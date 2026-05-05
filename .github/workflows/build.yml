@@ -1,0 +1,231 @@
+name: build
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      upstream_version:
+        description: "RustDesk upstream version to fork from (e.g. 1.4.6)"
+        required: true
+        default: "1.4.6"
+
+env:
+  UPSTREAM_VERSION: ${{ github.event.inputs.upstream_version || '1.4.6' }}
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Linux — produces .deb (x86_64)
+  # ---------------------------------------------------------------------------
+  linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            curl wget git build-essential cmake ninja-build pkg-config \
+            libgtk-3-dev libpulse-dev libasound2-dev libxdo-dev libxfixes-dev \
+            libxcb-randr0-dev libxcb-shape0-dev libxcb-xfixes0-dev libpam0g-dev \
+            libxkbcommon-dev libavutil-dev libavformat-dev libavcodec-dev \
+            libswscale-dev libswresample-dev libavdevice-dev libavfilter-dev \
+            libpostproc-dev libudev-dev libdbus-1-dev libsodium-dev clang \
+            libasound2-dev libssl-dev imagemagick
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: "3.24.5"
+
+      - name: Fetch upstream RustDesk
+        run: |
+          git clone --depth 1 --branch "${UPSTREAM_VERSION}" https://github.com/rustdesk/rustdesk.git
+          (cd rustdesk && git submodule update --init --recursive)
+
+      - name: Apply Mixel-Remote branding
+        run: ./scripts/apply-branding.sh
+        env:
+          RDREPO: ./rustdesk
+          BRANDING: ./branding
+
+      - name: Build Linux .deb
+        working-directory: rustdesk
+        run: |
+          # Stub: real build steps go here. RustDesk's own CI uses build.py.
+          # Documenting placeholder so first push surfaces missing pieces.
+          echo "TODO: cargo build --release --features inline,custom"
+          echo "TODO: package .deb via flutter_distributor or RustDesk's res/DEBIAN"
+          mkdir -p ../dist
+          # echo placeholder for upload step to find
+          echo "placeholder linux build" > ../dist/mixel-remote-${UPSTREAM_VERSION}-x86_64.deb
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/
+
+  # ---------------------------------------------------------------------------
+  # macOS — produces .dmg for arm64 + x86_64 (signed + notarized)
+  # ---------------------------------------------------------------------------
+  macos:
+    runs-on: macos-14
+    strategy:
+      matrix:
+        arch: [arm64, x86_64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build deps
+        run: |
+          brew install nasm pkg-config yasm cmake ninja imagemagick
+          # libvpx, libyuv, libsodium, opus
+          brew install libvpx libyuv libsodium opus
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.arch == 'arm64' && 'aarch64-apple-darwin' || 'x86_64-apple-darwin' }}
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: "3.24.5"
+
+      - name: Fetch upstream RustDesk
+        run: |
+          git clone --depth 1 --branch "${UPSTREAM_VERSION}" https://github.com/rustdesk/rustdesk.git
+          (cd rustdesk && git submodule update --init --recursive)
+
+      - name: Apply Mixel-Remote branding
+        run: ./scripts/apply-branding.sh
+        env:
+          RDREPO: ./rustdesk
+          BRANDING: ./branding
+
+      - name: Import Apple Developer ID cert
+        if: env.APPLE_CERT_P12_BASE64 != ''
+        env:
+          APPLE_CERT_P12_BASE64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
+          APPLE_CERT_P12_PASSWORD: ${{ secrets.APPLE_CERT_P12_PASSWORD }}
+        run: |
+          KEYCHAIN_PATH=$RUNNER_TEMP/build.keychain
+          KEYCHAIN_PASSWORD=ci-tmp-$$
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          echo "$APPLE_CERT_P12_BASE64" | base64 -d > $RUNNER_TEMP/cert.p12
+          security import $RUNNER_TEMP/cert.p12 -k "$KEYCHAIN_PATH" \
+            -P "$APPLE_CERT_P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign:,unsign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
+
+      - name: Build macOS .dmg
+        working-directory: rustdesk
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          # Stub: real build steps go here.
+          echo "TODO: rustup target add ${ARCH}-apple-darwin"
+          echo "TODO: cargo build --release --target ${ARCH}-apple-darwin --features inline,custom"
+          echo "TODO: flutter build macos --release"
+          echo "TODO: package .dmg with create-dmg"
+          echo "TODO: codesign + notarize via xcrun notarytool"
+          mkdir -p ../dist
+          echo "placeholder macos ${ARCH} build" > ../dist/mixel-remote-${UPSTREAM_VERSION}-${ARCH}.dmg
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}
+          path: dist/
+
+  # ---------------------------------------------------------------------------
+  # Windows — produces .exe + .msi (unsigned for v1)
+  # ---------------------------------------------------------------------------
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: "3.24.5"
+
+      - name: Install vcpkg deps
+        shell: bash
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git $HOME/vcpkg
+          $HOME/vcpkg/bootstrap-vcpkg.sh
+          $HOME/vcpkg/vcpkg install libvpx:x64-windows-static libyuv:x64-windows-static libsodium:x64-windows-static opus:x64-windows-static
+
+      - name: Fetch upstream RustDesk
+        shell: bash
+        run: |
+          git clone --depth 1 --branch "${UPSTREAM_VERSION}" https://github.com/rustdesk/rustdesk.git
+          (cd rustdesk && git submodule update --init --recursive)
+
+      - name: Apply Mixel-Remote branding
+        shell: bash
+        run: ./scripts/apply-branding.sh
+        env:
+          RDREPO: ./rustdesk
+          BRANDING: ./branding
+
+      - name: Build Windows .exe + .msi
+        shell: bash
+        working-directory: rustdesk
+        run: |
+          # Stub: real build steps go here.
+          echo "TODO: cargo build --release --features inline,custom"
+          echo "TODO: flutter build windows --release"
+          echo "TODO: package .msi via wix or rustdesk's own res/MSI build"
+          mkdir -p ../dist
+          echo "placeholder windows build" > ../dist/mixel-remote-${UPSTREAM_VERSION}-x86_64.exe
+          echo "placeholder windows msi build" > ../dist/mixel-remote-${UPSTREAM_VERSION}-x86_64.msi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/
+
+  # ---------------------------------------------------------------------------
+  # Upload all artifacts to Cloudflare R2
+  # ---------------------------------------------------------------------------
+  upload:
+    needs: [linux, macos, windows]
+    runs-on: ubuntu-22.04
+    if: always() && (needs.linux.result == 'success' || needs.macos.result == 'success' || needs.windows.result == 'success')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten artifacts into one dir
+        run: |
+          mkdir -p dist
+          find artifacts -type f -exec cp {} dist/ \;
+          ls -la dist/
+
+      - name: Upload to R2 via wrangler
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npm install -g wrangler@4
+          for f in dist/*; do
+            name=$(basename "$f")
+            wrangler r2 object put "mixel-remote-binaries/$name" --file "$f" --remote
+          done

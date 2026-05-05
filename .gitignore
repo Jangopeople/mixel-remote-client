@@ -1,0 +1,13 @@
+# Build outputs
+dist/
+artifacts/
+
+# Cloned upstream source (never committed; built fresh each CI run)
+rustdesk/
+
+# Local CI debug
+*.log
+.cache/
+
+# OS
+.DS_Store
