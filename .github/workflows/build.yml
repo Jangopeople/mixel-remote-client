@@ -43,6 +43,7 @@ jobs:
             libayatana-appindicator3-dev libasound2-dev libclang-dev \
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgtk-3-dev \
             libpam0g-dev libpulse-dev libva-dev \
+            libunwind-dev libdw-dev libdwarf-dev \
             libxcb-randr0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libxdo-dev libxfixes-dev llvm-dev nasm ninja-build pkg-config \
             tree python3 rpm unzip wget xz-utils libssl-dev imagemagick
