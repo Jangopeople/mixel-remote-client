@@ -48,6 +48,10 @@ jobs:
 
       - name: Fetch upstream RustDesk
         run: |
+          # rust-cache may create an empty `rustdesk/` directory for its
+          # workspace check before this step runs; nuke it so git clone
+          # doesn't fail with "destination path already exists".
+          rm -rf rustdesk
           git clone --depth 1 --branch "${UPSTREAM_VERSION}" --recurse-submodules \
             https://github.com/rustdesk/rustdesk.git rustdesk
 
@@ -137,6 +141,10 @@ jobs:
 
       - name: Fetch upstream RustDesk
         run: |
+          # rust-cache may create an empty `rustdesk/` directory for its
+          # workspace check before this step runs; nuke it so git clone
+          # doesn't fail with "destination path already exists".
+          rm -rf rustdesk
           git clone --depth 1 --branch "${UPSTREAM_VERSION}" --recurse-submodules \
             https://github.com/rustdesk/rustdesk.git rustdesk
 
@@ -234,6 +242,10 @@ jobs:
 
       - name: Fetch upstream RustDesk
         run: |
+          # rust-cache may create an empty `rustdesk/` directory for its
+          # workspace check before this step runs; nuke it so git clone
+          # doesn't fail with "destination path already exists".
+          rm -rf rustdesk
           git clone --depth 1 --branch "${UPSTREAM_VERSION}" --recurse-submodules \
             https://github.com/rustdesk/rustdesk.git rustdesk
 
@@ -365,6 +377,10 @@ jobs:
       - name: Fetch upstream RustDesk
         shell: bash
         run: |
+          # rust-cache may create an empty `rustdesk/` directory for its
+          # workspace check before this step runs; nuke it so git clone
+          # doesn't fail with "destination path already exists".
+          rm -rf rustdesk
           git clone --depth 1 --branch "${UPSTREAM_VERSION}" --recurse-submodules \
             https://github.com/rustdesk/rustdesk.git rustdesk
 
