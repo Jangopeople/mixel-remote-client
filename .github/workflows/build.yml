@@ -53,6 +53,7 @@ jobs:
         with:
           toolchain: ${{ env.RUST_VERSION }}
           targets: x86_64-unknown-linux-gnu
+          components: rustfmt
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -70,9 +71,9 @@ jobs:
           vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
           doNotCache: false
 
-      - name: Install vcpkg deps (libvpx, libyuv, opus, aom, libsodium)
+      - name: Install vcpkg deps
         run: |
-          $VCPKG_ROOT/vcpkg install --triplet x64-linux libvpx libyuv opus aom libsodium
+          $VCPKG_ROOT/vcpkg install --triplet x64-linux libvpx libyuv opus aom libjpeg-turbo
 
       - name: Fetch upstream RustDesk
         run: |
@@ -99,7 +100,7 @@ jobs:
         working-directory: rustdesk
         run: |
           export VCPKG_ROOT="${{ github.workspace }}/vcpkg"
-          python3 build.py --flutter --hwcodec
+          python3 build.py --flutter
 
       - name: Locate .deb
         id: locate
@@ -150,6 +151,7 @@ jobs:
         with:
           toolchain: ${{ env.MAC_RUST_VERSION }}
           targets: ${{ matrix.job.target }}
+          components: rustfmt
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -171,7 +173,7 @@ jobs:
       - name: Install vcpkg deps
         run: |
           triplet=${{ matrix.job.arch == 'aarch64' && 'arm64-osx' || 'x64-osx' }}
-          $VCPKG_ROOT/vcpkg install --triplet $triplet libvpx libyuv opus aom libsodium
+          $VCPKG_ROOT/vcpkg install --triplet $triplet libvpx libyuv opus aom libjpeg-turbo
 
       - name: Fetch upstream RustDesk
         run: |
@@ -203,7 +205,7 @@ jobs:
           if [ "${{ matrix.job.target }}" = "aarch64-apple-darwin" ]; then
             sed -i '' -e "s/MACOSX_DEPLOYMENT_TARGET=[0-9]*\\.[0-9]*/MACOSX_DEPLOYMENT_TARGET=12.3/" build.py
           fi
-          python3 build.py --flutter --hwcodec --unix-file-copy-paste
+          python3 build.py --flutter --unix-file-copy-paste
 
       - name: Package + sign + notarize .dmg
         working-directory: rustdesk
@@ -262,6 +264,7 @@ jobs:
         with:
           toolchain: ${{ env.RUST_VERSION }}
           targets: x86_64-pc-windows-msvc
+          components: rustfmt
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -282,7 +285,7 @@ jobs:
       - name: Install vcpkg deps
         shell: bash
         run: |
-          $VCPKG_ROOT/vcpkg install --triplet x64-windows-static libvpx libyuv opus aom libsodium
+          $VCPKG_ROOT/vcpkg install --triplet x64-windows-static libvpx libyuv opus aom libjpeg-turbo
 
       - name: Fetch upstream RustDesk
         shell: bash
@@ -303,7 +306,7 @@ jobs:
         env:
           VCPKG_ROOT: ${{ github.workspace }}/vcpkg
         run: |
-          python build.py --flutter --hwcodec
+          python build.py --flutter
 
       - name: Locate artifacts
         shell: bash
