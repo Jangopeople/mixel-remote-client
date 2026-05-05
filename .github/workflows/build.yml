@@ -196,6 +196,15 @@ jobs:
           - { arch: aarch64, target: aarch64-apple-darwin, os: macos-14 }
           - { arch: x86_64,  target: x86_64-apple-darwin,  os: macos-13 }
     runs-on: ${{ matrix.job.os }}
+    # Job-level env so step-level `if: env.APPLE_CERT_P12_BASE64 != ''`
+    # actually evaluates against the secret. (Step-level env applies after
+    # the if condition, so the if always saw it empty.)
+    env:
+      APPLE_CERT_P12_BASE64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
+      APPLE_CERT_P12_PASSWORD: ${{ secrets.APPLE_CERT_P12_PASSWORD }}
+      APPLE_NOTARY_USER:     ${{ secrets.APPLE_NOTARY_USER }}
+      APPLE_NOTARY_PASSWORD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
+      APPLE_NOTARY_TEAM_ID:  ${{ secrets.APPLE_NOTARY_TEAM_ID }}
     steps:
       - uses: actions/checkout@v4
 
@@ -263,9 +272,6 @@ jobs:
 
       - name: Import Apple Developer ID cert
         if: env.APPLE_CERT_P12_BASE64 != ''
-        env:
-          APPLE_CERT_P12_BASE64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
-          APPLE_CERT_P12_PASSWORD: ${{ secrets.APPLE_CERT_P12_PASSWORD }}
         uses: apple-actions/import-codesign-certs@v3
         with:
           p12-file-base64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
@@ -295,11 +301,6 @@ jobs:
 
       - name: Package + sign + notarize .dmg
         working-directory: rustdesk
-        env:
-          APPLE_CERT_P12_BASE64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
-          APPLE_NOTARY_USER:     ${{ secrets.APPLE_NOTARY_USER }}
-          APPLE_NOTARY_PASSWORD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
-          APPLE_NOTARY_TEAM_ID:  ${{ secrets.APPLE_NOTARY_TEAM_ID }}
         run: |
           APP_PATH="flutter/build/macos/Build/Products/Release/Mixel-Remote.app"
           # Fallback: upstream may still produce RustDesk.app if our PRODUCT_NAME patch failed
