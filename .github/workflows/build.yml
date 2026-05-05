@@ -19,6 +19,65 @@ env:
 
 jobs:
   # ===========================================================================
+  # BRIDGE — generate flutter_rust_bridge codegen output once; all platforms
+  # download the artifact instead of rebuilding the bridge codegen tool.
+  # Mirrors upstream's bridge.yml workflow.
+  # ===========================================================================
+  bridge:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake curl gcc git g++ \
+            libssl-dev pkg-config python3 wget unzip
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: rustfmt
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+
+      - name: Fetch upstream RustDesk
+        run: |
+          git clone --depth 1 --branch "${UPSTREAM_VERSION}" --recurse-submodules \
+            https://github.com/rustdesk/rustdesk.git rustdesk
+
+      - name: Install flutter_rust_bridge_codegen
+        run: |
+          cargo install flutter_rust_bridge_codegen --version 1.80.1 --features uuid --locked
+
+      - name: Generate bridge
+        working-directory: rustdesk
+        run: |
+          # extended_text version pin matches upstream bridge.yml
+          pushd flutter && sed -i -e 's/extended_text: 14.0.0/extended_text: 13.0.0/g' pubspec.yaml && flutter pub get && popd
+          ~/.cargo/bin/flutter_rust_bridge_codegen \
+            --rust-input ./src/flutter_ffi.rs \
+            --dart-output ./flutter/lib/generated_bridge.dart \
+            --c-output ./flutter/macos/Runner/bridge_generated.h
+          cp ./flutter/macos/Runner/bridge_generated.h ./flutter/ios/Runner/bridge_generated.h
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bridge-artifact
+          path: |
+            rustdesk/src/bridge_generated.rs
+            rustdesk/src/bridge_generated.io.rs
+            rustdesk/flutter/lib/generated_bridge.dart
+            rustdesk/flutter/lib/generated_bridge.freezed.dart
+            rustdesk/flutter/macos/Runner/bridge_generated.h
+            rustdesk/flutter/ios/Runner/bridge_generated.h
+
+  # ===========================================================================
   # LINUX — produces .deb
   # Closely follows upstream rustdesk's build-rustdesk-linux job, simplified
   # for x86_64 only and without the qemu-on-18.04 layer (we use the runner's
@@ -26,6 +85,7 @@ jobs:
   # compatible).
   # ===========================================================================
   linux:
+    needs: bridge
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -86,15 +146,11 @@ jobs:
           RDREPO: ./rustdesk
           BRANDING: ./branding
 
-      - name: Generate flutter bridge
-        working-directory: rustdesk
-        run: |
-          # rustdesk's build.py expects flutter_rust_bridge_codegen output
-          cargo install flutter_rust_bridge_codegen --version 1.80.1 --force
-          flutter pub get -C flutter
-          flutter_rust_bridge_codegen \
-            --rust-input ./src/flutter_ffi.rs \
-            --dart-output ./flutter/lib/generated_bridge.dart || true
+      - name: Restore bridge files
+        uses: actions/download-artifact@v4
+        with:
+          name: bridge-artifact
+          path: ./
 
       - name: Build (cargo + flutter via build.py)
         working-directory: rustdesk
@@ -124,6 +180,7 @@ jobs:
   # macOS — produces signed + notarized .dmg for arm64 + x86_64
   # ===========================================================================
   macos:
+    needs: bridge
     strategy:
       fail-fast: false
       matrix:
@@ -185,6 +242,12 @@ jobs:
         env:
           RDREPO: ./rustdesk
           BRANDING: ./branding
+
+      - name: Restore bridge files
+        uses: actions/download-artifact@v4
+        with:
+          name: bridge-artifact
+          path: ./
 
       - name: Import Apple Developer ID cert
         if: env.APPLE_CERT_P12_BASE64 != ''
@@ -255,6 +318,7 @@ jobs:
   # WINDOWS — produces unsigned .exe + .msi
   # ===========================================================================
   windows:
+    needs: bridge
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
@@ -299,6 +363,12 @@ jobs:
         env:
           RDREPO: ./rustdesk
           BRANDING: ./branding
+
+      - name: Restore bridge files
+        uses: actions/download-artifact@v4
+        with:
+          name: bridge-artifact
+          path: ./
 
       - name: Build (cargo + flutter via build.py)
         shell: bash
