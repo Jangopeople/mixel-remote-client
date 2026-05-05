@@ -115,6 +115,14 @@ patch_string flutter/macos/Runner/Configs/AppInfo.xcconfig \
   "Copyright © 2025 Purslane Ltd. All rights reserved." \
   "Copyright © 2026 $WIN_MANUFACTURER. All rights reserved."
 
+# build.py hardcodes RustDesk.app at lines 414 + 417 (the post-flutter
+# `cp service` and `create-dmg` steps for macOS). Once xcconfig
+# PRODUCT_NAME is renamed, flutter produces "$APP_NAME.app" and these
+# build.py lines fail unless we substitute the path too.
+patch_string build.py \
+  "RustDesk.app" \
+  "$APP_NAME.app"
+
 # 4. Write a runtime config fallback. This isn't strictly necessary if
 #    custom.txt + RENDEZVOUS_SERVER env vars work as advertised, but it's
 #    cheap insurance: if a user wipes their data dir, the binary still
