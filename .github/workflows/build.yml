@@ -268,7 +268,18 @@ jobs:
           if [ "${{ matrix.job.target }}" = "aarch64-apple-darwin" ]; then
             sed -i '' -e "s/MACOSX_DEPLOYMENT_TARGET=[0-9]*\\.[0-9]*/MACOSX_DEPLOYMENT_TARGET=12.3/" build.py
           fi
-          python3 build.py --flutter --unix-file-copy-paste
+          # Retry the build a few times — chromium.googlesource.com is flaky
+          # and intermittently fails the libwebm submodule fetch.
+          for attempt in 1 2 3; do
+            if python3 build.py --flutter --unix-file-copy-paste; then
+              echo "✓ build succeeded on attempt $attempt"
+              exit 0
+            fi
+            echo "⚠ build attempt $attempt failed; retrying after 30s"
+            sleep 30
+          done
+          echo "❌ build failed after 3 attempts"
+          exit 1
 
       - name: Package + sign + notarize .dmg
         working-directory: rustdesk
