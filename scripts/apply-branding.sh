@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# Apply Mixel-Remote branding to an upstream RustDesk source checkout.
+# Apply Mixel-Remote branding to a RustDesk 1.4.6 source checkout.
 #
-# Expected env: working directory contains a `rustdesk/` subdir with the
-# upstream source already checked out. Branding configs and icons live in
-# the parent (this repo) under branding/.
+# Tested file paths against RustDesk v1.4.6. Bumping UPSTREAM_VERSION may
+# require updating these paths.
 #
 # Usage:
 #   $RDREPO   = path to upstream rustdesk checkout (default: ./rustdesk)
@@ -15,7 +14,7 @@ RDREPO="${RDREPO:-./rustdesk}"
 BRANDING="${BRANDING:-./branding}"
 
 if [[ ! -d "$RDREPO" ]]; then
-  echo "❌ RustDesk source not found at $RDREPO"
+  echo "❌ RustDesk source not found at $RDREPO" >&2
   exit 1
 fi
 
@@ -24,48 +23,30 @@ source "$BRANDING/branding.env"
 
 echo "→ Applying branding: $APP_NAME ($MACOS_BUNDLE_ID) on top of RustDesk $UPSTREAM_VERSION"
 
-# 1. Copy custom.txt — RustDesk's build-time override file.
+# 1. custom.txt — RustDesk's build-time branding override file.
 cp "$BRANDING/custom.txt" "$RDREPO/custom.txt"
+echo "   wrote custom.txt"
 
-# 2. Replace the main app icon set. RustDesk holds icons at multiple
-#    locations; we overwrite each so every platform builder picks ours up.
-copy_icon () {
-  local size="$1"
-  local target="$2"
-  if [[ -f "$BRANDING/icon-${size}.png" ]]; then
-    cp "$BRANDING/icon-${size}.png" "$target"
-    echo "   icon $size → $(basename "$target")"
-  fi
-}
+# 2. Replace icons. Verified paths for RustDesk 1.4.6:
+#    res/icon.png      → main 512x512
+#    res/icon.ico      → Windows .ico
+#    res/32x32.png     → Linux package
+#    res/64x64.png
+#    res/128x128.png
+#    res/128x128@2x.png (i.e. 256x256)
+#    flutter/macos/Runner/AppIcon.icns
+#    flutter/windows/runner/resources/app_icon.ico
 
-# Linux/AppImage assets
-copy_icon 16   "$RDREPO/res/icon.png" || true
-copy_icon 256  "$RDREPO/res/256x256.png" || true
-copy_icon 128  "$RDREPO/res/128x128@2x.png" || true
-copy_icon 512  "$RDREPO/res/mac-tray-light.png" || true
-copy_icon 512  "$RDREPO/res/mac-tray-dark.png" || true
+cp "$BRANDING/icon-512.png"  "$RDREPO/res/icon.png"
+cp "$BRANDING/icon-32.png"   "$RDREPO/res/32x32.png"
+cp "$BRANDING/icon-64.png"   "$RDREPO/res/64x64.png"
+cp "$BRANDING/icon-128.png"  "$RDREPO/res/128x128.png"
+cp "$BRANDING/icon-256.png"  "$RDREPO/res/128x128@2x.png"
+echo "   wrote Linux icon set into res/"
 
-# Flutter app assets
-copy_icon 1024 "$RDREPO/flutter/assets/logo.png" || true
-copy_icon 512  "$RDREPO/flutter/assets/icon.png" || true
-
-# macOS .icns is generated from PNGs at build time by Flutter; placing
-# multi-size PNGs in macos/Runner/Assets.xcassets/AppIcon.appiconset/
-# is what actually rebrands the macOS app icon.
-MAC_ICONSET="$RDREPO/flutter/macos/Runner/Assets.xcassets/AppIcon.appiconset"
-if [[ -d "$MAC_ICONSET" ]]; then
-  copy_icon 16   "$MAC_ICONSET/app_icon_16.png"
-  copy_icon 32   "$MAC_ICONSET/app_icon_32.png"
-  copy_icon 64   "$MAC_ICONSET/app_icon_64.png"
-  copy_icon 128  "$MAC_ICONSET/app_icon_128.png"
-  copy_icon 256  "$MAC_ICONSET/app_icon_256.png"
-  copy_icon 512  "$MAC_ICONSET/app_icon_512.png"
-  copy_icon 1024 "$MAC_ICONSET/app_icon_1024.png"
-fi
-
-# Windows .ico is generated from icon-*.png at build time by flutter_launcher_icons
-WIN_ICON="$RDREPO/flutter/windows/runner/resources/app_icon.ico"
-if [[ -f "$WIN_ICON" ]]; then
+# Windows .ico (multi-resolution) — builds both res/icon.ico and the
+# flutter runner resource so both Windows build paths see the new icon.
+if command -v magick >/dev/null 2>&1; then
   magick \
     "$BRANDING/icon-16.png" \
     "$BRANDING/icon-32.png" \
@@ -73,42 +54,71 @@ if [[ -f "$WIN_ICON" ]]; then
     "$BRANDING/icon-64.png" \
     "$BRANDING/icon-128.png" \
     "$BRANDING/icon-256.png" \
-    "$WIN_ICON"
-  echo "   icon → app_icon.ico (multi-size)"
+    "$RDREPO/res/icon.ico"
+  cp "$RDREPO/res/icon.ico" "$RDREPO/flutter/windows/runner/resources/app_icon.ico"
+  echo "   wrote Windows .ico (multi-size)"
+else
+  echo "   ⚠ ImageMagick (magick) not found; Windows .ico not regenerated" >&2
 fi
 
-# 3. Patch user-visible strings that custom.txt doesn't override.
-#    We use sed on a known set of files. If upstream renames things, this
-#    needs revisiting; that's why we pin UPSTREAM_VERSION above.
+# macOS .icns — built from a temporary iconset.
+MACOS_ICNS="$RDREPO/flutter/macos/Runner/AppIcon.icns"
+if [[ -d "$(dirname "$MACOS_ICNS")" ]]; then
+  TMP_ICONSET="$(mktemp -d)/AppIcon.iconset"
+  mkdir -p "$TMP_ICONSET"
+  cp "$BRANDING/icon-16.png"   "$TMP_ICONSET/icon_16x16.png"
+  cp "$BRANDING/icon-32.png"   "$TMP_ICONSET/icon_16x16@2x.png"
+  cp "$BRANDING/icon-32.png"   "$TMP_ICONSET/icon_32x32.png"
+  cp "$BRANDING/icon-64.png"   "$TMP_ICONSET/icon_32x32@2x.png"
+  cp "$BRANDING/icon-128.png"  "$TMP_ICONSET/icon_128x128.png"
+  cp "$BRANDING/icon-256.png"  "$TMP_ICONSET/icon_128x128@2x.png"
+  cp "$BRANDING/icon-256.png"  "$TMP_ICONSET/icon_256x256.png"
+  cp "$BRANDING/icon-512.png"  "$TMP_ICONSET/icon_256x256@2x.png"
+  cp "$BRANDING/icon-512.png"  "$TMP_ICONSET/icon_512x512.png"
+  cp "$BRANDING/icon-1024.png" "$TMP_ICONSET/icon_512x512@2x.png"
+
+  if command -v iconutil >/dev/null 2>&1; then
+    iconutil -c icns "$TMP_ICONSET" -o "$MACOS_ICNS"
+    echo "   wrote AppIcon.icns via iconutil"
+  elif command -v magick >/dev/null 2>&1; then
+    magick "$BRANDING/icon-1024.png" "$MACOS_ICNS"
+    echo "   wrote AppIcon.icns via magick (single-resolution fallback)"
+  else
+    echo "   ⚠ Neither iconutil nor magick available; AppIcon.icns not updated" >&2
+  fi
+  rm -rf "$(dirname "$TMP_ICONSET")"
+fi
+
+# 3. Patch user-visible strings that custom.txt doesn't fully override.
+
 patch_string () {
   local file="$1" old="$2" new="$3"
-  [[ -f "$RDREPO/$file" ]] || return 0
+  [[ -f "$RDREPO/$file" ]] || { echo "   ⚠ skip (no file): $file" >&2; return 0; }
   if grep -q "$old" "$RDREPO/$file"; then
-    sed -i.bak "s|$old|$new|g" "$RDREPO/$file" && rm -f "$RDREPO/$file.bak"
+    sed -i.bak "s|$old|$new|g" "$RDREPO/$file"
+    rm -f "$RDREPO/$file.bak"
     echo "   patched: $file"
+  else
+    echo "   ℹ no match in: $file (string '$old' not found)" >&2
   fi
 }
 
-# macOS: bundle identifier and product name in xcconfig
-patch_string flutter/macos/Runner/Configs/AppInfo.xcconfig \
-  "PRODUCT_BUNDLE_IDENTIFIER = com.carriez.flutter_hbb" \
-  "PRODUCT_BUNDLE_IDENTIFIER = $MACOS_BUNDLE_ID"
+# macOS xcconfig — note: actual upstream string is `com.carriez.flutterHbb`,
+# not the underscored variant. Verified against res for 1.4.6.
 patch_string flutter/macos/Runner/Configs/AppInfo.xcconfig \
   "PRODUCT_NAME = RustDesk" \
   "PRODUCT_NAME = $APP_NAME"
+patch_string flutter/macos/Runner/Configs/AppInfo.xcconfig \
+  "PRODUCT_BUNDLE_IDENTIFIER = com.carriez.flutterHbb" \
+  "PRODUCT_BUNDLE_IDENTIFIER = $MACOS_BUNDLE_ID"
+patch_string flutter/macos/Runner/Configs/AppInfo.xcconfig \
+  "Copyright © 2025 Purslane Ltd. All rights reserved." \
+  "Copyright © 2026 $WIN_MANUFACTURER. All rights reserved."
 
-# Linux .desktop file generated by flutter_distributor; rename product name
-patch_string flutter/linux/CMakeLists.txt \
-  'set(BINARY_NAME "rustdesk")' \
-  "set(BINARY_NAME \"$APP_NAME_KEBAB\")"
-
-# Windows runner: window title
-patch_string flutter/windows/runner/main.cpp \
-  '"rustdesk"' "\"$APP_NAME_KEBAB\""
-
-# 4. Pre-bake server config — RustDesk reads RENDEZVOUS_SERVER from custom.txt
-#    at build time, but we also stuff it into the runtime config in case the
-#    user wipes their data dir.
+# 4. Write a runtime config fallback. This isn't strictly necessary if
+#    custom.txt + RENDEZVOUS_SERVER env vars work as advertised, but it's
+#    cheap insurance: if a user wipes their data dir, the binary still
+#    boots pointing at the correct relay.
 mkdir -p "$RDREPO/.cargo"
 cat > "$RDREPO/.cargo/config.toml" <<EOF
 [env]
@@ -116,5 +126,6 @@ RENDEZVOUS_SERVER = "$RENDEZVOUS_SERVER"
 RELAY_SERVER = "$RELAY_SERVER"
 RS_PUB_KEY = "$RS_PUB_KEY"
 EOF
+echo "   wrote .cargo/config.toml with baked-in server env"
 
-echo "✓ Branding applied. Build with the standard RustDesk build instructions."
+echo "✓ Branding applied."

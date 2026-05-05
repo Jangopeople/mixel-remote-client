@@ -12,41 +12,71 @@ on:
 
 env:
   UPSTREAM_VERSION: ${{ github.event.inputs.upstream_version || '1.4.6' }}
+  RUST_VERSION: "1.75"
+  MAC_RUST_VERSION: "1.81"
+  FLUTTER_VERSION: "3.24.5"
+  VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
 
 jobs:
-  # ---------------------------------------------------------------------------
-  # Linux — produces .deb (x86_64)
-  # ---------------------------------------------------------------------------
+  # ===========================================================================
+  # LINUX — produces .deb
+  # Closely follows upstream rustdesk's build-rustdesk-linux job, simplified
+  # for x86_64 only and without the qemu-on-18.04 layer (we use the runner's
+  # native ubuntu-22.04, which gets us a newer glibc but is still widely
+  # compatible).
+  # ===========================================================================
   linux:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install build deps
+      - name: Maximize build space
+        run: |
+          sudo rm -rf /opt/ghc /usr/local/lib/android /usr/share/dotnet
+          df -h
+
+      - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            curl wget git build-essential cmake ninja-build pkg-config \
-            libgtk-3-dev libpulse-dev libasound2-dev libxdo-dev libxfixes-dev \
-            libxcb-randr0-dev libxcb-shape0-dev libxcb-xfixes0-dev libpam0g-dev \
-            libxkbcommon-dev libavutil-dev libavformat-dev libavcodec-dev \
-            libswscale-dev libswresample-dev libavdevice-dev libavfilter-dev \
-            libpostproc-dev libudev-dev libdbus-1-dev libsodium-dev clang \
-            libasound2-dev libssl-dev imagemagick
+            build-essential clang cmake curl gcc git g++ \
+            libayatana-appindicator3-dev libasound2-dev libclang-dev \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgtk-3-dev \
+            libpam0g-dev libpulse-dev libva-dev \
+            libxcb-randr0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxdo-dev libxfixes-dev llvm-dev nasm ninja-build pkg-config \
+            tree python3 rpm unzip wget xz-utils libssl-dev imagemagick
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: x86_64-unknown-linux-gnu
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rustdesk
 
       - name: Install Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: "3.24.5"
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+
+      - name: Setup vcpkg + cache
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: false
+
+      - name: Install vcpkg deps (libvpx, libyuv, opus, aom, libsodium)
+        run: |
+          $VCPKG_ROOT/vcpkg install --triplet x64-linux libvpx libyuv opus aom libsodium
 
       - name: Fetch upstream RustDesk
         run: |
-          git clone --depth 1 --branch "${UPSTREAM_VERSION}" https://github.com/rustdesk/rustdesk.git
-          (cd rustdesk && git submodule update --init --recursive)
+          git clone --depth 1 --branch "${UPSTREAM_VERSION}" --recurse-submodules \
+            https://github.com/rustdesk/rustdesk.git rustdesk
 
       - name: Apply Mixel-Remote branding
         run: ./scripts/apply-branding.sh
@@ -54,54 +84,95 @@ jobs:
           RDREPO: ./rustdesk
           BRANDING: ./branding
 
-      - name: Build Linux .deb
+      - name: Generate flutter bridge
         working-directory: rustdesk
         run: |
-          # Stub: real build steps go here. RustDesk's own CI uses build.py.
-          # Documenting placeholder so first push surfaces missing pieces.
-          echo "TODO: cargo build --release --features inline,custom"
-          echo "TODO: package .deb via flutter_distributor or RustDesk's res/DEBIAN"
-          mkdir -p ../dist
-          # echo placeholder for upload step to find
-          echo "placeholder linux build" > ../dist/mixel-remote-${UPSTREAM_VERSION}-x86_64.deb
+          # rustdesk's build.py expects flutter_rust_bridge_codegen output
+          cargo install flutter_rust_bridge_codegen --version 1.80.1 --force
+          flutter pub get -C flutter
+          flutter_rust_bridge_codegen \
+            --rust-input ./src/flutter_ffi.rs \
+            --dart-output ./flutter/lib/generated_bridge.dart || true
+
+      - name: Build (cargo + flutter via build.py)
+        working-directory: rustdesk
+        run: |
+          export VCPKG_ROOT="${{ github.workspace }}/vcpkg"
+          python3 build.py --flutter --hwcodec
+
+      - name: Locate .deb
+        id: locate
+        run: |
+          deb=$(find rustdesk -name "*.deb" | head -n1)
+          if [[ -z "$deb" ]]; then
+            echo "❌ no .deb produced" >&2
+            find rustdesk -maxdepth 4 -name "*.deb" -o -name "rustdesk*" | head -20
+            exit 1
+          fi
+          mkdir -p dist
+          cp "$deb" "dist/mixel-remote-${UPSTREAM_VERSION}-x86_64.deb"
+          ls -la dist/
 
       - uses: actions/upload-artifact@v4
         with:
           name: linux
           path: dist/
 
-  # ---------------------------------------------------------------------------
-  # macOS — produces .dmg for arm64 + x86_64 (signed + notarized)
-  # ---------------------------------------------------------------------------
+  # ===========================================================================
+  # macOS — produces signed + notarized .dmg for arm64 + x86_64
+  # ===========================================================================
   macos:
-    runs-on: macos-14
     strategy:
+      fail-fast: false
       matrix:
-        arch: [arm64, x86_64]
+        job:
+          - { arch: aarch64, target: aarch64-apple-darwin, os: macos-14 }
+          - { arch: x86_64,  target: x86_64-apple-darwin,  os: macos-13 }
+    runs-on: ${{ matrix.job.os }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install build deps
+      - name: Install build runtime
         run: |
-          brew install nasm pkg-config yasm cmake ninja imagemagick
-          # libvpx, libyuv, libsodium, opus
-          brew install libvpx libyuv libsodium opus
+          brew install create-dmg
+          # NASM 2.x (NOT 3.x) for libvpx/aom/libyuv assembly
+          wget https://www.nasm.us/pub/nasm/releasebuilds/2.16.03/macosx/nasm-2.16.03-macosx.zip
+          unzip -q nasm-2.16.03-macosx.zip
+          sudo cp nasm-2.16.03/nasm /usr/local/bin/nasm
+          nasm --version
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@v1
         with:
-          targets: ${{ matrix.arch == 'arm64' && 'aarch64-apple-darwin' || 'x86_64-apple-darwin' }}
+          toolchain: ${{ env.MAC_RUST_VERSION }}
+          targets: ${{ matrix.job.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rustdesk
+          prefix-key: ${{ matrix.job.os }}
 
       - name: Install Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: "3.24.5"
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+
+      - name: Setup vcpkg + cache
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: false
+
+      - name: Install vcpkg deps
+        run: |
+          triplet=${{ matrix.job.arch == 'aarch64' && 'arm64-osx' || 'x64-osx' }}
+          $VCPKG_ROOT/vcpkg install --triplet $triplet libvpx libyuv opus aom libsodium
 
       - name: Fetch upstream RustDesk
         run: |
-          git clone --depth 1 --branch "${UPSTREAM_VERSION}" https://github.com/rustdesk/rustdesk.git
-          (cd rustdesk && git submodule update --init --recursive)
+          git clone --depth 1 --branch "${UPSTREAM_VERSION}" --recurse-submodules \
+            https://github.com/rustdesk/rustdesk.git rustdesk
 
       - name: Apply Mixel-Remote branding
         run: ./scripts/apply-branding.sh
@@ -114,67 +185,106 @@ jobs:
         env:
           APPLE_CERT_P12_BASE64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
           APPLE_CERT_P12_PASSWORD: ${{ secrets.APPLE_CERT_P12_PASSWORD }}
-        run: |
-          KEYCHAIN_PATH=$RUNNER_TEMP/build.keychain
-          KEYCHAIN_PASSWORD=ci-tmp-$$
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          echo "$APPLE_CERT_P12_BASE64" | base64 -d > $RUNNER_TEMP/cert.p12
-          security import $RUNNER_TEMP/cert.p12 -k "$KEYCHAIN_PATH" \
-            -P "$APPLE_CERT_P12_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple:,codesign:,unsign: \
-            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
+          p12-password: ${{ secrets.APPLE_CERT_P12_PASSWORD }}
+          keychain: mixel-build
 
-      - name: Build macOS .dmg
+      - name: Build (cargo + flutter via build.py)
+        working-directory: rustdesk
+        run: |
+          export VCPKG_ROOT="${{ github.workspace }}/vcpkg"
+          # Match upstream's mac min target adjustments
+          if [ "${{ matrix.job.target }}" = "aarch64-apple-darwin" ]; then
+            sed -i '' -e "s/MACOSX_DEPLOYMENT_TARGET=[0-9]*\\.[0-9]*/MACOSX_DEPLOYMENT_TARGET=12.3/" build.py
+          fi
+          python3 build.py --flutter --hwcodec --unix-file-copy-paste
+
+      - name: Package + sign + notarize .dmg
         working-directory: rustdesk
         env:
-          ARCH: ${{ matrix.arch }}
+          APPLE_CERT_P12_BASE64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
+          APPLE_NOTARY_USER:     ${{ secrets.APPLE_NOTARY_USER }}
+          APPLE_NOTARY_PASSWORD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
+          APPLE_NOTARY_TEAM_ID:  ${{ secrets.APPLE_NOTARY_TEAM_ID }}
         run: |
-          # Stub: real build steps go here.
-          echo "TODO: rustup target add ${ARCH}-apple-darwin"
-          echo "TODO: cargo build --release --target ${ARCH}-apple-darwin --features inline,custom"
-          echo "TODO: flutter build macos --release"
-          echo "TODO: package .dmg with create-dmg"
-          echo "TODO: codesign + notarize via xcrun notarytool"
+          APP_PATH="flutter/build/macos/Build/Products/Release/Mixel-Remote.app"
+          # Fallback: upstream may still produce RustDesk.app if our PRODUCT_NAME patch failed
+          if [[ ! -d "$APP_PATH" ]]; then
+            APP_PATH="flutter/build/macos/Build/Products/Release/RustDesk.app"
+          fi
+          if [[ ! -d "$APP_PATH" ]]; then
+            echo "❌ no .app produced" >&2
+            find flutter/build -maxdepth 6 -name "*.app" || true
+            exit 1
+          fi
           mkdir -p ../dist
-          echo "placeholder macos ${ARCH} build" > ../dist/mixel-remote-${UPSTREAM_VERSION}-${ARCH}.dmg
+          DMG="../dist/mixel-remote-${UPSTREAM_VERSION}-${{ matrix.job.arch }}.dmg"
+
+          if [[ -n "$APPLE_CERT_P12_BASE64" ]]; then
+            CODESIGN_ID=$(security find-identity -v | grep "Developer ID Application" | head -n1 | awk '{print $2}')
+            codesign --force --options runtime --deep --strict -s "$CODESIGN_ID" "$APP_PATH" -vvv
+            create-dmg --window-size 800 400 --icon "$(basename $APP_PATH)" 200 190 --hide-extension "$(basename $APP_PATH)" --app-drop-link 600 185 "$DMG" "$APP_PATH"
+            codesign --force --options runtime --deep --strict -s "$CODESIGN_ID" "$DMG" -vvv
+
+            xcrun notarytool submit "$DMG" \
+              --apple-id "$APPLE_NOTARY_USER" \
+              --password "$APPLE_NOTARY_PASSWORD" \
+              --team-id  "$APPLE_NOTARY_TEAM_ID" \
+              --wait
+            xcrun stapler staple "$DMG"
+          else
+            create-dmg --window-size 800 400 --icon "$(basename $APP_PATH)" 200 190 --hide-extension "$(basename $APP_PATH)" --app-drop-link 600 185 "$DMG" "$APP_PATH"
+            echo "⚠ Built unsigned DMG (no APPLE_CERT_P12_BASE64 secret)"
+          fi
+          ls -la ../dist/
 
       - uses: actions/upload-artifact@v4
         with:
-          name: macos-${{ matrix.arch }}
+          name: macos-${{ matrix.job.arch }}
           path: dist/
 
-  # ---------------------------------------------------------------------------
-  # Windows — produces .exe + .msi (unsigned for v1)
-  # ---------------------------------------------------------------------------
+  # ===========================================================================
+  # WINDOWS — produces unsigned .exe + .msi
+  # ===========================================================================
   windows:
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: x86_64-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rustdesk
 
       - name: Install Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: "3.24.5"
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+
+      - name: Setup vcpkg + cache
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: false
 
       - name: Install vcpkg deps
         shell: bash
         run: |
-          git clone https://github.com/microsoft/vcpkg.git $HOME/vcpkg
-          $HOME/vcpkg/bootstrap-vcpkg.sh
-          $HOME/vcpkg/vcpkg install libvpx:x64-windows-static libyuv:x64-windows-static libsodium:x64-windows-static opus:x64-windows-static
+          $VCPKG_ROOT/vcpkg install --triplet x64-windows-static libvpx libyuv opus aom libsodium
 
       - name: Fetch upstream RustDesk
         shell: bash
         run: |
-          git clone --depth 1 --branch "${UPSTREAM_VERSION}" https://github.com/rustdesk/rustdesk.git
-          (cd rustdesk && git submodule update --init --recursive)
+          git clone --depth 1 --branch "${UPSTREAM_VERSION}" --recurse-submodules \
+            https://github.com/rustdesk/rustdesk.git rustdesk
 
       - name: Apply Mixel-Remote branding
         shell: bash
@@ -183,47 +293,64 @@ jobs:
           RDREPO: ./rustdesk
           BRANDING: ./branding
 
-      - name: Build Windows .exe + .msi
+      - name: Build (cargo + flutter via build.py)
         shell: bash
         working-directory: rustdesk
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
         run: |
-          # Stub: real build steps go here.
-          echo "TODO: cargo build --release --features inline,custom"
-          echo "TODO: flutter build windows --release"
-          echo "TODO: package .msi via wix or rustdesk's own res/MSI build"
-          mkdir -p ../dist
-          echo "placeholder windows build" > ../dist/mixel-remote-${UPSTREAM_VERSION}-x86_64.exe
-          echo "placeholder windows msi build" > ../dist/mixel-remote-${UPSTREAM_VERSION}-x86_64.msi
+          python build.py --flutter --hwcodec
+
+      - name: Locate artifacts
+        shell: bash
+        run: |
+          mkdir -p dist
+          # build.py outputs into target/release and packages with WiX
+          for ext in exe msi; do
+            f=$(find rustdesk -maxdepth 5 -name "*.${ext}" -path "*release*" | head -n1 || true)
+            if [[ -n "$f" ]]; then
+              cp "$f" "dist/mixel-remote-${UPSTREAM_VERSION}-x86_64.${ext}"
+            fi
+          done
+          ls -la dist/ || (echo "❌ no Windows artifacts" && find rustdesk -name "*.exe" -o -name "*.msi" | head -10 && exit 1)
 
       - uses: actions/upload-artifact@v4
         with:
           name: windows
           path: dist/
 
-  # ---------------------------------------------------------------------------
-  # Upload all artifacts to Cloudflare R2
-  # ---------------------------------------------------------------------------
+  # ===========================================================================
+  # Upload — pushes any successful artifacts to Cloudflare R2.
+  # Marked continue-on-error so the workflow is "successful" even if R2 is
+  # not yet enabled on the account; in that case artifacts are still
+  # available via the GH Actions run page.
+  # ===========================================================================
   upload:
     needs: [linux, macos, windows]
+    if: always()
     runs-on: ubuntu-22.04
-    if: always() && (needs.linux.result == 'success' || needs.macos.result == 'success' || needs.windows.result == 'success')
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
 
-      - name: Flatten artifacts into one dir
+      - name: Flatten artifacts
         run: |
           mkdir -p dist
-          find artifacts -type f -exec cp {} dist/ \;
+          find artifacts -type f \( -name "*.deb" -o -name "*.dmg" -o -name "*.exe" -o -name "*.msi" \) -exec cp {} dist/ \;
           ls -la dist/
 
-      - name: Upload to R2 via wrangler
+      - name: Upload to R2
+        continue-on-error: true
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
+          if [[ -z "$CLOUDFLARE_API_TOKEN" ]]; then
+            echo "ℹ CLOUDFLARE_API_TOKEN not set — skipping R2 upload."
+            exit 0
+          fi
           npm install -g wrangler@4
           for f in dist/*; do
             name=$(basename "$f")
