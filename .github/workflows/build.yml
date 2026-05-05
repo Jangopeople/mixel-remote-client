@@ -409,14 +409,23 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          # build.py outputs into target/release and packages with WiX
-          for ext in exe msi; do
-            f=$(find rustdesk -maxdepth 5 -name "*.${ext}" -path "*release*" | head -n1 || true)
-            if [[ -n "$f" ]]; then
-              cp "$f" "dist/mixel-remote-${UPSTREAM_VERSION}-x86_64.${ext}"
-            fi
-          done
-          ls -la dist/ || (echo "❌ no Windows artifacts" && find rustdesk -name "*.exe" -o -name "*.msi" | head -10 && exit 1)
+          # build.py produces a self-contained portable installer at:
+          #   rustdesk/rustdesk-{version}-install.exe
+          # NOT the binary in target/release/ (which is just the packer tool).
+          installer=$(find rustdesk -maxdepth 2 -name "rustdesk-*-install.exe" | head -n1 || true)
+          if [[ -z "$installer" ]]; then
+            echo "❌ no rustdesk-*-install.exe found"
+            find rustdesk -maxdepth 4 -name "*.exe" | head -20
+            exit 1
+          fi
+          cp "$installer" "dist/mixel-remote-${UPSTREAM_VERSION}-x86_64.exe"
+          # WiX-built .msi: build.py only produces it when WiX Toolset is on
+          # the runner. We don't install WiX, so this is best-effort.
+          msi=$(find rustdesk -maxdepth 5 -name "*.msi" | head -n1 || true)
+          if [[ -n "$msi" ]]; then
+            cp "$msi" "dist/mixel-remote-${UPSTREAM_VERSION}-x86_64.msi"
+          fi
+          ls -la dist/
 
       - uses: actions/upload-artifact@v4
         with:
