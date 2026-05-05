@@ -150,7 +150,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: bridge-artifact
-          path: ./
+          path: ./rustdesk
 
       - name: Build (cargo + flutter via build.py)
         working-directory: rustdesk
@@ -247,7 +247,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: bridge-artifact
-          path: ./
+          path: ./rustdesk
 
       - name: Import Apple Developer ID cert
         if: env.APPLE_CERT_P12_BASE64 != ''
@@ -368,7 +368,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: bridge-artifact
-          path: ./
+          path: ./rustdesk
 
       - name: Build (cargo + flutter via build.py)
         shell: bash
