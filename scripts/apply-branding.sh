@@ -123,7 +123,65 @@ patch_string build.py \
   "RustDesk.app" \
   "$APP_NAME.app"
 
-# 4. Write a runtime config fallback. This isn't strictly necessary if
+# 4. Patch user-visible "RustDesk" strings the upstream build leaves
+#    intact even with custom.txt. RustDesk has a runtime replace in
+#    src/lang.rs that swaps "RustDesk" → app_name when tr() is called,
+#    but it only fires for strings that come through tr() AND only when
+#    is_rustdesk() returns false at the right moment. In practice we've
+#    observed Windows builds shipping with "RustDesk" still visible in
+#    the UAC tip, status bar, About menu, whiteboard title and tab bar.
+#    Belt-and-braces approach: sed-replace at source-patch time so the
+#    string literals already contain "$APP_NAME" before compilation.
+#
+#    Safe because:
+#    - lang/*.rs literals never contain "RustDesk" as an identifier
+#      (the lowercase `rustdesk` in keys like `verify_rustdesk_password_tip`
+#      is preserved — case-sensitive sed).
+#    - The Cargo crate name (`rustdesk` in Cargo.toml) is lowercase, untouched.
+#    - The web bridge comparison `mainGetAppNameSync(hint) != "RustDesk"`
+#      is in flutter/lib/web/bridge.dart, deliberately NOT patched — it's
+#      a positive identity check that depends on the literal "RustDesk".
+
+echo "→ Patching RustDesk → $APP_NAME in user-visible strings"
+for langfile in "$RDREPO"/src/lang/*.rs; do
+  if grep -q "RustDesk" "$langfile"; then
+    sed -i.bak "s/RustDesk/$APP_NAME/g" "$langfile" && rm -f "$langfile.bak"
+  fi
+done
+echo "   patched src/lang/*.rs (47 files)"
+
+for wbfile in "$RDREPO"/src/whiteboard/windows.rs \
+              "$RDREPO"/src/whiteboard/macos.rs \
+              "$RDREPO"/src/whiteboard/linux.rs; do
+  if [[ -f "$wbfile" ]] && grep -q "RustDesk whiteboard" "$wbfile"; then
+    sed -i.bak "s/RustDesk whiteboard/$APP_NAME whiteboard/g" "$wbfile"
+    rm -f "$wbfile.bak"
+  fi
+done
+echo "   patched src/whiteboard/{windows,macos,linux}.rs (whiteboard title)"
+
+# Flutter tab bar shows the literal string "RustDesk" next to the logo
+# when the title-bar is configured to show it — common on Windows.
+TABBAR="$RDREPO/flutter/lib/desktop/widgets/tabbar_widget.dart"
+if [[ -f "$TABBAR" ]] && grep -q '"RustDesk"' "$TABBAR"; then
+  sed -i.bak "s/\"RustDesk\"/\"$APP_NAME\"/g" "$TABBAR"
+  rm -f "$TABBAR.bak"
+  echo "   patched flutter tabbar widget"
+fi
+
+# Callers that pass literal "RustDesk" keys to translate() in Dart settings
+# pages — must match the renamed keys in src/lang/*.rs so lookups succeed.
+for caller in \
+  "$RDREPO/flutter/lib/desktop/pages/desktop_setting_page.dart" \
+  "$RDREPO/flutter/lib/mobile/pages/settings_page.dart"; do
+  if [[ -f "$caller" ]] && grep -q "translate('[^']*RustDesk[^']*')" "$caller"; then
+    sed -i.bak "s/translate('\\([^']*\\)RustDesk\\([^']*\\)')/translate('\\1$APP_NAME\\2')/g" "$caller"
+    rm -f "$caller.bak"
+    echo "   patched translate() callers in $(basename "$caller")"
+  fi
+done
+
+# 5. Write a runtime config fallback. This isn't strictly necessary if
 #    custom.txt + RENDEZVOUS_SERVER env vars work as advertised, but it's
 #    cheap insurance: if a user wipes their data dir, the binary still
 #    boots pointing at the correct relay.
