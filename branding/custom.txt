@@ -4,7 +4,7 @@ APP_DESCRIPTION=Mixel-Remote — remote support client by Mixel IT and Corporate
 LOCAL_APP_DATA=MixelRemote
 RENDEZVOUS_SERVER=rs.mixel.ch
 RELAY_SERVER=rs.mixel.ch
-RS_PUB_KEY=MtLWP8YyUXgXaixMMKTIlOBRnkUFfxdqTLHJpX2MetM=
+RS_PUB_KEY=OogSlDx9l+fgs0t6ihF3uTg9emyCv01m8cr4ullarRo=
 HELPER_URL=https://ism.mixel.ch
 ORG=Mixel IT and Corporate Services GmbH
 COPYRIGHT=© Mixel IT and Corporate Services GmbH
