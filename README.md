@@ -63,3 +63,13 @@ them with real cargo/flutter invocations is the next milestone — see
 Decision recorded in the parent ITSM project history. Cost: time spent
 maintaining the build pipeline. Benefit: zero recurring license fee and
 full control over the client.
+
+## Tool configuration
+
+- `AGENTS.md` — Codex briefing (read on every session)
+- `CODEX_CONVENTIONS.md` — detailed conventions reference
+- `.agent/SKILL.md` — Antigravity auditor skill
+- `.agent/rules/` — MIXEL audit rules (security, multi-tenant, compliance, UI tokens)
+- `.agent/workflows/` — Reusable audit workflows (PR review, deep audit)
+
+Re-install / update via `setup-mixel-tools.sh <slug>` from `~/Projects/`.
