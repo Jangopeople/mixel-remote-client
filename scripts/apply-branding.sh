@@ -194,4 +194,26 @@ RS_PUB_KEY = "$RS_PUB_KEY"
 EOF
 echo "   wrote .cargo/config.toml with baked-in server env"
 
+# 6. Microsoft Store (MSIX) policy 10.1.5 — a Store build must not promote
+#    acquiring software outside the Store. Hide the "install to system" /
+#    upgrade cards and the auto-update/download card when running as a packaged
+#    MSIX app, detected in pure Dart via the executable path containing
+#    'windowsapps' (MSIX installs under ...\WindowsApps\...). The direct-download
+#    Windows build runs from elsewhere and keeps these prompts. dart:io (Platform)
+#    is already imported by this file upstream.
+HOME_PAGE="$RDREPO/flutter/lib/desktop/pages/desktop_home_page.dart"
+if [[ ! -f "$HOME_PAGE" ]]; then
+  echo "❌ desktop_home_page.dart not found at $HOME_PAGE" >&2
+  exit 1
+fi
+sed -i.bak "s|if (isWindows && !bind.isDisableInstallation()) {|if (isWindows \&\& !bind.isDisableInstallation() \&\& !Platform.resolvedExecutable.toLowerCase().contains('windowsapps')) {|" "$HOME_PAGE"
+sed -i.bak "s|contains('rustdesk')) {|contains('rustdesk') \&\& !Platform.resolvedExecutable.toLowerCase().contains('windowsapps')) {|" "$HOME_PAGE"
+rm -f "$HOME_PAGE.bak"
+guards=$(grep -c "contains('windowsapps')" "$HOME_PAGE" || true)
+if [[ "$guards" -lt 2 ]]; then
+  echo "❌ MSIX install/update guard did not apply (got $guards/2 — upstream desktop_home_page.dart changed)" >&2
+  exit 1
+fi
+echo "   patched desktop_home_page.dart (hide install/update prompts in MSIX build)"
+
 echo "✓ Branding applied."
