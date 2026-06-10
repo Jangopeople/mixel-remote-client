@@ -181,18 +181,63 @@ for caller in \
   fi
 done
 
-# 5. Write a runtime config fallback. This isn't strictly necessary if
-#    custom.txt + RENDEZVOUS_SERVER env vars work as advertised, but it's
-#    cheap insurance: if a user wipes their data dir, the binary still
-#    boots pointing at the correct relay.
-mkdir -p "$RDREPO/.cargo"
-cat > "$RDREPO/.cargo/config.toml" <<EOF
-[env]
-RENDEZVOUS_SERVER = "$RENDEZVOUS_SERVER"
-RELAY_SERVER = "$RELAY_SERVER"
-RS_PUB_KEY = "$RS_PUB_KEY"
-EOF
-echo "   wrote .cargo/config.toml with baked-in server env"
+# 5. Bake the Mixel relay server + public key into the binary as the
+#    compile-time DEFAULT, so a freshly downloaded client already points at
+#    rs.mixel.ch and needs zero manual "ID/Relay Server + Key" entry.
+#
+#    IMPORTANT — why the old approach was a no-op:
+#    A previous version of this script wrote a `.cargo/config.toml` with
+#    `[env] RENDEZVOUS_SERVER/RELAY_SERVER/RS_PUB_KEY`. Upstream RustDesk's
+#    hbb_common (libs/hbb_common/src/config.rs) does NOT read any of those
+#    environment variables at compile time — verified against the 1.4.6
+#    submodule. The server + key defaults are hardcoded constants:
+#        pub const RENDEZVOUS_SERVERS: &[&str] = &["rs-ny.rustdesk.com"];
+#        pub const RS_PUB_KEY: &str = "OeVuKk5nlHiXp+APNn0Y3pC1Iwpwn44JGqrQCsWqmBw=";
+#    So the env file did nothing and every downloaded build shipped with
+#    RustDesk's own public server, forcing customers to type rs.mixel.ch +
+#    our key by hand. The reliable, well-known self-host method is to patch
+#    those two constants directly. The CI clones rustdesk with
+#    --recurse-submodules, so this file exists when branding runs.
+#
+#    The regex keys on the constant NAME (not the upstream default value),
+#    so it keeps working if upstream changes their default server or key.
+#    RELAY_SERVER is intentionally not patched separately: RustDesk derives
+#    the relay from whatever the rendezvous server advertises.
+CONFIG_RS="$RDREPO/libs/hbb_common/src/config.rs"
+if [[ ! -f "$CONFIG_RS" ]]; then
+  echo "❌ hbb_common config.rs not found at $CONFIG_RS — submodule not checked out?" >&2
+  echo "   (CI must clone rustdesk with --recurse-submodules)" >&2
+  exit 1
+fi
+
+# Escape the values for use in a sed replacement (`&` and `|` are the only
+# sed-special chars that can appear; our server/key don't contain `|`, but
+# guard anyway). The replacement also has to emit literal `&` characters in
+# `&[&str]`, which we write escaped as `\&`.
+rs_server_esc=$(printf '%s' "$RENDEZVOUS_SERVER" | sed -e 's/[&|]/\\&/g')
+rs_key_esc=$(printf '%s' "$RS_PUB_KEY" | sed -e 's/[&|]/\\&/g')
+
+sed -i.bak -E \
+  "s|pub const RENDEZVOUS_SERVERS: &\[&str\] = .*;|pub const RENDEZVOUS_SERVERS: \&[\&str] = \&[\"${rs_server_esc}\"];|" \
+  "$CONFIG_RS"
+sed -i.bak -E \
+  "s|pub const RS_PUB_KEY: &str = \".*\";|pub const RS_PUB_KEY: \&str = \"${rs_key_esc}\";|" \
+  "$CONFIG_RS"
+rm -f "$CONFIG_RS.bak"
+
+# Fail loudly if the patch didn't land — a silent miss would ship another
+# unconfigured build and we'd not notice until a customer complains again.
+if ! grep -q "pub const RENDEZVOUS_SERVERS: &\[&str\] = &\[\"${RENDEZVOUS_SERVER}\"\];" "$CONFIG_RS"; then
+  echo "❌ Failed to patch RENDEZVOUS_SERVERS in $CONFIG_RS (upstream format changed?)" >&2
+  grep -n "RENDEZVOUS_SERVERS" "$CONFIG_RS" >&2 || true
+  exit 1
+fi
+if ! grep -q "pub const RS_PUB_KEY: &str = \"${RS_PUB_KEY}\";" "$CONFIG_RS"; then
+  echo "❌ Failed to patch RS_PUB_KEY in $CONFIG_RS (upstream format changed?)" >&2
+  grep -n "RS_PUB_KEY" "$CONFIG_RS" >&2 || true
+  exit 1
+fi
+echo "   baked rendezvous server '$RENDEZVOUS_SERVER' + Mixel pub key into hbb_common config.rs"
 
 # 6. Microsoft Store (MSIX) policy 10.1.5 — a Store build must not promote
 #    acquiring software outside the Store. Hide the "install to system" /
