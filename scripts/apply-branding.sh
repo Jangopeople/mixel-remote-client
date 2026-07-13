@@ -223,6 +223,9 @@ sed -i.bak -E \
 sed -i.bak -E \
   "s|pub const RS_PUB_KEY: &str = \".*\";|pub const RS_PUB_KEY: \&str = \"${rs_key_esc}\";|" \
   "$CONFIG_RS"
+sed -i.bak -E \
+  "s|pub static ref APP_NAME: RwLock<String> = RwLock::new\(\"RustDesk\".to_owned\(\)\);|pub static ref APP_NAME: RwLock<String> = RwLock::new\(\"${APP_NAME}\".to_owned\(\)\);|" \
+  "$CONFIG_RS"
 rm -f "$CONFIG_RS.bak"
 
 # Fail loudly if the patch didn't land — a silent miss would ship another
@@ -237,7 +240,11 @@ if ! grep -q "pub const RS_PUB_KEY: &str = \"${RS_PUB_KEY}\";" "$CONFIG_RS"; the
   grep -n "RS_PUB_KEY" "$CONFIG_RS" >&2 || true
   exit 1
 fi
-echo "   baked rendezvous server '$RENDEZVOUS_SERVER' + Mixel pub key into hbb_common config.rs"
+if ! grep -q "pub static ref APP_NAME: RwLock<String> = RwLock::new(\"${APP_NAME}\".to_owned());" "$CONFIG_RS"; then
+  echo "❌ Failed to patch APP_NAME in $CONFIG_RS" >&2
+  exit 1
+fi
+echo "   baked rendezvous server '$RENDEZVOUS_SERVER' + Mixel pub key + default APP_NAME '$APP_NAME' into hbb_common config.rs"
 
 # 6. Microsoft Store (MSIX) policy 10.1.5 — a Store build must not promote
 #    acquiring software outside the Store. Hide the "install to system" /
@@ -460,6 +467,89 @@ if [[ -f "$ARP" ]]; then
   rm -f "$ARP.bak"
   echo "   patched MSI ARP URLs → ism.mixel.ch"
 fi
+
+# 7.5. Extra rebrand patches for privilege scripts, CLI details, and copyright strings.
+echo "→ Applying extra rebrand patches (privilege scripts, CLI, copyright, etc.)"
+
+# macOS privileges scripts — change com.carriez.RustDesk to com.carriez.rustdesk
+# so that the runtime `correct_app_name` function successfully replaces it with $MACOS_BUNDLE_ID
+echo "   patching macOS privileges scripts to use lowercase com.carriez.rustdesk"
+for script in "$RDREPO"/src/platform/privileges_scripts/*; do
+  if [[ -f "$script" ]]; then
+    sed -i.bak -e "s/com.carriez.RustDesk/com.carriez.rustdesk/g" "$script"
+    rm -f "$script.bak"
+  fi
+done
+
+# macOS updater mount point
+patch_string src/platform/macos.rs \
+  "let mount_point = \"/Volumes/RustDeskUpdate\";" \
+  "let mount_point = \"/Volumes/${APP_NAME_CAMEL}Update\";"
+
+# Windows MessageBoxW caption
+patch_string src/platform/windows.rs \
+  "let caption = \"RustDesk Output\"" \
+  "let caption = \"$APP_DISPLAY_NAME Output\""
+
+# CLI help and info in main.rs
+patch_string src/main.rs \
+  "App::new(\"rustdesk\")" \
+  "App::new(\"$APP_NAME_KEBAB\")"
+patch_string src/main.rs \
+  ".author(\"Purslane Ltd<info@rustdesk.com>\")" \
+  ".author(\"$WIN_MANUFACTURER <support@mixel.ch>\")"
+patch_string src/main.rs \
+  ".about(\"RustDesk command line tool\")" \
+  ".about(\"$APP_DISPLAY_NAME command line tool\")"
+
+# UAC elevation prompt and plugin manager messages
+patch_string src/plugin/manager.rs \
+  "\"RustDesk wants to install then plugin\"" \
+  "\"$APP_DISPLAY_NAME wants to install the plugin\""
+patch_string src/plugin/manager.rs \
+  "\"RustDesk wants to uninstall the plugin\"" \
+  "\"$APP_DISPLAY_NAME wants to uninstall the plugin\""
+
+# Linux virtual input device name
+patch_string src/server/uinput.rs \
+  ".name(\"RustDesk UInput Keyboard\")" \
+  ".name(\"$APP_DISPLAY_NAME UInput Keyboard\")"
+
+# Windows Privacy mode window name
+patch_string src/privacy_mode/win_topmost_window.rs \
+  "pub(super) const PRIVACY_WINDOW_NAME: &'static str = \"RustDeskPrivacyWindow\";" \
+  "pub(super) const PRIVACY_WINDOW_NAME: &'static str = \"${APP_NAME}PrivacyWindow\";"
+
+# Linux system message notification title
+PLATFORM_MOD_RS="libs/hbb_common/src/platform/mod.rs"
+patch_string "$PLATFORM_MOD_RS" \
+  "\"RustDesk\"," \
+  "\"$APP_DISPLAY_NAME\","
+
+# Flutter about page copyright
+patch_string flutter/lib/desktop/pages/desktop_setting_page.dart \
+  "Purslane Ltd." \
+  "$WIN_MANUFACTURER"
+
+# Old Sciter copyright in index.tis
+patch_string src/ui/index.tis \
+  "Copyright &copy; 2025 Purslane Ltd." \
+  "Copyright &copy; 2026 $WIN_MANUFACTURER."
+
+# Xcode bundle identifier definition in pbxproj
+patch_string flutter/macos/Runner.xcodeproj/project.pbxproj \
+  "PRODUCT_BUNDLE_IDENTIFIER = com.carriez.rustdesk;" \
+  "PRODUCT_BUNDLE_IDENTIFIER = $MACOS_BUNDLE_ID;"
+
+# Cargo.toml metadata copyrights
+patch_string Cargo.toml \
+  "LegalCopyright = \"Copyright © 2025 Purslane Ltd. All rights reserved.\"" \
+  "LegalCopyright = \"Copyright © 2026 $WIN_MANUFACTURER. All rights reserved.\""
+patch_string libs/portable/Cargo.toml \
+  "LegalCopyright = \"Copyright © 2025 Purslane Ltd. All rights reserved.\"" \
+  "LegalCopyright = \"Copyright © 2026 $WIN_MANUFACTURER. All rights reserved.\""
+
+
 
 # 8. Leak check — fail the build if key user-facing files still say RustDesk.
 #    Deliberately ignores: web/bridge.dart identity check, comments, librustdesk,
