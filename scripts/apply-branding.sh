@@ -432,10 +432,15 @@ build_py = os.environ.get("BUILDPY")
 with open(build_py, 'r') as f:
     code = f.read()
 
-code = code.replace(
-    '"cp target/release/liblibrustdesk.dylib target/release/librustdesk.dylib"',
-    'f"cp target/{os.environ.get(\'CARGO_BUILD_TARGET\') + \'/\' if os.environ.get(\'CARGO_BUILD_TARGET\') else \'\'}release/liblibrustdesk.dylib target/{os.environ.get(\'CARGO_BUILD_TARGET\') + \'/\' if os.environ.get(\'CARGO_BUILD_TARGET\') else \'\'}release/librustdesk.dylib"'
-)
+old_dylib = 'system2(\n        "cp target/release/liblibrustdesk.dylib target/release/librustdesk.dylib")'
+new_dylib = '''_target = os.environ.get("CARGO_BUILD_TARGET")
+    _prefix = f"target/{_target}/release" if _target else "target/release"
+    shutil.copy2(f"{_prefix}/liblibrustdesk.dylib", f"{_prefix}/librustdesk.dylib")
+    if _target:
+        os.makedirs("target/release", exist_ok=True)
+        shutil.copy2(f"{_prefix}/liblibrustdesk.dylib", "target/release/librustdesk.dylib")'''
+
+code = code.replace(old_dylib, new_dylib)
 code = code.replace(
     "'cp -rf ../target/release/service ",
     "f'cp -rf ../target/{os.environ.get(\"CARGO_BUILD_TARGET\") + \"/\" if os.environ.get(\"CARGO_BUILD_TARGET\") else \"\"}release/service "
