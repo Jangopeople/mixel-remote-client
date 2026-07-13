@@ -599,6 +599,14 @@ jobs:
             if [[ ! -f dist/Mixel-Remote-Support-Windows.exe ]]; then
               cp "$f" dist/Mixel-Remote-Support-Windows.exe
             fi
+            # Also copy to Mixel-Remote-Support.exe to align with mixel-ism links!
+            cp "$f" dist/Mixel-Remote-Support.exe
+          done
+          for f in dist/mixel-remote-*-x86_64.msi; do
+            cp "$f" dist/Mixel-Remote-Support.msi
+          done
+          for f in dist/mixel-remote-*-x86_64.deb; do
+            cp "$f" dist/Mixel-Remote-Support.deb
           done
           ls -la dist/
 
