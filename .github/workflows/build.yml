@@ -301,6 +301,11 @@ jobs:
         run: |
           export VCPKG_ROOT="${{ github.workspace }}/vcpkg"
           export CARGO_BUILD_TARGET="${{ matrix.job.target }}"
+          if [ "${{ matrix.job.arch }}" = "aarch64" ]; then
+            export FLUTTER_XCODE_ARCHS="arm64"
+          else
+            export FLUTTER_XCODE_ARCHS="x86_64"
+          fi
           if [ "${{ matrix.job.target }}" = "aarch64-apple-darwin" ]; then
             sed -i '' -e "s/MACOSX_DEPLOYMENT_TARGET=[0-9]*\\.[0-9]*/MACOSX_DEPLOYMENT_TARGET=12.3/" build.py
           fi
