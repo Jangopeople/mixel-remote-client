@@ -438,6 +438,7 @@ new_dylib = '''_target = os.environ.get("CARGO_BUILD_TARGET")
     shutil.copy2(f"{_prefix}/liblibrustdesk.dylib", f"{_prefix}/librustdesk.dylib")
     if _target:
         os.makedirs("target/release", exist_ok=True)
+        shutil.copy2(f"{_prefix}/liblibrustdesk.dylib", "target/release/liblibrustdesk.dylib")
         shutil.copy2(f"{_prefix}/liblibrustdesk.dylib", "target/release/librustdesk.dylib")'''
 
 code = code.replace(old_dylib, new_dylib)
