@@ -146,7 +146,7 @@ def main(argv):
 
     print(f"-> writing {exe_out}")
     pe.write(filename=str(exe_out))
-    print("✓ done")
+    print("Success done")
     return 0
 
 
