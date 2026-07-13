@@ -423,6 +423,28 @@ if [[ -f "$BUILDPY" ]]; then
     "$BUILDPY"
   rm -f "$BUILDPY.bak"
   echo "   patched build.py packaging identity"
+
+  # Support target-specific paths on macOS cross-compilation when CARGO_BUILD_TARGET is set
+  export BUILDPY
+  python3 << 'EOF'
+import os
+build_py = os.environ.get("BUILDPY")
+with open(build_py, 'r') as f:
+    code = f.read()
+
+code = code.replace(
+    '"cp target/release/liblibrustdesk.dylib target/release/librustdesk.dylib"',
+    'f"cp target/{os.environ.get(\'CARGO_BUILD_TARGET\') + \'/\' if os.environ.get(\'CARGO_BUILD_TARGET\') else \'\'}release/liblibrustdesk.dylib target/{os.environ.get(\'CARGO_BUILD_TARGET\') + \'/\' if os.environ.get(\'CARGO_BUILD_TARGET\') else \'\'}release/librustdesk.dylib"'
+)
+code = code.replace(
+    "'cp -rf ../target/release/service ",
+    "f'cp -rf ../target/{os.environ.get(\'CARGO_BUILD_TARGET\') + \'/\' if os.environ.get(\'CARGO_BUILD_TARGET\') else \'\'}release/service "
+)
+
+with open(build_py, 'w') as f:
+    f.write(code)
+EOF
+  echo "   patched build.py to support target-specific build directories"
 fi
 
 # RPM specs (best-effort; CI ships .deb today).

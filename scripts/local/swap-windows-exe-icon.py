@@ -104,11 +104,11 @@ def main(argv):
     ico_in = Path(argv[2])
     exe_out = Path(argv[3])
 
-    print(f"→ parsing {ico_in}")
+    print(f"-> parsing {ico_in}")
     grp_bytes, icon_payloads = parse_ico(ico_in)
     print(f"   {len(icon_payloads)} icon sizes in {ico_in.name}")
 
-    print(f"→ opening {exe_in}")
+    print(f"-> opening {exe_in}")
     pe = pefile.PE(str(exe_in), fast_load=False)
     pe.parse_data_directories(
         directories=[pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_RESOURCE"]]
@@ -144,7 +144,7 @@ def main(argv):
     replace_resource_data_in_place(pe, group_lang_entry, grp_bytes)
     print(f"   GROUP_ICON: {len(grp_bytes)} B")
 
-    print(f"→ writing {exe_out}")
+    print(f"-> writing {exe_out}")
     pe.write(filename=str(exe_out))
     print("✓ done")
     return 0
