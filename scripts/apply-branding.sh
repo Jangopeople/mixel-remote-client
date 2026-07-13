@@ -438,7 +438,7 @@ code = code.replace(
 )
 code = code.replace(
     "'cp -rf ../target/release/service ",
-    "f'cp -rf ../target/{os.environ.get(\'CARGO_BUILD_TARGET\') + \'/\' if os.environ.get(\'CARGO_BUILD_TARGET\') else \'\'}release/service "
+    "f'cp -rf ../target/{os.environ.get(\"CARGO_BUILD_TARGET\") + \"/\" if os.environ.get(\"CARGO_BUILD_TARGET\") else \"\"}release/service "
 )
 
 with open(build_py, 'w') as f:
