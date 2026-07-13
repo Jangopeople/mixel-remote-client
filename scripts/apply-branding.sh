@@ -517,8 +517,8 @@ patch_string src/server/uinput.rs \
 
 # Windows Privacy mode window name
 patch_string src/privacy_mode/win_topmost_window.rs \
-  "pub(super) const PRIVACY_WINDOW_NAME: &'static str = \"RustDeskPrivacyWindow\";" \
-  "pub(super) const PRIVACY_WINDOW_NAME: &'static str = \"${APP_NAME}PrivacyWindow\";"
+  "\"RustDeskPrivacyWindow\"" \
+  "\"${APP_NAME}PrivacyWindow\""
 
 # Linux system message notification title
 PLATFORM_MOD_RS="libs/hbb_common/src/platform/mod.rs"
@@ -534,7 +534,7 @@ patch_string flutter/lib/desktop/pages/desktop_setting_page.dart \
 # Old Sciter copyright in index.tis
 patch_string src/ui/index.tis \
   "Copyright &copy; 2025 Purslane Ltd." \
-  "Copyright &copy; 2026 $WIN_MANUFACTURER."
+  "Copyright \&copy; 2026 $WIN_MANUFACTURER."
 
 # Xcode bundle identifier definition in pbxproj
 patch_string flutter/macos/Runner.xcodeproj/project.pbxproj \
