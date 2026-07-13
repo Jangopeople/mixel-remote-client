@@ -11,3 +11,9 @@ rustdesk/
 
 # OS
 .DS_Store
+
+# Agent worktrees (ephemeral, never commit)
+.claude/worktrees/
+.codex/worktrees/
+.antigravity/worktrees/
+.worktrees/

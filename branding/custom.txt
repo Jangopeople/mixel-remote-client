@@ -1,6 +1,6 @@
 APP_NAME=Mixel-Remote
-APP_DISPLAY_NAME=Mixel-Remote
-APP_DESCRIPTION=Mixel-Remote — remote support client by Mixel IT and Corporate Services GmbH.
+APP_DISPLAY_NAME=Mixel Remote
+APP_DESCRIPTION=Mixel Remote — remote support client by Mixel IT and Corporate Services GmbH.
 LOCAL_APP_DATA=MixelRemote
 RENDEZVOUS_SERVER=rs.mixel.ch
 RELAY_SERVER=rs.mixel.ch

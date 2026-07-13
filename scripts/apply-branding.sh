@@ -261,4 +261,249 @@ if [[ "$guards" -lt 2 ]]; then
 fi
 echo "   patched desktop_home_page.dart (hide install/update prompts in MSIX build)"
 
-echo "✓ Branding applied."
+# 7. OS-level identity — make the shipped product Mixel-Remote only.
+#    Leave internal link names alone (Cargo crate `rustdesk`, `librustdesk.*`).
+#    Leave the web-bridge identity check `!= "RustDesk"` alone so
+#    is_custom_client() keeps working.
+echo "→ Rebranding OS / installer identity → $APP_NAME ($APP_NAME_KEBAB)"
+
+# Windows PE version resources (Task Manager, Explorer Properties, SmartScreen).
+WIN_RC="$RDREPO/flutter/windows/runner/Runner.rc"
+if [[ -f "$WIN_RC" ]]; then
+  sed -i.bak \
+    -e "s|VALUE \"CompanyName\", \"Purslane Ltd\"|VALUE \"CompanyName\", \"$WIN_MANUFACTURER\"|" \
+    -e "s|VALUE \"FileDescription\", \"RustDesk Remote Desktop\"|VALUE \"FileDescription\", \"$APP_DISPLAY_NAME\"|" \
+    -e "s|VALUE \"InternalName\", \"rustdesk\"|VALUE \"InternalName\", \"$APP_NAME_KEBAB\"|" \
+    -e "s|VALUE \"LegalCopyright\", \"Copyright © 2025 Purslane Ltd. All rights reserved.\"|VALUE \"LegalCopyright\", \"Copyright © 2026 $WIN_MANUFACTURER. All rights reserved.\"|" \
+    -e "s|VALUE \"OriginalFilename\", \"rustdesk.exe\"|VALUE \"OriginalFilename\", \"${APP_NAME_KEBAB}.exe\"|" \
+    -e "s|VALUE \"ProductName\", \"RustDesk\"|VALUE \"ProductName\", \"$APP_DISPLAY_NAME\"|" \
+    "$WIN_RC"
+  rm -f "$WIN_RC.bak"
+  echo "   patched flutter/windows/runner/Runner.rc"
+fi
+
+# Windows window-title / single-instance fallback before get_app_name loads.
+WIN_MAIN="$RDREPO/flutter/windows/runner/main.cpp"
+if [[ -f "$WIN_MAIN" ]]; then
+  sed -i.bak \
+    -e "s|std::wstring app_name = L\"RustDesk\";|std::wstring app_name = L\"$APP_NAME\";|" \
+    -e "s|RustDesk \[|${APP_NAME} [|g" \
+    "$WIN_MAIN"
+  rm -f "$WIN_MAIN.bak"
+  echo "   patched flutter/windows/runner/main.cpp fallback app_name"
+fi
+
+# Flutter BINARY_NAME / APPLICATION_ID (exe + linux binary name users see).
+for cmake in \
+  "$RDREPO/flutter/windows/CMakeLists.txt" \
+  "$RDREPO/flutter/linux/CMakeLists.txt"; do
+  if [[ -f "$cmake" ]]; then
+    sed -i.bak \
+      -e "s|set(BINARY_NAME \"rustdesk\")|set(BINARY_NAME \"$APP_NAME_KEBAB\")|" \
+      -e "s|set(APPLICATION_ID \"com.carriez.flutter_hbb\")|set(APPLICATION_ID \"$MACOS_BUNDLE_ID\")|" \
+      "$cmake"
+    rm -f "$cmake.bak"
+    echo "   patched $(basename "$(dirname "$cmake")")/CMakeLists.txt BINARY_NAME"
+  fi
+done
+
+# macOS URL scheme (deep links) — drop com.carriez.rustdesk / rustdesk://.
+MAC_PLIST="$RDREPO/flutter/macos/Runner/Info.plist"
+if [[ -f "$MAC_PLIST" ]]; then
+  sed -i.bak \
+    -e "s|<string>com.carriez.rustdesk</string>|<string>$MACOS_BUNDLE_ID</string>|" \
+    -e "s|<string>rustdesk</string>|<string>$APP_NAME_KEBAB</string>|" \
+    "$MAC_PLIST"
+  rm -f "$MAC_PLIST.bak"
+  echo "   patched flutter/macos/Runner/Info.plist URL scheme"
+fi
+
+# Linux desktop entries + systemd unit (launcher name, icons, Exec).
+for desk in \
+  "$RDREPO/res/rustdesk.desktop" \
+  "$RDREPO/res/rustdesk-link.desktop"; do
+  if [[ -f "$desk" ]]; then
+    sed -i.bak \
+      -e "s|^Name=RustDesk|Name=$APP_DISPLAY_NAME|" \
+      -e "s|^Icon=rustdesk|Icon=$APP_NAME_KEBAB|" \
+      -e "s|^Exec=rustdesk|Exec=$APP_NAME_KEBAB|" \
+      -e "s|^TryExec=rustdesk|TryExec=$APP_NAME_KEBAB|" \
+      -e "s|^StartupWMClass=rustdesk|StartupWMClass=$APP_NAME_KEBAB|" \
+      -e "s|x-scheme-handler/rustdesk|x-scheme-handler/$APP_NAME_KEBAB|" \
+      -e "s|Keywords=.*|Keywords=remote;support;mixel;desktop;|" \
+      "$desk"
+    rm -f "$desk.bak"
+    echo "   patched $(basename "$desk")"
+  fi
+done
+
+SERVICE="$RDREPO/res/rustdesk.service"
+if [[ -f "$SERVICE" ]]; then
+  sed -i.bak \
+    -e "s|^Description=RustDesk|Description=$APP_NAME|" \
+    -e "s|/usr/bin/rustdesk|/usr/bin/$APP_NAME_KEBAB|g" \
+    -e "s|pkill -f \"rustdesk --\"|pkill -f \"$APP_NAME_KEBAB --\"|g" \
+    -e "s|/run/rustdesk.pid|/run/$APP_NAME_KEBAB.pid|" \
+    "$SERVICE"
+  rm -f "$SERVICE.bak"
+  echo "   patched res/rustdesk.service"
+fi
+
+# Debian maintainer scripts — install paths + service name users manage.
+for debfile in \
+  "$RDREPO/res/DEBIAN/postinst" \
+  "$RDREPO/res/DEBIAN/prerm" \
+  "$RDREPO/res/DEBIAN/preinst" \
+  "$RDREPO/res/DEBIAN/postrm"; do
+  if [[ -f "$debfile" ]]; then
+    sed -i.bak \
+      -e "s|/usr/share/rustdesk|/usr/share/$APP_NAME_KEBAB|g" \
+      -e "s|/usr/bin/rustdesk|/usr/bin/$APP_NAME_KEBAB|g" \
+      -e "s|/usr/share/$APP_NAME_KEBAB/rustdesk|/usr/share/$APP_NAME_KEBAB/$APP_NAME_KEBAB|g" \
+      -e "s|/root/\.config/rustdesk|/root/.config/$APP_NAME_KEBAB|g" \
+      -e "s|rustdesk\.service|$APP_NAME_KEBAB.service|g" \
+      -e "s|service rustdesk |service $APP_NAME_KEBAB |g" \
+      -e "s|systemctl enable rustdesk|systemctl enable $APP_NAME_KEBAB|g" \
+      -e "s|systemctl start rustdesk|systemctl start $APP_NAME_KEBAB|g" \
+      -e "s|systemctl stop rustdesk|systemctl stop $APP_NAME_KEBAB|g" \
+      -e "s|systemctl disable rustdesk|systemctl disable $APP_NAME_KEBAB|g" \
+      -e "s|rustdesk +--server|$APP_NAME_KEBAB +--server|g" \
+      -e "s|stop rustdesk |stop $APP_NAME_KEBAB |g" \
+      "$debfile"
+    rm -f "$debfile.bak"
+    echo "   patched res/DEBIAN/$(basename "$debfile")"
+  fi
+done
+
+# Rename packaging assets so build.py / postinst agree on filenames.
+if [[ -f "$SERVICE" ]]; then
+  cp "$SERVICE" "$RDREPO/res/${APP_NAME_KEBAB}.service"
+  echo "   wrote res/${APP_NAME_KEBAB}.service"
+fi
+if [[ -f "$RDREPO/res/pam.d/rustdesk.debian" ]]; then
+  cp "$RDREPO/res/pam.d/rustdesk.debian" "$RDREPO/res/pam.d/${APP_NAME_KEBAB}.debian"
+  echo "   wrote res/pam.d/${APP_NAME_KEBAB}.debian"
+fi
+
+# build.py packaging identity (deb control, install paths, dmg volname, outputs).
+# Protect librustdesk.* so the native lib keeps linking.
+BUILDPY="$RDREPO/build.py"
+if [[ -f "$BUILDPY" ]]; then
+  sed -i.bak \
+    -e "s/librustdesk/__MIXEL_LIBRD__/g" \
+    -e "s/hbb_name = 'rustdesk'/hbb_name = '$APP_NAME_KEBAB'/" \
+    -e "s/Package: rustdesk/Package: $APP_NAME_KEBAB/" \
+    -e "s/Maintainer: rustdesk <info@rustdesk.com>/Maintainer: $WIN_MANUFACTURER <support@mixel.ch>/" \
+    -e "s|Homepage: https://rustdesk.com|Homepage: https://mixel.ch|" \
+    -e "s|Description: A remote control software.|Description: $APP_DESCRIPTION|" \
+    -e "s|/usr/share/rustdesk|/usr/share/$APP_NAME_KEBAB|g" \
+    -e "s|/etc/rustdesk|/etc/$APP_NAME_KEBAB|g" \
+    -e "s|apps/rustdesk.png|apps/$APP_NAME_KEBAB.png|g" \
+    -e "s|apps/rustdesk.svg|apps/$APP_NAME_KEBAB.svg|g" \
+    -e "s|applications/rustdesk.desktop|applications/$APP_NAME_KEBAB.desktop|g" \
+    -e "s|applications/rustdesk-link.desktop|applications/$APP_NAME_KEBAB-link.desktop|g" \
+    -e "s|pam.d/rustdesk|pam.d/$APP_NAME_KEBAB|g" \
+    -e "s|tmpdeb/usr/bin/rustdesk|tmpdeb/usr/bin/$APP_NAME_KEBAB|g" \
+    -e "s|res/rustdesk.service|res/$APP_NAME_KEBAB.service|g" \
+    -e "s|rustdesk.deb|$APP_NAME_KEBAB.deb|g" \
+    -e "s|rustdesk-%s.deb|$APP_NAME_KEBAB-%s.deb|g" \
+    -e "s|RustDesk Installer|$APP_NAME Installer|g" \
+    -e "s|rustdesk.dmg|$APP_NAME_KEBAB.dmg|g" \
+    -e "s|rustdesk-{version}|$APP_NAME_KEBAB-{version}|g" \
+    -e "s|bundle/deb/rustdesk|bundle/deb/$APP_NAME_KEBAB|g" \
+    -e "s|/rustdesk\.exe|/$APP_NAME_KEBAB.exe|g" \
+    -e "s/__MIXEL_LIBRD__/librustdesk/g" \
+    "$BUILDPY"
+  rm -f "$BUILDPY.bak"
+  echo "   patched build.py packaging identity"
+fi
+
+# RPM specs (best-effort; CI ships .deb today).
+for rpm in "$RDREPO"/res/rpm*.spec; do
+  [[ -f "$rpm" ]] || continue
+  sed -i.bak \
+    -e "s/librustdesk/__MIXEL_LIBRD__/g" \
+    -e "s/rustdesk/$APP_NAME_KEBAB/g" \
+    -e "s/RustDesk/$APP_NAME/g" \
+    -e "s|https://rustdesk.com|https://mixel.ch|g" \
+    -e "s/info@rustdesk.com/support@mixel.ch/g" \
+    -e "s/__MIXEL_LIBRD__/librustdesk/g" \
+    "$rpm"
+  rm -f "$rpm.bak"
+  echo "   patched $(basename "$rpm")"
+done
+
+# 2FA issuer shown in authenticator apps.
+AUTH_2FA="$RDREPO/src/auth_2fa.rs"
+if [[ -f "$AUTH_2FA" ]]; then
+  sed -i.bak "s|const ISSUER: &str = \"RustDesk\";|const ISSUER: \&str = \"$APP_NAME\";|" "$AUTH_2FA"
+  rm -f "$AUTH_2FA.bak"
+  echo "   patched src/auth_2fa.rs ISSUER"
+fi
+
+# Windows printer driver display names.
+PRINTER_CPP="$RDREPO/res/msi/CustomActions/RemotePrinter.cpp"
+if [[ -f "$PRINTER_CPP" ]]; then
+  sed -i.bak \
+    -e "s|RustDesk Printer|$APP_NAME Printer|g" \
+    -e "s|RustDeskPrinterDriver|MixelRemotePrinterDriver|g" \
+    -e "s|RustDesk v4 Printer Driver|$APP_NAME v4 Printer Driver|g" \
+    "$PRINTER_CPP"
+  rm -f "$PRINTER_CPP.bak"
+  echo "   patched RemotePrinter.cpp display names"
+fi
+
+# MSI Add/Remove Program links — point at Mixel, not github.com/rustdesk.
+ARP="$RDREPO/res/msi/Package/Fragments/AddRemoveProperties.wxs"
+if [[ -f "$ARP" ]]; then
+  sed -i.bak "s|https://github.com/rustdesk/rustdesk|https://ism.mixel.ch|g" "$ARP"
+  rm -f "$ARP.bak"
+  echo "   patched MSI ARP URLs → ism.mixel.ch"
+fi
+
+# 8. Leak check — fail the build if key user-facing files still say RustDesk.
+#    Deliberately ignores: web/bridge.dart identity check, comments, librustdesk,
+#    internal type names, and the upstream clone directory name itself.
+echo "→ Verifying no user-facing RustDesk identity remains"
+leak=0
+check_no_rustdesk () {
+  local file="$1"
+  local label="$2"
+  [[ -f "$RDREPO/$file" ]] || return 0
+  if grep -q 'RustDesk' "$RDREPO/$file"; then
+    echo "❌ leak in $label ($file):" >&2
+    grep -n 'RustDesk' "$RDREPO/$file" >&2 || true
+    leak=1
+  fi
+}
+check_no_rustdesk flutter/windows/runner/Runner.rc "Windows PE resources"
+check_no_rustdesk flutter/windows/runner/main.cpp "Windows main.cpp"
+check_no_rustdesk flutter/macos/Runner/Configs/AppInfo.xcconfig "macOS AppInfo"
+check_no_rustdesk res/rustdesk.desktop "Linux desktop"
+check_no_rustdesk res/rustdesk-link.desktop "Linux link desktop"
+check_no_rustdesk res/rustdesk.service "systemd unit"
+check_no_rustdesk src/auth_2fa.rs "2FA issuer"
+check_no_rustdesk flutter/lib/desktop/widgets/tabbar_widget.dart "Flutter tabbar"
+
+if grep -q 'ProductName.*RustDesk\|Name=RustDesk\|ISSUER.*RustDesk' \
+  "$RDREPO/flutter/windows/runner/Runner.rc" \
+  "$RDREPO/res/rustdesk.desktop" \
+  "$RDREPO/src/auth_2fa.rs" 2>/dev/null; then
+  leak=1
+fi
+
+# BINARY_NAME must be mixel-remote
+if grep -q 'set(BINARY_NAME "rustdesk")' \
+  "$RDREPO/flutter/windows/CMakeLists.txt" \
+  "$RDREPO/flutter/linux/CMakeLists.txt" 2>/dev/null; then
+  echo "❌ BINARY_NAME still rustdesk in CMakeLists.txt" >&2
+  leak=1
+fi
+
+if [[ "$leak" -ne 0 ]]; then
+  echo "❌ Branding leak check failed — refusing to ship a RustDesk-labelled build" >&2
+  exit 1
+fi
+echo "   leak check passed"
+
+echo "✓ Branding applied — product identity is $APP_NAME only."
