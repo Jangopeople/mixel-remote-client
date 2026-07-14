@@ -6,12 +6,11 @@ on:
   workflow_dispatch:
     inputs:
       upstream_version:
-        description: "RustDesk upstream version to fork from (e.g. 1.4.6)"
-        required: true
-        default: "1.4.6"
+        description: "RustDesk upstream version to fork from (empty = branding/branding.env)"
+        required: false
+        default: ""
 
 env:
-  UPSTREAM_VERSION: ${{ github.event.inputs.upstream_version || '1.4.6' }}
   RUST_VERSION: "1.75"
   MAC_RUST_VERSION: "1.81"
   FLUTTER_VERSION: "3.24.5"
@@ -19,12 +18,42 @@ env:
 
 jobs:
   # ===========================================================================
-  # BRIDGE — generate flutter_rust_bridge codegen output once; all platforms
-  # download the artifact instead of rebuilding the bridge codegen tool.
-  # Mirrors upstream's bridge.yml workflow.
+  # CONFIG — single source of truth for UPSTREAM_VERSION (branding.env unless
+  # workflow_dispatch overrides it).
+  # ===========================================================================
+  config:
+    runs-on: ubuntu-22.04
+    outputs:
+      upstream_version: ${{ steps.ver.outputs.upstream_version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: ver
+        name: Resolve UPSTREAM_VERSION
+        run: |
+          INPUT="${{ github.event.inputs.upstream_version }}"
+          FILE_VER="$(grep -E '^UPSTREAM_VERSION=' branding/branding.env | head -1 | cut -d= -f2- | tr -d '"')"
+          if [[ -n "$INPUT" ]]; then
+            VER="$INPUT"
+            echo "Using workflow_dispatch override: $VER"
+          else
+            VER="$FILE_VER"
+            echo "Using branding/branding.env: $VER"
+          fi
+          if [[ -z "$VER" ]]; then
+            echo "❌ could not resolve UPSTREAM_VERSION" >&2
+            exit 1
+          fi
+          echo "upstream_version=$VER" >> "$GITHUB_OUTPUT"
+
+  # ===========================================================================
+  # BRIDGE — generate flutter_rust_bridge codegen once for all platforms.
   # ===========================================================================
   bridge:
+    needs: config
     runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    env:
+      UPSTREAM_VERSION: ${{ needs.config.outputs.upstream_version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -48,9 +77,6 @@ jobs:
 
       - name: Fetch upstream RustDesk
         run: |
-          # rust-cache may create an empty `rustdesk/` directory for its
-          # workspace check before this step runs; nuke it so git clone
-          # doesn't fail with "destination path already exists".
           rm -rf rustdesk
           git clone --depth 1 --branch "${UPSTREAM_VERSION}" --recurse-submodules \
             https://github.com/rustdesk/rustdesk.git rustdesk
@@ -62,7 +88,6 @@ jobs:
       - name: Generate bridge
         working-directory: rustdesk
         run: |
-          # extended_text version pin matches upstream bridge.yml
           pushd flutter && sed -i -e 's/extended_text: 14.0.0/extended_text: 13.0.0/g' pubspec.yaml && flutter pub get && popd
           ~/.cargo/bin/flutter_rust_bridge_codegen \
             --rust-input ./src/flutter_ffi.rs \
@@ -83,14 +108,13 @@ jobs:
 
   # ===========================================================================
   # LINUX — produces .deb
-  # Closely follows upstream rustdesk's build-rustdesk-linux job, simplified
-  # for x86_64 only and without the qemu-on-18.04 layer (we use the runner's
-  # native ubuntu-22.04, which gets us a newer glibc but is still widely
-  # compatible).
   # ===========================================================================
   linux:
-    needs: bridge
+    needs: [config, bridge]
     runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    env:
+      UPSTREAM_VERSION: ${{ needs.config.outputs.upstream_version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -141,9 +165,6 @@ jobs:
 
       - name: Fetch upstream RustDesk
         run: |
-          # rust-cache may create an empty `rustdesk/` directory for its
-          # workspace check before this step runs; nuke it so git clone
-          # doesn't fail with "destination path already exists".
           rm -rf rustdesk
           git clone --depth 1 --branch "${UPSTREAM_VERSION}" --recurse-submodules \
             https://github.com/rustdesk/rustdesk.git rustdesk
@@ -158,7 +179,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: bridge-artifact
-          path: ./rustdesk
+          path: rustdesk
 
       - name: Build (cargo + flutter via build.py)
         working-directory: rustdesk
@@ -172,7 +193,7 @@ jobs:
           deb=$(find rustdesk -name "*.deb" | head -n1)
           if [[ -z "$deb" ]]; then
             echo "❌ no .deb produced" >&2
-            find rustdesk -maxdepth 4 -name "*.deb" -o -name "rustdesk*" | head -20
+            find rustdesk -maxdepth 4 -name "*.deb" -o -name "mixel-remote*" -o -name "rustdesk*" | head -20
             exit 1
           fi
           mkdir -p dist
@@ -185,21 +206,21 @@ jobs:
           path: dist/
 
   # ===========================================================================
-  # macOS — produces signed + notarized .dmg for arm64 + x86_64
+  # macOS — arm64 + x86_64 on macos-14 (macos-13 runners starve / never start).
+  # x86_64 is cross-built on the Apple Silicon runner via the Rust target.
   # ===========================================================================
   macos:
-    needs: bridge
+    needs: [config, bridge]
     strategy:
       fail-fast: false
       matrix:
         job:
-          - { arch: aarch64, target: aarch64-apple-darwin, os: macos-14 }
-          - { arch: x86_64,  target: x86_64-apple-darwin,  os: macos-13 }
-    runs-on: ${{ matrix.job.os }}
-    # Job-level env so step-level `if: env.APPLE_CERT_P12_BASE64 != ''`
-    # actually evaluates against the secret. (Step-level env applies after
-    # the if condition, so the if always saw it empty.)
+          - { arch: aarch64, target: aarch64-apple-darwin }
+          - { arch: x86_64,  target: x86_64-apple-darwin }
+    runs-on: macos-14
+    timeout-minutes: 180
     env:
+      UPSTREAM_VERSION: ${{ needs.config.outputs.upstream_version }}
       APPLE_CERT_P12_BASE64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
       APPLE_CERT_P12_PASSWORD: ${{ secrets.APPLE_CERT_P12_PASSWORD }}
       APPLE_NOTARY_USER:     ${{ secrets.APPLE_NOTARY_USER }}
@@ -210,15 +231,15 @@ jobs:
 
       - name: Install build runtime
         run: |
-          # autoconf/automake/libtool needed by vcpkg's libsodium build.
-          # pkg-config + create-dmg for build.py packaging.
-          # imagemagick for our apply-branding.sh icon manipulation.
           brew install autoconf automake libtool pkg-config create-dmg imagemagick
-          # NASM 2.x (NOT 3.x) for libvpx/aom/libyuv assembly. Brew has 3.x.
           wget https://www.nasm.us/pub/nasm/releasebuilds/2.16.03/macosx/nasm-2.16.03-macosx.zip
           unzip -q nasm-2.16.03-macosx.zip
           sudo cp nasm-2.16.03/nasm /usr/local/bin/nasm
           nasm --version
+          # Rosetta helps some Intel toolchain bits when cross-building x86_64.
+          if [[ "${{ matrix.job.arch }}" == "x86_64" ]]; then
+            softwareupdate --install-rosetta --agree-to-license || true
+          fi
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@v1
@@ -230,7 +251,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: rustdesk
-          prefix-key: ${{ matrix.job.os }}
+          prefix-key: macos-14-${{ matrix.job.arch }}
 
       - name: Install Flutter
         uses: subosito/flutter-action@v2
@@ -251,9 +272,6 @@ jobs:
 
       - name: Fetch upstream RustDesk
         run: |
-          # rust-cache may create an empty `rustdesk/` directory for its
-          # workspace check before this step runs; nuke it so git clone
-          # doesn't fail with "destination path already exists".
           rm -rf rustdesk
           git clone --depth 1 --branch "${UPSTREAM_VERSION}" --recurse-submodules \
             https://github.com/rustdesk/rustdesk.git rustdesk
@@ -268,7 +286,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: bridge-artifact
-          path: ./rustdesk
+          path: rustdesk
 
       - name: Import Apple Developer ID cert
         if: env.APPLE_CERT_P12_BASE64 != ''
@@ -282,12 +300,15 @@ jobs:
         working-directory: rustdesk
         run: |
           export VCPKG_ROOT="${{ github.workspace }}/vcpkg"
-          # Match upstream's mac min target adjustments
+          export CARGO_BUILD_TARGET="${{ matrix.job.target }}"
+          if [ "${{ matrix.job.arch }}" = "aarch64" ]; then
+            export FLUTTER_XCODE_ARCHS="arm64"
+          else
+            export FLUTTER_XCODE_ARCHS="x86_64"
+          fi
           if [ "${{ matrix.job.target }}" = "aarch64-apple-darwin" ]; then
             sed -i '' -e "s/MACOSX_DEPLOYMENT_TARGET=[0-9]*\\.[0-9]*/MACOSX_DEPLOYMENT_TARGET=12.3/" build.py
           fi
-          # Retry the build a few times — chromium.googlesource.com is flaky
-          # and intermittently fails the libwebm submodule fetch.
           for attempt in 1 2 3; do
             if python3 build.py --flutter --unix-file-copy-paste; then
               echo "✓ build succeeded on attempt $attempt"
@@ -299,11 +320,11 @@ jobs:
           echo "❌ build failed after 3 attempts"
           exit 1
 
-      - name: Package + sign + notarize .dmg
+      - name: Package + sign + notarize (.app then .dmg)
         working-directory: rustdesk
         run: |
+          set -euo pipefail
           APP_PATH="flutter/build/macos/Build/Products/Release/Mixel-Remote.app"
-          # Fallback: upstream may still produce RustDesk.app if our PRODUCT_NAME patch failed
           if [[ ! -d "$APP_PATH" ]]; then
             APP_PATH="flutter/build/macos/Build/Products/Release/RustDesk.app"
           fi
@@ -312,23 +333,69 @@ jobs:
             find flutter/build -maxdepth 6 -name "*.app" || true
             exit 1
           fi
+
+          # Normalize on-disk name to Mixel-Remote.app for customer-facing DMGs.
+          APP_DIR="$(dirname "$APP_PATH")"
+          if [[ "$(basename "$APP_PATH")" != "Mixel-Remote.app" ]]; then
+            rm -rf "$APP_DIR/Mixel-Remote.app"
+            mv "$APP_PATH" "$APP_DIR/Mixel-Remote.app"
+            APP_PATH="$APP_DIR/Mixel-Remote.app"
+          fi
+
           mkdir -p ../dist
           DMG="../dist/mixel-remote-${UPSTREAM_VERSION}-${{ matrix.job.arch }}.dmg"
+          rm -f "$DMG"
 
-          if [[ -n "$APPLE_CERT_P12_BASE64" ]]; then
-            CODESIGN_ID=$(security find-identity -v | grep "Developer ID Application" | head -n1 | awk '{print $2}')
-            codesign --force --options runtime --deep --strict -s "$CODESIGN_ID" "$APP_PATH" -vvv
-            create-dmg --window-size 800 400 --icon "$(basename $APP_PATH)" 200 190 --hide-extension "$(basename $APP_PATH)" --app-drop-link 600 185 "$DMG" "$APP_PATH"
-            codesign --force --options runtime --deep --strict -s "$CODESIGN_ID" "$DMG" -vvv
+          if [[ -n "${APPLE_CERT_P12_BASE64:-}" ]]; then
+            CODESIGN_ID=$(security find-identity -v -p codesigning \
+              | grep "Developer ID Application" | head -n1 | awk '{print $2}')
+            if [[ -z "$CODESIGN_ID" ]]; then
+              echo "❌ no Developer ID Application identity in keychain" >&2
+              security find-identity -v -p codesigning >&2 || true
+              exit 1
+            fi
 
+            # 1) Sign .app
+            codesign --force --options runtime --timestamp --deep --strict \
+              -s "$CODESIGN_ID" "$APP_PATH" -vvv
+            codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+
+            # 2) Notarize + staple the .app ITSELF (required for stable TCC grants
+            #    after the user drags .app → /Applications). See
+            #    scripts/local/sign-and-publish-macos.sh for the full rationale.
+            APP_ZIP="../dist/Mixel-Remote-${{ matrix.job.arch }}.zip"
+            rm -f "$APP_ZIP"
+            ditto -c -k --keepParent "$APP_PATH" "$APP_ZIP"
+            xcrun notarytool submit "$APP_ZIP" \
+              --apple-id "$APPLE_NOTARY_USER" \
+              --password "$APPLE_NOTARY_PASSWORD" \
+              --team-id  "$APPLE_NOTARY_TEAM_ID" \
+              --wait
+            rm -f "$APP_ZIP"
+            xcrun stapler staple "$APP_PATH"
+            xcrun stapler validate "$APP_PATH"
+
+            # 3) Package stapled .app into DMG, then sign/notarize/staple DMG.
+            create-dmg --window-size 800 400 \
+              --icon "Mixel-Remote.app" 200 190 \
+              --hide-extension "Mixel-Remote.app" \
+              --app-drop-link 600 185 \
+              "$DMG" "$APP_PATH"
+            codesign --force --options runtime --timestamp --deep --strict \
+              -s "$CODESIGN_ID" "$DMG" -vvv
             xcrun notarytool submit "$DMG" \
               --apple-id "$APPLE_NOTARY_USER" \
               --password "$APPLE_NOTARY_PASSWORD" \
               --team-id  "$APPLE_NOTARY_TEAM_ID" \
               --wait
             xcrun stapler staple "$DMG"
+            xcrun stapler validate "$DMG"
           else
-            create-dmg --window-size 800 400 --icon "$(basename $APP_PATH)" 200 190 --hide-extension "$(basename $APP_PATH)" --app-drop-link 600 185 "$DMG" "$APP_PATH"
+            create-dmg --window-size 800 400 \
+              --icon "Mixel-Remote.app" 200 190 \
+              --hide-extension "Mixel-Remote.app" \
+              --app-drop-link 600 185 \
+              "$DMG" "$APP_PATH"
             echo "⚠ Built unsigned DMG (no APPLE_CERT_P12_BASE64 secret)"
           fi
           ls -la ../dist/
@@ -339,11 +406,16 @@ jobs:
           path: dist/
 
   # ===========================================================================
-  # WINDOWS — produces unsigned .exe + .msi
+  # WINDOWS — produces .exe (+ .msi if WiX present), optional Authenticode.
   # ===========================================================================
   windows:
-    needs: bridge
+    needs: [config, bridge]
     runs-on: windows-2022
+    timeout-minutes: 180
+    env:
+      UPSTREAM_VERSION: ${{ needs.config.outputs.upstream_version }}
+      WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+      WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
 
@@ -375,19 +447,34 @@ jobs:
         run: |
           $VCPKG_ROOT/vcpkg install --triplet x64-windows-static libvpx libyuv opus aom libjpeg-turbo
 
+      - name: Install ImageMagick (for branding .ico)
+        shell: bash
+        run: |
+          choco install imagemagick -y --no-progress || choco install imagemagick.app -y --no-progress || true
+          MAGICK_DIR=$(ls -d /c/Program\ Files/ImageMagick-* 2>/dev/null | head -1 || true)
+          if [[ -n "$MAGICK_DIR" ]]; then
+            "$MAGICK_DIR/magick.exe" -version | head -1
+          else
+            echo "⚠ ImageMagick not found after choco install — branding will skip .ico regen if magick missing"
+          fi
+
       - name: Fetch upstream RustDesk
         shell: bash
         run: |
-          # rust-cache may create an empty `rustdesk/` directory for its
-          # workspace check before this step runs; nuke it so git clone
-          # doesn't fail with "destination path already exists".
           rm -rf rustdesk
           git clone --depth 1 --branch "${UPSTREAM_VERSION}" --recurse-submodules \
             https://github.com/rustdesk/rustdesk.git rustdesk
 
       - name: Apply Mixel-Remote branding
         shell: bash
-        run: ./scripts/apply-branding.sh
+        run: |
+          export PATH="/c/Program Files/ImageMagick-7*:/c/ProgramData/chocolatey/bin:$PATH"
+          # Resolve ImageMagick install dir (versioned folder name).
+          MAGICK_DIR=$(ls -d /c/Program\ Files/ImageMagick-* 2>/dev/null | head -1 || true)
+          if [[ -n "$MAGICK_DIR" ]]; then
+            export PATH="$MAGICK_DIR:$PATH"
+          fi
+          ./scripts/apply-branding.sh
         env:
           RDREPO: ./rustdesk
           BRANDING: ./branding
@@ -396,7 +483,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: bridge-artifact
-          path: ./rustdesk
+          path: rustdesk
 
       - name: Build (cargo + flutter via build.py)
         shell: bash
@@ -406,26 +493,77 @@ jobs:
         run: |
           python build.py --flutter
 
-      - name: Locate artifacts
+      - name: Locate + rebrand icon + optional Authenticode
         shell: bash
         run: |
+          set -euo pipefail
           mkdir -p dist
-          # build.py produces a self-contained portable installer at:
-          #   rustdesk/rustdesk-{version}-install.exe
-          # NOT the binary in target/release/ (which is just the packer tool).
-          installer=$(find rustdesk -maxdepth 2 -name "rustdesk-*-install.exe" | head -n1 || true)
+          installer=$(find rustdesk -maxdepth 2 \( -name "mixel-remote-*-install.exe" -o -name "rustdesk-*-install.exe" \) | head -n1 || true)
           if [[ -z "$installer" ]]; then
-            echo "❌ no rustdesk-*-install.exe found"
+            echo "❌ no mixel-remote-*-install.exe (or rustdesk-*-install.exe) found"
             find rustdesk -maxdepth 4 -name "*.exe" | head -20
             exit 1
           fi
-          cp "$installer" "dist/mixel-remote-${UPSTREAM_VERSION}-x86_64.exe"
-          # WiX-built .msi: build.py only produces it when WiX Toolset is on
-          # the runner. We don't install WiX, so this is best-effort.
+
+          OUT="dist/mixel-remote-${UPSTREAM_VERSION}-x86_64.exe"
+          cp "$installer" "$OUT"
+
           msi=$(find rustdesk -maxdepth 5 -name "*.msi" | head -n1 || true)
           if [[ -n "$msi" ]]; then
             cp "$msi" "dist/mixel-remote-${UPSTREAM_VERSION}-x86_64.msi"
           fi
+
+          # Prefer ico produced by apply-branding; else build from PNGs.
+          ICO="rustdesk/res/icon.ico"
+          if [[ ! -f "$ICO" ]]; then
+            MAGICK_DIR=$(ls -d /c/Program\ Files/ImageMagick-* 2>/dev/null | head -1 || true)
+            if [[ -n "$MAGICK_DIR" ]]; then
+              export PATH="$MAGICK_DIR:/c/ProgramData/chocolatey/bin:$PATH"
+            fi
+            magick \
+              branding/icon-16.png branding/icon-32.png branding/icon-48.png \
+              branding/icon-64.png branding/icon-128.png branding/icon-256.png \
+              dist/mixel-remote.ico
+            ICO="dist/mixel-remote.ico"
+          fi
+
+          python -m pip install --user pefile
+          python scripts/local/swap-windows-exe-icon.py \
+            "$OUT" "$ICO" "dist/mixel-remote-iconfixed.exe"
+          mv "dist/mixel-remote-iconfixed.exe" "$OUT"
+          rm -f dist/mixel-remote.ico
+
+          if [[ -n "${WINDOWS_CERT_PFX_BASE64:-}" ]]; then
+            echo "$WINDOWS_CERT_PFX_BASE64" | base64 --decode > dist/windows-code-sign.pfx
+            SIGNTOOL=$(find "/c/Program Files (x86)/Windows Kits/10/bin" -name signtool.exe 2>/dev/null | sort -r | head -n1 || true)
+            if [[ -n "$SIGNTOOL" ]]; then
+              "$SIGNTOOL" sign //f dist/windows-code-sign.pfx //p "$WINDOWS_CERT_PASSWORD" \
+                //tr http://timestamp.digicert.com //td sha256 //fd sha256 "$OUT"
+              if [[ -f "dist/mixel-remote-${UPSTREAM_VERSION}-x86_64.msi" ]]; then
+                "$SIGNTOOL" sign //f dist/windows-code-sign.pfx //p "$WINDOWS_CERT_PASSWORD" \
+                  //tr http://timestamp.digicert.com //td sha256 //fd sha256 \
+                  "dist/mixel-remote-${UPSTREAM_VERSION}-x86_64.msi" || true
+              fi
+              echo "✓ Authenticode signed with signtool"
+            else
+              choco install osslsigncode -y --no-progress || true
+              if command -v osslsigncode >/dev/null 2>&1; then
+                osslsigncode sign -pkcs12 dist/windows-code-sign.pfx \
+                  -pass "$WINDOWS_CERT_PASSWORD" \
+                  -t http://timestamp.digicert.com \
+                  -in "$OUT" -out "${OUT}.signed"
+                mv "${OUT}.signed" "$OUT"
+                echo "✓ Authenticode signed with osslsigncode"
+              else
+                echo "⚠ WINDOWS_CERT set but no signtool/osslsigncode — left unsigned"
+              fi
+            fi
+            rm -f dist/windows-code-sign.pfx
+          else
+            echo "⚠ WINDOWS_CERT_PFX_BASE64 not set — shipping unsigned Windows exe"
+          fi
+
+          cp "$OUT" "dist/Mixel-Remote-Support-Windows.exe"
           ls -la dist/
 
       - uses: actions/upload-artifact@v4
@@ -434,25 +572,47 @@ jobs:
           path: dist/
 
   # ===========================================================================
-  # Upload — pushes any successful artifacts to Cloudflare R2.
-  # Marked continue-on-error so the workflow is "successful" even if R2 is
-  # not yet enabled on the account; in that case artifacts are still
-  # available via the GH Actions run page.
+  # Upload — R2, including stable customer-facing aliases.
   # ===========================================================================
   upload:
     needs: [linux, macos, windows]
     if: always()
     runs-on: ubuntu-22.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
 
-      - name: Flatten artifacts
+      - name: Flatten artifacts + customer aliases
         run: |
+          set -euo pipefail
           mkdir -p dist
           find artifacts -type f \( -name "*.deb" -o -name "*.dmg" -o -name "*.exe" -o -name "*.msi" \) -exec cp {} dist/ \;
+
+          # Stable names linked from mixel-ism /remote-support (cache-busted there).
+          shopt -s nullglob
+          for f in dist/mixel-remote-*-aarch64.dmg; do
+            cp "$f" dist/Mixel-Remote-Support-Apple-Silicon.dmg
+          done
+          for f in dist/mixel-remote-*-x86_64.dmg; do
+            cp "$f" dist/Mixel-Remote-Support-Intel.dmg
+          done
+          for f in dist/mixel-remote-*-x86_64.exe; do
+            # Prefer the already-aliased copy from the windows job if present.
+            if [[ ! -f dist/Mixel-Remote-Support-Windows.exe ]]; then
+              cp "$f" dist/Mixel-Remote-Support-Windows.exe
+            fi
+            # Also copy to Mixel-Remote-Support.exe to align with mixel-ism links!
+            cp "$f" dist/Mixel-Remote-Support.exe
+          done
+          for f in dist/mixel-remote-*-x86_64.msi; do
+            cp "$f" dist/Mixel-Remote-Support.msi
+          done
+          for f in dist/mixel-remote-*-x86_64.deb; do
+            cp "$f" dist/Mixel-Remote-Support.deb
+          done
           ls -la dist/
 
       - name: Upload to R2
@@ -461,12 +621,17 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          if [[ -z "$CLOUDFLARE_API_TOKEN" ]]; then
+          if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
             echo "ℹ CLOUDFLARE_API_TOKEN not set — skipping R2 upload."
+            exit 0
+          fi
+          if [[ ! -d dist ]] || [[ -z "$(ls -A dist 2>/dev/null)" ]]; then
+            echo "⚠ no artifacts to upload (platform jobs may have failed)"
             exit 0
           fi
           npm install -g wrangler@4
           for f in dist/*; do
             name=$(basename "$f")
+            echo "→ uploading $name"
             wrangler r2 object put "mixel-remote-binaries/$name" --file "$f" --remote
           done
