@@ -690,12 +690,14 @@ patch_string flutter/lib/models/native_model.dart \
   "DynamicLibrary.open('librustdesk.so')" \
   "DynamicLibrary.open('${LIBNAME}.so')"
 
-# The Linux bundle ships whatever cargo emitted (librustdesk.so). Rename the
-# emitted file to ${LIBNAME}.so right after the cargo build, before packaging,
-# so the Dart loader above finds it. build.py strips it at a known path.
+# The Linux .deb copies the whole flutter bundle into
+# tmpdeb/usr/share/mixel-remote/ in ONE step; rename the core .so right there
+# (the single choke point every deb file passes through) so the shipped file
+# matches the Dart loader above. Renaming at the earlier strip step did NOT
+# reach the packaged copy — verified via a real .deb install on the VPS.
 patch_string build.py \
-  "system2(f'strip {flutter_build_dir}/lib/librustdesk.so')" \
-  "system2(f'mv {flutter_build_dir}/lib/librustdesk.so {flutter_build_dir}/lib/${LIBNAME}.so'); system2(f'strip {flutter_build_dir}/lib/${LIBNAME}.so')"
+  "f'cp -r {flutter_build_dir}/* tmpdeb/usr/share/mixel-remote/')" \
+  "f'cp -r {flutter_build_dir}/* tmpdeb/usr/share/mixel-remote/'); system2(f'mv tmpdeb/usr/share/mixel-remote/lib/librustdesk.so tmpdeb/usr/share/mixel-remote/lib/${LIBNAME}.so')"
 
 # Guards — a missed rename ships a rustdesk-named core or, worse, a runtime
 # that can't find its library. Fail loudly at branding time.
