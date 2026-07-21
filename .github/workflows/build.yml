@@ -9,6 +9,10 @@ on:
         description: "RustDesk upstream version to fork from (empty = branding/branding.env)"
         required: false
         default: ""
+      only:
+        description: "Comma list of platform jobs to run: linux,macos,windows (empty = all). Saves CI minutes on partial rebuilds."
+        required: false
+        default: ""
 
 env:
   RUST_VERSION: "1.75"
@@ -111,6 +115,7 @@ jobs:
   # ===========================================================================
   linux:
     needs: [config, bridge]
+    if: ${{ github.event.inputs.only == '' || contains(github.event.inputs.only, 'linux') }}
     runs-on: ubuntu-22.04
     timeout-minutes: 180
     env:
@@ -211,6 +216,7 @@ jobs:
   # ===========================================================================
   macos:
     needs: [config, bridge]
+    if: ${{ github.event.inputs.only == '' || contains(github.event.inputs.only, 'macos') }}
     strategy:
       fail-fast: false
       matrix:
@@ -410,6 +416,7 @@ jobs:
   # ===========================================================================
   windows:
     needs: [config, bridge]
+    if: ${{ github.event.inputs.only == '' || contains(github.event.inputs.only, 'windows') }}
     runs-on: windows-2022
     timeout-minutes: 180
     env:
@@ -575,7 +582,7 @@ jobs:
       # SmartScreen reputation regardless; the signature makes the warning
       # milder, shows a real publisher, and builds reputation faster.
       - name: Sign with Azure Trusted Signing
-        uses: azure/trusted-signing-action@v5
+        uses: azure/trusted-signing-action@v2
         with:
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
