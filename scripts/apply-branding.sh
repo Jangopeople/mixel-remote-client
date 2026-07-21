@@ -690,14 +690,21 @@ patch_string flutter/lib/models/native_model.dart \
   "DynamicLibrary.open('librustdesk.so')" \
   "DynamicLibrary.open('${LIBNAME}.so')"
 
-# The Linux .deb copies the whole flutter bundle into
-# tmpdeb/usr/share/mixel-remote/ in ONE step; rename the core .so right there
-# (the single choke point every deb file passes through) so the shipped file
-# matches the Dart loader above. Renaming at the earlier strip step did NOT
-# reach the packaged copy — verified via a real .deb install on the VPS.
-patch_string build.py \
-  "f'cp -r {flutter_build_dir}/* tmpdeb/usr/share/mixel-remote/')" \
-  "f'cp -r {flutter_build_dir}/* tmpdeb/usr/share/mixel-remote/'); system2(f'mv tmpdeb/usr/share/mixel-remote/lib/librustdesk.so tmpdeb/usr/share/mixel-remote/lib/${LIBNAME}.so')"
+# --- Linux (mirror Windows exactly): the flutter linux CMake copies the
+#     cargo .so into the bundle and RENAMEs it; rename the destination, and
+#     update the GTK runner's dlopen (main.cc) that loads it by name. This is
+#     the whole chain — no deb-staging mv needed. Verified: without the
+#     main.cc patch the runner dlopen('librustdesk.so') fails and the app
+#     won't start (caught by a real .deb launch test on the VPS).
+patch_string flutter/linux/CMakeLists.txt \
+  'COMPONENT Runtime RENAME librustdesk.so)' \
+  "COMPONENT Runtime RENAME ${LIBNAME}.so)"
+patch_string flutter/linux/main.cc \
+  '#define RUSTDESK_LIB_PATH "librustdesk.so"' \
+  "#define RUSTDESK_LIB_PATH \"${LIBNAME}.so\""
+patch_string flutter/linux/main.cc \
+  'Failed to load \"librustdesk.so\"' \
+  "Failed to load \\\"${LIBNAME}.so\\\""
 
 # Guards — a missed rename ships a rustdesk-named core or, worse, a runtime
 # that can't find its library. Fail loudly at branding time.
