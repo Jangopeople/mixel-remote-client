@@ -91,11 +91,27 @@ fi
 
 # 3. Patch user-visible strings that custom.txt doesn't fully override.
 
+# Escape a literal string for use as a sed BRE *pattern* (plus the '|'
+# delimiter we use). Backslash first, then the rest.
+_esc_pat () {
+  local s=$1
+  s=${s//\\/\\\\}; s=${s//./\\.}; s=${s//\*/\\*}; s=${s//\[/\\[}
+  s=${s//^/\\^}; s=${s//\$/\\\$}; s=${s//|/\\|}
+  printf '%s' "$s"
+}
+# Escape a literal string for use as a sed *replacement* (plus '|').
+# Critically escapes '&' — otherwise sed expands it to the whole match,
+# which silently corrupted replacements containing "&str", "&[&str]", etc.
+_esc_rep () {
+  local s=$1
+  s=${s//\\/\\\\}; s=${s//&/\\&}; s=${s//|/\\|}
+  printf '%s' "$s"
+}
 patch_string () {
   local file="$1" old="$2" new="$3"
   [[ -f "$RDREPO/$file" ]] || { echo "   ⚠ skip (no file): $file" >&2; return 0; }
-  if grep -q "$old" "$RDREPO/$file"; then
-    sed -i.bak "s|$old|$new|g" "$RDREPO/$file"
+  if grep -qF -- "$old" "$RDREPO/$file"; then
+    sed -i.bak "s|$(_esc_pat "$old")|$(_esc_rep "$new")|g" "$RDREPO/$file"
     rm -f "$RDREPO/$file.bak"
     echo "   patched: $file"
   else
