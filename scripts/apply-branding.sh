@@ -246,6 +246,26 @@ if ! grep -q "pub static ref APP_NAME: RwLock<String> = RwLock::new(\"${APP_NAME
 fi
 echo "   baked rendezvous server '$RENDEZVOUS_SERVER' + Mixel pub key + default APP_NAME '$APP_NAME' into hbb_common config.rs"
 
+# 5b. Also seed DEFAULT_SETTINGS so the Settings → Network fields VISIBLY
+#     show the Mixel server + key instead of appearing empty. The compiled
+#     constants above make the client USE rs.mixel.ch, but the UI fields
+#     only render the option map — empty fields made customers (and Michael,
+#     2026-07-21) believe the build was unconfigured. DEFAULT_SETTINGS is
+#     upstream's official mechanism for visible-but-overridable defaults:
+#     get_option() falls back to it, and is_option_can_save() keeps user
+#     configs clean when the value equals the default.
+rel_server_esc=$(printf '%s' "$RELAY_SERVER" | sed -e 's/[&|]/\\&/g')
+sed -i.bak -E \
+  "s|pub static ref DEFAULT_SETTINGS: RwLock<HashMap<String, String>> = Default::default\(\);|pub static ref DEFAULT_SETTINGS: RwLock<HashMap<String, String>> = RwLock::new(HashMap::from([(\"custom-rendezvous-server\".to_owned(), \"${rs_server_esc}\".to_owned()), (\"relay-server\".to_owned(), \"${rel_server_esc}\".to_owned()), (\"key\".to_owned(), \"${rs_key_esc}\".to_owned())]));|" \
+  "$CONFIG_RS"
+rm -f "$CONFIG_RS.bak"
+if ! grep -q "pub static ref DEFAULT_SETTINGS: RwLock<HashMap<String, String>> = RwLock::new(HashMap::from" "$CONFIG_RS"; then
+  echo "❌ Failed to patch DEFAULT_SETTINGS in $CONFIG_RS (upstream format changed?)" >&2
+  grep -n "DEFAULT_SETTINGS" "$CONFIG_RS" >&2 || true
+  exit 1
+fi
+echo "   seeded DEFAULT_SETTINGS so Network settings visibly show '$RENDEZVOUS_SERVER' + key"
+
 # 6. Microsoft Store (MSIX) policy 10.1.5 — a Store build must not promote
 #    acquiring software outside the Store. Hide the "install to system" /
 #    upgrade cards and the auto-update/download card when running as a packaged
