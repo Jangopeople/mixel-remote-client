@@ -632,6 +632,71 @@ if grep -q 'const APP_PREFIX: &str = "rustdesk";' "$RDREPO/libs/portable/src/mai
 fi
 echo "   deep-rebrand: extract dir + RuntimeBroker helper + outer-exe file props -> $APP_NAME_KEBAB / $APP_DISPLAY_NAME"
 
+# 7c. FULL REBRAND — rename the core native library file itself so nothing
+#     inside the unpacked runtime folder says "rustdesk" either. The Rust
+#     crate keeps [lib] name = "librustdesk" (so cargo still emits
+#     librustdesk.{dll,so} and the exported symbols — rustdesk_core_main_args
+#     etc., resolved by GetProcAddress/dlsym, NOT by filename — are
+#     unchanged). We only rename the SHIPPED file and update the three
+#     places that open it by name, in lockstep:
+#       (1) the bundle copy/rename step  (2) the C++ runner LoadLibrary
+#       (3) the Dart FFI DynamicLibrary.open
+#     Miss any one and the app fails to load its core → the guards below
+#     and the real-Windows launch gate catch it.
+LIBNAME="lib${APP_NAME_KEBAB}"   # libmixel-remote
+
+# --- Windows: CMake copies target/…/librustdesk.dll and RENAMEs it into the
+#     bundle; rename the destination only (source stays librustdesk.dll).
+patch_string flutter/windows/CMakeLists.txt \
+  'COMPONENT Runtime RENAME librustdesk.dll)' \
+  "COMPONENT Runtime RENAME ${LIBNAME}.dll)"
+patch_string flutter/windows/runner/main.cpp \
+  'LoadLibraryA("librustdesk.dll")' \
+  "LoadLibraryA(\"${LIBNAME}.dll\")"
+patch_string flutter/windows/runner/main.cpp \
+  'Failed to load librustdesk.dll.' \
+  "Failed to load ${LIBNAME}.dll."
+
+# --- Linux: the .deb/.so keeps the cargo output name; rename in build.py's
+#     strip step + the Dart loader. (build.py copies target/release/
+#     librustdesk.so into the bundle lib dir under the same name; we rename
+#     it there via a post-strip mv injected below is overkill — instead we
+#     rename the Dart-opened filename AND the bundled file by patching the
+#     flutter linux CMake install rename if present.)
+patch_string flutter/lib/models/native_model.dart \
+  "DynamicLibrary.open('librustdesk.dll')" \
+  "DynamicLibrary.open('${LIBNAME}.dll')"
+
+# --- Dart loader for Linux .so (two occurrences: android + desktop linux).
+#     Only the desktop-linux path matters for the .deb; both are safe to
+#     rename because the shipped file is renamed to match (see below).
+patch_string flutter/lib/models/native_model.dart \
+  "DynamicLibrary.open('librustdesk.so')" \
+  "DynamicLibrary.open('${LIBNAME}.so')"
+
+# The Linux bundle ships whatever cargo emitted (librustdesk.so). Rename the
+# emitted file to ${LIBNAME}.so right after the cargo build, before packaging,
+# so the Dart loader above finds it. build.py strips it at a known path.
+patch_string build.py \
+  "system2(f'strip {flutter_build_dir}/lib/librustdesk.so')" \
+  "system2(f'mv {flutter_build_dir}/lib/librustdesk.so {flutter_build_dir}/lib/${LIBNAME}.so'); system2(f'strip {flutter_build_dir}/lib/${LIBNAME}.so')"
+
+# Guards — a missed rename ships a rustdesk-named core or, worse, a runtime
+# that can't find its library. Fail loudly at branding time.
+if grep -q 'RENAME librustdesk.dll)' "$RDREPO/flutter/windows/CMakeLists.txt"; then
+  echo "❌ Windows core dll still renamed to librustdesk.dll (full-rebrand miss)" >&2; exit 1
+fi
+if grep -q "DynamicLibrary.open('librustdesk.dll')" "$RDREPO/flutter/lib/models/native_model.dart" \
+   || grep -q "DynamicLibrary.open('librustdesk.so')" "$RDREPO/flutter/lib/models/native_model.dart"; then
+  echo "❌ Dart FFI still opens librustdesk.{dll,so} (full-rebrand miss)" >&2; exit 1
+fi
+echo "   full-rebrand: core library shipped as ${LIBNAME}.{dll,so} (crate name unchanged; symbols intact)"
+#     NOTE (macOS): the .dylib is statically linked into the runner and lives
+#     in Contents/Frameworks; renaming it entangles with Xcode linking and
+#     the freshly-fixed notarization flow, so the mac dylib keeps its name.
+#     It is the least-exposed file (inside the signed .app) and mac is not the
+#     Store-blocked target (ToiToi = Windows).
+
 
 
 # 8. Leak check — fail the build if key user-facing files still say RustDesk.
