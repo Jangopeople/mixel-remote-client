@@ -597,6 +597,41 @@ patch_string libs/portable/Cargo.toml \
   "LegalCopyright = \"Copyright © 2025 Purslane Ltd. All rights reserved.\"" \
   "LegalCopyright = \"Copyright © 2026 $WIN_MANUFACTURER. All rights reserved.\""
 
+# 7b. DEEP REBRAND — remove the remaining "rustdesk" traces a Windows admin
+#     would see in %LOCALAPPDATA%, Task Manager, and the outer exe's file
+#     Details tab. (Process name is already mixel-remote.exe via build.py's
+#     `generate.py -e mixel-remote.exe` + CMake BINARY_NAME; config dir +
+#     *.toml are already APP_NAME-derived. These are what's left.)
+#
+#     Portable self-extractor: the launcher unpacks the runtime into
+#     %LOCALAPPDATA%\<APP_PREFIX> and, on Windows, spins a topmost helper
+#     named RuntimeBroker_rustdesk.exe. Rebrand both.
+patch_string libs/portable/src/main.rs \
+  'const APP_PREFIX: &str = "rustdesk";' \
+  "const APP_PREFIX: &str = \"$APP_NAME_KEBAB\";"
+patch_string libs/portable/src/main.rs \
+  'RuntimeBroker_rustdesk.exe' \
+  "RuntimeBroker_${APP_NAME_KEBAB}.exe"
+#     Outer install exe's Windows version-resource (Details tab: Product
+#     name / Original filename / Description). The crate name stays
+#     `rustdesk-portable-packer` (internal, never shown).
+patch_string libs/portable/Cargo.toml \
+  'ProductName = "RustDesk"' \
+  "ProductName = \"$APP_DISPLAY_NAME\""
+patch_string libs/portable/Cargo.toml \
+  'OriginalFilename = "rustdesk.exe"' \
+  "OriginalFilename = \"${APP_NAME_KEBAB}.exe\""
+patch_string libs/portable/Cargo.toml \
+  'FileDescription = "RustDesk Remote Desktop"' \
+  "FileDescription = \"$APP_DISPLAY_NAME\""
+#     Fail loudly if the extract-dir constant didn't get rebranded — a
+#     silent miss ships a %LOCALAPPDATA%\rustdesk folder again.
+if grep -q 'const APP_PREFIX: &str = "rustdesk";' "$RDREPO/libs/portable/src/main.rs"; then
+  echo "❌ APP_PREFIX still 'rustdesk' in libs/portable/src/main.rs (deep-rebrand miss)" >&2
+  exit 1
+fi
+echo "   deep-rebrand: extract dir + RuntimeBroker helper + outer-exe file props -> $APP_NAME_KEBAB / $APP_DISPLAY_NAME"
+
 
 
 # 8. Leak check — fail the build if key user-facing files still say RustDesk.
