@@ -628,6 +628,13 @@ patch_string libs/portable/src/main.rs \
 patch_string libs/portable/src/main.rs \
   'RuntimeBroker_rustdesk.exe' \
   "RuntimeBroker_${APP_NAME_KEBAB}.exe"
+#     The privacy-mode (screen-blackout) impl CreateProcess-launches that
+#     same injected helper by name — it MUST match the name the portable
+#     packer copies to, or privacy mode silently fails on Windows. This
+#     second reference was missed in the first deep-rebrand pass.
+patch_string src/privacy_mode/win_topmost_window.rs \
+  'RuntimeBroker_rustdesk.exe' \
+  "RuntimeBroker_${APP_NAME_KEBAB}.exe"
 #     Outer install exe's Windows version-resource (Details tab: Product
 #     name / Original filename / Description). The crate name stays
 #     `rustdesk-portable-packer` (internal, never shown).
