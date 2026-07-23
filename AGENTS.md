@@ -1,3 +1,28 @@
+> **Taking over / continuing Mixel-Remote work?** Read `HANDOFF.md` first —
+> it has the full current state (all channels, server, signing, open items)
+> as of 2026-07-23, written so another agent can continue without context.
+
+## Marketplace Release Safety
+
+This is a permanent hard rule for every current and future repository, all apps, all stores, and all platforms.
+
+- Never remove, cancel, expire, withdraw, replace, or delete an approved, live, ready-for-sale, waiting-for-review, in-review, or previously approved marketplace submission unless Michael explicitly asks for that exact destructive action in writing.
+- Never remove an approved app from sale.
+- Never remove an approved or active review submission just to upload a newer build.
+- App updates must be handled as updates: submit a new build/version through the store's normal update path while preserving the approved/live release.
+- If a store workflow appears to require removing or cancelling an existing approved/live/reviewed release, stop and ask Michael first.
+- Before any App Store Connect, Google Play Console, Microsoft Store, Microsoft Partner Center, Shopify app store, Chrome Web Store, Cloudflare marketplace, or other marketplace action that can affect public availability or review state, state the exact action and wait for explicit confirmation.
+
+
+## App Review Demo Accounts
+
+This is a permanent hard rule for every current and future repository, all apps, all stores, and all platforms.
+
+- Never provide `mixel@mixel.ch` or Michael's personal email address as a demo, review, QA, support, or test account to Apple, Google, Microsoft, Shopify, Chrome Web Store, or any other marketplace reviewer.
+- Always create and use a dedicated reviewer account for each product, e.g. `appreview-<product>@mixel.ch`, with only the access needed for review.
+- Store reviewer passwords only in the approved password store/keychain and in the marketplace review credentials field. Do not paste them into chat, source files, tickets, PRs, docs, or screenshots.
+- If a reviewer account stops working, rotate or recreate the dedicated reviewer account; never substitute Michael's personal email.
+
 # AGENTS.md — Mixel Remote client (build pipeline)
 
 > Briefing for agents working in `mixel-remote-client`. Read at session start.
