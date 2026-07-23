@@ -600,6 +600,20 @@ patch_string src/ui/index.tis \
   "Copyright &copy; 2025 Purslane Ltd." \
   "Copyright \&copy; 2026 $WIN_MANUFACTURER."
 
+# About-page slogan ("Slogan_tip") — RustDesk's tagline still shows on the
+# About page (most visible on macOS). Replace with a neutral Mixel line in
+# the three shipped languages so no upstream slogan leaks. (Other lang
+# files keep the upstream slogan; only en/de/fr are user-facing here.)
+patch_string src/lang/en.rs \
+  '("Slogan_tip", "Made with heart in this chaotic world!"),' \
+  '("Slogan_tip", "Mixel Remote — secure remote support by Mixel IT."),'
+patch_string src/lang/de.rs \
+  '("Slogan_tip", "Mit Herzblut programmiert - in einer Welt, die im Chaos versinkt!"),' \
+  '("Slogan_tip", "Mixel Remote — sichere Fernwartung von Mixel IT."),'
+patch_string src/lang/fr.rs \
+  '("Slogan_tip", "Fait avec cœur dans ce monde chaotique !"),' \
+  '("Slogan_tip", "Mixel Remote — assistance à distance sécurisée par Mixel IT."),'
+
 # Xcode bundle identifier definition in pbxproj
 patch_string flutter/macos/Runner.xcodeproj/project.pbxproj \
   "PRODUCT_BUNDLE_IDENTIFIER = com.carriez.rustdesk;" \
