@@ -304,6 +304,53 @@ if [[ "$guards" -lt 2 ]]; then
 fi
 echo "   patched desktop_home_page.dart (hide install/update prompts in MSIX build)"
 
+# 6b. NEVER show the upstream "new version of RustDesk" card or poll
+#     rustdesk.com for updates. Upstream only hides this when
+#     isCustomClient() is true (APP_NAME != "RustDesk"). If APP_NAME is
+#     wrong/stale for any reason, customers still get a pink Status card
+#     that says RustDesk and opens https://rustdesk.com/download — which
+#     must never ship in Mixel Remote. Hard-disable both the UI gate and
+#     the update-URL fetch regardless of isCustomClient().
+if ! grep -q 'if (!bind.isCustomClient() &&' "$HOME_PAGE"; then
+  echo "❌ expected RustDesk update-card gate missing in desktop_home_page.dart" >&2
+  exit 1
+fi
+# Only the update-card condition starts with this exact pattern at column 4.
+sed -i.bak 's|if (!bind.isCustomClient() &&|if (false \&\& !bind.isCustomClient() \&\&|' "$HOME_PAGE"
+rm -f "$HOME_PAGE.bak"
+if [[ "$(grep -c 'if (false && !bind.isCustomClient()' "$HOME_PAGE" || true)" -lt 1 ]]; then
+  echo "❌ failed to disable RustDesk update card on desktop home page" >&2
+  exit 1
+fi
+echo "   disabled desktop RustDesk software-update Status card"
+
+COMMON_DART="$RDREPO/flutter/lib/common.dart"
+if [[ -f "$COMMON_DART" ]]; then
+  # checkUpdate() registers the update handler only when !isCustomClient().
+  # Force the body to no-op so we never call mainGetSoftwareUpdateUrl().
+  if grep -q 'void checkUpdate() {' "$COMMON_DART"; then
+    # Insert an early return as the first statement inside checkUpdate().
+    # Portable across BSD/GNU sed: replace the function opener.
+    sed -i.bak 's|void checkUpdate() {|void checkUpdate() { return; // Mixel: never poll rustdesk.com updates|' "$COMMON_DART"
+    rm -f "$COMMON_DART.bak"
+    if ! grep -q 'void checkUpdate() { return; // Mixel: never poll rustdesk.com updates' "$COMMON_DART"; then
+      echo "❌ failed to disable checkUpdate() in common.dart" >&2
+      exit 1
+    fi
+    echo "   disabled checkUpdate() (no rustdesk.com version poll)"
+  else
+    echo "❌ checkUpdate() not found in flutter/lib/common.dart" >&2
+    exit 1
+  fi
+fi
+
+MOBILE_CONN="$RDREPO/flutter/lib/mobile/pages/connection_page.dart"
+if [[ -f "$MOBILE_CONN" ]]; then
+  sed -i.bak 's|if (!bind.isCustomClient() && !isIOS)|if (false \&\& !bind.isCustomClient() \&\& !isIOS)|' "$MOBILE_CONN"
+  rm -f "$MOBILE_CONN.bak"
+  echo "   disabled mobile RustDesk update UI"
+fi
+
 # 7. OS-level identity — make the shipped product Mixel-Remote only.
 #    Leave internal link names alone (Cargo crate `rustdesk`, `librustdesk.*`).
 #    Leave the web-bridge identity check `!= "RustDesk"` alone so
