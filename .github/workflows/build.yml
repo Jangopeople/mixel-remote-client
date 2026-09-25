@@ -636,6 +636,10 @@ jobs:
             fi
             # Also copy to Mixel-Remote-Support.exe to align with mixel-ism links!
             cp "$f" dist/Mixel-Remote-Support.exe
+            # The portable launcher detects -QS.exe and starts its built-in
+            # attended QuickSupport mode. This is the customer-facing download;
+            # keep the regular executable for technicians and managed installs.
+            cp "$f" dist/Mixel-Remote-QS.exe
           done
           for f in dist/mixel-remote-*-x86_64.msi; do
             cp "$f" dist/Mixel-Remote-Support.msi
