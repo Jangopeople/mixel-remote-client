@@ -69,7 +69,7 @@ try {
     throw 'Cold support URI launch failed: main app became hidden after initialization.'
   }
   Write-Host 'PASS: cold support URI launch shows customer app.'
-  $coldHealth = Wait-MixelSupportRuntimeHealth 'Cold support URI launch'
+  $coldHealth = Wait-MixelSupportRuntimeHealth 'Cold support URI launch' -RequireOnline
 
   [void][MixelSupportWindowTest]::ShowWindow($window, 6)
   Start-Sleep -Seconds 1
@@ -79,7 +79,7 @@ try {
   Start-Process -FilePath $executablePath -ArgumentList $uri | Out-Null
   $window = Wait-VisibleMain $main.Id 'Warm support URI launch'
   Write-Host 'PASS: warm support URI launch restores visible customer app.'
-  $warmHealth = Wait-MixelSupportRuntimeHealth 'Warm support URI launch'
+  $warmHealth = Wait-MixelSupportRuntimeHealth 'Warm support URI launch' -RequireOnline
 
   foreach ($logRoot in @(
       (Join-Path $env:APPDATA 'Mixel-Remote'),

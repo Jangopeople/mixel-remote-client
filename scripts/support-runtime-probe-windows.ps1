@@ -66,14 +66,14 @@ function Get-MixelSupportRuntimeHealth {
   }
 }
 
-function Wait-MixelSupportRuntimeHealth([string]$Scenario, [int]$TimeoutSeconds = 60) {
+function Wait-MixelSupportRuntimeHealth([string]$Scenario, [int]$TimeoutSeconds = 60, [switch]$RequireOnline) {
   $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
   $last = 'Incoming support endpoint did not respond.'
   while ([DateTime]::UtcNow -lt $deadline) {
     try {
       $health = Get-MixelSupportRuntimeHealth
       $last = $health | ConvertTo-Json -Compress
-      if ($health.attendedReady) {
+      if ($health.attendedReady -and (-not $RequireOnline -or ($health.rendezvousState -gt 0 -and $health.keyConfirmed))) {
         Write-Host "PASS: $Scenario actual incoming IPC proves attended-runtime-v1; rendezvousState=$($health.rendezvousState)."
         return $health
       }
