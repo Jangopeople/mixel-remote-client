@@ -19,7 +19,9 @@ public static class MixelSupportWindowTest {
 
 $executablePath = (Resolve-Path $Executable).Path
 $token = 'inv_00000000-0000-0000-0000-000000000002'
-$uri = "mixel-remote://support?invite=$token&apikey=synthetic-invalid-public-key-000000000000"
+# Windows protocol activation can canonicalize an authority-only URI by adding
+# this slash. Exercise the same semantic support URI the Dart parser accepts.
+$uri = "mixel-remote://support/?invite=$token&apikey=synthetic-invalid-public-key-000000000000"
 $before = @(Get-Process | Select-Object -ExpandProperty Id)
 $main = $null
 
