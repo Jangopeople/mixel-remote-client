@@ -13,8 +13,9 @@ class MixelSupportCompatibilityNotice {
       return;
     }
     _unavailableSince ??= _now();
-    if (_now().difference(_unavailableSince!) < const Duration(seconds: 30))
+    if (_now().difference(_unavailableSince!) < const Duration(seconds: 30)) {
       return;
+    }
     if (!_shown) _shown = show();
   }
 }
