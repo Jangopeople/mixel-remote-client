@@ -12,7 +12,7 @@ def guard_test_manifest(source: str) -> str:
     # WebRTC for every filtered unit test on the older product toolchain.
     if 'webrtc = { version = "0.14.0", optional = true }' not in source:
         raise RuntimeError("Pinned optional WebRTC dependency changed")
-    match = re.search(r"(?ms)^\[dev-dependencies\]\n(.*?)(?=^\[|\Z)", source)
+    match = re.search(r"(?ms)^\[dev-dependencies\]\r?\n(.*?)(?=^\[|\Z)", source)
     if not match:
         raise RuntimeError("Pinned common crate dev dependencies missing")
     dependencies, count = re.subn(r'^webrtc = "0\.14\.0"\r?\n', "", match.group(1), flags=re.M)
@@ -29,7 +29,7 @@ def run_guard_tests(repo: Path, runner=subprocess.run) -> int:
     original = manifest.read_bytes()
     modified = guard_test_manifest(original.decode("utf-8"))
     try:
-        manifest.write_text(modified, encoding="utf-8")
+        manifest.write_bytes(modified.encode("utf-8"))
         command = ["cargo", "test", "--locked", "--release", "--manifest-path", str(repo / "Cargo.toml"),
                    "-p", "hbb_common", "--no-default-features", "--lib", "mixel_support_invite_tests"]
         return runner(command, check=False).returncode

@@ -70,6 +70,12 @@ runpy.run_path(sys.argv[1], run_name='__main__')
     guard_spec.loader.exec_module(guard_runner)
     manifest = repo / "libs/hbb_common/Cargo.toml"
     original_manifest = manifest.read_bytes()
+    windows_manifest = original_manifest.decode("utf-8").replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8")
+    windows_modified = guard_runner.guard_test_manifest(windows_manifest.decode("utf-8")).encode("utf-8")
+    assert b'webrtc = "0.14.0"' not in windows_modified
+    assert b"\r\r\n" not in windows_modified, "temporary Windows manifest must not double its CRLF bytes"
+    manifest.write_bytes(windows_manifest)
+    original_manifest = windows_manifest
     for raises in (False, True):
         def fake_cargo(command, check):
             modified = manifest.read_text(encoding="utf-8")
