@@ -13,6 +13,11 @@ on:
         description: "Comma list of platform jobs to run: linux,macos,windows (empty = all). Saves CI minutes on partial rebuilds."
         required: false
         default: ""
+      publish_r2:
+        description: "Publish the build to the live customer download bucket"
+        required: true
+        type: boolean
+        default: false
 
 env:
   RUST_VERSION: "1.75"
@@ -31,6 +36,8 @@ jobs:
       upstream_version: ${{ steps.ver.outputs.upstream_version }}
     steps:
       - uses: actions/checkout@v4
+      - name: Verify support invite handoff patch
+        run: python3 scripts/test-support-invite.py
       - id: ver
         name: Resolve UPSTREAM_VERSION
         run: |
@@ -166,7 +173,7 @@ jobs:
 
       - name: Install vcpkg deps
         run: |
-          $VCPKG_ROOT/vcpkg install --triplet x64-linux libvpx libyuv opus aom libjpeg-turbo
+          "$VCPKG_ROOT/vcpkg" install --triplet x64-linux libvpx libyuv opus aom libjpeg-turbo
 
       - name: Fetch upstream RustDesk
         run: |
@@ -274,7 +281,7 @@ jobs:
       - name: Install vcpkg deps
         run: |
           triplet=${{ matrix.job.arch == 'aarch64' && 'arm64-osx' || 'x64-osx' }}
-          $VCPKG_ROOT/vcpkg install --triplet $triplet libvpx libyuv opus aom libjpeg-turbo
+          "$VCPKG_ROOT/vcpkg" install --triplet "$triplet" libvpx libyuv opus aom libjpeg-turbo
 
       - name: Fetch upstream RustDesk
         run: |
@@ -452,13 +459,13 @@ jobs:
       - name: Install vcpkg deps
         shell: bash
         run: |
-          $VCPKG_ROOT/vcpkg install --triplet x64-windows-static libvpx libyuv opus aom libjpeg-turbo
+          "$VCPKG_ROOT/vcpkg" install --triplet x64-windows-static libvpx libyuv opus aom libjpeg-turbo
 
       - name: Install ImageMagick (for branding .ico)
         shell: bash
         run: |
           choco install imagemagick -y --no-progress || choco install imagemagick.app -y --no-progress || true
-          MAGICK_DIR=$(ls -d /c/Program\ Files/ImageMagick-* 2>/dev/null | head -1 || true)
+          MAGICK_DIR=$(find "/c/Program Files" -maxdepth 1 -type d -name "ImageMagick-*" -print -quit 2>/dev/null || true)
           if [[ -n "$MAGICK_DIR" ]]; then
             "$MAGICK_DIR/magick.exe" -version | head -1
           else
@@ -477,7 +484,7 @@ jobs:
         run: |
           export PATH="/c/Program Files/ImageMagick-7*:/c/ProgramData/chocolatey/bin:$PATH"
           # Resolve ImageMagick install dir (versioned folder name).
-          MAGICK_DIR=$(ls -d /c/Program\ Files/ImageMagick-* 2>/dev/null | head -1 || true)
+          MAGICK_DIR=$(find "/c/Program Files" -maxdepth 1 -type d -name "ImageMagick-*" -print -quit 2>/dev/null || true)
           if [[ -n "$MAGICK_DIR" ]]; then
             export PATH="$MAGICK_DIR:$PATH"
           fi
@@ -523,7 +530,7 @@ jobs:
           # Prefer ico produced by apply-branding; else build from PNGs.
           ICO="rustdesk/res/icon.ico"
           if [[ ! -f "$ICO" ]]; then
-            MAGICK_DIR=$(ls -d /c/Program\ Files/ImageMagick-* 2>/dev/null | head -1 || true)
+            MAGICK_DIR=$(find "/c/Program Files" -maxdepth 1 -type d -name "ImageMagick-*" -print -quit 2>/dev/null || true)
             if [[ -n "$MAGICK_DIR" ]]; then
               export PATH="$MAGICK_DIR:/c/ProgramData/chocolatey/bin:$PATH"
             fi
@@ -606,7 +613,7 @@ jobs:
   # ===========================================================================
   upload:
     needs: [linux, macos, windows]
-    if: always()
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && inputs.publish_r2)
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     steps:
