@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Patch pinned real source twice; execute its cold/warm support URI path."""
 import os
+import importlib.util
 import shutil
 import sys
 import subprocess
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 root = Path(__file__).resolve().parents[1]
 upstream = Path(os.environ.get("RDREPO", root / "rustdesk"))
@@ -13,6 +15,7 @@ dart = os.environ.get("DART_BIN") or shutil.which("dart")
 if not dart:
     raise SystemExit("Dart SDK required: put dart on PATH or set DART_BIN")
 targets = [
+    "Cargo.toml", "libs/hbb_common/Cargo.toml", "libs/hbb_common/src/lib.rs",
     "flutter/lib/common.dart", "flutter/lib/main.dart", "src/ui_interface.rs",
     "src/ipc.rs", "src/ui_cm_interface.rs", "src/server/connection.rs", "src/core_main.rs", "src/common.rs", "src/updater.rs",
     "flutter/lib/desktop/pages/desktop_setting_page.dart",
@@ -62,6 +65,27 @@ runpy.run_path(sys.argv[1], run_name='__main__')
     subprocess.run([sys.executable, str(patcher)], env=env, check=True, capture_output=True, text=True, encoding="utf-8")
     second = {path: (repo / path).read_text(encoding="utf-8") for path in patched_paths}
     assert first == second, "patch must be idempotent across all touched files"
+    guard_spec = importlib.util.spec_from_file_location("compiled_guard", root / "scripts/test-compiled-support-guard.py")
+    guard_runner = importlib.util.module_from_spec(guard_spec)
+    guard_spec.loader.exec_module(guard_runner)
+    manifest = repo / "libs/hbb_common/Cargo.toml"
+    original_manifest = manifest.read_bytes()
+    for raises in (False, True):
+        def fake_cargo(command, check):
+            modified = manifest.read_text(encoding="utf-8")
+            assert 'webrtc = { version = "0.14.0", optional = true }' in modified
+            assert 'webrtc = "0.14.0"' not in modified.split("[dev-dependencies]", 1)[1]
+            assert all(option in command for option in ("--locked", "--release", "--no-default-features", "hbb_common"))
+            if raises:
+                raise RuntimeError("simulated Cargo process failure")
+            return SimpleNamespace(returncode=3)
+        try:
+            result = guard_runner.run_guard_tests(repo, fake_cargo)
+            assert not raises and result == 3
+        except RuntimeError as error:
+            assert raises and str(error) == "simulated Cargo process failure"
+        assert manifest.read_bytes() == original_manifest, "narrow test must restore upstream manifest on every failure path"
+    print("PASS: actual guard test retains optional WebRTC and restores upstream manifest after Cargo failures")
     french = (repo / "src/lang/fr.rs").read_bytes()
     assert "d’assistance Mixel Remote installé doit être mis à jour".encode("utf-8") in french
     assert "d’assistance Mixel Remote installé doit être mis à jour" in french.decode("utf-8")
