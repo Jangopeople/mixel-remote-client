@@ -17,6 +17,32 @@ Future<void> main() async {
     print('PASS: $name');
   }
 
+  await test(
+    'legacy service update notice displays once when UI is ready',
+    () async {
+      var now = DateTime(2026);
+      final notice = MixelSupportCompatibilityNotice(now: () => now);
+      var shown = 0;
+      notice.showIfRequired('guard-unavailable', () {
+        shown++;
+        return true;
+      });
+      now = now.add(const Duration(seconds: 31));
+      notice.showIfRequired('service-update-required', () => false);
+      notice.showIfRequired('service-update-required', () {
+        shown++;
+        return true;
+      });
+      notice.showIfRequired('service-update-required', () {
+        shown++;
+        return true;
+      });
+      expect(
+        shown == 1,
+        'retry until visible then show compatibility error only once',
+      );
+    },
+  );
   await test('malformed bearer never reaches ID or HTTP callbacks', () async {
     var callbacks = 0;
     final reporter = MixelSupportInviteReporter(
@@ -32,7 +58,7 @@ Future<void> main() async {
         callbacks++;
         return true;
       },
-      report: (_, __, ___) async {
+      report: (_, __, ___, ____) async {
         callbacks++;
         return 200;
       },
@@ -54,7 +80,7 @@ Future<void> main() async {
         readId: () async => ids[reads++],
         isOnline: () async => ++onlineChecks >= 2,
         armAttended: () async => true,
-        report: (receivedToken, receivedKey, id) async {
+        report: (receivedToken, receivedKey, id, nonce) async {
           expect(id == '123456', 'report only actual stable device ID');
           expect(reads == 5, 'wait for relay ready');
           expect(
@@ -80,7 +106,7 @@ Future<void> main() async {
       readId: () async => ids[reads++],
       isOnline: () async => true,
       armAttended: () async => true,
-      report: (_, __, id) async {
+      report: (_, __, id, nonce) async {
         expect(
           id == '234567' && reads == 3,
           'only stabilized ID can bind invite',
@@ -106,7 +132,7 @@ Future<void> main() async {
         },
         isOnline: () async => true,
         armAttended: () async => ++guards >= 4,
-        report: (_, __, ___) async {
+        report: (_, __, ___, ____) async {
           expect(
             reads == 4 && guards == 4,
             'no report before service guard confirmed',
@@ -132,7 +158,7 @@ Future<void> main() async {
         readId: () async => '123456',
         isOnline: () async => true,
         armAttended: () async => true,
-        report: (_, __, ___) async {
+        report: (_, __, ___, ____) async {
           activePosts++;
           if (activePosts > maximumActivePosts)
             maximumActivePosts = activePosts;
@@ -168,7 +194,7 @@ Future<void> main() async {
         readId: () async => '123456',
         isOnline: () async => true,
         armAttended: () async => true,
-        report: (_, __, ___) async {
+        report: (_, __, ___, ____) async {
           posts++;
           return status;
         },
@@ -188,7 +214,7 @@ Future<void> main() async {
         readId: () => idReady.future,
         isOnline: () async => true,
         armAttended: () async => true,
-        report: (_, __, ___) async {
+        report: (_, __, ___, ____) async {
           posts++;
           return 200;
         },
@@ -200,6 +226,89 @@ Future<void> main() async {
       idReady.complete('123456');
       await run;
       expect(posts == 0, 'old handoff must not report after replacement');
+    },
+  );
+  await test(
+    'late old invite response cannot poison replacement invite heartbeat',
+    () async {
+      final oldResponse = Completer<int>();
+      final oldStarted = Completer<void>();
+      final nonces = <String>[];
+      var currentReports = 0;
+      final old = MixelSupportInviteReporter(
+        readId: () async => '123456',
+        isOnline: () async => true,
+        armAttended: () async => true,
+        report: (_, __, ___, nonce) {
+          nonces.add(nonce);
+          oldStarted.complete();
+          return oldResponse.future;
+        },
+        delay: (_) async {},
+      );
+      final oldRun = old.run(token, apiKey);
+      await oldStarted.future;
+      old.stop();
+      late MixelSupportInviteReporter current;
+      current = MixelSupportInviteReporter(
+        readId: () async => '123456',
+        isOnline: () async => true,
+        armAttended: () async => true,
+        report: (_, __, ___, nonce) async {
+          nonces.add(nonce);
+          currentReports++;
+          if (currentReports == 1) oldResponse.complete(403);
+          if (currentReports == 2) current.stop();
+          return 200;
+        },
+        delay: (_) async {
+          await Future<void>.delayed(Duration.zero);
+        },
+      );
+      await current.run('inv_00000000-0000-0000-0000-000000000003', apiKey);
+      await oldRun;
+      expect(
+        currentReports == 2,
+        'old 403 must not stop successful current invite',
+      );
+      expect(
+        nonces.toSet().length == 3,
+        'each native HTTP response must have its own cache URL',
+      );
+      expect(
+        nonces.every((nonce) => RegExp(r'^[0-9a-f]{32}$').hasMatch(nonce)),
+        'opaque nonce contains no bearer',
+      );
+    },
+  );
+
+  await test(
+    'timed out native request replay uses separate cache nonce',
+    () async {
+      final lateResponse = Completer<int>();
+      final nonces = <String>[];
+      var reports = 0;
+      late MixelSupportInviteReporter reporter;
+      reporter = MixelSupportInviteReporter(
+        readId: () async => '123456',
+        isOnline: () async => true,
+        armAttended: () async => true,
+        requestTimeout: const Duration(milliseconds: 10),
+        report: (_, __, ___, nonce) {
+          nonces.add(nonce);
+          reports++;
+          if (reports == 1) return lateResponse.future;
+          lateResponse.complete(403);
+          reporter.stop();
+          return Future<int>.value(200);
+        },
+        delay: (_) async {},
+      );
+      await reporter.run(token, apiKey);
+      expect(
+        reports == 2 && nonces.toSet().length == 2,
+        'timeout replay must not consume previous HTTP response',
+      );
     },
   );
   print('Result: $passed passed; 0 failed');

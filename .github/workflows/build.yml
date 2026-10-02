@@ -599,6 +599,10 @@ jobs:
           cp "$OUT" "dist/Mixel-Remote-Support-Windows.exe"
           ls -la dist/
 
+      - name: Prepare full application directory for Store packaging
+        shell: pwsh
+        run: ./scripts/prepare-windows-store-payload.ps1
+
       # Azure Trusted Signing (Artifact Signing) — account mixel-codesigning,
       # profile mixel-remote (Public Trust, CN=Mixel International Services
       # SARLS). Signs every exe/msi in dist/ including the customer-facing
@@ -622,10 +626,27 @@ jobs:
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
 
+      - name: Sign compiled Store application
+        uses: azure/trusted-signing-action@v2
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: https://weu.codesigning.azure.net/
+          trusted-signing-account-name: mixel-codesigning
+          certificate-profile-name: mixel-remote
+          files-folder: ${{ github.workspace }}\store-payload
+          files-folder-filter: exe
+          files-folder-recurse: true
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
       - name: Verify Windows Authenticode signatures
         shell: pwsh
         run: |
-          $installers = Get-ChildItem dist -File | Where-Object { $_.Extension -in '.exe', '.msi' }
+          $installers = @(Get-ChildItem dist -File | Where-Object { $_.Extension -in '.exe', '.msi' }) +
+            @(Get-ChildItem store-payload -Recurse -Filter '*.exe' -File)
           if ($installers.Count -eq 0) { throw 'No Windows installer was built.' }
           foreach ($installer in $installers) {
             $signature = Get-AuthenticodeSignature -FilePath $installer.FullName
@@ -634,6 +655,21 @@ jobs:
             }
             Write-Host "PASS: $($installer.Name) Authenticode signature is Valid."
           }
+
+      - name: Package signed Store payload
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path store-artifact | Out-Null
+          Compress-Archive -Path store-payload/* -DestinationPath store-artifact/Mixel-Remote-Store-Payload.zip
+          $digest = (Get-FileHash store-artifact/Mixel-Remote-Store-Payload.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          Set-Content -Path store-artifact/Mixel-Remote-Store-Payload.sha256 -Value $digest -Encoding ascii
+          Write-Host "PASS: complete signed Store payload packaged; SHA256 $digest"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-msix-payload
+          path: store-artifact/
+          if-no-files-found: error
 
       - uses: actions/upload-artifact@v4
         with:

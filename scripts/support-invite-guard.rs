@@ -2,6 +2,26 @@
 static MIXEL_SUPPORT_INVITE_UNTIL: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
+pub const SUPPORT_INVITE_ATTESTATION: &str = "attended-runtime-v1";
+
+pub fn support_invite_guard_is_confirmed(value: &str) -> bool {
+    value == SUPPORT_INVITE_ATTESTATION
+}
+
+pub fn resolve_support_invite_attestation(
+    ipc_reachable: bool,
+    remote_proof: Option<&str>,
+) -> &'static str {
+    if !ipc_reachable {
+        return "guard-unavailable";
+    }
+    match remote_proof {
+        Some(SUPPORT_INVITE_ATTESTATION) => SUPPORT_INVITE_ATTESTATION,
+        Some("") => "guard-unavailable",
+        _ => "service-update-required",
+    }
+}
+
 pub fn is_support_invite_arg(value: &str) -> bool {
     value.starts_with("mixel-remote://support?") || value == "--support-invite"
 }
@@ -33,6 +53,14 @@ pub fn support_invite_requires_click() -> bool {
 
 pub fn support_invite_must_wait(required: bool, accepted: bool) -> bool {
     required && !accepted
+}
+
+pub fn effective_support_approve_mode(saved: &str, attended: bool) -> String {
+    if attended {
+        "click".to_owned()
+    } else {
+        saved.to_owned()
+    }
 }
 
 #[cfg(test)]
@@ -96,5 +124,49 @@ mod mixel_support_invite_tests {
         assert!(!support_invite_must_wait(true, true));
         assert!(!support_invite_must_wait(false, false));
         assert!(!support_invite_must_wait(false, true));
+    }
+
+    #[test]
+    fn saved_password_mode_shows_customer_accept_during_attended_support() {
+        let saved = "password";
+        let effective = effective_support_approve_mode(saved, true);
+        assert_eq!(effective, "click");
+        assert_ne!(effective, "password"); // Existing CM predicate displays Accept.
+        assert_eq!(saved, "password"); // No preference mutation.
+        assert_eq!(effective_support_approve_mode(saved, false), "password");
+        assert_eq!(effective_support_approve_mode("both", true), "click");
+        assert_eq!(effective_support_approve_mode("both", false), "both");
+    }
+
+    #[test]
+    fn legacy_generic_option_echo_cannot_confirm_runtime_guard() {
+        assert!(!support_invite_guard_is_confirmed("Y"));
+        assert!(!support_invite_guard_is_confirmed(""));
+        assert!(!support_invite_guard_is_confirmed("click"));
+        assert!(support_invite_guard_is_confirmed("attended-runtime-v1"));
+    }
+
+    #[test]
+    fn external_old_installed_or_portable_service_cannot_borrow_local_guard() {
+        assert_eq!(
+            resolve_support_invite_attestation(true, Some("Y")),
+            "service-update-required"
+        );
+        assert_eq!(
+            resolve_support_invite_attestation(true, None),
+            "service-update-required"
+        );
+        assert_eq!(
+            resolve_support_invite_attestation(false, None),
+            "guard-unavailable"
+        );
+        assert_eq!(
+            resolve_support_invite_attestation(false, Some(SUPPORT_INVITE_ATTESTATION)),
+            "guard-unavailable"
+        );
+        assert_eq!(
+            resolve_support_invite_attestation(true, Some(SUPPORT_INVITE_ATTESTATION)),
+            SUPPORT_INVITE_ATTESTATION
+        );
     }
 }

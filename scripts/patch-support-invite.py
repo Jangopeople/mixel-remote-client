@@ -44,6 +44,7 @@ helper = """// Mixel support invite handoff: presence only; customer accepts eve
 MixelSupportInviteReporter? _supportInviteReporter;
 Timer? _supportInviteAttendedTimer;
 bool _supportInviteRenewing = false;
+final _supportInviteCompatibilityNotice = MixelSupportCompatibilityNotice();
 
 Future<bool> _renewSupportInviteAttended() async {
   if (_supportInviteRenewing) return false;
@@ -51,7 +52,14 @@ Future<bool> _renewSupportInviteAttended() async {
   try {
     // A special runtime-only IPC command, never a saved preference.
     await bind.mainSetOption(key: 'mixel-support-invite-attended', value: 'Y');
-    return await bind.mainGetOption(key: 'mixel-support-invite-attended') == 'Y';
+    final proof = await bind.mainGetOption(key: 'mixel-support-invite-attended');
+    _supportInviteCompatibilityNotice.showIfRequired(proof, () {
+      if (globalKey.currentState?.overlay == null) return false;
+      showToast(translate('mixel_support_component_update_required'),
+        timeout: const Duration(seconds: 20));
+      return true;
+    });
+    return proof == 'attended-runtime-v1';
   } catch (_) {
     return false;
   } finally {
@@ -73,9 +81,9 @@ Future<void> _reportSupportInvite(String token, String apiKey) async {
       return status is Map && status['status_num'] is num && status['status_num'] > 0;
     },
     armAttended: _renewSupportInviteAttended,
-    report: (token, apiKey, id) async {
+    report: (token, apiKey, id, nonce) async {
       final response = await http.HttpService().sendRequest(
-        Uri.parse('https://rs.mixel.ch/api/presence/client'),
+        Uri.https('rs.mixel.ch', '/api/presence/client', {'request': nonce}),
         http.HttpMethod.post,
         headers: {'Content-Type': 'application/json', 'apikey': apiKey},
         body: jsonEncode({'token': token, 'rustdeskId': id, 'attendedReady': true}),
@@ -180,21 +188,37 @@ text = replace_once(text, "pub fn get_option<T: AsRef<str>>(key: T) -> String {\
     if key.as_ref() == "mixel-support-invite-attended" {
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         {
-            if let Ok(Some(value)) = ipc::get_config("mixel-support-invite-attended") {
-                return value;
-            }
-            if crate::platform::is_installed() {
-                // A separate installed service must confirm the guard.
-                return String::new();
-            }
+            return match ipc::get_config("mixel-support-invite-attended") {
+                Ok(value) => hbb_common::password_security::resolve_support_invite_attestation(
+                    true, value.as_deref()).to_owned(),
+                Err(_) => "guard-unavailable".to_owned(),
+            };
         }
+        #[cfg(any(target_os = "android", target_os = "ios"))]
         return if hbb_common::password_security::support_invite_requires_click() {
-            "Y".to_owned()
+            hbb_common::password_security::SUPPORT_INVITE_ATTESTATION.to_owned()
         } else {
-            String::new()
+            "guard-unavailable".to_owned()
         };
     }
 """, "runtime guard getter")
+text = replace_once(text, """        let map = OPTIONS.lock().unwrap();
+        if let Some(v) = map.get(key.as_ref()) {
+            v.to_owned()
+        } else {
+            "".to_owned()
+        }
+""", """        let saved = {
+            let map = OPTIONS.lock().unwrap();
+            map.get(key.as_ref()).cloned().unwrap_or_default()
+        };
+        if key.as_ref() == "approve-mode" {
+            hbb_common::password_security::effective_support_approve_mode(
+                &saved, hbb_common::password_security::support_invite_guard_is_confirmed(&get_option("mixel-support-invite-attended")))
+        } else {
+            saved
+        }
+""", "effective attended click mode for customer Accept UI")
 text = replace_once(text, "pub fn set_option(key: String, value: String) {\n", """pub fn set_option(key: String, value: String) {
     if key == "mixel-support-invite-attended" {
         if value == "Y" {
@@ -207,6 +231,98 @@ text = replace_once(text, "pub fn set_option(key: String, value: String) {\n", "
 """, "runtime guard setter")
 ui.write_text(text)
 
+# Native proxy-aware HTTP results are keyed by URL. Give each support heartbeat
+# an opaque unique URL, consume completed results, and expire abandoned ones.
+text = ui.read_text()
+text = replace_once(text, """pub fn get_async_http_status(url: String) -> Option<String> {
+    match ASYNC_HTTP_STATUS.lock().unwrap().get(&url) {
+""", """pub fn get_async_http_status(url: String) -> Option<String> {
+    let mut requests = ASYNC_HTTP_STATUS.lock().unwrap();
+    if url.starts_with("https://rs.mixel.ch/api/presence/client?request=") {
+        if requests.get(&url).map(|value| value.as_str()) == Some(" ") {
+            return Some(" ".to_owned());
+        }
+        return requests.remove(&url);
+    }
+    match requests.get(&url) {
+""", "consume support request results")
+text = replace_once(text, """        current_request.lock().unwrap().insert(url, res);
+    });
+}
+""", """        current_request.lock().unwrap().insert(url.clone(), res);
+        if url.starts_with("https://rs.mixel.ch/api/presence/client?request=") {
+            // The UI may close or supersede before consuming the result.
+            std::thread::sleep(std::time::Duration::from_secs(30));
+            current_request.lock().unwrap().remove(&url);
+        }
+    });
+}
+""", "expire abandoned support HTTP results")
+ui.write_text(text)
+
+common_rs = rdrepo / "src/common.rs"
+text = common_rs.read_text()
+text = replace_once(text, """    let response = get_http_response_async(
+        &url,
+        tls_url,
+        &method,
+        body.clone(),
+        &header,
+        tls_type,
+        danger_accept_invalid_cert,
+        danger_accept_invalid_cert,
+    )
+    .await?;
+""", """    let response_future = get_http_response_async(
+        &url,
+        tls_url,
+        &method,
+        body.clone(),
+        &header,
+        tls_type,
+        danger_accept_invalid_cert,
+        danger_accept_invalid_cert,
+    );
+    let response = if support_request {
+        timeout(6_000, response_future).await??
+    } else {
+        response_future.await?
+    };
+""", "bounded proxy-aware support HTTP timeout")
+text = replace_once(text, "    let response_body = response.text().await?;\n", """    let response_body = if support_request {
+        timeout(6_000, response.text()).await??
+    } else {
+        response.text().await?
+    };
+""", "bounded support response body timeout")
+text = replace_once(text, "    let danger_accept_invalid_cert = get_cached_tls_accept_invalid_cert(tls_url);\n", """    let support_request = url.starts_with("https://rs.mixel.ch/api/presence/client?request=");
+    let danger_accept_invalid_cert = if support_request {
+        Some(false) // Never expose support bearer data through invalid-certificate fallback.
+    } else {
+        get_cached_tls_accept_invalid_cert(tls_url)
+    };
+""", "validated HTTPS for support bearer data while retaining proxy/TLS backend")
+common_rs.write_text(text)
+
+settings = rdrepo / "flutter/lib/desktop/pages/desktop_setting_page.dart"
+text = settings.read_text()
+text = replace_once(text, "    final showAutoUpdate = isWindows && bind.mainIsInstalled();\n", "    final showAutoUpdate = isWindows && bind.mainIsInstalled() && !Platform.resolvedExecutable.toLowerCase().contains('windowsapps');\n", "Store settings external-update guard")
+settings.write_text(text)
+
+translations = {
+    "en": "The installed Mixel Remote support component must be updated before this support link can connect.",
+    "de": "Die installierte Mixel Remote Support-Komponente muss aktualisiert werden, bevor dieser Support-Link eine Verbindung herstellen kann.",
+    "fr": "Le composant d’assistance Mixel Remote installé doit être mis à jour avant de pouvoir vous connecter avec ce lien.",
+    "it": "Il componente di supporto Mixel Remote installato deve essere aggiornato prima di poter utilizzare questo link per connettersi.",
+}
+for locale, message in translations.items():
+    target = rdrepo / f"src/lang/{locale}.rs"
+    text = target.read_text()
+    entry = f'        ("mixel_support_component_update_required", "{message}"),\n'
+    if entry not in text:
+        text = replace_once(text, "    [\n", "    [\n" + entry, f"{locale} support component update notice")
+    target.write_text(text)
+
 ipc = rdrepo / "src/ipc.rs"
 text = ipc.read_text()
 text = replace_once(text, """                } else if name == "trusted-devices" {
@@ -215,7 +331,7 @@ text = replace_once(text, """                } else if name == "trusted-devices"
                     value = Some(Config::get_trusted_devices_json());
                 } else if name == "mixel-support-invite-attended" {
                     value = Some(if password::support_invite_requires_click() {
-                        "Y".to_owned()
+                        password::SUPPORT_INVITE_ATTESTATION.to_owned()
                     } else {
                         String::new()
                     });
@@ -261,6 +377,16 @@ text = replace_once(text, """        if self.authorized {
         }
         if self.require_2fa.is_some()""", "central authorization guard for password, 2FA and switch paths")
 text = text.replace("            } else if password::support_invite_requires_click()\n", "            } else if password::support_invite_must_wait(self.support_invite_attended, self.support_invite_accepted)\n")
+text = replace_once(text, """                _ = second_timer.tick() => {
+                    #[cfg(windows)]
+""", """                _ = second_timer.tick() => {
+                    if password::support_invite_must_wait(conn.support_invite_attended, conn.support_invite_accepted) {
+                        // Keep Accept visible for a latched pending request even
+                        // if the main app's initial guard deadline passes.
+                        password::renew_support_invite_attended();
+                    }
+                    #[cfg(windows)]
+""", "pending customer Accept visibility retention")
 text = replace_once(text, """            } else if (password::approve_mode() == ApproveMode::Click
 """, """            } else if password::support_invite_must_wait(self.support_invite_attended, self.support_invite_accepted)
                 || (password::approve_mode() == ApproveMode::Click

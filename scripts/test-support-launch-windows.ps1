@@ -35,7 +35,7 @@ function Find-MainWindow([int]$ProcessId) {
     }
     return $true
   }, [IntPtr]::Zero) | Out-Null
-  return @($found)
+  return $found.ToArray()
 }
 
 function Wait-VisibleMain([int]$ProcessId, [string]$Scenario) {
