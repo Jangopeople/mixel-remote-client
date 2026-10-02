@@ -23,6 +23,9 @@ source "$BRANDING/branding.env"
 
 echo "→ Applying branding: $APP_NAME ($MACOS_BUNDLE_ID) on top of RustDesk $UPSTREAM_VERSION"
 
+# Install the customer-consented support invite handoff in each fresh upstream checkout.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-invite.py"
+
 # 1. custom.txt — RustDesk's build-time branding override file.
 cp "$BRANDING/custom.txt" "$RDREPO/custom.txt"
 echo "   wrote custom.txt"
