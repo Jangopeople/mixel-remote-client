@@ -13,7 +13,7 @@ if not dart:
     raise SystemExit("Dart SDK required: put dart on PATH or set DART_BIN")
 targets = [
     "flutter/lib/common.dart", "flutter/lib/main.dart", "src/ui_interface.rs",
-    "src/ipc.rs", "src/server/connection.rs", "src/core_main.rs", "src/common.rs",
+    "src/ipc.rs", "src/server/connection.rs", "src/core_main.rs", "src/common.rs", "src/updater.rs",
     "flutter/lib/desktop/pages/desktop_setting_page.dart",
     "src/lang/en.rs", "src/lang/de.rs", "src/lang/fr.rs", "src/lang/it.rs",
     "libs/hbb_common/src/password_security.rs",
@@ -61,6 +61,9 @@ with tempfile.TemporaryDirectory(prefix="mixel-support-patch-") as tmp:
     assert "proof == 'attended-runtime-v1'" in common
     assert "_supportInviteCompatibilityNotice.showIfRequired" in common
     assert "contains('windowsapps')" in first["flutter/lib/desktop/pages/desktop_setting_page.dart"]
+    updater = first["src/updater.rs"]
+    assert updater.count("if is_mixel_store_package()") == 3
+    assert updater.index("if is_mixel_store_package()", updater.index("fn check_update(manually:")) < updater.index("do_check_software_update().is_err()"), "Store updater must stop before external request/download"
     assert "_supportInviteAttendedTimer ??= Timer.periodic" in common
     assert "launch args: $args" not in first["flutter/lib/main.dart"]
     assert 'print("initialLink: $initialLink");' not in common

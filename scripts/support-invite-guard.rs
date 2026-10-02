@@ -26,6 +26,10 @@ pub fn is_support_invite_arg(value: &str) -> bool {
     value.starts_with("mixel-remote://support?") || value == "--support-invite"
 }
 
+pub fn is_mixel_store_package_path(value: &str) -> bool {
+    value.to_ascii_lowercase().contains("windowsapps")
+}
+
 fn support_invite_now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -91,6 +95,22 @@ mod mixel_support_invite_tests {
         ));
         assert!(!is_support_invite_arg("--connect"));
         assert!(!is_support_invite_arg(""));
+    }
+
+    #[test]
+    fn store_package_path_disables_external_updates_without_changing_choices() {
+        assert!(is_mixel_store_package_path(
+            r"C:\Program Files\WindowsApps\Mixel_1.5.7_x64\Mixel-Remote.exe"
+        ));
+        assert!(is_mixel_store_package_path(
+            r"C:\PROGRAM FILES\WINDOWSAPPS\Mixel\Mixel-Remote.exe"
+        ));
+        assert!(!is_mixel_store_package_path(
+            r"C:\Program Files\Mixel-Remote\mixel-remote.exe"
+        ));
+        assert!(!is_mixel_store_package_path(
+            r"C:\Users\Example\AppData\Local\mixel-remote\mixel-remote.exe"
+        ));
     }
 
     #[test]

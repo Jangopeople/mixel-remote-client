@@ -309,6 +309,25 @@ text = settings.read_text()
 text = replace_once(text, "    final showAutoUpdate = isWindows && bind.mainIsInstalled();\n", "    final showAutoUpdate = isWindows && bind.mainIsInstalled() && !Platform.resolvedExecutable.toLowerCase().contains('windowsapps');\n", "Store settings external-update guard")
 settings.write_text(text)
 
+updater = rdrepo / "src/updater.rs"
+text = updater.read_text()
+store_guard = """fn is_mixel_store_package() -> bool {
+    #[cfg(target_os = "windows")]
+    return std::env::current_exe()
+        .map(|path| hbb_common::password_security::is_mixel_store_package_path(&path.to_string_lossy()))
+        .unwrap_or(true);
+    #[cfg(not(target_os = "windows"))]
+    return false;
+}
+
+"""
+if store_guard not in text:
+    text = replace_once(text, "enum UpdateMsg {\n", store_guard + "enum UpdateMsg {\n", "native Store package identity guard")
+text = replace_once(text, "pub fn start_auto_update() {\n", "pub fn start_auto_update() {\n    if is_mixel_store_package() { return; }\n", "Store auto updater start guard")
+text = replace_once(text, "pub fn manually_check_update() -> ResultType<()> {\n", "pub fn manually_check_update() -> ResultType<()> {\n    if is_mixel_store_package() { return Ok(()); }\n", "Store manual external updater guard")
+text = replace_once(text, "fn check_update(manually: bool) -> ResultType<()> {\n", "fn check_update(manually: bool) -> ResultType<()> {\n    if is_mixel_store_package() { return Ok(()); }\n", "Store external download/update execution guard")
+updater.write_text(text)
+
 translations = {
     "en": "The installed Mixel Remote support component must be updated before this support link can connect.",
     "de": "Die installierte Mixel Remote Support-Komponente muss aktualisiert werden, bevor dieser Support-Link eine Verbindung herstellen kann.",
