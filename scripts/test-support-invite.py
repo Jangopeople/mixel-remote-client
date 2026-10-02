@@ -13,7 +13,7 @@ if not dart:
     raise SystemExit("Dart SDK required: put dart on PATH or set DART_BIN")
 targets = [
     "flutter/lib/common.dart", "flutter/lib/main.dart", "src/ui_interface.rs",
-    "src/ipc.rs", "src/server/connection.rs",
+    "src/ipc.rs", "src/server/connection.rs", "src/core_main.rs",
     "libs/hbb_common/src/password_security.rs",
 ]
 
@@ -62,6 +62,10 @@ with tempfile.TemporaryDirectory(prefix="mixel-support-patch-") as tmp:
     central = connection.split("async fn send_logon_response_and_keep_alive(&mut self) -> bool {", 1)[1].split("self.authorized = true;", 1)[0]
     assert "support_invite_must_wait(" in central, "all automatic authorization must wait for customer Accept"
     assert "conn.support_invite_accepted = true;" in connection.split("ipc::Data::Authorize => {", 1)[1].split("}", 1)[0]
+    core = first["src/core_main.rs"]
+    assert "if args.is_empty() || _is_mixel_support_invite || crate::common::is_empty_uni_link(&args[0])" in core
+    assert core.count("(args.is_empty() || _is_mixel_support_invite)") == 2, "support URI must start portable service too"
+    assert core.index("renew_support_invite_attended();") < core.index("crate::start_server(false, no_server)"), "arm attended mode before receiving connections"
     assert "!support_invite_requires_click()" in first["libs/hbb_common/src/password_security.rs"]
     setter = first["src/ui_interface.rs"].split("pub fn set_option(key: String, value: String) {", 1)[1]
     runtime_only = setter.split('    if &key == "stop-service"', 1)[0]

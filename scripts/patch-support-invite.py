@@ -266,4 +266,40 @@ text = replace_once(text, """            } else if (password::approve_mode() == 
                 || (password::approve_mode() == ApproveMode::Click
 """, "attended guard before password/recent-session auto-authorization")
 connection.write_text(text)
+
+# The native bootstrap normally starts the incoming server only on an empty
+# command line. A support URI is an incoming help request, not an outgoing
+# connection command, so the same server/portable startup must run for it.
+core = rdrepo / "src/core_main.rs"
+text = core.read_text()
+bootstrap_before = """        i += 1;
+    }
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+"""
+bootstrap_after = """        i += 1;
+    }
+    let _is_mixel_support_invite = args.first()
+        .map(|arg| hbb_common::password_security::is_support_invite_arg(arg))
+        .unwrap_or(false);
+    if _is_mixel_support_invite {
+        // Arm before the incoming server starts, not after asynchronous UI init.
+        hbb_common::password_security::renew_support_invite_attended();
+    }
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+"""
+text = replace_once(text, bootstrap_before, bootstrap_after, "native support URI classification")
+text = replace_once(text, """        _is_quick_support |= !crate::platform::is_installed()
+            && args.is_empty()
+""", """        _is_quick_support |= !crate::platform::is_installed()
+            && (args.is_empty() || _is_mixel_support_invite)
+""", "support URI quicksupport classification")
+text = replace_once(text, """    if !crate::platform::is_installed()
+        && args.is_empty()
+        && _is_quick_support
+""", """    if !crate::platform::is_installed()
+        && (args.is_empty() || _is_mixel_support_invite)
+        && _is_quick_support
+""", "support URI portable service startup")
+text = replace_once(text, "    if args.is_empty() || crate::common::is_empty_uni_link(&args[0]) {\n", "    if args.is_empty() || _is_mixel_support_invite || crate::common::is_empty_uni_link(&args[0]) {\n", "support URI incoming rendezvous/server startup")
+core.write_text(text)
 print("Support invite handoff patched: visible app, stable presence heartbeat, runtime customer accept guard, redacted bearer logs")

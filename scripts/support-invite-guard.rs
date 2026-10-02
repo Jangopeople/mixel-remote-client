@@ -2,6 +2,10 @@
 static MIXEL_SUPPORT_INVITE_UNTIL: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
+pub fn is_support_invite_arg(value: &str) -> bool {
+    value.starts_with("mixel-remote://support?") || value == "--support-invite"
+}
+
 fn support_invite_now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -42,6 +46,23 @@ mod mixel_support_invite_tests {
         assert!(support_invite_guard_active(1_000, 91_000));
         assert!(!support_invite_guard_active(91_000, 91_000));
         assert!(!support_invite_guard_active(91_001, 91_000));
+    }
+
+    #[test]
+    fn support_uri_is_an_incoming_support_launch_not_outbound_connection() {
+        assert!(is_support_invite_arg(
+            "mixel-remote://support?invite=synthetic&apikey=synthetic"
+        ));
+        assert!(is_support_invite_arg("--support-invite"));
+        assert!(!is_support_invite_arg("mixel-remote://123456"));
+        assert!(!is_support_invite_arg(
+            "mixel-remote://support.attacker.example?invite=synthetic"
+        ));
+        assert!(!is_support_invite_arg(
+            "mixel-remote://support-something?invite=synthetic"
+        ));
+        assert!(!is_support_invite_arg("--connect"));
+        assert!(!is_support_invite_arg(""));
     }
 
     #[test]
