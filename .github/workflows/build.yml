@@ -18,6 +18,10 @@ on:
         required: true
         type: boolean
         default: false
+      runtime_artifact_run:
+        description: "Read-only runtime diagnostic using an existing signed payload run (empty = build)"
+        required: false
+        default: ""
 
 env:
   RUST_VERSION: "1.75"
@@ -31,6 +35,7 @@ jobs:
   # workflow_dispatch overrides it).
   # ===========================================================================
   config:
+    if: ${{ github.event.inputs.runtime_artifact_run == '' }}
     runs-on: ubuntu-22.04
     outputs:
       upstream_version: ${{ steps.ver.outputs.upstream_version }}
@@ -751,3 +756,47 @@ jobs:
             echo "→ uploading $name"
             wrangler r2 object put "mixel-remote-binaries/$name" --file "$f" --remote
           done
+
+  runtime:
+    if: ${{ github.event.inputs.runtime_artifact_run != '' }}
+    permissions:
+      actions: read
+      contents: read
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-msix-payload
+          run-id: ${{ github.event.inputs.runtime_artifact_run }}
+          github-token: ${{ github.token }}
+          path: signed-payload
+      - name: Verify and extract signed payload
+        shell: pwsh
+        run: |
+          $expected = (Get-Content signed-payload/Mixel-Remote-Store-Payload.sha256 -Raw).Trim()
+          $actual = (Get-FileHash signed-payload/Mixel-Remote-Store-Payload.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw 'Signed payload checksum differs.' }
+          Expand-Archive signed-payload/Mixel-Remote-Store-Payload.zip -DestinationPath runtime-client
+      - name: Exercise actual incoming support runtime
+        shell: pwsh
+        run: |
+          ./scripts/test-support-launch-windows.ps1 -Executable runtime-client/Mixel-Remote.exe
+      - name: Save synthetic runtime diagnostics
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force runtime-diagnostics | Out-Null
+          foreach ($root in @((Join-Path $env:APPDATA 'Mixel-Remote'), (Join-Path $env:LOCALAPPDATA 'Mixel-Remote'))) {
+            if (Test-Path $root) {
+              Get-ChildItem $root -Recurse -Filter '*.log' -File | ForEach-Object {
+                Copy-Item $_.FullName (Join-Path runtime-diagnostics $_.Name) -Force
+              }
+            }
+          }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: support-runtime-diagnostics
+          path: runtime-diagnostics/

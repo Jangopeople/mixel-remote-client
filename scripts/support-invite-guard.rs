@@ -23,7 +23,18 @@ pub fn resolve_support_invite_attestation(
 }
 
 pub fn is_support_invite_arg(value: &str) -> bool {
-    value.starts_with("mixel-remote://support?") || value == "--support-invite"
+    if value == "--support-invite" {
+        return true;
+    }
+    let Some((scheme, remainder)) = value.split_once("://") else {
+        return false;
+    };
+    let Some((authority_path, _query)) = remainder.split_once('?') else {
+        return false;
+    };
+    scheme.eq_ignore_ascii_case("mixel-remote")
+        && (authority_path.eq_ignore_ascii_case("support")
+            || authority_path.eq_ignore_ascii_case("support/"))
 }
 
 pub fn is_mixel_store_package_path(value: &str) -> bool {
@@ -86,6 +97,13 @@ mod mixel_support_invite_tests {
             "mixel-remote://support?invite=synthetic&apikey=synthetic"
         ));
         assert!(is_support_invite_arg("--support-invite"));
+        assert!(is_support_invite_arg(
+            "mixel-remote://support/?invite=synthetic&apikey=synthetic"
+        ));
+        assert!(is_support_invite_arg(
+            "MIXEL-REMOTE://SUPPORT/?invite=synthetic&apikey=synthetic"
+        ));
+        assert!(!is_support_invite_arg("mixel-remote://support/other?invite=synthetic"));
         assert!(!is_support_invite_arg("mixel-remote://123456"));
         assert!(!is_support_invite_arg(
             "mixel-remote://support.attacker.example?invite=synthetic"

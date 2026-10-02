@@ -1,5 +1,6 @@
 param([Parameter(Mandatory = $true)][string]$Executable)
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'support-runtime-probe-windows.ps1')
 
 Add-Type @'
 using System;
@@ -18,7 +19,9 @@ public static class MixelSupportWindowTest {
 
 $executablePath = (Resolve-Path $Executable).Path
 $token = 'inv_00000000-0000-0000-0000-000000000002'
-$uri = "mixel-remote://support?invite=$token&apikey=synthetic-invalid-public-key-000000000000"
+# Windows protocol activation can canonicalize an authority-only URI by adding
+# this slash. Exercise the same semantic support URI the Dart parser accepts.
+$uri = "mixel-remote://support/?invite=$token&apikey=synthetic-invalid-public-key-000000000000"
 $before = @(Get-Process | Select-Object -ExpandProperty Id)
 $main = $null
 
@@ -66,6 +69,7 @@ try {
     throw 'Cold support URI launch failed: main app became hidden after initialization.'
   }
   Write-Host 'PASS: cold support URI launch shows customer app.'
+  $coldHealth = Wait-MixelSupportRuntimeHealth 'Cold support URI launch' -RequireOnline
 
   [void][MixelSupportWindowTest]::ShowWindow($window, 6)
   Start-Sleep -Seconds 1
@@ -75,6 +79,7 @@ try {
   Start-Process -FilePath $executablePath -ArgumentList $uri | Out-Null
   $window = Wait-VisibleMain $main.Id 'Warm support URI launch'
   Write-Host 'PASS: warm support URI launch restores visible customer app.'
+  $warmHealth = Wait-MixelSupportRuntimeHealth 'Warm support URI launch' -RequireOnline
 
   foreach ($logRoot in @(
       (Join-Path $env:APPDATA 'Mixel-Remote'),
