@@ -37,7 +37,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Verify support invite handoff patch
-        run: python3 scripts/test-support-invite.py
+        run: python3 -m py_compile scripts/patch-support-invite.py scripts/test-support-invite.py
       - id: ver
         name: Resolve UPSTREAM_VERSION
         run: |
@@ -507,6 +507,25 @@ jobs:
         run: |
           python build.py --flutter
 
+      - name: Test attended support handoff
+        shell: bash
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+          RDREPO: ./rustdesk
+        run: |
+          python scripts/test-support-invite.py
+          dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart
+          dart scripts/test-support-invite.dart
+          cargo test --manifest-path rustdesk/libs/hbb_common/Cargo.toml --lib mixel_support_invite_tests
+
+      - name: Exercise actual Windows cold and warm support launches
+        shell: pwsh
+        run: |
+          $client = Get-ChildItem rustdesk/flutter/build/windows -Recurse -Filter 'mixel-remote.exe' -File |
+            Where-Object { $_.Directory.Name -eq 'Release' } | Select-Object -First 1
+          if (-not $client) { throw 'Built Windows desktop executable not found.' }
+          ./scripts/test-support-launch-windows.ps1 -Executable $client.FullName
+
       - name: Locate + rebrand icon + optional Authenticode
         shell: bash
         run: |
@@ -602,6 +621,19 @@ jobs:
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
+
+      - name: Verify Windows Authenticode signatures
+        shell: pwsh
+        run: |
+          $installers = Get-ChildItem dist -File | Where-Object { $_.Extension -in '.exe', '.msi' }
+          if ($installers.Count -eq 0) { throw 'No Windows installer was built.' }
+          foreach ($installer in $installers) {
+            $signature = Get-AuthenticodeSignature -FilePath $installer.FullName
+            if ($signature.Status -ne 'Valid') {
+              throw "Invalid Authenticode signature: $($installer.Name): $($signature.Status)"
+            }
+            Write-Host "PASS: $($installer.Name) Authenticode signature is Valid."
+          }
 
       - uses: actions/upload-artifact@v4
         with:
