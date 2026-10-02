@@ -443,6 +443,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: rustdesk
+          cache-on-failure: true
 
       - name: Install Flutter
         uses: subosito/flutter-action@v2
@@ -499,15 +500,7 @@ jobs:
           name: bridge-artifact
           path: rustdesk
 
-      - name: Build (cargo + flutter via build.py)
-        shell: bash
-        working-directory: rustdesk
-        env:
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-        run: |
-          python build.py --flutter
-
-      - name: Test attended support handoff
+      - name: Preflight generated support source and reporter
         shell: bash
         env:
           VCPKG_ROOT: ${{ github.workspace }}/vcpkg
@@ -516,6 +509,20 @@ jobs:
           python scripts/test-support-invite.py
           dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart
           dart scripts/test-support-invite.dart
+
+      - name: Build (cargo + flutter via build.py)
+        shell: bash
+        working-directory: rustdesk
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+        run: |
+          python build.py --flutter
+
+      - name: Test compiled attended support guard
+        shell: bash
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+        run: |
           cargo test --manifest-path rustdesk/libs/hbb_common/Cargo.toml --lib mixel_support_invite_tests
 
       - name: Exercise actual Windows cold and warm support launches

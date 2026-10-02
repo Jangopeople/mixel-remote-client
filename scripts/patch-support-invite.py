@@ -262,7 +262,22 @@ ui.write_text(text, encoding="utf-8")
 
 common_rs = rdrepo / "src/common.rs"
 text = common_rs.read_text(encoding="utf-8")
-text = replace_once(text, """    let response = get_http_response_async(
+tls_before = "    let danger_accept_invalid_cert = get_cached_tls_accept_invalid_cert(tls_url);\n"
+tls_after = """    let support_request = url.starts_with("https://rs.mixel.ch/api/presence/client?request=");
+    let danger_accept_invalid_cert = if support_request {
+        Some(false) // Never expose support bearer data through invalid-certificate fallback.
+    } else {
+        get_cached_tls_accept_invalid_cert(tls_url)
+    };
+"""
+http_start = text.index("pub async fn http_request_sync(")
+http_end = text.index("\n#[inline]", http_start)
+# Older patch versions matched the same TLS line in post_request. Restore that
+# unrelated transport; scope all support TLS/timeouts to the actual FFI handler.
+prefix = text[:http_start].replace(tls_after, tls_before, 1)
+http = text[http_start:http_end]
+http = replace_once(http, tls_before, tls_after, "validated support HTTPS in native FFI transport")
+http = replace_once(http, """    let response = get_http_response_async(
         &url,
         tls_url,
         &method,
@@ -289,19 +304,16 @@ text = replace_once(text, """    let response = get_http_response_async(
         response_future.await?
     };
 """, "bounded proxy-aware support HTTP timeout")
-text = replace_once(text, "    let response_body = response.text().await?;\n", """    let response_body = if support_request {
+http = replace_once(http, "    let response_body = response.text().await?;\n", """    let response_body = if support_request {
         timeout(6_000, response.text()).await??
     } else {
         response.text().await?
     };
 """, "bounded support response body timeout")
-text = replace_once(text, "    let danger_accept_invalid_cert = get_cached_tls_accept_invalid_cert(tls_url);\n", """    let support_request = url.starts_with("https://rs.mixel.ch/api/presence/client?request=");
-    let danger_accept_invalid_cert = if support_request {
-        Some(false) // Never expose support bearer data through invalid-certificate fallback.
-    } else {
-        get_cached_tls_accept_invalid_cert(tls_url)
-    };
-""", "validated HTTPS for support bearer data while retaining proxy/TLS backend")
+text = prefix + http + text[http_end:]
+text = text.replace("ui_interface::{get_option, is_installed, set_option}", "ui_interface::{get_option, set_option}")
+text = text.replace("    use std::net::ToSocketAddrs;\n", "")
+text = text.replace("    use hbb_common::protobuf::Enum;\n", "")
 common_rs.write_text(text, encoding="utf-8")
 
 settings = rdrepo / "flutter/lib/desktop/pages/desktop_setting_page.dart"
@@ -344,6 +356,7 @@ for locale, message in translations.items():
 
 ipc = rdrepo / "src/ipc.rs"
 text = ipc.read_text(encoding="utf-8")
+text = text.replace("keys::{self, OPTION_ALLOW_WEBSOCKET}", "keys::OPTION_ALLOW_WEBSOCKET")
 text = replace_once(text, """                } else if name == "trusted-devices" {
                     value = Some(Config::get_trusted_devices_json());
 """, """                } else if name == "trusted-devices" {
@@ -365,6 +378,10 @@ text = replace_once(text, """                } else if name == "unlock-pin" {
                     }
 """, "runtime IPC guard setter")
 ipc.write_text(text, encoding="utf-8")
+
+cm = rdrepo / "src/ui_cm_interface.rs"
+text = cm.read_text(encoding="utf-8").replace("config::{keys::*, option2bool}", "config::keys::*")
+cm.write_text(text, encoding="utf-8")
 
 connection = rdrepo / "src/server/connection.rs"
 text = connection.read_text(encoding="utf-8")

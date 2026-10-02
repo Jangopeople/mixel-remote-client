@@ -14,7 +14,7 @@ if not dart:
     raise SystemExit("Dart SDK required: put dart on PATH or set DART_BIN")
 targets = [
     "flutter/lib/common.dart", "flutter/lib/main.dart", "src/ui_interface.rs",
-    "src/ipc.rs", "src/server/connection.rs", "src/core_main.rs", "src/common.rs", "src/updater.rs",
+    "src/ipc.rs", "src/ui_cm_interface.rs", "src/server/connection.rs", "src/core_main.rs", "src/common.rs", "src/updater.rs",
     "flutter/lib/desktop/pages/desktop_setting_page.dart",
     "src/lang/en.rs", "src/lang/de.rs", "src/lang/fr.rs", "src/lang/it.rs",
     "libs/hbb_common/src/password_security.rs",
@@ -75,6 +75,9 @@ runpy.run_path(sys.argv[1], run_name='__main__')
     assert "Duration::from_secs(30)" in first["src/ui_interface.rs"]
     assert "timeout(6_000, response_future).await??" in first["src/common.rs"]
     assert "Some(false) // Never expose support bearer data" in first["src/common.rs"]
+    native_http = first["src/common.rs"].split("pub async fn http_request_sync(", 1)[1].split("\n#[inline]", 1)[0]
+    assert "let support_request =" in native_http, "support transport guard must be in native FFI function scope"
+    assert "let support_request =" not in first["src/common.rs"].split("pub async fn http_request_sync(", 1)[0], "unrelated POST transport stays unchanged"
     assert "true, value.as_deref()).to_owned()" in first["src/ui_interface.rs"]
     assert "crate::common::is_server_running()" not in first["src/ui_interface.rs"].split("pub fn get_option<T: AsRef<str>>(key: T) -> String {", 1)[1].split("effective_support_approve_mode", 1)[0]
     assert "proof == 'attended-runtime-v1'" in common
@@ -196,5 +199,23 @@ fn unrelated_http_status_retains_existing_reusable_behavior() {
     cache_binary = repo / ("native_cache_test.exe" if os.name == "nt" else "native_cache_test")
     subprocess.run([rustc, "--edition=2021", "--test", str(cache_test), "-o", str(cache_binary)], check=True)
     subprocess.run([str(cache_binary)], check=True)
+
+    # Compile and execute the actual generated native transport code, replacing
+    # only low-level HTTP/TLS dependencies and the unchanged JSON serialization.
+    # A declaration patched into the wrong function must fail this compilation.
+    common_source = first["src/common.rs"]
+    native_start = common_source.index("pub async fn http_request_sync(")
+    native_end = common_source.index("\n#[inline]", native_start)
+    native = common_source[native_start:native_end]
+    transport = native[:native.index("    // Serialize response headers")]
+    body_start = native.index("    let response_body =")
+    transport += native[body_start:native.index("    // Construct the JSON object", body_start)]
+    transport += "    Ok(response_body)\n}\n"
+    transport_template = (root / "scripts/support-invite-transport-test.rs").read_text(encoding="utf-8")
+    transport_test = repo / "native_transport_test.rs"
+    transport_test.write_text(transport_template.replace("// GENERATED_HTTP_REQUEST_SYNC", transport), encoding="utf-8")
+    transport_binary = repo / ("native_transport_test.exe" if os.name == "nt" else "native_transport_test")
+    subprocess.run([rustc, "--edition=2021", "--test", str(transport_test), "-o", str(transport_binary)], check=True)
+    subprocess.run([str(transport_binary)], check=True)
 
 print("Result: source patch and actual URI launch regression checks passed")
