@@ -468,7 +468,7 @@ if [[ -f "$BUILDPY" ]]; then
   python3 << 'EOF'
 import os
 build_py = os.environ.get("BUILDPY")
-with open(build_py, 'r') as f:
+with open(build_py, 'r', encoding='utf-8') as f:
     code = f.read()
 
 old_dylib = 'system2(\n        "cp target/release/liblibrustdesk.dylib target/release/librustdesk.dylib")'
@@ -486,7 +486,7 @@ code = code.replace(
     "f'cp -rf ../target/{os.environ.get(\"CARGO_BUILD_TARGET\") + \"/\" if os.environ.get(\"CARGO_BUILD_TARGET\") else \"\"}release/service "
 )
 
-with open(build_py, 'w') as f:
+with open(build_py, 'w', encoding='utf-8') as f:
     f.write(code)
 EOF
   echo "   patched build.py to support target-specific build directories"
