@@ -16,7 +16,7 @@ def replace_once(text: str, before: str, after: str, description: str) -> str:
 
 
 source = rdrepo / "flutter/lib/common.dart"
-text = source.read_text()
+text = source.read_text(encoding="utf-8")
 text = replace_once(
     text,
     "import 'package:uni_links/uni_links.dart';",
@@ -161,17 +161,17 @@ if "  if (uri.scheme == 'mixel-remote' && uri.authority == 'support') {" in text
     text = text[:start] + parser_after.split("  } else if (uri.authority.isEmpty &&")[0] + text[end:]
 else:
     text = replace_once(text, parser_before, parser_after, "support URI parser")
-source.write_text(text)
+source.write_text(text, encoding="utf-8")
 (rdrepo / "flutter/lib/mixel_support_invite.dart").write_text(
-    (scripts / "support-invite-reporter.dart").read_text()
+    (scripts / "support-invite-reporter.dart").read_text(encoding="utf-8"), encoding="utf-8"
 )
 
 main = rdrepo / "flutter/lib/main.dart"
-main.write_text(main.read_text().replace('debugPrint("launch args: $args");', "debugPrint('Main app launch received.');"))
+main.write_text(main.read_text(encoding="utf-8").replace('debugPrint("launch args: $args");', "debugPrint('Main app launch received.');"), encoding="utf-8")
 
 password = rdrepo / "libs/hbb_common/src/password_security.rs"
-text = password.read_text()
-guard_code = (scripts / "support-invite-guard.rs").read_text() + "\n"
+text = password.read_text(encoding="utf-8")
+guard_code = (scripts / "support-invite-guard.rs").read_text(encoding="utf-8") + "\n"
 guard_marker = "// Mixel attended support guard. Runtime only: never change saved login preferences.\n"
 if guard_marker not in text:
     text = replace_once(text, "lazy_static::lazy_static! {", guard_code + "lazy_static::lazy_static! {", "password guard insertion")
@@ -180,10 +180,10 @@ else:
     end = text.index("lazy_static::lazy_static! {", start)
     text = text[:start] + guard_code + text[end:]
 text = replace_once(text, "    approve_mode() == ApproveMode::Password\n", "    !support_invite_requires_click()\n        && approve_mode() == ApproveMode::Password\n", "connection-manager visibility guard")
-password.write_text(text)
+password.write_text(text, encoding="utf-8")
 
 ui = rdrepo / "src/ui_interface.rs"
-text = ui.read_text()
+text = ui.read_text(encoding="utf-8")
 text = replace_once(text, "pub fn get_option<T: AsRef<str>>(key: T) -> String {\n", """pub fn get_option<T: AsRef<str>>(key: T) -> String {
     if key.as_ref() == "mixel-support-invite-attended" {
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -229,11 +229,11 @@ text = replace_once(text, "pub fn set_option(key: String, value: String) {\n", "
         return; // Runtime only. Never write OPTIONS or Config.
     }
 """, "runtime guard setter")
-ui.write_text(text)
+ui.write_text(text, encoding="utf-8")
 
 # Native proxy-aware HTTP results are keyed by URL. Give each support heartbeat
 # an opaque unique URL, consume completed results, and expire abandoned ones.
-text = ui.read_text()
+text = ui.read_text(encoding="utf-8")
 text = replace_once(text, """pub fn get_async_http_status(url: String) -> Option<String> {
     match ASYNC_HTTP_STATUS.lock().unwrap().get(&url) {
 """, """pub fn get_async_http_status(url: String) -> Option<String> {
@@ -258,10 +258,10 @@ text = replace_once(text, """        current_request.lock().unwrap().insert(url,
     });
 }
 """, "expire abandoned support HTTP results")
-ui.write_text(text)
+ui.write_text(text, encoding="utf-8")
 
 common_rs = rdrepo / "src/common.rs"
-text = common_rs.read_text()
+text = common_rs.read_text(encoding="utf-8")
 text = replace_once(text, """    let response = get_http_response_async(
         &url,
         tls_url,
@@ -302,15 +302,15 @@ text = replace_once(text, "    let danger_accept_invalid_cert = get_cached_tls_a
         get_cached_tls_accept_invalid_cert(tls_url)
     };
 """, "validated HTTPS for support bearer data while retaining proxy/TLS backend")
-common_rs.write_text(text)
+common_rs.write_text(text, encoding="utf-8")
 
 settings = rdrepo / "flutter/lib/desktop/pages/desktop_setting_page.dart"
-text = settings.read_text()
+text = settings.read_text(encoding="utf-8")
 text = replace_once(text, "    final showAutoUpdate = isWindows && bind.mainIsInstalled();\n", "    final showAutoUpdate = isWindows && bind.mainIsInstalled() && !Platform.resolvedExecutable.toLowerCase().contains('windowsapps');\n", "Store settings external-update guard")
-settings.write_text(text)
+settings.write_text(text, encoding="utf-8")
 
 updater = rdrepo / "src/updater.rs"
-text = updater.read_text()
+text = updater.read_text(encoding="utf-8")
 store_guard = """fn is_mixel_store_package() -> bool {
     #[cfg(target_os = "windows")]
     return std::env::current_exe()
@@ -326,7 +326,7 @@ if store_guard not in text:
 text = replace_once(text, "pub fn start_auto_update() {\n", "pub fn start_auto_update() {\n    if is_mixel_store_package() { return; }\n", "Store auto updater start guard")
 text = replace_once(text, "pub fn manually_check_update() -> ResultType<()> {\n", "pub fn manually_check_update() -> ResultType<()> {\n    if is_mixel_store_package() { return Ok(()); }\n", "Store manual external updater guard")
 text = replace_once(text, "fn check_update(manually: bool) -> ResultType<()> {\n", "fn check_update(manually: bool) -> ResultType<()> {\n    if is_mixel_store_package() { return Ok(()); }\n", "Store external download/update execution guard")
-updater.write_text(text)
+updater.write_text(text, encoding="utf-8")
 
 translations = {
     "en": "The installed Mixel Remote support component must be updated before this support link can connect.",
@@ -336,14 +336,14 @@ translations = {
 }
 for locale, message in translations.items():
     target = rdrepo / f"src/lang/{locale}.rs"
-    text = target.read_text()
+    text = target.read_text(encoding="utf-8")
     entry = f'        ("mixel_support_component_update_required", "{message}"),\n'
     if entry not in text:
         text = replace_once(text, "    [\n", "    [\n" + entry, f"{locale} support component update notice")
-    target.write_text(text)
+    target.write_text(text, encoding="utf-8")
 
 ipc = rdrepo / "src/ipc.rs"
-text = ipc.read_text()
+text = ipc.read_text(encoding="utf-8")
 text = replace_once(text, """                } else if name == "trusted-devices" {
                     value = Some(Config::get_trusted_devices_json());
 """, """                } else if name == "trusted-devices" {
@@ -364,10 +364,10 @@ text = replace_once(text, """                } else if name == "unlock-pin" {
                         password::renew_support_invite_attended();
                     }
 """, "runtime IPC guard setter")
-ipc.write_text(text)
+ipc.write_text(text, encoding="utf-8")
 
 connection = rdrepo / "src/server/connection.rs"
-text = connection.read_text()
+text = connection.read_text(encoding="utf-8")
 text = replace_once(text, "    authorized: bool,\n", "    authorized: bool,\n    support_invite_attended: bool,\n    support_invite_accepted: bool,\n", "connection attended state")
 text = replace_once(text, "            authorized: false,\n", "            authorized: false,\n            support_invite_attended: password::support_invite_requires_click(),\n            support_invite_accepted: false,\n", "connection attended state initialization")
 text = replace_once(text, """                        ipc::Data::Authorize => {
@@ -410,13 +410,13 @@ text = replace_once(text, """            } else if (password::approve_mode() == 
 """, """            } else if password::support_invite_must_wait(self.support_invite_attended, self.support_invite_accepted)
                 || (password::approve_mode() == ApproveMode::Click
 """, "attended guard before password/recent-session auto-authorization")
-connection.write_text(text)
+connection.write_text(text, encoding="utf-8")
 
 # The native bootstrap normally starts the incoming server only on an empty
 # command line. A support URI is an incoming help request, not an outgoing
 # connection command, so the same server/portable startup must run for it.
 core = rdrepo / "src/core_main.rs"
-text = core.read_text()
+text = core.read_text(encoding="utf-8")
 bootstrap_before = """        i += 1;
     }
     #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -446,5 +446,5 @@ text = replace_once(text, """    if !crate::platform::is_installed()
         && _is_quick_support
 """, "support URI portable service startup")
 text = replace_once(text, "    if args.is_empty() || crate::common::is_empty_uni_link(&args[0]) {\n", "    if args.is_empty() || _is_mixel_support_invite || crate::common::is_empty_uni_link(&args[0]) {\n", "support URI incoming rendezvous/server startup")
-core.write_text(text)
+core.write_text(text, encoding="utf-8")
 print("Support invite handoff patched: visible app, stable presence heartbeat, runtime customer accept guard, redacted bearer logs")

@@ -2,6 +2,7 @@
 """Patch pinned real source twice; execute its cold/warm support URI path."""
 import os
 import shutil
+import sys
 import subprocess
 import tempfile
 from pathlib import Path
@@ -29,7 +30,7 @@ def original_source(path: str) -> str:
         git_path = path
     return subprocess.run(
         ["git", "-C", str(git_root), "show", f"HEAD:{git_path}"],
-        check=True, capture_output=True, text=True,
+        check=True, capture_output=True, text=True, encoding="utf-8",
     ).stdout
 
 
@@ -38,15 +39,33 @@ with tempfile.TemporaryDirectory(prefix="mixel-support-patch-") as tmp:
     for path in targets:
         target = repo / path
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(original_source(path))
+        target.write_text(original_source(path), encoding="utf-8")
     env = {**os.environ, "RDREPO": str(repo)}
     patcher = root / "scripts/patch-support-invite.py"
-    subprocess.run(["python3", str(patcher)], env=env, check=True, capture_output=True, text=True)
+    # Simulate Windows CP1252 as the implicit text IO encoding. All source must
+    # remain valid UTF-8, including French accents and the typographic apostrophe.
+    windows_encoding_runner = """
+import io
+import runpy
+import sys
+original_open = io.open
+def windows_default_open(file, mode='r', buffering=-1, encoding=None, *args, **kwargs):
+    if 'b' not in mode and encoding in (None, 'locale'):
+        encoding = 'cp1252'
+    return original_open(file, mode, buffering, encoding, *args, **kwargs)
+io.open = windows_default_open
+runpy.run_path(sys.argv[1], run_name='__main__')
+"""
+    subprocess.run([sys.executable, "-c", windows_encoding_runner, str(patcher)], env=env, check=True, capture_output=True, text=True, encoding="utf-8")
     patched_paths = targets + ["flutter/lib/mixel_support_invite.dart"]
-    first = {path: (repo / path).read_text() for path in patched_paths}
-    subprocess.run(["python3", str(patcher)], env=env, check=True, capture_output=True, text=True)
-    second = {path: (repo / path).read_text() for path in patched_paths}
+    first = {path: (repo / path).read_text(encoding="utf-8") for path in patched_paths}
+    subprocess.run([sys.executable, str(patcher)], env=env, check=True, capture_output=True, text=True, encoding="utf-8")
+    second = {path: (repo / path).read_text(encoding="utf-8") for path in patched_paths}
     assert first == second, "patch must be idempotent across all touched files"
+    french = (repo / "src/lang/fr.rs").read_bytes()
+    assert "d’assistance Mixel Remote installé doit être mis à jour".encode("utf-8") in french
+    assert "d’assistance Mixel Remote installé doit être mis à jour" in french.decode("utf-8")
+    print("PASS: CP1252-default source patch preserves UTF-8 translations and idempotence")
     common = first["flutter/lib/common.dart"]
     assert common.count("Future<void> _reportSupportInvite(") == 1
     assert common.count("registerProtocol('mixel-remote');") == 1
@@ -129,7 +148,7 @@ Future<void> main() async {
   if (reported != 3) throw StateError('Only valid handoffs may schedule presence');
   print('PASS: generated cold/warm support URI paths show the app, reject invalid/truncated arguments, never request outbound connection');
 }
-""")
+""", encoding="utf-8")
     subprocess.run([dart, str(runner)], check=True)
 
     # Execute the generated Rust one-shot cache accessor itself. This catches
@@ -173,7 +192,7 @@ fn unrelated_http_status_retains_existing_reusable_behavior() {
     assert_eq!(get_async_http_status(url.clone()), Some("status200".to_owned()));
     assert_eq!(get_async_http_status(url), Some("status200".to_owned()));
 }
-""")
+""", encoding="utf-8")
     cache_binary = repo / ("native_cache_test.exe" if os.name == "nt" else "native_cache_test")
     subprocess.run([rustc, "--edition=2021", "--test", str(cache_test), "-o", str(cache_binary)], check=True)
     subprocess.run([str(cache_binary)], check=True)
