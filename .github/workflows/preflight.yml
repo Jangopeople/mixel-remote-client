@@ -17,6 +17,7 @@ jobs:
       - name: Run release staging and configuration regression tests
         run: |
           python3 scripts/test-release-pipeline.py
+          python3 scripts/test-notarize-macos.py
           python3 scripts/test-sdk-discovery.py
           python3 scripts/test-support-session-fixture.py
           python3 scripts/test-relay-ws-bridge-lifecycle.py

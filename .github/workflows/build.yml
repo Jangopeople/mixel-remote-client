@@ -57,7 +57,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Verify release staging and build configuration
-        run: python3 scripts/test-release-pipeline.py
+        run: |
+          python3 scripts/test-release-pipeline.py
+          python3 scripts/test-notarize-macos.py
       - id: ver
         name: Validate build configuration and publication credentials
         env:
@@ -513,11 +515,8 @@ jobs:
             APP_ZIP="../dist/Mixel-Remote-${{ matrix.job.arch }}.zip"
             rm -f "$APP_ZIP"
             ditto -c -k --keepParent "$APP_PATH" "$APP_ZIP"
-            xcrun notarytool submit "$APP_ZIP" \
-              --apple-id "$APPLE_NOTARY_USER" \
-              --password "$APPLE_NOTARY_PASSWORD" \
-              --team-id  "$APPLE_NOTARY_TEAM_ID" \
-              --wait
+            python3 ../scripts/notarize-macos.py "$APP_ZIP" \
+              --log-dir "../dist/notary-app-${{ matrix.job.arch }}"
             rm -f "$APP_ZIP"
             xcrun stapler staple "$APP_PATH"
             xcrun stapler validate "$APP_PATH"
@@ -535,11 +534,8 @@ jobs:
               "$DMG" "$APP_PATH"
             codesign --force --options runtime --timestamp --deep --strict \
               -s "$CODESIGN_ID" "$DMG" -vvv
-            xcrun notarytool submit "$DMG" \
-              --apple-id "$APPLE_NOTARY_USER" \
-              --password "$APPLE_NOTARY_PASSWORD" \
-              --team-id  "$APPLE_NOTARY_TEAM_ID" \
-              --wait
+            python3 ../scripts/notarize-macos.py "$DMG" \
+              --log-dir "../dist/notary-dmg-${{ matrix.job.arch }}"
             xcrun stapler staple "$DMG"
             xcrun stapler validate "$DMG"
             codesign --verify --strict --verbose=2 "$DMG"
@@ -553,6 +549,13 @@ jobs:
             echo "⚠ Built unsigned DMG (no APPLE_CERT_P12_BASE64 secret)"
           fi
           ls -la ../dist/
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-notary-${{ matrix.job.arch }}
+          path: dist/notary-*/
+          if-no-files-found: warn
 
       - uses: actions/upload-artifact@v4
         with:
