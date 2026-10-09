@@ -109,8 +109,18 @@ class Session:
         window = self.cm()
         self.activate("host", window)
         time.sleep(.7)
-        self.screenshot("host", label + "-customer-accept")
         box = self.geometry("host", window)
+        # The real unauthorized CM renders blue Accept + white Cancel; an
+        # authorized Remote/FileTransfer session renders red Disconnect.
+        # This assertion covers FileTransfer too (VideoConnCount is Remote only).
+        point = (box["X"] + 25, box["Y"] + box["HEIGHT"] - 31)
+        def pending():
+            code = "from PIL import ImageGrab;import json;print(json.dumps(ImageGrab.grab().getpixel(" + repr(point) + ")[:3]))"
+            red, green, blue = json.loads(self.run("host", ["python3", "-c", code]).stdout)
+            return red < 80 and green > 75 and blue > 180
+        until(label + " actual unauthorized Accept UI", pending)
+        self.screenshot("host", label + "-customer-accept")
+        print("PASS: " + label + " real CM remains unauthorized with visible Accept before customer click", flush=True)
         # Actual visible CM button; never send an Authorize IPC message.
         self.click("host", box["X"] + box["WIDTH"] * .27, box["Y"] + box["HEIGHT"] - 31)
 
@@ -231,19 +241,15 @@ print(json.dumps(rects[0]))
         self.activate("controller", window)
         self.gui("controller", ["xdotool", "windowsize", window, "1300", "740", "windowmove", window, "0", "40"])
         time.sleep(1)
-        self.path(230, "/home/guest/send-proof")
-        self.path(870, "/home/guest/received")
+        self.path(350, "/home/guest/send-proof")
+        self.path(840, "/home/guest/received")
         self.click("controller", 160, 294)
         self.click("controller", 424, 232)
-        until("actual upload file", lambda: self.run("host", ["test", "-f", "/home/guest/received/" + FILE], check=False).returncode == 0)
-        host_hash = self.run("host", ["sha256sum", "/home/guest/received/" + FILE]).stdout.split()[0]
-        assert host_hash == expected_hash, "Transferred host bytes differ"
-        self.path(230, "/home/guest/roundtrip")
+        until("actual upload complete SHA256", lambda: self.run("host", ["sha256sum", "/home/guest/received/" + FILE], check=False).stdout.split()[:1] == [expected_hash])
+        self.path(350, "/home/guest/roundtrip")
         self.click("controller", 650, 294)
         self.click("controller", 575, 232)
-        until("actual downloaded file", lambda: self.run("controller", ["test", "-f", "/home/guest/roundtrip/" + FILE], check=False).returncode == 0)
-        received = self.run("controller", ["sha256sum", "/home/guest/roundtrip/" + FILE]).stdout.split()[0]
-        assert received == expected_hash, "Round-trip bytes differ"
+        until("actual downloaded complete SHA256", lambda: self.run("controller", ["sha256sum", "/home/guest/roundtrip/" + FILE], check=False).stdout.split()[:1] == [expected_hash])
         self.screenshot("controller", "file-roundtrip-proof")
         print("PASS: actual encrypted relay file upload + download matches SHA256 " + expected_hash, flush=True)
         self.stop_controller_gui()
@@ -286,10 +292,25 @@ print(json.dumps(rects[0]))
                 self.run(role, ["bash", "-c", "iptables-save -c >/proofs/native-port-block.txt"], user="root", check=False)
 
     def cleanup(self):
-        self.capture()
+        errors = []
+        try:
+            self.capture()
+        except Exception as error:
+            errors.append("Capture: " + str(error))
         for role in self.created:
-            command(["docker", "rm", "-f", self.names[role]], check=False)
-        command(["docker", "image", "rm", self.image], check=False)
+            try:
+                result = command(["docker", "rm", "-f", self.names[role]], check=False)
+                if result.returncode:
+                    errors.append(role + " container removal failed")
+            except Exception as error:
+                errors.append(role + " cleanup: " + str(error))
+        try:
+            result = command(["docker", "image", "rm", self.image], check=False)
+            if result.returncode:
+                errors.append("Owned test image removal failed")
+        except Exception as error:
+            errors.append("Image cleanup: " + str(error))
+        return errors
 
     def setup(self, temporary):
         context = temporary / "context"
@@ -359,8 +380,15 @@ def main():
             manifest["result"] = "passed"
             print("Result: real Linux consent/video/keyboard/mouse/file/restart/reconnect session passed", flush=True)
         finally:
-            session.cleanup()
-            (args.proofs / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+            try:
+                cleanup_errors = session.cleanup()
+                if cleanup_errors:
+                    manifest["cleanup_errors"] = cleanup_errors
+                    manifest["result"] = "failed"
+            finally:
+                (args.proofs / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+            if manifest.get("cleanup_errors"):
+                raise RuntimeError("Owned test cleanup/capture failed: " + "; ".join(manifest["cleanup_errors"]))
 
 
 if __name__ == "__main__":

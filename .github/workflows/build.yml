@@ -259,7 +259,9 @@ jobs:
           if-no-files-found: error
 
       - name: Prove actual relay support session on two native Linux desktops
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p artifacts
           python3 scripts/test-support-session-linux.py \
             --deb "dist/mixel-remote-${UPSTREAM_VERSION}-x86_64.deb" \
@@ -267,7 +269,9 @@ jobs:
 
       - name: Prove HTTPS support with native relay ports blocked
         if: ${{ !cancelled() && steps.locate.outcome == 'success' }}
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p artifacts
           python3 scripts/test-support-session-linux.py \
             --deb "dist/mixel-remote-${UPSTREAM_VERSION}-x86_64.deb" \
