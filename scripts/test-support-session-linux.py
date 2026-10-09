@@ -92,7 +92,7 @@ class Session:
     def native_udp_proof(self, label):
         sockets, established = self.fixture_tcp("host")
         rules = self.run("host", ["iptables-save", "-c"], user="root").stdout
-        counters = re.search(r"^\[(\d+):(\d+)\] -A OUTPUT .*--dport 21116 .*?-j ACCEPT$", rules, re.M)
+        counters = re.search(r"^\[(\d+):(\d+)\] -A OUTPUT -p udp .*--dport 21116 .*?-j ACCEPT$", rules, re.M)
         assert counters and int(counters.group(1)) > 0, "No host UDP21116 registration packets observed"
         if label == "initial-registration":
             assert not any(":443" in line.split()[4] for line in established), "Host initial registration unexpectedly used HTTPS"
@@ -100,11 +100,11 @@ class Session:
         (self.proofs / "host" / (label + "-udp-registration.txt")).write_text(rules + "\n" + sockets)
         return int(counters.group(1))
 
-    def run(self, role, arguments, *, check=True, user=None):
+    def run(self, role, arguments, *, check=True, user=None, timeout=30):
         cmd = ["docker", "exec"]
         if user:
             cmd += ["--user", user]
-        return command(cmd + [self.names[role]] + arguments, check=check)
+        return command(cmd + [self.names[role]] + arguments, check=check, timeout=timeout)
 
     def gui(self, role, arguments, *, check=True):
         script = 'export DBUS_SESSION_BUS_ADDRESS="$(cat /proofs/dbus-address)"; ' + shlex.join(arguments)
@@ -121,8 +121,8 @@ class Session:
                 'print(json.dumps(query(' + repr(kind) + ',' + repr(content) + ')))')
         return json.loads(self.run(role, ["python3", "-c", code]).stdout)
 
-    def screenshot(self, role, name):
-        self.run(role, ["python3", "-c", "from PIL import ImageGrab;ImageGrab.grab().save(" + repr("/proofs/" + name + ".png") + ")"])
+    def screenshot(self, role, name, timeout=30):
+        self.run(role, ["python3", "-c", "from PIL import ImageGrab;ImageGrab.grab().save(" + repr("/proofs/" + name + ".png") + ")"], timeout=timeout)
 
     def windows(self, role, pattern, visible=True):
         args = ["xdotool", "search"] + (["--onlyvisible"] if visible else []) + ["--name", pattern]
@@ -190,30 +190,85 @@ class Session:
         state = json.loads(self.run(role, ["python3", "-c", code]).stdout)
         return state if state[0] > 0 and state[1] is True else None
 
+    def relay_addresses(self, role):
+        if self.isolated_relay:
+            return {self.isolated_relay["address"]}
+        code = "import socket,json;print(json.dumps(sorted({item[4][0] for item in socket.getaddrinfo('rs.mixel.ch',443,socket.AF_INET,socket.SOCK_STREAM)})))"
+        return set(json.loads(self.run(role, ["python3", "-c", code]).stdout))
+
+    def other_peer_addresses(self, role):
+        other = "controller" if role == "host" else "host"
+        result = command(["docker", "inspect", "--format", "{{json .NetworkSettings.Networks}}", self.names[other]])
+        addresses = {details["IPAddress"] for details in json.loads(result.stdout).values() if details.get("IPAddress")}
+        assert addresses, "Cannot independently identify the owned opposite peer"
+        return addresses
+
+    def app_tcp_evidence(self, role):
+        """Count only exact relay endpoints owned by this extracted installer."""
+        sockets = self.run(role, ["ss", "-tnp"]).stdout
+        expected = self.relay_addresses(role)
+        other = self.other_peer_addresses(role)
+        verified = set()
+        connections = {}
+        for line in sockets.splitlines():
+            fields = line.split()
+            if len(fields) < 5 or fields[0] != "ESTAB":
+                continue
+            peer, _, port = fields[4].rpartition(":")
+            try:
+                address = ipaddress.ip_address(peer.strip("[]"))
+                peer = str(address.ipv4_mapped if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped else address)
+                port = int(port)
+            except ValueError:
+                continue
+            assert peer not in other, "Direct established socket to the owned opposite peer bypasses HTTPS relay: " + fields[4]
+            if peer not in expected:
+                continue
+            for owner in re.findall(r'\("mixel-remote",pid=(\d+),', line):
+                pid = int(owner)
+                if pid not in verified:
+                    executable = self.run(role, ["readlink", "/proc/" + owner + "/exe"]).stdout.strip()
+                    assert executable == EXE, "Socket PID is not the exact tested Mixel installer"
+                    verified.add(pid)
+                identity = (fields[3], fields[4])
+                record = connections.setdefault(identity, {"pids": set(), "address": peer, "port": port,
+                                                          "local_endpoint": fields[3], "peer_endpoint": fields[4]})
+                record["pids"].add(pid)
+        return sockets, [{**record, "pids": sorted(record["pids"])} for record in connections.values()]
+
     def active_https_proof(self):
         assert self.query("host", "VideoConnCount") == 1
+        evidence = {}
         for role in self.names:
-            sockets = self.run(role, ["ss", "-tnp"]).stdout
+            sockets, connections = self.app_tcp_evidence(role)
             (self.proofs / role / "active-encrypted-video-tcp.txt").write_text(sockets)
-            established = [line for line in sockets.splitlines() if line.startswith("ESTAB")]
-            assert not any(re.search(r":2111[5-9]\s", line) for line in established), "Blocked native relay connection established"
-            assert sum(":443" in line for line in established) >= 2, "Active forced relay plus registration did not establish TLS443 sockets"
+            assert not any(21115 <= item["port"] <= 21119 for item in connections), "Blocked native relay connection established"
+            tls = [item for item in connections if item["port"] == 443]
+            assert len(tls) >= 2, "Actual Mixel registration plus relay did not establish two exact relay TLS443 sockets"
+            assert any(self.server[role] in item["pids"] for item in tls), "Incoming registration process has no exact relay TLS443 socket"
+            if role == "controller":
+                assert any(self.server[role] not in item["pids"] for item in tls), "Outgoing session process has no separate exact relay TLS443 socket"
+            evidence[role] = {"incoming_pid": self.server[role], "app_executable": EXE, "connections": connections}
+        (self.proofs / "https-transport-proof.json").write_text(json.dumps(evidence, indent=2) + "\n")
         print("PASS: actual authenticated forced-relay video/input active with native21115-21119 blocked; both peers have TLS443 registration+session sockets", flush=True)
 
     def active_mixed_proof(self):
         assert self.query("host", "VideoConnCount") == 1
         host_udp = self.native_udp_proof("active-encrypted-video")
         assert host_udp > self.initial_udp_packets, "Host UDP registration stopped after the native TCP outage"
+        evidence = {}
         for role in self.names:
-            sockets, established = self.fixture_tcp(role)
+            sockets, connections = self.app_tcp_evidence(role)
             (self.proofs / role / "active-mixed-transport-tcp.txt").write_text(sockets)
             if role == "host":
-                assert not any(re.search(r":2111[5-9]$", line.split()[4]) for line in established), "Host blocked native TCP transport established"
-                assert sum(line.split()[4].endswith(":443") for line in established) >= 1, "Host relay session did not use HTTPS443"
+                assert not any(21115 <= item["port"] <= 21119 for item in connections), "Host blocked native TCP transport established"
+                assert any(item["port"] == 443 and self.server[role] in item["pids"] for item in connections), "Actual host incoming process has no exact HTTPS443 relay socket"
             else:
-                assert sum(line.split()[4].endswith(":443") for line in established) >= 1, "Controller registration did not use HTTPS443"
+                assert any(item["port"] == 443 and self.server[role] in item["pids"] for item in connections), "Controller incoming registration has no exact HTTPS443 socket"
+                assert any(item["port"] in (21117, 443) and self.server[role] not in item["pids"] for item in connections), "Controller session has no separate verified native/HTTPS relay socket"
+            evidence[role] = {"incoming_pid": self.server[role], "app_executable": EXE, "connections": connections}
         control_rules = self.run("controller", ["iptables-save", "-c"], user="root").stdout
-        control = re.search(r"^\[(\d+):(\d+)\] -A OUTPUT .*--dport 21116 .*?-j ACCEPT$", control_rules, re.M)
+        control = re.search(r"^\[(\d+):(\d+)\] -A OUTPUT -p tcp .*--dport 21116 .*?-j ACCEPT$", control_rules, re.M)
         assert control and int(control.group(1)) > 0, "Ordinary controller request did not exercise native TCP21116 control; mixed late-fallback gap not tested"
         (self.proofs / "controller" / "ordinary-id-native-control-tcp.txt").write_text(control_rules)
         (self.proofs / "mixed-transport-proof.json").write_text(json.dumps({
@@ -222,6 +277,7 @@ class Session:
             "controller_registration": "HTTPS443; native UDP21115-19 blocked",
             "controller_native_tcp": "ordinary-ID native TCP21116 control observed",
             "controller_control_tcp_packets": int(control.group(1)), "request": "ordinary ID, no --relay",
+            "socket_owners": evidence,
         }, indent=2) + "\n")
         print("PASS: mixed transport: host native UDP registration plus HTTPS443 session; controller HTTPS registration with native TCP available; ordinary ID without --relay", flush=True)
 
@@ -429,27 +485,35 @@ print(json.dumps(rects[0]))
         print("PASS: real network loss/recovery requires another actual customer Accept", flush=True)
 
     def capture(self):
-        for role in self.created:
-            self.screenshot(role, "final-desktop-state")
-            self.run(role, ["bash", "-c", "cp -R /home/guest/.local/share/logs/Mixel-Remote /proofs/native-logs 2>/dev/null || true; ss -tnp >/proofs/tcp-sockets.txt"], check=False)
-            if self.automatic_transport:
-                self.run(role, ["bash", "-c", "iptables-save -c >/proofs/native-port-block.txt"], user="root", check=False)
-
-    def cleanup(self):
         errors = []
-        try:
-            self.capture()
-        except Exception as error:
-            errors.append("Capture: " + str(error))
+        for role in self.created:
+            operations = [lambda: self.screenshot(role, "final-desktop-state", timeout=2),
+                          lambda: self.run(role, ["bash", "-c", "set -e; cp -R /home/guest/.local/share/logs/Mixel-Remote /proofs/native-logs; ss -tnp >/proofs/tcp-sockets.txt"], timeout=2)]
+            if self.automatic_transport:
+                operations.append(lambda: self.run(role, ["bash", "-c", "iptables-save -c >/proofs/native-port-block.txt"], user="root", timeout=2))
+            for operation in operations:
+                try:
+                    operation()
+                except Exception as error:
+                    errors.append(role + " capture: " + str(error))
+        return errors
+
+    def cleanup(self, interrupted=False):
+        errors = []
+        if not interrupted:
+            try:
+                errors.extend(self.capture())
+            except Exception as error:
+                errors.append("Capture: " + str(error))
         for role in self.created:
             try:
-                result = command(["docker", "rm", "-f", self.names[role]], check=False)
+                result = command(["docker", "rm", "-f", self.names[role]], check=False, timeout=4)
                 if result.returncode:
                     errors.append(role + " container removal failed")
             except Exception as error:
                 errors.append(role + " cleanup: " + str(error))
         try:
-            result = command(["docker", "image", "rm", self.image], check=False)
+            result = command(["docker", "image", "rm", self.image], check=False, timeout=3)
             if result.returncode:
                 errors.append("Owned test image removal failed")
         except Exception as error:
@@ -580,7 +644,8 @@ def main():
             print("Result: real Linux consent/video/keyboard/mouse/clipboard/file/restart/reconnect session passed", flush=True)
         finally:
             try:
-                cleanup_errors = session.cleanup()
+                interrupted = isinstance(sys.exc_info()[1], (SystemExit, KeyboardInterrupt, subprocess.TimeoutExpired))
+                cleanup_errors = session.cleanup(interrupted=interrupted)
                 if cleanup_errors:
                     manifest["cleanup_errors"] = cleanup_errors
                     manifest["result"] = "failed"

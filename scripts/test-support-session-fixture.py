@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Focused ownership and failure-path checks for the HTTPS fixture runner."""
 import importlib.util
+import io
 import json
+import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import tempfile
@@ -75,10 +78,11 @@ class FixtureTests(unittest.TestCase):
             session = desktop.Session(proofs, Path("client.deb"), False, False,
                                       {"pin": "test-public-pin", "network": "owned-test", "address": "192.168.48.2"}, True)
             session.initial_udp_packets = 1
+            session.server = {"host": 100, "controller": 100}
             sockets = "ESTAB 0 0 192.168.48.3:40000 192.168.48.2:443 users:((mixel-remote))\n"
             rules = "[0:0] -A OUTPUT -p tcp -m tcp --dport 21116 -j ACCEPT\n"
             with patch.object(session, "query", return_value=1), patch.object(session, "native_udp_proof", return_value=2), \
-                    patch.object(session, "fixture_tcp", return_value=(sockets, sockets.splitlines())), \
+                    patch.object(session, "app_tcp_evidence", side_effect=lambda role: (sockets, [{"address": "192.168.48.2", "port": 443, "pids": [100]}] + ([{"address": "192.168.48.2", "port": 21117, "pids": [101]}] if role == "controller" else []))), \
                     patch.object(session, "run", return_value=subprocess.CompletedProcess([], 0, rules, "")):
                 with self.assertRaisesRegex(AssertionError, "native TCP21116 control"):
                     session.active_mixed_proof()
@@ -94,6 +98,67 @@ class FixtureTests(unittest.TestCase):
             with self.assertRaises(subprocess.TimeoutExpired):
                 fixture.execute([sys.executable, "-c", code], timeout=1, capture=True)
             self.assertEqual(marker.read_text(), "actual finally ran")
+
+    def test_every_peer_cleanup_command_is_bounded_and_all_are_attempted(self):
+        session = desktop.Session(Path("proofs"), Path("client.deb"), False, True)
+        session.created = ["host", "controller"]
+        limits = []
+        def fail(arguments, **kwargs):
+            limits.append(kwargs["timeout"])
+            raise subprocess.TimeoutExpired(arguments, kwargs["timeout"])
+        with patch.object(session, "run", side_effect=lambda role, arguments, **kwargs: fail(arguments, **kwargs)), patch.object(desktop, "command", side_effect=fail):
+            errors = session.cleanup()
+        self.assertEqual(limits, [2] * 6 + [4, 4, 3])
+        self.assertEqual(len(errors), 9)
+        self.assertEqual(sum(limits), 23)
+        limits.clear()
+        with patch.object(session, "capture") as capture, patch.object(desktop, "command", side_effect=fail):
+            self.assertEqual(len(session.cleanup(interrupted=True)), 3)
+        capture.assert_not_called()
+        self.assertEqual(limits, [4, 4, 3])
+
+    def test_combined_peer_and_relay_cleanup_limits_fit_sigterm_grace(self):
+        limits = []
+        def run(arguments, **kwargs):
+            limits.append(kwargs["timeout"] + kwargs["termination_grace"] + 2 * kwargs["kill_grace"])
+            if "inspect" in arguments:
+                return subprocess.CompletedProcess(arguments, 0, json.dumps([{"Labels": fixture.LABEL, "Config": {"Labels": fixture.LABEL}}]), "")
+            raise subprocess.TimeoutExpired(arguments, kwargs["timeout"])
+        with tempfile.TemporaryDirectory() as output, patch.object(fixture, "execute", run):
+            self.assertEqual(len(fixture.cleanup(MANIFEST, Path(output))), 8)
+        self.assertEqual(len(limits), 13)
+        self.assertLess(23 + sum(limits), 60)
+        limits.clear()
+        with tempfile.TemporaryDirectory() as output, patch.object(fixture, "execute", run):
+            self.assertEqual(len(fixture.cleanup(MANIFEST, Path(output), interrupted=True)), 5)
+        self.assertEqual(len(limits), 10)
+        self.assertLess(11 + sum(limits), 60)
+
+    @unittest.skipUnless(os.name == "posix", "target Linux SIGTERM semantics")
+    def test_real_sigterm_runs_actual_peer_cleanup_before_parent_timeout_returns(self):
+        with tempfile.TemporaryDirectory(prefix="mixel-peer-sigterm-") as temporary:
+            folder = Path(temporary)
+            marker = folder / "cleanup.json"
+            calls = folder / "docker-calls.jsonl"
+            executable = folder / "docker"
+            executable.write_text("#!" + sys.executable + "\nimport json,sys\nfrom pathlib import Path\nwith Path(" + repr(str(calls)) + ").open('a') as f:f.write(json.dumps(sys.argv[1:])+'\\n')\n")
+            executable.chmod(0o755)
+            script = folder / "child.py"
+            script.write_text("import importlib.util,signal,sys,time,json\nfrom pathlib import Path\n"
+                "spec=importlib.util.spec_from_file_location('actual_session'," + repr(str(PATH.with_name('test-support-session-linux.py'))) + ")\n"
+                "module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)\n"
+                "session=module.Session(Path(" + repr(str(folder)) + "),Path('synthetic.deb'),False,True)\n"
+                "session.created=['host','controller']\n"
+                "signal.signal(signal.SIGTERM,lambda signum,frame:sys.exit(128+signum))\n"
+                "try:time.sleep(30)\n"
+                "finally:Path(" + repr(str(marker)) + ").write_text(json.dumps({'errors':session.cleanup(interrupted=True),'result':'failed'}))\n")
+            with patch.dict(os.environ, {"PATH": str(folder) + os.pathsep + os.environ["PATH"]}):
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    fixture.execute([sys.executable, str(script)], timeout=1, capture=True)
+            self.assertEqual(json.loads(marker.read_text()), {"errors": [], "result": "failed"})
+            commands = [json.loads(line) for line in calls.read_text().splitlines()]
+            self.assertEqual(len(commands), 3)
+            self.assertEqual([command[:2] for command in commands], [["rm", "-f"], ["rm", "-f"], ["image", "rm"]])
 
     def test_manifest_rejects_live_or_unrelated_resources(self):
         for changes in ({"network": "bridge"}, {"volume": "production-data"},
@@ -173,6 +238,89 @@ class FixtureTests(unittest.TestCase):
             self.assertEqual(lifecycle["result"], "failed")
             self.assertEqual(lifecycle["owned_fixture_cleanup"], "completed")
             self.assertIs(lifecycle["mixed_transports"], True)
+
+
+class TransportOracleTests(unittest.TestCase):
+    @staticmethod
+    def socket(port=443, pid=100, peer="192.168.48.2", process="mixel-remote", local=41000):
+        return f'ESTAB 0 0 192.168.48.3:{local} {peer}:{port} users:(("{process}",pid={pid},fd=20))\n'
+
+    def snapshots(self, mixed=False):
+        return {"host": self.socket() + ("" if mixed else self.socket(local=41001)),
+                "controller": self.socket() + self.socket(port=21117 if mixed else 443, pid=101, local=41001)}
+
+    def exercise(self, snapshots, mixed=False, executable=desktop.EXE):
+        with tempfile.TemporaryDirectory(prefix="mixel-socket-oracle-") as temporary:
+            proofs = Path(temporary)
+            for role in snapshots:
+                (proofs / role).mkdir()
+            session = desktop.Session(proofs, Path("client.deb"), False, not mixed,
+                {"pin": "public-fixture-pin", "network": "owned-fixture", "address": "192.168.48.2"}, mixed)
+            session.server = {"host": 100, "controller": 100}
+            session.initial_udp_packets = 1
+            def run(role, arguments, **kwargs):
+                if arguments[0] == "ss":
+                    output = snapshots[role]
+                elif arguments[0] == "readlink":
+                    output = executable + "\n"
+                elif arguments[0] == "iptables-save":
+                    output = "[2:300] -A OUTPUT -p " + ("udp" if role == "host" else "tcp") + " -m tcp --dport 21116 -j ACCEPT\n"
+                else:
+                    raise AssertionError(arguments)
+                return subprocess.CompletedProcess(arguments, 0, output, "")
+            with patch.object(session, "run", side_effect=run), \
+                    patch.object(session, "other_peer_addresses", side_effect=lambda role: {"192.168.48.4" if role == "host" else "192.168.48.3"}), \
+                    patch.object(session, "query", side_effect=lambda role, kind: 1 if kind == "VideoConnCount" else [1, True]), \
+                    patch.object(sys, "stdout", io.StringIO()):
+                if mixed:
+                    session.active_mixed_proof()
+                else:
+                    session.active_https_proof()
+            return json.loads((proofs / ("mixed-transport-proof.json" if mixed else "https-transport-proof.json")).read_text())
+
+    def test_exact_app_registration_and_relay_sockets_pass(self):
+        result = self.exercise(self.snapshots())
+        self.assertEqual(len(result["host"]["connections"]), 2)
+        self.assertEqual(result["controller"]["connections"][1]["pids"], [101])
+        self.assertNotEqual(result["host"]["connections"][0]["local_endpoint"], result["host"]["connections"][1]["local_endpoint"])
+
+    def test_mixed_native_udp_and_exact_host_tls_relay_pass(self):
+        result = self.exercise(self.snapshots(mixed=True), mixed=True)
+        self.assertEqual(result["host_udp_packets"], 2)
+        self.assertEqual(result["socket_owners"]["controller"]["connections"][1]["port"], 21117)
+
+    def test_unrelated_https_and_other_process_cannot_stand_in_for_relay(self):
+        for replacement in (self.socket(peer="203.0.113.10"), self.socket(process="curl"),
+                            'ESTAB 0 0 192.168.48.3:41001 192.168.48.2:443\n'):
+            snapshots = self.snapshots()
+            snapshots["host"] = self.socket() + replacement
+            with self.subTest(replacement=replacement), self.assertRaisesRegex(AssertionError, "two exact relay"):
+                self.exercise(snapshots)
+
+    def test_direct_opposite_peer_tcp_is_rejected_even_on_ephemeral_port(self):
+        for mixed in (False, True):
+            snapshots = self.snapshots(mixed)
+            snapshots["host"] += self.socket(peer="192.168.48.4", port=37851)
+            with self.subTest(mixed=mixed), self.assertRaisesRegex(AssertionError, "Direct established socket"):
+                self.exercise(snapshots, mixed)
+
+    def test_process_name_without_exact_installer_executable_is_rejected(self):
+        with self.assertRaisesRegex(AssertionError, "not the exact tested Mixel"):
+            self.exercise(self.snapshots(), executable="/usr/bin/another-mixel-remote")
+
+    def test_registration_socket_must_belong_to_actual_incoming_pid(self):
+        snapshots = self.snapshots()
+        snapshots["controller"] = self.socket(pid=101) + self.socket(pid=102, local=41001)
+        with self.assertRaisesRegex(AssertionError, "Incoming registration process"):
+            self.exercise(snapshots)
+
+    def test_one_kernel_socket_with_duplicate_fds_or_owners_cannot_count_as_two(self):
+        for same_pid in (True, False):
+            second = 100 if same_pid else 101
+            snapshots = self.snapshots()
+            snapshots["host"] = f'ESTAB 0 0 192.168.48.3:41000 192.168.48.2:443 users:(("mixel-remote",pid=100,fd=20),("mixel-remote",pid={second},fd=21))\n'
+            with self.subTest(same_pid=same_pid), self.assertRaisesRegex(AssertionError, "two exact relay"):
+                self.exercise(snapshots)
 
 
 if __name__ == "__main__":
