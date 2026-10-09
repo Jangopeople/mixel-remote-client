@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 UPSTREAM = Path(os.environ.get("RDREPO", ROOT / "rustdesk"))
 TARGETS = ["libs/hbb_common/src/lib.rs", "libs/hbb_common/src/config.rs",
            "libs/hbb_common/src/websocket.rs", "libs/hbb_common/src/socket_client.rs",
-           "src/rendezvous_mediator.rs"]
+           "src/rendezvous_mediator.rs", "src/client.rs"]
 
 
 def function(source, signature):
@@ -50,6 +50,16 @@ with tempfile.TemporaryDirectory(prefix="mixel-network-tests-") as temporary:
     connect = connect.replace("pub async fn connect_tcp<\n    't,", "pub async fn connect_tcp<")
     tls_connect = function(websocket, "async fn connect(\n")
     mediator_start = function(mediator, "pub async fn start(server: ServerPtr, host: String)")
+    mediator_tcp = function(mediator, "pub async fn start_tcp(server: ServerPtr, host: String)")
+    unsupported_registration = function(mediator, "if self.mixel_relay_only\n")
+    registration_success_start = mediator.index("                        hbb_common::mixel_support_network::registration_succeeded")
+    registration_success = mediator[registration_success_start:mediator.index("                        *SOLVING_PK_MISMATCH", registration_success_start)]
+    registration_socket_start = mediator.index("            mixel_relay_only: hbb_common::mixel_support_network")
+    registration_socket = mediator[registration_socket_start:mediator.index("            host: host.clone(),", registration_socket_start)].strip().removeprefix("mixel_relay_only: ").removesuffix(",")
+    intranet_relay_start = mediator.index("        let relay = self.mixel_relay_only || Config::is_proxy();") if "        let relay = self.mixel_relay_only || Config::is_proxy();" in mediator else mediator.index("        let relay = self.mixel_relay_only || Config::is_proxy()\n")
+    intranet_relay = mediator[intranet_relay_start:mediator.index(";", intranet_relay_start)+1]
+    punch_relay_start = mediator.index("        let relay = self.mixel_relay_only || Config::is_proxy() || ph.force_relay")
+    punch_relay = mediator[punch_relay_start:mediator.index(";", punch_relay_start)+1]
     use_websocket = function((repo / TARGETS[1]).read_text(encoding="utf-8"), "pub fn use_ws()")
     source = r'''
 use std::cell::RefCell;
@@ -62,7 +72,7 @@ type MaybeTlsStream<T> = T;
 type TcpStream = (TlsType, bool, Option<bool>, Option<bool>);
 #[derive(Clone,Copy,Debug,PartialEq)] enum TlsType { Rustls }
 #[derive(Debug,PartialEq)] pub enum Stream { Tcp, WebSocket(String) }
-#[derive(Default)] struct State { server:String, ws:bool, proxy:bool, native_fail:bool, cached_insecure:Option<bool>, requests:Vec<String> }
+#[derive(Default)] struct State { server:String, ws:bool, proxy:bool, native_fail:bool, ws_fail:bool, tcp_fail:bool, reject_registration:bool, key_confirmed:bool, host_key_confirmed:bool, cached_insecure:Option<bool>, requests:Vec<String> }
 thread_local! { static STATE:RefCell<State> = RefCell::new(State { server:"rs.mixel.ch".into(), ..State::default() }); }
 struct Config;
 const OPTION_RELAY_SERVER:&str="relay-server";
@@ -72,6 +82,9 @@ impl Config {
  fn is_proxy()->bool { STATE.with(|s|s.borrow().proxy) }
  fn get_rendezvous_server()->String { STATE.with(|s|s.borrow().server.clone()) }
  fn get_option(key:&str)->String { if key==OPTION_RELAY_SERVER {"rs.mixel.ch".into()} else if key=="allow-websocket" && STATE.with(|s|s.borrow().ws) {"Y".into()} else {String::new()} }
+ fn reset_online() {STATE.with(|s|s.borrow_mut().requests.push("reset-online".into()));}
+ fn set_key_confirmed(value:bool) {STATE.with(|s|s.borrow_mut().key_confirmed=value);}
+ fn set_host_key_confirmed(_host:&str,value:bool) {STATE.with(|s|s.borrow_mut().host_key_confirmed=value);}
 }
 mod keys {pub const OPTION_ALLOW_WEBSOCKET:&str="allow-websocket";}
 fn option2bool(_option:&str,value:&str)->bool {value=="Y"}
@@ -90,7 +103,7 @@ mod websocket {
  pub struct WsFramedStream;
  impl WsFramedStream {
   pub async fn new(url:String,_local:Option<()>,_proxy:Option<()>,_timeout:u64)->ResultType<String> {
-   STATE.with(|s|s.borrow_mut().requests.push(url.clone()));Ok(url)
+   STATE.with(|s| {let mut s=s.borrow_mut();s.requests.push(url.clone());if s.ws_fail {Err("gateway offline")} else {Ok(url)}})
   }
  }
 }
@@ -103,21 +116,44 @@ __TLS_CONNECT__
 }
 mod mixel_support_network {
  __HELPER__
- pub fn reset_for_test() { HTTPS_FALLBACK.store(false, Ordering::SeqCst); }
+ pub fn reset_for_test() { HTTPS_FALLBACK.store(false, Ordering::SeqCst);REGISTRATION_FAILURES.store(0,Ordering::SeqCst); }
 }
 type ServerPtr=Arc<String>;
 fn is_udp_disabled()->bool { false }
 mod hbb_common {pub(crate) use crate::mixel_support_network;}
 mod log { pub(crate) use crate::info; }
 #[macro_export] macro_rules! info { ($($arg:tt)*) => {{let _=format!($($arg)*);}} }
-struct RendezvousMediator;
+#[macro_export] macro_rules! bail {($($arg:tt)*)=>{{let _=format!($($arg)*);return Err("unsupported-registration");}}}
+async fn sleep(seconds:f32) {STATE.with(|s|s.borrow_mut().requests.push(format!("retry-delay:{seconds}")));}
+#[allow(non_camel_case_types)]
+#[derive(Clone,Copy,PartialEq)] enum RegisterResult {OK,NOT_SUPPORT}
+mod register_pk_response {pub(crate) use crate::RegisterResult as Result;}
+struct EnumResult(RegisterResult);impl EnumResult {fn enum_value(&self)->Result<RegisterResult,()> {Ok(self.0)}}
+struct RegisterResponse {result:EnumResult}
+struct Punch {force_relay:bool}
+struct RendezvousMediator {host:String,host_prefix:String,mixel_relay_only:bool}
 impl RendezvousMediator {
  async fn start_udp(_server:ServerPtr,host:String)->ResultType<()> {
   STATE.with(|s| {let mut s=s.borrow_mut();s.requests.push(format!("udp:{host}"));if s.native_fail {Err("UDP blocked")} else {Ok(())}})
  }
- async fn start_tcp(_server:ServerPtr,host:String)->ResultType<()> {
-  STATE.with(|s|s.borrow_mut().requests.push(format!("tcp:{host}")));Ok(())
+ async fn start_tcp_inner(_server:ServerPtr,host:String)->ResultType<()> {
+  STATE.with(|s|s.borrow_mut().requests.push(format!("tcp:{host}")));
+  if STATE.with(|s|s.borrow().tcp_fail) {return Err("gateway disconnected");}
+  if STATE.with(|s|s.borrow().reject_registration) {
+   let rz=Self{host:host.clone(),host_prefix:host,mixel_relay_only:true};
+   return rz.check_registration(RegisterResult::NOT_SUPPORT);
+  }
+  Ok(())
  }
+ fn check_registration(&self,result:RegisterResult)->ResultType<()> {
+  let rpr=RegisterResponse{result:EnumResult(result)};
+  __UNSUPPORTED_REGISTRATION__
+  if result==RegisterResult::OK {__REGISTRATION_SUCCESS__}
+  Ok(())
+ }
+ fn intranet_relay(&self)->bool {__INTRANET_RELAY__ relay}
+ fn punch_relay(&self,force_relay:bool)->bool {let ph=Punch{force_relay};__PUNCH_RELAY__ relay}
+ __MEDIATOR_TCP__
  __MEDIATOR_START__
 }
 __CHECK_WS__
@@ -126,6 +162,9 @@ struct Noop; impl Wake for Noop { fn wake(self:Arc<Self>) {} }
 fn run<F:Future>(future:F)->F::Output {
  let waker=Waker::from(Arc::new(Noop));let mut context=Context::from_waker(&waker);let mut future=Box::pin(future);
  loop { if let Poll::Ready(result)=future.as_mut().poll(&mut context) {return result;} }
+}
+fn registered_socket(host:&str,conn:Stream)->RendezvousMediator {
+ RendezvousMediator{host:host.into(),host_prefix:host.into(),mixel_relay_only:__REGISTRATION_SOCKET__}
 }
 #[test] fn actual_transport_policies() {
  mixel_support_network::reset_for_test();
@@ -193,7 +232,76 @@ fn run<F:Future>(future:F)->F::Output {
  assert_eq!(check_ws("other.example:22116"),"other.example:22116");
  assert!(!use_ws());
 }
-'''.replace("__TLS_CONNECT__", tls_connect).replace("__HELPER__", (ROOT / "scripts/support-network.rs").read_text(encoding="utf-8")).replace("__CHECK_WS__", function(websocket, "pub fn check_ws(")).replace("__CONNECT_TCP__", connect).replace("__MEDIATOR_START__", mediator_start).replace("__USE_WS__", use_websocket)
+#[test] fn actual_failed_https_connect_returns_to_native_after_network_restore() {
+ mixel_support_network::reset_for_test();
+ STATE.with(|s|{let mut s=s.borrow_mut();s.native_fail=true;s.ws_fail=true;});
+ assert_eq!(run(connect_tcp("rs.mixel.ch:21116",100)),Err("gateway offline"));
+ assert!(!mixel_support_network::https_fallback_active("rs.mixel.ch"));
+ STATE.with(|s|{let mut s=s.borrow_mut();s.native_fail=false;s.requests.clear();});
+ assert_eq!(run(connect_tcp("rs.mixel.ch:21116",100)),Ok(Stream::Tcp));
+ assert_eq!(STATE.with(|s|s.borrow().requests.clone()),vec!["native:rs.mixel.ch:21116"]);
+ // The path when fallback was already active must reset on failure too.
+ mixel_support_network::enable_https_fallback("rs.mixel.ch");
+ assert_eq!(run(connect_tcp("rs.mixel.ch:21116",100)),Err("gateway offline"));
+ assert!(!mixel_support_network::https_fallback_active("rs.mixel.ch"));
+ assert_eq!(run(connect_tcp("rs.mixel.ch:21116",100)),Ok(Stream::Tcp));
+}
+#[test] fn actual_registration_failure_resets_gateway_and_restarts_native_selection() {
+ mixel_support_network::reset_for_test();
+ let server=Arc::new(String::new());
+ for rejected in [false,true] {
+  mixel_support_network::enable_https_fallback("rs.mixel.ch");
+  STATE.with(|s|{let mut s=s.borrow_mut();s.tcp_fail=!rejected;s.reject_registration=rejected;s.requests.clear();});
+  assert!(run(RendezvousMediator::start(server.clone(),"rs.mixel.ch".into())).is_err());
+  assert!(!mixel_support_network::https_fallback_active("rs.mixel.ch"));
+  assert_eq!(STATE.with(|s|s.borrow().requests.clone()),vec!["tcp:rs.mixel.ch","reset-online",if rejected {"retry-delay:2"} else {"retry-delay:1"}]);
+  STATE.with(|s|{let mut s=s.borrow_mut();s.tcp_fail=false;s.reject_registration=false;s.requests.clear();});
+  assert_eq!(run(RendezvousMediator::start(server.clone(),"rs.mixel.ch".into())),Ok(()));
+  assert_eq!(STATE.with(|s|s.borrow().requests.clone()),vec!["udp:rs.mixel.ch"]);
+ }
+}
+#[test] fn actual_registration_unsupported_is_socket_owned_and_never_confirms_key() {
+ mixel_support_network::reset_for_test();
+ STATE.with(|s|{let mut s=s.borrow_mut();s.key_confirmed=true;s.host_key_confirmed=true;});
+ let rz=RendezvousMediator{host:"rs.mixel.ch".into(),host_prefix:"rs".into(),mixel_relay_only:true};
+ assert!(rz.check_registration(RegisterResult::NOT_SUPPORT).is_err());
+ assert!(!STATE.with(|s|s.borrow().key_confirmed||s.borrow().host_key_confirmed));
+ assert_eq!(rz.check_registration(RegisterResult::OK),Ok(()));
+ assert!(STATE.with(|s|s.borrow().key_confirmed&&s.borrow().host_key_confirmed));
+ let native=RendezvousMediator{host:"other.example".into(),host_prefix:"other".into(),mixel_relay_only:false};
+ assert_eq!(native.check_registration(RegisterResult::NOT_SUPPORT),Ok(()));
+}
+#[test] fn actual_explicit_websocket_proxy_and_foreign_failures_do_not_change_automatic_policy() {
+ mixel_support_network::reset_for_test();let server=Arc::new(String::new());
+ for (host,explicit,proxy) in [("rs.mixel.ch",true,false),("rs.mixel.ch",false,true),("other.example",true,false)] {
+  mixel_support_network::enable_https_fallback("rs.mixel.ch");
+  STATE.with(|s|{let mut s=s.borrow_mut();s.ws=explicit;s.proxy=proxy;s.tcp_fail=true;s.requests.clear();});
+  assert!(run(RendezvousMediator::start(server.clone(),host.into())).is_err());
+  assert!(mixel_support_network::https_fallback_active("rs.mixel.ch"));
+  assert_eq!(STATE.with(|s|s.borrow().requests.clone()),vec![format!("tcp:{host}")]);
+ }
+ STATE.with(|s|{let mut s=s.borrow_mut();s.ws=false;s.proxy=false;s.requests.clear();});
+ assert_eq!(run(RendezvousMediator::start(server,"other.example".into())),Ok(()));
+ assert_eq!(STATE.with(|s|s.borrow().requests.clone()),vec!["udp:other.example"]);
+ STATE.with(|s|{let mut s=s.borrow_mut();s.ws=true;s.ws_fail=true;});
+ assert_eq!(run(connect_tcp("rs.mixel.ch:21116",100)),Err("gateway offline"));
+ assert!(mixel_support_network::https_fallback_active("rs.mixel.ch"));
+}
+#[test] fn actual_active_registration_transport_survives_global_reset_without_direct_peer_probe() {
+ mixel_support_network::reset_for_test();
+ let ws=registered_socket("rs.mixel.ch:21116",Stream::WebSocket("Mixel".into()));
+ assert!(mixel_support_network::reset_https_fallback("rs.mixel.ch"));
+ assert!(ws.intranet_relay());assert!(ws.punch_relay(false));
+ mixel_support_network::enable_https_fallback("rs.mixel.ch");
+ for (endpoint,stream) in [("rs.mixel.ch:21116",Stream::Tcp),("other.example:21116",Stream::WebSocket("foreign".into()))] {
+  let native=registered_socket(endpoint,stream);
+  assert!(!native.intranet_relay());assert!(!native.punch_relay(false));assert!(native.punch_relay(true));
+ }
+ STATE.with(|s|s.borrow_mut().ws=true);
+ let native=registered_socket("other.example:21116",Stream::Tcp);
+ assert!(native.intranet_relay()&&native.punch_relay(false));
+}
+'''.replace("__TLS_CONNECT__", tls_connect).replace("__HELPER__", (ROOT / "scripts/support-network.rs").read_text(encoding="utf-8")).replace("__CHECK_WS__", function(websocket, "pub fn check_ws(")).replace("__CONNECT_TCP__", connect).replace("__MEDIATOR_START__", mediator_start).replace("__MEDIATOR_TCP__", mediator_tcp).replace("__UNSUPPORTED_REGISTRATION__", unsupported_registration).replace("__REGISTRATION_SUCCESS__", registration_success).replace("__USE_WS__", use_websocket).replace("__INTRANET_RELAY__", intranet_relay).replace("__PUNCH_RELAY__", punch_relay).replace("__REGISTRATION_SOCKET__", registration_socket)
     # UDP registration must leave its retry loop and enter real TCP/WSS startup.
     assert 'if hbb_common::mixel_support_network::enable_https_fallback(&host)' in mediator
     assert 'match Self::start_udp(server.clone(), host.clone()).await' in mediator
@@ -207,3 +315,229 @@ fn run<F:Future>(future:F)->F::Output {
     subprocess.run([rustc, "--edition=2021", "--deny", "warnings", "--test", str(harness), "-o", str(binary)], check=True)
     subprocess.run([str(binary), "--test-threads=1"], check=True)
     print("PASS: actual generated HTTPS transport, strict TLS policy, native-first/proxy/custom-server behavior and patch idempotence")
+
+    client = (repo / "src/client.rs").read_text(encoding="utf-8")
+    activation_start = client.index("        // Mixel HTTPS relay mode follows this socket")
+    activation = client[activation_start:client.index("        let my_addr = socket.local_addr();", activation_start)]
+    nat_start = client.index("        let my_nat_type = if interface.is_force_relay()")
+    nat = client[nat_start:client.index("        let mut is_local", nat_start)]
+    ipv6_start = client.index("        let mut ipv6 = if crate::get_ipv6_punch_enabled()")
+    ipv6 = client[ipv6_start:client.index("        let udp_nat_port", ipv6_start)]
+    reply_start = client.index("                            let s = udp.0.take();")
+    reply = client[reply_start:client.index('                            log::info!("{} Hole Punched', reply_start)]
+    relay_ipv6 = function(client, "if let Some(s) = ipv6.0.filter(|_| !interface.is_force_relay())")
+    ipv6_test = function(client, "if crate::get_ipv6_punch_enabled() && !interface.is_force_relay()")
+    actual_connect = function(client, "    async fn connect(\n        local_addr:")
+    init_start = client.index("        // The implicit process-wide fallback belongs")
+    initialize = client[init_start:client.index("        if let Some((real_id, server, key))", init_start)]
+    save = function(client, "if self.force_relay && !self.mixel_runtime_force_relay")
+    client_harness = r'''
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::future::Future;
+use std::net::SocketAddr;
+use std::pin::Pin;
+use std::sync::{Arc,RwLock};
+use std::task::{Context,Poll,Wake,Waker};
+type ResultType<T> = Result<T,&'static str>;
+type KcpStream = ();
+type ConnectionFuture<'a> = Pin<Box<dyn Future<Output=ResultType<(Stream,Option<KcpStream>,&'static str)>>+'a>>;
+const CONNECT_TIMEOUT:u64=1000;
+#[derive(Debug,PartialEq)] enum Stream { Tcp,WebSocket(String) }
+#[allow(non_camel_case_types)]
+#[derive(Clone,Copy,Debug,PartialEq)] enum NatType { SYMMETRIC=1,ASYMMETRIC=2,UNKNOWN_NAT=0 }
+#[derive(Clone,Copy)] struct ConnType;
+#[derive(Default)] struct Lch { force_relay:bool,mixel_runtime_force_relay:bool,direct_failures:i32,options:HashMap<String,String> }
+#[derive(Default)] struct Preferences {websocket:bool,proxy:bool}
+thread_local! {static PREFERENCES:RefCell<Preferences> = RefCell::new(Preferences::default());}
+struct Config;
+impl Config {
+ fn get_option(_key:&str)->String {if PREFERENCES.with(|s|s.borrow().websocket) {"Y".into()} else {String::new()}}
+ fn is_proxy()->bool {PREFERENCES.with(|s|s.borrow().proxy)}
+}
+mod config {pub fn option2bool(_key:&str,value:&str)->bool {value=="Y"}}
+#[derive(Default)] struct SavedConfig {options:HashMap<String,String>}
+impl Lch {
+ fn get_option(&self,key:&str)->String {self.options.get(key).cloned().unwrap_or_default()}
+ fn initialize(&mut self,force_relay:bool) {__INITIALIZE__}
+ fn save_relay(&self,config:&mut SavedConfig) {__SAVE__}
+}
+trait Interface {
+ fn get_lch(&self)->Arc<RwLock<Lch>>;
+ fn is_force_relay(&self)->bool {self.get_lch().read().unwrap().force_relay}
+ fn update_direct(&self,value:Option<bool>) {STATE.with(|s|s.borrow_mut().push(format!("direct-state:{value:?}")));}
+}
+struct TestInterface(Arc<RwLock<Lch>>);
+impl Interface for TestInterface {fn get_lch(&self)->Arc<RwLock<Lch>> {self.0.clone()}}
+fn interface(forced:bool)->TestInterface {TestInterface(Arc::new(RwLock::new(Lch{force_relay:forced,..Lch::default()})))}
+thread_local! {static STATE:RefCell<Vec<String>>=RefCell::new(Vec::new());}
+fn calls()->Vec<String> {STATE.with(|s|s.borrow().clone())}
+fn record(value:impl Into<String>) {STATE.with(|s|s.borrow_mut().push(value.into()));}
+#[macro_export] macro_rules! info {($($arg:tt)*)=>{{let _=format!($($arg)*);}}}
+#[macro_export] macro_rules! bail {
+ ($error:expr)=>{{let _=&$error;return Err("connection-error");}};
+ ($format:literal,$($arg:tt)*)=>{{let _=format!($format,$($arg)*);return Err("connection-error");}};
+}
+#[macro_export] macro_rules! anyhow {($($arg:tt)*)=>{{let _=format!($($arg)*);"forced-relay-disabled"}}}
+#[macro_export] macro_rules! allow_err {($value:expr)=>{{let _=$value;}}}
+mod log {pub(crate) use crate::info;pub(crate) use crate::info as debug;}
+mod hbb_common {pub mod mixel_support_network {__HELPER__}}
+fn get_ipv6_punch_enabled()->bool {true}
+async fn test_ipv6() {record("ipv6-test");}
+async fn get_nat_type(_timeout:u64)->i32 {record("nat-test");NatType::ASYMMETRIC as i32}
+struct UdpSocket;
+impl UdpSocket {async fn connect(&self,addr:SocketAddr)->ResultType<()> {record(format!("udp-bind:{addr}"));Ok(())}}
+async fn get_ipv6_socket()->Option<(Arc<UdpSocket>,Vec<u8>)> {record("ipv6-socket");Some((Arc::new(UdpSocket),vec![1]))}
+struct AddrMangle;
+impl AddrMangle {fn decode(_bytes:&[u8])->SocketAddr {"127.0.0.1:4444".parse().unwrap()}}
+struct Punch {is_udp:bool,socket_addr_v6:Vec<u8>}
+struct Relay {socket_addr_v6:Vec<u8>}
+trait FutureExt:Future+Sized {
+ fn boxed<'a>(self)->Pin<Box<dyn Future<Output=Self::Output>+'a>> where Self:'a {Box::pin(self)}
+}
+impl<F:Future> FutureExt for F {}
+fn connect_tcp_local(peer:SocketAddr,_local:Option<SocketAddr>,_timeout:u64)->impl Future<Output=ResultType<Stream>> {
+ record(format!("tcp:{peer}"));async {Ok(Stream::Tcp)}
+}
+fn udp_nat_connect(_socket:Arc<UdpSocket>,kind:&'static str,_timeout:u64)->impl Future<Output=ResultType<(Stream,Option<KcpStream>,&'static str)>> {
+ record(format!("udp-future:{kind}"));async move {Ok((Stream::Tcp,None,kind))}
+}
+async fn select_ok<'a>(futures:Vec<ConnectionFuture<'a>>)->ResultType<((Stream,Option<KcpStream>,&'static str),Vec<ConnectionFuture<'a>>)> {
+ for future in futures {if let Ok(value)=future.await {return Ok((value,Vec::new()));}}
+ Err("no-direct-connection")
+}
+struct Client;
+impl Client {
+ async fn request_relay(_id:&str,_relay:String,_server:&str,_signed:bool,_key:&str,_token:&str,_kind:ConnType)->ResultType<Stream> {
+  record("relay-request");Ok(Stream::WebSocket("authenticated-relay".into()))
+ }
+ async fn secure_connection(_id:&str,_pk:Vec<u8>,_key:&str,_connection:&mut Stream)->ResultType<Option<Vec<u8>>> {
+  record("authenticated-encryption");Ok(Some(vec![7]))
+ }
+ __ACTUAL_CONNECT__
+}
+struct Noop;impl Wake for Noop {fn wake(self:Arc<Self>) {}}
+fn run<F:Future>(future:F)->F::Output {
+ let waker=Waker::from(Arc::new(Noop));let mut context=Context::from_waker(&waker);let mut future=Box::pin(future);
+ loop {if let Poll::Ready(result)=future.as_mut().poll(&mut context) {return result;}}
+}
+fn activate(rendezvous_server:&str,socket:Stream,interface:&TestInterface,mut udp:(Option<u8>,Option<u8>))->(bool,(Option<u8>,Option<u8>)) {
+ struct StopUdp;
+ impl StopUdp {fn send(self,_value:())->Result<(),()> {record("udp-stop");Ok(())}}
+ let mut stop_udp_tx=Some(StopUdp);
+ __ACTIVATION__
+ (interface.is_force_relay(),udp)
+}
+#[test] fn actual_socket_detection_stops_background_nat_before_ipv6_setup() {
+ let ui=interface(false);
+ activate("rs.mixel.ch:21116",Stream::WebSocket("Mixel".into()),&ui,(Some(1),Some(2)));
+ run(early_ipv6(&ui));assert_eq!(calls(),vec!["udp-stop"]);
+ STATE.with(|s|s.borrow_mut().clear());let ui=interface(false);
+ activate("other.example:21116",Stream::Tcp,&ui,(Some(1),Some(2)));
+ run(early_ipv6(&ui));assert_eq!(calls(),vec!["ipv6-test"]);
+}
+async fn nat(interface:&TestInterface)->i32 {__NAT__ my_nat_type}
+async fn early_ipv6(interface:&TestInterface) {__IPV6_TEST__}
+async fn collect_ipv6(interface:&TestInterface)->(Option<Arc<UdpSocket>>,Option<Vec<u8>>) {
+ #[allow(unused_mut)]
+ __IPV6__
+ ipv6
+}
+async fn reply_probe(interface:&TestInterface,mut udp:(Option<Arc<UdpSocket>>,Option<u8>),mut ipv6:(Option<Arc<UdpSocket>>,Option<Vec<u8>>)) {
+ let ph=Punch{is_udp:true,socket_addr_v6:vec![1]};let peer_addr="127.0.0.1:3333".parse().unwrap();
+ __REPLY__
+ let _=(udp,ipv6);
+}
+async fn relay_ipv6(interface:&TestInterface)->usize {
+ let ipv6=(Some(Arc::new(UdpSocket)),None::<Vec<u8>>);let rr=Relay{socket_addr_v6:vec![1]};let mut connect_futures=Vec::new();
+ __RELAY_IPV6__
+ connect_futures.len()
+}
+#[test] fn actual_socket_mode_never_uses_global_fallback_to_force_native_or_foreign_transport() {
+ hbb_common::mixel_support_network::enable_https_fallback("rs.mixel.ch");
+ for (endpoint,socket,forced) in [
+  ("rs.mixel.ch:21116",Stream::Tcp,false),
+  ("other.example:21116",Stream::WebSocket("foreign".into()),false),
+  ("rs.mixel.ch.attacker.example:21116",Stream::WebSocket("foreign".into()),false),
+  ("rs.mixel.ch:21116",Stream::WebSocket("Mixel".into()),true)] {
+  let ui=interface(false);let (actual,udp)=activate(endpoint,socket,&ui,(Some(1),Some(2)));
+  assert_eq!(actual,forced);assert_eq!(udp,if forced {(None,None)} else {(Some(1),Some(2))});
+ }
+}
+#[test] fn actual_initialize_preserves_explicit_choices_without_using_process_fallback() {
+ hbb_common::mixel_support_network::enable_https_fallback("rs.mixel.ch");
+ let mut lch=Lch::default();
+ lch.mixel_runtime_force_relay=true;lch.force_relay=true;
+ lch.initialize(false);
+ assert!(!lch.force_relay&&!lch.mixel_runtime_force_relay);
+ lch.initialize(true);assert!(lch.force_relay&&!lch.mixel_runtime_force_relay);
+ lch.options.insert("force-always-relay".into(),"Y".into());
+ lch.initialize(false);assert!(lch.force_relay&&!lch.mixel_runtime_force_relay);
+ lch.options.clear();PREFERENCES.with(|p|p.borrow_mut().websocket=true);
+ lch.initialize(false);assert!(lch.force_relay&&!lch.mixel_runtime_force_relay);
+ PREFERENCES.with(|p|{let mut p=p.borrow_mut();p.websocket=false;p.proxy=true;});
+ lch.initialize(false);assert!(lch.force_relay&&!lch.mixel_runtime_force_relay);
+}
+#[test] fn actual_runtime_transport_choice_is_not_saved_but_explicit_choices_are() {
+ let ui=interface(false);
+ activate("rs.mixel.ch:21116",Stream::WebSocket("Mixel".into()),&ui,(Some(1),Some(2)));
+ let lch=ui.get_lch();let lch=lch.read().unwrap();
+ assert!(lch.force_relay&&lch.mixel_runtime_force_relay);
+ let mut saved=SavedConfig::default();lch.save_relay(&mut saved);
+ assert!(!saved.options.contains_key("force-always-relay"));
+ for (websocket,proxy,command,saved_preference) in [(true,false,false,false),(false,true,false,false),(false,false,true,false),(false,false,false,true)] {
+  PREFERENCES.with(|p|{let mut p=p.borrow_mut();p.websocket=websocket;p.proxy=proxy;});
+  let ui=interface(false);let lch=ui.get_lch();
+  {let mut lch=lch.write().unwrap();if saved_preference {lch.options.insert("force-always-relay".into(),"Y".into());}lch.initialize(command);}
+  activate("rs.mixel.ch:21116",Stream::WebSocket("Mixel".into()),&ui,(Some(1),Some(2)));
+  let lch=lch.read().unwrap();assert!(lch.force_relay&&!lch.mixel_runtime_force_relay);
+  let mut saved=SavedConfig::default();lch.save_relay(&mut saved);
+  assert_eq!(saved.options.get("force-always-relay"),Some(&"Y".to_owned()));
+ }
+}
+#[test] fn actual_forced_connect_constructs_no_tcp_udp_ipv6_and_keeps_relay_encryption_path() {
+ let ui=interface(true);let peer="127.0.0.1:21118".parse().unwrap();
+ let result=run(Client::connect(peer,peer,"peer",vec![1],"rs.mixel.ch","rs.mixel.ch",0,NatType::ASYMMETRIC,0,false,"pin","token",ConnType,ui,Some(Arc::new(UdpSocket)),Some(Arc::new(UdpSocket)),"TCP")).unwrap();
+ assert_eq!(calls(),vec!["relay-request","authenticated-encryption"]);
+ assert!(!result.1);assert_eq!(result.4,"Relay");assert_eq!(result.2,Some(vec![7]));
+}
+#[test] fn actual_native_connect_preserves_direct_tcp_udp_ipv6_and_encryption() {
+ let ui=interface(false);let peer="127.0.0.1:21118".parse().unwrap();
+ let result=run(Client::connect(peer,peer,"peer",vec![1],"foreign.example","foreign.example",0,NatType::ASYMMETRIC,NatType::ASYMMETRIC as i32,false,"pin","token",ConnType,ui,Some(Arc::new(UdpSocket)),Some(Arc::new(UdpSocket)),"TCP")).unwrap();
+ assert_eq!(calls(),vec!["tcp:127.0.0.1:21118","udp-future:UDP","udp-future:IPv6","authenticated-encryption"]);
+ assert!(result.1);assert_eq!(result.4,"TCP");
+}
+#[test] fn actual_forced_relay_without_server_fails_instead_of_touching_direct_peer() {
+ let ui=interface(true);let peer="127.0.0.1:21118".parse().unwrap();
+ assert!(run(Client::connect(peer,peer,"peer",vec![1],"","rs.mixel.ch",0,NatType::SYMMETRIC,0,false,"pin","token",ConnType,ui,None,None,"TCP")).is_err());
+ assert!(calls().is_empty());
+}
+#[test] fn actual_forced_nat_and_ipv6_setup_are_skipped() {
+ let ui=interface(true);assert_eq!(run(nat(&ui)),NatType::SYMMETRIC as i32);
+ run(early_ipv6(&ui));let sockets=run(collect_ipv6(&ui));assert!(sockets.0.is_none()&&sockets.1.is_none());
+ assert!(calls().is_empty());
+}
+#[test] fn actual_native_nat_and_ipv6_setup_remain_enabled() {
+ let ui=interface(false);assert_eq!(run(nat(&ui)),NatType::ASYMMETRIC as i32);
+ run(early_ipv6(&ui));let sockets=run(collect_ipv6(&ui));assert!(sockets.0.is_some()&&sockets.1.is_some());
+ assert_eq!(calls(),vec!["nat-test","ipv6-test","ipv6-socket"]);
+}
+#[test] fn actual_forced_punch_and_relay_response_cannot_reactivate_udp_or_ipv6() {
+ let ui=interface(true);run(reply_probe(&ui,(Some(Arc::new(UdpSocket)),Some(1)),(Some(Arc::new(UdpSocket)),Some(vec![1]))));
+ assert_eq!(run(relay_ipv6(&ui)),0);assert!(calls().is_empty());
+}
+#[test] fn actual_native_punch_and_relay_response_preserve_udp_and_ipv6() {
+ let ui=interface(false);run(reply_probe(&ui,(Some(Arc::new(UdpSocket)),Some(1)),(Some(Arc::new(UdpSocket)),Some(vec![1]))));
+ assert_eq!(run(relay_ipv6(&ui)),1);
+ assert_eq!(calls(),vec!["udp-bind:127.0.0.1:3333","udp-bind:127.0.0.1:4444","udp-bind:127.0.0.1:4444","udp-future:IPv6"]);
+}
+'''.replace("__HELPER__", (ROOT / "scripts/support-network.rs").read_text(encoding="utf-8"))
+    for marker, generated in {"__ACTUAL_CONNECT__": actual_connect, "__ACTIVATION__": activation,
+                              "__NAT__": nat, "__IPV6_TEST__": ipv6_test, "__IPV6__": ipv6,
+                              "__REPLY__": reply, "__RELAY_IPV6__": relay_ipv6,
+                              "__INITIALIZE__": initialize, "__SAVE__": save}.items():
+        client_harness = client_harness.replace(marker, generated)
+    harness.write_text(client_harness, encoding="utf-8")
+    subprocess.run([rustc, "--edition=2021", "--deny", "warnings", "--test", str(harness), "-o", str(binary)], check=True)
+    subprocess.run([str(binary), "--test-threads=1"], check=True)
+    print("PASS: actual generated socket-owned relay mode skips every forced direct TCP/UDP/IPv6 probe and retains native/custom plus relay encryption behavior")

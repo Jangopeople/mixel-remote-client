@@ -165,17 +165,53 @@ runpy.run_path(sys.argv[1], run_name='__main__')
     # This is the exact window-hiding condition used by the pinned app startup.
     startup_condition = "if (handledByUniLinks || handleUriLink(cmdArgs: kBootArgs))"
     assert startup_condition in first["flutter/lib/main.dart"]
+    # The portable QS filename becomes this raw argument. On a warm launch
+    # Windows forwards its original command line to the existing window before
+    # it appends the generated native Flutter arguments. Exercise that exact
+    # dispatch contract, including the real windowOnTop restore/show behavior.
+    windows_runner = original_source("flutter/windows/runner/main.cpp")
+    existing_window = windows_runner.split("  if (hwnd != NULL) {", 1)[1].split("  // Attach to console", 1)[0]
+    assert "if (!command_line_arguments.empty())" in existing_window
+    assert "DispatchToUniLinksDesktop(hwnd);" in existing_window
+    assert "rust_args" not in existing_window
+    portable = original_source("libs/portable/src/main.rs")
+    assert 'args = vec!["--quick_support".to_owned()];' in portable
+    window_on_top = common[common.index("Future<void> windowOnTop(int? id)"):common.index("\ntypedef DialogBuilder", common.index("Future<void> windowOnTop(int? id)"))]
     runner = repo / "flutter/lib/support_launch_test.dart"
     runner.write_text("import 'dart:async';\nimport 'mixel_support_invite.dart';\n" + """
 class FakeBind { String mainUriPrefixSync() => 'mixel-remote://'; }
 final bind = FakeBind();
 var shown = 0;
 var reported = 0;
+var renewals = 0;
 Timer? _supportInviteAttendedTimer;
-Future<bool> _renewSupportInviteAttended() async => true;
-void windowOnTop(int? id) { shown++; }
+Future<bool> _renewSupportInviteAttended() async { renewals++; return true; }
+const isDesktop = true;
+const kWindowMainId = 0;
+const kWindowEventShow = 'show';
+enum WindowType { Main }
+class FakeState { bool isMinimized = false; }
+final stateGlobal = FakeState();
+class FakeWindowManager {
+  bool visible = false;
+  var restored = 0;
+  Future<void> restore() async { restored++; stateGlobal.isMinimized = false; }
+  Future<void> show() async { shown++; visible = true; }
+  Future<void> focus() async {}
+}
+final windowManager = FakeWindowManager();
+class FakeRustDeskWinManager {
+  Future<void> registerActiveWindow(int id) async { if (id != kWindowMainId) throw StateError('Wrong restored window'); }
+  void call(WindowType type, String event, Map<String, int> data) {}
+}
+final rustDeskWinManager = FakeRustDeskWinManager();
+class WindowController {
+  static WindowController fromWindowId(int id) => WindowController();
+  void focus() {}
+  void show() {}
+}
 Future<void> _reportSupportInvite(String token, String key) async { reported++; }
-""" + handler + parser + """
+""" + window_on_top + handler + parser + """
 Future<void> main() async {
   final link = Uri(scheme: 'mixel-remote', host: 'support', queryParameters: {
     'invite':'inv_00000000-0000-0000-0000-000000000001',
@@ -212,8 +248,26 @@ Future<void> main() async {
   if (reported != 5) throw StateError('Only valid handoffs may schedule presence');
   if (handleUriLink(cmdArgs: ['--mixel-attended'])) throw StateError('QuickSupport launch hid app');
   if (_supportInviteAttendedTimer == null) throw StateError('QuickSupport failed to maintain consent guard');
+  await Future<void>.delayed(Duration.zero);
+  final attendedTimer = _supportInviteAttendedTimer;
+  for (final args in [['--quick_support'], ['--mixel-attended']]) {
+    stateGlobal.isMinimized = true;
+    windowManager.visible = false;
+    final restoredBefore = windowManager.restored;
+    final renewalBefore = renewals;
+    if (handleUriLink(cmdArgs: args)) throw StateError('Warm QuickSupport returned outbound connection intent');
+    await Future<void>.delayed(Duration.zero);
+    if (stateGlobal.isMinimized || !windowManager.visible || windowManager.restored != restoredBefore + 1) {
+      throw StateError('Warm QuickSupport did not restore the existing main window');
+    }
+    if (renewals != renewalBefore + 1 || !identical(attendedTimer, _supportInviteAttendedTimer)) {
+      throw StateError('Warm QuickSupport did not renew and retain its customer consent heartbeat');
+    }
+  }
+  if (reported != 5) throw StateError('QuickSupport must not report synthetic invite presence');
   _supportInviteAttendedTimer!.cancel();
   print('PASS: generated cold/warm support URI paths show the app, reject invalid/truncated arguments, never request outbound connection');
+  print('PASS: actual Windows raw QuickSupport warm dispatch restores the existing minimized main window and renews its attended consent lease');
 }
 """, encoding="utf-8")
     subprocess.run([dart, str(runner)], check=True)

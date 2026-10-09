@@ -48,12 +48,17 @@ try {
 . (Join-Path $PSScriptRoot 'support-runtime-probe-windows.ps1')
 if (-not ('MixelSupportProbeFixture' -as [type])) { Add-Type @'
 using System;
+using System.Collections.Concurrent;
 using System.IO;
 using System.IO.Pipes;
 using System.Text;
 using System.Threading.Tasks;
 public static class MixelSupportProbeFixture {
+  static readonly ConcurrentQueue<string> Requests = new ConcurrentQueue<string>();
+  public static string[] Requested() { return Requests.ToArray(); }
   public static Task Serve(string[] responses) {
+    string previous;
+    while (Requests.TryDequeue(out previous)) { }
     return Task.Run(() => {
       foreach (string response in responses) {
         using (var pipe = new NamedPipeServerStream("Mixel-Remote\\query", PipeDirection.InOut, 1, PipeTransmissionMode.Byte)) {
@@ -69,6 +74,7 @@ public static class MixelSupportProbeFixture {
             if (count == 0) throw new IOException("Fixture request was truncated");
             offset += count;
           }
+          Requests.Enqueue(Encoding.UTF8.GetString(request));
           if (response == "oversized") {
             int largeHeader = (65537 << 2) | 2;
             for (int i = 0; i < 3; i++) pipe.WriteByte((byte)(largeHeader >> (8 * i)));
@@ -92,17 +98,54 @@ public static class MixelSupportProbeFixture {
 
 $guard = '{"t":"Config","c":["mixel-support-invite-attended","attended-runtime-v2"]}'
 $online = '{"t":"OnlineStatus","c":[1,true]}'
-$fixture = [MixelSupportProbeFixture]::Serve(@($guard, $online))
+$options = '{"t":"Options","c":{"custom-rendezvous-server":"rs.mixel.ch","relay-server":"rs.mixel.ch","key":"OogSlDx9l+fgs0t6ihF3uTg9emyCv01m8cr4ullarRo="}}'
+$rendezvous = '{"t":"Config","c":["rendezvous_server","rs.mixel.ch:21116,rs.mixel.ch:21116"]}'
+$device = '{"t":"Config","c":["id","123456789"]}'
+$fixture = [MixelSupportProbeFixture]::Serve(@($guard, $online, $options, $rendezvous, $device))
 $health = Get-MixelSupportRuntimeHealth
 $fixture.GetAwaiter().GetResult()
-if (-not $health.attendedReady -or -not $health.keyConfirmed -or $health.rendezvousState -ne 1) {
+$expectedRequests = @(
+  '{"t":"Config","c":["mixel-support-invite-attended",null]}',
+  '{"t":"OnlineStatus","c":null}',
+  '{"t":"Options","c":null}',
+  '{"t":"Config","c":["rendezvous_server",null]}',
+  '{"t":"Config","c":["id",null]}')
+$actualRequests = [MixelSupportProbeFixture]::Requested()
+if ($actualRequests.Count -ne $expectedRequests.Count) { throw 'IPC health probe issued an unexpected number of requests.' }
+for ($index = 0; $index -lt $expectedRequests.Count; $index++) {
+  if ($actualRequests[$index] -cne $expectedRequests[$index]) {
+    throw 'IPC health probe must send only the exact framed read-only runtime queries.'
+  }
+}
+if (-not $health.attendedReady -or -not $health.keyConfirmed -or $health.rendezvousState -ne 1 -or
+    -not $health.brandedRelay -or $health.registeredId -ne '123456789' -or $health.rendezvousServer -ne 'rs.mixel.ch:21116') {
   throw 'Runtime IPC probe failed to parse a valid framed response.'
 }
-Write-Host 'PASS: actual named-pipe IPC decodes fragmented attended and online responses.'
+Write-Host 'PASS: actual named-pipe IPC decodes fragmented attended, online, branded relay/key, rendezvous and registered-ID responses.'
+Write-Host 'PASS: actual framed health requests are read-only and never arm consent or change options.'
 
 foreach ($invalid in @('{"t":"OnlineStatus","c":[1,"false"]}', '{"t":"OnlineStatus","c":["1",true]}', '{"t":"OnlineStatus","c":[1]}')) {
   $fixture = [MixelSupportProbeFixture]::Serve(@($guard, $invalid))
   Assert-Fails { Get-MixelSupportRuntimeHealth } 'malformed online proof'
+  $fixture.GetAwaiter().GetResult()
+}
+foreach ($invalid in @(
+    '{"t":"Options","c":[]}',
+    $options.Replace('rs.mixel.ch', 'other.example'),
+    $options.Replace('OogSlDx9l+fgs0t6ihF3uTg9emyCv01m8cr4ullarRo=', 'wrong-public-key'),
+    $options.Replace('"key":', '"mixel-support-invite-attended":"Y","key":'))) {
+  $fixture = [MixelSupportProbeFixture]::Serve(@($guard, $online, $invalid))
+  Assert-Fails { Get-MixelSupportRuntimeHealth } 'wrong/malformed relay defaults or persisted attended guard'
+  $fixture.GetAwaiter().GetResult()
+}
+foreach ($invalid in @('{"t":"Config","c":["rendezvous_server","other.example:21116"]}', '{"t":"Config","c":["id","rs.mixel.ch:21116"]}')) {
+  $fixture = [MixelSupportProbeFixture]::Serve(@($guard, $online, $options, $invalid))
+  Assert-Fails { Get-MixelSupportRuntimeHealth } 'wrong/malformed rendezvous proof'
+  $fixture.GetAwaiter().GetResult()
+}
+foreach ($invalid in @('{"t":"Config","c":["id",""]}', '{"t":"Config","c":["id",123456789]}', '{"t":"Config","c":["id","invalid id!"]}', '{"t":"Config","c":["id","123456789\n"]}', '{"t":"Config","c":["temporary-password","123456789"]}')) {
+  $fixture = [MixelSupportProbeFixture]::Serve(@($guard, $online, $options, $rendezvous, $invalid))
+  Assert-Fails { Get-MixelSupportRuntimeHealth } 'wrong/malformed registered ID'
   $fixture.GetAwaiter().GetResult()
 }
 foreach ($invalid in @('oversized', 'truncated')) {
@@ -110,4 +153,4 @@ foreach ($invalid in @('oversized', 'truncated')) {
   Assert-Fails { [MixelSupportIpcProbe]::Request('{"t":"OnlineStatus","c":null}') } 'invalid IPC frame'
   $fixture.GetAwaiter().GetResult()
 }
-Write-Host 'PASS: malformed online proofs, oversized frames and truncated frames fail closed.'
+Write-Host 'PASS: malformed online/relay/key/rendezvous/ID proofs, persisted consent, oversized frames and truncated frames fail closed.'

@@ -32,6 +32,7 @@ python3 "$(dirname "${BASH_SOURCE[0]}")/patch-secure-support.py"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-network.py"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-linux.py"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-input.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-clipboard.py"
 
 # 1. custom.txt — RustDesk's build-time branding override file.
 cp "$BRANDING/custom.txt" "$RDREPO/custom.txt"
@@ -343,6 +344,20 @@ if [[ -f "$WIN_MAIN" ]]; then
     -e "s|RustDesk \[|${APP_NAME} [|g" \
     "$WIN_MAIN"
   rm -f "$WIN_MAIN.bak"
+  python3 - "$WIN_MAIN" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+source = path.read_text(encoding="utf-8")
+before = '    argument.erase(argument.find_last_not_of(" \\n\\r\\t"));'
+after = '''    const auto last = argument.find_last_not_of(" \\n\\r\\t");
+    argument.erase(last == std::string::npos ? 0 : last + 1);'''
+if after not in source:
+    if source.count(before) != 1:
+        raise RuntimeError("Pinned Windows command-line normalization changed")
+    path.write_text(source.replace(before, after, 1), encoding="utf-8")
+PY
   echo "   patched flutter/windows/runner/main.cpp fallback app_name"
 fi
 

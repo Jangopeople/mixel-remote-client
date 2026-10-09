@@ -127,7 +127,10 @@ empty_handler = """  if (args.isEmpty) {
     return true;
   }
 """
-support_handler = """  if (args.contains('--mixel-attended') && !args.contains('--support-invite')) {
+support_handler = """  if ((args.contains('--mixel-attended') || args.contains('--quick_support')) &&
+      !args.contains('--support-invite')) {
+    // Windows forwards the launcher's original --quick_support argument to
+    // an existing window; generated native Flutter arguments are cold-only.
     windowOnTop(null);
     _supportInviteAttendedTimer ??= Timer.periodic(
       const Duration(seconds: 20), (_) => _renewSupportInviteAttended());
@@ -149,9 +152,12 @@ support_handler = """  if (args.contains('--mixel-attended') && !args.contains('
   }
 """
 start_marker = "  final supportInviteIndex = args.indexOf('--support-invite');\n"
-attended_marker = "  if (args.contains('--mixel-attended') && !args.contains('--support-invite')) {\n"
+attended_marker = "  if ((args.contains('--mixel-attended') || args.contains('--quick_support')) &&\n"
+old_attended_marker = "  if (args.contains('--mixel-attended') && !args.contains('--support-invite')) {\n"
 if attended_marker in text:
     start_marker = attended_marker
+elif old_attended_marker in text:
+    start_marker = old_attended_marker
 if start_marker in text:
     start = text.index(start_marker)
     end = text.index(empty_handler, start)
