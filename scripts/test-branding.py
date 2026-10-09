@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -204,9 +205,31 @@ print("PASS: actual Debian generator child explicitly uses UTF-8 and preserves t
     else:
         print("SKIP: Debian maintainer execution fixture requires native Unix filesystem semantics")
 
+    # Execute the real ICNS fallback even on hosts with iconutil. ImageMagick
+    # otherwise embeds its current clock in the internal PNG, so two complete
+    # branding runs produce different bytes on Windows and Linux.
+    magick = subprocess.run([BASH, "-c", "command -v magick >/dev/null 2>&1"],
+                            cwd=base, env=env, capture_output=True)
+    if magick.returncode == 0:
+        branding_source = SCRIPT.read_text(encoding="utf-8")
+        macos_icons = branding_source[branding_source.index('# macOS .icns'):branding_source.index('# 3. Patch user-visible')]
+        fallback = macos_icons.split('  elif command -v magick >/dev/null 2>&1; then\n', 1)[1].split('  else\n', 1)[0]
+        icns = base / "fallback-icon.icns"
+        fallback_env = {**env, "MACOS_ICNS": icns.as_posix()}
+        run([BASH, "-c", fallback], cwd=base, env=fallback_env)
+        first_icns = icns.read_bytes()
+        time.sleep(1.1)
+        run([BASH, "-c", fallback], cwd=base, env=fallback_env)
+        assert icns.read_bytes() == first_icns, "ImageMagick ICNS fallback embeds changing metadata"
+        print("PASS: actual ImageMagick ICNS fallback remains byte-identical across distinct output timestamps")
+    else:
+        print("SKIP: ImageMagick ICNS fallback execution requires magick")
+
     before = snapshot(repo)
     run(BRANDING_COMMAND, cwd=base, env=env)
-    assert snapshot(repo) == before, "complete branding must be idempotent"
+    after = snapshot(repo)
+    changed = [path for path in sorted(set(before) | set(after)) if before.get(path) != after.get(path)]
+    assert not changed, "complete branding must be idempotent; changed paths: " + repr(changed)
     print("PASS: the complete branding pipeline is byte-for-byte idempotent")
 
     cases = [

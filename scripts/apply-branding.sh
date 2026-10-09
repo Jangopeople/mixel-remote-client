@@ -92,7 +92,9 @@ if [[ -d "$(dirname "$MACOS_ICNS")" ]]; then
     iconutil -c icns "$TMP_ICONSET" -o "$MACOS_ICNS"
     echo "   wrote AppIcon.icns via iconutil"
   elif command -v magick >/dev/null 2>&1; then
-    magick "$BRANDING/icon-1024.png" "$MACOS_ICNS"
+    # The ICNS encoder embeds a PNG; exclude generated time metadata so
+    # repeated branding preserves the exact same asset bytes.
+    magick "$BRANDING/icon-1024.png" -define png:exclude-chunks=date,time "$MACOS_ICNS"
     echo "   wrote AppIcon.icns via magick (single-resolution fallback)"
   else
     echo "   ⚠ Neither iconutil nor magick available; AppIcon.icns not updated" >&2
