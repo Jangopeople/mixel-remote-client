@@ -60,6 +60,17 @@ pub fn relay_only_transport(endpoint: &str, websocket: bool) -> bool {
     websocket && (is_mixel_endpoint(endpoint) || is_mixel_wss(endpoint))
 }
 
+pub fn registration_receive_timeout_ms(mixel_websocket: bool, keep_alive_ms: i32) -> u64 {
+    // The Mixel bridge forwards a genuine server registration reply every 10s.
+    // Use a 20s receive-freshness limit; an in-flight send still has its bounded
+    // socket timeout. Native/custom/proxy retain the upstream keep-alive policy.
+    if mixel_websocket {
+        20_000
+    } else {
+        keep_alive_ms as u64 * 3 / 2
+    }
+}
+
 #[cfg(test)]
 mod mixel_support_network_tests {
     use super::*;
@@ -120,5 +131,13 @@ mod mixel_support_network_tests {
         for _ in 0..8 {assert_eq!(registration_retry_delay_ms("rs.mixel.ch"), 8_000);}
         registration_succeeded("rs.mixel.ch");
         assert_eq!(registration_retry_delay_ms("rs.mixel.ch"), 1_000);
+    }
+
+    #[test]
+    fn registration_freshness_is_bounded_only_for_actual_mixel_websocket() {
+        for keep_alive in [1_000, 60_000, 600_000] {
+            assert_eq!(registration_receive_timeout_ms(true, keep_alive), 20_000);
+            assert_eq!(registration_receive_timeout_ms(false, keep_alive), keep_alive as u64 * 3 / 2);
+        }
     }
 }

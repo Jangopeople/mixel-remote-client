@@ -159,6 +159,53 @@ patch("src/rendezvous_mediator.rs",
 
     async fn start_tcp_inner(server: ServerPtr, host: String) -> ResultType<()> {''')
 patch("src/rendezvous_mediator.rs",
+      '    pub async fn start_tcp(server: ServerPtr, host: String) -> ResultType<()> {',
+      '''    fn invalidate_mixel_registration(&self, enabled: bool) {
+        if enabled {
+            // Transport confirmation is ephemeral. Keep stored identity/public
+            // keys untouched, but never advertise a dead registration as ready.
+            Config::update_latency(&self.host, 0);
+            Config::set_key_confirmed(false);
+            Config::set_host_key_confirmed(&self.host_prefix, false);
+        }
+    }
+
+    pub async fn start_tcp(server: ServerPtr, host: String) -> ResultType<()> {''')
+patch("src/rendezvous_mediator.rs",
+      '''        Config::set_host_key_confirmed(&rz.host_prefix, false);
+        loop {''',
+      '''        Config::set_host_key_confirmed(&rz.host_prefix, false);
+        let mixel_registration = rz.mixel_relay_only && !Config::is_proxy();
+        rz.invalidate_mixel_registration(mixel_registration);
+        // Keep all fallible receive/send branches inside this future so EOF,
+        // EPIPE, malformed frames and timeout clear readiness before retry.
+        let result: ResultType<()> = async {
+        loop {''')
+patch("src/rendezvous_mediator.rs",
+      '''                    if last_recv_msg.elapsed().as_millis() as u64 > rz.keep_alive as u64 * 3 / 2 {
+                        bail!("Rendezvous connection is timeout");
+                    }''',
+      '''                    if last_recv_msg.elapsed().as_millis() as u64
+                        > hbb_common::mixel_support_network::registration_receive_timeout_ms(
+                            mixel_registration, rz.keep_alive)
+                    {
+                        bail!("Rendezvous connection is timeout");
+                    }''')
+patch("src/rendezvous_mediator.rs",
+      '''        }
+        Ok(())
+    }
+
+    pub async fn start(server: ServerPtr, host: String) -> ResultType<()> {''',
+      '''        }
+        Ok(())
+        }.await;
+        rz.invalidate_mixel_registration(mixel_registration);
+        result
+    }
+
+    pub async fn start(server: ServerPtr, host: String) -> ResultType<()> {''')
+patch("src/rendezvous_mediator.rs",
       '''            Some(rendezvous_message::Union::RegisterPkResponse(rpr)) => {
                 update_latency();''',
       '''            Some(rendezvous_message::Union::RegisterPkResponse(rpr)) => {

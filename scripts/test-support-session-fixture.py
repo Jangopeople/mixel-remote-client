@@ -353,6 +353,61 @@ class TransportOracleTests(unittest.TestCase):
             with self.subTest(same_pid=same_pid), self.assertRaisesRegex(AssertionError, "two exact relay"):
                 self.exercise(snapshots)
 
+    def registration_snapshots(self, snapshots, health_values=None, authenticated=0):
+        session = desktop.Session(Path("proofs"), Path("synthetic.deb"), False, True,
+            {"pin": "public-fixture-pin", "network": "owned", "address": "192.168.48.2"})
+        session.server["host"] = 100
+        output = iter(snapshots)
+        def run(role, arguments, **kwargs):
+            self.assertEqual(role, "host")
+            if arguments[0] == "ss":
+                value = next(output)
+            elif arguments[0] == "readlink":
+                value = desktop.EXE + "\n"
+            else:
+                raise AssertionError(arguments)
+            return subprocess.CompletedProcess(arguments, 0, value, "")
+        healthy = {"incoming_pid": 100, "online_status": [15, True]}
+        with patch.object(session, "run", side_effect=run), \
+                patch.object(session, "other_peer_addresses", return_value={"192.168.48.4"}), \
+                patch.object(session, "query", return_value=authenticated), \
+                patch.object(session, "health", side_effect=health_values if health_values is not None else lambda role: healthy):
+            baseline = session.registration_tls_snapshot()
+            self.assertIsNotNone(baseline, "The baseline is a real auth0 key-confirmed registration socket")
+            return baseline, session.fresh_registration_tls(baseline)
+
+    def test_actual_registration_recovery_rejects_cached_online_on_old_established_socket(self):
+        baseline, recovered = self.registration_snapshots([self.socket(), self.socket()])
+        self.assertEqual(baseline["incoming_pid"], 100)
+        self.assertIsNone(recovered)
+
+    def test_actual_registration_recovery_requires_new_tuple_same_pid_and_guarded_key(self):
+        baseline, recovered = self.registration_snapshots([self.socket(), self.socket(local=41002)])
+        self.assertEqual(recovered["incoming_pid"], baseline["incoming_pid"])
+        self.assertNotEqual(recovered["connections"][0]["local_endpoint"], baseline["connections"][0]["local_endpoint"])
+        self.assertEqual(recovered["authenticated_sessions"], 0)
+        self.assertTrue(recovered["guarded_ipc_before"])
+        self.assertTrue(recovered["guarded_ipc_after"])
+
+    def test_actual_registration_recovery_rejects_other_process_foreign_endpoint_or_two_lanes(self):
+        for changed in (self.socket(pid=101, local=41002), self.socket(peer="203.0.113.10", local=41002),
+                        self.socket(local=41002) + self.socket(local=41003)):
+            with self.subTest(changed=changed):
+                self.assertIsNone(self.registration_snapshots([self.socket(), changed])[1])
+
+    def test_actual_registration_recovery_rechecks_key_confirmation_after_kernel_snapshot(self):
+        healthy = {"incoming_pid": 100, "online_status": [15, True]}
+        self.assertIsNone(self.registration_snapshots([self.socket(), self.socket(local=41002)],
+                                                     [healthy, healthy, healthy, None])[1])
+
+    def test_actual_registration_snapshot_rejects_authenticated_session_before_socket_selection(self):
+        session = desktop.Session(Path("proofs"), Path("synthetic.deb"), False, True)
+        with patch.object(session, "query", return_value=1), patch.object(session, "health") as health, \
+                patch.object(session, "app_tcp_evidence") as sockets:
+            self.assertIsNone(session.registration_tls_snapshot())
+        health.assert_not_called()
+        sockets.assert_not_called()
+
 
 class DesktopReadinessTests(unittest.TestCase):
     @staticmethod

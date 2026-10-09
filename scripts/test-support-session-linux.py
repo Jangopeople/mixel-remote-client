@@ -345,6 +345,40 @@ if errors:sys.exit(1)
         (self.proofs / ((label + "-" if label else "") + "https-transport-proof.json")).write_text(json.dumps(evidence, indent=2) + "\n")
         print("PASS: actual authenticated forced-relay video/input active with native21115-21119 blocked; both peers have TLS443 registration+session sockets", flush=True)
 
+    def registration_tls_snapshot(self):
+        # With no authenticated session, exactly one incoming TLS socket is
+        # the registration lane. Guarded IPC is checked on both sides of the
+        # kernel snapshot so a connecting socket cannot inherit cached readiness.
+        if self.query("host", "VideoConnCount") != 0:
+            return None
+        before = self.health("host")
+        if not before:
+            return None
+        sockets, connections = self.app_tcp_evidence("host")
+        tls = [record for record in connections
+               if record["port"] == 443 and self.server["host"] in record["pids"]]
+        if len(tls) != 1:
+            return None
+        after = self.health("host")
+        if not after or self.query("host", "VideoConnCount") != 0:
+            return None
+        return {"incoming_pid": self.server["host"], "guarded_ipc_before": before,
+                "guarded_ipc_after": after, "authenticated_sessions": 0,
+                "connections": tls, "tcp_snapshot": sockets,
+                "observed_monotonic": time.monotonic()}
+
+    def fresh_registration_tls(self, baseline):
+        assert baseline["incoming_pid"] == self.server["host"], "Registration baseline belongs to another incoming process"
+        current = self.registration_tls_snapshot()
+        if not current:
+            return None
+        old = {(record["local_endpoint"], record["peer_endpoint"])
+               for record in baseline["connections"]}
+        record = current["connections"][0]
+        if (record["local_endpoint"], record["peer_endpoint"]) in old:
+            return None  # An old ESTAB socket and cached OnlineStatus are insufficient.
+        return current
+
     def active_mixed_proof(self, label=None):
         assert self.query("host", "VideoConnCount") == 1
         def continued_registration():
@@ -665,7 +699,18 @@ print(json.dumps({'rectangle':rects[0],'decoded_counter':counter,'marker_samples
 
     def drop(self):
         self.stop_controller_gui()
+        registration_before = None
+        if self.blocked:
+            registration_before = until("single key-confirmed incoming HTTPS registration socket at auth0", self.registration_tls_snapshot)
         self.connect("before-network-drop")
+        if registration_before:
+            _sockets, records = self.app_tcp_evidence("host")
+            baseline = registration_before["connections"][0]
+            assert any(record["local_endpoint"] == baseline["local_endpoint"]
+                       and record["peer_endpoint"] == baseline["peer_endpoint"]
+                       and self.server["host"] in record["pids"] for record in records), "Incoming registration changed before the actual network drop"
+            registration_before["baseline_tuple_verified_immediately_before_drop"] = True
+            (self.proofs / "before-network-drop-registration.json").write_text(json.dumps(registration_before, indent=2) + "\n")
         self.process_snapshot("host", "before-network-drop")
         command(["docker", "network", "disconnect", self.network, self.names["host"]])
         try:
@@ -676,20 +721,38 @@ print(json.dumps({'rectangle':rects[0],'decoded_counter':counter,'marker_samples
         # Require the same actual incoming process, attended kernel guard and
         # key-confirmed endpoint through several separate IPC observations.
         ready_since = None
+        registration_after = None
+        ready_tuple = None
         def recovered():
-            nonlocal ready_since
+            nonlocal ready_since, registration_after, ready_tuple
             try:
-                healthy = self.health("host")
+                if registration_before:
+                    registration_after = self.fresh_registration_tls(registration_before)
+                    healthy = registration_after is not None
+                else:
+                    healthy = self.health("host")
             except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
                 ready_since = None
                 raise
             if healthy:
+                if registration_after:
+                    record = registration_after["connections"][0]
+                    current_tuple = (record["local_endpoint"], record["peer_endpoint"])
+                    if current_tuple != ready_tuple:
+                        ready_since = None
+                        ready_tuple = current_tuple
                 if ready_since is None:
                     ready_since = time.monotonic()
                 return time.monotonic() - ready_since >= 2
             ready_since = None
             return False
         until("same native PID and guarded IPC registered stably after actual network drop", recovered, timeout=90)
+        if registration_after:
+            (self.proofs / "network-recovered-registration.json").write_text(json.dumps({
+                "baseline": registration_before, "fresh": registration_after,
+                "same_incoming_pid": self.server["host"], "stable_seconds": time.monotonic() - ready_since,
+                "fresh_registration_confirmed_before_first_controller_request": True,
+            }, indent=2) + "\n")
         self.process_snapshot("host", "network-recovered")
         self.stop_controller_gui()
         self.connect("network-reconnect")

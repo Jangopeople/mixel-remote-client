@@ -51,6 +51,16 @@ with tempfile.TemporaryDirectory(prefix="mixel-network-tests-") as temporary:
     tls_connect = function(websocket, "async fn connect(\n")
     mediator_start = function(mediator, "pub async fn start(server: ServerPtr, host: String)")
     mediator_tcp = function(mediator, "pub async fn start_tcp(server: ServerPtr, host: String)")
+    invalidate_registration = function(mediator, "fn invalidate_mixel_registration(")
+    freshness_start = mediator.index("        let mixel_registration = rz.mixel_relay_only")
+    freshness_init = mediator[freshness_start:mediator.index("        // Keep all fallible", freshness_start)]
+    receive_timeout = function(mediator, "if last_recv_msg.elapsed().as_millis() as u64\n")
+    inner = function(mediator, "async fn start_tcp_inner(")
+    freshness_finish = inner[inner.index("        rz.invalidate_mixel_registration", inner.index("}.await;")):inner.rindex("\n    }")]
+    assert "let result: ResultType<()> = async {" in inner and "}.await;" in inner
+    assert inner.index("let result: ResultType<()> = async {") < inner.index("res = conn.next()") < inner.index("}.await;")
+    assert inner.index("rz.handle_resp(") < inner.index("}.await;")
+    assert freshness_finish.strip().endswith("result")
     unsupported_registration = function(mediator, "if self.mixel_relay_only\n")
     registration_success_start = mediator.index("                        hbb_common::mixel_support_network::registration_succeeded")
     registration_success = mediator[registration_success_start:mediator.index("                        *SOLVING_PK_MISMATCH", registration_success_start)]
@@ -72,7 +82,7 @@ type MaybeTlsStream<T> = T;
 type TcpStream = (TlsType, bool, Option<bool>, Option<bool>);
 #[derive(Clone,Copy,Debug,PartialEq)] enum TlsType { Rustls }
 #[derive(Debug,PartialEq)] pub enum Stream { Tcp, WebSocket(String) }
-#[derive(Default)] struct State { server:String, ws:bool, proxy:bool, native_fail:bool, ws_fail:bool, tcp_fail:bool, reject_registration:bool, key_confirmed:bool, host_key_confirmed:bool, cached_insecure:Option<bool>, requests:Vec<String> }
+#[derive(Default)] struct State { server:String, ws:bool, proxy:bool, native_fail:bool, ws_fail:bool, tcp_fail:bool, reject_registration:bool, key_confirmed:bool, host_key_confirmed:bool, online:i64, cached_insecure:Option<bool>, requests:Vec<String> }
 thread_local! { static STATE:RefCell<State> = RefCell::new(State { server:"rs.mixel.ch".into(), ..State::default() }); }
 struct Config;
 const OPTION_RELAY_SERVER:&str="relay-server";
@@ -85,6 +95,7 @@ impl Config {
  fn reset_online() {STATE.with(|s|s.borrow_mut().requests.push("reset-online".into()));}
  fn set_key_confirmed(value:bool) {STATE.with(|s|s.borrow_mut().key_confirmed=value);}
  fn set_host_key_confirmed(_host:&str,value:bool) {STATE.with(|s|s.borrow_mut().host_key_confirmed=value);}
+ fn update_latency(host:&str,value:i64) {STATE.with(|s|{let mut s=s.borrow_mut();s.online=value;s.requests.push(format!("latency:{host}:{value}"));});}
 }
 mod keys {pub const OPTION_ALLOW_WEBSOCKET:&str="allow-websocket";}
 fn option2bool(_option:&str,value:&str)->bool {value=="Y"}
@@ -153,6 +164,16 @@ impl RendezvousMediator {
  }
  fn intranet_relay(&self)->bool {__INTRANET_RELAY__ relay}
  fn punch_relay(&self,force_relay:bool)->bool {let ph=Punch{force_relay};__PUNCH_RELAY__ relay}
+ __INVALIDATE_REGISTRATION__
+ fn begin_registration(&self)->bool {
+  let rz=self;
+  __FRESHNESS_INIT__
+  mixel_registration
+ }
+ fn finish_registration(&self,mixel_registration:bool,result:ResultType<()>)->ResultType<()> {
+  let rz=self;
+  __FRESHNESS_FINISH__
+ }
  __MEDIATOR_TCP__
  __MEDIATOR_START__
 }
@@ -165,6 +186,81 @@ fn run<F:Future>(future:F)->F::Output {
 }
 fn registered_socket(host:&str,conn:Stream)->RendezvousMediator {
  RendezvousMediator{host:host.into(),host_prefix:host.into(),mixel_relay_only:__REGISTRATION_SOCKET__}
+}
+fn receive_timer(mixel_registration:bool,keep_alive:i32,elapsed:u64)->ResultType<()> {
+ struct KeepAlive {keep_alive:i32}
+ struct LastReceived(u64);
+ impl LastReceived {fn elapsed(&self)->std::time::Duration {std::time::Duration::from_millis(self.0)}}
+ let rz=KeepAlive{keep_alive};let last_recv_msg=LastReceived(elapsed);
+ __RECEIVE_TIMEOUT__
+ Ok(())
+}
+#[test] fn actual_incoming_mixel_websocket_deadline_expires_before_session_timeout() {
+ let rz=registered_socket("rs.mixel.ch:21116",Stream::WebSocket("Mixel".into()));
+ assert!(rz.begin_registration());
+ assert_eq!(receive_timer(true,60_000,20_000),Ok(()));
+ assert!(receive_timer(true,60_000,20_001).is_err());
+ assert!(receive_timer(true,600_000,20_001).is_err());
+ // Model receive ages at the bridge's 10s cadence; real receipt waves are
+ // exercised separately by the stock-server gateway integration fixture.
+ for _ in 0..100 {assert_eq!(receive_timer(true,60_000,10_000),Ok(()));}
+ assert_eq!(receive_timer(false,60_000,89_999),Ok(()));
+ assert_eq!(receive_timer(false,60_000,90_000),Ok(()));
+ assert!(receive_timer(false,60_000,90_001).is_err());
+}
+#[test] fn actual_registration_start_and_every_scoped_exit_clear_cached_online_and_confirmation() {
+ let rz=registered_socket("rs.mixel.ch:21116",Stream::WebSocket("Mixel".into()));
+ STATE.with(|s|{let mut s=s.borrow_mut();s.online=20_000_000;s.key_confirmed=true;s.host_key_confirmed=true;});
+ let active=rz.begin_registration();assert!(active);
+ assert!(STATE.with(|s|{let s=s.borrow();s.online==0&&!s.key_confirmed&&!s.host_key_confirmed}));
+ assert_eq!(rz.check_registration(RegisterResult::OK),Ok(()));
+ Config::update_latency("rs.mixel.ch:21116",15);
+ assert!(STATE.with(|s|{let s=s.borrow();s.online>0&&s.key_confirmed&&s.host_key_confirmed}));
+ for result in [Err("EPIPE"),Err("EOF"),Err("invalid-frame"),receive_timer(true,60_000,21_000),Ok(())] {
+  STATE.with(|s|{let mut s=s.borrow_mut();s.online=15;s.key_confirmed=true;s.host_key_confirmed=true;});
+  assert_eq!(rz.finish_registration(active,result),result);
+  assert!(STATE.with(|s|{let s=s.borrow();s.online==0&&!s.key_confirmed&&!s.host_key_confirmed}));
+ }
+}
+#[test] fn actual_native_custom_and_proxy_registration_keep_upstream_readiness_and_timing() {
+ for (host,stream,proxy) in [("rs.mixel.ch:21116",Stream::Tcp,false),
+  ("other.example:21116",Stream::WebSocket("foreign".into()),false),
+  ("rs.mixel.ch:21116",Stream::WebSocket("Mixel".into()),true)] {
+  STATE.with(|s|{let mut s=s.borrow_mut();s.proxy=proxy;s.online=42;s.key_confirmed=true;s.host_key_confirmed=true;s.requests.clear();});
+  let rz=registered_socket(host,stream);let scoped=rz.begin_registration();assert!(!scoped);
+  assert_eq!(rz.finish_registration(scoped,Err("upstream-error")),Err("upstream-error"));
+  assert_eq!(receive_timer(scoped,60_000,60_000),Ok(()));
+  assert!(STATE.with(|s|{let s=s.borrow();s.online==42&&s.key_confirmed&&s.host_key_confirmed&&s.requests.is_empty()}));
+ }
+}
+#[test] fn actual_expired_registration_is_offline_before_bounded_native_retry() {
+ mixel_support_network::reset_for_test();mixel_support_network::enable_https_fallback("rs.mixel.ch");
+ let rz=registered_socket("rs.mixel.ch:21116",Stream::WebSocket("Mixel".into()));
+ let scoped=rz.begin_registration();rz.check_registration(RegisterResult::OK).unwrap();
+ Config::update_latency("rs.mixel.ch:21116",15);
+ STATE.with(|s|s.borrow_mut().requests.clear());
+ assert!(rz.finish_registration(scoped,receive_timer(scoped,60_000,21_000)).is_err());
+ STATE.with(|s|s.borrow_mut().tcp_fail=true);
+ assert!(run(RendezvousMediator::start_tcp(Arc::new(String::new()),"rs.mixel.ch:21116".into())).is_err());
+ assert_eq!(STATE.with(|s|s.borrow().requests.clone()),vec!["latency:rs.mixel.ch:21116:0","tcp:rs.mixel.ch:21116","reset-online","retry-delay:1"]);
+ assert!(!STATE.with(|s|s.borrow().key_confirmed||s.borrow().host_key_confirmed));
+}
+#[test] fn actual_expired_lane_cannot_supply_cached_confirmation_to_new_registration() {
+ let old=registered_socket("rs.mixel.ch:21116",Stream::WebSocket("Mixel".into()));
+ let active=old.begin_registration();old.check_registration(RegisterResult::OK).unwrap();
+ Config::update_latency("rs.mixel.ch:21116",15);
+ assert!(old.finish_registration(active,receive_timer(active,60_000,20_001)).is_err());
+ assert!(STATE.with(|s|{let s=s.borrow();s.online==0&&!s.key_confirmed&&!s.host_key_confirmed}));
+ let fresh=registered_socket("rs.mixel.ch:21116",Stream::WebSocket("Mixel".into()));
+ let fresh_active=fresh.begin_registration();
+ assert!(STATE.with(|s|{let s=s.borrow();s.online==0&&!s.key_confirmed&&!s.host_key_confirmed}));
+ // Reconfirm only through the generated successful response branch on the
+ // new lane, then clear it again if that lane's echo/send subsequently fails.
+ fresh.check_registration(RegisterResult::OK).unwrap();
+ Config::update_latency("rs.mixel.ch:21116",17);
+ assert!(STATE.with(|s|{let s=s.borrow();s.online==17&&s.key_confirmed&&s.host_key_confirmed}));
+ assert_eq!(fresh.finish_registration(fresh_active,Err("EPIPE")),Err("EPIPE"));
+ assert!(STATE.with(|s|{let s=s.borrow();s.online==0&&!s.key_confirmed&&!s.host_key_confirmed}));
 }
 #[test] fn actual_transport_policies() {
  mixel_support_network::reset_for_test();
@@ -301,7 +397,7 @@ fn registered_socket(host:&str,conn:Stream)->RendezvousMediator {
  let native=registered_socket("other.example:21116",Stream::Tcp);
  assert!(native.intranet_relay()&&native.punch_relay(false));
 }
-'''.replace("__TLS_CONNECT__", tls_connect).replace("__HELPER__", (ROOT / "scripts/support-network.rs").read_text(encoding="utf-8")).replace("__CHECK_WS__", function(websocket, "pub fn check_ws(")).replace("__CONNECT_TCP__", connect).replace("__MEDIATOR_START__", mediator_start).replace("__MEDIATOR_TCP__", mediator_tcp).replace("__UNSUPPORTED_REGISTRATION__", unsupported_registration).replace("__REGISTRATION_SUCCESS__", registration_success).replace("__USE_WS__", use_websocket).replace("__INTRANET_RELAY__", intranet_relay).replace("__PUNCH_RELAY__", punch_relay).replace("__REGISTRATION_SOCKET__", registration_socket)
+'''.replace("__TLS_CONNECT__", tls_connect).replace("__HELPER__", (ROOT / "scripts/support-network.rs").read_text(encoding="utf-8")).replace("__CHECK_WS__", function(websocket, "pub fn check_ws(")).replace("__CONNECT_TCP__", connect).replace("__MEDIATOR_START__", mediator_start).replace("__MEDIATOR_TCP__", mediator_tcp).replace("__UNSUPPORTED_REGISTRATION__", unsupported_registration).replace("__REGISTRATION_SUCCESS__", registration_success).replace("__USE_WS__", use_websocket).replace("__INTRANET_RELAY__", intranet_relay).replace("__PUNCH_RELAY__", punch_relay).replace("__REGISTRATION_SOCKET__", registration_socket).replace("__INVALIDATE_REGISTRATION__", invalidate_registration).replace("__FRESHNESS_INIT__", freshness_init).replace("__FRESHNESS_FINISH__", freshness_finish).replace("__RECEIVE_TIMEOUT__", receive_timeout)
     # UDP registration must leave its retry loop and enter real TCP/WSS startup.
     assert 'if hbb_common::mixel_support_network::enable_https_fallback(&host)' in mediator
     assert 'match Self::start_udp(server.clone(), host.clone()).await' in mediator
