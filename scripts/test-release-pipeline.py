@@ -2,9 +2,11 @@
 """Exercise release selection, fail-closed staging, and portable build failures."""
 import importlib.util
 import os
+import re
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -20,6 +22,51 @@ def module(name, file):
 
 release = module("mixel_release", "release-artifacts.py")
 portable = module("mixel_portable", "build-windows-portable.py")
+
+
+class PinnedDependencyRetryTests(unittest.TestCase):
+    def test_actual_platform_steps_retry_transient_failure_and_preserve_fatal_exit(self):
+        workflow = (ROOT / ".github/workflows/build.yml").read_text(encoding="utf-8")
+        scripts = re.findall(
+            r"      - name: Install vcpkg deps\n(?:        shell: bash\n)?        run: \|\n((?:          .*(?:\n|$))+)",
+            workflow,
+        )
+        self.assertEqual(len(scripts), 3)
+        for script, triplet in zip(scripts, ("x64-linux", "arm64-osx", "x64-windows-static")):
+            script = textwrap.dedent(script)
+            script = re.sub(r"\$\{\{ matrix\.job\.arch .*?\}\}", triplet, script)
+            for failures in (0, 1, 2, 3):
+                with self.subTest(triplet=triplet, failures=failures), tempfile.TemporaryDirectory(prefix="mixel-pinned-retry-") as directory:
+                    root = Path(directory)
+                    binary = root / "bin"
+                    binary.mkdir()
+                    vcpkg = binary / "vcpkg"
+                    vcpkg.write_text("""#!/bin/bash
+set -e
+count=0
+if [[ -f "$MIXEL_RETRY_COUNT" ]]; then count=$(cat "$MIXEL_RETRY_COUNT"); fi
+count=$((count + 1))
+printf '%s' "$count" >"$MIXEL_RETRY_COUNT"
+printf '%s\\n' "$*" >>"$MIXEL_RETRY_CALLS"
+if [[ "$count" -le "$MIXEL_RETRY_FAILURES" ]]; then exit 1; fi
+""", encoding="utf-8")
+                    vcpkg.chmod(0o755)
+                    sleep = binary / "sleep"
+                    sleep.write_text('#!/bin/bash\nprintf "%s\\n" "$*" >>"$MIXEL_RETRY_DELAYS"\n', encoding="utf-8")
+                    sleep.chmod(0o755)
+                    environment = {**os.environ, "VCPKG_ROOT": str(binary),
+                                   "PATH": str(binary) + os.pathsep + os.environ["PATH"],
+                                   "MIXEL_RETRY_COUNT": str(root / "count"), "MIXEL_RETRY_CALLS": str(root / "calls"),
+                                   "MIXEL_RETRY_DELAYS": str(root / "delays"), "MIXEL_RETRY_FAILURES": str(failures)}
+                    result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", script], env=environment,
+                                            capture_output=True, text=True, timeout=10)
+                    self.assertEqual(result.returncode, 1 if failures == 3 else 0)
+                    expected_calls = min(failures + 1, 3)
+                    self.assertEqual(int((root / "count").read_text()), expected_calls)
+                    self.assertEqual((root / "calls").read_text().splitlines(),
+                                     ["install --triplet " + triplet + " libvpx libyuv opus aom libjpeg-turbo"] * expected_calls)
+                    delays = (root / "delays").read_text().splitlines() if (root / "delays").exists() else []
+                    self.assertEqual(delays, ["10", "20"][:expected_calls - 1])
 
 
 class ReleasePipelineTests(unittest.TestCase):

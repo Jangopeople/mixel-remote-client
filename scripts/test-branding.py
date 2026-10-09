@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Run the complete branding pipeline on a fresh pinned source clone."""
-import ast
 import hashlib
+import json
 import os
 from pathlib import Path
 import plistlib
 import shutil
 import subprocess
+import sys
 import tempfile
 
 
@@ -129,35 +130,51 @@ int main() {
 
     # Execute the actual package generator, including its architecture-specific
     # dependencies, without importing the build script's command-line driver.
-    functions = ast.Module(body=[node for node in ast.parse(build).body
-                                if isinstance(node, ast.FunctionDef) and node.name in
-                                {"generate_control_file", "get_deb_arch", "get_deb_extra_depends"}],
-                           type_ignores=[])
-    generator = {"os": os, "system2": lambda _command: None}
-    exec(compile(functions, str(repo / "build.py"), "exec"), generator)
     expected_depends = ["libgtk-3-0", "libegl1", "libgl1", "libgles2", "libgl1-mesa-dri",
                         "libxcb-randr0", "libxdo3 | libxdo4", "libxfixes3", "libxcb-shape0",
                         "libxcb-xfixes0", "libasound2", "libsystemd0", "curl", "libva2",
                         "libva-drm2", "libva-x11-2", "libgstreamer-plugins-base1.0-0",
                         "libpam0g", "gstreamer1.0-pipewire"]
-    original_directory, original_arch = Path.cwd(), os.environ.get("DEB_ARCH")
-    try:
-        os.chdir(repo / "flutter")
-        for arch in ("amd64", "arm64", "armhf"):
-            os.environ["DEB_ARCH"] = arch
-            generator["generate_control_file"]("1.4.6")
-            control = (repo / "res/DEBIAN/control").read_text(encoding="utf-8")
-            fields = dict(line.split(": ", 1) for line in control.splitlines() if ": " in line)
-            dependencies = fields["Depends"].split(", ")
-            assert dependencies == expected_depends + (["libatomic1"] if arch == "armhf" else [])
-            assert len(dependencies) == len(set(dependencies)), "duplicate package dependency"
-            assert fields["Package"] == "mixel-remote" and fields["Architecture"] == arch
-    finally:
-        os.chdir(original_directory)
-        if original_arch is None:
-            os.environ.pop("DEB_ARCH", None)
-        else:
-            os.environ["DEB_ARCH"] = original_arch
+    # The real Linux generator uses open(..., "w") with the host default.
+    # Run that fixture with Linux's UTF-8 text semantics even when this test's
+    # parent is native Windows/CP1252. Keep strict UTF-8 decoding; never repair
+    # invalid package bytes by replacing or silently dropping characters.
+    debian_probe = '''import ast
+import json
+import os
+from pathlib import Path
+import sys
+
+assert os.environ.get("PYTHONUTF8") == "1", "Debian fixture child must explicitly enable UTF-8"
+assert sys.flags.utf8_mode == 1, "Debian fixture must run in explicit UTF-8 mode"
+repo = Path(sys.argv[1])
+expected_depends = json.loads(sys.argv[2])
+source = (repo / "build.py").read_text(encoding="utf-8")
+functions = ast.Module(body=[node for node in ast.parse(source).body
+                            if isinstance(node, ast.FunctionDef) and node.name in
+                            {"generate_control_file", "get_deb_arch", "get_deb_extra_depends"}],
+                       type_ignores=[])
+generator = {"os": os, "system2": lambda _command: None}
+exec(compile(functions, str(repo / "build.py"), "exec"), generator)
+os.chdir(repo / "flutter")
+for arch in ("amd64", "arm64", "armhf"):
+    os.environ["DEB_ARCH"] = arch
+    generator["generate_control_file"]("1.4.6")
+    control_path = repo / "res/DEBIAN/control"
+    with open(control_path) as stream:
+        assert stream.encoding.lower().replace("-", "") == "utf8", "Generator child default text IO is not UTF-8"
+    control = control_path.read_text(encoding="utf-8")
+    fields = dict(line.split(": ", 1) for line in control.splitlines() if ": " in line)
+    dependencies = fields["Depends"].split(", ")
+    assert dependencies == expected_depends + (["libatomic1"] if arch == "armhf" else [])
+    assert len(dependencies) == len(set(dependencies)), "duplicate package dependency"
+    assert fields["Package"] == "mixel-remote" and fields["Architecture"] == arch
+    assert fields["Description"] == "Mixel Remote — remote support client by Mixel IT and Corporate Services GmbH.", "Package description was damaged by text encoding"
+print("PASS: actual Debian generator child explicitly uses UTF-8 and preserves the full branded description")
+'''
+    generated = run([sys.executable, "-c", debian_probe, str(repo), json.dumps(expected_depends)],
+                    env={**env, "PYTHONUTF8": "1"})
+    print(generated.stdout.strip())
     print("PASS: actual Debian control generator requires EGL, GL, GLES and Mesa software rendering on all package architectures")
 
     # Execute the generated Debian upgrade path against an isolated filesystem.

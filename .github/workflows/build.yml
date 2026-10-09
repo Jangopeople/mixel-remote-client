@@ -190,7 +190,14 @@ jobs:
 
       - name: Install vcpkg deps
         run: |
-          "$VCPKG_ROOT/vcpkg" install --triplet x64-linux libvpx libyuv opus aom libjpeg-turbo
+          for attempt in 1 2 3; do
+            if "$VCPKG_ROOT/vcpkg" install --triplet x64-linux libvpx libyuv opus aom libjpeg-turbo; then
+              break
+            fi
+            if [[ "$attempt" == 3 ]]; then exit 1; fi
+            echo "Pinned dependency fetch/build failed; retrying attempt $((attempt + 1))/3"
+            sleep "$((attempt * 10))"
+          done
 
       - name: Fetch upstream RustDesk
         run: |
@@ -361,7 +368,14 @@ jobs:
       - name: Install vcpkg deps
         run: |
           triplet=${{ matrix.job.arch == 'aarch64' && 'arm64-osx' || 'x64-osx' }}
-          "$VCPKG_ROOT/vcpkg" install --triplet "$triplet" libvpx libyuv opus aom libjpeg-turbo
+          for attempt in 1 2 3; do
+            if "$VCPKG_ROOT/vcpkg" install --triplet "$triplet" libvpx libyuv opus aom libjpeg-turbo; then
+              break
+            fi
+            if [[ "$attempt" == 3 ]]; then exit 1; fi
+            echo "Pinned dependency fetch/build failed; retrying attempt $((attempt + 1))/3"
+            sleep "$((attempt * 10))"
+          done
 
       - name: Fetch upstream RustDesk
         run: |
@@ -581,7 +595,14 @@ jobs:
       - name: Install vcpkg deps
         shell: bash
         run: |
-          "$VCPKG_ROOT/vcpkg" install --triplet x64-windows-static libvpx libyuv opus aom libjpeg-turbo
+          for attempt in 1 2 3; do
+            if "$VCPKG_ROOT/vcpkg" install --triplet x64-windows-static libvpx libyuv opus aom libjpeg-turbo; then
+              break
+            fi
+            if [[ "$attempt" == 3 ]]; then exit 1; fi
+            echo "Pinned dependency fetch/build failed; retrying attempt $((attempt + 1))/3"
+            sleep "$((attempt * 10))"
+          done
 
       - name: Install ImageMagick (for branding .ico)
         shell: bash
