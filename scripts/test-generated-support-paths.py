@@ -41,6 +41,15 @@ def native_runner(repo: Path, rustc: str) -> None:
     updater = (repo / "src/updater.rs").read_text(encoding="utf-8")
     common = (repo / "src/common.rs").read_text(encoding="utf-8")
     core = (repo / "src/core_main.rs").read_text(encoding="utf-8")
+    ui = (repo / "src/ui_interface.rs").read_text(encoding="utf-8")
+    start = ui.index("pub struct UiStatus {")
+    status_struct = ui[start:ui.index("\n}", start)] + "\n}\n"
+    start = ui.index("UiStatus{", ui.index("static ref UI_STATUS"))
+    initial_status = ui[start:ui.index("}));", start)] + "}"
+    start = ui.index("                                if x > 0", ui.index("ipc::Data::OnlineStatus"))
+    online_update = ui[start:ui.index("\n                            }", start)]
+    # The first closing line above belongs to the match arm after its complete
+    # assignment; indentation prevents nested if blocks ending extraction early.
     # Execute each real generated guard before replacing the unrelated download
     # machinery with an observable side effect. The guard is never duplicated.
     updater_functions = (
@@ -112,6 +121,26 @@ fn run<F: Future>(future: F) -> F::Output {
     } }
 }
 GENERATED_UPDATER
+GENERATED_STATUS_STRUCT
+static UI_STATUS: Mutex<UiStatus> = Mutex::new(GENERATED_INITIAL_STATUS);
+fn receive_service_status(mut x: i32, _c: bool) -> bool {
+    let key_confirmed;
+    let mouse_time = 0;
+    let video_conn_count = 0;
+GENERATED_ONLINE_UPDATE
+    key_confirmed
+}
+#[test]
+fn flutter_native_status_exposes_actual_service_key_confirmation() {
+    assert!(!UI_STATUS.lock().unwrap().key_confirmed);
+    assert!(receive_service_status(5, true));
+    let status = UI_STATUS.lock().unwrap();
+    assert_eq!(status.status_num, 1);
+    assert!(status.key_confirmed);
+    drop(status);
+    assert!(!receive_service_status(5, false));
+    assert!(!UI_STATUS.lock().unwrap().key_confirmed);
+}
 fn linux_startup(args: Vec<String>) -> Option<Vec<String>> {
     let mut flutter_args = Vec::new();
     let no_server = false;
@@ -181,6 +210,9 @@ fn unrelated_outgoing_linux_link_retains_dbus_dispatch_only() {
 '''
     source = source.replace("GENERATED_GUARD_PATH", str(ROOT / "scripts/support-invite-guard.rs").replace("\\", "\\\\"))
     source = source.replace("GENERATED_UPDATER", updater_functions)
+    source = source.replace("GENERATED_STATUS_STRUCT", status_struct)
+    source = source.replace("GENERATED_INITIAL_STATUS", initial_status)
+    source = source.replace("GENERATED_ONLINE_UPDATE", online_update)
     source = source.replace("GENERATED_CLASSIFICATION", classification)
     source = source.replace("GENERATED_DISPATCH", dispatch)
     source = source.replace("GENERATED_INCOMING", incoming)
@@ -316,8 +348,68 @@ Future<void> main() async {
   print('Result: $passed generated desktop HTTP tests passed; 0 failed');
 }
 ''', encoding="utf-8")
+    common = (repo / "flutter/lib/common.dart").read_text(encoding="utf-8")
+    start = common.index("    isOnline: () async {") + len("    isOnline: () async {\n")
+    predicate = common[start:common.index("    },", start)]
+    (directory / "readiness.dart").write_text(
+        r'''import 'dart:convert';
+bool isMacOS = false;
+class Bind {
+  String status = '';
+  int statusReads = 0;
+  bool screenPermission = false;
+  bool trusted = false;
+  Future<String> mainGetConnectStatus() async { statusReads++; return status; }
+  bool mainIsCanScreenRecording({required bool prompt}) {
+    if (prompt) throw StateError('Heartbeat must not prompt for permissions');
+    return screenPermission;
+  }
+  bool mainIsProcessTrusted({required bool prompt}) {
+    if (prompt) throw StateError('Heartbeat must not prompt for permissions');
+    return trusted;
+  }
+}
+final bind = Bind();
+'''
+        "Future<bool> actualReadiness() async {\n" + predicate + "}\n" + r'''
+Future<void> main() async {
+  var passed = 0;
+  for (final sample in [
+    ['{"status_num":1,"key_confirmed":true}', true],
+    ['{"status_num":1,"key_confirmed":false}', false],
+    ['{"status_num":1}', false],
+    ['{"status_num":0,"key_confirmed":true}', false],
+    ['{"status_num":-1,"key_confirmed":true}', false],
+    ['{"status_num":"1","key_confirmed":true}', false],
+    ['{"status_num":1,"key_confirmed":"true"}', false],
+    ['[]', false],
+  ]) {
+    bind.status = sample[0] as String;
+    if (await actualReadiness() != sample[1]) throw StateError('Invalid native service readiness classification');
+    passed++;
+  }
+  isMacOS = true;
+  for (final permissions in [
+    [false, false, false], [false, true, false], [true, false, false], [true, true, true],
+  ]) {
+    bind.status = '{"status_num":1,"key_confirmed":true}';
+    bind.screenPermission = permissions[0]; bind.trusted = permissions[1]; bind.statusReads = 0;
+    if (await actualReadiness() != permissions[2]) throw StateError('Mac permissions must precede readiness');
+    if (!permissions[2] && bind.statusReads != 0) throw StateError('Missing Mac permissions must block before service reads');
+    passed++;
+  }
+  for (final status in ['{"status_num":0,"key_confirmed":true}', '{"status_num":1,"key_confirmed":false}']) {
+    bind.status = status;
+    if (await actualReadiness()) throw StateError('Mac permission grants cannot replace relay/key readiness');
+    passed++;
+  }
+  print('Result: $passed actual generated service key/Mac permission readiness cases passed; 0 failed');
+}
+''', encoding="utf-8",
+    )
     subprocess.run([dart, "analyze", str(directory)], check=True)
     subprocess.run([dart, str(directory / "runner.dart")], check=True)
+    subprocess.run([dart, str(directory / "readiness.dart")], check=True)
 
 
 def main() -> None:

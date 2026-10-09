@@ -80,6 +80,8 @@ Future<void> _reportSupportInvite(String token, String apiKey) async {
   final reporter = MixelSupportInviteReporter(
     readId: () async => await bind.mainGetMyId(),
     isOnline: () async {
+      if (isMacOS && (!bind.mainIsCanScreenRecording(prompt: false) ||
+          !bind.mainIsProcessTrusted(prompt: false))) return false;
       final status = jsonDecode(await bind.mainGetConnectStatus());
       return status is Map && status['status_num'] is num &&
         status['status_num'] > 0 && status['key_confirmed'] == true;
