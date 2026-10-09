@@ -279,7 +279,8 @@ print(json.dumps(state))
 if errors:sys.exit(1)
 '''.replace("PIDS", repr(sorted({pid for pid in (self.server.get(role), self.gui_pid.get(role)) if pid}))).replace("EXE_PATH", repr(EXE)).replace("CAPTURE_LOGS", repr(capture_logs)).replace("OUTPUT_PATH", repr("/proofs/" + label + "-process-state.json"))
         snapshot = json.loads(self.run(role, ["python3", "-c", code], timeout=timeout).stdout)
-        (self.proofs / role / (label + "-process-state.json")).write_text(json.dumps(snapshot, indent=2) + "\n")
+        # The guest already wrote the mounted proof. Its UID differs from the
+        # CI runner, so the runner must not reopen that file for writing.
         return snapshot
 
     def relay_addresses(self, role):
@@ -346,8 +347,13 @@ if errors:sys.exit(1)
 
     def active_mixed_proof(self, label=None):
         assert self.query("host", "VideoConnCount") == 1
-        host_udp = self.native_udp_proof((label + "-" if label else "") + "active-encrypted-video")
-        assert host_udp > self.initial_udp_packets, "Host UDP registration stopped after the native TCP outage"
+        def continued_registration():
+            packets = self.native_udp_proof((label + "-" if label else "") + "active-encrypted-video")
+            return packets if packets > self.initial_udp_packets else None
+        # Consent can complete before the next native registration interval.
+        # Require an actual later UDP packet instead of assuming it is due now.
+        host_udp = until("actual host UDP registration after native TCP outage", continued_registration, timeout=45)
+        assert self.query("host", "VideoConnCount") == 1, "Mixed session closed while waiting for actual UDP registration"
         evidence = {}
         for role in self.names:
             sockets, connections = self.app_tcp_evidence(role)

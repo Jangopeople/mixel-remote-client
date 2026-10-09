@@ -289,6 +289,37 @@ class TransportOracleTests(unittest.TestCase):
         self.assertEqual(result["host_udp_packets"], 2)
         self.assertEqual(result["socket_owners"]["controller"]["connections"][1]["port"], 21117)
 
+    def test_actual_mixed_oracle_waits_for_later_real_udp_packet(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            proofs = Path(temporary)
+            for role in ("host", "controller"):
+                (proofs / role).mkdir()
+            session = desktop.Session(proofs, Path("synthetic.deb"), False, False,
+                                      {"pin": "public-fixture-pin", "network": "owned", "address": "192.168.48.2"}, True)
+            session.initial_udp_packets = 2
+            session.server = {"host": 100, "controller": 100}
+            host = [{"port": 443, "pids": [100]}]
+            controller = [{"port": 443, "pids": [100]}, {"port": 21117, "pids": [101]}]
+            with patch.object(session, "native_udp_proof", side_effect=[2, 2, 3]) as udp, \
+                    patch.object(session, "query", return_value=1), patch.object(session, "app_tcp_evidence", side_effect=[("", host), ("", controller)]), \
+                    patch.object(session, "run", return_value=subprocess.CompletedProcess([], 0, "[3:300] -A OUTPUT -p tcp -m tcp --dport 21116 -j ACCEPT\n", "")), \
+                    patch.object(desktop.time, "sleep"), patch.object(sys, "stdout", io.StringIO()):
+                session.active_mixed_proof()
+            self.assertEqual(udp.call_count, 3)
+            self.assertEqual(json.loads((proofs / "mixed-transport-proof.json").read_text())["host_udp_packets"], 3)
+
+    def test_actual_mixed_oracle_never_accepts_stopped_udp_registration_after_timeout(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            session = desktop.Session(Path(temporary), Path("synthetic.deb"), False, False, mixed_transports=True)
+            session.initial_udp_packets = 2
+            with patch.object(session, "native_udp_proof", return_value=2), patch.object(session, "query", return_value=1), \
+                    patch.object(session, "app_tcp_evidence") as sockets, \
+                    patch.object(desktop.time, "monotonic", side_effect=[0, 0, 46]), patch.object(desktop.time, "sleep"):
+                with self.assertRaisesRegex(RuntimeError, "Timed out: actual host UDP registration"):
+                    session.active_mixed_proof()
+            sockets.assert_not_called()
+            self.assertFalse((Path(temporary) / "mixed-transport-proof.json").exists())
+
     def test_unrelated_https_and_other_process_cannot_stand_in_for_relay(self):
         for replacement in (self.socket(peer="203.0.113.10"), self.socket(process="curl"),
                             'ESTAB 0 0 192.168.48.3:41001 192.168.48.2:443\n'):
@@ -336,6 +367,15 @@ class DesktopReadinessTests(unittest.TestCase):
         duplicated = self.tsv(desktop.FILE) + self.tsv(desktop.FILE).splitlines()[1] + "\n"
         with self.assertRaisesRegex(AssertionError, "ambiguous"):
             desktop.Session.rendered_row(duplicated, bounds)
+
+    def test_actual_process_snapshot_does_not_rewrite_guest_owned_proof_on_host(self):
+        session = desktop.Session(Path("runner-proofs"), Path("synthetic.deb"), False, True)
+        session.server["host"] = 100
+        state = {"ipc_pid": "100", "memory": {"memory.events": "oom_kill 0"}}
+        with patch.object(session, "run", return_value=subprocess.CompletedProcess([], 0, json.dumps(state), "")), \
+                patch.object(Path, "write_text", side_effect=PermissionError("Guest UID differs from runner")) as host_write:
+            self.assertEqual(session.process_snapshot("host", "before-network-drop"), state)
+        host_write.assert_not_called()
 
     def test_actual_remote_row_wait_refreshes_empty_listing_before_returning_exact_visible_file(self):
         with tempfile.TemporaryDirectory() as temporary:
