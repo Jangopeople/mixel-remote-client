@@ -142,3 +142,49 @@ zero active connections so an ongoing support session is not interrupted.
 Then stop/remove only this new component. Do not restart or replace hbbs/hbbr,
 change the relay key, remove device records, touch DNS, alter certificates or
 modify marketplace submissions as part of deployment or rollback.
+
+## Guarded deployment bundle
+
+`prepare-deployment.py` runs locally and creates complete rewritten site files,
+component source, `deploy.sh`, `rollback.sh` and a SHA256 source manifest. It
+does not contact or mutate production. The committed public proxy snapshot is
+the exact 1183-byte site read during the audit; it contains no credential or
+private-key contents. The before digest is
+`1ebb21d7412fd843350891e46ccc1e6f692123588b2157c3b544b9fdc4613470`.
+
+```sh
+python3 infra/relay-ws-bridge/prepare-deployment.py \
+  --snapshot infra/relay-ws-bridge/fixtures/nginx-before-2026-10-09.conf \
+  --output /tmp/mixel-reviewed-gateway-deployment
+python3 scripts/test-relay-ws-bridge-deployment.py --docker
+python3 scripts/test-relay-ws-bridge-lifecycle.py
+```
+
+Record the printed digest of `source.sha256` when reviewing the bundle. Only
+after the human approves the exact production action, copy the entire bundle
+to the new `/opt/mixel-remote-registration-bridge` directory, owned by root,
+and run its `deploy.sh` as root with that reviewed digest as its sole argument.
+The script validates source hashes, the current site hash and existing public
+relay identity, rejects unexpected Compose environment files or an existing
+component project, checks the free loopback port, builds/starts only the new
+component, backs up the original site, writes the complete new site atomically,
+validates nginx and gracefully reloads it. hbbs/hbbr IDs, start times and restart
+counts must stay equal. If activation fails, only its reviewed nginx site is
+restored. No private relay key is read by any deployment guard.
+
+The paired `rollback.sh` takes the same digest, refuses unrelated site drift
+and restores only that deployment's verified original site. If active gateway
+connections remain, it exits with code 10 after restoring the old route and
+keeps the component alive for them to finish. Stop the component only after
+the local status count reaches zero by running the same `rollback.sh` command
+again with the reviewed digest. The second run accepts the verified restored
+site and removes only the drained component. Neither script changes DNS, certificates,
+native server containers, their database or marketplace availability.
+
+Offline deployment tests run the actual shell guards in a network-disabled
+container. Drift in the approved digest, source, site, pin or environment must
+stop before any infrastructure command. Both exact site files pass nginx
+1.30.4 syntax validation using freshly generated fixture certificate files
+mounted at the original certificate paths. Production's private certificate
+is never read or copied. The actual VPS-wide `nginx -t` is still mandatory at
+deployment time because other sites may have changed since the audit.
