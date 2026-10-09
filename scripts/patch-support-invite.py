@@ -263,9 +263,10 @@ text = replace_once(text, "pub fn set_option(key: String, value: String) {\n", "
         if value == "Y" {
             // Only this foreground caller owns the process lease. The service
             // heartbeat handler must remain memory-only across IPC.
-            if !hbb_common::password_security::hold_support_invite_attended_lease() {
-                return;
-            }
+            // Keep the incoming memory guard renewed even if the kernel lease
+            // cannot be acquired. The getter still blocks readiness on that
+            // failure; never let it silently restore password-based approval.
+            hbb_common::password_security::hold_support_invite_attended_lease();
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             ipc::set_config("mixel-support-invite-attended", value).ok();
         }

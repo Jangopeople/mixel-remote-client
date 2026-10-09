@@ -105,6 +105,14 @@ outside PATH. The real desktop smoke needs its target OS and compiled bundle;
 source regression tests do not establish screen/video/input behavior on a remote
 customer device. macOS permission grants remain controlled by the customer’s OS.
 
+The Linux build also runs two real isolated desktops with the exact packaged
+installer. Tests request a relayed session, require customer Accept, compare
+decoded video and host input, transfer a synthetic file in both directions, and
+recover from incoming-service restart and network loss. A second run blocks the
+native relay ports to exercise certificate-verified HTTPS on port 443. Failure
+stops the build; screenshots, native logs and the installer SHA256 remain in the
+`linux-support-session-proof` artifact.
+
 ## Build and release
 
 Use `build.yml` workflow dispatch on a review branch with `publish_r2=false` to
@@ -139,7 +147,11 @@ Required GitHub secrets are `APPLE_CERT_P12_BASE64`, `APPLE_CERT_P12_PASSWORD`,
 be unsigned when Apple secrets are absent; such builds cannot be published.
 
 `runtime_artifact_run` runs a read-only Windows launch diagnostic against a
-previous signed Store payload artifact. It never publishes downloads. The local
+previous signed Store payload artifact. `runtime_macos_artifact_run` verifies and
+launches both signed/notarized Mac installers. `runtime_linux_artifact_run` runs
+the native/HTTPS two-desktop session tests against an existing Linux artifact.
+All diagnostic inputs require `publish_r2=false` and a positive build run ID.
+The local
 macOS signing helper `scripts/local/sign-and-publish-macos.sh` is a publication
 action and must only be invoked for an authorized release.
 

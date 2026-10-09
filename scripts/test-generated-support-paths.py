@@ -49,6 +49,16 @@ def native_runner(repo: Path, rustc: str) -> None:
     initial_status = ui[start:ui.index("}));", start)] + "}"
     start = ui.index("                                if x > 0", ui.index("ipc::Data::OnlineStatus"))
     online_update = ui[start:ui.index("\n                            }", start)]
+    # Extract the complete owned early branches, keeping the actual getter and
+    # setter control flow. Observable fallthrough stands in for saved options.
+    attended_options = ""
+    for signature, fallback in (
+        ("pub fn get_option<T: AsRef<str>>(key: T) -> String {\n", '    "saved-fallback".to_owned()\n}\n'),
+        ("pub fn set_option(key: String, value: String) {\n", '    effect("saved-preference-write");\n}\n'),
+    ):
+        start = ui.index(signature)
+        end = ui.index("\n    }\n", start) + len("\n    }\n")
+        attended_options += ui[start:end] + fallback
     # The first closing line above belongs to the match arm after its complete
     # assignment; indentation prevents nested if blocks ending extraction early.
     # Execute each real generated guard before replacing the unrelated download
@@ -78,7 +88,11 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Wake, Waker};
 type ResultType<T> = Result<T, &'static str>;
 #[derive(Default)]
-struct Trace { custom: bool, store: bool, warm: bool, effects: Vec<&'static str> }
+struct Trace {
+    custom: bool, store: bool, warm: bool, effects: Vec<&'static str>,
+    fail_owner_hold: bool, owner_failed: bool, ipc_failed: bool,
+    renewals: Vec<(String, String)>,
+}
 thread_local! { static TRACE: RefCell<Trace> = RefCell::new(Trace::default()); }
 static SOFTWARE_UPDATE_URL: Mutex<String> = Mutex::new(String::new());
 fn effect(value: &'static str) { TRACE.with(|trace| trace.borrow_mut().effects.push(value)); }
@@ -105,8 +119,34 @@ mod hbb_common {
         impl PeerConfig { pub fn preload_peers() {} }
     }
     pub mod password_security {
-        pub use crate::real_guard::is_support_invite_arg;
-        pub fn hold_support_invite_attended_lease() -> bool { crate::effect("attended-guard"); true }
+        pub use crate::real_guard::{is_support_invite_arg, resolve_support_invite_attestation};
+        pub fn hold_support_invite_attended_lease() -> bool {
+            crate::effect("attended-guard");
+            crate::TRACE.with(|trace| {
+                let mut state = trace.borrow_mut();
+                state.owner_failed = state.fail_owner_hold;
+                !state.owner_failed
+            })
+        }
+        pub fn support_invite_owner_lease_failed() -> bool {
+            crate::TRACE.with(|trace| trace.borrow().owner_failed)
+        }
+    }
+}
+mod ipc {
+    pub fn get_config(_key: &str) -> Result<Option<String>, ()> {
+        crate::TRACE.with(|trace| if trace.borrow().ipc_failed {
+            Err(())
+        } else {
+            Ok(Some("attended-runtime-v2".to_owned()))
+        })
+    }
+    pub fn set_config(key: &str, value: String) -> Result<(), ()> {
+        crate::TRACE.with(|trace| {
+            let mut state = trace.borrow_mut();
+            state.renewals.push((key.to_owned(), value));
+            if state.ipc_failed { Err(()) } else { Ok(()) }
+        })
     }
 }
 #[allow(dead_code)]
@@ -122,6 +162,7 @@ fn run<F: Future>(future: F) -> F::Output {
     } }
 }
 GENERATED_UPDATER
+GENERATED_ATTENDED_OPTIONS
 GENERATED_STATUS_STRUCT
 static UI_STATUS: Mutex<UiStatus> = Mutex::new(GENERATED_INITIAL_STATUS);
 fn receive_service_status(mut x: i32, _c: bool) -> bool {
@@ -141,6 +182,63 @@ fn flutter_native_status_exposes_actual_service_key_confirmation() {
     drop(status);
     assert!(!receive_service_status(5, false));
     assert!(!UI_STATUS.lock().unwrap().key_confirmed);
+}
+#[test]
+fn actual_setter_success_renews_incoming_guard_without_saved_preferences() {
+    set_option("mixel-support-invite-attended".to_owned(), "Y".to_owned());
+    TRACE.with(|trace| {
+        assert_eq!(trace.borrow().effects, ["attended-guard"]);
+        assert_eq!(trace.borrow().renewals, [("mixel-support-invite-attended".to_owned(), "Y".to_owned())]);
+    });
+    assert_eq!(get_option("mixel-support-invite-attended"), "attended-runtime-v2");
+}
+#[test]
+fn actual_setter_failed_owner_still_renews_service_but_readiness_fails_closed() {
+    TRACE.with(|trace| trace.borrow_mut().fail_owner_hold = true);
+    set_option("mixel-support-invite-attended".to_owned(), "Y".to_owned());
+    TRACE.with(|trace| {
+        assert_eq!(trace.borrow().effects, ["attended-guard"]);
+        assert_eq!(trace.borrow().renewals, [("mixel-support-invite-attended".to_owned(), "Y".to_owned())]);
+    });
+    // The service can already attest its memory guard. Local ownership failure
+    // must still prevent the reporter announcing the customer as ready.
+    assert_eq!(get_option("mixel-support-invite-attended"), "guard-unavailable");
+}
+#[test]
+fn actual_setter_successful_retry_restores_readiness_after_owner_failure() {
+    TRACE.with(|trace| trace.borrow_mut().fail_owner_hold = true);
+    set_option("mixel-support-invite-attended".to_owned(), "Y".to_owned());
+    assert_eq!(get_option("mixel-support-invite-attended"), "guard-unavailable");
+    TRACE.with(|trace| trace.borrow_mut().fail_owner_hold = false);
+    set_option("mixel-support-invite-attended".to_owned(), "Y".to_owned());
+    assert_eq!(get_option("mixel-support-invite-attended"), "attended-runtime-v2");
+    TRACE.with(|trace| assert_eq!(trace.borrow().renewals.len(), 2));
+}
+#[test]
+fn actual_setter_nonrenew_values_cannot_revoke_or_persist_attended_guard() {
+    for value in ["", "N", "attended-runtime-v2", "invalid"] {
+        set_option("mixel-support-invite-attended".to_owned(), value.to_owned());
+    }
+    TRACE.with(|trace| {
+        assert!(trace.borrow().effects.is_empty());
+        assert!(trace.borrow().renewals.is_empty());
+    });
+}
+#[test]
+fn actual_setter_ipc_failure_keeps_readiness_unavailable_without_persistence() {
+    TRACE.with(|trace| trace.borrow_mut().ipc_failed = true);
+    set_option("mixel-support-invite-attended".to_owned(), "Y".to_owned());
+    assert_eq!(get_option("mixel-support-invite-attended"), "guard-unavailable");
+    TRACE.with(|trace| {
+        assert_eq!(trace.borrow().effects, ["attended-guard"]);
+        assert_eq!(trace.borrow().renewals.len(), 1);
+    });
+}
+#[test]
+fn unrelated_option_falls_through_to_existing_saved_preference_path() {
+    set_option("approve-mode".to_owned(), "password".to_owned());
+    assert_eq!(get_option("approve-mode"), "saved-fallback");
+    TRACE.with(|trace| assert_eq!(trace.borrow().effects, ["saved-preference-write"]));
 }
 fn linux_startup(args: Vec<String>) -> Option<Vec<String>> {
     let mut flutter_args = Vec::new();
@@ -217,6 +315,7 @@ fn unrelated_outgoing_linux_link_retains_dbus_dispatch_only() {
 '''
     source = source.replace("GENERATED_GUARD_PATH", str(ROOT / "scripts/support-invite-guard.rs").replace("\\", "\\\\"))
     source = source.replace("GENERATED_UPDATER", updater_functions)
+    source = source.replace("GENERATED_ATTENDED_OPTIONS", attended_options)
     source = source.replace("GENERATED_STATUS_STRUCT", status_struct)
     source = source.replace("GENERATED_INITIAL_STATUS", initial_status)
     source = source.replace("GENERATED_ONLINE_UPDATE", online_update)
