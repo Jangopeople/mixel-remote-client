@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real isolated Linux peers: relay, customer consent, video/input, files/recovery.
+"""Real isolated Linux peers: relay, consent, video/input/clipboard, files/recovery.
 
 Never uses direct IP, personal desktops, existing containers, saved customer
 passwords, or IPC authorization. IPC reads supply only independent assertions.
@@ -251,6 +251,26 @@ print(json.dumps(rects[0]))
         print("PASS: exact remote keyboard text + mouse callback reached host using " + ("supported Flutter Input source2" if self.flutter_input else "default native Input source1"), flush=True)
         return state
 
+    def clipboard(self):
+        assert self.query("host", "VideoConnCount") == 1
+        exchanges = []
+        for source, destination in (("controller", "host"), ("host", "controller")):
+            expected = "mixel-synthetic-clipboard-" + source + "-to-" + destination
+            # xclip owns the real X11 CLIPBOARD selection. It forks into the
+            # background; redirect its output so Docker pipes cannot stay open.
+            script = (shlex.join(["printf", "%s", expected])
+                      + " | xclip -selection clipboard -in >/dev/null 2>&1")
+            self.gui(source, ["bash", "-c", script])
+            actual = until(
+                "actual " + source + " to " + destination + " clipboard",
+                lambda: (value if value == expected else None)
+                if (value := self.gui(destination, ["xclip", "-selection", "clipboard", "-out"], check=False).stdout) else None,
+                timeout=30,
+            )
+            exchanges.append({"source": source, "destination": destination, "text": actual})
+        (self.proofs / "clipboard-proof.json").write_text(json.dumps(exchanges, indent=2) + "\n")
+        print("PASS: actual bidirectional remote clipboard matches exact synthetic text on both X11 desktops", flush=True)
+
     def path(self, x, path):
         self.click("controller", x, 180)
         self.gui("controller", ["xdotool", "key", "ctrl+a"])
@@ -408,6 +428,7 @@ def main():
             digest = session.setup(Path(temporary))
             session.connect("initial")
             manifest["host_input"] = session.input()
+            session.clipboard()
             if args.native_blocked:
                 session.active_https_proof()
             session.disconnect()
@@ -415,7 +436,7 @@ def main():
             session.restart_server()
             session.drop()
             manifest["result"] = "passed"
-            print("Result: real Linux consent/video/keyboard/mouse/file/restart/reconnect session passed", flush=True)
+            print("Result: real Linux consent/video/keyboard/mouse/clipboard/file/restart/reconnect session passed", flush=True)
         finally:
             try:
                 cleanup_errors = session.cleanup()
