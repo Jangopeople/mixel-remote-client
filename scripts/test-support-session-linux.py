@@ -105,7 +105,7 @@ class Session:
         pattern = "^" + self.ids["controller"] + ".*Mixel-Remote$"
         return until("real customer connection manager", lambda: next(iter(self.windows("host", pattern, False)), None))
 
-    def accept(self, label):
+    def pending_accept(self, label):
         window = self.cm()
         self.activate("host", window)
         time.sleep(.7)
@@ -121,6 +121,10 @@ class Session:
         until(label + " actual unauthorized Accept UI", pending)
         self.screenshot("host", label + "-customer-accept")
         print("PASS: " + label + " real CM remains unauthorized with visible Accept before customer click", flush=True)
+        return box
+
+    def accept(self, label):
+        box = self.pending_accept(label)
         # Actual visible CM button; never send an Authorize IPC message.
         self.click("host", box["X"] + box["WIDTH"] * .27, box["Y"] + box["HEIGHT"] - 31)
 
@@ -136,6 +140,25 @@ class Session:
     def online(self, role):
         state = self.query(role, "OnlineStatus")
         return state if isinstance(state, list) and state[0] > 0 and state[1] is True else None
+
+    def health(self, role):
+        # Reuse independent smoke assertions for the attended host: real owner
+        # PID, relay/key/options, native endpoint, ID, service key confirmation.
+        code = ("import sys,json;sys.path.insert(0,'/payload');"
+                "from ipc_probe import runtime_health;print(json.dumps(runtime_health("
+                + str(self.server[role]) + ")))")
+        state = json.loads(self.run(role, ["python3", "-c", code]).stdout)
+        return state if state[0] > 0 and state[1] is True else None
+
+    def active_https_proof(self):
+        assert self.query("host", "VideoConnCount") == 1
+        for role in self.names:
+            sockets = self.run(role, ["ss", "-tnp"]).stdout
+            (self.proofs / role / "active-encrypted-video-tcp.txt").write_text(sockets)
+            established = [line for line in sockets.splitlines() if line.startswith("ESTAB")]
+            assert not any(re.search(r":2111[5-9]\s", line) for line in established), "Blocked native relay connection established"
+            assert sum(":443" in line for line in established) >= 2, "Active forced relay plus registration did not establish TLS443 sockets"
+        print("PASS: actual authenticated forced-relay video/input active with native21115-21119 blocked; both peers have TLS443 registration+session sockets", flush=True)
 
     def start_gui(self, role):
         self.gui_pid[role] = self.launch(role, [URI] if role == "host" else [])
@@ -158,13 +181,18 @@ for name in os.listdir('/proc'):
         time.sleep(.6)
         self.start_gui("controller")
 
-    def connect(self, label):
+    def request(self, label):
         assert self.query("host", "VideoConnCount") == 0
         self.launch("controller", ["--connect", self.ids["host"], "--relay"])
         until("pending consent CM", self.cm)
         time.sleep(1)
         assert self.query("host", "VideoConnCount") == 0, "Password/recent session bypassed customer consent"
         self.screenshot("controller", label + "-before-accept")
+        self.pending_accept(label)
+
+    def connect(self, label, already_requested=False):
+        if not already_requested:
+            self.request(label)
         self.accept(label)
         until("explicit customer acceptance", lambda: self.query("host", "VideoConnCount") == 1)
         for window in self.windows("host", "^Mixel-Remote$"):
@@ -262,11 +290,16 @@ print(json.dumps(rects[0]))
             until("new native service IPC PID", lambda: self.run("host", ["cat", "/tmp/Mixel-Remote/ipc.pid"]).stdout.strip() == str(self.server["host"]))
             assert self.query("host", "Config", ["mixel-support-invite-attended", None]) == ["mixel-support-invite-attended", "attended-runtime-v2"], "Restarted service lost consent before heartbeat"
             assert self.query("host", "VideoConnCount") == 0
-            print("PASS: fresh native incoming process keeps v2 consent while UI heartbeat is SIGSTOP paused", flush=True)
+            until("native incoming process registered after restart", lambda: self.health("host"))
+            # CM is its own process. Keep the foreground owner paused through
+            # new login and visible unauthorized CM so no heartbeat can mask a
+            # service restart which lost the kernel-owned consent requirement.
+            self.request("service-restart-heartbeat-paused")
+            assert self.query("host", "VideoConnCount") == 0
+            print("PASS: fresh native incoming process requires real customer Accept for a new session while foreground UI heartbeat is SIGSTOP paused", flush=True)
         finally:
             self.run("host", ["kill", "-CONT", str(self.gui_pid["host"])], check=False)
-        until("native incoming process registered after restart", lambda: self.online("host"))
-        self.connect("service-restart")
+        self.connect("service-restart", already_requested=True)
         self.video_map("service-restart-video")
         self.disconnect()
 
@@ -341,6 +374,14 @@ print(json.dumps(rects[0]))
             until(role + " registered ID and verified relay key", lambda: self.online(role), timeout=90)
             self.ids[role] = self.query(role, "Config", ["id", None])[1]
             self.start_gui(role)
+            if role == "host":
+                until("independent host IPC/relay/pin/ID proof", lambda: self.health(role))
+            else:
+                assert self.run(role, ["cat", "/tmp/Mixel-Remote/ipc.pid"]).stdout.strip() == str(self.server[role])
+                options = self.query(role, "Options")
+                for key, value in {"custom-rendezvous-server": "rs.mixel.ch", "relay-server": "rs.mixel.ch", "key": "OogSlDx9l+fgs0t6ihF3uTg9emyCv01m8cr4ullarRo="}.items():
+                    assert options.get(key) == value, "Controller branded relay/pin changed"
+                assert "mixel-support-invite-attended" not in options
         self.gui("controller", ["bash", "-c", 'xdotool search --name "Mixel isolated customer desktop" windowminimize'])
         return expected_hash
 
@@ -367,16 +408,12 @@ def main():
             digest = session.setup(Path(temporary))
             session.connect("initial")
             manifest["host_input"] = session.input()
+            if args.native_blocked:
+                session.active_https_proof()
             session.disconnect()
             session.files(digest)
             session.restart_server()
             session.drop()
-            if args.native_blocked:
-                for role in session.names:
-                    sockets = session.run(role, ["ss", "-tn"]).stdout
-                    assert ":443" in sockets, "HTTPS transport did not establish a TLS443 socket"
-                    assert not re.search(r":2111[5-9]\s", sockets), "Blocked native relay connection still established"
-                print("PASS: native21115-21119 blocked; real verified-key relay session survives on TLS443", flush=True)
             manifest["result"] = "passed"
             print("Result: real Linux consent/video/keyboard/mouse/file/restart/reconnect session passed", flush=True)
         finally:
