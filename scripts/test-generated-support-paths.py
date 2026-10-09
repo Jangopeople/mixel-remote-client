@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from sdk_discovery import find_dart
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -105,7 +106,7 @@ mod hbb_common {
     }
     pub mod password_security {
         pub use crate::real_guard::is_support_invite_arg;
-        pub fn renew_support_invite_attended() { crate::effect("attended-guard"); }
+        pub fn hold_support_invite_attended_lease() -> bool { crate::effect("attended-guard"); true }
     }
 }
 #[allow(dead_code)]
@@ -420,7 +421,7 @@ Future<void> main() async {
 
 def main() -> None:
     rustc = os.environ.get("RUSTC_BIN") or shutil.which("rustc")
-    dart = os.environ.get("DART_BIN") or shutil.which("dart")
+    dart = find_dart()
     if not rustc or not dart:
         raise SystemExit("Rust and Dart required: set RUSTC_BIN/DART_BIN or put both on PATH")
     with tempfile.TemporaryDirectory(prefix="mixel-generated-support-") as temporary:

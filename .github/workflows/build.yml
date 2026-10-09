@@ -172,10 +172,6 @@ jobs:
           targets: x86_64-unknown-linux-gnu
           components: rustfmt
 
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: rustdesk
-
       - name: Install Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -198,6 +194,10 @@ jobs:
           git clone --depth 1 --branch "${UPSTREAM_VERSION}" --recurse-submodules \
             https://github.com/rustdesk/rustdesk.git rustdesk
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rustdesk
+
       - name: Apply Mixel-Remote branding
         run: ./scripts/apply-branding.sh
         env:
@@ -217,6 +217,11 @@ jobs:
         run: |
           python3 scripts/test-support-invite.py
           python3 scripts/test-generated-support-paths.py
+          python3 scripts/test-support-lease.py
+          python3 scripts/test-support-network.py
+          python3 scripts/test-secure-support.py
+          python3 scripts/test-support-linux.py
+          python3 scripts/test-support-input.py
           dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart
           dart scripts/test-support-invite.dart
 
@@ -252,6 +257,28 @@ jobs:
           name: linux
           path: dist/
           if-no-files-found: error
+
+      - name: Prove actual relay support session on two native Linux desktops
+        run: |
+          mkdir -p artifacts
+          python3 scripts/test-support-session-linux.py \
+            --deb "dist/mixel-remote-${UPSTREAM_VERSION}-x86_64.deb" \
+            --proofs artifacts/linux-native --require-native | tee artifacts/linux-native.log
+
+      - name: Prove HTTPS support with native relay ports blocked
+        if: ${{ !cancelled() && steps.locate.outcome == 'success' }}
+        run: |
+          mkdir -p artifacts
+          python3 scripts/test-support-session-linux.py \
+            --deb "dist/mixel-remote-${UPSTREAM_VERSION}-x86_64.deb" \
+            --proofs artifacts/linux-https --require-native --native-blocked | tee artifacts/linux-https.log
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-support-session-proof
+          path: artifacts/
+          if-no-files-found: warn
 
   # ===========================================================================
   # macOS — arm64 + x86_64 on macos-14 (macos-13 runners starve / never start).
@@ -297,11 +324,6 @@ jobs:
           targets: ${{ matrix.job.target }}
           components: rustfmt
 
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: rustdesk
-          prefix-key: macos-14-${{ matrix.job.arch }}
-
       - name: Install Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -324,6 +346,11 @@ jobs:
           rm -rf rustdesk
           git clone --depth 1 --branch "${UPSTREAM_VERSION}" --recurse-submodules \
             https://github.com/rustdesk/rustdesk.git rustdesk
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rustdesk
+          prefix-key: macos-14-${{ matrix.job.arch }}
 
       - name: Apply Mixel-Remote branding
         run: ./scripts/apply-branding.sh
@@ -352,6 +379,11 @@ jobs:
         run: |
           python3 scripts/test-support-invite.py
           python3 scripts/test-generated-support-paths.py
+          python3 scripts/test-support-lease.py
+          python3 scripts/test-support-network.py
+          python3 scripts/test-secure-support.py
+          python3 scripts/test-support-linux.py
+          python3 scripts/test-support-input.py
           dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart
           dart scripts/test-support-invite.dart
 
@@ -413,8 +445,8 @@ jobs:
           APP_EXECUTABLE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$INFO_PLIST")
           ARCH="${{ matrix.job.arch }}"
           [[ "$ARCH" != "aarch64" ]] || ARCH=arm64
-          lipo -verify_arch "$ARCH" "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE"
-          lipo -verify_arch "$ARCH" "$APP_PATH/Contents/Frameworks/liblibrustdesk.dylib"
+          lipo "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE" -verify_arch "$ARCH"
+          lipo "$APP_PATH/Contents/Frameworks/liblibrustdesk.dylib" -verify_arch "$ARCH"
           if [[ "${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || inputs.publish_r2 }}" == "true" && -z "${APPLE_CERT_P12_BASE64:-}" ]]; then
             echo "Publication requires a signed and notarized macOS app" >&2
             exit 1
@@ -578,6 +610,11 @@ jobs:
         run: |
           python scripts/test-support-invite.py
           python scripts/test-generated-support-paths.py
+          python scripts/test-support-lease.py
+          python scripts/test-support-network.py
+          python scripts/test-secure-support.py
+          python scripts/test-support-linux.py
+          python scripts/test-support-input.py
           dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart
           dart scripts/test-support-invite.dart
 
@@ -776,10 +813,16 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - name: Validate artifact-only diagnostic request
+        id: request
+        env:
+          RUNTIME_RUN_ID: ${{ inputs.runtime_artifact_run }}
+          PUBLISH_REQUESTED: ${{ inputs.publish_r2 }}
+        run: python scripts/release-artifacts.py runtime
       - uses: actions/download-artifact@v4
         with:
           name: windows-msix-payload
-          run-id: ${{ github.event.inputs.runtime_artifact_run }}
+          run-id: ${{ steps.request.outputs.run_id }}
           github-token: ${{ github.token }}
           path: signed-payload
       - name: Verify and extract signed payload
@@ -789,6 +832,7 @@ jobs:
           $actual = (Get-FileHash signed-payload/Mixel-Remote-Store-Payload.zip -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($actual -ne $expected) { throw 'Signed payload checksum differs.' }
           Expand-Archive signed-payload/Mixel-Remote-Store-Payload.zip -DestinationPath runtime-client
+          ./scripts/verify-windows-payload.ps1 -Payload runtime-client
       - name: Exercise actual incoming support runtime
         shell: pwsh
         run: |
@@ -881,8 +925,8 @@ jobs:
           APP_EXECUTABLE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$INFO_PLIST")
           ARCH="$EXPECTED_ARCH"
           [[ "$ARCH" != aarch64 ]] || ARCH=arm64
-          lipo -verify_arch "$ARCH" "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE"
-          lipo -verify_arch "$ARCH" "$APP_PATH/Contents/Frameworks/liblibrustdesk.dylib"
+          lipo "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE" -verify_arch "$ARCH"
+          lipo "$APP_PATH/Contents/Frameworks/liblibrustdesk.dylib" -verify_arch "$ARCH"
           codesign --verify --deep --strict --verbose=2 "$APP_PATH"
           xcrun stapler validate "$APP_PATH"
           spctl --assess --type execute --verbose=2 "$APP_PATH"

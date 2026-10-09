@@ -31,7 +31,7 @@ def run_guard_tests(repo: Path, runner=subprocess.run) -> int:
     try:
         manifest.write_bytes(modified.encode("utf-8"))
         command = ["cargo", "test", "--locked", "--release", "--manifest-path", str(repo / "Cargo.toml"),
-                   "-p", "hbb_common", "--no-default-features", "--lib", "mixel_support_invite_tests"]
+                   "-p", "hbb_common", "--no-default-features", "--lib", "mixel_support_"]
         return runner(command, check=False).returncode
     finally:
         # Byte-for-byte restore even if Cargo raises or its tests fail. The

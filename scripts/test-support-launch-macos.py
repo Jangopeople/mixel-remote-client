@@ -141,7 +141,7 @@ def wait_health(pid: int, scenario: str) -> None:
         result = unix.runtime_health(pid)
         return result if result[0] > 0 and result[1] else None
     state, confirmed = wait_for(scenario + " incoming server", ready, pid)
-    print(f"PASS: {scenario} actual incoming IPC proves attended-runtime-v1, branded relay, registered ID, online state={state}, keyConfirmed={str(confirmed).lower()}", flush=True)
+    print(f"PASS: {scenario} actual incoming IPC proves attended-runtime-v2, branded relay, registered ID, online state={state}, keyConfirmed={str(confirmed).lower()}", flush=True)
 
 
 def runtime(app: Path, helper: Path) -> None:

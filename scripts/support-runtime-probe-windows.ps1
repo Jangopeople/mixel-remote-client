@@ -62,7 +62,7 @@ function Get-MixelSupportRuntimeHealth {
   }
   return [pscustomobject]@{
     attendedProof = $guard.c[1]
-    attendedReady = ($guard.c[1] -eq 'attended-runtime-v1')
+    attendedReady = ($guard.c[1] -eq 'attended-runtime-v2')
     rendezvousState = $online.c[0]
     keyConfirmed = $online.c[1]
   }
@@ -76,7 +76,7 @@ function Wait-MixelSupportRuntimeHealth([string]$Scenario, [int]$TimeoutSeconds 
       $health = Get-MixelSupportRuntimeHealth
       $last = $health | ConvertTo-Json -Compress
       if ($health.attendedReady -and (-not $RequireOnline -or ($health.rendezvousState -gt 0 -and $health.keyConfirmed))) {
-        Write-Host "PASS: $Scenario actual incoming IPC proves attended-runtime-v1; rendezvousState=$($health.rendezvousState)."
+        Write-Host "PASS: $Scenario actual incoming IPC proves attended-runtime-v2; rendezvousState=$($health.rendezvousState)."
         return $health
       }
     } catch { $last = $_.Exception.Message }

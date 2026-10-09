@@ -71,8 +71,8 @@ def runtime_health(expected_pid: int) -> tuple[int, bool]:
     if int(IPC_PATH.with_suffix(".pid").read_text(encoding="utf-8").strip()) != expected_pid:
         raise RuntimeError("Incoming support IPC belongs to a different process")
     proof = query("Config", ["mixel-support-invite-attended", None])
-    if proof != ["mixel-support-invite-attended", "attended-runtime-v1"]:
-        raise RuntimeError("Actual incoming support guard did not confirm attended-runtime-v1")
+    if proof != ["mixel-support-invite-attended", "attended-runtime-v2"]:
+        raise RuntimeError("Actual incoming support guard did not confirm attended-runtime-v2")
     state = query("OnlineStatus")
     if not isinstance(state, list) or len(state) != 2 or type(state[0]) is not int or type(state[1]) is not bool:
         raise RuntimeError("Incoming support IPC returned an invalid online state")
@@ -139,7 +139,7 @@ def wait_health(main: subprocess.Popen, scenario: str) -> None:
         lambda: (result if result[0] > 0 and result[1] else None) if (result := runtime_health(main.pid)) else None,
         main,
     )
-    print(f"PASS: {scenario} actual incoming IPC proves attended-runtime-v1, branded relay, registered ID, online state={state}, keyConfirmed={str(confirmed).lower()}", flush=True)
+    print(f"PASS: {scenario} actual incoming IPC proves attended-runtime-v2, branded relay, registered ID, online state={state}, keyConfirmed={str(confirmed).lower()}", flush=True)
 
 
 def stop(process: subprocess.Popen | None) -> None:
@@ -240,14 +240,14 @@ def self_test() -> None:
             listener.bind(str(endpoint))
             listener.listen()
             def serve():
-                for response in ({"t": "Config", "c": ["fixture", "attended-runtime-v1"]}, {"t": "Wrong", "c": None}):
+                for response in ({"t": "Config", "c": ["fixture", "attended-runtime-v2"]}, {"t": "Wrong", "c": None}):
                     with listener.accept()[0] as connection:
                         requests.append(json.loads(read_frame(connection)))
                         for byte in frame(json.dumps(response).encode()):
                             connection.sendall(bytes([byte]))
             worker = threading.Thread(target=serve)
             worker.start()
-            assert query("Config", ["fixture", None], endpoint) == ["fixture", "attended-runtime-v1"]
+            assert query("Config", ["fixture", None], endpoint) == ["fixture", "attended-runtime-v2"]
             try:
                 query("Config", ["fixture", None], endpoint)
                 raise AssertionError("Mismatched IPC response passed")

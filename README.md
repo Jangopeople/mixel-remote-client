@@ -25,9 +25,29 @@ when an invitation is revoked, expired, or superseded. Invite bearer data is
 excluded from diagnostic logs. The consent guard is runtime state and does not
 change saved login preferences.
 
+The foreground customer app owns a process lease that survives an incoming
+service restart. Multiple foreground owners are supported; the last owner's
+exit releases that lease. Readiness requires `attended-runtime-v2`, so an older
+installed component must be updated before a new client announces support ready.
+
+Pinned ID/relay sessions reject missing or invalid peer identity and encryption
+handshakes. They must never downgrade to an unencrypted session after a key or
+protocol error. Intentional direct IP/LAN connections retain upstream behavior.
+
+Normal networks use native transport first. When Mixel's native registration or
+TCP ports fail, clients retry the exact `rs.mixel.ch` relay over certificate-verified
+HTTPS on port 443. The fallback is runtime state and preserves saved server/proxy
+settings. It cannot bypass an organization's explicit proxy or application policy.
+
 Windows QuickSupport double-click launches also maintain the runtime consent
 guard. Linux uses a Mixel-specific DBus name so installed stock RustDesk cannot
 consume a Mixel invitation. A cold Linux invitation starts the incoming service.
+Linux packages explicitly install the OpenGL/EGL/GLES libraries and software
+renderer. A valid nonroot X11 desktop without `logind` can display customer Accept
+and resolve the account for file transfer instead of waiting forever; root and
+genuine login-screen contexts remain guarded. A local override of the exact locked
+input dependency preserves active X11 keyboard capture when signals interrupt
+event polling. The override rejects revision drift and unrelated modifications.
 
 Mixel clients must never update from the stock RustDesk update manifest. Native
 and UI updater entry points are disabled for custom Mixel clients; releases come
@@ -63,6 +83,11 @@ With a fresh pinned checkout (including submodules) at `rustdesk/`, run:
 ```sh
 python3 scripts/test-support-invite.py
 python3 scripts/test-generated-support-paths.py
+python3 scripts/test-support-network.py
+python3 scripts/test-secure-support.py
+python3 scripts/test-support-linux.py
+python3 scripts/test-support-input.py
+python3 scripts/test-support-lease.py
 dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart
 dart scripts/test-support-invite.dart
 python3 scripts/test-release-pipeline.py

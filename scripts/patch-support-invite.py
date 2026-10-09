@@ -62,7 +62,7 @@ Future<bool> _renewSupportInviteAttended() async {
         timeout: const Duration(seconds: 20));
       return true;
     });
-    return proof == 'attended-runtime-v1';
+    return proof == 'attended-runtime-v2';
   } catch (_) {
     return false;
   } finally {
@@ -208,8 +208,23 @@ password.write_text(text, encoding="utf-8")
 
 ui = rdrepo / "src/ui_interface.rs"
 text = ui.read_text(encoding="utf-8")
+# Regenerate this complete owned branch when upgrading older branded source.
+# Its closing brace has exactly four spaces; nested branches have eight.
+for signature, branch in (
+    ("pub fn get_option<T: AsRef<str>>(key: T) -> String {\n", '    if key.as_ref() == "mixel-support-invite-attended" {\n'),
+    ("pub fn set_option(key: String, value: String) {\n", '    if key == "mixel-support-invite-attended" {\n'),
+):
+    start = text.index(signature) + len(signature)
+    if text.startswith(branch, start):
+        closing = re.search(r"(?m)^    }\n", text[start:])
+        if closing is None:
+            raise SystemExit("Could not find owned attended option branch")
+        text = text[:start] + text[start + closing.end():]
 text = replace_once(text, "pub fn get_option<T: AsRef<str>>(key: T) -> String {\n", """pub fn get_option<T: AsRef<str>>(key: T) -> String {
     if key.as_ref() == "mixel-support-invite-attended" {
+        if hbb_common::password_security::support_invite_owner_lease_failed() {
+            return "guard-unavailable".to_owned();
+        }
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         {
             return match ipc::get_config("mixel-support-invite-attended") {
@@ -246,7 +261,11 @@ text = replace_once(text, """        let map = OPTIONS.lock().unwrap();
 text = replace_once(text, "pub fn set_option(key: String, value: String) {\n", """pub fn set_option(key: String, value: String) {
     if key == "mixel-support-invite-attended" {
         if value == "Y" {
-            hbb_common::password_security::renew_support_invite_attended();
+            // Only this foreground caller owns the process lease. The service
+            // heartbeat handler must remain memory-only across IPC.
+            if !hbb_common::password_security::hold_support_invite_attended_lease() {
+                return;
+            }
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             ipc::set_config("mixel-support-invite-attended", value).ok();
         }
@@ -528,6 +547,11 @@ connection.write_text(text, encoding="utf-8")
 # connection command, so the same server/portable startup must run for it.
 core = rdrepo / "src/core_main.rs"
 text = core.read_text(encoding="utf-8")
+# Upgrade the two earlier foreground bootstrap arms to own the kernel lease.
+text = text.replace(
+    "hbb_common::password_security::renew_support_invite_attended();",
+    "hbb_common::password_security::hold_support_invite_attended_lease();",
+)
 bootstrap_before = """        i += 1;
     }
     #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -539,7 +563,7 @@ bootstrap_after = """        i += 1;
         .unwrap_or(false);
     if _is_mixel_support_invite {
         // Arm before the incoming server starts, not after asynchronous UI init.
-        hbb_common::password_security::renew_support_invite_attended();
+        hbb_common::password_security::hold_support_invite_attended_lease();
     }
     #[cfg(any(target_os = "linux", target_os = "windows"))]
 """
@@ -574,7 +598,7 @@ text = replace_once(text,
     "        crate::portable_service::client::set_quick_support(_is_quick_support);\n",
     """        crate::portable_service::client::set_quick_support(_is_quick_support);
         if _is_quick_support {
-            hbb_common::password_security::renew_support_invite_attended();
+            hbb_common::password_security::hold_support_invite_attended_lease();
             #[cfg(feature = "flutter")]
             flutter_args.push("--mixel-attended".to_owned());
         }

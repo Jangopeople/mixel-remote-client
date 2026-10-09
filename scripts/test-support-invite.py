@@ -8,10 +8,11 @@ import subprocess
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
+from sdk_discovery import find_dart
 
 root = Path(__file__).resolve().parents[1]
 upstream = Path(os.environ.get("RDREPO", root / "rustdesk"))
-dart = os.environ.get("DART_BIN") or shutil.which("dart")
+dart = find_dart()
 if not dart:
     raise SystemExit("Dart SDK required: put dart on PATH or set DART_BIN")
 targets = [
@@ -113,7 +114,10 @@ runpy.run_path(sys.argv[1], run_name='__main__')
     assert "let support_request =" not in first["src/common.rs"].split("pub async fn http_request_sync(", 1)[0], "unrelated POST transport stays unchanged"
     assert "true, value.as_deref()).to_owned()" in first["src/ui_interface.rs"]
     assert "crate::common::is_server_running()" not in first["src/ui_interface.rs"].split("pub fn get_option<T: AsRef<str>>(key: T) -> String {", 1)[1].split("effective_support_approve_mode", 1)[0]
-    assert "proof == 'attended-runtime-v1'" in common
+    assert "proof == 'attended-runtime-v2'" in common
+    assert "support_invite_owner_lease_failed()" in first["src/ui_interface.rs"]
+    assert "hold_support_invite_attended_lease()" in first["src/ui_interface.rs"]
+    assert "hold_support_invite_attended_lease" not in first["src/ipc.rs"], "incoming service heartbeat must not own a foreground lease"
     assert "_supportInviteCompatibilityNotice.showIfRequired" in common
     assert "!bind.isCustomClient() && bind.mainIsInstalled()" in first["flutter/lib/desktop/pages/desktop_setting_page.dart"]
     updater = first["src/updater.rs"]
@@ -140,7 +144,7 @@ runpy.run_path(sys.argv[1], run_name='__main__')
     core = first["src/core_main.rs"]
     assert "if args.is_empty() || _is_mixel_support_invite || crate::common::is_empty_uni_link(&args[0])" in core
     assert core.count("(args.is_empty() || _is_mixel_support_invite)") == 2, "support URI must start portable service too"
-    assert core.index("renew_support_invite_attended();") < core.index("crate::start_server(false, no_server)"), "arm attended mode before receiving connections"
+    assert core.index("hold_support_invite_attended_lease();") < core.index("crate::start_server(false, no_server)"), "arm attended mode before receiving connections"
     linux_dispatch = core.split("// linux uni (url) go here.", 1)[1].split("#[cfg(windows)]", 1)[0]
     assert "if _is_mixel_support_invite" in linux_dispatch
     assert "flutter_args.extend(args.iter().cloned());" in core

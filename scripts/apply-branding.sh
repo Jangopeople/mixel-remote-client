@@ -28,6 +28,10 @@ echo "→ Applying branding: $APP_NAME ($MACOS_BUNDLE_ID) on top of RustDesk $UP
 
 # Install the customer-consented support invite handoff in each fresh upstream checkout.
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-invite.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-secure-support.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-network.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-linux.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-input.py"
 
 # 1. custom.txt — RustDesk's build-time branding override file.
 cp "$BRANDING/custom.txt" "$RDREPO/custom.txt"
@@ -509,6 +513,16 @@ new_dylib = '''_target = os.environ.get("CARGO_BUILD_TARGET")
         shutil.copy2(f"{_prefix}/liblibrustdesk.dylib", "target/release/librustdesk.dylib")'''
 
 code = code.replace(old_dylib, new_dylib)
+
+# Flutter dynamically opens EGL/GLES in addition to GTK's GL context. A minimal
+# desktop can otherwise launch a black window. Mesa's DRI driver is an explicit
+# dependency because libegl-mesa0 does not depend on the software renderer.
+old_graphics = 'Depends: libgtk-3-0, libxcb-randr0,'
+new_graphics = 'Depends: libgtk-3-0, libegl1, libgl1, libgles2, libgl1-mesa-dri, libxcb-randr0,'
+if new_graphics not in code:
+    if code.count(old_graphics) != 1:
+        raise RuntimeError('Pinned upstream Debian graphics dependencies changed')
+    code = code.replace(old_graphics, new_graphics, 1)
 code = code.replace(
     "'cp -rf ../target/release/service ",
     "f'cp -rf ../target/{os.environ.get(\"CARGO_BUILD_TARGET\") + \"/\" if os.environ.get(\"CARGO_BUILD_TARGET\") else \"\"}release/service "
@@ -856,6 +870,7 @@ require_string src/server/dbus.rs "const DBUS_NAME: &str = \"$MACOS_BUNDLE_ID\";
 require_string res/rustdesk-link.desktop "MimeType=x-scheme-handler/$APP_NAME_KEBAB;"
 require_string res/rustdesk-link.desktop "Exec=$APP_NAME_KEBAB %u"
 require_string res/DEBIAN/postinst "rm -f /etc/systemd/system/${APP_NAME_KEBAB}.service /usr/lib/systemd/system/${APP_NAME_KEBAB}.service /usr/lib/systemd/user/${APP_NAME_KEBAB}.service"
+require_string build.py "Depends: libgtk-3-0, libegl1, libgl1, libgles2, libgl1-mesa-dri, libxcb-randr0,"
 require_string flutter/macos/Runner/Info.plist "<string>$APP_NAME_KEBAB</string>"
 require_string flutter/lib/common.dart "registerProtocol('$APP_NAME_KEBAB');"
 require_string libs/hbb_common/src/config.rs "(\"custom-rendezvous-server\".to_owned(), \"${RENDEZVOUS_SERVER}\".to_owned())"

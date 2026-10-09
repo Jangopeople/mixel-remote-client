@@ -90,7 +90,7 @@ public static class MixelSupportProbeFixture {
 }
 '@ }
 
-$guard = '{"t":"Config","c":["mixel-support-invite-attended","attended-runtime-v1"]}'
+$guard = '{"t":"Config","c":["mixel-support-invite-attended","attended-runtime-v2"]}'
 $online = '{"t":"OnlineStatus","c":[1,true]}'
 $fixture = [MixelSupportProbeFixture]::Serve(@($guard, $online))
 $health = Get-MixelSupportRuntimeHealth

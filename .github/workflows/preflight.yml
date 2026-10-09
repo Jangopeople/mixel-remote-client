@@ -15,7 +15,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Run release staging and configuration regression tests
-        run: python3 scripts/test-release-pipeline.py
+        run: |
+          python3 scripts/test-release-pipeline.py
+          python3 scripts/test-sdk-discovery.py
       - name: Exercise Unix runtime IPC and window probe self-tests
         run: python3 scripts/test-support-launch-linux.py --self-test
       - name: Parse all Python source
@@ -52,6 +54,11 @@ jobs:
         run: |
           python3 scripts/test-support-invite.py
           python3 scripts/test-generated-support-paths.py
+          python3 scripts/test-support-lease.py
+          python3 scripts/test-support-network.py
+          python3 scripts/test-secure-support.py
+          python3 scripts/test-support-linux.py
+          python3 scripts/test-support-input.py
           dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart
           dart scripts/test-support-invite.dart
   macos-runtime-harness:
