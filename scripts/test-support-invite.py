@@ -49,15 +49,15 @@ with tempfile.TemporaryDirectory(prefix="mixel-support-patch-") as tmp:
     # Simulate Windows CP1252 as the implicit text IO encoding. All source must
     # remain valid UTF-8, including French accents and the typographic apostrophe.
     windows_encoding_runner = """
-import io
 import runpy
 import sys
-original_open = io.open
-def windows_default_open(file, mode='r', buffering=-1, encoding=None, *args, **kwargs):
+from pathlib import Path
+original_open = Path.open
+def windows_default_open(self, mode='r', buffering=-1, encoding=None, *args, **kwargs):
     if 'b' not in mode and encoding in (None, 'locale'):
         encoding = 'cp1252'
-    return original_open(file, mode, buffering, encoding, *args, **kwargs)
-io.open = windows_default_open
+    return original_open(self, mode, buffering, encoding, *args, **kwargs)
+Path.open = windows_default_open
 runpy.run_path(sys.argv[1], run_name='__main__')
 """
     patched = subprocess.run([sys.executable, "-c", windows_encoding_runner, str(patcher)], env=env, capture_output=True, text=True, encoding="utf-8")

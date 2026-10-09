@@ -64,7 +64,7 @@ def native_runner(repo: Path, rustc: str) -> None:
     )
     start = core.index("    let _is_mixel_support_invite = args.first()")
     classification = core[start:core.index('    #[cfg(any(target_os = "linux", target_os = "windows"))]', start)]
-    start = core.index("    if args.len() > 0 && args[0].starts_with(&crate::get_uri_prefix())")
+    start = core.index("    if args.len() > 0 && args[0].to_ascii_lowercase().starts_with(&crate::get_uri_prefix().to_ascii_lowercase())")
     dispatch = core[start:core.index("    #[cfg(windows)]", start)]
     start = core.index("    if args.is_empty() || _is_mixel_support_invite || crate::common::is_empty_uni_link(&args[0]) {")
     incoming = core[start:core.index("    } else {", start)] + "    }\n"
@@ -188,7 +188,13 @@ fn linux_warm_support_link_dispatches_without_starting_duplicate_server() {
 fn linux_uppercase_support_link_keeps_its_native_incoming_handoff() {
     let uri = "MIXEL-REMOTE://SUPPORT/?invite=synthetic".to_owned();
     assert_eq!(linux_startup(vec![uri.clone()]), Some(vec![uri]));
-    TRACE.with(|trace| assert_eq!(trace.borrow().effects, ["attended-guard", "incoming-server"]));
+    TRACE.with(|trace| assert_eq!(trace.borrow().effects, ["attended-guard", "dbus", "incoming-server"]));
+}
+#[test]
+fn linux_uppercase_warm_support_link_dispatches_without_duplicate_startup() {
+    TRACE.with(|trace| trace.borrow_mut().warm = true);
+    assert_eq!(linux_startup(vec!["MIXEL-REMOTE://SUPPORT/?invite=synthetic".to_owned()]), None);
+    TRACE.with(|trace| assert_eq!(trace.borrow().effects, ["attended-guard", "dbus"]));
 }
 #[test]
 fn linux_direct_cli_support_handoff_reaches_flutter_without_uri_dispatch() {

@@ -26,6 +26,12 @@ def selected_platforms(value: str) -> tuple[str, ...]:
     return tuple(part for part in PLATFORMS if part in values)
 
 
+def validate_runtime_run_id(value: str) -> str:
+    if not re.fullmatch(r"[1-9][0-9]{0,19}", value):
+        raise ValueError("Runtime diagnostic run ID must contain only positive decimal digits")
+    return value
+
+
 def resolve_config(branding: Path, override: str, only: str) -> dict[str, str]:
     matches = re.findall(r"(?m)^UPSTREAM_VERSION=(.+)$", branding.read_text(encoding="utf-8"))
     if len(matches) != 1:
@@ -92,6 +98,7 @@ def main() -> None:
     staging = commands.add_parser("stage")
     staging.add_argument("--source", type=Path, default=Path("artifacts"))
     staging.add_argument("--destination", type=Path, default=Path("dist"))
+    commands.add_parser("runtime")
     args = parser.parse_args()
     if args.command == "config":
         values = resolve_config(args.branding, os.environ.get("INPUT_UPSTREAM_VERSION", ""), os.environ.get("INPUT_ONLY", ""))
@@ -100,6 +107,13 @@ def main() -> None:
             for key, value in values.items():
                 output.write(f"{key}={value}\n")
         print(f"PASS: validated upstream {values['upstream_version']}; selected {values['platforms']}")
+    elif args.command == "runtime":
+        run_id = validate_runtime_run_id(os.environ["RUNTIME_RUN_ID"])
+        if os.environ.get("PUBLISH_REQUESTED") == "true":
+            raise ValueError("Artifact runtime diagnostics require publish_r2=false")
+        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+            output.write(f"run_id={run_id}\n")
+        print("PASS: validated artifact-only runtime diagnostic request")
     else:
         manifest = stage_artifacts(args.source, args.destination, os.environ["UPSTREAM_VERSION"], os.environ["SELECTED_PLATFORMS"])
         print(f"PASS: staged {len(manifest['files'])} exact release artifacts and SHA256 manifest")

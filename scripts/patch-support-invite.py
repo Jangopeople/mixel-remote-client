@@ -559,6 +559,10 @@ text = replace_once(text, """    if !crate::platform::is_installed()
 text = replace_once(text, "    if args.is_empty() || crate::common::is_empty_uni_link(&args[0]) {\n", "    if args.is_empty() || _is_mixel_support_invite || crate::common::is_empty_uni_link(&args[0]) {\n", "support URI incoming rendezvous/server startup")
 # Linux tries to dispatch to an existing window before normal server startup.
 # On a cold launch, continue through startup and keep the original URI for Dart.
+text = replace_once(text,
+    "    if args.len() > 0 && args[0].starts_with(&crate::get_uri_prefix()) {\n",
+    "    if args.len() > 0 && args[0].to_ascii_lowercase().starts_with(&crate::get_uri_prefix().to_ascii_lowercase()) {\n",
+    "normalized Linux protocol activation")
 text = replace_once(text, """        return try_send_by_dbus(args[0].clone());
 """, """        if _is_mixel_support_invite {
             if try_send_by_dbus(args[0].clone()).is_none() { return None; }

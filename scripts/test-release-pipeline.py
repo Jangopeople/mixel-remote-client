@@ -55,6 +55,20 @@ class ReleasePipelineTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 release.validate_version(value)
 
+    def test_runtime_run_id_rejects_non_digits_and_zero(self):
+        self.assertEqual(release.validate_runtime_run_id("37916407292"), "37916407292")
+        for value in ("0", "", " 37916407292", "37916407292\n", "-1", "1;id", "1$(id)", "1" * 21):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                release.validate_runtime_run_id(value)
+
+    def test_runtime_diagnostic_cannot_request_publication(self):
+        output = self.root / "runtime-output"
+        result = subprocess.run([sys.executable, str(ROOT / "scripts/release-artifacts.py"), "runtime"],
+                                env={**os.environ, "GITHUB_OUTPUT": str(output), "RUNTIME_RUN_ID": "37916407292", "PUBLISH_REQUESTED": "true"},
+                                capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(output.exists())
+
     def test_config_cli_treats_override_as_data(self):
         output = self.root / "github-output"
         marker = self.root / "must-not-exist"

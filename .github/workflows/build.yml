@@ -22,6 +22,10 @@ on:
         description: "Read-only runtime diagnostic using an existing signed payload run (empty = build)"
         required: false
         default: ""
+      runtime_macos_artifact_run:
+        description: "Artifact-only macOS runtime diagnostic using an existing signed DMG run (empty = build)"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -38,7 +42,7 @@ jobs:
   # workflow_dispatch overrides it).
   # ===========================================================================
   config:
-    if: ${{ github.event.inputs.runtime_artifact_run == '' }}
+    if: ${{ github.event.inputs.runtime_artifact_run == '' && github.event.inputs.runtime_macos_artifact_run == '' }}
     runs-on: ubuntu-22.04
     outputs:
       upstream_version: ${{ steps.ver.outputs.upstream_version }}
@@ -449,6 +453,10 @@ jobs:
             xcrun stapler validate "$APP_PATH"
             spctl --assess --type execute --verbose=2 "$APP_PATH"
 
+            # Exercise this exact signed/stapled app through real URL activation
+            # before it becomes a downloadable installer.
+            python3 ../scripts/test-support-launch-macos.py --app "$APP_PATH"
+
             # 3) Package stapled .app into DMG, then sign/notarize/staple DMG.
             create-dmg --window-size 800 400 \
               --icon "Mixel-Remote.app" 200 190 \
@@ -801,4 +809,86 @@ jobs:
         if: always()
         with:
           name: support-runtime-diagnostics
+          path: runtime-diagnostics/
+
+  runtime-macos:
+    if: ${{ github.event.inputs.runtime_macos_artifact_run != '' }}
+    permissions:
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [aarch64, x86_64]
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate artifact-only diagnostic request
+        id: request
+        env:
+          RUNTIME_RUN_ID: ${{ inputs.runtime_macos_artifact_run }}
+          PUBLISH_REQUESTED: ${{ inputs.publish_r2 }}
+        run: python3 scripts/release-artifacts.py runtime
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}
+          run-id: ${{ steps.request.outputs.run_id }}
+          github-token: ${{ github.token }}
+          path: runtime-artifacts
+      - name: Enable Intel runtime when using Apple Silicon
+        if: matrix.arch == 'x86_64'
+        run: |
+          if [[ "$(uname -m)" == arm64 ]]; then
+            softwareupdate --install-rosetta --agree-to-license
+          fi
+      - name: Verify signed DMG and exercise its actual macOS application
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          DMGS=(runtime-artifacts/mixel-remote-*-"${EXPECTED_ARCH}".dmg)
+          if [[ ${#DMGS[@]} -ne 1 || ! -s "${DMGS[0]}" ]]; then
+            echo "Expected exactly one nonempty signed DMG for $EXPECTED_ARCH" >&2
+            exit 1
+          fi
+          DMG="${DMGS[0]}"
+          codesign --verify --strict --verbose=2 "$DMG"
+          xcrun stapler validate "$DMG"
+          spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG"
+          WORK="$(mktemp -d "${RUNNER_TEMP}/mixel-macos-runtime.XXXXXX")"
+          MOUNT="$WORK/mount"
+          MOUNTED=false
+          cleanup() {
+            if [[ "$MOUNTED" == true ]]; then
+              hdiutil detach "$MOUNT" -quiet || hdiutil detach "$MOUNT" -force -quiet
+            fi
+            rm -rf "$WORK"
+          }
+          trap cleanup EXIT
+          mkdir -p "$MOUNT" runtime-diagnostics
+          hdiutil attach "$DMG" -mountpoint "$MOUNT" -nobrowse -readonly -quiet
+          MOUNTED=true
+          [[ -d "$MOUNT/Mixel-Remote.app" ]] || { echo "Signed DMG contains no Mixel-Remote.app" >&2; exit 1; }
+          APP_PATH="$WORK/Mixel-Remote.app"
+          ditto "$MOUNT/Mixel-Remote.app" "$APP_PATH"
+          hdiutil detach "$MOUNT" -quiet
+          MOUNTED=false
+          INFO_PLIST="$APP_PATH/Contents/Info.plist"
+          BUNDLE_ID=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$INFO_PLIST")
+          [[ "$BUNDLE_ID" == ch.mixel.remote ]] || { echo "Unexpected macOS bundle identity" >&2; exit 1; }
+          APP_EXECUTABLE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$INFO_PLIST")
+          ARCH="$EXPECTED_ARCH"
+          [[ "$ARCH" != aarch64 ]] || ARCH=arm64
+          lipo -verify_arch "$ARCH" "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE"
+          lipo -verify_arch "$ARCH" "$APP_PATH/Contents/Frameworks/liblibrustdesk.dylib"
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+          xcrun stapler validate "$APP_PATH"
+          spctl --assess --type execute --verbose=2 "$APP_PATH"
+          python3 scripts/test-support-launch-macos.py --app "$APP_PATH" | tee "runtime-diagnostics/macos-${EXPECTED_ARCH}.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-support-runtime-diagnostics-${{ matrix.arch }}
           path: runtime-diagnostics/
