@@ -947,6 +947,9 @@ jobs:
 
   runtime-linux:
     if: ${{ github.event.inputs.runtime_linux_artifact_run != '' }}
+    permissions:
+      actions: read
+      contents: read
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     strategy:
