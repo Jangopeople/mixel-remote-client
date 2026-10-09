@@ -12,6 +12,9 @@ set -euo pipefail
 
 RDREPO="${RDREPO:-./rustdesk}"
 BRANDING="${BRANDING:-./branding}"
+# The Python handoff patch must use the same checkout as the shell patches,
+# including when this script is invoked from a different working directory.
+export RDREPO
 
 if [[ ! -d "$RDREPO" ]]; then
   echo "❌ RustDesk source not found at $RDREPO" >&2
@@ -353,6 +356,24 @@ for cmake in \
   fi
 done
 
+# Linux's native GTK window is visible before Dart finishes initialising. Its
+# icon lookup must use the icon installed by the branded Debian package.
+patch_string flutter/linux/my_application.cc \
+  'gtk_icon_theme_load_icon(theme, "rustdesk",' \
+  "gtk_icon_theme_load_icon(theme, \"$APP_NAME_KEBAB\","
+patch_string flutter/linux/my_application.cc \
+  'gtk_header_bar_set_title(header_bar, "rustdesk");' \
+  "gtk_header_bar_set_title(header_bar, \"$APP_DISPLAY_NAME\");"
+patch_string flutter/linux/my_application.cc \
+  'gtk_window_set_title(window, "rustdesk");' \
+  "gtk_window_set_title(window, \"$APP_DISPLAY_NAME\");"
+
+# Stock RustDesk and Mixel Remote can be installed on the same Linux computer.
+# A shared bus name sends a Mixel support invite to whichever app started first.
+patch_string src/server/dbus.rs \
+  'const DBUS_NAME: &str = "org.rustdesk.rustdesk";' \
+  "const DBUS_NAME: &str = \"$MACOS_BUNDLE_ID\";"
+
 # macOS URL scheme (deep links) — drop com.carriez.rustdesk / rustdesk://.
 MAC_PLIST="$RDREPO/flutter/macos/Runner/Info.plist"
 if [[ -f "$MAC_PLIST" ]]; then
@@ -421,6 +442,12 @@ for debfile in \
   fi
 done
 
+# Some older installs contain only the /etc override, without both /usr/lib
+# copies. With set -e, plain rm aborts the upgrade before installing the service.
+patch_string res/DEBIAN/postinst \
+  "rm /etc/systemd/system/${APP_NAME_KEBAB}.service /usr/lib/systemd/system/${APP_NAME_KEBAB}.service /usr/lib/systemd/user/${APP_NAME_KEBAB}.service" \
+  "rm -f /etc/systemd/system/${APP_NAME_KEBAB}.service /usr/lib/systemd/system/${APP_NAME_KEBAB}.service /usr/lib/systemd/user/${APP_NAME_KEBAB}.service"
+
 # Rename packaging assets so build.py / postinst agree on filenames.
 if [[ -f "$SERVICE" ]]; then
   cp "$SERVICE" "$RDREPO/res/${APP_NAME_KEBAB}.service"
@@ -464,9 +491,10 @@ if [[ -f "$BUILDPY" ]]; then
   echo "   patched build.py packaging identity"
 
   # Support target-specific paths on macOS cross-compilation when CARGO_BUILD_TARGET is set
-  export BUILDPY
+  export BUILDPY APP_NAME_KEBAB
   python3 << 'EOF'
 import os
+import re
 build_py = os.environ.get("BUILDPY")
 with open(build_py, 'r', encoding='utf-8') as f:
     code = f.read()
@@ -484,6 +512,15 @@ code = code.replace(old_dylib, new_dylib)
 code = code.replace(
     "'cp -rf ../target/release/service ",
     "f'cp -rf ../target/{os.environ.get(\"CARGO_BUILD_TARGET\") + \"/\" if os.environ.get(\"CARGO_BUILD_TARGET\") else \"\"}release/service "
+)
+
+# The upstream scalable icon is RustDesk's logo. Let GTK scale the already
+# installed Mixel PNG instead of shipping the upstream vector under our name.
+code = re.sub(
+    r"(?m)^([ \t]+)system2\(\n[ \t]+'cp (?:\.\./)?res/scalable\.svg "
+    r"tmpdeb/usr/share/icons/hicolor/scalable/apps/" + re.escape(os.environ["APP_NAME_KEBAB"]) + r"\.svg'\)\n",
+    lambda match: match[1] + "# The branded PNG above supplies the desktop icon at every size.\n",
+    code,
 )
 
 with open(build_py, 'w', encoding='utf-8') as f:
@@ -729,6 +766,10 @@ patch_string flutter/linux/main.cc \
 patch_string flutter/linux/main.cc \
   'Failed to load \"librustdesk.so\"' \
   "Failed to load \\\"${LIBNAME}.so\\\""
+# Arch packaging strips the bundled library after CMake has renamed it.
+patch_string build.py \
+  'strip {flutter_build_dir}/lib/librustdesk.so' \
+  "strip {flutter_build_dir}/lib/${LIBNAME}.so"
 
 # Guards — a missed rename ships a rustdesk-named core or, worse, a runtime
 # that can't find its library. Fail loudly at branding time.
@@ -792,5 +833,34 @@ if [[ "$leak" -ne 0 ]]; then
   exit 1
 fi
 echo "   leak check passed"
+
+# Positive checks catch a missing file or changed upstream expression. Merely
+# checking for absence of the old name can pass even when the app cannot load.
+require_string () {
+  local file="$1" expected="$2"
+  if [[ ! -f "$RDREPO/$file" ]] || ! grep -qF -- "$expected" "$RDREPO/$file"; then
+    echo "❌ Required runtime branding missing in $file: $expected" >&2
+    exit 1
+  fi
+}
+require_string flutter/windows/CMakeLists.txt "COMPONENT Runtime RENAME ${LIBNAME}.dll)"
+require_string flutter/windows/runner/main.cpp "LoadLibraryA(\"${LIBNAME}.dll\")"
+require_string flutter/linux/CMakeLists.txt "COMPONENT Runtime RENAME ${LIBNAME}.so)"
+require_string flutter/linux/main.cc "#define RUSTDESK_LIB_PATH \"${LIBNAME}.so\""
+require_string flutter/lib/models/native_model.dart "DynamicLibrary.open('${LIBNAME}.dll')"
+require_string flutter/lib/models/native_model.dart "DynamicLibrary.open('${LIBNAME}.so')"
+require_string flutter/linux/my_application.cc "gtk_icon_theme_load_icon(theme, \"$APP_NAME_KEBAB\","
+require_string flutter/linux/my_application.cc "gtk_header_bar_set_title(header_bar, \"$APP_DISPLAY_NAME\");"
+require_string flutter/linux/my_application.cc "gtk_window_set_title(window, \"$APP_DISPLAY_NAME\");"
+require_string src/server/dbus.rs "const DBUS_NAME: &str = \"$MACOS_BUNDLE_ID\";"
+require_string res/rustdesk-link.desktop "MimeType=x-scheme-handler/$APP_NAME_KEBAB;"
+require_string res/rustdesk-link.desktop "Exec=$APP_NAME_KEBAB %u"
+require_string res/DEBIAN/postinst "rm -f /etc/systemd/system/${APP_NAME_KEBAB}.service /usr/lib/systemd/system/${APP_NAME_KEBAB}.service /usr/lib/systemd/user/${APP_NAME_KEBAB}.service"
+require_string flutter/macos/Runner/Info.plist "<string>$APP_NAME_KEBAB</string>"
+require_string flutter/lib/common.dart "registerProtocol('$APP_NAME_KEBAB');"
+require_string libs/hbb_common/src/config.rs "(\"custom-rendezvous-server\".to_owned(), \"${RENDEZVOUS_SERVER}\".to_owned())"
+require_string libs/hbb_common/src/config.rs "(\"relay-server\".to_owned(), \"${RELAY_SERVER}\".to_owned())"
+require_string libs/hbb_common/src/config.rs "(\"key\".to_owned(), \"${RS_PUB_KEY}\".to_owned())"
+echo "   native loaders, protocol handlers, Linux app identity and relay defaults verified"
 
 echo "✓ Branding applied — product identity is $APP_NAME only."

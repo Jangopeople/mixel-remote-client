@@ -51,11 +51,13 @@ public static class MixelSupportIpcProbe {
 
 function Get-MixelSupportRuntimeHealth {
   $guard = [MixelSupportIpcProbe]::Request('{"t":"Config","c":["mixel-support-invite-attended",null]}') | ConvertFrom-Json
-  if ($guard.t -ne 'Config' -or $guard.c[0] -ne 'mixel-support-invite-attended') {
+  if ($guard.t -ne 'Config' -or $guard.c -isnot [array] -or $guard.c.Count -ne 2 -or
+      $guard.c[0] -ne 'mixel-support-invite-attended' -or $guard.c[1] -isnot [string]) {
     throw 'Incoming support IPC returned an unexpected guard response.'
   }
   $online = [MixelSupportIpcProbe]::Request('{"t":"OnlineStatus","c":null}') | ConvertFrom-Json
-  if ($online.t -ne 'OnlineStatus' -or $null -eq $online.c) {
+  if ($online.t -ne 'OnlineStatus' -or $online.c -isnot [array] -or $online.c.Count -ne 2 -or
+      $online.c[0] -isnot [long] -or $online.c[1] -isnot [bool]) {
     throw 'Incoming support IPC returned an unexpected online response.'
   }
   return [pscustomobject]@{

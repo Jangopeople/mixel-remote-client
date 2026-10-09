@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Install the attended support handoff into fresh or already-patched 1.4.6 source."""
 import os
+import re
 from pathlib import Path
 
 scripts = Path(__file__).resolve().parent
@@ -51,8 +52,10 @@ Future<bool> _renewSupportInviteAttended() async {
   _supportInviteRenewing = true;
   try {
     // A special runtime-only IPC command, never a saved preference.
-    await bind.mainSetOption(key: 'mixel-support-invite-attended', value: 'Y');
-    final proof = await bind.mainGetOption(key: 'mixel-support-invite-attended');
+    await bind.mainSetOption(key: 'mixel-support-invite-attended', value: 'Y')
+      .timeout(const Duration(seconds: 3));
+    final proof = await bind.mainGetOption(key: 'mixel-support-invite-attended')
+      .timeout(const Duration(seconds: 3));
     _supportInviteCompatibilityNotice.showIfRequired(proof, () {
       if (globalKey.currentState?.overlay == null) return false;
       showToast(translate('mixel_support_component_update_required'),
@@ -78,7 +81,8 @@ Future<void> _reportSupportInvite(String token, String apiKey) async {
     readId: () async => await bind.mainGetMyId(),
     isOnline: () async {
       final status = jsonDecode(await bind.mainGetConnectStatus());
-      return status is Map && status['status_num'] is num && status['status_num'] > 0;
+      return status is Map && status['status_num'] is num &&
+        status['status_num'] > 0 && status['key_confirmed'] == true;
     },
     armAttended: _renewSupportInviteAttended,
     report: (token, apiKey, id, nonce) async {
@@ -121,7 +125,14 @@ empty_handler = """  if (args.isEmpty) {
     return true;
   }
 """
-support_handler = """  final supportInviteIndex = args.indexOf('--support-invite');
+support_handler = """  if (args.contains('--mixel-attended') && !args.contains('--support-invite')) {
+    windowOnTop(null);
+    _supportInviteAttendedTimer ??= Timer.periodic(
+      const Duration(seconds: 20), (_) => _renewSupportInviteAttended());
+    Future.delayed(Duration.zero, _renewSupportInviteAttended);
+    return false;
+  }
+  final supportInviteIndex = args.indexOf('--support-invite');
   final supportApiKeyIndex = args.indexOf('--support-apikey');
   if (supportInviteIndex >= 0 && supportApiKeyIndex >= 0 &&
       supportInviteIndex + 1 < args.length && supportApiKeyIndex + 1 < args.length) {
@@ -136,6 +147,9 @@ support_handler = """  final supportInviteIndex = args.indexOf('--support-invite
   }
 """
 start_marker = "  final supportInviteIndex = args.indexOf('--support-invite');\n"
+attended_marker = "  if (args.contains('--mixel-attended') && !args.contains('--support-invite')) {\n"
+if attended_marker in text:
+    start_marker = attended_marker
 if start_marker in text:
     start = text.index(start_marker)
     end = text.index(empty_handler, start)
@@ -146,7 +160,9 @@ else:
 parser_before = """  if (uri.authority.isEmpty &&
       uri.path.split('').every((char) => char == '/')) {
 """
-parser_after = """  if (uri.scheme == 'mixel-remote' && uri.authority == 'support') {
+parser_after = """  if (uri.scheme.toLowerCase() == 'mixel-remote' && uri.host.toLowerCase() == 'support') {
+    if (uri.userInfo.isNotEmpty || uri.hasPort || uri.hasFragment ||
+        (uri.path.isNotEmpty && uri.path != '/')) return null;
     final params = uri.queryParameters.map((k, v) => MapEntry(k.toLowerCase(), v));
     final token = params['invite'] ?? '';
     final apiKey = params['apikey'] ?? '';
@@ -155,12 +171,18 @@ parser_after = """  if (uri.scheme == 'mixel-remote' && uri.authority == 'suppor
   } else if (uri.authority.isEmpty &&
       uri.path.split('').every((char) => char == '/')) {
 """
-if "  if (uri.scheme == 'mixel-remote' && uri.authority == 'support') {" in text:
-    start = text.index("  if (uri.scheme == 'mixel-remote' && uri.authority == 'support') {")
+old_parser = "  if (uri.scheme == 'mixel-remote' && uri.authority == 'support') {"
+new_parser = "  if (uri.scheme.toLowerCase() == 'mixel-remote' && uri.host.toLowerCase() == 'support') {"
+if old_parser in text or new_parser in text:
+    start = text.index(old_parser if old_parser in text else new_parser)
     end = text.index("  } else if (uri.authority.isEmpty &&", start)
     text = text[:start] + parser_after.split("  } else if (uri.authority.isEmpty &&")[0] + text[end:]
 else:
     text = replace_once(text, parser_before, parser_after, "support URI parser")
+text = replace_once(text,
+    "if (args[0].startsWith(bind.mainUriPrefixSync())) {",
+    "if (args[0].toLowerCase().startsWith(bind.mainUriPrefixSync().toLowerCase())) {",
+    "case-insensitive protocol command line")
 source.write_text(text, encoding="utf-8")
 (rdrepo / "flutter/lib/mixel_support_invite.dart").write_text(
     (scripts / "support-invite-reporter.dart").read_text(encoding="utf-8"), encoding="utf-8"
@@ -234,6 +256,17 @@ ui.write_text(text, encoding="utf-8")
 # Native proxy-aware HTTP results are keyed by URL. Give each support heartbeat
 # an opaque unique URL, consume completed results, and expire abandoned ones.
 text = ui.read_text(encoding="utf-8")
+# Flutter must expose the actual service key registration result as well as
+# socket reachability before an invite can announce the customer as ready.
+text = re.sub(
+    r'\n([ \t]*)#\[cfg\(not\(feature = "flutter"\)\)\]\n\1((?:pub |let mut )?key_confirmed\b)',
+    r'\n\1\2', text,
+)
+text = text.replace("""                                #[cfg(not(feature = "flutter"))]
+                                {
+                                    key_confirmed = _c;
+                                }
+""", "                                key_confirmed = _c;\n")
 text = replace_once(text, """pub fn get_async_http_status(url: String) -> Option<String> {
     match ASYNC_HTTP_STATUS.lock().unwrap().get(&url) {
 """, """pub fn get_async_http_status(url: String) -> Option<String> {
@@ -277,7 +310,8 @@ http_end = text.index("\n#[inline]", http_start)
 prefix = text[:http_start].replace(tls_after, tls_before, 1)
 http = text[http_start:http_end]
 http = replace_once(http, tls_before, tls_after, "validated support HTTPS in native FFI transport")
-http = replace_once(http, """    let response = get_http_response_async(
+if "    let request_future = async {" not in http:
+    http = replace_once(http, """    let response = get_http_response_async(
         &url,
         tls_url,
         &method,
@@ -304,21 +338,66 @@ http = replace_once(http, """    let response = get_http_response_async(
         response_future.await?
     };
 """, "bounded proxy-aware support HTTP timeout")
-http = replace_once(http, "    let response_body = response.text().await?;\n", """    let response_body = if support_request {
+    http = replace_once(http, "    let response_body = response.text().await?;\n", """    let response_body = if support_request {
         timeout(6_000, response.text()).await??
     } else {
         response.text().await?
     };
 """, "bounded support response body timeout")
+    # Header and body reads share one deadline. Separate timeouts used to allow a
+    # native request to outlive the reporter and overlap the next heartbeat.
+    http = http.replace("    let response_future = get_http_response_async(\n",
+                        "    let request_future = async {\n    let response_future = get_http_response_async(\n", 1)
+    http = http.replace("""    let response = if support_request {
+        timeout(6_000, response_future).await??
+    } else {
+        response_future.await?
+    };
+""", "    let response = response_future.await?;\n", 1)
+    http = http.replace("""    let response_body = if support_request {
+        timeout(6_000, response.text()).await??
+    } else {
+        response.text().await?
+    };
+""", "    let response_body = response.text().await?;\n", 1)
+    http = http.replace("""    serde_json::to_string(&result).map_err(|e| anyhow!("Failed to serialize response: {}", e))
+}
+""", """    serde_json::to_string(&result).map_err(|e| anyhow!("Failed to serialize response: {}", e))
+    };
+    if support_request {
+        timeout(6_000, request_future).await?
+    } else {
+        request_future.await
+    }
+}
+""", 1)
 text = prefix + http + text[http_end:]
 text = text.replace("ui_interface::{get_option, is_installed, set_option}", "ui_interface::{get_option, set_option}")
 text = text.replace("    use std::net::ToSocketAddrs;\n", "")
 text = text.replace("    use hbb_common::protobuf::Enum;\n", "")
 common_rs.write_text(text, encoding="utf-8")
 
+# All attended heartbeats use the bounded, proxy-aware native transport. The
+# upstream no-proxy Flutter HTTP branch does not cancel timed-out sockets.
+http_service = rdrepo / "flutter/lib/utils/http_service.dart"
+text = http_service.read_text(encoding="utf-8")
+text = replace_once(text, "    var useFlutterHttp = (isWeb || kIsWeb);\n", """    final supportRequest = url.scheme == 'https' && url.host == 'rs.mixel.ch' &&
+        url.path == '/api/presence/client' && url.queryParameters.containsKey('request');
+    var useFlutterHttp = (isWeb || kIsWeb);
+""", "support native HTTP classification")
+text = replace_once(text, "    if (!useFlutterHttp) {\n", "    if (!useFlutterHttp && !supportRequest) {\n", "support proxy transport routing")
+text = replace_once(text, "    return _parseHttpResponse(resJson);\n", "    return _parseHttpResponse(resJson, sensitive: supportRequest);\n", "redacted support transport errors")
+text = replace_once(text, "  http.Response _parseHttpResponse(String responseJson) {\n", "  http.Response _parseHttpResponse(String responseJson, {bool sensitive = false}) {\n", "sensitive response parser")
+text = replace_once(text, "    } catch (e) {\n      print('Failed to parse response", """    } catch (e) {
+      if (sensitive) throw Exception('Support request failed.');
+      print('Failed to parse response""", "redact bearer response before logging")
+text = text.replace("      default:\n        throw Exception('Unsupported HTTP method');\n", "")
+http_service.write_text(text, encoding="utf-8")
+
 settings = rdrepo / "flutter/lib/desktop/pages/desktop_setting_page.dart"
 text = settings.read_text(encoding="utf-8")
-text = replace_once(text, "    final showAutoUpdate = isWindows && bind.mainIsInstalled();\n", "    final showAutoUpdate = isWindows && bind.mainIsInstalled() && !Platform.resolvedExecutable.toLowerCase().contains('windowsapps');\n", "Store settings external-update guard")
+text = text.replace("final showAutoUpdate = isWindows && bind.mainIsInstalled() && !Platform.resolvedExecutable.toLowerCase().contains('windowsapps');", "final showAutoUpdate = isWindows && bind.mainIsInstalled();")
+text = replace_once(text, "    final showAutoUpdate = isWindows && bind.mainIsInstalled();\n", "    final showAutoUpdate = isWindows && !bind.isCustomClient() && bind.mainIsInstalled();\n", "Mixel settings external-update guard")
 settings.write_text(text, encoding="utf-8")
 
 updater = rdrepo / "src/updater.rs"
@@ -335,10 +414,23 @@ store_guard = """fn is_mixel_store_package() -> bool {
 """
 if store_guard not in text:
     text = replace_once(text, "enum UpdateMsg {\n", store_guard + "enum UpdateMsg {\n", "native Store package identity guard")
-text = replace_once(text, "pub fn start_auto_update() {\n", "pub fn start_auto_update() {\n    if is_mixel_store_package() { return; }\n", "Store auto updater start guard")
-text = replace_once(text, "pub fn manually_check_update() -> ResultType<()> {\n", "pub fn manually_check_update() -> ResultType<()> {\n    if is_mixel_store_package() { return Ok(()); }\n", "Store manual external updater guard")
-text = replace_once(text, "fn check_update(manually: bool) -> ResultType<()> {\n", "fn check_update(manually: bool) -> ResultType<()> {\n    if is_mixel_store_package() { return Ok(()); }\n", "Store external download/update execution guard")
+text = text.replace("if is_mixel_store_package() {", "if crate::is_custom_client() || is_mixel_store_package() {")
+text = replace_once(text, "pub fn start_auto_update() {\n", "pub fn start_auto_update() {\n    if crate::is_custom_client() || is_mixel_store_package() { return; }\n", "Store auto updater start guard")
+text = replace_once(text, "pub fn manually_check_update() -> ResultType<()> {\n", "pub fn manually_check_update() -> ResultType<()> {\n    if crate::is_custom_client() || is_mixel_store_package() { return Ok(()); }\n", "Store manual external updater guard")
+text = replace_once(text, "fn check_update(manually: bool) -> ResultType<()> {\n", "fn check_update(manually: bool) -> ResultType<()> {\n    if crate::is_custom_client() || is_mixel_store_package() { return Ok(()); }\n", "Store external download/update execution guard")
+text = text.replace("if is_mixel_store_package() {", "if crate::is_custom_client() || is_mixel_store_package() {")
 updater.write_text(text, encoding="utf-8")
+
+text = common_rs.read_text(encoding="utf-8")
+text = replace_once(text, "pub async fn do_check_software_update() -> hbb_common::ResultType<()> {\n", """pub async fn do_check_software_update() -> hbb_common::ResultType<()> {
+    if crate::is_custom_client() {
+        // Mixel updates come from signed releases or the platform store. The
+        // upstream manifest describes stock RustDesk binaries and relay defaults.
+        *SOFTWARE_UPDATE_URL.lock().unwrap() = String::new();
+        return Ok(());
+    }
+""", "preserve Mixel identity during upstream update checks")
+common_rs.write_text(text, encoding="utf-8")
 
 translations = {
     "en": "The installed Mixel Remote support component must be updated before this support link can connect.",
@@ -463,5 +555,33 @@ text = replace_once(text, """    if !crate::platform::is_installed()
         && _is_quick_support
 """, "support URI portable service startup")
 text = replace_once(text, "    if args.is_empty() || crate::common::is_empty_uni_link(&args[0]) {\n", "    if args.is_empty() || _is_mixel_support_invite || crate::common::is_empty_uni_link(&args[0]) {\n", "support URI incoming rendezvous/server startup")
+# Linux tries to dispatch to an existing window before normal server startup.
+# On a cold launch, continue through startup and keep the original URI for Dart.
+text = replace_once(text, """        return try_send_by_dbus(args[0].clone());
+""", """        if _is_mixel_support_invite {
+            if try_send_by_dbus(args[0].clone()).is_none() { return None; }
+        } else {
+            return try_send_by_dbus(args[0].clone());
+        }
+""", "Linux cold incoming support startup")
+text = replace_once(text,
+    "        crate::portable_service::client::set_quick_support(_is_quick_support);\n",
+    """        crate::portable_service::client::set_quick_support(_is_quick_support);
+        if _is_quick_support {
+            hbb_common::password_security::renew_support_invite_attended();
+            #[cfg(feature = "flutter")]
+            flutter_args.push("--mixel-attended".to_owned());
+        }
+""", "QuickSupport double-click requires ongoing customer consent")
+text = replace_once(text,
+    "    if args.is_empty() || _is_mixel_support_invite || crate::common::is_empty_uni_link(&args[0]) {\n",
+    """    if args.is_empty() || _is_mixel_support_invite || crate::common::is_empty_uni_link(&args[0]) {
+        #[cfg(feature = "flutter")]
+        if _is_mixel_support_invite {
+            // Forward URI/CLI handoffs on every desktop, including Linux cold
+            // starts and normalized protocol case, keeping the main UI visible.
+            flutter_args.extend(args.iter().cloned());
+        }
+""", "forward all incoming support arguments to Flutter")
 core.write_text(text, encoding="utf-8")
 print("Support invite handoff patched: visible app, stable presence heartbeat, runtime customer accept guard, redacted bearer logs")

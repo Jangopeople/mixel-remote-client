@@ -65,6 +65,15 @@ Future<void> main() async {
     );
     await reporter.run('inv_------------------------------------', apiKey);
     await reporter.run(token, 'short');
+    await reporter.run('$token\n', apiKey);
+    for (final injected in [
+      '$apiKey\r\nX-Attack: injected',
+      '$apiKey\u0000',
+      '$apiKey ',
+      '$apiKeyé',
+    ]) {
+      await reporter.run(token, injected);
+    }
     expect(callbacks == 0, 'invalid credentials must not reach any callback');
   });
 
@@ -188,7 +197,7 @@ Future<void> main() async {
   );
 
   await test('revoked or mismatched invite stops retries', () async {
-    for (final status in [401, 403, 404, 409]) {
+    for (final status in [401, 403, 404, 409, 410]) {
       var posts = 0;
       final reporter = MixelSupportInviteReporter(
         readId: () async => '123456',
@@ -308,6 +317,187 @@ Future<void> main() async {
       expect(
         reports == 2 && nonces.toSet().length == 2,
         'timeout replay must not consume previous HTTP response',
+      );
+    },
+  );
+
+  await test(
+    'hung startup callbacks time out and recover without reporting early',
+    () async {
+      for (final hanging in ['guard', 'id', 'online']) {
+        final pending = Completer<dynamic>();
+        var guardCalls = 0;
+        var idCalls = 0;
+        var onlineCalls = 0;
+        var reports = 0;
+        final delays = <int>[];
+        late MixelSupportInviteReporter reporter;
+        reporter = MixelSupportInviteReporter(
+          armAttended: () async {
+            guardCalls++;
+            if (hanging == 'guard' && guardCalls == 1)
+              return await pending.future as bool;
+            return true;
+          },
+          readId: () async {
+            idCalls++;
+            if (hanging == 'id' && idCalls == 1)
+              return await pending.future as String;
+            return '123456';
+          },
+          isOnline: () async {
+            onlineCalls++;
+            if (hanging == 'online' && onlineCalls == 1)
+              return await pending.future as bool;
+            return true;
+          },
+          report: (_, __, ___, ____) async {
+            reports++;
+            reporter.stop();
+            return 200;
+          },
+          requestTimeout: const Duration(milliseconds: 10),
+          delay: (duration) async {
+            delays.add(duration.inSeconds);
+          },
+        );
+        await reporter.run(token, apiKey).timeout(const Duration(seconds: 1));
+        expect(
+          reports == 1,
+          '$hanging timeout must retry then report only after recovery',
+        );
+        expect(
+          delays.contains(4),
+          '$hanging timeout must use bounded retry backoff',
+        );
+        // Late native failures are consumed without unhandled asynchronous errors.
+        pending.completeError(StateError('late synthetic $hanging failure'));
+        await Future<void>.delayed(Duration.zero);
+      }
+    },
+  );
+
+  await test(
+    'stop releases pending startup, HTTP and heartbeat waits immediately',
+    () async {
+      for (final hanging in ['guard', 'id', 'online', 'http', 'delay']) {
+        final entered = Completer<void>();
+        final pending = Completer<dynamic>();
+        var reports = 0;
+        final reporter = MixelSupportInviteReporter(
+          armAttended: () async {
+            if (hanging == 'guard') {
+              entered.complete();
+              return await pending.future as bool;
+            }
+            return true;
+          },
+          readId: () async {
+            if (hanging == 'id') {
+              entered.complete();
+              return await pending.future as String;
+            }
+            return '123456';
+          },
+          isOnline: () async {
+            if (hanging == 'online') {
+              entered.complete();
+              return await pending.future as bool;
+            }
+            return true;
+          },
+          report: (_, __, ___, ____) async {
+            reports++;
+            if (hanging == 'http') {
+              entered.complete();
+              return await pending.future as int;
+            }
+            return 200;
+          },
+          delay: (_) async {
+            if (hanging == 'delay') {
+              entered.complete();
+              await pending.future;
+            }
+          },
+        );
+        final running = reporter.run(token, apiKey);
+        await entered.future;
+        reporter.stop();
+        reporter.stop(); // Repeated teardown is safe.
+        await running.timeout(const Duration(milliseconds: 100));
+        expect(
+          reports == (hanging == 'http' ? 1 : 0),
+          'stop during $hanging must not start another HTTP request',
+        );
+        pending.completeError(StateError('late synthetic $hanging failure'));
+        await Future<void>.delayed(Duration.zero);
+      }
+    },
+  );
+
+  await test(
+    'duplicate runs cannot overlap a reporter or revive one after stop',
+    () async {
+      final entered = Completer<void>();
+      final pending = Completer<bool>();
+      var calls = 0;
+      final reporter = MixelSupportInviteReporter(
+        armAttended: () {
+          calls++;
+          entered.complete();
+          return pending.future;
+        },
+        readId: () async => '123456',
+        isOnline: () async => true,
+        report: (_, __, ___, ____) async => 200,
+      );
+      final first = reporter.run(token, apiKey);
+      await entered.future;
+      await reporter.run(token, apiKey);
+      expect(
+        calls == 1,
+        'duplicate run must not start another guard/read/report loop',
+      );
+      reporter.stop();
+      await first;
+      await reporter.run(token, apiKey);
+      expect(
+        calls == 1,
+        'stopped reporter cannot resume with superseded credentials',
+      );
+      pending.complete(true);
+    },
+  );
+  await test(
+    'default heartbeat teardown cancels every scheduled timer',
+    () async {
+      final timers = <Timer>[];
+      await runZoned(
+        () async {
+          late MixelSupportInviteReporter reporter;
+          reporter = MixelSupportInviteReporter(
+            armAttended: () async => true,
+            readId: () async {
+              Timer.run(reporter.stop);
+              return '123456';
+            },
+            isOnline: () async => true,
+            report: (_, __, ___, ____) async => 200,
+          );
+          await reporter.run(token, apiKey);
+        },
+        zoneSpecification: ZoneSpecification(
+          createTimer: (self, parent, zone, duration, callback) {
+            final timer = parent.createTimer(zone, duration, callback);
+            timers.add(timer);
+            return timer;
+          },
+        ),
+      );
+      expect(
+        timers.isNotEmpty && timers.every((timer) => !timer.isActive),
+        'superseded reporters must not retain heartbeat or request timers',
       );
     },
   );

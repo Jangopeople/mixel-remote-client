@@ -1,8 +1,13 @@
-param([Parameter(Mandatory = $true)][string]$Executable)
+param(
+  [Parameter(Mandatory = $true)][string]$Executable,
+  [switch]$Portable,
+  [switch]$QuickSupport,
+  [string]$ExpectedPayload
+)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support-runtime-probe-windows.ps1')
 
-Add-Type @'
+if (-not ('MixelSupportWindowTest' -as [type])) { Add-Type @'
 using System;
 using System.Text;
 using System.Runtime.InteropServices;
@@ -16,14 +21,26 @@ public static class MixelSupportWindowTest {
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr hwnd, StringBuilder title, int maximum);
 }
 '@
+}
 
 $executablePath = (Resolve-Path $Executable).Path
+$runtimePath = $executablePath
+if ($Portable) {
+  if (-not $ExpectedPayload) { throw 'Portable runtime verification requires the expected signed payload.' }
+  $runtimePath = Join-Path $env:LOCALAPPDATA 'mixel-remote/Mixel-Remote.exe'
+}
 $token = 'inv_00000000-0000-0000-0000-000000000002'
 # Windows protocol activation can canonicalize an authority-only URI by adding
 # this slash. Exercise the same semantic support URI the Dart parser accepts.
 $uri = "mixel-remote://support/?invite=$token&apikey=synthetic-invalid-public-key-000000000000"
 $before = @(Get-Process | Select-Object -ExpandProperty Id)
 $main = $null
+$launchScenario = if ($QuickSupport) { 'QuickSupport double-click' } else { 'support URI launch' }
+
+function Start-CustomerApp {
+  if ($QuickSupport) { return Start-Process -FilePath $executablePath -PassThru }
+  return Start-Process -FilePath $executablePath -ArgumentList $uri -PassThru
+}
 
 function Find-MainWindow([int]$ProcessId) {
   $found = [System.Collections.Generic.List[IntPtr]]::new()
@@ -58,28 +75,57 @@ function Wait-VisibleMain([int]$ProcessId, [string]$Scenario) {
   throw "$Scenario failed: customer app window did not become visible on the Windows runner desktop."
 }
 
+function Wait-PortableMain {
+  $deadline = [DateTime]::UtcNow.AddSeconds(60)
+  while ([DateTime]::UtcNow -lt $deadline) {
+    foreach ($candidate in (Get-Process | Where-Object {
+      $before -notcontains $_.Id -and $_.Path -and
+      $_.Path.Equals($runtimePath, [StringComparison]::OrdinalIgnoreCase)
+    })) {
+      if (@(Find-MainWindow $candidate.Id).Count -gt 0) { return $candidate }
+    }
+    Start-Sleep -Milliseconds 250
+  }
+  throw 'Portable customer launcher did not extract and start the customer app.'
+}
+
 try {
-  $main = Start-Process -FilePath $executablePath -ArgumentList $uri -PassThru
+  $main = Start-CustomerApp
   # Let FFI initialization and the cold URI handler finish before checking the
   # stable window state; the original bug hid an initially-created main window.
   Start-Sleep -Seconds 15
-  $window = Wait-VisibleMain $main.Id 'Cold support URI launch'
+  if ($Portable) {
+    $main = Wait-PortableMain
+    $expectedRoot = (Resolve-Path $ExpectedPayload).Path
+    $extractedRoot = Split-Path $runtimePath -Parent
+    foreach ($file in (Get-ChildItem $expectedRoot -Recurse -File)) {
+      $relative = [IO.Path]::GetRelativePath($expectedRoot, $file.FullName)
+      $extracted = Join-Path $extractedRoot $relative
+      if (-not (Test-Path $extracted) -or
+          (Get-FileHash $file.FullName -Algorithm SHA256).Hash -ne (Get-FileHash $extracted -Algorithm SHA256).Hash) {
+        throw "Portable customer launcher extracted different bytes: $relative"
+      }
+    }
+    & (Join-Path $PSScriptRoot 'verify-windows-payload.ps1') -Payload $extractedRoot
+    Write-Host 'PASS: portable customer launcher extracts the exact signed application and assets.'
+  }
+  $window = Wait-VisibleMain $main.Id "Cold $launchScenario"
   Start-Sleep -Seconds 3
   if (-not [MixelSupportWindowTest]::IsWindowVisible($window)) {
-    throw 'Cold support URI launch failed: main app became hidden after initialization.'
+    throw "Cold $launchScenario failed: main app became hidden after initialization."
   }
-  Write-Host 'PASS: cold support URI launch shows customer app.'
-  $coldHealth = Wait-MixelSupportRuntimeHealth 'Cold support URI launch' -RequireOnline
+  Write-Host "PASS: cold $launchScenario shows customer app."
+  $coldHealth = Wait-MixelSupportRuntimeHealth "Cold $launchScenario" -RequireOnline
 
   [void][MixelSupportWindowTest]::ShowWindow($window, 6)
   Start-Sleep -Seconds 1
   if (-not [MixelSupportWindowTest]::IsIconic($window)) {
     throw 'Warm-launch setup failed: runner could not minimize the customer app.'
   }
-  Start-Process -FilePath $executablePath -ArgumentList $uri | Out-Null
-  $window = Wait-VisibleMain $main.Id 'Warm support URI launch'
-  Write-Host 'PASS: warm support URI launch restores visible customer app.'
-  $warmHealth = Wait-MixelSupportRuntimeHealth 'Warm support URI launch' -RequireOnline
+  Start-CustomerApp | Out-Null
+  $window = Wait-VisibleMain $main.Id "Warm $launchScenario"
+  Write-Host "PASS: warm $launchScenario restores visible customer app."
+  $warmHealth = Wait-MixelSupportRuntimeHealth "Warm $launchScenario" -RequireOnline
 
   foreach ($logRoot in @(
       (Join-Path $env:APPDATA 'Mixel-Remote'),
@@ -96,6 +142,7 @@ try {
   # Only stop processes newly started from this runner-owned build directory.
   Get-Process | Where-Object {
     $before -notcontains $_.Id -and $_.Path -and
-    $_.Path.StartsWith((Split-Path $executablePath -Parent), [StringComparison]::OrdinalIgnoreCase)
+    ($_.Path.StartsWith((Split-Path $executablePath -Parent) + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or
+     ($Portable -and $_.Path.StartsWith((Split-Path $runtimePath -Parent) + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)))
   } | Stop-Process -Force -ErrorAction SilentlyContinue
 }

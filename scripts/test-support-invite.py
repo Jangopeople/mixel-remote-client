@@ -19,6 +19,7 @@ targets = [
     "flutter/lib/common.dart", "flutter/lib/main.dart", "src/ui_interface.rs",
     "src/ipc.rs", "src/ui_cm_interface.rs", "src/server/connection.rs", "src/core_main.rs", "src/common.rs", "src/updater.rs",
     "flutter/lib/desktop/pages/desktop_setting_page.dart",
+    "flutter/lib/utils/http_service.dart",
     "src/lang/en.rs", "src/lang/de.rs", "src/lang/fr.rs", "src/lang/it.rs",
     "libs/hbb_common/src/password_security.rs",
 ]
@@ -59,7 +60,9 @@ def windows_default_open(file, mode='r', buffering=-1, encoding=None, *args, **k
 io.open = windows_default_open
 runpy.run_path(sys.argv[1], run_name='__main__')
 """
-    subprocess.run([sys.executable, "-c", windows_encoding_runner, str(patcher)], env=env, check=True, capture_output=True, text=True, encoding="utf-8")
+    patched = subprocess.run([sys.executable, "-c", windows_encoding_runner, str(patcher)], env=env, capture_output=True, text=True, encoding="utf-8")
+    if patched.returncode:
+        raise RuntimeError(patched.stdout + patched.stderr)
     patched_paths = targets + ["flutter/lib/mixel_support_invite.dart"]
     first = {path: (repo / path).read_text(encoding="utf-8") for path in patched_paths}
     subprocess.run([sys.executable, str(patcher)], env=env, check=True, capture_output=True, text=True, encoding="utf-8")
@@ -103,7 +106,7 @@ runpy.run_path(sys.argv[1], run_name='__main__')
     assert "{'request': nonce}" in common
     assert "return requests.remove(&url);" in first["src/ui_interface.rs"]
     assert "Duration::from_secs(30)" in first["src/ui_interface.rs"]
-    assert "timeout(6_000, response_future).await??" in first["src/common.rs"]
+    assert "timeout(6_000, request_future).await?" in first["src/common.rs"]
     assert "Some(false) // Never expose support bearer data" in first["src/common.rs"]
     native_http = first["src/common.rs"].split("pub async fn http_request_sync(", 1)[1].split("\n#[inline]", 1)[0]
     assert "let support_request =" in native_http, "support transport guard must be in native FFI function scope"
@@ -112,10 +115,13 @@ runpy.run_path(sys.argv[1], run_name='__main__')
     assert "crate::common::is_server_running()" not in first["src/ui_interface.rs"].split("pub fn get_option<T: AsRef<str>>(key: T) -> String {", 1)[1].split("effective_support_approve_mode", 1)[0]
     assert "proof == 'attended-runtime-v1'" in common
     assert "_supportInviteCompatibilityNotice.showIfRequired" in common
-    assert "contains('windowsapps')" in first["flutter/lib/desktop/pages/desktop_setting_page.dart"]
+    assert "!bind.isCustomClient() && bind.mainIsInstalled()" in first["flutter/lib/desktop/pages/desktop_setting_page.dart"]
     updater = first["src/updater.rs"]
-    assert updater.count("if is_mixel_store_package()") == 3
-    assert updater.index("if is_mixel_store_package()", updater.index("fn check_update(manually:")) < updater.index("do_check_software_update().is_err()"), "Store updater must stop before external request/download"
+    assert updater.count("if crate::is_custom_client() || is_mixel_store_package()") == 3
+    assert updater.index("if crate::is_custom_client() || is_mixel_store_package()", updater.index("fn check_update(manually:")) < updater.index("do_check_software_update().is_err()"), "Mixel updater must stop before upstream request/download"
+    assert "if (!useFlutterHttp && !supportRequest)" in first["flutter/lib/utils/http_service.dart"]
+    assert "sensitive: supportRequest" in first["flutter/lib/utils/http_service.dart"]
+    assert "if (sensitive) throw Exception('Support request failed.');" in first["flutter/lib/utils/http_service.dart"]
     assert "_supportInviteAttendedTimer ??= Timer.periodic" in common
     assert "launch args: $args" not in first["flutter/lib/main.dart"]
     assert 'print("initialLink: $initialLink");' not in common
@@ -135,6 +141,10 @@ runpy.run_path(sys.argv[1], run_name='__main__')
     assert "if args.is_empty() || _is_mixel_support_invite || crate::common::is_empty_uni_link(&args[0])" in core
     assert core.count("(args.is_empty() || _is_mixel_support_invite)") == 2, "support URI must start portable service too"
     assert core.index("renew_support_invite_attended();") < core.index("crate::start_server(false, no_server)"), "arm attended mode before receiving connections"
+    linux_dispatch = core.split("// linux uni (url) go here.", 1)[1].split("#[cfg(windows)]", 1)[0]
+    assert "if _is_mixel_support_invite" in linux_dispatch
+    assert "flutter_args.extend(args.iter().cloned());" in core
+    assert "if try_send_by_dbus(args[0].clone()).is_none() { return None; }" in linux_dispatch
     assert "!support_invite_requires_click()" in first["libs/hbb_common/src/password_security.rs"]
     setter = first["src/ui_interface.rs"].split("pub fn set_option(key: String, value: String) {", 1)[1]
     runtime_only = setter.split('    if &key == "stop-service"', 1)[0]
@@ -145,18 +155,20 @@ runpy.run_path(sys.argv[1], run_name='__main__')
     # outgoing-connection branches, without needing a desktop for these tests.
     handler = common[common.index("bool handleUriLink("):common.index("  UriLinkType? type;", common.index("bool handleUriLink("))]
     handler += "  return false;\n}\n"
-    parser_start = common.index("  if (uri.scheme == 'mixel-remote' && uri.authority == 'support') {")
+    parser_start = common.index("  if (uri.scheme.toLowerCase() == 'mixel-remote' && uri.host.toLowerCase() == 'support') {")
     parser_end = common.index("  } else if (uri.authority.isEmpty &&", parser_start)
     parser = "List<String>? urlLinkToCmdArgs(Uri uri) {\n" + common[parser_start:parser_end] + "  }\n  return null;\n}\n"
     # This is the exact window-hiding condition used by the pinned app startup.
     startup_condition = "if (handledByUniLinks || handleUriLink(cmdArgs: kBootArgs))"
     assert startup_condition in first["flutter/lib/main.dart"]
     runner = repo / "flutter/lib/support_launch_test.dart"
-    runner.write_text("import 'mixel_support_invite.dart';\n" + """
+    runner.write_text("import 'dart:async';\nimport 'mixel_support_invite.dart';\n" + """
 class FakeBind { String mainUriPrefixSync() => 'mixel-remote://'; }
 final bind = FakeBind();
 var shown = 0;
 var reported = 0;
+Timer? _supportInviteAttendedTimer;
+Future<bool> _renewSupportInviteAttended() async => true;
 void windowOnTop(int? id) { shown++; }
 Future<void> _reportSupportInvite(String token, String key) async { reported++; }
 """ + handler + parser + """
@@ -177,8 +189,26 @@ Future<void> main() async {
   if (handleUriLink(uri: Uri.parse('mixel-remote://support?invite=invalid&apikey=short'))) {
     throw StateError('Invalid invite accepted');
   }
+  for (final variant in [
+    link.toString().replaceFirst('://support?', '://support/?'),
+    link.toString().replaceFirst('mixel-remote://support', 'MIXEL-REMOTE://SUPPORT'),
+  ]) {
+    if (urlLinkToCmdArgs(Uri.parse(variant)) == null) throw StateError('Normalized support URI rejected');
+    if (handleUriLink(cmdArgs: [variant])) throw StateError('Normalized handoff hid app');
+  }
+  for (final variant in [
+    link.toString().replaceFirst('://support?', '://support/other?'),
+    link.toString().replaceFirst('://support?', '://user@support?'),
+    link.toString().replaceFirst('://support?', '://support:443?'),
+    '${link.toString()}#fragment',
+  ]) {
+    if (urlLinkToCmdArgs(Uri.parse(variant)) != null) throw StateError('Malformed support route accepted');
+  }
   await Future<void>.delayed(Duration.zero);
-  if (reported != 3) throw StateError('Only valid handoffs may schedule presence');
+  if (reported != 5) throw StateError('Only valid handoffs may schedule presence');
+  if (handleUriLink(cmdArgs: ['--mixel-attended'])) throw StateError('QuickSupport launch hid app');
+  if (_supportInviteAttendedTimer == null) throw StateError('QuickSupport failed to maintain consent guard');
+  _supportInviteAttendedTimer!.cancel();
   print('PASS: generated cold/warm support URI paths show the app, reject invalid/truncated arguments, never request outbound connection');
 }
 """, encoding="utf-8")
@@ -237,10 +267,12 @@ fn unrelated_http_status_retains_existing_reusable_behavior() {
     native_start = common_source.index("pub async fn http_request_sync(")
     native_end = common_source.index("\n#[inline]", native_start)
     native = common_source[native_start:native_end]
+    # Preserve the actual outer deadline and async block; replace only response
+    # metadata/JSON serialization, which are unrelated to transport semantics.
     transport = native[:native.index("    // Serialize response headers")]
     body_start = native.index("    let response_body =")
     transport += native[body_start:native.index("    // Construct the JSON object", body_start)]
-    transport += "    Ok(response_body)\n}\n"
+    transport += "    Ok(response_body)\n" + native[native.index("    };\n    if support_request") :]
     transport_template = (root / "scripts/support-invite-transport-test.rs").read_text(encoding="utf-8")
     transport_test = repo / "native_transport_test.rs"
     transport_test.write_text(transport_template.replace("// GENERATED_HTTP_REQUEST_SYNC", transport), encoding="utf-8")

@@ -14,6 +14,9 @@ struct Trace {
     timeouts: Vec<u64>,
     body: Option<String>,
     header: String,
+    response_error: bool,
+    body_error: bool,
+    deadline_error: bool,
 }
 thread_local! {
     static TRACE: RefCell<Trace> = RefCell::new(Trace::default());
@@ -34,7 +37,13 @@ fn get_cached_tls_accept_invalid_cert(_url: &str) -> Option<bool> {
 struct Response;
 impl Response {
     async fn text(self) -> ResultType<String> {
-        Ok("response-body".to_owned())
+        TRACE.with(|trace| {
+            if trace.borrow().body_error {
+                Err("synthetic body error")
+            } else {
+                Ok("response-body".to_owned())
+            }
+        })
     }
 }
 async fn get_http_response_async(
@@ -56,10 +65,19 @@ async fn get_http_response_async(
         trace.body = body;
         trace.header = header.to_owned();
     });
-    Ok(Response)
+    TRACE.with(|trace| {
+        if trace.borrow().response_error {
+            Err("synthetic response error")
+        } else {
+            Ok(Response)
+        }
+    })
 }
 async fn timeout<F: Future>(millis: u64, future: F) -> ResultType<F::Output> {
     TRACE.with(|trace| trace.borrow_mut().timeouts.push(millis));
+    if TRACE.with(|trace| trace.borrow().deadline_error) {
+        return Err("synthetic deadline error");
+    }
     Ok(future.await)
 }
 struct NoopWake;
@@ -96,10 +114,39 @@ fn generated_support_transport_requires_valid_tls_and_bounded_header_and_body() 
         assert_eq!(trace.original_accept_invalid, Some(false));
         assert_eq!(trace.tls_type, Some(7));
         assert_eq!(trace.tls_url, "https://proxy.example.invalid");
-        assert_eq!(trace.timeouts, [6_000, 6_000]);
+        assert_eq!(trace.timeouts, [6_000]);
         assert_eq!(trace.body, body);
         assert_eq!(trace.header, "synthetic-header");
     });
+}
+
+#[test]
+fn generated_support_transport_propagates_header_body_and_total_deadline_errors() {
+    for error in ["response", "body", "deadline"] {
+        TRACE.with(|trace| {
+            *trace.borrow_mut() = Trace {
+                response_error: error == "response",
+                body_error: error == "body",
+                deadline_error: error == "deadline",
+                ..Trace::default()
+            };
+        });
+        let result = run(http_request_sync(
+            "https://rs.mixel.ch/api/presence/client?request=nonce2".to_owned(),
+            "POST".to_owned(),
+            Some("synthetic-body".to_owned()),
+            "synthetic-header".to_owned(),
+        ));
+        assert_eq!(
+            result,
+            Err(match error {
+                "response" => "synthetic response error",
+                "body" => "synthetic body error",
+                _ => "synthetic deadline error",
+            })
+        );
+        TRACE.with(|trace| assert_eq!(trace.borrow().timeouts, [6_000]));
+    }
 }
 #[test]
 fn unrelated_generated_transport_keeps_cached_tls_behavior() {

@@ -1,0 +1,54 @@
+name: client-preflight
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release-pipeline:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run release staging and configuration regression tests
+        run: python3 scripts/test-release-pipeline.py
+      - name: Parse all Python source
+        run: python3 -m compileall -q scripts
+      - name: Validate branding shell syntax
+        run: bash -n scripts/apply-branding.sh scripts/local/sign-and-publish-macos.sh
+  windows-packaging:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Exercise Windows payload preparation and IPC response validation
+        shell: pwsh
+        run: ./scripts/test-windows-pipeline.ps1
+  upstream-source:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve the pinned upstream version
+        id: config
+        run: python3 scripts/release-artifacts.py config
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.24.5'
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: '1.75'
+      - name: Fetch pinned upstream source
+        env:
+          UPSTREAM_VERSION: ${{ steps.config.outputs.upstream_version }}
+        run: git clone --depth 1 --branch "$UPSTREAM_VERSION" --recurse-submodules https://github.com/rustdesk/rustdesk.git rustdesk
+      - name: Exercise actual source patches and support reporter
+        run: |
+          python3 scripts/test-support-invite.py
+          python3 scripts/test-generated-support-paths.py
+          dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart
+          dart scripts/test-support-invite.dart

@@ -23,6 +23,9 @@ on:
         required: false
         default: ""
 
+permissions:
+  contents: read
+
 env:
   RUST_VERSION: "1.75"
   MAC_RUST_VERSION: "1.81"
@@ -39,27 +42,31 @@ jobs:
     runs-on: ubuntu-22.04
     outputs:
       upstream_version: ${{ steps.ver.outputs.upstream_version }}
+      platforms: ${{ steps.ver.outputs.platforms }}
+      linux: ${{ steps.ver.outputs.linux }}
+      macos: ${{ steps.ver.outputs.macos }}
+      windows: ${{ steps.ver.outputs.windows }}
     steps:
       - uses: actions/checkout@v4
-      - name: Verify support invite handoff patch
-        run: python3 -m py_compile scripts/patch-support-invite.py scripts/test-support-invite.py
+      - name: Verify release staging and build configuration
+        run: python3 scripts/test-release-pipeline.py
       - id: ver
-        name: Resolve UPSTREAM_VERSION
-        run: |
-          INPUT="${{ github.event.inputs.upstream_version }}"
-          FILE_VER="$(grep -E '^UPSTREAM_VERSION=' branding/branding.env | head -1 | cut -d= -f2- | tr -d '"')"
-          if [[ -n "$INPUT" ]]; then
-            VER="$INPUT"
-            echo "Using workflow_dispatch override: $VER"
-          else
-            VER="$FILE_VER"
-            echo "Using branding/branding.env: $VER"
-          fi
-          if [[ -z "$VER" ]]; then
-            echo "❌ could not resolve UPSTREAM_VERSION" >&2
-            exit 1
-          fi
-          echo "upstream_version=$VER" >> "$GITHUB_OUTPUT"
+        name: Validate build configuration and publication credentials
+        env:
+          INPUT_UPSTREAM_VERSION: ${{ inputs.upstream_version }}
+          INPUT_ONLY: ${{ inputs.only }}
+          PUBLISH_REQUESTED: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || inputs.publish_r2 }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          APPLE_CERT_P12_BASE64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
+          APPLE_CERT_P12_PASSWORD: ${{ secrets.APPLE_CERT_P12_PASSWORD }}
+          APPLE_NOTARY_USER: ${{ secrets.APPLE_NOTARY_USER }}
+          APPLE_NOTARY_PASSWORD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
+          APPLE_NOTARY_TEAM_ID: ${{ secrets.APPLE_NOTARY_TEAM_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        run: python3 scripts/release-artifacts.py config
 
   # ===========================================================================
   # BRIDGE — generate flutter_rust_bridge codegen once for all platforms.
@@ -127,7 +134,7 @@ jobs:
   # ===========================================================================
   linux:
     needs: [config, bridge]
-    if: ${{ github.event.inputs.only == '' || contains(github.event.inputs.only, 'linux') }}
+    if: ${{ needs.config.outputs.linux == 'true' }}
     runs-on: ubuntu-22.04
     timeout-minutes: 180
     env:
@@ -151,7 +158,8 @@ jobs:
             libunwind-dev libdw-dev libdwarf-dev \
             libxcb-randr0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libxdo-dev libxfixes-dev llvm-dev nasm ninja-build pkg-config \
-            tree python3 rpm unzip wget xz-utils libssl-dev imagemagick
+            tree python3 rpm unzip wget xz-utils libssl-dev imagemagick \
+            dbus-x11 xvfb xdotool x11-utils openbox
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@v1
@@ -198,11 +206,29 @@ jobs:
           name: bridge-artifact
           path: rustdesk
 
+      - name: Preflight generated support source and reporter
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+          RDREPO: ./rustdesk
+        run: |
+          python3 scripts/test-support-invite.py
+          python3 scripts/test-generated-support-paths.py
+          dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart
+          dart scripts/test-support-invite.dart
+
       - name: Build (cargo + flutter via build.py)
         working-directory: rustdesk
         run: |
           export VCPKG_ROOT="${{ github.workspace }}/vcpkg"
           python3 build.py --flutter
+
+      - name: Test compiled attended support guard
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+        run: python3 scripts/test-compiled-support-guard.py
+
+      - name: Exercise actual Linux cold and warm support launches
+        run: python3 scripts/test-support-launch-linux.py --executable rustdesk/flutter/build/linux/x64/release/bundle/mixel-remote
 
       - name: Locate .deb
         id: locate
@@ -221,6 +247,7 @@ jobs:
         with:
           name: linux
           path: dist/
+          if-no-files-found: error
 
   # ===========================================================================
   # macOS — arm64 + x86_64 on macos-14 (macos-13 runners starve / never start).
@@ -228,7 +255,7 @@ jobs:
   # ===========================================================================
   macos:
     needs: [config, bridge]
-    if: ${{ github.event.inputs.only == '' || contains(github.event.inputs.only, 'macos') }}
+    if: ${{ needs.config.outputs.macos == 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -314,6 +341,16 @@ jobs:
           p12-password: ${{ secrets.APPLE_CERT_P12_PASSWORD }}
           keychain: mixel-build
 
+      - name: Preflight generated support source and reporter
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+          RDREPO: ./rustdesk
+        run: |
+          python3 scripts/test-support-invite.py
+          python3 scripts/test-generated-support-paths.py
+          dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart
+          dart scripts/test-support-invite.dart
+
       - name: Build (cargo + flutter via build.py)
         working-directory: rustdesk
         run: |
@@ -338,6 +375,12 @@ jobs:
           echo "❌ build failed after 3 attempts"
           exit 1
 
+      - name: Test compiled attended support guard
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+          CARGO_BUILD_TARGET: ${{ matrix.job.target }}
+        run: python3 scripts/test-compiled-support-guard.py
+
       - name: Package + sign + notarize (.app then .dmg)
         working-directory: rustdesk
         run: |
@@ -360,6 +403,18 @@ jobs:
             APP_PATH="$APP_DIR/Mixel-Remote.app"
           fi
 
+          INFO_PLIST="$APP_PATH/Contents/Info.plist"
+          BUNDLE_ID=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$INFO_PLIST")
+          [[ "$BUNDLE_ID" == "ch.mixel.remote" ]] || { echo "Unexpected macOS bundle identity" >&2; exit 1; }
+          APP_EXECUTABLE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$INFO_PLIST")
+          ARCH="${{ matrix.job.arch }}"
+          [[ "$ARCH" != "aarch64" ]] || ARCH=arm64
+          lipo -verify_arch "$ARCH" "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE"
+          lipo -verify_arch "$ARCH" "$APP_PATH/Contents/Frameworks/liblibrustdesk.dylib"
+          if [[ "${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || inputs.publish_r2 }}" == "true" && -z "${APPLE_CERT_P12_BASE64:-}" ]]; then
+            echo "Publication requires a signed and notarized macOS app" >&2
+            exit 1
+          fi
           mkdir -p ../dist
           DMG="../dist/mixel-remote-${UPSTREAM_VERSION}-${{ matrix.job.arch }}.dmg"
           rm -f "$DMG"
@@ -392,6 +447,7 @@ jobs:
             rm -f "$APP_ZIP"
             xcrun stapler staple "$APP_PATH"
             xcrun stapler validate "$APP_PATH"
+            spctl --assess --type execute --verbose=2 "$APP_PATH"
 
             # 3) Package stapled .app into DMG, then sign/notarize/staple DMG.
             create-dmg --window-size 800 400 \
@@ -408,6 +464,8 @@ jobs:
               --wait
             xcrun stapler staple "$DMG"
             xcrun stapler validate "$DMG"
+            codesign --verify --strict --verbose=2 "$DMG"
+            spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG"
           else
             create-dmg --window-size 800 400 \
               --icon "Mixel-Remote.app" 200 190 \
@@ -422,19 +480,18 @@ jobs:
         with:
           name: macos-${{ matrix.job.arch }}
           path: dist/
+          if-no-files-found: error
 
   # ===========================================================================
-  # WINDOWS — produces .exe (+ .msi if WiX present), optional Authenticode.
+  # WINDOWS — signed application payload + portable EXE (+ optional MSI).
   # ===========================================================================
   windows:
     needs: [config, bridge]
-    if: ${{ github.event.inputs.only == '' || contains(github.event.inputs.only, 'windows') }}
+    if: ${{ needs.config.outputs.windows == 'true' }}
     runs-on: windows-2022
     timeout-minutes: 180
     env:
       UPSTREAM_VERSION: ${{ needs.config.outputs.upstream_version }}
-      WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
-      WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
 
@@ -512,6 +569,7 @@ jobs:
           RDREPO: ./rustdesk
         run: |
           python scripts/test-support-invite.py
+          python scripts/test-generated-support-paths.py
           dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart
           dart scripts/test-support-invite.dart
 
@@ -521,7 +579,7 @@ jobs:
         env:
           VCPKG_ROOT: ${{ github.workspace }}/vcpkg
         run: |
-          python build.py --flutter
+          python build.py --flutter --skip-portable-pack
 
       - name: Test compiled attended support guard
         shell: bash
@@ -530,90 +588,48 @@ jobs:
         run: |
           python scripts/test-compiled-support-guard.py
 
-      - name: Exercise actual Windows cold and warm support launches
+      - name: Prepare full application directory for Store packaging
+        shell: pwsh
+        run: ./scripts/prepare-windows-store-payload.ps1
+
+      - name: Sign compiled Store application
+        uses: azure/trusted-signing-action@v2
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: https://weu.codesigning.azure.net/
+          trusted-signing-account-name: mixel-codesigning
+          certificate-profile-name: mixel-remote
+          files-folder: ${{ github.workspace }}\store-payload
+          files-folder-filter: exe,dll
+          files-folder-recurse: true
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Verify and exercise the signed compiled application
         shell: pwsh
         run: |
-          $client = Get-ChildItem rustdesk/flutter/build/windows -Recurse -Filter 'mixel-remote.exe' -File |
-            Where-Object { $_.Directory.Name -eq 'Release' } | Select-Object -First 1
-          if (-not $client) { throw 'Built Windows desktop executable not found.' }
-          ./scripts/test-support-launch-windows.ps1 -Executable $client.FullName
+          ./scripts/verify-windows-payload.ps1 -Payload store-payload
+          ./scripts/test-support-launch-windows.ps1 -Executable store-payload/Mixel-Remote.exe
 
-      - name: Locate + rebrand icon + optional Authenticode
+      - name: Build portable launcher from the signed compiled application
+        shell: bash
+        run: |
+          python -m pip install -r rustdesk/libs/portable/requirements.txt
+          python scripts/build-windows-portable.py --output "dist/mixel-remote-${UPSTREAM_VERSION}-x86_64.exe"
+
+      - name: Stage optional MSI
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p dist
-          installer=$(find rustdesk -maxdepth 2 \( -name "mixel-remote-*-install.exe" -o -name "rustdesk-*-install.exe" \) | head -n1 || true)
-          if [[ -z "$installer" ]]; then
-            echo "❌ no mixel-remote-*-install.exe (or rustdesk-*-install.exe) found"
-            find rustdesk -maxdepth 4 -name "*.exe" | head -20
-            exit 1
-          fi
-
-          OUT="dist/mixel-remote-${UPSTREAM_VERSION}-x86_64.exe"
-          cp "$installer" "$OUT"
-
+          # The launcher build embeds res/icon.ico after apply-branding.sh.
+          # A second PE resource rewrite can silently retain oversized old icons.
           msi=$(find rustdesk -maxdepth 5 -name "*.msi" | head -n1 || true)
           if [[ -n "$msi" ]]; then
             cp "$msi" "dist/mixel-remote-${UPSTREAM_VERSION}-x86_64.msi"
           fi
-
-          # Prefer ico produced by apply-branding; else build from PNGs.
-          ICO="rustdesk/res/icon.ico"
-          if [[ ! -f "$ICO" ]]; then
-            MAGICK_DIR=$(find "/c/Program Files" -maxdepth 1 -type d -name "ImageMagick-*" -print -quit 2>/dev/null || true)
-            if [[ -n "$MAGICK_DIR" ]]; then
-              export PATH="$MAGICK_DIR:/c/ProgramData/chocolatey/bin:$PATH"
-            fi
-            magick \
-              branding/icon-16.png branding/icon-32.png branding/icon-48.png \
-              branding/icon-64.png branding/icon-128.png branding/icon-256.png \
-              dist/mixel-remote.ico
-            ICO="dist/mixel-remote.ico"
-          fi
-
-          python -m pip install --user pefile
-          python scripts/local/swap-windows-exe-icon.py \
-            "$OUT" "$ICO" "dist/mixel-remote-iconfixed.exe"
-          mv "dist/mixel-remote-iconfixed.exe" "$OUT"
-          rm -f dist/mixel-remote.ico
-
-          if [[ -n "${WINDOWS_CERT_PFX_BASE64:-}" ]]; then
-            echo "$WINDOWS_CERT_PFX_BASE64" | base64 --decode > dist/windows-code-sign.pfx
-            SIGNTOOL=$(find "/c/Program Files (x86)/Windows Kits/10/bin" -name signtool.exe 2>/dev/null | sort -r | head -n1 || true)
-            if [[ -n "$SIGNTOOL" ]]; then
-              "$SIGNTOOL" sign //f dist/windows-code-sign.pfx //p "$WINDOWS_CERT_PASSWORD" \
-                //tr http://timestamp.digicert.com //td sha256 //fd sha256 "$OUT"
-              if [[ -f "dist/mixel-remote-${UPSTREAM_VERSION}-x86_64.msi" ]]; then
-                "$SIGNTOOL" sign //f dist/windows-code-sign.pfx //p "$WINDOWS_CERT_PASSWORD" \
-                  //tr http://timestamp.digicert.com //td sha256 //fd sha256 \
-                  "dist/mixel-remote-${UPSTREAM_VERSION}-x86_64.msi" || true
-              fi
-              echo "✓ Authenticode signed with signtool"
-            else
-              choco install osslsigncode -y --no-progress || true
-              if command -v osslsigncode >/dev/null 2>&1; then
-                osslsigncode sign -pkcs12 dist/windows-code-sign.pfx \
-                  -pass "$WINDOWS_CERT_PASSWORD" \
-                  -t http://timestamp.digicert.com \
-                  -in "$OUT" -out "${OUT}.signed"
-                mv "${OUT}.signed" "$OUT"
-                echo "✓ Authenticode signed with osslsigncode"
-              else
-                echo "⚠ WINDOWS_CERT set but no signtool/osslsigncode — left unsigned"
-              fi
-            fi
-            rm -f dist/windows-code-sign.pfx
-          else
-            echo "⚠ WINDOWS_CERT_PFX_BASE64 not set — shipping unsigned Windows exe"
-          fi
-
-          cp "$OUT" "dist/Mixel-Remote-Support-Windows.exe"
-          ls -la dist/
-
-      - name: Prepare full application directory for Store packaging
-        shell: pwsh
-        run: ./scripts/prepare-windows-store-payload.ps1
 
       # Azure Trusted Signing (Artifact Signing) — account mixel-codesigning,
       # profile mixel-remote (Public Trust, CN=Mixel International Services
@@ -638,27 +654,18 @@ jobs:
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
 
-      - name: Sign compiled Store application
-        uses: azure/trusted-signing-action@v2
-        with:
-          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
-          endpoint: https://weu.codesigning.azure.net/
-          trusted-signing-account-name: mixel-codesigning
-          certificate-profile-name: mixel-remote
-          files-folder: ${{ github.workspace }}\store-payload
-          files-folder-filter: exe
-          files-folder-recurse: true
-          file-digest: SHA256
-          timestamp-rfc3161: http://timestamp.acs.microsoft.com
-          timestamp-digest: SHA256
+      - name: Prepare byte-identical signed customer aliases
+        shell: pwsh
+        run: |
+          $release = "dist/mixel-remote-$($env:UPSTREAM_VERSION)-x86_64.exe"
+          Copy-Item $release dist/Mixel-Remote-Support-Windows.exe
+          Copy-Item $release dist/Mixel-Remote-QS.exe
 
       - name: Verify Windows Authenticode signatures
         shell: pwsh
         run: |
           $installers = @(Get-ChildItem dist -File | Where-Object { $_.Extension -in '.exe', '.msi' }) +
-            @(Get-ChildItem store-payload -Recurse -Filter '*.exe' -File)
+            @(Get-ChildItem store-payload -Recurse -File | Where-Object { $_.Extension -in '.exe', '.dll' })
           if ($installers.Count -eq 0) { throw 'No Windows installer was built.' }
           foreach ($installer in $installers) {
             $signature = Get-AuthenticodeSignature -FilePath $installer.FullName
@@ -667,6 +674,16 @@ jobs:
             }
             Write-Host "PASS: $($installer.Name) Authenticode signature is Valid."
           }
+
+      - name: Exercise the signed portable customer download
+        shell: pwsh
+        run: |
+          ./scripts/test-support-launch-windows.ps1 -Executable dist/Mixel-Remote-Support-Windows.exe -Portable -ExpectedPayload store-payload
+
+      - name: Exercise the signed QuickSupport download without an invite
+        shell: pwsh
+        run: |
+          ./scripts/test-support-launch-windows.ps1 -Executable dist/Mixel-Remote-QS.exe -Portable -QuickSupport -ExpectedPayload store-payload
 
       - name: Package signed Store payload
         shell: pwsh
@@ -687,75 +704,60 @@ jobs:
         with:
           name: windows
           path: dist/
+          if-no-files-found: error
 
   # ===========================================================================
   # Upload — R2, including stable customer-facing aliases.
   # ===========================================================================
   upload:
-    needs: [linux, macos, windows]
-    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && inputs.publish_r2)
+    needs: [config, linux, macos, windows]
+    if: >-
+      ${{ always() && !cancelled() && needs.config.result == 'success' &&
+          (needs.linux.result == 'success' || needs.linux.result == 'skipped') &&
+          (needs.macos.result == 'success' || needs.macos.result == 'skipped') &&
+          (needs.windows.result == 'success' || needs.windows.result == 'skipped') &&
+          ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+           (github.event_name == 'workflow_dispatch' && inputs.publish_r2)) }}
     runs-on: ubuntu-22.04
     timeout-minutes: 30
+    concurrency:
+      group: mixel-remote-r2-publication
+      cancel-in-progress: false
+    env:
+      UPSTREAM_VERSION: ${{ needs.config.outputs.upstream_version }}
+      SELECTED_PLATFORMS: ${{ needs.config.outputs.platforms }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
 
-      - name: Flatten artifacts + customer aliases
-        run: |
-          set -euo pipefail
-          mkdir -p dist
-          find artifacts -type f \( -name "*.deb" -o -name "*.dmg" -o -name "*.exe" -o -name "*.msi" \) -exec cp {} dist/ \;
+      - name: Stage exact selected builds and customer aliases
+        run: python3 scripts/release-artifacts.py stage
 
-          # Stable names linked from mixel-ism /remote-support (cache-busted there).
-          shopt -s nullglob
-          for f in dist/mixel-remote-*-aarch64.dmg; do
-            cp "$f" dist/Mixel-Remote-Support-Apple-Silicon.dmg
-          done
-          for f in dist/mixel-remote-*-x86_64.dmg; do
-            cp "$f" dist/Mixel-Remote-Support-Intel.dmg
-          done
-          for f in dist/mixel-remote-*-x86_64.exe; do
-            # Prefer the already-aliased copy from the windows job if present.
-            if [[ ! -f dist/Mixel-Remote-Support-Windows.exe ]]; then
-              cp "$f" dist/Mixel-Remote-Support-Windows.exe
-            fi
-            # Also copy to Mixel-Remote-Support.exe to align with mixel-ism links!
-            cp "$f" dist/Mixel-Remote-Support.exe
-            # The portable launcher detects -QS.exe and starts its built-in
-            # attended QuickSupport mode. This is the customer-facing download;
-            # keep the regular executable for technicians and managed installs.
-            cp "$f" dist/Mixel-Remote-QS.exe
-          done
-          for f in dist/mixel-remote-*-x86_64.msi; do
-            cp "$f" dist/Mixel-Remote-Support.msi
-          done
-          for f in dist/mixel-remote-*-x86_64.deb; do
-            cp "$f" dist/Mixel-Remote-Support.deb
-          done
-          ls -la dist/
-
-      - name: Upload to R2
-        continue-on-error: true
+      - name: Upload verified builds to R2
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
-            echo "ℹ CLOUDFLARE_API_TOKEN not set — skipping R2 upload."
-            exit 0
-          fi
-          if [[ ! -d dist ]] || [[ -z "$(ls -A dist 2>/dev/null)" ]]; then
-            echo "⚠ no artifacts to upload (platform jobs may have failed)"
-            exit 0
-          fi
+          set -euo pipefail
+          : "${CLOUDFLARE_API_TOKEN:?Publication requires CLOUDFLARE_API_TOKEN}"
+          : "${CLOUDFLARE_ACCOUNT_ID:?Publication requires CLOUDFLARE_ACCOUNT_ID}"
           npm install -g wrangler@4
-          for f in dist/*; do
-            name=$(basename "$f")
-            echo "→ uploading $name"
-            wrangler r2 object put "mixel-remote-binaries/$name" --file "$f" --remote
-          done
+          # Canonical versions must all upload before customer aliases change.
+          python3 - <<'PY'
+          import json
+          import subprocess
+          from pathlib import Path
+          manifest = json.loads(Path('dist/release-manifest.json').read_text())
+          for entry in sorted(manifest['files'], key=lambda item: item['alias']):
+              name = entry['name']
+              subprocess.run(['wrangler', 'r2', 'object', 'put', f'mixel-remote-binaries/{name}',
+                              '--file', f'dist/{name}', '--remote'], check=True)
+          subprocess.run(['wrangler', 'r2', 'object', 'put',
+                          'mixel-remote-binaries/release-manifest.json', '--file',
+                          'dist/release-manifest.json', '--remote'], check=True)
+          PY
 
   runtime:
     if: ${{ github.event.inputs.runtime_artifact_run != '' }}

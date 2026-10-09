@@ -1,6 +1,8 @@
 // Mixel attended support guard. Runtime only: never change saved login preferences.
 static MIXEL_SUPPORT_INVITE_UNTIL: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
+static MIXEL_SUPPORT_INVITE_STARTED: std::sync::OnceLock<std::time::Instant> =
+    std::sync::OnceLock::new();
 
 pub const SUPPORT_INVITE_ATTESTATION: &str = "attended-runtime-v1";
 
@@ -38,14 +40,20 @@ pub fn is_support_invite_arg(value: &str) -> bool {
 }
 
 pub fn is_mixel_store_package_path(value: &str) -> bool {
-    value.to_ascii_lowercase().contains("windowsapps")
+    value
+        .split(['\\', '/'])
+        .any(|component| component.eq_ignore_ascii_case("WindowsApps"))
 }
 
 fn support_invite_now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or(0)
+    // Consent must not disappear early or last indefinitely after the customer
+    // corrects their system clock. This deadline is local to this process only.
+    MIXEL_SUPPORT_INVITE_STARTED
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_millis()
+        .min((u64::MAX - 1) as u128) as u64
+        + 1
 }
 
 fn support_invite_guard_active(now: u64, until: u64) -> bool {
@@ -53,7 +61,7 @@ fn support_invite_guard_active(now: u64, until: u64) -> bool {
 }
 
 pub fn renew_support_invite_attended() {
-    MIXEL_SUPPORT_INVITE_UNTIL.store(
+    MIXEL_SUPPORT_INVITE_UNTIL.fetch_max(
         support_invite_now_ms().saturating_add(90_000),
         std::sync::atomic::Ordering::SeqCst,
     );
@@ -103,7 +111,9 @@ mod mixel_support_invite_tests {
         assert!(is_support_invite_arg(
             "MIXEL-REMOTE://SUPPORT/?invite=synthetic&apikey=synthetic"
         ));
-        assert!(!is_support_invite_arg("mixel-remote://support/other?invite=synthetic"));
+        assert!(!is_support_invite_arg(
+            "mixel-remote://support/other?invite=synthetic"
+        ));
         assert!(!is_support_invite_arg("mixel-remote://123456"));
         assert!(!is_support_invite_arg(
             "mixel-remote://support.attacker.example?invite=synthetic"
@@ -129,12 +139,32 @@ mod mixel_support_invite_tests {
         assert!(!is_mixel_store_package_path(
             r"C:\Users\Example\AppData\Local\mixel-remote\mixel-remote.exe"
         ));
+        assert!(!is_mixel_store_package_path(
+            r"C:\Users\Example\Downloads\WindowsApps-backup\mixel-remote.exe"
+        ));
+        assert!(!is_mixel_store_package_path(
+            r"C:\Users\WindowsAppsUser\mixel-remote.exe"
+        ));
+        assert!(is_mixel_store_package_path(
+            "C:/Program Files/WindowsApps/Mixel/Mixel-Remote.exe"
+        ));
     }
 
     #[test]
     fn support_handoff_renews_attended_guard() {
         renew_support_invite_attended();
         assert!(support_invite_requires_click());
+    }
+
+    #[test]
+    fn guard_clock_is_nonzero_monotonic_and_renewals_cannot_shorten_deadline() {
+        let before = support_invite_now_ms();
+        assert_ne!(before, 0);
+        assert!(support_invite_now_ms() >= before);
+        renew_support_invite_attended();
+        let deadline = MIXEL_SUPPORT_INVITE_UNTIL.load(std::sync::atomic::Ordering::SeqCst);
+        renew_support_invite_attended();
+        assert!(MIXEL_SUPPORT_INVITE_UNTIL.load(std::sync::atomic::Ordering::SeqCst) >= deadline);
     }
 
     #[test]
