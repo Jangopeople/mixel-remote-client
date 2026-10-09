@@ -1,5 +1,32 @@
 # Mixel-Remote — Agent Handoff / Current State
 
+## Reliability work in progress — 2026-10-09
+
+The active review branch is `fix/remote-support-reliability`, PR
+[7](https://github.com/Jangopeople/mixel-remote-client/pull/7). This is a large
+attended-support, transport, native input/clipboard and installer verification
+pass. Read the PR and current workflow results before releasing its output.
+
+Source regression tests and the isolated stock hbbs/hbbr 1.1.15 gateway tests
+pass. An actual Linux diagnostic installer completed customer Accept, decoded
+video, native keyboard/mouse, bidirectional clipboard/file transfer, incoming
+service restart with paused UI heartbeat, and network reconnect through an
+isolated HTTPS fixture. That diagnostic binary predates the final source fixes;
+the combined platform builds are being rerun. Its fixture uses its own public
+pin and test CA and does not prove the live HTTPS route is repaired.
+
+The deployed stock server rejects host `RegisterPk` on `/ws/id` with
+`NOT_SUPPORT`. The reviewed compatibility service and exact production change
+and draining rollback are in `infra/relay-ws-bridge/README.md`. Michael's explicit
+production approval has been requested and is still pending. Do not infer
+approval from a passing fixture or from this handoff.
+
+Public downloads, marketplace submissions, installed local application/service,
+native server containers, relay identity/database and DNS have not changed.
+Builds use `publish_r2=false`. Keep the PR draft until its final required checks
+and production verification are resolved. Local diagnostic evidence is under
+the ignored `artifacts/verification-2026-10-09/` directory.
+
 > **Purpose:** if Michael hits his Claude weekly limit, another agent (Codex,
 > etc.) can pick up Mixel-Remote work from this file alone. Read this top to
 > bottom before touching anything. Last updated: **2026-07-23**.

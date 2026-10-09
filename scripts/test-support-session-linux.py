@@ -5,7 +5,9 @@ Never uses direct IP, personal desktops, existing containers, saved customer
 passwords, or IPC authorization. IPC reads supply only independent assertions.
 """
 import argparse
+import base64
 import hashlib
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -13,6 +15,7 @@ import platform
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -48,11 +51,14 @@ def until(description, operation, timeout=60):
 
 
 class Session:
-    def __init__(self, proofs, deb, flutter_input, blocked):
+    def __init__(self, proofs, deb, flutter_input, blocked, isolated_relay=None):
         self.proofs = proofs
         self.deb = deb
         self.flutter_input = flutter_input
         self.blocked = blocked
+        self.isolated_relay = isolated_relay
+        self.expected_pin = isolated_relay["pin"] if isolated_relay else "OogSlDx9l+fgs0t6ihF3uTg9emyCv01m8cr4ullarRo="
+        self.network = isolated_relay["network"] if isolated_relay else "bridge"
         self.name = "mixel-session-" + uuid.uuid4().hex[:12]
         self.image = self.name + ":test"
         self.names = {role: self.name + "-" + role for role in ("host", "controller")}
@@ -144,8 +150,9 @@ class Session:
     def health(self, role):
         # Reuse independent smoke assertions for the attended host: real owner
         # PID, relay/key/options, native endpoint, ID, service key confirmation.
-        code = ("import sys,json;sys.path.insert(0,'/payload');"
-                "from ipc_probe import runtime_health;print(json.dumps(runtime_health("
+        code = ("import sys,json;sys.path.insert(0,'/payload');import ipc_probe;"
+                + "ipc_probe.PUBLIC_KEY=" + repr(self.expected_pin) + ";"
+                "print(json.dumps(ipc_probe.runtime_health("
                 + str(self.server[role]) + ")))")
         state = json.loads(self.run(role, ["python3", "-c", code]).stdout)
         return state if state[0] > 0 and state[1] is True else None
@@ -183,7 +190,7 @@ for name in os.listdir('/proc'):
 
     def request(self, label):
         assert self.query("host", "VideoConnCount") == 0
-        self.launch("controller", ["--connect", self.ids["host"], "--relay"])
+        self.launch("controller", ["--connect", self.ids["host"]] + ([] if self.blocked else ["--relay"]))
         until("pending consent CM", self.cm)
         time.sleep(1)
         assert self.query("host", "VideoConnCount") == 0, "Password/recent session bypassed customer consent"
@@ -207,6 +214,10 @@ for name in os.listdir('/proc'):
         return viewer
 
     def video_map(self, name):
+        # A delayed support-link foreground callback can run after Accept on a
+        # slow desktop. Keep the synthetic fixture visible for pixel matching.
+        for window in self.windows("host", "^Mixel-Remote$"):
+            self.gui("host", ["xdotool", "windowminimize", window])
         self.screenshot("controller", name)
         code = r'''from PIL import Image
 import json
@@ -247,6 +258,10 @@ print(json.dumps(rects[0]))
         self.gui("controller", ["xdotool", "type", "--clearmodifiers", "--delay", "60", TEXT])
         self.click("controller", *mapping(541, 544))
         state = until("real remote keyboard and mouse callback", lambda: (value if value.get("text") == TEXT and value.get("count", 0) >= 1 else None) if (value := json.loads((self.proofs / "host/input.json").read_text())) else None)
+        self.screenshot("host", "host-keyboard-mouse-proof")
+        # The independent callback can precede the next encoded video frame.
+        # Let that frame settle so the shared viewer proof displays the click.
+        time.sleep(.8)
         self.screenshot("controller", "keyboard-mouse-proof")
         print("PASS: exact remote keyboard text + mouse callback reached host using " + ("supported Flutter Input source2" if self.flutter_input else "default native Input source1"), flush=True)
         return state
@@ -272,6 +287,8 @@ print(json.dumps(rects[0]))
         print("PASS: actual bidirectional remote clipboard matches exact synthetic text on both X11 desktops", flush=True)
 
     def path(self, x, path):
+        # Click the breadcrumb divider (no child navigation handler), which
+        # reliably opens the containing real editable location field.
         self.click("controller", x, 180)
         self.gui("controller", ["xdotool", "key", "ctrl+a"])
         self.gui("controller", ["xdotool", "type", "--clearmodifiers", path])
@@ -280,25 +297,35 @@ print(json.dumps(rects[0]))
 
     def files(self, expected_hash):
         self.stop_controller_gui()
-        self.run("host", ["mkdir", "-p", "/home/guest/received"])
-        self.run("controller", ["mkdir", "-p", "/home/guest/send-proof", "/home/guest/roundtrip"])
-        self.run("controller", ["cp", "/payload/" + FILE, "/home/guest/send-proof/" + FILE])
-        self.launch("controller", ["--file-transfer", self.ids["host"], "--relay"])
+        # Keep synthetic paths short and distinct for unambiguous UI proof.
+        source, remote, roundtrip = "/home/guest/s", "/home/guest/h", "/home/guest/r"
+        self.run("host", ["mkdir", "-p", remote])
+        self.run("controller", ["mkdir", "-p", source, roundtrip])
+        self.run("controller", ["cp", "/payload/" + FILE, source + "/" + FILE])
+        self.launch("controller", ["--file-transfer", self.ids["host"]] + ([] if self.blocked else ["--relay"]))
         self.accept("file-transfer")
         window = until("actual file manager", lambda: next(iter(self.windows("controller", "File Transfer.*Mixel-Remote$")), None))
         self.activate("controller", window)
         self.gui("controller", ["xdotool", "windowsize", window, "1300", "740", "windowmove", window, "0", "40"])
         time.sleep(1)
-        self.path(350, "/home/guest/send-proof")
-        self.path(840, "/home/guest/received")
+        self.path(130, source)
+        self.path(616, remote)
         self.click("controller", 160, 294)
+        self.screenshot("controller", "file-upload-selected")
         self.click("controller", 424, 232)
-        until("actual upload complete SHA256", lambda: self.run("host", ["sha256sum", "/home/guest/received/" + FILE], check=False).stdout.split()[:1] == [expected_hash])
-        self.path(350, "/home/guest/roundtrip")
+        until("actual upload complete SHA256", lambda: self.run("host", ["sha256sum", remote + "/" + FILE], check=False).stdout.split()[:1] == [expected_hash])
+        self.screenshot("controller", "file-upload-complete")
+        self.path(130, roundtrip)
         self.click("controller", 650, 294)
+        self.screenshot("controller", "file-download-selected")
         self.click("controller", 575, 232)
-        until("actual downloaded complete SHA256", lambda: self.run("controller", ["sha256sum", "/home/guest/roundtrip/" + FILE], check=False).stdout.split()[:1] == [expected_hash])
+        until("actual downloaded complete SHA256", lambda: self.run("controller", ["sha256sum", roundtrip + "/" + FILE], check=False).stdout.split()[:1] == [expected_hash])
         self.screenshot("controller", "file-roundtrip-proof")
+        (self.proofs / "file-roundtrip-proof.json").write_text(json.dumps({
+            "filename": FILE, "sha256": expected_hash,
+            "controller_source": source, "host_uploaded": remote,
+            "controller_downloaded": roundtrip,
+        }, indent=2) + "\n")
         print("PASS: actual encrypted relay file upload + download matches SHA256 " + expected_hash, flush=True)
         self.stop_controller_gui()
 
@@ -326,11 +353,11 @@ print(json.dumps(rects[0]))
     def drop(self):
         self.stop_controller_gui()
         self.connect("before-network-drop")
-        command(["docker", "network", "disconnect", "bridge", self.names["host"]])
+        command(["docker", "network", "disconnect", self.network, self.names["host"]])
         try:
             until("dropped transport disconnects authenticated session", lambda: self.query("host", "VideoConnCount") == 0, timeout=60)
         finally:
-            command(["docker", "network", "connect", "bridge", self.names["host"]])
+            command(["docker", "network", "connect", self.network, self.names["host"]])
         until("rendezvous recovered after actual network drop", lambda: self.online("host"), timeout=90)
         self.stop_controller_gui()
         self.connect("network-reconnect")
@@ -340,6 +367,7 @@ print(json.dumps(rects[0]))
 
     def capture(self):
         for role in self.created:
+            self.screenshot(role, "final-desktop-state")
             self.run(role, ["bash", "-c", "cp -R /home/guest/.local/share/logs/Mixel-Remote /proofs/native-logs 2>/dev/null || true; ss -tnp >/proofs/tcp-sockets.txt"], check=False)
             if self.blocked:
                 self.run(role, ["bash", "-c", "iptables-save -c >/proofs/native-port-block.txt"], user="root", check=False)
@@ -376,6 +404,8 @@ print(json.dumps(rects[0]))
         payload.mkdir()
         shutil.copyfile(self.deb, payload / "client.deb")
         shutil.copyfile(ROOT / "scripts/test-support-launch-linux.py", payload / "ipc_probe.py")
+        if self.isolated_relay:
+            shutil.copyfile(self.isolated_relay["ca"], payload / "isolated-relay-ca.crt")
         content = b"MIXEL_SYNTHETIC_FILE_TRANSFER_PROOF\n" + bytes(range(256)) * 256
         (payload / FILE).write_bytes(content)
         expected_hash = hashlib.sha256(content).hexdigest()
@@ -383,10 +413,19 @@ print(json.dumps(rects[0]))
             proofs = self.proofs / role
             proofs.mkdir(mode=0o777)
             proofs.chmod(0o777)
-            command(["docker", "run", "-d", "--platform", "linux/amd64", "--name", self.names[role], "--hostname", self.names[role], "--label", "com.mixel.test=" + self.name, "--cap-add", "NET_ADMIN", "--memory", "2g", "-v", str(proofs) + ":/proofs", "-v", str(payload) + ":/payload:ro", self.image])
+            arguments = ["docker", "run", "-d", "--platform", "linux/amd64", "--name", self.names[role], "--hostname", self.names[role], "--label", "com.mixel.test=" + self.name, "--cap-add", "NET_ADMIN", "--memory", "2g", "-v", str(proofs) + ":/proofs", "-v", str(payload) + ":/payload:ro"]
+            if self.isolated_relay:
+                arguments += ["--network", self.network, "--add-host", "rs.mixel.ch:" + self.isolated_relay["address"]]
+            # Enroll the unique owned name before Docker may create it. A
+            # timeout/signal between creation and command return still cleans it.
             self.created.append(role)
+            command(arguments + [self.image])
             until(role + " synthetic desktop", lambda: (proofs / "fixture-ready").exists())
             self.run(role, ["bash", "-c", "mkdir -p /usr/local/mixel-test; dpkg-deb -x /payload/client.deb /usr/local/mixel-test; chown -R guest:guest /home/guest/.cache"], user="root")
+            if self.isolated_relay:
+                self.run(role, ["bash", "-c", "cp /payload/isolated-relay-ca.crt /usr/local/share/ca-certificates/mixel-isolated-relay.crt; update-ca-certificates >/proofs/isolated-ca-install.log 2>&1"], user="root")
+                config = '[options]\ncustom-rendezvous-server = "rs.mixel.ch"\nrelay-server = "rs.mixel.ch"\nkey = "' + self.expected_pin + '"\n'
+                self.run(role, ["python3", "-c", "from pathlib import Path;p=Path('/home/guest/.config/mixel-remote');p.mkdir(parents=True,exist_ok=True);(p/'Mixel-Remote2.toml').write_text(" + repr(config) + ")"])
             if self.blocked:
                 for protocol in ("tcp", "udp"):
                     self.run(role, ["iptables", "-A", "OUTPUT", "-p", protocol, "--dport", "21115:21119", "-j", "REJECT"], user="root")
@@ -399,7 +438,7 @@ print(json.dumps(rects[0]))
             else:
                 assert self.run(role, ["cat", "/tmp/Mixel-Remote/ipc.pid"]).stdout.strip() == str(self.server[role])
                 options = self.query(role, "Options")
-                for key, value in {"custom-rendezvous-server": "rs.mixel.ch", "relay-server": "rs.mixel.ch", "key": "OogSlDx9l+fgs0t6ihF3uTg9emyCv01m8cr4ullarRo="}.items():
+                for key, value in {"custom-rendezvous-server": "rs.mixel.ch", "relay-server": "rs.mixel.ch", "key": self.expected_pin}.items():
                     assert options.get(key) == value, "Controller branded relay/pin changed"
                 assert "mixel-support-invite-attended" not in options
         self.gui("controller", ["bash", "-c", 'xdotool search --name "Mixel isolated customer desktop" windowminimize'])
@@ -413,7 +452,28 @@ def main():
     parser.add_argument("--native-blocked", action="store_true", help="Block native relay ports in both owned peers; prove automatic HTTPS443 transport")
     parser.add_argument("--flutter-input", action="store_true", help="Separately prove supported Flutter Input source2 (default proves native source1)")
     parser.add_argument("--require-native", action="store_true", help="Reject amd64 emulation so native keyboard results are unambiguous")
+    parser.add_argument("--artifact-run-id", help="Source build run for the exact installer (independent of this harness run)")
+    parser.add_argument("--isolated-relay-network", help="Explicit task-owned Docker network for a deployment-free relay fixture")
+    parser.add_argument("--isolated-relay-address", help="Private fixture TLS router IPv4; mapped to rs.mixel.ch only in owned peers")
+    parser.add_argument("--isolated-relay-ca", type=Path, help="Public fixture CA certificate; trusted only by owned peer containers")
+    parser.add_argument("--isolated-relay-pin", type=Path, help="Public fixture Ed25519 relay pin; seeded only in owned peer HOME")
     args = parser.parse_args()
+    isolated = None
+    isolated_values = (args.isolated_relay_network, args.isolated_relay_address, args.isolated_relay_ca, args.isolated_relay_pin)
+    if any(isolated_values):
+        if not all(isolated_values) or not args.native_blocked:
+            raise SystemExit("Isolated relay requires all four fixture parameters and --native-blocked")
+        address = ipaddress.ip_address(args.isolated_relay_address)
+        if address.version != 4 or not address.is_private or address.is_loopback or address.is_unspecified:
+            raise SystemExit("Isolated relay must use its private Docker IPv4")
+        ca = args.isolated_relay_ca.resolve(strict=True)
+        if b"PRIVATE KEY" in ca.read_bytes() or b"BEGIN CERTIFICATE" not in ca.read_bytes():
+            raise SystemExit("Isolated CA input must contain a public certificate only")
+        pin = args.isolated_relay_pin.resolve(strict=True).read_text().strip()
+        if len(base64.b64decode(pin, validate=True)) != 32:
+            raise SystemExit("Isolated relay pin must be a public Ed25519 key")
+        command(["docker", "network", "inspect", args.isolated_relay_network])
+        isolated = {"network": args.isolated_relay_network, "address": str(address), "ca": ca, "pin": pin}
     if args.require_native and platform.machine().lower() not in ("x86_64", "amd64"):
         raise SystemExit("Native amd64 host required for this proof")
     args.deb = args.deb.resolve(strict=True)
@@ -421,8 +481,11 @@ def main():
     args.proofs.mkdir(parents=True, exist_ok=True)
     if any(args.proofs.iterdir()):
         raise SystemExit("Proof output directory must be empty")
-    manifest = {"artifact": args.deb.name, "sha256": hashlib.sha256(args.deb.read_bytes()).hexdigest(), "host_architecture": platform.machine(), "native_ports_blocked": args.native_blocked, "input_source": "flutter2" if args.flutter_input else "native1", "result": "failed"}
-    session = Session(args.proofs, args.deb, args.flutter_input, args.native_blocked)
+    revision = command(["git", "-C", str(ROOT), "rev-parse", "HEAD"], check=False).stdout.strip()
+    manifest = {"artifact": args.deb.name, "sha256": hashlib.sha256(args.deb.read_bytes()).hexdigest(), "host_architecture": platform.machine(), "native_ports_blocked": args.native_blocked, "input_source": "flutter2" if args.flutter_input else "native1", "result": "failed", "relay_environment": "isolated fixture (test CA and test public pin)" if isolated else "live Mixel relay", "forced_relay_request": "automatic transport selection (no --relay)" if args.native_blocked else "explicit --relay", "harness_revision": revision or "unavailable", "harness_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(), "run_id": os.environ.get("GITHUB_RUN_ID"), "artifact_run_id": args.artifact_run_id or os.environ.get("GITHUB_RUN_ID")}
+    if isolated:
+        manifest["isolated_relay"] = {"network": isolated["network"], "private_address": isolated["address"], "public_pin_sha256": hashlib.sha256(isolated["pin"].encode()).hexdigest(), "ca_sha256": hashlib.sha256(isolated["ca"].read_bytes()).hexdigest()}
+    session = Session(args.proofs, args.deb, args.flutter_input, args.native_blocked, isolated)
     with tempfile.TemporaryDirectory(prefix="mixel-real-session-") as temporary:
         try:
             digest = session.setup(Path(temporary))
@@ -450,4 +513,5 @@ def main():
 
 
 if __name__ == "__main__":
+    signal.signal(signal.SIGTERM, lambda signum, _frame: sys.exit(128 + signum))
     main()

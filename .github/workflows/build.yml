@@ -167,7 +167,7 @@ jobs:
             libxcb-randr0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libxdo-dev libxfixes-dev llvm-dev nasm ninja-build pkg-config \
             tree python3 rpm unzip wget xz-utils libssl-dev imagemagick \
-            dbus-x11 xvfb xdotool x11-utils openbox
+            dbus-x11 xvfb xclip xdotool x11-utils openbox
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@v1
@@ -226,6 +226,8 @@ jobs:
           python3 scripts/test-secure-support.py
           python3 scripts/test-support-linux.py
           python3 scripts/test-support-input.py
+          python3 scripts/test-support-clipboard.py --native-x11
+          python3 scripts/test-branding.py
           dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart
           dart scripts/test-support-invite.dart
 
@@ -271,15 +273,16 @@ jobs:
             --deb "dist/mixel-remote-${UPSTREAM_VERSION}-x86_64.deb" \
             --proofs artifacts/linux-native --require-native | tee artifacts/linux-native.log
 
-      - name: Prove HTTPS support with native relay ports blocked
+      - name: Prove automatic HTTPS support against an isolated owned relay
         if: ${{ !cancelled() && steps.locate.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p artifacts
-          python3 scripts/test-support-session-linux.py \
+          python3 scripts/test-support-session-https-linux.py \
             --deb "dist/mixel-remote-${UPSTREAM_VERSION}-x86_64.deb" \
-            --proofs artifacts/linux-https --require-native --native-blocked | tee artifacts/linux-https.log
+            --proofs artifacts/linux-https --require-native \
+            --artifact-run-id "$GITHUB_RUN_ID" | tee artifacts/linux-https.log
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -392,6 +395,8 @@ jobs:
           python3 scripts/test-secure-support.py
           python3 scripts/test-support-linux.py
           python3 scripts/test-support-input.py
+          python3 scripts/test-support-clipboard.py
+          python3 scripts/test-branding.py
           dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart
           dart scripts/test-support-invite.dart
 
@@ -623,6 +628,8 @@ jobs:
           python scripts/test-secure-support.py
           python scripts/test-support-linux.py
           python scripts/test-support-input.py
+          python scripts/test-support-clipboard.py
+          python scripts/test-branding.py
           dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart
           dart scripts/test-support-invite.dart
 
@@ -980,11 +987,11 @@ jobs:
           DEBS=(runtime-artifacts/mixel-remote-*-x86_64.deb)
           [[ ${#DEBS[@]} == 1 && -s "${DEBS[0]}" ]] || { echo 'Expected exactly one customer installer' >&2; exit 1; }
           mkdir -p artifacts
-          OPTIONS=()
-          if [[ "$TRANSPORT" == https ]]; then OPTIONS+=(--native-blocked); fi
-          python3 scripts/test-support-session-linux.py \
+          HARNESS=scripts/test-support-session-linux.py
+          if [[ "$TRANSPORT" == https ]]; then HARNESS=scripts/test-support-session-https-linux.py; fi
+          python3 "$HARNESS" \
             --deb "${DEBS[0]}" --proofs artifacts/session --require-native \
-            "${OPTIONS[@]}" | tee artifacts/session.log
+            --artifact-run-id "${{ steps.request.outputs.run_id }}" | tee artifacts/session.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:

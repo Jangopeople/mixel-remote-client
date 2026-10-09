@@ -87,6 +87,7 @@ python3 scripts/test-support-network.py
 python3 scripts/test-secure-support.py
 python3 scripts/test-support-linux.py
 python3 scripts/test-support-input.py
+python3 scripts/test-support-clipboard.py
 python3 scripts/test-support-lease.py
 dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart
 dart scripts/test-support-invite.dart
@@ -105,13 +106,30 @@ outside PATH. The real desktop smoke needs its target OS and compiled bundle;
 source regression tests do not establish screen/video/input behavior on a remote
 customer device. macOS permission grants remain controlled by the customer’s OS.
 
+On Linux, `python3 scripts/test-support-clipboard.py --native-x11` additionally
+executes the exact pinned clipboard listener against a disposable X server.
+It verifies rapid ownership changes, selection filtering, callback errors and
+shutdown. This requires Cargo, Xvfb and xclip. The local Cargo overrides preserve
+the upstream locked versions and dependency edges; they fix interrupted input
+polling and missed clipboard events without updating unrelated dependencies.
+
 The Linux build also runs two real isolated desktops with the exact packaged
-installer. Tests request a relayed session, require customer Accept, compare
+installer. The native test uses the live Mixel relay. Tests require customer Accept, compare
 decoded video and host input, transfer a synthetic file in both directions, and
-recover from incoming-service restart and network loss. A second run blocks the
-native relay ports to exercise certificate-verified HTTPS on port 443. Failure
+recover from incoming-service restart and network loss. A second run creates a
+disposable copy of the pinned relay with the registration gateway, blocks native
+ports, and requests ordinary ID connections without the manual relay option.
+It verifies automatic certificate-verified HTTPS on port 443 using an explicitly
+recorded fixture CA and public relay pin. This does not assert that the gateway
+has been deployed to the live server. Failure
 stops the build; screenshots, native logs and the installer SHA256 remain in the
 `linux-support-session-proof` artifact.
+
+The isolated HTTPS regression is also runnable with
+`python3 scripts/test-support-session-https-linux.py --deb <installer> --proofs <new-directory>`.
+Its ownership checks and cleanup protect unrelated Docker resources. See
+[the gateway deployment and rollback scope](infra/relay-ws-bridge/README.md)
+before any production change.
 
 ## Build and release
 
