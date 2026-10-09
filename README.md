@@ -125,6 +125,11 @@ has been deployed to the live server. Failure
 stops the build; screenshots, native logs and the installer SHA256 remain in the
 `linux-support-session-proof` artifact.
 
+A third run preserves the customer's native UDP registration while blocking
+its TCP ports, and preserves the technician's TCP while blocking its UDP.
+It verifies ordinary ID and file-transfer sessions without a manual relay flag,
+including a late switch to HTTPS inside the incoming request path.
+
 The isolated HTTPS regression is also runnable with
 `python3 scripts/test-support-session-https-linux.py --deb <installer> --proofs <new-directory>`.
 Its ownership checks and cleanup protect unrelated Docker resources. See

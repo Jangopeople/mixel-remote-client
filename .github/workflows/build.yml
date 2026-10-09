@@ -284,6 +284,17 @@ jobs:
             --proofs artifacts/linux-https --require-native \
             --artifact-run-id "$GITHUB_RUN_ID" | tee artifacts/linux-https.log
 
+      - name: Prove incoming recovery when native TCP and UDP fail independently
+        if: ${{ !cancelled() && steps.locate.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          python3 scripts/test-support-session-https-linux.py \
+            --deb "dist/mixel-remote-${UPSTREAM_VERSION}-x86_64.deb" \
+            --proofs artifacts/linux-mixed --require-native --mixed-transports \
+            --artifact-run-id "$GITHUB_RUN_ID" | tee artifacts/linux-mixed.log
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -962,7 +973,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        transport: [native, https]
+        transport: [native, https, mixed]
     steps:
       - uses: actions/checkout@v4
       - name: Validate artifact-only diagnostic request
@@ -988,10 +999,12 @@ jobs:
           [[ ${#DEBS[@]} == 1 && -s "${DEBS[0]}" ]] || { echo 'Expected exactly one customer installer' >&2; exit 1; }
           mkdir -p artifacts
           HARNESS=scripts/test-support-session-linux.py
-          if [[ "$TRANSPORT" == https ]]; then HARNESS=scripts/test-support-session-https-linux.py; fi
+          OPTIONS=()
+          if [[ "$TRANSPORT" == https || "$TRANSPORT" == mixed ]]; then HARNESS=scripts/test-support-session-https-linux.py; fi
+          if [[ "$TRANSPORT" == mixed ]]; then OPTIONS+=(--mixed-transports); fi
           python3 "$HARNESS" \
             --deb "${DEBS[0]}" --proofs artifacts/session --require-native \
-            --artifact-run-id "${{ steps.request.outputs.run_id }}" | tee artifacts/session.log
+            --artifact-run-id "${{ steps.request.outputs.run_id }}" "${OPTIONS[@]}" | tee artifacts/session.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:

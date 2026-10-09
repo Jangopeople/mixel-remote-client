@@ -24,26 +24,65 @@ MANIFEST = {"kind": "mixel-isolated-registration-proof", "production_mutations":
 
 class FixtureTests(unittest.TestCase):
     def test_actual_remote_request_uses_automatic_https_without_cli_relay_flag(self):
-        for blocked in (False, True):
-            session = desktop.Session(Path("proofs"), Path("client.deb"), False, blocked)
+        for blocked, mixed in ((False, False), (True, False), (False, True)):
+            session = desktop.Session(Path("proofs"), Path("client.deb"), False, blocked, mixed_transports=mixed)
             session.ids["host"] = "123456789"
             with patch.object(session, "query", return_value=0), patch.object(session, "launch") as launch, \
                     patch.object(session, "cm", return_value="real-cm"), patch.object(session, "screenshot"), \
                     patch.object(session, "pending_accept"), patch.object(desktop.time, "sleep"):
                 session.request("argument-regression")
-            expected = ["--connect", "123456789"] + ([] if blocked else ["--relay"])
+            expected = ["--connect", "123456789"] + ([] if blocked or mixed else ["--relay"])
             launch.assert_called_once_with("controller", expected)
 
     def test_actual_file_request_uses_automatic_https_without_cli_relay_flag(self):
-        for blocked in (False, True):
-            session = desktop.Session(Path("proofs"), Path("client.deb"), False, blocked)
+        for blocked, mixed in ((False, False), (True, False), (False, True)):
+            session = desktop.Session(Path("proofs"), Path("client.deb"), False, blocked, mixed_transports=mixed)
             session.ids["host"] = "123456789"
             with patch.object(session, "stop_controller_gui"), patch.object(session, "run"), \
                     patch.object(session, "launch") as launch, patch.object(session, "accept", side_effect=RuntimeError("stop before UI")):
                 with self.assertRaisesRegex(RuntimeError, "stop before UI"):
                     session.files("hash-not-used-in-this-argument-test")
-            expected = ["--file-transfer", "123456789"] + ([] if blocked else ["--relay"])
+            expected = ["--file-transfer", "123456789"] + ([] if blocked or mixed else ["--relay"])
             launch.assert_called_once_with("controller", expected)
+
+    def test_mixed_firewall_preserves_host_initial_udp_and_controller_native_tcp(self):
+        session = desktop.Session(Path("proofs"), Path("client.deb"), False, False, mixed_transports=True)
+        with patch.object(session, "run") as run:
+            session.firewall("host")
+            session.firewall("controller")
+            session.firewall("host", after_registration=True)
+        self.assertEqual(run.call_args_list, [
+            unittest.mock.call("host", ["iptables", "-A", "OUTPUT", "-p", "udp", "--dport", "21116", "-j", "ACCEPT"], user="root"),
+            unittest.mock.call("controller", ["iptables", "-A", "OUTPUT", "-p", "udp", "--dport", "21115:21119", "-j", "REJECT"], user="root"),
+            unittest.mock.call("host", ["iptables", "-A", "OUTPUT", "-p", "tcp", "--dport", "21115:21119", "-j", "REJECT"], user="root"),
+        ])
+
+    def test_mixed_transport_rejects_initial_https_instead_of_claiming_native_registration(self):
+        session = desktop.Session(Path("proofs"), Path("client.deb"), False, False,
+                                  {"pin": "test-public-pin", "network": "owned-test", "address": "192.168.48.2"}, True)
+        sockets = "ESTAB 0 0 192.168.48.3:40000 192.168.48.2:443 users:((mixel-remote))\n"
+        rules = "[4:320] -A OUTPUT -p udp -m udp --dport 21116 -j ACCEPT\n"
+        with patch.object(session, "fixture_tcp", return_value=(sockets, sockets.splitlines())), \
+                patch.object(session, "run", return_value=subprocess.CompletedProcess([], 0, rules, "")):
+            with self.assertRaisesRegex(AssertionError, "unexpectedly used HTTPS"):
+                session.native_udp_proof("initial-registration")
+
+    def test_mixed_transport_cannot_pass_without_actual_controller_native_tcp_control(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            proofs = Path(temporary)
+            for role in ("host", "controller"):
+                (proofs / role).mkdir()
+            session = desktop.Session(proofs, Path("client.deb"), False, False,
+                                      {"pin": "test-public-pin", "network": "owned-test", "address": "192.168.48.2"}, True)
+            session.initial_udp_packets = 1
+            sockets = "ESTAB 0 0 192.168.48.3:40000 192.168.48.2:443 users:((mixel-remote))\n"
+            rules = "[0:0] -A OUTPUT -p tcp -m tcp --dport 21116 -j ACCEPT\n"
+            with patch.object(session, "query", return_value=1), patch.object(session, "native_udp_proof", return_value=2), \
+                    patch.object(session, "fixture_tcp", return_value=(sockets, sockets.splitlines())), \
+                    patch.object(session, "run", return_value=subprocess.CompletedProcess([], 0, rules, "")):
+                with self.assertRaisesRegex(AssertionError, "native TCP21116 control"):
+                    session.active_mixed_proof()
+            self.assertFalse((proofs / "mixed-transport-proof.json").exists())
 
     def test_actual_child_timeout_runs_its_finally_and_remains_a_failure(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -120,9 +159,11 @@ class FixtureTests(unittest.TestCase):
                 elif arguments[0] == "docker":
                     return subprocess.CompletedProcess(arguments, 0, json.dumps([{"Config": {"Labels": fixture.LABEL}, "Labels": fixture.LABEL}]), "")
                 else:
+                    self.assertIn("--mixed-transports", arguments)
+                    self.assertNotIn("--native-blocked", arguments)
                     raise failure
                 return subprocess.CompletedProcess(arguments, 0, "", "")
-            with patch.object(sys, "argv", [str(PATH), "--deb", str(deb), "--proofs", str(output)]), \
+            with patch.object(sys, "argv", [str(PATH), "--deb", str(deb), "--proofs", str(output), "--mixed-transports"]), \
                     patch.object(fixture, "execute", run), patch.object(fixture, "cleanup", return_value=[]) as cleanup:
                 with self.assertRaises(subprocess.CalledProcessError) as caught:
                     fixture.main()
@@ -131,6 +172,7 @@ class FixtureTests(unittest.TestCase):
             lifecycle = json.loads((output / "fixture-lifecycle.json").read_text())
             self.assertEqual(lifecycle["result"], "failed")
             self.assertEqual(lifecycle["owned_fixture_cleanup"], "completed")
+            self.assertIs(lifecycle["mixed_transports"], True)
 
 
 if __name__ == "__main__":

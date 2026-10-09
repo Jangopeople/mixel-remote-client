@@ -2,8 +2,8 @@
 """Run the actual desktop HTTPS suite against a disposable owned relay.
 
 The fixture uses new relay keys and its own TLS CA. It never changes the live
-Mixel server. Both peer containers block native ports and request ordinary ID
-connections, so successful sessions prove automatic HTTPS relay selection.
+Mixel server. Peers request ordinary ID connections, so successful sessions
+prove automatic HTTPS relay selection under a complete or partial port outage.
 """
 import argparse
 import json
@@ -96,6 +96,7 @@ def main():
     parser.add_argument("--proofs", required=True, type=Path)
     parser.add_argument("--require-native", action="store_true")
     parser.add_argument("--artifact-run-id")
+    parser.add_argument("--mixed-transports", action="store_true", help="Host retains native UDP registration; controller retains native TCP; ordinary ID/FT sessions must bridge the partial TCP outage")
     args = parser.parse_args()
     deb = args.deb.resolve(strict=True)
     output = args.proofs.resolve()
@@ -106,7 +107,7 @@ def main():
     fixture_manifest = None
     failure = None
     lifecycle = {"relay_environment": "isolated fixture (test CA and test public pin)",
-                 "production_mutations": False, "result": "failed"}
+                 "production_mutations": False, "mixed_transports": args.mixed_transports, "result": "failed"}
     try:
         execute([sys.executable, str(ROOT / "scripts/test-relay-ws-bridge-docker.py"),
                  "--keep-fixture", str(fixture_directory)], timeout=900)
@@ -116,7 +117,8 @@ def main():
         owned("network", fixture_manifest["network"])
         owned("volume", fixture_manifest["volume"])
         command = [sys.executable, str(ROOT / "scripts/test-support-session-linux.py"),
-                   "--deb", str(deb), "--proofs", str(output / "session"), "--native-blocked",
+                   "--deb", str(deb), "--proofs", str(output / "session"),
+                   "--mixed-transports" if args.mixed_transports else "--native-blocked",
                    "--isolated-relay-network", fixture_manifest["network"],
                    "--isolated-relay-address", fixture_manifest["fixture_address"],
                    "--isolated-relay-ca", fixture_manifest["public_test_ca_path"],

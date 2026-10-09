@@ -19,6 +19,7 @@ jobs:
           python3 scripts/test-release-pipeline.py
           python3 scripts/test-sdk-discovery.py
           python3 scripts/test-support-session-fixture.py
+          python3 scripts/test-relay-ws-bridge-lifecycle.py
       - name: Exercise Unix runtime IPC and window probe self-tests
         run: python3 scripts/test-support-launch-linux.py --self-test
       - name: Parse all Python source
@@ -43,6 +44,7 @@ jobs:
           set -o pipefail
           mkdir -p gateway-proof
           python3 scripts/test-relay-ws-bridge-docker.py 2>&1 | tee gateway-proof/registration.log
+          python3 scripts/test-relay-ws-bridge-deployment.py --docker 2>&1 | tee gateway-proof/deployment.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:

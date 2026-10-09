@@ -51,11 +51,13 @@ def until(description, operation, timeout=60):
 
 
 class Session:
-    def __init__(self, proofs, deb, flutter_input, blocked, isolated_relay=None):
+    def __init__(self, proofs, deb, flutter_input, blocked, isolated_relay=None, mixed_transports=False):
         self.proofs = proofs
         self.deb = deb
         self.flutter_input = flutter_input
         self.blocked = blocked
+        self.mixed_transports = mixed_transports
+        self.automatic_transport = blocked or mixed_transports
         self.isolated_relay = isolated_relay
         self.expected_pin = isolated_relay["pin"] if isolated_relay else "OogSlDx9l+fgs0t6ihF3uTg9emyCv01m8cr4ullarRo="
         self.network = isolated_relay["network"] if isolated_relay else "bridge"
@@ -66,6 +68,37 @@ class Session:
         self.server = {}
         self.gui_pid = {}
         self.ids = {}
+        self.initial_udp_packets = 0
+
+    def firewall(self, role, after_registration=False):
+        if self.mixed_transports:
+            protocols = ("tcp",) if role == "host" and after_registration else (("udp",) if role == "controller" else ())
+            if role == "host" and not after_registration:
+                # Count real native registration independently before imposing
+                # the partial TCP outage. NAT discovery must finish first.
+                self.run(role, ["iptables", "-A", "OUTPUT", "-p", "udp", "--dport", "21116", "-j", "ACCEPT"], user="root")
+        else:
+            protocols = ("tcp", "udp") if self.blocked and not after_registration else ()
+        for protocol in protocols:
+            self.run(role, ["iptables", "-A", "OUTPUT", "-p", protocol, "--dport", "21115:21119", "-j", "REJECT"], user="root")
+
+    def fixture_tcp(self, role):
+        sockets = self.run(role, ["ss", "-tnp"]).stdout
+        address = self.isolated_relay["address"]
+        return sockets, [line for line in sockets.splitlines()
+                         if line.startswith("ESTAB") and len(line.split()) >= 5
+                         and line.split()[4].startswith(address + ":")]
+
+    def native_udp_proof(self, label):
+        sockets, established = self.fixture_tcp("host")
+        rules = self.run("host", ["iptables-save", "-c"], user="root").stdout
+        counters = re.search(r"^\[(\d+):(\d+)\] -A OUTPUT .*--dport 21116 .*?-j ACCEPT$", rules, re.M)
+        assert counters and int(counters.group(1)) > 0, "No host UDP21116 registration packets observed"
+        if label == "initial-registration":
+            assert not any(":443" in line.split()[4] for line in established), "Host initial registration unexpectedly used HTTPS"
+        assert self.online("host"), "Host native registration is not key-confirmed"
+        (self.proofs / "host" / (label + "-udp-registration.txt")).write_text(rules + "\n" + sockets)
+        return int(counters.group(1))
 
     def run(self, role, arguments, *, check=True, user=None):
         cmd = ["docker", "exec"]
@@ -167,6 +200,31 @@ class Session:
             assert sum(":443" in line for line in established) >= 2, "Active forced relay plus registration did not establish TLS443 sockets"
         print("PASS: actual authenticated forced-relay video/input active with native21115-21119 blocked; both peers have TLS443 registration+session sockets", flush=True)
 
+    def active_mixed_proof(self):
+        assert self.query("host", "VideoConnCount") == 1
+        host_udp = self.native_udp_proof("active-encrypted-video")
+        assert host_udp > self.initial_udp_packets, "Host UDP registration stopped after the native TCP outage"
+        for role in self.names:
+            sockets, established = self.fixture_tcp(role)
+            (self.proofs / role / "active-mixed-transport-tcp.txt").write_text(sockets)
+            if role == "host":
+                assert not any(re.search(r":2111[5-9]$", line.split()[4]) for line in established), "Host blocked native TCP transport established"
+                assert sum(line.split()[4].endswith(":443") for line in established) >= 1, "Host relay session did not use HTTPS443"
+            else:
+                assert sum(line.split()[4].endswith(":443") for line in established) >= 1, "Controller registration did not use HTTPS443"
+        control_rules = self.run("controller", ["iptables-save", "-c"], user="root").stdout
+        control = re.search(r"^\[(\d+):(\d+)\] -A OUTPUT .*--dport 21116 .*?-j ACCEPT$", control_rules, re.M)
+        assert control and int(control.group(1)) > 0, "Ordinary controller request did not exercise native TCP21116 control; mixed late-fallback gap not tested"
+        (self.proofs / "controller" / "ordinary-id-native-control-tcp.txt").write_text(control_rules)
+        (self.proofs / "mixed-transport-proof.json").write_text(json.dumps({
+            "host_registration": "native UDP21116, key-confirmed before TCP block",
+            "host_udp_packets": host_udp, "host_session": "HTTPS443; native TCP21115-19 blocked",
+            "controller_registration": "HTTPS443; native UDP21115-19 blocked",
+            "controller_native_tcp": "ordinary-ID native TCP21116 control observed",
+            "controller_control_tcp_packets": int(control.group(1)), "request": "ordinary ID, no --relay",
+        }, indent=2) + "\n")
+        print("PASS: mixed transport: host native UDP registration plus HTTPS443 session; controller HTTPS registration with native TCP available; ordinary ID without --relay", flush=True)
+
     def start_gui(self, role):
         self.gui_pid[role] = self.launch(role, [URI] if role == "host" else [])
         until(role + " actual main window", lambda: self.windows(role, "^Mixel-Remote$"))
@@ -190,7 +248,7 @@ for name in os.listdir('/proc'):
 
     def request(self, label):
         assert self.query("host", "VideoConnCount") == 0
-        self.launch("controller", ["--connect", self.ids["host"]] + ([] if self.blocked else ["--relay"]))
+        self.launch("controller", ["--connect", self.ids["host"]] + ([] if self.automatic_transport else ["--relay"]))
         until("pending consent CM", self.cm)
         time.sleep(1)
         assert self.query("host", "VideoConnCount") == 0, "Password/recent session bypassed customer consent"
@@ -218,6 +276,11 @@ for name in os.listdir('/proc'):
         # slow desktop. Keep the synthetic fixture visible for pixel matching.
         for window in self.windows("host", "^Mixel-Remote$"):
             self.gui("host", ["xdotool", "windowminimize", window])
+        for window in self.windows("host", "^Mixel isolated customer desktop$"):
+            self.activate("host", window)
+        # Foreground callbacks can restore the app after minimizing it. The
+        # own synthetic fixture must be above it for an unoccluded RGB oracle.
+        time.sleep(.3)
         self.screenshot("controller", name)
         code = r'''from PIL import Image
 import json
@@ -302,7 +365,7 @@ print(json.dumps(rects[0]))
         self.run("host", ["mkdir", "-p", remote])
         self.run("controller", ["mkdir", "-p", source, roundtrip])
         self.run("controller", ["cp", "/payload/" + FILE, source + "/" + FILE])
-        self.launch("controller", ["--file-transfer", self.ids["host"]] + ([] if self.blocked else ["--relay"]))
+        self.launch("controller", ["--file-transfer", self.ids["host"]] + ([] if self.automatic_transport else ["--relay"]))
         self.accept("file-transfer")
         window = until("actual file manager", lambda: next(iter(self.windows("controller", "File Transfer.*Mixel-Remote$")), None))
         self.activate("controller", window)
@@ -369,7 +432,7 @@ print(json.dumps(rects[0]))
         for role in self.created:
             self.screenshot(role, "final-desktop-state")
             self.run(role, ["bash", "-c", "cp -R /home/guest/.local/share/logs/Mixel-Remote /proofs/native-logs 2>/dev/null || true; ss -tnp >/proofs/tcp-sockets.txt"], check=False)
-            if self.blocked:
+            if self.automatic_transport:
                 self.run(role, ["bash", "-c", "iptables-save -c >/proofs/native-port-block.txt"], user="root", check=False)
 
     def cleanup(self):
@@ -426,15 +489,16 @@ print(json.dumps(rects[0]))
                 self.run(role, ["bash", "-c", "cp /payload/isolated-relay-ca.crt /usr/local/share/ca-certificates/mixel-isolated-relay.crt; update-ca-certificates >/proofs/isolated-ca-install.log 2>&1"], user="root")
                 config = '[options]\ncustom-rendezvous-server = "rs.mixel.ch"\nrelay-server = "rs.mixel.ch"\nkey = "' + self.expected_pin + '"\n'
                 self.run(role, ["python3", "-c", "from pathlib import Path;p=Path('/home/guest/.config/mixel-remote');p.mkdir(parents=True,exist_ok=True);(p/'Mixel-Remote2.toml').write_text(" + repr(config) + ")"])
-            if self.blocked:
-                for protocol in ("tcp", "udp"):
-                    self.run(role, ["iptables", "-A", "OUTPUT", "-p", protocol, "--dport", "21115:21119", "-j", "REJECT"], user="root")
+            self.firewall(role)
             self.server[role] = self.launch(role, ["--server"])
             until(role + " registered ID and verified relay key", lambda: self.online(role), timeout=90)
             self.ids[role] = self.query(role, "Config", ["id", None])[1]
             self.start_gui(role)
             if role == "host":
                 until("independent host IPC/relay/pin/ID proof", lambda: self.health(role))
+                if self.mixed_transports:
+                    self.initial_udp_packets = self.native_udp_proof("initial-registration")
+                    self.firewall(role, after_registration=True)
             else:
                 assert self.run(role, ["cat", "/tmp/Mixel-Remote/ipc.pid"]).stdout.strip() == str(self.server[role])
                 options = self.query(role, "Options")
@@ -442,6 +506,10 @@ print(json.dumps(rects[0]))
                     assert options.get(key) == value, "Controller branded relay/pin changed"
                 assert "mixel-support-invite-attended" not in options
         self.gui("controller", ["bash", "-c", 'xdotool search --name "Mixel isolated customer desktop" windowminimize'])
+        if self.mixed_transports:
+            # Install after service/GUI setup so this counter cannot be
+            # satisfied by registration or a NAT discovery probe.
+            self.run("controller", ["iptables", "-A", "OUTPUT", "-p", "tcp", "--dport", "21116", "-j", "ACCEPT"], user="root")
         return expected_hash
 
 
@@ -449,7 +517,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--deb", required=True, type=Path)
     parser.add_argument("--proofs", required=True, type=Path)
-    parser.add_argument("--native-blocked", action="store_true", help="Block native relay ports in both owned peers; prove automatic HTTPS443 transport")
+    transports = parser.add_mutually_exclusive_group()
+    transports.add_argument("--native-blocked", action="store_true", help="Block native relay ports in both owned peers; prove automatic HTTPS443 transport")
+    transports.add_argument("--mixed-transports", action="store_true", help="Isolated fixture only: host UDP registration/native TCP blocked; controller UDP blocked/native TCP available")
     parser.add_argument("--flutter-input", action="store_true", help="Separately prove supported Flutter Input source2 (default proves native source1)")
     parser.add_argument("--require-native", action="store_true", help="Reject amd64 emulation so native keyboard results are unambiguous")
     parser.add_argument("--artifact-run-id", help="Source build run for the exact installer (independent of this harness run)")
@@ -461,8 +531,8 @@ def main():
     isolated = None
     isolated_values = (args.isolated_relay_network, args.isolated_relay_address, args.isolated_relay_ca, args.isolated_relay_pin)
     if any(isolated_values):
-        if not all(isolated_values) or not args.native_blocked:
-            raise SystemExit("Isolated relay requires all four fixture parameters and --native-blocked")
+        if not all(isolated_values) or not (args.native_blocked or args.mixed_transports):
+            raise SystemExit("Isolated relay requires all four fixture parameters and an explicit blocked/mixed transport mode")
         address = ipaddress.ip_address(args.isolated_relay_address)
         if address.version != 4 or not address.is_private or address.is_loopback or address.is_unspecified:
             raise SystemExit("Isolated relay must use its private Docker IPv4")
@@ -474,6 +544,8 @@ def main():
             raise SystemExit("Isolated relay pin must be a public Ed25519 key")
         command(["docker", "network", "inspect", args.isolated_relay_network])
         isolated = {"network": args.isolated_relay_network, "address": str(address), "ca": ca, "pin": pin}
+    if args.mixed_transports and isolated is None:
+        raise SystemExit("Mixed transport tests require the explicit isolated fixture")
     if args.require_native and platform.machine().lower() not in ("x86_64", "amd64"):
         raise SystemExit("Native amd64 host required for this proof")
     args.deb = args.deb.resolve(strict=True)
@@ -485,11 +557,17 @@ def main():
     manifest = {"artifact": args.deb.name, "sha256": hashlib.sha256(args.deb.read_bytes()).hexdigest(), "host_architecture": platform.machine(), "native_ports_blocked": args.native_blocked, "input_source": "flutter2" if args.flutter_input else "native1", "result": "failed", "relay_environment": "isolated fixture (test CA and test public pin)" if isolated else "live Mixel relay", "forced_relay_request": "automatic transport selection (no --relay)" if args.native_blocked else "explicit --relay", "harness_revision": revision or "unavailable", "harness_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(), "run_id": os.environ.get("GITHUB_RUN_ID"), "artifact_run_id": args.artifact_run_id or os.environ.get("GITHUB_RUN_ID")}
     if isolated:
         manifest["isolated_relay"] = {"network": isolated["network"], "private_address": isolated["address"], "public_pin_sha256": hashlib.sha256(isolated["pin"].encode()).hexdigest(), "ca_sha256": hashlib.sha256(isolated["ca"].read_bytes()).hexdigest()}
-    session = Session(args.proofs, args.deb, args.flutter_input, args.native_blocked, isolated)
+    manifest["mixed_transports"] = args.mixed_transports
+    if args.mixed_transports:
+        manifest["forced_relay_request"] = "automatic mixed transport selection (no --relay)"
+        manifest["transport_policy"] = {"host": "native UDP registration, TCP21115-19 blocked after initial registration", "controller": "UDP21115-19 blocked, native TCP available"}
+    session = Session(args.proofs, args.deb, args.flutter_input, args.native_blocked, isolated, args.mixed_transports)
     with tempfile.TemporaryDirectory(prefix="mixel-real-session-") as temporary:
         try:
             digest = session.setup(Path(temporary))
             session.connect("initial")
+            if args.mixed_transports:
+                session.active_mixed_proof()
             manifest["host_input"] = session.input()
             session.clipboard()
             if args.native_blocked:
