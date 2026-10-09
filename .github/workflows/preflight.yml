@@ -83,6 +83,7 @@ jobs:
           python3 scripts/test-support-network.py
           python3 scripts/test-secure-support.py
           python3 scripts/test-support-linux.py
+          python3 scripts/test-support-signals.py
           python3 scripts/test-support-input.py
           python3 scripts/test-support-clipboard.py --native-x11
           python3 scripts/test-branding.py

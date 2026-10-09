@@ -40,6 +40,7 @@ python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-invite.py"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-secure-support.py"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-network.py"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-linux.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-signals.py"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-input.py"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-clipboard.py"
 

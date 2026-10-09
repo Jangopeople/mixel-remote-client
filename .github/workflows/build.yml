@@ -234,6 +234,7 @@ jobs:
           python3 scripts/test-support-network.py
           python3 scripts/test-secure-support.py
           python3 scripts/test-support-linux.py
+          python3 scripts/test-support-signals.py
           python3 scripts/test-support-input.py
           python3 scripts/test-support-clipboard.py --native-x11
           python3 scripts/test-branding.py
@@ -421,6 +422,7 @@ jobs:
           python3 scripts/test-support-network.py
           python3 scripts/test-secure-support.py
           python3 scripts/test-support-linux.py
+          python3 scripts/test-support-signals.py
           python3 scripts/test-support-input.py
           python3 scripts/test-support-clipboard.py
           python3 scripts/test-branding.py
@@ -662,6 +664,7 @@ jobs:
           python scripts/test-support-network.py
           python scripts/test-secure-support.py
           python scripts/test-support-linux.py
+          python scripts/test-support-signals.py
           python scripts/test-support-input.py
           python scripts/test-support-clipboard.py
           python scripts/test-branding.py
