@@ -10,6 +10,15 @@
 
 set -euo pipefail
 
+# Git Bash sed defaults to Windows text IO, which turns Python-written CRLF
+# into LF only on the first matching branding pass. Preserve the original
+# newline bytes so repeated shell/Python patches are byte-identical.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    sed() { command sed --binary "$@"; }
+    ;;
+esac
+
 RDREPO="${RDREPO:-./rustdesk}"
 BRANDING="${BRANDING:-./branding}"
 # The Python handoff patch must use the same checkout as the shell patches,

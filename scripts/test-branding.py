@@ -38,14 +38,21 @@ def run(command: list[str], **kwargs) -> subprocess.CompletedProcess[str]:
     return result
 
 
-def snapshot(repo: Path) -> dict[str, str]:
+def snapshot(repo: Path) -> dict[str, dict[str, object]]:
     result = {}
     for source in (repo, repo / "libs/hbb_common", repo / ".mixel-deps/rdev", repo / ".mixel-deps/clipboard-master"):
         paths = run(["git", "-C", str(source), "ls-files", "--cached", "--others", "--exclude-standard"]).stdout.splitlines()
         for path in paths:
             target = source / path
             if target.is_file():
-                result[str(target.relative_to(repo))] = hashlib.sha256(target.read_bytes()).hexdigest()
+                data = target.read_bytes()
+                crlf = data.count(b"\r\n")
+                result[str(target.relative_to(repo))] = {
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                    "crlf": crlf,
+                    "bare_lf": data.count(b"\n") - crlf,
+                    "sha256_without_crlf": hashlib.sha256(data.replace(b"\r\n", b"\n")).hexdigest(),
+                }
     return result
 
 
@@ -229,7 +236,8 @@ print("PASS: actual Debian generator child explicitly uses UTF-8 and preserves t
     run(BRANDING_COMMAND, cwd=base, env=env)
     after = snapshot(repo)
     changed = [path for path in sorted(set(before) | set(after)) if before.get(path) != after.get(path)]
-    assert not changed, "complete branding must be idempotent; changed paths: " + repr(changed)
+    assert not changed, "complete branding must be idempotent; byte details: " + json.dumps(
+        {path: {"first": before.get(path), "second": after.get(path)} for path in changed}, sort_keys=True)
     print("PASS: the complete branding pipeline is byte-for-byte idempotent")
 
     cases = [
