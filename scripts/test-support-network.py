@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 UPSTREAM = Path(os.environ.get("RDREPO", ROOT / "rustdesk"))
 TARGETS = ["libs/hbb_common/src/lib.rs", "libs/hbb_common/src/config.rs",
            "libs/hbb_common/src/websocket.rs", "libs/hbb_common/src/socket_client.rs",
-           "src/rendezvous_mediator.rs", "src/client.rs"]
+           "src/rendezvous_mediator.rs", "src/client.rs", "src/ui_session_interface.rs"]
 
 
 def function(source, signature):
@@ -331,6 +331,7 @@ fn registered_socket(host:&str,conn:Stream)->RendezvousMediator {
     init_start = client.index("        // The implicit process-wide fallback belongs")
     initialize = client[init_start:client.index("        if let Some((real_id, server, key))", init_start)]
     save = function(client, "if self.force_relay && !self.mixel_runtime_force_relay")
+    reconnect = function((repo / "src/ui_session_interface.rs").read_text(encoding="utf-8"), "if true == force_relay")
     client_harness = r'''
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -369,6 +370,8 @@ trait Interface {
 }
 struct TestInterface(Arc<RwLock<Lch>>);
 impl Interface for TestInterface {fn get_lch(&self)->Arc<RwLock<Lch>> {self.0.clone()}}
+struct TestUi {lc:Arc<RwLock<Lch>>}
+impl TestUi {fn reconnect(&self,force_relay:bool) {__RECONNECT__}}
 fn interface(forced:bool)->TestInterface {TestInterface(Arc::new(RwLock::new(Lch{force_relay:forced,..Lch::default()})))}
 thread_local! {static STATE:RefCell<Vec<String>>=RefCell::new(Vec::new());}
 fn calls()->Vec<String> {STATE.with(|s|s.borrow().clone())}
@@ -495,6 +498,17 @@ async fn relay_ipv6(interface:&TestInterface)->usize {
   assert_eq!(saved.options.get("force-always-relay"),Some(&"Y".to_owned()));
  }
 }
+#[test] fn actual_explicit_reconnect_after_runtime_fallback_preserves_original_saved_choice() {
+ for explicit in [false,true] {
+  let ui=interface(false);
+  activate("rs.mixel.ch:21116",Stream::WebSocket("Mixel".into()),&ui,(Some(1),Some(2)));
+  let lch=ui.get_lch();TestUi{lc:lch.clone()}.reconnect(explicit);
+  let lch=lch.read().unwrap();
+  assert!(lch.force_relay);assert_eq!(lch.mixel_runtime_force_relay,!explicit);
+  let mut saved=SavedConfig::default();lch.save_relay(&mut saved);
+  assert_eq!(saved.options.contains_key("force-always-relay"),explicit);
+ }
+}
 #[test] fn actual_forced_connect_constructs_no_tcp_udp_ipv6_and_keeps_relay_encryption_path() {
  let ui=interface(true);let peer="127.0.0.1:21118".parse().unwrap();
  let result=run(Client::connect(peer,peer,"peer",vec![1],"rs.mixel.ch","rs.mixel.ch",0,NatType::ASYMMETRIC,0,false,"pin","token",ConnType,ui,Some(Arc::new(UdpSocket)),Some(Arc::new(UdpSocket)),"TCP")).unwrap();
@@ -535,9 +549,173 @@ async fn relay_ipv6(interface:&TestInterface)->usize {
     for marker, generated in {"__ACTUAL_CONNECT__": actual_connect, "__ACTIVATION__": activation,
                               "__NAT__": nat, "__IPV6_TEST__": ipv6_test, "__IPV6__": ipv6,
                               "__REPLY__": reply, "__RELAY_IPV6__": relay_ipv6,
-                              "__INITIALIZE__": initialize, "__SAVE__": save}.items():
+                              "__INITIALIZE__": initialize, "__SAVE__": save,
+                              "__RECONNECT__": reconnect}.items():
         client_harness = client_harness.replace(marker, generated)
     harness.write_text(client_harness, encoding="utf-8")
     subprocess.run([rustc, "--edition=2021", "--deny", "warnings", "--test", str(harness), "-o", str(binary)], check=True)
     subprocess.run([str(binary), "--test-threads=1"], check=True)
     print("PASS: actual generated socket-owned relay mode skips every forced direct TCP/UDP/IPv6 probe and retains native/custom plus relay encryption behavior")
+
+    # Compile both complete generated incoming host paths. Registration stays
+    # native while the later ID socket independently changes to WebSocket.
+    # Observable mocks record constructing a peer attempt, not just polling it.
+    host_harness = r'''
+#![allow(dead_code)]
+use std::cell::RefCell;
+use std::future::Future;
+use std::net::SocketAddr;
+use std::sync::{Arc,Mutex,MutexGuard,OnceLock};
+use std::task::{Context,Poll,Wake,Waker};
+use std::time::{Duration,Instant};
+type ResultType<T> = Result<T,Box<dyn std::error::Error+Send+Sync>>;
+type ServerPtr = Arc<()>;
+const CONNECT_TIMEOUT:u64=1000;
+#[allow(non_camel_case_types)]
+#[derive(Clone,Copy,PartialEq)] enum NatType { SYMMETRIC=1,ASYMMETRIC=2,UNKNOWN_NAT=0 }
+impl NatType {fn from_i32(value:i32)->Option<Self> {match value {1=>Some(Self::SYMMETRIC),2=>Some(Self::ASYMMETRIC),_=>None}}}
+struct EnumValue(NatType);
+mod bytes {pub type Bytes=Vec<u8>;}
+mod hbb_common {
+ pub mod mixel_support_network {__HELPER__}
+ pub mod protobuf {pub trait Enum {fn enum_value(&self)->Result<crate::NatType,()>;}}
+ pub(crate) use crate::AddrMangle;
+}
+impl hbb_common::protobuf::Enum for EnumValue {fn enum_value(&self)->Result<NatType,()> {Ok(self.0)}}
+#[derive(Default)] struct State {websocket:bool,disabled:bool,calls:Vec<String>}
+thread_local! {static STATE:RefCell<State>=RefCell::new(State::default());}
+fn record(value:impl Into<String>) {STATE.with(|s|s.borrow_mut().calls.push(value.into()));}
+fn calls()->Vec<String> {STATE.with(|s|s.borrow().calls.clone())}
+struct Config;
+impl Config {
+ fn is_proxy()->bool {false}
+ fn get_option(_key:&str)->String {String::new()}
+ fn get_nat_type()->i32 {NatType::ASYMMETRIC as i32}
+ fn get_id()->String {"123456789".into()}
+}
+mod config {
+ pub fn option2bool(_key:&str,value:&str)->bool {value=="Y"}
+ pub fn is_disable_tcp_listen()->bool {crate::STATE.with(|s|s.borrow().disabled)}
+}
+#[derive(Clone,Default)] struct Permissions;
+impl Permissions {fn into_option(self)->Option<u8> {Some(7)}}
+#[derive(Clone)] struct FetchLocalAddr {socket_addr:Vec<u8>,socket_addr_v6:Vec<u8>,relay_server:String,control_permissions:Permissions}
+struct PunchHole {socket_addr:Vec<u8>,socket_addr_v6:Vec<u8>,relay_server:String,control_permissions:Permissions,nat_type:EnumValue,udp_port:i32,force_relay:bool}
+#[derive(Default)] struct PunchHoleSent {socket_addr:Vec<u8>,id:String,relay_server:String,nat_type:EnumValue,version:String,socket_addr_v6:Vec<u8>}
+impl Default for EnumValue {fn default()->Self {Self(NatType::ASYMMETRIC)}}
+impl From<NatType> for EnumValue {fn from(value:NatType)->Self {Self(value)}}
+#[derive(Default)] struct LocalAddr {id:String,socket_addr:Vec<u8>,local_addr:Vec<u8>,relay_server:String,version:String,socket_addr_v6:Vec<u8>}
+const VERSION:&str="test";
+struct AddrMangle;
+impl AddrMangle {
+ fn decode(bytes:&[u8])->SocketAddr {if bytes.is_empty() {"127.0.0.1:0"} else {"127.0.0.1:4444"}.parse().unwrap()}
+ fn encode(_address:SocketAddr)->Vec<u8> {vec![1]}
+}
+struct Message {kind:&'static str}
+impl Message {
+ fn new()->Self {Self{kind:"unset"}}
+ fn set_local_addr(&mut self,_value:LocalAddr) {self.kind="local-frame";}
+ fn set_punch_hole_sent(&mut self,_value:PunchHoleSent) {self.kind="punch-frame";}
+ fn write_to_bytes(&self)->ResultType<Vec<u8>> {Ok(self.kind.as_bytes().to_vec())}
+}
+enum Stream {Tcp,WebSocket(())}
+impl Stream {
+ fn local_addr(&self)->SocketAddr {record("address-read");"127.0.0.1:30001".parse().unwrap()}
+ async fn send_raw(&mut self,bytes:Vec<u8>)->ResultType<()> {record(String::from_utf8(bytes).unwrap());Ok(())}
+}
+async fn connect_tcp(_endpoint:&str,_timeout:u64)->ResultType<Stream> {
+ if STATE.with(|s|s.borrow().websocket) {record("id-socket:ws");Ok(Stream::WebSocket(()))}
+ else {record("id-socket:tcp");Ok(Stream::Tcp)}
+}
+mod socket_client {
+ pub fn connect_tcp_local(_peer:std::net::SocketAddr,_local:Option<std::net::SocketAddr>,_timeout:u64)->impl std::future::Future<Output=crate::ResultType<crate::Stream>> {
+  crate::record("tcp-peer-constructed");async {Ok(crate::Stream::Tcp)}
+ }
+}
+async fn start_ipv6(_ipv6:SocketAddr,_peer:SocketAddr,_server:ServerPtr,_permissions:Option<u8>)->Vec<u8> {record("ipv6-peer");vec![6]}
+async fn accept_connection(_server:ServerPtr,_socket:Stream,_peer:SocketAddr,secure:bool,_permissions:Option<u8>) {record(format!("accept-secure={secure}"));}
+fn is_ipv4(address:&SocketAddr)->bool {address.is_ipv4()}
+struct Uuid;
+impl Uuid {fn new_v4()->Self {Self}}
+impl std::fmt::Display for Uuid {fn fmt(&self,out:&mut std::fmt::Formatter<'_>)->std::fmt::Result {out.write_str("synthetic-relay-uuid")}}
+struct Last;
+static LAST_MSG:Last=Last;
+impl Last {
+ async fn lock(&self)->MutexGuard<'static,(SocketAddr,Instant)> {
+  static VALUE:OnceLock<Mutex<(SocketAddr,Instant)>>=OnceLock::new();
+  VALUE.get_or_init(||Mutex::new(("127.0.0.1:0".parse().unwrap(),Instant::now()))).lock().unwrap()
+ }
+}
+#[macro_export] macro_rules! debug {($($arg:tt)*)=>{{let _=format!($($arg)*);}}}
+#[macro_export] macro_rules! allow_err {($value:expr)=>{{let _=$value;}}}
+mod log {pub(crate) use crate::debug;}
+struct RendezvousMediator {host:String,addr:SocketAddr,mixel_relay_only:bool}
+impl RendezvousMediator {
+ fn get_relay_server(&self,server:String)->String {server}
+ async fn create_relay(&self,_address:Vec<u8>,_relay:String,_uuid:String,_server:ServerPtr,secure:bool,initiate:bool,_ipv6:Vec<u8>,permissions:Option<u8>)->ResultType<()> {
+  assert_eq!(permissions,Some(7));record(format!("relay-secure={secure}-initiate={initiate}"));Ok(())
+ }
+ async fn punch_udp_hole(&self,_peer:SocketAddr,_server:ServerPtr,_message:PunchHoleSent,_permissions:Option<u8>)->ResultType<()> {record("udp-peer");Ok(())}
+ __INTRANET__
+ __INTRANET_INNER__
+ __PUNCH__
+}
+struct Noop;impl Wake for Noop {fn wake(self:Arc<Self>) {}}
+fn run<F:Future>(future:F)->F::Output {
+ let waker=Waker::from(Arc::new(Noop));let mut context=Context::from_waker(&waker);let mut future=Box::pin(future);
+ loop {if let Poll::Ready(result)=future.as_mut().poll(&mut context) {return result;}}
+}
+fn setup(host:&str,websocket:bool)->RendezvousMediator {
+ *run(LAST_MSG.lock())=("127.0.0.1:0".parse().unwrap(),Instant::now()-Duration::from_secs(1));
+ STATE.with(|s|*s.borrow_mut()=State{websocket,..State::default()});
+ hbb_common::mixel_support_network::reset_https_fallback("rs.mixel.ch");
+ RendezvousMediator{host:host.into(),addr:"127.0.0.1:21116".parse().unwrap(),mixel_relay_only:false}
+}
+fn intranet()->FetchLocalAddr {FetchLocalAddr{socket_addr:vec![1],socket_addr_v6:vec![6],relay_server:"rs.mixel.ch".into(),control_permissions:Permissions}}
+fn punch(udp_port:i32)->PunchHole {PunchHole{socket_addr:vec![1],socket_addr_v6:vec![6],relay_server:"rs.mixel.ch".into(),control_permissions:Permissions,nat_type:EnumValue(NatType::ASYMMETRIC),udp_port,force_relay:false}}
+#[test] fn actual_native_registration_then_later_https_intranet_constructs_no_tcp_or_ipv6_peer() {
+ let rz=setup("rs.mixel.ch:21116",true);
+ run(rz.handle_intranet(intranet(),Arc::new(()))).unwrap();
+ assert_eq!(calls(),vec!["id-socket:ws","relay-secure=true-initiate=true"]);
+}
+#[test] fn actual_native_registration_then_later_https_punch_constructs_no_tcp_or_ipv6_peer() {
+ let rz=setup("rs.mixel.ch:21116",true);
+ run(rz.handle_punch_hole(punch(0),Arc::new(()))).unwrap();
+ assert_eq!(calls(),vec!["id-socket:ws","relay-secure=true-initiate=true"]);
+}
+#[test] fn actual_native_intranet_retains_ipv6_and_local_tcp_bridge() {
+ let rz=setup("rs.mixel.ch:21116",false);
+ run(rz.handle_intranet(intranet(),Arc::new(()))).unwrap();
+ assert_eq!(calls(),vec!["id-socket:tcp","ipv6-peer","address-read","local-frame","accept-secure=true"]);
+}
+#[test] fn actual_native_punch_retains_ipv6_and_direct_tcp() {
+ let rz=setup("rs.mixel.ch:21116",false);
+ run(rz.handle_punch_hole(punch(0),Arc::new(()))).unwrap();
+ assert_eq!(calls(),vec!["id-socket:tcp","ipv6-peer","address-read","tcp-peer-constructed","punch-frame","accept-secure=true"]);
+}
+#[test] fn actual_foreign_websocket_preserves_upstream_custom_server_behavior() {
+ for intranet_case in [true,false] {
+  let rz=setup("other.example:21116",true);
+  if intranet_case {run(rz.handle_intranet(intranet(),Arc::new(()))).unwrap();}
+  else {run(rz.handle_punch_hole(punch(0),Arc::new(()))).unwrap();}
+  assert!(!calls().iter().any(|value|value.starts_with("relay-secure=")));
+  assert!(calls().contains(&"ipv6-peer".to_string()));
+  assert!(calls().contains(&"accept-secure=true".to_string()));
+ }
+}
+#[test] fn actual_native_udp_punch_retains_its_original_ipv6_and_udp_path() {
+ let rz=setup("rs.mixel.ch:21116",true);
+ run(rz.handle_punch_hole(punch(5555),Arc::new(()))).unwrap();
+ assert_eq!(calls(),vec!["ipv6-peer","udp-peer"]);
+}
+'''.replace("__HELPER__", (ROOT / "scripts/support-network.rs").read_text(encoding="utf-8"))
+    for marker, signature in {
+        "__INTRANET__": "    async fn handle_intranet(&self,",
+        "__INTRANET_INNER__": "    async fn handle_intranet_(",
+        "__PUNCH__": "    async fn handle_punch_hole(&self,",
+    }.items():
+        host_harness = host_harness.replace(marker, function(mediator, signature))
+    harness.write_text(host_harness, encoding="utf-8")
+    subprocess.run([rustc, "--edition=2021", "--deny", "warnings", "--test", str(harness), "-o", str(binary)], check=True)
+    subprocess.run([str(binary), "--test-threads=1"], check=True)
+    print("PASS: complete generated host intranet/punch paths route a later HTTPS socket through authenticated relay before constructing direct TCP/IPv6; native/UDP/custom paths retained")

@@ -191,6 +191,93 @@ patch("src/rendezvous_mediator.rs",
       '''        let relay = self.mixel_relay_only || Config::is_proxy() || ph.force_relay
             || config::option2bool("allow-websocket", &Config::get_option("allow-websocket"));''')
 
+# Registration can remain native while a later ID socket independently falls
+# back to HTTPS. Check that new socket before publishing a local TCP address or
+# constructing direct TCP/IPv6 attempts. Other native/UDP paths stay intact.
+patch("src/rendezvous_mediator.rs",
+      '''        if peer_addr_v6.port() > 0 && !relay {
+            socket_addr_v6 = start_ipv6(
+                peer_addr_v6,
+                addr,''',
+      '''        let direct_tcp_candidate = is_ipv4(&self.addr)
+            && !relay && !config::is_disable_tcp_listen();
+        if peer_addr_v6.port() > 0 && !relay && !direct_tcp_candidate {
+            socket_addr_v6 = start_ipv6(
+                peer_addr_v6,
+                addr,''')
+patch("src/rendezvous_mediator.rs",
+      '        if is_ipv4(&self.addr) && !relay && !config::is_disable_tcp_listen() {',
+      '        if direct_tcp_candidate {')
+patch("src/rendezvous_mediator.rs",
+      '''        socket_addr_v6: bytes::Bytes,
+    ) -> ResultType<()> {
+        let peer_addr = AddrMangle::decode(&fla.socket_addr);''',
+      '''        mut socket_addr_v6: bytes::Bytes,
+    ) -> ResultType<()> {
+        let peer_addr = AddrMangle::decode(&fla.socket_addr);''')
+patch("src/rendezvous_mediator.rs",
+      '''        log::debug!("Handle intranet from {:?}", peer_addr);
+        let mut socket = connect_tcp(&*self.host, CONNECT_TIMEOUT).await?;
+        let local_addr = socket.local_addr();''',
+      '''        log::debug!("Handle intranet from {:?}", peer_addr);
+        let mut socket = connect_tcp(&*self.host, CONNECT_TIMEOUT).await?;
+        if hbb_common::mixel_support_network::relay_only_transport(
+            &self.host, matches!(&socket, Stream::WebSocket(_)))
+        {
+            drop(socket);
+            return self.create_relay(
+                fla.socket_addr.into(), relay_server, Uuid::new_v4().to_string(),
+                server, true, true, socket_addr_v6,
+                fla.control_permissions.into_option(),
+            ).await;
+        }
+        let peer_addr_v6 = AddrMangle::decode(&fla.socket_addr_v6);
+        if peer_addr_v6.port() > 0 {
+            socket_addr_v6 = start_ipv6(
+                peer_addr_v6, peer_addr, server.clone(),
+                fla.control_permissions.clone().into_option(),
+            ).await;
+        }
+        let local_addr = socket.local_addr();''')
+patch("src/rendezvous_mediator.rs",
+      '''        if peer_addr_v6.port() > 0 && !relay {
+            socket_addr_v6 = start_ipv6(
+                peer_addr_v6,
+                peer_addr,''',
+      '''        let direct_tcp_candidate = ph.udp_port <= 0 && !relay
+            && ph.nat_type.enum_value() != Ok(NatType::SYMMETRIC)
+            && Config::get_nat_type() != NatType::SYMMETRIC as i32
+            && !config::is_disable_tcp_listen();
+        if peer_addr_v6.port() > 0 && !relay && !direct_tcp_candidate {
+            socket_addr_v6 = start_ipv6(
+                peer_addr_v6,
+                peer_addr,''')
+patch("src/rendezvous_mediator.rs",
+      '        let msg_punch = PunchHoleSent {',
+      '        let mut msg_punch = PunchHoleSent {')
+patch("src/rendezvous_mediator.rs",
+      '''        let mut socket = {
+            let socket = connect_tcp(&*self.host, CONNECT_TIMEOUT).await?;
+            let local_addr = socket.local_addr();''',
+      '''        let mut socket = {
+            let socket = connect_tcp(&*self.host, CONNECT_TIMEOUT).await?;
+            if hbb_common::mixel_support_network::relay_only_transport(
+                &self.host, matches!(&socket, Stream::WebSocket(_)))
+            {
+                drop(socket);
+                return self.create_relay(
+                    msg_punch.socket_addr.into(), msg_punch.relay_server,
+                    Uuid::new_v4().to_string(), server, true, true,
+                    msg_punch.socket_addr_v6, control_permissions,
+                ).await;
+            }
+            if peer_addr_v6.port() > 0 {
+                msg_punch.socket_addr_v6 = start_ipv6(
+                    peer_addr_v6, peer_addr, server.clone(), control_permissions.clone(),
+                ).await;
+            }
+            let local_addr = socket.local_addr();''')
+
 # A WebSocket gateway has no usable peer/local TCP adapter address. Force this
 # exact connection through the existing authenticated relay path after the
 # actual rendezvous socket exists, before NAT selection and PunchHoleRequest.
@@ -224,6 +311,16 @@ patch("src/client.rs",
             config
                 .options
                 .insert("force-always-relay".to_owned(), "Y".to_owned());
+        }''')
+patch("src/ui_session_interface.rs",
+      '''        if true == force_relay {
+            self.lc.write().unwrap().force_relay = true;
+        }''',
+      '''        if true == force_relay {
+            let mut lch = self.lc.write().unwrap();
+            lch.force_relay = true;
+            // This explicit user choice keeps upstream's saved relay behavior.
+            lch.mixel_runtime_force_relay = false;
         }''')
 patch("src/client.rs",
       '        stop_udp_tx: Option<oneshot::Sender<()>>,',
