@@ -773,16 +773,9 @@ jobs:
             Write-Host "PASS: $($installer.Name) Authenticode signature is Valid."
           }
 
-      - name: Exercise the signed portable customer download
-        shell: pwsh
-        run: |
-          ./scripts/test-support-launch-windows.ps1 -Executable dist/Mixel-Remote-Support-Windows.exe -Portable -ExpectedPayload store-payload
-
-      - name: Exercise the signed QuickSupport download without an invite
-        shell: pwsh
-        run: |
-          ./scripts/test-support-launch-windows.ps1 -Executable dist/Mixel-Remote-QS.exe -Portable -QuickSupport -ExpectedPayload store-payload
-
+      # Retain the verified signed payload for read-only runtime diagnosis even
+      # when a later customer launch test fails. R2 publication still requires
+      # this entire job (including both customer launch tests) to succeed.
       - name: Package signed Store payload
         shell: pwsh
         run: |
@@ -797,6 +790,16 @@ jobs:
           name: windows-msix-payload
           path: store-artifact/
           if-no-files-found: error
+
+      - name: Exercise the signed portable customer download
+        shell: pwsh
+        run: |
+          ./scripts/test-support-launch-windows.ps1 -Executable dist/Mixel-Remote-Support-Windows.exe -Portable -ExpectedPayload store-payload
+
+      - name: Exercise the signed QuickSupport download without an invite
+        shell: pwsh
+        run: |
+          ./scripts/test-support-launch-windows.ps1 -Executable dist/Mixel-Remote-QS.exe -Portable -QuickSupport -ExpectedPayload store-payload
 
       - uses: actions/upload-artifact@v4
         with:

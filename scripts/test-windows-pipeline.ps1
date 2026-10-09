@@ -8,6 +8,63 @@ foreach ($file in (Get-ChildItem $PSScriptRoot -Filter '*.ps1' -File)) {
 }
 Write-Host 'PASS: every Windows pipeline script parses cleanly.'
 
+# Compile the exact native OS fixture used by the real ordinary-to-QS runtime
+# test; its policy checks are testable without launching or changing an app.
+$launchSource = Get-Content (Join-Path $PSScriptRoot 'test-support-launch-windows.ps1') -Raw
+$fixtureClass = $launchSource.IndexOf('public static class MixelOrdinaryTokenFixture {')
+$fixtureStart = $launchSource.LastIndexOf('using System;', $fixtureClass)
+$fixtureEnd = $launchSource.IndexOf("`n'@ }", $fixtureClass)
+if ($fixtureClass -lt 0 -or $fixtureStart -lt 0 -or $fixtureEnd -le $fixtureStart) {
+  throw 'Actual ordinary-token runtime fixture is missing.'
+}
+if (-not ('MixelOrdinaryTokenFixture' -as [type])) {
+  Add-Type -TypeDefinition $launchSource.Substring($fixtureStart, $fixtureEnd - $fixtureStart)
+}
+foreach ($name in @('\BaseNamedObjects\Mixel-Remote-Attended-Runtime-v2', '\Sessions\0\BaseNamedObjects\Mixel-Remote-Attended-Runtime-v2')) {
+  if (-not [MixelOrdinaryTokenFixture]::IsLeaseName($name)) { throw 'Exact runtime lease name rejected.' }
+}
+foreach ($name in @('', '\BaseNamedObjects\Mixel-Remote-Attended-Runtime-v1', '\BaseNamedObjects\Mixel-Remote-Attended-Runtime-v2-other', '\Sessions\1\BaseNamedObjects\Mixel-Remote-Attended-Runtime-v2')) {
+  if ([MixelOrdinaryTokenFixture]::IsLeaseName($name)) { throw 'Unrelated process event accepted as the global v2 lease.' }
+}
+if (-not ('MixelOwnedLeaseFixture' -as [type])) { Add-Type @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+public static class MixelOwnedLeaseFixture {
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern IntPtr CreateEventExW(IntPtr attributes, string name, uint flags, uint access);
+  [DllImport("kernel32.dll")] public static extern bool CloseHandle(IntPtr handle);
+  public static IntPtr Create() {
+    IntPtr handle = CreateEventExW(IntPtr.Zero, "Global\\Mixel-Remote-Attended-Runtime-v2", 0, 0x100000);
+    if (handle == IntPtr.Zero) throw new Win32Exception();
+    return handle;
+  }
+}
+'@ }
+if ([MixelOrdinaryTokenFixture]::OwnsLease($PID)) { throw 'Fixture already owns the product event.' }
+$fixtureHandle = [MixelOwnedLeaseFixture]::Create()
+try {
+  if (-not [MixelOrdinaryTokenFixture]::OwnsLease($PID)) { throw 'Actual SYNCHRONIZE event handle was not attributed to its process.' }
+} finally {
+  [void][MixelOwnedLeaseFixture]::CloseHandle($fixtureHandle)
+}
+if ([MixelOrdinaryTokenFixture]::OwnsLease($PID)) { throw 'Closed event handle remains attributed to its process.' }
+Write-Host 'PASS: exact native runtime fixture observes the current PID owning the real SYNCHRONIZE-only global v2 event, then observes its handle release; unrelated event names fail closed.'
+
+foreach ($required in @(
+    "`$initialHealth.attendedProof -cne ''",
+    '[MixelOrdinaryTokenFixture]::Elevated($main.Id)',
+    '[MixelOrdinaryTokenFixture]::OwnsLease($main.Id)',
+    '$warmLaunch.WaitForExit(60000)',
+    '$started.Elapsed.TotalSeconds -lt 95',
+    '$window -ne $originalWindow',
+    '$initialHealth.incomingPid -ne $main.Id',
+    'Assert-OwnedIncomingHealth $warmHealth',
+    'Assert-OwnedIncomingHealth $currentHealth',
+    'Assert-OwnedIncomingHealth $finalHealth',
+    '-OrdinaryThenQuickSupport')) {
+  if (-not $launchSource.Contains($required)) { throw "Ordinary-to-QS runtime proof lost a required native assertion: $required" }
+}
+
 function Assert-Fails([scriptblock]$Action, [string]$Scenario) {
   $failed = $false
   try { & $Action } catch { $failed = $true }
@@ -46,6 +103,12 @@ try {
 }
 
 . (Join-Path $PSScriptRoot 'support-runtime-probe-windows.ps1')
+if ([MixelSupportIpcProbe]::ConsistentServerPid([uint32[]]@(42, 42, 42, 42, 42)) -ne 42) {
+  throw 'Consistent incoming server PID was rejected.'
+}
+foreach ($pids in @(@(0, 0, 0, 0, 0), @(42, 42, 43, 42, 42), @(42, 42, 42, 42))) {
+  Assert-Fails { [MixelSupportIpcProbe]::ConsistentServerPid([uint32[]]$pids) } 'missing or inconsistent incoming server PID'
+}
 if (-not ('MixelSupportProbeFixture' -as [type])) { Add-Type @'
 using System;
 using System.Collections.Concurrent;
@@ -117,12 +180,13 @@ for ($index = 0; $index -lt $expectedRequests.Count; $index++) {
     throw 'IPC health probe must send only the exact framed read-only runtime queries.'
   }
 }
-if (-not $health.attendedReady -or -not $health.keyConfirmed -or $health.rendezvousState -ne 1 -or
+if ($health.incomingPid -ne $PID -or -not $health.attendedReady -or -not $health.keyConfirmed -or $health.rendezvousState -ne 1 -or
     -not $health.brandedRelay -or $health.registeredId -ne '123456789' -or $health.rendezvousServer -ne 'rs.mixel.ch:21116') {
   throw 'Runtime IPC probe failed to parse a valid framed response.'
 }
 Write-Host 'PASS: actual named-pipe IPC decodes fragmented attended, online, branded relay/key, rendezvous and registered-ID responses.'
 Write-Host 'PASS: actual framed health requests are read-only and never arm consent or change options.'
+Write-Host 'PASS: all five actual named-pipe responses belong to the fixture server PID; missing or inconsistent PID attribution fails closed.'
 
 foreach ($invalid in @('{"t":"OnlineStatus","c":[1,"false"]}', '{"t":"OnlineStatus","c":["1",true]}', '{"t":"OnlineStatus","c":[1]}')) {
   $fixture = [MixelSupportProbeFixture]::Serve(@($guard, $invalid))
