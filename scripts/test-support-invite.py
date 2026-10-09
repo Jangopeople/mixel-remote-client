@@ -2,6 +2,7 @@
 """Patch pinned real source twice; execute its cold/warm support URI path."""
 import os
 import importlib.util
+import json
 import shutil
 import sys
 import subprocess
@@ -15,6 +16,9 @@ upstream = Path(os.environ.get("RDREPO", root / "rustdesk"))
 dart = find_dart()
 if not dart:
     raise SystemExit("Dart SDK required: put dart on PATH or set DART_BIN")
+rustc = os.environ.get("RUSTC_BIN") or shutil.which("rustc")
+if not rustc:
+    raise SystemExit("Rust compiler required for native cache regression check")
 targets = [
     "Cargo.toml", "libs/hbb_common/Cargo.toml", "libs/hbb_common/src/lib.rs",
     "flutter/lib/common.dart", "flutter/lib/main.dart", "src/ui_interface.rs",
@@ -155,6 +159,31 @@ runpy.run_path(sys.argv[1], run_name='__main__')
     assert "Config::set_option" not in runtime_only and "OPTIONS.lock" not in runtime_only
     print("PASS: real pinned source patches idempotently, bearer logs redacted, customer-click guard precedes password/recent-session bypasses, preferences preserved")
 
+    # Compile the actual generated forwarding block. The pinned Windows runner
+    # appends that Rust vector after the original CLI vector, preserving URI
+    # first even if initialLink is unavailable. Do not assume Rust args alone
+    # are the complete Windows Dart boot arguments.
+    forward_start = core.index("            // Forward URI/CLI handoffs")
+    forward_end = core.index("\n        }", forward_start)
+    forward = core[forward_start:forward_end]
+    boot_test = repo / "native_support_boot_vector.rs"
+    boot_test.write_text('''fn main() {
+    let mut input = std::env::args().skip(1);
+    let args = vec![input.next().unwrap()];
+    let mut flutter_args: Vec<String> = input.collect();
+''' + forward + '''
+    for arg in flutter_args { println!("{arg}"); }
+}
+''', encoding="utf-8")
+    boot_binary = repo / ("native_support_boot_vector.exe" if os.name == "nt" else "native_support_boot_vector")
+    subprocess.run([rustc, "--edition=2021", "--deny=warnings", str(boot_test), "-o", str(boot_binary)], check=True)
+    synthetic_uri = "mixel-remote://support?invite=inv_00000000-0000-0000-0000-000000000001&apikey=synthetic-public-key-000000000000"
+    native_boot_vectors = []
+    for markers in (["--mixel-attended"], ["--mixel-attended", "--mixel-attended-handoff-unavailable"]):
+        vector = subprocess.run([str(boot_binary), synthetic_uri, *markers], check=True, capture_output=True, text=True, encoding="utf-8").stdout.splitlines()
+        assert vector == [*markers, synthetic_uri], "Native forwarding must preserve all actual QS markers and the URI"
+        native_boot_vectors.append([synthetic_uri, *vector])
+
     # Execute the actual generated URI parser and handler before their unrelated
     # outgoing-connection branches, without needing a desktop for these tests.
     handler = common[common.index("bool handleUriLink("):common.index("  UriLinkType? type;", common.index("bool handleUriLink("))]
@@ -165,11 +194,12 @@ runpy.run_path(sys.argv[1], run_name='__main__')
     # This is the exact window-hiding condition used by the pinned app startup.
     startup_condition = "if (handledByUniLinks || handleUriLink(cmdArgs: kBootArgs))"
     assert startup_condition in first["flutter/lib/main.dart"]
-    # The portable QS filename becomes this raw argument. On a warm launch
-    # Windows forwards its original command line to the existing window before
-    # it appends the generated native Flutter arguments. Exercise that exact
-    # dispatch contract, including the real windowOnTop restore/show behavior.
+    # The portable QS filename becomes this raw argument. The locked plugin
+    # transports argv[1] as a string, not cmdArgs. Execute the actual generated
+    # raw listener before URI canonicalization, including real restore/show.
     windows_runner = original_source("flutter/windows/runner/main.cpp")
+    assert "command_line_arguments.insert(command_line_arguments.end(), rust_args.begin(), rust_args.end());" in windows_runner
+    assert "project.set_dart_entrypoint_arguments(std::move(command_line_arguments));" in windows_runner
     existing_window = windows_runner.split("  if (hwnd != NULL) {", 1)[1].split("  // Attach to console", 1)[0]
     assert "if (!command_line_arguments.empty())" in existing_window
     assert "DispatchToUniLinksDesktop(hwnd);" in existing_window
@@ -177,9 +207,15 @@ runpy.run_path(sys.argv[1], run_name='__main__')
     portable = original_source("libs/portable/src/main.rs")
     assert 'args = vec!["--quick_support".to_owned()];' in portable
     window_on_top = common[common.index("Future<void> windowOnTop(int? id)"):common.index("\ntypedef DialogBuilder", common.index("Future<void> windowOnTop(int? id)"))]
+    listener = common[common.index("StreamSubscription? listenUniLinks("):common.index("\nenum UriLinkType", common.index("StreamSubscription? listenUniLinks("))]
+    assert "linkStream.listen((String? rawLink)" in listener
+    assert "uriLinkStream.listen" not in listener
     runner = repo / "flutter/lib/support_launch_test.dart"
     runner.write_text("import 'dart:async';\nimport 'mixel_support_invite.dart';\n" + """
-class FakeBind { String mainUriPrefixSync() => 'mixel-remote://'; }
+class FakeBind {
+  String mainUriPrefixSync() => 'mixel-remote://';
+  void sendUrlScheme({required String url}) {}
+}
 final bind = FakeBind();
 var shown = 0;
 var reported = 0;
@@ -187,6 +223,12 @@ var renewals = 0;
 Timer? _supportInviteAttendedTimer;
 Future<bool> _renewSupportInviteAttended() async { renewals++; return true; }
 const isDesktop = true;
+const isLinux = false;
+const isWeb = false;
+void debugPrint(String message) {}
+final nativeLinks = StreamController<String?>();
+Stream<String?> get linkStream => nativeLinks.stream;
+""" + "final nativeBootVectors = <List<String>>" + json.dumps(native_boot_vectors) + ";\n" + """
 const kWindowMainId = 0;
 const kWindowEventShow = 'show';
 enum WindowType { Main }
@@ -211,7 +253,7 @@ class WindowController {
   void show() {}
 }
 Future<void> _reportSupportInvite(String token, String key) async { reported++; }
-""" + window_on_top + handler + parser + """
+""" + window_on_top + handler + parser + listener + """
 Future<void> main() async {
   final link = Uri(scheme: 'mixel-remote', host: 'support', queryParameters: {
     'invite':'inv_00000000-0000-0000-0000-000000000001',
@@ -246,6 +288,33 @@ Future<void> main() async {
   }
   await Future<void>.delayed(Duration.zero);
   if (reported != 5) throw StateError('Only valid handoffs may schedule presence');
+  // An ordinary existing GUI starts without any attended timer. Exercise the
+  // actual native string stream, rather than incorrectly substituting cmdArgs.
+  if (_supportInviteAttendedTimer != null || renewals != 0) throw StateError('Ordinary GUI fixture was already attended');
+  stateGlobal.isMinimized = true;
+  windowManager.visible = false;
+  final sub = listenUniLinks()!;
+  nativeLinks.add('--quick_support');
+  await Future<void>.delayed(const Duration(milliseconds: 20));
+  if (stateGlobal.isMinimized || !windowManager.visible || _supportInviteAttendedTimer == null || renewals != 1) {
+    throw StateError('Actual raw QuickSupport handoff failed to attend and restore ordinary GUI');
+  }
+  final shownBeforeMalformed = shown;
+  final renewalsBeforeMalformed = renewals;
+  for (final variant in [
+    '--quick%5fsupport', '--QUICK_SUPPORT', '--quick_support?',
+    '--quick_support/', '--quick_support#fragment', '--quick_support extra',
+    ' --quick_support', '--quick_support\\n', '--mixel-attended', '--quick_suppor',
+  ]) {
+    nativeLinks.add(variant);
+  }
+  await Future<void>.delayed(const Duration(milliseconds: 20));
+  if (shown != shownBeforeMalformed || renewals != renewalsBeforeMalformed || reported != 5) {
+    throw StateError('Malformed/encoded raw QuickSupport variant changed consent or UI');
+  }
+  await sub.cancel();
+  await nativeLinks.close();
+  if (handleUriLink(uriString: '--quick_support')) throw StateError('Cold raw QuickSupport became outbound intent');
   if (handleUriLink(cmdArgs: ['--mixel-attended'])) throw StateError('QuickSupport launch hid app');
   if (_supportInviteAttendedTimer == null) throw StateError('QuickSupport failed to maintain consent guard');
   await Future<void>.delayed(Duration.zero);
@@ -265,18 +334,137 @@ Future<void> main() async {
     }
   }
   if (reported != 5) throw StateError('QuickSupport must not report synthetic invite presence');
+  final reportsBeforeFallback = reported;
+  for (final nativeArgs in nativeBootVectors) {
+    // Simulate initialLink being unavailable: only kBootArgs is handled.
+    if (handleUriLink(cmdArgs: nativeArgs)) throw StateError('Native support fallback became outbound intent');
+  }
+  await Future<void>.delayed(Duration.zero);
+  if (reported != reportsBeforeFallback + nativeBootVectors.length) {
+    throw StateError('Full native marker-bearing boot vector lost valid invite reporting');
+  }
   _supportInviteAttendedTimer!.cancel();
   print('PASS: generated cold/warm support URI paths show the app, reject invalid/truncated arguments, never request outbound connection');
-  print('PASS: actual Windows raw QuickSupport warm dispatch restores the existing minimized main window and renews its attended consent lease');
+  print('PASS: actual generated raw native link stream attends an ordinary minimized GUI, rejects encoded/extended flags and retains its consent heartbeat; cold flag returns no outbound intent');
+  print('PASS: complete actual native support boot vectors retain invite reporting when initialLink is unavailable, including failed-handoff marker');
 }
 """, encoding="utf-8")
     subprocess.run([dart, str(runner)], check=True)
 
     # Execute the generated Rust one-shot cache accessor itself. This catches
     # URL correlation/consumption bugs that a reporter mock cannot expose.
-    rustc = os.environ.get("RUSTC_BIN") or shutil.which("rustc")
-    if not rustc:
-        raise SystemExit("Rust compiler required for native cache regression check")
+    # Execute the generated same-connection setter with a deferred GUI callback.
+    # Writing a frame is not acknowledgment: the old setter leaves the service
+    # guard unset when the transient sender exits. Only the processed read-back
+    # closes that gap, and stale/mismatched/missing replies must fail closed.
+    ipc_source = first["src/ipc.rs"]
+    ipc_start = ipc_source.index("pub async fn set_config_async(")
+    ipc_end = ipc_source.index('\n#[tokio::main', ipc_start)
+    ipc_setter = ipc_source[ipc_start:ipc_end]
+    original_ipc = original_source("src/ipc.rs")
+    original_start = original_ipc.index("pub async fn set_config_async(")
+    original_end = original_ipc.index('\n#[tokio::main', original_start)
+    original_setter = original_ipc[original_start:original_end].replace(
+        "pub async fn set_config_async(", "pub async fn original_set_config_async(", 1)
+    handoff_test = repo / "native_attended_handoff_test.rs"
+    handoff_test.write_text('''
+use std::future::Future;
+use std::sync::Mutex;
+use std::task::{Context, Poll, Wake, Waker};
+use std::sync::Arc;
+type ResultType<T> = Result<T, &'static str>;
+macro_rules! bail { ($message:expr) => { return Err($message) }; }
+#[derive(Clone)] enum Data { Config((String, Option<String>)), Other }
+struct State { mode: &'static str, memory: bool, sender_owner: bool, receiver_owner: bool, operations: Vec<Data> }
+static STATE: Mutex<State> = Mutex::new(State { mode: "ok", memory: false, sender_owner: true, receiver_owner: false, operations: Vec::new() });
+mod password {
+    pub const SUPPORT_INVITE_ATTESTATION: &str = "attended-runtime-v2";
+    pub fn renew_support_invite_attended() { super::STATE.lock().unwrap().memory = true; }
+}
+struct Connection;
+async fn connect(deadline: u64, postfix: &str) -> ResultType<Connection> {
+    assert_eq!(deadline, 1000); assert_eq!(postfix, "");
+    if STATE.lock().unwrap().mode == "disconnected" { Err("not connected") } else { Ok(Connection) }
+}
+impl Connection {
+    async fn send_config(&mut self, name: &str, value: String) -> ResultType<()> {
+        self.send(&Data::Config((name.to_owned(), Some(value)))).await
+    }
+    async fn send(&mut self, data: &Data) -> ResultType<()> {
+        STATE.lock().unwrap().operations.push(data.clone()); Ok(())
+    }
+    async fn next_timeout(&mut self, deadline: u64) -> ResultType<Option<Data>> {
+        assert_eq!(deadline, 1000);
+        let operations = std::mem::take(&mut STATE.lock().unwrap().operations);
+        assert_eq!(operations.len(), 2, "Set and get must use the same ordered connection");
+        match &operations[0] {
+            Data::Config((name, Some(value))) => {
+                assert_eq!(name, "mixel-support-invite-attended");
+                if value == "Y" { password::renew_support_invite_attended(); }
+            }
+            _ => panic!("Guard acknowledgment must follow renewal"),
+        }
+        match &operations[1] {
+            Data::Config((name, None)) => assert_eq!(name, "mixel-support-invite-attended"),
+            _ => panic!("Missing same-stream guard read-back"),
+        }
+        let mode = STATE.lock().unwrap().mode;
+        let proof = if mode == "stale" { "attended-runtime-v1" } else { password::SUPPORT_INVITE_ATTESTATION };
+        let name = if mode == "wrong-name" { "approve-mode" } else { "mixel-support-invite-attended" };
+        match mode {
+            "closed" => Ok(None), "timeout" => Err("deadline"),
+            "wrong-type" => Ok(Some(Data::Other)),
+            _ => Ok(Some(Data::Config((name.to_owned(), Some(proof.to_owned()))))),
+        }
+    }
+}
+async fn timeout<F: Future>(deadline: u64, future: F) -> Result<F::Output, &'static str> {
+    assert_eq!(deadline, 1500); Ok(future.await)
+}
+struct Noop;
+impl Wake for Noop { fn wake(self: Arc<Self>) {} }
+fn block_on<F: Future>(future: F) -> F::Output {
+    let waker = Waker::from(Arc::new(Noop)); let mut context = Context::from_waker(&waker);
+    let mut future = Box::pin(future);
+    match future.as_mut().poll(&mut context) { Poll::Ready(value) => value, Poll::Pending => panic!("fixture unexpectedly pending") }
+}
+fn reset(mode: &'static str) {
+    *STATE.lock().unwrap() = State { mode, memory: false, sender_owner: true, receiver_owner: false, operations: Vec::new() };
+}
+''' + original_setter + ipc_setter + '''
+#[test] fn original_write_only_setter_exposes_delayed_receiver_guard_gap() {
+    reset("ok");
+    block_on(original_set_config_async("mixel-support-invite-attended", "Y".to_owned())).unwrap();
+    let mut state = STATE.lock().unwrap(); state.sender_owner = false;
+    assert!(!state.memory && !state.sender_owner && !state.receiver_owner);
+}
+#[test] fn acknowledged_setter_covers_sender_exit_before_delayed_gui_lease() {
+    reset("ok");
+    block_on(set_config_async("mixel-support-invite-attended", "Y".to_owned())).unwrap();
+    let mut state = STATE.lock().unwrap(); state.sender_owner = false;
+    assert!(state.memory && !state.receiver_owner, "IPC memory guard must already protect the delayed receiver");
+    state.receiver_owner = true; assert!(state.memory || state.receiver_owner);
+}
+#[test] fn missing_stale_or_mismatched_acknowledgment_cannot_release_sender() {
+    for mode in ["disconnected", "closed", "timeout", "stale", "wrong-name", "wrong-type"] {
+        reset(mode);
+        assert!(block_on(set_config_async("mixel-support-invite-attended", "Y".to_owned())).is_err(), "{mode}");
+        assert!(STATE.lock().unwrap().sender_owner, "Failed acknowledgment must retain cold foreground owner");
+    }
+}
+#[test] fn unrelated_settings_retain_write_only_transport() {
+    reset("ok");
+    block_on(set_config_async("ordinary-setting", "Y".to_owned())).unwrap();
+    let state = STATE.lock().unwrap(); assert_eq!(state.operations.len(), 1); assert!(!state.memory);
+}
+''', encoding="utf-8")
+    handoff_binary = repo / ("native_attended_handoff_test.exe" if os.name == "nt" else "native_attended_handoff_test")
+    subprocess.run([rustc, "--edition=2021", "--deny=warnings", "--test", str(handoff_test), "-o", str(handoff_binary)], check=True)
+    subprocess.run([str(handoff_binary), "--test-threads=1"], check=True)
+    assert 'if _is_quick_support || _is_mixel_support_invite {' in core
+    assert 'if crate::ipc::set_config("mixel-support-invite-attended", "Y".to_owned()).is_err()' in core
+    assert 'flutter_args.push("--mixel-attended-handoff-unavailable".to_owned())' in core
+    print("PASS: actual generated attended IPC setter acknowledges memory renewal before delayed GUI ownership; stale/missing replies keep the cold owner and unrelated setters retain original behavior")
     ui_source = first["src/ui_interface.rs"]
     start = ui_source.index("pub fn get_async_http_status(url: String) -> Option<String> {")
     end = ui_source.index("\n#[inline]", start)

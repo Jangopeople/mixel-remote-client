@@ -98,23 +98,123 @@ with tempfile.TemporaryDirectory(prefix="mixel-branding-") as directory:
     # --quick_support handoff; empty/whitespace-only arguments must not throw.
     windows_main = (repo / "flutter/windows/runner/main.cpp").read_text(encoding="utf-8")
     normalize = windows_main[windows_main.index("  // Remove possible trailing whitespace"):windows_main.index("\n\n  int args_len")]
+    def window_dispatch(source: str) -> str:
+        return source[source.index("  // Uri links dispatch"):source.index("  // Attach to console")]
+
+    dispatch = window_dispatch(windows_main)
+    upstream_windows_main = run(["git", "-C", str(repo), "show", "HEAD:flutter/windows/runner/main.cpp"]).stdout
+    upstream_dispatch = window_dispatch(upstream_windows_main)
+    whitelist = windows_main[windows_main.index("const std::vector<std::string> parameters_white_list ="):]
+    whitelist = whitelist[:whitelist.index(";") + 1]
     cpp = base / "windows-arguments"
     cpp.mkdir()
     (cpp / "CMakeLists.txt").write_text('''cmake_minimum_required(VERSION 3.16)
 project(mixel_window_arguments LANGUAGES CXX)
 add_executable(window_arguments main.cpp)
-target_compile_features(window_arguments PRIVATE cxx_std_17)
-if(MSVC)
-  target_compile_options(window_arguments PRIVATE /W4 /WX)
-else()
-  target_compile_options(window_arguments PRIVATE -Wall -Wextra -Werror)
-endif()
+add_executable(window_arguments_original original.cpp)
+foreach(window_target IN ITEMS window_arguments window_arguments_original)
+  target_compile_features(${window_target} PRIVATE cxx_std_17)
+  if(MSVC)
+    target_compile_options(${window_target} PRIVATE /W4 /WX)
+  else()
+    target_compile_options(${window_target} PRIVATE -Wall -Wextra -Werror)
+  endif()
+endforeach()
 ''', encoding="utf-8")
-    (cpp / "main.cpp").write_text('''#include <iostream>
+    cpp_prefix = '''#include <algorithm>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <iostream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 void normalize(std::vector<std::string>& command_line_arguments) {
 ''' + normalize + '''
+}
+using HWND = void*;
+using DWORD = std::uint32_t;
+using DWORD_PTR = std::uintptr_t;
+using LPARAM = std::intptr_t;
+struct COPYDATASTRUCT { DWORD_PTR dwData; DWORD cbData; void* lpData; };
+constexpr int SW_NORMAL = 1;
+constexpr int SW_RESTORE = 9;
+constexpr unsigned int WM_COPYDATA = 74;
+constexpr DWORD_PTR UNI_LINKS_DESKTOP_MSG_ID = 1026;
+constexpr unsigned int SMTO_BLOCK = 1;
+constexpr unsigned int SMTO_ABORTIFHUNG = 2;
+int main_window;
+bool existing_window = true;
+bool minimized = true;
+int show_calls = 0;
+int foreground_calls = 0;
+int uri_dispatch_calls = 0;
+int bounded_handoff_calls = 0;
+bool delivery_success = true;
+HWND shown_window = nullptr;
+HWND foreground_window = nullptr;
+std::vector<std::string> plugin_argv;
+std::string emitted_uri;
+const wchar_t* getWindowClassName() { return L"fixture-class"; }
+HWND FindWindowW(const wchar_t*, const wchar_t*) {
+  return existing_window ? &main_window : nullptr;
+}
+int ShowWindow(HWND hwnd, int command) {
+  ++show_calls;
+  shown_window = hwnd;
+  if (command == SW_RESTORE || command == SW_NORMAL) minimized = false;
+  return 1;
+}
+int SetForegroundWindow(HWND hwnd) {
+  ++foreground_calls;
+  foreground_window = hwnd;
+  return 1;
+}
+void DispatchToUniLinksDesktop(HWND) {
+  ++uri_dispatch_calls;
+  // Pinned uni_links_desktop 0.1.7 sends only argv[1] as a URI string.
+  // It cannot deliver --quick_support as the Dart cmdArgs test assumed.
+  emitted_uri = plugin_argv.empty() ? "" : plugin_argv.front();
+}
+int SendMessageTimeoutW(HWND hwnd, unsigned int message, std::uintptr_t wparam,
+    LPARAM lparam, unsigned int flags, unsigned int timeout, DWORD_PTR* result) {
+  ++bounded_handoff_calls;
+  const auto& data = *reinterpret_cast<const COPYDATASTRUCT*>(lparam);
+  const char expected[] = "--quick_support";
+  if (hwnd != &main_window || message != WM_COPYDATA || wparam != 0 ||
+      flags != (SMTO_BLOCK | SMTO_ABORTIFHUNG) || timeout != 5000 ||
+      data.dwData != UNI_LINKS_DESKTOP_MSG_ID || data.cbData != sizeof(expected) ||
+      std::memcmp(data.lpData, expected, sizeof(expected)) != 0) {
+    throw std::runtime_error("Native handoff differs from pinned plugin framing or is unbounded");
+  }
+  emitted_uri = static_cast<const char*>(data.lpData);
+  *result = 0; // The pinned plugin uses the default LRESULT after delivering.
+  return delivery_success ? 1 : 0;
+}
+''' + whitelist + '''
+int existing_window_dispatch(std::vector<std::string> command_line_arguments,
+    std::vector<std::string> rust_args = {}) {
+  (void)rust_args; // The pinned original dispatch does not use core arguments.
+  plugin_argv = command_line_arguments;
+  const std::wstring app_name = L"Mixel-Remote";
+'''
+    cpp_suffix = '''
+  return EXIT_SUCCESS;
+}
+void reset(bool existing = true) {
+  existing_window = existing;
+  minimized = true;
+  show_calls = foreground_calls = uri_dispatch_calls = 0;
+  bounded_handoff_calls = 0;
+  delivery_success = true;
+  shown_window = foreground_window = nullptr;
+  emitted_uri.clear();
+}
+bool restored_same_window(bool attended_handoff) {
+  return !minimized && show_calls == 1 && foreground_calls == 1 &&
+      shown_window == &main_window && foreground_window == &main_window &&
+      uri_dispatch_calls == 0 && bounded_handoff_calls == (attended_handoff ? 1 : 0) &&
+      (!attended_handoff || emitted_uri == "--quick_support");
 }
 int main() {
   std::vector<std::string> args = {"--quick_support", "--cm", "mixel-remote://support/?invite=inv_00000000-0000-0000-0000-000000000001&apikey=synthetic-key-last-Z", "", " \\n\\r\\t", "--quick_support \\n\\r\\t"};
@@ -125,8 +225,45 @@ int main() {
     return 1;
   }
   std::cout << "PASS: actual generated Windows C++ argument normalization preserves complete QuickSupport/invite/key bytes and accepts empty/whitespace input" << std::endl;
+  reset();
+  if (existing_window_dispatch({"--quick_support"}) != EXIT_FAILURE || !restored_same_window(true)) {
+    std::cerr << "QuickSupport warm dispatch did not restore the same minimized HWND; URI transport emitted: " << emitted_uri << std::endl;
+    return 2;
+  }
+  reset();
+  if (existing_window_dispatch({}) != EXIT_FAILURE || !restored_same_window(false)) return 3;
+  const std::string invite = args[2];
+  for (const auto& uri : {invite, std::string("mixel-remote://123456789")}) {
+    reset();
+    if (existing_window_dispatch({uri}) != EXIT_FAILURE || uri_dispatch_calls != 1 ||
+        emitted_uri != uri || show_calls != 0 || foreground_calls != 0 ||
+        bounded_handoff_calls != 0 || !minimized) return 4;
+  }
+  for (const auto& arguments : {std::vector<std::string>{"--cm"},
+                               std::vector<std::string>{"--install"},
+                               std::vector<std::string>{"--quick_support", "--cm"}}) {
+    reset();
+    if (existing_window_dispatch(arguments) != EXIT_SUCCESS || uri_dispatch_calls != 0 ||
+        show_calls != 0 || foreground_calls != 0 || bounded_handoff_calls != 0) return 5;
+  }
+  reset(false);
+  if (existing_window_dispatch({"--quick_support"}) != EXIT_SUCCESS || uri_dispatch_calls != 0 ||
+      show_calls != 0 || foreground_calls != 0 || bounded_handoff_calls != 0) return 6;
+  reset();
+  delivery_success = false;
+  if (existing_window_dispatch({"--quick_support"}) != EXIT_SUCCESS || !restored_same_window(true)) return 7;
+  reset();
+  if (existing_window_dispatch({"--quick_support"}, {"--mixel-attended-handoff-unavailable"}) != EXIT_SUCCESS || !restored_same_window(false)) return 8;
+  reset();
+  if (existing_window_dispatch({invite}, {"--mixel-attended-handoff-unavailable"}) != EXIT_SUCCESS || uri_dispatch_calls != 0 || bounded_handoff_calls != 0) return 9;
+  std::cout << "PASS: actual generated Windows branch restores the same QuickSupport HWND and sends exact bounded pinned-plugin attended intent; failed delivery falls through to cold owned GUI; URI/CM/install/cold paths remain intact" << std::endl;
+  std::cout << "PASS: failed attended IPC acknowledgment retains the cold foreground owner before asynchronous URI/QuickSupport delivery" << std::endl;
 }
-''', encoding="utf-8")
+'''
+    # Compile the actual unpatched dispatch first. This recreates the native
+    # failure: the plugin gets a relative URI flag and never restores the HWND.
+    (cpp / "original.cpp").write_text(cpp_prefix + upstream_dispatch + cpp_suffix, encoding="utf-8")
+    (cpp / "main.cpp").write_text(cpp_prefix + dispatch + cpp_suffix, encoding="utf-8")
     cpp_build = cpp / "build"
     run(["cmake", "-S", str(cpp), "-B", str(cpp_build)])
     run(["cmake", "--build", str(cpp_build), "--config", "Release"])
@@ -134,6 +271,12 @@ int main() {
     binary = next((candidate for candidate in binaries if candidate.is_file()), None)
     if binary is None:
         raise RuntimeError("CMake did not build the generated Windows argument regression executable")
+    original_binary = binary.with_name("window_arguments_original" + binary.suffix)
+    if not original_binary.is_file():
+        raise RuntimeError("CMake did not build the original Windows dispatch regression executable")
+    negative = subprocess.run([str(original_binary)], capture_output=True, text=True, encoding="utf-8")
+    assert negative.returncode == 2 and "URI transport emitted: --quick_support" in negative.stderr, "Original Windows dispatch must reproduce the real QuickSupport warm failure"
+    print("PASS: actual original Windows dispatch reproduces QuickSupport relative-URI failure before the native restore fix")
     print(run([str(binary)]).stdout.strip())
 
     # Execute the actual package generator, including its architecture-specific

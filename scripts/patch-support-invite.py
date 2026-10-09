@@ -129,8 +129,8 @@ empty_handler = """  if (args.isEmpty) {
 """
 support_handler = """  if ((args.contains('--mixel-attended') || args.contains('--quick_support')) &&
       !args.contains('--support-invite')) {
-    // Windows forwards the launcher's original --quick_support argument to
-    // an existing window; generated native Flutter arguments are cold-only.
+    // Native boot arguments and the exact raw Windows handoff both arm the
+    // existing foreground process, which owns and renews its consent lease.
     windowOnTop(null);
     _supportInviteAttendedTimer ??= Timer.periodic(
       const Duration(seconds: 20), (_) => _renewSupportInviteAttended());
@@ -191,6 +191,53 @@ text = replace_once(text,
     "if (args[0].startsWith(bind.mainUriPrefixSync())) {",
     "if (args[0].toLowerCase().startsWith(bind.mainUriPrefixSync().toLowerCase())) {",
     "case-insensitive protocol command line")
+text = replace_once(text,
+    """  } else if (uriString != null) {
+    final uri = Uri.tryParse(uriString);
+    if (uri != null) {
+      args = urlLinkToCmdArgs(uri);
+    }
+  }
+""", """  } else if (uriString != null) {
+    // The locked Windows plugin forwards argv[1] as a raw string. Recognize
+    // this one internal intent before Uri.parse can canonicalize variants.
+    if (uriString == '--quick_support') {
+      args = ['--mixel-attended'];
+    } else {
+      final uri = Uri.tryParse(uriString);
+      if (uri != null) {
+        args = urlLinkToCmdArgs(uri);
+      }
+    }
+  }
+""", "exact raw QuickSupport attended intent")
+text = replace_once(text,
+    """  final sub = uriLinkStream.listen((Uri? uri) {
+    debugPrint('An app link was received.');
+    if (uri != null) {
+      if (handleByFlutter) {
+        handleUriLink(uri: uri);
+      } else {
+        bind.sendUrlScheme(url: uri.toString());
+      }
+    } else {
+      print("uni listen error: uri is empty.");
+    }
+""", """  // Preserve the exact native payload before URI canonicalization. In
+  // particular, percent-encoded or extended QuickSupport flags are rejected.
+  final sub = linkStream.listen((String? rawLink) {
+    debugPrint('An app link was received.');
+    if (rawLink != null) {
+      if (handleByFlutter) {
+        handleUriLink(uriString: rawLink);
+      } else {
+        final uri = Uri.tryParse(rawLink);
+        if (uri != null) bind.sendUrlScheme(url: uri.toString());
+      }
+    } else {
+      print("uni listen error: uri is empty.");
+    }
+""", "raw Windows native handoff stream")
 source.write_text(text, encoding="utf-8")
 (rdrepo / "flutter/lib/mixel_support_invite.dart").write_text(
     (scripts / "support-invite-reporter.dart").read_text(encoding="utf-8"), encoding="utf-8"
@@ -497,6 +544,33 @@ text = replace_once(text, """                } else if name == "unlock-pin" {
                         password::renew_support_invite_attended();
                     }
 """, "runtime IPC guard setter")
+text = replace_once(text, """    c.send_config(name, value).await?;
+    Ok(())
+}
+""", """    let attended_handoff = name == "mixel-support-invite-attended" && value == "Y";
+    let request = async {
+        c.send_config(name, value).await?;
+        if attended_handoff {
+            // The service handles frames serially on this same connection.
+            // Its reply therefore follows the memory-only renewal, even while
+            // the receiving Flutter isolate has not acquired its own lease yet.
+            c.send(&Data::Config((name.to_owned(), None))).await?;
+            match c.next_timeout(1_000).await? {
+                Some(Data::Config((reply_name, Some(proof))))
+                    if reply_name == name
+                        && proof == password::SUPPORT_INVITE_ATTESTATION => {}
+                _ => bail!("Attended handoff was not acknowledged"),
+            }
+        }
+        Ok(())
+    };
+    if attended_handoff {
+        timeout(1_500, request).await?
+    } else {
+        request.await
+    }
+}
+""", "acknowledged runtime-only IPC attended handoff")
 ipc.write_text(text, encoding="utf-8")
 
 cm = rdrepo / "src/ui_cm_interface.rs"
@@ -608,6 +682,15 @@ text = replace_once(text,
             hbb_common::password_security::hold_support_invite_attended_lease();
             #[cfg(feature = "flutter")]
             flutter_args.push("--mixel-attended".to_owned());
+        }
+        #[cfg(feature = "flutter")]
+        if _is_quick_support || _is_mixel_support_invite {
+            // Renew the old incoming service while this invocation still owns
+            // its foreground lease. Do not release it before the asynchronous
+            // WM_COPYDATA callback can acquire the existing GUI's own lease.
+            if crate::ipc::set_config("mixel-support-invite-attended", "Y".to_owned()).is_err() {
+                flutter_args.push("--mixel-attended-handoff-unavailable".to_owned());
+            }
         }
 """, "QuickSupport double-click requires ongoing customer consent")
 text = replace_once(text,

@@ -362,13 +362,86 @@ import sys
 
 path = Path(sys.argv[1])
 source = path.read_text(encoding="utf-8")
+original = source
 before = '    argument.erase(argument.find_last_not_of(" \\n\\r\\t"));'
 after = '''    const auto last = argument.find_last_not_of(" \\n\\r\\t");
     argument.erase(last == std::string::npos ? 0 : last + 1);'''
 if after not in source:
     if source.count(before) != 1:
         raise RuntimeError("Pinned Windows command-line normalization changed")
-    path.write_text(source.replace(before, after, 1), encoding="utf-8")
+    source = source.replace(before, after, 1)
+# The portable QS launcher supplies a command flag, while uni_links_desktop
+# forwards argv[1] as a URI string. Sending that flag to the URI parser cannot
+# restore a minimized window. Deliver the exact raw intent to the existing GUI
+# so it owns the consent lease; protocol links and the whitelist keep dispatch.
+before = '''      if (!command_line_arguments.empty()) {
+        // Dispatch command line arguments
+        DispatchToUniLinksDesktop(hwnd);
+      } else {
+        // Not called with arguments, or just open the app shortcut on desktop.
+        // So we just show the main window instead.
+        ::ShowWindow(hwnd, SW_NORMAL);
+        ::SetForegroundWindow(hwnd);
+      }'''
+after = '''      const bool quick_support_reopen =
+          command_line_arguments.size() == 1 &&
+          command_line_arguments.front() == "--quick_support";
+      const bool attended_handoff_unavailable =
+          std::find(rust_args.begin(), rust_args.end(),
+                    "--mixel-attended-handoff-unavailable") != rust_args.end();
+      if (attended_handoff_unavailable) {
+        // Native IPC did not acknowledge the old service's memory guard.
+        // Keep this invocation's foreground lease and create its attended GUI.
+        allow_multiple_instances = true;
+      }
+      if (!command_line_arguments.empty() && !quick_support_reopen) {
+        // Protocol links are forwarded as URI strings by uni_links_desktop.
+        if (!attended_handoff_unavailable) DispatchToUniLinksDesktop(hwnd);
+      } else {
+        // A shortcut or QS double-click restores the same GUI.
+        ::ShowWindow(hwnd, SW_RESTORE);
+        ::SetForegroundWindow(hwnd);
+        if (quick_support_reopen && !attended_handoff_unavailable) {
+          // Match the locked uni_links_desktop UTF-8/NUL WM_COPYDATA framing.
+          // Its receiver delivers raw strings, so the existing GUI can acquire
+          // its own attended lease even if it started as an ordinary app.
+          const char attended_argument[] = "--quick_support";
+          COPYDATASTRUCT data = {};
+          data.dwData = UNI_LINKS_DESKTOP_MSG_ID;
+          data.cbData = static_cast<DWORD>(sizeof(attended_argument));
+          data.lpData = const_cast<char*>(attended_argument);
+          DWORD_PTR result = 0;
+          if (::SendMessageTimeoutW(hwnd, WM_COPYDATA, 0,
+                  reinterpret_cast<LPARAM>(&data), SMTO_BLOCK | SMTO_ABORTIFHUNG,
+                  5000, &result) == 0) {
+            // Keep this invocation's owned guard and create its attended GUI
+            // if the old window cannot receive the intent. Never exit here.
+            allow_multiple_instances = true;
+          }
+        }
+      }'''
+if after not in source:
+    if source.count(before) != 1:
+        raise RuntimeError("Pinned Windows existing-window dispatch changed")
+    source = source.replace(before, after, 1)
+# A failed bounded delivery falls through to the cold Flutter construction;
+# the new invocation already holds the native QuickSupport lifetime lease.
+before = '''      return EXIT_FAILURE;
+    }
+  }
+
+  // Attach to console'''
+after = '''      if (!allow_multiple_instances) return EXIT_FAILURE;
+    }
+  }
+
+  // Attach to console'''
+if after not in source:
+    if source.count(before) != 1:
+        raise RuntimeError("Pinned Windows existing-window exit changed")
+    source = source.replace(before, after, 1)
+if source != original:
+    path.write_text(source, encoding="utf-8")
 PY
   echo "   patched flutter/windows/runner/main.cpp fallback app_name"
 fi
@@ -886,6 +959,9 @@ require_string () {
 }
 require_string flutter/windows/CMakeLists.txt "COMPONENT Runtime RENAME ${LIBNAME}.dll)"
 require_string flutter/windows/runner/main.cpp "LoadLibraryA(\"${LIBNAME}.dll\")"
+require_string flutter/windows/runner/main.cpp "command_line_arguments.front() == \"--quick_support\";"
+require_string flutter/windows/runner/main.cpp "::ShowWindow(hwnd, SW_RESTORE);"
+require_string flutter/windows/runner/main.cpp "if (!allow_multiple_instances) return EXIT_FAILURE;"
 require_string flutter/linux/CMakeLists.txt "COMPONENT Runtime RENAME ${LIBNAME}.so)"
 require_string flutter/linux/main.cc "#define RUSTDESK_LIB_PATH \"${LIBNAME}.so\""
 require_string flutter/lib/models/native_model.dart "DynamicLibrary.open('${LIBNAME}.dll')"
