@@ -323,5 +323,135 @@ class TransportOracleTests(unittest.TestCase):
                 self.exercise(snapshots)
 
 
+class DesktopReadinessTests(unittest.TestCase):
+    @staticmethod
+    def tsv(name):
+        return "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n" + "5\t1\t1\t1\t1\t1\t30\t12\t300\t30\t95\t" + name + "\n"
+
+    def test_actual_rendered_filename_parser_rejects_empty_wrong_and_ambiguous_rows(self):
+        bounds = (520, 278, 975, 320)
+        self.assertEqual(desktop.Session.rendered_row(self.tsv(desktop.FILE), bounds), (580, 287))
+        for name in ("", "another-proof.bin", desktop.FILE + ".part"):
+            self.assertIsNone(desktop.Session.rendered_row(self.tsv(name), bounds))
+        duplicated = self.tsv(desktop.FILE) + self.tsv(desktop.FILE).splitlines()[1] + "\n"
+        with self.assertRaisesRegex(AssertionError, "ambiguous"):
+            desktop.Session.rendered_row(duplicated, bounds)
+
+    def test_actual_remote_row_wait_refreshes_empty_listing_before_returning_exact_visible_file(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            proofs = Path(temporary)
+            (proofs / "controller").mkdir()
+            session = desktop.Session(proofs, Path("synthetic.deb"), False, True)
+            ocr = iter((self.tsv(""), self.tsv(desktop.FILE)))
+            actions = []
+            def run(role, arguments, **kwargs):
+                if arguments[0] == "tesseract":
+                    actions.append("read actual rendered remote row")
+                    return subprocess.CompletedProcess(arguments, 0, next(ocr), "")
+                return subprocess.CompletedProcess(arguments, 0, "", "")
+            with patch.object(session, "geometry", return_value={"X": 0, "Y": 40}), \
+                    patch.object(session, "run", side_effect=run), patch.object(session, "screenshot"), \
+                    patch.object(session, "click", side_effect=lambda *args: actions.append(("real refresh", args))), \
+                    patch.object(desktop.time, "sleep"):
+                point = session.file_row("remote", "real-window", "readiness", refresh=True)
+            self.assertEqual(point, (580, 287))
+            self.assertEqual(actions, ["read actual rendered remote row", ("real refresh", ("controller", 935, 180)), "read actual rendered remote row"])
+
+    def test_actual_input_targets_observed_controls_and_checks_text_before_button(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            proofs = Path(temporary)
+            (proofs / "host").mkdir()
+            (proofs / "host/input.json").write_text(json.dumps({"count": 0, "text": ""}))
+            session = desktop.Session(proofs, Path("synthetic.deb"), False, True)
+            state = {"focus": "", "text": "", "events": [], "controls": {
+                "entry": {"x": 100, "y": 500, "width": 800, "height": 40},
+                "button": {"x": 300, "y": 630, "width": 450, "height": 80}}}
+            clicks = []
+            mapping = lambda x, y: (x * 1.5 + 30, y * 1.5 + 10)
+            def click(role, x, y):
+                self.assertEqual(role, "controller", "A product proof must never inject host input")
+                clicks.append((x, y))
+                if len(clicks) == 1:
+                    state["focus"] = ".!entry"
+                else:
+                    self.assertEqual(state["text"], desktop.TEXT)
+                    (proofs / "host/input.json").write_text(json.dumps({"count": 1, "text": state["text"]}))
+            def gui(role, arguments):
+                self.assertEqual(role, "controller")
+                self.assertEqual(arguments, ["xdotool", "type", "--clearmodifiers", "--delay", "60", desktop.TEXT])
+                state["text"] = desktop.TEXT
+            with patch.object(session, "video_map", side_effect=lambda _: (mapping, state)), \
+                    patch.object(session, "fresh_video", return_value=(mapping, state)), \
+                    patch.object(session, "fixture_state", return_value=state), patch.object(session, "click", side_effect=click), \
+                    patch.object(session, "gui", side_effect=gui), patch.object(session, "screenshot"), \
+                    patch.object(desktop.time, "sleep"), patch.object(sys, "stdout", io.StringIO()):
+                self.assertEqual(session.input(), {"count": 1, "text": desktop.TEXT})
+            self.assertEqual(clicks, [mapping(500, 520), mapping(525, 670)])
+
+    def test_actual_clock_decoder_rejects_stale_hidden_corrupt_or_far_future_video(self):
+        def samples(counter):
+            return [[245, 246, 247] if bit == "1" else [8, 7, 9] for bit in "1010" + format(counter, "016b")]
+        self.assertEqual(desktop.decode_marker(samples(42), 42), 42)
+        self.assertEqual(desktop.decode_marker(samples(65535), 1), 65535)
+        self.assertEqual(desktop.decode_marker(samples(43), 42), 43)
+        for observed in (samples(34), samples(45), [[20, 20, 20]] * 20, [[229, 29, 54]] * 20, samples(42)[:-1]):
+            with self.subTest(samples=observed), self.assertRaises(RuntimeError):
+                desktop.decode_marker(observed, 42)
+
+    def test_actual_fresh_frame_gate_requires_two_different_current_decoded_clocks(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            session = desktop.Session(Path(temporary), Path("synthetic.deb"), False, True)
+            values = iter((120, 120, 121))
+            calls = []
+            def video(label):
+                counter = next(values)
+                calls.append(counter)
+                return "actual mapping", {"marker": {"counter": counter}, "decoded_marker": {"decoded_counter": counter, "rectangle": [91, 128, 300]}}
+            with patch.object(session, "video_map", side_effect=video), patch.object(desktop.time, "sleep"):
+                self.assertEqual(session.fresh_video("current-video")[0], "actual mapping")
+            self.assertEqual(calls, [120, 120, 121])
+            self.assertEqual(len(json.loads((Path(temporary) / "current-video-fresh-frames.json").read_text())), 3)
+
+    def test_recovery_transport_gate_dispatches_same_strict_oracle_and_keeps_phase_label(self):
+        for mixed in (False, True):
+            session = desktop.Session(Path("proofs"), Path("synthetic.deb"), False, not mixed, mixed_transports=mixed)
+            with patch.object(session, "active_https_proof") as https, patch.object(session, "active_mixed_proof") as partial:
+                session.active_transport_proof("service-restart")
+                session.active_transport_proof("network-reconnect")
+            selected, unused = (partial, https) if mixed else (https, partial)
+            self.assertEqual(selected.call_args_list, [unittest.mock.call("service-restart"), unittest.mock.call("network-reconnect")])
+            unused.assert_not_called()
+
+    @unittest.skipUnless(os.name == "posix", "requires the POSIX launch supervisor used in the Linux fixture")
+    def test_actual_launch_supervisor_retains_app_pid_and_records_failed_exit_status(self):
+        with tempfile.TemporaryDirectory(prefix="mixel-launch-status-") as temporary:
+            folder = Path(temporary)
+            (folder / "dbus-address").write_text("synthetic-test-bus-only")
+            session = desktop.Session(folder, Path("synthetic.deb"), False, True)
+            def run(_role, arguments, **_kwargs):
+                self.assertEqual(arguments[:2], ["bash", "-c"])
+                return subprocess.run(["bash", "-c", arguments[2].replace("/proofs", str(folder))], capture_output=True, text=True, check=True)
+            with patch.object(desktop, "EXE", sys.executable), patch.object(session, "run", side_effect=run):
+                pid = session.launch("host", ["-c", "import sys;sys.exit(24)"])
+            result = desktop.until("actual supervised child exit", lambda: next(iter(folder.glob("launch-*-exit.json")), None), timeout=3)
+            self.assertEqual(json.loads(result.read_text())["pid"], pid)
+            self.assertEqual(json.loads(result.read_text())["wait_status"], 24)
+
+    @unittest.skipUnless(os.name == "posix", "requires POSIX signal wait status")
+    def test_actual_launch_supervisor_records_sigkill_without_claiming_normal_exit(self):
+        with tempfile.TemporaryDirectory(prefix="mixel-launch-killed-") as temporary:
+            folder = Path(temporary)
+            (folder / "dbus-address").write_text("synthetic-test-bus-only")
+            session = desktop.Session(folder, Path("synthetic.deb"), False, True)
+            def run(_role, arguments, **_kwargs):
+                return subprocess.run(["bash", "-c", arguments[2].replace("/proofs", str(folder))], capture_output=True, text=True, check=True)
+            with patch.object(desktop, "EXE", sys.executable), patch.object(session, "run", side_effect=run):
+                pid = session.launch("host", ["-c", "import time;time.sleep(10)"])
+            os.kill(pid, signal.SIGKILL)
+            result = desktop.until("actual supervised signal status", lambda: next(iter(folder.glob("launch-*-exit.json")), None), timeout=3)
+            self.assertEqual(json.loads(result.read_text())["pid"], pid)
+            self.assertEqual(json.loads(result.read_text())["wait_status"], 137)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

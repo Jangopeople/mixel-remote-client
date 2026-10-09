@@ -6,7 +6,9 @@ passwords, or IPC authorization. IPC reads supply only independent assertions.
 """
 import argparse
 import base64
+import csv
 import hashlib
+import io
 import ipaddress
 import json
 import os
@@ -26,7 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 EXE = "/usr/local/mixel-test/usr/share/mixel-remote/mixel-remote"
 URI = "mixel-remote://support/?invite=inv_00000000-0000-0000-0000-000000000002&apikey=synthetic-invalid-public-key-000000000000"
 TEXT = "mixel-remote-native-keyboard-proof"
-FILE = "mixel-synthetic-transfer.bin"
+FILE = "mixel-proof.bin"
 
 
 def command(arguments, *, check=True, timeout=30):
@@ -48,6 +50,29 @@ def until(description, operation, timeout=60):
             last = error
         time.sleep(.4)
     raise RuntimeError(f"Timed out: {description}; {last or 'condition not met'}")
+
+
+def decode_marker(samples, source_counter):
+    """Decode the displayed fixture clock and reject stale/covered video."""
+    if len(samples) != 20:
+        raise RuntimeError("Decoded video marker has an invalid cell count")
+    bits = ""
+    for color in samples:
+        if max(color) < 90:
+            bits += "0"
+        elif min(color) > 165:
+            bits += "1"
+        else:
+            raise RuntimeError("Decoded video marker is obscured or ambiguous")
+    if bits[:4] != "1010":
+        raise RuntimeError("Decoded video marker synchronization is absent")
+    counter = int(bits[4:], 2)
+    # The half-second counter is unique over a nine-hour test window. At most
+    # three seconds of capture/network/decoder lag are allowed, including wrap.
+    age = ((source_counter - counter + 32768) & 65535) - 32768
+    if not -2 <= age <= 6:
+        raise RuntimeError("Decoded video retains an old or unrelated fixture frame")
+    return counter
 
 
 class Session:
@@ -111,9 +136,18 @@ class Session:
         return self.run(role, ["bash", "-c", script], check=check)
 
     def launch(self, role, arguments):
+        token = "launch-" + uuid.uuid4().hex[:12]
+        pid_file = "/proofs/" + token + ".pid"
+        result_file = "/proofs/" + token + "-exit.json"
+        result_code = "import json,sys,time;from pathlib import Path;Path(" + repr(result_file) + ").write_text(json.dumps({'pid':int(sys.argv[1]),'wait_status':int(sys.argv[2]),'monotonic':time.monotonic()}))"
+        child = (shlex.join([EXE, *arguments]) + " & app_pid=$!; printf '%s\\n' \"$app_pid\" > "
+                 + shlex.quote(pid_file) + '; wait "$app_pid"; result=$?; '
+                 + shlex.join(["python3", "-c", result_code]) + ' "$app_pid" "$result"')
         script = ('export DBUS_SESSION_BUS_ADDRESS="$(cat /proofs/dbus-address)"; nohup '
-                  + shlex.join([EXE, *arguments])
-                  + ' >>/proofs/app-stdout.log 2>&1 </dev/null & echo $!')
+                  + shlex.join(["bash", "-c", child])
+                  + ' >>/proofs/app-stdout.log 2>&1 </dev/null & '
+                  + "for attempt in {1..50}; do [ -s " + shlex.quote(pid_file)
+                  + " ] && break; sleep .1; done; cat " + shlex.quote(pid_file))
         return int(self.run(role, ["bash", "-c", script]).stdout.strip())
 
     def query(self, role, kind, content=None):
@@ -183,12 +217,70 @@ class Session:
     def health(self, role):
         # Reuse independent smoke assertions for the attended host: real owner
         # PID, relay/key/options, native endpoint, ID, service key confirmation.
-        code = ("import sys,json;sys.path.insert(0,'/payload');import ipc_probe;"
+        code = ("import sys,json,os;from pathlib import Path;sys.path.insert(0,'/payload');import ipc_probe;"
                 + "ipc_probe.PUBLIC_KEY=" + repr(self.expected_pin) + ";"
-                "print(json.dumps(ipc_probe.runtime_health("
-                + str(self.server[role]) + ")))")
+                "state=ipc_probe.runtime_health(" + str(self.server[role]) + ");"
+                "lease=Path('/tmp/mixel-remote-attended-v2-'+str(os.geteuid())+'/lease').stat();"
+                "locks=[line.split() for line in Path('/proc/locks').read_text().splitlines()];"
+                "assert any(len(row)>5 and row[1]=='FLOCK' and row[3]=='READ' and row[4]=="
+                + repr(str(self.gui_pid[role]))
+                + " and row[5].rsplit(':',1)[-1]==str(lease.st_ino) for row in locks),'Actual foreground PID lost its kernel attended lease';"
+                "print(json.dumps(state))")
         state = json.loads(self.run(role, ["python3", "-c", code]).stdout)
         return state if state[0] > 0 and state[1] is True else None
+
+    def fixture_state(self):
+        code = "import json,time;from pathlib import Path;s=json.loads(Path('/proofs/fixture-state.json').read_text());assert time.monotonic()-s['monotonic']<3,'Synthetic desktop observer stopped';print(json.dumps(s))"
+        state = json.loads(self.run("host", ["python3", "-c", code]).stdout)
+        assert all(state["controls"][name]["visible"] for name in ("canvas", "entry", "button")), "Synthetic input controls are not visible"
+        return state
+
+    def process_snapshot(self, role, label, timeout=2, capture_logs=False):
+        # Read only selected status fields. Never collect process argv, env,
+        # configuration files, bearer values or unrelated desktop contents.
+        code = r'''import json,time,shutil,subprocess,sys
+from pathlib import Path
+selected=('Name','State','PPid','VmRSS','VmHWM','Threads')
+state={'monotonic':time.monotonic(),'processes':{},'memory':{}}
+owned=set(PIDS)
+for p in Path('/proc').iterdir():
+ if not p.name.isdigit():continue
+ try:
+  if str((p/'exe').readlink())==EXE_PATH or (p/'comm').read_text().strip()=='mixel-remote':owned.add(int(p.name))
+ except OSError:pass
+for pid in sorted(owned):
+ p=Path('/proc')/str(pid)
+ try:
+  fields=dict(line.split(':',1) for line in (p/'status').read_text().splitlines() if ':' in line)
+  state['processes'][str(pid)]={key:fields[key].strip() for key in selected if key in fields}
+ except OSError as error:state['processes'][str(pid)]={'error':str(error)}
+for name in ('memory.events','memory.current','memory.max','memory.peak'):
+ try:state['memory'][name]=(Path('/sys/fs/cgroup')/name).read_text().strip()
+ except OSError as error:state['memory'][name]={'error':str(error)}
+try:state['ipc_pid']=Path('/tmp/Mixel-Remote/ipc.pid').read_text().strip()
+except OSError as error:state['ipc_pid']={'error':str(error)}
+try:state['kernel_locks']=Path('/proc/locks').read_text().splitlines()
+except OSError as error:state['kernel_locks']={'error':str(error)}
+state['exit_statuses']=[]
+for p in Path('/proofs').glob('launch-*-exit.json'):
+ try:state['exit_statuses'].append(json.loads(p.read_text()))
+ except (OSError,ValueError):pass
+errors=[]
+if CAPTURE_LOGS:
+ try:shutil.copytree('/home/guest/.local/share/logs/Mixel-Remote','/proofs/native-logs',dirs_exist_ok=True)
+ except OSError as error:errors.append(str(error))
+ try:
+  result=subprocess.run(['ss','-tnp'],capture_output=True,text=True,check=True)
+  Path('/proofs/tcp-sockets.txt').write_text(result.stdout)
+ except subprocess.SubprocessError as error:errors.append(str(error))
+state['diagnostic_errors']=errors
+Path(OUTPUT_PATH).write_text(json.dumps(state,indent=2)+'\n')
+print(json.dumps(state))
+if errors:sys.exit(1)
+'''.replace("PIDS", repr(sorted({pid for pid in (self.server.get(role), self.gui_pid.get(role)) if pid}))).replace("EXE_PATH", repr(EXE)).replace("CAPTURE_LOGS", repr(capture_logs)).replace("OUTPUT_PATH", repr("/proofs/" + label + "-process-state.json"))
+        snapshot = json.loads(self.run(role, ["python3", "-c", code], timeout=timeout).stdout)
+        (self.proofs / role / (label + "-process-state.json")).write_text(json.dumps(snapshot, indent=2) + "\n")
+        return snapshot
 
     def relay_addresses(self, role):
         if self.isolated_relay:
@@ -236,12 +328,12 @@ class Session:
                 record["pids"].add(pid)
         return sockets, [{**record, "pids": sorted(record["pids"])} for record in connections.values()]
 
-    def active_https_proof(self):
+    def active_https_proof(self, label=None):
         assert self.query("host", "VideoConnCount") == 1
         evidence = {}
         for role in self.names:
             sockets, connections = self.app_tcp_evidence(role)
-            (self.proofs / role / "active-encrypted-video-tcp.txt").write_text(sockets)
+            (self.proofs / role / ((label + "-" if label else "") + "active-encrypted-video-tcp.txt")).write_text(sockets)
             assert not any(21115 <= item["port"] <= 21119 for item in connections), "Blocked native relay connection established"
             tls = [item for item in connections if item["port"] == 443]
             assert len(tls) >= 2, "Actual Mixel registration plus relay did not establish two exact relay TLS443 sockets"
@@ -249,17 +341,17 @@ class Session:
             if role == "controller":
                 assert any(self.server[role] not in item["pids"] for item in tls), "Outgoing session process has no separate exact relay TLS443 socket"
             evidence[role] = {"incoming_pid": self.server[role], "app_executable": EXE, "connections": connections}
-        (self.proofs / "https-transport-proof.json").write_text(json.dumps(evidence, indent=2) + "\n")
+        (self.proofs / ((label + "-" if label else "") + "https-transport-proof.json")).write_text(json.dumps(evidence, indent=2) + "\n")
         print("PASS: actual authenticated forced-relay video/input active with native21115-21119 blocked; both peers have TLS443 registration+session sockets", flush=True)
 
-    def active_mixed_proof(self):
+    def active_mixed_proof(self, label=None):
         assert self.query("host", "VideoConnCount") == 1
-        host_udp = self.native_udp_proof("active-encrypted-video")
+        host_udp = self.native_udp_proof((label + "-" if label else "") + "active-encrypted-video")
         assert host_udp > self.initial_udp_packets, "Host UDP registration stopped after the native TCP outage"
         evidence = {}
         for role in self.names:
             sockets, connections = self.app_tcp_evidence(role)
-            (self.proofs / role / "active-mixed-transport-tcp.txt").write_text(sockets)
+            (self.proofs / role / ((label + "-" if label else "") + "active-mixed-transport-tcp.txt")).write_text(sockets)
             if role == "host":
                 assert not any(21115 <= item["port"] <= 21119 for item in connections), "Host blocked native TCP transport established"
                 assert any(item["port"] == 443 and self.server[role] in item["pids"] for item in connections), "Actual host incoming process has no exact HTTPS443 relay socket"
@@ -270,8 +362,8 @@ class Session:
         control_rules = self.run("controller", ["iptables-save", "-c"], user="root").stdout
         control = re.search(r"^\[(\d+):(\d+)\] -A OUTPUT -p tcp .*--dport 21116 .*?-j ACCEPT$", control_rules, re.M)
         assert control and int(control.group(1)) > 0, "Ordinary controller request did not exercise native TCP21116 control; mixed late-fallback gap not tested"
-        (self.proofs / "controller" / "ordinary-id-native-control-tcp.txt").write_text(control_rules)
-        (self.proofs / "mixed-transport-proof.json").write_text(json.dumps({
+        (self.proofs / "controller" / ((label + "-" if label else "") + "ordinary-id-native-control-tcp.txt")).write_text(control_rules)
+        (self.proofs / ((label + "-" if label else "") + "mixed-transport-proof.json")).write_text(json.dumps({
             "host_registration": "native UDP21116, key-confirmed before TCP block",
             "host_udp_packets": host_udp, "host_session": "HTTPS443; native TCP21115-19 blocked",
             "controller_registration": "HTTPS443; native UDP21115-19 blocked",
@@ -280,6 +372,12 @@ class Session:
             "socket_owners": evidence,
         }, indent=2) + "\n")
         print("PASS: mixed transport: host native UDP registration plus HTTPS443 session; controller HTTPS registration with native TCP available; ordinary ID without --relay", flush=True)
+
+    def active_transport_proof(self, label):
+        if self.blocked:
+            self.active_https_proof(label)
+        elif self.mixed_transports:
+            self.active_mixed_proof(label)
 
     def start_gui(self, role):
         self.gui_pid[role] = self.launch(role, [URI] if role == "host" else [])
@@ -337,9 +435,15 @@ for name in os.listdir('/proc'):
         # Foreground callbacks can restore the app after minimizing it. The
         # own synthetic fixture must be above it for an unoccluded RGB oracle.
         time.sleep(.3)
+        state = self.fixture_state()
+        viewer = next(iter(self.windows("controller", "Remote Desktop.*Mixel-Remote$")), None)
+        assert viewer, "Actual remote viewer is absent"
+        self.activate("controller", viewer)
         self.screenshot("controller", name)
         code = r'''from PIL import Image
-import json
+import json,sys,statistics
+sys.path.insert(0,'/payload')
+from session_probe import decode_marker
 im=Image.open('/proofs/NAME.png').convert('RGB')
 rects=[]
 for color in [(229,29,54),(19,183,108),(23,110,233)]:
@@ -358,25 +462,72 @@ for color in [(229,29,54),(19,183,108),(23,110,233)]:
  rects.append((min(r[1] for r in wide),min(r[2] for r in wide),width))
 assert abs(rects[1][0]-rects[0][0]-rects[0][2])<12
 assert abs(rects[2][0]-rects[1][0]-rects[1][2])<12
-print(json.dumps(rects[0]))
-'''.replace("NAME", name)
-        x, y, width = json.loads(self.run("controller", ["python3", "-c", code]).stdout)
-        return lambda hx, hy: (x + (hx - 91) * width / 300, y + (hy - 128) * width / 300)
+marker=MARKER
+canvas=CANVAS
+x,y,width=rects[0]
+samples=[]
+for index in range(20):
+ px=round(x+(marker['x']+index*marker['cell_width']+marker['cell_width']/2-canvas['x'])*width/300)
+ py=round(y+(marker['y']+marker['height']/2-canvas['y'])*width/300)
+ pixels=[im.getpixel((px+dx,py+dy)) for dx in (-1,0,1) for dy in (-1,0,1)]
+ samples.append([statistics.median(pixel[channel] for pixel in pixels) for channel in range(3)])
+counter=decode_marker(samples,marker['counter'])
+print(json.dumps({'rectangle':rects[0],'decoded_counter':counter,'marker_samples':samples}))
+'''.replace("NAME", name).replace("MARKER", repr(state["marker"])).replace("CANVAS", repr(state["controls"]["canvas"]))
+        decoded = json.loads(self.run("controller", ["python3", "-c", code]).stdout)
+        x, y, width = decoded["rectangle"]
+        current = self.fixture_state()
+        if current["controls"] != state["controls"]:
+            raise RuntimeError("Host control geometry changed during decoded video observation")
+        canvas = state["controls"]["canvas"]
+        state["decoded_marker"] = decoded
+        return (lambda hx, hy: (x + (hx - canvas["x"]) * width / 300,
+                               y + (hy - canvas["y"]) * width / 300)), state
+
+    def fresh_video(self, label):
+        observations = []
+        def changing():
+            mapping, state = self.video_map(label)
+            counter = state["decoded_marker"]["decoded_counter"]
+            observations.append({"source_counter": state["marker"]["counter"],
+                                 "decoded_counter": counter, "rectangle": state["decoded_marker"]["rectangle"]})
+            (self.proofs / (label + "-fresh-frames.json")).write_text(json.dumps(observations, indent=2) + "\n")
+            if len(observations) >= 2 and 0 < ((counter - observations[0]["decoded_counter"]) & 65535) < 120:
+                return mapping, state
+            return None
+        return until("changing current decoded video " + label, changing)
 
     def input(self):
-        mapping = until("actual decoded video RGB fixture", lambda: self.video_map("video-proof"))
-        print("PASS: actual remote video decodes the synthetic host RGB pattern", flush=True)
+        mapping, state = self.fresh_video("video-proof")
+        print("PASS: actual remote video decodes the synthetic host RGB pattern and a changing current frame marker", flush=True)
         if self.flutter_input:
             self.gui("controller", ["xdotool", "mousemove", "550", "5"])
             time.sleep(.6)
             self.click("controller", 580, 10)
             self.click("controller", 550, 23)
             self.click("controller", 612, 167)
-            mapping = self.video_map("flutter-input-mode")
-        self.click("controller", *mapping(250, 414))
+            mapping, state = self.video_map("flutter-input-mode")
+        entry = state["controls"]["entry"]
+        self.click("controller", *mapping(entry["x"] + entry["width"] / 2, entry["y"] + entry["height"] / 2))
+        until("actual remote entry focus", lambda: self.fixture_state()["focus"].endswith(".!entry"))
         self.gui("controller", ["xdotool", "type", "--clearmodifiers", "--delay", "60", TEXT])
-        self.click("controller", *mapping(541, 544))
-        state = until("real remote keyboard and mouse callback", lambda: (value if value.get("text") == TEXT and value.get("count", 0) >= 1 else None) if (value := json.loads((self.proofs / "host/input.json").read_text())) else None)
+        until("independent actual remote keyboard text", lambda: self.fixture_state()["text"] == TEXT)
+        print("PASS: independent host Tk observer confirms exact " + ("Flutter input2" if self.flutter_input else "default native input1") + " remote keyboard text", flush=True)
+        attempts = []
+        def button_callback():
+            actual = json.loads((self.proofs / "host/input.json").read_text())
+            if actual.get("text") == TEXT and actual.get("count", 0) >= 1:
+                return actual
+            mapping, observed = self.video_map("mouse-target")
+            assert observed["text"] == TEXT, "Exact host keyboard text changed before remote mouse callback"
+            button = observed["controls"]["button"]
+            target = mapping(button["x"] + button["width"] / 2, button["y"] + button["height"] / 2)
+            attempts.append({"host_geometry": observed["controls"], "controller_target": target,
+                             "events_before": observed["events"]})
+            (self.proofs / "mouse-target-proof.json").write_text(json.dumps(attempts, indent=2) + "\n")
+            self.click("controller", *target)
+            return None
+        state = until("real remote keyboard and mouse callback", button_callback)
         self.screenshot("host", "host-keyboard-mouse-proof")
         # The independent callback can precede the next encoded video frame.
         # Let that frame settle so the shared viewer proof displays the click.
@@ -414,6 +565,42 @@ print(json.dumps(rects[0]))
         self.gui("controller", ["xdotool", "key", "Return"])
         time.sleep(.8)
 
+    @staticmethod
+    def rendered_row(tsv, bounds, scale=3):
+        """Require the exact visible synthetic filename; return its text center."""
+        matches = []
+        for row in csv.DictReader(io.StringIO(tsv), delimiter="\t"):
+            if row.get("text", "").strip() == FILE:
+                matches.append((bounds[0] + (int(row["left"]) + int(row["width"]) / 2) / scale,
+                                bounds[1] + (int(row["top"]) + int(row["height"]) / 2) / scale))
+        assert len(matches) <= 1, "Rendered filename is ambiguous in the actual file pane"
+        return matches[0] if matches else None
+
+    def file_row(self, side, window, label, refresh=False):
+        box = self.geometry("controller", window)
+        # These bounds cover only the real file pane's first row, excluding
+        # the transfer-complete job notification and the other pane.
+        offset = 500 if side == "remote" else 0
+        bounds = (box["X"] + offset + 20, box["Y"] + 238,
+                  box["X"] + offset + 475, box["Y"] + 280)
+        next_refresh = 0
+        def observe():
+            nonlocal next_refresh
+            self.screenshot("controller", label)
+            code = "from PIL import Image;im=Image.open('/proofs/" + label + ".png').crop(" + repr(bounds) + ");im.resize((im.width*3,im.height*3)).save('/proofs/" + label + "-row.png')"
+            self.run("controller", ["python3", "-c", code])
+            actual = self.run("controller", ["tesseract", "/proofs/" + label + "-row.png", "stdout", "--psm", "6", "tsv"]).stdout
+            (self.proofs / "controller" / (label + "-rendered.tsv")).write_text(actual)
+            point = self.rendered_row(actual, bounds)
+            if point:
+                return point
+            if refresh and time.monotonic() >= next_refresh:
+                # Actual visible refresh control, never a file-list IPC write.
+                self.click("controller", box["X"] + (935 if side == "remote" else 449), box["Y"] + 140)
+                next_refresh = time.monotonic() + 2
+            return None
+        return until("actual rendered " + side + " row " + FILE, observe)
+
     def files(self, expected_hash):
         self.stop_controller_gui()
         # Keep synthetic paths short and distinct for unambiguous UI proof.
@@ -429,13 +616,13 @@ print(json.dumps(rects[0]))
         time.sleep(1)
         self.path(130, source)
         self.path(616, remote)
-        self.click("controller", 160, 294)
+        self.click("controller", *self.file_row("source", window, "file-upload-ready"))
         self.screenshot("controller", "file-upload-selected")
         self.click("controller", 424, 232)
         until("actual upload complete SHA256", lambda: self.run("host", ["sha256sum", remote + "/" + FILE], check=False).stdout.split()[:1] == [expected_hash])
         self.screenshot("controller", "file-upload-complete")
         self.path(130, roundtrip)
-        self.click("controller", 650, 294)
+        self.click("controller", *self.file_row("remote", window, "file-download-ready", refresh=True))
         self.screenshot("controller", "file-download-selected")
         self.click("controller", 575, 232)
         until("actual downloaded complete SHA256", lambda: self.run("controller", ["sha256sum", roundtrip + "/" + FILE], check=False).stdout.split()[:1] == [expected_hash])
@@ -466,21 +653,42 @@ print(json.dumps(rects[0]))
         finally:
             self.run("host", ["kill", "-CONT", str(self.gui_pid["host"])], check=False)
         self.connect("service-restart", already_requested=True)
-        self.video_map("service-restart-video")
+        self.fresh_video("service-restart-video")
+        self.active_transport_proof("service-restart")
         self.disconnect()
 
     def drop(self):
         self.stop_controller_gui()
         self.connect("before-network-drop")
+        self.process_snapshot("host", "before-network-drop")
         command(["docker", "network", "disconnect", self.network, self.names["host"]])
         try:
             until("dropped transport disconnects authenticated session", lambda: self.query("host", "VideoConnCount") == 0, timeout=60)
         finally:
             command(["docker", "network", "connect", self.network, self.names["host"]])
-        until("rendezvous recovered after actual network drop", lambda: self.online("host"), timeout=90)
+        self.process_snapshot("host", "after-network-restored")
+        # Require the same actual incoming process, attended kernel guard and
+        # key-confirmed endpoint through several separate IPC observations.
+        ready_since = None
+        def recovered():
+            nonlocal ready_since
+            try:
+                healthy = self.health("host")
+            except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
+                ready_since = None
+                raise
+            if healthy:
+                if ready_since is None:
+                    ready_since = time.monotonic()
+                return time.monotonic() - ready_since >= 2
+            ready_since = None
+            return False
+        until("same native PID and guarded IPC registered stably after actual network drop", recovered, timeout=90)
+        self.process_snapshot("host", "network-recovered")
         self.stop_controller_gui()
         self.connect("network-reconnect")
-        self.video_map("network-reconnect-video")
+        self.fresh_video("network-reconnect-video")
+        self.active_transport_proof("network-reconnect")
         self.disconnect()
         print("PASS: real network loss/recovery requires another actual customer Accept", flush=True)
 
@@ -488,7 +696,7 @@ print(json.dumps(rects[0]))
         errors = []
         for role in self.created:
             operations = [lambda: self.screenshot(role, "final-desktop-state", timeout=2),
-                          lambda: self.run(role, ["bash", "-c", "set -e; cp -R /home/guest/.local/share/logs/Mixel-Remote /proofs/native-logs; ss -tnp >/proofs/tcp-sockets.txt"], timeout=2)]
+                          lambda: self.process_snapshot(role, "final", timeout=2, capture_logs=True)]
             if self.automatic_transport:
                 operations.append(lambda: self.run(role, ["bash", "-c", "iptables-save -c >/proofs/native-port-block.txt"], user="root", timeout=2))
             for operation in operations:
@@ -531,6 +739,7 @@ print(json.dumps(rects[0]))
         payload.mkdir()
         shutil.copyfile(self.deb, payload / "client.deb")
         shutil.copyfile(ROOT / "scripts/test-support-launch-linux.py", payload / "ipc_probe.py")
+        shutil.copyfile(Path(__file__), payload / "session_probe.py")
         if self.isolated_relay:
             shutil.copyfile(self.isolated_relay["ca"], payload / "isolated-relay-ca.crt")
         content = b"MIXEL_SYNTHETIC_FILE_TRANSFER_PROOF\n" + bytes(range(256)) * 256
