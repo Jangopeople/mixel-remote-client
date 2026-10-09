@@ -1,0 +1,5 @@
+FROM mixel-registration-bridge:test
+USER 0:0
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libsodium23 nginx openssl \
+    && rm -rf /var/lib/apt/lists/*
+ENTRYPOINT ["python"]
