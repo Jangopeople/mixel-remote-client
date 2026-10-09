@@ -22,6 +22,10 @@ on:
         description: "Read-only runtime diagnostic using an existing signed payload run (empty = build)"
         required: false
         default: ""
+      runtime_linux_artifact_run:
+        description: "Artifact-only native Linux session diagnostic using an existing customer DEB run (empty = build)"
+        required: false
+        default: ""
       runtime_macos_artifact_run:
         description: "Artifact-only macOS runtime diagnostic using an existing signed DMG run (empty = build)"
         required: false
@@ -42,7 +46,7 @@ jobs:
   # workflow_dispatch overrides it).
   # ===========================================================================
   config:
-    if: ${{ github.event.inputs.runtime_artifact_run == '' && github.event.inputs.runtime_macos_artifact_run == '' }}
+    if: ${{ github.event.inputs.runtime_artifact_run == '' && github.event.inputs.runtime_macos_artifact_run == '' && github.event.inputs.runtime_linux_artifact_run == '' }}
     runs-on: ubuntu-22.04
     outputs:
       upstream_version: ${{ steps.ver.outputs.upstream_version }}
@@ -940,3 +944,47 @@ jobs:
         with:
           name: macos-support-runtime-diagnostics-${{ matrix.arch }}
           path: runtime-diagnostics/
+
+  runtime-linux:
+    if: ${{ github.event.inputs.runtime_linux_artifact_run != '' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        transport: [native, https]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate artifact-only diagnostic request
+        id: request
+        env:
+          RUNTIME_RUN_ID: ${{ inputs.runtime_linux_artifact_run }}
+          PUBLISH_REQUESTED: ${{ inputs.publish_r2 }}
+        run: python3 scripts/release-artifacts.py runtime
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux
+          run-id: ${{ steps.request.outputs.run_id }}
+          github-token: ${{ github.token }}
+          path: runtime-artifacts
+      - name: Prove real relay consent, video, input, files and recovery
+        shell: bash
+        env:
+          TRANSPORT: ${{ matrix.transport }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          DEBS=(runtime-artifacts/mixel-remote-*-x86_64.deb)
+          [[ ${#DEBS[@]} == 1 && -s "${DEBS[0]}" ]] || { echo 'Expected exactly one customer installer' >&2; exit 1; }
+          mkdir -p artifacts
+          OPTIONS=()
+          if [[ "$TRANSPORT" == https ]]; then OPTIONS+=(--native-blocked); fi
+          python3 scripts/test-support-session-linux.py \
+            --deb "${DEBS[0]}" --proofs artifacts/session --require-native \
+            "${OPTIONS[@]}" | tee artifacts/session.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-support-session-${{ matrix.transport }}
+          path: artifacts/
+          if-no-files-found: warn
