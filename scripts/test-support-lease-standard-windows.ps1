@@ -140,6 +140,9 @@ if (-not ('MixelOrdinaryTokenFixture' -as [type])) {
   }
   // Only the current caller's existing linked token is used; no token/session/
   // privilege setter or token from an unrelated process is opened.
+  sealed class CallerLinkedTokenQueryFailure : Win32Exception {
+    public CallerLinkedTokenQueryFailure(int error) : base(error,"Current caller linked-token query failed; nativeError="+error.ToString(System.Globalization.CultureInfo.InvariantCulture)) {}
+  }
   static IntPtr ReadCallerLinkedToken(IntPtr caller) {
     if(IntPtr.Size!=8) throw new InvalidOperationException("Caller-linked control requires x64 pointer size8");
     IntPtr data=Marshal.AllocHGlobal(8), linked=IntPtr.Zero;
@@ -148,7 +151,7 @@ if (-not ('MixelOrdinaryTokenFixture' -as [type])) {
       int required;
       bool success=GetTokenInformation(caller,(int)ObservedTokenClass.LinkedToken,data,8,out required);
       int error=Marshal.GetLastWin32Error();
-      if(!success) throw new Win32Exception(error,"Current caller linked-token query failed; nativeError="+error.ToString(System.Globalization.CultureInfo.InvariantCulture));
+      if(!success) throw new CallerLinkedTokenQueryFailure(error);
       if(required!=8) throw new InvalidOperationException("Current caller linked-token success length contract failed");
       linked=Marshal.ReadIntPtr(data);
       if(linked==IntPtr.Zero) throw new InvalidOperationException("Current caller linked-token success pointer contract failed");
@@ -157,6 +160,21 @@ if (-not ('MixelOrdinaryTokenFixture' -as [type])) {
       if(linked!=IntPtr.Zero) CloseHandle(linked);
       Marshal.FreeHGlobal(data);
     }
+  }
+  // Observe only whether this caller has a queryable existing linked token.
+  // Only actual class19 query error1312 is an unavailable optional comparison.
+  // Successful query alone never qualifies the token identity or lease.
+  public static int? ObserveCallerLinkedTokenQueryAvailability() {
+    IntPtr caller,linked=IntPtr.Zero;
+    if(!OpenProcessToken(GetCurrentProcess(),8,out caller)) throw new Win32Exception();
+    try {
+      try { linked=ReadCallerLinkedToken(caller); }
+      catch(CallerLinkedTokenQueryFailure failure) {
+        if(failure.NativeErrorCode!=1312) throw;
+        return failure.NativeErrorCode;
+      }
+      return null;
+    } finally { if(linked!=IntPtr.Zero) CloseHandle(linked); CloseHandle(caller); }
   }
   static void AssertCallerLinkedTokenClassification(bool sameSid,bool callerElevated,bool linkedElevated,uint tokenType,uint elevationType) {
     if(!sameSid || !callerElevated || linkedElevated || tokenType!=1 || elevationType!=3) throw new InvalidOperationException("Caller-linked token is not the existing elevated caller SID under actual primary1/Limited3 non-elevation");
@@ -566,6 +584,16 @@ function Invoke-StandardLeaseSubsystemObservations([ValidateSet('with-logon','wi
   }
 }
 
+function Invoke-OptionalCallerLinkedLeaseSubsystemObservations {
+  $unavailableError = [MixelOrdinaryTokenFixture]::ObserveCallerLinkedTokenQueryAvailability()
+  if ($null -ne $unavailableError) {
+    if ($unavailableError -ne 1312) { throw 'Optional caller-linked query returned an unexpected availability classifier.' }
+    Write-Host "OBSERVED: optional caller-linked comparison unavailable; operation=GetTokenInformation; tokenInformationClass=19; nativeError=$unavailableError; actualChildCount=0; fallback=False."
+    return
+  }
+  Invoke-StandardLeaseSubsystemObservations with-caller-linked
+}
+
 function Invoke-StandardLeaseNamespaceObservations([ValidateSet('with-logon','with-token')][string]$Launcher) {
   # These are observations only. They cannot satisfy the unchanged original
   # Global absence/error2 or consent gate that follows this isolated matrix.
@@ -640,7 +668,7 @@ try {
   Invoke-StandardLeaseNamespaceObservations with-token
   # Supplemental current-caller UAC linked-token observations cannot satisfy
   # the disposable pure standard-account acceptance that follows unchanged.
-  Invoke-StandardLeaseSubsystemObservations with-caller-linked
+  Invoke-OptionalCallerLinkedLeaseSubsystemObservations
   $absent = 'ownerFailed=false;ownerError=none;kernel=absent;probeError=none;memoryActive=false'
   $active = 'ownerFailed=false;ownerError=none;kernel=active;probeError=none;memoryActive=false'
   $activeOwner = 'ownerFailed=false;ownerError=none;kernel=active;probeError=none;memoryActive=true'

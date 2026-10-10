@@ -5,6 +5,14 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      windows_source_runner:
+        description: 'Windows source-only comparison runner'
+        type: choice
+        default: windows-2022
+        options:
+          - windows-2022
+          - windows-2025
 
 permissions:
   contents: read
@@ -33,7 +41,7 @@ jobs:
       - name: Validate branding shell syntax
         run: bash -n scripts/apply-branding.sh scripts/local/sign-and-publish-macos.sh
   windows-packaging:
-    runs-on: windows-2022
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_source_runner == 'windows-2025' && 'windows-2025' || 'windows-2022' }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
