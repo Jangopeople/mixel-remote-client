@@ -22,7 +22,7 @@ if not rustc:
 targets = [
     "Cargo.toml", "libs/hbb_common/Cargo.toml", "libs/hbb_common/src/lib.rs",
     "flutter/lib/common.dart", "flutter/lib/main.dart", "src/ui_interface.rs",
-    "src/ipc.rs", "src/ui_cm_interface.rs", "src/server/connection.rs", "src/core_main.rs", "src/common.rs", "src/updater.rs",
+    "src/ipc.rs", "src/ui_cm_interface.rs", "src/server/connection.rs", "src/server/dbus.rs", "src/core_main.rs", "src/common.rs", "src/updater.rs",
     "flutter/lib/desktop/pages/desktop_setting_page.dart",
     "flutter/lib/utils/http_service.dart",
     "src/lang/en.rs", "src/lang/de.rs", "src/lang/fr.rs", "src/lang/it.rs",
@@ -525,5 +525,7 @@ fn unrelated_http_status_retains_existing_reusable_behavior() {
     transport_binary = repo / ("native_transport_test.exe" if os.name == "nt" else "native_transport_test")
     subprocess.run([rustc, "--edition=2021", "--test", str(transport_test), "-o", str(transport_binary)], check=True)
     subprocess.run([str(transport_binary)], check=True)
+    subprocess.run([sys.executable, str(root / "scripts/test-support-dbus.py"),
+                    "--source", str(repo), "--upstream", str(upstream)], check=True)
 
 print("Result: source patch and actual URI launch regression checks passed")

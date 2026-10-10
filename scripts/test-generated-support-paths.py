@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 UPSTREAM = Path(os.environ.get("RDREPO", ROOT / "rustdesk"))
 TARGETS = [
     "flutter/lib/common.dart", "flutter/lib/main.dart", "src/ui_interface.rs",
-    "src/ipc.rs", "src/ui_cm_interface.rs", "src/server/connection.rs",
+    "src/ipc.rs", "src/ui_cm_interface.rs", "src/server/connection.rs", "src/server/dbus.rs",
     "src/core_main.rs", "src/common.rs", "src/updater.rs",
     "flutter/lib/desktop/pages/desktop_setting_page.dart",
     "flutter/lib/utils/http_service.dart", "src/lang/en.rs", "src/lang/de.rs",

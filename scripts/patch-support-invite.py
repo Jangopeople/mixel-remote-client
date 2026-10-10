@@ -573,6 +573,55 @@ text = replace_once(text, """    c.send_config(name, value).await?;
 """, "acknowledged runtime-only IPC attended handoff")
 ipc.write_text(text, encoding="utf-8")
 
+dbus = rdrepo / "src/server/dbus.rs"
+text = dbus.read_text(encoding="utf-8")
+text = replace_once(text, """            #[cfg(feature = "flutter")]
+            {
+                use crate::flutter;
+                let data = HashMap::from([
+""", """            #[cfg(feature = "flutter")]
+            {
+                // DBus acknowledges the queued event before Flutter processes
+                // it. Own the foreground lease in this receiver first, so an
+                // ordinary GUI cannot auto-authorize between sender exit and
+                // the Dart attended callback. No saved setting is changed.
+                if hbb_common::password_security::is_support_invite_arg(&_uni_links) {
+                    if !hbb_common::password_security::hold_support_invite_attended_lease()
+                        && crate::ipc::set_config("mixel-support-invite-attended", "Y".to_owned()).is_err()
+                    {
+                        // Keep the sender's cold attended fallback rather than
+                        // claiming that an unprotected receiver accepted it.
+                        return Ok(("attended-guard-unavailable".to_owned(),));
+                    }
+                }
+                use crate::flutter;
+                let data = HashMap::from([
+""", "native Linux DBus receiver consent ownership before event enqueue")
+text = replace_once(text, """                match crate::flutter::push_global_event(flutter::APP_TYPE_MAIN, event) {
+                    None => log::error!("failed to find main event stream"),
+                    Some(false) => {
+                        log::error!("failed to add dbus message to flutter global dbus stream.")
+                    }
+                    Some(true) => {}
+                }
+""", """                let delivery = crate::flutter::push_global_event(flutter::APP_TYPE_MAIN, event);
+                match delivery {
+                    None => log::error!("failed to find main event stream"),
+                    Some(false) => {
+                        log::error!("failed to add dbus message to flutter global dbus stream.")
+                    }
+                    Some(true) => {}
+                }
+                if hbb_common::password_security::is_support_invite_arg(&_uni_links)
+                    && delivery != Some(true)
+                {
+                    // A queued support intent must reach the existing GUI;
+                    // otherwise retain the sender's cold attended fallback.
+                    return Ok(("attended-handoff-unavailable".to_owned(),));
+                }
+""", "native Linux DBus support delivery acknowledgment")
+dbus.write_text(text, encoding="utf-8")
+
 cm = rdrepo / "src/ui_cm_interface.rs"
 text = cm.read_text(encoding="utf-8").replace("config::{keys::*, option2bool}", "config::keys::*")
 cm.write_text(text, encoding="utf-8")
