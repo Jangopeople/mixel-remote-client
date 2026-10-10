@@ -503,6 +503,9 @@ function Stop-OwnedCrashObservation($State) {
     }
     catch { if (-not $State.live.debugger.HasExited) { $debuggerCleanupFailed=$true } }
   }
+  if ($State.live -and $State.live.debugger.HasExited) {
+    try { Complete-OwnedDebuggerPipes $State.live } catch { $debuggerCleanupFailed=$true }
+  }
   # The private synthetic control executable or a WER writer can still be in
   # use after qd. Observe debugger exit first, then terminate only retained
   # fixture-owned native processes before deleting their private directory.
@@ -531,8 +534,51 @@ function Stop-OwnedCrashObservation($State) {
   } finally {
     if (Test-Path $State.folder) { Remove-Item $State.folder -Recurse -Force }
   }
+  if ($State.live -and $State.live.debugger.HasExited) { $State.live.debugger.Dispose() }
   if ($debuggerCleanupFailed -or $processCleanupFailed -or (Test-Path $State.folder)) { throw 'Owned native debugger/process/private file cleanup failed.' }
   Write-Host 'PASS: owned native crash observation restores its per-application registry values and deletes all private raw debugger/dump files.'
+}
+
+function Start-OwnedDebuggerProcess([string]$Executable, [string[]]$Arguments, [string]$Console, [string]$Errors) {
+  $output=$null; $errorOutput=$null; $debugger=$null; $started=$false
+  try {
+    $output=[IO.File]::Create($Console)
+    $errorOutput=[IO.File]::Create($Errors)
+    $info=[Diagnostics.ProcessStartInfo]::new()
+    $info.FileName=$Executable; $info.UseShellExecute=$false; $info.CreateNoWindow=$true
+    $info.RedirectStandardInput=$true; $info.RedirectStandardOutput=$true; $info.RedirectStandardError=$true
+    foreach ($argument in $Arguments) { $info.ArgumentList.Add($argument) }
+    $debugger=[Diagnostics.Process]::new(); $debugger.StartInfo=$info
+    if (-not $debugger.Start()) { throw 'Owned native debugger did not start.' }
+    $started=$true
+    # Keep our stdin writer open throughout capture. Drain both output pipes
+    # concurrently into SID-private files so a full pipe cannot block CDB.
+    $outputTask=$debugger.StandardOutput.BaseStream.CopyToAsync($output)
+    $errorTask=$debugger.StandardError.BaseStream.CopyToAsync($errorOutput)
+    return [pscustomobject]@{debugger=$debugger; input=$debugger.StandardInput; output=$output; errorOutput=$errorOutput; outputTask=$outputTask; errorTask=$errorTask; pipesClosed=$false}
+  } catch {
+    if ($started -and -not $debugger.HasExited) {
+      try { $debugger.Kill(); if (-not $debugger.WaitForExit(10000)) { Write-Host 'FAIL: owned debugger startup cleanup did not observe exit.' } }
+      catch { Write-Host 'FAIL: owned debugger startup cleanup additionally failed.' }
+    }
+    if ($output) { $output.Dispose() }; if ($errorOutput) { $errorOutput.Dispose() }
+    if ($debugger) { $debugger.Dispose() }
+    throw
+  }
+}
+
+function Complete-OwnedDebuggerPipes($Live) {
+  if ($Live.pipesClosed) { return }
+  if (-not $Live.debugger.HasExited) { throw 'Owned native debugger must exit before its retained input pipe is closed.' }
+  try {
+    foreach ($task in @($Live.outputTask,$Live.errorTask)) {
+      if (-not $task.Wait(10000)) { throw 'Owned native debugger output drain exceeded its deadline.' }
+      [void]$task.GetAwaiter().GetResult()
+    }
+  } finally {
+    $Live.input.Dispose(); $Live.output.Dispose(); $Live.errorOutput.Dispose()
+    $Live.pipesClosed=$true
+  }
 }
 
 function Start-OwnedLiveCrashObservation([int]$ProcessId, $State) {
@@ -549,18 +595,19 @@ function Start-OwnedLiveCrashObservation([int]$ProcessId, $State) {
     'sxe -c ".echo MIXEL_NATIVE_HEAP; .lastevent; .exr -1; kn 40; lm; .echo MIXEL_NATIVE_CAPTURE_END; qd" 0xc0000374',
     'sxd av',
     '.echo MIXEL_NATIVE_READY',
-    '.if (@$exr_code == 0xc0000374) { .echo MIXEL_NATIVE_HEAP; .lastevent; .exr -1; kn 40; lm; .echo MIXEL_NATIVE_CAPTURE_END; qd } .else { g }'
+    '.if (@$exr_code == 0xc0000374) { .echo MIXEL_NATIVE_HEAP; .lastevent; .exr -1; kn 40; lm; .echo MIXEL_NATIVE_CAPTURE_END; qd } .else { .echo MIXEL_NATIVE_CONTINUE; g }'
   ) | Set-Content $commands -Encoding ascii
   # Microsoft documents -pr for an already suspended target: resume occurs on
   # debugger attachment, permitting initial loader events and command startup.
   # The numeric heap break filter is configured on CDB's own command line.
-  $debugger=Start-Process $cdb -ArgumentList @('-p',[string]$ProcessId,'-pr','-G','-pd','-hd','-nosqm','-noshell','-xe','0xc0000374','-y',('"srv*'+$symbols+'*https://msdl.microsoft.com/download/symbols"'),'-cf',('"'+$commands+'"'),'-logo',('"'+$raw+'"')) -RedirectStandardOutput $console -RedirectStandardError $errors -PassThru -NoNewWindow
-  $State.live=[pscustomobject]@{ debugger=$debugger; raw=$raw; pid=$ProcessId; attached=$false; captureAttributed=$false; ready=$false }
+  $State.live=Start-OwnedDebuggerProcess $cdb @('-p',[string]$ProcessId,'-pr','-G','-pd','-hd','-nosqm','-noshell','-xe','0xc0000374','-y',('srv*'+$symbols+'*https://msdl.microsoft.com/download/symbols'),'-cf',$commands,'-logo',$raw) $console $errors
+  $debugger=$State.live.debugger
+  $State.live | Add-Member -NotePropertyMembers @{raw=$raw;pid=$ProcessId;attached=$false;captureAttributed=$false;ready=$false}
   $deadline=[DateTime]::UtcNow.AddSeconds(20)
   do {
     # Flush redirected output only after a confirmed debugger exit, before
     # parsing a rapid heap-capture-and-detach which polling may otherwise miss.
-    if ($debugger.HasExited) { $debugger.WaitForExit() }
+    if ($debugger.HasExited) { $debugger.WaitForExit(); Complete-OwnedDebuggerPipes $State.live }
     if ([MixelOrdinaryTokenFixture]::ActualOwnedDebuggerAttached($ProcessId)) {
       $State.live.attached=$true
     }
@@ -641,7 +688,7 @@ function Write-OwnedCrashDiagnostic([int]$ProcessId, [string]$OwnedExecutable, [
       if (-not $debugger.WaitForExit(10000) -or -not $debugger.HasExited) { throw 'Owned live debugger termination was not observed within its deadline.' }
       if ($State.live.ready) { throw 'Owned live stack extraction exceeded its deadline.' }
     }
-    $debugger.WaitForExit(); $debugger.Refresh()
+    $debugger.WaitForExit(); Complete-OwnedDebuggerPipes $State.live; $debugger.Refresh()
     $debuggerStatus='live-exit:'+$debugger.ExitCode
     $raw=$State.live.raw
   }
@@ -697,10 +744,15 @@ function Invoke-OwnedLiveCrashControl([string]$AccountSid, [string]$AccountName,
     $executable=Join-Path $state.folder 'Mixel-Native-Exception-Control.exe'
     @'
 using System;
+using System.Diagnostics;
+using System.IO;
 using System.Runtime.InteropServices;
 public static class MixelOwnedNativeExceptionControl {
   [DllImport("kernel32.dll")] static extern void RaiseException(uint code, uint flags, uint count, IntPtr arguments);
-  public static void Main() { RaiseException(0xc0000374, 1, 0, IntPtr.Zero); }
+  public static void Main() {
+    File.WriteAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"native-control-entered.txt"),Process.GetCurrentProcess().Id.ToString());
+    RaiseException(0xc0000374, 1, 0, IntPtr.Zero);
+  }
 }
 '@ | Set-Content $source -Encoding utf8
     $compiler=Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
@@ -715,8 +767,13 @@ public static class MixelOwnedNativeExceptionControl {
     Start-OwnedLiveCrashObservation $controlPid $state
     [MixelOrdinaryTokenFixture]::ReleaseOwnedPrimaryThreadObservation($controlPid)
     $capture=Write-OwnedCrashDiagnostic $controlPid $executable $startedAt $state -SyntheticControl
+    $entry=Join-Path $state.folder 'native-control-entered.txt'
+    $entered=Test-Path $entry
+    $entryPidVerified=$entered -and [IO.File]::ReadAllText($entry) -ceq [string]$controlPid
+    $continued=@(Get-Content $state.live.raw | Where-Object { $_.Trim() -ceq 'MIXEL_NATIVE_CONTINUE' }).Count -eq 1
+    Write-Host ('FIXTURE: synthetic native exception control execution evidence: '+([pscustomobject]@{pid=$controlPid;enteredMain=$entered;entryPidVerified=$entryPidVerified;continueBranchObserved=$continued} | ConvertTo-Json -Compress))
     if (-not $capture.actualLiveExceptionPidVerified -or $capture.pid -ne $controlPid -or
-        $capture.exceptionCodes.Count -ne 1 -or $capture.exceptionCodes[0] -ine 'c0000374' -or $capture.stackFrames.Count -eq 0) {
+        $capture.exceptionCodes.Count -ne 1 -or $capture.exceptionCodes[0] -ine 'c0000374' -or $capture.stackFrames.Count -eq 0 -or -not $entryPidVerified) {
       throw 'Synthetic native exception control did not qualify exact owned PID/code and a sanitized native stack.'
     }
     Write-Host "PASS: synthetic native RaiseException(0xc0000374) control qualifies the exact suspended standard-user launch, debugger-managed resume and bounded PID/code-attributed native stack capture; controlPid=$controlPid; this is debugger qualification only."
