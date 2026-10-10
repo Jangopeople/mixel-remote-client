@@ -39,6 +39,40 @@ jobs:
       - name: Exercise Windows payload preparation and IPC response validation
         shell: pwsh
         run: ./scripts/test-windows-pipeline.ps1
+      - name: Resolve the pinned Windows clipboard source
+        id: config
+        shell: pwsh
+        run: |
+          python scripts/release-artifacts.py config
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned Windows source configuration failed.' }
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: '1.75'
+      - name: Fetch pinned standalone Windows clipboard source
+        shell: bash
+        env:
+          UPSTREAM_VERSION: ${{ steps.config.outputs.upstream_version }}
+        run: git clone --depth 1 --branch "$UPSTREAM_VERSION" https://github.com/rustdesk/rustdesk.git rustdesk
+      - name: Qualify actual installed MSVC with a spaced Unicode temporary path
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP ('mixel MSVC préflight ' + [Guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Path $root | Out-Null
+          try {
+            ./scripts/activate-windows-msvc.ps1 -TemporaryRoot $root -ExportToGitHubEnvironment
+            if (@(Get-ChildItem -LiteralPath $root -Force).Count -ne 0) { throw 'Owned MSVC temporary batch was not cleaned.' }
+          } finally { Remove-Item -LiteralPath $root -Force }
+      - name: Prove actual native Windows clipboard C and Rust ownership
+        shell: pwsh
+        run: |
+          python scripts/test-support-windows-clipboard.py --evidence-dir windows-clipboard-proof
+          if ($LASTEXITCODE -ne 0) { throw 'Native Windows clipboard C/Rust ownership qualification failed.' }
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: windows-clipboard-source-native
+          path: windows-clipboard-proof/*.log
+          if-no-files-found: ignore
   https-registration-gateway:
     runs-on: ubuntu-22.04
     timeout-minutes: 15
