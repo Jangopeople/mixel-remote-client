@@ -17,6 +17,116 @@ if (-not ('MixelOrdinaryTokenFixture' -as [type])) {
   # Add only a documented secondary-launch comparison and retained-token SID
   # check to the test class; preserve its original customer launch and cleanup.
   $comparison = @'
+  // Exact public TOKEN_INFORMATION_CLASS values from Microsoft's winnt.h.
+  // These queries observe the existing token; they never assign privileges,
+  // token sessions, integrity levels, memberships or namespace permissions.
+  enum ObservedTokenClass { Groups=2, SessionId=12, HasRestrictions=21, IntegrityLevel=25, IsAppContainer=29 }
+  [StructLayout(LayoutKind.Sequential)] struct ObservedSidAttributes { public IntPtr sid; public uint attributes; }
+  [StructLayout(LayoutKind.Sequential)] struct ObservedGroupsHeader { public uint count; public ObservedSidAttributes first; }
+  public sealed class ObservedTokenFacts {
+    public uint sessionId, integrityRid;
+    public bool hasRestrictions, isAppContainer;
+    public string authenticatedUsers, interactive, users;
+    public override string ToString() {
+      return "tokenSessionId=" + sessionId.ToString(System.Globalization.CultureInfo.InvariantCulture) +
+        ";hasRestrictions=" + (hasRestrictions ? "true" : "false") +
+        ";isAppContainer=" + (isAppContainer ? "true" : "false") +
+        ";integrityRid=" + integrityRid.ToString(System.Globalization.CultureInfo.InvariantCulture) +
+        ";authenticatedUsers=" + authenticatedUsers + ";interactive=" + interactive + ";users=" + users;
+    }
+  }
+  static uint ObservedTokenDword(IntPtr token, ObservedTokenClass kind) {
+    IntPtr data=Marshal.AllocHGlobal(4);
+    try {
+      int required;
+      if (!GetTokenInformation(token,(int)kind,data,4,out required)) throw new Win32Exception();
+      if (required!=4) throw new InvalidOperationException("Read-only token DWORD size mismatch");
+      return unchecked((uint)Marshal.ReadInt32(data));
+    } finally { Marshal.FreeHGlobal(data); }
+  }
+  static bool ObservedTokenBool(IntPtr token, ObservedTokenClass kind) {
+    return ObservedTokenDword(token,kind)!=0;
+  }
+  static IntPtr ObservedTokenBuffer(IntPtr token, ObservedTokenClass kind, out int length) {
+    bool initial=GetTokenInformation(token,(int)kind,IntPtr.Zero,0,out length);
+    int error=Marshal.GetLastWin32Error();
+    if(initial || error!=122 || length<=0 || length>65536) throw new InvalidOperationException("Read-only token query size/error bounds failed");
+    int allocated=length; IntPtr data=Marshal.AllocHGlobal(allocated);
+    try {
+      if(!GetTokenInformation(token,(int)kind,data,allocated,out length)) throw new Win32Exception();
+      if(length<=0 || length>allocated) throw new InvalidOperationException("Read-only token output exceeded its allocation");
+      return data;
+    } catch { Marshal.FreeHGlobal(data); throw; }
+  }
+  static string ObservedBufferedSid(IntPtr data, int length, IntPtr sid) {
+    long offset=sid.ToInt64()-data.ToInt64();
+    if(offset<0 || offset>length-8 || Marshal.ReadByte(sid)!=1) throw new InvalidOperationException("Read-only token SID header bounds failed");
+    int subAuthorities=Marshal.ReadByte(sid,1);
+    if(subAuthorities>15 || 8+subAuthorities*4>length-offset) throw new InvalidOperationException("Read-only token SID content bounds failed");
+    return new SecurityIdentifier(sid).Value;
+  }
+  static uint ObservedIntegrityRid(IntPtr token) {
+    int length; IntPtr data=ObservedTokenBuffer(token,ObservedTokenClass.IntegrityLevel,out length);
+    try {
+      if(length<Marshal.SizeOf(typeof(ObservedSidAttributes))) throw new InvalidOperationException("Read-only token integrity label bounds failed");
+      var label=(ObservedSidAttributes)Marshal.PtrToStructure(data,typeof(ObservedSidAttributes));
+      string sid=ObservedBufferedSid(data,length,label.sid);
+      if((label.attributes & 0x20)==0 || !System.Text.RegularExpressions.Regex.IsMatch(sid,@"\AS-1-16-(?:0|[1-9][0-9]{0,9})\z")) throw new InvalidOperationException("Read-only token integrity SID is not canonical");
+      uint rid;
+      if(!uint.TryParse(sid.Substring(7),System.Globalization.NumberStyles.None,System.Globalization.CultureInfo.InvariantCulture,out rid)) throw new InvalidOperationException("Read-only token integrity RID is out of range");
+      return rid;
+    } finally { Marshal.FreeHGlobal(data); }
+  }
+  static void ObservedMemberships(IntPtr token, ObservedTokenFacts facts) {
+    facts.authenticatedUsers="absent"; facts.interactive="absent"; facts.users="absent";
+    int length; IntPtr data=ObservedTokenBuffer(token,ObservedTokenClass.Groups,out length);
+    try {
+      int offset=Marshal.OffsetOf(typeof(ObservedGroupsHeader),"first").ToInt32();
+      int itemSize=Marshal.SizeOf(typeof(ObservedSidAttributes));
+      if(length<offset) throw new InvalidOperationException("Read-only token group header bounds failed");
+      uint count=unchecked((uint)Marshal.ReadInt32(data));
+      if(count>4096 || count>(uint)((length-offset)/itemSize)) throw new InvalidOperationException("Read-only token group count bounds failed");
+      var seen=new System.Collections.Generic.HashSet<string>();
+      for(uint i=0;i<count;i++) {
+        var group=(ObservedSidAttributes)Marshal.PtrToStructure(IntPtr.Add(data,offset+checked((int)i)*itemSize),typeof(ObservedSidAttributes));
+        string sid=ObservedBufferedSid(data,length,group.sid);
+        if(sid!="S-1-5-11" && sid!="S-1-5-4" && sid!="S-1-5-32-545") continue;
+        if(!seen.Add(sid) || (group.attributes & 0x14)==0x14) throw new InvalidOperationException("Read-only observed token membership is inconsistent");
+        string state=(group.attributes & 0x10)!=0 ? "deny-only" : (group.attributes & 4)!=0 ? "enabled" : "disabled";
+        if(sid=="S-1-5-11") facts.authenticatedUsers=state;
+        else if(sid=="S-1-5-4") facts.interactive=state;
+        else facts.users=state;
+      }
+    } finally { Marshal.FreeHGlobal(data); }
+  }
+  static ObservedTokenFacts ReadObservedTokenFacts(IntPtr token) {
+    var facts=new ObservedTokenFacts { sessionId=ObservedTokenDword(token,ObservedTokenClass.SessionId),
+      hasRestrictions=ObservedTokenBool(token,ObservedTokenClass.HasRestrictions),
+      isAppContainer=ObservedTokenBool(token,ObservedTokenClass.IsAppContainer), integrityRid=ObservedIntegrityRid(token) };
+    ObservedMemberships(token,facts);
+    return facts;
+  }
+  public static ObservedTokenFacts RunnerTokenFacts() {
+    IntPtr token;
+    if(!OpenProcessToken(GetCurrentProcess(),8,out token)) throw new Win32Exception();
+    try { return ReadObservedTokenFacts(token); } finally { CloseHandle(token); }
+  }
+  public static ObservedTokenFacts StartedTokenFacts(int pid) {
+    IntPtr process, token;
+    if(!StartedProcesses.TryGetValue(pid,out process)) throw new InvalidOperationException("Token observation does not own the retained process");
+    if(!OpenProcessToken(process,8,out token)) throw new Win32Exception();
+    try { return ReadObservedTokenFacts(token); } finally { CloseHandle(token); }
+  }
+  public static ObservedTokenFacts FreshStandardTokenFacts(string username, string password, string expectedSid) {
+    IntPtr token;
+    if(!LogonUserW(username,".",password,2,0,out token)) throw new Win32Exception();
+    try {
+      using(var identity=new WindowsIdentity(token)) {
+        if(identity.User.Value!=expectedSid || ElevatedToken(token)) throw new InvalidOperationException("Fresh observed logon token does not own the standard SID");
+      }
+      return ReadObservedTokenFacts(token);
+    } finally { CloseHandle(token); }
+  }
   public static int StartStandardUserWithToken(string executable, string username, string password, string expectedSid) {
     IntPtr token;
     if (!LogonUserW(username, ".", password, 2, 0, out token)) throw new Win32Exception();
@@ -140,6 +250,7 @@ function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner'
     if (-not $sidMatches -or $elevated -or $actualSession -ne (Get-Process -Id $PID).SessionId) {
       throw 'Lease control is not the owned SID under the actual non-elevated same-session standard token.'
     }
+    $tokenFacts = [MixelOrdinaryTokenFixture]::StartedTokenFacts($controlPid)
     $deadline = [DateTime]::UtcNow.AddSeconds(10)
     while (-not (Test-Path $resultPath) -and [DateTime]::UtcNow -lt $deadline) {
       if ([MixelOrdinaryTokenFixture]::StartedStatus($controlPid).StartsWith('exited:')) { break }
@@ -158,7 +269,7 @@ function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner'
     }
     if ($ObserveOnly) {
       if ($ObservationLabel -cnotmatch '\A(?:bare|local|global)-[a-z]+(?:-[a-z]+)*\z') { throw 'Invalid safe namespace observation label.' }
-      Write-Host "OBSERVED: standard-token GUID functional control; launcher=$Launcher; scenario=$ObservationLabel; mode=$Mode; controlPid=$controlPid; ordinarySessionId=$actualSession; ownedSidMatched=$sidMatches; elevated=$elevated; $($record.sourceStatus); rawOpenError=$($record.rawOpenError); guardEmpty=$($record.attestation -ceq ''); guardConfirmed=$($record.attestation -ceq 'attended-runtime-v2'); requiresClick=$($record.requiresClick)."
+      Write-Host "OBSERVED: standard-token GUID functional control; launcher=$Launcher; scenario=$ObservationLabel; mode=$Mode; controlPid=$controlPid; ordinarySessionId=$actualSession; ownedSidMatched=$sidMatches; elevated=$elevated; $tokenFacts; $($record.sourceStatus); rawOpenError=$($record.rawOpenError); guardEmpty=$($record.attestation -ceq ''); guardConfirmed=$($record.attestation -ceq 'attended-runtime-v2'); requiresClick=$($record.requiresClick)."
     } else {
       Write-Host "FIXTURE: actual source lease under non-elevated same-session token; mode=$Mode; $($record.sourceStatus); rawOpenError=$($record.rawOpenError); guardEmpty=$($record.attestation -ceq ''); guardConfirmed=$($record.attestation -ceq 'attended-runtime-v2'); requiresClick=$($record.requiresClick)."
     }
@@ -240,6 +351,10 @@ try {
   if ($LASTEXITCODE -ne 0) { throw 'Actual standard-account lease source compilation failed.' }
   $desktopAccess = [MixelOrdinaryTokenFixture+DesktopAccess]::new($ownedSid)
   $profileStarted = $true
+  $runnerFacts=[MixelOrdinaryTokenFixture]::RunnerTokenFacts()
+  $freshFacts=[MixelOrdinaryTokenFixture]::FreshStandardTokenFacts($ownedUser,$ownedPassword,$ownedSid)
+  Write-Host "OBSERVED: read-only native token classification; subject=runner; processSessionId=$((Get-Process -Id $PID).SessionId); $runnerFacts."
+  Write-Host "OBSERVED: read-only native token classification; subject=fresh-standard-logon; processSessionId=none; ownedSidMatched=True; elevated=False; $freshFacts."
   Invoke-StandardLeaseNamespaceObservations with-logon
   Invoke-StandardLeaseNamespaceObservations with-token
   $absent = 'ownerFailed=false;ownerError=none;kernel=absent;probeError=none;memoryActive=false'
