@@ -20,7 +20,7 @@ rustc = os.environ.get("RUSTC_BIN") or shutil.which("rustc")
 if not rustc:
     raise SystemExit("Rust compiler required for native cache regression check")
 targets = [
-    "Cargo.toml", "libs/hbb_common/Cargo.toml", "libs/hbb_common/src/lib.rs",
+    "Cargo.toml", "libs/hbb_common/Cargo.toml", "libs/hbb_common/src/lib.rs", "libs/portable/src/main.rs",
     "flutter/lib/common.dart", "flutter/lib/main.dart", "src/ui_interface.rs",
     "src/ipc.rs", "src/ui_cm_interface.rs", "src/server/connection.rs", "src/server/dbus.rs", "src/core_main.rs", "src/common.rs", "src/updater.rs",
     "flutter/lib/desktop/pages/desktop_setting_page.dart",
@@ -526,6 +526,8 @@ fn unrelated_http_status_retains_existing_reusable_behavior() {
     subprocess.run([rustc, "--edition=2021", "--test", str(transport_test), "-o", str(transport_binary)], check=True)
     subprocess.run([str(transport_binary)], check=True)
     subprocess.run([sys.executable, str(root / "scripts/test-support-dbus.py"),
+                    "--source", str(repo), "--upstream", str(upstream)], check=True)
+    subprocess.run([sys.executable, str(root / "scripts/test-support-quicksupport-name.py"),
                     "--source", str(repo), "--upstream", str(upstream)], check=True)
 
 print("Result: source patch and actual URI launch regression checks passed")

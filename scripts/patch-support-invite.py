@@ -677,6 +677,34 @@ connection.write_text(text, encoding="utf-8")
 # connection command, so the same server/portable startup must run for it.
 core = rdrepo / "src/core_main.rs"
 text = core.read_text(encoding="utf-8")
+# Both native entrypoints must classify the executable name, never its parent
+# directory. Published Windows support aliases are attended even when a
+# browser adds its usual positive decimal copy number to the filename.
+quick_support_before = """    let exe = exe.to_lowercase();
+    exe.contains("-qs-") || exe.contains("-qs.exe") || exe.contains("_qs.exe")
+"""
+quick_support_after = """    let exe = exe.rsplit(['\\\\', '/']).next().unwrap_or_default().to_ascii_lowercase();
+    let customer_name = exe.strip_suffix(".exe").unwrap_or_default();
+    let customer_name = match customer_name.rsplit_once(" (") {
+        Some((name, suffix)) if suffix.strip_suffix(')')
+            .map(|number| !number.is_empty()
+                && !number.starts_with('0')
+                && number.bytes().all(|digit| digit.is_ascii_digit()))
+            .unwrap_or(false) => name,
+        _ => customer_name,
+    };
+    matches!(customer_name, "mixel-remote-support-windows" | "mixel-remote-support" | "mixel-remote-qs")
+        || exe.contains("-qs-") || exe.contains("-qs.exe") || exe.contains("_qs.exe")
+"""
+text = replace_once(text, quick_support_before, quick_support_after,
+                    "native QuickSupport executable basename and customer alias")
+portable = rdrepo / "libs/portable/src/main.rs"
+portable_text = portable.read_text(encoding="utf-8")
+portable_text = replace_once(portable_text,
+                            "\n".join("    " + line if line else line for line in quick_support_before.split("\n")),
+                            "\n".join("    " + line if line else line for line in quick_support_after.split("\n")),
+                            "portable QuickSupport executable basename and customer alias")
+portable.write_text(portable_text, encoding="utf-8")
 # Upgrade the two earlier foreground bootstrap arms to own the kernel lease.
 text = text.replace(
     "hbb_common::password_security::renew_support_invite_attended();",
