@@ -10,7 +10,19 @@ $first = $launchSource.LastIndexOf('using System;', $class)
 $last = $launchSource.IndexOf("`n'@ }", $class)
 if ($class -lt 0 -or $first -lt 0 -or $last -le $first) { throw 'Exact normal ordinary-token fixture is missing.' }
 if (-not ('MixelOrdinaryTokenFixture' -as [type])) {
-  Add-Type -TypeDefinition $launchSource.Substring($first, $last - $first)
+  $normalSource = $launchSource.Substring($first, $last - $first)
+  $marker = '  public static int StartStandardUser(string executable, string username, string password) {'
+  if ($normalSource.IndexOf($marker) -lt 0 -or $normalSource.IndexOf($marker) -ne $normalSource.LastIndexOf($marker)) { throw 'Exact owned namespace diagnostic boundary changed.' }
+  $bridge = @'
+  public static System.Collections.Generic.Dictionary<string,string> ObserveOwnedNamespace(int pid) {
+    IntPtr process;
+    if (!StartedProcesses.TryGetValue(pid,out process) || WaitForSingleObject(process,0)!=0x102 || GetProcessId(process)!=checked((uint)pid)) throw new InvalidOperationException("Namespace observation requires an actual retained live owned process");
+    return MixelCI.MixelStandardNamespaceDiagnostics.Observe(process);
+  }
+'@
+  $normalSource = $normalSource.Replace($marker,$bridge+"`n"+$marker)
+  $diagnostics = Get-Content (Join-Path $PSScriptRoot 'windows-standard-namespace-diagnostics.cs') -Raw
+  Add-Type -TypeDefinition ($normalSource+"`n"+$diagnostics)
 }
 if (-not [MixelOrdinaryTokenFixture]::Elevated($PID)) { throw 'Owned standard-account qualification requires the elevated isolated runner.' }
 
@@ -80,6 +92,17 @@ function Invoke-StandardLeaseControl([string]$Mode, [string]$ExpectedStatus, [in
     $text = [IO.File]::ReadAllText($resultPath)
     if ($text.Length -gt 4096) { throw 'Owned lease result exceeds its bound.' }
     $record = $text | ConvertFrom-Json
+    Write-Host "OBSERVED: primary source lease result before secondary token diagnosis; $($record.sourceStatus); rawOpenError=$($record.rawOpenError); guardEmpty=$($record.attestation -ceq ''); guardConfirmed=$($record.attestation -ceq 'attended-runtime-v2')."
+    try {
+      $tokenObservation = [MixelOrdinaryTokenFixture]::ObserveOwnedNamespace($controlPid)
+      Write-Host ('OBSERVED: actual owned standard-token namespace access; ' + ($tokenObservation | ConvertTo-Json -Compress))
+    } catch {
+      $nativeFailure = $_.Exception
+      while ($nativeFailure.InnerException) { $nativeFailure = $nativeFailure.InnerException }
+      if ($nativeFailure -is [MixelCI.NamespaceRestoreException]) { throw }
+      $nativeCode = if ($nativeFailure -is [ComponentModel.Win32Exception]) { $nativeFailure.NativeErrorCode } else { $nativeFailure.HResult }
+      Write-Host "OBSERVED: secondary owned token namespace diagnosis unavailable; nativeCode=$nativeCode."
+    }
     if ($record.pid -ne $controlPid -or $record.sourceStatus -cne $ExpectedStatus -or
         $record.rawOpenError -ne $ExpectedError -or $record.attestation -cne $ExpectedProof -or
         $record.requiresClick -isnot [bool] -or $record.requiresClick -ne $ExpectedRequired -or
