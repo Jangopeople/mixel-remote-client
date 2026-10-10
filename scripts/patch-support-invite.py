@@ -2,10 +2,13 @@
 """Install the attended support handoff into fresh or already-patched 1.4.6 source."""
 import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 scripts = Path(__file__).resolve().parent
 rdrepo = Path(os.environ.get("RDREPO", scripts.parent / "rustdesk"))
+subprocess.run([sys.executable, str(scripts / "patch-support-macos-uri.py")], check=True)
 
 
 def replace_once(text: str, before: str, after: str, description: str) -> str:

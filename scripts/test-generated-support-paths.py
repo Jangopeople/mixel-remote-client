@@ -12,6 +12,7 @@ from sdk_discovery import find_dart
 ROOT = Path(__file__).resolve().parents[1]
 UPSTREAM = Path(os.environ.get("RDREPO", ROOT / "rustdesk"))
 TARGETS = [
+    "flutter/pubspec.yaml", "flutter/pubspec.lock",
     "libs/portable/src/main.rs",
     "flutter/lib/common.dart", "flutter/lib/main.dart", "src/ui_interface.rs",
     "src/ipc.rs", "src/ui_cm_interface.rs", "src/server/connection.rs", "src/server/dbus.rs",

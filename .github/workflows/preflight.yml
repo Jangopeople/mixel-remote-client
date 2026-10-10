@@ -82,6 +82,7 @@ jobs:
         run: |
           python3 scripts/test-support-invite.py
           python3 scripts/test-generated-support-paths.py
+          python3 scripts/test-support-macos-uri-routing.py
           python3 scripts/test-support-lease.py
           python3 scripts/test-support-network.py
           python3 scripts/test-secure-support.py
@@ -97,10 +98,22 @@ jobs:
           dart scripts/test-support-invite.dart
   macos-runtime-harness:
     runs-on: macos-14
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
+      - name: Resolve the pinned upstream version
+        id: config
+        run: python3 scripts/release-artifacts.py config
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.24.5'
+      - name: Fetch pinned upstream source for exact generated routing fixtures
+        env:
+          UPSTREAM_VERSION: ${{ steps.config.outputs.upstream_version }}
+        run: git clone --depth 1 --branch "$UPSTREAM_VERSION" --recurse-submodules https://github.com/rustdesk/rustdesk.git rustdesk
       - name: Exercise native macOS URL activation and window probe self-tests
         run: |
           python3 scripts/test-support-launch-macos.py --self-test
+          python3 scripts/test-support-macos-uri-routing.py
           python3 scripts/test-macos-native-minimum.py

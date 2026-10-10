@@ -237,6 +237,7 @@ jobs:
         run: |
           python3 scripts/test-support-invite.py
           python3 scripts/test-generated-support-paths.py
+          python3 scripts/test-support-macos-uri-routing.py
           python3 scripts/test-support-lease.py
           python3 scripts/test-support-network.py
           python3 scripts/test-secure-support.py
@@ -448,6 +449,7 @@ jobs:
         run: |
           python3 scripts/test-support-invite.py
           python3 scripts/test-generated-support-paths.py
+          python3 scripts/test-support-macos-uri-routing.py
           python3 scripts/test-support-lease.py
           python3 scripts/test-support-network.py
           python3 scripts/test-secure-support.py
@@ -703,6 +705,7 @@ jobs:
         run: |
           python scripts/test-support-invite.py
           python scripts/test-generated-support-paths.py
+          python scripts/test-support-macos-uri-routing.py
           python scripts/test-support-lease.py
           python scripts/test-support-network.py
           python scripts/test-secure-support.py
