@@ -8,6 +8,53 @@ foreach ($file in (Get-ChildItem $PSScriptRoot -Filter '*.ps1' -File)) {
 }
 Write-Host 'PASS: every Windows pipeline script parses cleanly.'
 
+function Read-OwnedDesktopControlSnapshot([string]$Path) {
+  $stream=$null; $reader=$null
+  try {
+    $stream=[IO.FileStream]::new($Path,[IO.FileMode]::Open,[IO.FileAccess]::Read,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+    $reader=[IO.StreamReader]::new($stream,[Text.Encoding]::UTF8,$true)
+    $text=$reader.ReadToEnd()
+  } catch [IO.IOException] {
+    $failure=$_.Exception
+    while ($failure.InnerException) { $failure=$failure.InnerException }
+    if (($failure.HResult -band 0xffff) -in @(32,33)) { return [pscustomobject]@{pending=$true; values=$null} }
+    throw
+  } finally {
+    if ($reader) { $reader.Dispose() }
+    if ($stream) { $stream.Dispose() }
+  }
+  $values=@{}
+  foreach ($line in ($text -split '\r?\n')) {
+    if ($line -ceq '') { continue }
+    $separator=$line.IndexOf('=')
+    if ($separator -lt 1) { throw 'Malformed owned native desktop control snapshot.' }
+    $name=$line.Substring(0,$separator)
+    if ($values.ContainsKey($name)) { throw 'Duplicate owned native desktop control snapshot key.' }
+    $values[$name]=$line.Substring($separator+1)
+  }
+  return [pscustomobject]@{pending=$false; values=$values}
+}
+
+$snapshotControl=Join-Path ([IO.Path]::GetTempPath()) ('mixel-owned-desktop-read-lock-' + [Guid]::NewGuid().ToString('N'))
+$snapshotLock=$null
+try {
+  [IO.File]::WriteAllText($snapshotControl,"phase=Win32-calls-complete`npid=4321`n")
+  $snapshotLock=[IO.FileStream]::new($snapshotControl,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
+  $pending=Read-OwnedDesktopControlSnapshot $snapshotControl
+  if (-not $pending.pending -or $null -ne $pending.values) { throw 'Locked owned result snapshot did not report pending.' }
+  $snapshotLock.Dispose(); $snapshotLock=$null
+  $released=Read-OwnedDesktopControlSnapshot $snapshotControl
+  if ($released.pending -or $released.values.phase -cne 'Win32-calls-complete' -or $released.values.pid -cne '4321') { throw 'Released owned result snapshot did not decode completely.' }
+  [IO.File]::WriteAllText($snapshotControl,'invalid-result')
+  $malformedRejected=$false
+  try { [void](Read-OwnedDesktopControlSnapshot $snapshotControl) } catch { $malformedRejected=$true }
+  if (-not $malformedRejected) { throw 'Malformed owned result snapshot accepted.' }
+} finally {
+  if ($snapshotLock) { $snapshotLock.Dispose() }
+  if (Test-Path $snapshotControl) { Remove-Item $snapshotControl }
+}
+Write-Host 'PASS: exact native desktop snapshot reader reports pending only for an actual exclusive file lock, reads a complete snapshot after release and rejects malformed data.'
+
 # Compile the exact native OS fixture used by the real ordinary-to-QS runtime
 # test; its policy checks are testable without launching or changing an app.
 $launchSource = Get-Content (Join-Path $PSScriptRoot 'test-support-launch-windows.ps1') -Raw
@@ -38,6 +85,31 @@ try {
   }
 } finally { if (Test-Path $dumpControl) { Remove-Item $dumpControl } }
 Write-Host 'PASS: exact native dump attribution decodes the actual process stream and rejects six malformed or unattributed dump controls.'
+$captureTokens=$null; $captureErrors=$null
+$captureAst=[System.Management.Automation.Language.Parser]::ParseInput($launchSource,[ref]$captureTokens,[ref]$captureErrors)
+$captureFunction=@($captureAst.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Read-OwnedHeapCapture'},$true))
+if ($captureFunction.Count -ne 1) { throw 'Exact bounded native heap-capture parser missing.' }
+. ([scriptblock]::Create($captureFunction[0].Extent.Text))
+$ownedHeap='Last event: 18cc.1234: Exception - code c0000374 (first chance)'
+$wrongHeap='Last event: 20cc.9999: Exception - code c0000374 (first chance)'
+$ownedBreak='Last event: 18cc.1234: Break instruction exception - code 80000003 (first chance)'
+$ownedFrame='00 000000ab`12340000 00007ffa`abcd1000 libmixel_remote+0x4a730'
+$unrelatedFrame='01 000000ab`12340020 00007ffa`abcd2000 ntdll!UnrelatedInitialBreak+0x4'
+$capture=Read-OwnedHeapCapture @($unrelatedFrame,'MIXEL_NATIVE_HEAP',$ownedHeap,$ownedFrame,'MIXEL_NATIVE_CAPTURE_END',$unrelatedFrame) 6348
+if (-not $capture.verified -or $capture.frames.Count -ne 1 -or $capture.frames[0].symbol -cne 'libmixel_remote+0x4a730') {
+  throw 'Exact bounded heap capture omitted the owned frame or accepted unmarked rows.'
+}
+foreach ($invalidLines in @(
+    @('MIXEL_NATIVE_HEAP',$wrongHeap,$ownedFrame,$ownedBreak,$unrelatedFrame,'MIXEL_NATIVE_CAPTURE_END'),
+    @('MIXEL_NATIVE_HEAP',$ownedHeap,$ownedFrame,$ownedHeap,$unrelatedFrame,'MIXEL_NATIVE_CAPTURE_END'),
+    @('MIXEL_NATIVE_HEAP',$ownedBreak,$ownedFrame,'MIXEL_NATIVE_CAPTURE_END'),
+    @($ownedHeap,$ownedFrame,'MIXEL_NATIVE_CAPTURE_END'),
+    @('MIXEL_NATIVE_HEAP',$ownedHeap,$ownedFrame),
+    @('MIXEL_NATIVE_HEAP',$ownedHeap,$ownedFrame,'MIXEL_NATIVE_CAPTURE_END','MIXEL_NATIVE_HEAP',$ownedHeap,$ownedFrame,'MIXEL_NATIVE_CAPTURE_END'))) {
+  $rejected=Read-OwnedHeapCapture $invalidLines 6348
+  if ($rejected.verified -or $rejected.frames.Count -ne 0 -or $rejected.modules.Count -ne 0) { throw 'Mixed, duplicated or incomplete native exception attribution accepted.' }
+}
+Write-Host 'PASS: exact bounded live heap capture accepts only the owned PID/code block, excludes unmarked rows and rejects six mixed-event, duplicate-event, DebugBreak, unmarked, incomplete and duplicate-capture controls.'
 $actualDesktop = [MixelOrdinaryTokenFixture]::CurrentDesktopPath()
 if ($actualDesktop -notmatch '^[^\\]+\\[^\\]+$' -or $launchSource.Contains('desktop = "winsta0\\default"')) {
   throw 'Actual native launch desktop is missing or reverted to a different hard-coded desktop.'
@@ -199,12 +271,11 @@ public static class MixelOwnedDesktopControl {
       $actualGui = @{}
       while ([DateTime]::UtcNow -lt $deadline) {
         if (Test-Path $guiResult) {
-          foreach ($line in Get-Content $guiResult) {
-            $separator = $line.IndexOf('=')
-            if ($separator -lt 1) { throw 'Malformed owned native desktop control result.' }
-            $actualGui[$line.Substring(0, $separator)] = $line.Substring($separator + 1)
+          $snapshot=Read-OwnedDesktopControlSnapshot $guiResult
+          if (-not $snapshot.pending) {
+            $actualGui=$snapshot.values
+            if ($actualGui.phase -ceq 'Win32-calls-complete') { break }
           }
-          if ($actualGui.phase -ceq 'Win32-calls-complete') { break }
         }
         if ([MixelOrdinaryTokenFixture]::StartedStatus($guiPid).StartsWith('exited:')) { break }
         Start-Sleep -Milliseconds 100

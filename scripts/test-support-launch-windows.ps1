@@ -62,6 +62,8 @@ public static class MixelOrdinaryTokenFixture {
   [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
   [DllImport("kernel32.dll", SetLastError = true)] static extern bool GetExitCodeProcess(IntPtr process, out uint code);
   [DllImport("kernel32.dll", SetLastError = true)] static extern uint WaitForSingleObject(IntPtr handle, uint timeout);
+  [DllImport("kernel32.dll", SetLastError = true)] static extern uint ResumeThread(IntPtr thread);
+  [DllImport("kernel32.dll", SetLastError = true)] static extern bool CheckRemoteDebuggerPresent(IntPtr process, out bool present);
   [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
   [DllImport("kernel32.dll", SetLastError = true)] static extern bool DuplicateHandle(IntPtr source, IntPtr handle, IntPtr target, out IntPtr copy, uint access, bool inherit, uint options);
   [DllImport("advapi32.dll", SetLastError = true)] static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
@@ -147,12 +149,28 @@ public static class MixelOrdinaryTokenFixture {
   }
   static StartupInfo Startup() { return new StartupInfo { cb = Marshal.SizeOf(typeof(StartupInfo)), desktop = CurrentDesktopPath() }; }
   static readonly System.Collections.Generic.Dictionary<int, IntPtr> StartedProcesses = new System.Collections.Generic.Dictionary<int, IntPtr>();
-  static int Started(ProcessInfo process) {
-    CloseHandle(process.thread);
+  static readonly System.Collections.Generic.Dictionary<int, IntPtr> SuspendedThreads = new System.Collections.Generic.Dictionary<int, IntPtr>();
+  static int Started(ProcessInfo process, bool suspended = false) {
+    if (!suspended) CloseHandle(process.thread);
     int pid = checked((int)process.pid);
-    if (StartedProcesses.ContainsKey(pid)) { CloseHandle(process.process); throw new InvalidOperationException("Owned process observation PID collision"); }
+    if (StartedProcesses.ContainsKey(pid)) { if (suspended) CloseHandle(process.thread); CloseHandle(process.process); throw new InvalidOperationException("Owned process observation PID collision"); }
     StartedProcesses.Add(pid, process.process);
+    if (suspended) SuspendedThreads.Add(pid, process.thread);
     return pid;
+  }
+  public static bool ActualOwnedDebuggerAttached(int pid) {
+    IntPtr handle; bool attached;
+    if (!StartedProcesses.TryGetValue(pid, out handle)) throw new InvalidOperationException("Debugger target is not owned");
+    if (!CheckRemoteDebuggerPresent(handle, out attached)) throw new Win32Exception();
+    return attached;
+  }
+  public static void ResumeOwnedPrimaryThread(int pid) {
+    IntPtr thread;
+    if (!SuspendedThreads.TryGetValue(pid, out thread)) throw new InvalidOperationException("Primary thread is not owned and suspended");
+    uint previous = ResumeThread(thread);
+    if (previous == 0xffffffff) throw new Win32Exception();
+    SuspendedThreads.Remove(pid); CloseHandle(thread);
+    if (previous != 1) throw new InvalidOperationException("Unexpected owned primary thread suspension count");
   }
   public static string StartedStatus(int pid) {
     IntPtr handle;
@@ -165,6 +183,8 @@ public static class MixelOrdinaryTokenFixture {
     return "exited:0x" + code.ToString("x8");
   }
   public static void CloseStartedObservations() {
+    foreach (IntPtr thread in SuspendedThreads.Values) CloseHandle(thread);
+    SuspendedThreads.Clear();
     foreach (IntPtr handle in StartedProcesses.Values) CloseHandle(handle);
     StartedProcesses.Clear();
   }
@@ -201,9 +221,12 @@ public static class MixelOrdinaryTokenFixture {
     } finally { if (linked != IntPtr.Zero) CloseHandle(linked); if (token != IntPtr.Zero) CloseHandle(token); Marshal.FreeHGlobal(data); }
   }
   public static int StartStandardUser(string executable, string username, string password) {
+    return StartStandardUser(executable, username, password, false);
+  }
+  public static int StartStandardUser(string executable, string username, string password, bool diagnosticSuspended) {
     StartupInfo startup = Startup(); ProcessInfo process;
-    if (!CreateProcessWithLogonW(username, ".", password, 1, executable, new StringBuilder("\"" + executable + "\""), 0, IntPtr.Zero, System.IO.Path.GetDirectoryName(executable), ref startup, out process)) throw new Win32Exception();
-    return Started(process);
+    if (!CreateProcessWithLogonW(username, ".", password, 1, executable, new StringBuilder("\"" + executable + "\""), diagnosticSuspended ? 4U : 0U, IntPtr.Zero, System.IO.Path.GetDirectoryName(executable), ref startup, out process)) throw new Win32Exception();
+    return Started(process, diagnosticSuspended);
   }
   static byte[] Descriptor(IntPtr obj) {
     uint information = 4, required;
@@ -397,9 +420,22 @@ function Write-OwnedWindowDiagnostic([int]$ProcessId, [string]$Phase) {
 
 function Start-OwnedCrashObservation([string]$AccountSid) {
   if (-not $AccountSid) { throw 'Native crash capture requires the actual created standard-account SID.' }
+  $policy=@{}
+  foreach ($source in @(
+      @('machine','HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting'),
+      @('policy','HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Error Reporting'))) {
+    if (-not (Test-Path $source[1])) { continue }
+    $observed=Get-Item $source[1]
+    foreach ($name in @('Disabled','DontShowUI','LoggingDisabled')) {
+      if ($observed.GetValueNames().Contains($name) -and $observed.GetValueKind($name) -eq [Microsoft.Win32.RegistryValueKind]::DWord) {
+        $policy[$source[0]+':'+$name]=$observed.GetValue($name)
+      }
+    }
+  }
+  Write-Host ('FIXTURE: read-only actual runner WER policy DWORD observations (absence is not an enabled assertion): '+($policy | ConvertTo-Json -Compress))
   $folder = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) ('mixel-native-crash-private-' + [Guid]::NewGuid().ToString('N'))
   $key = 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\Mixel-Remote.exe'
-  $state = [pscustomobject]@{ folder=$folder; key=$key; existed=(Test-Path $key); values=@{} }
+  $state = [pscustomobject]@{ folder=$folder; key=$key; existed=(Test-Path $key); values=@{}; live=$null }
   if ($state.existed) {
     $original = Get-Item $key
     foreach ($name in @('DumpFolder','DumpType','DumpCount')) {
@@ -431,6 +467,14 @@ function Start-OwnedCrashObservation([string]$AccountSid) {
 function Stop-OwnedCrashObservation($State) {
   # Restore only the three values changed by this observation and remove the
   # exact disposable folder. Raw dumps/debugger output never enter artifacts.
+  $debuggerCleanupFailed=$false
+  if ($State.live -and -not $State.live.debugger.HasExited) {
+    try {
+      $State.live.debugger.Kill()
+      if (-not $State.live.debugger.WaitForExit(10000) -or -not $State.live.debugger.HasExited) { $debuggerCleanupFailed=$true }
+    }
+    catch { if (-not $State.live.debugger.HasExited) { $debuggerCleanupFailed=$true } }
+  }
   try {
     foreach ($name in @('DumpFolder','DumpType','DumpCount')) {
       if ($State.values.ContainsKey($name)) {
@@ -440,15 +484,91 @@ function Stop-OwnedCrashObservation($State) {
       }
     }
     if (-not $State.existed -and (Test-Path $State.key)) { Remove-Item $State.key }
+    if ($State.existed) {
+      $restored=Get-Item $State.key
+      foreach ($name in @('DumpFolder','DumpType','DumpCount')) {
+        $present=$restored.GetValueNames().Contains($name)
+        if ($present -ne $State.values.ContainsKey($name)) { throw 'Owned crash registry value presence was not restored.' }
+        if ($present -and ($restored.GetValueKind($name) -ne $State.values[$name].kind -or
+            $restored.GetValue($name,$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames) -cne $State.values[$name].value)) {
+          throw 'Owned crash registry value was not restored exactly.'
+        }
+      }
+    } elseif (Test-Path $State.key) { throw 'Owned crash registry key remains.' }
   } finally {
     if (Test-Path $State.folder) { Remove-Item $State.folder -Recurse -Force }
   }
+  if ($debuggerCleanupFailed -or (Test-Path $State.folder)) { throw 'Owned native debugger/private file cleanup failed.' }
+  Write-Host 'PASS: owned native crash observation restores its per-application registry values and deletes all private raw debugger/dump files.'
+}
+
+function Start-OwnedLiveCrashObservation([int]$ProcessId, $State) {
+  $cdb=Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/Debuggers/x64/cdb.exe'
+  $commands=Join-Path $State.folder 'live-commands-private.txt'
+  $raw=Join-Path $State.folder 'live-debugger-private.txt'
+  $console=Join-Path $State.folder 'live-console-private.txt'
+  $errors=Join-Path $State.folder 'live-errors-private.txt'
+  $symbols=Join-Path $State.folder 'symbols'
+  # .exr -1 supports live targets; .ecxr is documented for minidumps only.
+  # qd detaches and leaves the actual owned application to handle/terminate
+  # normally. No memory/argument display commands or child debugging are used.
+  @(
+    'sxe -c ".echo MIXEL_NATIVE_HEAP; .lastevent; .exr -1; kn 40; lm; .echo MIXEL_NATIVE_CAPTURE_END; qd" 0xc0000374',
+    'sxd av',
+    '.echo MIXEL_NATIVE_READY',
+    'g'
+  ) | Set-Content $commands -Encoding ascii
+  $debugger=Start-Process $cdb -ArgumentList @('-p',[string]$ProcessId,'-pb','-G','-pd','-hd','-nosqm','-noshell','-xe','0xc0000374','-y',('"srv*'+$symbols+'*https://msdl.microsoft.com/download/symbols"'),'-cf',('"'+$commands+'"'),'-logo',('"'+$raw+'"')) -RedirectStandardOutput $console -RedirectStandardError $errors -PassThru -NoNewWindow
+  $State.live=[pscustomobject]@{ debugger=$debugger; raw=$raw; pid=$ProcessId; attached=$false; ready=$false }
+  $deadline=[DateTime]::UtcNow.AddSeconds(20)
+  do {
+    if ([MixelOrdinaryTokenFixture]::ActualOwnedDebuggerAttached($ProcessId)) {
+      $State.live.attached=$true
+      if (Test-Path $raw) {
+        $State.live.ready=@(Get-Content $raw | Where-Object { $_.Trim() -ceq 'MIXEL_NATIVE_READY' }).Count -eq 1
+        if ($State.live.ready) {
+          Write-Host "FIXTURE: diagnostic-only actual native debugger attachment and configured-filter ready marker observed before owned primary thread resumes; foregroundPid=$ProcessId."
+          return
+        }
+      }
+    }
+    if ($debugger.HasExited) { throw 'Owned live native debugger exited before attaching.' }
+    Start-Sleep -Milliseconds 100
+  } while ([DateTime]::UtcNow -lt $deadline)
+  throw 'Owned live native debugger attachment/filter readiness did not complete within its deadline.'
+}
+
+function Read-OwnedHeapCapture([string[]]$Lines, [int]$ProcessId) {
+  $frames=@(); $modules=@(); $active=$false; $completed=$false; $invalid=$false
+  $captures=0; $events=0; $eventPid=$null; $code=$null
+  foreach ($line in $Lines) {
+    if ($line.Trim() -ceq 'MIXEL_NATIVE_HEAP') {
+      $captures++; $active=$true; $frames=@(); $modules=@(); $events=0; $eventPid=$null; $code=$null
+      if ($captures -ne 1) { $invalid=$true }
+      continue
+    }
+    if (-not $active) { continue }
+    if ($line.Trim() -ceq 'MIXEL_NATIVE_CAPTURE_END') { $active=$false; $completed=$true; continue }
+    if ($line -match 'Last event:\s*([0-9a-fA-F]+)\.[0-9a-fA-F]+:.*(?:code|exception)\s+([0-9a-fA-F]{8})') {
+      $events++; $eventPid=[Convert]::ToInt32($Matches[1],16); $code=$Matches[2]
+      if ($events -ne 1 -or $eventPid -ne $ProcessId -or $code -ine 'c0000374') { $invalid=$true; $frames=@(); $modules=@() }
+      continue
+    }
+    if ($line.Contains('Last event:')) { $invalid=$true; $frames=@(); $modules=@(); continue }
+    if ($events -ne 1 -or $invalid) { continue }
+    if ($line -match '^\s*([0-9a-fA-F]{1,3})\s+[0-9a-fA-F`]+\s+([0-9a-fA-F`]+)\s+((?:[A-Za-z0-9_.$?@:<>,~\[\]()+-]+![A-Za-z0-9_.$?@:<>,~\[\]()+ -]+|[A-Za-z0-9_.-]+\+0x[0-9a-fA-F]+))\s*$') {
+      $frames += [pscustomobject]@{ index=$Matches[1]; returnAddress=$Matches[2]; symbol=$Matches[3] }
+    } elseif ($line -match '^\s*[0-9a-fA-F`]+\s+[0-9a-fA-F`]+\s+([A-Za-z0-9_.-]+)\s+') { $modules += $Matches[1] }
+  }
+  $verified=$captures -eq 1 -and $completed -and -not $active -and -not $invalid -and $events -eq 1 -and $eventPid -eq $ProcessId -and $code -ieq 'c0000374'
+  if (-not $verified) { $frames=@(); $modules=@() }
+  return [pscustomobject]@{ verified=$verified; pid=$eventPid; code=$code; frames=$frames; modules=$modules }
 }
 
 function Write-OwnedCrashDiagnostic([int]$ProcessId, [string]$OwnedExecutable, [DateTime]$StartedAt, $State) {
   $deadline = [DateTime]::UtcNow.AddSeconds(30)
   $dump = $null
-  if ($State) {
+  if ($State -and -not $State.live) {
     do {
       foreach ($candidate in @(Get-ChildItem $State.folder -Filter '*.dmp' -File)) {
         # WER may still be writing a newly created dump. Retry bounded reads
@@ -470,7 +590,14 @@ function Write-OwnedCrashDiagnostic([int]$ProcessId, [string]$OwnedExecutable, [
     if ($eventPid -ne $ProcessId) { continue }
     $events += [pscustomobject]@{ eventId=1000; pid=$eventPid; module=$data.ModuleName; exception=$data.ExceptionCode; offset=$data.FaultingOffset }
   }
-  $frames=@(); $modules=@(); $lastEvent=@(); $debuggerStatus='no-owned-dump'
+  $frames=@(); $modules=@(); $lastEvent=@(); $debuggerStatus='no-owned-dump'; $raw=$null; $liveVerified=$false
+  if ($State -and $State.live) {
+    $debugger=$State.live.debugger
+    if (-not $debugger.WaitForExit(120000)) { $debugger.Kill(); throw 'Owned live stack extraction exceeded its deadline.' }
+    $debugger.WaitForExit(); $debugger.Refresh()
+    $debuggerStatus='live-exit:'+$debugger.ExitCode
+    $raw=$State.live.raw
+  }
   if ($dump) {
     $cdb = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/Debuggers/x64/cdb.exe'
     if (-not (Test-Path $cdb)) { throw 'Native diagnostic CDB was not prepared.' }
@@ -482,17 +609,26 @@ function Write-OwnedCrashDiagnostic([int]$ProcessId, [string]$OwnedExecutable, [
     $debugger.WaitForExit()
     $debugger.Refresh()
     $debuggerStatus='exit:'+$debugger.ExitCode
-    # kn has no argument/local-variable dump. Retain only stack symbols and
-    # loaded module names; arbitrary debugger text, memory and paths stay local.
-    foreach ($line in Get-Content $raw) {
-      if ($line -match '^\s*([0-9a-fA-F]{1,3})\s+[0-9a-fA-F`]+\s+([0-9a-fA-F`]+)\s+((?:[A-Za-z0-9_.$?@:<>,~\[\]()+-]+![A-Za-z0-9_.$?@:<>,~\[\]()+ -]+|[A-Za-z0-9_.-]+\+0x[0-9a-fA-F]+))\s*$') {
-        $frames += [pscustomobject]@{ index=$Matches[1]; returnAddress=$Matches[2]; symbol=$Matches[3] }
-      } elseif ($line -match '^\s*[0-9a-fA-F`]+\s+[0-9a-fA-F`]+\s+([A-Za-z0-9_.-]+)\s+') { $modules += $Matches[1] }
-      if ($line -match 'Last event:.*(?:code|exception)\s+([0-9a-fA-F]{8})') { $lastEvent += $Matches[1] }
+  }
+  if ($raw -and (Test-Path $raw)) {
+    # Bind one bounded heap-event block to both its actual native PID and code.
+    # kn has no arguments/locals; unmarked startup rows are never retained.
+    if ($State.live) {
+      $capture=Read-OwnedHeapCapture @(Get-Content $raw) $ProcessId
+      $liveVerified=$State.live.attached -and $State.live.ready -and $capture.verified
+      if ($liveVerified) { $frames=$capture.frames; $modules=$capture.modules; $lastEvent=@($capture.code) }
+    } else {
+      foreach ($line in Get-Content $raw) {
+        if ($line -match '^\s*([0-9a-fA-F]{1,3})\s+[0-9a-fA-F`]+\s+([0-9a-fA-F`]+)\s+((?:[A-Za-z0-9_.$?@:<>,~\[\]()+-]+![A-Za-z0-9_.$?@:<>,~\[\]()+ -]+|[A-Za-z0-9_.-]+\+0x[0-9a-fA-F]+))\s*$') {
+          $frames += [pscustomobject]@{ index=$Matches[1]; returnAddress=$Matches[2]; symbol=$Matches[3] }
+        } elseif ($line -match '^\s*[0-9a-fA-F`]+\s+[0-9a-fA-F`]+\s+([A-Za-z0-9_.-]+)\s+') { $modules += $Matches[1] }
+        if ($line -match 'Last event:.*(?:code|exception)\s+([0-9a-fA-F]{8})') { $lastEvent += $Matches[1] }
+      }
     }
   }
-  $extraction = if (-not $dump) { 'no-owned-dump' } elseif ($frames.Count -eq 0) { 'no-stack-frames' } else { 'stack-extracted' }
-  $selected=[pscustomobject]@{ pid=$ProcessId; nativeStatus=[MixelOrdinaryTokenFixture]::StartedStatus($ProcessId); applicationEvents=$events; actualDumpPidVerified=[bool]$dump; debuggerStatus=$debuggerStatus; stackExtraction=$extraction; exceptionCodes=$lastEvent; stackFrames=$frames; loadedModuleNames=$modules }
+  if ($State -and $State.live -and -not $liveVerified) { $frames=@(); $modules=@(); $lastEvent=@() }
+  $extraction = if (-not $dump -and -not $liveVerified) { 'no-owned-crash-attribution' } elseif ($frames.Count -eq 0) { 'no-stack-frames' } else { 'stack-extracted' }
+  $selected=[pscustomobject]@{ pid=$ProcessId; nativeStatus=[MixelOrdinaryTokenFixture]::StartedStatus($ProcessId); applicationEvents=$events; actualDumpPidVerified=[bool]$dump; actualLiveExceptionPidVerified=[bool]$liveVerified; debuggerStatus=$debuggerStatus; stackExtraction=$extraction; exceptionCodes=$lastEvent; stackFrames=$frames; loadedModuleNames=$modules }
   Write-Host ('FIXTURE: actual owned native crash evidence: '+($selected | ConvertTo-Json -Depth 5 -Compress))
   if ($env:RUNNER_TEMP) {
     $archive=Join-Path $env:RUNNER_TEMP 'mixel-owned-ordinary-qs-logs'
@@ -586,7 +722,16 @@ try {
         if ($NativeCrashDiagnostic) { $nativeCrash=Start-OwnedCrashObservation $ownedSid }
         $fixtureStage = 'start owned standard GUI'
         $ordinaryStartedAt=[DateTime]::UtcNow
-        try { $ordinaryPid = [MixelOrdinaryTokenFixture]::StartStandardUser($ordinaryExecutable, $ownedUser, $ownedPassword) }
+        try {
+          $ordinaryPid = [MixelOrdinaryTokenFixture]::StartStandardUser($ordinaryExecutable, $ownedUser, $ownedPassword, [bool]$NativeCrashDiagnostic)
+          if ($NativeCrashDiagnostic) {
+            $main=Get-Process -Id $ordinaryPid
+            $ordinaryProfileRoot=[MixelOrdinaryTokenFixture]::ProfilePath($ordinaryPid)
+            Start-OwnedLiveCrashObservation $ordinaryPid $nativeCrash
+            [MixelOrdinaryTokenFixture]::ResumeOwnedPrimaryThread($ordinaryPid)
+            Write-Host "FIXTURE: diagnostic-only resumes the exact owned primary thread once after native debugger attachment; foregroundPid=$ordinaryPid."
+          }
+        }
         finally { $ownedPassword = $null }
       }
       $main = Get-Process -Id $ordinaryPid
