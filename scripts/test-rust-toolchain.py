@@ -48,6 +48,16 @@ class RustToolchainTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "different Windows linkers"):
             find_msvc_linker(environment, verifier=self.verifier)
 
+    def test_plain_copied_native_environment_preserves_case_insensitive_selection(self):
+        copied = {key.upper(): value for key, value in self.environment.items()}
+        copied["cargo_target_x86_64_pc_windows_msvc_linker"] = str(self.linker)
+        self.assertEqual(find_msvc_linker(copied, verifier=self.verifier), self.linker)
+        copied["VCToolsInstallDir"] = str(self.tools)
+        self.assertEqual(find_msvc_linker(copied, verifier=self.verifier), self.linker)
+        copied["VCToolsInstallDir"] = str(self.root / "other-toolchain")
+        with self.assertRaisesRegex(RuntimeError, "Conflicting Windows environment aliases"):
+            find_msvc_linker(copied, verifier=self.verifier)
+
     def test_missing_relative_control_and_indirect_tool_paths_fail_closed(self):
         for value in ("", "relative/tools", str(self.tools) + "\n", str(self.root / "absent")):
             with self.subTest(value=value), self.assertRaises(RuntimeError):

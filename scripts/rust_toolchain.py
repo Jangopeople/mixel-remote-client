@@ -60,8 +60,18 @@ def verify_msvc_linker(linker: Path) -> None:
         raise RuntimeError("Installed linker is not the native Microsoft LINK executable; private metadata withheld")
 
 
+def windows_environment_value(environment: Mapping[str, str], name: str) -> str:
+    # Native os.environ ignores Windows key casing, but dict(os.environ) has
+    # uppercase keys and loses that behavior. Keep the same semantics when
+    # fixtures prepend a shadowing PATH, and reject conflicting synthetic aliases.
+    values = [value for key, value in environment.items() if key.casefold() == name.casefold()]
+    if values and any(value != values[0] for value in values):
+        raise RuntimeError("Conflicting Windows environment aliases for " + name)
+    return values[0] if values else ""
+
+
 def find_msvc_linker(environment: Mapping[str, str], *, verifier=verify_msvc_linker) -> Path:
-    directory = environment.get("VCToolsInstallDir", "")
+    directory = windows_environment_value(environment, "VCToolsInstallDir")
     if not directory or any(character in directory for character in "\r\n\x00"):
         raise RuntimeError("Activate the installed x64 MSVC developer environment before compiling Windows fixtures")
     tools = Path(directory)
@@ -72,7 +82,7 @@ def find_msvc_linker(environment: Mapping[str, str], *, verifier=verify_msvc_lin
     # outside the discovered toolchain while retaining the expected basename.
     if linker.resolve() != tools.resolve() / "bin/Hostx64/x64/link.exe":
         raise RuntimeError("Installed x64 MSVC linker path is indirect")
-    configured = environment.get("CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER")
+    configured = windows_environment_value(environment, "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER")
     if configured and Path(configured).resolve() != linker.resolve():
         raise RuntimeError("Cargo and direct Rust fixtures select different Windows linkers")
     verifier(linker)
