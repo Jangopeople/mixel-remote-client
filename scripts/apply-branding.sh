@@ -364,12 +364,18 @@ path = Path(sys.argv[1])
 source = path.read_text(encoding="utf-8")
 original = source
 before = '    argument.erase(argument.find_last_not_of(" \\n\\r\\t"));'
-after = '''    const auto last = argument.find_last_not_of(" \\n\\r\\t");
+previous = '''    const auto last = argument.find_last_not_of(" \\n\\r\\t");
+    argument.erase(last == std::string::npos ? 0 : last + 1);'''
+after = '''    // Utf8FromUtf16 includes the command-line UTF-8 NUL sentinel.
+    // Remove it before trimming whitespace, preserving every argument byte.
+    if (!argument.empty() && argument.back() == '\\0') argument.pop_back();
+    const auto last = argument.find_last_not_of(" \\n\\r\\t");
     argument.erase(last == std::string::npos ? 0 : last + 1);'''
 if after not in source:
-    if source.count(before) != 1:
+    matches = [candidate for candidate in (before, previous) if source.count(candidate) == 1]
+    if len(matches) != 1:
         raise RuntimeError("Pinned Windows command-line normalization changed")
-    source = source.replace(before, after, 1)
+    source = source.replace(matches[0], after, 1)
 # The portable QS launcher supplies a command flag, while uni_links_desktop
 # forwards argv[1] as a URI string. Sending that flag to the URI parser cannot
 # restore a minimized window. Deliver the exact raw intent to the existing GUI

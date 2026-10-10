@@ -93,9 +93,9 @@ with tempfile.TemporaryDirectory(prefix="mixel-branding-") as directory:
     assert plist["CFBundleURLTypes"][0]["CFBundleURLSchemes"] == ["mixel-remote"]
     print("PASS: branded GTK icon/titles, isolated Linux DBus, bundled library strip and macOS protocol registration")
 
-    # Execute the actual generated C++ argument normalization. Keeping the
-    # last character is essential for support invite/API keys and the portable
-    # --quick_support handoff; empty/whitespace-only arguments must not throw.
+    # Execute the pinned converter before the actual generated normalization
+    # and dispatch. WideCharToMultiByte(-1) includes a NUL in std::string::size;
+    # plain string test inputs cannot reproduce that customer command line.
     windows_main = (repo / "flutter/windows/runner/main.cpp").read_text(encoding="utf-8")
     normalize = windows_main[windows_main.index("  // Remove possible trailing whitespace"):windows_main.index("\n\n  int args_len")]
     def window_dispatch(source: str) -> str:
@@ -104,6 +104,18 @@ with tempfile.TemporaryDirectory(prefix="mixel-branding-") as directory:
     dispatch = window_dispatch(windows_main)
     upstream_windows_main = run(["git", "-C", str(repo), "show", "HEAD:flutter/windows/runner/main.cpp"]).stdout
     upstream_dispatch = window_dispatch(upstream_windows_main)
+    upstream_normalize = upstream_windows_main[upstream_windows_main.index("  // Remove possible trailing whitespace"):upstream_windows_main.index("\n\n  int args_len")]
+    sentinel_guard = '''    // Utf8FromUtf16 includes the command-line UTF-8 NUL sentinel.
+    // Remove it before trimming whitespace, preserving every argument byte.
+    if (!argument.empty() && argument.back() == '\\0') argument.pop_back();
+'''
+    assert normalize.count(sentinel_guard) == 1
+    previous_normalize = normalize.replace(sentinel_guard, "", 1)
+    assert 'argument.erase(last == std::string::npos ? 0 : last + 1);' in previous_normalize
+    utils = (repo / "flutter/windows/runner/utils.cpp").read_text(encoding="utf-8")
+    upstream_utils = run(["git", "-C", str(repo), "show", "HEAD:flutter/windows/runner/utils.cpp"]).stdout
+    assert utils == upstream_utils, "The pinned Windows UTF-16 converter must remain unchanged"
+    converter = utils[utils.index("std::string Utf8FromUtf16("):]
     whitelist = windows_main[windows_main.index("const std::vector<std::string> parameters_white_list ="):]
     whitelist = whitelist[:whitelist.index(";") + 1]
     cpp = base / "windows-arguments"
@@ -112,8 +124,14 @@ with tempfile.TemporaryDirectory(prefix="mixel-branding-") as directory:
 project(mixel_window_arguments LANGUAGES CXX)
 add_executable(window_arguments main.cpp)
 add_executable(window_arguments_original original.cpp)
-foreach(window_target IN ITEMS window_arguments window_arguments_original)
+add_executable(window_arguments_previous_normalizer previous_normalizer.cpp)
+add_executable(window_arguments_upstream_normalizer upstream_normalizer.cpp)
+foreach(window_target IN ITEMS window_arguments window_arguments_original window_arguments_previous_normalizer window_arguments_upstream_normalizer)
+  target_sources(${window_target} PRIVATE converter.cpp)
   target_compile_features(${window_target} PRIVATE cxx_std_17)
+  if(WIN32)
+    target_link_libraries(${window_target} PRIVATE kernel32)
+  endif()
   if(MSVC)
     target_compile_options(${window_target} PRIVATE /W4 /WX)
   else()
@@ -121,16 +139,88 @@ foreach(window_target IN ITEMS window_arguments window_arguments_original)
   endif()
 endforeach()
 ''', encoding="utf-8")
+    # Windows compiles the exact converter against the real kernel32 API. The
+    # non-Windows backend implements its documented UTF-16 and terminating-NUL
+    # contract only; it never substitutes for native customer runtime proof.
+    (cpp / "converter.cpp").write_text('''#include <cstdint>
+#include <string>
+#ifdef _WIN32
+#include <windows.h>
+const char* converter_backend_name() { return "native Windows WideCharToMultiByte"; }
+#else
+constexpr unsigned int CP_UTF8 = 65001;
+constexpr unsigned long WC_ERR_INVALID_CHARS = 0x80;
+const char* converter_backend_name() { return "non-Windows documented UTF-16/NUL contract backend"; }
+int WideCharToMultiByte(unsigned int page, unsigned long flags, const wchar_t* source,
+    int source_length, char* target, int capacity, const char* fallback, int* used_fallback) {
+  if (page != CP_UTF8 || flags != WC_ERR_INVALID_CHARS || !source ||
+      source_length != -1 || capacity < 0 || fallback || used_fallback) return 0;
+  std::string encoded;
+  for (std::size_t index = 0; source[index]; ++index) {
+    std::uint32_t value = static_cast<std::uint32_t>(source[index]);
+    if (value > 0xffff) return 0; // Inputs are actual UTF-16 code units.
+    if (value >= 0xd800 && value <= 0xdbff) {
+      const auto low = static_cast<std::uint32_t>(source[++index]);
+      if (low < 0xdc00 || low > 0xdfff) return 0;
+      value = 0x10000 + ((value - 0xd800) << 10) + low - 0xdc00;
+    } else if (value >= 0xdc00 && value <= 0xdfff) return 0;
+    if (value < 0x80) encoded.push_back(static_cast<char>(value));
+    else if (value < 0x800) {
+      encoded.push_back(static_cast<char>(0xc0 | (value >> 6)));
+      encoded.push_back(static_cast<char>(0x80 | (value & 0x3f)));
+    } else if (value < 0x10000) {
+      encoded.push_back(static_cast<char>(0xe0 | (value >> 12)));
+      encoded.push_back(static_cast<char>(0x80 | ((value >> 6) & 0x3f)));
+      encoded.push_back(static_cast<char>(0x80 | (value & 0x3f)));
+    } else {
+      encoded.push_back(static_cast<char>(0xf0 | (value >> 18)));
+      encoded.push_back(static_cast<char>(0x80 | ((value >> 12) & 0x3f)));
+      encoded.push_back(static_cast<char>(0x80 | ((value >> 6) & 0x3f)));
+      encoded.push_back(static_cast<char>(0x80 | (value & 0x3f)));
+    }
+  }
+  encoded.push_back('\\0');
+  if (!target && capacity == 0) return static_cast<int>(encoded.size());
+  if (!target || capacity < static_cast<int>(encoded.size())) return 0;
+  encoded.copy(target, encoded.size());
+  return static_cast<int>(encoded.size());
+}
+#endif
+// Keep the pinned converter verbatim, including its existing int/size_t
+// comparison. Suppress only that upstream warning around this exact function;
+// the fixture and changed generated code still compile with warnings as errors.
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable: 4018)
+#else
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wsign-compare"
+#endif
+''' + converter + '''
+#ifdef _MSC_VER
+#pragma warning(pop)
+#else
+#pragma GCC diagnostic pop
+#endif
+''', encoding="utf-8")
     cpp_prefix = '''#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <initializer_list>
 #include <iostream>
 #include <stdexcept>
 #include <string>
 #include <vector>
+std::string Utf8FromUtf16(const wchar_t*);
+const char* converter_backend_name();
 void normalize(std::vector<std::string>& command_line_arguments) {
 ''' + normalize + '''
+}
+std::vector<std::string> native_arguments(std::initializer_list<const wchar_t*> arguments) {
+  std::vector<std::string> result;
+  for (const auto* argument : arguments) result.push_back(Utf8FromUtf16(argument));
+  return result;
 }
 using HWND = void*;
 using DWORD = std::uint32_t;
@@ -195,6 +285,7 @@ int SendMessageTimeoutW(HWND hwnd, unsigned int message, std::uintptr_t wparam,
 int existing_window_dispatch(std::vector<std::string> command_line_arguments,
     std::vector<std::string> rust_args = {}) {
   (void)rust_args; // The pinned original dispatch does not use core arguments.
+  normalize(command_line_arguments);
   plugin_argv = command_line_arguments;
   const std::wstring app_name = L"Mixel-Remote";
 '''
@@ -217,53 +308,95 @@ bool restored_same_window(bool attended_handoff) {
       (!attended_handoff || emitted_uri == "--quick_support");
 }
 int main() {
-  std::vector<std::string> args = {"--quick_support", "--cm", "mixel-remote://support/?invite=inv_00000000-0000-0000-0000-000000000001&apikey=synthetic-key-last-Z", "", " \\n\\r\\t", "--quick_support \\n\\r\\t"};
-  const auto original = args;
+  const wchar_t unicode[] = {L'Z', static_cast<wchar_t>(0xfc), L'r', L'i', L'c', L'h',
+      static_cast<wchar_t>(0xd83d), static_cast<wchar_t>(0xde42), L'Z', 0};
+  const wchar_t invalid[] = {static_cast<wchar_t>(0xd800), 0};
+  std::vector<std::string> args = native_arguments({L"--quick_support", L"--cm",
+      L"mixel-remote://support/?invite=inv_00000000-0000-0000-0000-000000000001&apikey=synthetic-key-last-Z",
+      L"", L" \\n\\r\\t", L"--quick_support \\n\\r\\t", L"--install", unicode,
+      L" leading-preserved-final-Z \\t", nullptr, invalid});
+  const std::vector<std::string> expected = {"--quick_support", "--cm",
+      "mixel-remote://support/?invite=inv_00000000-0000-0000-0000-000000000001&apikey=synthetic-key-last-Z",
+      "", "", "--quick_support", "--install", "Z\\xc3\\xbcrich\\xf0\\x9f\\x99\\x82Z",
+      " leading-preserved-final-Z", "", ""};
+  for (std::size_t index = 0; index < 9; ++index) {
+    if (args[index].empty() || args[index].back() != '\\0') return 10;
+  }
+  if (!args[9].empty() || !args[10].empty()) return 10;
+#ifdef UPSTREAM_NORMALIZER
+  args.resize(9); // The pinned original throws on invalid/null converter output.
+#endif
   normalize(args);
-  if (args[0] != original[0] || args[1] != original[1] || args[2] != original[2] || !args[3].empty() || !args[4].empty() || args[5] != "--quick_support") {
+#ifdef PREVIOUS_NORMALIZER
+  if (args[0] != expected[0] && args[0].back() == '\\0' &&
+      std::find(parameters_white_list.begin(), parameters_white_list.end(), args[1]) == parameters_white_list.end() &&
+      std::find(parameters_white_list.begin(), parameters_white_list.end(), args[6]) == parameters_white_list.end()) {
+    std::cerr << "REPRODUCED: pre-fix native converter NUL prevents exact QuickSupport/CM/install comparisons" << std::endl;
+    return 11;
+  }
+  return 1;
+#elif defined(UPSTREAM_NORMALIZER)
+  if (args[0] == expected[0] && args[1] == expected[1] && args[2] == expected[2] &&
+      args[6] == expected[6] && args[7] == expected[7] && args[3].empty() &&
+      args[4] == " \\n\\r\\t" && args[5] == "--quick_support \\n\\r\\t") {
+    std::cerr << "REPRODUCED: pinned original removes converter NUL but leaves trailing whitespace" << std::endl;
+    return 12;
+  }
+  return 1;
+#else
+  if (args != expected) {
     std::cerr << "Generated Windows arguments changed token bytes or rejected empty input" << std::endl;
     return 1;
   }
-  std::cout << "PASS: actual generated Windows C++ argument normalization preserves complete QuickSupport/invite/key bytes and accepts empty/whitespace input" << std::endl;
+  auto interior = std::vector<std::string>{std::string("A\\0B\\0", 4)};
+  normalize(interior);
+  if (interior[0] != std::string("A\\0B", 3)) return 13;
+  std::cout << "PASS: exact pinned converter -> generated normalization (" << converter_backend_name()
+      << ") removes only the terminal NUL, preserves final invite/key and UTF-8 bytes, leading/interior bytes, and safely trims empty/whitespace input" << std::endl;
   reset();
-  if (existing_window_dispatch({"--quick_support"}) != EXIT_FAILURE || !restored_same_window(true)) {
+  if (existing_window_dispatch(native_arguments({L"--quick_support"})) != EXIT_FAILURE || !restored_same_window(true)) {
     std::cerr << "QuickSupport warm dispatch did not restore the same minimized HWND; URI transport emitted: " << emitted_uri << std::endl;
     return 2;
   }
   reset();
   if (existing_window_dispatch({}) != EXIT_FAILURE || !restored_same_window(false)) return 3;
   const std::string invite = args[2];
-  for (const auto& uri : {invite, std::string("mixel-remote://123456789")}) {
+  for (const auto* uri : {L"mixel-remote://support/?invite=inv_00000000-0000-0000-0000-000000000001&apikey=synthetic-key-last-Z", L"mixel-remote://123456789"}) {
     reset();
-    if (existing_window_dispatch({uri}) != EXIT_FAILURE || uri_dispatch_calls != 1 ||
-        emitted_uri != uri || show_calls != 0 || foreground_calls != 0 ||
+    auto expected_uri = native_arguments({uri});
+    normalize(expected_uri);
+    if (existing_window_dispatch(native_arguments({uri})) != EXIT_FAILURE || uri_dispatch_calls != 1 ||
+        emitted_uri != expected_uri[0] || show_calls != 0 || foreground_calls != 0 ||
         bounded_handoff_calls != 0 || !minimized) return 4;
   }
-  for (const auto& arguments : {std::vector<std::string>{"--cm"},
-                               std::vector<std::string>{"--install"},
-                               std::vector<std::string>{"--quick_support", "--cm"}}) {
+  for (const auto& arguments : {native_arguments({L"--cm"}),
+                               native_arguments({L"--install"}),
+                               native_arguments({L"--quick_support", L"--cm"})}) {
     reset();
     if (existing_window_dispatch(arguments) != EXIT_SUCCESS || uri_dispatch_calls != 0 ||
         show_calls != 0 || foreground_calls != 0 || bounded_handoff_calls != 0) return 5;
   }
   reset(false);
-  if (existing_window_dispatch({"--quick_support"}) != EXIT_SUCCESS || uri_dispatch_calls != 0 ||
+  if (existing_window_dispatch(native_arguments({L"--quick_support"})) != EXIT_SUCCESS || uri_dispatch_calls != 0 ||
       show_calls != 0 || foreground_calls != 0 || bounded_handoff_calls != 0) return 6;
   reset();
   delivery_success = false;
-  if (existing_window_dispatch({"--quick_support"}) != EXIT_SUCCESS || !restored_same_window(true)) return 7;
+  if (existing_window_dispatch(native_arguments({L"--quick_support"})) != EXIT_SUCCESS || !restored_same_window(true)) return 7;
   reset();
-  if (existing_window_dispatch({"--quick_support"}, {"--mixel-attended-handoff-unavailable"}) != EXIT_SUCCESS || !restored_same_window(false)) return 8;
+  if (existing_window_dispatch(native_arguments({L"--quick_support"}), {"--mixel-attended-handoff-unavailable"}) != EXIT_SUCCESS || !restored_same_window(false)) return 8;
   reset();
   if (existing_window_dispatch({invite}, {"--mixel-attended-handoff-unavailable"}) != EXIT_SUCCESS || uri_dispatch_calls != 0 || bounded_handoff_calls != 0) return 9;
   std::cout << "PASS: actual generated Windows branch restores the same QuickSupport HWND and sends exact bounded pinned-plugin attended intent; failed delivery falls through to cold owned GUI; URI/CM/install/cold paths remain intact" << std::endl;
   std::cout << "PASS: failed attended IPC acknowledgment retains the cold foreground owner before asynchronous URI/QuickSupport delivery" << std::endl;
+#endif
 }
 '''
     # Compile the actual unpatched dispatch first. This recreates the native
     # failure: the plugin gets a relative URI flag and never restores the HWND.
     (cpp / "original.cpp").write_text(cpp_prefix + upstream_dispatch + cpp_suffix, encoding="utf-8")
     (cpp / "main.cpp").write_text(cpp_prefix + dispatch + cpp_suffix, encoding="utf-8")
+    (cpp / "previous_normalizer.cpp").write_text("#define PREVIOUS_NORMALIZER\n" + cpp_prefix.replace(normalize, previous_normalize, 1) + dispatch + cpp_suffix, encoding="utf-8")
+    (cpp / "upstream_normalizer.cpp").write_text("#define UPSTREAM_NORMALIZER\n" + cpp_prefix.replace(normalize, upstream_normalize, 1) + dispatch + cpp_suffix, encoding="utf-8")
     cpp_build = cpp / "build"
     run(["cmake", "-S", str(cpp), "-B", str(cpp_build)])
     run(["cmake", "--build", str(cpp_build), "--config", "Release"])
@@ -277,7 +410,21 @@ int main() {
     negative = subprocess.run([str(original_binary)], capture_output=True, text=True, encoding="utf-8")
     assert negative.returncode == 2 and "URI transport emitted: --quick_support" in negative.stderr, "Original Windows dispatch must reproduce the real QuickSupport warm failure"
     print("PASS: actual original Windows dispatch reproduces QuickSupport relative-URI failure before the native restore fix")
+    for suffix, code, message in (
+            ("previous_normalizer", 11, "pre-fix native converter NUL prevents exact QuickSupport/CM/install comparisons"),
+            ("upstream_normalizer", 12, "pinned original removes converter NUL but leaves trailing whitespace")):
+        control = binary.with_name("window_arguments_" + suffix + binary.suffix)
+        negative = subprocess.run([str(control)], capture_output=True, text=True, encoding="utf-8")
+        assert negative.returncode == code and message in negative.stderr, "Actual converter normalization control did not reproduce: " + suffix
+        print("PASS: actual converter negative control: " + message)
     print(run([str(binary)]).stdout.strip())
+    # Also qualify upgrading the already-branded pre-fix source, rather than
+    # allowing a repeated application to retain its NUL comparison regression.
+    windows_main_path = repo / "flutter/windows/runner/main.cpp"
+    windows_main_path.write_text(windows_main.replace(sentinel_guard, "", 1), encoding="utf-8")
+    run(BRANDING_COMMAND, cwd=base, env=env)
+    assert windows_main_path.read_text(encoding="utf-8") == windows_main
+    print("PASS: full branding upgrades the pre-fix NUL-retaining normalizer to the exact fresh generated source")
 
     # Execute the actual package generator, including its architecture-specific
     # dependencies, without importing the build script's command-line driver.
