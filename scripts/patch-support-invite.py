@@ -297,13 +297,14 @@ text = replace_once(text, "pub fn get_option<T: AsRef<str>>(key: T) -> String {\
         };
     }
 """, "runtime guard getter")
-text = replace_once(text, """        let map = OPTIONS.lock().unwrap();
+saved_options_before = """        let map = OPTIONS.lock().unwrap();
         if let Some(v) = map.get(key.as_ref()) {
             v.to_owned()
         } else {
             "".to_owned()
         }
-""", """        let saved = {
+"""
+old_saved_options = """        let saved = {
             let map = OPTIONS.lock().unwrap();
             map.get(key.as_ref()).cloned().unwrap_or_default()
         };
@@ -313,7 +314,28 @@ text = replace_once(text, """        let map = OPTIONS.lock().unwrap();
         } else {
             saved
         }
-""", "effective attended click mode for customer Accept UI")
+"""
+new_saved_options = """        let saved = {
+            let map = OPTIONS.lock().unwrap();
+            map.get(key.as_ref()).cloned().unwrap_or_default()
+        };
+        if key.as_ref() == "approve-mode" {
+            // Authorization uncertainty must leave the customer's Accept UI
+            // accessible without claiming readiness. Use the raw service proof:
+            // an ordinary empty result must preserve saved password behavior.
+            let requires_click = hbb_common::password_security::support_invite_requires_click()
+                || matches!(ipc::get_config("mixel-support-invite-attended").ok().flatten().as_deref(),
+                    Some(hbb_common::password_security::SUPPORT_INVITE_ATTESTATION) | Some("guard-unavailable"));
+            hbb_common::password_security::effective_support_approve_mode(&saved, requires_click)
+        } else {
+            saved
+        }
+"""
+if old_saved_options in text:
+    if text.count(old_saved_options) != 1:
+        raise SystemExit("Ambiguous owned attended approval mode")
+    text = text.replace(old_saved_options, new_saved_options, 1)
+text = replace_once(text, saved_options_before, new_saved_options, "effective attended click mode for customer Accept UI")
 text = replace_once(text, "pub fn set_option(key: String, value: String) {\n", """pub fn set_option(key: String, value: String) {
     if key == "mixel-support-invite-attended" {
         if value == "Y" {
@@ -527,16 +549,26 @@ for locale, message in translations.items():
 ipc = rdrepo / "src/ipc.rs"
 text = ipc.read_text(encoding="utf-8")
 text = text.replace("keys::{self, OPTION_ALLOW_WEBSOCKET}", "keys::OPTION_ALLOW_WEBSOCKET")
-text = replace_once(text, """                } else if name == "trusted-devices" {
-                    value = Some(Config::get_trusted_devices_json());
-""", """                } else if name == "trusted-devices" {
-                    value = Some(Config::get_trusted_devices_json());
-                } else if name == "mixel-support-invite-attended" {
+old_attended_getter = """                } else if name == "mixel-support-invite-attended" {
                     value = Some(if password::support_invite_requires_click() {
                         password::SUPPORT_INVITE_ATTESTATION.to_owned()
                     } else {
                         String::new()
                     });
+"""
+new_attended_getter = """                } else if name == "mixel-support-invite-attended" {
+                    value = Some(password::support_invite_attestation().to_owned());
+"""
+if old_attended_getter in text:
+    if text.count(old_attended_getter) != 1:
+        raise SystemExit("Ambiguous owned attended IPC getter")
+    text = text.replace(old_attended_getter, new_attended_getter, 1)
+text = replace_once(text, """                } else if name == "trusted-devices" {
+                    value = Some(Config::get_trusted_devices_json());
+""", """                } else if name == "trusted-devices" {
+                    value = Some(Config::get_trusted_devices_json());
+                } else if name == "mixel-support-invite-attended" {
+                    value = Some(password::support_invite_attestation().to_owned());
 """, "runtime IPC guard getter")
 text = replace_once(text, """                } else if name == "unlock-pin" {
                     Config::set_unlock_pin(&value);

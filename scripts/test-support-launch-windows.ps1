@@ -406,6 +406,18 @@ public static class MixelOrdinaryTokenFixture {
       return false;
     } finally { if (data != IntPtr.Zero) Marshal.FreeHGlobal(data); CloseHandle(process); }
   }
+  public static bool LeasePresent(string name) {
+    IntPtr handle = OpenEventW(0x100000, false, name);
+    if (handle == IntPtr.Zero) {
+      int error = Marshal.GetLastWin32Error();
+      if (error == 2) return false;
+      throw new Win32Exception(error);
+    }
+    try { return true; } finally { CloseHandle(handle); }
+  }
+  public static bool LeasePresent() {
+    return LeasePresent("Global\\Mixel-Remote-Attended-Runtime-v2");
+  }
 }
 '@ }
 
@@ -1277,12 +1289,49 @@ function Assert-OwnedIncomingHealth($Health) {
   }
 }
 
+function Stop-OwnedCustomerProcesses {
+  # Observe termination through each exact process object's retained handle.
+  # Stop-Process alone returns before exit and must not hide cleanup failures.
+  $errors = [System.Collections.Generic.List[string]]::new()
+  for ($round = 0; $round -le 3; $round++) {
+    $ownedCount = 0
+    foreach ($process in (Get-Process)) {
+      $ownedPath = $null
+      try { $ownedPath = $process.Path } catch { }
+      if ($before -contains $process.Id -or -not $ownedPath) { $process.Dispose(); continue }
+      $owned = $ownedPath.StartsWith((Split-Path $executablePath -Parent) + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or
+        ($Portable -and $ownedPath.StartsWith((Split-Path $runtimePath -Parent) + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) -or
+        ($ordinaryRoot -and $ownedPath.StartsWith($ordinaryRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase))
+      if (-not $owned) { $process.Dispose(); continue }
+      $ownedCount++
+      # The last enumeration verifies the third termination round without
+      # accepting a surviving owned process or manufacturing a false failure.
+      if ($round -eq 3) { $process.Dispose(); continue }
+      try {
+        if ($process.HasExited) { continue }
+        $null = $process.Handle
+        try { $process.Kill() } catch { if (-not $process.HasExited) { throw } }
+        if (-not $process.WaitForExit(10000)) { throw 'Owned customer process termination was not observed.' }
+      } catch { $errors.Add("Owned customer process $($process.Id) cleanup failed.") }
+      finally { $process.Dispose() }
+    }
+    if ($errors.Count -gt 0) { throw ($errors -join ' ') }
+    if ($ownedCount -eq 0) { return }
+  }
+  throw 'Owned customer processes remain after bounded termination and fresh process enumeration.'
+}
+
 try {
   if ($OrdinaryThenQuickSupport) {
     Write-Host "FIXTURE: read-only global attended event before ordinary launch: win32Error=$([MixelOrdinaryTokenFixture]::LeaseProbeError())."
     if (-not $QuickSupport -or -not $ExpectedPayload -or (-not $Portable -and -not $CompiledQuickSupportDiagnostic)) {
       throw 'Ordinary-to-QuickSupport proof requires the actual portable QS launcher and exact signed payload, or explicit compiled-only diagnosis.'
     }
+    $fixtureStage = 'verify absent prior foreground consent lease'
+    if ([MixelOrdinaryTokenFixture]::LeasePresent()) {
+      throw 'Ordinary-to-QS baseline found a prior global consent owner before starting the ordinary app.'
+    }
+    Write-Host 'PASS: ordinary-to-QS baseline has no prior global consent owner before actual ordinary startup.'
     # Pinned older clients detect '-qs-' anywhere in argv[0], including parent
     # directories. Use a neutral path so retained signed payloads can prove a
     # genuinely ordinary unguarded startup before the actual QS handoff.
@@ -1373,8 +1422,9 @@ try {
     if ($initialHealth.incomingPid -ne $main.Id) { throw 'Ordinary positive control is not querying its actual in-process native incoming server.' }
     $baselineIncomingPid = $initialHealth.incomingPid
     $initialOwnsLease = [MixelOrdinaryTokenFixture]::OwnsLease($main.Id)
+    $initialLeasePresent = [MixelOrdinaryTokenFixture]::LeasePresent()
     $initialGuardEmpty = $initialHealth.attendedProof -ceq ''
-    Write-Host "FIXTURE: read-only ordinary baseline: guardEmpty=$initialGuardEmpty, guardV2=$($initialHealth.attendedReady), foregroundOwnsLease=$initialOwnsLease, runnerLeaseProbeWin32Error=$([MixelOrdinaryTokenFixture]::LeaseProbeError())."
+    Write-Host "FIXTURE: read-only ordinary baseline: guardEmpty=$initialGuardEmpty, guardV2=$($initialHealth.attendedReady), foregroundOwnsLease=$initialOwnsLease, globalLeasePresent=$initialLeasePresent, runnerLeaseProbeWin32Error=$([MixelOrdinaryTokenFixture]::LeaseProbeError())."
     $ordinaryTokenLeaseProbe = [MixelOrdinaryTokenFixture]::LeaseProbeErrorAsProcess($main.Id)
     Write-Host "FIXTURE: optional actual-token event observation: nativeResult=$ordinaryTokenLeaseProbe (negative means unavailable token access, never an absent event)."
     if ($initialHealth.attendedProof -cne '' -or $initialOwnsLease) {
@@ -1461,15 +1511,9 @@ try {
   }
   try { [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses() }
   catch { $nativeCrashCleanupFailed=$true; Write-Host 'FAIL: actual retained owned native process termination additionally failed.' }
-  # Only stop processes newly started from this runner-owned build directory.
-  Get-Process | Where-Object {
-    $ownedPath=$null
-    try { $ownedPath=$_.Path } catch { }
-    $before -notcontains $_.Id -and $ownedPath -and
-    ($ownedPath.StartsWith((Split-Path $executablePath -Parent) + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or
-     ($Portable -and $ownedPath.StartsWith((Split-Path $runtimePath -Parent) + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) -or
-     ($ordinaryRoot -and $ownedPath.StartsWith($ordinaryRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)))
-  } | Stop-Process -Force -ErrorAction SilentlyContinue
+  $customerCleanupFailure = $null
+  try { Stop-OwnedCustomerProcesses }
+  catch { $customerCleanupFailure = $_ }
   [MixelOrdinaryTokenFixture]::CloseStartedObservations()
   if ($ordinaryRoot -or $ownedUser -or $desktopAccess) {
     $cleanupErrors = [System.Collections.Generic.List[string]]::new()
@@ -1510,6 +1554,10 @@ try {
       if ($primaryFailure) { Write-Host ('FAIL: owned cleanup additionally failed: ' + ($cleanupErrors -join ' ')) }
       else { throw ($cleanupErrors -join ' ') }
     }
+  }
+  if ($customerCleanupFailure) {
+    if ($primaryFailure) { Write-Host 'FAIL: owned customer process cleanup additionally failed.' }
+    else { throw $customerCleanupFailure }
   }
 }
 

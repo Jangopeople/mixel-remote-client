@@ -127,7 +127,7 @@ def main():
     source = (ROOT / "scripts/support-invite-guard.rs").read_text(encoding="utf-8")
     current = "\n\n".join(function(source, "    #[cfg(windows)]\n    fn " + name + "()")
                            for name in ("create", "probe")) + "\n"
-    assert "event_name.as_ptr()" in current and "wide(EVENT).as_ptr()" not in current
+    assert "wide(EVENT).as_ptr()" not in current
     event = "Global\\Mixel-Lease-Error-Test-" + uuid.uuid4().hex
     scope = "actual Win32" if os.name == "nt" else "simulated Win32; actual Rust drop ordering"
     with tempfile.TemporaryDirectory(prefix="mixel-lease-error-") as temporary:

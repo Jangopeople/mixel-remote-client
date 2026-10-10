@@ -1,4 +1,5 @@
 $ErrorActionPreference = 'Stop'
+& (Join-Path $PSScriptRoot 'test-windows-customer-cleanup.ps1')
 $repository = Split-Path $PSScriptRoot -Parent
 foreach ($file in (Get-ChildItem $PSScriptRoot -Filter '*.ps1' -File)) {
   $tokens = $null
@@ -169,7 +170,7 @@ public static class MixelOwnedLeaseFixture {
   }
 }
 '@ }
-if ([MixelOrdinaryTokenFixture]::OwnsLease($PID)) { throw 'Fixture already owns the product event.' }
+if ([MixelOrdinaryTokenFixture]::OwnsLease($PID) -or [MixelOrdinaryTokenFixture]::LeasePresent()) { throw 'Fixture already has a product event owner.' }
 if ([MixelOrdinaryTokenFixture]::LeaseProbeError() -ne 2) { throw 'Read-only global lease observation did not prove the missing-event negative control.' }
 if ([MixelOrdinaryTokenFixture]::LeaseProbeErrorAsProcess($PID) -ne 2) { throw 'Actual-token read-only global lease observation did not prove the missing-event negative control.' }
 if ([MixelOrdinaryTokenFixture]::LeaseProbeErrorAsProcess(0) -ne -87) { throw 'Unavailable actual-token observation was not kept distinct from an absent event.' }
@@ -178,10 +179,11 @@ try {
   if ([MixelOrdinaryTokenFixture]::LeaseProbeError() -ne 0) { throw 'Read-only global lease observation did not prove the actual live-event positive control.' }
   if ([MixelOrdinaryTokenFixture]::LeaseProbeErrorAsProcess($PID) -ne 0) { throw 'Actual-token read-only global lease observation did not prove the actual live-event positive control.' }
   if (-not [MixelOrdinaryTokenFixture]::OwnsLease($PID)) { throw 'Actual SYNCHRONIZE event handle was not attributed to its process.' }
+  if (-not [MixelOrdinaryTokenFixture]::LeasePresent()) { throw 'Live global consent event was not observed.' }
 } finally {
   [void][MixelOwnedLeaseFixture]::CloseHandle($fixtureHandle)
 }
-if ([MixelOrdinaryTokenFixture]::OwnsLease($PID)) { throw 'Closed event handle remains attributed to its process.' }
+if ([MixelOrdinaryTokenFixture]::OwnsLease($PID) -or [MixelOrdinaryTokenFixture]::LeasePresent()) { throw 'Closed event remains owned or globally present.' }
 if ([MixelOrdinaryTokenFixture]::LeaseProbeError() -ne 2) { throw 'Read-only global lease observation retained a handle after the owned event was closed.' }
 Write-Host 'PASS: exact native runtime fixture observes the current PID owning the real SYNCHRONIZE-only global v2 event, then observes its handle release; unrelated event names fail closed.'
 $unownedIdentityRejected = $false
@@ -453,6 +455,11 @@ public static class MixelOwnedDesktopControl {
 
 foreach ($required in @(
     "`$initialHealth.attendedProof -cne ''",
+    '$initialOwnsLease',
+    "'verify absent prior foreground consent lease'",
+    'globalLeasePresent=$initialLeasePresent',
+    'Stop-OwnedCustomerProcesses',
+    '$process.WaitForExit(10000)',
     '[MixelOrdinaryTokenFixture]::Elevated($main.Id)',
     '[MixelOrdinaryTokenFixture]::OwnsLease($main.Id)',
     '$warmLaunch.WaitForExit(60000)',
