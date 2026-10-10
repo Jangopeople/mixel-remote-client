@@ -34,6 +34,7 @@ jobs:
         run: bash -n scripts/apply-branding.sh scripts/local/sign-and-publish-macos.sh
   windows-packaging:
     runs-on: windows-2022
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
       - name: Exercise Windows payload preparation and IPC response validation
@@ -48,11 +49,35 @@ jobs:
       - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: '1.75'
-      - name: Fetch pinned standalone Windows clipboard source
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.24.5'
+      - name: Fetch pinned complete Windows source
         shell: bash
         env:
           UPSTREAM_VERSION: ${{ steps.config.outputs.upstream_version }}
-        run: git clone --depth 1 --branch "$UPSTREAM_VERSION" https://github.com/rustdesk/rustdesk.git rustdesk
+        run: git clone --depth 1 --branch "$UPSTREAM_VERSION" --recurse-submodules https://github.com/rustdesk/rustdesk.git rustdesk
+      - name: Fetch exact pinned native AV1 API headers without codec compilation
+        shell: bash
+        run: |
+          git init native-aom-headers
+          git -C native-aom-headers config core.autocrlf false
+          git -C native-aom-headers fetch --depth 1 https://aomedia.googlesource.com/aom d6f30ae474dd6c358f26de0a0fc26a0d7340a84c
+          git -C native-aom-headers checkout --detach FETCH_HEAD
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          expected = {
+              'aomcx.h': '64f38ce6d05edf08fb9838d0ac3af352108e588e5f04d17139aaa93e08587e5f',
+              'aom_codec.h': 'ace046167692a42a258a9f017aa78dde723d2a40d00de70e4af207fc517de22c',
+          }
+          for name, digest in expected.items():
+              actual = hashlib.sha256((Path('native-aom-headers/aom') / name).read_bytes()).hexdigest()
+              if actual != digest:
+                  raise RuntimeError('Pinned native libaom API header differs: ' + name)
+          print('PASS: exact libaom headers match the pinned Windows producer API bytes; no codec library build required.')
+          PY
       - name: Qualify actual installed MSVC with a spaced Unicode temporary path
         shell: pwsh
         run: |
@@ -83,6 +108,12 @@ jobs:
               subprocess.run(['rustc', '--edition=2021', '--deny=warnings', str(source), '-o', str(binary)], check=True, timeout=60)
               subprocess.run([str(binary), 'mixel préflight'], check=True, timeout=10)
           PY
+      - name: Exercise complete Windows generated source, keep-awake and native branding
+        shell: bash
+        env:
+          RDREPO: ./rustdesk
+          AOM_INCLUDE_DIR: ${{ github.workspace }}/native-aom-headers
+        run: bash scripts/test-windows-generated-source.sh
       - uses: actions/upload-artifact@v6
         if: always()
         with:
