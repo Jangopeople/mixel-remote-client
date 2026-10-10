@@ -27,6 +27,7 @@ if (-not ('MixelOrdinaryTokenFixture' -as [type])) {
     public uint sessionId, integrityRid;
     public bool sessionKnown=true;
     public bool hasRestrictions, isAppContainer;
+    public uint hasRestrictionsReturnedLength, isAppContainerReturnedLength;
     public string authenticatedUsers, interactive, users;
     public string unavailableKind, unavailableFailure;
     public int? unavailableError, unavailableLength;
@@ -37,7 +38,9 @@ if (-not ('MixelOrdinaryTokenFixture' -as [type])) {
         ";tokenQueryReturnedLength=" + (unavailableLength.HasValue ? unavailableLength.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) : "none");
       return "tokenSessionId=" + sessionId.ToString(System.Globalization.CultureInfo.InvariantCulture) +
         ";hasRestrictions=" + (hasRestrictions ? "true" : "false") +
+        ";hasRestrictionsReturnedLength=" + hasRestrictionsReturnedLength.ToString(System.Globalization.CultureInfo.InvariantCulture) +
         ";isAppContainer=" + (isAppContainer ? "true" : "false") +
+        ";isAppContainerReturnedLength=" + isAppContainerReturnedLength.ToString(System.Globalization.CultureInfo.InvariantCulture) +
         ";integrityRid=" + integrityRid.ToString(System.Globalization.CultureInfo.InvariantCulture) +
         ";authenticatedUsers=" + authenticatedUsers + ";interactive=" + interactive + ";users=" + users;
     }
@@ -61,8 +64,24 @@ if (-not ('MixelOrdinaryTokenFixture' -as [type])) {
       return unchecked((uint)Marshal.ReadInt32(data));
     } finally { Marshal.FreeHGlobal(data); }
   }
-  static bool ObservedTokenBool(IntPtr token, ObservedTokenClass kind) {
-    return ObservedTokenDword(token,kind)!=0;
+  static bool ObservedTokenBoolValue(IntPtr data, int required, ObservedTokenClass kind) {
+    // Actual GetTokenInformation class21 returned a successful one-byte value in a99. Read only
+    // that byte for this measured class; all other classes retain exact DWORD.
+    if(kind==ObservedTokenClass.HasRestrictions && required==1) return Marshal.ReadByte(data)!=0;
+    if(required==4) return Marshal.ReadInt32(data)!=0;
+    throw new ObservedTokenQueryFailure(kind,"returned-size",null,required);
+  }
+  static bool ObservedTokenBool(IntPtr token, ObservedTokenClass kind, out uint returnedLength) {
+    IntPtr data=Marshal.AllocHGlobal(4);
+    try {
+      int required;
+      bool success=GetTokenInformation(token,(int)kind,data,4,out required);
+      int error=Marshal.GetLastWin32Error();
+      if(!success) throw new ObservedTokenQueryFailure(kind,"api-error",error,required);
+      bool value=ObservedTokenBoolValue(data,required,kind);
+      returnedLength=checked((uint)required);
+      return value;
+    } finally { Marshal.FreeHGlobal(data); }
   }
   static IntPtr ObservedTokenBuffer(IntPtr token, ObservedTokenClass kind, out int length) {
     bool initial=GetTokenInformation(token,(int)kind,IntPtr.Zero,0,out length);
@@ -123,8 +142,8 @@ if (-not ('MixelOrdinaryTokenFixture' -as [type])) {
     var kind=ObservedTokenClass.SessionId;
     try {
       facts.sessionId=ObservedTokenDword(token,kind); facts.sessionKnown=true;
-      kind=ObservedTokenClass.HasRestrictions; facts.hasRestrictions=ObservedTokenBool(token,kind);
-      kind=ObservedTokenClass.IsAppContainer; facts.isAppContainer=ObservedTokenBool(token,kind);
+      kind=ObservedTokenClass.HasRestrictions; facts.hasRestrictions=ObservedTokenBool(token,kind,out facts.hasRestrictionsReturnedLength);
+      kind=ObservedTokenClass.IsAppContainer; facts.isAppContainer=ObservedTokenBool(token,kind,out facts.isAppContainerReturnedLength);
       kind=ObservedTokenClass.IntegrityLevel; facts.integrityRid=ObservedIntegrityRid(token);
       kind=ObservedTokenClass.Groups; ObservedMemberships(token,facts);
     } catch(ObservedTokenQueryFailure failure) {
@@ -259,13 +278,80 @@ function Assert-StandardLeaseSafeResult($Record, [uint32]$ExpectedPid) {
   }
 }
 
+function Read-StandardUnnamedEventResult([uint32]$ExpectedPid) {
+  $path = Join-Path $fixtureRoot 'fixture-unnamed-result.json'
+  if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw 'Owned unnamed event observation result is missing.' }
+  $text = [IO.File]::ReadAllText($path)
+  if ($text.Length -gt 4096) { throw 'Owned unnamed event observation exceeds its bound.' }
+  $record = $text | ConvertFrom-Json
+  $names = @($record.PSObject.Properties.Name | Sort-Object)
+  $expected = @('pid','phase','created','createError','closed','closeError','sourceStatusAfter','rawOpenErrorAfter','attestationAfter','requiresClickAfter') | Sort-Object
+  $pidIsNumber = $record.pid -is [int] -or $record.pid -is [long] -or $record.pid -is [uint32] -or $record.pid -is [uint64]
+  if (($names -join ',') -cne ($expected -join ',') -or -not $pidIsNumber -or
+      $ExpectedPid -eq 0 -or $record.pid -ne $ExpectedPid -or
+      $record.phase -isnot [string] -or $record.phase -cnotin @('sddl','create','close') -or
+      $record.created -isnot [bool] -or $record.closed -isnot [bool]) {
+    throw 'Owned unnamed event result has invalid schema, types or retained PID.'
+  }
+  foreach ($field in @('createError','closeError')) {
+    $value = $record.$field
+    $isNumber = $value -is [int] -or $value -is [long] -or $value -is [uint32] -or $value -is [uint64]
+    if (-not $isNumber -or $value -lt 0 -or $value -gt [uint32]::MaxValue) {
+      throw 'Owned unnamed event native error is not a bounded integer.'
+    }
+  }
+  if ((-not $record.created -and ($record.phase -ceq 'close' -or $record.closed -or $record.closeError -ne 0)) -or
+      ($record.created -and ($record.phase -cne 'close' -or $record.createError -ne 0 -or
+          ($record.closed -and $record.closeError -ne 0)))) {
+    throw 'Owned unnamed event result contains inconsistent create/close stage fields.'
+  }
+  $after = [pscustomobject]@{pid=$record.pid;sourceStatus=$record.sourceStatusAfter;rawOpenError=$record.rawOpenErrorAfter;attestation=$record.attestationAfter;requiresClick=$record.requiresClickAfter;ownerFailed=$false}
+  Assert-StandardLeaseSafeResult $after $ExpectedPid
+  if (-not $record.sourceStatusAfter.StartsWith('ownerFailed=false;ownerError=none;') -or
+      -not $record.sourceStatusAfter.EndsWith(';memoryActive=false') -or
+      $record.sourceStatusAfter.Contains(';kernel=active;') -or $record.attestationAfter -ceq 'attended-runtime-v2') {
+    throw 'Read-only unnamed observation unexpectedly armed memory or acquired a named owner lease.'
+  }
+  return $record
+}
+
+function Assert-StandardUnnamedEventControl($Record, $Before) {
+  # The safe observational reader preserves an API failure's literal zero code.
+  # Refuse that unknown functional outcome after it has been printed.
+  if (-not $Record.created -and $Record.createError -eq 0) {
+    throw 'Owned unnamed event API failed without a native error code; functional outcome is unknown.'
+  }
+  if ($Record.created -and -not $Record.closed) {
+    if ($Record.closeError -eq 0) {
+      throw 'Exact owned unnamed event handle close failed without a native error code; functional outcome is unknown.'
+    }
+    throw 'Exact owned unnamed event handle did not close successfully; owned process cleanup is required.'
+  }
+  if ($Record.sourceStatusAfter -cne $Before.sourceStatus -or
+      $Record.rawOpenErrorAfter -ne $Before.rawOpenError -or
+      $Record.attestationAfter -cne $Before.attestation -or
+      $Record.requiresClickAfter -ne $Before.requiresClick) {
+    throw 'Isolated unnamed event observation changed the exact untouched named guard classification.'
+  }
+}
+
+
 function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner')][string]$Mode, [string]$ExpectedStatus, [int]$ExpectedError,
     [string]$ExpectedProof, [bool]$ExpectedRequired, [bool]$ExpectedOwnerFailed, [switch]$KeepAlive,
     [switch]$ObserveOnly, [string]$ObservationLabel,
     [ValidateSet('with-logon','with-token')][string]$Launcher = 'with-logon',
-    [ValidateSet('console','windows')][string]$Subsystem = 'console') {
+    [ValidateSet('console','windows')][string]$Subsystem = 'console', [switch]$UnnamedControl) {
   $expectedExecutable = if ($Subsystem -ceq 'windows') { 'lease-standard-gui.exe' } else { 'lease-standard.exe' }
   if ([IO.Path]::GetFileName($executable) -cne $expectedExecutable) { throw 'Owned source control executable does not match its declared subsystem.' }
+  $unnamedRequest = Join-Path $fixtureRoot 'fixture-unnamed.request'
+  $unnamedResult = Join-Path $fixtureRoot 'fixture-unnamed-result.json'
+  if (Test-Path -LiteralPath $unnamedRequest) { Remove-Item -LiteralPath $unnamedRequest }
+  if (Test-Path -LiteralPath $unnamedResult) { Remove-Item -LiteralPath $unnamedResult }
+  if ($UnnamedControl) {
+    if (-not $ObserveOnly -or $Mode -cne 'probe' -or $KeepAlive -or
+        $ObservationLabel -cne "global-$Subsystem-initial-untouched-absent") { throw 'Unnamed event observation is limited to the initial untouched subsystem probe.' }
+    [IO.File]::WriteAllText($unnamedRequest, 'observe', [Text.UTF8Encoding]::new($false))
+  }
   if (Test-Path $resultPath) { Remove-Item -LiteralPath $resultPath }
   [IO.File]::WriteAllText((Join-Path $fixtureRoot 'fixture-mode.txt'), $Mode, [Text.UTF8Encoding]::new($false))
   if ($Launcher -ceq 'with-token') {
@@ -305,6 +391,16 @@ function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner'
     } else {
       Write-Host "FIXTURE: actual source lease under non-elevated same-session token; mode=$Mode; $($record.sourceStatus); rawOpenError=$($record.rawOpenError); guardEmpty=$($record.attestation -ceq ''); guardConfirmed=$($record.attestation -ceq 'attended-runtime-v2'); requiresClick=$($record.requiresClick)."
     }
+    if ($UnnamedControl) {
+      $deadline = [DateTime]::UtcNow.AddSeconds(10)
+      while (-not (Test-Path -LiteralPath $unnamedResult -PathType Leaf) -and [DateTime]::UtcNow -lt $deadline) {
+        if ([MixelOrdinaryTokenFixture]::StartedStatus($controlPid).StartsWith('exited:')) { break }
+        Start-Sleep -Milliseconds 50
+      }
+      $unnamed = Read-StandardUnnamedEventResult $controlPid
+      Write-Host "OBSERVED: standard-token unnamed event control; launcher=$Launcher; subsystem=$Subsystem; controlPid=$controlPid; ordinarySessionId=$actualSession; ownedSidMatched=$sidMatches; elevated=$elevated; phase=$($unnamed.phase); created=$($unnamed.created); createError=$($unnamed.createError); closed=$($unnamed.closed); closeError=$($unnamed.closeError); sourceStatusAfter=$($unnamed.sourceStatusAfter); rawOpenErrorAfter=$($unnamed.rawOpenErrorAfter); guardEmptyAfter=$($unnamed.attestationAfter -ceq ''); guardConfirmedAfter=$($unnamed.attestationAfter -ceq 'attended-runtime-v2'); requiresClickAfter=$($unnamed.requiresClickAfter)."
+      Assert-StandardUnnamedEventControl $unnamed $record
+    }
     if (-not $KeepAlive) {
       [IO.File]::WriteAllText((Join-Path $fixtureRoot "fixture-release-$controlPid"), 'verified')
       $deadline = [DateTime]::UtcNow.AddSeconds(10)
@@ -335,7 +431,7 @@ function Invoke-StandardLeaseSubsystemObservations([ValidateSet('with-logon','wi
       python (Join-Path $PSScriptRoot 'test-support-lease.py') --export-standard-windows-fixture $script:fixtureRoot --event $endpoint --export-standard-windows-subsystem-pair
       if ($LASTEXITCODE -ne 0) { throw 'Exact source console/Windows subsystem pair compilation failed.' }
       try {
-        [void](Invoke-StandardLeaseControl -Mode probe -Launcher $Launcher -Subsystem $subsystem -ObserveOnly -ObservationLabel "global-$subsystem-initial-untouched-absent")
+        [void](Invoke-StandardLeaseControl -Mode probe -Launcher $Launcher -Subsystem $subsystem -ObserveOnly -ObservationLabel "global-$subsystem-initial-untouched-absent" -UnnamedControl)
         [void](Invoke-StandardLeaseControl -Mode owner -Launcher $Launcher -Subsystem $subsystem -KeepAlive -ObserveOnly -ObservationLabel "global-$subsystem-explicit-source-owner")
         [void](Invoke-StandardLeaseControl -Mode probe -Launcher $Launcher -Subsystem $subsystem -ObserveOnly -ObservationLabel "global-$subsystem-fresh-probe-after-owner-request")
         [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses()

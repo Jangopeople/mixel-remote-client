@@ -246,6 +246,23 @@ fn main() {
             std::process::id(), status, raw_error, proof, required, failed);
         std::fs::write(directory.join("fixture-result.new"), result).unwrap();
         std::fs::rename(directory.join("fixture-result.new"), directory.join("fixture-result.json")).unwrap();
+        // This test-only request is absent from the strict normal baseline.
+        // The result never acquires/renews an attended lease or exports ready.
+        let unnamed_request = directory.join("fixture-unnamed.request");
+        if unnamed_request.is_file() {
+            assert_eq!(mode, "probe", "Unnamed observation must not run as a lease owner");
+            assert_eq!(std::fs::read_to_string(&unnamed_request).unwrap(), "observe");
+            let (phase, created, create_error, closed, close_error) = mixel_support_lease::fixture_unnamed_create();
+            let after_status = support_invite_lease_status();
+            let after_error = mixel_support_lease::fixture_raw_open_error();
+            let after_proof = support_invite_attestation();
+            let after_required = support_invite_requires_click();
+            let unnamed_result = format!(
+                "{{\"pid\":{},\"phase\":\"{}\",\"created\":{},\"createError\":{},\"closed\":{},\"closeError\":{},\"sourceStatusAfter\":\"{}\",\"rawOpenErrorAfter\":{},\"attestationAfter\":\"{}\",\"requiresClickAfter\":{}}}\n",
+                std::process::id(), phase, created, create_error, closed, close_error, after_status, after_error, after_proof, after_required);
+            std::fs::write(directory.join("fixture-unnamed-result.new"), unnamed_result).unwrap();
+            std::fs::rename(directory.join("fixture-unnamed-result.new"), directory.join("fixture-unnamed-result.json")).unwrap();
+        }
         if mode == "owner" {
             std::thread::sleep(std::time::Duration::from_secs(120));
         } else {
@@ -281,8 +298,40 @@ def isolated_source(original, directory, prefix, event):
     return source.replace(bridge_marker, WINDOWS_BRIDGE + bridge_marker, 1)
 
 
+def standard_unnamed_bridge(original):
+    # Copy the current Windows create implementation; no alternate SDDL,
+    # SECURITY_ATTRIBUTES layout, privilege, event access or owner state.
+    first = "    #[cfg(windows)]\n    fn create() -> std::io::Result<Lease> {"
+    last = "\n    #[cfg(windows)]\n    fn current(_lease: &Lease) -> std::io::Result<bool> {"
+    assert original.count(first) == 1 and original.count(last) == 1, "Exact Windows create extraction boundary changed"
+    start = original.index(first)
+    end = original.index(last, start)
+    body = original[start:end]
+    replacements = (
+        ("fn create() -> std::io::Result<Lease>",
+         "pub(super) fn fixture_unnamed_create() -> (&'static str, bool, u32, bool, u32)"),
+        ("return Err(std::io::Error::last_os_error());",
+         'return ("sddl", false, unsafe { GetLastError() }, false, 0);'),
+        ("        let name = wide(EVENT);\n        let handle = unsafe { CreateEventExW(&attributes, name.as_ptr(), 0, 0x00100000) };",
+         "        let handle = unsafe { CreateEventExW(&attributes, std::ptr::null(), 0, 0x00100000) };"),
+        ("        if let Some(error) = error {\n            return Err(std::io::Error::from_raw_os_error(error as i32));\n        }\n        Ok(Lease(handle as usize))",
+         '        if let Some(error) = error {\n            return ("create", false, error, false, 0);\n        }\n'
+         '        // Only a non-null handle returned by this exact call is closed.\n'
+         '        let closed = unsafe { CloseHandle(handle) } != 0;\n'
+         '        let close_error = if closed { 0 } else { unsafe { GetLastError() } };\n'
+         '        ("close", true, 0, closed, close_error)'),
+    )
+    for old, new in replacements:
+        assert body.count(old) == 1, "Exact Windows create discriminator boundary changed"
+        body = body.replace(old, new, 1)
+    return body
+
+
 def standard_windows_fixture_body(original, directory, prefix, event):
     source = isolated_source(original, directory, prefix, event)
+    marker = "\n}\n\npub fn hold_support_invite_attended_lease()"
+    assert source.count(marker) == 1, "Standard Windows bridge extraction boundary changed"
+    source = source.replace(marker, "\n" + standard_unnamed_bridge(original) + marker, 1)
     return source + HARNESS.replace("fn main() {", "fn lease_main() {", 1) + STANDARD_WINDOWS_HARNESS
 
 
