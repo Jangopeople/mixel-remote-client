@@ -113,6 +113,8 @@ foreach ($required in @(
     '$main.SessionId -ne (Get-Process -Id $PID).SessionId',
     '$ordinaryProfileRoot = [MixelOrdinaryTokenFixture]::ProfilePath($main.Id)',
     "Join-Path `$ordinaryProfileRoot 'AppData/Roaming/Mixel-Remote'",
+    "('mixel-ordinary-client-' +",
+    "Write-OwnedWindowDiagnostic `$main.Id 'initial ordinary startup'",
     'if ($ownedSid) { try { Remove-LocalUser -SID',
     '$primaryFailure = $_',
     'if ($primaryFailure) { Write-Host',

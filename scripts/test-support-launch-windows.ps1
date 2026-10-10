@@ -247,6 +247,38 @@ function Find-MainWindow([int]$ProcessId) {
   return $found.ToArray()
 }
 
+function Write-OwnedWindowDiagnostic([int]$ProcessId, [string]$Phase) {
+  try {
+    $process = Get-Process -Id $ProcessId -ErrorAction Stop
+    $windows = [System.Collections.Generic.List[object]]::new()
+    [MixelSupportWindowTest]::EnumWindows({
+      param($window, $parameter)
+      [uint32]$ownerId = 0
+      [void][MixelSupportWindowTest]::GetWindowThreadProcessId($window, [ref]$ownerId)
+      if ($ownerId -eq $ProcessId) {
+        $title = [System.Text.StringBuilder]::new(512)
+        [void][MixelSupportWindowTest]::GetWindowText($window, $title, 512)
+        $windows.Add([pscustomobject]@{
+          hwnd = $window.ToInt64(); title = $title.ToString()
+          visible = [MixelSupportWindowTest]::IsWindowVisible($window)
+          iconic = [MixelSupportWindowTest]::IsIconic($window)
+        })
+      }
+      return $true
+    }, [IntPtr]::Zero) | Out-Null
+    $state = [pscustomobject]@{
+      phase = $Phase; foregroundPid = $ProcessId; executable = $process.Path
+      exited = $process.HasExited; sessionId = $process.SessionId
+      elevated = [MixelOrdinaryTokenFixture]::Elevated($ProcessId)
+      runnerDesktop = [MixelOrdinaryTokenFixture]::CurrentDesktopPath()
+      windows = $windows.ToArray()
+    }
+    Write-Host ('FIXTURE: actual owned process/window snapshot: ' + ($state | ConvertTo-Json -Depth 4 -Compress))
+  } catch {
+    Write-Host "FIXTURE: owned process/window snapshot unavailable for PID $ProcessId; errorId=$($_.FullyQualifiedErrorId)."
+  }
+}
+
 function Wait-VisibleMain([int]$ProcessId, [string]$Scenario) {
   $deadline = [DateTime]::UtcNow.AddSeconds(60)
   while ([DateTime]::UtcNow -lt $deadline) {
@@ -298,7 +330,10 @@ try {
     if (-not $QuickSupport -or -not $ExpectedPayload -or (-not $Portable -and -not $CompiledQuickSupportDiagnostic)) {
       throw 'Ordinary-to-QuickSupport proof requires the actual portable QS launcher and exact signed payload, or explicit compiled-only diagnosis.'
     }
-    $ordinaryRoot = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) ('mixel-ordinary-qs-' + [Guid]::NewGuid().ToString('N'))
+    # Pinned older clients detect '-qs-' anywhere in argv[0], including parent
+    # directories. Use a neutral path so retained signed payloads can prove a
+    # genuinely ordinary unguarded startup before the actual QS handoff.
+    $ordinaryRoot = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) ('mixel-ordinary-client-' + [Guid]::NewGuid().ToString('N'))
     $fixtureStage = 'copy signed ordinary payload'
     New-Item -ItemType Directory $ordinaryRoot | Out-Null
     Copy-Item (Join-Path (Resolve-Path $ExpectedPayload).Path '*') $ordinaryRoot -Recurse
@@ -337,6 +372,7 @@ try {
     if ($main.SessionId -ne (Get-Process -Id $PID).SessionId) { throw 'Ordinary GUI was launched in a different session from the actual runner desktop.' }
     $ordinaryProfileRoot = [MixelOrdinaryTokenFixture]::ProfilePath($main.Id)
     Write-Host "FIXTURE: actual ordinary process is non-elevated in caller session; foregroundPid=$($main.Id), ordinarySessionId=$($main.SessionId)."
+    Write-OwnedWindowDiagnostic $main.Id 'initial ordinary startup'
   } else {
     $main = Start-CustomerApp
   }
@@ -432,6 +468,7 @@ try {
   # Report fixture attribution without copying the memory-only password or
   # arbitrary app arguments. Rethrow the original error after owned cleanup.
   Write-Host "FAIL: owned runtime stage '$fixtureStage'; errorId=$($_.FullyQualifiedErrorId); exceptionType=$($_.Exception.GetType().FullName)."
+  if ($main -and $OrdinaryThenQuickSupport) { Write-OwnedWindowDiagnostic $main.Id 'failed ordinary-to-QS scenario' }
   throw
 } finally {
   # Only stop processes newly started from this runner-owned build directory.
