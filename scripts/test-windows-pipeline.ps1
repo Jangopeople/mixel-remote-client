@@ -172,6 +172,7 @@ public static class MixelOwnedLeaseFixture {
 if ([MixelOrdinaryTokenFixture]::OwnsLease($PID)) { throw 'Fixture already owns the product event.' }
 if ([MixelOrdinaryTokenFixture]::LeaseProbeError() -ne 2) { throw 'Read-only global lease observation did not prove the missing-event negative control.' }
 if ([MixelOrdinaryTokenFixture]::LeaseProbeErrorAsProcess($PID) -ne 2) { throw 'Actual-token read-only global lease observation did not prove the missing-event negative control.' }
+if ([MixelOrdinaryTokenFixture]::LeaseProbeErrorAsProcess(0) -ne -87) { throw 'Unavailable actual-token observation was not kept distinct from an absent event.' }
 $fixtureHandle = [MixelOwnedLeaseFixture]::Create()
 try {
   if ([MixelOrdinaryTokenFixture]::LeaseProbeError() -ne 0) { throw 'Read-only global lease observation did not prove the actual live-event positive control.' }

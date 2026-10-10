@@ -352,9 +352,19 @@ public static class MixelOrdinaryTokenFixture {
   public static int LeaseProbeErrorAsProcess(int pid) {
     IntPtr process = OpenProcess(0x1000, false, pid), token = IntPtr.Zero;
     bool impersonated = false;
-    if (process == IntPtr.Zero) throw new Win32Exception();
+    // Negative results mean this optional token observation was unavailable;
+    // they are never treated as an absent event or an unguarded application.
+    if (process == IntPtr.Zero) {
+      int error = Marshal.GetLastWin32Error();
+      if (error == 0) throw new InvalidOperationException("Missing process observation has no native error");
+      return -error;
+    }
     try {
-      if (!OpenProcessToken(process, 10, out token) || !ImpersonateLoggedOnUser(token)) throw new Win32Exception();
+      if (!OpenProcessToken(process, 10, out token) || !ImpersonateLoggedOnUser(token)) {
+        int error = Marshal.GetLastWin32Error();
+        if (error == 0) throw new InvalidOperationException("Unavailable token observation has no native error");
+        return -error;
+      }
       impersonated = true;
       return LeaseProbeError();
     } finally {
@@ -1364,7 +1374,9 @@ try {
     $baselineIncomingPid = $initialHealth.incomingPid
     $initialOwnsLease = [MixelOrdinaryTokenFixture]::OwnsLease($main.Id)
     $initialGuardEmpty = $initialHealth.attendedProof -ceq ''
-    Write-Host "FIXTURE: read-only ordinary baseline: guardEmpty=$initialGuardEmpty, guardV2=$($initialHealth.attendedReady), foregroundOwnsLease=$initialOwnsLease, runnerLeaseProbeWin32Error=$([MixelOrdinaryTokenFixture]::LeaseProbeError()), actualOrdinaryTokenLeaseProbeWin32Error=$([MixelOrdinaryTokenFixture]::LeaseProbeErrorAsProcess($main.Id))."
+    Write-Host "FIXTURE: read-only ordinary baseline: guardEmpty=$initialGuardEmpty, guardV2=$($initialHealth.attendedReady), foregroundOwnsLease=$initialOwnsLease, runnerLeaseProbeWin32Error=$([MixelOrdinaryTokenFixture]::LeaseProbeError())."
+    $ordinaryTokenLeaseProbe = [MixelOrdinaryTokenFixture]::LeaseProbeErrorAsProcess($main.Id)
+    Write-Host "FIXTURE: optional actual-token event observation: nativeResult=$ordinaryTokenLeaseProbe (negative means unavailable token access, never an absent event)."
     if ($initialHealth.attendedProof -cne '' -or $initialOwnsLease) {
       throw 'Ordinary-to-QS positive control is already guarded; refusing a manufactured transition proof.'
     }
