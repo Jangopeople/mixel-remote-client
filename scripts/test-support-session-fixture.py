@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """Focused ownership and failure-path checks for the HTTPS fixture runner."""
 import importlib.util
+import ast
+import copy
+import hashlib
 import io
+import inspect
+import itertools
 import json
 import os
 from pathlib import Path
@@ -9,6 +14,8 @@ import signal
 import subprocess
 import sys
 import tempfile
+import textwrap
+import types
 import unittest
 from unittest.mock import patch
 
@@ -240,6 +247,207 @@ class FixtureTests(unittest.TestCase):
             self.assertIs(lifecycle["mixed_transports"], True)
 
 
+class SavedPasswordProofTests(unittest.TestCase):
+    def test_saved_password_mode_requires_native_isolation_before_any_peer_is_created(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            deb = Path(temporary) / "synthetic.deb"
+            deb.write_bytes(b"synthetic")
+            for extra in ([], ["--require-native"], ["--require-native", "--native-blocked"]):
+                with self.subTest(extra=extra), patch.object(sys, "argv", [str(desktop.__file__), "--deb", str(deb), "--proofs", str(Path(temporary) / "proofs"), "--saved-password-consent", *extra]), \
+                        patch.object(desktop.platform, "machine", return_value="x86_64"), patch.object(desktop, "command") as commands:
+                    with self.assertRaisesRegex(SystemExit, "requires native amd64"):
+                        desktop.main()
+                    commands.assert_not_called()
+            with patch.object(sys, "argv", [str(PATH), "--deb", str(deb), "--proofs", str(Path(temporary) / "proofs"), "--saved-password-consent"]), \
+                    patch.object(fixture, "execute") as commands:
+                with self.assertRaisesRegex(SystemExit, "requires native blocked"):
+                    fixture.main()
+                commands.assert_not_called()
+
+    def test_exact_collected_linux_bytes_are_bound_to_application_source_independent_of_qa(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            deb = root / "artifacts/linux/client.deb"
+            deb.parent.mkdir(parents=True)
+            deb.write_bytes(b"owned synthetic artifact provenance control")
+            digest = hashlib.sha256(deb.read_bytes()).hexdigest()
+            source, run_id = "7" * 40, "123456789"
+            url = "https://github.com/Jangopeople/mixel-remote-client/actions/runs/" + run_id
+            metadata = {"id": int(run_id), "head_sha": source, "event": "workflow_dispatch", "html_url": url,
+                        "status": "completed", "conclusion": "failure"}
+            provenance = {"repository": "Jangopeople/mixel-remote-client", "build_run_id": int(run_id), "build_url": url,
+                          "event": "workflow_dispatch", "head_sha": source, "source_commit": source,
+                          "application_source_baseline": source, "collected_artifacts": {"linux": {
+                              "artifact_id": 123, "artifact_digest": "sha256:" + "a" * 64,
+                              "files_sha256": {"artifacts/linux/client.deb": digest}}}}
+            def write(meta, prov):
+                (root / "run-metadata.json").write_text(json.dumps(meta))
+                (root / "artifact-provenance.json").write_text(json.dumps(prov))
+            write(metadata, provenance)
+            evidence = desktop.verify_application_artifact(root, deb, run_id, source, digest)
+            self.assertEqual(evidence["application_source_baseline"], source)
+            self.assertEqual(evidence["application_run_conclusion"], "failure")
+            self.assertEqual(evidence["artifact_sha256"], digest)
+            negatives = [
+                ("metadata run", ["metadata", "id"], 1),
+                ("metadata source", ["metadata", "head_sha"], "8" * 40),
+                ("metadata URL", ["metadata", "html_url"], url + "0"),
+                ("metadata event", ["metadata", "event"], "push"),
+                ("repository", ["provenance", "repository"], "other/repository"),
+                ("artifact run", ["provenance", "build_run_id"], 1),
+                ("artifact URL", ["provenance", "build_url"], url + "0"),
+                ("artifact event", ["provenance", "event"], "push"),
+                *[(field, ["provenance", field], "8" * 40) for field in ("head_sha", "source_commit", "application_source_baseline")],
+                ("artifact id", ["provenance", "collected_artifacts", "linux", "artifact_id"], 0),
+                ("boolean artifact id", ["provenance", "collected_artifacts", "linux", "artifact_id"], True),
+                ("archive digest", ["provenance", "collected_artifacts", "linux", "artifact_digest"], "sha256:invalid"),
+                ("old mapped bytes", ["provenance", "collected_artifacts", "linux", "files_sha256", "artifacts/linux/client.deb"], "0" * 64),
+            ]
+            for label, keys, value in negatives:
+                with self.subTest(label=label):
+                    documents = {"metadata": copy.deepcopy(metadata), "provenance": copy.deepcopy(provenance)}
+                    item = documents
+                    for key in keys[:-1]:
+                        item = item[key]
+                    item[keys[-1]] = value
+                    write(documents["metadata"], documents["provenance"])
+                    with self.assertRaises((AssertionError, ValueError)):
+                        desktop.verify_application_artifact(root, deb, run_id, source, digest)
+            write(metadata, provenance)
+            deb.write_bytes(b"different actual bytes")
+            with self.assertRaisesRegex(AssertionError, "Actual DEB bytes"):
+                desktop.verify_application_artifact(root, deb, run_id, source, digest)
+            outside = root / "outside.deb"
+            outside.write_bytes(b"synthetic")
+            with self.assertRaisesRegex(ValueError, "collected Linux artifact"):
+                desktop.verify_application_artifact(root, outside, run_id, source, digest)
+            for bad_run, bad_source, bad_hash in (("0123", source, digest), (run_id, source[:7], digest), (run_id, source, digest[:7]), (None, source, digest)):
+                with self.assertRaisesRegex(ValueError, "explicit run"):
+                    desktop.verify_application_artifact(root, deb, bad_run, bad_source, bad_hash)
+
+    def test_password_mode_starts_ordinary_guis_and_preserves_exact_host_preferences(self):
+        session = desktop.PasswordSession(Path("proofs"), Path("client.deb"), False, True)
+        with patch.object(session, "launch", return_value=123) as launch, patch.object(session, "windows", return_value=["owned"]):
+            for role in ("host", "controller"):
+                session.start_gui(role)
+            self.assertEqual(launch.call_args_list, [unittest.mock.call("host", []), unittest.mock.call("controller", [])])
+        with tempfile.TemporaryDirectory() as temporary:
+            config = Path(temporary) / "Mixel-Remote2.toml"
+            config.write_text('[options]\nkey = "public-synthetic-pin"\n')
+            commands = []
+            def run(_role, arguments, **_kwargs):
+                commands.append(arguments)
+                if arguments[:2] == ["python3", "-c"]:
+                    exec(compile(arguments[2].replace("/home/guest/.config/mixel-remote/Mixel-Remote2.toml", str(config)), "actual preference seed", "exec"), {})
+            with patch.object(session, "run", side_effect=run):
+                session.firewall("host")
+            self.assertIn('approve-mode = "password"\nverification-method = "use-permanent-password"\n', config.read_text())
+            self.assertIn('key = "public-synthetic-pin"', config.read_text())
+            self.assertEqual([item[1] for item in commands if item[0] == "iptables"], ["-A", "-A"])
+
+    def exercise_flow(self, failure=None):
+        with tempfile.TemporaryDirectory() as temporary:
+            session = desktop.PasswordSession(Path(temporary), Path("client.deb"), False, True)
+            session.ids, session.gui_pid = {"host": "synthetic-id"}, {"host": 100}
+            saved = {"approve-mode": "password", "verification-method": "use-permanent-password", "key": "public-test-pin"}
+            state = {"guard": False, "authorized": True, "requested": False, "password": None}
+            manifest, events = {}, []
+            def run(role, arguments, **kwargs):
+                self.assertEqual((role, arguments[:2], kwargs), ("host", [desktop.EXE, "--password"], {"user": "root"}))
+                state["password"] = arguments[2]
+                return subprocess.CompletedProcess(arguments, 0, "Done!", "")
+            def launch(role, arguments):
+                events.append(("launch", role, arguments[:2]))
+                if role == "host":
+                    self.assertEqual(arguments, [desktop.URI])
+                    state["guard"] = True
+                    return 200
+                self.assertEqual(arguments, ["--connect", "synthetic-id", "--password", state["password"]])
+                state["authorized"] = not state["guard"]
+            def query(_role, kind, content=None):
+                if kind == "Options":
+                    return dict(saved)
+                if kind == "VideoConnCount":
+                    return 1 if state["authorized"] or (failure == "password bypass" and state["requested"]) else 0
+                if content[0] == "permanent-password":
+                    return [content[0], state["password"]]
+                return [content[0], "attended-runtime-v2" if state["guard"] else ""]
+            def pending(label):
+                events.append(("pending", label))
+                state["requested"] = True
+            def accept(label, already_requested):
+                self.assertTrue(already_requested)
+                events.append(("accept", label))
+                state["authorized"] = True
+            def fresh(label):
+                events.append(("video", label))
+                if failure == "stale accepted video" and "accepted" in label:
+                    raise RuntimeError("unchanged strict video gate rejected")
+            clock = itertools.count(100.0, .25)
+            with patch.object(session, "run", side_effect=run), patch.object(session, "launch", side_effect=launch), \
+                    patch.object(session, "query", side_effect=query), patch.object(session, "windows", return_value=["original-window"]), \
+                    patch.object(session, "activate"), patch.object(session, "gui"), patch.object(session, "screenshot"), \
+                    patch.object(session, "fresh_video", side_effect=fresh), patch.object(session, "disconnect"), \
+                    patch.object(session, "stop_controller_gui"), patch.object(session, "process_snapshot", return_value={"exit_statuses": [{"pid": 200, "wait_status": 0}]}), \
+                    patch.object(desktop.Session, "health", return_value=True), patch.object(session, "pending_accept", side_effect=pending), \
+                    patch.object(session, "connect", side_effect=accept), patch.object(session, "active_https_proof") as tls, \
+                    patch.object(desktop.time, "monotonic", side_effect=lambda: next(clock)), patch.object(desktop.time, "sleep"), \
+                    patch.object(sys, "stdout", io.StringIO()):
+                if failure:
+                    with self.assertRaises((AssertionError, RuntimeError)):
+                        session.saved_password_consent(manifest)
+                    self.assertNotIn("actual_accept_then_authorized_video", manifest)
+                    tls.assert_not_called()
+                else:
+                    session.saved_password_consent(manifest)
+                    self.assertGreaterEqual(manifest["attended_auth0_observations"][-1]["seconds"], 12)
+                    self.assertTrue(manifest["valid_password_baseline_autoauthorized_without_accept"])
+                    self.assertTrue(manifest["saved_preferences_and_password_preserved"])
+                    self.assertTrue(manifest["warm_uri_handoff"]["same_original_gui_kernel_lease_verified_after_sender_exit"])
+                    self.assertLess(events.index(("video", "valid-password-baseline-video")), events.index(("launch", "host", [desktop.URI])))
+                    self.assertLess(events.index(("pending", "valid-password-attended-after-wait")), events.index(("accept", "valid-password-attended")))
+                    tls.assert_called_once_with("valid-password-attended")
+            return events
+
+    def test_exact_flow_keeps_positive_password_control_before_guard_and_accept_after_twelve_seconds(self):
+        self.exercise_flow()
+
+    def test_password_bypass_and_stale_video_remain_failures_before_success_flags(self):
+        bypass = self.exercise_flow("password bypass")
+        self.assertFalse(any(event[0] == "accept" for event in bypass))
+        self.exercise_flow("stale accepted video")
+
+    def test_wrapper_forwards_exact_native_password_and_provenance_contract_and_cleans_on_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            deb = root / "client.deb"
+            deb.write_bytes(b"synthetic")
+            output = root / "proofs"
+            arguments = [str(PATH), "--deb", str(deb), "--proofs", str(output), "--require-native", "--saved-password-consent",
+                         "--artifact-run-id", "123", "--artifact-root", str(root), "--artifact-source-commit", "7" * 40, "--expected-sha256", "0" * 64]
+            def run(command, **_kwargs):
+                if "--keep-fixture" in command:
+                    directory = Path(command[command.index("--keep-fixture") + 1])
+                    directory.mkdir()
+                    (directory / "manifest.json").write_text(json.dumps({**MANIFEST, "fixture_address": "192.168.1.2",
+                        "public_pin_path": str(directory / "pin"), "public_test_ca_path": str(directory / "ca.crt")}))
+                elif command[0] == "docker":
+                    return subprocess.CompletedProcess(command, 0, json.dumps([{"Config": {"Labels": fixture.LABEL}, "Labels": fixture.LABEL}]), "")
+                else:
+                    for flag in ("--require-native", "--saved-password-consent", "--native-blocked"):
+                        self.assertIn(flag, command)
+                    for flag, value in (("--artifact-run-id", "123"), ("--artifact-root", str(root)),
+                                        ("--artifact-source-commit", "7" * 40), ("--expected-sha256", "0" * 64)):
+                        self.assertEqual(command[command.index(flag) + 1], value)
+                    raise RuntimeError("intentional child proof failure")
+                return subprocess.CompletedProcess(command, 0, "", "")
+            with patch.object(sys, "argv", arguments), patch.object(fixture, "execute", run), patch.object(fixture, "cleanup", return_value=[]) as cleanup:
+                with self.assertRaisesRegex(RuntimeError, "intentional child"):
+                    fixture.main()
+            cleanup.assert_called_once()
+            self.assertEqual(json.loads((output / "fixture-lifecycle.json").read_text())["result"], "failed")
+
+
 class TransportOracleTests(unittest.TestCase):
     @staticmethod
     def socket(port=443, pid=100, peer="192.168.48.2", process="mixel-remote", local=41000):
@@ -409,6 +617,179 @@ class TransportOracleTests(unittest.TestCase):
         sockets.assert_not_called()
 
 
+class NetworkRecoveryOrderingTests(unittest.TestCase):
+    @staticmethod
+    def original_drop():
+        # Extract the actual method and remove only the newly added stop. The
+        # normalized AST must equal the genuine failed 5df042a source method,
+        # so the negative control cannot silently become a different failure.
+        node = ast.parse(textwrap.dedent(inspect.getsource(desktop.Session.drop))).body[0]
+        transaction = next(part for part in node.body if isinstance(part, ast.Try))
+        removed = [part for part in transaction.body if isinstance(part, ast.Expr)
+                   and isinstance(part.value, ast.Call) and isinstance(part.value.func, ast.Attribute)
+                   and isinstance(part.value.func.value, ast.Name) and part.value.func.value.id == "self"
+                   and part.value.func.attr == "stop_controller_gui"]
+        assert len(removed) == 1, "Expected exactly one disconnected outgoing-session stop"
+        transaction.body.remove(removed[0])
+        def canonical(part):
+            if isinstance(part, ast.AST):
+                assert not getattr(part, "type_params", []), "Original control has no generic type parameters"
+                return {"node": type(part).__name__, "fields": {key: canonical(value)
+                        for key, value in ast.iter_fields(part) if key != "type_params"}}
+            return [canonical(value) for value in part] if isinstance(part, list) else part
+        fingerprint = hashlib.sha256(json.dumps(canonical(node), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        assert fingerprint == "f62e5b9807e936e5a55f8699c95b88f1a9f711b82fd887e03030c357e4a14807", "Original network-drop control differs from failed 5df042a source"
+        namespace = dict(desktop.__dict__)
+        exec(compile(ast.fix_missing_locations(ast.Module(body=[node], type_ignores=[])),
+                     "original 5df042a Session.drop", "exec"), namespace)
+        # Share the real module globals so the same command/clock boundary
+        # controls also apply to the extracted original method.
+        return types.FunctionType(namespace["drop"].__code__, desktop.__dict__)
+
+    def exercise(self, *, blocked=True, mixed=False, method=None, failure=None, error=None):
+        with tempfile.TemporaryDirectory(prefix="mixel-recovery-order-") as temporary:
+            proofs = Path(temporary)
+            session = desktop.Session(proofs, Path("synthetic.deb"), False, blocked,
+                {"pin": "public-fixture-pin", "network": "owned-fixture", "address": "192.168.48.2"}, mixed)
+            session.server["host"] = 100
+            state = {"network": True, "dropped": False, "outgoing": False, "auth": 0}
+            events, waits = [], []
+            clock = itertools.count(100.0, .25)
+            actual_until = desktop.until
+
+            def wait(description, operation, timeout=60):
+                waits.append((description, timeout))
+                return actual_until(description, operation, timeout)
+
+            def stop():
+                events.append(("stop-outgoing", state["network"]))
+                if not state["network"] and failure == "stop":
+                    raise RuntimeError("Outgoing session stop failed")
+                state.update(outgoing=False, auth=0)
+
+            def connect(label):
+                events.append(("customer-accept", label))
+                self.assertTrue(state["network"])
+                state.update(outgoing=True, auth=1)
+
+            def network(arguments):
+                self.assertEqual(arguments[:2], ["docker", "network"])
+                self.assertEqual(arguments[3:], [session.network, session.names["host"]])
+                if arguments[2] == "disconnect":
+                    self.assertTrue(state["network"])
+                    state.update(network=False, dropped=True)
+                    events.append(("network", "disconnect"))
+                else:
+                    self.assertEqual(arguments[2], "connect")
+                    self.assertFalse(state["network"])
+                    events.append(("network", "restore", state["outgoing"]))
+                    # An open outgoing session automatically establishes a new
+                    # unauthorized relay lane as soon as the network returns.
+                    state.update(network=True, auth=0)
+                return subprocess.CompletedProcess(arguments, 0, "", "")
+
+            def query(role, kind):
+                self.assertEqual((role, kind), ("host", "VideoConnCount"))
+                if not state["network"]:
+                    value = 1 if failure == "disconnect" else 0
+                    events.append(("dropped-auth", value))
+                    return value
+                return state["auth"]
+
+            def health(role):
+                self.assertEqual(role, "host")
+                events.append(("guarded-health", state["dropped"]))
+                if state["dropped"] and failure == "guard":
+                    return None
+                return {"incoming_pid": 100, "online_status": [15, True], "foreground_read_lease": True}
+
+            def run(role, arguments, **kwargs):
+                self.assertEqual(role, "host")
+                if arguments[0] == "ss":
+                    local = 41000 if not state["dropped"] or failure == "old socket" else 41002
+                    output = TransportOracleTests.socket(local=local)
+                    if state["outgoing"]:
+                        output += TransportOracleTests.socket(local=local + 1)
+                    events.append(("actual-kernel-sockets", len(output.splitlines())))
+                elif arguments[0] == "readlink":
+                    output = desktop.EXE + "\n"
+                else:
+                    raise AssertionError(arguments)
+                return subprocess.CompletedProcess(arguments, 0, output, "")
+
+            def video(label):
+                events.append(("fresh-video", label))
+                if failure == "stale video":
+                    raise RuntimeError("Unchanged fresh-video gate rejected stale frame")
+
+            with patch.object(session, "stop_controller_gui", side_effect=stop), \
+                    patch.object(session, "connect", side_effect=connect), \
+                    patch.object(session, "query", side_effect=query), patch.object(session, "health", side_effect=health), \
+                    patch.object(session, "run", side_effect=run), \
+                    patch.object(session, "other_peer_addresses", return_value={"192.168.48.4"}), \
+                    patch.object(session, "process_snapshot"), patch.object(session, "fresh_video", side_effect=video), \
+                    patch.object(session, "active_transport_proof", side_effect=lambda label: events.append(("transport", label))), \
+                    patch.object(session, "disconnect", side_effect=lambda: events.append(("customer-disconnect",))), \
+                    patch.object(desktop, "command", side_effect=network), patch.object(desktop, "until", side_effect=wait), \
+                    patch.object(desktop.time, "monotonic", side_effect=lambda: next(clock)), \
+                    patch.object(desktop.time, "sleep"), patch.object(sys, "stdout", io.StringIO()):
+                if error:
+                    with self.assertRaisesRegex(RuntimeError, error):
+                        (method or desktop.Session.drop)(session)
+                else:
+                    (method or desktop.Session.drop)(session)
+            evidence = proofs / "network-recovered-registration.json"
+            return events, waits, json.loads(evidence.read_text()) if evidence.exists() else None
+
+    def test_original_exact_source_ordering_times_out_on_auto_reconnected_unauthorized_lane(self):
+        events, waits, evidence = self.exercise(method=self.original_drop(), error="Timed out: same native PID")
+        self.assertIn(("network", "restore", True), events)
+        self.assertIn(("actual-kernel-sockets", 2), events)
+        self.assertNotIn(("customer-accept", "network-reconnect"), events)
+        self.assertIsNone(evidence)
+        self.assertEqual(waits[-1][1], 90)
+
+    def test_actual_fixed_order_stops_outgoing_while_offline_before_strict_recovery_in_all_modes(self):
+        for blocked, mixed in ((False, False), (True, False), (False, True)):
+            with self.subTest(blocked=blocked, mixed=mixed):
+                events, waits, evidence = self.exercise(blocked=blocked, mixed=mixed)
+                self.assertLess(events.index(("dropped-auth", 0)), events.index(("stop-outgoing", False)))
+                self.assertLess(events.index(("stop-outgoing", False)), events.index(("network", "restore", False)))
+                self.assertLess(events.index(("network", "restore", False)), events.index(("customer-accept", "network-reconnect")))
+                self.assertEqual([timeout for label, timeout in waits if "transport disconnects" in label or "registered stably" in label], [60, 90])
+                self.assertEqual(events[-3:], [("fresh-video", "network-reconnect-video"), ("transport", "network-reconnect"), ("customer-disconnect",)])
+                if blocked:
+                    self.assertGreaterEqual(evidence["stable_seconds"], 2)
+                    self.assertTrue(evidence["fresh_registration_confirmed_before_first_controller_request"])
+                    self.assertEqual(evidence["same_incoming_pid"], 100)
+                    self.assertNotEqual(evidence["baseline"]["connections"][0]["local_endpoint"], evidence["fresh"]["connections"][0]["local_endpoint"])
+                else:
+                    self.assertIsNone(evidence)
+
+    def test_stop_or_disconnect_failure_still_restores_owned_network_and_cannot_pass_recovery(self):
+        for failure, error in (("stop", "Outgoing session stop failed"), ("disconnect", "Timed out: dropped transport")):
+            with self.subTest(failure=failure):
+                events, waits, evidence = self.exercise(failure=failure, error=error)
+                self.assertEqual(sum(event[:2] == ("network", "restore") for event in events), 1)
+                self.assertNotIn(("customer-accept", "network-reconnect"), events)
+                self.assertIsNone(evidence)
+
+    def test_old_socket_or_missing_guard_remains_rejected_after_controller_cleanup(self):
+        for failure in ("old socket", "guard"):
+            with self.subTest(failure=failure):
+                events, waits, evidence = self.exercise(failure=failure, error="Timed out: same native PID")
+                self.assertIn(("network", "restore", False), events)
+                self.assertNotIn(("customer-accept", "network-reconnect"), events)
+                self.assertIsNone(evidence)
+                self.assertEqual(waits[-1][1], 90)
+
+    def test_actual_video_failure_after_new_accept_still_fails_without_disconnect_success(self):
+        events, waits, evidence = self.exercise(failure="stale video", error="fresh-video gate rejected stale frame")
+        self.assertIn(("customer-accept", "network-reconnect"), events)
+        self.assertNotIn(("transport", "network-reconnect"), events)
+        self.assertNotIn(("customer-disconnect",), events)
+
+
 class DesktopReadinessTests(unittest.TestCase):
     @staticmethod
     def tsv(name):
@@ -501,11 +882,14 @@ class DesktopReadinessTests(unittest.TestCase):
             def video(label):
                 counter = next(values)
                 calls.append(counter)
-                return "actual mapping", {"marker": {"counter": counter}, "decoded_marker": {"decoded_counter": counter, "rectangle": [91, 128, 300]}}
+                return "actual mapping", {"marker": {"counter": counter}, "decoded_marker": {"decoded_counter": counter, "rectangle": [91, 128, 300]},
+                                          "video_observation": {"source_before_capture": counter - 1, "source_after_capture": counter}}
             with patch.object(session, "video_map", side_effect=video), patch.object(desktop.time, "sleep"):
                 self.assertEqual(session.fresh_video("current-video")[0], "actual mapping")
             self.assertEqual(calls, [120, 120, 121])
-            self.assertEqual(len(json.loads((Path(temporary) / "current-video-fresh-frames.json").read_text())), 3)
+            observations = json.loads((Path(temporary) / "current-video-fresh-frames.json").read_text())
+            self.assertEqual(len(observations), 3)
+            self.assertEqual(observations[-1]["capture"], {"source_before_capture": 120, "source_after_capture": 121})
 
     def test_recovery_transport_gate_dispatches_same_strict_oracle_and_keeps_phase_label(self):
         for mixed in (False, True):

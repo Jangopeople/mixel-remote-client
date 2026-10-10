@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import platform
 import re
+import secrets
 import shlex
 import shutil
 import signal
@@ -73,6 +74,43 @@ def decode_marker(samples, source_counter):
     if not -2 <= age <= 6:
         raise RuntimeError("Decoded video retains an old or unrelated fixture frame")
     return counter
+
+
+def verify_application_artifact(artifact_root, deb, run_id, source_commit, expected_sha256):
+    """Bind the tested DEB to its collected Linux artifact and source run."""
+    if not (run_id and re.fullmatch(r"[1-9][0-9]*", run_id)
+            and source_commit and re.fullmatch(r"[0-9a-f]{40}", source_commit)
+            and expected_sha256 and re.fullmatch(r"[0-9a-f]{64}", expected_sha256)):
+        raise ValueError("Saved-password proof requires explicit run, full application source SHA and installer SHA256")
+    root = artifact_root.resolve(strict=True)
+    deb = deb.resolve(strict=True)
+    if not deb.is_file() or not deb.is_relative_to(root):
+        raise ValueError("Installer must reside under its collected artifact root")
+    relative = deb.relative_to(root).as_posix()
+    if not relative.startswith("artifacts/linux/") or deb.suffix != ".deb":
+        raise ValueError("Installer path must belong to the collected Linux artifact")
+    metadata_path, provenance_path = root / "run-metadata.json", root / "artifact-provenance.json"
+    metadata, provenance = (json.loads(path.read_text()) for path in (metadata_path, provenance_path))
+    url = "https://github.com/Jangopeople/mixel-remote-client/actions/runs/" + run_id
+    assert str(metadata["id"]) == run_id and metadata["head_sha"] == source_commit, "Run metadata source/run differs from application"
+    assert metadata["event"] == "workflow_dispatch" and metadata["html_url"] == url, "Unexpected application workflow metadata"
+    assert provenance["repository"] == "Jangopeople/mixel-remote-client", "Unexpected collected repository"
+    assert str(provenance["build_run_id"]) == run_id and provenance["build_url"] == url, "Collected artifact belongs to a different run"
+    assert provenance["event"] == "workflow_dispatch", "Unexpected collected workflow event"
+    for field in ("head_sha", "source_commit", "application_source_baseline"):
+        assert provenance[field] == source_commit, "Collected application source differs: " + field
+    artifact = provenance["collected_artifacts"]["linux"]
+    assert type(artifact["artifact_id"]) is int and artifact["artifact_id"] > 0, "Invalid collected artifact ID"
+    assert re.fullmatch(r"sha256:[0-9a-f]{64}", artifact["artifact_digest"]), "Invalid collected archive digest"
+    assert artifact["files_sha256"][relative] == expected_sha256, "DEB differs from exact collected artifact mapping"
+    assert hashlib.sha256(deb.read_bytes()).hexdigest() == expected_sha256, "Actual DEB bytes differ from collected mapping"
+    return {"application_source_baseline": source_commit, "artifact_run_id": run_id,
+            "artifact_sha256": expected_sha256, "artifact_relative_path": relative,
+            "collected_artifact_id": artifact["artifact_id"], "collected_archive_digest": artifact["artifact_digest"],
+            "artifact_workflow_url": url, "run_metadata_sha256": hashlib.sha256(metadata_path.read_bytes()).hexdigest(),
+            "artifact_provenance_sha256": hashlib.sha256(provenance_path.read_bytes()).hexdigest(),
+            "validation_scope": "exact Linux artifact; overall multi-platform run result is recorded independently",
+            "application_run_status": metadata.get("status"), "application_run_conclusion": metadata.get("conclusion")}
 
 
 class Session:
@@ -475,11 +513,18 @@ for name in os.listdir('/proc'):
         # Foreground callbacks can restore the app after minimizing it. The
         # own synthetic fixture must be above it for an unoccluded RGB oracle.
         time.sleep(.3)
-        state = self.fixture_state()
         viewer = next(iter(self.windows("controller", "Remote Desktop.*Mixel-Remote$")), None)
         assert viewer, "Actual remote viewer is absent"
         self.activate("controller", viewer)
+        before_capture = self.fixture_state()
+        capture_started = time.monotonic()
         self.screenshot("controller", name)
+        capture_finished = time.monotonic()
+        # Bind the clock to the captured image before slow pixel analysis. A
+        # pre-capture snapshot can reject a current frame as a future frame.
+        state = self.fixture_state()
+        if before_capture["controls"] != state["controls"]:
+            raise RuntimeError("Host control geometry changed across image capture")
         code = r'''from PIL import Image
 import json,sys,statistics
 sys.path.insert(0,'/payload')
@@ -502,6 +547,11 @@ for color in [(229,29,54),(19,183,108),(23,110,233)]:
  rects.append((min(r[1] for r in wide),min(r[2] for r in wide),width))
 assert abs(rects[1][0]-rects[0][0]-rects[0][2])<12
 assert abs(rects[2][0]-rects[1][0]-rects[1][2])<12
+# A popup can cover only the top of one bar. Require the other two to agree
+# on the common top; the clock itself still has to decode and be current.
+top=statistics.median(rect[1] for rect in rects)
+assert sum(abs(rect[1]-top)<=2 for rect in rects)>=2,'Remote RGB tops disagree'
+rects[0]=(rects[0][0],round(top),rects[0][2])
 marker=MARKER
 canvas=CANVAS
 x,y,width=rects[0]
@@ -521,6 +571,14 @@ print(json.dumps({'rectangle':rects[0],'decoded_counter':counter,'marker_samples
             raise RuntimeError("Host control geometry changed during decoded video observation")
         canvas = state["controls"]["canvas"]
         state["decoded_marker"] = decoded
+        state["video_observation"] = {
+            "source_before_capture": before_capture["marker"]["counter"],
+            "source_after_capture": state["marker"]["counter"],
+            "source_before_monotonic": before_capture["monotonic"],
+            "source_after_monotonic": state["monotonic"],
+            "capture_started_monotonic": capture_started,
+            "capture_finished_monotonic": capture_finished,
+        }
         return (lambda hx, hy: (x + (hx - canvas["x"]) * width / 300,
                                y + (hy - canvas["y"]) * width / 300)), state
 
@@ -530,7 +588,8 @@ print(json.dumps({'rectangle':rects[0],'decoded_counter':counter,'marker_samples
             mapping, state = self.video_map(label)
             counter = state["decoded_marker"]["decoded_counter"]
             observations.append({"source_counter": state["marker"]["counter"],
-                                 "decoded_counter": counter, "rectangle": state["decoded_marker"]["rectangle"]})
+                                 "decoded_counter": counter, "rectangle": state["decoded_marker"]["rectangle"],
+                                 "capture": state["video_observation"]})
             (self.proofs / (label + "-fresh-frames.json")).write_text(json.dumps(observations, indent=2) + "\n")
             if len(observations) >= 2 and 0 < ((counter - observations[0]["decoded_counter"]) & 65535) < 120:
                 return mapping, state
@@ -715,6 +774,10 @@ print(json.dumps({'rectangle':rects[0],'decoded_counter':counter,'marker_samples
         command(["docker", "network", "disconnect", self.network, self.names["host"]])
         try:
             until("dropped transport disconnects authenticated session", lambda: self.query("host", "VideoConnCount") == 0, timeout=60)
+            # End the outgoing session while the host is still offline. Its
+            # automatic retry otherwise opens an unauthorized relay lane before
+            # the independent auth0 registration snapshot can select one lane.
+            self.stop_controller_gui()
         finally:
             command(["docker", "network", "connect", self.network, self.names["host"]])
         self.process_snapshot("host", "after-network-restored")
@@ -855,6 +918,98 @@ print(json.dumps({'rectangle':rects[0],'decoded_counter':counter,'marker_samples
         return expected_hash
 
 
+class PasswordSession(Session):
+    """Prove the same valid password before and after a real attended handoff."""
+    def firewall(self, role, after_registration=False):
+        super().firewall(role, after_registration)
+        if role == "host" and not after_registration:
+            preferences = 'approve-mode = "password"\nverification-method = "use-permanent-password"\n'
+            code = "from pathlib import Path;p=Path('/home/guest/.config/mixel-remote/Mixel-Remote2.toml');p.write_text(p.read_text()+" + repr(preferences) + ")"
+            self.run(role, ["python3", "-c", code])
+
+    def start_gui(self, role):
+        self.gui_pid[role] = self.launch(role, [])
+        until(role + " actual ordinary main window", lambda: self.windows(role, "^Mixel-Remote$"))
+
+    def health(self, role):
+        assert self.query(role, "Config", ["mixel-support-invite-attended", None]) == ["mixel-support-invite-attended", ""]
+        assert self.run(role, ["cat", "/tmp/Mixel-Remote/ipc.pid"]).stdout.strip() == str(self.server[role])
+        options = self.query(role, "Options")
+        for key, value in {"custom-rendezvous-server": "rs.mixel.ch", "relay-server": "rs.mixel.ch", "key": self.expected_pin,
+                           "approve-mode": "password", "verification-method": "use-permanent-password"}.items():
+            assert options.get(key) == value
+        return self.online(role)
+
+    def saved_password_consent(self, manifest):
+        password = "MixelSynthetic" + secrets.token_hex(12)
+        result = self.run("host", [EXE, "--password", password], user="root")
+        assert "Done!" in result.stdout, "Supported administrative permanent-password setter failed"
+        until("synthetic permanent password stored in actual incoming server",
+              lambda: self.query("host", "Config", ["permanent-password", None])[1] == password)
+        saved = self.query("host", "Options")
+        assert saved["approve-mode"] == "password" and saved["verification-method"] == "use-permanent-password"
+        assert "mixel-support-invite-attended" not in saved
+        manifest["password_set_via_supported_cli"] = True
+        print("PASS: exact binary administrative --password setter stores a random synthetic permanent password", flush=True)
+        # The positive control uses the real login path, without customer
+        # Accept or any IPC authorization write.
+        self.launch("controller", ["--connect", self.ids["host"], "--password", password])
+        until("valid password baseline automatic authorization", lambda: self.query("host", "VideoConnCount") == 1)
+        viewer = until("baseline real remote viewer", lambda: next(iter(self.windows("controller", "Remote Desktop.*Mixel-Remote$")), None))
+        self.activate("controller", viewer)
+        self.gui("controller", ["wmctrl", "-ir", viewer, "-b", "add,fullscreen"])
+        self.fresh_video("valid-password-baseline-video")
+        self.screenshot("host", "valid-password-baseline-authorized")
+        manifest["valid_password_baseline_autoauthorized_without_accept"] = True
+        print("PASS: the exact saved password automatically authorizes the ordinary app (auth1), with changing current video and no Accept click", flush=True)
+        self.disconnect()
+        self.stop_controller_gui()
+        original_windows = set(self.windows("host", "^Mixel-Remote$", False))
+        assert original_windows, "Ordinary host window disappeared before support handoff"
+        handoff_pid = self.launch("host", [URI])
+        def handoff_exit():
+            statuses = self.process_snapshot("host", "warm-support-handoff")["exit_statuses"]
+            return next((status for status in statuses if status["pid"] == handoff_pid), None)
+        completed = until("warm URI sender exits after DBus acknowledgment", handoff_exit)
+        assert completed["wait_status"] == 0, "Warm URI sender failed"
+        assert set(self.windows("host", "^Mixel-Remote$", False)) == original_windows, "Warm URI replaced the original ordinary host window"
+        until("original ordinary GUI owns attended kernel lease after sender exit", lambda: Session.health(self, "host"))
+        manifest["warm_uri_handoff"] = {"sender_pid": handoff_pid, "sender_exit_status": 0, "original_gui_pid": self.gui_pid["host"],
+                                        "original_window_ids": sorted(original_windows), "same_original_gui_kernel_lease_verified_after_sender_exit": True}
+        print("PASS: warm support URI sender exits cleanly; the same original ordinary GUI/window owns the attended kernel lease", flush=True)
+        until("actual warm support URI v2 guard", lambda: self.query("host", "Config", ["mixel-support-invite-attended", None]) == ["mixel-support-invite-attended", "attended-runtime-v2"])
+        assert self.query("host", "Options") == saved, "Attended URI changed persistent access preferences"
+        assert self.query("host", "Config", ["permanent-password", None])[1] == password
+        self.launch("controller", ["--connect", self.ids["host"], "--password", password])
+        self.pending_accept("valid-password-attended")
+        started = time.monotonic()
+        observations = []
+        while time.monotonic() - started < 12:
+            count = self.query("host", "VideoConnCount")
+            assert count == 0, "Valid permanent password bypassed customer Accept"
+            observations.append({"seconds": round(time.monotonic() - started, 3), "authenticated_remote_count": count})
+            (self.proofs / "saved-password-auth0-observations.json").write_text(json.dumps(observations, indent=2) + "\n")
+            time.sleep(.5)
+        assert self.query("host", "VideoConnCount") == 0, "Valid password bypassed Accept after twelve seconds"
+        observations.append({"seconds": round(time.monotonic() - started, 3), "authenticated_remote_count": 0})
+        (self.proofs / "saved-password-auth0-observations.json").write_text(json.dumps(observations, indent=2) + "\n")
+        self.screenshot("controller", "valid-password-attended-before-accept")
+        self.pending_accept("valid-password-attended-after-wait")
+        manifest["attended_auth0_observations"] = observations
+        manifest["attended_unauthorized_duration_seconds"] = time.monotonic() - started
+        print("PASS: the same proven valid password remains unauthorized for at least twelve seconds with visible blue customer Accept (auth0)", flush=True)
+        self.connect("valid-password-attended", already_requested=True)
+        self.fresh_video("valid-password-attended-accepted-video")
+        self.active_https_proof("valid-password-attended")
+        assert self.query("host", "Options") == saved, "Customer Accept changed saved access preferences"
+        assert self.query("host", "Config", ["permanent-password", None])[1] == password
+        manifest["actual_accept_then_authorized_video"] = True
+        manifest["saved_preferences_and_password_preserved"] = True
+        self.disconnect()
+        manifest["actual_customer_disconnect_auth0"] = True
+        print("PASS: actual customer Accept enables native encrypted current video; saved access choices and password remain unchanged", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--deb", required=True, type=Path)
@@ -865,6 +1020,10 @@ def main():
     parser.add_argument("--flutter-input", action="store_true", help="Separately prove supported Flutter Input source2 (default proves native source1)")
     parser.add_argument("--require-native", action="store_true", help="Reject amd64 emulation so native keyboard results are unambiguous")
     parser.add_argument("--artifact-run-id", help="Source build run for the exact installer (independent of this harness run)")
+    parser.add_argument("--saved-password-consent", action="store_true", help="Native isolated proof: a proven valid permanent password cannot bypass real attended Accept")
+    parser.add_argument("--artifact-root", type=Path, help="Collected root containing run metadata, provenance and the exact Linux DEB")
+    parser.add_argument("--artifact-source-commit", help="Explicit full application source SHA, independent of updated QA source")
+    parser.add_argument("--expected-sha256", help="Exact expected installer SHA256 from the collected Linux artifact")
     parser.add_argument("--isolated-relay-network", help="Explicit task-owned Docker network for a deployment-free relay fixture")
     parser.add_argument("--isolated-relay-address", help="Private fixture TLS router IPv4; mapped to rs.mixel.ch only in owned peers")
     parser.add_argument("--isolated-relay-ca", type=Path, help="Public fixture CA certificate; trusted only by owned peer containers")
@@ -891,6 +1050,18 @@ def main():
     if args.require_native and platform.machine().lower() not in ("x86_64", "amd64"):
         raise SystemExit("Native amd64 host required for this proof")
     args.deb = args.deb.resolve(strict=True)
+    application_provenance = None
+    provenance_requested = (args.artifact_root, args.artifact_source_commit, args.expected_sha256)
+    if args.saved_password_consent:
+        if not args.require_native or not args.native_blocked or isolated is None or args.mixed_transports or args.flutter_input:
+            raise SystemExit("Saved-password proof requires native amd64, an isolated blocked-native relay and default input mode")
+        if not all(provenance_requested):
+            raise SystemExit("Saved-password proof requires exact collected artifact provenance")
+    if any(provenance_requested):
+        if not all(provenance_requested):
+            raise SystemExit("All collected artifact provenance parameters are required together")
+        application_provenance = verify_application_artifact(args.artifact_root, args.deb, args.artifact_run_id,
+                                                            args.artifact_source_commit, args.expected_sha256)
     args.proofs = args.proofs.resolve()
     args.proofs.mkdir(parents=True, exist_ok=True)
     if any(args.proofs.iterdir()):
@@ -900,30 +1071,47 @@ def main():
     if isolated:
         manifest["isolated_relay"] = {"network": isolated["network"], "private_address": isolated["address"], "public_pin_sha256": hashlib.sha256(isolated["pin"].encode()).hexdigest(), "ca_sha256": hashlib.sha256(isolated["ca"].read_bytes()).hexdigest()}
     manifest["mixed_transports"] = args.mixed_transports
+    if application_provenance:
+        manifest["application_artifact_provenance"] = application_provenance
+        manifest["application_source_baseline"] = application_provenance["application_source_baseline"]
+    qa_sources = ["scripts/test-support-session-linux.py", "scripts/test-support-launch-linux.py",
+                  "scripts/test-support-session-https-linux.py", "scripts/e2e/linux-fixture.py",
+                  "scripts/e2e/start-linux-desktop.sh", "scripts/e2e/Dockerfile.linux"]
+    manifest["qa_source_sha256"] = {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in qa_sources}
+    manifest["qa_tracked_changes"] = command(["git", "-C", str(ROOT), "status", "--porcelain", "--", *qa_sources], check=False).stdout.splitlines()
     if args.mixed_transports:
         manifest["forced_relay_request"] = "automatic mixed transport selection (no --relay)"
         manifest["transport_policy"] = {"host": "native UDP registration, TCP21115-19 blocked after initial registration", "controller": "UDP21115-19 blocked, native TCP available"}
-    session = Session(args.proofs, args.deb, args.flutter_input, args.native_blocked, isolated, args.mixed_transports)
+    session_type = PasswordSession if args.saved_password_consent else Session
+    session = session_type(args.proofs, args.deb, args.flutter_input, args.native_blocked, isolated, args.mixed_transports)
+    if args.saved_password_consent:
+        manifest.update({"kind": "native-valid-permanent-password-attended-consent-proof", "no_ipc_authorize": True,
+                         "password": "random synthetic value retained only in temporary peer HOME",
+                         "execution": "native Linux amd64", "production_mutations": False})
     with tempfile.TemporaryDirectory(prefix="mixel-real-session-") as temporary:
         try:
             digest = session.setup(Path(temporary))
-            session.connect("initial")
-            if args.mixed_transports:
-                session.active_mixed_proof()
-            manifest["host_input"] = session.input()
-            session.clipboard()
-            if args.native_blocked:
-                session.active_https_proof()
-            session.disconnect()
-            session.files(digest)
-            session.restart_server()
-            session.drop()
+            if args.saved_password_consent:
+                session.saved_password_consent(manifest)
+            else:
+                session.connect("initial")
+                if args.mixed_transports:
+                    session.active_mixed_proof()
+                manifest["host_input"] = session.input()
+                session.clipboard()
+                if args.native_blocked:
+                    session.active_https_proof()
+                session.disconnect()
+                session.files(digest)
+                session.restart_server()
+                session.drop()
             manifest["result"] = "passed"
-            print("Result: real Linux consent/video/keyboard/mouse/clipboard/file/restart/reconnect session passed", flush=True)
+            print("Result: native valid-password attended consent session passed" if args.saved_password_consent else "Result: real Linux consent/video/keyboard/mouse/clipboard/file/restart/reconnect session passed", flush=True)
         finally:
             try:
                 interrupted = isinstance(sys.exc_info()[1], (SystemExit, KeyboardInterrupt, subprocess.TimeoutExpired))
                 cleanup_errors = session.cleanup(interrupted=interrupted)
+                manifest["owned_resources_cleaned"] = not cleanup_errors
                 if cleanup_errors:
                     manifest["cleanup_errors"] = cleanup_errors
                     manifest["result"] = "failed"

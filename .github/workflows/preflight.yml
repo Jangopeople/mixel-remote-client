@@ -13,13 +13,16 @@ jobs:
   release-pipeline:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Run release staging and configuration regression tests
         run: |
           python3 scripts/test-release-pipeline.py
           python3 scripts/test-notarize-macos.py
+          python3 scripts/test-macos-native-minimum.py
           python3 scripts/test-sdk-discovery.py
           python3 scripts/test-support-session-fixture.py
+          python3 scripts/test-support-video-sampling.py
+          python3 scripts/test-linux-runtime-artifact.py
           python3 scripts/test-relay-ws-bridge-lifecycle.py
       - name: Exercise Unix runtime IPC and window probe self-tests
         run: python3 scripts/test-support-launch-linux.py --self-test
@@ -30,7 +33,7 @@ jobs:
   windows-packaging:
     runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Exercise Windows payload preparation and IPC response validation
         shell: pwsh
         run: ./scripts/test-windows-pipeline.ps1
@@ -38,7 +41,7 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Exercise bounded gateway sockets and the actual pinned hbbs and hbbr
         shell: bash
         run: |
@@ -46,7 +49,7 @@ jobs:
           mkdir -p gateway-proof
           python3 scripts/test-relay-ws-bridge-docker.py 2>&1 | tee gateway-proof/registration.log
           python3 scripts/test-relay-ws-bridge-deployment.py --docker 2>&1 | tee gateway-proof/deployment.log
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: https-registration-gateway-proof
@@ -56,7 +59,7 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Resolve the pinned upstream version
         id: config
         run: python3 scripts/release-artifacts.py config
@@ -67,10 +70,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: '1.75'
-      - name: Install native clipboard regression dependencies
+      - name: Install native clipboard and codec regression dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb xclip
+          sudo apt-get install -y xvfb xclip libaom-dev
       - name: Fetch pinned upstream source
         env:
           UPSTREAM_VERSION: ${{ steps.config.outputs.upstream_version }}
@@ -86,6 +89,9 @@ jobs:
           python3 scripts/test-support-signals.py
           python3 scripts/test-support-input.py
           python3 scripts/test-support-clipboard.py --native-x11
+          python3 scripts/test-support-video.py
+          python3 scripts/test-support-macos.py
+          python3 scripts/test-support-wakelock.py
           python3 scripts/test-branding.py
           dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart
           dart scripts/test-support-invite.dart
@@ -93,6 +99,8 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Exercise native macOS URL activation and window probe self-tests
-        run: python3 scripts/test-support-launch-macos.py --self-test
+        run: |
+          python3 scripts/test-support-launch-macos.py --self-test
+          python3 scripts/test-macos-native-minimum.py

@@ -39,6 +39,7 @@ env:
   MAC_RUST_VERSION: "1.81"
   FLUTTER_VERSION: "3.24.5"
   VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
+  VCPKG_BINARY_SOURCES: "clear;files,${{ github.workspace }}/.vcpkg-binary-cache,readwrite"
 
 jobs:
   # ===========================================================================
@@ -55,7 +56,7 @@ jobs:
       macos: ${{ steps.ver.outputs.macos }}
       windows: ${{ steps.ver.outputs.windows }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Verify release staging and build configuration
         run: |
           python3 scripts/test-release-pipeline.py
@@ -88,7 +89,7 @@ jobs:
     env:
       UPSTREAM_VERSION: ${{ needs.config.outputs.upstream_version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install build deps
         run: |
@@ -128,7 +129,7 @@ jobs:
             --c-output ./flutter/macos/Runner/bridge_generated.h
           cp ./flutter/macos/Runner/bridge_generated.h ./flutter/ios/Runner/bridge_generated.h
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: bridge-artifact
           path: |
@@ -150,7 +151,7 @@ jobs:
     env:
       UPSTREAM_VERSION: ${{ needs.config.outputs.upstream_version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Maximize build space
         run: |
@@ -183,6 +184,12 @@ jobs:
         with:
           channel: stable
           flutter-version: ${{ env.FLUTTER_VERSION }}
+
+      - name: Restore compiled codec cache
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/.vcpkg-binary-cache
+          key: mixel-vcpkg-v1-ubuntu22.04-x64-linux-${{ env.VCPKG_COMMIT_ID }}
 
       - name: Setup vcpkg + cache
         uses: lukka/run-vcpkg@v11
@@ -218,7 +225,7 @@ jobs:
           BRANDING: ./branding
 
       - name: Restore bridge files
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: bridge-artifact
           path: rustdesk
@@ -237,6 +244,9 @@ jobs:
           python3 scripts/test-support-signals.py
           python3 scripts/test-support-input.py
           python3 scripts/test-support-clipboard.py --native-x11
+          python3 scripts/test-support-video.py
+          python3 scripts/test-support-macos.py
+          python3 scripts/test-support-wakelock.py
           python3 scripts/test-branding.py
           dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart
           dart scripts/test-support-invite.dart
@@ -268,7 +278,7 @@ jobs:
           cp "$deb" "dist/mixel-remote-${UPSTREAM_VERSION}-x86_64.deb"
           ls -la dist/
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: linux
           path: dist/
@@ -305,7 +315,7 @@ jobs:
             --proofs artifacts/linux-mixed --require-native --mixed-transports \
             --artifact-run-id "$GITHUB_RUN_ID" | tee artifacts/linux-mixed.log
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: linux-support-session-proof
@@ -329,13 +339,15 @@ jobs:
     timeout-minutes: 180
     env:
       UPSTREAM_VERSION: ${{ needs.config.outputs.upstream_version }}
+      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.job.arch == 'aarch64' && '12.3' || '10.14' }}
+      VCPKG_OVERLAY_TRIPLETS: ${{ github.workspace }}/.github/vcpkg-triplets
       APPLE_CERT_P12_BASE64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
       APPLE_CERT_P12_PASSWORD: ${{ secrets.APPLE_CERT_P12_PASSWORD }}
       APPLE_NOTARY_USER:     ${{ secrets.APPLE_NOTARY_USER }}
       APPLE_NOTARY_PASSWORD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
       APPLE_NOTARY_TEAM_ID:  ${{ secrets.APPLE_NOTARY_TEAM_ID }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install build runtime
         run: |
@@ -362,6 +374,12 @@ jobs:
           channel: stable
           flutter-version: ${{ env.FLUTTER_VERSION }}
 
+      - name: Restore compiled codec cache
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/.vcpkg-binary-cache
+          key: mixel-vcpkg-v2-macos14-${{ matrix.job.arch }}-${{ env.MACOSX_DEPLOYMENT_TARGET }}-${{ hashFiles('.github/vcpkg-triplets/*.cmake') }}-${{ env.VCPKG_COMMIT_ID }}
+
       - name: Setup vcpkg + cache
         uses: lukka/run-vcpkg@v11
         with:
@@ -372,13 +390,23 @@ jobs:
         run: |
           triplet=${{ matrix.job.arch == 'aarch64' && 'arm64-osx' || 'x64-osx' }}
           for attempt in 1 2 3; do
-            if "$VCPKG_ROOT/vcpkg" install --triplet "$triplet" libvpx libyuv opus aom libjpeg-turbo; then
+            if "$VCPKG_ROOT/vcpkg" install --overlay-triplets="$VCPKG_OVERLAY_TRIPLETS" --triplet "$triplet" libvpx libyuv opus aom libjpeg-turbo; then
               break
             fi
             if [[ "$attempt" == 3 ]]; then exit 1; fi
             echo "Pinned dependency fetch/build failed; retrying attempt $((attempt + 1))/3"
             sleep "$((attempt * 10))"
           done
+
+      - name: Verify every native codec architecture and minimum
+        run: |
+          python3 scripts/test-macos-native-minimum.py
+          triplet=${{ matrix.job.arch == 'aarch64' && 'arm64-osx' || 'x64-osx' }}
+          arch=${{ matrix.job.arch == 'aarch64' && 'arm64' || 'x86_64' }}
+          python3 scripts/verify-macos-native-minimum.py \
+            --lib-dir "$VCPKG_ROOT/installed/$triplet/lib" \
+            --arch "$arch" --minimum "$MACOSX_DEPLOYMENT_TARGET" \
+            --output "native-codec-proof/${{ matrix.job.arch }}.json"
 
       - name: Fetch upstream RustDesk
         run: |
@@ -389,16 +417,17 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: rustdesk
-          prefix-key: macos-14-${{ matrix.job.arch }}
+          prefix-key: macos-14-v2-${{ matrix.job.arch }}-${{ env.MACOSX_DEPLOYMENT_TARGET }}-${{ hashFiles('.github/vcpkg-triplets/*.cmake') }}
 
       - name: Apply Mixel-Remote branding
         run: ./scripts/apply-branding.sh
         env:
           RDREPO: ./rustdesk
           BRANDING: ./branding
+          MIXEL_MACOS_ARCH: ${{ matrix.job.arch }}
 
       - name: Restore bridge files
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: bridge-artifact
           path: rustdesk
@@ -415,6 +444,7 @@ jobs:
         env:
           VCPKG_ROOT: ${{ github.workspace }}/vcpkg
           RDREPO: ./rustdesk
+          MACOS_RUNTIME_LINK_TARGET: ${{ matrix.job.target }}
         run: |
           python3 scripts/test-support-invite.py
           python3 scripts/test-generated-support-paths.py
@@ -425,6 +455,9 @@ jobs:
           python3 scripts/test-support-signals.py
           python3 scripts/test-support-input.py
           python3 scripts/test-support-clipboard.py
+          python3 scripts/test-support-video.py
+          python3 scripts/test-support-macos.py
+          python3 scripts/test-support-wakelock.py
           python3 scripts/test-branding.py
           dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart
           dart scripts/test-support-invite.dart
@@ -438,9 +471,6 @@ jobs:
             export FLUTTER_XCODE_ARCHS="arm64"
           else
             export FLUTTER_XCODE_ARCHS="x86_64"
-          fi
-          if [ "${{ matrix.job.target }}" = "aarch64-apple-darwin" ]; then
-            sed -i '' -e "s/MACOSX_DEPLOYMENT_TARGET=[0-9]*\\.[0-9]*/MACOSX_DEPLOYMENT_TARGET=12.3/" build.py
           fi
           for attempt in 1 2 3; do
             if python3 build.py --flutter --unix-file-copy-paste; then
@@ -552,14 +582,21 @@ jobs:
           fi
           ls -la ../dist/
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: macos-native-codecs-${{ matrix.job.arch }}
+          path: native-codec-proof/
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: macos-notary-${{ matrix.job.arch }}
           path: dist/notary-*/
           if-no-files-found: warn
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: macos-${{ matrix.job.arch }}
           path: dist/
@@ -576,7 +613,7 @@ jobs:
     env:
       UPSTREAM_VERSION: ${{ needs.config.outputs.upstream_version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@v1
@@ -590,6 +627,12 @@ jobs:
         with:
           channel: stable
           flutter-version: ${{ env.FLUTTER_VERSION }}
+
+      - name: Restore compiled codec cache
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/.vcpkg-binary-cache
+          key: mixel-vcpkg-v1-windows2022-x64-windows-static-${{ env.VCPKG_COMMIT_ID }}
 
       - name: Setup vcpkg + cache
         uses: lukka/run-vcpkg@v11
@@ -642,7 +685,7 @@ jobs:
           BRANDING: ./branding
 
       - name: Restore bridge files
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: bridge-artifact
           path: rustdesk
@@ -667,6 +710,9 @@ jobs:
           python scripts/test-support-signals.py
           python scripts/test-support-input.py
           python scripts/test-support-clipboard.py
+          python scripts/test-support-video.py
+          python scripts/test-support-macos.py
+          python scripts/test-support-wakelock.py
           python scripts/test-branding.py
           dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart
           dart scripts/test-support-invite.dart
@@ -697,7 +743,7 @@ jobs:
           azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
           azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
           endpoint: https://weu.codesigning.azure.net/
-          trusted-signing-account-name: mixel-codesigning
+          signing-account-name: mixel-codesigning
           certificate-profile-name: mixel-remote
           files-folder: ${{ github.workspace }}\store-payload
           files-folder-filter: exe,dll
@@ -744,7 +790,7 @@ jobs:
           azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
           azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
           endpoint: https://weu.codesigning.azure.net/
-          trusted-signing-account-name: mixel-codesigning
+          signing-account-name: mixel-codesigning
           certificate-profile-name: mixel-remote
           files-folder: ${{ github.workspace }}\dist
           files-folder-filter: exe,msi
@@ -785,7 +831,7 @@ jobs:
           Set-Content -Path store-artifact/Mixel-Remote-Store-Payload.sha256 -Value $digest -Encoding ascii
           Write-Host "PASS: complete signed Store payload packaged; SHA256 $digest"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: windows-msix-payload
           path: store-artifact/
@@ -801,7 +847,7 @@ jobs:
         run: |
           ./scripts/test-support-launch-windows.ps1 -Executable dist/Mixel-Remote-QS.exe -Portable -QuickSupport -ExpectedPayload store-payload
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: windows
           path: dist/
@@ -828,8 +874,8 @@ jobs:
       UPSTREAM_VERSION: ${{ needs.config.outputs.upstream_version }}
       SELECTED_PLATFORMS: ${{ needs.config.outputs.platforms }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v7
         with:
           path: artifacts
 
@@ -865,17 +911,45 @@ jobs:
     permissions:
       actions: read
       contents: read
-    runs-on: windows-latest
-    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Validate artifact-only diagnostic request
         id: request
         env:
           RUNTIME_RUN_ID: ${{ inputs.runtime_artifact_run }}
           PUBLISH_REQUESTED: ${{ inputs.publish_r2 }}
         run: python scripts/release-artifacts.py runtime
-      - uses: actions/download-artifact@v4
+      - name: Qualify exact ordinary Windows desktop fixture
+        shell: pwsh
+        run: ./scripts/test-windows-pipeline.ps1
+      - name: Prepare Microsoft native crash stack debugger
+        shell: pwsh
+        run: |
+          $cdb = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/Debuggers/x64/cdb.exe'
+          if (-not (Test-Path $cdb)) {
+            # Official Microsoft crash-analysis guidance uses this SDK installer
+            # and the debugger-only feature. No application bytes are changed.
+            $setup = Join-Path $env:RUNNER_TEMP 'mixel-debugger-sdk-setup.exe'
+            Invoke-WebRequest 'https://go.microsoft.com/fwlink/?linkid=2173743' -OutFile $setup
+            $signature = Get-AuthenticodeSignature $setup
+            if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') {
+              throw 'Native debugger SDK installer is not validly signed by Microsoft.'
+            }
+            $installer = Start-Process $setup -ArgumentList '/features','OptionId.WindowsDesktopDebuggers','/q','/norestart' -PassThru -Wait
+            if ($installer.ExitCode -notin @(0,3010) -or -not (Test-Path $cdb)) { throw 'Microsoft native debugger preparation failed.' }
+            Remove-Item $setup
+          }
+          $signature = Get-AuthenticodeSignature $cdb
+          if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') {
+            throw 'Native debugger is not validly signed by Microsoft.'
+          }
+      - uses: actions/download-artifact@v7
         with:
           name: windows-msix-payload
           run-id: ${{ steps.request.outputs.run_id }}
@@ -899,7 +973,7 @@ jobs:
           # The retained artifact is the exact signed compiled payload. Pass the
           # native QS argument its portable launcher emits; the full build still
           # requires the actual signed customer QS outer launcher to pass 95s.
-          ./scripts/test-support-launch-windows.ps1 -Executable runtime-client/Mixel-Remote.exe -QuickSupport -ExpectedPayload runtime-client -OrdinaryThenQuickSupport -CompiledQuickSupportDiagnostic
+          ./scripts/test-support-launch-windows.ps1 -Executable runtime-client/Mixel-Remote.exe -QuickSupport -ExpectedPayload runtime-client -OrdinaryThenQuickSupport -CompiledQuickSupportDiagnostic -NativeCrashDiagnostic
       - name: Save synthetic runtime diagnostics
         if: always()
         shell: pwsh
@@ -916,10 +990,10 @@ jobs:
           if (Test-Path $ownedLogs) {
             Copy-Item $ownedLogs runtime-diagnostics/owned-ordinary-profile -Recurse
           }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: always()
         with:
-          name: support-runtime-diagnostics
+          name: support-runtime-diagnostics-${{ matrix.os }}
           path: runtime-diagnostics/
 
   runtime-macos:
@@ -934,14 +1008,14 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Validate artifact-only diagnostic request
         id: request
         env:
           RUNTIME_RUN_ID: ${{ inputs.runtime_macos_artifact_run }}
           PUBLISH_REQUESTED: ${{ inputs.publish_r2 }}
         run: python3 scripts/release-artifacts.py runtime
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: macos-${{ matrix.arch }}
           run-id: ${{ steps.request.outputs.run_id }}
@@ -998,7 +1072,7 @@ jobs:
           xcrun stapler validate "$APP_PATH"
           spctl --assess --type execute --verbose=2 "$APP_PATH"
           python3 scripts/test-support-launch-macos.py --app "$APP_PATH" | tee "runtime-diagnostics/macos-${EXPECTED_ARCH}.log"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: macos-support-runtime-diagnostics-${{ matrix.arch }}
@@ -1016,27 +1090,37 @@ jobs:
       matrix:
         transport: [native, https, mixed]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Validate artifact-only diagnostic request
         id: request
         env:
           RUNTIME_RUN_ID: ${{ inputs.runtime_linux_artifact_run }}
           PUBLISH_REQUESTED: ${{ inputs.publish_r2 }}
         run: python3 scripts/release-artifacts.py runtime
-      - uses: actions/download-artifact@v4
-        with:
-          name: linux
-          run-id: ${{ steps.request.outputs.run_id }}
-          github-token: ${{ github.token }}
-          path: runtime-artifacts
+      - name: Collect and verify exact Linux artifact provenance
+        id: artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNTIME_RUN_ID: ${{ steps.request.outputs.run_id }}
+        run: |
+          python3 scripts/collect-linux-runtime-artifact.py \
+            --run-id "$RUNTIME_RUN_ID" --output runtime-artifacts \
+            --github-output "$GITHUB_OUTPUT"
+          mkdir -p artifacts/application-provenance
+          cp runtime-artifacts/run-metadata.json runtime-artifacts/artifact-provenance.json \
+            artifacts/application-provenance/
       - name: Prove real relay consent, video, input, files and recovery
         shell: bash
         env:
           TRANSPORT: ${{ matrix.transport }}
+          ARTIFACT_ROOT: ${{ steps.artifact.outputs.artifact_root }}
+          ARTIFACT_SOURCE: ${{ steps.artifact.outputs.source_commit }}
+          ARTIFACT_SHA256: ${{ steps.artifact.outputs.sha256 }}
+          ARTIFACT_RUN_ID: ${{ steps.request.outputs.run_id }}
         run: |
           set -euo pipefail
           shopt -s nullglob
-          DEBS=(runtime-artifacts/mixel-remote-*-x86_64.deb)
+          DEBS=(runtime-artifacts/artifacts/linux/mixel-remote-*-x86_64.deb)
           [[ ${#DEBS[@]} == 1 && -s "${DEBS[0]}" ]] || { echo 'Expected exactly one customer installer' >&2; exit 1; }
           mkdir -p artifacts
           HARNESS=scripts/test-support-session-linux.py
@@ -1045,8 +1129,26 @@ jobs:
           if [[ "$TRANSPORT" == mixed ]]; then OPTIONS+=(--mixed-transports); fi
           python3 "$HARNESS" \
             --deb "${DEBS[0]}" --proofs artifacts/session --require-native \
-            --artifact-run-id "${{ steps.request.outputs.run_id }}" "${OPTIONS[@]}" | tee artifacts/session.log
-      - uses: actions/upload-artifact@v4
+            --artifact-root "$ARTIFACT_ROOT" --artifact-source-commit "$ARTIFACT_SOURCE" \
+            --expected-sha256 "$ARTIFACT_SHA256" --artifact-run-id "$ARTIFACT_RUN_ID" \
+            "${OPTIONS[@]}" | tee artifacts/session.log
+      - name: Prove a valid saved password still requires customer Accept
+        if: ${{ !cancelled() && matrix.transport == 'https' && steps.artifact.outcome == 'success' }}
+        env:
+          ARTIFACT_ROOT: ${{ steps.artifact.outputs.artifact_root }}
+          ARTIFACT_DEB: ${{ steps.artifact.outputs.deb }}
+          ARTIFACT_SOURCE: ${{ steps.artifact.outputs.source_commit }}
+          ARTIFACT_SHA256: ${{ steps.artifact.outputs.sha256 }}
+          ARTIFACT_RUN_ID: ${{ steps.request.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          python3 scripts/test-support-session-https-linux.py \
+            --deb "$ARTIFACT_DEB" --proofs artifacts/saved-password-consent \
+            --require-native --saved-password-consent \
+            --artifact-root "$ARTIFACT_ROOT" --artifact-source-commit "$ARTIFACT_SOURCE" \
+            --expected-sha256 "$ARTIFACT_SHA256" --artifact-run-id "$ARTIFACT_RUN_ID" \
+            | tee artifacts/saved-password-consent.log
+      - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: linux-support-session-${{ matrix.transport }}

@@ -55,6 +55,7 @@ if [[ "$count" -le "$MIXEL_RETRY_FAILURES" ]]; then exit 1; fi
                     sleep.write_text('#!/bin/bash\nprintf "%s\\n" "$*" >>"$MIXEL_RETRY_DELAYS"\n', encoding="utf-8")
                     sleep.chmod(0o755)
                     environment = {**os.environ, "VCPKG_ROOT": str(binary),
+                                   "VCPKG_OVERLAY_TRIPLETS": str(root / "triplet overlays"),
                                    "PATH": str(binary) + os.pathsep + os.environ["PATH"],
                                    "MIXEL_RETRY_COUNT": str(root / "count"), "MIXEL_RETRY_CALLS": str(root / "calls"),
                                    "MIXEL_RETRY_DELAYS": str(root / "delays"), "MIXEL_RETRY_FAILURES": str(failures)}
@@ -63,8 +64,9 @@ if [[ "$count" -le "$MIXEL_RETRY_FAILURES" ]]; then exit 1; fi
                     self.assertEqual(result.returncode, 1 if failures == 3 else 0)
                     expected_calls = min(failures + 1, 3)
                     self.assertEqual(int((root / "count").read_text()), expected_calls)
+                    overlay = " --overlay-triplets=" + environment["VCPKG_OVERLAY_TRIPLETS"] if triplet == "arm64-osx" else ""
                     self.assertEqual((root / "calls").read_text().splitlines(),
-                                     ["install --triplet " + triplet + " libvpx libyuv opus aom libjpeg-turbo"] * expected_calls)
+                                     ["install" + overlay + " --triplet " + triplet + " libvpx libyuv opus aom libjpeg-turbo"] * expected_calls)
                     delays = (root / "delays").read_text().splitlines() if (root / "delays").exists() else []
                     self.assertEqual(delays, ["10", "20"][:expected_calls - 1])
 
