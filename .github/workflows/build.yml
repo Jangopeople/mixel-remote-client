@@ -1039,6 +1039,14 @@ jobs:
         if: ${{ !inputs.runtime_windows_release_gate }}
         shell: pwsh
         run: |
+          # Observe the genuine baseline and complete the same strict 95s
+          # compiled handoff before the optional live debugger can affect it.
+          # This remains signed-inner diagnosis, never customer release proof.
+          ./scripts/test-support-launch-windows.ps1 -Executable runtime-client/Mixel-Remote.exe -QuickSupport -ExpectedPayload runtime-client -OrdinaryThenQuickSupport -CompiledQuickSupportDiagnostic
+      - name: Diagnose signed compiled native crash attribution
+        if: ${{ !inputs.runtime_windows_release_gate }}
+        shell: pwsh
+        run: |
           # The retained artifact is the exact signed compiled payload. Pass the
           # native QS argument its portable launcher emits; the full build still
           # requires the actual signed customer QS outer launcher to pass 95s.
