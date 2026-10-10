@@ -314,9 +314,9 @@ def c_source(native_source):
     return PRELUDE + typedefs + structure + alignment + STUBS + "\n\n".join(functions) + MAIN
 
 
-def checked(command, output, name, expected=0, contains=None):
+def checked(command, output, name, expected=0, contains=None, environment=None):
     result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                            text=True, timeout=60)
+                            text=True, timeout=60, env=environment)
     (output / (name + ".log")).write_text(result.stdout)
     if expected == 0:
         assert result.returncode == 0, result.stdout
@@ -326,6 +326,14 @@ def checked(command, output, name, expected=0, contains=None):
         assert contains in result.stdout, result.stdout
     print(f"PASS: {name}; actual exit {result.returncode}")
     return result
+
+
+def unix_compiler():
+    # Use GCC's own instrumentation and runtime together on Linux; Apple Clang
+    # supplies the actual SDK/compiler runtime on macOS.
+    compiler = os.environ.get("CC") or shutil.which("clang" if sys.platform == "darwin" else "gcc")
+    assert compiler, "Native C compiler required"
+    return compiler
 
 
 def compile_c(path, executable, output, label, obj=False):
@@ -338,8 +346,7 @@ def compile_c(path, executable, output, label, obj=False):
         else:
             command += [str(path), "/Fe" + str(executable)]
     else:
-        compiler = os.environ.get("CC") or shutil.which("clang") or shutil.which("gcc")
-        assert compiler, "Native C compiler required"
+        compiler = unix_compiler()
         command = [compiler, "-std=c11", "-D_DEFAULT_SOURCE", "-g", "-O0", "-fsanitize=address", "-pthread"]
         if obj:
             command += ["-DMIXEL_CLIP_RUST_CALLER", "-c"]
@@ -437,26 +444,43 @@ def run(output):
         compile_c(path, obj, output, label + "-object-compile", obj=True)
         executable = output / (label + "-rust-caller" + (".exe" if os.name == "nt" else ""))
         command = [rustc, "--edition=2021", str(rust), "-o", str(executable), "-C", "link-arg=" + str(obj)]
+        native_environment = None
         if os.name == "nt":
             # MSVC's ASan C object carries the runtime directives into the linker.
             command += ["-C", "link-arg=/INCREMENTAL:NO"]
         elif sys.platform == "darwin":
-            compiler = os.environ.get("CC") or shutil.which("clang")
+            compiler = unix_compiler()
             runtime = Path(subprocess.run([compiler, "-print-file-name=libclang_rt.asan_osx_dynamic.dylib"],
                                          check=True, capture_output=True, text=True).stdout.strip())
             assert runtime.is_absolute() and runtime.is_file(), "Actual compiler ASan runtime absent"
             command += ["-C", "link-arg=" + str(runtime), "-C", "link-arg=-Wl,-rpath," + str(runtime.parent)]
         else:
-            compiler = shutil.which("gcc")
-            assert compiler, "GCC AddressSanitizer runtime required"
+            compiler = unix_compiler()
             runtime = Path(subprocess.run([compiler, "-print-file-name=libasan.so"],
                                          check=True, capture_output=True, text=True).stdout.strip())
             assert runtime.is_absolute() and runtime.is_file(), "Actual compiler ASan runtime absent"
-            command += ["-C", "link-arg=" + str(runtime), "-C", "link-arg=-pthread"]
+            support = Path(subprocess.run([compiler, "-print-libgcc-file-name"],
+                                         check=True, capture_output=True, text=True).stdout.strip())
+            assert support.is_absolute() and support.is_file(), "Actual compiler support archive absent"
+            # GCC AArch64 may emit outlined atomic helpers. rustc's default
+            # support libraries precede the explicit C object, so put this
+            # compiler's archive after it to resolve only its required helpers.
+            command += ["-C", "link-arg=" + str(runtime), "-C", "link-arg=" + str(support),
+                        "-C", "link-arg=-pthread"]
+            # rustc's standard system libraries precede user link arguments.
+            # Place only this verified compiler runtime first in this test
+            # process; otherwise ASan rejects initialization before exercising
+            # the actual C/Rust ownership contract. The product build and parent
+            # environment are untouched.
+            assert not any(c.isspace() or c == ':' for c in str(runtime)), "ASan runtime path is not a safe preload member"
+            native_environment = os.environ.copy()
+            previous = native_environment.get("LD_PRELOAD", "")
+            native_environment["LD_PRELOAD"] = str(runtime) + (" " + previous if previous else "")
         checked(command, output, label + "-rust-compile")
         checked([str(executable), label], output, label + "-actual-rust-drop",
                 expected=1 if label == "original" else 0,
-                contains="AddressSanitizer: heap-use-after-free" if label == "original" else "PASS: actual pinned Rust")
+                contains="AddressSanitizer: heap-use-after-free" if label == "original" else "PASS: actual pinned Rust",
+                environment=native_environment)
     print("PASS: original C and actual Rust error-Drop both fail under AddressSanitizer; corrected actual C/Rust resource ownership passes")
 
 
