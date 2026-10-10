@@ -20,6 +20,24 @@ if ($fixtureClass -lt 0 -or $fixtureStart -lt 0 -or $fixtureEnd -le $fixtureStar
 if (-not ('MixelOrdinaryTokenFixture' -as [type])) {
   Add-Type -TypeDefinition $launchSource.Substring($fixtureStart, $fixtureEnd - $fixtureStart)
 }
+$dumpControl = Join-Path ([IO.Path]::GetTempPath()) ('mixel-owned-dump-attribution-' + [Guid]::NewGuid().ToString('N'))
+try {
+  $validDump = [byte[]]::new(56)
+  foreach ($field in @(@(0,0x504d444d),@(8,1),@(12,32),@(32,15),@(36,12),@(40,44),@(44,12),@(48,1),@(52,4321))) {
+    [BitConverter]::GetBytes([uint32]$field[1]).CopyTo($validDump,$field[0])
+  }
+  [IO.File]::WriteAllBytes($dumpControl,$validDump)
+  if ([MixelOrdinaryTokenFixture]::DumpProcessId($dumpControl) -ne 4321) { throw 'Actual minidump process stream was not decoded.' }
+  foreach ($mutation in @(@(0,0),@(8,0),@(12,1000),@(36,4),@(40,1000),@(48,0))) {
+    $invalidDump=$validDump.Clone()
+    [BitConverter]::GetBytes([uint32]$mutation[1]).CopyTo($invalidDump,$mutation[0])
+    [IO.File]::WriteAllBytes($dumpControl,$invalidDump)
+    $rejected=$false
+    try { [void][MixelOrdinaryTokenFixture]::DumpProcessId($dumpControl) } catch { $rejected=$true }
+    if (-not $rejected) { throw 'Malformed or unattributed native dump accepted.' }
+  }
+} finally { if (Test-Path $dumpControl) { Remove-Item $dumpControl } }
+Write-Host 'PASS: exact native dump attribution decodes the actual process stream and rejects six malformed or unattributed dump controls.'
 $actualDesktop = [MixelOrdinaryTokenFixture]::CurrentDesktopPath()
 if ($actualDesktop -notmatch '^[^\\]+\\[^\\]+$' -or $launchSource.Contains('desktop = "winsta0\\default"')) {
   throw 'Actual native launch desktop is missing or reverted to a different hard-coded desktop.'

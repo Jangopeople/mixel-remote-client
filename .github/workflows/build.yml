@@ -865,8 +865,12 @@ jobs:
     permissions:
       actions: read
       contents: read
-    runs-on: windows-latest
-    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - name: Validate artifact-only diagnostic request
@@ -878,6 +882,27 @@ jobs:
       - name: Qualify exact ordinary Windows desktop fixture
         shell: pwsh
         run: ./scripts/test-windows-pipeline.ps1
+      - name: Prepare Microsoft native crash stack debugger
+        shell: pwsh
+        run: |
+          $cdb = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/Debuggers/x64/cdb.exe'
+          if (-not (Test-Path $cdb)) {
+            # Official Microsoft crash-analysis guidance uses this SDK installer
+            # and the debugger-only feature. No application bytes are changed.
+            $setup = Join-Path $env:RUNNER_TEMP 'mixel-debugger-sdk-setup.exe'
+            Invoke-WebRequest 'https://go.microsoft.com/fwlink/?linkid=2173743' -OutFile $setup
+            $signature = Get-AuthenticodeSignature $setup
+            if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') {
+              throw 'Native debugger SDK installer is not validly signed by Microsoft.'
+            }
+            $installer = Start-Process $setup -ArgumentList '/features','OptionId.WindowsDesktopDebuggers','/q','/norestart' -PassThru -Wait
+            if ($installer.ExitCode -notin @(0,3010) -or -not (Test-Path $cdb)) { throw 'Microsoft native debugger preparation failed.' }
+            Remove-Item $setup
+          }
+          $signature = Get-AuthenticodeSignature $cdb
+          if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') {
+            throw 'Native debugger is not validly signed by Microsoft.'
+          }
       - uses: actions/download-artifact@v4
         with:
           name: windows-msix-payload
@@ -902,7 +927,7 @@ jobs:
           # The retained artifact is the exact signed compiled payload. Pass the
           # native QS argument its portable launcher emits; the full build still
           # requires the actual signed customer QS outer launcher to pass 95s.
-          ./scripts/test-support-launch-windows.ps1 -Executable runtime-client/Mixel-Remote.exe -QuickSupport -ExpectedPayload runtime-client -OrdinaryThenQuickSupport -CompiledQuickSupportDiagnostic
+          ./scripts/test-support-launch-windows.ps1 -Executable runtime-client/Mixel-Remote.exe -QuickSupport -ExpectedPayload runtime-client -OrdinaryThenQuickSupport -CompiledQuickSupportDiagnostic -NativeCrashDiagnostic
       - name: Save synthetic runtime diagnostics
         if: always()
         shell: pwsh
@@ -922,7 +947,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: support-runtime-diagnostics
+          name: support-runtime-diagnostics-${{ matrix.os }}
           path: runtime-diagnostics/
 
   runtime-macos:

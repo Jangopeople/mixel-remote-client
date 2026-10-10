@@ -4,9 +4,14 @@ param(
   [switch]$QuickSupport,
   [switch]$OrdinaryThenQuickSupport,
   [switch]$CompiledQuickSupportDiagnostic,
+  [switch]$NativeCrashDiagnostic,
   [string]$ExpectedPayload
 )
 $ErrorActionPreference = 'Stop'
+if ($NativeCrashDiagnostic -and
+    (-not $CompiledQuickSupportDiagnostic -or -not $OrdinaryThenQuickSupport -or $env:GITHUB_ACTIONS -cne 'true')) {
+  throw 'Native crash capture is restricted to the explicit compiled diagnostic on an isolated GitHub Actions runner.'
+}
 if ($CompiledQuickSupportDiagnostic -and
     ($Portable -or -not $QuickSupport -or -not $OrdinaryThenQuickSupport -or -not $ExpectedPayload)) {
   throw 'Compiled QS diagnosis requires the ordinary-to-QS scenario and exact signed payload, without a portable outer launcher.'
@@ -163,6 +168,25 @@ public static class MixelOrdinaryTokenFixture {
     foreach (IntPtr handle in StartedProcesses.Values) CloseHandle(handle);
     StartedProcesses.Clear();
   }
+  // The MiscInfo stream must independently attribute the private WER dump to
+  // the actual owned PID; a filename alone is not sufficient evidence.
+  public static int DumpProcessId(string path) {
+    using (var file = System.IO.File.OpenRead(path)) using (var reader = new System.IO.BinaryReader(file)) {
+      if (file.Length < 32 || reader.ReadUInt32() != 0x504d444d) throw new InvalidOperationException("Invalid minidump header");
+      reader.ReadUInt32(); uint count = reader.ReadUInt32(), directory = reader.ReadUInt32();
+      if (count > 1024 || (long)directory + count * 12L > file.Length) throw new InvalidOperationException("Invalid minidump directory");
+      for (uint index = 0; index < count; index++) {
+        file.Position = directory + index * 12L;
+        uint kind = reader.ReadUInt32(), size = reader.ReadUInt32(), offset = reader.ReadUInt32();
+        if (kind != 15) continue;
+        if (size < 12 || (long)offset + size > file.Length) throw new InvalidOperationException("Invalid minidump process stream");
+        file.Position = offset; uint declared = reader.ReadUInt32(), flags = reader.ReadUInt32();
+        if (declared < 12 || declared > size || (flags & 1) == 0) throw new InvalidOperationException("Minidump has no actual process ID");
+        return checked((int)reader.ReadUInt32());
+      }
+      throw new InvalidOperationException("Minidump process attribution missing");
+    }
+  }
   public static int StartLinkedToken(string executable) {
     IntPtr token = IntPtr.Zero, linked = IntPtr.Zero, data = Marshal.AllocHGlobal(IntPtr.Size);
     try {
@@ -286,6 +310,9 @@ $desktopAccess = $null
 $baselineIncomingPid = $null
 $fixtureStage = 'customer launch'
 $primaryFailure = $null
+$nativeCrash = $null
+$nativeCrashCleanupFailed = $false
+$ordinaryStartedAt = $null
 $launchScenario = if ($OrdinaryThenQuickSupport) { 'ordinary GUI to QuickSupport handoff' } elseif ($QuickSupport) { 'QuickSupport double-click' } else { 'support URI launch' }
 
 function Start-CustomerApp {
@@ -365,6 +392,112 @@ function Write-OwnedWindowDiagnostic([int]$ProcessId, [string]$Phase) {
     Write-Host ('FIXTURE: actual owned process/window snapshot: ' + ($state | ConvertTo-Json -Depth 4 -Compress))
   } catch {
     Write-Host "FIXTURE: owned process/window snapshot unavailable for PID $ProcessId; errorId=$($_.FullyQualifiedErrorId)."
+  }
+}
+
+function Start-OwnedCrashObservation([string]$AccountSid) {
+  if (-not $AccountSid) { throw 'Native crash capture requires the actual created standard-account SID.' }
+  $folder = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) ('mixel-native-crash-private-' + [Guid]::NewGuid().ToString('N'))
+  $key = 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\Mixel-Remote.exe'
+  $state = [pscustomobject]@{ folder=$folder; key=$key; existed=(Test-Path $key); values=@{} }
+  if ($state.existed) {
+    $original = Get-Item $key
+    foreach ($name in @('DumpFolder','DumpType','DumpCount')) {
+      if ($original.GetValueNames() -contains $name) {
+        $state.values[$name] = @{ value=$original.GetValue($name,$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames); kind=$original.GetValueKind($name) }
+      }
+    }
+  }
+  try {
+    New-Item -ItemType Directory $folder | Out-Null
+    $acl = [Security.AccessControl.DirectorySecurity]::new()
+    $acl.SetAccessRuleProtection($true,$false)
+    foreach ($entry in @(@('S-1-5-18','FullControl'), @('S-1-5-32-544','FullControl'), @($AccountSid,'Modify'))) {
+      $rule = [Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new($entry[0]),$entry[1],'ContainerInherit,ObjectInherit','None','Allow')
+      $acl.AddAccessRule($rule)
+    }
+    Set-Acl $folder $acl
+    New-Item $key -Force | Out-Null
+    New-ItemProperty $key -Name DumpFolder -Value $folder -PropertyType ExpandString -Force | Out-Null
+    New-ItemProperty $key -Name DumpType -Value 2 -PropertyType DWord -Force | Out-Null
+    New-ItemProperty $key -Name DumpCount -Value 1 -PropertyType DWord -Force | Out-Null
+    return $state
+  } catch {
+    try { Stop-OwnedCrashObservation $state } catch { Write-Host 'FAIL: owned crash observation setup cleanup additionally failed.' }
+    throw
+  }
+}
+
+function Stop-OwnedCrashObservation($State) {
+  # Restore only the three values changed by this observation and remove the
+  # exact disposable folder. Raw dumps/debugger output never enter artifacts.
+  try {
+    foreach ($name in @('DumpFolder','DumpType','DumpCount')) {
+      if ($State.values.ContainsKey($name)) {
+        New-ItemProperty $State.key -Name $name -Value $State.values[$name].value -PropertyType $State.values[$name].kind -Force | Out-Null
+      } elseif ((Test-Path $State.key) -and (Get-Item $State.key).GetValueNames().Contains($name)) {
+        Remove-ItemProperty $State.key -Name $name
+      }
+    }
+    if (-not $State.existed -and (Test-Path $State.key)) { Remove-Item $State.key }
+  } finally {
+    if (Test-Path $State.folder) { Remove-Item $State.folder -Recurse -Force }
+  }
+}
+
+function Write-OwnedCrashDiagnostic([int]$ProcessId, [string]$OwnedExecutable, [DateTime]$StartedAt, $State) {
+  $deadline = [DateTime]::UtcNow.AddSeconds(30)
+  $dump = $null
+  if ($State) {
+    do {
+      foreach ($candidate in @(Get-ChildItem $State.folder -Filter '*.dmp' -File)) {
+        # WER may still be writing a newly created dump. Retry bounded reads
+        # instead of treating a partial header or sharing lock as attribution.
+        try {
+          if ([MixelOrdinaryTokenFixture]::DumpProcessId($candidate.FullName) -eq $ProcessId) { $dump=$candidate; break }
+        } catch { }
+      }
+      if ($dump) { break }
+      Start-Sleep -Milliseconds 500
+    } while ([DateTime]::UtcNow -lt $deadline)
+  }
+  $events = @()
+  foreach ($event in @(Get-WinEvent -FilterHashtable @{LogName='Application'; Id=1000; StartTime=$StartedAt.AddSeconds(-1)} -ErrorAction SilentlyContinue)) {
+    $data=@{}
+    foreach ($entry in ([xml]$event.ToXml()).Event.EventData.Data) { $data[[string]$entry.Name]=[string]$entry.'#text' }
+    if ($data.AppPath -cne $OwnedExecutable -or $data.ProcessId -notmatch '^(?:0x)?[0-9a-fA-F]+$') { continue }
+    $eventPid = if ($data.ProcessId.StartsWith('0x')) { [Convert]::ToInt64($data.ProcessId.Substring(2),16) } else { [Convert]::ToInt64($data.ProcessId) }
+    if ($eventPid -ne $ProcessId) { continue }
+    $events += [pscustomobject]@{ eventId=1000; pid=$eventPid; module=$data.ModuleName; exception=$data.ExceptionCode; offset=$data.FaultingOffset }
+  }
+  $frames=@(); $modules=@(); $lastEvent=@(); $debuggerStatus='no-owned-dump'
+  if ($dump) {
+    $cdb = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/Debuggers/x64/cdb.exe'
+    if (-not (Test-Path $cdb)) { throw 'Native diagnostic CDB was not prepared.' }
+    $raw = Join-Path $State.folder 'debugger-private.txt'
+    $errors = Join-Path $State.folder 'debugger-private-errors.txt'
+    $symbols = Join-Path $State.folder 'symbols'
+    $debugger = Start-Process $cdb -ArgumentList @('-z',('"'+$dump.FullName+'"'),'-y',('"srv*'+$symbols+'*https://msdl.microsoft.com/download/symbols"'),'-c','".lastevent; .ecxr; kn 40; lm; q"') -RedirectStandardOutput $raw -RedirectStandardError $errors -PassThru -NoNewWindow
+    if (-not $debugger.WaitForExit(120000)) { Stop-Process -Id $debugger.Id -Force; throw 'Owned dump stack extraction exceeded its deadline.' }
+    $debugger.WaitForExit()
+    $debugger.Refresh()
+    $debuggerStatus='exit:'+$debugger.ExitCode
+    # kn has no argument/local-variable dump. Retain only stack symbols and
+    # loaded module names; arbitrary debugger text, memory and paths stay local.
+    foreach ($line in Get-Content $raw) {
+      if ($line -match '^\s*([0-9a-fA-F]{1,3})\s+[0-9a-fA-F`]+\s+([0-9a-fA-F`]+)\s+((?:[A-Za-z0-9_.$?@:<>,~\[\]()+-]+![A-Za-z0-9_.$?@:<>,~\[\]()+ -]+|[A-Za-z0-9_.-]+\+0x[0-9a-fA-F]+))\s*$') {
+        $frames += [pscustomobject]@{ index=$Matches[1]; returnAddress=$Matches[2]; symbol=$Matches[3] }
+      } elseif ($line -match '^\s*[0-9a-fA-F`]+\s+[0-9a-fA-F`]+\s+([A-Za-z0-9_.-]+)\s+') { $modules += $Matches[1] }
+      if ($line -match 'Last event:.*(?:code|exception)\s+([0-9a-fA-F]{8})') { $lastEvent += $Matches[1] }
+    }
+  }
+  $extraction = if (-not $dump) { 'no-owned-dump' } elseif ($frames.Count -eq 0) { 'no-stack-frames' } else { 'stack-extracted' }
+  $selected=[pscustomobject]@{ pid=$ProcessId; nativeStatus=[MixelOrdinaryTokenFixture]::StartedStatus($ProcessId); applicationEvents=$events; actualDumpPidVerified=[bool]$dump; debuggerStatus=$debuggerStatus; stackExtraction=$extraction; exceptionCodes=$lastEvent; stackFrames=$frames; loadedModuleNames=$modules }
+  Write-Host ('FIXTURE: actual owned native crash evidence: '+($selected | ConvertTo-Json -Depth 5 -Compress))
+  if ($env:RUNNER_TEMP) {
+    $archive=Join-Path $env:RUNNER_TEMP 'mixel-owned-ordinary-qs-logs'
+    New-Item -ItemType Directory $archive -Force | Out-Null
+    $selected | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $archive 'native-crash-sanitized.json')
   }
 }
 
@@ -450,7 +583,9 @@ try {
         Add-LocalGroupMember -SID ([Security.Principal.SecurityIdentifier]::new('S-1-5-32-545')) -Member $ownedUser
         $fixtureStage = 'grant owned standard desktop access'
         $desktopAccess = [MixelOrdinaryTokenFixture+DesktopAccess]::new($ownedSid)
+        if ($NativeCrashDiagnostic) { $nativeCrash=Start-OwnedCrashObservation $ownedSid }
         $fixtureStage = 'start owned standard GUI'
+        $ordinaryStartedAt=[DateTime]::UtcNow
         try { $ordinaryPid = [MixelOrdinaryTokenFixture]::StartStandardUser($ordinaryExecutable, $ownedUser, $ownedPassword) }
         finally { $ownedPassword = $null }
       }
@@ -558,6 +693,10 @@ try {
   # arbitrary app arguments. Rethrow the original error after owned cleanup.
   Write-Host "FAIL: owned runtime stage '$fixtureStage'; errorId=$($_.FullyQualifiedErrorId); exceptionType=$($_.Exception.GetType().FullName)."
   if ($main -and $OrdinaryThenQuickSupport) { Write-OwnedWindowDiagnostic $main.Id 'failed ordinary-to-QS scenario' }
+  if ($main -and $ordinaryStartedAt) {
+    try { Write-OwnedCrashDiagnostic $main.Id $ordinaryExecutable $ordinaryStartedAt $nativeCrash }
+    catch { Write-Host "FIXTURE: owned native crash extraction additionally failed; errorId=$($_.FullyQualifiedErrorId)." }
+  }
   throw
 } finally {
   # Only stop processes newly started from this runner-owned build directory.
@@ -567,9 +706,14 @@ try {
      ($Portable -and $_.Path.StartsWith((Split-Path $runtimePath -Parent) + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) -or
      ($ordinaryRoot -and $_.Path.StartsWith($ordinaryRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)))
   } | Stop-Process -Force -ErrorAction SilentlyContinue
+  if ($nativeCrash) {
+    try { Stop-OwnedCrashObservation $nativeCrash }
+    catch { $nativeCrashCleanupFailed=$true; Write-Host 'FAIL: owned native crash observation cleanup additionally failed.' }
+  }
   [MixelOrdinaryTokenFixture]::CloseStartedObservations()
   if ($ordinaryRoot -or $ownedUser -or $desktopAccess) {
     $cleanupErrors = [System.Collections.Generic.List[string]]::new()
+    if ($nativeCrashCleanupFailed) { $cleanupErrors.Add('Owned native crash observation cleanup failed.') }
     Start-Sleep -Seconds 2
     # Preserve only logs from the actual owned runtime token's profile before
     # deleting it. No account credentials, configuration files or raw argv are
