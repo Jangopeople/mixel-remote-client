@@ -59,6 +59,19 @@ if ($env:GITHUB_ACTIONS -ceq 'true' -and [MixelOrdinaryTokenFixture]::Elevated($
   if ($accountStart -lt 0 -or $accountEnd -le $accountStart) { throw 'Actual owned account bootstrap is missing.' }
   $ownedUser = 'mixelqs' + [Guid]::NewGuid().ToString('N').Substring(0, 10)
   $ownedSid = $null
+  $descriptionRejected = $false
+  $negativeSid = $null
+  try {
+    $negativeAccount = New-LocalUser -Name $ownedUser -NoPassword -Description 'Owned disposable Mixel QuickSupport runtime fixture'
+    $negativeSid = $negativeAccount.SID.Value
+  } catch [System.Management.Automation.ParameterBindingValidationException] {
+    $descriptionRejected = $true
+  } finally {
+    if ($negativeSid) { Remove-LocalUser -SID ([Security.Principal.SecurityIdentifier]::new($negativeSid)) }
+  }
+  if (-not $descriptionRejected) { throw 'Native New-LocalUser did not reject the original invalid 51-character fixture description.' }
+  if (Get-LocalUser -Name $ownedUser -ErrorAction SilentlyContinue) { throw 'Invalid-description negative control unexpectedly created an account.' }
+  Write-Host 'PASS: actual New-LocalUser rejects the original invalid 51-character description before creating any account.'
   try {
     . ([scriptblock]::Create($launchSource.Substring($accountStart, $accountEnd - $accountStart)))
     if (-not $ownedSid -or (Get-LocalUser -SID ([Security.Principal.SecurityIdentifier]::new($ownedSid))).Name -cne $ownedUser) {

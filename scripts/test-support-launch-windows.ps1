@@ -274,7 +274,9 @@ try {
         [Security.Cryptography.RandomNumberGenerator]::Fill($random)
         $ownedPassword = 'aA!9' + [Convert]::ToBase64String($random)
         $fixtureStage = 'create owned standard account'
-        $account = New-LocalUser -Name $ownedUser -Password (ConvertTo-SecureString $ownedPassword -AsPlainText -Force) -AccountNeverExpires -PasswordNeverExpires -Description 'Owned disposable Mixel QuickSupport runtime fixture'
+        # New-LocalUser validates Description at 48 characters. The previous
+        # 51-character fixture comment failed before any account was created.
+        $account = New-LocalUser -Name $ownedUser -Password (ConvertTo-SecureString $ownedPassword -AsPlainText -Force) -AccountNeverExpires -PasswordNeverExpires -Description 'Mixel owned QuickSupport runtime fixture'
         $ownedSid = $account.SID.Value
         $fixtureStage = 'add owned standard account to users'
         Add-LocalGroupMember -SID ([Security.Principal.SecurityIdentifier]::new('S-1-5-32-545')) -Member $ownedUser
