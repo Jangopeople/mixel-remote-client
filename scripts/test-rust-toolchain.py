@@ -58,18 +58,17 @@ class RustToolchainTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "indirect"):
             find_msvc_linker(self.environment, verifier=self.verifier)
 
-    def test_native_probe_qualifies_real_identity_and_rejects_coreutils_output(self):
-        for output, status, passed in (("Microsoft (R) Incremental Linker Version 14.44\n", 0, True),
-                                       ("/usr/bin/link: extra operand", 1, False),
-                                       ("GNU coreutils link", 0, False),
-                                       ("Microsoft Incremental Linker" + "x" * 131072, 0, False)):
-            with self.subTest(output=output[:50]), patch("rust_toolchain.subprocess.run", return_value=subprocess.CompletedProcess([], status, output, "")) as runner:
+    def test_native_pe_identity_rejects_coreutils_and_other_microsoft_tools(self):
+        for identity, passed in (({"CompanyName": "Microsoft Corporation", "OriginalFilename": "LINK.EXE"}, True),
+                                 ({"CompanyName": "GNU", "OriginalFilename": "link.exe"}, False),
+                                 ({"CompanyName": "Microsoft Corporation", "OriginalFilename": "cl.exe"}, False),
+                                 ({"OriginalFilename": "link.exe"}, False), ({}, False)):
+            with self.subTest(identity=identity), patch("rust_toolchain.read_windows_version_info", return_value=identity) as reader:
                 if passed:
                     verify_msvc_linker(self.linker)
                 else:
                     with self.assertRaises(RuntimeError): verify_msvc_linker(self.linker)
-                self.assertEqual(runner.call_args.args[0], [str(self.linker), "/?"])
-                self.assertEqual(runner.call_args.kwargs["timeout"], 10)
+                self.assertEqual(reader.call_args.args[0], self.linker)
         self.linker.write_bytes(b"not-a-PE")
         with self.assertRaisesRegex(RuntimeError, "PE executable"): verify_msvc_linker(self.linker)
 

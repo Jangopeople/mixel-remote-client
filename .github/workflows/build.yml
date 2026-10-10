@@ -750,6 +750,7 @@ jobs:
           VCPKG_ROOT: ${{ github.workspace }}/vcpkg
           RDREPO: ./rustdesk
         run: |
+          source scripts/use-windows-msvc-bash.sh
           python scripts/test-support-invite.py
           python scripts/test-generated-support-paths.py
           python scripts/test-support-macos-uri-routing.py
@@ -773,6 +774,7 @@ jobs:
         env:
           VCPKG_ROOT: ${{ github.workspace }}/vcpkg
         run: |
+          source ../scripts/use-windows-msvc-bash.sh
           python build.py --flutter --skip-portable-pack
 
       - name: Test compiled attended support guard
@@ -780,6 +782,7 @@ jobs:
         env:
           VCPKG_ROOT: ${{ github.workspace }}/vcpkg
         run: |
+          source scripts/use-windows-msvc-bash.sh
           python scripts/test-compiled-support-guard.py
 
       - name: Prepare full application directory for Store packaging
@@ -811,6 +814,7 @@ jobs:
       - name: Build portable launcher from the signed compiled application
         shell: bash
         run: |
+          source scripts/use-windows-msvc-bash.sh
           python -m pip install -r rustdesk/libs/portable/requirements.txt
           python scripts/build-windows-portable.py --output "dist/mixel-remote-${UPSTREAM_VERSION}-x86_64.exe"
 

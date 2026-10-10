@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Keep native permission calls available and match each Mac build's real minimum."""
+"""Guard pinned Mac permissions, display metadata and native resource ownership."""
 import hashlib
 import os
 from pathlib import Path
@@ -41,10 +41,35 @@ NEW_CAPTURE = '''    if (@available(macOS 10.15, *)) {
     return false;'''
 OLD_INPUT = '    if (floor(NSAppKitVersionNumber) >= NSAppKitVersionNumber10_15) {'
 NEW_INPUT = '    if (@available(macOS 10.15, *)) {'
+OLD_PIXEL_ENCODING = '\tCFStringRef pixelEncoding = CGDisplayModeCopyPixelEncoding(mode);\t\n'
+NEW_PIXEL_ENCODING = OLD_PIXEL_ENCODING + '''    // Mixel: this deprecated metadata API may return no encoding.
+    if (pixelEncoding == NULL) {
+        return 0;
+    }
+'''
+OLD_AUTH_FAILURE = '''    if (status != errAuthorizationSuccess) {
+        printf("Failed to authorize\\n");
+        return false;
+    }'''
+NEW_AUTH_FAILURE = '''    if (status != errAuthorizationSuccess) {
+        printf("Failed to authorize\\n");
+        // Mixel: cancellation/error still owns the successful-create reference.
+        AuthorizationFree(authRef, kAuthorizationFlagDefaults);
+        return false;
+    }'''
+OLD_AUTH_EXECUTE = '''        FILE *pipe = NULL;
+        status = AuthorizationExecuteWithPrivileges(authRef, process, kAuthorizationFlagDefaults, args, &pipe);'''
+NEW_AUTH_EXECUTE = '''        // Mixel: this caller has no stream reader; request no unused pipe.
+        status = AuthorizationExecuteWithPrivileges(authRef, process, kAuthorizationFlagDefaults, args, NULL);'''
 
 
 def patch_permissions(text):
     original = text
+    for old, new in ((OLD_PIXEL_ENCODING, NEW_PIXEL_ENCODING),
+                     (OLD_AUTH_FAILURE, NEW_AUTH_FAILURE),
+                     (OLD_AUTH_EXECUTE, NEW_AUTH_EXECUTE)):
+        if original.count(new) == 1:
+            original = original.replace(new, old, 1)
     if text.count(NEW_CAPTURE) == 1:
         original = original.replace(NEW_CAPTURE, OLD_CAPTURE, 1)
     # NEW_INPUT occurs in both corrected permission functions; normalize only
@@ -58,7 +83,14 @@ def patch_permissions(text):
         raise RuntimeError('Pinned 1.4.6 Mac permission source changed')
     if original.count(OLD_CAPTURE) != 1 or original.count(OLD_INPUT) != 1:
         raise RuntimeError('Pinned Mac permission call anchors changed')
-    return original.replace(OLD_CAPTURE, NEW_CAPTURE, 1).replace(OLD_INPUT, NEW_INPUT, 1)
+    fixed = original.replace(OLD_CAPTURE, NEW_CAPTURE, 1).replace(OLD_INPUT, NEW_INPUT, 1)
+    for old, new in ((OLD_PIXEL_ENCODING, NEW_PIXEL_ENCODING),
+                     (OLD_AUTH_FAILURE, NEW_AUTH_FAILURE),
+                     (OLD_AUTH_EXECUTE, NEW_AUTH_EXECUTE)):
+        if fixed.count(old) != 1:
+            raise RuntimeError('Pinned Mac native failure boundary changed')
+        fixed = fixed.replace(old, new, 1)
+    return fixed
 
 
 def patch_runtime(text):
@@ -109,7 +141,7 @@ def apply(repo, architecture=None):
     for path, text in changes.items():
         with path.open('w', encoding='utf-8', newline='\n') as out:
             out.write(text)
-    print('   patched native Mac permission availability guards' + ('; aligned ' + architecture + ' core/Runner/advertised minimum' if architecture else ''))
+    print('   patched native Mac permission availability, nullable display metadata and authorization ownership' + ('; aligned ' + architecture + ' core/Runner/advertised minimum' if architecture else ''))
 
 
 if __name__ == '__main__':

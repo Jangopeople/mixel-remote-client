@@ -3,25 +3,61 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-import subprocess
 from collections.abc import Mapping, Sequence
+
+
+def read_windows_version_info(executable: Path) -> dict[str, str]:
+    """Read native PE identity without locale-dependent compiler console text."""
+    if os.name != "nt":
+        raise RuntimeError("Native Windows version metadata requires Windows")
+    import ctypes
+    from ctypes import wintypes
+
+    version = ctypes.WinDLL("version", use_last_error=True)
+    version.GetFileVersionInfoSizeW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(wintypes.DWORD)]
+    version.GetFileVersionInfoSizeW.restype = wintypes.DWORD
+    version.GetFileVersionInfoW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID]
+    version.GetFileVersionInfoW.restype = wintypes.BOOL
+    version.VerQueryValueW.argtypes = [wintypes.LPCVOID, wintypes.LPCWSTR,
+                                     ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(wintypes.UINT)]
+    version.VerQueryValueW.restype = wintypes.BOOL
+    handle = wintypes.DWORD()
+    size = version.GetFileVersionInfoSizeW(str(executable), ctypes.byref(handle))
+    if not 0 < size <= 1048576:
+        raise RuntimeError("Installed linker has absent or oversized native version metadata")
+    data = ctypes.create_string_buffer(size)
+    if not version.GetFileVersionInfoW(str(executable), 0, size, data):
+        raise RuntimeError("Installed linker native version metadata could not be read")
+    pointer = ctypes.c_void_p(); length = wintypes.UINT()
+    if not version.VerQueryValueW(data, "\\VarFileInfo\\Translation", ctypes.byref(pointer), ctypes.byref(length)) or not pointer.value or length.value < 4:
+        raise RuntimeError("Installed linker native version translation is absent")
+    translation = ctypes.cast(pointer, ctypes.POINTER(wintypes.WORD))
+    prefix = f"\\StringFileInfo\\{translation[0]:04x}{translation[1]:04x}\\"
+    identity = {}
+    for name in ("CompanyName", "OriginalFilename"):
+        if not version.VerQueryValueW(data, prefix + name, ctypes.byref(pointer), ctypes.byref(length)) or not pointer.value or not 1 < length.value <= 256:
+            raise RuntimeError("Installed linker native version identity is absent or oversized")
+        value = ctypes.wstring_at(pointer, length.value - 1)
+        if any(ord(character) < 32 for character in value):
+            raise RuntimeError("Installed linker native version identity is invalid")
+        identity[name] = value
+    return identity
 
 
 def verify_msvc_linker(linker: Path) -> None:
     # cl/link share the developer environment's explicit x64 tool directory.
     # Both are real PE files; then qualify the actual linker rather than a
-    # same-named coreutils executable appearing earlier on PATH.
+    # same-named coreutils executable appearing earlier on PATH. Version
+    # resources avoid locale, banner suppression and help exit-code differences.
     for executable in (linker, linker.with_name("cl.exe")):
         if not executable.is_file() or executable.is_symlink():
             raise RuntimeError("Installed x64 MSVC tool is absent or indirect")
         with executable.open("rb") as stream:
             if stream.read(2) != b"MZ":
                 raise RuntimeError("Installed x64 MSVC tool is not a PE executable")
-    result = subprocess.run([str(linker), "/?"], capture_output=True, text=True,
-                            encoding="utf-8", errors="replace", timeout=10)
-    output = result.stdout + result.stderr
-    if result.returncode != 0 or len(output) > 131072 or "Microsoft" not in output or "Incremental Linker" not in output:
-        raise RuntimeError("Installed Microsoft linker failed native qualification; private output withheld")
+    identity = read_windows_version_info(linker)
+    if identity.get("CompanyName") != "Microsoft Corporation" or identity.get("OriginalFilename", "").casefold() != "link.exe":
+        raise RuntimeError("Installed linker is not the native Microsoft LINK executable; private metadata withheld")
 
 
 def find_msvc_linker(environment: Mapping[str, str], *, verifier=verify_msvc_linker) -> Path:
