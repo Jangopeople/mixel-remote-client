@@ -475,11 +475,16 @@ for name in os.listdir('/proc'):
         # Foreground callbacks can restore the app after minimizing it. The
         # own synthetic fixture must be above it for an unoccluded RGB oracle.
         time.sleep(.3)
-        state = self.fixture_state()
         viewer = next(iter(self.windows("controller", "Remote Desktop.*Mixel-Remote$")), None)
         assert viewer, "Actual remote viewer is absent"
         self.activate("controller", viewer)
+        before_capture = self.fixture_state()
+        capture_started = time.monotonic()
         self.screenshot("controller", name)
+        capture_finished = time.monotonic()
+        # Bind the clock to the captured image before slow pixel analysis. A
+        # pre-capture snapshot can reject a current frame as a future frame.
+        state = self.fixture_state()
         code = r'''from PIL import Image
 import json,sys,statistics
 sys.path.insert(0,'/payload')
@@ -502,6 +507,11 @@ for color in [(229,29,54),(19,183,108),(23,110,233)]:
  rects.append((min(r[1] for r in wide),min(r[2] for r in wide),width))
 assert abs(rects[1][0]-rects[0][0]-rects[0][2])<12
 assert abs(rects[2][0]-rects[1][0]-rects[1][2])<12
+# A popup can cover only the top of one bar. Require the other two to agree
+# on the common top; the clock itself still has to decode and be current.
+top=statistics.median(rect[1] for rect in rects)
+assert sum(abs(rect[1]-top)<=2 for rect in rects)>=2,'Remote RGB tops disagree'
+rects[0]=(rects[0][0],round(top),rects[0][2])
 marker=MARKER
 canvas=CANVAS
 x,y,width=rects[0]
@@ -521,6 +531,14 @@ print(json.dumps({'rectangle':rects[0],'decoded_counter':counter,'marker_samples
             raise RuntimeError("Host control geometry changed during decoded video observation")
         canvas = state["controls"]["canvas"]
         state["decoded_marker"] = decoded
+        state["video_observation"] = {
+            "source_before_capture": before_capture["marker"]["counter"],
+            "source_after_capture": state["marker"]["counter"],
+            "source_before_monotonic": before_capture["monotonic"],
+            "source_after_monotonic": state["monotonic"],
+            "capture_started_monotonic": capture_started,
+            "capture_finished_monotonic": capture_finished,
+        }
         return (lambda hx, hy: (x + (hx - canvas["x"]) * width / 300,
                                y + (hy - canvas["y"]) * width / 300)), state
 
@@ -530,7 +548,8 @@ print(json.dumps({'rectangle':rects[0],'decoded_counter':counter,'marker_samples
             mapping, state = self.video_map(label)
             counter = state["decoded_marker"]["decoded_counter"]
             observations.append({"source_counter": state["marker"]["counter"],
-                                 "decoded_counter": counter, "rectangle": state["decoded_marker"]["rectangle"]})
+                                 "decoded_counter": counter, "rectangle": state["decoded_marker"]["rectangle"],
+                                 "capture": state["video_observation"]})
             (self.proofs / (label + "-fresh-frames.json")).write_text(json.dumps(observations, indent=2) + "\n")
             if len(observations) >= 2 and 0 < ((counter - observations[0]["decoded_counter"]) & 65535) < 120:
                 return mapping, state
