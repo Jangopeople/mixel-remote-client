@@ -609,8 +609,9 @@ function Start-OwnedLiveCrashObservation([int]$ProcessId, $State) {
   ) | Set-Content $commands -Encoding ascii
   # Microsoft documents -pr for an already suspended target: resume occurs on
   # debugger attachment, permitting initial loader events and command startup.
-  # The numeric heap break filter is configured on CDB's own command line.
-  $State.live=Start-OwnedDebuggerProcess $cdb @('-p',[string]$ProcessId,'-pr','-G','-pd','-hd','-nosqm','-noshell','-xe','0xc0000374','-y',('srv*'+$symbols+'*https://msdl.microsoft.com/download/symbols'),'-cf',$commands,'-logo',$raw) $console $errors
+  # Lowercase -g ignores only the debugger's initial breakpoint; uppercase -G
+  # ignores its final breakpoint. The numeric heap break filter remains active.
+  $State.live=Start-OwnedDebuggerProcess $cdb @('-p',[string]$ProcessId,'-pr','-g','-G','-pd','-hd','-nosqm','-noshell','-xe','0xc0000374','-y',('srv*'+$symbols+'*https://msdl.microsoft.com/download/symbols'),'-cf',$commands,'-logo',$raw) $console $errors
   $debugger=$State.live.debugger
   $State.live | Add-Member -NotePropertyMembers @{raw=$raw;console=$console;errors=$errors;pid=$ProcessId;attached=$false;captureAttributed=$false;ready=$false;primaryThreadResume=$null;timeoutObservation=$null}
   $deadline=[DateTime]::UtcNow.AddSeconds(20)
