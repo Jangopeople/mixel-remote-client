@@ -103,6 +103,7 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Runtime.CompilerServices;
 using System.Text;
 public static class MixelOwnedDesktopControl {
   [DllImport("user32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern IntPtr CreateWindowExW(uint extended, string cls, string title, uint style, int x, int y, int width, int height, IntPtr parent, IntPtr menu, IntPtr instance, IntPtr parameter);
@@ -115,13 +116,25 @@ public static class MixelOwnedDesktopControl {
   [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
   [DllImport("user32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool GetUserObjectInformationW(IntPtr obj, int kind, StringBuilder text, uint size, out uint required);
   static string Name(IntPtr obj) { var text=new StringBuilder(512); uint required; return GetUserObjectInformationW(obj,2,text,1024,out required) ? text.ToString() : "unavailable(win32="+Marshal.GetLastWin32Error()+")"; }
+  static void WriteResult(string result, string[] values) {
+    string temporary=result+".new";
+    File.WriteAllLines(temporary,values);
+    if(File.Exists(result)) File.Replace(temporary,result,null);
+    else File.Move(temporary,result);
+  }
   public static void Main() {
     string result=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"desktop-control-result.txt");
-    File.WriteAllLines(result,new[] { "phase=entered-main", "pid="+Process.GetCurrentProcess().Id, "session="+Process.GetCurrentProcess().SessionId });
+    WriteResult(result,new[] { "phase=entered-main", "pid="+Process.GetCurrentProcess().Id, "session="+Process.GetCurrentProcess().SessionId });
+    try { Gui(result); }
+    catch(Exception error) {
+      WriteResult(result,new[] { "phase=managed-GUI-exception", "pid="+Process.GetCurrentProcess().Id, "exceptionType="+error.GetType().FullName, "exceptionHResult=0x"+error.HResult.ToString("x8") });
+    }
+  }
+  [MethodImpl(MethodImplOptions.NoInlining)] static void Gui(string result) {
     IntPtr menu=CreateMenu(); int menuError=menu==IntPtr.Zero ? Marshal.GetLastWin32Error() : 0;
     IntPtr window=CreateWindowExW(0,"STATIC","Mixel owned ordinary desktop fixture",0x10cf0000,30,30,500,200,IntPtr.Zero,menu,IntPtr.Zero,IntPtr.Zero);
     int windowError=window==IntPtr.Zero ? Marshal.GetLastWin32Error() : 0;
-    File.WriteAllLines(result,new[] {
+    WriteResult(result,new[] {
       "phase=Win32-calls-complete",
       "pid="+Process.GetCurrentProcess().Id, "session="+Process.GetCurrentProcess().SessionId,
       "desktop="+Name(GetProcessWindowStation())+"\\"+Name(GetThreadDesktop(GetCurrentThreadId())),
@@ -146,7 +159,17 @@ public static class MixelOwnedDesktopControl {
       $diagnostic = @($launchAst.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Write-OwnedWindowDiagnostic'},$true))
       if ($diagnostic.Count -ne 1) { throw 'Exact owned runtime diagnostic function is ambiguous.' }
       . ([scriptblock]::Create($diagnostic[0].Extent.Text))
-      $guiAccess = [MixelOrdinaryTokenFixture+DesktopAccess]::new($ownedSid)
+      $baselineAcls = [MixelOrdinaryTokenFixture]::DesktopAclHashes()
+      $desktopControls = [System.Collections.Generic.List[object]]::new()
+      foreach ($mode in @('minimal-before', 'canonical', 'minimal-after')) {
+      $canonical = $mode -ceq 'canonical'
+      if (Test-Path $guiResult) { Remove-Item $guiResult }
+      $guiProcess = $null; $guiPid = $null; $trialFailure = $null
+      try {
+      $guiAccess = [MixelOrdinaryTokenFixture+DesktopAccess]::new($ownedSid, $canonical)
+      $effectiveDesktopAccess = [MixelOrdinaryTokenFixture]::ActualStandardDesktopAccess($ownedUser, $ownedPassword, $ownedSid)
+      Write-Host ("FIXTURE: $mode actual owned standard SID Win32 desktop access errors (0=granted): " + ($effectiveDesktopAccess | ConvertTo-Json -Compress))
+      if ($effectiveDesktopAccess['station:0x327'] -ne 0 -or $effectiveDesktopAccess['desktop:0xc7'] -ne 0) { throw 'Owned standard SID lacks its exact temporarily granted Win32 desktop rights.' }
       $guiProfile = $true
       $guiStartedAt = [DateTime]::UtcNow
       $guiPid = [MixelOrdinaryTokenFixture]::StartStandardUser($guiExecutable, $ownedUser, $ownedPassword)
@@ -168,8 +191,8 @@ public static class MixelOwnedDesktopControl {
         if ([MixelOrdinaryTokenFixture]::StartedStatus($guiPid).StartsWith('exited:')) { break }
         Start-Sleep -Milliseconds 100
       }
-      Write-Host ('FIXTURE: actual native owned ordinary Win32 desktop control: ' + ($actualGui | ConvertTo-Json -Compress))
-      Write-OwnedWindowDiagnostic $guiPid 'native Win32 desktop fixture qualification'
+      Write-Host ("FIXTURE: $mode actual native owned ordinary Win32 desktop control: " + ($actualGui | ConvertTo-Json -Compress))
+      Write-OwnedWindowDiagnostic $guiPid "native Win32 desktop fixture qualification ($mode)"
       if ($actualGui.phase -cne 'Win32-calls-complete') {
         $nativeStatus = [MixelOrdinaryTokenFixture]::StartedStatus($guiPid)
         # Only emit selected fields from events attributable to this exact
@@ -184,13 +207,44 @@ public static class MixelOwnedDesktopControl {
           $selected = [pscustomobject]@{ eventId=$event.Id; pid=$eventPid; appName=$data.AppName; module=$data.ModuleName; exception=$data.ExceptionCode; offset=$data.FaultingOffset }
           Write-Host ('FIXTURE: actual owned native Application Error event: ' + ($selected | ConvertTo-Json -Compress))
         }
-        throw "Exact owned ordinary desktop fixture did not complete its Win32 control; phase=$($actualGui.phase), nativeStatus=$nativeStatus."
+        if ($canonical) { throw "Canonical owned ordinary desktop fixture did not complete its Win32 control; phase=$($actualGui.phase), nativeStatus=$nativeStatus." }
+        $desktopControls.Add([pscustomobject]@{ mode=$mode; passed=$false; pid=$guiPid; nativeStatus=$nativeStatus; result=$actualGui })
+        Write-Host "DIAGNOSTIC: $mode control did not complete Win32 calls; phase=$($actualGui.phase), nativeStatus=$nativeStatus."
+        continue
       }
       if ($actualGui.pid -ne [string]$guiPid -or $actualGui.desktop -cne $actualDesktop -or
           $actualGui.window -eq '0' -or $actualGui.visible -cne 'True' -or $actualGui.menu -eq '0') {
-        throw "Exact owned ordinary Win32 GUI fixture failed; windowError=$($actualGui.windowError), menuError=$($actualGui.menuError), desktop=$($actualGui.desktop)."
+        if ($canonical) { throw "Canonical owned ordinary Win32 GUI fixture failed; windowError=$($actualGui.windowError), menuError=$($actualGui.menuError), desktop=$($actualGui.desktop)." }
+        $desktopControls.Add([pscustomobject]@{ mode=$mode; passed=$false; pid=$guiPid; nativeStatus=[MixelOrdinaryTokenFixture]::StartedStatus($guiPid); result=$actualGui })
+        Write-Host "DIAGNOSTIC: $mode control failed GUI checks; windowError=$($actualGui.windowError), menuError=$($actualGui.menuError), desktop=$($actualGui.desktop)."
+        continue
       }
-      Write-Host 'PASS: exact owned standard-account launch and temporary SID-scoped desktop grant create an actual visible Win32 window and menu on the runner desktop.'
+      $desktopControls.Add([pscustomobject]@{ mode=$mode; passed=$true; pid=$guiPid; nativeStatus=[MixelOrdinaryTokenFixture]::StartedStatus($guiPid); result=$actualGui })
+      Write-Host "PASS: $mode exact owned standard-account launch and temporary SID-scoped desktop grant create an actual visible Win32 window and menu on the runner desktop."
+      } catch {
+        $trialFailure = $_
+        throw
+      } finally {
+        $trialCleanup = [System.Collections.Generic.List[string]]::new()
+        if ($guiPid -and [MixelOrdinaryTokenFixture]::StartedStatus($guiPid) -ceq 'still-running') {
+          try { Stop-Process -Id $guiPid -Force } catch { $trialCleanup.Add('Owned desktop trial process cleanup failed.') }
+        }
+        [MixelOrdinaryTokenFixture]::CloseStartedObservations()
+        if ($guiAccess) { try { $guiAccess.Dispose(); $guiAccess=$null } catch { $trialCleanup.Add('Owned desktop trial ACL restoration failed.') } }
+        if ([MixelOrdinaryTokenFixture]::DesktopAclHashes() -cne $baselineAcls) { $trialCleanup.Add('Owned desktop trial did not restore the exact original station/desktop ACL hashes.') }
+        if ($trialCleanup.Count -gt 0) {
+          if ($trialFailure) { Write-Host ('FAIL: owned desktop trial cleanup additionally failed: ' + ($trialCleanup -join ' ')) }
+          else { throw ($trialCleanup -join ' ') }
+        } else { Write-Host "PASS: $mode owned desktop control restores the exact original station/desktop ACL hashes." }
+      }
+      }
+      Write-Host ('FIXTURE: native same-account/profile/executable desktop A/B/A results: ' + ($desktopControls | ConvertTo-Json -Depth 5 -Compress))
+      if ($desktopControls.Count -ne 3 -or -not $desktopControls[1].passed) { throw 'Canonical owned interactive desktop qualification did not pass.' }
+      if (-not $desktopControls[0].passed -and -not $desktopControls[2].passed) {
+        Write-Host 'PASS: same account/profile/executable A/B/A reproduces minimal-rights failure before and after canonical visible-window/menu success, with exact original ACL restoration between all trials.'
+      } else {
+        Write-Host 'DIAGNOSTIC: canonical visible-window/menu qualification passes, but minimal rights also passed in at least one trial; no ACL-causality claim is made.'
+      }
     } catch {
       $guiFailure = $_
       throw
@@ -249,7 +303,7 @@ foreach ($required in @(
     'ThreadDesktopName([uint32]$_.Id)',
     '$process.Modules | Select-Object -ExpandProperty ModuleName',
     'StartedStatus($ProcessId)',
-    'Grant(desktop, identity, 0xc7)',
+    'canonical ? 0xf01ff : 0xc7',
     'if ($ownedSid) { try { Remove-LocalUser -SID',
     '$primaryFailure = $_',
     'if ($primaryFailure) { Write-Host',

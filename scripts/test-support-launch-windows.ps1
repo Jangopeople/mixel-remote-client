@@ -61,6 +61,9 @@ public static class MixelOrdinaryTokenFixture {
   [DllImport("kernel32.dll", SetLastError = true)] static extern bool DuplicateHandle(IntPtr source, IntPtr handle, IntPtr target, out IntPtr copy, uint access, bool inherit, uint options);
   [DllImport("advapi32.dll", SetLastError = true)] static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
   [DllImport("advapi32.dll", SetLastError = true)] static extern bool GetTokenInformation(IntPtr token, int kind, IntPtr data, int size, out int required);
+  [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool LogonUserW(string user, string domain, string password, uint logonType, uint provider, out IntPtr token);
+  [DllImport("advapi32.dll", SetLastError = true)] static extern bool ImpersonateLoggedOnUser(IntPtr token);
+  [DllImport("advapi32.dll", SetLastError = true)] static extern bool RevertToSelf();
   [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool CreateProcessWithTokenW(IntPtr token, uint flags, string application, StringBuilder command, uint creation, IntPtr environment, string directory, ref StartupInfo startup, out ProcessInfo process);
   [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool CreateProcessWithLogonW(string user, string domain, string password, uint flags, string application, StringBuilder command, uint creation, IntPtr environment, string directory, ref StartupInfo startup, out ProcessInfo process);
   [DllImport("user32.dll")] static extern IntPtr GetProcessWindowStation();
@@ -68,6 +71,10 @@ public static class MixelOrdinaryTokenFixture {
   [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool GetUserObjectInformationW(IntPtr obj, int kind, StringBuilder text, uint size, out uint required);
   [DllImport("user32.dll", SetLastError = true)] static extern bool GetUserObjectSecurity(IntPtr obj, ref uint information, byte[] data, uint size, out uint required);
   [DllImport("user32.dll", SetLastError = true)] static extern bool SetUserObjectSecurity(IntPtr obj, ref uint information, byte[] data);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern IntPtr OpenWindowStationW(string name, bool inherit, uint access);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern IntPtr OpenDesktopW(string name, uint flags, bool inherit, uint access);
+  [DllImport("user32.dll")] static extern bool CloseWindowStation(IntPtr station);
+  [DllImport("user32.dll")] static extern bool CloseDesktop(IntPtr desktop);
   [DllImport("userenv.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool DeleteProfileW(string sid, string path, string computer);
   [DllImport("userenv.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool GetUserProfileDirectoryW(IntPtr token, StringBuilder path, ref uint size);
   [DllImport("ntdll.dll")] static extern int NtQuerySystemInformation(int kind, IntPtr data, int length, out int required);
@@ -105,6 +112,34 @@ public static class MixelOrdinaryTokenFixture {
     return UserObjectName(GetProcessWindowStation()) + "\\" + UserObjectName(GetThreadDesktop(GetCurrentThreadId()));
   }
   public static string ThreadDesktopName(uint thread) { return UserObjectName(GetThreadDesktop(thread)); }
+  public static System.Collections.Generic.Dictionary<string, int> ActualStandardDesktopAccess(string user, string password, string expectedSid) {
+    string stationName = UserObjectName(GetProcessWindowStation()), desktopName = UserObjectName(GetThreadDesktop(GetCurrentThreadId()));
+    IntPtr token;
+    if (!LogonUserW(user, ".", password, 2, 0, out token)) throw new Win32Exception();
+    bool impersonated = false;
+    try {
+      using (var identity = new WindowsIdentity(token)) {
+        if (identity.User.Value != expectedSid) throw new InvalidOperationException("Desktop access probe token does not own the created SID");
+      }
+      if (!ImpersonateLoggedOnUser(token)) throw new Win32Exception();
+      impersonated = true;
+      var result = new System.Collections.Generic.Dictionary<string, int>();
+      foreach (uint access in new uint[] { 0x327, 0x37f, 0x20000 }) {
+        IntPtr station = OpenWindowStationW(stationName, false, access);
+        result.Add("station:0x" + access.ToString("x"), station == IntPtr.Zero ? Marshal.GetLastWin32Error() : 0);
+        if (station != IntPtr.Zero) CloseWindowStation(station);
+      }
+      foreach (uint access in new uint[] { 0xc7, 0x1ff, 0x20000 }) {
+        IntPtr desktop = OpenDesktopW(desktopName, 0, false, access);
+        result.Add("desktop:0x" + access.ToString("x"), desktop == IntPtr.Zero ? Marshal.GetLastWin32Error() : 0);
+        if (desktop != IntPtr.Zero) CloseDesktop(desktop);
+      }
+      return result;
+    } finally {
+      if (impersonated && !RevertToSelf()) throw new Win32Exception();
+      CloseHandle(token);
+    }
+  }
   static StartupInfo Startup() { return new StartupInfo { cb = Marshal.SizeOf(typeof(StartupInfo)), desktop = CurrentDesktopPath() }; }
   static readonly System.Collections.Generic.Dictionary<int, IntPtr> StartedProcesses = new System.Collections.Generic.Dictionary<int, IntPtr>();
   static int Started(ProcessInfo process) {
@@ -155,6 +190,11 @@ public static class MixelOrdinaryTokenFixture {
     return result;
   }
   static void Apply(IntPtr obj, byte[] descriptor) { uint information = 4; if (!SetUserObjectSecurity(obj, ref information, descriptor)) throw new Win32Exception(); }
+  public static string DesktopAclHashes() {
+    using (var hash = System.Security.Cryptography.SHA256.Create()) {
+      return Convert.ToBase64String(hash.ComputeHash(Descriptor(GetProcessWindowStation()))) + ":" + Convert.ToBase64String(hash.ComputeHash(Descriptor(GetThreadDesktop(GetCurrentThreadId()))));
+    }
+  }
   static byte[] Grant(IntPtr obj, SecurityIdentifier sid, int access) {
     byte[] original = Descriptor(obj); var descriptor = new RawSecurityDescriptor(original, 0);
     if (descriptor.DiscretionaryAcl != null) {
@@ -166,12 +206,14 @@ public static class MixelOrdinaryTokenFixture {
   public sealed class DesktopAccess : IDisposable {
     readonly IntPtr station = GetProcessWindowStation(), desktop = GetThreadDesktop(GetCurrentThreadId());
     byte[] stationOriginal, desktopOriginal;
-    public DesktopAccess(string sid) {
+    public DesktopAccess(string sid) : this(sid, true) { }
+    public DesktopAccess(string sid, bool canonical) {
       var identity = new SecurityIdentifier(sid);
-      stationOriginal = Grant(station, identity, 0x327);
-      // GUI controls and Flutter can create menus. Grant that documented
-      // desktop right only to this disposable account, then restore the ACL.
-      try { desktopOriginal = Grant(desktop, identity, 0xc7); } catch { Apply(station, stationOriginal); stationOriginal = null; throw; }
+      // The canonical Microsoft interactive-process fixture grants normal
+      // interactive rights only to this disposable account, then restores the
+      // original ACL. The narrow variant remains for the native A/B/A control.
+      stationOriginal = Grant(station, identity, canonical ? 0xf037f : 0x327);
+      try { desktopOriginal = Grant(desktop, identity, canonical ? 0xf01ff : 0xc7); } catch { Apply(station, stationOriginal); stationOriginal = null; throw; }
     }
     public void Dispose() {
       Exception failure = null;
