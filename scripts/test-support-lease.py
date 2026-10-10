@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -280,21 +281,49 @@ def isolated_source(original, directory, prefix, event):
     return source.replace(bridge_marker, WINDOWS_BRIDGE + bridge_marker, 1)
 
 
-def export_standard_windows_fixture(directory, event):
+def standard_windows_fixture_body(original, directory, prefix, event):
+    source = isolated_source(original, directory, prefix, event)
+    return source + HARNESS.replace("fn main() {", "fn lease_main() {", 1) + STANDARD_WINDOWS_HARNESS
+
+
+def read_pe_subsystem(binary):
+    assert 128 <= binary.stat().st_size <= 16 * 1024 * 1024, "Actual Windows PE executable exceeds its size bounds"
+    data = binary.read_bytes()
+    assert 128 <= len(data) <= 16 * 1024 * 1024 and data[:2] == b"MZ", "Expected bounded actual Windows PE executable"
+    pe = struct.unpack_from("<I", data, 0x3c)[0]
+    assert 64 <= pe <= len(data) - 96 and data[pe:pe + 4] == b"PE\0\0", "Actual PE header is missing or outside its bounds"
+    machine, optional_size = struct.unpack_from("<H", data, pe + 4)[0], struct.unpack_from("<H", data, pe + 20)[0]
+    optional = pe + 24
+    assert machine == 0x8664 and optional_size >= 70 and optional + optional_size <= len(data), "Expected bounded x64 PE optional header"
+    assert struct.unpack_from("<H", data, optional)[0] == 0x20b, "Expected actual PE32+ executable"
+    return struct.unpack_from("<H", data, optional + 68)[0]
+
+
+def export_standard_windows_fixture(directory, event, subsystem_pair=False):
     assert os.name == "nt", "Standard-account fixture compilation requires actual Windows"
     assert re.fullmatch(r"(?:(?:Global|Local)\\)?Mixel-Remote-Standard-Lease-[0-9a-f]{32}", event), "Expected an isolated GUID event name"
     directory = directory.resolve()
     assert directory.is_dir() and not directory.is_symlink(), "Expected an owned existing fixture directory"
     original = (ROOT / "scripts/support-invite-guard.rs").read_text(encoding="utf-8")
     assert "pub fn support_invite_lease_status() -> String" in original, "Actual read-only lease classification helper is missing"
-    source = isolated_source(original, directory, "mixel-standard-lease-" + uuid.uuid4().hex + "-", event)
+    body = standard_windows_fixture_body(original, directory, "mixel-standard-lease-" + uuid.uuid4().hex + "-", event)
     fixture = directory / "lease-standard.rs"
-    fixture.write_text(source + HARNESS.replace("fn main() {", "fn lease_main() {", 1) + STANDARD_WINDOWS_HARNESS, encoding="utf-8")
+    fixture.write_text(body, encoding="utf-8", newline="\n")
     binary = directory / "lease-standard.exe"
     rustc = os.environ.get("RUSTC_BIN") or shutil.which("rustc")
     assert rustc, "Native standard-account lease control requires rustc"
     subprocess.run([rustc, "--edition", "2021", "-D", "warnings", str(fixture), "-o", str(binary)], check=True, timeout=90)
+    assert read_pe_subsystem(binary) == 3, "Actual console source control must link PE subsystem3"
     print("PASS: actual source-extracted standard-account lease control compiles with no Rust warnings", flush=True)
+    if subsystem_pair:
+        header = '#![windows_subsystem = "windows"]\n'
+        gui_fixture = directory / "lease-standard-gui.rs"
+        gui_fixture.write_text(header + body, encoding="utf-8", newline="\n")
+        assert gui_fixture.read_bytes() == header.encode("ascii") + fixture.read_bytes(), "Console/Windows subsystem pair differs beyond its single crate header"
+        gui_binary = directory / "lease-standard-gui.exe"
+        subprocess.run([rustc, "--edition", "2021", "-D", "warnings", str(gui_fixture), "-o", str(gui_binary)], check=True, timeout=90)
+        assert read_pe_subsystem(gui_binary) == 2, "Actual Windows source control must link PE subsystem2"
+        print("PASS: actual console/Windows source pair differs only by the crate subsystem header; linked x64 PE metadata is console3/windows2 with no Rust warnings", flush=True)
 
 
 def main():
@@ -434,9 +463,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--export-standard-windows-fixture", type=Path)
     parser.add_argument("--event")
+    parser.add_argument("--export-standard-windows-subsystem-pair", action="store_true")
     args = parser.parse_args()
     if args.export_standard_windows_fixture is not None:
-        export_standard_windows_fixture(args.export_standard_windows_fixture, args.event or "")
+        export_standard_windows_fixture(args.export_standard_windows_fixture, args.event or "", args.export_standard_windows_subsystem_pair)
     else:
         assert args.event is None, "An isolated event requires explicit fixture export mode"
+        assert not args.export_standard_windows_subsystem_pair, "A subsystem pair requires explicit fixture export mode"
         main()

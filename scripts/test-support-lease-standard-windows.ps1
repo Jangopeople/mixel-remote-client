@@ -25,9 +25,16 @@ if (-not ('MixelOrdinaryTokenFixture' -as [type])) {
   [StructLayout(LayoutKind.Sequential)] struct ObservedGroupsHeader { public uint count; public ObservedSidAttributes first; }
   public sealed class ObservedTokenFacts {
     public uint sessionId, integrityRid;
+    public bool sessionKnown=true;
     public bool hasRestrictions, isAppContainer;
     public string authenticatedUsers, interactive, users;
+    public string unavailableKind, unavailableFailure;
+    public int? unavailableError, unavailableLength;
     public override string ToString() {
+      if(unavailableKind!=null) return "tokenSessionId=" + (sessionKnown ? sessionId.ToString(System.Globalization.CultureInfo.InvariantCulture) : "unavailable") +
+        ";tokenFacts=unavailable;tokenQueryKind=" + unavailableKind + ";tokenQueryFailure=" + unavailableFailure +
+        ";tokenQueryError=" + (unavailableError.HasValue ? unavailableError.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) : "none") +
+        ";tokenQueryReturnedLength=" + (unavailableLength.HasValue ? unavailableLength.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) : "none");
       return "tokenSessionId=" + sessionId.ToString(System.Globalization.CultureInfo.InvariantCulture) +
         ";hasRestrictions=" + (hasRestrictions ? "true" : "false") +
         ";isAppContainer=" + (isAppContainer ? "true" : "false") +
@@ -35,12 +42,22 @@ if (-not ('MixelOrdinaryTokenFixture' -as [type])) {
         ";authenticatedUsers=" + authenticatedUsers + ";interactive=" + interactive + ";users=" + users;
     }
   }
+  sealed class ObservedTokenQueryFailure : InvalidOperationException {
+    public ObservedTokenClass kind;
+    public string failure;
+    public int? error, length;
+    public ObservedTokenQueryFailure(ObservedTokenClass kind, string failure, int? error, int? length) {
+      this.kind=kind; this.failure=failure; this.error=error; this.length=length;
+    }
+  }
   static uint ObservedTokenDword(IntPtr token, ObservedTokenClass kind) {
     IntPtr data=Marshal.AllocHGlobal(4);
     try {
       int required;
-      if (!GetTokenInformation(token,(int)kind,data,4,out required)) throw new Win32Exception();
-      if (required!=4) throw new InvalidOperationException("Read-only token DWORD size mismatch");
+      bool success=GetTokenInformation(token,(int)kind,data,4,out required);
+      int error=Marshal.GetLastWin32Error();
+      if (!success) throw new ObservedTokenQueryFailure(kind,"api-error",error,required);
+      if (required!=4) throw new ObservedTokenQueryFailure(kind,"returned-size",null,required);
       return unchecked((uint)Marshal.ReadInt32(data));
     } finally { Marshal.FreeHGlobal(data); }
   }
@@ -50,11 +67,13 @@ if (-not ('MixelOrdinaryTokenFixture' -as [type])) {
   static IntPtr ObservedTokenBuffer(IntPtr token, ObservedTokenClass kind, out int length) {
     bool initial=GetTokenInformation(token,(int)kind,IntPtr.Zero,0,out length);
     int error=Marshal.GetLastWin32Error();
-    if(initial || error!=122 || length<=0 || length>65536) throw new InvalidOperationException("Read-only token query size/error bounds failed");
+    if(initial || error!=122 || length<=0 || length>65536) throw new ObservedTokenQueryFailure(kind,"size-contract",initial ? (int?)null : error,length);
     int allocated=length; IntPtr data=Marshal.AllocHGlobal(allocated);
     try {
-      if(!GetTokenInformation(token,(int)kind,data,allocated,out length)) throw new Win32Exception();
-      if(length<=0 || length>allocated) throw new InvalidOperationException("Read-only token output exceeded its allocation");
+      bool success=GetTokenInformation(token,(int)kind,data,allocated,out length);
+      int outputError=Marshal.GetLastWin32Error();
+      if(!success) throw new ObservedTokenQueryFailure(kind,"api-error",outputError,length);
+      if(length<=0 || length>allocated) throw new ObservedTokenQueryFailure(kind,"size-contract",null,length);
       return data;
     } catch { Marshal.FreeHGlobal(data); throw; }
   }
@@ -100,10 +119,20 @@ if (-not ('MixelOrdinaryTokenFixture' -as [type])) {
     } finally { Marshal.FreeHGlobal(data); }
   }
   static ObservedTokenFacts ReadObservedTokenFacts(IntPtr token) {
-    var facts=new ObservedTokenFacts { sessionId=ObservedTokenDword(token,ObservedTokenClass.SessionId),
-      hasRestrictions=ObservedTokenBool(token,ObservedTokenClass.HasRestrictions),
-      isAppContainer=ObservedTokenBool(token,ObservedTokenClass.IsAppContainer), integrityRid=ObservedIntegrityRid(token) };
-    ObservedMemberships(token,facts);
+    var facts=new ObservedTokenFacts { sessionKnown=false };
+    var kind=ObservedTokenClass.SessionId;
+    try {
+      facts.sessionId=ObservedTokenDword(token,kind); facts.sessionKnown=true;
+      kind=ObservedTokenClass.HasRestrictions; facts.hasRestrictions=ObservedTokenBool(token,kind);
+      kind=ObservedTokenClass.IsAppContainer; facts.isAppContainer=ObservedTokenBool(token,kind);
+      kind=ObservedTokenClass.IntegrityLevel; facts.integrityRid=ObservedIntegrityRid(token);
+      kind=ObservedTokenClass.Groups; ObservedMemberships(token,facts);
+    } catch(ObservedTokenQueryFailure failure) {
+      facts.unavailableKind=failure.kind.ToString(); facts.unavailableFailure=failure.failure;
+      facts.unavailableError=failure.error; facts.unavailableLength=failure.length;
+    } catch(InvalidOperationException) {
+      facts.unavailableKind=kind.ToString(); facts.unavailableFailure="content-contract";
+    }
     return facts;
   }
   public static ObservedTokenFacts RunnerTokenFacts() {
@@ -233,7 +262,10 @@ function Assert-StandardLeaseSafeResult($Record, [uint32]$ExpectedPid) {
 function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner')][string]$Mode, [string]$ExpectedStatus, [int]$ExpectedError,
     [string]$ExpectedProof, [bool]$ExpectedRequired, [bool]$ExpectedOwnerFailed, [switch]$KeepAlive,
     [switch]$ObserveOnly, [string]$ObservationLabel,
-    [ValidateSet('with-logon','with-token')][string]$Launcher = 'with-logon') {
+    [ValidateSet('with-logon','with-token')][string]$Launcher = 'with-logon',
+    [ValidateSet('console','windows')][string]$Subsystem = 'console') {
+  $expectedExecutable = if ($Subsystem -ceq 'windows') { 'lease-standard-gui.exe' } else { 'lease-standard.exe' }
+  if ([IO.Path]::GetFileName($executable) -cne $expectedExecutable) { throw 'Owned source control executable does not match its declared subsystem.' }
   if (Test-Path $resultPath) { Remove-Item -LiteralPath $resultPath }
   [IO.File]::WriteAllText((Join-Path $fixtureRoot 'fixture-mode.txt'), $Mode, [Text.UTF8Encoding]::new($false))
   if ($Launcher -ceq 'with-token') {
@@ -269,7 +301,7 @@ function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner'
     }
     if ($ObserveOnly) {
       if ($ObservationLabel -cnotmatch '\A(?:bare|local|global)-[a-z]+(?:-[a-z]+)*\z') { throw 'Invalid safe namespace observation label.' }
-      Write-Host "OBSERVED: standard-token GUID functional control; launcher=$Launcher; scenario=$ObservationLabel; mode=$Mode; controlPid=$controlPid; ordinarySessionId=$actualSession; ownedSidMatched=$sidMatches; elevated=$elevated; $tokenFacts; $($record.sourceStatus); rawOpenError=$($record.rawOpenError); guardEmpty=$($record.attestation -ceq ''); guardConfirmed=$($record.attestation -ceq 'attended-runtime-v2'); requiresClick=$($record.requiresClick)."
+      Write-Host "OBSERVED: standard-token GUID functional control; launcher=$Launcher; subsystem=$Subsystem; scenario=$ObservationLabel; mode=$Mode; controlPid=$controlPid; ordinarySessionId=$actualSession; ownedSidMatched=$sidMatches; elevated=$elevated; $tokenFacts; $($record.sourceStatus); rawOpenError=$($record.rawOpenError); guardEmpty=$($record.attestation -ceq ''); guardConfirmed=$($record.attestation -ceq 'attended-runtime-v2'); requiresClick=$($record.requiresClick)."
     } else {
       Write-Host "FIXTURE: actual source lease under non-elevated same-session token; mode=$Mode; $($record.sourceStatus); rawOpenError=$($record.rawOpenError); guardEmpty=$($record.attestation -ceq ''); guardConfirmed=$($record.attestation -ceq 'attended-runtime-v2'); requiresClick=$($record.requiresClick)."
     }
@@ -285,6 +317,38 @@ function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner'
     }
     return $controlPid
   } finally { if ($control) { $control.Dispose() } }
+}
+
+function Invoke-StandardLeaseSubsystemObservations([ValidateSet('with-logon','with-token')][string]$Launcher) {
+  # Each selected executable observes its own untouched GUID. Both binaries in
+  # each pair have byte-identical source apart from the crate subsystem header.
+  # This experiment cannot satisfy the original strict console fixture below.
+  $savedRoot=$script:fixtureRoot; $savedExecutable=$script:executable; $savedResult=$script:resultPath
+  try {
+    foreach ($subsystem in @('console','windows')) {
+      $script:fixtureRoot=Join-Path $savedRoot "$Launcher-$subsystem-pair"
+      New-Item -ItemType Directory -Path $script:fixtureRoot | Out-Null
+      $filename=if ($subsystem -ceq 'windows') { 'lease-standard-gui.exe' } else { 'lease-standard.exe' }
+      $script:executable=Join-Path $script:fixtureRoot $filename
+      $script:resultPath=Join-Path $script:fixtureRoot 'fixture-result.json'
+      $endpoint='Global\Mixel-Remote-Standard-Lease-' + [Guid]::NewGuid().ToString('N')
+      python (Join-Path $PSScriptRoot 'test-support-lease.py') --export-standard-windows-fixture $script:fixtureRoot --event $endpoint --export-standard-windows-subsystem-pair
+      if ($LASTEXITCODE -ne 0) { throw 'Exact source console/Windows subsystem pair compilation failed.' }
+      try {
+        [void](Invoke-StandardLeaseControl -Mode probe -Launcher $Launcher -Subsystem $subsystem -ObserveOnly -ObservationLabel "global-$subsystem-initial-untouched-absent")
+        [void](Invoke-StandardLeaseControl -Mode owner -Launcher $Launcher -Subsystem $subsystem -KeepAlive -ObserveOnly -ObservationLabel "global-$subsystem-explicit-source-owner")
+        [void](Invoke-StandardLeaseControl -Mode probe -Launcher $Launcher -Subsystem $subsystem -ObserveOnly -ObservationLabel "global-$subsystem-fresh-probe-after-owner-request")
+        [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses()
+        [MixelOrdinaryTokenFixture]::CloseStartedObservations()
+        [void](Invoke-StandardLeaseControl -Mode probe -Launcher $Launcher -Subsystem $subsystem -ObserveOnly -ObservationLabel "global-$subsystem-after-confirmed-owner-request-process-termination")
+      } finally {
+        [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses()
+        [MixelOrdinaryTokenFixture]::CloseStartedObservations()
+      }
+    }
+  } finally {
+    $script:fixtureRoot=$savedRoot; $script:executable=$savedExecutable; $script:resultPath=$savedResult
+  }
 }
 
 function Invoke-StandardLeaseNamespaceObservations([ValidateSet('with-logon','with-token')][string]$Launcher) {
@@ -355,6 +419,8 @@ try {
   $freshFacts=[MixelOrdinaryTokenFixture]::FreshStandardTokenFacts($ownedUser,$ownedPassword,$ownedSid)
   Write-Host "OBSERVED: read-only native token classification; subject=runner; processSessionId=$((Get-Process -Id $PID).SessionId); $runnerFacts."
   Write-Host "OBSERVED: read-only native token classification; subject=fresh-standard-logon; processSessionId=none; ownedSidMatched=True; elevated=False; $freshFacts."
+  Invoke-StandardLeaseSubsystemObservations with-logon
+  Invoke-StandardLeaseSubsystemObservations with-token
   Invoke-StandardLeaseNamespaceObservations with-logon
   Invoke-StandardLeaseNamespaceObservations with-token
   $absent = 'ownerFailed=false;ownerError=none;kernel=absent;probeError=none;memoryActive=false'
