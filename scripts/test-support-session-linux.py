@@ -774,6 +774,10 @@ print(json.dumps({'rectangle':rects[0],'decoded_counter':counter,'marker_samples
         command(["docker", "network", "disconnect", self.network, self.names["host"]])
         try:
             until("dropped transport disconnects authenticated session", lambda: self.query("host", "VideoConnCount") == 0, timeout=60)
+            # End the outgoing session while the host is still offline. Its
+            # automatic retry otherwise opens an unauthorized relay lane before
+            # the independent auth0 registration snapshot can select one lane.
+            self.stop_controller_gui()
         finally:
             command(["docker", "network", "connect", self.network, self.names["host"]])
         self.process_snapshot("host", "after-network-restored")

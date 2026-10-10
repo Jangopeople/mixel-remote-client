@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Focused ownership and failure-path checks for the HTTPS fixture runner."""
 import importlib.util
+import ast
 import copy
 import hashlib
 import io
+import inspect
 import itertools
 import json
 import os
@@ -12,6 +14,8 @@ import signal
 import subprocess
 import sys
 import tempfile
+import textwrap
+import types
 import unittest
 from unittest.mock import patch
 
@@ -611,6 +615,179 @@ class TransportOracleTests(unittest.TestCase):
             self.assertIsNone(session.registration_tls_snapshot())
         health.assert_not_called()
         sockets.assert_not_called()
+
+
+class NetworkRecoveryOrderingTests(unittest.TestCase):
+    @staticmethod
+    def original_drop():
+        # Extract the actual method and remove only the newly added stop. The
+        # normalized AST must equal the genuine failed 5df042a source method,
+        # so the negative control cannot silently become a different failure.
+        node = ast.parse(textwrap.dedent(inspect.getsource(desktop.Session.drop))).body[0]
+        transaction = next(part for part in node.body if isinstance(part, ast.Try))
+        removed = [part for part in transaction.body if isinstance(part, ast.Expr)
+                   and isinstance(part.value, ast.Call) and isinstance(part.value.func, ast.Attribute)
+                   and isinstance(part.value.func.value, ast.Name) and part.value.func.value.id == "self"
+                   and part.value.func.attr == "stop_controller_gui"]
+        assert len(removed) == 1, "Expected exactly one disconnected outgoing-session stop"
+        transaction.body.remove(removed[0])
+        def canonical(part):
+            if isinstance(part, ast.AST):
+                assert not getattr(part, "type_params", []), "Original control has no generic type parameters"
+                return {"node": type(part).__name__, "fields": {key: canonical(value)
+                        for key, value in ast.iter_fields(part) if key != "type_params"}}
+            return [canonical(value) for value in part] if isinstance(part, list) else part
+        fingerprint = hashlib.sha256(json.dumps(canonical(node), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        assert fingerprint == "f62e5b9807e936e5a55f8699c95b88f1a9f711b82fd887e03030c357e4a14807", "Original network-drop control differs from failed 5df042a source"
+        namespace = dict(desktop.__dict__)
+        exec(compile(ast.fix_missing_locations(ast.Module(body=[node], type_ignores=[])),
+                     "original 5df042a Session.drop", "exec"), namespace)
+        # Share the real module globals so the same command/clock boundary
+        # controls also apply to the extracted original method.
+        return types.FunctionType(namespace["drop"].__code__, desktop.__dict__)
+
+    def exercise(self, *, blocked=True, mixed=False, method=None, failure=None, error=None):
+        with tempfile.TemporaryDirectory(prefix="mixel-recovery-order-") as temporary:
+            proofs = Path(temporary)
+            session = desktop.Session(proofs, Path("synthetic.deb"), False, blocked,
+                {"pin": "public-fixture-pin", "network": "owned-fixture", "address": "192.168.48.2"}, mixed)
+            session.server["host"] = 100
+            state = {"network": True, "dropped": False, "outgoing": False, "auth": 0}
+            events, waits = [], []
+            clock = itertools.count(100.0, .25)
+            actual_until = desktop.until
+
+            def wait(description, operation, timeout=60):
+                waits.append((description, timeout))
+                return actual_until(description, operation, timeout)
+
+            def stop():
+                events.append(("stop-outgoing", state["network"]))
+                if not state["network"] and failure == "stop":
+                    raise RuntimeError("Outgoing session stop failed")
+                state.update(outgoing=False, auth=0)
+
+            def connect(label):
+                events.append(("customer-accept", label))
+                self.assertTrue(state["network"])
+                state.update(outgoing=True, auth=1)
+
+            def network(arguments):
+                self.assertEqual(arguments[:2], ["docker", "network"])
+                self.assertEqual(arguments[3:], [session.network, session.names["host"]])
+                if arguments[2] == "disconnect":
+                    self.assertTrue(state["network"])
+                    state.update(network=False, dropped=True)
+                    events.append(("network", "disconnect"))
+                else:
+                    self.assertEqual(arguments[2], "connect")
+                    self.assertFalse(state["network"])
+                    events.append(("network", "restore", state["outgoing"]))
+                    # An open outgoing session automatically establishes a new
+                    # unauthorized relay lane as soon as the network returns.
+                    state.update(network=True, auth=0)
+                return subprocess.CompletedProcess(arguments, 0, "", "")
+
+            def query(role, kind):
+                self.assertEqual((role, kind), ("host", "VideoConnCount"))
+                if not state["network"]:
+                    value = 1 if failure == "disconnect" else 0
+                    events.append(("dropped-auth", value))
+                    return value
+                return state["auth"]
+
+            def health(role):
+                self.assertEqual(role, "host")
+                events.append(("guarded-health", state["dropped"]))
+                if state["dropped"] and failure == "guard":
+                    return None
+                return {"incoming_pid": 100, "online_status": [15, True], "foreground_read_lease": True}
+
+            def run(role, arguments, **kwargs):
+                self.assertEqual(role, "host")
+                if arguments[0] == "ss":
+                    local = 41000 if not state["dropped"] or failure == "old socket" else 41002
+                    output = TransportOracleTests.socket(local=local)
+                    if state["outgoing"]:
+                        output += TransportOracleTests.socket(local=local + 1)
+                    events.append(("actual-kernel-sockets", len(output.splitlines())))
+                elif arguments[0] == "readlink":
+                    output = desktop.EXE + "\n"
+                else:
+                    raise AssertionError(arguments)
+                return subprocess.CompletedProcess(arguments, 0, output, "")
+
+            def video(label):
+                events.append(("fresh-video", label))
+                if failure == "stale video":
+                    raise RuntimeError("Unchanged fresh-video gate rejected stale frame")
+
+            with patch.object(session, "stop_controller_gui", side_effect=stop), \
+                    patch.object(session, "connect", side_effect=connect), \
+                    patch.object(session, "query", side_effect=query), patch.object(session, "health", side_effect=health), \
+                    patch.object(session, "run", side_effect=run), \
+                    patch.object(session, "other_peer_addresses", return_value={"192.168.48.4"}), \
+                    patch.object(session, "process_snapshot"), patch.object(session, "fresh_video", side_effect=video), \
+                    patch.object(session, "active_transport_proof", side_effect=lambda label: events.append(("transport", label))), \
+                    patch.object(session, "disconnect", side_effect=lambda: events.append(("customer-disconnect",))), \
+                    patch.object(desktop, "command", side_effect=network), patch.object(desktop, "until", side_effect=wait), \
+                    patch.object(desktop.time, "monotonic", side_effect=lambda: next(clock)), \
+                    patch.object(desktop.time, "sleep"), patch.object(sys, "stdout", io.StringIO()):
+                if error:
+                    with self.assertRaisesRegex(RuntimeError, error):
+                        (method or desktop.Session.drop)(session)
+                else:
+                    (method or desktop.Session.drop)(session)
+            evidence = proofs / "network-recovered-registration.json"
+            return events, waits, json.loads(evidence.read_text()) if evidence.exists() else None
+
+    def test_original_exact_source_ordering_times_out_on_auto_reconnected_unauthorized_lane(self):
+        events, waits, evidence = self.exercise(method=self.original_drop(), error="Timed out: same native PID")
+        self.assertIn(("network", "restore", True), events)
+        self.assertIn(("actual-kernel-sockets", 2), events)
+        self.assertNotIn(("customer-accept", "network-reconnect"), events)
+        self.assertIsNone(evidence)
+        self.assertEqual(waits[-1][1], 90)
+
+    def test_actual_fixed_order_stops_outgoing_while_offline_before_strict_recovery_in_all_modes(self):
+        for blocked, mixed in ((False, False), (True, False), (False, True)):
+            with self.subTest(blocked=blocked, mixed=mixed):
+                events, waits, evidence = self.exercise(blocked=blocked, mixed=mixed)
+                self.assertLess(events.index(("dropped-auth", 0)), events.index(("stop-outgoing", False)))
+                self.assertLess(events.index(("stop-outgoing", False)), events.index(("network", "restore", False)))
+                self.assertLess(events.index(("network", "restore", False)), events.index(("customer-accept", "network-reconnect")))
+                self.assertEqual([timeout for label, timeout in waits if "transport disconnects" in label or "registered stably" in label], [60, 90])
+                self.assertEqual(events[-3:], [("fresh-video", "network-reconnect-video"), ("transport", "network-reconnect"), ("customer-disconnect",)])
+                if blocked:
+                    self.assertGreaterEqual(evidence["stable_seconds"], 2)
+                    self.assertTrue(evidence["fresh_registration_confirmed_before_first_controller_request"])
+                    self.assertEqual(evidence["same_incoming_pid"], 100)
+                    self.assertNotEqual(evidence["baseline"]["connections"][0]["local_endpoint"], evidence["fresh"]["connections"][0]["local_endpoint"])
+                else:
+                    self.assertIsNone(evidence)
+
+    def test_stop_or_disconnect_failure_still_restores_owned_network_and_cannot_pass_recovery(self):
+        for failure, error in (("stop", "Outgoing session stop failed"), ("disconnect", "Timed out: dropped transport")):
+            with self.subTest(failure=failure):
+                events, waits, evidence = self.exercise(failure=failure, error=error)
+                self.assertEqual(sum(event[:2] == ("network", "restore") for event in events), 1)
+                self.assertNotIn(("customer-accept", "network-reconnect"), events)
+                self.assertIsNone(evidence)
+
+    def test_old_socket_or_missing_guard_remains_rejected_after_controller_cleanup(self):
+        for failure in ("old socket", "guard"):
+            with self.subTest(failure=failure):
+                events, waits, evidence = self.exercise(failure=failure, error="Timed out: same native PID")
+                self.assertIn(("network", "restore", False), events)
+                self.assertNotIn(("customer-accept", "network-reconnect"), events)
+                self.assertIsNone(evidence)
+                self.assertEqual(waits[-1][1], 90)
+
+    def test_actual_video_failure_after_new_accept_still_fails_without_disconnect_success(self):
+        events, waits, evidence = self.exercise(failure="stale video", error="fresh-video gate rejected stale frame")
+        self.assertIn(("customer-accept", "network-reconnect"), events)
+        self.assertNotIn(("transport", "network-reconnect"), events)
+        self.assertNotIn(("customer-disconnect",), events)
 
 
 class DesktopReadinessTests(unittest.TestCase):
