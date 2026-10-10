@@ -67,10 +67,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: '1.75'
-      - name: Install native clipboard regression dependencies
+      - name: Install native clipboard and codec regression dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb xclip
+          sudo apt-get install -y xvfb xclip libaom-dev
       - name: Fetch pinned upstream source
         env:
           UPSTREAM_VERSION: ${{ steps.config.outputs.upstream_version }}
@@ -86,6 +86,7 @@ jobs:
           python3 scripts/test-support-signals.py
           python3 scripts/test-support-input.py
           python3 scripts/test-support-clipboard.py --native-x11
+          python3 scripts/test-support-video.py
           python3 scripts/test-branding.py
           dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart
           dart scripts/test-support-invite.dart
