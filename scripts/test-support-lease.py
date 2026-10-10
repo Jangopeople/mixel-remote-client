@@ -6,6 +6,7 @@ service probe code comes byte-for-byte from the shipped guard template; a test
 bridge exposes creation errors. Windows uses an allocator that clears last-error
 on cleanup to exercise the API's required immediate error capture.
 """
+import argparse
 import json
 import os
 from pathlib import Path
@@ -43,6 +44,17 @@ WINDOWS_BRIDGE = r'''
             Ok(_) => 0,
         }
     }
+
+    #[cfg(windows)]
+    pub(super) fn fixture_raw_open_error() -> u32 {
+        let name = wide(EVENT);
+        let handle = unsafe { OpenEventW(0x00100000, 0, name.as_ptr()) };
+        if handle.is_null() {
+            return unsafe { GetLastError() };
+        }
+        unsafe { CloseHandle(handle); }
+        0
+    }
 '''
 HARNESS = r'''
 #[cfg(windows)]
@@ -70,13 +82,26 @@ fn main() {
             assert!(hold_support_invite_attended_lease());
             assert!(!support_invite_owner_lease_failed());
             assert_eq!(support_invite_attestation(), SUPPORT_INVITE_ATTESTATION);
+            assert!(support_invite_lease_status().ends_with("memoryActive=true"));
             println!("owner-ready");
             use std::io::Write;
             std::io::stdout().flush().unwrap();
             std::thread::sleep(std::time::Duration::from_secs(120));
         }
         Some("probe") => println!("{}", support_invite_requires_click()),
+        Some("raw-open-error") => {
+            #[cfg(windows)] println!("{}", mixel_support_lease::fixture_raw_open_error());
+        }
         Some("attestation") => println!("{}", support_invite_attestation()),
+        Some("status") => {
+            let status = support_invite_lease_status();
+            assert_eq!(status, support_invite_lease_status());
+            if status.contains(";kernel=absent;") {
+                assert!(!support_invite_requires_click());
+                assert_eq!(support_invite_attestation(), "");
+            }
+            println!("{}", status);
+        }
         Some("renew-attestation") => {
             renew_support_invite_attended();
             assert!(support_invite_requires_click());
@@ -153,11 +178,14 @@ fn main() {
                 std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o777)).unwrap();
                 assert!(!hold_support_invite_attended_lease());
                 assert!(support_invite_owner_lease_failed());
+                assert!(support_invite_lease_status().contains("ownerFailed=true;"));
+                assert!(support_invite_lease_status().ends_with("memoryActive=true"));
                 assert!(support_invite_requires_click());
                 assert_eq!(support_invite_attestation(), "guard-unavailable");
                 std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
                 assert!(hold_support_invite_attended_lease());
                 assert!(!support_invite_owner_lease_failed());
+                assert!(support_invite_lease_status().starts_with("ownerFailed=false;ownerError=none;kernel=active;"));
             }
             #[cfg(windows)] {
                 use std::ffi::c_void;
@@ -171,11 +199,14 @@ fn main() {
                 assert!(!mutex.is_null());
                 assert!(!hold_support_invite_attended_lease());
                 assert!(support_invite_owner_lease_failed());
+                assert!(support_invite_lease_status().starts_with("ownerFailed=true;ownerError=6;kernel=unavailable;probeError=6;"));
+                assert!(support_invite_lease_status().ends_with("memoryActive=true"));
                 assert!(support_invite_requires_click());
                 assert_eq!(support_invite_attestation(), "guard-unavailable");
                 unsafe { CloseHandle(mutex); }
                 assert!(hold_support_invite_attended_lease());
                 assert!(!support_invite_owner_lease_failed());
+                assert!(support_invite_lease_status().starts_with("ownerFailed=false;ownerError=none;kernel=active;"));
             }
             println!("owner-retry-clears-failure");
         }
@@ -185,6 +216,85 @@ fn main() {
 '''
 
 
+STANDARD_WINDOWS_HARNESS = r'''
+fn main() {
+    // Keep the existing native negative-control branches compiled with -D warnings.
+    if std::env::args().nth(1).is_some() {
+        lease_main();
+        return;
+    }
+    #[cfg(windows)] {
+        let directory = std::env::current_exe().unwrap().parent().unwrap().to_owned();
+        let mode = std::fs::read_to_string(directory.join("fixture-mode.txt")).unwrap();
+        match mode.as_str() {
+            "probe" => {}
+            "owner" => { assert!(hold_support_invite_attended_lease()); }
+            "failed-owner" => { assert!(!hold_support_invite_attended_lease()); }
+            _ => panic!("Unknown owned standard-account functional control"),
+        }
+        let status = support_invite_lease_status();
+        let raw_error = mixel_support_lease::fixture_raw_open_error();
+        let proof = support_invite_attestation();
+        let required = support_invite_requires_click();
+        let failed = support_invite_owner_lease_failed();
+        assert!(matches!(proof, "" | "attended-runtime-v2" | "guard-unavailable"));
+        let result = format!(
+            "{{\"pid\":{},\"sourceStatus\":\"{}\",\"rawOpenError\":{},\"attestation\":\"{}\",\"requiresClick\":{},\"ownerFailed\":{}}}\n",
+            std::process::id(), status, raw_error, proof, required, failed);
+        std::fs::write(directory.join("fixture-result.new"), result).unwrap();
+        std::fs::rename(directory.join("fixture-result.new"), directory.join("fixture-result.json")).unwrap();
+        if mode == "owner" {
+            std::thread::sleep(std::time::Duration::from_secs(120));
+        } else {
+            // Retain the actual token until the parent has verified this exact
+            // PID/result. A fixed sleep would race a heavily loaded CI runner.
+            let release = directory.join(format!("fixture-release-{}", std::process::id()));
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+            while !release.is_file() && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            assert!(release.is_file(), "Owned standard-account result was not acknowledged");
+            std::fs::remove_file(release).unwrap();
+        }
+    }
+    #[cfg(not(windows))]
+    panic!("This standard-account functional control requires actual Windows");
+}
+'''
+
+
+def isolated_source(original, directory, prefix, event):
+    source, count = re.subn(r'const ROOT: &str = "(?:/tmp|/private/tmp)";',
+                           lambda _: "const ROOT: &str = " + json.dumps(str(directory)) + ";", original)
+    assert count == 2, "Native lease root isolation marker changed"
+    source, count = re.subn(r'const PREFIX: &str = "mixel-remote-attended-v[0-9]+-";',
+                           lambda _: "const PREFIX: &str = " + json.dumps(prefix) + ";", source)
+    assert count == 1, "Native owner directory marker changed"
+    source, count = re.subn(r'const EVENT: &str = "Global\\\\Mixel-Remote-Attended-Runtime-v[0-9]+";',
+                           lambda _: "const EVENT: &str = " + json.dumps(event) + ";", source)
+    assert count == 1, "Windows native event isolation marker changed"
+    bridge_marker = "\n}\n\npub fn hold_support_invite_attended_lease()"
+    assert source.count(bridge_marker) == 1, "Native lease fixture bridge boundary changed"
+    return source.replace(bridge_marker, WINDOWS_BRIDGE + bridge_marker, 1)
+
+
+def export_standard_windows_fixture(directory, event):
+    assert os.name == "nt", "Standard-account fixture compilation requires actual Windows"
+    assert re.fullmatch(r"Global\\Mixel-Remote-Standard-Lease-[0-9a-f]{32}", event), "Expected an isolated GUID event name"
+    directory = directory.resolve()
+    assert directory.is_dir() and not directory.is_symlink(), "Expected an owned existing fixture directory"
+    original = (ROOT / "scripts/support-invite-guard.rs").read_text(encoding="utf-8")
+    assert "pub fn support_invite_lease_status() -> String" in original, "Actual read-only lease classification helper is missing"
+    source = isolated_source(original, directory, "mixel-standard-lease-" + uuid.uuid4().hex + "-", event)
+    fixture = directory / "lease-standard.rs"
+    fixture.write_text(source + HARNESS.replace("fn main() {", "fn lease_main() {", 1) + STANDARD_WINDOWS_HARNESS, encoding="utf-8")
+    binary = directory / "lease-standard.exe"
+    rustc = os.environ.get("RUSTC_BIN") or shutil.which("rustc")
+    assert rustc, "Native standard-account lease control requires rustc"
+    subprocess.run([rustc, "--edition", "2021", "-D", "warnings", str(fixture), "-o", str(binary)], check=True, timeout=90)
+    print("PASS: actual source-extracted standard-account lease control compiles with no Rust warnings", flush=True)
+
+
 def main():
     original = (ROOT / "scripts/support-invite-guard.rs").read_text(encoding="utf-8")
     owners = []
@@ -192,18 +302,7 @@ def main():
         directory = Path(temporary)
         prefix = "mixel-lease-test-" + uuid.uuid4().hex + "-"
         event = "Global\\Mixel-Remote-Test-Lease-" + uuid.uuid4().hex
-        source, count = re.subn(r'const ROOT: &str = "(?:/tmp|/private/tmp)";',
-                               lambda _: "const ROOT: &str = " + json.dumps(str(directory)) + ";", original)
-        assert count == 2, "Native lease root isolation marker changed"
-        source, count = re.subn(r'const PREFIX: &str = "mixel-remote-attended-v[0-9]+-";',
-                               lambda _: "const PREFIX: &str = " + json.dumps(prefix) + ";", source)
-        assert count == 1, "Native owner directory marker changed"
-        source, count = re.subn(r'const EVENT: &str = "Global\\\\Mixel-Remote-Attended-Runtime-v[0-9]+";',
-                               lambda _: "const EVENT: &str = " + json.dumps(event) + ";", source)
-        assert count == 1, "Windows native event isolation marker changed"
-        bridge_marker = "\n}\n\npub fn hold_support_invite_attended_lease()"
-        assert source.count(bridge_marker) == 1, "Native lease fixture bridge boundary changed"
-        source = source.replace(bridge_marker, WINDOWS_BRIDGE + bridge_marker, 1)
+        source = isolated_source(original, directory, prefix, event)
         fixture = directory / "lease.rs"
         fixture.write_text(source + HARNESS, encoding="utf-8")
         binary = directory / ("lease.exe" if os.name == "nt" else "lease")
@@ -219,6 +318,16 @@ def main():
             if attestation is None:
                 attestation = "attended-runtime-v2" if expected else ""
             assert command("attestation") == attestation, "Fresh probe must not attest readiness from unknown ownership"
+            status = command("status")
+            fields = dict(part.split("=", 1) for part in status.split(";"))
+            assert fields.keys() == {"ownerFailed", "ownerError", "kernel", "probeError", "memoryActive"}, "Native status contract changed"
+            assert fields["ownerFailed"] == "false" and fields["ownerError"] == "none" and fields["memoryActive"] == "false", "Read-only fresh status created owner/memory state"
+            kernel = "unavailable" if attestation == "guard-unavailable" else "active" if expected else "absent"
+            assert fields["kernel"] == kernel, "Read-only native status omitted the actual kernel state"
+            if kernel == "unavailable":
+                assert re.fullmatch(r"-?[0-9]+", fields["probeError"]), "Unavailable native status omitted its numeric error"
+            else:
+                assert fields["probeError"] == "none", "Known native state reported a probe error"
 
         try:
             probe(False)
@@ -312,8 +421,20 @@ def main():
                 if owner.poll() is None:
                     owner.kill()
                     owner.wait(timeout=10)
+    if os.name == "nt":
+        pwsh = shutil.which("pwsh")
+        assert pwsh, "Actual Windows standard-account lease controls require PowerShell7"
+        subprocess.run([pwsh, "-NoProfile", "-File", str(ROOT / "scripts/test-support-lease-standard-windows.ps1")], check=True, timeout=180)
     print("Result: native cross-process attended lease lifecycle passed", flush=True)
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--export-standard-windows-fixture", type=Path)
+    parser.add_argument("--event")
+    args = parser.parse_args()
+    if args.export_standard_windows_fixture is not None:
+        export_standard_windows_fixture(args.export_standard_windows_fixture, args.event or "")
+    else:
+        assert args.event is None, "An isolated event requires explicit fixture export mode"
+        main()

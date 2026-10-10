@@ -1359,6 +1359,8 @@ try {
     $initialLeasePresent = [MixelOrdinaryTokenFixture]::LeasePresent()
     Write-Host "FIXTURE: read-only ordinary baseline; guardEmpty=$($initialHealth.attendedProof -ceq ''), guardConfirmed=$($initialHealth.attendedReady), foregroundOwnsLease=$initialOwnsLease, globalLeasePresent=$initialLeasePresent; foregroundPid=$($main.Id)."
     if ($initialHealth.attendedProof -cne '' -or $initialOwnsLease) {
+      $leaseStatus = Get-MixelSupportLeaseDiagnostic $initialHealth.incomingPid
+      Write-Host "FIXTURE: failed ordinary baseline read-only native lease observation; $leaseStatus."
       throw 'Ordinary-to-QS positive control is already guarded; refusing a manufactured transition proof.'
     }
     Write-Host "PASS: actual ordinary non-elevated signed GUI starts genuinely unguarded, with empty read-only IPC guard and no foreground lease; foregroundPid=$($main.Id), incomingPipePid=$($initialHealth.incomingPid), hwnd=$($window.ToInt64())."

@@ -567,6 +567,9 @@ text = replace_once(text, """                } else if name == "trusted-devices"
                 } else if name == "mixel-support-invite-attended" {
                     value = Some(password::support_invite_attestation().to_owned());
 """, "runtime IPC guard getter")
+text = replace_once(text, new_attended_getter, new_attended_getter + """                } else if name == "mixel-support-invite-lease-status" {
+                    value = Some(password::support_invite_lease_status());
+""", "read-only native lease observation")
 text = replace_once(text, """                } else if name == "unlock-pin" {
                     Config::set_unlock_pin(&value);
 """, """                } else if name == "unlock-pin" {
