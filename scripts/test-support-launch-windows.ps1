@@ -1428,6 +1428,14 @@ try {
     $ordinaryTokenLeaseProbe = [MixelOrdinaryTokenFixture]::LeaseProbeErrorAsProcess($main.Id)
     Write-Host "FIXTURE: optional actual-token event observation: nativeResult=$ordinaryTokenLeaseProbe (negative means unavailable token access, never an absent event)."
     if ($initialHealth.attendedProof -cne '' -or $initialOwnsLease) {
+      try {
+        $leaseStatus = Get-MixelSupportLeaseDiagnostic $initialHealth.incomingPid
+        Write-Host "FIXTURE: failed ordinary baseline read-only native lease observation; $leaseStatus."
+      } catch {
+        # Older retained signed artifacts may lack this diagnostic getter.
+        # Unavailable secondary evidence must preserve the failing baseline.
+        Write-Host 'FIXTURE: failed ordinary baseline read-only native lease observation unavailable; original guarded-state failure preserved.'
+      }
       throw 'Ordinary-to-QS positive control is already guarded; refusing a manufactured transition proof.'
     }
     Write-Host "PASS: actual ordinary non-elevated signed GUI starts genuinely unguarded, with empty read-only IPC guard and no foreground lease; foregroundPid=$($main.Id), incomingPipePid=$($initialHealth.incomingPid), hwnd=$($window.ToInt64())."

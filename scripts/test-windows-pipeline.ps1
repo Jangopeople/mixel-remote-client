@@ -491,9 +491,14 @@ foreach ($required in @(
   if (-not $launchSource.Contains($required)) { throw "Ordinary-to-QS runtime proof lost a required native assertion: $required" }
 }
 
-function Assert-Fails([scriptblock]$Action, [string]$Scenario) {
+function Assert-Fails([scriptblock]$Action, [string]$Scenario, [string[]]$ExpectedMessages = @()) {
   $failed = $false
-  try { & $Action } catch { $failed = $true }
+  try { & $Action } catch {
+    if ($ExpectedMessages.Count -gt 0 -and $ExpectedMessages -cnotcontains $_.Exception.Message) {
+      throw "Unexpected failure for ${Scenario}: $($_.Exception.Message)"
+    }
+    $failed = $true
+  }
   if (-not $failed) { throw "Expected failure was accepted: $Scenario" }
 }
 
@@ -614,28 +619,195 @@ Write-Host 'PASS: actual named-pipe IPC decodes fragmented attended, online, bra
 Write-Host 'PASS: actual framed health requests are read-only and never arm consent or change options.'
 Write-Host 'PASS: all five actual named-pipe responses belong to the fixture server PID; missing or inconsistent PID attribution fails closed.'
 
-foreach ($invalid in @('{"t":"OnlineStatus","c":[1,"false"]}', '{"t":"OnlineStatus","c":["1",true]}', '{"t":"OnlineStatus","c":[1]}')) {
+foreach ($rawProof in @('', 'attended-runtime-v2', 'guard-unavailable', 'attended-runtime-v1', 'Y', 'ATTENDED-RUNTIME-V2')) {
+  $rawGuard = [pscustomobject]@{ t = 'Config'; c = @('mixel-support-invite-attended', $rawProof) } | ConvertTo-Json -Compress
+  $fixture = [MixelSupportProbeFixture]::Serve(@($rawGuard, $online, $options, $rendezvous, $device))
+  $rawHealth = Get-MixelSupportRuntimeHealth
+  $fixture.GetAwaiter().GetResult()
+  if ($rawHealth.attendedProof -isnot [string] -or $rawHealth.attendedProof -cne $rawProof -or
+      $rawHealth.attendedReady -isnot [bool] -or $rawHealth.attendedReady -ne ($rawProof -ceq 'attended-runtime-v2') -or
+      $rawHealth.incomingPid -ne $PID -or -not $rawHealth.brandedRelay -or
+      -not $rawHealth.keyConfirmed -or $rawHealth.rendezvousState -ne 1 -or
+      $rawHealth.registeredId -cne '123456789' -or $rawHealth.rendezvousServer -cne 'rs.mixel.ch:21116') {
+    throw 'Actual IPC health must preserve the raw guard proof and confirm only exact attended-runtime-v2.'
+  }
+  $actualRequests = [MixelSupportProbeFixture]::Requested()
+  if ($actualRequests.Count -ne $expectedRequests.Count) { throw 'Raw guard health issued an unexpected number of requests.' }
+  for ($index = 0; $index -lt $expectedRequests.Count; $index++) {
+    if ($actualRequests[$index] -cne $expectedRequests[$index]) {
+      throw 'Raw guard health must use only the exact read-only queries, with no consent setter or preference writes.'
+    }
+  }
+}
+Write-Host 'PASS: actual named-pipe health preserves ordinary empty, v2, unavailable and legacy proofs verbatim; only exact v2 confirms readiness, including case-variant rejection; all queries remain read-only.'
+
+foreach ($invalid in @(
+    '{"t":"Config","c":["mixel-support-invite-attended",null]}',
+    '{"t":"Config","c":["mixel-support-invite-attended",true]}',
+    '{"t":"Config","c":["mixel-support-invite-attended",1]}',
+    '{"t":"Config","c":["mixel-support-invite-attended",{}]}',
+    '{"t":"Config","c":["mixel-support-invite-attended",[]]}',
+    '{"t":["Config"],"c":["mixel-support-invite-attended","attended-runtime-v2"]}',
+    '{"t":"Config","c":[["mixel-support-invite-attended"],"attended-runtime-v2"]}',
+    '{"t":"config","c":["mixel-support-invite-attended","attended-runtime-v2"]}',
+    '{"t":"Config","c":["MIXEL-SUPPORT-INVITE-ATTENDED","attended-runtime-v2"]}',
+    '{"t":"Config","c":["other-option",""]}')) {
+  $fixture = [MixelSupportProbeFixture]::Serve(@($invalid))
+  Assert-Fails { Get-MixelSupportRuntimeHealth } 'malformed raw guard proof' @('Incoming support IPC returned an unexpected guard response.')
+  $fixture.GetAwaiter().GetResult()
+  $actualRequests = [MixelSupportProbeFixture]::Requested()
+  if ($actualRequests.Count -ne 1 -or $actualRequests[0] -cne $expectedRequests[0]) {
+    throw 'Malformed raw guard must fail after its sole read-only query, without sending consent setters or further requests.'
+  }
+}
+Write-Host 'PASS: actual named-pipe health rejects null, non-string, nested-array and wrong-case/tag/key guard replies at the guard parser before further requests; no consent setters or preference writes.'
+
+$leaseStatusRequest = '{"t":"Config","c":["mixel-support-invite-lease-status",null]}'
+$leaseStatusAbsent = 'ownerFailed=false;ownerError=none;kernel=absent;probeError=none;memoryActive=false'
+foreach ($leaseStatus in @(
+    $leaseStatusAbsent,
+    'ownerFailed=false;ownerError=none;kernel=active;probeError=none;memoryActive=false',
+    'ownerFailed=false;ownerError=none;kernel=absent;probeError=none;memoryActive=true',
+    'ownerFailed=true;ownerError=5;kernel=unavailable;probeError=6;memoryActive=false',
+    'ownerFailed=true;ownerError=0;kernel=unavailable;probeError=0;memoryActive=false',
+    'ownerFailed=true;ownerError=2147483647;kernel=unavailable;probeError=2147483647;memoryActive=false',
+    'ownerFailed=true;ownerError=-2147483648;kernel=unavailable;probeError=-2147483648;memoryActive=false')) {
+  $leaseReply = [pscustomobject]@{ t = 'Config'; c = @('mixel-support-invite-lease-status', $leaseStatus) } | ConvertTo-Json -Compress
+  $fixture = [MixelSupportProbeFixture]::Serve(@($leaseReply))
+  $observed = Get-MixelSupportLeaseDiagnostic -ExpectedIncomingPid $PID
+  $fixture.GetAwaiter().GetResult()
+  $actualRequests = [MixelSupportProbeFixture]::Requested()
+  if ($observed -isnot [string] -or $observed -cne $leaseStatus -or
+      $actualRequests.Count -ne 1 -or $actualRequests[0] -cne $leaseStatusRequest) {
+    throw 'Lease diagnostics must preserve attributed safe status and issue only the one read-only query.'
+  }
+}
+$validLeaseReply = [pscustomobject]@{ t = 'Config'; c = @('mixel-support-invite-lease-status', $leaseStatusAbsent) } | ConvertTo-Json -Compress
+$validLeaseErrorReply = [pscustomobject]@{ t = 'Config'; c = @('mixel-support-invite-lease-status', 'ownerFailed=true;ownerError=5;kernel=unavailable;probeError=6;memoryActive=false') } | ConvertTo-Json -Compress
+foreach ($unexpectedPid in @([uint32]0, [uint32]($PID + 1))) {
+  $fixture = [MixelSupportProbeFixture]::Serve(@($validLeaseReply))
+  Assert-Fails { Get-MixelSupportLeaseDiagnostic -ExpectedIncomingPid $unexpectedPid } 'missing/misattributed lease diagnostic PID'
+  $fixture.GetAwaiter().GetResult()
+  $actualRequests = [MixelSupportProbeFixture]::Requested()
+  if ($actualRequests.Count -ne 1 -or $actualRequests[0] -cne $leaseStatusRequest) {
+    throw 'Misattributed lease diagnostics must not send consent setters or further requests.'
+  }
+}
+foreach ($invalid in @(
+    '{"t":"Config","c":["mixel-support-invite-lease-status",null]}',
+    '{"t":"Config","c":["mixel-support-invite-lease-status",1]}',
+    $validLeaseReply.Replace('"t":"Config"', '"t":["Config"]'),
+    $validLeaseReply.Replace('"mixel-support-invite-lease-status",', '["mixel-support-invite-lease-status"],'),
+    $validLeaseReply.Replace('"t":"Config"', '"t":"config"'),
+    $validLeaseReply.Replace('mixel-support-invite-lease-status', 'MIXEL-SUPPORT-INVITE-LEASE-STATUS'),
+    $validLeaseReply.Replace('"t":"Config"', '"t":"Options"'),
+    $validLeaseReply.Replace('mixel-support-invite-lease-status', 'other-option'),
+    $validLeaseReply.Replace('ownerFailed=false', 'ownerFailed=False'),
+    $validLeaseReply.Replace('ownerError=none', 'ownerError=unknown'),
+    $validLeaseReply.Replace('kernel=absent', 'kernel=unknown'),
+    $validLeaseReply.Replace(';memoryActive=false', ''),
+    $validLeaseReply.Replace('memoryActive=false', 'memoryActive=false\n'),
+    $validLeaseReply.Replace('memoryActive=false', 'memoryActive=false;extra=value'),
+    $validLeaseErrorReply.Replace('ownerError=5', 'ownerError=01'),
+    $validLeaseErrorReply.Replace('ownerError=5', 'ownerError=-01'),
+    $validLeaseErrorReply.Replace('ownerError=5', 'ownerError=-0'),
+    $validLeaseErrorReply.Replace('ownerError=5', 'ownerError=2147483648'),
+    $validLeaseErrorReply.Replace('ownerError=5', 'ownerError=-2147483649'),
+    $validLeaseErrorReply.Replace('probeError=6', 'probeError=01'),
+    $validLeaseErrorReply.Replace('probeError=6', 'probeError=-01'),
+    $validLeaseErrorReply.Replace('probeError=6', 'probeError=-0'),
+    $validLeaseErrorReply.Replace('probeError=6', 'probeError=2147483648'),
+    $validLeaseErrorReply.Replace('probeError=6', 'probeError=-2147483649'),
+    $validLeaseErrorReply.Replace('ownerFailed=true', 'ownerFailed=false'),
+    $validLeaseErrorReply.Replace('ownerError=5', 'ownerError=none'),
+    $validLeaseErrorReply.Replace('kernel=unavailable', 'kernel=absent'),
+    $validLeaseErrorReply.Replace('probeError=6', 'probeError=none'))) {
+  $fixture = [MixelSupportProbeFixture]::Serve(@($invalid))
+  Assert-Fails { Get-MixelSupportLeaseDiagnostic -ExpectedIncomingPid $PID } 'malformed read-only lease diagnostic' @(
+    'Actual incoming support endpoint returned an unattributed or invalid read-only lease observation.',
+    'Actual incoming support endpoint returned an inconsistent read-only lease observation.',
+    'Actual incoming support endpoint returned an out-of-range native lease error.')
+  $fixture.GetAwaiter().GetResult()
+  $actualRequests = [MixelSupportProbeFixture]::Requested()
+  if ($actualRequests.Count -ne 1 -or $actualRequests[0] -cne $leaseStatusRequest) {
+    throw 'Malformed lease diagnostics must not send consent setters or further requests.'
+  }
+}
+Write-Host 'PASS: actual named-pipe lease diagnostics preserve safe absent/active/error/memory statuses, require the actual incoming PID and reject malformed/nested-array/wrong-case envelopes, noncanonical/out-of-range codes and inconsistent error pairs at the actual parser; every observation is one read-only query.'
+
+$failedBaseline = @($captureAst.FindAll({
+  param($node)
+  $node -is [System.Management.Automation.Language.IfStatementAst] -and
+    $node.Extent.Text -match '^if \(\$initialHealth\.attendedProof -cne .* -or \$initialOwnsLease\) \{'
+}, $true))
+if ($failedBaseline.Count -ne 1) { throw 'Exact failed ordinary-to-QS baseline gate missing.' }
+$failedBaselineBlock = [scriptblock]::Create($failedBaseline[0].Extent.Text)
+foreach ($unavailable in @($false, $true)) {
+  $failureMessage = & {
+    param([scriptblock]$ActualBlock, [bool]$Unavailable)
+    $initialHealth = [pscustomobject]@{ attendedProof = 'guard-unavailable'; incomingPid = 4321 }
+    $initialOwnsLease = $false
+    function Get-MixelSupportLeaseDiagnostic([uint32]$ExpectedIncomingPid) {
+      if ($ExpectedIncomingPid -ne 4321) { throw 'Secondary observation lost the actual incoming PID.' }
+      if ($Unavailable) { throw 'Retained older signed payload has no lease diagnostic getter.' }
+      return 'ownerFailed=false;ownerError=none;kernel=unavailable;probeError=5;memoryActive=false'
+    }
+    try { & $ActualBlock; 'UNEXPECTED: guarded baseline accepted' }
+    catch { $_.Exception.Message }
+  } $failedBaselineBlock $unavailable
+  if ($failureMessage -isnot [string] -or $failureMessage -cne 'Ordinary-to-QS positive control is already guarded; refusing a manufactured transition proof.') {
+    throw 'Secondary valid/unavailable lease diagnostics changed or masked the actual guarded-baseline failure.'
+  }
+}
+Write-Host 'PASS: exact ordinary-to-QS failing baseline stays fatal with either valid secondary lease evidence or an older signed payload lacking the diagnostic getter; no readiness is manufactured.'
+
+foreach ($invalid in @(
+    '{"t":"OnlineStatus","c":[1,"false"]}',
+    '{"t":"OnlineStatus","c":["1",true]}',
+    '{"t":"OnlineStatus","c":[1]}',
+    $online.Replace('"t":"OnlineStatus"', '"t":["OnlineStatus"]'),
+    $online.Replace('"t":"OnlineStatus"', '"t":"onlinestatus"'))) {
   $fixture = [MixelSupportProbeFixture]::Serve(@($guard, $invalid))
-  Assert-Fails { Get-MixelSupportRuntimeHealth } 'malformed online proof'
+  Assert-Fails { Get-MixelSupportRuntimeHealth } 'malformed online proof' @('Incoming support IPC returned an unexpected online response.')
   $fixture.GetAwaiter().GetResult()
 }
 foreach ($invalid in @(
     '{"t":"Options","c":[]}',
+    $options.Replace('"t":"Options"', '"t":["Options"]'),
+    $options.Replace('"t":"Options"', '"t":"options"'),
     $options.Replace('rs.mixel.ch', 'other.example'),
     $options.Replace('OogSlDx9l+fgs0t6ihF3uTg9emyCv01m8cr4ullarRo=', 'wrong-public-key'),
     $options.Replace('"key":', '"mixel-support-invite-attended":"Y","key":'))) {
   $fixture = [MixelSupportProbeFixture]::Serve(@($guard, $online, $invalid))
-  Assert-Fails { Get-MixelSupportRuntimeHealth } 'wrong/malformed relay defaults or persisted attended guard'
+  Assert-Fails { Get-MixelSupportRuntimeHealth } 'wrong/malformed relay defaults or persisted attended guard' @(
+    'Incoming support IPC returned unexpected relay options.',
+    'Actual incoming support server is not using the branded relay defaults.',
+    'Attended support guard leaked into saved preferences.')
   $fixture.GetAwaiter().GetResult()
 }
-foreach ($invalid in @('{"t":"Config","c":["rendezvous_server","other.example:21116"]}', '{"t":"Config","c":["id","rs.mixel.ch:21116"]}')) {
+foreach ($invalid in @(
+    '{"t":"Config","c":["rendezvous_server","other.example:21116"]}',
+    '{"t":"Config","c":["id","rs.mixel.ch:21116"]}',
+    $rendezvous.Replace('"t":"Config"', '"t":["Config"]'),
+    $rendezvous.Replace('"rendezvous_server",', '["rendezvous_server"],'),
+    $rendezvous.Replace('"t":"Config"', '"t":"config"'),
+    $rendezvous.Replace('rendezvous_server', 'RENDEZVOUS_SERVER'))) {
   $fixture = [MixelSupportProbeFixture]::Serve(@($guard, $online, $options, $invalid))
-  Assert-Fails { Get-MixelSupportRuntimeHealth } 'wrong/malformed rendezvous proof'
+  Assert-Fails { Get-MixelSupportRuntimeHealth } 'wrong/malformed rendezvous proof' @('Actual incoming rendezvous server does not match rs.mixel.ch.')
   $fixture.GetAwaiter().GetResult()
 }
-foreach ($invalid in @('{"t":"Config","c":["id",""]}', '{"t":"Config","c":["id",123456789]}', '{"t":"Config","c":["id","invalid id!"]}', '{"t":"Config","c":["id","123456789\n"]}', '{"t":"Config","c":["temporary-password","123456789"]}')) {
+foreach ($invalid in @(
+    '{"t":"Config","c":["id",""]}',
+    '{"t":"Config","c":["id",123456789]}',
+    '{"t":"Config","c":["id","invalid id!"]}',
+    '{"t":"Config","c":["id","123456789\n"]}',
+    '{"t":"Config","c":["temporary-password","123456789"]}',
+    $device.Replace('"t":"Config"', '"t":["Config"]'),
+    $device.Replace('"id",', '["id"],'),
+    $device.Replace('"t":"Config"', '"t":"config"'),
+    $device.Replace('"id",', '"ID",'))) {
   $fixture = [MixelSupportProbeFixture]::Serve(@($guard, $online, $options, $rendezvous, $invalid))
-  Assert-Fails { Get-MixelSupportRuntimeHealth } 'wrong/malformed registered ID'
+  Assert-Fails { Get-MixelSupportRuntimeHealth } 'wrong/malformed registered ID' @('Actual incoming support server has no usable support device ID.')
   $fixture.GetAwaiter().GetResult()
 }
 foreach ($invalid in @('oversized', 'truncated')) {

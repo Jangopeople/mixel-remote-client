@@ -270,9 +270,25 @@ fn unrelated_option_falls_through_to_existing_saved_preference_path() {
 fn actual_desktop_saved_password_survives_safely_empty_raw_proof() {
     saved_options();
     TRACE.with(|trace| trace.borrow_mut().raw_proof=Some(""));
-    assert_eq!(get_option("mixel-support-invite-attended"), "guard-unavailable");
+    let proof = get_option("mixel-support-invite-attended");
+    assert_eq!(proof, "");
+    assert!(!real_guard::support_invite_guard_is_confirmed(&proof));
     assert_eq!(get_option("approve-mode"), "password");
     assert_eq!(OPTIONS.lock().unwrap().get("approve-mode").unwrap(), "password");
+}
+#[test]
+fn actual_desktop_empty_proof_cannot_hide_an_ipc_failure() {
+    TRACE.with(|trace| { let mut state=trace.borrow_mut(); state.raw_proof=Some(""); state.ipc_failed=true; });
+    let proof = get_option("mixel-support-invite-attended");
+    assert_eq!(proof, "guard-unavailable");
+    assert!(!real_guard::support_invite_guard_is_confirmed(&proof));
+}
+#[test]
+fn actual_desktop_unknown_proof_cannot_become_inactive_or_ready() {
+    TRACE.with(|trace| trace.borrow_mut().raw_proof=Some("attended-runtime-v2 "));
+    let proof = get_option("mixel-support-invite-attended");
+    assert_eq!(proof, "service-update-required");
+    assert!(!real_guard::support_invite_guard_is_confirmed(&proof));
 }
 #[test]
 fn actual_desktop_confirmed_attended_proof_shows_accept_without_saving_click() {
@@ -300,7 +316,9 @@ fn actual_desktop_owner_failure_shows_accept_without_claiming_ready() {
 fn actual_desktop_local_fail_closed_guard_shows_accept_despite_empty_service_proof() {
     saved_options();
     TRACE.with(|trace| { let mut state=trace.borrow_mut(); state.local_required=true; state.raw_proof=Some(""); });
-    assert_eq!(get_option("mixel-support-invite-attended"), "guard-unavailable");
+    let proof = get_option("mixel-support-invite-attended");
+    assert_eq!(proof, "");
+    assert!(!real_guard::support_invite_guard_is_confirmed(&proof));
     assert_eq!(get_option("approve-mode"), "click");
 }
 fn linux_startup(args: Vec<String>) -> Option<Vec<String>> {

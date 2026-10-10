@@ -11,17 +11,19 @@ pub const SUPPORT_INVITE_ATTESTATION: &str = "attended-runtime-v2";
 // A restarted service discovers a live owner before authorizing any session.
 mod mixel_support_lease {
     use std::sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicI32, Ordering},
         Mutex,
     };
 
     static OWNER: Mutex<Option<Lease>> = Mutex::new(None);
     static OWNER_FAILED: AtomicBool = AtomicBool::new(false);
+    static OWNER_ERROR: AtomicI32 = AtomicI32::new(0);
 
     pub(super) fn hold() -> bool {
         let mut owner = OWNER.lock().unwrap_or_else(|error| error.into_inner());
         if let Some(lease) = owner.as_ref() {
             if current(lease).unwrap_or(false) {
+                OWNER_ERROR.store(0, Ordering::SeqCst);
                 OWNER_FAILED.store(false, Ordering::SeqCst);
                 return true;
             }
@@ -31,10 +33,12 @@ mod mixel_support_lease {
         match create() {
             Ok(lease) => {
                 *owner = Some(lease);
+                OWNER_ERROR.store(0, Ordering::SeqCst);
                 OWNER_FAILED.store(false, Ordering::SeqCst);
                 true
             }
-            Err(_) => {
+            Err(error) => {
+                OWNER_ERROR.store(error.raw_os_error().unwrap_or(-1), Ordering::SeqCst);
                 OWNER_FAILED.store(true, Ordering::SeqCst);
                 false
             }
@@ -43,6 +47,15 @@ mod mixel_support_lease {
 
     pub(super) fn owner_failed() -> bool {
         OWNER_FAILED.load(Ordering::SeqCst)
+    }
+
+    pub(super) fn observation() -> (bool, Option<i32>, std::io::Result<bool>) {
+        // This read-only observation never acquires or renews a lease. Keep the
+        // owner/error pair consistent with a concurrent foreground repair.
+        let _owner = OWNER.lock().unwrap_or_else(|error| error.into_inner());
+        let failed = owner_failed();
+        let error = failed.then(|| OWNER_ERROR.load(Ordering::SeqCst));
+        (failed, error, probe())
     }
 
     pub(super) fn active() -> bool {
@@ -366,6 +379,23 @@ pub fn support_invite_owner_lease_failed() -> bool {
     mixel_support_lease::owner_failed()
 }
 
+pub fn support_invite_lease_status() -> String {
+    let (owner_failed, owner_error, probe) = mixel_support_lease::observation();
+    let (kernel, probe_error) = match probe {
+        Ok(true) => ("active", None),
+        Ok(false) => ("absent", None),
+        Err(error) => ("unavailable", Some(error.raw_os_error().unwrap_or(-1))),
+    };
+    let memory_active = support_invite_guard_active(
+        support_invite_now_ms(), MIXEL_SUPPORT_INVITE_UNTIL.load(std::sync::atomic::Ordering::SeqCst),
+    );
+    let code = |value: Option<i32>| value.map(|code| code.to_string()).unwrap_or_else(|| "none".to_owned());
+    format!(
+        "ownerFailed={owner_failed};ownerError={};kernel={kernel};probeError={};memoryActive={memory_active}",
+        code(owner_error), code(probe_error),
+    )
+}
+
 pub fn support_invite_guard_is_confirmed(value: &str) -> bool {
     value == SUPPORT_INVITE_ATTESTATION
 }
@@ -379,7 +409,8 @@ pub fn resolve_support_invite_attestation(
     }
     match remote_proof {
         Some(SUPPORT_INVITE_ATTESTATION) => SUPPORT_INVITE_ATTESTATION,
-        Some("") | Some("guard-unavailable") => "guard-unavailable",
+        Some("") => "",
+        Some("guard-unavailable") => "guard-unavailable",
         _ => "service-update-required",
     }
 }
@@ -612,5 +643,25 @@ mod mixel_support_invite_tests {
             resolve_support_invite_attestation(true, Some(SUPPORT_INVITE_ATTESTATION)),
             SUPPORT_INVITE_ATTESTATION
         );
+    }
+
+    #[test]
+    fn safely_inactive_service_is_distinct_from_unavailable_and_ready() {
+        let inactive = resolve_support_invite_attestation(true, Some(""));
+        assert_eq!(inactive, "");
+        assert!(!support_invite_guard_is_confirmed(inactive));
+        assert_eq!(
+            resolve_support_invite_attestation(false, Some("")),
+            "guard-unavailable"
+        );
+        assert_eq!(
+            resolve_support_invite_attestation(true, Some("guard-unavailable")),
+            "guard-unavailable"
+        );
+        for value in [None, Some("Y"), Some("attended-runtime-v1"), Some("unknown")] {
+            assert!(!support_invite_guard_is_confirmed(
+                resolve_support_invite_attestation(true, value)
+            ));
+        }
     }
 }
