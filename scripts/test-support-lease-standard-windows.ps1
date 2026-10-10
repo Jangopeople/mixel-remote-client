@@ -12,7 +12,32 @@ if ($class -lt 0 -or $first -lt 0 -or $last -le $first) { throw 'Exact normal or
 if (-not ('MixelOrdinaryTokenFixture' -as [type])) {
   $normalSource = $launchSource.Substring($first, $last - $first)
   $marker = '  public static int StartStandardUser(string executable, string username, string password) {'
-  if ($normalSource.IndexOf($marker) -lt 0 -or $normalSource.IndexOf($marker) -ne $normalSource.LastIndexOf($marker)) { throw 'Exact owned namespace diagnostic boundary changed.' }
+  $position = $normalSource.IndexOf($marker)
+  if ($position -lt 0 -or $position -ne $normalSource.LastIndexOf($marker)) { throw 'Exact normal standard-launch comparison boundary changed.' }
+  # Add only a documented secondary-launch comparison and retained-token SID
+  # check to the test class; preserve its original customer launch and cleanup.
+  $comparison = @'
+  public static int StartStandardUserWithToken(string executable, string username, string password, string expectedSid) {
+    IntPtr token;
+    if (!LogonUserW(username, ".", password, 2, 0, out token)) throw new Win32Exception();
+    try {
+      using (var identity = new WindowsIdentity(token)) {
+        if (identity.User.Value != expectedSid || ElevatedToken(token)) throw new InvalidOperationException("Secondary launch did not log on the owned standard SID");
+      }
+      StartupInfo startup = Startup(); ProcessInfo process;
+      if (!CreateProcessWithTokenW(token, 1, executable, new StringBuilder("\"" + executable + "\""), 0, IntPtr.Zero, System.IO.Path.GetDirectoryName(executable), ref startup, out process)) throw new Win32Exception();
+      return Started(process);
+    } finally { CloseHandle(token); }
+  }
+  public static bool StartedUserSidMatches(int pid, string expectedSid) {
+    IntPtr process, token;
+    if (!StartedProcesses.TryGetValue(pid, out process)) throw new InvalidOperationException("SID check does not own the retained process");
+    if (!OpenProcessToken(process, 8, out token)) throw new Win32Exception();
+    try {
+      using (var identity = new WindowsIdentity(token)) { return identity.User.Value == expectedSid; }
+    } finally { CloseHandle(token); }
+  }
+'@
   $bridge = @'
   public static System.Collections.Generic.Dictionary<string,string> ObserveOwnedNamespace(int pid) {
     IntPtr process;
@@ -20,7 +45,7 @@ if (-not ('MixelOrdinaryTokenFixture' -as [type])) {
     return MixelCI.MixelStandardNamespaceDiagnostics.Observe(process);
   }
 '@
-  $normalSource = $normalSource.Replace($marker,$bridge+"`n"+$marker)
+  $normalSource = $normalSource.Insert($position,$comparison+"`n"+$bridge+"`n")
   $diagnostics = Get-Content (Join-Path $PSScriptRoot 'windows-standard-namespace-diagnostics.cs') -Raw
   Add-Type -TypeDefinition ($normalSource+"`n"+$diagnostics)
 }
@@ -38,12 +63,12 @@ public static class MixelIsolatedLeaseControl {
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool CloseHandle(IntPtr handle);
   [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr memory);
   static void Isolated(string name) {
-    if (!System.Text.RegularExpressions.Regex.IsMatch(name, @"\AGlobal\\Mixel-Remote-Standard-Lease-[0-9a-f]{32}\z")) throw new InvalidOperationException("Expected GUID-isolated lease control name");
+    if (!System.Text.RegularExpressions.Regex.IsMatch(name, @"\A(?:(?:Global|Local)\\)?Mixel-Remote-Standard-Lease-[0-9a-f]{32}\z")) throw new InvalidOperationException("Expected GUID-isolated lease control name");
   }
-  public static IntPtr DeniedEvent(string name) {
+  static IntPtr Event(string name, string sddl) {
     Isolated(name);
     IntPtr descriptor;
-    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW("D:P(A;;GA;;;BA)(A;;GA;;;SY)",1,out descriptor,IntPtr.Zero)) throw new Win32Exception();
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl,1,out descriptor,IntPtr.Zero)) throw new Win32Exception();
     IntPtr handle; int error;
     try {
       Attributes attributes=new Attributes { length=(uint)Marshal.SizeOf(typeof(Attributes)), descriptor=descriptor, inherit=0 };
@@ -53,6 +78,8 @@ public static class MixelIsolatedLeaseControl {
     if(handle==IntPtr.Zero) throw new Win32Exception(error);
     return handle;
   }
+  public static IntPtr DeniedEvent(string name) { return Event(name,"D:P(A;;GA;;;BA)(A;;GA;;;SY)"); }
+  public static IntPtr WorldEvent(string name) { return Event(name,"D:P(A;;0x00100000;;;WD)(A;;GA;;;BA)(A;;GA;;;SY)"); }
   public static IntPtr WrongObject(string name) {
     Isolated(name);
     // Grant the requested SYNCHRONIZE right to the ordinary account, so an
@@ -72,16 +99,55 @@ public static class MixelIsolatedLeaseControl {
 }
 '@ }
 
-function Invoke-StandardLeaseControl([string]$Mode, [string]$ExpectedStatus, [int]$ExpectedError,
-    [string]$ExpectedProof, [bool]$ExpectedRequired, [bool]$ExpectedOwnerFailed, [switch]$KeepAlive) {
+function Assert-StandardLeaseSafeResult($Record, [uint32]$ExpectedPid) {
+  $names = @($Record.PSObject.Properties.Name | Sort-Object)
+  $expectedNames = @('attestation','ownerFailed','pid','rawOpenError','requiresClick','sourceStatus')
+  $pidIsNumber = $Record.pid -is [int] -or $Record.pid -is [long] -or $Record.pid -is [uint32] -or $Record.pid -is [uint64]
+  $errorIsNumber = $Record.rawOpenError -is [int] -or $Record.rawOpenError -is [long] -or $Record.rawOpenError -is [uint32] -or $Record.rawOpenError -is [uint64]
+  if (($names -join ',') -cne ($expectedNames -join ',') -or $ExpectedPid -eq 0 -or
+      -not $pidIsNumber -or $Record.pid -ne $ExpectedPid -or -not $errorIsNumber -or
+      $Record.rawOpenError -lt 0 -or $Record.rawOpenError -gt [uint32]::MaxValue -or
+      $Record.sourceStatus -isnot [string] -or $Record.attestation -isnot [string] -or
+      $Record.attestation -cnotin @('','attended-runtime-v2','guard-unavailable') -or
+      $Record.requiresClick -isnot [bool] -or $Record.ownerFailed -isnot [bool]) {
+    throw 'Owned standard-account result is not the exact PID or canonical safe source classification.'
+  }
+  $codePattern = '(?:none|0|-?[1-9][0-9]{0,9})'
+  $fields = [regex]::Match($Record.sourceStatus, ('\AownerFailed=(?<owner>true|false);ownerError=(?<ownerError>' + $codePattern + ');kernel=(?<kernel>active|absent|unavailable);probeError=(?<probeError>' + $codePattern + ');memoryActive=(true|false)\z'))
+  if (-not $fields.Success -or
+      (($fields.Groups['owner'].Value -ceq 'true') -ne ($fields.Groups['ownerError'].Value -cne 'none')) -or
+      (($fields.Groups['kernel'].Value -ceq 'unavailable') -ne ($fields.Groups['probeError'].Value -cne 'none')) -or
+      (($fields.Groups['owner'].Value -ceq 'true') -ne $Record.ownerFailed)) {
+    throw 'Owned standard-account result contains inconsistent read-only native lease classification.'
+  }
+  foreach ($field in @('ownerError','probeError')) {
+    $value = $fields.Groups[$field].Value
+    [int]$nativeCode = 0
+    if ($value -cne 'none' -and -not [int]::TryParse($value, [Globalization.NumberStyles]::AllowLeadingSign, [Globalization.CultureInfo]::InvariantCulture, [ref]$nativeCode)) {
+      throw 'Owned standard-account result contains an out-of-range native lease error.'
+    }
+  }
+}
+
+function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner')][string]$Mode, [string]$ExpectedStatus, [int]$ExpectedError,
+    [string]$ExpectedProof, [bool]$ExpectedRequired, [bool]$ExpectedOwnerFailed, [switch]$KeepAlive,
+    [switch]$ObserveOnly, [string]$ObservationLabel,
+    [ValidateSet('with-logon','with-token')][string]$Launcher = 'with-logon') {
   if (Test-Path $resultPath) { Remove-Item -LiteralPath $resultPath }
   [IO.File]::WriteAllText((Join-Path $fixtureRoot 'fixture-mode.txt'), $Mode, [Text.UTF8Encoding]::new($false))
-  $controlPid = [MixelOrdinaryTokenFixture]::StartStandardUser($executable, $ownedUser, $ownedPassword)
+  if ($Launcher -ceq 'with-token') {
+    $controlPid = [MixelOrdinaryTokenFixture]::StartStandardUserWithToken($executable, $ownedUser, $ownedPassword, $ownedSid)
+  } else {
+    $controlPid = [MixelOrdinaryTokenFixture]::StartStandardUser($executable, $ownedUser, $ownedPassword)
+  }
   $control = $null
   try {
     $control = Get-Process -Id $controlPid
-    if ([MixelOrdinaryTokenFixture]::Elevated($controlPid) -or $control.SessionId -ne (Get-Process -Id $PID).SessionId) {
-      throw 'Lease control is not the actual non-elevated same-session standard token.'
+    $sidMatches = [MixelOrdinaryTokenFixture]::StartedUserSidMatches($controlPid, $ownedSid)
+    $elevated = [MixelOrdinaryTokenFixture]::Elevated($controlPid)
+    $actualSession = $control.SessionId
+    if (-not $sidMatches -or $elevated -or $actualSession -ne (Get-Process -Id $PID).SessionId) {
+      throw 'Lease control is not the owned SID under the actual non-elevated same-session standard token.'
     }
     $deadline = [DateTime]::UtcNow.AddSeconds(10)
     while (-not (Test-Path $resultPath) -and [DateTime]::UtcNow -lt $deadline) {
@@ -92,6 +158,7 @@ function Invoke-StandardLeaseControl([string]$Mode, [string]$ExpectedStatus, [in
     $text = [IO.File]::ReadAllText($resultPath)
     if ($text.Length -gt 4096) { throw 'Owned lease result exceeds its bound.' }
     $record = $text | ConvertFrom-Json
+    Assert-StandardLeaseSafeResult $record $controlPid
     Write-Host "OBSERVED: primary source lease result before secondary token diagnosis; $($record.sourceStatus); rawOpenError=$($record.rawOpenError); guardEmpty=$($record.attestation -ceq ''); guardConfirmed=$($record.attestation -ceq 'attended-runtime-v2')."
     try {
       $tokenObservation = [MixelOrdinaryTokenFixture]::ObserveOwnedNamespace($controlPid)
@@ -103,13 +170,18 @@ function Invoke-StandardLeaseControl([string]$Mode, [string]$ExpectedStatus, [in
       $nativeCode = if ($nativeFailure -is [ComponentModel.Win32Exception]) { $nativeFailure.NativeErrorCode } else { $nativeFailure.HResult }
       Write-Host "OBSERVED: secondary owned token namespace diagnosis unavailable; nativeCode=$nativeCode."
     }
-    if ($record.pid -ne $controlPid -or $record.sourceStatus -cne $ExpectedStatus -or
+    if (-not $ObserveOnly -and ($record.sourceStatus -cne $ExpectedStatus -or
         $record.rawOpenError -ne $ExpectedError -or $record.attestation -cne $ExpectedProof -or
         $record.requiresClick -isnot [bool] -or $record.requiresClick -ne $ExpectedRequired -or
-        $record.ownerFailed -isnot [bool] -or $record.ownerFailed -ne $ExpectedOwnerFailed) {
+        $record.ownerFailed -isnot [bool] -or $record.ownerFailed -ne $ExpectedOwnerFailed)) {
       throw ('Actual standard-account source lease classification mismatch: ' + ($record | ConvertTo-Json -Compress))
     }
-    Write-Host "FIXTURE: actual source lease under non-elevated same-session token; mode=$Mode; $($record.sourceStatus); rawOpenError=$($record.rawOpenError); guardEmpty=$($record.attestation -ceq ''); guardConfirmed=$($record.attestation -ceq 'attended-runtime-v2'); requiresClick=$($record.requiresClick)."
+    if ($ObserveOnly) {
+      if ($ObservationLabel -cnotmatch '\A(?:bare|local|global)-[a-z]+(?:-[a-z]+)*\z') { throw 'Invalid safe namespace observation label.' }
+      Write-Host "OBSERVED: standard-token GUID functional control; launcher=$Launcher; scenario=$ObservationLabel; mode=$Mode; controlPid=$controlPid; ordinarySessionId=$actualSession; ownedSidMatched=$sidMatches; elevated=$elevated; $($record.sourceStatus); rawOpenError=$($record.rawOpenError); guardEmpty=$($record.attestation -ceq ''); guardConfirmed=$($record.attestation -ceq 'attended-runtime-v2'); requiresClick=$($record.requiresClick)."
+    } else {
+      Write-Host "FIXTURE: actual source lease under non-elevated same-session token; mode=$Mode; $($record.sourceStatus); rawOpenError=$($record.rawOpenError); guardEmpty=$($record.attestation -ceq ''); guardConfirmed=$($record.attestation -ceq 'attended-runtime-v2'); requiresClick=$($record.requiresClick)."
+    }
     if (-not $KeepAlive) {
       [IO.File]::WriteAllText((Join-Path $fixtureRoot "fixture-release-$controlPid"), 'verified')
       $deadline = [DateTime]::UtcNow.AddSeconds(10)
@@ -122,6 +194,44 @@ function Invoke-StandardLeaseControl([string]$Mode, [string]$ExpectedStatus, [in
     }
     return $controlPid
   } finally { if ($control) { $control.Dispose() } }
+}
+
+function Invoke-StandardLeaseNamespaceObservations([ValidateSet('with-logon','with-token')][string]$Launcher) {
+  # These are observations only. They cannot satisfy the unchanged original
+  # Global absence/error2 or consent gate that follows this isolated matrix.
+  $savedRoot=$script:fixtureRoot; $savedExecutable=$script:executable; $savedResult=$script:resultPath
+  try {
+    foreach ($namespace in @('bare','local','global')) {
+      $script:fixtureRoot=Join-Path $savedRoot "$Launcher-$namespace"
+      New-Item -ItemType Directory -Path $script:fixtureRoot | Out-Null
+      $script:executable=Join-Path $script:fixtureRoot 'lease-standard.exe'
+      $script:resultPath=Join-Path $script:fixtureRoot 'fixture-result.json'
+      $name='Mixel-Remote-Standard-Lease-' + [Guid]::NewGuid().ToString('N')
+      $endpoint=switch ($namespace) { 'bare' { $name }; 'local' { 'Local\'+$name }; 'global' { 'Global\'+$name } }
+      python (Join-Path $PSScriptRoot 'test-support-lease.py') --export-standard-windows-fixture $script:fixtureRoot --event $endpoint
+      if ($LASTEXITCODE -ne 0) { throw 'Normal namespace source control compilation failed.' }
+      $matrixHandle=[IntPtr]::Zero
+      try {
+        [void](Invoke-StandardLeaseControl -Mode probe -Launcher $Launcher -ObserveOnly -ObservationLabel "$namespace-initial-untouched-absent")
+        [void](Invoke-StandardLeaseControl -Mode owner -Launcher $Launcher -KeepAlive -ObserveOnly -ObservationLabel "$namespace-explicit-source-owner")
+        [void](Invoke-StandardLeaseControl -Mode probe -Launcher $Launcher -ObserveOnly -ObservationLabel "$namespace-fresh-probe-after-owner-request")
+        [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses()
+        [MixelOrdinaryTokenFixture]::CloseStartedObservations()
+        [void](Invoke-StandardLeaseControl -Mode probe -Launcher $Launcher -ObserveOnly -ObservationLabel "$namespace-after-confirmed-owner-request-process-termination")
+        $matrixHandle=[MixelIsolatedLeaseControl]::WorldEvent($endpoint)
+        [void](Invoke-StandardLeaseControl -Mode probe -Launcher $Launcher -ObserveOnly -ObservationLabel "$namespace-existing-world-synchronize-event")
+        [MixelIsolatedLeaseControl]::Close($matrixHandle)
+        $matrixHandle=[IntPtr]::Zero
+        [void](Invoke-StandardLeaseControl -Mode probe -Launcher $Launcher -ObserveOnly -ObservationLabel "$namespace-after-confirmed-world-event-close")
+      } finally {
+        if ($matrixHandle -ne [IntPtr]::Zero) { [MixelIsolatedLeaseControl]::Close($matrixHandle) }
+        [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses()
+        [MixelOrdinaryTokenFixture]::CloseStartedObservations()
+      }
+    }
+  } finally {
+    $script:fixtureRoot=$savedRoot; $script:executable=$savedExecutable; $script:resultPath=$savedResult
+  }
 }
 
 $ownedUser = 'mixellease' + [Guid]::NewGuid().ToString('N').Substring(0,10)
@@ -150,6 +260,8 @@ try {
   if ($LASTEXITCODE -ne 0) { throw 'Actual standard-account lease source compilation failed.' }
   $desktopAccess = [MixelOrdinaryTokenFixture+DesktopAccess]::new($ownedSid)
   $profileStarted = $true
+  Invoke-StandardLeaseNamespaceObservations with-logon
+  Invoke-StandardLeaseNamespaceObservations with-token
   $absent = 'ownerFailed=false;ownerError=none;kernel=absent;probeError=none;memoryActive=false'
   $active = 'ownerFailed=false;ownerError=none;kernel=active;probeError=none;memoryActive=false'
   $activeOwner = 'ownerFailed=false;ownerError=none;kernel=active;probeError=none;memoryActive=true'
