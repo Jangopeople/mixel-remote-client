@@ -14,6 +14,9 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: '1.75'
       - name: Run release staging and configuration regression tests
         run: |
           python3 scripts/test-release-pipeline.py
@@ -22,6 +25,7 @@ jobs:
           python3 scripts/test-macos-native-minimum.py
           python3 scripts/test-macos-bundle-minimum.py
           python3 scripts/test-sdk-discovery.py
+          python3 scripts/test-rust-toolchain.py
           python3 scripts/test-support-session-fixture.py
           python3 scripts/test-support-video-sampling.py
           python3 scripts/test-linux-runtime-artifact.py
@@ -92,6 +96,9 @@ jobs:
         run: |
           python scripts/test-support-windows-clipboard.py --evidence-dir windows-clipboard-proof
           if ($LASTEXITCODE -ne 0) { throw 'Native Windows clipboard C/Rust ownership qualification failed.' }
+      - name: Prove explicit MSVC selection under actual Git Bash coreutils shadow
+        shell: bash
+        run: python scripts/test-rust-toolchain.py --native-windows
       - name: Qualify actual native Rust linker after Git Bash startup
         shell: bash
         run: |
@@ -165,7 +172,9 @@ jobs:
         run: |
           python3 scripts/test-support-invite.py
           python3 scripts/test-generated-support-paths.py
+          python3 scripts/test-support-macos-uri-routing.py
           python3 scripts/test-support-lease.py
+          python3 scripts/test-windows-lease-error.py
           python3 scripts/test-support-network.py
           python3 scripts/test-secure-support.py
           python3 scripts/test-support-linux.py
@@ -181,12 +190,16 @@ jobs:
           dart scripts/test-support-invite.dart
   macos-runtime-harness:
     runs-on: macos-14
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
-      - name: Resolve the pinned native Mac source
+      - name: Resolve the pinned upstream version
         id: config
         run: python3 scripts/release-artifacts.py config
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.24.5'
       - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: '1.81'
@@ -196,10 +209,10 @@ jobs:
           if [[ "$(uname -m)" == "arm64" ]]; then
             softwareupdate --install-rosetta --agree-to-license
           fi
-      - name: Fetch pinned standalone native Mac source
+      - name: Fetch pinned upstream source for native and generated routing fixtures
         env:
           UPSTREAM_VERSION: ${{ steps.config.outputs.upstream_version }}
-        run: git clone --depth 1 --branch "$UPSTREAM_VERSION" https://github.com/rustdesk/rustdesk.git rustdesk
+        run: git clone --depth 1 --branch "$UPSTREAM_VERSION" --recurse-submodules https://github.com/rustdesk/rustdesk.git rustdesk
       - name: Prove native Mac failure boundaries and actual pinned Rust final link
         env:
           MACOS_RUNTIME_LINK_TARGET: x86_64-apple-darwin
@@ -207,5 +220,6 @@ jobs:
       - name: Exercise native macOS URL activation and window probe self-tests
         run: |
           python3 scripts/test-support-launch-macos.py --self-test
+          python3 scripts/test-support-macos-uri-routing.py
           python3 scripts/test-macos-native-minimum.py
           python3 scripts/test-macos-bundle-minimum.py

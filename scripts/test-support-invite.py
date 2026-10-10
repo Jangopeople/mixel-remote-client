@@ -10,6 +10,7 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from sdk_discovery import find_dart
+from rust_toolchain import rustc_command
 
 root = Path(__file__).resolve().parents[1]
 upstream = Path(os.environ.get("RDREPO", root / "rustdesk"))
@@ -20,6 +21,7 @@ rustc = os.environ.get("RUSTC_BIN") or shutil.which("rustc")
 if not rustc:
     raise SystemExit("Rust compiler required for native cache regression check")
 targets = [
+    "flutter/pubspec.yaml", "flutter/pubspec.lock",
     "Cargo.toml", "libs/hbb_common/Cargo.toml", "libs/hbb_common/src/lib.rs", "libs/portable/src/main.rs",
     "flutter/lib/common.dart", "flutter/lib/main.dart", "src/ui_interface.rs",
     "src/ipc.rs", "src/ui_cm_interface.rs", "src/server/connection.rs", "src/server/dbus.rs", "src/core_main.rs", "src/common.rs", "src/updater.rs",
@@ -68,11 +70,48 @@ runpy.run_path(sys.argv[1], run_name='__main__')
     patched = subprocess.run([sys.executable, "-c", windows_encoding_runner, str(patcher)], env=env, capture_output=True, text=True, encoding="utf-8")
     if patched.returncode:
         raise RuntimeError(patched.stdout + patched.stderr)
-    patched_paths = targets + ["flutter/lib/mixel_support_invite.dart"]
+    patched_paths = targets + ["flutter/lib/mixel_support_invite.dart"] + [
+        str(path.relative_to(repo)) for path in (repo / "flutter/local_plugins/uni_links_desktop").rglob("*") if path.is_file()
+    ]
     first = {path: (repo / path).read_text(encoding="utf-8") for path in patched_paths}
     subprocess.run([sys.executable, str(patcher)], env=env, check=True, capture_output=True, text=True, encoding="utf-8")
     second = {path: (repo / path).read_text(encoding="utf-8") for path in patched_paths}
     assert first == second, "patch must be idempotent across all touched files"
+    dependency_patcher = root / "scripts/patch-support-macos-uri.py"
+    pubspec = repo / "flutter/pubspec.yaml"
+    lockfile = repo / "flutter/pubspec.lock"
+    assert first["flutter/pubspec.yaml"].count("path: local_plugins/uni_links_desktop") == 1
+    for target, before, after in (
+        (pubspec, "  uni_links_desktop: ^0.1.6", "  uni_links_desktop: ^0.1.8"),
+        (pubspec, "    path: local_plugins/uni_links_desktop", "    path: unexpected-plugin"),
+        (pubspec, "dependency_overrides:\n", "dependency_overrides:\n  uni_links_desktop:\n    path: local_plugins/uni_links_desktop\n"),
+        (lockfile, "692de81efc32ef72df56d428902afb5216d5f9e43d71c7b315d360acd7a1e115", "unexpected-source-hash"),
+    ):
+        saved = target.read_bytes()
+        target.write_text(saved.decode("utf-8").replace(before, after, 1), encoding="utf-8")
+        snapshot = {path: (repo / path).read_bytes() for path in patched_paths}
+        rejected = subprocess.run([sys.executable, str(dependency_patcher)], env=env, capture_output=True)
+        assert rejected.returncode != 0, "dependency/source drift must fail closed"
+        assert snapshot == {path: (repo / path).read_bytes() for path in patched_paths}, "drift must be rejected before writing"
+        target.write_bytes(saved)
+    saved = lockfile.read_bytes()
+    lock_text = lockfile.read_text(encoding="utf-8")
+    start = lock_text.index("  uni_links_desktop:\n")
+    end = lock_text.index("  uni_links_platform_interface:\n", start)
+    resolved = '''  uni_links_desktop:
+    dependency: "direct main"
+    description:
+      path: "local_plugins/uni_links_desktop"
+      relative: true
+    source: path
+    version: "0.1.7"
+'''
+    lockfile.write_text(lock_text[:start] + resolved + lock_text[end:], encoding="utf-8")
+    expected_lock = lockfile.read_bytes()
+    subprocess.run([sys.executable, str(dependency_patcher)], env=env, check=True, capture_output=True)
+    assert lockfile.read_bytes() == expected_lock, "resolved local lock must remain intact"
+    lockfile.write_bytes(saved)
+    print("PASS: exact repo-local URI plugin is idempotent; dependency/source/override drift rejected before write; resolved local lock retained")
     guard_spec = importlib.util.spec_from_file_location("compiled_guard", root / "scripts/test-compiled-support-guard.py")
     guard_runner = importlib.util.module_from_spec(guard_spec)
     guard_spec.loader.exec_module(guard_runner)
@@ -205,7 +244,7 @@ runpy.run_path(sys.argv[1], run_name='__main__')
 }
 ''', encoding="utf-8")
     boot_binary = repo / ("native_support_boot_vector.exe" if os.name == "nt" else "native_support_boot_vector")
-    subprocess.run([rustc, "--edition=2021", "--deny=warnings", str(boot_test), "-o", str(boot_binary)], check=True)
+    subprocess.run(rustc_command([rustc, "--edition=2021", "--deny=warnings", str(boot_test), "-o", str(boot_binary)]), check=True)
     synthetic_uri = "mixel-remote://support?invite=inv_00000000-0000-0000-0000-000000000001&apikey=synthetic-public-key-000000000000"
     native_boot_vectors = []
     for markers in (["--mixel-attended"], ["--mixel-attended", "--mixel-attended-handoff-unavailable"]):
@@ -508,7 +547,7 @@ fn reset(mode: &'static str) {
 }
 ''').replace("// ACTUAL_ATTENDED_IPC_GETTER", first["src/ipc.rs"].split('} else if name == "mixel-support-invite-attended" {', 1)[1].splitlines()[1].strip()), encoding="utf-8")
     handoff_binary = repo / ("native_attended_handoff_test.exe" if os.name == "nt" else "native_attended_handoff_test")
-    subprocess.run([rustc, "--edition=2021", "--deny=warnings", "--test", str(handoff_test), "-o", str(handoff_binary)], check=True)
+    subprocess.run(rustc_command([rustc, "--edition=2021", "--deny=warnings", "--test", str(handoff_test), "-o", str(handoff_binary)]), check=True)
     subprocess.run([str(handoff_binary), "--test-threads=1"], check=True)
     assert 'if _is_quick_support || _is_mixel_support_invite {' in core
     assert 'if crate::ipc::set_config("mixel-support-invite-attended", "Y".to_owned()).is_err()' in core
@@ -552,7 +591,7 @@ fn unrelated_http_status_retains_existing_reusable_behavior() {
 }
 """, encoding="utf-8")
     cache_binary = repo / ("native_cache_test.exe" if os.name == "nt" else "native_cache_test")
-    subprocess.run([rustc, "--edition=2021", "--test", str(cache_test), "-o", str(cache_binary)], check=True)
+    subprocess.run(rustc_command([rustc, "--edition=2021", "--test", str(cache_test), "-o", str(cache_binary)]), check=True)
     subprocess.run([str(cache_binary)], check=True)
 
     # Compile and execute the actual generated native transport code, replacing
@@ -572,7 +611,7 @@ fn unrelated_http_status_retains_existing_reusable_behavior() {
     transport_test = repo / "native_transport_test.rs"
     transport_test.write_text(transport_template.replace("// GENERATED_HTTP_REQUEST_SYNC", transport), encoding="utf-8")
     transport_binary = repo / ("native_transport_test.exe" if os.name == "nt" else "native_transport_test")
-    subprocess.run([rustc, "--edition=2021", "--test", str(transport_test), "-o", str(transport_binary)], check=True)
+    subprocess.run(rustc_command([rustc, "--edition=2021", "--test", str(transport_test), "-o", str(transport_binary)]), check=True)
     subprocess.run([str(transport_binary)], check=True)
     subprocess.run([sys.executable, str(root / "scripts/test-support-dbus.py"),
                     "--source", str(repo), "--upstream", str(upstream)], check=True)

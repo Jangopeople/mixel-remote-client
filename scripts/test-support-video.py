@@ -14,6 +14,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+from rust_toolchain import rustc_command
 
 ROOT = Path(__file__).resolve().parents[1]
 UPSTREAM = Path(os.environ.get("RDREPO", ROOT / "rustdesk"))
@@ -200,6 +201,6 @@ with tempfile.TemporaryDirectory(prefix="mixel-video-control-") as temporary:
     binary = work / ("caller.exe" if os.name == "nt" else "caller")
     rustc = os.environ.get("RUSTC_BIN") or shutil.which("rustc")
     assert rustc, "Native Rust compiler required"
-    run([rustc, "--edition=2021", "--deny=warnings", str(rust), "-C", "link-arg=" + str(obj), "-o", str(binary)])
+    run(rustc_command([rustc, "--edition=2021", "--deny=warnings", str(rust), "-C", "link-arg=" + str(obj), "-o", str(binary)]))
     run([str(binary)])
 print("Result: pinned AV1 unsigned tile-control source and actual C-varargs regression checks passed")

@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+from rust_toolchain import rustc_command
 
 ROOT = Path(__file__).resolve().parents[1]
 UPSTREAM = Path(os.environ.get("RDREPO", ROOT / "rustdesk"))
@@ -124,7 +125,7 @@ fn queries()->Vec<String> {STATE.with(|s|s.borrow().queries.clone())}
     source = repo / "linux-prelogin-tests.rs"
     source.write_text(harness, encoding="utf-8")
     binary = repo / ("linux-prelogin-tests.exe" if os.name == "nt" else "linux-prelogin-tests")
-    subprocess.run(["rustc", "--edition=2021", "--deny", "warnings", "--test", str(source), "-o", str(binary)], check=True)
+    subprocess.run(rustc_command(["rustc", "--edition=2021", "--deny", "warnings", "--test", str(source), "-o", str(binary)]), check=True)
     subprocess.run([str(binary), "--test-threads=1"], check=True)
 
     # Execute the actual source used to populate PeerInfo.username and resolve
@@ -186,7 +187,7 @@ fn select(shell:&str) {STATE.with(|s|s.borrow_mut().record=Some(account(1000,"gu
 }
 '''.replace("__ACTIVE_USER__", active_user)
     source.write_text(account_harness, encoding="utf-8")
-    subprocess.run(["rustc", "--edition=2021", "--deny", "warnings", "--test", str(source), "-o", str(binary)], check=True)
+    subprocess.run(rustc_command(["rustc", "--edition=2021", "--deny", "warnings", "--test", str(source), "-o", str(binary)]), check=True)
     subprocess.run([str(binary), "--test-threads=1"], check=True)
 
 print("PASS: actual generated Linux prelogin and PeerInfo/home identity support nonroot desktops without logind and keep privileged cases conservative")

@@ -11,6 +11,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+from rust_toolchain import rustc_command
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -479,7 +480,7 @@ def main() -> None:
         rust_source = repository / "secure-handshake-tests.rs"
         rust_source.write_text(generated, encoding="utf-8")
         binary = repository / ("secure-handshake-tests.exe" if os.name == "nt" else "secure-handshake-tests")
-        subprocess.run([rustc, "--edition=2021", "--deny", "warnings", "--test", str(rust_source), "-o", str(binary)], check=True)
+        subprocess.run(rustc_command([rustc, "--edition=2021", "--deny", "warnings", "--test", str(rust_source), "-o", str(binary)]), check=True)
         subprocess.run([str(binary), "--test-threads=1"], check=True)
         for relative, broken in (
             ("src/client.rs", originals["src/client.rs"].replace("        Ok(option_pk)\n", "        Ok(None)\n", 1)),

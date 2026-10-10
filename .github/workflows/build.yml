@@ -252,6 +252,7 @@ jobs:
         run: |
           python3 scripts/test-support-invite.py
           python3 scripts/test-generated-support-paths.py
+          python3 scripts/test-support-macos-uri-routing.py
           python3 scripts/test-support-lease.py
           python3 scripts/test-support-network.py
           python3 scripts/test-secure-support.py
@@ -463,6 +464,7 @@ jobs:
         run: |
           python3 scripts/test-support-invite.py
           python3 scripts/test-generated-support-paths.py
+          python3 scripts/test-support-macos-uri-routing.py
           python3 scripts/test-support-lease.py
           python3 scripts/test-support-network.py
           python3 scripts/test-secure-support.py
@@ -724,6 +726,10 @@ jobs:
       - name: Activate installed native MSVC clipboard regression toolchain
         shell: pwsh
         run: ./scripts/activate-windows-msvc.ps1 -ExportToGitHubEnvironment
+
+      - name: Prove explicit MSVC selection under actual Git Bash coreutils shadow
+        shell: bash
+        run: python scripts/test-rust-toolchain.py --native-windows
 
       - name: Prove native Windows clipboard ownership and Rust error cleanup
         shell: pwsh
@@ -1038,6 +1044,14 @@ jobs:
         run: |
           ./scripts/test-support-launch-windows.ps1 -Executable runtime-client/Mixel-Remote.exe
       - name: Diagnose signed compiled ordinary-to-QuickSupport ownership
+        if: ${{ !inputs.runtime_windows_release_gate }}
+        shell: pwsh
+        run: |
+          # Observe the genuine baseline and complete the same strict 95s
+          # compiled handoff before the optional live debugger can affect it.
+          # This remains signed-inner diagnosis, never customer release proof.
+          ./scripts/test-support-launch-windows.ps1 -Executable runtime-client/Mixel-Remote.exe -QuickSupport -ExpectedPayload runtime-client -OrdinaryThenQuickSupport -CompiledQuickSupportDiagnostic
+      - name: Diagnose signed compiled native crash attribution
         if: ${{ !inputs.runtime_windows_release_gate }}
         shell: pwsh
         run: |

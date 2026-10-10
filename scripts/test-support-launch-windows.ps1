@@ -58,6 +58,7 @@ public static class MixelOrdinaryTokenFixture {
     public uint attributes, reserved;
   }
   [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
+  [DllImport("kernel32.dll", SetLastError = true)] static extern uint GetProcessId(IntPtr process);
   [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
   [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
   [DllImport("kernel32.dll", SetLastError = true)] static extern bool GetExitCodeProcess(IntPtr process, out uint code);
@@ -66,8 +67,8 @@ public static class MixelOrdinaryTokenFixture {
   [DllImport("kernel32.dll", SetLastError = true)] static extern bool CheckRemoteDebuggerPresent(IntPtr process, out bool present);
   [DllImport("kernel32.dll", SetLastError = true)] static extern bool TerminateProcess(IntPtr process, uint code);
   [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
-  [DllImport("kernel32.dll", SetLastError = true)] static extern bool DuplicateHandle(IntPtr source, IntPtr handle, IntPtr target, out IntPtr copy, uint access, bool inherit, uint options);
   [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern IntPtr OpenEventW(uint access, bool inherit, string name);
+  [DllImport("kernel32.dll", SetLastError = true)] static extern bool DuplicateHandle(IntPtr source, IntPtr handle, IntPtr target, out IntPtr copy, uint access, bool inherit, uint options);
   [DllImport("advapi32.dll", SetLastError = true)] static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
   [DllImport("advapi32.dll", SetLastError = true)] static extern bool GetTokenInformation(IntPtr token, int kind, IntPtr data, int size, out int required);
   [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool LogonUserW(string user, string domain, string password, uint logonType, uint provider, out IntPtr token);
@@ -152,6 +153,38 @@ public static class MixelOrdinaryTokenFixture {
   static StartupInfo Startup() { return new StartupInfo { cb = Marshal.SizeOf(typeof(StartupInfo)), desktop = CurrentDesktopPath() }; }
   static readonly System.Collections.Generic.Dictionary<int, IntPtr> StartedProcesses = new System.Collections.Generic.Dictionary<int, IntPtr>();
   static readonly System.Collections.Generic.Dictionary<int, IntPtr> SuspendedThreads = new System.Collections.Generic.Dictionary<int, IntPtr>();
+  public static System.Collections.Generic.Dictionary<string, string> SuspendedOwnedIdentity(int pid) {
+    IntPtr process, thread, token = IntPtr.Zero, integrity = IntPtr.Zero;
+    if (!StartedProcesses.TryGetValue(pid, out process) || !SuspendedThreads.TryGetValue(pid, out thread))
+      throw new InvalidOperationException("Identity qualification requires the retained owned suspended process and primary thread");
+    if (WaitForSingleObject(process, 0) != 0x102 || GetProcessId(process) != checked((uint)pid))
+      throw new InvalidOperationException("Owned suspended process identity is no longer live or does not match its kernel PID");
+    try {
+      if (!OpenProcessToken(process, 8, out token)) throw new Win32Exception();
+      var result = new System.Collections.Generic.Dictionary<string, string>();
+      result.Add("kernelPid", GetProcessId(process).ToString());
+      using (var identity = new WindowsIdentity(token)) { result.Add("sid", identity.User.Value); }
+      result.Add("elevated", ElevatedToken(token).ToString());
+      IntPtr session = Marshal.AllocHGlobal(4);
+      try {
+        int required;
+        if (!GetTokenInformation(token, 12, session, 4, out required) || required != 4) throw new Win32Exception();
+        result.Add("sessionId", Marshal.ReadInt32(session).ToString());
+      } finally { Marshal.FreeHGlobal(session); }
+      int size;
+      GetTokenInformation(token, 25, IntPtr.Zero, 0, out size);
+      if (size < IntPtr.Size + 4 || size > 65536) throw new InvalidOperationException("Invalid owned process integrity metadata size");
+      integrity = Marshal.AllocHGlobal(size);
+      int actual;
+      if (!GetTokenInformation(token, 25, integrity, size, out actual) || actual > size) throw new Win32Exception();
+      var label = new SecurityIdentifier(Marshal.ReadIntPtr(integrity));
+      result.Add("integritySid", label.Value);
+      return result;
+    } finally {
+      if (integrity != IntPtr.Zero) Marshal.FreeHGlobal(integrity);
+      if (token != IntPtr.Zero) CloseHandle(token);
+    }
+  }
   static int Started(ProcessInfo process, bool suspended = false) {
     if (!suspended) CloseHandle(process.thread);
     int pid = checked((int)process.pid);
@@ -309,6 +342,38 @@ public static class MixelOrdinaryTokenFixture {
   public static void RemoveProfile(string sid) { if (!DeleteProfileW(sid, null, null) && Marshal.GetLastWin32Error() != 2) throw new Win32Exception(); }
   public static bool IsLeaseName(string name) {
     return name == "\\BaseNamedObjects\\Mixel-Remote-Attended-Runtime-v2" || name == "\\Sessions\\0\\BaseNamedObjects\\Mixel-Remote-Attended-Runtime-v2";
+  }
+  public static int LeaseProbeError() {
+    IntPtr handle = OpenEventW(0x100000, false, "Global\\Mixel-Remote-Attended-Runtime-v2");
+    if (handle == IntPtr.Zero) return Marshal.GetLastWin32Error();
+    if (!CloseHandle(handle)) throw new Win32Exception();
+    return 0;
+  }
+  public static int LeaseProbeErrorAsProcess(int pid) {
+    IntPtr process = OpenProcess(0x1000, false, pid), token = IntPtr.Zero;
+    bool impersonated = false;
+    // Negative results mean this optional token observation was unavailable;
+    // they are never treated as an absent event or an unguarded application.
+    if (process == IntPtr.Zero) {
+      int error = Marshal.GetLastWin32Error();
+      if (error == 0) throw new InvalidOperationException("Missing process observation has no native error");
+      return -error;
+    }
+    try {
+      if (!OpenProcessToken(process, 10, out token) || !ImpersonateLoggedOnUser(token)) {
+        int error = Marshal.GetLastWin32Error();
+        if (error == 0) throw new InvalidOperationException("Unavailable token observation has no native error");
+        return -error;
+      }
+      impersonated = true;
+      return LeaseProbeError();
+    } finally {
+      bool reverted = !impersonated || RevertToSelf();
+      int revertError = reverted ? 0 : Marshal.GetLastWin32Error();
+      if (token != IntPtr.Zero) CloseHandle(token);
+      CloseHandle(process);
+      if (!reverted) throw new Win32Exception(revertError);
+    }
   }
   static string ObjectText(IntPtr handle, int kind) {
     IntPtr data = Marshal.AllocHGlobal(65536);
@@ -1258,6 +1323,7 @@ function Stop-OwnedCustomerProcesses {
 
 try {
   if ($OrdinaryThenQuickSupport) {
+    Write-Host "FIXTURE: read-only global attended event before ordinary launch: win32Error=$([MixelOrdinaryTokenFixture]::LeaseProbeError())."
     if (-not $QuickSupport -or -not $ExpectedPayload -or (-not $Portable -and -not $CompiledQuickSupportDiagnostic)) {
       throw 'Ordinary-to-QuickSupport proof requires the actual portable QS launcher and exact signed payload, or explicit compiled-only diagnosis.'
     }
@@ -1357,7 +1423,10 @@ try {
     $baselineIncomingPid = $initialHealth.incomingPid
     $initialOwnsLease = [MixelOrdinaryTokenFixture]::OwnsLease($main.Id)
     $initialLeasePresent = [MixelOrdinaryTokenFixture]::LeasePresent()
-    Write-Host "FIXTURE: read-only ordinary baseline; guardEmpty=$($initialHealth.attendedProof -ceq ''), guardConfirmed=$($initialHealth.attendedReady), foregroundOwnsLease=$initialOwnsLease, globalLeasePresent=$initialLeasePresent; foregroundPid=$($main.Id)."
+    $initialGuardEmpty = $initialHealth.attendedProof -ceq ''
+    Write-Host "FIXTURE: read-only ordinary baseline: guardEmpty=$initialGuardEmpty, guardV2=$($initialHealth.attendedReady), foregroundOwnsLease=$initialOwnsLease, globalLeasePresent=$initialLeasePresent, runnerLeaseProbeWin32Error=$([MixelOrdinaryTokenFixture]::LeaseProbeError())."
+    $ordinaryTokenLeaseProbe = [MixelOrdinaryTokenFixture]::LeaseProbeErrorAsProcess($main.Id)
+    Write-Host "FIXTURE: optional actual-token event observation: nativeResult=$ordinaryTokenLeaseProbe (negative means unavailable token access, never an absent event)."
     if ($initialHealth.attendedProof -cne '' -or $initialOwnsLease) {
       throw 'Ordinary-to-QS positive control is already guarded; refusing a manufactured transition proof.'
     }

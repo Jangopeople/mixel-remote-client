@@ -151,6 +151,7 @@ python3 scripts/test-support-wakelock.py
 python3 scripts/test-support-lease.py
 dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart
 dart scripts/test-support-invite.dart
+python3 scripts/test-support-macos-uri-routing.py
 python3 scripts/test-release-pipeline.py
 python3 scripts/test-notarize-macos.py
 python3 scripts/test-macos-native-minimum.py

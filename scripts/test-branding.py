@@ -56,6 +56,12 @@ def snapshot(repo: Path) -> dict[str, dict[str, object]]:
     return result
 
 
+def config_path_function(source: str) -> str:
+    start = source.index("    pub fn path<P: AsRef<Path>>(p: P) -> PathBuf {")
+    end = source.index("\n    pub fn", start + 1)
+    return source[start:end]
+
+
 with tempfile.TemporaryDirectory(prefix="mixel-branding-") as directory:
     base = Path(directory)
     repo = base / "rustdesk"
@@ -63,6 +69,7 @@ with tempfile.TemporaryDirectory(prefix="mixel-branding-") as directory:
     run(["git", "clone", "--quiet", "--shared", str(SOURCE / "libs/hbb_common"), str(repo / "libs/hbb_common")])
     submodule_commit = run(["git", "-C", str(repo), "ls-tree", "HEAD", "libs/hbb_common"]).stdout.split()[2]
     run(["git", "-C", str(repo / "libs/hbb_common"), "checkout", "--quiet", submodule_commit])
+    original_config = (repo / "libs/hbb_common/src/config.rs").read_text(encoding="utf-8")
     # Deliberately omit RDREPO. The documented default is the current working
     # directory's ./rustdesk; the Python patch must never hit the original clone.
     env = {key: value for key, value in os.environ.items() if key != "RDREPO"}
@@ -91,6 +98,22 @@ with tempfile.TemporaryDirectory(prefix="mixel-branding-") as directory:
     assert "Event::XfixesSelectionNotify" in clipboard and "event.selection == selection" in clipboard
     plist = plistlib.loads((repo / "flutter/macos/Runner/Info.plist").read_bytes())
     assert plist["CFBundleURLTypes"][0]["CFBundleURLSchemes"] == ["mixel-remote"]
+    common = (repo / "src/common.rs").read_text(encoding="utf-8")
+    assert '"ch.mixel.remote".to_owned()' in common.split("pub fn get_full_name() -> String {", 1)[1].split("}\n", 1)[0]
+    config = (repo / "libs/hbb_common/src/config.rs").read_text(encoding="utf-8")
+    assert 'RwLock::new("com.carriez".to_owned())' in config, "retain the existing preference namespace"
+    assert config_path_function(config) == config_path_function(original_config), "keep actual config path resolution byte-identical"
+    macos = (repo / "src/platform/macos.rs").read_text(encoding="utf-8")
+    helper_calls = [line.strip() for line in macos.splitlines() if "get_full_name()" in line]
+    assert helper_calls == [
+        'let daemon = format!("{}_service.plist", crate::get_full_name());',
+        'let agent = format!("{}_server.plist", crate::get_full_name());',
+        'let agent = format!("{}_server.plist", crate::get_full_name());',
+        '.args(&["remove", &format!("{}_server", crate::get_full_name())])',
+        'let agent = format!("{}_server.plist", crate::get_full_name());',
+    ], "helper naming must affect only daemon/agent detection, update and removal"
+    run([sys.executable, str(ROOT / "scripts/test-macos-service-label.py")])
+    print("PASS: all five actual macOS helper uses agree on canonical service labels; ORG and config path resolution retained")
     print("PASS: branded GTK icon/titles, isolated Linux DBus, bundled library strip and macOS protocol registration")
 
     # Execute the pinned converter before the actual generated normalization

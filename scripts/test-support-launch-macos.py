@@ -14,6 +14,8 @@ from pathlib import Path
 import plistlib
 import pwd
 import signal
+import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -24,6 +26,8 @@ SCRIPT_DIRECTORY = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location("mixel_unix_smoke", SCRIPT_DIRECTORY / "test-support-launch-linux.py")
 unix = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(unix)
+WARM_TOKEN = "inv_00000000-0000-0000-0000-000000000003"
+WARM_URI = unix.URI.replace(unix.TOKEN, WARM_TOKEN)
 
 SWIFT = r"""
 import AppKit
@@ -38,11 +42,10 @@ func emit(_ result: [String: Any]) {
 let arguments = CommandLine.arguments
 if arguments.count < 3 { exit(2) }
 let action = arguments[1]
-if action == "launch" {
-    if arguments.count != 5 { exit(2) }
+if action == "launch" || action == "ordinary" {
+    if arguments.count != (action == "launch" ? 5 : 3) { exit(2) }
     let application = URL(fileURLWithPath: arguments[2]).resolvingSymlinksInPath()
-    guard let supportURL = URL(string: arguments[3]) else { exit(2) }
-    if arguments[4] == "cold" && NSWorkspace.shared.runningApplications.contains(where: {
+    if (action == "ordinary" || arguments[4] == "cold") && NSWorkspace.shared.runningApplications.contains(where: {
         $0.bundleURL?.resolvingSymlinksInPath() == application
     }) { emit(["error": "Built application is already running"]); exit(1) }
     let configuration = NSWorkspace.OpenConfiguration()
@@ -52,13 +55,19 @@ if action == "launch" {
     configuration.addsToRecentItems = false
     var finished = false
     var result: [String: Any] = ["error": "App URL activation timed out"]
-    NSWorkspace.shared.open([supportURL], withApplicationAt: application, configuration: configuration) { app, error in
+    let completion: (NSRunningApplication?, Error?) -> Void = { app, error in
         if let app = app, error == nil {
             result = ["pid": app.processIdentifier]
         } else {
             result = ["error": "App URL activation failed"]
         }
         finished = true
+    }
+    if action == "ordinary" {
+        NSWorkspace.shared.openApplication(at: application, configuration: configuration, completionHandler: completion)
+    } else {
+        guard let supportURL = URL(string: arguments[3]) else { exit(2) }
+        NSWorkspace.shared.open([supportURL], withApplicationAt: application, configuration: configuration, completionHandler: completion)
     }
     let deadline = Date().addingTimeInterval(30)
     while !finished && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
@@ -138,10 +147,45 @@ def probe(helper: Path, pid: int, app: Path):
 
 def wait_health(pid: int, scenario: str) -> None:
     def ready():
+        verify_ipc_owner(pid)
         result = unix.runtime_health(pid)
         return result if result[0] > 0 and result[1] else None
     state, confirmed = wait_for(scenario + " incoming server", ready, pid)
     print(f"PASS: {scenario} actual incoming IPC proves attended-runtime-v2, branded relay, registered ID, online state={state}, keyConfirmed={str(confirmed).lower()}", flush=True)
+
+
+def verify_ipc_owner(pid: int, endpoint: Path = unix.IPC_PATH) -> None:
+    # The two launch agents can share a pathname while racing the .pid file.
+    # Darwin's kernel peer PID identifies the server actually receiving IPC.
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+        connection.settimeout(2)
+        connection.connect(str(endpoint))
+        # SDK sys/un.h: SOL_LOCAL=0 and LOCAL_PEERPID=0x002.
+        actual = struct.unpack("i", connection.getsockopt(0, 0x002, 4))[0]
+    if actual != pid:
+        raise RuntimeError("Actual incoming IPC belongs to a different application process")
+
+
+def stop_owned_fixture(helper: Path, pid: int, app: Path) -> None:
+    # Only terminate the exact application started on this isolated runner.
+    if probe(helper, pid, app).get("running"):
+        verify_ipc_owner(pid)
+        if unix.query("VideoConnCount") != 0:
+            raise RuntimeError("Isolated fixture unexpectedly has an authenticated remote session")
+        os.kill(pid, signal.SIGTERM)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.1)
+        else:
+            os.kill(pid, signal.SIGKILL)
+    pid_file = unix.IPC_PATH.with_suffix(".pid")
+    if pid_file.exists() and int(pid_file.read_text(encoding="utf-8").strip()) == pid:
+        unix.IPC_PATH.unlink(missing_ok=True)
+        pid_file.unlink(missing_ok=True)
 
 
 def runtime(app: Path, helper: Path) -> None:
@@ -157,6 +201,42 @@ def runtime(app: Path, helper: Path) -> None:
     offsets = {path: path.stat().st_size for path in log_root.rglob("*") if path.is_file()} if log_root.exists() else {}
     pid = None
     try:
+        # Warm activation must begin in an ordinary unarmed application. A
+        # guard left active by cold support launch cannot prove a new callback.
+        ordinary = helper_request(helper, "ordinary", str(app))
+        pid = ordinary.get("pid")
+        if type(pid) is not int or pid <= 0:
+            raise RuntimeError("macOS ordinary GUI launch returned no application PID")
+        wait_for("Ordinary customer window", lambda: probe(helper, pid, app).get("visible"), pid)
+
+        def ordinary_ready():
+            verify_ipc_owner(pid)
+            if int(unix.IPC_PATH.with_suffix(".pid").read_text().strip()) != pid:
+                raise RuntimeError("Ordinary GUI IPC PID file does not identify its owner")
+            if unix.query("Config", ["mixel-support-invite-attended", None]) != ["mixel-support-invite-attended", ""]:
+                raise RuntimeError("Ordinary GUI already has an attended guard; fresh warm intent cannot be proven")
+            if unix.query("VideoConnCount") != 0:
+                raise RuntimeError("Ordinary GUI unexpectedly has an authenticated remote session")
+            state = unix.query("OnlineStatus")
+            return isinstance(state, list) and len(state) == 2 and state[0] > 0 and state[1] is True
+
+        wait_for("Ordinary unarmed incoming server", ordinary_ready, pid)
+        print("PASS: ordinary macOS GUI starts registered with no attended guard and no authenticated remote session", flush=True)
+        hidden = helper_request(helper, "hide", str(pid)).get("requested") is True
+        if hidden:
+            wait_for("Warm support URL hide setup", lambda: probe(helper, pid, app).get("hidden") and not probe(helper, pid, app).get("visible"), pid, timeout=10)
+        warm = helper_request(helper, "launch", str(app), WARM_URI, "warm")
+        if warm.get("pid") != pid:
+            raise RuntimeError("macOS warm URL activation created a different customer application")
+        wait_for("Warm support URL customer window", lambda: probe(helper, pid, app).get("visible"), pid)
+        wait_health(pid, "Fresh ordinary-to-support warm URL launch")
+        print("PASS: fresh warm support intent changes the same ordinary application from empty guard to attended-runtime-v2", flush=True)
+        stop_owned_fixture(helper, pid, app)
+        pid = None
+
+        # A separate cold process receives a distinct synthetic token. Neither
+        # this native guard check nor visibility claims HTTP presence delivery;
+        # generated Dart routing/report matching has its own isolated fixture.
         launched = helper_request(helper, "launch", str(app), unix.URI, "cold")
         pid = launched.get("pid")
         if type(pid) is not int or pid <= 0:
@@ -169,37 +249,13 @@ def runtime(app: Path, helper: Path) -> None:
             time.sleep(0.25)
         print("PASS: cold macOS support URL activation opens a stable visible customer window", flush=True)
         wait_health(pid, "Cold support URL launch")
-        hidden = helper_request(helper, "hide", str(pid)).get("requested") is True
-        if hidden:
-            wait_for("Warm support URL hide setup", lambda: probe(helper, pid, app).get("hidden") and not probe(helper, pid, app).get("visible"), pid, timeout=10)
-        warm = helper_request(helper, "launch", str(app), unix.URI, "warm")
-        if warm.get("pid") != pid:
-            raise RuntimeError("macOS warm URL activation created a different customer application")
-        wait_for("Warm support URL customer window", lambda: probe(helper, pid, app).get("visible"), pid)
-        print("PASS: warm macOS support URL activation " + ("restores the same hidden customer application" if hidden else "reuses the same visible accessory customer application"), flush=True)
-        wait_health(pid, "Warm support URL launch")
     finally:
         if pid is not None:
-            # Only terminate the exact bundle launched by this test.
             try:
-                if probe(helper, pid, app).get("running"):
-                    os.kill(pid, signal.SIGTERM)
-                    deadline = time.monotonic() + 5
-                    while time.monotonic() < deadline:
-                        try:
-                            os.kill(pid, 0)
-                        except ProcessLookupError:
-                            break
-                        time.sleep(0.1)
-                    else:
-                        os.kill(pid, signal.SIGKILL)
-                pid_file = unix.IPC_PATH.with_suffix(".pid")
-                if int(pid_file.read_text(encoding="utf-8").strip()) == pid:
-                    unix.IPC_PATH.unlink(missing_ok=True)
-                    pid_file.unlink(missing_ok=True)
+                stop_owned_fixture(helper, pid, app)
             except (OSError, RuntimeError, ValueError):
                 pass
-    sensitive = (unix.TOKEN.encode(), unix.API_KEY.encode(), b"mixel-remote://support/?invite=")
+    sensitive = (unix.TOKEN.encode(), WARM_TOKEN.encode(), unix.API_KEY.encode(), b"mixel-remote://support/?invite=")
     for path in log_root.rglob("*") if log_root.exists() else []:
         if not path.is_file():
             continue
@@ -214,6 +270,18 @@ def runtime(app: Path, helper: Path) -> None:
 
 def self_test(helper: Path, directory: Path) -> None:
     unix.self_test()
+    # A stale PID sidecar must not substitute for the kernel socket owner.
+    endpoint = directory / "owner-identity.sock"
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+        listener.bind(str(endpoint))
+        listener.listen(4)
+        verify_ipc_owner(os.getpid(), endpoint)
+        try:
+            verify_ipc_owner(os.getpid() + 1, endpoint)
+            raise AssertionError("A different actual IPC owner was accepted")
+        except RuntimeError:
+            pass
+    print("PASS: macOS kernel IPC peer ownership rejects stale sidecar attribution")
     response = helper_request(helper, "probe", str(os.getpid()))
     assert response.get("visible") is False, "A CLI process must not have an app window"
     app = (directory / "Smoke Fixture.app").resolve()
@@ -251,15 +319,15 @@ application.run()
         raise RuntimeError("macOS smoke fixture compilation failed: " + compiled.stderr[-2000:])
     pid = None
     try:
-        uri = "mixel-smoke-fixture://fixture"
-        pid = helper_request(helper, "launch", str(app), uri, "cold")["pid"]
+        uri = "mixel-smoke-fixture://ordinary-to-warm"
+        pid = helper_request(helper, "ordinary", str(app))["pid"]
         wait_for("Mac window probe fixture", lambda: probe(helper, pid, app).get("visible"), pid, timeout=15)
         hidden = helper_request(helper, "hide", str(pid)).get("requested") is True
         if hidden:
             wait_for("Mac window probe fixture hide", lambda: probe(helper, pid, app).get("hidden"), pid, timeout=10)
         assert helper_request(helper, "launch", str(app), uri, "warm")["pid"] == pid
         wait_for("Mac window probe fixture warm restore", lambda: probe(helper, pid, app).get("visible"), pid, timeout=15)
-        print("PASS: actual macOS accessory fixture cold/warm URL activation and CoreGraphics visibility work without requesting TCC access")
+        print("PASS: actual macOS accessory fixture ordinary-to-warm URL activation and CoreGraphics visibility work without requesting TCC access")
     finally:
         if pid is not None:
             try:
@@ -286,7 +354,7 @@ def main() -> int:
                 runtime(args.app.resolve(), helper)
                 print("PASS: actual macOS cold/warm attended-support launch and relay smoke; video/input permissions require customer approval", flush=True)
     except (OSError, RuntimeError, subprocess.SubprocessError) as error:
-        detail = str(error).replace(unix.URI, "[support URI]").replace(unix.TOKEN, "[invite]").replace(unix.API_KEY, "[API key]")
+        detail = str(error).replace(unix.URI, "[support URI]").replace(WARM_URI, "[support URI]").replace(unix.TOKEN, "[invite]").replace(WARM_TOKEN, "[invite]").replace(unix.API_KEY, "[API key]")
         print(f"FAIL: {detail}", file=sys.stderr)
         return 1
     return 0

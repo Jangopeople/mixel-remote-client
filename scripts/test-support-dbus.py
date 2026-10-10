@@ -16,6 +16,7 @@ import socket
 import subprocess
 import tempfile
 import uuid
+from rust_toolchain import rustc_command
 
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
@@ -189,7 +190,7 @@ with tempfile.TemporaryDirectory(prefix="mixel-native-dbus-") as temporary:
         source = work / (name + ".rs")
         source.write_text(code, encoding="utf-8")
         binary = work / (name + (".exe" if os.name == "nt" else ""))
-        subprocess.run([rustc, "--edition=2021", "--deny=warnings", "--cfg", 'feature="flutter"', str(source), "-o", str(binary)], check=True)
+        subprocess.run(rustc_command([rustc, "--edition=2021", "--deny=warnings", "--cfg", 'feature="flutter"', str(source), "-o", str(binary)]), check=True)
         binaries[name] = binary
 
     def scenario(name, uri, *, support=True, owner_failure=False, ipc_failure=False,
