@@ -39,6 +39,7 @@ env:
   MAC_RUST_VERSION: "1.81"
   FLUTTER_VERSION: "3.24.5"
   VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
+  VCPKG_BINARY_SOURCES: "clear;files,${{ github.workspace }}/.vcpkg-binary-cache,readwrite"
 
 jobs:
   # ===========================================================================
@@ -184,6 +185,12 @@ jobs:
           channel: stable
           flutter-version: ${{ env.FLUTTER_VERSION }}
 
+      - name: Restore compiled codec cache
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/.vcpkg-binary-cache
+          key: mixel-vcpkg-v1-ubuntu22.04-x64-linux-${{ env.VCPKG_COMMIT_ID }}
+
       - name: Setup vcpkg + cache
         uses: lukka/run-vcpkg@v11
         with:
@@ -238,6 +245,8 @@ jobs:
           python3 scripts/test-support-input.py
           python3 scripts/test-support-clipboard.py --native-x11
           python3 scripts/test-support-video.py
+          python3 scripts/test-support-macos.py
+          python3 scripts/test-support-wakelock.py
           python3 scripts/test-branding.py
           dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart
           dart scripts/test-support-invite.dart
@@ -363,6 +372,12 @@ jobs:
           channel: stable
           flutter-version: ${{ env.FLUTTER_VERSION }}
 
+      - name: Restore compiled codec cache
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/.vcpkg-binary-cache
+          key: mixel-vcpkg-v1-macos14-${{ matrix.job.arch }}-${{ env.VCPKG_COMMIT_ID }}
+
       - name: Setup vcpkg + cache
         uses: lukka/run-vcpkg@v11
         with:
@@ -397,6 +412,7 @@ jobs:
         env:
           RDREPO: ./rustdesk
           BRANDING: ./branding
+          MIXEL_MACOS_ARCH: ${{ matrix.job.arch }}
 
       - name: Restore bridge files
         uses: actions/download-artifact@v4
@@ -427,6 +443,8 @@ jobs:
           python3 scripts/test-support-input.py
           python3 scripts/test-support-clipboard.py
           python3 scripts/test-support-video.py
+          python3 scripts/test-support-macos.py
+          python3 scripts/test-support-wakelock.py
           python3 scripts/test-branding.py
           dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart
           dart scripts/test-support-invite.dart
@@ -440,9 +458,6 @@ jobs:
             export FLUTTER_XCODE_ARCHS="arm64"
           else
             export FLUTTER_XCODE_ARCHS="x86_64"
-          fi
-          if [ "${{ matrix.job.target }}" = "aarch64-apple-darwin" ]; then
-            sed -i '' -e "s/MACOSX_DEPLOYMENT_TARGET=[0-9]*\\.[0-9]*/MACOSX_DEPLOYMENT_TARGET=12.3/" build.py
           fi
           for attempt in 1 2 3; do
             if python3 build.py --flutter --unix-file-copy-paste; then
@@ -593,6 +608,12 @@ jobs:
           channel: stable
           flutter-version: ${{ env.FLUTTER_VERSION }}
 
+      - name: Restore compiled codec cache
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/.vcpkg-binary-cache
+          key: mixel-vcpkg-v1-windows2022-x64-windows-static-${{ env.VCPKG_COMMIT_ID }}
+
       - name: Setup vcpkg + cache
         uses: lukka/run-vcpkg@v11
         with:
@@ -670,6 +691,8 @@ jobs:
           python scripts/test-support-input.py
           python scripts/test-support-clipboard.py
           python scripts/test-support-video.py
+          python scripts/test-support-macos.py
+          python scripts/test-support-wakelock.py
           python scripts/test-branding.py
           dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart
           dart scripts/test-support-invite.dart
@@ -700,7 +723,7 @@ jobs:
           azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
           azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
           endpoint: https://weu.codesigning.azure.net/
-          trusted-signing-account-name: mixel-codesigning
+          signing-account-name: mixel-codesigning
           certificate-profile-name: mixel-remote
           files-folder: ${{ github.workspace }}\store-payload
           files-folder-filter: exe,dll
@@ -747,7 +770,7 @@ jobs:
           azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
           azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
           endpoint: https://weu.codesigning.azure.net/
-          trusted-signing-account-name: mixel-codesigning
+          signing-account-name: mixel-codesigning
           certificate-profile-name: mixel-remote
           files-folder: ${{ github.workspace }}\dist
           files-folder-filter: exe,msi

@@ -89,6 +89,8 @@ jobs:
           python3 scripts/test-support-input.py
           python3 scripts/test-support-clipboard.py --native-x11
           python3 scripts/test-support-video.py
+          python3 scripts/test-support-macos.py
+          python3 scripts/test-support-wakelock.py
           python3 scripts/test-branding.py
           dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart
           dart scripts/test-support-invite.dart
