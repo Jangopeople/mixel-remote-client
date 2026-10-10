@@ -89,12 +89,20 @@ def main() -> None:
         temporary = Path(directory)
         target = temporary / patcher.SOURCE
         target.parent.mkdir(parents=True)
-        target.write_text(original, encoding="utf-8")
         env = {**os.environ, "RDREPO": str(temporary)}
-        for invocation in range(2):
-            result = run([sys.executable, str(ROOT / "scripts/patch-support-wakelock.py")], env=env)
-            require(result.returncode == 0, result.stdout + result.stderr)
-            require(target.read_bytes() == generated.encode(), f"CLI patch invocation {invocation} differed")
+        for label, contents in (
+            ("original LF", original.encode("utf-8")),
+            ("original CRLF", original.replace("\n", "\r\n").encode("utf-8")),
+            ("generated LF", generated.encode("utf-8")),
+            ("generated CRLF", generated.replace("\n", "\r\n").encode("utf-8")),
+        ):
+            target.write_bytes(contents)
+            for invocation in range(2):
+                result = run([sys.executable, str(ROOT / "scripts/patch-support-wakelock.py")], env=env)
+                require(result.returncode == 0, result.stdout + result.stderr)
+                require(target.read_bytes() == generated.encode("utf-8"),
+                        f"{label} CLI patch invocation {invocation} differed")
+        print("PASS canonical UTF-8/LF CLI bytes for original/generated LF/CRLF inputs and repeated invocations")
         # The CLI also fails before writing a drifted production file.
         target.write_text(drift_controls[0], encoding="utf-8")
         before = target.read_bytes()

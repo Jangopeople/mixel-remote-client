@@ -749,24 +749,7 @@ jobs:
         env:
           VCPKG_ROOT: ${{ github.workspace }}/vcpkg
           RDREPO: ./rustdesk
-        run: |
-          source scripts/use-windows-msvc-bash.sh
-          python scripts/test-support-invite.py
-          python scripts/test-generated-support-paths.py
-          python scripts/test-support-macos-uri-routing.py
-          python scripts/test-support-lease.py
-          python scripts/test-support-network.py
-          python scripts/test-secure-support.py
-          python scripts/test-support-linux.py
-          python scripts/test-support-signals.py
-          python scripts/test-support-input.py
-          python scripts/test-support-clipboard.py
-          python scripts/test-support-video.py
-          python scripts/test-support-macos.py
-          python scripts/test-support-wakelock.py
-          python scripts/test-branding.py
-          dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart
-          dart scripts/test-support-invite.dart
+        run: bash scripts/test-windows-generated-source.sh
 
       - name: Build (cargo + flutter via build.py)
         shell: bash
