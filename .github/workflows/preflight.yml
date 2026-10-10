@@ -17,8 +17,10 @@ jobs:
       - name: Run release staging and configuration regression tests
         run: |
           python3 scripts/test-release-pipeline.py
+          python3 scripts/test-windows-release-runtime.py
           python3 scripts/test-notarize-macos.py
           python3 scripts/test-macos-native-minimum.py
+          python3 scripts/test-macos-bundle-minimum.py
           python3 scripts/test-sdk-discovery.py
           python3 scripts/test-support-session-fixture.py
           python3 scripts/test-support-video-sampling.py
@@ -89,6 +91,7 @@ jobs:
           python3 scripts/test-support-signals.py
           python3 scripts/test-support-input.py
           python3 scripts/test-support-clipboard.py --native-x11
+          python3 scripts/test-support-windows-clipboard.py
           python3 scripts/test-support-video.py
           python3 scripts/test-support-macos.py
           python3 scripts/test-support-wakelock.py
@@ -104,3 +107,4 @@ jobs:
         run: |
           python3 scripts/test-support-launch-macos.py --self-test
           python3 scripts/test-macos-native-minimum.py
+          python3 scripts/test-macos-bundle-minimum.py

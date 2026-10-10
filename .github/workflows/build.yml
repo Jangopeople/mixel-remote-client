@@ -18,6 +18,11 @@ on:
         required: true
         type: boolean
         default: false
+      runtime_windows_release_gate:
+        description: "Debugger-free actual signed Windows QuickSupport95 gate (requires artifact run and publish=false)"
+        required: false
+        type: boolean
+        default: false
       runtime_artifact_run:
         description: "Read-only runtime diagnostic using an existing signed payload run (empty = build)"
         required: false
@@ -47,7 +52,7 @@ jobs:
   # workflow_dispatch overrides it).
   # ===========================================================================
   config:
-    if: ${{ github.event.inputs.runtime_artifact_run == '' && github.event.inputs.runtime_macos_artifact_run == '' && github.event.inputs.runtime_linux_artifact_run == '' }}
+    if: ${{ (github.event.inputs.runtime_artifact_run == '' && github.event.inputs.runtime_macos_artifact_run == '' && github.event.inputs.runtime_linux_artifact_run == '') || (inputs.runtime_windows_release_gate && inputs.runtime_artifact_run == '') }}
     runs-on: ubuntu-22.04
     outputs:
       upstream_version: ${{ steps.ver.outputs.upstream_version }}
@@ -61,6 +66,16 @@ jobs:
         run: |
           python3 scripts/test-release-pipeline.py
           python3 scripts/test-notarize-macos.py
+      - name: Validate debugger-free Windows release gate request
+        env:
+          WINDOWS_RELEASE_GATE: ${{ inputs.runtime_windows_release_gate }}
+          PUBLISH_REQUESTED: ${{ inputs.publish_r2 }}
+          RUNTIME_RUN_ID: ${{ inputs.runtime_artifact_run }}
+          RUNTIME_LINUX_RUN: ${{ inputs.runtime_linux_artifact_run }}
+          RUNTIME_MACOS_RUN: ${{ inputs.runtime_macos_artifact_run }}
+        run: |
+          python3 scripts/test-windows-release-runtime.py
+          python3 scripts/collect-windows-release-runtime.py request
       - id: ver
         name: Validate build configuration and publication credentials
         env:
@@ -434,7 +449,7 @@ jobs:
 
       - name: Import Apple Developer ID cert
         if: env.APPLE_CERT_P12_BASE64 != ''
-        uses: apple-actions/import-codesign-certs@v3
+        uses: apple-actions/import-codesign-certs@v6
         with:
           p12-file-base64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
           p12-password: ${{ secrets.APPLE_CERT_P12_PASSWORD }}
@@ -519,6 +534,10 @@ jobs:
           [[ "$ARCH" != "aarch64" ]] || ARCH=arm64
           lipo "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE" -verify_arch "$ARCH"
           lipo "$APP_PATH/Contents/Frameworks/liblibrustdesk.dylib" -verify_arch "$ARCH"
+          python3 ../scripts/test-macos-bundle-minimum.py
+          python3 ../scripts/verify-macos-bundle-minimum.py \
+            --bundle "$APP_PATH" --arch "$ARCH" --minimum "$MACOSX_DEPLOYMENT_TARGET" \
+            --output "../bundle-minimum-proof/${{ matrix.job.arch }}.json"
           if [[ "${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || inputs.publish_r2 }}" == "true" && -z "${APPLE_CERT_P12_BASE64:-}" ]]; then
             echo "Publication requires a signed and notarized macOS app" >&2
             exit 1
@@ -587,6 +606,13 @@ jobs:
         with:
           name: macos-native-codecs-${{ matrix.job.arch }}
           path: native-codec-proof/
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: macos-bundle-minimum-${{ matrix.job.arch }}
+          path: bundle-minimum-proof/
           if-no-files-found: warn
 
       - uses: actions/upload-artifact@v6
@@ -694,6 +720,47 @@ jobs:
         with:
           workspaces: rustdesk
           cache-on-failure: true
+
+      - name: Activate installed native MSVC clipboard regression toolchain
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) { throw 'Installed Visual Studio discovery tool is absent.' }
+          $installation = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or @($installation).Count -ne 1 -or [string]::IsNullOrWhiteSpace($installation)) { throw 'Installed x64 MSVC toolchain discovery failed.' }
+          $devcmd = Join-Path $installation 'Common7/Tools/VsDevCmd.bat'
+          if (-not (Test-Path -LiteralPath $devcmd -PathType Leaf) -or $devcmd.Contains('"')) { throw 'Installed MSVC developer environment is absent.' }
+          $environment = & $env:ComSpec /d /s /c ('""' + $devcmd + '" -no_logo -arch=x64 -host_arch=x64 && set"')
+          if ($LASTEXITCODE -ne 0 -or @($environment).Count -eq 0 -or $environment.Count -gt 4096 -or ($environment -join "`n").Length -gt 1048576) { throw 'Installed MSVC developer environment import failed its exit/output bounds.' }
+          $changed = 0
+          foreach ($line in $environment) {
+            if ($line.StartsWith('=')) { continue }
+            if ($line -notmatch '^([A-Za-z_][A-Za-z0-9_()]*?)=(.*)$') { throw 'Unexpected native MSVC environment record.' }
+            $name, $value = $Matches[1], $Matches[2]
+            if ([Environment]::GetEnvironmentVariable($name, 'Process') -cne $value) {
+              if ($name -match '^(GITHUB_|RUNNER_|NODE_OPTIONS$)') { throw 'MSVC attempted to replace a protected runner variable.' }
+              $delimiter = 'MIXEL_MSVC_' + [Guid]::NewGuid().ToString('N')
+              Add-Content -LiteralPath $env:GITHUB_ENV -Value ($name + '<<' + $delimiter + "`n" + $value + "`n" + $delimiter) -Encoding utf8
+              [Environment]::SetEnvironmentVariable($name, $value, 'Process')
+              $changed++
+            }
+          }
+          if ($env:VSCMD_ARG_TGT_ARCH -cne 'x64' -or $env:VSCMD_ARG_HOST_ARCH -cne 'x64') { throw 'Installed MSVC developer environment is not x64 host and target.' }
+          if (-not (Get-Command cl.exe -ErrorAction SilentlyContinue)) { throw 'Installed native MSVC compiler is unavailable after environment import.' }
+          Write-Host ('PASS: installed x64 MSVC environment imported; ' + $changed + ' changed toolchain variables, values withheld.')
+
+      - name: Prove native Windows clipboard ownership and Rust error cleanup
+        shell: pwsh
+        run: |
+          python scripts/test-support-windows-clipboard.py --evidence-dir windows-clipboard-proof
+          if ($LASTEXITCODE -ne 0) { throw 'Native Windows clipboard C/Rust ownership qualification failed.' }
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: windows-clipboard-source-native
+          path: windows-clipboard-proof/*.log
+          if-no-files-found: ignore
 
       - name: Preflight generated support source and reporter
         shell: bash
@@ -864,7 +931,7 @@ jobs:
           (needs.macos.result == 'success' || needs.macos.result == 'skipped') &&
           (needs.windows.result == 'success' || needs.windows.result == 'skipped') &&
           ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
-           (github.event_name == 'workflow_dispatch' && inputs.publish_r2)) }}
+           (github.event_name == 'workflow_dispatch' && inputs.publish_r2)) && !inputs.runtime_windows_release_gate }}
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     concurrency:
@@ -924,11 +991,20 @@ jobs:
         env:
           RUNTIME_RUN_ID: ${{ inputs.runtime_artifact_run }}
           PUBLISH_REQUESTED: ${{ inputs.publish_r2 }}
-        run: python scripts/release-artifacts.py runtime
+          WINDOWS_RELEASE_GATE: ${{ inputs.runtime_windows_release_gate }}
+          RUNTIME_LINUX_RUN: ${{ inputs.runtime_linux_artifact_run }}
+          RUNTIME_MACOS_RUN: ${{ inputs.runtime_macos_artifact_run }}
+        shell: pwsh
+        run: |
+          python scripts/release-artifacts.py runtime
+          if ($LASTEXITCODE -ne 0) { throw 'Artifact-only Windows runtime request qualification failed.' }
+          python scripts/collect-windows-release-runtime.py request
+          if ($LASTEXITCODE -ne 0) { throw 'Debugger-free Windows release gate request qualification failed.' }
       - name: Qualify exact ordinary Windows desktop fixture
         shell: pwsh
         run: ./scripts/test-windows-pipeline.ps1
       - name: Prepare Microsoft native crash stack debugger
+        if: ${{ !inputs.runtime_windows_release_gate }}
         shell: pwsh
         run: |
           $cdb = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/Debuggers/x64/cdb.exe'
@@ -950,11 +1026,33 @@ jobs:
             throw 'Native debugger is not validly signed by Microsoft.'
           }
       - uses: actions/download-artifact@v7
+        if: ${{ !inputs.runtime_windows_release_gate }}
         with:
           name: windows-msix-payload
           run-id: ${{ steps.request.outputs.run_id }}
           github-token: ${{ github.token }}
           path: signed-payload
+      - name: Collect exact successful customer Windows release
+        if: ${{ inputs.runtime_windows_release_gate }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WINDOWS_RELEASE_GATE: ${{ inputs.runtime_windows_release_gate }}
+          PUBLISH_REQUESTED: ${{ inputs.publish_r2 }}
+          RUNTIME_RUN_ID: ${{ steps.request.outputs.run_id }}
+          RUNTIME_LINUX_RUN: ${{ inputs.runtime_linux_artifact_run }}
+          RUNTIME_MACOS_RUN: ${{ inputs.runtime_macos_artifact_run }}
+        run: |
+          python scripts/collect-windows-release-runtime.py collect --run-id $env:RUNTIME_RUN_ID --output release-runtime-collection
+          if ($LASTEXITCODE -ne 0) { throw 'Exact successful Windows release provenance qualification failed.' }
+          New-Item -ItemType Directory signed-payload, release-client | Out-Null
+          Copy-Item release-runtime-collection/artifacts/windows-msix-payload/* signed-payload/
+          Copy-Item release-runtime-collection/artifacts/windows/* release-client/
+          Get-ChildItem release-client -File | ForEach-Object {
+            $signature = Get-AuthenticodeSignature $_.FullName
+            if ($signature.Status -ne 'Valid') { throw 'Actual customer launcher Authenticode signature is not valid.' }
+            Write-Host ('PASS: actual customer release signature Valid: '+$_.Name)
+          }
       - name: Verify and extract signed payload
         shell: pwsh
         run: |
@@ -968,12 +1066,18 @@ jobs:
         run: |
           ./scripts/test-support-launch-windows.ps1 -Executable runtime-client/Mixel-Remote.exe
       - name: Diagnose signed compiled ordinary-to-QuickSupport ownership
+        if: ${{ !inputs.runtime_windows_release_gate }}
         shell: pwsh
         run: |
           # The retained artifact is the exact signed compiled payload. Pass the
           # native QS argument its portable launcher emits; the full build still
           # requires the actual signed customer QS outer launcher to pass 95s.
           ./scripts/test-support-launch-windows.ps1 -Executable runtime-client/Mixel-Remote.exe -QuickSupport -ExpectedPayload runtime-client -OrdinaryThenQuickSupport -CompiledQuickSupportDiagnostic -NativeCrashDiagnostic
+      - name: Prove actual signed customer QuickSupport95 without debugger
+        if: ${{ inputs.runtime_windows_release_gate }}
+        shell: pwsh
+        run: |
+          ./scripts/test-support-launch-windows.ps1 -Executable release-client/Mixel-Remote-QS.exe -Portable -QuickSupport -ExpectedPayload runtime-client -OrdinaryThenQuickSupport
       - name: Save synthetic runtime diagnostics
         if: always()
         shell: pwsh
@@ -985,6 +1089,10 @@ jobs:
                 Copy-Item $_.FullName (Join-Path runtime-diagnostics $_.Name) -Force
               }
             }
+          }
+          if (Test-Path release-runtime-collection/artifact-provenance.json) {
+            Copy-Item release-runtime-collection/artifact-provenance.json runtime-diagnostics/customer-release-input-provenance.json
+            Copy-Item release-runtime-collection/run-metadata.json runtime-diagnostics/customer-release-producer-run.json
           }
           $ownedLogs = Join-Path $env:RUNNER_TEMP 'mixel-owned-ordinary-qs-logs'
           if (Test-Path $ownedLogs) {

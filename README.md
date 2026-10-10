@@ -109,6 +109,17 @@ from Mixel’s signed downloads or the platform store’s normal update mechanis
   must fit the app's advertised minimum. Members without encoded OS requirements
   are recorded explicitly. Pinned source validation rejects inconsistent
   architecture targets and upstream drift before modifying the checkout.
+- Every bundled Mac native binary is checked before signing: the requested CPU
+  must be present and its encoded deployment minimum must fit the bundle metadata.
+  Internal framework links are resolved within the app; a failed rerun removes any
+  stale successful proof. Certificate import uses the audited Node24 action and
+  removes its temporary build keychain after the job.
+- Windows clipboard cleanup belongs to its creating context. Failed initialization
+  and Rust error-Box Drop release native resources once; an unnamed mutex avoids
+  an unnecessary shared cross-process object. The worker receives shutdown before
+  a late window can wait, destroys its own window/listener and joins before the
+  pending response, module reference and context state are released. Native
+  AddressSanitizer controls exercise the actual pinned C and Rust create/Drop.
 - Linux produces a branded Debian package and verifies its actual cold/warm
   customer launch under an isolated X11/DBus desktop.
 
@@ -133,6 +144,7 @@ python3 scripts/test-support-linux.py
 python3 scripts/test-support-signals.py
 python3 scripts/test-support-input.py
 python3 scripts/test-support-clipboard.py
+python3 scripts/test-support-windows-clipboard.py
 python3 scripts/test-support-video.py
 python3 scripts/test-support-macos.py
 python3 scripts/test-support-wakelock.py
@@ -142,6 +154,8 @@ dart scripts/test-support-invite.dart
 python3 scripts/test-release-pipeline.py
 python3 scripts/test-notarize-macos.py
 python3 scripts/test-macos-native-minimum.py
+python3 scripts/test-macos-bundle-minimum.py
+python3 scripts/test-windows-release-runtime.py
 python3 scripts/test-branding.py
 python3 scripts/test-support-launch-linux.py --self-test
 python3 scripts/test-support-session-fixture.py
@@ -267,6 +281,14 @@ launches both signed/notarized Mac installers. `runtime_linux_artifact_run` runs
 the native/HTTPS/mixed two-desktop session tests and separate saved-password
 consent case against an exactly collected Linux artifact.
 All diagnostic inputs require `publish_r2=false` and a positive build run ID.
+Set `runtime_windows_release_gate=true` together with `runtime_artifact_run` to
+run the normal customer QuickSupport handoff against a completed successful
+Windows build. The collector independently verifies both GitHub ZIP digests,
+same-source producer job, exact signed launcher aliases and inner payload
+checksum. Both Windows runner versions use the actual signed portable QS outer
+launcher, ordinary process creation, and the unchanged95-second PID/HWND/IPC/
+consent-owner requirements. This mode skips native crash-debugger preparation;
+publication and mixing other platform artifact inputs are rejected.
 The Windows crash diagnostic creates a disposable standard-account fixture in
 CI, verifies a controlled native exception, and retains only PID-bound stack
 symbols. It restores temporary desktop/registry settings and removes the owned
