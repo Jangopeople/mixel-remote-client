@@ -5,9 +5,9 @@
 The active review branch is `fix/remote-support-reliability`, draft PR
 [7](https://github.com/Jangopeople/mixel-remote-client/pull/7). This is a large
 attended-support, transport, native input/clipboard and installer verification
-pass. It is **unfinished**: the fresh Windows ordinary-user startup still crashes,
-and the production
-HTTPS gateway awaits Michael's exact approval. No public release has been made.
+pass. It is **unfinished**: the corrected Windows clipboard lifecycle still needs
+fresh native customer validation, and the production HTTPS gateway awaits
+Michael's exact approval. No public release has been made.
 
 The working acceptance criteria are a branded customer launch with registered
 relay/key readiness, customer Accept before authenticated control even with saved
@@ -34,9 +34,21 @@ exact-DEB native rerun `38068710521` completed success with independent all-four
 replay of 432 actual API-bound members. The Mac runtime correction and
 explicit codec deployment targets are committed as `bc346be` after actual pinned
 Rust1.81/cc1.2.13 link reproduction, native ARM/Intel archive controls and independent
-review. Fresh Mac-only build `38069369883` is queued from exact
-`bc346beb7498cc3017b4c6029c29b9038f3ed2a0`, with publication disabled.
-Fresh packaged Mac verification remains required. Product corrections also include the Linux warm DBus
+review. Fresh Mac-only build `38069369883` completed **success** for both architectures
+from exact `bc346beb7498cc3017b4c6029c29b9038f3ed2a0`, with publication disabled.
+Both passed compiled consent, signing, app/DMG Accepted notarization, stapling,
+Gatekeeper and cold/warm registered-ID/v2/relay/key launch. Independent replay
+bound seven actual API ZIPs and50 canonical member bytes. Read-only actual bundle
+checks passed22 ARM and41 Intel native binaries; codec proofs contain932 ARM
+and958 Intel archive members. ARM DMG SHA256 is
+`b699eaeb32b3669eee471184c3da1e29f7769aa57ae66b062c9f878ea2fbc947`;
+Intel is `4e1fec4ee961c627258e64870f85a2bc2849cdc58d67eb70943787ee91ac2896`.
+All owned read-only mounts are removed. The121-file proof freeze is
+`fresh-build-monitor-38069369883/proof-freeze.json` SHA256
+`b237a29845f4b373116b334c898eecebdfa510d18a3a494c3261e14cca610e45`.
+Current source additionally integrates the full pre-signing bundle gate, invalid-
+architecture stale-proof rejection and audited Node24 certificate import v6;
+fresh signing/keychain-cleanup qualification of that integration is required. Product corrections also include the Linux warm DBus
 consent/handoff fix `235273c`, basename-only Windows support aliases `d6728bd`,
 Windows UTF-16 terminal-NUL normalization `481215f`, and the unsigned AV1 variadic
 argument correction `f0e41de`. The existing larger pass covers bounded/redacted
@@ -88,8 +100,9 @@ the 95-second handoff did not occur. Exact signed Store payload retained in the
 same run: inner ZIP SHA256
 `4e9b9485b22fd2cdc25037f738bd5dbbebb8972687439c1d1099cad23b482ca9`.
 No final Windows distribution artifact was emitted after that strict failure.
-The heap crash has no confirmed product cause. Do not blame AV1, GPU, ACL or UAC
-without attributed native evidence. Both UTF-16 and AV1 source corrections pass
+The heap cause was unconfirmed at that run. The later exact-source C/Rust
+cleanup reproduction below now demonstrates a product lifetime defect. Do not
+attribute other causes such as AV1, GPU, ACL or UAC without native evidence. Both UTF-16 and AV1 source corrections pass
 native Windows execution; the AV1 original reproduces 12 wrong variadic values
 and the fixed code passes all 14 cases against actual headers.
 
@@ -184,8 +197,9 @@ behind `RtlFreeHeap` and the native core. Export-nearest `free_zero_copy_buffer_
 labels have huge offsets and do not identify the actual functions. Windows2025
 PID3932 failed the visible-window gate without a heap capture; its bounded owned
 query reported code `80000003`, whose origin is unestablished. Cleanup passed.
-The exact signed core is stripped and has no qualified RSDS/PDB identity; a
-same-source diagnostic symbol build is being prepared. Default debugger-free
+The exact signed core is stripped and has no qualified RSDS/PDB identity.
+Uncommitted symbol preparation is retained only in ignored evidence and is not
+integrated. Normal release verification proceeds without it. Default debugger-free
 ordinary launch and the 95-second customer gate remain unchanged and unpassed.
 
 Independent old-core `.pdata`/IAT/string disassembly and the exact ordinary-user
@@ -195,9 +209,20 @@ context; dropping its error Box invokes C uninit a second time. Exact source-
 extracted C init/uninit/format-map functions reproduce `AddressSanitizer:
 heap-use-after-free` when CreateMutex fails then the Rust error-Drop contract runs.
 The original failure is preserved under `clipboard-double-cleanup-reproduction`.
-A strict pinned ownership/idempotence correction is being implemented; it is not
-committed or qualified in a new Windows release yet. Matching symbol-build and
-final both-OS debugger-free outer-QuickSupport verification remain necessary.
+The pinned correction makes cleanup owner-specific and idempotent, uses an
+unnamed per-context mutex, balances the loaded user32 module, frees pending file
+response data, and clears state after the worker joins. Review also reproduced an
+immediate Drop/late-window deadlock; an internal aligned Interlocked stop flag
+publishes shutdown before the worker can block. The creating worker destroys its
+window and removes the modern/legacy listener before OleUninitialize. Actual
+source-extracted worker schedules and the pinned Rust create/error/foreign-Drop
+caller pass AddressSanitizer; original use-after-free and bounded deadlock remain
+retained negative proofs. A new normal signed Windows build and both-OS
+**debugger-free actual signed QS outer**95-second verification are mandatory.
+The collector requires a completed successful same-source producer Windows job,
+exact GitHub ZIP digests, byte-identical signed aliases and inner payload checksum;
+request validation prohibits publication/mixed platforms and checks Python failures
+immediately. The native source test uses installed MSVC without a new Node action.
 
 New Linux DEB SHA256 is
 `af63e2b6f8ef320d42e6b5ee305bed04fe5e7808490797b863f39fdd5eadc6d8`.
@@ -237,7 +262,8 @@ Read-only inspection of the exact old Mac DMGs found ARM core/service minima of
 remove four original Intel compiler errors under warnings-as-errors without
 changing the legacy permission fallback or requesting OS permission grants.
 Eleven drift/architecture/atomic-validation controls and the complete fresh
-branding pipeline pass. Native packaged verification of the correction is pending.
+branding pipeline pass. Native packaged verification of the application correction passed in38069369883;
+the additional compatibility gate/signing-action integration needs a fresh run.
 
 The earlier supplemental saved-password result remains failed and immutable:
 actual valid-password authentication/video, Disconnect, warm same-GUI URI and

@@ -93,6 +93,10 @@ with tempfile.TemporaryDirectory(prefix='mixel-codec-minimum-') as directory:
             command = [sys.executable, str(Path(__file__).with_name('verify-macos-native-minimum.py')),
                        '--lib-dir', str(library_dir), '--arch', arch, '--minimum', minimum]
             subprocess.run(command + ['--output', str(root / (arch + '.json'))], check=True)
+            output = root / (arch + '.json')
+            result = subprocess.run(command + ['--arch', 'invalid', '--output', str(output)], capture_output=True)
+            assert result.returncode != 0 and not output.exists()
+            subprocess.run(command + ['--output', str(output)], check=True)
             missing = library_dir / gate.LIBRARIES[0]
             missing.write_bytes(archive.read_bytes())  # actual newer14.0 object
             output = root / (arch + '.json')
@@ -111,4 +115,4 @@ with tempfile.TemporaryDirectory(prefix='mixel-codec-minimum-') as directory:
             output = root / (arch + '-extra.json')
             result = subprocess.run(command + ['--output', str(output)], capture_output=True)
             assert result.returncode != 0 and not output.exists()
-            print(f'PASS: actual {arch} six-archive CLI fixture writes complete proof; newer-OS same-output rerun removes prior success, protects non-JSON input, and missing/extra library creates no successful proof')
+            print(f'PASS: actual {arch} six-archive CLI fixture writes complete proof; invalid-architecture/newer-OS same-output reruns remove prior success, protect non-JSON input, and missing/extra library creates no successful proof')

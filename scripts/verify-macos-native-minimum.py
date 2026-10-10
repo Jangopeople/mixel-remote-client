@@ -142,7 +142,7 @@ def verify_archive(path, arch, minimum):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--lib-dir', type=Path, required=True)
-    parser.add_argument('--arch', choices=tuple(CPUS), required=True)
+    parser.add_argument('--arch', required=True)
     parser.add_argument('--minimum', required=True)
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
@@ -150,6 +150,8 @@ def main():
         raise ValueError('Proof output must be a JSON file, separate from native input archives')
     # A failed rerun must never upload an older successful invocation's proof.
     args.output.unlink(missing_ok=True)
+    if args.arch not in CPUS:
+        raise ValueError('Native codec architecture must be x86_64 or arm64')
     minimum = version(args.minimum)
     actual = tuple(sorted(path.name for path in args.lib_dir.glob('*.a')))
     if actual != LIBRARIES:
