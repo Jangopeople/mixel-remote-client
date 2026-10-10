@@ -50,18 +50,14 @@ def native_runner(repo: Path, rustc: str) -> None:
     initial_status = ui[start:ui.index("}));", start)] + "}"
     start = ui.index("                                if x > 0", ui.index("ipc::Data::OnlineStatus"))
     online_update = ui[start:ui.index("\n                            }", start)]
-    # Extract the complete owned early branches, keeping the actual getter and
-    # setter control flow. Observable fallthrough stands in for saved options.
-    attended_options = ""
-    for signature, fallback in (
-        ("pub fn get_option<T: AsRef<str>>(key: T) -> String {\n", '    "saved-fallback".to_owned()\n}\n'),
-        ("pub fn set_option(key: String, value: String) {\n", '    effect("saved-preference-write");\n}\n'),
-    ):
-        start = ui.index(signature)
-        end = ui.index("\n    }\n", start) + len("\n    }\n")
-        attended_options += ui[start:end] + fallback
-    # The first closing line above belongs to the match arm after its complete
-    # assignment; indentation prevents nested if blocks ending extraction early.
+    # Execute the complete generated getter, including its desktop saved-options
+    # branch. Mock the saved map and IPC endpoint, never approval control flow.
+    start = ui.index("pub fn get_option<T: AsRef<str>>(key: T) -> String {\n")
+    end = ui.index("\n}\n", start) + len("\n}\n")
+    attended_options = ui[start:end]
+    start = ui.index("pub fn set_option(key: String, value: String) {\n")
+    end = ui.index("\n    }\n", start) + len("\n    }\n")
+    attended_options += ui[start:end] + '    effect("saved-preference-write");\n}\n'
     # Execute each real generated guard before replacing the unrelated download
     # machinery with an observable side effect. The guard is never duplicated.
     updater_functions = (
@@ -85,17 +81,33 @@ def native_runner(repo: Path, rustc: str) -> None:
     source = r'''
 use std::cell::RefCell;
 use std::future::Future;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock, LockResult, MutexGuard};
+use std::collections::HashMap;
 use std::task::{Context, Poll, Wake, Waker};
 type ResultType<T> = Result<T, &'static str>;
 #[derive(Default)]
 struct Trace {
     custom: bool, store: bool, warm: bool, effects: Vec<&'static str>,
     fail_owner_hold: bool, owner_failed: bool, ipc_failed: bool,
+    local_required: bool, raw_proof: Option<&'static str>, ipc_reads: Vec<String>,
     renewals: Vec<(String, String)>,
 }
 thread_local! { static TRACE: RefCell<Trace> = RefCell::new(Trace::default()); }
 static SOFTWARE_UPDATE_URL: Mutex<String> = Mutex::new(String::new());
+static SAVED_OPTIONS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+struct OptionStore;
+static OPTIONS: OptionStore = OptionStore;
+impl OptionStore {
+    fn lock(&self) -> LockResult<MutexGuard<'static, HashMap<String, String>>> {
+        SAVED_OPTIONS.get_or_init(|| Mutex::new(HashMap::new())).lock()
+    }
+}
+fn saved_options() {
+    *OPTIONS.lock().unwrap() = HashMap::from([
+        ("approve-mode".to_owned(), "password".to_owned()),
+        ("ordinary-option".to_owned(), "ordinary-value".to_owned()),
+    ]);
+}
 fn effect(value: &'static str) { TRACE.with(|trace| trace.borrow_mut().effects.push(value)); }
 fn is_custom_client() -> bool { TRACE.with(|trace| trace.borrow().custom) }
 fn is_mixel_store_package() -> bool { TRACE.with(|trace| trace.borrow().store) }
@@ -120,7 +132,8 @@ mod hbb_common {
         impl PeerConfig { pub fn preload_peers() {} }
     }
     pub mod password_security {
-        pub use crate::real_guard::{is_support_invite_arg, resolve_support_invite_attestation};
+        pub use crate::real_guard::{is_support_invite_arg, resolve_support_invite_attestation,
+            effective_support_approve_mode, SUPPORT_INVITE_ATTESTATION};
         pub fn hold_support_invite_attended_lease() -> bool {
             crate::effect("attended-guard");
             crate::TRACE.with(|trace| {
@@ -132,14 +145,18 @@ mod hbb_common {
         pub fn support_invite_owner_lease_failed() -> bool {
             crate::TRACE.with(|trace| trace.borrow().owner_failed)
         }
+        pub fn support_invite_requires_click() -> bool {
+            crate::TRACE.with(|trace| trace.borrow().local_required || trace.borrow().owner_failed)
+        }
     }
 }
 mod ipc {
-    pub fn get_config(_key: &str) -> Result<Option<String>, ()> {
-        crate::TRACE.with(|trace| if trace.borrow().ipc_failed {
-            Err(())
-        } else {
-            Ok(Some("attended-runtime-v2".to_owned()))
+    pub fn get_config(key: &str) -> Result<Option<String>, ()> {
+        crate::TRACE.with(|trace| {
+            let mut state = trace.borrow_mut();
+            state.ipc_reads.push(key.to_owned());
+            if state.ipc_failed { Err(()) }
+            else { Ok(Some(state.raw_proof.unwrap_or("attended-runtime-v2").to_owned())) }
         })
     }
     pub fn set_config(key: &str, value: String) -> Result<(), ()> {
@@ -237,9 +254,52 @@ fn actual_setter_ipc_failure_keeps_readiness_unavailable_without_persistence() {
 }
 #[test]
 fn unrelated_option_falls_through_to_existing_saved_preference_path() {
-    set_option("approve-mode".to_owned(), "password".to_owned());
-    assert_eq!(get_option("approve-mode"), "saved-fallback");
-    TRACE.with(|trace| assert_eq!(trace.borrow().effects, ["saved-preference-write"]));
+    saved_options();
+    set_option("ordinary-option".to_owned(), "ordinary-value".to_owned());
+    TRACE.with(|trace| { let mut state=trace.borrow_mut(); state.local_required=true; state.raw_proof=Some("guard-unavailable"); });
+    assert_eq!(get_option("ordinary-option"), "ordinary-value");
+    assert_eq!(get_option("missing-option"), "");
+    TRACE.with(|trace| {
+        assert_eq!(trace.borrow().effects, ["saved-preference-write"]);
+        assert!(trace.borrow().ipc_reads.is_empty());
+    });
+}
+#[test]
+fn actual_desktop_saved_password_survives_safely_empty_raw_proof() {
+    saved_options();
+    TRACE.with(|trace| trace.borrow_mut().raw_proof=Some(""));
+    assert_eq!(get_option("mixel-support-invite-attended"), "guard-unavailable");
+    assert_eq!(get_option("approve-mode"), "password");
+    assert_eq!(OPTIONS.lock().unwrap().get("approve-mode").unwrap(), "password");
+}
+#[test]
+fn actual_desktop_confirmed_attended_proof_shows_accept_without_saving_click() {
+    saved_options();
+    assert_eq!(get_option("mixel-support-invite-attended"), "attended-runtime-v2");
+    assert_eq!(get_option("approve-mode"), "click");
+    assert_eq!(OPTIONS.lock().unwrap().get("approve-mode").unwrap(), "password");
+}
+#[test]
+fn actual_desktop_explicit_probe_error_shows_accept_without_claiming_ready() {
+    saved_options();
+    TRACE.with(|trace| trace.borrow_mut().raw_proof=Some("guard-unavailable"));
+    assert_eq!(get_option("mixel-support-invite-attended"), "guard-unavailable");
+    assert_eq!(get_option("approve-mode"), "click");
+    assert_eq!(OPTIONS.lock().unwrap().get("approve-mode").unwrap(), "password");
+}
+#[test]
+fn actual_desktop_owner_failure_shows_accept_without_claiming_ready() {
+    saved_options();
+    TRACE.with(|trace| { let mut state=trace.borrow_mut(); state.owner_failed=true; state.raw_proof=Some(""); });
+    assert_eq!(get_option("mixel-support-invite-attended"), "guard-unavailable");
+    assert_eq!(get_option("approve-mode"), "click");
+}
+#[test]
+fn actual_desktop_local_fail_closed_guard_shows_accept_despite_empty_service_proof() {
+    saved_options();
+    TRACE.with(|trace| { let mut state=trace.borrow_mut(); state.local_required=true; state.raw_proof=Some(""); });
+    assert_eq!(get_option("mixel-support-invite-attended"), "guard-unavailable");
+    assert_eq!(get_option("approve-mode"), "click");
 }
 fn linux_startup(args: Vec<String>) -> Option<Vec<String>> {
     let mut flutter_args = Vec::new();
@@ -326,7 +386,7 @@ fn unrelated_outgoing_linux_link_retains_dbus_dispatch_only() {
     target = repo / "generated_native_paths.rs"
     target.write_text(source, encoding="utf-8")
     binary = repo / ("generated_native_paths.exe" if os.name == "nt" else "generated_native_paths")
-    subprocess.run([rustc, "--edition=2021", "--cfg", 'feature="flutter"', "--test", str(target), "-o", str(binary)], check=True)
+    subprocess.run([rustc, "--edition=2021", "--deny=warnings", "--cfg", 'feature="flutter"', "--test", str(target), "-o", str(binary)], check=True)
     subprocess.run([str(binary), "--test-threads=1"], check=True)
 
 

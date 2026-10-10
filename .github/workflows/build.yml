@@ -878,6 +878,14 @@ jobs:
         run: |
           ./scripts/test-support-launch-windows.ps1 -Executable dist/Mixel-Remote-QS.exe -Portable -QuickSupport -ExpectedPayload store-payload
 
+      - name: Retain owned ordinary customer application logs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-customer-launch-logs
+          path: ${{ runner.temp }}/mixel-owned-ordinary-qs-logs/**/*.log
+          if-no-files-found: ignore
+
       - uses: actions/upload-artifact@v6
         with:
           name: windows

@@ -51,6 +51,26 @@ mod mixel_support_lease {
         owner_failed() || probe().unwrap_or(true)
     }
 
+    pub(super) fn attestation(memory_handoff: bool) -> &'static str {
+        if owner_failed() {
+            return "guard-unavailable";
+        }
+        // Uncertainty blocks automatic authorization, but never proves ready.
+        // The acknowledged service handoff may precede foreground ownership;
+        // its explicit memory guard is valid only after a safely absent probe.
+        let proof = match probe() {
+            Ok(true) => super::SUPPORT_INVITE_ATTESTATION,
+            Ok(false) if memory_handoff => super::SUPPORT_INVITE_ATTESTATION,
+            Ok(false) => "",
+            Err(_) => "guard-unavailable",
+        };
+        if owner_failed() {
+            "guard-unavailable"
+        } else {
+            proof
+        }
+    }
+
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     type Lease = std::fs::File;
 
@@ -279,9 +299,10 @@ mod mixel_support_lease {
             descriptor,
             inherit: 0,
         };
-        let handle = unsafe { CreateEventExW(&attributes, wide(EVENT).as_ptr(), 0, 0x00100000) };
+        let name = wide(EVENT);
+        let handle = unsafe { CreateEventExW(&attributes, name.as_ptr(), 0, 0x00100000) };
         let error = if handle.is_null() {
-            Some(std::io::Error::last_os_error())
+            Some(unsafe { GetLastError() })
         } else {
             None
         };
@@ -289,7 +310,7 @@ mod mixel_support_lease {
             LocalFree(descriptor);
         }
         if let Some(error) = error {
-            return Err(error);
+            return Err(std::io::Error::from_raw_os_error(error as i32));
         }
         Ok(Lease(handle as usize))
     }
@@ -301,12 +322,16 @@ mod mixel_support_lease {
 
     #[cfg(windows)]
     fn probe() -> std::io::Result<bool> {
-        let handle = unsafe { OpenEventW(0x00100000, 0, wide(EVENT).as_ptr()) };
+        let name = wide(EVENT);
+        let handle = unsafe { OpenEventW(0x00100000, 0, name.as_ptr()) };
         if handle.is_null() {
-            return if unsafe { GetLastError() } == 2 {
+            // Capture the error before the UTF-16 allocation is freed: cleanup
+            // and allocator calls need not preserve Win32 thread error state.
+            let error = unsafe { GetLastError() };
+            return if error == 2 {
                 Ok(false)
             } else {
-                Err(std::io::Error::last_os_error())
+                Err(std::io::Error::from_raw_os_error(error as i32))
             };
         }
         unsafe {
@@ -354,7 +379,7 @@ pub fn resolve_support_invite_attestation(
     }
     match remote_proof {
         Some(SUPPORT_INVITE_ATTESTATION) => SUPPORT_INVITE_ATTESTATION,
-        Some("") => "guard-unavailable",
+        Some("") | Some("guard-unavailable") => "guard-unavailable",
         _ => "service-update-required",
     }
 }
@@ -407,6 +432,13 @@ pub fn support_invite_requires_click() -> bool {
         support_invite_now_ms(),
         MIXEL_SUPPORT_INVITE_UNTIL.load(std::sync::atomic::Ordering::SeqCst),
     ) || mixel_support_lease::active()
+}
+
+pub fn support_invite_attestation() -> &'static str {
+    mixel_support_lease::attestation(support_invite_guard_active(
+        support_invite_now_ms(),
+        MIXEL_SUPPORT_INVITE_UNTIL.load(std::sync::atomic::Ordering::SeqCst),
+    ))
 }
 
 pub fn support_invite_must_wait(required: bool, accepted: bool) -> bool {
@@ -552,6 +584,10 @@ mod mixel_support_invite_tests {
 
     #[test]
     fn external_old_installed_or_portable_service_cannot_borrow_local_guard() {
+        assert_eq!(
+            resolve_support_invite_attestation(true, Some("guard-unavailable")),
+            "guard-unavailable"
+        );
         assert_eq!(
             resolve_support_invite_attestation(true, Some("attended-runtime-v1")),
             "service-update-required"

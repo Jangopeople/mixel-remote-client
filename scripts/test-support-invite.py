@@ -122,6 +122,35 @@ runpy.run_path(sys.argv[1], run_name='__main__')
     assert "support_invite_owner_lease_failed()" in first["src/ui_interface.rs"]
     assert "hold_support_invite_attended_lease()" in first["src/ui_interface.rs"]
     assert "hold_support_invite_attended_lease" not in first["src/ipc.rs"], "incoming service heartbeat must not own a foreground lease"
+    assert first["src/ipc.rs"].count("value = Some(password::support_invite_attestation().to_owned());") == 1
+    old_getter = """                    value = Some(if password::support_invite_requires_click() {
+                        password::SUPPORT_INVITE_ATTESTATION.to_owned()
+                    } else {
+                        String::new()
+                    });"""
+    old_ipc = first["src/ipc.rs"].replace("                    value = Some(password::support_invite_attestation().to_owned());", old_getter)
+    (repo / "src/ipc.rs").write_text(old_ipc, encoding="utf-8")
+    old_saved_options = """        let saved = {
+            let map = OPTIONS.lock().unwrap();
+            map.get(key.as_ref()).cloned().unwrap_or_default()
+        };
+        if key.as_ref() == "approve-mode" {
+            hbb_common::password_security::effective_support_approve_mode(
+                &saved, hbb_common::password_security::support_invite_guard_is_confirmed(&get_option("mixel-support-invite-attended")))
+        } else {
+            saved
+        }
+"""
+    ui_text = first["src/ui_interface.rs"]
+    saved_start = ui_text.index("        let saved = {")
+    saved_end = ui_text.index("\n    }\n", saved_start)
+    new_saved_options = ui_text[saved_start:saved_end] + "\n"
+    old_ui = ui_text.replace(new_saved_options, old_saved_options, 1)
+    assert old_ui != ui_text, "Owned desktop approval upgrade fixture did not change source"
+    (repo / "src/ui_interface.rs").write_text(old_ui, encoding="utf-8")
+    subprocess.run([sys.executable, str(patcher)], env=env, check=True, capture_output=True, text=True, encoding="utf-8")
+    assert (repo / "src/ipc.rs").read_text(encoding="utf-8") == first["src/ipc.rs"], "Upgrade must replace the prior fail-closed authorization echo without duplicating IPC branches"
+    assert (repo / "src/ui_interface.rs").read_text(encoding="utf-8") == first["src/ui_interface.rs"], "Upgrade must replace the prior confirmed-only Accept UI branch exactly"
     assert "_supportInviteCompatibilityNotice.showIfRequired" in common
     assert "!bind.isCustomClient() && bind.mainIsInstalled()" in first["flutter/lib/desktop/pages/desktop_setting_page.dart"]
     updater = first["src/updater.rs"]
@@ -367,7 +396,7 @@ Future<void> main() async {
     original_setter = original_ipc[original_start:original_end].replace(
         "pub async fn set_config_async(", "pub async fn original_set_config_async(", 1)
     handoff_test = repo / "native_attended_handoff_test.rs"
-    handoff_test.write_text('''
+    handoff_test.write_text(('''
 use std::future::Future;
 use std::sync::Mutex;
 use std::task::{Context, Poll, Wake, Waker};
@@ -380,6 +409,17 @@ static STATE: Mutex<State> = Mutex::new(State { mode: "ok", memory: false, sende
 mod password {
     pub const SUPPORT_INVITE_ATTESTATION: &str = "attended-runtime-v2";
     pub fn renew_support_invite_attended() { super::STATE.lock().unwrap().memory = true; }
+    pub fn support_invite_attestation() -> &'static str {
+        let state=super::STATE.lock().unwrap();
+        if state.mode == "probe-error" || state.mode == "owner-failed" { "guard-unavailable" }
+        else if state.memory || state.receiver_owner { SUPPORT_INVITE_ATTESTATION }
+        else { "" }
+    }
+}
+fn generated_runtime_proof() -> String {
+    let value: Option<String>;
+    // ACTUAL_ATTENDED_IPC_GETTER
+    value.unwrap()
 }
 struct Connection;
 async fn connect(deadline: u64, postfix: &str) -> ResultType<Connection> {
@@ -409,12 +449,12 @@ impl Connection {
             _ => panic!("Missing same-stream guard read-back"),
         }
         let mode = STATE.lock().unwrap().mode;
-        let proof = if mode == "stale" { "attended-runtime-v1" } else { password::SUPPORT_INVITE_ATTESTATION };
+        let proof = if mode == "stale" { "attended-runtime-v1".to_owned() } else { generated_runtime_proof() };
         let name = if mode == "wrong-name" { "approve-mode" } else { "mixel-support-invite-attended" };
         match mode {
             "closed" => Ok(None), "timeout" => Err("deadline"),
             "wrong-type" => Ok(Some(Data::Other)),
-            _ => Ok(Some(Data::Config((name.to_owned(), Some(proof.to_owned()))))),
+            _ => Ok(Some(Data::Config((name.to_owned(), Some(proof))))),
         }
     }
 }
@@ -446,10 +486,19 @@ fn reset(mode: &'static str) {
     state.receiver_owner = true; assert!(state.memory || state.receiver_owner);
 }
 #[test] fn missing_stale_or_mismatched_acknowledgment_cannot_release_sender() {
-    for mode in ["disconnected", "closed", "timeout", "stale", "wrong-name", "wrong-type"] {
+    for mode in ["disconnected", "closed", "timeout", "stale", "wrong-name", "wrong-type", "probe-error", "owner-failed"] {
         reset(mode);
         assert!(block_on(set_config_async("mixel-support-invite-attended", "Y".to_owned())).is_err(), "{mode}");
         assert!(STATE.lock().unwrap().sender_owner, "Failed acknowledgment must retain cold foreground owner");
+    }
+}
+#[test] fn actual_getter_preserves_absent_live_and_unavailable_proofs() {
+    reset("ok"); assert_eq!(generated_runtime_proof(), "");
+    STATE.lock().unwrap().receiver_owner=true;
+    assert_eq!(generated_runtime_proof(), password::SUPPORT_INVITE_ATTESTATION);
+    for mode in ["probe-error", "owner-failed"] {
+        reset(mode); password::renew_support_invite_attended();
+        assert_eq!(generated_runtime_proof(), "guard-unavailable");
     }
 }
 #[test] fn unrelated_settings_retain_write_only_transport() {
@@ -457,7 +506,7 @@ fn reset(mode: &'static str) {
     block_on(set_config_async("ordinary-setting", "Y".to_owned())).unwrap();
     let state = STATE.lock().unwrap(); assert_eq!(state.operations.len(), 1); assert!(!state.memory);
 }
-''', encoding="utf-8")
+''').replace("// ACTUAL_ATTENDED_IPC_GETTER", first["src/ipc.rs"].split('} else if name == "mixel-support-invite-attended" {', 1)[1].splitlines()[1].strip()), encoding="utf-8")
     handoff_binary = repo / ("native_attended_handoff_test.exe" if os.name == "nt" else "native_attended_handoff_test")
     subprocess.run([rustc, "--edition=2021", "--deny=warnings", "--test", str(handoff_test), "-o", str(handoff_binary)], check=True)
     subprocess.run([str(handoff_binary), "--test-threads=1"], check=True)
