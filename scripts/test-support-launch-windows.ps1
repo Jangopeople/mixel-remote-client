@@ -600,12 +600,18 @@ function Start-OwnedLiveCrashObservation([int]$ProcessId, $State) {
   # .exr -1 supports live targets; .ecxr is documented for minidumps only.
   # qd detaches and leaves the actual owned application to handle/terminate
   # normally. No memory/argument display commands or child debugging are used.
+  # Invalid CloseHandle calls can raise only while a debugger is attached.
+  # Capture that separate event, then preserve its default Not Handled status.
+  # Both native code and debugger-owned current PID must match before gn; the
+  # debugger-only counter bounds this diagnostic without changing app memory.
+  $invalidHandleCommand='.if ((@$tpid == 0n'+$ProcessId+') and (@$exr_code == 0xc0000008)) { .if (@$t0 < 0n16) { r $t0 = @$t0 + 1; .echo MIXEL_NATIVE_INVALID_HANDLE; .lastevent; .exr -1; kn 40; lm; .echo MIXEL_NATIVE_INVALID_HANDLE_END; gn } .else { .echo MIXEL_NATIVE_INVALID_HANDLE_LIMIT; qd } } .else { .echo MIXEL_NATIVE_OWNERSHIP_REJECTED; qd }'
   @(
     'sxe -c ".echo MIXEL_NATIVE_HEAP; .lastevent; .exr -1; kn 40; lm; .echo MIXEL_NATIVE_CAPTURE_END; qd" 0xc0000374',
+    ('sxe -c "'+$invalidHandleCommand+'" -c2 "'+$invalidHandleCommand+'" ch'),
     'sxd av',
     '.echo MIXEL_NATIVE_READY',
     '.echo MIXEL_NATIVE_STARTUP_EVENT; .lastevent; .echo MIXEL_NATIVE_STARTUP_EVENT_END',
-    '.if (@$exr_code == 0xc0000374) { .echo MIXEL_NATIVE_HEAP; .lastevent; .exr -1; kn 40; lm; .echo MIXEL_NATIVE_CAPTURE_END; qd } .else { .echo MIXEL_NATIVE_CONTINUE; g }'
+    ('.if (@$exr_code == 0xc0000374) { .echo MIXEL_NATIVE_HEAP; .lastevent; .exr -1; kn 40; lm; .echo MIXEL_NATIVE_CAPTURE_END; qd } .else { .if (@$exr_code == 0xc0000008) { '+$invalidHandleCommand+' } .else { .echo MIXEL_NATIVE_CONTINUE; g } }')
   ) | Set-Content $commands -Encoding ascii
   # Microsoft documents -pr for an already suspended target: resume occurs on
   # debugger attachment, permitting initial loader events and command startup.
@@ -667,6 +673,45 @@ function Read-OwnedHeapCapture([string[]]$Lines, [int]$ProcessId) {
   return [pscustomobject]@{ verified=$verified; pid=$eventPid; code=$code; frames=$frames; modules=$modules }
 }
 
+function Read-OwnedInvalidHandleCaptures([string[]]$Lines, [int]$ProcessId) {
+  $captures=@(); $active=$false; $invalid=$false; $starts=0; $ends=0; $events=0
+  $eventPid=$null; $chance=$null; $frames=@(); $modules=@()
+  if ($Lines.Count -gt 65536) { return [pscustomobject]@{ verified=$false; captures=@(); bounded=$false } }
+  foreach ($line in $Lines) {
+    if ($line.Trim() -cin @('MIXEL_NATIVE_INVALID_HANDLE_LIMIT','MIXEL_NATIVE_OWNERSHIP_REJECTED')) { $invalid=$true }
+    if ($line.Trim() -ceq 'MIXEL_NATIVE_INVALID_HANDLE') {
+      $starts++
+      if ($active -or $starts -gt 16) { $invalid=$true }
+      $active=$true; $events=0; $eventPid=$null; $chance=$null; $frames=@(); $modules=@()
+      continue
+    }
+    if ($line.Trim() -ceq 'MIXEL_NATIVE_INVALID_HANDLE_END') {
+      $ends++
+      if (-not $active -or $events -ne 1 -or $eventPid -ne $ProcessId -or -not $chance -or $frames.Count -eq 0) { $invalid=$true }
+      if (-not $invalid) { $captures += [pscustomobject]@{ pid=$eventPid; code='c0000008'; chance=$chance; stackFrames=$frames; loadedModuleNames=$modules } }
+      $active=$false; continue
+    }
+    if (-not $active) { continue }
+    if ($line -match 'Last event:\s*([0-9a-fA-F]+)\.[0-9a-fA-F]+:.*(?:code|exception)\s+c0000008\s+\((first|second) chance\)') {
+      $events++; $eventPid=[Convert]::ToInt32($Matches[1],16); $chance=$Matches[2]+'-chance'
+      if ($events -ne 1 -or $eventPid -ne $ProcessId) { $invalid=$true }
+      continue
+    }
+    if ($line.Contains('Last event:')) { $invalid=$true; continue }
+    if ($events -ne 1 -or $invalid) { continue }
+    if ($line -match '^\s*([0-9a-fA-F]{1,3})\s+[0-9a-fA-F`]+\s+([0-9a-fA-F`]+)\s+((?:[A-Za-z0-9_.$?@:<>,~\[\]()+-]+![A-Za-z0-9_.$?@:<>,~\[\]()+ -]+|[A-Za-z0-9_.-]+\+0x[0-9a-fA-F]+))\s*$') {
+      $frames += [pscustomobject]@{ index=$Matches[1]; returnAddress=$Matches[2]; symbol=$Matches[3] }
+      if ($frames.Count -gt 40) { $invalid=$true }
+    } elseif ($line -match '^\s*[0-9a-fA-F`]+\s+[0-9a-fA-F`]+\s+([A-Za-z0-9_.-]+)\s+') {
+      $modules += $Matches[1]
+      if ($modules.Count -gt 256) { $invalid=$true }
+    }
+  }
+  $verified=$starts -ge 1 -and $starts -le 16 -and $starts -eq $ends -and -not $active -and -not $invalid -and $captures.Count -eq $starts
+  if (-not $verified) { $captures=@() }
+  return [pscustomobject]@{ verified=$verified; captures=$captures; bounded=($starts -le 16) }
+}
+
 function Read-OwnedExecutionMetadata([string[]]$Lines, [int]$ProcessId, [switch]$TimeoutEvent) {
   $startMarker=if ($TimeoutEvent) { 'MIXEL_NATIVE_TIMEOUT_EVENT' } else { 'MIXEL_NATIVE_STARTUP_EVENT' }
   $endMarker=$startMarker+'_END'
@@ -683,6 +728,7 @@ function Read-OwnedExecutionMetadata([string[]]$Lines, [int]$ProcessId, [switch]
       elseif ($description -match '(?i)^exit process') { 'process-exit' }
       elseif ($description -match '(?i)exception' -and $description -match '(?:code|exception)\s+c0000374') { 'heap-exception' }
       elseif ($description -match '(?i)exception' -and $description -match '(?:code|exception)\s+80000003') { 'initial-break-exception' }
+      elseif ($description -match '(?:code|exception)\s+c0000008') { 'invalid-handle-exception' }
       elseif ($description -match '(?i)exception' -and $description -match '(?:code|exception)\s+[0-9a-fA-F]{8}') { 'other-exception' }
       else { 'other-native-event' }
     $code=if ($description -match '(?i)(?:code|exception)\s+([0-9a-fA-F]{8})(?:\s|$)') { $Matches[1].ToLowerInvariant() } else { $null }
@@ -774,15 +820,30 @@ function Write-OwnedControlExecutionEvidence([int]$ProcessId, $State, [switch]$P
   $entry=Join-Path $State.folder 'native-control-entered.txt'
   $entered=if ($ProductTarget) { $null } else { Test-Path $entry }
   $entryPidVerified=if ($ProductTarget) { $null } else { $entered -and [IO.File]::ReadAllText($entry) -ceq [string]$ProcessId }
+  $closeResult=Join-Path $State.folder 'native-control-invalid-handle-return.txt'
+  $invalidHandleReturnVerified=if ($ProductTarget) { $null } else { (Test-Path $closeResult) -and [IO.File]::ReadAllText($closeResult) -ceq ($ProcessId.ToString()+';0;6') }
+  $invalidHandles=[pscustomobject]@{ verified=$false; captures=@(); bounded=$true }
+  if ($State.live -and (Test-Path $State.live.raw)) {
+    $snapshot=Read-OwnedLiveDebuggerSnapshot $State.live.raw
+    if ($snapshot.pending) { throw 'Stopped debugger invalid-handle snapshot is incomplete.' }
+    $invalidHandles=Read-OwnedInvalidHandleCaptures $snapshot.lines $ProcessId
+    $invalidHandles.verified=$State.live.ready -and ($State.live.attached -or $State.live.captureAttributed) -and $invalidHandles.verified
+    if (-not $invalidHandles.verified) { $invalidHandles.captures=@() }
+  }
   $streams=@{}
   if ($State.live) {
     foreach ($name in @('raw','console','errors')) {
       $path=$State.live.$name
-      $streams[$name]=if (Test-Path $path) { Read-OwnedExecutionMetadata ([IO.File]::ReadAllLines($path)) $ProcessId } else { $null }
+      $streams[$name]=$null
+      if (Test-Path $path) {
+        $snapshot=Read-OwnedLiveDebuggerSnapshot $path
+        if ($snapshot.pending) { throw 'Stopped debugger execution snapshot is incomplete.' }
+        $streams[$name]=Read-OwnedExecutionMetadata $snapshot.lines $ProcessId
+      }
     }
   }
   $kind=if ($ProductTarget) { 'owned-product-native-execution' } else { 'synthetic-native-exception-execution' }
-  $evidence=[pscustomobject]@{ evidenceKind=$kind; observationPhase='after-bounded-debugger-stop-before-target-cleanup'; pid=$ProcessId; nativeStatus=[MixelOrdinaryTokenFixture]::StartedStatus($ProcessId); enteredMain=$entered; entryPidVerified=$entryPidVerified; primaryThreadResume=$(if ($State.live) { $State.live.primaryThreadResume } else { $null }); timeoutObservation=$(if ($State.live) { $State.live.timeoutObservation } else { $null }); debuggerExited=($State.live -and $State.live.debugger.HasExited); streams=$streams }
+  $evidence=[pscustomobject]@{ evidenceKind=$kind; observationPhase='after-bounded-debugger-stop-before-target-cleanup'; pid=$ProcessId; nativeStatus=[MixelOrdinaryTokenFixture]::StartedStatus($ProcessId); enteredMain=$entered; entryPidVerified=$entryPidVerified; syntheticInvalidHandleReturnFalseAndError6=$invalidHandleReturnVerified; invalidHandleCaptures=$invalidHandles; primaryThreadResume=$(if ($State.live) { $State.live.primaryThreadResume } else { $null }); timeoutObservation=$(if ($State.live) { $State.live.timeoutObservation } else { $null }); debuggerExited=($State.live -and $State.live.debugger.HasExited); streams=$streams }
   Write-Host ('FIXTURE: bounded native execution evidence before cleanup: '+($evidence | ConvertTo-Json -Depth 5 -Compress))
   if ($env:RUNNER_TEMP) {
     $archive=Join-Path $env:RUNNER_TEMP 'mixel-owned-ordinary-qs-logs'
@@ -886,9 +947,13 @@ using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 public static class MixelOwnedNativeExceptionControl {
+  [DllImport("kernel32.dll", SetLastError=true)] [return: MarshalAs(UnmanagedType.Bool)] static extern bool CloseHandle(IntPtr handle);
   [DllImport("kernel32.dll")] static extern void RaiseException(uint code, uint flags, uint count, IntPtr arguments);
   public static void Main() {
     File.WriteAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"native-control-entered.txt"),Process.GetCurrentProcess().Id.ToString());
+    bool closed=CloseHandle(IntPtr.Zero);
+    int closeError=Marshal.GetLastWin32Error();
+    File.WriteAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"native-control-invalid-handle-return.txt"),Process.GetCurrentProcess().Id.ToString()+";"+(closed ? "1" : "0")+";"+closeError.ToString());
     RaiseException(0xc0000374, 1, 0, IntPtr.Zero);
   }
 }
@@ -907,11 +972,21 @@ public static class MixelOwnedNativeExceptionControl {
     $entry=Join-Path $state.folder 'native-control-entered.txt'
     $entered=Test-Path $entry
     $entryPidVerified=$entered -and [IO.File]::ReadAllText($entry) -ceq [string]$controlPid
+    $closeResult=Join-Path $state.folder 'native-control-invalid-handle-return.txt'
+    $closeReturnVerified=(Test-Path $closeResult) -and [IO.File]::ReadAllText($closeResult) -ceq ($controlPid.ToString()+';0;6')
+    $snapshot=Read-OwnedLiveDebuggerSnapshot $state.live.raw
+    if ($snapshot.pending) { throw 'Synthetic stopped debugger invalid-handle snapshot is incomplete.' }
+    $invalidHandles=Read-OwnedInvalidHandleCaptures $snapshot.lines $controlPid
+    if (-not $closeReturnVerified -or -not $invalidHandles.verified -or
+        @($invalidHandles.captures | Where-Object { $_.chance -cne 'first-chance' }).Count -gt 0) {
+      throw 'Synthetic invalid CloseHandle control did not qualify exact PID/code/native stack and normal FALSE/ERROR_INVALID_HANDLE return before its heap exception.'
+    }
     if (-not $capture.actualLiveExceptionPidVerified -or $capture.pid -ne $controlPid -or
         $capture.exceptionCodes.Count -ne 1 -or $capture.exceptionCodes[0] -ine 'c0000374' -or $capture.stackFrames.Count -eq 0 -or -not $entryPidVerified) {
       throw 'Synthetic native exception control did not qualify exact owned PID/code and a sanitized native stack.'
     }
     Write-Host "PASS: synthetic native RaiseException(0xc0000374) control qualifies the exact suspended standard-user launch, owned primary-thread release after filter readiness and bounded PID/code-attributed native stack capture; controlPid=$controlPid; this is debugger qualification only."
+    Write-Host "PASS: synthetic invalid CloseHandle control captures actual owned PID/c0000008/native frames and preserves normal FALSE/ERROR_INVALID_HANDLE(6) before the independently attributed heap exception; controlPid=$controlPid; this is debugger qualification only."
   } catch { $controlFailure=$_; throw }
   finally {
     $errors=[System.Collections.Generic.List[string]]::new()
