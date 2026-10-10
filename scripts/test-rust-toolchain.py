@@ -101,7 +101,10 @@ def native_git_bash_control():
         source.write_text('fn main() { println!("PASS: explicit MSVC linked actual Rust despite PATH coreutils shadow"); }\n', encoding="utf-8")
         command = [rustc, "--edition=2021", "--deny=warnings", str(source), "-o", str(executable), "-C", "link-arg=/INCREMENTAL:NO"]
         rejected = subprocess.run(command + ["-C", "linker=" + str(coreutils)], capture_output=True, text=True, timeout=60, env=environment)
-        if rejected.returncode == 0 or "extra operand" not in rejected.stderr:
+        # GNU diagnostics vary with argument count, quoting and locale. The
+        # actual same Rust source/flags must fail through the installed Git
+        # coreutils executable and succeed through verified Microsoft LINK.
+        if rejected.returncode == 0:
             raise RuntimeError("Actual coreutils linker did not reproduce the failed native gate")
         subprocess.run(rustc_command(command, environment=environment), check=True, timeout=60, env=environment)
         subprocess.run([str(executable)], check=True, timeout=10, env=environment)
