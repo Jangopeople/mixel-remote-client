@@ -20,7 +20,7 @@ if (-not ('MixelOrdinaryTokenFixture' -as [type])) {
   // Exact public TOKEN_INFORMATION_CLASS values from Microsoft's winnt.h.
   // These queries observe the existing token; they never assign privileges,
   // token sessions, integrity levels, memberships or namespace permissions.
-  enum ObservedTokenClass { Groups=2, SessionId=12, HasRestrictions=21, IntegrityLevel=25, IsAppContainer=29 }
+  enum ObservedTokenClass { Groups=2, Type=8, SessionId=12, ElevationType=18, LinkedToken=19, HasRestrictions=21, IntegrityLevel=25, LogonSid=28, IsAppContainer=29 }
   [StructLayout(LayoutKind.Sequential)] struct ObservedSidAttributes { public IntPtr sid; public uint attributes; }
   [StructLayout(LayoutKind.Sequential)] struct ObservedGroupsHeader { public uint count; public ObservedSidAttributes first; }
   public sealed class ObservedTokenFacts {
@@ -29,20 +29,21 @@ if (-not ('MixelOrdinaryTokenFixture' -as [type])) {
     public bool hasRestrictions, isAppContainer;
     public uint hasRestrictionsReturnedLength, isAppContainerReturnedLength;
     public string authenticatedUsers, interactive, users;
+    public string logonComparison="tokenLogonSidCount=unavailable;tokenLogonSidMatchesCaller=unavailable;tokenLogonSidQuerySubject=target;tokenLogonSidQueryFailure=not-measured;tokenLogonSidQueryError=none;tokenLogonSidQueryReturnedLength=none";
     public string unavailableKind, unavailableFailure;
     public int? unavailableError, unavailableLength;
     public override string ToString() {
       if(unavailableKind!=null) return "tokenSessionId=" + (sessionKnown ? sessionId.ToString(System.Globalization.CultureInfo.InvariantCulture) : "unavailable") +
         ";tokenFacts=unavailable;tokenQueryKind=" + unavailableKind + ";tokenQueryFailure=" + unavailableFailure +
         ";tokenQueryError=" + (unavailableError.HasValue ? unavailableError.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) : "none") +
-        ";tokenQueryReturnedLength=" + (unavailableLength.HasValue ? unavailableLength.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) : "none");
+        ";tokenQueryReturnedLength=" + (unavailableLength.HasValue ? unavailableLength.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) : "none") + ";" + logonComparison;
       return "tokenSessionId=" + sessionId.ToString(System.Globalization.CultureInfo.InvariantCulture) +
         ";hasRestrictions=" + (hasRestrictions ? "true" : "false") +
         ";hasRestrictionsReturnedLength=" + hasRestrictionsReturnedLength.ToString(System.Globalization.CultureInfo.InvariantCulture) +
         ";isAppContainer=" + (isAppContainer ? "true" : "false") +
         ";isAppContainerReturnedLength=" + isAppContainerReturnedLength.ToString(System.Globalization.CultureInfo.InvariantCulture) +
         ";integrityRid=" + integrityRid.ToString(System.Globalization.CultureInfo.InvariantCulture) +
-        ";authenticatedUsers=" + authenticatedUsers + ";interactive=" + interactive + ";users=" + users;
+        ";authenticatedUsers=" + authenticatedUsers + ";interactive=" + interactive + ";users=" + users + ";" + logonComparison;
     }
   }
   sealed class ObservedTokenQueryFailure : InvalidOperationException {
@@ -137,6 +138,116 @@ if (-not ('MixelOrdinaryTokenFixture' -as [type])) {
       }
     } finally { Marshal.FreeHGlobal(data); }
   }
+  // Only the current caller's existing linked token is used; no token/session/
+  // privilege setter or token from an unrelated process is opened.
+  static IntPtr ReadCallerLinkedToken(IntPtr caller) {
+    if(IntPtr.Size!=8) throw new InvalidOperationException("Caller-linked control requires x64 pointer size8");
+    IntPtr data=Marshal.AllocHGlobal(8), linked=IntPtr.Zero;
+    try {
+      Marshal.WriteIntPtr(data,IntPtr.Zero);
+      int required;
+      bool success=GetTokenInformation(caller,(int)ObservedTokenClass.LinkedToken,data,8,out required);
+      int error=Marshal.GetLastWin32Error();
+      if(!success) throw new Win32Exception(error,"Current caller linked-token query failed; nativeError="+error.ToString(System.Globalization.CultureInfo.InvariantCulture));
+      if(required!=8) throw new InvalidOperationException("Current caller linked-token success length contract failed");
+      linked=Marshal.ReadIntPtr(data);
+      if(linked==IntPtr.Zero) throw new InvalidOperationException("Current caller linked-token success pointer contract failed");
+      IntPtr result=linked; linked=IntPtr.Zero; return result;
+    } finally {
+      if(linked!=IntPtr.Zero) CloseHandle(linked);
+      Marshal.FreeHGlobal(data);
+    }
+  }
+  static void AssertCallerLinkedTokenClassification(bool sameSid,bool callerElevated,bool linkedElevated,uint tokenType,uint elevationType) {
+    if(!sameSid || !callerElevated || linkedElevated || tokenType!=1 || elevationType!=3) throw new InvalidOperationException("Caller-linked token is not the existing elevated caller SID under actual primary1/Limited3 non-elevation");
+  }
+  static void AssertCallerLinkedToken(IntPtr caller, IntPtr linked) {
+    using(var original=new WindowsIdentity(caller)) using(var filtered=new WindowsIdentity(linked)) {
+      AssertCallerLinkedTokenClassification(original.User.Value==filtered.User.Value,ElevatedToken(caller),ElevatedToken(linked),ObservedTokenDword(linked,ObservedTokenClass.Type),ObservedTokenDword(linked,ObservedTokenClass.ElevationType));
+    }
+  }
+  public static int StartCallerLinkedUser(string executable) {
+    IntPtr caller,linked=IntPtr.Zero;
+    if(!OpenProcessToken(GetCurrentProcess(),8,out caller)) throw new Win32Exception();
+    try {
+      linked=ReadCallerLinkedToken(caller);
+      AssertCallerLinkedToken(caller,linked);
+      StartupInfo startup=Startup(); ProcessInfo process;
+      // Existing returned-handle access only. Failure is retained; no duplicate
+      // with broader access, privilege grant or alternate launch fallback.
+      bool success=CreateProcessWithTokenW(linked,1,executable,new StringBuilder("\""+executable+"\""),0,IntPtr.Zero,System.IO.Path.GetDirectoryName(executable),ref startup,out process);
+      int error=Marshal.GetLastWin32Error();
+      if(!success) throw new Win32Exception(error,"Caller-linked process launch failed; nativeError="+error.ToString(System.Globalization.CultureInfo.InvariantCulture));
+      return Started(process);
+    } finally { if(linked!=IntPtr.Zero) CloseHandle(linked); CloseHandle(caller); }
+  }
+  public static bool StartedUserSidMatchesCaller(int pid) {
+    IntPtr process,token,caller;
+    if(!StartedProcesses.TryGetValue(pid,out process)) throw new InvalidOperationException("Caller SID observation does not own the retained process");
+    if(!OpenProcessToken(process,8,out token)) throw new Win32Exception();
+    try {
+      if(!OpenProcessToken(GetCurrentProcess(),8,out caller)) throw new Win32Exception();
+      try {
+        using(var original=new WindowsIdentity(caller)) using(var child=new WindowsIdentity(token)) {
+          AssertCallerLinkedTokenClassification(original.User.Value==child.User.Value,ElevatedToken(caller),ElevatedToken(token),ObservedTokenDword(token,ObservedTokenClass.Type),ObservedTokenDword(token,ObservedTokenClass.ElevationType));
+          return true;
+        }
+      }
+      finally { CloseHandle(caller); }
+    } finally { CloseHandle(token); }
+  }
+  static byte[] ObservedLogonSidBytes(IntPtr data,int length,out uint count) {
+    int offset=Marshal.OffsetOf(typeof(ObservedGroupsHeader),"first").ToInt32();
+    int stride=Marshal.SizeOf(typeof(ObservedSidAttributes));
+    if(IntPtr.Size!=8 || offset!=8 || stride!=16 || length<offset) throw new InvalidOperationException("Read-only logon SID header bounds failed");
+    count=unchecked((uint)Marshal.ReadInt32(data));
+    if(count>1 || count>(uint)((length-offset)/stride)) throw new InvalidOperationException("Read-only logon SID count bounds failed");
+    if(count==0) return null;
+    var group=(ObservedSidAttributes)Marshal.PtrToStructure(IntPtr.Add(data,offset),typeof(ObservedSidAttributes));
+    long sidOffset=group.sid.ToInt64()-data.ToInt64();
+    if((group.attributes & 0xc0000000)!=0xc0000000 || sidOffset<offset+stride || sidOffset>length-20) throw new InvalidOperationException("Read-only logon SID pointer/attribute bounds failed");
+    // Canonical logon SID is S-1-5-5-X-Y. Its private X/Y bytes stay local;
+    // only count and comparison equality are serialized, never the SID or LUID.
+    if(Marshal.ReadByte(group.sid)!=1 || Marshal.ReadByte(group.sid,1)!=3 ||
+       Marshal.ReadByte(group.sid,2)!=0 || Marshal.ReadByte(group.sid,3)!=0 ||
+       Marshal.ReadByte(group.sid,4)!=0 || Marshal.ReadByte(group.sid,5)!=0 ||
+       Marshal.ReadByte(group.sid,6)!=0 || Marshal.ReadByte(group.sid,7)!=5 ||
+       Marshal.ReadInt32(group.sid,8)!=5) throw new InvalidOperationException("Read-only logon SID canonical shape failed");
+    byte[] value=new byte[20]; Marshal.Copy(group.sid,value,0,value.Length); return value;
+  }
+  static byte[] ObservedLogonSid(IntPtr token,out uint count) {
+    int length;IntPtr data=ObservedTokenBuffer(token,ObservedTokenClass.LogonSid,out length);
+    try { return ObservedLogonSidBytes(data,length,out count); } finally { Marshal.FreeHGlobal(data); }
+  }
+  static bool ObservedLogonSidEqual(byte[] first,byte[] second) {
+    if(first==null || second==null || first.Length!=20 || second.Length!=20) throw new InvalidOperationException("Read-only logon SID equality requires two bounded actual identities");
+    for(int i=0;i<20;i++) if(first[i]!=second[i]) return false;
+    return true;
+  }
+  static string ObserveLogonSidComparison(IntPtr target) {
+    uint? targetCount=null;string subject="target";
+    try {
+      uint count;byte[] first=ObservedLogonSid(target,out count);targetCount=count;
+      if(first==null) return "tokenLogonSidCount=0;tokenLogonSidMatchesCaller=unavailable;tokenLogonSidQuerySubject=target;tokenLogonSidQueryFailure=empty;tokenLogonSidQueryError=none;tokenLogonSidQueryReturnedLength=none";
+      subject="caller";IntPtr caller;
+      if(!OpenProcessToken(GetCurrentProcess(),8,out caller)) throw new ObservedTokenQueryFailure(ObservedTokenClass.LogonSid,"api-error",Marshal.GetLastWin32Error(),null);
+      try {
+        byte[] second=ObservedLogonSid(caller,out count);
+        if(second==null) return "tokenLogonSidCount=1;tokenLogonSidMatchesCaller=unavailable;tokenLogonSidQuerySubject=caller;tokenLogonSidQueryFailure=empty;tokenLogonSidQueryError=none;tokenLogonSidQueryReturnedLength=none";
+        bool equal=ObservedLogonSidEqual(first,second);
+        return "tokenLogonSidCount=1;tokenLogonSidMatchesCaller="+(equal?"true":"false")+";tokenLogonSidQuerySubject=none;tokenLogonSidQueryFailure=none;tokenLogonSidQueryError=none;tokenLogonSidQueryReturnedLength=none";
+      } finally { CloseHandle(caller); }
+    } catch(ObservedTokenQueryFailure failure) {
+      return "tokenLogonSidCount="+(targetCount.HasValue?targetCount.Value.ToString(System.Globalization.CultureInfo.InvariantCulture):"unavailable")+
+        ";tokenLogonSidMatchesCaller=unavailable;tokenLogonSidQuerySubject="+subject+";tokenLogonSidQueryFailure="+failure.failure+
+        ";tokenLogonSidQueryError="+(failure.error.HasValue?failure.error.Value.ToString(System.Globalization.CultureInfo.InvariantCulture):"none")+
+        ";tokenLogonSidQueryReturnedLength="+(failure.length.HasValue?failure.length.Value.ToString(System.Globalization.CultureInfo.InvariantCulture):"none");
+    } catch(InvalidOperationException) {
+      return "tokenLogonSidCount="+(targetCount.HasValue?targetCount.Value.ToString(System.Globalization.CultureInfo.InvariantCulture):"unavailable")+
+        ";tokenLogonSidMatchesCaller=unavailable;tokenLogonSidQuerySubject="+subject+";tokenLogonSidQueryFailure=content-contract;tokenLogonSidQueryError=none;tokenLogonSidQueryReturnedLength=none";
+    }
+  }
+
   static ObservedTokenFacts ReadObservedTokenFacts(IntPtr token) {
     var facts=new ObservedTokenFacts { sessionKnown=false };
     var kind=ObservedTokenClass.SessionId;
@@ -152,6 +263,7 @@ if (-not ('MixelOrdinaryTokenFixture' -as [type])) {
     } catch(InvalidOperationException) {
       facts.unavailableKind=kind.ToString(); facts.unavailableFailure="content-contract";
     }
+    facts.logonComparison=ObserveLogonSidComparison(token);
     return facts;
   }
   public static ObservedTokenFacts RunnerTokenFacts() {
@@ -339,7 +451,7 @@ function Assert-StandardUnnamedEventControl($Record, $Before) {
 function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner')][string]$Mode, [string]$ExpectedStatus, [int]$ExpectedError,
     [string]$ExpectedProof, [bool]$ExpectedRequired, [bool]$ExpectedOwnerFailed, [switch]$KeepAlive,
     [switch]$ObserveOnly, [string]$ObservationLabel,
-    [ValidateSet('with-logon','with-token')][string]$Launcher = 'with-logon',
+    [ValidateSet('with-logon','with-token','with-caller-linked')][string]$Launcher = 'with-logon',
     [ValidateSet('console','windows')][string]$Subsystem = 'console', [switch]$UnnamedControl) {
   $expectedExecutable = if ($Subsystem -ceq 'windows') { 'lease-standard-gui.exe' } else { 'lease-standard.exe' }
   if ([IO.Path]::GetFileName($executable) -cne $expectedExecutable) { throw 'Owned source control executable does not match its declared subsystem.' }
@@ -348,13 +460,16 @@ function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner'
   if (Test-Path -LiteralPath $unnamedRequest) { Remove-Item -LiteralPath $unnamedRequest }
   if (Test-Path -LiteralPath $unnamedResult) { Remove-Item -LiteralPath $unnamedResult }
   if ($UnnamedControl) {
-    if (-not $ObserveOnly -or $Mode -cne 'probe' -or $KeepAlive -or
+    if ($Launcher -ceq 'with-caller-linked' -or -not $ObserveOnly -or $Mode -cne 'probe' -or $KeepAlive -or
         $ObservationLabel -cne "global-$Subsystem-initial-untouched-absent") { throw 'Unnamed event observation is limited to the initial untouched subsystem probe.' }
     [IO.File]::WriteAllText($unnamedRequest, 'observe', [Text.UTF8Encoding]::new($false))
   }
   if (Test-Path $resultPath) { Remove-Item -LiteralPath $resultPath }
   [IO.File]::WriteAllText((Join-Path $fixtureRoot 'fixture-mode.txt'), $Mode, [Text.UTF8Encoding]::new($false))
-  if ($Launcher -ceq 'with-token') {
+  if ($Launcher -ceq 'with-caller-linked') {
+    if (-not $ObserveOnly) { throw 'Caller-linked UAC token cannot satisfy pure standard-account acceptance.' }
+    $controlPid=[MixelOrdinaryTokenFixture]::StartCallerLinkedUser($executable)
+  } elseif ($Launcher -ceq 'with-token') {
     $controlPid = [MixelOrdinaryTokenFixture]::StartStandardUserWithToken($executable, $ownedUser, $ownedPassword, $ownedSid)
   } else {
     $controlPid = [MixelOrdinaryTokenFixture]::StartStandardUser($executable, $ownedUser, $ownedPassword)
@@ -362,11 +477,11 @@ function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner'
   $control = $null
   try {
     $control = Get-Process -Id $controlPid
-    $sidMatches = [MixelOrdinaryTokenFixture]::StartedUserSidMatches($controlPid, $ownedSid)
+    $sidMatches = if ($Launcher -ceq 'with-caller-linked') { [MixelOrdinaryTokenFixture]::StartedUserSidMatchesCaller($controlPid) } else { [MixelOrdinaryTokenFixture]::StartedUserSidMatches($controlPid, $ownedSid) }
     $elevated = [MixelOrdinaryTokenFixture]::Elevated($controlPid)
     $actualSession = $control.SessionId
     if (-not $sidMatches -or $elevated -or $actualSession -ne (Get-Process -Id $PID).SessionId) {
-      throw 'Lease control is not the owned SID under the actual non-elevated same-session standard token.'
+      throw 'Lease control is not the verified source identity under the actual non-elevated same-session token.'
     }
     $tokenFacts = [MixelOrdinaryTokenFixture]::StartedTokenFacts($controlPid)
     $deadline = [DateTime]::UtcNow.AddSeconds(10)
@@ -387,7 +502,11 @@ function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner'
     }
     if ($ObserveOnly) {
       if ($ObservationLabel -cnotmatch '\A(?:bare|local|global)-[a-z]+(?:-[a-z]+)*\z') { throw 'Invalid safe namespace observation label.' }
+      if ($Launcher -ceq 'with-caller-linked') {
+        Write-Host "OBSERVED: caller-linked-token GUID functional control; tokenContext=current-caller-uac-linked; pureStandardAccount=False; subsystem=$Subsystem; scenario=$ObservationLabel; mode=$Mode; controlPid=$controlPid; ordinarySessionId=$actualSession; ownedCallerSidMatched=$sidMatches; elevated=$elevated; $tokenFacts; $($record.sourceStatus); rawOpenError=$($record.rawOpenError); guardEmpty=$($record.attestation -ceq ''); guardConfirmed=$($record.attestation -ceq 'attended-runtime-v2'); requiresClick=$($record.requiresClick)."
+      } else {
       Write-Host "OBSERVED: standard-token GUID functional control; launcher=$Launcher; subsystem=$Subsystem; scenario=$ObservationLabel; mode=$Mode; controlPid=$controlPid; ordinarySessionId=$actualSession; ownedSidMatched=$sidMatches; elevated=$elevated; $tokenFacts; $($record.sourceStatus); rawOpenError=$($record.rawOpenError); guardEmpty=$($record.attestation -ceq ''); guardConfirmed=$($record.attestation -ceq 'attended-runtime-v2'); requiresClick=$($record.requiresClick)."
+      }
     } else {
       Write-Host "FIXTURE: actual source lease under non-elevated same-session token; mode=$Mode; $($record.sourceStatus); rawOpenError=$($record.rawOpenError); guardEmpty=$($record.attestation -ceq ''); guardConfirmed=$($record.attestation -ceq 'attended-runtime-v2'); requiresClick=$($record.requiresClick)."
     }
@@ -415,7 +534,7 @@ function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner'
   } finally { if ($control) { $control.Dispose() } }
 }
 
-function Invoke-StandardLeaseSubsystemObservations([ValidateSet('with-logon','with-token')][string]$Launcher) {
+function Invoke-StandardLeaseSubsystemObservations([ValidateSet('with-logon','with-token','with-caller-linked')][string]$Launcher) {
   # Each selected executable observes its own untouched GUID. Both binaries in
   # each pair have byte-identical source apart from the crate subsystem header.
   # This experiment cannot satisfy the original strict console fixture below.
@@ -431,7 +550,7 @@ function Invoke-StandardLeaseSubsystemObservations([ValidateSet('with-logon','wi
       python (Join-Path $PSScriptRoot 'test-support-lease.py') --export-standard-windows-fixture $script:fixtureRoot --event $endpoint --export-standard-windows-subsystem-pair
       if ($LASTEXITCODE -ne 0) { throw 'Exact source console/Windows subsystem pair compilation failed.' }
       try {
-        [void](Invoke-StandardLeaseControl -Mode probe -Launcher $Launcher -Subsystem $subsystem -ObserveOnly -ObservationLabel "global-$subsystem-initial-untouched-absent" -UnnamedControl)
+        [void](Invoke-StandardLeaseControl -Mode probe -Launcher $Launcher -Subsystem $subsystem -ObserveOnly -ObservationLabel "global-$subsystem-initial-untouched-absent" -UnnamedControl:($Launcher -cne 'with-caller-linked'))
         [void](Invoke-StandardLeaseControl -Mode owner -Launcher $Launcher -Subsystem $subsystem -KeepAlive -ObserveOnly -ObservationLabel "global-$subsystem-explicit-source-owner")
         [void](Invoke-StandardLeaseControl -Mode probe -Launcher $Launcher -Subsystem $subsystem -ObserveOnly -ObservationLabel "global-$subsystem-fresh-probe-after-owner-request")
         [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses()
@@ -519,6 +638,9 @@ try {
   Invoke-StandardLeaseSubsystemObservations with-token
   Invoke-StandardLeaseNamespaceObservations with-logon
   Invoke-StandardLeaseNamespaceObservations with-token
+  # Supplemental current-caller UAC linked-token observations cannot satisfy
+  # the disposable pure standard-account acceptance that follows unchanged.
+  Invoke-StandardLeaseSubsystemObservations with-caller-linked
   $absent = 'ownerFailed=false;ownerError=none;kernel=absent;probeError=none;memoryActive=false'
   $active = 'ownerFailed=false;ownerError=none;kernel=active;probeError=none;memoryActive=false'
   $activeOwner = 'ownerFailed=false;ownerError=none;kernel=active;probeError=none;memoryActive=true'
