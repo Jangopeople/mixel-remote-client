@@ -10,8 +10,20 @@
 
 set -euo pipefail
 
+# Git Bash sed defaults to Windows text IO, which turns Python-written CRLF
+# into LF only on the first matching branding pass. Preserve the original
+# newline bytes so repeated shell/Python patches are byte-identical.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    sed() { command sed --binary "$@"; }
+    ;;
+esac
+
 RDREPO="${RDREPO:-./rustdesk}"
 BRANDING="${BRANDING:-./branding}"
+# The Python handoff patch must use the same checkout as the shell patches,
+# including when this script is invoked from a different working directory.
+export RDREPO
 
 if [[ ! -d "$RDREPO" ]]; then
   echo "❌ RustDesk source not found at $RDREPO" >&2
@@ -25,6 +37,16 @@ echo "→ Applying branding: $APP_NAME ($MACOS_BUNDLE_ID) on top of RustDesk $UP
 
 # Install the customer-consented support invite handoff in each fresh upstream checkout.
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-invite.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-secure-support.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-network.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-linux.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-signals.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-input.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-clipboard.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-windows-clipboard.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-video.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-wakelock.py"
 
 # 1. custom.txt — RustDesk's build-time branding override file.
 cp "$BRANDING/custom.txt" "$RDREPO/custom.txt"
@@ -84,7 +106,9 @@ if [[ -d "$(dirname "$MACOS_ICNS")" ]]; then
     iconutil -c icns "$TMP_ICONSET" -o "$MACOS_ICNS"
     echo "   wrote AppIcon.icns via iconutil"
   elif command -v magick >/dev/null 2>&1; then
-    magick "$BRANDING/icon-1024.png" "$MACOS_ICNS"
+    # The ICNS encoder embeds a PNG; exclude generated time metadata so
+    # repeated branding preserves the exact same asset bytes.
+    magick "$BRANDING/icon-1024.png" -define png:exclude-chunks=date,time "$MACOS_ICNS"
     echo "   wrote AppIcon.icns via magick (single-resolution fallback)"
   else
     echo "   ⚠ Neither iconutil nor magick available; AppIcon.icns not updated" >&2
@@ -336,6 +360,99 @@ if [[ -f "$WIN_MAIN" ]]; then
     -e "s|RustDesk \[|${APP_NAME} [|g" \
     "$WIN_MAIN"
   rm -f "$WIN_MAIN.bak"
+  python3 - "$WIN_MAIN" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+source = path.read_text(encoding="utf-8")
+original = source
+before = '    argument.erase(argument.find_last_not_of(" \\n\\r\\t"));'
+previous = '''    const auto last = argument.find_last_not_of(" \\n\\r\\t");
+    argument.erase(last == std::string::npos ? 0 : last + 1);'''
+after = '''    // Utf8FromUtf16 includes the command-line UTF-8 NUL sentinel.
+    // Remove it before trimming whitespace, preserving every argument byte.
+    if (!argument.empty() && argument.back() == '\\0') argument.pop_back();
+    const auto last = argument.find_last_not_of(" \\n\\r\\t");
+    argument.erase(last == std::string::npos ? 0 : last + 1);'''
+if after not in source:
+    matches = [candidate for candidate in (before, previous) if source.count(candidate) == 1]
+    if len(matches) != 1:
+        raise RuntimeError("Pinned Windows command-line normalization changed")
+    source = source.replace(matches[0], after, 1)
+# The portable QS launcher supplies a command flag, while uni_links_desktop
+# forwards argv[1] as a URI string. Sending that flag to the URI parser cannot
+# restore a minimized window. Deliver the exact raw intent to the existing GUI
+# so it owns the consent lease; protocol links and the whitelist keep dispatch.
+before = '''      if (!command_line_arguments.empty()) {
+        // Dispatch command line arguments
+        DispatchToUniLinksDesktop(hwnd);
+      } else {
+        // Not called with arguments, or just open the app shortcut on desktop.
+        // So we just show the main window instead.
+        ::ShowWindow(hwnd, SW_NORMAL);
+        ::SetForegroundWindow(hwnd);
+      }'''
+after = '''      const bool quick_support_reopen =
+          command_line_arguments.size() == 1 &&
+          command_line_arguments.front() == "--quick_support";
+      const bool attended_handoff_unavailable =
+          std::find(rust_args.begin(), rust_args.end(),
+                    "--mixel-attended-handoff-unavailable") != rust_args.end();
+      if (attended_handoff_unavailable) {
+        // Native IPC did not acknowledge the old service's memory guard.
+        // Keep this invocation's foreground lease and create its attended GUI.
+        allow_multiple_instances = true;
+      }
+      if (!command_line_arguments.empty() && !quick_support_reopen) {
+        // Protocol links are forwarded as URI strings by uni_links_desktop.
+        if (!attended_handoff_unavailable) DispatchToUniLinksDesktop(hwnd);
+      } else {
+        // A shortcut or QS double-click restores the same GUI.
+        ::ShowWindow(hwnd, SW_RESTORE);
+        ::SetForegroundWindow(hwnd);
+        if (quick_support_reopen && !attended_handoff_unavailable) {
+          // Match the locked uni_links_desktop UTF-8/NUL WM_COPYDATA framing.
+          // Its receiver delivers raw strings, so the existing GUI can acquire
+          // its own attended lease even if it started as an ordinary app.
+          const char attended_argument[] = "--quick_support";
+          COPYDATASTRUCT data = {};
+          data.dwData = UNI_LINKS_DESKTOP_MSG_ID;
+          data.cbData = static_cast<DWORD>(sizeof(attended_argument));
+          data.lpData = const_cast<char*>(attended_argument);
+          DWORD_PTR result = 0;
+          if (::SendMessageTimeoutW(hwnd, WM_COPYDATA, 0,
+                  reinterpret_cast<LPARAM>(&data), SMTO_BLOCK | SMTO_ABORTIFHUNG,
+                  5000, &result) == 0) {
+            // Keep this invocation's owned guard and create its attended GUI
+            // if the old window cannot receive the intent. Never exit here.
+            allow_multiple_instances = true;
+          }
+        }
+      }'''
+if after not in source:
+    if source.count(before) != 1:
+        raise RuntimeError("Pinned Windows existing-window dispatch changed")
+    source = source.replace(before, after, 1)
+# A failed bounded delivery falls through to the cold Flutter construction;
+# the new invocation already holds the native QuickSupport lifetime lease.
+before = '''      return EXIT_FAILURE;
+    }
+  }
+
+  // Attach to console'''
+after = '''      if (!allow_multiple_instances) return EXIT_FAILURE;
+    }
+  }
+
+  // Attach to console'''
+if after not in source:
+    if source.count(before) != 1:
+        raise RuntimeError("Pinned Windows existing-window exit changed")
+    source = source.replace(before, after, 1)
+if source != original:
+    path.write_text(source, encoding="utf-8")
+PY
   echo "   patched flutter/windows/runner/main.cpp fallback app_name"
 fi
 
@@ -352,6 +469,24 @@ for cmake in \
     echo "   patched $(basename "$(dirname "$cmake")")/CMakeLists.txt BINARY_NAME"
   fi
 done
+
+# Linux's native GTK window is visible before Dart finishes initialising. Its
+# icon lookup must use the icon installed by the branded Debian package.
+patch_string flutter/linux/my_application.cc \
+  'gtk_icon_theme_load_icon(theme, "rustdesk",' \
+  "gtk_icon_theme_load_icon(theme, \"$APP_NAME_KEBAB\","
+patch_string flutter/linux/my_application.cc \
+  'gtk_header_bar_set_title(header_bar, "rustdesk");' \
+  "gtk_header_bar_set_title(header_bar, \"$APP_DISPLAY_NAME\");"
+patch_string flutter/linux/my_application.cc \
+  'gtk_window_set_title(window, "rustdesk");' \
+  "gtk_window_set_title(window, \"$APP_DISPLAY_NAME\");"
+
+# Stock RustDesk and Mixel Remote can be installed on the same Linux computer.
+# A shared bus name sends a Mixel support invite to whichever app started first.
+patch_string src/server/dbus.rs \
+  'const DBUS_NAME: &str = "org.rustdesk.rustdesk";' \
+  "const DBUS_NAME: &str = \"$MACOS_BUNDLE_ID\";"
 
 # macOS URL scheme (deep links) — drop com.carriez.rustdesk / rustdesk://.
 MAC_PLIST="$RDREPO/flutter/macos/Runner/Info.plist"
@@ -421,6 +556,12 @@ for debfile in \
   fi
 done
 
+# Some older installs contain only the /etc override, without both /usr/lib
+# copies. With set -e, plain rm aborts the upgrade before installing the service.
+patch_string res/DEBIAN/postinst \
+  "rm /etc/systemd/system/${APP_NAME_KEBAB}.service /usr/lib/systemd/system/${APP_NAME_KEBAB}.service /usr/lib/systemd/user/${APP_NAME_KEBAB}.service" \
+  "rm -f /etc/systemd/system/${APP_NAME_KEBAB}.service /usr/lib/systemd/system/${APP_NAME_KEBAB}.service /usr/lib/systemd/user/${APP_NAME_KEBAB}.service"
+
 # Rename packaging assets so build.py / postinst agree on filenames.
 if [[ -f "$SERVICE" ]]; then
   cp "$SERVICE" "$RDREPO/res/${APP_NAME_KEBAB}.service"
@@ -464,9 +605,10 @@ if [[ -f "$BUILDPY" ]]; then
   echo "   patched build.py packaging identity"
 
   # Support target-specific paths on macOS cross-compilation when CARGO_BUILD_TARGET is set
-  export BUILDPY
+  export BUILDPY APP_NAME_KEBAB
   python3 << 'EOF'
 import os
+import re
 build_py = os.environ.get("BUILDPY")
 with open(build_py, 'r', encoding='utf-8') as f:
     code = f.read()
@@ -481,9 +623,28 @@ new_dylib = '''_target = os.environ.get("CARGO_BUILD_TARGET")
         shutil.copy2(f"{_prefix}/liblibrustdesk.dylib", "target/release/librustdesk.dylib")'''
 
 code = code.replace(old_dylib, new_dylib)
+
+# Flutter dynamically opens EGL/GLES in addition to GTK's GL context. A minimal
+# desktop can otherwise launch a black window. Mesa's DRI driver is an explicit
+# dependency because libegl-mesa0 does not depend on the software renderer.
+old_graphics = 'Depends: libgtk-3-0, libxcb-randr0,'
+new_graphics = 'Depends: libgtk-3-0, libegl1, libgl1, libgles2, libgl1-mesa-dri, libxcb-randr0,'
+if new_graphics not in code:
+    if code.count(old_graphics) != 1:
+        raise RuntimeError('Pinned upstream Debian graphics dependencies changed')
+    code = code.replace(old_graphics, new_graphics, 1)
 code = code.replace(
     "'cp -rf ../target/release/service ",
     "f'cp -rf ../target/{os.environ.get(\"CARGO_BUILD_TARGET\") + \"/\" if os.environ.get(\"CARGO_BUILD_TARGET\") else \"\"}release/service "
+)
+
+# The upstream scalable icon is RustDesk's logo. Let GTK scale the already
+# installed Mixel PNG instead of shipping the upstream vector under our name.
+code = re.sub(
+    r"(?m)^([ \t]+)system2\(\n[ \t]+'cp (?:\.\./)?res/scalable\.svg "
+    r"tmpdeb/usr/share/icons/hicolor/scalable/apps/" + re.escape(os.environ["APP_NAME_KEBAB"]) + r"\.svg'\)\n",
+    lambda match: match[1] + "# The branded PNG above supplies the desktop icon at every size.\n",
+    code,
 )
 
 with open(build_py, 'w', encoding='utf-8') as f:
@@ -729,6 +890,10 @@ patch_string flutter/linux/main.cc \
 patch_string flutter/linux/main.cc \
   'Failed to load \"librustdesk.so\"' \
   "Failed to load \\\"${LIBNAME}.so\\\""
+# Arch packaging strips the bundled library after CMake has renamed it.
+patch_string build.py \
+  'strip {flutter_build_dir}/lib/librustdesk.so' \
+  "strip {flutter_build_dir}/lib/${LIBNAME}.so"
 
 # Guards — a missed rename ships a rustdesk-named core or, worse, a runtime
 # that can't find its library. Fail loudly at branding time.
@@ -792,5 +957,38 @@ if [[ "$leak" -ne 0 ]]; then
   exit 1
 fi
 echo "   leak check passed"
+
+# Positive checks catch a missing file or changed upstream expression. Merely
+# checking for absence of the old name can pass even when the app cannot load.
+require_string () {
+  local file="$1" expected="$2"
+  if [[ ! -f "$RDREPO/$file" ]] || ! grep -qF -- "$expected" "$RDREPO/$file"; then
+    echo "❌ Required runtime branding missing in $file: $expected" >&2
+    exit 1
+  fi
+}
+require_string flutter/windows/CMakeLists.txt "COMPONENT Runtime RENAME ${LIBNAME}.dll)"
+require_string flutter/windows/runner/main.cpp "LoadLibraryA(\"${LIBNAME}.dll\")"
+require_string flutter/windows/runner/main.cpp "command_line_arguments.front() == \"--quick_support\";"
+require_string flutter/windows/runner/main.cpp "::ShowWindow(hwnd, SW_RESTORE);"
+require_string flutter/windows/runner/main.cpp "if (!allow_multiple_instances) return EXIT_FAILURE;"
+require_string flutter/linux/CMakeLists.txt "COMPONENT Runtime RENAME ${LIBNAME}.so)"
+require_string flutter/linux/main.cc "#define RUSTDESK_LIB_PATH \"${LIBNAME}.so\""
+require_string flutter/lib/models/native_model.dart "DynamicLibrary.open('${LIBNAME}.dll')"
+require_string flutter/lib/models/native_model.dart "DynamicLibrary.open('${LIBNAME}.so')"
+require_string flutter/linux/my_application.cc "gtk_icon_theme_load_icon(theme, \"$APP_NAME_KEBAB\","
+require_string flutter/linux/my_application.cc "gtk_header_bar_set_title(header_bar, \"$APP_DISPLAY_NAME\");"
+require_string flutter/linux/my_application.cc "gtk_window_set_title(window, \"$APP_DISPLAY_NAME\");"
+require_string src/server/dbus.rs "const DBUS_NAME: &str = \"$MACOS_BUNDLE_ID\";"
+require_string res/rustdesk-link.desktop "MimeType=x-scheme-handler/$APP_NAME_KEBAB;"
+require_string res/rustdesk-link.desktop "Exec=$APP_NAME_KEBAB %u"
+require_string res/DEBIAN/postinst "rm -f /etc/systemd/system/${APP_NAME_KEBAB}.service /usr/lib/systemd/system/${APP_NAME_KEBAB}.service /usr/lib/systemd/user/${APP_NAME_KEBAB}.service"
+require_string build.py "Depends: libgtk-3-0, libegl1, libgl1, libgles2, libgl1-mesa-dri, libxcb-randr0,"
+require_string flutter/macos/Runner/Info.plist "<string>$APP_NAME_KEBAB</string>"
+require_string flutter/lib/common.dart "registerProtocol('$APP_NAME_KEBAB');"
+require_string libs/hbb_common/src/config.rs "(\"custom-rendezvous-server\".to_owned(), \"${RENDEZVOUS_SERVER}\".to_owned())"
+require_string libs/hbb_common/src/config.rs "(\"relay-server\".to_owned(), \"${RELAY_SERVER}\".to_owned())"
+require_string libs/hbb_common/src/config.rs "(\"key\".to_owned(), \"${RS_PUB_KEY}\".to_owned())"
+echo "   native loaders, protocol handlers, Linux app identity and relay defaults verified"
 
 echo "✓ Branding applied — product identity is $APP_NAME only."

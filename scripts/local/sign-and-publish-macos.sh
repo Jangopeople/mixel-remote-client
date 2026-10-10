@@ -22,6 +22,7 @@ set -euo pipefail
 
 TEAM_ID="5277F8NDH4"
 NOTARY_PROFILE="mixel-notary"
+NOTARY_HELPER="$(cd "$(dirname "$0")/.." && pwd)/notarize-macos.py"
 R2_BUCKET="mixel-remote-binaries"
 
 DMG_IN="${1:-}"
@@ -36,7 +37,7 @@ APP_NAME="Mixel-Remote.app"
 echo "→ workdir: $WORK"
 
 # 1. Verify tools
-for tool in create-dmg xcrun codesign hdiutil; do
+for tool in create-dmg xcrun codesign hdiutil python3; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "❌ missing tool: $tool" >&2
     [[ "$tool" == "create-dmg" ]] && echo "   install with: brew install create-dmg" >&2
@@ -180,9 +181,9 @@ codesign --verify --deep --strict --verbose=2 "$WORK/$APP_NAME"
 echo "→ submitting .app to Apple notarization (1-5 min)"
 APP_ZIP="$WORK/${APP_NAME%.app}.zip"
 ditto -c -k --keepParent "$WORK/$APP_NAME" "$APP_ZIP"
-xcrun notarytool submit "$APP_ZIP" \
+python3 "$NOTARY_HELPER" "$APP_ZIP" \
   --keychain-profile "$NOTARY_PROFILE" \
-  --wait
+  --log-dir "$WORK/notary-app"
 rm -f "$APP_ZIP"
 
 # 7c. Staple the .app — embeds the ticket into the bundle so macOS can
@@ -214,9 +215,9 @@ codesign \
 
 # 10. Notarize the DMG separately (different artifact, different hash).
 echo "→ submitting DMG to Apple notarization (1-5 min)"
-xcrun notarytool submit "$DMG_OUT" \
+python3 "$NOTARY_HELPER" "$DMG_OUT" \
   --keychain-profile "$NOTARY_PROFILE" \
-  --wait
+  --log-dir "$WORK/notary-dmg"
 
 # 11. Staple the DMG (defensive — makes mounted-DMG flow work offline too).
 echo "→ stapling DMG"
