@@ -339,6 +339,8 @@ jobs:
     timeout-minutes: 180
     env:
       UPSTREAM_VERSION: ${{ needs.config.outputs.upstream_version }}
+      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.job.arch == 'aarch64' && '12.3' || '10.14' }}
+      VCPKG_OVERLAY_TRIPLETS: ${{ github.workspace }}/.github/vcpkg-triplets
       APPLE_CERT_P12_BASE64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
       APPLE_CERT_P12_PASSWORD: ${{ secrets.APPLE_CERT_P12_PASSWORD }}
       APPLE_NOTARY_USER:     ${{ secrets.APPLE_NOTARY_USER }}
@@ -376,7 +378,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ${{ github.workspace }}/.vcpkg-binary-cache
-          key: mixel-vcpkg-v1-macos14-${{ matrix.job.arch }}-${{ env.VCPKG_COMMIT_ID }}
+          key: mixel-vcpkg-v2-macos14-${{ matrix.job.arch }}-${{ env.MACOSX_DEPLOYMENT_TARGET }}-${{ hashFiles('.github/vcpkg-triplets/*.cmake') }}-${{ env.VCPKG_COMMIT_ID }}
 
       - name: Setup vcpkg + cache
         uses: lukka/run-vcpkg@v11
@@ -388,13 +390,23 @@ jobs:
         run: |
           triplet=${{ matrix.job.arch == 'aarch64' && 'arm64-osx' || 'x64-osx' }}
           for attempt in 1 2 3; do
-            if "$VCPKG_ROOT/vcpkg" install --triplet "$triplet" libvpx libyuv opus aom libjpeg-turbo; then
+            if "$VCPKG_ROOT/vcpkg" install --overlay-triplets="$VCPKG_OVERLAY_TRIPLETS" --triplet "$triplet" libvpx libyuv opus aom libjpeg-turbo; then
               break
             fi
             if [[ "$attempt" == 3 ]]; then exit 1; fi
             echo "Pinned dependency fetch/build failed; retrying attempt $((attempt + 1))/3"
             sleep "$((attempt * 10))"
           done
+
+      - name: Verify every native codec architecture and minimum
+        run: |
+          python3 scripts/test-macos-native-minimum.py
+          triplet=${{ matrix.job.arch == 'aarch64' && 'arm64-osx' || 'x64-osx' }}
+          arch=${{ matrix.job.arch == 'aarch64' && 'arm64' || 'x86_64' }}
+          python3 scripts/verify-macos-native-minimum.py \
+            --lib-dir "$VCPKG_ROOT/installed/$triplet/lib" \
+            --arch "$arch" --minimum "$MACOSX_DEPLOYMENT_TARGET" \
+            --output "native-codec-proof/${{ matrix.job.arch }}.json"
 
       - name: Fetch upstream RustDesk
         run: |
@@ -405,7 +417,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: rustdesk
-          prefix-key: macos-14-${{ matrix.job.arch }}
+          prefix-key: macos-14-v2-${{ matrix.job.arch }}-${{ env.MACOSX_DEPLOYMENT_TARGET }}-${{ hashFiles('.github/vcpkg-triplets/*.cmake') }}
 
       - name: Apply Mixel-Remote branding
         run: ./scripts/apply-branding.sh
@@ -432,6 +444,7 @@ jobs:
         env:
           VCPKG_ROOT: ${{ github.workspace }}/vcpkg
           RDREPO: ./rustdesk
+          MACOS_RUNTIME_LINK_TARGET: ${{ matrix.job.target }}
         run: |
           python3 scripts/test-support-invite.py
           python3 scripts/test-generated-support-paths.py
@@ -568,6 +581,13 @@ jobs:
             echo "⚠ Built unsigned DMG (no APPLE_CERT_P12_BASE64 secret)"
           fi
           ls -la ../dist/
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: macos-native-codecs-${{ matrix.job.arch }}
+          path: native-codec-proof/
+          if-no-files-found: warn
 
       - uses: actions/upload-artifact@v6
         if: always()

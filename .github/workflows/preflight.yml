@@ -18,6 +18,7 @@ jobs:
         run: |
           python3 scripts/test-release-pipeline.py
           python3 scripts/test-notarize-macos.py
+          python3 scripts/test-macos-native-minimum.py
           python3 scripts/test-sdk-discovery.py
           python3 scripts/test-support-session-fixture.py
           python3 scripts/test-support-video-sampling.py
@@ -100,4 +101,6 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Exercise native macOS URL activation and window probe self-tests
-        run: python3 scripts/test-support-launch-macos.py --self-test
+        run: |
+          python3 scripts/test-support-launch-macos.py --self-test
+          python3 scripts/test-macos-native-minimum.py

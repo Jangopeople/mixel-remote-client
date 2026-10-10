@@ -7,6 +7,25 @@ import re
 
 SOURCE = 'src/platform/macos.mm'
 ORIGINAL_SHA256 = 'ca32cb7fd33b28faa4b452a2acc7787ff7571e7dcc756b67d2b60486a34a6bbc'
+BUILD_SOURCE = 'build.rs'
+ORIGINAL_BUILD_SHA256 = '8ef5daa629f04d6d330d1080b9b5444281c538161118cc3abb1cf94f11bf25bd'
+OLD_RUNTIME = '    b.flag("-std=c++17").file(file).compile("macos");\n'
+NEW_RUNTIME = OLD_RUNTIME + '''    // Rust's final link omits Clang's default availability runtime. Resolve
+    // the archive through the same target compiler instead of an Xcode path.
+    let output = b.get_compiler().to_command()
+        .arg("-print-file-name=libclang_rt.osx.a")
+        .output().expect("Cannot query the Mac availability runtime");
+    assert!(output.status.success(), "Mac availability runtime lookup failed");
+    let archive = std::path::PathBuf::from(
+        String::from_utf8(output.stdout).expect("Non-UTF8 Mac runtime path").trim()
+    );
+    assert!(archive.is_absolute() && archive.is_file() &&
+        archive.file_name() == Some(std::ffi::OsStr::new("libclang_rt.osx.a")),
+        "Target compiler did not resolve its Mac availability runtime");
+    println!("cargo:rustc-link-search=native={}",
+        archive.parent().unwrap().display());
+    println!("cargo:rustc-link-lib=static=clang_rt.osx");
+'''
 OLD_CAPTURE = '''    bool res = CGPreflightScreenCaptureAccess();
     if (!res && prompt) {
         CGRequestScreenCaptureAccess();
@@ -42,6 +61,15 @@ def patch_permissions(text):
     return original.replace(OLD_CAPTURE, NEW_CAPTURE, 1).replace(OLD_INPUT, NEW_INPUT, 1)
 
 
+def patch_runtime(text):
+    original = text.replace(NEW_RUNTIME, OLD_RUNTIME, 1) if text.count(NEW_RUNTIME) == 1 else text
+    if hashlib.sha256(original.encode()).hexdigest() != ORIGINAL_BUILD_SHA256:
+        raise RuntimeError('Pinned 1.4.6 Mac build script changed')
+    if original.count(OLD_RUNTIME) != 1:
+        raise RuntimeError('Pinned Mac compiler anchor changed')
+    return original.replace(OLD_RUNTIME, NEW_RUNTIME, 1)
+
+
 def configure_target(build, project, pods, info, architecture):
     targets = {'aarch64': '12.3', 'x86_64': '10.14'}
     if architecture not in targets:
@@ -68,7 +96,10 @@ def apply(repo, architecture=None):
     package = re.search(r'(?ms)^\[package\]\s*\n(.*?)(?=^\[|\Z)', manifest)
     if re.findall(r'^version\s*=\s*"([^"]+)"\s*$', package.group(1) if package else '', re.M) != ['1.4.6']:
         raise RuntimeError('Mac corrections require pinned upstream 1.4.6')
-    changes = {repo / SOURCE: patch_permissions((repo / SOURCE).read_text())}
+    changes = {
+        repo / SOURCE: patch_permissions((repo / SOURCE).read_text()),
+        repo / BUILD_SOURCE: patch_runtime((repo / BUILD_SOURCE).read_text()),
+    }
     if architecture is not None:
         paths = ['build.py', 'flutter/macos/Runner.xcodeproj/project.pbxproj', 'flutter/macos/Podfile']
         texts = [(repo / p).read_text() for p in paths]
