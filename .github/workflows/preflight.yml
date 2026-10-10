@@ -13,7 +13,7 @@ jobs:
   release-pipeline:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Run release staging and configuration regression tests
         run: |
           python3 scripts/test-release-pipeline.py
@@ -32,7 +32,7 @@ jobs:
   windows-packaging:
     runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Exercise Windows payload preparation and IPC response validation
         shell: pwsh
         run: ./scripts/test-windows-pipeline.ps1
@@ -40,7 +40,7 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Exercise bounded gateway sockets and the actual pinned hbbs and hbbr
         shell: bash
         run: |
@@ -48,7 +48,7 @@ jobs:
           mkdir -p gateway-proof
           python3 scripts/test-relay-ws-bridge-docker.py 2>&1 | tee gateway-proof/registration.log
           python3 scripts/test-relay-ws-bridge-deployment.py --docker 2>&1 | tee gateway-proof/deployment.log
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: https-registration-gateway-proof
@@ -58,7 +58,7 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Resolve the pinned upstream version
         id: config
         run: python3 scripts/release-artifacts.py config
@@ -98,6 +98,6 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Exercise native macOS URL activation and window probe self-tests
         run: python3 scripts/test-support-launch-macos.py --self-test
