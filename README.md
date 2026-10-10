@@ -101,7 +101,13 @@ from Mixel’s signed downloads or the platform store’s normal update mechanis
   evidence is retained even when Apple's service times out.
 - Apple Silicon build and bundle metadata require macOS 12.3, matching the native
   core and service. Intel retains macOS 10.14, with explicit availability guards
-  around the newer permission APIs. Pinned source validation rejects inconsistent
+  around the newer permission APIs. The Mac native build explicitly links the
+  target compiler's availability runtime, including the pinned Rust1.81 final link.
+  Same-name vcpkg overlay triplets set codec deployment targets before compilation;
+  separate cache versions prevent reuse of newer-OS codec objects. Every native
+  archive member must match its CPU architecture, and every encoded macOS minimum
+  must fit the app's advertised minimum. Members without encoded OS requirements
+  are recorded explicitly. Pinned source validation rejects inconsistent
   architecture targets and upstream drift before modifying the checkout.
 - Linux produces a branded Debian package and verifies its actual cold/warm
   customer launch under an isolated X11/DBus desktop.
@@ -135,6 +141,7 @@ dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.da
 dart scripts/test-support-invite.dart
 python3 scripts/test-release-pipeline.py
 python3 scripts/test-notarize-macos.py
+python3 scripts/test-macos-native-minimum.py
 python3 scripts/test-branding.py
 python3 scripts/test-support-launch-linux.py --self-test
 python3 scripts/test-support-session-fixture.py
@@ -146,7 +153,10 @@ actionlint
 ```
 
 Set `RDREPO` for another upstream checkout and `DART_BIN` for a Dart executable
-outside PATH. The video control test needs actual libaom headers from the pinned
+outside PATH. On macOS, `test-support-macos.py` requires the build's Rust1.81
+compiler; set `MAC_RUSTC_BIN` if it is outside PATH. `MACOS_RUNTIME_LINK_TARGET`
+selects `x86_64-apple-darwin` or `aarch64-apple-darwin` for its actual final-link
+regression. The video control test needs actual libaom headers from the pinned
 vcpkg installation or `AOM_INCLUDE_DIR`; it executes the generated Rust caller
 against a C variadic receiver and rejects the original floating-point tile argument.
 The real desktop smoke needs its target OS and compiled bundle;

@@ -21,13 +21,22 @@ established by these scoped tests.
 
 The last completed all-platform application baseline is
 `7f060ab92e6c9bcfa726e9d316e73605627b721e`. The newer application source
-`5df042a8d88bb861da4979dfcc4735e67b1124f3` is being built in
+`5df042a8d88bb861da4979dfcc4735e67b1124f3` was built in
 [38065522873](https://github.com/Jangopeople/mixel-remote-client/actions/runs/38065522873)
-for Linux and both Mac architectures, with publication disabled. It fixes optional
-Linux keep-awake backend failures and bounded asynchronous request coalescing,
-Mac permission API availability guards, and the Apple Silicon minimum-version
-metadata. Source tests and independent review pass; these fixes are not yet
-qualified in newly built application binaries. Product corrections also include the Linux warm DBus
+for Linux and both Mac architectures, with publication disabled. The overall run
+**failed**: Intel's final Rust link omitted Clang's availability runtime; the
+Linux job's embedded HTTPS recovery test encountered an outgoing-session ordering
+race. The ARM packaging/signing/notarization/launch job passed. Optional Linux
+keep-awake containment and bounded asynchronous request coalescing are qualified
+in the actual new DEB; four-mode artifact-only run `38067179820` passed independently.
+The corrected Linux ordering is committed as `91d95e9`, with 48 regression tests;
+exact-DEB native rerun `38068710521` completed success with independent all-four-mode
+replay of 432 actual API-bound members. The Mac runtime correction and
+explicit codec deployment targets are committed as `bc346be` after actual pinned
+Rust1.81/cc1.2.13 link reproduction, native ARM/Intel archive controls and independent
+review. Fresh Mac-only build `38069369883` is queued from exact
+`bc346beb7498cc3017b4c6029c29b9038f3ed2a0`, with publication disabled.
+Fresh packaged Mac verification remains required. Product corrections also include the Linux warm DBus
 consent/handoff fix `235273c`, basename-only Windows support aliases `d6728bd`,
 Windows UTF-16 terminal-NUL normalization `481215f`, and the unsigned AV1 variadic
 argument correction `f0e41de`. The existing larger pass covers bounded/redacted
@@ -159,6 +168,54 @@ exited code8 before its controlled heap exception. No product was launched.
 Cleanup passed. This does not attribute the original debugger-free heap crash.
 Exception stack return addresses are not exception instruction addresses; do not
 infer an address-specific continuation policy from a stack symbol alone.
+
+Diagnostic `63783ef786726203dd6d4c4f2ba1e83f84763400` narrows normalization
+of the debugger-only CloseHandle notification to the owned PID/code8/first chance,
+nonzero/nonwrapping target-resolved dispatcher and CloseHandle bases, exact offsets,
+and consistent event/exception/frame-return addresses. A separate continuable
+flags0 genuine invalid exception must remain fatal with no after-raise sentinel.
+All six source-extracted root/independent control groups passed unchanged hashes.
+Native run `38068070084` at that exact source finished **failure** on both OS
+versions, but both calibrations passed: the genuine code8 negative stayed fatal,
+NULL and handle1 returned FALSE/error6 after the exact mapped debugger notification,
+and an independent owned synthetic heap yielded fourteen frames. Actual Windows2022
+product PID3232 then produced an attributed heap `c0000374` with eighteen frames
+behind `RtlFreeHeap` and the native core. Export-nearest `free_zero_copy_buffer_f64`
+labels have huge offsets and do not identify the actual functions. Windows2025
+PID3932 failed the visible-window gate without a heap capture; its bounded owned
+query reported code `80000003`, whose origin is unestablished. Cleanup passed.
+The exact signed core is stripped and has no qualified RSDS/PDB identity; a
+same-source diagnostic symbol build is being prepared. Default debugger-free
+ordinary launch and the 95-second customer gate remain unchanged and unpassed.
+
+Independent old-core `.pdata`/IAT/string disassembly and the exact ordinary-user
+log narrow the heap path to failed Windows clipboard-file context initialization.
+`CliprdrClientContext::create` returns Err after C init already uninitializes the
+context; dropping its error Box invokes C uninit a second time. Exact source-
+extracted C init/uninit/format-map functions reproduce `AddressSanitizer:
+heap-use-after-free` when CreateMutex fails then the Rust error-Drop contract runs.
+The original failure is preserved under `clipboard-double-cleanup-reproduction`.
+A strict pinned ownership/idempotence correction is being implemented; it is not
+committed or qualified in a new Windows release yet. Matching symbol-build and
+final both-OS debugger-free outer-QuickSupport verification remain necessary.
+
+New Linux DEB SHA256 is
+`af63e2b6f8ef320d42e6b5ee305bed04fe5e7808490797b863f39fdd5eadc6d8`.
+Independent four-mode replay of `38067179820` binds all three actual GitHub ZIP
+API digests and 424 members before checking customer Accept, current decoded video,
+input, clipboard/files, process ownership, relay restart and new registration.
+The saved-password case preserves GUI1075, warm sender1504 exit0, 22 auth0 samples
+through 12.563 seconds, actual Accept, changing current video and unchanged access
+preferences. All eight app stdout logs have zero unhandled/ScreenSaver errors and
+seventeen contained generic keep-awake unavailable notices. The application build's
+failed status remains recorded separately; this scoped proof does not qualify Windows.
+The independently frozen review manifest is
+`independent-linux-runtime-38067179820/independent-four-mode-review-manifest.json`
+(SHA256 `8ac999fb78bb3b65a574dfac241826f6794f751f2dece36b5aee38586b855a2d`).
+
+Audited Node24 checkout/artifact action updates are committed as `d55c7c7`.
+Exact preflight `38066727820` passed all five jobs with no task-owned Node20
+warning. The centrally managed Sentinel workflow was left unchanged.
 
 New preflight runs `38065498067` at application `5df042a` and `38065579787` at
 diagnostic `b828ac6` both passed all five jobs. Their exact metadata and passing
