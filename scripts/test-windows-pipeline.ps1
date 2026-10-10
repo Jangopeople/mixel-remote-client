@@ -64,7 +64,8 @@ if ($env:GITHUB_ACTIONS -ceq 'true' -and [MixelOrdinaryTokenFixture]::Elevated($
   try {
     $negativeAccount = New-LocalUser -Name $ownedUser -NoPassword -Description 'Owned disposable Mixel QuickSupport runtime fixture'
     $negativeSid = $negativeAccount.SID.Value
-  } catch [System.Management.Automation.ParameterBindingValidationException] {
+  } catch [System.Management.Automation.ParameterBindingException] {
+    if (-not $_.Exception.Message.Contains('Description') -or -not $_.Exception.Message.Contains('48')) { throw }
     $descriptionRejected = $true
   } finally {
     if ($negativeSid) { Remove-LocalUser -SID ([Security.Principal.SecurityIdentifier]::new($negativeSid)) }
@@ -98,6 +99,11 @@ foreach ($required in @(
     'Assert-OwnedIncomingHealth $warmHealth',
     'Assert-OwnedIncomingHealth $currentHealth',
     'Assert-OwnedIncomingHealth $finalHealth',
+    "-ArgumentList '--quick_support'",
+    'actual customer QS portable launcher',
+    'exact signed compiled QS argument (diagnostic)',
+    '(-not $Portable -and -not $CompiledQuickSupportDiagnostic)',
+    'Compiled diagnostic executable differs from the retained signed payload entry.',
     'if ($ownedSid) { try { Remove-LocalUser -SID',
     '$primaryFailure = $_',
     'if ($primaryFailure) { Write-Host',

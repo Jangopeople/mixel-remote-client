@@ -3,9 +3,17 @@ param(
   [switch]$Portable,
   [switch]$QuickSupport,
   [switch]$OrdinaryThenQuickSupport,
+  [switch]$CompiledQuickSupportDiagnostic,
   [string]$ExpectedPayload
 )
 $ErrorActionPreference = 'Stop'
+if ($CompiledQuickSupportDiagnostic -and
+    ($Portable -or -not $QuickSupport -or -not $OrdinaryThenQuickSupport -or -not $ExpectedPayload)) {
+  throw 'Compiled QS diagnosis requires the ordinary-to-QS scenario and exact signed payload, without a portable outer launcher.'
+}
+if ($QuickSupport -and -not $Portable -and -not $CompiledQuickSupportDiagnostic) {
+  throw 'Customer QuickSupport proof requires the actual portable launcher; compiled diagnosis must be explicitly selected.'
+}
 . (Join-Path $PSScriptRoot 'support-runtime-probe-windows.ps1')
 
 if (-not ('MixelSupportWindowTest' -as [type])) { Add-Type @'
@@ -163,6 +171,12 @@ public static class MixelOrdinaryTokenFixture {
 '@ }
 
 $executablePath = (Resolve-Path $Executable).Path
+if ($CompiledQuickSupportDiagnostic) {
+  $expectedCompiledEntry = Join-Path (Resolve-Path $ExpectedPayload).Path 'Mixel-Remote.exe'
+  if ((Get-FileHash $executablePath -Algorithm SHA256).Hash -cne (Get-FileHash $expectedCompiledEntry -Algorithm SHA256).Hash) {
+    throw 'Compiled diagnostic executable differs from the retained signed payload entry.'
+  }
+}
 $runtimePath = $executablePath
 if ($Portable) {
   if (-not $ExpectedPayload) { throw 'Portable runtime verification requires the expected signed payload.' }
@@ -181,10 +195,16 @@ $desktopAccess = $null
 $baselineIncomingPid = $null
 $fixtureStage = 'customer launch'
 $primaryFailure = $null
-$launchScenario = if ($QuickSupport) { 'QuickSupport double-click' } else { 'support URI launch' }
+$launchScenario = if ($OrdinaryThenQuickSupport) { 'ordinary GUI to QuickSupport handoff' } elseif ($QuickSupport) { 'QuickSupport double-click' } else { 'support URI launch' }
 
 function Start-CustomerApp {
-  if ($QuickSupport) { return Start-Process -FilePath $executablePath -PassThru }
+  if ($QuickSupport) {
+    if ($Portable) { return Start-Process -FilePath $executablePath -PassThru }
+    # Artifact-only diagnosis uses the exact retained signed desktop payload
+    # with the same native argument the customer QS portable launcher emits.
+    # Final installer verification still executes the actual portable launcher.
+    return Start-Process -FilePath $executablePath -ArgumentList '--quick_support' -PassThru
+  }
   return Start-Process -FilePath $executablePath -ArgumentList $uri -PassThru
 }
 
@@ -252,8 +272,8 @@ function Assert-OwnedIncomingHealth($Health) {
 
 try {
   if ($OrdinaryThenQuickSupport) {
-    if (-not $QuickSupport -or -not $Portable -or -not $ExpectedPayload) {
-      throw 'Ordinary-to-QuickSupport proof requires the actual portable QS launcher and exact signed payload.'
+    if (-not $QuickSupport -or -not $ExpectedPayload -or (-not $Portable -and -not $CompiledQuickSupportDiagnostic)) {
+      throw 'Ordinary-to-QuickSupport proof requires the actual portable QS launcher and exact signed payload, or explicit compiled-only diagnosis.'
     }
     $ordinaryRoot = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) ('mixel-ordinary-qs-' + [Guid]::NewGuid().ToString('N'))
     $fixtureStage = 'copy signed ordinary payload'
@@ -325,7 +345,7 @@ try {
     if ($initialHealth.attendedProof -cne '' -or [MixelOrdinaryTokenFixture]::OwnsLease($main.Id)) {
       throw 'Ordinary-to-QS positive control is already guarded; refusing a manufactured transition proof.'
     }
-    Write-Host 'PASS: actual ordinary non-elevated signed GUI starts genuinely unguarded, with empty read-only IPC guard and no foreground lease.'
+    Write-Host "PASS: actual ordinary non-elevated signed GUI starts genuinely unguarded, with empty read-only IPC guard and no foreground lease; foregroundPid=$($main.Id), incomingPipePid=$($initialHealth.incomingPid), hwnd=$($window.ToInt64())."
   } else {
     $coldHealth = Wait-MixelSupportRuntimeHealth "Cold $launchScenario" -RequireOnline
     Assert-OwnedIncomingHealth $coldHealth
@@ -361,7 +381,8 @@ try {
     $finalHealth = Get-MixelSupportRuntimeHealth
     Assert-OwnedIncomingHealth $finalHealth
     if (-not $finalHealth.attendedReady -or -not [MixelOrdinaryTokenFixture]::OwnsLease($main.Id)) { throw 'Foreground consent did not outlive the 90s memory deadline.' }
-    Write-Host "PASS: genuine ordinary GUI -> actual QS restores the same PID/HWND, and that foreground PID owns the kernel consent lease with v2 readiness after $([int]$started.Elapsed.TotalSeconds)s beyond the 90s memory deadline; transient launcher exited."
+    $handoffKind = if ($Portable) { 'actual customer QS portable launcher' } else { 'exact signed compiled QS argument (diagnostic)' }
+    Write-Host "PASS: genuine ordinary GUI -> $handoffKind restores the same PID/HWND, and that foreground PID owns the kernel consent lease with v2 readiness after $([int]$started.Elapsed.TotalSeconds)s beyond the 90s memory deadline; transient launcher exited; foregroundPid=$($main.Id), incomingPipePid=$($finalHealth.incomingPid), hwnd=$($originalWindow.ToInt64())."
   }
 
   foreach ($logRoot in @(

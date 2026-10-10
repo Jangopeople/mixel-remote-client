@@ -893,6 +893,13 @@ jobs:
         shell: pwsh
         run: |
           ./scripts/test-support-launch-windows.ps1 -Executable runtime-client/Mixel-Remote.exe
+      - name: Diagnose signed compiled ordinary-to-QuickSupport ownership
+        shell: pwsh
+        run: |
+          # The retained artifact is the exact signed compiled payload. Pass the
+          # native QS argument its portable launcher emits; the full build still
+          # requires the actual signed customer QS outer launcher to pass 95s.
+          ./scripts/test-support-launch-windows.ps1 -Executable runtime-client/Mixel-Remote.exe -QuickSupport -ExpectedPayload runtime-client -OrdinaryThenQuickSupport -CompiledQuickSupportDiagnostic
       - name: Save synthetic runtime diagnostics
         if: always()
         shell: pwsh
