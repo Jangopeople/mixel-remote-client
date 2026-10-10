@@ -50,6 +50,30 @@ try {
 if ([MixelOrdinaryTokenFixture]::OwnsLease($PID)) { throw 'Closed event handle remains attributed to its process.' }
 Write-Host 'PASS: exact native runtime fixture observes the current PID owning the real SYNCHRONIZE-only global v2 event, then observes its handle release; unrelated event names fail closed.'
 
+# Exercise the exact disposable-account bootstrap before spending time on a
+# full signed build. The original runtime failure occurred before its GUI wait
+# and was hidden by deleting a name whose account creation had failed.
+if ($env:GITHUB_ACTIONS -ceq 'true' -and [MixelOrdinaryTokenFixture]::Elevated($PID)) {
+  $accountStart = $launchSource.IndexOf('$random = [byte[]]::new(24)')
+  $accountEnd = $launchSource.IndexOf("`$fixtureStage = 'add owned standard account to users'", $accountStart)
+  if ($accountStart -lt 0 -or $accountEnd -le $accountStart) { throw 'Actual owned account bootstrap is missing.' }
+  $ownedUser = 'mixelqs' + [Guid]::NewGuid().ToString('N').Substring(0, 10)
+  $ownedSid = $null
+  try {
+    . ([scriptblock]::Create($launchSource.Substring($accountStart, $accountEnd - $accountStart)))
+    if (-not $ownedSid -or (Get-LocalUser -SID ([Security.Principal.SecurityIdentifier]::new($ownedSid))).Name -cne $ownedUser) {
+      throw 'Actual owned standard account was not created with its recorded SID.'
+    }
+    Write-Host 'PASS: actual ordinary runtime bootstrap creates its isolated standard account using memory-only random credentials.'
+  } finally {
+    $ownedPassword = $null
+    $random = $null
+    if ($ownedSid) { Remove-LocalUser -SID ([Security.Principal.SecurityIdentifier]::new($ownedSid)) }
+  }
+  if (Get-LocalUser -Name $ownedUser -ErrorAction SilentlyContinue) { throw 'Owned account remained after its actual SID was removed.' }
+  Write-Host 'PASS: actual standard account cleanup removes only the created SID and leaves no test account.'
+}
+
 foreach ($required in @(
     "`$initialHealth.attendedProof -cne ''",
     '[MixelOrdinaryTokenFixture]::Elevated($main.Id)',
@@ -61,6 +85,9 @@ foreach ($required in @(
     'Assert-OwnedIncomingHealth $warmHealth',
     'Assert-OwnedIncomingHealth $currentHealth',
     'Assert-OwnedIncomingHealth $finalHealth',
+    'if ($ownedSid) { try { Remove-LocalUser -SID',
+    '$primaryFailure = $_',
+    'if ($primaryFailure) { Write-Host',
     '-OrdinaryThenQuickSupport')) {
   if (-not $launchSource.Contains($required)) { throw "Ordinary-to-QS runtime proof lost a required native assertion: $required" }
 }

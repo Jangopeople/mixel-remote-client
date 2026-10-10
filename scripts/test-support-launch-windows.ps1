@@ -179,6 +179,8 @@ $ownedUser = $null
 $ownedSid = $null
 $desktopAccess = $null
 $baselineIncomingPid = $null
+$fixtureStage = 'customer launch'
+$primaryFailure = $null
 $launchScenario = if ($QuickSupport) { 'QuickSupport double-click' } else { 'support URI launch' }
 
 function Start-CustomerApp {
@@ -254,13 +256,16 @@ try {
       throw 'Ordinary-to-QuickSupport proof requires the actual portable QS launcher and exact signed payload.'
     }
     $ordinaryRoot = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) ('mixel-ordinary-qs-' + [Guid]::NewGuid().ToString('N'))
+    $fixtureStage = 'copy signed ordinary payload'
     New-Item -ItemType Directory $ordinaryRoot | Out-Null
     Copy-Item (Join-Path (Resolve-Path $ExpectedPayload).Path '*') $ordinaryRoot -Recurse
     $ordinaryExecutable = Join-Path $ordinaryRoot 'Mixel-Remote.exe'
     & (Join-Path $PSScriptRoot 'verify-windows-payload.ps1') -Payload $ordinaryRoot
     if (-not [MixelOrdinaryTokenFixture]::Elevated($PID)) {
+      $fixtureStage = 'start current ordinary token'
       $main = Start-Process -FilePath $ordinaryExecutable -PassThru
     } else {
+      $fixtureStage = 'start linked ordinary token'
       $ordinaryPid = [MixelOrdinaryTokenFixture]::StartLinkedToken($ordinaryExecutable)
       if ($ordinaryPid -eq 0) {
         if ($env:GITHUB_ACTIONS -cne 'true') { throw 'Disposable standard-user fallback is restricted to an isolated GitHub Actions runner.' }
@@ -268,15 +273,20 @@ try {
         $random = [byte[]]::new(24)
         [Security.Cryptography.RandomNumberGenerator]::Fill($random)
         $ownedPassword = 'aA!9' + [Convert]::ToBase64String($random)
+        $fixtureStage = 'create owned standard account'
         $account = New-LocalUser -Name $ownedUser -Password (ConvertTo-SecureString $ownedPassword -AsPlainText -Force) -AccountNeverExpires -PasswordNeverExpires -Description 'Owned disposable Mixel QuickSupport runtime fixture'
         $ownedSid = $account.SID.Value
+        $fixtureStage = 'add owned standard account to users'
         Add-LocalGroupMember -SID ([Security.Principal.SecurityIdentifier]::new('S-1-5-32-545')) -Member $ownedUser
+        $fixtureStage = 'grant owned standard desktop access'
         $desktopAccess = [MixelOrdinaryTokenFixture+DesktopAccess]::new($ownedSid)
+        $fixtureStage = 'start owned standard GUI'
         try { $ordinaryPid = [MixelOrdinaryTokenFixture]::StartStandardUser($ordinaryExecutable, $ownedUser, $ownedPassword) }
         finally { $ownedPassword = $null }
       }
       $main = Get-Process -Id $ordinaryPid
     }
+    $fixtureStage = 'verify actual ordinary process token'
     if ([MixelOrdinaryTokenFixture]::Elevated($main.Id)) { throw 'Ordinary startup still uses an elevated token and could silently auto-enter QuickSupport.' }
   } else {
     $main = Start-CustomerApp
@@ -363,6 +373,12 @@ try {
     }
   }
   Write-Host 'PASS: synthetic support invite bearer absent from app log files.'
+} catch {
+  $primaryFailure = $_
+  # Report fixture attribution without copying the memory-only password or
+  # arbitrary app arguments. Rethrow the original error after owned cleanup.
+  Write-Host "FAIL: owned runtime stage '$fixtureStage'; errorId=$($_.FullyQualifiedErrorId); exceptionType=$($_.Exception.GetType().FullName)."
+  throw
 } finally {
   # Only stop processes newly started from this runner-owned build directory.
   Get-Process | Where-Object {
@@ -383,9 +399,14 @@ try {
       }
       if (-not $profileRemoved) { $cleanupErrors.Add('Owned test-user profile cleanup failed.') }
     }
-    if ($ownedUser) { try { Remove-LocalUser -Name $ownedUser } catch { $cleanupErrors.Add('Owned standard local account cleanup failed.') } }
+    # A requested account name does not prove creation succeeded. Only delete
+    # the actual account whose returned SID this scenario recorded.
+    if ($ownedSid) { try { Remove-LocalUser -SID ([Security.Principal.SecurityIdentifier]::new($ownedSid)) } catch { $cleanupErrors.Add('Owned standard local account cleanup failed.') } }
     if ($ordinaryRoot) { try { Remove-Item $ordinaryRoot -Recurse -Force } catch { $cleanupErrors.Add('Owned ordinary payload cleanup failed.') } }
-    if ($cleanupErrors.Count -gt 0) { throw ($cleanupErrors -join ' ') }
+    if ($cleanupErrors.Count -gt 0) {
+      if ($primaryFailure) { Write-Host ('FAIL: owned cleanup additionally failed: ' + ($cleanupErrors -join ' ')) }
+      else { throw ($cleanupErrors -join ' ') }
+    }
   }
 }
 
