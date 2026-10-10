@@ -244,6 +244,13 @@ fn main() {
         let result = format!(
             "{{\"pid\":{},\"sourceStatus\":\"{}\",\"rawOpenError\":{},\"attestation\":\"{}\",\"requiresClick\":{},\"ownerFailed\":{}}}\n",
             std::process::id(), status, raw_error, proof, required, failed);
+        // Observation is secondary: its native error is recorded separately and
+        // cannot replace the already captured source guard classification.
+        let observation = match standard_namespace_readonly::observe() {
+            Ok(value) => value,
+            Err(error) => format!("{{\"pid\":{},\"observationError\":{}}}",std::process::id(),error.raw_os_error().unwrap_or(-1)),
+        };
+        let _ = std::fs::write(directory.join("fixture-namespace.json"),observation);
         std::fs::write(directory.join("fixture-result.new"), result).unwrap();
         std::fs::rename(directory.join("fixture-result.new"), directory.join("fixture-result.json")).unwrap();
         if mode == "owner" {
@@ -290,7 +297,8 @@ def export_standard_windows_fixture(directory, event):
     assert "pub fn support_invite_lease_status() -> String" in original, "Actual read-only lease classification helper is missing"
     source = isolated_source(original, directory, "mixel-standard-lease-" + uuid.uuid4().hex + "-", event)
     fixture = directory / "lease-standard.rs"
-    fixture.write_text(source + HARNESS.replace("fn main() {", "fn lease_main() {", 1) + STANDARD_WINDOWS_HARNESS, encoding="utf-8")
+    namespace_observer = (ROOT / "scripts/windows-standard-namespace-readonly.rs").read_text(encoding="utf-8")
+    fixture.write_text(source + namespace_observer + HARNESS.replace("fn main() {", "fn lease_main() {", 1) + STANDARD_WINDOWS_HARNESS, encoding="utf-8")
     binary = directory / "lease-standard.exe"
     rustc = os.environ.get("RUSTC_BIN") or shutil.which("rustc")
     assert rustc, "Native standard-account lease control requires rustc"

@@ -134,6 +134,8 @@ function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner'
     [switch]$ObserveOnly, [string]$ObservationLabel,
     [ValidateSet('with-logon','with-token')][string]$Launcher = 'with-logon') {
   if (Test-Path $resultPath) { Remove-Item -LiteralPath $resultPath }
+  $namespacePath = Join-Path $fixtureRoot 'fixture-namespace.json'
+  if (Test-Path $namespacePath) { Remove-Item -LiteralPath $namespacePath }
   [IO.File]::WriteAllText((Join-Path $fixtureRoot 'fixture-mode.txt'), $Mode, [Text.UTF8Encoding]::new($false))
   if ($Launcher -ceq 'with-token') {
     $controlPid = [MixelOrdinaryTokenFixture]::StartStandardUserWithToken($executable, $ownedUser, $ownedPassword, $ownedSid)
@@ -160,6 +162,19 @@ function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner'
     $record = $text | ConvertFrom-Json
     Assert-StandardLeaseSafeResult $record $controlPid
     Write-Host "OBSERVED: primary source lease result before secondary token diagnosis; $($record.sourceStatus); rawOpenError=$($record.rawOpenError); guardEmpty=$($record.attestation -ceq ''); guardConfirmed=$($record.attestation -ceq 'attended-runtime-v2')."
+    try {
+      if (Test-Path $namespacePath) {
+        if ((Get-Item -LiteralPath $namespacePath).Length -gt 4096) { throw 'Bounded child namespace observation exceeded its byte limit.' }
+        $namespaceText = [IO.File]::ReadAllText($namespacePath)
+        if ($namespaceText.Length -gt 4096) { throw 'Bounded child namespace observation exceeded its limit.' }
+        $namespaceRecord = $namespaceText | ConvertFrom-Json
+        if ($namespaceRecord.pid -ne $controlPid) { throw 'Child namespace observation does not belong to the actual owned PID.' }
+        foreach ($property in $namespaceRecord.PSObject.Properties) {
+          if ($property.Name -cnotmatch '\A(?:pid|session|observationError|(?:root|sessions|sessionRoot|sessionObjects|globalObjects)(?:TraverseError|QueryError|CreateAccessError))\z' -or $property.Value -isnot [long] -and $property.Value -isnot [int]) { throw 'Child namespace observation is not a bounded scalar record.' }
+        }
+        Write-Host ('OBSERVED: actual child-token namespace access; ' + ($namespaceRecord | ConvertTo-Json -Compress))
+      } else { Write-Host 'OBSERVED: secondary child namespace observation unavailable.' }
+    } catch { Write-Host 'OBSERVED: secondary child namespace observation invalid or unavailable; strict source gate remains required.' }
     try {
       $tokenObservation = [MixelOrdinaryTokenFixture]::ObserveOwnedNamespace($controlPid)
       Write-Host ('OBSERVED: actual owned standard-token namespace access; ' + ($tokenObservation | ConvertTo-Json -Compress))
