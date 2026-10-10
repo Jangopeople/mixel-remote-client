@@ -4,7 +4,7 @@ import ast
 import hashlib
 import io
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import subprocess
 import sys
 import tarfile
@@ -47,19 +47,19 @@ def between(text, start, end):
 def dart_fixture(directory, dart):
     # Use the same pinned pristine files as the existing full patch regression;
     # execute the actual patch in a disposable tree, never the working checkout.
-    tree = ast.parse((ROOT / "scripts/test-support-invite.py").read_text())
+    tree = ast.parse((ROOT / "scripts/test-support-invite.py").read_text(encoding="utf-8"))
     targets = next(ast.literal_eval(node.value) for node in tree.body
                    if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "targets" for t in node.targets))
     for path in targets:
         target = directory / path
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(original(path))
+        target.write_text(original(path), encoding="utf-8", newline="\n")
     patched = subprocess.run([sys.executable, str(ROOT / "scripts/patch-support-invite.py")],
                              env={**os.environ, "RDREPO": str(directory)},
-                             capture_output=True, text=True)
+                             capture_output=True, text=True, encoding="utf-8")
     if patched.returncode:
         raise RuntimeError(patched.stdout + patched.stderr)
-    common = (directory / "flutter/lib/common.dart").read_text()
+    common = (directory / "flutter/lib/common.dart").read_text(encoding="utf-8")
     helper = between(common, "// Mixel support invite handoff:", "// uri link handler\n")
     handler = between(common, "bool handleUriLink(", "  UriLinkType? type;") + "  return false;\n}\n"
     listener = between(common, "StreamSubscription? listenUniLinks(", "\nenum UriLinkType")
@@ -89,7 +89,7 @@ class HttpService {
     return Response(requests.length == 1 ? 503 : 200);
   }
 }
-''')
+''', encoding="utf-8", newline="\n")
     test.write_text(r'''
 import 'dart:async';
 import 'dart:convert';
@@ -205,7 +205,7 @@ Future<void> main() async {
     await nativeLinks.close();
   }
 }
-''')
+''', encoding="utf-8", newline="\n")
     subprocess.run([dart, "analyze", str(test), str(test.parent / "fixture_http.dart"),
                     str(test.parent / "mixel_support_invite.dart")], check=True)
     subprocess.run([dart, str(test)], check=True, timeout=25)
@@ -214,8 +214,12 @@ Future<void> main() async {
 def pinned_vendor_fixture(generated):
     vendor = ROOT / "scripts/vendor/uni_links_desktop"
     local = generated / "flutter/local_plugins/uni_links_desktop"
-    assert {str(path.relative_to(vendor)) for path in vendor.rglob("*") if path.is_file()} == PLUGIN_FILES
-    assert {str(path.relative_to(local)) for path in local.rglob("*") if path.is_file()} == PLUGIN_FILES
+    assert {path.relative_to(vendor).as_posix() for path in vendor.rglob("*") if path.is_file()} == PLUGIN_FILES
+    assert {path.relative_to(local).as_posix() for path in local.rglob("*") if path.is_file()} == PLUGIN_FILES
+    windows_root = PureWindowsPath("C:/fixture/vendor")
+    windows_paths = {windows_root / path for path in PLUGIN_FILES}
+    assert {str(path.relative_to(windows_root)) for path in windows_paths} != PLUGIN_FILES
+    assert {path.relative_to(windows_root).as_posix() for path in windows_paths} == PLUGIN_FILES
     archive = urlopen("https://pub.dev/api/archives/uni_links_desktop-0.1.7.tar.gz", timeout=20).read()
     assert hashlib.sha256(archive).hexdigest() == PLUGIN_SHA
     with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as tar:
@@ -224,9 +228,44 @@ def pinned_vendor_fixture(generated):
             if path != "macos/Classes/UniLinksDesktopPlugin.swift":
                 assert (vendor / path).read_bytes() == tar.extractfile(path).read(), path
         plugin = tar.extractfile("macos/Classes/UniLinksDesktopPlugin.swift").read().decode()
-    assert "  uni_links_desktop:\n    path: local_plugins/uni_links_desktop\n" in (generated / "flutter/pubspec.yaml").read_text()
+    assert "  uni_links_desktop:\n    path: local_plugins/uni_links_desktop\n" in (generated / "flutter/pubspec.yaml").read_text(encoding="utf-8")
     print("PASS exact pinned archive identity, all 12 unmodified dependency/license/platform files and generated repo-local override; Mac correction is isolated")
     return plugin
+
+
+def vendor_checkout_fixture(directory):
+    # Actual Git checkout control: Windows autocrlf must not rewrite pinned
+    # dependency/license bytes. This does not change the caller's Git config.
+    root = directory / "vendor-git-checkout"
+    root.mkdir()
+    def git(*arguments):
+        subprocess.run(["git", "-C", str(root), *arguments], check=True,
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+    git("init", "--quiet")
+    git("config", "core.autocrlf", "true")
+    relative = Path("scripts/vendor/uni_links_desktop")
+    vendor = ROOT / relative
+    target = root / relative
+    target.mkdir(parents=True)
+    license = target / "LICENSE"
+    original = (vendor / "LICENSE").read_bytes()
+    license.write_bytes(original)
+    git("add", ".")
+    license.unlink()
+    git("checkout-index", "--all", "--force")
+    assert license.read_bytes() != original and b"\r\n" in license.read_bytes()
+    (root / ".gitattributes").write_bytes((ROOT / ".gitattributes").read_bytes())
+    for path in sorted(PLUGIN_FILES):
+        file = target / path
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_bytes((vendor / path).read_bytes())
+    git("add", ".")
+    for path in PLUGIN_FILES:
+        (target / path).unlink()
+    git("checkout-index", "--all", "--force")
+    for path in PLUGIN_FILES:
+        assert (target / path).read_bytes() == (vendor / path).read_bytes(), path
+    print("PASS actual Git autocrlf negative control and exact 13-file vendor/license checkout bytes preserved by repository attributes")
 
 
 def swift_fixture(directory, plugin):
@@ -238,7 +277,7 @@ def swift_fixture(directory, plugin):
     assert hashlib.sha256(header).hexdigest() == ENGINE_HEADER_SHA
     assert b"- (BOOL)handleOpenURLs:(NSArray<NSURL*>*)urls;" in header
     (directory / "FlutterAppLifecycleDelegate.h").write_bytes(header)
-    (directory / "FlutterMacros.h").write_text("#define FLUTTER_DARWIN_EXPORT\n")
+    (directory / "FlutterMacros.h").write_text("#define FLUTTER_DARWIN_EXPORT\n", encoding="utf-8", newline="\n")
     swift = directory / "main.swift"
     swift.write_text(r'''
 import Cocoa
@@ -299,7 +338,7 @@ _ = main.onListen(withArguments: nil, eventSink: { primaryMessages.append($0 as!
 main.handle(FlutterMethodCall("getInitialLink"), result: { initial = $0 as? String })
 precondition(initial == cold && primaryMessages == [cold, warm])
 print("PASS negative control reproduces dropped second warm support URI during a real canceled-listener gap in the exact pinned Swift plugin")
-''' )
+''' , encoding="utf-8", newline="\n")
     output = directory / "swift-routing-fixture"
     subprocess.run(["xcrun", "swiftc", "-import-objc-header", str(directory / "FlutterAppLifecycleDelegate.h"),
                     str(swift), "-o", str(output)], check=True)
@@ -307,9 +346,9 @@ print("PASS negative control reproduces dropped second warm support URI during a
     # Compile the actual generated repo-local plugin correction separately.
     # The baseline above must continue reproducing the original defect.
     generated = directory / "dart/flutter/local_plugins/uni_links_desktop/macos/Classes/UniLinksDesktopPlugin.swift"
-    patched = generated.read_text()
+    patched = generated.read_text(encoding="utf-8")
     assert patched.count("import FlutterMacOS") == 1
-    baseline = swift.read_text()
+    baseline = swift.read_text(encoding="utf-8")
     original_plugin = plugin.replace("import FlutterMacOS", "")
     assert baseline.count(original_plugin) == 1
     positive = baseline[:baseline.index("// Baseline negative control:")].replace(
@@ -413,7 +452,7 @@ print("PASS ordinary and malformed URLs keep original live behavior with no pend
     positive_dir = directory / "patched-swift"
     positive_dir.mkdir()
     positive_source = positive_dir / "main.swift"
-    positive_source.write_text(positive)
+    positive_source.write_text(positive, encoding="utf-8", newline="\n")
     positive_output = positive_dir / "swift-routing-fixture"
     subprocess.run(["xcrun", "swiftc", "-import-objc-header", str(directory / "FlutterAppLifecycleDelegate.h"),
                     str(positive_source), "-o", str(positive_output)], check=True)
@@ -428,6 +467,7 @@ def main():
         directory = Path(temp)
         dart_fixture(directory / "dart", dart)
         plugin = pinned_vendor_fixture(directory / "dart")
+        vendor_checkout_fixture(directory)
         if sys.platform == "darwin":
             swift_fixture(directory, plugin)
         else:

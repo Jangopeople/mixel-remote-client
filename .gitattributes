@@ -1,0 +1,2 @@
+# Preserve the exact pinned dependency and license bytes on Windows checkouts.
+scripts/vendor/uni_links_desktop/** -text
