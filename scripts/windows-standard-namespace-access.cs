@@ -32,11 +32,13 @@ public sealed class StandardNamespaceAccess : IDisposable {
     return data;
   }
   static byte[] Acl(byte[] bytes) {
-    if(bytes==null || bytes.Length<20 || bytes.Length>65536) throw new InvalidOperationException("Invalid bounded native security descriptor");
+    if(bytes==null || bytes.Length<20 || bytes.Length>65536 || bytes[0]!=1) throw new InvalidOperationException("Invalid bounded native security descriptor");
     ushort nativeFlags=BitConverter.ToUInt16(bytes,2);
     uint offset=BitConverter.ToUInt32(bytes,16);
     if((nativeFlags&0x8004)!=0x8004 || offset<20 || offset>(uint)bytes.Length-8) throw new InvalidOperationException("Namespace must retain an explicit self-relative existing DACL");
-    int position=checked((int)offset); int length=BitConverter.ToUInt16(bytes,position+2);
+    int position=checked((int)offset);
+    if(bytes[position]!=2 && bytes[position]!=4) throw new InvalidOperationException("Invalid native ACL revision");
+    int length=BitConverter.ToUInt16(bytes,position+2);
     if(length<8 || length>bytes.Length-position) throw new InvalidOperationException("Invalid bounded native DACL size");
     var descriptor=new RawSecurityDescriptor(bytes,0);
     if(descriptor.DiscretionaryAcl==null) throw new InvalidOperationException("Namespace must retain an explicit existing DACL");

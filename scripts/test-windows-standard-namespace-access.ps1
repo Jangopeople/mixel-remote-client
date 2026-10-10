@@ -81,7 +81,27 @@ public static class StandardNamespaceAccessManagedRegression {
     changed=Copy(minimal);Buffer.BlockCopy(BitConverter.GetBytes(uint.MaxValue),0,changed,16,4);Reject(()=>Acl(changed),"Out-of-range native ACL offset was accepted");
     changed=Copy(minimal);Buffer.BlockCopy(BitConverter.GetBytes((ushort)7),0,changed,offset+2,2);Reject(()=>Acl(changed),"Undersized native ACL header was accepted");
     changed=Copy(minimal);Buffer.BlockCopy(BitConverter.GetBytes(ushort.MaxValue),0,changed,offset+2,2);Reject(()=>Acl(changed),"Out-of-range native ACL size was accepted");
-    changed=Copy(minimal);changed[offset]=0xff;Reject(()=>Acl(changed),"Malformed native ACL revision was accepted");
+    foreach(byte revision in new byte[]{0,2,0xff}) {
+      changed=Copy(minimal);changed[0]=revision;
+      Reject(()=>Acl(changed),"Malformed native security descriptor revision was accepted");
+      Reject(()=>Grant(changed,owned),"Malformed security descriptor revision grant was accepted");
+    }
+    foreach(byte revision in new byte[]{0,1,3,0xff}) {
+      changed=Copy(minimal);changed[offset]=revision;
+      Reject(()=>Acl(changed),"Malformed native ACL revision was accepted");
+      Reject(()=>Grant(changed,owned),"Malformed native ACL revision grant was accepted");
+    }
+    foreach(byte revision in new byte[]{2,4}) {
+      var supportedAcl=new RawAcl(revision,1);
+      supportedAcl.InsertAce(0,new CommonAce(AceFlags.None,AceQualifier.AccessAllowed,1,world,false,null));
+      var supported=Binary(new RawSecurityDescriptor(ControlFlags.DiscretionaryAclPresent,null,null,null,supportedAcl));
+      int supportedOffset=checked((int)BitConverter.ToUInt32(supported,16));
+      Require(supported[0]==1 && supported[supportedOffset]==revision,"Supported native descriptor/ACL revision fixture was normalized unexpectedly");
+      var extracted=Acl(supported);Require(extracted[2]==revision,"Supported native ACL revision was rejected or changed");
+      var supportedGrant=new RawSecurityDescriptor(Grant(supported,owned),0);
+      Require(supportedGrant.DiscretionaryAcl.Count==2 && Bytes(Binary(supportedGrant.DiscretionaryAcl[0]),Binary(supportedAcl[0])),"Supported native ACL revision grant lost its original ACE");
+    }
+    Console.WriteLine("PASS: actual helper accepts descriptor revision1 with native ACL revisions2/4 and rejects descriptor revisions0/2/255 and native ACL revisions0/1/3/255 for both extraction and grant");
     var collision=new RawAcl(GenericAcl.AclRevision,1);collision.InsertAce(0,new CommonAce(AceFlags.None,AceQualifier.AccessDenied,4,owned,false,null));
     Reject(()=>Grant(Binary(new RawSecurityDescriptor(ControlFlags.DiscretionaryAclPresent,null,null,null,collision)),owned),"Existing owned deny ACE was overwritten or duplicated");
     Console.WriteLine("PASS: actual helper rejects null, truncated, oversized, nonrelative, malformed/offset/size-invalid and pre-existing owned-SID collision fixtures");
