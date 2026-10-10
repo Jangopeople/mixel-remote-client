@@ -81,6 +81,19 @@ class RustToolchainTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "conflicts"):
                 rustc_command(["rustc", "source.rs", *flags], windows=True, environment=self.environment, verifier=self.verifier)
 
+    def test_spaced_source_basename_requires_explicit_valid_crate_before_linking(self):
+        rustc = os.environ.get("RUSTC_BIN") or shutil.which("rustc")
+        self.assertTrue(rustc, "Rust compiler is required for the actual source-path control")
+        source = self.root / "actual fixture.rs"
+        source.write_text('fn main() {}\n', encoding="utf-8")
+        command = [rustc, "--edition=2021", "--deny=warnings", str(source), "--emit=metadata", "-o", str(self.root / "actual fixture.rmeta")]
+        rejected = subprocess.run(command, capture_output=True, text=True, timeout=60)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("invalid character", rejected.stderr)
+        self.assertNotIn("linking with", rejected.stderr)
+        corrected = subprocess.run(command + ["--crate-name", "mixel_native_linker_control"], capture_output=True, text=True, timeout=60)
+        self.assertEqual(corrected.returncode, 0, corrected.stderr)
+
 
 def native_git_bash_control():
     if os.name != "nt":
@@ -99,12 +112,12 @@ def native_git_bash_control():
     with tempfile.TemporaryDirectory(prefix="mixel MSVC native compile préflight ") as temporary:
         root = Path(temporary); source = root / "actual fixture.rs"; executable = root / "actual fixture.exe"
         source.write_text('fn main() { println!("PASS: explicit MSVC linked actual Rust despite PATH coreutils shadow"); }\n', encoding="utf-8")
-        command = [rustc, "--edition=2021", "--deny=warnings", str(source), "-o", str(executable), "-C", "link-arg=/INCREMENTAL:NO"]
+        command = [rustc, "--edition=2021", "--deny=warnings", "--crate-name", "mixel_native_linker_control", str(source), "-o", str(executable), "-C", "link-arg=/INCREMENTAL:NO"]
         rejected = subprocess.run(command + ["-C", "linker=" + str(coreutils)], capture_output=True, text=True, timeout=60, env=environment)
         # GNU diagnostics vary with argument count, quoting and locale. The
         # actual same Rust source/flags must fail through the installed Git
         # coreutils executable and succeed through verified Microsoft LINK.
-        if rejected.returncode == 0:
+        if rejected.returncode == 0 or "linking with" not in rejected.stderr or "link.exe" not in rejected.stderr:
             raise RuntimeError("Actual coreutils linker did not reproduce the failed native gate")
         subprocess.run(rustc_command(command, environment=environment), check=True, timeout=60, env=environment)
         subprocess.run([str(executable)], check=True, timeout=10, env=environment)

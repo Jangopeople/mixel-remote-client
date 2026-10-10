@@ -58,6 +58,7 @@ public static class MixelOrdinaryTokenFixture {
     public uint attributes, reserved;
   }
   [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
+  [DllImport("kernel32.dll", SetLastError = true)] static extern uint GetProcessId(IntPtr process);
   [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
   [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
   [DllImport("kernel32.dll", SetLastError = true)] static extern bool GetExitCodeProcess(IntPtr process, out uint code);
@@ -151,6 +152,38 @@ public static class MixelOrdinaryTokenFixture {
   static StartupInfo Startup() { return new StartupInfo { cb = Marshal.SizeOf(typeof(StartupInfo)), desktop = CurrentDesktopPath() }; }
   static readonly System.Collections.Generic.Dictionary<int, IntPtr> StartedProcesses = new System.Collections.Generic.Dictionary<int, IntPtr>();
   static readonly System.Collections.Generic.Dictionary<int, IntPtr> SuspendedThreads = new System.Collections.Generic.Dictionary<int, IntPtr>();
+  public static System.Collections.Generic.Dictionary<string, string> SuspendedOwnedIdentity(int pid) {
+    IntPtr process, thread, token = IntPtr.Zero, integrity = IntPtr.Zero;
+    if (!StartedProcesses.TryGetValue(pid, out process) || !SuspendedThreads.TryGetValue(pid, out thread))
+      throw new InvalidOperationException("Identity qualification requires the retained owned suspended process and primary thread");
+    if (WaitForSingleObject(process, 0) != 0x102 || GetProcessId(process) != checked((uint)pid))
+      throw new InvalidOperationException("Owned suspended process identity is no longer live or does not match its kernel PID");
+    try {
+      if (!OpenProcessToken(process, 8, out token)) throw new Win32Exception();
+      var result = new System.Collections.Generic.Dictionary<string, string>();
+      result.Add("kernelPid", GetProcessId(process).ToString());
+      using (var identity = new WindowsIdentity(token)) { result.Add("sid", identity.User.Value); }
+      result.Add("elevated", ElevatedToken(token).ToString());
+      IntPtr session = Marshal.AllocHGlobal(4);
+      try {
+        int required;
+        if (!GetTokenInformation(token, 12, session, 4, out required) || required != 4) throw new Win32Exception();
+        result.Add("sessionId", Marshal.ReadInt32(session).ToString());
+      } finally { Marshal.FreeHGlobal(session); }
+      int size;
+      GetTokenInformation(token, 25, IntPtr.Zero, 0, out size);
+      if (size < IntPtr.Size + 4 || size > 65536) throw new InvalidOperationException("Invalid owned process integrity metadata size");
+      integrity = Marshal.AllocHGlobal(size);
+      int actual;
+      if (!GetTokenInformation(token, 25, integrity, size, out actual) || actual > size) throw new Win32Exception();
+      var label = new SecurityIdentifier(Marshal.ReadIntPtr(integrity));
+      result.Add("integritySid", label.Value);
+      return result;
+    } finally {
+      if (integrity != IntPtr.Zero) Marshal.FreeHGlobal(integrity);
+      if (token != IntPtr.Zero) CloseHandle(token);
+    }
+  }
   static int Started(ProcessInfo process, bool suspended = false) {
     if (!suspended) CloseHandle(process.thread);
     int pid = checked((int)process.pid);

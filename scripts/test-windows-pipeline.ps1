@@ -178,6 +178,13 @@ try {
 }
 if ([MixelOrdinaryTokenFixture]::OwnsLease($PID)) { throw 'Closed event handle remains attributed to its process.' }
 Write-Host 'PASS: exact native runtime fixture observes the current PID owning the real SYNCHRONIZE-only global v2 event, then observes its handle release; unrelated event names fail closed.'
+$unownedIdentityRejected = $false
+try { [void][MixelOrdinaryTokenFixture]::SuspendedOwnedIdentity($PID) } catch {
+  if (-not $_.Exception.ToString().Contains('retained owned suspended process and primary thread')) { throw }
+  $unownedIdentityRejected = $true
+}
+if (-not $unownedIdentityRejected) { throw 'A PID without retained owned process/thread handles satisfied suspended identity qualification.' }
+Write-Host 'PASS: exact native identity qualification rejects an unowned current PID without retained process and suspended primary-thread handles.'
 
 # Exercise the exact disposable-account bootstrap before spending time on a
 # full signed build. The original runtime failure occurred before its GUI wait
@@ -296,11 +303,20 @@ public static class MixelOwnedDesktopControl {
       if ($effectiveDesktopAccess['station:0x327'] -ne 0 -or $effectiveDesktopAccess['desktop:0xc7'] -ne 0) { throw 'Owned standard SID lacks its exact temporarily granted Win32 desktop rights.' }
       $guiProfile = $true
       $guiStartedAt = [DateTime]::UtcNow
-      $guiPid = [MixelOrdinaryTokenFixture]::StartStandardUser($guiExecutable, $ownedUser, $ownedPassword)
+      # Qualify the exact retained process before it can enter Main or exit.
+      # The narrow desktop negative can fail during native DLL initialization;
+      # inspecting a running/exited PID afterward races the token/session check.
+      $guiPid = [MixelOrdinaryTokenFixture]::StartStandardUser($guiExecutable, $ownedUser, $ownedPassword, $true)
       $guiProcess = Get-Process -Id $guiPid
-      if ([MixelOrdinaryTokenFixture]::Elevated($guiPid) -or $guiProcess.SessionId -ne (Get-Process -Id $PID).SessionId) {
-        throw 'Owned desktop control is not a genuine non-elevated process in the runner session.'
+      $guiIdentity = [MixelOrdinaryTokenFixture]::SuspendedOwnedIdentity($guiPid)
+      Write-Host ("FIXTURE: $mode retained suspended owned process token identity: " + ($guiIdentity | ConvertTo-Json -Compress))
+      if ($guiIdentity['kernelPid'] -cne [string]$guiPid -or $guiIdentity['sid'] -cne $ownedSid -or
+          $guiIdentity['elevated'] -cne 'False' -or $guiIdentity['integritySid'] -cne 'S-1-16-8192' -or
+          $guiIdentity['sessionId'] -cne [string](Get-Process -Id $PID).SessionId -or
+          [MixelOrdinaryTokenFixture]::StartedStatus($guiPid) -cne 'still-running' -or (Test-Path $guiResult)) {
+        throw 'Owned suspended desktop control does not have its created standard SID, medium-integrity non-elevated token and actual runner session.'
       }
+      if ([MixelOrdinaryTokenFixture]::ResumeOwnedPrimaryThread($guiPid) -ne 1) { throw 'Owned desktop control primary thread did not resume its one retained suspension.' }
       $deadline = [DateTime]::UtcNow.AddSeconds(8)
       $actualGui = @{}
       while ([DateTime]::UtcNow -lt $deadline) {
@@ -373,7 +389,10 @@ public static class MixelOwnedDesktopControl {
       $guiAccess = [MixelOrdinaryTokenFixture+DesktopAccess]::new($ownedSid)
       $guiPid = [MixelOrdinaryTokenFixture]::StartStandardUser($guiExecutable, $ownedUser, $ownedPassword, $true)
       $guiProcess = Get-Process -Id $guiPid
-      if ([MixelOrdinaryTokenFixture]::Elevated($guiPid) -or $guiProcess.SessionId -ne (Get-Process -Id $PID).SessionId -or
+      $cleanupIdentity = [MixelOrdinaryTokenFixture]::SuspendedOwnedIdentity($guiPid)
+      if ($cleanupIdentity['kernelPid'] -cne [string]$guiPid -or $cleanupIdentity['sid'] -cne $ownedSid -or
+          $cleanupIdentity['elevated'] -cne 'False' -or $cleanupIdentity['integritySid'] -cne 'S-1-16-8192' -or
+          $cleanupIdentity['sessionId'] -cne [string](Get-Process -Id $PID).SessionId -or
           [MixelOrdinaryTokenFixture]::StartedStatus($guiPid) -cne 'still-running' -or (Test-Path $guiResult)) {
         throw 'Owned retained-handle cleanup control did not start as a genuine suspended ordinary process before Main.'
       }
@@ -381,6 +400,13 @@ public static class MixelOwnedDesktopControl {
       if ([MixelOrdinaryTokenFixture]::StartedStatus($guiPid) -cne 'exited:0x00000001' -or (Test-Path $guiResult)) {
         throw 'Exact retained native process handle did not prove termination of its suspended owned target.'
       }
+      $exitedIdentityRejected = $false
+      try { [void][MixelOrdinaryTokenFixture]::SuspendedOwnedIdentity($guiPid) } catch {
+        if (-not $_.Exception.ToString().Contains('no longer live or does not match its kernel PID')) { throw }
+        $exitedIdentityRejected = $true
+      }
+      if (-not $exitedIdentityRejected) { throw 'An exited owned process satisfied live suspended identity qualification.' }
+      Write-Host 'PASS: retained native identity qualification rejects the actual exited owned process before reading its token.'
       # Already-exited handles are intentionally safe to revisit without PID
       # lookup or reliance on a loaded executable path.
       [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses()
