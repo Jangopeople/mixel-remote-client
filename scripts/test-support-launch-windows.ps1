@@ -664,9 +664,9 @@ function Read-OwnedHeapCapture([string[]]$Lines, [int]$ProcessId) {
     }
     if ($line.Contains('Last event:')) { $invalid=$true; $frames=@(); $modules=@(); continue }
     if ($events -ne 1 -or $invalid) { continue }
-    if ($line -match '^\s*([0-9a-fA-F]{1,3})\s+[0-9a-fA-F`]+\s+([0-9a-fA-F`]+)\s+((?:[A-Za-z0-9_.$?@:<>,~\[\]()+-]+![A-Za-z0-9_.$?@:<>,~\[\]()+ -]+|[A-Za-z0-9_.-]+\+0x[0-9a-fA-F]+))\s*$') {
+    if ($line -match '^\s*([0-9a-fA-F]{1,3})\s+[0-9a-fA-F`]+\s+([0-9a-fA-F`]+)\s+((?:[A-Za-z0-9_.$?@:<>,~\[\]()+-]+![A-Za-z0-9_.$?@:<>,~\[\]()+-]+|[A-Za-z0-9_.-]+\+0x[0-9a-fA-F]+))\s*$') {
       $frames += [pscustomobject]@{ index=$Matches[1]; returnAddress=$Matches[2]; symbol=$Matches[3] }
-    } elseif ($line -match '^\s*[0-9a-fA-F`]+\s+[0-9a-fA-F`]+\s+([A-Za-z0-9_.-]+)\s+') { $modules += $Matches[1] }
+    } elseif ($line -match '^\s*(?:[0-9a-fA-F]{8,16}|[0-9a-fA-F]{8}`[0-9a-fA-F]{8})\s+(?:[0-9a-fA-F]{8,16}|[0-9a-fA-F]{8}`[0-9a-fA-F]{8})\s+([A-Za-z0-9_.-]+)\s+') { $modules += $Matches[1] }
   }
   $verified=$captures -eq 1 -and $completed -and -not $active -and -not $invalid -and $events -eq 1 -and $eventPid -eq $ProcessId -and $code -ieq 'c0000374'
   if (-not $verified) { $frames=@(); $modules=@() }
@@ -675,53 +675,72 @@ function Read-OwnedHeapCapture([string[]]$Lines, [int]$ProcessId) {
 
 function Read-OwnedInvalidHandleCaptures([string[]]$Lines, [int]$ProcessId) {
   $captures=@(); $active=$false; $invalid=$false; $starts=0; $ends=0; $events=0
-  $eventPid=$null; $chance=$null; $frames=@(); $modules=@()
-  $observations=[pscustomobject]@{ captureStarts=0; captureEnds=0; eventRows=0; ownedPidRows=0; invalidHandleCodeRows=0; firstChanceRows=0; secondChanceRows=0; malformedEventRows=0; wrongPidRows=0; wrongCodeRows=0; unknownChanceRows=0; duplicateEventBlocks=0; malformedBlocks=0; noFrameBlocks=0; incompleteBlocks=0; ownershipRejected=0; limitReached=0; sizeBoundRejected=0 }
-  if ($Lines.Count -gt 65536) { $observations.sizeBoundRejected=1; return [pscustomobject]@{ verified=$false; captures=@(); bounded=$false; observations=$observations } }
+  $eventPid=$null; $chance=$null; $frames=@(); $modules=@(); $blockInvalid=$false; $exceptionAddress=$null; $addressRows=0; $recordCodeRows=0
+  $observations=[pscustomobject]@{ captureStarts=0; captureEnds=0; eventRows=0; ownedPidRows=0; invalidHandleCodeRows=0; firstChanceRows=0; secondChanceRows=0; exceptionAddressRows=0; exceptionRecordCodeRows=0; malformedRecordCodeRows=0; malformedAddressRows=0; malformedEventRows=0; wrongPidRows=0; wrongCodeRows=0; unknownChanceRows=0; duplicateEventBlocks=0; malformedBlocks=0; noFrameBlocks=0; incompleteBlocks=0; ownershipRejected=0; limitReached=0; sizeBoundRejected=0 }
+  if ($Lines.Count -gt 65536) { $observations.sizeBoundRejected=1; return [pscustomobject]@{ verified=$false; partialCapturePidVerified=$false; passedBlockCount=0; captures=@(); bounded=$false; observations=$observations } }
   foreach ($line in $Lines) {
-    if ($line.Trim() -ceq 'MIXEL_NATIVE_INVALID_HANDLE_LIMIT') { $invalid=$true; $observations.limitReached++ }
-    if ($line.Trim() -ceq 'MIXEL_NATIVE_OWNERSHIP_REJECTED') { $invalid=$true; $observations.ownershipRejected++ }
+    if ($line.Trim() -ceq 'MIXEL_NATIVE_INVALID_HANDLE_LIMIT') { $invalid=$true; if ($active) { $blockInvalid=$true }; $observations.limitReached++ }
+    if ($line.Trim() -ceq 'MIXEL_NATIVE_OWNERSHIP_REJECTED') { $invalid=$true; if ($active) { $blockInvalid=$true }; $observations.ownershipRejected++ }
     if ($line.Trim() -ceq 'MIXEL_NATIVE_INVALID_HANDLE') {
       $starts++
       if ($active) { $invalid=$true; $observations.malformedBlocks++ }
       if ($starts -gt 16) { $invalid=$true; $observations.sizeBoundRejected++ }
-      $active=$true; $events=0; $eventPid=$null; $chance=$null; $frames=@(); $modules=@()
+      $blockInvalid=$active -or $starts -gt 16
+      $active=$true; $events=0; $eventPid=$null; $chance=$null; $frames=@(); $modules=@(); $exceptionAddress=$null; $addressRows=0; $recordCodeRows=0
       continue
     }
     if ($line.Trim() -ceq 'MIXEL_NATIVE_INVALID_HANDLE_END') {
       $ends++
-      if (-not $active -or $events -ne 1 -or $eventPid -ne $ProcessId -or -not $chance) { $invalid=$true; $observations.malformedBlocks++ }
-      if ($frames.Count -eq 0) { $invalid=$true; $observations.noFrameBlocks++ }
-      if (-not $invalid) { $captures += [pscustomobject]@{ pid=$eventPid; code='c0000008'; chance=$chance; stackFrames=$frames; loadedModuleNames=$modules } }
+      if (-not $active -or $events -ne 1 -or $eventPid -ne $ProcessId -or -not $chance) { $invalid=$true; $blockInvalid=$true; $observations.malformedBlocks++ }
+      if ($addressRows -ne 1 -or -not $exceptionAddress) { $invalid=$true; $blockInvalid=$true; $observations.malformedAddressRows++ }
+      if ($recordCodeRows -ne 1) { $invalid=$true; $blockInvalid=$true; $observations.malformedRecordCodeRows++ }
+      if ($frames.Count -eq 0) { $invalid=$true; $blockInvalid=$true; $observations.noFrameBlocks++ }
+      if (-not $blockInvalid -and $captures.Count -lt 16) { $captures += [pscustomobject]@{ pid=$eventPid; code='c0000008'; chance=$chance; nativeExceptionAddress=$exceptionAddress; stackFrames=$frames; loadedModuleNames=$modules } }
       $active=$false; continue
     }
     if (-not $active) { continue }
     if ($line -match 'Last event:\s*([0-9a-fA-F]+)\.[0-9a-fA-F]+:\s*(.+)$') {
       $events++; $observations.eventRows++; $eventPid=[Convert]::ToInt32($Matches[1],16); $description=$Matches[2]
-      if ($events -ne 1) { $invalid=$true; $observations.duplicateEventBlocks++ }
-      if ($eventPid -eq $ProcessId) { $observations.ownedPidRows++ } else { $invalid=$true; $observations.wrongPidRows++ }
-      if ($description -match '(?:code|exception)\s+c0000008(?:\s|$)') { $observations.invalidHandleCodeRows++ } else { $invalid=$true; $observations.wrongCodeRows++ }
+      if ($events -ne 1) { $invalid=$true; $blockInvalid=$true; $observations.duplicateEventBlocks++ }
+      if ($eventPid -eq $ProcessId) { $observations.ownedPidRows++ } else { $invalid=$true; $blockInvalid=$true; $observations.wrongPidRows++ }
+      if ($description -match '(?:code|exception)\s+c0000008(?:\s|$)') { $observations.invalidHandleCodeRows++ } else { $invalid=$true; $blockInvalid=$true; $observations.wrongCodeRows++ }
       if ($description -match '\((first|second) chance\)') {
         $chance=$Matches[1]+'-chance'
         if ($chance -ceq 'first-chance') { $observations.firstChanceRows++ } else { $observations.secondChanceRows++ }
-      } else { $invalid=$true; $observations.unknownChanceRows++ }
+      } else { $invalid=$true; $blockInvalid=$true; $observations.unknownChanceRows++ }
       continue
     }
-    if ($line.Contains('Last event:')) { $invalid=$true; $observations.malformedEventRows++; continue }
-    if ($events -ne 1 -or $invalid) { continue }
-    if ($line -match '^\s*([0-9a-fA-F]{1,3})\s+[0-9a-fA-F`]+\s+([0-9a-fA-F`]+)\s+((?:[A-Za-z0-9_.$?@:<>,~\[\]()+-]+![A-Za-z0-9_.$?@:<>,~\[\]()+ -]+|[A-Za-z0-9_.-]+\+0x[0-9a-fA-F]+))\s*$') {
+    if ($line.Contains('Last event:')) { $invalid=$true; $blockInvalid=$true; $observations.malformedEventRows++; continue }
+    if ($events -ne 1 -or $blockInvalid) { continue }
+    if ($line -match '^\s*ExceptionAddress:\s*([0-9a-fA-F`]{8,17})(?:\s|$)') {
+      $addressRows++; $observations.exceptionAddressRows++
+      $hex=$Matches[1].Replace('`','')
+      if ($addressRows -ne 1 -or $hex -notmatch '^[0-9a-fA-F]{8,16}$' -or [Convert]::ToUInt64($hex,16) -eq 0) { $invalid=$true; $blockInvalid=$true; $observations.malformedAddressRows++ }
+      else { $exceptionAddress=$hex.ToLowerInvariant() }
+      continue
+    }
+    if ($line -match '^\s*ExceptionAddress:') { $invalid=$true; $blockInvalid=$true; $observations.malformedAddressRows++; continue }
+    if ($line -match '^\s*ExceptionCode:\s*c0000008(?:\s|$)') {
+      $recordCodeRows++; $observations.exceptionRecordCodeRows++
+      if ($recordCodeRows -ne 1) { $invalid=$true; $blockInvalid=$true; $observations.malformedRecordCodeRows++ }
+      continue
+    }
+    if ($line -match '^\s*ExceptionCode:') { $invalid=$true; $blockInvalid=$true; $observations.malformedRecordCodeRows++; continue }
+    if ($line -match '^\s*([0-9a-fA-F]{1,3})\s+[0-9a-fA-F`]+\s+([0-9a-fA-F`]+)\s+((?:[A-Za-z0-9_.$?@:<>,~\[\]()+-]+![A-Za-z0-9_.$?@:<>,~\[\]()+-]+|[A-Za-z0-9_.-]+\+0x[0-9a-fA-F]+))\s*$') {
       $frames += [pscustomobject]@{ index=$Matches[1]; returnAddress=$Matches[2]; symbol=$Matches[3] }
-      if ($frames.Count -gt 40) { $invalid=$true; $observations.sizeBoundRejected++ }
-    } elseif ($line -match '^\s*[0-9a-fA-F`]+\s+[0-9a-fA-F`]+\s+([A-Za-z0-9_.-]+)\s+') {
+      if ($frames.Count -gt 40) { $invalid=$true; $blockInvalid=$true; $observations.sizeBoundRejected++ }
+    } elseif ($line -match '^\s*(?:[0-9a-fA-F]{8,16}|[0-9a-fA-F]{8}`[0-9a-fA-F]{8})\s+(?:[0-9a-fA-F]{8,16}|[0-9a-fA-F]{8}`[0-9a-fA-F]{8})\s+([A-Za-z0-9_.-]+)\s+') {
       $modules += $Matches[1]
-      if ($modules.Count -gt 256) { $invalid=$true; $observations.sizeBoundRejected++ }
+      if ($modules.Count -gt 256) { $invalid=$true; $blockInvalid=$true; $observations.sizeBoundRejected++ }
     }
   }
   $verified=$starts -ge 1 -and $starts -le 16 -and $starts -eq $ends -and -not $active -and -not $invalid -and $captures.Count -eq $starts
   $observations.captureStarts=$starts; $observations.captureEnds=$ends
   if ($active -or $starts -ne $ends) { $observations.incompleteBlocks=1 }
-  if (-not $verified) { $captures=@() }
-  return [pscustomobject]@{ verified=$verified; captures=$captures; bounded=($observations.sizeBoundRejected -eq 0); observations=$observations }
+  # A later exit-like or rejected block must not erase an earlier individually
+  # complete owned-PID/code/chance stack. Partial evidence never passes the full
+  # control or the independent heap parser.
+  return [pscustomobject]@{ verified=$verified; partialCapturePidVerified=($captures.Count -gt 0); passedBlockCount=$captures.Count; captures=$captures; bounded=($observations.sizeBoundRejected -eq 0); observations=$observations }
 }
 
 function Read-OwnedExecutionMetadata([string[]]$Lines, [int]$ProcessId, [switch]$TimeoutEvent) {
@@ -841,8 +860,10 @@ function Write-OwnedControlExecutionEvidence([int]$ProcessId, $State, [switch]$P
     $snapshot=Read-OwnedLiveDebuggerSnapshot $State.live.raw
     if ($snapshot.pending) { throw 'Stopped debugger invalid-handle snapshot is incomplete.' }
     $invalidHandles=Read-OwnedInvalidHandleCaptures $snapshot.lines $ProcessId
-    $invalidHandles.verified=$State.live.ready -and ($State.live.attached -or $State.live.captureAttributed) -and $invalidHandles.verified
-    if (-not $invalidHandles.verified) { $invalidHandles.captures=@() }
+    $ownedStartup=$State.live.ready -and ($State.live.attached -or $State.live.captureAttributed)
+    $invalidHandles.verified=$ownedStartup -and $invalidHandles.verified
+    $invalidHandles.partialCapturePidVerified=$ownedStartup -and $invalidHandles.partialCapturePidVerified
+    if (-not $ownedStartup) { $invalidHandles.captures=@(); $invalidHandles.passedBlockCount=0 }
   }
   $streams=@{}
   if ($State.live) {
