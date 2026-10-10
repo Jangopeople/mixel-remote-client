@@ -1,35 +1,249 @@
 # Mixel-Remote — Agent Handoff / Current State
 
-## Reliability work in progress — 2026-10-09
+## Reliability work in progress — 2026-10-10
 
-The active review branch is `fix/remote-support-reliability`, PR
+The active review branch is `fix/remote-support-reliability`, draft PR
 [7](https://github.com/Jangopeople/mixel-remote-client/pull/7). This is a large
 attended-support, transport, native input/clipboard and installer verification
-pass. Read the PR and current workflow results before releasing its output.
+pass. It is **unfinished**: the fresh Windows ordinary-user startup still crashes,
+and the production
+HTTPS gateway awaits Michael's exact approval. No public release has been made.
 
-Source regression tests and the isolated stock hbbs/hbbr 1.1.15 gateway tests
-pass. An actual Linux diagnostic installer completed customer Accept, decoded
-video, native keyboard/mouse, bidirectional clipboard/file transfer, incoming
-service restart with paused UI heartbeat, and network reconnect through an
-isolated HTTPS fixture. That diagnostic binary predates the final source fixes;
-the combined platform builds are being rerun. Its fixture uses its own public
-pin and test CA and does not prove the live HTTPS route is repaired.
+The working acceptance criteria are a branded customer launch with registered
+relay/key readiness, customer Accept before authenticated control even with saved
+passwords/recent sessions, native-first automatic HTTPS fallback and reconnect,
+working mouse/keyboard, bidirectional clipboard and SHA-verified file transfer,
+and fresh packaged Linux/Windows/Mac builds with actual runtime/signature checks.
+The Windows portable customer gate additionally requires 95 seconds of the same
+PID/HWND, positive v2 IPC and retained kernel-owner consent. Keep every gate strict.
+Full TeamViewer/pcvisit feature parity and an absence of every possible bug are not
+established by these scoped tests.
 
-The deployed stock server rejects host `RegisterPk` on `/ws/id` with
-`NOT_SUPPORT`. The reviewed compatibility service and exact production change
-and draining rollback are in `infra/relay-ws-bridge/README.md`. Michael's explicit
-production approval has been requested and is still pending. Do not infer
-approval from a passing fixture or from this handoff.
+The last completed all-platform application baseline is
+`7f060ab92e6c9bcfa726e9d316e73605627b721e`. The newer application source
+`5df042a8d88bb861da4979dfcc4735e67b1124f3` is being built in
+[38065522873](https://github.com/Jangopeople/mixel-remote-client/actions/runs/38065522873)
+for Linux and both Mac architectures, with publication disabled. It fixes optional
+Linux keep-awake backend failures and bounded asynchronous request coalescing,
+Mac permission API availability guards, and the Apple Silicon minimum-version
+metadata. Source tests and independent review pass; these fixes are not yet
+qualified in newly built application binaries. Product corrections also include the Linux warm DBus
+consent/handoff fix `235273c`, basename-only Windows support aliases `d6728bd`,
+Windows UTF-16 terminal-NUL normalization `481215f`, and the unsigned AV1 variadic
+argument correction `f0e41de`. The existing larger pass covers bounded/redacted
+invite handling, kernel-owned attended consent, strict peer encryption, native
+input/clipboard fixes, WSS receive freshness, same-process new-registration
+recovery, early C++ SIGPIPE handling, branding and signed installer checks.
 
-Public downloads, marketplace submissions, installed local application/service,
-native server containers, relay identity/database and DNS have not changed.
-Builds use `publish_r2=false`. Keep the PR draft until its final required checks
-and production verification are resolved. Local diagnostic evidence is under
-the ignored `artifacts/verification-2026-10-09/` directory.
+Fresh all-platform build
+[38056398014](https://github.com/Jangopeople/mixel-remote-client/actions/runs/38056398014)
+from that exact baseline finished **failure** because of the Windows gate.
+Configuration, bridge, all platform source preflights, Linux and both Mac jobs
+passed. Builds use `publish_r2=false`; public downloads remain unchanged.
+
+The exact fresh Linux DEB SHA256 is
+`0bf6d261e2e8ca2c5ed80be1f73e8b119bd7e581ce66aa91b0e69879e7afc021`.
+All three native desktop suites passed: live native relay, isolated fully blocked
+HTTPS, and independently blocked native TCP/UDP. Independent replay bound all
+346 evidence files to their direct GitHub ZIP/API IDs/digests before verifying
+actual Accept/Disconnect, all nine changing/current decoded frame clocks, default
+native keyboard/mouse, two-way clipboard/files, paused-GUI incoming restart and
+network recovery with the same incoming PID/lease. HTTPS required a genuinely new
+TLS registration tuple and stable guarded/key-positive readiness before the
+first reconnect request. No incoming exit/OOM occurred; cleanup passed. A separate
+clean Ubuntu apt-install proof passed exact dependency/launcher/desktop/service
+and runner/core `ldd` checks. It runs amd64 emulation and is packaging proof.
+The native sessions do not exercise a systemd-managed installed root-service restart.
+
+Both fresh Mac jobs passed compilation, compiled consent checks, signing,
+app/DMG Accepted notarization, stapling, Gatekeeper and actual cold/warm same-app
+registered-ID/v2/relay/key readiness. Downloaded exact DMGs separately passed
+read-only signature/ticket/Gatekeeper, bundle `ch.mixel.remote` and architecture
+checks. ARM DMG SHA256 is
+`8010d3e9570e0c789409de0eea85c4991242a45038262ec48a2fc6670d51dc62`;
+Intel is `6a7a6af9645bc3384de8d953650dd5abe54fbe78fc210e49c36bf336d71c83fb`.
+The first Intel proof passed validation but failed busy-volume detach. Its failure
+is preserved. Exact owned-image cleanup then passed; a qualified v3 helper adds
+bounded detach retries, exact image/mount/device ownership and no recursive
+mounted-directory deletion. Nineteen helper controls, including disappearance
+before normal or forced detach, passed. A fresh Intel v3 rerun passed with owned
+mount removed. The v1, v2 and v3 inputs/results remain separate and immutable.
+Intel CI executes via Rosetta on Apple Silicon, not native Intel hardware. These
+checks do not prove a full Mac screen-control session or grant customer TCC access.
+
+Fresh Windows passed compilation, native UTF-16/AV1 source regressions, compiled
+consent, signing of the full payload, signed portable extraction, cold/warm URI,
+and cold/warm QuickSupport launch with actual incoming v2/registered relay/key.
+Its subsequent non-elevated ordinary GUI PID1788 exited `0xc0000374` before HWND;
+the 95-second handoff did not occur. Exact signed Store payload retained in the
+same run: inner ZIP SHA256
+`4e9b9485b22fd2cdc25037f738bd5dbbebb8972687439c1d1099cad23b482ca9`.
+No final Windows distribution artifact was emitted after that strict failure.
+The heap crash has no confirmed product cause. Do not blame AV1, GPU, ACL or UAC
+without attributed native evidence. Both UTF-16 and AV1 source corrections pass
+native Windows execution; the AV1 original reproduces 12 wrong variadic values
+and the fixed code passes all 14 cases against actual headers.
+
+Windows fixture desktop permissions were separately established by native
+A/B/A tests on Windows 2022 and 2025: minimal per-SID rights fail before Main with
+`0x8007045a`, the canonical temporary per-SID grant succeeds, and returning to
+minimal rights fails again. Exact original ACL hashes, account/SID and profile
+are restored. An exclusive-file-lock snapshot-reader race is fixed and qualified.
+Diagnostic `38059294364` at `0d5f4d04fc3130d5ff977bc4b939294912fb54bc`
+proved a synthetic native `RaiseException(0xc0000374)` with actual control PID4348,
+Main entry and one bounded PID/code/stack on Windows2022. Windows2025's control
+stayed suspended before Main even though the originally retained primary hThread
+reported previous suspend count zero. This rules out residual CREATE_SUSPENDED
+as the sole explanation. Product PID6948 on Windows2022 remained alive/suspended
+without a HWND; no product exception was captured. The retained-thread operation
+runs once after actual filter READY plus owned attachment, accepts documented
+previous-count0/no-op or1, rejects extra suspension and preserves execution markers.
+Diagnostic `38060545546` at `a83cf38397d2cc78b9e58601248e7f7b5238efdc`
+then used a bounded read-only native `.lastevent` query before cleanup. Both OS
+controls responded immediately at the stopped initial breakpoint `80000003`,
+with exact owned PIDs3464/3404, Mainfalse and no parser/evaluation errors. The
+lowercase CDB `-g` correction then qualified in native run `38061358434` at
+`e0dfeaf001ac105432b761eef5ff249260b19110`: both OS controls entered Main and
+captured their exact `c0000374` PID/stack. Actual product PIDs6416/6572 advanced
+to a hidden Mixel window, then stopped at owned invalid-handle `c0000008` events;
+no product heap exception was captured. This is a debugger stop, not an attributed
+customer heap cause. The next diagnostic captures those separate exact-PID/code/
+chance stacks and preserves default exception handling before continuing. No
+customer acceptance gate or application source changed for these diagnostic fixes.
+Reviewed diagnostic source `05848d3b92a0495bf1a7a08386e73731cf4e4fd0`
+adds separate exact-PID/code/first-or-second-chance invalid-handle stacks with
+16-event, 40-frame and 256-module limits. Its native synthetic control must prove
+an invalid non-pseudo CloseHandle returns FALSE/error6 before independently
+capturing its controlled heap exception. Local compilation, 16 negative/parser/
+privacy controls, finally capture and independent review passed. Both-OS native
+run `38062609997` failed its strict synthetic invalid-handle capture gate. Both
+controls entered Main, observed CloseHandle(NULL) returning FALSE/error6 and
+captured their separate exact-PID heap exception, but neither qualified an
+invalid-handle stack. Product launch did not run. The next diagnostic retains
+the NULL return control, adds a distinct nonzero/non-pseudo invalid handle and
+exports bounded scalar capture/rejection counts. Source
+`77cad049fa688e48e86e760e39ea5fc6a403749e` passed exact local parser/finally,
+PowerShell/C# and read-only timeout controls and independent review. Native run
+`38063541272` failed on both OS controls: NULL returned FALSE/error6, but nonzero
+handle1 raised code8 and terminated before returning or reaching the heap control.
+Two invalid-handle marker blocks, exact owned PID/code rows and one first-chance
+row were observed; the later unknown-chance/no-frame block made strict attribution
+fail. No product launch occurred; cleanup passed. This establishes a debugger
+side effect, not the original debugger-free customer heap cause. The next probe
+will preserve individually complete bounded blocks as explicitly partial evidence
+while leaving the overall qualification false. Native qualification is still
+required. Full preflight `38062603429` at
+`05848d3` passed all five jobs. The failed calibration result remains failed.
+Normal customer tests remain creation-flags0 and debugger-free. Live debugger
+input stays open while private stdout/stderr drain concurrently. Raw dumps,
+raw debugger files and symbol caches are private and removed; artifacts retain
+only sanitized PID/code/frame/module/event classifications. Do not conflate a
+synthetic exception with actual product heap corruption.
+
+Diagnostic source `b828ac641396ec3b6f3e7856d0a01a944f3fb813` retains individually
+complete owned invalid-handle records as explicitly partial evidence when a later
+block is rejected. A unique hex exception address and matching exception-record
+code are required. The overall synthetic gate still fails on any rejected block.
+Both heap and invalid-handle frame parsers reject trailing free text and malformed
+short-index module rows; retained genuine native frames still replay exactly.
+All five source-extracted PowerShell/C# checks and independent review pass.
+Native diagnostic
+[38065587379](https://github.com/Jangopeople/mixel-remote-client/actions/runs/38065587379)
+uses the unchanged signed `38056398014` payload and failed its strict synthetic
+control on both OS versions. Each retained one qualified partial first-chance
+code8 block with fifteen frames; full qualification stayed false. The native
+exception address maps in the stack to `ntdll!KiRaiseUserExceptionDispatcher+0x3a`,
+followed by `KERNELBASE!CloseHandle+0x49` on Windows2025 or `+0x4f` on Windows2022.
+NULL returned FALSE/error6, while nonzero handle1 never returned and the control
+exited code8 before its controlled heap exception. No product was launched.
+Cleanup passed. This does not attribute the original debugger-free heap crash.
+Exception stack return addresses are not exception instruction addresses; do not
+infer an address-specific continuation policy from a stack symbol alone.
+
+New preflight runs `38065498067` at application `5df042a` and `38065579787` at
+diagnostic `b828ac6` both passed all five jobs. Their exact metadata and passing
+logs are retained as `preflight-5df042-success.*` and `preflight-b828ac-success.*`.
+
+The old successful Linux runtime logs also exposed unhandled optional
+`org.freedesktop.ScreenSaver` provider errors. The new keep-awake manager serializes
+the backend call, records enabled state only after success, catches optional
+backend errors without raw provider details, and retries on later lifecycle
+requests. Its pending queue stays bounded: one queued callback for 10,002 requests
+while one acquisition is held. Five actual original failure controls and thirteen
+corrected Dart scenarios pass. Missing desktop keep-awake support must not abort
+or misreport a remote session.
+
+Read-only inspection of the exact old Mac DMGs found ARM core/service minima of
+12.3 while its bundle advertised 10.14. Intel core, runner and service remain
+10.14. The new pinned patch makes ARM build, runner, pods and bundle consistently
+12.3 and preserves Intel 10.14. Explicit 10.15 permission availability guards
+remove four original Intel compiler errors under warnings-as-errors without
+changing the legacy permission fallback or requesting OS permission grants.
+Eleven drift/architecture/atomic-validation controls and the complete fresh
+branding pipeline pass. Native packaged verification of the correction is pending.
+
+The earlier supplemental saved-password result remains failed and immutable:
+actual valid-password authentication/video, Disconnect, warm same-GUI URI and
+12 seconds of auth0 passed, but post-Accept changing-video sampling timed out.
+Source-extracted controls reproduced a clock read before a slow capture, popup
+occlusion of one RGB bar and a geometry change across capture. The corrected
+sampler reads source immediately after capture, uses two agreeing bar tops and
+rejects changed geometry. Its original three-second freshness, future tolerance,
+clock sync and changing-frame requirements are unchanged. Forty-three consent/
+fixture/provenance controls and retained-image regressions passed independently.
+The new native saved-password mode requires exact mapped run/source/DEB and an
+isolated blocked-native TLS fixture. It proves ordinary saved-password auth1
+before the same password stays auth0 for twelve seconds after a warm attended
+URI, then requires actual visible Accept, changing current video, TLS transport,
+unchanged access preferences and Disconnect auth0. No IPC authorization is used.
+Artifact-only native run `38061126199` at QA source
+`e581a1c4e472f71b87ca3ae28277cf5d6f41fcfe` completed **success**. It explicitly binds
+the three ordinary transport suites and supplemental password case to the exact
+`7f060ab` DEB from build `38056398014`; it preserves the failed overall app build.
+All three fresh ordinary suites passed independent exact-archive replay. The
+native saved-password case also passed: ordinary auth1/current video, warm sender
+PID1498 exit0, original GUI1075 and kernel lease, 22 auth0 observations spanning
+0.102–12.600 seconds, actual blue Accept, auth1 and changing decoded clocks,
+native TLS443, preserved preferences/password, Disconnect auth0 and cleanup.
+Independent PNG decoding matches baseline clock1181 and accepted clock1253.
+Fresh full preflight `38061125440` at that QA source passed all five jobs.
+Evidence is `native-saved-password-38061126199` and
+`independent-linux-runtime-38061126199`. The old failed password result remains
+failed; these are fresh native results with independently qualified QA inputs.
+
+Evidence and full source/run/SHA provenance live in ignored
+`artifacts/verification-2026-10-09/`. The current canonical collection is
+`final-build-38056398014`; strict Linux replay is
+`linux-candidate-replay-38056398014`. Earlier `37952824679` installers and all
+older diagnostic payloads remain diagnostic baselines, not final proof.
+
+The deployed stock server rejects host RegisterPk on `/ws/id` with NOT_SUPPORT.
+The reviewed loopback compatibility service, exact production action and draining
+rollback are in `infra/relay-ws-bridge/README.md`. Isolated actual server/TLS/
+encrypted-session and 100-host reconnect tests plus offline deployment tests
+pass. All six offline deployment tests were rerun successfully on October10;
+the reviewed bundle source-manifest digest is
+`45760e7b76adc47b7efa795b655c060bd1cc7d04a3fa02e9857f7ebb02825264`.
+Michael's explicit production approval is still pending. Do not infer it from
+"continue", fixtures, builds or the broad original request. Recheck deployment
+guards after exact approval. No production identity/database/DNS/server container,
+public download, marketplace submission or installed local app/service changed.
+
+Root owns docs, installer verification and final packaging. Pipeline owns Windows
+native diagnosis/build/signature/provenance; invite owns supplemental saved-password
+proof and QA sampling; experience owns independent native Linux replay/reviews.
+Do not stop at a fixable failure. Keep the PR draft until final strict gates and
+production decision/verification are resolved.
+
+The earlier refreshed local TLS relay fixture was removed with the existing
+manifest/label ownership checks. All three exact containers, its network and
+private identity volume are absent; cleanup evidence is
+`refreshed-owned-relay-cleanup-final/manifest.json`. Native CI fixtures are separate.
 
 > **Purpose:** if Michael hits his Claude weekly limit, another agent (Codex,
 > etc.) can pick up Mixel-Remote work from this file alone. Read this top to
-> bottom before touching anything. Last updated: **2026-07-23**.
+> bottom before touching anything. The earlier operational notes below date from
+> **2026-07-23**; the reliability status above is current for **2026-10-10**.
 > Obey `AGENTS.md`, `GUARDRAILS.md`, `CODEX_CONVENTIONS.md` in this repo —
 > especially the marketplace-release-safety rule (never cancel/replace a
 > live or in-review store submission; updates go through the normal update
@@ -80,7 +294,7 @@ Connects only to Mixel's own relay. Two repos are involved:
   - `patch_string` helper escapes sed metachars (`&` in replacement) — do NOT
     revert that; unescaped `&` silently corrupts patches.
 
-## Current channel state (all live unless noted)
+## Historical channel snapshot — 2026-07-23
 
 | Channel | State |
 |---|---|
