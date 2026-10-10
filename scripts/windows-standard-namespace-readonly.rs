@@ -10,7 +10,7 @@ mod standard_namespace_readonly {
         length: u32, root: *mut c_void, name: *const UnicodeString,
         attributes: u32, security: *mut c_void, qos: *mut c_void,
     }
-    type OpenDirectory = unsafe extern "system" fn(*mut *mut c_void, u32, *const ObjectAttributes) -> i32;
+    type OpenObject = unsafe extern "system" fn(*mut *mut c_void, u32, *const ObjectAttributes) -> i32;
     type StatusError = unsafe extern "system" fn(i32) -> u32;
     #[link(name="kernel32")]
     extern "system" {
@@ -25,7 +25,7 @@ mod standard_namespace_readonly {
         // Capture immediately; no temporary UTF-16 allocation has ended.
         io::Error::from_raw_os_error(unsafe { GetLastError() } as i32)
     }
-    fn directory_error(path: &str, access: u32, open: OpenDirectory, status_error: StatusError) -> io::Result<u32> {
+    fn object_error(path: &str, access: u32, open: OpenObject, status_error: StatusError) -> io::Result<u32> {
         if path.len() > 128 { return Err(io::Error::new(io::ErrorKind::InvalidInput,"Bounded namespace path exceeded")); }
         let name: Vec<u16> = path.encode_utf16().chain(Some(0)).collect();
         let text = UnicodeString {
@@ -40,15 +40,22 @@ mod standard_namespace_readonly {
         if status < 0 {
             if !handle.is_null() {
                 if unsafe { CloseHandle(handle) } == 0 { return Err(native_failure()); }
-                return Err(io::Error::new(io::ErrorKind::InvalidData,"Failed directory open returned a handle"));
+                return Err(io::Error::new(io::ErrorKind::InvalidData,"Failed diagnostic object open returned a handle"));
             }
             return Ok(unsafe { status_error(status) });
         }
-        if handle.is_null() { return Err(io::Error::new(io::ErrorKind::InvalidData,"Successful directory open returned no handle")); }
+        if handle.is_null() { return Err(io::Error::new(io::ErrorKind::InvalidData,"Successful diagnostic object open returned no handle")); }
         if unsafe { CloseHandle(handle) } == 0 { return Err(native_failure()); }
         Ok(0)
     }
-    pub(super) fn observe() -> io::Result<String> {
+    pub(super) fn observe(event: &str) -> io::Result<String> {
+        // This is solely the exported disposable source fixture's exact GUID.
+        // Reject arbitrary names before opening any native diagnostic object.
+        let leaf = event.strip_prefix("Global\\").or_else(|| event.strip_prefix("Local\\")).unwrap_or(event);
+        let guid = leaf.strip_prefix("Mixel-Remote-Standard-Lease-").unwrap_or("");
+        if guid.len() != 32 || !guid.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)) {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput,"Expected an owned source-fixture GUID event"));
+        }
         let mut session = 0;
         if unsafe { ProcessIdToSessionId(GetCurrentProcessId(),&mut session) } == 0 { return Err(native_failure()); }
         let name: Vec<u16> = "ntdll.dll".encode_utf16().chain(Some(0)).collect();
@@ -58,7 +65,10 @@ mod standard_namespace_readonly {
         if open.is_null() { return Err(native_failure()); }
         let error = unsafe { GetProcAddress(module,b"RtlNtStatusToDosError\0".as_ptr()) };
         if error.is_null() { return Err(native_failure()); }
-        let open: OpenDirectory = unsafe { std::mem::transmute(open) };
+        let event_open = unsafe { GetProcAddress(module,b"NtOpenEvent\0".as_ptr()) };
+        if event_open.is_null() { return Err(native_failure()); }
+        let open: OpenObject = unsafe { std::mem::transmute(open) };
+        let event_open: OpenObject = unsafe { std::mem::transmute(event_open) };
         let error: StatusError = unsafe { std::mem::transmute(error) };
         let mut result = format!("{{\"pid\":{},\"session\":{}",std::process::id(),session);
         for (label,path) in [
@@ -67,10 +77,25 @@ mod standard_namespace_readonly {
             ("sessionObjects",format!("\\Sessions\\{session}\\BaseNamedObjects")),
             ("globalObjects","\\BaseNamedObjects".to_owned()),
         ] {
-            for (right,access) in [("TraverseError",2),("QueryError",1),("CreateAccessError",4)] {
-                let code = directory_error(&path,access,open,error)?;
+            // Observe individual and combined specific rights separately. Mask15
+            // is all four directory-specific rights, not DIRECTORY_ALL_ACCESS.
+            for (right,access) in [
+                ("TraverseError",2),("QueryError",1),("CreateAccessError",4),
+                ("CreateSubdirectoryAccessError",8),("CombinedCreationAccessError",7),
+                ("AllSpecificAccessError",15),
+            ] {
+                let code = object_error(&path,access,open,error)?;
                 result.push_str(&format!(",\"{label}{right}\":{code}"));
             }
+        }
+        // A read-only native-path discriminator, never a substitute for the
+        // actual Win32 guard result captured before this secondary observation.
+        for (label,path) in [
+            ("GlobalAbsoluteEventError",format!("\\BaseNamedObjects\\{leaf}")),
+            ("SessionAbsoluteEventError",format!("\\Sessions\\{session}\\BaseNamedObjects\\{leaf}")),
+        ] {
+            let code = object_error(&path,0x00100000,event_open,error)?;
+            result.push_str(&format!(",\"{label}\":{code}"));
         }
         result.push('}');
         Ok(result)
