@@ -170,18 +170,25 @@ public static class MixelOrdinaryTokenFixture {
     }
     return attached;
   }
-  public static void ResumeOwnedPrimaryThread(int pid) {
-    IntPtr thread;
-    if (!SuspendedThreads.TryGetValue(pid, out thread)) throw new InvalidOperationException("Primary thread is not owned and suspended");
-    uint previous = ResumeThread(thread);
-    if (previous == 0xffffffff) throw new Win32Exception();
-    SuspendedThreads.Remove(pid); CloseHandle(thread);
-    if (previous != 1) throw new InvalidOperationException("Unexpected owned primary thread suspension count");
-  }
-  public static void ReleaseOwnedPrimaryThreadObservation(int pid) {
-    IntPtr thread;
-    if (!SuspendedThreads.TryGetValue(pid, out thread)) throw new InvalidOperationException("Primary thread observation is not owned");
-    SuspendedThreads.Remove(pid); CloseHandle(thread);
+  public static int ResumeOwnedPrimaryThread(int pid) {
+    IntPtr thread, process;
+    if (!SuspendedThreads.TryGetValue(pid, out thread) || !StartedProcesses.TryGetValue(pid, out process)) throw new InvalidOperationException("Primary thread and process observations are not owned");
+    try {
+      uint wait = WaitForSingleObject(process, 0);
+      if (wait == 0) return -1; // The exact target can exit after capture/detach.
+      if (wait != 0x102) throw new Win32Exception();
+      uint previous = ResumeThread(thread);
+      if (previous == 0xffffffff) {
+        int error = Marshal.GetLastWin32Error();
+        if (WaitForSingleObject(process, 0) == 0) return -1;
+        throw new Win32Exception(error);
+      }
+      // A debugger may already have released CREATE_SUSPENDED. The documented
+      // previous count 0 is then a harmless no-op; 1 releases our one count.
+      // Never repeatedly resume an unexpected additional suspension.
+      if (previous > 1) throw new InvalidOperationException("Unexpected owned primary thread suspension count");
+      return checked((int)previous);
+    } finally { SuspendedThreads.Remove(pid); CloseHandle(thread); }
   }
   public static void StopOwnedStartedProcesses() {
     foreach (IntPtr handle in StartedProcesses.Values) {
@@ -202,11 +209,13 @@ public static class MixelOrdinaryTokenFixture {
   public static string StartedStatus(int pid) {
     IntPtr handle;
     if (!StartedProcesses.TryGetValue(pid, out handle)) return "not-native-fixture-started";
-    uint code;
-    if (!GetExitCodeProcess(handle, out code)) throw new Win32Exception();
     uint wait = WaitForSingleObject(handle, 0);
     if (wait == 0x102) return "still-running";
     if (wait != 0) throw new Win32Exception();
+    // Read the exit code only after this retained process handle signals.
+    // A code read before the wait can capture STILL_ACTIVE just before exit.
+    uint code;
+    if (!GetExitCodeProcess(handle, out code)) throw new Win32Exception();
     return "exited:0x" + code.ToString("x8");
   }
   public static void CloseStartedObservations() {
@@ -603,7 +612,7 @@ function Start-OwnedLiveCrashObservation([int]$ProcessId, $State) {
   # The numeric heap break filter is configured on CDB's own command line.
   $State.live=Start-OwnedDebuggerProcess $cdb @('-p',[string]$ProcessId,'-pr','-G','-pd','-hd','-nosqm','-noshell','-xe','0xc0000374','-y',('srv*'+$symbols+'*https://msdl.microsoft.com/download/symbols'),'-cf',$commands,'-logo',$raw) $console $errors
   $debugger=$State.live.debugger
-  $State.live | Add-Member -NotePropertyMembers @{raw=$raw;console=$console;errors=$errors;pid=$ProcessId;attached=$false;captureAttributed=$false;ready=$false}
+  $State.live | Add-Member -NotePropertyMembers @{raw=$raw;console=$console;errors=$errors;pid=$ProcessId;attached=$false;captureAttributed=$false;ready=$false;primaryThreadResume=$null}
   $deadline=[DateTime]::UtcNow.AddSeconds(20)
   do {
     # Flush redirected output only after a confirmed debugger exit, before
@@ -617,7 +626,9 @@ function Start-OwnedLiveCrashObservation([int]$ProcessId, $State) {
       $State.live.ready=@($lines | Where-Object { $_.Trim() -ceq 'MIXEL_NATIVE_READY' }).Count -eq 1
       $State.live.captureAttributed=(Read-OwnedHeapCapture $lines $ProcessId).verified
       if ($State.live.ready -and ($State.live.attached -or $State.live.captureAttributed)) {
-        Write-Host ("FIXTURE: diagnostic-only configured-filter ready marker observed after debugger-managed resume; foregroundPid=$ProcessId; retainedHandleAttachmentObserved=$($State.live.attached); exactNativeHeapCaptureObserved=$($State.live.captureAttributed).")
+        $previous=[MixelOrdinaryTokenFixture]::ResumeOwnedPrimaryThread($ProcessId)
+        $State.live.primaryThreadResume=[pscustomobject]@{ targetExited=($previous -eq -1); previousSuspendCount=$(if ($previous -ge 0) { $previous } else { $null }) }
+        Write-Host ("FIXTURE: diagnostic-only configured-filter READY and exact target ownership qualified; foregroundPid=$ProcessId; retainedHandleAttachmentObserved=$($State.live.attached); exactNativeHeapCaptureObserved=$($State.live.captureAttributed); ownedPrimaryThreadResume="+($State.live.primaryThreadResume | ConvertTo-Json -Compress)+'.')
         return
       }
     }
@@ -684,10 +695,10 @@ function Read-OwnedExecutionMetadata([string[]]$Lines, [int]$ProcessId) {
   }
 }
 
-function Write-OwnedControlExecutionEvidence([int]$ProcessId, $State) {
+function Write-OwnedControlExecutionEvidence([int]$ProcessId, $State, [switch]$ProductTarget) {
   $entry=Join-Path $State.folder 'native-control-entered.txt'
-  $entered=Test-Path $entry
-  $entryPidVerified=$entered -and [IO.File]::ReadAllText($entry) -ceq [string]$ProcessId
+  $entered=if ($ProductTarget) { $null } else { Test-Path $entry }
+  $entryPidVerified=if ($ProductTarget) { $null } else { $entered -and [IO.File]::ReadAllText($entry) -ceq [string]$ProcessId }
   $streams=@{}
   if ($State.live) {
     foreach ($name in @('raw','console','errors')) {
@@ -695,12 +706,14 @@ function Write-OwnedControlExecutionEvidence([int]$ProcessId, $State) {
       $streams[$name]=if (Test-Path $path) { Read-OwnedExecutionMetadata ([IO.File]::ReadAllLines($path)) $ProcessId } else { $null }
     }
   }
-  $evidence=[pscustomobject]@{ evidenceKind='synthetic-native-exception-execution'; observationPhase='after-bounded-debugger-stop-before-target-cleanup'; pid=$ProcessId; nativeStatus=[MixelOrdinaryTokenFixture]::StartedStatus($ProcessId); enteredMain=$entered; entryPidVerified=$entryPidVerified; debuggerExited=($State.live -and $State.live.debugger.HasExited); streams=$streams }
-  Write-Host ('FIXTURE: bounded synthetic native exception execution evidence before cleanup: '+($evidence | ConvertTo-Json -Depth 5 -Compress))
+  $kind=if ($ProductTarget) { 'owned-product-native-execution' } else { 'synthetic-native-exception-execution' }
+  $evidence=[pscustomobject]@{ evidenceKind=$kind; observationPhase='after-bounded-debugger-stop-before-target-cleanup'; pid=$ProcessId; nativeStatus=[MixelOrdinaryTokenFixture]::StartedStatus($ProcessId); enteredMain=$entered; entryPidVerified=$entryPidVerified; primaryThreadResume=$(if ($State.live) { $State.live.primaryThreadResume } else { $null }); debuggerExited=($State.live -and $State.live.debugger.HasExited); streams=$streams }
+  Write-Host ('FIXTURE: bounded native execution evidence before cleanup: '+($evidence | ConvertTo-Json -Depth 5 -Compress))
   if ($env:RUNNER_TEMP) {
     $archive=Join-Path $env:RUNNER_TEMP 'mixel-owned-ordinary-qs-logs'
     New-Item -ItemType Directory $archive -Force | Out-Null
-    $evidence | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $archive 'native-exception-execution-sanitized.json')
+    $artifactName=if ($ProductTarget) { 'native-product-execution-sanitized.json' } else { 'native-exception-execution-sanitized.json' }
+    $evidence | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $archive $artifactName)
   }
 }
 
@@ -815,7 +828,6 @@ public static class MixelOwnedNativeExceptionControl {
       throw 'Owned native exception control is not the actual suspended non-elevated same-session standard-user target.'
     }
     Start-OwnedLiveCrashObservation $controlPid $state
-    [MixelOrdinaryTokenFixture]::ReleaseOwnedPrimaryThreadObservation($controlPid)
     $capture=Write-OwnedCrashDiagnostic $controlPid $executable $startedAt $state -SyntheticControl
     $entry=Join-Path $state.folder 'native-control-entered.txt'
     $entered=Test-Path $entry
@@ -824,7 +836,7 @@ public static class MixelOwnedNativeExceptionControl {
         $capture.exceptionCodes.Count -ne 1 -or $capture.exceptionCodes[0] -ine 'c0000374' -or $capture.stackFrames.Count -eq 0 -or -not $entryPidVerified) {
       throw 'Synthetic native exception control did not qualify exact owned PID/code and a sanitized native stack.'
     }
-    Write-Host "PASS: synthetic native RaiseException(0xc0000374) control qualifies the exact suspended standard-user launch, debugger-managed resume and bounded PID/code-attributed native stack capture; controlPid=$controlPid; this is debugger qualification only."
+    Write-Host "PASS: synthetic native RaiseException(0xc0000374) control qualifies the exact suspended standard-user launch, owned primary-thread release after filter readiness and bounded PID/code-attributed native stack capture; controlPid=$controlPid; this is debugger qualification only."
   } catch { $controlFailure=$_; throw }
   finally {
     $errors=[System.Collections.Generic.List[string]]::new()
@@ -939,7 +951,6 @@ try {
             $ordinaryProfileRoot=[MixelOrdinaryTokenFixture]::ProfilePath($ordinaryPid)
             if ([MixelOrdinaryTokenFixture]::Elevated($ordinaryPid) -or $main.SessionId -ne (Get-Process -Id $PID).SessionId) { throw 'Owned suspended diagnostic target is not an ordinary same-session process.' }
             Start-OwnedLiveCrashObservation $ordinaryPid $nativeCrash
-            [MixelOrdinaryTokenFixture]::ReleaseOwnedPrimaryThreadObservation($ordinaryPid)
           }
         }
         finally { $ownedPassword = $null }
@@ -1055,6 +1066,14 @@ try {
   throw
 } finally {
   if ($nativeCrash) {
+    if ($ordinaryPid) {
+      if ($nativeCrash.live) {
+        try { Stop-OwnedLiveDebugger $nativeCrash.live }
+        catch { $nativeCrashCleanupFailed=$true; Write-Host 'FAIL: owned product debugger exit/output observation additionally failed.' }
+      }
+      try { Write-OwnedControlExecutionEvidence $ordinaryPid $nativeCrash -ProductTarget }
+      catch { $nativeCrashCleanupFailed=$true; Write-Host 'FAIL: bounded owned product execution evidence capture additionally failed.' }
+    }
     try { Stop-OwnedCrashObservation $nativeCrash }
     catch { $nativeCrashCleanupFailed=$true; Write-Host 'FAIL: owned native crash observation cleanup additionally failed.' }
   }
