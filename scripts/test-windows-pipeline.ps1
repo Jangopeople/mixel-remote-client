@@ -60,7 +60,7 @@ Write-Host 'PASS: exact native runtime fixture observes the current PID owning t
 # and was hidden by deleting a name whose account creation had failed.
 if ($env:GITHUB_ACTIONS -ceq 'true' -and [MixelOrdinaryTokenFixture]::Elevated($PID)) {
   $accountStart = $launchSource.IndexOf('$random = [byte[]]::new(24)')
-  $accountEnd = $launchSource.IndexOf("`$fixtureStage = 'add owned standard account to users'", $accountStart)
+  $accountEnd = $launchSource.IndexOf("`$fixtureStage = 'grant owned standard desktop access'", $accountStart)
   if ($accountStart -lt 0 -or $accountEnd -le $accountStart) { throw 'Actual owned account bootstrap is missing.' }
   $ownedUser = 'mixelqs' + [Guid]::NewGuid().ToString('N').Substring(0, 10)
   $ownedSid = $null
@@ -83,7 +83,7 @@ if ($env:GITHUB_ACTIONS -ceq 'true' -and [MixelOrdinaryTokenFixture]::Elevated($
     if (-not $ownedSid -or (Get-LocalUser -SID ([Security.Principal.SecurityIdentifier]::new($ownedSid))).Name -cne $ownedUser) {
       throw 'Actual owned standard account was not created with its recorded SID.'
     }
-    Write-Host 'PASS: actual ordinary runtime bootstrap creates its isolated standard account using memory-only random credentials.'
+    Write-Host 'PASS: actual ordinary runtime bootstrap creates its isolated standard account and adds it to Users using memory-only random credentials.'
     # Qualify the exact cross-account desktop/launch fixture with an actual
     # Win32 GUI before waiting for the customer app. This control cannot satisfy
     # any customer HWND, incoming IPC, consent lease or 95-second runtime gate.
@@ -117,10 +117,12 @@ public static class MixelOwnedDesktopControl {
   static string Name(IntPtr obj) { var text=new StringBuilder(512); uint required; return GetUserObjectInformationW(obj,2,text,1024,out required) ? text.ToString() : "unavailable(win32="+Marshal.GetLastWin32Error()+")"; }
   public static void Main() {
     string result=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"desktop-control-result.txt");
+    File.WriteAllLines(result,new[] { "phase=entered-main", "pid="+Process.GetCurrentProcess().Id, "session="+Process.GetCurrentProcess().SessionId });
     IntPtr menu=CreateMenu(); int menuError=menu==IntPtr.Zero ? Marshal.GetLastWin32Error() : 0;
     IntPtr window=CreateWindowExW(0,"STATIC","Mixel owned ordinary desktop fixture",0x10cf0000,30,30,500,200,IntPtr.Zero,menu,IntPtr.Zero,IntPtr.Zero);
     int windowError=window==IntPtr.Zero ? Marshal.GetLastWin32Error() : 0;
     File.WriteAllLines(result,new[] {
+      "phase=Win32-calls-complete",
       "pid="+Process.GetCurrentProcess().Id, "session="+Process.GetCurrentProcess().SessionId,
       "desktop="+Name(GetProcessWindowStation())+"\\"+Name(GetThreadDesktop(GetCurrentThreadId())),
       "window="+window.ToInt64(), "visible="+IsWindowVisible(window), "windowError="+windowError,
@@ -135,6 +137,15 @@ public static class MixelOwnedDesktopControl {
       $compiler = Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
       & $compiler /nologo /target:winexe "/out:$guiExecutable" $guiSource
       if ($LASTEXITCODE -ne 0 -or -not (Test-Path $guiExecutable)) { throw 'Owned Win32 desktop fixture compilation failed.' }
+      $windowClass = $launchSource.IndexOf('public static class MixelSupportWindowTest {')
+      $windowFirst = $launchSource.LastIndexOf('using System;', $windowClass)
+      $windowLast = $launchSource.IndexOf("`n'@", $windowClass)
+      if ($windowClass -lt 0 -or $windowFirst -lt 0 -or $windowLast -le $windowFirst) { throw 'Exact runtime window fixture class missing.' }
+      if (-not ('MixelSupportWindowTest' -as [type])) { Add-Type -TypeDefinition $launchSource.Substring($windowFirst,$windowLast-$windowFirst) }
+      $launchAst = [System.Management.Automation.Language.Parser]::ParseInput($launchSource,[ref]$null,[ref]$null)
+      $diagnostic = @($launchAst.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Write-OwnedWindowDiagnostic'},$true))
+      if ($diagnostic.Count -ne 1) { throw 'Exact owned runtime diagnostic function is ambiguous.' }
+      . ([scriptblock]::Create($diagnostic[0].Extent.Text))
       $guiAccess = [MixelOrdinaryTokenFixture+DesktopAccess]::new($ownedSid)
       $guiProfile = $true
       $guiPid = [MixelOrdinaryTokenFixture]::StartStandardUser($guiExecutable, $ownedUser, $ownedPassword)
@@ -143,15 +154,27 @@ public static class MixelOwnedDesktopControl {
         throw 'Owned desktop control is not a genuine non-elevated process in the runner session.'
       }
       $deadline = [DateTime]::UtcNow.AddSeconds(8)
-      while (-not (Test-Path $guiResult) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
-      if (-not (Test-Path $guiResult)) { throw 'Exact owned ordinary desktop fixture did not execute its Win32 control.' }
       $actualGui = @{}
-      foreach ($line in Get-Content $guiResult) {
-        $separator = $line.IndexOf('=')
-        if ($separator -lt 1) { throw 'Malformed owned native desktop control result.' }
-        $actualGui[$line.Substring(0, $separator)] = $line.Substring($separator + 1)
+      while ([DateTime]::UtcNow -lt $deadline) {
+        if (Test-Path $guiResult) {
+          foreach ($line in Get-Content $guiResult) {
+            $separator = $line.IndexOf('=')
+            if ($separator -lt 1) { throw 'Malformed owned native desktop control result.' }
+            $actualGui[$line.Substring(0, $separator)] = $line.Substring($separator + 1)
+          }
+          if ($actualGui.phase -ceq 'Win32-calls-complete') { break }
+        }
+        $guiProcess.Refresh()
+        if ($guiProcess.HasExited) { break }
+        Start-Sleep -Milliseconds 100
       }
       Write-Host ('FIXTURE: actual native owned ordinary Win32 desktop control: ' + ($actualGui | ConvertTo-Json -Compress))
+      Write-OwnedWindowDiagnostic $guiPid 'native Win32 desktop fixture qualification'
+      if ($actualGui.phase -cne 'Win32-calls-complete') {
+        $guiProcess.Refresh()
+        $exitCode = if ($guiProcess.HasExited) { $guiProcess.ExitCode } else { 'still-running' }
+        throw "Exact owned ordinary desktop fixture did not complete its Win32 control; phase=$($actualGui.phase), exit=$exitCode."
+      }
       if ($actualGui.pid -ne [string]$guiPid -or $actualGui.desktop -cne $actualDesktop -or
           $actualGui.window -eq '0' -or $actualGui.visible -cne 'True' -or $actualGui.menu -eq '0') {
         throw "Exact owned ordinary Win32 GUI fixture failed; windowError=$($actualGui.windowError), menuError=$($actualGui.menuError), desktop=$($actualGui.desktop)."
