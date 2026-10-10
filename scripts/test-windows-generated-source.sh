@@ -8,6 +8,7 @@ for mixel_source_test in \
   test-generated-support-paths \
   test-support-macos-uri-routing \
   test-support-lease \
+  test-windows-lease-error \
   test-support-network \
   test-secure-support \
   test-support-linux \

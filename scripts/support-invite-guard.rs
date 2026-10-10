@@ -279,9 +279,13 @@ mod mixel_support_lease {
             descriptor,
             inherit: 0,
         };
-        let handle = unsafe { CreateEventExW(&attributes, wide(EVENT).as_ptr(), 0, 0x00100000) };
+        // Retain UTF-16 storage through immediate native error capture. Its
+        // allocator/drop may call native APIs and replace thread last-error.
+        let event_name = wide(EVENT);
+        let handle = unsafe { CreateEventExW(&attributes, event_name.as_ptr(), 0, 0x00100000) };
+        let native_error = if handle.is_null() { unsafe { GetLastError() } } else { 0 };
         let error = if handle.is_null() {
-            Some(std::io::Error::last_os_error())
+            Some(std::io::Error::from_raw_os_error(native_error as i32))
         } else {
             None
         };
@@ -301,12 +305,14 @@ mod mixel_support_lease {
 
     #[cfg(windows)]
     fn probe() -> std::io::Result<bool> {
-        let handle = unsafe { OpenEventW(0x00100000, 0, wide(EVENT).as_ptr()) };
+        let event_name = wide(EVENT);
+        let handle = unsafe { OpenEventW(0x00100000, 0, event_name.as_ptr()) };
+        let native_error = if handle.is_null() { unsafe { GetLastError() } } else { 0 };
         if handle.is_null() {
-            return if unsafe { GetLastError() } == 2 {
+            return if native_error == 2 {
                 Ok(false)
             } else {
-                Err(std::io::Error::last_os_error())
+                Err(std::io::Error::from_raw_os_error(native_error as i32))
             };
         }
         unsafe {
