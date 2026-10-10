@@ -816,3 +816,7 @@ foreach ($invalid in @('oversized', 'truncated')) {
   $fixture.GetAwaiter().GetResult()
 }
 Write-Host 'PASS: malformed online/relay/key/rendezvous/ID proofs, persisted consent, oversized frames and truncated frames fail closed.'
+
+# Pure managed ACL regression uses exact helper bodies; actual native session
+# access/cleanup and original consent gates run in standard-account controls.
+& (Join-Path $PSScriptRoot 'test-windows-standard-namespace-access.ps1')

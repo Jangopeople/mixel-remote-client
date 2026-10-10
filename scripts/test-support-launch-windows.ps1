@@ -444,6 +444,7 @@ $ordinaryProfileRoot = $null
 $ownedUser = $null
 $ownedSid = $null
 $desktopAccess = $null
+$namespaceAccess = $null
 $baselineIncomingPid = $null
 $fixtureStage = 'customer launch'
 $primaryFailure = $null
@@ -1363,6 +1364,11 @@ try {
         Add-LocalGroupMember -SID ([Security.Principal.SecurityIdentifier]::new('S-1-5-32-545')) -Member $ownedUser
         $fixtureStage = 'grant owned standard desktop access'
         $desktopAccess = [MixelOrdinaryTokenFixture+DesktopAccess]::new($ownedSid)
+        $fixtureStage = 'grant owned standard session namespace create access'
+        if (-not ('MixelCI.StandardNamespaceAccess' -as [type])) {
+          Add-Type -TypeDefinition (Get-Content (Join-Path $PSScriptRoot 'windows-standard-namespace-access.cs') -Raw)
+        }
+        $namespaceAccess = [MixelCI.StandardNamespaceAccess]::new($ownedSid, $ownedUser, [uint32](Get-Process -Id $PID).SessionId)
         if ($NativeCrashDiagnostic) {
           $fixtureStage = 'qualify actual native debugger with synthetic exception control'
           Invoke-OwnedLiveCrashControl $ownedSid $ownedUser $ownedPassword
@@ -1523,7 +1529,7 @@ try {
   try { Stop-OwnedCustomerProcesses }
   catch { $customerCleanupFailure = $_ }
   [MixelOrdinaryTokenFixture]::CloseStartedObservations()
-  if ($ordinaryRoot -or $ownedUser -or $desktopAccess) {
+  if ($ordinaryRoot -or $ownedUser -or $desktopAccess -or $namespaceAccess) {
     $cleanupErrors = [System.Collections.Generic.List[string]]::new()
     if ($nativeCrashCleanupFailed) { $cleanupErrors.Add('Owned native crash observation cleanup failed.') }
     Start-Sleep -Seconds 2
@@ -1545,6 +1551,7 @@ try {
         }
       } catch { $cleanupErrors.Add('Owned ordinary runtime log preservation failed.') }
     }
+    if ($namespaceAccess) { try { $namespaceAccess.Dispose() } catch { $cleanupErrors.Add('Owned session namespace DACL restoration failed.') } }
     if ($desktopAccess) { try { $desktopAccess.Dispose() } catch { $cleanupErrors.Add('Owned desktop ACL restoration failed.') } }
     if ($ownedSid) {
       $profileRemoved = $false

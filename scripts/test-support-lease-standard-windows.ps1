@@ -262,7 +262,7 @@ $fixtureRoot = Join-Path ([Environment]::GetFolderPath('CommonApplicationData'))
 $eventName = 'Global\Mixel-Remote-Standard-Lease-' + [Guid]::NewGuid().ToString('N')
 $executable = Join-Path $fixtureRoot 'lease-standard.exe'
 $resultPath = Join-Path $fixtureRoot 'fixture-result.json'
-$desktopAccess = $null; $profileStarted = $false; $eventHandle = [IntPtr]::Zero; $failure = $null
+$desktopAccess = $null; $namespaceAccess = $null; $profileStarted = $false; $eventHandle = [IntPtr]::Zero; $failure = $null
 $originalDesktop = [MixelOrdinaryTokenFixture]::DesktopAclHashes()
 try {
   # Use the exact customer account bootstrap; its random password stays in memory.
@@ -284,7 +284,21 @@ try {
   $profileStarted = $true
   Invoke-StandardLeaseNamespaceObservations with-logon
   Invoke-StandardLeaseNamespaceObservations with-token
+  # Preserve the original namespace-access classification as an A/B/A negative
+  # control. These observed values cannot satisfy any positive consent gate.
+  [void](Invoke-StandardLeaseControl -Mode probe -ObserveOnly -ObservationLabel 'global-original-before-owned-grant')
+  $beforeGrant = [IO.File]::ReadAllText($resultPath) | ConvertFrom-Json
   $absent = 'ownerFailed=false;ownerError=none;kernel=absent;probeError=none;memoryActive=false'
+  $unavailable = 'ownerFailed=false;ownerError=none;kernel=unavailable;probeError=5;memoryActive=false'
+  $initialAbsent = $beforeGrant.sourceStatus -ceq $absent -and $beforeGrant.rawOpenError -eq 2 -and $beforeGrant.attestation -ceq '' -and -not $beforeGrant.requiresClick -and -not $beforeGrant.ownerFailed
+  $initialDenied = $beforeGrant.sourceStatus -ceq $unavailable -and $beforeGrant.rawOpenError -eq 5 -and $beforeGrant.attestation -ceq 'guard-unavailable' -and $beforeGrant.requiresClick -and -not $beforeGrant.ownerFailed
+  if (-not $initialAbsent -and -not $initialDenied) { throw 'Original unprepared standard namespace is neither safely absent nor safely unavailable.' }
+  if (-not ('MixelCI.StandardNamespaceAccess' -as [type])) {
+    Add-Type -TypeDefinition (Get-Content (Join-Path $PSScriptRoot 'windows-standard-namespace-access.cs') -Raw)
+  }
+  $namespaceAccess = [MixelCI.StandardNamespaceAccess]::new($ownedSid, $ownedUser, [uint32](Get-Process -Id $PID).SessionId)
+  Write-Host 'FIXTURE: exact caller-session namespace grants create access only to the owned disposable SID; product guard and event ACLs remain enforced.'
+
   $active = 'ownerFailed=false;ownerError=none;kernel=active;probeError=none;memoryActive=false'
   $activeOwner = 'ownerFailed=false;ownerError=none;kernel=active;probeError=none;memoryActive=true'
   [void](Invoke-StandardLeaseControl probe $absent 2 '' $false $false)
@@ -310,6 +324,12 @@ try {
   } finally { [MixelIsolatedLeaseControl]::Close($eventHandle); $eventHandle = [IntPtr]::Zero }
   [void](Invoke-StandardLeaseControl probe $absent 2 '' $false $false)
   Write-Host 'PASS: closed wrong-object control leaves no GUID lease or false readiness in a fresh actual standard-account process.'
+  [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses()
+  [MixelOrdinaryTokenFixture]::CloseStartedObservations()
+  $namespaceAccess.Dispose(); $namespaceAccess = $null
+  [void](Invoke-StandardLeaseControl probe $beforeGrant.sourceStatus ([int]$beforeGrant.rawOpenError) $beforeGrant.attestation ([bool]$beforeGrant.requiresClick) ([bool]$beforeGrant.ownerFailed))
+  Write-Host 'PASS: native A/B/A namespace preparation preserves the original absent-or-denied classification after exact DACL restoration; no false readiness remains.'
+
 } catch {
   $failure = $_
   throw
@@ -318,6 +338,7 @@ try {
   if ($eventHandle -ne [IntPtr]::Zero) { try { [MixelIsolatedLeaseControl]::Close($eventHandle) } catch { $cleanup.Add('Owned isolated event handle cleanup failed.') } }
   try { [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses() } catch { $cleanup.Add('Exact owned standard lease process cleanup failed.') }
   [MixelOrdinaryTokenFixture]::CloseStartedObservations()
+  if ($namespaceAccess) { try { $namespaceAccess.Dispose() } catch { $cleanup.Add('Owned standard lease namespace DACL restoration failed.') } }
   if ($desktopAccess) { try { $desktopAccess.Dispose() } catch { $cleanup.Add('Owned standard lease desktop ACL restoration failed.') } }
   if ([MixelOrdinaryTokenFixture]::DesktopAclHashes() -cne $originalDesktop) { $cleanup.Add('Owned standard lease desktop ACL hashes changed.') }
   if ($profileStarted -and $ownedSid) {
