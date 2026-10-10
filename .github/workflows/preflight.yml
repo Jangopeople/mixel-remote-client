@@ -67,6 +67,22 @@ jobs:
         run: |
           python scripts/test-support-windows-clipboard.py --evidence-dir windows-clipboard-proof
           if ($LASTEXITCODE -ne 0) { throw 'Native Windows clipboard C/Rust ownership qualification failed.' }
+      - name: Qualify actual native Rust linker after Git Bash startup
+        shell: bash
+        run: |
+          source scripts/use-windows-msvc-bash.sh
+          python - <<'PY'
+          import subprocess
+          import tempfile
+          from pathlib import Path
+          with tempfile.TemporaryDirectory(prefix='mixel native Rust préflight ') as folder:
+              root = Path(folder)
+              source = root / 'native.rs'
+              binary = root / 'native.exe'
+              source.write_text('fn main() { assert_eq!(std::env::args().nth(1).as_deref(), Some("mixel préflight")); println!("PASS: actual standalone Rust links with MSVC and runs under Git Bash after native environment import."); }\n', encoding='utf-8')
+              subprocess.run(['rustc', '--edition=2021', '--deny=warnings', str(source), '-o', str(binary)], check=True, timeout=60)
+              subprocess.run([str(binary), 'mixel préflight'], check=True, timeout=10)
+          PY
       - uses: actions/upload-artifact@v6
         if: always()
         with:
@@ -137,6 +153,26 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
+      - name: Resolve the pinned native Mac source
+        id: config
+        run: python3 scripts/release-artifacts.py config
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: '1.81'
+          targets: x86_64-apple-darwin
+      - name: Prepare Intel execution on an Apple Silicon runner
+        run: |
+          if [[ "$(uname -m)" == "arm64" ]]; then
+            softwareupdate --install-rosetta --agree-to-license
+          fi
+      - name: Fetch pinned standalone native Mac source
+        env:
+          UPSTREAM_VERSION: ${{ steps.config.outputs.upstream_version }}
+        run: git clone --depth 1 --branch "$UPSTREAM_VERSION" https://github.com/rustdesk/rustdesk.git rustdesk
+      - name: Prove native Mac failure boundaries and actual pinned Rust final link
+        env:
+          MACOS_RUNTIME_LINK_TARGET: x86_64-apple-darwin
+        run: python3 scripts/test-support-macos.py
       - name: Exercise native macOS URL activation and window probe self-tests
         run: |
           python3 scripts/test-support-launch-macos.py --self-test

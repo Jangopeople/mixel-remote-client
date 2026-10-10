@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Qualify pinned Mac availability guards and architecture-specific minimums."""
+"""Qualify pinned Mac availability, native failure boundaries and minimums."""
 import hashlib
 import importlib.util
 import os
@@ -27,14 +27,39 @@ def reject(operation):
     raise AssertionError('Pinned Mac source drift accepted')
 
 
+def native_function(text, signature):
+    start = text.index(signature)
+    brace = text.index('{', start)
+    depth = 1
+    for index in range(brace + 1, len(text)):
+        depth += (text[index] == '{') - (text[index] == '}')
+        if depth == 0:
+            return text[start:index + 1]
+    raise AssertionError('Incomplete pinned native function')
+
+
 original = source(patcher.SOURCE)
 assert hashlib.sha256(original.encode()).hexdigest() == patcher.ORIGINAL_SHA256
 fixed = patcher.patch_permissions(original)
 assert patcher.patch_permissions(fixed) == fixed
-assert fixed.replace(patcher.NEW_CAPTURE, patcher.OLD_CAPTURE, 1).replace(patcher.NEW_INPUT, patcher.OLD_INPUT, 1) == original
+normalized = fixed.replace(patcher.NEW_CAPTURE, patcher.OLD_CAPTURE, 1).replace(patcher.NEW_INPUT, patcher.OLD_INPUT, 1)
+for old, new in ((patcher.OLD_PIXEL_ENCODING, patcher.NEW_PIXEL_ENCODING),
+                 (patcher.OLD_AUTH_FAILURE, patcher.NEW_AUTH_FAILURE),
+                 (patcher.OLD_AUTH_EXECUTE, patcher.NEW_AUTH_EXECUTE)):
+    normalized = normalized.replace(new, old, 1)
+assert normalized == original
 reject(lambda: patcher.patch_permissions(original.replace('return false;', 'return true;', 1)))
 reject(lambda: patcher.patch_permissions(original + '\n'))
 reject(lambda: patcher.patch_permissions(fixed.replace('macOS 10.15', 'macOS 10.14', 1)))
+for old, new in ((patcher.OLD_PIXEL_ENCODING, patcher.NEW_PIXEL_ENCODING),
+                 (patcher.OLD_AUTH_FAILURE, patcher.NEW_AUTH_FAILURE),
+                 (patcher.OLD_AUTH_EXECUTE, patcher.NEW_AUTH_EXECUTE)):
+    reject(lambda new=new: patcher.patch_permissions(fixed.replace(new, new + '\n', 1)))
+    reject(lambda new=new: patcher.patch_permissions(fixed.replace(new, new * 2, 1)))
+    # An existing availability-only patched checkout upgrades strictly through
+    # the same full original pin, without requiring a pristine working tree.
+    partial = fixed.replace(new, old, 1)
+    assert patcher.patch_permissions(partial) == fixed
 original_build = source(patcher.BUILD_SOURCE)
 fixed_build = patcher.patch_runtime(original_build)
 assert patcher.patch_runtime(fixed_build) == fixed_build
@@ -78,11 +103,194 @@ with tempfile.TemporaryDirectory(prefix='mixel-macos-target-') as directory:
     assert all(p.read_bytes() == data for p, data in snapshot.items())
     (repo / 'Cargo.toml').write_text(source('Cargo.toml').replace('version = "1.4.6"', 'version = "1.4.7"', 1))
     reject(lambda: patcher.apply(repo, 'aarch64'))
-print('PASS: pinned Mac permission/runtime correction/idempotence, ARM12.3 and Intel10.14 targets, architecture switching, atomic validation and 16 drift/upgrade rejections')
+print('PASS: pinned Mac permission/native ownership/runtime correction/idempotence, ARM12.3 and Intel10.14 targets, architecture switching, atomic validation and 22 drift/upgrade rejections')
+
+
+NATIVE_BOUNDARY_STUBS = r'''
+#include <CoreFoundation/CoreFoundation.h>
+#include <CoreGraphics/CoreGraphics.h>
+#include <Security/Authorization.h>
+#include <Security/AuthorizationTags.h>
+#include <IOKit/graphics/IOGraphicsTypes.h>
+#include <assert.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/resource.h>
+static CFStringRef encoding;
+static int encoding_copies, encoding_releases;
+static CFStringRef test_CopyPixelEncoding(CGDisplayModeRef mode) {
+    assert(mode == NULL);
+    encoding_copies++;
+    return encoding ? (CFStringRef)CFRetain(encoding) : NULL;
+}
+static CFComparisonResult test_CFStringCompare(CFStringRef first, CFStringRef second, CFStringCompareFlags options) {
+    if (!first) {
+        puts("NATIVE_CONTROL: original source enters actual CoreFoundation NULL comparison");
+        fflush(stdout);
+    }
+    CFComparisonResult result = CFStringCompare(first, second, options);
+    if (!first) {
+        puts("NATIVE_CONTROL: actual CoreFoundation NULL comparison returned");
+        fflush(stdout);
+    }
+    return result;
+}
+static void test_CFRelease(CFTypeRef value) {
+    assert(value && value == encoding);
+    encoding_releases++;
+    CFRelease(value);
+}
+static OSStatus create_status, rights_status, execute_status;
+static int auth_creates, auth_rights, auth_executes, auth_frees, auth_owned;
+static int pipe_requests;
+static FILE *owned_pipe;
+static const AuthorizationRef owned_auth = (AuthorizationRef)(uintptr_t)0x1234;
+static OSStatus test_AuthorizationCreate(const AuthorizationRights *rights,
+    const AuthorizationEnvironment *environment, AuthorizationFlags flags, AuthorizationRef *result) {
+    assert(!rights && environment == kAuthorizationEmptyEnvironment && flags == kAuthorizationFlagDefaults);
+    auth_creates++;
+    if (create_status == errAuthorizationSuccess) { *result = owned_auth; auth_owned++; }
+    return create_status;
+}
+static OSStatus test_AuthorizationCopyRights(AuthorizationRef authorization,
+    const AuthorizationRights *rights, const AuthorizationEnvironment *environment,
+    AuthorizationFlags flags, AuthorizationRights **authorized) {
+    assert(authorization == owned_auth && auth_owned == 1 && !auth_frees);
+    assert(rights && rights->count == 1 && !strcmp(rights->items[0].name, kAuthorizationRightExecute));
+    assert(environment == kAuthorizationEmptyEnvironment && !authorized);
+    assert(flags == (kAuthorizationFlagDefaults | kAuthorizationFlagInteractionAllowed |
+        kAuthorizationFlagPreAuthorize | kAuthorizationFlagExtendRights));
+    auth_rights++;
+    return rights_status;
+}
+static OSStatus test_AuthorizationFree(AuthorizationRef authorization, AuthorizationFlags flags) {
+    assert(authorization == owned_auth && auth_owned == 1 && !auth_frees && flags == kAuthorizationFlagDefaults);
+    auth_frees++; auth_owned--;
+    return errAuthorizationSuccess;
+}
+static OSStatus test_AuthorizationExecuteWithPrivileges(AuthorizationRef authorization,
+    const char *process, AuthorizationFlags flags, char *const *arguments, FILE **pipe) {
+    assert(authorization == owned_auth && auth_owned == 1 && !auth_frees);
+    assert(process && !strcmp(process, "synthetic-never-executed-tool"));
+    assert(flags == kAuthorizationFlagDefaults && arguments && !strcmp(arguments[0], "synthetic") && !arguments[1]);
+    auth_executes++;
+    if (pipe) {
+        pipe_requests++;
+        if (execute_status == errAuthorizationSuccess) {
+            owned_pipe = tmpfile(); assert(owned_pipe); *pipe = owned_pipe;
+        }
+    }
+    return execute_status;
+}
+#define CGDisplayModeCopyPixelEncoding test_CopyPixelEncoding
+#define CFStringCompare test_CFStringCompare
+#define CFRelease test_CFRelease
+#define AuthorizationCreate test_AuthorizationCreate
+#define AuthorizationCopyRights test_AuthorizationCopyRights
+#define AuthorizationFree test_AuthorizationFree
+#define AuthorizationExecuteWithPrivileges test_AuthorizationExecuteWithPrivileges
+'''
+
+NATIVE_BOUNDARY_MAIN = r'''
+int main(int argc, char **argv) {
+    assert(argc == 2);
+    // The original NULL control uses the real CoreFoundation comparator, but
+    // cannot leave a core file behind. No TCC or authorization APIs execute.
+    struct rlimit no_core = {0, 0}; assert(setrlimit(RLIMIT_CORE, &no_core) == 0);
+    if (!strcmp(argv[1], "pixel-null")) {
+        assert(bitDepth(NULL) == 0 && encoding_copies == 1 && !encoding_releases);
+        puts("PASS_NATIVE: NULL pixel encoding returns unknown depth0 without CoreFoundation compare/release");
+        return 0;
+    }
+    if (!strcmp(argv[1], "pixel-known")) {
+        const CFStringRef values[] = {CFSTR(kIO32BitFloatPixels), CFSTR(kIO64BitDirectPixels),
+            CFSTR(kIO16BitFloatPixels), CFSTR(IO32BitDirectPixels), CFSTR(kIO30BitDirectPixels),
+            CFSTR(IO16BitDirectPixels), CFSTR(IO8BitIndexedPixels), CFSTR("unrecognized synthetic encoding")};
+        const size_t depths[] = {96, 64, 48, 32, 30, 16, 8, 0};
+        for (size_t index = 0; index < sizeof(depths) / sizeof(depths[0]); index++) {
+            encoding = values[index]; encoding_copies = encoding_releases = 0;
+            assert(bitDepth(NULL) == depths[index]);
+            assert(encoding_copies == 1 && encoding_releases == 1);
+        }
+        puts("PASS_NATIVE: seven known pixel encodings plus unknown preserve actual CoreFoundation matching and one release each");
+        return 0;
+    }
+    bool execute = false;
+    if (!strcmp(argv[1], "auth-create-error")) create_status = errAuthorizationInternal;
+    else if (!strcmp(argv[1], "auth-cancel")) rights_status = errAuthorizationCanceled;
+    else if (!strcmp(argv[1], "auth-denied")) rights_status = errAuthorizationDenied;
+    else if (!strcmp(argv[1], "auth-rights-error")) rights_status = errAuthorizationInternal;
+    else if (!strcmp(argv[1], "auth-success")) {}
+    else if (!strcmp(argv[1], "auth-execute-error")) { execute = true; execute_status = errAuthorizationInternal; }
+    else if (!strcmp(argv[1], "auth-execute-success")) execute = true;
+    else return 64;
+    char argument[] = "synthetic", process[] = "synthetic-never-executed-tool";
+    char *arguments[] = {argument, NULL};
+    bool result = Elevate(execute ? process : NULL, execute ? arguments : NULL);
+    bool expected = !create_status && !rights_status && !execute_status;
+    assert(result == expected && auth_creates == 1);
+    assert(auth_rights == (create_status ? 0 : 1));
+    assert(auth_executes == (execute && !create_status && !rights_status ? 1 : 0));
+    bool leaked_auth = auth_owned != 0;
+    bool unused_pipe = pipe_requests != 0;
+    if (owned_pipe) { assert(fclose(owned_pipe) == 0); owned_pipe = NULL; }
+    if (leaked_auth) {
+        assert(!auth_frees && rights_status && !create_status);
+        puts("REPRODUCED_NATIVE: failed/cancelled rights retain the successful-create authorization reference");
+        return 42;
+    }
+    assert(auth_frees == (create_status ? 0 : 1));
+    if (unused_pipe) {
+        puts("REPRODUCED_NATIVE: process invocation requests an unused communications stream");
+        return 43;
+    }
+    printf("PASS_NATIVE: %s preserves result and releases its successful-create authorization exactly once, with no pipe or OS permission request\n", argv[1]);
+    return 0;
+}
+'''
+
+
+def qualify_native_boundaries(original_text, fixed_text, folder, arch, minimum):
+    functions = ['size_t bitDepth(CGDisplayModeRef mode)', 'extern "C" bool Elevate(char* process, char** args)']
+    programs = {}
+    for name, text in [('original', original_text), ('fixed', fixed_text)]:
+        path = folder / ('boundaries-' + name + '.mm')
+        path.write_text(NATIVE_BOUNDARY_STUBS + '\n'.join(native_function(text, signature) for signature in functions) + NATIVE_BOUNDARY_MAIN)
+        binary = folder / ('boundaries-' + name)
+        # These extracted functions use only C/CoreFoundation. Avoid loading
+        # newer SDK libc++ headers or runtime for the Intel10.14 control.
+        command = ['xcrun', 'clang++', '-std=c++17', '-arch', arch, '-mmacosx-version-min=' + minimum,
+                   '-nostdinc++', '-nostdlib++', '-Wall', '-Wextra', '-Werror', str(path), '-framework', 'CoreFoundation', '-o', str(binary)]
+        compiled = subprocess.run(command, text=True, capture_output=True, timeout=60)
+        assert compiled.returncode == 0, compiled.stderr
+        assert not compiled.stderr, compiled.stderr
+        programs[name] = binary
+    for name, binary in programs.items():
+        cases = ['pixel-null', 'pixel-known', 'auth-create-error', 'auth-cancel', 'auth-denied',
+                 'auth-rights-error', 'auth-success', 'auth-execute-error', 'auth-execute-success']
+        for case in cases:
+            result = subprocess.run([str(binary), case], text=True, capture_output=True, timeout=15)
+            if name == 'original' and case == 'pixel-null':
+                assert result.returncode in (-4, -6, -10, -11), (result.returncode, result.stdout, result.stderr)
+                assert result.stdout.count('original source enters actual CoreFoundation NULL comparison') == 1, result.stdout
+                assert 'actual CoreFoundation NULL comparison returned' not in result.stdout, result.stdout
+                print('PASS: actual original ' + arch + ' NULL pixel metadata reaches real CoreFoundation failure; exit=' + str(result.returncode))
+            elif name == 'original' and case in ('auth-cancel', 'auth-denied', 'auth-rights-error'):
+                assert result.returncode == 42 and 'REPRODUCED_NATIVE: failed/cancelled rights' in result.stdout, (result.returncode, result.stdout, result.stderr)
+            elif name == 'original' and case in ('auth-execute-error', 'auth-execute-success'):
+                assert result.returncode == 43 and 'REPRODUCED_NATIVE: process invocation' in result.stdout, (result.returncode, result.stdout, result.stderr)
+            else:
+                assert result.returncode == 0 and 'PASS_NATIVE:' in result.stdout, (result.returncode, result.stdout, result.stderr)
+    print('PASS: actual source-extracted ' + arch + ' macOS' + minimum + ' pixel NULL/known/unknown controls and create/cancel/denied/error/success/execution authorization ownership; original defects reproduced, corrected16 controls pass; no real Authorization/TCC/elevated execution')
 
 if platform.system() == 'Darwin':
     with tempfile.TemporaryDirectory(prefix='mixel-macos-availability-') as directory:
         folder = Path(directory)
+        target = os.environ.get('MACOS_RUNTIME_LINK_TARGET', 'x86_64-apple-darwin')
+        assert target in ('x86_64-apple-darwin', 'aarch64-apple-darwin')
+        boundary_arch, boundary_minimum = ('x86_64', '10.14') if target.startswith('x86_64') else ('arm64', '12.3')
+        qualify_native_boundaries(original, fixed, folder, boundary_arch, boundary_minimum)
         header = original[:original.index('extern "C" bool CanUseNewApiForScreenCaptureCheck()')]
         def function(text, signature):
             start = text.index(signature)
