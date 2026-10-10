@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import uuid
+from rust_toolchain import rustc_command
 
 ROOT = Path(__file__).resolve().parents[1]
 HARNESS = r'''
@@ -120,7 +121,7 @@ def main():
         fixture = directory / "lease.rs"
         fixture.write_text(source + HARNESS, encoding="utf-8")
         binary = directory / ("lease.exe" if os.name == "nt" else "lease")
-        subprocess.run(["rustc", "--edition", "2021", "-D", "warnings", str(fixture), "-o", str(binary)], check=True)
+        subprocess.run(rustc_command(["rustc", "--edition", "2021", "-D", "warnings", str(fixture), "-o", str(binary)]), check=True)
 
         def command(*arguments):
             return subprocess.check_output([str(binary), *arguments], text=True, timeout=10).strip()

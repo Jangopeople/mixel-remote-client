@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+from rust_toolchain import rustc_command
 
 ROOT = Path(__file__).resolve().parents[1]
 UPSTREAM = Path(os.environ.get("RDREPO", ROOT / "rustdesk"))
@@ -136,7 +137,7 @@ with tempfile.TemporaryDirectory(prefix="mixel-input-tests-") as temporary:
     source = repo / "input-tests.rs"
     source.write_text(harness, encoding="utf-8")
     binary = repo / ("input-tests.exe" if os.name == "nt" else "input-tests")
-    subprocess.run(["rustc", "--edition=2021", "--deny", "warnings", "--test", str(source), "-o", str(binary)], check=True)
+    subprocess.run(rustc_command(["rustc", "--edition=2021", "--deny", "warnings", "--test", str(source), "-o", str(binary)]), check=True)
     subprocess.run([str(binary), "--test-threads=1"], check=True)
 
 print("PASS: actual pinned X11 event loop retries interrupted polling without losing keyboard events or changing fatal/stop handling")

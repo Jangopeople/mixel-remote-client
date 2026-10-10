@@ -7,6 +7,7 @@ import sys
 import tempfile
 from pathlib import Path
 from sdk_discovery import find_dart
+from rust_toolchain import rustc_command
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -327,7 +328,7 @@ fn unrelated_outgoing_linux_link_retains_dbus_dispatch_only() {
     target = repo / "generated_native_paths.rs"
     target.write_text(source, encoding="utf-8")
     binary = repo / ("generated_native_paths.exe" if os.name == "nt" else "generated_native_paths")
-    subprocess.run([rustc, "--edition=2021", "--cfg", 'feature="flutter"', "--test", str(target), "-o", str(binary)], check=True)
+    subprocess.run(rustc_command([rustc, "--edition=2021", "--cfg", 'feature="flutter"', "--test", str(target), "-o", str(binary)]), check=True)
     subprocess.run([str(binary), "--test-threads=1"], check=True)
 
 

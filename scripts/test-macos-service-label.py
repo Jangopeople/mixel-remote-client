@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from rust_toolchain import rustc_command
 
 
 ROOT = Path(__file__).resolve().parent
@@ -44,7 +45,7 @@ fn installed_signed_helpers_are_found_and_updater_selects_daemon_path() {
 }
 ''', encoding="utf-8")
     executable = directory / "labels-test"
-    result = subprocess.run(["rustc", "--edition=2021", "--test", str(source), "-o", str(executable)], capture_output=True, text=True, timeout=60)
+    result = subprocess.run(rustc_command(["rustc", "--edition=2021", "--test", str(source), "-o", str(executable)]), capture_output=True, text=True, timeout=60)
     if result.returncode:
         raise AssertionError(result.stderr)
     return subprocess.run([str(executable)], capture_output=True, text=True, timeout=10)

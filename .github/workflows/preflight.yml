@@ -22,6 +22,7 @@ jobs:
           python3 scripts/test-macos-native-minimum.py
           python3 scripts/test-macos-bundle-minimum.py
           python3 scripts/test-sdk-discovery.py
+          python3 scripts/test-rust-toolchain.py
           python3 scripts/test-support-session-fixture.py
           python3 scripts/test-support-video-sampling.py
           python3 scripts/test-linux-runtime-artifact.py
@@ -67,6 +68,9 @@ jobs:
         run: |
           python scripts/test-support-windows-clipboard.py --evidence-dir windows-clipboard-proof
           if ($LASTEXITCODE -ne 0) { throw 'Native Windows clipboard C/Rust ownership qualification failed.' }
+      - name: Prove explicit MSVC selection under actual Git Bash coreutils shadow
+        shell: bash
+        run: python scripts/test-rust-toolchain.py --native-windows
       - uses: actions/upload-artifact@v6
         if: always()
         with:

@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+from rust_toolchain import rustc_command
 
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
@@ -213,7 +214,7 @@ with tempfile.TemporaryDirectory(prefix="mixel-quick-support-name-") as temporar
         source.write_text(test_source, encoding="utf-8")
         binary = Path(temporary) / (variant + (".exe" if os.name == "nt" else ""))
         print(variant + " source SHA256: core=" + hashlib.sha256(core.encode()).hexdigest() + " portable=" + hashlib.sha256(portable.encode()).hexdigest(), flush=True)
-        command = [rustc, "--edition=2021", "--deny=warnings", "--cfg", 'feature="flutter"']
+        command = rustc_command([rustc, "--edition=2021", "--deny=warnings", "--cfg", 'feature="flutter"'])
         if variant == "original":
             command += ["--cfg", "original"]
         subprocess.run(command + ["--test", str(source), "-o", str(binary)], check=True)

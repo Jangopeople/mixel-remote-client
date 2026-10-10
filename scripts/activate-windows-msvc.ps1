@@ -79,15 +79,32 @@ try {
   $target = if ($updates.ContainsKey('VSCMD_ARG_TGT_ARCH')) { $updates['VSCMD_ARG_TGT_ARCH'] } else { $env:VSCMD_ARG_TGT_ARCH }
   $hostArch = if ($updates.ContainsKey('VSCMD_ARG_HOST_ARCH')) { $updates['VSCMD_ARG_HOST_ARCH'] } else { $env:VSCMD_ARG_HOST_ARCH }
   if ($target -cne 'x64' -or $hostArch -cne 'x64') { throw 'Installed MSVC developer environment is not x64 host and target.' }
+  $tools = if ($updates.ContainsKey('VCToolsInstallDir')) { $updates['VCToolsInstallDir'] } else { $env:VCToolsInstallDir }
+  if ([string]::IsNullOrWhiteSpace($tools)) { throw 'Installed native MSVC tools directory is absent.' }
+  $linker = Join-Path $tools 'bin/Hostx64/x64/link.exe'
+  $cargoName = 'CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER'
+  $existingLinker = [Environment]::GetEnvironmentVariable($cargoName, 'Process')
+  if (-not [string]::IsNullOrWhiteSpace($existingLinker) -and -not [StringComparer]::OrdinalIgnoreCase.Equals([IO.Path]::GetFullPath($existingLinker), [IO.Path]::GetFullPath($linker))) {
+    throw 'Existing Cargo linker conflicts with the installed x64 MSVC linker.'
+  }
+  if ($updates.ContainsKey($cargoName)) { throw 'Native MSVC attempted to replace the owned Cargo linker variable.' }
+  $updates.Add($cargoName, $linker)
+  # First import the developer environment into this process, then qualify the
+  # exact PE/linker identity before exporting anything to later runner steps.
+  foreach ($entry in $updates.GetEnumerator()) {
+    [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, 'Process')
+  }
+  $scripts = $PSScriptRoot
+  python -c 'import sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]); from rust_toolchain import find_msvc_linker; import os; find_msvc_linker(os.environ)' $scripts
+  if ($LASTEXITCODE -ne 0) { throw 'Installed native MSVC linker qualification failed.' }
+  if (-not (Get-Command cl.exe -ErrorAction SilentlyContinue)) { throw 'Installed native MSVC compiler is unavailable after environment import.' }
   foreach ($entry in $updates.GetEnumerator()) {
     if ($ExportToGitHubEnvironment) {
       $delimiter = 'MIXEL_MSVC_' + [Guid]::NewGuid().ToString('N')
       Add-Content -LiteralPath $env:GITHUB_ENV -Value ($entry.Key + '<<' + $delimiter + "`n" + $entry.Value + "`n" + $delimiter) -Encoding utf8
     }
-    [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, 'Process')
   }
-  if (-not (Get-Command cl.exe -ErrorAction SilentlyContinue)) { throw 'Installed native MSVC compiler is unavailable after environment import.' }
-  Write-Host ('PASS: installed x64 MSVC environment imported through owned batch; ' + $updates.Count + ' changed toolchain variables, values withheld.')
+  Write-Host ('PASS: installed x64 MSVC environment and explicit qualified Cargo linker imported through owned batch; ' + $updates.Count + ' changed toolchain variables, values withheld.')
 } finally {
   if ($process) { $process.Dispose() }
   if ($created) { Remove-Item -LiteralPath $owned -Recurse -Force }

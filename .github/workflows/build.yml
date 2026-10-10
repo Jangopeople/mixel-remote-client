@@ -727,6 +727,10 @@ jobs:
         shell: pwsh
         run: ./scripts/activate-windows-msvc.ps1 -ExportToGitHubEnvironment
 
+      - name: Prove explicit MSVC selection under actual Git Bash coreutils shadow
+        shell: bash
+        run: python scripts/test-rust-toolchain.py --native-windows
+
       - name: Prove native Windows clipboard ownership and Rust error cleanup
         shell: pwsh
         run: |

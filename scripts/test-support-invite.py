@@ -10,6 +10,7 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from sdk_discovery import find_dart
+from rust_toolchain import rustc_command
 
 root = Path(__file__).resolve().parents[1]
 upstream = Path(os.environ.get("RDREPO", root / "rustdesk"))
@@ -214,7 +215,7 @@ runpy.run_path(sys.argv[1], run_name='__main__')
 }
 ''', encoding="utf-8")
     boot_binary = repo / ("native_support_boot_vector.exe" if os.name == "nt" else "native_support_boot_vector")
-    subprocess.run([rustc, "--edition=2021", "--deny=warnings", str(boot_test), "-o", str(boot_binary)], check=True)
+    subprocess.run(rustc_command([rustc, "--edition=2021", "--deny=warnings", str(boot_test), "-o", str(boot_binary)]), check=True)
     synthetic_uri = "mixel-remote://support?invite=inv_00000000-0000-0000-0000-000000000001&apikey=synthetic-public-key-000000000000"
     native_boot_vectors = []
     for markers in (["--mixel-attended"], ["--mixel-attended", "--mixel-attended-handoff-unavailable"]):
@@ -497,7 +498,7 @@ fn reset(mode: &'static str) {
 }
 ''', encoding="utf-8")
     handoff_binary = repo / ("native_attended_handoff_test.exe" if os.name == "nt" else "native_attended_handoff_test")
-    subprocess.run([rustc, "--edition=2021", "--deny=warnings", "--test", str(handoff_test), "-o", str(handoff_binary)], check=True)
+    subprocess.run(rustc_command([rustc, "--edition=2021", "--deny=warnings", "--test", str(handoff_test), "-o", str(handoff_binary)]), check=True)
     subprocess.run([str(handoff_binary), "--test-threads=1"], check=True)
     assert 'if _is_quick_support || _is_mixel_support_invite {' in core
     assert 'if crate::ipc::set_config("mixel-support-invite-attended", "Y".to_owned()).is_err()' in core
@@ -541,7 +542,7 @@ fn unrelated_http_status_retains_existing_reusable_behavior() {
 }
 """, encoding="utf-8")
     cache_binary = repo / ("native_cache_test.exe" if os.name == "nt" else "native_cache_test")
-    subprocess.run([rustc, "--edition=2021", "--test", str(cache_test), "-o", str(cache_binary)], check=True)
+    subprocess.run(rustc_command([rustc, "--edition=2021", "--test", str(cache_test), "-o", str(cache_binary)]), check=True)
     subprocess.run([str(cache_binary)], check=True)
 
     # Compile and execute the actual generated native transport code, replacing
@@ -561,7 +562,7 @@ fn unrelated_http_status_retains_existing_reusable_behavior() {
     transport_test = repo / "native_transport_test.rs"
     transport_test.write_text(transport_template.replace("// GENERATED_HTTP_REQUEST_SYNC", transport), encoding="utf-8")
     transport_binary = repo / ("native_transport_test.exe" if os.name == "nt" else "native_transport_test")
-    subprocess.run([rustc, "--edition=2021", "--test", str(transport_test), "-o", str(transport_binary)], check=True)
+    subprocess.run(rustc_command([rustc, "--edition=2021", "--test", str(transport_test), "-o", str(transport_binary)]), check=True)
     subprocess.run([str(transport_binary)], check=True)
     subprocess.run([sys.executable, str(root / "scripts/test-support-dbus.py"),
                     "--source", str(repo), "--upstream", str(upstream)], check=True)

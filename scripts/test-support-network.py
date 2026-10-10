@@ -5,6 +5,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+from rust_toolchain import rustc_command
 
 ROOT = Path(__file__).resolve().parents[1]
 UPSTREAM = Path(os.environ.get("RDREPO", ROOT / "rustdesk"))
@@ -408,7 +409,7 @@ fn receive_timer(mixel_registration:bool,keep_alive:i32,elapsed:u64)->ResultType
     if not rustc:
         raise RuntimeError("Rust is required for actual generated network path tests")
     binary = repo / ("network-tests.exe" if os.name == "nt" else "network-tests")
-    subprocess.run([rustc, "--edition=2021", "--deny", "warnings", "--test", str(harness), "-o", str(binary)], check=True)
+    subprocess.run(rustc_command([rustc, "--edition=2021", "--deny", "warnings", "--test", str(harness), "-o", str(binary)]), check=True)
     subprocess.run([str(binary), "--test-threads=1"], check=True)
     print("PASS: actual generated HTTPS transport, strict TLS policy, native-first/proxy/custom-server behavior and patch idempotence")
 
@@ -649,7 +650,7 @@ async fn relay_ipv6(interface:&TestInterface)->usize {
                               "__RECONNECT__": reconnect}.items():
         client_harness = client_harness.replace(marker, generated)
     harness.write_text(client_harness, encoding="utf-8")
-    subprocess.run([rustc, "--edition=2021", "--deny", "warnings", "--test", str(harness), "-o", str(binary)], check=True)
+    subprocess.run(rustc_command([rustc, "--edition=2021", "--deny", "warnings", "--test", str(harness), "-o", str(binary)]), check=True)
     subprocess.run([str(binary), "--test-threads=1"], check=True)
     print("PASS: actual generated socket-owned relay mode skips every forced direct TCP/UDP/IPv6 probe and retains native/custom plus relay encryption behavior")
 
@@ -812,6 +813,6 @@ fn punch(udp_port:i32)->PunchHole {PunchHole{socket_addr:vec![1],socket_addr_v6:
     }.items():
         host_harness = host_harness.replace(marker, function(mediator, signature))
     harness.write_text(host_harness, encoding="utf-8")
-    subprocess.run([rustc, "--edition=2021", "--deny", "warnings", "--test", str(harness), "-o", str(binary)], check=True)
+    subprocess.run(rustc_command([rustc, "--edition=2021", "--deny", "warnings", "--test", str(harness), "-o", str(binary)]), check=True)
     subprocess.run([str(binary), "--test-threads=1"], check=True)
     print("PASS: complete generated host intranet/punch paths route a later HTTPS socket through authenticated relay before constructing direct TCP/IPv6; native/UDP/custom paths retained")
