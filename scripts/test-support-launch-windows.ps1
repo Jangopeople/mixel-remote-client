@@ -55,6 +55,8 @@ public static class MixelOrdinaryTokenFixture {
   [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
   [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
   [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
+  [DllImport("kernel32.dll", SetLastError = true)] static extern bool GetExitCodeProcess(IntPtr process, out uint code);
+  [DllImport("kernel32.dll", SetLastError = true)] static extern uint WaitForSingleObject(IntPtr handle, uint timeout);
   [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
   [DllImport("kernel32.dll", SetLastError = true)] static extern bool DuplicateHandle(IntPtr source, IntPtr handle, IntPtr target, out IntPtr copy, uint access, bool inherit, uint options);
   [DllImport("advapi32.dll", SetLastError = true)] static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
@@ -104,7 +106,28 @@ public static class MixelOrdinaryTokenFixture {
   }
   public static string ThreadDesktopName(uint thread) { return UserObjectName(GetThreadDesktop(thread)); }
   static StartupInfo Startup() { return new StartupInfo { cb = Marshal.SizeOf(typeof(StartupInfo)), desktop = CurrentDesktopPath() }; }
-  static int Started(ProcessInfo process) { CloseHandle(process.thread); CloseHandle(process.process); return checked((int)process.pid); }
+  static readonly System.Collections.Generic.Dictionary<int, IntPtr> StartedProcesses = new System.Collections.Generic.Dictionary<int, IntPtr>();
+  static int Started(ProcessInfo process) {
+    CloseHandle(process.thread);
+    int pid = checked((int)process.pid);
+    if (StartedProcesses.ContainsKey(pid)) { CloseHandle(process.process); throw new InvalidOperationException("Owned process observation PID collision"); }
+    StartedProcesses.Add(pid, process.process);
+    return pid;
+  }
+  public static string StartedStatus(int pid) {
+    IntPtr handle;
+    if (!StartedProcesses.TryGetValue(pid, out handle)) return "not-native-fixture-started";
+    uint code;
+    if (!GetExitCodeProcess(handle, out code)) throw new Win32Exception();
+    uint wait = WaitForSingleObject(handle, 0);
+    if (wait == 0x102) return "still-running";
+    if (wait != 0) throw new Win32Exception();
+    return "exited:0x" + code.ToString("x8");
+  }
+  public static void CloseStartedObservations() {
+    foreach (IntPtr handle in StartedProcesses.Values) CloseHandle(handle);
+    StartedProcesses.Clear();
+  }
   public static int StartLinkedToken(string executable) {
     IntPtr token = IntPtr.Zero, linked = IntPtr.Zero, data = Marshal.AllocHGlobal(IntPtr.Size);
     try {
@@ -146,7 +169,9 @@ public static class MixelOrdinaryTokenFixture {
     public DesktopAccess(string sid) {
       var identity = new SecurityIdentifier(sid);
       stationOriginal = Grant(station, identity, 0x327);
-      try { desktopOriginal = Grant(desktop, identity, 0xc3); } catch { Apply(station, stationOriginal); stationOriginal = null; throw; }
+      // GUI controls and Flutter can create menus. Grant that documented
+      // desktop right only to this disposable account, then restore the ACL.
+      try { desktopOriginal = Grant(desktop, identity, 0xc7); } catch { Apply(station, stationOriginal); stationOriginal = null; throw; }
     }
     public void Dispose() {
       Exception failure = null;
@@ -250,6 +275,7 @@ function Find-MainWindow([int]$ProcessId) {
 
 function Write-OwnedWindowDiagnostic([int]$ProcessId, [string]$Phase) {
   try {
+    Write-Host "FIXTURE: actual retained native process observation: phase=$Phase, pid=$ProcessId, status=$([MixelOrdinaryTokenFixture]::StartedStatus($ProcessId))."
     $process = Get-Process -Id $ProcessId -ErrorAction Stop
     $windows = [System.Collections.Generic.List[object]]::new()
     [MixelSupportWindowTest]::EnumWindows({
@@ -499,6 +525,7 @@ try {
      ($Portable -and $_.Path.StartsWith((Split-Path $runtimePath -Parent) + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) -or
      ($ordinaryRoot -and $_.Path.StartsWith($ordinaryRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)))
   } | Stop-Process -Force -ErrorAction SilentlyContinue
+  [MixelOrdinaryTokenFixture]::CloseStartedObservations()
   if ($ordinaryRoot -or $ownedUser -or $desktopAccess) {
     $cleanupErrors = [System.Collections.Generic.List[string]]::new()
     Start-Sleep -Seconds 2

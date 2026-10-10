@@ -88,7 +88,7 @@ if ($env:GITHUB_ACTIONS -ceq 'true' -and [MixelOrdinaryTokenFixture]::Elevated($
     # Win32 GUI before waiting for the customer app. This control cannot satisfy
     # any customer HWND, incoming IPC, consent lease or 95-second runtime gate.
     $guiRoot = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) ('mixel-ordinary-fixture-' + [Guid]::NewGuid().ToString('N'))
-    $guiProcess = $null; $guiAccess = $null; $guiProfile = $false; $guiFailure = $null
+    $guiProcess = $null; $guiPid = $null; $guiAccess = $null; $guiProfile = $false; $guiFailure = $null
     try {
       New-Item -ItemType Directory $guiRoot | Out-Null
       $acl = Get-Acl $guiRoot
@@ -148,6 +148,7 @@ public static class MixelOwnedDesktopControl {
       . ([scriptblock]::Create($diagnostic[0].Extent.Text))
       $guiAccess = [MixelOrdinaryTokenFixture+DesktopAccess]::new($ownedSid)
       $guiProfile = $true
+      $guiStartedAt = [DateTime]::UtcNow
       $guiPid = [MixelOrdinaryTokenFixture]::StartStandardUser($guiExecutable, $ownedUser, $ownedPassword)
       $guiProcess = Get-Process -Id $guiPid
       if ([MixelOrdinaryTokenFixture]::Elevated($guiPid) -or $guiProcess.SessionId -ne (Get-Process -Id $PID).SessionId) {
@@ -164,16 +165,26 @@ public static class MixelOwnedDesktopControl {
           }
           if ($actualGui.phase -ceq 'Win32-calls-complete') { break }
         }
-        $guiProcess.Refresh()
-        if ($guiProcess.HasExited) { break }
+        if ([MixelOrdinaryTokenFixture]::StartedStatus($guiPid).StartsWith('exited:')) { break }
         Start-Sleep -Milliseconds 100
       }
       Write-Host ('FIXTURE: actual native owned ordinary Win32 desktop control: ' + ($actualGui | ConvertTo-Json -Compress))
       Write-OwnedWindowDiagnostic $guiPid 'native Win32 desktop fixture qualification'
       if ($actualGui.phase -cne 'Win32-calls-complete') {
-        $guiProcess.Refresh()
-        $exitCode = if ($guiProcess.HasExited) { $guiProcess.ExitCode } else { 'still-running' }
-        throw "Exact owned ordinary desktop fixture did not complete its Win32 control; phase=$($actualGui.phase), exit=$exitCode."
+        $nativeStatus = [MixelOrdinaryTokenFixture]::StartedStatus($guiPid)
+        # Only emit selected fields from events attributable to this exact
+        # owned executable and PID, never arbitrary event text or raw argv.
+        $events = @(Get-WinEvent -FilterHashtable @{LogName='Application'; Id=1000; StartTime=$guiStartedAt.AddSeconds(-1)} -ErrorAction SilentlyContinue)
+        foreach ($event in $events) {
+          $data = @{}
+          foreach ($entry in ([xml]$event.ToXml()).Event.EventData.Data) { $data[[string]$entry.Name] = [string]$entry.'#text' }
+          if ($data.AppPath -cne $guiExecutable -or $data.ProcessId -notmatch '^(?:0x)?[0-9a-fA-F]+$') { continue }
+          $eventPid = if ($data.ProcessId.StartsWith('0x')) { [Convert]::ToInt64($data.ProcessId.Substring(2),16) } else { [Convert]::ToInt64($data.ProcessId) }
+          if ($eventPid -ne $guiPid) { continue }
+          $selected = [pscustomobject]@{ eventId=$event.Id; pid=$eventPid; appName=$data.AppName; module=$data.ModuleName; exception=$data.ExceptionCode; offset=$data.FaultingOffset }
+          Write-Host ('FIXTURE: actual owned native Application Error event: ' + ($selected | ConvertTo-Json -Compress))
+        }
+        throw "Exact owned ordinary desktop fixture did not complete its Win32 control; phase=$($actualGui.phase), nativeStatus=$nativeStatus."
       }
       if ($actualGui.pid -ne [string]$guiPid -or $actualGui.desktop -cne $actualDesktop -or
           $actualGui.window -eq '0' -or $actualGui.visible -cne 'True' -or $actualGui.menu -eq '0') {
@@ -188,6 +199,7 @@ public static class MixelOwnedDesktopControl {
       if ($guiProcess -and -not $guiProcess.HasExited) {
         try { Stop-Process -Id $guiProcess.Id -Force } catch { $guiCleanup.Add('Owned native desktop-control process cleanup failed.') }
       }
+      [MixelOrdinaryTokenFixture]::CloseStartedObservations()
       if ($guiAccess) { try { $guiAccess.Dispose() } catch { $guiCleanup.Add('Owned native desktop-control ACL restoration failed.') } }
       if ($guiProfile) {
         $profileRemoved = $false
@@ -236,6 +248,8 @@ foreach ($required in @(
     "Write-OwnedWindowDiagnostic `$main.Id 'initial ordinary startup'",
     'ThreadDesktopName([uint32]$_.Id)',
     '$process.Modules | Select-Object -ExpandProperty ModuleName',
+    'StartedStatus($ProcessId)',
+    'Grant(desktop, identity, 0xc7)',
     'if ($ownedSid) { try { Remove-LocalUser -SID',
     '$primaryFailure = $_',
     'if ($primaryFailure) { Write-Host',
