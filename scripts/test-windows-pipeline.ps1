@@ -20,6 +20,11 @@ if ($fixtureClass -lt 0 -or $fixtureStart -lt 0 -or $fixtureEnd -le $fixtureStar
 if (-not ('MixelOrdinaryTokenFixture' -as [type])) {
   Add-Type -TypeDefinition $launchSource.Substring($fixtureStart, $fixtureEnd - $fixtureStart)
 }
+$actualDesktop = [MixelOrdinaryTokenFixture]::CurrentDesktopPath()
+if ($actualDesktop -notmatch '^[^\\]+\\[^\\]+$' -or $launchSource.Contains('desktop = "winsta0\\default"')) {
+  throw 'Actual native launch desktop is missing or reverted to a different hard-coded desktop.'
+}
+Write-Host "PASS: exact native fixture discovers the actual runner window station and thread desktop used for both permission grants and ordinary GUI launch: $actualDesktop."
 foreach ($name in @('\BaseNamedObjects\Mixel-Remote-Attended-Runtime-v2', '\Sessions\0\BaseNamedObjects\Mixel-Remote-Attended-Runtime-v2')) {
   if (-not [MixelOrdinaryTokenFixture]::IsLeaseName($name)) { throw 'Exact runtime lease name rejected.' }
 }
@@ -104,6 +109,10 @@ foreach ($required in @(
     'exact signed compiled QS argument (diagnostic)',
     '(-not $Portable -and -not $CompiledQuickSupportDiagnostic)',
     'Compiled diagnostic executable differs from the retained signed payload entry.',
+    'desktop = CurrentDesktopPath()',
+    '$main.SessionId -ne (Get-Process -Id $PID).SessionId',
+    '$ordinaryProfileRoot = [MixelOrdinaryTokenFixture]::ProfilePath($main.Id)',
+    "Join-Path `$ordinaryProfileRoot 'AppData/Roaming/Mixel-Remote'",
     'if ($ownedSid) { try { Remove-LocalUser -SID',
     '$primaryFailure = $_',
     'if ($primaryFailure) { Write-Host',

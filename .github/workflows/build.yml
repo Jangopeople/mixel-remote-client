@@ -912,6 +912,10 @@ jobs:
               }
             }
           }
+          $ownedLogs = Join-Path $env:RUNNER_TEMP 'mixel-owned-ordinary-qs-logs'
+          if (Test-Path $ownedLogs) {
+            Copy-Item $ownedLogs runtime-diagnostics/owned-ordinary-profile -Recurse
+          }
       - uses: actions/upload-artifact@v4
         if: always()
         with:

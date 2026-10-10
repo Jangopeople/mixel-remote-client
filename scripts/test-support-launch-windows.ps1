@@ -63,9 +63,11 @@ public static class MixelOrdinaryTokenFixture {
   [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool CreateProcessWithLogonW(string user, string domain, string password, uint flags, string application, StringBuilder command, uint creation, IntPtr environment, string directory, ref StartupInfo startup, out ProcessInfo process);
   [DllImport("user32.dll")] static extern IntPtr GetProcessWindowStation();
   [DllImport("user32.dll")] static extern IntPtr GetThreadDesktop(uint thread);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool GetUserObjectInformationW(IntPtr obj, int kind, StringBuilder text, uint size, out uint required);
   [DllImport("user32.dll", SetLastError = true)] static extern bool GetUserObjectSecurity(IntPtr obj, ref uint information, byte[] data, uint size, out uint required);
   [DllImport("user32.dll", SetLastError = true)] static extern bool SetUserObjectSecurity(IntPtr obj, ref uint information, byte[] data);
   [DllImport("userenv.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool DeleteProfileW(string sid, string path, string computer);
+  [DllImport("userenv.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool GetUserProfileDirectoryW(IntPtr token, StringBuilder path, ref uint size);
   [DllImport("ntdll.dll")] static extern int NtQuerySystemInformation(int kind, IntPtr data, int length, out int required);
   [DllImport("ntdll.dll")] static extern int NtQueryObject(IntPtr handle, int kind, IntPtr data, int length, out int required);
 
@@ -80,7 +82,27 @@ public static class MixelOrdinaryTokenFixture {
     try { if (!OpenProcessToken(process, 8, out token)) throw new Win32Exception(); return ElevatedToken(token); }
     finally { if (token != IntPtr.Zero) CloseHandle(token); CloseHandle(process); }
   }
-  static StartupInfo Startup() { return new StartupInfo { cb = Marshal.SizeOf(typeof(StartupInfo)), desktop = "winsta0\\default" }; }
+  public static string ProfilePath(int pid) {
+    IntPtr process = OpenProcess(0x1000, false, pid), token = IntPtr.Zero;
+    if (process == IntPtr.Zero) throw new Win32Exception();
+    try {
+      if (!OpenProcessToken(process, 8, out token)) throw new Win32Exception();
+      var path = new StringBuilder(512); uint size = checked((uint)path.Capacity);
+      if (!GetUserProfileDirectoryW(token, path, ref size)) throw new Win32Exception();
+      return path.ToString();
+    } finally { if (token != IntPtr.Zero) CloseHandle(token); CloseHandle(process); }
+  }
+  static string UserObjectName(IntPtr obj) {
+    var name = new StringBuilder(512); uint required;
+    if (obj == IntPtr.Zero || !GetUserObjectInformationW(obj, 2, name, checked((uint)name.Capacity * 2), out required)) throw new Win32Exception();
+    string value = name.ToString();
+    if (value.Length == 0 || value.IndexOf('\\') >= 0) throw new InvalidOperationException("Invalid actual desktop object name");
+    return value;
+  }
+  public static string CurrentDesktopPath() {
+    return UserObjectName(GetProcessWindowStation()) + "\\" + UserObjectName(GetThreadDesktop(GetCurrentThreadId()));
+  }
+  static StartupInfo Startup() { return new StartupInfo { cb = Marshal.SizeOf(typeof(StartupInfo)), desktop = CurrentDesktopPath() }; }
   static int Started(ProcessInfo process) { CloseHandle(process.thread); CloseHandle(process.process); return checked((int)process.pid); }
   public static int StartLinkedToken(string executable) {
     IntPtr token = IntPtr.Zero, linked = IntPtr.Zero, data = Marshal.AllocHGlobal(IntPtr.Size);
@@ -189,6 +211,7 @@ $uri = "mixel-remote://support/?invite=$token&apikey=synthetic-invalid-public-ke
 $before = @(Get-Process | Select-Object -ExpandProperty Id)
 $main = $null
 $ordinaryRoot = $null
+$ordinaryProfileRoot = $null
 $ownedUser = $null
 $ownedSid = $null
 $desktopAccess = $null
@@ -281,6 +304,7 @@ try {
     Copy-Item (Join-Path (Resolve-Path $ExpectedPayload).Path '*') $ordinaryRoot -Recurse
     $ordinaryExecutable = Join-Path $ordinaryRoot 'Mixel-Remote.exe'
     & (Join-Path $PSScriptRoot 'verify-windows-payload.ps1') -Payload $ordinaryRoot
+    Write-Host "FIXTURE: owned ordinary GUI uses the same actual runner desktop granted by DesktopAccess: $([MixelOrdinaryTokenFixture]::CurrentDesktopPath()); callerSessionId=$((Get-Process -Id $PID).SessionId)."
     if (-not [MixelOrdinaryTokenFixture]::Elevated($PID)) {
       $fixtureStage = 'start current ordinary token'
       $main = Start-Process -FilePath $ordinaryExecutable -PassThru
@@ -310,6 +334,9 @@ try {
     }
     $fixtureStage = 'verify actual ordinary process token'
     if ([MixelOrdinaryTokenFixture]::Elevated($main.Id)) { throw 'Ordinary startup still uses an elevated token and could silently auto-enter QuickSupport.' }
+    if ($main.SessionId -ne (Get-Process -Id $PID).SessionId) { throw 'Ordinary GUI was launched in a different session from the actual runner desktop.' }
+    $ordinaryProfileRoot = [MixelOrdinaryTokenFixture]::ProfilePath($main.Id)
+    Write-Host "FIXTURE: actual ordinary process is non-elevated in caller session; foregroundPid=$($main.Id), ordinarySessionId=$($main.SessionId)."
   } else {
     $main = Start-CustomerApp
   }
@@ -388,7 +415,11 @@ try {
   foreach ($logRoot in @(
       (Join-Path $env:APPDATA 'Mixel-Remote'),
       (Join-Path $env:LOCALAPPDATA 'Mixel-Remote'),
-      (Join-Path $env:APPDATA 'MixelRemote'))) {
+      (Join-Path $env:APPDATA 'MixelRemote'),
+      $(if ($ordinaryProfileRoot) { Join-Path $ordinaryProfileRoot 'AppData/Roaming/Mixel-Remote' }),
+      $(if ($ordinaryProfileRoot) { Join-Path $ordinaryProfileRoot 'AppData/Local/Mixel-Remote' }),
+      $(if ($ordinaryProfileRoot) { Join-Path $ordinaryProfileRoot 'AppData/Roaming/MixelRemote' }))) {
+    if (-not $logRoot) { continue }
     if (Test-Path $logRoot) {
       $leaks = Get-ChildItem $logRoot -Recurse -Filter '*.log' -File |
         Select-String -SimpleMatch $token
@@ -413,6 +444,24 @@ try {
   if ($ordinaryRoot -or $ownedUser -or $desktopAccess) {
     $cleanupErrors = [System.Collections.Generic.List[string]]::new()
     Start-Sleep -Seconds 2
+    # Preserve only logs from the actual owned runtime token's profile before
+    # deleting it. No account credentials, configuration files or raw argv are
+    # copied. CI can inspect a failed GUI launch without recreating its user.
+    if ($ownedSid -and $ordinaryProfileRoot -and $env:RUNNER_TEMP) {
+      try {
+        $archive = Join-Path $env:RUNNER_TEMP 'mixel-owned-ordinary-qs-logs'
+        foreach ($root in @('AppData/Roaming/Mixel-Remote', 'AppData/Local/Mixel-Remote', 'AppData/Roaming/MixelRemote')) {
+          $sourceRoot = Join-Path $ordinaryProfileRoot $root
+          if (-not (Test-Path $sourceRoot)) { continue }
+          foreach ($file in (Get-ChildItem $sourceRoot -Recurse -Filter '*.log' -File)) {
+            $relative = [IO.Path]::GetRelativePath($ordinaryProfileRoot, $file.FullName)
+            $destination = Join-Path $archive $relative
+            New-Item -ItemType Directory -Force (Split-Path $destination -Parent) | Out-Null
+            Copy-Item $file.FullName $destination -Force
+          }
+        }
+      } catch { $cleanupErrors.Add('Owned ordinary runtime log preservation failed.') }
+    }
     if ($desktopAccess) { try { $desktopAccess.Dispose() } catch { $cleanupErrors.Add('Owned desktop ACL restoration failed.') } }
     if ($ownedSid) {
       $profileRemoved = $false
