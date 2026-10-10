@@ -315,9 +315,7 @@ public static class MixelOwnedDesktopControl {
         throw
       } finally {
         $trialCleanup = [System.Collections.Generic.List[string]]::new()
-        if ($guiPid -and [MixelOrdinaryTokenFixture]::StartedStatus($guiPid) -ceq 'still-running') {
-          try { Stop-Process -Id $guiPid -Force } catch { $trialCleanup.Add('Owned desktop trial process cleanup failed.') }
-        }
+        try { [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses() } catch { $trialCleanup.Add('Owned retained desktop trial process cleanup failed.') }
         [MixelOrdinaryTokenFixture]::CloseStartedObservations()
         if ($guiAccess) { try { $guiAccess.Dispose(); $guiAccess=$null } catch { $trialCleanup.Add('Owned desktop trial ACL restoration failed.') } }
         if ([MixelOrdinaryTokenFixture]::DesktopAclHashes() -cne $baselineAcls) { $trialCleanup.Add('Owned desktop trial did not restore the exact original station/desktop ACL hashes.') }
@@ -334,14 +332,34 @@ public static class MixelOwnedDesktopControl {
       } else {
         Write-Host 'DIAGNOSTIC: canonical visible-window/menu qualification passes, but minimal rights also passed in at least one trial; no ACL-causality claim is made.'
       }
+      # A diagnostic attach failure can leave the original primary thread
+      # suspended before Process.Path is available. Qualify exact retained
+      # native-handle cleanup on that real standard-user state as well.
+      if (Test-Path $guiResult) { Remove-Item $guiResult }
+      $guiAccess = [MixelOrdinaryTokenFixture+DesktopAccess]::new($ownedSid)
+      $guiPid = [MixelOrdinaryTokenFixture]::StartStandardUser($guiExecutable, $ownedUser, $ownedPassword, $true)
+      $guiProcess = Get-Process -Id $guiPid
+      if ([MixelOrdinaryTokenFixture]::Elevated($guiPid) -or $guiProcess.SessionId -ne (Get-Process -Id $PID).SessionId -or
+          [MixelOrdinaryTokenFixture]::StartedStatus($guiPid) -cne 'still-running' -or (Test-Path $guiResult)) {
+        throw 'Owned retained-handle cleanup control did not start as a genuine suspended ordinary process before Main.'
+      }
+      [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses()
+      if ([MixelOrdinaryTokenFixture]::StartedStatus($guiPid) -cne 'exited:0x00000001' -or (Test-Path $guiResult)) {
+        throw 'Exact retained native process handle did not prove termination of its suspended owned target.'
+      }
+      # Already-exited handles are intentionally safe to revisit without PID
+      # lookup or reliance on a loaded executable path.
+      [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses()
+      [MixelOrdinaryTokenFixture]::CloseStartedObservations()
+      $guiAccess.Dispose(); $guiAccess=$null
+      if ([MixelOrdinaryTokenFixture]::DesktopAclHashes() -cne $baselineAcls) { throw 'Suspended process cleanup control did not restore its original desktop ACLs.' }
+      Write-Host "PASS: exact retained native process handle terminates the actual owned suspended non-elevated target before Main, observes native exit 0x00000001 and safely revisits its exited handle; pid=$guiPid; original desktop ACL hashes restored."
     } catch {
       $guiFailure = $_
       throw
     } finally {
       $guiCleanup = [System.Collections.Generic.List[string]]::new()
-      if ($guiProcess -and -not $guiProcess.HasExited) {
-        try { Stop-Process -Id $guiProcess.Id -Force } catch { $guiCleanup.Add('Owned native desktop-control process cleanup failed.') }
-      }
+      try { [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses() } catch { $guiCleanup.Add('Owned retained native desktop-control process cleanup failed.') }
       [MixelOrdinaryTokenFixture]::CloseStartedObservations()
       if ($guiAccess) { try { $guiAccess.Dispose() } catch { $guiCleanup.Add('Owned native desktop-control ACL restoration failed.') } }
       if ($guiProfile) {
