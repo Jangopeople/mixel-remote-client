@@ -170,15 +170,27 @@ function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner'
         $namespaceRecord = $namespaceText | ConvertFrom-Json
         if ($namespaceRecord.pid -ne $controlPid) { throw 'Child namespace observation does not belong to the actual owned PID.' }
         foreach ($property in $namespaceRecord.PSObject.Properties) {
-          if ($property.Name -cnotmatch '\A(?:pid|session|observationError|GlobalAbsoluteEventError|SessionAbsoluteEventError|(?:root|sessions|sessionRoot|sessionObjects|globalObjects)(?:TraverseError|QueryError|CreateAccessError|CreateSubdirectoryAccessError|CombinedCreationAccessError|AllSpecificAccessError))\z' -or ($property.Value -isnot [long] -and $property.Value -isnot [int])) { throw 'Child namespace observation is not a bounded scalar record.' }
+          if ($property.Name -cnotmatch '\A(?:pid|session|observationError|GlobalAbsoluteEventError|SessionAbsoluteEventError|(?:Global|Local)Alias(?:OpenError|QueryError|TargetKind)|(?:root|sessions|sessionRoot|sessionObjects|globalObjects)(?:TraverseError|QueryError|CreateAccessError|CreateSubdirectoryAccessError|CombinedCreationAccessError|AllSpecificAccessError))\z' -or ($property.Value -isnot [long] -and $property.Value -isnot [int])) { throw 'Child namespace observation is not a bounded scalar record.' }
           if ($property.Name -ceq 'observationError') {
             if ($property.Value -lt -2147483648 -or $property.Value -gt 2147483647) { throw 'Child namespace native error exceeds its signed scalar domain.' }
           } elseif ($property.Value -lt 0 -or $property.Value -gt 4294967295) { throw 'Child namespace DWORD exceeds its unsigned scalar domain.' }
+          if ($property.Name -cmatch '\A(?:Global|Local)AliasTargetKind\z' -and $property.Value -gt 3) { throw 'Child namespace alias target kind exceeds its numeric domain.' }
         }
         $namespaceNames = @($namespaceRecord.PSObject.Properties.Name)
         if ($namespaceNames -ccontains 'observationError') {
           if ($namespaceNames.Count -ne 2) { throw 'Child namespace error record contains unexpected fields.' }
-        } elseif ($namespaceNames.Count -ne 34 -or $namespaceRecord.session -lt 0) { throw 'Child namespace observation is incomplete or has an invalid session.' }
+        } else {
+          if ($namespaceNames.Count -ne 40 -or $namespaceRecord.session -lt 0) { throw 'Child namespace observation is incomplete or has an invalid session.' }
+          foreach ($alias in @('Global','Local')) {
+            $open = $namespaceRecord.PSObject.Properties[$alias+'AliasOpenError'].Value
+            $query = $namespaceRecord.PSObject.Properties[$alias+'AliasQueryError'].Value
+            $kind = $namespaceRecord.PSObject.Properties[$alias+'AliasTargetKind'].Value
+            if (($open -ne 0 -and ($query -ne 4294967295 -or $kind -ne 0)) -or
+                ($open -eq 0 -and (($query -ne 0 -and $kind -ne 0) -or ($query -eq 0 -and $kind -eq 0)))) {
+              throw 'Child namespace alias observation has inconsistent numeric states.'
+            }
+          }
+        }
         Write-Host ('OBSERVED: actual child-token namespace access; ' + ($namespaceRecord | ConvertTo-Json -Compress))
       } else { Write-Host 'OBSERVED: secondary child namespace observation unavailable.' }
     } catch { Write-Host 'OBSERVED: secondary child namespace observation invalid or unavailable; strict source gate remains required.' }

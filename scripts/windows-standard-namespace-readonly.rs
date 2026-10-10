@@ -4,13 +4,15 @@
 mod standard_namespace_readonly {
     use std::{ffi::c_void, io, ptr};
     #[repr(C)]
-    struct UnicodeString { length: u16, maximum: u16, buffer: *const u16 }
+    struct UnicodeString { length: u16, maximum: u16, buffer: *mut u16 }
     #[repr(C)]
     struct ObjectAttributes {
         length: u32, root: *mut c_void, name: *const UnicodeString,
         attributes: u32, security: *mut c_void, qos: *mut c_void,
     }
     type OpenObject = unsafe extern "system" fn(*mut *mut c_void, u32, *const ObjectAttributes) -> i32;
+    type QueryLink = unsafe extern "system" fn(*mut c_void, *mut UnicodeString, *mut u32) -> i32;
+    type EqualString = unsafe extern "system" fn(*const UnicodeString, *const UnicodeString, u8) -> u8;
     type StatusError = unsafe extern "system" fn(i32) -> u32;
     #[link(name="kernel32")]
     extern "system" {
@@ -29,7 +31,7 @@ mod standard_namespace_readonly {
         if path.len() > 128 { return Err(io::Error::new(io::ErrorKind::InvalidInput,"Bounded namespace path exceeded")); }
         let name: Vec<u16> = path.encode_utf16().chain(Some(0)).collect();
         let text = UnicodeString {
-            length: ((name.len()-1)*2) as u16, maximum: (name.len()*2) as u16, buffer: name.as_ptr(),
+            length: ((name.len()-1)*2) as u16, maximum: (name.len()*2) as u16, buffer: name.as_ptr() as *mut u16,
         };
         let attributes = ObjectAttributes {
             length: std::mem::size_of::<ObjectAttributes>() as u32, root: ptr::null_mut(), name: &text,
@@ -47,6 +49,53 @@ mod standard_namespace_readonly {
         if handle.is_null() { return Err(io::Error::new(io::ErrorKind::InvalidData,"Successful diagnostic object open returned no handle")); }
         if unsafe { CloseHandle(handle) } == 0 { return Err(native_failure()); }
         Ok(0)
+    }
+    fn alias_errors(path: &str, session: u32, open: OpenObject, query: QueryLink, equal: EqualString, status_error: StatusError) -> io::Result<(u32,u32,u32)> {
+        if path.len() > 128 { return Err(io::Error::new(io::ErrorKind::InvalidInput,"Bounded alias path exceeded")); }
+        let name: Vec<u16> = path.encode_utf16().chain(Some(0)).collect();
+        let text = UnicodeString {
+            length: ((name.len()-1)*2) as u16, maximum: (name.len()*2) as u16, buffer: name.as_ptr() as *mut u16,
+        };
+        let attributes = ObjectAttributes {
+            length: std::mem::size_of::<ObjectAttributes>() as u32, root: ptr::null_mut(), name: &text,
+            attributes: 0x40, security: ptr::null_mut(), qos: ptr::null_mut(),
+        };
+        let mut handle = ptr::null_mut();
+        // Open only these two fixed existing symbolic links with QUERY access.
+        let status = unsafe { open(&mut handle,1,&attributes) };
+        if status < 0 {
+            let code = unsafe { status_error(status) };
+            if !handle.is_null() {
+                if unsafe { CloseHandle(handle) } == 0 { return Err(native_failure()); }
+                return Err(io::Error::new(io::ErrorKind::InvalidData,"Failed alias open returned a handle"));
+            }
+            return Ok((code,u32::MAX,0));
+        }
+        if handle.is_null() { return Err(io::Error::new(io::ErrorKind::InvalidData,"Successful alias open returned no handle")); }
+        let mut buffer = [0u16;128];
+        let original = buffer.as_mut_ptr();
+        let capacity = (buffer.len()*2) as u16;
+        let mut target = UnicodeString { length: 0, maximum: capacity, buffer: original };
+        // ReturnedLength is optional; the fixed buffer is never resized.
+        let status = unsafe { query(handle,&mut target,ptr::null_mut()) };
+        // Convert the NT error before closing or dropping any temporary value.
+        let code = if status < 0 { unsafe { status_error(status) } } else { 0 };
+        let invalid = status >= 0 && (target.buffer != original || target.maximum != capacity ||
+            target.length % 2 != 0 || target.length > capacity);
+        if unsafe { CloseHandle(handle) } == 0 { return Err(native_failure()); }
+        if invalid { return Err(io::Error::new(io::ErrorKind::InvalidData,"Invalid bounded native alias target metadata")); }
+        if status < 0 { return Ok((0,code,0)); }
+        // Native case-insensitive Unicode comparison retains NT path semantics.
+        // The target is still our validated bounded buffer and is never printed.
+        let matches = |expected: &str| {
+            let expected: Vec<u16> = expected.encode_utf16().collect();
+            let text = UnicodeString { length: (expected.len()*2) as u16,
+                maximum: (expected.len()*2) as u16, buffer: expected.as_ptr() as *mut u16 };
+            unsafe { equal(&target,&text,1) != 0 }
+        };
+        let kind = if matches("\\BaseNamedObjects") { 1 }
+            else if matches(&format!("\\Sessions\\{session}\\BaseNamedObjects")) { 2 } else { 3 };
+        Ok((0,0,kind))
     }
     pub(super) fn observe(event: &str) -> io::Result<String> {
         // This is solely the exported disposable source fixture's exact GUID.
@@ -67,8 +116,17 @@ mod standard_namespace_readonly {
         if error.is_null() { return Err(native_failure()); }
         let event_open = unsafe { GetProcAddress(module,b"NtOpenEvent\0".as_ptr()) };
         if event_open.is_null() { return Err(native_failure()); }
+        let link_open = unsafe { GetProcAddress(module,b"NtOpenSymbolicLinkObject\0".as_ptr()) };
+        if link_open.is_null() { return Err(native_failure()); }
+        let link_query = unsafe { GetProcAddress(module,b"NtQuerySymbolicLinkObject\0".as_ptr()) };
+        if link_query.is_null() { return Err(native_failure()); }
+        let equal = unsafe { GetProcAddress(module,b"RtlEqualUnicodeString\0".as_ptr()) };
+        if equal.is_null() { return Err(native_failure()); }
         let open: OpenObject = unsafe { std::mem::transmute(open) };
         let event_open: OpenObject = unsafe { std::mem::transmute(event_open) };
+        let link_open: OpenObject = unsafe { std::mem::transmute(link_open) };
+        let link_query: QueryLink = unsafe { std::mem::transmute(link_query) };
+        let equal: EqualString = unsafe { std::mem::transmute(equal) };
         let error: StatusError = unsafe { std::mem::transmute(error) };
         let mut result = format!("{{\"pid\":{},\"session\":{}",std::process::id(),session);
         for (label,path) in [
@@ -96,6 +154,11 @@ mod standard_namespace_readonly {
         ] {
             let code = object_error(&path,0x00100000,event_open,error)?;
             result.push_str(&format!(",\"{label}\":{code}"));
+        }
+        for alias in ["Global","Local"] {
+            let path = format!("\\Sessions\\{session}\\BaseNamedObjects\\{alias}");
+            let (open,query,kind) = alias_errors(&path,session,link_open,link_query,equal,error)?;
+            result.push_str(&format!(",\"{alias}AliasOpenError\":{open},\"{alias}AliasQueryError\":{query},\"{alias}AliasTargetKind\":{kind}"));
         }
         result.push('}');
         Ok(result)
