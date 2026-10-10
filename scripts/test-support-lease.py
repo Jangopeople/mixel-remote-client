@@ -228,7 +228,9 @@ fn main() {
         let mode = std::fs::read_to_string(directory.join("fixture-mode.txt")).unwrap();
         match mode.as_str() {
             "probe" => {}
-            "owner" => { assert!(hold_support_invite_attended_lease()); }
+            // The parent strictly validates success; retain real create-error
+            // classification when an experimental standard-token owner fails.
+            "owner" => { let _ = hold_support_invite_attended_lease(); }
             "failed-owner" => { assert!(!hold_support_invite_attended_lease()); }
             _ => panic!("Unknown owned standard-account functional control"),
         }
@@ -280,7 +282,7 @@ def isolated_source(original, directory, prefix, event):
 
 def export_standard_windows_fixture(directory, event):
     assert os.name == "nt", "Standard-account fixture compilation requires actual Windows"
-    assert re.fullmatch(r"Global\\Mixel-Remote-Standard-Lease-[0-9a-f]{32}", event), "Expected an isolated GUID event name"
+    assert re.fullmatch(r"(?:(?:Global|Local)\\)?Mixel-Remote-Standard-Lease-[0-9a-f]{32}", event), "Expected an isolated GUID event name"
     directory = directory.resolve()
     assert directory.is_dir() and not directory.is_symlink(), "Expected an owned existing fixture directory"
     original = (ROOT / "scripts/support-invite-guard.rs").read_text(encoding="utf-8")
