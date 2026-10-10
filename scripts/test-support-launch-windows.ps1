@@ -67,6 +67,7 @@ public static class MixelOrdinaryTokenFixture {
   [DllImport("kernel32.dll", SetLastError = true)] static extern bool CheckRemoteDebuggerPresent(IntPtr process, out bool present);
   [DllImport("kernel32.dll", SetLastError = true)] static extern bool TerminateProcess(IntPtr process, uint code);
   [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern IntPtr OpenEventW(uint access, bool inherit, string name);
   [DllImport("kernel32.dll", SetLastError = true)] static extern bool DuplicateHandle(IntPtr source, IntPtr handle, IntPtr target, out IntPtr copy, uint access, bool inherit, uint options);
   [DllImport("advapi32.dll", SetLastError = true)] static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
   [DllImport("advapi32.dll", SetLastError = true)] static extern bool GetTokenInformation(IntPtr token, int kind, IntPtr data, int size, out int required);
@@ -341,6 +342,28 @@ public static class MixelOrdinaryTokenFixture {
   public static void RemoveProfile(string sid) { if (!DeleteProfileW(sid, null, null) && Marshal.GetLastWin32Error() != 2) throw new Win32Exception(); }
   public static bool IsLeaseName(string name) {
     return name == "\\BaseNamedObjects\\Mixel-Remote-Attended-Runtime-v2" || name == "\\Sessions\\0\\BaseNamedObjects\\Mixel-Remote-Attended-Runtime-v2";
+  }
+  public static int LeaseProbeError() {
+    IntPtr handle = OpenEventW(0x100000, false, "Global\\Mixel-Remote-Attended-Runtime-v2");
+    if (handle == IntPtr.Zero) return Marshal.GetLastWin32Error();
+    if (!CloseHandle(handle)) throw new Win32Exception();
+    return 0;
+  }
+  public static int LeaseProbeErrorAsProcess(int pid) {
+    IntPtr process = OpenProcess(0x1000, false, pid), token = IntPtr.Zero;
+    bool impersonated = false;
+    if (process == IntPtr.Zero) throw new Win32Exception();
+    try {
+      if (!OpenProcessToken(process, 10, out token) || !ImpersonateLoggedOnUser(token)) throw new Win32Exception();
+      impersonated = true;
+      return LeaseProbeError();
+    } finally {
+      bool reverted = !impersonated || RevertToSelf();
+      int revertError = reverted ? 0 : Marshal.GetLastWin32Error();
+      if (token != IntPtr.Zero) CloseHandle(token);
+      CloseHandle(process);
+      if (!reverted) throw new Win32Exception(revertError);
+    }
   }
   static string ObjectText(IntPtr handle, int kind) {
     IntPtr data = Marshal.AllocHGlobal(65536);
@@ -1246,6 +1269,7 @@ function Assert-OwnedIncomingHealth($Health) {
 
 try {
   if ($OrdinaryThenQuickSupport) {
+    Write-Host "FIXTURE: read-only global attended event before ordinary launch: win32Error=$([MixelOrdinaryTokenFixture]::LeaseProbeError())."
     if (-not $QuickSupport -or -not $ExpectedPayload -or (-not $Portable -and -not $CompiledQuickSupportDiagnostic)) {
       throw 'Ordinary-to-QuickSupport proof requires the actual portable QS launcher and exact signed payload, or explicit compiled-only diagnosis.'
     }
@@ -1338,7 +1362,10 @@ try {
     Assert-OwnedIncomingHealth $initialHealth
     if ($initialHealth.incomingPid -ne $main.Id) { throw 'Ordinary positive control is not querying its actual in-process native incoming server.' }
     $baselineIncomingPid = $initialHealth.incomingPid
-    if ($initialHealth.attendedProof -cne '' -or [MixelOrdinaryTokenFixture]::OwnsLease($main.Id)) {
+    $initialOwnsLease = [MixelOrdinaryTokenFixture]::OwnsLease($main.Id)
+    $initialGuardEmpty = $initialHealth.attendedProof -ceq ''
+    Write-Host "FIXTURE: read-only ordinary baseline: guardEmpty=$initialGuardEmpty, guardV2=$($initialHealth.attendedReady), foregroundOwnsLease=$initialOwnsLease, runnerLeaseProbeWin32Error=$([MixelOrdinaryTokenFixture]::LeaseProbeError()), actualOrdinaryTokenLeaseProbeWin32Error=$([MixelOrdinaryTokenFixture]::LeaseProbeErrorAsProcess($main.Id))."
+    if ($initialHealth.attendedProof -cne '' -or $initialOwnsLease) {
       throw 'Ordinary-to-QS positive control is already guarded; refusing a manufactured transition proof.'
     }
     Write-Host "PASS: actual ordinary non-elevated signed GUI starts genuinely unguarded, with empty read-only IPC guard and no foreground lease; foregroundPid=$($main.Id), incomingPipePid=$($initialHealth.incomingPid), hwnd=$($window.ToInt64())."

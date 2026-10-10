@@ -170,13 +170,18 @@ public static class MixelOwnedLeaseFixture {
 }
 '@ }
 if ([MixelOrdinaryTokenFixture]::OwnsLease($PID)) { throw 'Fixture already owns the product event.' }
+if ([MixelOrdinaryTokenFixture]::LeaseProbeError() -ne 2) { throw 'Read-only global lease observation did not prove the missing-event negative control.' }
+if ([MixelOrdinaryTokenFixture]::LeaseProbeErrorAsProcess($PID) -ne 2) { throw 'Actual-token read-only global lease observation did not prove the missing-event negative control.' }
 $fixtureHandle = [MixelOwnedLeaseFixture]::Create()
 try {
+  if ([MixelOrdinaryTokenFixture]::LeaseProbeError() -ne 0) { throw 'Read-only global lease observation did not prove the actual live-event positive control.' }
+  if ([MixelOrdinaryTokenFixture]::LeaseProbeErrorAsProcess($PID) -ne 0) { throw 'Actual-token read-only global lease observation did not prove the actual live-event positive control.' }
   if (-not [MixelOrdinaryTokenFixture]::OwnsLease($PID)) { throw 'Actual SYNCHRONIZE event handle was not attributed to its process.' }
 } finally {
   [void][MixelOwnedLeaseFixture]::CloseHandle($fixtureHandle)
 }
 if ([MixelOrdinaryTokenFixture]::OwnsLease($PID)) { throw 'Closed event handle remains attributed to its process.' }
+if ([MixelOrdinaryTokenFixture]::LeaseProbeError() -ne 2) { throw 'Read-only global lease observation retained a handle after the owned event was closed.' }
 Write-Host 'PASS: exact native runtime fixture observes the current PID owning the real SYNCHRONIZE-only global v2 event, then observes its handle release; unrelated event names fail closed.'
 $unownedIdentityRejected = $false
 try { [void][MixelOrdinaryTokenFixture]::SuspendedOwnedIdentity($PID) } catch {
