@@ -110,8 +110,15 @@ def main():
     parser.add_argument("--proofs", required=True, type=Path)
     parser.add_argument("--require-native", action="store_true")
     parser.add_argument("--artifact-run-id")
+    parser.add_argument("--saved-password-consent", action="store_true", help="Native isolated valid-permanent-password versus attended Accept proof")
+    parser.add_argument("--artifact-root", type=Path)
+    parser.add_argument("--artifact-source-commit")
+    parser.add_argument("--expected-sha256")
     parser.add_argument("--mixed-transports", action="store_true", help="Host retains native UDP registration; controller retains native TCP; ordinary ID/FT sessions must bridge the partial TCP outage")
     args = parser.parse_args()
+    if args.saved_password_consent and (not args.require_native or args.mixed_transports
+                                       or not all((args.artifact_run_id, args.artifact_root, args.artifact_source_commit, args.expected_sha256))):
+        raise SystemExit("Saved-password proof requires native blocked transport and complete collected artifact provenance")
     deb = args.deb.resolve(strict=True)
     output = args.proofs.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -121,7 +128,8 @@ def main():
     fixture_manifest = None
     failure = None
     lifecycle = {"relay_environment": "isolated fixture (test CA and test public pin)",
-                 "production_mutations": False, "mixed_transports": args.mixed_transports, "result": "failed"}
+                 "production_mutations": False, "mixed_transports": args.mixed_transports,
+                 "saved_password_consent": args.saved_password_consent, "result": "failed"}
     try:
         execute([sys.executable, str(ROOT / "scripts/test-relay-ws-bridge-docker.py"),
                  "--keep-fixture", str(fixture_directory)], timeout=900)
@@ -141,6 +149,12 @@ def main():
             command += ["--require-native"]
         if args.artifact_run_id:
             command += ["--artifact-run-id", args.artifact_run_id]
+        if args.saved_password_consent:
+            command += ["--saved-password-consent"]
+        for name, value in (("--artifact-root", args.artifact_root), ("--artifact-source-commit", args.artifact_source_commit),
+                            ("--expected-sha256", args.expected_sha256)):
+            if value:
+                command += [name, str(value)]
         execute(command, timeout=1200)
         lifecycle["result"] = "passed"
     except BaseException as error:

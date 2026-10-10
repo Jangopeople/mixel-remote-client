@@ -195,9 +195,13 @@ def main():
     assert state["marker"]["counter"] == 16680 and state["decoded_marker"]["decoded_counter"] == 16679
     assert state["video_observation"]["source_before_capture"] == 16675
     assert events.index("capture") < events.index("source-after") < events.index("analyze")
+    moved = fixture(16680)
+    moved["controls"]["canvas"]["x"] += 20
+    moved["marker"]["x"] += 20
+    rejected(lambda: sample(current, image, fixture(16675), moved), "geometry changed across image capture")
     if original:
         rejected(lambda: sample(original, image, fixture(16675), fixture(16680)), "old or unrelated")
-    print("PASS: actual sampler uses the after-capture source clock before pixel analysis and retains the before/after tuple")
+    print("PASS: actual sampler uses the after-capture source clock before pixel analysis, retains its tuple and rejects geometry changes across capture")
     _, state, _ = sample(current, PixelImage(16679, popup=True), fixture(16679), fixture(16679))
     assert state["decoded_marker"]["rectangle"] == [0, 0, 300]
     if original:

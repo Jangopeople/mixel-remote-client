@@ -20,6 +20,8 @@ jobs:
           python3 scripts/test-notarize-macos.py
           python3 scripts/test-sdk-discovery.py
           python3 scripts/test-support-session-fixture.py
+          python3 scripts/test-support-video-sampling.py
+          python3 scripts/test-linux-runtime-artifact.py
           python3 scripts/test-relay-ws-bridge-lifecycle.py
       - name: Exercise Unix runtime IPC and window probe self-tests
         run: python3 scripts/test-support-launch-linux.py --self-test

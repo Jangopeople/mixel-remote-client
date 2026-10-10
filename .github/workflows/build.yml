@@ -1054,20 +1054,30 @@ jobs:
           RUNTIME_RUN_ID: ${{ inputs.runtime_linux_artifact_run }}
           PUBLISH_REQUESTED: ${{ inputs.publish_r2 }}
         run: python3 scripts/release-artifacts.py runtime
-      - uses: actions/download-artifact@v4
-        with:
-          name: linux
-          run-id: ${{ steps.request.outputs.run_id }}
-          github-token: ${{ github.token }}
-          path: runtime-artifacts
+      - name: Collect and verify exact Linux artifact provenance
+        id: artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNTIME_RUN_ID: ${{ steps.request.outputs.run_id }}
+        run: |
+          python3 scripts/collect-linux-runtime-artifact.py \
+            --run-id "$RUNTIME_RUN_ID" --output runtime-artifacts \
+            --github-output "$GITHUB_OUTPUT"
+          mkdir -p artifacts/application-provenance
+          cp runtime-artifacts/run-metadata.json runtime-artifacts/artifact-provenance.json \
+            artifacts/application-provenance/
       - name: Prove real relay consent, video, input, files and recovery
         shell: bash
         env:
           TRANSPORT: ${{ matrix.transport }}
+          ARTIFACT_ROOT: ${{ steps.artifact.outputs.artifact_root }}
+          ARTIFACT_SOURCE: ${{ steps.artifact.outputs.source_commit }}
+          ARTIFACT_SHA256: ${{ steps.artifact.outputs.sha256 }}
+          ARTIFACT_RUN_ID: ${{ steps.request.outputs.run_id }}
         run: |
           set -euo pipefail
           shopt -s nullglob
-          DEBS=(runtime-artifacts/mixel-remote-*-x86_64.deb)
+          DEBS=(runtime-artifacts/artifacts/linux/mixel-remote-*-x86_64.deb)
           [[ ${#DEBS[@]} == 1 && -s "${DEBS[0]}" ]] || { echo 'Expected exactly one customer installer' >&2; exit 1; }
           mkdir -p artifacts
           HARNESS=scripts/test-support-session-linux.py
@@ -1076,7 +1086,25 @@ jobs:
           if [[ "$TRANSPORT" == mixed ]]; then OPTIONS+=(--mixed-transports); fi
           python3 "$HARNESS" \
             --deb "${DEBS[0]}" --proofs artifacts/session --require-native \
-            --artifact-run-id "${{ steps.request.outputs.run_id }}" "${OPTIONS[@]}" | tee artifacts/session.log
+            --artifact-root "$ARTIFACT_ROOT" --artifact-source-commit "$ARTIFACT_SOURCE" \
+            --expected-sha256 "$ARTIFACT_SHA256" --artifact-run-id "$ARTIFACT_RUN_ID" \
+            "${OPTIONS[@]}" | tee artifacts/session.log
+      - name: Prove a valid saved password still requires customer Accept
+        if: ${{ !cancelled() && matrix.transport == 'https' && steps.artifact.outcome == 'success' }}
+        env:
+          ARTIFACT_ROOT: ${{ steps.artifact.outputs.artifact_root }}
+          ARTIFACT_DEB: ${{ steps.artifact.outputs.deb }}
+          ARTIFACT_SOURCE: ${{ steps.artifact.outputs.source_commit }}
+          ARTIFACT_SHA256: ${{ steps.artifact.outputs.sha256 }}
+          ARTIFACT_RUN_ID: ${{ steps.request.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          python3 scripts/test-support-session-https-linux.py \
+            --deb "$ARTIFACT_DEB" --proofs artifacts/saved-password-consent \
+            --require-native --saved-password-consent \
+            --artifact-root "$ARTIFACT_ROOT" --artifact-source-commit "$ARTIFACT_SOURCE" \
+            --expected-sha256 "$ARTIFACT_SHA256" --artifact-run-id "$ARTIFACT_RUN_ID" \
+            | tee artifacts/saved-password-consent.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
