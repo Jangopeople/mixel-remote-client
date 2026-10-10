@@ -496,16 +496,7 @@ function Stop-OwnedCrashObservation($State) {
   # Restore only the three values changed by this observation and remove the
   # exact disposable folder. Raw dumps/debugger output never enter artifacts.
   $debuggerCleanupFailed=$false
-  if ($State.live -and -not $State.live.debugger.HasExited) {
-    try {
-      $State.live.debugger.Kill()
-      if (-not $State.live.debugger.WaitForExit(10000) -or -not $State.live.debugger.HasExited) { $debuggerCleanupFailed=$true }
-    }
-    catch { if (-not $State.live.debugger.HasExited) { $debuggerCleanupFailed=$true } }
-  }
-  if ($State.live -and $State.live.debugger.HasExited) {
-    try { Complete-OwnedDebuggerPipes $State.live } catch { $debuggerCleanupFailed=$true }
-  }
+  if ($State.live) { try { Stop-OwnedLiveDebugger $State.live } catch { $debuggerCleanupFailed=$true } }
   # The private synthetic control executable or a WER writer can still be in
   # use after qd. Observe debugger exit first, then terminate only retained
   # fixture-owned native processes before deleting their private directory.
@@ -581,6 +572,15 @@ function Complete-OwnedDebuggerPipes($Live) {
   }
 }
 
+function Stop-OwnedLiveDebugger($Live) {
+  if (-not $Live.debugger.HasExited) {
+    try { $Live.debugger.Kill() }
+    catch { if (-not $Live.debugger.HasExited) { throw } }
+    if (-not $Live.debugger.WaitForExit(10000) -or -not $Live.debugger.HasExited) { throw 'Owned native debugger termination was not observed within its deadline.' }
+  }
+  Complete-OwnedDebuggerPipes $Live
+}
+
 function Start-OwnedLiveCrashObservation([int]$ProcessId, $State) {
   $cdb=Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/Debuggers/x64/cdb.exe'
   $commands=Join-Path $State.folder 'live-commands-private.txt'
@@ -595,6 +595,7 @@ function Start-OwnedLiveCrashObservation([int]$ProcessId, $State) {
     'sxe -c ".echo MIXEL_NATIVE_HEAP; .lastevent; .exr -1; kn 40; lm; .echo MIXEL_NATIVE_CAPTURE_END; qd" 0xc0000374',
     'sxd av',
     '.echo MIXEL_NATIVE_READY',
+    '.echo MIXEL_NATIVE_STARTUP_EVENT; .lastevent; .echo MIXEL_NATIVE_STARTUP_EVENT_END',
     '.if (@$exr_code == 0xc0000374) { .echo MIXEL_NATIVE_HEAP; .lastevent; .exr -1; kn 40; lm; .echo MIXEL_NATIVE_CAPTURE_END; qd } .else { .echo MIXEL_NATIVE_CONTINUE; g }'
   ) | Set-Content $commands -Encoding ascii
   # Microsoft documents -pr for an already suspended target: resume occurs on
@@ -602,7 +603,7 @@ function Start-OwnedLiveCrashObservation([int]$ProcessId, $State) {
   # The numeric heap break filter is configured on CDB's own command line.
   $State.live=Start-OwnedDebuggerProcess $cdb @('-p',[string]$ProcessId,'-pr','-G','-pd','-hd','-nosqm','-noshell','-xe','0xc0000374','-y',('srv*'+$symbols+'*https://msdl.microsoft.com/download/symbols'),'-cf',$commands,'-logo',$raw) $console $errors
   $debugger=$State.live.debugger
-  $State.live | Add-Member -NotePropertyMembers @{raw=$raw;pid=$ProcessId;attached=$false;captureAttributed=$false;ready=$false}
+  $State.live | Add-Member -NotePropertyMembers @{raw=$raw;console=$console;errors=$errors;pid=$ProcessId;attached=$false;captureAttributed=$false;ready=$false}
   $deadline=[DateTime]::UtcNow.AddSeconds(20)
   do {
     # Flush redirected output only after a confirmed debugger exit, before
@@ -652,6 +653,55 @@ function Read-OwnedHeapCapture([string[]]$Lines, [int]$ProcessId) {
   $verified=$captures -eq 1 -and $completed -and -not $active -and -not $invalid -and $events -eq 1 -and $eventPid -eq $ProcessId -and $code -ieq 'c0000374'
   if (-not $verified) { $frames=@(); $modules=@() }
   return [pscustomobject]@{ verified=$verified; pid=$eventPid; code=$code; frames=$frames; modules=$modules }
+}
+
+function Read-OwnedExecutionMetadata([string[]]$Lines, [int]$ProcessId) {
+  $active=$false; $complete=$false; $starts=0; $ends=0; $events=0; $eventPid=$null; $eventKind='unobserved'
+  foreach ($line in $Lines) {
+    if ($line.Trim() -ceq 'MIXEL_NATIVE_STARTUP_EVENT') { $starts++; $active=$true; continue }
+    if ($line.Trim() -ceq 'MIXEL_NATIVE_STARTUP_EVENT_END') { $ends++; $active=$false; $complete=$true; continue }
+    if (-not $active -or $line -notmatch 'Last event:\s*([0-9a-fA-F]+)\.[0-9a-fA-F]+:\s*(.+)$') { continue }
+    $events++; $eventPid=[Convert]::ToInt32($Matches[1],16); $description=$Matches[2]
+    $eventKind=if ($description -match '(?i)^create process') { 'process-create' }
+      elseif ($description -match '(?i)^create thread') { 'thread-create' }
+      elseif ($description -match '(?i)^load module') { 'module-load' }
+      elseif ($description -match '(?i)^exit process') { 'process-exit' }
+      elseif ($description -match '(?i)exception' -and $description -match '(?:code|exception)\s+c0000374') { 'heap-exception' }
+      elseif ($description -match '(?i)exception' -and $description -match '(?:code|exception)\s+80000003') { 'initial-break-exception' }
+      elseif ($description -match '(?i)exception' -and $description -match '(?:code|exception)\s+[0-9a-fA-F]{8}') { 'other-exception' }
+      else { 'other-native-event' }
+  }
+  $eventVerified=$starts -eq 1 -and $ends -eq 1 -and $events -eq 1 -and $complete -and -not $active -and $eventPid -eq $ProcessId
+  if (-not $eventVerified) { $eventKind='unattributed-or-incomplete' }
+  return [pscustomobject]@{
+    readyMarkers=@($Lines | Where-Object { $_.Trim() -ceq 'MIXEL_NATIVE_READY' }).Count
+    continueMarkers=@($Lines | Where-Object { $_.Trim() -ceq 'MIXEL_NATIVE_CONTINUE' }).Count
+    heapCaptureStarts=@($Lines | Where-Object { $_.Trim() -ceq 'MIXEL_NATIVE_HEAP' }).Count
+    heapCaptureEnds=@($Lines | Where-Object { $_.Trim() -ceq 'MIXEL_NATIVE_CAPTURE_END' }).Count
+    startupEventPidVerified=$eventVerified; startupEventKind=$eventKind
+    syntaxErrorLines=@($Lines | Where-Object { $_ -match '(?i)syntax error' }).Count
+    evaluationErrorLines=@($Lines | Where-Object { $_ -match "(?i)bad register error|could(?:n.t| not) (?:resolve|evaluate)|unable to (?:resolve|evaluate)" }).Count
+  }
+}
+
+function Write-OwnedControlExecutionEvidence([int]$ProcessId, $State) {
+  $entry=Join-Path $State.folder 'native-control-entered.txt'
+  $entered=Test-Path $entry
+  $entryPidVerified=$entered -and [IO.File]::ReadAllText($entry) -ceq [string]$ProcessId
+  $streams=@{}
+  if ($State.live) {
+    foreach ($name in @('raw','console','errors')) {
+      $path=$State.live.$name
+      $streams[$name]=if (Test-Path $path) { Read-OwnedExecutionMetadata ([IO.File]::ReadAllLines($path)) $ProcessId } else { $null }
+    }
+  }
+  $evidence=[pscustomobject]@{ evidenceKind='synthetic-native-exception-execution'; observationPhase='after-bounded-debugger-stop-before-target-cleanup'; pid=$ProcessId; nativeStatus=[MixelOrdinaryTokenFixture]::StartedStatus($ProcessId); enteredMain=$entered; entryPidVerified=$entryPidVerified; debuggerExited=($State.live -and $State.live.debugger.HasExited); streams=$streams }
+  Write-Host ('FIXTURE: bounded synthetic native exception execution evidence before cleanup: '+($evidence | ConvertTo-Json -Depth 5 -Compress))
+  if ($env:RUNNER_TEMP) {
+    $archive=Join-Path $env:RUNNER_TEMP 'mixel-owned-ordinary-qs-logs'
+    New-Item -ItemType Directory $archive -Force | Out-Null
+    $evidence | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $archive 'native-exception-execution-sanitized.json')
+  }
 }
 
 function Write-OwnedCrashDiagnostic([int]$ProcessId, [string]$OwnedExecutable, [DateTime]$StartedAt, $State, [switch]$SyntheticControl) {
@@ -770,8 +820,6 @@ public static class MixelOwnedNativeExceptionControl {
     $entry=Join-Path $state.folder 'native-control-entered.txt'
     $entered=Test-Path $entry
     $entryPidVerified=$entered -and [IO.File]::ReadAllText($entry) -ceq [string]$controlPid
-    $continued=@(Get-Content $state.live.raw | Where-Object { $_.Trim() -ceq 'MIXEL_NATIVE_CONTINUE' }).Count -eq 1
-    Write-Host ('FIXTURE: synthetic native exception control execution evidence: '+([pscustomobject]@{pid=$controlPid;enteredMain=$entered;entryPidVerified=$entryPidVerified;continueBranchObserved=$continued} | ConvertTo-Json -Compress))
     if (-not $capture.actualLiveExceptionPidVerified -or $capture.pid -ne $controlPid -or
         $capture.exceptionCodes.Count -ne 1 -or $capture.exceptionCodes[0] -ine 'c0000374' -or $capture.stackFrames.Count -eq 0 -or -not $entryPidVerified) {
       throw 'Synthetic native exception control did not qualify exact owned PID/code and a sanitized native stack.'
@@ -780,6 +828,11 @@ public static class MixelOwnedNativeExceptionControl {
   } catch { $controlFailure=$_; throw }
   finally {
     $errors=[System.Collections.Generic.List[string]]::new()
+    if ($state -and $controlPid) {
+      if ($state.live) { try { Stop-OwnedLiveDebugger $state.live } catch { $errors.Add('Synthetic debugger exit/output observation failed.') } }
+      try { Write-OwnedControlExecutionEvidence $controlPid $state } catch { $errors.Add('Synthetic bounded execution evidence capture failed.') }
+      if ($controlFailure) { Write-OwnedWindowDiagnostic $controlPid 'synthetic native exception control after bounded debugger stop, before target cleanup' }
+    }
     if ($state) { try { Stop-OwnedCrashObservation $state } catch { $errors.Add('Synthetic native exception private/registry cleanup failed.') } }
     try { [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses() } catch { $errors.Add('Synthetic retained native process cleanup failed.') }
     [MixelOrdinaryTokenFixture]::CloseStartedObservations()
