@@ -110,6 +110,40 @@ foreach ($invalidLines in @(
   if ($rejected.verified -or $rejected.frames.Count -ne 0 -or $rejected.modules.Count -ne 0) { throw 'Mixed, duplicated or incomplete native exception attribution accepted.' }
 }
 Write-Host 'PASS: exact bounded live heap capture accepts only the owned PID/code block, excludes unmarked rows and rejects six mixed-event, duplicate-event, DebugBreak, unmarked, incomplete and duplicate-capture controls.'
+foreach ($name in @('Read-OwnedLiveDebuggerSnapshot','Read-OwnedExecutionMetadata')) {
+  $function=@($captureAst.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq $name},$true))
+  if ($function.Count -ne 1) { throw 'Exact live debugger snapshot/event helper missing.' }
+  . ([scriptblock]::Create($function[0].Extent.Text))
+}
+$liveSnapshotControl=Join-Path ([IO.Path]::GetTempPath()) ('mixel-owned-live-debugger-read-' + [Guid]::NewGuid().ToString('N'))
+$liveWriter=$null; $liveLock=$null
+try {
+  $liveWriter=[IO.FileStream]::new($liveSnapshotControl,[IO.FileMode]::Create,[IO.FileAccess]::ReadWrite,[IO.FileShare]::ReadWrite)
+  $partial=[Text.Encoding]::UTF8.GetBytes("MIXEL_NATIVE_TIMEOUT_EVENT`nLast event: 18cc.1234: Exception - code c0000005`n")
+  $liveWriter.Write($partial,0,$partial.Length); $liveWriter.Flush()
+  $snapshot=Read-OwnedLiveDebuggerSnapshot $liveSnapshotControl
+  if ($snapshot.pending -or (Read-OwnedExecutionMetadata $snapshot.lines 6348 -TimeoutEvent).startupEventPidVerified) { throw 'Open-writer incomplete event snapshot was attributed.' }
+  $completed=[Text.Encoding]::UTF8.GetBytes("MIXEL_NATIVE_TIMEOUT_EVENT_END`n")
+  $liveWriter.Write($completed,0,$completed.Length); $liveWriter.Flush()
+  $snapshot=Read-OwnedLiveDebuggerSnapshot $liveSnapshotControl
+  $event=Read-OwnedExecutionMetadata $snapshot.lines 6348 -TimeoutEvent
+  if ($snapshot.pending -or -not $event.startupEventPidVerified -or $event.startupEventCode -cne 'c0000005') { throw 'Retained concurrent writer prevented exact live shared snapshot attribution.' }
+  $liveWriter.Dispose(); $liveWriter=$null
+  if ($IsWindows) {
+    $liveLock=[IO.FileStream]::new($liveSnapshotControl,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
+    $locked=Read-OwnedLiveDebuggerSnapshot $liveSnapshotControl
+    if (-not $locked.pending -or $null -ne $locked.lines) { throw 'Actual exclusive live debugger snapshot lock was accepted.' }
+    $liveLock.Dispose(); $liveLock=$null
+    $released=Read-OwnedLiveDebuggerSnapshot $liveSnapshotControl
+    if ($released.pending -or -not (Read-OwnedExecutionMetadata $released.lines 6348 -TimeoutEvent).startupEventPidVerified) { throw 'Released live debugger lock did not decode completely.' }
+    Write-Host 'PASS: actual Windows live debugger snapshot reader retries only a transient exclusive lock and attributes the completed exact event after release.'
+  }
+} finally {
+  if ($liveWriter) { $liveWriter.Dispose() }
+  if ($liveLock) { $liveLock.Dispose() }
+  if (Test-Path $liveSnapshotControl) { Remove-Item $liveSnapshotControl }
+}
+Write-Host 'PASS: exact live debugger snapshot reader reads while the actual writer handle remains open, rejects its incomplete event and attributes only the completed marked PID/code snapshot.'
 $actualDesktop = [MixelOrdinaryTokenFixture]::CurrentDesktopPath()
 if ($actualDesktop -notmatch '^[^\\]+\\[^\\]+$' -or $launchSource.Contains('desktop = "winsta0\\default"')) {
   throw 'Actual native launch desktop is missing or reverted to a different hard-coded desktop.'

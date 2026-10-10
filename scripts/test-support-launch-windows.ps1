@@ -612,7 +612,7 @@ function Start-OwnedLiveCrashObservation([int]$ProcessId, $State) {
   # The numeric heap break filter is configured on CDB's own command line.
   $State.live=Start-OwnedDebuggerProcess $cdb @('-p',[string]$ProcessId,'-pr','-G','-pd','-hd','-nosqm','-noshell','-xe','0xc0000374','-y',('srv*'+$symbols+'*https://msdl.microsoft.com/download/symbols'),'-cf',$commands,'-logo',$raw) $console $errors
   $debugger=$State.live.debugger
-  $State.live | Add-Member -NotePropertyMembers @{raw=$raw;console=$console;errors=$errors;pid=$ProcessId;attached=$false;captureAttributed=$false;ready=$false;primaryThreadResume=$null}
+  $State.live | Add-Member -NotePropertyMembers @{raw=$raw;console=$console;errors=$errors;pid=$ProcessId;attached=$false;captureAttributed=$false;ready=$false;primaryThreadResume=$null;timeoutObservation=$null}
   $deadline=[DateTime]::UtcNow.AddSeconds(20)
   do {
     # Flush redirected output only after a confirmed debugger exit, before
@@ -666,14 +666,17 @@ function Read-OwnedHeapCapture([string[]]$Lines, [int]$ProcessId) {
   return [pscustomobject]@{ verified=$verified; pid=$eventPid; code=$code; frames=$frames; modules=$modules }
 }
 
-function Read-OwnedExecutionMetadata([string[]]$Lines, [int]$ProcessId) {
-  $active=$false; $complete=$false; $starts=0; $ends=0; $events=0; $eventPid=$null; $eventKind='unobserved'
+function Read-OwnedExecutionMetadata([string[]]$Lines, [int]$ProcessId, [switch]$TimeoutEvent) {
+  $startMarker=if ($TimeoutEvent) { 'MIXEL_NATIVE_TIMEOUT_EVENT' } else { 'MIXEL_NATIVE_STARTUP_EVENT' }
+  $endMarker=$startMarker+'_END'
+  $active=$false; $complete=$false; $starts=0; $ends=0; $events=0; $eventPid=$null; $eventKind='unobserved'; $eventCode=$null
+  $lastPidVerified=$false; $lastKind='unobserved'; $lastCode=$null
   foreach ($line in $Lines) {
-    if ($line.Trim() -ceq 'MIXEL_NATIVE_STARTUP_EVENT') { $starts++; $active=$true; continue }
-    if ($line.Trim() -ceq 'MIXEL_NATIVE_STARTUP_EVENT_END') { $ends++; $active=$false; $complete=$true; continue }
-    if (-not $active -or $line -notmatch 'Last event:\s*([0-9a-fA-F]+)\.[0-9a-fA-F]+:\s*(.+)$') { continue }
-    $events++; $eventPid=[Convert]::ToInt32($Matches[1],16); $description=$Matches[2]
-    $eventKind=if ($description -match '(?i)^create process') { 'process-create' }
+    if ($line.Trim() -ceq $startMarker) { $starts++; $active=$true; continue }
+    if ($line.Trim() -ceq $endMarker) { $ends++; $active=$false; $complete=$true; continue }
+    if ($line -notmatch 'Last event:\s*([0-9a-fA-F]+)\.[0-9a-fA-F]+:\s*(.+)$') { continue }
+    $observedPid=[Convert]::ToInt32($Matches[1],16); $description=$Matches[2]
+    $kind=if ($description -match '(?i)^create process') { 'process-create' }
       elseif ($description -match '(?i)^create thread') { 'thread-create' }
       elseif ($description -match '(?i)^load module') { 'module-load' }
       elseif ($description -match '(?i)^exit process') { 'process-exit' }
@@ -681,18 +684,89 @@ function Read-OwnedExecutionMetadata([string[]]$Lines, [int]$ProcessId) {
       elseif ($description -match '(?i)exception' -and $description -match '(?:code|exception)\s+80000003') { 'initial-break-exception' }
       elseif ($description -match '(?i)exception' -and $description -match '(?:code|exception)\s+[0-9a-fA-F]{8}') { 'other-exception' }
       else { 'other-native-event' }
+    $code=if ($description -match '(?i)(?:code|exception)\s+([0-9a-fA-F]{8})(?:\s|$)') { $Matches[1].ToLowerInvariant() } else { $null }
+    $lastPidVerified=$observedPid -eq $ProcessId
+    $lastKind=if ($lastPidVerified) { $kind } else { 'unattributed' }
+    $lastCode=if ($lastPidVerified) { $code } else { $null }
+    if ($active) { $events++; $eventPid=$observedPid; $eventKind=$kind; $eventCode=$code }
   }
   $eventVerified=$starts -eq 1 -and $ends -eq 1 -and $events -eq 1 -and $complete -and -not $active -and $eventPid -eq $ProcessId
-  if (-not $eventVerified) { $eventKind='unattributed-or-incomplete' }
+  if (-not $eventVerified) { $eventKind='unattributed-or-incomplete'; $eventCode=$null }
   return [pscustomobject]@{
     readyMarkers=@($Lines | Where-Object { $_.Trim() -ceq 'MIXEL_NATIVE_READY' }).Count
     continueMarkers=@($Lines | Where-Object { $_.Trim() -ceq 'MIXEL_NATIVE_CONTINUE' }).Count
     heapCaptureStarts=@($Lines | Where-Object { $_.Trim() -ceq 'MIXEL_NATIVE_HEAP' }).Count
     heapCaptureEnds=@($Lines | Where-Object { $_.Trim() -ceq 'MIXEL_NATIVE_CAPTURE_END' }).Count
-    startupEventPidVerified=$eventVerified; startupEventKind=$eventKind
+    startupEventPidVerified=$eventVerified; startupEventKind=$eventKind; startupEventCode=$eventCode
+    timeoutEventStarts=@($Lines | Where-Object { $_.Trim() -ceq 'MIXEL_NATIVE_TIMEOUT_EVENT' }).Count
+    timeoutEventEnds=@($Lines | Where-Object { $_.Trim() -ceq 'MIXEL_NATIVE_TIMEOUT_EVENT_END' }).Count
+    debuggerPromptLines=@($Lines | Where-Object { $_ -match '^\s*[0-9]+:[0-9a-fA-F]+>' }).Count
+    lastObservedNativeEventPidVerified=$lastPidVerified; lastObservedNativeEventKind=$lastKind; lastObservedNativeEventCode=$lastCode
     syntaxErrorLines=@($Lines | Where-Object { $_ -match '(?i)syntax error' }).Count
     evaluationErrorLines=@($Lines | Where-Object { $_ -match "(?i)bad register error|could(?:n.t| not) (?:resolve|evaluate)|unable to (?:resolve|evaluate)" }).Count
+    commandErrorLines=@($Lines | Where-Object { $_ -match '(?i)unknown command|unrecognized command|no runnable debuggees|command not supported' }).Count
   }
+}
+
+function Read-OwnedLiveDebuggerSnapshot([string]$Path) {
+  $stream=$null; $memory=$null; $reader=$null
+  try {
+    $stream=[IO.FileStream]::new($Path,[IO.FileMode]::Open,[IO.FileAccess]::Read,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+    # Read only the length observed when this shared handle opens; ongoing
+    # appends cannot make a snapshot read continue indefinitely.
+    $length=$stream.Length
+    if ($length -gt 16777216) { throw 'Owned live debugger snapshot exceeded its size bound.' }
+    $bytes=[byte[]]::new([int]$length); $offset=0
+    while ($offset -lt $bytes.Length) {
+      $read=$stream.Read($bytes,$offset,$bytes.Length-$offset)
+      if ($read -eq 0) { return [pscustomobject]@{pending=$true;lines=$null} }
+      $offset+=$read
+    }
+    $memory=[IO.MemoryStream]::new($bytes,$false)
+    $reader=[IO.StreamReader]::new($memory,[Text.Encoding]::UTF8,$true)
+    return [pscustomobject]@{pending=$false;lines=[string[]]($reader.ReadToEnd() -split '\r?\n')}
+  } catch [IO.IOException] {
+    $failure=$_.Exception
+    while ($failure.InnerException) { $failure=$failure.InnerException }
+    if (($failure.HResult -band 0xffff) -in @(32,33)) { return [pscustomobject]@{pending=$true;lines=$null} }
+    throw
+  } finally {
+    if ($reader) { $reader.Dispose() }
+    if ($memory) { $memory.Dispose() }
+    if ($stream) { $stream.Dispose() }
+  }
+}
+
+function Request-OwnedDebuggerTimeoutEvent([int]$ProcessId, $State) {
+  $live=$State.live
+  $observation=[pscustomobject]@{ requested=$false; writeCompleted=$false; flushCompleted=$false; requestError=$false; eventPidVerified=$false; eventKind='unobserved'; eventCode=$null }
+  $live.timeoutObservation=$observation
+  if ($live.debugger.HasExited) { return }
+  $deadline=[DateTime]::UtcNow.AddSeconds(3)
+  try {
+    # Read-only event observation only. Never inject g/gh/gn or alter filters.
+    $observation.requested=$true
+    $write=$live.input.WriteLineAsync('.echo MIXEL_NATIVE_TIMEOUT_EVENT; .lastevent; .echo MIXEL_NATIVE_TIMEOUT_EVENT_END')
+    if (-not $write.Wait([Math]::Max(0,[int]($deadline-[DateTime]::UtcNow).TotalMilliseconds))) { return }
+    [void]$write.GetAwaiter().GetResult(); $observation.writeCompleted=$true
+    $flush=$live.input.FlushAsync()
+    if (-not $flush.Wait([Math]::Max(0,[int]($deadline-[DateTime]::UtcNow).TotalMilliseconds))) { return }
+    [void]$flush.GetAwaiter().GetResult(); $observation.flushCompleted=$true
+    do {
+      if (Test-Path $live.raw) {
+        $snapshot=Read-OwnedLiveDebuggerSnapshot $live.raw
+        if (-not $snapshot.pending) {
+          $metadata=Read-OwnedExecutionMetadata $snapshot.lines $ProcessId -TimeoutEvent
+          if ($metadata.startupEventPidVerified) {
+            $observation.eventPidVerified=$true; $observation.eventKind=$metadata.startupEventKind; $observation.eventCode=$metadata.startupEventCode
+            return
+          }
+        }
+      }
+      if ($live.debugger.HasExited) { return }
+      Start-Sleep -Milliseconds 50
+    } while ([DateTime]::UtcNow -lt $deadline)
+  } catch { $observation.requestError=$true }
 }
 
 function Write-OwnedControlExecutionEvidence([int]$ProcessId, $State, [switch]$ProductTarget) {
@@ -707,7 +781,7 @@ function Write-OwnedControlExecutionEvidence([int]$ProcessId, $State, [switch]$P
     }
   }
   $kind=if ($ProductTarget) { 'owned-product-native-execution' } else { 'synthetic-native-exception-execution' }
-  $evidence=[pscustomobject]@{ evidenceKind=$kind; observationPhase='after-bounded-debugger-stop-before-target-cleanup'; pid=$ProcessId; nativeStatus=[MixelOrdinaryTokenFixture]::StartedStatus($ProcessId); enteredMain=$entered; entryPidVerified=$entryPidVerified; primaryThreadResume=$(if ($State.live) { $State.live.primaryThreadResume } else { $null }); debuggerExited=($State.live -and $State.live.debugger.HasExited); streams=$streams }
+  $evidence=[pscustomobject]@{ evidenceKind=$kind; observationPhase='after-bounded-debugger-stop-before-target-cleanup'; pid=$ProcessId; nativeStatus=[MixelOrdinaryTokenFixture]::StartedStatus($ProcessId); enteredMain=$entered; entryPidVerified=$entryPidVerified; primaryThreadResume=$(if ($State.live) { $State.live.primaryThreadResume } else { $null }); timeoutObservation=$(if ($State.live) { $State.live.timeoutObservation } else { $null }); debuggerExited=($State.live -and $State.live.debugger.HasExited); streams=$streams }
   Write-Host ('FIXTURE: bounded native execution evidence before cleanup: '+($evidence | ConvertTo-Json -Depth 5 -Compress))
   if ($env:RUNNER_TEMP) {
     $archive=Join-Path $env:RUNNER_TEMP 'mixel-owned-ordinary-qs-logs'
@@ -747,8 +821,8 @@ function Write-OwnedCrashDiagnostic([int]$ProcessId, [string]$OwnedExecutable, [
     $debugger=$State.live.debugger
     $waitMs=if ($State.live.ready) { 120000 } else { 0 }
     if (-not $debugger.WaitForExit($waitMs)) {
-      $debugger.Kill()
-      if (-not $debugger.WaitForExit(10000) -or -not $debugger.HasExited) { throw 'Owned live debugger termination was not observed within its deadline.' }
+      if ($State.live.ready) { Request-OwnedDebuggerTimeoutEvent $ProcessId $State }
+      Stop-OwnedLiveDebugger $State.live
       if ($State.live.ready) { throw 'Owned live stack extraction exceeded its deadline.' }
     }
     $debugger.WaitForExit(); Complete-OwnedDebuggerPipes $State.live; $debugger.Refresh()
