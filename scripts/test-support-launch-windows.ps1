@@ -62,7 +62,7 @@ public static class MixelOrdinaryTokenFixture {
   [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool CreateProcessWithTokenW(IntPtr token, uint flags, string application, StringBuilder command, uint creation, IntPtr environment, string directory, ref StartupInfo startup, out ProcessInfo process);
   [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool CreateProcessWithLogonW(string user, string domain, string password, uint flags, string application, StringBuilder command, uint creation, IntPtr environment, string directory, ref StartupInfo startup, out ProcessInfo process);
   [DllImport("user32.dll")] static extern IntPtr GetProcessWindowStation();
-  [DllImport("user32.dll")] static extern IntPtr GetThreadDesktop(uint thread);
+  [DllImport("user32.dll", SetLastError = true)] static extern IntPtr GetThreadDesktop(uint thread);
   [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool GetUserObjectInformationW(IntPtr obj, int kind, StringBuilder text, uint size, out uint required);
   [DllImport("user32.dll", SetLastError = true)] static extern bool GetUserObjectSecurity(IntPtr obj, ref uint information, byte[] data, uint size, out uint required);
   [DllImport("user32.dll", SetLastError = true)] static extern bool SetUserObjectSecurity(IntPtr obj, ref uint information, byte[] data);
@@ -102,6 +102,7 @@ public static class MixelOrdinaryTokenFixture {
   public static string CurrentDesktopPath() {
     return UserObjectName(GetProcessWindowStation()) + "\\" + UserObjectName(GetThreadDesktop(GetCurrentThreadId()));
   }
+  public static string ThreadDesktopName(uint thread) { return UserObjectName(GetThreadDesktop(thread)); }
   static StartupInfo Startup() { return new StartupInfo { cb = Marshal.SizeOf(typeof(StartupInfo)), desktop = CurrentDesktopPath() }; }
   static int Started(ProcessInfo process) { CloseHandle(process.thread); CloseHandle(process.process); return checked((int)process.pid); }
   public static int StartLinkedToken(string executable) {
@@ -266,12 +267,32 @@ function Write-OwnedWindowDiagnostic([int]$ProcessId, [string]$Phase) {
       }
       return $true
     }, [IntPtr]::Zero) | Out-Null
+    $modules = @()
+    try { $modules = @($process.Modules | Select-Object -ExpandProperty ModuleName) }
+    catch { $modules = @('unavailable') }
+    $threads = @($process.Threads | ForEach-Object {
+      $threadDesktop = $null
+      try { $threadDesktop = [MixelOrdinaryTokenFixture]::ThreadDesktopName([uint32]$_.Id) }
+      catch {
+        $nativeError = $_.Exception
+        while ($nativeError.InnerException) { $nativeError = $nativeError.InnerException }
+        $threadDesktop = if ($nativeError -is [ComponentModel.Win32Exception]) { 'unavailable(win32=' + $nativeError.NativeErrorCode + ')' } else { 'unavailable' }
+      }
+      $threadState = 'unavailable'; $waitReason = $null; $startAddress = $null
+      try {
+        $threadState = $_.ThreadState.ToString()
+        if ($_.ThreadState -eq [Diagnostics.ThreadState]::Wait) { $waitReason = $_.WaitReason.ToString() }
+        $startAddress = $_.StartAddress.ToInt64()
+      } catch { }
+      [pscustomobject]@{ id = $_.Id; state = $threadState; waitReason = $waitReason; desktop = $threadDesktop; startAddress = $startAddress }
+    })
     $state = [pscustomobject]@{
       phase = $Phase; foregroundPid = $ProcessId; executable = $process.Path
       exited = $process.HasExited; sessionId = $process.SessionId
       elevated = [MixelOrdinaryTokenFixture]::Elevated($ProcessId)
       runnerDesktop = [MixelOrdinaryTokenFixture]::CurrentDesktopPath()
       windows = $windows.ToArray()
+      modules = $modules; threads = $threads
     }
     Write-Host ('FIXTURE: actual owned process/window snapshot: ' + ($state | ConvertTo-Json -Depth 4 -Compress))
   } catch {

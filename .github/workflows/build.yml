@@ -875,6 +875,9 @@ jobs:
           RUNTIME_RUN_ID: ${{ inputs.runtime_artifact_run }}
           PUBLISH_REQUESTED: ${{ inputs.publish_r2 }}
         run: python scripts/release-artifacts.py runtime
+      - name: Qualify exact ordinary Windows desktop fixture
+        shell: pwsh
+        run: ./scripts/test-windows-pipeline.ps1
       - uses: actions/download-artifact@v4
         with:
           name: windows-msix-payload

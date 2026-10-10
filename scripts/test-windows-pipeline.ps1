@@ -84,6 +84,102 @@ if ($env:GITHUB_ACTIONS -ceq 'true' -and [MixelOrdinaryTokenFixture]::Elevated($
       throw 'Actual owned standard account was not created with its recorded SID.'
     }
     Write-Host 'PASS: actual ordinary runtime bootstrap creates its isolated standard account using memory-only random credentials.'
+    # Qualify the exact cross-account desktop/launch fixture with an actual
+    # Win32 GUI before waiting for the customer app. This control cannot satisfy
+    # any customer HWND, incoming IPC, consent lease or 95-second runtime gate.
+    $guiRoot = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) ('mixel-ordinary-fixture-' + [Guid]::NewGuid().ToString('N'))
+    $guiProcess = $null; $guiAccess = $null; $guiProfile = $false; $guiFailure = $null
+    try {
+      New-Item -ItemType Directory $guiRoot | Out-Null
+      $acl = Get-Acl $guiRoot
+      $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+        [Security.Principal.SecurityIdentifier]::new($ownedSid), 'Modify', 'ContainerInherit,ObjectInherit', 'None', 'Allow'))
+      Set-Acl -Path $guiRoot -AclObject $acl
+      $guiSource = Join-Path $guiRoot 'desktop-control.cs'
+      $guiExecutable = Join-Path $guiRoot 'desktop-control.exe'
+      $guiResult = Join-Path $guiRoot 'desktop-control-result.txt'
+      Set-Content $guiSource -Encoding utf8 -Value @'
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class MixelOwnedDesktopControl {
+  [DllImport("user32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern IntPtr CreateWindowExW(uint extended, string cls, string title, uint style, int x, int y, int width, int height, IntPtr parent, IntPtr menu, IntPtr instance, IntPtr parameter);
+  [DllImport("user32.dll", SetLastError=true)] static extern IntPtr CreateMenu();
+  [DllImport("user32.dll")] static extern bool DestroyMenu(IntPtr menu);
+  [DllImport("user32.dll")] static extern bool DestroyWindow(IntPtr window);
+  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr window);
+  [DllImport("user32.dll")] static extern IntPtr GetProcessWindowStation();
+  [DllImport("user32.dll", SetLastError=true)] static extern IntPtr GetThreadDesktop(uint thread);
+  [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+  [DllImport("user32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool GetUserObjectInformationW(IntPtr obj, int kind, StringBuilder text, uint size, out uint required);
+  static string Name(IntPtr obj) { var text=new StringBuilder(512); uint required; return GetUserObjectInformationW(obj,2,text,1024,out required) ? text.ToString() : "unavailable(win32="+Marshal.GetLastWin32Error()+")"; }
+  public static void Main() {
+    string result=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"desktop-control-result.txt");
+    IntPtr menu=CreateMenu(); int menuError=menu==IntPtr.Zero ? Marshal.GetLastWin32Error() : 0;
+    IntPtr window=CreateWindowExW(0,"STATIC","Mixel owned ordinary desktop fixture",0x10cf0000,30,30,500,200,IntPtr.Zero,menu,IntPtr.Zero,IntPtr.Zero);
+    int windowError=window==IntPtr.Zero ? Marshal.GetLastWin32Error() : 0;
+    File.WriteAllLines(result,new[] {
+      "pid="+Process.GetCurrentProcess().Id, "session="+Process.GetCurrentProcess().SessionId,
+      "desktop="+Name(GetProcessWindowStation())+"\\"+Name(GetThreadDesktop(GetCurrentThreadId())),
+      "window="+window.ToInt64(), "visible="+IsWindowVisible(window), "windowError="+windowError,
+      "menu="+menu.ToInt64(), "menuError="+menuError, "profile="+Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
+    });
+    System.Threading.Thread.Sleep(10000);
+    if(window!=IntPtr.Zero) DestroyWindow(window);
+    if(menu!=IntPtr.Zero) DestroyMenu(menu);
+  }
+}
+'@
+      $compiler = Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
+      & $compiler /nologo /target:winexe "/out:$guiExecutable" $guiSource
+      if ($LASTEXITCODE -ne 0 -or -not (Test-Path $guiExecutable)) { throw 'Owned Win32 desktop fixture compilation failed.' }
+      $guiAccess = [MixelOrdinaryTokenFixture+DesktopAccess]::new($ownedSid)
+      $guiProfile = $true
+      $guiPid = [MixelOrdinaryTokenFixture]::StartStandardUser($guiExecutable, $ownedUser, $ownedPassword)
+      $guiProcess = Get-Process -Id $guiPid
+      if ([MixelOrdinaryTokenFixture]::Elevated($guiPid) -or $guiProcess.SessionId -ne (Get-Process -Id $PID).SessionId) {
+        throw 'Owned desktop control is not a genuine non-elevated process in the runner session.'
+      }
+      $deadline = [DateTime]::UtcNow.AddSeconds(8)
+      while (-not (Test-Path $guiResult) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
+      if (-not (Test-Path $guiResult)) { throw 'Exact owned ordinary desktop fixture did not execute its Win32 control.' }
+      $actualGui = @{}
+      foreach ($line in Get-Content $guiResult) {
+        $separator = $line.IndexOf('=')
+        if ($separator -lt 1) { throw 'Malformed owned native desktop control result.' }
+        $actualGui[$line.Substring(0, $separator)] = $line.Substring($separator + 1)
+      }
+      Write-Host ('FIXTURE: actual native owned ordinary Win32 desktop control: ' + ($actualGui | ConvertTo-Json -Compress))
+      if ($actualGui.pid -ne [string]$guiPid -or $actualGui.desktop -cne $actualDesktop -or
+          $actualGui.window -eq '0' -or $actualGui.visible -cne 'True' -or $actualGui.menu -eq '0') {
+        throw "Exact owned ordinary Win32 GUI fixture failed; windowError=$($actualGui.windowError), menuError=$($actualGui.menuError), desktop=$($actualGui.desktop)."
+      }
+      Write-Host 'PASS: exact owned standard-account launch and temporary SID-scoped desktop grant create an actual visible Win32 window and menu on the runner desktop.'
+    } catch {
+      $guiFailure = $_
+      throw
+    } finally {
+      $guiCleanup = [System.Collections.Generic.List[string]]::new()
+      if ($guiProcess -and -not $guiProcess.HasExited) {
+        try { Stop-Process -Id $guiProcess.Id -Force } catch { $guiCleanup.Add('Owned native desktop-control process cleanup failed.') }
+      }
+      if ($guiAccess) { try { $guiAccess.Dispose() } catch { $guiCleanup.Add('Owned native desktop-control ACL restoration failed.') } }
+      if ($guiProfile) {
+        $profileRemoved = $false
+        for ($attempt=0; $attempt -lt 5; $attempt++) {
+          try { [MixelOrdinaryTokenFixture]::RemoveProfile($ownedSid); $profileRemoved=$true; break }
+          catch { if ($attempt -lt 4) { Start-Sleep -Seconds 2 } }
+        }
+        if (-not $profileRemoved) { $guiCleanup.Add('Owned native desktop-control profile cleanup failed.') }
+      }
+      if (Test-Path $guiRoot) { try { Remove-Item $guiRoot -Recurse -Force } catch { $guiCleanup.Add('Owned native desktop-control files cleanup failed.') } }
+      if ($guiCleanup.Count -gt 0) {
+        if ($guiFailure) { Write-Host ('FAIL: owned native desktop-control cleanup additionally failed: ' + ($guiCleanup -join ' ')) }
+        else { throw ($guiCleanup -join ' ') }
+      }
+    }
   } finally {
     $ownedPassword = $null
     $random = $null
@@ -115,6 +211,8 @@ foreach ($required in @(
     "Join-Path `$ordinaryProfileRoot 'AppData/Roaming/Mixel-Remote'",
     "('mixel-ordinary-client-' +",
     "Write-OwnedWindowDiagnostic `$main.Id 'initial ordinary startup'",
+    'ThreadDesktopName([uint32]$_.Id)',
+    '$process.Modules | Select-Object -ExpandProperty ModuleName',
     'if ($ownedSid) { try { Remove-LocalUser -SID',
     '$primaryFailure = $_',
     'if ($primaryFailure) { Write-Host',
