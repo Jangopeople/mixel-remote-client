@@ -17,6 +17,10 @@ on:
         description: 'Compile a GUID-only portable desktop QA fixture; does not qualify standard-user consent or release readiness'
         type: boolean
         default: false
+      standard_gui_connection_observation:
+        description: 'Observe isolated standard-child GUI initialization A/B/A; preserves native outcomes and never qualifies consent or applications'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -170,6 +174,40 @@ jobs:
         with:
           name: portable-standard-lease-qa-source-only
           path: standard-lease-qa-bundle/
+          if-no-files-found: error
+          retention-days: 7
+  standard-gui-connection-observation:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.standard_gui_connection_observation }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_source_runner == 'windows-2025' && 'windows-2025' || 'windows-2022' }}
+    timeout-minutes: 10
+    env:
+      MIXEL_GUI_CONNECTION_OBSERVATION: '1'
+      GIT_CONFIG_COUNT: '1'
+      GIT_CONFIG_KEY_0: core.autocrlf
+      GIT_CONFIG_VALUE_0: 'false'
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: '1.75'
+      - name: Activate the existing native x64 compiler for isolated observation
+        shell: pwsh
+        run: ./scripts/activate-windows-msvc.ps1 -ExportToGitHubEnvironment
+      - name: Exercise GUI observation source and cleanup controls without native calls
+        shell: pwsh
+        run: |
+          python scripts/test-standard-gui-connection.py
+          if ($LASTEXITCODE -ne 0) { throw 'GUI connection source controls failed.' }
+          ./scripts/test-standard-gui-connection-source.ps1
+      - name: Observe exact standard-child GUI connection without consent qualification
+        shell: pwsh
+        run: ./scripts/observe-standard-gui-connection-windows.ps1 -EvidenceDirectory gui-connection-proof
+      - name: Preserve literal source-bound observations and cleanup outcomes
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: standard-gui-connection-observation
+          path: gui-connection-proof/
           if-no-files-found: error
           retention-days: 7
   https-registration-gateway:
