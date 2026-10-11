@@ -262,6 +262,48 @@ def parse_trace(raw):
             'nativeCallCount': len(records), 'records': records, 'win32HandleNonNull': winreturn,
             'completedQualifiedSourceWindow': True}
 
+def observe_failure_capture(raw):
+    """Secondary safe metadata only; never replace the original full reader/gate.
+
+    Preserve every complete namespace marker, including unknown/failure markers,
+    and validate that stream with the unchanged reader. Non-marker debugger
+    failures remain explicit. No target values other than the reader's bounded
+    native enums/masks/status/booleans are returned.
+    """
+    result = dict(metadataOnly=True, readinessQualified=False,
+                  inputBounded=False, fullReaderAccepted=False,
+                  commandFailure=False, markerProjectionAccepted=False,
+                  nativeCallCount=0, records=[], win32HandleNonNull=False)
+    if type(raw) is not str:
+        return result
+    try:
+        bounded = len(raw.encode('utf-8')) <= 1048576
+    except UnicodeEncodeError:
+        return result
+    if not bounded:
+        return result
+    result['inputBounded'] = True
+    complete = raw[:raw.rfind('\n') + 1]
+    result['commandFailure'] = bool(re.search(
+        r'(?i)(syntax error|couldn.t resolve|unable to insert breakpoint|no hardware breakpoint|hardware breakpoint limit)', complete))
+    try:
+        parse_trace(raw)
+        result['fullReaderAccepted'] = True
+    except ValueError:
+        pass
+    markers = [line.strip() for line in complete.splitlines()
+               if line.strip().startswith('MIXEL_NAMESPACE_')]
+    try:
+        validated = parse_trace('\n'.join(markers) + '\n')
+    except ValueError:
+        return result
+    result.update(markerProjectionAccepted=True,
+                  nativeCallCount=validated['nativeCallCount'],
+                  records=validated['records'],
+                  win32HandleNonNull=validated['win32HandleNonNull'])
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--pid', type=int); parser.add_argument('--tid', type=int)
@@ -270,7 +312,20 @@ def main():
     parser.add_argument('--binary',type=Path);parser.add_argument('--exe-sha256')
     parser.add_argument('--engine-dll',type=Path);parser.add_argument('--engine-sha256')
     parser.add_argument('--parse', type=Path)
+    parser.add_argument('--failure-observe', type=Path)
     args = parser.parse_args()
+    if args.failure_observe:
+        if args.parse:
+            parser.error('Full parsing and secondary failure observation are exclusive')
+        path = args.failure_observe
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 1048576:
+            raise ValueError('Secondary private capture must be a bounded plain file')
+        with path.open('rb') as stream:
+            data = stream.read(1048577)
+        if len(data) > 1048576:
+            raise ValueError('Secondary private capture exceeded its byte bound')
+        print(json.dumps(observe_failure_capture(data.decode('utf-8')), separators=(',', ':')))
+        return
     if args.parse:
         if args.parse.stat().st_size > 1048576: raise ValueError('Private log exceeds1MiB')
         result = parse_trace(args.parse.read_text(encoding='utf-8'))

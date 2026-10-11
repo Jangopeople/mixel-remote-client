@@ -1194,6 +1194,37 @@ function New-TraceEngineDll([string]$Private) {
   if($info.Length-lt512-or$info.Length-gt16777216-or(Get-FileHash $dll -Algorithm SHA256).Hash.ToLowerInvariant()-cne$dllHash){throw 'Private native SDK DLL identity differs.'}
   return [pscustomobject]@{path=$dll;dllSHA256=$dllHash}
 }
+function Get-TraceFailureNativeRecords($Live,[string]$Phase) {
+  $unavailable=[pscustomobject]@{schemaAvailable=$false;metadataOnly=$true;readinessQualified=$false;inputBounded=$false;fullReaderAccepted=$false;commandFailure=$false;markerProjectionAccepted=$false;nativeCallCount=0;records=@();win32HandleNonNull=$false}
+  if(-not$Live-or$Phase-cne'trace'){return $unavailable}
+  try {
+    $retained=@($script:traceLiveProcesses|Where-Object{[object]::ReferenceEquals($_,$Live)})
+    if($retained.Count-ne1-or$Live.childPid-le0-or$Live.process.StartInfo.FileName-cne$script:cdb-or$Live.disposed){return $unavailable}
+    Assert-TracePlainPath $Live.outPath
+    $folder=[IO.Path]::GetDirectoryName($Live.outPath)
+    $helper=Join-Path $PSScriptRoot 'windows-namespace-cdb.py';Assert-TracePlainPath $helper
+    $text=(Invoke-TracePython @($helper,'--failure-observe',$Live.outPath) $folder 'failure-native-observation' 2).TrimEnd([char[]]"`r`n")
+    if([Text.Encoding]::UTF8.GetByteCount($text)-gt16384){return $unavailable}
+    $value=ConvertFrom-Json -InputObject $text -ErrorAction Stop
+    $keys=@('metadataOnly','readinessQualified','inputBounded','fullReaderAccepted','commandFailure','markerProjectionAccepted','nativeCallCount','records','win32HandleNonNull')
+    if((@($value.PSObject.Properties.Name)-join',')-cne($keys-join',')){return $unavailable}
+    foreach($key in @('metadataOnly','readinessQualified','inputBounded','fullReaderAccepted','commandFailure','markerProjectionAccepted','win32HandleNonNull')){if($value.PSObject.Properties[$key].Value-isnot[bool]){return $unavailable}}
+    if(-not$value.metadataOnly-or$value.readinessQualified-or($value.fullReaderAccepted-and$value.commandFailure)-or$value.records-isnot[Array]-or$value.records.Count-gt32-or($value.nativeCallCount-isnot[int]-and$value.nativeCallCount-isnot[long])-or$value.nativeCallCount-ne$value.records.Count){return $unavailable}
+    if(-not$value.markerProjectionAccepted-and($value.nativeCallCount-ne0-or$value.win32HandleNonNull)){return $unavailable}
+    if($value.fullReaderAccepted-and(-not$value.markerProjectionAccepted-or-not$value.inputBounded)){return $unavailable}
+    if($value.markerProjectionAccepted-and-not$value.inputBounded){return $unavailable}
+    $recordKeys=@('sequence','api','desiredAccess','rootNonNull','pathKind','nativeStatus','handleNonNull');$sequence=0
+    foreach($record in $value.records){
+      $sequence++
+      if((@($record.PSObject.Properties.Name)-join',')-cne($recordKeys-join',')){return $unavailable}
+      foreach($key in @('sequence','api','desiredAccess','pathKind','nativeStatus')){$number=$record.PSObject.Properties[$key].Value;if(($number-isnot[int]-and$number-isnot[long])-or$number-lt0-or$number-gt4294967295){return $unavailable}}
+      if($record.sequence-ne$sequence-or$record.api-notin@(1,2)-or$record.pathKind-gt12-or$record.rootNonNull-isnot[bool]-or$record.handleNonNull-isnot[bool]){return $unavailable}
+    }
+    if(($value|ConvertTo-Json -Depth 4 -Compress)-cne$text){return $unavailable}
+    $value|Add-Member -NotePropertyName schemaAvailable -NotePropertyValue $true
+    return $value
+  } catch {return $unavailable}
+}
 function Get-TraceFailureFacts($Live,[ValidateSet('export','identity','commands','startup','resume','trace','parse','result','ack','cleanup')][string]$Phase,[bool]$TimedOut,$Execution=$null) {
   $text='';$stderr='';$readFailed=$false;$stdoutBytes=0L;$stderrBytes=0L;$expectedControlCommand=''
   $expectedChildPid=0u;$expectedThreadId=0u
@@ -1222,6 +1253,7 @@ function Get-TraceFailureFacts($Live,[ValidateSet('export','identity','commands'
     hardwareControlFailure=[bool]($complete -match '(?m)^MIXEL_NAMESPACE_TRACE_FAIL_(?:IMAGE|CONTROL_ADDRESS|CONTROL_BINDING|HWCONTROL_SCOPE|HWCONTROL_MISSING)\r?$')
     scopeFailure=[bool]($complete -match '(?m)^MIXEL_NAMESPACE_TRACE_FAIL_(?:SCOPE|PID|ARCH|WINDOW_NESTED|WIN32_INTERFACE)\r?$')
     returnFailure=[bool]($complete -match '(?m)^MIXEL_NAMESPACE_TRACE_FAIL_(?:RETURN_SCOPE|RETURN_HANDLE|WIN32_RETURN_SCOPE)\r?$')
+    nativeFailureObservation=Get-TraceFailureNativeRecords $Live $Phase
     startupDiagnostics=Get-TraceStartupFacts $text
     hardwareDiagnostics=Get-TraceHardwareFacts $text $expectedControlCommand
     engineMetadataDiagnostics=Get-TraceEngineMetadataFacts $text $expectedChildPid $expectedThreadId $expectedControlCommand

@@ -518,5 +518,46 @@ for args in [None,{}, {'dll':'D:\\foreign\\mixelengine.dll','binary':engine_inpu
     rejects(lambda args=args:module.commands(101,202,2,leaf,r'D:\owned',pe,args),'Ambiguous/foreign engine input accepted')
 require(module.parse_trace(valid.replace(module.BINDINGS,'MIXEL_CDB_ENGINE_QUERY PRIVATE_UNKNOWN\n'+module.BINDINGS))==module.parse_trace(valid),'Getter metadata substituted/changed strict hardware capture parser')
 
+# Secondary failure observations cannot change the original full-reader gate.
+observed = module.observe_failure_capture(valid)
+require(observed['metadataOnly'] and not observed['readinessQualified'] and observed['fullReaderAccepted'] and observed['markerProjectionAccepted'], 'Safe projection acquired readiness or rejected complete markers')
+require(observed['records'] == module.parse_trace(valid)['records'], 'Safe projection changed native scalar domains')
+for failure in ['Syntax error', "Couldn't resolve PRIVATE_PATH", 'Unable to insert breakpoint', 'No hardware breakpoint', 'Hardware breakpoint limit']:
+    for capture in [failure+'\n'+valid, valid.replace(module.READY,module.READY+'\n'+failure), valid+failure+'\n']:
+        rejects(lambda capture=capture:module.parse_trace(capture), 'Original failure reader stopped rejecting command failures')
+        observation = module.observe_failure_capture(capture)
+        require(observation['inputBounded'] and observation['commandFailure'] and not observation['fullReaderAccepted'] and observation['markerProjectionAccepted'], 'Explicit whole-reader failure was hidden or marker sequence was weakened')
+        require(observation['records']==observed['records'] and not observation['readinessQualified'] and 'PRIVATE' not in json.dumps(observation), 'Safe projection leaked text or qualified a failed capture')
+for capture in [None, 1, True, b'PRIVATE', 'x'*1048577, '\u00e9'*524289, '\ud800']:
+    observation = module.observe_failure_capture(capture)
+    require(not observation['inputBounded'] and not observation['markerProjectionAccepted'] and observation['records']==[] and not observation['readinessQualified'], 'Unbounded/non-string input produced metadata')
+for injected in ['MIXEL_NAMESPACE_TRACE_FAIL_SCOPE','MIXEL_NAMESPACE_TRACE_FAIL_RETURN_SCOPE','MIXEL_NAMESPACE_TRACE_READY_EXTRA','MIXEL_NAMESPACE_NATIVE secret=PRIVATE','MIXEL_NAMESPACE_UNKNOWN']:
+    observation=module.observe_failure_capture(valid.replace(module.READY,module.READY+'\n'+injected))
+    require(not observation['markerProjectionAccepted'] and not observation['fullReaderAccepted'] and observation['records']==[], 'Failure/unknown/malformed marker was discarded by secondary projection')
+for bad in [record(sequence=0),record(sequence=2),record(api=0),record(api=3),record(access='100000000'),record(root=2),record(kind=13),record(status='100000000'),record(handle=2),record(qualified=0)]:
+    observation=module.observe_failure_capture(prefix+bad+'\n'+suffix+'Syntax error\n')
+    require(observation['commandFailure'] and not observation['markerProjectionAccepted'] and observation['records']==[], 'Out-of-domain native values were projected')
+for capture in [valid.replace(module.HWCONTROL,''),valid.replace(module.END,''),valid.replace(module.HWCONTROL,module.HWCONTROL+'\n'+module.HWCONTROL),valid.replace(module.READY,module.READY+'\n'+module.READY),valid.replace('MIXEL_NAMESPACE_WIN32 handleNonNull=0 scopeQualified=1','MIXEL_NAMESPACE_WIN32 handleNonNull=2 scopeQualified=1')]:
+    require(not module.observe_failure_capture(capture)['markerProjectionAccepted'], 'Incomplete/duplicate/out-of-order metadata was projected')
+maximum=prefix+'\n'.join(record(sequence=i+1,kind=i%13,access='ffffffff',status='ffffffff') for i in range(32))+'\n'+suffix+'Syntax error\n'
+maximum_observation=module.observe_failure_capture(maximum)
+require(maximum_observation['markerProjectionAccepted'] and maximum_observation['nativeCallCount']==32 and maximum_observation['records'][-1]['nativeStatus']==0xffffffff, 'Bounded DWORD/native record maximum changed')
+require(not module.observe_failure_capture(maximum.replace(suffix,record(sequence=33)+'\n'+suffix))['markerProjectionAccepted'], 'More than32 records were projected')
+require(module.observe_failure_capture(valid+'MIXEL_NAMESPACE_TRACE_FAIL_SCOPE')['markerProjectionAccepted'], 'Incomplete tail was accepted as a complete failure marker')
+require(not module.observe_failure_capture(valid+module.END+'\n')['markerProjectionAccepted'], 'Duplicate completion was projected')
+with tempfile.TemporaryDirectory(prefix='mixel-safe-failure-observation-') as temporary:
+    capture=Path(temporary)/'capture.private';capture.write_text('Syntax error PRIVATE_CREDENTIAL\n'+valid)
+    command=[sys.executable,str(ROOT/'windows-namespace-cdb.py'),'--failure-observe',str(capture)]
+    completed=subprocess.run(command,capture_output=True,text=True,timeout=10)
+    require(completed.returncode==0 and completed.stderr=='' and 'PRIVATE' not in completed.stdout, 'Failure-only CLI leaked raw capture or failed')
+    bridge=json.loads(completed.stdout)
+    require(bridge['markerProjectionAccepted'] and not bridge['fullReaderAccepted'] and not bridge['readinessQualified'], 'CLI converted failed full capture into readiness')
+    strict=subprocess.run([sys.executable,str(ROOT/'windows-namespace-cdb.py'),'--parse',str(capture)],capture_output=True,text=True,timeout=10)
+    require(strict.returncode!=0 and strict.stdout=='' and 'PRIVATE_CREDENTIAL' not in strict.stderr, 'Original strict CLI stopped rejecting actual command failure')
+    capture.write_bytes(b'x'*1048577)
+    require(subprocess.run(command,capture_output=True,timeout=10).returncode!=0, 'Oversized file bypassed secondary input bound')
+    capture.write_text(valid);alias=Path(temporary)/'alias.private';alias.symlink_to(capture)
+    require(subprocess.run(command[:-1]+[str(alias)],capture_output=True,timeout=10).returncode!=0, 'Indirect capture file was accepted')
+
 print(f'PASS: {checks} pure generator/parser controls; 4 hardware slots, exact Win32 GUID window, same-thread/RSP-qualified returns, shared32-entry diagnostics and32-record bound, native values unchanged')
 print('Scope: no actual Windows/CDB execution or signed/runtime/customer-Accept qualification')
