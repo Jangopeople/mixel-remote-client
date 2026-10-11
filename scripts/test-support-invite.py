@@ -25,6 +25,7 @@ targets = [
     "Cargo.toml", "libs/hbb_common/Cargo.toml", "libs/hbb_common/src/lib.rs", "libs/portable/src/main.rs",
     "flutter/lib/common.dart", "flutter/lib/main.dart", "src/ui_interface.rs",
     "src/ipc.rs", "src/ui_cm_interface.rs", "src/server/connection.rs", "src/server/dbus.rs", "src/core_main.rs", "src/common.rs", "src/updater.rs",
+    "src/server.rs", "src/flutter.rs", "flutter/lib/models/native_model.dart", "flutter/lib/desktop/pages/desktop_home_page.dart",
     "flutter/lib/desktop/pages/desktop_setting_page.dart",
     "flutter/lib/utils/http_service.dart",
     "src/lang/en.rs", "src/lang/de.rs", "src/lang/fr.rs", "src/lang/it.rs",
@@ -70,7 +71,7 @@ runpy.run_path(sys.argv[1], run_name='__main__')
     patched = subprocess.run([sys.executable, "-c", windows_encoding_runner, str(patcher)], env=env, capture_output=True, text=True, encoding="utf-8")
     if patched.returncode:
         raise RuntimeError(patched.stdout + patched.stderr)
-    patched_paths = targets + ["flutter/lib/mixel_support_invite.dart"] + [
+    patched_paths = targets + ["flutter/lib/mixel_support_invite.dart", "src/mixel_support_url.rs"] + [
         str(path.relative_to(repo)) for path in (repo / "flutter/local_plugins/uni_links_desktop").rglob("*") if path.is_file()
     ]
     first = {path: (repo / path).read_text(encoding="utf-8") for path in patched_paths}

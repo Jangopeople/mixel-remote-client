@@ -225,6 +225,7 @@ jobs:
           python3 scripts/test-support-invite.py
           python3 scripts/test-generated-support-paths.py
           python3 scripts/test-support-macos-uri-routing.py
+          python3 scripts/test-support-macos-url-ack.py
           python3 scripts/test-support-lease.py
           python3 scripts/test-windows-lease-error.py
           python3 scripts/test-support-network.py

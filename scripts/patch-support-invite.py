@@ -819,4 +819,5 @@ text = replace_once(text,
         }
 """, "forward all incoming support arguments to Flutter")
 core.write_text(text, encoding="utf-8")
+subprocess.run([sys.executable, str(scripts / "patch-support-macos-url-ack.py")], check=True)
 print("Support invite handoff patched: visible app, stable presence heartbeat, runtime customer accept guard, redacted bearer logs")

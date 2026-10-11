@@ -18,6 +18,7 @@ TARGETS = [
     "flutter/lib/common.dart", "flutter/lib/main.dart", "src/ui_interface.rs",
     "src/ipc.rs", "src/ui_cm_interface.rs", "src/server/connection.rs", "src/server/dbus.rs",
     "src/core_main.rs", "src/common.rs", "src/updater.rs",
+    "src/server.rs", "src/flutter.rs", "flutter/lib/models/native_model.dart", "flutter/lib/desktop/pages/desktop_home_page.dart",
     "flutter/lib/desktop/pages/desktop_setting_page.dart",
     "flutter/lib/utils/http_service.dart", "src/lang/en.rs", "src/lang/de.rs",
     "src/lang/fr.rs", "src/lang/it.rs", "libs/hbb_common/src/password_security.rs",
