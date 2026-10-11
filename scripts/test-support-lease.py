@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -253,6 +254,23 @@ fn main() {
         let _ = std::fs::write(directory.join("fixture-namespace.json"),observation);
         std::fs::write(directory.join("fixture-result.new"), result).unwrap();
         std::fs::rename(directory.join("fixture-result.new"), directory.join("fixture-result.json")).unwrap();
+        // This test-only request is absent from the strict normal baseline.
+        // The result never acquires/renews an attended lease or exports ready.
+        let unnamed_request = directory.join("fixture-unnamed.request");
+        if unnamed_request.is_file() {
+            assert_eq!(mode, "probe", "Unnamed observation must not run as a lease owner");
+            assert_eq!(std::fs::read_to_string(&unnamed_request).unwrap(), "observe");
+            let (phase, created, create_error, closed, close_error) = mixel_support_lease::fixture_unnamed_create();
+            let after_status = support_invite_lease_status();
+            let after_error = mixel_support_lease::fixture_raw_open_error();
+            let after_proof = support_invite_attestation();
+            let after_required = support_invite_requires_click();
+            let unnamed_result = format!(
+                "{{\"pid\":{},\"phase\":\"{}\",\"created\":{},\"createError\":{},\"closed\":{},\"closeError\":{},\"sourceStatusAfter\":\"{}\",\"rawOpenErrorAfter\":{},\"attestationAfter\":\"{}\",\"requiresClickAfter\":{}}}\n",
+                std::process::id(), phase, created, create_error, closed, close_error, after_status, after_error, after_proof, after_required);
+            std::fs::write(directory.join("fixture-unnamed-result.new"), unnamed_result).unwrap();
+            std::fs::rename(directory.join("fixture-unnamed-result.new"), directory.join("fixture-unnamed-result.json")).unwrap();
+        }
         if mode == "owner" {
             std::thread::sleep(std::time::Duration::from_secs(120));
         } else {
@@ -288,24 +306,84 @@ def isolated_source(original, directory, prefix, event):
     return source.replace(bridge_marker, WINDOWS_BRIDGE + bridge_marker, 1)
 
 
-def export_standard_windows_fixture(directory, event):
+def standard_unnamed_bridge(original):
+    # Copy the current Windows create implementation; no alternate SDDL,
+    # SECURITY_ATTRIBUTES layout, privilege, event access or owner state.
+    first = "    #[cfg(windows)]\n    fn create() -> std::io::Result<Lease> {"
+    last = "\n    #[cfg(windows)]\n    fn current(_lease: &Lease) -> std::io::Result<bool> {"
+    assert original.count(first) == 1 and original.count(last) == 1, "Exact Windows create extraction boundary changed"
+    start = original.index(first)
+    end = original.index(last, start)
+    body = original[start:end]
+    replacements = (
+        ("fn create() -> std::io::Result<Lease>",
+         "pub(super) fn fixture_unnamed_create() -> (&'static str, bool, u32, bool, u32)"),
+        ("return Err(std::io::Error::last_os_error());",
+         'return ("sddl", false, unsafe { GetLastError() }, false, 0);'),
+        ("        let name = wide(EVENT);\n        let handle = unsafe { CreateEventExW(&attributes, name.as_ptr(), 0, 0x00100000) };",
+         "        let handle = unsafe { CreateEventExW(&attributes, std::ptr::null(), 0, 0x00100000) };"),
+        ("        if let Some(error) = error {\n            return Err(std::io::Error::from_raw_os_error(error as i32));\n        }\n        Ok(Lease(handle as usize))",
+         '        if let Some(error) = error {\n            return ("create", false, error, false, 0);\n        }\n'
+         '        // Only a non-null handle returned by this exact call is closed.\n'
+         '        let closed = unsafe { CloseHandle(handle) } != 0;\n'
+         '        let close_error = if closed { 0 } else { unsafe { GetLastError() } };\n'
+         '        ("close", true, 0, closed, close_error)'),
+    )
+    for old, new in replacements:
+        assert body.count(old) == 1, "Exact Windows create discriminator boundary changed"
+        body = body.replace(old, new, 1)
+    return body
+
+
+def standard_windows_fixture_body(original, directory, prefix, event):
+    source = isolated_source(original, directory, prefix, event)
+    marker = "\n}\n\npub fn hold_support_invite_attended_lease()"
+    assert source.count(marker) == 1, "Standard Windows bridge extraction boundary changed"
+    source = source.replace(marker, "\n" + standard_unnamed_bridge(original) + marker, 1)
+    namespace_observer = (ROOT / "scripts/windows-standard-namespace-readonly.rs").read_text(encoding="utf-8")
+    assert STANDARD_WINDOWS_HARNESS.count("MIXEL_STANDARD_FIXTURE_EVENT") == 1, "Standard diagnostic event isolation marker changed"
+    standard_harness = STANDARD_WINDOWS_HARNESS.replace("MIXEL_STANDARD_FIXTURE_EVENT", json.dumps(event))
+    return source + namespace_observer + HARNESS.replace("fn main() {", "fn lease_main() {", 1) + standard_harness
+
+
+def read_pe_subsystem(binary):
+    assert 128 <= binary.stat().st_size <= 16 * 1024 * 1024, "Actual Windows PE executable exceeds its size bounds"
+    data = binary.read_bytes()
+    assert 128 <= len(data) <= 16 * 1024 * 1024 and data[:2] == b"MZ", "Expected bounded actual Windows PE executable"
+    pe = struct.unpack_from("<I", data, 0x3c)[0]
+    assert 64 <= pe <= len(data) - 96 and data[pe:pe + 4] == b"PE\0\0", "Actual PE header is missing or outside its bounds"
+    machine, optional_size = struct.unpack_from("<H", data, pe + 4)[0], struct.unpack_from("<H", data, pe + 20)[0]
+    optional = pe + 24
+    assert machine == 0x8664 and optional_size >= 70 and optional + optional_size <= len(data), "Expected bounded x64 PE optional header"
+    assert struct.unpack_from("<H", data, optional)[0] == 0x20b, "Expected actual PE32+ executable"
+    return struct.unpack_from("<H", data, optional + 68)[0]
+
+
+def export_standard_windows_fixture(directory, event, subsystem_pair=False):
     assert os.name == "nt", "Standard-account fixture compilation requires actual Windows"
     assert re.fullmatch(r"(?:(?:Global|Local)\\)?Mixel-Remote-Standard-Lease-[0-9a-f]{32}", event), "Expected an isolated GUID event name"
     directory = directory.resolve()
     assert directory.is_dir() and not directory.is_symlink(), "Expected an owned existing fixture directory"
     original = (ROOT / "scripts/support-invite-guard.rs").read_text(encoding="utf-8")
     assert "pub fn support_invite_lease_status() -> String" in original, "Actual read-only lease classification helper is missing"
-    source = isolated_source(original, directory, "mixel-standard-lease-" + uuid.uuid4().hex + "-", event)
+    body = standard_windows_fixture_body(original, directory, "mixel-standard-lease-" + uuid.uuid4().hex + "-", event)
     fixture = directory / "lease-standard.rs"
-    namespace_observer = (ROOT / "scripts/windows-standard-namespace-readonly.rs").read_text(encoding="utf-8")
-    assert STANDARD_WINDOWS_HARNESS.count("MIXEL_STANDARD_FIXTURE_EVENT") == 1, "Standard diagnostic event isolation marker changed"
-    standard_harness = STANDARD_WINDOWS_HARNESS.replace("MIXEL_STANDARD_FIXTURE_EVENT", json.dumps(event))
-    fixture.write_text(source + namespace_observer + HARNESS.replace("fn main() {", "fn lease_main() {", 1) + standard_harness, encoding="utf-8")
+    fixture.write_text(body, encoding="utf-8", newline="\n")
     binary = directory / "lease-standard.exe"
     rustc = os.environ.get("RUSTC_BIN") or shutil.which("rustc")
     assert rustc, "Native standard-account lease control requires rustc"
     subprocess.run(rustc_command([rustc, "--edition", "2021", "-D", "warnings", str(fixture), "-o", str(binary)]), check=True, timeout=90)
+    assert read_pe_subsystem(binary) == 3, "Actual console source control must link PE subsystem3"
     print("PASS: actual source-extracted standard-account lease control compiles with no Rust warnings", flush=True)
+    if subsystem_pair:
+        header = '#![windows_subsystem = "windows"]\n'
+        gui_fixture = directory / "lease-standard-gui.rs"
+        gui_fixture.write_text(header + body, encoding="utf-8", newline="\n")
+        assert gui_fixture.read_bytes() == header.encode("ascii") + fixture.read_bytes(), "Console/Windows subsystem pair differs beyond its single crate header"
+        gui_binary = directory / "lease-standard-gui.exe"
+        subprocess.run(rustc_command([rustc, "--edition", "2021", "-D", "warnings", str(gui_fixture), "-o", str(gui_binary)]), check=True, timeout=90)
+        assert read_pe_subsystem(gui_binary) == 2, "Actual Windows source control must link PE subsystem2"
+        print("PASS: actual console/Windows source pair differs only by the crate subsystem header; linked x64 PE metadata is console3/windows2 with no Rust warnings", flush=True)
 
 
 def main():
@@ -445,9 +523,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--export-standard-windows-fixture", type=Path)
     parser.add_argument("--event")
+    parser.add_argument("--export-standard-windows-subsystem-pair", action="store_true")
     args = parser.parse_args()
     if args.export_standard_windows_fixture is not None:
-        export_standard_windows_fixture(args.export_standard_windows_fixture, args.event or "")
+        export_standard_windows_fixture(args.export_standard_windows_fixture, args.event or "", args.export_standard_windows_subsystem_pair)
     else:
         assert args.event is None, "An isolated event requires explicit fixture export mode"
+        assert not args.export_standard_windows_subsystem_pair, "A subsystem pair requires explicit fixture export mode"
         main()

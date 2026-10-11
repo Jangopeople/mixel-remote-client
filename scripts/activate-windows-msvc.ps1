@@ -21,41 +21,60 @@ if ([string]::IsNullOrWhiteSpace($TemporaryRoot)) { $TemporaryRoot = $env:RUNNER
 if ([string]::IsNullOrWhiteSpace($TemporaryRoot)) { $TemporaryRoot = [IO.Path]::GetTempPath() }
 if (-not (Test-Path -LiteralPath $TemporaryRoot -PathType Container)) { throw 'Native MSVC temporary root is absent.' }
 $owned = Join-Path ([IO.Path]::GetFullPath($TemporaryRoot)) ('mixel-msvc-env-' + [Guid]::NewGuid().ToString('N'))
+if ($owned -match '["%\r\n]') { throw 'Owned MSVC batch path cannot be represented as a literal command path.' }
 $created = $false
 $process = $null
 try {
   New-Item -ItemType Directory -Path $owned | Out-Null
   $created = $true
   $batch = Join-Path $owned 'activate.cmd'
+  $snapshot = Join-Path $owned 'environment.utf16'
   # Keep batch syntax in its own file. PowerShell's Windows cmd.exe Legacy
   # argument reconstruction must never re-escape an embedded developer path.
-  $body = '@echo off' + "`r`n" + 'call "%MIXEL_MSVC_DEVCMD%" -no_logo -arch=x64 -host_arch=x64' + "`r`n" + 'if errorlevel 1 exit /b 1' + "`r`nset`r`n"
+  # The developer script may start children which retain inherited pipe handles.
+  # Snapshot the completed environment with cmd's own UTF-16 set redirection;
+  # correctness then depends on the retained command process, never pipe EOF.
+  $body = '@echo off' + "`r`n" + 'call "%MIXEL_MSVC_DEVCMD%" -no_logo -arch=x64 -host_arch=x64 >nul 2>&1' + "`r`n" + 'if errorlevel 1 exit /b 1' + "`r`n" + 'set > "%MIXEL_MSVC_ENV_OUTPUT%"' + "`r`n" + 'if errorlevel 1 exit /b 1' + "`r`n"
   [IO.File]::WriteAllText($batch, $body, [Text.UTF8Encoding]::new($false))
   $info = [Diagnostics.ProcessStartInfo]::new()
   $info.FileName = $env:ComSpec
   # Arguments is a raw Windows command line; .NET does not CRT-escape the quotes.
   # The only /c command is the quoted owned filename, with no /s quote stripping.
-  $info.Arguments = '/d /u /c "' + $batch + '"'
+  $info.Arguments = '/d /v:off /u /c "' + $batch + '"'
   $info.Environment['MIXEL_MSVC_DEVCMD'] = $devcmd
+  $info.Environment['MIXEL_MSVC_ENV_OUTPUT'] = $snapshot
   $info.UseShellExecute = $false
   $info.CreateNoWindow = $true
-  $info.RedirectStandardOutput = $true
-  $info.RedirectStandardError = $true
-  $info.StandardOutputEncoding = [Text.UnicodeEncoding]::new($false, $false)
-  $info.StandardErrorEncoding = [Text.UTF8Encoding]::new($false)
   $process = [Diagnostics.Process]::new()
   $process.StartInfo = $info
   if (-not $process.Start()) { throw 'Installed MSVC command processor did not start.' }
-  $stdout = $process.StandardOutput.ReadToEndAsync()
-  $stderr = $process.StandardError.ReadToEndAsync()
   if (-not $process.WaitForExit(30000)) {
     $process.Kill($true)
     [void]$process.WaitForExit(5000)
     throw 'Installed MSVC developer environment import exceeded its time bound.'
   }
-  if (-not $stdout.Wait(5000) -or -not $stderr.Wait(5000)) { throw 'Installed MSVC environment streams did not complete.' }
-  $text = $stdout.Result
-  if ($process.ExitCode -ne 0 -or $text.Length -eq 0 -or $text.Length -gt 1048576 -or $stderr.Result.Length -gt 65536) {
+  if ($process.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $snapshot -PathType Leaf)) {
+    throw 'Installed MSVC developer environment import failed its exit/output bounds; private output withheld.'
+  }
+  $record = Get-Item -LiteralPath $snapshot -Force
+  if (($record.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or $record.Length -le 0 -or $record.Length -gt 2097152 -or $record.Length % 2 -ne 0) {
+    throw 'Installed MSVC developer environment snapshot failed its file/output bounds; private output withheld.'
+  }
+  $snapshotBytes = [byte[]]::new(2097154)
+  $snapshotLength = 0
+  $snapshotStream = [IO.File]::Open($snapshot, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+  try {
+    while ($snapshotLength -lt $snapshotBytes.Length) {
+      $readCount = $snapshotStream.Read($snapshotBytes, $snapshotLength, $snapshotBytes.Length - $snapshotLength)
+      if ($readCount -eq 0) { break }
+      $snapshotLength += $readCount
+    }
+  } finally { $snapshotStream.Dispose() }
+  if ($snapshotLength -le 0 -or $snapshotLength -gt 2097152 -or $snapshotLength % 2 -ne 0) {
+    throw 'Installed MSVC developer environment snapshot failed its read/output bounds; private output withheld.'
+  }
+  $text = [Text.UnicodeEncoding]::new($false, $false, $true).GetString($snapshotBytes, 0, $snapshotLength)
+  if ($text.Length -eq 0 -or $text.Length -gt 1048576) {
     throw 'Installed MSVC developer environment import failed its exit/output bounds; private output withheld.'
   }
   $environment = @($text -split '\r?\n' | Where-Object { $_.Length -gt 0 })
@@ -68,6 +87,10 @@ try {
     $name, $value = $Matches[1], $Matches[2]
     if ($name -ceq 'MIXEL_MSVC_DEVCMD') {
       if ($value -cne $devcmd) { throw 'Owned MSVC developer path changed in its child environment.' }
+      continue
+    }
+    if ($name -ceq 'MIXEL_MSVC_ENV_OUTPUT') {
+      if ($value -cne $snapshot) { throw 'Owned MSVC environment snapshot path changed in its child environment.' }
       continue
     }
     if ([Environment]::GetEnvironmentVariable($name, 'Process') -cne $value) {
