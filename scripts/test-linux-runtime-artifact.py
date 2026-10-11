@@ -2,6 +2,7 @@
 """Reject mismatched build/archive inputs without network or installer execution."""
 import copy
 import hashlib
+import io
 from pathlib import Path
 import runpy
 import struct
@@ -93,6 +94,31 @@ class ArtifactControls(unittest.TestCase):
             path.write_bytes(path.read_bytes() + b"unexpected bytes")
             with self.assertRaises(ValueError):
                 API["read_linux_package"](path, digest)
+
+    def test_nul_truncated_file_and_directory_names_are_rejected_before_read(self):
+        name = "mixel-remote-1.4.6-x86_64.deb"
+        with tempfile.TemporaryDirectory(prefix="mixel-artifact-nul-control-") as temporary:
+            path = Path(temporary) / "owned.zip"
+            for members, before, after in (
+                ([(name + "X/../hidden", b"synthetic package")],
+                 (name + "X/../hidden").encode(), (name + "\0/../hidden").encode()),
+                ([(name, b"synthetic package"), ("nested/Xhidden", b"hidden")],
+                 b"nested/Xhidden", b"nested/\0hidden"),
+            ):
+                with self.subTest(raw_name=before):
+                    buffer = io.BytesIO()
+                    with zipfile.ZipFile(buffer, "w") as contents:
+                        for member, data in members:
+                            contents.writestr(member, data)
+                    raw = buffer.getvalue()
+                    self.assertEqual(len(before), len(after))
+                    self.assertEqual(raw.count(before), 2)
+                    raw = raw.replace(before, after)
+                    path.write_bytes(raw)
+                    with zipfile.ZipFile(path) as contents:
+                        self.assertEqual(sum(entry.filename != entry.orig_filename for entry in contents.infolist()), 1)
+                    with self.assertRaisesRegex(ValueError, "truncated by ZIP parsing"):
+                        API["read_linux_package"](path, "sha256:" + hashlib.sha256(raw).hexdigest())
 
 
 if __name__ == "__main__":

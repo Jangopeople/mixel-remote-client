@@ -128,6 +128,24 @@ class WindowsReleaseGateTests(unittest.TestCase):
                 for relative, digest in mapping['files_sha256'].items():
                     self.assertEqual(hashlib.sha256((output / relative).read_bytes()).hexdigest(), digest)
 
+    def test_nul_truncated_customer_and_payload_names_are_rejected(self):
+        with tempfile.TemporaryDirectory(prefix='mixel-release-nul-control-') as folder:
+            path = Path(folder) / 'owned.zip'
+            for name, members in [('windows', windows_files()), ('windows-msix-payload', payload_files())]:
+                with self.subTest(artifact=name):
+                    original, data = members[0]
+                    before, after = (original + 'X/../hidden').encode(), (original + '\0/../hidden').encode()
+                    altered = [(original + 'X/../hidden', data)] + members[1:]
+                    raw = archive_bytes(altered)
+                    self.assertEqual(len(before), len(after))
+                    self.assertEqual(raw.count(before), 2)
+                    raw = raw.replace(before, after)
+                    path.write_bytes(raw)
+                    with zipfile.ZipFile(path) as archive:
+                        self.assertEqual(sum(entry.filename != entry.orig_filename for entry in archive.infolist()), 1)
+                    with self.assertRaisesRegex(ValueError, 'truncated by ZIP parsing'):
+                        GATE.read_archive(path, name, 'sha256:' + hashlib.sha256(raw).hexdigest())
+
     def test_inventory_cannot_hide_duplicate_artifacts_or_stall_on_empty_page(self):
         with patch.object(GATE, 'api_json', side_effect=[{'total_count': 2, 'artifacts': [artifact('windows')]},
                                                        {'total_count': 2, 'artifacts': [artifact('windows-msix-payload')]}]):
