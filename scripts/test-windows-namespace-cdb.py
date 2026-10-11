@@ -50,6 +50,8 @@ for name in ['winentry.txt','entry.txt']:
 require('ba0 e 1 ntdll!NtOpenDirectoryObject' in files['start.txt'],'Directory hardware binding missing')
 require('ba1 e 1 ntdll!NtOpenEvent' in files['start.txt'],'Event hardware binding missing')
 require('ba2 e 1 KERNELBASE!OpenEventW' in files['start.txt'],'Exact Win32 window filter missing')
+require(files['start.txt'].endswith('.echo MIXEL_NAMESPACE_TRACE_READY\n'),'Initial debugger script must finish at the verified readiness barrier')
+require(not re.search(r'(?m)^\s*(?:g|gc|gh|gn)\s*$',files['start.txt']),'Initial script resumed before the owned parent removed external suspension')
 require('ba3 e 1 @$t13' in files['entry.txt'],'Fourth and final hardware slot missing')
 require('~~[0xca]ba3' in files['entry.txt'],'Native return lacks actual OS TID restriction')
 require('@rsp != @$t12+0n8' in files['return.txt'],'Native return stack scope missing')

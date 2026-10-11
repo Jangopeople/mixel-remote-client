@@ -100,7 +100,10 @@ def commands(pid, tid, session, event, folder):
             f'{thread}ba1 e 1 ntdll!NtOpenEvent "r $t1 = 2; {script("entry.txt")}"',
             f'{thread}ba2 e 1 KERNELBASE!OpenEventW "{script("winentry.txt")}"',
             '.printf "MIXEL_NAMESPACE_BINDINGS directory=%u event=%u win32=%u\\n",(@$bp0 == ntdll!NtOpenDirectoryObject),(@$bp1 == ntdll!NtOpenEvent),(@$bp2 == KERNELBASE!OpenEventW)',
-            '.echo MIXEL_NAMESPACE_TRACE_READY', 'g']
+            # Keep the initial debug event stopped. The retained parent removes
+            # the source thread's external suspension after verifying READY,
+            # then queues exactly one fixed continuation through owned stdin.
+            '.echo MIXEL_NAMESPACE_TRACE_READY']
     files = {name: '\n'.join(lines) + '\n' for name, lines in
              [('start.txt', init), ('winentry.txt', winentry), ('entry.txt', enter),
               ('return.txt', ret), ('winreturn.txt', winret)]}
@@ -171,7 +174,7 @@ def main():
     for name, text in files.items():
         target = args.output / name; target.write_text(text); target.chmod(0o600)
     scope = {'scope': 'Source-only debugger evidence; never a signed release/readiness gate', 'maximumRecords': 32,
-             'pathKind': paths, 'requires': 'retained owned suspended PID/TID/SID + non-elevated same-session identity first; actual bindings/READY before one owned ResumeThread; bounded deadline/private1MiB raw log; exact Win32 result + qd/owned cleanup; no public artifact/upload'}
+             'pathKind': paths, 'requires': 'retained owned suspended PID/TID/SID + non-elevated same-session identity first; actual bindings/READY before one owned ResumeThread then one fixed owned-stdin g continuation; bounded deadline/private1MiB raw log; exact Win32 result + qd/owned cleanup; no public artifact/upload'}
     target = args.output / 'DIAGNOSTIC-SCOPE.json'; target.write_text(json.dumps(scope, indent=2) + '\n'); target.chmod(0o600)
     print('PASS: bounded hardware diagnostic commands generated; actual CDB execution is a separate gate')
 

@@ -311,6 +311,7 @@ function Restore-TraceRootAcl([string]$Path,[byte[]]$Original) {
   }
 }
 function Start-TraceProcess([string]$File,[string[]]$Arguments,[string]$Folder,[string]$Label,[int]$ChildPid=0) {
+  if ($ChildPid -gt 0 -and $File -cne $script:cdb) {throw 'Only the verified retained CDB may receive trace command input.'}
   Assert-TracePlainPath $Folder
   $outPath=Join-Path $Folder ($Label+'-stdout.private');$errPath=Join-Path $Folder ($Label+'-stderr.private')
   Assert-TracePlainPath $outPath -AllowMissing;Assert-TracePlainPath $errPath -AllowMissing
@@ -319,15 +320,15 @@ function Start-TraceProcess([string]$File,[string[]]$Arguments,[string]$Folder,[
     $output=[IO.FileStream]::new($outPath,'CreateNew','Write','ReadWrite')
     $errors=[IO.FileStream]::new($errPath,'CreateNew','Write','ReadWrite')
     $info=[Diagnostics.ProcessStartInfo]::new();$info.FileName=$File;$info.UseShellExecute=$false;$info.CreateNoWindow=$true
-    $info.RedirectStandardInput=$true;$info.RedirectStandardOutput=$true;$info.RedirectStandardError=$true
+    $info.RedirectStandardInput=$ChildPid -gt 0;$info.RedirectStandardOutput=$true;$info.RedirectStandardError=$true
     foreach ($argument in $Arguments) { [void]$info.ArgumentList.Add($argument) }
     $process=[Diagnostics.Process]::new();$process.StartInfo=$info
-    $live=[pscustomobject]@{process=$process;input=$null;output=$output;errors=$errors;outPath=$outPath;errPath=$errPath;outTask=$null;errTask=$null;closed=$false;disposed=$false;childPid=$ChildPid}
+    $live=[pscustomobject]@{process=$process;input=$null;output=$output;errors=$errors;outPath=$outPath;errPath=$errPath;outTask=$null;errTask=$null;closed=$false;disposed=$false;childPid=$ChildPid;continuationAttempted=$false;continuationWritten=$false;continuationQueued=$false}
     if (-not $process.Start()) { throw 'Owned trace subprocess failed to start.' };$started=$true
     # Register the exact retained object before accessing pipes or starting tasks.
     # A startup failure cannot discard an already-started process observation.
     $script:traceLiveProcesses.Add($live)
-    $live.input=$process.StandardInput
+    if ($ChildPid -gt 0) {$live.input=$process.StandardInput}
     $live.outTask=[MixelNamespaceTraceIO]::CopyBounded($process.StandardOutput.BaseStream,$output,1048576)
     $live.errTask=[MixelNamespaceTraceIO]::CopyBounded($process.StandardError.BaseStream,$errors,1048576)
     return $live
@@ -405,6 +406,22 @@ function Assert-TraceReady([string]$Text) {
       ($markers.Count -eq 2 -and $markers[1] -cne 'MIXEL_NAMESPACE_TRACE_READY')) { throw 'Trace startup lacks the exact ordered bindings and one READY marker.' }
   return $markers.Count -eq 2
 }
+function Send-TraceContinuation($Live,[int]$ChildPid,[bool]$Ready,[bool]$Resumed,[int]$Previous,[bool]$Gated) {
+  $retained=@($script:traceLiveProcesses | Where-Object {[object]::ReferenceEquals($_,$Live)})
+  if ($retained.Count -ne 1 -or $ChildPid -le 0 -or $Live.childPid -ne $ChildPid -or
+      $Live.process.StartInfo.FileName -cne $script:cdb -or -not $Ready -or -not $Resumed -or
+      (-not $Gated -and $Previous -ne 1) -or ($Gated -and $Previous -notin @(0,1)) -or
+      $Live.closed -or $Live.disposed -or $Live.continuationAttempted -or $Live.continuationWritten -or $Live.continuationQueued -or $Live.process.HasExited -or -not $Live.input -or
+      [MixelOrdinaryTokenFixture]::StartedStatus($ChildPid) -cne 'still-running' -or
+      -not [MixelOrdinaryTokenFixture]::ActualOwnedDebuggerAttached($ChildPid)) {
+    throw 'Trace continuation requires the same retained live debugger, exact readiness and one qualified owned resume.'
+  }
+  # Set the attempt flag before any write. A partial write or failed flush is
+  # fatal and cannot authorize a second continuation command.
+  $Live.continuationAttempted=$true
+  $Live.input.Write("g`r`n");$Live.continuationWritten=$true
+  $Live.input.Flush();$Live.continuationQueued=$true
+}
 function Get-TraceCdbStopFacts([string]$Text) {
   $end=$Text.LastIndexOf("`n");$complete=if ($end -ge 0) {$Text.Substring(0,$end+1)} else {''}
   $kindOf={param([string]$InputText)
@@ -437,14 +454,23 @@ function Get-TraceCdbStopFacts([string]$Text) {
     postReadyLastRecognizedStopKind=& $kindOf $postComplete
   }
 }
-function Get-TraceExecutionFacts([int]$ChildPid,[string]$AttemptRoot,[bool]$Resumed,[int]$Previous,[bool]$Gated) {
+function Get-TraceExecutionFacts([int]$ChildPid,[string]$AttemptRoot,[bool]$Resumed,[int]$Previous,[bool]$Gated,$Continuation=$null) {
   $facts=[ordered]@{
     privateGate=$Gated;primaryResumeObserved=$Resumed;primaryResumePrevious=$(if($Resumed -and $Previous -in @(-1,0,1)){$Previous}else{-2})
     ownedChildState='unavailable';ownedChildExitCode=0L;ownedDebuggerStateAvailable=$false;ownedDebuggerAttached=$false
     sourceResultMetadataAvailable=$false;sourceResultExists=$false;sourceResultBounded=$false
     secondaryMetadataAvailable=$false;secondaryExists=$false;secondaryBounded=$false
+    continuationStateAvailable=$false;continuationAttempted=$false;continuationWritten=$false;continuationQueued=$false
   }
   if ($ChildPid -le 0) {return [pscustomobject]$facts}
+  try {
+    if ($Continuation -and @($script:traceLiveProcesses | Where-Object {[object]::ReferenceEquals($_,$Continuation)}).Count -eq 1 -and
+        $Continuation.childPid -eq $ChildPid -and $Continuation.continuationAttempted -is [bool] -and
+        $Continuation.continuationWritten -is [bool] -and $Continuation.continuationQueued -is [bool]) {
+      $facts.continuationStateAvailable=$true;$facts.continuationAttempted=$Continuation.continuationAttempted
+      $facts.continuationWritten=$Continuation.continuationWritten;$facts.continuationQueued=$Continuation.continuationQueued
+    }
+  } catch {}
   try {
     $status=[MixelOrdinaryTokenFixture]::StartedStatus($ChildPid)
     if ($status -ceq 'still-running') {$facts.ownedChildState='still-running'}
@@ -590,13 +616,15 @@ function Invoke-TraceAttempt([ValidateSet('absent','world')][string]$Scenario,[s
     if (-not $ready -or -not [MixelOrdinaryTokenFixture]::ActualOwnedDebuggerAttached($childPid)) {
       $timeout=$true
       if ($Gated) { throw 'Private gated trace did not reach exact debugger readiness.' }
-      Write-Host ('OBSERVED: bounded source-only trace startup facts; '+((Get-TraceFailureFacts $live $phase $true (Get-TraceExecutionFacts $childPid $attemptRoot $resumed $previous ([bool]$Gated))) | ConvertTo-Json -Depth 4 -Compress))
+      Write-Host ('OBSERVED: bounded source-only trace startup facts; '+((Get-TraceFailureFacts $live $phase $true (Get-TraceExecutionFacts $childPid $attemptRoot $resumed $previous ([bool]$Gated) $live)) | ConvertTo-Json -Depth 4 -Compress))
       return [pscustomobject]@{StartupTimedOut=$true}
     }
     $phase='resume'
     $previous=[MixelOrdinaryTokenFixture]::ResumeOwnedPrimaryThread($childPid)
     $resumed=$true
     if ((-not $Gated -and $previous -ne 1) -or ($Gated -and $previous -notin @(0,1))) { throw 'Trace did not perform the one qualified owned primary resume.' }
+    Send-TraceContinuation $live $childPid $ready $resumed $previous ([bool]$Gated)
+    Write-Host ('OBSERVED: bounded source-only trace continuation queued; '+([pscustomobject]@{privateGate=[bool]$Gated;primaryResumePrevious=$previous;continuationAttempted=$live.continuationAttempted;continuationWritten=$live.continuationWritten;continuationQueued=$live.continuationQueued}|ConvertTo-Json -Compress))
     if ($Gated) {
       $temporary=Join-Path $gateRoot 'ready.new';[IO.File]::WriteAllText($temporary,$nonce,[Text.UTF8Encoding]::new($false));[IO.File]::Move($temporary,$gate)
     }
@@ -627,10 +655,10 @@ function Invoke-TraceAttempt([ValidateSet('absent','world')][string]$Scenario,[s
     while ([MixelOrdinaryTokenFixture]::StartedStatus($childPid) -ceq 'still-running' -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 50 }
     if ([MixelOrdinaryTokenFixture]::StartedStatus($childPid) -cne 'exited:0x00000000') { throw 'Retained source trace child acknowledgement/exit failed.' }
     $completed=$true
-    return [pscustomobject]@{StartupTimedOut=$false;Scenario=$Scenario;PrivateGate=[bool]$Gated;FirstCallQualified=$true;OriginalSourceSHA256=$originalHash;DiagnosticSourceSHA256=$diagnosticHash;OwnedIdentityQualified=$true;DebuggerDetached=$true;SingleResumeQualified=$true;rawOpenError=$record.rawOpenError;Trace=$parsed}
+    return [pscustomobject]@{StartupTimedOut=$false;Scenario=$Scenario;PrivateGate=[bool]$Gated;FirstCallQualified=$true;OriginalSourceSHA256=$originalHash;DiagnosticSourceSHA256=$diagnosticHash;OwnedIdentityQualified=$true;DebuggerDetached=$true;SingleResumeQualified=$true;SingleContinuationQualified=$live.continuationQueued;rawOpenError=$record.rawOpenError;Trace=$parsed}
   } catch {
     $attemptFailure=$_.Exception
-    Write-Host ('OBSERVED: bounded source-only trace failure facts; '+((Get-TraceFailureFacts $live $phase $timeout (Get-TraceExecutionFacts $childPid $attemptRoot $resumed $previous ([bool]$Gated))) | ConvertTo-Json -Depth 4 -Compress))
+    Write-Host ('OBSERVED: bounded source-only trace failure facts; '+((Get-TraceFailureFacts $live $phase $timeout (Get-TraceExecutionFacts $childPid $attemptRoot $resumed $previous ([bool]$Gated) $live)) | ConvertTo-Json -Depth 4 -Compress))
     throw
   } finally {
     $errors=[Collections.Generic.List[Exception]]::new()
