@@ -593,8 +593,40 @@ function Get-TraceStartupFacts([string]$Text) {
   $facts.failureCategories=@($categories|Sort-Object)
   return [pscustomobject]$facts
 }
+function Get-TraceRowLexemes([string]$Row) {
+  $Row=$Row.Trim()
+  $facts=[ordered]@{lexemesAvailable=$false;length=[Math]::Min(4096,$Row.Length);lengthBounded=$Row.Length -le 4096;tokenCount=0;tokensBounded=$false;slotTokenKind='unavailable';statusTokenKind='unavailable';addressShape='unavailable';addressTokenCount=0;typeSizeShape='unavailable';passPairPresent=$false;colonShape='unavailable';promptPresent=$false;quotedCommandPresent=$false;controlCharacterPresent=$false;escapePresent=$false;angleBracketPresent=$false;blWordPresent=$false;slashLWordPresent=$false;beginWordPresent=$false;endWordPresent=$false;echoWordPresent=$false}
+  if($Row.Length -gt 4096){return [pscustomobject]$facts}
+  $tokens=@($Row -split '\s+'|Where-Object {$_ -ne ''})
+  $facts.tokenCount=[Math]::Min(32,$tokens.Count);$facts.tokensBounded=$tokens.Count -le 32
+  if(-not $facts.tokensBounded){return [pscustomobject]$facts}
+  $facts.lexemesAvailable=$true;$facts.slotTokenKind='missing';$facts.statusTokenKind='missing';$facts.addressShape='none';$facts.typeSizeShape='absent';$facts.colonShape='absent'
+  if($tokens.Count -gt 0){$facts.slotTokenKind=if($tokens[0] -cmatch '\A[0-3]\z'){'expected-slot'}elseif($tokens[0] -cmatch '\A[0-9]+\z'){'numeric-other'}else{'other'}}
+  if($tokens.Count -gt 1){$facts.statusTokenKind=switch -CaseSensitive ($tokens[1]){'e'{'enabled'}'d'{'disabled'}'u'{'unresolved'}default{'other'}}}
+  $addressKinds=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+  for($index=0;$index -lt $tokens.Count;$index++){
+    $token=$tokens[$index]
+    $address=if($token -cmatch '\A[0-9a-fA-F]{8}\z'){'hex8'}elseif($token -cmatch '\A[0-9a-fA-F]{16}\z'){'hex16'}elseif($token -cmatch '\A[0-9a-fA-F]{8}`[0-9a-fA-F]{8}\z'){'split16'}elseif($token -cmatch '\A\((?:[0-9a-fA-F]{8}|[0-9a-fA-F]{16}|[0-9a-fA-F]{8}`[0-9a-fA-F]{8})\)\z'){'parenthesized'}else{''}
+    if($address){[void]$addressKinds.Add($address);$facts.addressTokenCount++}
+    if($facts.typeSizeShape -ceq 'absent'){
+      if($token -cmatch '\A[erwi][1248]\z'){$facts.typeSizeShape=if($token -ceq 'e1'){'packed-e1'}else{'packed-other'}}
+      elseif($index+1 -lt $tokens.Count -and $token -cmatch '\A[erwi]\z' -and $tokens[$index+1] -cmatch '\A[1248]\z'){$facts.typeSizeShape=if($token -ceq 'e' -and $tokens[$index+1] -ceq '1'){'separate-e1'}else{'separate-other'}}
+    }
+    if($index+1 -lt $tokens.Count -and $token -cmatch '\A[0-9a-fA-F]{1,4}\z' -and $tokens[$index+1] -cmatch '\A\([0-9a-fA-F]{1,4}\)\z'){$facts.passPairPresent=$true}
+    if($token -cmatch '\A[0-9]{1,10}:[0-9a-fA-F]{1,8}\z'){$facts.colonShape='index-pair'}
+    elseif($token -cmatch '\A[0-9]{1,10}:\*{3,4}\z'){$facts.colonShape='index-wildcard'}
+    elseif($token.Contains(':') -and $facts.colonShape -ceq 'absent'){$facts.colonShape='other-colon'}
+  }
+  if($addressKinds.Count -eq 1){$facts.addressShape=@($addressKinds)[0]}elseif($addressKinds.Count -gt 1){$facts.addressShape='multiple'}
+  $facts.promptPresent=[bool]($Row -cmatch '\A[0-9]{1,10}:[0-9a-fA-F]{1,8}>')
+  $facts.quotedCommandPresent=$Row.Contains('"')
+  $facts.controlCharacterPresent=[bool]($Row -cmatch '[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]');$facts.escapePresent=$Row.Contains([char]27);$facts.angleBracketPresent=$Row.Contains('<') -or $Row.Contains('>')
+  $facts.blWordPresent=$tokens -ccontains 'bl';$facts.slashLWordPresent=$tokens -ccontains '/L'
+  $facts.beginWordPresent=$Row.Contains('MIXEL_NAMESPACE_HW_LIST_BEGIN');$facts.endWordPresent=$Row.Contains('MIXEL_NAMESPACE_HW_LIST_END');$facts.echoWordPresent=$tokens -ccontains '.echo'
+  return [pscustomobject]$facts
+}
 function Get-TraceHardwareFacts([string]$Text) {
-  $facts=[ordered]@{engineBlockCount=0;engineBlockComplete=$false;engineRowCount=0;engineSchemaValid=$false;engineIndexMetadataAvailable=$false;engineOsThreadCorrelationAvailable=$false;engineOsThreadMatched=$false;rowKindsAvailable=$false;rowKindsBounded=$false;rowKindsCount=0;knownRowCount=0;commandEchoRowCount=0;blankRowCount=0;oversizedRowCount=0;unknownRowCount=0;duplicateSlotCount=0;slotMask=0;enabledMask=0;resolvedMask=0;executeByteMask=0;passOneMask=0;threadSpecificMask=0;contextMarkerCount=0;contextSchemaValid=$true;contextAvailable=$false;processMatched=$false;threadMatched=$false;addressPresentMask=0;localEnableMask=0;globalEnableMask=0;executionByteMask=0}
+  $facts=[ordered]@{engineBlockCount=0;engineBlockComplete=$false;engineRowCount=0;engineSchemaValid=$false;engineIndexMetadataAvailable=$false;engineOsThreadCorrelationAvailable=$false;engineOsThreadMatched=$false;rowKindsAvailable=$false;rowKindsBounded=$false;rowKindsCount=0;knownRowCount=0;commandEchoRowCount=0;blankRowCount=0;oversizedRowCount=0;unknownRowCount=0;duplicateSlotCount=0;lexemeRows=@();slotMask=0;enabledMask=0;resolvedMask=0;executeByteMask=0;passOneMask=0;threadSpecificMask=0;contextMarkerCount=0;contextSchemaValid=$true;contextAvailable=$false;processMatched=$false;threadMatched=$false;addressPresentMask=0;localEnableMask=0;globalEnableMask=0;executionByteMask=0}
   if([Text.Encoding]::UTF8.GetByteCount($Text) -gt 1048576){$facts.contextSchemaValid=$false;return [pscustomobject]$facts}
   $end=$Text.LastIndexOf("`n");$complete=if($end -ge 0){$Text.Substring(0,$end+1)}else{''}
   $lines=@($complete -split '\r?\n'|ForEach-Object {$_.Trim()})
@@ -622,6 +654,7 @@ function Get-TraceHardwareFacts([string]$Text) {
     if($finish -eq $begin+1){$blockRows=@()}
     $facts.rowKindsAvailable=$true;$facts.rowKindsBounded=$blockRows.Count -le 32;$facts.rowKindsCount=[Math]::Min(32,$blockRows.Count)
     $rowSlots=0
+    $facts.lexemeRows=@($blockRows|Select-Object -First 32|ForEach-Object {Get-TraceRowLexemes $_})
     foreach($row in @($blockRows|Select-Object -First 32)){
       if($row -ceq ''){$facts.blankRowCount++;continue}
       if($row.Length -gt 4096){$facts.oversizedRowCount++;continue}
@@ -666,6 +699,39 @@ function Get-TraceContinuationFacts([string]$Text) {
   $facts.acknowledgementObserved=$facts.acknowledgementSchemaValid -and $facts.acknowledgementCount -eq 1
   return [pscustomobject]$facts
 }
+function Get-TraceMarkerFormattingFacts([string]$Text) {
+  $facts=[ordered]@{available=$false;markers=@()}
+  if([Text.Encoding]::UTF8.GetByteCount($Text) -gt 1048576){return [pscustomobject]$facts}
+  $end=$Text.LastIndexOf("`n");$complete=if($end -ge 0){$Text.Substring(0,$end+1)}else{''};$tail=$Text.Substring($end+1)
+  $lines=@($complete -split '\r?\n'|ForEach-Object {$_.Trim()})
+  $tokens=[ordered]@{ack='MIXEL_NAMESPACE_CONTINUATION_ACK';'hardware-control'='MIXEL_NAMESPACE_HWCONTROL';'win32-entry'='MIXEL_NAMESPACE_WIN32_ENTRY';'prewindow-entry'='MIXEL_NAMESPACE_PREWINDOW_ENTRY';native='MIXEL_NAMESPACE_NATIVE';window='MIXEL_NAMESPACE_TRACE_WINDOW';end='MIXEL_NAMESPACE_TRACE_END'}
+  $items=[Collections.Generic.List[object]]::new()
+  foreach($key in $tokens.Keys){
+    $literal=[regex]::Escape($tokens[$key]);$occurrence='(?<!\w)'+$literal+'(?=\s|\z|[";<>]|\\[rn])'
+    $allCount=[regex]::Matches($Text,$occurrence).Count;$tailCount=[regex]::Matches($tail,$occurrence).Count
+    $matching=@($lines|Where-Object {$_ -cmatch $occurrence})
+    $item=[ordered]@{kind=$key;bounded=$allCount -le 32 -and $matching.Count -le 32;tokenOccurrenceCount=[Math]::Min(32,$allCount);completeLineCount=[Math]::Min(32,$matching.Count);tailOccurrenceCount=[Math]::Min(32,$tailCount);standalonePrefixLineCount=0;promptPrefixLineCount=0;commandEchoLineCount=0;otherLineCount=0;oversizedLineCount=0}
+    foreach($line in @($matching|Select-Object -First 32)){
+      if($line.Length -gt 4096){$item.oversizedLineCount++;continue}
+      $prompt=$false;$payload=$line
+      if($line -cmatch '\A([0-9]{1,10}):[0-9a-fA-F]{1,8}>\s*(.*)\z' -and [long]$Matches[1] -le 4294967295){$prompt=$true;$payload=$Matches[2]}
+      if($key -ceq 'ack'){
+        if($line -ceq $tokens[$key]){$item.standalonePrefixLineCount++}
+        elseif($prompt -and $payload -ceq $tokens[$key]){$item.promptPrefixLineCount++}
+        elseif($payload -cmatch '\A\.echo MIXEL_NAMESPACE_CONTINUATION_ACK; g\z'){$item.commandEchoLineCount++}
+        else{$item.otherLineCount++}
+      }else{
+        if($line -cmatch ('\A'+$literal+'(?=\s|\z)')){$item.standalonePrefixLineCount++}
+        elseif($prompt -and $payload -cmatch ('\A'+$literal+'(?=\s|\z)')){$item.promptPrefixLineCount++}
+        elseif($payload -cmatch ('\A(?:\.echo '+$literal+'(?=\s|\z|;)|\.printf "'+$literal+'(?=\s|"|\\[rn]))')){$item.commandEchoLineCount++}
+        else{$item.otherLineCount++}
+      }
+    }
+    $items.Add([pscustomobject]$item)
+  }
+  $facts.available=$true;$facts.markers=$items.ToArray()
+  return [pscustomobject]$facts
+}
 function Get-TraceFailureFacts($Live,[ValidateSet('export','identity','commands','startup','resume','trace','parse','result','ack','cleanup')][string]$Phase,[bool]$TimedOut,$Execution=$null) {
   $text='';$stderr='';$readFailed=$false;$stdoutBytes=0L;$stderrBytes=0L
   if ($Live) {
@@ -693,6 +759,7 @@ function Get-TraceFailureFacts($Live,[ValidateSet('export','identity','commands'
     startupDiagnostics=Get-TraceStartupFacts $text
     hardwareDiagnostics=Get-TraceHardwareFacts $text
     continuationDiagnostics=Get-TraceContinuationFacts $text
+    markerFormattingDiagnostics=Get-TraceMarkerFormattingFacts $text
     entryDiagnostics=Get-TraceEntryFacts $text
     debuggerStop=Get-TraceCdbStopFacts $text
     execution=$Execution
