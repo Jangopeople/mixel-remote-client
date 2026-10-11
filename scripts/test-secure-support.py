@@ -442,7 +442,7 @@ fn explicit_direct_listener_and_stock_host_keep_plaintext_compatibility() {
 
 
 def main() -> None:
-    rustc = shutil.which("rustc")
+    rustc = os.environ.get("RUSTC_BIN") or shutil.which("rustc")
     if not rustc:
         raise RuntimeError("rustc is required to execute actual handshake branches")
     with tempfile.TemporaryDirectory(prefix="mixel-secure-support-test-") as temporary:

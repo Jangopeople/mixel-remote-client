@@ -405,7 +405,7 @@ fn receive_timer(mixel_registration:bool,keep_alive:i32,elapsed:u64)->ResultType
     assert 'Self::start_tcp(server, host).await' in mediator
     harness = repo / "network.rs"
     harness.write_text(source, encoding="utf-8")
-    rustc = shutil.which("rustc")
+    rustc = os.environ.get("RUSTC_BIN") or shutil.which("rustc")
     if not rustc:
         raise RuntimeError("Rust is required for actual generated network path tests")
     binary = repo / ("network-tests.exe" if os.name == "nt" else "network-tests")
