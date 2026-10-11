@@ -3,6 +3,7 @@
 import copy
 import hashlib
 import importlib.util
+import json
 import re
 import struct
 import subprocess
@@ -238,6 +239,98 @@ class OwnedPackageInventoryTests(unittest.TestCase):
 
 
 class RetainedLoaderResultTests(unittest.TestCase):
+    def test_joined_loader_secondary_observation_is_removed_before_exact_inventory(self):
+        with tempfile.TemporaryDirectory(prefix="mixel-qa-loader-") as folder:
+            root = Path(folder)
+            OwnedPackageInventoryTests().populate(root)
+            fixture = root / "fixture"
+            record = {"pid": 123, "sourceStatus": "ownerFailed=false;ownerError=none;kernel=absent;probeError=none;memoryActive=false",
+                      "rawOpenError": 2, "attestation": "", "requiresClick": False, "ownerFailed": False}
+
+            class Child:
+                pid, returncode = 123, None
+
+                def __init__(self, *_args, **_kwargs):
+                    (fixture / "fixture-result.json").write_text(json.dumps(record), encoding="utf-8")
+                    (fixture / "fixture-namespace.json").write_text("{}", encoding="utf-8")
+
+                def poll(self):
+                    return self.returncode
+
+                def communicate(self, timeout):
+                    self.returncode = 0
+                    return b"", b""
+
+                def kill(self):
+                    raise AssertionError("Already completed source loader must not be killed")
+
+            refusal = subprocess.CompletedProcess([], 1, b"", bundle.REFUSAL.split('"')[1].encode())
+            with patch.object(bundle.subprocess, "run", return_value=refusal), patch.object(bundle.subprocess, "Popen", Child):
+                result = bundle.loader_smoke(fixture / "lease-standard.exe", fixture)
+            self.assertFalse(result["standardUserQualified"])
+            self.assertFalse((fixture / "fixture-namespace.json").exists())
+            self.assertEqual(len(bundle.bundle_members(root)), 12)
+
+    def test_secondary_observation_refuses_preexisting_or_nonregular_and_oversized_members(self):
+        with tempfile.TemporaryDirectory(prefix="mixel-qa-loader-bounds-") as folder:
+            root = Path(folder)
+            observation = root / "fixture-namespace.json"
+            observation.mkdir()
+            with self.assertRaisesRegex(ValueError, "new owned fixture records"):
+                bundle.loader_smoke(root / "unused.exe", root)
+            with self.assertRaisesRegex(ValueError, "bounded ordinary file"):
+                bundle.remove_owned_loader_observation(observation)
+            self.assertTrue(observation.is_dir())
+            observation.rmdir()
+            observation.write_bytes(b"x" * 4097)
+            with self.assertRaisesRegex(ValueError, "bounded ordinary file"):
+                bundle.remove_owned_loader_observation(observation)
+            self.assertEqual(observation.stat().st_size, 4097)
+            observation.unlink()
+            target = root / "must-preserve.json"
+            target.write_bytes(b"owned symlink target")
+            observation.write_bytes(b"owned reparse metadata control")
+            reparse = type("ReparseRecord", (), {"st_mode": 0o100644, "st_file_attributes": 0x400, "st_size": 30})()
+            with patch.object(bundle.Path, "lstat", return_value=reparse), self.assertRaisesRegex(ValueError, "bounded ordinary file"):
+                bundle.remove_owned_loader_observation(observation)
+            self.assertEqual(observation.read_bytes(), b"owned reparse metadata control")
+            if bundle.os.name != "nt":
+                # Exercise an actual host symlink too; Windows reparse metadata
+                # is tested above without requiring a symlink-creation privilege.
+                observation.unlink()
+                observation.symlink_to(target)
+                with self.assertRaisesRegex(ValueError, "new owned fixture records"):
+                    bundle.loader_smoke(root / "unused.exe", root)
+                with self.assertRaisesRegex(ValueError, "bounded ordinary file"):
+                    bundle.remove_owned_loader_observation(observation)
+                self.assertTrue(observation.is_symlink())
+            self.assertEqual(target.read_bytes(), b"owned symlink target")
+
+    def test_unconfirmed_child_exit_preserves_secondary_observation(self):
+        with tempfile.TemporaryDirectory(prefix="mixel-qa-loader-unjoined-") as folder:
+            root = Path(folder)
+
+            class Child:
+                pid, returncode = 123, None
+
+                def __init__(self, *_args, **_kwargs):
+                    (root / "fixture-namespace.json").write_text("{}", encoding="utf-8")
+
+                def poll(self):
+                    return None
+
+                def kill(self):
+                    pass
+
+                def communicate(self, timeout):
+                    raise subprocess.TimeoutExpired("owned loader", timeout)
+
+            refusal = subprocess.CompletedProcess([], 1, b"", bundle.REFUSAL.split('"')[1].encode())
+            with patch.object(bundle.subprocess, "run", return_value=refusal), patch.object(bundle.subprocess, "Popen", Child), patch.object(bundle.time, "monotonic", side_effect=(0, 11)):
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    bundle.loader_smoke(root / "unused.exe", root)
+            self.assertEqual((root / "fixture-namespace.json").read_text(), "{}")
+
     def test_safe_result_is_only_a_loader_classification(self):
         record = {"pid": 123, "sourceStatus": "ownerFailed=false;ownerError=none;kernel=unavailable;probeError=5;memoryActive=false",
                   "rawOpenError": 5, "attestation": "guard-unavailable", "requiresClick": True, "ownerFailed": False}

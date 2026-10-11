@@ -58,6 +58,17 @@ def remove_owned_compiler_sidecars(directory):
         path.unlink()
 
 
+def remove_owned_loader_observation(path):
+    """Remove only the fixed joined child's bounded secondary observation."""
+    try:
+        record = path.lstat()
+    except FileNotFoundError:
+        return
+    if not stat.S_ISREG(record.st_mode) or getattr(record, "st_file_attributes", 0) & 0x400 or record.st_size > 4096:
+        raise ValueError("Owned loader observation is not a bounded ordinary file")
+    path.unlink()
+
+
 def bundle_members(directory):
     """Require the exact relocatable package inventory before writing its manifest."""
     members = []
@@ -190,7 +201,14 @@ def safe_result(record, pid):
 def loader_smoke(binary, directory):
     result = directory / "fixture-result.json"
     mode = directory / "fixture-mode.txt"
+    observation = directory / "fixture-namespace.json"
     if result.exists() or mode.exists():
+        raise ValueError("Loader smoke requires new owned fixture records")
+    try:
+        observation.lstat()
+    except FileNotFoundError:
+        pass
+    else:
         raise ValueError("Loader smoke requires new owned fixture records")
     refusal = subprocess.run([str(binary), "probe"], cwd=directory, capture_output=True, timeout=10)
     if refusal.returncode == 0 or result.exists() or b"Portable source QA accepts no command-line arguments" not in refusal.stderr:
@@ -218,6 +236,7 @@ def loader_smoke(binary, directory):
         if child.poll() is None:
             child.kill()
             child.communicate(timeout=5)
+        remove_owned_loader_observation(observation)
         for path in (mode, result, release):
             if path.exists():
                 path.unlink()
