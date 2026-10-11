@@ -281,14 +281,26 @@ using System.Threading.Tasks;
 public static class MixelPortableNativePipeControls {
   public static int NativeStage { get; private set; }
   public static void Run() {
+    string capacityName="MixelRemoteQA-lease-"+Guid.NewGuid().ToString("N");
+    NativeStage=4;
+    using(var first=new MixelPortableLeaseAdditionalInstanceChannel(capacityName,true,0)) {
+      NativeStage=5;
+      // Prove spare capacity independently of the FIRST_PIPE_INSTANCE flag.
+      using(var additional=new MixelPortableLeaseAdditionalInstanceChannel(capacityName,true,0)) {}
+      NativeStage=6;
+      bool firstRefused=false;
+      try { using(var collision=new MixelPortableLeaseFirstInstanceChannel(capacityName,true,0)) {} }
+      catch(System.ComponentModel.Win32Exception error) { if(error.NativeErrorCode!=5)throw; firstRefused=true; }
+      if(!firstRefused)throw new Exception("First-instance flag accepted a second server with available capacity");
+    }
     string name="MixelRemoteQA-lease-"+Guid.NewGuid().ToString("N");
     uint pid=(uint)System.Diagnostics.Process.GetCurrentProcess().Id;
     NativeStage=1;
     using(var server=new MixelPortableLeaseNativeChannel(name,true,0)) {
       bool refused=false;
       NativeStage=2;
-      try { using(var collision=new MixelPortableLeaseNativeChannel(name,true,0)) {} } catch(System.ComponentModel.Win32Exception error) { if(error.NativeErrorCode!=5)throw; refused=true; }
-      if(!refused)throw new Exception("First-instance pipe collision accepted");
+      try { using(var collision=new MixelPortableLeaseNativeChannel(name,true,0)) {} } catch(System.ComponentModel.Win32Exception error) { if(error.NativeErrorCode!=5 && error.NativeErrorCode!=231)throw; refused=true; }
+      if(!refused)throw new Exception("Single-instance pipe collision accepted");
       NativeStage=3;
       var client=Task.Run(()=> {
         using(var channel=new MixelPortableLeaseNativeChannel(name,false,pid)) {
@@ -320,6 +332,11 @@ public static class MixelPortableNativePipeControls {
 }
 '@
 $nativeControlSource+=$channel.Replace('MixelPortableLeaseChannel','MixelPortableLeaseNativeChannel')
+$createCall='CreateNamedPipeW(@"\\.\pipe\"+name,0x40080003,8,1,4096,4096,0,ref attributes)'
+if([regex]::Matches($channel,[regex]::Escape($createCall)).Count -ne 1) { throw 'Exact native create call changed before isolated flag controls.' }
+$firstInstanceSource=$channel.Replace('MixelPortableLeaseChannel','MixelPortableLeaseFirstInstanceChannel').Replace($createCall,$createCall.Replace(',8,1,4096,',',8,2,4096,'))
+$additionalInstanceSource=$firstInstanceSource.Replace('MixelPortableLeaseFirstInstanceChannel','MixelPortableLeaseAdditionalInstanceChannel').Replace('0x40080003,8,2,4096,','0x40000003,8,2,4096,')
+$nativeControlSource+=$firstInstanceSource+$additionalInstanceSource
 Add-Type -TypeDefinition $nativeControlSource
 if($NativePipeControls) {
   if([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT -or -not [Environment]::Is64BitProcess) { throw 'Native transport controls require actual x64 Windows.' }
@@ -332,7 +349,7 @@ if($NativePipeControls) {
     Write-Host ('Native transport failure: stage={0}; nativeCodeAvailable={1}; nativeCode={2}' -f [MixelPortableNativePipeControls]::NativeStage,$nativeCodeAvailable,$nativeCode)
     throw
   }
-  Write-Host 'PASS: actual Windows private first-instance pipe refuses name collision; bidirectional two-phase/release/finish exchange and kernel server/client PID checks pass; retained task and both handles close. Transport only; no standard-account consent or signed-app qualification.'
+  Write-Host 'PASS: actual Windows first-instance flag rejects a second server after spare capacity is independently proven; unchanged single-instance pipe refuses collision; bidirectional two-phase/release/finish exchange and kernel server/client PID checks pass; retained task and all handles close. Transport only; no standard-account consent or signed-app qualification.'
 } else {
   Write-Host 'Result: exact interactive source controls pass; zero Windows API calls and no standard-account/runtime qualification.'
 }
