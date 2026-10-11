@@ -890,7 +890,7 @@ function Get-TraceEngineQueryFacts([string]$Text) {
   return [pscustomobject]$facts
 }
 function Get-TraceEngineShapeFacts([string]$Text) {
-  $keys=@('commandAvailableMask','commandLength0','commandLength1','commandLength2','commandLength3','outerQuoteMask','edgeWhitespaceMask','controlCharacterMask','quotedExpectedMask','trimmedExpectedMask','expectedBodyOccurrenceMask','expectedScriptOccurrenceMask','moduleEnumerationAvailable','moduleCount','scannedCount','moduleNamesSuccessCount','moduleNamesBoundedCount','moduleExactPathCount','moduleCasePathCount','moduleBasenameOnlyCount','moduleScanCompleted')
+  $keys=@('commandAvailableMask','commandLength0','commandLength1','commandLength2','commandLength3','outerQuoteMask','edgeWhitespaceMask','controlCharacterMask','quotedExpectedMask','trimmedExpectedMask','expectedBodyOccurrenceMask','expectedScriptOccurrenceMask','backslashDeletedExpectedMask','moduleEnumerationAvailable','moduleCount','scannedCount','moduleNamesSuccessCount','moduleNamesBoundedCount','moduleExactPathCount','moduleCasePathCount','moduleBasenameOnlyCount','moduleScanCompleted')
   $facts=[ordered]@{recordCount=0;schemaAvailable=$false};foreach($key in $keys){$facts[$key]=0}
   if([Text.Encoding]::UTF8.GetByteCount($Text)-gt1048576){return [pscustomobject]$facts}
   $end=$Text.LastIndexOf("`n");if($end-lt0){return [pscustomobject]$facts}
@@ -912,16 +912,17 @@ function Get-TraceEngineShapeFacts([string]$Text) {
       if(($number-isnot[int]-and$number-isnot[long])-or$number-lt0-or$number-gt$max){return [pscustomobject]$facts};$canonical[$key]=[int]$number
     }
     if(($canonical|ConvertTo-Json -Compress)-cne$json-or$value.commandAvailableMask-ne$query.commandAvailableMask){return [pscustomobject]$facts}
-    foreach($key in @('outerQuoteMask','edgeWhitespaceMask','controlCharacterMask','quotedExpectedMask','trimmedExpectedMask','expectedBodyOccurrenceMask','expectedScriptOccurrenceMask')){
+    foreach($key in @('outerQuoteMask','edgeWhitespaceMask','controlCharacterMask','quotedExpectedMask','trimmedExpectedMask','expectedBodyOccurrenceMask','expectedScriptOccurrenceMask','backslashDeletedExpectedMask')){
       if(($value.PSObject.Properties[$key].Value-band(-bnot$value.commandAvailableMask))-ne0){return [pscustomobject]$facts}
     }
     for($slot=0;$slot-lt4;$slot++){
       $bit=1-shl$slot;$length=$value.PSObject.Properties['commandLength'+$slot].Value
       if(($value.commandAvailableMask-band$bit)-eq0-and$length-ne0){return [pscustomobject]$facts}
       if(($value.outerQuoteMask-band$bit)-ne0-and$length-lt2){return [pscustomobject]$facts}
-      if((($value.edgeWhitespaceMask-bor$value.controlCharacterMask-bor$value.trimmedExpectedMask-bor$value.expectedBodyOccurrenceMask-bor$value.expectedScriptOccurrenceMask)-band$bit)-ne0-and$length-eq0){return [pscustomobject]$facts}
+      if((($value.edgeWhitespaceMask-bor$value.controlCharacterMask-bor$value.trimmedExpectedMask-bor$value.expectedBodyOccurrenceMask-bor$value.expectedScriptOccurrenceMask-bor$value.backslashDeletedExpectedMask)-band$bit)-ne0-and$length-eq0){return [pscustomobject]$facts}
     }
     if(($value.quotedExpectedMask-band(-bnot$value.outerQuoteMask))-ne0-or(($value.quotedExpectedMask-bor$value.trimmedExpectedMask-bor$query.callbackMatchedMask)-band(-bnot($value.expectedBodyOccurrenceMask-band$value.expectedScriptOccurrenceMask)))-ne0-or($query.callbackMatchedMask-band(-bnot$value.trimmedExpectedMask))-ne0){return [pscustomobject]$facts}
+    if(($value.backslashDeletedExpectedMask-band($value.outerQuoteMask-bor$value.edgeWhitespaceMask-bor$value.controlCharacterMask-bor$value.quotedExpectedMask-bor$value.trimmedExpectedMask-bor$value.expectedBodyOccurrenceMask-bor$value.expectedScriptOccurrenceMask-bor$query.callbackMatchedMask))-ne0){return [pscustomobject]$facts}
     if($value.scannedCount-gt$value.moduleCount-or$value.moduleNamesSuccessCount-gt$value.scannedCount-or$value.moduleNamesBoundedCount-gt$value.moduleNamesSuccessCount-or$value.moduleExactPathCount-gt$value.moduleCasePathCount-or$value.moduleCasePathCount+$value.moduleBasenameOnlyCount-gt$value.moduleNamesBoundedCount){return [pscustomobject]$facts}
     if(-not$value.moduleEnumerationAvailable-and(@($keys|Where-Object{($_.StartsWith('module')-or$_-ceq'scannedCount')-and$value.PSObject.Properties[$_].Value-ne0}).Count-ne0)){return [pscustomobject]$facts}
     if($value.moduleEnumerationAvailable-and$value.moduleCount-eq0){return [pscustomobject]$facts}
@@ -958,6 +959,41 @@ function Get-TraceEngineEventFacts([string]$Text) {
   } catch { }
   return [pscustomobject]$facts
 }
+function Get-TraceEngineStackFacts([string]$Text) {
+  $keys=@('currentThreadAvailable','currentEventThreadMatched','stackAvailable','frameCount','frame0InstructionMatched','symbolAvailableMask','displacementZeroMask','dbgBreakPointMask','remoteBreakinMask','loaderBreakMask')
+  $facts=[ordered]@{recordCount=0;schemaAvailable=$false};foreach($key in $keys){$facts[$key]=0}
+  if([Text.Encoding]::UTF8.GetByteCount($Text)-gt1048576){return [pscustomobject]$facts}
+  $end=$Text.LastIndexOf("`n");if($end-lt0){return [pscustomobject]$facts}
+  $lines=@($Text.Substring(0,$end+1)-split'\r?\n'|ForEach-Object{$_.Trim()});$records=@($lines|Where-Object{$_-cmatch'\AMIXEL_CDB_ENGINE_STACK(?:\s|\z)'})
+  $facts.recordCount=[Math]::Min(32,$records.Count)
+  if($records.Count-ne1-or$records[0].Length-gt2048){return [pscustomobject]$facts}
+  $event=Get-TraceEngineEventFacts $Text;$eventPosition=-1
+  for($index=0;$index-lt$lines.Count;$index++){if($lines[$index]-cmatch'\AMIXEL_CDB_ENGINE_EVENT '){$eventPosition=$index;break}}
+  if(-not$event.schemaAvailable-or$eventPosition-lt0-or[Array]::IndexOf($lines,$records[0])-le$eventPosition-or$records[0]-cnotmatch'\AMIXEL_CDB_ENGINE_STACK (\{[^\r\n]+\})\z'){return [pscustomobject]$facts};$json=$Matches[1]
+  try {
+    $value=ConvertFrom-Json -InputObject $json -ErrorAction Stop
+    if((@($value.PSObject.Properties.Name)-join',')-cne($keys-join',')){return [pscustomobject]$facts}
+    $canonical=[ordered]@{}
+    foreach($key in $keys){
+      $number=$value.PSObject.Properties[$key].Value;$max=if($key-ceq'frameCount'){8}elseif($key.EndsWith('Mask')){255}else{1}
+      if(($number-isnot[int]-and$number-isnot[long])-or$number-lt0-or$number-gt$max){return [pscustomobject]$facts};$canonical[$key]=[int]$number
+    }
+    if(($canonical|ConvertTo-Json -Compress)-cne$json){return [pscustomobject]$facts}
+    if(-not$event.exceptionAvailable-and(@($keys|Where-Object{$value.PSObject.Properties[$_].Value-ne0}).Count-ne0)){return [pscustomobject]$facts}
+    foreach($parent in @('currentThreadAvailable','currentEventThreadMatched','stackAvailable')){
+      $position=[Array]::IndexOf($keys,$parent)
+      if(-not$value.PSObject.Properties[$parent].Value-and(@($keys|Select-Object -Skip($position+1)|Where-Object{$value.PSObject.Properties[$_].Value-ne0}).Count-ne0)){return [pscustomobject]$facts}
+    }
+    if($value.stackAvailable-and$value.frameCount-eq0){return [pscustomobject]$facts}
+    $frameMask=(1-shl$value.frameCount)-1
+    if(($value.symbolAvailableMask-band(-bnot$frameMask))-ne0){return [pscustomobject]$facts}
+    foreach($key in @('displacementZeroMask','dbgBreakPointMask','remoteBreakinMask','loaderBreakMask')){if(($value.PSObject.Properties[$key].Value-band(-bnot$value.symbolAvailableMask))-ne0){return [pscustomobject]$facts}}
+    if(-not$value.frame0InstructionMatched-and($value.symbolAvailableMask-ne0)){return [pscustomobject]$facts}
+    if(($value.dbgBreakPointMask-band$value.remoteBreakinMask)-ne0-or($value.dbgBreakPointMask-band$value.loaderBreakMask)-ne0-or($value.remoteBreakinMask-band$value.loaderBreakMask)-ne0){return [pscustomobject]$facts}
+    foreach($key in $keys){$facts[$key]=$canonical[$key]};$facts.schemaAvailable=$true
+  } catch { }
+  return [pscustomobject]$facts
+}
 function New-TraceEventQueryCommand([uint32]$ChildPid,[uint32]$Thread,[uint32]$ProbeRva,[uint32]$ImageSize,[string]$Image,[string]$Folder) {
   if(-not$ChildPid-or-not$Thread-or-not$ProbeRva-or$ProbeRva-ge$ImageSize-or$ImageSize-gt268435456){throw 'Stopped event query requires the exact bounded source identities.'}
   foreach($path in @($Image,$Folder)){
@@ -982,8 +1018,9 @@ function Collect-TraceStoppedEvent($Live,[int]$ChildPid) {
     $deadline=[DateTime]::UtcNow.AddSeconds(2)
     while(-not$Live.process.HasExited-and[DateTime]::UtcNow-lt$deadline){
       Assert-TraceStreams $Live
-      $event=Get-TraceEngineEventFacts ([MixelNamespaceTraceIO]::ReadBounded($Live.outPath,1048576))
-      if($event.recordCount-gt0){break}
+      $snapshot=[MixelNamespaceTraceIO]::ReadBounded($Live.outPath,1048576)
+      $event=Get-TraceEngineEventFacts $snapshot;$stack=Get-TraceEngineStackFacts $snapshot
+      if($event.schemaAvailable-and$stack.schemaAvailable){break}
       Start-Sleep -Milliseconds 50
     }
   } catch { }
@@ -1060,6 +1097,7 @@ function Get-TraceFailureFacts($Live,[ValidateSet('export','identity','commands'
     engineQueryDiagnostics=Get-TraceEngineQueryFacts $text
     engineShapeDiagnostics=Get-TraceEngineShapeFacts $text
     engineEventDiagnostics=Get-TraceEngineEventFacts $text
+    engineStackDiagnostics=Get-TraceEngineStackFacts $text
     eventQueryAttempted=[bool]($Live-and$Live.PSObject.Properties['eventQueryAttempted']-and$Live.eventQueryAttempted-is[bool]-and$Live.eventQueryAttempted)
     eventQueryWritten=[bool]($Live-and$Live.PSObject.Properties['eventQueryWritten']-and$Live.eventQueryWritten-is[bool]-and$Live.eventQueryWritten)
     eventQueryQueued=[bool]($Live-and$Live.PSObject.Properties['eventQueryQueued']-and$Live.eventQueryQueued-is[bool]-and$Live.eventQueryQueued)

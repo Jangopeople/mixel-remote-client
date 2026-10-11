@@ -87,7 +87,7 @@ struct facts {
 struct shapes {
     unsigned command_available = 0, lengths[4] = {};
     unsigned outer_quote = 0, edge_whitespace = 0, control_character = 0;
-    unsigned quoted_expected = 0, trimmed_expected = 0, expected_body = 0, expected_script = 0;
+    unsigned quoted_expected = 0, trimmed_expected = 0, expected_body = 0, expected_script = 0, backslash_deleted_expected = 0;
     unsigned module_enumeration_available = 0, module_count = 0, scanned_count = 0;
     unsigned module_names_success = 0, module_names_bounded = 0, module_exact_path = 0, module_case_path = 0, module_basename_only = 0;
     unsigned module_scan_completed = 0;
@@ -108,12 +108,17 @@ void command_shapes(const char* command, size_t length, const char* expected, co
     for (size_t index = 0; index < length; ++index) if (static_cast<unsigned char>(command[index]) < 32 || command[index] == 127) s->control_character |= bit;
     if (std::strstr(command, expected)) s->expected_body |= bit;
     if (script && std::strstr(command, script)) s->expected_script |= bit;
+    // Compare a private expected variant only; never normalize the actual callback.
+    char deleted[1024] = {}; size_t used = 0, expected_length = 0;
+    if (!bounded_length(expected, sizeof(deleted), &expected_length)) return;
+    for (size_t index = 0; index < expected_length; ++index) if (expected[index] != '\\') deleted[used++] = expected[index];
+    if (std::strcmp(command, deleted) == 0) s->backslash_deleted_expected |= bit;
 }
 void output_shapes(IDebugControl* control, const shapes& s) {
     control->Output(DEBUG_OUTPUT_NORMAL,
-        "\nMIXEL_CDB_ENGINE_SHAPES {\"commandAvailableMask\":%u,\"commandLength0\":%u,\"commandLength1\":%u,\"commandLength2\":%u,\"commandLength3\":%u,\"outerQuoteMask\":%u,\"edgeWhitespaceMask\":%u,\"controlCharacterMask\":%u,\"quotedExpectedMask\":%u,\"trimmedExpectedMask\":%u,\"expectedBodyOccurrenceMask\":%u,\"expectedScriptOccurrenceMask\":%u,\"moduleEnumerationAvailable\":%u,\"moduleCount\":%u,\"scannedCount\":%u,\"moduleNamesSuccessCount\":%u,\"moduleNamesBoundedCount\":%u,\"moduleExactPathCount\":%u,\"moduleCasePathCount\":%u,\"moduleBasenameOnlyCount\":%u,\"moduleScanCompleted\":%u}\n",
+        "\nMIXEL_CDB_ENGINE_SHAPES {\"commandAvailableMask\":%u,\"commandLength0\":%u,\"commandLength1\":%u,\"commandLength2\":%u,\"commandLength3\":%u,\"outerQuoteMask\":%u,\"edgeWhitespaceMask\":%u,\"controlCharacterMask\":%u,\"quotedExpectedMask\":%u,\"trimmedExpectedMask\":%u,\"expectedBodyOccurrenceMask\":%u,\"expectedScriptOccurrenceMask\":%u,\"backslashDeletedExpectedMask\":%u,\"moduleEnumerationAvailable\":%u,\"moduleCount\":%u,\"scannedCount\":%u,\"moduleNamesSuccessCount\":%u,\"moduleNamesBoundedCount\":%u,\"moduleExactPathCount\":%u,\"moduleCasePathCount\":%u,\"moduleBasenameOnlyCount\":%u,\"moduleScanCompleted\":%u}\n",
         s.command_available, s.lengths[0], s.lengths[1], s.lengths[2], s.lengths[3],
-        s.outer_quote, s.edge_whitespace, s.control_character, s.quoted_expected, s.trimmed_expected, s.expected_body, s.expected_script,
+        s.outer_quote, s.edge_whitespace, s.control_character, s.quoted_expected, s.trimmed_expected, s.expected_body, s.expected_script, s.backslash_deleted_expected,
         s.module_enumeration_available, s.module_count, s.scanned_count, s.module_names_success, s.module_names_bounded,
         s.module_exact_path, s.module_case_path, s.module_basename_only, s.module_scan_completed);
 }
@@ -141,35 +146,73 @@ void output_event(IDebugControl* control, const event_facts& e) {
         e.event_available, e.event_process_matched, e.event_thread_matched, e.event_is_exception,
         e.exception_available, e.exception_kind, e.first_chance, e.location_available, e.location_kind);
 }
+struct stack_facts {
+    unsigned current_thread_available = 0, current_event_thread_matched = 0;
+    unsigned stack_available = 0, frame_count = 0, frame0_instruction_matched = 0;
+    unsigned symbol_available = 0, displacement_zero = 0, dbg_break_point = 0, remote_breakin = 0, loader_break = 0;
+};
+void output_stack(IDebugControl* control, const stack_facts& s) {
+    control->Output(DEBUG_OUTPUT_NORMAL,
+        "\nMIXEL_CDB_ENGINE_STACK {\"currentThreadAvailable\":%u,\"currentEventThreadMatched\":%u,\"stackAvailable\":%u,\"frameCount\":%u,\"frame0InstructionMatched\":%u,\"symbolAvailableMask\":%u,\"displacementZeroMask\":%u,\"dbgBreakPointMask\":%u,\"remoteBreakinMask\":%u,\"loaderBreakMask\":%u}\n",
+        s.current_thread_available, s.current_event_thread_matched, s.stack_available, s.frame_count, s.frame0_instruction_matched,
+        s.symbol_available, s.displacement_zero, s.dbg_break_point, s.remote_breakin, s.loader_break);
+}
+void output_event_stack(IDebugControl* control, const event_facts& e, const stack_facts& s) {
+    output_event(control, e); output_stack(control, s);
+}
+void inspect_stack(IDebugControl* control, IDebugSystemObjects* system, IDebugSymbols* symbols,
+                   ULONG event_thread, ULONG64 exception_address, stack_facts* s) {
+    ULONG current_thread = DEBUG_ANY_ID;
+    if (system->GetCurrentThreadId(&current_thread) != S_OK || current_thread == DEBUG_ANY_ID) return;
+    s->current_thread_available = 1; s->current_event_thread_matched = current_thread == event_thread;
+    if (!s->current_event_thread_matched) return; // Current context only; no selection.
+    DEBUG_STACK_FRAME frames[8] = {}; ULONG filled = UINT32_MAX;
+    if (control->GetStackTrace(0, 0, 0, frames, 8, &filled) != S_OK || filled == 0 || filled > 8) return;
+    s->stack_available = 1; s->frame_count = filled;
+    s->frame0_instruction_matched = exception_address && frames[0].InstructionOffset == exception_address;
+    if (!s->frame0_instruction_matched || !symbols) return;
+    const char* known[3] = { "ntdll!DbgBreakPoint", "ntdll!DbgUiRemoteBreakin", "ntdll!LdrpDoDebuggerBreak" };
+    for (ULONG index = 0; index < filled; ++index) {
+        if (!frames[index].InstructionOffset) continue;
+        char name[4096]; std::memset(name, 0x7f, sizeof(name)); size_t length = 0; ULONG64 displacement = UINT64_MAX;
+        if (symbols->GetNameByOffset(frames[index].InstructionOffset, name, static_cast<ULONG>(sizeof(name)), nullptr, &displacement) != S_OK ||
+            !bounded_length(name, sizeof(name), &length) || !length || displacement >= 268435456) continue;
+        const unsigned bit = 1u << index; s->symbol_available |= bit;
+        if (!displacement) s->displacement_zero |= bit;
+        if (std::strcmp(name, known[0]) == 0) s->dbg_break_point |= bit;
+        else if (std::strcmp(name, known[1]) == 0) s->remote_breakin |= bit;
+        else if (std::strcmp(name, known[2]) == 0) s->loader_break |= bit;
+    }
+}
 HRESULT inspect_event(PDEBUG_CLIENT client, PCSTR input) {
     owned_interface<IDebugControl> control;
     if (client->QueryInterface(__uuidof(IDebugControl), reinterpret_cast<void**>(&control.value)) != S_OK || !control.value) return E_NOINTERFACE;
-    event_facts e; arguments args;
-    if (!parse_arguments(input, &args)) { output_event(control.value, e); return S_OK; }
+    event_facts e; stack_facts s; arguments args;
+    if (!parse_arguments(input, &args)) { output_event_stack(control.value, e, s); return S_OK; }
     e.arguments_valid = 1;
     ULONG status = DEBUG_STATUS_NO_DEBUGGEE;
-    if (control.value->GetExecutionStatus(&status) != S_OK) { output_event(control.value, e); return S_OK; }
+    if (control.value->GetExecutionStatus(&status) != S_OK) { output_event_stack(control.value, e, s); return S_OK; }
     e.status_available = 1; e.engine_stopped = status == DEBUG_STATUS_BREAK;
-    if (!e.engine_stopped) { output_event(control.value, e); return S_OK; }
+    if (!e.engine_stopped) { output_event_stack(control.value, e, s); return S_OK; }
     owned_interface<IDebugSystemObjects> system;
-    if (client->QueryInterface(__uuidof(IDebugSystemObjects), reinterpret_cast<void**>(&system.value)) != S_OK || !system.value) { output_event(control.value, e); return S_OK; }
+    if (client->QueryInterface(__uuidof(IDebugSystemObjects), reinterpret_cast<void**>(&system.value)) != S_OK || !system.value) { output_event_stack(control.value, e, s); return S_OK; }
     ULONG current_pid = 0, current_engine_process = DEBUG_ANY_ID, expected_engine_thread = DEBUG_ANY_ID;
     if (system.value->GetCurrentProcessSystemId(&current_pid) == S_OK && system.value->GetCurrentProcessId(&current_engine_process) == S_OK && current_engine_process != DEBUG_ANY_ID) {
         e.context_available = 1; e.process_matched = current_pid == args.pid;
     }
-    if (!e.process_matched || system.value->GetThreadIdBySystemId(args.tid, &expected_engine_thread) != S_OK || expected_engine_thread == DEBUG_ANY_ID) { output_event(control.value, e); return S_OK; }
+    if (!e.process_matched || system.value->GetThreadIdBySystemId(args.tid, &expected_engine_thread) != S_OK || expected_engine_thread == DEBUG_ANY_ID) { output_event_stack(control.value, e, s); return S_OK; }
     e.mapping_available = 1;
     ULONG type = 0, last_process = DEBUG_ANY_ID, last_thread_index = DEBUG_ANY_ID, used = 0;
     DEBUG_LAST_EVENT_INFO_EXCEPTION info = {};
-    if (control.value->GetLastEventInformation(&type, &last_process, &last_thread_index, &info, static_cast<ULONG>(sizeof(info)), &used, nullptr, 0, nullptr) != S_OK || last_process == DEBUG_ANY_ID || last_thread_index == DEBUG_ANY_ID) { output_event(control.value, e); return S_OK; }
+    if (control.value->GetLastEventInformation(&type, &last_process, &last_thread_index, &info, static_cast<ULONG>(sizeof(info)), &used, nullptr, 0, nullptr) != S_OK || last_process == DEBUG_ANY_ID || last_thread_index == DEBUG_ANY_ID) { output_event_stack(control.value, e, s); return S_OK; }
     // LastEventInformation exposes a thread INDEX. Correlate only the explicit
     // event engine IDs; never reinterpret that index as a mapped engine ID.
     ULONG event_process = DEBUG_ANY_ID, event_thread = DEBUG_ANY_ID;
-    if (system.value->GetEventProcess(&event_process) != S_OK || system.value->GetEventThread(&event_thread) != S_OK || event_process == DEBUG_ANY_ID || event_thread == DEBUG_ANY_ID) { output_event(control.value, e); return S_OK; }
+    if (system.value->GetEventProcess(&event_process) != S_OK || system.value->GetEventThread(&event_thread) != S_OK || event_process == DEBUG_ANY_ID || event_thread == DEBUG_ANY_ID) { output_event_stack(control.value, e, s); return S_OK; }
     e.event_available = 1; e.event_process_matched = event_process == current_engine_process; e.event_thread_matched = event_thread == expected_engine_thread;
-    if (!e.event_process_matched) { e.event_thread_matched = 0; output_event(control.value, e); return S_OK; }
+    if (!e.event_process_matched) { e.event_thread_matched = 0; output_event_stack(control.value, e, s); return S_OK; }
     e.event_is_exception = type == DEBUG_EVENT_EXCEPTION;
-    if (!e.event_is_exception || used != sizeof(info) || info.FirstChance > 1 || info.ExceptionRecord.NumberParameters > EXCEPTION_MAXIMUM_PARAMETERS) { output_event(control.value, e); return S_OK; }
+    if (!e.event_is_exception || used != sizeof(info) || info.FirstChance > 1 || info.ExceptionRecord.NumberParameters > EXCEPTION_MAXIMUM_PARAMETERS) { output_event_stack(control.value, e, s); return S_OK; }
     e.exception_available = 1; e.first_chance = info.FirstChance;
     const ULONG code = info.ExceptionRecord.ExceptionCode;
     e.exception_kind = code == 0x80000003u ? 1u : code == 0x80000004u ? 2u : code == 0xc0000005u ? 3u : 4u;
@@ -186,7 +229,8 @@ HRESULT inspect_event(PDEBUG_CLIENT client, PCSTR input) {
         }
         if (matches == 1) e.location_kind = kind;
     }
-    output_event(control.value, e); return S_OK;
+    inspect_stack(control.value, system.value, symbols.value, event_thread, info.ExceptionRecord.ExceptionAddress, &s);
+    output_event_stack(control.value, e, s); return S_OK;
 }
 }
 extern "C" __declspec(dllexport) HRESULT CALLBACK DebugExtensionInitialize(PULONG version, PULONG flags) {
