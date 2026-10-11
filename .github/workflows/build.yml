@@ -296,6 +296,9 @@ jobs:
           VCPKG_ROOT: ${{ github.workspace }}/vcpkg
         run: python3 scripts/test-compiled-support-guard.py
 
+      - name: Verify compiled Flutter UI branding
+        run: python3 scripts/verify-flutter-branding.py --assets rustdesk/flutter/build/linux/x64/release/bundle/data/flutter_assets
+
       - name: Exercise actual Linux cold and warm support launches
         run: python3 scripts/test-support-launch-linux.py --executable rustdesk/flutter/build/linux/x64/release/bundle/mixel-remote
 
@@ -522,6 +525,9 @@ jobs:
           VCPKG_ROOT: ${{ github.workspace }}/vcpkg
           CARGO_BUILD_TARGET: ${{ matrix.job.target }}
         run: python3 scripts/test-compiled-support-guard.py
+
+      - name: Verify compiled Flutter UI branding
+        run: python3 scripts/verify-flutter-branding.py --assets rustdesk/flutter/build/macos/Build/Products/Release/Mixel-Remote.app/Contents/Frameworks/App.framework/Resources/flutter_assets
 
       - name: Package + sign + notarize (.app then .dmg)
         working-directory: rustdesk
@@ -782,6 +788,9 @@ jobs:
         run: |
           source scripts/use-windows-msvc-bash.sh
           python scripts/test-compiled-support-guard.py
+
+      - name: Verify compiled Flutter UI branding
+        run: python scripts/verify-flutter-branding.py --assets rustdesk/flutter/build/windows/x64/runner/Release/data/flutter_assets
 
       - name: Prepare full application directory for Store packaging
         shell: pwsh

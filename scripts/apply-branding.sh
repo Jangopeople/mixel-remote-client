@@ -48,6 +48,7 @@ python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-video.py"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos.py"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-texture.py"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-wakelock.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-flutter-branding.py" --repo "$RDREPO" --branding "$BRANDING"
 
 # 1. custom.txt — RustDesk's build-time branding override file.
 cp "$BRANDING/custom.txt" "$RDREPO/custom.txt"

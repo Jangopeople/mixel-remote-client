@@ -70,6 +70,11 @@ with tempfile.TemporaryDirectory(prefix="mixel-branding-") as directory:
     first = run(BRANDING_COMMAND, cwd=base, env=env)
     assert "native loaders, protocol handlers, Linux app identity and relay defaults verified" in first.stdout
     assert (repo / "flutter/lib/mixel_support_invite.dart").is_file()
+    assert (repo / "flutter/assets/icon.png").read_bytes() == (ROOT / "branding/icon-512.png").read_bytes()
+    assert not (repo / "flutter/assets/icon.svg").exists()
+    common = (repo / "flutter/lib/common.dart").read_text(encoding="utf-8")
+    assert "return Image.asset('assets/icon.png', width: size, height: size);" in common
+    assert "'assets/icon.svg'" not in common
     print("PASS: complete branding and support patch use the same fresh 1.4.6 checkout with default RDREPO")
 
     gtk = (repo / "flutter/linux/my_application.cc").read_text(encoding="utf-8")

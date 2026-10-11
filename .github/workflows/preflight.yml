@@ -40,6 +40,7 @@ jobs:
           python3 scripts/test-macos-bundle-minimum.py
           python3 scripts/test-sdk-discovery.py
           python3 scripts/test-support-session-fixture.py
+          python3 scripts/test-flutter-branding.py
           python3 scripts/test-support-video-sampling.py
           python3 scripts/test-linux-runtime-artifact.py
           python3 scripts/test-relay-ws-bridge-lifecycle.py
