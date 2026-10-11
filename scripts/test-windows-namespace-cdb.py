@@ -199,6 +199,57 @@ for event in ['',leaf+'x',leaf+'\\secret','Global\\'+leaf,'Local\\'+leaf,leaf.up
 for folder in ['',r'\\host\share',r'C:\..\owned',r'C:\owned\..',r'C:\owned path',r'C:\owned%path',r'C:\owned;echo',r'C:\owned"path',r'C:\owned&path','C:\\owned\npath','C:\\owned\\']:
     rejects(lambda folder=folder:commands(101,202,2,leaf,folder),'Ambiguous command folder accepted')
 
+# MIXEL_QUOTED_BA_ENCODING_CONTROLS_BEGIN
+# Simulated documented C-style quoted-string boundary; actual SDK GetCommand
+# equality and hardware/window evidence remain required on Windows.
+def decode_ba_string(encoded):
+    if type(encoded) is not str or len(encoded) > 2048 or len(encoded) < 2 or encoded[0] != '"' or encoded[-1] != '"':
+        raise ValueError('Invalid bounded quoted command string')
+    result=[];index=1
+    while index < len(encoded)-1:
+        c=encoded[index]
+        if ord(c) < 32 or ord(c) > 126 or c == '"':raise ValueError('Ambiguous quoted callback')
+        if c == '\\':
+            index+=1
+            if index >= len(encoded)-1 or encoded[index] != '\\':raise ValueError('Unexpected C escape')
+            c='\\'
+        result.append(c);index+=1
+    return ''.join(result)
+for body in ['$$><D:\\owned\\entry.txt','r $t1 = 1; $$><D:\\owned\\entry.txt','r $t1 = 2; $$><D:\\owned\\entry.txt','x','\\','\\'*1023,'x'*1023]:
+    encoded=module.ba_command_string(body)
+    require(decode_ba_string(encoded)==body,'Quoted ba path encoding fails exact C-style roundtrip')
+    require(len(encoded.encode('ascii'))<=2048 and encoded.count('\\')==body.count('\\')*2,'Encoded callback bounds or only-backslash transform changed')
+for bad in [None,True,1,b'callback','', 'x'*1024,'\\'*1024,'"','x";g','\n','\r','\t','\0','x\x1f','x\x7f','é','Ｃ']:
+    rejects(lambda bad=bad:module.ba_command_string(bad),'Ambiguous/nonASCII/unbounded callback accepted')
+for bad in ['', '"','"x', 'x"', '\\', '"\\"','"\\n"','"\\a"','"x";g','"x\n"','"x""','"é"','"'+'\\'*2048+'"']:
+    rejects(lambda bad=bad:decode_ba_string(bad),'Malformed/truncated/unrecognized callback escape accepted')
+for folder in [r'D:\owned',long_folder,r'D:\a\_temp\trace-'+('a'*32)+'\\'+('b'*32)]:
+    generated,_=commands(0xffffffff,0xffffffff,0xffffffff,leaf,folder)
+    expected={
+        'start.txt':['r $t1 = 1; $$><'+folder+'\\entry.txt','r $t1 = 2; $$><'+folder+'\\entry.txt','$$><'+folder+'\\winentry.txt','$$><'+folder+'\\hwcontrol.txt'],
+        'winentry.txt':['$$><'+folder+'\\winreturn.txt'],
+        'entry.txt':['$$><'+folder+'\\return.txt']}
+    observed=0
+    for name,text in generated.items():
+        encoded=re.findall(r'(?m)^~~\[0xffffffff\]ba[0-3] e 1 (?:/1 )?[^"\n]+ ("[^"\n]*")$',text)
+        require(len(encoded)==len(expected.get(name,[])),'Quoted hardware callback count/scope changed')
+        if name in expected:
+            decoded=[decode_ba_string(x) for x in encoded]
+            require(decoded==expected[name],'Startup/dynamic return decoded callback differs from its exact private body')
+            require(all(module.ba_command_string(x)==y for x,y in zip(decoded,encoded)),'Callback encoding is noncanonical or contains extra control escapes')
+            observed+=len(decoded)
+        require(len(text.replace('\n',';\n').encode('ascii'))<=4096,'Escaping violates CDB condensed block bound')
+    require(observed==6,'Startup or dynamic return hardware callback was not covered')
+    require(('$$><'+folder+'\\winmatch-01.txt\n')in generated['winentry.txt'],'Unquoted Win32 helper path was encoded')
+    require(('$$><'+folder+'\\pathmatch-01.txt\n')in generated['entry.txt'],'Unquoted native helper path was encoded')
+    require(('$$><'+folder+'\\hardware-state.txt\n')in generated['start.txt'],'Unquoted startup helper path was encoded')
+# A literal old ba string loses separators at its C-style boundary; the fixed
+# encoded string preserves every separator without changing native arguments.
+old_callback='r $t1 = 1; $$><D:\\owned\\entry.txt'
+rejects(lambda:decode_ba_string('"'+old_callback+'"'),'Unescaped old callback passed strict roundtrip')
+require(decode_ba_string(module.ba_command_string(old_callback))==old_callback,'Fixed body was normalized or changed')
+# MIXEL_QUOTED_BA_ENCODING_CONTROLS_END
+
 def win_entry(sequence=1,mask=7,matched=1,access=1,inherit=1):
     return f'MIXEL_NAMESPACE_WIN32_ENTRY sequence={sequence} leafValidMask={mask} leafMatched={matched} accessMatched={access} inheritFalse={inherit}'
 def pre_entry(sequence=1,api=1):

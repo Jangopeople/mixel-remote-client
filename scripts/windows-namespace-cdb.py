@@ -27,6 +27,16 @@ def windows_file(folder, leaf):
         raise ValueError('Expected a bounded unambiguous owned Windows script folder')
     return folder + '\\' + leaf
 
+def ba_command_string(body):
+    # ba parses quoted CommandString with C-style escapes. Preserve the exact
+    # decoded owned callback; unquoted script commands keep literal paths.
+    if type(body) is not str or not body or len(body) > 1023 or any(ord(c) < 32 or ord(c) > 126 or c == '"' for c in body):
+        raise ValueError('Expected a bounded unambiguous printable callback body')
+    encoded = '"' + body.replace('\\', '\\\\') + '"'
+    if len(encoded.encode('ascii')) > 2048:
+        raise ValueError('Encoded callback exceeds its bounded command string')
+    return encoded
+
 def commands(pid, tid, session, event, folder, pe, engine=None):
     for value in (pid, tid, session):
         if type(value) is not int or not 0 < value <= 0xffffffff:
@@ -75,7 +85,7 @@ def commands(pid, tid, session, event, folder, pe, engine=None):
                      f'.if ($vvalid(@$t14,0n8) == 0) {{ {fail("WIN32_STACK")} }}',
                      'r $t18 = poi(@$t14)',
                      f'.if ($vvalid(@$t18,0n1) == 0) {{ {fail("WIN32_RETURN")} }}',
-                     'bc 2', f'{thread}ba2 e 1 @$t18 "{script("winreturn.txt")}"',
+                     'bc 2', f'{thread}ba2 e 1 @$t18 {ba_command_string(script("winreturn.txt"))}',
                      '.echo MIXEL_NAMESPACE_TRACE_WINDOW', '}','gc'])
     enter = [scope, '.if (@$t16 == 0) {',
              f'.if (@$t4 >= 0n32) {{ {fail("ENTRY_LIMIT")} }}',
@@ -102,7 +112,7 @@ def commands(pid, tid, session, event, folder, pe, engine=None):
         name = f'pathmatch-{kind:02d}.txt'
         helpers[name] = f'.if (@$t8 == 0n{len(path)*2}) {{ .if ({equals(path)}) {{ r $t10 = 0n{kind} }} }}\n'
         enter.append(script(name))
-    enter.extend(['bd 0 1', f'{thread}ba3 e 1 @$t13 "{script("return.txt")}"', '}','gc'])
+    enter.extend(['bd 0 1', f'{thread}ba3 e 1 @$t13 {ba_command_string(script("return.txt"))}', '}','gc'])
     ret = [scope,
            f'.if ((@$t19 != 0) or (@$t16 != 1) or (@$t17 != 1) or (@rsp != @$t12+0n8) or (@rip != @$t13)) {{ {fail("RETURN_SCOPE")} }}',
            f'.if ($vvalid(@$t11,0n8) == 0) {{ {fail("RETURN_HANDLE")} }}',
@@ -147,10 +157,10 @@ def commands(pid, tid, session, event, folder, pe, engine=None):
                               '.echo MIXEL_CDB_BREAKPOINT_COMMANDS_BEGIN','.bpcmds','.echo MIXEL_CDB_BREAKPOINT_COMMANDS_END'])
     init.extend([f'r $t19 = @$t15 + 0n{pe["probeRva"]}',
                  f'.if ((@$t19 <= @$t15) or (@$t19 >= @$t15+0n{pe["imageSize"]}) or ($vvalid(@$t19,0n1) == 0) or (@$t19 == ntdll!NtOpenDirectoryObject) or (@$t19 == ntdll!NtOpenEvent) or (@$t19 == KERNELBASE!OpenEventW)) {{ {fail("CONTROL_ADDRESS")} }}',
-            f'{thread}ba0 e 1 ntdll!NtOpenDirectoryObject "r $t1 = 1; {script("entry.txt")}"',
-            f'{thread}ba1 e 1 ntdll!NtOpenEvent "r $t1 = 2; {script("entry.txt")}"',
-            f'{thread}ba2 e 1 KERNELBASE!OpenEventW "{script("winentry.txt")}"',
-            f'{thread}ba3 e 1 /1 @$t19 "{script("hwcontrol.txt")}"',
+            f'{thread}ba0 e 1 ntdll!NtOpenDirectoryObject {ba_command_string("r $t1 = 1; " + script("entry.txt"))}',
+            f'{thread}ba1 e 1 ntdll!NtOpenEvent {ba_command_string("r $t1 = 2; " + script("entry.txt"))}',
+            f'{thread}ba2 e 1 KERNELBASE!OpenEventW {ba_command_string(script("winentry.txt"))}',
+            f'{thread}ba3 e 1 /1 @$t19 {ba_command_string(script("hwcontrol.txt"))}',
             f'.if (@$bp3 != @$t19) {{ {fail("CONTROL_BINDING")} }}',
             script('hardware-state.txt'),
             '.printf "MIXEL_NAMESPACE_BINDINGS directory=%u event=%u win32=%u\\n",(@$bp0 == ntdll!NtOpenDirectoryObject),(@$bp1 == ntdll!NtOpenEvent),(@$bp2 == KERNELBASE!OpenEventW)',
