@@ -66,6 +66,64 @@ public static class MixelNamespaceTraceIO {
 }
 '@
 Add-Type -TypeDefinition $boundedSource -CompilerOptions '/warnaserror'
+$aclNativeSource = @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+public static class MixelNamespaceTraceAcl {
+  [DllImport("advapi32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool GetFileSecurityW(string file,uint information,[Out] byte[] descriptor,uint length,out uint needed);
+  [DllImport("advapi32.dll",CharSet=CharSet.Unicode)] static extern uint SetNamedSecurityInfoW(string file,uint objectType,uint information,IntPtr owner,IntPtr group,IntPtr dacl,IntPtr sacl);
+  static int Position(byte[] bytes) {
+    if(bytes==null || bytes.Length<20 || bytes.Length>65536 || bytes[0]!=1 || (BitConverter.ToUInt16(bytes,2)&0x8004)!=0x8004) throw new InvalidOperationException("Invalid bounded native file descriptor");
+    uint offset=BitConverter.ToUInt32(bytes,16);
+    if(offset<20 || offset>(uint)bytes.Length-8) throw new InvalidOperationException("Native file DACL offset is invalid");
+    int position=checked((int)offset),size=BitConverter.ToUInt16(bytes,position+2);
+    if((bytes[position]!=2 && bytes[position]!=4) || size<8 || size>bytes.Length-position) throw new InvalidOperationException("Native file DACL size or revision is invalid");
+    return position;
+  }
+  public static byte[] Read(string path) {
+    uint needed;
+    bool first=GetFileSecurityW(path,7,null,0,out needed);
+    int error=first?0:Marshal.GetLastWin32Error();
+    if(first) throw new InvalidOperationException("Unexpected native file descriptor size query success");
+    if(error!=122) throw new Win32Exception(error);
+    if(needed<20 || needed>65536) throw new InvalidOperationException("Invalid bounded native file descriptor size query");
+    byte[] bytes=new byte[needed];uint actual;
+    if(!GetFileSecurityW(path,7,bytes,needed,out actual)) {error=Marshal.GetLastWin32Error();throw new Win32Exception(error);}
+    if(actual<20 || actual>needed) throw new InvalidOperationException("Native file descriptor read exceeded its bound");
+    if(actual!=needed) Array.Resize(ref bytes,checked((int)actual));
+    Position(bytes);return bytes;
+  }
+  public static void RestoreDacl(string path,byte[] original) {
+    int position=Position(original);
+    uint information=4U|((BitConverter.ToUInt16(original,2)&0x1000)!=0?0x80000000U:0x20000000U);
+    var pinned=GCHandle.Alloc(original,GCHandleType.Pinned);
+    try {
+      // Pass the saved native ACL, including padding. This API returns its own
+      // error code and writes only the DACL plus its original protection state.
+      uint error=SetNamedSecurityInfoW(path,1,information,IntPtr.Zero,IntPtr.Zero,IntPtr.Add(pinned.AddrOfPinnedObject(),position),IntPtr.Zero);
+      if(error!=0) throw new Win32Exception(unchecked((int)error));
+    } finally { pinned.Free(); }
+  }
+  public static ushort Control(byte[] bytes) {Position(bytes);return BitConverter.ToUInt16(bytes,2);}
+  public static byte[] Dacl(byte[] bytes) {
+    int position=Position(bytes),size=BitConverter.ToUInt16(bytes,position+2);
+    ushort flags=(ushort)(BitConverter.ToUInt16(bytes,2)&0x150c);
+    byte[] result=new byte[size+2];result[0]=(byte)flags;result[1]=(byte)(flags>>8);Buffer.BlockCopy(bytes,position,result,2,size);return result;
+  }
+  public static bool Equal(byte[] left,byte[] right) {
+    if(left==null || right==null || left.Length!=right.Length)return false;
+    int difference=0;for(int i=0;i<left.Length;i++)difference|=left[i]^right[i];return difference==0;
+  }
+  public static string Hash(byte[] bytes) {
+    Position(bytes);
+    using(var hash=System.Security.Cryptography.SHA256.Create()) {return BitConverter.ToString(hash.ComputeHash(bytes)).Replace("-","");}
+  }
+}
+'@
+Add-Type -TypeDefinition $aclNativeSource -CompilerOptions '/warnaserror'
+$script:traceLiveProcesses=[Collections.Generic.List[object]]::new()
+
 $leaseSource=Get-Content (Join-Path $PSScriptRoot 'test-support-lease-standard-windows.ps1') -Raw
 $isolated=$leaseSource.IndexOf('public static class MixelIsolatedLeaseControl {')
 $isolatedFirst=$leaseSource.LastIndexOf('using System;',$isolated)
@@ -103,37 +161,94 @@ function Remove-TracePlainContents([string]$Path) {
   }
   Get-ChildItem -LiteralPath $Path -Force | Remove-Item -Recurse -Force
 }
-function Set-TraceDirectoryAcl([string]$Path,[string]$ChildSid,[switch]$ReadOnly) {
-  Assert-TracePlainPath $Path
-  $acl=[Security.AccessControl.DirectorySecurity]::new()
-  $acl.SetAccessRuleProtection($true,$false)
+function Get-TraceNativeError([Exception]$Failure) {
+  $current=$Failure
+  for ($depth=0;$current -and $depth -lt 16;$depth++) {
+    if ($current -is [ComponentModel.Win32Exception]) { return [pscustomobject]@{known=$true;code=[int]$current.NativeErrorCode;hresult=[int]$current.HResult} }
+    if (-not $current.InnerException) { break };$current=$current.InnerException
+  }
+  return [pscustomobject]@{known=$false;code=0;hresult=$(if($current){[int]$current.HResult}else{0})}
+}
+function Write-TraceStageFailure([ValidateSet('create-user','verify-user','create-private-root','snapshot-private-root','restrict-private-root','create-source-root','snapshot-source-root','restrict-source-root','create-gate-root','snapshot-gate-root','restrict-gate-root','grant-desktop','grant-namespace','trace-absent','trace-world','cleanup-private-root','cleanup-source-root','cleanup-gate-root')][string]$Stage,[Exception]$Failure) {
+  $native=Get-TraceNativeError $Failure
+  Write-Host ('OBSERVED: bounded source-only trace stage failure; '+([pscustomobject]@{stage=$Stage;nativeErrorKnown=$native.known;nativeError=$native.code;hresult=$native.hresult}|ConvertTo-Json -Compress))
+}
+function Write-TraceAclFacts([ValidateSet('set-directory','set-file','restore-root')][string]$Phase,$ExpectedAcl,$ActualAcl,[byte[]]$ExpectedNative,[byte[]]$ActualNative,[Exception]$Failure) {
+  $native=Get-TraceNativeError $Failure
+  $expectedAvailable=$null -ne $ExpectedNative;$actualAvailable=$null -ne $ActualNative
+  $facts=[pscustomobject]@{
+    phase=$Phase;nativeErrorKnown=$native.known;nativeError=$native.code;hresult=$native.hresult
+    expectedAvailable=$expectedAvailable;actualAvailable=$actualAvailable
+    expectedControl=$(if($expectedAvailable){[int][MixelNamespaceTraceAcl]::Control($ExpectedNative)}else{0})
+    actualControl=$(if($actualAvailable){[int][MixelNamespaceTraceAcl]::Control($ActualNative)}else{0})
+    expectedProtected=$(if($ExpectedAcl){[bool]$ExpectedAcl.AreAccessRulesProtected}else{$false})
+    actualProtected=$(if($ActualAcl){[bool]$ActualAcl.AreAccessRulesProtected}else{$false})
+    expectedCanonical=$(if($ExpectedAcl){[bool]$ExpectedAcl.AreAccessRulesCanonical}else{$false})
+    actualCanonical=$(if($ActualAcl){[bool]$ActualAcl.AreAccessRulesCanonical}else{$false})
+    expectedHash=$(if($expectedAvailable){[MixelNamespaceTraceAcl]::Hash($ExpectedNative)}else{''})
+    actualHash=$(if($actualAvailable){[MixelNamespaceTraceAcl]::Hash($ActualNative)}else{''})
+  }
+  Write-Host ('OBSERVED: bounded owned trace ACL facts; '+($facts|ConvertTo-Json -Compress))
+}
+function New-TraceAclPlan($Acl,[string]$ChildSid,[bool]$Directory,[bool]$ReadOnly) {
+  # Derive from the current descriptor to preserve native inheritance metadata.
+  # Then replace every ACE; this never retains a prior unrelated allowance.
+  $Acl.SetAccessRuleProtection($true,$false)
+  foreach ($rule in @($Acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]))) { [void]$Acl.RemoveAccessRuleAll($rule) }
   $runner=[Security.Principal.WindowsIdentity]::GetCurrent().User
   foreach ($sid in @($runner,[Security.Principal.SecurityIdentifier]::new('S-1-5-18'))) {
-    $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid,'FullControl','ContainerInherit,ObjectInherit','None','Allow'))
+    $rule=if($Directory){[Security.AccessControl.FileSystemAccessRule]::new($sid,'FullControl','ContainerInherit,ObjectInherit','None','Allow')}else{[Security.AccessControl.FileSystemAccessRule]::new($sid,'FullControl','Allow')}
+    $Acl.AddAccessRule($rule)
   }
   if ($ChildSid) {
-    $rights=if ($ReadOnly) {'ReadAndExecute'} else {'Modify'}
-    $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new($ChildSid),$rights,'ContainerInherit,ObjectInherit','None','Allow'))
+    $rights=if($ReadOnly){'ReadAndExecute'}else{'Modify'}
+    $sid=[Security.Principal.SecurityIdentifier]::new($ChildSid)
+    $rule=if($Directory){[Security.AccessControl.FileSystemAccessRule]::new($sid,$rights,'ContainerInherit,ObjectInherit','None','Allow')}else{[Security.AccessControl.FileSystemAccessRule]::new($sid,$rights,'Allow')}
+    $Acl.AddAccessRule($rule)
   }
-  Set-Acl -LiteralPath $Path -AclObject $acl
-  $actual=Get-Acl -LiteralPath $Path
-  if ($actual.GetSecurityDescriptorSddlForm('Access') -cne $acl.GetSecurityDescriptorSddlForm('Access')) { throw 'Owned trace directory ACL did not read back exactly.' }
+  return $Acl
 }
-function Set-TraceReadOnlyFile([string]$Path,[string]$ChildSid) {
+function Set-TraceAcl([string]$Path,[string]$ChildSid,[bool]$Directory,[bool]$ReadOnly) {
   Assert-TracePlainPath $Path
-  $acl=[Security.AccessControl.FileSecurity]::new();$acl.SetAccessRuleProtection($true,$false)
-  foreach ($sid in @([Security.Principal.WindowsIdentity]::GetCurrent().User,[Security.Principal.SecurityIdentifier]::new('S-1-5-18'))) {
-    $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid,'FullControl','Allow'))
+  $phase=if($Directory){'set-directory'}else{'set-file'}
+  $expected=$null;$actual=$null;$expectedNative=$null;$actualNative=$null
+  try {
+    $expected=New-TraceAclPlan (Get-Acl -LiteralPath $Path) $ChildSid $Directory $ReadOnly
+    $expectedNative=$expected.GetSecurityDescriptorBinaryForm()
+    Set-Acl -LiteralPath $Path -AclObject $expected
+    $actual=Get-Acl -LiteralPath $Path;$actualNative=[MixelNamespaceTraceAcl]::Read($Path)
+    if ($actual.GetSecurityDescriptorSddlForm('Access') -cne $expected.GetSecurityDescriptorSddlForm('Access') -or
+        -not [MixelNamespaceTraceAcl]::Equal([MixelNamespaceTraceAcl]::Dacl($expectedNative),[MixelNamespaceTraceAcl]::Dacl($actualNative))) {
+      throw 'Owned trace ACL did not read back as the exact planned native DACL.'
+    }
+  } catch {
+    Write-TraceAclFacts $phase $expected $actual $expectedNative $actualNative $_.Exception
+    throw
   }
-  $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new($ChildSid),'ReadAndExecute','Allow'))
-  Set-Acl -LiteralPath $Path -AclObject $acl
-  if ((Get-Acl -LiteralPath $Path).GetSecurityDescriptorSddlForm('Access') -cne $acl.GetSecurityDescriptorSddlForm('Access')) { throw 'Owned trace read-only file ACL did not read back exactly.' }
 }
-function Start-TraceProcess([string]$File,[string[]]$Arguments,[string]$Folder,[string]$Label) {
+function Set-TraceDirectoryAcl([string]$Path,[string]$ChildSid,[switch]$ReadOnly) { Set-TraceAcl $Path $ChildSid $true ([bool]$ReadOnly) }
+function Set-TraceReadOnlyFile([string]$Path,[string]$ChildSid) { Set-TraceAcl $Path $ChildSid $false $true }
+function Restore-TraceRootAcl([string]$Path,[byte[]]$Original) {
+  Assert-TracePlainPath $Path
+  $expected=$null;$actual=$null;$actualNative=$null
+  try {
+    # Interpret the original access rules only for safe diagnostics. Restore
+    # directly from the saved native DACL; never reserialize its padding.
+    $expected=Get-Acl -LiteralPath $Path
+    $expected.SetSecurityDescriptorBinaryForm($Original,[Security.AccessControl.AccessControlSections]::Access)
+    [MixelNamespaceTraceAcl]::RestoreDacl($Path,$Original)
+    $actual=Get-Acl -LiteralPath $Path;$actualNative=[MixelNamespaceTraceAcl]::Read($Path)
+    if (-not [MixelNamespaceTraceAcl]::Equal($Original,$actualNative)) { throw 'Owned trace root did not restore its exact original native descriptor.' }
+  } catch {
+    Write-TraceAclFacts 'restore-root' $expected $actual $Original $actualNative $_.Exception
+    throw
+  }
+}
+function Start-TraceProcess([string]$File,[string[]]$Arguments,[string]$Folder,[string]$Label,[int]$ChildPid=0) {
   Assert-TracePlainPath $Folder
   $outPath=Join-Path $Folder ($Label+'-stdout.private');$errPath=Join-Path $Folder ($Label+'-stderr.private')
   Assert-TracePlainPath $outPath -AllowMissing;Assert-TracePlainPath $errPath -AllowMissing
-  $output=$null;$errors=$null;$process=$null;$started=$false
+  $output=$null;$errors=$null;$process=$null;$started=$false;$live=$null
   try {
     $output=[IO.FileStream]::new($outPath,'CreateNew','Write','ReadWrite')
     $errors=[IO.FileStream]::new($errPath,'CreateNew','Write','ReadWrite')
@@ -141,11 +256,21 @@ function Start-TraceProcess([string]$File,[string[]]$Arguments,[string]$Folder,[
     $info.RedirectStandardInput=$true;$info.RedirectStandardOutput=$true;$info.RedirectStandardError=$true
     foreach ($argument in $Arguments) { [void]$info.ArgumentList.Add($argument) }
     $process=[Diagnostics.Process]::new();$process.StartInfo=$info
+    $live=[pscustomobject]@{process=$process;input=$null;output=$output;errors=$errors;outPath=$outPath;errPath=$errPath;outTask=$null;errTask=$null;closed=$false;disposed=$false;childPid=$ChildPid}
     if (-not $process.Start()) { throw 'Owned trace subprocess failed to start.' };$started=$true
-    return [pscustomobject]@{process=$process;input=$process.StandardInput;output=$output;errors=$errors;outPath=$outPath;errPath=$errPath;outTask=[MixelNamespaceTraceIO]::CopyBounded($process.StandardOutput.BaseStream,$output,1048576);errTask=[MixelNamespaceTraceIO]::CopyBounded($process.StandardError.BaseStream,$errors,1048576);closed=$false}
+    # Register the exact retained object before accessing pipes or starting tasks.
+    # A startup failure cannot discard an already-started process observation.
+    $script:traceLiveProcesses.Add($live)
+    $live.input=$process.StandardInput
+    $live.outTask=[MixelNamespaceTraceIO]::CopyBounded($process.StandardOutput.BaseStream,$output,1048576)
+    $live.errTask=[MixelNamespaceTraceIO]::CopyBounded($process.StandardError.BaseStream,$errors,1048576)
+    return $live
   } catch {
-    if ($started -and -not $process.HasExited) { $process.Kill();if (-not $process.WaitForExit(10000)) { throw 'Owned trace subprocess startup cleanup failed.' } }
-    if ($output) {$output.Dispose()};if ($errors) {$errors.Dispose()};if ($process) {$process.Dispose()};throw
+    $originalFailure=$_.Exception
+    if ($started) {
+      try {Stop-TraceRetainedProcess $live} catch {throw [AggregateException]::new('Owned trace subprocess startup and retained cleanup failed.',[Exception[]]@($originalFailure,$_.Exception))}
+    } else {if ($output) {$output.Dispose()};if ($errors) {$errors.Dispose()};if ($process) {$process.Dispose()}}
+    throw
   }
 }
 function Assert-TraceStreams($Live) {
@@ -156,10 +281,11 @@ function Complete-TraceStreams($Live) {
   if (-not $Live.process.HasExited) { throw 'Trace output drain requires the retained subprocess exit.' }
   try {
     foreach ($task in @($Live.outTask,$Live.errTask)) {
+      if (-not $task) {continue}
       if (-not $task.Wait(10000)) { throw 'Private trace output drain timed out.' }
       [void]$task.GetAwaiter().GetResult()
     }
-  } finally { $Live.input.Dispose();$Live.output.Dispose();$Live.errors.Dispose();$Live.closed=$true }
+  } finally { if($Live.input){$Live.input.Dispose()};$Live.output.Dispose();$Live.errors.Dispose();$Live.closed=$true }
 }
 function Stop-TraceDebugger($Live,[int]$ChildPid) {
   if (-not $Live.process.HasExited) {
@@ -172,8 +298,19 @@ function Stop-TraceDebugger($Live,[int]$ChildPid) {
   Complete-TraceStreams $Live
   if ($ChildPid -gt 0 -and [MixelOrdinaryTokenFixture]::ActualOwnedDebuggerAttached($ChildPid)) { throw 'Retained child still has an attached debugger after debugger exit.' }
 }
+function Stop-TraceRetainedProcess($Live) {
+  if ($Live.disposed) {return}
+  if ($Live.childPid -gt 0) {Stop-TraceDebugger $Live $Live.childPid}
+  else {
+    if (-not $Live.process.HasExited) {$Live.process.Kill();if(-not $Live.process.WaitForExit(10000)){throw 'Retained trace helper termination was not observed.'}}
+    Complete-TraceStreams $Live
+  }
+  if (-not $Live.process.HasExited) {throw 'Retained trace subprocess exit was not observed.'}
+  $Live.process.Dispose();$Live.disposed=$true
+}
 function Invoke-TracePython([string[]]$Arguments,[string]$Folder,[string]$Label,[int]$Seconds=90) {
   $live=Start-TraceProcess $script:python $Arguments $Folder $Label
+  $operationFailure=$null
   try {
     $deadline=[DateTime]::UtcNow.AddSeconds($Seconds)
     while (-not $live.process.HasExited -and [DateTime]::UtcNow -lt $deadline) { Assert-TraceStreams $live;Start-Sleep -Milliseconds 50 }
@@ -182,11 +319,12 @@ function Invoke-TracePython([string[]]$Arguments,[string]$Folder,[string]$Label,
     Complete-TraceStreams $live
     if ($live.process.ExitCode -ne 0) { throw 'Private trace Python operation failed; raw output is never printed.' }
     return [MixelNamespaceTraceIO]::ReadBounded($live.outPath,1048576)
+  } catch {$operationFailure=$_.Exception;throw
   } finally {
-    try {
-      if (-not $live.process.HasExited) { $live.process.Kill();if (-not $live.process.WaitForExit(10000)) { throw 'Retained trace Python cleanup failed.' } }
-      Complete-TraceStreams $live
-    } finally { $live.process.Dispose() }
+    try {Stop-TraceRetainedProcess $live} catch {
+      if($operationFailure){throw [AggregateException]::new('Private trace Python operation and retained cleanup failed.',[Exception[]]@($operationFailure,$_.Exception))}
+      throw
+    }
   }
 }
 function Assert-TraceReady([string]$Text) {
@@ -290,7 +428,7 @@ function Invoke-TraceAttempt([ValidateSet('absent','world')][string]$Scenario,[s
   $gate=Join-Path $gateRoot 'ready';$nonce=[Guid]::NewGuid().ToString('N')+[Guid]::NewGuid().ToString('N')
   $event='Mixel-Remote-Standard-Lease-'+[Guid]::NewGuid().ToString('N')
   $source=Join-Path $attemptRoot 'lease-standard.rs';$exe=Join-Path $attemptRoot 'lease-standard.exe'
-  $live=$null;$childPid=0;$eventHandle=[IntPtr]::Zero;$timeout=$false;$completed=$false;$phase='export'
+  $live=$null;$childPid=0;$eventHandle=[IntPtr]::Zero;$timeout=$false;$completed=$false;$phase='export';$attemptFailure=$null
   try {
     [void](Invoke-TracePython @((Join-Path $PSScriptRoot 'test-support-lease.py'),'--export-standard-windows-fixture',$attemptRoot,'--event',('Global\'+$event)) $private 'source-export' 100)
     Assert-TracePlainPath $source;Assert-TracePlainPath $exe
@@ -314,7 +452,7 @@ function Invoke-TraceAttempt([ValidateSet('absent','world')][string]$Scenario,[s
     [void](Invoke-TracePython @((Join-Path $PSScriptRoot 'windows-namespace-cdb.py'),'--pid',[string]$childPid,'--tid',[string]$thread,'--session',[string]$script:session,'--event',$event,'--windows-folder',$private,'--output',$private) $private 'commands')
     $arguments=@('-p',[string]$childPid,'-pd','-noshell','-nosqm','-cf',(Join-Path $private 'start.txt'))
     if ($Gated) { $arguments=@('-p',[string]$childPid,'-pr','-pd','-noshell','-nosqm','-cf',(Join-Path $private 'start.txt')) }
-    $live=Start-TraceProcess $script:cdb $arguments $private 'cdb'
+    $live=Start-TraceProcess $script:cdb $arguments $private 'cdb' $childPid
     $phase='startup'
     $deadline=[DateTime]::UtcNow.AddSeconds(20);$ready=$false
     while ([DateTime]::UtcNow -lt $deadline) {
@@ -365,15 +503,21 @@ function Invoke-TraceAttempt([ValidateSet('absent','world')][string]$Scenario,[s
     $completed=$true
     return [pscustomobject]@{StartupTimedOut=$false;Scenario=$Scenario;PrivateGate=[bool]$Gated;FirstCallQualified=$true;OriginalSourceSHA256=$originalHash;DiagnosticSourceSHA256=$diagnosticHash;OwnedIdentityQualified=$true;DebuggerDetached=$true;SingleResumeQualified=$true;rawOpenError=$record.rawOpenError;Trace=$parsed}
   } catch {
+    $attemptFailure=$_.Exception
     Write-Host ('OBSERVED: bounded source-only trace failure facts; '+((Get-TraceFailureFacts $live $phase $timeout) | ConvertTo-Json -Compress))
     throw
   } finally {
     $errors=[Collections.Generic.List[Exception]]::new()
-    if ($live) { try { Stop-TraceDebugger $live $childPid } catch {$errors.Add([InvalidOperationException]::new('Retained trace debugger detach/drain cleanup failed.'))};$live.process.Dispose() }
-    try {[MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses()} catch {$errors.Add([InvalidOperationException]::new('Retained source trace child cleanup failed.'))}
-    [MixelOrdinaryTokenFixture]::CloseStartedObservations()
+    $subprocessesStopped=$true;$childrenStopped=$false
+    foreach ($retained in $script:traceLiveProcesses) {
+      try {Stop-TraceRetainedProcess $retained} catch {$subprocessesStopped=$false;$errors.Add([InvalidOperationException]::new('Retained trace subprocess cleanup failed.',$_.Exception))}
+    }
+    try {[MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses();$childrenStopped=$true} catch {$errors.Add([InvalidOperationException]::new('Retained source trace child cleanup failed.',$_.Exception))}
+    # Preserve native ownership until every helper/debugger and child exit is
+    # verified, including a process whose startup failed before it was returned.
+    if ($subprocessesStopped -and $childrenStopped) {[MixelOrdinaryTokenFixture]::CloseStartedObservations()}
     if ($eventHandle -ne [IntPtr]::Zero) {try {[MixelIsolatedLeaseControl]::Close($eventHandle)} catch {$errors.Add([InvalidOperationException]::new('Owned GUID event handle cleanup failed.'))}}
-    if ($errors.Count -gt 0) {throw [AggregateException]::new('Source trace attempt cleanup failed.',$errors)}
+    if ($errors.Count -gt 0) {if($attemptFailure){$errors.Insert(0,$attemptFailure)};throw [AggregateException]::new('Source trace attempt cleanup failed.',$errors)}
     if ($timeout -and $completed) { throw 'Trace timeout was inconsistently marked completed.' }
   }
 }
@@ -392,24 +536,31 @@ $fixtureRoot=Join-Path $env:RUNNER_TEMP ('mixel-trace-source-'+[Guid]::NewGuid()
 $gateRoot=Join-Path $env:RUNNER_TEMP ('mixel-trace-gates-'+[Guid]::NewGuid().ToString('N'))
 if ($privateRoot -cnotmatch '\A[A-Z]:\\[A-Za-z0-9_\\.-]+\z' -or $privateRoot.Split('\') -ccontains '..') { throw 'Trace command folder is not a bounded unambiguous Windows path.' }
 $originalDesktop=[MixelOrdinaryTokenFixture]::DesktopAclHashes()
-$fileSnapshots=[Collections.Generic.Dictionary[string,string]]::new()
-$stage='create owned source trace account'
+$fileSnapshots=[Collections.Generic.Dictionary[string,byte[]]]::new()
+$stage='create-user'
 try {
   $accountStart=$launchSource.IndexOf('$random = [byte[]]::new(24)')
   $accountEnd=$launchSource.IndexOf("`$fixtureStage = 'grant owned standard desktop access'",$accountStart)
   if ($accountStart -lt 0 -or $accountEnd -le $accountStart) { throw 'Exact disposable customer account bootstrap changed.' }
   . ([scriptblock]::Create($launchSource.Substring($accountStart,$accountEnd-$accountStart)))
+  $stage='verify-user'
   if (-not $ownedSid -or (Get-LocalUser -SID ([Security.Principal.SecurityIdentifier]::new($ownedSid))).Name -cne $ownedUser) { throw 'Exact owned trace account SID/name verification failed.' }
   foreach ($directory in @($privateRoot,$fixtureRoot,$gateRoot)) {
+    $kind=if($directory -ceq $privateRoot){'private'}elseif($directory -ceq $fixtureRoot){'source'}else{'gate'}
+    $stage='create-'+$kind+'-root'
     Assert-TracePlainPath $directory -AllowMissing
     New-Item -ItemType Directory -Path $directory | Out-Null
-    $fileSnapshots.Add($directory,(Get-Acl -LiteralPath $directory).GetSecurityDescriptorSddlForm('Access'))
+    $stage='snapshot-'+$kind+'-root'
+    $fileSnapshots.Add($directory,[MixelNamespaceTraceAcl]::Read($directory))
+    $stage='restrict-'+$kind+'-root'
     Set-TraceDirectoryAcl $directory $(if ($directory -ceq $privateRoot) {''} else {$ownedSid}) -ReadOnly
   }
+  $stage='grant-desktop'
   $desktopAccess=[MixelOrdinaryTokenFixture+DesktopAccess]::new($ownedSid)
+  $stage='grant-namespace'
   $namespaceAccess=[MixelCI.StandardNamespaceAccess]::new($ownedSid,$ownedUser,$session)
   foreach ($scenario in @('absent','world')) {
-    $stage='run '+$scenario+' source hardware trace'
+    $stage='trace-'+$scenario
     $result=Invoke-TraceAttempt $scenario
     if ($result.StartupTimedOut) { $result=Invoke-TraceAttempt $scenario -Gated }
     if ($result.StartupTimedOut -or -not $result.FirstCallQualified) { throw 'Source trace lacks first-call qualification.' }
@@ -417,10 +568,17 @@ try {
     Write-Host ('OBSERVED: source-only namespace hardware trace; '+($result | ConvertTo-Json -Depth 8 -Compress))
   }
 } catch {
+  Write-TraceStageFailure $stage $_.Exception
   $failure=[InvalidOperationException]::new(('Source-only namespace tracing failed at '+$stage+'. No raw debugger output was printed.'))
 } finally {
   $cleanup=[Collections.Generic.List[Exception]]::new()
-  try {[MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses()} catch {$cleanup.Add([InvalidOperationException]::new('Final retained trace child cleanup failed.'))}
+  $subprocessesStopped=$true;$childrenStopped=$false
+  foreach ($retained in $script:traceLiveProcesses) {
+    try {Stop-TraceRetainedProcess $retained} catch {$subprocessesStopped=$false;$cleanup.Add([InvalidOperationException]::new('Final retained trace subprocess cleanup failed.'))}
+  }
+  try {[MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses();$childrenStopped=$true} catch {$cleanup.Add([InvalidOperationException]::new('Final retained trace child cleanup failed.'))}
+  $ownedProcessesStopped=$subprocessesStopped -and $childrenStopped
+  if ($ownedProcessesStopped) {
   [MixelOrdinaryTokenFixture]::CloseStartedObservations()
   if ($namespaceAccess) {try {$namespaceAccess.Dispose()} catch {$cleanup.Add([InvalidOperationException]::new('Exact trace namespace DACL restoration failed.'))}}
   if ($desktopAccess) {try {$desktopAccess.Dispose()} catch {$cleanup.Add([InvalidOperationException]::new('Exact trace desktop DACL restoration failed.'))}}
@@ -436,12 +594,21 @@ try {
     try {
       # Delete private contents while their runner-only ACL is still installed.
       Remove-TracePlainContents $pair.Key
-      $acl=[Security.AccessControl.DirectorySecurity]::new();$acl.SetSecurityDescriptorSddlForm($pair.Value,'Access');Set-Acl -LiteralPath $pair.Key -AclObject $acl
-      if ((Get-Acl -LiteralPath $pair.Key).GetSecurityDescriptorSddlForm('Access') -cne $pair.Value) {throw 'Trace file ACL restoration mismatch.'}
+      Restore-TraceRootAcl $pair.Key $pair.Value
       Remove-Item -LiteralPath $pair.Key -Recurse -Force
-    } catch {$cleanup.Add([InvalidOperationException]::new('Owned trace private/source/gate ACL restoration or file cleanup failed.'))}
+    } catch {
+      $kind=if($pair.Key -ceq $privateRoot){'private'}elseif($pair.Key -ceq $fixtureRoot){'source'}else{'gate'}
+      Write-TraceStageFailure ('cleanup-'+$kind+'-root') $_.Exception
+      $cleanup.Add([InvalidOperationException]::new('Owned trace private/source/gate ACL restoration or file cleanup failed.'))
+    }
   }
   if (Get-LocalUser -Name $ownedUser -ErrorAction SilentlyContinue) {$cleanup.Add([InvalidOperationException]::new('Owned trace account remains.'))}
+  } else {
+    # Keep retained handles and restrictive ACLs for an unverified live process.
+    # Never restore/delete its namespace, account or private files.
+    $cleanup.Add([InvalidOperationException]::new('Owned process exit was not verified; ACL, account and private storage cleanup was withheld.'))
+  }
+  $ownedPassword=$null;$random=$null
   if ($failure) {$cleanup.Insert(0,$failure)}
   if ($cleanup.Count -gt 0) {throw [AggregateException]::new('Source-only namespace trace or exact owned cleanup failed.',$cleanup)}
 }
