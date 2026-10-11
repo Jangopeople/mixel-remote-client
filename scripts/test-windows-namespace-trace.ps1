@@ -106,6 +106,10 @@ public static class MixelNamespaceTraceAcl {
     } finally { pinned.Free(); }
   }
   public static ushort Control(byte[] bytes) {Position(bytes);return BitConverter.ToUInt16(bytes,2);}
+  public static byte[] AutoInherited(byte[] bytes) {
+    Position(bytes);
+    byte[] result=(byte[])bytes.Clone();result[3]|=4;return result;
+  }
   public static byte[] Dacl(byte[] bytes) {
     int position=Position(bytes),size=BitConverter.ToUInt16(bytes,position+2);
     ushort flags=(ushort)(BitConverter.ToUInt16(bytes,2)&0x150c);
@@ -169,11 +173,11 @@ function Get-TraceNativeError([Exception]$Failure) {
   }
   return [pscustomobject]@{known=$false;code=0;hresult=$(if($current){[int]$current.HResult}else{0})}
 }
-function Write-TraceStageFailure([ValidateSet('create-user','verify-user','create-private-root','snapshot-private-root','restrict-private-root','create-source-root','snapshot-source-root','restrict-source-root','create-gate-root','snapshot-gate-root','restrict-gate-root','grant-desktop','grant-namespace','trace-absent','trace-world','cleanup-private-root','cleanup-source-root','cleanup-gate-root')][string]$Stage,[Exception]$Failure) {
+function Write-TraceStageFailure([ValidateSet('create-user','verify-user','create-private-root','initialize-private-root','snapshot-private-root','restrict-private-root','create-source-root','initialize-source-root','snapshot-source-root','restrict-source-root','create-gate-root','initialize-gate-root','snapshot-gate-root','restrict-gate-root','grant-desktop','grant-namespace','trace-absent','trace-world','cleanup-private-root','cleanup-source-root','cleanup-gate-root')][string]$Stage,[Exception]$Failure) {
   $native=Get-TraceNativeError $Failure
   Write-Host ('OBSERVED: bounded source-only trace stage failure; '+([pscustomobject]@{stage=$Stage;nativeErrorKnown=$native.known;nativeError=$native.code;hresult=$native.hresult}|ConvertTo-Json -Compress))
 }
-function Write-TraceAclFacts([ValidateSet('set-directory','set-file','restore-root')][string]$Phase,$ExpectedAcl,$ActualAcl,[byte[]]$ExpectedNative,[byte[]]$ActualNative,[Exception]$Failure) {
+function Write-TraceAclFacts([ValidateSet('initialize-root','set-directory','set-file','restore-root')][string]$Phase,$ExpectedAcl,$ActualAcl,[byte[]]$ExpectedNative,[byte[]]$ActualNative,[Exception]$Failure) {
   $native=Get-TraceNativeError $Failure
   $expectedAvailable=$null -ne $ExpectedNative;$actualAvailable=$null -ne $ActualNative
   $facts=[pscustomobject]@{
@@ -189,6 +193,30 @@ function Write-TraceAclFacts([ValidateSet('set-directory','set-file','restore-ro
     actualHash=$(if($actualAvailable){[MixelNamespaceTraceAcl]::Hash($ActualNative)}else{''})
   }
   Write-Host ('OBSERVED: bounded owned trace ACL facts; '+($facts|ConvertTo-Json -Compress))
+}
+function Initialize-TraceCreatedRoot([string]$Path) {
+  Assert-TracePlainPath $Path
+  if (-not $script:createdRoots.Contains($Path) -or $script:fileSnapshots.ContainsKey($Path) -or
+      -not (Get-Item -LiteralPath $Path -Force).PSIsContainer -or @(Get-ChildItem -LiteralPath $Path -Force).Count -ne 0) {
+    throw 'ACL initialization requires an unused empty root created by this exact trace.'
+  }
+  $expected=$null;$actual=$null;$expectedNative=$null;$actualNative=$null
+  try {
+    $before=[MixelNamespaceTraceAcl]::Read($Path)
+    # SetNamedSecurityInfo imposes the documented current inheritance model.
+    # Initialize only our new empty roots before recording their baseline;
+    # prove that solely SE_DACL_AUTO_INHERITED metadata changed, byte for byte.
+    $expectedNative=[MixelNamespaceTraceAcl]::AutoInherited($before)
+    $expected=Get-Acl -LiteralPath $Path
+    $expected.SetSecurityDescriptorBinaryForm($expectedNative,[Security.AccessControl.AccessControlSections]::Access)
+    [MixelNamespaceTraceAcl]::RestoreDacl($Path,$before)
+    $actual=Get-Acl -LiteralPath $Path;$actualNative=[MixelNamespaceTraceAcl]::Read($Path)
+    if (-not [MixelNamespaceTraceAcl]::Equal($expectedNative,$actualNative)) {throw 'New trace root initialization changed more than its documented inheritance metadata.'}
+    return $actualNative
+  } catch {
+    Write-TraceAclFacts 'initialize-root' $expected $actual $expectedNative $actualNative $_.Exception
+    throw
+  }
 }
 function New-TraceAclPlan($Acl,[string]$ChildSid,[bool]$Directory,[bool]$ReadOnly) {
   # Derive from the current descriptor to preserve native inheritance metadata.
@@ -206,6 +234,9 @@ function New-TraceAclPlan($Acl,[string]$ChildSid,[bool]$Directory,[bool]$ReadOnl
     $rule=if($Directory){[Security.AccessControl.FileSystemAccessRule]::new($sid,$rights,'ContainerInherit,ObjectInherit','None','Allow')}else{[Security.AccessControl.FileSystemAccessRule]::new($sid,$rights,'Allow')}
     $Acl.AddAccessRule($rule)
   }
+  # Plan the documented metadata written by the native inheritance engine.
+  # Exact DACL flags, ACEs, padding and Access SDDL still must read back.
+  $Acl.SetSecurityDescriptorBinaryForm([MixelNamespaceTraceAcl]::AutoInherited($Acl.GetSecurityDescriptorBinaryForm()),[Security.AccessControl.AccessControlSections]::Access)
   return $Acl
 }
 function Set-TraceAcl([string]$Path,[string]$ChildSid,[bool]$Directory,[bool]$ReadOnly) {
@@ -537,6 +568,7 @@ $gateRoot=Join-Path $env:RUNNER_TEMP ('mixel-trace-gates-'+[Guid]::NewGuid().ToS
 if ($privateRoot -cnotmatch '\A[A-Z]:\\[A-Za-z0-9_\\.-]+\z' -or $privateRoot.Split('\') -ccontains '..') { throw 'Trace command folder is not a bounded unambiguous Windows path.' }
 $originalDesktop=[MixelOrdinaryTokenFixture]::DesktopAclHashes()
 $fileSnapshots=[Collections.Generic.Dictionary[string,byte[]]]::new()
+$createdRoots=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
 $stage='create-user'
 try {
   $accountStart=$launchSource.IndexOf('$random = [byte[]]::new(24)')
@@ -550,8 +582,11 @@ try {
     $stage='create-'+$kind+'-root'
     Assert-TracePlainPath $directory -AllowMissing
     New-Item -ItemType Directory -Path $directory | Out-Null
+    [void]$createdRoots.Add($directory)
+    $stage='initialize-'+$kind+'-root'
+    $canonical=[byte[]](Initialize-TraceCreatedRoot $directory)
     $stage='snapshot-'+$kind+'-root'
-    $fileSnapshots.Add($directory,[MixelNamespaceTraceAcl]::Read($directory))
+    $fileSnapshots.Add($directory,$canonical)
     $stage='restrict-'+$kind+'-root'
     Set-TraceDirectoryAcl $directory $(if ($directory -ceq $privateRoot) {''} else {$ownedSid}) -ReadOnly
   }
@@ -601,6 +636,16 @@ try {
       Write-TraceStageFailure ('cleanup-'+$kind+'-root') $_.Exception
       $cleanup.Add([InvalidOperationException]::new('Owned trace private/source/gate ACL restoration or file cleanup failed.'))
     }
+  }
+  foreach ($directory in $createdRoots) {
+    if ($fileSnapshots.ContainsKey($directory)) {continue}
+    try {
+      # A root whose initialization failed was never used or snapshotted.
+      # Delete only that owned empty creation, with no ACL restoration claim.
+      Assert-TracePlainPath $directory
+      if (@(Get-ChildItem -LiteralPath $directory -Force).Count -ne 0) {throw 'Unused new trace root is unexpectedly nonempty.'}
+      Remove-Item -LiteralPath $directory -Force
+    } catch {$cleanup.Add([InvalidOperationException]::new('Unused new trace root cleanup failed.'))}
   }
   if (Get-LocalUser -Name $ownedUser -ErrorAction SilentlyContinue) {$cleanup.Add([InvalidOperationException]::new('Owned trace account remains.'))}
   } else {
