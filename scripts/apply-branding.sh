@@ -46,6 +46,7 @@ python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-clipboard.py"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-windows-clipboard.py"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-video.py"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-texture.py"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-wakelock.py"
 
 # 1. custom.txt — RustDesk's build-time branding override file.

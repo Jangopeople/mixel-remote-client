@@ -155,6 +155,7 @@ jobs:
       - name: Generate bridge
         working-directory: rustdesk
         run: |
+          RDREPO=. python3 ../scripts/patch-support-macos-texture.py
           pushd flutter && sed -i -e 's/extended_text: 14.0.0/extended_text: 13.0.0/g' pubspec.yaml && flutter pub get && popd
           ~/.cargo/bin/flutter_rust_bridge_codegen \
             --rust-input ./src/flutter_ffi.rs \
