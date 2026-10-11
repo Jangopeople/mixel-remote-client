@@ -279,13 +279,17 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 public static class MixelPortableNativePipeControls {
+  public static int NativeStage { get; private set; }
   public static void Run() {
     string name="MixelRemoteQA-lease-"+Guid.NewGuid().ToString("N");
     uint pid=(uint)System.Diagnostics.Process.GetCurrentProcess().Id;
+    NativeStage=1;
     using(var server=new MixelPortableLeaseNativeChannel(name,true,0)) {
       bool refused=false;
+      NativeStage=2;
       try { using(var collision=new MixelPortableLeaseNativeChannel(name,true,0)) {} } catch(System.ComponentModel.Win32Exception error) { if(error.NativeErrorCode!=5)throw; refused=true; }
       if(!refused)throw new Exception("First-instance pipe collision accepted");
+      NativeStage=3;
       var client=Task.Run(()=> {
         using(var channel=new MixelPortableLeaseNativeChannel(name,false,pid)) {
           if(channel.PeerPid!=pid)throw new Exception("Actual server PID changed");
@@ -319,7 +323,15 @@ $nativeControlSource+=$channel.Replace('MixelPortableLeaseChannel','MixelPortabl
 Add-Type -TypeDefinition $nativeControlSource
 if($NativePipeControls) {
   if([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT -or -not [Environment]::Is64BitProcess) { throw 'Native transport controls require actual x64 Windows.' }
-  [MixelPortableNativePipeControls]::Run()
+  try { [MixelPortableNativePipeControls]::Run() } catch {
+    $nativeException=$_.Exception
+    for($depth=0;$depth -lt 8 -and $null -ne $nativeException.InnerException;$depth++) { $nativeException=$nativeException.InnerException }
+    $nativeCodeAvailable=$nativeException -is [ComponentModel.Win32Exception]
+    $nativeCode=0
+    if($nativeCodeAvailable) { $nativeCode=$nativeException.NativeErrorCode }
+    Write-Host ('Native transport failure: stage={0}; nativeCodeAvailable={1}; nativeCode={2}' -f [MixelPortableNativePipeControls]::NativeStage,$nativeCodeAvailable,$nativeCode)
+    throw
+  }
   Write-Host 'PASS: actual Windows private first-instance pipe refuses name collision; bidirectional two-phase/release/finish exchange and kernel server/client PID checks pass; retained task and both handles close. Transport only; no standard-account consent or signed-app qualification.'
 } else {
   Write-Host 'Result: exact interactive source controls pass; zero Windows API calls and no standard-account/runtime qualification.'
