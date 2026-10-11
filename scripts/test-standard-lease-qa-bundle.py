@@ -78,7 +78,7 @@ class PortableSourceTests(unittest.TestCase):
             subprocess.run(["git", "add", "."], cwd=root, check=True, capture_output=True)
             subprocess.run(["git", "-c", "user.name=Mixel QA", "-c", "user.email=qa@example.test", "commit", "--quiet", "-m", "Owned QA source control"], cwd=root, check=True, capture_output=True)
             with patch.object(bundle, "ROOT", root):
-                self.assertEqual(len(bundle.git_source_bindings()), 12)
+                self.assertEqual(len(bundle.git_source_bindings()), 13)
                 builder = root / bundle.BUILD_SOURCE
                 original = builder.read_bytes()
                 builder.write_bytes(original + b"changed builder\n")
@@ -97,6 +97,12 @@ class PortableSourceTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "exact committed blob"):
                     bundle.git_source_bindings()
                 observer.write_bytes(original_observer)
+                launch = root / "scripts/test-support-launch-windows.ps1"
+                original_launch = launch.read_bytes()
+                launch.write_bytes(original_launch + b"changed retained native ownership\n")
+                with self.assertRaisesRegex(ValueError, "exact committed blob"):
+                    bundle.git_source_bindings()
+                launch.write_bytes(original_launch)
                 subprocess.run(["git", "rm", "--cached", bundle.BUILD_SOURCE], cwd=root, check=True, capture_output=True)
                 subprocess.run(["git", "-c", "user.name=Mixel QA", "-c", "user.email=qa@example.test", "commit", "--quiet", "-m", "Remove only the owned build-source binding"], cwd=root, check=True, capture_output=True)
                 with self.assertRaises(subprocess.CalledProcessError):
@@ -114,7 +120,7 @@ class PortableSourceTests(unittest.TestCase):
             self.assertIsNotNone(source_allow)
             actual = re.findall(r"'([^']+)'", source_allow.group(1))
             expected = (*bundle.SOURCES, *bundle.ADAPTERS.values(), bundle.BUILD_SOURCE, *bundle.BUILD_CONTROLS)
-            self.assertEqual(len(actual), 12)
+            self.assertEqual(len(actual), 13)
             self.assertEqual(set(actual), set(expected))
 
     def test_actual_static_compile_selects_native_linker_preserves_flags_and_rejects_conflict(self):

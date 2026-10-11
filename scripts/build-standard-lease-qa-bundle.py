@@ -39,6 +39,7 @@ BUILD_CONTROLS = (
     "scripts/activate-windows-msvc.ps1",
     "scripts/test-standard-lease-qa-bundle.py",
     "scripts/test-support-lease-interactive-source.ps1",
+    "scripts/test-support-launch-windows.ps1",
 )
 PACKAGE_MEMBERS = frozenset((*SOURCES, *ADAPTERS,
     "fixture/lease-standard.rs", "fixture/lease-standard.exe",

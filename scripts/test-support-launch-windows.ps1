@@ -58,15 +58,15 @@ public static class MixelOrdinaryTokenFixture {
     public uint attributes, reserved;
   }
   [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
-  [DllImport("kernel32.dll", SetLastError = true)] static extern uint GetProcessId(IntPtr process);
   [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
   [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
   [DllImport("kernel32.dll", SetLastError = true)] static extern bool GetExitCodeProcess(IntPtr process, out uint code);
+  [DllImport("kernel32.dll", SetLastError = true)] static extern uint GetProcessId(IntPtr process);
   [DllImport("kernel32.dll", SetLastError = true)] static extern uint WaitForSingleObject(IntPtr handle, uint timeout);
   [DllImport("kernel32.dll", SetLastError = true)] static extern uint ResumeThread(IntPtr thread);
   [DllImport("kernel32.dll", SetLastError = true)] static extern bool CheckRemoteDebuggerPresent(IntPtr process, out bool present);
   [DllImport("kernel32.dll", SetLastError = true)] static extern bool TerminateProcess(IntPtr process, uint code);
-  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
+  [DllImport("kernel32.dll", SetLastError = true)] static extern bool CloseHandle(IntPtr handle);
   [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern IntPtr OpenEventW(uint access, bool inherit, string name);
   [DllImport("kernel32.dll", SetLastError = true)] static extern bool DuplicateHandle(IntPtr source, IntPtr handle, IntPtr target, out IntPtr copy, uint access, bool inherit, uint options);
   [DllImport("advapi32.dll", SetLastError = true)] static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
@@ -153,6 +153,8 @@ public static class MixelOrdinaryTokenFixture {
   static StartupInfo Startup() { return new StartupInfo { cb = Marshal.SizeOf(typeof(StartupInfo)), desktop = CurrentDesktopPath() }; }
   static readonly System.Collections.Generic.Dictionary<int, IntPtr> StartedProcesses = new System.Collections.Generic.Dictionary<int, IntPtr>();
   static readonly System.Collections.Generic.Dictionary<int, IntPtr> SuspendedThreads = new System.Collections.Generic.Dictionary<int, IntPtr>();
+  static readonly System.Collections.Generic.HashSet<IntPtr> PendingProcesses = new System.Collections.Generic.HashSet<IntPtr>();
+  static readonly System.Collections.Generic.HashSet<IntPtr> PendingThreads = new System.Collections.Generic.HashSet<IntPtr>();
   public static System.Collections.Generic.Dictionary<string, string> SuspendedOwnedIdentity(int pid) {
     IntPtr process, thread, token = IntPtr.Zero, integrity = IntPtr.Zero;
     if (!StartedProcesses.TryGetValue(pid, out process) || !SuspendedThreads.TryGetValue(pid, out thread))
@@ -186,11 +188,21 @@ public static class MixelOrdinaryTokenFixture {
     }
   }
   static int Started(ProcessInfo process, bool suspended = false) {
-    if (!suspended) CloseHandle(process.thread);
+    // Successful creation owns these exact handles before PID attribution or
+    // thread close. Keep every unresolved handle for bounded outer cleanup.
+    if (process.process != IntPtr.Zero) PendingProcesses.Add(process.process);
+    if (process.thread != IntPtr.Zero) PendingThreads.Add(process.thread);
+    if (process.process == IntPtr.Zero || process.thread == IntPtr.Zero || process.pid == 0 || GetProcessId(process.process) != process.pid) throw new InvalidOperationException("Owned process handle/PID contract failed");
     int pid = checked((int)process.pid);
-    if (StartedProcesses.ContainsKey(pid)) { if (suspended) CloseHandle(process.thread); CloseHandle(process.process); throw new InvalidOperationException("Owned process observation PID collision"); }
+    if (StartedProcesses.ContainsKey(pid)) throw new InvalidOperationException("Owned process observation PID collision");
     StartedProcesses.Add(pid, process.process);
-    if (suspended) SuspendedThreads.Add(pid, process.thread);
+    PendingProcesses.Remove(process.process);
+    if (suspended) {
+      SuspendedThreads.Add(pid, process.thread);
+    } else if (!CloseHandle(process.thread)) {
+      throw new Win32Exception(Marshal.GetLastWin32Error(), "Owned primary-thread handle close failed");
+    }
+    PendingThreads.Remove(process.thread);
     return pid;
   }
   public static bool ActualOwnedDebuggerAttached(int pid) {
@@ -222,23 +234,33 @@ public static class MixelOrdinaryTokenFixture {
       // Never repeatedly resume an unexpected additional suspension.
       if (previous > 1) throw new InvalidOperationException("Unexpected owned primary thread suspension count");
       return checked((int)previous);
-    } finally { SuspendedThreads.Remove(pid); CloseHandle(thread); }
+    } finally {
+      if (!CloseHandle(thread)) throw new Win32Exception(Marshal.GetLastWin32Error(), "Owned resumed-thread handle close failed");
+      SuspendedThreads.Remove(pid);
+    }
   }
-  public static void StopOwnedStartedProcesses() {
-    foreach (IntPtr handle in StartedProcesses.Values) {
+  static void StopOwnedProcessHandle(IntPtr handle) {
       uint wait = WaitForSingleObject(handle, 0);
-      if (wait == 0) continue;
-      if (wait != 0x102) throw new Win32Exception();
+      if (wait == 0) return;
+      if (wait != 0x102) throw new Win32Exception(Marshal.GetLastWin32Error());
       if (!TerminateProcess(handle, 1)) {
         int error = Marshal.GetLastWin32Error();
         // An independently exiting process can signal this same retained
         // handle between the zero-time wait and TerminateProcess. Windows
         // documents ERROR_ACCESS_DENIED for termination after process exit.
         if (error != 5 || WaitForSingleObject(handle, 10000) != 0) throw new Win32Exception(error);
-        continue;
+        return;
       }
       if (WaitForSingleObject(handle, 10000) != 0) throw new InvalidOperationException("Owned native process termination not observed");
+  }
+  public static void StopOwnedStartedProcesses() {
+    var failures = new System.Collections.Generic.List<Exception>();
+    var handles = new System.Collections.Generic.HashSet<IntPtr>(StartedProcesses.Values);
+    handles.UnionWith(PendingProcesses);
+    foreach (IntPtr handle in handles) {
+      try { StopOwnedProcessHandle(handle); } catch (Exception error) { failures.Add(error); }
     }
+    if (failures.Count != 0) throw new AggregateException("Owned native process termination failed", failures);
   }
   public static string StartedStatus(int pid) {
     IntPtr handle;
@@ -253,10 +275,35 @@ public static class MixelOrdinaryTokenFixture {
     return "exited:0x" + code.ToString("x8");
   }
   public static void CloseStartedObservations() {
-    foreach (IntPtr thread in SuspendedThreads.Values) CloseHandle(thread);
-    SuspendedThreads.Clear();
-    foreach (IntPtr handle in StartedProcesses.Values) CloseHandle(handle);
-    StartedProcesses.Clear();
+    var failures = new System.Collections.Generic.List<Exception>();
+    foreach (int pid in new System.Collections.Generic.List<int>(SuspendedThreads.Keys)) {
+      try {
+        if (!CloseHandle(SuspendedThreads[pid])) throw new Win32Exception(Marshal.GetLastWin32Error(), "Owned primary-thread handle close failed");
+        SuspendedThreads.Remove(pid);
+      } catch (Exception error) { failures.Add(error); }
+    }
+    foreach (IntPtr thread in new System.Collections.Generic.List<IntPtr>(PendingThreads)) {
+      try {
+        if (!CloseHandle(thread)) throw new Win32Exception(Marshal.GetLastWin32Error(), "Owned pending-thread handle close failed");
+        PendingThreads.Remove(thread);
+      } catch (Exception error) { failures.Add(error); }
+    }
+    foreach (int pid in new System.Collections.Generic.List<int>(StartedProcesses.Keys)) {
+      try {
+        IntPtr handle = StartedProcesses[pid];
+        if (WaitForSingleObject(handle, 0) != 0) throw new InvalidOperationException("Cannot release an unconfirmed owned process observation");
+        if (!CloseHandle(handle)) throw new Win32Exception(Marshal.GetLastWin32Error(), "Owned process handle close failed");
+        StartedProcesses.Remove(pid);
+      } catch (Exception error) { failures.Add(error); }
+    }
+    foreach (IntPtr handle in new System.Collections.Generic.List<IntPtr>(PendingProcesses)) {
+      try {
+        if (WaitForSingleObject(handle, 0) != 0) throw new InvalidOperationException("Cannot release an unconfirmed owned pending-process observation");
+        if (!CloseHandle(handle)) throw new Win32Exception(Marshal.GetLastWin32Error(), "Owned pending-process handle close failed");
+        PendingProcesses.Remove(handle);
+      } catch (Exception error) { failures.Add(error); }
+    }
+    if (failures.Count != 0) throw new AggregateException("Owned native handle cleanup failed", failures);
   }
   // The MiscInfo stream must independently attribute the private WER dump to
   // the actual owned PID; a filename alone is not sufficient evidence.
@@ -1528,7 +1575,8 @@ try {
   $customerCleanupFailure = $null
   try { Stop-OwnedCustomerProcesses }
   catch { $customerCleanupFailure = $_ }
-  [MixelOrdinaryTokenFixture]::CloseStartedObservations()
+  try { [MixelOrdinaryTokenFixture]::CloseStartedObservations() }
+  catch { $nativeCrashCleanupFailed=$true; Write-Host 'FAIL: actual retained owned native handle close additionally failed.' }
   if ($ordinaryRoot -or $ownedUser -or $desktopAccess -or $namespaceAccess) {
     $cleanupErrors = [System.Collections.Generic.List[string]]::new()
     if ($nativeCrashCleanupFailed) { $cleanupErrors.Add('Owned native crash observation cleanup failed.') }
