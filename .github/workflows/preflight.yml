@@ -13,6 +13,10 @@ on:
         options:
           - windows-2022
           - windows-2025
+      portable_standard_lease_qa_bundle:
+        description: 'Compile a GUID-only portable desktop QA fixture; does not qualify standard-user consent or release readiness'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -28,6 +32,7 @@ jobs:
       - name: Run release staging and configuration regression tests
         run: |
           python3 scripts/test-release-pipeline.py
+          python3 scripts/test-standard-lease-qa-bundle.py
           python3 scripts/test-windows-release-runtime.py
           python3 scripts/test-notarize-macos.py
           python3 scripts/test-macos-native-minimum.py
@@ -135,6 +140,45 @@ jobs:
           name: windows-clipboard-source-native
           path: windows-clipboard-proof/*.log
           if-no-files-found: ignore
+  portable-standard-lease-qa:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.portable_standard_lease_qa_bundle }}
+    runs-on: windows-2022
+    timeout-minutes: 10
+    env:
+      GIT_CONFIG_COUNT: '1'
+      GIT_CONFIG_KEY_0: core.autocrlf
+      GIT_CONFIG_VALUE_0: 'false'
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: '1.75'
+      - name: Activate the existing native x64 compiler for source-only QA
+        shell: pwsh
+        run: ./scripts/activate-windows-msvc.ps1 -ExportToGitHubEnvironment
+      - name: Verify exact adapters with stock Windows PowerShell 5
+        shell: powershell
+        run: |
+          if ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1 -or $PSVersionTable.PSEdition -cne 'Desktop' -or -not [Environment]::Is64BitProcess) { throw 'Requires actual stock x64 Windows PowerShell 5.1 Desktop.' }
+          Write-Host ('PASS: actual stock Windows PowerShell ' + $PSVersionTable.PSVersion.ToString() + '; Desktop; x64; source controls only.')
+          ./scripts/test-support-lease-interactive-source.ps1 -NativePipeControls
+      - name: Verify portable source and malformed-input refusals
+        shell: pwsh
+        run: |
+          python scripts/test-standard-lease-qa-bundle.py
+          if ($LASTEXITCODE -ne 0) { throw 'Portable source/binary boundary controls failed.' }
+      - name: Compile static-CRT GUID-only console and GUI fixtures with scoped loader smoke
+        shell: pwsh
+        run: |
+          python scripts/build-standard-lease-qa-bundle.py --output standard-lease-qa-bundle
+          if ($LASTEXITCODE -ne 0) { throw 'Portable GUID-only source fixture compilation failed.' }
+      - name: Upload source-bound compilation package without release qualification
+        uses: actions/upload-artifact@v6
+        with:
+          name: portable-standard-lease-qa-source-only
+          path: standard-lease-qa-bundle/
+          if-no-files-found: error
+          retention-days: 7
   https-registration-gateway:
     runs-on: ubuntu-22.04
     timeout-minutes: 15
