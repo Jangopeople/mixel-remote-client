@@ -110,6 +110,18 @@ public static class MixelNamespaceTraceAcl {
     Position(bytes);
     byte[] result=(byte[])bytes.Clone();result[3]|=4;return result;
   }
+  static byte[] Identity(byte[] bytes,int field) {
+    Position(bytes);uint offset=BitConverter.ToUInt32(bytes,field);
+    if(offset<20 || offset>(uint)bytes.Length-8)throw new InvalidOperationException("Native owner or group offset is invalid");
+    int position=checked((int)offset),count=bytes[position+1],size=8+count*4;
+    if(bytes[position]!=1 || count>15 || size>bytes.Length-position)throw new InvalidOperationException("Native owner or group SID is invalid");
+    byte[] result=new byte[size];Buffer.BlockCopy(bytes,position,result,0,size);return result;
+  }
+  public static byte[] OwnerGroup(byte[] bytes) {
+    byte[] owner=Identity(bytes,4),group=Identity(bytes,8),result=new byte[2+owner.Length+group.Length];
+    result[0]=checked((byte)owner.Length);result[1]=checked((byte)group.Length);
+    Buffer.BlockCopy(owner,0,result,2,owner.Length);Buffer.BlockCopy(group,0,result,2+owner.Length,group.Length);return result;
+  }
   public static byte[] Dacl(byte[] bytes) {
     int position=Position(bytes),size=BitConverter.ToUInt16(bytes,position+2);
     ushort flags=(ushort)(BitConverter.ToUInt16(bytes,2)&0x150c);
@@ -203,19 +215,42 @@ function Initialize-TraceCreatedRoot([string]$Path) {
   $expected=$null;$actual=$null;$expectedNative=$null;$actualNative=$null
   try {
     $before=[MixelNamespaceTraceAcl]::Read($Path)
-    # SetNamedSecurityInfo imposes the documented current inheritance model.
-    # Initialize only our new empty roots before recording their baseline;
-    # prove that solely SE_DACL_AUTO_INHERITED metadata changed, byte for byte.
-    $expectedNative=[MixelNamespaceTraceAcl]::AutoInherited($before)
-    $expected=Get-Acl -LiteralPath $Path
-    $expected.SetSecurityDescriptorBinaryForm($expectedNative,[Security.AccessControl.AccessControlSections]::Access)
-    [MixelNamespaceTraceAcl]::RestoreDacl($Path,$before)
+    $beforeIdentity=[MixelNamespaceTraceAcl]::OwnerGroup($before)
+    # These are unused folders created by this trace. Establish their intended
+    # private protected ACL before saving a canonical native baseline; never
+    # treat creation defaults as an existing external object's baseline.
+    $expected=New-TraceAclPlan (Get-Acl -LiteralPath $Path) '' $true $false
+    Assert-TracePrivateRootAcl $expected
+    $expectedNative=$expected.GetSecurityDescriptorBinaryForm()
+    Set-Acl -LiteralPath $Path -AclObject $expected
     $actual=Get-Acl -LiteralPath $Path;$actualNative=[MixelNamespaceTraceAcl]::Read($Path)
-    if (-not [MixelNamespaceTraceAcl]::Equal($expectedNative,$actualNative)) {throw 'New trace root initialization changed more than its documented inheritance metadata.'}
+    Assert-TracePrivateRootAcl $actual
+    if ($actual.GetSecurityDescriptorSddlForm('Access') -cne $expected.GetSecurityDescriptorSddlForm('Access') -or
+        -not [MixelNamespaceTraceAcl]::Equal([MixelNamespaceTraceAcl]::Dacl($expectedNative),[MixelNamespaceTraceAcl]::Dacl($actualNative)) -or
+        -not [MixelNamespaceTraceAcl]::Equal($beforeIdentity,[MixelNamespaceTraceAcl]::OwnerGroup($actualNative))) {
+      throw 'New trace root did not establish its exact private ACL with unchanged owner and group.'
+    }
     return $actualNative
   } catch {
     Write-TraceAclFacts 'initialize-root' $expected $actual $expectedNative $actualNative $_.Exception
     throw
+  }
+}
+function Assert-TracePrivateRootAcl($Acl) {
+  $allowed=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+  [void]$allowed.Add([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)
+  [void]$allowed.Add('S-1-5-18')
+  $seen=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+  $rules=@($Acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]))
+  if (-not $Acl.AreAccessRulesProtected -or -not $Acl.AreAccessRulesCanonical -or $rules.Count -ne $allowed.Count) {throw 'New trace private ACL must contain only the protected runner and SYSTEM allowances.'}
+  foreach ($rule in $rules) {
+    if ($rule.IsInherited -or $rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow -or
+        -not $allowed.Contains($rule.IdentityReference.Value) -or -not $seen.Add($rule.IdentityReference.Value) -or
+        $rule.FileSystemRights -ne [Security.AccessControl.FileSystemRights]::FullControl -or
+        $rule.InheritanceFlags -ne ([Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit) -or
+        $rule.PropagationFlags -ne [Security.AccessControl.PropagationFlags]::None) {
+      throw 'New trace private ACL has an unexpected principal, access mask or inheritance rule.'
+    }
   }
 }
 function New-TraceAclPlan($Acl,[string]$ChildSid,[bool]$Directory,[bool]$ReadOnly) {
