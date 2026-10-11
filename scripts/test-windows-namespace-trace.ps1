@@ -642,6 +642,100 @@ function Get-TraceRowLexemes([string]$Row) {
   $facts.beginWordPresent=$Row.Contains('MIXEL_NAMESPACE_HW_LIST_BEGIN');$facts.endWordPresent=$Row.Contains('MIXEL_NAMESPACE_HW_LIST_END');$facts.echoWordPresent=$tokens -ccontains '.echo'
   return [pscustomobject]$facts
 }
+function Get-TraceAssociationTokenFacts([string]$Row,[bool]$FromRowStart=$false) {
+  $facts=[ordered]@{available=$false;observationKind=if($FromRowStart){'row'}else{'post-pass'};rowBounded=$false;tokensBounded=$false;passPairPresent=$false;remainingTokenCount=0;observedCount=0;observationTruncated=$false;shapes=@();lengths=@();punctuationMasks=@();asciiDigitPresent=@();asciiLetterPresent=@()}
+  if($Row.Length -gt 4096){return [pscustomobject]$facts};$facts.rowBounded=$true
+  $tokens=@($Row.Trim() -split '\s+'|Where-Object {$_ -ne ''});$facts.tokensBounded=$tokens.Count -le 32
+  if(-not $facts.tokensBounded){return [pscustomobject]$facts}
+  $start=if($FromRowStart){0}else{-1}
+  if(-not $FromRowStart){for($index=0;$index+1 -lt $tokens.Count;$index++){
+    if($tokens[$index] -cmatch '\A[0-9a-fA-F]{1,4}\z' -and $tokens[$index+1] -cmatch '\A\([0-9a-fA-F]{1,4}\)\z'){$start=$index+2;$facts.passPairPresent=$true;break}
+  }
+  }
+  if($start -lt 0){return [pscustomobject]$facts}
+  $post=@($tokens|Select-Object -Skip $start);$facts.remainingTokenCount=$post.Count;$facts.observationTruncated=$post.Count -gt 8
+  $observed=@($post|Select-Object -First 8)
+  # A token bound rejects the entire observation; no truncated token is parsed.
+  if(@($observed|Where-Object {$_.Length -gt 256}).Count){return [pscustomobject]$facts}
+  $punctuation=@(':','~','[',']','<','>','"',"'",'.','*','=','/','\','!','(',')')
+  foreach($token in $observed){
+    $shape=if($token -cmatch '\A[0-9]{1,10}\z'){'decimal'}elseif($token -cmatch '\A[0-9a-fA-F]{1,16}\z'){'hex'}
+      elseif($token -cmatch '\A[0-9]{1,10}:\z'){'decimal-colon'}elseif($token -cmatch '\A:[0-9a-fA-F]{1,16}\z'){'colon-hex'}elseif($token -ceq ':'){'colon-only'}
+      elseif($token -cmatch '\A[0-9]{1,10}:[0-9a-fA-F]{1,16}\z'){'packed-pair'}elseif($token -cmatch '\A\*{1,4}\z'){'wildcard'}elseif($token -cmatch '\A[A-Za-z_][A-Za-z_0-9-]*\z'){'word'}else{'other'}
+    $mask=0;for($bit=0;$bit -lt $punctuation.Count;$bit++){if($token.Contains($punctuation[$bit])){$mask=$mask -bor (1 -shl $bit)}}
+    $facts.shapes+=,$shape;$facts.lengths+=,$token.Length;$facts.punctuationMasks+=,$mask
+    $facts.asciiDigitPresent+=,[bool]($token -cmatch '[0-9]');$facts.asciiLetterPresent+=,[bool]($token -cmatch '[A-Za-z]')
+  }
+  $facts.available=$true;$facts.observedCount=$observed.Count
+  return [pscustomobject]$facts
+}
+function Get-TraceEngineMetadataFacts([string]$Text,[uint32]$ChildPid=0,[uint32]$Thread=0,[string]$ExpectedControlCommand='') {
+  $facts=[ordered]@{textBounded=$false;threadBlockComplete=$false;threadRowCount=0;threadMappingAvailable=$false;retainedProcessMatched=$false;retainedThreadMatched=$false;threadLexemeRows=@();commandBlockComplete=$false;commandRowCount=0;commandRowsBounded=$false;commandSchemaAvailable=$false;commandSlotMask=0;commandExecuteByteMask=0;commandCallbackComparisonAvailable=$false;commandCallbackMatchedMask=0;callbackTextOccurrenceMask=0;callbackTextOccurrenceCount=0;callbackTextOccurrencesBounded=$true;commandOsScopeLiteralMask=0;commandOsScopeMatchedMask=0;commandIndexScopeLiteralMask=0;commandUnknownRowCount=0;commandEchoRowCount=0;commandLexemeRows=@();associationBlockComplete=$false;associationRowsBounded=$false;associationRows=@()}
+  if([Text.Encoding]::UTF8.GetByteCount($Text) -gt 1048576){return [pscustomobject]$facts};$facts.textBounded=$true
+  $end=$Text.LastIndexOf("`n");$complete=if($end -ge 0){$Text.Substring(0,$end+1)}else{''}
+  $lines=@($complete -split '\r?\n'|ForEach-Object {$_.Trim()})
+  $blocks=@{}
+  foreach($kind in @('THREAD_STATUS','BREAKPOINT_COMMANDS','ASSOCIATION')){
+    $prefix=if($kind -ceq 'ASSOCIATION'){'MIXEL_NAMESPACE_HW_LIST'}else{'MIXEL_CDB_'+$kind}
+    $begin=-1;$finish=-1;$invalid=$false;$boundary=-1
+    for($index=0;$index -lt $lines.Count;$index++){
+      $line=$lines[$index]
+      if($line -ceq ($prefix+'_BEGIN')){if($begin -ge 0 -or $boundary -ge 0){$invalid=$true};$begin=$index}
+      elseif($line -ceq ($prefix+'_END')){if($begin -lt 0 -or $finish -ge 0 -or $boundary -ge 0){$invalid=$true};$finish=$index}
+      elseif($line.StartsWith($prefix,[StringComparison]::Ordinal)){$invalid=$true}
+      if($line -ceq 'MIXEL_NAMESPACE_BINDINGS directory=1 event=1 win32=1' -or $line -ceq 'MIXEL_NAMESPACE_TRACE_READY'){$boundary=$index}
+    }
+    $valid=-not $invalid -and $begin -ge 0 -and $finish -gt $begin
+    $rows=@();if($valid -and $finish -gt $begin+1){$rows=@($lines[($begin+1)..($finish-1)])}
+    $blocks[$kind]=[pscustomobject]@{valid=$valid;begin=$begin;finish=$finish;rows=$rows}
+  }
+  # Reject interleaved, reversed or overlapping fixed metadata blocks.
+  if($blocks.THREAD_STATUS.valid -and $blocks.BREAKPOINT_COMMANDS.valid -and $blocks.THREAD_STATUS.finish -ge $blocks.BREAKPOINT_COMMANDS.begin){$blocks.THREAD_STATUS.valid=$false;$blocks.BREAKPOINT_COMMANDS.valid=$false}
+  foreach($kind in @('THREAD_STATUS','BREAKPOINT_COMMANDS')){
+    if($blocks[$kind].valid -and $blocks.ASSOCIATION.valid -and $blocks.ASSOCIATION.finish -ge $blocks[$kind].begin){$blocks[$kind].valid=$false}
+  }
+  $threadRows=@($blocks.THREAD_STATUS.rows);$facts.threadBlockComplete=$blocks.THREAD_STATUS.valid;$facts.threadRowCount=[Math]::Min(32,$threadRows.Count)
+  if($facts.threadBlockComplete -and $threadRows.Count -le 32){$facts.threadLexemeRows=@($threadRows|ForEach-Object {Get-TraceAssociationTokenFacts $_ $true})}
+  if($facts.threadBlockComplete -and $threadRows.Count -le 32 -and @($threadRows|Where-Object {$_.Length -gt 4096}).Count -eq 0){
+    $current=@($threadRows|Where-Object {$_ -ne '' -and $_ -cnotmatch '\A[0-9]{1,10}:[0-9a-fA-F]{1,8}>\s+~\.\z'})
+    if($current.Count -eq 1 -and $current[0] -cmatch '\A\.\s+([0-9]{1,10})\s+id:\s+([0-9a-fA-F]{1,8})\.([0-9a-fA-F]{1,8})\s+Suspend:\s+[0-9]{1,10}\s+Teb:?\s+(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{16}|[0-9a-fA-F]{8}`[0-9a-fA-F]{8})\s+(?:Unfrozen|Frozen)\z' -and [long]$Matches[1] -le 4294967295){
+      $mappedPid=[Convert]::ToUInt32($Matches[2],16);$mappedTid=[Convert]::ToUInt32($Matches[3],16)
+      if($mappedPid -gt 0 -and $mappedTid -gt 0 -and $ChildPid -gt 0 -and $Thread -gt 0){$facts.threadMappingAvailable=$true;$facts.retainedProcessMatched=$mappedPid -eq $ChildPid;$facts.retainedThreadMatched=$mappedTid -eq $Thread}
+    }
+  }
+  $commandRows=@($blocks.BREAKPOINT_COMMANDS.rows);$facts.commandBlockComplete=$blocks.BREAKPOINT_COMMANDS.valid;$facts.commandRowCount=[Math]::Min(32,$commandRows.Count);$facts.commandRowsBounded=$commandRows.Count -le 32
+  $expectedValid=$ExpectedControlCommand.Length -le 4096 -and $ExpectedControlCommand -cmatch '\A"\$\$><[A-Z]:\\[A-Za-z0-9_\\.-]+\\hwcontrol\.txt"\z' -and -not $ExpectedControlCommand.Contains('..')
+  $facts.commandCallbackComparisonAvailable=$facts.commandBlockComplete -and $expectedValid -and $facts.commandRowsBounded -and @($commandRows|Where-Object {$_.Length -gt 4096}).Count -eq 0
+  $callbacks=@();if($expectedValid){$folder=$ExpectedControlCommand.Substring(5,$ExpectedControlCommand.Length-6);$folder=$folder.Substring(0,$folder.Length-'hwcontrol.txt'.Length);$callbacks=@(('"r $t1 = 1; $$><'+$folder+'entry.txt"'),('"r $t1 = 2; $$><'+$folder+'entry.txt"'),('"$$><'+$folder+'winentry.txt"'),$ExpectedControlCommand)}
+  if($facts.commandBlockComplete -and $facts.commandRowsBounded){
+    $known=0;$duplicate=$false;$callbackTextOccurrences=0
+    $facts.commandLexemeRows=@($commandRows|ForEach-Object {
+      $lex=Get-TraceAssociationTokenFacts $_ $true
+      $leading=if($_.Length -gt 4096){'unavailable'}elseif($_ -cmatch '\Aba[0-3](?:\s|\z)'){'ba'}elseif($_ -cmatch '\Abp[0-3](?:\s|\z)'){'bp'}elseif($_ -cmatch '\Abu[0-3](?:\s|\z)'){'bu'}elseif($_ -cmatch '\A~~?\[' -or $_ -cmatch '\A~[0-9]'){'thread-prefix'}elseif($_ -cmatch '\A[0-9]{1,10}:[0-9a-fA-F]{1,8}>'){'prompt'}else{'other'}
+      $lex|Add-Member -NotePropertyName leadingCommandKind -NotePropertyValue $leading;$lex
+    })
+    foreach($row in $commandRows){
+      if($row -ceq ''){continue}
+      if($facts.commandCallbackComparisonAvailable){for($callbackIndex=0;$callbackIndex -lt $callbacks.Count;$callbackIndex++){
+        $occurrences=[regex]::Matches($row,[regex]::Escape($callbacks[$callbackIndex])).Count
+        if($occurrences){$facts.callbackTextOccurrenceMask=$facts.callbackTextOccurrenceMask -bor (1 -shl $callbackIndex);$callbackTextOccurrences+=$occurrences}
+      }}
+      if($row.Length -le 4096 -and $row -cmatch '\A[0-9]{1,10}:[0-9a-fA-F]{1,8}>\s+\.bpcmds\z'){$facts.commandEchoRowCount++;continue}
+      if($row.Length -gt 4096 -or $row -cnotmatch '\A(?:(~~\[(?:0x)?[0-9a-fA-F]{1,8}\]|~[0-9]{1,10})\s*)?ba([0-3])\s+(?:e\s+1|e1)\s+(?:/1\s+)?[^\s"]{1,256}\s+("[^\r\n]{1,4090}")\z'){$facts.commandUnknownRowCount++;continue}
+      $scope=$Matches[1];$slotIndex=[int]$Matches[2];$slot=1 -shl $slotIndex;$callback=$Matches[3]
+      if($scope -cmatch '\A~([0-9]{1,10})\z' -and [long]$Matches[1] -gt 4294967295){$facts.commandUnknownRowCount++;continue};$known++
+      if(($facts.commandSlotMask -band $slot) -ne 0){$duplicate=$true};$facts.commandSlotMask=$facts.commandSlotMask -bor $slot;$facts.commandExecuteByteMask=$facts.commandExecuteByteMask -bor $slot
+      if($facts.commandCallbackComparisonAvailable -and $callback -ceq $callbacks[$slotIndex]){$facts.commandCallbackMatchedMask=$facts.commandCallbackMatchedMask -bor $slot}
+      if($scope -cmatch '\A~~\[(?:0x)?([0-9a-fA-F]{1,8})\]\z'){$facts.commandOsScopeLiteralMask=$facts.commandOsScopeLiteralMask -bor $slot;if($Thread -gt 0 -and [Convert]::ToUInt32($Matches[1],16) -eq $Thread){$facts.commandOsScopeMatchedMask=$facts.commandOsScopeMatchedMask -bor $slot}}
+      elseif($scope -cmatch '\A~([0-9]{1,10})\z' -and [long]$Matches[1] -le 4294967295){$facts.commandIndexScopeLiteralMask=$facts.commandIndexScopeLiteralMask -bor $slot}
+    }
+    $facts.callbackTextOccurrenceCount=[Math]::Min(32,$callbackTextOccurrences);$facts.callbackTextOccurrencesBounded=$callbackTextOccurrences -le 32
+    $facts.commandSchemaAvailable=$known -eq 4 -and -not $duplicate -and $facts.commandUnknownRowCount -eq 0 -and $facts.commandSlotMask -eq 15
+  }
+  $facts.associationBlockComplete=$blocks.ASSOCIATION.valid;$facts.associationRowsBounded=$blocks.ASSOCIATION.rows.Count -le 32
+  if($facts.associationBlockComplete -and $facts.associationRowsBounded){$facts.associationRows=@($blocks.ASSOCIATION.rows|ForEach-Object {Get-TraceAssociationTokenFacts $_})}
+  return [pscustomobject]$facts
+}
 function Get-TraceHardwareFacts([string]$Text,[string]$ExpectedControlCommand='') {
   $facts=[ordered]@{engineBlockCount=0;engineBlockComplete=$false;engineRowCount=0;engineSchemaValid=$false;engineIndexMetadataAvailable=$false;engineOsThreadCorrelationAvailable=$false;engineOsThreadMatched=$false;rowKindsAvailable=$false;rowKindsBounded=$false;rowKindsCount=0;knownRowCount=0;commandEchoRowCount=0;blankRowCount=0;oversizedRowCount=0;unknownRowCount=0;duplicateSlotCount=0;lexemeRows=@();controlCommandComparisonAvailable=$false;controlCommandMatchCount=0;slotMask=0;enabledMask=0;resolvedMask=0;executeByteMask=0;passOneMask=0;threadSpecificMask=0;contextMarkerCount=0;contextSchemaValid=$true;contextAvailable=$false;processMatched=$false;threadMatched=$false;addressPresentMask=0;localEnableMask=0;globalEnableMask=0;executionByteMask=0}
   if([Text.Encoding]::UTF8.GetByteCount($Text) -gt 1048576){$facts.contextSchemaValid=$false;return [pscustomobject]$facts}
@@ -755,8 +849,11 @@ function Get-TraceMarkerFormattingFacts([string]$Text) {
 }
 function Get-TraceFailureFacts($Live,[ValidateSet('export','identity','commands','startup','resume','trace','parse','result','ack','cleanup')][string]$Phase,[bool]$TimedOut,$Execution=$null) {
   $text='';$stderr='';$readFailed=$false;$stdoutBytes=0L;$stderrBytes=0L;$expectedControlCommand=''
+  $expectedChildPid=0u;$expectedThreadId=0u
   if ($Live) {
     if($Live.PSObject.Properties['expectedControlCommand'] -and $Live.expectedControlCommand -is [string]){$expectedControlCommand=$Live.expectedControlCommand}
+    if($Live.PSObject.Properties['childPid'] -and ($Live.childPid -is [int] -or $Live.childPid -is [uint32]) -and $Live.childPid -gt 0){$expectedChildPid=[uint32]$Live.childPid}
+    if($Live.PSObject.Properties['expectedThreadId'] -and $Live.expectedThreadId -is [uint32] -and $Live.expectedThreadId -gt 0){$expectedThreadId=$Live.expectedThreadId}
     try {
       $stdoutBytes=(Get-Item -LiteralPath $Live.outPath).Length;$stderrBytes=(Get-Item -LiteralPath $Live.errPath).Length
       $text=[MixelNamespaceTraceIO]::ReadBounded($Live.outPath,1048576)
@@ -780,6 +877,7 @@ function Get-TraceFailureFacts($Live,[ValidateSet('export','identity','commands'
     returnFailure=[bool]($complete -match '(?m)^MIXEL_NAMESPACE_TRACE_FAIL_(?:RETURN_SCOPE|RETURN_HANDLE|WIN32_RETURN_SCOPE)\r?$')
     startupDiagnostics=Get-TraceStartupFacts $text
     hardwareDiagnostics=Get-TraceHardwareFacts $text $expectedControlCommand
+    engineMetadataDiagnostics=Get-TraceEngineMetadataFacts $text $expectedChildPid $expectedThreadId $expectedControlCommand
     continuationDiagnostics=Get-TraceContinuationFacts $text
     markerFormattingDiagnostics=Get-TraceMarkerFormattingFacts $text
     entryDiagnostics=Get-TraceEntryFacts $text
@@ -876,6 +974,7 @@ function Invoke-TraceAttempt([ValidateSet('absent','world')][string]$Scenario,[s
     if ($Gated) { $arguments=@('-p',[string]$childPid,'-pr','-pd','-noshell','-nosqm','-cf',(Join-Path $private 'start.txt')) }
     $live=Start-TraceProcess $script:cdb $arguments $private 'cdb' $childPid
     $live|Add-Member -NotePropertyName expectedControlCommand -NotePropertyValue ('"$$><'+(Join-Path $private 'hwcontrol.txt')+'"')
+    $live|Add-Member -NotePropertyName expectedThreadId -NotePropertyValue ([uint32]$thread)
     $phase='startup'
     $deadline=[DateTime]::UtcNow.AddSeconds(20);$ready=$false
     while ([DateTime]::UtcNow -lt $deadline) {

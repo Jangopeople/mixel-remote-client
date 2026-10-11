@@ -141,6 +141,9 @@ def commands(pid, tid, session, event, folder, pe):
     execution_mask=' + '.join(f'((@dr7 & 0x{15 << (16+4*slot):x}) == 0)*0n{1 << slot}' for slot in range(4))
     hardware_snapshot=['.echo MIXEL_NAMESPACE_HW_LIST_BEGIN','bl /L 0 1 2 3','.echo MIXEL_NAMESPACE_HW_LIST_END',
                        f'.printf "MIXEL_NAMESPACE_HW_CONTEXT processMatched=%u threadMatched=%u addressPresentMask=%u localEnableMask=%u globalEnableMask=%u executionByteMask=%u\\n",(@$tpid == 0n{pid}),(@$tid == 0n{tid}),({address_mask}),({local_mask}),({global_mask}),({execution_mask})']
+    # Fixed read-only engine metadata; outside the capture-marker namespace.
+    hardware_snapshot.extend(['.echo MIXEL_CDB_THREAD_STATUS_BEGIN','~.','.echo MIXEL_CDB_THREAD_STATUS_END',
+                              '.echo MIXEL_CDB_BREAKPOINT_COMMANDS_BEGIN','.bpcmds','.echo MIXEL_CDB_BREAKPOINT_COMMANDS_END'])
     init.extend([f'r $t19 = @$t15 + 0n{pe["probeRva"]}',
                  f'.if ((@$t19 <= @$t15) or (@$t19 >= @$t15+0n{pe["imageSize"]}) or ($vvalid(@$t19,0n1) == 0) or (@$t19 == ntdll!NtOpenDirectoryObject) or (@$t19 == ntdll!NtOpenEvent) or (@$t19 == KERNELBASE!OpenEventW)) {{ {fail("CONTROL_ADDRESS")} }}',
             f'{thread}ba0 e 1 ntdll!NtOpenDirectoryObject "r $t1 = 1; {script("entry.txt")}"',

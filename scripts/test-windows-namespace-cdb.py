@@ -124,7 +124,10 @@ for slot in range(4):
     require(f'((@dr7 & 0x{1 << (2*slot):x}) != 0)*0n{1 << slot}' in snapshot,'Local DR7 enable bit geometry changed')
     require(f'((@dr7 & 0x{2 << (2*slot):x}) != 0)*0n{1 << slot}' in snapshot,'Global DR7 enable bit geometry changed')
     require(f'((@dr7 & 0x{15 << (16+4*slot):x}) == 0)*0n{1 << slot}' in snapshot,'DR7 execute/one-byte nibble geometry changed')
-observed_expressions=re.fullmatch(r'.*\n\.printf "[^"\n]+",\(@\$tpid == 0n101\),\(@\$tid == 0n202\),\((.*?)\),\((.*?)\),\((.*?)\),\((.*?)\)\n',snapshot,re.S).groups()
+engine_observation='.echo MIXEL_CDB_THREAD_STATUS_BEGIN\n~.\n.echo MIXEL_CDB_THREAD_STATUS_END\n.echo MIXEL_CDB_BREAKPOINT_COMMANDS_BEGIN\n.bpcmds\n.echo MIXEL_CDB_BREAKPOINT_COMMANDS_END\n'
+require(snapshot.endswith(engine_observation) and snapshot.count(engine_observation)==1,'Fixed read-only engine metadata commands/delimiters changed')
+require(not any(token in engine_observation for token in ['MIXEL_NAMESPACE_', 'r ', 'g\n', 'ba0','ba1','ba2','ba3']),'Engine metadata changes capture namespace or debugger state')
+observed_expressions=re.fullmatch(r'.*\n\.printf "[^"\n]+",\(@\$tpid == 0n101\),\(@\$tid == 0n202\),\((.*?)\),\((.*?)\),\((.*?)\),\((.*?)\)\n',snapshot[:-len(engine_observation)],re.S).groups()
 def snapshot_masks(registers,dr7):
     names={'ntdll!NtOpenDirectoryObject':'watch0','ntdll!NtOpenEvent':'watch1','KERNELBASE!OpenEventW':'watch2','@$t19':'watch3',**{f'@dr{index}':f'dr{index}' for index in range(4)},'@dr7':'dr7'}
     values={**{f'watch{index}':0x1000+index*0x100 for index in range(4)},**{f'dr{index}':value for index,value in enumerate(registers)},'dr7':dr7}
@@ -210,6 +213,10 @@ def record(sequence=1,api=1,access='0000000f',root=0,kind=4,status='c0000022',ha
     return f'MIXEL_NAMESPACE_NATIVE seq={sequence} api={api} access=0x{access} rootNonNull={root} pathKind={kind} ntstatus=0x{status} handleNonNull={handle} scopeQualified={qualified}'
 suffix='MIXEL_NAMESPACE_WIN32 handleNonNull=0 scopeQualified=1\n'+module.END+'\n'
 valid=prefix+record()+'\n'+suffix
+private_metadata='MIXEL_CDB_THREAD_STATUS_BEGIN\n. 1 id: 65.ca Suspend: 1 Teb 00000000`7ffdd000 Unfrozen\nMIXEL_CDB_THREAD_STATUS_END\nMIXEL_CDB_BREAKPOINT_COMMANDS_BEGIN\nba0 e 1 ntdll!NtOpenDirectoryObject "PRIVATE_CALLBACK"\nMIXEL_CDB_BREAKPOINT_COMMANDS_END\n'
+require(module.parse_trace(valid.replace(module.BINDINGS,private_metadata+module.BINDINGS))==module.parse_trace(valid),'Read-only noncapture metadata changed mandatory capture qualification')
+for unknown in ['MIXEL_NAMESPACE_THREAD_STATUS_BEGIN','MIXEL_NAMESPACE_BREAKPOINT_COMMANDS_END','MIXEL_NAMESPACE_UNKNOWN_PRIVATE']:
+    rejects(lambda unknown=unknown:module.parse_trace(valid.replace(module.BINDINGS,unknown+'\n'+module.BINDINGS)),'Unknown original capture namespace was silently accommodated')
 result=module.parse_trace(valid)
 ack=module.CONTINUATION_ACK+'\n'
 ack_valid=valid.replace(module.READY+'\n',module.READY+'\n'+ack,1)
