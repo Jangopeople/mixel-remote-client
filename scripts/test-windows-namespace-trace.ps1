@@ -965,6 +965,53 @@ function Get-TraceEngineLoadFacts([string]$Text) {
   } catch { }
   return [pscustomobject]$facts
 }
+function Get-TraceEngineProbeFacts([string]$Text) {
+  $keys=@('cacheAvailable','actualProbeOffsetAvailable','interfaceAvailable','moduleLookupAvailable','cachedBaseMatched','cachedBaseUnique','loadedNameAvailable','loadedPathMatched','imageRangeMatched','probeRvaMatched')
+  $facts=[ordered]@{recordCount=0;schemaAvailable=$false};foreach($key in $keys){$facts[$key]=0}
+  if([Text.Encoding]::UTF8.GetByteCount($Text)-gt1048576){return [pscustomobject]$facts}
+  $end=$Text.LastIndexOf("`n");if($end-lt0){return [pscustomobject]$facts}
+  $lines=@($Text.Substring(0,$end+1)-split'\r?\n'|ForEach-Object{$_.Trim()});$records=@($lines|Where-Object{$_-cmatch'\AMIXEL_CDB_ENGINE_PROBE(?:\s|\z)'})
+  $facts.recordCount=[Math]::Min(32,$records.Count)
+  if($records.Count-ne1-or$records[0].Length-gt2048){return [pscustomobject]$facts}
+  $position=[Array]::IndexOf($lines,$records[0]);$binding=[Array]::IndexOf($lines,'MIXEL_NAMESPACE_BINDINGS directory=1 event=1 win32=1');$loadPosition=-1
+  for($index=0;$index-lt$lines.Count;$index++){if($lines[$index]-cmatch'\AMIXEL_CDB_ENGINE_LOAD '){$loadPosition=$index;break}}
+  $query=Get-TraceEngineQueryFacts $Text;$shape=Get-TraceEngineShapeFacts $Text;$load=Get-TraceEngineLoadFacts $Text
+  if(-not$query.schemaAvailable-or-not$shape.schemaAvailable-or-not$load.schemaAvailable-or$loadPosition-lt0-or$position-le$loadPosition-or($binding-ge0-and$position-ge$binding)-or$records[0]-cnotmatch'\AMIXEL_CDB_ENGINE_PROBE (\{[^\r\n]+\})\z'){return [pscustomobject]$facts};$json=$Matches[1]
+  try {
+    $value=ConvertFrom-Json -InputObject $json -ErrorAction Stop
+    if((@($value.PSObject.Properties.Name)-join',')-cne($keys-join',')){return [pscustomobject]$facts}
+    $canonical=[ordered]@{}
+    foreach($key in $keys){$number=$value.PSObject.Properties[$key].Value;if(($number-isnot[int]-and$number-isnot[long])-or$number-lt0-or$number-gt1){return [pscustomobject]$facts};$canonical[$key]=[int]$number}
+    if(($canonical|ConvertTo-Json -Compress)-cne$json){return [pscustomobject]$facts}
+    if(-not$value.cacheAvailable-and(@($keys|Where-Object{$value.PSObject.Properties[$_].Value-ne0}).Count-ne0)){return [pscustomobject]$facts}
+    if($value.cacheAvailable-and(-not$query.currentEngineMatched-or-not$shape.moduleScanCompleted-or$shape.moduleCount-eq0)){return [pscustomobject]$facts}
+    if($value.actualProbeOffsetAvailable-and(-not$value.cacheAvailable-or($query.offsetAvailableMask-band8)-eq0)){return [pscustomobject]$facts}
+    foreach($pair in @(@('moduleLookupAvailable','actualProbeOffsetAvailable'),@('cachedBaseMatched','moduleLookupAvailable'),@('cachedBaseUnique','cachedBaseMatched'),@('interfaceAvailable','cachedBaseUnique'),@('loadedNameAvailable','interfaceAvailable'),@('loadedPathMatched','loadedNameAvailable'),@('imageRangeMatched','loadedPathMatched'),@('probeRvaMatched','imageRangeMatched'))){if($value.PSObject.Properties[$pair[0]].Value-and-not$value.PSObject.Properties[$pair[1]].Value){return [pscustomobject]$facts}}
+    foreach($key in $keys){$facts[$key]=$canonical[$key]};$facts.schemaAvailable=$true
+  } catch { }
+  return [pscustomobject]$facts
+}
+function Get-TraceEngineExecutionFacts([string]$Text) {
+  $keys=@('statusAvailable','statusKind');$facts=[ordered]@{recordCount=0;schemaAvailable=$false;statusAvailable=0;statusKind=0}
+  if([Text.Encoding]::UTF8.GetByteCount($Text)-gt1048576){return [pscustomobject]$facts}
+  $end=$Text.LastIndexOf("`n");if($end-lt0){return [pscustomobject]$facts}
+  $lines=@($Text.Substring(0,$end+1)-split'\r?\n'|ForEach-Object{$_.Trim()});$records=@($lines|Where-Object{$_-cmatch'\AMIXEL_CDB_ENGINE_EXECUTION(?:\s|\z)'})
+  $facts.recordCount=[Math]::Min(32,$records.Count)
+  if($records.Count-ne1-or$records[0].Length-gt2048){return [pscustomobject]$facts}
+  $position=[Array]::IndexOf($lines,$records[0]);$binding=[Array]::IndexOf($lines,'MIXEL_NAMESPACE_BINDINGS directory=1 event=1 win32=1');$probePosition=-1
+  for($index=0;$index-lt$lines.Count;$index++){if($lines[$index]-cmatch'\AMIXEL_CDB_ENGINE_PROBE '){$probePosition=$index;break}}
+  $query=Get-TraceEngineQueryFacts $Text;$probe=Get-TraceEngineProbeFacts $Text
+  if(-not$query.schemaAvailable-or-not$probe.schemaAvailable-or$probePosition-lt0-or$position-le$probePosition-or($binding-ge0-and$position-ge$binding)-or$records[0]-cnotmatch'\AMIXEL_CDB_ENGINE_EXECUTION (\{[^\r\n]+\})\z'){return [pscustomobject]$facts};$json=$Matches[1]
+  try {
+    $value=ConvertFrom-Json -InputObject $json -ErrorAction Stop
+    if((@($value.PSObject.Properties.Name)-join',')-cne($keys-join',')){return [pscustomobject]$facts}
+    $canonical=[ordered]@{}
+    foreach($key in $keys){$number=$value.PSObject.Properties[$key].Value;$max=if($key-ceq'statusKind'){7}else{1};if(($number-isnot[int]-and$number-isnot[long])-or$number-lt0-or$number-gt$max){return [pscustomobject]$facts};$canonical[$key]=[int]$number}
+    if(($canonical|ConvertTo-Json -Compress)-cne$json-or[bool]$value.statusAvailable-ne[bool]$value.statusKind-or($value.statusAvailable-and-not$query.currentEngineMatched)){return [pscustomobject]$facts}
+    foreach($key in $keys){$facts[$key]=$canonical[$key]};$facts.schemaAvailable=$true
+  } catch { }
+  return [pscustomobject]$facts
+}
 function Get-TraceEngineEventFacts([string]$Text) {
   $keys=@('argumentsValid','statusAvailable','engineStopped','contextAvailable','processMatched','mappingAvailable','eventAvailable','eventProcessMatched','eventThreadMatched','eventIsException','exceptionAvailable','exceptionKind','firstChance','locationAvailableMask','locationKind')
   $facts=[ordered]@{recordCount=0;schemaAvailable=$false};foreach($key in $keys){$facts[$key]=0}
@@ -1130,6 +1177,8 @@ function Get-TraceFailureFacts($Live,[ValidateSet('export','identity','commands'
     engineQueryDiagnostics=Get-TraceEngineQueryFacts $text
     engineShapeDiagnostics=Get-TraceEngineShapeFacts $text
     engineLoadDiagnostics=Get-TraceEngineLoadFacts $text
+    engineProbeDiagnostics=Get-TraceEngineProbeFacts $text
+    engineExecutionDiagnostics=Get-TraceEngineExecutionFacts $text
     engineEventDiagnostics=Get-TraceEngineEventFacts $text
     engineStackDiagnostics=Get-TraceEngineStackFacts $text
     eventQueryAttempted=[bool]($Live-and$Live.PSObject.Properties['eventQueryAttempted']-and$Live.eventQueryAttempted-is[bool]-and$Live.eventQueryAttempted)
