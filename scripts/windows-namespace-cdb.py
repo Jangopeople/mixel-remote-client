@@ -10,6 +10,8 @@ from pathlib import Path
 
 RECORD = re.compile(r'MIXEL_NAMESPACE_NATIVE seq=([0-9]+) api=([12]) access=0x([0-9a-fA-F]{8}) rootNonNull=([01]) pathKind=([0-9]+) ntstatus=0x([0-9a-fA-F]{8}) handleNonNull=([01]) scopeQualified=1')
 WIN32 = re.compile(r'MIXEL_NAMESPACE_WIN32 handleNonNull=([01]) scopeQualified=1')
+WIN32_ENTRY = re.compile(r'MIXEL_NAMESPACE_WIN32_ENTRY sequence=([1-9][0-9]?) leafValidMask=([0-7]) leafMatched=([01]) accessMatched=([01]) inheritFalse=([01])')
+PREWINDOW_ENTRY = re.compile(r'MIXEL_NAMESPACE_PREWINDOW_ENTRY sequence=([1-9][0-9]?) api=([12])')
 BINDINGS = 'MIXEL_NAMESPACE_BINDINGS directory=1 event=1 win32=1'
 READY = 'MIXEL_NAMESPACE_TRACE_READY'
 END = 'MIXEL_NAMESPACE_TRACE_END'
@@ -48,14 +50,16 @@ def commands(pid, tid, session, event, folder):
     # Hardware Win32 entry slot2 is reused for its return, leaving slot3 for NT.
     winentry = [scope,
                 f'.if ((@$t16 != 0) or (@$t17 != 0)) {{ {fail("WINDOW_NESTED")} }}',
-                'r $t9 = @r8', 'r $t15 = 0']
+                f'.if (@$t4 >= 0n32) {{ {fail("ENTRY_LIMIT")} }}',
+                'r $t4 = @$t4 + 1', 'r $t9 = @r8', 'r $t15 = 0', 'r $t5 = 0']
     for index, spelling in enumerate(('Global\\' + event, 'Local\\' + event, event), 1):
         size = 2 * (len(spelling) + 1)
         # Nested validity guards ensure comparison cannot read invalid memory.
         name = f'winmatch-{index:02d}.txt'
-        helpers[name] = f'.if ($vvalid(@$t9,0n{size}) != 0) {{ .if ({equals(spelling)} and (wo(@$t9+0n{size-2}) == 0)) {{ r $t15 = 1 }} }}\n'
+        helpers[name] = f'.if ($vvalid(@$t9,0n{size}) != 0) {{ r $t5 = @$t5 | 0n{1 << (index-1)}; .if ({equals(spelling)} and (wo(@$t9+0n{size-2}) == 0)) {{ r $t15 = 1 }} }}\n'
         winentry.append(script(name))
-    winentry.extend(['.if (@$t15 != 0) {',
+    winentry.extend(['.printf "MIXEL_NAMESPACE_WIN32_ENTRY sequence=%u leafValidMask=%u leafMatched=%u accessMatched=%u inheritFalse=%u\\n",@$t4,@$t5,(@$t15 != 0),(@ecx == 0x00100000),(@edx == 0)',
+                     '.if (@$t15 != 0) {',
                      f'.if ((@ecx != 0x00100000) or (@edx != 0)) {{ {fail("WIN32_INTERFACE")} }}',
                      'r $t16 = 1', 'r $t14 = @rsp',
                      f'.if ($vvalid(@$t14,0n8) == 0) {{ {fail("WIN32_STACK")} }}',
@@ -63,7 +67,11 @@ def commands(pid, tid, session, event, folder):
                      f'.if ($vvalid(@$t18,0n1) == 0) {{ {fail("WIN32_RETURN")} }}',
                      'bc 2', f'{thread}ba2 e 1 @$t18 "{script("winreturn.txt")}"',
                      '.echo MIXEL_NAMESPACE_TRACE_WINDOW', '}','gc'])
-    enter = [scope, '.if (@$t16 == 1) {',
+    enter = [scope, '.if (@$t16 == 0) {',
+             f'.if (@$t4 >= 0n32) {{ {fail("ENTRY_LIMIT")} }}',
+             'r $t4 = @$t4 + 1',
+             '.printf "MIXEL_NAMESPACE_PREWINDOW_ENTRY sequence=%u api=%u\\n",@$t4,@$t1',
+             '}', '.if (@$t16 == 1) {',
              f'.if (@$t17 != 0) {{ {fail("NATIVE_NESTED")} }}',
              f'.if (@$t0 >= 0n32) {{ {fail("RECORD_LIMIT")} }}',
              'r $t0 = @$t0 + 1', 'r $t17 = 1', 'r $t2 = @edx',
@@ -95,7 +103,7 @@ def commands(pid, tid, session, event, folder):
               '.echo MIXEL_NAMESPACE_TRACE_END', 'bc *', 'qd']
     init = ['.expr /s masm', f'.if (@$tpid != 0n{pid}) {{ {fail("PID")} }}',
             f'.if (@$ptrsize != 0n8) {{ {fail("ARCH")} }}',
-            'bc *', 'r $t0 = 0', 'r $t16 = 0', 'r $t17 = 0',
+            'bc *', 'r $t0 = 0', 'r $t4 = 0', 'r $t5 = 0', 'r $t16 = 0', 'r $t17 = 0',
             f'{thread}ba0 e 1 ntdll!NtOpenDirectoryObject "r $t1 = 1; {script("entry.txt")}"',
             f'{thread}ba1 e 1 ntdll!NtOpenEvent "r $t1 = 2; {script("entry.txt")}"',
             f'{thread}ba2 e 1 KERNELBASE!OpenEventW "{script("winentry.txt")}"',
@@ -116,6 +124,7 @@ def parse_trace(raw):
     if type(raw) is not str or len(raw.encode('utf-8')) > 1048576:
         raise ValueError('Bounded private trace exceeds1MiB')
     records, stage, window, winreturn = [], 0, False, None
+    entry_count, qualified_entry = 0, False
     for line in raw.splitlines():
         line = line.strip()
         # Only exact marker lines count. Script command echoes remain ignored.
@@ -132,8 +141,20 @@ def parse_trace(raw):
             if stage != 1: raise ValueError('Ready lacks exact bindings')
             stage = 2
         elif line == 'MIXEL_NAMESPACE_TRACE_WINDOW':
-            if stage != 2 or window: raise ValueError('Window is not first qualified source call')
+            if stage != 2 or window or not qualified_entry: raise ValueError('Window lacks its first qualified source entry')
             window = True
+        elif (match := WIN32_ENTRY.fullmatch(line)):
+            if stage != 2 or window or qualified_entry: raise ValueError('Win32 entry outside bounded pre-window stage')
+            sequence, mask, matched, access, inherit = map(int, match.groups())
+            if sequence != entry_count + 1 or sequence > 32 or (matched and not mask): raise ValueError('Win32 entry sequence/readability invalid')
+            if matched and not (access and inherit): raise ValueError('Matched Win32 entry violates original interface')
+            entry_count = sequence
+            qualified_entry = bool(matched and access and inherit)
+        elif (match := PREWINDOW_ENTRY.fullmatch(line)):
+            if stage != 2 or window or qualified_entry: raise ValueError('Native pre-window entry outside bounded stage')
+            sequence = int(match.group(1))
+            if sequence != entry_count + 1 or sequence > 32: raise ValueError('Pre-window entry sequence invalid')
+            entry_count = sequence
         elif line == END:
             if stage != 3 or winreturn is None: raise ValueError('End lacks qualified Win32 return')
             stage = 4

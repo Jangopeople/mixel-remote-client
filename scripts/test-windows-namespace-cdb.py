@@ -33,7 +33,7 @@ for name, data in files.items():
 for index in range(1,4):
     name=f'winmatch-{index:02d}.txt'
     require(name in files and ('$$><'+r'D:\a\_temp\mixel-ns-trace-control'+'\\'+name) in files['winentry.txt'],'Win32 comparison helper not consumed')
-    require('r $t15 = 1' in files[name] and '$vvalid(@$t9,' in files[name],'Win32 helper lost bounded exact match')
+    require('r $t15 = 1' in files[name] and '$vvalid(@$t9,' in files[name] and f'r $t5 = @$t5 | 0n{1 << (index-1)}' in files[name],'Win32 helper lost bounded exact match/readability bit')
     require(not re.search(r'(?i)\b(?:g|gc|gh|gn|qd|ba|bc|bd|be)\b|MIXEL_NAMESPACE_',files[name]),'Win32 helper changed execution/marker scope')
 for kind in range(1,13):
     name=f'pathmatch-{kind:02d}.txt'
@@ -58,6 +58,13 @@ require('@rsp != @$t12+0n8' in files['return.txt'],'Native return stack scope mi
 require('@rsp != @$t14+0n8' in files['winreturn.txt'],'Win32 return stack scope missing')
 require('bc *\nqd' in files['winreturn.txt'],'Normal exact window completion fails to detach')
 require('@$t0 >= 0n32' in files['entry.txt'],'Record bound missing')
+require('r $t4 = 0' in files['start.txt'] and 'r $t5 = 0' in files['start.txt'],'Shared entry sequence/readability reset missing')
+for name in ['winentry.txt','entry.txt']:
+    require('@$t4 >= 0n32' in files[name] and 'MIXEL_NAMESPACE_TRACE_FAIL_ENTRY_LIMIT' in files[name],'Shared32-entry bound missing')
+    require(files[name].count('r $t4 = @$t4 + 1')==1,'Entry sequence increment is not exact once')
+    require(files[name].index('TRACE_FAIL_SCOPE') < files[name].index('r $t4 = @$t4 + 1'),'Entry marker precedes exact retained PID/TID scope')
+require(files['winentry.txt'].index('MIXEL_NAMESPACE_WIN32_ENTRY') < files['winentry.txt'].index('.if (@$t15 != 0) {'),'Win32 entry diagnostic is after leaf filter')
+require(files['entry.txt'].index('.if (@$t16 == 0) {') < files['entry.txt'].index('MIXEL_NAMESPACE_PREWINDOW_ENTRY') < files['entry.txt'].index('.if (@$t16 == 1) {'),'Native pre-window marker captures inside actual window')
 require('@ecx != 0x00100000' in files['winentry.txt'] and '@edx != 0' in files['winentry.txt'],'Original interface not observed exactly')
 require(files['return.txt'].count('\\n')==1, 'Native scalar output newline escaped incorrectly')
 for value in [0,-1,0x100000000,None,True,'101']:
@@ -69,7 +76,12 @@ for event in ['',leaf+'x',leaf+'\\secret','Global\\'+leaf,'Local\\'+leaf,leaf.up
 for folder in ['',r'\\host\share',r'C:\..\owned',r'C:\owned\..',r'C:\owned path',r'C:\owned%path',r'C:\owned;echo',r'C:\owned"path',r'C:\owned&path','C:\\owned\npath','C:\\owned\\']:
     rejects(lambda folder=folder:module.commands(101,202,2,leaf,folder),'Ambiguous command folder accepted')
 
-prefix = '\n'.join([module.BINDINGS,module.READY,'MIXEL_NAMESPACE_TRACE_WINDOW'])+'\n'
+def win_entry(sequence=1,mask=7,matched=1,access=1,inherit=1):
+    return f'MIXEL_NAMESPACE_WIN32_ENTRY sequence={sequence} leafValidMask={mask} leafMatched={matched} accessMatched={access} inheritFalse={inherit}'
+def pre_entry(sequence=1,api=1):
+    return f'MIXEL_NAMESPACE_PREWINDOW_ENTRY sequence={sequence} api={api}'
+ready_prefix='\n'.join([module.BINDINGS,module.READY])+'\n'
+prefix = ready_prefix+win_entry()+'\nMIXEL_NAMESPACE_TRACE_WINDOW\n'
 def record(sequence=1,api=1,access='0000000f',root=0,kind=4,status='c0000022',handle=0,qualified=1):
     return f'MIXEL_NAMESPACE_NATIVE seq={sequence} api={api} access=0x{access} rootNonNull={root} pathKind={kind} ntstatus=0x{status} handleNonNull={handle} scopeQualified={qualified}'
 suffix='MIXEL_NAMESPACE_WIN32 handleNonNull=0 scopeQualified=1\n'+module.END+'\n'
@@ -104,5 +116,63 @@ require(module.parse_trace('0:000> .echo MIXEL_NAMESPACE_TRACE_END\n'+valid)['na
 for status in ['00000000','00000001','7fffffff','80000000','c0000005','ffffffff']:
     require(module.parse_trace(prefix+record(status=status)+'\n'+suffix)['records'][0]['nativeStatus']==int(status,16),'Raw32-bit NTSTATUS changed')
 
-print(f'PASS: {checks} pure generator/parser controls; 4 hardware slots, exact Win32 GUID window, same-thread/RSP-qualified returns, 32-record bound, native values unchanged')
+# Read exact generated comparisons; simulate only the bounded target-read boundary.
+# This checks actual UTF-16 literals, terminating-null offset, readability bits,
+# and marker ordering. It does not execute CDB or assert native breakpoint hits.
+spellings=['Global\\'+leaf,'Local\\'+leaf,leaf]
+comparisons=[]
+for index,spelling in enumerate(spellings,1):
+    text=files[f'winmatch-{index:02d}.txt']
+    span=int(re.search(r'\$vvalid\(@\$t9,0n([0-9]+)\)',text).group(1))
+    bit=int(re.search(r'r \$t5 = @\$t5 \| 0n([0-9]+);',text).group(1))
+    units=[(int(offset),int(value,16)) for offset,value in re.findall(r'\(wo\(@\$t9\+0n([0-9]+)\) == 0x([0-9a-f]{4})\)',text)]
+    nul=int(re.search(r'\(wo\(@\$t9\+0n([0-9]+)\) == 0\)',text).group(1))
+    require(span==len(spelling.encode('utf-16-le'))+2 and nul==span-2 and bit==1 << (index-1),'Generated comparison span/null/bit differs from exact spelling')
+    require(units==[(2*i,ord(char)) for i,char in enumerate(spelling)],'Generated UTF-16 filter lost exact source GUID correlation')
+    comparisons.append((span,bit,units,nul))
+def observe_name(name,valid_bytes):
+    data=(name+'\0').encode('utf-16-le');mask=0;matched=False
+    for span,bit,units,nul in comparisons:
+        if span>valid_bytes: continue
+        mask |= bit
+        # Readable backing beyond the string is simulated zero-filled, as a
+        # valid allocation does not imply exact string length.
+        buffer=data+b'\0'*max(0,span-len(data))
+        matched |= all(int.from_bytes(buffer[offset:offset+2],'little')==value for offset,value in units) and buffer[nul:nul+2]==b'\0\0'
+    return mask,bool(matched)
+for spelling in spellings:
+    require(observe_name(spelling,512)==(7,True),'An exact readable supported spelling misses the generated filter')
+    require(observe_name(spelling,0)==(0,False),'Invalid target buffer is read/matched')
+    for span in sorted(set(item[0] for item in comparisons)):
+        mask,matched=observe_name(spelling,span-1)
+        require(mask==sum(bit for size,bit,_,_ in comparisons if size<=span-1),'Unreadable comparison span contributes a mask bit')
+        require(matched==(len((spelling+'\0').encode('utf-16-le'))<=span-1),'Bounded shorter memory matched an unreadable exact spelling')
+for name in [leaf.upper(),spellings[0]+'x',spellings[0].replace('Global','global'),leaf[:-1],leaf.replace('0','1',1),'Other-'+leaf,spellings[0]+'\0x']:
+    mask,matched=observe_name(name,512)
+    require(mask==7 and matched==(name==spellings[0]+'\0x'),'Exact filter accepts a different GUID/prefix/case/termination')
+
+for size in [1,2,31,32]:
+    entries=[pre_entry(i,1+(i%2)) for i in range(1,size)] + [win_entry(size)]
+    raw=ready_prefix+'\n'.join(entries)+'\nMIXEL_NAMESPACE_TRACE_WINDOW\n'+record()+'\n'+suffix
+    require(module.parse_trace(raw)==result,'Bounded source-only diagnostics altered actual capture result schema/values')
+for mask in range(8):
+    for access in [0,1]:
+        for inherit in [0,1]:
+            raw=ready_prefix+win_entry(mask=mask,matched=0,access=access,inherit=inherit)+'\n'+win_entry(2)+'\nMIXEL_NAMESPACE_TRACE_WINDOW\n'+suffix
+            require(module.parse_trace(raw)['completedQualifiedSourceWindow'],'Unmatched bounded entry wrongly changed later exact window')
+for mask in range(1,8):
+    require(module.parse_trace(valid.replace(win_entry(),win_entry(mask=mask)))==result,'Readable matched mask changed real native record')
+for bad in [win_entry(sequence=0),win_entry(sequence=-1),win_entry(sequence=2),win_entry(sequence=33),win_entry(sequence='01'),win_entry(mask=8),win_entry(mask=-1),win_entry(mask=0),win_entry(matched=2),win_entry(access=2),win_entry(inherit=2),win_entry(access=0),win_entry(inherit=0),win_entry()+' extra=secret',pre_entry(api=0),pre_entry(api=3),pre_entry(sequence=0),pre_entry(sequence=33),'MIXEL_NAMESPACE_WIN32_ENTRY sequence=1 leafMatched=1']:
+    rejects(lambda bad=bad:module.parse_trace(valid.replace(win_entry(),bad)),'Malformed/scalar/out-of-order diagnostic accepted')
+rejects(lambda:module.parse_trace(valid.replace(win_entry()+'\n','')),'Window qualified without its exact entry marker')
+rejects(lambda:module.parse_trace(ready_prefix+win_entry()+'\n'+pre_entry(2)+'\nMIXEL_NAMESPACE_TRACE_WINDOW\n'+suffix),'Matched entry was not immediately followed by its window')
+rejects(lambda:module.parse_trace(ready_prefix+'\n'.join(pre_entry(i) for i in range(1,33))+'\n'+win_entry(33)+'\nMIXEL_NAMESPACE_TRACE_WINDOW\n'+suffix),'Shared diagnostic bound admits33total entries')
+for entry in [win_entry(matched=0),pre_entry()]:
+    rejects(lambda entry=entry:module.parse_trace(entry+'\n'+valid),'Diagnostic accepted before bindings/readiness')
+    rejects(lambda entry=entry:module.parse_trace(valid+entry+'\n'),'Diagnostic accepted after END')
+    rejects(lambda entry=entry:module.parse_trace(valid.replace(record(),entry+'\n'+record())),'Diagnostic accepted inside actual native window')
+    rejects(lambda entry=entry:module.parse_trace(ready_prefix+entry+'\n'),'Partial/no-window diagnostics qualified source completion')
+rejects(lambda:module.parse_trace(valid+'MIXEL_NAMESPACE_TRACE_FAIL_ENTRY_LIMIT\n'),'Overflow marker ignored')
+
+print(f'PASS: {checks} pure generator/parser controls; 4 hardware slots, exact Win32 GUID window, same-thread/RSP-qualified returns, shared32-entry diagnostics and32-record bound, native values unchanged')
 print('Scope: no actual Windows/CDB execution or signed/runtime/customer-Accept qualification')

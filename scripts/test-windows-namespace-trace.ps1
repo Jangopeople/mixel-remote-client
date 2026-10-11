@@ -527,6 +527,34 @@ function Get-TraceExecutionFacts([int]$ChildPid,[string]$AttemptRoot,[bool]$Resu
   }
   return [pscustomobject]$facts
 }
+function Get-TraceEntryFacts([string]$Text) {
+  $facts=[ordered]@{markerSchemaValid=$true;completeMarkerCount=0;win32EntryCount=0;nativeDirectoryPreWindowCount=0;nativeEventPreWindowCount=0;entryLimitFailure=$false;entries=@()}
+  if ([Text.Encoding]::UTF8.GetByteCount($Text) -gt 1048576) {$facts.markerSchemaValid=$false;return [pscustomobject]$facts}
+  $end=$Text.LastIndexOf("`n");$complete=if($end -ge 0){$Text.Substring(0,$end+1)}else{''}
+  $ready=$false;$window=$false;$qualified=$false;$qualifiedInterface=$false;$items=[Collections.Generic.List[object]]::new()
+  foreach ($line in @($complete -split '\r?\n' | ForEach-Object {$_.Trim()})) {
+    if ($line -ceq 'MIXEL_NAMESPACE_TRACE_READY') {if($ready){$facts.markerSchemaValid=$false;break};$ready=$true;continue}
+    if ($line -ceq 'MIXEL_NAMESPACE_TRACE_WINDOW') {if(-not $ready -or $window -or -not $qualifiedInterface){$facts.markerSchemaValid=$false;break};$window=$true;continue}
+    if ($line -ceq 'MIXEL_NAMESPACE_TRACE_FAIL_ENTRY_LIMIT') {$facts.entryLimitFailure=$true;continue}
+    if ($line -cnotmatch '\AMIXEL_NAMESPACE_(?:WIN32_ENTRY|PREWINDOW_ENTRY)') {continue}
+    if (-not $ready -or $window -or $qualified -or $items.Count -ge 32) {$facts.markerSchemaValid=$false;break}
+    if ($line -cmatch '\AMIXEL_NAMESPACE_WIN32_ENTRY sequence=([1-9][0-9]?) leafValidMask=([0-7]) leafMatched=([01]) accessMatched=([01]) inheritFalse=([01])\z') {
+      $sequence=[int]$Matches[1];$mask=[int]$Matches[2];$matched=$Matches[3] -ceq '1';$access=$Matches[4] -ceq '1';$inherit=$Matches[5] -ceq '1'
+      if ($sequence -ne $items.Count+1 -or $sequence -gt 32 -or ($matched -and $mask -eq 0)) {$facts.markerSchemaValid=$false;break}
+      $items.Add([pscustomobject]@{kind='win32';sequence=$sequence;leafValidMask=$mask;leafMatched=$matched;accessMatched=$access;inheritFalse=$inherit})
+      $facts.win32EntryCount++;$qualified=$matched;$qualifiedInterface=$matched -and $access -and $inherit
+    } elseif ($line -cmatch '\AMIXEL_NAMESPACE_PREWINDOW_ENTRY sequence=([1-9][0-9]?) api=([12])\z') {
+      $sequence=[int]$Matches[1];$api=[int]$Matches[2]
+      if ($sequence -ne $items.Count+1 -or $sequence -gt 32) {$facts.markerSchemaValid=$false;break}
+      $items.Add([pscustomobject]@{kind='native-prewindow';sequence=$sequence;api=$api})
+      if($api -eq 1){$facts.nativeDirectoryPreWindowCount++}else{$facts.nativeEventPreWindowCount++}
+    } else {$facts.markerSchemaValid=$false;break}
+  }
+  # Malformed diagnostics never leak a partially accepted or arbitrary marker.
+  if ($facts.markerSchemaValid) {$facts.completeMarkerCount=$items.Count;$facts.entries=$items.ToArray()}
+  else {$facts.win32EntryCount=0;$facts.nativeDirectoryPreWindowCount=0;$facts.nativeEventPreWindowCount=0}
+  return [pscustomobject]$facts
+}
 function Get-TraceFailureFacts($Live,[ValidateSet('export','identity','commands','startup','resume','trace','parse','result','ack','cleanup')][string]$Phase,[bool]$TimedOut,$Execution=$null) {
   $text='';$stderr='';$readFailed=$false;$stdoutBytes=0L;$stderrBytes=0L
   if ($Live) {
@@ -550,6 +578,7 @@ function Get-TraceFailureFacts($Live,[ValidateSet('export','identity','commands'
     hardwareLimitFailure=[bool]($combined -match '(?i)(no hardware breakpoint|hardware breakpoint limit)')
     scopeFailure=[bool]($complete -match '(?m)^MIXEL_NAMESPACE_TRACE_FAIL_(?:SCOPE|PID|ARCH|WINDOW_NESTED|WIN32_INTERFACE)\r?$')
     returnFailure=[bool]($complete -match '(?m)^MIXEL_NAMESPACE_TRACE_FAIL_(?:RETURN_SCOPE|RETURN_HANDLE|WIN32_RETURN_SCOPE)\r?$')
+    entryDiagnostics=Get-TraceEntryFacts $text
     debuggerStop=Get-TraceCdbStopFacts $text
     execution=$Execution
   }
