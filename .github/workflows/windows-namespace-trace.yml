@@ -2,6 +2,12 @@ name: windows-namespace-trace
 
 on:
   workflow_dispatch:
+    inputs:
+      attach_after_main_barrier:
+        description: 'Separate source-only attach-after-main-barrier experiment; no customer release qualification'
+        type: boolean
+        required: false
+        default: false
   push:
     branches: ['codex/**']
     paths:
@@ -55,7 +61,13 @@ jobs:
           }
       - name: Observe exact owned standard-account Win32 calls
         shell: pwsh
+        env:
+          MIXEL_ATTACH_AFTER_MAIN_BARRIER: ${{ inputs.attach_after_main_barrier }}
         run: |
           # This job produces source-only debugger evidence and no artifacts.
           # Original full source and debugger-free signed customer95 gates remain required.
-          ./scripts/test-windows-namespace-trace.ps1
+          if ($env:MIXEL_ATTACH_AFTER_MAIN_BARRIER -ceq 'true') {
+            ./scripts/test-windows-namespace-trace.ps1 -AttachAfterMainBarrier
+          } else {
+            ./scripts/test-windows-namespace-trace.ps1
+          }

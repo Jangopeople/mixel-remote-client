@@ -1,5 +1,7 @@
 # Source-only hardware trace. Never a signed product/customer-Accept release gate.
 # Run as its own PowerShell process in the existing isolated x64 Windows CI job.
+param([switch]$AttachAfterMainBarrier)
+
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 if (-not $IsWindows -or $env:GITHUB_ACTIONS -cne 'true' -or [IntPtr]::Size -ne 8) {
@@ -45,6 +47,55 @@ $traceBridge = @'
   }
 '@
 $normalSource=$normalSource.Insert($normalSource.IndexOf($marker),$traceBridge+"`n")
+# Only the opt-in post-main experiment adds a live observation boundary.
+# The ordinary suspended helper and its native resume remain unchanged.
+$traceMainBridge = @'
+  [DllImport("kernel32.dll", SetLastError=true)] static extern IntPtr OpenThread(uint access,bool inherit,uint tid);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern uint GetProcessIdOfThread(IntPtr thread);
+  public static System.Collections.Generic.Dictionary<string,string> TraceLiveOwnedIdentity(int pid,uint tid,string executable) {
+    IntPtr process,thread=IntPtr.Zero,token=IntPtr.Zero,integrity=IntPtr.Zero;
+    if(tid==0 || !StartedProcesses.TryGetValue(pid,out process) || SuspendedThreads.ContainsKey(pid) || WaitForSingleObject(process,0)!=0x102 || GetProcessId(process)!=checked((uint)pid))
+      throw new InvalidOperationException("Live trace requires the retained resumed owned process");
+    Exception failure=null;
+    try {
+      thread=OpenThread(0x100800U,false,tid); // QUERY_LIMITED_INFORMATION | SYNCHRONIZE only.
+      if(thread==IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
+      uint actualTid=GetThreadId(thread);if(actualTid==0)throw new Win32Exception(Marshal.GetLastWin32Error());
+      uint owner=GetProcessIdOfThread(thread);if(owner==0)throw new Win32Exception(Marshal.GetLastWin32Error());
+      if(actualTid!=tid || owner!=checked((uint)pid) || WaitForSingleObject(thread,0)!=0x102) throw new InvalidOperationException("Live trace primary thread ownership or lifetime changed");
+      ushort machine,native;
+      if(!IsWow64Process2(process,out machine,out native)) throw new Win32Exception(Marshal.GetLastWin32Error());
+      if(machine!=0 || native!=0x8664) throw new InvalidOperationException("Live trace requires the actual native x64 process");
+      var image=new StringBuilder(32768);uint length=(uint)image.Capacity;
+      if(!QueryFullProcessImageNameW(process,0,image,ref length))throw new Win32Exception(Marshal.GetLastWin32Error());
+      if(!string.Equals(System.IO.Path.GetFullPath(image.ToString()),System.IO.Path.GetFullPath(executable),StringComparison.OrdinalIgnoreCase))throw new InvalidOperationException("Live trace image differs from its qualified executable");
+      if(!OpenProcessToken(process,8,out token))throw new Win32Exception(Marshal.GetLastWin32Error());
+      var result=new System.Collections.Generic.Dictionary<string,string>();
+      result.Add("kernelPid",GetProcessId(process).ToString());result.Add("kernelTid",actualTid.ToString());
+      using(var identity=new WindowsIdentity(token)){result.Add("sid",identity.User.Value);}
+      result.Add("elevated",ElevatedToken(token).ToString());
+      IntPtr session=Marshal.AllocHGlobal(4);
+      try {int required;if(!GetTokenInformation(token,12,session,4,out required) || required!=4)throw new Win32Exception(Marshal.GetLastWin32Error());result.Add("sessionId",Marshal.ReadInt32(session).ToString());}
+      finally {Marshal.FreeHGlobal(session);}
+      int size;GetTokenInformation(token,25,IntPtr.Zero,0,out size);
+      if(size<IntPtr.Size+4 || size>65536)throw new InvalidOperationException("Live trace integrity metadata exceeded its bound");
+      integrity=Marshal.AllocHGlobal(size);int actual;
+      if(!GetTokenInformation(token,25,integrity,size,out actual))throw new Win32Exception(Marshal.GetLastWin32Error());
+      if(actual<IntPtr.Size+4 || actual>size)throw new InvalidOperationException("Live trace integrity read exceeded its bound");
+      var label=new SecurityIdentifier(Marshal.ReadIntPtr(integrity));result.Add("integritySid",label.Value);
+      if(WaitForSingleObject(process,0)!=0x102 || WaitForSingleObject(thread,0)!=0x102 || GetProcessId(process)!=checked((uint)pid))throw new InvalidOperationException("Live trace identity expired during observation");
+      return result;
+    } catch(Exception error){failure=error;throw;}
+    finally {
+      if(integrity!=IntPtr.Zero)Marshal.FreeHGlobal(integrity);
+      var errors=new System.Collections.Generic.List<Exception>();
+      if(token!=IntPtr.Zero && !CloseHandle(token))errors.Add(new Win32Exception(Marshal.GetLastWin32Error()));
+      if(thread!=IntPtr.Zero && !CloseHandle(thread))errors.Add(new Win32Exception(Marshal.GetLastWin32Error()));
+      if(errors.Count>0){if(failure!=null)errors.Insert(0,failure);throw new AggregateException("Live trace observation handle cleanup failed",errors);}
+    }
+  }
+'@
+if($AttachAfterMainBarrier){$normalSource=$normalSource.Insert($normalSource.IndexOf($marker),$traceMainBridge+"`n")}
 Add-Type -TypeDefinition $normalSource -CompilerOptions '/warnaserror'
 if (-not [MixelOrdinaryTokenFixture]::Elevated($PID)) { throw 'Source namespace tracing requires the elevated isolated runner.' }
 
@@ -1191,11 +1242,13 @@ function Get-TraceFailureFacts($Live,[ValidateSet('export','identity','commands'
     execution=$Execution
   }
 }
-function New-TraceGatedSource([string]$Source,[string]$Gate,[string]$Nonce,[string]$Private,[bool]$Gated=$true) {
+function New-TraceGatedSource([string]$Source,[string]$Gate,[string]$Nonce,[string]$Private,[bool]$Gated=$true,[bool]$AfterMainBarrier=$false) {
   Assert-TracePlainPath $Source
   Assert-TracePlainPath $Gate -AllowMissing
   $arguments=@((Join-Path $PSScriptRoot 'windows_namespace_probe.py'),'--source',$Source,'--gate',$Gate,'--nonce',$Nonce)
+  if($AfterMainBarrier -and -not $Gated){throw 'Post-main source generation requires the separate private gate.'}
   if($Gated){$arguments+='--gated'}
+  if($AfterMainBarrier){$arguments+='--attach-after-main-barrier'}
   $qualified=(Invoke-TracePython $arguments $Private 'probe-compile' 100).Trim()
   if([Text.Encoding]::UTF8.GetByteCount($qualified) -gt 256 -or $qualified -cnotmatch '\A\{"probeRva":([1-9][0-9]{0,8}),"imageSize":([1-9][0-9]{0,8}),"exeSHA256":"([0-9a-f]{64})"\}\z'){throw 'Private PE qualification bridge is invalid.'}
   $rva=[long]$Matches[1];$image=[long]$Matches[2];$hash=$Matches[3]
@@ -1221,6 +1274,44 @@ function Read-TraceProbeProof([string]$Path) {
   return [pscustomobject]@{pid=$pidValue;tid=$tidValue;probeRva=$rva}
 }
 
+function Read-TraceMainBarrierProof([string]$Path) {
+  Assert-TracePlainPath $Path
+  $text=[MixelNamespaceTraceIO]::ReadBounded($Path,192)
+  if($text -cnotmatch '\A\{"pid":([1-9][0-9]{0,9}),"tid":([1-9][0-9]{0,9}),"barrierNonce":"([0-9a-f]{64})"\}\z'){throw 'Private main barrier witness is not the exact canonical schema.'}
+  $pidValue=[long]$Matches[1];$tidValue=[long]$Matches[2];$nonceValue=$Matches[3]
+  if($pidValue -gt 4294967295 -or $tidValue -gt 4294967295){throw 'Private main barrier witness exceeded its DWORD domain.'}
+  return [pscustomobject]@{pid=$pidValue;tid=$tidValue;barrierNonce=$nonceValue}
+}
+function Assert-TraceMainBarrier([int]$ChildPid,[uint32]$Thread,[string]$AttemptRoot,[string]$Gate,[string]$Nonce,[string]$Source,[string]$SourceHash,[string]$Exe,[string]$ExeHash) {
+  if($ChildPid -le 0 -or $Thread -eq 0 -or $Nonce -cnotmatch '\A[0-9a-f]{64}\z' -or $SourceHash -cnotmatch '\A[0-9A-F]{64}\z' -or $ExeHash -cnotmatch '\A[0-9A-F]{64}\z'){throw 'Private main barrier identities are invalid.'}
+  foreach($path in @($Gate,($Gate+'.new')) + @('fixture-result.json','fixture-result.new','fixture-namespace.json','fixture-namespace.new','fixture-hwcontrol.json','fixture-hwcontrol.new')|ForEach-Object{if($_ -cin @($Gate,($Gate+'.new'))){$_}else{Join-Path $AttemptRoot $_}}){
+    Assert-TracePlainPath $path -AllowMissing
+    if(Test-Path -LiteralPath $path){throw 'Private main barrier requires an unreleased gate and no original outputs.'}
+  }
+  Assert-TracePlainPath $Source;Assert-TracePlainPath $Exe
+  if((Get-FileHash $Source -Algorithm SHA256).Hash -cne $SourceHash -or (Get-FileHash $Exe -Algorithm SHA256).Hash -cne $ExeHash){throw 'Private main barrier source or executable identity changed.'}
+  $identity=[MixelOrdinaryTokenFixture]::TraceLiveOwnedIdentity($ChildPid,$Thread,$Exe)
+  if($identity['kernelPid'] -cne [string]$ChildPid -or $identity['kernelTid'] -cne [string]$Thread -or $identity['sid'] -cne $script:ownedSid -or $identity['elevated'] -cne 'False' -or $identity['sessionId'] -cne [string]$script:session -or $identity['integritySid'] -cne 'S-1-16-8192'){throw 'Private main barrier retained live identity failed.'}
+  $proof=Read-TraceMainBarrierProof (Join-Path $AttemptRoot 'fixture-main-barrier.json')
+  if($proof.pid -ne $ChildPid -or $proof.tid -ne $Thread -or $proof.barrierNonce -cne $Nonce){throw 'Private main barrier witness disagrees with its fresh retained process/thread/nonce.'}
+}
+function Enter-TraceMainBarrier([int]$ChildPid,[uint32]$Thread,[string]$AttemptRoot,[string]$Gate,[string]$Nonce,[string]$Source,[string]$SourceHash,[string]$Exe,[string]$ExeHash) {
+  foreach($path in @($Gate,($Gate+'.new')) + @('fixture-main-barrier.json','fixture-main-barrier.new','fixture-result.json','fixture-result.new','fixture-namespace.json','fixture-namespace.new','fixture-hwcontrol.json','fixture-hwcontrol.new')|ForEach-Object{if($_ -cin @($Gate,($Gate+'.new'))){$_}else{Join-Path $AttemptRoot $_}}){
+    Assert-TracePlainPath $path -AllowMissing
+    if(Test-Path -LiteralPath $path){throw 'Private main barrier attempt was not fresh before its sole resume.'}
+  }
+  if([MixelOrdinaryTokenFixture]::ActualOwnedDebuggerAttached($ChildPid)){throw 'Private main barrier may not resume an already attached process.'}
+  $previous=[MixelOrdinaryTokenFixture]::ResumeOwnedPrimaryThread($ChildPid)
+  if($previous -ne 1){throw 'Private main barrier requires exactly one previous owned primary suspension.'}
+  $path=Join-Path $AttemptRoot 'fixture-main-barrier.json';$deadline=[DateTime]::UtcNow.AddSeconds(20)
+  while(-not(Test-Path -LiteralPath $path) -and [DateTime]::UtcNow -lt $deadline){
+    if([MixelOrdinaryTokenFixture]::StartedStatus($ChildPid) -cne 'still-running'){throw 'Private main barrier child exited before its witness.'}
+    Start-Sleep -Milliseconds 50
+  }
+  Assert-TraceMainBarrier $ChildPid $Thread $AttemptRoot $Gate $Nonce $Source $SourceHash $Exe $ExeHash
+  return $previous
+}
+
 function Assert-TraceParsedResult($Trace,$Record) {
   $names=@($Trace.PSObject.Properties.Name | Sort-Object)
   if (($names -join ',') -cne 'completedQualifiedSourceWindow,evidenceScope,nativeCallCount,records,win32HandleNonNull' -or
@@ -1242,7 +1333,8 @@ function Assert-TraceParsedResult($Trace,$Record) {
     }
   }
 }
-function Invoke-TraceAttempt([ValidateSet('absent','world')][string]$Scenario,[switch]$Gated) {
+function Invoke-TraceAttempt([ValidateSet('absent','world')][string]$Scenario,[switch]$Gated,[switch]$AfterMainBarrier) {
+  if($AfterMainBarrier -and (-not $Gated -or -not $AttachAfterMainBarrier)){throw 'Post-main attachment requires the explicitly selected separate gated experiment.'}
   $attemptRoot=Join-Path $script:fixtureRoot ([Guid]::NewGuid().ToString('N'))
   $private=Join-Path $script:privateRoot ([Guid]::NewGuid().ToString('N'))
   Assert-TracePlainPath $attemptRoot -AllowMissing;Assert-TracePlainPath $private -AllowMissing
@@ -1257,7 +1349,7 @@ function Invoke-TraceAttempt([ValidateSet('absent','world')][string]$Scenario,[s
     [void](Invoke-TracePython @((Join-Path $PSScriptRoot 'test-support-lease.py'),'--export-standard-windows-fixture',$attemptRoot,'--event',('Global\'+$event)) $private 'source-export' 100)
     Assert-TracePlainPath $source;Assert-TracePlainPath $exe
     $originalHash=(Get-FileHash $source -Algorithm SHA256).Hash
-    $qualifiedPe=New-TraceGatedSource $source $gate $nonce $private ([bool]$Gated)
+    $qualifiedPe=New-TraceGatedSource $source $gate $nonce $private ([bool]$Gated) ([bool]$AfterMainBarrier)
     $expectedProbeRva=$qualifiedPe.probeRva;$expectedImageSize=$qualifiedPe.imageSize
     $diagnosticHash=(Get-FileHash $source -Algorithm SHA256).Hash;$exeHash=(Get-FileHash $exe -Algorithm SHA256).Hash
     if ($originalHash -ceq $diagnosticHash) { throw 'Private timing-gate source hash binding is invalid.' }
@@ -1275,10 +1367,19 @@ function Invoke-TraceAttempt([ValidateSet('absent','world')][string]$Scenario,[s
     if ($identity['kernelPid'] -cne [string]$childPid -or $identity['sid'] -cne $script:ownedSid -or $identity['elevated'] -cne 'False' -or
         $identity['sessionId'] -cne [string]$script:session -or $identity['integritySid'] -cne 'S-1-16-8192' -or
         (Get-FileHash $exe -Algorithm SHA256).Hash -cne $exeHash) { throw 'Retained trace PID/SID/session/medium/non-elevated/image qualification failed.' }
+    if($AfterMainBarrier){
+      $phase='resume';$resumeAttempted=$true
+      $previous=Enter-TraceMainBarrier $childPid ([uint32]$thread) $attemptRoot $gate $nonce $source $diagnosticHash $exe $exeHash
+      $resumed=$true
+    }
     $phase='commands'
     [void](Invoke-TracePython @((Join-Path $PSScriptRoot 'windows-namespace-cdb.py'),'--pid',[string]$childPid,'--tid',[string]$thread,'--session',[string]$script:session,'--event',$event,'--windows-folder',$private,'--output',$private,'--binary',$exe,'--exe-sha256',$exeHash,'--engine-dll',$engine.path,'--engine-sha256',$engine.dllSHA256) $private 'commands')
     $arguments=@('-p',[string]$childPid,'-pd','-noshell','-nosqm','-cf',(Join-Path $private 'start.txt'))
     if ($Gated) { $arguments=@('-p',[string]$childPid,'-pr','-pb','-pd','-noshell','-nosqm','-cf',(Join-Path $private 'start.txt')) }
+    if($AfterMainBarrier){
+      Assert-TraceMainBarrier $childPid ([uint32]$thread) $attemptRoot $gate $nonce $source $diagnosticHash $exe $exeHash
+      $arguments=@('-p',[string]$childPid,'-pb','-pd','-noshell','-nosqm','-cf',(Join-Path $private 'start.txt'))
+    }
     $live=Start-TraceProcess $script:cdb $arguments $private 'cdb' $childPid
     $live|Add-Member -NotePropertyName expectedControlCommand -NotePropertyValue ('"$$><'+(Join-Path $private 'hwcontrol.txt')+'"')
     $live|Add-Member -NotePropertyName expectedThreadId -NotePropertyValue ([uint32]$thread)
@@ -1306,6 +1407,7 @@ function Invoke-TraceAttempt([ValidateSet('absent','world')][string]$Scenario,[s
       $fallbackResult=[pscustomobject]@{StartupTimedOut=$true;GatedFallbackRequired=$true;FallbackReason='startup-timeout';AdditionalSuspensionDetected=$false;AdditionalPreviousSuspendCount=0L;OwnedCleanupVerified=$false}
       return $fallbackResult
     }
+    if(-not $AfterMainBarrier){
     $phase='resume'
     $resumeAttempted=$true
     try {$previous=[MixelOrdinaryTokenFixture]::ResumeOwnedPrimaryThread($childPid);$resumed=$true} catch {
@@ -1318,9 +1420,15 @@ function Invoke-TraceAttempt([ValidateSet('absent','world')][string]$Scenario,[s
       throw
     }
     if ((-not $Gated -and $previous -ne 1) -or ($Gated -and $previous -notin @(0,1))) { throw 'Trace did not perform the one qualified owned primary resume.' }
+    } else {
+      $engineState=Get-TraceEngineExecutionFacts ([MixelNamespaceTraceIO]::ReadBounded($live.outPath,1048576))
+      if(-not $engineState.schemaAvailable -or $engineState.statusAvailable -ne 1 -or $engineState.statusKind -ne 1 -or $previous -ne 1 -or -not $resumed){throw 'Post-main attachment lacks exact stopped engine readiness and its one prior resume.'}
+      Assert-TraceMainBarrier $childPid ([uint32]$thread) $attemptRoot $gate $nonce $source $diagnosticHash $exe $exeHash
+    }
     Send-TraceContinuation $live $childPid $ready $resumed $previous ([bool]$Gated)
     Write-Host ('OBSERVED: bounded source-only trace continuation queued; '+([pscustomobject]@{privateGate=[bool]$Gated;primaryResumePrevious=$previous;continuationAttempted=$live.continuationAttempted;continuationWritten=$live.continuationWritten;continuationQueued=$live.continuationQueued}|ConvertTo-Json -Compress))
     if ($Gated) {
+      if($AfterMainBarrier){Assert-TraceMainBarrier $childPid ([uint32]$thread) $attemptRoot $gate $nonce $source $diagnosticHash $exe $exeHash}
       $temporary=Join-Path $gateRoot 'ready.new';[IO.File]::WriteAllText($temporary,$nonce,[Text.UTF8Encoding]::new($false));[IO.File]::Move($temporary,$gate)
     }
     $phase='trace'
@@ -1353,9 +1461,12 @@ function Invoke-TraceAttempt([ValidateSet('absent','world')][string]$Scenario,[s
     while ([MixelOrdinaryTokenFixture]::StartedStatus($childPid) -ceq 'still-running' -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 50 }
     if ([MixelOrdinaryTokenFixture]::StartedStatus($childPid) -cne 'exited:0x00000000') { throw 'Retained source trace child acknowledgement/exit failed.' }
     $completed=$true
-    return [pscustomobject]@{StartupTimedOut=$false;GatedFallbackRequired=$false;Scenario=$Scenario;PrivateGate=[bool]$Gated;FirstCallQualified=$true;OriginalSourceSHA256=$originalHash;DiagnosticSourceSHA256=$diagnosticHash;DiagnosticExecutableSHA256=$exeHash;HardwareControlQualified=$true;SourceProbeThreadQualified=$true;OwnedIdentityQualified=$true;DebuggerDetached=$true;SingleResumeQualified=$true;SingleContinuationQualified=$live.continuationQueued;rawOpenError=$record.rawOpenError;Trace=$parsed}
+    $success=[pscustomobject]@{StartupTimedOut=$false;GatedFallbackRequired=$false;Scenario=$Scenario;PrivateGate=[bool]$Gated;FirstCallQualified=$true;OriginalSourceSHA256=$originalHash;DiagnosticSourceSHA256=$diagnosticHash;DiagnosticExecutableSHA256=$exeHash;HardwareControlQualified=$true;SourceProbeThreadQualified=$true;OwnedIdentityQualified=$true;DebuggerDetached=$true;SingleResumeQualified=$true;SingleContinuationQualified=$live.continuationQueued;rawOpenError=$record.rawOpenError;Trace=$parsed}
+    if($AfterMainBarrier){$success|Add-Member -NotePropertyName AttachAfterMainBarrier -NotePropertyValue $true}
+    return $success
   } catch {
     $attemptFailure=$_.Exception
+    if($AfterMainBarrier){Write-Host ('OBSERVED: separate source-only post-main attachment mode; '+([pscustomobject]@{attachAfterMainBarrier=$true;preAttachResumeAttempted=$resumeAttempted;preAttachResumeQualified=$resumed;preAttachPrevious=$previous;debuggerStarted=[bool]$live}|ConvertTo-Json -Compress))}
     Write-Host ('OBSERVED: bounded source-only trace failure facts; '+((Get-TraceFailureFacts $live $phase $timeout (Get-TraceExecutionFacts $childPid $attemptRoot $resumed $previous ([bool]$Gated) $live $resumeAttempted $additionalCount ([uint32]$thread) $expectedProbeRva $expectedImageSize)) | ConvertTo-Json -Depth 4 -Compress))
     throw
   } finally {
@@ -1418,10 +1529,14 @@ try {
   $namespaceAccess=[MixelCI.StandardNamespaceAccess]::new($ownedSid,$ownedUser,$session)
   foreach ($scenario in @('absent','world')) {
     $stage='trace-'+$scenario
+    if($AttachAfterMainBarrier){
+      $result=Invoke-TraceAttempt $scenario -Gated -AfterMainBarrier
+    } else {
     $result=Invoke-TraceAttempt $scenario
     if ($result.GatedFallbackRequired) {
       if(-not $result.OwnedCleanupVerified) {throw 'Fresh gated trace requires verified cleanup of the rejected original attempt.'}
       $result=Invoke-TraceAttempt $scenario -Gated
+    }
     }
     if ($result.GatedFallbackRequired -or $result.StartupTimedOut -or -not $result.FirstCallQualified) { throw 'Source trace lacks first-call qualification.' }
     # Only validated numeric observations/booleans and source digests go public.

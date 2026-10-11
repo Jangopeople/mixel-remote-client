@@ -13,11 +13,13 @@ PROBE = 'mixel_namespace_trace_hw_probe'
 MARKER = '        let status = support_invite_lease_status();\n        let raw_error = mixel_support_lease::fixture_raw_open_error();'
 CAPTURE = '        let proof = support_invite_attestation();'
 
-def diagnostic_source(source, gate, nonce, gated):
+def diagnostic_source(source, gate, nonce, gated, attach_after_main_barrier=False):
     if type(source) is not str or len(source.encode('utf-8')) > 1048576 or source.count(MARKER) != 1 or source.count(CAPTURE) != 1 or PROBE in source:
         raise ValueError('Exact private source extraction boundary changed')
     if type(gated) is not bool or not re.fullmatch('[0-9a-f]{64}', nonce) or not gate or any(c in gate for c in '\r\n\0'):
         raise ValueError('Private timing gate identity is invalid')
+    if type(attach_after_main_barrier) is not bool or (attach_after_main_barrier and not gated):
+        raise ValueError('Post-main attachment requires the separate gated diagnostic mode')
     barrier = ''
     if gated:
         barrier = '''        assert_eq!(mode, "probe", "Private trace barrier requires probe mode");
@@ -32,6 +34,20 @@ def diagnostic_source(source, gate, nonce, gated):
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
 '''.replace('GATE_LITERAL', json.dumps(gate)).replace('NONCE_LITERAL', json.dumps(nonce))
+        if attach_after_main_barrier:
+            # Separate private witness only; the original guard/error capture stays exact.
+            witness = '''        let trace_barrier_tid = {
+            #[link(name = "kernel32")]
+            extern "system" { fn GetCurrentThreadId() -> u32; }
+            unsafe { GetCurrentThreadId() }
+        };
+        let trace_barrier_proof = format!("{{\\"pid\\":{},\\"tid\\":{},\\"barrierNonce\\":\\"{}\\"}}", std::process::id(), trace_barrier_tid, NONCE_LITERAL);
+        let mut trace_barrier_file = std::fs::OpenOptions::new().write(true).create_new(true).open("fixture-main-barrier.new").unwrap();
+        std::io::Write::write_all(&mut trace_barrier_file, trace_barrier_proof.as_bytes()).unwrap();
+        drop(trace_barrier_file);
+        std::fs::rename("fixture-main-barrier.new", "fixture-main-barrier.json").unwrap();
+'''.replace('NONCE_LITERAL', json.dumps(nonce))
+            barrier = barrier.replace('        loop {\n', witness + '        loop {\n', 1)
     source = source.replace(MARKER, barrier + f'        let trace_probe_fn: extern \"C\" fn() -> u32 = std::hint::black_box({PROBE} as extern \"C\" fn() -> u32);\n        let trace_probe_tid = trace_probe_fn();\n' + MARKER, 1)
     # Supplemental file is written only after the unchanged immediate raw-error
     # capture. It never changes either original result or namespace schema.
@@ -144,12 +160,13 @@ def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--source',type=Path,required=True);parser.add_argument('--gate',required=True)
     parser.add_argument('--nonce',required=True);parser.add_argument('--gated',action='store_true')
+    parser.add_argument('--attach-after-main-barrier',action='store_true')
     args=parser.parse_args()
     if os.name != 'nt': raise ValueError('Private probe compilation requires actual Windows')
     from rust_toolchain import rustc_command
     if not args.source.is_absolute() or not args.source.is_file() or args.source.is_symlink() or args.source.suffix != '.rs' or args.source.stat().st_size > 1048576:
         raise ValueError('Private source file type/size/path invalid')
-    original=args.source.read_text(encoding='utf-8');result=diagnostic_source(original,args.gate,args.nonce,args.gated)
+    original=args.source.read_text(encoding='utf-8');result=diagnostic_source(original,args.gate,args.nonce,args.gated,args.attach_after_main_barrier)
     args.source.write_text(result,encoding='utf-8',newline='\n')
     compiler=os.environ.get('RUSTC_BIN') or shutil.which('rustc')
     if not compiler: raise ValueError('Qualified Rust compiler is missing')
