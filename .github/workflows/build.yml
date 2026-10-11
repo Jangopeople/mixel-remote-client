@@ -18,6 +18,11 @@ on:
         required: true
         type: boolean
         default: false
+      collect_windows_preflight_failure:
+        description: "Continue a failed Windows source preflight for unpublished diagnosis; the original failure still blocks release"
+        required: false
+        type: boolean
+        default: false
       runtime_windows_release_gate:
         description: "Debugger-free actual signed Windows QuickSupport95 gate (requires artifact run and publish=false)"
         required: false
@@ -52,7 +57,7 @@ jobs:
   # workflow_dispatch overrides it).
   # ===========================================================================
   config:
-    if: ${{ (github.event.inputs.runtime_artifact_run == '' && github.event.inputs.runtime_macos_artifact_run == '' && github.event.inputs.runtime_linux_artifact_run == '') || (inputs.runtime_windows_release_gate && inputs.runtime_artifact_run == '') }}
+    if: ${{ inputs.collect_windows_preflight_failure || (github.event.inputs.runtime_artifact_run == '' && github.event.inputs.runtime_macos_artifact_run == '' && github.event.inputs.runtime_linux_artifact_run == '') || (inputs.runtime_windows_release_gate && inputs.runtime_artifact_run == '') }}
     runs-on: ubuntu-22.04
     outputs:
       upstream_version: ${{ steps.ver.outputs.upstream_version }}
@@ -60,12 +65,25 @@ jobs:
       linux: ${{ steps.ver.outputs.linux }}
       macos: ${{ steps.ver.outputs.macos }}
       windows: ${{ steps.ver.outputs.windows }}
+      collect_windows_preflight_failure: ${{ steps.preflight_request.outputs.collect_windows_preflight_failure }}
     steps:
       - uses: actions/checkout@v5
       - name: Verify release staging and build configuration
         run: |
           python3 scripts/test-release-pipeline.py
           python3 scripts/test-notarize-macos.py
+          python3 scripts/test-windows-preflight-build.py
+      - id: preflight_request
+        name: Validate unpublished Windows preflight diagnostic request
+        env:
+          COLLECT_WINDOWS_PREFLIGHT_FAILURE: ${{ inputs.collect_windows_preflight_failure }}
+          INPUT_ONLY: ${{ inputs.only }}
+          PUBLISH_REQUESTED: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || inputs.publish_r2 }}
+          WINDOWS_RELEASE_GATE: ${{ inputs.runtime_windows_release_gate }}
+          RUNTIME_RUN_ID: ${{ inputs.runtime_artifact_run }}
+          RUNTIME_LINUX_RUN: ${{ inputs.runtime_linux_artifact_run }}
+          RUNTIME_MACOS_RUN: ${{ inputs.runtime_macos_artifact_run }}
+        run: python3 scripts/validate-windows-preflight-build.py request
       - name: Validate debugger-free Windows release gate request
         env:
           WINDOWS_RELEASE_GATE: ${{ inputs.runtime_windows_release_gate }}
@@ -739,6 +757,8 @@ jobs:
           if-no-files-found: ignore
 
       - name: Preflight generated support source and reporter
+        id: preflight
+        continue-on-error: ${{ needs.config.outputs.collect_windows_preflight_failure == 'true' }}
         shell: bash
         env:
           VCPKG_ROOT: ${{ github.workspace }}/vcpkg
@@ -886,6 +906,22 @@ jobs:
           path: ${{ runner.temp }}/mixel-owned-ordinary-qs-logs/**/*.log
           if-no-files-found: ignore
 
+      - name: Require the original Windows source preflight before customer artifact upload
+        if: ${{ always() && !cancelled() }}
+        shell: pwsh
+        env:
+          COLLECT_WINDOWS_PREFLIGHT_FAILURE: ${{ inputs.collect_windows_preflight_failure }}
+          INPUT_ONLY: ${{ inputs.only }}
+          PUBLISH_REQUESTED: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || inputs.publish_r2 }}
+          WINDOWS_RELEASE_GATE: ${{ inputs.runtime_windows_release_gate }}
+          RUNTIME_RUN_ID: ${{ inputs.runtime_artifact_run }}
+          RUNTIME_LINUX_RUN: ${{ inputs.runtime_linux_artifact_run }}
+          RUNTIME_MACOS_RUN: ${{ inputs.runtime_macos_artifact_run }}
+          SOURCE_PREFLIGHT_OUTCOME: ${{ steps.preflight.outcome }}
+        run: |
+          python scripts/validate-windows-preflight-build.py outcome
+          if ($LASTEXITCODE -ne 0) { throw 'Original Windows source preflight still blocks customer release.' }
+
       - uses: actions/upload-artifact@v6
         with:
           name: windows
@@ -903,7 +939,7 @@ jobs:
           (needs.macos.result == 'success' || needs.macos.result == 'skipped') &&
           (needs.windows.result == 'success' || needs.windows.result == 'skipped') &&
           ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
-           (github.event_name == 'workflow_dispatch' && inputs.publish_r2)) && !inputs.runtime_windows_release_gate }}
+           (github.event_name == 'workflow_dispatch' && inputs.publish_r2)) && !inputs.runtime_windows_release_gate && !inputs.collect_windows_preflight_failure }}
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     concurrency:
@@ -946,7 +982,7 @@ jobs:
           PY
 
   runtime:
-    if: ${{ github.event.inputs.runtime_artifact_run != '' }}
+    if: ${{ github.event.inputs.runtime_artifact_run != '' && !inputs.collect_windows_preflight_failure }}
     permissions:
       actions: read
       contents: read
@@ -1077,7 +1113,7 @@ jobs:
           path: runtime-diagnostics/
 
   runtime-macos:
-    if: ${{ github.event.inputs.runtime_macos_artifact_run != '' }}
+    if: ${{ github.event.inputs.runtime_macos_artifact_run != '' && !inputs.collect_windows_preflight_failure }}
     permissions:
       actions: read
       contents: read
@@ -1159,7 +1195,7 @@ jobs:
           path: runtime-diagnostics/
 
   runtime-linux:
-    if: ${{ github.event.inputs.runtime_linux_artifact_run != '' }}
+    if: ${{ github.event.inputs.runtime_linux_artifact_run != '' && !inputs.collect_windows_preflight_failure }}
     permissions:
       actions: read
       contents: read
