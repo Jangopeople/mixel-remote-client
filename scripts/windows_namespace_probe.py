@@ -32,10 +32,20 @@ def diagnostic_source(source, gate, nonce, gated):
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
 '''.replace('GATE_LITERAL', json.dumps(gate)).replace('NONCE_LITERAL', json.dumps(nonce))
-    source = source.replace(MARKER, barrier + f'        let trace_probe_tid = {PROBE}();\n' + MARKER, 1)
+    source = source.replace(MARKER, barrier + f'        let trace_probe_fn: extern \"C\" fn() -> u32 = std::hint::black_box({PROBE} as extern \"C\" fn() -> u32);\n        let trace_probe_tid = trace_probe_fn();\n' + MARKER, 1)
     # Supplemental file is written only after the unchanged immediate raw-error
     # capture. It never changes either original result or namespace schema.
-    supplemental = '''        let trace_probe_proof = format!("{{\\"pid\\":{},\\"tid\\":{}}}", std::process::id(), trace_probe_tid);
+    supplemental = '''        let trace_probe_rva = {
+            #[link(name = "kernel32")]
+            extern "system" { fn GetModuleHandleW(name: *const u16) -> *mut std::ffi::c_void; }
+            let main_base = unsafe { GetModuleHandleW(std::ptr::null()) } as usize;
+            if main_base == 0 { 0 } else {
+                (trace_probe_fn as usize).checked_sub(main_base)
+                    .filter(|rva| *rva > 0 && *rva < 268435456)
+                    .map(|rva| rva as u32).unwrap_or(0)
+            }
+        };
+        let trace_probe_proof = format!("{{\\"pid\\":{},\\"tid\\":{},\\"probeRva\\":{}}}", std::process::id(), trace_probe_tid, trace_probe_rva);
         std::fs::write("fixture-hwcontrol.new", trace_probe_proof).unwrap();
         std::fs::rename("fixture-hwcontrol.new", "fixture-hwcontrol.json").unwrap();
 '''
@@ -145,7 +155,8 @@ def main():
     if not compiler: raise ValueError('Qualified Rust compiler is missing')
     command=[compiler,'--edition','2021','-D','warnings','-C','opt-level=0','-C','lto=no','-C','link-arg=/OPT:NOICF','-C','link-arg=/EXPORT:'+PROBE,str(args.source),'-o',str(args.source.with_suffix('.exe'))]
     subprocess.run(rustc_command(command),check=True,timeout=90,cwd=args.source.parent)
-    qualify_file(args.source.with_suffix('.exe'))
-    print('PASS: private future-probe source compiles warning-free; exact AMD64 PE32+ export/entry/executable sections qualified')
+    qualified = qualify_file(args.source.with_suffix('.exe'))
+    # Private parent bridge; never print this metadata in the public CI facts.
+    print(json.dumps({key: qualified[key] for key in ('probeRva','imageSize','exeSHA256')}, separators=(',', ':')))
 
 if __name__=='__main__':main()

@@ -495,13 +495,13 @@ function Get-TraceCdbStopFacts([string]$Text) {
     postReadyLastRecognizedStopKind=& $kindOf $postComplete
   }
 }
-function Get-TraceExecutionFacts([int]$ChildPid,[string]$AttemptRoot,[bool]$Resumed,[int]$Previous,[bool]$Gated,$Continuation=$null,[bool]$ResumeAttempted=$false,[long]$AdditionalCount=-1,[uint32]$Thread=0) {
+function Get-TraceExecutionFacts([int]$ChildPid,[string]$AttemptRoot,[bool]$Resumed,[int]$Previous,[bool]$Gated,$Continuation=$null,[bool]$ResumeAttempted=$false,[long]$AdditionalCount=-1,[uint32]$Thread=0,[uint32]$ExpectedProbeRva=0,[uint32]$ImageSize=0) {
   $facts=[ordered]@{
     privateGate=$Gated;primaryResumeObserved=$Resumed;primaryResumePrevious=$(if($Resumed -and $Previous -in @(-1,0,1)){$Previous}else{-2})
     ownedChildState='unavailable';ownedChildExitCode=0L;ownedDebuggerStateAvailable=$false;ownedDebuggerAttached=$false
     sourceResultMetadataAvailable=$false;sourceResultExists=$false;sourceResultBounded=$false
     secondaryMetadataAvailable=$false;secondaryExists=$false;secondaryBounded=$false
-    hwcontrolMetadataAvailable=$false;hwcontrolExists=$false;hwcontrolBounded=$false;hwcontrolSchemaValid=$false;sourceProcessMatched=$false;sourceThreadMatched=$false
+    hwcontrolMetadataAvailable=$false;hwcontrolExists=$false;hwcontrolBounded=$false;hwcontrolSchemaValid=$false;sourceProcessMatched=$false;sourceThreadMatched=$false;sourceProbeRvaAvailable=$false;sourceProbeRvaMatched=$false
     continuationStateAvailable=$false;continuationAttempted=$false;continuationWritten=$false;continuationQueued=$false
     primaryResumeAttempted=$ResumeAttempted -or $Resumed;additionalSuspensionCountKnown=$AdditionalCount -ge 2 -and $AdditionalCount -le 4294967294
     additionalPreviousSuspendCount=$(if($AdditionalCount -ge 2 -and $AdditionalCount -le 4294967294){$AdditionalCount}else{0L})
@@ -530,10 +530,16 @@ function Get-TraceExecutionFacts([int]$ChildPid,[string]$AttemptRoot,[bool]$Resu
       $facts[$file[1]+'MetadataAvailable']=$true;$facts[$file[1]+'Exists']=[bool]$exists;$facts[$file[1]+'Bounded']=[bool]$bounded
       if($file[1] -ceq 'hwcontrol' -and $bounded){
         $proof=Read-TraceProbeProof $path
-        if((@($proof.PSObject.Properties.Name|Sort-Object)-join ',') -ceq 'pid,tid'){
+        if((@($proof.PSObject.Properties.Name|Sort-Object)-join ',') -ceq 'pid,probeRva,tid'){
           $valid=$true
           foreach($field in @('pid','tid')){$value=$proof.PSObject.Properties[$field].Value;if(($value -isnot [int] -and $value -isnot [long]) -or $value -le 0 -or $value -gt 4294967295){$valid=$false}}
-          if($valid){$facts.hwcontrolSchemaValid=$true;$facts.sourceProcessMatched=$proof.pid -eq $ChildPid;$facts.sourceThreadMatched=$Thread -ne 0 -and $proof.tid -eq $Thread}
+          $rva=$proof.probeRva
+          if(($rva -isnot [int] -and $rva -isnot [long]) -or $rva -lt 0 -or $rva -ge 268435456){$valid=$false}
+          if($valid){
+            $facts.hwcontrolSchemaValid=$true;$facts.sourceProcessMatched=$proof.pid -eq $ChildPid;$facts.sourceThreadMatched=$Thread -ne 0 -and $proof.tid -eq $Thread
+            $facts.sourceProbeRvaAvailable=$rva -gt 0
+            $facts.sourceProbeRvaMatched=$rva -gt 0 -and $ExpectedProbeRva -gt 0 -and $ExpectedProbeRva -lt $ImageSize -and $ImageSize -le 268435456 -and $rva -eq $ExpectedProbeRva
+          }
         }
       }
     } catch {}
@@ -595,12 +601,12 @@ function Get-TraceStartupFacts([string]$Text) {
 }
 function Get-TraceRowLexemes([string]$Row) {
   $Row=$Row.Trim()
-  $facts=[ordered]@{lexemesAvailable=$false;length=[Math]::Min(4096,$Row.Length);lengthBounded=$Row.Length -le 4096;tokenCount=0;tokensBounded=$false;slotTokenKind='unavailable';statusTokenKind='unavailable';addressShape='unavailable';addressTokenCount=0;typeSizeShape='unavailable';passPairPresent=$false;colonShape='unavailable';promptPresent=$false;quotedCommandPresent=$false;controlCharacterPresent=$false;escapePresent=$false;angleBracketPresent=$false;blWordPresent=$false;slashLWordPresent=$false;beginWordPresent=$false;endWordPresent=$false;echoWordPresent=$false}
+  $facts=[ordered]@{lexemesAvailable=$false;length=[Math]::Min(4096,$Row.Length);lengthBounded=$Row.Length -le 4096;tokenCount=0;tokensBounded=$false;slotTokenKind='unavailable';statusTokenKind='unavailable';addressShape='unavailable';addressTokenCount=0;typeSizeShape='unavailable';passPairPresent=$false;postPassAssociationShape='unavailable';colonShape='unavailable';promptPresent=$false;quotedCommandPresent=$false;controlCharacterPresent=$false;escapePresent=$false;angleBracketPresent=$false;blWordPresent=$false;slashLWordPresent=$false;beginWordPresent=$false;endWordPresent=$false;echoWordPresent=$false}
   if($Row.Length -gt 4096){return [pscustomobject]$facts}
   $tokens=@($Row -split '\s+'|Where-Object {$_ -ne ''})
   $facts.tokenCount=[Math]::Min(32,$tokens.Count);$facts.tokensBounded=$tokens.Count -le 32
   if(-not $facts.tokensBounded){return [pscustomobject]$facts}
-  $facts.lexemesAvailable=$true;$facts.slotTokenKind='missing';$facts.statusTokenKind='missing';$facts.addressShape='none';$facts.typeSizeShape='absent';$facts.colonShape='absent'
+  $facts.lexemesAvailable=$true;$facts.slotTokenKind='missing';$facts.statusTokenKind='missing';$facts.addressShape='none';$facts.typeSizeShape='absent';$facts.colonShape='absent';$facts.postPassAssociationShape='absent'
   if($tokens.Count -gt 0){$facts.slotTokenKind=if($tokens[0] -cmatch '\A[0-3]\z'){'expected-slot'}elseif($tokens[0] -cmatch '\A[0-9]+\z'){'numeric-other'}else{'other'}}
   if($tokens.Count -gt 1){$facts.statusTokenKind=switch -CaseSensitive ($tokens[1]){'e'{'enabled'}'d'{'disabled'}'u'{'unresolved'}default{'other'}}}
   $addressKinds=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
@@ -612,7 +618,18 @@ function Get-TraceRowLexemes([string]$Row) {
       if($token -cmatch '\A[erwi][1248]\z'){$facts.typeSizeShape=if($token -ceq 'e1'){'packed-e1'}else{'packed-other'}}
       elseif($index+1 -lt $tokens.Count -and $token -cmatch '\A[erwi]\z' -and $tokens[$index+1] -cmatch '\A[1248]\z'){$facts.typeSizeShape=if($token -ceq 'e' -and $tokens[$index+1] -ceq '1'){'separate-e1'}else{'separate-other'}}
     }
-    if($index+1 -lt $tokens.Count -and $token -cmatch '\A[0-9a-fA-F]{1,4}\z' -and $tokens[$index+1] -cmatch '\A\([0-9a-fA-F]{1,4}\)\z'){$facts.passPairPresent=$true}
+    if(-not $facts.passPairPresent -and $index+1 -lt $tokens.Count -and $token -cmatch '\A[0-9a-fA-F]{1,4}\z' -and $tokens[$index+1] -cmatch '\A\([0-9a-fA-F]{1,4}\)\z'){
+      $facts.passPairPresent=$true
+      $association=@($tokens|Select-Object -Skip ($index+2) -First 3)
+      $facts.postPassAssociationShape=if($association.Count -eq 0){'absent'}
+        elseif($association[0] -cmatch '\A[0-9]{1,10}:[0-9a-fA-F]{1,8}\z'){'packed-pair'}
+        elseif($association[0] -cmatch '\A[0-9]{1,10}:\*{3,4}\z'){'packed-wildcard'}
+        elseif($association.Count -ge 3 -and $association[0] -cmatch '\A[0-9]{1,10}\z' -and $association[1] -ceq ':' -and $association[2] -cmatch '\A[0-9a-fA-F]{1,8}\z'){'spaced-colon-pair'}
+        elseif($association.Count -ge 2 -and $association[0] -cmatch '\A[0-9]{1,10}:\z' -and $association[1] -cmatch '\A[0-9a-fA-F]{1,8}\z'){'index-colon-space'}
+        elseif($association.Count -ge 2 -and $association[0] -cmatch '\A[0-9]{1,10}\z' -and $association[1] -cmatch '\A[0-9a-fA-F]{1,8}\z'){'index-whitespace'}
+        elseif($association[0] -cmatch '\A[0-9]{1,10}:\z'){'index-colon-only'}
+        elseif($association[0] -ceq ':'){'colon-only'}else{'other'}
+    }
     if($token -cmatch '\A[0-9]{1,10}:[0-9a-fA-F]{1,8}\z'){$facts.colonShape='index-pair'}
     elseif($token -cmatch '\A[0-9]{1,10}:\*{3,4}\z'){$facts.colonShape='index-wildcard'}
     elseif($token.Contains(':') -and $facts.colonShape -ceq 'absent'){$facts.colonShape='other-colon'}
@@ -625,8 +642,8 @@ function Get-TraceRowLexemes([string]$Row) {
   $facts.beginWordPresent=$Row.Contains('MIXEL_NAMESPACE_HW_LIST_BEGIN');$facts.endWordPresent=$Row.Contains('MIXEL_NAMESPACE_HW_LIST_END');$facts.echoWordPresent=$tokens -ccontains '.echo'
   return [pscustomobject]$facts
 }
-function Get-TraceHardwareFacts([string]$Text) {
-  $facts=[ordered]@{engineBlockCount=0;engineBlockComplete=$false;engineRowCount=0;engineSchemaValid=$false;engineIndexMetadataAvailable=$false;engineOsThreadCorrelationAvailable=$false;engineOsThreadMatched=$false;rowKindsAvailable=$false;rowKindsBounded=$false;rowKindsCount=0;knownRowCount=0;commandEchoRowCount=0;blankRowCount=0;oversizedRowCount=0;unknownRowCount=0;duplicateSlotCount=0;lexemeRows=@();slotMask=0;enabledMask=0;resolvedMask=0;executeByteMask=0;passOneMask=0;threadSpecificMask=0;contextMarkerCount=0;contextSchemaValid=$true;contextAvailable=$false;processMatched=$false;threadMatched=$false;addressPresentMask=0;localEnableMask=0;globalEnableMask=0;executionByteMask=0}
+function Get-TraceHardwareFacts([string]$Text,[string]$ExpectedControlCommand='') {
+  $facts=[ordered]@{engineBlockCount=0;engineBlockComplete=$false;engineRowCount=0;engineSchemaValid=$false;engineIndexMetadataAvailable=$false;engineOsThreadCorrelationAvailable=$false;engineOsThreadMatched=$false;rowKindsAvailable=$false;rowKindsBounded=$false;rowKindsCount=0;knownRowCount=0;commandEchoRowCount=0;blankRowCount=0;oversizedRowCount=0;unknownRowCount=0;duplicateSlotCount=0;lexemeRows=@();controlCommandComparisonAvailable=$false;controlCommandMatchCount=0;slotMask=0;enabledMask=0;resolvedMask=0;executeByteMask=0;passOneMask=0;threadSpecificMask=0;contextMarkerCount=0;contextSchemaValid=$true;contextAvailable=$false;processMatched=$false;threadMatched=$false;addressPresentMask=0;localEnableMask=0;globalEnableMask=0;executionByteMask=0}
   if([Text.Encoding]::UTF8.GetByteCount($Text) -gt 1048576){$facts.contextSchemaValid=$false;return [pscustomobject]$facts}
   $end=$Text.LastIndexOf("`n");$complete=if($end -ge 0){$Text.Substring(0,$end+1)}else{''}
   $lines=@($complete -split '\r?\n'|ForEach-Object {$_.Trim()})
@@ -654,6 +671,10 @@ function Get-TraceHardwareFacts([string]$Text) {
     if($finish -eq $begin+1){$blockRows=@()}
     $facts.rowKindsAvailable=$true;$facts.rowKindsBounded=$blockRows.Count -le 32;$facts.rowKindsCount=[Math]::Min(32,$blockRows.Count)
     $rowSlots=0
+    $facts.controlCommandComparisonAvailable=$ExpectedControlCommand.Length -le 4096 -and $ExpectedControlCommand -cmatch '\A"\$\$><[A-Z]:\\[A-Za-z0-9_\\.-]+\\hwcontrol\.txt"\z' -and -not $ExpectedControlCommand.Contains('..')
+    if($facts.controlCommandComparisonAvailable){
+      $facts.controlCommandMatchCount=[Math]::Min(32,@($blockRows|Where-Object { $_.Length -le 4096 -and $_ -ceq $ExpectedControlCommand }).Count)
+    }
     $facts.lexemeRows=@($blockRows|Select-Object -First 32|ForEach-Object {Get-TraceRowLexemes $_})
     foreach($row in @($blockRows|Select-Object -First 32)){
       if($row -ceq ''){$facts.blankRowCount++;continue}
@@ -733,8 +754,9 @@ function Get-TraceMarkerFormattingFacts([string]$Text) {
   return [pscustomobject]$facts
 }
 function Get-TraceFailureFacts($Live,[ValidateSet('export','identity','commands','startup','resume','trace','parse','result','ack','cleanup')][string]$Phase,[bool]$TimedOut,$Execution=$null) {
-  $text='';$stderr='';$readFailed=$false;$stdoutBytes=0L;$stderrBytes=0L
+  $text='';$stderr='';$readFailed=$false;$stdoutBytes=0L;$stderrBytes=0L;$expectedControlCommand=''
   if ($Live) {
+    if($Live.PSObject.Properties['expectedControlCommand'] -and $Live.expectedControlCommand -is [string]){$expectedControlCommand=$Live.expectedControlCommand}
     try {
       $stdoutBytes=(Get-Item -LiteralPath $Live.outPath).Length;$stderrBytes=(Get-Item -LiteralPath $Live.errPath).Length
       $text=[MixelNamespaceTraceIO]::ReadBounded($Live.outPath,1048576)
@@ -757,7 +779,7 @@ function Get-TraceFailureFacts($Live,[ValidateSet('export','identity','commands'
     scopeFailure=[bool]($complete -match '(?m)^MIXEL_NAMESPACE_TRACE_FAIL_(?:SCOPE|PID|ARCH|WINDOW_NESTED|WIN32_INTERFACE)\r?$')
     returnFailure=[bool]($complete -match '(?m)^MIXEL_NAMESPACE_TRACE_FAIL_(?:RETURN_SCOPE|RETURN_HANDLE|WIN32_RETURN_SCOPE)\r?$')
     startupDiagnostics=Get-TraceStartupFacts $text
-    hardwareDiagnostics=Get-TraceHardwareFacts $text
+    hardwareDiagnostics=Get-TraceHardwareFacts $text $expectedControlCommand
     continuationDiagnostics=Get-TraceContinuationFacts $text
     markerFormattingDiagnostics=Get-TraceMarkerFormattingFacts $text
     entryDiagnostics=Get-TraceEntryFacts $text
@@ -770,23 +792,29 @@ function New-TraceGatedSource([string]$Source,[string]$Gate,[string]$Nonce,[stri
   Assert-TracePlainPath $Gate -AllowMissing
   $arguments=@((Join-Path $PSScriptRoot 'windows_namespace_probe.py'),'--source',$Source,'--gate',$Gate,'--nonce',$Nonce)
   if($Gated){$arguments+='--gated'}
-  [void](Invoke-TracePython $arguments $Private 'probe-compile' 100)
+  $qualified=(Invoke-TracePython $arguments $Private 'probe-compile' 100).Trim()
+  if([Text.Encoding]::UTF8.GetByteCount($qualified) -gt 256 -or $qualified -cnotmatch '\A\{"probeRva":([1-9][0-9]{0,8}),"imageSize":([1-9][0-9]{0,8}),"exeSHA256":"([0-9a-f]{64})"\}\z'){throw 'Private PE qualification bridge is invalid.'}
+  $rva=[long]$Matches[1];$image=[long]$Matches[2];$hash=$Matches[3]
+  if($rva -ge $image -or $image -gt 268435456){throw 'Private PE qualification bridge exceeded its exact image bounds.'}
+  return [pscustomobject]@{probeRva=[uint32]$rva;imageSize=[uint32]$image;exeSHA256=$hash}
 }
-function Assert-TraceProbeProof($Proof,[uint32]$ChildPid,[uint32]$Thread) {
-  if((@($Proof.PSObject.Properties.Name|Sort-Object)-join ',') -cne 'pid,tid'){throw 'Private source probe proof schema is invalid.'}
+function Assert-TraceProbeProof($Proof,[uint32]$ChildPid,[uint32]$Thread,[uint32]$ExpectedProbeRva,[uint32]$ImageSize) {
+  if((@($Proof.PSObject.Properties.Name|Sort-Object)-join ',') -cne 'pid,probeRva,tid'){throw 'Private source probe proof schema is invalid.'}
   foreach($field in @('pid','tid')){
     $value=$Proof.PSObject.Properties[$field].Value
     if(($value -isnot [int] -and $value -isnot [long]) -or $value -le 0 -or $value -gt 4294967295){throw 'Private source probe proof exceeded its DWORD domain.'}
   }
+  $rva=$Proof.probeRva
+  if(($rva -isnot [int] -and $rva -isnot [long]) -or $rva -le 0 -or $ExpectedProbeRva -eq 0 -or $rva -ne $ExpectedProbeRva -or $ExpectedProbeRva -ge $ImageSize -or $ImageSize -gt 268435456){throw 'Private source probe pointer disagrees with the exact qualified PE export.'}
   if($Proof.pid -ne $ChildPid -or $Proof.tid -ne $Thread){throw 'Private source probe PID/thread disagrees with retained native ownership.'}
 }
 function Read-TraceProbeProof([string]$Path) {
   Assert-TracePlainPath $Path
   $text=[MixelNamespaceTraceIO]::ReadBounded($Path,128)
-  if($text -cnotmatch '\A\{"pid":([1-9][0-9]{0,9}),"tid":([1-9][0-9]{0,9})\}\z'){throw 'Private source probe bytes are not the exact bounded schema.'}
-  $pidValue=[long]$Matches[1];$tidValue=[long]$Matches[2]
-  if($pidValue -gt 4294967295 -or $tidValue -gt 4294967295){throw 'Private source probe bytes exceeded the DWORD domain.'}
-  return [pscustomobject]@{pid=$pidValue;tid=$tidValue}
+  if($text -cnotmatch '\A\{"pid":([1-9][0-9]{0,9}),"tid":([1-9][0-9]{0,9}),"probeRva":(0|[1-9][0-9]{0,8})\}\z'){throw 'Private source probe bytes are not the exact bounded schema.'}
+  $pidValue=[long]$Matches[1];$tidValue=[long]$Matches[2];$rva=[long]$Matches[3]
+  if($pidValue -gt 4294967295 -or $tidValue -gt 4294967295 -or $rva -ge 268435456){throw 'Private source probe bytes exceeded their exact scalar domain.'}
+  return [pscustomobject]@{pid=$pidValue;tid=$tidValue;probeRva=$rva}
 }
 
 function Assert-TraceParsedResult($Trace,$Record) {
@@ -820,14 +848,16 @@ function Invoke-TraceAttempt([ValidateSet('absent','world')][string]$Scenario,[s
   $gate=Join-Path $gateRoot 'ready';$nonce=[Guid]::NewGuid().ToString('N')+[Guid]::NewGuid().ToString('N')
   $event='Mixel-Remote-Standard-Lease-'+[Guid]::NewGuid().ToString('N')
   $source=Join-Path $attemptRoot 'lease-standard.rs';$exe=Join-Path $attemptRoot 'lease-standard.exe'
-  $live=$null;$childPid=0;$eventHandle=[IntPtr]::Zero;$timeout=$false;$completed=$false;$phase='export';$attemptFailure=$null;$resumed=$false;$previous=-2;$resumeAttempted=$false;$additionalCount=-1L;$fallbackResult=$null;$thread=0
+  $live=$null;$childPid=0;$eventHandle=[IntPtr]::Zero;$timeout=$false;$completed=$false;$phase='export';$attemptFailure=$null;$resumed=$false;$previous=-2;$resumeAttempted=$false;$additionalCount=-1L;$fallbackResult=$null;$thread=0;$expectedProbeRva=0;$expectedImageSize=0
   try {
     [void](Invoke-TracePython @((Join-Path $PSScriptRoot 'test-support-lease.py'),'--export-standard-windows-fixture',$attemptRoot,'--event',('Global\'+$event)) $private 'source-export' 100)
     Assert-TracePlainPath $source;Assert-TracePlainPath $exe
     $originalHash=(Get-FileHash $source -Algorithm SHA256).Hash
-    New-TraceGatedSource $source $gate $nonce $private ([bool]$Gated)
+    $qualifiedPe=New-TraceGatedSource $source $gate $nonce $private ([bool]$Gated)
+    $expectedProbeRva=$qualifiedPe.probeRva;$expectedImageSize=$qualifiedPe.imageSize
     $diagnosticHash=(Get-FileHash $source -Algorithm SHA256).Hash;$exeHash=(Get-FileHash $exe -Algorithm SHA256).Hash
     if ($originalHash -ceq $diagnosticHash) { throw 'Private timing-gate source hash binding is invalid.' }
+    if($qualifiedPe.exeSHA256 -cne $exeHash.ToLowerInvariant()){throw 'Private qualified PE identity differs from the exact retained executable.'}
     $mode=Join-Path $attemptRoot 'fixture-mode.txt';[IO.File]::WriteAllText($mode,'probe',[Text.UTF8Encoding]::new($false))
     Set-TraceDirectoryAcl $attemptRoot $script:ownedSid
     foreach ($file in @($source,$exe,$mode)) { Set-TraceReadOnlyFile $file $script:ownedSid }
@@ -845,6 +875,7 @@ function Invoke-TraceAttempt([ValidateSet('absent','world')][string]$Scenario,[s
     $arguments=@('-p',[string]$childPid,'-pd','-noshell','-nosqm','-cf',(Join-Path $private 'start.txt'))
     if ($Gated) { $arguments=@('-p',[string]$childPid,'-pr','-pd','-noshell','-nosqm','-cf',(Join-Path $private 'start.txt')) }
     $live=Start-TraceProcess $script:cdb $arguments $private 'cdb' $childPid
+    $live|Add-Member -NotePropertyName expectedControlCommand -NotePropertyValue ('"$$><'+(Join-Path $private 'hwcontrol.txt')+'"')
     $phase='startup'
     $deadline=[DateTime]::UtcNow.AddSeconds(20);$ready=$false
     while ([DateTime]::UtcNow -lt $deadline) {
@@ -857,7 +888,7 @@ function Invoke-TraceAttempt([ValidateSet('absent','world')][string]$Scenario,[s
     if (-not $ready -or -not [MixelOrdinaryTokenFixture]::ActualOwnedDebuggerAttached($childPid)) {
       $timeout=$true
       if ($Gated) { throw 'Private gated trace did not reach exact debugger readiness.' }
-      Write-Host ('OBSERVED: bounded source-only trace startup facts; '+((Get-TraceFailureFacts $live $phase $true (Get-TraceExecutionFacts $childPid $attemptRoot $resumed $previous ([bool]$Gated) $live $resumeAttempted $additionalCount ([uint32]$thread))) | ConvertTo-Json -Depth 4 -Compress))
+      Write-Host ('OBSERVED: bounded source-only trace startup facts; '+((Get-TraceFailureFacts $live $phase $true (Get-TraceExecutionFacts $childPid $attemptRoot $resumed $previous ([bool]$Gated) $live $resumeAttempted $additionalCount ([uint32]$thread) $expectedProbeRva $expectedImageSize)) | ConvertTo-Json -Depth 4 -Compress))
       $fallbackResult=[pscustomobject]@{StartupTimedOut=$true;GatedFallbackRequired=$true;FallbackReason='startup-timeout';AdditionalSuspensionDetected=$false;AdditionalPreviousSuspendCount=0L;OwnedCleanupVerified=$false}
       return $fallbackResult
     }
@@ -866,7 +897,7 @@ function Invoke-TraceAttempt([ValidateSet('absent','world')][string]$Scenario,[s
     try {$previous=[MixelOrdinaryTokenFixture]::ResumeOwnedPrimaryThread($childPid);$resumed=$true} catch {
       $additionalCount=Get-TraceAdditionalSuspensionCount $_.Exception
       if(Test-TraceAdditionalSuspensionFallback $live $childPid $attemptRoot $additionalCount $ready $resumeAttempted $resumed ([bool]$Gated)) {
-        Write-Host ('OBSERVED: bounded source-only trace additional suspension facts; '+((Get-TraceFailureFacts $live $phase $false (Get-TraceExecutionFacts $childPid $attemptRoot $resumed $previous ([bool]$Gated) $live $resumeAttempted $additionalCount ([uint32]$thread))) | ConvertTo-Json -Depth 4 -Compress))
+        Write-Host ('OBSERVED: bounded source-only trace additional suspension facts; '+((Get-TraceFailureFacts $live $phase $false (Get-TraceExecutionFacts $childPid $attemptRoot $resumed $previous ([bool]$Gated) $live $resumeAttempted $additionalCount ([uint32]$thread) $expectedProbeRva $expectedImageSize)) | ConvertTo-Json -Depth 4 -Compress))
         $fallbackResult=[pscustomobject]@{StartupTimedOut=$false;GatedFallbackRequired=$true;FallbackReason='additional-suspension';AdditionalSuspensionDetected=$true;AdditionalPreviousSuspendCount=$additionalCount;OwnedCleanupVerified=$false}
         return $fallbackResult
       }
@@ -896,7 +927,7 @@ function Invoke-TraceAttempt([ValidateSet('absent','world')][string]$Scenario,[s
     Assert-TraceParsedResult $parsed $record
     $probePath=Join-Path $attemptRoot 'fixture-hwcontrol.json';Assert-TracePlainPath $probePath
     $probeProof=Read-TraceProbeProof $probePath
-    Assert-TraceProbeProof $probeProof ([uint32]$childPid) ([uint32]$thread)
+    Assert-TraceProbeProof $probeProof ([uint32]$childPid) ([uint32]$thread) $expectedProbeRva $expectedImageSize
     Assert-TracePlainPath (Join-Path $attemptRoot 'fixture-namespace.json')
     $secondary=([MixelNamespaceTraceIO]::ReadBounded((Join-Path $attemptRoot 'fixture-namespace.json'),4096)) | ConvertFrom-Json
     if (($secondary.pid -isnot [int] -and $secondary.pid -isnot [long]) -or $secondary.pid -ne $childPid -or
@@ -911,7 +942,7 @@ function Invoke-TraceAttempt([ValidateSet('absent','world')][string]$Scenario,[s
     return [pscustomobject]@{StartupTimedOut=$false;GatedFallbackRequired=$false;Scenario=$Scenario;PrivateGate=[bool]$Gated;FirstCallQualified=$true;OriginalSourceSHA256=$originalHash;DiagnosticSourceSHA256=$diagnosticHash;DiagnosticExecutableSHA256=$exeHash;HardwareControlQualified=$true;SourceProbeThreadQualified=$true;OwnedIdentityQualified=$true;DebuggerDetached=$true;SingleResumeQualified=$true;SingleContinuationQualified=$live.continuationQueued;rawOpenError=$record.rawOpenError;Trace=$parsed}
   } catch {
     $attemptFailure=$_.Exception
-    Write-Host ('OBSERVED: bounded source-only trace failure facts; '+((Get-TraceFailureFacts $live $phase $timeout (Get-TraceExecutionFacts $childPid $attemptRoot $resumed $previous ([bool]$Gated) $live $resumeAttempted $additionalCount ([uint32]$thread))) | ConvertTo-Json -Depth 4 -Compress))
+    Write-Host ('OBSERVED: bounded source-only trace failure facts; '+((Get-TraceFailureFacts $live $phase $timeout (Get-TraceExecutionFacts $childPid $attemptRoot $resumed $previous ([bool]$Gated) $live $resumeAttempted $additionalCount ([uint32]$thread) $expectedProbeRva $expectedImageSize)) | ConvertTo-Json -Depth 4 -Compress))
     throw
   } finally {
     $errors=[Collections.Generic.List[Exception]]::new()

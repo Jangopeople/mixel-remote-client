@@ -70,8 +70,10 @@ with tempfile.TemporaryDirectory(prefix='mixel-private-pe-control-') as temporar
 minimal=MARKER+'\n'+CAPTURE+'\n'
 for gated in [False,True]:
     transformed=diagnostic_source(minimal,r'D:\owned\gate','0'*64,gated)
-    require(transformed.count(f'let trace_probe_tid = {PROBE}();')==1 and transformed.count(f'pub extern "C" fn {PROBE}()')==1,'Source probe call/export is not unique')
-    require(transformed.index('let trace_probe_tid')<transformed.index(MARKER)<transformed.index('fixture-hwcontrol.new')<transformed.index(CAPTURE),'Probe call/capture/supplemental order invalid')
+    require(transformed.count(f'let trace_probe_fn: extern \"C\" fn() -> u32 = std::hint::black_box({PROBE} as extern \"C\" fn() -> u32);')==1 and transformed.count('let trace_probe_tid = trace_probe_fn();')==1 and transformed.count(f'pub extern \"C\" fn {PROBE}()')==1,'Exact typed probe pointer/call/export is not unique')
+    require(transformed.index('let trace_probe_fn')<transformed.index('let trace_probe_tid')<transformed.index(MARKER)<transformed.index('GetModuleHandleW(std::ptr::null())')<transformed.index('fixture-hwcontrol.new')<transformed.index(CAPTURE),'Probe pointer/call/original capture/module getter/supplemental order invalid')
+    require('(trace_probe_fn as usize).checked_sub(main_base)' in transformed and '.filter(|rva| *rva > 0 && *rva < 268435456)' in transformed and '.map(|rva| rva as u32).unwrap_or(0)' in transformed,'Relative pointer is not bounded/unavailable checked subtraction')
+    require(transformed.count('trace_probe_fn();')==1 and 'FreeLibrary' not in transformed and f'{PROBE}();' not in transformed,'Probe invocation or module ownership changed')
     require(transformed.count(MARKER)==1 and transformed.count(CAPTURE)==1 and 'GetCurrentThreadId() -> u32' in transformed,'Original capture or native thread getter changed')
     require(('let trace_gate' in transformed)==gated,'No-pr/gated source distinction changed')
     if gated:require(transformed.index('let trace_gate')<transformed.index('let trace_probe_tid'),'Probe executed before nonce barrier')
