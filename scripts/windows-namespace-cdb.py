@@ -17,6 +17,7 @@ BINDINGS = 'MIXEL_NAMESPACE_BINDINGS directory=1 event=1 win32=1'
 READY = 'MIXEL_NAMESPACE_TRACE_READY'
 END = 'MIXEL_NAMESPACE_TRACE_END'
 HWCONTROL = 'MIXEL_NAMESPACE_HWCONTROL scopeQualified=1'
+THREAD_SELECTION = re.compile(r'MIXEL_NAMESPACE_THREAD_SELECTION processMatched=([01]) threadMatched=([01])')
 
 def windows_file(folder, leaf):
     if not re.fullmatch(r'[A-Z]:\\[A-Za-z0-9_\\.-]+', folder) or '..' in folder.split('\\') or folder.endswith('\\'):
@@ -112,7 +113,8 @@ def commands(pid, tid, session, event, folder, pe):
                'r $t19 = 0',f'.echo {HWCONTROL}','gc']
     init = ['.expr /s masm', f'.if (@$tpid != 0n{pid}) {{ {fail("PID")} }}',
             f'.if (@$ptrsize != 0n8) {{ {fail("ARCH")} }}',
-            f'~[0n{tid}]s',scope,
+            f'~[0n{tid}]s',
+            f'.printf "MIXEL_NAMESPACE_THREAD_SELECTION processMatched=%u threadMatched=%u\\n",(@$tpid == 0n{pid}),(@$tid == 0n{tid})',scope,
             'bc *', 'r $t0 = 0', 'r $t4 = 0', 'r $t5 = 0', 'r $t16 = 0', 'r $t17 = 0',
             f'.if (@$exentry <= 0n{pe["entryRva"]}) {{ {fail("IMAGE")} }}',
             f'r $t15 = @$exentry - 0n{pe["entryRva"]}',
@@ -152,8 +154,9 @@ def parse_trace(raw):
     if type(raw) is not str or len(raw.encode('utf-8')) > 1048576:
         raise ValueError('Bounded private trace exceeds1MiB')
     records, stage, window, winreturn = [], 0, False, None
-    entry_count, qualified_entry, control = 0, False, False
-    for line in raw.splitlines():
+    entry_count, qualified_entry, control, selected = 0, False, False, False
+    # A concurrent or incomplete final marker cannot supply evidence.
+    for line in raw[:raw.rfind('\n')+1].splitlines():
         line = line.strip()
         # Only exact marker lines count. Script command echoes remain ignored.
         if not line.startswith('MIXEL_NAMESPACE_'):
@@ -162,8 +165,12 @@ def parse_trace(raw):
             continue
         if line.startswith('MIXEL_NAMESPACE_TRACE_FAIL_'):
             raise ValueError('CDB bounded trace failed')
-        if line == BINDINGS:
-            if stage != 0: raise ValueError('Duplicate/out-of-order bindings')
+        if (match := THREAD_SELECTION.fullmatch(line)):
+            if stage != 0 or selected or match.groups() != ('1','1'):
+                raise ValueError('Thread selection is false/duplicate/out-of-order')
+            selected = True
+        elif line == BINDINGS:
+            if stage != 0 or not selected: raise ValueError('Bindings lack one exact qualified thread selection')
             stage = 1
         elif line == READY:
             if stage != 1: raise ValueError('Ready lacks exact bindings')

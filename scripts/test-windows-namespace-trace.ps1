@@ -414,9 +414,10 @@ function Assert-TraceReady([string]$Text) {
   if ($complete -match '(?i)(syntax error|couldn.t resolve|unable to insert breakpoint|no hardware breakpoint|hardware breakpoint limit)') { throw 'Trace startup reported a debugger command or binding failure.' }
   $markers=@($complete -split '\r?\n' | ForEach-Object {$_.Trim()} | Where-Object {$_.StartsWith('MIXEL_NAMESPACE_')})
   if ($markers.Count -eq 0) { return $false }
-  if ($markers.Count -gt 2 -or $markers[0] -cne 'MIXEL_NAMESPACE_BINDINGS directory=1 event=1 win32=1' -or
-      ($markers.Count -eq 2 -and $markers[1] -cne 'MIXEL_NAMESPACE_TRACE_READY')) { throw 'Trace startup lacks the exact ordered bindings and one READY marker.' }
-  return $markers.Count -eq 2
+  if ($markers.Count -gt 3 -or $markers[0] -cne 'MIXEL_NAMESPACE_THREAD_SELECTION processMatched=1 threadMatched=1' -or
+      ($markers.Count -ge 2 -and $markers[1] -cne 'MIXEL_NAMESPACE_BINDINGS directory=1 event=1 win32=1') -or
+      ($markers.Count -eq 3 -and $markers[2] -cne 'MIXEL_NAMESPACE_TRACE_READY')) { throw 'Trace startup lacks exact ordered thread selection, bindings and one READY marker.' }
+  return $markers.Count -eq 3
 }
 function Send-TraceContinuation($Live,[int]$ChildPid,[bool]$Ready,[bool]$Resumed,[int]$Previous,[bool]$Gated) {
   $retained=@($script:traceLiveProcesses | Where-Object {[object]::ReferenceEquals($_,$Live)})
@@ -566,6 +567,29 @@ function Get-TraceEntryFacts([string]$Text) {
   else {$facts.hardwareControlCount=0;$facts.win32EntryCount=0;$facts.nativeDirectoryPreWindowCount=0;$facts.nativeEventPreWindowCount=0}
   return [pscustomobject]$facts
 }
+function Get-TraceStartupFacts([string]$Text) {
+  $facts=[ordered]@{selectionMarkerCount=0;selectionSchemaValid=$true;selectionAvailable=$false;processMatched=$false;threadMatched=$false;failureTagCount=0;failureCategories=@()}
+  if([Text.Encoding]::UTF8.GetByteCount($Text) -gt 1048576){$facts.selectionSchemaValid=$false;return [pscustomobject]$facts}
+  $end=$Text.LastIndexOf("`n");$complete=if($end -ge 0){$Text.Substring(0,$end+1)}else{''}
+  $afterSelection=$false;$bindingOrReady=$false;$process=$false;$thread=$false
+  $allowed=@('PID','ARCH','SCOPE','WINDOW_NESTED','WIN32_INTERFACE','WIN32_STACK','WIN32_RETURN','WIN32_RETURN_SCOPE','ENTRY_LIMIT','HWCONTROL_MISSING','HWCONTROL_SCOPE','NATIVE_NESTED','RECORD_LIMIT','STACK','POINTER','ATTR_SIZE','NAME_HEADER','NAME_LENGTH','NAME_BUFFER','RETURN_SCOPE','RETURN_HANDLE','IMAGE','CONTROL_ADDRESS','CONTROL_BINDING')
+  $categories=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+  foreach($line in @($complete -split '\r?\n'|ForEach-Object {$_.Trim()})){
+    if($line -ceq 'MIXEL_NAMESPACE_BINDINGS directory=1 event=1 win32=1' -or $line -ceq 'MIXEL_NAMESPACE_TRACE_READY'){$bindingOrReady=$true}
+    if($line -cmatch '\AMIXEL_NAMESPACE_THREAD_SELECTION processMatched=([01]) threadMatched=([01])\z'){
+      $facts.selectionMarkerCount=[Math]::Min(32,$facts.selectionMarkerCount+1)
+      if($afterSelection -or $bindingOrReady){$facts.selectionSchemaValid=$false}
+      $afterSelection=$true;$process=$Matches[1] -ceq '1';$thread=$Matches[2] -ceq '1'
+    }elseif($line -cmatch '\AMIXEL_NAMESPACE_THREAD_SELECTION'){$facts.selectionSchemaValid=$false}
+    if($line -cmatch '\AMIXEL_NAMESPACE_TRACE_FAIL_([A-Z0-9_]+)\z' -and $allowed -ccontains $Matches[1]){
+      $facts.failureTagCount=[Math]::Min(32,$facts.failureTagCount+1)
+      [void]$categories.Add($Matches[1].ToLowerInvariant().Replace('_','-'))
+    }
+  }
+  if($facts.selectionSchemaValid -and $facts.selectionMarkerCount -eq 1){$facts.selectionAvailable=$true;$facts.processMatched=$process;$facts.threadMatched=$thread}
+  $facts.failureCategories=@($categories|Sort-Object)
+  return [pscustomobject]$facts
+}
 function Get-TraceFailureFacts($Live,[ValidateSet('export','identity','commands','startup','resume','trace','parse','result','ack','cleanup')][string]$Phase,[bool]$TimedOut,$Execution=$null) {
   $text='';$stderr='';$readFailed=$false;$stdoutBytes=0L;$stderrBytes=0L
   if ($Live) {
@@ -590,6 +614,7 @@ function Get-TraceFailureFacts($Live,[ValidateSet('export','identity','commands'
     hardwareControlFailure=[bool]($complete -match '(?m)^MIXEL_NAMESPACE_TRACE_FAIL_(?:IMAGE|CONTROL_ADDRESS|CONTROL_BINDING|HWCONTROL_SCOPE|HWCONTROL_MISSING)\r?$')
     scopeFailure=[bool]($complete -match '(?m)^MIXEL_NAMESPACE_TRACE_FAIL_(?:SCOPE|PID|ARCH|WINDOW_NESTED|WIN32_INTERFACE)\r?$')
     returnFailure=[bool]($complete -match '(?m)^MIXEL_NAMESPACE_TRACE_FAIL_(?:RETURN_SCOPE|RETURN_HANDLE|WIN32_RETURN_SCOPE)\r?$')
+    startupDiagnostics=Get-TraceStartupFacts $text
     entryDiagnostics=Get-TraceEntryFacts $text
     debuggerStop=Get-TraceCdbStopFacts $text
     execution=$Execution

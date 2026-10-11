@@ -110,6 +110,11 @@ for name in ['winentry.txt','entry.txt']:
 require('ba0 e 1 ntdll!NtOpenDirectoryObject' in files['start.txt'],'Directory hardware binding missing')
 require('ba1 e 1 ntdll!NtOpenEvent' in files['start.txt'],'Event hardware binding missing')
 require('ba2 e 1 KERNELBASE!OpenEventW' in files['start.txt'],'Exact Win32 window filter missing')
+selection_command='.printf "MIXEL_NAMESPACE_THREAD_SELECTION processMatched=%u threadMatched=%u\\n",(@$tpid == 0n101),(@$tid == 0n202)'
+require(files['start.txt'].count(selection_command)==1,'Thread selection evidence is not exact/unique')
+require(files['start.txt'].index('~[0n202]s') < files['start.txt'].index(selection_command) < files['start.txt'].index('TRACE_FAIL_SCOPE') < files['start.txt'].index('MIXEL_NAMESPACE_BINDINGS'),'Selection evidence changed selector/scope/bindings order')
+require('.if ((@$tpid != 0n101) or (@$tid != 0n202)) { .echo MIXEL_NAMESPACE_TRACE_FAIL_SCOPE; bc *; qd }' in files['start.txt'],'Original thread scope predicate changed')
+require(files['start.txt'].index('TRACE_FAIL_PID')<files['start.txt'].index('TRACE_FAIL_ARCH')<files['start.txt'].index('~[0n202]s'),'Original pre-selection PID/architecture gates changed')
 require(files['start.txt'].endswith('.echo MIXEL_NAMESPACE_TRACE_READY\n'),'Initial debugger script must finish at the verified readiness barrier')
 require(not re.search(r'(?m)^\s*(?:g|gc|gh|gn)\s*$',files['start.txt']),'Initial script resumed before the owned parent removed external suspension')
 require('ba3 e 1 @$t13' in files['entry.txt'],'Fourth and final hardware slot missing')
@@ -146,7 +151,8 @@ def win_entry(sequence=1,mask=7,matched=1,access=1,inherit=1):
     return f'MIXEL_NAMESPACE_WIN32_ENTRY sequence={sequence} leafValidMask={mask} leafMatched={matched} accessMatched={access} inheritFalse={inherit}'
 def pre_entry(sequence=1,api=1):
     return f'MIXEL_NAMESPACE_PREWINDOW_ENTRY sequence={sequence} api={api}'
-ready_prefix='\n'.join([module.BINDINGS,module.READY])+'\n'
+selection='MIXEL_NAMESPACE_THREAD_SELECTION processMatched=1 threadMatched=1'
+ready_prefix='\n'.join([selection,module.BINDINGS,module.READY])+'\n'
 prefix = ready_prefix+module.HWCONTROL+'\n'+win_entry()+'\nMIXEL_NAMESPACE_TRACE_WINDOW\n'
 def record(sequence=1,api=1,access='0000000f',root=0,kind=4,status='c0000022',handle=0,qualified=1):
     return f'MIXEL_NAMESPACE_NATIVE seq={sequence} api={api} access=0x{access} rootNonNull={root} pathKind={kind} ntstatus=0x{status} handleNonNull={handle} scopeQualified={qualified}'
@@ -239,6 +245,20 @@ for entry in [win_entry(matched=0),pre_entry()]:
     rejects(lambda entry=entry:module.parse_trace(valid.replace(record(),entry+'\n'+record())),'Diagnostic accepted inside actual native window')
     rejects(lambda entry=entry:module.parse_trace(ready_prefix+entry+'\n'),'Partial/no-window diagnostics qualified source completion')
 rejects(lambda:module.parse_trace(valid+'MIXEL_NAMESPACE_TRACE_FAIL_ENTRY_LIMIT\n'),'Overflow marker ignored')
+for process in [0,1]:
+    for thread in [0,1]:
+        alternate=f'MIXEL_NAMESPACE_THREAD_SELECTION processMatched={process} threadMatched={thread}'
+        if process and thread:require(module.parse_trace(valid)==result,'Exact thread selection no longer accepts qualified source')
+        else:rejects(lambda alternate=alternate:module.parse_trace(valid.replace(selection,alternate)),'False thread selection qualifies source trace')
+for marker in [selection+' extra=PRIVATE_UNKNOWN',selection.replace('processMatched=1','processMatched=true'),selection.replace('threadMatched=1','threadMatched=2'),selection.replace('threadMatched=1','threadMatched=01'),selection.replace('processMatched','ProcessMatched'),'MIXEL_NAMESPACE_THREAD_SELECTION','MIXEL_NAMESPACE_THREAD_SELECTION_EXTRA']:
+    rejects(lambda marker=marker:module.parse_trace(valid.replace(selection,marker)),'Malformed/unknown thread selection qualifies source trace')
+rejects(lambda:module.parse_trace(valid.replace(selection+'\n','')),'Missing thread selection qualifies source trace')
+rejects(lambda:module.parse_trace(valid.replace(selection,selection+'\n'+selection)),'Duplicate thread selection qualifies source trace')
+rejects(lambda:module.parse_trace(valid.replace(selection+'\n','').replace(module.BINDINGS,module.BINDINGS+'\n'+selection)),'Late thread selection qualifies source trace')
+rejects(lambda:module.parse_trace(valid.replace(selection+'\n','').replace(module.READY,module.READY+'\n'+selection)),'Post-READY thread selection qualifies source trace')
+rejects(lambda:module.parse_trace(selection),'Partial thread selection qualifies source trace')
+rejects(lambda:module.parse_trace(valid.rstrip('\n')),'Partial final END qualifies source trace')
+require(module.parse_trace(valid+'MIXEL_NAMESPACE_THREAD_SELECTION processMatched=')==result,'Incomplete final diagnostic tail was treated as a completed marker')
 rejects(lambda:module.parse_trace(valid.replace(module.HWCONTROL+'\n','')),'Missing future hardware control qualifies source window')
 rejects(lambda:module.parse_trace(valid.replace(module.HWCONTROL,module.HWCONTROL+'\n'+module.HWCONTROL)),'Duplicate hardware control accepted')
 rejects(lambda:module.parse_trace(module.HWCONTROL+'\n'+valid),'Control accepted before readiness')
