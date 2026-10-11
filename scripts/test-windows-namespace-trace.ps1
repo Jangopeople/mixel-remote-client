@@ -405,7 +405,64 @@ function Assert-TraceReady([string]$Text) {
       ($markers.Count -eq 2 -and $markers[1] -cne 'MIXEL_NAMESPACE_TRACE_READY')) { throw 'Trace startup lacks the exact ordered bindings and one READY marker.' }
   return $markers.Count -eq 2
 }
-function Get-TraceFailureFacts($Live,[ValidateSet('export','identity','commands','startup','resume','trace','parse','result','ack','cleanup')][string]$Phase,[bool]$TimedOut) {
+function Get-TraceCdbStopFacts([string]$Text) {
+  $end=$Text.LastIndexOf("`n");$complete=if ($end -ge 0) {$Text.Substring(0,$end+1)} else {''}
+  $kindOf={param([string]$InputText)
+    $kind='none'
+    foreach ($match in [regex]::Matches($InputText,'(?im)^\s*ntdll!(DbgBreakPoint|DbgUiRemoteBreakin|LdrpDoDebuggerBreak)(?:\+0x[0-9a-f]+)?:\s*$')) {
+      $kind=switch ($match.Groups[1].Value.ToLowerInvariant()) {
+        'dbgbreakpoint' {'debug-break'}
+        'dbguiremotebreakin' {'remote-breakin'}
+        'ldrpdodebuggerbreak' {'loader-break'}
+      }
+    }
+    return $kind
+  }
+  $ready=[regex]::Matches($complete,'(?m)^MIXEL_NAMESPACE_TRACE_READY\r?\n')
+  $afterReady=if($ready.Count -eq 1){$Text.Substring($ready[0].Index+$ready[0].Length)}else{''}
+  $postEnd=$afterReady.LastIndexOf("`n");$postComplete=if($postEnd -ge 0){$afterReady.Substring(0,$postEnd+1)}else{''}
+  # Only fixed categories and capped counts leave the private debugger output.
+  return [pscustomobject]@{
+    debuggerPromptCount=[Math]::Min(32,[regex]::Matches($complete,'(?m)^\s*[0-9]+:[0-9a-fA-F]+>').Count)
+    firstChanceBreakpointCount=[Math]::Min(32,[regex]::Matches($complete,'(?im)^[^\r\n]*Break instruction exception - code 80000003 \(first chance\)\s*$').Count)
+    firstChanceSingleStepCount=[Math]::Min(32,[regex]::Matches($complete,'(?im)^[^\r\n]* - code 80000004 \(first chance\)\s*$').Count)
+    firstChanceAccessViolationCount=[Math]::Min(32,[regex]::Matches($complete,'(?im)^[^\r\n]* - code c0000005 \(first chance\)\s*$').Count)
+    initialBreakpointBannerCount=[Math]::Min(32,[regex]::Matches($complete,'(?im)^\s*Initial breakpoint(?: hit)?\s*$').Count)
+    hardwareBreakpointHitCount=[Math]::Min(32,[regex]::Matches($complete,'(?im)^\s*Breakpoint [0-3] hit\s*$').Count)
+    lastRecognizedStopKind=& $kindOf $complete
+    postReadyEvidenceAvailable=$ready.Count -eq 1
+    # CDB's waiting command prompt may be the final, un-terminated output.
+    postReadyPromptPresent=[bool]($afterReady -match '(?m)^\s*[0-9]+:[0-9a-fA-F]+>\s*$')
+    postReadyFirstChanceBreakpointCount=[Math]::Min(32,[regex]::Matches($postComplete,'(?im)^[^\r\n]*Break instruction exception - code 80000003 \(first chance\)\s*$').Count)
+    postReadyLastRecognizedStopKind=& $kindOf $postComplete
+  }
+}
+function Get-TraceExecutionFacts([int]$ChildPid,[string]$AttemptRoot,[bool]$Resumed,[int]$Previous,[bool]$Gated) {
+  $facts=[ordered]@{
+    privateGate=$Gated;primaryResumeObserved=$Resumed;primaryResumePrevious=$(if($Resumed -and $Previous -in @(-1,0,1)){$Previous}else{-2})
+    ownedChildState='unavailable';ownedChildExitCode=0L;ownedDebuggerStateAvailable=$false;ownedDebuggerAttached=$false
+    sourceResultMetadataAvailable=$false;sourceResultExists=$false;sourceResultBounded=$false
+    secondaryMetadataAvailable=$false;secondaryExists=$false;secondaryBounded=$false
+  }
+  if ($ChildPid -le 0) {return [pscustomobject]$facts}
+  try {
+    $status=[MixelOrdinaryTokenFixture]::StartedStatus($ChildPid)
+    if ($status -ceq 'still-running') {$facts.ownedChildState='still-running'}
+    elseif ($status -cmatch '\Aexited:0x([0-9a-f]{8})\z') {$facts.ownedChildState='exited';$facts.ownedChildExitCode=[Convert]::ToInt64($Matches[1],16)}
+  } catch {}
+  try {$facts.ownedDebuggerAttached=[MixelOrdinaryTokenFixture]::ActualOwnedDebuggerAttached($ChildPid);$facts.ownedDebuggerStateAvailable=$true} catch {}
+  foreach ($file in @(@('fixture-result.json','sourceResult'),@('fixture-namespace.json','secondary'))) {
+    try {
+      $path=Join-Path $AttemptRoot $file[0];Assert-TracePlainPath $path -AllowMissing
+      $exists=Test-Path -LiteralPath $path
+      $bounded=$false
+      if ($exists) {$item=Get-Item -LiteralPath $path -Force;$bounded=(-not $item.PSIsContainer -and $item.Length -le 4096)}
+      $facts[$file[1]+'MetadataAvailable']=$true;$facts[$file[1]+'Exists']=[bool]$exists;$facts[$file[1]+'Bounded']=[bool]$bounded
+    } catch {}
+  }
+  return [pscustomobject]$facts
+}
+function Get-TraceFailureFacts($Live,[ValidateSet('export','identity','commands','startup','resume','trace','parse','result','ack','cleanup')][string]$Phase,[bool]$TimedOut,$Execution=$null) {
   $text='';$stderr='';$readFailed=$false;$stdoutBytes=0L;$stderrBytes=0L
   if ($Live) {
     try {
@@ -428,6 +485,8 @@ function Get-TraceFailureFacts($Live,[ValidateSet('export','identity','commands'
     hardwareLimitFailure=[bool]($combined -match '(?i)(no hardware breakpoint|hardware breakpoint limit)')
     scopeFailure=[bool]($complete -match '(?m)^MIXEL_NAMESPACE_TRACE_FAIL_(?:SCOPE|PID|ARCH|WINDOW_NESTED|WIN32_INTERFACE)\r?$')
     returnFailure=[bool]($complete -match '(?m)^MIXEL_NAMESPACE_TRACE_FAIL_(?:RETURN_SCOPE|RETURN_HANDLE|WIN32_RETURN_SCOPE)\r?$')
+    debuggerStop=Get-TraceCdbStopFacts $text
+    execution=$Execution
   }
 }
 function New-TraceGatedSource([string]$Source,[string]$Gate,[string]$Nonce,[string]$Private) {
@@ -494,7 +553,7 @@ function Invoke-TraceAttempt([ValidateSet('absent','world')][string]$Scenario,[s
   $gate=Join-Path $gateRoot 'ready';$nonce=[Guid]::NewGuid().ToString('N')+[Guid]::NewGuid().ToString('N')
   $event='Mixel-Remote-Standard-Lease-'+[Guid]::NewGuid().ToString('N')
   $source=Join-Path $attemptRoot 'lease-standard.rs';$exe=Join-Path $attemptRoot 'lease-standard.exe'
-  $live=$null;$childPid=0;$eventHandle=[IntPtr]::Zero;$timeout=$false;$completed=$false;$phase='export';$attemptFailure=$null
+  $live=$null;$childPid=0;$eventHandle=[IntPtr]::Zero;$timeout=$false;$completed=$false;$phase='export';$attemptFailure=$null;$resumed=$false;$previous=-2
   try {
     [void](Invoke-TracePython @((Join-Path $PSScriptRoot 'test-support-lease.py'),'--export-standard-windows-fixture',$attemptRoot,'--event',('Global\'+$event)) $private 'source-export' 100)
     Assert-TracePlainPath $source;Assert-TracePlainPath $exe
@@ -531,11 +590,12 @@ function Invoke-TraceAttempt([ValidateSet('absent','world')][string]$Scenario,[s
     if (-not $ready -or -not [MixelOrdinaryTokenFixture]::ActualOwnedDebuggerAttached($childPid)) {
       $timeout=$true
       if ($Gated) { throw 'Private gated trace did not reach exact debugger readiness.' }
-      Write-Host ('OBSERVED: bounded source-only trace startup facts; '+((Get-TraceFailureFacts $live $phase $true) | ConvertTo-Json -Compress))
+      Write-Host ('OBSERVED: bounded source-only trace startup facts; '+((Get-TraceFailureFacts $live $phase $true (Get-TraceExecutionFacts $childPid $attemptRoot $resumed $previous ([bool]$Gated))) | ConvertTo-Json -Depth 4 -Compress))
       return [pscustomobject]@{StartupTimedOut=$true}
     }
     $phase='resume'
     $previous=[MixelOrdinaryTokenFixture]::ResumeOwnedPrimaryThread($childPid)
+    $resumed=$true
     if ((-not $Gated -and $previous -ne 1) -or ($Gated -and $previous -notin @(0,1))) { throw 'Trace did not perform the one qualified owned primary resume.' }
     if ($Gated) {
       $temporary=Join-Path $gateRoot 'ready.new';[IO.File]::WriteAllText($temporary,$nonce,[Text.UTF8Encoding]::new($false));[IO.File]::Move($temporary,$gate)
@@ -570,7 +630,7 @@ function Invoke-TraceAttempt([ValidateSet('absent','world')][string]$Scenario,[s
     return [pscustomobject]@{StartupTimedOut=$false;Scenario=$Scenario;PrivateGate=[bool]$Gated;FirstCallQualified=$true;OriginalSourceSHA256=$originalHash;DiagnosticSourceSHA256=$diagnosticHash;OwnedIdentityQualified=$true;DebuggerDetached=$true;SingleResumeQualified=$true;rawOpenError=$record.rawOpenError;Trace=$parsed}
   } catch {
     $attemptFailure=$_.Exception
-    Write-Host ('OBSERVED: bounded source-only trace failure facts; '+((Get-TraceFailureFacts $live $phase $timeout) | ConvertTo-Json -Compress))
+    Write-Host ('OBSERVED: bounded source-only trace failure facts; '+((Get-TraceFailureFacts $live $phase $timeout (Get-TraceExecutionFacts $childPid $attemptRoot $resumed $previous ([bool]$Gated))) | ConvertTo-Json -Depth 4 -Compress))
     throw
   } finally {
     $errors=[Collections.Generic.List[Exception]]::new()
