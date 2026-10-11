@@ -393,7 +393,9 @@ def fetch_source():
                 tree = subprocess.check_output(["git", "-C", directory, "rev-parse", "FETCH_HEAD^{tree}"], timeout=30).decode().strip()
                 if head != PIN or tree != TREE:
                     raise RuntimeError("Fetched renderer identity changed")
-                return source_files(subprocess.check_output(["git", "-C", directory, "archive", "--format=tar", PIN], timeout=30))
+                # git archive applies checkout conversion too. Preserve exact
+                # pinned blob bytes even under Windows core.autocrlf defaults.
+                return source_files(subprocess.check_output(["git", "-c", "core.autocrlf=false", "-c", "core.eol=lf", "-C", directory, "archive", "--format=tar", PIN], timeout=30))
         except (subprocess.SubprocessError, OSError):
             if attempt == 2:
                 raise RuntimeError("Pinned renderer fetch failed after 3 attempts") from None

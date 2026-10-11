@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Run pinned renderer lifecycle, frame-lock, async Dart and materialization controls."""
 import argparse
+import ast
 import hashlib
 import importlib.util
 import io
@@ -534,6 +535,61 @@ Future<void> main() async {
     print(run([dart, str(negative)], output, "original-dart-zero-output.log").strip())
 
 
+def git_archive_controls(output, files):
+    # Reconstruct only the already verified98 source blobs in an owned Git
+    # object database; no global settings, upstream refs or worktrees change.
+    fixture = output / "actual-git-archive-source"
+    fixture.mkdir()
+    for name, data in files.items():
+        file = fixture / name
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_bytes(data)
+    subprocess.run(["git", "init", "-q", str(fixture)], check=True, capture_output=True, timeout=30)
+    subprocess.run(["git", "-c", "core.autocrlf=false", "-c", "core.eol=lf", "-C", str(fixture), "add", "-f", "--", "."], check=True, capture_output=True, timeout=30)
+    tree = subprocess.check_output(["git", "-C", str(fixture), "write-tree"], timeout=30).decode().strip()
+    subprocess.run(["git", "-C", str(fixture), "config", "core.autocrlf", "true"], check=True, capture_output=True, timeout=30)
+    subprocess.run(["git", "-C", str(fixture), "config", "core.eol", "crlf"], check=True, capture_output=True, timeout=30)
+    helper = ast.parse((ROOT / "scripts/patch-support-macos-texture.py").read_text())
+    fetch = next(node for node in helper.body if isinstance(node, ast.FunctionDef) and node.name == "fetch_source")
+    calls = [node for node in ast.walk(fetch) if isinstance(node, ast.Call)
+             and isinstance(node.func, ast.Attribute) and node.func.attr == "check_output"
+             and node.args and isinstance(node.args[0], ast.List)
+             and any(isinstance(part, ast.Constant) and part.value == "archive" for part in node.args[0].elts)]
+    assert len(calls) == 1
+    call = calls[0]
+    assert len(call.keywords) == 1 and call.keywords[0].arg == "timeout" and call.keywords[0].value.value == 30
+    command = eval(compile(ast.Expression(call.args[0]), "actual-fetch-source-archive-command", "eval"),
+                   {"__builtins__": {}}, {"directory": str(fixture), "PIN": tree})
+    assert command[:5] == ["git", "-c", "core.autocrlf=false", "-c", "core.eol=lf"]
+    original = [command[0]] + command[5:]
+    uncorrected = subprocess.check_output(original, timeout=30)
+    (output / "actual-original-autocrlf-archive.tar").write_bytes(uncorrected)
+    try:
+        P.source_files(uncorrected)
+    except RuntimeError as error:
+        assert str(error) == "Complete pinned renderer inventory changed"
+    else:
+        raise AssertionError("Original Git archive unexpectedly preserved pinned LF blobs under core.autocrlf=true")
+    corrected = subprocess.check_output(command, timeout=30)
+    (output / "actual-corrected-autocrlf-archive.tar").write_bytes(corrected)
+    assert P.source_files(corrected) == files
+    # Removing the current source's exact override recreates the real failure;
+    # an implementation that merely relaxes inventory validation cannot pass.
+    with tarfile.open(fileobj=io.BytesIO(uncorrected)) as archive:
+        prior = {entry.name: archive.extractfile(entry).read()
+                 for entry in archive.getmembers() if entry.isfile()}
+    changed = sorted(name for name in files if prior[name] != files[name])
+    assert changed
+    (output / "git-archive-source-proof.json").write_text(json.dumps({
+        "result": "passed", "pinned_inventory_sha256": P.INVENTORY_SHA,
+        "original_changed_file_count": len(changed), "original_changed_files": changed,
+        "original_archive_sha256": P.sha(uncorrected), "corrected_archive_sha256": P.sha(corrected),
+        "source_extracted_command": command, "original_inventory_rejected": True,
+        "corrected_all98_blobs_equal": True, "global_Git_settings_changed": False,
+        "scope": "Real Git archive conversion on an isolated98-blob source fixture; revision is an owned fixture tree, not a fabricated upstream identity. Actual fetch retains its exact commit/tree checks."}, indent=2) + "\n")
+    print("PASS: real Git core.autocrlf=true archive changes pinned source bytes and original inventory rejects; current exact-source archive command preserves all98 blobs without global setting changes")
+
+
 def workflow_controls(output, originals, files):
     workflow = (ROOT / ".github/workflows/build.yml").read_text()
     hook = "          RDREPO=. python3 ../scripts/patch-support-macos-texture.py\n"
@@ -627,6 +683,7 @@ def main():
         if args.output:
             output.mkdir(parents=True, exist_ok=False)
         generated = materialization_controls(output, originals, files)
+        git_archive_controls(output, files)
         workflow_controls(output, originals, files)
         swift_controls(output, files)
         rust_controls(output, generated)
