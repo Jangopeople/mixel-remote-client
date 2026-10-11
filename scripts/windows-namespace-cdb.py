@@ -113,7 +113,7 @@ def commands(pid, tid, session, event, folder, pe):
                'r $t19 = 0',f'.echo {HWCONTROL}','gc']
     init = ['.expr /s masm', f'.if (@$tpid != 0n{pid}) {{ {fail("PID")} }}',
             f'.if (@$ptrsize != 0n8) {{ {fail("ARCH")} }}',
-            f'~[0n{tid}]s',
+            f'{thread}s',
             f'.printf "MIXEL_NAMESPACE_THREAD_SELECTION processMatched=%u threadMatched=%u\\n",(@$tpid == 0n{pid}),(@$tid == 0n{tid})',scope,
             'bc *', 'r $t0 = 0', 'r $t4 = 0', 'r $t5 = 0', 'r $t16 = 0', 'r $t17 = 0',
             f'.if (@$exentry <= 0n{pe["entryRva"]}) {{ {fail("IMAGE")} }}',
