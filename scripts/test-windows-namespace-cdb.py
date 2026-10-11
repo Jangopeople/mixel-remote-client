@@ -4,8 +4,13 @@ import importlib.util
 import json
 from pathlib import Path
 import re
+import struct
+import sys
+import tempfile
 
 ROOT = Path(__file__).parent
+sys.path.insert(0,str(ROOT))
+from windows_namespace_probe import PROBE, MARKER, CAPTURE, diagnostic_source, qualify_pe, qualify_file
 spec = importlib.util.spec_from_file_location('bounded_cdb_diagnostic', ROOT/'windows-namespace-cdb.py')
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
@@ -23,8 +28,63 @@ def rejects(call, message):
     else: raise AssertionError(message)
 
 leaf = 'Mixel-Remote-Standard-Lease-'+'0123456789abcdef'*2
-files, paths = module.commands(101,202,2,leaf,r'D:\a\_temp\mixel-ns-trace-control')
-require(len(files)==20 and len(paths)==12,'Bounded helper/program shape changed')
+def synthetic_pe():
+    data=bytearray(3072);data[:2]=b'MZ'
+    def w(at,value):struct.pack_into('<H',data,at,value)
+    def d(at,value):struct.pack_into('<I',data,at,value)
+    d(0x3c,128);data[128:132]=b'PE\0\0';w(132,0x8664);w(134,2);w(148,240);w(150,0x22)
+    opt=152;w(opt,0x20b);d(opt+16,0x1000);d(opt+56,0x3000);d(opt+60,1024);w(opt+68,3);d(opt+108,16);d(opt+112,0x2000);d(opt+116,0x180)
+    for index,(va,raw,flags) in enumerate([(0x1000,1024,0x60000020),(0x2000,2048,0x40000040)]):
+        at=opt+240+40*index
+        for offset,value in [(8,1024),(12,va),(16,1024),(20,raw),(36,flags)]:d(at+offset,value)
+    for offset,value in [(12,0x20b0),(16,1),(20,1),(24,1),(28,0x2040),(32,0x2044),(36,0x2048)]:d(2048+offset,value)
+    d(2112,0x1100);d(2116,0x2060);w(2120,0)
+    name=PROBE.encode()+b'\0';data[2144:2144+len(name)]=name
+    data[2224:2243]=b'lease-standard.exe\0'
+    return bytes(data)
+pe_bytes=synthetic_pe();pe=qualify_pe(pe_bytes)
+require(pe['entryRva']==0x1000 and pe['probeRva']==0x1100 and pe['imageSize']==0x3000,'Exact raw-backed private PE geometry changed')
+def patched_pe(offset,value,width=4):
+    data=bytearray(pe_bytes);struct.pack_into('<H' if width==2 else '<I',data,offset,value);return bytes(data)
+for bad in [None,'MZ',bytearray(pe_bytes),b'',b'MZ'+b'\0'*126,pe_bytes[:1024],pe_bytes+b'\0'*16777216]:
+    rejects(lambda bad=bad:qualify_pe(bad),'Absent/oversized/non-byte PE accepted')
+for offset,value,width in [(0x3c,0xffffffff,4),(128,0,4),(132,0x14c,2),(134,0,2),(134,97,2),(148,119,2),(148,4097,2),(150,0x2022,2),(150,0x120,2),(152,0x10b,2),(220,2,2),(260,0,4),(260,17,4),(168,0,4),(168,0x3000,4),(208,1024,4),(212,471,4),(212,65537,4),(400,0x2c00,4),(404,0xffffffff,4),(408,0xffffffff,4),(444,0x1000,4),(452,1024,4),(428,0x40000020,4),(428,0xe0000020,4),(268,39,4),(268,65537,4),(2064,0,4),(2068,0,4),(2068,129,4),(2068,2,4),(2072,2,4),(2076,0x2000,4),(2080,0x2040,4),(2084,0x2044,4),(2116,0x2040,4),(2116,0x1100,4),(2120,1,2),(2112,0x2000,4),(2112,0x1000,4),(2112,0,4),(2112,0x3000,4),(2112,0x2400,4),(2060,0,4),(2060,0x2060,4)]:
+    rejects(lambda offset=offset,value=value,width=width:qualify_pe(patched_pe(offset,value,width)),'Malformed/overlapping/forwarded/non-executable PE accepted')
+bad=bytearray(pe_bytes);bad[2144]=ord('X');rejects(lambda:qualify_pe(bytes(bad)),'Different export name accepted')
+bad=bytearray(pe_bytes);bad[2144+len(PROBE)]=ord('X');rejects(lambda:qualify_pe(bytes(bad)),'Unterminated exact export name accepted')
+require(qualify_pe(pe_bytes)==pe,'PE qualification changed its input or result')
+with tempfile.TemporaryDirectory(prefix='mixel-private-pe-control-') as temporary:
+    root=Path(temporary);binary=root/'lease-standard.exe';binary.write_bytes(pe_bytes)
+    require(qualify_file(binary,pe['exeSHA256'])==pe,'Actual bounded executable file/hash qualification failed')
+    require(qualify_file(binary,pe['exeSHA256'].upper())==pe,'Canonical uppercase hash was rejected')
+    for sha in ['', '0'*64, 'g'*64,None,1]:
+        if sha is None:continue
+        rejects(lambda sha=sha:qualify_file(binary,sha),'Wrong/malformed executable hash accepted')
+    alias=root/'alias.exe';alias.symlink_to(binary)
+    for path in [alias,root,root/'missing.exe',str(binary),root/'other.bin']:
+        rejects(lambda path=path:qualify_file(path),'Indirect/non-file/wrong-type private executable accepted')
+    binary.write_bytes(b'MZ')
+    rejects(lambda:qualify_file(binary),'Small invalid binary accepted')
+    binary.write_bytes(b'\0'*16777217)
+    rejects(lambda:qualify_file(binary),'Oversized executable read accepted')
+minimal=MARKER+'\n'+CAPTURE+'\n'
+for gated in [False,True]:
+    transformed=diagnostic_source(minimal,r'D:\owned\gate','0'*64,gated)
+    require(transformed.count(f'let trace_probe_tid = {PROBE}();')==1 and transformed.count(f'pub extern "C" fn {PROBE}()')==1,'Source probe call/export is not unique')
+    require(transformed.index('let trace_probe_tid')<transformed.index(MARKER)<transformed.index('fixture-hwcontrol.new')<transformed.index(CAPTURE),'Probe call/capture/supplemental order invalid')
+    require(transformed.count(MARKER)==1 and transformed.count(CAPTURE)==1 and 'GetCurrentThreadId() -> u32' in transformed,'Original capture or native thread getter changed')
+    require(('let trace_gate' in transformed)==gated,'No-pr/gated source distinction changed')
+    if gated:require(transformed.index('let trace_gate')<transformed.index('let trace_probe_tid'),'Probe executed before nonce barrier')
+for source in ['',MARKER, minimal+MARKER, minimal+CAPTURE,minimal+PROBE]:
+    rejects(lambda source=source:diagnostic_source(source,'D:\\gate','0'*64,True),'Ambiguous/missing original source boundary accepted')
+for nonce in ['', '0'*63,'0'*65,'G'+'0'*63]:
+    rejects(lambda nonce=nonce:diagnostic_source(minimal,'D:\\gate',nonce,True),'Invalid private nonce accepted')
+for gate in ['', 'D:\\gate\n', 'D:\\gate\0']:
+    rejects(lambda gate=gate:diagnostic_source(minimal,gate,'0'*64,True),'Invalid private gate path accepted')
+rejects(lambda:diagnostic_source(minimal,'D:\\gate','0'*64,1),'Nonboolean timing mode accepted')
+def commands(*args):return module.commands(*args,pe)
+files, paths = commands(101,202,2,leaf,r'D:\a\_temp\mixel-ns-trace-control')
+require(len(files)==21 and len(paths)==12,'Bounded helper/program shape changed')
 for name, data in files.items():
     require(len(data.replace('\n',';\n').encode('ascii'))<=4096, 'Condensed command block exceeds4096 characters')
     require(not re.search(r'(?i)%m[asu]|\b(?:du|db|dw|dq)\s|\.call\b|\.fnret\b|\bgu\b|(?<!\$)\bbp[0-9 ]|\bbu\b',data),'Raw strings/memory/software breakpoint/altered-return command')
@@ -40,8 +100,8 @@ for kind in range(1,13):
     require(name in files and ('$$><'+r'D:\a\_temp\mixel-ns-trace-control'+'\\'+name) in files['entry.txt'],'Native path helper not consumed')
     require(f'r $t10 = 0n{kind}' in files[name] and '.if (@$t8 == 0n' in files[name],'Native helper lost exact byte-length match')
     require(not re.search(r'(?i)\b(?:g|gc|gh|gn|qd|ba|bc|bd|be)\b|MIXEL_NAMESPACE_',files[name]),'Native helper changed execution/marker scope')
-rejects(lambda:module.commands(101,202,2,leaf,'D:\\'+'a'*4096),'Oversized nested script folder accepted')
-maximum_files,_=module.commands(0xffffffff,0xffffffff,0xffffffff,leaf,r'D:\a\_temp\mixel-ns-trace-control')
+rejects(lambda:commands(101,202,2,leaf,'D:\\'+'a'*4096),'Oversized nested script folder accepted')
+maximum_files,_=commands(0xffffffff,0xffffffff,0xffffffff,leaf,r'D:\a\_temp\mixel-ns-trace-control')
 require(all(len(text.replace('\n',';\n').encode('ascii'))<=4096 for text in maximum_files.values()),'Largest DWORD identity/path exceeds4096')
 require('.if (@$t15 != 0) {' in files['winentry.txt'] and files['winentry.txt'].endswith('}\ngc\n'),'Nonmatching Win32 call can fall through after resume')
 require('.if (@$t16 == 1) {' in files['entry.txt'] and files['entry.txt'].endswith('}\ngc\n'),'Pre-window native call can fall through after resume')
@@ -53,6 +113,12 @@ require('ba2 e 1 KERNELBASE!OpenEventW' in files['start.txt'],'Exact Win32 windo
 require(files['start.txt'].endswith('.echo MIXEL_NAMESPACE_TRACE_READY\n'),'Initial debugger script must finish at the verified readiness barrier')
 require(not re.search(r'(?m)^\s*(?:g|gc|gh|gn)\s*$',files['start.txt']),'Initial script resumed before the owned parent removed external suspension')
 require('ba3 e 1 @$t13' in files['entry.txt'],'Fourth and final hardware slot missing')
+require('ba3 e 1 /1 @$t19' in files['start.txt'] and '~[0n202]s' in files['start.txt'],'Future export control or explicit OS-thread context missing')
+require('r $t15 = @$exentry - 0n4096' in files['start.txt'] and 'r $t19 = @$t15 + 0n4352' in files['start.txt'],'Actual PE entry/export loaded-address correlation changed')
+require('r $t19 = 0' in files['hwcontrol.txt'] and 'bc 3' not in files['hwcontrol.txt'] and files['hwcontrol.txt'].endswith('gc\n'),'One-shot control sentinel/removal/continuation changed')
+require(files['hwcontrol.txt'].index('TRACE_FAIL_SCOPE')<files['hwcontrol.txt'].index('r $t19 = 0')<files['hwcontrol.txt'].index(module.HWCONTROL),'Control marker precedes exact thread/RIP qualification')
+require('(@rip != @$t19)' in files['hwcontrol.txt'] and '(@$t19 == 0)' in files['hwcontrol.txt'],'Future control lacks RIP or duplicate guard')
+require('@$t19 != 0' in files['entry.txt'] and '@$t19 != 0' in files['winentry.txt'],'Native window can reuse pending control slot')
 require('~~[0xca]ba3' in files['entry.txt'],'Native return lacks actual OS TID restriction')
 require('@rsp != @$t12+0n8' in files['return.txt'],'Native return stack scope missing')
 require('@rsp != @$t14+0n8' in files['winreturn.txt'],'Win32 return stack scope missing')
@@ -70,18 +136,18 @@ require(files['return.txt'].count('\\n')==1, 'Native scalar output newline escap
 for value in [0,-1,0x100000000,None,True,'101']:
     for field in range(3):
         ids=[101,202,2];ids[field]=value
-        rejects(lambda ids=ids:module.commands(*ids,leaf,r'D:\a\_temp\mixel-ns-trace-control'),'Malformed identity accepted')
+        rejects(lambda ids=ids:commands(*ids,leaf,r'D:\a\_temp\mixel-ns-trace-control'),'Malformed identity accepted')
 for event in ['',leaf+'x',leaf+'\\secret','Global\\'+leaf,'Local\\'+leaf,leaf.upper(),'Other-'+('0'*32),leaf.replace('0','g',1)]:
-    rejects(lambda event=event:module.commands(101,202,2,event,r'D:\a\_temp\mixel-ns-trace-control'),'Arbitrary event name accepted')
+    rejects(lambda event=event:commands(101,202,2,event,r'D:\a\_temp\mixel-ns-trace-control'),'Arbitrary event name accepted')
 for folder in ['',r'\\host\share',r'C:\..\owned',r'C:\owned\..',r'C:\owned path',r'C:\owned%path',r'C:\owned;echo',r'C:\owned"path',r'C:\owned&path','C:\\owned\npath','C:\\owned\\']:
-    rejects(lambda folder=folder:module.commands(101,202,2,leaf,folder),'Ambiguous command folder accepted')
+    rejects(lambda folder=folder:commands(101,202,2,leaf,folder),'Ambiguous command folder accepted')
 
 def win_entry(sequence=1,mask=7,matched=1,access=1,inherit=1):
     return f'MIXEL_NAMESPACE_WIN32_ENTRY sequence={sequence} leafValidMask={mask} leafMatched={matched} accessMatched={access} inheritFalse={inherit}'
 def pre_entry(sequence=1,api=1):
     return f'MIXEL_NAMESPACE_PREWINDOW_ENTRY sequence={sequence} api={api}'
 ready_prefix='\n'.join([module.BINDINGS,module.READY])+'\n'
-prefix = ready_prefix+win_entry()+'\nMIXEL_NAMESPACE_TRACE_WINDOW\n'
+prefix = ready_prefix+module.HWCONTROL+'\n'+win_entry()+'\nMIXEL_NAMESPACE_TRACE_WINDOW\n'
 def record(sequence=1,api=1,access='0000000f',root=0,kind=4,status='c0000022',handle=0,qualified=1):
     return f'MIXEL_NAMESPACE_NATIVE seq={sequence} api={api} access=0x{access} rootNonNull={root} pathKind={kind} ntstatus=0x{status} handleNonNull={handle} scopeQualified={qualified}'
 suffix='MIXEL_NAMESPACE_WIN32 handleNonNull=0 scopeQualified=1\n'+module.END+'\n'
@@ -153,12 +219,12 @@ for name in [leaf.upper(),spellings[0]+'x',spellings[0].replace('Global','global
 
 for size in [1,2,31,32]:
     entries=[pre_entry(i,1+(i%2)) for i in range(1,size)] + [win_entry(size)]
-    raw=ready_prefix+'\n'.join(entries)+'\nMIXEL_NAMESPACE_TRACE_WINDOW\n'+record()+'\n'+suffix
+    raw=ready_prefix+module.HWCONTROL+'\n'+'\n'.join(entries)+'\nMIXEL_NAMESPACE_TRACE_WINDOW\n'+record()+'\n'+suffix
     require(module.parse_trace(raw)==result,'Bounded source-only diagnostics altered actual capture result schema/values')
 for mask in range(8):
     for access in [0,1]:
         for inherit in [0,1]:
-            raw=ready_prefix+win_entry(mask=mask,matched=0,access=access,inherit=inherit)+'\n'+win_entry(2)+'\nMIXEL_NAMESPACE_TRACE_WINDOW\n'+suffix
+            raw=ready_prefix+module.HWCONTROL+'\n'+win_entry(mask=mask,matched=0,access=access,inherit=inherit)+'\n'+win_entry(2)+'\nMIXEL_NAMESPACE_TRACE_WINDOW\n'+suffix
             require(module.parse_trace(raw)['completedQualifiedSourceWindow'],'Unmatched bounded entry wrongly changed later exact window')
 for mask in range(1,8):
     require(module.parse_trace(valid.replace(win_entry(),win_entry(mask=mask)))==result,'Readable matched mask changed real native record')
@@ -173,6 +239,16 @@ for entry in [win_entry(matched=0),pre_entry()]:
     rejects(lambda entry=entry:module.parse_trace(valid.replace(record(),entry+'\n'+record())),'Diagnostic accepted inside actual native window')
     rejects(lambda entry=entry:module.parse_trace(ready_prefix+entry+'\n'),'Partial/no-window diagnostics qualified source completion')
 rejects(lambda:module.parse_trace(valid+'MIXEL_NAMESPACE_TRACE_FAIL_ENTRY_LIMIT\n'),'Overflow marker ignored')
+rejects(lambda:module.parse_trace(valid.replace(module.HWCONTROL+'\n','')),'Missing future hardware control qualifies source window')
+rejects(lambda:module.parse_trace(valid.replace(module.HWCONTROL,module.HWCONTROL+'\n'+module.HWCONTROL)),'Duplicate hardware control accepted')
+rejects(lambda:module.parse_trace(module.HWCONTROL+'\n'+valid),'Control accepted before readiness')
+rejects(lambda:module.parse_trace(valid+module.HWCONTROL+'\n'),'Control accepted after completion')
+rejects(lambda:module.parse_trace(valid.replace(module.HWCONTROL,module.HWCONTROL.replace('=1','=0'))),'Unqualified control accepted')
+for entries in [pre_entry()+'\n',win_entry(matched=0)+'\n',pre_entry()+'\n'+win_entry(2,matched=0)+'\n']:
+    size=len(entries.splitlines())
+    raw=ready_prefix+entries+module.HWCONTROL+'\n'+win_entry(size+1)+'\nMIXEL_NAMESPACE_TRACE_WINDOW\n'+suffix
+    require(module.parse_trace(raw)['completedQualifiedSourceWindow'],'Safe unmatched/source-IO calls before future probe were rejected')
+rejects(lambda:module.parse_trace(ready_prefix+win_entry()+'\n'+module.HWCONTROL+'\nMIXEL_NAMESPACE_TRACE_WINDOW\n'+suffix),'Control can follow first matched source entry')
 
 print(f'PASS: {checks} pure generator/parser controls; 4 hardware slots, exact Win32 GUID window, same-thread/RSP-qualified returns, shared32-entry diagnostics and32-record bound, native values unchanged')
 print('Scope: no actual Windows/CDB execution or signed/runtime/customer-Accept qualification')

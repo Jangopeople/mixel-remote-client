@@ -7,6 +7,7 @@ import argparse
 import json
 import re
 from pathlib import Path
+from windows_namespace_probe import qualify_file
 
 RECORD = re.compile(r'MIXEL_NAMESPACE_NATIVE seq=([0-9]+) api=([12]) access=0x([0-9a-fA-F]{8}) rootNonNull=([01]) pathKind=([0-9]+) ntstatus=0x([0-9a-fA-F]{8}) handleNonNull=([01]) scopeQualified=1')
 WIN32 = re.compile(r'MIXEL_NAMESPACE_WIN32 handleNonNull=([01]) scopeQualified=1')
@@ -15,18 +16,22 @@ PREWINDOW_ENTRY = re.compile(r'MIXEL_NAMESPACE_PREWINDOW_ENTRY sequence=([1-9][0
 BINDINGS = 'MIXEL_NAMESPACE_BINDINGS directory=1 event=1 win32=1'
 READY = 'MIXEL_NAMESPACE_TRACE_READY'
 END = 'MIXEL_NAMESPACE_TRACE_END'
+HWCONTROL = 'MIXEL_NAMESPACE_HWCONTROL scopeQualified=1'
 
 def windows_file(folder, leaf):
     if not re.fullmatch(r'[A-Z]:\\[A-Za-z0-9_\\.-]+', folder) or '..' in folder.split('\\') or folder.endswith('\\'):
         raise ValueError('Expected a bounded unambiguous owned Windows script folder')
     return folder + '\\' + leaf
 
-def commands(pid, tid, session, event, folder):
+def commands(pid, tid, session, event, folder, pe):
     for value in (pid, tid, session):
         if type(value) is not int or not 0 < value <= 0xffffffff:
             raise ValueError('Expected actual nonzero DWORD identity')
     if not re.fullmatch(r'Mixel-Remote-Standard-Lease-[0-9a-f]{32}', event):
         raise ValueError('Expected the exact isolated source-fixture GUID leaf')
+    # Only a freshly qualified complete executable supplies these fields.
+    if type(pe) is not dict or any(type(pe.get(k)) is not int or not 0 < pe[k] <= 0xffffffff for k in ('entryRva','probeRva','imageSize','peOffset','headersSize')):
+        raise ValueError('Expected bounded qualified private PE properties')
     def script(leaf):
         return '$$><' + windows_file(folder, leaf)
     def fail(tag):
@@ -60,6 +65,7 @@ def commands(pid, tid, session, event, folder):
         winentry.append(script(name))
     winentry.extend(['.printf "MIXEL_NAMESPACE_WIN32_ENTRY sequence=%u leafValidMask=%u leafMatched=%u accessMatched=%u inheritFalse=%u\\n",@$t4,@$t5,(@$t15 != 0),(@ecx == 0x00100000),(@edx == 0)',
                      '.if (@$t15 != 0) {',
+                     f'.if (@$t19 != 0) {{ {fail("HWCONTROL_MISSING")} }}',
                      f'.if ((@ecx != 0x00100000) or (@edx != 0)) {{ {fail("WIN32_INTERFACE")} }}',
                      'r $t16 = 1', 'r $t14 = @rsp',
                      f'.if ($vvalid(@$t14,0n8) == 0) {{ {fail("WIN32_STACK")} }}',
@@ -72,6 +78,7 @@ def commands(pid, tid, session, event, folder):
              'r $t4 = @$t4 + 1',
              '.printf "MIXEL_NAMESPACE_PREWINDOW_ENTRY sequence=%u api=%u\\n",@$t4,@$t1',
              '}', '.if (@$t16 == 1) {',
+             f'.if (@$t19 != 0) {{ {fail("HWCONTROL_MISSING")} }}',
              f'.if (@$t17 != 0) {{ {fail("NATIVE_NESTED")} }}',
              f'.if (@$t0 >= 0n32) {{ {fail("RECORD_LIMIT")} }}',
              'r $t0 = @$t0 + 1', 'r $t17 = 1', 'r $t2 = @edx',
@@ -93,7 +100,7 @@ def commands(pid, tid, session, event, folder):
         enter.append(script(name))
     enter.extend(['bd 0 1', f'{thread}ba3 e 1 @$t13 "{script("return.txt")}"', '}','gc'])
     ret = [scope,
-           f'.if ((@$t16 != 1) or (@$t17 != 1) or (@rsp != @$t12+0n8) or (@rip != @$t13)) {{ {fail("RETURN_SCOPE")} }}',
+           f'.if ((@$t19 != 0) or (@$t16 != 1) or (@$t17 != 1) or (@rsp != @$t12+0n8) or (@rip != @$t13)) {{ {fail("RETURN_SCOPE")} }}',
            f'.if ($vvalid(@$t11,0n8) == 0) {{ {fail("RETURN_HANDLE")} }}',
            '.printf "MIXEL_NAMESPACE_NATIVE seq=%u api=%u access=0x%08x rootNonNull=%u pathKind=%u ntstatus=0x%08x handleNonNull=%u scopeQualified=1\\n",@$t0,@$t1,@$t2,(@$t3 != 0),@$t10,@eax,(poi(@$t11) != 0)',
            'bc 3', 'r $t17 = 0', 'be 0 1', 'g']
@@ -101,20 +108,41 @@ def commands(pid, tid, session, event, folder):
               f'.if ((@$t16 != 1) or (@$t17 != 0) or (@rsp != @$t14+0n8) or (@rip != @$t18)) {{ {fail("WIN32_RETURN_SCOPE")} }}',
               '.printf "MIXEL_NAMESPACE_WIN32 handleNonNull=%u scopeQualified=1\\n",(@rax != 0)',
               '.echo MIXEL_NAMESPACE_TRACE_END', 'bc *', 'qd']
+    control = [scope,f'.if ((@$t19 == 0) or (@rip != @$t19) or (@$t16 != 0) or (@$t17 != 0)) {{ {fail("HWCONTROL_SCOPE")} }}',
+               'r $t19 = 0',f'.echo {HWCONTROL}','gc']
     init = ['.expr /s masm', f'.if (@$tpid != 0n{pid}) {{ {fail("PID")} }}',
             f'.if (@$ptrsize != 0n8) {{ {fail("ARCH")} }}',
+            f'~[0n{tid}]s',scope,
             'bc *', 'r $t0 = 0', 'r $t4 = 0', 'r $t5 = 0', 'r $t16 = 0', 'r $t17 = 0',
+            f'.if (@$exentry <= 0n{pe["entryRva"]}) {{ {fail("IMAGE")} }}',
+            f'r $t15 = @$exentry - 0n{pe["entryRva"]}',
+            f'.if (((@$t15 & 0xffff) != 0) or ($vvalid(@$t15,0n{pe["headersSize"]}) == 0)) {{ {fail("IMAGE")} }}']
+    checks=[(0,2,0x5a4d),(0x3c,4,pe['peOffset']),(pe['peOffset'],4,0x4550),
+            (pe['peOffset']+4,2,0x8664),(pe['peOffset']+6,2,pe['sectionCount']),
+            (pe['peOffset']+20,2,pe['optionalSize']),(pe['peOffset']+22,2,pe['coffFlags'])]
+    optional=pe['peOffset']+24
+    checks.extend([(optional,2,0x20b),(optional+16,4,pe['entryRva']),(optional+56,4,pe['imageSize']),
+                   (optional+60,4,pe['headersSize']),(optional+112,4,pe['exportRva']),(optional+116,4,pe['exportSize']),
+                   (pe['probeSectionHeader']+8,4,pe['probeSectionVirtualSize']),(pe['probeSectionHeader']+12,4,pe['probeSectionRva']),
+                   (pe['probeSectionHeader']+16,4,pe['probeSectionRawSize']),(pe['probeSectionHeader']+36,4,pe['probeSectionFlags'])])
+    for offset,size,value in checks:
+        read='wo' if size==2 else 'dwo'
+        init.append(f'.if ({read}(@$t15+0n{offset}) != 0n{value}) {{ {fail("IMAGE")} }}')
+    init.extend([f'r $t19 = @$t15 + 0n{pe["probeRva"]}',
+                 f'.if ((@$t19 <= @$t15) or (@$t19 >= @$t15+0n{pe["imageSize"]}) or ($vvalid(@$t19,0n1) == 0) or (@$t19 == ntdll!NtOpenDirectoryObject) or (@$t19 == ntdll!NtOpenEvent) or (@$t19 == KERNELBASE!OpenEventW)) {{ {fail("CONTROL_ADDRESS")} }}',
             f'{thread}ba0 e 1 ntdll!NtOpenDirectoryObject "r $t1 = 1; {script("entry.txt")}"',
             f'{thread}ba1 e 1 ntdll!NtOpenEvent "r $t1 = 2; {script("entry.txt")}"',
             f'{thread}ba2 e 1 KERNELBASE!OpenEventW "{script("winentry.txt")}"',
+            f'{thread}ba3 e 1 /1 @$t19 "{script("hwcontrol.txt")}"',
+            f'.if (@$bp3 != @$t19) {{ {fail("CONTROL_BINDING")} }}',
             '.printf "MIXEL_NAMESPACE_BINDINGS directory=%u event=%u win32=%u\\n",(@$bp0 == ntdll!NtOpenDirectoryObject),(@$bp1 == ntdll!NtOpenEvent),(@$bp2 == KERNELBASE!OpenEventW)',
             # Keep the initial debug event stopped. The retained parent removes
             # the source thread's external suspension after verifying READY,
             # then queues exactly one fixed continuation through owned stdin.
-            '.echo MIXEL_NAMESPACE_TRACE_READY']
+            '.echo MIXEL_NAMESPACE_TRACE_READY'])
     files = {name: '\n'.join(lines) + '\n' for name, lines in
              [('start.txt', init), ('winentry.txt', winentry), ('entry.txt', enter),
-              ('return.txt', ret), ('winreturn.txt', winret)]}
+              ('return.txt', ret), ('winreturn.txt', winret),('hwcontrol.txt',control)]}
     files.update(helpers)
     if any(len(text.replace('\n',';\n').encode('ascii')) > 4096 for text in files.values()):
         raise ValueError('Condensed CDB command block exceeds4096 characters')
@@ -124,7 +152,7 @@ def parse_trace(raw):
     if type(raw) is not str or len(raw.encode('utf-8')) > 1048576:
         raise ValueError('Bounded private trace exceeds1MiB')
     records, stage, window, winreturn = [], 0, False, None
-    entry_count, qualified_entry = 0, False
+    entry_count, qualified_entry, control = 0, False, False
     for line in raw.splitlines():
         line = line.strip()
         # Only exact marker lines count. Script command echoes remain ignored.
@@ -141,13 +169,16 @@ def parse_trace(raw):
             if stage != 1: raise ValueError('Ready lacks exact bindings')
             stage = 2
         elif line == 'MIXEL_NAMESPACE_TRACE_WINDOW':
-            if stage != 2 or window or not qualified_entry: raise ValueError('Window lacks its first qualified source entry')
+            if stage != 2 or window or not qualified_entry or not control: raise ValueError('Window lacks its qualified source entry/control')
             window = True
+        elif line == HWCONTROL:
+            if stage != 2 or window or qualified_entry or control: raise ValueError('Hardware control is duplicate/out-of-order')
+            control = True
         elif (match := WIN32_ENTRY.fullmatch(line)):
             if stage != 2 or window or qualified_entry: raise ValueError('Win32 entry outside bounded pre-window stage')
             sequence, mask, matched, access, inherit = map(int, match.groups())
             if sequence != entry_count + 1 or sequence > 32 or (matched and not mask): raise ValueError('Win32 entry sequence/readability invalid')
-            if matched and not (access and inherit): raise ValueError('Matched Win32 entry violates original interface')
+            if matched and not (access and inherit and control): raise ValueError('Matched Win32 entry violates original interface/control')
             entry_count = sequence
             qualified_entry = bool(matched and access and inherit)
         elif (match := PREWINDOW_ENTRY.fullmatch(line)):
@@ -181,6 +212,7 @@ def main():
     parser.add_argument('--pid', type=int); parser.add_argument('--tid', type=int)
     parser.add_argument('--session', type=int); parser.add_argument('--event')
     parser.add_argument('--windows-folder'); parser.add_argument('--output', type=Path)
+    parser.add_argument('--binary',type=Path);parser.add_argument('--exe-sha256')
     parser.add_argument('--parse', type=Path)
     args = parser.parse_args()
     if args.parse:
@@ -188,9 +220,10 @@ def main():
         result = parse_trace(args.parse.read_text(encoding='utf-8'))
         print(json.dumps(result, separators=(',', ':')))
         return
-    if None in (args.pid, args.tid, args.session, args.event, args.windows_folder, args.output):
+    if None in (args.pid, args.tid, args.session, args.event, args.windows_folder, args.output,args.binary,args.exe_sha256):
         parser.error('All generator identity/folder/output fields are required')
-    files, paths = commands(args.pid, args.tid, args.session, args.event, args.windows_folder)
+    pe=qualify_file(args.binary,args.exe_sha256)
+    files, paths = commands(args.pid, args.tid, args.session, args.event, args.windows_folder,pe)
     args.output.mkdir(mode=0o700, parents=True, exist_ok=True)
     for name, text in files.items():
         target = args.output / name; target.write_text(text); target.chmod(0o600)

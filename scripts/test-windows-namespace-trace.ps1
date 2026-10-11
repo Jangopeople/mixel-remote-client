@@ -452,7 +452,7 @@ function Test-TraceAdditionalSuspensionFallback($Live,[int]$ChildPid,[string]$At
         -not [MixelOrdinaryTokenFixture]::ActualOwnedDebuggerAttached($ChildPid)) {return $false}
     $text=[MixelNamespaceTraceIO]::ReadBounded($Live.outPath,1048576)
     if(-not (Assert-TraceReady $text) -or $text.Contains('MIXEL_NAMESPACE_TRACE_WINDOW') -or $text.Contains('MIXEL_NAMESPACE_TRACE_END')) {return $false}
-    foreach($file in @('fixture-result.json','fixture-namespace.json')) {
+    foreach($file in @('fixture-result.json','fixture-namespace.json','fixture-hwcontrol.json')) {
       $path=Join-Path $AttemptRoot $file;Assert-TracePlainPath $path -AllowMissing
       if(Test-Path -LiteralPath $path) {return $false}
     }
@@ -491,12 +491,13 @@ function Get-TraceCdbStopFacts([string]$Text) {
     postReadyLastRecognizedStopKind=& $kindOf $postComplete
   }
 }
-function Get-TraceExecutionFacts([int]$ChildPid,[string]$AttemptRoot,[bool]$Resumed,[int]$Previous,[bool]$Gated,$Continuation=$null,[bool]$ResumeAttempted=$false,[long]$AdditionalCount=-1) {
+function Get-TraceExecutionFacts([int]$ChildPid,[string]$AttemptRoot,[bool]$Resumed,[int]$Previous,[bool]$Gated,$Continuation=$null,[bool]$ResumeAttempted=$false,[long]$AdditionalCount=-1,[uint32]$Thread=0) {
   $facts=[ordered]@{
     privateGate=$Gated;primaryResumeObserved=$Resumed;primaryResumePrevious=$(if($Resumed -and $Previous -in @(-1,0,1)){$Previous}else{-2})
     ownedChildState='unavailable';ownedChildExitCode=0L;ownedDebuggerStateAvailable=$false;ownedDebuggerAttached=$false
     sourceResultMetadataAvailable=$false;sourceResultExists=$false;sourceResultBounded=$false
     secondaryMetadataAvailable=$false;secondaryExists=$false;secondaryBounded=$false
+    hwcontrolMetadataAvailable=$false;hwcontrolExists=$false;hwcontrolBounded=$false;hwcontrolSchemaValid=$false;sourceProcessMatched=$false;sourceThreadMatched=$false
     continuationStateAvailable=$false;continuationAttempted=$false;continuationWritten=$false;continuationQueued=$false
     primaryResumeAttempted=$ResumeAttempted -or $Resumed;additionalSuspensionCountKnown=$AdditionalCount -ge 2 -and $AdditionalCount -le 4294967294
     additionalPreviousSuspendCount=$(if($AdditionalCount -ge 2 -and $AdditionalCount -le 4294967294){$AdditionalCount}else{0L})
@@ -516,31 +517,41 @@ function Get-TraceExecutionFacts([int]$ChildPid,[string]$AttemptRoot,[bool]$Resu
     elseif ($status -cmatch '\Aexited:0x([0-9a-f]{8})\z') {$facts.ownedChildState='exited';$facts.ownedChildExitCode=[Convert]::ToInt64($Matches[1],16)}
   } catch {}
   try {$facts.ownedDebuggerAttached=[MixelOrdinaryTokenFixture]::ActualOwnedDebuggerAttached($ChildPid);$facts.ownedDebuggerStateAvailable=$true} catch {}
-  foreach ($file in @(@('fixture-result.json','sourceResult'),@('fixture-namespace.json','secondary'))) {
+  foreach ($file in @(@('fixture-result.json','sourceResult',4096),@('fixture-namespace.json','secondary',4096),@('fixture-hwcontrol.json','hwcontrol',128))) {
     try {
       $path=Join-Path $AttemptRoot $file[0];Assert-TracePlainPath $path -AllowMissing
       $exists=Test-Path -LiteralPath $path
       $bounded=$false
-      if ($exists) {$item=Get-Item -LiteralPath $path -Force;$bounded=(-not $item.PSIsContainer -and $item.Length -le 4096)}
+      if ($exists) {$item=Get-Item -LiteralPath $path -Force;$bounded=(-not $item.PSIsContainer -and $item.Length -le $file[2])}
       $facts[$file[1]+'MetadataAvailable']=$true;$facts[$file[1]+'Exists']=[bool]$exists;$facts[$file[1]+'Bounded']=[bool]$bounded
+      if($file[1] -ceq 'hwcontrol' -and $bounded){
+        $proof=Read-TraceProbeProof $path
+        if((@($proof.PSObject.Properties.Name|Sort-Object)-join ',') -ceq 'pid,tid'){
+          $valid=$true
+          foreach($field in @('pid','tid')){$value=$proof.PSObject.Properties[$field].Value;if(($value -isnot [int] -and $value -isnot [long]) -or $value -le 0 -or $value -gt 4294967295){$valid=$false}}
+          if($valid){$facts.hwcontrolSchemaValid=$true;$facts.sourceProcessMatched=$proof.pid -eq $ChildPid;$facts.sourceThreadMatched=$Thread -ne 0 -and $proof.tid -eq $Thread}
+        }
+      }
     } catch {}
   }
   return [pscustomobject]$facts
 }
 function Get-TraceEntryFacts([string]$Text) {
-  $facts=[ordered]@{markerSchemaValid=$true;completeMarkerCount=0;win32EntryCount=0;nativeDirectoryPreWindowCount=0;nativeEventPreWindowCount=0;entryLimitFailure=$false;entries=@()}
+  $facts=[ordered]@{markerSchemaValid=$true;hardwareControlCount=0;completeMarkerCount=0;win32EntryCount=0;nativeDirectoryPreWindowCount=0;nativeEventPreWindowCount=0;entryLimitFailure=$false;entries=@()}
   if ([Text.Encoding]::UTF8.GetByteCount($Text) -gt 1048576) {$facts.markerSchemaValid=$false;return [pscustomobject]$facts}
   $end=$Text.LastIndexOf("`n");$complete=if($end -ge 0){$Text.Substring(0,$end+1)}else{''}
   $ready=$false;$window=$false;$qualified=$false;$qualifiedInterface=$false;$items=[Collections.Generic.List[object]]::new()
   foreach ($line in @($complete -split '\r?\n' | ForEach-Object {$_.Trim()})) {
     if ($line -ceq 'MIXEL_NAMESPACE_TRACE_READY') {if($ready){$facts.markerSchemaValid=$false;break};$ready=$true;continue}
-    if ($line -ceq 'MIXEL_NAMESPACE_TRACE_WINDOW') {if(-not $ready -or $window -or -not $qualifiedInterface){$facts.markerSchemaValid=$false;break};$window=$true;continue}
+    if ($line -ceq 'MIXEL_NAMESPACE_TRACE_WINDOW') {if(-not $ready -or $window -or -not $qualifiedInterface -or $facts.hardwareControlCount -ne 1){$facts.markerSchemaValid=$false;break};$window=$true;continue}
+    if ($line -ceq 'MIXEL_NAMESPACE_HWCONTROL scopeQualified=1') {if(-not $ready -or $window -or $qualified -or $facts.hardwareControlCount -ne 0){$facts.markerSchemaValid=$false;break};$facts.hardwareControlCount=1;continue}
+    if ($line -cmatch '\AMIXEL_NAMESPACE_HWCONTROL') {$facts.markerSchemaValid=$false;break}
     if ($line -ceq 'MIXEL_NAMESPACE_TRACE_FAIL_ENTRY_LIMIT') {$facts.entryLimitFailure=$true;continue}
     if ($line -cnotmatch '\AMIXEL_NAMESPACE_(?:WIN32_ENTRY|PREWINDOW_ENTRY)') {continue}
     if (-not $ready -or $window -or $qualified -or $items.Count -ge 32) {$facts.markerSchemaValid=$false;break}
     if ($line -cmatch '\AMIXEL_NAMESPACE_WIN32_ENTRY sequence=([1-9][0-9]?) leafValidMask=([0-7]) leafMatched=([01]) accessMatched=([01]) inheritFalse=([01])\z') {
       $sequence=[int]$Matches[1];$mask=[int]$Matches[2];$matched=$Matches[3] -ceq '1';$access=$Matches[4] -ceq '1';$inherit=$Matches[5] -ceq '1'
-      if ($sequence -ne $items.Count+1 -or $sequence -gt 32 -or ($matched -and $mask -eq 0)) {$facts.markerSchemaValid=$false;break}
+      if ($sequence -ne $items.Count+1 -or $sequence -gt 32 -or ($matched -and ($mask -eq 0 -or $facts.hardwareControlCount -ne 1))) {$facts.markerSchemaValid=$false;break}
       $items.Add([pscustomobject]@{kind='win32';sequence=$sequence;leafValidMask=$mask;leafMatched=$matched;accessMatched=$access;inheritFalse=$inherit})
       $facts.win32EntryCount++;$qualified=$matched;$qualifiedInterface=$matched -and $access -and $inherit
     } elseif ($line -cmatch '\AMIXEL_NAMESPACE_PREWINDOW_ENTRY sequence=([1-9][0-9]?) api=([12])\z') {
@@ -552,7 +563,7 @@ function Get-TraceEntryFacts([string]$Text) {
   }
   # Malformed diagnostics never leak a partially accepted or arbitrary marker.
   if ($facts.markerSchemaValid) {$facts.completeMarkerCount=$items.Count;$facts.entries=$items.ToArray()}
-  else {$facts.win32EntryCount=0;$facts.nativeDirectoryPreWindowCount=0;$facts.nativeEventPreWindowCount=0}
+  else {$facts.hardwareControlCount=0;$facts.win32EntryCount=0;$facts.nativeDirectoryPreWindowCount=0;$facts.nativeEventPreWindowCount=0}
   return [pscustomobject]$facts
 }
 function Get-TraceFailureFacts($Live,[ValidateSet('export','identity','commands','startup','resume','trace','parse','result','ack','cleanup')][string]$Phase,[bool]$TimedOut,$Execution=$null) {
@@ -576,6 +587,7 @@ function Get-TraceFailureFacts($Live,[ValidateSet('export','identity','commands'
     syntaxFailure=[bool]($combined -match '(?i)syntax error')
     bindingFailure=[bool]($combined -match '(?i)(couldn.t resolve|unable to insert breakpoint)')
     hardwareLimitFailure=[bool]($combined -match '(?i)(no hardware breakpoint|hardware breakpoint limit)')
+    hardwareControlFailure=[bool]($complete -match '(?m)^MIXEL_NAMESPACE_TRACE_FAIL_(?:IMAGE|CONTROL_ADDRESS|CONTROL_BINDING|HWCONTROL_SCOPE|HWCONTROL_MISSING)\r?$')
     scopeFailure=[bool]($complete -match '(?m)^MIXEL_NAMESPACE_TRACE_FAIL_(?:SCOPE|PID|ARCH|WINDOW_NESTED|WIN32_INTERFACE)\r?$')
     returnFailure=[bool]($complete -match '(?m)^MIXEL_NAMESPACE_TRACE_FAIL_(?:RETURN_SCOPE|RETURN_HANDLE|WIN32_RETURN_SCOPE)\r?$')
     entryDiagnostics=Get-TraceEntryFacts $text
@@ -583,39 +595,30 @@ function Get-TraceFailureFacts($Live,[ValidateSet('export','identity','commands'
     execution=$Execution
   }
 }
-function New-TraceGatedSource([string]$Source,[string]$Gate,[string]$Nonce,[string]$Private) {
-  $generator=Join-Path $Private 'gate-source.py'
-  $code=@'
-import sys,json,os,shutil,subprocess
-from pathlib import Path
-sys.path.insert(0,sys.argv[1])
-from rust_toolchain import rustc_command
-source,gate,nonce=Path(sys.argv[2]),sys.argv[3],sys.argv[4]
-assert len(nonce)==64 and all(c in '0123456789abcdef' for c in nonce)
-text=source.read_text(encoding='utf-8')
-marker='        let status = support_invite_lease_status();\n        let raw_error = mixel_support_lease::fixture_raw_open_error();'
-assert text.count(marker)==1,'Exact pre-guard source probe boundary changed'
-barrier='''        assert_eq!(mode, "probe", "Private trace barrier requires probe mode");
-        let trace_gate = std::path::Path::new(GATE_LITERAL);
-        let trace_deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
-        loop {
-            if let Ok(metadata) = std::fs::symlink_metadata(trace_gate) {
-                assert!(metadata.is_file() && !metadata.file_type().is_symlink() && metadata.len() <= 64, "Invalid private trace gate");
-                if std::fs::read_to_string(trace_gate).unwrap() == NONCE_LITERAL { break; }
-            }
-            assert!(std::time::Instant::now() < trace_deadline, "Private trace gate timed out");
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        }
-'''.replace('GATE_LITERAL',json.dumps(gate)).replace('NONCE_LITERAL',json.dumps(nonce))
-source.write_text(text.replace(marker,barrier+marker,1),encoding='utf-8')
-rustc=os.environ.get('RUSTC_BIN') or shutil.which('rustc')
-assert rustc,'Qualified Rust compiler is missing'
-subprocess.run(rustc_command([rustc,'--edition','2021','-D','warnings',str(source),'-o',str(source.with_suffix('.exe'))]),check=True,timeout=90)
-print('PASS: private source-only timing gate compiled with warnings as errors')
-'@
-  [IO.File]::WriteAllText($generator,$code,[Text.UTF8Encoding]::new($false))
-  [void](Invoke-TracePython @($generator,$PSScriptRoot,$Source,$Gate,$Nonce) $Private 'gate-compile' 100)
+function New-TraceGatedSource([string]$Source,[string]$Gate,[string]$Nonce,[string]$Private,[bool]$Gated=$true) {
+  Assert-TracePlainPath $Source
+  Assert-TracePlainPath $Gate -AllowMissing
+  $arguments=@((Join-Path $PSScriptRoot 'windows_namespace_probe.py'),'--source',$Source,'--gate',$Gate,'--nonce',$Nonce)
+  if($Gated){$arguments+='--gated'}
+  [void](Invoke-TracePython $arguments $Private 'probe-compile' 100)
 }
+function Assert-TraceProbeProof($Proof,[uint32]$ChildPid,[uint32]$Thread) {
+  if((@($Proof.PSObject.Properties.Name|Sort-Object)-join ',') -cne 'pid,tid'){throw 'Private source probe proof schema is invalid.'}
+  foreach($field in @('pid','tid')){
+    $value=$Proof.PSObject.Properties[$field].Value
+    if(($value -isnot [int] -and $value -isnot [long]) -or $value -le 0 -or $value -gt 4294967295){throw 'Private source probe proof exceeded its DWORD domain.'}
+  }
+  if($Proof.pid -ne $ChildPid -or $Proof.tid -ne $Thread){throw 'Private source probe PID/thread disagrees with retained native ownership.'}
+}
+function Read-TraceProbeProof([string]$Path) {
+  Assert-TracePlainPath $Path
+  $text=[MixelNamespaceTraceIO]::ReadBounded($Path,128)
+  if($text -cnotmatch '\A\{"pid":([1-9][0-9]{0,9}),"tid":([1-9][0-9]{0,9})\}\z'){throw 'Private source probe bytes are not the exact bounded schema.'}
+  $pidValue=[long]$Matches[1];$tidValue=[long]$Matches[2]
+  if($pidValue -gt 4294967295 -or $tidValue -gt 4294967295){throw 'Private source probe bytes exceeded the DWORD domain.'}
+  return [pscustomobject]@{pid=$pidValue;tid=$tidValue}
+}
+
 function Assert-TraceParsedResult($Trace,$Record) {
   $names=@($Trace.PSObject.Properties.Name | Sort-Object)
   if (($names -join ',') -cne 'completedQualifiedSourceWindow,evidenceScope,nativeCallCount,records,win32HandleNonNull' -or
@@ -647,14 +650,14 @@ function Invoke-TraceAttempt([ValidateSet('absent','world')][string]$Scenario,[s
   $gate=Join-Path $gateRoot 'ready';$nonce=[Guid]::NewGuid().ToString('N')+[Guid]::NewGuid().ToString('N')
   $event='Mixel-Remote-Standard-Lease-'+[Guid]::NewGuid().ToString('N')
   $source=Join-Path $attemptRoot 'lease-standard.rs';$exe=Join-Path $attemptRoot 'lease-standard.exe'
-  $live=$null;$childPid=0;$eventHandle=[IntPtr]::Zero;$timeout=$false;$completed=$false;$phase='export';$attemptFailure=$null;$resumed=$false;$previous=-2;$resumeAttempted=$false;$additionalCount=-1L;$fallbackResult=$null
+  $live=$null;$childPid=0;$eventHandle=[IntPtr]::Zero;$timeout=$false;$completed=$false;$phase='export';$attemptFailure=$null;$resumed=$false;$previous=-2;$resumeAttempted=$false;$additionalCount=-1L;$fallbackResult=$null;$thread=0
   try {
     [void](Invoke-TracePython @((Join-Path $PSScriptRoot 'test-support-lease.py'),'--export-standard-windows-fixture',$attemptRoot,'--event',('Global\'+$event)) $private 'source-export' 100)
     Assert-TracePlainPath $source;Assert-TracePlainPath $exe
     $originalHash=(Get-FileHash $source -Algorithm SHA256).Hash
-    if ($Gated) { New-TraceGatedSource $source $gate $nonce $private }
+    New-TraceGatedSource $source $gate $nonce $private ([bool]$Gated)
     $diagnosticHash=(Get-FileHash $source -Algorithm SHA256).Hash;$exeHash=(Get-FileHash $exe -Algorithm SHA256).Hash
-    if (($Gated -and $originalHash -ceq $diagnosticHash) -or (-not $Gated -and $originalHash -cne $diagnosticHash)) { throw 'Private timing-gate source hash binding is invalid.' }
+    if ($originalHash -ceq $diagnosticHash) { throw 'Private timing-gate source hash binding is invalid.' }
     $mode=Join-Path $attemptRoot 'fixture-mode.txt';[IO.File]::WriteAllText($mode,'probe',[Text.UTF8Encoding]::new($false))
     Set-TraceDirectoryAcl $attemptRoot $script:ownedSid
     foreach ($file in @($source,$exe,$mode)) { Set-TraceReadOnlyFile $file $script:ownedSid }
@@ -668,7 +671,7 @@ function Invoke-TraceAttempt([ValidateSet('absent','world')][string]$Scenario,[s
         $identity['sessionId'] -cne [string]$script:session -or $identity['integritySid'] -cne 'S-1-16-8192' -or
         (Get-FileHash $exe -Algorithm SHA256).Hash -cne $exeHash) { throw 'Retained trace PID/SID/session/medium/non-elevated/image qualification failed.' }
     $phase='commands'
-    [void](Invoke-TracePython @((Join-Path $PSScriptRoot 'windows-namespace-cdb.py'),'--pid',[string]$childPid,'--tid',[string]$thread,'--session',[string]$script:session,'--event',$event,'--windows-folder',$private,'--output',$private) $private 'commands')
+    [void](Invoke-TracePython @((Join-Path $PSScriptRoot 'windows-namespace-cdb.py'),'--pid',[string]$childPid,'--tid',[string]$thread,'--session',[string]$script:session,'--event',$event,'--windows-folder',$private,'--output',$private,'--binary',$exe,'--exe-sha256',$exeHash) $private 'commands')
     $arguments=@('-p',[string]$childPid,'-pd','-noshell','-nosqm','-cf',(Join-Path $private 'start.txt'))
     if ($Gated) { $arguments=@('-p',[string]$childPid,'-pr','-pd','-noshell','-nosqm','-cf',(Join-Path $private 'start.txt')) }
     $live=Start-TraceProcess $script:cdb $arguments $private 'cdb' $childPid
@@ -684,7 +687,7 @@ function Invoke-TraceAttempt([ValidateSet('absent','world')][string]$Scenario,[s
     if (-not $ready -or -not [MixelOrdinaryTokenFixture]::ActualOwnedDebuggerAttached($childPid)) {
       $timeout=$true
       if ($Gated) { throw 'Private gated trace did not reach exact debugger readiness.' }
-      Write-Host ('OBSERVED: bounded source-only trace startup facts; '+((Get-TraceFailureFacts $live $phase $true (Get-TraceExecutionFacts $childPid $attemptRoot $resumed $previous ([bool]$Gated) $live $resumeAttempted $additionalCount)) | ConvertTo-Json -Depth 4 -Compress))
+      Write-Host ('OBSERVED: bounded source-only trace startup facts; '+((Get-TraceFailureFacts $live $phase $true (Get-TraceExecutionFacts $childPid $attemptRoot $resumed $previous ([bool]$Gated) $live $resumeAttempted $additionalCount ([uint32]$thread))) | ConvertTo-Json -Depth 4 -Compress))
       $fallbackResult=[pscustomobject]@{StartupTimedOut=$true;GatedFallbackRequired=$true;FallbackReason='startup-timeout';AdditionalSuspensionDetected=$false;AdditionalPreviousSuspendCount=0L;OwnedCleanupVerified=$false}
       return $fallbackResult
     }
@@ -693,7 +696,7 @@ function Invoke-TraceAttempt([ValidateSet('absent','world')][string]$Scenario,[s
     try {$previous=[MixelOrdinaryTokenFixture]::ResumeOwnedPrimaryThread($childPid);$resumed=$true} catch {
       $additionalCount=Get-TraceAdditionalSuspensionCount $_.Exception
       if(Test-TraceAdditionalSuspensionFallback $live $childPid $attemptRoot $additionalCount $ready $resumeAttempted $resumed ([bool]$Gated)) {
-        Write-Host ('OBSERVED: bounded source-only trace additional suspension facts; '+((Get-TraceFailureFacts $live $phase $false (Get-TraceExecutionFacts $childPid $attemptRoot $resumed $previous ([bool]$Gated) $live $resumeAttempted $additionalCount)) | ConvertTo-Json -Depth 4 -Compress))
+        Write-Host ('OBSERVED: bounded source-only trace additional suspension facts; '+((Get-TraceFailureFacts $live $phase $false (Get-TraceExecutionFacts $childPid $attemptRoot $resumed $previous ([bool]$Gated) $live $resumeAttempted $additionalCount ([uint32]$thread))) | ConvertTo-Json -Depth 4 -Compress))
         $fallbackResult=[pscustomobject]@{StartupTimedOut=$false;GatedFallbackRequired=$true;FallbackReason='additional-suspension';AdditionalSuspensionDetected=$true;AdditionalPreviousSuspendCount=$additionalCount;OwnedCleanupVerified=$false}
         return $fallbackResult
       }
@@ -721,6 +724,9 @@ function Invoke-TraceAttempt([ValidateSet('absent','world')][string]$Scenario,[s
     $record=([MixelNamespaceTraceIO]::ReadBounded($result,4096)) | ConvertFrom-Json
     Assert-StandardLeaseSafeResult $record ([uint32]$childPid)
     Assert-TraceParsedResult $parsed $record
+    $probePath=Join-Path $attemptRoot 'fixture-hwcontrol.json';Assert-TracePlainPath $probePath
+    $probeProof=Read-TraceProbeProof $probePath
+    Assert-TraceProbeProof $probeProof ([uint32]$childPid) ([uint32]$thread)
     Assert-TracePlainPath (Join-Path $attemptRoot 'fixture-namespace.json')
     $secondary=([MixelNamespaceTraceIO]::ReadBounded((Join-Path $attemptRoot 'fixture-namespace.json'),4096)) | ConvertFrom-Json
     if (($secondary.pid -isnot [int] -and $secondary.pid -isnot [long]) -or $secondary.pid -ne $childPid -or
@@ -732,10 +738,10 @@ function Invoke-TraceAttempt([ValidateSet('absent','world')][string]$Scenario,[s
     while ([MixelOrdinaryTokenFixture]::StartedStatus($childPid) -ceq 'still-running' -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 50 }
     if ([MixelOrdinaryTokenFixture]::StartedStatus($childPid) -cne 'exited:0x00000000') { throw 'Retained source trace child acknowledgement/exit failed.' }
     $completed=$true
-    return [pscustomobject]@{StartupTimedOut=$false;GatedFallbackRequired=$false;Scenario=$Scenario;PrivateGate=[bool]$Gated;FirstCallQualified=$true;OriginalSourceSHA256=$originalHash;DiagnosticSourceSHA256=$diagnosticHash;OwnedIdentityQualified=$true;DebuggerDetached=$true;SingleResumeQualified=$true;SingleContinuationQualified=$live.continuationQueued;rawOpenError=$record.rawOpenError;Trace=$parsed}
+    return [pscustomobject]@{StartupTimedOut=$false;GatedFallbackRequired=$false;Scenario=$Scenario;PrivateGate=[bool]$Gated;FirstCallQualified=$true;OriginalSourceSHA256=$originalHash;DiagnosticSourceSHA256=$diagnosticHash;DiagnosticExecutableSHA256=$exeHash;HardwareControlQualified=$true;SourceProbeThreadQualified=$true;OwnedIdentityQualified=$true;DebuggerDetached=$true;SingleResumeQualified=$true;SingleContinuationQualified=$live.continuationQueued;rawOpenError=$record.rawOpenError;Trace=$parsed}
   } catch {
     $attemptFailure=$_.Exception
-    Write-Host ('OBSERVED: bounded source-only trace failure facts; '+((Get-TraceFailureFacts $live $phase $timeout (Get-TraceExecutionFacts $childPid $attemptRoot $resumed $previous ([bool]$Gated) $live $resumeAttempted $additionalCount)) | ConvertTo-Json -Depth 4 -Compress))
+    Write-Host ('OBSERVED: bounded source-only trace failure facts; '+((Get-TraceFailureFacts $live $phase $timeout (Get-TraceExecutionFacts $childPid $attemptRoot $resumed $previous ([bool]$Gated) $live $resumeAttempted $additionalCount ([uint32]$thread))) | ConvertTo-Json -Depth 4 -Compress))
     throw
   } finally {
     $errors=[Collections.Generic.List[Exception]]::new()
