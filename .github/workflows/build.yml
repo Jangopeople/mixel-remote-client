@@ -225,11 +225,11 @@ jobs:
           path: ${{ github.workspace }}/.vcpkg-binary-cache
           key: mixel-vcpkg-v1-ubuntu22.04-x64-linux-${{ env.VCPKG_COMMIT_ID }}
 
-      - name: Setup vcpkg + cache
+      - name: Setup pinned vcpkg
         uses: lukka/run-vcpkg@v11
         with:
           vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
-          doNotCache: false
+          doNotCache: true
 
       - name: Install vcpkg deps
         run: |
@@ -414,11 +414,11 @@ jobs:
           path: ${{ github.workspace }}/.vcpkg-binary-cache
           key: mixel-vcpkg-v2-macos14-${{ matrix.job.arch }}-${{ env.MACOSX_DEPLOYMENT_TARGET }}-${{ hashFiles('.github/vcpkg-triplets/*.cmake') }}-${{ env.VCPKG_COMMIT_ID }}
 
-      - name: Setup vcpkg + cache
+      - name: Setup pinned vcpkg
         uses: lukka/run-vcpkg@v11
         with:
           vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
-          doNotCache: false
+          doNotCache: true
 
       - name: Install vcpkg deps
         run: |
@@ -679,11 +679,11 @@ jobs:
           path: ${{ github.workspace }}/.vcpkg-binary-cache
           key: mixel-vcpkg-v1-windows2022-x64-windows-static-${{ env.VCPKG_COMMIT_ID }}
 
-      - name: Setup vcpkg + cache
+      - name: Setup pinned vcpkg
         uses: lukka/run-vcpkg@v11
         with:
           vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
-          doNotCache: false
+          doNotCache: true
 
       - name: Install vcpkg deps
         shell: bash
