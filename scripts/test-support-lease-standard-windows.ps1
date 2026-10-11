@@ -335,6 +335,7 @@ using System;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 public static class MixelIsolatedLeaseControl {
+  static readonly System.Collections.Generic.HashSet<IntPtr> Owned = new System.Collections.Generic.HashSet<IntPtr>();
   [StructLayout(LayoutKind.Sequential)] struct Attributes { public uint length; public IntPtr descriptor; public int inherit; }
   [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool ConvertStringSecurityDescriptorToSecurityDescriptorW(string text, uint version, out IntPtr descriptor, IntPtr size);
   [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern IntPtr CreateEventExW(ref Attributes attributes, string name, uint flags, uint access);
@@ -355,6 +356,7 @@ public static class MixelIsolatedLeaseControl {
       error=handle==IntPtr.Zero ? Marshal.GetLastWin32Error() : 0;
     } finally { LocalFree(descriptor); }
     if(handle==IntPtr.Zero) throw new Win32Exception(error);
+    Owned.Add(handle);
     return handle;
   }
   public static IntPtr DeniedEvent(string name) { return Event(name,"D:P(A;;GA;;;BA)(A;;GA;;;SY)"); }
@@ -372,9 +374,22 @@ public static class MixelIsolatedLeaseControl {
       error=handle==IntPtr.Zero ? Marshal.GetLastWin32Error() : 0;
     } finally { LocalFree(descriptor); }
     if(handle==IntPtr.Zero) throw new Win32Exception(error);
+    Owned.Add(handle);
     return handle;
   }
-  public static void Close(IntPtr handle) { if(handle!=IntPtr.Zero && !CloseHandle(handle)) throw new Win32Exception(); }
+  public static void Close(IntPtr handle) {
+    if(handle==IntPtr.Zero) return;
+    if(!Owned.Contains(handle)) throw new InvalidOperationException("Isolated lease handle is not owned");
+    if(!CloseHandle(handle)) throw new Win32Exception(Marshal.GetLastWin32Error());
+    Owned.Remove(handle);
+  }
+  public static void ClosePending() {
+    var failures = new System.Collections.Generic.List<Exception>();
+    foreach(IntPtr handle in new System.Collections.Generic.List<IntPtr>(Owned)) {
+      try { Close(handle); } catch(Exception error) { failures.Add(error); }
+    }
+    if(failures.Count!=0) throw new AggregateException("Owned isolated lease handle cleanup failed", failures);
+  }
 }
 '@ }
 
@@ -571,12 +586,12 @@ function Invoke-StandardLeaseSubsystemObservations([ValidateSet('with-logon','wi
         [void](Invoke-StandardLeaseControl -Mode probe -Launcher $Launcher -Subsystem $subsystem -ObserveOnly -ObservationLabel "global-$subsystem-initial-untouched-absent" -UnnamedControl:($Launcher -cne 'with-caller-linked'))
         [void](Invoke-StandardLeaseControl -Mode owner -Launcher $Launcher -Subsystem $subsystem -KeepAlive -ObserveOnly -ObservationLabel "global-$subsystem-explicit-source-owner")
         [void](Invoke-StandardLeaseControl -Mode probe -Launcher $Launcher -Subsystem $subsystem -ObserveOnly -ObservationLabel "global-$subsystem-fresh-probe-after-owner-request")
-        [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses()
-        [MixelOrdinaryTokenFixture]::CloseStartedObservations()
+        try { [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses() }
+        finally { [MixelOrdinaryTokenFixture]::CloseStartedObservations() }
         [void](Invoke-StandardLeaseControl -Mode probe -Launcher $Launcher -Subsystem $subsystem -ObserveOnly -ObservationLabel "global-$subsystem-after-confirmed-owner-request-process-termination")
       } finally {
-        [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses()
-        [MixelOrdinaryTokenFixture]::CloseStartedObservations()
+        try { [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses() }
+        finally { [MixelOrdinaryTokenFixture]::CloseStartedObservations() }
       }
     }
   } finally {
@@ -613,8 +628,8 @@ function Invoke-StandardLeaseNamespaceObservations([ValidateSet('with-logon','wi
         [void](Invoke-StandardLeaseControl -Mode probe -Launcher $Launcher -ObserveOnly -ObservationLabel "$namespace-initial-untouched-absent")
         [void](Invoke-StandardLeaseControl -Mode owner -Launcher $Launcher -KeepAlive -ObserveOnly -ObservationLabel "$namespace-explicit-source-owner")
         [void](Invoke-StandardLeaseControl -Mode probe -Launcher $Launcher -ObserveOnly -ObservationLabel "$namespace-fresh-probe-after-owner-request")
-        [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses()
-        [MixelOrdinaryTokenFixture]::CloseStartedObservations()
+        try { [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses() }
+        finally { [MixelOrdinaryTokenFixture]::CloseStartedObservations() }
         [void](Invoke-StandardLeaseControl -Mode probe -Launcher $Launcher -ObserveOnly -ObservationLabel "$namespace-after-confirmed-owner-request-process-termination")
         $matrixHandle=[MixelIsolatedLeaseControl]::WorldEvent($endpoint)
         [void](Invoke-StandardLeaseControl -Mode probe -Launcher $Launcher -ObserveOnly -ObservationLabel "$namespace-existing-world-synchronize-event")
@@ -622,9 +637,12 @@ function Invoke-StandardLeaseNamespaceObservations([ValidateSet('with-logon','wi
         $matrixHandle=[IntPtr]::Zero
         [void](Invoke-StandardLeaseControl -Mode probe -Launcher $Launcher -ObserveOnly -ObservationLabel "$namespace-after-confirmed-world-event-close")
       } finally {
-        if ($matrixHandle -ne [IntPtr]::Zero) { [MixelIsolatedLeaseControl]::Close($matrixHandle) }
-        [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses()
-        [MixelOrdinaryTokenFixture]::CloseStartedObservations()
+        try {
+          if ($matrixHandle -ne [IntPtr]::Zero) { [MixelIsolatedLeaseControl]::Close($matrixHandle); $matrixHandle=[IntPtr]::Zero }
+        } finally {
+          try { [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses() }
+          finally { [MixelOrdinaryTokenFixture]::CloseStartedObservations() }
+        }
       }
     }
   } finally {
@@ -702,9 +720,11 @@ try {
   $cleanup = [System.Collections.Generic.List[string]]::new()
   if ($eventHandle -ne [IntPtr]::Zero) { try { [MixelIsolatedLeaseControl]::Close($eventHandle) } catch { $cleanup.Add('Owned isolated event handle cleanup failed.') } }
   try { [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses() } catch { $cleanup.Add('Exact owned standard lease process cleanup failed.') }
-  [MixelOrdinaryTokenFixture]::CloseStartedObservations()
+  try { [MixelOrdinaryTokenFixture]::CloseStartedObservations() } catch { $cleanup.Add('Exact owned standard lease handle close failed.') }
+  try { [MixelIsolatedLeaseControl]::ClosePending() } catch { $cleanup.Add('Owned retained isolated lease handle cleanup failed.') }
   if ($desktopAccess) { try { $desktopAccess.Dispose() } catch { $cleanup.Add('Owned standard lease desktop ACL restoration failed.') } }
-  if ([MixelOrdinaryTokenFixture]::DesktopAclHashes() -cne $originalDesktop) { $cleanup.Add('Owned standard lease desktop ACL hashes changed.') }
+  try { if ([MixelOrdinaryTokenFixture]::DesktopAclHashes() -cne $originalDesktop) { $cleanup.Add('Owned standard lease desktop ACL hashes changed.') } }
+  catch { $cleanup.Add('Owned standard lease desktop ACL hash verification failed.') }
   if ($profileStarted -and $ownedSid) {
     $removed = $false
     for ($attempt=0; $attempt -lt 5; $attempt++) {

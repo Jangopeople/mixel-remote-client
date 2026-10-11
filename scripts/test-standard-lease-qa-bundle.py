@@ -74,7 +74,7 @@ class PortableSourceTests(unittest.TestCase):
             subprocess.run(["git", "add", "."], cwd=root, check=True, capture_output=True)
             subprocess.run(["git", "-c", "user.name=Mixel QA", "-c", "user.email=qa@example.test", "commit", "--quiet", "-m", "Owned QA source control"], cwd=root, check=True, capture_output=True)
             with patch.object(bundle, "ROOT", root):
-                self.assertEqual(len(bundle.git_source_bindings()), 10)
+                self.assertEqual(len(bundle.git_source_bindings()), 11)
                 builder = root / bundle.BUILD_SOURCE
                 original = builder.read_bytes()
                 builder.write_bytes(original + b"changed builder\n")

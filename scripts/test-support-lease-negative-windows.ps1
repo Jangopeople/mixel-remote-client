@@ -57,7 +57,7 @@ function Assert-PortableLeaseBundle([string]$Root,[string]$ExpectedManifestSha25
     $bytes=Read-PortableLeaseBytes $path 16777216
     if($bytes.Length -ne $member.bytes -or (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() -cne $member.sha256) { throw 'Portable bundle member hash or byte count changed.' }
   }
-  $sourceAllow=@('scripts/support-invite-guard.rs','scripts/test-support-lease.py','scripts/test-support-lease-standard-windows.ps1','scripts/test-support-lease-interactive-windows.ps1','scripts/test-support-lease-negative-windows.ps1','scripts/build-standard-lease-qa-bundle.py','.github/workflows/preflight.yml','scripts/activate-windows-msvc.ps1','scripts/test-standard-lease-qa-bundle.py','scripts/test-support-lease-interactive-source.ps1')
+  $sourceAllow=@('scripts/support-invite-guard.rs','scripts/test-support-lease.py','scripts/test-support-lease-standard-windows.ps1','scripts/test-support-lease-interactive-windows.ps1','scripts/test-support-lease-negative-windows.ps1','scripts/build-standard-lease-qa-bundle.py','.github/workflows/preflight.yml','scripts/activate-windows-msvc.ps1','scripts/test-standard-lease-qa-bundle.py','scripts/test-support-lease-interactive-source.ps1','scripts/test-support-launch-windows.ps1')
   if($manifest.buildSourceBindings -isnot [array] -or $manifest.buildSourceBindings.Count -ne $sourceAllow.Count) { throw 'Portable build source binding count changed.' }
   $sourceSeen=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
   foreach($binding in $manifest.buildSourceBindings) {
@@ -83,7 +83,7 @@ function Assert-PortableLeaseBundle([string]$Root,[string]$ExpectedManifestSha25
   $expectedSource=@{
   'scripts/support-invite-guard.rs' = '4b48b7995b36cc9662958ef8753be70ef0b6cf35626b7264f0151bc553293f29'
   'scripts/test-support-lease.py' = '4358b9452935bdc95a1209d50ca12dd22356a7c0fbe77192e4404b47386c44e6'
-  'scripts/test-support-lease-standard-windows.ps1' = 'c767892da28717bf450f7096b0905a5b87ccdc439c55138eb79bbe1000070cad'
+  'scripts/test-support-lease-standard-windows.ps1' = '75359cd04fc1b650f119af77eab55081db99c13eb0bf69242cd7c01e8491ba60'
   }
   foreach($name in $expectedSource.Keys) { if((Get-FileHash -LiteralPath (Join-Path $Root $name) -Algorithm SHA256).Hash.ToLowerInvariant() -cne $expectedSource[$name]) { throw 'Portable source pin changed.' } }
   $console=Read-PortableLeaseText (Join-Path $Root 'fixture/lease-standard.rs') 1048576

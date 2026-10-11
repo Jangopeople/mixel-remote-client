@@ -1,4 +1,4 @@
-﻿param([string]$MainPath=(Join-Path $PSScriptRoot 'test-support-lease-interactive-windows.ps1'),[string]$AdminPath=(Join-Path $PSScriptRoot 'test-support-lease-negative-windows.ps1'),[string]$StandardPath=(Join-Path $PSScriptRoot 'test-support-lease-standard-windows.ps1'))
+﻿param([string]$MainPath=(Join-Path $PSScriptRoot 'test-support-lease-interactive-windows.ps1'),[string]$AdminPath=(Join-Path $PSScriptRoot 'test-support-lease-negative-windows.ps1'),[string]$StandardPath=(Join-Path $PSScriptRoot 'test-support-lease-standard-windows.ps1'),[string]$LaunchPath=(Join-Path $PSScriptRoot 'test-support-launch-windows.ps1'))
 $ErrorActionPreference='Stop'
 $MainPath=[IO.Path]::GetFullPath($MainPath); $AdminPath=[IO.Path]::GetFullPath($AdminPath); $StandardPath=[IO.Path]::GetFullPath($StandardPath)
 $candidate=$MainPath; $admin=$AdminPath; $native=$MainPath
@@ -220,4 +220,179 @@ foreach($text in @($source,$adminSource)) {
   if($text.Contains('$IsWindows') -or $text.Contains('PowerShell7') -or $text.Contains('$RepoRoot') -or $text.Contains('python ') -or -not $text.Contains('[IO.File]::Replace(') -or -not $text.Contains('[PlatformID]::Win32NT')) { throw 'PS5/prebuilt-only publication/platform boundary changed.' }
 }
 Write-Host 'PASS: exact native ownership source passes ten controls, including later-child cleanup after first wait failure, partial-close retries, successful creation/thread-close refusal, attribution failures and retained query-token close failure; main stop/close are independent.'
+# Bind the ordinary hosted fixture's ownership methods to pure API providers.
+# No P/Invoke declaration or native API is included in this mock assembly.
+$normal=Get-Content -LiteralPath ([IO.Path]::GetFullPath($LaunchPath)) -Raw -Encoding UTF8
+$normalStart=Section $normal '  static readonly System.Collections.Generic.Dictionary<int, IntPtr> StartedProcesses' '  public static bool ActualOwnedDebuggerAttached'
+$normalResume=Section $normal '  public static int ResumeOwnedPrimaryThread' '  static void StopOwnedProcessHandle'
+$normalStop=Section $normal '  static void StopOwnedProcessHandle' '  public static string StartedStatus'
+$normalClose=Section $normal '  public static void CloseStartedObservations()' '  // The MiscInfo stream'
+if(-not $normal.Contains('[DllImport("kernel32.dll", SetLastError = true)] static extern bool CloseHandle(IntPtr handle);') -or
+   -not $normal.Contains('[DllImport("kernel32.dll", SetLastError = true)] static extern uint GetProcessId(IntPtr process);')) { throw 'Exact owned handle API last-error/identity declarations changed.' }
+$normalMock=@'
+using System;
+using System.ComponentModel;
+using System.Collections.Generic;
+public static class MixelNormalOwnershipSourceMock {
+ struct ProcessInfo { public IntPtr process,thread; public uint pid,tid; }
+ static HashSet<long> Exited=new HashSet<long>(),WaitFailure=new HashSet<long>(),TerminateFailure=new HashSet<long>(),CloseFailure=new HashSet<long>();
+ static Dictionary<long,int> Closed=new Dictionary<long,int>();
+ static Dictionary<long,uint> Identities=new Dictionary<long,uint>();
+ static HashSet<long> Terminated=new HashSet<long>();
+ static int Kind,LastError;
+ static class Marshal { public static int GetLastWin32Error(){return LastError;} }
+ static uint GetProcessId(IntPtr handle){uint pid;return Identities.TryGetValue(handle.ToInt64(),out pid)?pid:0;}
+ static uint ResumeThread(IntPtr thread){return Kind==15?1U:Kind==17?2U:0U;}
+ static uint WaitForSingleObject(IntPtr handle,uint timeout){long key=handle.ToInt64();if(WaitFailure.Contains(key))return 0xffffffff;if(Exited.Contains(key))return 0;return 0x102;}
+ static bool TerminateProcess(IntPtr handle,uint code){long key=handle.ToInt64();Terminated.Add(key);if(TerminateFailure.Contains(key)){if(Kind==3)Exited.Add(key);return false;}Exited.Add(key);return true;}
+ static bool CloseHandle(IntPtr handle){long key=handle.ToInt64();int count;Closed.TryGetValue(key,out count);Closed[key]=count+1;return !CloseFailure.Contains(key);}
+__EXACT_START__
+__EXACT_RESUME__
+__EXACT_STOP__
+__EXACT_CLOSE__
+ static void Reset(int kind){Kind=kind;LastError=6;StartedProcesses.Clear();SuspendedThreads.Clear();PendingProcesses.Clear();PendingThreads.Clear();Exited.Clear();WaitFailure.Clear();TerminateFailure.Clear();CloseFailure.Clear();Closed.Clear();Identities.Clear();Terminated.Clear();}
+ static void ExpectFailure(Action action){bool failed=false;try{action();}catch(AggregateException){failed=true;}catch(InvalidOperationException){failed=true;}catch(Win32Exception){failed=true;}catch(OverflowException){failed=true;}if(!failed)throw new Exception("Owned fixture failure was accepted");}
+ static void Empty(){if(StartedProcesses.Count+SuspendedThreads.Count+PendingProcesses.Count+PendingThreads.Count!=0)throw new Exception("Unresolved handle ownership remains");}
+ public static void Run(int kind){
+  Reset(kind);
+  if(kind<=6){
+   StartedProcesses.Add(1,new IntPtr(1));
+   if(kind==1||kind==6)Exited.Add(1);
+   if(kind==3||kind==4){LastError=5;TerminateFailure.Add(1);}
+   if(kind==5){WaitFailure.Add(1);StartedProcesses.Add(2,new IntPtr(2));}
+   if(kind==6){StartedProcesses.Add(2,new IntPtr(2));Exited.Add(2);CloseFailure.Add(1);}
+   if(kind<=3){StopOwnedStartedProcesses();CloseStartedObservations();Empty();if(Closed[1]!=1||Terminated.Count!=(kind==1?0:1))throw new Exception("Positive stop/close behavior changed");return;}
+   if(kind==4||kind==5){ExpectFailure(StopOwnedStartedProcesses);ExpectFailure(CloseStartedObservations);if(StartedProcesses.Count!=1||!StartedProcesses.ContainsKey(1)||Closed.ContainsKey(1))throw new Exception("Unconfirmed child ownership was discarded");if(kind==5&&(!Terminated.Contains(2)||Closed[2]!=1))throw new Exception("Later child cleanup was skipped");WaitFailure.Clear();TerminateFailure.Clear();StopOwnedStartedProcesses();CloseStartedObservations();Empty();if(Closed[1]!=1||(kind==5&&Closed[2]!=1))throw new Exception("Successful close repeated during retry");return;}
+   StopOwnedStartedProcesses();ExpectFailure(CloseStartedObservations);if(StartedProcesses.Count!=1||!StartedProcesses.ContainsKey(1)||Closed[1]!=1||Closed[2]!=1)throw new Exception("Partial close lost failure or skipped later handle");CloseFailure.Clear();CloseStartedObservations();Empty();if(Closed[1]!=2||Closed[2]!=1)throw new Exception("Retry repeated a successful close");return;
+  }
+  ProcessInfo info=new ProcessInfo{process=new IntPtr(1),thread=new IntPtr(10),pid=101,tid=11};Identities[1]=101;
+  if(kind==7){CloseFailure.Add(10);ExpectFailure(()=>Started(info));if(StartedProcesses.Count!=1||PendingThreads.Count!=1||PendingProcesses.Count!=0)throw new Exception("Failed thread close accepted PID or lost ownership");CloseFailure.Clear();StopOwnedStartedProcesses();CloseStartedObservations();Empty();if(Closed[1]!=1||Closed[10]!=2)throw new Exception("Thread-close failure cleanup differs");return;}
+  if(kind==8)info.pid=0;
+  if(kind==9)Identities[1]=102;
+  if(kind==10){info.pid=uint.MaxValue;Identities[1]=uint.MaxValue;}
+  if(kind>=8&&kind<=10){ExpectFailure(()=>Started(info));if(PendingProcesses.Count!=1||PendingThreads.Count!=1||StartedProcesses.Count!=0)throw new Exception("Attribution failure lost owned return handles");StopOwnedStartedProcesses();CloseStartedObservations();Empty();if(Closed[1]!=1||Closed[10]!=1)throw new Exception("Attribution failure cleanup differs");return;}
+  if(kind==11){StartedProcesses.Add(101,new IntPtr(2));ExpectFailure(()=>Started(info));if(StartedProcesses[101]!=new IntPtr(2)||PendingProcesses.Count!=1||PendingThreads.Count!=1)throw new Exception("PID collision changed existing owner");StopOwnedStartedProcesses();CloseStartedObservations();Empty();if(Closed[1]!=1||Closed[2]!=1||Closed[10]!=1)throw new Exception("Collision cleanup lost a returned handle");return;}
+  if(kind==12){int pid=Started(info,true);if(pid!=101||SuspendedThreads.Count!=1||Closed.Count!=0)throw new Exception("Held thread ownership changed");StopOwnedStartedProcesses();CloseStartedObservations();Empty();if(Closed[1]!=1||Closed[10]!=1)throw new Exception("Held thread cleanup differs");return;}
+  if(kind==13){info.process=IntPtr.Zero;ExpectFailure(()=>Started(info));if(PendingProcesses.Count!=0||PendingThreads.Count!=1)throw new Exception("Partial creation ownership was invented or lost");StopOwnedStartedProcesses();CloseStartedObservations();Empty();if(Closed.Count!=1||Closed[10]!=1)throw new Exception("Partial return close differs");return;}
+  if(kind==14){PendingProcesses.Add(new IntPtr(1));PendingProcesses.Add(new IntPtr(2));PendingThreads.Add(new IntPtr(10));Exited.Add(1);Exited.Add(2);CloseFailure.Add(1);CloseFailure.Add(10);ExpectFailure(CloseStartedObservations);if(PendingProcesses.Count!=1||PendingThreads.Count!=1||Closed[2]!=1)throw new Exception("Pending partial close lost ownership or skipped later handle");CloseFailure.Clear();CloseStartedObservations();Empty();if(Closed[1]!=2||Closed[10]!=2||Closed[2]!=1)throw new Exception("Pending retry repeated a successful close");return;}
+  if(kind>=15&&kind<=17){Started(info,true);if(kind==16)CloseFailure.Add(10);if(kind==15){if(ResumeOwnedPrimaryThread(101)!=1||SuspendedThreads.Count!=0||Closed[10]!=1)throw new Exception("Resume success semantics changed");}else{ExpectFailure(()=>ResumeOwnedPrimaryThread(101));if(kind==16&&(SuspendedThreads.Count!=1||Closed[10]!=1))throw new Exception("Resumed-thread close failure lost ownership");if(kind==17&&(SuspendedThreads.Count!=0||Closed[10]!=1))throw new Exception("Unexpected suspension-count refusal changed");}CloseFailure.Clear();StopOwnedStartedProcesses();CloseStartedObservations();Empty();if(Closed[1]!=1||Closed[10]!=(kind==16?2:1))throw new Exception("Resumed-thread retry repeated a successful close");return;}
+  throw new Exception("Unknown source ownership control");
+ }
+}
+'@.Replace('__EXACT_START__',$normalStart).Replace('__EXACT_RESUME__',$normalResume).Replace('__EXACT_STOP__',$normalStop).Replace('__EXACT_CLOSE__',$normalClose)
+Add-Type -TypeDefinition $normalMock
+foreach($case in 1..17){[MixelNormalOwnershipSourceMock]::Run($case)}
+$normalFinally=Section $normal "  `$customerCleanupFailure = `$null" '  if ($ordinaryRoot -or $ownedUser -or $desktopAccess)'
+if(-not $normalFinally.Contains("try { [MixelOrdinaryTokenFixture]::CloseStartedObservations() }`n  catch")){throw 'Normal fixture close failure skips remaining outer cleanup.'}
+$standardFinally=Section $original "  try { [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses() } catch" '  if ($desktopAccess)'
+if(-not $standardFinally.Contains("try { [MixelOrdinaryTokenFixture]::CloseStartedObservations() } catch")){throw 'Standard source close failure skips remaining outer cleanup.'}
+if([regex]::Matches($original,'(?m)^\s+finally \{ \[MixelOrdinaryTokenFixture\]::CloseStartedObservations\(\) \}$').Count -ne 4){throw 'Source observation stop failures skip exact handle cleanup.'}
+Write-Host 'PASS: exact normal fixture ownership source passes seventeen fault/success controls; failed waits and closes retain ownership, later children still clean, thread-close/PID/partial-return failures refuse launch, resumed-thread close failure stays owned and retry never closes a successful handle twice.'
+
+# Keep the exact isolated event/mutex ownership bodies, substituting only their
+# API providers. No imported Windows declaration is compiled or invoked here.
+$isolatedPrefix="if (-not ('MixelIsolatedLeaseControl' -as [type])) { Add-Type @'"+"`n"
+$isolatedBlock=Section $original $isolatedPrefix "`n'@ }`n`nfunction Assert-StandardLeaseSafeResult"
+$isolated=$isolatedBlock.Substring($isolatedPrefix.Length)
+$providers=@{
+  '  [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool ConvertStringSecurityDescriptorToSecurityDescriptorW(string text, uint version, out IntPtr descriptor, IntPtr size);'='  static bool ConvertStringSecurityDescriptorToSecurityDescriptorW(string text,uint version,out IntPtr descriptor,IntPtr size){if(version!=1||size!=IntPtr.Zero)throw new Exception("Descriptor arguments changed");LastSddl=text;descriptor=new IntPtr(9);return true;}'
+  '  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern IntPtr CreateEventExW(ref Attributes attributes, string name, uint flags, uint access);'='  static IntPtr CreateEventExW(ref Attributes attributes,string name,uint flags,uint access){if(flags!=0||access!=0x100000||attributes.inherit!=0||attributes.descriptor!=new IntPtr(9))throw new Exception("Event arguments changed");return Created();}'
+  '  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern IntPtr CreateMutexW(ref Attributes attributes, bool owner, string name);'='  static IntPtr CreateMutexW(ref Attributes attributes,bool owner,string name){if(owner||attributes.inherit!=0||attributes.descriptor!=new IntPtr(9))throw new Exception("Mutex arguments changed");return Created();}'
+  '  [DllImport("kernel32.dll", SetLastError=true)] static extern bool CloseHandle(IntPtr handle);'='  static bool CloseHandle(IntPtr handle){long value=handle.ToInt64();int count;Closed.TryGetValue(value,out count);Closed[value]=count+1;SourceLastError=6;return !CloseFailure.Contains(value);}'
+  '  [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr memory);'='  static IntPtr LocalFree(IntPtr memory){if(memory!=new IntPtr(9))throw new Exception("Descriptor ownership changed");Freed++;SourceLastError=0;return IntPtr.Zero;}'
+}
+foreach($declaration in $providers.Keys){
+  if([regex]::Matches($isolated,[regex]::Escape($declaration)).Count -ne 1){throw 'Isolated ownership API provider boundary drifted.'}
+  $isolated=$isolated.Replace($declaration,$providers[$declaration])
+}
+$isolated=$isolated.Replace('public static class MixelIsolatedLeaseControl {','public static class MixelIsolatedOwnershipSourceMock {').Replace('Marshal.GetLastWin32Error()','SourceLastError')
+if($isolated.Contains('DllImport') -or -not $isolated.TrimEnd().EndsWith('}')){throw 'Isolated ownership mock contains a native declaration or malformed boundary.'}
+$isolatedTests=@'
+  static int SourceLastError,Freed,Next;static bool CreateFailure;static string LastSddl;
+  static readonly System.Collections.Generic.HashSet<long> CloseFailure=new System.Collections.Generic.HashSet<long>();
+  static readonly System.Collections.Generic.Dictionary<long,int> Closed=new System.Collections.Generic.Dictionary<long,int>();
+  static IntPtr Created(){SourceLastError=5;return CreateFailure?IntPtr.Zero:new IntPtr(++Next);}
+  static void Reset(){Owned.Clear();CloseFailure.Clear();Closed.Clear();SourceLastError=0;Freed=0;Next=0;CreateFailure=false;LastSddl=null;}
+  static void Reject(Action action){bool refused=false;try{action();}catch(InvalidOperationException){refused=true;}catch(Win32Exception){refused=true;}catch(AggregateException){refused=true;}if(!refused)throw new Exception("Invalid isolated ownership state was accepted");}
+  public static void Run(){
+    const string name="Global\\Mixel-Remote-Standard-Lease-0123456789abcdef0123456789abcdef";
+    Reset();Close(IntPtr.Zero);Reject(()=>Close(new IntPtr(99)));Reject(()=>WorldEvent("Global\\Mixel-Remote-Attended-Runtime-v2"));if(Closed.Count!=0||Freed!=0||Owned.Count!=0)throw new Exception("Unowned close/name refusal made an API call");
+    Reset();IntPtr first=WorldEvent(name),second=WrongObject(name);if(Owned.Count!=2||Freed!=2||LastSddl!="D:P(A;;0x00100000;;;WD)(A;;GA;;;BA)(A;;GA;;;SY)")throw new Exception("Successful creation ownership or SDDL changed");ClosePending();if(Owned.Count!=0||Closed[1]!=1||Closed[2]!=1)throw new Exception("Successful created handles not closed once");
+    Reset();first=DeniedEvent(name);second=WrongObject(name);CloseFailure.Add(first.ToInt64());Reject(ClosePending);if(Owned.Count!=1||!Owned.Contains(first)||Closed[1]!=1||Closed[2]!=1)throw new Exception("First isolated close failure skipped later handle or lost ownership");CloseFailure.Clear();ClosePending();if(Owned.Count!=0||Closed[1]!=2||Closed[2]!=1)throw new Exception("Retry repeated a successful isolated close");
+    Reset();CreateFailure=true;try{WorldEvent(name);throw new Exception("Failed event creation accepted");}catch(Win32Exception error){if(error.NativeErrorCode!=5)throw new Exception("Create error was not retained before descriptor free");}try{WrongObject(name);throw new Exception("Failed mutex creation accepted");}catch(Win32Exception error){if(error.NativeErrorCode!=5)throw new Exception("Mutex error was not retained before descriptor free");}ClosePending();if(Owned.Count!=0||Closed.Count!=0||Freed!=2)throw new Exception("Failed creation invented handle ownership");
+  }
+'@
+$isolated=$isolated.TrimEnd();$isolated=$isolated.Substring(0,$isolated.Length-1)+$isolatedTests+"`n}"
+Add-Type -TypeDefinition $isolated
+[MixelIsolatedOwnershipSourceMock]::Run()
+Write-Host 'PASS: exact isolated event/mutex ownership bodies reject unowned/product names, retain failed closes, attempt later handles, retry only unresolved handles and retain creation errors before descriptor release.'
+
+# Execute the actual outer finally blocks with pure providers, including the
+# failure branches that used to abandon remaining owned resources.
+$tokens=$null;$errors=$null
+$standardAst=[Management.Automation.Language.Parser]::ParseFile($StandardPath,[ref]$tokens,[ref]$errors)
+if($errors.Count){throw 'Standard cleanup source does not parse.'}
+$namespace=@($standardAst.FindAll({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Invoke-StandardLeaseNamespaceObservations'},$true))
+if($namespace.Count -ne 1){throw 'Exact namespace cleanup function boundary changed.'}
+$matrix=@($namespace[0].FindAll({param($node)$node -is [Management.Automation.Language.TryStatementAst] -and $node.Finally -and $node.Finally.Extent.Text.Contains('if ($matrixHandle')},$true))
+$main=@($standardAst.EndBlock.Statements|Where-Object{$_ -is [Management.Automation.Language.TryStatementAst]})
+if($matrix.Count -ne 1 -or $main.Count -ne 1){throw 'Exact outer cleanup finally boundaries changed.'}
+Add-Type @'
+using System;
+using System.Collections.Generic;
+public static class MixelStandardOuterSourceMock {
+  public static bool EventFails,StopFails,CloseFails,PendingFails,HashFails;
+  public static readonly List<string> Calls=new List<string>();
+  public static void Reset(){EventFails=StopFails=CloseFails=PendingFails=HashFails=false;Calls.Clear();}
+  public static void Close(IntPtr handle){Calls.Add("eventClose");if(EventFails)throw new InvalidOperationException("Synthetic owned event close failure");}
+  public static void ClosePending(){Calls.Add("pendingClose");if(PendingFails)throw new InvalidOperationException("Synthetic pending event close failure");}
+  public static void StopOwnedStartedProcesses(){Calls.Add("stopOwned");if(StopFails)throw new InvalidOperationException("Synthetic owned stop failure");}
+  public static void CloseStartedObservations(){Calls.Add("closeOwned");if(CloseFails)throw new InvalidOperationException("Synthetic owned process close failure");}
+  public static string DesktopAclHashes(){Calls.Add("hashRead");if(HashFails)throw new InvalidOperationException("Synthetic hash read failure");return "original";}
+  public static void RemoveProfile(string sid){Calls.Add("profileCleanup");}
+}
+public sealed class MixelStandardOuterSidSourceMock {public MixelStandardOuterSidSourceMock(string value){if(value!="synthetic-owned-sid")throw new Exception("Mock SID attribution differs");}}
+'@
+function Get-ActualStandardCleanup($Block){
+  $text=$Block.Extent.Text
+  if(-not $text.StartsWith('{') -or -not $text.EndsWith('}')){throw 'Actual finally delimiters changed.'}
+  $text=$text.Substring(1,$text.Length-2).Replace('[MixelOrdinaryTokenFixture]','[MixelStandardOuterSourceMock]').Replace('[MixelIsolatedLeaseControl]','[MixelStandardOuterSourceMock]').Replace('[Security.Principal.SecurityIdentifier]','[MixelStandardOuterSidSourceMock]')
+  return [scriptblock]::Create($text)
+}
+$matrixCleanup=Get-ActualStandardCleanup $matrix[0].Finally
+$mainCleanup=Get-ActualStandardCleanup $main[0].Finally
+function Test-ActualStandardCleanup {
+  function Remove-Item {param($LiteralPath,[switch]$Recurse,[switch]$Force) [MixelStandardOuterSourceMock]::Calls.Add('filesCleanup')}
+  function Remove-LocalUser {param($SID) [MixelStandardOuterSourceMock]::Calls.Add('sidCleanup')}
+  function Get-LocalUser {param($Name,$SID,$ErrorAction) return $null}
+  function Start-Sleep {param($Seconds,$Milliseconds)}
+  function Write-Host {param($Object)}
+  foreach($case in 0..3){
+    [MixelStandardOuterSourceMock]::Reset()
+    [MixelStandardOuterSourceMock]::EventFails=$case -eq 1
+    [MixelStandardOuterSourceMock]::StopFails=$case -eq 2
+    [MixelStandardOuterSourceMock]::CloseFails=$case -eq 3
+    $matrixHandle=[IntPtr]555;$caught=$false
+    try{. $matrixCleanup}catch{$caught=$true}
+    if($caught -ne ($case -ne 0) -or ([MixelStandardOuterSourceMock]::Calls -join ',') -cne 'eventClose,stopOwned,closeOwned' -or ($matrixHandle -ne [IntPtr]::Zero) -ne ($case -eq 1)){throw 'Actual matrix finally abandons cleanup or discards a failed event close.'}
+  }
+  foreach($case in 0..5){
+    [MixelStandardOuterSourceMock]::Reset()
+    [MixelStandardOuterSourceMock]::EventFails=$case -eq 1
+    [MixelStandardOuterSourceMock]::StopFails=$case -eq 2
+    [MixelStandardOuterSourceMock]::CloseFails=$case -eq 3
+    [MixelStandardOuterSourceMock]::PendingFails=$case -eq 4
+    [MixelStandardOuterSourceMock]::HashFails=$case -eq 5
+    $eventHandle=[IntPtr]555;$desktopAccess=$null;$originalDesktop='original'
+    $profileStarted=$true;$ownedSid='synthetic-owned-sid';$ownedUser='synthetic-owned-user'
+    $ownedPassword='synthetic-nonsecret-marker';$random='synthetic-nonsecret-marker'
+    $fixtureRoot=$temporaryCleanup;$failure='synthetic-prior-failure'
+    . $mainCleanup
+    if(([MixelStandardOuterSourceMock]::Calls -join ',') -cne 'eventClose,stopOwned,closeOwned,pendingClose,hashRead,profileCleanup,sidCleanup,filesCleanup' -or $null -ne $ownedPassword -or $null -ne $random -or $cleanup.Count -ne ($case -ne 0)){throw 'Actual standard outer finally skips a later owned cleanup attempt or conceals a failure.'}
+  }
+}
+$temporaryCleanup=Join-Path ([IO.Path]::GetTempPath()) ('mixel-source-cleanup-'+[Guid]::NewGuid().ToString('N'))
+[void][IO.Directory]::CreateDirectory($temporaryCleanup)
+try{Test-ActualStandardCleanup}finally{[IO.Directory]::Delete($temporaryCleanup,$true)}
+Write-Host 'PASS: exact matrix/main finally blocks pass ten pure failure/success cases; event, stop, close, pending-close and hash failures still attempt later owned cleanup, preserve failed ownership and clear memory-only markers.'
 Write-Host 'Result: exact interactive source controls pass; zero Windows API calls and no standard-account/runtime qualification.'
