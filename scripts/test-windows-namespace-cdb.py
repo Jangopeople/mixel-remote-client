@@ -209,6 +209,23 @@ def record(sequence=1,api=1,access='0000000f',root=0,kind=4,status='c0000022',ha
 suffix='MIXEL_NAMESPACE_WIN32 handleNonNull=0 scopeQualified=1\n'+module.END+'\n'
 valid=prefix+record()+'\n'+suffix
 result=module.parse_trace(valid)
+ack=module.CONTINUATION_ACK+'\n'
+ack_valid=valid.replace(module.READY+'\n',module.READY+'\n'+ack,1)
+require(module.parse_trace(ack_valid)==result,'Optional fixed acknowledgement changed actual hit/window/native result')
+require(module.parse_trace(valid)==result,'Missing diagnostic acknowledgement manufactured a gate or blocked actual hardware proof')
+rejects(lambda:module.parse_trace(ack_valid.replace(ack,ack+ack,1)),'Duplicate continuation acknowledgement accepted')
+for marker in [selection,list_begin,list_end,context(),module.BINDINGS,module.READY]:
+    rejects(lambda marker=marker:module.parse_trace(valid.replace(marker+'\n',ack+marker+'\n',1)),'Acknowledgement accepted before exact READY')
+for marker in [module.HWCONTROL,win_entry(),record(),module.END]:
+    rejects(lambda marker=marker:module.parse_trace(valid.replace(marker+'\n',marker+'\n'+ack,1)),'Late acknowledgement accepted after hardware/entry/native/completion')
+for entry in [pre_entry(),win_entry(matched=0)]:
+    raw=ready_prefix+entry+'\n'+ack+module.HWCONTROL+'\n'+win_entry(2)+'\nMIXEL_NAMESPACE_TRACE_WINDOW\n'+suffix
+    rejects(lambda raw=raw:module.parse_trace(raw),'Acknowledgement accepted after a safe pre-window entry')
+for bad in ['MIXEL_NAMESPACE_CONTINUATION_ACK_EXTRA','MIXEL_NAMESPACE_CONTINUATION_ACK secret=PRIVATE_UNKNOWN','MIXEL_NAMESPACE_CONTINUATION_ACK=1','MIXEL_NAMESPACE_CONTINUATION_ACK acknowledged=true']:
+    rejects(lambda bad=bad:module.parse_trace(ack_valid.replace(module.CONTINUATION_ACK,bad)),'Malformed/unbounded acknowledgement accepted')
+for echo in ['0:001> .echo MIXEL_NAMESPACE_CONTINUATION_ACK; g\n','.echo MIXEL_NAMESPACE_CONTINUATION_ACK\n']:
+    require(module.parse_trace(valid.replace(module.READY+'\n',module.READY+'\n'+echo))==result,'Command echo counted as actual acknowledgement/changed real trace')
+require(module.parse_trace(valid+module.CONTINUATION_ACK)==result,'Partial final acknowledgement counted as completed evidence')
 for field in ['address','local','global_mask','execution']:
     for value in range(16):
         require(module.parse_trace(valid.replace(context(),context(**{field:value})))==result,'Read-only masks influenced actual hit/window qualification')

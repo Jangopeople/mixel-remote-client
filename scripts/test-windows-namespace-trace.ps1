@@ -435,7 +435,7 @@ function Send-TraceContinuation($Live,[int]$ChildPid,[bool]$Ready,[bool]$Resumed
   # Set the attempt flag before any write. A partial write or failed flush is
   # fatal and cannot authorize a second continuation command.
   $Live.continuationAttempted=$true
-  $Live.input.Write("g`r`n");$Live.continuationWritten=$true
+  $Live.input.Write(".echo MIXEL_NAMESPACE_CONTINUATION_ACK; g`r`n");$Live.continuationWritten=$true
   $Live.input.Flush();$Live.continuationQueued=$true
 }
 function Get-TraceAdditionalSuspensionCount([Exception]$Failure) {
@@ -594,7 +594,7 @@ function Get-TraceStartupFacts([string]$Text) {
   return [pscustomobject]$facts
 }
 function Get-TraceHardwareFacts([string]$Text) {
-  $facts=[ordered]@{engineBlockCount=0;engineBlockComplete=$false;engineRowCount=0;engineSchemaValid=$false;engineIndexMetadataAvailable=$false;engineOsThreadCorrelationAvailable=$false;engineOsThreadMatched=$false;slotMask=0;enabledMask=0;resolvedMask=0;executeByteMask=0;passOneMask=0;threadSpecificMask=0;contextMarkerCount=0;contextSchemaValid=$true;contextAvailable=$false;processMatched=$false;threadMatched=$false;addressPresentMask=0;localEnableMask=0;globalEnableMask=0;executionByteMask=0}
+  $facts=[ordered]@{engineBlockCount=0;engineBlockComplete=$false;engineRowCount=0;engineSchemaValid=$false;engineIndexMetadataAvailable=$false;engineOsThreadCorrelationAvailable=$false;engineOsThreadMatched=$false;rowKindsAvailable=$false;rowKindsBounded=$false;rowKindsCount=0;knownRowCount=0;commandEchoRowCount=0;blankRowCount=0;oversizedRowCount=0;unknownRowCount=0;duplicateSlotCount=0;slotMask=0;enabledMask=0;resolvedMask=0;executeByteMask=0;passOneMask=0;threadSpecificMask=0;contextMarkerCount=0;contextSchemaValid=$true;contextAvailable=$false;processMatched=$false;threadMatched=$false;addressPresentMask=0;localEnableMask=0;globalEnableMask=0;executionByteMask=0}
   if([Text.Encoding]::UTF8.GetByteCount($Text) -gt 1048576){$facts.contextSchemaValid=$false;return [pscustomobject]$facts}
   $end=$Text.LastIndexOf("`n");$complete=if($end -ge 0){$Text.Substring(0,$end+1)}else{''}
   $lines=@($complete -split '\r?\n'|ForEach-Object {$_.Trim()})
@@ -617,9 +617,22 @@ function Get-TraceHardwareFacts([string]$Text) {
     $facts.addressPresentMask=$contextValues[2];$facts.localEnableMask=$contextValues[3];$facts.globalEnableMask=$contextValues[4];$facts.executionByteMask=$contextValues[5]
   }
   if($facts.engineBlockComplete){
-    $rows=@($lines[($begin+1)..($finish-1)]|Where-Object {$_ -ne ''})
+    $blockRows=@($lines[($begin+1)..($finish-1)])
     # Empty bl output is unavailable, not a four-slot engine configuration.
-    if($finish -eq $begin+1){$rows=@()}
+    if($finish -eq $begin+1){$blockRows=@()}
+    $facts.rowKindsAvailable=$true;$facts.rowKindsBounded=$blockRows.Count -le 32;$facts.rowKindsCount=[Math]::Min(32,$blockRows.Count)
+    $rowSlots=0
+    foreach($row in @($blockRows|Select-Object -First 32)){
+      if($row -ceq ''){$facts.blankRowCount++;continue}
+      if($row.Length -gt 4096){$facts.oversizedRowCount++;continue}
+      if($row -cmatch '\A([0-9]{1,10}):[0-9a-fA-F]{1,8}>\s+bl /L 0 1 2 3\z' -and [long]$Matches[1] -le 4294967295){$facts.commandEchoRowCount++;continue}
+      if($row -cmatch '\A([0-3])\s+([ed])\s+(u\s+)?([0-9a-fA-F]{8}(?:`[0-9a-fA-F]{8})?|[0-9a-fA-F]{16})\s+([erwi])\s+([1248])\s+([0-9a-fA-F]{1,4})\s+\(([0-9a-fA-F]{1,4})\)\s+([0-9]{1,10}):(\*{3,4}|[0-9a-fA-F]{1,8})(?:\s+[^\r\n]*)?\z' -and
+          [Convert]::ToUInt64($Matches[4].Replace('`',''),16) -ne 0 -and [long]$Matches[9] -le 4294967295){
+        $facts.knownRowCount++;$slot=1 -shl [int]$Matches[1]
+        if(($rowSlots -band $slot) -ne 0){$facts.duplicateSlotCount++};$rowSlots=$rowSlots -bor $slot
+      }else{$facts.unknownRowCount++}
+    }
+    $rows=@($blockRows|Where-Object {$_ -ne ''})
     $facts.engineRowCount=[Math]::Min(32,$rows.Count)
     $masks=[ordered]@{slotMask=0;enabledMask=0;resolvedMask=0;executeByteMask=0;passOneMask=0;threadSpecificMask=0};$valid=$rows.Count -eq 4
     foreach($row in $rows){
@@ -635,6 +648,22 @@ function Get-TraceHardwareFacts([string]$Text) {
     }
     if($valid -and $masks.slotMask -eq 15){$facts.engineSchemaValid=$true;$facts.engineIndexMetadataAvailable=$true;foreach($key in $masks.Keys){$facts[$key]=$masks[$key]}}
   }
+  return [pscustomobject]$facts
+}
+function Get-TraceContinuationFacts([string]$Text) {
+  $facts=[ordered]@{acknowledgementCount=0;acknowledgementSchemaValid=$true;acknowledgementObserved=$false}
+  if([Text.Encoding]::UTF8.GetByteCount($Text) -gt 1048576){$facts.acknowledgementSchemaValid=$false;return [pscustomobject]$facts}
+  $end=$Text.LastIndexOf("`n");$complete=if($end -ge 0){$Text.Substring(0,$end+1)}else{''}
+  $ready=$false;$afterEntry=$false
+  foreach($line in @($complete -split '\r?\n'|ForEach-Object {$_.Trim()})){
+    if($line -ceq 'MIXEL_NAMESPACE_TRACE_READY'){if($ready){$facts.acknowledgementSchemaValid=$false};$ready=$true}
+    if($line -cmatch '\AMIXEL_NAMESPACE_(?:HWCONTROL|WIN32_ENTRY|PREWINDOW_ENTRY|NATIVE|TRACE_WINDOW|TRACE_END)(?:\s|\z)'){$afterEntry=$true}
+    if($line -ceq 'MIXEL_NAMESPACE_CONTINUATION_ACK'){
+      $facts.acknowledgementCount=[Math]::Min(32,$facts.acknowledgementCount+1)
+      if(-not $ready -or $afterEntry -or $facts.acknowledgementCount -ne 1){$facts.acknowledgementSchemaValid=$false}
+    }elseif($line -cmatch '\AMIXEL_NAMESPACE_CONTINUATION_ACK'){$facts.acknowledgementSchemaValid=$false}
+  }
+  $facts.acknowledgementObserved=$facts.acknowledgementSchemaValid -and $facts.acknowledgementCount -eq 1
   return [pscustomobject]$facts
 }
 function Get-TraceFailureFacts($Live,[ValidateSet('export','identity','commands','startup','resume','trace','parse','result','ack','cleanup')][string]$Phase,[bool]$TimedOut,$Execution=$null) {
@@ -663,6 +692,7 @@ function Get-TraceFailureFacts($Live,[ValidateSet('export','identity','commands'
     returnFailure=[bool]($complete -match '(?m)^MIXEL_NAMESPACE_TRACE_FAIL_(?:RETURN_SCOPE|RETURN_HANDLE|WIN32_RETURN_SCOPE)\r?$')
     startupDiagnostics=Get-TraceStartupFacts $text
     hardwareDiagnostics=Get-TraceHardwareFacts $text
+    continuationDiagnostics=Get-TraceContinuationFacts $text
     entryDiagnostics=Get-TraceEntryFacts $text
     debuggerStop=Get-TraceCdbStopFacts $text
     execution=$Execution

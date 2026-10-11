@@ -17,6 +17,7 @@ BINDINGS = 'MIXEL_NAMESPACE_BINDINGS directory=1 event=1 win32=1'
 READY = 'MIXEL_NAMESPACE_TRACE_READY'
 END = 'MIXEL_NAMESPACE_TRACE_END'
 HWCONTROL = 'MIXEL_NAMESPACE_HWCONTROL scopeQualified=1'
+CONTINUATION_ACK = 'MIXEL_NAMESPACE_CONTINUATION_ACK'
 THREAD_SELECTION = re.compile(r'MIXEL_NAMESPACE_THREAD_SELECTION processMatched=([01]) threadMatched=([01])')
 HW_CONTEXT = re.compile(r'MIXEL_NAMESPACE_HW_CONTEXT processMatched=([01]) threadMatched=([01]) addressPresentMask=([0-9]|1[0-5]) localEnableMask=([0-9]|1[0-5]) globalEnableMask=([0-9]|1[0-5]) executionByteMask=([0-9]|1[0-5])')
 
@@ -166,7 +167,7 @@ def parse_trace(raw):
         raise ValueError('Bounded private trace exceeds1MiB')
     records, stage, window, winreturn = [], 0, False, None
     entry_count, qualified_entry, control, selected = 0, False, False, False
-    list_open, list_complete, context = False, False, False
+    list_open, list_complete, context, acknowledged = False, False, False, False
     # A concurrent or incomplete final marker cannot supply evidence.
     for line in raw[:raw.rfind('\n')+1].splitlines():
         line = line.strip()
@@ -196,6 +197,10 @@ def parse_trace(raw):
         elif line == READY:
             if stage != 1: raise ValueError('Ready lacks exact bindings')
             stage = 2
+        elif line == CONTINUATION_ACK:
+            if stage != 2 or acknowledged or control or entry_count or window:
+                raise ValueError('Continuation acknowledgement is duplicate/out-of-order')
+            acknowledged = True
         elif line == 'MIXEL_NAMESPACE_TRACE_WINDOW':
             if stage != 2 or window or not qualified_entry or not control: raise ValueError('Window lacks its qualified source entry/control')
             window = True
