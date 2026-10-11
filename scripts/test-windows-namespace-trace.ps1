@@ -1378,7 +1378,7 @@ function Invoke-TraceAttempt([ValidateSet('absent','world')][string]$Scenario,[s
     if ($Gated) { $arguments=@('-p',[string]$childPid,'-pr','-pb','-pd','-noshell','-nosqm','-cf',(Join-Path $private 'start.txt')) }
     if($AfterMainBarrier){
       Assert-TraceMainBarrier $childPid ([uint32]$thread) $attemptRoot $gate $nonce $source $diagnosticHash $exe $exeHash
-      $arguments=@('-p',[string]$childPid,'-pb','-pd','-noshell','-nosqm','-cf',(Join-Path $private 'start.txt'))
+      $arguments=@('-p',[string]$childPid,'-pd','-noshell','-nosqm','-cf',(Join-Path $private 'start.txt'))
     }
     $live=Start-TraceProcess $script:cdb $arguments $private 'cdb' $childPid
     $live|Add-Member -NotePropertyName expectedControlCommand -NotePropertyValue ('"$$><'+(Join-Path $private 'hwcontrol.txt')+'"')
