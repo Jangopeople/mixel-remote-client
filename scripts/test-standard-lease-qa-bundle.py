@@ -141,6 +141,61 @@ class OwnedPEMetadataTests(unittest.TestCase):
                 bundle.pe_imports(owned_pe(name))
 
 
+class OwnedPackageInventoryTests(unittest.TestCase):
+    def populate(self, root):
+        for name in bundle.PACKAGE_MEMBERS:
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"owned inventory control")
+
+    def test_exact_compiler_auxiliary_names_are_excluded_before_manifest(self):
+        with tempfile.TemporaryDirectory(prefix="mixel-qa-package-") as folder:
+            root = Path(folder)
+            self.populate(root)
+            for name in ("lease-standard.pdb", "lease-standard-gui.pdb"):
+                (root / "fixture" / name).write_bytes(b"owned synthetic auxiliary inventory control")
+            with self.assertRaisesRegex(ValueError, "file inventory differs"):
+                bundle.bundle_members(root)
+            bundle.remove_owned_compiler_sidecars(root / "fixture")
+            self.assertEqual(len(bundle.bundle_members(root)), 12)
+            self.assertEqual({p.relative_to(root).as_posix() for p in bundle.bundle_members(root)}, bundle.PACKAGE_MEMBERS)
+
+    def test_unexpected_missing_or_nested_members_are_refused(self):
+        with tempfile.TemporaryDirectory(prefix="mixel-qa-package-") as folder:
+            root = Path(folder)
+            self.populate(root)
+            extra = root / "fixture" / "unexpected.pdb"
+            extra.write_bytes(b"owned synthetic unexpected inventory control")
+            bundle.remove_owned_compiler_sidecars(root / "fixture")
+            self.assertTrue(extra.exists())
+            with self.assertRaisesRegex(ValueError, "file inventory differs"):
+                bundle.bundle_members(root)
+            extra.unlink()
+            nested = root / "fixture" / "unexpected"
+            nested.mkdir()
+            with self.assertRaisesRegex(ValueError, "directory inventory differs"):
+                bundle.bundle_members(root)
+            nested.rmdir()
+            (root / "fixture" / "lease-standard.exe").unlink()
+            with self.assertRaisesRegex(ValueError, "missing a required member"):
+                bundle.bundle_members(root)
+
+    def test_auxiliary_directory_and_oversized_file_are_refused_without_deletion(self):
+        with tempfile.TemporaryDirectory(prefix="mixel-qa-package-") as folder:
+            fixture = Path(folder)
+            sidecar = fixture / "lease-standard.pdb"
+            sidecar.mkdir()
+            with self.assertRaisesRegex(ValueError, "bounded ordinary file"):
+                bundle.remove_owned_compiler_sidecars(fixture)
+            self.assertTrue(sidecar.is_dir())
+            sidecar.rmdir()
+            with sidecar.open("wb") as stream:
+                stream.truncate(64 * 1024 * 1024 + 1)
+            with self.assertRaisesRegex(ValueError, "bounded ordinary file"):
+                bundle.remove_owned_compiler_sidecars(fixture)
+            self.assertEqual(sidecar.stat().st_size, 64 * 1024 * 1024 + 1)
+
+
 class RetainedLoaderResultTests(unittest.TestCase):
     def test_safe_result_is_only_a_loader_classification(self):
         record = {"pid": 123, "sourceStatus": "ownerFailed=false;ownerError=none;kernel=unavailable;probeError=5;memoryActive=false",

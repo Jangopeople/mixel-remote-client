@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import struct
 import subprocess
 import sys
@@ -36,6 +37,46 @@ BUILD_CONTROLS = (
     "scripts/test-standard-lease-qa-bundle.py",
     "scripts/test-support-lease-interactive-source.ps1",
 )
+PACKAGE_MEMBERS = frozenset((*SOURCES, *ADAPTERS,
+    "fixture/lease-standard.rs", "fixture/lease-standard.exe",
+    "fixture/lease-standard-gui.rs", "fixture/lease-standard-gui.exe",
+    "lease-standard-compile.log", "lease-standard-gui-compile.log", "hosted-loader-smoke.json"))
+
+
+def remove_owned_compiler_sidecars(directory):
+    """Exclude two exact compiler auxiliary names without reading their contents."""
+    for name in ("lease-standard.pdb", "lease-standard-gui.pdb"):
+        path = directory / name
+        try:
+            record = path.lstat()
+        except FileNotFoundError:
+            continue
+        if not stat.S_ISREG(record.st_mode) or getattr(record, "st_file_attributes", 0) & 0x400 or record.st_size > 64 * 1024 * 1024:
+            raise ValueError("Owned compiler auxiliary output is not a bounded ordinary file")
+        path.unlink()
+
+
+def bundle_members(directory):
+    """Require the exact relocatable package inventory before writing its manifest."""
+    members = []
+    pending = [directory]
+    while pending:
+        for path in pending.pop().iterdir():
+            record = path.lstat()
+            name = path.relative_to(directory).as_posix()
+            if stat.S_ISLNK(record.st_mode) or getattr(record, "st_file_attributes", 0) & 0x400:
+                raise ValueError("QA package refuses reparse members")
+            if stat.S_ISDIR(record.st_mode):
+                if name not in ("fixture", "scripts"):
+                    raise ValueError("QA package directory inventory differs")
+                pending.append(path)
+            elif stat.S_ISREG(record.st_mode) and name in PACKAGE_MEMBERS:
+                members.append(path)
+            else:
+                raise ValueError("QA package file inventory differs")
+    if {path.relative_to(directory).as_posix() for path in members} != PACKAGE_MEMBERS:
+        raise ValueError("QA package is missing a required member")
+    return sorted(members)
 
 
 def digest(path):
@@ -228,7 +269,8 @@ def build(output):
     for target, source in ADAPTERS.items():
         (output / target).write_bytes((ROOT / source).read_bytes())
     (output / "hosted-loader-smoke.json").write_text(json.dumps(smoke, indent=2) + "\n", encoding="utf-8")
-    members = sorted(path for path in output.rglob("*") if path.is_file())
+    remove_owned_compiler_sidecars(fixture)
+    members = bundle_members(output)
     manifest = {"schemaVersion": 1, "purpose": PURPOSE, "runtimeQualified": False,
                 "eventName": event, "commit": head, "tree": tree, "runId": int(run), "jobName": JOB,
                 "compiler": version, "args": STATIC_ARGS, "portableEntryAssertion": REFUSAL.strip(),
@@ -237,6 +279,7 @@ def build(output):
                            "sha256": digest(path)} for path in members]}
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     print("PASS: exact GUID-only console/GUI fixtures compile with static CRT, reject argv, load and write owned results; this is compilation/loader proof only.")
+    print("PASS: exact 12-member QA package inventory verified; two known compiler auxiliary outputs excluded without reading their contents.")
     print("NOT QUALIFIED: actual standard-user desktop consent and signed customer applications remain separate required gates.")
 
 
