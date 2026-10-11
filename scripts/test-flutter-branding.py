@@ -24,7 +24,7 @@ class BrandingTests(unittest.TestCase):
         self.source.parent.mkdir(parents=True)
         self.assets = self.repo / "flutter/assets"
         self.assets.mkdir(parents=True)
-        self.source.write_text("// unchanged prefix\n" + PATCH["ORIGINAL"] + "\n// unchanged suffix\n")
+        self.source.write_text("// unchanged prefix\n" + PATCH["ORIGINAL"] + "\n" + PATCH["FOOTER_ORIGINAL"] + "\n// unchanged suffix\n")
         self.svg = self.assets / "icon.svg"
         self.svg.write_bytes(SVG.read_bytes())
         self.compiled = self.root / "compiled/flutter_assets"
@@ -50,7 +50,7 @@ class BrandingTests(unittest.TestCase):
         self.apply()
         self.assertEqual((self.assets / "icon.png").read_bytes(), ICON.read_bytes())
         self.assertFalse(self.svg.exists())
-        self.assertEqual(self.source.read_bytes(), before.replace(PATCH["ORIGINAL"].encode(), PATCH["BRANDED"].encode()))
+        self.assertEqual(self.source.read_bytes(), before.replace(PATCH["ORIGINAL"].encode(), PATCH["BRANDED"].encode()).replace(PATCH["FOOTER_ORIGINAL"].encode(), PATCH["FOOTER_BRANDED"].encode()))
         result = self.source.read_bytes()
         self.apply()
         self.assertEqual(self.source.read_bytes(), result)
@@ -60,6 +60,7 @@ class BrandingTests(unittest.TestCase):
         self.source.write_bytes(before)
         self.apply()
         expected = before.replace(PATCH["ORIGINAL"].replace("\n", "\r\n").encode(), PATCH["BRANDED"].replace("\n", "\r\n").encode())
+        expected = expected.replace(PATCH["FOOTER_ORIGINAL"].replace("\n", "\r\n").encode(), PATCH["FOOTER_BRANDED"].replace("\n", "\r\n").encode())
         self.assertEqual(self.source.read_bytes(), expected)
         self.apply()
         self.assertEqual(self.source.read_bytes(), expected)
@@ -68,8 +69,19 @@ class BrandingTests(unittest.TestCase):
         for source in (PATCH["ORIGINAL"].replace("width: size", "width: size + 1"), PATCH["ORIGINAL"] * 2,
                        PATCH["ORIGINAL"] + PATCH["BRANDED"]):
             with self.subTest(source=source[:35]):
-                self.source.write_text(source)
-                with self.assertRaises(ValueError):
+                self.source.write_text(source + "\n" + PATCH["FOOTER_ORIGINAL"])
+                with self.assertRaisesRegex(ValueError, "Pinned Flutter icon loader changed"):
+                    self.apply()
+                self.assertEqual(self.svg.read_bytes(), SVG.read_bytes())
+                self.assertFalse((self.assets / "icon.png").exists())
+
+    def test_footer_drift_and_duplicates_fail_before_any_asset_mutation(self):
+        for footer in (PATCH["FOOTER_ORIGINAL"].replace("https://rustdesk.com", "https://changed.example"),
+                       PATCH["FOOTER_ORIGINAL"] * 2,
+                       PATCH["FOOTER_ORIGINAL"] + PATCH["FOOTER_BRANDED"]):
+            with self.subTest(footer=footer[:40]):
+                self.source.write_text(PATCH["ORIGINAL"] + "\n" + footer)
+                with self.assertRaisesRegex(ValueError, "Pinned Flutter support footer changed"):
                     self.apply()
                 self.assertEqual(self.svg.read_bytes(), SVG.read_bytes())
                 self.assertFalse((self.assets / "icon.png").exists())

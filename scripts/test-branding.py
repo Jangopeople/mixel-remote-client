@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -75,6 +76,18 @@ with tempfile.TemporaryDirectory(prefix="mixel-branding-") as directory:
     common = (repo / "flutter/lib/common.dart").read_text(encoding="utf-8")
     assert "return Image.asset('assets/icon.png', width: size, height: size);" in common
     assert "'assets/icon.svg'" not in common
+    assert "launchUrl(Uri.parse('https://mixel.ch'));" in common
+    for file in (repo / "src/lang").glob("*.rs"):
+        branded = file.read_text(encoding="utf-8")
+        upstream = run(["git", "-C", str(repo), "show", "HEAD:src/lang/" + file.name]).stdout
+        assert not re.search(r"Rust[Dd]esk", branded), file.name
+        # Lowercase lookup keys and the upstream documentation URLs retain
+        # their exact bytes while visible capitalized product values change.
+        assert re.findall(r'\("([^"\n]*rustdesk[^"\n]*)",', branded) == re.findall(r'\("([^"\n]*rustdesk[^"\n]*)",', upstream), file.name
+        assert re.findall(r'https://rustdesk\.com[^"\n]*', branded) == re.findall(r'https://rustdesk\.com[^"\n]*', upstream), file.name
+    assert '("powered_by_me", "Werkt met Mixel-Remote")' in (repo / "src/lang/nl.rs").read_text(encoding="utf-8")
+    assert '("About Mixel-Remote", "Про Mixel-Remote")' in (repo / "src/lang/uk.rs").read_text(encoding="utf-8")
+    print("PASS: actual Dutch/Ukrainian values and Flutter footer use Mixel; lowercase lookup keys and documentation URLs preserved")
     print("PASS: complete branding and support patch use the same fresh 1.4.6 checkout with default RDREPO")
 
     gtk = (repo / "flutter/linux/my_application.cc").read_text(encoding="utf-8")
@@ -551,5 +564,14 @@ print("PASS: actual Debian generator child explicitly uses UTF-8 and preserves t
         assert rejected.returncode != 0, f"Corrupt {label} unexpectedly passed"
         assert f"Required runtime branding missing in {path}" in rejected.stderr, rejected.stderr[-4000:]
         print(f"PASS: full branding rejects a corrupt {label}")
+
+    footer_source = repo / "flutter/lib/common.dart"
+    original_footer = footer_source.read_text(encoding="utf-8")
+    assert "launchUrl(Uri.parse('https://mixel.ch'));" in original_footer
+    footer_source.write_text(original_footer.replace("launchUrl(Uri.parse('https://mixel.ch'));", "launchUrl(Uri.parse('https://changed.example'));"), encoding="utf-8")
+    rejected = subprocess.run(BRANDING_COMMAND, cwd=base, env=env, capture_output=True, text=True, encoding="utf-8")
+    footer_source.write_text(original_footer, encoding="utf-8")
+    assert rejected.returncode != 0 and "Pinned Flutter support footer changed" in rejected.stderr
+    print("PASS: full branding rejects a changed Flutter footer instead of retaining an unverified destination")
 
 print("PASS: all full-pipeline branding regression checks")

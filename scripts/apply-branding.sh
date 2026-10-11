@@ -181,7 +181,7 @@ patch_string build.py \
 #    Safe because:
 #    - lang/*.rs literals never contain "RustDesk" as an identifier
 #      (the lowercase `rustdesk` in keys like `verify_rustdesk_password_tip`
-#      is preserved — case-sensitive sed).
+#      is preserved — only the capitalized RustDesk/Rustdesk spellings change).
 #    - The Cargo crate name (`rustdesk` in Cargo.toml) is lowercase, untouched.
 #    - The web bridge comparison `mainGetAppNameSync(hint) != "RustDesk"`
 #      is in flutter/lib/web/bridge.dart, deliberately NOT patched — it's
@@ -189,8 +189,8 @@ patch_string build.py \
 
 echo "→ Patching RustDesk → $APP_NAME in user-visible strings"
 for langfile in "$RDREPO"/src/lang/*.rs; do
-  if grep -q "RustDesk" "$langfile"; then
-    sed -i.bak "s/RustDesk/$APP_NAME/g" "$langfile" && rm -f "$langfile.bak"
+  if grep -q "Rust[Dd]esk" "$langfile"; then
+    sed -i.bak "s/Rust[Dd]esk/$APP_NAME/g" "$langfile" && rm -f "$langfile.bak"
   fi
 done
 echo "   patched src/lang/*.rs (47 files)"
