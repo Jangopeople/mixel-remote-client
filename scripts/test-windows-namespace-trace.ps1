@@ -1229,7 +1229,7 @@ function Invoke-TraceAttempt([ValidateSet('absent','world')][string]$Scenario,[s
     $phase='commands'
     [void](Invoke-TracePython @((Join-Path $PSScriptRoot 'windows-namespace-cdb.py'),'--pid',[string]$childPid,'--tid',[string]$thread,'--session',[string]$script:session,'--event',$event,'--windows-folder',$private,'--output',$private,'--binary',$exe,'--exe-sha256',$exeHash,'--engine-dll',$engine.path,'--engine-sha256',$engine.dllSHA256) $private 'commands')
     $arguments=@('-p',[string]$childPid,'-pd','-noshell','-nosqm','-cf',(Join-Path $private 'start.txt'))
-    if ($Gated) { $arguments=@('-p',[string]$childPid,'-pr','-pd','-noshell','-nosqm','-cf',(Join-Path $private 'start.txt')) }
+    if ($Gated) { $arguments=@('-p',[string]$childPid,'-pr','-pb','-pd','-noshell','-nosqm','-cf',(Join-Path $private 'start.txt')) }
     $live=Start-TraceProcess $script:cdb $arguments $private 'cdb' $childPid
     $live|Add-Member -NotePropertyName expectedControlCommand -NotePropertyValue ('"$$><'+(Join-Path $private 'hwcontrol.txt')+'"')
     $live|Add-Member -NotePropertyName expectedThreadId -NotePropertyValue ([uint32]$thread)
