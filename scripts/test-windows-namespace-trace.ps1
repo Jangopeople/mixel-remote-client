@@ -847,6 +847,86 @@ function Get-TraceMarkerFormattingFacts([string]$Text) {
   $facts.available=$true;$facts.markers=$items.ToArray()
   return [pscustomobject]$facts
 }
+function Get-TraceEngineQueryFacts([string]$Text) {
+  $keys=@('argumentsValid','contextAvailable','processMatched','threadMatched','mappingAvailable','currentEngineMatched','moduleAvailable','presentMask','idMatchedMask','flagsAvailableMask','enabledMask','deferredMask','oneShotMask','adderOnlyMask','goOnlyMask','unknownFlagsMask','typeAvailableMask','dataAmd64Mask','dataAvailableMask','executeByteMask','passAvailableMask','passOneMask','currentPassAvailableMask','currentPassOneMask','matchAvailableMask','specificThreadMask','anyThreadMask','expectedEngineMatchedMask','commandAvailableMask','callbackMatchedMask','offsetAvailableMask','expectedOffsetAvailableMask','offsetMatchedMask')
+  $facts=[ordered]@{recordCount=0;schemaAvailable=$false}
+  foreach($key in $keys){$facts[$key]=0}
+  if([Text.Encoding]::UTF8.GetByteCount($Text)-gt1048576){return [pscustomobject]$facts}
+  $end=$Text.LastIndexOf("`n");if($end-lt0){return [pscustomobject]$facts}
+  $lines=@($Text.Substring(0,$end+1)-split'\r?\n'|ForEach-Object{$_.Trim()})
+  $records=@($lines|Where-Object{$_-cmatch'\AMIXEL_CDB_ENGINE_QUERY(?:\s|\z)'})
+  $facts.recordCount=[Math]::Min(32,$records.Count)
+  if($records.Count-ne1-or$records[0].Length-gt4096){return [pscustomobject]$facts}
+  $position=[Array]::IndexOf($lines,$records[0]);$binding=[Array]::IndexOf($lines,'MIXEL_NAMESPACE_BINDINGS directory=1 event=1 win32=1')
+  if($binding-ge0-and$position-ge$binding){return [pscustomobject]$facts}
+  if($records[0]-cnotmatch'\AMIXEL_CDB_ENGINE_QUERY (\{[^\r\n]+\})\z'){return [pscustomobject]$facts}
+  $json=$Matches[1]
+  try {
+    $value=ConvertFrom-Json -InputObject $json -ErrorAction Stop
+    if((@($value.PSObject.Properties.Name)-join',')-cne($keys-join',')){return [pscustomobject]$facts}
+    $canonical=[ordered]@{}
+    for($index=0;$index-lt$keys.Count;$index++){
+      $key=$keys[$index];$number=$value.PSObject.Properties[$key].Value;$max=if($index-lt7){1}else{15}
+      if(($number-isnot[int]-and$number-isnot[long])-or$number-lt0-or$number-gt$max){return [pscustomobject]$facts}
+      $canonical[$key]=[int]$number
+    }
+    if(($canonical|ConvertTo-Json -Compress)-cne$json){return [pscustomobject]$facts}
+    if(($value.idMatchedMask-band(-bnot$value.presentMask))-ne0){return [pscustomobject]$facts}
+    foreach($key in @('flagsAvailableMask','typeAvailableMask','dataAvailableMask','passAvailableMask','currentPassAvailableMask','matchAvailableMask','commandAvailableMask','offsetAvailableMask')){
+      if(($value.PSObject.Properties[$key].Value-band(-bnot$value.idMatchedMask))-ne0){return [pscustomobject]$facts}
+    }
+    $derived=@{enabledMask='flagsAvailableMask';deferredMask='flagsAvailableMask';oneShotMask='flagsAvailableMask';adderOnlyMask='flagsAvailableMask';goOnlyMask='flagsAvailableMask';unknownFlagsMask='flagsAvailableMask';dataAmd64Mask='typeAvailableMask';executeByteMask='dataAvailableMask';passOneMask='passAvailableMask';currentPassOneMask='currentPassAvailableMask';specificThreadMask='matchAvailableMask';anyThreadMask='matchAvailableMask';expectedEngineMatchedMask='specificThreadMask';callbackMatchedMask='commandAvailableMask';offsetMatchedMask='offsetAvailableMask'}
+    foreach($key in $derived.Keys){if(($value.PSObject.Properties[$key].Value-band(-bnot$value.PSObject.Properties[$derived[$key]].Value))-ne0){return [pscustomobject]$facts}}
+    if(($value.specificThreadMask-band$value.anyThreadMask)-ne0-or($value.specificThreadMask-bor$value.anyThreadMask)-ne$value.matchAvailableMask-or($value.offsetMatchedMask-band(-bnot$value.expectedOffsetAvailableMask))-ne0){return [pscustomobject]$facts}
+    if(-not$value.argumentsValid-and(@($keys|Select-Object -Skip 1|Where-Object{$value.PSObject.Properties[$_].Value-ne0}).Count-ne0)){return [pscustomobject]$facts}
+    if(-not$value.contextAvailable-and($value.processMatched-or$value.threadMatched)){return [pscustomobject]$facts}
+    if(($value.mappingAvailable-or$value.currentEngineMatched)-and-not($value.contextAvailable-and$value.processMatched-and$value.threadMatched)){return [pscustomobject]$facts}
+    if($value.currentEngineMatched-and-not$value.mappingAvailable){return [pscustomobject]$facts}
+    if((-not$value.mappingAvailable-or-not$value.currentEngineMatched)-and(@($keys|Select-Object -Skip 7|Where-Object{$value.PSObject.Properties[$_].Value-ne0}).Count-ne0-or$value.moduleAvailable-ne0)){return [pscustomobject]$facts}
+    if([bool]($value.expectedOffsetAvailableMask-band8)-ne[bool]$value.moduleAvailable){return [pscustomobject]$facts}
+    foreach($key in $keys){$facts[$key]=$canonical[$key]}
+    $facts.schemaAvailable=$true
+  } catch { }
+  return [pscustomobject]$facts
+}
+function Get-TraceEngineBuildFacts([string]$Text) {
+  $facts=[ordered]@{available=$false;phase='unavailable';nativeExitAvailable=$false;nativeExitCode=0L;codeFactsAvailable=$false;errorCodes=@();warningCodes=@()}
+  if($Text.Length-gt4096){return [pscustomobject]$facts}
+  try {
+    $value=ConvertFrom-Json -InputObject $Text -ErrorAction Stop
+    if((@($value.PSObject.Properties.Name)-join',')-cne'buildFailed,phase,nativeExitAvailable,nativeExitCode,codeFactsAvailable,errorCodes,warningCodes'-or$value.buildFailed-isnot[bool]-or-not$value.buildFailed-or$value.phase-isnot[string]-or$value.phase-cnotin@('platform','source','toolchain','sdk','compile','link','qualification')-or$value.nativeExitAvailable-isnot[bool]-or$value.codeFactsAvailable-isnot[bool]){return [pscustomobject]$facts}
+    $exit=$value.nativeExitCode
+    if(($exit-isnot[int]-and$exit-isnot[long])-or$exit-lt-2147483648-or$exit-gt4294967295-or(-not$value.nativeExitAvailable-and$exit-ne0)){return [pscustomobject]$facts}
+    foreach($key in @('errorCodes','warningCodes')){
+      $codes=$value.PSObject.Properties[$key].Value
+      if($codes-isnot[Array]-or$codes.Count-gt32-or(-not$value.codeFactsAvailable-and$codes.Count-ne0)){return [pscustomobject]$facts}
+      $previous=-1
+      foreach($code in $codes){if(($code-isnot[int]-and$code-isnot[long])-or$code-lt0-or$code-gt9999-or$code-le$previous){return [pscustomobject]$facts};$previous=$code}
+    }
+    if(($value|ConvertTo-Json -Depth 3 -Compress)-cne$Text){return [pscustomobject]$facts}
+    $facts.available=$true;$facts.phase=$value.phase;$facts.nativeExitAvailable=$value.nativeExitAvailable;$facts.nativeExitCode=[long]$exit;$facts.codeFactsAvailable=$value.codeFactsAvailable;$facts.errorCodes=@($value.errorCodes);$facts.warningCodes=@($value.warningCodes)
+  } catch { }
+  return [pscustomobject]$facts
+}
+function New-TraceEngineDll([string]$Private) {
+  $helper=Join-Path $PSScriptRoot 'windows_namespace_engine.py';$source=Join-Path $PSScriptRoot 'windows-namespace-engine-readonly.cpp'
+  Assert-TracePlainPath $helper;Assert-TracePlainPath $source;Assert-TracePlainPath $Private
+  try {$text=(Invoke-TracePython @($helper,'--output',$Private) $Private 'engine-build' 140).Trim()} catch {
+    try {
+      $path=Join-Path $Private 'engine-build-stdout.private';Assert-TracePlainPath $path
+      $failure=Get-TraceEngineBuildFacts ([MixelNamespaceTraceIO]::ReadBounded($path,4096).Trim())
+      if($failure.available){Write-Host ('OBSERVED: bounded native SDK build failure; '+($failure|ConvertTo-Json -Depth 3 -Compress))}
+    } catch { }
+    throw
+  }
+  if($text.Length-gt1024-or$text-cnotmatch'\A\{"dllSHA256":"([0-9a-f]{64})","imageSize":([1-9][0-9]{0,8}),"exportRvas":\{"DebugExtensionInitialize":([1-9][0-9]{0,8}),"inspect":([1-9][0-9]{0,8})\},"sourceSHA256":"([0-9a-f]{64})"\}\z'){throw 'Private native SDK qualification bridge is invalid.'}
+  $dllHash=$Matches[1];$image=[long]$Matches[2];$init=[long]$Matches[3];$inspect=[long]$Matches[4];$sourceHash=$Matches[5]
+  if($image-gt268435456-or$init-ge$image-or$inspect-ge$image-or$init-eq$inspect-or(Get-FileHash $source -Algorithm SHA256).Hash.ToLowerInvariant()-cne$sourceHash){throw 'Private native SDK source/export identity differs.'}
+  $dll=Join-Path $Private 'mixelengine.dll';Assert-TracePlainPath $dll
+  $info=Get-Item -LiteralPath $dll
+  if($info.Length-lt512-or$info.Length-gt16777216-or(Get-FileHash $dll -Algorithm SHA256).Hash.ToLowerInvariant()-cne$dllHash){throw 'Private native SDK DLL identity differs.'}
+  return [pscustomobject]@{path=$dll;dllSHA256=$dllHash}
+}
 function Get-TraceFailureFacts($Live,[ValidateSet('export','identity','commands','startup','resume','trace','parse','result','ack','cleanup')][string]$Phase,[bool]$TimedOut,$Execution=$null) {
   $text='';$stderr='';$readFailed=$false;$stdoutBytes=0L;$stderrBytes=0L;$expectedControlCommand=''
   $expectedChildPid=0u;$expectedThreadId=0u
@@ -878,6 +958,7 @@ function Get-TraceFailureFacts($Live,[ValidateSet('export','identity','commands'
     startupDiagnostics=Get-TraceStartupFacts $text
     hardwareDiagnostics=Get-TraceHardwareFacts $text $expectedControlCommand
     engineMetadataDiagnostics=Get-TraceEngineMetadataFacts $text $expectedChildPid $expectedThreadId $expectedControlCommand
+    engineQueryDiagnostics=Get-TraceEngineQueryFacts $text
     continuationDiagnostics=Get-TraceContinuationFacts $text
     markerFormattingDiagnostics=Get-TraceMarkerFormattingFacts $text
     entryDiagnostics=Get-TraceEntryFacts $text
@@ -956,6 +1037,7 @@ function Invoke-TraceAttempt([ValidateSet('absent','world')][string]$Scenario,[s
     $diagnosticHash=(Get-FileHash $source -Algorithm SHA256).Hash;$exeHash=(Get-FileHash $exe -Algorithm SHA256).Hash
     if ($originalHash -ceq $diagnosticHash) { throw 'Private timing-gate source hash binding is invalid.' }
     if($qualifiedPe.exeSHA256 -cne $exeHash.ToLowerInvariant()){throw 'Private qualified PE identity differs from the exact retained executable.'}
+    $engine=New-TraceEngineDll $private
     $mode=Join-Path $attemptRoot 'fixture-mode.txt';[IO.File]::WriteAllText($mode,'probe',[Text.UTF8Encoding]::new($false))
     Set-TraceDirectoryAcl $attemptRoot $script:ownedSid
     foreach ($file in @($source,$exe,$mode)) { Set-TraceReadOnlyFile $file $script:ownedSid }
@@ -969,7 +1051,7 @@ function Invoke-TraceAttempt([ValidateSet('absent','world')][string]$Scenario,[s
         $identity['sessionId'] -cne [string]$script:session -or $identity['integritySid'] -cne 'S-1-16-8192' -or
         (Get-FileHash $exe -Algorithm SHA256).Hash -cne $exeHash) { throw 'Retained trace PID/SID/session/medium/non-elevated/image qualification failed.' }
     $phase='commands'
-    [void](Invoke-TracePython @((Join-Path $PSScriptRoot 'windows-namespace-cdb.py'),'--pid',[string]$childPid,'--tid',[string]$thread,'--session',[string]$script:session,'--event',$event,'--windows-folder',$private,'--output',$private,'--binary',$exe,'--exe-sha256',$exeHash) $private 'commands')
+    [void](Invoke-TracePython @((Join-Path $PSScriptRoot 'windows-namespace-cdb.py'),'--pid',[string]$childPid,'--tid',[string]$thread,'--session',[string]$script:session,'--event',$event,'--windows-folder',$private,'--output',$private,'--binary',$exe,'--exe-sha256',$exeHash,'--engine-dll',$engine.path,'--engine-sha256',$engine.dllSHA256) $private 'commands')
     $arguments=@('-p',[string]$childPid,'-pd','-noshell','-nosqm','-cf',(Join-Path $private 'start.txt'))
     if ($Gated) { $arguments=@('-p',[string]$childPid,'-pr','-pd','-noshell','-nosqm','-cf',(Join-Path $private 'start.txt')) }
     $live=Start-TraceProcess $script:cdb $arguments $private 'cdb' $childPid

@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import re
 import struct
+import subprocess
 import sys
 import tempfile
 
@@ -367,6 +368,104 @@ for entries in [pre_entry()+'\n',win_entry(matched=0)+'\n',pre_entry()+'\n'+win_
     raw=ready_prefix+entries+module.HWCONTROL+'\n'+win_entry(size+1)+'\nMIXEL_NAMESPACE_TRACE_WINDOW\n'+suffix
     require(module.parse_trace(raw)['completedQualifiedSourceWindow'],'Safe unmatched/source-IO calls before future probe were rejected')
 rejects(lambda:module.parse_trace(ready_prefix+win_entry()+'\n'+module.HWCONTROL+'\nMIXEL_NAMESPACE_TRACE_WINDOW\n'+suffix),'Control can follow first matched source entry')
+
+# Getter-only extension PE/build qualification; native Windows ABI is separate.
+import types
+import windows_namespace_engine as engine_module
+
+def synthetic_engine_dll():
+    data=bytearray(pe_bytes)
+    struct.pack_into('<H',data,150,0x2022)
+    struct.pack_into('<I',data,2068,2);struct.pack_into('<I',data,2072,2)
+    for at,value in ((2076,0x2040),(2080,0x2048),(2084,0x2050),(2112,0x1100),(2116,0x1200),(2120,0x2070),(2124,0x2090)):
+        struct.pack_into('<I',data,at,value)
+    struct.pack_into('<H',data,2128,0);struct.pack_into('<H',data,2130,1)
+    data[2160:2185]=b'DebugExtensionInitialize\0';data[2192:2200]=b'inspect\0';data[2224:2240]=b'mixelengine.dll\0'
+    return bytes(data)
+engine_bytes=synthetic_engine_dll();engine_pe=engine_module.qualify_dll(engine_bytes)
+require(engine_pe['exportRvas']=={'DebugExtensionInitialize':0x1100,'inspect':0x1200} and engine_pe['imageSize']==0x3000,'Exact SDK callback qualification failed')
+for offset,value,width in [(132,0x14c,2),(134,0,2),(148,239,2),(150,0x22,2),(150,0x2102,2),(152,0x10b,2),(168,0,4),(208,0xffffffff,4),(212,65537,4),(268,39,4),(400,0xffffffff,4),(444,0x1000,4),(452,1024,4),(428,0xe0000020,4),(2068,1,4),(2072,3,4),(2076,0x2000,4),(2080,0x2040,4),(2084,0x2048,4),(2120,0x2048,4),(2124,0x2070,4),(2130,0,2),(2112,0x2000,4),(2116,0x1100,4),(2112,0,4),(2116,0x3000,4),(2060,0x2070,4)]:
+    bad=bytearray(engine_bytes);struct.pack_into('<H' if width==2 else '<I',bad,offset,value)
+    rejects(lambda bad=bytes(bad):engine_module.qualify_dll(bad),'Malformed/alias/forwarded DLL accepted')
+for at in [2160,2192,2224]:
+    bad=bytearray(engine_bytes);bad[at]=ord('X');rejects(lambda bad=bytes(bad):engine_module.qualify_dll(bad),'Wrong SDK callback/DLL identity accepted')
+for data in [None,'MZ',bytearray(engine_bytes),b'MZ',engine_bytes[:1024],engine_bytes+b'\0'*16777216]:
+    rejects(lambda data=data:engine_module.qualify_dll(data),'Unbounded/non-native DLL input accepted')
+with tempfile.TemporaryDirectory(prefix='mixel-private-engine-control-') as temporary:
+    root=Path(temporary).resolve();dll=root/'mixelengine.dll';dll.write_bytes(engine_bytes)
+    require(engine_module.qualify_file(dll,engine_pe['dllSHA256'])==engine_pe,'Exact private DLL identity failed')
+    alias=root/'alias';alias.symlink_to(root,target_is_directory=True)
+    for path in [root,root/'missing.dll',alias/'mixelengine.dll',str(dll)]:rejects(lambda path=path:engine_module.qualify_file(path),'Indirect/absent/wrong-type DLL accepted')
+    for sha in ['0'*64,'',engine_pe['dllSHA256'].upper(),1]:rejects(lambda sha=sha:engine_module.qualify_file(dll,sha),'Different/noncanonical DLL hash accepted')
+    sdk=root/'sdk';header=sdk/'Include'/'10.0.0'/'um';header.mkdir(parents=True);(header/'dbgeng.h').write_text('SIMULATED_HEADER')
+    tools=root/'tools';tools.mkdir();linker=tools/'link.exe';compiler=tools/'cl.exe';linker.write_bytes(b'MZ');compiler.write_bytes(b'MZ')
+    original={name:getattr(engine_module,name) for name in ('os','find_msvc_linker','read_windows_version_info','subprocess')}
+    calls=[];fail='';phase_values=[]
+    def mock_run(argv,**kw):
+        calls.append(argv)
+        require(kw['capture_output'] is True and kw['timeout']==60,'Native compiler/linker privacy/deadline changed')
+        if argv[0]==str(compiler):
+            require('/c' in argv and '/LD' not in argv and '/link' not in argv and '/W4' in argv and '/WX' in argv,'CL reintroduced an implicit unqualified LINK')
+            if fail=='compile':return types.SimpleNamespace(returncode=1,stdout=b'PRIVATE',stderr=b'PRIVATE')
+            (kw['cwd']/'engine.obj').write_bytes(b'OWNED_OBJECT')
+        elif argv[0]==str(linker):
+            require('/DLL' in argv and '/MACHINE:X64' in argv and '/WX' in argv and '/DYNAMICBASE' in argv and '/NXCOMPAT' in argv,'Explicit verified LINK/hardening changed')
+            if fail=='link':return types.SimpleNamespace(returncode=1,stdout=b'PRIVATE',stderr=b'PRIVATE')
+            (kw['cwd']/'mixelengine.dll').write_bytes(b'MZ' if fail=='qualification' else engine_bytes)
+        else:raise AssertionError('Unqualified executable invocation')
+        return types.SimpleNamespace(returncode=0)
+    try:
+        engine_module.os=types.SimpleNamespace(name='nt',environ={'WindowsSdkDir':str(sdk),'WindowsSDKVersion':'10.0.0\\'})
+        engine_module.find_msvc_linker=lambda env:linker
+        engine_module.read_windows_version_info=lambda path:{'CompanyName':'Microsoft Corporation','OriginalFilename':'cl.exe'}
+        engine_module.subprocess=types.SimpleNamespace(run=mock_run,SubprocessError=subprocess.SubprocessError)
+        for failed in ['', 'compile','link','qualification']:
+            fail=failed;out=root/('owned-'+(failed or 'success'));out.mkdir();calls.clear();phase_values.clear()
+            if failed:
+                try:engine_module._build(out,phase_values.append)
+                except engine_module.BuildFailure as error:require(error.phase==failed and 'PRIVATE' not in str(error),'Native fixed build failure phase lost/private output leaked')
+                else:raise AssertionError('Failed native build accepted')
+            else:
+                result=engine_module._build(out,phase_values.append)
+                require(result['dllSHA256']==engine_pe['dllSHA256'] and len(result['sourceSHA256'])==64,'SDK build hash bridge failed')
+                require(calls[0][0]==str(compiler) and calls[1][0]==str(linker),'Qualified compiler/linker selection changed')
+                require(phase_values==list(engine_module.PHASES),'Fixed build phase lifecycle changed')
+        engine_module.read_windows_version_info=lambda path:{'CompanyName':'PRIVATE','OriginalFilename':'cl.exe'}
+        out=root/'owned-wrong-identity';out.mkdir();calls.clear()
+        try:engine_module.build(out)
+        except engine_module.BuildFailure as error:require(error.phase=='toolchain' and not calls,'Wrong CL identity invoked a native executable')
+        else:raise AssertionError('Wrong CL identity accepted')
+        engine_module.read_windows_version_info=lambda path:{'CompanyName':'Microsoft Corporation','OriginalFilename':'cl.exe'}
+        engine_module.os.environ={'WindowsSdkDir':'','WindowsSDKVersion':'','ProgramFiles(x86)':''}
+        try:engine_module.build(out)
+        except engine_module.BuildFailure as error:require(error.phase=='sdk' and not calls,'Absent SDK fell back to relative header directory')
+        else:raise AssertionError('Absent SDK accepted')
+    finally:
+        for name,value in original.items():setattr(engine_module,name,value)
+for native_code in [0,1,2,-2147483648,4294967295]:
+    completed=types.SimpleNamespace(returncode=native_code,stdout=b'PRIVATE_PATH: error C2027: PRIVATE_SOURCE\nwarning C4100: PRIVATE\nerror LNK2019: PRIVATE',stderr=b'error C2027: PRIVATE_DUPLICATE')
+    failure=engine_module.BuildFailure('compile',completed)
+    require(failure.facts['nativeExitAvailable'] and failure.facts['nativeExitCode']==native_code and failure.facts['errorCodes']==[2019,2027] and failure.facts['warningCodes']==[4100] and 'PRIVATE' not in json.dumps(failure.facts),'Native bounded code/exit projection leaked or changed')
+for native_code in [-2147483649,4294967296,True,'PRIVATE']:
+    failure=engine_module.BuildFailure('link',types.SimpleNamespace(returncode=native_code,stdout=b'PRIVATE',stderr=b'PRIVATE'))
+    require(not failure.facts['nativeExitAvailable'] and not failure.facts['codeFactsAvailable'],'Invalid native exit was projected')
+failure=engine_module.BuildFailure('compile',types.SimpleNamespace(returncode=2,stdout=b'error C2027: PRIVATE'*100000,stderr=b''))
+require(not failure.facts['codeFactsAvailable'] and failure.facts['errorCodes']==[],'Oversized compiler output was scanned')
+failure=engine_module.BuildFailure('link',types.SimpleNamespace(returncode=2,stdout=b''.join(f'error LNK{code:04d}: PRIVATE\n'.encode() for code in range(1000,1100)),stderr=b''))
+require(len(failure.facts['errorCodes'])==32 and failure.facts['errorCodes']==list(range(1000,1032)),'Native numeric code set exceeded its fixed bound')
+engine_inputs={'dll':r'D:\owned\mixelengine.dll','binary':r'D:\fixture\lease-standard.exe'}
+ordinary,_=module.commands(101,202,2,leaf,r'D:\owned',pe)
+with_engine,_=module.commands(101,202,2,leaf,r'D:\owned',pe,engine_inputs)
+require(set(with_engine)==set(ordinary)|{'engine-query.txt'},'Getter helper altered original command inventory')
+for name in ordinary:
+    expected=ordinary[name]
+    if name=='start.txt':expected=expected.replace('$$><D:\\owned\\hardware-state.txt\n','$$><D:\\owned\\hardware-state.txt\n$$><D:\\owned\\engine-query.txt\n')
+    require(with_engine[name]==expected,'Getter helper changed original commands/selector/scope/hardware slots')
+require(with_engine['engine-query.txt']=='.load D:\\owned\\mixelengine.dll\n!mixelengine.inspect 101 202 4352 12288 D:\\fixture\\lease-standard.exe D:\\owned\n','Explicit fixed DLL invocation/private qualified fields changed')
+for args in [None,{}, {'dll':'D:\\foreign\\mixelengine.dll','binary':engine_inputs['binary']},{'dll':engine_inputs['dll'],'binary':'D:\\fixture\\..\\lease-standard.exe'}, {'dll':engine_inputs['dll'],'binary':'D:\\fixture\\lease-standard.exe','PRIVATE':1}]:
+    if args is None:continue
+    rejects(lambda args=args:module.commands(101,202,2,leaf,r'D:\owned',pe,args),'Ambiguous/foreign engine input accepted')
+require(module.parse_trace(valid.replace(module.BINDINGS,'MIXEL_CDB_ENGINE_QUERY PRIVATE_UNKNOWN\n'+module.BINDINGS))==module.parse_trace(valid),'Getter metadata substituted/changed strict hardware capture parser')
 
 print(f'PASS: {checks} pure generator/parser controls; 4 hardware slots, exact Win32 GUID window, same-thread/RSP-qualified returns, shared32-entry diagnostics and32-record bound, native values unchanged')
 print('Scope: no actual Windows/CDB execution or signed/runtime/customer-Accept qualification')

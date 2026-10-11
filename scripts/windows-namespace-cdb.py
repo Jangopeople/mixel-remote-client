@@ -8,6 +8,7 @@ import json
 import re
 from pathlib import Path
 from windows_namespace_probe import qualify_file
+from windows_namespace_engine import qualify_file as qualify_engine_file
 
 RECORD = re.compile(r'MIXEL_NAMESPACE_NATIVE seq=([0-9]+) api=([12]) access=0x([0-9a-fA-F]{8}) rootNonNull=([01]) pathKind=([0-9]+) ntstatus=0x([0-9a-fA-F]{8}) handleNonNull=([01]) scopeQualified=1')
 WIN32 = re.compile(r'MIXEL_NAMESPACE_WIN32 handleNonNull=([01]) scopeQualified=1')
@@ -26,7 +27,7 @@ def windows_file(folder, leaf):
         raise ValueError('Expected a bounded unambiguous owned Windows script folder')
     return folder + '\\' + leaf
 
-def commands(pid, tid, session, event, folder, pe):
+def commands(pid, tid, session, event, folder, pe, engine=None):
     for value in (pid, tid, session):
         if type(value) is not int or not 0 < value <= 0xffffffff:
             raise ValueError('Expected actual nonzero DWORD identity')
@@ -157,6 +158,14 @@ def commands(pid, tid, session, event, folder, pe):
             # the source thread's external suspension after verifying READY,
             # then queues exactly one fixed continuation through owned stdin.
             '.echo MIXEL_NAMESPACE_TRACE_READY'])
+    if engine is not None:
+        if type(engine) is not dict or set(engine)!= {'dll','binary'}:raise ValueError('Expected exact private engine inputs')
+        for key,leaf in (('dll','mixelengine.dll'),('binary','lease-standard.exe')):
+            path=engine[key]
+            if type(path) is not str or len(path)>512 or not path.endswith('\\'+leaf) or windows_file(path.rsplit('\\',1)[0],leaf)!=path or '..' in path:raise ValueError('Private engine input path is invalid')
+        if engine['dll']!=windows_file(folder,'mixelengine.dll'):raise ValueError('Engine DLL is outside its exact private command folder')
+        helpers['engine-query.txt']=f'.load {engine["dll"]}\n!mixelengine.inspect {pid} {tid} {pe["probeRva"]} {pe["imageSize"]} {engine["binary"]} {folder}\n'
+        init.insert(init.index(script('hardware-state.txt'))+1,script('engine-query.txt'))
     files = {name: '\n'.join(lines) + '\n' for name, lines in
              [('start.txt', init), ('winentry.txt', winentry), ('entry.txt', enter),
               ('return.txt', ret), ('winreturn.txt', winret),('hwcontrol.txt',control),('hardware-state.txt',hardware_snapshot)]}
@@ -249,6 +258,7 @@ def main():
     parser.add_argument('--session', type=int); parser.add_argument('--event')
     parser.add_argument('--windows-folder'); parser.add_argument('--output', type=Path)
     parser.add_argument('--binary',type=Path);parser.add_argument('--exe-sha256')
+    parser.add_argument('--engine-dll',type=Path);parser.add_argument('--engine-sha256')
     parser.add_argument('--parse', type=Path)
     args = parser.parse_args()
     if args.parse:
@@ -256,10 +266,11 @@ def main():
         result = parse_trace(args.parse.read_text(encoding='utf-8'))
         print(json.dumps(result, separators=(',', ':')))
         return
-    if None in (args.pid, args.tid, args.session, args.event, args.windows_folder, args.output,args.binary,args.exe_sha256):
+    if None in (args.pid, args.tid, args.session, args.event, args.windows_folder, args.output,args.binary,args.exe_sha256,args.engine_dll,args.engine_sha256):
         parser.error('All generator identity/folder/output fields are required')
     pe=qualify_file(args.binary,args.exe_sha256)
-    files, paths = commands(args.pid, args.tid, args.session, args.event, args.windows_folder,pe)
+    qualify_engine_file(args.engine_dll,args.engine_sha256)
+    files, paths = commands(args.pid, args.tid, args.session, args.event, args.windows_folder,pe,{'dll':str(args.engine_dll),'binary':str(args.binary)})
     args.output.mkdir(mode=0o700, parents=True, exist_ok=True)
     for name, text in files.items():
         target = args.output / name; target.write_text(text); target.chmod(0o600)
