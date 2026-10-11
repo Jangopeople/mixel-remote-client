@@ -18,6 +18,7 @@ READY = 'MIXEL_NAMESPACE_TRACE_READY'
 END = 'MIXEL_NAMESPACE_TRACE_END'
 HWCONTROL = 'MIXEL_NAMESPACE_HWCONTROL scopeQualified=1'
 THREAD_SELECTION = re.compile(r'MIXEL_NAMESPACE_THREAD_SELECTION processMatched=([01]) threadMatched=([01])')
+HW_CONTEXT = re.compile(r'MIXEL_NAMESPACE_HW_CONTEXT processMatched=([01]) threadMatched=([01]) addressPresentMask=([0-9]|1[0-5]) localEnableMask=([0-9]|1[0-5]) globalEnableMask=([0-9]|1[0-5]) executionByteMask=([0-9]|1[0-5])')
 
 def windows_file(folder, leaf):
     if not re.fullmatch(r'[A-Z]:\\[A-Za-z0-9_\\.-]+', folder) or '..' in folder.split('\\') or folder.endswith('\\'):
@@ -130,6 +131,15 @@ def commands(pid, tid, session, event, folder, pe):
     for offset,size,value in checks:
         read='wo' if size==2 else 'dwo'
         init.append(f'.if ({read}(@$t15+0n{offset}) != 0n{value}) {{ {fail("IMAGE")} }}')
+    # Read-only pre-continuation context. The engine may deploy breakpoints on
+    # continuation; these masks never prove activation or permit a trace window.
+    addresses=('ntdll!NtOpenDirectoryObject','ntdll!NtOpenEvent','KERNELBASE!OpenEventW','@$t19')
+    address_mask=' + '.join('('+ ' or '.join(f'(@dr{slot} == {address})' for slot in range(4))+f')*0n{1 << index}' for index,address in enumerate(addresses))
+    local_mask=' + '.join(f'((@dr7 & 0x{1 << (2*slot):x}) != 0)*0n{1 << slot}' for slot in range(4))
+    global_mask=' + '.join(f'((@dr7 & 0x{2 << (2*slot):x}) != 0)*0n{1 << slot}' for slot in range(4))
+    execution_mask=' + '.join(f'((@dr7 & 0x{15 << (16+4*slot):x}) == 0)*0n{1 << slot}' for slot in range(4))
+    hardware_snapshot=['.echo MIXEL_NAMESPACE_HW_LIST_BEGIN','bl /L 0 1 2 3','.echo MIXEL_NAMESPACE_HW_LIST_END',
+                       f'.printf "MIXEL_NAMESPACE_HW_CONTEXT processMatched=%u threadMatched=%u addressPresentMask=%u localEnableMask=%u globalEnableMask=%u executionByteMask=%u\\n",(@$tpid == 0n{pid}),(@$tid == 0n{tid}),({address_mask}),({local_mask}),({global_mask}),({execution_mask})']
     init.extend([f'r $t19 = @$t15 + 0n{pe["probeRva"]}',
                  f'.if ((@$t19 <= @$t15) or (@$t19 >= @$t15+0n{pe["imageSize"]}) or ($vvalid(@$t19,0n1) == 0) or (@$t19 == ntdll!NtOpenDirectoryObject) or (@$t19 == ntdll!NtOpenEvent) or (@$t19 == KERNELBASE!OpenEventW)) {{ {fail("CONTROL_ADDRESS")} }}',
             f'{thread}ba0 e 1 ntdll!NtOpenDirectoryObject "r $t1 = 1; {script("entry.txt")}"',
@@ -137,6 +147,7 @@ def commands(pid, tid, session, event, folder, pe):
             f'{thread}ba2 e 1 KERNELBASE!OpenEventW "{script("winentry.txt")}"',
             f'{thread}ba3 e 1 /1 @$t19 "{script("hwcontrol.txt")}"',
             f'.if (@$bp3 != @$t19) {{ {fail("CONTROL_BINDING")} }}',
+            script('hardware-state.txt'),
             '.printf "MIXEL_NAMESPACE_BINDINGS directory=%u event=%u win32=%u\\n",(@$bp0 == ntdll!NtOpenDirectoryObject),(@$bp1 == ntdll!NtOpenEvent),(@$bp2 == KERNELBASE!OpenEventW)',
             # Keep the initial debug event stopped. The retained parent removes
             # the source thread's external suspension after verifying READY,
@@ -144,7 +155,7 @@ def commands(pid, tid, session, event, folder, pe):
             '.echo MIXEL_NAMESPACE_TRACE_READY'])
     files = {name: '\n'.join(lines) + '\n' for name, lines in
              [('start.txt', init), ('winentry.txt', winentry), ('entry.txt', enter),
-              ('return.txt', ret), ('winreturn.txt', winret),('hwcontrol.txt',control)]}
+              ('return.txt', ret), ('winreturn.txt', winret),('hwcontrol.txt',control),('hardware-state.txt',hardware_snapshot)]}
     files.update(helpers)
     if any(len(text.replace('\n',';\n').encode('ascii')) > 4096 for text in files.values()):
         raise ValueError('Condensed CDB command block exceeds4096 characters')
@@ -155,6 +166,7 @@ def parse_trace(raw):
         raise ValueError('Bounded private trace exceeds1MiB')
     records, stage, window, winreturn = [], 0, False, None
     entry_count, qualified_entry, control, selected = 0, False, False, False
+    list_open, list_complete, context = False, False, False
     # A concurrent or incomplete final marker cannot supply evidence.
     for line in raw[:raw.rfind('\n')+1].splitlines():
         line = line.strip()
@@ -169,8 +181,17 @@ def parse_trace(raw):
             if stage != 0 or selected or match.groups() != ('1','1'):
                 raise ValueError('Thread selection is false/duplicate/out-of-order')
             selected = True
+        elif line == 'MIXEL_NAMESPACE_HW_LIST_BEGIN':
+            if stage != 0 or not selected or list_open or list_complete or context: raise ValueError('Hardware list begins outside its one bounded startup block')
+            list_open = True
+        elif line == 'MIXEL_NAMESPACE_HW_LIST_END':
+            if not list_open or stage != 0: raise ValueError('Hardware list end lacks its bounded startup block')
+            list_open = False; list_complete = True
+        elif HW_CONTEXT.fullmatch(line):
+            if stage != 0 or not list_complete or list_open or context: raise ValueError('Hardware context is duplicate/out-of-order')
+            context = True
         elif line == BINDINGS:
-            if stage != 0 or not selected: raise ValueError('Bindings lack one exact qualified thread selection')
+            if stage != 0 or not selected or not context: raise ValueError('Bindings lack exact qualified thread selection/typed hardware observation')
             stage = 1
         elif line == READY:
             if stage != 1: raise ValueError('Ready lacks exact bindings')

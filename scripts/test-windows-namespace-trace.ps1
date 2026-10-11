@@ -414,10 +414,13 @@ function Assert-TraceReady([string]$Text) {
   if ($complete -match '(?i)(syntax error|couldn.t resolve|unable to insert breakpoint|no hardware breakpoint|hardware breakpoint limit)') { throw 'Trace startup reported a debugger command or binding failure.' }
   $markers=@($complete -split '\r?\n' | ForEach-Object {$_.Trim()} | Where-Object {$_.StartsWith('MIXEL_NAMESPACE_')})
   if ($markers.Count -eq 0) { return $false }
-  if ($markers.Count -gt 3 -or $markers[0] -cne 'MIXEL_NAMESPACE_THREAD_SELECTION processMatched=1 threadMatched=1' -or
-      ($markers.Count -ge 2 -and $markers[1] -cne 'MIXEL_NAMESPACE_BINDINGS directory=1 event=1 win32=1') -or
-      ($markers.Count -eq 3 -and $markers[2] -cne 'MIXEL_NAMESPACE_TRACE_READY')) { throw 'Trace startup lacks exact ordered thread selection, bindings and one READY marker.' }
-  return $markers.Count -eq 3
+  if ($markers.Count -gt 6 -or $markers[0] -cne 'MIXEL_NAMESPACE_THREAD_SELECTION processMatched=1 threadMatched=1' -or
+      ($markers.Count -ge 2 -and $markers[1] -cne 'MIXEL_NAMESPACE_HW_LIST_BEGIN') -or
+      ($markers.Count -ge 3 -and $markers[2] -cne 'MIXEL_NAMESPACE_HW_LIST_END') -or
+      ($markers.Count -ge 4 -and $markers[3] -cnotmatch '\AMIXEL_NAMESPACE_HW_CONTEXT processMatched=[01] threadMatched=[01] addressPresentMask=([0-9]|1[0-5]) localEnableMask=([0-9]|1[0-5]) globalEnableMask=([0-9]|1[0-5]) executionByteMask=([0-9]|1[0-5])\z') -or
+      ($markers.Count -ge 5 -and $markers[4] -cne 'MIXEL_NAMESPACE_BINDINGS directory=1 event=1 win32=1') -or
+      ($markers.Count -eq 6 -and $markers[5] -cne 'MIXEL_NAMESPACE_TRACE_READY')) { throw 'Trace startup lacks exact ordered thread selection, typed hardware observations, bindings and one READY marker.' }
+  return $markers.Count -eq 6
 }
 function Send-TraceContinuation($Live,[int]$ChildPid,[bool]$Ready,[bool]$Resumed,[int]$Previous,[bool]$Gated) {
   $retained=@($script:traceLiveProcesses | Where-Object {[object]::ReferenceEquals($_,$Live)})
@@ -590,6 +593,50 @@ function Get-TraceStartupFacts([string]$Text) {
   $facts.failureCategories=@($categories|Sort-Object)
   return [pscustomobject]$facts
 }
+function Get-TraceHardwareFacts([string]$Text) {
+  $facts=[ordered]@{engineBlockCount=0;engineBlockComplete=$false;engineRowCount=0;engineSchemaValid=$false;engineIndexMetadataAvailable=$false;engineOsThreadCorrelationAvailable=$false;engineOsThreadMatched=$false;slotMask=0;enabledMask=0;resolvedMask=0;executeByteMask=0;passOneMask=0;threadSpecificMask=0;contextMarkerCount=0;contextSchemaValid=$true;contextAvailable=$false;processMatched=$false;threadMatched=$false;addressPresentMask=0;localEnableMask=0;globalEnableMask=0;executionByteMask=0}
+  if([Text.Encoding]::UTF8.GetByteCount($Text) -gt 1048576){$facts.contextSchemaValid=$false;return [pscustomobject]$facts}
+  $end=$Text.LastIndexOf("`n");$complete=if($end -ge 0){$Text.Substring(0,$end+1)}else{''}
+  $lines=@($complete -split '\r?\n'|ForEach-Object {$_.Trim()})
+  $begin=-1;$finish=-1;$contextIndex=-1;$blockInvalid=$false;$contextValues=@()
+  for($index=0;$index -lt $lines.Count;$index++){
+    $line=$lines[$index]
+    if($line -ceq 'MIXEL_NAMESPACE_HW_LIST_BEGIN'){$facts.engineBlockCount=[Math]::Min(32,$facts.engineBlockCount+1);if($begin -ge 0){$blockInvalid=$true};$begin=$index}
+    elseif($line -ceq 'MIXEL_NAMESPACE_HW_LIST_END'){if($begin -lt 0 -or $finish -ge 0){$blockInvalid=$true};$finish=$index}
+    elseif($line -cmatch '\AMIXEL_NAMESPACE_HW_LIST'){$blockInvalid=$true}
+    if($line -cmatch '\AMIXEL_NAMESPACE_HW_CONTEXT processMatched=([01]) threadMatched=([01]) addressPresentMask=([0-9]|1[0-5]) localEnableMask=([0-9]|1[0-5]) globalEnableMask=([0-9]|1[0-5]) executionByteMask=([0-9]|1[0-5])\z'){
+      $facts.contextMarkerCount=[Math]::Min(32,$facts.contextMarkerCount+1)
+      if($contextIndex -ge 0 -or $finish -lt 0 -or $blockInvalid){$facts.contextSchemaValid=$false}
+      $contextIndex=$index;$contextValues=@(1..6|ForEach-Object {[int]$Matches[$_]})
+    }elseif($line -cmatch '\AMIXEL_NAMESPACE_HW_CONTEXT'){$facts.contextSchemaValid=$false}
+    if(($line -ceq 'MIXEL_NAMESPACE_BINDINGS directory=1 event=1 win32=1' -or $line -ceq 'MIXEL_NAMESPACE_TRACE_READY') -and $contextIndex -lt 0){$facts.contextSchemaValid=$false}
+  }
+  $facts.engineBlockComplete=-not $blockInvalid -and $facts.engineBlockCount -eq 1 -and $finish -gt $begin
+  if($facts.contextSchemaValid -and $facts.contextMarkerCount -eq 1 -and $facts.engineBlockComplete){
+    $facts.contextAvailable=$true;$facts.processMatched=[bool]$contextValues[0];$facts.threadMatched=[bool]$contextValues[1]
+    $facts.addressPresentMask=$contextValues[2];$facts.localEnableMask=$contextValues[3];$facts.globalEnableMask=$contextValues[4];$facts.executionByteMask=$contextValues[5]
+  }
+  if($facts.engineBlockComplete){
+    $rows=@($lines[($begin+1)..($finish-1)]|Where-Object {$_ -ne ''})
+    # Empty bl output is unavailable, not a four-slot engine configuration.
+    if($finish -eq $begin+1){$rows=@()}
+    $facts.engineRowCount=[Math]::Min(32,$rows.Count)
+    $masks=[ordered]@{slotMask=0;enabledMask=0;resolvedMask=0;executeByteMask=0;passOneMask=0;threadSpecificMask=0};$valid=$rows.Count -eq 4
+    foreach($row in $rows){
+      if($row.Length -gt 4096 -or $row -cnotmatch '\A([0-3])\s+([ed])\s+(u\s+)?([0-9a-fA-F]{8}(?:`[0-9a-fA-F]{8})?|[0-9a-fA-F]{16})\s+([erwi])\s+([1248])\s+([0-9a-fA-F]{1,4})\s+\(([0-9a-fA-F]{1,4})\)\s+([0-9]{1,10}):(\*{3,4}|[0-9a-fA-F]{1,8})(?:\s+[^\r\n]*)?\z'){$valid=$false;continue}
+      $slot=1 -shl [int]$Matches[1]
+      if(($masks.slotMask -band $slot) -ne 0 -or [Convert]::ToUInt64($Matches[4].Replace('`',''),16) -eq 0 -or [long]$Matches[9] -gt 4294967295){$valid=$false;continue}
+      $masks.slotMask=$masks.slotMask -bor $slot
+      if($Matches[2] -ceq 'e'){$masks.enabledMask=$masks.enabledMask -bor $slot}
+      if(-not $Matches[3]){$masks.resolvedMask=$masks.resolvedMask -bor $slot}
+      if($Matches[5] -ceq 'e' -and $Matches[6] -ceq '1'){$masks.executeByteMask=$masks.executeByteMask -bor $slot}
+      if([Convert]::ToInt32($Matches[7],16) -eq 1 -and [Convert]::ToInt32($Matches[8],16) -eq 1){$masks.passOneMask=$masks.passOneMask -bor $slot}
+      if($Matches[10] -notmatch '\*'){$masks.threadSpecificMask=$masks.threadSpecificMask -bor $slot}
+    }
+    if($valid -and $masks.slotMask -eq 15){$facts.engineSchemaValid=$true;$facts.engineIndexMetadataAvailable=$true;foreach($key in $masks.Keys){$facts[$key]=$masks[$key]}}
+  }
+  return [pscustomobject]$facts
+}
 function Get-TraceFailureFacts($Live,[ValidateSet('export','identity','commands','startup','resume','trace','parse','result','ack','cleanup')][string]$Phase,[bool]$TimedOut,$Execution=$null) {
   $text='';$stderr='';$readFailed=$false;$stdoutBytes=0L;$stderrBytes=0L
   if ($Live) {
@@ -615,6 +662,7 @@ function Get-TraceFailureFacts($Live,[ValidateSet('export','identity','commands'
     scopeFailure=[bool]($complete -match '(?m)^MIXEL_NAMESPACE_TRACE_FAIL_(?:SCOPE|PID|ARCH|WINDOW_NESTED|WIN32_INTERFACE)\r?$')
     returnFailure=[bool]($complete -match '(?m)^MIXEL_NAMESPACE_TRACE_FAIL_(?:RETURN_SCOPE|RETURN_HANDLE|WIN32_RETURN_SCOPE)\r?$')
     startupDiagnostics=Get-TraceStartupFacts $text
+    hardwareDiagnostics=Get-TraceHardwareFacts $text
     entryDiagnostics=Get-TraceEntryFacts $text
     debuggerStop=Get-TraceCdbStopFacts $text
     execution=$Execution

@@ -84,7 +84,7 @@ for gate in ['', 'D:\\gate\n', 'D:\\gate\0']:
 rejects(lambda:diagnostic_source(minimal,'D:\\gate','0'*64,1),'Nonboolean timing mode accepted')
 def commands(*args):return module.commands(*args,pe)
 files, paths = commands(101,202,2,leaf,r'D:\a\_temp\mixel-ns-trace-control')
-require(len(files)==21 and len(paths)==12,'Bounded helper/program shape changed')
+require(len(files)==22 and len(paths)==12,'Bounded helper/program shape changed')
 for name, data in files.items():
     require(len(data.replace('\n',';\n').encode('ascii'))<=4096, 'Condensed command block exceeds4096 characters')
     require(not re.search(r'(?i)%m[asu]|\b(?:du|db|dw|dq)\s|\.call\b|\.fnret\b|\bgu\b|(?<!\$)\bbp[0-9 ]|\bbu\b',data),'Raw strings/memory/software breakpoint/altered-return command')
@@ -110,6 +110,44 @@ for name in ['winentry.txt','entry.txt']:
 require('ba0 e 1 ntdll!NtOpenDirectoryObject' in files['start.txt'],'Directory hardware binding missing')
 require('ba1 e 1 ntdll!NtOpenEvent' in files['start.txt'],'Event hardware binding missing')
 require('ba2 e 1 KERNELBASE!OpenEventW' in files['start.txt'],'Exact Win32 window filter missing')
+snapshot=files['hardware-state.txt']
+require(snapshot.startswith('.echo MIXEL_NAMESPACE_HW_LIST_BEGIN\nbl /L 0 1 2 3\n.echo MIXEL_NAMESPACE_HW_LIST_END\n'),'Bounded private breakpoint block/delimiters changed')
+require(snapshot.count('MIXEL_NAMESPACE_HW_CONTEXT')==1 and '@$tpid == 0n101' in snapshot and '@$tid == 0n202' in snapshot,'Read-only context lacks unique retained-scope observation')
+require(files['start.txt'].index('CONTROL_BINDING') < files['start.txt'].index('hardware-state.txt') < files['start.txt'].index('MIXEL_NAMESPACE_BINDINGS'),'Snapshot moved outside configured pre-READY stage')
+require(not re.search(r'(?im)^r\s|\b(?:g|gc|gh|gn|ba|bc|bd|be)\b|\.apply_dbp|\b[ed][bwdq]\s',snapshot),'Read-only snapshot changes target/debugger execution state')
+for logical,address in enumerate(('ntdll!NtOpenDirectoryObject','ntdll!NtOpenEvent','KERNELBASE!OpenEventW','@$t19')):
+    expression='('+ ' or '.join(f'(@dr{slot} == {address})' for slot in range(4))+f')*0n{1 << logical}'
+    require(expression in snapshot,'Address-presence assumes fixed logical/physical slot mapping')
+for slot in range(4):
+    require(f'((@dr7 & 0x{1 << (2*slot):x}) != 0)*0n{1 << slot}' in snapshot,'Local DR7 enable bit geometry changed')
+    require(f'((@dr7 & 0x{2 << (2*slot):x}) != 0)*0n{1 << slot}' in snapshot,'Global DR7 enable bit geometry changed')
+    require(f'((@dr7 & 0x{15 << (16+4*slot):x}) == 0)*0n{1 << slot}' in snapshot,'DR7 execute/one-byte nibble geometry changed')
+observed_expressions=re.fullmatch(r'.*\n\.printf "[^"\n]+",\(@\$tpid == 0n101\),\(@\$tid == 0n202\),\((.*?)\),\((.*?)\),\((.*?)\),\((.*?)\)\n',snapshot,re.S).groups()
+def snapshot_masks(registers,dr7):
+    names={'ntdll!NtOpenDirectoryObject':'watch0','ntdll!NtOpenEvent':'watch1','KERNELBASE!OpenEventW':'watch2','@$t19':'watch3',**{f'@dr{index}':f'dr{index}' for index in range(4)},'@dr7':'dr7'}
+    values={**{f'watch{index}':0x1000+index*0x100 for index in range(4)},**{f'dr{index}':value for index,value in enumerate(registers)},'dr7':dr7}
+    output=[]
+    for expression in observed_expressions:
+        for original,name in names.items():expression=expression.replace(original,name)
+        expression=re.sub(r'0n([0-9]+)',r'\1',expression)
+        require(re.fullmatch(r'[a-z0-9_ ()+*!=&|]+',expression) is not None,'Unbounded state expression added')
+        output.append(eval(expression,{'__builtins__':{}},values))
+    return output
+for mask in range(16):
+    registers=[0x1000+index*0x100 if mask & (1<<index) else 0 for index in range(4)]
+    expected=[mask,0,0,15]
+    require(snapshot_masks(registers,0)==expected,'Actual read-only address expression lost bounded logical mask')
+    require(snapshot_masks(registers[::-1],0)==expected,'Logical address mask assumes physical slot order')
+    local=sum(1<<(2*slot) for slot in range(4) if mask & (1<<slot))
+    global_bits=sum(2<<(2*slot) for slot in range(4) if mask & (1<<slot))
+    require(snapshot_masks([0]*4,local)==[0,mask,0,15],'Actual local-enable expression lost DR7 bit domain')
+    require(snapshot_masks([0]*4,global_bits)==[0,0,mask,15],'Actual global-enable expression lost DR7 bit domain')
+for slot in range(4):
+    for nibble in range(1,16):
+        require(snapshot_masks([0]*4,nibble<<(16+4*slot))==[0,0,0,15 ^ (1<<slot)],'Actual execution/one-byte expression accepts a nonzero LEN/RW nibble')
+long_folder=r'D:\a\_temp\mixel-ns-trace-'+('a'*32)+'\\'+('b'*32)+r'\commands'
+long_files,_=commands(0xffffffff,0xffffffff,0xffffffff,leaf,long_folder)
+require(all(len(text.replace('\n',';\n').encode('ascii'))<=4096 for text in long_files.values()),'Actual-shaped GUID command path exceeds4096')
 selection_command='.printf "MIXEL_NAMESPACE_THREAD_SELECTION processMatched=%u threadMatched=%u\\n",(@$tpid == 0n101),(@$tid == 0n202)'
 require(files['start.txt'].count(selection_command)==1,'Thread selection evidence is not exact/unique')
 require(files['start.txt'].index('~~[0xca]s') < files['start.txt'].index(selection_command) < files['start.txt'].index('TRACE_FAIL_SCOPE') < files['start.txt'].index('MIXEL_NAMESPACE_BINDINGS'),'Selection evidence changed selector/scope/bindings order')
@@ -160,13 +198,39 @@ def win_entry(sequence=1,mask=7,matched=1,access=1,inherit=1):
 def pre_entry(sequence=1,api=1):
     return f'MIXEL_NAMESPACE_PREWINDOW_ENTRY sequence={sequence} api={api}'
 selection='MIXEL_NAMESPACE_THREAD_SELECTION processMatched=1 threadMatched=1'
-ready_prefix='\n'.join([selection,module.BINDINGS,module.READY])+'\n'
+list_begin='MIXEL_NAMESPACE_HW_LIST_BEGIN';list_end='MIXEL_NAMESPACE_HW_LIST_END'
+def context(process=1,thread=1,address=0,local=0,global_mask=0,execution=15):
+    return f'MIXEL_NAMESPACE_HW_CONTEXT processMatched={process} threadMatched={thread} addressPresentMask={address} localEnableMask={local} globalEnableMask={global_mask} executionByteMask={execution}'
+hardware_prefix='\n'.join([list_begin,list_end,context()])+'\n'
+ready_prefix='\n'.join([selection,list_begin,list_end,context(),module.BINDINGS,module.READY])+'\n'
 prefix = ready_prefix+module.HWCONTROL+'\n'+win_entry()+'\nMIXEL_NAMESPACE_TRACE_WINDOW\n'
 def record(sequence=1,api=1,access='0000000f',root=0,kind=4,status='c0000022',handle=0,qualified=1):
     return f'MIXEL_NAMESPACE_NATIVE seq={sequence} api={api} access=0x{access} rootNonNull={root} pathKind={kind} ntstatus=0x{status} handleNonNull={handle} scopeQualified={qualified}'
 suffix='MIXEL_NAMESPACE_WIN32 handleNonNull=0 scopeQualified=1\n'+module.END+'\n'
 valid=prefix+record()+'\n'+suffix
 result=module.parse_trace(valid)
+for field in ['address','local','global_mask','execution']:
+    for value in range(16):
+        require(module.parse_trace(valid.replace(context(),context(**{field:value})))==result,'Read-only masks influenced actual hit/window qualification')
+for process in [0,1]:
+    for thread in [0,1]:
+        require(module.parse_trace(valid.replace(context(),context(process=process,thread=thread)))==result,'Secondary context replaced mandatory actual hardware scope gate')
+for marker in [list_begin,list_end,context()]:
+    rejects(lambda marker=marker:module.parse_trace(valid.replace(marker+'\n','',1)),'Missing startup hardware metadata accepted')
+    rejects(lambda marker=marker:module.parse_trace(valid.replace(marker,marker+'\n'+marker,1)),'Duplicate startup hardware metadata accepted')
+    rejects(lambda marker=marker:module.parse_trace(marker+'\n'+valid),'Metadata accepted before selected startup context')
+    rejects(lambda marker=marker:module.parse_trace(valid+marker+'\n'),'Metadata accepted after actual END')
+    rejects(lambda marker=marker:module.parse_trace(valid.replace(marker+'\n','',1).replace(module.BINDINGS,module.BINDINGS+'\n'+marker)),'Metadata accepted after bindings')
+for field in ['address','local','global_mask','execution']:
+    for value in [-1,16,'01','true','0x1',4294967295]:
+        rejects(lambda field=field,value=value:module.parse_trace(valid.replace(context(),context(**{field:value}))),'Malformed/unbounded context mask accepted')
+for marker in [context(process=2),context(thread=-1),context(thread='true'),context()+' extra=PRIVATE_UNKNOWN',context().replace('addressPresentMask','AddressPresentMask'),'MIXEL_NAMESPACE_HW_CONTEXT','MIXEL_NAMESPACE_HW_LIST_BEGIN_EXTRA','MIXEL_NAMESPACE_HW_LIST_END_EXTRA']:
+    rejects(lambda marker=marker:module.parse_trace(valid.replace(context(),marker)),'Unknown/malformed hardware observation accepted')
+rejects(lambda:module.parse_trace(valid.replace(list_begin+'\n'+list_end,list_end+'\n'+list_begin)),'Hardware block end-before-begin accepted')
+rejects(lambda:module.parse_trace(valid.replace(list_end+'\n'+context(),context()+'\n'+list_end)),'Context accepted inside private hardware list block')
+require(module.parse_trace(valid.replace(list_begin+'\n',list_begin+'\n'+'0 e PRIVATE_RAW_ADDRESS_COMMAND\n'))==result,'Private bl rows changed fixed original actual result schema')
+for marker in [list_begin,list_end,context()]:
+    require(module.parse_trace(valid+marker[:-1])==result,'Partial final hardware metadata was treated as a complete marker')
 require(result['records']==[dict(sequence=1,api=1,desiredAccess=15,rootNonNull=False,pathKind=4,nativeStatus=0xc0000022,handleNonNull=False)],'Actual denial vector parsed incorrectly')
 require(result['evidenceScope'].startswith('source-only debugger') and not result['win32HandleNonNull'],'Observation scope or actual handle boolean changed')
 for kind in range(13):
