@@ -932,6 +932,39 @@ function Get-TraceEngineShapeFacts([string]$Text) {
   } catch { }
   return [pscustomobject]$facts
 }
+function Get-TraceEngineLoadFacts([string]$Text) {
+  $keys=@('interfaceAvailable','cacheAvailable','moduleCount','scannedCount','namesSuccessCount','namesBoundedCount','exactPathCount','casePathCount','basenameOnlyCount','scanCompleted','uniqueFullPathMatched','probeOffsetAvailable','probeOffsetMatched')
+  $facts=[ordered]@{recordCount=0;schemaAvailable=$false};foreach($key in $keys){$facts[$key]=0}
+  if([Text.Encoding]::UTF8.GetByteCount($Text)-gt1048576){return [pscustomobject]$facts}
+  $end=$Text.LastIndexOf("`n");if($end-lt0){return [pscustomobject]$facts}
+  $lines=@($Text.Substring(0,$end+1)-split'\r?\n'|ForEach-Object{$_.Trim()});$records=@($lines|Where-Object{$_-cmatch'\AMIXEL_CDB_ENGINE_LOAD(?:\s|\z)'})
+  $facts.recordCount=[Math]::Min(32,$records.Count)
+  if($records.Count-ne1-or$records[0].Length-gt2048){return [pscustomobject]$facts}
+  $position=[Array]::IndexOf($lines,$records[0]);$binding=[Array]::IndexOf($lines,'MIXEL_NAMESPACE_BINDINGS directory=1 event=1 win32=1');$shapePosition=-1
+  for($index=0;$index-lt$lines.Count;$index++){if($lines[$index]-cmatch'\AMIXEL_CDB_ENGINE_SHAPES '){$shapePosition=$index;break}}
+  $query=Get-TraceEngineQueryFacts $Text;$shape=Get-TraceEngineShapeFacts $Text
+  if(-not$query.schemaAvailable-or-not$shape.schemaAvailable-or$shapePosition-lt0-or$position-le$shapePosition-or($binding-ge0-and$position-ge$binding)-or$records[0]-cnotmatch'\AMIXEL_CDB_ENGINE_LOAD (\{[^\r\n]+\})\z'){return [pscustomobject]$facts};$json=$Matches[1]
+  try {
+    $value=ConvertFrom-Json -InputObject $json -ErrorAction Stop
+    if((@($value.PSObject.Properties.Name)-join',')-cne($keys-join',')){return [pscustomobject]$facts}
+    $canonical=[ordered]@{}
+    foreach($key in $keys){
+      $number=$value.PSObject.Properties[$key].Value;$max=if($key.EndsWith('Count')){128}else{1}
+      if(($number-isnot[int]-and$number-isnot[long])-or$number-lt0-or$number-gt$max){return [pscustomobject]$facts};$canonical[$key]=[int]$number
+    }
+    if(($canonical|ConvertTo-Json -Compress)-cne$json){return [pscustomobject]$facts}
+    if(-not$value.cacheAvailable-and(@($keys|Where-Object{$value.PSObject.Properties[$_].Value-ne0}).Count-ne0)){return [pscustomobject]$facts}
+    if($value.cacheAvailable-and(-not$query.currentEngineMatched-or-not$shape.moduleScanCompleted-or$value.moduleCount-eq0-or$value.moduleCount-ne$shape.moduleCount)){return [pscustomobject]$facts}
+    if(-not$value.interfaceAvailable-and(@($keys|Select-Object -Skip 3|Where-Object{$value.PSObject.Properties[$_].Value-ne0}).Count-ne0)){return [pscustomobject]$facts}
+    if($value.scannedCount-gt$value.moduleCount-or$value.namesSuccessCount-gt$value.scannedCount-or$value.namesBoundedCount-gt$value.namesSuccessCount-or$value.exactPathCount-gt$value.casePathCount-or$value.casePathCount+$value.basenameOnlyCount-gt$value.namesBoundedCount){return [pscustomobject]$facts}
+    if($value.scanCompleted-and($value.scannedCount-ne$value.moduleCount-or$value.namesBoundedCount-ne$value.moduleCount)){return [pscustomobject]$facts}
+    if([bool]$value.uniqueFullPathMatched-ne[bool]($value.scanCompleted-and$value.casePathCount-eq1)){return [pscustomobject]$facts}
+    if($value.probeOffsetAvailable-and-not$value.uniqueFullPathMatched){return [pscustomobject]$facts}
+    if($value.probeOffsetMatched-and(-not$value.probeOffsetAvailable-or($query.offsetAvailableMask-band8)-eq0)){return [pscustomobject]$facts}
+    foreach($key in $keys){$facts[$key]=$canonical[$key]};$facts.schemaAvailable=$true
+  } catch { }
+  return [pscustomobject]$facts
+}
 function Get-TraceEngineEventFacts([string]$Text) {
   $keys=@('argumentsValid','statusAvailable','engineStopped','contextAvailable','processMatched','mappingAvailable','eventAvailable','eventProcessMatched','eventThreadMatched','eventIsException','exceptionAvailable','exceptionKind','firstChance','locationAvailableMask','locationKind')
   $facts=[ordered]@{recordCount=0;schemaAvailable=$false};foreach($key in $keys){$facts[$key]=0}
@@ -1096,6 +1129,7 @@ function Get-TraceFailureFacts($Live,[ValidateSet('export','identity','commands'
     engineMetadataDiagnostics=Get-TraceEngineMetadataFacts $text $expectedChildPid $expectedThreadId $expectedControlCommand
     engineQueryDiagnostics=Get-TraceEngineQueryFacts $text
     engineShapeDiagnostics=Get-TraceEngineShapeFacts $text
+    engineLoadDiagnostics=Get-TraceEngineLoadFacts $text
     engineEventDiagnostics=Get-TraceEngineEventFacts $text
     engineStackDiagnostics=Get-TraceEngineStackFacts $text
     eventQueryAttempted=[bool]($Live-and$Live.PSObject.Properties['eventQueryAttempted']-and$Live.eventQueryAttempted-is[bool]-and$Live.eventQueryAttempted)

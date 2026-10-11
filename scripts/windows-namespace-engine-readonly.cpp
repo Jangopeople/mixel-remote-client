@@ -132,6 +132,45 @@ void output(IDebugControl* control, const facts& f) {
         f.offset_available, f.expected_offset_available, f.offset_matched);
 }
 
+struct loaded_facts {
+    unsigned interface_available = 0, cache_available = 0, module_count = 0, scanned_count = 0;
+    unsigned names_success = 0, names_bounded = 0, exact_path = 0, case_path = 0, basename_only = 0;
+    unsigned scan_completed = 0, unique_full_path_matched = 0, probe_offset_available = 0, probe_offset_matched = 0;
+};
+void output_loaded(IDebugControl* control, const loaded_facts& l) {
+    control->Output(DEBUG_OUTPUT_NORMAL,
+        "\nMIXEL_CDB_ENGINE_LOAD {\"interfaceAvailable\":%u,\"cacheAvailable\":%u,\"moduleCount\":%u,\"scannedCount\":%u,\"namesSuccessCount\":%u,\"namesBoundedCount\":%u,\"exactPathCount\":%u,\"casePathCount\":%u,\"basenameOnlyCount\":%u,\"scanCompleted\":%u,\"uniqueFullPathMatched\":%u,\"probeOffsetAvailable\":%u,\"probeOffsetMatched\":%u}\n",
+        l.interface_available, l.cache_available, l.module_count, l.scanned_count, l.names_success, l.names_bounded,
+        l.exact_path, l.case_path, l.basename_only, l.scan_completed, l.unique_full_path_matched, l.probe_offset_available, l.probe_offset_matched);
+}
+void inspect_loaded(PDEBUG_CLIENT client, const arguments& args, const ULONG64* bases, ULONG count,
+                    bool cache_available, ULONG64 actual_probe_offset, loaded_facts* l) {
+    if (!cache_available || !count || count > 128) return;
+    for (ULONG index = 0; index < count; ++index) if (!bases[index]) return;
+    l->cache_available = 1; l->module_count = count;
+    owned_interface<IDebugSymbols2> symbols;
+    if (client->QueryInterface(__uuidof(IDebugSymbols2), reinterpret_cast<void**>(&symbols.value)) != S_OK || !symbols.value) return;
+    l->interface_available = 1; bool complete = true; ULONG64 matched_base = 0;
+    for (ULONG index = 0; index < count; ++index) {
+        char name[4096]; std::memset(name, 0x7f, sizeof(name)); size_t length = 0; ++l->scanned_count;
+        // DEBUG_ANY_ID makes the getter name this same cached base, not an index.
+        if (symbols.value->GetModuleNameString(DEBUG_MODNAME_LOADED_IMAGE, DEBUG_ANY_ID, bases[index], name, static_cast<ULONG>(sizeof(name)), nullptr) != S_OK) { complete = false; break; }
+        ++l->names_success;
+        if (!bounded_length(name, sizeof(name), &length) || !length) { complete = false; break; }
+        ++l->names_bounded;
+        if (std::strcmp(name, args.image) == 0) ++l->exact_path;
+        if (same_ascii_path(name, args.image)) { ++l->case_path; matched_base = bases[index]; }
+        const char* leaf = std::strrchr(args.image, '\\');
+        if (leaf && !std::strchr(name, '\\') && !std::strchr(name, '/') && same_ascii_path(name, leaf + 1)) ++l->basename_only;
+    }
+    l->scan_completed = complete;
+    if (!complete || l->case_path != 1) return;
+    l->unique_full_path_matched = 1;
+    if (matched_base > UINT64_MAX - args.image_size) return;
+    const ULONG64 end = matched_base + args.image_size, probe = matched_base + args.probe_rva;
+    if (probe <= matched_base || probe >= end) return;
+    l->probe_offset_available = 1; l->probe_offset_matched = actual_probe_offset && actual_probe_offset == probe;
+}
 struct event_facts {
     unsigned arguments_valid = 0, status_available = 0, engine_stopped = 0;
     unsigned context_available = 0, process_matched = 0, mapping_available = 0;
@@ -243,11 +282,11 @@ extern "C" __declspec(dllexport) HRESULT CALLBACK inspect(PDEBUG_CLIENT client, 
     if (input && std::strncmp(input, "event ", 6) == 0) return inspect_event(client, input + 6);
     owned_interface<IDebugControl> control;
     if (client->QueryInterface(__uuidof(IDebugControl), reinterpret_cast<void**>(&control.value)) != S_OK || !control.value) return E_NOINTERFACE;
-    facts f; shapes s; arguments args;
-    if (!parse_arguments(input, &args)) { output(control.value, f); output_shapes(control.value, s); return S_OK; }
+    facts f; shapes s; loaded_facts l; arguments args;
+    if (!parse_arguments(input, &args)) { output(control.value, f); output_shapes(control.value, s); output_loaded(control.value, l); return S_OK; }
     f.arguments_valid = 1;
     owned_interface<IDebugSystemObjects> system;
-    if (client->QueryInterface(__uuidof(IDebugSystemObjects), reinterpret_cast<void**>(&system.value)) != S_OK || !system.value) { output(control.value, f); output_shapes(control.value, s); return S_OK; }
+    if (client->QueryInterface(__uuidof(IDebugSystemObjects), reinterpret_cast<void**>(&system.value)) != S_OK || !system.value) { output(control.value, f); output_shapes(control.value, s); output_loaded(control.value, l); return S_OK; }
     ULONG current_pid = 0, current_tid = 0, current_engine = 0, expected_engine = 0;
     if (system.value->GetCurrentProcessSystemId(&current_pid) == S_OK && system.value->GetCurrentThreadSystemId(&current_tid) == S_OK) {
         f.context_available = 1; f.process_matched = current_pid == args.pid; f.thread_matched = current_tid == args.tid;
@@ -255,9 +294,10 @@ extern "C" __declspec(dllexport) HRESULT CALLBACK inspect(PDEBUG_CLIENT client, 
     if (f.process_matched && f.thread_matched && system.value->GetThreadIdBySystemId(args.tid, &expected_engine) == S_OK && system.value->GetCurrentThreadId(&current_engine) == S_OK) {
         f.mapping_available = 1; f.current_engine_matched = current_engine == expected_engine;
     }
-    if (!f.mapping_available || !f.current_engine_matched) { output(control.value, f); output_shapes(control.value, s); return S_OK; }
+    if (!f.mapping_available || !f.current_engine_matched) { output(control.value, f); output_shapes(control.value, s); output_loaded(control.value, l); return S_OK; }
     owned_interface<IDebugSymbols> symbols;
-    ULONG64 expected_offsets[4] = {};
+    ULONG64 expected_offsets[4] = {}, module_bases[128] = {}, actual_probe_offset = 0;
+    ULONG cached_module_count = 0; bool cached_modules_available = false;
     if (client->QueryInterface(__uuidof(IDebugSymbols), reinterpret_cast<void**>(&symbols.value)) == S_OK && symbols.value) {
         const char* names[3] = { "ntdll!NtOpenDirectoryObject", "ntdll!NtOpenEvent", "KERNELBASE!OpenEventW" };
         for (unsigned slot = 0; slot < 3; ++slot) if (symbols.value->GetOffsetByName(names[slot], &expected_offsets[slot]) == S_OK && expected_offsets[slot]) f.expected_offset_available |= 1u << slot;
@@ -268,6 +308,7 @@ extern "C" __declspec(dllexport) HRESULT CALLBACK inspect(PDEBUG_CLIENT client, 
             char image[4096]; std::memset(image, 0x7f, sizeof(image)); ULONG64 base = 0; size_t length = 0;
             ++s.scanned_count;
             if (symbols.value->GetModuleByIndex(index, &base) != S_OK || !base) { module_scan_valid = false; break; }
+            module_bases[index] = base;
             if (symbols.value->GetModuleNames(index, base, image, static_cast<ULONG>(sizeof(image)), nullptr, nullptr, 0, nullptr, nullptr, 0, nullptr) != S_OK) { module_scan_valid = false; break; }
             ++s.module_names_success;
             if (!bounded_length(image, sizeof(image), &length)) { module_scan_valid = false; break; }
@@ -279,6 +320,7 @@ extern "C" __declspec(dllexport) HRESULT CALLBACK inspect(PDEBUG_CLIENT client, 
             if (same_ascii_path(image, args.image)) { ++matches; image_base = base; }
         }
         s.module_scan_completed = module_scan_valid;
+        cached_module_count = loaded; cached_modules_available = module_scan_valid;
         if (module_scan_valid && matches == 1 && image_base <= UINT64_MAX - args.image_size) {
             f.module_available = 1; expected_offsets[3] = image_base + args.probe_rva; f.expected_offset_available |= 8;
         }
@@ -324,9 +366,10 @@ extern "C" __declspec(dllexport) HRESULT CALLBACK inspect(PDEBUG_CLIENT client, 
             }
         }
         ULONG64 offset = 0;
-        if (breakpoint.value->GetOffset(&offset) == S_OK && offset) { f.offset_available |= bit; if ((f.expected_offset_available & bit) && offset == expected_offsets[slot]) f.offset_matched |= bit; }
+        if (breakpoint.value->GetOffset(&offset) == S_OK && offset) { if (slot == 3) actual_probe_offset = offset; f.offset_available |= bit; if ((f.expected_offset_available & bit) && offset == expected_offsets[slot]) f.offset_matched |= bit; }
     }
-    output(control.value, f); output_shapes(control.value, s); return S_OK;
+    inspect_loaded(client, args, module_bases, cached_module_count, cached_modules_available, actual_probe_offset, &l);
+    output(control.value, f); output_shapes(control.value, s); output_loaded(control.value, l); return S_OK;
 }
 static_assert(std::is_same<decltype(&inspect), PDEBUG_EXTENSION_CALL>::value, "SDK callback ABI differs");
 static_assert(std::is_same<decltype(&DebugExtensionInitialize), PDEBUG_EXTENSION_INITIALIZE>::value, "SDK initialization ABI differs");
