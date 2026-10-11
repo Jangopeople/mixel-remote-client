@@ -188,7 +188,12 @@ fn support_invite_lease_status()->String {
 fn support_invite_attestation()->&'static str { if gui_connection::synthetic_error()==2 { "" } else { "guard-unavailable" } }
 fn support_invite_requires_click()->bool { true }
 fn support_invite_owner_lease_failed()->bool { false }
-mod mixel_support_lease { pub fn fixture_raw_open_error()->u32 { super::gui_connection::synthetic_error() } }
+mod mixel_support_lease {
+    pub fn fixture_raw_open_error()->u32 { super::gui_connection::synthetic_error() }
+    pub fn fixture_unnamed_create()->(&'static str,bool,u32,bool,u32) {
+        panic!("Retained legacy creation helper must never execute");
+    }
+}
 '''
         helper=builder.GUI_HELPER
         position=helper.rfind('\n}')
@@ -243,6 +248,20 @@ mod mixel_support_lease { pub fn fixture_raw_open_error()->u32 { super::gui_conn
             self.assertNotEqual(expired.returncode,0);self.assertTrue(result_path.is_file())
             self.assertIn(b'not acknowledged',expired.stderr)
             print('PASS: actual mocked child entry runs A/B/A, retains literal results, consumes only its PID acknowledgement, rejects arguments and fails an unacknowledged deadline; no Windows qualification.',flush=True)
+
+    @unittest.skipUnless(os.name=='nt', 'Exact native Windows guard metadata compilation requires Windows; pure entry controls still run on this host')
+    def test_complete_windows_generated_source_compiles_with_warnings_fatal(self):
+        # The mocked entry cannot expose Windows-only unused exporter functions.
+        # Compile the entire real generated source, without executing any child.
+        with tempfile.TemporaryDirectory(prefix='mixel-gui-native-source-') as temporary:
+            root=Path(temporary);source=root/'gui-connection.rs';metadata=root/'gui-connection.rmeta'
+            source.write_text(builder.generated_source(root,'Global\\Mixel-Remote-Standard-Lease-'+'d'*32),encoding='utf-8')
+            result=subprocess.run([self.compiler(),'--edition','2021','-D','warnings','--emit=metadata',str(source),'-o',str(metadata)],capture_output=True,text=True,timeout=60)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertEqual(result.stderr,'')
+            self.assertTrue(metadata.is_file())
+            self.assertEqual(list(root.glob('*.exe')),[])
+            print('PASS: complete actual Windows generated guard/exporter/GUI entry compiles with -D warnings; metadata only, no native child executed.',flush=True)
 
     def test_pe_metadata_refuses_static_gui_delayload_and_gui_subsystem(self):
         def image(name='kernel32.dll'):
