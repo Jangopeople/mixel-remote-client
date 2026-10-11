@@ -78,7 +78,7 @@ class PortableSourceTests(unittest.TestCase):
             subprocess.run(["git", "add", "."], cwd=root, check=True, capture_output=True)
             subprocess.run(["git", "-c", "user.name=Mixel QA", "-c", "user.email=qa@example.test", "commit", "--quiet", "-m", "Owned QA source control"], cwd=root, check=True, capture_output=True)
             with patch.object(bundle, "ROOT", root):
-                self.assertEqual(len(bundle.git_source_bindings()), 11)
+                self.assertEqual(len(bundle.git_source_bindings()), 12)
                 builder = root / bundle.BUILD_SOURCE
                 original = builder.read_bytes()
                 builder.write_bytes(original + b"changed builder\n")
@@ -91,6 +91,12 @@ class PortableSourceTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "exact committed blob"):
                     bundle.git_source_bindings()
                 helper.write_bytes(original_helper)
+                observer = root / "scripts/windows-standard-namespace-readonly.rs"
+                original_observer = observer.read_bytes()
+                observer.write_bytes(original_observer + b"changed compiled namespace observer\n")
+                with self.assertRaisesRegex(ValueError, "exact committed blob"):
+                    bundle.git_source_bindings()
+                observer.write_bytes(original_observer)
                 subprocess.run(["git", "rm", "--cached", bundle.BUILD_SOURCE], cwd=root, check=True, capture_output=True)
                 subprocess.run(["git", "-c", "user.name=Mixel QA", "-c", "user.email=qa@example.test", "commit", "--quiet", "-m", "Remove only the owned build-source binding"], cwd=root, check=True, capture_output=True)
                 with self.assertRaises(subprocess.CalledProcessError):
@@ -104,6 +110,12 @@ class PortableSourceTests(unittest.TestCase):
             for path, value in pins.items():
                 self.assertEqual(value, hashlib.sha256((ROOT / path).read_bytes()).hexdigest())
             self.assertEqual(source.count("'scripts/rust_toolchain.py'"), 1)
+            source_allow = re.search(r"\$sourceAllow=@\(([^\n]+)\)", source)
+            self.assertIsNotNone(source_allow)
+            actual = re.findall(r"'([^']+)'", source_allow.group(1))
+            expected = (*bundle.SOURCES, *bundle.ADAPTERS.values(), bundle.BUILD_SOURCE, *bundle.BUILD_CONTROLS)
+            self.assertEqual(len(actual), 12)
+            self.assertEqual(set(actual), set(expected))
 
     def test_actual_static_compile_selects_native_linker_preserves_flags_and_rejects_conflict(self):
         with tempfile.TemporaryDirectory(prefix="mixel-qa-native-linker-") as folder:

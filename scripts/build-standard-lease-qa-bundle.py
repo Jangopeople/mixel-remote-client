@@ -34,6 +34,7 @@ STATIC_ARGS = ["--edition", "2021", "-D", "warnings", "-C", "target-feature=+crt
 BUILD_SOURCE = "scripts/build-standard-lease-qa-bundle.py"
 BUILD_CONTROLS = (
     "scripts/rust_toolchain.py",
+    "scripts/windows-standard-namespace-readonly.rs",
     ".github/workflows/preflight.yml",
     "scripts/activate-windows-msvc.ps1",
     "scripts/test-standard-lease-qa-bundle.py",
