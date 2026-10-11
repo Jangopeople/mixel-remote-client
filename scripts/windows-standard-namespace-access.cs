@@ -63,7 +63,9 @@ public sealed class StandardNamespaceAccess : IDisposable {
       if(qualified!=null && qualified.SecurityIdentifier.Equals(sid)) throw new InvalidOperationException("Disposable SID already has a namespace ACE");
       if((existing.AceFlags&AceFlags.Inherited)!=0 && position==descriptor.DiscretionaryAcl.Count) position=index;
     }
-    descriptor.DiscretionaryAcl.InsertAce(position,new CommonAce(AceFlags.None,AceQualifier.AccessAllowed,4,sid,false,null));
+    // Win32 namespace bootstrap requests query|traverse|create-object|create-subdirectory (15).
+    // Existing query/traverse (3) are unchanged; add only object/subdirectory (4|8).
+    descriptor.DiscretionaryAcl.InsertAce(position,new CommonAce(AceFlags.None,AceQualifier.AccessAllowed,12,sid,false,null));
     byte[] result=new byte[descriptor.BinaryLength]; descriptor.GetBinaryForm(result,0); return result;
   }
   static void Apply(IntPtr obj,byte[] descriptor) {
@@ -111,7 +113,7 @@ public sealed class StandardNamespaceAccess : IDisposable {
       original=Descriptor(handle); byte[] updated=WithCreateAccess(original,sid); grantedAcl=Acl(updated);
       if(!Equal(Acl(Descriptor(handle)),Acl(original))) throw new InvalidOperationException("Namespace DACL changed before the owned grant; refusing to overwrite it");
       Apply(handle,updated); applied=true;
-      if(!Equal(Acl(Descriptor(handle)),grantedAcl)) throw new InvalidOperationException("Namespace create-only grant changed unexpected DACL bytes");
+      if(!Equal(Acl(Descriptor(handle)),grantedAcl)) throw new InvalidOperationException("Namespace object/subdirectory grant changed unexpected DACL bytes");
     } catch(Exception primary) {
       var failures=new List<Exception> {primary};
       if(applied) {

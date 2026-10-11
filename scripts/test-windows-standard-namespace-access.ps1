@@ -51,14 +51,14 @@ public static class StandardNamespaceAccessManagedRegression {
       var ace=result.DiscretionaryAcl[index];var qualified=ace as QualifiedAce;
       if(qualified!=null && qualified.SecurityIdentifier.Equals(owned)) {
         var added=ace as CommonAce;
-        Require(index==2 && added!=null && added.AceQualifier==AceQualifier.AccessAllowed && added.AccessMask==4 && added.AceFlags==AceFlags.None && !added.IsCallback && added.OpaqueLength==0,"Owned namespace ACE is not the one explicit create-only grant before inherited ACEs");
+        Require(index==2 && added!=null && added.AceQualifier==AceQualifier.AccessAllowed && added.AccessMask==12 && added.AceFlags==AceFlags.None && !added.IsCallback && added.OpaqueLength==0,"Owned namespace ACE is not the one explicit create-object/subdirectory grant before inherited ACEs");
         found++;
       } else {
         Require(oldIndex<dacl.Count && Bytes(Binary(ace),Binary(dacl[oldIndex])),"Namespace grant changed an original ACE blob or relative order");oldIndex++;
       }
     }
     Require(found==1 && oldIndex==dacl.Count,"Owned namespace grant lost an original ACE or duplicated its own SID");
-    Console.WriteLine("PASS: actual Windows helper preserves original deny/allow/callback/object/inherited ACE blobs and relative order, owner/group/SACL/DACL flags, and adds exactly one mask4/flags0 noncallback owned SID before inherited ACEs");
+    Console.WriteLine("PASS: actual Windows helper preserves original deny/allow/callback/object/inherited ACE blobs and relative order, owner/group/SACL/DACL flags, and adds exactly one mask12/flags0 noncallback owned SID before inherited ACEs");
     // Test genuine native ACL padding rather than RawAcl's reserialized length.
     var minimal=Binary(new RawSecurityDescriptor(flags&~ControlFlags.SystemAclPresent,null,null,null,dacl));
     int offset=checked((int)BitConverter.ToUInt32(minimal,16));int oldSize=BitConverter.ToUInt16(minimal,offset+2);

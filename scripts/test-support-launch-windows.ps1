@@ -1364,7 +1364,7 @@ try {
         Add-LocalGroupMember -SID ([Security.Principal.SecurityIdentifier]::new('S-1-5-32-545')) -Member $ownedUser
         $fixtureStage = 'grant owned standard desktop access'
         $desktopAccess = [MixelOrdinaryTokenFixture+DesktopAccess]::new($ownedSid)
-        $fixtureStage = 'grant owned standard session namespace create access'
+        $fixtureStage = 'grant owned standard session namespace object/subdirectory access'
         if (-not ('MixelCI.StandardNamespaceAccess' -as [type])) {
           Add-Type -TypeDefinition (Get-Content (Join-Path $PSScriptRoot 'windows-standard-namespace-access.cs') -Raw)
         }

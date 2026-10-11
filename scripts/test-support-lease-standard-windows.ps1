@@ -736,7 +736,7 @@ try {
     Add-Type -TypeDefinition (Get-Content (Join-Path $PSScriptRoot 'windows-standard-namespace-access.cs') -Raw)
   }
   $namespaceAccess = [MixelCI.StandardNamespaceAccess]::new($ownedSid, $ownedUser, [uint32](Get-Process -Id $PID).SessionId)
-  Write-Host 'FIXTURE: exact caller-session namespace grants create access only to the owned disposable SID; product guard and event ACLs remain enforced.'
+  Write-Host 'FIXTURE: exact caller-session namespace grants only object/subdirectory creation (mask12) to the owned disposable SID; product guard and event ACLs remain enforced.'
 
   $active = 'ownerFailed=false;ownerError=none;kernel=active;probeError=none;memoryActive=false'
   $activeOwner = 'ownerFailed=false;ownerError=none;kernel=active;probeError=none;memoryActive=true'
