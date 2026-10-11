@@ -84,6 +84,39 @@ struct facts {
     unsigned match_available = 0, specific_thread = 0, any_thread = 0, expected_engine_matched = 0;
     unsigned command_available = 0, callback_matched = 0, offset_available = 0, expected_offset_available = 0, offset_matched = 0;
 };
+struct shapes {
+    unsigned command_available = 0, lengths[4] = {};
+    unsigned outer_quote = 0, edge_whitespace = 0, control_character = 0;
+    unsigned quoted_expected = 0, trimmed_expected = 0, expected_body = 0, expected_script = 0;
+    unsigned module_enumeration_available = 0, module_count = 0, scanned_count = 0;
+    unsigned module_names_success = 0, module_names_bounded = 0, module_exact_path = 0, module_case_path = 0, module_basename_only = 0;
+    unsigned module_scan_completed = 0;
+};
+bool ascii_whitespace(char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\v' || c == '\f'; }
+void command_shapes(const char* command, size_t length, const char* expected, const char* script, unsigned bit, unsigned slot, shapes* s) {
+    s->command_available |= bit; s->lengths[slot] = static_cast<unsigned>(length);
+    if (length >= 2 && command[0] == '"' && command[length - 1] == '"') {
+        s->outer_quote |= bit;
+        const size_t expected_length = std::strlen(expected);
+        if (length == expected_length + 2 && std::memcmp(command + 1, expected, expected_length) == 0) s->quoted_expected |= bit;
+    }
+    if (length && (ascii_whitespace(command[0]) || ascii_whitespace(command[length - 1]))) s->edge_whitespace |= bit;
+    size_t first = 0, last = length;
+    while (first < last && ascii_whitespace(command[first])) ++first;
+    while (last > first && ascii_whitespace(command[last - 1])) --last;
+    if (last - first == std::strlen(expected) && std::memcmp(command + first, expected, last - first) == 0) s->trimmed_expected |= bit;
+    for (size_t index = 0; index < length; ++index) if (static_cast<unsigned char>(command[index]) < 32 || command[index] == 127) s->control_character |= bit;
+    if (std::strstr(command, expected)) s->expected_body |= bit;
+    if (script && std::strstr(command, script)) s->expected_script |= bit;
+}
+void output_shapes(IDebugControl* control, const shapes& s) {
+    control->Output(DEBUG_OUTPUT_NORMAL,
+        "\nMIXEL_CDB_ENGINE_SHAPES {\"commandAvailableMask\":%u,\"commandLength0\":%u,\"commandLength1\":%u,\"commandLength2\":%u,\"commandLength3\":%u,\"outerQuoteMask\":%u,\"edgeWhitespaceMask\":%u,\"controlCharacterMask\":%u,\"quotedExpectedMask\":%u,\"trimmedExpectedMask\":%u,\"expectedBodyOccurrenceMask\":%u,\"expectedScriptOccurrenceMask\":%u,\"moduleEnumerationAvailable\":%u,\"moduleCount\":%u,\"scannedCount\":%u,\"moduleNamesSuccessCount\":%u,\"moduleNamesBoundedCount\":%u,\"moduleExactPathCount\":%u,\"moduleCasePathCount\":%u,\"moduleBasenameOnlyCount\":%u,\"moduleScanCompleted\":%u}\n",
+        s.command_available, s.lengths[0], s.lengths[1], s.lengths[2], s.lengths[3],
+        s.outer_quote, s.edge_whitespace, s.control_character, s.quoted_expected, s.trimmed_expected, s.expected_body, s.expected_script,
+        s.module_enumeration_available, s.module_count, s.scanned_count, s.module_names_success, s.module_names_bounded,
+        s.module_exact_path, s.module_case_path, s.module_basename_only, s.module_scan_completed);
+}
 void output(IDebugControl* control, const facts& f) {
     control->Output(DEBUG_OUTPUT_NORMAL,
         "\nMIXEL_CDB_ENGINE_QUERY {\"argumentsValid\":%u,\"contextAvailable\":%u,\"processMatched\":%u,\"threadMatched\":%u,\"mappingAvailable\":%u,\"currentEngineMatched\":%u,\"moduleAvailable\":%u,\"presentMask\":%u,\"idMatchedMask\":%u,\"flagsAvailableMask\":%u,\"enabledMask\":%u,\"deferredMask\":%u,\"oneShotMask\":%u,\"adderOnlyMask\":%u,\"goOnlyMask\":%u,\"unknownFlagsMask\":%u,\"typeAvailableMask\":%u,\"dataAmd64Mask\":%u,\"dataAvailableMask\":%u,\"executeByteMask\":%u,\"passAvailableMask\":%u,\"passOneMask\":%u,\"currentPassAvailableMask\":%u,\"currentPassOneMask\":%u,\"matchAvailableMask\":%u,\"specificThreadMask\":%u,\"anyThreadMask\":%u,\"expectedEngineMatchedMask\":%u,\"commandAvailableMask\":%u,\"callbackMatchedMask\":%u,\"offsetAvailableMask\":%u,\"expectedOffsetAvailableMask\":%u,\"offsetMatchedMask\":%u}\n",
@@ -93,6 +126,68 @@ void output(IDebugControl* control, const facts& f) {
         f.match_available, f.specific_thread, f.any_thread, f.expected_engine_matched, f.command_available, f.callback_matched,
         f.offset_available, f.expected_offset_available, f.offset_matched);
 }
+
+struct event_facts {
+    unsigned arguments_valid = 0, status_available = 0, engine_stopped = 0;
+    unsigned context_available = 0, process_matched = 0, mapping_available = 0;
+    unsigned event_available = 0, event_process_matched = 0, event_thread_matched = 0, event_is_exception = 0;
+    unsigned exception_available = 0, exception_kind = 0, first_chance = 0;
+    unsigned location_available = 0, location_kind = 0;
+};
+void output_event(IDebugControl* control, const event_facts& e) {
+    control->Output(DEBUG_OUTPUT_NORMAL,
+        "\nMIXEL_CDB_ENGINE_EVENT {\"argumentsValid\":%u,\"statusAvailable\":%u,\"engineStopped\":%u,\"contextAvailable\":%u,\"processMatched\":%u,\"mappingAvailable\":%u,\"eventAvailable\":%u,\"eventProcessMatched\":%u,\"eventThreadMatched\":%u,\"eventIsException\":%u,\"exceptionAvailable\":%u,\"exceptionKind\":%u,\"firstChance\":%u,\"locationAvailableMask\":%u,\"locationKind\":%u}\n",
+        e.arguments_valid, e.status_available, e.engine_stopped, e.context_available, e.process_matched, e.mapping_available,
+        e.event_available, e.event_process_matched, e.event_thread_matched, e.event_is_exception,
+        e.exception_available, e.exception_kind, e.first_chance, e.location_available, e.location_kind);
+}
+HRESULT inspect_event(PDEBUG_CLIENT client, PCSTR input) {
+    owned_interface<IDebugControl> control;
+    if (client->QueryInterface(__uuidof(IDebugControl), reinterpret_cast<void**>(&control.value)) != S_OK || !control.value) return E_NOINTERFACE;
+    event_facts e; arguments args;
+    if (!parse_arguments(input, &args)) { output_event(control.value, e); return S_OK; }
+    e.arguments_valid = 1;
+    ULONG status = DEBUG_STATUS_NO_DEBUGGEE;
+    if (control.value->GetExecutionStatus(&status) != S_OK) { output_event(control.value, e); return S_OK; }
+    e.status_available = 1; e.engine_stopped = status == DEBUG_STATUS_BREAK;
+    if (!e.engine_stopped) { output_event(control.value, e); return S_OK; }
+    owned_interface<IDebugSystemObjects> system;
+    if (client->QueryInterface(__uuidof(IDebugSystemObjects), reinterpret_cast<void**>(&system.value)) != S_OK || !system.value) { output_event(control.value, e); return S_OK; }
+    ULONG current_pid = 0, current_engine_process = DEBUG_ANY_ID, expected_engine_thread = DEBUG_ANY_ID;
+    if (system.value->GetCurrentProcessSystemId(&current_pid) == S_OK && system.value->GetCurrentProcessId(&current_engine_process) == S_OK && current_engine_process != DEBUG_ANY_ID) {
+        e.context_available = 1; e.process_matched = current_pid == args.pid;
+    }
+    if (!e.process_matched || system.value->GetThreadIdBySystemId(args.tid, &expected_engine_thread) != S_OK || expected_engine_thread == DEBUG_ANY_ID) { output_event(control.value, e); return S_OK; }
+    e.mapping_available = 1;
+    ULONG type = 0, last_process = DEBUG_ANY_ID, last_thread_index = DEBUG_ANY_ID, used = 0;
+    DEBUG_LAST_EVENT_INFO_EXCEPTION info = {};
+    if (control.value->GetLastEventInformation(&type, &last_process, &last_thread_index, &info, static_cast<ULONG>(sizeof(info)), &used, nullptr, 0, nullptr) != S_OK || last_process == DEBUG_ANY_ID || last_thread_index == DEBUG_ANY_ID) { output_event(control.value, e); return S_OK; }
+    // LastEventInformation exposes a thread INDEX. Correlate only the explicit
+    // event engine IDs; never reinterpret that index as a mapped engine ID.
+    ULONG event_process = DEBUG_ANY_ID, event_thread = DEBUG_ANY_ID;
+    if (system.value->GetEventProcess(&event_process) != S_OK || system.value->GetEventThread(&event_thread) != S_OK || event_process == DEBUG_ANY_ID || event_thread == DEBUG_ANY_ID) { output_event(control.value, e); return S_OK; }
+    e.event_available = 1; e.event_process_matched = event_process == current_engine_process; e.event_thread_matched = event_thread == expected_engine_thread;
+    if (!e.event_process_matched) { e.event_thread_matched = 0; output_event(control.value, e); return S_OK; }
+    e.event_is_exception = type == DEBUG_EVENT_EXCEPTION;
+    if (!e.event_is_exception || used != sizeof(info) || info.FirstChance > 1 || info.ExceptionRecord.NumberParameters > EXCEPTION_MAXIMUM_PARAMETERS) { output_event(control.value, e); return S_OK; }
+    e.exception_available = 1; e.first_chance = info.FirstChance;
+    const ULONG code = info.ExceptionRecord.ExceptionCode;
+    e.exception_kind = code == 0x80000003u ? 1u : code == 0x80000004u ? 2u : code == 0xc0000005u ? 3u : 4u;
+    owned_interface<IDebugSymbols> symbols;
+    if (client->QueryInterface(__uuidof(IDebugSymbols), reinterpret_cast<void**>(&symbols.value)) == S_OK && symbols.value) {
+        const char* names[3] = { "ntdll!DbgBreakPoint", "ntdll!DbgUiRemoteBreakin", "ntdll!LdrpDoDebuggerBreak" };
+        unsigned matches = 0, kind = 0;
+        for (unsigned index = 0; index < 3; ++index) {
+            ULONG64 address = 0;
+            if (symbols.value->GetOffsetByName(names[index], &address) == S_OK && address) {
+                e.location_available |= 1u << index;
+                if (address == info.ExceptionRecord.ExceptionAddress) { ++matches; kind = index + 1; }
+            }
+        }
+        if (matches == 1) e.location_kind = kind;
+    }
+    output_event(control.value, e); return S_OK;
+}
 }
 extern "C" __declspec(dllexport) HRESULT CALLBACK DebugExtensionInitialize(PULONG version, PULONG flags) {
     if (!version || !flags) return E_INVALIDARG;
@@ -101,13 +196,14 @@ extern "C" __declspec(dllexport) HRESULT CALLBACK DebugExtensionInitialize(PULON
 extern "C" __declspec(dllexport) HRESULT CALLBACK inspect(PDEBUG_CLIENT client, PCSTR input) {
     // Borrow client only for this synchronous callback; every QI reference is owned.
     if (!client) return E_INVALIDARG;
+    if (input && std::strncmp(input, "event ", 6) == 0) return inspect_event(client, input + 6);
     owned_interface<IDebugControl> control;
     if (client->QueryInterface(__uuidof(IDebugControl), reinterpret_cast<void**>(&control.value)) != S_OK || !control.value) return E_NOINTERFACE;
-    facts f; arguments args;
-    if (!parse_arguments(input, &args)) { output(control.value, f); return S_OK; }
+    facts f; shapes s; arguments args;
+    if (!parse_arguments(input, &args)) { output(control.value, f); output_shapes(control.value, s); return S_OK; }
     f.arguments_valid = 1;
     owned_interface<IDebugSystemObjects> system;
-    if (client->QueryInterface(__uuidof(IDebugSystemObjects), reinterpret_cast<void**>(&system.value)) != S_OK || !system.value) { output(control.value, f); return S_OK; }
+    if (client->QueryInterface(__uuidof(IDebugSystemObjects), reinterpret_cast<void**>(&system.value)) != S_OK || !system.value) { output(control.value, f); output_shapes(control.value, s); return S_OK; }
     ULONG current_pid = 0, current_tid = 0, current_engine = 0, expected_engine = 0;
     if (system.value->GetCurrentProcessSystemId(&current_pid) == S_OK && system.value->GetCurrentThreadSystemId(&current_tid) == S_OK) {
         f.context_available = 1; f.process_matched = current_pid == args.pid; f.thread_matched = current_tid == args.tid;
@@ -115,7 +211,7 @@ extern "C" __declspec(dllexport) HRESULT CALLBACK inspect(PDEBUG_CLIENT client, 
     if (f.process_matched && f.thread_matched && system.value->GetThreadIdBySystemId(args.tid, &expected_engine) == S_OK && system.value->GetCurrentThreadId(&current_engine) == S_OK) {
         f.mapping_available = 1; f.current_engine_matched = current_engine == expected_engine;
     }
-    if (!f.mapping_available || !f.current_engine_matched) { output(control.value, f); return S_OK; }
+    if (!f.mapping_available || !f.current_engine_matched) { output(control.value, f); output_shapes(control.value, s); return S_OK; }
     owned_interface<IDebugSymbols> symbols;
     ULONG64 expected_offsets[4] = {};
     if (client->QueryInterface(__uuidof(IDebugSymbols), reinterpret_cast<void**>(&symbols.value)) == S_OK && symbols.value) {
@@ -123,13 +219,22 @@ extern "C" __declspec(dllexport) HRESULT CALLBACK inspect(PDEBUG_CLIENT client, 
         for (unsigned slot = 0; slot < 3; ++slot) if (symbols.value->GetOffsetByName(names[slot], &expected_offsets[slot]) == S_OK && expected_offsets[slot]) f.expected_offset_available |= 1u << slot;
         ULONG loaded = 0, unloaded = 0, matches = 0; ULONG64 image_base = 0;
         bool module_scan_valid = symbols.value->GetNumberModules(&loaded, &unloaded) == S_OK && loaded > 0 && loaded <= 128;
+        if (module_scan_valid) { s.module_enumeration_available = 1; s.module_count = loaded; }
         if (module_scan_valid) for (ULONG index = 0; index < loaded; ++index) {
             char image[4096]; std::memset(image, 0x7f, sizeof(image)); ULONG64 base = 0; size_t length = 0;
-            if (symbols.value->GetModuleByIndex(index, &base) != S_OK || !base ||
-                symbols.value->GetModuleNames(index, base, image, static_cast<ULONG>(sizeof(image)), nullptr, nullptr, 0, nullptr, nullptr, 0, nullptr) != S_OK ||
-                !bounded_length(image, sizeof(image), &length)) { module_scan_valid = false; break; }
+            ++s.scanned_count;
+            if (symbols.value->GetModuleByIndex(index, &base) != S_OK || !base) { module_scan_valid = false; break; }
+            if (symbols.value->GetModuleNames(index, base, image, static_cast<ULONG>(sizeof(image)), nullptr, nullptr, 0, nullptr, nullptr, 0, nullptr) != S_OK) { module_scan_valid = false; break; }
+            ++s.module_names_success;
+            if (!bounded_length(image, sizeof(image), &length)) { module_scan_valid = false; break; }
+            ++s.module_names_bounded;
+            if (std::strcmp(image, args.image) == 0) ++s.module_exact_path;
+            if (same_ascii_path(image, args.image)) ++s.module_case_path;
+            const char* leaf = std::strrchr(args.image, '\\');
+            if (leaf && !std::strchr(image, '\\') && !std::strchr(image, '/') && same_ascii_path(image, leaf + 1)) ++s.module_basename_only;
             if (same_ascii_path(image, args.image)) { ++matches; image_base = base; }
         }
+        s.module_scan_completed = module_scan_valid;
         if (module_scan_valid && matches == 1 && image_base <= UINT64_MAX - args.image_size) {
             f.module_available = 1; expected_offsets[3] = image_base + args.probe_rva; f.expected_offset_available |= 8;
         }
@@ -168,12 +273,16 @@ extern "C" __declspec(dllexport) HRESULT CALLBACK inspect(PDEBUG_CLIENT client, 
         char command[4096]; std::memset(command, 0x7f, sizeof(command)); size_t command_length = 0;
         if (breakpoint.value->GetCommand(command, static_cast<ULONG>(sizeof(command)), nullptr) == S_OK && bounded_length(command, sizeof(command), &command_length)) {
             f.command_available |= bit;
-            if (lengths[slot] > 0 && static_cast<size_t>(lengths[slot]) < sizeof(expected[slot]) && std::strcmp(command, expected[slot]) == 0) f.callback_matched |= bit;
+            if (lengths[slot] > 0 && static_cast<size_t>(lengths[slot]) < sizeof(expected[slot])) {
+                if (std::strcmp(command, expected[slot]) == 0) f.callback_matched |= bit;
+                const char* script = std::strstr(expected[slot], "$$><");
+                command_shapes(command, command_length, expected[slot], script, bit, slot, &s);
+            }
         }
         ULONG64 offset = 0;
         if (breakpoint.value->GetOffset(&offset) == S_OK && offset) { f.offset_available |= bit; if ((f.expected_offset_available & bit) && offset == expected_offsets[slot]) f.offset_matched |= bit; }
     }
-    output(control.value, f); return S_OK;
+    output(control.value, f); output_shapes(control.value, s); return S_OK;
 }
 static_assert(std::is_same<decltype(&inspect), PDEBUG_EXTENSION_CALL>::value, "SDK callback ABI differs");
 static_assert(std::is_same<decltype(&DebugExtensionInitialize), PDEBUG_EXTENSION_INITIALIZE>::value, "SDK initialization ABI differs");
