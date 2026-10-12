@@ -100,6 +100,75 @@ def rejected(operation, root):
     assert snapshot(root) == before, 'Invalid overlay changed actual source before refusing'
 
 
+def pinned_archive(repository, revision, names, env=None):
+    # text=auto also follows core.eol when autocrlf is false. Native Windows
+    # archive conversion must never replace the exact LF Git blob hash pins.
+    return subprocess.check_output(['git', '-C', str(repository), '-c', 'core.autocrlf=false',
+                                    '-c', 'core.eol=lf', 'archive', '--format=tar', revision, *names], env=env)
+
+
+def fresh_members(data):
+    result = {}
+    with tarfile.open(fileobj=io.BytesIO(data)) as archive:
+        for member in archive:
+            if member.isfile():
+                assert member.name in S.FRESH and member.name not in result, 'Changed fresh SDK source inventory'
+                original = archive.extractfile(member).read()
+                assert S.digest(original) == S.FRESH[member.name], 'Changed fresh SDK source: ' + member.name
+                result[member.name] = original
+    assert set(result) == set(S.FRESH), 'Incomplete fresh SDK source inventory'
+    return result
+
+
+def archive_eol_controls(out, upstream):
+    inherited = dict(os.environ, GIT_CONFIG_COUNT='2', GIT_CONFIG_KEY_0='core.autocrlf',
+                     GIT_CONFIG_VALUE_0='false', GIT_CONFIG_KEY_1='core.eol', GIT_CONFIG_VALUE_1='crlf')
+    # Reproduce the exact previous command on real pinned Git objects, without
+    # changing the upstream checkout/configuration or normalizing accepted bytes.
+    original_args = ['git', '-C', str(upstream), '-c', 'core.autocrlf=false',
+                     'archive', '--format=tar', S.PIN, *S.FILES]
+    previous = subprocess.check_output(original_args, env=inherited)
+    corrected = pinned_archive(upstream, S.PIN, S.FILES, inherited)
+    files = fresh_members(corrected)
+    try: fresh_members(previous)
+    except AssertionError: pass
+    else: raise AssertionError('Original Windows-like archive unexpectedly retained the LF pins')
+    old = {}
+    with tarfile.open(fileobj=io.BytesIO(previous)) as archive:
+        for member in archive:
+            if member.isfile(): old[member.name] = archive.extractfile(member).read()
+    assert set(old) == set(files)
+    for name, data in files.items():
+        blob = subprocess.check_output(['git', '-C', str(upstream), 'show', S.PIN + ':' + name])
+        assert data == blob and S.digest(data) == S.FRESH[name]
+        assert old[name] == blob.replace(b'\n', b'\r\n') and S.digest(old[name]) != S.FRESH[name]
+    for autocrlf in ('false', 'true', 'input'):
+        for eol in ('lf', 'crlf', 'native'):
+            env = dict(inherited, GIT_CONFIG_VALUE_0=autocrlf, GIT_CONFIG_VALUE_1=eol)
+            assert pinned_archive(upstream, S.PIN, S.FILES, env) == corrected
+    refusals = 0
+    for change in ('tampered', 'mixed', 'missing', 'duplicate'):
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode='w') as archive:
+            for index, (name, data) in enumerate(files.items()):
+                if index == 0 and change == 'missing': continue
+                if index == 0 and change == 'tampered': data += b'// foreign\n'
+                if index == 0 and change == 'mixed': data = data.replace(b'\n', b'\r\n', 1)
+                member = tarfile.TarInfo(name); member.size = len(data)
+                archive.addfile(member, io.BytesIO(data))
+                if index == 0 and change == 'duplicate': archive.addfile(member, io.BytesIO(data))
+        try: fresh_members(buffer.getvalue())
+        except AssertionError: refusals += 1
+        else: raise AssertionError('Invalid raw fresh archive accepted: ' + change)
+    (out / 'real-git-archive-eol-proof.json').write_text(json.dumps({
+        'original_raw_hash_refusal': True, 'original_command': original_args,
+        'source': S.PIN, 'exact_six_git_blob_hashes': {name: S.digest(data) for name, data in files.items()},
+        'original_crlf_member_hashes': {name: S.digest(data) for name, data in old.items()},
+        'inherited_eol_autocrlf_cases': 9, 'raw_tampered_mixed_inventory_refusals': refusals,
+        'runner_temporary_archive_bytes_available': False}, indent=2) + '\n', encoding='utf-8')
+    print('PASS: original real Git CRLF archive fails all six raw pins; explicit LF preserves exact Git blobs under nine inherited settings; four tampered/mixed/inventory archives refuse.')
+
+
 def materialization(out, source, upstream):
     controls = 0
     for label, newline in (('lf', b'\n'), ('crlf', b'\r\n')):
@@ -163,20 +232,17 @@ def materialization(out, source, upstream):
         for mode in ('apply', 'check', 'restore'):
             rejected(lambda: S.apply(bad, restore=mode == 'restore', check=mode == 'check'), bad)
             controls += 1
-    archive_args = ['git', '-C', str(upstream), '-c', 'core.autocrlf=false', 'archive', '--format=tar', S.PIN, *S.FILES]
-    data = subprocess.check_output(archive_args)
-    inherited = dict(os.environ, GIT_CONFIG_COUNT='1', GIT_CONFIG_KEY_0='core.autocrlf', GIT_CONFIG_VALUE_0='true')
-    assert subprocess.check_output(archive_args, env=inherited) == data
+    data = pinned_archive(upstream, S.PIN, S.FILES)
+    inherited = dict(os.environ, GIT_CONFIG_COUNT='2', GIT_CONFIG_KEY_0='core.autocrlf',
+                     GIT_CONFIG_VALUE_0='true', GIT_CONFIG_KEY_1='core.eol', GIT_CONFIG_VALUE_1='crlf')
+    assert pinned_archive(upstream, S.PIN, S.FILES, inherited) == data
+    originals = fresh_members(data)
     for label, newline in (('lf', b'\n'), ('crlf', b'\r\n')):
         fresh = out / ('fresh-' + label); fresh.mkdir()
         (fresh / 'Cargo.toml').write_bytes(b'[package]\nversion = "1.4.6"\n'.replace(b'\n', newline))
-        with tarfile.open(fileobj=io.BytesIO(data)) as archive:
-            for member in archive:
-                if member.isfile():
-                    original = archive.extractfile(member).read()
-                    assert S.digest(original) == S.FRESH[member.name]
-                    path = fresh / member.name; path.parent.mkdir(parents=True, exist_ok=True)
-                    path.write_bytes(original.replace(b'\n', newline))
+        for name, original in originals.items():
+            path = fresh / name; path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(original.replace(b'\n', newline))
         before = snapshot(fresh); S.apply(fresh, restore=True); assert snapshot(fresh) == before
         rejected(lambda: S.apply(fresh), fresh)
         controls += 2
@@ -331,10 +397,10 @@ def flutter_controls(out, source, flutter):
 
 def full_branding(out, upstream, bash):
     copied = out / 'pipeline-source'; copied.mkdir()
-    args = ['git', '-C', str(ROOT), '-c', 'core.autocrlf=false', 'archive', '--format=tar', 'HEAD', 'scripts', 'branding']
-    archive = subprocess.check_output(args)
-    inherited = dict(os.environ, GIT_CONFIG_COUNT='1', GIT_CONFIG_KEY_0='core.autocrlf', GIT_CONFIG_VALUE_0='true')
-    assert subprocess.check_output(args, env=inherited) == archive
+    archive = pinned_archive(ROOT, 'HEAD', ('scripts', 'branding'))
+    inherited = dict(os.environ, GIT_CONFIG_COUNT='2', GIT_CONFIG_KEY_0='core.autocrlf',
+                     GIT_CONFIG_VALUE_0='true', GIT_CONFIG_KEY_1='core.eol', GIT_CONFIG_VALUE_1='crlf')
+    assert pinned_archive(ROOT, 'HEAD', ('scripts', 'branding'), inherited) == archive
     with tarfile.open(fileobj=io.BytesIO(archive)) as stream:
         for member in stream:
             if member.isfile():
@@ -421,6 +487,7 @@ def main():
             raise RuntimeError('SDK verification output must be outside its read-only input checkout')
         out.mkdir(parents=True, exist_ok=True)
         before = source_snapshot(args.app.resolve())
+        archive_eol_controls(out, args.source.resolve())
         materialization(out, args.app.resolve(), args.source.resolve())
         previous_helper_controls(out, args.app.resolve())
         host_portability_controls(out)

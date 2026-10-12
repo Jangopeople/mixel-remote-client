@@ -57,6 +57,44 @@ def snapshot(repo: Path) -> dict[str, dict[str, object]]:
     return result
 
 
+def full_source_snapshot(repo: Path) -> dict[str, tuple[str, str]]:
+    """Include owned ignored sources and empty directories, excluding Git data."""
+    result = {}
+    for path in repo.rglob("*"):
+        relative = path.relative_to(repo)
+        if ".git" in relative.parts:
+            continue
+        if path.is_symlink():
+            result[relative.as_posix()] = ("symlink", os.readlink(path))
+        elif path.is_file():
+            result[relative.as_posix()] = ("file", hashlib.sha256(path.read_bytes()).hexdigest())
+        elif path.is_dir():
+            result[relative.as_posix()] = ("directory", "")
+        else:
+            raise RuntimeError(f"Unexpected nonregular branding fixture source: {relative}")
+    return result
+
+
+def require_runtime_refusal(result: subprocess.CompletedProcess[str], path: str, label: str) -> None:
+    assert result.returncode != 0, f"Corrupt {label} unexpectedly passed"
+    assert f"Required runtime branding missing in {path}" in result.stderr, result.stderr[-4000:]
+
+
+def runtime_refusal_controls(paths: list[str]) -> None:
+    for path in paths:
+        marker = f"Required runtime branding missing in {path}"
+        require_runtime_refusal(subprocess.CompletedProcess([], 1, "", marker), path, "fixture")
+        for code, error in ((0, marker), (1, "Changed SDK compatibility current source: flutter/lib/desktop/widgets/tabbar_widget.dart"),
+                            (1, "Required runtime branding missing in a/different/path")):
+            try:
+                require_runtime_refusal(subprocess.CompletedProcess([], code, "", error), path, "fixture")
+            except AssertionError:
+                pass
+            else:
+                raise AssertionError("Unrelated, successful or misattributed runtime refusal accepted")
+    print("PASS: four exact runtime refusal paths accept; twelve successful, unrelated SDK or wrong-path results refuse")
+
+
 with tempfile.TemporaryDirectory(prefix="mixel-branding-") as directory:
     base = Path(directory)
     repo = base / "rustdesk"
@@ -567,20 +605,28 @@ print("PASS: actual Debian generator child explicitly uses UTF-8 and preserves t
         ("flutter/macos/Runner/Info.plist", '<string>mixel-remote</string>', '<string>missing-protocol</string>', "macOS URL handler"),
         ("libs/hbb_common/src/config.rs", '("relay-server".to_owned(), "rs.mixel.ch".to_owned())', '("relay-server".to_owned(), "wrong.example".to_owned())', "visible relay default"),
     ]
-    for path, expected, corrupted, label in cases:
-        file = repo / path
+    pristine = full_source_snapshot(repo)
+    runtime_refusal_controls([path for path, _, _, _ in cases])
+    for index, (path, expected, corrupted, label) in enumerate(cases):
+        # A fatal pipeline run may have reversed the final owned layers before
+        # reaching its runtime check. Each negative begins at the same complete
+        # composed source, while the documented default-RDREPO baseline stays intact.
+        candidate = base / f"runtime-corruption-{index}"
+        shutil.copytree(repo, candidate, symlinks=True)
+        assert full_source_snapshot(candidate) == pristine
+        file = candidate / path
         original = file.read_text(encoding="utf-8")
         assert expected in original
         file.write_text(original.replace(expected, corrupted), encoding="utf-8")
-        rejected = subprocess.run(BRANDING_COMMAND, cwd=base, env=env, capture_output=True, text=True, encoding="utf-8")
-        file.write_text(original, encoding="utf-8")
-        assert rejected.returncode != 0, f"Corrupt {label} unexpectedly passed"
-        assert f"Required runtime branding missing in {path}" in rejected.stderr, rejected.stderr[-4000:]
+        rejected = subprocess.run(BRANDING_COMMAND, cwd=base, env={**env, "RDREPO": candidate.as_posix()},
+                                  capture_output=True, text=True, encoding="utf-8")
+        require_runtime_refusal(rejected, path, label)
+        assert full_source_snapshot(repo) == pristine, "Runtime corruption control changed the composed baseline"
         print(f"PASS: full branding rejects a corrupt {label}")
 
-    # The runtime checks above fail before the final exit-owner layer is
-    # reapplied. Restore the fully composed source before its drift control.
+    # Recheck the untouched composed baseline before the later owned-source guards.
     run(BRANDING_COMMAND, cwd=base, env=env)
+    assert full_source_snapshot(repo) == pristine, "Composed baseline changed before the footer control"
     footer_source = repo / "flutter/lib/common.dart"
     original_footer = footer_source.read_text(encoding="utf-8")
     assert "launchUrl(Uri.parse('https://mixel.ch'));" in original_footer
@@ -590,24 +636,33 @@ print("PASS: actual Debian generator child explicitly uses UTF-8 and preserves t
     assert snapshot(repo) == before_rejected_footer, "Changed footer refusal must precede any pipeline mutation"
     footer_source.write_text(original_footer, encoding="utf-8")
     assert rejected.returncode != 0 and "Changed application-exit current source: flutter/lib/common.dart" in rejected.stderr, rejected.stderr[-4000:]
+    assert full_source_snapshot(repo) == pristine, "Footer corruption control changed the composed baseline"
     print("PASS: full branding rejects a changed Flutter footer instead of retaining an unverified destination")
 
-    window_source_file = owned_window / "macos/Classes/FlutterWindow.swift"
+    startup_candidate = base / "window-startup-corruption"
+    shutil.copytree(repo, startup_candidate, symlinks=True)
+    assert full_source_snapshot(startup_candidate) == pristine
+    window_source_file = startup_candidate / "flutter/.mixel-dependencies/desktop_multi_window/macos/Classes/FlutterWindow.swift"
     original_window = window_source_file.read_bytes()
     window_source_file.write_bytes(original_window.replace(
         b"guard flutterViewController.engine.run(withEntrypoint: nil) else {", b"guard true else {", 1))
-    rejected = subprocess.run(BRANDING_COMMAND, cwd=base, env=env, capture_output=True, text=True, encoding="utf-8")
-    window_source_file.write_bytes(original_window)
-    assert rejected.returncode != 0 and "Mac subwindow startup patch" in rejected.stderr
+    rejected = subprocess.run(BRANDING_COMMAND, cwd=base, env={**env, "RDREPO": startup_candidate.as_posix()},
+                              capture_output=True, text=True, encoding="utf-8")
+    assert rejected.returncode != 0 and "Mac subwindow startup patch" in rejected.stderr, rejected.stderr[-4000:]
+    assert full_source_snapshot(repo) == pristine, "Window startup corruption control changed the composed baseline"
     print("PASS: full branding refuses a corrupted subwindow startup guard instead of accepting a dead engine")
 
-    manager_source_file = owned_window / "macos/Classes/MultiWindowManager.swift"
+    close_candidate = base / "window-close-corruption"
+    shutil.copytree(repo, close_candidate, symlinks=True)
+    assert full_source_snapshot(close_candidate) == pristine
+    manager_source_file = close_candidate / "flutter/.mixel-dependencies/desktop_multi_window/macos/Classes/MultiWindowManager.swift"
     original_manager = manager_source_file.read_bytes()
     manager_source_file.write_bytes(original_manager.replace(
         b"closingWindows[windowId] = window", b"// closing engine retention removed", 1))
-    rejected = subprocess.run(BRANDING_COMMAND, cwd=base, env=env, capture_output=True, text=True, encoding="utf-8")
-    manager_source_file.write_bytes(original_manager)
-    assert rejected.returncode != 0 and "Mac subwindow startup patch" in rejected.stderr
+    rejected = subprocess.run(BRANDING_COMMAND, cwd=base, env={**env, "RDREPO": close_candidate.as_posix()},
+                              capture_output=True, text=True, encoding="utf-8")
+    assert rejected.returncode != 0 and "Mac subwindow startup patch" in rejected.stderr, rejected.stderr[-4000:]
+    assert full_source_snapshot(repo) == pristine, "Window close corruption control changed the composed baseline"
     print("PASS: full branding refuses a corrupted close acknowledgement lifetime guard")
 
 print("PASS: all full-pipeline branding regression checks")
