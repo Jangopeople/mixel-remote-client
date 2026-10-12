@@ -19,6 +19,53 @@ if (-not ('MixelOrdinaryTokenFixture' -as [type])) {
   # Add only a documented secondary-launch comparison and retained-token SID
   # check to the test class; preserve its original customer launch and cleanup.
   $comparison = @'
+  // Direct ordinary creation inherits only this Actions caller's existing
+  // context. It never substitutes a secondary/linked token or desktop.
+  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, ExactSpelling=true, SetLastError=true)]
+  static extern bool CreateProcessW(string application, StringBuilder command, IntPtr processAttributes, IntPtr threadAttributes, bool inheritHandles, uint creation, IntPtr environment, string directory, ref StartupInfo startup, out ProcessInfo process);
+  public static int StartCurrentCallerNative(string executable) {
+    var startup=new StartupInfo { cb=Marshal.SizeOf(typeof(StartupInfo)) }; ProcessInfo process;
+    bool success=CreateProcessW(executable,new StringBuilder("\""+executable+"\""),IntPtr.Zero,IntPtr.Zero,false,0,IntPtr.Zero,System.IO.Path.GetDirectoryName(executable),ref startup,out process);
+    int error=Marshal.GetLastWin32Error();
+    if(!success) throw new Win32Exception(error,"Current-caller source launch failed; nativeError="+error.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    return Started(process);
+  }
+  public static bool StartedCurrentCallerSidMatches(int pid) {
+    IntPtr process,token,caller=IntPtr.Zero;
+    bool callerOpened=false; Exception primaryFailure=null;
+    if(!StartedProcesses.TryGetValue(pid,out process)) throw new InvalidOperationException("Current-caller SID check does not own the retained process");
+    if(!OpenProcessToken(process,8,out token)) {
+      int error=Marshal.GetLastWin32Error();
+      throw new Win32Exception(error,"Current-caller child primary TOKEN_QUERY failed; nativeError="+error.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    }
+    try {
+      // CreateProcessW inherits the calling process's primary token even when
+      // its thread impersonates. GetCurrent() observes that effective thread
+      // first, so it is not the launch identity being compared here.
+      if(!OpenProcessToken(GetCurrentProcess(),8,out caller)) {
+        int error=Marshal.GetLastWin32Error();
+        throw new Win32Exception(error,"Current-caller process primary TOKEN_QUERY failed; nativeError="+error.ToString(System.Globalization.CultureInfo.InvariantCulture));
+      }
+      callerOpened=true;
+      using(var original=new WindowsIdentity(caller)) using(var child=new WindowsIdentity(token)) { return original.User.Value==child.User.Value; }
+    } catch(Exception error) {
+      primaryFailure=error; throw;
+    } finally {
+      var failures=new System.Collections.Generic.List<Exception>();
+      if(callerOpened && !CloseHandle(caller)) {
+        int error=Marshal.GetLastWin32Error();
+        failures.Add(new Win32Exception(error,"Current-caller primary read-only identity token close failed; nativeError="+error.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+      }
+      if(!CloseHandle(token)) {
+        int error=Marshal.GetLastWin32Error();
+        failures.Add(new Win32Exception(error,"Current-caller child read-only identity token close failed; nativeError="+error.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+      }
+      if(failures.Count!=0) {
+        if(primaryFailure!=null) failures.Insert(0,primaryFailure);
+        throw new AggregateException("Current-caller read-only identity cleanup failed",failures);
+      }
+    }
+  }
   // Exact public TOKEN_INFORMATION_CLASS values from Microsoft's winnt.h.
   // These queries observe the existing token; they never assign privileges,
   // token sessions, integrity levels, memberships or namespace permissions.
@@ -649,6 +696,90 @@ function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner'
   } finally { if ($control) { $control.Dispose() } }
 }
 
+function Invoke-CurrentCallerLeaseControl([ValidateSet('probe','owner')][string]$Mode, [string]$ExpectedStatus,
+    [int]$ExpectedError, [string]$ExpectedProof, [bool]$ExpectedRequired, [switch]$KeepAlive) {
+  if ([IO.Path]::GetFileName($executable) -cne 'lease-standard.exe') { throw 'Current-caller comparison requires the unchanged base console source fixture.' }
+  foreach ($filename in @('fixture-result.json','fixture-thread-token-initial.json','fixture-thread-token-unnamed.json','fixture-unnamed.request','fixture-unnamed-result.json')) {
+    $path = Join-Path $fixtureRoot $filename
+    if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path }
+  }
+  [IO.File]::WriteAllText((Join-Path $fixtureRoot 'fixture-thread-token.request'), 'observe', [Text.UTF8Encoding]::new($false))
+  [IO.File]::WriteAllText((Join-Path $fixtureRoot 'fixture-mode.txt'), $Mode, [Text.UTF8Encoding]::new($false))
+  $controlPid = [MixelOrdinaryTokenFixture]::StartCurrentCallerNative($executable)
+  $control = $null; $caller = $null
+  try {
+    $control = Get-Process -Id $controlPid
+    $caller = Get-Process -Id $PID
+    $sidMatches = [MixelOrdinaryTokenFixture]::StartedCurrentCallerSidMatches($controlPid)
+    $elevated = [MixelOrdinaryTokenFixture]::Elevated($controlPid)
+    $callerElevated = [MixelOrdinaryTokenFixture]::Elevated($PID)
+    $actualSession = $control.SessionId
+    $tokenFacts = [MixelOrdinaryTokenFixture]::StartedTokenFacts($controlPid)
+    if (-not $sidMatches -or $elevated -ne $callerElevated -or $actualSession -ne $caller.SessionId -or
+        -not $tokenFacts.sessionKnown -or $tokenFacts.sessionId -ne $actualSession -or
+        $tokenFacts.logonComparison -cne 'tokenLogonSidCount=1;tokenLogonSidMatchesCaller=true;tokenLogonSidQuerySubject=none;tokenLogonSidQueryFailure=none;tokenLogonSidQueryError=none;tokenLogonSidQueryReturnedLength=none') {
+      throw 'Direct current-caller source child did not preserve the actual caller SID/elevation/session/logon identity.'
+    }
+    $deadline = [DateTime]::UtcNow.AddSeconds(10)
+    while (-not (Test-Path -LiteralPath $resultPath -PathType Leaf) -and [DateTime]::UtcNow -lt $deadline) {
+      if ([MixelOrdinaryTokenFixture]::StartedStatus($controlPid).StartsWith('exited:')) { break }
+      Start-Sleep -Milliseconds 50
+    }
+    if (-not (Test-Path -LiteralPath $resultPath -PathType Leaf)) { throw 'Direct current-caller source child did not produce its bounded native result.' }
+    $text = [IO.File]::ReadAllText($resultPath)
+    if ($text.Length -gt 4096) { throw 'Direct current-caller native result exceeds its bound.' }
+    $record = $text | ConvertFrom-Json
+    Assert-StandardLeaseSafeResult $record $controlPid
+    $threadTokens = Read-StandardCallingThreadTokens $controlPid
+    Write-Host "OBSERVED: direct current Actions caller GUID functional control; tokenContext=unchanged-current-caller; genuineStandardQualified=False; fullEightQualified=False; customerAppQualified=False; mode=$Mode; controlPid=$controlPid; processSessionId=$actualSession; ownedCallerSidMatched=$sidMatches; elevated=$elevated; callerElevated=$callerElevated; $tokenFacts; $($record | ConvertTo-Json -Compress)."
+    Write-Host "OBSERVED: direct current Actions caller pre-API calling-thread tokens; controlPid=$controlPid; mode=$Mode; $($threadTokens | ConvertTo-Json -Depth 4 -Compress)."
+    if ($record.sourceStatus -cne $ExpectedStatus -or $record.rawOpenError -ne $ExpectedError -or
+        $record.attestation -cne $ExpectedProof -or $record.requiresClick -ne $ExpectedRequired -or $record.ownerFailed) {
+      throw ('Actual current-caller source lease classification mismatch: ' + ($record | ConvertTo-Json -Compress))
+    }
+    $failedTokenCloses = @($threadTokens.records | Where-Object { $_.threadClose -ceq 'failed' -or $_.primaryClose -ceq 'failed' })
+    if ($failedTokenCloses.Count -gt 0) { throw 'Direct current-caller read-only token handle cleanup failed.' }
+    if ($KeepAlive) {
+      if ([MixelOrdinaryTokenFixture]::StartedStatus($controlPid) -cne 'still-running') { throw 'Direct current-caller source owner exited before its fresh observer.' }
+    } else {
+      $releasePath = Join-Path $fixtureRoot "fixture-release-$controlPid"
+      [IO.File]::WriteAllText($releasePath, 'verified')
+      $deadline = [DateTime]::UtcNow.AddSeconds(10)
+      while ([MixelOrdinaryTokenFixture]::StartedStatus($controlPid) -ceq 'still-running' -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 50 }
+      if ([MixelOrdinaryTokenFixture]::StartedStatus($controlPid) -cne 'exited:0x00000000') { throw 'Direct current-caller source child did not exit successfully after acknowledgment.' }
+      # The same base directory is reused by the original standard terminal.
+      # A later reused PID must not inherit an earlier caller acknowledgment.
+      Remove-Item -LiteralPath $releasePath
+    }
+    return $controlPid
+  } finally {
+    try { if ($control) { $control.Dispose() } }
+    finally { if ($caller) { $caller.Dispose() } }
+  }
+}
+
+function Invoke-CurrentCallerLeaseFour {
+  # The original terminal later uses this same executable and Global GUID.
+  # A passing caller comparison remains diagnostic, never standard/app proof.
+  $absent = 'ownerFailed=false;ownerError=none;kernel=absent;probeError=none;memoryActive=false'
+  $active = 'ownerFailed=false;ownerError=none;kernel=active;probeError=none;memoryActive=false'
+  $activeOwner = 'ownerFailed=false;ownerError=none;kernel=active;probeError=none;memoryActive=true'
+  try {
+    [void](Invoke-CurrentCallerLeaseControl probe $absent 2 '' $false)
+    $ownerPid = Invoke-CurrentCallerLeaseControl owner $activeOwner 0 'attended-runtime-v2' $true -KeepAlive
+    $observerPid = Invoke-CurrentCallerLeaseControl probe $active 0 'attended-runtime-v2' $true
+    if ($observerPid -eq $ownerPid) { throw 'Current-caller owner and fresh observer are not distinct retained processes.' }
+    [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses()
+    if ([MixelOrdinaryTokenFixture]::StartedStatus($ownerPid) -cne 'exited:0x00000001') { throw 'Exact retained current-caller owner did not observe its termination.' }
+    [MixelOrdinaryTokenFixture]::CloseStartedObservations()
+    [void](Invoke-CurrentCallerLeaseControl probe $absent 2 '' $false)
+    Write-Host 'PASS: diagnostic-only current Actions caller executes unchanged source/GUID absent2, own/live0 and confirmed owner-drop/absent2; genuineStandardQualified=False; fullEightQualified=False; customerAppQualified=False.'
+  } finally {
+    try { [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses() }
+    finally { [MixelOrdinaryTokenFixture]::CloseStartedObservations() }
+  }
+}
+
 function Invoke-StandardLeaseSubsystemObservations([ValidateSet('with-logon','with-token','with-caller-linked')][string]$Launcher) {
   # Each selected executable observes its own untouched GUID. Both binaries in
   # each pair have byte-identical source apart from the crate subsystem header.
@@ -762,6 +893,12 @@ try {
   $freshFacts=[MixelOrdinaryTokenFixture]::FreshStandardTokenFacts($ownedUser,$ownedPassword,$ownedSid)
   Write-Host "OBSERVED: read-only native token classification; subject=runner; processSessionId=$((Get-Process -Id $PID).SessionId); $runnerFacts."
   Write-Host "OBSERVED: read-only native token classification; subject=fresh-standard-logon; processSessionId=none; ownedSidMatched=True; elevated=False; $freshFacts."
+  $currentCallerFailure = $null
+  try { Invoke-CurrentCallerLeaseFour }
+  catch {
+    $currentCallerFailure = $_
+    Write-Host ('FAIL: direct current-caller diagnostic remains fatal after the unchanged standard controls: ' + $_.Exception.Message)
+  }
   Invoke-StandardLeaseSubsystemObservations with-logon
   Invoke-StandardLeaseSubsystemObservations with-token
   Invoke-StandardLeaseNamespaceObservations with-logon
@@ -795,6 +932,7 @@ try {
   } finally { [MixelIsolatedLeaseControl]::Close($eventHandle); $eventHandle = [IntPtr]::Zero }
   [void](Invoke-StandardLeaseControl probe $absent 2 '' $false $false)
   Write-Host 'PASS: closed wrong-object control leaves no GUID lease or false readiness in a fresh actual standard-account process.'
+  if ($currentCallerFailure) { throw $currentCallerFailure }
 } catch {
   $failure = $_
   throw

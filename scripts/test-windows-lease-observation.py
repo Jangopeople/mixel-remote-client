@@ -129,6 +129,228 @@ def token_record():
 
 
 class ObservationControls(unittest.TestCase):
+    @staticmethod
+    def powershell_engines():
+        pwsh = shutil.which("pwsh")
+        if not pwsh:
+            raise AssertionError("PowerShell required for executable source controls")
+        engines = [(pwsh, "Core")]
+        if os.name == "nt":
+            desktop = shutil.which("powershell.exe")
+            if not desktop or Path(desktop).resolve() == Path(pwsh).resolve():
+                raise AssertionError("Actual Windows source controls require distinct stock PowerShell5.1")
+            engines.append((desktop, "Desktop"))
+        return engines
+
+    def test_current_caller_launch_exact_arguments_and_owned_handoff(self):
+        source = (ROOT / "scripts/test-support-lease-standard-windows.ps1").read_text()
+        launch = (ROOT / "scripts/test-support-launch-windows.ps1").read_text()
+        method = re.search(r'  public static int StartCurrentCallerNative\(string executable\) \{.*?\n  \}', source, re.S)
+        identity = re.search(r'  public static bool StartedCurrentCallerSidMatches\(int pid\) \{.*?\n  \}', source, re.S)
+        self.assertIsNotNone(method)
+        self.assertIsNotNone(identity)
+        self.assertIn('int error=Marshal.GetLastWin32Error();\n    if(!success)', method[0])
+        self.assertIn('return Started(process);', method[0])
+        self.assertIn('OpenProcessToken(GetCurrentProcess(),8,out caller)', identity[0])
+        self.assertNotIn('WindowsIdentity.GetCurrent(', identity[0])
+        startup = re.search(r'  \[StructLayout\(LayoutKind.Sequential, CharSet = CharSet.Unicode\)\] struct StartupInfo \{.*?\n  \}', launch, re.S)
+        process = re.search(r'  \[StructLayout\(LayoutKind.Sequential\)\] struct ProcessInfo \{[^\n]+', launch)
+        self.assertIsNotNone(startup)
+        self.assertIsNotNone(process)
+        csharp = r'''
+using System; using System.ComponentModel; using System.Runtime.InteropServices; using System.Text;
+public static class DirectCallerLaunchControl {
+''' + startup[0] + "\n" + process[0] + r'''
+  public static bool Success=true; public static int Calls,Owned,Variant,Queries,Closed,IdentityDisposed,EffectiveThreadQueries;
+  public static string QueryOrder="",CloseOrder="";
+  static class Marshal {
+    public static int NativeError;
+    public static int SizeOf(Type value){return System.Runtime.InteropServices.Marshal.SizeOf(value);}
+    public static int GetLastWin32Error(){return NativeError;}
+  }
+  static System.Collections.Generic.Dictionary<int,IntPtr> StartedProcesses=new System.Collections.Generic.Dictionary<int,IntPtr>();
+  sealed class UserIdentity { public string Value; }
+  sealed class WindowsIdentity:IDisposable {
+    public UserIdentity User;
+    WindowsIdentity(string value) {User=new UserIdentity {Value=value};}
+    public WindowsIdentity(IntPtr token) {
+      if(token!=new IntPtr(501) && token!=new IntPtr(502))throw new InvalidOperationException("Unowned identity token");
+      if((Variant==7 && token==new IntPtr(502)) || ((Variant==8 || Variant==12) && token==new IntPtr(501)))throw new InvalidOperationException("Injected identity construction failure");
+      User=new UserIdentity {Value=Variant==1 && token==new IntPtr(501)?"different-primary":"caller-primary"};
+    }
+    // The effective thread has a deliberately different identity. Querying it
+    // would reproduce the reviewed GetCurrent/process-primary subject defect.
+    public static WindowsIdentity GetCurrent(){EffectiveThreadQueries++;return new WindowsIdentity("different-effective-thread");}
+    public void Dispose(){IdentityDisposed++;if((Variant==9 && User.Value=="caller-primary" && IdentityDisposed==2) || (Variant==10 && IdentityDisposed==1))throw new InvalidOperationException("Injected identity disposal failure");}
+  }
+  static IntPtr GetCurrentProcess(){return new IntPtr(101);}
+  static bool OpenProcessToken(IntPtr process,uint access,out IntPtr token){
+    if((process!=new IntPtr(401) && process!=new IntPtr(101)) || access!=8)throw new InvalidOperationException("Identity query is not exact retained child/current process handle TOKEN_QUERY");
+    Queries++;bool child=process==new IntPtr(401);QueryOrder+=child?"child,":"caller,";token=new IntPtr(child?501:502);
+    bool success=!((Variant==2 && child) || ((Variant==3 || Variant==11) && !child));
+    Marshal.NativeError=success?0:(child?5:1300);return success;
+  }
+  static bool CloseHandle(IntPtr token){if(token!=new IntPtr(501) && token!=new IntPtr(502))throw new InvalidOperationException("Unowned identity token close");Closed++;bool child=token==new IntPtr(501);CloseOrder+=child?"child,":"caller,";bool success=!(Variant==6 || Variant==12 || ((Variant==4 || Variant==13) && !child) || ((Variant==5 || Variant==11) && child));Marshal.NativeError=success || Variant==13?0:(child?6:5);return success;}
+  static bool CreateProcessW(string application,StringBuilder command,IntPtr pa,IntPtr ta,bool inherit,uint flags,IntPtr env,string directory,ref StartupInfo startup,out ProcessInfo process) {
+    Calls++;
+    if(application!="owned path préflight/lease-standard.exe" || command.ToString()!="\""+application+"\"" || pa!=IntPtr.Zero || ta!=IntPtr.Zero || inherit || flags!=0 || env!=IntPtr.Zero || directory!=System.IO.Path.GetDirectoryName(application) || startup.desktop!=null || startup.cb!=Marshal.SizeOf(typeof(StartupInfo)) || startup.flags!=0) throw new InvalidOperationException("Direct launch changed context or arguments");
+    process=new ProcessInfo {process=new IntPtr(401),thread=new IntPtr(402),pid=403,tid=404};Marshal.NativeError=Success?0:87;return Success;
+  }
+  static int Started(ProcessInfo process) { if(process.process!=new IntPtr(401) || process.thread!=new IntPtr(402) || process.pid!=403 || process.tid!=404) throw new InvalidOperationException("Wrong owned creation handles");Owned++;StartedProcesses.Add((int)process.pid,process.process);return (int)process.pid; }
+''' + method[0] + "\n" + identity[0] + "\n}"
+        with tempfile.TemporaryDirectory(prefix="mixel-direct-launch-source-") as temporary:
+            root = Path(temporary)
+            (root / "control.cs").write_text(csharp)
+            script = root / "control.ps1"
+            script.write_text(r'''
+param([string]$Repository,[string]$ControlRoot,[string]$ExpectedEdition)
+$ErrorActionPreference='Stop'
+if($PSVersionTable.PSEdition -cne $ExpectedEdition -or ($ExpectedEdition -ceq 'Desktop' -and ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1))) { throw 'Actual required PowerShell edition/version missing' }
+# Compile the complete actual augmented class as well as executing the isolated
+# launch body with mocks. No method in the real class is invoked here.
+$standard=[IO.File]::ReadAllText((Join-Path $Repository 'scripts/test-support-lease-standard-windows.ps1')).Replace("`r`n","`n")
+$normal=[IO.File]::ReadAllText((Join-Path $Repository 'scripts/test-support-launch-windows.ps1'))
+$class=$normal.IndexOf('public static class MixelOrdinaryTokenFixture {');$first=$normal.LastIndexOf('using System;',$class);$last=$normal.IndexOf("`n'@ }",$class)
+if($class -lt 0 -or $first -lt 0 -or $last -le $first) {throw 'Actual shared class extraction drift'}
+$actual=$normal.Substring($first,$last-$first);$marker='  public static int StartStandardUser(string executable, string username, string password) {'
+$position=$actual.IndexOf($marker);if($position -lt 0 -or $position -ne $actual.LastIndexOf($marker)) {throw 'Actual comparison insertion drift'}
+$begin=$standard.IndexOf("  `$comparison = @'`n");$end=$standard.IndexOf("`n'@",$begin)
+if($begin -lt 0 -or $end -le $begin) {throw 'Actual comparison extraction drift'}
+$begin += "  `$comparison = @'`n".Length
+Add-Type -TypeDefinition $actual.Insert($position,$standard.Substring($begin,$end-$begin)+"`n")
+Add-Type -TypeDefinition ([IO.File]::ReadAllText((Join-Path $ControlRoot 'control.cs')))
+if([DirectCallerLaunchControl]::StartCurrentCallerNative('owned path préflight/lease-standard.exe') -ne 403 -or [DirectCallerLaunchControl]::Owned -ne 1) { throw 'Exact retained handoff failed' }
+foreach($variant in @(0,1,2,3,4,5,6,7,8,9,10,11,12,13)) {
+  [DirectCallerLaunchControl]::Variant=$variant;[DirectCallerLaunchControl]::Queries=0;[DirectCallerLaunchControl]::Closed=0;[DirectCallerLaunchControl]::IdentityDisposed=0
+  [DirectCallerLaunchControl]::EffectiveThreadQueries=0;[DirectCallerLaunchControl]::QueryOrder='';[DirectCallerLaunchControl]::CloseOrder=''
+  $value=$null;$message='';$failure=$null;try {$value=[DirectCallerLaunchControl]::StartedCurrentCallerSidMatches(403)}catch{$failure=$_.Exception.InnerException;$message=$failure.Message}
+  $queries=if($variant -eq 2){1}else{2}
+  $closes=if($variant -eq 2){0}elseif($variant -cin @(3,11)){1}else{2}
+  $disposed=if($variant -cin @(2,3,7,11)){0}elseif($variant -cin @(8,12)){1}else{2}
+  $queryOrder=if($variant -eq 2){'child,'}else{'child,caller,'}
+  $closeOrder=if($variant -eq 2){''}elseif($variant -cin @(3,11)){'child,'}else{'caller,child,'}
+  if([DirectCallerLaunchControl]::Queries -ne $queries -or [DirectCallerLaunchControl]::Closed -ne $closes -or [DirectCallerLaunchControl]::IdentityDisposed -ne $disposed -or
+    [DirectCallerLaunchControl]::EffectiveThreadQueries -ne 0 -or [DirectCallerLaunchControl]::QueryOrder -cne $queryOrder -or [DirectCallerLaunchControl]::CloseOrder -cne $closeOrder -or
+    ($variant -eq 0 -and ($value -ne $true -or $message -cne '')) -or ($variant -eq 1 -and ($value -ne $false -or $message -cne '')) -or ($variant -ge 2 -and $message -ceq '')) {throw 'Actual same-caller identity/owned token failure or disposal contract changed'}
+  if($variant -cin @(2,3)) {
+    $code=if($variant -eq 2){5}else{1300}
+    if($failure -isnot [ComponentModel.Win32Exception] -or $failure.NativeErrorCode -ne $code -or -not $message.Contains("nativeError=$code")){throw 'Actual primary query error was clobbered or omitted'}
+  }
+  if($variant -cin @(4,5,6,11,12,13)) {
+    $count=if($variant -cin @(4,5,13)){1}elseif($variant -eq 12){3}else{2}
+    if($failure -isnot [AggregateException] -or $failure.InnerExceptions.Count -ne $count) {throw 'Actual identity cleanup erased an earlier or simultaneous failure'}
+    if(($variant -eq 11 -and -not $failure.InnerExceptions[0].Message.Contains('process primary TOKEN_QUERY failed')) -or
+       ($variant -eq 12 -and $failure.InnerExceptions[0].Message -cne 'Injected identity construction failure') -or
+       ($variant -cin @(6,12) -and (-not $failure.InnerExceptions[$count-2].Message.Contains('primary read-only identity token close failed') -or -not $failure.InnerExceptions[$count-1].Message.Contains('child read-only identity token close failed')))) {throw 'Actual source primary/query/close failure ordering or facts changed'}
+    $codes=(@($failure.InnerExceptions | Where-Object {$_ -is [ComponentModel.Win32Exception]} | ForEach-Object {$_.NativeErrorCode}) -join ',')
+    $expectedCodes=switch($variant){4{'5'}5{'6'}6{'5,6'}11{'1300,6'}12{'5,6'}13{'0'}}
+    if($codes -cne $expectedCodes -or @($failure.InnerExceptions | Where-Object {$_ -is [ComponentModel.Win32Exception] -and -not $_.Message.Contains("nativeError=$($_.NativeErrorCode)")}).Count -ne 0){throw 'Actual original or simultaneous native query/close errors were clobbered or omitted; failed error0 remains fatal'}
+  }
+}
+[DirectCallerLaunchControl]::Queries=0;$refused=$false;try{[void][DirectCallerLaunchControl]::StartedCurrentCallerSidMatches(999)}catch{$refused=$true}
+if(-not $refused -or [DirectCallerLaunchControl]::Queries -ne 0) {throw 'Unowned identity PID reached token query'}
+[DirectCallerLaunchControl]::Success=$false
+$refused=$false;try { [void][DirectCallerLaunchControl]::StartCurrentCallerNative('owned path préflight/lease-standard.exe') } catch { $refused=$_.Exception.InnerException -is [ComponentModel.Win32Exception] -and $_.Exception.InnerException.NativeErrorCode -eq 87 -and $_.Exception.InnerException.Message.Contains('nativeError=87') }
+if(-not $refused -or [DirectCallerLaunchControl]::Calls -ne 2 -or [DirectCallerLaunchControl]::Owned -ne 1) { throw 'Failed direct creation returned ownership or retried with another context' }
+Write-Host 'PASS: actual extracted current-caller creation uses explicit Unicode/spaced path, quoted no-argument command, flags0/inheritfalse/environmentNULL/desktopNULL, exact owned handle handoff and fatal failure without retry; caller process and retained child primary TOKEN_QUERY identities match despite distinct effective thread identity; 14 identity/open/close/constructor/dispose combinations preserve both independent owned closes, exact immediate native error numbers, simultaneous close failures and primary-failure facts; failed close error0 remains fatal; unowned PID refused before queries. APIs mocked only.'
+''')
+            for engine, edition in self.powershell_engines():
+                result = subprocess.run([engine, "-NoProfile", "-File", str(script), "-Repository", str(ROOT), "-ControlRoot", str(root), "-ExpectedEdition", edition], capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                print(result.stdout, flush=True)
+
+    def test_current_caller_four_actual_functions_strict_results_and_cleanup(self):
+        with tempfile.TemporaryDirectory(prefix="mixel-current-caller-controls-") as temporary:
+            root = Path(temporary)
+            script = root / "control.ps1"
+            script.write_text(r'''
+param([string]$Repository,[string]$ControlRoot,[string]$ExpectedEdition)
+$ErrorActionPreference='Stop'
+if($PSVersionTable.PSEdition -cne $ExpectedEdition -or ($ExpectedEdition -ceq 'Desktop' -and ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1))) { throw 'Actual required PowerShell edition/version missing' }
+$source=[IO.File]::ReadAllText((Join-Path $Repository 'scripts/test-support-lease-standard-windows.ps1'))
+$tokens=$null;$errors=$null;$ast=[Management.Automation.Language.Parser]::ParseInput($source,[ref]$tokens,[ref]$errors)
+if($errors.Count) { throw 'Current helper does not parse' }
+foreach($name in @('Assert-StandardLeaseSafeResult','Read-StandardCallingThreadTokens','Invoke-CurrentCallerLeaseControl','Invoke-CurrentCallerLeaseFour')) {
+  $matches=$ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq $name},$true)
+  if($matches.Count -ne 1) { throw "Missing exact current function $name" }
+  . ([scriptblock]::Create($matches[0].Extent.Text))
+}
+Add-Type @'
+using System;using System.IO;using System.Collections.Generic;
+public sealed class ControlProcess : IDisposable { public int SessionId=2;public void Dispose(){MixelOrdinaryTokenFixture.Disposed++;} }
+public sealed class ControlFacts {public bool sessionKnown=true;public uint sessionId=2;public string logonComparison="tokenLogonSidCount=1;tokenLogonSidMatchesCaller=true;tokenLogonSidQuerySubject=none;tokenLogonSidQueryFailure=none;tokenLogonSidQueryError=none;tokenLogonSidQueryReturnedLength=none";}
+public static class MixelOrdinaryTokenFixture {
+  public static string Root,Scenario;public static int CallerPid,Next,Owner,Disposed,Stops,Closes;
+  public static List<string> Calls=new List<string>();static Dictionary<int,string> statuses=new Dictionary<int,string>();
+  public static void Reset(string root,string scenario,int caller) {Root=root;Scenario=scenario;CallerPid=caller;Next=4000;Owner=0;Disposed=Stops=Closes=0;Calls.Clear();statuses.Clear();}
+  public static int StartCurrentCallerNative(string executable) {
+    if(executable!=Path.Combine(Root,"lease-standard.exe") || File.ReadAllText(Path.Combine(Root,"fixture-thread-token.request"))!="observe") throw new InvalidOperationException("Wrong source executable/request");
+    int pid=++Next;string mode=File.ReadAllText(Path.Combine(Root,"fixture-mode.txt"));Calls.Add(mode+":"+pid);statuses.Add(pid,"still-running");
+    bool active=Owner!=0;bool memory=mode=="owner";if(memory){Owner=pid;active=true;}
+    string kernel=active?"active":"absent",probe="none",proof=active?"attended-runtime-v2":"";int error=active?0:2;bool click=active,failed=false;
+    if(Scenario=="error5") {kernel="unavailable";probe="5";error=5;proof="guard-unavailable";click=true;}
+    if(Scenario=="false-ready" && !active){proof="attended-runtime-v2";click=true;}
+    if(Scenario=="owner-memory" && memory)memory=false;
+    if(Scenario=="owner-failed") {failed=true;proof="guard-unavailable";click=true;}
+    if(Scenario=="wrong-click")click=!click;
+    string status="ownerFailed="+(failed?"true":"false")+";ownerError="+(failed?"6":"none")+";kernel="+kernel+";probeError="+probe+";memoryActive="+(memory?"true":"false");
+    string json="{\"pid\":"+pid+",\"sourceStatus\":\""+status+"\",\"rawOpenError\":"+error+",\"attestation\":\""+proof+"\",\"requiresClick\":"+(click?"true":"false")+",\"ownerFailed\":"+(failed?"true":"false")+"}";
+    File.WriteAllText(Path.Combine(Root,"fixture-result.json"),json);
+    string close=Scenario=="token-close"?"failed":"closed";int closeError=Scenario=="token-close"?0:0;
+    File.WriteAllText(Path.Combine(Root,"fixture-thread-token-initial.json"),"{\"schema\":1,\"pid\":"+pid+",\"records\":[{\"phase\":\"OpenEventW\",\"tid\":103,\"threadStatus\":\"absent\",\"threadError\":1008,\"threadType\":0,\"threadImpersonationLevel\":0,\"primaryStatus\":\"available\",\"primaryError\":0,\"primaryType\":1,\"threadLogonMatchesPrimary\":null,\"threadClose\":\"not-opened\",\"threadCloseError\":0,\"primaryClose\":\""+close+"\",\"primaryCloseError\":"+closeError+"}]}");
+    return pid;
+  }
+  public static bool StartedCurrentCallerSidMatches(int pid){return Scenario!="sid";}
+  public static bool Elevated(int pid){return pid==CallerPid || Scenario!="elevation";}
+  public static ControlFacts StartedTokenFacts(int pid){var f=new ControlFacts();if(Scenario=="token-session")f.sessionId=3;if(Scenario=="unknown-session")f.sessionKnown=false;if(Scenario=="logon")f.logonComparison=f.logonComparison.Replace("MatchesCaller=true","MatchesCaller=false");return f;}
+  public static string StartedStatus(int pid){if(!statuses.ContainsKey(pid))throw new InvalidOperationException("Unowned status");if(Scenario=="early-owner" && pid==Owner)return "exited:0x00000000";if(pid!=Owner && File.Exists(Path.Combine(Root,"fixture-release-"+pid)))statuses[pid]="exited:0x00000000";return statuses[pid];}
+  public static void StopOwnedStartedProcesses(){Stops++;Calls.Add("stop");foreach(int pid in new List<int>(statuses.Keys))if(statuses[pid]=="still-running")statuses[pid]="exited:0x00000001";Owner=0;if(Scenario=="stop")throw new InvalidOperationException("Mock retained stop failure");}
+  public static void CloseStartedObservations(){Closes++;Calls.Add("close");statuses.Clear();if(Scenario=="close")throw new InvalidOperationException("Mock retained close failure");}
+}
+'@
+function Get-Process {param([int]$Id) $process=[ControlProcess]::new();if($Id -ne $PID -and [MixelOrdinaryTokenFixture]::Scenario -ceq 'process-session'){$process.SessionId=3};return $process}
+$script:printed=[Collections.Generic.List[string]]::new()
+function Write-Host {param($Object) $script:printed.Add([string]$Object)}
+$scenarios=@('pass','error5','false-ready','owner-memory','owner-failed','wrong-click','token-close','sid','elevation','process-session','token-session','unknown-session','logon','early-owner','stop','close')
+foreach($scenario in $scenarios) {
+  $fixtureRoot=Join-Path $ControlRoot $scenario;[void][IO.Directory]::CreateDirectory($fixtureRoot)
+  $executable=Join-Path $fixtureRoot 'lease-standard.exe';$resultPath=Join-Path $fixtureRoot 'fixture-result.json'
+  [MixelOrdinaryTokenFixture]::Reset($fixtureRoot,$scenario,$PID)
+  $script:printed.Clear()
+  $message='';try { Invoke-CurrentCallerLeaseFour } catch { $message=$_.Exception.Message }
+  if(($scenario -ceq 'pass') -ne ($message -ceq '')) {throw "Incorrect direct control scenario $scenario : $message"}
+  if([MixelOrdinaryTokenFixture]::Stops -lt 1 -or [MixelOrdinaryTokenFixture]::Closes -lt 1) {throw "Independent retained cleanup missing $scenario"}
+  if($scenario -ceq 'pass') {
+    if(([MixelOrdinaryTokenFixture]::Calls -join ',') -cne 'probe:4001,owner:4002,probe:4003,stop,close,probe:4004,stop,close' -or [MixelOrdinaryTokenFixture]::Disposed -ne 8) {throw 'Four phase ownership/order or wrapper disposal changed'}
+    if(@(Get-ChildItem -LiteralPath $fixtureRoot -Filter 'fixture-release-*').Count -ne 0) {throw 'Confirmed exited caller acknowledgment can leak into the unchanged standard terminal after PID reuse'}
+    if($script:printed.Count -ne 9 -or @($script:printed | Where-Object {$_ -like 'OBSERVED: direct current Actions caller GUID functional control;*' -and $_.Contains('genuineStandardQualified=False; fullEightQualified=False; customerAppQualified=False;')}).Count -ne 4) {throw 'Diagnostic output silently became standard/app qualification or lost native records'}
+  } else {
+    if($scenario -ceq 'error5' -and (-not $message.Contains('classification mismatch') -or -not ($script:printed -join '').Contains('"rawOpenError":5'))) {throw 'Native5 did not remain fatal or was lost before failure'}
+    if($scenario -ceq 'token-close' -and -not $message.Contains('token handle cleanup failed')) {throw 'Unknown failed close0 did not remain fatal'}
+  }
+}
+$start=$source.IndexOf('  $currentCallerFailure = $null')
+$end=$source.IndexOf('  Invoke-StandardLeaseSubsystemObservations with-logon',$start)
+if($start -lt 0 -or $end -le $start) {throw 'Direct comparison not before unchanged matrix'}
+$entry=$source.Substring($start,$end-$start)
+$final=$ast.FindAll({param($node) $node -is [Management.Automation.Language.IfStatementAst] -and $node.Extent.Text -ceq 'if ($currentCallerFailure) { throw $currentCallerFailure }'},$true)
+if($final.Count -ne 1 -or $final[0].Extent.StartOffset -lt $source.IndexOf("PASS: closed wrong-object control leaves no GUID lease")) {throw 'Deferred direct failure replaced or escaped the original mandatory gate'}
+function Invoke-CurrentCallerLeaseFour {throw 'Exact retained direct source failure'}
+. ([scriptblock]::Create($entry))
+if(-not $currentCallerFailure -or $currentCallerFailure.Exception.Message -cne 'Exact retained direct source failure') {throw 'Direct failure erased before old matrix'}
+$oldMatrixReached=$true
+$message='';try {& ([scriptblock]::Create($final[0].Extent.Text))} catch {$message=$_.Exception.Message}
+if(-not $oldMatrixReached -or $message -cne 'Exact retained direct source failure') {throw 'Deferred direct failure no longer fatal'}
+Microsoft.PowerShell.Utility\Write-Host 'PASS: exact current-caller PowerShell functions execute four strict same-executable phases, retained owner drop/fresh absence and independent cleanup; 15 identity/native-state/close/lifetime/cleanup mutations refuse; failure is retained while the old matrix runs and rethrown after the unchanged mandatory gate. APIs mocked only; no standard/app qualification.'
+''')
+            for index, (engine, edition) in enumerate(self.powershell_engines()):
+                control_root = root / ("engine-" + str(index))
+                control_root.mkdir()
+                result = subprocess.run([engine, "-NoProfile", "-File", str(script), "-Repository", str(ROOT), "-ControlRoot", str(control_root), "-ExpectedEdition", edition], capture_output=True, text=True, timeout=35)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("PASS: exact current-caller PowerShell functions", result.stdout)
+                print(result.stdout, flush=True)
+
     def test_actual_source_dispatch_runs_reader_before_fatal_native_gate(self):
         bash = shutil.which("bash")
         if os.name == "nt":
