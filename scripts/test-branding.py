@@ -79,7 +79,11 @@ with tempfile.TemporaryDirectory(prefix="mixel-branding-") as directory:
     window_source = (owned_window / "macos/Classes/FlutterWindow.swift").read_text(encoding="utf-8")
     assert "guard flutterViewController.engine.run(withEntrypoint: nil) else {" in window_source
     assert "window_engine_start_failed" in (owned_window / "macos/Classes/FlutterMultiWindowPlugin.swift").read_text(encoding="utf-8")
-    print("PASS: full branding resolves the owned exact Mac window plugin and propagates startup failure")
+    window_manager_source = (owned_window / "macos/Classes/MultiWindowManager.swift").read_text(encoding="utf-8")
+    assert "closingWindows[windowId] = window" in window_manager_source
+    assert "DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: timeout)" in window_manager_source
+    assert "finishClosingWindow(windowId: windowId, timedOut: false)" in window_manager_source
+    print("PASS: full branding resolves the owned exact Mac window plugin, propagates startup failure and bounds close acknowledgement")
     assert (repo / "flutter/assets/icon.png").read_bytes() == (ROOT / "branding/icon-512.png").read_bytes()
     assert not (repo / "flutter/assets/icon.svg").exists()
     common = (repo / "flutter/lib/common.dart").read_text(encoding="utf-8")
@@ -591,5 +595,14 @@ print("PASS: actual Debian generator child explicitly uses UTF-8 and preserves t
     window_source_file.write_bytes(original_window)
     assert rejected.returncode != 0 and "Mac subwindow startup patch" in rejected.stderr
     print("PASS: full branding refuses a corrupted subwindow startup guard instead of accepting a dead engine")
+
+    manager_source_file = owned_window / "macos/Classes/MultiWindowManager.swift"
+    original_manager = manager_source_file.read_bytes()
+    manager_source_file.write_bytes(original_manager.replace(
+        b"closingWindows[windowId] = window", b"// closing engine retention removed", 1))
+    rejected = subprocess.run(BRANDING_COMMAND, cwd=base, env=env, capture_output=True, text=True, encoding="utf-8")
+    manager_source_file.write_bytes(original_manager)
+    assert rejected.returncode != 0 and "Mac subwindow startup patch" in rejected.stderr
+    print("PASS: full branding refuses a corrupted close acknowledgement lifetime guard")
 
 print("PASS: all full-pipeline branding regression checks")

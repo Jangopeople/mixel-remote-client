@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Start the pinned Mac subwindow engine before AppKit can send window events."""
+"""Guard pinned Mac subwindow engine startup and bounded close acknowledgement."""
 import hashlib
 import io
 import json
@@ -21,7 +21,7 @@ OLD_DEP = b"""  desktop_multi_window:
     git:
       url: https://github.com/rustdesk-org/rustdesk_desktop_multi_window"""
 NEW_DEP = b"""  desktop_multi_window:
-    # Exact b47e8385; Mac subwindow startup completes before native window events.
+    # Exact b47e8385; guarded Mac subwindow startup and close acknowledgement.
     path: .mixel-dependencies/desktop_multi_window"""
 REPLACEMENTS = {
     "macos/Classes/FlutterWindow.swift": (
@@ -44,10 +44,54 @@ REPLACEMENTS = {
     "macos/Classes/MultiWindowManager.swift": (
         "8b2fdb864e4a35d6da494c6c4c974e6d5d44af59e492552227c142025b3793d5",
         (
+            ("  private var windows: [Int64: BaseFlutterWindow] = [:]", """  private var windows: [Int64: BaseFlutterWindow] = [:]
+  private var closingWindows: [Int64: BaseFlutterWindow] = [:]
+  private var closeTimeouts: [Int64: DispatchWorkItem] = [:]"""),
             ("  func create(arguments: String) -> Int64 {", "  func create(arguments: String) -> Int64? {"),
             ("    let window = FlutterWindow(id: windowId, arguments: arguments)", """    guard let window = FlutterWindow(id: windowId, arguments: arguments) else {
       return nil
     }"""),
+            (r"""  func onClose(windowId: Int64) {
+    // notify flutter to close this window gracefully
+    guard let window = self.windows[windowId] else {
+      return
+    }
+    let args = NSDictionary()
+    debugPrint("invoke onDestroy \(windowId)")
+    window.windowChannel.invokeMethod(fromWindowId: 0, method: "onDestroy", arguments: args, result: nil)
+    windows.removeValue(forKey: windowId)
+  }""", r"""  func onClose(windowId: Int64) {
+    // Stop reuse immediately, but keep the engine alive for Dart's async handler.
+    guard let window = windows.removeValue(forKey: windowId) else {
+      return
+    }
+    closingWindows[windowId] = window
+    let timeout = DispatchWorkItem { [weak self] in
+      self?.finishClosingWindow(windowId: windowId, timedOut: true)
+    }
+    closeTimeouts[windowId] = timeout
+    DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: timeout)
+
+    let args = NSDictionary()
+    debugPrint("invoke onDestroy \(windowId)")
+    window.windowChannel.invokeMethod(fromWindowId: 0, method: "onDestroy", arguments: args) { [weak self] _ in
+      // Never shut down inside the engine's platform-message reply callback.
+      DispatchQueue.main.async { [weak self] in
+        self?.finishClosingWindow(windowId: windowId, timedOut: false)
+      }
+    }
+  }
+
+  private func finishClosingWindow(windowId: Int64, timedOut: Bool) {
+    guard closingWindows[windowId] != nil else {
+      return
+    }
+    closeTimeouts.removeValue(forKey: windowId)?.cancel()
+    if timedOut {
+      debugPrint("Timed out waiting for support-window cleanup acknowledgement.")
+    }
+    closingWindows.removeValue(forKey: windowId)
+  }"""),
         ),
     ),
     "macos/Classes/FlutterMultiWindowPlugin.swift": (
@@ -224,7 +268,7 @@ def apply(repo):
                 raise RuntimeError("Owned subwindow destination appeared during preparation")
             stage.rename(target)
     pubspec.write_bytes(corrected)
-    print("   patched pinned Mac subwindow startup: plugins → engine → native view/delegate; startup failure returns FlutterError; shared cache untouched")
+    print("   patched pinned Mac subwindow lifecycle: plugins → engine → native view/delegate; startup failure returns FlutterError; close retains engine until Dart reply or 5s fallback; shared cache untouched")
 
 
 if __name__ == "__main__":

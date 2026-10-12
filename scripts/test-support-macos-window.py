@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Qualify pinned subwindow materialization and actual Swift startup/failure paths."""
+"""Qualify pinned subwindow ownership, actual Swift startup and bounded close paths."""
 import argparse
 import hashlib
 import importlib.util
@@ -78,6 +78,13 @@ def materialization(output, files):
             checks += 1
     for label, mutation in (
         ("missing-guard", lambda d: (d / "macos/Classes/FlutterWindow.swift").write_bytes(files["macos/Classes/FlutterWindow.swift"])),
+        ("missing-close-ack", lambda d: (d / "macos/Classes/MultiWindowManager.swift").write_bytes(
+            (d / "macos/Classes/MultiWindowManager.swift").read_bytes().replace(
+                P.REPLACEMENTS["macos/Classes/MultiWindowManager.swift"][1][-1][1].encode(),
+                P.REPLACEMENTS["macos/Classes/MultiWindowManager.swift"][1][-1][0].encode(), 1))),
+        ("close-timeout-drift", lambda d: (d / "macos/Classes/MultiWindowManager.swift").write_bytes(
+            (d / "macos/Classes/MultiWindowManager.swift").read_bytes().replace(
+                b"deadline: .now() + 5", b"deadline: .now() + 6", 1))),
         ("extra-file", lambda d: (d / "extra").write_text("extra")),
         ("extra-directory", lambda d: (d / "extra").mkdir()),
         ("symlink", lambda d: (d / "linked").symlink_to(d / "pubspec.yaml")),
@@ -234,6 +241,117 @@ print(original ? "PASS: original actual Swift constructor emits invalid-engine l
 '''
 
 
+CLOSE_SWIFT = r'''
+import Foundation
+import Dispatch
+var events: [String] = []
+var shutdownTimes: [Int64: Double] = [:]
+var callbacks: [Int64: FlutterResult] = [:]
+var mode: [Int64: String] = [:]
+var reenter: ((Int64) -> Void)?
+var inReply = false
+typealias FlutterResult = (Any?) -> Void
+final class Engine {
+ let id: Int64
+ var alive = true
+ init(_ id: Int64) { self.id=id }
+ func shutdown() {
+  assert(alive && !inReply, "Engine released twice or within platform reply")
+  alive=false; events.append("shutdown:"+String(id))
+  shutdownTimes[id]=ProcessInfo.processInfo.systemUptime
+ }
+}
+final class WindowChannel {
+ let engine: Engine
+ init(_ engine: Engine) { self.engine=engine }
+ func invokeMethod(fromWindowId: Int64, method: String, arguments: Any?, result: FlutterResult? = nil) {
+  assert(fromWindowId==0 && method=="onDestroy")
+  let id=engine.id
+  events.append("send:"+String(id))
+  if let result=result { callbacks[id]=result }
+  reenter?(id)
+  DispatchQueue.main.async { [weak engine] in
+   guard engine?.alive == true else { events.append("lost:"+String(id)); return }
+   events.append("handler:"+String(id))
+   if mode[id]=="reply" {
+    DispatchQueue.main.asyncAfter(deadline: .now()+0.03) { [weak engine] in
+     guard engine?.alive == true else { events.append("cleanup-lost:"+String(id)); return }
+     events.append("cleanup:"+String(id))
+     if let reply=callbacks[id] { inReply=true; reply(nil); inReply=false }
+    }
+   }
+  }
+ }
+}
+final class BaseFlutterWindow {
+ let engine: Engine
+ lazy var windowChannel=WindowChannel(engine)
+ init(_ id: Int64) { engine=Engine(id) }
+ deinit { engine.shutdown() }
+}
+final class MultiWindowManager {
+ __FIELDS__
+ __CLOSE__
+ __FINISH__
+ func add(_ id: Int64) { windows[id]=BaseFlutterWindow(id) }
+ func state() -> (Int,Int,Int) { __STATE__ }
+}
+func pump(until condition: () -> Bool, timeout: Double) {
+ let deadline=ProcessInfo.processInfo.systemUptime+timeout
+ while !condition() && ProcessInfo.processInfo.systemUptime<deadline {
+  _=RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow:0.01))
+ }
+ assert(condition(), "Controlled async close did not reach deadline")
+}
+let original=CommandLine.arguments.contains("original")
+let manager=MultiWindowManager()
+if original {
+ manager.add(1); mode[1]="reply"
+ manager.onClose(windowId:1)
+ assert(events==["send:1","shutdown:1"])
+ pump(until: { events.contains("lost:1") }, timeout:1)
+ assert(!events.contains("handler:1") && !events.contains("cleanup:1"))
+ print("PASS: original exact native close shuts down before deferred Dart handler/cleanup")
+} else {
+ manager.add(1); mode[1]="reply"
+ reenter = { [weak manager] id in manager?.onClose(windowId:id) }
+ manager.onClose(windowId:1)
+ reenter = nil
+ manager.onClose(windowId:1) // duplicate/reentrant notification must not send twice
+ assert(manager.state()==(0,1,1) && !events.contains("shutdown:1"))
+ pump(until: { events.contains("shutdown:1") }, timeout:1)
+ assert(events==["send:1","handler:1","cleanup:1","shutdown:1"])
+ assert(manager.state()==(0,0,0))
+ if let reply=callbacks[1] { inReply=true; reply(nil); reply(nil); inReply=false }
+ pump(until: { manager.state()==(0,0,0) }, timeout:0.1)
+
+ let started=ProcessInfo.processInfo.systemUptime
+ for id: Int64 in [2,3,4] { manager.add(id); mode[id]="hung"; manager.onClose(windowId:id) }
+ manager.onClose(windowId:2)
+ assert(manager.state()==(0,3,3))
+ DispatchQueue.main.asyncAfter(deadline: .now()+4.95) {
+  if let reply=callbacks[3] { inReply=true; reply(nil); inReply=false }
+ }
+ DispatchQueue.main.asyncAfter(deadline: .now()+5.05) {
+  if let reply=callbacks[4] { inReply=true; reply(nil); reply(nil); inReply=false }
+  events.append("late-replies")
+ }
+ pump(until: { manager.state()==(0,0,0) && events.contains("late-replies") }, timeout:7)
+ for id: Int64 in [1,2,3,4] {
+  assert(events.filter { $0=="send:"+String(id) }.count==1)
+  assert(events.filter { $0=="shutdown:"+String(id) }.count==1)
+ }
+ let elapsed=shutdownTimes[2]!-started
+ assert(elapsed>=4.9 && elapsed<6.5, "Hung fallback did not use actual five-second main queue deadline")
+ assert(shutdownTimes[3]!<shutdownTimes[2]!, "Pre-timeout reply did not win")
+ assert(shutdownTimes[4]!>=shutdownTimes[2]!-0.05, "Late reply did not use fallback")
+ print("PASS: corrected exact native close retains engine through async handler/reply, defers release outside callback, rejects reentrant close, cancels successful timeout, and releases once for actual 5s hung fallback and both reply/timeout race orders")
+ print("OBSERVED: hung fallback seconds="+String(elapsed))
+}
+print("BOUNDARY: exact extracted Swift methods with asynchronous channel/engine doubles; no packaged Dart or complete remote/file disposal claim")
+'''
+
+
 def native_controls(output, files, framework):
     compiler = shutil.which("swiftc")
     assert compiler and sys.platform == "darwin", "Native Mac Swift compiler required"
@@ -253,6 +371,20 @@ def native_controls(output, files, framework):
         checked([compiler, "-warnings-as-errors", str(path), "-o", str(binary)], output, label + "-swift-compile")
         text = checked([str(binary), label], output, label + "-actual-startup")
         assert "PASS: " + label + " actual Swift constructor" in text
+        declarations = "\n".join(line for line in manager.splitlines()
+                                 if line.startswith("  private var ") and any(
+                                     field in line for field in (" windows:", " closingWindows:", " closeTimeouts:")))
+        on_close = extract_function(manager, "  func onClose(windowId: Int64) {")
+        finish = extract_function(manager, "  private func finishClosingWindow(") if label == "corrected" else ""
+        state = "return (windows.count,closingWindows.count,closeTimeouts.count)" if label == "corrected" else "return (windows.count,0,0)"
+        close_source = CLOSE_SWIFT.replace("__FIELDS__", declarations).replace("__CLOSE__", on_close).replace(
+            "__FINISH__", finish).replace("__STATE__", state)
+        close_path = output / (label + "-actual-close.swift")
+        close_path.write_text(close_source)
+        close_binary = output / (label + "-actual-close")
+        checked([compiler, "-warnings-as-errors", str(close_path), "-o", str(close_binary)], output, label + "-close-swift-compile")
+        close_text = checked([str(close_binary), label], output, label + "-actual-close")
+        assert "PASS: " + label + " exact native close" in close_text
     if framework:
         framework = framework.resolve()
         assert framework.name == "FlutterMacOS.framework" and framework.is_dir(), "Actual FlutterMacOS framework required"
@@ -287,7 +419,7 @@ def main():
         materialization(output, files)
         if args.native or args.flutter_framework:
             native_controls(output, files, args.flutter_framework)
-    print("PASS: pinned Mac subwindow startup source and ownership regression qualification")
+    print("PASS: pinned Mac subwindow startup, bounded close acknowledgement and ownership regression qualification")
 
 
 if __name__ == "__main__":
