@@ -863,9 +863,13 @@ def main():
                     print("PASS: portable service ignores other UIDs' protected inactive endpoints", flush=True)
         finally:
             for owner in owners:
-                if owner.poll() is None:
-                    owner.kill()
-                    owner.wait(timeout=10)
+                try:
+                    if owner.poll() is None:
+                        owner.kill()
+                        owner.wait(timeout=10)
+                finally:
+                    if owner.stdout is not None:
+                        owner.stdout.close()
     if os.name == "nt":
         pwsh = shutil.which("pwsh")
         assert pwsh, "Actual Windows standard-account lease controls require PowerShell7"

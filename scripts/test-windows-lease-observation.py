@@ -312,6 +312,163 @@ Write-Host 'PASS: actual extracted current-caller creation uses explicit Unicode
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 print(result.stdout, flush=True)
 
+    def test_fixture_result_sharing_retry_actual_lock_deadline_and_fatal_conservation(self):
+        source = (ROOT / "scripts/test-support-lease-standard-windows.ps1").read_text(encoding="utf-8")
+        start = source.index("function Read-StandardFixtureResult(")
+        end = source.index("function Invoke-StandardLeaseControl(", start)
+        helper = source[start:end]
+        self.assertEqual(source.count("$text = Read-StandardFixtureResult $resultPath $deadline"), 2)
+        prior = source[:start] + source[end:]
+        prior = prior.replace("$text = Read-StandardFixtureResult $resultPath $deadline",
+                              "$text = [IO.File]::ReadAllText($resultPath)")
+        self.assertEqual(hashlib.sha256(prior.encode()).hexdigest(),
+                         "103f8474c7a4b79f33c1ab64e98fce48cd380931607cb6c9b359e7eeccaf86d1")
+        self.assertEqual(helper.count("[IO.File]::ReadAllText($Path)"), 1)
+        self.assertIn('std::fs::write(directory.join("fixture-result.new"), result).unwrap();\n'
+                      '        mixel_support_lease::fixture_flush_thread_tokens(&directory,false);\n'
+                      '        std::fs::rename(directory.join("fixture-result.new"), directory.join("fixture-result.json")).unwrap();',
+                      lease.STANDARD_WINDOWS_HARNESS)
+        with tempfile.TemporaryDirectory(prefix="mixel-result-sharing-controls-") as temporary:
+            root = Path(temporary)
+            retry_script = root / "retry-control.ps1"
+            retry_script.write_text(r'''
+param([string]$Repository,[string]$ControlRoot,[string]$ExpectedEdition)
+$ErrorActionPreference='Stop'
+if($PSVersionTable.PSEdition -cne $ExpectedEdition -or ($ExpectedEdition -ceq 'Desktop' -and ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1))) {throw 'Required actual PowerShell edition/version missing'}
+$source=[IO.File]::ReadAllText((Join-Path $Repository 'scripts/test-support-lease-standard-windows.ps1')).Replace("`r`n","`n")
+$tokens=$null;$errors=$null;$ast=[Management.Automation.Language.Parser]::ParseInput($source,[ref]$tokens,[ref]$errors)
+if($errors.Count) {throw 'Actual retry helper does not parse'}
+function ExactFunction([string]$Name) {
+  $nodes=$ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq $Name},$true)
+  if($nodes.Count -ne 1) {throw "Missing exact function $Name"};return $nodes[0].Extent.Text
+}
+$helper=ExactFunction 'Read-StandardFixtureResult'
+. ([scriptblock]::Create((ExactFunction 'Assert-StandardLeaseSafeResult')))
+foreach($name in @('Invoke-StandardLeaseControl','Invoke-CurrentCallerLeaseControl')) {
+  $body=ExactFunction $name
+  if(-not $body.Contains('$deadline = [DateTime]::UtcNow.AddSeconds(10)') -or
+     -not $body.Contains('$text = Read-StandardFixtureResult $resultPath $deadline') -or
+     -not $body.Contains('if ($text.Length -gt 4096)') -or
+     $body.IndexOf('$text = Read-StandardFixtureResult') -gt $body.IndexOf('$record = $text | ConvertFrom-Json')) {throw 'Original deadline, size bound or parse order changed'}
+}
+$standardAst=[Management.Automation.Language.Parser]::ParseInput((ExactFunction 'Invoke-StandardLeaseControl'),[ref]$tokens,[ref]$errors)
+$sizeGate=$standardAst.FindAll({param($node) $node -is [Management.Automation.Language.IfStatementAst] -and $node.Extent.Text.StartsWith('if ($text.Length -gt 4096)')},$true)
+$nativeGate=$standardAst.FindAll({param($node) $node -is [Management.Automation.Language.IfStatementAst] -and $node.Extent.Text.Contains('Actual standard-account source lease classification mismatch:')},$true)
+if($sizeGate.Count -ne 1 -or $nativeGate.Count -ne 1){throw 'Exact original size/native classification gate missing'}
+Add-Type @'
+using System;using System.IO;using System.Threading;
+public sealed class FixtureReadIOException:IOException {public FixtureReadIOException(int code):base("Controlled exact IO status"){HResult=code;}}
+public static class FixtureResultRead {
+  static FileStream holder;static Timer timer;static readonly object gate=new object();static string ownedPath;
+  public static int Calls,Releases,ForcedCode;static int releaseDelay;public static bool ForceIO,ForceOther;public static IOException FirstSharing;
+  public static bool Windows {get{return Environment.OSVersion.Platform==PlatformID.Win32NT;}}
+  public static void Reset(){Release();Calls=Releases=ForcedCode=0;ForceIO=ForceOther=false;FirstSharing=null;}
+  public static void Hold(string path,int milliseconds){ownedPath=path;releaseDelay=milliseconds;holder=File.Open(path,FileMode.Open,FileAccess.Read,FileShare.None);}
+  public static void Release(){lock(gate){if(holder!=null){holder.Dispose();holder=null;Releases++;}if(timer!=null){timer.Dispose();timer=null;}}}
+  public static string ReadAllText(string path){Calls++;if(ForceOther)throw new InvalidOperationException("Controlled non-IO fatal");if(ForceIO)throw new FixtureReadIOException(ForcedCode);
+    try{return File.ReadAllText(path);}catch(IOException error){
+      lock(gate){if(releaseDelay>0){timer=new Timer(delegate(object value){Release();},null,releaseDelay,Timeout.Infinite);releaseDelay=0;}}
+      // POSIX FileShare.None reports errno35. Map only the owned real-lock
+      // boundary to the Windows HRESULT; Windows retains its actual status.
+      if(!Windows && path==ownedPath && error.HResult==35){IOException mapped=new FixtureReadIOException(unchecked((int)0x80070020));if(FirstSharing==null)FirstSharing=mapped;throw mapped;}
+      if(error.HResult==unchecked((int)0x80070020) && FirstSharing==null)FirstSharing=error;throw;
+    }
+  }
+}
+public static class FixtureReadClock {public static DateTime Now;public static DateTime UtcNow {get{return Now;}}}
+'@
+$path=Join-Path $ControlRoot 'fixture-result.json'
+$native='{"pid":4321,"sourceStatus":"ownerFailed=false;ownerError=none;kernel=unavailable;probeError=5;memoryActive=false","rawOpenError":5,"attestation":"guard-unavailable","requiresClick":true,"ownerFailed":false}'
+[IO.File]::WriteAllText($path,$native)
+# Real exclusive ownership demonstrates the original immediate-read failure.
+[FixtureResultRead]::Reset();[FixtureResultRead]::Hold($path,0)
+try {
+  $failure=$null;try {[void][IO.File]::ReadAllText($path)}catch{$failure=$_.Exception;while($failure.InnerException){$failure=$failure.InnerException}}
+  $expected=if([FixtureResultRead]::Windows){-2147024864}else{35}
+  if($failure -isnot [IO.IOException] -or $failure.HResult -ne $expected){throw 'Original own exclusive-read sharing failure not reproduced'}
+}finally{[FixtureResultRead]::Release()}
+# Only the file-read API is an explicit dependency shim. Every lock/release and
+# file byte is real; the exact extracted retry/exception/deadline body runs.
+$readShim=$helper.Replace('[IO.File]::ReadAllText($Path)','[FixtureResultRead]::ReadAllText($Path)')
+. ([scriptblock]::Create($readShim))
+[FixtureResultRead]::Reset();[FixtureResultRead]::Hold($path,150)
+try {
+  $watch=[Diagnostics.Stopwatch]::StartNew();$text=Read-StandardFixtureResult $path ([DateTime]::UtcNow.AddSeconds(2));$watch.Stop()
+  if($text -cne $native -or [FixtureResultRead]::Calls -lt 2 -or [FixtureResultRead]::Releases -ne 1 -or $watch.ElapsedMilliseconds -lt 80 -or $watch.ElapsedMilliseconds -gt 3000){throw 'Actual own exclusive release was not awaited under the bounded retry'}
+}finally{[FixtureResultRead]::Release()}
+foreach($expired in @($false,$true)) {
+  [FixtureResultRead]::Reset();[FixtureResultRead]::Hold($path,0)
+  try {
+    $deadline=if($expired){[DateTime]::UtcNow.AddMilliseconds(-1)}else{[DateTime]::UtcNow.AddMilliseconds(120)}
+    $watch=[Diagnostics.Stopwatch]::StartNew();$failure=$null
+    try{[void](Read-StandardFixtureResult $path $deadline)}catch{$failure=$_.Exception;while($failure.InnerException){$failure=$failure.InnerException}};$watch.Stop()
+    if($failure -isnot [IO.IOException] -or $failure.HResult -ne -2147024864 -or -not [Object]::ReferenceEquals($failure,[FixtureResultRead]::FirstSharing) -or
+       ($expired -and [FixtureResultRead]::Calls -ne 1) -or (-not $expired -and [FixtureResultRead]::Calls -lt 2) -or
+       $watch.ElapsedMilliseconds -gt 1500 -or (-not $expired -and $watch.ElapsedMilliseconds -lt 80)){throw 'Sharing timeout extended the original deadline, erased the original error or retried an expired read'}
+  }finally{[FixtureResultRead]::Release()}
+}
+# Bind the first candidate's actual catch-only body, which let a post-sleep
+# retry succeed at/after expiry. Only the clock and file-read APIs are stand-ins.
+$catchOnly=$helper.Replace("  `$sharingFailure = `$null`n",'').Replace("    if (`$null -ne `$sharingFailure -and [DateTime]::UtcNow -ge `$Deadline) { throw `$sharingFailure }`n",'')
+$catchOnly=$catchOnly.Replace('      if ($failure -isnot [IO.IOException] -or $failure.HResult -ne -2147024864) { throw }',"      if (`$failure -isnot [IO.IOException] -or `$failure.HResult -ne -2147024864 -or`n          [DateTime]::UtcNow -ge `$Deadline) { throw }")
+$catchOnly=$catchOnly.Replace("      if (`$null -eq `$sharingFailure) { `$sharingFailure = `$_ }`n",'').Replace("      if ([DateTime]::UtcNow -ge `$Deadline) { throw `$sharingFailure }`n",'')
+$sha=[Security.Cryptography.SHA256]::Create()
+try{$hash=([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($catchOnly+"`n`n")))).Replace('-','').ToLowerInvariant()}finally{$sha.Dispose()}
+if($hash -cne '7cc127fd7196a075710a47bae912610ca419a374f0e955e694d8afd961d7786a'){throw 'Original catch-only candidate body drifted'}
+function Start-Sleep {param([int]$Milliseconds)
+  if($script:controlledClock){[FixtureReadClock]::Now=$script:clockResume;[FixtureResultRead]::Release()}
+  else{Microsoft.PowerShell.Utility\Start-Sleep -Milliseconds $Milliseconds}
+}
+$script:controlledClock=$true
+foreach($offset in @(0,1)) {
+  foreach($original in @($true,$false)) {
+    [FixtureResultRead]::Reset();[FixtureResultRead]::Hold($path,0)
+    [FixtureReadClock]::Now=[DateTime]::UtcNow;$deadline=[FixtureReadClock]::Now.AddMilliseconds(100);$script:clockResume=$deadline.AddMilliseconds($offset)
+    $body=if($original){$catchOnly}else{$helper}
+    . ([scriptblock]::Create($body.Replace('[IO.File]::ReadAllText($Path)','[FixtureResultRead]::ReadAllText($Path)').Replace('[DateTime]::UtcNow','[FixtureReadClock]::UtcNow')))
+    try {
+      $failure=$null;$text='';try{$text=Read-StandardFixtureResult $path $deadline}catch{$failure=$_.Exception;while($failure.InnerException){$failure=$failure.InnerException}}
+      if($original){if($failure -or $text -cne $native -or [FixtureResultRead]::Calls -ne 2){throw 'Actual original catch-only late-read defect not reproduced'}}
+      elseif($null -eq $failure -or -not [Object]::ReferenceEquals($failure,[FixtureResultRead]::FirstSharing) -or [FixtureResultRead]::Calls -ne 1){throw 'At/after-deadline retry was allowed or original first sharing error replaced'}
+    }finally{[FixtureResultRead]::Release()}
+  }
+}
+$script:controlledClock=$false
+. ([scriptblock]::Create($readShim))
+foreach($code in @(0,-2147024894,-2147024891,-2147024863)) {
+  [FixtureResultRead]::Reset();[FixtureResultRead]::ForceIO=$true;[FixtureResultRead]::ForcedCode=$code;$failure=$null
+  try{[void](Read-StandardFixtureResult $path ([DateTime]::UtcNow.AddSeconds(1)))}catch{$failure=$_.Exception;while($failure.InnerException){$failure=$failure.InnerException}}
+  if($failure -isnot [IO.IOException] -or $failure.HResult -ne $code -or [FixtureResultRead]::Calls -ne 1){throw 'Nonsharing IO/error0 was retried or replaced'}
+}
+[FixtureResultRead]::Reset();[FixtureResultRead]::ForceOther=$true;$message=''
+try{[void](Read-StandardFixtureResult $path ([DateTime]::UtcNow.AddSeconds(1)))}catch{$message=$_.Exception.Message}
+if(-not $message.Contains('Controlled non-IO fatal') -or [FixtureResultRead]::Calls -ne 1){throw 'Non-IO failure was retried or replaced'}
+[FixtureResultRead]::Reset()
+$ObserveOnly=$false;$ExpectedStatus='ownerFailed=false;ownerError=none;kernel=absent;probeError=none;memoryActive=false'
+$ExpectedError=2;$ExpectedProof='';$ExpectedRequired=$false;$ExpectedOwnerFailed=$false
+foreach($payload in @('{malformed',(' ' * 4097),$native)) {
+  [IO.File]::WriteAllText($path,$payload);$message=''
+  try {
+    $text=Read-StandardFixtureResult $path ([DateTime]::UtcNow.AddSeconds(1))
+    & ([scriptblock]::Create($sizeGate[0].Extent.Text))
+    $record=$text | ConvertFrom-Json;Assert-StandardLeaseSafeResult $record 4321
+    & ([scriptblock]::Create($nativeGate[0].Extent.Text))
+  }catch{$message=$_.Exception.Message}
+  if($message -ceq '' -or ($payload -ceq $native -and (-not $message.Contains('classification mismatch') -or -not $message.Contains('"rawOpenError":5'))) -or
+     ($payload.Length -gt 4096 -and -not $message.Contains('exceeds its bound'))){throw 'Malformed/oversize/native5 became a successful result after retry'}
+}
+Write-Host "PASS: exact result reader reproduces original real FileShare.None refusal, waits for own release, retries only sharing HRESULT within original deadline, preserves expiry/other IO/error0/non-IO/malformed/oversize/native5 fatal outcomes. SHA-bound original catch-only accepts at/after deadline; corrected exact-clock controls retain the first sharing exception and perform no late read. Real file/lock APIs; POSIX-only HRESULT35 and exact-clock mappings are explicit API stand-ins. Actual engine: $($PSVersionTable.PSVersion); $($PSVersionTable.PSEdition)."
+''', encoding="utf-8-sig")
+            for index, (engine, edition) in enumerate(self.powershell_engines()):
+                control_root = root / ("engine-" + str(index))
+                control_root.mkdir()
+                result = subprocess.run([engine, "-NoProfile", "-File", str(retry_script), "-Repository", str(ROOT),
+                                         "-ControlRoot", str(control_root), "-ExpectedEdition", edition],
+                                        capture_output=True, text=True, encoding="utf-8", timeout=20)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("preserves expiry/other IO/error0/non-IO/malformed/oversize/native5 fatal", result.stdout)
+                print(result.stdout, flush=True)
+
     def test_current_caller_four_actual_functions_strict_results_and_cleanup(self):
         # The compiled fixture acknowledges its retained result by consuming the
         # exact release path before a successful exit. Model that real lifecycle,
@@ -330,7 +487,7 @@ Write-Host "Actual mocked four-phase control PowerShell: $($PSVersionTable.PSVer
 $source=[IO.File]::ReadAllText((Join-Path $Repository 'scripts/test-support-lease-standard-windows.ps1'))
 $tokens=$null;$errors=$null;$ast=[Management.Automation.Language.Parser]::ParseInput($source,[ref]$tokens,[ref]$errors)
 if($errors.Count) { throw 'Current helper does not parse' }
-foreach($name in @('Write-LeaseContextFailure','Invoke-LeaseJobObservation','Read-StandardChildJobLimits','Invoke-LeaseChildJobLimitsObservation','Read-StandardChildDirectoryAccess','Invoke-LeaseChildDirectoryAccessObservation','Assert-StandardLeaseSafeResult','Read-StandardCallingThreadTokens','Invoke-CurrentCallerLeaseControl','Invoke-CurrentCallerLeaseFour')) {
+foreach($name in @('Write-LeaseContextFailure','Invoke-LeaseJobObservation','Read-StandardChildJobLimits','Invoke-LeaseChildJobLimitsObservation','Read-StandardChildDirectoryAccess','Invoke-LeaseChildDirectoryAccessObservation','Assert-StandardLeaseSafeResult','Read-StandardCallingThreadTokens','Read-StandardFixtureResult','Invoke-CurrentCallerLeaseControl','Invoke-CurrentCallerLeaseFour')) {
   $matches=$ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq $name},$true)
   if($matches.Count -ne 1) { throw "Missing exact current function $name" }
   if($name -ceq 'Invoke-CurrentCallerLeaseControl') { $correctedControl=$matches[0].Extent.Text }

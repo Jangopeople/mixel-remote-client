@@ -939,6 +939,25 @@ function Read-StandardCallingThreadTokens([uint32]$ExpectedPid, [switch]$Unnamed
   return $record
 }
 
+function Read-StandardFixtureResult([string]$Path, [DateTime]$Deadline) {
+  $sharingFailure = $null
+  while ($true) {
+    if ($null -ne $sharingFailure -and [DateTime]::UtcNow -ge $Deadline) { throw $sharingFailure }
+    try { return [IO.File]::ReadAllText($Path) } catch {
+      $failure = $_.Exception
+      while ($failure -isnot [IO.IOException] -and $null -ne $failure.InnerException) {
+        $failure = $failure.InnerException
+      }
+      # Reuse the original readiness deadline. Only the observed Windows
+      # sharing violation may be transient; every other read failure is fatal.
+      if ($failure -isnot [IO.IOException] -or $failure.HResult -ne -2147024864) { throw }
+      if ($null -eq $sharingFailure) { $sharingFailure = $_ }
+      if ([DateTime]::UtcNow -ge $Deadline) { throw $sharingFailure }
+      Start-Sleep -Milliseconds 20
+    }
+  }
+}
+
 function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner')][string]$Mode, [string]$ExpectedStatus, [int]$ExpectedError,
     [string]$ExpectedProof, [bool]$ExpectedRequired, [bool]$ExpectedOwnerFailed, [switch]$KeepAlive,
     [switch]$ObserveOnly, [string]$ObservationLabel,
@@ -988,7 +1007,7 @@ function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner'
       Start-Sleep -Milliseconds 50
     }
     if (-not (Test-Path $resultPath)) { throw 'Owned standard-account lease control did not produce its bounded native result.' }
-    $text = [IO.File]::ReadAllText($resultPath)
+    $text = Read-StandardFixtureResult $resultPath $deadline
     if ($text.Length -gt 4096) { throw 'Owned lease result exceeds its bound.' }
     $record = $text | ConvertFrom-Json
     Assert-StandardLeaseSafeResult $record $controlPid
@@ -1077,7 +1096,7 @@ function Invoke-CurrentCallerLeaseControl([ValidateSet('probe','owner')][string]
       Start-Sleep -Milliseconds 50
     }
     if (-not (Test-Path -LiteralPath $resultPath -PathType Leaf)) { throw 'Direct current-caller source child did not produce its bounded native result.' }
-    $text = [IO.File]::ReadAllText($resultPath)
+    $text = Read-StandardFixtureResult $resultPath $deadline
     if ($text.Length -gt 4096) { throw 'Direct current-caller native result exceeds its bound.' }
     $record = $text | ConvertFrom-Json
     Assert-StandardLeaseSafeResult $record $controlPid
