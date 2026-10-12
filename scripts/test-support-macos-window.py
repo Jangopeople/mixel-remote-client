@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Qualify pinned subwindow ownership, actual Swift startup and bounded close paths."""
+"""Qualify pinned Mac startup, current lifecycle state and bounded close paths."""
 import argparse
 import hashlib
 import importlib.util
 import io
+import json
 import os
 from pathlib import Path
 import shutil
@@ -12,11 +13,20 @@ import sys
 import tarfile
 import tempfile
 from unittest.mock import patch
+from urllib.request import urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("mixel_window_patch", ROOT / "scripts/patch-support-macos-window.py")
 P = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(P)
+
+ENGINE = "a18df97ca57a249df5d8d68cd0820600223ce262"
+ENGINE_FILES = {
+    "Source/FlutterEngine.mm": "1e59b42da1a82999b5d902ad94f4036265ce3f1dea9ccaae04fee1e89d3a5d5c",
+    "Source/FlutterAppLifecycleDelegate.mm": "f04648c8a439c7cc1cad3106ac5100f2b6e0ec5c0747d6fa20b4e87568666a42",
+    "Headers/FlutterEngine.h": "96d684b07db41db3912cb3f1d917da856726f0b5b70237a4ae743327c9998710",
+    "Headers/FlutterAppLifecycleDelegate.h": "a2af9087215714bda2d9720a1fa765db8c1caf44f79f6da9b36fa8567190ace7",
+}
 
 
 def checked(args, output, name):
@@ -85,6 +95,18 @@ def materialization(output, files):
         ("close-timeout-drift", lambda d: (d / "macos/Classes/MultiWindowManager.swift").write_bytes(
             (d / "macos/Classes/MultiWindowManager.swift").read_bytes().replace(
                 b"deadline: .now() + 5", b"deadline: .now() + 6", 1))),
+        ("missing-occlusion-sync", lambda d: (d / "macos/Classes/FlutterWindow.swift").write_bytes(
+            (d / "macos/Classes/FlutterWindow.swift").read_bytes().replace(
+                b"engine.handleDidChangeOcclusionState(", b"engine.removedOcclusionSync(", 1))),
+        ("missing-active-sync", lambda d: (d / "macos/Classes/FlutterWindow.swift").write_bytes(
+            (d / "macos/Classes/FlutterWindow.swift").read_bytes().replace(
+                b"engine.handleWillBecomeActive(", b"engine.removedActiveSync(", 1))),
+        ("missing-inactive-sync", lambda d: (d / "macos/Classes/FlutterWindow.swift").write_bytes(
+            (d / "macos/Classes/FlutterWindow.swift").read_bytes().replace(
+                b"engine.handleWillResignActive(", b"engine.removedInactiveSync(", 1))),
+        ("assumed-active-state", lambda d: (d / "macos/Classes/FlutterWindow.swift").write_bytes(
+            (d / "macos/Classes/FlutterWindow.swift").read_bytes().replace(
+                b"let applicationIsActive = application.isActive", b"let applicationIsActive = true", 1))),
         ("extra-file", lambda d: (d / "extra").write_text("extra")),
         ("extra-directory", lambda d: (d / "extra").mkdir()),
         ("symlink", lambda d: (d / "linked").symlink_to(d / "pubspec.yaml")),
@@ -153,6 +175,18 @@ struct Style: OptionSet {
 }
 enum Backing { case buffered }
 enum Visibility { case hidden }
+struct Occlusion: OptionSet {
+ let rawValue: Int
+ static let visible = Occlusion(rawValue: 1)
+}
+class NSApplication {
+ static let shared = NSApplication()
+ static let didChangeOcclusionStateNotification = Notification.Name("occlusion")
+ static let willBecomeActiveNotification = Notification.Name("active")
+ static let willResignActiveNotification = Notification.Name("inactive")
+ var isActive = true
+ var occlusionState: Occlusion = .visible
+}
 class NSWindow {
  var contentViewController: FlutterViewController? { didSet { calls.append("attach-view") } }
  weak var delegate: AnyObject? { didSet { calls.append("delegate") } }
@@ -168,12 +202,32 @@ class FlutterWindowInner: NSWindow {}
 class FlutterDartProject { var dartEntrypointArguments: [String] = [] }
 class Engine {
  var running = false
+ var active = false
+ var visible = false
+ var lifecycleStates: [String] = []
  func run(withEntrypoint: String?) -> Bool {
   calls.append("run"); starts += 1
   guard shouldStart else { return false }
   running=true; return true
  }
  func shutDownEngine() { calls.append("shutdown"); shutdowns += 1; running=false }
+ func emitLifecycle(_ state: String) { assert(running); lifecycleStates.append(state) }
+ func handleDidChangeOcclusionState(_ note: Notification) {
+   assert(note.name == NSApplication.didChangeOcclusionStateNotification && note.object as? NSApplication === NSApplication.shared)
+   calls.append("lifecycle-occlusion")
+   self.visible = NSApplication.shared.occlusionState.contains(.visible)
+   self.emitLifecycle(self.visible ? (self.active ? "resumed" : "inactive") : "hidden")
+ }
+ func handleWillBecomeActive(_ note: Notification) {
+   assert(note.name == NSApplication.willBecomeActiveNotification && note.object as? NSApplication === NSApplication.shared)
+   calls.append("lifecycle-active"); self.active=true
+   self.emitLifecycle(self.visible ? "resumed" : "hidden")
+ }
+ func handleWillResignActive(_ note: Notification) {
+   assert(note.name == NSApplication.willResignActiveNotification && note.object as? NSApplication === NSApplication.shared)
+   calls.append("lifecycle-inactive"); self.active=false
+   self.emitLifecycle(self.visible ? "inactive" : "hidden")
+ }
 }
 class Registrar {}
 class FlutterViewController {
@@ -218,8 +272,12 @@ class FlutterMultiWindowPlugin {
  }
 }
 let original = CommandLine.arguments.contains("original")
+for visible in [true, false] {
+for active in [true, false] {
 for successful in [true, false, true] {
  calls=[]; invalidEvents=0; shouldStart=successful; starts=0; shutdowns=0
+ NSApplication.shared.isActive=active
+ NSApplication.shared.occlusionState=visible ? .visible : []
  let manager=MultiWindowManager.shared
  manager.windows.removeAll()
  var replies: [Any?] = []
@@ -230,14 +288,45 @@ for successful in [true, false, true] {
  } else if successful {
   assert(starts==1 && shutdowns==0 && invalidEvents==0 && replies[0] is Int64 && manager.windows.count==1)
   let plugin=calls.firstIndex(of:"app-plugins")!, run=calls.firstIndex(of:"run")!, attach=calls.firstIndex(of:"attach-view")!, delegate=calls.firstIndex(of:"delegate")!
-  assert(plugin<run && run<attach && attach<delegate)
+  let occlusion=calls.firstIndex(of:"lifecycle-occlusion")!, activity=calls.firstIndex(of:active ? "lifecycle-active" : "lifecycle-inactive")!
+  assert(plugin<run && run<occlusion && occlusion<activity && activity<attach && attach<delegate)
+  let engine=(manager.windows.values.first as! FlutterWindow).window.contentViewController!.engine
+  assert(engine.visible==visible && engine.active==active)
+  assert(engine.lifecycleStates.last==(visible ? (active ? "resumed" : "inactive") : "hidden"))
  } else {
   assert(starts==1 && shutdowns==1 && invalidEvents==0 && manager.windows.isEmpty)
   assert((replies[0] as? FlutterError)?.code == "window_engine_start_failed")
   assert(!calls.contains("attach-view") && !calls.contains("delegate"))
+  assert(!calls.contains(where: { $0.hasPrefix("lifecycle-") }))
+ }
+ if successful {
+  let engine=(manager.windows.values.first as! FlutterWindow).window.contentViewController!.engine
+  if original {
+   assert(engine.lifecycleStates.isEmpty)
+   assert(engine.run(withEntrypoint:nil))
+   engine.handleWillBecomeActive(Notification(name:NSApplication.willBecomeActiveNotification,object:NSApplication.shared))
+   assert(engine.lifecycleStates.last=="hidden")
+   // A real later occlusion callback repairs the original visibility cache.
+   engine.handleDidChangeOcclusionState(Notification(name:NSApplication.didChangeOcclusionStateNotification,object:NSApplication.shared))
+  }
+  NSApplication.shared.isActive=false
+  engine.handleWillResignActive(Notification(name:NSApplication.willResignActiveNotification,object:NSApplication.shared))
+  assert(engine.lifecycleStates.last==(visible ? "inactive" : "hidden"))
+  NSApplication.shared.isActive=true
+  engine.handleWillBecomeActive(Notification(name:NSApplication.willBecomeActiveNotification,object:NSApplication.shared))
+  assert(engine.lifecycleStates.last==(visible ? "resumed" : "hidden"))
+  NSApplication.shared.occlusionState=[]
+  engine.handleDidChangeOcclusionState(Notification(name:NSApplication.didChangeOcclusionStateNotification,object:NSApplication.shared))
+  assert(engine.lifecycleStates.last=="hidden")
+  NSApplication.shared.occlusionState=visible ? .visible : []
+  engine.handleDidChangeOcclusionState(Notification(name:NSApplication.didChangeOcclusionStateNotification,object:NSApplication.shared))
+  assert(engine.lifecycleStates.last==(visible ? "resumed" : "hidden"))
  }
 }
+}
+}
 print(original ? "PASS: original actual Swift constructor emits invalid-engine layout events and falsely returns a window on startup failure" : "PASS: corrected actual Swift constructor starts after plugins and before view/delegate; failure shuts down, retains no window and returns exactly one FlutterError; later creation succeeds")
+print(original ? "PASS: original late-engine lifecycle is unseeded; focus notification reports hidden while app is actually visible until an occlusion callback" : "PASS: corrected actual constructor synchronizes visible/hidden and active/inactive snapshots only after successful start; later focus and occlusion callbacks preserve legitimate states, with no callback on failed startup")
 '''
 
 
@@ -352,9 +441,115 @@ print("BOUNDARY: exact extracted Swift methods with asynchronous channel/engine 
 '''
 
 
+ENGINE_OBJC = r'''
+#import <Foundation/Foundation.h>
+#include <cassert>
+#include <iostream>
+using NSApplicationOcclusionState=NSUInteger;
+static const NSApplicationOcclusionState NSApplicationOcclusionStateVisible=1;
+namespace flutter { enum class AppLifecycleState { kHidden,kResumed,kInactive }; }
+@interface NSApplication:NSObject
+@property(nonatomic) NSApplicationOcclusionState occlusionState;
++ (instancetype)sharedApplication;
+@end
+@implementation NSApplication
++ (instancetype)sharedApplication { static NSApplication* instance; if(!instance) instance=[NSApplication new]; return instance; }
+@end
+@interface EngineControl:NSObject {
+  BOOL _active;
+  BOOL _visible;
+}
+@property(nonatomic) flutter::AppLifecycleState last;
+- (void)setApplicationState:(flutter::AppLifecycleState)state;
+- (void)handleWillBecomeActive:(NSNotification*)notification;
+- (void)handleWillResignActive:(NSNotification*)notification;
+- (void)handleDidChangeOcclusionState:(NSNotification*)notification;
+@end
+@implementation EngineControl
+- (instancetype)init { if(self=[super init]) { __INITIAL_STATE__ } return self; }
+- (void)setApplicationState:(flutter::AppLifecycleState)state { self.last=state; }
+__HANDLERS__
+@end
+int main() { @autoreleasepool {
+  NSApplication* app=[NSApplication sharedApplication];
+  NSNotification* note=[NSNotification notificationWithName:@"source-control-only" object:app];
+  app.occlusionState=NSApplicationOcclusionStateVisible;
+  EngineControl* original=[EngineControl new];
+  [original handleWillBecomeActive:note];assert(original.last==flutter::AppLifecycleState::kHidden);
+  [original handleWillResignActive:note];assert(original.last==flutter::AppLifecycleState::kHidden);
+  [original handleWillBecomeActive:note];assert(original.last==flutter::AppLifecycleState::kHidden);
+  std::cout<<"PASS: exact pinned engine initializes visibility false; late activate/resign callbacks report hidden despite an actually visible observed app.\n";
+  for (bool visible : {false,true}) {
+    for (bool active : {false,true}) {
+      app.occlusionState=visible ? NSApplicationOcclusionStateVisible : 0;
+      EngineControl* corrected=[EngineControl new];
+      [corrected handleDidChangeOcclusionState:note];
+      if(active) [corrected handleWillBecomeActive:note];
+      else [corrected handleWillResignActive:note];
+      using State=flutter::AppLifecycleState;
+      assert(corrected.last==(visible ? (active ? State::kResumed : State::kInactive) : State::kHidden));
+      [corrected handleWillResignActive:note];
+      assert(corrected.last==(visible ? State::kInactive : State::kHidden));
+      [corrected handleWillBecomeActive:note];
+      assert(corrected.last==(visible ? State::kResumed : State::kHidden));
+      app.occlusionState=0;[corrected handleDidChangeOcclusionState:note];
+      assert(corrected.last==State::kHidden);
+      [corrected handleWillBecomeActive:note];assert(corrected.last==State::kHidden);
+      app.occlusionState=NSApplicationOcclusionStateVisible;
+      [corrected handleDidChangeOcclusionState:note];assert(corrected.last==State::kResumed);
+    }
+  }
+  std::cout<<"PASS: exact pinned handlers synchronize all four actual visibility/activity states and preserve future focus/hide/restore callbacks without forced frames or geometry.\n";
+  std::cout<<"BOUNDARY: exact original engine handlers with observed-application doubles; no live viewer cause or packaged painting repair claim.\n";
+} }
+'''
+
+
+def engine_controls(output):
+    official = output / "official-engine"
+    official.mkdir()
+    bindings = {"flutter_version": "3.24.5", "engine_revision": ENGINE, "files": {}}
+    sources = {}
+    for relative, digest in ENGINE_FILES.items():
+        url = ("https://raw.githubusercontent.com/flutter/engine/" + ENGINE +
+               "/shell/platform/darwin/macos/framework/" + relative)
+        with urlopen(url, timeout=30) as response:
+            data = response.read(2 * 1024 * 1024)
+        assert P.sha(data) == digest, "Pinned public Flutter engine source drift: " + relative
+        (official / Path(relative).name).write_bytes(data)
+        sources[relative] = data.decode()
+        bindings["files"][relative] = {"url": url, "sha256": digest, "bytes": len(data)}
+    version_url = "https://raw.githubusercontent.com/flutter/flutter/3.24.5/bin/internal/engine.version"
+    with urlopen(version_url, timeout=30) as response:
+        version = response.read(128)
+    assert version == (ENGINE + "\n").encode(), "Pinned Flutter version no longer binds the expected engine"
+    (official / "engine.version").write_bytes(version)
+    bindings["engine_version_url"] = version_url
+    source = sources["Source/FlutterEngine.mm"]
+    initial = "_active = NO;\n  _visible = NO;"
+    assert source.count(initial) == 1
+    handlers = [extract_function(source, "- (void)" + name + ":(NSNotification*)notification {")
+                for name in ("handleWillBecomeActive", "handleWillResignActive", "handleDidChangeOcclusionState")]
+    bindings["extracted_methods"] = {handler.split(":", 1)[0]: P.sha(handler.encode()) for handler in handlers}
+    registrar = extract_function(sources["Source/FlutterAppLifecycleDelegate.mm"],
+                                 "- (void)addDelegate:(NSObject<FlutterAppLifecycleDelegate>*)delegate {")
+    assert "[_delegates addPointer:" in registrar and "handle" not in registrar
+    bindings["registrar_add_delegate_sha256"] = P.sha(registrar.encode())
+    (output / "engine-source-bindings.json").write_text(json.dumps(bindings, indent=2) + "\n")
+    path = output / "actual-engine-lifecycle.mm"
+    path.write_text(ENGINE_OBJC.replace("__INITIAL_STATE__", initial).replace("__HANDLERS__", "\n".join(handlers)))
+    binary = output / "actual-engine-lifecycle"
+    checked(["xcrun", "clang++", "-std=c++17", "-fobjc-arc", "-Wall", "-Wextra", "-Werror",
+             "-framework", "Foundation", str(path), "-o", str(binary)], output, "actual-engine-lifecycle-compile")
+    text = checked([str(binary)], output, "actual-engine-lifecycle")
+    assert "PASS: exact pinned engine initializes visibility false" in text
+    assert "PASS: exact pinned handlers synchronize all four" in text
+
+
 def native_controls(output, files, framework):
     compiler = shutil.which("swiftc")
     assert compiler and sys.platform == "darwin", "Native Mac Swift compiler required"
+    engine_controls(output)
     for label in ("original", "corrected"):
         sources = {name: (P.patch_file(name, data) if label == "corrected" and name in P.REPLACEMENTS else data)
                    for name, data in files.items()}
@@ -388,6 +583,8 @@ def native_controls(output, files, framework):
     if framework:
         framework = framework.resolve()
         assert framework.name == "FlutterMacOS.framework" and framework.is_dir(), "Actual FlutterMacOS framework required"
+        for name in ("FlutterEngine.h", "FlutterAppLifecycleDelegate.h"):
+            assert P.sha((framework / "Headers" / name).read_bytes()) == ENGINE_FILES["Headers/" + name], "Actual Flutter SDK public header drift: " + name
         module = output / "actual-plugin"
         module.mkdir()
         paths = []

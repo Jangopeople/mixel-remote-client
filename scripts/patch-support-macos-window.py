@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Guard pinned Mac subwindow engine startup and bounded close acknowledgement."""
+"""Guard pinned Mac engine startup, initial lifecycle and close acknowledgement."""
 import hashlib
 import io
 import json
@@ -21,7 +21,7 @@ OLD_DEP = b"""  desktop_multi_window:
     git:
       url: https://github.com/rustdesk-org/rustdesk_desktop_multi_window"""
 NEW_DEP = b"""  desktop_multi_window:
-    # Exact b47e8385; guarded Mac subwindow startup and close acknowledgement.
+    # Exact b47e8385; guarded Mac startup, initial lifecycle and close acknowledgement.
     path: .mixel-dependencies/desktop_multi_window"""
 REPLACEMENTS = {
     "macos/Classes/FlutterWindow.swift": (
@@ -34,6 +34,24 @@ REPLACEMENTS = {
     guard flutterViewController.engine.run(withEntrypoint: nil) else {
       flutterViewController.engine.shutDownEngine()
       return nil
+    }
+    // A late-created Flutter engine has not received earlier app notifications.
+    // Synchronize its public lifecycle callbacks from the current application,
+    // on this main-thread startup path, before attaching the view/delegate.
+    // These callback arguments are never posted to NotificationCenter.
+    let application = NSApplication.shared
+    let applicationIsActive = application.isActive
+    flutterViewController.engine.handleDidChangeOcclusionState(
+      Notification(name: NSApplication.didChangeOcclusionStateNotification,
+                   object: application))
+    if applicationIsActive {
+      flutterViewController.engine.handleWillBecomeActive(
+        Notification(name: NSApplication.willBecomeActiveNotification,
+                     object: application))
+    } else {
+      flutterViewController.engine.handleWillResignActive(
+        Notification(name: NSApplication.willResignActiveNotification,
+                     object: application))
     }
     window.contentViewController = flutterViewController
 
