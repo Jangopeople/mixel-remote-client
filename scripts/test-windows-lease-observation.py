@@ -19,6 +19,11 @@ spec = importlib.util.spec_from_file_location("lease_observation", ROOT / "scrip
 lease = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(lease)
 
+directory_spec = importlib.util.spec_from_file_location("directory_security_controls", ROOT / "scripts/test-support-directory-security.py")
+directory_security = importlib.util.module_from_spec(directory_spec)
+directory_spec.loader.exec_module(directory_security)
+DirectorySecurityControls = directory_security.DirectorySecurityControls
+
 MOCKS = r'''
         #[allow(non_snake_case)]
         mod native {
@@ -260,7 +265,10 @@ $position=$actual.IndexOf($marker);if($position -lt 0 -or $position -ne $actual.
 $begin=$standard.IndexOf("  `$comparison = @'`n");$end=$standard.IndexOf("`n'@",$begin)
 if($begin -lt 0 -or $end -le $begin) {throw 'Actual comparison extraction drift'}
 $begin += "  `$comparison = @'`n".Length
-Add-Type -TypeDefinition $actual.Insert($position,$standard.Substring($begin,$end-$begin)+"`n")
+$directoryHelper=[IO.File]::ReadAllText((Join-Path $Repository 'scripts/test-support-directory-security.cs'))
+$helperPosition=$directoryHelper.IndexOf('public static class DirectorySecurityPrototype {')
+if($helperPosition -lt 0 -or $helperPosition -ne $directoryHelper.LastIndexOf('public static class DirectorySecurityPrototype {')){throw 'Actual directory fixture class extraction drift'}
+Add-Type -TypeDefinition ("using System.Collections.Generic;`n"+$actual.Insert($position,$standard.Substring($begin,$end-$begin)+"`n")+"`n"+$directoryHelper.Substring($helperPosition))
 Add-Type -TypeDefinition ([IO.File]::ReadAllText((Join-Path $ControlRoot 'control.cs')))
 if([DirectCallerLaunchControl]::StartCurrentCallerNative('owned path préflight/lease-standard.exe') -ne 403 -or [DirectCallerLaunchControl]::Owned -ne 1) { throw 'Exact retained handoff failed' }
 foreach($variant in @(0,1,2,3,4,5,6,7,8,9,10,11,12,13)) {
@@ -318,7 +326,10 @@ Write-Host 'PASS: actual extracted current-caller creation uses explicit Unicode
         end = source.index("function Invoke-StandardLeaseControl(", start)
         helper = source[start:end]
         self.assertEqual(source.count("$text = Read-StandardFixtureResult $resultPath $deadline"), 2)
-        prior = source[:start] + source[end:]
+        prior = directory_security.project_standard_source(source)
+        prior_start = prior.index("function Read-StandardFixtureResult(")
+        prior_end = prior.index("function Invoke-StandardLeaseControl(", prior_start)
+        prior = prior[:prior_start] + prior[prior_end:]
         prior = prior.replace("$text = Read-StandardFixtureResult $resultPath $deadline",
                               "$text = [IO.File]::ReadAllText($resultPath)")
         self.assertEqual(hashlib.sha256(prior.encode()).hexdigest(),
@@ -532,6 +543,8 @@ public static class MixelOrdinaryTokenFixture {
   public static void CloseStartedObservations(){Closes++;Calls.Add("close");statuses.Clear();if(Scenario=="close")throw new InvalidOperationException("Mock retained close failure");}
 }
 '@
+# The additional directory observer has its own actual extracted native/PS suite.
+function Invoke-LeaseDirectorySecurityObservation {param([uint32]$ExpectedPid) if($ExpectedPid -lt 4001 -or $ExpectedPid -gt 4004){throw "Unowned mocked directory dependency"}}
 function Get-Process {param([int]$Id) $process=[ControlProcess]::new();if($Id -ne $PID -and [MixelOrdinaryTokenFixture]::Scenario -ceq 'process-session'){$process.SessionId=3};return $process}
 function Remove-Item {
   param([string]$LiteralPath)
@@ -690,7 +703,12 @@ Microsoft.PowerShell.Utility\Write-Host 'PASS: exact original consumed-acknowled
     Check(Owned.Count==0 && DiagnosticDescriptors.Count==0 && queryAllocation==IntPtr.Zero,"Previous diagnostic leaked ownership");
     Scenario="pass";OpenCalls=QueryCalls=ReadCloses=QueryFrees=0;IntPtr original=WorldEvent(ControlName);Scenario=scenario;return original;
   }
-  public static void Drain(){Scenario="pass";ClosePending();Check(Owned.Count==0 && WorldNames.Count==0 && DiagnosticDescriptors.Count==0 && queryAllocation==IntPtr.Zero,"Owned read-only cleanup incomplete");}
+  public static void Drain(){
+    // Failed native outputs never establish production ownership. The mock
+    // allocator alone releases its intentionally poisoned allocated output.
+    if((Scenario=="query5-allocation" || Scenario=="query5-free-close") && queryAllocation!=IntPtr.Zero){Check(!DiagnosticDescriptors.Contains(queryAllocation) && QueryFrees==0,"Failed query output was claimed/freed");Marshal.FreeHGlobal(queryAllocation);queryAllocation=IntPtr.Zero;}
+    Scenario="pass";ClosePending();Check(Owned.Count==0 && WorldNames.Count==0 && DiagnosticDescriptors.Count==0 && queryAllocation==IntPtr.Zero,"Owned read-only cleanup incomplete");
+  }
   public static void ControlRun(){
     foreach(string scenario in new[]{"pass","no-acl","null-dacl","other-ace","label-other","no-acl-poison","absent-dacl-poison","absent-label-poison"}){
       IntPtr original=Begin(scenario);SafeDescriptorFacts facts=ObserveWorldDescriptor(ControlName,original);
@@ -714,7 +732,7 @@ Microsoft.PowerShell.Utility\Write-Host 'PASS: exact original consumed-acknowled
         var errors=failure is AggregateException?((AggregateException)failure).InnerExceptions:new System.Collections.ObjectModel.ReadOnlyCollection<Exception>(new[]{failure});
         int firstCode=scenario=="open0" || scenario=="close0" || scenario=="sacl-query0"?0:5;
         Check(errors[0] is Win32Exception && ((Win32Exception)errors[0]).NativeErrorCode==firstCode,"Direct API or immediate last error clobbered; unknown native0 accepted");
-        if(scenario=="query5-free-close")Check(errors.Count==3 && ((Win32Exception)errors[1]).NativeErrorCode==6 && ((Win32Exception)errors[2]).NativeErrorCode==6,"Original query and both cleanup failures lost/order changed");
+        if(scenario=="query5-free-close")Check(errors.Count==2 && ((Win32Exception)errors[1]).NativeErrorCode==6 && QueryFrees==0,"Direct query error and owned close failure lost, or failed output freed");
       }
       Drain();
     }
@@ -725,6 +743,19 @@ Microsoft.PowerShell.Utility\Write-Host 'PASS: exact original consumed-acknowled
     Check(refused && OpenCalls==previous,"Wrong isolated GUID reached native reopen");Drain();refused=false;
     try{ObserveWorldDescriptor(ControlName,retained);}catch(InvalidOperationException){refused=true;}
     Check(refused && OpenCalls==previous,"Closed owner reached native reopen");
+  }
+'''
+        current_world = re.search(r'  public static SafeDescriptorFacts ObserveWorldDescriptor\(.*?\n  \}', mocked, re.S)
+        self.assertIsNotNone(current_world)
+        old_world, new_world, _ = directory_security.PROJECTION[3]
+        self.assertEqual(current_world[0].count(new_world.rstrip()), 1)
+        original_world = current_world[0].replace(new_world.rstrip(), old_world.rstrip()).replace("ObserveWorldDescriptor(", "OriginalObserveWorldDescriptor(")
+        original_failed_output_control = r'''
+  public static void OriginalFailedQueryOutputControl(){
+    IntPtr original=Begin("query5-allocation");Exception failure=null;
+    try{OriginalObserveWorldDescriptor(ControlName,original);}catch(Exception error){failure=error;}
+    Check(failure is Win32Exception && ((Win32Exception)failure).NativeErrorCode==5 && QueryFrees==1 && ReadCloses==1 && Owned.Contains(original),"Exact prior failed-query output ownership gap no longer reproduces");
+    Drain();
   }
 '''
         absent_guard = "    if(!daclPresent) dacl=IntPtr.Zero;\n    if(!saclPresent) sacl=IntPtr.Zero;\n"
@@ -744,7 +775,7 @@ Microsoft.PowerShell.Utility\Write-Host 'PASS: exact original consumed-acknowled
     }
   }
 '''
-        mocked = mocked[:mocked.rindex("}")] + mocks + original_reader + original_control + "\n}"
+        mocked = mocked[:mocked.rindex("}")] + mocks + original_reader + original_control + original_world + original_failed_output_control + "\n}"
         job = re.search(r'  public static bool StartedJobMembership\(int pid\) \{.*?\n  \}', source, re.S)
         self.assertIsNotNone(job)
         job_control = r'''
@@ -769,6 +800,7 @@ if($PSVersionTable.PSEdition -cne $ExpectedEdition -or ($ExpectedEdition -ceq 'D
 Add-Type -TypeDefinition ([IO.File]::ReadAllText((Join-Path $ControlRoot 'actual.cs')))
 Add-Type -TypeDefinition ([IO.File]::ReadAllText((Join-Path $ControlRoot 'mocked.cs')))
 [MixelIsolatedLeaseControl]::OriginalAbsentOutputsControl()
+[MixelIsolatedLeaseControl]::OriginalFailedQueryOutputControl()
 [MixelIsolatedLeaseControl]::ControlRun()
 foreach($variant in @(0,1,2,3)) {
   [MixelOrdinaryTokenFixture]::Variant=$variant;[MixelOrdinaryTokenFixture]::Calls=0;$value=$null;$failure=$null
@@ -797,7 +829,7 @@ if($leaseContextFailures.Count -ne 0 -or $script:printed.Count -ne 2 -or -not $s
 $owner=[MixelIsolatedLeaseControl]::Begin('query5-free-close');Invoke-LeaseWorldDescriptorObservation ([MixelIsolatedLeaseControl]::ControlName) $owner local
 [MixelIsolatedLeaseControl]::Drain()
 if($leaseContextFailures.Count -ne 2 -or -not $script:printed[2].Contains('nativeErrors=0; fatalAfterOriginalGate=True;') -or
-   -not $script:printed[3].Contains('nativeErrors=5,6,6; fatalAfterOriginalGate=True;')) {throw 'Deferred fatal failures lost primary/cleanup errors including native0'}
+   -not $script:printed[3].Contains('nativeErrors=5,6; fatalAfterOriginalGate=True;')) {throw 'Deferred fatal failures lost primary/cleanup errors including native0'}
 $gate=$ast.FindAll({param($node)$node -is [Management.Automation.Language.IfStatementAst] -and $node.Extent.Text.StartsWith('if ($leaseContextFailures.Count -gt 0)')},$true)
 if($gate.Count -ne 1 -or $gate[0].Extent.StartOffset -lt $source.IndexOf('PASS: closed wrong-object control leaves no GUID lease') -or
    $gate[0].Extent.StartOffset -lt $source.IndexOf('if ($currentCallerFailure) { throw $currentCallerFailure }')) {throw 'Diagnostic replaced or preceded unchanged original terminal'}

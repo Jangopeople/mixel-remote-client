@@ -13,12 +13,22 @@ $last = $launchSource.IndexOf("`n'@ }", $class)
 if ($class -lt 0 -or $first -lt 0 -or $last -le $first) { throw 'Exact normal ordinary-token fixture is missing.' }
 if (-not ('MixelOrdinaryTokenFixture' -as [type])) {
   $normalSource = $launchSource.Substring($first, $last - $first)
+  $directorySecuritySource = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'test-support-directory-security.cs'))
+  $directorySecurityClass = $directorySecuritySource.IndexOf('public static class DirectorySecurityPrototype {')
+  if ($directorySecurityClass -lt 0 -or $directorySecurityClass -ne $directorySecuritySource.LastIndexOf('public static class DirectorySecurityPrototype {')) { throw 'Exact read-only directory security helper changed.' }
   $marker = '  public static int StartStandardUser(string executable, string username, string password) {'
   $position = $normalSource.IndexOf($marker)
   if ($position -lt 0 -or $position -ne $normalSource.LastIndexOf($marker)) { throw 'Exact normal standard-launch comparison boundary changed.' }
   # Add only a documented secondary-launch comparison and retained-token SID
   # check to the test class; preserve its original customer launch and cleanup.
   $comparison = @'
+  public static DirectorySecurityPrototype.Observation StartedDirectorySecurityFacts(int pid,string ownedSid) {
+    // The existing fixture created and verified this QA account locally. Only
+    // redacted byte equality leaves the helper; neither SID nor account name is output.
+    var identity=new SecurityIdentifier(ownedSid);
+    byte[] bytes=new byte[identity.BinaryLength];identity.GetBinaryForm(bytes,0);
+    return DirectorySecurityPrototype.ObserveRetained(new DirectorySecurityPrototype.NativeApi(),pid,StartedProcesses,bytes);
+  }
   // Direct ordinary creation inherits only this Actions caller's existing
   // context. It never substitutes a secondary/linked token or desktop.
   [DllImport("kernel32.dll", CharSet=CharSet.Unicode, ExactSpelling=true, SetLastError=true)]
@@ -386,7 +396,7 @@ if (-not ('MixelOrdinaryTokenFixture' -as [type])) {
     } finally { CloseHandle(token); }
   }
 '@
-  Add-Type -TypeDefinition $normalSource.Insert($position, $comparison + "`n")
+  Add-Type -TypeDefinition ("using System.Collections.Generic;`n" + $normalSource.Insert($position, $comparison + "`n") + "`n" + $directorySecuritySource.Substring($directorySecurityClass))
 }
 if (-not [MixelOrdinaryTokenFixture]::Elevated($PID)) { throw 'Owned standard-account qualification requires the elevated isolated runner.' }
 
@@ -541,10 +551,11 @@ public static class MixelIsolatedLeaseControl {
     try {
       IntPtr owner,group,dacl,sacl;
       uint result=ReadOnlyGetSecurityInfo(handle,6,0x14,out owner,out group,out dacl,out sacl,out descriptor);
-      if(descriptor!=IntPtr.Zero) DiagnosticDescriptors.Add(descriptor);
-      // GetSecurityInfo returns its own DWORD error, not the thread's last error.
-      if(result!=0) throw new Win32Exception(unchecked((int)result),"Owned World event DACL/LABEL query failed; nativeError="+result.ToString(System.Globalization.CultureInfo.InvariantCulture));
+      // GetSecurityInfo returns its own DWORD error. Failed outputs do not
+      // establish allocation ownership, even when the output pointer is nonzero.
+      if(result!=0) { descriptor=IntPtr.Zero; throw new Win32Exception(unchecked((int)result),"Owned World event DACL/LABEL query failed; nativeError="+result.ToString(System.Globalization.CultureInfo.InvariantCulture)); }
       if(descriptor==IntPtr.Zero) throw new InvalidOperationException("Owned World event descriptor query returned no allocation");
+      DiagnosticDescriptors.Add(descriptor);
       // Read the requested label from the returned descriptor, independently
       // of GetSecurityInfo's optional ppSacl output contract for a full SACL.
       bool daclPresent,saclPresent,defaulted;
@@ -602,7 +613,7 @@ public static class MixelIsolatedLeaseControl {
 }
 '@ }
 
-function Write-LeaseContextFailure([ValidateSet('job-membership','job-limits','explicit-directory-access','owned-world-descriptor')][string]$Operation, [Exception]$Failure) {
+function Write-LeaseContextFailure([ValidateSet('job-membership','job-limits','explicit-directory-access','explicit-directory-security','owned-world-descriptor')][string]$Operation, [Exception]$Failure) {
   $actual = $Failure
   for ($depth = 0; $depth -lt 8 -and $actual -is [Management.Automation.MethodInvocationException] -and $actual.InnerException; $depth++) {
     $actual = $actual.InnerException
@@ -776,6 +787,83 @@ function Invoke-LeaseChildDirectoryAccessObservation([uint32]$ControlPid) {
     # invented Win32 errors or proof about CreateEvent's actual namespace.
     if ($failures.Count -gt 0) { throw [AggregateException]::new('Owned explicit-directory observation failed.', $failures) }
   } catch { Write-LeaseContextFailure explicit-directory-access $_.Exception }
+}
+
+function Invoke-LeaseDirectorySecurityObservation([uint32]$ExpectedPid) {
+  try {
+    if ($ExpectedPid -eq 0 -or -not $ownedSid) { throw 'Retained directory observation requires the exact child and owned QA identity.' }
+    $facts = [MixelOrdinaryTokenFixture]::StartedDirectorySecurityFacts($ExpectedPid,$ownedSid)
+    if ($facts -isnot [DirectorySecurityPrototype+Observation] -or $facts.schema -ne 1 -or $facts.pid -ne $ExpectedPid -or
+        $facts.scope -cne 'ExplicitDirectorySecurityOnly' -or $facts.context -cne 'ParentCall' -or
+        $facts.identityComparison -cne 'PrimaryTokensOnly' -or $facts.parentCallingThreadTokenMeasured -or
+        $facts.actualEventRouteMeasured -or $facts.effectiveAccessCalculated -or $facts.objectsCreated -or $facts.causeEstablished -or
+        $facts.directories.Count -ne 2 -or $facts.directories[0].pathKind -cne 'global' -or $facts.directories[1].pathKind -cne 'child-session') {
+      throw 'Read-only directory security facts changed their exact retained subject or measurement scope.'
+    }
+    $json = $facts | ConvertTo-Json -Depth 8 -Compress
+    if ($json.Length -gt 131072 -or $json.Contains('S-1-') -or $json.Contains('SecurityIdentifier')) { throw 'Read-only directory security output exceeds its bounded redacted schema.' }
+    Write-Host "OBSERVED: parent read-only explicit directory security; controlPid=$ExpectedPid; information=DACL4,LABEL16; requestedAccess=READ_CONTROL; ActualEventRouteUnmeasured=True; $json."
+    $failures = [Collections.Generic.List[Exception]]::new()
+    foreach ($stage in @('load','unload')) {
+      $expected = if ($stage -ceq 'load') { 'available' } else { 'unloaded' }
+      if ($facts.$stage -cne $expected) {
+        $failures.Add([InvalidOperationException]::new("Directory security module stage incomplete: $stage=$($facts.$stage)."))
+        $code = if ($stage -ceq 'load') { $facts.loadError } else { $facts.unloadError }
+        if (($stage -ceq 'unload' -and $facts.unload -ceq 'error') -or
+            ($stage -ceq 'load' -and $facts.load -cin @('system-directory-error','load-error','api-unavailable'))) {
+          if ($null -ne $code) { $failures.Add([ComponentModel.Win32Exception]::new([int]$code,"Directory security native module failure: stage=$stage.")) }
+        }
+      }
+    }
+    foreach ($subject in @('current','child')) {
+      $token = $facts.$subject
+      if ($token.open -cne 'available' -or $token.user -cne 'available' -or $token.logon -cnotin @('available','absent') -or
+          $token.integrity -cne 'available' -or $token.close -cne 'closed') {
+        $failures.Add([InvalidOperationException]::new("Directory security primary comparison incomplete: subject=$subject."))
+      }
+      foreach ($field in @('open','user','logon','integrity','close')) {
+        if ($token.$field -ceq 'error' -and $null -ne $token.($field + 'Error')) {
+          $failures.Add([ComponentModel.Win32Exception]::new([int]$token.($field + 'Error'),"Directory security native primary comparison failure: subject=$subject; stage=$field."))
+        }
+      }
+    }
+    foreach ($row in $facts.directories) {
+      # A literal nonzero NTSTATUS is an explicit read-access result. Do not
+      # invent a Win32 mapping or use it to diagnose the unchanged event route.
+      if ($row.open -ceq 'nt-error') {
+        if ($null -eq $row.ntStatus -or $row.ntStatus -eq 0 -or $row.close -cne 'not-opened') { throw 'Read-only directory security NT result or failed-output ownership changed.' }
+        continue
+      }
+      if ($row.open -cne 'opened' -or $row.ntStatus -ne 0 -or $row.close -cne 'closed') {
+        $failures.Add([InvalidOperationException]::new("Directory security open/close contract incomplete: path=$($row.pathKind)."))
+      }
+      if ($row.close -ceq 'error' -and $null -ne $row.closeError) {
+        $failures.Add([ComponentModel.Win32Exception]::new([int]$row.closeError,"Directory security owned directory close failed: path=$($row.pathKind)."))
+      }
+      foreach ($field in @('dacl','label')) {
+        $query = $row.$field
+        if ($query.information -ne $(if ($field -ceq 'dacl') { 4 } else { 16 }) -or $query.aces.Count -gt 64) {
+          throw 'Read-only directory security query identity or ACE bound changed.'
+        }
+        if ($query.status -ceq 'error') {
+          $code = [BitConverter]::ToInt32([BitConverter]::GetBytes([uint32]$query.nativeError),0)
+          $failures.Add([ComponentModel.Win32Exception]::new($code,"Directory security direct query failed: path=$($row.pathKind); information=$($query.information)."))
+        } elseif ($query.status -cne 'available' -or $query.free -cne 'freed' -or
+                  $query.parse -cnotin @('complete','empty','absent','null','unknown-ace')) {
+          $failures.Add([InvalidOperationException]::new("Directory security query/getter/cleanup incomplete: path=$($row.pathKind); information=$($query.information)."))
+        }
+        if ($query.parse -cin @('control-error','getter-error','acl-api-error') -and $null -ne $query.getterError) {
+          $failures.Add([ComponentModel.Win32Exception]::new([int]$query.getterError,"Directory security native descriptor/ACL getter failed: path=$($row.pathKind); information=$($query.information)."))
+        }
+        if ($query.free -ceq 'error' -and $null -ne $query.freeError) {
+          $failures.Add([ComponentModel.Win32Exception]::new([int]$query.freeError,"Directory security owned descriptor release failed: path=$($row.pathKind); information=$($query.information)."))
+        }
+        # Unknown ACEs are reported as incomplete facts, never a permission
+        # calculation. The bounded header facts remain useful and are not errors.
+      }
+    }
+    if ($failures.Count -gt 0) { throw [AggregateException]::new('Read-only explicit directory security observation incomplete.', $failures) }
+  } catch { Write-LeaseContextFailure explicit-directory-security $_.Exception }
 }
 
 function Invoke-LeaseWorldDescriptorObservation([string]$Name, [IntPtr]$Handle, [string]$Namespace) {
@@ -1016,6 +1104,7 @@ function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner'
     Invoke-LeaseJobObservation $controlPid
     Invoke-LeaseChildJobLimitsObservation $controlPid
     Invoke-LeaseChildDirectoryAccessObservation $controlPid
+    Invoke-LeaseDirectorySecurityObservation $controlPid
     if (-not $ObserveOnly -and ($record.sourceStatus -cne $ExpectedStatus -or
         $record.rawOpenError -ne $ExpectedError -or $record.attestation -cne $ExpectedProof -or
         $record.requiresClick -isnot [bool] -or $record.requiresClick -ne $ExpectedRequired -or
@@ -1106,6 +1195,7 @@ function Invoke-CurrentCallerLeaseControl([ValidateSet('probe','owner')][string]
     Invoke-LeaseJobObservation $controlPid
     Invoke-LeaseChildJobLimitsObservation $controlPid
     Invoke-LeaseChildDirectoryAccessObservation $controlPid
+    Invoke-LeaseDirectorySecurityObservation $controlPid
     if ($record.sourceStatus -cne $ExpectedStatus -or $record.rawOpenError -ne $ExpectedError -or
         $record.attestation -cne $ExpectedProof -or $record.requiresClick -ne $ExpectedRequired -or $record.ownerFailed) {
       throw ('Actual current-caller source lease classification mismatch: ' + ($record | ConvertTo-Json -Compress))
