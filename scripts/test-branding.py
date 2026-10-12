@@ -71,6 +71,15 @@ with tempfile.TemporaryDirectory(prefix="mixel-branding-") as directory:
     first = run(BRANDING_COMMAND, cwd=base, env=env)
     assert "native loaders, protocol handlers, Linux app identity and relay defaults verified" in first.stdout
     assert (repo / "flutter/lib/mixel_support_invite.dart").is_file()
+    assert "path: .mixel-dependencies/desktop_multi_window" in (repo / "flutter/pubspec.yaml").read_text(encoding="utf-8")
+    owned_window = repo / "flutter/.mixel-dependencies/desktop_multi_window"
+    window_proof = json.loads((owned_window / ".mixel-source.json").read_bytes())
+    assert window_proof["commit"] == "b47e8385e5a75d38319ad706a64b0ead3108b093"
+    assert window_proof["tree"] == "ee184480a0e519b9f51f7496d3d90674782481d6"
+    window_source = (owned_window / "macos/Classes/FlutterWindow.swift").read_text(encoding="utf-8")
+    assert "guard flutterViewController.engine.run(withEntrypoint: nil) else {" in window_source
+    assert "window_engine_start_failed" in (owned_window / "macos/Classes/FlutterMultiWindowPlugin.swift").read_text(encoding="utf-8")
+    print("PASS: full branding resolves the owned exact Mac window plugin and propagates startup failure")
     assert (repo / "flutter/assets/icon.png").read_bytes() == (ROOT / "branding/icon-512.png").read_bytes()
     assert not (repo / "flutter/assets/icon.svg").exists()
     common = (repo / "flutter/lib/common.dart").read_text(encoding="utf-8")
@@ -573,5 +582,14 @@ print("PASS: actual Debian generator child explicitly uses UTF-8 and preserves t
     footer_source.write_text(original_footer, encoding="utf-8")
     assert rejected.returncode != 0 and "Pinned Flutter support footer changed" in rejected.stderr
     print("PASS: full branding rejects a changed Flutter footer instead of retaining an unverified destination")
+
+    window_source_file = owned_window / "macos/Classes/FlutterWindow.swift"
+    original_window = window_source_file.read_bytes()
+    window_source_file.write_bytes(original_window.replace(
+        b"guard flutterViewController.engine.run(withEntrypoint: nil) else {", b"guard true else {", 1))
+    rejected = subprocess.run(BRANDING_COMMAND, cwd=base, env=env, capture_output=True, text=True, encoding="utf-8")
+    window_source_file.write_bytes(original_window)
+    assert rejected.returncode != 0 and "Mac subwindow startup patch" in rejected.stderr
+    print("PASS: full branding refuses a corrupted subwindow startup guard instead of accepting a dead engine")
 
 print("PASS: all full-pipeline branding regression checks")

@@ -156,6 +156,7 @@ jobs:
         working-directory: rustdesk
         run: |
           RDREPO=. python3 ../scripts/patch-support-macos-texture.py
+          RDREPO=. python3 ../scripts/patch-support-macos-window.py
           pushd flutter && sed -i -e 's/extended_text: 14.0.0/extended_text: 13.0.0/g' pubspec.yaml && flutter pub get && popd
           ~/.cargo/bin/flutter_rust_bridge_codegen \
             --rust-input ./src/flutter_ffi.rs \
@@ -280,6 +281,7 @@ jobs:
           python3 scripts/test-support-clipboard.py --native-x11
           python3 scripts/test-support-video.py
           python3 scripts/test-support-macos.py
+          python3 scripts/test-support-macos-window.py
           python3 scripts/test-support-wakelock.py
           python3 scripts/test-branding.py
           dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart
@@ -494,6 +496,7 @@ jobs:
           python3 scripts/test-support-clipboard.py
           python3 scripts/test-support-video.py
           python3 scripts/test-support-macos.py
+          python3 scripts/test-support-macos-window.py
           python3 scripts/test-support-wakelock.py
           python3 scripts/test-branding.py
           dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart

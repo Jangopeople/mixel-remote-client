@@ -47,6 +47,7 @@ python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-windows-clipboard.py"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-video.py"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos.py"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-texture.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-window.py"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-wakelock.py"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-flutter-branding.py" --repo "$RDREPO" --branding "$BRANDING"
 
