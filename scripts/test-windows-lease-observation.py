@@ -149,7 +149,7 @@ class ObservationControls(unittest.TestCase):
         writers = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
                    and isinstance(node.func, ast.Attribute) and node.func.attr == "write_text"
                    and isinstance(node.func.value, ast.Name) and node.func.value.id == "script"]
-        self.assertEqual(len(writers), 4)
+        self.assertEqual(len(writers), 5)
         csharp_writers = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
                          and isinstance(node.func, ast.Attribute) and node.func.attr == "write_text"
                          and node.args and isinstance(node.args[0], ast.Name) and node.args[0].id == "csharp"]
@@ -329,7 +329,7 @@ Write-Host "Actual mocked four-phase control PowerShell: $($PSVersionTable.PSVer
 $source=[IO.File]::ReadAllText((Join-Path $Repository 'scripts/test-support-lease-standard-windows.ps1'))
 $tokens=$null;$errors=$null;$ast=[Management.Automation.Language.Parser]::ParseInput($source,[ref]$tokens,[ref]$errors)
 if($errors.Count) { throw 'Current helper does not parse' }
-foreach($name in @('Write-LeaseContextFailure','Invoke-LeaseJobObservation','Assert-StandardLeaseSafeResult','Read-StandardCallingThreadTokens','Invoke-CurrentCallerLeaseControl','Invoke-CurrentCallerLeaseFour')) {
+foreach($name in @('Write-LeaseContextFailure','Invoke-LeaseJobObservation','Read-StandardChildJobLimits','Invoke-LeaseChildJobLimitsObservation','Assert-StandardLeaseSafeResult','Read-StandardCallingThreadTokens','Invoke-CurrentCallerLeaseControl','Invoke-CurrentCallerLeaseFour')) {
   $matches=$ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq $name},$true)
   if($matches.Count -ne 1) { throw "Missing exact current function $name" }
   if($name -ceq 'Invoke-CurrentCallerLeaseControl') { $correctedControl=$matches[0].Extent.Text }
@@ -356,6 +356,8 @@ public static class MixelOrdinaryTokenFixture {
     string status="ownerFailed="+(failed?"true":"false")+";ownerError="+(failed?"6":"none")+";kernel="+kernel+";probeError="+probe+";memoryActive="+(memory?"true":"false");
     string json="{\"pid\":"+pid+",\"sourceStatus\":\""+status+"\",\"rawOpenError\":"+error+",\"attestation\":\""+proof+"\",\"requiresClick\":"+(click?"true":"false")+",\"ownerFailed\":"+(failed?"true":"false")+"}";
     File.WriteAllText(Path.Combine(Root,"fixture-result.json"),json);
+    if(File.ReadAllText(Path.Combine(Root,"fixture-job-limits.request"))!="observe")throw new InvalidOperationException("Missing child-self job observation request");
+    File.WriteAllText(Path.Combine(Root,"fixture-job-limits.json"),"{\"schema\":1,\"pid\":"+pid+",\"inAnyJob\":true,\"membershipStatus\":\"available\",\"membershipError\":0,\"uiStatus\":\"available\",\"uiError\":0,\"uiReturned\":4,\"uiFlags\":0,\"extendedStatus\":\"available\",\"extendedError\":0,\"extendedReturned\":144,\"extendedFlags\":8192}");
     string close=Scenario=="token-close"?"failed":"closed";int closeError=Scenario=="token-close"?0:0;
     File.WriteAllText(Path.Combine(Root,"fixture-thread-token-initial.json"),"{\"schema\":1,\"pid\":"+pid+",\"records\":[{\"phase\":\"OpenEventW\",\"tid\":103,\"threadStatus\":\"absent\",\"threadError\":1008,\"threadType\":0,\"threadImpersonationLevel\":0,\"primaryStatus\":\"available\",\"primaryError\":0,\"primaryType\":1,\"threadLogonMatchesPrimary\":null,\"threadClose\":\"not-opened\",\"threadCloseError\":0,\"primaryClose\":\""+close+"\",\"primaryCloseError\":"+closeError+"}]}");
     return pid;
@@ -406,8 +408,9 @@ foreach($scenario in $scenarios) {
   if($positive) {
     if(([MixelOrdinaryTokenFixture]::Calls -join ',') -cne 'probe:4001,owner:4002,probe:4003,stop,close,probe:4004,stop,close' -or [MixelOrdinaryTokenFixture]::Disposed -ne 8) {throw 'Four phase ownership/order or wrapper disposal changed'}
     if(@(Get-ChildItem -LiteralPath $fixtureRoot -Filter 'fixture-release-*').Count -ne 0) {throw 'Confirmed exited caller acknowledgment can leak into the unchanged standard terminal after PID reuse'}
-    if($script:printed.Count -ne 13 -or @($script:printed | Where-Object {$_ -like 'OBSERVED: direct current Actions caller GUID functional control;*' -and $_.Contains('genuineStandardQualified=False; fullEightQualified=False; customerAppQualified=False;')}).Count -ne 4 -or
-       @($script:printed | Where-Object {$_ -like 'OBSERVED: retained owned source child job membership;*' -and $_.Contains('childJobLimitsMeasured=False; namedDirectoryMeasured=False.')}).Count -ne 4 -or $leaseContextFailures.Count -ne 0) {throw 'Diagnostic output silently became standard/app qualification or lost native records'}
+    if($script:printed.Count -ne 17 -or @($script:printed | Where-Object {$_ -like 'OBSERVED: direct current Actions caller GUID functional control;*' -and $_.Contains('genuineStandardQualified=False; fullEightQualified=False; customerAppQualified=False;')}).Count -ne 4 -or
+       @($script:printed | Where-Object {$_ -like 'OBSERVED: retained owned source child job membership;*' -and $_.Contains('childJobLimitsMeasured=False; namedDirectoryMeasured=False.')}).Count -ne 4 -or
+       @($script:printed | Where-Object {$_ -like 'OBSERVED: owned source child immediate job limits;*' -and $_.Contains('immediateJobOnly=True; completeLimitsMeasured=True; namedDirectoryMeasured=False; causeEstablished=False;')}).Count -ne 4 -or $leaseContextFailures.Count -ne 0) {throw 'Diagnostic output silently became standard/app qualification or lost native records'}
   } else {
     if($scenario -ceq 'remove-denied' -and ($message -cne 'Mock existing acknowledgment cleanup denied' -or
        -not (Test-Path -LiteralPath (Join-Path $fixtureRoot 'fixture-release-4001')) -or
@@ -451,7 +454,8 @@ Microsoft.PowerShell.Utility\Write-Host 'PASS: exact original consumed-acknowled
         self.assertIn("ReadOnlyGetSecurityInfo(handle,6,0x14", mocked)
         self.assertNotIn("AccessCheck", mocked)
         self.assertNotIn("DuplicateToken", source)
-        self.assertNotIn("QueryInformationJobObject", source)
+        self.assertNotIn("QueryInformationJobObject", actual)
+        self.assertNotRegex(source, r"static extern [^\n]*QueryInformationJobObject")
         mocked = mocked.replace("Marshal.GetLastWin32Error()", "MockLastError()")
         mocks = r'''
   public static string Scenario="pass";
@@ -769,7 +773,7 @@ if sys.argv[1]=='scripts/test-support-lease.py':
         self.assertEqual(body.count('fixture_thread_tokens::observe("CreateEventExW-unnamed");'), 1)
         for call in ('CreateEventExW(&attributes, name.as_ptr(), 0, 0x00100000)', 'OpenEventW(0x00100000, 0, name.as_ptr())'):
             self.assertIn(call, body)
-        stripped = re.sub(r'        fixture_thread_tokens::observe\("[^"]+"\);\n', '', body).replace(lease.STANDARD_THREAD_BRIDGE, '', 1)
+        stripped = re.sub(r'        fixture_thread_tokens::observe\("[^"]+"\);\n', '', body).replace(lease.STANDARD_THREAD_BRIDGE, '', 1).replace(lease.STANDARD_JOB_BRIDGE, '', 1)
         marker = "\n}\n\npub fn hold_support_invite_attended_lease()"
         expected = lease.isolated_source(original, Path("owned-control"), "mixel-standard-control-", "Global\\Mixel-Remote-Standard-Lease-" + "a" * 32)
         expected = expected.replace(marker, "\n" + lease.standard_unnamed_bridge(original) + marker, 1)
@@ -779,10 +783,208 @@ if sys.argv[1]=='scripts/test-support-lease.py':
         self.assertLess(main.index('fixture_enable_thread_tokens(&directory)'),main.index('hold_support_invite_attended_lease();'))
         self.assertLess(main.index('fixture_flush_thread_tokens(&directory,false)'),main.index('std::fs::rename(directory.join("fixture-result.new")'))
         self.assertLess(main.index('fixture_flush_thread_tokens(&directory,true)'),main.index('std::fs::rename(directory.join("fixture-unnamed-result.new")'))
+        self.assertLess(main.index('fixture_observe_job_limits(&directory)'),main.index('hold_support_invite_attended_lease();'))
+        self.assertIn('.write(true).create_new(true)',lease.STANDARD_JOB_BRIDGE)
+        for forbidden in ("AssignProcessToJobObject", "SetInformationJobObject", "CreateJobObject", "OpenJobObject", "AdjustToken", "Impersonate", "SetThreadToken"):
+            self.assertNotIn(forbidden,lease.STANDARD_JOB_BRIDGE)
         self.assertIn('.write(true).create_new(true)',lease.STANDARD_THREAD_BRIDGE)
         self.assertNotIn('std::fs::rename',lease.STANDARD_THREAD_BRIDGE)
         for forbidden in ("Impersonate", "RevertToSelf", "SetThreadToken", "SetTokenInformation", "AdjustToken", "NtOpen", "SetSecurity", "LogonUser"):
             self.assertNotIn(forbidden, lease.STANDARD_THREAD_BRIDGE)
+
+    def test_child_self_job_queries_exact_layout_errors_and_immutable_publication(self):
+        rustc = os.environ.get("RUSTC_BIN") or shutil.which("rustc")
+        self.assertTrue(rustc)
+        bridge = lease.STANDARD_JOB_BRIDGE.replace("    #[cfg(windows)]\n", "")
+        start = bridge.index('        #[link(name="kernel32")]')
+        end = bridge.index('\n        fn query(', start)
+        mocked = r'''
+        #[allow(non_snake_case)]
+        mod native {
+            use super::{c_void,Handle,ExtendedLimit};
+            use std::sync::atomic::{AtomicU32,Ordering};
+            pub static VARIANT:AtomicU32=AtomicU32::new(0);
+            pub static ERROR:AtomicU32=AtomicU32::new(0);
+            pub static CALLS:AtomicU32=AtomicU32::new(0);
+            pub unsafe fn GetCurrentProcess()->Handle {101usize as _}
+            pub unsafe fn GetLastError()->u32 {ERROR.load(Ordering::SeqCst)}
+            pub unsafe fn IsProcessInJob(process:Handle,job:Handle,present:*mut i32)->i32 {
+                assert_eq!(process as usize,101);assert!(job.is_null());assert_eq!(*present,0);
+                let v=VARIANT.load(Ordering::SeqCst);*present=if v==1 {0} else {1};
+                ERROR.store(if v==3 {0} else {5},Ordering::SeqCst);
+                if v==2 || v==3 {0} else {1}
+            }
+            pub unsafe fn QueryInformationJobObject(job:Handle,kind:i32,data:*mut c_void,size:u32,returned:*mut u32)->i32 {
+                assert!(job.is_null());assert_eq!(*returned,0);
+                assert!(matches!((kind,size),(4,4)|(9,144)));
+                assert!(std::slice::from_raw_parts(data.cast::<u8>(),size as usize).iter().all(|x|*x==0));
+                let order=CALLS.fetch_add(1,Ordering::SeqCst);assert_eq!(kind,if order%2==0 {4} else {9});
+                let v=VARIANT.load(Ordering::SeqCst);
+                if kind==4 {*(data as *mut u32)=if v==12 {u32::MAX} else {64};}
+                else {(*(data as *mut ExtendedLimit)).basic.flags=if v==12 {u32::MAX} else {8192};}
+                *returned=if kind==4 && v==8 {3} else if kind==9 && v==9 {143}
+                    else if kind==4 && v==10 {5} else if kind==9 && v==11 {145} else {size};
+                let fail=(kind==4 && matches!(v,4|5)) || (kind==9 && matches!(v,6|7|13));
+                ERROR.store(if !fail || matches!(v,5|7) {0} else if v==13 {u32::MAX} else if kind==4 {5} else {87},Ordering::SeqCst);
+                if fail {0} else {1}
+            }
+        }
+        use native::{GetCurrentProcess,GetLastError,IsProcessInJob,QueryInformationJobObject};
+'''
+        bridge = bridge[:start] + mocked + bridge[end:]
+        tests = r'''
+        #[test]
+        fn actual_job_observer() {
+            use std::sync::atomic::Ordering;
+            let root=std::path::PathBuf::from(std::env::var("MIXEL_JOB_CONTROL_DIR").unwrap());
+            observe(&root);assert_eq!(native::CALLS.load(Ordering::SeqCst),0);
+            assert!(!root.join("fixture-job-limits.json").exists());
+            for variant in 0..14 {
+                let dir=root.join(variant.to_string());std::fs::create_dir(&dir).unwrap();
+                std::fs::write(dir.join("fixture-job-limits.request"),"observe").unwrap();
+                native::VARIANT.store(variant,Ordering::SeqCst);native::CALLS.store(0,Ordering::SeqCst);
+                observe(&dir);
+                let text=std::fs::read_to_string(dir.join("fixture-job-limits.json")).unwrap();
+                assert_eq!(native::CALLS.load(Ordering::SeqCst),if matches!(variant,1|2|3) {0} else {2});
+                assert!(text.contains(&format!("\"pid\":{}",std::process::id())));
+                match variant {
+                    0=>{assert!(text.contains("\"uiFlags\":64"));assert!(text.contains("\"extendedFlags\":8192"));},
+                    1=>{assert!(text.contains("\"inAnyJob\":false"));assert!(text.contains("\"uiStatus\":\"not-in-job\""));},
+                    2=>assert!(text.contains("\"membershipStatus\":\"error\",\"membershipError\":5")),
+                    3=>assert!(text.contains("\"membershipStatus\":\"error\",\"membershipError\":0")),
+                    4=>assert!(text.contains("\"uiStatus\":\"error\",\"uiError\":5,\"uiReturned\":4,\"uiFlags\":null")),
+                    5=>assert!(text.contains("\"uiStatus\":\"error\",\"uiError\":0,\"uiReturned\":4,\"uiFlags\":null")),
+                    6=>assert!(text.contains("\"extendedStatus\":\"error\",\"extendedError\":87")),
+                    7=>assert!(text.contains("\"extendedStatus\":\"error\",\"extendedError\":0")),
+                    8=>assert!(text.contains("\"uiStatus\":\"size\",\"uiError\":0,\"uiReturned\":3,\"uiFlags\":null")),
+                    9=>assert!(text.contains("\"extendedStatus\":\"size\",\"extendedError\":0,\"extendedReturned\":143,\"extendedFlags\":null")),
+                    10=>assert!(text.contains("\"uiReturned\":5,\"uiFlags\":null")),
+                    11=>assert!(text.contains("\"extendedReturned\":145,\"extendedFlags\":null")),
+                    12=>{assert!(text.contains("\"uiFlags\":4294967295"));assert!(text.contains("\"extendedFlags\":4294967295"));},
+                    13=>assert!(text.contains("\"extendedError\":4294967295")),
+                    _=>unreachable!(),
+                }
+                if matches!(variant,2|3) {assert!(text.contains("\"inAnyJob\":null"));assert!(text.contains("\"uiFlags\":null"));}
+                let before=std::fs::read(dir.join("fixture-job-limits.json")).unwrap();
+                assert!(std::panic::catch_unwind(||observe(&dir)).is_err());
+                assert_eq!(std::fs::read(dir.join("fixture-job-limits.json")).unwrap(),before);
+            }
+        }
+'''
+        boundary = '\n    }\n    pub(super) fn fixture_observe_job_limits'
+        self.assertEqual(bridge.count(boundary), 1)
+        bridge = bridge.replace(boundary, tests + boundary, 1)
+        with tempfile.TemporaryDirectory(prefix="mixel-job-self-source-") as temporary:
+            root = Path(temporary)
+            source = root / "control.rs"
+            source.write_text("mod fixture {\n" + bridge + '\n#[test] fn exported_absence() {let root=std::path::PathBuf::from(std::env::var("MIXEL_JOB_CONTROL_DIR").unwrap());fixture_observe_job_limits(&root);}\n}\n')
+            binary = root / ("control.exe" if os.name == "nt" else "control")
+            subprocess.run([rustc, "--edition", "2021", "-D", "warnings", "--test", str(source), "-o", str(binary)], check=True, capture_output=True, timeout=60)
+            output = subprocess.run([str(binary), "--test-threads=1"], check=True, capture_output=True, text=True, timeout=15, env={**os.environ, "MIXEL_JOB_CONTROL_DIR": str(root)})
+            self.assertIn("2 passed; 0 failed", output.stdout)
+            for variant in range(14):
+                value = json.loads((root / str(variant) / "fixture-job-limits.json").read_text())
+                self.assertEqual(value["schema"], 1)
+                self.assertGreater(value["pid"], 0)
+            print("PASS: literal child-self observer exact zeroed x64 ABI/NULL queries, fourteen membership/flags/error0/error5/size/native-DWORD cases, both query attempts, request absence and immutable duplicate refusal; mocked APIs only.", flush=True)
+
+    def test_actual_child_job_reader_and_deferred_error_facts(self):
+        good = dict(schema=1,pid=4321,inAnyJob=True,membershipStatus="available",membershipError=0,
+                    uiStatus="available",uiError=0,uiReturned=4,uiFlags=64,
+                    extendedStatus="available",extendedError=0,extendedReturned=144,extendedFlags=8192)
+        cases = [(good, True)]
+        for key,value in (("schema",True),("pid","4321"),("pid",4322),("extra","refused"),
+                          ("membershipStatus",["available"]),("inAnyJob",1),("membershipError",5),
+                          ("uiStatus",["available"]),("extendedStatus",["available"]),
+                          ("uiFlags",-1),("extendedFlags",4294967296),("uiFlags",True),
+                          ("uiReturned",3),("extendedReturned",143),("uiError",5)):
+            cases.append(({**good,key:value},False))
+        for kind in ("ui","extended"):
+            cases.append(({**good,kind+"Status":"invented"},False))
+            cases.append(({**good,kind+"Status":"size",kind+"Flags":None},False))
+            cases.append(({**good,kind+"Status":"error"},False))
+        positives = [good, {**good,"uiFlags":4294967295,"extendedFlags":4294967295}]
+        for kind,length in (("ui",4),("extended",144)):
+            for error in (0,5,4294967295):
+                positives.append({**good,kind+"Status":"error",kind+"Error":error,kind+"Flags":None})
+            positives.append({**good,kind+"Status":"size",kind+"Returned":length-1,kind+"Flags":None})
+        for failed,error in ((False,0),(True,0),(True,5)):
+            positives.append({**good,"membershipStatus":"error" if failed else "available","membershipError":error,
+                              "inAnyJob":None if failed else False,
+                              **{kind+field:value for kind in ("ui","extended") for field,value in (("Status","membership-error" if failed else "not-in-job"),("Error",0),("Returned",0),("Flags",None))}})
+        cases.extend((value,True) for value in positives[1:])
+        with tempfile.TemporaryDirectory(prefix="mixel-job-reader-") as temporary:
+            root=Path(temporary)
+            (root/"cases.json").write_text(json.dumps([{"record":v,"accept":a} for v,a in cases]))
+            script=root/"control.ps1"
+            script.write_text(r'''
+param([string]$Repository,[string]$ControlRoot,[string]$ExpectedEdition)
+$ErrorActionPreference='Stop'
+if($PSVersionTable.PSEdition -cne $ExpectedEdition -or ($ExpectedEdition -ceq 'Desktop' -and ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1))) {throw 'Required actual PowerShell edition missing'}
+$fixtureRoot=$ControlRoot
+$source=[IO.File]::ReadAllText((Join-Path $Repository 'scripts/test-support-lease-standard-windows.ps1'))
+$tokens=$null;$errors=$null;$ast=[Management.Automation.Language.Parser]::ParseInput($source,[ref]$tokens,[ref]$errors)
+if($errors.Count){throw 'Current helper does not parse'}
+foreach($name in @('Write-LeaseContextFailure','Read-StandardChildJobLimits','Invoke-LeaseChildJobLimitsObservation')) {
+ $items=$ast.FindAll({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq $name},$true)
+ if($items.Count -ne 1){throw 'Exact child job reader/observer missing'}
+ . ([scriptblock]::Create($items[0].Extent.Text))
+ if($name -ceq 'Read-StandardChildJobLimits') {
+  $rootGuard=@'
+  if (-not $text.TrimStart().StartsWith('{') -or -not $text.TrimEnd().EndsWith('}')) { throw 'Owned child job-limit root must be an object.' }
+'@
+  $body=$items[0].Extent.Text
+  if(-not $body.Contains($rootGuard) -or $body.IndexOf($rootGuard) -ne $body.LastIndexOf($rootGuard)){throw 'Exact root envelope guard changed'}
+  $originalBody=$body.Replace($rootGuard,'').Replace('function Read-StandardChildJobLimits(','function Read-OriginalChildJobLimits(')
+  . ([scriptblock]::Create($originalBody))
+ }
+}
+$path=Join-Path $fixtureRoot 'fixture-job-limits.json'
+$script:printed=[Collections.Generic.List[string]]::new();function Write-Host {param($Object)$script:printed.Add([string]$Object)}
+$leaseContextFailures=[Collections.Generic.List[Exception]]::new()
+$cases=[IO.File]::ReadAllText((Join-Path $ControlRoot 'cases.json')) | ConvertFrom-Json
+foreach($case in $cases) {
+ [IO.File]::WriteAllText($path,($case.record | ConvertTo-Json -Depth 5 -Compress))
+ $failed=$false;try{[void](Read-StandardChildJobLimits 4321)}catch{$failed=$true}
+ if($failed -eq $case.accept){throw 'Child job reader acceptance changed'}
+ if($case.accept) {
+  $leaseContextFailures.Clear();$script:printed.Clear();Invoke-LeaseChildJobLimitsObservation 4321
+  $failureExpected=$case.record.membershipStatus -ceq 'error' -or $case.record.uiStatus -cin @('error','size') -or $case.record.extendedStatus -cin @('error','size')
+  if(($leaseContextFailures.Count -ne 0) -ne $failureExpected -or -not $script:printed[0].Contains('immediateJobOnly=True;') -or
+     -not $script:printed[0].Contains('causeEstablished=False;')){throw 'Partial query was silently successful or inferred an event cause'}
+  if($failureExpected -and (-not $script:printed[1].Contains('fatalAfterOriginalGate=True;') -or -not $script:printed[1].Contains('operation=job-limits;'))) {throw 'Read-only query failure replaced original native gate'}
+  if($case.record.uiStatus -ceq 'error' -and $case.record.uiError -eq 0 -and -not $script:printed[1].Contains('nativeErrors=0;')){throw 'Failed native0 query was discarded'}
+  if($case.record.extendedStatus -ceq 'error' -and $case.record.extendedError -eq [uint32]::MaxValue -and
+     (-not $script:printed[0].Contains('"extendedError":4294967295') -or -not $script:printed[1].Contains('nativeErrors=-1;'))) {throw 'Raw native DWORD bits were changed by .NET signed exception conversion'}
+ }
+}
+$object=$cases[0].record | ConvertTo-Json -Depth 5 -Compress
+$arrayRoots=@(('['+$object+']'),('[['+$object+']]'))
+if($arrayRoots.Count -ne 2){throw 'Both separate malformed root envelopes are required'}
+[IO.File]::WriteAllText($path,$arrayRoots[0])
+$prior=Read-OriginalChildJobLimits 4321
+if($prior.pid -ne 4321 -or $prior.uiFlags -ne 64 -or $prior.extendedFlags -ne 8192){throw 'Original singleton envelope defect did not reproduce'}
+foreach($invalid in $arrayRoots) {
+ [IO.File]::WriteAllText($path,$invalid)
+ $message='';try{[void](Read-StandardChildJobLimits 4321)}catch{$message=$_.Exception.Message}
+ if($message -cne 'Owned child job-limit root must be an object.'){throw 'Singleton or nested array envelope reached object conversion'}
+}
+[IO.File]::WriteAllText($path,(' ' * 4097))
+$failed=$false;try{[void](Read-StandardChildJobLimits 4321)}catch{$failed=$true};if(-not $failed){throw 'Oversize job observation accepted'}
+Remove-Item -LiteralPath $path
+$failed=$false;try{[void](Read-StandardChildJobLimits 4321)}catch{$failed=$true};if(-not $failed){throw 'Missing job observation accepted'}
+$original=$ast.FindAll({param($node)$node -is [Management.Automation.Language.IfStatementAst] -and $node.Extent.Text.StartsWith('if (-not $ObserveOnly -and ($record.sourceStatus')},$true)
+if($original.Count -ne 1){throw 'Original mandatory native gate changed'}
+$ObserveOnly=$false;$record=[pscustomobject]@{sourceStatus='ownerFailed=false;ownerError=none;kernel=unavailable;probeError=5;memoryActive=false';rawOpenError=5;attestation='guard-unavailable';requiresClick=$true;ownerFailed=$false}
+$ExpectedStatus='ownerFailed=false;ownerError=none;kernel=absent;probeError=none;memoryActive=false';$ExpectedError=2;$ExpectedProof='';$ExpectedRequired=$false;$ExpectedOwnerFailed=$false
+$message='';try{& ([scriptblock]::Create($original[0].Extent.Text))}catch{$message=$_.Exception.Message}
+if(-not $message.Contains('classification mismatch') -or -not $message.Contains('"rawOpenError":5')){throw 'Original fatal native5 changed after job diagnostics'}
+Microsoft.PowerShell.Utility\Write-Host 'PASS: literal child-self job reader preserves complete/absent/partial/error0/size/rawDWORD facts, rejects malformed/singleton/nested/missing/oversize records, defers query failures and preserves original fatal native5; no native Windows or event-cause qualification.'
+''',encoding="utf-8-sig")
+            for engine,edition in self.powershell_engines():
+                result=subprocess.run([engine,"-NoProfile","-File",str(script),"-Repository",str(ROOT),"-ControlRoot",str(root),"-ExpectedEdition",edition],capture_output=True,text=True,timeout=30)
+                self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+                print(result.stdout,flush=True)
 
     def test_actual_rust_observer_with_mocked_api_errors_and_cleanup(self):
         rustc = os.environ.get("RUSTC_BIN") or shutil.which("rustc")
@@ -813,6 +1015,7 @@ if sys.argv[1]=='scripts/test-support-lease.py':
         rustc = os.environ.get("RUSTC_BIN") or shutil.which("rustc")
         self.assertTrue(rustc, "Rust compiler required for executable source controls")
         facade = r'''
+        pub(super) fn fixture_observe_job_limits(directory:&std::path::Path) { assert!(!directory.join("fixture-job-limits.request").exists()); }
         pub(super) fn fixture_raw_open_error()->u32 { fixture_thread_tokens::observe("OpenEventW"); 2 }
         pub(super) fn fixture_unnamed_create()->(&'static str,bool,u32,bool,u32) {
             fixture_thread_tokens::observe("CreateEventExW-unnamed"); ("created",true,0,true,0)

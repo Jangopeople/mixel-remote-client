@@ -183,6 +183,83 @@ STANDARD_THREAD_BRIDGE = r'''
         fixture_thread_tokens::flush(directory,unnamed);
     }
 '''
+# Exported source-fixture diagnostic only. NULL selects this calling child's
+# immediate job, even when jobs are nested (documented QueryInformationJobObject
+# contract). Raw DWORD flags do not establish an event/namespace failure cause.
+STANDARD_JOB_BRIDGE = r'''
+    #[cfg(windows)]
+    mod fixture_job_limits {
+        use std::ffi::c_void;
+        type Handle = *mut c_void;
+        #[repr(C)]
+        struct BasicLimit {
+            process_time: i64, job_time: i64, flags: u32,
+            minimum_working_set: usize, maximum_working_set: usize,
+            active_process_limit: u32, affinity: usize,
+            priority_class: u32, scheduling_class: u32,
+        }
+        #[repr(C)]
+        struct ExtendedLimit {
+            basic: BasicLimit, io: [u64; 6], process_memory: usize,
+            job_memory: usize, peak_process_memory: usize, peak_job_memory: usize,
+        }
+        #[link(name="kernel32")]
+        extern "system" {
+            fn GetCurrentProcess() -> Handle;
+            fn GetLastError() -> u32;
+            fn IsProcessInJob(process: Handle, job: Handle, present: *mut i32) -> i32;
+            fn QueryInformationJobObject(job: Handle, kind: i32, data: *mut c_void,
+                size: u32, returned: *mut u32) -> i32;
+        }
+        fn query(kind: i32, data: *mut c_void, size: u32) -> (&'static str, u32, u32) {
+            let mut returned=0;
+            let success=unsafe { QueryInformationJobObject(std::ptr::null_mut(),kind,data,size,&mut returned) };
+            let error=if success==0 { unsafe { GetLastError() } } else { 0 };
+            (if success==0 { "error" } else if returned!=size { "size" } else { "available" },error,returned)
+        }
+        pub(super) fn observe(directory: &std::path::Path) {
+            let request=directory.join("fixture-job-limits.request");
+            if !request.is_file() { return; }
+            assert_eq!(std::fs::read_to_string(request).unwrap(),"observe","Invalid owned job observation request");
+            // All bytes, including ABI padding, start at zero. This exported
+            // fixture is x64 only; no guessed x86 layout reaches a Win32 call.
+            assert_eq!(std::mem::size_of::<usize>(),8,"Job diagnostic requires exact x64 ABI");
+            assert_eq!(std::mem::size_of::<BasicLimit>(),64);
+            assert_eq!(std::mem::size_of::<ExtendedLimit>(),144);
+            let mut extended: ExtendedLimit=unsafe { std::mem::zeroed() };
+            unsafe { std::ptr::write_bytes(&mut extended as *mut ExtendedLimit,0,1); }
+            assert_eq!(std::ptr::addr_of!(extended.basic.flags) as usize - std::ptr::addr_of!(extended) as usize,16);
+            let mut ui=0u32;
+            let mut present=0;
+            let member_success=unsafe { IsProcessInJob(GetCurrentProcess(),std::ptr::null_mut(),&mut present) };
+            let member_error=if member_success==0 { unsafe { GetLastError() } } else { 0 };
+            let in_job=member_success!=0 && present!=0;
+            let unused=if member_success==0 { "membership-error" } else { "not-in-job" };
+            let ui_result=if in_job { query(4,(&mut ui as *mut u32).cast(),4) } else { (unused,0,0) };
+            // Attempt both independent read-only classes even if UI fails.
+            let extended_result=if in_job { query(9,(&mut extended as *mut ExtendedLimit).cast(),144) } else { (unused,0,0) };
+            let ui_flags=if ui_result.0=="available" { ui.to_string() } else { "null".to_owned() };
+            let extended_flags=if extended_result.0=="available" { extended.basic.flags.to_string() } else { "null".to_owned() };
+            let result=format!(concat!(
+                "{{\"schema\":1,\"pid\":{},\"inAnyJob\":{},\"membershipStatus\":\"{}\",\"membershipError\":{},",
+                "\"uiStatus\":\"{}\",\"uiError\":{},\"uiReturned\":{},\"uiFlags\":{},",
+                "\"extendedStatus\":\"{}\",\"extendedError\":{},\"extendedReturned\":{},\"extendedFlags\":{}}}\n"),
+                std::process::id(),if member_success==0 { "null" } else if in_job { "true" } else { "false" },
+                if member_success==0 { "error" } else { "available" },member_error,
+                ui_result.0,ui_result.1,ui_result.2,ui_flags,
+                extended_result.0,extended_result.1,extended_result.2,extended_flags);
+            assert!(result.len()<=4096,"Read-only job result exceeds its bound");
+            use std::io::Write;
+            let mut file=std::fs::OpenOptions::new().write(true).create_new(true)
+                .open(directory.join("fixture-job-limits.json")).unwrap();
+            file.write_all(result.as_bytes()).unwrap();
+        }
+    }
+    #[cfg(windows)]
+    pub(super) fn fixture_observe_job_limits(directory: &std::path::Path) {
+        fixture_job_limits::observe(directory);
+    }
+'''
 HARNESS = r'''
 #[cfg(windows)]
 struct LastErrorClearingAllocator;
@@ -352,6 +429,7 @@ fn main() {
     }
     #[cfg(windows)] {
         let directory = std::env::current_exe().unwrap().parent().unwrap().to_owned();
+        mixel_support_lease::fixture_observe_job_limits(&directory);
         mixel_support_lease::fixture_enable_thread_tokens(&directory);
         let mode = std::fs::read_to_string(directory.join("fixture-mode.txt")).unwrap();
         match mode.as_str() {
@@ -460,7 +538,7 @@ def standard_windows_fixture_body(original, directory, prefix, event):
     source = isolated_source(original, directory, prefix, event)
     marker = "\n}\n\npub fn hold_support_invite_attended_lease()"
     assert source.count(marker) == 1, "Standard Windows bridge extraction boundary changed"
-    source = source.replace(marker, "\n" + standard_unnamed_bridge(original) + STANDARD_THREAD_BRIDGE + marker, 1)
+    source = source.replace(marker, "\n" + standard_unnamed_bridge(original) + STANDARD_THREAD_BRIDGE + STANDARD_JOB_BRIDGE + marker, 1)
     # Instrument only this test source, before (never between the API call and
     # immediate last-error capture). Product code and event call arguments stay
     # unchanged. The intentionally prior-probe negative stays uninstrumented.

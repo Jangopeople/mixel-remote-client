@@ -602,7 +602,7 @@ public static class MixelIsolatedLeaseControl {
 }
 '@ }
 
-function Write-LeaseContextFailure([ValidateSet('job-membership','owned-world-descriptor')][string]$Operation, [Exception]$Failure) {
+function Write-LeaseContextFailure([ValidateSet('job-membership','job-limits','owned-world-descriptor')][string]$Operation, [Exception]$Failure) {
   $actual = $Failure
   for ($depth = 0; $depth -lt 8 -and $actual -is [Management.Automation.MethodInvocationException] -and $actual.InnerException; $depth++) {
     $actual = $actual.InnerException
@@ -619,6 +619,72 @@ function Invoke-LeaseJobObservation([int]$ControlPid) {
     $inJob = [MixelOrdinaryTokenFixture]::StartedJobMembership($ControlPid)
     Write-Host "OBSERVED: retained owned source child job membership; controlPid=$ControlPid; inAnyJob=$inJob; query=IsProcessInJob(NULL); childJobLimitsMeasured=False; namedDirectoryMeasured=False."
   } catch { Write-LeaseContextFailure job-membership $_.Exception }
+}
+
+function Read-StandardChildJobLimits([uint32]$ExpectedPid) {
+  $path = Join-Path $fixtureRoot 'fixture-job-limits.json'
+  if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw 'Owned child job-limit observation is missing.' }
+  $text = [IO.File]::ReadAllText($path)
+  if ($text.Length -gt 4096) { throw 'Owned child job-limit observation exceeds its bound.' }
+  # PS5/7 pipeline conversion unwraps singleton JSON arrays. The native
+  # publisher emits one object; reject any other root envelope before parsing.
+  if (-not $text.TrimStart().StartsWith('{') -or -not $text.TrimEnd().EndsWith('}')) { throw 'Owned child job-limit root must be an object.' }
+  $record = $text | ConvertFrom-Json
+  $names = @($record.PSObject.Properties.Name | Sort-Object)
+  $expected = @('schema','pid','inAnyJob','membershipStatus','membershipError','uiStatus','uiError','uiReturned','uiFlags','extendedStatus','extendedError','extendedReturned','extendedFlags') | Sort-Object
+  if (($names -join ',') -cne ($expected -join ',')) { throw 'Owned child job-limit fields changed.' }
+  foreach ($name in @('schema','pid','membershipError','uiError','uiReturned','extendedError','extendedReturned')) {
+    $value = $record.$name
+    if (-not ($value -is [int] -or $value -is [long] -or $value -is [uint32] -or $value -is [uint64]) -or
+        $value -lt 0 -or $value -gt [uint32]::MaxValue) { throw 'Owned child job-limit integer is not bounded.' }
+  }
+  if ($record.schema -ne 1 -or $ExpectedPid -eq 0 -or $record.pid -ne $ExpectedPid -or
+      $record.membershipStatus -isnot [string] -or $record.membershipStatus -cnotin @('available','error') -or
+      ($record.membershipStatus -ceq 'available' -and ($record.membershipError -ne 0 -or $record.inAnyJob -isnot [bool])) -or
+      ($record.membershipStatus -ceq 'error' -and $null -ne $record.inAnyJob)) { throw 'Owned child job membership facts are inconsistent.' }
+  foreach ($kind in @('ui','extended')) {
+    $status = $record.($kind + 'Status'); $errorCode = $record.($kind + 'Error')
+    $returned = $record.($kind + 'Returned'); $flags = $record.($kind + 'Flags')
+    $length = if ($kind -ceq 'ui') { 4 } else { 144 }
+    if ($status -isnot [string]) { throw 'Owned child job-limit status must be a scalar string.' }
+    if ($record.membershipStatus -ceq 'error' -or -not $record.inAnyJob) {
+      $unused = if ($record.membershipStatus -ceq 'error') { 'membership-error' } else { 'not-in-job' }
+      if ($status -cne $unused -or $errorCode -ne 0 -or $returned -ne 0 -or $null -ne $flags) { throw 'Unqueried child job limits contain invented facts.' }
+    } else {
+      if ($status -cnotin @('available','error','size') -or
+          ($status -cne 'error' -and $errorCode -ne 0) -or
+          ($status -ceq 'available' -and $returned -ne $length) -or
+          ($status -ceq 'size' -and $returned -eq $length)) { throw 'Child job query result/length is inconsistent.' }
+      if ($status -ceq 'available') {
+        if (-not ($flags -is [int] -or $flags -is [long] -or $flags -is [uint32] -or $flags -is [uint64]) -or
+            $flags -lt 0 -or $flags -gt [uint32]::MaxValue) { throw 'Child job flags are not a raw bounded DWORD.' }
+      } elseif ($null -ne $flags) { throw 'Failed or short child job query published unverified flags.' }
+    }
+  }
+  return $record
+}
+
+function Invoke-LeaseChildJobLimitsObservation([uint32]$ControlPid) {
+  try {
+    $record = Read-StandardChildJobLimits $ControlPid
+    $complete = $record.membershipStatus -ceq 'available' -and $record.inAnyJob -and
+        $record.uiStatus -ceq 'available' -and $record.extendedStatus -ceq 'available'
+    Write-Host "OBSERVED: owned source child immediate job limits; controlPid=$ControlPid; query=QueryInformationJobObject(NULL); immediateJobOnly=True; completeLimitsMeasured=$complete; namedDirectoryMeasured=False; causeEstablished=False; $($record | ConvertTo-Json -Compress)."
+    $failures = [Collections.Generic.List[Exception]]::new()
+    if ($record.membershipStatus -ceq 'error') {
+      $code = [BitConverter]::ToInt32([BitConverter]::GetBytes([uint32]$record.membershipError),0)
+      $failures.Add([ComponentModel.Win32Exception]::new($code,'Child self job membership query failed.'))
+    }
+    foreach ($kind in @('ui','extended')) {
+      if ($record.($kind + 'Status') -ceq 'error') {
+        $code = [BitConverter]::ToInt32([BitConverter]::GetBytes([uint32]$record.($kind + 'Error')),0)
+        $failures.Add([ComponentModel.Win32Exception]::new($code,"Child self $kind job query failed."))
+      } elseif ($record.($kind + 'Status') -ceq 'size') {
+        $failures.Add([InvalidOperationException]::new("Child self $kind job query returned a different structure length."))
+      }
+    }
+    if ($failures.Count -gt 0) { throw [AggregateException]::new('Owned child job-limit observation failed.', $failures) }
+  } catch { Write-LeaseContextFailure job-limits $_.Exception }
 }
 
 function Invoke-LeaseWorldDescriptorObservation([string]$Name, [IntPtr]$Handle, [string]$Namespace) {
@@ -799,11 +865,12 @@ function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner'
     [IO.File]::WriteAllText($unnamedRequest, 'observe', [Text.UTF8Encoding]::new($false))
   }
   if (Test-Path $resultPath) { Remove-Item -LiteralPath $resultPath }
-  foreach ($filename in @('fixture-thread-token-initial.json','fixture-thread-token-unnamed.json')) {
+  foreach ($filename in @('fixture-thread-token-initial.json','fixture-thread-token-unnamed.json','fixture-job-limits.json')) {
     $threadResult = Join-Path $fixtureRoot $filename
     if (Test-Path -LiteralPath $threadResult) { Remove-Item -LiteralPath $threadResult }
   }
   [IO.File]::WriteAllText((Join-Path $fixtureRoot 'fixture-thread-token.request'), 'observe', [Text.UTF8Encoding]::new($false))
+  [IO.File]::WriteAllText((Join-Path $fixtureRoot 'fixture-job-limits.request'), 'observe', [Text.UTF8Encoding]::new($false))
   [IO.File]::WriteAllText((Join-Path $fixtureRoot 'fixture-mode.txt'), $Mode, [Text.UTF8Encoding]::new($false))
   if ($Launcher -ceq 'with-caller-linked') {
     if (-not $ObserveOnly) { throw 'Caller-linked UAC token cannot satisfy pure standard-account acceptance.' }
@@ -836,6 +903,7 @@ function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner'
     $threadTokens = Read-StandardCallingThreadTokens $controlPid
     Write-Host "OBSERVED: owned child calling-thread token immediately before native event APIs; controlPid=$controlPid; mode=$Mode; $($threadTokens | ConvertTo-Json -Depth 4 -Compress)."
     Invoke-LeaseJobObservation $controlPid
+    Invoke-LeaseChildJobLimitsObservation $controlPid
     if (-not $ObserveOnly -and ($record.sourceStatus -cne $ExpectedStatus -or
         $record.rawOpenError -ne $ExpectedError -or $record.attestation -cne $ExpectedProof -or
         $record.requiresClick -isnot [bool] -or $record.requiresClick -ne $ExpectedRequired -or
@@ -887,11 +955,12 @@ function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner'
 function Invoke-CurrentCallerLeaseControl([ValidateSet('probe','owner')][string]$Mode, [string]$ExpectedStatus,
     [int]$ExpectedError, [string]$ExpectedProof, [bool]$ExpectedRequired, [switch]$KeepAlive) {
   if ([IO.Path]::GetFileName($executable) -cne 'lease-standard.exe') { throw 'Current-caller comparison requires the unchanged base console source fixture.' }
-  foreach ($filename in @('fixture-result.json','fixture-thread-token-initial.json','fixture-thread-token-unnamed.json','fixture-unnamed.request','fixture-unnamed-result.json')) {
+  foreach ($filename in @('fixture-result.json','fixture-thread-token-initial.json','fixture-thread-token-unnamed.json','fixture-unnamed.request','fixture-unnamed-result.json','fixture-job-limits.json')) {
     $path = Join-Path $fixtureRoot $filename
     if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path }
   }
   [IO.File]::WriteAllText((Join-Path $fixtureRoot 'fixture-thread-token.request'), 'observe', [Text.UTF8Encoding]::new($false))
+  [IO.File]::WriteAllText((Join-Path $fixtureRoot 'fixture-job-limits.request'), 'observe', [Text.UTF8Encoding]::new($false))
   [IO.File]::WriteAllText((Join-Path $fixtureRoot 'fixture-mode.txt'), $Mode, [Text.UTF8Encoding]::new($false))
   $controlPid = [MixelOrdinaryTokenFixture]::StartCurrentCallerNative($executable)
   $control = $null; $caller = $null
@@ -922,6 +991,7 @@ function Invoke-CurrentCallerLeaseControl([ValidateSet('probe','owner')][string]
     Write-Host "OBSERVED: direct current Actions caller GUID functional control; tokenContext=unchanged-current-caller; genuineStandardQualified=False; fullEightQualified=False; customerAppQualified=False; mode=$Mode; controlPid=$controlPid; processSessionId=$actualSession; ownedCallerSidMatched=$sidMatches; elevated=$elevated; callerElevated=$callerElevated; $tokenFacts; $($record | ConvertTo-Json -Compress)."
     Write-Host "OBSERVED: direct current Actions caller pre-API calling-thread tokens; controlPid=$controlPid; mode=$Mode; $($threadTokens | ConvertTo-Json -Depth 4 -Compress)."
     Invoke-LeaseJobObservation $controlPid
+    Invoke-LeaseChildJobLimitsObservation $controlPid
     if ($record.sourceStatus -cne $ExpectedStatus -or $record.rawOpenError -ne $ExpectedError -or
         $record.attestation -cne $ExpectedProof -or $record.requiresClick -ne $ExpectedRequired -or $record.ownerFailed) {
       throw ('Actual current-caller source lease classification mismatch: ' + ($record | ConvertTo-Json -Compress))
