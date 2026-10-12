@@ -1376,6 +1376,7 @@ try {
   }
   # Let FFI initialization and the cold URI handler finish before checking the
   # stable window state; the original bug hid an initially-created main window.
+  $fixtureStage = 'verify stable cold customer window'
   Start-Sleep -Seconds 15
   if ($Portable -and -not $OrdinaryThenQuickSupport) {
     $main = Wait-PortableMain
@@ -1399,6 +1400,7 @@ try {
   }
   Write-Host "PASS: cold $launchScenario shows customer app."
   if ($OrdinaryThenQuickSupport) {
+    $fixtureStage = 'verify ordinary native consent baseline'
     $initialHealth = Get-MixelSupportRuntimeHealth
     Assert-OwnedIncomingHealth $initialHealth
     if ($initialHealth.incomingPid -ne $main.Id) { throw 'Ordinary positive control is not querying its actual in-process native incoming server.' }
@@ -1409,6 +1411,9 @@ try {
     if ($initialHealth.attendedProof -cne '' -or $initialOwnsLease) {
       $leaseStatus = Get-MixelSupportLeaseDiagnostic $initialHealth.incomingPid
       Write-Host "FIXTURE: failed ordinary baseline read-only native lease observation; $leaseStatus."
+      if ($initialHealth.attendedProof -ceq 'guard-unavailable') {
+        throw 'Ordinary-to-QS positive control cannot safely inspect the native consent lease; refusing an unavailable baseline.'
+      }
       throw 'Ordinary-to-QS positive control is already guarded; refusing a manufactured transition proof.'
     }
     Write-Host "PASS: actual ordinary non-elevated signed GUI starts genuinely unguarded, with empty read-only IPC guard and no foreground lease; foregroundPid=$($main.Id), incomingPipePid=$($initialHealth.incomingPid), hwnd=$($window.ToInt64())."
@@ -1419,6 +1424,7 @@ try {
   }
 
   [void][MixelSupportWindowTest]::ShowWindow($window, 6)
+  $fixtureStage = 'verify warm customer handoff'
   Start-Sleep -Seconds 1
   if (-not [MixelSupportWindowTest]::IsIconic($window)) {
     throw 'Warm-launch setup failed: runner could not minimize the customer app.'
@@ -1431,6 +1437,7 @@ try {
   $warmHealth = Wait-MixelSupportRuntimeHealth "Warm $launchScenario" -RequireOnline
   Assert-OwnedIncomingHealth $warmHealth
   if ($OrdinaryThenQuickSupport) {
+    $fixtureStage = 'verify same ordinary GUI owns consent beyond memory deadline'
     if (-not $warmLaunch.WaitForExit(60000)) { throw 'Transient QS launcher did not exit after dispatching to the existing ordinary GUI.' }
     if (-not [MixelOrdinaryTokenFixture]::OwnsLease($main.Id)) { throw 'The original foreground GUI does not own the actual kernel consent lease.' }
     $started = [Diagnostics.Stopwatch]::StartNew()

@@ -57,6 +57,132 @@ WINDOWS_BRIDGE = r'''
         0
     }
 '''
+
+# Used only by the exported standard-account source fixture. Observe the actual
+# child's calling thread immediately before its unchanged event API call. These
+# TOKEN_QUERY handles never impersonate, revert, assign or modify any token.
+STANDARD_THREAD_BRIDGE = r'''
+    #[cfg(windows)]
+    mod fixture_thread_tokens {
+        use std::ffi::c_void;
+        type Handle = *mut c_void;
+        #[repr(C)]
+        #[derive(Clone, Copy, Default, PartialEq, Eq)]
+        struct Luid { low: u32, high: i32 }
+        #[repr(C)]
+        #[derive(Default)]
+        struct Statistics {
+            token_id: Luid, authentication_id: Luid, expires: i64,
+            token_type: u32, impersonation_level: u32, dynamic_charged: u32,
+            dynamic_available: u32, groups: u32, privileges: u32, modified_id: Luid,
+        }
+        #[link(name="kernel32")]
+        extern "system" {
+            fn GetCurrentProcess() -> Handle;
+            fn GetCurrentThread() -> Handle;
+            fn GetCurrentThreadId() -> u32;
+            fn GetLastError() -> u32;
+            fn CloseHandle(handle: Handle) -> i32;
+        }
+        #[link(name="advapi32")]
+        extern "system" {
+            fn OpenProcessToken(process: Handle, access: u32, token: *mut Handle) -> i32;
+            fn OpenThreadToken(thread: Handle, access: u32, open_as_self: i32, token: *mut Handle) -> i32;
+            fn GetTokenInformation(token: Handle, kind: u32, data: *mut c_void, size: u32, returned: *mut u32) -> i32;
+        }
+        struct Facts { status: &'static str, error: u32, statistics: Statistics }
+        impl Facts {
+            fn empty(status: &'static str, error: u32) -> Self {
+                Self { status, error, statistics: Statistics::default() }
+            }
+        }
+        fn statistics(token: Handle) -> Facts {
+            let mut facts=Facts::empty("available",0);
+            let mut returned=0;
+            let size=std::mem::size_of::<Statistics>() as u32;
+            assert_eq!(size,56,"Exact Win32 TOKEN_STATISTICS layout changed");
+            let success=unsafe { GetTokenInformation(token,10,(&mut facts.statistics as *mut Statistics).cast(),size,&mut returned) };
+            let error=if success==0 { unsafe { GetLastError() } } else { 0 };
+            if success==0 { return Facts::empty("statistics-error",error); }
+            if returned!=size { return Facts::empty("statistics-size",0); }
+            facts
+        }
+        fn close(token: Handle) -> (&'static str,u32) {
+            if token.is_null() { return ("not-opened",0); }
+            let success=unsafe { CloseHandle(token) };
+            let error=if success==0 { unsafe { GetLastError() } } else { 0 };
+            (if success==0 { "failed" } else { "closed" },error)
+        }
+        static RECORDS: std::sync::Mutex<Vec<String>>=std::sync::Mutex::new(Vec::new());
+        static ENABLED: std::sync::atomic::AtomicBool=std::sync::atomic::AtomicBool::new(false);
+        pub(super) fn enable(directory: &std::path::Path) {
+            let request=directory.join("fixture-thread-token.request");
+            let enabled=request.is_file();
+            if enabled { assert_eq!(std::fs::read_to_string(request).unwrap(),"observe","Invalid owned calling-thread observation request"); }
+            ENABLED.store(enabled,std::sync::atomic::Ordering::SeqCst);
+        }
+        pub(super) fn observe(phase: &'static str) {
+            if !ENABLED.load(std::sync::atomic::Ordering::SeqCst) { return; }
+            assert!(matches!(phase,"CreateEventExW" | "CreateEventExW-unnamed" | "OpenEventW"));
+            let tid=unsafe { GetCurrentThreadId() };
+            assert_ne!(tid,0);
+            let mut thread=std::ptr::null_mut();
+            // OpenAsSelf chooses the access check for this read-only token
+            // query. It does not change the thread's effective security token.
+            let thread_open=unsafe { OpenThreadToken(GetCurrentThread(),8,1,&mut thread) };
+            let thread_error=if thread_open==0 { unsafe { GetLastError() } } else { 0 };
+            let thread_facts=if thread_open!=0 { statistics(thread) }
+                else { Facts::empty(if thread_error==1008 { "absent" } else { "open-error" },thread_error) };
+            let mut primary=std::ptr::null_mut();
+            let primary_open=unsafe { OpenProcessToken(GetCurrentProcess(),8,&mut primary) };
+            let primary_error=if primary_open==0 { unsafe { GetLastError() } } else { 0 };
+            let primary_facts=if primary_open!=0 { statistics(primary) } else { Facts::empty("open-error",primary_error) };
+            let same_logon=if thread_facts.status=="available" && primary_facts.status=="available" {
+                if thread_facts.statistics.authentication_id==primary_facts.statistics.authentication_id { "true" } else { "false" }
+            } else { "null" };
+            let (thread_close,thread_close_error)=close(if thread_open!=0 { thread } else { std::ptr::null_mut() });
+            let (primary_close,primary_close_error)=close(if primary_open!=0 { primary } else { std::ptr::null_mut() });
+            // No SID, token ID, authentication LUID, credentials or arguments
+            // leave this helper. Equality alone compares existing identities.
+            let record=format!(concat!(
+                "{{\"phase\":\"{}\",\"tid\":{},\"threadStatus\":\"{}\",\"threadError\":{},",
+                "\"threadType\":{},\"threadImpersonationLevel\":{},\"primaryStatus\":\"{}\",\"primaryError\":{},",
+                "\"primaryType\":{},\"threadLogonMatchesPrimary\":{},\"threadClose\":\"{}\",\"threadCloseError\":{},",
+                "\"primaryClose\":\"{}\",\"primaryCloseError\":{}}}"),
+                phase,tid,thread_facts.status,thread_facts.error,thread_facts.statistics.token_type,
+                thread_facts.statistics.impersonation_level,primary_facts.status,primary_facts.error,
+                primary_facts.statistics.token_type,same_logon,thread_close,thread_close_error,primary_close,primary_close_error);
+            let mut records=RECORDS.lock().unwrap();
+            assert!(records.len()<32,"Read-only thread-token observation exceeds its call bound");
+            records.push(record);
+        }
+        pub(super) fn flush(directory: &std::path::Path, unnamed: bool) {
+            if !ENABLED.load(std::sync::atomic::Ordering::SeqCst) { return; }
+            let records=RECORDS.lock().unwrap();
+            assert!(!records.is_empty(),"No calling-thread event observation recorded");
+            let unnamed_calls=records.iter().filter(|record| record.contains("\"phase\":\"CreateEventExW-unnamed\"")).count();
+            assert_eq!(unnamed_calls,if unnamed { 1 } else { 0 },"Calling-thread publication stage does not match its event calls");
+            let result=format!("{{\"schema\":1,\"pid\":{},\"records\":[{}]}}\n",std::process::id(),records.join(","));
+            assert!(result.len()<=32768,"Read-only token result exceeds its size bound");
+            let filename=if unnamed { "fixture-thread-token-unnamed.json" } else { "fixture-thread-token-initial.json" };
+            // Each phase is written once and closed before its separate result
+            // readiness file is published. The parent cannot read partial
+            // bytes or hold a delete-denying reader across a later replacement.
+            // create_new also refuses accidental repeat publication.
+            let mut file=std::fs::OpenOptions::new().write(true).create_new(true).open(directory.join(filename)).unwrap();
+            use std::io::Write;
+            file.write_all(result.as_bytes()).unwrap();
+        }
+    }
+    #[cfg(windows)]
+    pub(super) fn fixture_enable_thread_tokens(directory: &std::path::Path) {
+        fixture_thread_tokens::enable(directory);
+    }
+    #[cfg(windows)]
+    pub(super) fn fixture_flush_thread_tokens(directory: &std::path::Path, unnamed: bool) {
+        fixture_thread_tokens::flush(directory,unnamed);
+    }
+'''
 HARNESS = r'''
 #[cfg(windows)]
 struct LastErrorClearingAllocator;
@@ -226,6 +352,7 @@ fn main() {
     }
     #[cfg(windows)] {
         let directory = std::env::current_exe().unwrap().parent().unwrap().to_owned();
+        mixel_support_lease::fixture_enable_thread_tokens(&directory);
         let mode = std::fs::read_to_string(directory.join("fixture-mode.txt")).unwrap();
         match mode.as_str() {
             "probe" => {}
@@ -245,6 +372,7 @@ fn main() {
             "{{\"pid\":{},\"sourceStatus\":\"{}\",\"rawOpenError\":{},\"attestation\":\"{}\",\"requiresClick\":{},\"ownerFailed\":{}}}\n",
             std::process::id(), status, raw_error, proof, required, failed);
         std::fs::write(directory.join("fixture-result.new"), result).unwrap();
+        mixel_support_lease::fixture_flush_thread_tokens(&directory,false);
         std::fs::rename(directory.join("fixture-result.new"), directory.join("fixture-result.json")).unwrap();
         // This test-only request is absent from the strict normal baseline.
         // The result never acquires/renews an attended lease or exports ready.
@@ -261,6 +389,7 @@ fn main() {
                 "{{\"pid\":{},\"phase\":\"{}\",\"created\":{},\"createError\":{},\"closed\":{},\"closeError\":{},\"sourceStatusAfter\":\"{}\",\"rawOpenErrorAfter\":{},\"attestationAfter\":\"{}\",\"requiresClickAfter\":{}}}\n",
                 std::process::id(), phase, created, create_error, closed, close_error, after_status, after_error, after_proof, after_required);
             std::fs::write(directory.join("fixture-unnamed-result.new"), unnamed_result).unwrap();
+            mixel_support_lease::fixture_flush_thread_tokens(&directory,true);
             std::fs::rename(directory.join("fixture-unnamed-result.new"), directory.join("fixture-unnamed-result.json")).unwrap();
         }
         if mode == "owner" {
@@ -331,7 +460,18 @@ def standard_windows_fixture_body(original, directory, prefix, event):
     source = isolated_source(original, directory, prefix, event)
     marker = "\n}\n\npub fn hold_support_invite_attended_lease()"
     assert source.count(marker) == 1, "Standard Windows bridge extraction boundary changed"
-    source = source.replace(marker, "\n" + standard_unnamed_bridge(original) + marker, 1)
+    source = source.replace(marker, "\n" + standard_unnamed_bridge(original) + STANDARD_THREAD_BRIDGE + marker, 1)
+    # Instrument only this test source, before (never between the API call and
+    # immediate last-error capture). Product code and event call arguments stay
+    # unchanged. The intentionally prior-probe negative stays uninstrumented.
+    calls = (
+        ('        let handle = unsafe { CreateEventExW(&attributes, name.as_ptr(), 0, 0x00100000) };', "CreateEventExW", 1),
+        ('        let handle = unsafe { CreateEventExW(&attributes, std::ptr::null(), 0, 0x00100000) };', "CreateEventExW-unnamed", 1),
+        ('        let handle = unsafe { OpenEventW(0x00100000, 0, name.as_ptr()) };', "OpenEventW", 2),
+    )
+    for call, phase, count in calls:
+        assert source.count(call)==count, "Exact standard fixture event observation boundary changed"
+        source=source.replace(call, f'        fixture_thread_tokens::observe("{phase}");\n' + call)
     return source + HARNESS.replace("fn main() {", "fn lease_main() {", 1) + STANDARD_WINDOWS_HARNESS
 
 

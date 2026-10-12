@@ -4,6 +4,8 @@ $ErrorActionPreference = 'Stop'
 if (-not $IsWindows -or $env:GITHUB_ACTIONS -cne 'true') {
   throw 'Disposable standard-account lease qualification requires an isolated Windows Actions runner.'
 }
+python (Join-Path $PSScriptRoot 'test-windows-lease-observation.py')
+if ($LASTEXITCODE -ne 0) { throw 'Calling-thread observation and fatal baseline source controls failed.' }
 $launchSource = Get-Content (Join-Path $PSScriptRoot 'test-support-launch-windows.ps1') -Raw
 $class = $launchSource.IndexOf('public static class MixelOrdinaryTokenFixture {')
 $first = $launchSource.LastIndexOf('using System;', $class)
@@ -481,6 +483,71 @@ function Assert-StandardUnnamedEventControl($Record, $Before) {
 }
 
 
+function Read-StandardCallingThreadTokens([uint32]$ExpectedPid, [switch]$Unnamed) {
+  $filename = if ($Unnamed) { 'fixture-thread-token-unnamed.json' } else { 'fixture-thread-token-initial.json' }
+  $path = Join-Path $fixtureRoot $filename
+  if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw 'Owned calling-thread token result is missing.' }
+  $text = [IO.File]::ReadAllText($path)
+  if ($text.Length -gt 32768) { throw 'Owned calling-thread token result exceeds its bound.' }
+  $record = $text | ConvertFrom-Json
+  foreach ($field in @('schema','pid')) {
+    $value = $record.$field
+    $numeric = $value -is [int] -or $value -is [long] -or $value -is [uint32] -or $value -is [uint64]
+    if (-not $numeric -or $value -lt 1 -or $value -gt [uint32]::MaxValue) { throw 'Owned calling-thread token metadata is not a bounded integer.' }
+  }
+  if ((@($record.PSObject.Properties.Name | Sort-Object) -join ',') -cne 'pid,records,schema' -or
+      $record.schema -ne 1 -or $record.pid -ne $ExpectedPid -or $ExpectedPid -eq 0 -or
+      $record.records -isnot [array] -or $record.records.Count -lt 1 -or $record.records.Count -gt 32) {
+    throw 'Owned calling-thread token result has invalid schema or retained PID.'
+  }
+  $expected = @('phase','tid','threadStatus','threadError','threadType','threadImpersonationLevel','primaryStatus','primaryError','primaryType','threadLogonMatchesPrimary','threadClose','threadCloseError','primaryClose','primaryCloseError') | Sort-Object
+  $tid = $null
+  foreach ($item in $record.records) {
+    foreach ($field in @('phase','threadStatus','primaryStatus','threadClose','primaryClose')) {
+      if ($item.$field -isnot [string]) { throw 'Owned calling-thread token classification is not a scalar string.' }
+    }
+    if ((@($item.PSObject.Properties.Name | Sort-Object) -join ',') -cne ($expected -join ',') -or
+        $item.phase -cnotin @('CreateEventExW','CreateEventExW-unnamed','OpenEventW') -or
+        $item.threadStatus -cnotin @('available','absent','open-error','statistics-error','statistics-size') -or
+        $item.primaryStatus -cnotin @('available','open-error','statistics-error','statistics-size') -or
+        $item.threadClose -cnotin @('closed','not-opened','failed') -or $item.primaryClose -cnotin @('closed','not-opened','failed')) {
+      throw 'Owned calling-thread token observation contains an unknown field or classification.'
+    }
+    foreach ($field in @('tid','threadError','threadType','threadImpersonationLevel','primaryError','primaryType','threadCloseError','primaryCloseError')) {
+      $value = $item.$field
+      $numeric = $value -is [int] -or $value -is [long] -or $value -is [uint32] -or $value -is [uint64]
+      if (-not $numeric -or $value -lt 0 -or $value -gt [uint32]::MaxValue) { throw 'Owned calling-thread token native value is not a bounded integer.' }
+    }
+    if ($item.tid -eq 0 -or ($null -ne $tid -and $item.tid -ne $tid)) { throw 'Source fixture event calls were not observed on the same actual calling thread.' }
+    $tid = $item.tid
+    $available = $item.threadStatus -ceq 'available' -and $item.primaryStatus -ceq 'available'
+    if (($available -and $item.threadLogonMatchesPrimary -isnot [bool]) -or
+        (-not $available -and $null -ne $item.threadLogonMatchesPrimary) -or
+        ($item.threadStatus -ceq 'available' -and ($item.threadType -ne 2 -or $item.threadImpersonationLevel -gt 3 -or $item.threadError -ne 0)) -or
+        ($item.primaryStatus -ceq 'available' -and ($item.primaryType -ne 1 -or $item.primaryError -ne 0)) -or
+        ($item.threadStatus -cne 'available' -and ($item.threadType -ne 0 -or $item.threadImpersonationLevel -ne 0)) -or
+        ($item.primaryStatus -cne 'available' -and $item.primaryType -ne 0) -or
+        ($item.threadStatus -ceq 'absent' -and ($item.threadError -ne 1008 -or $item.threadClose -cne 'not-opened'))) {
+      throw 'Owned calling-thread token observation contains inconsistent identity facts.'
+    }
+    foreach ($subject in @('thread','primary')) {
+      $opened = $item.("${subject}Status") -cin @('available','statistics-error','statistics-size')
+      $close = $item.("${subject}Close")
+      if (($opened -and $close -cnotin @('closed','failed')) -or
+          (-not $opened -and $close -cne 'not-opened') -or
+          ($close -cne 'failed' -and $item.("${subject}CloseError") -ne 0)) {
+        throw 'Owned calling-thread token observation contains inconsistent handle cleanup.'
+      }
+    }
+  }
+  $unnamedCalls = @($record.records | Where-Object { $_.phase -ceq 'CreateEventExW-unnamed' }).Count
+  $expectedUnnamedCalls = if ($Unnamed) { 1 } else { 0 }
+  if ($unnamedCalls -ne $expectedUnnamedCalls) { throw 'Owned calling-thread token result does not match the requested publication stage.' }
+  # All serialized fields are canonical classifications or bounded numeric
+  # facts. SID, LUID, token ID, credentials and raw arguments are absent.
+  return $record
+}
+
 function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner')][string]$Mode, [string]$ExpectedStatus, [int]$ExpectedError,
     [string]$ExpectedProof, [bool]$ExpectedRequired, [bool]$ExpectedOwnerFailed, [switch]$KeepAlive,
     [switch]$ObserveOnly, [string]$ObservationLabel,
@@ -498,6 +565,11 @@ function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner'
     [IO.File]::WriteAllText($unnamedRequest, 'observe', [Text.UTF8Encoding]::new($false))
   }
   if (Test-Path $resultPath) { Remove-Item -LiteralPath $resultPath }
+  foreach ($filename in @('fixture-thread-token-initial.json','fixture-thread-token-unnamed.json')) {
+    $threadResult = Join-Path $fixtureRoot $filename
+    if (Test-Path -LiteralPath $threadResult) { Remove-Item -LiteralPath $threadResult }
+  }
+  [IO.File]::WriteAllText((Join-Path $fixtureRoot 'fixture-thread-token.request'), 'observe', [Text.UTF8Encoding]::new($false))
   [IO.File]::WriteAllText((Join-Path $fixtureRoot 'fixture-mode.txt'), $Mode, [Text.UTF8Encoding]::new($false))
   if ($Launcher -ceq 'with-caller-linked') {
     if (-not $ObserveOnly) { throw 'Caller-linked UAC token cannot satisfy pure standard-account acceptance.' }
@@ -527,11 +599,16 @@ function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner'
     if ($text.Length -gt 4096) { throw 'Owned lease result exceeds its bound.' }
     $record = $text | ConvertFrom-Json
     Assert-StandardLeaseSafeResult $record $controlPid
+    $threadTokens = Read-StandardCallingThreadTokens $controlPid
+    Write-Host "OBSERVED: owned child calling-thread token immediately before native event APIs; controlPid=$controlPid; mode=$Mode; $($threadTokens | ConvertTo-Json -Depth 4 -Compress)."
     if (-not $ObserveOnly -and ($record.sourceStatus -cne $ExpectedStatus -or
         $record.rawOpenError -ne $ExpectedError -or $record.attestation -cne $ExpectedProof -or
         $record.requiresClick -isnot [bool] -or $record.requiresClick -ne $ExpectedRequired -or
         $record.ownerFailed -isnot [bool] -or $record.ownerFailed -ne $ExpectedOwnerFailed)) {
       throw ('Actual standard-account source lease classification mismatch: ' + ($record | ConvertTo-Json -Compress))
+    }
+    if (@($threadTokens.records | Where-Object { $_.threadClose -ceq 'failed' -or $_.primaryClose -ceq 'failed' }).Count -gt 0) {
+      throw 'Owned read-only calling-thread token handle cleanup failed; native process cleanup is required.'
     }
     if ($ObserveOnly) {
       if ($ObservationLabel -cnotmatch '\A(?:bare|local|global)-[a-z]+(?:-[a-z]+)*\z') { throw 'Invalid safe namespace observation label.' }
@@ -550,8 +627,13 @@ function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner'
         Start-Sleep -Milliseconds 50
       }
       $unnamed = Read-StandardUnnamedEventResult $controlPid
+      $threadTokens = Read-StandardCallingThreadTokens $controlPid -Unnamed
+      Write-Host "OBSERVED: owned child calling-thread token including exact unnamed event API; controlPid=$controlPid; $($threadTokens | ConvertTo-Json -Depth 4 -Compress)."
       Write-Host "OBSERVED: standard-token unnamed event control; launcher=$Launcher; subsystem=$Subsystem; controlPid=$controlPid; ordinarySessionId=$actualSession; ownedSidMatched=$sidMatches; elevated=$elevated; phase=$($unnamed.phase); created=$($unnamed.created); createError=$($unnamed.createError); closed=$($unnamed.closed); closeError=$($unnamed.closeError); sourceStatusAfter=$($unnamed.sourceStatusAfter); rawOpenErrorAfter=$($unnamed.rawOpenErrorAfter); guardEmptyAfter=$($unnamed.attestationAfter -ceq ''); guardConfirmedAfter=$($unnamed.attestationAfter -ceq 'attended-runtime-v2'); requiresClickAfter=$($unnamed.requiresClickAfter)."
       Assert-StandardUnnamedEventControl $unnamed $record
+      if (@($threadTokens.records | Where-Object { $_.threadClose -ceq 'failed' -or $_.primaryClose -ceq 'failed' }).Count -gt 0) {
+        throw 'Owned read-only calling-thread token handle cleanup failed; native process cleanup is required.'
+      }
     }
     if (-not $KeepAlive) {
       [IO.File]::WriteAllText((Join-Path $fixtureRoot "fixture-release-$controlPid"), 'verified')
