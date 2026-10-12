@@ -592,53 +592,74 @@ def git_archive_controls(output, files):
 
 def workflow_controls(output, originals, files):
     workflow = (ROOT / ".github/workflows/build.yml").read_text()
-    hook = "          RDREPO=. python3 ../scripts/patch-support-macos-texture.py\n"
-    assert workflow.count(hook) == 1
+    helpers = ("patch-support-macos-texture.py", "patch-support-macos-window.py")
+    hooks = tuple("          RDREPO=. python3 ../scripts/" + name + "\n" for name in helpers)
+    assert all(workflow.count(hook) == 1 for hook in hooks)
     committed = subprocess.check_output(["git", "-C", str(ROOT), "show", "HEAD:.github/workflows/build.yml"]).decode()
-    assert workflow.replace(hook, "", 1) == committed.replace(hook, "", 1), "No other build job/guard may change for this integration"
+    assert workflow == committed, "No production build job, hook or guard may change for this fixture correction"
     match = re.search(r"      - name: Generate bridge\n        working-directory: rustdesk\n        run: \|\n((?:          .*\n)+)", workflow)
     assert match
     script = textwrap.dedent(match[1])
-    assert script.index("patch-support-macos-texture.py") < script.index("flutter pub get") < script.index("flutter_rust_bridge_codegen")
+    assert script.index(helpers[0]) < script.index(helpers[1]) < script.index("flutter pub get") < script.index("flutter_rust_bridge_codegen")
+    window_spec = importlib.util.spec_from_file_location("mixel_window_workflow", ROOT / "scripts" / helpers[1])
+    window = importlib.util.module_from_spec(window_spec)
+    window_spec.loader.exec_module(window)
+    window_files = window.fetch_source()
+    assert len(window_files) == 124 and window.inventory(window_files) == window.INVENTORY_SHA
     owner = output / "actual bridge étape"
-    repo = owner / "rustdesk"
-    write_repo(repo, originals)
-    (repo / "flutter/macos/Runner").mkdir(parents=True)
-    (repo / "flutter/ios/Runner").mkdir(parents=True)
-    (owner / "scripts").mkdir()
-    shutil.copyfile(ROOT / "scripts/patch-support-macos-texture.py", owner / "scripts/patch-support-macos-texture.py")
-    # Deterministically replay the real bounded98-member source archive in the
-    # actual helper child; Flutter/compiler stand-ins assert the input ordering.
-    archive = owner / "pinned-renderer.tar"
-    with tarfile.open(archive, "w") as tar:
-        for name, data in files.items():
-            info = tarfile.TarInfo(name); info.size = len(data)
-            tar.addfile(info, io.BytesIO(data))
+    owner.mkdir()
+
+    def prepare_case(case):
+        repo = case / "rustdesk"
+        write_repo(repo, originals)
+        (repo / "flutter/macos/Runner").mkdir(parents=True)
+        (repo / "flutter/ios/Runner").mkdir(parents=True)
+        (case / "scripts").mkdir()
+        for name in helpers:
+            shutil.copyfile(ROOT / "scripts" / name, case / "scripts" / name)
+        # Both actual child helpers validate their complete pinned archives;
+        # only network retrieval is replaced with these exact source bytes.
+        for name, contents in (("pinned-renderer.tar", files), ("pinned-window.tar", window_files)):
+            with tarfile.open(case / name, "w") as tar:
+                for member_name, data in contents.items():
+                    info = tarfile.TarInfo(member_name); info.size = len(data)
+                    tar.addfile(info, io.BytesIO(data))
+        return repo
+
+    repo = prepare_case(owner / "with-both-hooks")
     binary = owner / "bin"
     binary.mkdir()
     python = binary / "python3"
     python.write_text('#!' + sys.executable + '\n' + r'''
-import importlib.util,os
+import importlib.util,json,os,sys
 from pathlib import Path
-s=importlib.util.spec_from_file_location('actual_patch','../scripts/patch-support-macos-texture.py')
+allowed={'../scripts/patch-support-macos-texture.py':'pinned-renderer.tar',
+         '../scripts/patch-support-macos-window.py':'pinned-window.tar'}
+assert len(sys.argv)==2 and sys.argv[1] in allowed, 'Unexpected bridge helper invocation'
+s=importlib.util.spec_from_file_location('actual_patch',sys.argv[1])
 p=importlib.util.module_from_spec(s);s.loader.exec_module(p)
-p.fetch_source=lambda:p.source_files(Path('../pinned-renderer.tar').read_bytes())
+p.fetch_source=lambda:p.source_files((Path('..')/allowed[sys.argv[1]]).read_bytes())
 p.apply(Path(os.environ['RDREPO']))
+with Path('../actual-helper-invocations.jsonl').open('a') as log:
+    log.write(json.dumps(sys.argv[1:])+'\n')
 ''')
     flutter = binary / "flutter"
     flutter.write_text('#!' + sys.executable + '\n' + r'''
 from pathlib import Path
 assert 'session_unregister_pixelbuffer_texture_if_current' in Path('../src/flutter_ffi.rs').read_text()
 assert 'path: .mixel-dependencies/texture_rgba_renderer' in Path('pubspec.yaml').read_text()
-print('PASS: actual bridge step patched source before Flutter resolution')
+assert 'path: .mixel-dependencies/desktop_multi_window' in Path('pubspec.yaml').read_text()
+assert 'guard flutterViewController.engine.run(withEntrypoint: nil) else {' in Path('.mixel-dependencies/desktop_multi_window/macos/Classes/FlutterWindow.swift').read_text()
+print('PASS: actual bridge step patched both pinned dependencies before Flutter resolution')
 ''')
     codegen = binary / "flutter_rust_bridge_codegen"
     codegen.write_text('#!' + sys.executable + '\n' + r'''
 from pathlib import Path
 assert 'session_unregister_pixelbuffer_texture_if_current' in Path('src/flutter_ffi.rs').read_text()
 assert 'bool sessionUnregisterPixelbufferTextureIfCurrent(' in Path('flutter/lib/web/bridge.dart').read_text()
+assert 'guard flutterViewController.engine.run(withEntrypoint: nil) else {' in Path('flutter/.mixel-dependencies/desktop_multi_window/macos/Classes/FlutterWindow.swift').read_text()
 Path('flutter/macos/Runner/bridge_generated.h').write_text('ordered bridge fixture')
-print('PASS: actual bridge step reaches codegen with new retirement API')
+print('PASS: actual bridge step reaches codegen with both source hooks applied')
 ''')
     for executable in (python, flutter, codegen):
         executable.chmod(0o755)
@@ -653,15 +674,72 @@ print('PASS: actual bridge step reaches codegen with new retirement API')
     result = subprocess.run([bash, "-e", "-o", "pipefail", "-c", script], cwd=repo, env=environment, capture_output=True, text=True, timeout=120)
     (output / "actual-bridge-step-output.log").write_text(result.stdout + result.stderr)
     assert result.returncode == 0, result.stdout + result.stderr
-    # Removing the exact hook makes the same downstream dependency/codegen
-    # checks fail on pristine input; a static name/count alone cannot pass.
-    negative = owner / "without-hook/rustdesk"
-    write_repo(negative, originals)
-    result = subprocess.run([bash, "-e", "-o", "pipefail", "-c", script.replace("RDREPO=. python3 ../scripts/patch-support-macos-texture.py\n", "", 1)], cwd=negative, env=environment, capture_output=True, text=True, timeout=30)
-    (output / "bridge-without-hook-negative.log").write_text(result.stdout + result.stderr)
-    assert result.returncode != 0 and "AssertionError" in result.stderr
-    (output / "workflow-source-proof.json").write_text(json.dumps({"result":"passed", "workflow_sha256":P.sha(workflow.encode()), "head_workflow_sha256":P.sha(committed.encode()), "only_change":"single existing bridge-step pre-generation hook", "all_other_build_jobs_and_guards_byte_identical":True, "actual_source_step_executed":True, "compiler_and_Flutter_tools":"ordering stand-ins; actual pinned bridge generation is a separate required build check"}, indent=2) + "\n")
-    print("PASS: actual bridge-step hook precedes dependency/codegen input; removing hook rejects pristine input; all other build jobs/guards unchanged")
+    assert (repo.parent / "actual-helper-invocations.jsonl").read_text().splitlines() == [json.dumps(["../scripts/" + name]) for name in helpers]
+    assert len(P.existing_files(repo / "flutter" / P.DEPENDENCY)) == 98
+    assert len(window.existing_files(repo / "flutter" / window.DEPENDENCY)) == 124
+    # Exact prior fixture bodies demonstrate why a second helper masked a
+    # removed texture hook: the Python stand-in ignored its arguments and
+    # always applied texture, while both downstream tools checked only texture.
+    prior_binary = owner / "prior-bin"
+    prior_binary.mkdir()
+    prior_bodies = {
+        "python3": r'''
+import importlib.util,os
+from pathlib import Path
+s=importlib.util.spec_from_file_location('actual_patch','../scripts/patch-support-macos-texture.py')
+p=importlib.util.module_from_spec(s);s.loader.exec_module(p)
+p.fetch_source=lambda:p.source_files(Path('../pinned-renderer.tar').read_bytes())
+p.apply(Path(os.environ['RDREPO']))
+''',
+        "flutter": r'''
+from pathlib import Path
+assert 'session_unregister_pixelbuffer_texture_if_current' in Path('../src/flutter_ffi.rs').read_text()
+assert 'path: .mixel-dependencies/texture_rgba_renderer' in Path('pubspec.yaml').read_text()
+print('PASS: actual bridge step patched source before Flutter resolution')
+''',
+        "flutter_rust_bridge_codegen": r'''
+from pathlib import Path
+assert 'session_unregister_pixelbuffer_texture_if_current' in Path('src/flutter_ffi.rs').read_text()
+assert 'bool sessionUnregisterPixelbufferTextureIfCurrent(' in Path('flutter/lib/web/bridge.dart').read_text()
+Path('flutter/macos/Runner/bridge_generated.h').write_text('ordered bridge fixture')
+print('PASS: actual bridge step reaches codegen with new retirement API')
+''',
+    }
+    for name, body in prior_bodies.items():
+        path = prior_binary / name
+        path.write_text('#!' + sys.executable + '\n' + body)
+        path.chmod(0o755)
+    prior_repo = prepare_case(owner / "prior-dispatch-without-texture")
+    prior_script = script.replace("RDREPO=. python3 ../scripts/" + helpers[0] + "\n", "", 1)
+    prior_script = prior_script.replace(shlex.quote(codegen.as_posix()), shlex.quote((prior_binary / "flutter_rust_bridge_codegen").as_posix()), 1)
+    prior_result = subprocess.run([bash, "-e", "-o", "pipefail", "-c", prior_script], cwd=prior_repo,
+                                  env={**environment, "PATH": str(prior_binary) + os.pathsep + os.environ["PATH"]},
+                                  capture_output=True, text=True, timeout=30)
+    (output / "bridge-prior-dispatch-without-texture-hook.log").write_text(prior_result.stdout + prior_result.stderr)
+    assert prior_result.returncode == 0, prior_result.stdout + prior_result.stderr
+    assert len(P.existing_files(prior_repo / "flutter" / P.DEPENDENCY)) == 98
+    assert not (prior_repo / "flutter" / window.DEPENDENCY).exists()
+    print("PASS: reproduced prior argument-ignoring Python fixture falsely passing a removed texture hook through the window invocation")
+    negatives = {}
+    # Each negative gets the same complete source/helper fixtures. Failure must
+    # arise from the missing dependency, not a missing helper/archive path.
+    for name in helpers:
+        negative = prepare_case(owner / ("without-" + name.removesuffix(".py")))
+        changed = script.replace("RDREPO=. python3 ../scripts/" + name + "\n", "", 1)
+        result = subprocess.run([bash, "-e", "-o", "pipefail", "-c", changed], cwd=negative, env=environment, capture_output=True, text=True, timeout=30)
+        (output / ("bridge-without-" + name + "-negative.log")).write_text(result.stdout + result.stderr)
+        assert result.returncode != 0 and "AssertionError" in result.stderr
+        other = helpers[1] if name == helpers[0] else helpers[0]
+        assert (negative.parent / "actual-helper-invocations.jsonl").read_text().splitlines() == [json.dumps(["../scripts/" + other])]
+        negatives[name] = result.returncode
+    before = snapshot(repo)
+    before_invocations = (repo.parent / "actual-helper-invocations.jsonl").read_bytes()
+    for args in ([], ["../scripts/unexpected.py"], ["../scripts/" + helpers[0], "--extra"], ["../scripts/" + helpers[1], "--extra"]):
+        result = subprocess.run([sys.executable, str(python)] + args, cwd=repo, env={**environment, "RDREPO": "."}, capture_output=True, text=True, timeout=15)
+        assert result.returncode != 0 and "Unexpected bridge helper invocation" in result.stderr
+        assert snapshot(repo) == before and (repo.parent / "actual-helper-invocations.jsonl").read_bytes() == before_invocations
+    (output / "workflow-source-proof.json").write_text(json.dumps({"result":"passed", "workflow_sha256":P.sha(workflow.encode()), "head_workflow_sha256":P.sha(committed.encode()), "only_change":"test-only faithful dispatch of the two committed bridge hooks", "all_other_build_jobs_and_guards_byte_identical":True, "actual_source_step_executed":True, "pinned_renderer_files":98, "pinned_window_files":124, "prior_argument_ignoring_dispatch_false_pass_reproduced":True, "independent_missing_hook_exit_codes":negatives, "unexpected_helper_invocations_rejected":4, "compiler_and_Flutter_tools":"ordering stand-ins; actual pinned bridge generation is a separate required build check"}, indent=2) + "\n")
+    print("PASS: actual two-hook bridge step validates pinned98 renderer and124 window sources before dependency/codegen; removing either hook fails independently; four unexpected invocations refuse before writes; production workflow unchanged")
 
 
 def main():
