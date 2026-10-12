@@ -241,6 +241,18 @@ mod mixel_support_lease {
     pub fn fixture_unnamed_create()->(&'static str,bool,u32,bool,u32) {
         panic!("Retained legacy creation helper must never execute");
     }
+    pub fn fixture_enable_thread_tokens(_: &std::path::Path) {
+        panic!("Retained thread-token diagnostics must never execute");
+    }
+    pub fn fixture_flush_thread_tokens(_: &std::path::Path, _: bool) {
+        panic!("Retained thread-token flush must never execute");
+    }
+    pub fn fixture_observe_job_limits(_: &std::path::Path) {
+        panic!("Retained job diagnostics must never execute");
+    }
+    pub fn fixture_observe_directory_access(_: &std::path::Path) {
+        panic!("Retained directory diagnostics must never execute");
+    }
 }
 '''
         helper=builder.GUI_HELPER
@@ -297,19 +309,53 @@ mod mixel_support_lease {
             self.assertIn(b'not acknowledged',expired.stderr)
             print('PASS: actual mocked child entry runs A/B/A, retains literal results, consumes only its PID acknowledgement, rejects arguments and fails an unacknowledged deadline; no Windows qualification.',flush=True)
 
-    @unittest.skipUnless(os.name=='nt', 'Exact native Windows guard metadata compilation requires Windows; pure entry controls still run on this host')
     def test_complete_windows_generated_source_compiles_with_warnings_fatal(self):
         # The mocked entry cannot expose Windows-only unused exporter functions.
         # Compile the entire real generated source, without executing any child.
+        target=[]
+        if os.name!='nt':
+            name='x86_64-pc-windows-msvc'
+            directory=subprocess.run([self.compiler(),'--print','target-libdir','--target',name],capture_output=True,text=True,encoding='utf-8',timeout=60)
+            if directory.returncode or not list(Path(directory.stdout.strip()).glob('libstd-*.rlib')):
+                self.skipTest('Windows metadata target is not installed; the actual native Windows job remains mandatory')
+            target=['--target',name]
         with tempfile.TemporaryDirectory(prefix='mixel-gui-native-source-') as temporary:
             root=Path(temporary);source=root/'gui-connection.rs';metadata=root/'gui-connection.rmeta'
-            source.write_text(builder.generated_source(root,'Global\\Mixel-Remote-Standard-Lease-'+'d'*32),encoding='utf-8')
-            result=subprocess.run([self.compiler(),'--edition','2021','-D','warnings','--emit=metadata',str(source),'-o',str(metadata)],capture_output=True,text=True,timeout=60)
+            generated=builder.generated_source(root,'Global\\Mixel-Remote-Standard-Lease-'+'d'*32)
+            command=[self.compiler(),'--edition','2021','-D','warnings',*target,'--emit=metadata',str(source),'-o',str(metadata)]
+            # Reproduce the old whole-source error by removing only these
+            # compile-only references, retaining every guard/exporter body.
+            references=[]
+            for name in ('fixture_enable_thread_tokens','fixture_flush_thread_tokens',
+                         'fixture_observe_job_limits','fixture_observe_directory_access'):
+                matches=[line for line in builder.MAIN.splitlines(keepends=True) if 'let _ = mixel_support_lease::'+name+' as fn(' in line]
+                self.assertEqual(len(matches),1)
+                self.assertEqual(generated.count(matches[0]),1)
+                references.append(matches[0])
+            original=generated
+            for reference in references:original=original.replace(reference,'',1)
+            source.write_text(original,encoding='utf-8')
+            failed=subprocess.run(command,capture_output=True,text=True,encoding='utf-8',timeout=60)
+            self.assertNotEqual(failed.returncode,0)
+            for name in ('fixture_enable_thread_tokens','fixture_flush_thread_tokens',
+                         'fixture_observe_job_limits','fixture_observe_directory_access'):
+                self.assertIn('function `'+name+'` is never used',failed.stderr)
+            self.assertIn('29 previous errors',failed.stderr)
+            self.assertFalse(metadata.exists())
+            source.write_text(generated,encoding='utf-8')
+            result=subprocess.run(command,capture_output=True,text=True,encoding='utf-8',timeout=60)
             self.assertEqual(result.returncode,0,result.stderr)
             self.assertEqual(result.stderr,'')
             self.assertTrue(metadata.is_file())
             self.assertEqual(list(root.glob('*.exe')),[])
-            print('PASS: complete actual Windows generated guard/exporter/GUI entry compiles with -D warnings; metadata only, no native child executed.',flush=True)
+            # Warnings remain fatal; a genuinely unused new function must fail.
+            metadata.unlink()
+            source.write_text(generated+'\nfn unused_gui_control_must_fail() {}\n',encoding='utf-8')
+            denied=subprocess.run(command,capture_output=True,text=True,encoding='utf-8',timeout=60)
+            self.assertNotEqual(denied.returncode,0)
+            self.assertIn('function `unused_gui_control_must_fail` is never used',denied.stderr)
+            self.assertFalse(metadata.exists())
+            print('PASS: exact old Windows GUI source reproduces29 unused export errors; complete corrected guard/exporter/GUI compiles clean with -D warnings; new unused control still fatal; metadata only, no Windows child executed.',flush=True)
 
     def test_pe_metadata_refuses_static_gui_delayload_and_gui_subsystem(self):
         def image(name='kernel32.dll'):

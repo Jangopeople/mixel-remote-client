@@ -203,6 +203,10 @@ fn main() {
     // Retain compilation coverage only; never execute legacy creation controls.
     let _ = lease_main as fn();
     let _ = mixel_support_lease::fixture_unnamed_create as fn() -> (&'static str, bool, u32, bool, u32);
+    let _ = mixel_support_lease::fixture_enable_thread_tokens as fn(&std::path::Path);
+    let _ = mixel_support_lease::fixture_flush_thread_tokens as fn(&std::path::Path, bool);
+    let _ = mixel_support_lease::fixture_observe_job_limits as fn(&std::path::Path);
+    let _ = mixel_support_lease::fixture_observe_directory_access as fn(&std::path::Path);
     let directory = std::env::current_exe().unwrap().parent().unwrap().to_owned();
     let mode = std::fs::read_to_string(directory.join("gui-connection-mode.txt")).unwrap();
     assert!(matches!(mode.as_str(), "A-before" | "B" | "A-after"));
