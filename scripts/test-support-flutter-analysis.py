@@ -437,7 +437,7 @@ def pipeline(out,source,bash):
     for app_newlines,initial_profile in (("lf","false"),("lf","true"),("crlf","false"),("crlf","true")):
         newline=b"\n" if app_newlines=="lf" else b"\r\n"
         label=app_newlines+"-initial-"+initial_profile
-        repo=out/("pipeline-"+label)
+        repo=out/("pipeline-lf" if label=="lf-initial-false" else "pipeline-"+label)
         run(["git","clone","--quiet","--shared",str(source),str(repo)],out,"clone-"+label)
         run(["git","-C",str(repo),"checkout","--quiet",P.PIN],out,"checkout-"+label)
         library=source/"libs/hbb_common"
