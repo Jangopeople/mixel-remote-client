@@ -8,7 +8,7 @@ import importlib.util
 import io
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import shutil
 import subprocess
 import tarfile
@@ -73,6 +73,25 @@ def branding_bash(explicit,windows):
     return str(resolved)
 
 
+def git_bash_runtime(selected,output):
+    # Query the exact selected shell's own public MSYS path mapper. GNU Bash
+    # version text is informational and does not identify its Windows runtime.
+    shell=PureWindowsPath(selected)
+    install=shell.parent.parent
+    if install.name.lower()=="usr":
+        install=install.parent
+    lines=output.splitlines()
+    if len(lines)!=2:
+        raise RuntimeError("Active Git Bash runtime query must return exactly two Windows paths")
+    root,actual=(PureWindowsPath(line) for line in lines)
+    if not root.is_absolute() or not actual.is_absolute() or root!=install:
+        raise RuntimeError("Active Bash runtime does not map to the supplied Git installation")
+    if actual not in tuple(install/name for name in (
+            "bin/bash","bin/bash.exe","usr/bin/bash","usr/bin/bash.exe")):
+        raise RuntimeError("Active Bash runtime executable is outside the supplied Git installation")
+    return {"installation":str(root),"running_bash":str(actual)}
+
+
 def shell_controls(out,bash,source):
     control=out/"shell préflight 🚀"
     control.mkdir()
@@ -122,8 +141,41 @@ def shell_controls(out,bash,source):
         out,"actual-exact-bash-unicode-control",env=env)
     assert "PASS: actual exact Bash preserves préflight 🚀 argument and shell-facing paths" in result.stdout
     version=run([str(selected),"--version"],out,"actual-exact-bash-version")
+    print("Actual exact Bash version (informational):\n"+version.stdout,flush=True)
+    runtime=None
+    # These are parser controls, not executions of the installation stand-ins.
+    expected=r"C:\Program Files\Git"
+    for name in ("bin/bash.exe","usr/bin/bash.exe"):
+        for active in (r"C:\Program Files\Git\bin\bash",r"C:\Program Files\Git\bin\bash.exe",
+                       r"C:\Program Files\Git\usr\bin\bash",r"C:\Program Files\Git\usr\bin\bash.exe"):
+            assert git_bash_runtime(str(PureWindowsPath(expected)/name),expected+"\r\n"+active+"\r\n")["installation"]==expected
+    runtime_refusals=0
+    for value in ("",expected+"\n",expected+"\na\nb\n","relative\n"+expected+r"\bin\bash.exe",
+                  r"C:\foreign\Git"+"\n"+expected+r"\bin\bash.exe",
+                  expected+"\n"+r"C:\foreign\Git\usr\bin\bash.exe",
+                  expected+"\n"+expected+r"\usr\bin\sh.exe"):
+        try:
+            git_bash_runtime(expected+r"\bin\bash.exe",value)
+        except RuntimeError:
+            runtime_refusals+=1
+        else:
+            raise AssertionError("Missing/relative/foreign Git Bash runtime path was accepted")
+    assert runtime_refusals==7
+    # The old assertion can reject a legitimate runtime solely because its
+    # informational version output omits "msys". This text is a labelled mock;
+    # the next Windows execution retains the actual version and runtime bytes.
+    try:
+        assert "msys" in "GNU bash, version 5.2.37(1)-release\n".lower(),"Actual active Windows shell is not Git/MSYS Bash"
+    except AssertionError as error:
+        assert str(error)=="Actual active Windows shell is not Git/MSYS Bash"
+    else:
+        raise AssertionError("Original version-substring false refusal was not reproduced")
     if os.name=="nt":
-        assert "msys" in version.stdout.lower(),"Actual active Windows shell is not Git/MSYS Bash"
+        queried=run([str(selected),"--noprofile","--norc","-c",
+            '/usr/bin/cygpath.exe -w / && /usr/bin/cygpath.exe -w "$BASH"'],
+            out,"actual-exact-bash-runtime")
+        print("Actual exact Bash runtime paths:\n"+queried.stdout,flush=True)
+        runtime=git_bash_runtime(str(selected),queried.stdout)
     tree=ast.parse(Path(__file__).read_text(encoding="utf-8"))
     pipeline_node=next(node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name=="pipeline")
     shell_runs=[call for call in ast.walk(pipeline_node)
@@ -171,7 +223,10 @@ def shell_controls(out,bash,source):
         assert archive_inputs["true"][name]!=data,"Original archive conversion no longer reproduced"
     (out/"exact-bash-proof.json").write_text(json.dumps({
         "actual_selected_shell":str(selected),"actual_spaced_unicode_invocation_exit":result.returncode,
-        "actual_windows_git_msys_version_verified":os.name=="nt",
+        "actual_version_output_informational_only":True,
+        "actual_windows_git_msys_runtime":runtime,
+        "runtime_path_refusals":runtime_refusals,
+        "original_version_substring_false_refusal_reproduced_mocked_version_only":True,
         "installation_layout_controls_mocked_only":True,"path_refusals":refusals,
         "existing_unix_default_preserved":True,"all_three_pipeline_calls_exact_supplied_shell":True,
         "original_bare_bash_failure_boundary_reproduced":True,
