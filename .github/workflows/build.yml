@@ -909,6 +909,7 @@ jobs:
           Copy-Item $release dist/Mixel-Remote-QS.exe
 
       - name: Verify Windows Authenticode signatures
+        id: windows_authenticode
         shell: pwsh
         run: |
           $installers = @(Get-ChildItem dist -File | Where-Object { $_.Extension -in '.exe', '.msi' }) +
@@ -973,6 +974,14 @@ jobs:
         run: |
           python scripts/validate-windows-preflight-build.py outcome
           if ($LASTEXITCODE -ne 0) { throw 'Original Windows source preflight still blocks customer release.' }
+
+      - name: Retain verified signed Windows installers for unpublished diagnosis
+        if: ${{ always() && !cancelled() && needs.config.outputs.collect_windows_preflight_failure == 'true' && steps.windows_authenticode.outcome == 'success' }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-unpublished-diagnostic
+          path: dist/
+          if-no-files-found: error
 
       - uses: actions/upload-artifact@v6
         with:

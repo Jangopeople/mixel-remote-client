@@ -39,6 +39,11 @@ def expression_value(expression, context):
                ast.Compare, ast.Eq, ast.NotEq, ast.Constant)
     if any(not isinstance(node, allowed) for node in ast.walk(tree)):
         raise AssertionError('Unexpected conditional operation')
+    # Actions compares strings without case sensitivity. These workflow
+    # predicates use only Boolean logic and string-to-string comparisons.
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            node.value = node.value.casefold()
     return bool(eval(compile(tree, '<actual-workflow-condition>', 'eval'), {'__builtins__': {}}, {}))
 
 
@@ -140,7 +145,7 @@ class WindowsPreflightBuildTests(unittest.TestCase):
         condition = re.search(r'continue-on-error: (.+)', preflight)[1]
         for value in ('', 'false', 'TRUE', 'true'):
             self.assertEqual(expression_value(condition, {'needs.config.outputs.collect_windows_preflight_failure': value}),
-                             value == 'true')
+                             value.casefold() == 'true')
         final = re.search(r'      - name: Require the original Windows source preflight before customer artifact upload\n(.*?)(?=\n      - )', windows, re.S)[1]
         self.assertIn('if: ${{ always() && !cancelled() }}', final)
         self.assertIn('SOURCE_PREFLIGHT_OUTCOME: ${{ steps.preflight.outcome }}', final)
@@ -164,6 +169,38 @@ class WindowsPreflightBuildTests(unittest.TestCase):
                 self.assertEqual(len(matches), 1)
                 self.assertNotIn('continue-on-error:', matches[0])
                 self.assertNotIn('if:', matches[0])
+
+    def test_diagnostic_installers_require_validated_opt_in_and_completed_signature_verification(self):
+        text = (ROOT / '.github/workflows/build.yml').read_text(encoding='utf-8')
+        windows = job(text, 'windows')
+        verifier = re.search(r'      - name: Verify Windows Authenticode signatures\n(.*?)(?=\n      - )', windows, re.S)[1]
+        self.assertIn('id: windows_authenticode\n', verifier)
+        self.assertIn("if ($signature.Status -ne 'Valid')", verifier)
+        self.assertNotIn('if:', verifier)
+        self.assertNotIn('continue-on-error:', verifier)
+        diagnostic = re.search(r'      - name: Retain verified signed Windows installers for unpublished diagnosis\n(.*?)(?=\n      - )', windows, re.S)[1]
+        self.assertIn('name: windows-unpublished-diagnostic\n', diagnostic)
+        self.assertIn('path: dist/\n', diagnostic)
+        self.assertIn('if-no-files-found: error', diagnostic)
+        condition = re.search(r'^        if: (.+)$', diagnostic, re.M)[1]
+        self.assertIn('always()', condition)
+        self.assertIn('!cancelled()', condition)
+        condition = condition.replace('always()', 'observed_always').replace('cancelled()', 'observed_cancelled')
+        for enabled in ('true', 'false', '', 'TRUE', '1', ' true', 'true '):
+            for signature in ('success', 'failure', 'skipped', 'cancelled', '', 'SUCCESS'):
+                for cancelled in (False, True):
+                    context = {'observed_always': True, 'observed_cancelled': cancelled,
+                               'needs.config.outputs.collect_windows_preflight_failure': enabled,
+                               'steps.windows_authenticode.outcome': signature}
+                    with self.subTest(enabled=enabled, signature=signature, cancelled=cancelled):
+                        self.assertEqual(expression_value(condition, context),
+                                         enabled.casefold() == 'true' and signature.casefold() == 'success' and not cancelled)
+        self.assertLess(windows.index('Verify Windows Authenticode signatures'),
+                        windows.index('Retain verified signed Windows installers'))
+        self.assertLess(windows.index('Require the original Windows source preflight'),
+                        windows.index('name: windows-unpublished-diagnostic'))
+        self.assertLess(windows.index('name: windows-unpublished-diagnostic'), windows.index('name: windows\n'))
+        self.assertIn('!inputs.collect_windows_preflight_failure', job(text, 'upload'))
 
 
 if __name__ == '__main__':
