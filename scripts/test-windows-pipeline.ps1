@@ -20,6 +20,8 @@ function Assert-Fails([scriptblock]$Action, [string]$Scenario, [string[]]$Expect
 # The ordinary invocation still executes every existing pipeline control.
 # The additional stock-PS5 job exercises only the exact named-pipe health suite.
 if (-not $RuntimeProbeOnly) {
+& python (Join-Path $PSScriptRoot 'test-windows-desktop-identity-diagnostic.py')
+if ($LASTEXITCODE -ne 0) { throw 'Owned desktop identity diagnostic source controls failed.' }
 & (Join-Path $PSScriptRoot 'test-windows-customer-cleanup.ps1')
 $repository = Split-Path $PSScriptRoot -Parent
 foreach ($file in (Get-ChildItem $PSScriptRoot -Filter '*.ps1' -File)) {
@@ -77,6 +79,19 @@ try {
 }
 Write-Host 'PASS: exact native desktop snapshot reader reports pending only for an actual exclusive file lock, reads a complete snapshot after release and rejects malformed data.'
 
+function Write-OwnedDesktopIdentityDiagnostic([int]$OwnedPid, [string]$ExpectedSid, [string]$Mode,
+    [bool]$PredicateElevated, $PredicateChildSession, $PredicateCallerSession) {
+  $record=[ordered]@{schema=1; mode=$Mode; ownedPid=$OwnedPid; predicateElevated=$PredicateElevated;
+    predicateChildSession=$PredicateChildSession; predicateCallerSession=$PredicateCallerSession;
+    sessionPredicateEvaluated=($null -ne $PredicateChildSession); nativeStatus=$null; primaryToken=$null;
+    statusObservationFailureType=$null; tokenObservationFailureType=$null}
+  try { $record.nativeStatus=[MixelOrdinaryTokenFixture]::StartedStatus($OwnedPid) }
+  catch { $record.statusObservationFailureType=$_.Exception.GetType().FullName }
+  try { $record.primaryToken=[MixelOrdinaryTokenFixture]::ObserveOwnedDesktopPrimary($OwnedPid,$ExpectedSid) }
+  catch { $record.tokenObservationFailureType=$_.Exception.GetType().FullName }
+  Write-Host ('FIXTURE: fatal owned desktop identity observation; ' + ($record | ConvertTo-Json -Depth 4 -Compress))
+}
+
 # Compile the exact native OS fixture used by the real ordinary-to-QS runtime
 # test; its policy checks are testable without launching or changing an app.
 $launchSource = Get-Content (Join-Path $PSScriptRoot 'test-support-launch-windows.ps1') -Raw
@@ -87,7 +102,12 @@ if ($fixtureClass -lt 0 -or $fixtureStart -lt 0 -or $fixtureEnd -le $fixtureStar
   throw 'Actual ordinary-token runtime fixture is missing.'
 }
 if (-not ('MixelOrdinaryTokenFixture' -as [type])) {
-  Add-Type -TypeDefinition $launchSource.Substring($fixtureStart, $fixtureEnd - $fixtureStart)
+  $fixtureSource=$launchSource.Substring($fixtureStart, $fixtureEnd - $fixtureStart)
+  $identityMarker='  public static int StartStandardUser(string executable, string username, string password) {'
+  $identityPosition=$fixtureSource.IndexOf($identityMarker)
+  if ($identityPosition -lt 0 -or $identityPosition -ne $fixtureSource.LastIndexOf($identityMarker)) { throw 'Exact owned desktop diagnostic insertion point drifted.' }
+  $identitySource=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'support-windows-desktop-identity-diagnostic.cs'))
+  Add-Type -TypeDefinition $fixtureSource.Insert($identityPosition,$identitySource+"`n")
 }
 $dumpControl = Join-Path ([IO.Path]::GetTempPath()) ('mixel-owned-dump-attribution-' + [Guid]::NewGuid().ToString('N'))
 try {
@@ -321,7 +341,11 @@ public static class MixelOwnedDesktopControl {
       $guiStartedAt = [DateTime]::UtcNow
       $guiPid = [MixelOrdinaryTokenFixture]::StartStandardUser($guiExecutable, $ownedUser, $ownedPassword)
       $guiProcess = Get-Process -Id $guiPid
-      if ([MixelOrdinaryTokenFixture]::Elevated($guiPid) -or $guiProcess.SessionId -ne (Get-Process -Id $PID).SessionId) {
+      $guiElevated=[MixelOrdinaryTokenFixture]::Elevated($guiPid)
+      $predicateChildSession=$null; $predicateCallerSession=$null
+      if ($guiElevated -or ($predicateChildSession=$guiProcess.SessionId) -ne ($predicateCallerSession=(Get-Process -Id $PID).SessionId)) {
+        try { Write-OwnedDesktopIdentityDiagnostic $guiPid $ownedSid $mode $guiElevated $predicateChildSession $predicateCallerSession }
+        catch { try { Write-Host ('FIXTURE: fatal owned desktop identity diagnostic emission failed; exceptionType=' + $_.Exception.GetType().FullName) } catch {} }
         throw 'Owned desktop control is not a genuine non-elevated process in the runner session.'
       }
       $deadline = [DateTime]::UtcNow.AddSeconds(8)
