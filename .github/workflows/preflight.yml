@@ -52,8 +52,15 @@ jobs:
   windows-packaging:
     runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_source_runner == 'windows-2025' && 'windows-2025' || 'windows-2022' }}
     timeout-minutes: 20
+    env:
+      PYTHONUTF8: '1'
     steps:
       - uses: actions/checkout@v5
+      - name: Verify UTF-8 repository source decoding
+        shell: pwsh
+        run: |
+          python -c "import sys; from pathlib import Path; assert sys.flags.utf8_mode == 1; p = Path('.github/workflows/build.yml'); assert p.read_text() == p.read_text(encoding='utf-8'); print('PASS: Windows Python reads repository source as strict UTF-8')"
+          if ($LASTEXITCODE -ne 0) { throw 'Windows repository source encoding verification failed.' }
       - name: Exercise Windows payload preparation and IPC response validation
         shell: pwsh
         run: ./scripts/test-windows-pipeline.ps1

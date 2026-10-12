@@ -643,6 +643,7 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 180
     env:
+      PYTHONUTF8: '1'
       UPSTREAM_VERSION: ${{ needs.config.outputs.upstream_version }}
     steps:
       - uses: actions/checkout@v5
