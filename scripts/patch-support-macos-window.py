@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Guard pinned Mac engine startup, initial lifecycle and close acknowledgement."""
+"""Guard pinned Mac frame readiness, startup, lifecycle and close acknowledgement."""
 import hashlib
 import io
 import json
@@ -21,7 +21,7 @@ OLD_DEP = b"""  desktop_multi_window:
     git:
       url: https://github.com/rustdesk-org/rustdesk_desktop_multi_window"""
 NEW_DEP = b"""  desktop_multi_window:
-    # Exact b47e8385; guarded Mac startup, initial lifecycle and close acknowledgement.
+    # Exact b47e8385; guarded Mac frame readiness, startup, lifecycle and close acknowledgement.
     path: .mixel-dependencies/desktop_multi_window"""
 REPLACEMENTS = {
     "macos/Classes/FlutterWindow.swift": (
@@ -31,6 +31,9 @@ REPLACEMENTS = {
             ("    window.contentViewController = flutterViewController\n", ""),
             ("    super.init(window: window, channel: windowChannel)\n", """    // AppKit can emit move/resize events before show() calls viewWillAppear.
     // Register every plugin first, then start before attaching the view/delegate.
+    // The public view getter installs the native VSync waiter in viewDidLoad
+    // before run can request an initial frame on the separate UI thread.
+    _ = flutterViewController.view
     guard flutterViewController.engine.run(withEntrypoint: nil) else {
       flutterViewController.engine.shutDownEngine()
       return nil
@@ -286,7 +289,7 @@ def apply(repo):
                 raise RuntimeError("Owned subwindow destination appeared during preparation")
             stage.rename(target)
     pubspec.write_bytes(corrected)
-    print("   patched pinned Mac subwindow lifecycle: plugins → engine → native view/delegate; startup failure returns FlutterError; close retains engine until Dart reply or 5s fallback; shared cache untouched")
+    print("   patched pinned Mac subwindow lifecycle: plugins → VSync-ready view → engine → native view/delegate; startup failure returns FlutterError; close retains engine until Dart reply or 5s fallback; shared cache untouched")
 
 
 if __name__ == "__main__":
