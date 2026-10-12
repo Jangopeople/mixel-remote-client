@@ -19,6 +19,9 @@ ROOT=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location("mixel_flutter_analysis",ROOT/"scripts/patch-support-flutter-analysis.py")
 P=importlib.util.module_from_spec(spec)
 spec.loader.exec_module(P)
+termination_spec=importlib.util.spec_from_file_location("mixel_application_exit_composition",ROOT/"scripts/patch-support-macos-termination.py")
+T=importlib.util.module_from_spec(termination_spec)
+termination_spec.loader.exec_module(T)
 
 
 def run(args,out,label,*,cwd=None,env=None,success=True):
@@ -340,7 +343,8 @@ def pipeline(out,source,bash):
     # Include the exact current root integration and the reviewed new helpers,
     # without mutating root-owned files.
     for name in ("apply-branding.sh","patch-support-macos-cleanup.py",
-                 "patch-support-flutter-analysis.py","test-support-flutter-analysis.py"):
+                 "patch-support-flutter-analysis.py","test-support-flutter-analysis.py",
+                 "patch-support-macos-termination.py","test-support-macos-termination.py"):
         shutil.copyfile(ROOT/"scripts"/name,copied/"scripts"/name)
     script=copied/"scripts/apply-branding.sh"
     shell_source="$"+"{BASH_SOURCE[0]}"
@@ -370,8 +374,13 @@ def pipeline(out,source,bash):
             (repo/name).write_bytes(pinned(source,name).replace(b"\n",newline))
         env=dict(os.environ,RDREPO=repo.as_posix(),BRANDING=(copied/"branding").as_posix())
         run([bash,script.as_posix()],out,"pipeline-"+label+"-1",cwd=copied,env=env)
+        T.apply(repo,check=True)
         for name,(_,corrected,*_) in P.FILES.items():
-            assert sha((repo/name).read_bytes().replace(b"\r\n",b"\n"))==corrected,name
+            actual=(repo/name).read_bytes().replace(b"\r\n",b"\n")
+            canonical=(T.regular(repo/"flutter/.mixel-dependencies/macos_application_exit",name)
+                       if name in T.FILES else actual)
+            assert sha(canonical)==corrected,name
+            assert actual==(T.transform(name,canonical) if name in T.FILES else canonical),name
         first=snapshot(repo)
         run([bash,script.as_posix()],out,"pipeline-"+label+"-2",cwd=copied,env=env)
         assert snapshot(repo)==first,"Full pipeline second pass changed bytes"
@@ -382,14 +391,15 @@ def pipeline(out,source,bash):
         target.write_bytes(saved+b"// unapproved drift\n")
         before=snapshot(repo)
         failed=run([bash,script.as_posix()],out,"pipeline-"+label+"-refusal",cwd=copied,env=env,success=False)
-        assert failed.returncode!=0 and "Pinned Flutter analysis input changed" in failed.stderr
+        assert failed.returncode!=0 and "Changed application-exit current source: flutter/lib/common.dart" in failed.stderr
         assert snapshot(repo)==before,"Drift refusal changed another pipeline file"
         target.write_bytes(saved)
         if label=="lf":
-            common=saved.replace("import 'dart:convert';\n".encode(),"import 'dart:convert';\nimport 'dart:math';\n".encode(),1)
+            canonical=T.regular(repo/"flutter/.mixel-dependencies/macos_application_exit",name)
+            common=canonical.replace("import 'dart:convert';\n".encode(),"import 'dart:convert';\nimport 'dart:math';\n".encode(),1)
             assert sha(common)==P.FILES[name][0]
             originals[name]=common
-    print("PASS: exact current complete branding and cleanup plus late analyzer hook; LF/CRLF twice byte-identical; drift fails without mutation")
+    print("PASS: exact current complete branding, cleanup, analyzer and final Quit composition; LF/CRLF twice byte-identical; drift fails without mutation")
     return originals
 
 
@@ -535,8 +545,12 @@ def analyze_app(out,source,flutter,files):
     # the exact pre-correction six files only in an owned analysis fixture, so
     # this proof also works after apply-branding has already applied the fix.
     source_before=snapshot(source/"flutter")
+    application_exit=(source/T.GENERATED).exists() or (source/T.GENERATED).is_symlink()
+    if application_exit: T.apply(source,check=True)
     for name in P.FILES:
-        P.transform(name,(source/name).read_bytes())
+        canonical=(T.regular(source/"flutter/.mixel-dependencies/macos_application_exit",name)
+                   if application_exit and name in T.FILES else (source/name).read_bytes())
+        P.transform(name,canonical)
     checkout=out/"complete-app-fixture"
     for name in ("lib","test","assets",".mixel-dependencies"):
         if (source/"flutter"/name).exists():
@@ -546,6 +560,13 @@ def analyze_app(out,source,flutter,files):
         target.parent.mkdir(parents=True,exist_ok=True)
         shutil.copyfile(source/"flutter"/name,target)
     shutil.copyfile(source/"Cargo.toml",checkout/"Cargo.toml")
+    if application_exit:
+        for name in T.FILES:
+            target=checkout/name; target.parent.mkdir(parents=True,exist_ok=True)
+            shutil.copyfile(source/name,target)
+        # Strict exact-owned reversal happens only in this private analyzer
+        # fixture. The supplied app retains every final Quit correction byte.
+        T.apply(checkout,restore=True)
     for name in P.FILES:
         (checkout/name).write_bytes(files[name])
     env=dict(os.environ,CI="true",FLUTTER_SUPPRESS_ANALYTICS="true",DART_SUPPRESS_ANALYTICS="true")

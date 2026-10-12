@@ -312,6 +312,12 @@ Write-Host 'PASS: actual extracted current-caller creation uses explicit Unicode
                 print(result.stdout, flush=True)
 
     def test_current_caller_four_actual_functions_strict_results_and_cleanup(self):
+        # The compiled fixture acknowledges its retained result by consuming the
+        # exact release path before a successful exit. Model that real lifecycle,
+        # as well as a residual acknowledgment that still requires parent cleanup.
+        fixture_source = (ROOT / "scripts/test-support-lease.py").read_text(encoding="utf-8")
+        self.assertIn('let release = directory.join(format!("fixture-release-{}", std::process::id()));', fixture_source)
+        self.assertIn('assert!(release.is_file(), "Owned standard-account result was not acknowledged");\n            std::fs::remove_file(release).unwrap();', fixture_source)
         with tempfile.TemporaryDirectory(prefix="mixel-current-caller-controls-") as temporary:
             root = Path(temporary)
             script = root / "control.ps1"
@@ -326,6 +332,7 @@ if($errors.Count) { throw 'Current helper does not parse' }
 foreach($name in @('Assert-StandardLeaseSafeResult','Read-StandardCallingThreadTokens','Invoke-CurrentCallerLeaseControl','Invoke-CurrentCallerLeaseFour')) {
   $matches=$ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq $name},$true)
   if($matches.Count -ne 1) { throw "Missing exact current function $name" }
+  if($name -ceq 'Invoke-CurrentCallerLeaseControl') { $correctedControl=$matches[0].Extent.Text }
   . ([scriptblock]::Create($matches[0].Extent.Text))
 }
 Add-Type @'
@@ -356,28 +363,52 @@ public static class MixelOrdinaryTokenFixture {
   public static bool StartedCurrentCallerSidMatches(int pid){return Scenario!="sid";}
   public static bool Elevated(int pid){return pid==CallerPid || Scenario!="elevation";}
   public static ControlFacts StartedTokenFacts(int pid){var f=new ControlFacts();if(Scenario=="token-session")f.sessionId=3;if(Scenario=="unknown-session")f.sessionKnown=false;if(Scenario=="logon")f.logonComparison=f.logonComparison.Replace("MatchesCaller=true","MatchesCaller=false");return f;}
-  public static string StartedStatus(int pid){if(!statuses.ContainsKey(pid))throw new InvalidOperationException("Unowned status");if(Scenario=="early-owner" && pid==Owner)return "exited:0x00000000";if(pid!=Owner && File.Exists(Path.Combine(Root,"fixture-release-"+pid)))statuses[pid]="exited:0x00000000";return statuses[pid];}
+  public static string StartedStatus(int pid){if(!statuses.ContainsKey(pid))throw new InvalidOperationException("Unowned status");if(Scenario=="early-owner" && pid==Owner)return "exited:0x00000000";string release=Path.Combine(Root,"fixture-release-"+pid);if(pid!=Owner && File.Exists(release)){if(Scenario!="parent-release" && Scenario!="remove-denied")File.Delete(release);statuses[pid]="exited:0x00000000";}return statuses[pid];}
   public static void StopOwnedStartedProcesses(){Stops++;Calls.Add("stop");foreach(int pid in new List<int>(statuses.Keys))if(statuses[pid]=="still-running")statuses[pid]="exited:0x00000001";Owner=0;if(Scenario=="stop")throw new InvalidOperationException("Mock retained stop failure");}
   public static void CloseStartedObservations(){Closes++;Calls.Add("close");statuses.Clear();if(Scenario=="close")throw new InvalidOperationException("Mock retained close failure");}
 }
 '@
 function Get-Process {param([int]$Id) $process=[ControlProcess]::new();if($Id -ne $PID -and [MixelOrdinaryTokenFixture]::Scenario -ceq 'process-session'){$process.SessionId=3};return $process}
+function Remove-Item {
+  param([string]$LiteralPath)
+  if([MixelOrdinaryTokenFixture]::Scenario -ceq 'remove-denied' -and [IO.Path]::GetFileName($LiteralPath).StartsWith('fixture-release-')) {throw 'Mock existing acknowledgment cleanup denied'}
+  Microsoft.PowerShell.Management\Remove-Item -LiteralPath $LiteralPath
+}
 $script:printed=[Collections.Generic.List[string]]::new()
 function Write-Host {param($Object) $script:printed.Add([string]$Object)}
-$scenarios=@('pass','error5','false-ready','owner-memory','owner-failed','wrong-click','token-close','sid','elevation','process-session','token-session','unknown-session','logon','early-owner','stop','close')
+$cleanupGuard='if (Test-Path -LiteralPath $releasePath) { Remove-Item -LiteralPath $releasePath }'
+if(-not $correctedControl.Contains($cleanupGuard)) {throw 'Exact guarded release cleanup missing'}
+# Restore the one original failing statement inside the actual extracted body;
+# the child model still consumes its acknowledgment before retained exit0.
+$originalControl=$correctedControl.Replace($cleanupGuard,'Remove-Item -LiteralPath $releasePath')
+. ([scriptblock]::Create($originalControl))
+$fixtureRoot=Join-Path $ControlRoot 'original-consumed-release';[void][IO.Directory]::CreateDirectory($fixtureRoot)
+$executable=Join-Path $fixtureRoot 'lease-standard.exe';$resultPath=Join-Path $fixtureRoot 'fixture-result.json'
+[MixelOrdinaryTokenFixture]::Reset($fixtureRoot,'pass',$PID);$script:printed.Clear()
+$message='';try {Invoke-CurrentCallerLeaseFour} catch {$message=$_.Exception.Message}
+if(-not $message.Contains('fixture-release-4001') -or -not $message.Contains('does not exist') -or
+   ([MixelOrdinaryTokenFixture]::Calls -join ',') -cne 'probe:4001,stop,close' -or
+   [MixelOrdinaryTokenFixture]::Disposed -ne 2 -or [MixelOrdinaryTokenFixture]::Stops -ne 1 -or [MixelOrdinaryTokenFixture]::Closes -ne 1 -or
+   (Test-Path -LiteralPath (Join-Path $fixtureRoot 'fixture-release-4001'))) {throw "Original consumed acknowledgment did not fail the exact first-probe cleanup: $message"}
+. ([scriptblock]::Create($correctedControl))
+$scenarios=@('pass','parent-release','remove-denied','error5','false-ready','owner-memory','owner-failed','wrong-click','token-close','sid','elevation','process-session','token-session','unknown-session','logon','early-owner','stop','close')
 foreach($scenario in $scenarios) {
   $fixtureRoot=Join-Path $ControlRoot $scenario;[void][IO.Directory]::CreateDirectory($fixtureRoot)
   $executable=Join-Path $fixtureRoot 'lease-standard.exe';$resultPath=Join-Path $fixtureRoot 'fixture-result.json'
   [MixelOrdinaryTokenFixture]::Reset($fixtureRoot,$scenario,$PID)
   $script:printed.Clear()
   $message='';try { Invoke-CurrentCallerLeaseFour } catch { $message=$_.Exception.Message }
-  if(($scenario -ceq 'pass') -ne ($message -ceq '')) {throw "Incorrect direct control scenario $scenario : $message"}
+  $positive=$scenario -ceq 'pass' -or $scenario -ceq 'parent-release'
+  if($positive -ne ($message -ceq '')) {throw "Incorrect direct control scenario $scenario : $message"}
   if([MixelOrdinaryTokenFixture]::Stops -lt 1 -or [MixelOrdinaryTokenFixture]::Closes -lt 1) {throw "Independent retained cleanup missing $scenario"}
-  if($scenario -ceq 'pass') {
+  if($positive) {
     if(([MixelOrdinaryTokenFixture]::Calls -join ',') -cne 'probe:4001,owner:4002,probe:4003,stop,close,probe:4004,stop,close' -or [MixelOrdinaryTokenFixture]::Disposed -ne 8) {throw 'Four phase ownership/order or wrapper disposal changed'}
     if(@(Get-ChildItem -LiteralPath $fixtureRoot -Filter 'fixture-release-*').Count -ne 0) {throw 'Confirmed exited caller acknowledgment can leak into the unchanged standard terminal after PID reuse'}
     if($script:printed.Count -ne 9 -or @($script:printed | Where-Object {$_ -like 'OBSERVED: direct current Actions caller GUID functional control;*' -and $_.Contains('genuineStandardQualified=False; fullEightQualified=False; customerAppQualified=False;')}).Count -ne 4) {throw 'Diagnostic output silently became standard/app qualification or lost native records'}
   } else {
+    if($scenario -ceq 'remove-denied' -and ($message -cne 'Mock existing acknowledgment cleanup denied' -or
+       -not (Test-Path -LiteralPath (Join-Path $fixtureRoot 'fixture-release-4001')) -or
+       ([MixelOrdinaryTokenFixture]::Calls -join ',') -cne 'probe:4001,stop,close' -or [MixelOrdinaryTokenFixture]::Disposed -ne 2)) {throw 'Existing acknowledgment cleanup failure was erased or retained process/wrapper cleanup changed'}
     if($scenario -ceq 'error5' -and (-not $message.Contains('classification mismatch') -or -not ($script:printed -join '').Contains('"rawOpenError":5'))) {throw 'Native5 did not remain fatal or was lost before failure'}
     if($scenario -ceq 'token-close' -and -not $message.Contains('token handle cleanup failed')) {throw 'Unknown failed close0 did not remain fatal'}
   }
@@ -394,14 +425,14 @@ if(-not $currentCallerFailure -or $currentCallerFailure.Exception.Message -cne '
 $oldMatrixReached=$true
 $message='';try {& ([scriptblock]::Create($final[0].Extent.Text))} catch {$message=$_.Exception.Message}
 if(-not $oldMatrixReached -or $message -cne 'Exact retained direct source failure') {throw 'Deferred direct failure no longer fatal'}
-Microsoft.PowerShell.Utility\Write-Host 'PASS: exact current-caller PowerShell functions execute four strict same-executable phases, retained owner drop/fresh absence and independent cleanup; 15 identity/native-state/close/lifetime/cleanup mutations refuse; failure is retained while the old matrix runs and rethrown after the unchanged mandatory gate. APIs mocked only; no standard/app qualification.'
+Microsoft.PowerShell.Utility\Write-Host 'PASS: exact original consumed-acknowledgment cleanup fails after its first native-result model; corrected current-caller PowerShell functions execute four strict same-executable phases with consumed and residual acknowledgments, retained owner drop/fresh absence and independent cleanup; 16 identity/native-state/close/lifetime/cleanup mutations refuse including existing-file unlink failure; failure is retained while the old matrix runs and rethrown after the unchanged mandatory gate. APIs mocked only; no standard/app qualification.'
 ''', encoding="utf-8-sig")
             for index, (engine, edition) in enumerate(self.powershell_engines()):
                 control_root = root / ("engine-" + str(index))
                 control_root.mkdir()
                 result = subprocess.run([engine, "-NoProfile", "-File", str(script), "-Repository", str(ROOT), "-ControlRoot", str(control_root), "-ExpectedEdition", edition], capture_output=True, text=True, timeout=35)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                self.assertIn("PASS: exact current-caller PowerShell functions", result.stdout)
+                self.assertIn("corrected current-caller PowerShell functions execute four strict same-executable phases", result.stdout)
                 print(result.stdout, flush=True)
 
     def test_actual_source_dispatch_runs_reader_before_fatal_native_gate(self):
@@ -444,6 +475,7 @@ if sys.argv[1]=='scripts/test-support-lease.py':
             self.assertEqual(result.returncode, 23, result.stdout + result.stderr)
             self.assertEqual((root / "actual-invocations.log").read_text().splitlines(), [
                 "scripts/test-support-flutter-analysis.py",
+                "scripts/test-support-macos-termination.py",
                 "scripts/test-support-invite.py", "scripts/test-generated-support-paths.py",
                 "scripts/test-windows-lease-observation.py", "scripts/test-support-lease.py"])
             arguments = [json.loads(line) for line in (root / "actual-argv.jsonl").read_text(encoding="utf-8").splitlines()]
@@ -453,11 +485,13 @@ if sys.argv[1]=='scripts/test-support-lease.py':
             self.assertEqual(arguments[0][0:2], ["scripts/test-support-flutter-analysis.py", "--dart"])
             self.assertEqual(arguments[0][3:], ["--bash", expected_shell])
             self.assertTrue(Path(arguments[0][4]).is_absolute(), "Dispatcher lost the active full Bash path")
-            self.assertEqual(arguments[1:], [[name] for name in [
+            self.assertEqual(arguments[1][0:2], ["scripts/test-support-macos-termination.py", "--flutter"])
+            self.assertEqual(arguments[1][3:], ["--bash", expected_shell])
+            self.assertEqual(arguments[2:], [[name] for name in [
                 "scripts/test-support-invite.py", "scripts/test-generated-support-paths.py",
                 "scripts/test-windows-lease-observation.py", "scripts/test-support-lease.py"]])
             self.assertIn("CONTROL: unchanged fatal native gate", result.stdout)
-            print("PASS: exact generated-source dispatcher executes Flutter analyzer and calling-thread/reader controls before the unchanged fatal native lease gate; fatal result stops later tests.", flush=True)
+            print("PASS: exact generated-source dispatcher executes Flutter analyzer, Mac Quit and calling-thread/reader controls before the unchanged fatal native lease gate; fatal result stops later tests.", flush=True)
 
     @staticmethod
     def mocked_bridge():

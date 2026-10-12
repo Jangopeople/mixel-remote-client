@@ -271,6 +271,7 @@ jobs:
           RDREPO: ./rustdesk
         run: |
           python3 scripts/test-support-flutter-analysis.py --dart "$(command -v dart)"
+          python3 scripts/test-support-macos-termination.py --flutter "$(command -v flutter)"
           python3 scripts/test-support-invite.py
           python3 scripts/test-generated-support-paths.py
           python3 scripts/test-support-lease.py
@@ -492,6 +493,7 @@ jobs:
           MACOS_RUNTIME_LINK_TARGET: ${{ matrix.job.target }}
         run: |
           python3 scripts/test-support-flutter-analysis.py --dart "$(command -v dart)"
+          python3 scripts/test-support-macos-termination.py --flutter "$(command -v flutter)"
           python3 scripts/test-support-invite.py
           python3 scripts/test-generated-support-paths.py
           python3 scripts/test-support-lease.py

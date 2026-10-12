@@ -749,7 +749,9 @@ function Invoke-CurrentCallerLeaseControl([ValidateSet('probe','owner')][string]
       if ([MixelOrdinaryTokenFixture]::StartedStatus($controlPid) -cne 'exited:0x00000000') { throw 'Direct current-caller source child did not exit successfully after acknowledgment.' }
       # The same base directory is reused by the original standard terminal.
       # A later reused PID must not inherit an earlier caller acknowledgment.
-      Remove-Item -LiteralPath $releasePath
+      # The exact source child consumes this acknowledgment before exit. Only
+      # remove a residual file; cleanup errors for an existing file stay fatal.
+      if (Test-Path -LiteralPath $releasePath) { Remove-Item -LiteralPath $releasePath }
     }
     return $controlPid
   } finally {

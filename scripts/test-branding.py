@@ -578,13 +578,18 @@ print("PASS: actual Debian generator child explicitly uses UTF-8 and preserves t
         assert f"Required runtime branding missing in {path}" in rejected.stderr, rejected.stderr[-4000:]
         print(f"PASS: full branding rejects a corrupt {label}")
 
+    # The runtime checks above fail before the final exit-owner layer is
+    # reapplied. Restore the fully composed source before its drift control.
+    run(BRANDING_COMMAND, cwd=base, env=env)
     footer_source = repo / "flutter/lib/common.dart"
     original_footer = footer_source.read_text(encoding="utf-8")
     assert "launchUrl(Uri.parse('https://mixel.ch'));" in original_footer
     footer_source.write_text(original_footer.replace("launchUrl(Uri.parse('https://mixel.ch'));", "launchUrl(Uri.parse('https://changed.example'));"), encoding="utf-8")
+    before_rejected_footer = snapshot(repo)
     rejected = subprocess.run(BRANDING_COMMAND, cwd=base, env=env, capture_output=True, text=True, encoding="utf-8")
+    assert snapshot(repo) == before_rejected_footer, "Changed footer refusal must precede any pipeline mutation"
     footer_source.write_text(original_footer, encoding="utf-8")
-    assert rejected.returncode != 0 and "Pinned Flutter support footer changed" in rejected.stderr
+    assert rejected.returncode != 0 and "Changed application-exit current source: flutter/lib/common.dart" in rejected.stderr, rejected.stderr[-4000:]
     print("PASS: full branding rejects a changed Flutter footer instead of retaining an unverified destination")
 
     window_source_file = owned_window / "macos/Classes/FlutterWindow.swift"

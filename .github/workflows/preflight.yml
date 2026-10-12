@@ -258,6 +258,7 @@ jobs:
       - name: Exercise actual source patches and support reporter
         run: |
           python3 scripts/test-support-flutter-analysis.py --dart "$(command -v dart)"
+          python3 scripts/test-support-macos-termination.py --flutter "$(command -v flutter)"
           python3 scripts/test-support-invite.py
           python3 scripts/test-generated-support-paths.py
           python3 scripts/test-support-lease.py
@@ -297,10 +298,10 @@ jobs:
           if [[ "$(uname -m)" == "arm64" ]]; then
             softwareupdate --install-rosetta --agree-to-license
           fi
-      - name: Fetch pinned standalone native Mac source
+      - name: Fetch pinned native Mac source and common library
         env:
           UPSTREAM_VERSION: ${{ steps.config.outputs.upstream_version }}
-        run: git clone --depth 1 --branch "$UPSTREAM_VERSION" https://github.com/rustdesk/rustdesk.git rustdesk
+        run: git clone --depth 1 --branch "$UPSTREAM_VERSION" --recurse-submodules https://github.com/rustdesk/rustdesk.git rustdesk
       - name: Prove native Mac failure boundaries and actual pinned Rust final link
         env:
           MACOS_RUNTIME_LINK_TARGET: x86_64-apple-darwin
@@ -309,6 +310,8 @@ jobs:
         run: python3 scripts/test-support-macos-window.py --native
       - name: Prove awaited Mac page and terminal cleanup with real Flutter widgets
         run: python3 scripts/test-support-macos-cleanup.py --dart "$(command -v dart)" --flutter "$(command -v flutter)"
+      - name: Prove bounded main-engine Quit and owned resource cleanup
+        run: python3 scripts/test-support-macos-termination.py --flutter "$(command -v flutter)"
       - name: Exercise native macOS URL activation and window probe self-tests
         run: |
           python3 scripts/test-support-launch-macos-diagnostics.py

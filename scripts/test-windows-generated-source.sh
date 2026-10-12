@@ -8,6 +8,7 @@ if [[ "${OS:-}" == Windows_NT ]]; then
   mixel_analyzer_bash="$(cygpath -w "$BASH")"
 fi
 python scripts/test-support-flutter-analysis.py --dart "$(command -v dart)" --bash "$mixel_analyzer_bash"
+python scripts/test-support-macos-termination.py --flutter "$(command -v flutter)" --bash "$mixel_analyzer_bash"
 unset mixel_analyzer_bash
 for mixel_source_test in \
   test-support-invite \
