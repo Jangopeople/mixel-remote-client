@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Prove pinned analyzer fixes and unchanged Client/terminal behavior."""
 import argparse
+import ast
 import collections
 import hashlib
 import importlib.util
@@ -20,8 +21,8 @@ spec.loader.exec_module(P)
 
 
 def run(args,out,label,*,cwd=None,env=None,success=True):
-    result=subprocess.run(args,cwd=cwd,env=env,capture_output=True,text=True,timeout=240)
-    (out/(label+".log")).write_text(result.stdout+result.stderr)
+    result=subprocess.run(args,cwd=cwd,env=env,capture_output=True,text=True,encoding="utf-8",timeout=240)
+    (out/(label+".log")).write_text(result.stdout+result.stderr,encoding="utf-8")
     if success:
         assert result.returncode==0,result.stdout+result.stderr
     return result
@@ -48,6 +49,53 @@ def pinned(source,name):
     return subprocess.check_output(["git","-C",str(source),"show",P.PIN+":"+name],timeout=60)
 
 
+def encoding_controls(out):
+    # The actual Windows runner selected cp1252 for the old implicit source
+    # read. Keep that original failure as a negative control on real script
+    # bytes, while accepting both legitimate checkout newline conventions.
+    data=(ROOT/"scripts/apply-branding.sh").read_bytes().replace(b"\r\n",b"\n")
+    expected=data.decode("utf-8")
+    failures={}
+    for label,newline in (("lf","\n"),("crlf","\r\n")):
+        path=out/("actual-utf8-"+label+".sh")
+        encoded=data.replace(b"\n",newline.encode("ascii"))
+        path.write_bytes(encoded)
+        try:
+            path.read_text(encoding="cp1252")
+        except UnicodeDecodeError as error:
+            failures[label]={"encoding":error.encoding,"start":error.start,"end":error.end}
+        else:
+            raise AssertionError("Actual script no longer reproduces the original cp1252 refusal")
+        assert path.read_text(encoding="utf-8")==expected
+        path.write_text(expected,encoding="utf-8",newline=newline)
+        assert path.read_bytes()==encoded,"Explicit UTF8 changed legitimate checkout bytes"
+    own=Path(__file__).read_text(encoding="utf-8")
+    tree=ast.parse(own)
+    negative_read=next(node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name=="encoding_controls")
+    negative_lines={call.lineno for call in ast.walk(negative_read)
+        if isinstance(call,ast.Call) and isinstance(call.func,ast.Attribute) and call.func.attr=="read_text"
+        and any(keyword.arg=="encoding" and isinstance(keyword.value,ast.Constant) and keyword.value.value=="cp1252"
+            for keyword in call.keywords)}
+    assert len(negative_lines)==1,"Expected exactly one deliberate original-encoding refusal"
+    for call in ast.walk(tree):
+        if not isinstance(call,ast.Call) or not isinstance(call.func,ast.Attribute):
+            continue
+        text_io=call.func.attr in ("read_text","write_text")
+        captured_text=call.func.attr=="run" and any(
+            keyword.arg=="text" and isinstance(keyword.value,ast.Constant) and keyword.value.value is True
+            for keyword in call.keywords)
+        if text_io or captured_text:
+            encoding=next((keyword.value for keyword in call.keywords if keyword.arg=="encoding"),None)
+            required="cp1252" if call.lineno in negative_lines else "utf-8"
+            assert isinstance(encoding,ast.Constant) and encoding.value==required,\
+                "Implicit fixture text encoding at line "+str(call.lineno)
+    (out/"utf8-checkout-proof.json").write_text(json.dumps({
+        "original_cp1252_refusals":failures,"actual_script_sha256":sha(data),
+        "explicit_utf8_lf_crlf_bytes_preserved":True,"all_fixture_text_io_explicit":True
+    },sort_keys=True,indent=2)+"\n",encoding="utf-8")
+    print("PASS: actual Windows cp1252 source refusal reproduced; explicit UTF8 preserves LF/CRLF Unicode bytes; all fixture text IO/captured output explicit")
+
+
 def pipeline(out,source):
     copied=out/"pipeline-source"
     copied.mkdir()
@@ -66,9 +114,9 @@ def pipeline(out,source):
     script=copied/"scripts/apply-branding.sh"
     shell_source="$"+"{BASH_SOURCE[0]}"
     hook='python3 "$(dirname "'+shell_source+'")/patch-support-flutter-analysis.py"\n'
-    text=script.read_text()
+    text=script.read_text(encoding="utf-8")
     if hook not in text:
-        script.write_text(text+"\n"+hook)
+        script.write_text(text+"\n"+hook,encoding="utf-8")
     else:
         assert text.count(hook)==1
     originals={name:pinned(source,name) for name in P.FILES if name!="flutter/lib/common.dart"}
@@ -92,7 +140,7 @@ def pipeline(out,source):
         first=snapshot(repo)
         run(["bash",str(script)],out,"pipeline-"+label+"-2",cwd=copied,env=env)
         assert snapshot(repo)==first,"Full pipeline second pass changed bytes"
-        (out/("pipeline-"+label+"-snapshot.json")).write_text(json.dumps(first,sort_keys=True,indent=2)+"\n")
+        (out/("pipeline-"+label+"-snapshot.json")).write_text(json.dumps(first,sort_keys=True,indent=2)+"\n",encoding="utf-8")
         name="flutter/lib/common.dart"
         target=repo/name
         saved=target.read_bytes()
@@ -148,7 +196,7 @@ def source_controls(out,files):
         target=root/name
         target.write_bytes(target.read_bytes()+b"// drift\n")
         if name=="Cargo.toml":
-            target.write_text('[package]\nversion = "1.4.5"\n')
+            target.write_text('[package]\nversion = "1.4.5"\n',encoding="utf-8")
         refusal(root,out);count+=1
     for label,operation in (
         ("symlink",lambda path: (path.unlink(),path.symlink_to(out/"source-lf"/P.CLIENT))),
@@ -208,7 +256,7 @@ extension ReactiveInt on int { RxInt get obs=>RxInt(this); }
 }
 """
         path=out/(label+"-client-control.dart")
-        path.write_text(prefix+client+clients+main)
+        path.write_text(prefix+client+clients+main,encoding="utf-8")
         result=run([str(dart),"analyze","--format=machine",str(path)],out,label+"-client-analyze",success=label=="corrected")
         if label=="original":
             errors=[line for line in result.stdout.splitlines() if line.startswith("ERROR|")]
@@ -237,7 +285,7 @@ void main() {
 }
 """
     path=out/"actual-terminal-key-control.dart"
-    path.write_text(program)
+    path.write_text(program,encoding="utf-8")
     run([str(dart),str(path)],out,"actual-terminal-key-control")
     print("PASS: actual original Client fixture fails with exactly four argument errors; corrected actual constructor compiles/runs; all actual terminal key mappings conserved")
 
@@ -289,7 +337,7 @@ def analyze_app(out,source,flutter,files):
         {"baseline_exit":baseline.returncode,"corrected_exit":corrected.returncode,
          "baseline":dict(counts),"corrected":dict(fixed),"exact_six_target_conservation":True,
          "source_sha256":{name:sha((ROOT/"scripts"/name).read_bytes()) for name in (
-             "patch-support-flutter-analysis.py","test-support-flutter-analysis.py")}},sort_keys=True,indent=2)+"\n")
+             "patch-support-flutter-analysis.py","test-support-flutter-analysis.py")}},sort_keys=True,indent=2)+"\n",encoding="utf-8")
     print("PASS: real full Flutter3.24.5 application analyze: original4errors5warnings → corrected0errors0warnings; "+str(fixed["info"])+" existing info; exact six-file source conservation")
 
 
@@ -306,6 +354,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="mixel-flutter-analysis-") as temporary:
         out=args.evidence_dir.resolve() if args.evidence_dir else Path(temporary)
         out.mkdir(parents=True,exist_ok=True)
+        encoding_controls(out)
         files=pipeline(out,args.source.resolve())
         source_controls(out,files)
         if args.dart:
