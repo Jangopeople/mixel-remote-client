@@ -162,18 +162,24 @@ class ObservationControls(unittest.TestCase):
                 self.assertEqual(encoding, "utf-8-sig")
                 self.assertIsInstance(writer.args[0], ast.Constant)
                 original = writer.args[0].value
+                self.assertNotIn("\r", original)
                 path = Path(temporary) / (str(index) + ".ps1")
-                path.write_text(original, encoding=encoding)
-                payload = path.read_bytes()
-                self.assertTrue(payload.startswith(codecs.BOM_UTF8))
-                self.assertEqual(payload.decode("utf-8-sig"), original)
+                # Path.write_text uses the host line ending by default. Both
+                # Unix LF and Windows CRLF preserve this Unicode source; make
+                # each writer mode explicit so both actually run on every OS.
+                for newline in ("\n", "\r\n"):
+                    path.write_text(original, encoding=encoding, newline=newline)
+                    payload = path.read_bytes()
+                    expected = original.replace("\n", newline)
+                    self.assertEqual(payload, codecs.BOM_UTF8 + expected.encode("utf-8"))
+                    self.assertEqual(payload.decode("utf-8-sig"), expected)
                 if "préflight" in original:
                     # Windows PowerShell5 reads an unmarked source file with
                     # its legacy ANSI codepage; this is a bounded cp1252 decode
                     # control, not execution of that unavailable local engine.
                     self.assertNotEqual(original.encode("utf-8").decode("cp1252"), original)
                     self.assertNotIn("préflight", original.encode("utf-8").decode("cp1252"))
-        print("PASS: all three generated PowerShell source files retain UTF8 BOM and exact Unicode; original unmarked accented source changes under the explicit legacy cp1252 decode control. Actual Desktop5 execution remains required on Windows.", flush=True)
+        print("PASS: all three generated PowerShell source files retain exact UTF8 BOM/Unicode bytes with both actual LF and CRLF writer modes; original unmarked accented source changes under the explicit legacy cp1252 decode control. Actual Desktop5 execution remains required on Windows.", flush=True)
 
     def test_current_caller_launch_exact_arguments_and_owned_handoff(self):
         source = (ROOT / "scripts/test-support-lease-standard-windows.ps1").read_text()
