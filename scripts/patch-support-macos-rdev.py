@@ -266,7 +266,11 @@ def apply(repo: Path, restore: bool = False, check: bool = False) -> None:
             planned.append((target, (old if restore else new).replace("\n", newline).encode()))
         elif relative == "src/linux/grab.rs":
             canonical, _newline = normalized(actual)
-            if canonical != input_patch.patch_grab(original.decode("utf-8")):
+            old = original.decode("utf-8")
+            corrected = input_patch.patch_grab(old)
+            # Exact pre-snapshot overlays migrate only through restoration.
+            # No source is written here; normal application requires the fix.
+            if canonical != corrected and not (restore and canonical == input_patch.patch_grab_legacy(old)):
                 raise RuntimeError("Pinned Linux input overlay is required")
         elif relative == input_patch.ANDROID_PATH:
             canonical, _newline = normalized(actual)

@@ -33,13 +33,50 @@ def run(arguments: list[str], directory: Path) -> str:
     return result.stdout.strip()
 
 
-def patch_grab(source: str) -> str:
+def patch_grab_legacy(source: str) -> str:
     if NEW in source:
         return source
     if source.count(OLD) != 1:
         raise RuntimeError("Pinned rdev X11 poll loop changed")
     return source.replace(OLD, NEW, 1)
 
+
+
+def patch_grab(source: str) -> str:
+    source = patch_grab_legacy(source)
+    changes = (
+        ("use crate::{key_from_code, Event, EventType, GrabError, Keyboard, KeyboardState};",
+         "use crate::{code_from_key, key_from_code, Event, EventType, GrabError, Keyboard};"),
+        ("fn convert_event(code: u32, is_press: bool) -> Event {",
+         "fn convert_event(code: u32, is_press: bool, state: u32) -> Event {"),
+        ("            let unicode_info = kbd.add(&event_type);",
+         """            // XKeyEvent stores the modifier state when this queued key occurred.
+            // Querying the pointer now can observe a later Shift/AltGr release.
+            let unicode_info = if is_press {
+                code_from_key(key).and_then(|keycode| {
+                    // Preserve the existing decoder's Control filtering.
+                    kbd.unicode_from_code(keycode, state & 0xFFFB)
+                })
+            } else {
+                None
+            };"""),
+        ("        let event = convert_event(keycode, is_press);",
+         """        let state = unsafe { x_event.key.state };
+        let event = convert_event(keycode, is_press, state);"""),
+    )
+    states = []
+    for old, new in changes:
+        if source.count(old) == 1 and new not in source:
+            states.append("old")
+        elif source.count(new) == 1 and old not in source:
+            states.append("new")
+        else:
+            raise RuntimeError("Pinned rdev queued modifier source changed")
+    if len(set(states)) != 1:
+        raise RuntimeError("Mixed rdev queued modifier correction")
+    for old, new in changes:
+        source = source.replace(old, new, 1)
+    return source
 
 def patch_android(source: str) -> str:
     # Android KEYCODE_GRAVE is 68; KEYCODE_APOSTROPHE remains 75.
@@ -118,7 +155,7 @@ def apply(repo: Path) -> None:
                               check=True, capture_output=True, text=True, encoding="utf-8").stdout
     expected = patch_grab(original)
     target = dependency / "src/linux/grab.rs"
-    if target.read_text(encoding="utf-8") not in (original, expected):
+    if target.read_text(encoding="utf-8") not in (original, patch_grab_legacy(original), expected):
         raise RuntimeError("Local rdev X11 override contains unexpected changes")
     android = dependency / ANDROID_PATH
     try:
@@ -135,7 +172,7 @@ def apply(repo: Path) -> None:
         android.write_bytes(new_android)
     manifest.write_text(new_manifest, encoding="utf-8")
     lock.write_text(new_lock, encoding="utf-8")
-    print("   installed pinned local rdev override: interrupted X11 polls retain keyboard capture; Android grave/apostrophe keys remain distinct")
+    print("   installed pinned local rdev override: interrupted X11 polls retain capture; queued keys retain event modifiers; Android grave/apostrophe keys remain distinct")
 
 
 if __name__ == "__main__":

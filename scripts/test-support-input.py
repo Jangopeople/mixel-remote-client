@@ -294,6 +294,123 @@ fn poll(steps:Vec<Result<(),std::io::ErrorKind>>,stop:bool)->Poll {Poll {steps:s
 '''
 
 
+
+EVENT_STATE_HARNESS = r'''
+#![allow(non_snake_case)]
+use std::{sync::{Mutex,mpsc::{channel,Sender}}, time::SystemTime};
+#[derive(Debug,Copy,Clone,PartialEq,Eq)] enum Key {A,At,Colon,Plus,Shift,Control,Numpad,AltGr,Dead,Delete,Unknown}
+#[derive(Debug,Copy,Clone,PartialEq,Eq)] enum EventType {KeyPress(Key),KeyRelease(Key),Other}
+#[derive(Debug,Clone,PartialEq,Eq)] struct UnicodeInfo {name:Option<String>,is_dead:bool,unicode:Vec<u16>}
+#[derive(Debug,Clone)] struct Event {event_type:EventType,time:SystemTime,unicode:Option<UnicodeInfo>,platform_code:u32,position_code:u32,usb_hid:u32}
+enum GrabEvent {KeyEvent(Event)}
+const KEYPRESS_EVENT:i32=2;
+static GRAB_KEY_EVENT_SENDER:Mutex<Option<Sender<GrabEvent>>>=Mutex::new(None);
+static mut KEYBOARD:Option<Keyboard>=None;
+static CURRENT:Mutex<u32>=Mutex::new(0);
+static DECODED:Mutex<Vec<(u32,u32)>>=Mutex::new(Vec::new());
+static mut CURRENT_QUERIES:u32=0;
+fn key_from_code(code:u32)->Key {match code {38=>Key::A,11=>Key::At,47=>Key::Colon,21=>Key::Plus,50=>Key::Shift,37=>Key::Control,90=>Key::Numpad,108=>Key::AltGr,49=>Key::Dead,119=>Key::Delete,_=>Key::Unknown}}
+fn code_from_key(key:Key)->Option<u32> {match key {Key::A=>Some(38),Key::At=>Some(11),Key::Colon=>Some(47),Key::Plus=>Some(21),Key::Shift=>Some(50),Key::Control=>Some(37),Key::Numpad=>Some(90),Key::AltGr=>Some(108),Key::Dead=>Some(49),Key::Delete=>Some(119),Key::Unknown=>None}}
+#[derive(Default)] struct Keyboard {keysym:u32}
+trait KeyboardState {fn add(&mut self,event:&EventType)->Option<UnicodeInfo>;}
+impl Keyboard {
+ unsafe fn get_current_modifiers(&mut self)->Option<u32> {CURRENT_QUERIES+=1;Some(*CURRENT.lock().unwrap())}
+ unsafe fn unicode_from_code(&mut self,code:u32,state:u32)->Option<UnicodeInfo> {
+  DECODED.lock().unwrap().push((code,state));self.keysym=code+state;
+  let shift=state&1!=0;let caps=state&2!=0;let altgr=state&128!=0;let num=state&16!=0;
+  let value=match code {38=>if shift^caps {"A"} else {"a"},11=>if altgr {"€"} else if shift {"@"} else {"2"},47=>if shift {":"} else {";"},21=>if shift {"+"} else {"="},90=>if num {"0"} else {"insert"},49=>return Some(UnicodeInfo{name:None,is_dead:true,unicode:vec![]}),119=>"\u{7f}",_=>return None};
+  Some(UnicodeInfo{name:Some(value.to_owned()),is_dead:false,unicode:vec![]})
+ }
+ fn keysym(&self)->u32 {self.keysym}
+}
+mod xlib {
+ use std::sync::Mutex;
+ pub enum Display {}
+ #[derive(Copy,Clone)]#[repr(C)]pub struct XKeyEvent {pub type_:i32,pub keycode:u32,pub state:u32}
+ #[derive(Copy,Clone)]#[repr(C)]pub union XEvent {pub key:XKeyEvent,pub type_:i32}
+ pub static QUEUE:Mutex<Vec<XKeyEvent>>=Mutex::new(Vec::new());
+ pub unsafe fn XPending(_: *mut Display)->i32 {QUEUE.lock().unwrap().len() as i32}
+ pub unsafe fn XNextEvent(_: *mut Display,event: &mut XEvent)->i32 {let key=QUEUE.lock().unwrap().remove(0);*event=XEvent{key};0}
+}
+__ADD__
+__ISCONTROL__
+__CONVERT__
+__READ__
+fn queued(codes:&[u32],state:u32,current:u32,press:bool)->Vec<Event> {
+ unsafe{KEYBOARD=Some(Keyboard::default());}*CURRENT.lock().unwrap()=current;
+ let (tx,rx)=channel();*GRAB_KEY_EVENT_SENDER.lock().unwrap()=Some(tx);
+ *xlib::QUEUE.lock().unwrap()=codes.iter().map(|code|xlib::XKeyEvent{type_:if press {2} else {3},keycode:*code,state}).collect();
+ let mut event=xlib::XEvent{type_:0};read_x_event(&mut event,std::ptr::null_mut());
+ *GRAB_KEY_EVENT_SENDER.lock().unwrap()=None;
+ rx.try_iter().map(|e|{let GrabEvent::KeyEvent(event)=e;event}).collect()
+}
+fn text(events:Vec<Event>)->String {events.into_iter().filter_map(|e|e.unicode.and_then(|u|u.name)).collect()}
+fn main() {
+ let sample=queued(&[38],0,0,true).remove(0);
+ assert_eq!(sample.event_type,EventType::KeyPress(Key::A));assert!(sample.time<=SystemTime::now());assert_eq!(sample.platform_code,38);assert_eq!(sample.position_code,38);assert_eq!(sample.usb_hid,0);
+ let shifted=text(queued(&[38,11,47,21],1,0,true));
+ #[cfg(original)] {assert_eq!(shifted,"a2;=");println!("ORIGINAL GAP: historical Shift=1/current=0 yielded a2;= instead of A@:+");}
+ #[cfg(corrected)] {
+  assert_eq!(shifted,"A@:+");assert_eq!(text(queued(&[38,11,47,21],0,1,true)),"a2;=");
+  for state in 0..=255 {
+   DECODED.lock().unwrap().clear();let events=queued(&[38,11,47,21,90,49],state,state^255,true);
+   assert_eq!(*DECODED.lock().unwrap(),vec![(38,state&0xFFFB),(11,state&0xFFFB),(47,state&0xFFFB),(21,state&0xFFFB),(90,state&0xFFFB),(49,state&0xFFFB)]);
+   assert_eq!(events.len(),6);assert_eq!(events.iter().map(|e|e.position_code).collect::<Vec<_>>(),vec![38,11,47,21,90,49]);
+   assert_eq!(events[0].event_type,EventType::KeyPress(Key::A));assert_eq!(events[0].usb_hid,0);assert!(events[0].time<=SystemTime::now());
+   assert_eq!(events[0].platform_code,38+(state&0xFFFB));assert!(events[5].unicode.as_ref().unwrap().is_dead);
+  }
+  // Both the character press and later Shift release are already queued;
+  // the server's current mask has advanced to zero before the grab loop runs.
+  unsafe{KEYBOARD=Some(Keyboard::default());}*CURRENT.lock().unwrap()=0;
+  let (tx,rx)=channel();*GRAB_KEY_EVENT_SENDER.lock().unwrap()=Some(tx);
+  *xlib::QUEUE.lock().unwrap()=vec![xlib::XKeyEvent{type_:2,keycode:38,state:1},xlib::XKeyEvent{type_:3,keycode:50,state:1}];
+  let mut x=xlib::XEvent{type_:0};read_x_event(&mut x,std::ptr::null_mut());*GRAB_KEY_EVENT_SENDER.lock().unwrap()=None;
+  let events:Vec<Event>=rx.try_iter().map(|g|{let GrabEvent::KeyEvent(e)=g;e}).collect();
+  assert_eq!(events[0].unicode.as_ref().unwrap().name.as_deref(),Some("A"));assert_eq!(events[1].event_type,EventType::KeyRelease(Key::Shift));assert!(events[1].unicode.is_none());
+  for state in [256,512,1024,2048,4096,65535,65536,u32::MAX] {
+   DECODED.lock().unwrap().clear();queued(&[38],state,0,true);assert_eq!(*DECODED.lock().unwrap(),vec![(38,state&0xFFFB)]);
+  }
+  // A non-key event remains the original no-Unicode release classification.
+  unsafe{KEYBOARD=Some(Keyboard::default());}DECODED.lock().unwrap().clear();
+  let (tx,rx)=channel();*GRAB_KEY_EVENT_SENDER.lock().unwrap()=Some(tx);
+  *xlib::QUEUE.lock().unwrap()=vec![xlib::XKeyEvent{type_:99,keycode:999,state:u32::MAX}];
+  read_x_event(&mut x,std::ptr::null_mut());*GRAB_KEY_EVENT_SENDER.lock().unwrap()=None;
+  let GrabEvent::KeyEvent(e)=rx.try_recv().unwrap();assert_eq!(e.event_type,EventType::KeyRelease(Key::Unknown));assert!(e.unicode.is_none());assert!(DECODED.lock().unwrap().is_empty());
+  assert_eq!(text(queued(&[38],2,0,true)),"A");assert_eq!(text(queued(&[38],3,0,true)),"a");
+  assert_eq!(text(queued(&[11],128,0,true)),"€");assert_eq!(text(queued(&[90],16,0,true)),"0");
+  DECODED.lock().unwrap().clear();let released=queued(&[38,50,37,108],1,255,false);assert!(released.iter().all(|e|e.unicode.is_none()));assert_eq!(released[0].event_type,EventType::KeyRelease(Key::A));assert!(DECODED.lock().unwrap().is_empty());
+  assert!(queued(&[999],1,0,true)[0].unicode.is_none());assert!(queued(&[119],1,0,true)[0].unicode.is_none());
+  unsafe{KEYBOARD=None;assert!(convert_event(38,true,1).unicode.is_none());assert_eq!(convert_event(38,true,1).platform_code,0);}
+  assert_eq!(unsafe{CURRENT_QUERIES},0);println!("CORRECTED PASS: exact queued functions decode A@:+;256 state masks/Control/Caps/AltGr/NumLock/dead/release/unknown/no keyboard controls; no current-state query");
+ }
+ // Exercise unchanged other-event/release KeyboardState callers.
+ let mut k=Keyboard::default();assert!(k.add(&EventType::Other).is_none());assert!(k.add(&EventType::KeyRelease(Key::A)).is_none());
+}
+'''
+
+
+def queued_modifier_controls(repo: Path, dependency: Path) -> None:
+    original = git_source(dependency, "src/linux/grab.rs")
+    corrected = patcher.patch_grab(original)
+    keyboard = git_source(dependency, "src/linux/keyboard.rs")
+    for mode, source in (("original", original), ("corrected", corrected)):
+        harness = EVENT_STATE_HARNESS.replace("__ADD__", block(keyboard, "impl KeyboardState for Keyboard {"))
+        for marker, name in (("__ISCONTROL__", "fn is_control("), ("__CONVERT__", "fn convert_event("), ("__READ__", "fn read_x_event(")):
+            harness = harness.replace(marker, block(source, name))
+        target = repo / ("queued-modifiers-" + mode + ".rs")
+        target.write_text(harness, encoding="utf-8")
+        binary = target.with_suffix(".exe" if os.name == "nt" else "")
+        compilation = subprocess.run([RUSTC, "--edition=2021", "-D", "warnings", "--cfg", mode, str(target), "-o", str(binary)],
+                                     capture_output=True, text=True, encoding="utf-8", timeout=90)
+        assert compilation.returncode == 0, compilation.stderr
+        executed = subprocess.run([str(binary)], capture_output=True, text=True, encoding="utf-8", timeout=15)
+        assert executed.returncode == 0, executed.stderr
+        print(executed.stdout.strip())
+        if args.evidence_dir:
+            shutil.copyfile(target, args.evidence_dir / target.name)
+            (args.evidence_dir / ("queued-modifiers-" + mode + "-compile.log")).write_text(compilation.stdout + compilation.stderr, encoding="utf-8")
+            (args.evidence_dir / ("queued-modifiers-" + mode + "-run.log")).write_text(executed.stdout + executed.stderr, encoding="utf-8")
+
 with tempfile.TemporaryDirectory(prefix="mixel-input-tests-") as temporary:
     repo = Path(temporary)
     for relative in ("Cargo.toml", "Cargo.lock"):
@@ -317,6 +434,19 @@ with tempfile.TemporaryDirectory(prefix="mixel-input-tests-") as temporary:
                               check=True, capture_output=True, text=True, encoding="utf-8").stdout
     actual = files[2].read_text(encoding="utf-8")
     assert actual == patcher.patch_grab(original)
+    assert patcher.patch_grab(patcher.patch_grab_legacy(original)) == actual
+    assert patcher.patch_grab(actual) == actual
+    for old, new in (("state & 0xFFFB", "state & 0xFFFF"), ("x_event.key.state", "0")):
+        reject(lambda: patcher.patch_grab(actual.replace(old, new)), "queued modifier source changed")
+    partial = patcher.patch_grab_legacy(original).replace("        let event = convert_event(keycode, is_press);",
+                                                        "        let state = unsafe { x_event.key.state };\n        let event = convert_event(keycode, is_press, state);")
+    reject(lambda: patcher.patch_grab(partial), "Mixed rdev queued modifier correction")
+    for invalid in (partial, actual.replace("state & 0xFFFB", "state & 0xFFFF")):
+        files[2].write_text(invalid, encoding="utf-8")
+        guarded_refusal(repo, lambda: patcher.apply(repo), "unexpected changes")
+    files[2].write_text(actual, encoding="utf-8")
+
+
     android_original = git_source(dependency, patcher.ANDROID_PATH)
     assert hashlib.sha256(android_original.encode()).hexdigest() == patcher.ANDROID_SHA256
     android_corrected = patcher.patch_android(android_original)
@@ -372,6 +502,7 @@ with tempfile.TemporaryDirectory(prefix="mixel-input-tests-") as temporary:
     patcher.apply(repo)
     assert files[2].read_text(encoding="utf-8") == actual
     android_converters(repo, dependency)
+    queued_modifier_controls(repo, dependency)
     mac_spec = importlib.util.spec_from_file_location("mixel_mac_input_patch", ROOT / "scripts/patch-support-macos-rdev.py")
     mac = importlib.util.module_from_spec(mac_spec)
     mac_spec.loader.exec_module(mac)
@@ -404,6 +535,24 @@ with tempfile.TemporaryDirectory(prefix="mixel-input-tests-") as temporary:
         mac.apply(state)
         native = snapshot(state)
         mac.apply(state, check=True)
+        assert snapshot(state) == native
+        linux = clone / "src/linux/grab.rs"
+        fixed_linux = linux.read_bytes()
+        linux.write_bytes(patcher.patch_grab_legacy(original).replace("\n", newline).encode())
+        legacy_linux = snapshot(state)
+        mac.apply(state, restore=True, check=True)
+        assert snapshot(state) == legacy_linux
+        guarded_refusal(state, lambda: mac.apply(state, check=True), "Pinned Linux input overlay is required")
+        mac.apply(state, restore=True)
+        assert linux.read_bytes() == patcher.patch_grab_legacy(original).replace("\n", newline).encode()
+        patcher.apply(state)
+        assert snapshot(state) == clean
+        mac.apply(state)
+        assert snapshot(state) == native
+        # A partial snapshot correction must refuse before any Mac write.
+        linux.write_bytes(patcher.patch_grab_legacy(original).replace("kbd.add(&event_type)", "kbd.add(&event_type) /* drift */").replace("\n", newline).encode())
+        guarded_refusal(state, lambda: mac.apply(state, restore=True), "Pinned Linux input overlay is required")
+        linux.write_bytes(fixed_linux)
         assert snapshot(state) == native
         # Exact old-table migration is restore-only, not a broad input waiver.
         android.write_bytes(android_original.replace("\n", newline).encode())
