@@ -11,6 +11,7 @@ import os
 from pathlib import Path, PureWindowsPath
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 
@@ -21,7 +22,11 @@ spec.loader.exec_module(P)
 
 
 def run(args,out,label,*,cwd=None,env=None,success=True):
-    result=subprocess.run(args,cwd=cwd,env=env,capture_output=True,text=True,encoding="utf-8",timeout=240)
+    # The parent decoder cannot configure a captured Python child's encoder.
+    # Match both sides of this fixture's pipe without changing file encodings,
+    # the caller's environment, or the real build's environment.
+    child_env=dict(os.environ if env is None else env,PYTHONIOENCODING="utf-8")
+    result=subprocess.run(args,cwd=cwd,env=child_env,capture_output=True,text=True,encoding="utf-8",timeout=240)
     (out/(label+".log")).write_text(result.stdout+result.stderr,encoding="utf-8")
     if success:
         assert result.returncode==0,result.stdout+result.stderr
@@ -282,6 +287,44 @@ def encoding_controls(out):
         "explicit_utf8_lf_crlf_bytes_preserved":True,"all_fixture_text_io_explicit":True
     },sort_keys=True,indent=2)+"\n",encoding="utf-8")
     print("PASS: actual Windows cp1252 source refusal reproduced; explicit UTF8 preserves LF/CRLF Unicode bytes; all fixture text IO/captured output explicit")
+
+
+def captured_stdout_controls(out):
+    # Execute the exact production status print that failed in the private
+    # Windows branding fixture, without invoking the product patch itself.
+    source=ROOT/"scripts/patch-support-macos-window.py"
+    text=source.read_text(encoding="utf-8")
+    prints=[node for node in ast.walk(ast.parse(text)) if isinstance(node,ast.Call)
+        and isinstance(node.func,ast.Name) and node.func.id=="print"
+        and len(node.args)==1 and isinstance(node.args[0],ast.Constant)
+        and isinstance(node.args[0].value,str)
+        and "patched pinned Mac subwindow lifecycle" in node.args[0].value]
+    assert len(prints)==1 and "→" in prints[0].args[0].value
+    payload="préflight 🚀"
+    code=ast.get_source_segment(text,prints[0])+"\nimport sys,os\n"+\
+        "print("+repr(payload)+")\nprint(sys.stdout.encoding)\n"+\
+        "print(os.environ['MIXEL_FIXTURE_STDOUT_CONTROL'])\n"
+    script=out/"actual captured child préflight.py"
+    script.write_text(code,encoding="utf-8",newline="\n")
+    env=dict(os.environ,PYTHONIOENCODING="cp1252",MIXEL_FIXTURE_STDOUT_CONTROL=payload)
+    before=dict(env)
+    original=subprocess.run([sys.executable,str(script)],env=env,capture_output=True,timeout=30)
+    (out/"original-captured-cp1252-stdout.log").write_bytes(original.stdout+original.stderr)
+    assert original.returncode!=0 and b"UnicodeEncodeError" in original.stderr and b"\\u2192" in original.stderr
+    corrected=run([sys.executable,str(script)],out,"corrected-captured-utf8-stdout",env=env)
+    expected=prints[0].args[0].value+"\n"+payload+"\nutf-8\n"+payload+"\n"
+    assert corrected.stdout==expected and corrected.stderr==""
+    assert env==before,"Captured subprocess encoding changed its caller's environment"
+    (out/"captured-stdout-proof.json").write_text(json.dumps({
+        "actual_production_print_source_sha256":sha(source.read_bytes()),
+        "actual_production_print":prints[0].args[0].value,
+        "original_forced_cp1252_exit":original.returncode,
+        "corrected_actual_child_exit":corrected.returncode,
+        "actual_unicode_stdout_exact":True,"child_declared_encoding":"utf-8",
+        "caller_environment_unchanged":True,"product_patch_invoked":False,
+        "actual_windows_default_requires_next_CI":os.name!="nt"
+    },sort_keys=True,indent=2)+"\n",encoding="utf-8")
+    print("PASS: exact production Unicode status print fails in actual cp1252 child; same captured subprocess runs with UTF8 stdout, exact Unicode and unchanged caller environment")
 
 
 def pipeline(out,source,bash):
@@ -549,6 +592,7 @@ def main():
         out=args.evidence_dir.resolve() if args.evidence_dir else Path(temporary)
         out.mkdir(parents=True,exist_ok=True)
         encoding_controls(out)
+        captured_stdout_controls(out)
         shell_controls(out,bash,args.source.resolve())
         files=pipeline(out,args.source.resolve(),bash)
         source_controls(out,files)
