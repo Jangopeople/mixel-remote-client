@@ -81,7 +81,7 @@ class PortableSourceTests(unittest.TestCase):
             subprocess.run(["git", "add", "."], cwd=root, check=True, capture_output=True)
             subprocess.run(["git", "-c", "user.name=Mixel QA", "-c", "user.email=qa@example.test", "commit", "--quiet", "-m", "Owned QA source control"], cwd=root, check=True, capture_output=True)
             with patch.object(bundle, "ROOT", root):
-                self.assertEqual(len(bundle.git_source_bindings()), 12)
+                self.assertEqual(len(bundle.git_source_bindings()), 14)
                 builder = root / bundle.BUILD_SOURCE
                 original = builder.read_bytes()
                 builder.write_bytes(original + b"changed builder\n")
@@ -164,7 +164,7 @@ class OwnedPackageInventoryTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "file inventory differs"):
                 bundle.bundle_members(root)
             bundle.remove_owned_compiler_sidecars(root / "fixture")
-            self.assertEqual(len(bundle.bundle_members(root)), 13)
+            self.assertEqual(len(bundle.bundle_members(root)), 15)
             self.assertEqual({p.relative_to(root).as_posix() for p in bundle.bundle_members(root)}, bundle.PACKAGE_MEMBERS)
 
     def test_unexpected_missing_or_nested_members_are_refused(self):
@@ -301,7 +301,7 @@ class FreshDependencyPackagingTests(unittest.TestCase):
              contextlib.redirect_stdout(io.StringIO()) as captured:
             bundle.build(output)
         self.assertEqual(native_compilations, ["lease-standard.exe", "lease-standard-gui.exe"] * 2)
-        self.assertIn("exact 13-member", captured.getvalue())
+        self.assertIn("exact 15-member", captured.getvalue())
         return output
 
     def test_actual_fresh_package_includes_exact_helper_and_source_binding(self):
@@ -317,7 +317,7 @@ class FreshDependencyPackagingTests(unittest.TestCase):
             manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
             self.assertIs(manifest["runtimeQualified"], False)
             self.assertEqual({entry["path"] for entry in manifest["files"]}, bundle.PACKAGE_MEMBERS)
-            self.assertEqual(len(manifest["files"]), 13)
+            self.assertEqual(len(manifest["files"]), 15)
             binding = next(entry for entry in manifest["buildSourceBindings"] if entry["path"] == self.helper)
             member = next(entry for entry in manifest["files"] if entry["path"] == self.helper)
             self.assertEqual(binding, member)
@@ -364,7 +364,7 @@ class FreshDependencyPackagingTests(unittest.TestCase):
                 end = text.index("\n$bundle=Assert-PortableLeaseBundle", start)
                 verifier = root / (target + "-pure-controls.ps1")
                 verifier.write_text("param([string]$Bundle,[string]$Digest)\n$ErrorActionPreference='Stop'\n" + text[start:end] +
-                                    "\n$result=Assert-PortableLeaseBundle $Bundle $Digest\nif($result.Manifest.files.Count -ne 13 -or $result.Manifest.buildSourceBindings.Count -ne 12 -or $result.Manifest.runtimeQualified){throw 'Fresh scope changed.'}\nWrite-Host 'PASS: actual fresh package validator.'\n", encoding="utf-8-sig", newline="\n")
+                                    "\n$result=Assert-PortableLeaseBundle $Bundle $Digest\nif($result.Manifest.files.Count -ne 15 -or $result.Manifest.buildSourceBindings.Count -ne 14 -or $result.Manifest.runtimeQualified){throw 'Fresh scope changed.'}\nWrite-Host 'PASS: actual fresh package validator.'\n", encoding="utf-8-sig", newline="\n")
 
                 def validate(expect_success, expected_marker=None, digest=None):
                     actual_digest = digest or hashlib.sha256((output / "manifest.json").read_bytes()).hexdigest()
@@ -411,6 +411,14 @@ class FreshDependencyPackagingTests(unittest.TestCase):
                         if control == "extra-member":
                             (output / "scripts/extra.cs").unlink()
                 validate(True)
+
+
+class NtChildDependencyPackagingTests(FreshDependencyPackagingTests):
+    helper = "scripts/test-support-nt-event-child.rs"
+
+
+class NtBindingDependencyPackagingTests(FreshDependencyPackagingTests):
+    helper = "scripts/test-support-nt-event-binding.cs"
 
 
 if __name__ == "__main__":

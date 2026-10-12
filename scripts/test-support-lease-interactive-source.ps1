@@ -308,11 +308,32 @@ function Assert-OriginalObservationCleanup([string]$Text) {
   if($errors.Count) { throw 'Original observation source does not parse.' }
   foreach($name in @('Invoke-StandardLeaseSubsystemObservations','Invoke-StandardLeaseNamespaceObservations')) {
     $functions=@($ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq $name},$true))
-    if($functions.Count -ne 1 -or [regex]::Matches($functions[0].Body.Extent.Text,'(?m)^\s+finally \{ \[MixelOrdinaryTokenFixture\]::CloseStartedObservations\(\) \}$').Count -ne 2) { throw 'Source observation stop failures skip exact handle cleanup.' }
+    if($functions.Count -ne 1) { throw 'Source observation cleanup function is missing or duplicated.' }
+    $text=$functions[0].Body.Extent.Text.Replace("`r`n","`n")
+    $expected=if($name -ceq 'Invoke-StandardLeaseSubsystemObservations'){2}else{1}
+    if([regex]::Matches($text,'(?m)^\s+finally \{ \[MixelOrdinaryTokenFixture\]::CloseStartedObservations\(\) \}$').Count -ne $expected) { throw 'Source observation stop failures skip exact handle cleanup.' }
+    if($name -ceq 'Invoke-StandardLeaseNamespaceObservations') {
+      $pending=@'
+            try {
+              Complete-LeaseNtPendingProtocols
+              if ($matrixHandle -ne [IntPtr]::Zero -and -not (Test-LeaseNtWorldPending $matrixHandle)) { [MixelIsolatedLeaseControl]::Close($matrixHandle); $matrixHandle=[IntPtr]::Zero }
+            } finally {
+              if (@($script:ntPendingProtocols | Where-Object { -not $_.childExited }).Count -eq 0) {
+                [MixelOrdinaryTokenFixture]::CloseStartedObservations()
+              } else {
+                # The original subsequent fixture reuse/eight controls close their
+                # observation map. Do not enter them while this exact owned child
+                # still needs that borrowed identity and the verified World handle.
+                throw 'Exact pending NT child remains live after owned stop; retained process/World/protocol ownership prevents further fixture reuse.'
+              }
+            }
+'@
+      if([regex]::Matches($text,[regex]::Escape($pending.Replace("`r`n","`n"))).Count -ne 1){throw 'Exact pending-child drain/zero-live guard/close-or-fatal ownership branch changed.'}
+    }
   }
 }
 Assert-OriginalObservationCleanup $original
-foreach($changed in @($original.Replace('[MixelOrdinaryTokenFixture]::CloseStartedObservations()','changed-close'),$original.Replace('function Invoke-StandardLeaseNamespaceObservations(', 'function ChangedObservation('))) {
+foreach($changed in @($original.Replace('[MixelOrdinaryTokenFixture]::CloseStartedObservations()','changed-close'),$original.Replace('function Invoke-StandardLeaseNamespaceObservations(', 'function ChangedObservation('),$original.Replace('Complete-LeaseNtPendingProtocols','Changed-PendingDrain'),$original.Replace('Where-Object { -not $_.childExited }','Where-Object { $_.childExited }'),$original.Replace('Exact pending NT child remains live after owned stop;','Changed pending-child fatal;'))) {
   $refused=$false
   try { Assert-OriginalObservationCleanup $changed } catch { $refused=$true }
   if(-not $refused) { throw 'Missing original observation cleanup was accepted.' }
@@ -371,7 +392,7 @@ $standardAst=[Management.Automation.Language.Parser]::ParseFile($StandardPath,[r
 if($errors.Count){throw 'Standard cleanup source does not parse.'}
 $namespace=@($standardAst.FindAll({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Invoke-StandardLeaseNamespaceObservations'},$true))
 if($namespace.Count -ne 1){throw 'Exact namespace cleanup function boundary changed.'}
-$matrix=@($namespace[0].FindAll({param($node)$node -is [Management.Automation.Language.TryStatementAst] -and $node.Finally -and $node.Finally.Extent.Text.Contains('if ($matrixHandle')},$true))
+$matrix=@($namespace[0].FindAll({param($node)$node -is [Management.Automation.Language.TryStatementAst] -and $node.Finally -and @($node.Body.Statements|Where-Object{$_.Extent.Text -ceq '$matrixHandle=[MixelIsolatedLeaseControl]::WorldEvent($endpoint)'}).Count -eq 1},$true))
 $main=@($standardAst.EndBlock.Statements|Where-Object{$_ -is [Management.Automation.Language.TryStatementAst]})
 if($matrix.Count -ne 1 -or $main.Count -ne 1){throw 'Exact outer cleanup finally boundaries changed.'}
 Add-Type @'
@@ -404,6 +425,11 @@ function Test-ActualStandardCleanup {
   function Get-LocalUser {param($Name,$SID,$ErrorAction) return $null}
   function Start-Sleep {param($Seconds,$Milliseconds)}
   function Write-Host {param($Object)}
+  function Test-LeaseNtWorldPending([IntPtr]$Handle){return @($script:ntPendingProtocols|Where-Object{-not $_.childExited}).Count -gt 0}
+  function Complete-LeaseNtPendingProtocols {if($script:syntheticConfirmNtExit){foreach($context in $script:ntPendingProtocols){$context.childExited=$true}}}
+  $script:ntPendingProtocols=[Collections.Generic.List[object]]::new()
+  $script:ntPreservedRoots=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+  $script:syntheticConfirmNtExit=$false
   foreach($case in 0..3){
     [MixelStandardOuterSourceMock]::Reset()
     [MixelStandardOuterSourceMock]::EventFails=$case -eq 1
@@ -411,8 +437,21 @@ function Test-ActualStandardCleanup {
     [MixelStandardOuterSourceMock]::CloseFails=$case -eq 3
     $matrixHandle=[IntPtr]555;$caught=$false
     try{. $matrixCleanup}catch{$caught=$true}
-    if($caught -ne ($case -ne 0) -or ([MixelStandardOuterSourceMock]::Calls -join ',') -cne 'eventClose,stopOwned,closeOwned' -or ($matrixHandle -ne [IntPtr]::Zero) -ne ($case -eq 1)){throw 'Actual matrix finally abandons cleanup or discards a failed event close.'}
+    $expectedCalls=if($case -eq 1){'eventClose,stopOwned,eventClose,closeOwned'}else{'eventClose,stopOwned,closeOwned'}
+    if($caught -ne ($case -ne 0) -or ([MixelStandardOuterSourceMock]::Calls -join ',') -cne $expectedCalls -or ($matrixHandle -ne [IntPtr]::Zero) -ne ($case -eq 1)){throw 'Actual matrix finally abandons cleanup or discards a failed event close.'}
   }
+  foreach($case in 0..3){
+    [MixelStandardOuterSourceMock]::Reset()
+    [MixelStandardOuterSourceMock]::StopFails=$case -eq 1
+    [MixelStandardOuterSourceMock]::EventFails=$case -eq 3
+    $script:ntPendingProtocols.Clear();$script:ntPendingProtocols.Add([pscustomobject]@{childExited=$false})
+    $script:syntheticConfirmNtExit=$case -ge 2
+    $matrixHandle=[IntPtr]555;$caught=$false
+    try{. $matrixCleanup}catch{$caught=$true}
+    $expectedCalls=if($case -lt 2){'stopOwned'}else{'stopOwned,eventClose,closeOwned'}
+    if($caught -ne ($case -ne 2) -or ([MixelStandardOuterSourceMock]::Calls -join ',') -cne $expectedCalls -or ($matrixHandle -ne [IntPtr]::Zero) -ne ($case -ne 2)){throw 'Actual pending-live/late-exit matrix cleanup loses ownership or skips an independent process close.'}
+  }
+  $script:ntPendingProtocols.Clear();$script:syntheticConfirmNtExit=$false
   foreach($case in 0..5){
     [MixelStandardOuterSourceMock]::Reset()
     [MixelStandardOuterSourceMock]::EventFails=$case -eq 1
@@ -431,5 +470,5 @@ function Test-ActualStandardCleanup {
 $temporaryCleanup=Join-Path ([IO.Path]::GetTempPath()) ('mixel-source-cleanup-'+[Guid]::NewGuid().ToString('N'))
 [void][IO.Directory]::CreateDirectory($temporaryCleanup)
 try{Test-ActualStandardCleanup}finally{[IO.Directory]::Delete($temporaryCleanup,$true)}
-Write-Host 'PASS: exact matrix/main finally blocks pass ten pure failure/success cases; event, stop, close, pending-close and hash failures still attempt later owned cleanup, preserve failed ownership and clear memory-only markers.'
+Write-Host 'PASS: exact matrix/main finally blocks retain ten original and four pending-live/late-exit pure failure/success cases; event, stop, close, pending-close and hash failures still attempt later owned cleanup, preserve failed ownership and clear memory-only markers.'
 Write-Host 'Result: exact interactive source controls pass; zero Windows API calls and no standard-account/runtime qualification.'

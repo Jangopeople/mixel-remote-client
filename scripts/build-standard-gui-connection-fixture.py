@@ -21,6 +21,8 @@ SOURCES = (
     "scripts/build-standard-lease-qa-bundle.py",
     ".github/workflows/preflight.yml",
     "scripts/test-support-directory-security.cs",
+    "scripts/test-support-nt-event-child.rs",
+    "scripts/test-support-nt-event-binding.cs",
 )
 
 
@@ -247,9 +249,10 @@ def generated_source(directory, event, original=None):
     spec.loader.exec_module(lease)
     original = original if original is not None else (ROOT / SOURCES[0]).read_text(encoding="utf-8")
     body = lease.standard_windows_fixture_body(original, directory, "mixel-gui-observe-" + event[-32:] + "-", event)
-    if body.count(lease.STANDARD_WINDOWS_HARNESS) != 1:
+    harness = lease.standard_windows_harness(event)
+    if body.count(harness) != 1:
         raise ValueError("Exact generated standard child entry changed")
-    return body.replace(lease.STANDARD_WINDOWS_HARNESS, GUI_HELPER + MAIN, 1)
+    return body.replace(harness, GUI_HELPER + MAIN, 1)
 
 
 def pe_observation_metadata(data):

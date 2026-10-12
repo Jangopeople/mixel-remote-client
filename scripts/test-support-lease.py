@@ -637,6 +637,18 @@ fn main() {
 '''
 
 
+
+def standard_windows_harness(event):
+    # The diagnostic is nested in Standard main so replacing the whole main
+    # conserves GUI output and does not export unused diagnostic functions.
+    child = (ROOT / "scripts/test-support-nt-event-child.rs").read_text(encoding="utf-8")
+    marker = '        std::fs::rename(directory.join("fixture-result.new"), directory.join("fixture-result.json")).unwrap();\n'
+    assert STANDARD_WINDOWS_HARNESS.count(marker) == 1, "Exact original Standard result publication boundary changed"
+    diagnostic = ('        mod fixture_nt_event {\n' + child + '\n        }\n'
+                  '        if mode == \"nt-world-probe\" { fixture_nt_event::observe_native(&directory, ' + json.dumps(event) + ').unwrap(); }\n')
+    return STANDARD_WINDOWS_HARNESS.replace(marker, marker + diagnostic, 1).replace('"probe" => {}', '"probe" | "nt-world-probe" => {}', 1)
+
+
 def isolated_source(original, directory, prefix, event):
     source, count = re.subn(r'const ROOT: &str = "(?:/tmp|/private/tmp)";',
                            lambda _: "const ROOT: &str = " + json.dumps(str(directory)) + ";", original)
@@ -697,7 +709,7 @@ def standard_windows_fixture_body(original, directory, prefix, event):
     for call, phase, count in calls:
         assert source.count(call)==count, "Exact standard fixture event observation boundary changed"
         source=source.replace(call, f'        fixture_thread_tokens::observe("{phase}");\n' + call)
-    return source + HARNESS.replace("fn main() {", "fn lease_main() {", 1) + STANDARD_WINDOWS_HARNESS
+    return source + HARNESS.replace("fn main() {", "fn lease_main() {", 1) + standard_windows_harness(event)
 
 
 def read_pe_subsystem(binary):

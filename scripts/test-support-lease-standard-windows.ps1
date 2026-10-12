@@ -6,6 +6,8 @@ if (-not $IsWindows -or $env:GITHUB_ACTIONS -cne 'true') {
 }
 python (Join-Path $PSScriptRoot 'test-windows-lease-observation.py')
 if ($LASTEXITCODE -ne 0) { throw 'Calling-thread observation and fatal baseline source controls failed.' }
+$ntBindingSource = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'test-support-nt-event-binding.cs'))
+if (-not ('MixelNtEventBinding' -as [type])) { Add-Type -TypeDefinition $ntBindingSource -CompilerOptions /warnaserror+ -ErrorAction Stop }
 $launchSource = Get-Content (Join-Path $PSScriptRoot 'test-support-launch-windows.ps1') -Raw
 $class = $launchSource.IndexOf('public static class MixelOrdinaryTokenFixture {')
 $first = $launchSource.LastIndexOf('using System;', $class)
@@ -22,6 +24,16 @@ if (-not ('MixelOrdinaryTokenFixture' -as [type])) {
   # Add only a documented secondary-launch comparison and retained-token SID
   # check to the test class; preserve its original customer launch and cleanup.
   $comparison = @'
+  public static object RetainedNtEventProcesses(int pid) {
+    IntPtr process;
+    if(!StartedProcesses.TryGetValue(pid,out process) || process==IntPtr.Zero || process.ToInt64()==-1) throw new InvalidOperationException("Nt event diagnostic requires an exact retained child");
+    return StartedProcesses;
+  }
+  public static void StopRetainedNtEventChild(int pid) {
+    IntPtr process;
+    if(!StartedProcesses.TryGetValue(pid,out process)) throw new InvalidOperationException("Nt event cleanup child is not owned");
+    StopOwnedProcessHandle(process);
+  }
   public static DirectorySecurityPrototype.Observation StartedDirectorySecurityFacts(int pid,string ownedSid) {
     // The existing fixture created and verified this QA account locally. Only
     // redacted byte equality leaves the helper; neither SID nor account name is output.
@@ -432,6 +444,11 @@ public static class MixelIsolatedLeaseControl {
     return handle;
   }
   public static IntPtr DeniedEvent(string name) { return Event(name,"D:P(A;;GA;;;BA)(A;;GA;;;SY)"); }
+  public static object RetainedNtWorldEvents(string name,IntPtr handle) {
+    string actual;
+    if(!Owned.Contains(handle) || !WorldNames.TryGetValue(handle,out actual) || actual!=name) throw new InvalidOperationException("Nt event binding requires the exact existing owned World event");
+    return WorldNames;
+  }
   public static IntPtr WorldEvent(string name) {
     IntPtr handle=Event(name,"D:P(A;;0x00100000;;;WD)(A;;GA;;;BA)(A;;GA;;;SY)");
     WorldNames.Add(handle,name);
@@ -613,7 +630,7 @@ public static class MixelIsolatedLeaseControl {
 }
 '@ }
 
-function Write-LeaseContextFailure([ValidateSet('job-membership','job-limits','explicit-directory-access','explicit-directory-security','owned-world-descriptor')][string]$Operation, [Exception]$Failure) {
+function Write-LeaseContextFailure([ValidateSet('job-membership','job-limits','explicit-directory-access','explicit-directory-security','owned-world-descriptor','nt-world-bind-arm','nt-child-self','nt-child-ack','nt-child-owned-exit','nt-parent-cleanup','nt-protocol-cleanup','nt-parent-pending-cleanup','nt-pending-protocol-cleanup','nt-world-still-held')][string]$Operation, [Exception]$Failure) {
   $actual = $Failure
   for ($depth = 0; $depth -lt 8 -and $actual -is [Management.Automation.MethodInvocationException] -and $actual.InnerException; $depth++) {
     $actual = $actual.InnerException
@@ -1046,11 +1063,69 @@ function Read-StandardFixtureResult([string]$Path, [DateTime]$Deadline) {
   }
 }
 
+
+function Test-LeaseNtWorldPending([IntPtr]$WorldHandle) {
+  return @($script:ntPendingProtocols | Where-Object { $_.worldHandle -eq $WorldHandle -and -not $_.childExited }).Count -gt 0
+}
+
+function Complete-LeaseNtPendingProtocols {
+  foreach ($context in @($script:ntPendingProtocols)) {
+    try {
+      if (-not $context.childExited) {
+        if (-not [MixelOrdinaryTokenFixture]::StartedStatus($context.pid).StartsWith('exited:')) { throw 'Pending exact NT child exit is not confirmed; binding remains owned.' }
+        $context.childExited=$true
+        $context.binding.Dispose()
+        if (-not $context.facts.cleanupOkay) { Write-LeaseContextFailure nt-parent-pending-cleanup ([InvalidOperationException]::new('Pending owned parent binding cleanup failed; literal facts retained.')) }
+      }
+      if ($context.files) { $context.files.Cleanup() }
+      [void]$script:ntPendingProtocols.Remove($context)
+    } catch { Write-LeaseContextFailure nt-pending-protocol-cleanup $_.Exception }
+  }
+}
+
+function Read-StandardNtReplyBytes([string]$Path, [DateTime]$Deadline, [int]$ExpectedPid) {
+  $sharingFailure = $null
+  while ([DateTime]::UtcNow -lt $Deadline) {
+    if ([MixelOrdinaryTokenFixture]::StartedStatus($ExpectedPid) -cne 'still-running') { throw 'Exact retained NT child exited before reply.' }
+    try { return ,([MixelNtEventBinding+Transport]::ReadBoundedBytes($Path,2048)) }
+    catch {
+      $failure=$_.Exception
+      while ($failure.InnerException -and ($failure -is [Reflection.TargetInvocationException] -or $failure -is [Management.Automation.MethodInvocationException])) { $failure=$failure.InnerException }
+      if ($failure -is [IO.FileNotFoundException]) { }
+      elseif ($failure -is [IO.IOException] -and $failure.HResult -eq -2147024864) { $sharingFailure=$failure }
+      else { throw }
+    }
+    Start-Sleep -Milliseconds 20
+  }
+  if ($sharingFailure) { throw $sharingFailure }
+  throw 'Owned NT child reply exceeded the original result deadline.'
+}
+
+function Invoke-StandardNtChildObservation($Binding,$Files,[int]$ControlPid,$Original,[DateTime]$Deadline) {
+  $started=[Collections.Generic.Dictionary[int,IntPtr]][MixelOrdinaryTokenFixture]::RetainedNtEventProcesses($ControlPid)
+  $request=$Binding.IssueKnownChildRequest($ControlPid,[uint32]$Original.pid,$started)
+  [MixelNtEventBinding+Transport]::WriteRequest($Files.directory,$ControlPid,$request,$Files)
+  $path=Join-Path $Files.directory 'fixture-nt-event-result.json'
+  $bytes=Read-StandardNtReplyBytes $path $Deadline $ControlPid
+  $reply=[MixelNtEventBinding+Transport]::ReadReply($bytes)
+  $Binding.ValidateTransportReply($reply,$ControlPid,$started)
+  $Files.AdoptValidatedReply($path,$bytes,$Binding,$ControlPid,$started)
+  Write-Host "OBSERVED: same source World-event child direct NT open; scenario=global-existing-world-synchronize-event; controlPid=$ControlPid; originalWin32Error=$($Original.rawOpenError); sameRetainedPID=True; parentObjectIdentityBound=True; requestedAccess=1048576; originalWin32EventRouteUnmeasured=True; causeEstablished=False; $($reply | ConvertTo-Json -Depth 4 -Compress)."
+  if (-not $reply.cleanupOkay -or $reply.openStatus -cnotin @('opened','nt-status')) { throw 'Owned NT child API/lifecycle observation incomplete; literal reply retained.' }
+  return $reply
+}
+
 function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner')][string]$Mode, [string]$ExpectedStatus, [int]$ExpectedError,
     [string]$ExpectedProof, [bool]$ExpectedRequired, [bool]$ExpectedOwnerFailed, [switch]$KeepAlive,
     [switch]$ObserveOnly, [string]$ObservationLabel,
     [ValidateSet('with-logon','with-token','with-caller-linked')][string]$Launcher = 'with-logon',
-    [ValidateSet('console','windows')][string]$Subsystem = 'console', [switch]$UnnamedControl) {
+    [ValidateSet('console','windows')][string]$Subsystem = 'console', [switch]$UnnamedControl,
+    [switch]$ObserveNtEvent, [IntPtr]$NtWorldHandle = [IntPtr]::Zero, [string]$NtWorldName) {
+  $ntBinding=$null; $ntFacts=$null; $ntFiles=$null; $ntReply=$null; $ntArmed=$false; $ntProbeFailed=$false; $ntSkipLaunch=$false; $controlPid=0
+  if ($ObserveNtEvent -and ($Mode -cne 'probe' -or -not $ObserveOnly -or $KeepAlive -or $UnnamedControl -or
+      $Subsystem -cne 'console' -or $Launcher -cnotin @('with-logon','with-token') -or
+      $ObservationLabel -cne 'global-existing-world-synchronize-event' -or $NtWorldHandle -eq [IntPtr]::Zero -or
+      $NtWorldName -cnotmatch '\AGlobal\\Mixel-Remote-Standard-Lease-[0-9a-f]{32}\z')) { throw 'Internal NT observation is limited to the existing Global World matrix child.' }
   $expectedExecutable = if ($Subsystem -ceq 'windows') { 'lease-standard-gui.exe' } else { 'lease-standard.exe' }
   if ([IO.Path]::GetFileName($executable) -cne $expectedExecutable) { throw 'Owned source control executable does not match its declared subsystem.' }
   $unnamedRequest = Join-Path $fixtureRoot 'fixture-unnamed.request'
@@ -1071,6 +1146,25 @@ function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner'
   [IO.File]::WriteAllText((Join-Path $fixtureRoot 'fixture-job-limits.request'), 'observe', [Text.UTF8Encoding]::new($false))
   [IO.File]::WriteAllText((Join-Path $fixtureRoot 'fixture-directory-access.request'), 'observe', [Text.UTF8Encoding]::new($false))
   [IO.File]::WriteAllText((Join-Path $fixtureRoot 'fixture-mode.txt'), $Mode, [Text.UTF8Encoding]::new($false))
+  if ($ObserveNtEvent) {
+    try {
+      $world=[Collections.Generic.Dictionary[IntPtr,string]][MixelIsolatedLeaseControl]::RetainedNtWorldEvents($NtWorldName,$NtWorldHandle)
+      $candidate='\BaseNamedObjects\'+$NtWorldName.Substring(7)
+      $ntBinding=[MixelNtEventBinding+ParentBinding]::Open([MixelNtEventBinding+KernelApi]::new(),$NtWorldHandle,$world,$candidate,[ref]$ntFacts)
+      if (-not $ntBinding) { throw 'Existing World event identity could not be verified; no child NT target issued.' }
+      $ntFiles=[MixelNtEventBinding+ProtocolFiles]::new($fixtureRoot)
+      [MixelNtEventBinding+Transport]::Arm($fixtureRoot,$ntFiles)
+      [IO.File]::WriteAllText((Join-Path $fixtureRoot 'fixture-mode.txt'), 'nt-world-probe', [Text.UTF8Encoding]::new($false))
+      $ntArmed=$true
+    } catch {
+      $ntSkipLaunch=$true
+      [void]$script:ntPreservedRoots.Add($fixtureRoot)
+      Write-LeaseContextFailure nt-world-bind-arm $_.Exception
+    }
+  }
+  $control = $null
+  try {
+  if ($ntSkipLaunch) { return 0 }
   if ($Launcher -ceq 'with-caller-linked') {
     if (-not $ObserveOnly) { throw 'Caller-linked UAC token cannot satisfy pure standard-account acceptance.' }
     $controlPid=[MixelOrdinaryTokenFixture]::StartCallerLinkedUser($executable)
@@ -1079,8 +1173,6 @@ function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner'
   } else {
     $controlPid = [MixelOrdinaryTokenFixture]::StartStandardUser($executable, $ownedUser, $ownedPassword)
   }
-  $control = $null
-  try {
     $control = Get-Process -Id $controlPid
     $sidMatches = if ($Launcher -ceq 'with-caller-linked') { [MixelOrdinaryTokenFixture]::StartedUserSidMatchesCaller($controlPid) } else { [MixelOrdinaryTokenFixture]::StartedUserSidMatches($controlPid, $ownedSid) }
     $elevated = [MixelOrdinaryTokenFixture]::Elevated($controlPid)
@@ -1099,6 +1191,10 @@ function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner'
     if ($text.Length -gt 4096) { throw 'Owned lease result exceeds its bound.' }
     $record = $text | ConvertFrom-Json
     Assert-StandardLeaseSafeResult $record $controlPid
+    if ($ntArmed) {
+      try { $ntReply=Invoke-StandardNtChildObservation $ntBinding $ntFiles $controlPid $record $deadline }
+      catch { $ntProbeFailed=$true; Write-LeaseContextFailure nt-child-self $_.Exception }
+    }
     $threadTokens = Read-StandardCallingThreadTokens $controlPid
     Write-Host "OBSERVED: owned child calling-thread token immediately before native event APIs; controlPid=$controlPid; mode=$Mode; $($threadTokens | ConvertTo-Json -Depth 4 -Compress)."
     Invoke-LeaseJobObservation $controlPid
@@ -1139,18 +1235,56 @@ function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner'
         throw 'Owned read-only calling-thread token handle cleanup failed; native process cleanup is required.'
       }
     }
-    if (-not $KeepAlive) {
+    if ($ntArmed) {
+      try {
+        if ($ntProbeFailed) { [MixelOrdinaryTokenFixture]::StopRetainedNtEventChild($controlPid) }
+        else {
+          $started=[Collections.Generic.Dictionary[int,IntPtr]][MixelOrdinaryTokenFixture]::RetainedNtEventProcesses($controlPid)
+          $ntBinding.AcknowledgeTransport($ntReply,$controlPid,$started,$fixtureRoot,$ntFiles)
+          $ntExitDeadline=[DateTime]::UtcNow.AddSeconds(10)
+          while ([MixelOrdinaryTokenFixture]::StartedStatus($controlPid) -ceq 'still-running' -and [DateTime]::UtcNow -lt $ntExitDeadline) { Start-Sleep -Milliseconds 50 }
+          if ([MixelOrdinaryTokenFixture]::StartedStatus($controlPid) -cne 'exited:0x00000000') { throw 'Exact owned NT child did not exit successfully after acknowledgment.' }
+        }
+      } catch { $ntProbeFailed=$true; Write-LeaseContextFailure nt-child-ack $_.Exception }
+    }
+    if (-not $KeepAlive -and -not $ntArmed) {
       [IO.File]::WriteAllText((Join-Path $fixtureRoot "fixture-release-$controlPid"), 'verified')
       $deadline = [DateTime]::UtcNow.AddSeconds(10)
       while ([MixelOrdinaryTokenFixture]::StartedStatus($controlPid) -ceq 'still-running' -and [DateTime]::UtcNow -lt $deadline) {
         Start-Sleep -Milliseconds 50
       }
       if ([MixelOrdinaryTokenFixture]::StartedStatus($controlPid) -cne 'exited:0x00000000') { throw 'Exact owned functional lease process did not exit successfully.' }
-    } elseif ([MixelOrdinaryTokenFixture]::StartedStatus($controlPid) -cne 'still-running') {
+    } elseif ($KeepAlive -and [MixelOrdinaryTokenFixture]::StartedStatus($controlPid) -cne 'still-running') {
       throw 'Actual standard-account lease owner exited before independent observation.'
     }
     return $controlPid
-  } finally { if ($control) { $control.Dispose() } }
+  } finally {
+    if ($ObserveNtEvent) {
+      $ntExited=($controlPid -eq 0)
+      if ($controlPid -ne 0) {
+        try {
+          if ([MixelOrdinaryTokenFixture]::StartedStatus($controlPid) -ceq 'still-running') { [MixelOrdinaryTokenFixture]::StopRetainedNtEventChild($controlPid) }
+          $ntExited=[MixelOrdinaryTokenFixture]::StartedStatus($controlPid).StartsWith('exited:')
+          if (-not $ntExited) { throw 'Exact retained NT child exit was not confirmed.' }
+        } catch { Write-LeaseContextFailure nt-child-owned-exit $_.Exception }
+      }
+      # Original World ownership stays with the matrix. Its independently
+      # verified binding is drained after the child, before the reused directory.
+      if ($ntBinding -and $ntExited) { $ntBinding.Dispose() }
+      elseif ($ntBinding) {
+        $script:ntPendingProtocols.Add([pscustomobject]@{binding=$ntBinding;facts=$ntFacts;files=$ntFiles;pid=$controlPid;worldHandle=$NtWorldHandle;childExited=$false})
+      }
+      if ($ntFacts) {
+        Write-Host "OBSERVED: parent existing World NT binding; scenario=global-existing-world-synchronize-event; controlPid=$controlPid; childExitConfirmed=$ntExited; originalWin32EventRouteUnmeasured=True; $($ntFacts | ConvertTo-Json -Depth 5 -Compress)."
+        if (-not $ntFacts.cleanupOkay) { Write-LeaseContextFailure nt-parent-cleanup ([InvalidOperationException]::new('Owned parent NT binding/module cleanup failed; literal facts retained.')) }
+      }
+      if ($ntFiles -and $ntExited) {
+        try { $ntFiles.Cleanup() }
+        catch { [void]$script:ntPreservedRoots.Add($fixtureRoot); Write-LeaseContextFailure nt-protocol-cleanup $_.Exception }
+      }
+    }
+    if ($control) { $control.Dispose() }
+  }
 }
 
 function Invoke-CurrentCallerLeaseControl([ValidateSet('probe','owner')][string]$Mode, [string]$ExpectedStatus,
@@ -1310,17 +1444,35 @@ function Invoke-StandardLeaseNamespaceObservations([ValidateSet('with-logon','wi
         finally { [MixelOrdinaryTokenFixture]::CloseStartedObservations() }
         [void](Invoke-StandardLeaseControl -Mode probe -Launcher $Launcher -ObserveOnly -ObservationLabel "$namespace-after-confirmed-owner-request-process-termination")
         $matrixHandle=[MixelIsolatedLeaseControl]::WorldEvent($endpoint)
-        [void](Invoke-StandardLeaseControl -Mode probe -Launcher $Launcher -ObserveOnly -ObservationLabel "$namespace-existing-world-synchronize-event")
+        [void](Invoke-StandardLeaseControl -Mode probe -Launcher $Launcher -ObserveOnly -ObservationLabel "$namespace-existing-world-synchronize-event" -ObserveNtEvent:($namespace -ceq 'global') -NtWorldHandle $matrixHandle -NtWorldName $endpoint)
         Invoke-LeaseWorldDescriptorObservation $endpoint $matrixHandle $namespace
-        [MixelIsolatedLeaseControl]::Close($matrixHandle)
-        $matrixHandle=[IntPtr]::Zero
-        [void](Invoke-StandardLeaseControl -Mode probe -Launcher $Launcher -ObserveOnly -ObservationLabel "$namespace-after-confirmed-world-event-close")
+        if (-not (Test-LeaseNtWorldPending $matrixHandle)) {
+          [MixelIsolatedLeaseControl]::Close($matrixHandle)
+          $matrixHandle=[IntPtr]::Zero
+        }
+        if ($matrixHandle -eq [IntPtr]::Zero) {
+          [void](Invoke-StandardLeaseControl -Mode probe -Launcher $Launcher -ObserveOnly -ObservationLabel "$namespace-after-confirmed-world-event-close")
+        } else { Write-LeaseContextFailure nt-world-still-held ([InvalidOperationException]::new('Exact World handle remains held for an unexited owned child; no after-close observation issued.')) }
       } finally {
         try {
-          if ($matrixHandle -ne [IntPtr]::Zero) { [MixelIsolatedLeaseControl]::Close($matrixHandle); $matrixHandle=[IntPtr]::Zero }
+          if ($matrixHandle -ne [IntPtr]::Zero -and -not (Test-LeaseNtWorldPending $matrixHandle)) { [MixelIsolatedLeaseControl]::Close($matrixHandle); $matrixHandle=[IntPtr]::Zero }
         } finally {
           try { [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses() }
-          finally { [MixelOrdinaryTokenFixture]::CloseStartedObservations() }
+          finally {
+            try {
+              Complete-LeaseNtPendingProtocols
+              if ($matrixHandle -ne [IntPtr]::Zero -and -not (Test-LeaseNtWorldPending $matrixHandle)) { [MixelIsolatedLeaseControl]::Close($matrixHandle); $matrixHandle=[IntPtr]::Zero }
+            } finally {
+              if (@($script:ntPendingProtocols | Where-Object { -not $_.childExited }).Count -eq 0) {
+                [MixelOrdinaryTokenFixture]::CloseStartedObservations()
+              } else {
+                # The original subsequent fixture reuse/eight controls close their
+                # observation map. Do not enter them while this exact owned child
+                # still needs that borrowed identity and the verified World handle.
+                throw 'Exact pending NT child remains live after owned stop; retained process/World/protocol ownership prevents further fixture reuse.'
+              }
+            }
+          }
         }
       }
     }
@@ -1328,6 +1480,9 @@ function Invoke-StandardLeaseNamespaceObservations([ValidateSet('with-logon','wi
     $script:fixtureRoot=$savedRoot; $script:executable=$savedExecutable; $script:resultPath=$savedResult
   }
 }
+
+$script:ntPendingProtocols = [Collections.Generic.List[object]]::new()
+$script:ntPreservedRoots = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
 
 $ownedUser = 'mixellease' + [Guid]::NewGuid().ToString('N').Substring(0,10)
 $ownedSid = $null; $ownedPassword = $null; $random = $null
@@ -1410,8 +1565,10 @@ try {
   $cleanup = [System.Collections.Generic.List[string]]::new()
   if ($eventHandle -ne [IntPtr]::Zero) { try { [MixelIsolatedLeaseControl]::Close($eventHandle) } catch { $cleanup.Add('Owned isolated event handle cleanup failed.') } }
   try { [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses() } catch { $cleanup.Add('Exact owned standard lease process cleanup failed.') }
-  try { [MixelOrdinaryTokenFixture]::CloseStartedObservations() } catch { $cleanup.Add('Exact owned standard lease handle close failed.') }
-  try { [MixelIsolatedLeaseControl]::ClosePending() } catch { $cleanup.Add('Owned retained isolated lease handle cleanup failed.') }
+  Complete-LeaseNtPendingProtocols
+  if ($script:ntPendingProtocols.Count -gt 0) { $cleanup.Add('Exact pending NT protocol ownership cleanup remains incomplete.') }
+  if (@($script:ntPendingProtocols | Where-Object { -not $_.childExited }).Count -eq 0) { try { [MixelOrdinaryTokenFixture]::CloseStartedObservations() } catch { $cleanup.Add('Exact owned standard lease handle close failed.') } }
+  if (@($script:ntPendingProtocols | Where-Object { -not $_.childExited }).Count -eq 0) { try { [MixelIsolatedLeaseControl]::ClosePending() } catch { $cleanup.Add('Owned retained isolated lease handle cleanup failed.') } }
   if ($desktopAccess) { try { $desktopAccess.Dispose() } catch { $cleanup.Add('Owned standard lease desktop ACL restoration failed.') } }
   try { if ([MixelOrdinaryTokenFixture]::DesktopAclHashes() -cne $originalDesktop) { $cleanup.Add('Owned standard lease desktop ACL hashes changed.') } }
   catch { $cleanup.Add('Owned standard lease desktop ACL hash verification failed.') }
@@ -1425,7 +1582,9 @@ try {
   }
   if ($ownedSid) { try { Remove-LocalUser -SID ([Security.Principal.SecurityIdentifier]::new($ownedSid)) } catch { $cleanup.Add('Owned standard lease SID cleanup failed.') } }
   $ownedPassword = $null; $random = $null
+  if ($script:ntPendingProtocols.Count -eq 0 -and $script:ntPreservedRoots.Count -eq 0) {
   if (Test-Path $fixtureRoot) { try { Remove-Item -LiteralPath $fixtureRoot -Recurse -Force } catch { $cleanup.Add('Owned standard lease files cleanup failed.') } }
+  } else { $cleanup.Add('Owned fixture files retained for incomplete NT child/protocol ownership cleanup.') }
   if (Get-LocalUser -Name $ownedUser -ErrorAction SilentlyContinue) { $cleanup.Add('Owned standard lease account remains.') }
   if ($cleanup.Count -gt 0) {
     if ($failure) { Write-Host ('FAIL: standard lease cleanup additionally failed: ' + ($cleanup -join ' ')) }

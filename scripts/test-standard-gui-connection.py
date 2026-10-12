@@ -129,7 +129,7 @@ class GuiConnectionSourceTests(unittest.TestCase):
             lease=importlib.util.module_from_spec(spec);spec.loader.exec_module(lease)
             guard=(ROOT/builder.SOURCES[0]).read_text(encoding="utf-8")
             baseline=lease.standard_windows_fixture_body(guard,root,"mixel-gui-observe-"+"a"*32+"-",event)
-            self.assertEqual(actual.replace(builder.GUI_HELPER+builder.MAIN,lease.STANDARD_WINDOWS_HARNESS,1),baseline)
+            self.assertEqual(actual.replace(builder.GUI_HELPER+builder.MAIN,lease.standard_windows_harness(event),1),baseline)
             self.assertEqual(builder.MAIN.count('observe("before")'),1)
             self.assertLess(builder.MAIN.index('module.desktop_window()'),builder.MAIN.index('observe("after-call")'))
             self.assertLess(builder.MAIN.index('observe("after-call")'),builder.MAIN.index('module.names()'))
@@ -166,7 +166,7 @@ class GuiConnectionSourceTests(unittest.TestCase):
             self.assertNotIn('source-manifest.json',{p.name for p in evidence.iterdir()})
             with self.assertRaises(FileExistsError):builder.prepare(workspace,evidence,'Global\\Mixel-Remote-Standard-Lease-'+'b'*32,False)
 
-    def test_actual_manifest_binds_new_helper_and_refuses_missing_or_tampered_source(self):
+    def assert_actual_manifest_dependency(self, helper):
         # Execute real source generation/Git binding/manifest writing. The native
         # compiler boundary uses an explicit synthetic PE, never an OS child.
         with tempfile.TemporaryDirectory(prefix='mixel-gui-helper-binding-') as temporary:
@@ -175,7 +175,7 @@ class GuiConnectionSourceTests(unittest.TestCase):
                 path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes((ROOT/name).read_bytes())
             for command in (('init','--quiet'),('config','core.autocrlf','false'),('add','.'),('-c','user.name=Mixel QA','-c','user.email=qa@example.test','commit','--quiet','-m','Owned GUI helper binding')):
                 subprocess.run(['git',*command],cwd=root,check=True,capture_output=True)
-            helper='scripts/test-support-directory-security.cs';original=(root/helper).read_bytes()
+            original=(root/helper).read_bytes()
             qa_spec=importlib.util.spec_from_file_location('gui_synthetic_pe',ROOT/'scripts/test-standard-lease-qa-bundle.py')
             qa=importlib.util.module_from_spec(qa_spec);qa_spec.loader.exec_module(qa)
             pe=qa.owned_pe();struct.pack_into('<H',pe,220,3)
@@ -199,7 +199,7 @@ class GuiConnectionSourceTests(unittest.TestCase):
                         manifest=json.loads((evidence/'source-manifest.json').read_text(encoding='utf-8'))
                         binding=next(item for item in manifest['sources'] if item['path']==helper)
                         self.assertEqual(binding,{'path':helper,'bytes':len(original),'sha256':hashlib.sha256(original).hexdigest()})
-                        self.assertEqual(len(manifest['sources']),11)
+                        self.assertEqual(len(manifest['sources']),13)
                         self.assertFalse(any(manifest[key] for key in ('standardQualified','fullEightQualified','customerAppQualified','finalQualified')))
                     else:
                         with self.assertRaises(FileNotFoundError if control=='missing' else ValueError):
@@ -208,6 +208,13 @@ class GuiConnectionSourceTests(unittest.TestCase):
                         self.assertFalse((evidence/'source-manifest.json').exists())
                     (root/helper).write_bytes(original)
             self.assertEqual(len(compiled),1)
+
+    def test_actual_manifest_binds_new_helper_and_refuses_missing_or_tampered_source(self):
+        for helper in ('scripts/test-support-directory-security.cs',
+                       'scripts/test-support-nt-event-child.rs',
+                       'scripts/test-support-nt-event-binding.cs'):
+            with self.subTest(helper=helper):
+                self.assert_actual_manifest_dependency(helper)
 
     def test_actual_documented_helper_with_mocked_api_faults(self):
         rustc=self.compiler()
