@@ -18,7 +18,7 @@ public static class MixelSessionDirectoryAba {
   }
   public sealed class Facts {
     public int schema=1; public string scope="CiTemporarySessionDirectoryDaclOnly";
-    public uint session, openAccess=0x60000, addedMask=4; public int addedAceFlags=0;
+    public uint session, openAccess=0x60000, addedMask=8; public int addedAceFlags=0;
     public int? openNtStatus; public string open="not-attempted", grant="not-attempted", restore="not-attempted", close="not-owned", unload="not-attempted";
     public bool writeAttempted, restorationVerified, cleanupOkay, originalAceOrderPreserved;
     public string originalDaclHash, expectedDaclHash, restoredDaclHash, originalLabelHash, originalOwnerHash, originalGroupHash;
@@ -105,7 +105,7 @@ public static class MixelSessionDirectoryAba {
     Require(count<64&&original.Length+8+ownedSid.Length<=65535,"One additional ACE exceeds the diagnostic bound");
     // Preserve every original ACE and all trailing bytes in their exact order.
     byte[] value=new byte[original.Length+8+ownedSid.Length];Buffer.BlockCopy(original,0,value,0,end);
-    value[end]=0;value[end+1]=0;Put16(value,end+2,(ushort)(8+ownedSid.Length));Put(value,end+4,4);
+    value[end]=0;value[end+1]=0;Put16(value,end+2,(ushort)(8+ownedSid.Length));Put(value,end+4,8);
     Buffer.BlockCopy(ownedSid,0,value,end+8,ownedSid.Length);
     Buffer.BlockCopy(original,end,value,end+8+ownedSid.Length,original.Length-end);
     Put16(value,2,(ushort)value.Length);Put16(value,4,(ushort)(count+1));return value;
@@ -233,7 +233,7 @@ public static class MixelSessionDirectoryAba {
           uint length=unchecked((ushort)Marshal.ReadInt16(ace,2));Require(length>=16&&length%4==0&&length<=end-relative,"Public ACE extent exceeds owned ACL");
           okay=AddAce(target,revision,0xffffffff,ace,length);error=okay?0:Marshal.GetLastWin32Error();if(!okay)throw new Win32Exception(error,"Original ACE copy failed");
         }
-        okay=AddAccessAllowedAceEx(target,revision,0,4,sid);error=okay?0:Marshal.GetLastWin32Error();if(!okay)throw new Win32Exception(error,"Owned noninheriting ACE add failed");
+        okay=AddAccessAllowedAceEx(target,revision,0,8,sid);error=okay?0:Marshal.GetLastWin32Error();if(!okay)throw new Win32Exception(error,"Owned noninheriting ACE add failed");
         uint[] result=AclSize(target);Require(result[0]==count+1&&result[1]==end+8+sid.Length&&result[2]==size[2],"Public transformed ACL size changed");
         // Preserve the original unused ACL bytes; never edit opaque ACL members.
         if(size[2]!=0)Marshal.Copy(originalAcl,end,IntPtr.Add(target,(int)result[1]),(int)size[2]);

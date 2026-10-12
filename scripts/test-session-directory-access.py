@@ -65,7 +65,7 @@ public static class AbaMock {
  }
  public static void Unit(){
   Platform.Mode="normal";var a=new Platform();var s=new MixelSessionDirectoryAba.Scope(a,User());s.Open();byte[] before=(byte[])a.descriptor.Clone();s.Apply();Check(a.sets==1&&a.descriptor.Length==before.Length+36,"Exactly one bounded ACE added");
-  Check(a.descriptor[92]==0&&a.descriptor[93]==0&&BitConverter.ToUInt32(a.descriptor,96)==4,"New ACE type flags mask changed");
+  Check(a.descriptor[92]==0&&a.descriptor[93]==0&&BitConverter.ToUInt32(a.descriptor,96)==8,"New ACE type flags mask changed");
   for(int i=8;i<48;i++)Check(a.descriptor[44+i]==before[44+i],"Original ACE order changed");
   s.Restore();s.Dispose();Check(a.sets==2&&a.closes==1&&a.unloads==1&&s.facts.restorationVerified&&s.facts.cleanupOkay,"Normal restoration/cleanup failed");
   Check(s.facts.originalDaclHash==s.facts.restoredDaclHash&&s.facts.ownerUnchanged&&s.facts.groupUnchanged&&s.facts.controlUnchanged&&s.facts.labelUnchanged,"Snapshot facts inconsistent");
@@ -129,7 +129,7 @@ NATIVE_MOCK = r'''
     static bool MockAclSize(IntPtr acl,IntPtr output,uint length,uint kind){AbaMock.Check(length==12&&kind==2,"ACL size ABI changed");if(mockMode=="acl-info"){mockError=5;return false;}int count=(ushort)Marshal.ReadInt16(acl,4),end=MockAclEnd(acl),size=(ushort)Marshal.ReadInt16(acl,2);Marshal.WriteInt32(output,0,count);Marshal.WriteInt32(output,4,end);Marshal.WriteInt32(output,8,size-end);return true;}
     static bool MockGetAce(IntPtr acl,uint index,out IntPtr ace){AbaMock.Check(index<2,"Foreign original ACE index");ace=IntPtr.Add(acl,mockMode=="ace-pointer"?1:8+20*(int)index);return true;}
     static bool MockAddAce(IntPtr acl,uint revision,uint index,IntPtr ace,uint length){AbaMock.Check(revision==2&&index==0xffffffff&&length==20,"Native original ACE copy changed");int end=MockAclEnd(acl);byte[] raw=new byte[length];Marshal.Copy(ace,raw,0,raw.Length);Marshal.Copy(raw,0,IntPtr.Add(acl,end),raw.Length);Marshal.WriteInt16(acl,4,(short)(1+(ushort)Marshal.ReadInt16(acl,4)));return true;}
-    static bool MockAddAllowed(IntPtr acl,uint revision,uint flags,uint mask,byte[] sid){AbaMock.Check(revision==2&&flags==0&&mask==4&&MixelSessionDirectoryAba.Hash(sid)==MixelSessionDirectoryAba.Hash(AbaMock.User()),"Wrong granted ACE/SID/mask/flags");
+    static bool MockAddAllowed(IntPtr acl,uint revision,uint flags,uint mask,byte[] sid){AbaMock.Check(revision==2&&flags==0&&mask==8&&MixelSessionDirectoryAba.Hash(sid)==MixelSessionDirectoryAba.Hash(AbaMock.User()),"Wrong granted ACE/SID/mask/flags");
       if(mockMode=="ace-add"){mockError=5;return false;}int count=(ushort)Marshal.ReadInt16(acl,4),size=MockAclEnd(acl);byte[] raw=new byte[size];Marshal.Copy(acl,raw,0,size);Buffer.BlockCopy(BitConverter.GetBytes((ushort)size),0,raw,2,2);byte[] added=AddOneAce(raw,sid);Marshal.Copy(added,0,acl,added.Length);AbaMock.Check((ushort)Marshal.ReadInt16(acl,4)==count+1,"Mock ACE count changed");return true;}
     static bool MockInitSecurity(IntPtr sd,uint revision){AbaMock.Check(revision==1,"Security descriptor revision changed");if(mockMode=="sd-init"){mockError=5;return false;}return true;}
     static bool MockAttachDacl(IntPtr sd,bool present,IntPtr acl,bool defaulted){AbaMock.Check(present&&!defaulted,"DACL present/defaulted changed");if(mockMode=="dacl-attach"){mockError=5;return false;}securityAcls[sd]=acl;return true;}
@@ -168,14 +168,14 @@ class Controls(unittest.TestCase):
             (root/'control.ps1').write_text(prefix+body, encoding='utf-8-sig')
             return run([shutil.which('pwsh') or 'pwsh', '-NoProfile', '-NonInteractive', '-File', str(root/'control.ps1')])
 
-    def test_mask_four_only_and_preserved_positive_control_source(self):
+    def test_mask_eight_only_and_preserved_positive_control_source(self):
         # Reverse only three exact diagnostic-mask operands to the already
         # qualified mask15 source. Every native API/lifetime/state guard stays exact.
         text=CS.read_text(encoding='utf-8')
         restored=text
-        for current, previous in [('addedMask=4','addedMask=15'),
-                                  ('Put(value,end+4,4);','Put(value,end+4,15);'),
-                                  ('AddAccessAllowedAceEx(target,revision,0,4,sid)',
+        for current, previous in [('addedMask=8','addedMask=15'),
+                                  ('Put(value,end+4,8);','Put(value,end+4,15);'),
+                                  ('AddAccessAllowedAceEx(target,revision,0,8,sid)',
                                    'AddAccessAllowedAceEx(target,revision,0,15,sid)')]:
             self.assertEqual(restored.count(current),1)
             restored=restored.replace(current,previous)
@@ -187,7 +187,21 @@ class Controls(unittest.TestCase):
                                  'bf291d27fcdb4aec3cae1b19b29f70491c74159dafba5e49642746cbf6233379')
         self.assertEqual(hashlib.sha256(previous.encode('utf-8')).hexdigest(),
                          '507f96dd8c8292767aca8dff1b38fa3967f3600b30aeae9ccd767301518dd815')
-        print('PASS: fixed DIRECTORY_CREATE_OBJECT4 only; full native/lifetime/identity/restore/source/Std8 reverses to qualified mask15 bytes.',flush=True)
+        # The failed mask4 remains a second immutable source reference.
+        previous_four=CS.read_text(encoding='utf-8')
+        for current, previous in [('addedMask=8','addedMask=4'),
+                                  ('Put(value,end+4,8);','Put(value,end+4,4);'),
+                                  ('AddAccessAllowedAceEx(target,revision,0,8,sid)',
+                                   'AddAccessAllowedAceEx(target,revision,0,4,sid)')]:
+            self.assertEqual(previous_four.count(current),1)
+            previous_four=previous_four.replace(current,previous)
+        self.assertEqual(hashlib.sha256(previous_four.encode('utf-8')).hexdigest(),
+                         '65fc503abd02da1fc50f0e2abe73a747fd21468512298376cea73062422b0a64')
+        prior_wrapper=wrapper.replace(hashlib.sha256(CS.read_bytes()).hexdigest(),
+                                    '65fc503abd02da1fc50f0e2abe73a747fd21468512298376cea73062422b0a64')
+        self.assertEqual(hashlib.sha256(prior_wrapper.encode('utf-8')).hexdigest(),
+                         'e570c508d1515850b6865e8eb68c4a75cfe6da9d0be057477dca968f05bca6c5')
+        print('PASS: fixed DIRECTORY_CREATE_SUBDIRECTORY8 only; full native/lifetime/identity/restore/source/Std8 reverses to qualified mask15 bytes.',flush=True)
 
     def test_actual_csharp_scope_fault_and_descriptor_controls(self):
         result = self.ps('[AbaMock]::Unit()\n', include_mock=True)
