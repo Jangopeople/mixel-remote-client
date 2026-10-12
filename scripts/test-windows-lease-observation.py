@@ -149,7 +149,7 @@ class ObservationControls(unittest.TestCase):
         writers = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
                    and isinstance(node.func, ast.Attribute) and node.func.attr == "write_text"
                    and isinstance(node.func.value, ast.Name) and node.func.value.id == "script"]
-        self.assertEqual(len(writers), 3)
+        self.assertEqual(len(writers), 4)
         csharp_writers = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
                          and isinstance(node.func, ast.Attribute) and node.func.attr == "write_text"
                          and node.args and isinstance(node.args[0], ast.Name) and node.args[0].id == "csharp"]
@@ -179,7 +179,7 @@ class ObservationControls(unittest.TestCase):
                     # control, not execution of that unavailable local engine.
                     self.assertNotEqual(original.encode("utf-8").decode("cp1252"), original)
                     self.assertNotIn("préflight", original.encode("utf-8").decode("cp1252"))
-        print("PASS: all three generated PowerShell source files retain exact UTF8 BOM/Unicode bytes with both actual LF and CRLF writer modes; original unmarked accented source changes under the explicit legacy cp1252 decode control. Actual Desktop5 execution remains required on Windows.", flush=True)
+        print("PASS: all four generated PowerShell source files retain exact UTF8 BOM/Unicode bytes with both actual LF and CRLF writer modes; original unmarked accented source changes under the explicit legacy cp1252 decode control. Actual Desktop5 execution remains required on Windows.", flush=True)
 
     def test_current_caller_launch_exact_arguments_and_owned_handoff(self):
         source = (ROOT / "scripts/test-support-lease-standard-windows.ps1").read_text()
@@ -329,7 +329,7 @@ Write-Host "Actual mocked four-phase control PowerShell: $($PSVersionTable.PSVer
 $source=[IO.File]::ReadAllText((Join-Path $Repository 'scripts/test-support-lease-standard-windows.ps1'))
 $tokens=$null;$errors=$null;$ast=[Management.Automation.Language.Parser]::ParseInput($source,[ref]$tokens,[ref]$errors)
 if($errors.Count) { throw 'Current helper does not parse' }
-foreach($name in @('Assert-StandardLeaseSafeResult','Read-StandardCallingThreadTokens','Invoke-CurrentCallerLeaseControl','Invoke-CurrentCallerLeaseFour')) {
+foreach($name in @('Write-LeaseContextFailure','Invoke-LeaseJobObservation','Assert-StandardLeaseSafeResult','Read-StandardCallingThreadTokens','Invoke-CurrentCallerLeaseControl','Invoke-CurrentCallerLeaseFour')) {
   $matches=$ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq $name},$true)
   if($matches.Count -ne 1) { throw "Missing exact current function $name" }
   if($name -ceq 'Invoke-CurrentCallerLeaseControl') { $correctedControl=$matches[0].Extent.Text }
@@ -363,6 +363,7 @@ public static class MixelOrdinaryTokenFixture {
   public static bool StartedCurrentCallerSidMatches(int pid){return Scenario!="sid";}
   public static bool Elevated(int pid){return pid==CallerPid || Scenario!="elevation";}
   public static ControlFacts StartedTokenFacts(int pid){var f=new ControlFacts();if(Scenario=="token-session")f.sessionId=3;if(Scenario=="unknown-session")f.sessionKnown=false;if(Scenario=="logon")f.logonComparison=f.logonComparison.Replace("MatchesCaller=true","MatchesCaller=false");return f;}
+  public static bool StartedJobMembership(int pid){if(!statuses.ContainsKey(pid))throw new InvalidOperationException("Unowned job observation");return true;}
   public static string StartedStatus(int pid){if(!statuses.ContainsKey(pid))throw new InvalidOperationException("Unowned status");if(Scenario=="early-owner" && pid==Owner)return "exited:0x00000000";string release=Path.Combine(Root,"fixture-release-"+pid);if(pid!=Owner && File.Exists(release)){if(Scenario!="parent-release" && Scenario!="remove-denied")File.Delete(release);statuses[pid]="exited:0x00000000";}return statuses[pid];}
   public static void StopOwnedStartedProcesses(){Stops++;Calls.Add("stop");foreach(int pid in new List<int>(statuses.Keys))if(statuses[pid]=="still-running")statuses[pid]="exited:0x00000001";Owner=0;if(Scenario=="stop")throw new InvalidOperationException("Mock retained stop failure");}
   public static void CloseStartedObservations(){Closes++;Calls.Add("close");statuses.Clear();if(Scenario=="close")throw new InvalidOperationException("Mock retained close failure");}
@@ -375,6 +376,7 @@ function Remove-Item {
   Microsoft.PowerShell.Management\Remove-Item -LiteralPath $LiteralPath
 }
 $script:printed=[Collections.Generic.List[string]]::new()
+$leaseContextFailures=[Collections.Generic.List[Exception]]::new()
 function Write-Host {param($Object) $script:printed.Add([string]$Object)}
 $cleanupGuard='if (Test-Path -LiteralPath $releasePath) { Remove-Item -LiteralPath $releasePath }'
 if(-not $correctedControl.Contains($cleanupGuard)) {throw 'Exact guarded release cleanup missing'}
@@ -404,7 +406,8 @@ foreach($scenario in $scenarios) {
   if($positive) {
     if(([MixelOrdinaryTokenFixture]::Calls -join ',') -cne 'probe:4001,owner:4002,probe:4003,stop,close,probe:4004,stop,close' -or [MixelOrdinaryTokenFixture]::Disposed -ne 8) {throw 'Four phase ownership/order or wrapper disposal changed'}
     if(@(Get-ChildItem -LiteralPath $fixtureRoot -Filter 'fixture-release-*').Count -ne 0) {throw 'Confirmed exited caller acknowledgment can leak into the unchanged standard terminal after PID reuse'}
-    if($script:printed.Count -ne 9 -or @($script:printed | Where-Object {$_ -like 'OBSERVED: direct current Actions caller GUID functional control;*' -and $_.Contains('genuineStandardQualified=False; fullEightQualified=False; customerAppQualified=False;')}).Count -ne 4) {throw 'Diagnostic output silently became standard/app qualification or lost native records'}
+    if($script:printed.Count -ne 13 -or @($script:printed | Where-Object {$_ -like 'OBSERVED: direct current Actions caller GUID functional control;*' -and $_.Contains('genuineStandardQualified=False; fullEightQualified=False; customerAppQualified=False;')}).Count -ne 4 -or
+       @($script:printed | Where-Object {$_ -like 'OBSERVED: retained owned source child job membership;*' -and $_.Contains('childJobLimitsMeasured=False; namedDirectoryMeasured=False.')}).Count -ne 4 -or $leaseContextFailures.Count -ne 0) {throw 'Diagnostic output silently became standard/app qualification or lost native records'}
   } else {
     if($scenario -ceq 'remove-denied' -and ($message -cne 'Mock existing acknowledgment cleanup denied' -or
        -not (Test-Path -LiteralPath (Join-Path $fixtureRoot 'fixture-release-4001')) -or
@@ -433,6 +436,221 @@ Microsoft.PowerShell.Utility\Write-Host 'PASS: exact original consumed-acknowled
                 result = subprocess.run([engine, "-NoProfile", "-File", str(script), "-Repository", str(ROOT), "-ControlRoot", str(control_root), "-ExpectedEdition", edition], capture_output=True, text=True, timeout=35)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertIn("corrected current-caller PowerShell functions execute four strict same-executable phases", result.stdout)
+                print(result.stdout, flush=True)
+
+    def test_owned_world_descriptor_and_retained_job_read_only_controls(self):
+        source = (ROOT / "scripts/test-support-lease-standard-windows.ps1").read_text(encoding="utf-8").replace("\r\n", "\n")
+        start = source.index("public static class MixelIsolatedLeaseControl {")
+        first = source.rindex("using System;", 0, start)
+        end = source.index("\n'@ }", start)
+        actual = source[first:end]
+        pattern = r'  \[DllImport\([^\n]*\)\](?:[ \t]*\n)?[ \t]*static extern [^\n]*;\n'
+        mocked, count = re.subn(pattern, "", actual)
+        self.assertEqual(count, 10, "Exact diagnostic and original native declarations changed")
+        self.assertIn("ReadOnlyOpenEvent(0x20000,false,name)", mocked)
+        self.assertIn("ReadOnlyGetSecurityInfo(handle,6,0x14", mocked)
+        self.assertNotIn("AccessCheck", mocked)
+        self.assertNotIn("DuplicateToken", source)
+        self.assertNotIn("QueryInformationJobObject", source)
+        mocked = mocked.replace("Marshal.GetLastWin32Error()", "MockLastError()")
+        mocks = r'''
+  public static string Scenario="pass";
+  public static int OpenCalls, QueryCalls, ReadCloses, QueryFrees, NativeError;
+  static IntPtr queryAllocation=IntPtr.Zero;
+  static IntPtr queryDacl,querySacl;
+  static int MockLastError(){return NativeError;}
+  static void Check(bool value,string reason){if(!value)throw new InvalidOperationException(reason);}
+  static bool ConvertStringSecurityDescriptorToSecurityDescriptorW(string text,uint version,out IntPtr descriptor,IntPtr size){
+    Check(text=="D:P(A;;0x00100000;;;WD)(A;;GA;;;BA)(A;;GA;;;SY)" && version==1 && size==IntPtr.Zero,"Original event descriptor changed");
+    descriptor=Marshal.AllocHGlobal(20);return true;
+  }
+  static IntPtr CreateEventExW(ref Attributes attributes,string name,uint flags,uint access){Check(attributes.descriptor!=IntPtr.Zero && attributes.length==24 && attributes.inherit==0 && name==ControlName && flags==0 && access==0x100000,"Original event API/ABI/access changed");return new IntPtr(101);}
+  static IntPtr CreateMutexW(ref Attributes attributes,bool owner,string name){throw new InvalidOperationException("Unexpected wrong-object control execution");}
+  static IntPtr LocalFree(IntPtr memory){Marshal.FreeHGlobal(memory);NativeError=87;return IntPtr.Zero;}
+  static IntPtr ReadOnlyOpenEvent(uint access,bool inherit,string name){
+    OpenCalls++;Check(access==0x20000 && !inherit && name==ControlName,"Diagnostic reopen changed READ_CONTROL/inheritance/owned name");
+    if(Scenario=="open5" || Scenario=="open0"){NativeError=Scenario=="open0"?0:5;return IntPtr.Zero;}
+    NativeError=0;return new IntPtr(102);
+  }
+  static byte[] Sid(ulong authority,params uint[] parts){
+    byte[] data=new byte[8+parts.Length*4];data[0]=1;data[1]=(byte)parts.Length;
+    for(int i=7;i>=2;i--){data[i]=(byte)authority;authority>>=8;}
+    for(int i=0;i<parts.Length;i++)Array.Copy(BitConverter.GetBytes(parts[i]),0,data,8+i*4,4);return data;
+  }
+  static byte[] Ace(byte type,uint mask,byte[] sid){
+    byte[] data=new byte[8+sid.Length];data[0]=type;Array.Copy(BitConverter.GetBytes((ushort)data.Length),0,data,2,2);Array.Copy(BitConverter.GetBytes(mask),0,data,4,4);Array.Copy(sid,0,data,8,sid.Length);return data;
+  }
+  static byte[] Acl(params byte[][] aces){
+    int size=8;foreach(byte[] ace in aces)size+=ace.Length;byte[] data=new byte[size];data[0]=2;Array.Copy(BitConverter.GetBytes((ushort)size),0,data,2,2);Array.Copy(BitConverter.GetBytes((ushort)aces.Length),0,data,4,2);
+    int offset=8;foreach(byte[] ace in aces){Array.Copy(ace,0,data,offset,ace.Length);offset+=ace.Length;}return data;
+  }
+  static uint ReadOnlyGetSecurityInfo(IntPtr handle,uint objectType,uint information,out IntPtr owner,out IntPtr group,out IntPtr dacl,out IntPtr sacl,out IntPtr descriptor){
+    QueryCalls++;Check(handle==new IntPtr(102) && objectType==6 && information==0x14,"Query changed kernel object or DACL+LABEL-only information");
+    owner=group=dacl=sacl=descriptor=IntPtr.Zero;NativeError=87;
+    if(Scenario=="query5")return 5;
+    if(Scenario=="missing-descriptor")return 0;
+    byte[] access=Acl(Ace(0,0x100000,Sid(1,0)),Ace(0,0x10000000,Sid(5,32,544)),Ace(0,0x10000000,Sid(5,18)));
+    if(Scenario=="other-ace")access=Acl(Ace(0,0x100000,Sid(5,21,123,456,789,1001)));
+    if(Scenario=="bad-acl" || Scenario=="no-acl-poison" || Scenario=="absent-dacl-poison"){access[2]=7;access[3]=0;}
+    if(Scenario=="bad-ace"){access[10]=255;access[11]=255;}
+    if(Scenario=="bad-sid")access[17]=15;
+    byte[] labels=Acl(Ace(Scenario=="label-other"?(byte)2:(byte)0x11,1,Sid(16,12288)));
+    if(Scenario=="no-acl-poison" || Scenario=="absent-label-poison"){labels[2]=7;labels[3]=0;}
+    descriptor=Marshal.AllocHGlobal(20+access.Length+labels.Length);queryAllocation=descriptor;
+    dacl=IntPtr.Add(descriptor,20);sacl=IntPtr.Add(dacl,access.Length);
+    Marshal.Copy(access,0,dacl,access.Length);Marshal.Copy(labels,0,sacl,labels.Length);
+    if(Scenario=="no-acl")dacl=sacl=IntPtr.Zero;
+    if(Scenario=="null-dacl")dacl=IntPtr.Zero;
+    queryDacl=dacl;querySacl=sacl;
+    // Optional GetSecurityInfo ACL pointers are deliberately absent. The exact
+    // production getters must read the requested subsets from its descriptor.
+    dacl=sacl=IntPtr.Zero;
+    return Scenario=="query5-allocation" || Scenario=="query5-free-close"?5u:0u;
+  }
+  static bool ReadOnlyGetDacl(IntPtr descriptor,out bool present,out IntPtr acl,out bool defaulted){Check(descriptor==queryAllocation && descriptor!=IntPtr.Zero,"Unowned DACL descriptor getter");present=Scenario!="no-acl" && Scenario!="no-acl-poison" && Scenario!="absent-dacl-poison";acl=queryDacl;defaulted=false;NativeError=5;return Scenario!="dacl-query5";}
+  static bool ReadOnlyGetSacl(IntPtr descriptor,out bool present,out IntPtr acl,out bool defaulted){Check(descriptor==queryAllocation && descriptor!=IntPtr.Zero,"Unowned LABEL descriptor getter");present=Scenario!="no-acl" && Scenario!="no-acl-poison" && Scenario!="absent-label-poison";acl=querySacl;defaulted=false;NativeError=0;return Scenario!="sacl-query0";}
+  static IntPtr ReadOnlyLocalFree(IntPtr descriptor){
+    QueryFrees++;Check(descriptor==queryAllocation && descriptor!=IntPtr.Zero,"Unowned descriptor free");
+    if(Scenario=="free6" || Scenario=="query5-free-close"){NativeError=6;return descriptor;}
+    Marshal.FreeHGlobal(descriptor);queryAllocation=IntPtr.Zero;NativeError=87;return IntPtr.Zero;
+  }
+  static bool CloseHandle(IntPtr handle){
+    Check(handle==new IntPtr(101) || handle==new IntPtr(102),"Foreign native handle close");
+    if(handle==new IntPtr(102)){ReadCloses++;if(Scenario=="close6" || Scenario=="close0" || Scenario=="query5-free-close"){NativeError=Scenario=="close0"?0:6;return false;}}
+    NativeError=87;return true;
+  }
+  public const string ControlName="Global\\Mixel-Remote-Standard-Lease-0123456789abcdef0123456789abcdef";
+  public static IntPtr Begin(string scenario){
+    Check(Owned.Count==0 && DiagnosticDescriptors.Count==0 && queryAllocation==IntPtr.Zero,"Previous diagnostic leaked ownership");
+    Scenario="pass";OpenCalls=QueryCalls=ReadCloses=QueryFrees=0;IntPtr original=WorldEvent(ControlName);Scenario=scenario;return original;
+  }
+  public static void Drain(){Scenario="pass";ClosePending();Check(Owned.Count==0 && WorldNames.Count==0 && DiagnosticDescriptors.Count==0 && queryAllocation==IntPtr.Zero,"Owned read-only cleanup incomplete");}
+  public static void ControlRun(){
+    foreach(string scenario in new[]{"pass","no-acl","null-dacl","other-ace","label-other","no-acl-poison","absent-dacl-poison","absent-label-poison"}){
+      IntPtr original=Begin(scenario);SafeDescriptorFacts facts=ObserveWorldDescriptor(ControlName,original);
+      Check(Owned.Count==1 && Owned.Contains(original) && WorldNames.ContainsKey(original) && DiagnosticDescriptors.Count==0,"Observation replaced or closed original owner");
+      Check(OpenCalls==1 && QueryCalls==1 && ReadCloses==1 && QueryFrees==1,"Successful independent query/free/close lifecycle changed");
+      if(scenario=="pass")Check(facts.daclAces.Length==3 && facts.daclAces[0].trustee=="World" && facts.daclAces[0].mask==0x100000 && facts.daclAces[1].trustee=="Administrators" && facts.daclAces[2].trustee=="SYSTEM" && facts.labels.Length==1 && facts.labels[0].classification=="mandatory-integrity" && facts.labels[0].integrityRid==12288 && facts.labels[0].policy==1,"Actual bounded ACL/SID/label parser changed");
+      if(scenario=="no-acl")Check(!facts.daclPresent && !facts.labelAclPresent && facts.daclAces.Length==0 && facts.labels.Length==0,"Null ACL classified as measured World/label");
+      if(scenario=="no-acl-poison")Check(!facts.daclPresent && !facts.labelAclPresent && facts.daclNull && facts.labelAclNull && facts.daclAces.Length==0 && facts.labels.Length==0,"Invalid absent ACL outputs were inspected or classified as present");
+      if(scenario=="absent-dacl-poison")Check(!facts.daclPresent && facts.daclNull && facts.daclAces.Length==0 && facts.labelAclPresent && facts.labels.Length==1,"Absent DACL output inspected or valid present label discarded");
+      if(scenario=="absent-label-poison")Check(facts.daclPresent && facts.daclAces.Length==3 && !facts.labelAclPresent && facts.labelAclNull && facts.labels.Length==0,"Absent label output inspected or valid present DACL discarded");
+      if(scenario=="null-dacl")Check(facts.daclPresent && facts.daclNull && facts.daclAces.Length==0,"Present NULL DACL conflated with absent DACL");
+      if(scenario=="other-ace")Check(facts.daclAces.Length==1 && facts.daclAces[0].trustee=="other","Other SID not redacted");
+      if(scenario=="label-other")Check(facts.labels[0].classification=="other" && !facts.labels[0].integrityRid.HasValue,"Unknown label invented a mandatory RID");
+      Drain();
+    }
+    foreach(string scenario in new[]{"open5","open0","query5","query5-allocation","missing-descriptor","dacl-query5","sacl-query0","bad-acl","bad-ace","bad-sid","free6","close6","close0","query5-free-close"}){
+      IntPtr original=Begin(scenario);Exception failure=null;try{ObserveWorldDescriptor(ControlName,original);}catch(Exception error){failure=error;}
+      Check(failure!=null && Owned.Contains(original) && WorldNames.ContainsKey(original),"Failed read-only query was accepted or destroyed original owner");
+      bool openFailure=scenario.StartsWith("open");Check(QueryCalls==(openFailure?0:1) && ReadCloses==(openFailure?0:1),"Failure skipped independent read handle close or queried after failed open");
+      if(openFailure || scenario.StartsWith("query5") || scenario=="close0" || scenario=="dacl-query5" || scenario=="sacl-query0"){
+        var errors=failure is AggregateException?((AggregateException)failure).InnerExceptions:new System.Collections.ObjectModel.ReadOnlyCollection<Exception>(new[]{failure});
+        int firstCode=scenario=="open0" || scenario=="close0" || scenario=="sacl-query0"?0:5;
+        Check(errors[0] is Win32Exception && ((Win32Exception)errors[0]).NativeErrorCode==firstCode,"Direct API or immediate last error clobbered; unknown native0 accepted");
+        if(scenario=="query5-free-close")Check(errors.Count==3 && ((Win32Exception)errors[1]).NativeErrorCode==6 && ((Win32Exception)errors[2]).NativeErrorCode==6,"Original query and both cleanup failures lost/order changed");
+      }
+      Drain();
+    }
+    IntPtr retained=Begin("pass");int previous=OpenCalls;bool refused=false;
+    try{ObserveWorldDescriptor(ControlName,IntPtr.Zero);}catch(InvalidOperationException){refused=true;}
+    Check(refused && OpenCalls==previous,"Unowned handle reached native reopen");refused=false;
+    try{ObserveWorldDescriptor(ControlName.Replace("0123456789abcdef0123456789abcdef","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),retained);}catch(InvalidOperationException){refused=true;}
+    Check(refused && OpenCalls==previous,"Wrong isolated GUID reached native reopen");Drain();refused=false;
+    try{ObserveWorldDescriptor(ControlName,retained);}catch(InvalidOperationException){refused=true;}
+    Check(refused && OpenCalls==previous,"Closed owner reached native reopen");
+  }
+'''
+        absent_guard = "    if(!daclPresent) dacl=IntPtr.Zero;\n    if(!saclPresent) sacl=IntPtr.Zero;\n"
+        self.assertEqual(mocked.count(absent_guard), 1)
+        descriptor_reader = re.search(r'  static SafeDescriptorFacts ReadOnlyDescriptorFacts\(.*?\n  \}', mocked, re.S)
+        self.assertIsNotNone(descriptor_reader)
+        original_reader = descriptor_reader[0].replace(absent_guard, "").replace("ReadOnlyDescriptorFacts(", "OriginalReadOnlyDescriptorFacts(")
+        original_control = r'''
+  public static void OriginalAbsentOutputsControl(){
+    foreach(string scenario in new[]{"no-acl-poison","absent-dacl-poison","absent-label-poison"}){
+      Begin(scenario);IntPtr handle=ReadOnlyOpenEvent(0x20000,false,ControlName);Owned.Add(handle);
+      IntPtr owner,group,dacl,sacl,descriptor;Check(ReadOnlyGetSecurityInfo(handle,6,0x14,out owner,out group,out dacl,out sacl,out descriptor)==0,"Original absent-output setup failed");DiagnosticDescriptors.Add(descriptor);
+      bool daclPresent,saclPresent,defaulted;Check(ReadOnlyGetDacl(descriptor,out daclPresent,out dacl,out defaulted),"Original absent-output DACL getter failed");Check(ReadOnlyGetSacl(descriptor,out saclPresent,out sacl,out defaulted),"Original absent-output LABEL getter failed");
+      bool reproduced=false;try{OriginalReadOnlyDescriptorFacts(daclPresent,dacl,saclPresent,sacl);}catch(InvalidOperationException error){reproduced=error.Message=="Owned descriptor ACL size is invalid";}
+      Check(reproduced,"Original ignored Present flag no longer reproduces the allocated poisoned ACL read");
+      FreeDiagnosticDescriptor(descriptor);Close(handle);Drain();
+    }
+  }
+'''
+        mocked = mocked[:mocked.rindex("}")] + mocks + original_reader + original_control + "\n}"
+        job = re.search(r'  public static bool StartedJobMembership\(int pid\) \{.*?\n  \}', source, re.S)
+        self.assertIsNotNone(job)
+        job_control = r'''
+public static class MixelOrdinaryTokenFixture {
+  static readonly System.Collections.Generic.Dictionary<int,IntPtr> StartedProcesses=new System.Collections.Generic.Dictionary<int,IntPtr>{{403,new IntPtr(401)}};
+  public static int Variant,Calls,Error;
+  static int MockLastError(){return Error;}
+  static bool IsProcessInJob(IntPtr process,IntPtr job,out bool present){
+    Calls++;if(process!=new IntPtr(401) || job!=IntPtr.Zero)throw new InvalidOperationException("Job query changed exact retained process or NULL any-job subject");
+    present=Variant==1;Error=Variant==3?0:5;return Variant<2;
+  }
+''' + job[0].replace("Marshal.GetLastWin32Error()", "MockLastError()") + "\n}"
+        with tempfile.TemporaryDirectory(prefix="mixel-owned-context-read-only-") as temporary:
+            root = Path(temporary)
+            (root / "actual.cs").write_text(actual.replace("class MixelIsolatedLeaseControl", "class CompiledActualWorldDescriptorControl"), encoding="utf-8")
+            (root / "mocked.cs").write_text(mocked + "\n" + job_control, encoding="utf-8")
+            script = root / "control.ps1"
+            script.write_text(r'''
+param([string]$Repository,[string]$ControlRoot,[string]$ExpectedEdition)
+$ErrorActionPreference='Stop'
+if($PSVersionTable.PSEdition -cne $ExpectedEdition -or ($ExpectedEdition -ceq 'Desktop' -and ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1))) {throw 'Required actual PowerShell edition missing'}
+Add-Type -TypeDefinition ([IO.File]::ReadAllText((Join-Path $ControlRoot 'actual.cs')))
+Add-Type -TypeDefinition ([IO.File]::ReadAllText((Join-Path $ControlRoot 'mocked.cs')))
+[MixelIsolatedLeaseControl]::OriginalAbsentOutputsControl()
+[MixelIsolatedLeaseControl]::ControlRun()
+foreach($variant in @(0,1,2,3)) {
+  [MixelOrdinaryTokenFixture]::Variant=$variant;[MixelOrdinaryTokenFixture]::Calls=0;$value=$null;$failure=$null
+  try{$value=[MixelOrdinaryTokenFixture]::StartedJobMembership(403)}catch{$failure=$_.Exception.InnerException}
+  if([MixelOrdinaryTokenFixture]::Calls -ne 1 -or ($variant -lt 2 -and ($failure -or $value -ne ($variant -eq 1))) -or
+     ($variant -ge 2 -and ($failure -isnot [ComponentModel.Win32Exception] -or $failure.NativeErrorCode -ne [MixelOrdinaryTokenFixture]::Error))) {throw 'Retained job membership native success/error facts changed'}
+}
+[MixelOrdinaryTokenFixture]::Calls=0;$failed=$false;try{[void][MixelOrdinaryTokenFixture]::StartedJobMembership(999)}catch{$failed=$true}
+if(-not $failed -or [MixelOrdinaryTokenFixture]::Calls -ne 0){throw 'Unowned PID reached native job query'}
+$source=[IO.File]::ReadAllText((Join-Path $Repository 'scripts/test-support-lease-standard-windows.ps1'))
+$tokens=$null;$errors=$null;$ast=[Management.Automation.Language.Parser]::ParseInput($source,[ref]$tokens,[ref]$errors)
+if($errors.Count){throw 'Current source helper does not parse'}
+foreach($name in @('Write-LeaseContextFailure','Invoke-LeaseJobObservation','Invoke-LeaseWorldDescriptorObservation')) {
+  $items=$ast.FindAll({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq $name},$true)
+  if($items.Count -ne 1){throw 'Exact read-only observation function missing'}
+  . ([scriptblock]::Create($items[0].Extent.Text))
+}
+$script:printed=[Collections.Generic.List[string]]::new();function Write-Host {param($Object)$script:printed.Add([string]$Object)}
+$leaseContextFailures=[Collections.Generic.List[Exception]]::new()
+[MixelOrdinaryTokenFixture]::Variant=1;Invoke-LeaseJobObservation 403
+$owner=[MixelIsolatedLeaseControl]::Begin('pass');Invoke-LeaseWorldDescriptorObservation ([MixelIsolatedLeaseControl]::ControlName) $owner global
+[MixelIsolatedLeaseControl]::Drain()
+if($leaseContextFailures.Count -ne 0 -or $script:printed.Count -ne 2 -or -not $script:printed[0].Contains('childJobLimitsMeasured=False; namedDirectoryMeasured=False.') -or
+   -not $script:printed[1].Contains('information=DACL+LABEL; namedDirectoryMeasured=False;') -or ($script:printed -join '').Contains('S-1-')) {throw 'Observation invented child limits/directory cause, lost successful facts or exported a SID'}
+[MixelOrdinaryTokenFixture]::Variant=3;Invoke-LeaseJobObservation 403
+$owner=[MixelIsolatedLeaseControl]::Begin('query5-free-close');Invoke-LeaseWorldDescriptorObservation ([MixelIsolatedLeaseControl]::ControlName) $owner local
+[MixelIsolatedLeaseControl]::Drain()
+if($leaseContextFailures.Count -ne 2 -or -not $script:printed[2].Contains('nativeErrors=0; fatalAfterOriginalGate=True;') -or
+   -not $script:printed[3].Contains('nativeErrors=5,6,6; fatalAfterOriginalGate=True;')) {throw 'Deferred fatal failures lost primary/cleanup errors including native0'}
+$gate=$ast.FindAll({param($node)$node -is [Management.Automation.Language.IfStatementAst] -and $node.Extent.Text.StartsWith('if ($leaseContextFailures.Count -gt 0)')},$true)
+if($gate.Count -ne 1 -or $gate[0].Extent.StartOffset -lt $source.IndexOf('PASS: closed wrong-object control leaves no GUID lease') -or
+   $gate[0].Extent.StartOffset -lt $source.IndexOf('if ($currentCallerFailure) { throw $currentCallerFailure }')) {throw 'Diagnostic replaced or preceded unchanged original terminal'}
+$caught=$null;try{& ([scriptblock]::Create($gate[0].Extent.Text))}catch{$caught=$_.Exception}
+if($caught -isnot [AggregateException] -or $caught.InnerExceptions.Count -ne 2){throw 'Deferred query errors accepted after original terminal'}
+$leaseContextFailures.Clear();& ([scriptblock]::Create($gate[0].Extent.Text))
+$original=$ast.FindAll({param($node)$node -is [Management.Automation.Language.IfStatementAst] -and $node.Extent.Text.StartsWith('if (-not $ObserveOnly -and ($record.sourceStatus')},$true)
+if($original.Count -ne 1){throw 'Original mandatory native failure branch changed'}
+$ObserveOnly=$false;$record=[pscustomobject]@{sourceStatus='ownerFailed=false;ownerError=none;kernel=unavailable;probeError=5;memoryActive=false';rawOpenError=5;attestation='guard-unavailable';requiresClick=$true;ownerFailed=$false}
+$ExpectedStatus='ownerFailed=false;ownerError=none;kernel=absent;probeError=none;memoryActive=false';$ExpectedError=2;$ExpectedProof='';$ExpectedRequired=$false;$ExpectedOwnerFailed=$false
+$message='';try{& ([scriptblock]::Create($original[0].Extent.Text))}catch{$message=$_.Exception.Message}
+if(-not $message.Contains('classification mismatch') -or -not $message.Contains('"rawOpenError":5')){throw 'Original fatal native5 was relaxed/replaced'}
+Microsoft.PowerShell.Utility\Write-Host "Actual read-only context control PowerShell: $($PSVersionTable.PSVersion); $($PSVersionTable.PSEdition)"
+Microsoft.PowerShell.Utility\Write-Host 'PASS: exact original WorldEvent API/ACL retained; separate owned READ_CONTROL reopen and direct GetSecurityInfo DACL+LABEL error preserved; three original poisoned absent-ACL failures and eight corrected parsed positive states, fourteen query/descriptor-getter/parse/free/close failures, three ownership refusals and independent cleanup; retained child IsProcessInJob true/false/native5/native0 controls; redacted observations defer and rethrow all errors after unchanged fatal native5 gate. APIs mocked only; no directory cause, Windows/app qualification or token duplication.'
+''', encoding="utf-8-sig")
+            for engine, edition in self.powershell_engines():
+                result = subprocess.run([engine, "-NoProfile", "-File", str(script), "-Repository", str(ROOT), "-ControlRoot", str(root), "-ExpectedEdition", edition], capture_output=True, text=True, encoding="utf-8", timeout=35)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("separate owned READ_CONTROL reopen", result.stdout)
                 print(result.stdout, flush=True)
 
     def test_actual_source_dispatch_runs_reader_before_fatal_native_gate(self):

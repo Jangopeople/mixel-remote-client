@@ -344,6 +344,17 @@ if (-not ('MixelOrdinaryTokenFixture' -as [type])) {
     if(!OpenProcessToken(process,8,out token)) throw new Win32Exception();
     try { return ReadObservedTokenFacts(token); } finally { CloseHandle(token); }
   }
+  [DllImport("kernel32.dll", ExactSpelling=true, SetLastError=true)]
+  static extern bool IsProcessInJob(IntPtr process, IntPtr job, out bool present);
+  public static bool StartedJobMembership(int pid) {
+    IntPtr process;
+    if(!StartedProcesses.TryGetValue(pid,out process)) throw new InvalidOperationException("Job observation does not own the retained process");
+    bool present;
+    bool success=IsProcessInJob(process,IntPtr.Zero,out present);
+    int error=Marshal.GetLastWin32Error();
+    if(!success) throw new Win32Exception(error,"Owned read-only job membership query failed; nativeError="+error.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    return present;
+  }
   public static ObservedTokenFacts FreshStandardTokenFacts(string username, string password, string expectedSid) {
     IntPtr token;
     if(!LogonUserW(username,".",password,2,0,out token)) throw new Win32Exception();
@@ -385,6 +396,8 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 public static class MixelIsolatedLeaseControl {
   static readonly System.Collections.Generic.HashSet<IntPtr> Owned = new System.Collections.Generic.HashSet<IntPtr>();
+  static readonly System.Collections.Generic.Dictionary<IntPtr,string> WorldNames = new System.Collections.Generic.Dictionary<IntPtr,string>();
+  static readonly System.Collections.Generic.HashSet<IntPtr> DiagnosticDescriptors = new System.Collections.Generic.HashSet<IntPtr>();
   [StructLayout(LayoutKind.Sequential)] struct Attributes { public uint length; public IntPtr descriptor; public int inherit; }
   [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool ConvertStringSecurityDescriptorToSecurityDescriptorW(string text, uint version, out IntPtr descriptor, IntPtr size);
   [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern IntPtr CreateEventExW(ref Attributes attributes, string name, uint flags, uint access);
@@ -409,7 +422,150 @@ public static class MixelIsolatedLeaseControl {
     return handle;
   }
   public static IntPtr DeniedEvent(string name) { return Event(name,"D:P(A;;GA;;;BA)(A;;GA;;;SY)"); }
-  public static IntPtr WorldEvent(string name) { return Event(name,"D:P(A;;0x00100000;;;WD)(A;;GA;;;BA)(A;;GA;;;SY)"); }
+  public static IntPtr WorldEvent(string name) {
+    IntPtr handle=Event(name,"D:P(A;;0x00100000;;;WD)(A;;GA;;;BA)(A;;GA;;;SY)");
+    WorldNames.Add(handle,name);
+    return handle;
+  }
+  // Diagnostic-only public read APIs. The original event's creation, access,
+  // ACL and lifetime stay unchanged. This separate handle requests READ_CONTROL
+  // only; LABEL_SECURITY_INFORMATION does not request the full audit SACL.
+  [DllImport("kernel32.dll", EntryPoint="OpenEventW", CharSet=CharSet.Unicode, ExactSpelling=true, SetLastError=true)]
+  static extern IntPtr ReadOnlyOpenEvent(uint access, bool inherit, string name);
+  [DllImport("advapi32.dll", EntryPoint="GetSecurityInfo", ExactSpelling=true)]
+  static extern uint ReadOnlyGetSecurityInfo(IntPtr handle, uint objectType, uint information, out IntPtr owner, out IntPtr group, out IntPtr dacl, out IntPtr sacl, out IntPtr descriptor);
+  [DllImport("advapi32.dll", EntryPoint="GetSecurityDescriptorDacl", ExactSpelling=true, SetLastError=true)]
+  static extern bool ReadOnlyGetDacl(IntPtr descriptor, out bool present, out IntPtr acl, out bool defaulted);
+  [DllImport("advapi32.dll", EntryPoint="GetSecurityDescriptorSacl", ExactSpelling=true, SetLastError=true)]
+  static extern bool ReadOnlyGetSacl(IntPtr descriptor, out bool present, out IntPtr acl, out bool defaulted);
+  [DllImport("kernel32.dll", EntryPoint="LocalFree", ExactSpelling=true, SetLastError=true)]
+  static extern IntPtr ReadOnlyLocalFree(IntPtr memory);
+  public sealed class SafeAceFacts {
+    public byte type, flags;
+    public uint mask;
+    public string trustee;
+  }
+  public sealed class SafeLabelFacts {
+    public byte type, flags;
+    public uint policy;
+    public uint? integrityRid;
+    public string classification;
+  }
+  public sealed class SafeDescriptorFacts {
+    public bool daclPresent, daclNull, labelAclPresent, labelAclNull;
+    public SafeAceFacts[] daclAces;
+    public SafeLabelFacts[] labels;
+  }
+  static byte[] ReadOnlyAcl(IntPtr pointer) {
+    if(pointer==IntPtr.Zero) return null;
+    int size=unchecked((ushort)Marshal.ReadInt16(pointer,2));
+    if(size<8) throw new InvalidOperationException("Owned descriptor ACL size is invalid");
+    byte[] bytes=new byte[size]; Marshal.Copy(pointer,bytes,0,size);
+    if((bytes[0]!=2 && bytes[0]!=4) || BitConverter.ToUInt16(bytes,4)>1024) throw new InvalidOperationException("Owned descriptor ACL header is invalid");
+    return bytes;
+  }
+  static uint[] ReadOnlySid(byte[] bytes,int offset,int end,out ulong authority) {
+    if(offset<0 || end>bytes.Length || offset>end-8 || bytes[offset]!=1 || bytes[offset+1]>15 || offset+8+bytes[offset+1]*4>end) throw new InvalidOperationException("Owned descriptor SID bounds are invalid");
+    authority=0; for(int i=2;i<8;i++) authority=(authority<<8)|bytes[offset+i];
+    uint[] parts=new uint[bytes[offset+1]];
+    for(int i=0;i<parts.Length;i++) parts[i]=BitConverter.ToUInt32(bytes,offset+8+i*4);
+    return parts;
+  }
+  static string ReadOnlyTrustee(byte[] bytes,int offset,int end) {
+    ulong authority; uint[] parts=ReadOnlySid(bytes,offset,end,out authority);
+    if(authority==1 && parts.Length==1 && parts[0]==0) return "World";
+    if(authority==5 && parts.Length==1 && parts[0]==18) return "SYSTEM";
+    if(authority==5 && parts.Length==2 && parts[0]==32 && parts[1]==544) return "Administrators";
+    return "other";
+  }
+  static int ReadOnlyAceEnd(byte[] bytes,int offset) {
+    if(offset<8 || offset>bytes.Length-4) throw new InvalidOperationException("Owned descriptor ACE header bounds are invalid");
+    int size=BitConverter.ToUInt16(bytes,offset+2);
+    if(size<4 || size>bytes.Length-offset) throw new InvalidOperationException("Owned descriptor ACE content bounds are invalid");
+    return offset+size;
+  }
+  static SafeDescriptorFacts ReadOnlyDescriptorFacts(bool daclPresent,IntPtr dacl,bool saclPresent,IntPtr sacl) {
+    // The descriptor getters leave the ACL output invalid when Present is false.
+    // Never inspect that output; absent and present-NULL remain distinct facts.
+    if(!daclPresent) dacl=IntPtr.Zero;
+    if(!saclPresent) sacl=IntPtr.Zero;
+    byte[] access=ReadOnlyAcl(dacl), labels=ReadOnlyAcl(sacl);
+    var result=new SafeDescriptorFacts { daclPresent=daclPresent, daclNull=dacl==IntPtr.Zero, labelAclPresent=saclPresent, labelAclNull=sacl==IntPtr.Zero };
+    var safeAces=new System.Collections.Generic.List<SafeAceFacts>();
+    if(access!=null) {
+      int offset=8, count=BitConverter.ToUInt16(access,4);
+      for(int i=0;i<count;i++) {
+        int end=ReadOnlyAceEnd(access,offset);
+        var ace=new SafeAceFacts { type=access[offset], flags=access[offset+1], trustee="other" };
+        if(ace.type==0 || ace.type==1) {
+          if(end-offset<16) throw new InvalidOperationException("Owned descriptor access ACE is truncated");
+          ace.mask=BitConverter.ToUInt32(access,offset+4);
+          ace.trustee=ReadOnlyTrustee(access,offset+8,end);
+        }
+        safeAces.Add(ace); offset=end;
+      }
+    }
+    var safeLabels=new System.Collections.Generic.List<SafeLabelFacts>();
+    if(labels!=null) {
+      int offset=8, count=BitConverter.ToUInt16(labels,4);
+      for(int i=0;i<count;i++) {
+        int end=ReadOnlyAceEnd(labels,offset);
+        var label=new SafeLabelFacts { type=labels[offset], flags=labels[offset+1], classification="other" };
+        if(label.type==0x11) {
+          if(end-offset<16) throw new InvalidOperationException("Owned descriptor integrity ACE is truncated");
+          label.policy=BitConverter.ToUInt32(labels,offset+4);
+          ulong authority; uint[] parts=ReadOnlySid(labels,offset+8,end,out authority);
+          if(authority==16 && parts.Length==1) { label.integrityRid=parts[0]; label.classification="mandatory-integrity"; }
+        }
+        safeLabels.Add(label); offset=end;
+      }
+    }
+    result.daclAces=safeAces.ToArray(); result.labels=safeLabels.ToArray();
+    return result;
+  }
+  static void FreeDiagnosticDescriptor(IntPtr descriptor) {
+    if(!DiagnosticDescriptors.Contains(descriptor)) throw new InvalidOperationException("Read-only descriptor allocation is not owned");
+    IntPtr failed=ReadOnlyLocalFree(descriptor);
+    int error=Marshal.GetLastWin32Error();
+    if(failed!=IntPtr.Zero) throw new Win32Exception(error,"Owned read-only descriptor free failed; nativeError="+error.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    DiagnosticDescriptors.Remove(descriptor);
+  }
+  public static SafeDescriptorFacts ObserveWorldDescriptor(string name,IntPtr original) {
+    Isolated(name); string actual;
+    if(!Owned.Contains(original) || !WorldNames.TryGetValue(original,out actual) || actual!=name) throw new InvalidOperationException("Descriptor query does not own this exact retained World event/name");
+    IntPtr handle=ReadOnlyOpenEvent(0x20000,false,name);
+    int openError=Marshal.GetLastWin32Error();
+    if(handle==IntPtr.Zero) throw new Win32Exception(openError,"Owned World event READ_CONTROL open failed; nativeError="+openError.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    if(!Owned.Add(handle)) throw new InvalidOperationException("Read-only event query returned an already-owned handle");
+    IntPtr descriptor=IntPtr.Zero; Exception primaryFailure=null;
+    try {
+      IntPtr owner,group,dacl,sacl;
+      uint result=ReadOnlyGetSecurityInfo(handle,6,0x14,out owner,out group,out dacl,out sacl,out descriptor);
+      if(descriptor!=IntPtr.Zero) DiagnosticDescriptors.Add(descriptor);
+      // GetSecurityInfo returns its own DWORD error, not the thread's last error.
+      if(result!=0) throw new Win32Exception(unchecked((int)result),"Owned World event DACL/LABEL query failed; nativeError="+result.ToString(System.Globalization.CultureInfo.InvariantCulture));
+      if(descriptor==IntPtr.Zero) throw new InvalidOperationException("Owned World event descriptor query returned no allocation");
+      // Read the requested label from the returned descriptor, independently
+      // of GetSecurityInfo's optional ppSacl output contract for a full SACL.
+      bool daclPresent,saclPresent,defaulted;
+      bool daclSuccess=ReadOnlyGetDacl(descriptor,out daclPresent,out dacl,out defaulted);
+      int daclError=Marshal.GetLastWin32Error();
+      if(!daclSuccess) throw new Win32Exception(daclError,"Owned World descriptor DACL read failed; nativeError="+daclError.ToString(System.Globalization.CultureInfo.InvariantCulture));
+      bool saclSuccess=ReadOnlyGetSacl(descriptor,out saclPresent,out sacl,out defaulted);
+      int saclError=Marshal.GetLastWin32Error();
+      if(!saclSuccess) throw new Win32Exception(saclError,"Owned World descriptor label read failed; nativeError="+saclError.ToString(System.Globalization.CultureInfo.InvariantCulture));
+      return ReadOnlyDescriptorFacts(daclPresent,dacl,saclPresent,sacl);
+    } catch(Exception error) { primaryFailure=error; throw; }
+    finally {
+      var failures=new System.Collections.Generic.List<Exception>();
+      if(descriptor!=IntPtr.Zero) { try { FreeDiagnosticDescriptor(descriptor); } catch(Exception error) { failures.Add(error); } }
+      try { Close(handle); } catch(Exception error) { failures.Add(error); }
+      if(failures.Count!=0) {
+        if(primaryFailure!=null) failures.Insert(0,primaryFailure);
+        throw new AggregateException("Owned World event read-only query cleanup failed",failures);
+      }
+    }
+  }
   public static IntPtr WrongObject(string name) {
     Isolated(name);
     // Grant the requested SYNCHRONIZE right to the ordinary account, so an
@@ -431,16 +587,47 @@ public static class MixelIsolatedLeaseControl {
     if(!Owned.Contains(handle)) throw new InvalidOperationException("Isolated lease handle is not owned");
     if(!CloseHandle(handle)) throw new Win32Exception(Marshal.GetLastWin32Error());
     Owned.Remove(handle);
+    WorldNames.Remove(handle);
   }
   public static void ClosePending() {
     var failures = new System.Collections.Generic.List<Exception>();
     foreach(IntPtr handle in new System.Collections.Generic.List<IntPtr>(Owned)) {
       try { Close(handle); } catch(Exception error) { failures.Add(error); }
     }
+    foreach(IntPtr descriptor in new System.Collections.Generic.List<IntPtr>(DiagnosticDescriptors)) {
+      try { FreeDiagnosticDescriptor(descriptor); } catch(Exception error) { failures.Add(error); }
+    }
     if(failures.Count!=0) throw new AggregateException("Owned isolated lease handle cleanup failed", failures);
   }
 }
 '@ }
+
+function Write-LeaseContextFailure([ValidateSet('job-membership','owned-world-descriptor')][string]$Operation, [Exception]$Failure) {
+  $actual = $Failure
+  for ($depth = 0; $depth -lt 8 -and $actual -is [Management.Automation.MethodInvocationException] -and $actual.InnerException; $depth++) {
+    $actual = $actual.InnerException
+  }
+  $leaseContextFailures.Add($actual)
+  $items = if ($actual -is [AggregateException]) { @($actual.Flatten().InnerExceptions) } else { @($actual) }
+  $codes = @($items | Where-Object { $_ -is [ComponentModel.Win32Exception] } | ForEach-Object { $_.NativeErrorCode })
+  $safeCodes = if ($codes.Count) { $codes -join ',' } else { 'none' }
+  Write-Host "FAIL: source-only read-only lease context observation; operation=$Operation; exceptionType=$($actual.GetType().Name); nativeErrors=$safeCodes; fatalAfterOriginalGate=True; namedDirectoryCauseEstablished=False."
+}
+
+function Invoke-LeaseJobObservation([int]$ControlPid) {
+  try {
+    $inJob = [MixelOrdinaryTokenFixture]::StartedJobMembership($ControlPid)
+    Write-Host "OBSERVED: retained owned source child job membership; controlPid=$ControlPid; inAnyJob=$inJob; query=IsProcessInJob(NULL); childJobLimitsMeasured=False; namedDirectoryMeasured=False."
+  } catch { Write-LeaseContextFailure job-membership $_.Exception }
+}
+
+function Invoke-LeaseWorldDescriptorObservation([string]$Name, [IntPtr]$Handle, [string]$Namespace) {
+  try {
+    if ($Namespace -cnotin @('bare','local','global')) { throw 'Unsafe descriptor namespace classification.' }
+    $facts = [MixelIsolatedLeaseControl]::ObserveWorldDescriptor($Name,$Handle)
+    Write-Host "OBSERVED: exact retained isolated World event descriptor; namespace=$Namespace; extraAccess=READ_CONTROL; information=DACL+LABEL; namedDirectoryMeasured=False; $($facts | ConvertTo-Json -Depth 5 -Compress)."
+  } catch { Write-LeaseContextFailure owned-world-descriptor $_.Exception }
+}
 
 function Assert-StandardLeaseSafeResult($Record, [uint32]$ExpectedPid) {
   $names = @($Record.PSObject.Properties.Name | Sort-Object)
@@ -648,6 +835,7 @@ function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner'
     Assert-StandardLeaseSafeResult $record $controlPid
     $threadTokens = Read-StandardCallingThreadTokens $controlPid
     Write-Host "OBSERVED: owned child calling-thread token immediately before native event APIs; controlPid=$controlPid; mode=$Mode; $($threadTokens | ConvertTo-Json -Depth 4 -Compress)."
+    Invoke-LeaseJobObservation $controlPid
     if (-not $ObserveOnly -and ($record.sourceStatus -cne $ExpectedStatus -or
         $record.rawOpenError -ne $ExpectedError -or $record.attestation -cne $ExpectedProof -or
         $record.requiresClick -isnot [bool] -or $record.requiresClick -ne $ExpectedRequired -or
@@ -733,6 +921,7 @@ function Invoke-CurrentCallerLeaseControl([ValidateSet('probe','owner')][string]
     $threadTokens = Read-StandardCallingThreadTokens $controlPid
     Write-Host "OBSERVED: direct current Actions caller GUID functional control; tokenContext=unchanged-current-caller; genuineStandardQualified=False; fullEightQualified=False; customerAppQualified=False; mode=$Mode; controlPid=$controlPid; processSessionId=$actualSession; ownedCallerSidMatched=$sidMatches; elevated=$elevated; callerElevated=$callerElevated; $tokenFacts; $($record | ConvertTo-Json -Compress)."
     Write-Host "OBSERVED: direct current Actions caller pre-API calling-thread tokens; controlPid=$controlPid; mode=$Mode; $($threadTokens | ConvertTo-Json -Depth 4 -Compress)."
+    Invoke-LeaseJobObservation $controlPid
     if ($record.sourceStatus -cne $ExpectedStatus -or $record.rawOpenError -ne $ExpectedError -or
         $record.attestation -cne $ExpectedProof -or $record.requiresClick -ne $ExpectedRequired -or $record.ownerFailed) {
       throw ('Actual current-caller source lease classification mismatch: ' + ($record | ConvertTo-Json -Compress))
@@ -848,6 +1037,7 @@ function Invoke-StandardLeaseNamespaceObservations([ValidateSet('with-logon','wi
         [void](Invoke-StandardLeaseControl -Mode probe -Launcher $Launcher -ObserveOnly -ObservationLabel "$namespace-after-confirmed-owner-request-process-termination")
         $matrixHandle=[MixelIsolatedLeaseControl]::WorldEvent($endpoint)
         [void](Invoke-StandardLeaseControl -Mode probe -Launcher $Launcher -ObserveOnly -ObservationLabel "$namespace-existing-world-synchronize-event")
+        Invoke-LeaseWorldDescriptorObservation $endpoint $matrixHandle $namespace
         [MixelIsolatedLeaseControl]::Close($matrixHandle)
         $matrixHandle=[IntPtr]::Zero
         [void](Invoke-StandardLeaseControl -Mode probe -Launcher $Launcher -ObserveOnly -ObservationLabel "$namespace-after-confirmed-world-event-close")
@@ -872,6 +1062,7 @@ $eventName = 'Global\Mixel-Remote-Standard-Lease-' + [Guid]::NewGuid().ToString(
 $executable = Join-Path $fixtureRoot 'lease-standard.exe'
 $resultPath = Join-Path $fixtureRoot 'fixture-result.json'
 $desktopAccess = $null; $profileStarted = $false; $eventHandle = [IntPtr]::Zero; $failure = $null
+$leaseContextFailures = [System.Collections.Generic.List[Exception]]::new()
 $originalDesktop = [MixelOrdinaryTokenFixture]::DesktopAclHashes()
 try {
   # Use the exact customer account bootstrap; its random password stays in memory.
@@ -935,6 +1126,9 @@ try {
   [void](Invoke-StandardLeaseControl probe $absent 2 '' $false $false)
   Write-Host 'PASS: closed wrong-object control leaves no GUID lease or false readiness in a fresh actual standard-account process.'
   if ($currentCallerFailure) { throw $currentCallerFailure }
+  if ($leaseContextFailures.Count -gt 0) {
+    throw [AggregateException]::new('Read-only source lease context observation failed after the unchanged original gate.', $leaseContextFailures)
+  }
 } catch {
   $failure = $_
   throw
