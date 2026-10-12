@@ -16,6 +16,7 @@ for mixel_source_test in \
   test-support-clipboard \
   test-support-video \
   test-support-macos \
+  test-support-macos-cleanup \
   test-support-wakelock \
   test-branding; do
   python "scripts/$mixel_source_test.py"

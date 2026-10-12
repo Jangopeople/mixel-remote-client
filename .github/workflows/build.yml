@@ -282,6 +282,7 @@ jobs:
           python3 scripts/test-support-video.py
           python3 scripts/test-support-macos.py
           python3 scripts/test-support-macos-window.py
+          python3 scripts/test-support-macos-cleanup.py --dart "$(command -v dart)" --flutter "$(command -v flutter)"
           python3 scripts/test-support-wakelock.py
           python3 scripts/test-branding.py
           dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart
@@ -497,6 +498,7 @@ jobs:
           python3 scripts/test-support-video.py
           python3 scripts/test-support-macos.py
           python3 scripts/test-support-macos-window.py
+          python3 scripts/test-support-macos-cleanup.py --dart "$(command -v dart)" --flutter "$(command -v flutter)"
           python3 scripts/test-support-wakelock.py
           python3 scripts/test-branding.py
           dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart
@@ -533,6 +535,7 @@ jobs:
         run: python3 scripts/verify-flutter-branding.py --assets rustdesk/flutter/build/macos/Build/Products/Release/Mixel-Remote.app/Contents/Frameworks/App.framework/Resources/flutter_assets
 
       - name: Package + sign + notarize (.app then .dmg)
+        id: macos_package
         working-directory: rustdesk
         run: |
           set -euo pipefail
@@ -596,14 +599,23 @@ jobs:
             ditto -c -k --keepParent "$APP_PATH" "$APP_ZIP"
             python3 ../scripts/notarize-macos.py "$APP_ZIP" \
               --log-dir "../dist/notary-app-${{ matrix.job.arch }}"
-            rm -f "$APP_ZIP"
             xcrun stapler staple "$APP_PATH"
             xcrun stapler validate "$APP_PATH"
             spctl --assess --type execute --verbose=2 "$APP_PATH"
 
+            # Keep the exact signed/stapled launch input outside customer dist.
+            # Only a failed package step uploads this diagnostic, never a DMG.
+            DIAGNOSTICS="../macos-launch-failure/${{ matrix.job.arch }}"
+            mkdir -p "$DIAGNOSTICS"
+            DIAGNOSTIC_APP_ZIP="$DIAGNOSTICS/signed-stapled-diagnostic-app.zip"
+            ditto -c -k --keepParent "$APP_PATH" "$DIAGNOSTIC_APP_ZIP"
+            rm -f "$APP_ZIP"
+            python3 ../scripts/test-support-launch-macos-diagnostics.py
+
             # Exercise this exact signed/stapled app through real URL activation
             # before it becomes a downloadable installer.
-            python3 ../scripts/test-support-launch-macos.py --app "$APP_PATH"
+            python3 ../scripts/test-support-launch-macos.py --app "$APP_PATH" \
+              --diagnostics "$DIAGNOSTICS/runtime" --diagnostic-app-zip "$DIAGNOSTIC_APP_ZIP"
 
             # 3) Package stapled .app into DMG, then sign/notarize/staple DMG.
             create-dmg --window-size 800 400 \
@@ -628,6 +640,14 @@ jobs:
             echo "⚠ Built unsigned DMG (no APPLE_CERT_P12_BASE64 secret)"
           fi
           ls -la ../dist/
+
+      - name: Retain failed macOS launch bundle and bounded diagnostics
+        uses: actions/upload-artifact@v6
+        if: ${{ always() && steps.macos_package.outcome == 'failure' }}
+        with:
+          name: macos-launch-failure-diagnostic-${{ matrix.job.arch }}
+          path: macos-launch-failure/
+          if-no-files-found: warn
 
       - uses: actions/upload-artifact@v6
         if: always()
