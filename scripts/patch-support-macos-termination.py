@@ -866,7 +866,7 @@ def validate_previous_cleanup(repo, prepared):
     if not any((repo / name).exists() or (repo / name).is_symlink() for name in triggers):
         return
     helper_path = Path(__file__).resolve().parent / 'patch-support-macos-cleanup.py'
-    helper = regular(helper_path.parent, helper_path.name)
+    helper, _ = normalize(regular(helper_path.parent, helper_path.name))
     if digest(helper) != '197bc021abf3cb8563b92dfca30d5ba7f1c93328db4318cf56386baa9cf6a0fb':
         raise RuntimeError('Changed earlier Mac cleanup verifier')
     namespace = {'__name__': 'mixel_previous_cleanup_verifier', '__file__': str(helper_path)}

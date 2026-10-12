@@ -147,7 +147,7 @@ def canonical(source,name):
 def previous_cleanup_controls(out, fixture):
     spec=importlib.util.spec_from_file_location('mixel_prior_cleanup_controls',ROOT/'scripts/patch-support-macos-cleanup.py')
     prior=importlib.util.module_from_spec(spec); spec.loader.exec_module(prior)
-    helper=(ROOT/'scripts/patch-support-macos-cleanup.py').read_bytes()
+    helper,_=P.normalize((ROOT/'scripts/patch-support-macos-cleanup.py').read_bytes())
     assert P.digest(helper)=='197bc021abf3cb8563b92dfca30d5ba7f1c93328db4318cf56386baa9cf6a0fb'
     valid=out/'previous-cleanup-valid'
     shutil.copytree(fixture,valid)
@@ -206,9 +206,41 @@ def previous_cleanup_controls(out, fixture):
     else: raise AssertionError('Unapproved prior verifier accepted')
     assert snapshot(valid)==before
     count+=1
+    current=(ROOT/'scripts/patch-support-macos-termination.py').read_bytes().replace(b'\r\n',b'\n')
+    normalized=b'    helper, _ = normalize(regular(helper_path.parent, helper_path.name))\n'
+    raw=b'    helper = regular(helper_path.parent, helper_path.name)\n'
+    assert current.count(normalized)==1
+    original=current.replace(normalized,raw)
+    assert P.digest(original)=='b0a82ff321131cb8b26dff1ec04d77a88a4c06ba20599910cda96b5d6df6b5b5'
+    for label,data,accepted in (('lf',helper,True),('crlf',helper.replace(b'\n',b'\r\n'),True),
+        ('mixed',helper.replace(b'\n',b'\r\n',1),False),('tampered',helper+b'\n# altered verifier\n',False)):
+        scripts=out/('prior-verifier-newline-'+label)/'scripts'; scripts.mkdir(parents=True)
+        (scripts/'patch-support-macos-cleanup.py').write_bytes(data)
+        scope={'__name__':'mixel_actual_verifier_newlines','__file__':str(scripts/'patch-support-macos-termination.py')}
+        exec(compile(current,'actual-current-newline-guard','exec'),scope)
+        before=snapshot(valid)
+        if accepted:
+            scope['apply'](valid,check=True)
+            assert snapshot(valid)==before
+        else:
+            for restore,check in ((True,False),(False,True),(False,False)):
+                try: scope['apply'](valid,restore=restore,check=check)
+                except RuntimeError: pass
+                else: raise AssertionError('Unapproved verifier newline/source accepted: '+label)
+                assert snapshot(valid)==before
+                count+=1
+        if label=='crlf':
+            baseline={'__name__':'mixel_actual_173_raw_guard','__file__':scope['__file__']}
+            exec(compile(original,'exact-173-original-raw-hash-guard','exec'),baseline)
+            try: baseline['apply'](valid,check=True)
+            except RuntimeError as error: assert 'Changed earlier Mac cleanup verifier' in str(error)
+            else: raise AssertionError('Original173 must reject the real CRLF verifier')
+            assert snapshot(valid)==before
     (out/'previous-cleanup-guard-proof.json').write_text(json.dumps({'fatal_zero_mutation_controls':count,
         'all_prior_targets_and_provenance_checked':12,'both_missing_inputs_rejected':True,
         'actual_projected_newline_guard':True,'prior_verifier_sha256':P.digest(helper),
+        'actual_LF_CRLF_verifier_directories_pass':True,'actual_mixed_tampered_verifiers_refused':True,
+        'exact173_CRLF_original_failure_reproduced':True,
         'all_813_generated_runtime_hashes_conserved':conserved},indent=2,sort_keys=True)+'\n',encoding='utf-8')
     print(f'PASS: {count} earlier cleanup target/provenance/utility/inventory guards refuse before writes; all12 generated runtime files byte-identical to813.')
 
@@ -238,6 +270,12 @@ def full_branding(out,bash):
                 target.write_bytes(stream.extractfile(member).read())
     for name in ('apply-branding.sh','patch-support-macos-termination.py','test-support-macos-termination.py'):
         shutil.copy2(ROOT/'scripts'/name,copied/'scripts'/name)
+    verifier=copied/'scripts/patch-support-macos-cleanup.py'
+    verifier_lf,_=P.normalize(verifier.read_bytes())
+    assert P.digest(verifier_lf)=='197bc021abf3cb8563b92dfca30d5ba7f1c93328db4318cf56386baa9cf6a0fb'
+    # Execute the complete pipeline with the actual verifier bytes produced by
+    # a Windows CRLF checkout, rather than only modeling its digest.
+    verifier.write_bytes(verifier_lf.replace(b'\n',b'\r\n'))
     script=copied/'scripts/apply-branding.sh'; results={}
     for label,newline in (('lf',b'\n'),('crlf',b'\r\n')):
         repo=out/('full-branding-'+label)
@@ -275,7 +313,9 @@ def full_branding(out,bash):
         assert failed.returncode!=0 and pipeline_snapshot(repo)==before,'Pipeline drift mutated earlier targets'
         target.write_bytes(saved)
         results[label]={'files':len(current),'passes':2,'exact_all_11_targets':True,'all_bytes_idempotent':True,'drift_refuses_without_mutation':True}
-    (out/'full-branding-integration.json').write_text(json.dumps({'script_sha256':P.digest(script.read_bytes()),'results':results},indent=2)+'\n',encoding='utf-8')
+    (out/'full-branding-integration.json').write_text(json.dumps({'script_sha256':P.digest(script.read_bytes()),
+        'actual_prior_verifier_checkout_newline':'crlf','normalized_prior_verifier_sha256':P.digest(verifier_lf),
+        'results':results},indent=2)+'\n',encoding='utf-8')
     print('PASS: complete branding LF/CRLF twice, exact Quit targets, whole-pipeline idempotence and zero-mutation drift refusal.')
 
 
