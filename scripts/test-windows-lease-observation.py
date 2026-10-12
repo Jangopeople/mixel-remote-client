@@ -1790,8 +1790,16 @@ function Add-NtControlType([string]$Definition) {
 $warningFailure = $null
 try { Add-NtControlType 'public static class MixelNtUnusedWarningControl { public static void Run() { int unused; } }' }
 catch { $warningFailure = $_ }
-if (-not $warningFailure -or $warningFailure.ToString() -cnotmatch 'CS0168' -or ('MixelNtUnusedWarningControl' -as [type])) {
-  throw 'The actual source-control compiler did not refuse its unused-variable warning.'
+$warningCode = $null
+if ($warningFailure) {
+  if ($PSVersionTable.PSEdition -ceq 'Desktop' -and $warningFailure.FullyQualifiedErrorId -cmatch '^SOURCE_CODE_ERROR(?:,|$)') {
+    # FullCLR Add-Type retains ErrorNumber in the public compiler-error target;
+    # its displayed ErrorText does not have to contain that separate code.
+    $warningCode = $warningFailure.TargetObject.ErrorNumber
+  } elseif ($PSVersionTable.PSEdition -ceq 'Core' -and $warningFailure.ToString() -cmatch '\bCS0168\b') { $warningCode = 'CS0168' }
+}
+if (-not $warningFailure -or $warningCode -isnot [string] -or $warningCode -cne 'CS0168' -or ('MixelNtUnusedWarningControl' -as [type])) {
+  throw ('The actual source-control compiler did not refuse its unused-variable warning; edition=' + $PSVersionTable.PSEdition + '; throwSeen=' + [bool]$warningFailure + '; targetCode=' + $warningCode + '; typeLoaded=' + [bool]('MixelNtUnusedWarningControl' -as [type]))
 }
 Write-Host ('PASS: actual ' + $PSVersionTable.PSEdition + ' C# compiler keeps CS0168 fatal; no warning suppression.')
 Add-NtControlType ([IO.File]::ReadAllText($Source))
@@ -1866,7 +1874,16 @@ Write-Host 'PASS: actual helper parent52 plus ledger13 controls; fixed CreateNew
             root=Path(temporary)
             source=root/"child.rs";source.write_text(helper+"\n#[cfg(test)] mod controls {\n"+NT_CHILD_CONTROLS+"\n}\n",encoding="utf-8")
             binary=root/("child.exe" if os.name=="nt" else "child")
-            subprocess.run([compiler,"--edition","2021","--test","-D","warnings",str(source),"-o",str(binary)],check=True,capture_output=True,timeout=60)
+            # Both the literal common controls and the native-API projection
+            # must compile their real cfg(windows) branches warning-fatal.
+            target="x86_64-pc-windows-msvc"
+            library=subprocess.run([compiler,"--print","target-libdir","--target",target],capture_output=True,text=True,encoding="utf-8",timeout=15)
+            self.assertEqual(library.returncode,0,library.stdout+library.stderr)
+            self.assertTrue(any(Path(library.stdout.strip()).glob("libstd-*.rlib")),"Pinned Windows standard library is required for the native-ABI controls")
+            metadata=subprocess.run([compiler,"--edition","2021","--test","--target",target,"--emit","metadata","-D","warnings",str(source),"-o",str(root/"common-controls-windows.rmeta")],capture_output=True,text=True,encoding="utf-8",timeout=60)
+            self.assertEqual(metadata.returncode,0,"Windows common-ABI control metadata failed; exit="+str(metadata.returncode)+"\n"+metadata.stdout[-4096:]+metadata.stderr[-4096:])
+            compiled=subprocess.run([compiler,"--edition","2021","--test","-D","warnings",str(source),"-o",str(binary)],capture_output=True,text=True,encoding="utf-8",timeout=60)
+            self.assertEqual(compiled.returncode,0,"Rust native-ABI control compilation failed; exit="+str(compiled.returncode)+"\n"+compiled.stdout[-4096:]+compiled.stderr[-4096:])
             result=subprocess.run([str(binary),"--nocapture"],capture_output=True,text=True,timeout=30)
             self.assertEqual(result.returncode,0,result.stdout+result.stderr)
             common = {
@@ -1887,17 +1904,20 @@ Write-Host 'PASS: actual helper parent52 plus ledger13 controls; fixed CreateNew
             projected=helper.replace('#[cfg(windows)]\npub struct Native;','pub struct Native;',1).replace('#[cfg(windows)]\nimpl Api for Native','impl Api for Native',1)
             first=projected.index('#[cfg(windows)]\n#[link(name = "kernel32")]');end=projected.index('\n}\n',first)+3
             self.assertEqual(projected[first:end].count('fn '),8)
-            aliases='use native_mocks::{get_pid as GetCurrentProcessId,system as GetSystemDirectoryW,load as LoadLibraryExW,resolve as GetProcAddress,error as GetLastError,close as CloseHandle,free as FreeLibrary};'
+            aliases='use native_mocks::{get_pid as GetCurrentProcessId,system as GetSystemDirectoryW,load as LoadLibraryExW,resolve as GetProcAddress,error as GetLastError,close as CloseHandle,free as FreeLibrary};\n#[cfg(windows)] use native_mocks::move_file as MoveFileW;'
             projected=projected[:first]+aliases+projected[end:]
             start=helper.index('        use std::os::windows::ffi::OsStrExt;');end=helper.index('\n    }\n    #[cfg(not(windows))]',start)
             move=helper[start:end].replace('        use std::os::windows::ffi::OsStrExt;\n','').replace('temporary.as_os_str().encode_wide()','temporary.to_str().unwrap().encode_utf16()').replace('destination.as_os_str().encode_wide()','destination.to_str().unwrap().encode_utf16()').replace('MoveFileW(','native_mocks::move_file(')
             projected+='\nfn projected_windows_move(temporary:&Path,destination:&Path)->Result<bool,String> {\n'+move+'\n}\n'
             source.write_text(projected+NT_NATIVE_CONTROLS,encoding="utf-8")
-            subprocess.run([compiler,"--edition","2021","--test","-D","warnings",str(source),"-o",str(binary)],check=True,capture_output=True,timeout=60)
+            metadata=subprocess.run([compiler,"--edition","2021","--test","--target",target,"--emit","metadata","-D","warnings",str(source),"-o",str(root/"native-controls-windows.rmeta")],capture_output=True,text=True,encoding="utf-8",timeout=60)
+            self.assertEqual(metadata.returncode,0,"Windows native-ABI control metadata failed; exit="+str(metadata.returncode)+"\n"+metadata.stdout[-4096:]+metadata.stderr[-4096:])
+            compiled=subprocess.run([compiler,"--edition","2021","--test","-D","warnings",str(source),"-o",str(binary)],capture_output=True,text=True,encoding="utf-8",timeout=60)
+            self.assertEqual(compiled.returncode,0,"Rust native-ABI control compilation failed; exit="+str(compiled.returncode)+"\n"+compiled.stdout[-4096:]+compiled.stderr[-4096:])
             result=subprocess.run([str(binary),"--nocapture"],capture_output=True,text=True,timeout=30)
             self.assertEqual(result.returncode,0,result.stdout+result.stderr);self.assertIn("1 passed",result.stdout)
             print(result.stdout,flush=True)
-        print("PASS: exact seven common Rust child controls plus the Unix-only nonregular/symlink control on POSIX, and literal Windows native-wrapper/C-layout/signed NTSTATUS/no-replace publication controls pass with mocked native APIs only.",flush=True)
+        print("PASS: exact seven common Rust child controls plus the Unix-only nonregular/symlink control on POSIX, and both literal common/native-wrapper controls compile real cfg(windows) metadata -Dwarnings; host C-layout/signed NTSTATUS/no-replace publication controls pass with mocked native APIs only.",flush=True)
 
     def test_same_child_nt_composed_harness_normal_probe_foreign_arm_and_alias_conservation(self):
         child=(ROOT/"scripts/test-support-nt-event-child.rs").read_text(encoding="utf-8")
