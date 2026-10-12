@@ -6,6 +6,7 @@ source scripts/use-windows-msvc-bash.sh
 for mixel_source_test in \
   test-support-invite \
   test-generated-support-paths \
+  test-windows-lease-observation \
   test-support-lease \
   test-support-network \
   test-secure-support \

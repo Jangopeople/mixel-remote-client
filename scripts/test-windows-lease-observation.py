@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -128,6 +129,47 @@ def token_record():
 
 
 class ObservationControls(unittest.TestCase):
+    def test_actual_source_dispatch_runs_reader_before_fatal_native_gate(self):
+        bash = shutil.which("bash")
+        if os.name == "nt":
+            candidate = Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Git/bin/bash.exe"
+            if candidate.is_file():
+                bash = str(candidate)
+        self.assertTrue(bash, "Bash required for executable source ordering controls")
+        with tempfile.TemporaryDirectory(prefix="mixel source dispatch préflight ") as temporary:
+            root = Path(temporary)
+            scripts = root / "scripts"
+            scripts.mkdir()
+            dispatcher = scripts / "test-windows-generated-source.sh"
+            dispatcher.write_bytes((ROOT / "scripts/test-windows-generated-source.sh").read_bytes())
+            # Only the native environment and individual test bodies are
+            # stand-ins; run the exact dispatcher and its real fatal ordering.
+            (scripts / "use-windows-msvc-bash.sh").write_text(r'''
+python() {
+  "$MIXEL_SOURCE_ORDER_PYTHON" "$MIXEL_SOURCE_ORDER_SHIM" "$@"
+}
+''', encoding="utf-8", newline="\n")
+            python = root / "python-ordering-control.py"
+            python.write_text(r'''
+import sys
+from pathlib import Path
+with Path('actual-invocations.log').open('a') as output:
+    output.write(sys.argv[1]+'\n')
+if sys.argv[1]=='scripts/test-support-lease.py':
+    print('CONTROL: unchanged fatal native gate',flush=True)
+    sys.exit(23)
+''', encoding="utf-8", newline="\n")
+            result = subprocess.run([bash, str(dispatcher)], cwd=root,
+                                    env={**os.environ, "MIXEL_SOURCE_ORDER_PYTHON": Path(sys.executable).resolve().as_posix(),
+                                         "MIXEL_SOURCE_ORDER_SHIM": python.as_posix()},
+                                    capture_output=True, text=True, timeout=15)
+            self.assertEqual(result.returncode, 23, result.stdout + result.stderr)
+            self.assertEqual((root / "actual-invocations.log").read_text().splitlines(), [
+                "scripts/test-support-invite.py", "scripts/test-generated-support-paths.py",
+                "scripts/test-windows-lease-observation.py", "scripts/test-support-lease.py"])
+            self.assertIn("CONTROL: unchanged fatal native gate", result.stdout)
+            print("PASS: exact generated-source dispatcher executes calling-thread/reader controls before the unchanged fatal native lease gate; fatal result stops later tests.", flush=True)
+
     @staticmethod
     def mocked_bridge():
         bridge = lease.STANDARD_THREAD_BRIDGE.replace("    #[cfg(windows)]\n", "")
@@ -266,6 +308,10 @@ fn main() {
         self.assertTrue(pwsh, "PowerShell required for executable source controls")
         engines = [pwsh]
         windows_powershell = shutil.which("powershell.exe") if os.name == "nt" else None
+        if os.name == "nt":
+            self.assertTrue(windows_powershell, "Actual Windows source controls require stock Windows PowerShell5.1")
+            self.assertNotEqual(Path(windows_powershell).resolve(), Path(pwsh).resolve(),
+                                "Stock Windows PowerShell5.1 must be distinct from PowerShell7")
         if windows_powershell and Path(windows_powershell).resolve() != Path(pwsh).resolve():
             engines.append(windows_powershell)
         with tempfile.TemporaryDirectory(prefix="mixel-thread-token-reader-") as temporary:
@@ -310,8 +356,12 @@ fn main() {
             encoded_cases = json.dumps(cases)
             script = root / "control.ps1"
             script.write_text(r'''
-param([string]$Repository,[string]$ControlRoot)
+param([string]$Repository,[string]$ControlRoot,[string]$ExpectedEdition)
 $ErrorActionPreference='Stop'
+if ($PSVersionTable.PSEdition -cne $ExpectedEdition -or
+    ($ExpectedEdition -ceq 'Desktop' -and ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1))) {
+  throw 'Calling-thread reader did not execute with the required actual PowerShell edition/version'
+}
 $fixtureRoot=$ControlRoot
 $source=[IO.File]::ReadAllText((Join-Path $Repository 'scripts/test-support-lease-standard-windows.ps1'))
 $tokens=$null;$errors=$null
@@ -386,7 +436,8 @@ Write-Host "Actual PowerShell version: $($PSVersionTable.PSVersion)"
                 control_root = root / ("engine-" + str(index))
                 control_root.mkdir()
                 (control_root / "cases.json").write_text(encoded_cases)
-                output = subprocess.run([engine, "-NoProfile", "-File", str(script), "-Repository", str(ROOT), "-ControlRoot", str(control_root)], capture_output=True, text=True, timeout=30)
+                edition = "Desktop" if engine == windows_powershell else "Core"
+                output = subprocess.run([engine, "-NoProfile", "-File", str(script), "-Repository", str(ROOT), "-ControlRoot", str(control_root), "-ExpectedEdition", edition], capture_output=True, text=True, timeout=30)
                 self.assertEqual(output.returncode, 0, output.stdout + output.stderr)
                 self.assertIn("PASS: actual PowerShell reader", output.stdout)
                 print(output.stdout, flush=True)
