@@ -3,6 +3,7 @@
 import ast
 import codecs
 import importlib.util
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -359,8 +360,8 @@ public static class MixelOrdinaryTokenFixture {
     if(File.ReadAllText(Path.Combine(Root,"fixture-job-limits.request"))!="observe")throw new InvalidOperationException("Missing child-self job observation request");
     File.WriteAllText(Path.Combine(Root,"fixture-job-limits.json"),"{\"schema\":1,\"pid\":"+pid+",\"inAnyJob\":true,\"membershipStatus\":\"available\",\"membershipError\":0,\"uiStatus\":\"available\",\"uiError\":0,\"uiReturned\":4,\"uiFlags\":0,\"extendedStatus\":\"available\",\"extendedError\":0,\"extendedReturned\":144,\"extendedFlags\":8192}");
     if(File.ReadAllText(Path.Combine(Root,"fixture-directory-access.request"))!="observe")throw new InvalidOperationException("Missing child-self explicit directory request");
-    string rows="";for(int i=0;i<4;i++){if(i!=0)rows+=",";string kind=i<2?"global":"session",path=i<2?"\\\\BaseNamedObjects":"\\\\Sessions\\\\2\\\\BaseNamedObjects";rows+="{\"directory\":\""+kind+"\",\"path\":\""+path+"\",\"access\":"+(1+i%2)+",\"ntStatus\":0,\"status\":\"opened\",\"handleReturned\":true,\"closeStatus\":\"closed\",\"closeError\":0}";}
-    File.WriteAllText(Path.Combine(Root,"fixture-directory-access.json"),"{\"schema\":1,\"pid\":"+pid+",\"scope\":\"ExplicitDirectoryAccessOnly\",\"route\":\"ActualEventRouteUnmeasured\",\"sessionStatus\":\"available\",\"sessionError\":0,\"sessionId\":2,\"loaderStatus\":\"available\",\"loaderError\":0,\"unloadStatus\":\"closed\",\"unloadError\":0,\"records\":["+rows+"]}");
+    string rows="";for(int i=0;i<6;i++){if(i!=0)rows+=",";bool global=i<2||i==4;string kind=global?"global":"session",path=global?"\\\\BaseNamedObjects":"\\\\Sessions\\\\2\\\\BaseNamedObjects";rows+="{\"directory\":\""+kind+"\",\"path\":\""+path+"\",\"access\":"+(i<4?1+i%2:4)+",\"ntStatus\":0,\"status\":\"opened\",\"handleReturned\":true,\"closeStatus\":\"closed\",\"closeError\":0}";}
+    File.WriteAllText(Path.Combine(Root,"fixture-directory-access.json"),"{\"schema\":1,\"pid\":"+pid+",\"scope\":\"ExplicitDirectoryAccessOnly\",\"route\":\"ActualEventRouteUnmeasured\",\"nameCreationAccessMeasured\":true,\"objectsCreated\":false,\"sessionStatus\":\"available\",\"sessionError\":0,\"sessionId\":2,\"loaderStatus\":\"available\",\"loaderError\":0,\"unloadStatus\":\"closed\",\"unloadError\":0,\"records\":["+rows+"]}");
     string close=Scenario=="token-close"?"failed":"closed";int closeError=Scenario=="token-close"?0:0;
     File.WriteAllText(Path.Combine(Root,"fixture-thread-token-initial.json"),"{\"schema\":1,\"pid\":"+pid+",\"records\":[{\"phase\":\"OpenEventW\",\"tid\":103,\"threadStatus\":\"absent\",\"threadError\":1008,\"threadType\":0,\"threadImpersonationLevel\":0,\"primaryStatus\":\"available\",\"primaryError\":0,\"primaryType\":1,\"threadLogonMatchesPrimary\":null,\"threadClose\":\"not-opened\",\"threadCloseError\":0,\"primaryClose\":\""+close+"\",\"primaryCloseError\":"+closeError+"}]}");
     return pid;
@@ -414,7 +415,7 @@ foreach($scenario in $scenarios) {
     if($script:printed.Count -ne 21 -or @($script:printed | Where-Object {$_ -like 'OBSERVED: direct current Actions caller GUID functional control;*' -and $_.Contains('genuineStandardQualified=False; fullEightQualified=False; customerAppQualified=False;')}).Count -ne 4 -or
        @($script:printed | Where-Object {$_ -like 'OBSERVED: retained owned source child job membership;*' -and $_.Contains('childJobLimitsMeasured=False; namedDirectoryMeasured=False.')}).Count -ne 4 -or
        @($script:printed | Where-Object {$_ -like 'OBSERVED: owned source child immediate job limits;*' -and $_.Contains('immediateJobOnly=True; completeLimitsMeasured=True; namedDirectoryMeasured=False; causeEstablished=False;')}).Count -ne 4 -or
-       @($script:printed | Where-Object {$_ -like 'OBSERVED: owned source child explicit object directory access;*' -and $_.Contains('ExplicitDirectoryAccessOnly=True; ActualEventRouteUnmeasured=True; creationRightsMeasured=False; causeEstablished=False;')}).Count -ne 4 -or $leaseContextFailures.Count -ne 0) {throw 'Diagnostic output silently became standard/app qualification or lost native records'}
+       @($script:printed | Where-Object {$_ -like 'OBSERVED: owned source child explicit object directory access;*' -and $_.Contains('ExplicitDirectoryAccessOnly=True; ActualEventRouteUnmeasured=True; nameCreationAccessMeasured=True; objectsCreated=False; causeEstablished=False;')}).Count -ne 4 -or $leaseContextFailures.Count -ne 0) {throw 'Diagnostic output silently became standard/app qualification or lost native records'}
   } else {
     if($scenario -ceq 'remove-denied' -and ($message -cne 'Mock existing acknowledgment cleanup denied' -or
        -not (Test-Path -LiteralPath (Join-Path $fixtureRoot 'fixture-release-4001')) -or
@@ -801,8 +802,25 @@ if sys.argv[1]=='scripts/test-support-lease.py':
             self.assertNotIn(forbidden, lease.STANDARD_THREAD_BRIDGE)
 
     @staticmethod
-    def mocked_directory_bridge():
-        bridge=lease.STANDARD_DIRECTORY_BRIDGE.replace('    #[cfg(windows)]\n','')
+    def mocked_directory_bridge(prior_creation=False):
+        bridge=lease.STANDARD_DIRECTORY_BRIDGE
+        if prior_creation:
+            delta=r'''                        // Request name-creation access separately on these
+                        // existing directories. This only opens handles; no
+                        // directory or event object is created or modified.
+                        records.push(attempt(open,"global",r"\BaseNamedObjects",4));
+                        if session_status=="available" {
+                            let path=format!(r"\Sessions\{}\BaseNamedObjects",session);
+                            records.push(attempt(open,"session",&path,4));
+                        }
+'''
+            assert bridge.count(delta)==1
+            bridge=bridge.replace(delta,'',1)
+            field='                "\\\"nameCreationAccessMeasured\\\":{},\\\"objectsCreated\\\":false,",\n'
+            assert bridge.count(field)==1
+            bridge=bridge.replace(field,'',1).replace('std::process::id(),loader_status=="available",session_status,session_error,','std::process::id(),session_status,session_error,',1).replace('records.len()<=6','records.len()<=4',1).replace('matches!(access,1 | 2 | 4)','matches!(access,1 | 2)',1)
+            assert hashlib.sha256(bridge.encode()).hexdigest()=='ef0dbc29cf4b66c621a60f209884ba9e1815130737e37197bf795977e6220974'
+        bridge=bridge.replace('    #[cfg(windows)]\n','')
         start=bridge.index('        #[link(name="kernel32")]')
         end=bridge.index('\n        fn layout_valid()',start)
         mocks=r'''
@@ -840,28 +858,33 @@ if sys.argv[1]=='scripts/test-support-lease.py':
                 NtOpenDirectoryObject as *mut c_void
             }
             unsafe extern "system" fn NtOpenDirectoryObject(out:*mut Handle,access:u32,oa:*mut ObjectAttributes)->i32 {
-                let index=OPENS.fetch_add(1,Ordering::SeqCst);assert!(index<4);assert!(FREES.load(Ordering::SeqCst)==0);
-                assert!(out.read().is_null());assert_eq!(access,1+index%2);
+                let index=OPENS.fetch_add(1,Ordering::SeqCst);assert!(index<6);assert!(FREES.load(Ordering::SeqCst)==0);
+                let v=VARIANT.load(Ordering::SeqCst);let creation_start=if v==9 || v==10 {2} else {4};
+                assert!(out.read().is_null());assert_eq!(access,if index<creation_start {1+index%2} else {4});
                 let object=&*oa;assert_eq!(object.length,48);assert!(object.root.is_null());assert_eq!(object.attributes,0x40);
                 assert!(object.security.is_null() && object.quality.is_null());assert!(!object.name.is_null());
                 let bytes=std::slice::from_raw_parts(oa.cast::<u8>(),48);assert_eq!(&bytes[4..8],[0;4]);assert_eq!(&bytes[28..32],[0;4]);
                 let name=&*object.name;assert_eq!(name.maximum_length,name.length+2);assert!(name.length>0 && name.length<254 && name.length%2==0);
                 assert_eq!(&std::slice::from_raw_parts(object.name.cast::<u8>(),16)[4..8],[0;4]);
                 let wide=std::slice::from_raw_parts(name.buffer,name.maximum_length as usize/2);assert_eq!(wide.last(),Some(&0));
-                let path=String::from_utf16(&wide[..wide.len()-1]).unwrap();let v=VARIANT.load(Ordering::SeqCst);
+                let path=String::from_utf16(&wide[..wide.len()-1]).unwrap();
                 let session=if v==16 {u32::MAX} else if v==17 {0} else {2};
-                assert_eq!(path,if index<2 {r"\BaseNamedObjects".to_owned()} else {format!(r"\Sessions\{}\BaseNamedObjects",session)});
+                assert_eq!(path,if index<2 || index==creation_start {r"\BaseNamedObjects".to_owned()} else {format!(r"\Sessions\{}\BaseNamedObjects",session)});
                 ERROR.store(777,Ordering::SeqCst); // NTSTATUS must not read this stale Win32 error.
                 if v==2 || (v==1 && index==0) {return if v==2 {0xc0000034u32 as i32} else {0xc0000022u32 as i32};}
                 if v==13 && index==0 {return 0;}
                 if v==14 && index==0 {*out=999usize as _;return 0xc000000du32 as i32;}
                 if v==15 && index==0 {return 1;}
+                if (v==20 && index==4) || (v==21 && index>=4) {return 0xc0000022u32 as i32;}
+                if v==23 && index>=4 {return 0xc0000034u32 as i32;}
+                if v==24 && index==5 {*out=999usize as _;return 0xc000000du32 as i32;}
                 *out=(801+index as usize) as _;0
             }
             pub unsafe fn CloseHandle(handle:Handle)->i32 {
-                let h=handle as usize;assert!((801..=804).contains(&h));assert_eq!(FREES.load(Ordering::SeqCst),0);
+                let h=handle as usize;assert!((801..=806).contains(&h));assert_eq!(FREES.load(Ordering::SeqCst),0);
                 CLOSES.fetch_add(1,Ordering::SeqCst);let v=VARIANT.load(Ordering::SeqCst);
                 if h==801 && matches!(v,3|4|18) {ERROR.store(if v==3 {5} else if v==18 {u32::MAX} else {0},Ordering::SeqCst);return 0;}
+                if h==805 && v==22 {ERROR.store(0,Ordering::SeqCst);return 0;}
                 2
             }
             pub unsafe fn FreeLibrary(module:Handle)->i32 {
@@ -926,6 +949,12 @@ fn main() {
             root=Path(temporary);source=root/'source.rs';source.write_text(prelude+harness+prior)
             binary=root/('control.exe' if os.name=='nt' else 'control')
             subprocess.run([rustc,'--edition','2021','-D','warnings',str(source),'-o',str(binary)],check=True,capture_output=True,timeout=60)
+            # Execute the SHA-bound actual f894 observer through the same
+            # exported main: its four old rights cannot measure access4.
+            prior_source=root/'prior-creation.rs'
+            prior_source.write_text(prelude.replace(bridge,self.mocked_directory_bridge(prior_creation=True),1)+harness+prior)
+            prior_binary=root/('prior-creation.exe' if os.name=='nt' else 'prior-creation')
+            subprocess.run([rustc,'--edition','2021','-D','warnings',str(prior_source),'-o',str(prior_binary)],check=True,capture_output=True,timeout=60)
             def run(path,variant=0,prior=False):
                 path.mkdir();owned=path/binary.name;shutil.copy2(binary,owned)
                 (path/'fixture-mode.txt').write_text('probe')
@@ -939,25 +968,43 @@ fn main() {
             result=subprocess.run([str(owned)],env=env,capture_output=True,text=True,timeout=15)
             self.assertEqual(result.returncode,0,result.stderr);self.assertIn('counts=(0, 0, 0, 0, 0)',result.stdout)
             self.assertFalse((owned.parent/'fixture-directory-access.json').exists());self.assertTrue((owned.parent/'fixture-result.json').exists())
+            original=root/'actual-f894';original.mkdir();old=original/prior_binary.name;shutil.copy2(prior_binary,old)
+            (original/'fixture-mode.txt').write_text('probe');(original/'fixture-directory-access.request').write_text('observe')
+            result=subprocess.run([str(old)],env={**os.environ,'MIXEL_DIRECTORY_VARIANT':'0'},capture_output=True,text=True,timeout=15)
+            self.assertEqual(result.returncode,0,result.stderr);self.assertIn('counts=(4, 4, 4, 1, 0)',result.stdout)
+            old_record=json.loads((original/'fixture-directory-access.json').read_text())
+            self.assertEqual([row['access'] for row in old_record['records']],[1,2,1,2])
+            self.assertNotIn('nameCreationAccessMeasured',old_record);self.assertFalse(any(row['access']==4 for row in old_record['records']))
             values=[]
-            for variant in range(20):
+            for variant in range(25):
                 owned,env=run(root/str(variant),variant);(owned.parent/'fixture-directory-access.request').write_text('observe')
                 result=subprocess.run([str(owned)],env=env,capture_output=True,text=True,timeout=15)
                 self.assertEqual(result.returncode,0,result.stderr)
                 value=json.loads((owned.parent/'fixture-directory-access.json').read_text());values.append(value)
                 actual=json.loads((owned.parent/'fixture-result.json').read_text());self.assertEqual(value['pid'],actual['pid'])
                 self.assertEqual(actual['rawOpenError'],2);self.assertEqual(actual['attestation'],'')
-                expected_open=0 if variant in (5,6,7,8,19) else 2 if variant in (9,10) else 4
-                expected_close=0 if variant in (2,5,6,7,8,19) else expected_open-1 if variant in (1,13,14,15) else expected_open
+                expected_open=0 if variant in (5,6,7,8,19) else 3 if variant in (9,10) else 6
+                expected_close=0 if variant in (2,5,6,7,8,19) else expected_open-1 if variant in (1,13,14,15,20,24) else expected_open-2 if variant in (21,23) else expected_open
                 expected_free=0 if variant in (5,6,19) else 1
-                expected_errors=1 if variant in (3,4,5,6,7,8,9,10,11,12,18) else 0
+                expected_errors=1 if variant in (3,4,5,6,7,8,9,10,11,12,18,22) else 0
                 counts=re.search(r'counts=\((\d+), (\d+), (\d+), (\d+), (\d+)\)',result.stdout);self.assertIsNotNone(counts)
                 self.assertEqual(tuple(map(int,counts.groups()))[1:],(expected_open,expected_close,expected_free,expected_errors))
+                self.assertEqual(value['nameCreationAccessMeasured'],expected_open>0);self.assertIs(value['objectsCreated'],False)
+                if expected_open==6:
+                    self.assertEqual([(row['directory'],row['access']) for row in value['records']],[('global',1),('global',2),('session',1),('session',2),('global',4),('session',4)])
+                elif expected_open==3:self.assertEqual([row['access'] for row in value['records']],[1,2,4])
                 if variant==19:self.assertEqual(value['loaderStatus'],'layout-error');self.assertEqual(value['sessionStatus'],'unqueried')
                 if variant in (1,2):self.assertTrue(all(row['ntStatus']==-1073741772 for row in value['records']) if variant==2 else value['records'][0]['ntStatus']==-1073741790)
                 if variant in (3,4,18):self.assertEqual(value['records'][0]['closeError'],5 if variant==3 else 4294967295 if variant==18 else 0)
                 if variant in (13,14,15):self.assertEqual(value['records'][0]['status'],'contract-error');self.assertEqual(value['records'][0]['closeStatus'],'not-opened')
                 if variant in (16,17):self.assertEqual(value['sessionId'],4294967295 if variant==16 else 0)
+                if variant in (20,21,22,23,24):
+                    self.assertEqual(value['records'][:4],values[0]['records'][:4])
+                    if variant in (20,21):self.assertEqual(value['records'][4]['ntStatus'],-1073741790)
+                    if variant==21:self.assertEqual(value['records'][5]['ntStatus'],-1073741790)
+                    if variant==22:self.assertEqual(value['records'][4]['closeStatus'],'failed');self.assertEqual(value['records'][4]['closeError'],0);self.assertEqual(value['records'][5]['closeStatus'],'closed')
+                    if variant==23:self.assertTrue(all(row['ntStatus']==-1073741772 for row in value['records'][4:]))
+                    if variant==24:self.assertEqual(value['records'][5]['status'],'contract-error');self.assertEqual(value['records'][5]['closeStatus'],'not-opened')
                 saved=(owned.parent/'fixture-directory-access.json').read_bytes();(owned.parent/'fixture-result.json').unlink()
                 duplicate=subprocess.run([str(owned)],env=env,capture_output=True,text=True,timeout=15)
                 self.assertNotEqual(duplicate.returncode,0);self.assertIn('AlreadyExists',duplicate.stderr)
@@ -966,36 +1013,42 @@ fn main() {
             result=subprocess.run([str(owned)],env=env,capture_output=True,text=True,timeout=15)
             self.assertNotEqual(result.returncode,0);self.assertIn('Invalid owned explicit-directory',result.stderr)
             self.assertFalse((owned.parent/'fixture-result.json').exists())
-        print('PASS: exact exported source main reproduces requested-but-unmeasured prior gap; absent request makes zero calls; corrected20 native API/layout/status/error0/ownership cases preserve original event result and immutable publication. APIs mocked, no actual Win32 directory route/cause qualification.',flush=True)
+        print('PASS: exact exported source main and SHA-bound f894 observer reproduce unmeasured access4; original four query/traverse tuples conserved; absent request makes zero calls; corrected25 native API/layout/status/error0/ownership cases add two independent name-creation access requests without object creation, preserve original event result and immutable publication. APIs mocked, no actual Win32 directory route/cause qualification.',flush=True)
 
     def test_explicit_directory_actual_reader_strict_scope_and_deferred_failures(self):
         def row(index):
-            return dict(directory='global' if index<2 else 'session',path='\\BaseNamedObjects' if index<2 else '\\Sessions\\2\\BaseNamedObjects',access=1+index%2,ntStatus=0,status='opened',handleReturned=True,closeStatus='closed',closeError=0)
-        good=dict(schema=1,pid=4321,scope='ExplicitDirectoryAccessOnly',route='ActualEventRouteUnmeasured',sessionStatus='available',sessionError=0,sessionId=2,loaderStatus='available',loaderError=0,unloadStatus='closed',unloadError=0,records=[row(i) for i in range(4)])
+            global_directory=index<2 or index==4
+            return dict(directory='global' if global_directory else 'session',path='\\BaseNamedObjects' if global_directory else '\\Sessions\\2\\BaseNamedObjects',access=1+index%2 if index<4 else 4,ntStatus=0,status='opened',handleReturned=True,closeStatus='closed',closeError=0)
+        good=dict(schema=1,pid=4321,scope='ExplicitDirectoryAccessOnly',route='ActualEventRouteUnmeasured',nameCreationAccessMeasured=True,objectsCreated=False,sessionStatus='available',sessionError=0,sessionId=2,loaderStatus='available',loaderError=0,unloadStatus='closed',unloadError=0,records=[row(i) for i in range(6)])
         cases=[dict(record=good,accept=True,failure=False)]
         def mutated(key,value,accept=False,failure=False,index=None):
             record=json.loads(json.dumps(good))
             if index is None:record[key]=value
             else:record['records'][index][key]=value
             cases.append(dict(record=record,accept=accept,failure=failure))
-        for key,value in [('schema',True),('pid',4322),('scope','ActualEventRoute'),('route',['ActualEventRouteUnmeasured']),('sessionId',-1),('sessionId',True),('sessionStatus',['available']),('sessionError',5),('loaderError',1),('unloadError',1),('records',{}),('records',good['records'][:3]),('extra',0)]:mutated(key,value)
+        for key,value in [('schema',True),('pid',4322),('scope','ActualEventRoute'),('route',['ActualEventRouteUnmeasured']),('nameCreationAccessMeasured',False),('nameCreationAccessMeasured',1),('objectsCreated',True),('objectsCreated',0),('sessionId',-1),('sessionId',True),('sessionStatus',['available']),('sessionError',5),('loaderError',1),('unloadError',1),('records',{}),('records',good['records'][:4]),('records',good['records'][:5]),('extra',0)]:mutated(key,value)
         for key,value in [('access',4),('access',True),('access',2),('path','\\Sessions\\99\\BaseNamedObjects'),('directory',['global']),('ntStatus',4294967295),('ntStatus',-2147483649),('ntStatus',True),('ntStatus',1),('handleReturned',1),('status',['opened']),('closeStatus','not-opened'),('closeError',True),('closeError',4294967296),('extra',0)]:mutated(key,value,index=0)
         for error in [0,5,4294967295]:
             record=json.loads(json.dumps(good));record['records'][0].update(closeStatus='failed',closeError=error);cases.append(dict(record=record,accept=True,failure=True))
+            record=json.loads(json.dumps(good));record['records'][4].update(closeStatus='failed',closeError=error);cases.append(dict(record=record,accept=True,failure=True))
+        for index in [4,5]:
+            for key,value in [('access',1),('access',2),('access',8),('access',True),('path','\\BaseNamedObjects' if index==5 else '\\Sessions\\2\\BaseNamedObjects')]:mutated(key,value,index=index)
+            record=json.loads(json.dumps(good));record['records'][index].update(ntStatus=-1073741790,status='nt-result',handleReturned=False,closeStatus='not-opened');cases.append(dict(record=record,accept=True,failure=False))
         for nt,returned in [(-1073741790,False),(-1073741772,False),(-2147483648,False),(-1073741811,True),(0,False),(1,False),(2147483647,False)]:
             record=json.loads(json.dumps(good));record['records'][0].update(ntStatus=nt,handleReturned=returned,status='contract-error' if nt>=0 or returned else 'nt-result',closeStatus='not-opened');cases.append(dict(record=record,accept=True,failure=nt>=0 or returned))
         for kind in ['session','loader','unload']:
             for error in [0,5,4294967295]:
                 record=json.loads(json.dumps(good));record[kind+'Error']=error
-                if kind=='session':record.update(sessionStatus='error',sessionId=None,records=record['records'][:2])
-                elif kind=='loader':record.update(loaderStatus='load-error',unloadStatus='not-loaded',records=[])
+                if kind=='session':record.update(sessionStatus='error',sessionId=None,records=record['records'][:2]+[record['records'][4]])
+                elif kind=='loader':record.update(loaderStatus='load-error',unloadStatus='not-loaded',nameCreationAccessMeasured=False,records=[])
                 else:record.update(unloadStatus='failed')
                 cases.append(dict(record=record,accept=True,failure=True))
-        record=json.loads(json.dumps(good));record.update(loaderStatus='export-error',loaderError=127,records=[]);cases.append(dict(record=record,accept=True,failure=True))
-        record=json.loads(json.dumps(good));record.update(loaderStatus='layout-error',sessionStatus='unqueried',sessionId=None,unloadStatus='not-loaded',records=[]);cases.append(dict(record=record,accept=True,failure=True))
+        record=json.loads(json.dumps(good));record.update(loaderStatus='export-error',loaderError=127,nameCreationAccessMeasured=False,records=[]);cases.append(dict(record=record,accept=True,failure=True))
+        record=json.loads(json.dumps(good));record.update(loaderStatus='layout-error',sessionStatus='unqueried',sessionId=None,unloadStatus='not-loaded',nameCreationAccessMeasured=False,records=[]);cases.append(dict(record=record,accept=True,failure=True))
         for session in [0,4294967295]:
             record=json.loads(json.dumps(good));record['sessionId']=session
-            for item in record['records'][2:]:item['path']=f'\\Sessions\\{session}\\BaseNamedObjects'
+            for item in record['records']:
+                if item['directory']=='session':item['path']=f'\\Sessions\\{session}\\BaseNamedObjects'
             cases.append(dict(record=record,accept=True,failure=False))
         with tempfile.TemporaryDirectory(prefix='mixel-explicit-directory-reader-') as temporary:
             root=Path(temporary);(root/'cases.json').write_text(json.dumps(cases));script=root/'control.ps1'
@@ -1019,7 +1072,8 @@ foreach($case in $cases) {
  if(($message -ceq '') -ne $case.accept){throw "Directory strict acceptance changed: $message"}
  if($case.accept) {
   $leaseContextFailures.Clear();$script:printed.Clear();Invoke-LeaseChildDirectoryAccessObservation 4321
-  if(($leaseContextFailures.Count -ne 0) -ne $case.failure -or -not $script:printed[0].Contains('ExplicitDirectoryAccessOnly=True; ActualEventRouteUnmeasured=True; creationRightsMeasured=False; causeEstablished=False;')){throw 'Directory measurement failure was hidden or event route was inferred'}
+  $expectedFlag=[string][bool]$case.record.nameCreationAccessMeasured
+  if(($leaseContextFailures.Count -ne 0) -ne $case.failure -or -not $script:printed[0].Contains("ExplicitDirectoryAccessOnly=True; ActualEventRouteUnmeasured=True; nameCreationAccessMeasured=$expectedFlag; objectsCreated=False; causeEstablished=False;")){throw 'Directory measurement failure was hidden or event route was inferred'}
   if($case.failure -and (-not $script:printed[1].Contains('fatalAfterOriginalGate=True;') -or -not $script:printed[1].Contains('operation=explicit-directory-access;'))){throw 'Directory error replaced original native gate'}
   if($case.record.records.Count -and $case.record.records[0].closeStatus -ceq 'failed' -and $case.record.records[0].closeError -eq 0 -and -not $script:printed[1].Contains('nativeErrors=0;')){throw 'Directory close error0 was discarded'}
   if($case.record.unloadStatus -ceq 'failed' -and $case.record.unloadError -eq [uint32]::MaxValue -and -not $script:printed[1].Contains('nativeErrors=-1;')){throw 'Raw DWORD module error bits changed'}
@@ -1038,7 +1092,7 @@ $ObserveOnly=$false;$record=[pscustomobject]@{sourceStatus='ownerFailed=false;ow
 $ExpectedStatus='ownerFailed=false;ownerError=none;kernel=absent;probeError=none;memoryActive=false';$ExpectedError=2;$ExpectedProof='';$ExpectedRequired=$false;$ExpectedOwnerFailed=$false
 $message='';try{& ([scriptblock]::Create($original[0].Extent.Text))}catch{$message=$_.Exception.Message}
 if(-not $message.Contains('classification mismatch') -or -not $message.Contains('"rawOpenError":5')){throw 'Original fatal native5 was replaced'}
-Microsoft.PowerShell.Utility\Write-Host 'PASS: literal explicit-directory reader validates exact paths/query1/traverse2/self-session/signed NTSTATUS/ownership; rejects malformed/root-array/missing/oversize facts; preserves close0 and deferred errors behind unchanged fatal native5. Explicit paths only, actual event route unmeasured.'
+Microsoft.PowerShell.Utility\Write-Host 'PASS: literal explicit-directory reader retains exact query1/traverse2 paths and adds independent name-creation access4/self-session/signed NTSTATUS/ownership; rejects missing/duplicate/changed rights and false creation claims, malformed/root-array/missing/oversize facts; preserves close0 and deferred errors behind unchanged fatal native5. Existing directory opens only, no objects created; actual event route unmeasured.'
 ''',encoding='utf-8-sig')
             for engine,edition in self.powershell_engines():
                 result=subprocess.run([engine,'-NoProfile','-File',str(script),'-Repository',str(ROOT),'-ControlRoot',str(root),'-ExpectedEdition',edition],capture_output=True,text=True,timeout=30)

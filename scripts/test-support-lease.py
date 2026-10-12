@@ -304,7 +304,7 @@ STANDARD_DIRECTORY_BRIDGE = r'''
             std::ptr::addr_of!(object.quality) as usize-o==40
         }
         fn attempt(open: OpenDirectory, directory: &str, path: &str, access: u32) -> String {
-            assert!(matches!(directory,"global" | "session") && matches!(access,1 | 2));
+            assert!(matches!(directory,"global" | "session") && matches!(access,1 | 2 | 4));
             // Both names are derived solely from constants and this child's
             // actual DWORD session. Absolute names require RootDirectory=NULL.
             let mut wide: Vec<u16>=path.encode_utf16().chain(Some(0)).collect();
@@ -370,6 +370,14 @@ STANDARD_DIRECTORY_BRIDGE = r'''
                             let path=format!(r"\Sessions\{}\BaseNamedObjects",session);
                             for access in [1,2] { records.push(attempt(open,"session",&path,access)); }
                         }
+                        // Request name-creation access separately on these
+                        // existing directories. This only opens handles; no
+                        // directory or event object is created or modified.
+                        records.push(attempt(open,"global",r"\BaseNamedObjects",4));
+                        if session_status=="available" {
+                            let path=format!(r"\Sessions\{}\BaseNamedObjects",session);
+                            records.push(attempt(open,"session",&path,4));
+                        }
                     }
                     // Keep the owned module alive until every export call and
                     // owned directory close has finished. Never CloseHandle it.
@@ -380,12 +388,13 @@ STANDARD_DIRECTORY_BRIDGE = r'''
             }
             let result=format!(concat!(
                 "{{\"schema\":1,\"pid\":{},\"scope\":\"ExplicitDirectoryAccessOnly\",\"route\":\"ActualEventRouteUnmeasured\",",
+                "\"nameCreationAccessMeasured\":{},\"objectsCreated\":false,",
                 "\"sessionStatus\":\"{}\",\"sessionError\":{},\"sessionId\":{},\"loaderStatus\":\"{}\",\"loaderError\":{},",
                 "\"unloadStatus\":\"{}\",\"unloadError\":{},\"records\":[{}]}}\n"),
-                std::process::id(),session_status,session_error,
+                std::process::id(),loader_status=="available",session_status,session_error,
                 if session_status=="available" { session.to_string() } else { "null".to_owned() },
                 loader_status,loader_error,unload_status,unload_error,records.join(","));
-            assert!(result.len()<=4096 && records.len()<=4,"Explicit-directory result exceeds its bound");
+            assert!(result.len()<=4096 && records.len()<=6,"Explicit-directory result exceeds its bound");
             use std::io::Write;
             let mut file=std::fs::OpenOptions::new().write(true).create_new(true)
                 .open(directory.join("fixture-directory-access.json")).unwrap();

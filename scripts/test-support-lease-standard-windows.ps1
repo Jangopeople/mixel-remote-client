@@ -694,7 +694,7 @@ function Read-StandardChildDirectoryAccess([uint32]$ExpectedPid) {
   if ($text.Length -gt 4096) { throw 'Owned explicit-directory observation exceeds its bound.' }
   if (-not $text.TrimStart().StartsWith('{') -or -not $text.TrimEnd().EndsWith('}')) { throw 'Owned explicit-directory root must be an object.' }
   $record = $text | ConvertFrom-Json
-  $expected = @('schema','pid','scope','route','sessionStatus','sessionError','sessionId','loaderStatus','loaderError','unloadStatus','unloadError','records') | Sort-Object
+  $expected = @('schema','pid','scope','route','nameCreationAccessMeasured','objectsCreated','sessionStatus','sessionError','sessionId','loaderStatus','loaderError','unloadStatus','unloadError','records') | Sort-Object
   if ((@($record.PSObject.Properties.Name | Sort-Object) -join ',') -cne ($expected -join ',')) { throw 'Owned explicit-directory fields changed.' }
   foreach ($name in @('schema','pid','sessionError','loaderError','unloadError')) {
     $value = $record.$name
@@ -706,6 +706,7 @@ function Read-StandardChildDirectoryAccess([uint32]$ExpectedPid) {
   }
   if ($record.schema -ne 1 -or $ExpectedPid -eq 0 -or $record.pid -ne $ExpectedPid -or
       $record.scope -cne 'ExplicitDirectoryAccessOnly' -or $record.route -cne 'ActualEventRouteUnmeasured' -or
+      $record.nameCreationAccessMeasured -isnot [bool] -or $record.objectsCreated -isnot [bool] -or $record.objectsCreated -or
       $record.sessionStatus -cnotin @('available','error','unqueried') -or
       $record.loaderStatus -cnotin @('available','load-error','export-error','layout-error') -or
       $record.unloadStatus -cnotin @('closed','failed','not-loaded') -or $record.records -isnot [array]) { throw 'Owned explicit-directory identity/scope changed.' }
@@ -719,8 +720,9 @@ function Read-StandardChildDirectoryAccess([uint32]$ExpectedPid) {
       ($record.loaderStatus -cin @('load-error','layout-error') -and ($record.unloadStatus -cne 'not-loaded' -or $record.unloadError -ne 0)) -or
       ($record.loaderStatus -cin @('available','export-error') -and $record.unloadStatus -cnotin @('closed','failed')) -or
       ($record.unloadStatus -cne 'failed' -and $record.unloadError -ne 0)) { throw 'Directory loader ownership facts are inconsistent.' }
-  $count = if ($record.loaderStatus -cne 'available') { 0 } elseif ($record.sessionStatus -ceq 'available') { 4 } else { 2 }
-  if ($record.records.Count -ne $count) { throw 'Directory open attempts are missing, duplicated or invented.' }
+  $count = if ($record.loaderStatus -cne 'available') { 0 } elseif ($record.sessionStatus -ceq 'available') { 6 } else { 3 }
+  if ($record.records.Count -ne $count -or $record.nameCreationAccessMeasured -ne ($record.loaderStatus -ceq 'available')) { throw 'Directory open attempts are missing, duplicated or invented.' }
+  $creationStart = if ($record.sessionStatus -ceq 'available') { 4 } else { 2 }
   for ($i = 0; $i -lt $count; $i++) {
     $item = $record.records[$i]
     $fields = @('directory','path','access','ntStatus','status','handleReturned','closeStatus','closeError') | Sort-Object
@@ -735,10 +737,11 @@ function Read-StandardChildDirectoryAccess([uint32]$ExpectedPid) {
       if (-not ($value -is [int] -or $value -is [long] -or $value -is [uint32] -or $value -is [uint64]) -or
           $value -lt $minimum -or $value -gt $maximum) { throw 'Directory attempt native integer is not bounded.' }
     }
-    $kind = if ($i -lt 2) { 'global' } else { 'session' }
-    $explicitPath = if ($i -lt 2) { '\BaseNamedObjects' } else { "\Sessions\$($record.sessionId)\BaseNamedObjects" }
-    if ($item.directory -cne $kind -or $item.path -cne $explicitPath -or $item.access -ne (1 + ($i % 2)) -or
-        $item.handleReturned -isnot [bool] -or $item.status -cnotin @('opened','nt-result','contract-error')) { throw 'Explicit directory or independent read-only right changed.' }
+    $kind = if ($i -lt 2 -or $i -eq $creationStart) { 'global' } else { 'session' }
+    $explicitPath = if ($kind -ceq 'global') { '\BaseNamedObjects' } else { "\Sessions\$($record.sessionId)\BaseNamedObjects" }
+    $access = if ($i -ge $creationStart) { 4 } else { 1 + ($i % 2) }
+    if ($item.directory -cne $kind -or $item.path -cne $explicitPath -or $item.access -ne $access -or
+        $item.handleReturned -isnot [bool] -or $item.status -cnotin @('opened','nt-result','contract-error')) { throw 'Explicit directory or independent access-only right changed.' }
     if ($item.ntStatus -eq 0 -and $item.handleReturned) {
       if ($item.status -cne 'opened' -or $item.closeStatus -cnotin @('closed','failed') -or
           ($item.closeStatus -ceq 'closed' -and $item.closeError -ne 0)) { throw 'Owned directory handle close facts changed.' }
@@ -753,7 +756,7 @@ function Read-StandardChildDirectoryAccess([uint32]$ExpectedPid) {
 function Invoke-LeaseChildDirectoryAccessObservation([uint32]$ControlPid) {
   try {
     $record = Read-StandardChildDirectoryAccess $ControlPid
-    Write-Host "OBSERVED: owned source child explicit object directory access; controlPid=$ControlPid; ExplicitDirectoryAccessOnly=True; ActualEventRouteUnmeasured=True; creationRightsMeasured=False; causeEstablished=False; $($record | ConvertTo-Json -Depth 5 -Compress)."
+    Write-Host "OBSERVED: owned source child explicit object directory access; controlPid=$ControlPid; ExplicitDirectoryAccessOnly=True; ActualEventRouteUnmeasured=True; nameCreationAccessMeasured=$($record.nameCreationAccessMeasured); objectsCreated=False; causeEstablished=False; $($record | ConvertTo-Json -Depth 5 -Compress)."
     $failures = [Collections.Generic.List[Exception]]::new()
     foreach ($kind in @('session','loader','unload')) {
       if ($record.($kind + 'Status') -cin @('error','load-error','export-error','failed')) {
