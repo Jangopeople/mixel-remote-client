@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Coordinate bounded main-engine Mac Quit after aggregate Flutter cancellation."""
 import hashlib
+import contextlib
+import io
 import os
 from pathlib import Path
 import re
 import stat
+import tempfile
 
 PIN = "1abc897c451c8b5bbff3792509a7fef9d12f2ce3"
 GENERATED = "flutter/lib/mixel_support_app_exit.dart"
@@ -848,6 +851,63 @@ def normalize(data):
     return normalized, newline
 
 
+def validate_previous_cleanup(repo, prepared):
+    """Execute the pinned earlier layer's guards before changing its inputs."""
+    owned_name = 'flutter/.mixel-dependencies/macos_cleanup'
+    utility_name = 'flutter/lib/mixel_support_cleanup.dart'
+    # Standalone eleven-file lifecycle fixtures have none of these page files.
+    # A full checkout still triggers validation if both owned inputs are deleted.
+    page_names = ('remote_page', 'file_manager_page', 'view_camera_page',
+                  'port_forward_page', 'remote_tab_page', 'file_manager_tab_page',
+                  'view_camera_tab_page', 'port_forward_tab_page', 'terminal_tab_page',
+                  'terminal_page', 'terminal_connection_manager')
+    triggers = (owned_name, utility_name, *('flutter/lib/desktop/pages/' + name + '.dart'
+                                         for name in page_names))
+    if not any((repo / name).exists() or (repo / name).is_symlink() for name in triggers):
+        return
+    helper_path = Path(__file__).resolve().parent / 'patch-support-macos-cleanup.py'
+    helper = regular(helper_path.parent, helper_path.name)
+    if digest(helper) != '197bc021abf3cb8563b92dfca30d5ba7f1c93328db4318cf56386baa9cf6a0fb':
+        raise RuntimeError('Changed earlier Mac cleanup verifier')
+    namespace = {'__name__': 'mixel_previous_cleanup_verifier', '__file__': str(helper_path)}
+    exec(compile(helper, str(helper_path), 'exec'), namespace)
+    prior_files, prior_regular = namespace['FILES'], namespace['regular']
+    owned = repo / owned_name
+    for name in (*prior_files, utility_name, owned_name + '/proof.json'):
+        namespace['safe_parents'](repo, name)
+    if not owned.is_dir() or owned.is_symlink() or not (repo / utility_name).is_file():
+        raise RuntimeError('Missing earlier Mac cleanup ownership')
+    try:
+        # The original helper remains authoritative, including its complete
+        # provenance inventory. It may write only this disposable projection.
+        with tempfile.TemporaryDirectory(prefix='mixel-exit-cleanup-preflight-') as directory:
+            stage = Path(directory)
+            for name in ('Cargo.toml', *prior_files, utility_name):
+                data = prior_regular(repo / name)
+                if name in FILES:
+                    _, newline = normalize(data)
+                    data = prepared[name][0].replace(b'\n', newline)
+                target = stage / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+            (stage / owned_name).mkdir(parents=True)
+            for path in owned.rglob('*'):
+                relative = path.relative_to(owned)
+                target = stage / owned_name / relative
+                if path.is_symlink():
+                    raise RuntimeError('Symlink in earlier Mac cleanup inventory')
+                if path.is_dir():
+                    target.mkdir(parents=True, exist_ok=True)
+                else:
+                    data = prior_regular(path)
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(data)
+            with contextlib.redirect_stdout(io.StringIO()):
+                namespace['apply'](stage)
+    except (OSError, ValueError) as error:
+        raise RuntimeError('Invalid earlier Mac cleanup ownership') from error
+
+
 def apply(repo, restore=False, check=False):
     cargo, _ = normalize(regular(repo, 'Cargo.toml'))
     packages = re.findall(rb'(?ms)^\[package\]\s*\n(.*?)(?=^\[|\Z)', cargo)
@@ -917,6 +977,7 @@ def apply(repo, restore=False, check=False):
         # Restored canonical inputs keep owned pristine copies for the next pass.
         if any(normalize(regular(repo, name))[0] != prepared[name][0] for name in FILES):
             raise RuntimeError('Missing application-exit utility')
+    validate_previous_cleanup(repo, prepared)
     if check:
         return
     if not originals.exists():

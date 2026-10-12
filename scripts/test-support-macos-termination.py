@@ -144,6 +144,75 @@ def canonical(source,name):
     return original
 
 
+def previous_cleanup_controls(out, fixture):
+    spec=importlib.util.spec_from_file_location('mixel_prior_cleanup_controls',ROOT/'scripts/patch-support-macos-cleanup.py')
+    prior=importlib.util.module_from_spec(spec); spec.loader.exec_module(prior)
+    helper=(ROOT/'scripts/patch-support-macos-cleanup.py').read_bytes()
+    assert P.digest(helper)=='197bc021abf3cb8563b92dfca30d5ba7f1c93328db4318cf56386baa9cf6a0fb'
+    valid=out/'previous-cleanup-valid'
+    shutil.copytree(fixture,valid)
+    P.apply(valid,restore=True)
+    for name in prior.FILES:
+        data=subprocess.check_output(['git','-C',str(ROOT/'rustdesk'),'show',P.PIN+':'+name])
+        assert prior.sha(data)==prior.FILES[name]
+        target=valid/name; target.parent.mkdir(parents=True,exist_ok=True); target.write_bytes(data)
+    prior.apply(valid)
+    P.apply(valid)
+    before=snapshot(valid); P.apply(valid,check=True); assert snapshot(valid)==before
+    # Source813 runtime identities were bound before adding this materialization guard.
+    # Fixed byte hashes also work in shallow hosted Actions checkouts.
+    expected_runtime={'flutter/lib/common.dart': '390d75c80128850d598794502b6f5d265eb99750f64ebfc98140770661cb2cb0', 'flutter/lib/desktop/pages/desktop_home_page.dart': '51ea09a0714b2e92cde95e8676663b4666ba2489f0230f05dec48a95c3606874', 'flutter/lib/desktop/pages/desktop_tab_page.dart': 'db034e32b19d8e99482903e9adb83f9f91ee24bfeb509f0e7658a6217783d074', 'flutter/lib/desktop/widgets/tabbar_widget.dart': 'd05d6fd84b6c2f51775dfb7e2eb928367a81addbba0dbef56adc2494935685f6', 'flutter/lib/main.dart': '982765b4bd1bdf52aec77af49398ff590697978178248d546ec777b947e3d2b8', 'flutter/lib/mixel_support_app_exit.dart': '37b2f956dbbf07e4129c7b0db1d695d11dbdb1952699e4124238b9befcfbf06e', 'flutter/lib/models/ab_model.dart': 'b4c7038cb74488a2916dc2b34e33d25a3084d33a2dcf4989b4af249a2567e5fe', 'flutter/lib/models/native_model.dart': '0c78091698b2aa83fbf4ae4ed283a84c730d319336960f667b501c1eb52ef4b8', 'flutter/lib/models/server_model.dart': '0c85a7230d2277f9d2dea092b81883717b184f7c315f25833078bfd0824bcda8', 'flutter/lib/utils/multi_window_manager.dart': '27e065acf8f7feb2c80151437c071689a2dc33f1bdc9b8ce9ecacd8b74e2ede4', 'flutter/macos/Runner/AppDelegate.swift': '8a70d4f1af3f0ad28a4119d6cd887b2096f8869a559b7589fc54015d19d771a1', 'flutter/macos/Runner/MainFlutterWindow.swift': 'f497d07f72e4704a821faef262a9717c6b540957c613dc0d8db05410f2579aa1'}
+    assert set(expected_runtime)==set(P.FILES)|{P.GENERATED}
+    conserved={}
+    for name,expected in expected_runtime.items():
+        actual=P.regular(valid,name)
+        assert P.digest(actual)==expected,name
+        conserved[name]=P.digest(actual)
+    cases=[('target-'+str(i),name,'append') for i,name in enumerate(prior.FILES)]
+    cases += [('provenance-'+str(i),prior.OWNED+'/'+name,'append') for i,name in enumerate(prior.FILES)]
+    cases += [('utility-change',prior.GENERATED,'append'),('utility-missing',prior.GENERATED,'unlink'),
+              ('proof-change',prior.OWNED+'/proof.json','append'),('proof-missing',prior.OWNED+'/proof.json','unlink'),
+              ('owned-missing',prior.OWNED,'remove'),('both-missing',prior.OWNED,'remove-both'),
+              ('extra-file',prior.OWNED+'/foreign','new'),('extra-directory',prior.OWNED+'/foreign','directory'),
+              ('projected-newline','flutter/lib/utils/multi_window_manager.dart','crlf')]
+    if hasattr(os,'mkfifo'): cases += [('fifo',prior.OWNED+'/foreign','fifo')]
+    count=0
+    for label,name,operation in cases:
+        bad=out/('previous-cleanup-'+label); shutil.copytree(valid,bad)
+        target=bad/name
+        if operation=='append': target.write_bytes(target.read_bytes()+b'// foreign drift\n')
+        elif operation=='unlink': target.unlink()
+        elif operation in ('remove','remove-both'):
+            shutil.rmtree(target)
+            if operation=='remove-both': (bad/prior.GENERATED).unlink()
+        elif operation=='new': target.write_bytes(b'foreign')
+        elif operation=='directory': target.mkdir()
+        elif operation=='fifo': os.mkfifo(target)
+        else: target.write_bytes(target.read_bytes().replace(b'\n',b'\r\n'))
+        before=snapshot(bad)
+        for restore,check in ((True,False),(False,True),(False,False)):
+            try: P.apply(bad,restore=restore,check=check)
+            except RuntimeError: pass
+            else: raise AssertionError('Earlier cleanup drift accepted: '+label)
+            assert snapshot(bad)==before,'Earlier cleanup refusal mutated actual source: '+label
+            count+=1
+    verifier=out/'changed-prior-verifier/scripts'; verifier.mkdir(parents=True)
+    (verifier/'patch-support-macos-cleanup.py').write_bytes(helper+b'\n# unapproved verifier\n')
+    copied={'__name__':'mixel_changed_prior_guard','__file__':str(verifier/'patch-support-macos-termination.py')}
+    exec(compile((ROOT/'scripts/patch-support-macos-termination.py').read_bytes(),'copied-current-guard','exec'),copied)
+    before=snapshot(valid)
+    try: copied['apply'](valid,restore=True)
+    except RuntimeError as error: assert 'Changed earlier Mac cleanup verifier' in str(error)
+    else: raise AssertionError('Unapproved prior verifier accepted')
+    assert snapshot(valid)==before
+    count+=1
+    (out/'previous-cleanup-guard-proof.json').write_text(json.dumps({'fatal_zero_mutation_controls':count,
+        'all_prior_targets_and_provenance_checked':12,'both_missing_inputs_rejected':True,
+        'actual_projected_newline_guard':True,'prior_verifier_sha256':P.digest(helper),
+        'all_813_generated_runtime_hashes_conserved':conserved},indent=2,sort_keys=True)+'\n',encoding='utf-8')
+    print(f'PASS: {count} earlier cleanup target/provenance/utility/inventory guards refuse before writes; all12 generated runtime files byte-identical to813.')
+
+
 def pipeline_snapshot(root):
     records={}
     for parent,dirs,files in os.walk(root):
@@ -792,6 +861,7 @@ def main():
         args.source=args.output/'full-branding-lf'
         args.full_branding=False
     fixture=source_controls(args.source,args.output)
+    previous_cleanup_controls(args.output,fixture)
     if shutil.which('xcrun'):
         original_controls(args.output)
         swift_controls(args.output,args.framework,fixture)

@@ -16,10 +16,16 @@ ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("mixel_cleanup_patch", ROOT / "scripts/patch-support-macos-cleanup.py")
 P = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(P)
+TERMINATION_SPEC = importlib.util.spec_from_file_location("mixel_cleanup_exit_composition", ROOT / "scripts/patch-support-macos-termination.py")
+T = importlib.util.module_from_spec(TERMINATION_SPEC)
+TERMINATION_SPEC.loader.exec_module(T)
 
 
 def source_files(source):
-    archive = subprocess.check_output(["git", "-C", str(source), "archive", "--format=tar", P.PIN] + list(P.FILES), timeout=60)
+    archive_args = ["git", "-C", str(source), "-c", "core.autocrlf=false", "archive", "--format=tar", P.PIN] + list(P.FILES)
+    archive = subprocess.check_output(archive_args, timeout=60)
+    inherited = dict(os.environ, GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="core.autocrlf", GIT_CONFIG_VALUE_0="true")
+    assert subprocess.check_output(archive_args, env=inherited, timeout=60) == archive, "Inherited Git CRLF changed the pinned cleanup source"
     with tarfile.open(fileobj=io.BytesIO(archive)) as stream:
         files = {member.name: stream.extractfile(member).read() for member in stream if member.isfile()}
     assert set(files) == set(P.FILES)
@@ -131,19 +137,28 @@ def pipeline_snapshot(repo):
     return result
 
 
-def full_branding(out, files, source):
-    """Run the current full pipeline with the proposed hook in a private copy."""
+def full_branding(out, files, source, bash=None):
+    """Run the exact current pipeline and validate both owned correction layers."""
+    analyzer_spec=importlib.util.spec_from_file_location("mixel_cleanup_branding_shell",ROOT/"scripts/test-support-flutter-analysis.py")
+    analyzer=importlib.util.module_from_spec(analyzer_spec)
+    analyzer_spec.loader.exec_module(analyzer)
+    bash=analyzer.branding_bash(bash,os.name=="nt")
     copied=out/"branding-pipeline-copy"
     copied.mkdir()
-    archive=subprocess.check_output(["git","-C",str(ROOT),"archive","--format=tar",
-                                     "HEAD","scripts","branding"],timeout=60)
+    revision=subprocess.check_output(["git","-C",str(ROOT),"rev-parse","HEAD"],text=True).strip()
+    archive_args=["git","-C",str(ROOT),"-c","core.autocrlf=false","archive","--format=tar",
+                  revision,"scripts","branding"]
+    archive=subprocess.check_output(archive_args,timeout=60)
+    inherited=dict(os.environ,GIT_CONFIG_COUNT="1",GIT_CONFIG_KEY_0="core.autocrlf",GIT_CONFIG_VALUE_0="true")
+    assert subprocess.check_output(archive_args,env=inherited,timeout=60)==archive,"Inherited Git CRLF changed the exact pipeline source"
     with tarfile.open(fileobj=io.BytesIO(archive)) as stream:
         for member in stream:
             if member.isfile():
                 target=copied/member.name
                 target.parent.mkdir(parents=True,exist_ok=True)
                 target.write_bytes(stream.extractfile(member).read())
-    for name in ("patch-support-macos-cleanup.py","test-support-macos-cleanup.py"):
+    for name in ("apply-branding.sh","patch-support-macos-cleanup.py","test-support-macos-cleanup.py",
+                 "patch-support-macos-termination.py"):
         shutil.copyfile(ROOT/"scripts"/name,copied/"scripts"/name)
     script=copied/"scripts/apply-branding.sh"
     original=script.read_text()
@@ -151,57 +166,66 @@ def full_branding(out, files, source):
     anchor='python3 "$(dirname "'+shell_source+'")/patch-support-macos-window.py"\n'
     assert original.count(anchor)==1
     hook='python3 "$(dirname "'+shell_source+'")/patch-support-macos-cleanup.py"\n'
-    if hook in original:
-        assert original.count(hook)==1 and anchor+hook in original
-    else:
-        script.write_text(original.replace(anchor,anchor+hook))
-    proof={"root_head":subprocess.check_output(["git","-C",str(ROOT),"rev-parse","HEAD"]).decode().strip(),
-           "proposed_hook":"immediately after patch-support-macos-window.py",
+    assert original.count(hook)==1 and original.count(anchor+hook)==1
+    proof={"root_head":revision,
+           "actual_cleanup_hook":"immediately after patch-support-macos-window.py",
            "pipeline_source_sha256":hashlib.sha256(archive).hexdigest(),
            "pipeline_script_sha256":hashlib.sha256(script.read_bytes()).hexdigest(),
            "cleanup_helper_sha256":hashlib.sha256((copied/"scripts/patch-support-macos-cleanup.py").read_bytes()).hexdigest(),
+           "termination_helper_sha256":hashlib.sha256((copied/"scripts/patch-support-macos-termination.py").read_bytes()).hexdigest(),
+           "inherited_Git_CRLF_cannot_change_sources":True,
            "results":{}}
     for label,newline in (("lf",b"\n"),("crlf",b"\r\n")):
         repo=out/("full-branding-"+label)
-        subprocess.run(["git","clone","--quiet","--shared",str(source),str(repo)],check=True,timeout=60)
-        subprocess.run(["git","-C",str(repo),"checkout","--quiet",P.PIN],check=True,timeout=60)
-        subprocess.run(["git","clone","--quiet","--shared",str(source/"libs/hbb_common"),str(repo/"libs/hbb_common")],
+        subprocess.run(["git","-c","core.autocrlf=false","clone","--quiet","--shared",str(source),str(repo)],check=True,timeout=60)
+        subprocess.run(["git","-C",str(repo),"-c","core.autocrlf=false","checkout","--quiet",P.PIN],check=True,timeout=60)
+        subprocess.run(["git","-c","core.autocrlf=false","clone","--quiet","--shared",str(source/"libs/hbb_common"),str(repo/"libs/hbb_common")],
                        check=True,timeout=60)
         pin=subprocess.check_output(["git","-C",str(repo),"ls-tree","HEAD","libs/hbb_common"]).decode().split()[2]
-        subprocess.run(["git","-C",str(repo/"libs/hbb_common"),"checkout","--quiet",pin],check=True,timeout=60)
+        subprocess.run(["git","-C",str(repo/"libs/hbb_common"),"-c","core.autocrlf=false","checkout","--quiet",pin],check=True,timeout=60)
         for name,data in files.items():
             (repo/name).write_bytes(data.replace(b"\n",newline))
-        env=dict(os.environ,RDREPO=str(repo),BRANDING=str(copied/"branding"))
+        env=dict(os.environ,RDREPO=repo.as_posix(),BRANDING=(copied/"branding").as_posix(),PYTHONIOENCODING="utf-8")
         for attempt in (1,2):
-            result=subprocess.run(["bash",str(script)],cwd=copied,env=env,capture_output=True,text=True,timeout=240)
-            (out/("full-branding-"+label+"-"+str(attempt)+".log")).write_text(result.stdout+result.stderr)
+            result=subprocess.run([bash,script.as_posix()],cwd=copied,env=env,capture_output=True,text=True,encoding="utf-8",timeout=240)
+            (out/("full-branding-"+label+"-"+str(attempt)+".log")).write_text(result.stdout+result.stderr,encoding="utf-8")
             assert result.returncode==0,result.stdout+result.stderr
             assert "patched bounded Mac page cleanup" in result.stdout
             assert "native loaders, protocol handlers, Linux app identity and relay defaults verified" in result.stdout
+            before_check=pipeline_snapshot(repo)
+            T.apply(repo,check=True)
+            assert pipeline_snapshot(repo)==before_check,"Final Quit validation mutated the pipeline"
             for name,data in files.items():
-                assert (repo/name).read_bytes()==P.transform(name,data).replace(b"\n",newline),name
+                corrected=P.transform(name,data)
+                if name in T.FILES:
+                    canonical=T.regular(repo/"flutter/.mixel-dependencies/macos_application_exit",name)
+                    assert canonical==corrected,name
+                    corrected=T.transform(name,canonical)
+                assert (repo/name).read_bytes()==corrected.replace(b"\n",newline),name
                 assert (repo/P.OWNED/name).read_bytes()==data,name
             assert (repo/P.GENERATED).read_bytes()==P.UTILITY.encode()
+            assert (repo/T.GENERATED).read_bytes()==T.UTILITY.encode()
             current=pipeline_snapshot(repo)
             if attempt==1:
                 first=current
             else:
                 assert current==first,"Complete branding pipeline mutated on its second pass"
-        (out/("full-branding-"+label+"-snapshot.json")).write_text(json.dumps(current,sort_keys=True,indent=2)+"\n")
+        (out/("full-branding-"+label+"-snapshot.json")).write_text(json.dumps(current,sort_keys=True,indent=2)+"\n",encoding="utf-8")
         name=next(iter(files))
         target=repo/name
         saved=target.read_bytes()
         target.write_bytes(saved+b"// unauthorized target drift\n")
         before=pipeline_snapshot(repo)
-        rejected=subprocess.run(["bash",str(script)],cwd=copied,env=env,capture_output=True,text=True,timeout=240)
-        (out/("full-branding-"+label+"-drift-refusal.log")).write_text(rejected.stdout+rejected.stderr)
-        assert rejected.returncode!=0 and "Owned Mac cleanup target changed" in rejected.stderr
+        rejected=subprocess.run([bash,script.as_posix()],cwd=copied,env=env,capture_output=True,text=True,encoding="utf-8",timeout=240)
+        (out/("full-branding-"+label+"-drift-refusal.log")).write_text(rejected.stdout+rejected.stderr,encoding="utf-8")
+        assert rejected.returncode!=0 and "Owned Mac cleanup target changed: "+name in rejected.stderr
         assert pipeline_snapshot(repo)==before,"Earlier full-pipeline hooks modified bytes before cleanup drift refusal"
         target.write_bytes(saved)
         proof["results"][label]={"all_files":len(current),"passes":2,"exact_12_targets":True,
+                                "strict_final_Quit_composition":True,"exact_both_utilities":True,
                                 "complete_byte_idempotence":True,"fatal_drift_no_mutation":True}
-    (out/"full-branding-integration-proof.json").write_text(json.dumps(proof,sort_keys=True,indent=2)+"\n")
-    print("PASS: actual complete branding LF/CRLF twice; exact cleanup targets, whole-pipeline byte idempotence and fatal drift without mutation")
+    (out/"full-branding-integration-proof.json").write_text(json.dumps(proof,sort_keys=True,indent=2)+"\n",encoding="utf-8")
+    print("PASS: actual complete branding LF/CRLF twice; exact cleanup/Quit composition, both owned utilities, whole-pipeline byte idempotence and fatal drift without mutation")
 
 
 DART = r"""
@@ -1129,6 +1153,7 @@ def main():
     parser.add_argument("--dart",type=Path)
     parser.add_argument("--flutter",type=Path)
     parser.add_argument("--full-branding",action="store_true")
+    parser.add_argument("--bash",type=Path,help="Actual active Git Bash executable; required full path for Windows --full-branding")
     args=parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="mixel-cleanup-control-") as temporary:
         out=args.evidence_dir.resolve() if args.evidence_dir else Path(temporary)
@@ -1136,7 +1161,7 @@ def main():
         files=source_files(args.source)
         materialization(out,files)
         if args.full_branding:
-            full_branding(out,files,args.source.resolve())
+            full_branding(out,files,args.source.resolve(),args.bash)
         if args.dart:
             common_source=subprocess.check_output(["git","-C",str(args.source),"show",P.PIN+":flutter/lib/common.dart"],timeout=60).decode()
             (out/"pinned-common.dart").write_text(common_source)
