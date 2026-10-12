@@ -426,10 +426,13 @@ python() {
 ''', encoding="utf-8", newline="\n")
             python = root / "python-ordering-control.py"
             python.write_text(r'''
+import json
 import sys
 from pathlib import Path
 with Path('actual-invocations.log').open('a') as output:
     output.write(sys.argv[1]+'\n')
+with Path('actual-argv.jsonl').open('a',encoding='utf-8') as output:
+    output.write(json.dumps(sys.argv[1:])+'\n')
 if sys.argv[1]=='scripts/test-support-lease.py':
     print('CONTROL: unchanged fatal native gate',flush=True)
     sys.exit(23)
@@ -443,6 +446,16 @@ if sys.argv[1]=='scripts/test-support-lease.py':
                 "scripts/test-support-flutter-analysis.py",
                 "scripts/test-support-invite.py", "scripts/test-generated-support-paths.py",
                 "scripts/test-windows-lease-observation.py", "scripts/test-support-lease.py"])
+            arguments = [json.loads(line) for line in (root / "actual-argv.jsonl").read_text(encoding="utf-8").splitlines()]
+            expected_shell = subprocess.check_output([bash, "-c",
+                'if [[ "${OS:-}" == Windows_NT ]]; then cygpath -w "$BASH"; else printf "%s\\n" "$BASH"; fi'],
+                text=True, encoding="utf-8", timeout=15).strip()
+            self.assertEqual(arguments[0][0:2], ["scripts/test-support-flutter-analysis.py", "--dart"])
+            self.assertEqual(arguments[0][3:], ["--bash", expected_shell])
+            self.assertTrue(Path(arguments[0][4]).is_absolute(), "Dispatcher lost the active full Bash path")
+            self.assertEqual(arguments[1:], [[name] for name in [
+                "scripts/test-support-invite.py", "scripts/test-generated-support-paths.py",
+                "scripts/test-windows-lease-observation.py", "scripts/test-support-lease.py"]])
             self.assertIn("CONTROL: unchanged fatal native gate", result.stdout)
             print("PASS: exact generated-source dispatcher executes Flutter analyzer and calling-thread/reader controls before the unchanged fatal native lease gate; fatal result stops later tests.", flush=True)
 

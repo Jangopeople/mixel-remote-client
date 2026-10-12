@@ -49,6 +49,139 @@ def pinned(source,name):
     return subprocess.check_output(["git","-C",str(source),"show",P.PIN+":"+name],timeout=60)
 
 
+def branding_bash(explicit,windows):
+    if explicit is None:
+        if windows:
+            raise RuntimeError("Windows analyzer fixture requires the active Git Bash executable by full path")
+        return "bash"
+    if windows and not explicit.is_absolute():
+        raise RuntimeError("Windows analyzer fixture requires an absolute active Git Bash path")
+    resolved=explicit.resolve(strict=True)
+    if not resolved.is_file():
+        raise RuntimeError("Analyzer fixture Bash executable is not a file")
+    if windows:
+        # The dispatcher supplies its actual running BASH, converted by that
+        # Git installation's cygpath. Refuse the WSL/System32 stub before
+        # execution, and require the adjacent public Git/MSYS installation.
+        if resolved.name.lower()!="bash.exe" or resolved.parent.name.lower()!="bin":
+            raise RuntimeError("Windows analyzer fixture requires Git Bash, not WSL")
+        install=resolved.parent.parent
+        if install.name.lower()=="usr":
+            install=install.parent
+        if not (install/"cmd/git.exe").is_file() or not (install/"usr/bin/cygpath.exe").is_file():
+            raise RuntimeError("Active Windows Bash is not in the installed Git/MSYS layout")
+    return str(resolved)
+
+
+def shell_controls(out,bash,source):
+    control=out/"shell préflight 🚀"
+    control.mkdir()
+    git=control/"Git with spaces"
+    for name in ("cmd/git.exe","usr/bin/cygpath.exe","bin/bash.exe","usr/bin/bash.exe"):
+        path=git/name
+        path.parent.mkdir(parents=True,exist_ok=True)
+        path.write_bytes(b"source-only installation layout control")
+    for name in ("bin/bash.exe","usr/bin/bash.exe"):
+        path=git/name
+        assert branding_bash(path,True)==str(path.resolve())
+    system=control/"Windows/System32/bash.exe"
+    system.parent.mkdir(parents=True)
+    system.write_bytes(b"source-only WSL path control")
+    refusals=0
+    for path in (None,Path("bash"),system,git,control/"absent.exe"):
+        try:
+            branding_bash(path,True)
+        except (RuntimeError,OSError):
+            refusals+=1
+        else:
+            raise AssertionError("Missing/relative/WSL/nonfile shell path was accepted")
+    (git/"cmd/git.exe").unlink()
+    for name in ("bin/bash.exe","usr/bin/bash.exe"):
+        try:
+            branding_bash(git/name,True)
+        except RuntimeError:
+            refusals+=1
+        else:
+            raise AssertionError("Non-Git Bash layout was accepted")
+    assert refusals==7
+    assert branding_bash(None,False)=="bash","Existing Unix shell default changed"
+    selected=Path(bash if bash!="bash" else shutil.which("bash")).resolve(strict=True)
+    assert branding_bash(selected,False)==str(selected)
+    # Run the actual supplied native shell with a spaced Unicode script,
+    # argument and environment. Layout stand-ins above are never executed.
+    script=control/"actual shell invocation préflight.sh"
+    script.write_text('set -euo pipefail\n'+
+        '[ "$1" = "préflight 🚀" ]\n'+
+        '[ "$RDREPO" = "$2" ]\n'+
+        '[ "$BRANDING" = "$3" ]\n'+
+        'printf "%s\\n" "PASS: actual exact Bash preserves préflight 🚀 argument and shell-facing paths"\n',
+        encoding="utf-8",newline="\n")
+    env=dict(os.environ,RDREPO=(control/"source préflight").as_posix(),
+        BRANDING=(control/"branding préflight").as_posix())
+    result=run([str(selected),script.as_posix(),"préflight 🚀",env["RDREPO"],env["BRANDING"]],
+        out,"actual-exact-bash-unicode-control",env=env)
+    assert "PASS: actual exact Bash preserves préflight 🚀 argument and shell-facing paths" in result.stdout
+    version=run([str(selected),"--version"],out,"actual-exact-bash-version")
+    if os.name=="nt":
+        assert "msys" in version.stdout.lower(),"Actual active Windows shell is not Git/MSYS Bash"
+    tree=ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    pipeline_node=next(node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name=="pipeline")
+    shell_runs=[call for call in ast.walk(pipeline_node)
+        if isinstance(call,ast.Call) and isinstance(call.func,ast.Name) and call.func.id=="run"
+        and call.args and isinstance(call.args[0],ast.List)
+        and isinstance(call.args[0].elts[0],ast.Name) and call.args[0].elts[0].id=="bash"]
+    assert len(shell_runs)==3,"Full pipeline no longer uses the exact supplied shell for all three calls"
+    # Execute the exact current pipeline with only its three shell executables
+    # restored to the observed old bare `bash` boundary. Git/source operations
+    # remain real; the Windows WSL process result alone is a labelled stand-in.
+    # The full corrected pipeline below executes the supplied real shell.
+    for call in shell_runs:
+        call.args[0].elts[0]=ast.Constant(value="bash")
+    bare_calls=[]
+    def prior_shell_boundary(args,*positional,**keywords):
+        if args[0]=="bash":
+            bare_calls.append(args)
+            raise AssertionError("Windows Subsystem for Linux has no installed distributions.")
+        return run(args,*positional,**keywords)
+    scope=dict(globals(),run=prior_shell_boundary)
+    exec(compile(ast.fix_missing_locations(ast.Module(body=[pipeline_node],type_ignores=[])),
+        "original-bare-bash-boundary","exec"),scope)
+    legacy=out/"original-bare-bash-control"
+    legacy.mkdir()
+    try:
+        scope["pipeline"](legacy,source,bash)
+    except AssertionError as error:
+        assert str(error)=="Windows Subsystem for Linux has no installed distributions."
+    else:
+        raise AssertionError("Original bare Bash boundary no longer propagates the actual WSL failure")
+    assert len(bare_calls)==1 and bare_calls[0][0]=="bash"
+    archive_inputs={}
+    for mode in ("true","false"):
+        raw=subprocess.check_output(["git","-C",str(ROOT),"-c","core.autocrlf="+mode,
+            "archive","--format=tar","HEAD","scripts/apply-branding.sh","branding/branding.env"],timeout=60)
+        (out/("actual-shell-archive-autocrlf-"+mode+".tar")).write_bytes(raw)
+        with tarfile.open(fileobj=io.BytesIO(raw)) as stream:
+            archive_inputs[mode]={member.name:stream.extractfile(member).read()
+                for member in stream if member.isfile()}
+    assert archive_inputs["true"].keys()==archive_inputs["false"].keys()
+    for name,data in archive_inputs["false"].items():
+        original=subprocess.check_output(["git","-C",str(ROOT),"show","HEAD:"+name],timeout=60)
+        assert data==original and b"\r\n" not in data
+        assert archive_inputs["true"][name]==data.replace(b"\n",b"\r\n")
+        assert archive_inputs["true"][name]!=data,"Original archive conversion no longer reproduced"
+    (out/"exact-bash-proof.json").write_text(json.dumps({
+        "actual_selected_shell":str(selected),"actual_spaced_unicode_invocation_exit":result.returncode,
+        "actual_windows_git_msys_version_verified":os.name=="nt",
+        "installation_layout_controls_mocked_only":True,"path_refusals":refusals,
+        "existing_unix_default_preserved":True,"all_three_pipeline_calls_exact_supplied_shell":True,
+        "original_bare_bash_failure_boundary_reproduced":True,
+        "original_windows_wsl_process_result_mocked_only":True,
+        "original_archive_autocrlf_conversion_reproduced":True,
+        "corrected_private_shell_archive_equals_committed_lf_bytes":True
+    },sort_keys=True,indent=2)+"\n",encoding="utf-8")
+    print("PASS: exact supplied Bash executes spaced Unicode script/argument/environment; seven missing/relative/WSL/non-Git paths refuse; Unix default and all three exact pipeline calls preserved")
+
+
 def encoding_controls(out):
     # The actual Windows runner selected cp1252 for the old implicit source
     # read. Keep that original failure as a negative control on real script
@@ -96,10 +229,10 @@ def encoding_controls(out):
     print("PASS: actual Windows cp1252 source refusal reproduced; explicit UTF8 preserves LF/CRLF Unicode bytes; all fixture text IO/captured output explicit")
 
 
-def pipeline(out,source):
+def pipeline(out,source,bash):
     copied=out/"pipeline-source"
     copied.mkdir()
-    archive=subprocess.check_output(["git","-C",str(ROOT),"archive","--format=tar","HEAD","scripts","branding"],timeout=60)
+    archive=subprocess.check_output(["git","-C",str(ROOT),"-c","core.autocrlf=false","archive","--format=tar","HEAD","scripts","branding"],timeout=60)
     with tarfile.open(fileobj=io.BytesIO(archive)) as stream:
         for member in stream:
             if member.isfile():
@@ -116,9 +249,13 @@ def pipeline(out,source):
     hook='python3 "$(dirname "'+shell_source+'")/patch-support-flutter-analysis.py"\n'
     text=script.read_text(encoding="utf-8")
     if hook not in text:
-        script.write_text(text+"\n"+hook,encoding="utf-8")
+        text+="\n"+hook
     else:
         assert text.count(hook)==1
+    # This private shell copy must keep committed LF semantics independently
+    # of the host Git checkout/text writer defaults. Upstream test inputs still
+    # exercise both actual LF and CRLF throughout the complete branding matrix.
+    script.write_bytes(text.encode("utf-8"))
     originals={name:pinned(source,name) for name in P.FILES if name!="flutter/lib/common.dart"}
     originals[P.CLIENT]=pinned(source,P.CLIENT)
     assert sha(originals[P.CLIENT])==P.CLIENT_SHA256
@@ -133,12 +270,12 @@ def pipeline(out,source):
         run(["git","-C",str(repo/"libs/hbb_common"),"checkout","--quiet",library_pin],out,"hbb-checkout-"+label)
         for name in P.FILES:
             (repo/name).write_bytes(pinned(source,name).replace(b"\n",newline))
-        env=dict(os.environ,RDREPO=str(repo),BRANDING=str(copied/"branding"))
-        run(["bash",str(script)],out,"pipeline-"+label+"-1",cwd=copied,env=env)
+        env=dict(os.environ,RDREPO=repo.as_posix(),BRANDING=(copied/"branding").as_posix())
+        run([bash,script.as_posix()],out,"pipeline-"+label+"-1",cwd=copied,env=env)
         for name,(_,corrected,*_) in P.FILES.items():
             assert sha((repo/name).read_bytes().replace(b"\r\n",b"\n"))==corrected,name
         first=snapshot(repo)
-        run(["bash",str(script)],out,"pipeline-"+label+"-2",cwd=copied,env=env)
+        run([bash,script.as_posix()],out,"pipeline-"+label+"-2",cwd=copied,env=env)
         assert snapshot(repo)==first,"Full pipeline second pass changed bytes"
         (out/("pipeline-"+label+"-snapshot.json")).write_text(json.dumps(first,sort_keys=True,indent=2)+"\n",encoding="utf-8")
         name="flutter/lib/common.dart"
@@ -146,7 +283,7 @@ def pipeline(out,source):
         saved=target.read_bytes()
         target.write_bytes(saved+b"// unapproved drift\n")
         before=snapshot(repo)
-        failed=run(["bash",str(script)],out,"pipeline-"+label+"-refusal",cwd=copied,env=env,success=False)
+        failed=run([bash,script.as_posix()],out,"pipeline-"+label+"-refusal",cwd=copied,env=env,success=False)
         assert failed.returncode!=0 and "Pinned Flutter analysis input changed" in failed.stderr
         assert snapshot(repo)==before,"Drift refusal changed another pipeline file"
         target.write_bytes(saved)
@@ -346,16 +483,19 @@ def main():
     parser.add_argument("--source",type=Path,default=Path(os.environ.get("RDREPO",ROOT/"rustdesk")))
     parser.add_argument("--evidence-dir",type=Path)
     parser.add_argument("--dart",type=Path)
+    parser.add_argument("--bash",type=Path,help="Actual active Bash executable; required full Git Bash path on Windows")
     parser.add_argument("--flutter",type=Path)
     parser.add_argument("--analysis-checkout",type=Path,help="Read-only complete app/dependency/codegen context; verification builds an owned six-file baseline/fixed fixture")
     args=parser.parse_args()
     if bool(args.flutter)!=bool(args.analysis_checkout):
         parser.error("--flutter and --analysis-checkout must be supplied together")
+    bash=branding_bash(args.bash,os.name=="nt")
     with tempfile.TemporaryDirectory(prefix="mixel-flutter-analysis-") as temporary:
         out=args.evidence_dir.resolve() if args.evidence_dir else Path(temporary)
         out.mkdir(parents=True,exist_ok=True)
         encoding_controls(out)
-        files=pipeline(out,args.source.resolve())
+        shell_controls(out,bash,args.source.resolve())
+        files=pipeline(out,args.source.resolve(),bash)
         source_controls(out,files)
         if args.dart:
             dart_controls(out,files,args.dart)
