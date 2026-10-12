@@ -7,6 +7,7 @@ from pathlib import Path
 import select
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -94,6 +95,41 @@ class Lines:
         raise AssertionError(f"Actual X11 listener missed {expected!r}: {output}")
 
 
+def stop_owned_process(process, timeout=3):
+    """Bound disposal to the exact Popen child, including a stubborn server."""
+    if process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=timeout)
+
+
+def read_xvfb_display(process, read_fd, timeout=30):
+    """Read displayfd without a blocking readline or an invented display."""
+    deadline = time.monotonic() + timeout
+    data = b""
+    while time.monotonic() < deadline:
+        ready, _, _ = select.select([read_fd], [], [], min(.1, max(0, deadline - time.monotonic())))
+        if ready:
+            chunk = os.read(read_fd, 32)
+            if not chunk:
+                raise RuntimeError(f"Own Xvfb closed displayfd before readiness; exit={process.poll()}; bytes={data!r}")
+            data += chunk
+            if len(data) > 32:
+                raise RuntimeError("Own Xvfb returned an oversized displayfd record")
+            if b"\n" in data:
+                number = data.removesuffix(b"\n")
+                if not number or not number.isdigit() or int(number) > 65535:
+                    raise RuntimeError(f"Own Xvfb returned an invalid displayfd record: {data!r}")
+                return ":" + number.decode("ascii")
+        if process.poll() is not None:
+            raise RuntimeError(f"Own Xvfb exited before readiness; exit={process.returncode}; bytes={data!r}")
+    raise RuntimeError(f"Own Xvfb did not report readiness within {timeout}s; pid={process.pid}; bytes={data!r}")
+
+
 def native_x11(repo, lock):
     if not os.name == "posix" or not Path("/proc").is_dir():
         raise RuntimeError("Actual X11 listener proof requires Linux")
@@ -116,15 +152,18 @@ def native_x11(repo, lock):
     subprocess.run(["cargo", "build", "--manifest-path", str(project / "Cargo.toml")], check=True)
     binary = project / "target/debug/mixel-clipboard-proof"
     read_fd, write_fd = os.pipe()
-    xvfb = subprocess.Popen(["Xvfb", "-displayfd", str(write_fd), "-screen", "0", "1000x700x24", "-ac", "-nolisten", "tcp"],
-                            pass_fds=(write_fd,), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    os.close(write_fd)
+    server_log = project / "xvfb-stderr.log"
+    xvfb = None
     processes = []
     try:
-        ready, _, _ = select.select([read_fd], [], [], 10)
-        assert ready, "Own Xvfb failed to start"
-        with os.fdopen(read_fd) as pipe:
-            display = ":" + pipe.readline().strip()
+        with server_log.open("wb") as diagnostic:
+            try:
+                xvfb = subprocess.Popen(["Xvfb", "-displayfd", str(write_fd), "-screen", "0", "1000x700x24", "-ac", "-nolisten", "tcp"],
+                                        pass_fds=(write_fd,), stdout=subprocess.DEVNULL, stderr=diagnostic)
+            finally:
+                os.close(write_fd)
+                write_fd = None
+        display = read_xvfb_display(xvfb, read_fd)
         environment = {**os.environ, "DISPLAY": display}
 
         def put(text, selection="clipboard"):
@@ -186,13 +225,32 @@ def native_x11(repo, lock):
         assert (lines.line(1) or "").startswith("ERROR ")
         print("PASS: actual X server connection loss remains a terminal error")
     finally:
-        for process in processes:
-            if process.poll() is None:
-                process.kill()
-                process.wait(timeout=3)
-        if xvfb.poll() is None:
-            xvfb.terminate()
-            xvfb.wait(timeout=3)
+        original_failure = sys.exc_info()[0] is not None
+        cleanup_failures = []
+        for process in [*processes, *([xvfb] if xvfb else [])]:
+            try:
+                stop_owned_process(process)
+            except (OSError, subprocess.TimeoutExpired) as error:
+                cleanup_failures.append(f"Owned child pid={process.pid}: {error}")
+            finally:
+                for stream in (process.stdout, process.stderr):
+                    if stream:
+                        stream.close()
+        os.close(read_fd)
+        if write_fd is not None:
+            os.close(write_fd)
+        if original_failure or cleanup_failures:
+            diagnostic = server_log.read_bytes() if server_log.exists() else b""
+            print(f"Xvfb startup/server diagnostic ({len(diagnostic)} bytes; final 16384 bytes):\n"
+                  + diagnostic[-16384:].decode("utf-8", errors="replace"), file=sys.stderr)
+        if cleanup_failures:
+            message = "Owned X11 cleanup failed: " + "; ".join(cleanup_failures)
+            if original_failure:
+                # Preserve the actual failure while retaining every cleanup
+                # failure in the same original provider job log.
+                print(message, file=sys.stderr)
+            else:
+                raise RuntimeError(message)
 
 
 def main():
