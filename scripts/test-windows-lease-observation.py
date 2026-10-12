@@ -958,12 +958,45 @@ foreach($case in $cases) {
      (-not $script:printed[0].Contains('"extendedError":4294967295') -or -not $script:printed[1].Contains('nativeErrors=-1;'))) {throw 'Raw native DWORD bits were changed by .NET signed exception conversion'}
  }
 }
+Microsoft.PowerShell.Utility\Write-Host "CONTROL: actual $ExpectedEdition positive/malformed job-reader cases completed before original envelope reproduction."
 $object=$cases[0].record | ConvertTo-Json -Depth 5 -Compress
 $arrayRoots=@(('['+$object+']'),('[['+$object+']]'))
 if($arrayRoots.Count -ne 2){throw 'Both separate malformed root envelopes are required'}
 [IO.File]::WriteAllText($path,$arrayRoots[0])
-$prior=Read-OriginalChildJobLimits 4321
-if($prior.pid -ne 4321 -or $prior.uiFlags -ne 64 -or $prior.extendedFlags -ne 8192){throw 'Original singleton envelope defect did not reproduce'}
+# Desktop5 preserves a JSON root array as one pipeline object; modern Core
+# enumerates it by default. The original defect is therefore Core-specific.
+# Do not demand that a strict original Desktop reader accept a malformed root.
+$converted=$arrayRoots[0] | ConvertFrom-Json
+if($ExpectedEdition -ceq 'Core') {
+ if($converted -is [array]){throw 'Actual Core singleton conversion contract changed'}
+ $prior=Read-OriginalChildJobLimits 4321
+ if($prior.pid -ne 4321 -or $prior.uiFlags -ne 64 -or $prior.extendedFlags -ne 8192){throw 'Original Core singleton envelope defect did not reproduce'}
+ # Execute the same literal reader under a controlled non-enumerating output
+ # boundary. This models WriteObject(result), the published old cmdlet path;
+ # actual stock Desktop5 is separately mandatory on Windows below.
+ function ConvertFrom-Json {
+  param([Parameter(ValueFromPipeline=$true)][string]$InputObject)
+  process {
+   $parsed=Microsoft.PowerShell.Utility\ConvertFrom-Json -InputObject $InputObject -NoEnumerate
+   Write-Output -NoEnumerate $parsed
+  }
+ }
+ $preserved=$arrayRoots[0] | ConvertFrom-Json
+ if($preserved -isnot [array] -or $preserved.Count -ne 1 -or $preserved[0].pid -ne 4321){throw 'Controlled old array-output boundary is not exact'}
+ $message='';try{[void](Read-OriginalChildJobLimits 4321)}catch{$message=$_.Exception.Message}
+ if($message -cne 'Owned child job-limit fields changed.'){throw 'Original preserved-array field refusal changed'}
+ foreach($invalid in $arrayRoots) {
+  [IO.File]::WriteAllText($path,$invalid)
+  $message='';try{[void](Read-StandardChildJobLimits 4321)}catch{$message=$_.Exception.Message}
+  if($message -cne 'Owned child job-limit root must be an object.'){throw 'Preserved-array mode bypassed the corrected root guard'}
+ }
+ Remove-Item -LiteralPath Function:\ConvertFrom-Json
+} else {
+ if($converted -isnot [array] -or $converted.Count -ne 1 -or $converted[0].pid -ne 4321){throw 'Actual Desktop5 singleton conversion contract changed'}
+ $message='';try{[void](Read-OriginalChildJobLimits 4321)}catch{$message=$_.Exception.Message}
+ if($message -cne 'Owned child job-limit fields changed.'){throw 'Original Desktop5 malformed root refusal changed'}
+}
+Microsoft.PowerShell.Utility\Write-Host "CONTROL: actual $ExpectedEdition original singleton conversion bound; corrected root refusals remain mandatory."
 foreach($invalid in $arrayRoots) {
  [IO.File]::WriteAllText($path,$invalid)
  $message='';try{[void](Read-StandardChildJobLimits 4321)}catch{$message=$_.Exception.Message}
