@@ -58,6 +58,9 @@ jobs:
       - name: Exercise Windows payload preparation and IPC response validation
         shell: pwsh
         run: ./scripts/test-windows-pipeline.ps1
+      - name: Exercise exact runtime health IPC with stock Windows PowerShell 5
+        shell: powershell
+        run: ./scripts/test-windows-pipeline.ps1 -RuntimeProbeOnly -RequireStockWindowsPowerShell5
       - name: Resolve the pinned Windows clipboard source
         id: config
         shell: pwsh

@@ -1,4 +1,25 @@
+param([switch]$RuntimeProbeOnly, [switch]$RequireStockWindowsPowerShell5)
 $ErrorActionPreference = 'Stop'
+if ($RequireStockWindowsPowerShell5 -and
+    ($PSVersionTable.PSEdition -cne 'Desktop' -or $PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1 -or -not [Environment]::Is64BitProcess)) {
+  throw 'Runtime health controls require actual stock x64 Windows PowerShell 5.1 Desktop.'
+}
+Write-Host ('Actual runtime-probe PowerShell: ' + $PSVersionTable.PSVersion.ToString() + '; ' + $PSVersionTable.PSEdition + '; x64=' + [Environment]::Is64BitProcess)
+
+function Assert-Fails([scriptblock]$Action, [string]$Scenario, [string[]]$ExpectedMessages = @()) {
+  $failed = $false
+  try { & $Action } catch {
+    if ($ExpectedMessages.Count -gt 0 -and $ExpectedMessages -cnotcontains $_.Exception.Message) {
+      throw "Unexpected failure for ${Scenario}: $($_.Exception.Message)"
+    }
+    $failed = $true
+  }
+  if (-not $failed) { throw "Expected failure was accepted: $Scenario" }
+}
+
+# The ordinary invocation still executes every existing pipeline control.
+# The additional stock-PS5 job exercises only the exact named-pipe health suite.
+if (-not $RuntimeProbeOnly) {
 & (Join-Path $PSScriptRoot 'test-windows-customer-cleanup.ps1')
 $repository = Split-Path $PSScriptRoot -Parent
 foreach ($file in (Get-ChildItem $PSScriptRoot -Filter '*.ps1' -File)) {
@@ -459,16 +480,6 @@ foreach ($required in @(
   if (-not $launchSource.Contains($required)) { throw "Ordinary-to-QS runtime proof lost a required native assertion: $required" }
 }
 
-function Assert-Fails([scriptblock]$Action, [string]$Scenario, [string[]]$ExpectedMessages = @()) {
-  $failed = $false
-  try { & $Action } catch {
-    if ($ExpectedMessages.Count -gt 0 -and $ExpectedMessages -cnotcontains $_.Exception.Message) {
-      throw "Unexpected failure for ${Scenario}: $($_.Exception.Message)"
-    }
-    $failed = $true
-  }
-  if (-not $failed) { throw "Expected failure was accepted: $Scenario" }
-}
 
 $temporary = Join-Path ([IO.Path]::GetTempPath()) ('mixel-windows-pipeline-' + [Guid]::NewGuid())
 try {
@@ -501,6 +512,8 @@ try {
   if (Test-Path $temporary) { Remove-Item $temporary -Recurse -Force }
 }
 
+}
+
 . (Join-Path $PSScriptRoot 'support-runtime-probe-windows.ps1')
 if ([MixelSupportIpcProbe]::ConsistentServerPid([uint32[]]@(42, 42, 42, 42, 42)) -ne 42) {
   throw 'Consistent incoming server PID was rejected.'
@@ -522,8 +535,10 @@ public static class MixelSupportProbeFixture {
     string previous;
     while (Requests.TryDequeue(out previous)) { }
     return Task.Run(() => {
-      foreach (string response in responses) {
-        using (var pipe = new NamedPipeServerStream("Mixel-Remote\\query", PipeDirection.InOut, 1, PipeTransmissionMode.Byte)) {
+      // Reuse this owned listener across the health response group. Destroying
+      // and recreating its name can discard the next client's queued connect.
+      using (var pipe = new NamedPipeServerStream("Mixel-Remote\\query", PipeDirection.InOut, 1, PipeTransmissionMode.Byte)) {
+        foreach (string response in responses) {
           pipe.WaitForConnection();
           int first = pipe.ReadByte();
           int headerLength = (first & 3) + 1;
@@ -551,6 +566,16 @@ public static class MixelSupportProbeFixture {
             foreach (byte value in body) pipe.WriteByte(value);
           }
           pipe.Flush();
+          if (response != "truncated") {
+            // Keep this owned server alive until RequestWithServerPid has read
+            // the complete response and disposed its client. Flush alone does
+            // not attest consumption of fragmented bytes or safe name reuse.
+            // This is server-side EOF observation, with no extra wire packet.
+            var closed = pipe.ReadAsync(new byte[1], 0, 1);
+            if (!closed.Wait(2000)) throw new TimeoutException("Owned IPC fixture client did not close after its response.");
+            if (closed.Result != 0) throw new InvalidDataException("Owned IPC fixture received an extra client packet.");
+          }
+          pipe.Disconnect();
         }
       }
     });
@@ -586,6 +611,76 @@ if ($health.incomingPid -ne $PID -or -not $health.attendedReady -or -not $health
 Write-Host 'PASS: actual named-pipe IPC decodes fragmented attended, online, branded relay/key, rendezvous and registered-ID responses.'
 Write-Host 'PASS: actual framed health requests are read-only and never arm consent or change options.'
 Write-Host 'PASS: all five actual named-pipe responses belong to the fixture server PID; missing or inconsistent PID attribution fails closed.'
+
+$probePath = Join-Path $PSScriptRoot 'support-runtime-probe-windows.ps1'
+$probeTokens = $null; $probeErrors = $null
+$probeAst = [Management.Automation.Language.Parser]::ParseFile($probePath, [ref]$probeTokens, [ref]$probeErrors)
+if ($probeErrors.Count -ne 0) { throw 'Actual runtime health helper failed to parse.' }
+$healthFunction = @($probeAst.FindAll({ param($node)
+  $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Get-MixelSupportRuntimeHealth'
+}, $true))
+if ($healthFunction.Count -ne 1) { throw 'Actual runtime health function is missing or duplicated.' }
+$integerCondition = '($online.c[0] -isnot [int] -and $online.c[0] -isnot [long])'
+if (($healthFunction[0].Extent.Text.Split(@($integerCondition), [StringSplitOptions]::None).Count - 1) -ne 1) {
+  throw 'Exact uncoerced signed integer condition is missing or duplicated.'
+}
+if ($PSVersionTable.PSEdition -ceq 'Desktop') {
+  $smallOnline = $online | ConvertFrom-Json
+  if ($smallOnline.c[0] -isnot [int]) { throw 'Actual Windows PowerShell must reproduce its small JSON Int32 conversion.' }
+  # Execute the actual old function with only its original integer condition restored.
+  $priorHealth = $healthFunction[0].Extent.Text.Replace(
+    'function Get-MixelSupportRuntimeHealth', 'function Get-MixelSupportRuntimeHealthPriorInt64').Replace(
+    $integerCondition, '$online.c[0] -isnot [long]')
+  . ([scriptblock]::Create($priorHealth))
+  $fixture = [MixelSupportProbeFixture]::Serve(@($guard, $online))
+  Assert-Fails { Get-MixelSupportRuntimeHealthPriorInt64 } 'original Int64-only parser rejects real Windows PowerShell Int32' @(
+    'Incoming support IPC returned an unexpected online response.')
+  $fixture.GetAwaiter().GetResult()
+  $actualRequests = [MixelSupportProbeFixture]::Requested()
+  if ($actualRequests.Count -ne 2 -or $actualRequests[0] -cne $expectedRequests[0] -or $actualRequests[1] -cne $expectedRequests[1]) {
+    throw 'Original integer failure did not stop after the exact read-only online query.'
+  }
+  Write-Host 'PASS: actual stock Windows PowerShell5.1 reproduces original Int64-only health parser failure on JSON integer1 (Int32); no further requests follow rejection.'
+} else {
+  Write-Host 'OBSERVED: original stock Windows PowerShell5.1 Int32 conversion is not executed in this Core process.'
+}
+
+$integerLiterals = @('0', '1', '-1', '2147483647', '-2147483648', '2147483648', '-2147483649', '9223372036854775807', '-9223372036854775808')
+foreach ($integerLiteral in $integerLiterals) {
+  $integerOnline = '{"t":"OnlineStatus","c":[' + $integerLiteral + ',true]}'
+  $fixture = [MixelSupportProbeFixture]::Serve(@($guard, $integerOnline, $options, $rendezvous, $device))
+  $integerHealth = Get-MixelSupportRuntimeHealth
+  $fixture.GetAwaiter().GetResult()
+  $expectedInteger = [long]::Parse($integerLiteral, [Globalization.CultureInfo]::InvariantCulture)
+  if (($integerHealth.rendezvousState -isnot [int] -and $integerHealth.rendezvousState -isnot [long]) -or
+      $integerHealth.rendezvousState -ne $expectedInteger -or -not $integerHealth.keyConfirmed -or
+      $integerHealth.incomingPid -ne $PID -or -not $integerHealth.attendedReady) {
+    throw 'Actual framed health parser changed or coerced a signed integer response.'
+  }
+  $actualRequests = [MixelSupportProbeFixture]::Requested()
+  if ($actualRequests.Count -ne $expectedRequests.Count) { throw 'Integer health issued an unexpected number of requests.' }
+  for ($index = 0; $index -lt $expectedRequests.Count; $index++) {
+    if ($actualRequests[$index] -cne $expectedRequests[$index]) { throw 'Integer health changed the exact read-only queries.' }
+  }
+}
+$onlineCondition = @($healthFunction[0].FindAll({ param($node)
+  $node -is [Management.Automation.Language.IfStatementAst] -and
+  $node.Extent.Text.Contains("throw 'Incoming support IPC returned an unexpected online response.'")
+}, $true))
+if ($onlineCondition.Count -ne 1) { throw 'Actual online type validator is missing or duplicated.' }
+foreach ($typedValue in @([int]1, [long]1, [bool]$true, [double]1, [decimal]1, [single]1, [uint32]1, [uint64]1, [string]'1', ([object[]]@(1)), $null, [uint64]::MaxValue)) {
+  $online = [pscustomobject]@{ t = 'OnlineStatus'; c = [object[]]@($typedValue, $true) }
+  $acceptedType = $typedValue -is [int] -or $typedValue -is [long]
+  $refusedType = $false
+  try { & ([scriptblock]::Create($onlineCondition[0].Extent.Text)) } catch {
+    if ($_.Exception.Message -cne 'Incoming support IPC returned an unexpected online response.') { throw }
+    $refusedType = $true
+  }
+  if ($refusedType -eq $acceptedType) { throw 'Actual online validator accepted a coerced or non-signed-integer scalar.' }
+}
+$online = '{"t":"OnlineStatus","c":[1,true]}'
+Write-Host ('OBSERVED: actual JSON small-integer runtime type: ' + ($online | ConvertFrom-Json).c[0].GetType().FullName)
+Write-Host 'PASS: actual fragmented named-pipe health accepts nine small/large signed integer states without coercion; exact actual validator accepts only Int32/Int64 scalar types and rejects ten noninteger/unsigned/nested/oversized values.'
 
 foreach ($rawProof in @('', 'attended-runtime-v2', 'guard-unavailable', 'attended-runtime-v1', 'Y', 'ATTENDED-RUNTIME-V2')) {
   $rawGuard = [pscustomobject]@{ t = 'Config'; c = @('mixel-support-invite-attended', $rawProof) } | ConvertTo-Json -Compress
@@ -706,13 +801,29 @@ Write-Host 'PASS: actual named-pipe lease diagnostics preserve safe absent/activ
 foreach ($invalid in @(
     '{"t":"OnlineStatus","c":[1,"false"]}',
     '{"t":"OnlineStatus","c":["1",true]}',
+    '{"t":"OnlineStatus","c":[true,true]}',
+    '{"t":"OnlineStatus","c":[false,true]}',
+    '{"t":"OnlineStatus","c":[null,true]}',
+    '{"t":"OnlineStatus","c":[[1],true]}',
+    '{"t":"OnlineStatus","c":[{},true]}',
+    '{"t":"OnlineStatus","c":[1.0,true]}',
+    '{"t":"OnlineStatus","c":[1.5,true]}',
+    '{"t":"OnlineStatus","c":[1e0,true]}',
+    '{"t":"OnlineStatus","c":[1e100,true]}',
+    '{"t":"OnlineStatus","c":[9223372036854775808,true]}',
+    '{"t":"OnlineStatus","c":[-9223372036854775809,true]}',
     '{"t":"OnlineStatus","c":[1]}',
     $online.Replace('"t":"OnlineStatus"', '"t":["OnlineStatus"]'),
     $online.Replace('"t":"OnlineStatus"', '"t":"onlinestatus"'))) {
   $fixture = [MixelSupportProbeFixture]::Serve(@($guard, $invalid))
   Assert-Fails { Get-MixelSupportRuntimeHealth } 'malformed online proof' @('Incoming support IPC returned an unexpected online response.')
   $fixture.GetAwaiter().GetResult()
+  $actualRequests = [MixelSupportProbeFixture]::Requested()
+  if ($actualRequests.Count -ne 2 -or $actualRequests[0] -cne $expectedRequests[0] -or $actualRequests[1] -cne $expectedRequests[1]) {
+    throw 'Malformed online responses must stop after the exact read-only online query.'
+  }
 }
+Write-Host 'PASS: actual framed health refuses sixteen malformed online replies including bool/null/nested arrays, decimal and exponent forms and both values outside signed Int64; every rejection stops after two read-only requests.'
 foreach ($invalid in @(
     '{"t":"Options","c":[]}',
     $options.Replace('"t":"Options"', '"t":["Options"]'),
@@ -754,7 +865,10 @@ foreach ($invalid in @(
 }
 foreach ($invalid in @('oversized', 'truncated')) {
   $fixture = [MixelSupportProbeFixture]::Serve(@($invalid))
-  Assert-Fails { [MixelSupportIpcProbe]::Request('{"t":"OnlineStatus","c":null}') } 'invalid IPC frame'
+  $expectedFrameError = if ($invalid -ceq 'oversized') { 'Incoming support IPC response exceeds its bound.' } else { 'Incoming support IPC closed before its response.' }
+  Assert-Fails {
+    try { [MixelSupportIpcProbe]::Request('{"t":"OnlineStatus","c":null}') } catch { throw $_.Exception.GetBaseException().Message }
+  } 'invalid IPC frame' @($expectedFrameError)
   $fixture.GetAwaiter().GetResult()
 }
 Write-Host 'PASS: malformed online/relay/key/rendezvous/ID proofs, persisted consent, oversized frames and truncated frames fail closed.'
