@@ -1768,8 +1768,35 @@ Write-Host "Actual PowerShell version: $($PSVersionTable.PSVersion); $($PSVersio
             source = root / "control.cs"
             source.write_text(header + "\n".join(line for line in helper.splitlines() if not line.startswith("using ")) + controls + csharp_controls, encoding="utf-8")
             control = root / "control.ps1"
-            control.write_text("param($Source,$Standard,$Owned)\n$ErrorActionPreference='Stop'\nAdd-Type -TypeDefinition ([IO.File]::ReadAllText($Source)) -CompilerOptions '/warnaserror+' -ErrorAction Stop\n" + body,
-                               encoding="utf-8-sig")
+            compile_control = r"""
+param($Source,$Standard,$Owned)
+$ErrorActionPreference='Stop'
+function Add-NtControlType([string]$Definition) {
+  if ($PSVersionTable.PSEdition -ceq 'Desktop') {
+    if ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1) { throw 'Actual stock Desktop5.1 compiler is required.' }
+    $parameters = [System.CodeDom.Compiler.CompilerParameters]::new()
+    $parameters.GenerateInMemory = $true
+    $parameters.TreatWarningsAsErrors = $true
+    $parameters.WarningLevel = 4
+    [void]$parameters.ReferencedAssemblies.Add('System.dll')
+    [void]$parameters.ReferencedAssemblies.Add('System.Core.dll')
+    Add-Type -TypeDefinition $Definition -CompilerParameters $parameters -ErrorAction Stop
+  } elseif ($PSVersionTable.PSEdition -ceq 'Core') {
+    Add-Type -TypeDefinition $Definition -CompilerOptions '/warnaserror+' -ErrorAction Stop
+  } else { throw 'Unknown actual PowerShell compiler edition.' }
+}
+# This warning must remain fatal before compiling the actual mock/helper.
+# Its diagnostic code proves a compiler warning, rather than another failure.
+$warningFailure = $null
+try { Add-NtControlType 'public static class MixelNtUnusedWarningControl { public static void Run() { int unused; } }' }
+catch { $warningFailure = $_ }
+if (-not $warningFailure -or $warningFailure.ToString() -cnotmatch 'CS0168' -or ('MixelNtUnusedWarningControl' -as [type])) {
+  throw 'The actual source-control compiler did not refuse its unused-variable warning.'
+}
+Write-Host ('PASS: actual ' + $PSVersionTable.PSEdition + ' C# compiler keeps CS0168 fatal; no warning suppression.')
+Add-NtControlType ([IO.File]::ReadAllText($Source))
+"""
+            control.write_text(compile_control + body, encoding="utf-8-sig")
             for engine, edition in ObservationControls.powershell_engines():
                 owned = root / edition
                 owned.mkdir()
@@ -1841,7 +1868,21 @@ Write-Host 'PASS: actual helper parent52 plus ledger13 controls; fixed CreateNew
             binary=root/("child.exe" if os.name=="nt" else "child")
             subprocess.run([compiler,"--edition","2021","--test","-D","warnings",str(source),"-o",str(binary)],check=True,capture_output=True,timeout=60)
             result=subprocess.run([str(binary),"--nocapture"],capture_output=True,text=True,timeout=30)
-            self.assertEqual(result.returncode,0,result.stdout+result.stderr);self.assertIn("8 passed",result.stdout)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            common = {
+                "sha256_public_vectors_and_actual_utf16_hash",
+                "exact_x64_c_layout_and_offsets",
+                "malformed_request_has_no_native_path",
+                "read_only_lifecycle_signed_status_and_poison_ownership",
+                "request_absent_malformed_stale_result_and_real_file_transport",
+                "armed_request_deadline_is_bounded_and_calls_no_api",
+                "real_concurrent_destination_is_never_replaced_and_only_owned_temp_is_drained",
+            }
+            expected = common | ({"nonregular_and_symlink_request_refused_before_api"} if os.name == "posix" else set())
+            self.assertIn(os.name, ("nt", "posix"), "Unsupported Rust control host platform")
+            actual = set(re.findall(r"^test controls::([a-z_0-9]+) \.\.\. ok$", result.stdout, re.MULTILINE))
+            self.assertEqual(actual, expected, result.stdout)
+            self.assertIn(f"{len(expected)} passed; 0 failed", result.stdout)
             print(result.stdout,flush=True)
             projected=helper.replace('#[cfg(windows)]\npub struct Native;','pub struct Native;',1).replace('#[cfg(windows)]\nimpl Api for Native','impl Api for Native',1)
             first=projected.index('#[cfg(windows)]\n#[link(name = "kernel32")]');end=projected.index('\n}\n',first)+3
@@ -1856,7 +1897,7 @@ Write-Host 'PASS: actual helper parent52 plus ledger13 controls; fixed CreateNew
             result=subprocess.run([str(binary),"--nocapture"],capture_output=True,text=True,timeout=30)
             self.assertEqual(result.returncode,0,result.stdout+result.stderr);self.assertIn("1 passed",result.stdout)
             print(result.stdout,flush=True)
-        print("PASS: exact Rust child8 and literal Windows native-wrapper/C-layout/signed NTSTATUS/no-replace publication controls pass with mocked native APIs only.",flush=True)
+        print("PASS: exact seven common Rust child controls plus the Unix-only nonregular/symlink control on POSIX, and literal Windows native-wrapper/C-layout/signed NTSTATUS/no-replace publication controls pass with mocked native APIs only.",flush=True)
 
     def test_same_child_nt_composed_harness_normal_probe_foreign_arm_and_alias_conservation(self):
         child=(ROOT/"scripts/test-support-nt-event-child.rs").read_text(encoding="utf-8")
