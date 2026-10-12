@@ -48,7 +48,7 @@ SCAFFOLD = r'''#![allow(dead_code,unused_variables,unused_mut,unused_assignments
 use std::cell::RefCell;
 use std::path::PathBuf;
 #[derive(Default)]
-struct Trace{installed:bool,elevated:bool,pre_elevate:bool,quick:bool,clear_setup:bool,leases:u32,service:u32,forwarded:Vec<String>}
+struct Trace{installed:bool,elevated:bool,pre_elevate:bool,quick:bool,clear_setup:bool,leases:u32,service:u32,forwarded:Vec<String>,same_window:bool,handoff_failed:bool,window_queries:u32}
 thread_local!{static TRACE:RefCell<Trace>=RefCell::new(Trace::default());}
 fn reset(installed:bool,elevated:bool,pre_elevate:bool){TRACE.with(|t|*t.borrow_mut()=Trace{installed,elevated,pre_elevate,..Trace::default()});}
 mod platform{
@@ -62,7 +62,8 @@ mod hbb_common{pub mod password_security{
     // ACTUAL_URI_CLASSIFIER
     pub fn hold_support_invite_attended_lease()->bool{super::super::TRACE.with(|t|t.borrow_mut().leases+=1);true}
 }}
-mod ipc{pub fn set_config(name:&str,value:String)->Result<(), &'static str>{assert_eq!(name,"mixel-support-invite-attended");assert_eq!(value,"Y");Ok(())}}
+mod ipc{pub fn set_config(name:&str,value:String)->Result<(), &'static str>{assert_eq!(name,"mixel-support-invite-attended");assert_eq!(value,"Y");if super::TRACE.with(|t|t.borrow().handoff_failed){Err("no acknowledgement")}else{Ok(())}}}
+fn mixel_has_same_executable_main_window()->bool{TRACE.with(|t|{let mut t=t.borrow_mut();t.window_queries+=1;t.same_window})}
 mod log{macro_rules! error{($($arg:tt)*)=>{eprintln!($($arg)*)};}pub(crate) use error;}
 mod portable_service{pub mod client{
     pub enum StartPara{Direct}
@@ -186,10 +187,105 @@ fn explicit_flags_and_original_argument_install_elevation_gates_remain_intact(){
     TRACE.with(|t|assert_eq!(t.borrow().service,0));
     reset(false,false,false);assert!(!core_dispatch(argv("Mixel-Remote-Support-Windows.exe",&["--connect","123456789"]),false).0);
 }
+#[cfg(all(not(original),not(warm_original)))]
+#[test]
+fn warm_same_image_acknowledged_window_skips_only_automatic_direct_bootstrap(){
+    reset(false,false,false);
+    TRACE.with(|t|t.borrow_mut().same_window=true);
+    let (quick,flags)=core_dispatch(argv("payload/Mixel-Remote.exe",&["--quick_support"]),false);
+    assert!(quick);assert!(flags.contains(&"--mixel-attended".to_owned()));
+    TRACE.with(|t|{let t=t.borrow();assert_eq!(t.service,0);assert_eq!(t.window_queries,1);assert!(t.leases>0);assert!(t.quick);});
+    reset(false,false,false);
+    TRACE.with(|t|{let mut t=t.borrow_mut();t.same_window=true;t.handoff_failed=true;});
+    let (_,flags)=core_dispatch(argv("payload/Mixel-Remote.exe",&["--quick_support"]),false);
+    assert!(flags.contains(&"--mixel-attended-handoff-unavailable".to_owned()));
+    TRACE.with(|t|{let t=t.borrow();assert_eq!(t.service,1);assert_eq!(t.window_queries,0);assert!(t.leases>0);});
+    for flags in [&["--quick_support","--elevate"][..],&["--quick_support","--run-as-system"][..]]{
+        reset(false,false,false);TRACE.with(|t|t.borrow_mut().same_window=true);
+        core_dispatch(argv("payload/Mixel-Remote.exe",flags),false);
+        TRACE.with(|t|{let t=t.borrow();assert_eq!(t.service,0);assert_eq!(t.window_queries,0);});
+    }
+    // A missing/replaced/query-failed window leaves the original cold Direct path.
+    reset(false,false,false);core_dispatch(argv("payload/Mixel-Remote.exe",&["--quick_support"]),false);
+    TRACE.with(|t|assert_eq!(t.borrow().service,1));
+    reset(false,false,false);TRACE.with(|t|t.borrow_mut().same_window=true);
+    assert!(!core_dispatch(argv("payload/Mixel-Remote.exe",&[]),false).0);
+    TRACE.with(|t|assert_eq!(t.borrow().window_queries,0));
+}
+#[cfg(warm_original)]
+#[test]
+fn actual_previous_service_gate_starts_direct_before_existing_window_dispatch(){
+    reset(false,false,false);TRACE.with(|t|t.borrow_mut().same_window=true);
+    let (quick,flags)=core_dispatch(argv("payload/Mixel-Remote.exe",&["--quick_support"]),false);
+    assert!(quick);assert!(flags.contains(&"--mixel-attended".to_owned()));
+    TRACE.with(|t|{let t=t.borrow();assert_eq!(t.service,1);assert_eq!(t.window_queries,0);assert!(t.leases>0);});
+}
 '''
 
+def run_same_image_window_controls(temporary=None):
+    del temporary
+    core = (arguments.source / "src/core_main.rs").read_text(encoding="utf-8")
+    helper = function(core, "fn mixel_has_same_executable_main_window() -> bool")
+    program = r'''#![allow(non_snake_case)]
+use std::cell::RefCell;
+#[derive(Default)]struct Fake{mode:u8,finds:u32,threads:u32,opens:u32,queries:u32,closes:u32,retained:bool}
+thread_local!{static F:RefCell<Fake>=RefCell::new(Fake::default());}
+fn reset(mode:u8){F.with(|f|*f.borrow_mut()=Fake{mode,..Fake::default()});}
+fn get_app_name()->String{"Mixel-Remote".to_owned()}
+mod platform{pub mod windows{pub const FLUTTER_RUNNER_WIN32_WINDOW_CLASS:&str="FLUTTER_RUNNER_WIN32_WINDOW";}}
+mod log{macro_rules! error{($($arg:tt)*)=>{eprintln!($($arg)*)};}pub(crate) use error;}
+mod winapi{
+ pub mod shared{pub mod minwindef{pub const FALSE:i32=0;}}
+ pub mod um{
+  pub mod winnt{pub const PROCESS_QUERY_LIMITED_INFORMATION:u32=0x1000;}
+  pub mod handleapi{pub unsafe fn CloseHandle(h:*mut std::ffi::c_void)->i32{assert_eq!(h as usize,77);super::super::super::F.with(|f|{let mut f=f.borrow_mut();f.closes+=1;if f.mode==7{0}else{f.retained=false;1}})}}
+  pub mod processthreadsapi{
+   pub unsafe fn GetCurrentProcessId()->u32{std::process::id()}
+   pub unsafe fn OpenProcess(access:u32,inherit:i32,pid:u32)->*mut std::ffi::c_void{assert_eq!(access,0x1000);assert_eq!(inherit,0);assert_eq!(pid,54321);super::super::super::F.with(|f|{let mut f=f.borrow_mut();f.opens+=1;if f.mode==3{std::ptr::null_mut()}else{f.retained=true;77usize as *mut _}})}
+  }
+  pub mod winuser{
+   pub unsafe fn FindWindowW(class:*const u16,title:*const u16)->*mut std::ffi::c_void{
+    unsafe fn text(p:*const u16)->String{let mut n=0;while *p.add(n)!=0{n+=1;}String::from_utf16(std::slice::from_raw_parts(p,n)).unwrap()}
+    assert_eq!(text(class),"FLUTTER_RUNNER_WIN32_WINDOW");assert_eq!(text(title),"Mixel-Remote");
+    super::super::super::F.with(|f|{let mut f=f.borrow_mut();f.finds+=1;if f.mode==1 || (f.mode==11 && f.finds==2){std::ptr::null_mut()}else if f.mode==12 && f.finds==2{10usize as *mut _}else{9usize as *mut _}})
+   }
+   pub unsafe fn GetWindowThreadProcessId(window:*mut std::ffi::c_void,pid:*mut u32)->u32{
+    assert_eq!(window as usize,9);super::super::super::F.with(|f|{let mut f=f.borrow_mut();f.threads+=1;if f.mode==2{return 0;}*pid=if f.mode==13 && f.threads==2{999}else if f.mode==14{0}else if f.mode==15{std::process::id()}else{54321};1})
+   }
+  }
+  pub mod winbase{pub unsafe fn QueryFullProcessImageNameW(h:*mut std::ffi::c_void,flags:u32,p:*mut u16,n:*mut u32)->i32{
+   assert_eq!(h as usize,77);assert_eq!(flags,0);assert_eq!(*n,32768);
+   super::super::super::F.with(|f|{let mut f=f.borrow_mut();f.queries+=1;
+    if f.mode==4{return 0;}if f.mode==5{*n=0;return 1;}if f.mode==6{*n=32768;return 1;}if f.mode==16{*n=32769;return 1;}
+    let mut image=std::env::current_exe().unwrap().to_str().unwrap().to_owned();
+    if f.mode==8{image="C:\\foreign\\Mixel-Remote.exe".to_owned();}
+    if f.mode==9{image=image.to_ascii_uppercase();}
+    if f.mode==10{image=format!("\\\\?\\{}",image.replace('/',"\\"));}
+    let mut units:Vec<u16>=image.encode_utf16().collect();
+    if f.mode==17{units=vec![0xd800];}
+    for (i,u) in units.iter().enumerate(){*p.add(i)=*u;}
+    *n=units.len() as u32;*p.add(units.len())=if f.mode==18{1}else{0};1
+   })
+  }}
+ }
+}
+// EXACT_GENERATED_HELPER
+#[test]fn current_image_requires_owned_closed_query_and_revalidated_window(){for mode in [0,9,10]{reset(mode);assert!(mixel_has_same_executable_main_window());F.with(|f|{let f=f.borrow();assert_eq!((f.opens,f.queries,f.closes),(1,1,1));assert!(!f.retained);assert_eq!((f.finds,f.threads),(2,2));});}}
+#[test]fn absent_invalid_self_or_unqueryable_window_never_becomes_warm(){for mode in [1,2,3,14,15]{reset(mode);assert!(!mixel_has_same_executable_main_window());F.with(|f|assert_eq!(f.borrow().closes,0));}}
+#[test]fn query_failure_foreign_image_invalid_lengths_and_utf16_close_once(){for mode in [4,5,6,8,16,17,18]{reset(mode);assert!(!mixel_has_same_executable_main_window());F.with(|f|{let f=f.borrow();assert_eq!(f.closes,1);assert!(!f.retained);});}}
+#[test]fn failed_close_retains_unresolved_mock_ownership_and_is_not_positive(){reset(7);assert!(!mixel_has_same_executable_main_window());F.with(|f|{let f=f.borrow();assert_eq!(f.closes,1);assert!(f.retained);});}
+#[test]fn disappearing_replaced_window_or_reused_pid_never_becomes_warm(){for mode in [11,12,13]{reset(mode);assert!(!mixel_has_same_executable_main_window());F.with(|f|{let f=f.borrow();assert_eq!(f.closes,1);assert!(!f.retained);});}}
+'''
+    program = program.replace("// EXACT_GENERATED_HELPER", helper)
+    with tempfile.TemporaryDirectory(prefix="mixel-warm-qs-window-") as own:
+        source=Path(own)/"window.rs";source.write_text(program,encoding="utf-8")
+        binary=Path(own)/("window.exe" if os.name=="nt" else "window")
+        subprocess.run([rustc,"--edition=2021","--deny=warnings","--test",str(source),"-o",str(binary)],check=True)
+        subprocess.run([str(binary),"--test-threads=1"],check=True)
+    print("PASS: exact same-image warm window helper; 3 positive and 16 conservative API/path/ownership/race cases; failed close remains unresolved in mock",flush=True)
+
 with tempfile.TemporaryDirectory(prefix="mixel-quick-support-name-") as temporary:
-    for variant in ("original", "patched"):
+    for variant in ("original", "warm_original", "patched"):
         core = original("src/core_main.rs") if variant == "original" else (arguments.source / "src/core_main.rs").read_text(encoding="utf-8")
         portable = original("libs/portable/src/main.rs") if variant == "original" else (arguments.source / "libs/portable/src/main.rs").read_text(encoding="utf-8")
         core_detector = function(core, "fn is_quick_support_exe(exe: &str) -> bool")
@@ -207,6 +303,15 @@ with tempfile.TemporaryDirectory(prefix="mixel-quick-support-name-") as temporar
         selector = core[start:core.index("    }\n    let mut log_name", start)]
         start = core.index("    if !crate::platform::is_installed()\n")
         service_gate = function(core, core[start:core.index(" {", start)])
+        if variant == "warm_original":
+            assert service_gate.count("        && !(_mixel_attended_handoff_confirmed && mixel_has_same_executable_main_window())\n") == 1
+            service_gate = service_gate.replace("        && !(_mixel_attended_handoff_confirmed && mixel_has_same_executable_main_window())\n", "", 1)
+            previous_core = original("src/core_main.rs")
+            previous_start = previous_core.index("    if !crate::platform::is_installed()\n")
+            previous_gate = function(previous_core, previous_core[previous_start:previous_core.index(" {", previous_start)])
+            # The only prior branding delta in this exact block adds the support
+            # URI condition. Removing it proves the whole old gate is pinned.
+            assert service_gate.replace("(args.is_empty() || _is_mixel_support_invite)", "args.is_empty()", 1) == previous_gate
         classifier = function((ROOT / "scripts/support-invite-guard.rs").read_text(encoding="utf-8"), "pub fn is_support_invite_arg(value: &str) -> bool")
         test_source = SCAFFOLD.replace("// ACTUAL_URI_CLASSIFIER", classifier).replace("// CORE_DETECTOR", core_detector).replace("// PORTABLE_DETECTOR", portable_detector).replace("// WRAPPER_MAIN", wrapper).replace("// CORE_ARGV_PARSER", argv_parser).replace("// CORE_SELECTOR", selector).replace("// CORE_PORTABLE_SERVICE_GATE", service_gate).replace("// ACTUAL_SOURCE_TESTS", TESTS)
         source = Path(temporary) / (variant + ".rs")
@@ -216,6 +321,9 @@ with tempfile.TemporaryDirectory(prefix="mixel-quick-support-name-") as temporar
         command = [rustc, "--edition=2021", "--deny=warnings", "--cfg", 'feature="flutter"']
         if variant == "original":
             command += ["--cfg", "original"]
+        if variant == "warm_original":
+            command += ["--cfg", "warm_original"]
         subprocess.run(command + ["--test", str(source), "-o", str(binary)], check=True)
         subprocess.run([str(binary), "--test-threads=1"], check=True)
+run_same_image_window_controls(temporary=None)
 print("Result: actual original directory-token/customer-alias failures reproduced; generated synchronized basename/copy detectors, wrapper flag forwarding and native consent/service gates passed", flush=True)

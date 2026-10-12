@@ -787,6 +787,22 @@ text = replace_once(text, """        return try_send_by_dbus(args[0].clone());
             return try_send_by_dbus(args[0].clone());
         }
 """, "Linux cold incoming support startup")
+# Upgrade an already-owned pre-warm-fix bootstrap without duplicating its lease
+# or handoff branch. Fresh source has only the original set_quick_support line.
+old_handoff_branch = """            if crate::ipc::set_config("mixel-support-invite-attended", "Y".to_owned()).is_err() {
+                flutter_args.push("--mixel-attended-handoff-unavailable".to_owned());
+            }
+"""
+new_handoff_branch = """            if crate::ipc::set_config("mixel-support-invite-attended", "Y".to_owned()).is_err() {
+                flutter_args.push("--mixel-attended-handoff-unavailable".to_owned());
+            } else {
+                _mixel_attended_handoff_confirmed = true;
+            }
+"""
+if old_handoff_branch in text:
+    if text.count(old_handoff_branch) != 1:
+        raise SystemExit("Ambiguous old QuickSupport attended handoff")
+    text = text.replace(old_handoff_branch, new_handoff_branch, 1)
 text = replace_once(text,
     "        crate::portable_service::client::set_quick_support(_is_quick_support);\n",
     """        crate::portable_service::client::set_quick_support(_is_quick_support);
@@ -802,9 +818,80 @@ text = replace_once(text,
             // WM_COPYDATA callback can acquire the existing GUI's own lease.
             if crate::ipc::set_config("mixel-support-invite-attended", "Y".to_owned()).is_err() {
                 flutter_args.push("--mixel-attended-handoff-unavailable".to_owned());
+            } else {
+                _mixel_attended_handoff_confirmed = true;
             }
         }
 """, "QuickSupport double-click requires ongoing customer consent")
+text = replace_once(text, "    let mut _is_quick_support = false;\n",
+                    "    let mut _is_quick_support = false;\n    let mut _mixel_attended_handoff_confirmed = false;\n",
+                    "warm QuickSupport keeps the actual attended handoff outcome")
+warm_window_helper = r'''#[cfg(windows)]
+fn mixel_has_same_executable_main_window() -> bool {
+    use winapi::shared::minwindef::FALSE;
+    use winapi::um::{
+        handleapi::CloseHandle,
+        processthreadsapi::{GetCurrentProcessId, OpenProcess},
+        winbase::QueryFullProcessImageNameW,
+        winnt::PROCESS_QUERY_LIMITED_INFORMATION,
+        winuser::{FindWindowW, GetWindowThreadProcessId},
+    };
+    let current = match std::env::current_exe().ok()
+        .and_then(|path| path.to_str().map(str::to_owned)) {
+        Some(value) => value,
+        None => return false,
+    };
+    let app_name = crate::get_app_name();
+    if app_name.is_empty() { return false; }
+    let class: Vec<u16> = crate::platform::windows::FLUTTER_RUNNER_WIN32_WINDOW_CLASS
+        .encode_utf16().chain(Some(0)).collect();
+    let title: Vec<u16> = app_name.encode_utf16().chain(Some(0)).collect();
+    unsafe {
+        let window = FindWindowW(class.as_ptr(), title.as_ptr());
+        if window.is_null() { return false; }
+        let mut pid = 0;
+        if GetWindowThreadProcessId(window, &mut pid) == 0
+            || pid == 0 || pid == GetCurrentProcessId() { return false; }
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+        if process.is_null() { return false; }
+        let mut image = vec![0u16; 32_768];
+        let mut length = image.len() as u32;
+        let queried = QueryFullProcessImageNameW(process, 0, image.as_mut_ptr(), &mut length) != FALSE;
+        // Own only this limited-query process handle; never close the HWND.
+        // A failed close/query cannot establish a valid warm bootstrap hint.
+        if CloseHandle(process) == FALSE {
+            log::error!("QuickSupport existing-window process query handle did not close");
+            return false;
+        }
+        if !queried || length == 0 || length as usize >= image.len()
+            || image[length as usize] != 0 { return false; }
+        let previous = match String::from_utf16(&image[..length as usize]) {
+            Ok(value) => value,
+            Err(_) => return false,
+        };
+        // std::current_exe may use the extended Win32 prefix. Compare complete
+        // paths conservatively, preserving non-ASCII bytes and rejecting a
+        // different copy of the product even when its window title matches.
+        let normalize = |value: &str| value.strip_prefix(r"\\?\").unwrap_or(value).replace('/', "\\");
+        if !normalize(&previous).eq_ignore_ascii_case(&normalize(&current)) { return false; }
+        let mut final_pid = 0;
+        FindWindowW(class.as_ptr(), title.as_ptr()) == window
+            && GetWindowThreadProcessId(window, &mut final_pid) != 0 && final_pid == pid
+    }
+}
+
+'''
+warm_helper_marker = "#[cfg(windows)]\n#[inline]\nfn is_quick_support_exe(exe: &str) -> bool {"
+text = replace_once(text, warm_helper_marker, warm_window_helper + warm_helper_marker,
+                    "read-only same-image warm QuickSupport main window")
+text = replace_once(text, """        && _is_quick_support
+        && !_is_elevate
+        && !_is_run_as_system
+""", """        && _is_quick_support
+        && !_is_elevate
+        && !_is_run_as_system
+        && !(_mixel_attended_handoff_confirmed && mixel_has_same_executable_main_window())
+""", "warm QuickSupport skips automatic service bootstrap before native window dispatch")
 text = replace_once(text,
     "    if args.is_empty() || _is_mixel_support_invite || crate::common::is_empty_uni_link(&args[0]) {\n",
     """    if args.is_empty() || _is_mixel_support_invite || crate::common::is_empty_uni_link(&args[0]) {
