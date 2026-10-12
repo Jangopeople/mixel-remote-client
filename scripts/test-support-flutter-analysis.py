@@ -194,8 +194,8 @@ def shell_controls(out,bash,source):
         if isinstance(call,ast.Call) and isinstance(call.func,ast.Name) and call.func.id=="run"
         and call.args and isinstance(call.args[0],ast.List)
         and isinstance(call.args[0].elts[0],ast.Name) and call.args[0].elts[0].id=="bash"]
-    assert len(shell_runs)==5,"Full pipeline no longer uses the exact supplied shell for all five calls"
-    # Execute the exact current pipeline with only its five shell executables
+    assert len(shell_runs)==7,"Full pipeline no longer uses the exact supplied shell for all seven calls"
+    # Execute the exact current pipeline with only its seven shell executables
     # restored to the observed old bare `bash` boundary. Git/source operations
     # remain real; the Windows WSL process result alone is a labelled stand-in.
     # The full corrected pipeline below executes the supplied real shell.
@@ -240,13 +240,13 @@ def shell_controls(out,bash,source):
         "runtime_path_refusals":runtime_refusals,
         "original_version_substring_false_refusal_reproduced_mocked_version_only":True,
         "installation_layout_controls_mocked_only":True,"path_refusals":refusals,
-        "existing_unix_default_preserved":True,"all_five_pipeline_calls_exact_supplied_shell":True,
+        "existing_unix_default_preserved":True,"all_seven_pipeline_calls_exact_supplied_shell":True,
         "original_bare_bash_failure_boundary_reproduced":True,
         "original_windows_wsl_process_result_mocked_only":True,
         "original_archive_autocrlf_conversion_reproduced":True,
         "corrected_private_shell_archive_equals_committed_lf_bytes":True
     },sort_keys=True,indent=2)+"\n",encoding="utf-8")
-    print("PASS: exact supplied Bash executes spaced Unicode script/argument/environment; seven missing/relative/WSL/non-Git paths refuse; Unix default and all three exact pipeline calls preserved")
+    print("PASS: exact supplied Bash executes spaced Unicode script/argument/environment; seven missing/relative/WSL/non-Git paths refuse; Unix default and all seven exact pipeline calls preserved")
 
 
 def encoding_controls(out):
@@ -334,6 +334,34 @@ def captured_stdout_controls(out):
     print("PASS: exact production Unicode status print fails in actual cp1252 child; same captured subprocess runs with UTF8 stdout, exact Unicode and unchanged caller environment")
 
 
+def assert_pipeline_refusal(result,marker):
+    assert result.returncode!=0 and marker in result.stderr, (
+        "Expected exact fatal marker: "+marker+"; actual exit="+str(result.returncode)+
+        "; bounded child stderr:\n"+result.stderr[:4096])
+
+
+def pipeline_failure_diagnostics_controls(out):
+    wrong=run([sys.executable,"-c","import sys; sys.stderr.write('wrong native marker\\n'+'x'*5000+'PRIVATE_TAIL'); sys.exit(19)"],out,"wrong-pipeline-marker-control",success=False)
+    try:
+        assert_pipeline_refusal(wrong,"expected exact marker")
+    except AssertionError as error:
+        message=str(error)
+        assert "actual exit=19" in message and "wrong native marker" in message
+        assert "PRIVATE_TAIL" not in message and len(message)<4300
+    else:
+        raise AssertionError("Different fatal marker was accepted")
+    successful=run([sys.executable,"-c","import sys; sys.stderr.write('expected exact marker')"],out,"successful-pipeline-marker-control")
+    try:
+        assert_pipeline_refusal(successful,"expected exact marker")
+    except AssertionError as error:
+        assert "actual exit=0" in str(error)
+    else:
+        raise AssertionError("Successful child was accepted as a fatal refusal")
+    fatal=run([sys.executable,"-c","import sys; sys.stderr.write('expected exact marker'); sys.exit(23)"],out,"fatal-pipeline-marker-control",success=False)
+    assert_pipeline_refusal(fatal,"expected exact marker")
+    print("PASS: exact fatal markers and nonzero child exits remain mandatory; mismatches retain bounded actual stderr/exit")
+
+
 def pipeline(out,source,bash):
     copied=out/"pipeline-source"
     copied.mkdir()
@@ -397,19 +425,46 @@ def pipeline(out,source,bash):
         # state, so helper-local zero-write checks cannot hide that regression.
         dependency_target=repo/".mixel-deps/rdev/src/macos/keyboard.rs"
         dependency_saved=dependency_target.read_bytes()
-        dependency_target.write_bytes(dependency_saved+b"// unapproved dependency drift\n")
-        dependency_before=snapshot(repo)
-        dependency_failed=run([bash,script.as_posix()],out,"pipeline-"+label+"-rdev-refusal",cwd=copied,env=env,success=False)
-        assert dependency_failed.returncode!=0 and "Unrelated rdev source drift" in dependency_failed.stderr
-        assert snapshot(repo)==dependency_before,"Dependency refusal changed an earlier overlay file"
-        dependency_target.write_bytes(dependency_saved)
+        dependency_config=repo/".mixel-deps/rdev/.git/config"
+        dependency_config_saved=dependency_config.read_bytes()
+        try:
+            for checkout_crlf,newline in (("false",b"\n"),("true",b"\r\n")):
+                # Materialize the real tracked file through Git's conversion,
+                # with the same configuration active for every macro Git
+                # command. A checkout-only override is not an inherited
+                # profile: the next git diff would classify CRLF as drift.
+                run(["git","-C",str(repo/".mixel-deps/rdev"),"config","--local","core.autocrlf",checkout_crlf],out,"pipeline-"+label+"-rdev-config-"+checkout_crlf)
+                dependency_target.unlink()
+                run(["git","-C",str(repo/".mixel-deps/rdev"),"checkout","HEAD","--","src/macos/keyboard.rs"],out,"pipeline-"+label+"-rdev-checkout-"+checkout_crlf)
+                inherited=dependency_target.read_bytes()
+                assert inherited==dependency_saved.replace(b"\r\n",b"\n").replace(b"\n",newline)
+                clean=snapshot(repo)
+                run([bash,script.as_posix()],out,"pipeline-"+label+"-rdev-clean-"+checkout_crlf,cwd=copied,env=env)
+                assert snapshot(repo)==clean,"Clean inherited dependency checkout changed bytes"
+                if checkout_crlf=="true":
+                    # Reproduce the old fixture failure: the source helper
+                    # correctly refuses CRLF input with an LF-only suffix.
+                    dependency_target.write_bytes(inherited+b"// unapproved dependency drift\n")
+                    original_before=snapshot(repo)
+                    original_failed=run([bash,script.as_posix()],out,"pipeline-"+label+"-rdev-original-mixed-refusal",cwd=copied,env=env,success=False)
+                    assert_pipeline_refusal(original_failed,"Mixed or unsupported dependency newlines")
+                    assert "Unrelated rdev source drift" not in original_failed.stderr
+                    assert snapshot(repo)==original_before,"Original mixed-newline refusal changed another file"
+                dependency_target.write_bytes(inherited+b"// unapproved dependency drift"+newline)
+                dependency_before=snapshot(repo)
+                dependency_failed=run([bash,script.as_posix()],out,"pipeline-"+label+"-rdev-refusal-"+checkout_crlf,cwd=copied,env=env,success=False)
+                assert_pipeline_refusal(dependency_failed,"Unrelated rdev source drift")
+                assert snapshot(repo)==dependency_before,"Dependency refusal changed an earlier overlay file"
+        finally:
+            dependency_target.write_bytes(dependency_saved)
+            dependency_config.write_bytes(dependency_config_saved)
         dependency=repo/".mixel-deps/rdev"
         missing_dependency=out/("retained-missing-rdev-"+label)
         dependency.rename(missing_dependency)
         try:
             missing_before=snapshot(repo)
             missing_failed=run([bash,script.as_posix()],out,"pipeline-"+label+"-rdev-missing-refusal",cwd=copied,env=env,success=False)
-            assert missing_failed.returncode!=0 and "Missing owned rdev dependency checkout" in missing_failed.stderr
+            assert_pipeline_refusal(missing_failed,"Missing owned rdev dependency checkout")
             assert snapshot(repo)==missing_before,"Missing dependency refusal changed an earlier overlay file"
         finally:
             missing_dependency.rename(dependency)
@@ -419,7 +474,7 @@ def pipeline(out,source,bash):
         target.write_bytes(saved+b"// unapproved drift\n")
         before=snapshot(repo)
         failed=run([bash,script.as_posix()],out,"pipeline-"+label+"-refusal",cwd=copied,env=env,success=False)
-        assert failed.returncode!=0 and "Changed application-exit current source: flutter/lib/common.dart" in failed.stderr
+        assert_pipeline_refusal(failed,"Changed application-exit current source: flutter/lib/common.dart")
         assert snapshot(repo)==before,"Drift refusal changed another pipeline file"
         target.write_bytes(saved)
         if label=="lf":
@@ -653,6 +708,7 @@ def main():
         out.mkdir(parents=True,exist_ok=True)
         encoding_controls(out)
         captured_stdout_controls(out)
+        pipeline_failure_diagnostics_controls(out)
         shell_controls(out,bash,args.source.resolve())
         files=pipeline(out,args.source.resolve(),bash)
         source_controls(out,files)
