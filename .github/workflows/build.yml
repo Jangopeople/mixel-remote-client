@@ -413,16 +413,16 @@ jobs:
           unzip -q nasm-2.16.03-macosx.zip
           sudo cp nasm-2.16.03/nasm /usr/local/bin/nasm
           nasm --version
-          # Rosetta helps some Intel toolchain bits when cross-building x86_64.
-          if [[ "${{ matrix.job.arch }}" == "x86_64" ]]; then
-            softwareupdate --install-rosetta --agree-to-license || true
+          # Each Mac input qualification executes both native architectures.
+          if [[ "$(uname -m)" == "arm64" ]]; then
+            softwareupdate --install-rosetta --agree-to-license
           fi
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: ${{ env.MAC_RUST_VERSION }}
-          targets: ${{ matrix.job.target }}
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
           components: rustfmt
 
       - name: Install Flutter
@@ -495,6 +495,14 @@ jobs:
         with:
           name: bridge-artifact
           path: rustdesk
+
+      - name: Prove Mac input C ABI and borrowed-event safety on both architectures
+        env:
+          RDREPO: ./rustdesk
+        run: |
+          set -o pipefail
+          mkdir -p macos-rdev-proof
+          python3 scripts/test-support-macos-rdev.py --native --evidence-dir macos-rdev-proof 2>&1 | tee macos-rdev-proof/qualification.log
 
       - name: Import Apple Developer ID cert
         if: env.APPLE_CERT_P12_BASE64 != ''
@@ -678,6 +686,20 @@ jobs:
         with:
           name: macos-launch-failure-diagnostic-${{ matrix.job.arch }}
           path: macos-launch-failure/
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: macos-rdev-${{ matrix.job.arch }}
+          path: |
+            macos-rdev-proof/*.log
+            macos-rdev-proof/*.json
+            macos-rdev-proof/native-harness/trampoline.c
+            macos-rdev-proof/native-harness/Cargo.toml
+            macos-rdev-proof/native-harness/Cargo.lock
+            macos-rdev-proof/native-harness/src/main.rs
+            macos-rdev-proof/native-harness/original-owned-wrapper.rs
           if-no-files-found: warn
 
       - uses: actions/upload-artifact@v6

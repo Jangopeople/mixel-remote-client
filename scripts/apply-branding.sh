@@ -35,8 +35,12 @@ source "$BRANDING/branding.env"
 
 # Restore exact owned compatibility and Quit overlays in reverse order before
 # pinned earlier helpers see canonical inputs on repeated branding passes.
+# Check the independent input dependency before either earlier overlay writes;
+# the SDK restore already validates the complete Quit/cleanup chain virtually.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-rdev.py" --restore --check "$RDREPO"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-flutter-sdk-compatibility.py" --restore "$RDREPO"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-termination.py" --restore "$RDREPO"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-rdev.py" --restore "$RDREPO"
 
 echo "→ Applying branding: $APP_NAME ($MACOS_BUNDLE_ID) on top of RustDesk $UPSTREAM_VERSION"
 
@@ -47,6 +51,9 @@ python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-network.py"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-linux.py"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-signals.py"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-input.py"
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-rdev.py" "$RDREPO"
+fi
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-clipboard.py"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-windows-clipboard.py"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-video.py"

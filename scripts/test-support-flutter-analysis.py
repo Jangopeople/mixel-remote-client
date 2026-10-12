@@ -194,8 +194,8 @@ def shell_controls(out,bash,source):
         if isinstance(call,ast.Call) and isinstance(call.func,ast.Name) and call.func.id=="run"
         and call.args and isinstance(call.args[0],ast.List)
         and isinstance(call.args[0].elts[0],ast.Name) and call.args[0].elts[0].id=="bash"]
-    assert len(shell_runs)==3,"Full pipeline no longer uses the exact supplied shell for all three calls"
-    # Execute the exact current pipeline with only its three shell executables
+    assert len(shell_runs)==5,"Full pipeline no longer uses the exact supplied shell for all five calls"
+    # Execute the exact current pipeline with only its five shell executables
     # restored to the observed old bare `bash` boundary. Git/source operations
     # remain real; the Windows WSL process result alone is a labelled stand-in.
     # The full corrected pipeline below executes the supplied real shell.
@@ -240,7 +240,7 @@ def shell_controls(out,bash,source):
         "runtime_path_refusals":runtime_refusals,
         "original_version_substring_false_refusal_reproduced_mocked_version_only":True,
         "installation_layout_controls_mocked_only":True,"path_refusals":refusals,
-        "existing_unix_default_preserved":True,"all_three_pipeline_calls_exact_supplied_shell":True,
+        "existing_unix_default_preserved":True,"all_five_pipeline_calls_exact_supplied_shell":True,
         "original_bare_bash_failure_boundary_reproduced":True,
         "original_windows_wsl_process_result_mocked_only":True,
         "original_archive_autocrlf_conversion_reproduced":True,
@@ -350,7 +350,8 @@ def pipeline(out,source,bash):
                  "patch-support-flutter-analysis.py","test-support-flutter-analysis.py",
                  "patch-support-macos-termination.py","test-support-macos-termination.py",
                  "patch-support-flutter-sdk-compatibility.py","test-support-flutter-sdk-compatibility.py",
-                 "test-support-macos-cleanup.py","test-support-macos-window.py"):
+                 "test-support-macos-cleanup.py","test-support-macos-window.py",
+                 "patch-support-macos-rdev.py"):
         shutil.copyfile(ROOT/"scripts"/name,copied/"scripts"/name)
     script=copied/"scripts/apply-branding.sh"
     shell_source="$"+"{BASH_SOURCE[0]}"
@@ -391,6 +392,27 @@ def pipeline(out,source,bash):
         run([bash,script.as_posix()],out,"pipeline-"+label+"-2",cwd=copied,env=env)
         assert snapshot(repo)==first,"Full pipeline second pass changed bytes"
         (out/("pipeline-"+label+"-snapshot.json")).write_text(json.dumps(first,sort_keys=True,indent=2)+"\n",encoding="utf-8")
+        # A late dependency refusal used to restore valid SDK/Quit overlays
+        # first. Exercise the entire actual shell macro on the fully composed
+        # state, so helper-local zero-write checks cannot hide that regression.
+        dependency_target=repo/".mixel-deps/rdev/src/macos/keyboard.rs"
+        dependency_saved=dependency_target.read_bytes()
+        dependency_target.write_bytes(dependency_saved+b"// unapproved dependency drift\n")
+        dependency_before=snapshot(repo)
+        dependency_failed=run([bash,script.as_posix()],out,"pipeline-"+label+"-rdev-refusal",cwd=copied,env=env,success=False)
+        assert dependency_failed.returncode!=0 and "Unrelated rdev source drift" in dependency_failed.stderr
+        assert snapshot(repo)==dependency_before,"Dependency refusal changed an earlier overlay file"
+        dependency_target.write_bytes(dependency_saved)
+        dependency=repo/".mixel-deps/rdev"
+        missing_dependency=out/("retained-missing-rdev-"+label)
+        dependency.rename(missing_dependency)
+        try:
+            missing_before=snapshot(repo)
+            missing_failed=run([bash,script.as_posix()],out,"pipeline-"+label+"-rdev-missing-refusal",cwd=copied,env=env,success=False)
+            assert missing_failed.returncode!=0 and "Missing owned rdev dependency checkout" in missing_failed.stderr
+            assert snapshot(repo)==missing_before,"Missing dependency refusal changed an earlier overlay file"
+        finally:
+            missing_dependency.rename(dependency)
         name="flutter/lib/common.dart"
         target=repo/name
         saved=target.read_bytes()
@@ -405,7 +427,7 @@ def pipeline(out,source,bash):
             common=canonical.replace("import 'dart:convert';\n".encode(),"import 'dart:convert';\nimport 'dart:math';\n".encode(),1)
             assert sha(common)==P.FILES[name][0]
             originals[name]=common
-    print("PASS: exact current complete branding, cleanup, analyzer and final Quit composition; LF/CRLF twice byte-identical; drift fails without mutation")
+    print("PASS: exact current complete branding, cleanup, analyzer and final Quit composition; LF/CRLF twice byte-identical; Dart and dependency drift fail without mutation")
     return originals
 
 
