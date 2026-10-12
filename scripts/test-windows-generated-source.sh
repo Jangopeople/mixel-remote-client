@@ -3,6 +3,7 @@ set -euo pipefail
 mixel_windows_source_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$mixel_windows_source_root"
 source scripts/use-windows-msvc-bash.sh
+python scripts/test-support-flutter-analysis.py --dart "$(command -v dart)"
 for mixel_source_test in \
   test-support-invite \
   test-generated-support-paths \

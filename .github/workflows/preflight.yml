@@ -257,6 +257,7 @@ jobs:
         run: git clone --depth 1 --branch "$UPSTREAM_VERSION" --recurse-submodules https://github.com/rustdesk/rustdesk.git rustdesk
       - name: Exercise actual source patches and support reporter
         run: |
+          python3 scripts/test-support-flutter-analysis.py --dart "$(command -v dart)"
           python3 scripts/test-support-invite.py
           python3 scripts/test-generated-support-paths.py
           python3 scripts/test-support-lease.py

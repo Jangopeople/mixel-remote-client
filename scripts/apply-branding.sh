@@ -995,4 +995,7 @@ require_string libs/hbb_common/src/config.rs "(\"relay-server\".to_owned(), \"${
 require_string libs/hbb_common/src/config.rs "(\"key\".to_owned(), \"${RS_PUB_KEY}\".to_owned())"
 echo "   native loaders, protocol handlers, Linux app identity and relay defaults verified"
 
+# common.dart must have its complete branded identity before this pinned check.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-flutter-analysis.py"
+
 echo "✓ Branding applied — product identity is $APP_NAME only."

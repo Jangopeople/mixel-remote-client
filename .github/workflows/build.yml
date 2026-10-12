@@ -270,6 +270,7 @@ jobs:
           VCPKG_ROOT: ${{ github.workspace }}/vcpkg
           RDREPO: ./rustdesk
         run: |
+          python3 scripts/test-support-flutter-analysis.py --dart "$(command -v dart)"
           python3 scripts/test-support-invite.py
           python3 scripts/test-generated-support-paths.py
           python3 scripts/test-support-lease.py
@@ -293,6 +294,10 @@ jobs:
         run: |
           export VCPKG_ROOT="${{ github.workspace }}/vcpkg"
           python3 build.py --flutter
+
+      - name: Require the complete generated Flutter app to analyze without errors or warnings
+        working-directory: rustdesk/flutter
+        run: flutter analyze --no-pub --no-fatal-infos
 
       - name: Test compiled attended support guard
         env:
@@ -486,6 +491,7 @@ jobs:
           RDREPO: ./rustdesk
           MACOS_RUNTIME_LINK_TARGET: ${{ matrix.job.target }}
         run: |
+          python3 scripts/test-support-flutter-analysis.py --dart "$(command -v dart)"
           python3 scripts/test-support-invite.py
           python3 scripts/test-generated-support-paths.py
           python3 scripts/test-support-lease.py
@@ -524,6 +530,10 @@ jobs:
           done
           echo "❌ build failed after 3 attempts"
           exit 1
+
+      - name: Require the complete generated Flutter app to analyze without errors or warnings
+        working-directory: rustdesk/flutter
+        run: flutter analyze --no-pub --no-fatal-infos
 
       - name: Test compiled attended support guard
         env:
@@ -803,6 +813,10 @@ jobs:
         run: |
           source ../scripts/use-windows-msvc-bash.sh
           python build.py --flutter --skip-portable-pack
+
+      - name: Require the complete generated Flutter app to analyze without errors or warnings
+        working-directory: rustdesk/flutter
+        run: flutter analyze --no-pub --no-fatal-infos
 
       - name: Test compiled attended support guard
         shell: bash

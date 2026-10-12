@@ -440,10 +440,11 @@ if sys.argv[1]=='scripts/test-support-lease.py':
                                     capture_output=True, text=True, timeout=15)
             self.assertEqual(result.returncode, 23, result.stdout + result.stderr)
             self.assertEqual((root / "actual-invocations.log").read_text().splitlines(), [
+                "scripts/test-support-flutter-analysis.py",
                 "scripts/test-support-invite.py", "scripts/test-generated-support-paths.py",
                 "scripts/test-windows-lease-observation.py", "scripts/test-support-lease.py"])
             self.assertIn("CONTROL: unchanged fatal native gate", result.stdout)
-            print("PASS: exact generated-source dispatcher executes calling-thread/reader controls before the unchanged fatal native lease gate; fatal result stops later tests.", flush=True)
+            print("PASS: exact generated-source dispatcher executes Flutter analyzer and calling-thread/reader controls before the unchanged fatal native lease gate; fatal result stops later tests.", flush=True)
 
     @staticmethod
     def mocked_bridge():
