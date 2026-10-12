@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """Executable source controls; mocked Win32 APIs never qualify Windows runtime."""
+import ast
+import codecs
 import importlib.util
 import json
 import os
@@ -142,6 +144,37 @@ class ObservationControls(unittest.TestCase):
             engines.append((desktop, "Desktop"))
         return engines
 
+    def test_generated_powershell_files_keep_unicode_with_desktop5_bom(self):
+        tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+        writers = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+                   and isinstance(node.func, ast.Attribute) and node.func.attr == "write_text"
+                   and isinstance(node.func.value, ast.Name) and node.func.value.id == "script"]
+        self.assertEqual(len(writers), 3)
+        csharp_writers = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+                         and isinstance(node.func, ast.Attribute) and node.func.attr == "write_text"
+                         and node.args and isinstance(node.args[0], ast.Name) and node.args[0].id == "csharp"]
+        self.assertEqual(len(csharp_writers), 1)
+        self.assertEqual({item.arg: ast.literal_eval(item.value) for item in csharp_writers[0].keywords}, {"encoding": "utf-8"})
+        with tempfile.TemporaryDirectory(prefix="mixel-powershell-encoding-") as temporary:
+            for index, writer in enumerate(writers):
+                encoding = next((item.value.value for item in writer.keywords
+                                 if item.arg == "encoding" and isinstance(item.value, ast.Constant)), None)
+                self.assertEqual(encoding, "utf-8-sig")
+                self.assertIsInstance(writer.args[0], ast.Constant)
+                original = writer.args[0].value
+                path = Path(temporary) / (str(index) + ".ps1")
+                path.write_text(original, encoding=encoding)
+                payload = path.read_bytes()
+                self.assertTrue(payload.startswith(codecs.BOM_UTF8))
+                self.assertEqual(payload.decode("utf-8-sig"), original)
+                if "préflight" in original:
+                    # Windows PowerShell5 reads an unmarked source file with
+                    # its legacy ANSI codepage; this is a bounded cp1252 decode
+                    # control, not execution of that unavailable local engine.
+                    self.assertNotEqual(original.encode("utf-8").decode("cp1252"), original)
+                    self.assertNotIn("préflight", original.encode("utf-8").decode("cp1252"))
+        print("PASS: all three generated PowerShell source files retain UTF8 BOM and exact Unicode; original unmarked accented source changes under the explicit legacy cp1252 decode control. Actual Desktop5 execution remains required on Windows.", flush=True)
+
     def test_current_caller_launch_exact_arguments_and_owned_handoff(self):
         source = (ROOT / "scripts/test-support-lease-standard-windows.ps1").read_text()
         launch = (ROOT / "scripts/test-support-launch-windows.ps1").read_text()
@@ -200,12 +233,15 @@ public static class DirectCallerLaunchControl {
 ''' + method[0] + "\n" + identity[0] + "\n}"
         with tempfile.TemporaryDirectory(prefix="mixel-direct-launch-source-") as temporary:
             root = Path(temporary)
-            (root / "control.cs").write_text(csharp)
+            # ReadAllText below decodes the C# expectation as UTF8 on every
+            # runner, regardless of Python's locale-dependent write default.
+            (root / "control.cs").write_text(csharp, encoding="utf-8")
             script = root / "control.ps1"
             script.write_text(r'''
 param([string]$Repository,[string]$ControlRoot,[string]$ExpectedEdition)
 $ErrorActionPreference='Stop'
 if($PSVersionTable.PSEdition -cne $ExpectedEdition -or ($ExpectedEdition -ceq 'Desktop' -and ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1))) { throw 'Actual required PowerShell edition/version missing' }
+Write-Host "Actual mocked launch control PowerShell: $($PSVersionTable.PSVersion); $($PSVersionTable.PSEdition)"
 # Compile the complete actual augmented class as well as executing the isolated
 # launch body with mocks. No method in the real class is invoked here.
 $standard=[IO.File]::ReadAllText((Join-Path $Repository 'scripts/test-support-lease-standard-windows.ps1')).Replace("`r`n","`n")
@@ -253,7 +289,17 @@ if(-not $refused -or [DirectCallerLaunchControl]::Queries -ne 0) {throw 'Unowned
 $refused=$false;try { [void][DirectCallerLaunchControl]::StartCurrentCallerNative('owned path préflight/lease-standard.exe') } catch { $refused=$_.Exception.InnerException -is [ComponentModel.Win32Exception] -and $_.Exception.InnerException.NativeErrorCode -eq 87 -and $_.Exception.InnerException.Message.Contains('nativeError=87') }
 if(-not $refused -or [DirectCallerLaunchControl]::Calls -ne 2 -or [DirectCallerLaunchControl]::Owned -ne 1) { throw 'Failed direct creation returned ownership or retried with another context' }
 Write-Host 'PASS: actual extracted current-caller creation uses explicit Unicode/spaced path, quoted no-argument command, flags0/inheritfalse/environmentNULL/desktopNULL, exact owned handle handoff and fatal failure without retry; caller process and retained child primary TOKEN_QUERY identities match despite distinct effective thread identity; 14 identity/open/close/constructor/dispose combinations preserve both independent owned closes, exact immediate native error numbers, simultaneous close failures and primary-failure facts; failed close error0 remains fatal; unowned PID refused before queries. APIs mocked only.'
-''')
+''', encoding="utf-8-sig")
+            # Replay the reviewed unmarked-source ANSI decoding defect using
+            # the actual launch body and unchanged Unicode C# expectation.
+            # Core executes this deliberately decoded source; it is not PS5.
+            original_ansi = root / "original-ansi-decoded.ps1"
+            original_ansi.write_text(script.read_bytes()[len(codecs.BOM_UTF8):].decode("cp1252"), encoding="utf-8-sig")
+            engine, edition = self.powershell_engines()[0]
+            negative = subprocess.run([engine, "-NoProfile", "-File", str(original_ansi), "-Repository", str(ROOT), "-ControlRoot", str(root), "-ExpectedEdition", edition], capture_output=True, text=True, timeout=30)
+            self.assertNotEqual(negative.returncode, 0)
+            self.assertIn("Direct launch changed context or arguments", negative.stdout + negative.stderr)
+            print("PASS: original explicit ANSI-decoded Unicode argument fails the actual extracted strict launch body before ownership; corrected BOM script is exercised next. This negative replay uses Core and mocked APIs, not native Desktop5.", flush=True)
             for engine, edition in self.powershell_engines():
                 result = subprocess.run([engine, "-NoProfile", "-File", str(script), "-Repository", str(ROOT), "-ControlRoot", str(root), "-ExpectedEdition", edition], capture_output=True, text=True, timeout=30)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -267,6 +313,7 @@ Write-Host 'PASS: actual extracted current-caller creation uses explicit Unicode
 param([string]$Repository,[string]$ControlRoot,[string]$ExpectedEdition)
 $ErrorActionPreference='Stop'
 if($PSVersionTable.PSEdition -cne $ExpectedEdition -or ($ExpectedEdition -ceq 'Desktop' -and ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1))) { throw 'Actual required PowerShell edition/version missing' }
+Write-Host "Actual mocked four-phase control PowerShell: $($PSVersionTable.PSVersion); $($PSVersionTable.PSEdition)"
 $source=[IO.File]::ReadAllText((Join-Path $Repository 'scripts/test-support-lease-standard-windows.ps1'))
 $tokens=$null;$errors=$null;$ast=[Management.Automation.Language.Parser]::ParseInput($source,[ref]$tokens,[ref]$errors)
 if($errors.Count) { throw 'Current helper does not parse' }
@@ -342,7 +389,7 @@ $oldMatrixReached=$true
 $message='';try {& ([scriptblock]::Create($final[0].Extent.Text))} catch {$message=$_.Exception.Message}
 if(-not $oldMatrixReached -or $message -cne 'Exact retained direct source failure') {throw 'Deferred direct failure no longer fatal'}
 Microsoft.PowerShell.Utility\Write-Host 'PASS: exact current-caller PowerShell functions execute four strict same-executable phases, retained owner drop/fresh absence and independent cleanup; 15 identity/native-state/close/lifetime/cleanup mutations refuse; failure is retained while the old matrix runs and rethrown after the unchanged mandatory gate. APIs mocked only; no standard/app qualification.'
-''')
+''', encoding="utf-8-sig")
             for index, (engine, edition) in enumerate(self.powershell_engines()):
                 control_root = root / ("engine-" + str(index))
                 control_root.mkdir()
@@ -652,8 +699,8 @@ foreach($case in @(@('', $false, ''), @('guard-unavailable',$false,'cannot safel
 }
 if($launch.IndexOf("`$fixtureStage = 'verify ordinary native consent baseline'") -gt $launch.IndexOf('$initialHealth = Get-MixelSupportRuntimeHealth')) { throw 'Baseline stage attribution follows the native observation' }
 Write-Host 'PASS: actual PowerShell reader accepts 12 valid observations including unknown native error0, refuses 26 malformed records including all five singleton string arrays and eight impossible cleanup states plus an oversize file, selects immutable initial/unnamed files with a retained FileShare.Read reader, and preserves five native baseline outcomes including fatal unavailable/error5 and both fatal cleanup gates.'
-Write-Host "Actual PowerShell version: $($PSVersionTable.PSVersion)"
-''')
+Write-Host "Actual PowerShell version: $($PSVersionTable.PSVersion); $($PSVersionTable.PSEdition)"
+''', encoding="utf-8-sig")
             for index, engine in enumerate(engines):
                 control_root = root / ("engine-" + str(index))
                 control_root.mkdir()
