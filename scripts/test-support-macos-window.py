@@ -415,29 +415,99 @@ if original {
  pump(until: { manager.state()==(0,0,0) }, timeout:0.1)
 
  let started=ProcessInfo.processInfo.systemUptime
- for id: Int64 in [2,3,4] { manager.add(id); mode[id]="hung"; manager.onClose(windowId:id) }
+ manager.add(2); mode[2]="hung"; manager.onClose(windowId:2)
  manager.onClose(windowId:2)
- assert(manager.state()==(0,3,3))
- DispatchQueue.main.asyncAfter(deadline: .now()+4.95) {
-  if let reply=callbacks[3] { inReply=true; reply(nil); inReply=false }
- }
- DispatchQueue.main.asyncAfter(deadline: .now()+5.05) {
-  if let reply=callbacks[4] { inReply=true; reply(nil); reply(nil); inReply=false }
-  events.append("late-replies")
- }
- pump(until: { manager.state()==(0,0,0) && events.contains("late-replies") }, timeout:7)
- for id: Int64 in [1,2,3,4] {
+ assert(manager.state()==(0,1,1))
+ pump(until: { manager.state()==(0,0,0) }, timeout:20)
+ for id: Int64 in [1,2] {
   assert(events.filter { $0=="send:"+String(id) }.count==1)
   assert(events.filter { $0=="shutdown:"+String(id) }.count==1)
  }
  let elapsed=shutdownTimes[2]!-started
- assert(elapsed>=4.9 && elapsed<6.5, "Hung fallback did not use actual five-second main queue deadline")
- assert(shutdownTimes[3]!<shutdownTimes[2]!, "Pre-timeout reply did not win")
- assert(shutdownTimes[4]!>=shutdownTimes[2]!-0.05, "Late reply did not use fallback")
- print("PASS: corrected exact native close retains engine through async handler/reply, defers release outside callback, rejects reentrant close, cancels successful timeout, and releases once for actual 5s hung fallback and both reply/timeout race orders")
+ assert(elapsed>=4.9 && elapsed<20, "Hung fallback did not reach its actual five-second main queue deadline")
+ print("PASS: corrected exact native close retains engine through async handler/reply, defers release outside callback, rejects reentrant close, cancels successful timeout, and releases once for actual 5s hung fallback")
  print("OBSERVED: hung fallback seconds="+String(elapsed))
 }
 print("BOUNDARY: exact extracted Swift methods with asynchronous channel/engine doubles; no packaged Dart or complete remote/file disposal claim")
+'''
+
+
+CLOSE_RACE_SWIFT = r'''
+import Foundation
+typealias FlutterResult = (Any?) -> Void
+var events: [String] = []
+var callbacks: [Int64: FlutterResult] = [:]
+var inReply = false
+func debugPrint(_ value: Any) {}
+
+// Execute the exact extracted production methods with explicit delivery order.
+// A nominal 4.95s callback may run after a queued 5s timer on a loaded host;
+// delivery of a reply also queues its release for a later main-queue turn.
+final class DispatchQueue {
+ static let main = DispatchQueue()
+ var pending: [() -> Void] = []
+ var timers: [DispatchWorkItem] = []
+ func async(execute: @escaping () -> Void) { pending.append(execute) }
+ func asyncAfter(deadline: DispatchTime, execute: DispatchWorkItem) {
+  let remaining = Double(deadline.uptimeNanoseconds - DispatchTime.now().uptimeNanoseconds) / 1e9
+  assert(remaining > 4.9 && remaining <= 5, "Exact production deadline changed")
+  timers.append(execute)
+ }
+ func runMainTurn() { assert(!inReply); let action=pending.removeFirst(); action() }
+ func runAll() { while !pending.isEmpty { runMainTurn() } }
+ func fireTimer() { assert(!inReply && timers.count==1); if !timers[0].isCancelled { timers[0].perform() } }
+ func reset() { pending.removeAll(); timers.removeAll() }
+}
+final class Engine {
+ let id: Int64
+ init(_ id: Int64) { self.id=id }
+ func shutdown() { assert(!inReply, "Engine shutdown inside platform reply"); events.append("shutdown:"+String(id)) }
+}
+final class WindowChannel {
+ let engine: Engine
+ init(_ engine: Engine) { self.engine=engine }
+ func invokeMethod(fromWindowId: Int64, method: String, arguments: Any?, result: FlutterResult?=nil) {
+  assert(fromWindowId==0 && method=="onDestroy")
+  events.append("send:"+String(engine.id)); callbacks[engine.id]=result
+ }
+}
+final class BaseFlutterWindow {
+ let engine: Engine
+ lazy var windowChannel=WindowChannel(engine)
+ init(_ id: Int64) { engine=Engine(id) }
+ deinit { engine.shutdown() }
+}
+final class MultiWindowManager {
+ __FIELDS__
+ __CLOSE__
+ __FINISH__
+ func add(_ id: Int64) { windows[id]=BaseFlutterWindow(id) }
+ func state() -> (Int,Int,Int) { __STATE__ }
+}
+func deliverReply(_ id: Int64) {
+ inReply=true; callbacks[id]!(nil); inReply=false
+}
+for order in ["reply-release-first", "timeout-first", "reply-delivered-timeout-before-release"] {
+ events=[]; callbacks=[:]; DispatchQueue.main.reset()
+ let manager=MultiWindowManager(); let id: Int64=1
+ manager.add(id); manager.onClose(windowId:id); manager.onClose(windowId:id)
+ assert(manager.state()==(0,1,1) && events==["send:1"])
+ if order=="reply-release-first" {
+  deliverReply(id)
+  assert(manager.state()==(0,1,1) && events==["send:1"])
+  DispatchQueue.main.runMainTurn(); DispatchQueue.main.fireTimer()
+ } else if order=="timeout-first" {
+  DispatchQueue.main.fireTimer(); deliverReply(id)
+ } else {
+  deliverReply(id); DispatchQueue.main.fireTimer()
+ }
+ deliverReply(id); deliverReply(id); manager.onClose(windowId:id)
+ DispatchQueue.main.runAll(); DispatchQueue.main.fireTimer()
+ assert(manager.state()==(0,0,0) && events==["send:1","shutdown:1"])
+ assert(DispatchQueue.main.timers[0].isCancelled)
+ print("PASS: exact native close queue order "+order+" releases once outside reply, cancels timeout and rejects duplicate/late replies")
+}
+print("BOUNDARY: exact extracted Swift methods with controlled queue delivery; actual five-second fallback is exercised separately")
 '''
 
 
@@ -580,6 +650,16 @@ def native_controls(output, files, framework):
         checked([compiler, "-warnings-as-errors", str(close_path), "-o", str(close_binary)], output, label + "-close-swift-compile")
         close_text = checked([str(close_binary), label], output, label + "-actual-close")
         assert "PASS: " + label + " exact native close" in close_text
+        if label == "corrected":
+            races = CLOSE_RACE_SWIFT.replace("__FIELDS__", declarations).replace("__CLOSE__", on_close).replace(
+                "__FINISH__", finish).replace("__STATE__", state)
+            race_path = output / "actual-close-queue-orders.swift"
+            race_path.write_text(races)
+            race_binary = output / "actual-close-queue-orders"
+            checked([compiler, "-warnings-as-errors", str(race_path), "-o", str(race_binary)], output, "actual-close-queue-orders-compile")
+            race_text = checked([str(race_binary)], output, "actual-close-queue-orders")
+            for order in ("reply-release-first", "timeout-first", "reply-delivered-timeout-before-release"):
+                assert "PASS: exact native close queue order " + order in race_text
     if framework:
         framework = framework.resolve()
         assert framework.name == "FlutterMacOS.framework" and framework.is_dir(), "Actual FlutterMacOS framework required"
