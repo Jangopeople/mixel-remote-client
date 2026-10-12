@@ -22,7 +22,23 @@ $originalParser=Section $original 'function Assert-StandardLeaseSafeResult' 'fun
 if($parser -cne $originalParser) { throw 'Actual source six-field parser drifted.' }
 . ([scriptblock]::Create($parser))
 $core=Section $source "  `$absent = 'ownerFailed=false;" "  Write-AtomicJson (Join-Path `$fixtureRoot 'negative-finished.json')"
-$originalCore=Section $original "  `$absent = 'ownerFailed=false;" "} catch {`n  `$failure = `$_`n  throw`n} finally {"
+function Read-OriginalStandardTerminal([string]$Text) {
+  $tokens=$null; $errors=$null
+  $ast=[Management.Automation.Language.Parser]::ParseInput($Text,[ref]$tokens,[ref]$errors)
+  if($errors.Count) { throw 'Original standard source does not parse.' }
+  # The current-caller comparison has its own $absent variable. Select only
+  # the original top-level terminal, never a function or nested observation.
+  $marker="[void](Invoke-StandardLeaseControl probe `$absent 2 '' `$false `$false)"
+  $terminals=@($ast.EndBlock.Statements|Where-Object {$_ -is [Management.Automation.Language.TryStatementAst] -and $_.Body.Extent.Text.Contains($marker)})
+  if($terminals.Count -ne 1) { throw 'Original standard terminal is missing or duplicated.' }
+  return $terminals[0].Body.Extent.Text
+}
+$originalCore=Read-OriginalStandardTerminal $original
+foreach($changed in @($original.Replace("[void](Invoke-StandardLeaseControl probe `$absent 2 '' `$false `$false)",'changed original call'),($original+"`ntry { [void](Invoke-StandardLeaseControl probe `$absent 2 '' `$false `$false) } finally {}"))) {
+  $refused=$false
+  try { [void](Read-OriginalStandardTerminal $changed) } catch { $refused=$true }
+  if(-not $refused) { throw 'Missing or duplicated original standard terminal was accepted.' }
+}
 $pattern='(?m)^\s*(?:\[void\]\(|\$ownerPid = )Invoke-StandardLeaseControl[^\r\n]+'
 $actualCalls=@([regex]::Matches($core,$pattern)|ForEach-Object{$_.Value.Trim()})
 $originalCalls=@([regex]::Matches($originalCore,$pattern)|ForEach-Object{$_.Value.Trim()})
@@ -286,13 +302,27 @@ $normalFinally=Section $normal "  `$customerCleanupFailure = `$null" '  if ($ord
 if(-not $normalFinally.Contains("try { [MixelOrdinaryTokenFixture]::CloseStartedObservations() }`n  catch")){throw 'Normal fixture close failure skips remaining outer cleanup.'}
 $standardFinally=Section $original "  try { [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses() } catch" '  if ($desktopAccess)'
 if(-not $standardFinally.Contains("try { [MixelOrdinaryTokenFixture]::CloseStartedObservations() } catch")){throw 'Standard source close failure skips remaining outer cleanup.'}
-if([regex]::Matches($original,'(?m)^\s+finally \{ \[MixelOrdinaryTokenFixture\]::CloseStartedObservations\(\) \}$').Count -ne 4){throw 'Source observation stop failures skip exact handle cleanup.'}
+function Assert-OriginalObservationCleanup([string]$Text) {
+  $tokens=$null; $errors=$null
+  $ast=[Management.Automation.Language.Parser]::ParseInput($Text,[ref]$tokens,[ref]$errors)
+  if($errors.Count) { throw 'Original observation source does not parse.' }
+  foreach($name in @('Invoke-StandardLeaseSubsystemObservations','Invoke-StandardLeaseNamespaceObservations')) {
+    $functions=@($ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq $name},$true))
+    if($functions.Count -ne 1 -or [regex]::Matches($functions[0].Body.Extent.Text,'(?m)^\s+finally \{ \[MixelOrdinaryTokenFixture\]::CloseStartedObservations\(\) \}$').Count -ne 2) { throw 'Source observation stop failures skip exact handle cleanup.' }
+  }
+}
+Assert-OriginalObservationCleanup $original
+foreach($changed in @($original.Replace('[MixelOrdinaryTokenFixture]::CloseStartedObservations()','changed-close'),$original.Replace('function Invoke-StandardLeaseNamespaceObservations(', 'function ChangedObservation('))) {
+  $refused=$false
+  try { Assert-OriginalObservationCleanup $changed } catch { $refused=$true }
+  if(-not $refused) { throw 'Missing original observation cleanup was accepted.' }
+}
 Write-Host 'PASS: exact normal fixture ownership source passes seventeen fault/success controls; failed waits and closes retain ownership, later children still clean, thread-close/PID/partial-return failures refuse launch, resumed-thread close failure stays owned and retry never closes a successful handle twice.'
 
 # Keep the exact isolated event/mutex ownership bodies, substituting only their
 # API providers. No imported Windows declaration is compiled or invoked here.
 $isolatedPrefix="if (-not ('MixelIsolatedLeaseControl' -as [type])) { Add-Type @'"+"`n"
-$isolatedBlock=Section $original $isolatedPrefix "`n'@ }`n`nfunction Assert-StandardLeaseSafeResult"
+$isolatedBlock=Section $original $isolatedPrefix "`n'@ }"
 $isolated=$isolatedBlock.Substring($isolatedPrefix.Length)
 $providers=@{
   '  [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool ConvertStringSecurityDescriptorToSecurityDescriptorW(string text, uint version, out IntPtr descriptor, IntPtr size);'='  static bool ConvertStringSecurityDescriptorToSecurityDescriptorW(string text,uint version,out IntPtr descriptor,IntPtr size){if(version!=1||size!=IntPtr.Zero)throw new Exception("Descriptor arguments changed");LastSddl=text;descriptor=new IntPtr(9);return true;}'
@@ -300,6 +330,13 @@ $providers=@{
   '  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern IntPtr CreateMutexW(ref Attributes attributes, bool owner, string name);'='  static IntPtr CreateMutexW(ref Attributes attributes,bool owner,string name){if(owner||attributes.inherit!=0||attributes.descriptor!=new IntPtr(9))throw new Exception("Mutex arguments changed");return Created();}'
   '  [DllImport("kernel32.dll", SetLastError=true)] static extern bool CloseHandle(IntPtr handle);'='  static bool CloseHandle(IntPtr handle){long value=handle.ToInt64();int count;Closed.TryGetValue(value,out count);Closed[value]=count+1;SourceLastError=6;return !CloseFailure.Contains(value);}'
   '  [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr memory);'='  static IntPtr LocalFree(IntPtr memory){if(memory!=new IntPtr(9))throw new Exception("Descriptor ownership changed");Freed++;SourceLastError=0;return IntPtr.Zero;}'
+  # These read-only diagnostics are outside the original creation/ownership
+  # control. Throw if any is reached; compile the entire current class.
+  ('  [DllImport("kernel32.dll", EntryPoint="OpenEventW", CharSet=CharSet.Unicode, ExactSpelling=true, SetLastError=true)]'+"`n"+'  static extern IntPtr ReadOnlyOpenEvent(uint access, bool inherit, string name);')='  static IntPtr ReadOnlyOpenEvent(uint access,bool inherit,string name){throw new InvalidOperationException("Out-of-scope descriptor query");}'
+  ('  [DllImport("advapi32.dll", EntryPoint="GetSecurityInfo", ExactSpelling=true)]'+"`n"+'  static extern uint ReadOnlyGetSecurityInfo(IntPtr handle, uint objectType, uint information, out IntPtr owner, out IntPtr group, out IntPtr dacl, out IntPtr sacl, out IntPtr descriptor);')='  static uint ReadOnlyGetSecurityInfo(IntPtr handle,uint objectType,uint information,out IntPtr owner,out IntPtr group,out IntPtr dacl,out IntPtr sacl,out IntPtr descriptor){throw new InvalidOperationException("Out-of-scope descriptor query");}'
+  ('  [DllImport("advapi32.dll", EntryPoint="GetSecurityDescriptorDacl", ExactSpelling=true, SetLastError=true)]'+"`n"+'  static extern bool ReadOnlyGetDacl(IntPtr descriptor, out bool present, out IntPtr acl, out bool defaulted);')='  static bool ReadOnlyGetDacl(IntPtr descriptor,out bool present,out IntPtr acl,out bool defaulted){throw new InvalidOperationException("Out-of-scope descriptor query");}'
+  ('  [DllImport("advapi32.dll", EntryPoint="GetSecurityDescriptorSacl", ExactSpelling=true, SetLastError=true)]'+"`n"+'  static extern bool ReadOnlyGetSacl(IntPtr descriptor, out bool present, out IntPtr acl, out bool defaulted);')='  static bool ReadOnlyGetSacl(IntPtr descriptor,out bool present,out IntPtr acl,out bool defaulted){throw new InvalidOperationException("Out-of-scope descriptor query");}'
+  ('  [DllImport("kernel32.dll", EntryPoint="LocalFree", ExactSpelling=true, SetLastError=true)]'+"`n"+'  static extern IntPtr ReadOnlyLocalFree(IntPtr memory);')='  static IntPtr ReadOnlyLocalFree(IntPtr memory){throw new InvalidOperationException("Out-of-scope descriptor query");}'
 }
 foreach($declaration in $providers.Keys){
   if([regex]::Matches($isolated,[regex]::Escape($declaration)).Count -ne 1){throw 'Isolated ownership API provider boundary drifted.'}

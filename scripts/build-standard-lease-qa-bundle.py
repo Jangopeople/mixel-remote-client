@@ -22,6 +22,7 @@ SOURCES = (
     "scripts/support-invite-guard.rs",
     "scripts/test-support-lease.py",
     "scripts/test-support-lease-standard-windows.ps1",
+    "scripts/test-support-directory-security.cs",
 )
 ADAPTERS = {
     "run-standard-lease-qa.ps1": "scripts/test-support-lease-interactive-windows.ps1",
@@ -280,7 +281,7 @@ def build(output):
                            "sha256": digest(path)} for path in members]}
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     print("PASS: exact GUID-only console/GUI fixtures compile with static CRT, reject argv, load and write owned results; this is compilation/loader proof only.")
-    print("PASS: exact 12-member QA package inventory verified; two known compiler auxiliary outputs excluded without reading their contents.")
+    print("PASS: exact 13-member QA package inventory verified; two known compiler auxiliary outputs excluded without reading their contents.")
     print("NOT QUALIFIED: actual standard-user desktop consent and signed customer applications remain separate required gates.")
 
 

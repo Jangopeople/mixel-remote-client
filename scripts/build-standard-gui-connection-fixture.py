@@ -20,6 +20,7 @@ SOURCES = (
     "scripts/test-standard-gui-connection.py", "scripts/test-standard-gui-connection-source.ps1",
     "scripts/build-standard-lease-qa-bundle.py",
     ".github/workflows/preflight.yml",
+    "scripts/test-support-directory-security.cs",
 )
 
 

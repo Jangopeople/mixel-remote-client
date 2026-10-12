@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Pure source, mocked documented-API, and scoped workflow controls; no Windows calls."""
 import importlib.util
+import contextlib
+import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -10,6 +13,8 @@ import subprocess
 import tempfile
 import time
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("gui_builder", ROOT / "scripts/build-standard-gui-connection-fixture.py")
@@ -160,6 +165,49 @@ class GuiConnectionSourceTests(unittest.TestCase):
             self.assertEqual(list(workspace.iterdir()),[])
             self.assertNotIn('source-manifest.json',{p.name for p in evidence.iterdir()})
             with self.assertRaises(FileExistsError):builder.prepare(workspace,evidence,'Global\\Mixel-Remote-Standard-Lease-'+'b'*32,False)
+
+    def test_actual_manifest_binds_new_helper_and_refuses_missing_or_tampered_source(self):
+        # Execute real source generation/Git binding/manifest writing. The native
+        # compiler boundary uses an explicit synthetic PE, never an OS child.
+        with tempfile.TemporaryDirectory(prefix='mixel-gui-helper-binding-') as temporary:
+            root=Path(temporary).resolve()
+            for name in builder.SOURCES:
+                path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes((ROOT/name).read_bytes())
+            for command in (('init','--quiet'),('config','core.autocrlf','false'),('add','.'),('-c','user.name=Mixel QA','-c','user.email=qa@example.test','commit','--quiet','-m','Owned GUI helper binding')):
+                subprocess.run(['git',*command],cwd=root,check=True,capture_output=True)
+            helper='scripts/test-support-directory-security.cs';original=(root/helper).read_bytes()
+            qa_spec=importlib.util.spec_from_file_location('gui_synthetic_pe',ROOT/'scripts/test-standard-lease-qa-bundle.py')
+            qa=importlib.util.module_from_spec(qa_spec);qa_spec.loader.exec_module(qa)
+            pe=qa.owned_pe();struct.pack_into('<H',pe,220,3)
+            compiler=str(root/'mock-native-rustc');compiled=[];real_run=subprocess.run
+
+            def run(command,**kwargs):
+                if command[0]!=compiler:return real_run(command,**kwargs)
+                self.assertEqual(command[1:7],['--edition','2021','-D','warnings','-C','target-feature=+crt-static'])
+                self.assertEqual(command[-2],'-o');Path(command[-1]).write_bytes(pe);compiled.append(command)
+                return subprocess.CompletedProcess(command,0,stdout=b'',stderr=b'')
+
+            environment={**os.environ,'GITHUB_ACTIONS':'true','GITHUB_JOB':'standard-gui-connection-observation',
+                         'MIXEL_GUI_CONNECTION_OBSERVATION':'1','RUSTC_BIN':compiler}
+            with patch.object(builder,'ROOT',root),patch.object(builder,'os',SimpleNamespace(name='nt',environ=environment)),patch.object(builder.subprocess,'run',side_effect=run):
+                for control in ('valid','missing','tampered'):
+                    workspace=root/(control+'-workspace');evidence=root/(control+'-evidence');workspace.mkdir();evidence.mkdir()
+                    if control=='missing':(root/helper).unlink()
+                    elif control=='tampered':(root/helper).write_bytes(original+b'// source tamper\n')
+                    if control=='valid':
+                        with contextlib.redirect_stdout(io.StringIO()):builder.prepare(workspace,evidence,'Global\\Mixel-Remote-Standard-Lease-'+'e'*32)
+                        manifest=json.loads((evidence/'source-manifest.json').read_text(encoding='utf-8'))
+                        binding=next(item for item in manifest['sources'] if item['path']==helper)
+                        self.assertEqual(binding,{'path':helper,'bytes':len(original),'sha256':hashlib.sha256(original).hexdigest()})
+                        self.assertEqual(len(manifest['sources']),11)
+                        self.assertFalse(any(manifest[key] for key in ('standardQualified','fullEightQualified','customerAppQualified','finalQualified')))
+                    else:
+                        with self.assertRaises(FileNotFoundError if control=='missing' else ValueError):
+                            builder.prepare(workspace,evidence,'Global\\Mixel-Remote-Standard-Lease-'+'e'*32)
+                        self.assertFalse((workspace/'gui-connection.exe').exists())
+                        self.assertFalse((evidence/'source-manifest.json').exists())
+                    (root/helper).write_bytes(original)
+            self.assertEqual(len(compiled),1)
 
     def test_actual_documented_helper_with_mocked_api_faults(self):
         rustc=self.compiler()

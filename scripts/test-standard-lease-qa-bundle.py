@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
 """Exercise portable QA source boundaries and malformed PE/result refusals."""
 import copy
+import contextlib
+import hashlib
 import importlib.util
+import io
+import json
+import os
+import shutil
 import struct
 import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 from pathlib import Path
@@ -74,7 +81,7 @@ class PortableSourceTests(unittest.TestCase):
             subprocess.run(["git", "add", "."], cwd=root, check=True, capture_output=True)
             subprocess.run(["git", "-c", "user.name=Mixel QA", "-c", "user.email=qa@example.test", "commit", "--quiet", "-m", "Owned QA source control"], cwd=root, check=True, capture_output=True)
             with patch.object(bundle, "ROOT", root):
-                self.assertEqual(len(bundle.git_source_bindings()), 11)
+                self.assertEqual(len(bundle.git_source_bindings()), 12)
                 builder = root / bundle.BUILD_SOURCE
                 original = builder.read_bytes()
                 builder.write_bytes(original + b"changed builder\n")
@@ -157,7 +164,7 @@ class OwnedPackageInventoryTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "file inventory differs"):
                 bundle.bundle_members(root)
             bundle.remove_owned_compiler_sidecars(root / "fixture")
-            self.assertEqual(len(bundle.bundle_members(root)), 12)
+            self.assertEqual(len(bundle.bundle_members(root)), 13)
             self.assertEqual({p.relative_to(root).as_posix() for p in bundle.bundle_members(root)}, bundle.PACKAGE_MEMBERS)
 
     def test_unexpected_missing_or_nested_members_are_refused(self):
@@ -226,6 +233,184 @@ class RetainedLoaderResultTests(unittest.TestCase):
         for changed in (None, {**record, "extra": True}, {key: value for key, value in record.items() if key != "pid"}):
             with self.assertRaises(ValueError):
                 bundle.safe_result(changed, 123)
+
+
+class FreshDependencyPackagingTests(unittest.TestCase):
+    """Run actual Git/source/package/PowerShell validation; mock native compile/load only."""
+    helper = "scripts/test-support-directory-security.cs"
+
+    def materialize_repository(self, root):
+        names = (*bundle.SOURCES, *bundle.ADAPTERS.values(), bundle.BUILD_SOURCE, *bundle.BUILD_CONTROLS)
+        for name in names:
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes((ROOT / name).read_bytes())
+        for command in (("init", "--quiet"), ("config", "core.autocrlf", "false"), ("add", "."),
+                        ("-c", "user.name=Mixel QA", "-c", "user.email=qa@example.test", "commit", "--quiet", "-m", "Owned fresh package controls")):
+            subprocess.run(["git", *command], cwd=root, check=True, capture_output=True)
+        return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+
+    def build_package(self, root, head):
+        output = root / "fresh-package"
+        real_check_output, real_run = subprocess.check_output, subprocess.run
+        real_spec = importlib.util.spec_from_file_location
+        compiler = str(root / "mock-native-rustc")
+        native_compilations = []
+
+        def check_output(command, **kwargs):
+            if command == [compiler, "--version"]:
+                return "rustc 1.75.0 (owned compiler mock)\n"
+            return real_check_output(command, **kwargs)
+
+        def run(command, **kwargs):
+            if command[0] != compiler:
+                return real_run(command, **kwargs)
+            self.assertEqual(command[-2], "-o")
+            source, binary = Path(command[-3]), Path(command[-1])
+            arguments = command[1:-3]
+            self.assertIn(arguments, [bundle.STATIC_ARGS, ["--edition", "2021", "-D", "warnings"]])
+            if arguments == bundle.STATIC_ARGS:
+                self.assertIn(bundle.REFUSAL, source.read_text(encoding="utf-8"))
+            data = owned_pe()
+            struct.pack_into("<H", data, 152 + 68, 2 if binary.stem.endswith("-gui") else 3)
+            binary.write_bytes(data)
+            native_compilations.append(binary.name)
+            return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
+
+        environment = {**os.environ, "GITHUB_ACTIONS": "true", "GITHUB_JOB": bundle.JOB,
+                       "GITHUB_SHA": head, "GITHUB_RUN_ID": "123", "RUSTC_BIN": compiler}
+
+        def source_spec(name, filename):
+            spec = real_spec(name, filename)
+            execute = spec.loader.exec_module
+
+            def load_exporter(module):
+                execute(module)
+                # Execute the real source exporter with only its platform/native
+                # boundary mocked; never alter the source or shared os module.
+                module.os = SimpleNamespace(name="nt", environ=environment)
+            spec.loader.exec_module = load_exporter
+            return spec
+
+        with patch.object(bundle, "ROOT", root), patch.object(bundle, "os", SimpleNamespace(name="nt", environ=environment)), \
+             patch.object(bundle.importlib.util, "spec_from_file_location", side_effect=source_spec), \
+             patch.object(bundle.shutil, "which", return_value=compiler), \
+             patch.object(bundle.subprocess, "check_output", side_effect=check_output), \
+             patch.object(bundle.subprocess, "run", side_effect=run), \
+             patch.object(bundle, "loader_smoke", return_value={"scope": "mocked-native-loader-only", "standardUserQualified": False}), \
+             contextlib.redirect_stdout(io.StringIO()) as captured:
+            bundle.build(output)
+        self.assertEqual(native_compilations, ["lease-standard.exe", "lease-standard-gui.exe"] * 2)
+        self.assertIn("exact 13-member", captured.getvalue())
+        return output
+
+    def test_actual_fresh_package_includes_exact_helper_and_source_binding(self):
+        with tempfile.TemporaryDirectory(prefix="mixel-fresh-qa-build-") as folder:
+            root = Path(folder).resolve()
+            head = self.materialize_repository(root)
+            inherited = str(root / "inherited-compiler-must-not-execute")
+            with patch.dict(os.environ, {"RUSTC_BIN": inherited}):
+                # The private native mock must override exporter precedence,
+                # and leave the caller's configured compiler untouched.
+                output = self.build_package(root, head)
+                self.assertEqual(os.environ["RUSTC_BIN"], inherited)
+            manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+            self.assertIs(manifest["runtimeQualified"], False)
+            self.assertEqual({entry["path"] for entry in manifest["files"]}, bundle.PACKAGE_MEMBERS)
+            self.assertEqual(len(manifest["files"]), 13)
+            binding = next(entry for entry in manifest["buildSourceBindings"] if entry["path"] == self.helper)
+            member = next(entry for entry in manifest["files"] if entry["path"] == self.helper)
+            self.assertEqual(binding, member)
+            self.assertEqual((output / self.helper).read_bytes(), (ROOT / self.helper).read_bytes())
+            for target, source in bundle.ADAPTERS.items():
+                self.assertEqual((output / target).read_bytes(), (ROOT / source).read_bytes())
+
+    def test_missing_tampered_or_untracked_helper_refuses_before_output(self):
+        with tempfile.TemporaryDirectory(prefix="mixel-fresh-qa-refusal-") as folder:
+            root = Path(folder).resolve()
+            head = self.materialize_repository(root)
+            path = root / self.helper
+            original = path.read_bytes()
+            environment = {**os.environ, "GITHUB_ACTIONS": "true", "GITHUB_JOB": bundle.JOB,
+                           "GITHUB_SHA": head, "GITHUB_RUN_ID": "123"}
+            with patch.object(bundle, "ROOT", root), patch.object(bundle, "os", SimpleNamespace(name="nt", environ=environment)), \
+                 patch.object(bundle.shutil, "which", side_effect=AssertionError("No compiler lookup before source binding")):
+                path.unlink()
+                with self.assertRaisesRegex(ValueError, "missing or outside"):
+                    bundle.build(root / "missing-refused")
+                path.write_bytes(original + b"// tampered source\n")
+                with self.assertRaisesRegex(ValueError, "exact committed blob"):
+                    bundle.build(root / "tampered-refused")
+                path.write_bytes(original)
+                subprocess.run(["git", "rm", "--cached", self.helper], cwd=root, check=True, capture_output=True)
+                subprocess.run(["git", "-c", "user.name=Mixel QA", "-c", "user.email=qa@example.test", "commit", "--quiet", "-m", "Untrack owned helper"], cwd=root, check=True, capture_output=True)
+                environment["GITHUB_SHA"] = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+                with self.assertRaises(subprocess.CalledProcessError):
+                    bundle.build(root / "untracked-refused")
+            self.assertFalse(any(path.name.endswith("-refused") for path in root.iterdir()))
+
+    def test_actual_powershell_fresh_validators_refuse_missing_tampered_hash_and_extra_members(self):
+        shell = shutil.which("pwsh") or shutil.which("powershell")
+        if not shell:
+            self.skipTest("PowerShell is unavailable; actual validator controls require Core or Desktop")
+        with tempfile.TemporaryDirectory(prefix="mixel-fresh-qa-validators-") as folder:
+            root = Path(folder).resolve()
+            output = self.build_package(root, self.materialize_repository(root))
+            original_manifest = (output / "manifest.json").read_bytes()
+            original_helper = (output / self.helper).read_bytes()
+            for target, source in bundle.ADAPTERS.items():
+                text = (ROOT / source).read_text(encoding="utf-8-sig")
+                start = text.index("function Assert-PortableLeaseInteger(")
+                end = text.index("\n$bundle=Assert-PortableLeaseBundle", start)
+                verifier = root / (target + "-pure-controls.ps1")
+                verifier.write_text("param([string]$Bundle,[string]$Digest)\n$ErrorActionPreference='Stop'\n" + text[start:end] +
+                                    "\n$result=Assert-PortableLeaseBundle $Bundle $Digest\nif($result.Manifest.files.Count -ne 13 -or $result.Manifest.buildSourceBindings.Count -ne 12 -or $result.Manifest.runtimeQualified){throw 'Fresh scope changed.'}\nWrite-Host 'PASS: actual fresh package validator.'\n", encoding="utf-8-sig", newline="\n")
+
+                def validate(expect_success, expected_marker=None, digest=None):
+                    actual_digest = digest or hashlib.sha256((output / "manifest.json").read_bytes()).hexdigest()
+                    result = subprocess.run([shell, "-NoProfile", "-NonInteractive", "-File", str(verifier), "-Bundle", str(output), "-Digest", actual_digest], capture_output=True, text=True, encoding="utf-8", timeout=30)
+                    self.assertEqual(result.returncode == 0, expect_success, result.stdout + result.stderr)
+                    if expected_marker:
+                        self.assertIn(expected_marker, result.stdout + result.stderr)
+
+                with self.subTest(adapter=target, control="valid"):
+                    validate(True)
+                with self.subTest(adapter=target, control="trusted-digest"):
+                    validate(False, "separately trusted SHA256", "0" * 64)
+                with self.subTest(adapter=target, control="missing-helper"):
+                    (output / self.helper).unlink()
+                    validate(False)
+                    (output / self.helper).write_bytes(original_helper)
+                with self.subTest(adapter=target, control="tampered-helper"):
+                    (output / self.helper).write_bytes(original_helper + b"// tampered\n")
+                    validate(False, "member hash or byte count changed")
+                    # Even a newly trusted file inventory cannot contradict its source binding.
+                    manifest = json.loads(original_manifest)
+                    member = next(item for item in manifest["files"] if item["path"] == self.helper)
+                    member.update(bytes=(output / self.helper).stat().st_size, sha256=hashlib.sha256((output / self.helper).read_bytes()).hexdigest())
+                    (output / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+                    validate(False, "exact build source binding")
+                    (output / self.helper).write_bytes(original_helper)
+                    (output / "manifest.json").write_bytes(original_manifest)
+                for control in ("missing-member", "missing-binding", "wrong-source-hash", "duplicate-binding", "extra-member"):
+                    with self.subTest(adapter=target, control=control):
+                        manifest = json.loads(original_manifest)
+                        if control == "missing-member":
+                            manifest["files"] = [item for item in manifest["files"] if item["path"] != self.helper]
+                        elif control == "missing-binding":
+                            manifest["buildSourceBindings"] = [item for item in manifest["buildSourceBindings"] if item["path"] != self.helper]
+                        elif control == "wrong-source-hash":
+                            next(item for item in manifest["buildSourceBindings"] if item["path"] == self.helper)["sha256"] = "0" * 64
+                        elif control == "duplicate-binding":
+                            manifest["buildSourceBindings"][-1] = next(item for item in manifest["buildSourceBindings"] if item["path"] == self.helper)
+                        else:
+                            (output / "scripts/extra.cs").write_bytes(b"extra source")
+                        (output / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+                        validate(False)
+                        (output / "manifest.json").write_bytes(original_manifest)
+                        if control == "extra-member":
+                            (output / "scripts/extra.cs").unlink()
+                validate(True)
 
 
 if __name__ == "__main__":
