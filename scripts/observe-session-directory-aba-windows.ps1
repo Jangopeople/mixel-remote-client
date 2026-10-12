@@ -127,7 +127,7 @@ $script:abaDeferredFailure=$null
 $pins=ConvertFrom-Json @'
 {
   "support-invite-guard.rs": "4b48b7995b36cc9662958ef8753be70ef0b6cf35626b7264f0151bc553293f29",
-  "test-session-directory-access.cs": "bf291d27fcdb4aec3cae1b19b29f70491c74159dafba5e49642746cbf6233379",
+  "test-session-directory-access.cs": "65fc503abd02da1fc50f0e2abe73a747fd21468512298376cea73062422b0a64",
   "test-support-directory-security.cs": "3f70bcef70508b264a9559dbb9f7fc9bdbb0c3e28ea7929008dc084dec6d973e",
   "test-support-launch-windows.ps1": "765b98c6324161018321eadb3528a14a844dc4dd1bee1df158c9f68db6c8af8e",
   "test-support-lease-standard-windows.ps1": "a9b0bf8ee68209f78a82ca4260c9d35faf10449a25f5976775731e98042a057f",
