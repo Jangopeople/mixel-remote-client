@@ -602,7 +602,7 @@ public static class MixelIsolatedLeaseControl {
 }
 '@ }
 
-function Write-LeaseContextFailure([ValidateSet('job-membership','job-limits','owned-world-descriptor')][string]$Operation, [Exception]$Failure) {
+function Write-LeaseContextFailure([ValidateSet('job-membership','job-limits','explicit-directory-access','owned-world-descriptor')][string]$Operation, [Exception]$Failure) {
   $actual = $Failure
   for ($depth = 0; $depth -lt 8 -and $actual -is [Management.Automation.MethodInvocationException] -and $actual.InnerException; $depth++) {
     $actual = $actual.InnerException
@@ -685,6 +685,94 @@ function Invoke-LeaseChildJobLimitsObservation([uint32]$ControlPid) {
     }
     if ($failures.Count -gt 0) { throw [AggregateException]::new('Owned child job-limit observation failed.', $failures) }
   } catch { Write-LeaseContextFailure job-limits $_.Exception }
+}
+
+function Read-StandardChildDirectoryAccess([uint32]$ExpectedPid) {
+  $path = Join-Path $fixtureRoot 'fixture-directory-access.json'
+  if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw 'Owned explicit-directory observation is missing.' }
+  $text = [IO.File]::ReadAllText($path)
+  if ($text.Length -gt 4096) { throw 'Owned explicit-directory observation exceeds its bound.' }
+  if (-not $text.TrimStart().StartsWith('{') -or -not $text.TrimEnd().EndsWith('}')) { throw 'Owned explicit-directory root must be an object.' }
+  $record = $text | ConvertFrom-Json
+  $expected = @('schema','pid','scope','route','sessionStatus','sessionError','sessionId','loaderStatus','loaderError','unloadStatus','unloadError','records') | Sort-Object
+  if ((@($record.PSObject.Properties.Name | Sort-Object) -join ',') -cne ($expected -join ',')) { throw 'Owned explicit-directory fields changed.' }
+  foreach ($name in @('schema','pid','sessionError','loaderError','unloadError')) {
+    $value = $record.$name
+    if (-not ($value -is [int] -or $value -is [long] -or $value -is [uint32] -or $value -is [uint64]) -or
+        $value -lt 0 -or $value -gt [uint32]::MaxValue) { throw 'Owned explicit-directory integer is not bounded.' }
+  }
+  foreach ($name in @('scope','route','sessionStatus','loaderStatus','unloadStatus')) {
+    if ($record.$name -isnot [string]) { throw 'Owned explicit-directory classification must be a scalar string.' }
+  }
+  if ($record.schema -ne 1 -or $ExpectedPid -eq 0 -or $record.pid -ne $ExpectedPid -or
+      $record.scope -cne 'ExplicitDirectoryAccessOnly' -or $record.route -cne 'ActualEventRouteUnmeasured' -or
+      $record.sessionStatus -cnotin @('available','error','unqueried') -or
+      $record.loaderStatus -cnotin @('available','load-error','export-error','layout-error') -or
+      $record.unloadStatus -cnotin @('closed','failed','not-loaded') -or $record.records -isnot [array]) { throw 'Owned explicit-directory identity/scope changed.' }
+  if ($record.sessionStatus -ceq 'available') {
+    $value = $record.sessionId
+    if (-not ($value -is [int] -or $value -is [long] -or $value -is [uint32] -or $value -is [uint64]) -or
+        $value -lt 0 -or $value -gt [uint32]::MaxValue -or $record.sessionError -ne 0) { throw 'Owned directory session is not an actual bounded DWORD.' }
+  } elseif ($null -ne $record.sessionId -or ($record.sessionStatus -ceq 'unqueried' -and $record.sessionError -ne 0)) { throw 'Unmeasured directory session contains invented facts.' }
+  if (($record.loaderStatus -ceq 'layout-error') -ne ($record.sessionStatus -ceq 'unqueried') -or
+      ($record.loaderStatus -cin @('available','layout-error') -and $record.loaderError -ne 0) -or
+      ($record.loaderStatus -cin @('load-error','layout-error') -and ($record.unloadStatus -cne 'not-loaded' -or $record.unloadError -ne 0)) -or
+      ($record.loaderStatus -cin @('available','export-error') -and $record.unloadStatus -cnotin @('closed','failed')) -or
+      ($record.unloadStatus -cne 'failed' -and $record.unloadError -ne 0)) { throw 'Directory loader ownership facts are inconsistent.' }
+  $count = if ($record.loaderStatus -cne 'available') { 0 } elseif ($record.sessionStatus -ceq 'available') { 4 } else { 2 }
+  if ($record.records.Count -ne $count) { throw 'Directory open attempts are missing, duplicated or invented.' }
+  for ($i = 0; $i -lt $count; $i++) {
+    $item = $record.records[$i]
+    $fields = @('directory','path','access','ntStatus','status','handleReturned','closeStatus','closeError') | Sort-Object
+    if ((@($item.PSObject.Properties.Name | Sort-Object) -join ',') -cne ($fields -join ',')) { throw 'Directory attempt fields changed.' }
+    foreach ($name in @('directory','path','status','closeStatus')) {
+      if ($item.$name -isnot [string]) { throw 'Directory attempt classification must be a scalar string.' }
+    }
+    foreach ($name in @('access','ntStatus','closeError')) {
+      $value = $item.$name
+      $minimum = if ($name -ceq 'ntStatus') { [int]::MinValue } else { 0 }
+      $maximum = if ($name -ceq 'ntStatus') { [int]::MaxValue } else { [uint32]::MaxValue }
+      if (-not ($value -is [int] -or $value -is [long] -or $value -is [uint32] -or $value -is [uint64]) -or
+          $value -lt $minimum -or $value -gt $maximum) { throw 'Directory attempt native integer is not bounded.' }
+    }
+    $kind = if ($i -lt 2) { 'global' } else { 'session' }
+    $explicitPath = if ($i -lt 2) { '\BaseNamedObjects' } else { "\Sessions\$($record.sessionId)\BaseNamedObjects" }
+    if ($item.directory -cne $kind -or $item.path -cne $explicitPath -or $item.access -ne (1 + ($i % 2)) -or
+        $item.handleReturned -isnot [bool] -or $item.status -cnotin @('opened','nt-result','contract-error')) { throw 'Explicit directory or independent read-only right changed.' }
+    if ($item.ntStatus -eq 0 -and $item.handleReturned) {
+      if ($item.status -cne 'opened' -or $item.closeStatus -cnotin @('closed','failed') -or
+          ($item.closeStatus -ceq 'closed' -and $item.closeError -ne 0)) { throw 'Owned directory handle close facts changed.' }
+    } else {
+      $status = if ($item.ntStatus -ge 0 -or $item.handleReturned) { 'contract-error' } else { 'nt-result' }
+      if ($item.status -cne $status -or $item.closeStatus -cne 'not-opened' -or $item.closeError -ne 0) { throw 'Unowned directory handle was closed or NTSTATUS was reclassified.' }
+    }
+  }
+  return $record
+}
+
+function Invoke-LeaseChildDirectoryAccessObservation([uint32]$ControlPid) {
+  try {
+    $record = Read-StandardChildDirectoryAccess $ControlPid
+    Write-Host "OBSERVED: owned source child explicit object directory access; controlPid=$ControlPid; ExplicitDirectoryAccessOnly=True; ActualEventRouteUnmeasured=True; creationRightsMeasured=False; causeEstablished=False; $($record | ConvertTo-Json -Depth 5 -Compress)."
+    $failures = [Collections.Generic.List[Exception]]::new()
+    foreach ($kind in @('session','loader','unload')) {
+      if ($record.($kind + 'Status') -cin @('error','load-error','export-error','failed')) {
+        $code = [BitConverter]::ToInt32([BitConverter]::GetBytes([uint32]$record.($kind + 'Error')),0)
+        $failures.Add([ComponentModel.Win32Exception]::new($code,"Child self directory $kind observation failed."))
+      }
+    }
+    if ($record.loaderStatus -ceq 'layout-error') { $failures.Add([InvalidOperationException]::new('Directory diagnostic x64 layout is unavailable.')) }
+    foreach ($item in $record.records) {
+      if ($item.status -ceq 'contract-error') { $failures.Add([InvalidOperationException]::new("Directory open returned an unexpected status/output contract; rawNTSTATUS=$($item.ntStatus).")) }
+      if ($item.closeStatus -ceq 'failed') {
+        $code = [BitConverter]::ToInt32([BitConverter]::GetBytes([uint32]$item.closeError),0)
+        $failures.Add([ComponentModel.Win32Exception]::new($code,'Owned directory handle close failed.'))
+      }
+    }
+    # Access-denied/not-found NTSTATUS values are measured results, not
+    # invented Win32 errors or proof about CreateEvent's actual namespace.
+    if ($failures.Count -gt 0) { throw [AggregateException]::new('Owned explicit-directory observation failed.', $failures) }
+  } catch { Write-LeaseContextFailure explicit-directory-access $_.Exception }
 }
 
 function Invoke-LeaseWorldDescriptorObservation([string]$Name, [IntPtr]$Handle, [string]$Namespace) {
@@ -865,12 +953,13 @@ function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner'
     [IO.File]::WriteAllText($unnamedRequest, 'observe', [Text.UTF8Encoding]::new($false))
   }
   if (Test-Path $resultPath) { Remove-Item -LiteralPath $resultPath }
-  foreach ($filename in @('fixture-thread-token-initial.json','fixture-thread-token-unnamed.json','fixture-job-limits.json')) {
+  foreach ($filename in @('fixture-thread-token-initial.json','fixture-thread-token-unnamed.json','fixture-job-limits.json','fixture-directory-access.json')) {
     $threadResult = Join-Path $fixtureRoot $filename
     if (Test-Path -LiteralPath $threadResult) { Remove-Item -LiteralPath $threadResult }
   }
   [IO.File]::WriteAllText((Join-Path $fixtureRoot 'fixture-thread-token.request'), 'observe', [Text.UTF8Encoding]::new($false))
   [IO.File]::WriteAllText((Join-Path $fixtureRoot 'fixture-job-limits.request'), 'observe', [Text.UTF8Encoding]::new($false))
+  [IO.File]::WriteAllText((Join-Path $fixtureRoot 'fixture-directory-access.request'), 'observe', [Text.UTF8Encoding]::new($false))
   [IO.File]::WriteAllText((Join-Path $fixtureRoot 'fixture-mode.txt'), $Mode, [Text.UTF8Encoding]::new($false))
   if ($Launcher -ceq 'with-caller-linked') {
     if (-not $ObserveOnly) { throw 'Caller-linked UAC token cannot satisfy pure standard-account acceptance.' }
@@ -904,6 +993,7 @@ function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner'
     Write-Host "OBSERVED: owned child calling-thread token immediately before native event APIs; controlPid=$controlPid; mode=$Mode; $($threadTokens | ConvertTo-Json -Depth 4 -Compress)."
     Invoke-LeaseJobObservation $controlPid
     Invoke-LeaseChildJobLimitsObservation $controlPid
+    Invoke-LeaseChildDirectoryAccessObservation $controlPid
     if (-not $ObserveOnly -and ($record.sourceStatus -cne $ExpectedStatus -or
         $record.rawOpenError -ne $ExpectedError -or $record.attestation -cne $ExpectedProof -or
         $record.requiresClick -isnot [bool] -or $record.requiresClick -ne $ExpectedRequired -or
@@ -955,12 +1045,13 @@ function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner'
 function Invoke-CurrentCallerLeaseControl([ValidateSet('probe','owner')][string]$Mode, [string]$ExpectedStatus,
     [int]$ExpectedError, [string]$ExpectedProof, [bool]$ExpectedRequired, [switch]$KeepAlive) {
   if ([IO.Path]::GetFileName($executable) -cne 'lease-standard.exe') { throw 'Current-caller comparison requires the unchanged base console source fixture.' }
-  foreach ($filename in @('fixture-result.json','fixture-thread-token-initial.json','fixture-thread-token-unnamed.json','fixture-unnamed.request','fixture-unnamed-result.json','fixture-job-limits.json')) {
+  foreach ($filename in @('fixture-result.json','fixture-thread-token-initial.json','fixture-thread-token-unnamed.json','fixture-unnamed.request','fixture-unnamed-result.json','fixture-job-limits.json','fixture-directory-access.json')) {
     $path = Join-Path $fixtureRoot $filename
     if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path }
   }
   [IO.File]::WriteAllText((Join-Path $fixtureRoot 'fixture-thread-token.request'), 'observe', [Text.UTF8Encoding]::new($false))
   [IO.File]::WriteAllText((Join-Path $fixtureRoot 'fixture-job-limits.request'), 'observe', [Text.UTF8Encoding]::new($false))
+  [IO.File]::WriteAllText((Join-Path $fixtureRoot 'fixture-directory-access.request'), 'observe', [Text.UTF8Encoding]::new($false))
   [IO.File]::WriteAllText((Join-Path $fixtureRoot 'fixture-mode.txt'), $Mode, [Text.UTF8Encoding]::new($false))
   $controlPid = [MixelOrdinaryTokenFixture]::StartCurrentCallerNative($executable)
   $control = $null; $caller = $null
@@ -992,6 +1083,7 @@ function Invoke-CurrentCallerLeaseControl([ValidateSet('probe','owner')][string]
     Write-Host "OBSERVED: direct current Actions caller pre-API calling-thread tokens; controlPid=$controlPid; mode=$Mode; $($threadTokens | ConvertTo-Json -Depth 4 -Compress)."
     Invoke-LeaseJobObservation $controlPid
     Invoke-LeaseChildJobLimitsObservation $controlPid
+    Invoke-LeaseChildDirectoryAccessObservation $controlPid
     if ($record.sourceStatus -cne $ExpectedStatus -or $record.rawOpenError -ne $ExpectedError -or
         $record.attestation -cne $ExpectedProof -or $record.requiresClick -ne $ExpectedRequired -or $record.ownerFailed) {
       throw ('Actual current-caller source lease classification mismatch: ' + ($record | ConvertTo-Json -Compress))

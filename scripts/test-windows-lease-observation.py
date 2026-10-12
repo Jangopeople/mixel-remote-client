@@ -149,7 +149,7 @@ class ObservationControls(unittest.TestCase):
         writers = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
                    and isinstance(node.func, ast.Attribute) and node.func.attr == "write_text"
                    and isinstance(node.func.value, ast.Name) and node.func.value.id == "script"]
-        self.assertEqual(len(writers), 5)
+        self.assertEqual(len(writers), 6)
         csharp_writers = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
                          and isinstance(node.func, ast.Attribute) and node.func.attr == "write_text"
                          and node.args and isinstance(node.args[0], ast.Name) and node.args[0].id == "csharp"]
@@ -329,7 +329,7 @@ Write-Host "Actual mocked four-phase control PowerShell: $($PSVersionTable.PSVer
 $source=[IO.File]::ReadAllText((Join-Path $Repository 'scripts/test-support-lease-standard-windows.ps1'))
 $tokens=$null;$errors=$null;$ast=[Management.Automation.Language.Parser]::ParseInput($source,[ref]$tokens,[ref]$errors)
 if($errors.Count) { throw 'Current helper does not parse' }
-foreach($name in @('Write-LeaseContextFailure','Invoke-LeaseJobObservation','Read-StandardChildJobLimits','Invoke-LeaseChildJobLimitsObservation','Assert-StandardLeaseSafeResult','Read-StandardCallingThreadTokens','Invoke-CurrentCallerLeaseControl','Invoke-CurrentCallerLeaseFour')) {
+foreach($name in @('Write-LeaseContextFailure','Invoke-LeaseJobObservation','Read-StandardChildJobLimits','Invoke-LeaseChildJobLimitsObservation','Read-StandardChildDirectoryAccess','Invoke-LeaseChildDirectoryAccessObservation','Assert-StandardLeaseSafeResult','Read-StandardCallingThreadTokens','Invoke-CurrentCallerLeaseControl','Invoke-CurrentCallerLeaseFour')) {
   $matches=$ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq $name},$true)
   if($matches.Count -ne 1) { throw "Missing exact current function $name" }
   if($name -ceq 'Invoke-CurrentCallerLeaseControl') { $correctedControl=$matches[0].Extent.Text }
@@ -358,6 +358,9 @@ public static class MixelOrdinaryTokenFixture {
     File.WriteAllText(Path.Combine(Root,"fixture-result.json"),json);
     if(File.ReadAllText(Path.Combine(Root,"fixture-job-limits.request"))!="observe")throw new InvalidOperationException("Missing child-self job observation request");
     File.WriteAllText(Path.Combine(Root,"fixture-job-limits.json"),"{\"schema\":1,\"pid\":"+pid+",\"inAnyJob\":true,\"membershipStatus\":\"available\",\"membershipError\":0,\"uiStatus\":\"available\",\"uiError\":0,\"uiReturned\":4,\"uiFlags\":0,\"extendedStatus\":\"available\",\"extendedError\":0,\"extendedReturned\":144,\"extendedFlags\":8192}");
+    if(File.ReadAllText(Path.Combine(Root,"fixture-directory-access.request"))!="observe")throw new InvalidOperationException("Missing child-self explicit directory request");
+    string rows="";for(int i=0;i<4;i++){if(i!=0)rows+=",";string kind=i<2?"global":"session",path=i<2?"\\\\BaseNamedObjects":"\\\\Sessions\\\\2\\\\BaseNamedObjects";rows+="{\"directory\":\""+kind+"\",\"path\":\""+path+"\",\"access\":"+(1+i%2)+",\"ntStatus\":0,\"status\":\"opened\",\"handleReturned\":true,\"closeStatus\":\"closed\",\"closeError\":0}";}
+    File.WriteAllText(Path.Combine(Root,"fixture-directory-access.json"),"{\"schema\":1,\"pid\":"+pid+",\"scope\":\"ExplicitDirectoryAccessOnly\",\"route\":\"ActualEventRouteUnmeasured\",\"sessionStatus\":\"available\",\"sessionError\":0,\"sessionId\":2,\"loaderStatus\":\"available\",\"loaderError\":0,\"unloadStatus\":\"closed\",\"unloadError\":0,\"records\":["+rows+"]}");
     string close=Scenario=="token-close"?"failed":"closed";int closeError=Scenario=="token-close"?0:0;
     File.WriteAllText(Path.Combine(Root,"fixture-thread-token-initial.json"),"{\"schema\":1,\"pid\":"+pid+",\"records\":[{\"phase\":\"OpenEventW\",\"tid\":103,\"threadStatus\":\"absent\",\"threadError\":1008,\"threadType\":0,\"threadImpersonationLevel\":0,\"primaryStatus\":\"available\",\"primaryError\":0,\"primaryType\":1,\"threadLogonMatchesPrimary\":null,\"threadClose\":\"not-opened\",\"threadCloseError\":0,\"primaryClose\":\""+close+"\",\"primaryCloseError\":"+closeError+"}]}");
     return pid;
@@ -408,9 +411,10 @@ foreach($scenario in $scenarios) {
   if($positive) {
     if(([MixelOrdinaryTokenFixture]::Calls -join ',') -cne 'probe:4001,owner:4002,probe:4003,stop,close,probe:4004,stop,close' -or [MixelOrdinaryTokenFixture]::Disposed -ne 8) {throw 'Four phase ownership/order or wrapper disposal changed'}
     if(@(Get-ChildItem -LiteralPath $fixtureRoot -Filter 'fixture-release-*').Count -ne 0) {throw 'Confirmed exited caller acknowledgment can leak into the unchanged standard terminal after PID reuse'}
-    if($script:printed.Count -ne 17 -or @($script:printed | Where-Object {$_ -like 'OBSERVED: direct current Actions caller GUID functional control;*' -and $_.Contains('genuineStandardQualified=False; fullEightQualified=False; customerAppQualified=False;')}).Count -ne 4 -or
+    if($script:printed.Count -ne 21 -or @($script:printed | Where-Object {$_ -like 'OBSERVED: direct current Actions caller GUID functional control;*' -and $_.Contains('genuineStandardQualified=False; fullEightQualified=False; customerAppQualified=False;')}).Count -ne 4 -or
        @($script:printed | Where-Object {$_ -like 'OBSERVED: retained owned source child job membership;*' -and $_.Contains('childJobLimitsMeasured=False; namedDirectoryMeasured=False.')}).Count -ne 4 -or
-       @($script:printed | Where-Object {$_ -like 'OBSERVED: owned source child immediate job limits;*' -and $_.Contains('immediateJobOnly=True; completeLimitsMeasured=True; namedDirectoryMeasured=False; causeEstablished=False;')}).Count -ne 4 -or $leaseContextFailures.Count -ne 0) {throw 'Diagnostic output silently became standard/app qualification or lost native records'}
+       @($script:printed | Where-Object {$_ -like 'OBSERVED: owned source child immediate job limits;*' -and $_.Contains('immediateJobOnly=True; completeLimitsMeasured=True; namedDirectoryMeasured=False; causeEstablished=False;')}).Count -ne 4 -or
+       @($script:printed | Where-Object {$_ -like 'OBSERVED: owned source child explicit object directory access;*' -and $_.Contains('ExplicitDirectoryAccessOnly=True; ActualEventRouteUnmeasured=True; creationRightsMeasured=False; causeEstablished=False;')}).Count -ne 4 -or $leaseContextFailures.Count -ne 0) {throw 'Diagnostic output silently became standard/app qualification or lost native records'}
   } else {
     if($scenario -ceq 'remove-denied' -and ($message -cne 'Mock existing acknowledgment cleanup denied' -or
        -not (Test-Path -LiteralPath (Join-Path $fixtureRoot 'fixture-release-4001')) -or
@@ -773,7 +777,7 @@ if sys.argv[1]=='scripts/test-support-lease.py':
         self.assertEqual(body.count('fixture_thread_tokens::observe("CreateEventExW-unnamed");'), 1)
         for call in ('CreateEventExW(&attributes, name.as_ptr(), 0, 0x00100000)', 'OpenEventW(0x00100000, 0, name.as_ptr())'):
             self.assertIn(call, body)
-        stripped = re.sub(r'        fixture_thread_tokens::observe\("[^"]+"\);\n', '', body).replace(lease.STANDARD_THREAD_BRIDGE, '', 1).replace(lease.STANDARD_JOB_BRIDGE, '', 1)
+        stripped = re.sub(r'        fixture_thread_tokens::observe\("[^"]+"\);\n', '', body).replace(lease.STANDARD_THREAD_BRIDGE, '', 1).replace(lease.STANDARD_JOB_BRIDGE, '', 1).replace(lease.STANDARD_DIRECTORY_BRIDGE, '', 1)
         marker = "\n}\n\npub fn hold_support_invite_attended_lease()"
         expected = lease.isolated_source(original, Path("owned-control"), "mixel-standard-control-", "Global\\Mixel-Remote-Standard-Lease-" + "a" * 32)
         expected = expected.replace(marker, "\n" + lease.standard_unnamed_bridge(original) + marker, 1)
@@ -784,6 +788,10 @@ if sys.argv[1]=='scripts/test-support-lease.py':
         self.assertLess(main.index('fixture_flush_thread_tokens(&directory,false)'),main.index('std::fs::rename(directory.join("fixture-result.new")'))
         self.assertLess(main.index('fixture_flush_thread_tokens(&directory,true)'),main.index('std::fs::rename(directory.join("fixture-unnamed-result.new")'))
         self.assertLess(main.index('fixture_observe_job_limits(&directory)'),main.index('hold_support_invite_attended_lease();'))
+        self.assertLess(main.index('fixture_observe_directory_access(&directory)'),main.index('hold_support_invite_attended_lease();'))
+        self.assertIn('.write(true).create_new(true)',lease.STANDARD_DIRECTORY_BRIDGE)
+        for forbidden in ("CreateDirectory", "NtQuery", "Bno", "OpenProcess", "OpenThread", "Token", "Impersonate", "SetSecurity", "SetInformation", "Adjust", "DIRECTORY_CREATE", "NtClose"):
+            self.assertNotIn(forbidden,lease.STANDARD_DIRECTORY_BRIDGE)
         self.assertIn('.write(true).create_new(true)',lease.STANDARD_JOB_BRIDGE)
         for forbidden in ("AssignProcessToJobObject", "SetInformationJobObject", "CreateJobObject", "OpenJobObject", "AdjustToken", "Impersonate", "SetThreadToken"):
             self.assertNotIn(forbidden,lease.STANDARD_JOB_BRIDGE)
@@ -791,6 +799,250 @@ if sys.argv[1]=='scripts/test-support-lease.py':
         self.assertNotIn('std::fs::rename',lease.STANDARD_THREAD_BRIDGE)
         for forbidden in ("Impersonate", "RevertToSelf", "SetThreadToken", "SetTokenInformation", "AdjustToken", "NtOpen", "SetSecurity", "LogonUser"):
             self.assertNotIn(forbidden, lease.STANDARD_THREAD_BRIDGE)
+
+    @staticmethod
+    def mocked_directory_bridge():
+        bridge=lease.STANDARD_DIRECTORY_BRIDGE.replace('    #[cfg(windows)]\n','')
+        start=bridge.index('        #[link(name="kernel32")]')
+        end=bridge.index('\n        fn layout_valid()',start)
+        mocks=r'''
+        #[allow(non_snake_case)]
+        mod native {
+            use super::{c_void,Handle,ObjectAttributes};
+            use std::sync::atomic::{AtomicU32,Ordering};
+            pub static VARIANT:AtomicU32=AtomicU32::new(0);
+            pub static CALLS:AtomicU32=AtomicU32::new(0);
+            pub static OPENS:AtomicU32=AtomicU32::new(0);
+            pub static CLOSES:AtomicU32=AtomicU32::new(0);
+            pub static FREES:AtomicU32=AtomicU32::new(0);
+            pub static ERROR:AtomicU32=AtomicU32::new(0);
+            pub static ERROR_READS:AtomicU32=AtomicU32::new(0);
+            pub unsafe fn GetCurrentProcessId()->u32 { CALLS.fetch_add(1,Ordering::SeqCst);std::process::id() }
+            pub unsafe fn ProcessIdToSessionId(pid:u32,out:*mut u32)->i32 {
+                CALLS.fetch_add(1,Ordering::SeqCst);assert_eq!(pid,std::process::id());assert_eq!(*out,0);
+                let v=VARIANT.load(Ordering::SeqCst);
+                if v==9 || v==10 {ERROR.store(if v==10 {0} else {87},Ordering::SeqCst);return 0;}
+                *out=if v==16 {u32::MAX} else if v==17 {0} else {2};2
+            }
+            pub unsafe fn LoadLibraryExW(name:*const u16,file:Handle,flags:u32)->Handle {
+                CALLS.fetch_add(1,Ordering::SeqCst);assert!(file.is_null());assert_eq!(flags,0x800);
+                let mut len=0;while *name.add(len)!=0 {len+=1;assert!(len<32);}
+                assert_eq!(String::from_utf16(std::slice::from_raw_parts(name,len)).unwrap(),"ntdll.dll");
+                let v=VARIANT.load(Ordering::SeqCst);
+                if v==5 || v==6 {ERROR.store(if v==6 {0} else {126},Ordering::SeqCst);return std::ptr::null_mut();}
+                701usize as _
+            }
+            pub unsafe fn GetProcAddress(module:Handle,name:*const u8)->*mut c_void {
+                CALLS.fetch_add(1,Ordering::SeqCst);assert_eq!(module as usize,701);
+                assert_eq!(std::ffi::CStr::from_ptr(name.cast()).to_bytes(),b"NtOpenDirectoryObject");
+                let v=VARIANT.load(Ordering::SeqCst);
+                if v==7 || v==8 {ERROR.store(if v==8 {0} else {127},Ordering::SeqCst);return std::ptr::null_mut();}
+                NtOpenDirectoryObject as *mut c_void
+            }
+            unsafe extern "system" fn NtOpenDirectoryObject(out:*mut Handle,access:u32,oa:*mut ObjectAttributes)->i32 {
+                let index=OPENS.fetch_add(1,Ordering::SeqCst);assert!(index<4);assert!(FREES.load(Ordering::SeqCst)==0);
+                assert!(out.read().is_null());assert_eq!(access,1+index%2);
+                let object=&*oa;assert_eq!(object.length,48);assert!(object.root.is_null());assert_eq!(object.attributes,0x40);
+                assert!(object.security.is_null() && object.quality.is_null());assert!(!object.name.is_null());
+                let bytes=std::slice::from_raw_parts(oa.cast::<u8>(),48);assert_eq!(&bytes[4..8],[0;4]);assert_eq!(&bytes[28..32],[0;4]);
+                let name=&*object.name;assert_eq!(name.maximum_length,name.length+2);assert!(name.length>0 && name.length<254 && name.length%2==0);
+                assert_eq!(&std::slice::from_raw_parts(object.name.cast::<u8>(),16)[4..8],[0;4]);
+                let wide=std::slice::from_raw_parts(name.buffer,name.maximum_length as usize/2);assert_eq!(wide.last(),Some(&0));
+                let path=String::from_utf16(&wide[..wide.len()-1]).unwrap();let v=VARIANT.load(Ordering::SeqCst);
+                let session=if v==16 {u32::MAX} else if v==17 {0} else {2};
+                assert_eq!(path,if index<2 {r"\BaseNamedObjects".to_owned()} else {format!(r"\Sessions\{}\BaseNamedObjects",session)});
+                ERROR.store(777,Ordering::SeqCst); // NTSTATUS must not read this stale Win32 error.
+                if v==2 || (v==1 && index==0) {return if v==2 {0xc0000034u32 as i32} else {0xc0000022u32 as i32};}
+                if v==13 && index==0 {return 0;}
+                if v==14 && index==0 {*out=999usize as _;return 0xc000000du32 as i32;}
+                if v==15 && index==0 {return 1;}
+                *out=(801+index as usize) as _;0
+            }
+            pub unsafe fn CloseHandle(handle:Handle)->i32 {
+                let h=handle as usize;assert!((801..=804).contains(&h));assert_eq!(FREES.load(Ordering::SeqCst),0);
+                CLOSES.fetch_add(1,Ordering::SeqCst);let v=VARIANT.load(Ordering::SeqCst);
+                if h==801 && matches!(v,3|4|18) {ERROR.store(if v==3 {5} else if v==18 {u32::MAX} else {0},Ordering::SeqCst);return 0;}
+                2
+            }
+            pub unsafe fn FreeLibrary(module:Handle)->i32 {
+                assert_eq!(module as usize,701);assert_eq!(FREES.fetch_add(1,Ordering::SeqCst),0);
+                let v=VARIANT.load(Ordering::SeqCst);if v==11 || v==12 {ERROR.store(if v==12 {0} else {5},Ordering::SeqCst);return 0;}2
+            }
+            pub unsafe fn GetLastError()->u32 {ERROR_READS.fetch_add(1,Ordering::SeqCst);ERROR.load(Ordering::SeqCst)}
+        }
+        use native::{GetCurrentProcessId,ProcessIdToSessionId,LoadLibraryExW,GetProcAddress,FreeLibrary,CloseHandle,GetLastError};
+'''
+        bridge=bridge[:start]+mocks+bridge[end:]
+        # The real layout function remains byte-exact and executes. This sole
+        # fixture-only branch control exercises its unavailable-layout result.
+        bridge=bridge.replace('if layout_valid() {','if layout_valid() && native::VARIANT.load(std::sync::atomic::Ordering::SeqCst)!=19 {',1)
+        boundary='\n    }\n    pub(super) fn fixture_observe_directory_access'
+        controls=r'''
+        pub(super) fn set_variant(value:u32) {native::VARIANT.store(value,std::sync::atomic::Ordering::SeqCst);}
+        pub(super) fn counts()->(u32,u32,u32,u32,u32) {
+            use std::sync::atomic::Ordering;
+            (native::CALLS.load(Ordering::SeqCst),native::OPENS.load(Ordering::SeqCst),native::CLOSES.load(Ordering::SeqCst),native::FREES.load(Ordering::SeqCst),native::ERROR_READS.load(Ordering::SeqCst))
+        }
+'''
+        assert bridge.count(boundary)==1
+        return bridge.replace(boundary,controls+boundary,1)
+
+    def test_explicit_directory_actual_exported_main_layout_status_and_ownership(self):
+        rustc=os.environ.get('RUSTC_BIN') or shutil.which('rustc');self.assertTrue(rustc)
+        bridge=self.mocked_directory_bridge()
+        prelude=r'''
+mod mixel_support_lease {
+'''+bridge+r'''
+    pub(super) fn fixture_enable_thread_tokens(_directory:&std::path::Path) {}
+    pub(super) fn fixture_flush_thread_tokens(_directory:&std::path::Path,_unnamed:bool) {}
+    pub(super) fn fixture_observe_job_limits(_directory:&std::path::Path) {}
+    pub(super) fn fixture_raw_open_error()->u32 {2}
+    pub(super) fn fixture_unnamed_create()->(&'static str,bool,u32,bool,u32) {panic!("Not requested")}
+    pub(super) fn variant(value:u32) {fixture_directory_access::set_variant(value);}
+    pub(super) fn counts()->(u32,u32,u32,u32,u32) {fixture_directory_access::counts()}
+}
+fn lease_main() {panic!("Not requested")}
+fn hold_support_invite_attended_lease()->bool {false}
+fn support_invite_lease_status()->&'static str {"ownerFailed=false;ownerError=none;kernel=absent;probeError=none;memoryActive=false"}
+fn support_invite_attestation()->&'static str {""}
+fn support_invite_requires_click()->bool {false}
+fn support_invite_owner_lease_failed()->bool {false}
+fn main() {
+    let directory=std::env::current_exe().unwrap().parent().unwrap().to_owned();
+    let variant=std::env::var("MIXEL_DIRECTORY_VARIANT").unwrap().parse().unwrap();
+    mixel_support_lease::variant(variant);
+    std::fs::write(directory.join(format!("fixture-release-{}",std::process::id())),"verified").unwrap();
+    if std::env::var_os("MIXEL_DIRECTORY_PRIOR").is_some() {prior_fixture_main();} else {fixture_main();}
+    println!("counts={:?}",mixel_support_lease::counts());
+}
+'''
+        harness=lease.STANDARD_WINDOWS_HARNESS.replace('fn main() {','fn fixture_main() {',1).replace('    #[cfg(windows)] ','    ')
+        refusal='    #[cfg(not(windows))]\n    panic!("This standard-account functional control requires actual Windows");\n'
+        self.assertEqual(harness.count(refusal),1);harness=harness.replace(refusal,'',1)
+        call='        mixel_support_lease::fixture_observe_directory_access(&directory);\n'
+        self.assertEqual(harness.count(call),1)
+        prior=harness.replace(call,'',1).replace('fn fixture_main() {','fn prior_fixture_main() {',1)
+        with tempfile.TemporaryDirectory(prefix='mixel-explicit-directory-main-') as temporary:
+            root=Path(temporary);source=root/'source.rs';source.write_text(prelude+harness+prior)
+            binary=root/('control.exe' if os.name=='nt' else 'control')
+            subprocess.run([rustc,'--edition','2021','-D','warnings',str(source),'-o',str(binary)],check=True,capture_output=True,timeout=60)
+            def run(path,variant=0,prior=False):
+                path.mkdir();owned=path/binary.name;shutil.copy2(binary,owned)
+                (path/'fixture-mode.txt').write_text('probe')
+                env={**os.environ,'MIXEL_DIRECTORY_VARIANT':str(variant)}
+                if prior:env['MIXEL_DIRECTORY_PRIOR']='1'
+                return owned,env
+            owned,env=run(root/'absent');result=subprocess.run([str(owned)],env=env,capture_output=True,text=True,timeout=15)
+            self.assertEqual(result.returncode,0,result.stderr);self.assertIn('counts=(0, 0, 0, 0, 0)',result.stdout)
+            self.assertFalse((owned.parent/'fixture-directory-access.json').exists())
+            owned,env=run(root/'prior-request',prior=True);(owned.parent/'fixture-directory-access.request').write_text('observe')
+            result=subprocess.run([str(owned)],env=env,capture_output=True,text=True,timeout=15)
+            self.assertEqual(result.returncode,0,result.stderr);self.assertIn('counts=(0, 0, 0, 0, 0)',result.stdout)
+            self.assertFalse((owned.parent/'fixture-directory-access.json').exists());self.assertTrue((owned.parent/'fixture-result.json').exists())
+            values=[]
+            for variant in range(20):
+                owned,env=run(root/str(variant),variant);(owned.parent/'fixture-directory-access.request').write_text('observe')
+                result=subprocess.run([str(owned)],env=env,capture_output=True,text=True,timeout=15)
+                self.assertEqual(result.returncode,0,result.stderr)
+                value=json.loads((owned.parent/'fixture-directory-access.json').read_text());values.append(value)
+                actual=json.loads((owned.parent/'fixture-result.json').read_text());self.assertEqual(value['pid'],actual['pid'])
+                self.assertEqual(actual['rawOpenError'],2);self.assertEqual(actual['attestation'],'')
+                expected_open=0 if variant in (5,6,7,8,19) else 2 if variant in (9,10) else 4
+                expected_close=0 if variant in (2,5,6,7,8,19) else expected_open-1 if variant in (1,13,14,15) else expected_open
+                expected_free=0 if variant in (5,6,19) else 1
+                expected_errors=1 if variant in (3,4,5,6,7,8,9,10,11,12,18) else 0
+                counts=re.search(r'counts=\((\d+), (\d+), (\d+), (\d+), (\d+)\)',result.stdout);self.assertIsNotNone(counts)
+                self.assertEqual(tuple(map(int,counts.groups()))[1:],(expected_open,expected_close,expected_free,expected_errors))
+                if variant==19:self.assertEqual(value['loaderStatus'],'layout-error');self.assertEqual(value['sessionStatus'],'unqueried')
+                if variant in (1,2):self.assertTrue(all(row['ntStatus']==-1073741772 for row in value['records']) if variant==2 else value['records'][0]['ntStatus']==-1073741790)
+                if variant in (3,4,18):self.assertEqual(value['records'][0]['closeError'],5 if variant==3 else 4294967295 if variant==18 else 0)
+                if variant in (13,14,15):self.assertEqual(value['records'][0]['status'],'contract-error');self.assertEqual(value['records'][0]['closeStatus'],'not-opened')
+                if variant in (16,17):self.assertEqual(value['sessionId'],4294967295 if variant==16 else 0)
+                saved=(owned.parent/'fixture-directory-access.json').read_bytes();(owned.parent/'fixture-result.json').unlink()
+                duplicate=subprocess.run([str(owned)],env=env,capture_output=True,text=True,timeout=15)
+                self.assertNotEqual(duplicate.returncode,0);self.assertIn('AlreadyExists',duplicate.stderr)
+                self.assertEqual((owned.parent/'fixture-directory-access.json').read_bytes(),saved);self.assertFalse((owned.parent/'fixture-result.json').exists())
+            owned,env=run(root/'invalid-request');(owned.parent/'fixture-directory-access.request').write_text('unexpected')
+            result=subprocess.run([str(owned)],env=env,capture_output=True,text=True,timeout=15)
+            self.assertNotEqual(result.returncode,0);self.assertIn('Invalid owned explicit-directory',result.stderr)
+            self.assertFalse((owned.parent/'fixture-result.json').exists())
+        print('PASS: exact exported source main reproduces requested-but-unmeasured prior gap; absent request makes zero calls; corrected20 native API/layout/status/error0/ownership cases preserve original event result and immutable publication. APIs mocked, no actual Win32 directory route/cause qualification.',flush=True)
+
+    def test_explicit_directory_actual_reader_strict_scope_and_deferred_failures(self):
+        def row(index):
+            return dict(directory='global' if index<2 else 'session',path='\\BaseNamedObjects' if index<2 else '\\Sessions\\2\\BaseNamedObjects',access=1+index%2,ntStatus=0,status='opened',handleReturned=True,closeStatus='closed',closeError=0)
+        good=dict(schema=1,pid=4321,scope='ExplicitDirectoryAccessOnly',route='ActualEventRouteUnmeasured',sessionStatus='available',sessionError=0,sessionId=2,loaderStatus='available',loaderError=0,unloadStatus='closed',unloadError=0,records=[row(i) for i in range(4)])
+        cases=[dict(record=good,accept=True,failure=False)]
+        def mutated(key,value,accept=False,failure=False,index=None):
+            record=json.loads(json.dumps(good))
+            if index is None:record[key]=value
+            else:record['records'][index][key]=value
+            cases.append(dict(record=record,accept=accept,failure=failure))
+        for key,value in [('schema',True),('pid',4322),('scope','ActualEventRoute'),('route',['ActualEventRouteUnmeasured']),('sessionId',-1),('sessionId',True),('sessionStatus',['available']),('sessionError',5),('loaderError',1),('unloadError',1),('records',{}),('records',good['records'][:3]),('extra',0)]:mutated(key,value)
+        for key,value in [('access',4),('access',True),('access',2),('path','\\Sessions\\99\\BaseNamedObjects'),('directory',['global']),('ntStatus',4294967295),('ntStatus',-2147483649),('ntStatus',True),('ntStatus',1),('handleReturned',1),('status',['opened']),('closeStatus','not-opened'),('closeError',True),('closeError',4294967296),('extra',0)]:mutated(key,value,index=0)
+        for error in [0,5,4294967295]:
+            record=json.loads(json.dumps(good));record['records'][0].update(closeStatus='failed',closeError=error);cases.append(dict(record=record,accept=True,failure=True))
+        for nt,returned in [(-1073741790,False),(-1073741772,False),(-2147483648,False),(-1073741811,True),(0,False),(1,False),(2147483647,False)]:
+            record=json.loads(json.dumps(good));record['records'][0].update(ntStatus=nt,handleReturned=returned,status='contract-error' if nt>=0 or returned else 'nt-result',closeStatus='not-opened');cases.append(dict(record=record,accept=True,failure=nt>=0 or returned))
+        for kind in ['session','loader','unload']:
+            for error in [0,5,4294967295]:
+                record=json.loads(json.dumps(good));record[kind+'Error']=error
+                if kind=='session':record.update(sessionStatus='error',sessionId=None,records=record['records'][:2])
+                elif kind=='loader':record.update(loaderStatus='load-error',unloadStatus='not-loaded',records=[])
+                else:record.update(unloadStatus='failed')
+                cases.append(dict(record=record,accept=True,failure=True))
+        record=json.loads(json.dumps(good));record.update(loaderStatus='export-error',loaderError=127,records=[]);cases.append(dict(record=record,accept=True,failure=True))
+        record=json.loads(json.dumps(good));record.update(loaderStatus='layout-error',sessionStatus='unqueried',sessionId=None,unloadStatus='not-loaded',records=[]);cases.append(dict(record=record,accept=True,failure=True))
+        for session in [0,4294967295]:
+            record=json.loads(json.dumps(good));record['sessionId']=session
+            for item in record['records'][2:]:item['path']=f'\\Sessions\\{session}\\BaseNamedObjects'
+            cases.append(dict(record=record,accept=True,failure=False))
+        with tempfile.TemporaryDirectory(prefix='mixel-explicit-directory-reader-') as temporary:
+            root=Path(temporary);(root/'cases.json').write_text(json.dumps(cases));script=root/'control.ps1'
+            script.write_text(r'''
+param([string]$Repository,[string]$ControlRoot,[string]$ExpectedEdition)
+$ErrorActionPreference='Stop'
+if($PSVersionTable.PSEdition -cne $ExpectedEdition -or ($ExpectedEdition -ceq 'Desktop' -and ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1))){throw 'Actual required PowerShell edition missing'}
+$fixtureRoot=$ControlRoot;$source=[IO.File]::ReadAllText((Join-Path $Repository 'scripts/test-support-lease-standard-windows.ps1'))
+$tokens=$null;$errors=$null;$ast=[Management.Automation.Language.Parser]::ParseInput($source,[ref]$tokens,[ref]$errors);if($errors.Count){throw 'Current helper does not parse'}
+foreach($name in @('Write-LeaseContextFailure','Read-StandardChildDirectoryAccess','Invoke-LeaseChildDirectoryAccessObservation')) {
+ $items=$ast.FindAll({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq $name},$true)
+ if($items.Count -ne 1){throw 'Exact directory reader/observer missing'}
+ . ([scriptblock]::Create($items[0].Extent.Text))
+}
+$script:printed=[Collections.Generic.List[string]]::new();function Write-Host {param($Object)$script:printed.Add([string]$Object)}
+$leaseContextFailures=[Collections.Generic.List[Exception]]::new();$path=Join-Path $fixtureRoot 'fixture-directory-access.json'
+$cases=[IO.File]::ReadAllText((Join-Path $fixtureRoot 'cases.json')) | ConvertFrom-Json
+foreach($case in $cases) {
+ [IO.File]::WriteAllText($path,($case.record | ConvertTo-Json -Depth 7 -Compress))
+ $message='';try{[void](Read-StandardChildDirectoryAccess 4321)}catch{$message=$_.Exception.Message}
+ if(($message -ceq '') -ne $case.accept){throw "Directory strict acceptance changed: $message"}
+ if($case.accept) {
+  $leaseContextFailures.Clear();$script:printed.Clear();Invoke-LeaseChildDirectoryAccessObservation 4321
+  if(($leaseContextFailures.Count -ne 0) -ne $case.failure -or -not $script:printed[0].Contains('ExplicitDirectoryAccessOnly=True; ActualEventRouteUnmeasured=True; creationRightsMeasured=False; causeEstablished=False;')){throw 'Directory measurement failure was hidden or event route was inferred'}
+  if($case.failure -and (-not $script:printed[1].Contains('fatalAfterOriginalGate=True;') -or -not $script:printed[1].Contains('operation=explicit-directory-access;'))){throw 'Directory error replaced original native gate'}
+  if($case.record.records.Count -and $case.record.records[0].closeStatus -ceq 'failed' -and $case.record.records[0].closeError -eq 0 -and -not $script:printed[1].Contains('nativeErrors=0;')){throw 'Directory close error0 was discarded'}
+  if($case.record.unloadStatus -ceq 'failed' -and $case.record.unloadError -eq [uint32]::MaxValue -and -not $script:printed[1].Contains('nativeErrors=-1;')){throw 'Raw DWORD module error bits changed'}
+ }
+}
+$object=$cases[0].record | ConvertTo-Json -Depth 7 -Compress
+foreach($invalid in @(('['+$object+']'),('[['+$object+']]'))) {
+ [IO.File]::WriteAllText($path,$invalid);$message='';try{[void](Read-StandardChildDirectoryAccess 4321)}catch{$message=$_.Exception.Message}
+ if($message -cne 'Owned explicit-directory root must be an object.'){throw 'Singleton/nested directory envelope reached object conversion'}
+}
+[IO.File]::WriteAllText($path,(' '*4097));$message='';try{[void](Read-StandardChildDirectoryAccess 4321)}catch{$message=$_.Exception.Message};if(-not $message){throw 'Oversize directory result accepted'}
+Remove-Item -LiteralPath $path;$message='';try{[void](Read-StandardChildDirectoryAccess 4321)}catch{$message=$_.Exception.Message};if(-not $message){throw 'Missing directory result accepted'}
+$original=$ast.FindAll({param($node)$node -is [Management.Automation.Language.IfStatementAst] -and $node.Extent.Text.StartsWith('if (-not $ObserveOnly -and ($record.sourceStatus')},$true)
+if($original.Count -ne 1){throw 'Original mandatory native gate changed'}
+$ObserveOnly=$false;$record=[pscustomobject]@{sourceStatus='ownerFailed=false;ownerError=none;kernel=unavailable;probeError=5;memoryActive=false';rawOpenError=5;attestation='guard-unavailable';requiresClick=$true;ownerFailed=$false}
+$ExpectedStatus='ownerFailed=false;ownerError=none;kernel=absent;probeError=none;memoryActive=false';$ExpectedError=2;$ExpectedProof='';$ExpectedRequired=$false;$ExpectedOwnerFailed=$false
+$message='';try{& ([scriptblock]::Create($original[0].Extent.Text))}catch{$message=$_.Exception.Message}
+if(-not $message.Contains('classification mismatch') -or -not $message.Contains('"rawOpenError":5')){throw 'Original fatal native5 was replaced'}
+Microsoft.PowerShell.Utility\Write-Host 'PASS: literal explicit-directory reader validates exact paths/query1/traverse2/self-session/signed NTSTATUS/ownership; rejects malformed/root-array/missing/oversize facts; preserves close0 and deferred errors behind unchanged fatal native5. Explicit paths only, actual event route unmeasured.'
+''',encoding='utf-8-sig')
+            for engine,edition in self.powershell_engines():
+                result=subprocess.run([engine,'-NoProfile','-File',str(script),'-Repository',str(ROOT),'-ControlRoot',str(root),'-ExpectedEdition',edition],capture_output=True,text=True,timeout=30)
+                self.assertEqual(result.returncode,0,result.stdout+result.stderr);print(result.stdout,flush=True)
 
     def test_child_self_job_queries_exact_layout_errors_and_immutable_publication(self):
         rustc = os.environ.get("RUSTC_BIN") or shutil.which("rustc")
@@ -1048,6 +1300,7 @@ Microsoft.PowerShell.Utility\Write-Host 'PASS: literal child-self job reader pre
         rustc = os.environ.get("RUSTC_BIN") or shutil.which("rustc")
         self.assertTrue(rustc, "Rust compiler required for executable source controls")
         facade = r'''
+        pub(super) fn fixture_observe_directory_access(directory:&std::path::Path) { assert!(!directory.join("fixture-directory-access.request").exists()); }
         pub(super) fn fixture_observe_job_limits(directory:&std::path::Path) { assert!(!directory.join("fixture-job-limits.request").exists()); }
         pub(super) fn fixture_raw_open_error()->u32 { fixture_thread_tokens::observe("OpenEventW"); 2 }
         pub(super) fn fixture_unnamed_create()->(&'static str,bool,u32,bool,u32) {

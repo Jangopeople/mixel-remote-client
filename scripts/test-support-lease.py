@@ -260,6 +260,143 @@ STANDARD_JOB_BRIDGE = r'''
         fixture_job_limits::observe(directory);
     }
 '''
+# Opt-in exported source fixture only: existing explicit object directories,
+# independent QUERY/TRAVERSE rights. These facts do not identify the directory
+# selected internally by the unchanged Win32 event API.
+STANDARD_DIRECTORY_BRIDGE = r'''
+    #[cfg(windows)]
+    mod fixture_directory_access {
+        use std::ffi::c_void;
+        type Handle = *mut c_void;
+        #[repr(C)]
+        struct UnicodeString { length: u16, maximum_length: u16, buffer: *mut u16 }
+        #[repr(C)]
+        struct ObjectAttributes {
+            length: u32, root: Handle, name: *mut UnicodeString, attributes: u32,
+            security: *mut c_void, quality: *mut c_void,
+        }
+        type OpenDirectory = unsafe extern "system" fn(*mut Handle,u32,*mut ObjectAttributes)->i32;
+        #[link(name="kernel32")]
+        extern "system" {
+            fn GetCurrentProcessId() -> u32;
+            fn ProcessIdToSessionId(pid: u32, session: *mut u32) -> i32;
+            fn LoadLibraryExW(name: *const u16, file: Handle, flags: u32) -> Handle;
+            fn GetProcAddress(module: Handle, name: *const u8) -> *mut c_void;
+            fn FreeLibrary(module: Handle) -> i32;
+            fn CloseHandle(handle: Handle) -> i32;
+            fn GetLastError() -> u32;
+        }
+        fn layout_valid() -> bool {
+            let mut name: UnicodeString=unsafe { std::mem::zeroed() };
+            let object: ObjectAttributes=unsafe { std::mem::zeroed() };
+            let n=std::ptr::addr_of_mut!(name) as usize;
+            let o=std::ptr::addr_of!(object) as usize;
+            std::mem::size_of::<usize>()==8 && std::mem::size_of::<UnicodeString>()==16 &&
+            std::mem::size_of::<ObjectAttributes>()==48 &&
+            std::ptr::addr_of!(name.length) as usize-n==0 &&
+            std::ptr::addr_of!(name.maximum_length) as usize-n==2 &&
+            std::ptr::addr_of!(name.buffer) as usize-n==8 &&
+            std::ptr::addr_of!(object.length) as usize-o==0 &&
+            std::ptr::addr_of!(object.root) as usize-o==8 &&
+            std::ptr::addr_of!(object.name) as usize-o==16 &&
+            std::ptr::addr_of!(object.attributes) as usize-o==24 &&
+            std::ptr::addr_of!(object.security) as usize-o==32 &&
+            std::ptr::addr_of!(object.quality) as usize-o==40
+        }
+        fn attempt(open: OpenDirectory, directory: &str, path: &str, access: u32) -> String {
+            assert!(matches!(directory,"global" | "session") && matches!(access,1 | 2));
+            // Both names are derived solely from constants and this child's
+            // actual DWORD session. Absolute names require RootDirectory=NULL.
+            let mut wide: Vec<u16>=path.encode_utf16().chain(Some(0)).collect();
+            assert!(wide.len()<128 && wide.len()>1);
+            let mut name: UnicodeString=unsafe { std::mem::zeroed() };
+            let mut object: ObjectAttributes=unsafe { std::mem::zeroed() };
+            unsafe {
+                std::ptr::write_bytes(&mut name as *mut UnicodeString,0,1);
+                std::ptr::write_bytes(&mut object as *mut ObjectAttributes,0,1);
+            }
+            name.length=((wide.len()-1)*2) as u16;
+            name.maximum_length=(wide.len()*2) as u16;
+            name.buffer=wide.as_mut_ptr();
+            object.length=48;object.name=&mut name;object.attributes=0x40;
+            let mut handle=std::ptr::null_mut();
+            let nt_status=unsafe { open(&mut handle,access,&mut object) };
+            // NtOpenDirectoryObject documents STATUS_SUCCESS (zero) or an
+            // error NTSTATUS. Never substitute last-error or guess ownership
+            // from an output written on an unsuccessful/unknown status.
+            let returned=!handle.is_null();
+            let (status,close_status,close_error)=if nt_status==0 && returned {
+                let success=unsafe { CloseHandle(handle) };
+                let error=if success==0 { unsafe { GetLastError() } } else { 0 };
+                ("opened",if success==0 { "failed" } else { "closed" },error)
+            } else {
+                (if nt_status>=0 || returned { "contract-error" } else { "nt-result" },"not-opened",0)
+            };
+            format!(concat!(
+                "{{\"directory\":\"{}\",\"path\":\"{}\",\"access\":{},\"ntStatus\":{},",
+                "\"status\":\"{}\",\"handleReturned\":{},\"closeStatus\":\"{}\",\"closeError\":{}}}"),
+                directory,path.replace('\\',"\\\\"),access,nt_status,status,returned,close_status,close_error)
+        }
+        pub(super) fn observe(directory: &std::path::Path) {
+            let request=directory.join("fixture-directory-access.request");
+            if !request.is_file() { return; }
+            assert_eq!(std::fs::read_to_string(request).unwrap(),"observe","Invalid owned explicit-directory observation request");
+            let mut records=Vec::new();
+            let mut session=0u32;
+            let mut session_status="unqueried";let mut session_error=0;
+            let mut loader_status="layout-error";let mut loader_error=0;
+            let mut unload_status="not-loaded";let mut unload_error=0;
+            if layout_valid() {
+                let session_success=unsafe { ProcessIdToSessionId(GetCurrentProcessId(),&mut session) };
+                session_error=if session_success==0 { unsafe { GetLastError() } } else { 0 };
+                session_status=if session_success==0 { "error" } else { "available" };
+                let dll: Vec<u16>="ntdll.dll".encode_utf16().chain(Some(0)).collect();
+                // The returned LoadLibraryEx reference is owned. System32 is
+                // the sole search directory, with no legacy-path fallback.
+                let module=unsafe { LoadLibraryExW(dll.as_ptr(),std::ptr::null_mut(),0x800) };
+                loader_error=if module.is_null() { unsafe { GetLastError() } } else { 0 };
+                if module.is_null() { loader_status="load-error"; }
+                else {
+                    let export=unsafe { GetProcAddress(module,b"NtOpenDirectoryObject\0".as_ptr()) };
+                    loader_error=if export.is_null() { unsafe { GetLastError() } } else { 0 };
+                    if export.is_null() { loader_status="export-error"; }
+                    else {
+                        loader_status="available";
+                        let open: OpenDirectory=unsafe { std::mem::transmute(export) };
+                        for access in [1,2] {
+                            records.push(attempt(open,"global",r"\BaseNamedObjects",access));
+                        }
+                        if session_status=="available" {
+                            let path=format!(r"\Sessions\{}\BaseNamedObjects",session);
+                            for access in [1,2] { records.push(attempt(open,"session",&path,access)); }
+                        }
+                    }
+                    // Keep the owned module alive until every export call and
+                    // owned directory close has finished. Never CloseHandle it.
+                    let success=unsafe { FreeLibrary(module) };
+                    unload_error=if success==0 { unsafe { GetLastError() } } else { 0 };
+                    unload_status=if success==0 { "failed" } else { "closed" };
+                }
+            }
+            let result=format!(concat!(
+                "{{\"schema\":1,\"pid\":{},\"scope\":\"ExplicitDirectoryAccessOnly\",\"route\":\"ActualEventRouteUnmeasured\",",
+                "\"sessionStatus\":\"{}\",\"sessionError\":{},\"sessionId\":{},\"loaderStatus\":\"{}\",\"loaderError\":{},",
+                "\"unloadStatus\":\"{}\",\"unloadError\":{},\"records\":[{}]}}\n"),
+                std::process::id(),session_status,session_error,
+                if session_status=="available" { session.to_string() } else { "null".to_owned() },
+                loader_status,loader_error,unload_status,unload_error,records.join(","));
+            assert!(result.len()<=4096 && records.len()<=4,"Explicit-directory result exceeds its bound");
+            use std::io::Write;
+            let mut file=std::fs::OpenOptions::new().write(true).create_new(true)
+                .open(directory.join("fixture-directory-access.json")).unwrap();
+            file.write_all(result.as_bytes()).unwrap();
+        }
+    }
+    #[cfg(windows)]
+    pub(super) fn fixture_observe_directory_access(directory: &std::path::Path) {
+        fixture_directory_access::observe(directory);
+    }
+'''
 HARNESS = r'''
 #[cfg(windows)]
 struct LastErrorClearingAllocator;
@@ -429,6 +566,7 @@ fn main() {
     }
     #[cfg(windows)] {
         let directory = std::env::current_exe().unwrap().parent().unwrap().to_owned();
+        mixel_support_lease::fixture_observe_directory_access(&directory);
         mixel_support_lease::fixture_observe_job_limits(&directory);
         mixel_support_lease::fixture_enable_thread_tokens(&directory);
         let mode = std::fs::read_to_string(directory.join("fixture-mode.txt")).unwrap();
@@ -538,7 +676,7 @@ def standard_windows_fixture_body(original, directory, prefix, event):
     source = isolated_source(original, directory, prefix, event)
     marker = "\n}\n\npub fn hold_support_invite_attended_lease()"
     assert source.count(marker) == 1, "Standard Windows bridge extraction boundary changed"
-    source = source.replace(marker, "\n" + standard_unnamed_bridge(original) + STANDARD_THREAD_BRIDGE + STANDARD_JOB_BRIDGE + marker, 1)
+    source = source.replace(marker, "\n" + standard_unnamed_bridge(original) + STANDARD_THREAD_BRIDGE + STANDARD_JOB_BRIDGE + STANDARD_DIRECTORY_BRIDGE + marker, 1)
     # Instrument only this test source, before (never between the API call and
     # immediate last-error capture). Product code and event call arguments stay
     # unchanged. The intentionally prior-probe negative stays uninstrumented.
