@@ -25,6 +25,11 @@ on:
 permissions:
   contents: read
 
+env:
+  # Direct Python helpers and their inherited child processes share UTF-8 on Windows.
+  PYTHONUTF8: "1"
+  PYTHONIOENCODING: "utf-8"
+
 jobs:
   release-pipeline:
     runs-on: ubuntu-22.04

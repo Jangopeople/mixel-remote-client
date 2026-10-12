@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Exercise release selection, fail-closed staging, and portable build failures."""
+import ast
 import importlib.util
 import os
 import re
@@ -22,6 +23,56 @@ def module(name, file):
 
 release = module("mixel_release", "release-artifacts.py")
 portable = module("mixel_portable", "build-windows-portable.py")
+
+
+class WorkflowPythonEncodingTests(unittest.TestCase):
+    def test_actual_unicode_helper_status_and_fatal_result_with_workflow_environment(self):
+        statements = []
+        for helper_name, marker in (("patch-support-macos-window.py", "patched pinned Mac subwindow lifecycle"),
+                                    ("patch-support-macos-cleanup.py", "patched bounded Mac page cleanup")):
+            source = (ROOT / "scripts" / helper_name).read_text(encoding="utf-8")
+            calls = [node for node in ast.walk(ast.parse(source)) if isinstance(node, ast.Call)
+                     and isinstance(node.func, ast.Name) and node.func.id == "print"
+                     and len(node.args) == 1 and isinstance(node.args[0], ast.Constant)
+                     and isinstance(node.args[0].value, str) and marker in node.args[0].value]
+            self.assertEqual(len(calls), 1, helper_name)
+            self.assertIn("\u2192", calls[0].args[0].value)
+            statements.append((helper_name, ast.get_source_segment(source, calls[0]), calls[0].args[0].value))
+        payload = "pr\u00e9flight \U0001f680"
+        with tempfile.TemporaryDirectory(prefix="mixel-python-workflow-") as directory:
+            old_environment = {**os.environ, "PYTHONUTF8": "0", "PYTHONIOENCODING": "cp1252"}
+            scripts = []
+            for helper_name, statement, status in statements:
+                code = statement + "\nimport sys\n" + \
+                    "print(" + repr(payload) + ")\nprint(sys.stdout.encoding)\n" + \
+                    "sys.exit(int(sys.argv[1]))\n"
+                script = Path(directory) / helper_name
+                script.write_text(code, encoding="utf-8")
+                scripts.append((script, status))
+                original = subprocess.run([sys.executable, str(script), "0"], env=old_environment,
+                                          capture_output=True, timeout=15)
+                self.assertNotEqual(original.returncode, 0, helper_name)
+                self.assertIn(b"UnicodeEncodeError", original.stderr)
+                self.assertIn(b"\\u2192", original.stderr)
+            for workflow_name in ("preflight.yml", "build.yml"):
+                workflow = (ROOT / ".github/workflows" / workflow_name).read_text(encoding="utf-8")
+                blocks = re.findall(r"^env:\n((?:[ \t]+[^\n]*\n)+)", workflow, flags=re.M)
+                self.assertEqual(len(blocks), 1, workflow_name + " requires one inherited environment")
+                encoding_environment = {}
+                for name, expected in (("PYTHONUTF8", "1"), ("PYTHONIOENCODING", "utf-8")):
+                    values = re.findall(r"^  " + name + r': "([^"\n]+)"$', blocks[0], flags=re.M)
+                    self.assertEqual(values, [expected], workflow_name + ": " + name)
+                    encoding_environment[name] = values[0]
+                environment = {**old_environment, **encoding_environment}
+                for script, status in scripts:
+                    for exit_code in (0, 23):
+                        with self.subTest(workflow=workflow_name, helper=script.name, exit_code=exit_code):
+                            result = subprocess.run([sys.executable, str(script), str(exit_code)], env=environment,
+                                                    capture_output=True, timeout=15)
+                            self.assertEqual(result.returncode, exit_code)
+                            self.assertEqual(result.stdout.decode("utf-8"), status + "\n" + payload + "\nutf-8\n")
+                            self.assertEqual(result.stderr, b"")
+                self.assertEqual(old_environment["PYTHONIOENCODING"], "cp1252")
 
 
 class PinnedDependencyRetryTests(unittest.TestCase):
