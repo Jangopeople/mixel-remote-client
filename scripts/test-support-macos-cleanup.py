@@ -29,7 +29,8 @@ def source_files(source):
 
 def fixture(root, files, newline=b"\n"):
     root.mkdir()
-    (root / "Cargo.toml").write_text('[package]\nversion = "1.4.6"\n')
+    (root / "Cargo.toml").write_bytes(
+        b'[package]\nversion = "1.4.6"\n'.replace(b"\n", newline))
     for name, data in files.items():
         path = root / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -69,6 +70,20 @@ def materialization(out, files):
             assert (root / P.OWNED / name).read_bytes() == original
         assert (root / P.GENERATED).read_bytes() == P.UTILITY.encode()
     count = 0
+    for label, cargo in (
+        ("wrong-package-version", '[package]\nversion = "1.4.7"\n[dependencies]\nversion = "1.4.6"\n'),
+        ("missing-package", '[dependencies]\nversion = "1.4.6"\n'),
+        ("duplicate-package", '[package]\nversion = "1.4.6"\n[package]\nversion = "1.4.6"\n'),
+        ("duplicate-version", '[package]\nversion = "1.4.6"\nversion = "1.4.6"\n'),
+        ("missing-version", '[package]\nname = "fixture"\n[dependencies]\nversion = "1.4.6"\n'),
+    ):
+        root = out / label
+        fixture(root, files)
+        (root / "Cargo.toml").write_text(cargo)
+        before = snapshot(root)
+        refusal(lambda: P.apply(root))
+        assert snapshot(root) == before
+        count += 1
     for name in files:
         root = out / ("source-drift-" + Path(name).stem)
         fixture(root, files)

@@ -638,8 +638,10 @@ def transform(name, data):
 def apply(repo):
     for name in tuple(FILES) + (GENERATED, OWNED + "/proof.json"):
         safe_parents(repo, name)
-    cargo = regular(repo / "Cargo.toml").decode()
-    if '\nversion = "1.4.6"\n' not in cargo:
+    cargo = regular(repo / "Cargo.toml").decode().replace("\r\n", "\n")
+    packages = re.findall(r"(?ms)^\[package\]\s*\n(.*?)(?=^\[|\Z)", cargo)
+    if (len(packages) != 1 or
+            re.findall(r'^version\s*=\s*"([^"]+)"\s*$', packages[0], re.M) != ["1.4.6"]):
         raise RuntimeError("Mac cleanup correction requires upstream 1.4.6")
     owned = repo / OWNED
     expected_members = set(FILES) | {"proof.json"}
