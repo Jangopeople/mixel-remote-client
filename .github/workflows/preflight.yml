@@ -227,6 +227,7 @@ jobs:
           python3 scripts/test-support-macos-uri-routing.py
           python3 scripts/test-support-macos-url-ack.py
           python3 scripts/test-support-macos-url-async-peer.py
+          python3 scripts/test-macos-update.py
           python3 scripts/test-support-lease.py
           python3 scripts/test-windows-lease-error.py
           python3 scripts/test-support-network.py

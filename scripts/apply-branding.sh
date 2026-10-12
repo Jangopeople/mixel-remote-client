@@ -38,6 +38,7 @@ echo "→ Applying branding: $APP_NAME ($MACOS_BUNDLE_ID) on top of RustDesk $UP
 # Runtime helper checks and update paths must use the same bundle identity as
 # the privilege templates. Keep ORG untouched so existing preferences remain.
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-macos-service-label.py" "$MACOS_BUNDLE_ID"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-macos-update.py"
 
 # Install the customer-consented support invite handoff in each fresh upstream checkout.
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-invite.py"
