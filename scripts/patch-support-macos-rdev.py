@@ -268,6 +268,15 @@ def apply(repo: Path, restore: bool = False, check: bool = False) -> None:
             canonical, _newline = normalized(actual)
             if canonical != input_patch.patch_grab(original.decode("utf-8")):
                 raise RuntimeError("Pinned Linux input overlay is required")
+        elif relative == input_patch.ANDROID_PATH:
+            canonical, _newline = normalized(actual)
+            old = original.decode("utf-8")
+            new = input_patch.patch_android(old)
+            # Exact pre-correction checkouts can migrate through the existing
+            # restore-before-input sequence. Application requires the fixed
+            # table; restoration never writes this input-owned file.
+            if canonical != new and not (restore and canonical == old):
+                raise RuntimeError("Pinned Android input overlay is required")
         else:
             canonical, _newline = normalized(actual)
             if canonical != original.decode("utf-8"):

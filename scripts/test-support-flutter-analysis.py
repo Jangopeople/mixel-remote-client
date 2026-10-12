@@ -198,8 +198,8 @@ def shell_controls(out,bash,source):
         if isinstance(call,ast.Call) and isinstance(call.func,ast.Name) and call.func.id=="run"
         and call.args and isinstance(call.args[0],ast.List)
         and isinstance(call.args[0].elts[0],ast.Name) and call.args[0].elts[0].id=="bash"]
-    assert len(shell_runs)==7,"Full pipeline no longer uses the exact supplied shell for all seven calls"
-    # Execute the exact current pipeline with only its seven shell executables
+    assert len(shell_runs)==9,"Full pipeline no longer uses the exact supplied shell for all nine calls"
+    # Execute the exact current pipeline with only its nine shell executables
     # restored to the observed old bare `bash` boundary. Git/source operations
     # remain real; the Windows WSL process result alone is a labelled stand-in.
     # The full corrected pipeline below executes the supplied real shell.
@@ -244,13 +244,13 @@ def shell_controls(out,bash,source):
         "runtime_path_refusals":runtime_refusals,
         "original_version_substring_false_refusal_reproduced_mocked_version_only":True,
         "installation_layout_controls_mocked_only":True,"path_refusals":refusals,
-        "existing_unix_default_preserved":True,"all_seven_pipeline_calls_exact_supplied_shell":True,
+        "existing_unix_default_preserved":True,"all_nine_pipeline_calls_exact_supplied_shell":True,
         "original_bare_bash_failure_boundary_reproduced":True,
         "original_windows_wsl_process_result_mocked_only":True,
         "original_archive_autocrlf_conversion_reproduced":True,
         "corrected_private_shell_archive_equals_committed_lf_bytes":True
     },sort_keys=True,indent=2)+"\n",encoding="utf-8")
-    print("PASS: exact supplied Bash executes spaced Unicode script/argument/environment; seven missing/relative/WSL/non-Git paths refuse; Unix default and all seven exact pipeline calls preserved")
+    print("PASS: exact supplied Bash executes spaced Unicode script/argument/environment; seven missing/relative/WSL/non-Git paths refuse; Unix default and all nine exact pipeline calls preserved")
 
 
 def encoding_controls(out):
@@ -373,7 +373,11 @@ def dependency_profile(out,dependency,setting,label):
     saved={name:(dependency/name).read_bytes() for name in tracked}
     originals={name:subprocess.check_output(["git","-C",str(dependency),"cat-file","blob","HEAD:"+name],timeout=60) for name in tracked}
     modified={name:data for name,data in saved.items() if data.replace(b"\r\n",b"\n")!=originals[name]}
-    assert set(modified)<={"src/linux/grab.rs",*R.FILES},"Unexpected fixture modification before profile conversion"
+    assert set(modified)<={"src/linux/grab.rs","src/keycodes/android.rs",*R.FILES},"Unexpected fixture modification before profile conversion"
+    if "src/keycodes/android.rs" in modified:
+        source=originals["src/keycodes/android.rs"]
+        assert sha(source)=="461b84c7676baf5cc3356bfba9ead2c8ce32a52d8a403843978b1c626ded9c92"
+        assert modified["src/keycodes/android.rs"].replace(b"\r\n",b"\n")==source.replace(b"    BackQuote, 75,\n",b"    BackQuote, 68,\n",1)
     run(["git","-C",str(dependency),"config","--local","core.autocrlf",setting],out,label+"-config")
     run(["git","-C",str(dependency),"config","--local","core.eol","crlf" if setting=="true" else "lf"],out,label+"-eol")
     for name in tracked:
@@ -417,7 +421,7 @@ def pipeline(out,source,bash):
                  "patch-support-macos-termination.py","test-support-macos-termination.py",
                  "patch-support-flutter-sdk-compatibility.py","test-support-flutter-sdk-compatibility.py",
                  "test-support-macos-cleanup.py","test-support-macos-window.py",
-                 "patch-support-macos-rdev.py"):
+                 "patch-support-macos-rdev.py","patch-support-input.py"):
         shutil.copyfile(ROOT/"scripts"/name,copied/"scripts"/name)
     script=copied/"scripts/apply-branding.sh"
     shell_source="$"+"{BASH_SOURCE[0]}"
@@ -478,6 +482,23 @@ def pipeline(out,source,bash):
         run([bash,script.as_posix()],out,"pipeline-"+label+"-2",cwd=copied,env=env)
         assert snapshot(repo)==first,"Full pipeline second pass changed bytes"
         (out/("pipeline-"+label+"-snapshot.json")).write_text(json.dumps(first,sort_keys=True,indent=2)+"\n",encoding="utf-8")
+        android_target=dependency/"src/keycodes/android.rs"
+        android_saved=android_target.read_bytes()
+        android_newline=b"\r\n" if b"\r\n" in android_saved else b"\n"
+        android_old=subprocess.check_output(["git","-C",str(dependency),"cat-file","blob","HEAD:src/keycodes/android.rs"],timeout=60)
+        assert sha(android_old)=="461b84c7676baf5cc3356bfba9ead2c8ce32a52d8a403843978b1c626ded9c92"
+        assert android_saved.replace(b"\r\n",b"\n")==android_old.replace(b"    BackQuote, 75,\n",b"    BackQuote, 68,\n",1)
+        # A previously branded exact old table may pass only the read-only
+        # restore prefix; the input producer must fix it before Mac reapply.
+        android_target.write_bytes(android_old.replace(b"\n",android_newline))
+        run([bash,script.as_posix()],out,"pipeline-"+label+"-android-legacy-migration",cwd=copied,env=env)
+        assert snapshot(repo)==first,"Exact old Android migration changed another final pipeline byte"
+        android_target.write_bytes(android_saved.replace(b"    Quote, 75,",b"    Quote, 76,"))
+        android_before=snapshot(repo)
+        android_failed=run([bash,script.as_posix()],out,"pipeline-"+label+"-android-drift-refusal",cwd=copied,env=env,success=False)
+        assert_pipeline_refusal(android_failed,"Pinned Android input overlay is required")
+        assert snapshot(repo)==android_before,"Android table drift restored an earlier valid overlay before refusal"
+        android_target.write_bytes(android_saved)
         # A late dependency refusal used to restore valid SDK/Quit overlays
         # first. Exercise the entire actual shell macro on the fully composed
         # state, so helper-local zero-write checks cannot hide that regression.

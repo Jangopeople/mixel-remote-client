@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Patch the locked rdev dependency locally, preserving X11 capture on EINTR."""
+"""Patch locked rdev input capture and the Android physical grave-key mapping."""
+import hashlib
 import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 import tempfile
 
@@ -10,6 +12,8 @@ UPSTREAM_URL = "https://github.com/rustdesk-org/rdev"
 PIN = "f9b60b1dd0f3300a1b797d7a74c116683cd232c8"
 DEPENDENCY = ".mixel-deps/rdev"
 PATCH_TABLE = f'\n[patch."{UPSTREAM_URL}"]\nrdev = {{ path = "{DEPENDENCY}" }}\n'
+ANDROID_PATH = "src/keycodes/android.rs"
+ANDROID_SHA256 = "461b84c7676baf5cc3356bfba9ead2c8ce32a52d8a403843978b1c626ded9c92"
 OLD = """            Err(e) => {
                 log::error!("Failed to poll event, {}", e);
                 break;
@@ -35,6 +39,24 @@ def patch_grab(source: str) -> str:
     if source.count(OLD) != 1:
         raise RuntimeError("Pinned rdev X11 poll loop changed")
     return source.replace(OLD, NEW, 1)
+
+
+def patch_android(source: str) -> str:
+    # Android KEYCODE_GRAVE is 68; KEYCODE_APOSTROPHE remains 75.
+    # https://developer.android.com/reference/android/view/KeyEvent#KEYCODE_GRAVE
+    original = source.replace("    BackQuote, 68,\n", "    BackQuote, 75,\n")
+    if hashlib.sha256(original.encode("utf-8")).hexdigest() != ANDROID_SHA256 or original.count("    BackQuote, 75,\n") != 1:
+        raise RuntimeError("Pinned rdev Android mapping table changed")
+    return original.replace("    BackQuote, 75,\n", "    BackQuote, 68,\n", 1)
+
+
+def android_bytes(source: bytes) -> bytes:
+    text = source.decode("utf-8")
+    canonical = text.replace("\r\n", "\n")
+    if "\r" in canonical or ("\r\n" in text and "\n" in text.replace("\r\n", "")):
+        raise RuntimeError("Mixed or unsupported Android mapping newlines")
+    newline = "\r\n" if "\r\n" in text else "\n"
+    return patch_android(canonical).replace("\n", newline).encode("utf-8")
 
 
 def patch_manifest(source: str) -> str:
@@ -86,7 +108,7 @@ def apply(repo: Path) -> None:
     if run(["remote", "get-url", "origin"], dependency) != UPSTREAM_URL:
         raise RuntimeError("Local rdev override has an unexpected upstream")
     modified = run(["diff", "--name-only", "HEAD"], dependency).splitlines()
-    if any(path != "src/linux/grab.rs" for path in modified):
+    if any(path not in ("src/linux/grab.rs", ANDROID_PATH) for path in modified):
         raise RuntimeError("Local rdev override contains unrelated source changes")
     # Cargo can implicitly execute an added build.rs, even if tracked files
     # are untouched. This checkout has no build outputs or generated files.
@@ -98,10 +120,22 @@ def apply(repo: Path) -> None:
     target = dependency / "src/linux/grab.rs"
     if target.read_text(encoding="utf-8") not in (original, expected):
         raise RuntimeError("Local rdev X11 override contains unexpected changes")
+    android = dependency / ANDROID_PATH
+    try:
+        record = android.lstat()
+    except FileNotFoundError as error:
+        raise RuntimeError("Missing pinned Android mapping source") from error
+    if not stat.S_ISREG(record.st_mode) or record.st_nlink != 1 or getattr(record, "st_file_attributes", 0) & 0x400:
+        raise RuntimeError("Android mapping source must be an owned ordinary file")
+    old_android = android.read_bytes()
+    new_android = android_bytes(old_android)
+    # Validate both input changes before the first source/manifest/lock write.
     target.write_text(expected, encoding="utf-8")
+    if old_android != new_android:
+        android.write_bytes(new_android)
     manifest.write_text(new_manifest, encoding="utf-8")
     lock.write_text(new_lock, encoding="utf-8")
-    print("   installed pinned local rdev override: interrupted X11 polls retain keyboard capture")
+    print("   installed pinned local rdev override: interrupted X11 polls retain keyboard capture; Android grave/apostrophe keys remain distinct")
 
 
 if __name__ == "__main__":
