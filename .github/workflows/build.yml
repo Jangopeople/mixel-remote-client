@@ -661,6 +661,12 @@ jobs:
           channel: stable
           flutter-version: ${{ env.FLUTTER_VERSION }}
 
+      - name: Resolve canonical Windows Dart executable
+        shell: pwsh
+        run: |
+          python -c "import os, sys; from pathlib import Path; sys.path.insert(0, 'scripts'); from sdk_discovery import find_dart; binary = find_dart(); assert binary and Path(binary).is_file(), 'Installed Dart SDK is missing'; assert not binary.lower().endswith('.exe') or binary.endswith('.exe'), 'Windows Dart executable suffix is not canonical'; stream = open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8', newline='\n'); stream.write('DART_BIN=' + binary + '\n'); stream.close(); print('PASS: canonical installed Windows Dart executable exported to unchanged source tests')"
+          if ($LASTEXITCODE -ne 0) { throw 'Windows Dart SDK resolution failed.' }
+
       - name: Restore compiled codec cache
         uses: actions/cache@v5
         with:
