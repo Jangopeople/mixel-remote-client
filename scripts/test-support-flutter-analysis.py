@@ -27,6 +27,10 @@ sdk_spec=importlib.util.spec_from_file_location("mixel_sdk_compatibility_composi
 S=importlib.util.module_from_spec(sdk_spec)
 sdk_spec.loader.exec_module(S)
 
+rdev_spec=importlib.util.spec_from_file_location("mixel_rdev_fixture_profiles",ROOT/"scripts/patch-support-macos-rdev.py")
+R=importlib.util.module_from_spec(rdev_spec)
+rdev_spec.loader.exec_module(R)
+
 
 def run(args,out,label,*,cwd=None,env=None,success=True):
     # The parent decoder cannot configure a captured Python child's encoder.
@@ -362,6 +366,40 @@ def pipeline_failure_diagnostics_controls(out):
     print("PASS: exact fatal markers and nonzero child exits remain mandatory; mismatches retain bounded actual stderr/exit")
 
 
+def dependency_profile(out,dependency,setting,label):
+    # A Git newline policy belongs to the complete checkout. Rewriting just
+    # keyboard.rs leaves other CRLF tracked files dirty under autocrlf=false.
+    tracked=subprocess.check_output(["git","-C",str(dependency),"ls-files","-z"],timeout=60).decode("utf-8").split("\0")[:-1]
+    saved={name:(dependency/name).read_bytes() for name in tracked}
+    originals={name:subprocess.check_output(["git","-C",str(dependency),"cat-file","blob","HEAD:"+name],timeout=60) for name in tracked}
+    modified={name:data for name,data in saved.items() if data.replace(b"\r\n",b"\n")!=originals[name]}
+    assert set(modified)<={"src/linux/grab.rs",*R.FILES},"Unexpected fixture modification before profile conversion"
+    run(["git","-C",str(dependency),"config","--local","core.autocrlf",setting],out,label+"-config")
+    run(["git","-C",str(dependency),"config","--local","core.eol","crlf" if setting=="true" else "lf"],out,label+"-eol")
+    for name in tracked:
+        target=dependency/name
+        assert target.is_file() and not target.is_symlink() and target.stat().st_nlink==1
+        target.unlink()
+    run(["git","-C",str(dependency),"checkout","HEAD","--","."],out,label+"-checkout-all")
+    newline=b"\r\n" if setting=="true" else b"\n"
+    for name in tracked:
+        actual=(dependency/name).read_bytes()
+        assert actual==originals[name].replace(b"\n",newline),name
+    # Preserve verified overlay content with the selected Mac checkout
+    # newlines. The Linux producer uses native text IO; retain its exact bytes
+    # so the complete macro remains byte-idempotent on either host.
+    for name,data in modified.items():
+        (dependency/name).write_bytes(data if name=="src/linux/grab.rs" else data.replace(b"\r\n",b"\n").replace(b"\n",newline))
+    (out/(label+"-tracked-profile.json")).write_text(json.dumps({
+        "autocrlf":setting,"tracked_count":len(tracked),
+        "all_pristine_paths_materialized_through_git":True,
+        "retained_verified_overlay_paths":sorted(modified),
+        "verified_overlay_logical_sha256":{name:sha(data.replace(b"\r\n",b"\n")) for name,data in modified.items()},
+        "git_attributes":subprocess.check_output(["git","-C",str(dependency),"check-attr","-a","--",*tracked],timeout=60).decode("utf-8"),
+        "tracked_sha256":{name:sha((dependency/name).read_bytes()) for name in tracked}
+    },sort_keys=True,indent=2)+"\n",encoding="utf-8")
+
+
 def pipeline(out,source,bash):
     copied=out/"pipeline-source"
     copied.mkdir()
@@ -396,7 +434,9 @@ def pipeline(out,source,bash):
     originals={name:pinned(source,name) for name in P.FILES if name!="flutter/lib/common.dart"}
     originals[P.CLIENT]=pinned(source,P.CLIENT)
     assert sha(originals[P.CLIENT])==P.CLIENT_SHA256
-    for label,newline in (("lf",b"\n"),("crlf",b"\r\n")):
+    for app_newlines,initial_profile in (("lf","false"),("lf","true"),("crlf","false"),("crlf","true")):
+        newline=b"\n" if app_newlines=="lf" else b"\r\n"
+        label=app_newlines+"-initial-"+initial_profile
         repo=out/("pipeline-"+label)
         run(["git","clone","--quiet","--shared",str(source),str(repo)],out,"clone-"+label)
         run(["git","-C",str(repo),"checkout","--quiet",P.PIN],out,"checkout-"+label)
@@ -407,7 +447,25 @@ def pipeline(out,source,bash):
         run(["git","-C",str(repo/"libs/hbb_common"),"checkout","--quiet",library_pin],out,"hbb-checkout-"+label)
         for name in P.FILES:
             (repo/name).write_bytes(pinned(source,name).replace(b"\n",newline))
+        # Reproduce the complete Windows-inherited checkout before the first
+        # macro, not just one CRLF file introduced into a Unix-LF dependency.
+        dependency=repo/R.DEPENDENCY
+        dependency.mkdir(parents=True)
+        for arguments in (["init","--quiet"],
+                          ["config","--local","core.autocrlf",initial_profile],
+                          ["config","--local","core.eol","crlf" if initial_profile=="true" else "lf"],
+                          ["remote","add","origin",R.UPSTREAM],
+                          ["fetch","--quiet","--depth","1","origin",R.PIN],
+                          ["checkout","--quiet","--detach",R.PIN]):
+            run(["git","-C",str(dependency),*arguments],out,"pipeline-"+label+"-initial-"+arguments[0]+("-eol" if "core.eol" in arguments else ""))
+        initial_tracked=snapshot(dependency)
+        initial_newline=b"\r\n" if initial_profile=="true" else b"\n"
+        for relative in initial_tracked:
+            logical=subprocess.check_output(["git","-C",str(dependency),"cat-file","blob","HEAD:"+relative],timeout=60)
+            assert (dependency/relative).read_bytes()==logical.replace(b"\n",initial_newline),relative
+        (out/("pipeline-"+label+"-initial-tracked.json")).write_text(json.dumps(initial_tracked,sort_keys=True,indent=2)+"\n",encoding="utf-8")
         env=dict(os.environ,RDREPO=repo.as_posix(),BRANDING=(copied/"branding").as_posix())
+        run([sys.executable,str(copied/"scripts/patch-support-input.py")],out,"pipeline-"+label+"-initial-input",env=env)
         run([bash,script.as_posix()],out,"pipeline-"+label+"-1",cwd=copied,env=env)
         S.apply(repo,check=True)
         for name,(_,corrected,*_) in P.FILES.items():
@@ -425,17 +483,12 @@ def pipeline(out,source,bash):
         # state, so helper-local zero-write checks cannot hide that regression.
         dependency_target=repo/".mixel-deps/rdev/src/macos/keyboard.rs"
         dependency_saved=dependency_target.read_bytes()
+        tracked_saved={name:(dependency/name).read_bytes() for name in subprocess.check_output(["git","-C",str(dependency),"ls-files","-z"],timeout=60).decode("utf-8").split("\0")[:-1]}
         dependency_config=repo/".mixel-deps/rdev/.git/config"
         dependency_config_saved=dependency_config.read_bytes()
         try:
             for checkout_crlf,newline in (("false",b"\n"),("true",b"\r\n")):
-                # Materialize the real tracked file through Git's conversion,
-                # with the same configuration active for every macro Git
-                # command. A checkout-only override is not an inherited
-                # profile: the next git diff would classify CRLF as drift.
-                run(["git","-C",str(repo/".mixel-deps/rdev"),"config","--local","core.autocrlf",checkout_crlf],out,"pipeline-"+label+"-rdev-config-"+checkout_crlf)
-                dependency_target.unlink()
-                run(["git","-C",str(repo/".mixel-deps/rdev"),"checkout","HEAD","--","src/macos/keyboard.rs"],out,"pipeline-"+label+"-rdev-checkout-"+checkout_crlf)
+                dependency_profile(out,dependency,checkout_crlf,"pipeline-"+label+"-rdev-"+checkout_crlf)
                 inherited=dependency_target.read_bytes()
                 assert inherited==dependency_saved.replace(b"\r\n",b"\n").replace(b"\n",newline)
                 clean=snapshot(repo)
@@ -455,9 +508,19 @@ def pipeline(out,source,bash):
                 dependency_failed=run([bash,script.as_posix()],out,"pipeline-"+label+"-rdev-refusal-"+checkout_crlf,cwd=copied,env=env,success=False)
                 assert_pipeline_refusal(dependency_failed,"Unrelated rdev source drift")
                 assert snapshot(repo)==dependency_before,"Dependency refusal changed an earlier overlay file"
+                dependency_target.write_bytes(inherited)
         finally:
-            dependency_target.write_bytes(dependency_saved)
+            for relative,data in tracked_saved.items():
+                (dependency/relative).write_bytes(data)
             dependency_config.write_bytes(dependency_config_saved)
+        assert dependency_config.read_bytes()==dependency_config_saved,"Dependency profile changed the original Git configuration"
+        assert snapshot(repo)==first,"Dependency profile did not restore complete original checkout bytes"
+        (out/("pipeline-"+label+"-restoration.json")).write_text(json.dumps({
+            "complete_checkout_bytes_restored":True,"original_git_config_bytes_restored":True,
+            "git_config_sha256_before":sha(dependency_config_saved),
+            "git_config_sha256_after":sha(dependency_config.read_bytes()),
+            "tracked_count":len(tracked_saved)
+        },sort_keys=True,indent=2)+"\n",encoding="utf-8")
         dependency=repo/".mixel-deps/rdev"
         missing_dependency=out/("retained-missing-rdev-"+label)
         dependency.rename(missing_dependency)
@@ -477,12 +540,12 @@ def pipeline(out,source,bash):
         assert_pipeline_refusal(failed,"Changed application-exit current source: flutter/lib/common.dart")
         assert snapshot(repo)==before,"Drift refusal changed another pipeline file"
         target.write_bytes(saved)
-        if label=="lf":
+        if app_newlines=="lf":
             canonical=T.regular(repo/"flutter/.mixel-dependencies/macos_application_exit",name)
             common=canonical.replace("import 'dart:convert';\n".encode(),"import 'dart:convert';\nimport 'dart:math';\n".encode(),1)
             assert sha(common)==P.FILES[name][0]
             originals[name]=common
-    print("PASS: exact current complete branding, cleanup, analyzer and final Quit composition; LF/CRLF twice byte-identical; Dart and dependency drift fail without mutation")
+    print("PASS: exact current complete branding, cleanup, analyzer and final Quit composition; app LF/CRLF crossed with complete initial LF/CRLF dependency checkouts, each twice byte-identical; whole tracked profiles and Dart/dependency drift fail without mutation")
     return originals
 
 
