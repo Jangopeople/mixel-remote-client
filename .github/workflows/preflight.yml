@@ -38,6 +38,7 @@ jobs:
       - name: Run release staging and configuration regression tests
         run: |
           python3 scripts/test-release-pipeline.py
+          python3 scripts/test-flutter-sdk-pipeline.py
           python3 scripts/test-standard-lease-qa-bundle.py
           python3 scripts/test-windows-release-runtime.py
           python3 scripts/test-notarize-macos.py
@@ -78,7 +79,7 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: '3.24.5'
+          flutter-version: '3.27.4'
       - name: Fetch pinned complete Windows source
         shell: bash
         env:
@@ -248,7 +249,7 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: '3.24.5'
+          flutter-version: '3.27.4'
       - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: '1.75'
@@ -262,7 +263,8 @@ jobs:
         run: git clone --depth 1 --branch "$UPSTREAM_VERSION" --recurse-submodules https://github.com/rustdesk/rustdesk.git rustdesk
       - name: Exercise actual source patches and support reporter
         run: |
-          python3 scripts/test-support-flutter-analysis.py --dart "$(command -v dart)"
+          python3 scripts/test-support-flutter-analysis.py --dart "$(command -v dart)" --evidence-dir "$RUNNER_TEMP/mixel-sdk-source"
+          python3 scripts/test-support-flutter-sdk-compatibility.py --app "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf"
           python3 scripts/test-support-macos-termination.py --flutter "$(command -v flutter)"
           python3 scripts/test-support-invite.py
           python3 scripts/test-generated-support-paths.py
@@ -297,7 +299,14 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: '3.24.5'
+          flutter-version: '3.27.4'
+      - name: Prepare the exact release Flutter framework for native regression checks
+        run: |
+          flutter precache --macos
+          mixel_flutter_framework="$(python3 -c 'import pathlib,shutil; print(pathlib.Path(shutil.which("flutter")).resolve().parents[1] / "bin/cache/artifacts/engine/darwin-x64-release/FlutterMacOS.xcframework/macos-arm64_x86_64/FlutterMacOS.framework")')"
+          test -f "$mixel_flutter_framework/Headers/FlutterEngine.h"
+          echo "MIXEL_FLUTTER_FRAMEWORK=$mixel_flutter_framework" >> "$GITHUB_ENV"
+
       - name: Prepare Intel execution on an Apple Silicon runner
         run: |
           if [[ "$(uname -m)" == "arm64" ]]; then
@@ -307,16 +316,20 @@ jobs:
         env:
           UPSTREAM_VERSION: ${{ steps.config.outputs.upstream_version }}
         run: git clone --depth 1 --branch "$UPSTREAM_VERSION" --recurse-submodules https://github.com/rustdesk/rustdesk.git rustdesk
+      - name: Prove exact SDK source compatibility and composed branding
+        run: |
+          python3 scripts/test-support-flutter-analysis.py --dart "$(command -v dart)" --evidence-dir "$RUNNER_TEMP/mixel-sdk-source"
+          python3 scripts/test-support-flutter-sdk-compatibility.py --app "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf"
       - name: Prove native Mac failure boundaries and actual pinned Rust final link
         env:
           MACOS_RUNTIME_LINK_TARGET: x86_64-apple-darwin
         run: python3 scripts/test-support-macos.py
       - name: Prove native Mac subwindow startup and failure propagation
-        run: python3 scripts/test-support-macos-window.py --native
+        run: python3 scripts/test-support-macos-window.py --native --flutter-framework "$MIXEL_FLUTTER_FRAMEWORK"
       - name: Prove awaited Mac page and terminal cleanup with real Flutter widgets
         run: python3 scripts/test-support-macos-cleanup.py --dart "$(command -v dart)" --flutter "$(command -v flutter)"
       - name: Prove bounded main-engine Quit and owned resource cleanup
-        run: python3 scripts/test-support-macos-termination.py --flutter "$(command -v flutter)"
+        run: python3 scripts/test-support-macos-termination.py --flutter "$(command -v flutter)" --framework "$MIXEL_FLUTTER_FRAMEWORK"
       - name: Exercise native macOS URL activation and window probe self-tests
         run: |
           python3 scripts/test-support-launch-macos-diagnostics.py

@@ -50,7 +50,7 @@ env:
   PYTHONIOENCODING: "utf-8"
   RUST_VERSION: "1.75"
   MAC_RUST_VERSION: "1.81"
-  FLUTTER_VERSION: "3.24.5"
+  FLUTTER_VERSION: "3.27.4"
   VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
   VCPKG_BINARY_SOURCES: "clear;files,${{ github.workspace }}/.vcpkg-binary-cache,readwrite"
 
@@ -74,6 +74,7 @@ jobs:
       - name: Verify release staging and build configuration
         run: |
           python3 scripts/test-release-pipeline.py
+          python3 scripts/test-flutter-sdk-pipeline.py
           python3 scripts/test-notarize-macos.py
           python3 scripts/test-windows-preflight-build.py
       - id: preflight_request
@@ -150,6 +151,12 @@ jobs:
           rm -rf rustdesk
           git clone --depth 1 --branch "${UPSTREAM_VERSION}" --recurse-submodules \
             https://github.com/rustdesk/rustdesk.git rustdesk
+
+      - name: Apply exact SDK compatibility before bridge generation
+        run: ./scripts/apply-branding.sh
+        env:
+          RDREPO: ./rustdesk
+          BRANDING: ./branding
 
       - name: Install flutter_rust_bridge_codegen
         run: |
@@ -274,6 +281,7 @@ jobs:
           RDREPO: ./rustdesk
         run: |
           python3 scripts/test-support-flutter-analysis.py --dart "$(command -v dart)"
+          python3 scripts/test-support-flutter-sdk-compatibility.py --app rustdesk --flutter "$(command -v flutter)"
           python3 scripts/test-support-macos-termination.py --flutter "$(command -v flutter)"
           python3 scripts/test-support-invite.py
           python3 scripts/test-generated-support-paths.py
@@ -423,6 +431,13 @@ jobs:
           channel: stable
           flutter-version: ${{ env.FLUTTER_VERSION }}
 
+      - name: Prepare the exact release Flutter framework for native regression checks
+        run: |
+          flutter precache --macos
+          mixel_flutter_framework="$(python3 -c 'import pathlib,shutil; print(pathlib.Path(shutil.which("flutter")).resolve().parents[1] / "bin/cache/artifacts/engine/darwin-x64-release/FlutterMacOS.xcframework/macos-arm64_x86_64/FlutterMacOS.framework")')"
+          test -f "$mixel_flutter_framework/Headers/FlutterEngine.h"
+          echo "MIXEL_FLUTTER_FRAMEWORK=$mixel_flutter_framework" >> "$GITHUB_ENV"
+
       - name: Restore compiled codec cache
         uses: actions/cache@v5
         with:
@@ -496,7 +511,8 @@ jobs:
           MACOS_RUNTIME_LINK_TARGET: ${{ matrix.job.target }}
         run: |
           python3 scripts/test-support-flutter-analysis.py --dart "$(command -v dart)"
-          python3 scripts/test-support-macos-termination.py --flutter "$(command -v flutter)"
+          python3 scripts/test-support-flutter-sdk-compatibility.py --app rustdesk --flutter "$(command -v flutter)"
+          python3 scripts/test-support-macos-termination.py --flutter "$(command -v flutter)" --framework "$MIXEL_FLUTTER_FRAMEWORK"
           python3 scripts/test-support-invite.py
           python3 scripts/test-generated-support-paths.py
           python3 scripts/test-support-lease.py
@@ -508,7 +524,7 @@ jobs:
           python3 scripts/test-support-clipboard.py
           python3 scripts/test-support-video.py
           python3 scripts/test-support-macos.py
-          python3 scripts/test-support-macos-window.py
+          python3 scripts/test-support-macos-window.py --flutter-framework "$MIXEL_FLUTTER_FRAMEWORK"
           python3 scripts/test-support-macos-cleanup.py --dart "$(command -v dart)" --flutter "$(command -v flutter)"
           python3 scripts/test-support-wakelock.py
           python3 scripts/test-branding.py
@@ -808,6 +824,7 @@ jobs:
         env:
           VCPKG_ROOT: ${{ github.workspace }}/vcpkg
           RDREPO: ./rustdesk
+          MIXEL_SDK_FULL_APP_PREFLIGHT: "true"
         run: bash scripts/test-windows-generated-source.sh
 
       - name: Build (cargo + flutter via build.py)

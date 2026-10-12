@@ -20,6 +20,10 @@ TERMINATION_SPEC = importlib.util.spec_from_file_location("mixel_cleanup_exit_co
 T = importlib.util.module_from_spec(TERMINATION_SPEC)
 TERMINATION_SPEC.loader.exec_module(T)
 
+sdk_spec=importlib.util.spec_from_file_location("mixel_sdk_compatibility_composition",ROOT/"scripts/patch-support-flutter-sdk-compatibility.py")
+S=importlib.util.module_from_spec(sdk_spec)
+sdk_spec.loader.exec_module(S)
+
 
 def source_files(source):
     archive_args = ["git", "-C", str(source), "-c", "core.autocrlf=false", "archive", "--format=tar", P.PIN] + list(P.FILES)
@@ -158,7 +162,9 @@ def full_branding(out, files, source, bash=None):
                 target.parent.mkdir(parents=True,exist_ok=True)
                 target.write_bytes(stream.extractfile(member).read())
     for name in ("apply-branding.sh","patch-support-macos-cleanup.py","test-support-macos-cleanup.py",
-                 "patch-support-macos-termination.py"):
+                 "patch-support-macos-termination.py","patch-support-flutter-sdk-compatibility.py",
+                 "test-support-flutter-sdk-compatibility.py","test-support-flutter-analysis.py",
+                 "test-support-macos-termination.py","test-support-macos-window.py"):
         shutil.copyfile(ROOT/"scripts"/name,copied/"scripts"/name)
     script=copied/"scripts/apply-branding.sh"
     original=script.read_text()
@@ -193,7 +199,7 @@ def full_branding(out, files, source, bash=None):
             assert "patched bounded Mac page cleanup" in result.stdout
             assert "native loaders, protocol handlers, Linux app identity and relay defaults verified" in result.stdout
             before_check=pipeline_snapshot(repo)
-            T.apply(repo,check=True)
+            S.apply(repo,check=True)
             assert pipeline_snapshot(repo)==before_check,"Final Quit validation mutated the pipeline"
             for name,data in files.items():
                 corrected=P.transform(name,data)
@@ -201,6 +207,10 @@ def full_branding(out, files, source, bash=None):
                     canonical=T.regular(repo/"flutter/.mixel-dependencies/macos_application_exit",name)
                     assert canonical==corrected,name
                     corrected=T.transform(name,canonical)
+                if name in S.FILES:
+                    canonical=S.regular(repo/S.OWNED,name)
+                    assert canonical==corrected,name
+                    corrected=S.transform(name,canonical)
                 assert (repo/name).read_bytes()==corrected.replace(b"\n",newline),name
                 assert (repo/P.OWNED/name).read_bytes()==data,name
             assert (repo/P.GENERATED).read_bytes()==P.UTILITY.encode()

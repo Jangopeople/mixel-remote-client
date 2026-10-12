@@ -33,8 +33,9 @@ fi
 # shellcheck source=/dev/null
 source "$BRANDING/branding.env"
 
-# Restore only the exact owned late Quit correction before pinned earlier
-# helpers see their canonical inputs on repeated complete branding passes.
+# Restore exact owned compatibility and Quit overlays in reverse order before
+# pinned earlier helpers see canonical inputs on repeated branding passes.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-flutter-sdk-compatibility.py" --restore "$RDREPO"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-termination.py" --restore "$RDREPO"
 
 echo "→ Applying branding: $APP_NAME ($MACOS_BUNDLE_ID) on top of RustDesk $UPSTREAM_VERSION"
@@ -1002,5 +1003,6 @@ echo "   native loaders, protocol handlers, Linux app identity and relay default
 # common.dart must have its complete branded identity before this pinned check.
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-flutter-analysis.py"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-termination.py" "$RDREPO"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-flutter-sdk-compatibility.py" "$RDREPO"
 
 echo "✓ Branding applied — product identity is $APP_NAME only."

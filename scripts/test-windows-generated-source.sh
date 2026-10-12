@@ -7,7 +7,16 @@ mixel_analyzer_bash="$BASH"
 if [[ "${OS:-}" == Windows_NT ]]; then
   mixel_analyzer_bash="$(cygpath -w "$BASH")"
 fi
-python scripts/test-support-flutter-analysis.py --dart "$(command -v dart)" --bash "$mixel_analyzer_bash"
+python scripts/test-support-flutter-analysis.py --dart "$(command -v dart)" --bash "$mixel_analyzer_bash" --evidence-dir "$RUNNER_TEMP/mixel-sdk-source"
+case "${MIXEL_SDK_FULL_APP_PREFLIGHT:-false}" in
+  true|false) ;;
+  *) echo "Invalid complete SDK application preflight request" >&2; exit 1 ;;
+esac
+if [[ "${MIXEL_SDK_FULL_APP_PREFLIGHT:-false}" == true ]]; then
+  python scripts/test-support-flutter-sdk-compatibility.py --app "$RDREPO" --flutter "$(command -v flutter)" --bash "$mixel_analyzer_bash"
+else
+  python scripts/test-support-flutter-sdk-compatibility.py --app "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --bash "$mixel_analyzer_bash"
+fi
 python scripts/test-support-macos-termination.py --flutter "$(command -v flutter)" --bash "$mixel_analyzer_bash"
 unset mixel_analyzer_bash
 for mixel_source_test in \

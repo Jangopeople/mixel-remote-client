@@ -664,6 +664,10 @@ Microsoft.PowerShell.Utility\Write-Host 'PASS: exact original WorldEvent API/ACL
             root = Path(temporary)
             scripts = root / "scripts"
             scripts.mkdir()
+            runner_temp = root / "runner temporary préflight 🚀"
+            app = root / "full application préflight 🚀"
+            runner_temp.mkdir()
+            app.mkdir()
             dispatcher = scripts / "test-windows-generated-source.sh"
             dispatcher.write_bytes((ROOT / "scripts/test-windows-generated-source.sh").read_bytes())
             # Only the native environment and individual test bodies are
@@ -686,30 +690,51 @@ if sys.argv[1]=='scripts/test-support-lease.py':
     print('CONTROL: unchanged fatal native gate',flush=True)
     sys.exit(23)
 ''', encoding="utf-8", newline="\n")
-            result = subprocess.run([bash, str(dispatcher)], cwd=root,
-                                    env={**os.environ, "MIXEL_SOURCE_ORDER_PYTHON": Path(sys.executable).resolve().as_posix(),
-                                         "MIXEL_SOURCE_ORDER_SHIM": python.as_posix()},
-                                    capture_output=True, text=True, timeout=15)
-            self.assertEqual(result.returncode, 23, result.stdout + result.stderr)
-            self.assertEqual((root / "actual-invocations.log").read_text().splitlines(), [
-                "scripts/test-support-flutter-analysis.py",
-                "scripts/test-support-macos-termination.py",
-                "scripts/test-support-invite.py", "scripts/test-generated-support-paths.py",
-                "scripts/test-windows-lease-observation.py", "scripts/test-support-lease.py"])
-            arguments = [json.loads(line) for line in (root / "actual-argv.jsonl").read_text(encoding="utf-8").splitlines()]
+            environment = {**os.environ, "MIXEL_SOURCE_ORDER_PYTHON": Path(sys.executable).resolve().as_posix(),
+                           "MIXEL_SOURCE_ORDER_SHIM": python.as_posix(),
+                           "RUNNER_TEMP": runner_temp.as_posix(), "RDREPO": app.as_posix(),
+                           "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+            environment.pop("MIXEL_SDK_FULL_APP_PREFLIGHT", None)
             expected_shell = subprocess.check_output([bash, "-c",
                 'if [[ "${OS:-}" == Windows_NT ]]; then cygpath -w "$BASH"; else printf "%s\\n" "$BASH"; fi'],
                 text=True, encoding="utf-8", timeout=15).strip()
-            self.assertEqual(arguments[0][0:2], ["scripts/test-support-flutter-analysis.py", "--dart"])
-            self.assertEqual(arguments[0][3:], ["--bash", expected_shell])
-            self.assertTrue(Path(arguments[0][4]).is_absolute(), "Dispatcher lost the active full Bash path")
-            self.assertEqual(arguments[1][0:2], ["scripts/test-support-macos-termination.py", "--flutter"])
-            self.assertEqual(arguments[1][3:], ["--bash", expected_shell])
-            self.assertEqual(arguments[2:], [[name] for name in [
+            preceding = [
                 "scripts/test-support-invite.py", "scripts/test-generated-support-paths.py",
-                "scripts/test-windows-lease-observation.py", "scripts/test-support-lease.py"]])
-            self.assertIn("CONTROL: unchanged fatal native gate", result.stdout)
-            print("PASS: exact generated-source dispatcher executes Flutter analyzer, Mac Quit and calling-thread/reader controls before the unchanged fatal native lease gate; fatal result stops later tests.", flush=True)
+                "scripts/test-windows-lease-observation.py", "scripts/test-support-lease.py"]
+            for full in (None, "", "false", "true", "TRUE", " true"):
+                with self.subTest(full_app_request=full):
+                    for name in ("actual-invocations.log", "actual-argv.jsonl"):
+                        (root / name).unlink(missing_ok=True)
+                    case_environment = dict(environment)
+                    if full is not None:
+                        case_environment["MIXEL_SDK_FULL_APP_PREFLIGHT"] = full
+                    result = subprocess.run([bash, str(dispatcher)], cwd=root, env=case_environment,
+                                            capture_output=True, text=True, encoding="utf-8", timeout=15)
+                    arguments = [json.loads(line) for line in (root / "actual-argv.jsonl").read_text(encoding="utf-8").splitlines()]
+                    self.assertEqual(arguments[0][0:2], ["scripts/test-support-flutter-analysis.py", "--dart"])
+                    self.assertEqual(arguments[0][3:], ["--bash", expected_shell, "--evidence-dir",
+                                                       runner_temp.as_posix() + "/mixel-sdk-source"])
+                    self.assertTrue(Path(arguments[0][4]).is_absolute(), "Dispatcher lost the active full Bash path")
+                    if full in ("TRUE", " true"):
+                        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                        self.assertIn("Invalid complete SDK application preflight request", result.stderr)
+                        self.assertEqual(len(arguments), 1, "Invalid request reached SDK or native tests")
+                        continue
+                    self.assertEqual(result.returncode, 23, result.stdout + result.stderr)
+                    expected_sdk = ["scripts/test-support-flutter-sdk-compatibility.py", "--app"]
+                    if full == "true":
+                        self.assertEqual(arguments[1][0:4], expected_sdk + [app.as_posix(), "--flutter"])
+                        self.assertEqual(arguments[1][5:], ["--bash", expected_shell])
+                    else:
+                        self.assertEqual(arguments[1], expected_sdk + [runner_temp.as_posix() + "/mixel-sdk-source/pipeline-lf",
+                                                                     "--bash", expected_shell])
+                    self.assertEqual(arguments[2][0:2], ["scripts/test-support-macos-termination.py", "--flutter"])
+                    self.assertEqual(arguments[2][3:], ["--bash", expected_shell])
+                    self.assertEqual(arguments[3:], [[name] for name in preceding])
+                    self.assertEqual((root / "actual-invocations.log").read_text(encoding="utf-8").splitlines(),
+                                     [row[0] for row in arguments])
+                    self.assertIn("CONTROL: unchanged fatal native gate", result.stdout)
+            print("PASS: exact generated-source dispatcher preserves spaced Unicode runner/application paths, default/source and explicit full-app SDK gates, invalid-request refusal, then Flutter analyzer, SDK, Mac Quit and calling-thread/reader controls before unchanged fatal native23; later tests remain unrun.", flush=True)
 
     @staticmethod
     def mocked_bridge():

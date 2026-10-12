@@ -35,6 +35,31 @@ FRAME_ENGINE_FILES = {
     "shell/common/vsync_waiter.cc": "46c8896cb4b28fc954d47246b4a1da88ac1419113d45718fa779ec0f249e2002",
 }
 
+SDK_PROFILES = {
+    "3.24.5": {"engine": ENGINE, "native": ENGINE_FILES, "frame": FRAME_ENGINE_FILES},
+    "3.27.4": {
+        "engine": "82bd5b7209295a5b7ff8cae0df96e7870171e3a5",
+        "native": dict(ENGINE_FILES, **{
+            "Source/FlutterEngine.mm": "76c759afa2356594198986da8a35a3dd2eea8255936f8666d1f9e82494a9d7dc",
+            "Source/FlutterViewController.mm": "346a89442eb07dbe7e63a83890fa9507131f5a6c35c5f207859e3d72dfe40a4e",
+            "Headers/FlutterEngine.h": "87a325c6c9089f2c4fec8215a1ec717a7fc0fd4d7d2c5f2a82fe16b890c3bae7",
+        }),
+        "frame": dict(FRAME_ENGINE_FILES, **{
+            "shell/common/engine.cc": "76204b363afd759104b763a9ff5aea959faf6da121ff165eb39c87326935230e",
+        }),
+    },
+}
+
+
+def framework_profile(framework):
+    engine_header = P.sha((framework / "Headers/FlutterEngine.h").read_bytes())
+    lifecycle_header = P.sha((framework / "Headers/FlutterAppLifecycleDelegate.h").read_bytes())
+    matched = [version for version, profile in SDK_PROFILES.items()
+               if engine_header == profile["native"]["Headers/FlutterEngine.h"] and
+               lifecycle_header == profile["native"]["Headers/FlutterAppLifecycleDelegate.h"]]
+    assert len(matched) == 1, "Actual Flutter SDK public header drift"
+    return matched[0]
+
 
 def checked(args, output, name):
     result = subprocess.run(args, capture_output=True, text=True, timeout=60)
@@ -740,13 +765,15 @@ int main(){@autoreleasepool {
 }}
 '''
 
-def engine_controls(output):
+def engine_controls(output, version="3.24.5"):
+    profile = SDK_PROFILES[version]
+    engine = profile["engine"]
     official = output / "official-engine"
     official.mkdir()
-    bindings = {"flutter_version": "3.24.5", "engine_revision": ENGINE, "files": {}}
+    bindings = {"flutter_version": version, "engine_revision": engine, "files": {}}
     sources = {}
-    for relative, digest in ENGINE_FILES.items():
-        url = ("https://raw.githubusercontent.com/flutter/engine/" + ENGINE +
+    for relative, digest in profile["native"].items():
+        url = ("https://raw.githubusercontent.com/flutter/engine/" + engine +
                "/shell/platform/darwin/macos/framework/" + relative)
         with urlopen(url, timeout=30) as response:
             data = response.read(2 * 1024 * 1024)
@@ -754,11 +781,11 @@ def engine_controls(output):
         (official / Path(relative).name).write_bytes(data)
         sources[relative] = data.decode()
         bindings["files"][relative] = {"url": url, "sha256": digest, "bytes": len(data)}
-    version_url = "https://raw.githubusercontent.com/flutter/flutter/3.24.5/bin/internal/engine.version"
+    version_url = "https://raw.githubusercontent.com/flutter/flutter/" + version + "/bin/internal/engine.version"
     with urlopen(version_url, timeout=30) as response:
-        version = response.read(128)
-    assert version == (ENGINE + "\n").encode(), "Pinned Flutter version no longer binds the expected engine"
-    (official / "engine.version").write_bytes(version)
+        engine_version = response.read(128)
+    assert engine_version == (engine + "\n").encode(), "Pinned Flutter version no longer binds the expected engine"
+    (official / "engine.version").write_bytes(engine_version)
     bindings["engine_version_url"] = version_url
     source = sources["Source/FlutterEngine.mm"]
     initial = "_active = NO;\n  _visible = NO;"
@@ -779,14 +806,16 @@ def engine_controls(output):
     text = checked([str(binary)], output, "actual-engine-lifecycle")
     assert "PASS: exact pinned engine initializes visibility false" in text
     assert "PASS: exact pinned handlers synchronize all four" in text
-    frame_readiness_controls(output, sources["Source/FlutterEngine.mm"], sources["Source/FlutterViewController.mm"])
+    frame_readiness_controls(output, sources["Source/FlutterEngine.mm"], sources["Source/FlutterViewController.mm"], version)
 
 
-def frame_readiness_controls(output, native_engine, view_controller):
+def frame_readiness_controls(output, native_engine, view_controller, version="3.24.5"):
+    profile = SDK_PROFILES[version]
+    engine = profile["engine"]
     sources = {}
-    bindings = {"flutter_version": "3.24.5", "engine_revision": ENGINE, "files": {}}
-    for relative, digest in FRAME_ENGINE_FILES.items():
-        url = "https://raw.githubusercontent.com/flutter/engine/" + ENGINE + "/" + relative
+    bindings = {"flutter_version": version, "engine_revision": engine, "files": {}}
+    for relative, digest in profile["frame"].items():
+        url = "https://raw.githubusercontent.com/flutter/engine/" + engine + "/" + relative
         with urlopen(url, timeout=30) as response:
             data = response.read(2 * 1024 * 1024)
         assert P.sha(data) == digest, "Pinned Flutter frame source drift: " + relative
@@ -829,7 +858,8 @@ def frame_readiness_controls(output, native_engine, view_controller):
 def native_controls(output, files, framework):
     compiler = shutil.which("swiftc")
     assert compiler and sys.platform == "darwin", "Native Mac Swift compiler required"
-    engine_controls(output)
+    version = framework_profile(framework.resolve()) if framework else "3.24.5"
+    engine_controls(output, version)
     ready_window = P.patch_file("macos/Classes/FlutterWindow.swift", files["macos/Classes/FlutterWindow.swift"]).decode()
     ready_init = extract_function(ready_window, "  init?(id:")
     for label in ("original", "corrected"):
@@ -885,8 +915,7 @@ def native_controls(output, files, framework):
     if framework:
         framework = framework.resolve()
         assert framework.name == "FlutterMacOS.framework" and framework.is_dir(), "Actual FlutterMacOS framework required"
-        for name in ("FlutterEngine.h", "FlutterAppLifecycleDelegate.h"):
-            assert P.sha((framework / "Headers" / name).read_bytes()) == ENGINE_FILES["Headers/" + name], "Actual Flutter SDK public header drift: " + name
+        assert framework_profile(framework) == version
         module = output / "actual-plugin"
         module.mkdir()
         paths = []
@@ -901,7 +930,7 @@ def native_controls(output, files, framework):
             checked([compiler, "-typecheck", "-warnings-as-errors", "-sdk", sdk,
                      "-target", arch + "-apple-macos" + minimum, "-F", str(framework.parent)] + paths,
                     output, "actual-pinned-framework-" + arch + "-complete-plugin-typecheck")
-        print("PASS: all four complete Swift plugin sources typecheck against actual pinned Flutter framework on arm64 and x86_64")
+        print("PASS: all four complete Swift plugin sources typecheck against actual Flutter" + version + " framework on arm64 and x86_64")
 
 
 def main():

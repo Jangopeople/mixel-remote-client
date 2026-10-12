@@ -18,6 +18,10 @@ spec = importlib.util.spec_from_file_location('mixel_app_exit', ROOT/'scripts/pa
 P = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(P)
 
+sdk_spec=importlib.util.spec_from_file_location("mixel_sdk_compatibility_composition",ROOT/"scripts/patch-support-flutter-sdk-compatibility.py")
+S=importlib.util.module_from_spec(sdk_spec)
+sdk_spec.loader.exec_module(S)
+
 
 def run(args, out, label, cwd=None):
     if os.name=='nt' and Path(args[0]).suffix.lower()=='.bat':
@@ -46,7 +50,7 @@ def snapshot(root):
 
 
 def source_controls(source, out):
-    P.apply(source,check=True)
+    (S.apply(source,check=True) if (source/S.OWNED).exists() else P.apply(source,check=True))
     count = 0
     for ending in (b'\n', b'\r\n'):
         fixture = out/('source-lf' if ending == b'\n' else 'source-crlf')
@@ -134,7 +138,7 @@ def source_controls(source, out):
 
 
 def canonical(source,name):
-    current,_=P.normalize(P.regular(source,name))
+    current,_=P.normalize(S.regular(source/S.OWNED,name) if (source/S.OWNED).exists() and name in S.FILES else P.regular(source,name))
     if P.digest(current)==P.FILES[name]: return current
     original=P.regular(source/'flutter/.mixel-dependencies/macos_application_exit',name)
     if P.digest(original)!=P.FILES[name] or current!=P.transform(name,original):
@@ -268,7 +272,9 @@ def full_branding(out,bash):
             if member.isfile():
                 target=copied/member.name; target.parent.mkdir(parents=True,exist_ok=True)
                 target.write_bytes(stream.extractfile(member).read())
-    for name in ('apply-branding.sh','patch-support-macos-termination.py','test-support-macos-termination.py'):
+    for name in ('apply-branding.sh','patch-support-macos-termination.py','test-support-macos-termination.py',
+                 'patch-support-flutter-sdk-compatibility.py','test-support-flutter-sdk-compatibility.py',
+                 'test-support-flutter-analysis.py','test-support-macos-cleanup.py','test-support-macos-window.py'):
         shutil.copy2(ROOT/'scripts'/name,copied/'scripts'/name)
     verifier=copied/'scripts/patch-support-macos-cleanup.py'
     verifier_lf,_=P.normalize(verifier.read_bytes())
@@ -297,12 +303,16 @@ def full_branding(out,bash):
             for name in P.FILES:
                 original=P.regular(repo/'flutter/.mixel-dependencies/macos_application_exit',name)
                 assert P.digest(original)==P.FILES[name]
-                current,_=P.normalize(P.regular(repo,name))
+                current,_=P.normalize(S.regular(repo/S.OWNED,name) if name in S.FILES else P.regular(repo,name))
                 # Existing complete branding already normalizes some targets
                 # to LF. The standalone controls prove our incoming-byte
                 # preservation; here both original checkout newline variants
                 # must produce exact corrected bodies and stable all-file bytes.
                 assert current==P.transform(name,original),name
+            S.apply(repo,check=True)
+            for name in S.FILES:
+                original=S.regular(repo/S.OWNED,name)
+                assert S.normalize(S.regular(repo,name))[0]==S.transform(name,original),name
             current=pipeline_snapshot(repo)
             if attempt==1: first=current
             else: assert first==current,'Whole branding changed on its second pass'
@@ -355,20 +365,25 @@ int main() { @autoreleasepool {
 '''
 
 
-def original_controls(out):
-    revision='a18df97ca57a249df5d8d68cd0820600223ce262'
+def original_controls(out, framework=None):
+    spec=importlib.util.spec_from_file_location('mixel_quit_sdk_profile',ROOT/'scripts/test-support-macos-window.py')
+    window=importlib.util.module_from_spec(spec); spec.loader.exec_module(window)
+    version=window.framework_profile(framework.resolve()) if framework else '3.24.5'
+    profile=window.SDK_PROFILES[version]
+    revision=profile['engine']
     base='https://raw.githubusercontent.com/flutter/engine/'+revision+'/shell/platform/darwin/macos/framework/Source/'
     sources={}
     for name in ('FlutterAppDelegate.mm','FlutterEngine.mm'):
         with urlopen(base+name,timeout=30) as response: data=response.read(200000)
-        if name=='FlutterEngine.mm': assert P.digest(data)=='1e59b42da1a82999b5d902ad94f4036265ce3f1dea9ccaae04fee1e89d3a5d5c'
+        if name=='FlutterEngine.mm': assert P.digest(data)==profile['native']['Source/FlutterEngine.mm']
+        else: assert P.digest(data)=='c71c33c770713f350f0c183a6ee3d7f28a364f653e1c3044e942efe2dfbbee15'
         (out/name).write_bytes(data); sources[name]=data.decode('utf-8')
     source=sources['FlutterAppDelegate.mm']
     anchor='- (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication* _Nonnull)sender {'
     start=source.index(anchor); method=source[start:P.brace_end(source,start)+1]
     assert 'flutterAppDelegate.terminationHandler = self;' in sources['FlutterEngine.mm']
     assert sources['FlutterEngine.mm'].count('_terminationHandler = [[FlutterEngineTerminationHandler alloc] initWithEngine:self\n                                                                       terminator:nil];')==1
-    manifest={'revision':revision,'files':{name:P.digest((out/name).read_bytes()) for name in sources},
+    manifest={'flutter_version':version,'revision':revision,'files':{name:P.digest((out/name).read_bytes()) for name in sources},
               'original_delegate_method_sha256':P.digest(method.encode()),
               'mock_boundary':'Handler only models its actual pending shouldTerminate flag; no app/engine launch.'}
     (out/'original-source-bindings.json').write_text(json.dumps(manifest,indent=2)+'\n',encoding='utf-8')
@@ -840,6 +855,7 @@ def dart_controls(out, app, flutter, pipeline):
     if app:
         copied=out/'app-fixture'
         shutil.copytree(app,copied,ignore=shutil.ignore_patterns('.git','build','__pycache__'))
+        if (copied/S.OWNED).exists(): S.apply(copied,restore=True)
         for name in (*P.FILES,P.GENERATED):
             shutil.copy2(fixture/name,copied/name)
         shutil.copytree(fixture/'flutter/.mixel-dependencies/macos_application_exit',
@@ -869,6 +885,10 @@ dev_dependencies:
     run([str(flutter),'pub','get'],out,'flutter-exit-fixture-pub-get',widget)
     run([str(flutter),'test','--no-pub','test'],out,'flutter-actual-exit-resource-tests',widget)
     if app:
+        version=json.loads(run([str(flutter),'--version','--machine'],out,'actual-full-app-sdk-version',copied/'flutter'))['frameworkVersion']
+        if version==S.SDK:
+            S.apply(copied)
+            run([str(flutter),'pub','get'],out,'actual-full-app-sdk-pub-get',copied/'flutter')
         run([str(flutter),'analyze','--no-pub','--no-fatal-infos'],out,'flutter-full-app-analysis',copied/'flutter')
     print('PASS: actual Flutter resource/handler controls'+(' and complete app analysis.' if app else '.'))
 
@@ -903,7 +923,7 @@ def main():
     fixture=source_controls(args.source,args.output)
     previous_cleanup_controls(args.output,fixture)
     if shutil.which('xcrun'):
-        original_controls(args.output)
+        original_controls(args.output,args.framework)
         swift_controls(args.output,args.framework,fixture)
     if args.flutter: dart_controls(args.output,args.app,args.flutter,args.source)
     if args.full_branding: full_branding(args.output,bash)

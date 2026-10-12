@@ -23,6 +23,10 @@ termination_spec=importlib.util.spec_from_file_location("mixel_application_exit_
 T=importlib.util.module_from_spec(termination_spec)
 termination_spec.loader.exec_module(T)
 
+sdk_spec=importlib.util.spec_from_file_location("mixel_sdk_compatibility_composition",ROOT/"scripts/patch-support-flutter-sdk-compatibility.py")
+S=importlib.util.module_from_spec(sdk_spec)
+sdk_spec.loader.exec_module(S)
+
 
 def run(args,out,label,*,cwd=None,env=None,success=True):
     # The parent decoder cannot configure a captured Python child's encoder.
@@ -344,7 +348,9 @@ def pipeline(out,source,bash):
     # without mutating root-owned files.
     for name in ("apply-branding.sh","patch-support-macos-cleanup.py",
                  "patch-support-flutter-analysis.py","test-support-flutter-analysis.py",
-                 "patch-support-macos-termination.py","test-support-macos-termination.py"):
+                 "patch-support-macos-termination.py","test-support-macos-termination.py",
+                 "patch-support-flutter-sdk-compatibility.py","test-support-flutter-sdk-compatibility.py",
+                 "test-support-macos-cleanup.py","test-support-macos-window.py"):
         shutil.copyfile(ROOT/"scripts"/name,copied/"scripts"/name)
     script=copied/"scripts/apply-branding.sh"
     shell_source="$"+"{BASH_SOURCE[0]}"
@@ -374,7 +380,7 @@ def pipeline(out,source,bash):
             (repo/name).write_bytes(pinned(source,name).replace(b"\n",newline))
         env=dict(os.environ,RDREPO=repo.as_posix(),BRANDING=(copied/"branding").as_posix())
         run([bash,script.as_posix()],out,"pipeline-"+label+"-1",cwd=copied,env=env)
-        T.apply(repo,check=True)
+        S.apply(repo,check=True)
         for name,(_,corrected,*_) in P.FILES.items():
             actual=(repo/name).read_bytes().replace(b"\r\n",b"\n")
             canonical=(T.regular(repo/"flutter/.mixel-dependencies/macos_application_exit",name)
@@ -541,12 +547,12 @@ def diagnostic_counts(text):
 
 
 def analyze_app(out,source,flutter,files):
-    # The supplied complete dependency/codegen context is read-only. Restore
-    # the exact pre-correction six files only in an owned analysis fixture, so
-    # this proof also works after apply-branding has already applied the fix.
+    # Validate every final ownership layer without changing the supplied app.
     source_before=snapshot(source/"flutter")
+    sdk_overlay=(source/S.OWNED).exists() or (source/S.OWNED).is_symlink()
     application_exit=(source/T.GENERATED).exists() or (source/T.GENERATED).is_symlink()
-    if application_exit: T.apply(source,check=True)
+    if sdk_overlay: S.apply(source,check=True)
+    elif application_exit: T.apply(source,check=True)
     for name in P.FILES:
         canonical=(T.regular(source/"flutter/.mixel-dependencies/macos_application_exit",name)
                    if application_exit and name in T.FILES else (source/name).read_bytes())
@@ -556,45 +562,56 @@ def analyze_app(out,source,flutter,files):
         if (source/"flutter"/name).exists():
             shutil.copytree(source/"flutter"/name,checkout/"flutter"/name)
     for name in ("pubspec.yaml","pubspec.lock","analysis_options.yaml",".dart_tool/package_config.json"):
-        target=checkout/"flutter"/name
-        target.parent.mkdir(parents=True,exist_ok=True)
+        target=checkout/"flutter"/name; target.parent.mkdir(parents=True,exist_ok=True)
         shutil.copyfile(source/"flutter"/name,target)
     shutil.copyfile(source/"Cargo.toml",checkout/"Cargo.toml")
     if application_exit:
         for name in T.FILES:
             target=checkout/name; target.parent.mkdir(parents=True,exist_ok=True)
             shutil.copyfile(source/name,target)
-        # Strict exact-owned reversal happens only in this private analyzer
-        # fixture. The supplied app retains every final Quit correction byte.
-        T.apply(checkout,restore=True)
-    for name in P.FILES:
-        (checkout/name).write_bytes(files[name])
+    if sdk_overlay: S.apply(checkout,restore=True)
+    if application_exit: T.apply(checkout,restore=True)
+    for name in P.FILES: (checkout/name).write_bytes(files[name])
     env=dict(os.environ,CI="true",FLUTTER_SUPPRESS_ANALYTICS="true",DART_SUPPRESS_ANALYTICS="true")
+    version_run=run([str(flutter),"--version","--machine"],out,"actual-full-app-sdk-version",env=env)
+    version=json.loads(version_run.stdout)["frameworkVersion"]
+    assert version in ("3.24.5",S.SDK),"Unqualified Flutter analyzer SDK"
+    new_warnings=7 if version==S.SDK else 0
     before=snapshot(checkout/"flutter")
     baseline=run([str(flutter),"analyze","--no-pub","--no-fatal-infos"],out,"actual-full-app-baseline",cwd=checkout/"flutter",env=env,success=False)
     counts,_=diagnostic_counts(baseline.stdout+baseline.stderr)
-    assert counts["error"]==4 and counts["warning"]==5,counts
+    assert counts["error"]==4 and counts["warning"]==5+new_warnings,counts
     for name in P.FILES:
-        path=out/"actual-original"/name
-        path.parent.mkdir(parents=True,exist_ok=True)
+        path=out/"actual-original"/name; path.parent.mkdir(parents=True,exist_ok=True)
         path.write_bytes((checkout/name).read_bytes())
     P.apply(checkout)
+    middle_run=run([str(flutter),"analyze","--no-pub","--no-fatal-infos"],out,"actual-full-app-original-analysis-corrected",cwd=checkout/"flutter",env=env,success=new_warnings==0)
+    middle,_=diagnostic_counts(middle_run.stdout+middle_run.stderr)
+    assert middle["error"]==0 and middle["warning"]==new_warnings and middle["info"]==counts["info"],middle
+    middle_source=snapshot(checkout/"flutter")
+    assert {name for name in before if before[name]!=middle_source[name]}=={name.removeprefix("flutter/") for name in P.FILES}
+    for name in P.FILES:
+        path=out/"actual-corrected"/name; path.parent.mkdir(parents=True,exist_ok=True)
+        path.write_bytes((checkout/name).read_bytes())
+    # Reapply exact resource/Quit and SDK overlays only after proving that the
+    # original six-file correction retained its own independent byte boundary.
+    if application_exit: T.apply(checkout)
+    if version==S.SDK or sdk_overlay: S.apply(checkout)
     corrected=run([str(flutter),"analyze","--no-pub","--no-fatal-infos"],out,"actual-full-app-corrected",cwd=checkout/"flutter",env=env)
     fixed,_=diagnostic_counts(corrected.stdout+corrected.stderr)
     assert fixed["error"]==0 and fixed["warning"]==0 and fixed["info"]==counts["info"],fixed
-    after=snapshot(checkout/"flutter")
-    assert {name for name in before if before[name]!=after[name]}=={name.removeprefix("flutter/") for name in P.FILES}
     assert snapshot(source/"flutter")==source_before,"Supplied analysis checkout changed"
-    for name in P.FILES:
-        path=out/"actual-corrected"/name
-        path.parent.mkdir(parents=True,exist_ok=True)
-        path.write_bytes((checkout/name).read_bytes())
     (out/"complete-app-analysis-proof.json").write_text(json.dumps(
-        {"baseline_exit":baseline.returncode,"corrected_exit":corrected.returncode,
-         "baseline":dict(counts),"corrected":dict(fixed),"exact_six_target_conservation":True,
+        {"flutter_version":version,"baseline_exit":baseline.returncode,"corrected_exit":corrected.returncode,
+         "baseline":dict(counts),"original_analysis_layer_corrected":dict(middle),"corrected":dict(fixed),
+         "exact_six_target_conservation":True,"final_owned_layers_reapplied":{
+             "application_exit":application_exit,"sdk_overlay":version==S.SDK or sdk_overlay},
          "source_sha256":{name:sha((ROOT/"scripts"/name).read_bytes()) for name in (
-             "patch-support-flutter-analysis.py","test-support-flutter-analysis.py")}},sort_keys=True,indent=2)+"\n",encoding="utf-8")
-    print("PASS: real full Flutter3.24.5 application analyze: original4errors5warnings → corrected0errors0warnings; "+str(fixed["info"])+" existing info; exact six-file source conservation")
+             "patch-support-flutter-analysis.py","test-support-flutter-analysis.py",
+             "patch-support-flutter-sdk-compatibility.py")}},sort_keys=True,indent=2)+"\n",encoding="utf-8")
+    print("PASS: real full Flutter"+version+" analyze: original4errors"+str(5+new_warnings)+
+          "warnings -> six-file analysis correction0errors"+str(new_warnings)+
+          "warnings -> complete owned composition0errors0warnings; "+str(fixed["info"])+" existing infos")
 
 
 def main():
