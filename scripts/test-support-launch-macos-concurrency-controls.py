@@ -445,6 +445,10 @@ class ConcurrencyControls(unittest.TestCase):
 
     def test_preflight_wrapper_and_mandatory_source_command_exact_whole_inverse(self):
         text = C.canonical((ROOT / '.github/workflows/preflight.yml').read_bytes()).decode()
+        budget = "  windows-packaging:\n    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_source_runner == 'windows-2025' && 'windows-2025' || 'windows-2022' }}\n    timeout-minutes: 120\n"
+        previous_budget = budget.replace('    timeout-minutes: 120\n', '    timeout-minutes: 60\n', 1)
+        self.assertEqual(text.count(budget), 1)
+        text = text.replace(budget, previous_budget, 1)
         old = '          python3 scripts/test-support-launch-macos.py --self-test\n'
         current = '          python3 scripts/test-support-launch-macos-concurrency.py --original-desktop --self-test\n'
         control = '          python3 scripts/test-support-launch-macos-concurrency-controls.py --evidence-dir "$RUNNER_TEMP/mixel-macos-concurrency-source"\n'
