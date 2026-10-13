@@ -38,11 +38,14 @@ source "$BRANDING/branding.env"
 # Validate file-transfer, keyboard and input ownership before any restore writes.
 # The file-transfer check projects the exact prior SDK/Quit/cleanup chain.
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-native-warnings.py" --source "$RDREPO" --restore --check --before-branding
-python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-uinput-scroll.py" --check
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-fingerprint.py" --restore --check "$RDREPO"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-uinput-device.py" --source "$RDREPO" --restore --check
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-file-transfer-window.py" --restore --check --before-branding "$RDREPO"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-keyboard-default.py" --check
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-rdev.py" --restore --check "$RDREPO"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-fingerprint.py" --restore "$RDREPO"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-native-warnings.py" --source "$RDREPO" --restore
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-uinput-device.py" --source "$RDREPO" --restore
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-file-transfer-window.py" --restore "$RDREPO"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-flutter-sdk-compatibility.py" --restore "$RDREPO"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-termination.py" --restore "$RDREPO"
@@ -1020,6 +1023,8 @@ python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-flutter-sdk-compatibility.
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-file-transfer-window.py" "$RDREPO"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-keyboard-default.py"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-uinput-scroll.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-uinput-device.py" --source "$RDREPO"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-native-warnings.py" --source "$RDREPO" --after-branding
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-fingerprint.py" "$RDREPO"
 
 echo "✓ Branding applied — product identity is $APP_NAME only."

@@ -95,6 +95,50 @@ def runtime_refusal_controls(paths: list[str]) -> None:
     print("PASS: four exact runtime refusal paths accept; twelve successful, unrelated SDK or wrong-path results refuse")
 
 
+def write_corrupt_footer(path: Path) -> None:
+    original = path.read_bytes()
+    expected = b"launchUrl(Uri.parse('https://mixel.ch'));"
+    corrupted = b"launchUrl(Uri.parse('https://changed.example'));"
+    assert original.count(expected) == 1, "Exactly one verified footer destination required"
+    path.write_bytes(original.replace(expected, corrupted, 1))
+
+
+def require_footer_refusal(result: subprocess.CompletedProcess[str]) -> None:
+    assert result.returncode != 0, "Changed footer unexpectedly passed"
+    assert "Pinned file-transfer window source changed: flutter/lib/common.dart" in result.stderr, result.stderr[-4000:]
+
+
+def footer_refusal_controls(base: Path) -> None:
+    expected = b"launchUrl(Uri.parse('https://mixel.ch'));"
+    corrupted = b"launchUrl(Uri.parse('https://changed.example'));"
+    for profile, newline in (("LF", b"\n"), ("CRLF", b"\r\n")):
+        path = base / f"footer-{profile}.dart"
+        original = newline.join((b"// preserve surrounding source", expected, b"// preserve final newline", b""))
+        path.write_bytes(original)
+        write_corrupt_footer(path)
+        assert path.read_bytes() == original.replace(expected, corrupted, 1), profile
+    for index, malformed in enumerate((b"missing verified destination\n", expected + b"\n" + expected + b"\n")):
+        path = base / f"footer-malformed-{index}.dart"
+        path.write_bytes(malformed)
+        try:
+            write_corrupt_footer(path)
+        except AssertionError:
+            assert path.read_bytes() == malformed
+        else:
+            raise AssertionError("Missing or duplicate footer accepted")
+    marker = "Pinned file-transfer window source changed: flutter/lib/common.dart"
+    require_footer_refusal(subprocess.CompletedProcess([], 1, "", marker))
+    for code, error in ((0, marker), (1, "Changed SDK compatibility current source: flutter/lib/common.dart"),
+                        (1, "Pinned file-transfer window source changed: flutter/lib/other.dart")):
+        try:
+            require_footer_refusal(subprocess.CompletedProcess([], code, "", error))
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError("Successful, unrelated or wrong-path footer refusal accepted")
+    print("PASS: footer byte corruption preserves LF/CRLF; missing/duplicate sources and successful/unrelated/wrong-path refusals reject")
+
+
 with tempfile.TemporaryDirectory(prefix="mixel-branding-") as directory:
     base = Path(directory).resolve()
     repo = base / "rustdesk"
@@ -627,15 +671,16 @@ print("PASS: actual Debian generator child explicitly uses UTF-8 and preserves t
     # Recheck the untouched composed baseline before the later owned-source guards.
     run(BRANDING_COMMAND, cwd=base, env=env)
     assert full_source_snapshot(repo) == pristine, "Composed baseline changed before the footer control"
-    footer_source = repo / "flutter/lib/common.dart"
-    original_footer = footer_source.read_text(encoding="utf-8")
-    assert "launchUrl(Uri.parse('https://mixel.ch'));" in original_footer
-    footer_source.write_text(original_footer.replace("launchUrl(Uri.parse('https://mixel.ch'));", "launchUrl(Uri.parse('https://changed.example'));"), encoding="utf-8")
-    before_rejected_footer = snapshot(repo)
-    rejected = subprocess.run(BRANDING_COMMAND, cwd=base, env=env, capture_output=True, text=True, encoding="utf-8")
-    assert snapshot(repo) == before_rejected_footer, "Changed footer refusal must precede any pipeline mutation"
-    footer_source.write_text(original_footer, encoding="utf-8")
-    assert rejected.returncode != 0 and "Pinned file-transfer window source changed: flutter/lib/common.dart" in rejected.stderr, rejected.stderr[-4000:]
+    footer_refusal_controls(base)
+    footer_candidate = base / "footer-corruption"
+    shutil.copytree(repo, footer_candidate, symlinks=True)
+    assert full_source_snapshot(footer_candidate) == pristine
+    write_corrupt_footer(footer_candidate / "flutter/lib/common.dart")
+    before_rejected_footer = full_source_snapshot(footer_candidate)
+    rejected = subprocess.run(BRANDING_COMMAND, cwd=base, env={**env, "RDREPO": footer_candidate.as_posix()},
+                              capture_output=True, text=True, encoding="utf-8")
+    require_footer_refusal(rejected)
+    assert full_source_snapshot(footer_candidate) == before_rejected_footer, "Changed footer refusal must precede any pipeline mutation"
     assert full_source_snapshot(repo) == pristine, "Footer corruption control changed the composed baseline"
     print("PASS: full branding rejects a changed Flutter footer instead of retaining an unverified destination")
 

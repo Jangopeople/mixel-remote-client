@@ -172,7 +172,9 @@ def full_branding(out, files, source, bash=None):
                  "patch-support-file-transfer-window.py","test-support-file-transfer-window.py",
                  "patch-support-keyboard-default.py",
                  "patch-support-uinput-scroll.py",
-                 "patch-support-native-warnings.py","test-support-native-warnings.py"):
+                 "patch-support-uinput-device.py","test-support-uinput-device.py",
+                 "patch-support-native-warnings.py","test-support-native-warnings.py",
+                 "patch-support-fingerprint.py","test-support-fingerprint.py"):
         shutil.copyfile(ROOT/"scripts"/name,copied/"scripts"/name)
     script=copied/"scripts/apply-branding.sh"
     original=script.read_text()
