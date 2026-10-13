@@ -1,4 +1,4 @@
-param([switch]$RuntimeProbeOnly, [switch]$RequireStockWindowsPowerShell5)
+﻿param([switch]$RuntimeProbeOnly, [switch]$RequireStockWindowsPowerShell5)
 $ErrorActionPreference = 'Stop'
 if ($RequireStockWindowsPowerShell5 -and
     ($PSVersionTable.PSEdition -cne 'Desktop' -or $PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1 -or -not [Environment]::Is64BitProcess)) {
@@ -124,6 +124,31 @@ function Complete-OwnedNoncanonicalExitedDesktopControl([int]$OwnedPid, [string]
   return $true
 }
 
+function Complete-OwnedDesktopCleanup($Access, [string]$ExpectedHashes, [bool]$DesktopMayBeChanged) {
+  $failures=[System.Collections.Generic.List[string]]::new()
+  $processesExited=$false; $observationsClosed=$false; $disposeComplete=$null -eq $Access
+  $desktopRestored=-not $DesktopMayBeChanged
+  try { [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses(); $processesExited=$true }
+  catch { $failures.Add('Owned retained desktop process cleanup failed.') }
+  try { [MixelOrdinaryTokenFixture]::CloseStartedObservations(); $observationsClosed=$true }
+  catch { $failures.Add('Owned retained desktop observation cleanup failed.') }
+  if ($Access) {
+    try { $Access.Dispose(); $disposeComplete=$true }
+    catch { $failures.Add('Owned desktop ACL restoration failed.') }
+  }
+  if ($DesktopMayBeChanged) {
+    try {
+      if (-not $ExpectedHashes -or [MixelOrdinaryTokenFixture]::DesktopAclHashes() -cne $ExpectedHashes) {
+        throw 'Exact original station/desktop ACL hashes were not restored.'
+      }
+      $desktopRestored=$disposeComplete
+    } catch { $failures.Add('Owned desktop original ACL hash verification failed.') }
+  }
+  return [pscustomobject]@{processesExited=$processesExited; observationsClosed=$observationsClosed;
+    desktopRestored=$desktopRestored; cleanupOkay=($processesExited -and $observationsClosed -and $desktopRestored);
+    failures=$failures}
+}
+
 # Compile the exact native OS fixture used by the real ordinary-to-QS runtime
 # test; its policy checks are testable without launching or changing an app.
 $launchSource = Get-Content (Join-Path $PSScriptRoot 'test-support-launch-windows.ps1') -Raw
@@ -244,15 +269,28 @@ public static class MixelOwnedLeaseFixture {
 }
 '@ }
 if ([MixelOrdinaryTokenFixture]::OwnsLease($PID) -or [MixelOrdinaryTokenFixture]::LeasePresent()) { throw 'Fixture already has a product event owner.' }
+if ([MixelOrdinaryTokenFixture]::LeaseProbeError() -ne 2) { throw 'Read-only global lease observation did not prove the missing-event negative control.' }
+if ([MixelOrdinaryTokenFixture]::LeaseProbeErrorAsProcess($PID) -ne 2) { throw 'Actual-token read-only global lease observation did not prove the missing-event negative control.' }
+if ([MixelOrdinaryTokenFixture]::LeaseProbeErrorAsProcess(0) -ne -87) { throw 'Unavailable actual-token observation was not kept distinct from an absent event.' }
 $fixtureHandle = [MixelOwnedLeaseFixture]::Create()
 try {
+  if ([MixelOrdinaryTokenFixture]::LeaseProbeError() -ne 0) { throw 'Read-only global lease observation did not prove the actual live-event positive control.' }
+  if ([MixelOrdinaryTokenFixture]::LeaseProbeErrorAsProcess($PID) -ne 0) { throw 'Actual-token read-only global lease observation did not prove the actual live-event positive control.' }
   if (-not [MixelOrdinaryTokenFixture]::OwnsLease($PID)) { throw 'Actual SYNCHRONIZE event handle was not attributed to its process.' }
   if (-not [MixelOrdinaryTokenFixture]::LeasePresent()) { throw 'Live global consent event was not observed.' }
 } finally {
   [void][MixelOwnedLeaseFixture]::CloseHandle($fixtureHandle)
 }
 if ([MixelOrdinaryTokenFixture]::OwnsLease($PID) -or [MixelOrdinaryTokenFixture]::LeasePresent()) { throw 'Closed event remains owned or globally present.' }
+if ([MixelOrdinaryTokenFixture]::LeaseProbeError() -ne 2) { throw 'Read-only global lease observation retained a handle after the owned event was closed.' }
 Write-Host 'PASS: exact native runtime fixture observes the current PID owning the real SYNCHRONIZE-only global v2 event, then observes its handle release; unrelated event names fail closed.'
+$unownedIdentityRejected = $false
+try { [void][MixelOrdinaryTokenFixture]::SuspendedOwnedIdentity($PID) } catch {
+  if (-not $_.Exception.ToString().Contains('retained owned suspended process and primary thread')) { throw }
+  $unownedIdentityRejected = $true
+}
+if (-not $unownedIdentityRejected) { throw 'A PID without retained owned process/thread handles satisfied suspended identity qualification.' }
+Write-Host 'PASS: exact native identity qualification rejects an unowned current PID without retained process and suspended primary-thread handles.'
 
 # Exercise the exact disposable-account bootstrap before spending time on a
 # full signed build. The original runtime failure occurred before its GUI wait
@@ -277,6 +315,7 @@ if ($env:GITHUB_ACTIONS -ceq 'true' -and [MixelOrdinaryTokenFixture]::Elevated($
   if (-not $descriptionRejected) { throw 'Native New-LocalUser did not reject the original invalid 51-character fixture description.' }
   if (Get-LocalUser -Name $ownedUser -ErrorAction SilentlyContinue) { throw 'Invalid-description negative control unexpectedly created an account.' }
   Write-Host 'PASS: actual New-LocalUser rejects the original invalid 51-character description before creating any account.'
+  $accountFailure=$null; $guiCleanupKnown=$true
   try {
     . ([scriptblock]::Create($launchSource.Substring($accountStart, $accountEnd - $accountStart)))
     if (-not $ownedSid -or (Get-LocalUser -SID ([Security.Principal.SecurityIdentifier]::new($ownedSid))).Name -cne $ownedUser) {
@@ -288,6 +327,7 @@ if ($env:GITHUB_ACTIONS -ceq 'true' -and [MixelOrdinaryTokenFixture]::Elevated($
     # any customer HWND, incoming IPC, consent lease or 95-second runtime gate.
     $guiRoot = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) ('mixel-ordinary-fixture-' + [Guid]::NewGuid().ToString('N'))
     $guiProcess = $null; $guiPid = $null; $guiAccess = $null; $guiProfile = $false; $guiFailure = $null
+    $guiDesktopMayBeChanged=$false; $baselineAcls=$null
     try {
       New-Item -ItemType Directory $guiRoot | Out-Null
       $acl = Get-Acl $guiRoot
@@ -365,29 +405,30 @@ public static class MixelOwnedDesktopControl {
       if (Test-Path $guiResult) { Remove-Item $guiResult }
       $guiProcess = $null; $guiPid = $null; $trialFailure = $null
       try {
+      $guiCleanupKnown=$false; $guiDesktopMayBeChanged=$true
       $guiAccess = [MixelOrdinaryTokenFixture+DesktopAccess]::new($ownedSid, $canonical)
       $effectiveDesktopAccess = [MixelOrdinaryTokenFixture]::ActualStandardDesktopAccess($ownedUser, $ownedPassword, $ownedSid)
       Write-Host ("FIXTURE: $mode actual owned standard SID Win32 desktop access errors (0=granted): " + ($effectiveDesktopAccess | ConvertTo-Json -Compress))
       if ($effectiveDesktopAccess['station:0x327'] -ne 0 -or $effectiveDesktopAccess['desktop:0xc7'] -ne 0) { throw 'Owned standard SID lacks its exact temporarily granted Win32 desktop rights.' }
       $guiProfile = $true
       $guiStartedAt = [DateTime]::UtcNow
-      $guiPid = [MixelOrdinaryTokenFixture]::StartStandardUser($guiExecutable, $ownedUser, $ownedPassword)
+      # Qualify the exact retained process before it can enter Main or exit.
+      # The narrow desktop negative can fail during native DLL initialization;
+      # inspecting a running/exited PID afterward races the token/session check.
+      $guiPid = [MixelOrdinaryTokenFixture]::StartStandardUser($guiExecutable, $ownedUser, $ownedPassword, $true)
+      $guiProcess = Get-Process -Id $guiPid
+      $guiIdentity = [MixelOrdinaryTokenFixture]::SuspendedOwnedIdentity($guiPid)
+      Write-Host ("FIXTURE: $mode retained suspended owned process token identity: " + ($guiIdentity | ConvertTo-Json -Compress))
+      if ($guiIdentity['kernelPid'] -cne [string]$guiPid -or $guiIdentity['sid'] -cne $ownedSid -or
+          $guiIdentity['elevated'] -cne 'False' -or $guiIdentity['integritySid'] -cne 'S-1-16-8192' -or
+          $guiIdentity['sessionId'] -cne [string](Get-Process -Id $PID).SessionId -or
+          [MixelOrdinaryTokenFixture]::StartedStatus($guiPid) -cne 'still-running' -or (Test-Path $guiResult)) {
+        try { Write-OwnedDesktopIdentityDiagnostic $guiPid $ownedSid $mode ($guiIdentity['elevated'] -ceq 'True') $guiIdentity['sessionId'] ([string](Get-Process -Id $PID).SessionId) }
+        catch { try { Write-Host 'FIXTURE: secondary owned desktop identity diagnosis unavailable; original failure preserved.' } catch {} }
+        throw 'Owned suspended desktop control does not have its created standard SID, medium-integrity non-elevated token and actual runner session.'
+      }
+      if ([MixelOrdinaryTokenFixture]::ResumeOwnedPrimaryThread($guiPid) -ne 1) { throw 'Owned desktop control primary thread did not resume its one retained suspension.' }
       if (Complete-OwnedNoncanonicalExitedDesktopControl $guiPid $ownedSid $mode $desktopControls) { continue }
-      try { $guiProcess = Get-Process -Id $guiPid }
-      catch {
-        if ($_.FullyQualifiedErrorId -ceq 'NoProcessFoundForGivenId,Microsoft.PowerShell.Commands.GetProcessCommand' -and
-            (Complete-OwnedNoncanonicalExitedDesktopControl $guiPid $ownedSid $mode $desktopControls)) { continue }
-        throw
-      }
-      $guiElevated=[MixelOrdinaryTokenFixture]::Elevated($guiPid)
-      $predicateChildSession=$null; $predicateCallerSession=$null
-      if ($guiElevated -or ($predicateChildSession=$guiProcess.SessionId) -ne ($predicateCallerSession=(Get-Process -Id $PID).SessionId)) {
-        if (-not $guiElevated -and $null -eq $predicateChildSession -and
-            (Complete-OwnedNoncanonicalExitedDesktopControl $guiPid $ownedSid $mode $desktopControls)) { continue }
-        try { Write-OwnedDesktopIdentityDiagnostic $guiPid $ownedSid $mode $guiElevated $predicateChildSession $predicateCallerSession }
-        catch { try { Write-Host ('FIXTURE: fatal owned desktop identity diagnostic emission failed; exceptionType=' + $_.Exception.GetType().FullName) } catch {} }
-        throw 'Owned desktop control is not a genuine non-elevated process in the runner session.'
-      }
       $deadline = [DateTime]::UtcNow.AddSeconds(8)
       $actualGui = @{}
       while ([DateTime]::UtcNow -lt $deadline) {
@@ -436,14 +477,17 @@ public static class MixelOwnedDesktopControl {
         throw
       } finally {
         $trialCleanup = [System.Collections.Generic.List[string]]::new()
-        try { [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses() } catch { $trialCleanup.Add('Owned retained desktop trial process cleanup failed.') }
-        [MixelOrdinaryTokenFixture]::CloseStartedObservations()
-        if ($guiAccess) { try { $guiAccess.Dispose(); $guiAccess=$null } catch { $trialCleanup.Add('Owned desktop trial ACL restoration failed.') } }
-        if ([MixelOrdinaryTokenFixture]::DesktopAclHashes() -cne $baselineAcls) { $trialCleanup.Add('Owned desktop trial did not restore the exact original station/desktop ACL hashes.') }
+        $trialFacts=Complete-OwnedDesktopCleanup $guiAccess $baselineAcls $guiDesktopMayBeChanged
+        foreach ($failure in $trialFacts.failures) { $trialCleanup.Add($failure) }
+        $guiCleanupKnown=$trialFacts.cleanupOkay
+        if ($trialFacts.desktopRestored) { $guiAccess=$null; $guiDesktopMayBeChanged=$false }
         if ($trialCleanup.Count -gt 0) {
-          if ($trialFailure) { Write-Host ('FAIL: owned desktop trial cleanup additionally failed: ' + ($trialCleanup -join ' ')) }
+          if ($trialFailure) { try { Write-Host ('FAIL: owned desktop trial cleanup additionally failed: ' + ($trialCleanup -join ' ')) } catch {} }
           else { throw ($trialCleanup -join ' ') }
-        } else { Write-Host "PASS: $mode owned desktop control restores the exact original station/desktop ACL hashes." }
+        } else {
+          if ($trialFailure) { try { Write-Host "PASS: $mode owned desktop control restores the exact original station/desktop ACL hashes." } catch {} }
+          else { Write-Host "PASS: $mode owned desktop control restores the exact original station/desktop ACL hashes." }
+        }
       }
       }
       Write-Host ('FIXTURE: native same-account/profile/executable desktop A/B/A results: ' + ($desktopControls | ConvertTo-Json -Depth 5 -Compress))
@@ -457,10 +501,14 @@ public static class MixelOwnedDesktopControl {
       # suspended before Process.Path is available. Qualify exact retained
       # native-handle cleanup on that real standard-user state as well.
       if (Test-Path $guiResult) { Remove-Item $guiResult }
+      $guiCleanupKnown=$false; $guiDesktopMayBeChanged=$true
       $guiAccess = [MixelOrdinaryTokenFixture+DesktopAccess]::new($ownedSid)
       $guiPid = [MixelOrdinaryTokenFixture]::StartStandardUser($guiExecutable, $ownedUser, $ownedPassword, $true)
       $guiProcess = Get-Process -Id $guiPid
-      if ([MixelOrdinaryTokenFixture]::Elevated($guiPid) -or $guiProcess.SessionId -ne (Get-Process -Id $PID).SessionId -or
+      $cleanupIdentity = [MixelOrdinaryTokenFixture]::SuspendedOwnedIdentity($guiPid)
+      if ($cleanupIdentity['kernelPid'] -cne [string]$guiPid -or $cleanupIdentity['sid'] -cne $ownedSid -or
+          $cleanupIdentity['elevated'] -cne 'False' -or $cleanupIdentity['integritySid'] -cne 'S-1-16-8192' -or
+          $cleanupIdentity['sessionId'] -cne [string](Get-Process -Id $PID).SessionId -or
           [MixelOrdinaryTokenFixture]::StartedStatus($guiPid) -cne 'still-running' -or (Test-Path $guiResult)) {
         throw 'Owned retained-handle cleanup control did not start as a genuine suspended ordinary process before Main.'
       }
@@ -468,22 +516,31 @@ public static class MixelOwnedDesktopControl {
       if ([MixelOrdinaryTokenFixture]::StartedStatus($guiPid) -cne 'exited:0x00000001' -or (Test-Path $guiResult)) {
         throw 'Exact retained native process handle did not prove termination of its suspended owned target.'
       }
+      $exitedIdentityRejected = $false
+      try { [void][MixelOrdinaryTokenFixture]::SuspendedOwnedIdentity($guiPid) } catch {
+        if (-not $_.Exception.ToString().Contains('no longer live or does not match its kernel PID')) { throw }
+        $exitedIdentityRejected = $true
+      }
+      if (-not $exitedIdentityRejected) { throw 'An exited owned process satisfied live suspended identity qualification.' }
+      Write-Host 'PASS: retained native identity qualification rejects the actual exited owned process before reading its token.'
       # Already-exited handles are intentionally safe to revisit without PID
       # lookup or reliance on a loaded executable path.
       [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses()
       [MixelOrdinaryTokenFixture]::CloseStartedObservations()
       $guiAccess.Dispose(); $guiAccess=$null
       if ([MixelOrdinaryTokenFixture]::DesktopAclHashes() -cne $baselineAcls) { throw 'Suspended process cleanup control did not restore its original desktop ACLs.' }
+      $guiDesktopMayBeChanged=$false
       Write-Host "PASS: exact retained native process handle terminates the actual owned suspended non-elevated target before Main, observes native exit 0x00000001 and safely revisits its exited handle; pid=$guiPid; original desktop ACL hashes restored."
     } catch {
       $guiFailure = $_
       throw
     } finally {
       $guiCleanup = [System.Collections.Generic.List[string]]::new()
-      try { [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses() } catch { $guiCleanup.Add('Owned retained native desktop-control process cleanup failed.') }
-      [MixelOrdinaryTokenFixture]::CloseStartedObservations()
-      if ($guiAccess) { try { $guiAccess.Dispose() } catch { $guiCleanup.Add('Owned native desktop-control ACL restoration failed.') } }
-      if ($guiProfile) {
+      $guiFacts=Complete-OwnedDesktopCleanup $guiAccess $baselineAcls $guiDesktopMayBeChanged
+      foreach ($failure in $guiFacts.failures) { $guiCleanup.Add($failure) }
+      $guiCleanupKnown=$guiFacts.cleanupOkay
+      if ($guiFacts.desktopRestored) { $guiAccess=$null; $guiDesktopMayBeChanged=$false }
+      if ($guiProfile -and $guiCleanupKnown) {
         $profileRemoved = $false
         for ($attempt=0; $attempt -lt 5; $attempt++) {
           try { [MixelOrdinaryTokenFixture]::RemoveProfile($ownedSid); $profileRemoved=$true; break }
@@ -491,16 +548,29 @@ public static class MixelOwnedDesktopControl {
         }
         if (-not $profileRemoved) { $guiCleanup.Add('Owned native desktop-control profile cleanup failed.') }
       }
-      if (Test-Path $guiRoot) { try { Remove-Item $guiRoot -Recurse -Force } catch { $guiCleanup.Add('Owned native desktop-control files cleanup failed.') } }
+      if ($guiCleanupKnown) {
+        if (Test-Path $guiRoot) { try { Remove-Item $guiRoot -Recurse -Force } catch { $guiCleanup.Add('Owned native desktop-control files cleanup failed.') } }
+      } else { $guiCleanup.Add('Unknown owned desktop cleanup retains account, profile and fixture files for recovery.') }
       if ($guiCleanup.Count -gt 0) {
-        if ($guiFailure) { Write-Host ('FAIL: owned native desktop-control cleanup additionally failed: ' + ($guiCleanup -join ' ')) }
+        if ($guiFailure) { try { Write-Host ('FAIL: owned native desktop-control cleanup additionally failed: ' + ($guiCleanup -join ' ')) } catch {} }
         else { throw ($guiCleanup -join ' ') }
       }
     }
+  } catch {
+    $accountFailure=$_
+    throw
   } finally {
     $ownedPassword = $null
     $random = $null
-    if ($ownedSid) { Remove-LocalUser -SID ([Security.Principal.SecurityIdentifier]::new($ownedSid)) }
+    if ($ownedSid) {
+      if (-not $guiCleanupKnown) {
+        if ($accountFailure) { try { Write-Host 'FAIL: owned desktop cleanup is unverified; account, profile and files retained.' } catch {} }
+        else { throw 'Owned desktop cleanup is unverified; account, profile and files retained.' }
+      } else {
+        try { Remove-LocalUser -SID ([Security.Principal.SecurityIdentifier]::new($ownedSid)) }
+        catch { if ($accountFailure) { try { Write-Host 'FAIL: owned account cleanup additionally failed; original error retained.' } catch {} } else { throw } }
+      }
+    }
   }
   if (Get-LocalUser -Name $ownedUser -ErrorAction SilentlyContinue) { throw 'Owned account remained after its actual SID was removed.' }
   Write-Host 'PASS: actual standard account cleanup removes only the created SID and leaves no test account.'
@@ -862,6 +932,43 @@ foreach ($invalid in @(
 }
 Write-Host 'PASS: actual named-pipe lease diagnostics preserve safe absent/active/error/memory statuses, require the actual incoming PID and reject malformed/nested-array/wrong-case envelopes, noncanonical/out-of-range codes and inconsistent error pairs at the actual parser; every observation is one read-only query.'
 
+$failedBaseline = @($captureAst.FindAll({
+  param($node)
+  $node -is [System.Management.Automation.Language.IfStatementAst] -and
+    $node.Extent.Text -match '^if \(\$initialHealth\.attendedProof -cne .* -or \$initialOwnsLease\) \{'
+}, $true))
+if ($failedBaseline.Count -ne 1) { throw 'Exact failed ordinary-to-QS baseline gate missing.' }
+$failedBaselineBlock = [scriptblock]::Create($failedBaseline[0].Extent.Text)
+foreach ($baseline in @(
+    @{ proof = 'attended-runtime-v2'; failure = 'Ordinary-to-QS positive control is already guarded; refusing a manufactured transition proof.' },
+    @{ proof = 'guard-unavailable'; failure = 'Ordinary-to-QS positive control cannot safely inspect the native consent lease; refusing an unavailable baseline.' })) {
+  foreach ($unavailable in @($false, $true)) {
+    $failureMessage = & {
+      param([scriptblock]$ActualBlock, [bool]$Unavailable, [string]$BaselineProof)
+      $initialHealth = [pscustomobject]@{ attendedProof = $BaselineProof; incomingPid = 4321 }
+      $initialOwnsLease = $false
+      $diagnosticSeen = @{ count = 0; incomingPid = $null }
+      function Get-MixelSupportLeaseDiagnostic([uint32]$ExpectedIncomingPid) {
+        $diagnosticSeen.count++
+        $diagnosticSeen.incomingPid = $ExpectedIncomingPid
+        if ($ExpectedIncomingPid -ne 4321) { throw 'Secondary observation lost the actual incoming PID.' }
+        if ($Unavailable) { throw 'Retained older signed payload has no lease diagnostic getter.' }
+        return 'ownerFailed=false;ownerError=none;kernel=unavailable;probeError=5;memoryActive=false'
+      }
+      try { & $ActualBlock; 'UNEXPECTED: guarded baseline accepted' }
+      catch { $_.Exception.Message }
+      if ($diagnosticSeen.count -ne 1 -or $diagnosticSeen.incomingPid -ne 4321) {
+        throw 'Secondary baseline observation must issue exactly one read-only query for the actual incoming PID.'
+      }
+    } $failedBaselineBlock $unavailable $baseline.proof
+    if ($failureMessage -isnot [string] -or $failureMessage -cne $baseline.failure) {
+      throw 'Secondary valid/unavailable lease diagnostics changed or masked the actual guarded-baseline failure.'
+    }
+  }
+}
+Write-Host 'PASS: exact ordinary-to-QS guarded and unavailable baseline failures remain separately fatal with either valid secondary lease evidence or an older signed payload lacking the diagnostic getter; each observes only the actual incoming PID once and no readiness is manufactured.'
+
+
 foreach ($invalid in @(
     '{"t":"OnlineStatus","c":[1,"false"]}',
     '{"t":"OnlineStatus","c":["1",true]}',
@@ -936,3 +1043,7 @@ foreach ($invalid in @('oversized', 'truncated')) {
   $fixture.GetAwaiter().GetResult()
 }
 Write-Host 'PASS: malformed online/relay/key/rendezvous/ID proofs, persisted consent, oversized frames and truncated frames fail closed.'
+
+# Pure managed ACL regression uses exact helper bodies; actual native session
+# access/cleanup and original consent gates run in standard-account controls.
+& (Join-Path $PSScriptRoot 'test-windows-standard-namespace-access.ps1')

@@ -25,7 +25,7 @@ function Read-PinnedHostedSource([string]$Path,[string]$Expected) {
   return $text
 }
 function Start-HostedStandardQaNamespace {
-  if ($script:qaNamespaceScope -or $ownedUser -cnotmatch '\Amixellease[0-9a-f]{10}\z' -or
+  if ($script:qaNamespaceRegistered -or $ownedUser -cnotmatch '\Amixellease[0-9a-f]{10}\z' -or
       (Get-LocalUser -SID ([Security.Principal.SecurityIdentifier]::new($ownedSid))).Name -cne $ownedUser -or
       $runnerFacts.unavailableKind -or $freshFacts.unavailableKind -or
       $runnerFacts.integrityRid -ne 12288 -or $freshFacts.integrityRid -ne 8192 -or
@@ -35,30 +35,26 @@ function Start-HostedStandardQaNamespace {
       $runnerFacts.sessionId -ne (Get-Process -Id $PID).SessionId) {
     throw 'Exact disposable owned QA identity and High/Medium same-session source facts required.'
   }
-  $identity=[Security.Principal.SecurityIdentifier]::new($ownedSid)
-  $sidBytes=[byte[]]::new($identity.BinaryLength);$identity.GetBinaryForm($sidBytes,0)
-  $script:qaNamespaceScope=[MixelHostedQaNamespace+Scope]::new([MixelHostedQaNamespace+NativeApi]::new('StandardSource'),$sidBytes)
+  if (-not [MixelHostedQaNamespace]::HostedScopeAllowed($IsWindows,[Environment]::Is64BitProcess,$env:GITHUB_ACTIONS,
+      $env:GITHUB_REPOSITORY,$env:RUNNER_ENVIRONMENT,$env:GITHUB_JOB,$env:GITHUB_EVENT_NAME,$env:GITHUB_REF,
+      $env:GITHUB_WORKFLOW_REF,$env:MIXEL_HOSTED_OWNED_QA_NAMESPACE,'StandardSource')) {
+    throw 'Source fixture workflow/job/event/ref differs; no grant permitted.'
+  }
+  # Register only. The original script observes A before its sole mask12 grant.
+  $script:qaNamespaceRegistered=$true
   $script:qaNamespaceCleanupOkay=$false
-  # Publish ownership before Open/Apply; failed queries or partially writing setters
-  # are independently drained by the original outer finally.
-  $script:qaNamespaceScope.Open()
-  $script:qaNamespaceScope.Apply()
-  Write-Host ('FIXTURE: isolated owned QA namespace bootstrap before exact original8; mask15 is measured sufficient, minimum unqualified; ' +
-      ($script:qaNamespaceScope.facts | ConvertTo-Json -Depth 6 -Compress))
+  Write-Host 'FIXTURE: hosted identity and workflow validated before original A; original script owns the single mask12 grant, exact8 and restoration probe.'
 }
 
 function Restore-HostedStandardQaNamespace {
-  if (-not $script:qaNamespaceScope) { $script:qaNamespaceCleanupOkay=$true;return }
-  $restoreFailure=$null;$disposeFailure=$null
-  try { $script:qaNamespaceScope.Restore() } catch { $restoreFailure=$_ }
-  finally {
-    try { $script:qaNamespaceScope.Dispose() } catch { $disposeFailure=$_ }
-  }
-  $facts=$script:qaNamespaceScope.facts
-  $script:qaNamespaceCleanupOkay=($null -eq $restoreFailure -and $null -eq $disposeFailure -and
-      $facts.cleanupOkay -and (-not $facts.writeAttempted -or $facts.restorationVerified))
+  if (-not $script:qaNamespaceRegistered) { $script:qaNamespaceCleanupOkay=$true;return }
+  # The original finally restores independently of child termination. Observe
+  # its managed result here; never create a second directory grant or handle.
+  $facts=$script:namespaceFacts
+  $factsKnown=($null -eq $facts -or ($facts.cleanupOkay -and (-not $facts.writeAttempted -or $facts.restorationVerified)))
+  $script:qaNamespaceCleanupOkay=([bool]$script:namespaceRestorationKnown -and $factsKnown)
   Write-Host ('OBSERVED: isolated owned QA namespace bootstrap cleanup; ' +
-      ([ordered]@{directory=$facts;restoreFailed=($null -ne $restoreFailure);disposeFailed=($null -ne $disposeFailure);
+      ([ordered]@{directory=$script:namespaceFacts;namespaceRestorationKnown=$script:namespaceRestorationKnown;
         accountCleanupPermitted=$script:qaNamespaceCleanupOkay;standardEightQualified=$false;
         minimumMaskQualified=$false;actualWin32RouteMeasured=$false;productPermissionChanged=$false} |
         ConvertTo-Json -Depth 8 -Compress))
@@ -69,34 +65,36 @@ function Restore-HostedStandardQaNamespace {
 
 function New-HostedStandardQaScript([string]$Original,[string]$Prefix) {
   $setupAnchor="`n  Invoke-OptionalCallerLinkedLeaseSubsystemObservations`n"
-  $drainAnchor="`n  Complete-LeaseNtPendingProtocols`n"
-  $deleteAnchor="`n  if (`$profileStarted -and `$ownedSid) {`n"
+  $drainAnchor="`n  try { Complete-LeaseNtPendingProtocols } catch { `$cleanup.Add('Exact pending NT protocol drain failed.') }`n"
+  $deleteAnchor="`n  if (`$ownedCleanupPermitted -and `$profileStarted -and `$ownedSid) {`n"
   foreach ($anchor in @($setupAnchor,$drainAnchor,$deleteAnchor)) {
     if ($Original.IndexOf($anchor) -lt 0 -or $Original.IndexOf($anchor) -ne $Original.LastIndexOf($anchor)) {
       throw 'Exact original fixture setup/outer cleanup boundary changed.'
     }
   }
-  $stopAnchor="  try { [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses() } catch { `$cleanup.Add('Exact owned standard lease process cleanup failed.') }"
+  $stopAnchor="  try { [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses(); `$ownedProcessesExited=`$true } catch { `$cleanup.Add('Exact owned standard lease process cleanup failed.') }"
   if ($Original.IndexOf($stopAnchor) -lt 0 -or $Original.IndexOf($stopAnchor) -ne $Original.LastIndexOf($stopAnchor)) { throw 'Exact original owned process cleanup boundary changed.' }
-  $stop="`$script:qaProcessesKnownStopped=`$false`n  try { [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses(); `$script:qaProcessesKnownStopped=`$true } catch { `$cleanup.Add('Exact owned standard lease process cleanup failed.') }"
   $setup=$setupAnchor+"  Start-HostedStandardQaNamespace`n"
   $drain="`n"+@'
-  try { Restore-HostedStandardQaNamespace }
-  catch { $cleanup.Add('Owned QA namespace restoration/cleanup failed; no false success.') }
   try { Complete-LeaseNtPendingProtocols }
   catch { $cleanup.Add('Exact pending NT protocol drain failed; other owned restoration remains independent.') }
 '@ + "`n"
   $deletion="`n"+@'
+  $script:qaProcessesKnownStopped=[bool]$ownedProcessesExited
+  try { Restore-HostedStandardQaNamespace }
+  catch { $cleanup.Add('Owned QA namespace restoration/cleanup failed; no false success.') }
   if (-not $script:qaNamespaceCleanupOkay -or -not $script:qaProcessesKnownStopped -or
-      @($script:ntPendingProtocols | Where-Object { -not $_.childExited }).Count -gt 0) {
-    Write-Host 'FAIL: owned QA namespace remains unknown; actual account/profile/root retained. Original Standard failure remains fatal.'
-    if ($failure) { throw $failure }
-    throw 'Owned QA namespace did not restore/close before account cleanup.'
+      $script:ntPendingProtocols.Count -gt 0 -or $script:ntPreservedRoots.Count -gt 0) {
+    $ownedCleanupPermitted=$false
+    $cleanup.Add('Owned QA namespace did not restore/close before account cleanup.')
+    try { Write-Host 'FAIL: owned QA namespace remains unknown; actual account/profile/root retained. Original Standard failure remains fatal.' } catch {}
   }
 '@ + "`n" + $deleteAnchor
-  $modified=$Original.Replace($setupAnchor,$setup).Replace($drainAnchor,$drain).Replace($deleteAnchor,$deletion).Replace($stopAnchor,$stop)
-  $state="`$script:qaNamespaceScope=`$null;`$script:qaNamespaceCleanupOkay=`$true;`$script:qaProcessesKnownStopped=`$false`n"
-  return $Prefix+"`n"+$state+$modified
+  $modified=$Original.Replace($setupAnchor,$setup).Replace($drainAnchor,$drain).Replace($deleteAnchor,$deletion)
+  $state="`$script:qaNamespaceRegistered=`$false;`$script:qaNamespaceCleanupOkay=`$true;`$script:qaProcessesKnownStopped=`$false`n"
+  # Keep the pinned UTF-8 signature at the standalone source boundary only.
+  # A signature embedded after function declarations is a PowerShell token.
+  return $Prefix+"`n"+$state+$modified.TrimStart([char]0xFEFF)
 }
 
 $pins=ConvertFrom-Json @'
@@ -104,12 +102,16 @@ $pins=ConvertFrom-Json @'
   "support-invite-guard.rs": "4b48b7995b36cc9662958ef8753be70ef0b6cf35626b7264f0151bc553293f29",
   "test-hosted-qa-session-directory.cs": "b7f7886e2e6de9f7d76ef371473a436d8845b1396c12b63517331894d4611d4e",
   "test-support-directory-security.cs": "3f70bcef70508b264a9559dbb9f7fc9bdbb0c3e28ea7929008dc084dec6d973e",
-  "test-support-launch-windows.ps1": "012ad7b7a2e52ddc7bd1c2c7aae63b7726187dab2d6aa2291bbb39de82928dec",
-  "test-support-lease-standard-windows.ps1": "a9b0bf8ee68209f78a82ca4260c9d35faf10449a25f5976775731e98042a057f",
-  "test-support-lease.py": "d11b25c95232544eb64f5de78f0e31cbc54630dd832185c55edfb4a3157cd604",
+  "test-support-launch-windows.ps1": "a223245ce2299e341f25f2e3d035ae41ea940622bd6bdba43295e3c63036c4dd",
+  "test-support-lease-standard-windows.ps1": "c2897356a81f5410789fcebab4e845639a329da892b41cff4675aa08bc17f15e",
+  "test-support-lease.py": "bdba6cc24c0b247de85a3bcda79744dd932f00bb6e97d038eba14a7e43d1db64",
   "test-support-nt-event-binding.cs": "4f166e8e0fbdce7a5fb6786862e031c5bb175704e7490a0e4a9feaac9fac62ca",
   "test-support-nt-event-child.rs": "80cf1b1969b66568910d3a84ba46d4749db1c5744aac21b69777cd795dc0b034",
-  "test-windows-lease-observation.py": "bc64f1bd16d32d201de7654b04f26074428a742f896d18977a6012408329a75e"
+  "test-windows-lease-observation.py": "b12bd7ff19fbf91e921cbff2d6e685441111c2a74811983fac21be8a5b1543a6",
+  "rust_toolchain.py": "2156c1452df874462a5e2a569f25a800a339cc2cb92f5732340aa12a633afa3c",
+  "windows-standard-namespace-readonly.rs": "23e5fee444459cb68ed7c2bb2ac6c8696583697ce8874019101b16659334b705",
+  "windows-standard-namespace-access.cs": "7f04727ae8161b8e4da1d2e4a74a0324549996da5af52a08c14538ccf53b2589",
+  "windows-standard-namespace-diagnostics.cs": "980178cba4736f260d1365d3f19b3371158efcd0856d75fb12c036b0a093aad8"
 }
 '@
 $canonical=[Collections.Generic.Dictionary[string,string]]::new([StringComparer]::Ordinal)
@@ -140,12 +142,12 @@ try {
   finally { $stream.Dispose() }
   $script:hostedGeneratedHash=(Get-FileHash -LiteralPath $temporary -Algorithm SHA256).Hash.ToLowerInvariant()
   . $temporary
-  Write-Host 'PASS: unchanged original Standard8 passed in source-only owned hosted fixture; native predicates unmodified; namespace restored before account cleanup.'
+  Write-Host 'PASS: unchanged original Standard8 and ninth restored-A probe passed in source-only hosted fixture with a single mask12 scope; namespace restored before account cleanup.'
 } catch { $wrapperFailure=$_;throw }
 finally {
   $reportFailure=$null;$generatedCleanupFailure=$null
-  if ($script:qaNamespaceScope) {
-    $report=[ordered]@{schema=1;scope='HostedOwnedStandardSourceFixture';directory=$script:qaNamespaceScope.facts;
+  if ($script:qaNamespaceRegistered) {
+    $report=[ordered]@{schema=1;scope='HostedOwnedStandardSourceFixture';directory=$script:namespaceFacts;
       namespaceCleanupKnown=$script:qaNamespaceCleanupOkay;ownedProcessesKnownStopped=$script:qaProcessesKnownStopped;
       nativeOriginalFailure=($null -ne $wrapperFailure);productPermissionChanged=$false;minimumMaskQualified=$false;actualWin32RouteMeasured=$false}
     try {

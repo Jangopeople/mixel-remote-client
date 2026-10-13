@@ -129,7 +129,10 @@ class GuiConnectionSourceTests(unittest.TestCase):
             lease=importlib.util.module_from_spec(spec);spec.loader.exec_module(lease)
             guard=(ROOT/builder.SOURCES[0]).read_text(encoding="utf-8")
             baseline=lease.standard_windows_fixture_body(guard,root,"mixel-gui-observe-"+"a"*32+"-",event)
-            self.assertEqual(actual.replace(builder.GUI_HELPER+builder.MAIN,lease.standard_windows_harness(event),1),baseline)
+            harness=lease.standard_windows_harness(event)
+            self.assertEqual(harness.count("MIXEL_STANDARD_FIXTURE_EVENT"),1)
+            harness=harness.replace("MIXEL_STANDARD_FIXTURE_EVENT",json.dumps(event),1)
+            self.assertEqual(actual.replace(builder.GUI_HELPER+builder.MAIN,harness,1),baseline)
             self.assertEqual(builder.MAIN.count('observe("before")'),1)
             self.assertLess(builder.MAIN.index('module.desktop_window()'),builder.MAIN.index('observe("after-call")'))
             self.assertLess(builder.MAIN.index('observe("after-call")'),builder.MAIN.index('module.names()'))
@@ -199,7 +202,7 @@ class GuiConnectionSourceTests(unittest.TestCase):
                         manifest=json.loads((evidence/'source-manifest.json').read_text(encoding='utf-8'))
                         binding=next(item for item in manifest['sources'] if item['path']==helper)
                         self.assertEqual(binding,{'path':helper,'bytes':len(original),'sha256':hashlib.sha256(original).hexdigest()})
-                        self.assertEqual(len(manifest['sources']),13)
+                        self.assertEqual(len(manifest['sources']),15)
                         self.assertFalse(any(manifest[key] for key in ('standardQualified','fullEightQualified','customerAppQualified','finalQualified')))
                     else:
                         with self.assertRaises(FileNotFoundError if control=='missing' else ValueError):
@@ -212,7 +215,9 @@ class GuiConnectionSourceTests(unittest.TestCase):
     def test_actual_manifest_binds_new_helper_and_refuses_missing_or_tampered_source(self):
         for helper in ('scripts/test-support-directory-security.cs',
                        'scripts/test-support-nt-event-child.rs',
-                       'scripts/test-support-nt-event-binding.cs'):
+                       'scripts/test-support-nt-event-binding.cs',
+                       'scripts/rust_toolchain.py',
+                       'scripts/windows-standard-namespace-readonly.rs'):
             with self.subTest(helper=helper):
                 self.assert_actual_manifest_dependency(helper)
 

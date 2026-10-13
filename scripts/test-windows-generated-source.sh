@@ -8,6 +8,7 @@ if [[ "${OS:-}" == Windows_NT ]]; then
   mixel_analyzer_bash="$(cygpath -w "$BASH")"
 fi
 python scripts/test-support-flutter-analysis.py --dart "$(command -v dart)" --bash "$mixel_analyzer_bash" --evidence-dir "$RUNNER_TEMP/mixel-sdk-source"
+python scripts/test-support-macos-termination-support.py --app "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf"
 case "${MIXEL_SDK_FULL_APP_PREFLIGHT:-false}" in
   true|false) ;;
   *) echo "Invalid complete SDK application preflight request" >&2; exit 1 ;;
@@ -22,10 +23,12 @@ python scripts/test-macos-update.py --source "$RUNNER_TEMP/mixel-sdk-source/pipe
 for mixel_source_test in \
   test-support-invite \
   test-generated-support-paths \
+  test-support-macos-uri-routing \
   test-hosted-standard-qa \
   test-packaged-owned-qa \
   test-windows-lease-observation \
   test-support-lease \
+  test-windows-lease-error \
   test-support-network \
   test-secure-support \
   test-support-linux \

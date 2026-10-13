@@ -3,6 +3,7 @@
 import argparse
 import ast
 import collections
+import contextlib
 import hashlib
 import importlib.util
 import io
@@ -10,6 +11,7 @@ import json
 import os
 from pathlib import Path, PureWindowsPath
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -34,6 +36,64 @@ rdev_spec.loader.exec_module(R)
 file_transfer_spec=importlib.util.spec_from_file_location("mixel_file_transfer_composition",ROOT/"scripts/patch-support-file-transfer-window.py")
 F=importlib.util.module_from_spec(file_transfer_spec)
 file_transfer_spec.loader.exec_module(F)
+
+
+def copy_current_pipeline_inputs(destination):
+    """Bind every current tracked/incoming fixture resource into private copies.
+
+    Git selects scripts/branding inputs; generated caches and ignored runtime
+    files are excluded. HEAD's archive remains the baseline, then these exact
+    regular current files supply the reviewed integration under test.
+    """
+    names = subprocess.check_output(["git", "-C", str(ROOT), "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "scripts", "branding"])
+    for raw_name in sorted(set(names.decode("utf-8").split("\0")) - {""}):
+        relative = Path(raw_name)
+        if relative.is_absolute() or ".." in relative.parts or relative.parts[0] not in ("scripts", "branding"):
+            raise RuntimeError("Unsafe current fixture input name")
+        source = ROOT / relative
+        status = source.lstat()
+        if not stat.S_ISREG(status.st_mode) or status.st_nlink != 1 or status.st_size > 10_000_000 or getattr(status, "st_file_attributes", 0) & 0x400:
+            raise RuntimeError("Unowned current fixture input")
+        for parent in source.parents:
+            if parent == ROOT: break
+            entry = parent.lstat()
+            if not stat.S_ISDIR(entry.st_mode) or getattr(entry, "st_file_attributes", 0) & 0x400:
+                raise RuntimeError("Unsafe current fixture input parent")
+        target = Path(destination) / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(source.read_bytes())
+
+
+@contextlib.contextmanager
+def startup_baseline(source):
+    """Verify earlier layers in a private exact startup inverse; input is read-only.
+
+    The final startup suite qualifies its actual generated bodies separately.
+    This projection never accepts an unpinned input or changes supplied source.
+    """
+    source = Path(source).resolve()
+    spec = importlib.util.spec_from_file_location("mixel_fixture_startup", ROOT / "scripts/patch-macos-startup.py")
+    startup = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(startup)
+    original = {name: (source / name).read_bytes() for name in startup.INPUT_HASHES}
+    original["src/tray.rs"] = (source / "src/tray.rs").read_bytes()
+    if not any(startup.MARKER.encode() in value for value in original.values()):
+        yield source
+        return
+    with tempfile.TemporaryDirectory(prefix="mixel-exact-startup-inverse-") as temporary:
+        projected = Path(temporary).resolve() / "source"
+        shutil.copytree(source, projected, symlinks=True,
+                        ignore=shutil.ignore_patterns(".git", "build", ".dart_tool", "__pycache__"))
+        startup.apply(projected, restore=True)
+        tray_spec = importlib.util.spec_from_file_location("mixel_fixture_tray", ROOT / "scripts/patch-support-macos-tray-url.py")
+        tray = importlib.util.module_from_spec(tray_spec)
+        tray_spec.loader.exec_module(tray)
+        tray.apply(projected, restore=True)
+        assert {name: startup.digest((projected / name).read_text(encoding="utf-8")) for name in startup.INPUT_HASHES} == startup.INPUT_HASHES
+        try:
+            yield projected
+        finally:
+            assert {name: (source / name).read_bytes() for name in original} == original, "Startup projection mutated supplied input"
 
 
 def run(args,out,label,*,cwd=None,env=None,success=True):
@@ -421,8 +481,19 @@ def pipeline(out,source,bash):
     # Include the exact current root integration and the reviewed new helpers,
     # without mutating root-owned files.
     for name in ("apply-branding.sh","patch-support-macos-cleanup.py",
+                 "patch-macos-service-label.py","patch-macos-update.py",
+                 "patch-support-invite.py","patch-secure-support.py",
+                 "patch-support-network.py","patch-support-linux.py",
+                 "patch-support-signals.py","patch-support-clipboard.py",
+                 "patch-support-windows-clipboard.py","patch-support-video.py",
+                 "patch-support-macos.py","patch-support-wakelock.py",
+                 "patch-support-macos-uri.py","patch-support-macos-url-ack.py",
                  "patch-support-flutter-analysis.py","test-support-flutter-analysis.py",
                  "patch-support-macos-termination.py","test-support-macos-termination.py",
+                 "patch-support-macos-texture.py",
+                 "patch-support-macos-window.py",
+                 "patch-flutter-branding.py",
+                 "test-flutter-branding.py","verify-flutter-branding.py",
                  "patch-support-flutter-sdk-compatibility.py","test-support-flutter-sdk-compatibility.py",
                  "test-support-macos-cleanup.py","test-support-macos-window.py",
                  "patch-support-macos-rdev.py","patch-support-input.py",
@@ -433,8 +504,29 @@ def pipeline(out,source,bash):
                  "patch-support-native-warnings.py","test-support-native-warnings.py",
                  "patch-support-fingerprint.py","test-support-fingerprint.py",
                  "patch-support-fatal-crash.py","test-support-fatal-crash.py",
+                 "patch-macos-startup.py","test-macos-startup.py","test-macos-startup-ui.dart","macos-startup-failure.dart",
+                 "patch-support-macos-tray-url.py","test-support-macos-tray-url.py",
                  "patch-macos-update.py","test-macos-update.py","macos-update.scpt","macos-update-bundle.sh"):
         shutil.copyfile(ROOT/"scripts"/name,copied/"scripts"/name)
+    # These helpers consume checked-in source resources and the complete
+    # vendored URI plugin. HEAD may predate reviewed incoming files, so retain
+    # the actual current resource bytes alongside the exact helper inventory.
+    for name in ("support-network.rs","support-invite-reporter.dart",
+                 "support-invite-guard.rs","support-macos-url-queue.rs",
+                 "macos-update.scpt","macos-update-bundle.sh",
+                 "fixtures/flutter-icon-upstream.svg"):
+        target=copied/"scripts"/name
+        target.parent.mkdir(parents=True,exist_ok=True)
+        shutil.copyfile(ROOT/"scripts"/name,target)
+    shutil.copytree(ROOT/"scripts/vendor/uni_links_desktop",
+                    copied/"scripts/vendor/uni_links_desktop",dirs_exist_ok=True)
+    for name in ("branding.env","custom.txt","icon-16.png","icon-32.png",
+                 "icon-48.png","icon-64.png","icon-128.png","icon-256.png",
+                 "icon-512.png","icon-1024.png"):
+        shutil.copyfile(ROOT/"branding"/name,copied/"branding"/name)
+    copy_current_pipeline_inputs(copied)
+    run([sys.executable,str(copied/"scripts/test-flutter-branding.py")],
+        out,"pipeline-current-flutter-branding-controls")
     script=copied/"scripts/apply-branding.sh"
     shell_source="$"+"{BASH_SOURCE[0]}"
     hook='python3 "$(dirname "'+shell_source+'")/patch-support-flutter-analysis.py"\n'
@@ -483,14 +575,15 @@ def pipeline(out,source,bash):
         env=dict(os.environ,RDREPO=repo.as_posix(),BRANDING=(copied/"branding").as_posix(),GIT_CONFIG_COUNT="0")
         run([sys.executable,str(copied/"scripts/patch-support-input.py")],out,"pipeline-"+label+"-initial-input",env=env)
         run([bash,script.as_posix()],out,"pipeline-"+label+"-1",cwd=copied,env=env)
-        F.verify_previous_layers(repo) if (repo/F.GENERATED).exists() else S.apply(repo,check=True)
-        for name,(_,corrected,*_) in P.FILES.items():
-            actual=(repo/name).read_bytes().replace(b"\r\n",b"\n")
-            if name in F.COMPOSED and (repo/F.GENERATED).exists(): actual=F.transform(name,actual,restore=True)
-            canonical=(T.regular(repo/"flutter/.mixel-dependencies/macos_application_exit",name)
-                       if name in T.FILES else actual)
-            assert sha(canonical)==corrected,name
-            assert actual==(T.transform(name,canonical) if name in T.FILES else canonical),name
+        with startup_baseline(repo) as checked_repo:
+            F.verify_previous_layers(checked_repo) if (checked_repo/F.GENERATED).exists() else S.apply(checked_repo,check=True)
+            for name,(_,corrected,*_) in P.FILES.items():
+                actual=(checked_repo/name).read_bytes().replace(b"\r\n",b"\n")
+                if name in F.COMPOSED and (checked_repo/F.GENERATED).exists(): actual=F.transform(name,actual,restore=True)
+                canonical=(T.regular(checked_repo/"flutter/.mixel-dependencies/macos_application_exit",name)
+                           if name in T.FILES else actual)
+                assert sha(canonical)==corrected,name
+                assert actual==(T.transform(name,canonical) if name in T.FILES else canonical),name
         first=snapshot(repo)
         run([bash,script.as_posix()],out,"pipeline-"+label+"-2",cwd=copied,env=env)
         assert snapshot(repo)==first,"Full pipeline second pass changed bytes"
@@ -571,7 +664,7 @@ def pipeline(out,source,bash):
         target.write_bytes(saved+b"// unapproved drift\n")
         before=snapshot(repo)
         failed=run([bash,script.as_posix()],out,"pipeline-"+label+"-refusal",cwd=copied,env=env,success=False)
-        marker=("Pinned file-transfer window source changed: "+name) if (repo/F.GENERATED).exists() else "Changed application-exit current source: flutter/lib/common.dart"
+        marker="Pinned Mac startup input digest mismatch; refusing all writes"
         assert_pipeline_refusal(failed,marker)
         assert snapshot(repo)==before,"Drift refusal changed another pipeline file"
         target.write_bytes(saved)

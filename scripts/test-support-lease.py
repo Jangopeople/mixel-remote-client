@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import uuid
+from rust_toolchain import rustc_command
 
 ROOT = Path(__file__).resolve().parents[1]
 WINDOWS_BRIDGE = r'''
@@ -596,6 +597,13 @@ fn main() {
         let result = format!(
             "{{\"pid\":{},\"sourceStatus\":\"{}\",\"rawOpenError\":{},\"attestation\":\"{}\",\"requiresClick\":{},\"ownerFailed\":{}}}\n",
             std::process::id(), status, raw_error, proof, required, failed);
+        // Observation is secondary: its native error is recorded separately and
+        // cannot replace the already captured source guard classification.
+        let observation = match standard_namespace_readonly::observe(MIXEL_STANDARD_FIXTURE_EVENT) {
+            Ok(value) => value,
+            Err(error) => format!("{{\"pid\":{},\"observationError\":{}}}",std::process::id(),error.raw_os_error().unwrap_or(-1)),
+        };
+        let _ = std::fs::write(directory.join("fixture-namespace.json"),observation);
         std::fs::write(directory.join("fixture-result.new"), result).unwrap();
         mixel_support_lease::fixture_flush_thread_tokens(&directory,false);
         std::fs::rename(directory.join("fixture-result.new"), directory.join("fixture-result.json")).unwrap();
@@ -709,7 +717,11 @@ def standard_windows_fixture_body(original, directory, prefix, event):
     for call, phase, count in calls:
         assert source.count(call)==count, "Exact standard fixture event observation boundary changed"
         source=source.replace(call, f'        fixture_thread_tokens::observe("{phase}");\n' + call)
-    return source + HARNESS.replace("fn main() {", "fn lease_main() {", 1) + standard_windows_harness(event)
+    namespace_observer = (ROOT / "scripts/windows-standard-namespace-readonly.rs").read_text(encoding="utf-8")
+    standard_harness = standard_windows_harness(event)
+    assert standard_harness.count("MIXEL_STANDARD_FIXTURE_EVENT") == 1, "Standard diagnostic event isolation marker changed"
+    standard_harness = standard_harness.replace("MIXEL_STANDARD_FIXTURE_EVENT", json.dumps(event))
+    return source + namespace_observer + HARNESS.replace("fn main() {", "fn lease_main() {", 1) + standard_harness
 
 
 def read_pe_subsystem(binary):
@@ -738,7 +750,7 @@ def export_standard_windows_fixture(directory, event, subsystem_pair=False):
     binary = directory / "lease-standard.exe"
     rustc = os.environ.get("RUSTC_BIN") or shutil.which("rustc")
     assert rustc, "Native standard-account lease control requires rustc"
-    subprocess.run([rustc, "--edition", "2021", "-D", "warnings", str(fixture), "-o", str(binary)], check=True, timeout=90)
+    subprocess.run(rustc_command([rustc, "--edition", "2021", "-D", "warnings", str(fixture), "-o", str(binary)]), check=True, timeout=90)
     assert read_pe_subsystem(binary) == 3, "Actual console source control must link PE subsystem3"
     print("PASS: actual source-extracted standard-account lease control compiles with no Rust warnings", flush=True)
     if subsystem_pair:
@@ -747,7 +759,7 @@ def export_standard_windows_fixture(directory, event, subsystem_pair=False):
         gui_fixture.write_text(header + body, encoding="utf-8", newline="\n")
         assert gui_fixture.read_bytes() == header.encode("ascii") + fixture.read_bytes(), "Console/Windows subsystem pair differs beyond its single crate header"
         gui_binary = directory / "lease-standard-gui.exe"
-        subprocess.run([rustc, "--edition", "2021", "-D", "warnings", str(gui_fixture), "-o", str(gui_binary)], check=True, timeout=90)
+        subprocess.run(rustc_command([rustc, "--edition", "2021", "-D", "warnings", str(gui_fixture), "-o", str(gui_binary)]), check=True, timeout=90)
         assert read_pe_subsystem(gui_binary) == 2, "Actual Windows source control must link PE subsystem2"
         print("PASS: actual console/Windows source pair differs only by the crate subsystem header; linked x64 PE metadata is console3/windows2 with no Rust warnings", flush=True)
 
@@ -765,7 +777,7 @@ def main():
         binary = directory / ("lease.exe" if os.name == "nt" else "lease")
         rustc = os.environ.get("RUSTC_BIN") or shutil.which("rustc")
         assert rustc, "Native lease tests require rustc"
-        subprocess.run([rustc, "--edition", "2021", "-D", "warnings", str(fixture), "-o", str(binary)], check=True)
+        subprocess.run(rustc_command([rustc, "--edition", "2021", "-D", "warnings", str(fixture), "-o", str(binary)]), check=True)
 
         def command(*arguments):
             return subprocess.check_output([str(binary), *arguments], text=True, timeout=10).strip()

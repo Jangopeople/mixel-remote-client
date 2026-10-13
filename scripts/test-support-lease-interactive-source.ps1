@@ -1,4 +1,4 @@
-﻿param([string]$MainPath=(Join-Path $PSScriptRoot 'test-support-lease-interactive-windows.ps1'),[string]$AdminPath=(Join-Path $PSScriptRoot 'test-support-lease-negative-windows.ps1'),[string]$StandardPath=(Join-Path $PSScriptRoot 'test-support-lease-standard-windows.ps1'),[string]$LaunchPath=(Join-Path $PSScriptRoot 'test-support-launch-windows.ps1'))
+﻿param([string]$MainPath=(Join-Path $PSScriptRoot 'test-support-lease-interactive-windows.ps1'),[string]$AdminPath=(Join-Path $PSScriptRoot 'test-support-lease-negative-windows.ps1'),[string]$StandardPath=(Join-Path $PSScriptRoot 'test-support-lease-standard-windows.ps1'),[string]$LaunchPath=(Join-Path $PSScriptRoot 'test-support-launch-windows.ps1'),[switch]$NativePipeControls)
 $ErrorActionPreference='Stop'
 $MainPath=[IO.Path]::GetFullPath($MainPath); $AdminPath=[IO.Path]::GetFullPath($AdminPath); $StandardPath=[IO.Path]::GetFullPath($StandardPath)
 $candidate=$MainPath; $admin=$AdminPath; $native=$MainPath
@@ -39,10 +39,11 @@ foreach($changed in @($original.Replace("[void](Invoke-StandardLeaseControl prob
   try { [void](Read-OriginalStandardTerminal $changed) } catch { $refused=$true }
   if(-not $refused) { throw 'Missing or duplicated original standard terminal was accepted.' }
 }
-$pattern='(?m)^\s*(?:\[void\]\(|\$ownerPid = )Invoke-StandardLeaseControl[^\r\n]+'
+$pattern='(?m)^\s*(?:\[void\]\(|\$ownerPid = )Invoke-StandardLeaseControl (?:probe|owner|failed-owner) [^\r\n]+'
 $actualCalls=@([regex]::Matches($core,$pattern)|ForEach-Object{$_.Value.Trim()})
 $originalCalls=@([regex]::Matches($originalCore,$pattern)|ForEach-Object{$_.Value.Trim()})
-if($actualCalls.Count -ne 8 -or ($actualCalls -join "`n") -cne ($originalCalls -join "`n")) { throw 'Exact eight original assertion calls changed.' }
+if($originalCalls.Count -ne 9 -or $originalCalls[8] -cne '[void](Invoke-StandardLeaseControl probe $beforeGrant.sourceStatus ([int]$beforeGrant.rawOpenError) $beforeGrant.attestation ([bool]$beforeGrant.requiresClick) ([bool]$beforeGrant.ownerFailed))') { throw 'Mandatory hosted original-descriptor restoration assertion changed.' }
+if($actualCalls.Count -ne 8 -or ($actualCalls -join "`n") -cne ($originalCalls[0..7] -join "`n")) { throw 'Exact eight original grant-phase assertion calls changed.' }
 $nativeStart="Add-Type @'"+"`n"
 $nativeBlock=Section $source $nativeStart "`n'@`nfunction Assert-StandardLeaseSafeResult"
 $nativeSource=$nativeBlock.Substring($nativeStart.Length)
@@ -132,16 +133,18 @@ public static class MixelInteractiveSourceFlowMock {
 }
 '@
 $script:flowCalls=[Collections.Generic.List[string]]::new()
-$script:requests=[Collections.Generic.List[string]]::new(); $script:released=0; $script:rejectFirst=$false
+$script:requests=[Collections.Generic.List[string]]::new(); $script:released=0; $script:completed=0; $script:rejectFirst=$false
 $script:acceptanceMessages=[Collections.Generic.List[string]]::new()
 . ([scriptblock]::Create((Section $source 'function Get-PortableLeaseAdminInstruction' 'function Assert-NegativeReady')))
 $fixtureRoot=Join-Path ([IO.Path]::GetTempPath()) "owned QA's ü !"; $bundle=[pscustomobject]@{Root=(Join-Path ([IO.Path]::GetTempPath()) "bundle QA's ü !")}; $ExpectedManifestSha256='a'*64
 $instruction=Get-PortableLeaseAdminInstruction $fixtureRoot $bundle.Root $ExpectedManifestSha256
 $command=$instruction.Substring($instruction.IndexOf("& '",[StringComparison]::Ordinal))
+if(-not $instruction.Contains('administrator/SYSTEM-protected directory') -or -not $instruction.Contains('verify the trusted manifest SHA there') -or -not $instruction.Contains('Replace BOTH displayed bundle/script paths')) { throw 'Elevated helper instruction omits the protected-code prerequisite.' }
 $tokens=$null;$errors=$null;$ast=[Management.Automation.Language.Parser]::ParseInput($command,[ref]$tokens,[ref]$errors)
 $values=@($ast.FindAll({param($node) $node -is [Management.Automation.Language.StringConstantExpressionAst]},$true)|ForEach-Object{$_.Value})
 $expected=@((Join-Path $bundle.Root 'run-admin-negative-lease-qa.ps1'),$fixtureRoot,$bundle.Root,$ExpectedManifestSha256)
 if($errors.Count -or $values.Count -ne 4 -or ($values -join "`0") -cne ($expected -join "`0")) { throw 'Actual admin instruction does not round-trip spaced Unicode/apostrophe paths as four exact string literals.' }
+if(-not $command.EndsWith((' -StandardParentPid '+$PID),[StringComparison]::Ordinal)) { throw 'Admin pipe instruction is not bound to the exact standard parent PID.' }
 Write-Host 'PASS: actual source admin instruction quotes verified script and spaced Unicode/apostrophe workspace/bundle paths after standard owner-release qualification.'
 function Invoke-StandardLeaseControl($Mode,$Status,$ErrorCode,$Proof,$Click,$OwnerFailed,[switch]$KeepAlive) {
   if($script:rejectFirst) { throw 'Mandatory actual native error5 remains unavailable.' }
@@ -150,14 +153,15 @@ function Invoke-StandardLeaseControl($Mode,$Status,$ErrorCode,$Proof,$Click,$Own
 }
 function Request-NegativeFixture($Mode) { $script:requests.Add($Mode) }
 function Complete-NegativeFixture { $script:released++ }
+function Complete-NegativeSession { $script:completed++ }
 function Capture-SourceAcceptanceMessage($Message) { if($Message.StartsWith('LOCAL QA:') -and ($script:flowCalls.Count -ne 4 -or $script:requests.Count -ne 0)) { throw 'Admin setup instruction preceded confirmed owner release.' }; $script:acceptanceMessages.Add($Message) }
 $mockCore=$core.Replace('[MixelInteractiveLeaseProcess]','[MixelInteractiveSourceFlowMock]').Replace('Write-Host','Capture-SourceAcceptanceMessage')
 . ([scriptblock]::Create($mockCore))
-if($flowCalls.Count -ne 8 -or ($requests -join ',') -cne 'denied,wrong-object' -or $released -ne 2 -or $acceptanceMessages.Count -ne 7 -or [MixelInteractiveSourceFlowMock]::Stops -ne 1 -or [MixelInteractiveSourceFlowMock]::Closes -ne 1) { throw 'Exact core source flow changed.' }
+if($flowCalls.Count -ne 8 -or ($requests -join ',') -cne 'denied,wrong-object' -or $released -ne 2 -or $completed -ne 1 -or $acceptanceMessages.Count -ne 7 -or [MixelInteractiveSourceFlowMock]::Stops -ne 1 -or [MixelInteractiveSourceFlowMock]::Closes -ne 1) { throw 'Exact core source flow changed.' }
 if(($flowCalls|Where-Object{$_ -cmatch '\|5\|guard-unavailable\|True\|False\|False\z'}).Count -ne 1 -or ($flowCalls|Where-Object{$_ -cmatch '\|6\|guard-unavailable\|True\|(?:True|False)\|False\z'}).Count -ne 2) { throw 'Fail-closed error5/error6 assertions changed.' }
 $script:rejectFirst=$true; $before=$flowCalls.Count; $rejected=$false
 try { . ([scriptblock]::Create($mockCore)) } catch { if($_.Exception.Message -cne 'Mandatory actual native error5 remains unavailable.') { throw }; $rejected=$true }
-if(-not $rejected -or $flowCalls.Count -ne $before -or $requests.Count -ne 2 -or $acceptanceMessages.Count -ne 7) { throw 'Failed initial baseline progressed or printed acceptance.' }
+if(-not $rejected -or $flowCalls.Count -ne $before -or $requests.Count -ne 2 -or $completed -ne 1 -or $acceptanceMessages.Count -ne 7) { throw 'Failed initial baseline progressed or printed acceptance.' }
 Write-Host 'PASS: exact eight terminal source controls retain error2/owner/release/error5/error6 expectations; failed mandatory first probe cannot progress to owner or admin setup.'
 $ownership=Section $nativeSource '  static void StopOwnedHandle(' "`n}`n"
 $ownership=$ownership.Replace('Marshal.GetLastWin32Error()','LastError')
@@ -231,15 +235,62 @@ foreach($case in 1..10) { [MixelInteractiveOwnershipSourceMock]::Run($case,$nati
 $cleanupMain=Section $source "  try { [MixelInteractiveLeaseProcess]::StopOwnedStartedProcesses() } catch" "  # Evidence remains"
 if($cleanupMain -notmatch 'StopOwnedStartedProcesses\(\) \} catch[^\n]+\n  try \{ \[MixelInteractiveLeaseProcess\]::CloseStartedObservations\(\) \} catch') { throw 'Main cleanup does not independently attempt stop and close.' }
 if(-not $source.Contains("try {`n  `$parentProof=[MixelInteractiveLeaseProcess]::AssertParent()`n")) { throw 'Parent assertion does not enter bounded cleanup on failure.' }
-if(-not $adminSource.Contains('AddSeconds(60)') -or -not $adminSource.Contains('AddSeconds(240)') -or 60 -le 2*(10+10)+10) { throw 'Two-child negative fixture release timing is not bounded consistently.' }
+if(-not $adminSource.Contains('Receive-NegativeJson 60000') -or -not $adminSource.Contains('AddSeconds(240)') -or 60 -le 2*(10+10)+10) { throw 'Two-child negative fixture release timing is not bounded consistently.' }
 foreach($text in @($source,$adminSource)) {
-  if($text.Contains('$IsWindows') -or $text.Contains('PowerShell7') -or $text.Contains('$RepoRoot') -or $text.Contains('python ') -or -not $text.Contains('[IO.File]::Replace(') -or -not $text.Contains('[PlatformID]::Win32NT')) { throw 'PS5/prebuilt-only publication/platform boundary changed.' }
+  if($text.Contains('$IsWindows') -or $text.Contains('PowerShell7') -or $text.Contains('$RepoRoot') -or $text.Contains('python ') -or -not $text.Contains('[PlatformID]::Win32NT')) { throw 'PS5/prebuilt-only publication/platform boundary changed.' }
 }
+foreach($forbidden in @('[IO.File]::Write','[IO.File]::Replace','[IO.File]::Move','Join-Path $Workspace','Get-Item -LiteralPath $Workspace','ReadAllText($release)','ReadAllBytes($Path)')) {
+  # Bundle validation reads the separately SHA-bound package; the admin phase
+  # must never read or write the standard-user-owned workspace by pathname.
+  $adminPhase=$adminSource.Substring($adminSource.IndexOf('$Workspace=[IO.Path]::GetFullPath', [StringComparison]::Ordinal))
+  if($adminPhase.Contains($forbidden)) { throw 'Elevated helper accesses user-controlled workspace files.' }
+}
+$channelStart='public sealed class MixelPortableLeaseChannel : IDisposable {'
+$channel=Section $source $channelStart "`n'@"
+$adminChannel=Section $adminSource $channelStart "`n'@"
+if($channel -cne $adminChannel -or -not $channel.Contains('CreateNamedPipeW(@"\\.\pipe\"+name,0x40080003,8,1,4096,4096,0,ref attributes)') -or -not $channel.Contains('actual!=expectedServerPid') -or -not $channel.Contains('GetNamedPipeClientProcessId(server.SafePipeHandle') -or -not $channel.Contains('security.SetAccessRuleProtection(true,false)')) { throw 'Private first-instance/local-only/PID-bound pipe contract changed.' }
+$adminBlock=Section $adminSource $nativeStart "`n'@`nfunction Receive-NegativeJson"
+$adminNative=$adminBlock.Substring($nativeStart.Length).Replace('MixelPortableLeaseChannel','MixelPortableLeaseAdminNativeChannel')
+Add-Type -TypeDefinition $adminNative
+if(-not $adminSource.Contains('finally { if($channel) { $channel.Dispose() } }') -or -not $source.Contains("try { if(`$negativeChannel) { `$negativeChannel.Dispose() } } catch")) { throw 'Either pipe peer loses unconditional cleanup.' }
+foreach($forbidden in @('WorldSid','AuthenticatedUserSid','Impersonate','SetTokenInformation','WriteAll','Get-Item','ReadAll')) { if($channel.Contains($forbidden)) { throw 'Pipe bridge widens caller/file/token authority.' } }
+$frame=[MixelPortableLeaseChannel]::Frame('valid metadata')
+if([MixelPortableLeaseChannel]::Decode($frame[0..3],$frame[4..($frame.Length-1)]) -cne 'valid metadata') { throw 'Actual bounded UTF8 frame round-trip failed.' }
+$maximum=[MixelPortableLeaseChannel]::Frame('a'*4096)
+if($maximum.Length -ne 4100) { throw 'Maximum bounded frame changed.' }
+foreach($invalid in @('',('a'*4097),([string][char]0xd800))) {
+  $refused=$false; try { [void][MixelPortableLeaseChannel]::Frame($invalid) } catch { $refused=$true }
+  if(-not $refused) { throw 'Invalid or oversized outbound frame accepted.' }
+}
+foreach($invalid in @(@([byte[]](0,0,0,0),[byte[]]@()),@([BitConverter]::GetBytes(2),[byte[]]@(65)),@([BitConverter]::GetBytes(1),[byte[]]@(255)),@([byte[]]@(1),[byte[]]@(65)),@([BitConverter]::GetBytes(4097),[byte[]](@(65)*4097)))) {
+  $refused=$false; try { [void][MixelPortableLeaseChannel]::Decode($invalid[0],$invalid[1]) } catch { $refused=$true }
+  if(-not $refused) { throw 'Malformed inbound frame accepted.' }
+}
+. ([scriptblock]::Create((Section $source 'function Assert-NegativeReady' 'function Invoke-StandardLeaseControl')))
+. ([scriptblock]::Create((Section $adminSource 'function Assert-NegativeRequest' '$seen=[Collections.Generic.HashSet[string]]::new();')))
+$negativeChannel=[pscustomobject]@{PeerPid=123}
+$eventName='Global\Mixel-Remote-Standard-Lease-'+('b'*32); $requestId='c'*32
+$bundle=[pscustomobject]@{Manifest=[pscustomobject]@{eventName=$eventName}}
+$ready=[pscustomobject]@{request=$requestId;mode='denied';eventName=$eventName;pid=123;created=$true}
+Assert-NegativeReady $ready $requestId 'denied' $eventName
+Assert-NegativeRequest ([pscustomobject]@{request=$requestId;mode='denied';eventName=$eventName})
+foreach($change in @(@('pid',124),@('pid','123'),@('created',$false),@('request',('d'*32)),@('mode','wrong-object'),@('eventName','Global\unrelated'))) {
+  $packet=$ready|ConvertTo-Json -Compress|ConvertFrom-Json; $packet.($change[0])=$change[1]
+  $refused=$false; try { Assert-NegativeReady $packet $requestId 'denied' $eventName } catch { $refused=$true }
+  if(-not $refused) { throw 'Wrong peer/request/mode/event or creation packet accepted.' }
+}
+foreach($change in @(@('request','invalid'),@('mode','other'),@('eventName','Global\unrelated'))) {
+  $packet=[pscustomobject]@{request=$requestId;mode='denied';eventName=$eventName}; $packet.($change[0])=$change[1]
+  $refused=$false; try { Assert-NegativeRequest $packet } catch { $refused=$true }
+  if(-not $refused) { throw 'Noncanonical native-object request accepted.' }
+}
+Write-Host 'PASS: both exact server/client C# blocks compile; nine actual packet PID/request/mode/event/creation mutations rejected before object or readiness claims; both peers retain cleanup.'
+Write-Host 'PASS: exact shared pipe bridge compiles; protected first-instance remote-refusing server and both kernel PID checks retained; actual UTF8 framing rejects empty, oversized, invalid, mismatched and short packets; admin phase makes zero workspace file calls.'
 Write-Host 'PASS: exact native ownership source passes ten controls, including later-child cleanup after first wait failure, partial-close retries, successful creation/thread-close refusal, attribution failures and retained query-token close failure; main stop/close are independent.'
 # Bind the ordinary hosted fixture's ownership methods to pure API providers.
 # No P/Invoke declaration or native API is included in this mock assembly.
 $normal=Get-Content -LiteralPath ([IO.Path]::GetFullPath($LaunchPath)) -Raw -Encoding UTF8
-$normalStart=Section $normal '  static readonly System.Collections.Generic.Dictionary<int, IntPtr> StartedProcesses' '  public static bool ActualOwnedDebuggerAttached'
+$normalStart=(Section $normal '  static readonly System.Collections.Generic.Dictionary<int, IntPtr> StartedProcesses' '  public static System.Collections.Generic.Dictionary<string, string> SuspendedOwnedIdentity') + (Section $normal '  static int Started(ProcessInfo process, bool suspended = false)' '  public static bool ActualOwnedDebuggerAttached')
 $normalResume=Section $normal '  public static int ResumeOwnedPrimaryThread' '  static void StopOwnedProcessHandle'
 $normalStop=Section $normal '  static void StopOwnedProcessHandle' '  public static string StartedStatus'
 $normalClose=Section $normal '  public static void CloseStartedObservations()' '  // The MiscInfo stream'
@@ -298,9 +349,13 @@ __EXACT_CLOSE__
 '@.Replace('__EXACT_START__',$normalStart).Replace('__EXACT_RESUME__',$normalResume).Replace('__EXACT_STOP__',$normalStop).Replace('__EXACT_CLOSE__',$normalClose)
 Add-Type -TypeDefinition $normalMock
 foreach($case in 1..17){[MixelNormalOwnershipSourceMock]::Run($case)}
-$normalFinally=Section $normal "  `$customerCleanupFailure = `$null" '  if ($ordinaryRoot -or $ownedUser -or $desktopAccess)'
+$normalFinally=Section $normal "  `$customerCleanupFailure = `$null" '  if ($ordinaryRoot -or $ownedUser -or $desktopAccess -or $namespaceAccess)'
 if(-not $normalFinally.Contains("try { [MixelOrdinaryTokenFixture]::CloseStartedObservations() }`n  catch")){throw 'Normal fixture close failure skips remaining outer cleanup.'}
-$standardFinally=Section $original "  try { [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses() } catch" '  if ($desktopAccess)'
+$tokens=$null;$errors=$null
+$standardOuterAst=[Management.Automation.Language.Parser]::ParseInput($original,[ref]$tokens,[ref]$errors)
+$standardOuter=@($standardOuterAst.EndBlock.Statements|Where-Object{$_ -is [Management.Automation.Language.TryStatementAst]})
+if($errors.Count -or $standardOuter.Count -ne 1 -or -not $standardOuter[0].Finally){throw 'Exact standard outer finally boundary changed.'}
+$standardFinally=$standardOuter[0].Finally.Extent.Text
 if(-not $standardFinally.Contains("try { [MixelOrdinaryTokenFixture]::CloseStartedObservations() } catch")){throw 'Standard source close failure skips remaining outer cleanup.'}
 function Assert-OriginalObservationCleanup([string]$Text) {
   $tokens=$null; $errors=$null
@@ -399,14 +454,15 @@ Add-Type @'
 using System;
 using System.Collections.Generic;
 public static class MixelStandardOuterSourceMock {
-  public static bool EventFails,StopFails,CloseFails,PendingFails,HashFails;
+  public static bool EventFails,StopFails,CloseFails,PendingFails,HashFails,DesktopFails,HashDrift;
   public static readonly List<string> Calls=new List<string>();
-  public static void Reset(){EventFails=StopFails=CloseFails=PendingFails=HashFails=false;Calls.Clear();}
+  public static void Reset(){EventFails=StopFails=CloseFails=PendingFails=HashFails=DesktopFails=HashDrift=false;Calls.Clear();}
   public static void Close(IntPtr handle){Calls.Add("eventClose");if(EventFails)throw new InvalidOperationException("Synthetic owned event close failure");}
   public static void ClosePending(){Calls.Add("pendingClose");if(PendingFails)throw new InvalidOperationException("Synthetic pending event close failure");}
   public static void StopOwnedStartedProcesses(){Calls.Add("stopOwned");if(StopFails)throw new InvalidOperationException("Synthetic owned stop failure");}
   public static void CloseStartedObservations(){Calls.Add("closeOwned");if(CloseFails)throw new InvalidOperationException("Synthetic owned process close failure");}
-  public static string DesktopAclHashes(){Calls.Add("hashRead");if(HashFails)throw new InvalidOperationException("Synthetic hash read failure");return "original";}
+  public static string DesktopAclHashes(){Calls.Add("hashRead");if(HashFails)throw new InvalidOperationException("Synthetic hash read failure");return HashDrift?"foreign":"original";}
+  public sealed class DesktopAccess {public void Dispose(){Calls.Add("desktopDispose");if(DesktopFails)throw new InvalidOperationException("Synthetic desktop restoration failure");}}
   public static void RemoveProfile(string sid){Calls.Add("profileCleanup");}
 }
 public sealed class MixelStandardOuterSidSourceMock {public MixelStandardOuterSidSourceMock(string value){if(value!="synthetic-owned-sid")throw new Exception("Mock SID attribution differs");}}
@@ -452,23 +508,111 @@ function Test-ActualStandardCleanup {
     if($caught -ne ($case -ne 2) -or ([MixelStandardOuterSourceMock]::Calls -join ',') -cne $expectedCalls -or ($matrixHandle -ne [IntPtr]::Zero) -ne ($case -ne 2)){throw 'Actual pending-live/late-exit matrix cleanup loses ownership or skips an independent process close.'}
   }
   $script:ntPendingProtocols.Clear();$script:syntheticConfirmNtExit=$false
-  foreach($case in 0..5){
+  foreach($case in 0..8){
     [MixelStandardOuterSourceMock]::Reset()
     [MixelStandardOuterSourceMock]::EventFails=$case -eq 1
     [MixelStandardOuterSourceMock]::StopFails=$case -eq 2
     [MixelStandardOuterSourceMock]::CloseFails=$case -eq 3
     [MixelStandardOuterSourceMock]::PendingFails=$case -eq 4
-    [MixelStandardOuterSourceMock]::HashFails=$case -eq 5
-    $eventHandle=[IntPtr]555;$desktopAccess=$null;$originalDesktop='original'
+    [MixelStandardOuterSourceMock]::HashFails=$case -in @(5,8)
+    [MixelStandardOuterSourceMock]::DesktopFails=$case -in @(6,8)
+    [MixelStandardOuterSourceMock]::HashDrift=$case -eq 7
+    $eventHandle=[IntPtr]555;$desktopAccess=$null;$namespaceAccess=$null;$originalDesktop='original'
+    if($case -ge 6){$desktopAccess=[MixelStandardOuterSourceMock+DesktopAccess]::new()}
+    $script:namespaceRestorationKnown=$true
     $profileStarted=$true;$ownedSid='synthetic-owned-sid';$ownedUser='synthetic-owned-user'
     $ownedPassword='synthetic-nonsecret-marker';$random='synthetic-nonsecret-marker'
     $fixtureRoot=$temporaryCleanup;$failure='synthetic-prior-failure'
     . $mainCleanup
-    if(([MixelStandardOuterSourceMock]::Calls -join ',') -cne 'eventClose,stopOwned,closeOwned,pendingClose,hashRead,profileCleanup,sidCleanup,filesCleanup' -or $null -ne $ownedPassword -or $null -ne $random -or $cleanup.Count -ne ($case -ne 0)){throw 'Actual standard outer finally skips a later owned cleanup attempt or conceals a failure.'}
+    $expectedCalls='eventClose,stopOwned,closeOwned,pendingClose,'+$(if($case -ge 6){'desktopDispose,'}else{''})+'hashRead'
+    if($case -notin @(2,5,6,7,8)){$expectedCalls+=',profileCleanup,sidCleanup,filesCleanup'}
+    $expectedFailures=if($case -eq 8){3}elseif($case -in @(2,5,6,7)){2}else{[int]($case -ne 0)}
+    if(([MixelStandardOuterSourceMock]::Calls -join ',') -cne $expectedCalls -or $null -ne $ownedPassword -or $null -ne $random -or $cleanup.Count -ne $expectedFailures){throw 'Actual standard outer finally skips a later owned cleanup attempt, deletes ownership before known exit/restoration, or conceals a failure.'}
   }
 }
 $temporaryCleanup=Join-Path ([IO.Path]::GetTempPath()) ('mixel-source-cleanup-'+[Guid]::NewGuid().ToString('N'))
 [void][IO.Directory]::CreateDirectory($temporaryCleanup)
 try{Test-ActualStandardCleanup}finally{[IO.Directory]::Delete($temporaryCleanup,$true)}
-Write-Host 'PASS: exact matrix/main finally blocks retain ten original and four pending-live/late-exit pure failure/success cases; event, stop, close, pending-close and hash failures still attempt later owned cleanup, preserve failed ownership and clear memory-only markers.'
-Write-Host 'Result: exact interactive source controls pass; zero Windows API calls and no standard-account/runtime qualification.'
+Write-Host 'PASS: exact matrix/main finally blocks retain ten original and four pending-live/late-exit controls plus three desktop Dispose/hash/drift controls; independent hash verification follows failed Dispose, unknown exit or desktop restoration quarantines profile/account/root, and memory-only markers clear.'
+$nativeControlSource=@'
+using System;
+using System.IO;
+using System.Text;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Threading.Tasks;
+public static class MixelPortableNativePipeControls {
+  public static int NativeStage { get; private set; }
+  public static void Run() {
+    string capacityName="MixelRemoteQA-lease-"+Guid.NewGuid().ToString("N");
+    NativeStage=4;
+    using(var first=new MixelPortableLeaseAdditionalInstanceChannel(capacityName,true,0)) {
+      NativeStage=5;
+      // Prove spare capacity independently of the FIRST_PIPE_INSTANCE flag.
+      using(var additional=new MixelPortableLeaseAdditionalInstanceChannel(capacityName,true,0)) {}
+      NativeStage=6;
+      bool firstRefused=false;
+      try { using(var collision=new MixelPortableLeaseFirstInstanceChannel(capacityName,true,0)) {} }
+      catch(System.ComponentModel.Win32Exception error) { if(error.NativeErrorCode!=5)throw; firstRefused=true; }
+      if(!firstRefused)throw new Exception("First-instance flag accepted a second server with available capacity");
+    }
+    string name="MixelRemoteQA-lease-"+Guid.NewGuid().ToString("N");
+    uint pid=(uint)System.Diagnostics.Process.GetCurrentProcess().Id;
+    NativeStage=1;
+    using(var server=new MixelPortableLeaseNativeChannel(name,true,0)) {
+      bool refused=false;
+      NativeStage=2;
+      try { using(var collision=new MixelPortableLeaseNativeChannel(name,true,0)) {} } catch(System.ComponentModel.Win32Exception error) { if(error.NativeErrorCode!=5 && error.NativeErrorCode!=231)throw; refused=true; }
+      if(!refused)throw new Exception("Single-instance pipe collision accepted");
+      NativeStage=3;
+      var client=Task.Run(()=> {
+        using(var channel=new MixelPortableLeaseNativeChannel(name,false,pid)) {
+          if(channel.PeerPid!=pid)throw new Exception("Actual server PID changed");
+          foreach(string request in new[]{"denied","wrong-object"}) {
+            channel.Send(request,1000);
+            if(channel.Receive(2000)!=request+"-ready")throw new Exception("Phase ready reply changed");
+            channel.Send(request+"-release",1000);
+            if(channel.Receive(2000)!=request+"-closed")throw new Exception("Phase closed reply changed");
+          }
+          channel.Send("finished",1000);
+        }
+      });
+      try {
+        foreach(string request in new[]{"denied","wrong-object"}) {
+          if(server.Receive(2000)!=request || server.PeerPid!=pid)throw new Exception("Actual client PID or phase changed");
+          server.Send(request+"-ready",1000);
+          if(server.Receive(2000)!=request+"-release")throw new Exception("Phase release changed");
+          server.Send(request+"-closed",1000);
+        }
+        if(server.Receive(2000)!="finished")throw new Exception("Completion changed");
+        if(!client.Wait(2000))throw new Exception("Retained transport task exceeded bound");
+      } finally {
+        server.Dispose();
+        if(!client.Wait(10000))throw new Exception("Retained transport task did not finish on cleanup");
+      }
+    }
+  }
+}
+'@
+$nativeControlSource+=$channel.Replace('MixelPortableLeaseChannel','MixelPortableLeaseNativeChannel')
+$createCall='CreateNamedPipeW(@"\\.\pipe\"+name,0x40080003,8,1,4096,4096,0,ref attributes)'
+if([regex]::Matches($channel,[regex]::Escape($createCall)).Count -ne 1) { throw 'Exact native create call changed before isolated flag controls.' }
+$firstInstanceSource=$channel.Replace('MixelPortableLeaseChannel','MixelPortableLeaseFirstInstanceChannel').Replace($createCall,$createCall.Replace(',8,1,4096,',',8,2,4096,'))
+$additionalInstanceSource=$firstInstanceSource.Replace('MixelPortableLeaseFirstInstanceChannel','MixelPortableLeaseAdditionalInstanceChannel').Replace('0x40080003,8,2,4096,','0x40000003,8,2,4096,')
+$nativeControlSource+=$firstInstanceSource+$additionalInstanceSource
+Add-Type -TypeDefinition $nativeControlSource
+if($NativePipeControls) {
+  if([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT -or -not [Environment]::Is64BitProcess) { throw 'Native transport controls require actual x64 Windows.' }
+  try { [MixelPortableNativePipeControls]::Run() } catch {
+    $nativeException=$_.Exception
+    for($depth=0;$depth -lt 8 -and $null -ne $nativeException.InnerException;$depth++) { $nativeException=$nativeException.InnerException }
+    $nativeCodeAvailable=$nativeException -is [ComponentModel.Win32Exception]
+    $nativeCode=0
+    if($nativeCodeAvailable) { $nativeCode=$nativeException.NativeErrorCode }
+    Write-Host ('Native transport failure: stage={0}; nativeCodeAvailable={1}; nativeCode={2}' -f [MixelPortableNativePipeControls]::NativeStage,$nativeCodeAvailable,$nativeCode)
+    throw
+  }
+  Write-Host 'PASS: actual Windows first-instance flag rejects a second server after spare capacity is independently proven; unchanged single-instance pipe refuses collision; bidirectional two-phase/release/finish exchange and kernel server/client PID checks pass; retained task and all handles close. Transport only; no standard-account consent or signed-app qualification.'
+} else {
+  Write-Host 'Result: exact interactive source controls pass; zero Windows API calls and no standard-account/runtime qualification.'
+}

@@ -7,15 +7,18 @@ import sys
 import tempfile
 from pathlib import Path
 from sdk_discovery import find_dart
+from rust_toolchain import rustc_command
 
 
 ROOT = Path(__file__).resolve().parents[1]
 UPSTREAM = Path(os.environ.get("RDREPO", ROOT / "rustdesk"))
 TARGETS = [
+    "flutter/pubspec.yaml", "flutter/pubspec.lock",
     "libs/portable/src/main.rs",
     "flutter/lib/common.dart", "flutter/lib/main.dart", "src/ui_interface.rs",
     "src/ipc.rs", "src/ui_cm_interface.rs", "src/server/connection.rs", "src/server/dbus.rs",
     "src/core_main.rs", "src/common.rs", "src/updater.rs",
+    "src/server.rs", "src/flutter.rs", "flutter/lib/models/native_model.dart", "flutter/lib/desktop/pages/desktop_home_page.dart",
     "flutter/lib/desktop/pages/desktop_setting_page.dart",
     "flutter/lib/utils/http_service.dart", "src/lang/en.rs", "src/lang/de.rs",
     "src/lang/fr.rs", "src/lang/it.rs", "libs/hbb_common/src/password_security.rs",
@@ -404,7 +407,7 @@ fn unrelated_outgoing_linux_link_retains_dbus_dispatch_only() {
     target = repo / "generated_native_paths.rs"
     target.write_text(source, encoding="utf-8")
     binary = repo / ("generated_native_paths.exe" if os.name == "nt" else "generated_native_paths")
-    subprocess.run([rustc, "--edition=2021", "--deny=warnings", "--cfg", 'feature="flutter"', "--test", str(target), "-o", str(binary)], check=True)
+    subprocess.run(rustc_command([rustc, "--edition=2021", "--deny=warnings", "--cfg", 'feature="flutter"', "--test", str(target), "-o", str(binary)]), check=True)
     subprocess.run([str(binary), "--test-threads=1"], check=True)
 
 

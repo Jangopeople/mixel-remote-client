@@ -1,4 +1,4 @@
-# Source QA only. Signed customer application qualification is separate.
+﻿# Source QA only. Signed customer application qualification is separate.
 param([Parameter(Mandatory)][string]$ExpectedManifestSha256,[string]$BundleRoot=$PSScriptRoot,[ValidateSet('console','windows')][string]$Subsystem='windows')
 $ErrorActionPreference='Stop'
 if([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT -or -not [Environment]::Is64BitProcess -or $PSVersionTable.PSVersion.Major -lt 5) { throw 'Requires actual x64 Windows PowerShell5 or later.' }
@@ -57,7 +57,7 @@ function Assert-PortableLeaseBundle([string]$Root,[string]$ExpectedManifestSha25
     $bytes=Read-PortableLeaseBytes $path 16777216
     if($bytes.Length -ne $member.bytes -or (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() -cne $member.sha256) { throw 'Portable bundle member hash or byte count changed.' }
   }
-  $sourceAllow=@('scripts/support-invite-guard.rs','scripts/test-support-lease.py','scripts/test-support-lease-standard-windows.ps1','scripts/test-support-directory-security.cs','scripts/test-support-nt-event-child.rs','scripts/test-support-nt-event-binding.cs','scripts/test-support-lease-interactive-windows.ps1','scripts/test-support-lease-negative-windows.ps1','scripts/build-standard-lease-qa-bundle.py','.github/workflows/preflight.yml','scripts/activate-windows-msvc.ps1','scripts/test-standard-lease-qa-bundle.py','scripts/test-support-lease-interactive-source.ps1','scripts/test-support-launch-windows.ps1')
+  $sourceAllow=@('scripts/support-invite-guard.rs','scripts/test-support-lease.py','scripts/test-support-lease-standard-windows.ps1','scripts/test-support-directory-security.cs','scripts/test-support-nt-event-child.rs','scripts/test-support-nt-event-binding.cs','scripts/test-support-lease-interactive-windows.ps1','scripts/test-support-lease-negative-windows.ps1','scripts/build-standard-lease-qa-bundle.py','.github/workflows/preflight.yml','scripts/activate-windows-msvc.ps1','scripts/test-standard-lease-qa-bundle.py','scripts/test-support-lease-interactive-source.ps1','scripts/rust_toolchain.py','scripts/windows-standard-namespace-readonly.rs','scripts/test-support-launch-windows.ps1')
   if($manifest.buildSourceBindings -isnot [array] -or $manifest.buildSourceBindings.Count -ne $sourceAllow.Count) { throw 'Portable build source binding count changed.' }
   $sourceSeen=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
   foreach($binding in $manifest.buildSourceBindings) {
@@ -362,6 +362,107 @@ public static class MixelInteractiveLeaseProcess {
   }
 }
 
+public sealed class MixelPortableLeaseChannel : IDisposable {
+  [StructLayout(LayoutKind.Sequential)] struct PipeAttributes { public int length; public IntPtr descriptor; public int inherit; }
+  [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern Microsoft.Win32.SafeHandles.SafePipeHandle CreateNamedPipeW(string name,uint open,uint mode,uint instances,uint output,uint input,uint timeout,ref PipeAttributes attributes);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetNamedPipeClientProcessId(Microsoft.Win32.SafeHandles.SafePipeHandle pipe,out uint pid);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetNamedPipeServerProcessId(Microsoft.Win32.SafeHandles.SafePipeHandle pipe,out uint pid);
+  readonly System.IO.Pipes.PipeStream stream;
+  readonly System.IO.Pipes.NamedPipeServerStream server;
+  public uint PeerPid { get; private set; }
+  public bool HasPeer { get { return stream.IsConnected; } }
+  static string Validate(string name) {
+    if(!System.Text.RegularExpressions.Regex.IsMatch(name,@"\AMixelRemoteQA-lease-[0-9a-f]{32}\z")) throw new InvalidOperationException("Expected new GUID-only local QA pipe");
+    return name;
+  }
+  public MixelPortableLeaseChannel(string name,bool createServer,uint expectedServerPid) {
+    Validate(name);
+    if(createServer) {
+      var security=new System.IO.Pipes.PipeSecurity();
+      security.SetAccessRuleProtection(true,false);
+      using(var identity=System.Security.Principal.WindowsIdentity.GetCurrent()) {
+        security.SetOwner(identity.User);
+        foreach(var sid in new[]{identity.User,new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.BuiltinAdministratorsSid,null),new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.LocalSystemSid,null)})
+          security.AddAccessRule(new System.IO.Pipes.PipeAccessRule(sid,System.IO.Pipes.PipeAccessRights.FullControl,System.Security.AccessControl.AccessControlType.Allow));
+      }
+      byte[] descriptor=security.GetSecurityDescriptorBinaryForm();
+      var pinned=GCHandle.Alloc(descriptor,GCHandleType.Pinned);
+      Microsoft.Win32.SafeHandles.SafePipeHandle handle=null;
+      try {
+        var attributes=new PipeAttributes{length=Marshal.SizeOf(typeof(PipeAttributes)),descriptor=pinned.AddrOfPinnedObject(),inherit=0};
+        // First-instance, overlapped, duplex; byte mode and reject remote clients.
+        handle=CreateNamedPipeW(@"\\.\pipe\"+name,0x40080003,8,1,4096,4096,0,ref attributes);
+        int error=handle.IsInvalid?Marshal.GetLastWin32Error():0;
+        if(handle.IsInvalid) throw new Win32Exception(error,"Private local QA pipe creation failed");
+        server=new System.IO.Pipes.NamedPipeServerStream(System.IO.Pipes.PipeDirection.InOut,true,false,handle);
+        stream=server; handle=null;
+      } finally { if(handle!=null)handle.Dispose(); pinned.Free(); }
+    } else {
+      if(expectedServerPid==0) throw new InvalidOperationException("Expected retained standard parent PID");
+      var client=new System.IO.Pipes.NamedPipeClientStream(".",name,System.IO.Pipes.PipeDirection.InOut,System.IO.Pipes.PipeOptions.Asynchronous);
+      try {
+        client.Connect(10000);
+        uint actual;
+        if(!GetNamedPipeServerProcessId(client.SafePipeHandle,out actual) || actual!=expectedServerPid) throw new InvalidOperationException("Local QA pipe is not the expected standard parent");
+        PeerPid=actual; stream=client;
+      } catch { client.Dispose(); throw; }
+    }
+  }
+  void Connected(int timeout) {
+    if(stream.IsConnected) return;
+    if(server==null) throw new InvalidOperationException("Local QA peer disconnected");
+    var pending=server.BeginWaitForConnection(null,null);
+    try {
+      if(!pending.AsyncWaitHandle.WaitOne(timeout)) { Dispose(); throw new InvalidOperationException("Local QA peer connection exceeded its bound"); }
+      server.EndWaitForConnection(pending);
+      uint actual;
+      if(!GetNamedPipeClientProcessId(server.SafePipeHandle,out actual) || actual==0) throw new InvalidOperationException("Local QA helper PID unavailable");
+      PeerPid=actual;
+    } finally { pending.AsyncWaitHandle.Close(); }
+  }
+  byte[] ReadExact(int length,DateTime deadline) {
+    var bytes=new byte[length]; int offset=0;
+    while(offset<length) {
+      int remaining=(int)Math.Ceiling((deadline-DateTime.UtcNow).TotalMilliseconds);
+      if(remaining<=0) { Dispose(); throw new InvalidOperationException("Local QA reply exceeded its bound"); }
+      var pending=stream.BeginRead(bytes,offset,length-offset,null,null);
+      try {
+        if(!pending.AsyncWaitHandle.WaitOne(remaining)) { Dispose(); throw new InvalidOperationException("Local QA reply exceeded its bound"); }
+        int received=stream.EndRead(pending);
+        if(received==0) throw new InvalidOperationException("Local QA peer closed an incomplete frame");
+        offset+=received;
+      } finally { pending.AsyncWaitHandle.Close(); }
+    }
+    return bytes;
+  }
+  public static byte[] Frame(string text) {
+    byte[] body=new UTF8Encoding(false,true).GetBytes(text);
+    if(body.Length<1 || body.Length>4096) throw new InvalidOperationException("Local QA frame exceeds its bound");
+    byte[] frame=new byte[body.Length+4];
+    Array.Copy(BitConverter.GetBytes(body.Length),frame,4); Array.Copy(body,0,frame,4,body.Length); return frame;
+  }
+  public static string Decode(byte[] header,byte[] body) {
+    if(header.Length!=4 || body.Length<1 || body.Length>4096 || BitConverter.ToInt32(header,0)!=body.Length) throw new InvalidOperationException("Local QA frame length changed");
+    return new UTF8Encoding(false,true).GetString(body);
+  }
+  public void Send(string text,int connectionTimeout) {
+    Connected(connectionTimeout);
+    var frame=Frame(text); var pending=stream.BeginWrite(frame,0,frame.Length,null,null);
+    try {
+      if(!pending.AsyncWaitHandle.WaitOne(2000)) { Dispose(); throw new InvalidOperationException("Local QA frame write exceeded its bound"); }
+      stream.EndWrite(pending);
+    } finally { pending.AsyncWaitHandle.Close(); }
+  }
+  public string Receive(int timeout) {
+    Connected(timeout);
+    DateTime deadline=DateTime.UtcNow.AddMilliseconds(timeout);
+    byte[] header=ReadExact(4,deadline); int length=BitConverter.ToInt32(header,0);
+    if(length<1 || length>4096) throw new InvalidOperationException("Local QA frame length is outside its bound");
+    return Decode(header,ReadExact(length,deadline));
+  }
+  public void Dispose() { stream.Dispose(); }
+}
+
 '@
 function Assert-StandardLeaseSafeResult($Record, [uint32]$ExpectedPid) {
   $names = @($Record.PSObject.Properties.Name | Sort-Object)
@@ -398,7 +499,7 @@ $fixtureRoot=Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) ('
 $eventName=$bundle.Manifest.eventName
 $executable=Join-Path $fixtureRoot $(if($Subsystem -ceq 'windows'){'lease-standard-gui.exe'}else{'lease-standard.exe'})
 $resultPath=Join-Path $fixtureRoot 'fixture-result.json'
-$negativeRequest=$null
+$negativeRequest=$null; $negativeChannel=$null; $negativeFinished=$false
 function Read-BoundedJson([string]$Path) {
   $item=Get-Item -LiteralPath $Path
   if($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $item.Length -gt 4096) { throw 'Owned result is not a bounded ordinary file.' }
@@ -413,8 +514,8 @@ function Write-AtomicJson([string]$Path,$Record) {
 }
 function Get-PortableLeaseAdminInstruction([string]$Workspace,[string]$Root,[string]$ManifestSha256) {
   $scriptPath=Join-Path $Root 'run-admin-negative-lease-qa.ps1'
-  $command="& '"+$scriptPath.Replace("'","''")+"' -Workspace '"+$Workspace.Replace("'","''")+"' -BundleRoot '"+$Root.Replace("'","''")+"' -ExpectedManifestSha256 '"+$ManifestSha256.Replace("'","''")+"'"
-  return ('LOCAL QA: after the confirmed standard baseline, run in the separately authorized admin session: '+$command)
+  $command="& '"+$scriptPath.Replace("'","''")+"' -Workspace '"+$Workspace.Replace("'","''")+"' -BundleRoot '"+$Root.Replace("'","''")+"' -ExpectedManifestSha256 '"+$ManifestSha256.Replace("'","''")+"'"+" -StandardParentPid "+$PID
+  return ('LOCAL QA: first copy the separately verified bundle into an administrator/SYSTEM-protected directory and verify the trusted manifest SHA there. Replace BOTH displayed bundle/script paths with that protected copy before running this prepared command in the separately authorized admin session: '+$command)
 }
 function Assert-NegativeReady($Record,[string]$Request,[string]$Mode,[string]$EventName) {
   $pidNumber=$Record.pid -is [int] -or $Record.pid -is [long] -or $Record.pid -is [uint32] -or $Record.pid -is [uint64]
@@ -423,7 +524,7 @@ function Assert-NegativeReady($Record,[string]$Request,[string]$Mode,[string]$Ev
       $Record.mode -isnot [string] -or $Record.mode -cne $Mode -or
       $Record.eventName -isnot [string] -or $Record.eventName -cne $EventName -or
       $Record.created -isnot [bool] -or -not $Record.created -or -not $pidNumber -or
-      $Record.pid -le 0 -or $Record.pid -gt [uint32]::MaxValue) { throw 'Owned admin negative fixture did not confirm its exact isolated object.' }
+      $Record.pid -le 0 -or $Record.pid -gt [uint32]::MaxValue -or $Record.pid -ne $negativeChannel.PeerPid) { throw 'Owned admin negative fixture did not confirm its exact isolated object.' }
 }
 function Assert-NegativeClosed($Record,[string]$Request) {
   if((@($Record.PSObject.Properties.Name|Sort-Object)-join ',') -cne 'closed,request' -or
@@ -455,38 +556,27 @@ function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner'
   } elseif([MixelInteractiveLeaseProcess]::StartedStatus($controlPid) -cne 'still-running') { throw 'Exact ordinary owner exited before independent observation.' }
   return $controlPid
 }
+function Read-NegativePacket([int]$Timeout) {
+  try { return ($negativeChannel.Receive($Timeout)|ConvertFrom-Json) } catch { throw 'Bounded local QA reply decoding failed.' }
+}
 function Request-NegativeFixture([ValidateSet('denied','wrong-object')][string]$Mode) {
   $script:negativeRequest=[Guid]::NewGuid().ToString('N')
-  Write-AtomicJson (Join-Path $fixtureRoot 'negative-request.json') ([ordered]@{request=$negativeRequest;mode=$Mode;eventName=$eventName})
-  $deadline=[DateTime]::UtcNow.AddSeconds(90)
-  $readyPath=Join-Path $fixtureRoot 'negative-ready.json'
-  while([DateTime]::UtcNow -lt $deadline) {
-    if(Test-Path -LiteralPath $readyPath) {
-      $ready=Read-BoundedJson $readyPath
-      if($ready.request -is [string] -and $ready.request -ceq $negativeRequest) {
-        Assert-NegativeReady $ready $negativeRequest $Mode $eventName
-        return
-      }
-    }
-    Start-Sleep -Milliseconds 100
-  }
-  throw 'Separate owned admin negative fixture was not ready within its bound.'
+  $negativeChannel.Send((([ordered]@{request=$negativeRequest;mode=$Mode;eventName=$eventName})|ConvertTo-Json -Compress),90000)
+  $ready=Read-NegativePacket 10000
+  Assert-NegativeReady $ready $negativeRequest $Mode $eventName
 }
 function Complete-NegativeFixture {
   if(-not $negativeRequest) { return }
-  [IO.File]::WriteAllText((Join-Path $fixtureRoot ('negative-release-'+$negativeRequest)),'verified',[Text.UTF8Encoding]::new($false))
-  $deadline=[DateTime]::UtcNow.AddSeconds(10); $closedPath=Join-Path $fixtureRoot 'negative-closed.json'
-  while([DateTime]::UtcNow -lt $deadline) {
-    if(Test-Path -LiteralPath $closedPath) {
-      $closed=Read-BoundedJson $closedPath
-      if($closed.request -is [string] -and $closed.request -ceq $negativeRequest) {
-        Assert-NegativeClosed $closed $negativeRequest
-        $script:negativeRequest=$null; return
-      }
-    }
-    Start-Sleep -Milliseconds 50
+  $negativeChannel.Send((([ordered]@{request=$negativeRequest;released=$true})|ConvertTo-Json -Compress),10000)
+  $closed=Read-NegativePacket 10000
+  Assert-NegativeClosed $closed $negativeRequest
+  $script:negativeRequest=$null
+}
+function Complete-NegativeSession {
+  if($negativeChannel -and $negativeChannel.HasPeer -and -not $negativeFinished) {
+    $script:negativeFinished=$true
+    $negativeChannel.Send((([ordered]@{finished=$true})|ConvertTo-Json -Compress),10000)
   }
-  throw 'Owned isolated admin fixture handle closure was not confirmed.'
 }
 $failure=$null
 try {
@@ -500,6 +590,7 @@ try {
     [IO.File]::Copy((Join-Path $bundle.Root ('fixture/'+$name)),$target,$false)
     if((Get-Item -LiteralPath $target).Length -ne $member.bytes -or (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLowerInvariant() -cne $member.sha256) { throw 'Owned copied fixture member differs from the trusted bundle.' }
   }
+  $negativeChannel=[MixelPortableLeaseChannel]::new([IO.Path]::GetFileName($fixtureRoot),$true,0)
   $absent = 'ownerFailed=false;ownerError=none;kernel=absent;probeError=none;memoryActive=false'
   $active = 'ownerFailed=false;ownerError=none;kernel=active;probeError=none;memoryActive=false'
   $activeOwner = 'ownerFailed=false;ownerError=none;kernel=active;probeError=none;memoryActive=true'
@@ -528,6 +619,7 @@ try {
   [void](Invoke-StandardLeaseControl probe $absent 2 '' $false $false)
   Write-Host 'PASS: closed wrong-object control leaves no GUID lease or false readiness in a fresh actual standard-account process.'
 
+  Complete-NegativeSession
   Write-AtomicJson (Join-Path $fixtureRoot 'negative-finished.json') ([ordered]@{finished=$true})
 } catch { $failure=$_; throw } finally {
   $cleanup=[Collections.Generic.List[string]]::new()
@@ -535,6 +627,8 @@ try {
   try { [MixelInteractiveLeaseProcess]::StopOwnedStartedProcesses() } catch { $cleanup.Add('Exact owned ordinary child termination failed.') }
   try { [MixelInteractiveLeaseProcess]::CloseStartedObservations() } catch { $cleanup.Add('Exact owned native handle closure failed.') }
   try { if(Test-Path -LiteralPath $fixtureRoot) { Write-AtomicJson (Join-Path $fixtureRoot 'negative-finished.json') ([ordered]@{finished=$true}) } } catch { $cleanup.Add('Owned completion marker publication failed.') }
+  try { Complete-NegativeSession } catch { $cleanup.Add('Owned pipe completion publication failed.') }
+  try { if($negativeChannel) { $negativeChannel.Dispose() } } catch { $cleanup.Add('Owned pipe cleanup failed.') }
   # Evidence remains in the owned local directory for collection; never delete
   # an account, profile, credential, desktop ACL or unrelated files.
   if($cleanup.Count) { if($failure) { Write-Host ('FAIL: '+($cleanup -join ' ')) } else { throw ($cleanup -join ' ') } }

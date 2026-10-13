@@ -7,6 +7,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -15,6 +16,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 from pathlib import Path
+from rust_toolchain import rustc_command
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -81,17 +83,72 @@ class PortableSourceTests(unittest.TestCase):
             subprocess.run(["git", "add", "."], cwd=root, check=True, capture_output=True)
             subprocess.run(["git", "-c", "user.name=Mixel QA", "-c", "user.email=qa@example.test", "commit", "--quiet", "-m", "Owned QA source control"], cwd=root, check=True, capture_output=True)
             with patch.object(bundle, "ROOT", root):
-                self.assertEqual(len(bundle.git_source_bindings()), 14)
+                self.assertEqual(len(bundle.git_source_bindings()), 16)
                 builder = root / bundle.BUILD_SOURCE
                 original = builder.read_bytes()
                 builder.write_bytes(original + b"changed builder\n")
                 with self.assertRaisesRegex(ValueError, "exact committed blob"):
                     bundle.git_source_bindings()
                 builder.write_bytes(original)
+                helper = root / "scripts/rust_toolchain.py"
+                original_helper = helper.read_bytes()
+                helper.write_bytes(original_helper + b"changed linker selection\n")
+                with self.assertRaisesRegex(ValueError, "exact committed blob"):
+                    bundle.git_source_bindings()
+                helper.write_bytes(original_helper)
+                observer = root / "scripts/windows-standard-namespace-readonly.rs"
+                original_observer = observer.read_bytes()
+                observer.write_bytes(original_observer + b"changed compiled namespace observer\n")
+                with self.assertRaisesRegex(ValueError, "exact committed blob"):
+                    bundle.git_source_bindings()
+                observer.write_bytes(original_observer)
+                launch = root / "scripts/test-support-launch-windows.ps1"
+                original_launch = launch.read_bytes()
+                launch.write_bytes(original_launch + b"changed retained native ownership\n")
+                with self.assertRaisesRegex(ValueError, "exact committed blob"):
+                    bundle.git_source_bindings()
+                launch.write_bytes(original_launch)
                 subprocess.run(["git", "rm", "--cached", bundle.BUILD_SOURCE], cwd=root, check=True, capture_output=True)
                 subprocess.run(["git", "-c", "user.name=Mixel QA", "-c", "user.email=qa@example.test", "commit", "--quiet", "-m", "Remove only the owned build-source binding"], cwd=root, check=True, capture_output=True)
                 with self.assertRaises(subprocess.CalledProcessError):
                     bundle.git_source_bindings()
+
+    def test_both_adapters_bind_exact_integrated_sources_to_trusted_manifest(self):
+        for name in bundle.ADAPTERS.values():
+            source = (ROOT / name).read_text(encoding="utf-8-sig")
+            self.assertNotIn("$expectedSource", source)
+            self.assertIn("$actual -cne $ExpectedManifestSha256", source)
+            self.assertIn("$member[0].bytes -ne $binding.bytes -or $member[0].sha256 -cne $binding.sha256", source)
+            self.assertEqual(source.count("'scripts/rust_toolchain.py'"), 1)
+            source_allow = re.search(r"\$sourceAllow=@\(([^\n]+)\)", source)
+            self.assertIsNotNone(source_allow)
+            actual = re.findall(r"'([^']+)'", source_allow.group(1))
+            expected = (*bundle.SOURCES, *bundle.ADAPTERS.values(), bundle.BUILD_SOURCE, *bundle.BUILD_CONTROLS)
+            self.assertEqual(len(actual), 16)
+            self.assertEqual(set(actual), set(expected))
+
+    def test_actual_static_compile_selects_native_linker_preserves_flags_and_rejects_conflict(self):
+        with tempfile.TemporaryDirectory(prefix="mixel-qa-native-linker-") as folder:
+            tools = Path(folder).resolve()
+            linker = tools / "bin/Hostx64/x64/link.exe"
+            linker.parent.mkdir(parents=True)
+            linker.write_bytes(b"MZ native fixture")
+            environment = {"VCTOOLSINSTALLDIR": str(tools)}
+            verified = []
+            def select(command):
+                return rustc_command(command, windows=True, environment=environment,
+                                     verifier=lambda path: verified.append(path))
+            with patch.object(bundle, "rustc_command", side_effect=select), patch.object(bundle.subprocess, "run") as run:
+                bundle.compile_static_fixture("explicit rustc", Path("owned source.rs"), Path("owned app.exe"))
+                self.assertEqual(verified, [linker])
+                self.assertEqual(run.call_args.args[0], ["explicit rustc", *bundle.STATIC_ARGS,
+                                 "owned source.rs", "-o", "owned app.exe", "-C", "linker=" + str(linker)])
+                self.assertEqual(run.call_args.kwargs, {"capture_output": True, "timeout": 90})
+                run.reset_mock()
+                environment["cargo_target_x86_64_pc_windows_msvc_linker"] = str(tools / "shadow-link.exe")
+                with self.assertRaisesRegex(RuntimeError, "different Windows linkers"):
+                    bundle.compile_static_fixture("explicit rustc", Path("owned.rs"), Path("owned.exe"))
+                run.assert_not_called()
 
 
 class OwnedPEMetadataTests(unittest.TestCase):
@@ -204,6 +261,98 @@ class OwnedPackageInventoryTests(unittest.TestCase):
 
 
 class RetainedLoaderResultTests(unittest.TestCase):
+    def test_joined_loader_secondary_observation_is_removed_before_exact_inventory(self):
+        with tempfile.TemporaryDirectory(prefix="mixel-qa-loader-") as folder:
+            root = Path(folder)
+            OwnedPackageInventoryTests().populate(root)
+            fixture = root / "fixture"
+            record = {"pid": 123, "sourceStatus": "ownerFailed=false;ownerError=none;kernel=absent;probeError=none;memoryActive=false",
+                      "rawOpenError": 2, "attestation": "", "requiresClick": False, "ownerFailed": False}
+
+            class Child:
+                pid, returncode = 123, None
+
+                def __init__(self, *_args, **_kwargs):
+                    (fixture / "fixture-result.json").write_text(json.dumps(record), encoding="utf-8")
+                    (fixture / "fixture-namespace.json").write_text("{}", encoding="utf-8")
+
+                def poll(self):
+                    return self.returncode
+
+                def communicate(self, timeout):
+                    self.returncode = 0
+                    return b"", b""
+
+                def kill(self):
+                    raise AssertionError("Already completed source loader must not be killed")
+
+            refusal = subprocess.CompletedProcess([], 1, b"", bundle.REFUSAL.split('"')[1].encode())
+            with patch.object(bundle.subprocess, "run", return_value=refusal), patch.object(bundle.subprocess, "Popen", Child):
+                result = bundle.loader_smoke(fixture / "lease-standard.exe", fixture)
+            self.assertFalse(result["standardUserQualified"])
+            self.assertFalse((fixture / "fixture-namespace.json").exists())
+            self.assertEqual(len(bundle.bundle_members(root)), 15)
+
+    def test_secondary_observation_refuses_preexisting_or_nonregular_and_oversized_members(self):
+        with tempfile.TemporaryDirectory(prefix="mixel-qa-loader-bounds-") as folder:
+            root = Path(folder)
+            observation = root / "fixture-namespace.json"
+            observation.mkdir()
+            with self.assertRaisesRegex(ValueError, "new owned fixture records"):
+                bundle.loader_smoke(root / "unused.exe", root)
+            with self.assertRaisesRegex(ValueError, "bounded ordinary file"):
+                bundle.remove_owned_loader_observation(observation)
+            self.assertTrue(observation.is_dir())
+            observation.rmdir()
+            observation.write_bytes(b"x" * 4097)
+            with self.assertRaisesRegex(ValueError, "bounded ordinary file"):
+                bundle.remove_owned_loader_observation(observation)
+            self.assertEqual(observation.stat().st_size, 4097)
+            observation.unlink()
+            target = root / "must-preserve.json"
+            target.write_bytes(b"owned symlink target")
+            observation.write_bytes(b"owned reparse metadata control")
+            reparse = type("ReparseRecord", (), {"st_mode": 0o100644, "st_file_attributes": 0x400, "st_size": 30})()
+            with patch.object(bundle.Path, "lstat", return_value=reparse), self.assertRaisesRegex(ValueError, "bounded ordinary file"):
+                bundle.remove_owned_loader_observation(observation)
+            self.assertEqual(observation.read_bytes(), b"owned reparse metadata control")
+            if bundle.os.name != "nt":
+                # Exercise an actual host symlink too; Windows reparse metadata
+                # is tested above without requiring a symlink-creation privilege.
+                observation.unlink()
+                observation.symlink_to(target)
+                with self.assertRaisesRegex(ValueError, "new owned fixture records"):
+                    bundle.loader_smoke(root / "unused.exe", root)
+                with self.assertRaisesRegex(ValueError, "bounded ordinary file"):
+                    bundle.remove_owned_loader_observation(observation)
+                self.assertTrue(observation.is_symlink())
+            self.assertEqual(target.read_bytes(), b"owned symlink target")
+
+    def test_unconfirmed_child_exit_preserves_secondary_observation(self):
+        with tempfile.TemporaryDirectory(prefix="mixel-qa-loader-unjoined-") as folder:
+            root = Path(folder)
+
+            class Child:
+                pid, returncode = 123, None
+
+                def __init__(self, *_args, **_kwargs):
+                    (root / "fixture-namespace.json").write_text("{}", encoding="utf-8")
+
+                def poll(self):
+                    return None
+
+                def kill(self):
+                    pass
+
+                def communicate(self, timeout):
+                    raise subprocess.TimeoutExpired("owned loader", timeout)
+
+            refusal = subprocess.CompletedProcess([], 1, b"", bundle.REFUSAL.split('"')[1].encode())
+            with patch.object(bundle.subprocess, "run", return_value=refusal), patch.object(bundle.subprocess, "Popen", Child), patch.object(bundle.time, "monotonic", side_effect=(0, 11)):
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    bundle.loader_smoke(root / "unused.exe", root)
+            self.assertEqual((root / "fixture-namespace.json").read_text(), "{}")
+
     def test_safe_result_is_only_a_loader_classification(self):
         record = {"pid": 123, "sourceStatus": "ownerFailed=false;ownerError=none;kernel=unavailable;probeError=5;memoryActive=false",
                   "rawOpenError": 5, "attestation": "guard-unavailable", "requiresClick": True, "ownerFailed": False}
@@ -256,6 +405,17 @@ class FreshDependencyPackagingTests(unittest.TestCase):
         real_spec = importlib.util.spec_from_file_location
         compiler = str(root / "mock-native-rustc")
         native_compilations = []
+        tools = root / "mock-msvc"
+        linker = tools / "bin/Hostx64/x64/link.exe"
+        linker.parent.mkdir(parents=True)
+        linker.write_bytes(b"MZ owned native linker mock")
+
+        def qualify(command):
+            # Exercise the real qualified command shape without invoking a
+            # native version API or relying on the test host's installed tools.
+            return rustc_command(command, windows=True,
+                                 environment={"VCTOOLSINSTALLDIR": str(tools)},
+                                 verifier=lambda _path: None)
 
         def check_output(command, **kwargs):
             if command == [compiler, "--version"]:
@@ -265,9 +425,10 @@ class FreshDependencyPackagingTests(unittest.TestCase):
         def run(command, **kwargs):
             if command[0] != compiler:
                 return real_run(command, **kwargs)
-            self.assertEqual(command[-2], "-o")
-            source, binary = Path(command[-3]), Path(command[-1])
-            arguments = command[1:-3]
+            output_index = command.index("-o")
+            source, binary = Path(command[output_index - 1]), Path(command[output_index + 1])
+            arguments = command[1:output_index - 1]
+            self.assertEqual(command[output_index + 2:], ["-C", "linker=" + str(linker)])
             self.assertIn(arguments, [bundle.STATIC_ARGS, ["--edition", "2021", "-D", "warnings"]])
             if arguments == bundle.STATIC_ARGS:
                 self.assertIn(bundle.REFUSAL, source.read_text(encoding="utf-8"))
@@ -289,10 +450,12 @@ class FreshDependencyPackagingTests(unittest.TestCase):
                 # Execute the real source exporter with only its platform/native
                 # boundary mocked; never alter the source or shared os module.
                 module.os = SimpleNamespace(name="nt", environ=environment)
+                module.rustc_command = qualify
             spec.loader.exec_module = load_exporter
             return spec
 
         with patch.object(bundle, "ROOT", root), patch.object(bundle, "os", SimpleNamespace(name="nt", environ=environment)), \
+             patch.object(bundle, "rustc_command", side_effect=qualify), \
              patch.object(bundle.importlib.util, "spec_from_file_location", side_effect=source_spec), \
              patch.object(bundle.shutil, "which", return_value=compiler), \
              patch.object(bundle.subprocess, "check_output", side_effect=check_output), \
@@ -364,7 +527,7 @@ class FreshDependencyPackagingTests(unittest.TestCase):
                 end = text.index("\n$bundle=Assert-PortableLeaseBundle", start)
                 verifier = root / (target + "-pure-controls.ps1")
                 verifier.write_text("param([string]$Bundle,[string]$Digest)\n$ErrorActionPreference='Stop'\n" + text[start:end] +
-                                    "\n$result=Assert-PortableLeaseBundle $Bundle $Digest\nif($result.Manifest.files.Count -ne 15 -or $result.Manifest.buildSourceBindings.Count -ne 14 -or $result.Manifest.runtimeQualified){throw 'Fresh scope changed.'}\nWrite-Host 'PASS: actual fresh package validator.'\n", encoding="utf-8-sig", newline="\n")
+                                    "\n$result=Assert-PortableLeaseBundle $Bundle $Digest\nif($result.Manifest.files.Count -ne 15 -or $result.Manifest.buildSourceBindings.Count -ne 16 -or $result.Manifest.runtimeQualified){throw 'Fresh scope changed.'}\nWrite-Host 'PASS: actual fresh package validator.'\n", encoding="utf-8-sig", newline="\n")
 
                 def validate(expect_success, expected_marker=None, digest=None):
                     actual_digest = digest or hashlib.sha256((output / "manifest.json").read_bytes()).hexdigest()

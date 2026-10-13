@@ -1,6 +1,31 @@
 # Mixel-Remote — Agent Handoff / Current State
 
-## Continuation correction — 2026-10-13
+## Private composed Windows source qualification — 2026-10-13
+
+The final carrier deliberately composes the reviewed own Windows controls with
+owner `5c97134e6b76ac3a1db1de6595f6fb57511d43d3`. The three wrappers now bind the
+actual observation source `522e8868236f66b459efcb98193fd187905a832b9d5e80210253b3de1e9bfc19`
+and the complete composed helper family. The historical owner pins and inverse
+controls below remain separate, exact historical evidence.
+
+Hosted and optional registration validate the owned identity before original A.
+The original Standard script owns one qualified mask12 grant, all original eight
+assertions, exact restoration, and the ninth restored-A probe. No mask15 helper
+is instantiated inside that scope. Process-exit, namespace or desktop restoration
+uncertainty quarantines account/profile/root cleanup; desktop disposal and exact
+hash verification are attempted independently. Pending NT bindings and protocol
+files remain owned after failed disposal or cleanup, including repeated drains.
+
+Current source/mock gates pass lease26, suspended desktop identity3, hosted9,
+optional original-eight9, session-directory9, directory-security7 and GUI-source10.
+Both exact PowerShell source gates pass with zero Windows API calls. Rust1.75
+Windows metadata rejects the prior clashing FFI declaration and accepts the exact
+aligned readonly helper with warnings fatal. GUI source provenance binds15 actual
+members, including the compiler adapter and readonly Rust resource. These are
+source/compiler/mock results; real Windows desktop and application acceptance
+remain open. The owner continuation and earlier checkpoints below are historical.
+
+## Historical owner continuation correction — 2026-10-13
 
 The automatic a19 preflight38355118352 and manual Windows2022/2025
 preflights38355539913/38355542299 completed FAILURE at one stale hosted source

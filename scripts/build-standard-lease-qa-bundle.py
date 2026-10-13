@@ -14,6 +14,7 @@ import sys
 import time
 import uuid
 from pathlib import Path
+from rust_toolchain import rustc_command
 
 ROOT = Path(__file__).resolve().parents[1]
 PURPOSE = "compile-only-standard-lease-qa"
@@ -35,6 +36,8 @@ REFUSAL = '    assert!(std::env::args().len() == 1, "Portable source QA accepts 
 STATIC_ARGS = ["--edition", "2021", "-D", "warnings", "-C", "target-feature=+crt-static"]
 BUILD_SOURCE = "scripts/build-standard-lease-qa-bundle.py"
 BUILD_CONTROLS = (
+    "scripts/rust_toolchain.py",
+    "scripts/windows-standard-namespace-readonly.rs",
     ".github/workflows/preflight.yml",
     "scripts/activate-windows-msvc.ps1",
     "scripts/test-standard-lease-qa-bundle.py",
@@ -58,6 +61,17 @@ def remove_owned_compiler_sidecars(directory):
         if not stat.S_ISREG(record.st_mode) or getattr(record, "st_file_attributes", 0) & 0x400 or record.st_size > 64 * 1024 * 1024:
             raise ValueError("Owned compiler auxiliary output is not a bounded ordinary file")
         path.unlink()
+
+
+def remove_owned_loader_observation(path):
+    """Remove only the fixed joined child's bounded secondary observation."""
+    try:
+        record = path.lstat()
+    except FileNotFoundError:
+        return
+    if not stat.S_ISREG(record.st_mode) or getattr(record, "st_file_attributes", 0) & 0x400 or record.st_size > 4096:
+        raise ValueError("Owned loader observation is not a bounded ordinary file")
+    path.unlink()
 
 
 def bundle_members(directory):
@@ -192,7 +206,14 @@ def safe_result(record, pid):
 def loader_smoke(binary, directory):
     result = directory / "fixture-result.json"
     mode = directory / "fixture-mode.txt"
+    observation = directory / "fixture-namespace.json"
     if result.exists() or mode.exists():
+        raise ValueError("Loader smoke requires new owned fixture records")
+    try:
+        observation.lstat()
+    except FileNotFoundError:
+        pass
+    else:
         raise ValueError("Loader smoke requires new owned fixture records")
     refusal = subprocess.run([str(binary), "probe"], cwd=directory, capture_output=True, timeout=10)
     if refusal.returncode == 0 or result.exists() or b"Portable source QA accepts no command-line arguments" not in refusal.stderr:
@@ -220,9 +241,16 @@ def loader_smoke(binary, directory):
         if child.poll() is None:
             child.kill()
             child.communicate(timeout=5)
+        remove_owned_loader_observation(observation)
         for path in (mode, result, release):
             if path.exists():
                 path.unlink()
+
+
+def compile_static_fixture(rustc, source_path, binary):
+    """Keep static-CRT flags while qualifying the actual native Windows linker."""
+    return subprocess.run(rustc_command([rustc, *STATIC_ARGS, str(source_path), "-o", str(binary)]),
+                          capture_output=True, timeout=90)
 
 
 def build(output):
@@ -237,7 +265,7 @@ def build(output):
     output = output.absolute()
     if output.exists() or output.is_symlink() or output.parent.is_symlink() or output.parent.resolve() != ROOT:
         raise ValueError("QA output must be a new direct workspace directory")
-    rustc = shutil.which("rustc")
+    rustc = os.environ.get("RUSTC_BIN") or shutil.which("rustc")
     if not rustc:
         raise ValueError("Installed native Rust compiler is absent")
     version = subprocess.check_output([rustc, "--version"], text=True, timeout=10).strip()
@@ -257,7 +285,7 @@ def build(output):
     for name, source in (("lease-standard", body), ("lease-standard-gui", header + body)):
         source_path, binary = fixture / (name + ".rs"), fixture / (name + ".exe")
         source_path.write_text(source, encoding="utf-8", newline="\n")
-        compiled = subprocess.run([rustc, *STATIC_ARGS, str(source_path), "-o", str(binary)], capture_output=True, timeout=90)
+        compiled = compile_static_fixture(rustc, source_path, binary)
         (output / (name + "-compile.log")).write_bytes(compiled.stdout + compiled.stderr)
         if compiled.returncode != 0 or compiled.stderr:
             raise ValueError("Portable static-CRT fixture compilation failed or warned")

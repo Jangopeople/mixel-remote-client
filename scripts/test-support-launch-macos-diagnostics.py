@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("mixel_macos_launch", ROOT / "scripts/test-support-launch-macos.py")
 launch = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(launch)
+VERIFY_IPC_OWNER = launch.verify_ipc_owner
 PID = 12345
 BASE = datetime(2026, 10, 12, 9, 45, 0, tzinfo=timezone.utc)
 
@@ -38,6 +39,47 @@ class Clock:
 
     def now(self):
         return BASE + timedelta(seconds=self.value)
+
+
+class SyntheticSmokeCleanupTests(unittest.TestCase):
+    def test_exact_fixture_exits_without_querying_unrelated_endpoint(self):
+        with patch.object(launch, "probe", return_value={"running": True, "launchTime": 123.0}), \
+             patch.object(launch.os, "kill", side_effect=[None, ProcessLookupError()]) as kill, \
+             patch.object(launch, "verify_ipc_owner", side_effect=AssertionError("unrelated endpoint")), \
+             patch.object(launch.unix, "query", side_effect=AssertionError("live IPC")):
+            launch.cleanup_smoke_fixture(Path("helper"), 123, Path("synthetic.app"), 123.0)
+            self.assertEqual(kill.call_args_list, [unittest.mock.call(123, signal.SIGTERM), unittest.mock.call(123, 0)])
+
+    def test_changed_birth_and_invalid_identity_refuse_signal(self):
+        for birth in (124.0, None):
+            with patch.object(launch, "probe", return_value={"running": True, "launchTime": birth}), patch.object(launch.os, "kill") as kill:
+                with self.assertRaises(RuntimeError):
+                    launch.cleanup_smoke_fixture(Path("helper"), 123, Path("synthetic.app"), 123.0)
+                kill.assert_not_called()
+        for pid, birth in ((0, 123.0), (True, 123.0), (123, 0), (123, float("nan"))):
+            with patch.object(launch, "probe") as probe, patch.object(launch.os, "kill") as kill:
+                with self.assertRaises(RuntimeError):
+                    launch.cleanup_smoke_fixture(Path("helper"), pid, Path("synthetic.app"), birth)
+                probe.assert_not_called(); kill.assert_not_called()
+
+    def test_exit_timeout_is_fatal_without_a_second_signal_or_ipc(self):
+        with patch.object(launch, "probe", return_value={"running": True, "launchTime": 123.0}), \
+             patch.object(launch.os, "kill") as kill, \
+             patch.object(launch.time, "monotonic", side_effect=[0, 0, 6]), \
+             patch.object(launch.time, "sleep"), \
+             patch.object(launch.unix, "query", side_effect=AssertionError("live IPC")):
+            with self.assertRaisesRegex(RuntimeError, "did not exit"):
+                launch.cleanup_smoke_fixture(Path("helper"), 123, Path("synthetic.app"), 123.0)
+            self.assertEqual(kill.call_args_list, [unittest.mock.call(123, signal.SIGTERM), unittest.mock.call(123, 0)])
+
+    def test_self_test_finally_uses_only_exact_fixture_cleanup(self):
+        import ast
+        tree=ast.parse((ROOT / "scripts/test-support-launch-macos.py").read_text(encoding="utf-8"))
+        body=next(node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name=="self_test")
+        final=next(node for node in body.body if isinstance(node,ast.Try)).finalbody
+        text=ast.unparse(ast.Module(body=final,type_ignores=[]))
+        self.assertIn("cleanup_smoke_fixture(helper, pid, app, launch_time)",text)
+        self.assertNotIn("endpoint",text);self.assertNotIn("unix.query",text)
 
 
 class OwnedFixtures(unittest.TestCase):
@@ -63,6 +105,12 @@ class OwnedFixtures(unittest.TestCase):
             mocked = patch.object(launch, target, replacement) if "." not in target else patch.object(launch.time, target.split(".")[1], replacement)
             mocked.start()
             self.addCleanup(mocked.stop)
+
+        owner = patch.object(launch,"verify_ipc_owner")
+        owner.start();self.addCleanup(owner.stop)
+        query = patch.object(launch.unix,"query",side_effect=lambda name,args=None: {
+            "VideoConnCount":0,"OnlineStatus":[1,True],"Config":["mixel-support-invite-attended",""]}[name])
+        query.start();self.addCleanup(query.stop)
 
     def evidence(self):
         return launch.RuntimeEvidence(self.app, self.output, self.logs, self.reports)
@@ -386,7 +434,7 @@ class OwnedCleanupTests(OwnedFixtures):
         evidence = self.failed()
         endpoint = self.endpoint()
         for window in (RuntimeError("Window probe targets a different application bundle"),
-                       {"running": True, "launchTime": BASE.timestamp() + 999}):
+                       {"running": True, "bundlePath": str(self.app), "launchTime": BASE.timestamp() + 999}):
             with self.subTest(window=window), patch.object(launch.os, "kill") as killed:
                 argument = {"side_effect": window} if isinstance(window, Exception) else {"return_value": window}
                 with patch.object(evidence, "window", **argument):
@@ -396,6 +444,44 @@ class OwnedCleanupTests(OwnedFixtures):
                 self.assertEqual(len(killed.call_args_list), 1)
                 self.assertTrue(endpoint.exists())
 
+    def test_kernel_peer_pid_uses_exact_endpoint_and_rejects_different_owner(self):
+        from unittest.mock import MagicMock
+        endpoint = self.root / 'owned-private-synthetic-ipc'
+        for observed in (PID, PID + 1):
+            with self.subTest(observed=observed):
+                connection = MagicMock()
+                connection.__enter__.return_value = connection
+                connection.getsockopt.return_value = launch.struct.pack('i', observed)
+                with patch.object(launch.socket, 'socket', return_value=connection):
+                    if observed == PID:
+                        VERIFY_IPC_OWNER(PID, endpoint)
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, 'different application process'):
+                            VERIFY_IPC_OWNER(PID, endpoint)
+                connection.connect.assert_called_once_with(str(endpoint))
+                connection.getsockopt.assert_called_once_with(0, 0x002, 4)
+                connection.__exit__.assert_called_once()
+
+    def test_foreign_ipc_owner_blocks_signal_and_retains_endpoint(self):
+        evidence = self.failed()
+        endpoint = self.endpoint()
+        with patch.object(launch.os, 'kill') as killed, patch.object(evidence, 'window', return_value={'running':True, 'bundlePath':str(self.app), 'launchTime':BASE.timestamp()}), patch.object(launch, 'verify_ipc_owner', side_effect=RuntimeError('Actual incoming IPC belongs to a different application process')):
+            result = launch.cleanup_runtime(evidence, self.root/'unused-helper', endpoint)
+        self.assertEqual([item.args for item in killed.call_args_list], [(PID,0)])
+        self.assertIn('process_error', result)
+        self.assertEqual(result['endpoint'], 'not-touched')
+        self.assertTrue(endpoint.exists())
+
+    def test_authenticated_session_blocks_signal_and_retains_endpoint(self):
+        evidence = self.failed()
+        endpoint = self.endpoint()
+        with patch.object(launch.os, 'kill') as killed, patch.object(evidence, 'window', return_value={'running':True, 'bundlePath':str(self.app), 'launchTime':BASE.timestamp()}), patch.object(launch.unix,'query',return_value=1):
+            result = launch.cleanup_runtime(evidence, self.root/'unused-helper', endpoint)
+        self.assertEqual([item.args for item in killed.call_args_list], [(PID,0)])
+        self.assertIn('process_error', result)
+        self.assertEqual(result['endpoint'], 'not-touched')
+        self.assertTrue(endpoint.exists())
+
     def test_verified_sigterm_exit_then_endpoint_cleanup(self):
         evidence = self.failed()
         endpoint = self.endpoint()
@@ -404,7 +490,7 @@ class OwnedCleanupTests(OwnedFixtures):
             calls.append((pid, action))
             if len(calls) >= 3:
                 raise ProcessLookupError
-        with patch.object(launch.os, "kill", kill), patch.object(evidence, "window", return_value={"running": True, "launchTime": BASE.timestamp()}):
+        with patch.object(launch.os, "kill", kill), patch.object(evidence, "window", return_value={"running": True, "bundlePath": str(self.app), "launchTime": BASE.timestamp()}):
             result = launch.cleanup_runtime(evidence, self.root / "unused-helper", endpoint)
         self.assertEqual(calls, [(PID, 0), (PID, signal.SIGTERM), (PID, 0), (PID, 0)])
         self.assertEqual(result["process"], "terminated-owned-application")
@@ -413,7 +499,7 @@ class OwnedCleanupTests(OwnedFixtures):
     def test_failed_signal_retains_endpoint_and_error(self):
         evidence = self.failed()
         endpoint = self.endpoint()
-        with patch.object(launch.os, "kill", side_effect=[None, PermissionError(1, "synthetic")]), patch.object(evidence, "window", return_value={"running": True, "launchTime": BASE.timestamp()}):
+        with patch.object(launch.os, "kill", side_effect=[None, PermissionError(1, "synthetic")]), patch.object(evidence, "window", return_value={"running": True, "bundlePath": str(self.app), "launchTime": BASE.timestamp()}):
             result = launch.cleanup_runtime(evidence, self.root / "unused-helper", endpoint)
         self.assertIn("process_error", result)
         self.assertEqual(result["endpoint"], "not-touched")
@@ -440,9 +526,9 @@ class OwnedCleanupTests(OwnedFixtures):
                 gone = True
             elif gone:
                 raise ProcessLookupError
-        with patch.object(launch.os, "kill", kill), patch.object(evidence, "window", return_value={"running": True, "launchTime": BASE.timestamp()}) as checked:
+        with patch.object(launch.os, "kill", kill), patch.object(evidence, "window", return_value={"running": True, "bundlePath": str(self.app), "launchTime": BASE.timestamp()}) as checked:
             result = launch.cleanup_runtime(evidence, self.root / "unused-helper", endpoint)
-        self.assertEqual(checked.call_count, 2)
+        self.assertGreater(checked.call_count, 2)
         self.assertIn((PID, signal.SIGTERM), killed)
         self.assertIn((PID, signal.SIGKILL), killed)
         self.assertEqual(result["endpoint"], "removed-owned-endpoint")
@@ -450,12 +536,145 @@ class OwnedCleanupTests(OwnedFixtures):
     def test_sigkill_refuses_changed_launch_after_timeout(self):
         evidence = self.failed()
         endpoint = self.endpoint()
-        with patch.object(launch.os, "kill") as killed, patch.object(evidence, "window", side_effect=[
-                {"running": True, "launchTime": BASE.timestamp()}, {"running": True, "launchTime": BASE.timestamp() + 1}]):
+        with patch.object(launch.os, "kill") as killed, patch.object(evidence, "window", side_effect=lambda *args, **kwargs: {"running": True, "bundlePath": str(self.app), "launchTime": BASE.timestamp() + (1 if self.clock.value >= 15 else 0)}):
             result = launch.cleanup_runtime(evidence, self.root / "unused-helper", endpoint)
         self.assertIn("process_error", result)
         self.assertNotIn((PID, signal.SIGKILL), [call.args for call in killed.call_args_list])
         self.assertTrue(endpoint.exists())
+
+    def test_invalid_owned_identity_refuses_all_process_and_ipc_operations(self):
+        evidence = self.failed()
+        endpoint = self.endpoint()
+        for pid, birth in ((True, BASE.timestamp()), (0, BASE.timestamp()), (PID, False),
+                           (PID, 0), (PID, float("nan")), (PID, float("inf"))):
+            evidence.pid, evidence.launch_time = pid, birth
+            with self.subTest(pid=pid, birth=birth), patch.object(launch.os, "kill") as killed, \
+                 patch.object(evidence, "window") as window, patch.object(launch.unix, "query") as query:
+                result = launch.cleanup_runtime(evidence, self.root / "unused-helper", endpoint)
+                killed.assert_not_called(); window.assert_not_called(); query.assert_not_called()
+                self.assertIn("process_error", result)
+                self.assertTrue(endpoint.exists())
+
+    def test_only_exact_integer_zero_is_a_connection_count_proof(self):
+        evidence = self.failed()
+        endpoint = self.endpoint()
+        window = {"running": True, "bundlePath": str(self.app), "launchTime": BASE.timestamp()}
+        for count in (False, True, 0.0, -1, 1, "0", None, float("nan")):
+            with self.subTest(count=count), patch.object(launch.os, "kill") as killed, \
+                 patch.object(evidence, "window", return_value=window), patch.object(launch.unix, "query", return_value=count):
+                result = launch.cleanup_runtime(evidence, self.root / "unused-helper", endpoint)
+                self.assertEqual([call.args for call in killed.call_args_list], [(PID, 0)])
+                self.assertIn("process_error", result)
+                self.assertEqual(result["endpoint"], "not-touched")
+                self.assertTrue(endpoint.exists())
+
+    def test_missing_ipc_cannot_authorize_a_signal(self):
+        evidence = self.failed()
+        window = {"running": True, "bundlePath": str(self.app), "launchTime": BASE.timestamp()}
+        with patch.object(launch.os, "kill") as killed, patch.object(evidence, "window", return_value=window), \
+             patch.object(launch.unix, "query") as query:
+            result = launch.cleanup_runtime(evidence, self.root / "unused-helper", self.root / "absent-ipc")
+        self.assertEqual([call.args for call in killed.call_args_list], [(PID, 0)])
+        query.assert_not_called()
+        self.assertIn("process_error", result)
+
+    def test_new_connection_after_term_refuses_kill_and_retains_endpoint(self):
+        evidence = self.failed()
+        endpoint = self.endpoint()
+        window = {"running": True, "bundlePath": str(self.app), "launchTime": BASE.timestamp()}
+        with patch.object(launch.os, "kill") as killed, patch.object(evidence, "window", return_value=window), \
+             patch.object(launch.unix, "query", side_effect=[0, 1]) as query, \
+             patch.object(launch, "verify_ipc_owner") as owner:
+            result = launch.cleanup_runtime(evidence, self.root / "unused-helper", endpoint)
+        signals = [call.args for call in killed.call_args_list if call.args[1] != 0]
+        self.assertEqual(signals, [(PID, signal.SIGTERM)])
+        self.assertEqual(query.call_count, 2)
+        self.assertEqual(owner.call_args_list, [unittest.mock.call(PID, endpoint)] * 2)
+        self.assertIn("process_error", result)
+        self.assertTrue(endpoint.exists())
+
+    def test_replaced_kernel_owner_after_term_refuses_kill(self):
+        evidence = self.failed()
+        endpoint = self.endpoint()
+        window = {"running": True, "bundlePath": str(self.app), "launchTime": BASE.timestamp()}
+        with patch.object(launch.os, "kill") as killed, patch.object(evidence, "window", return_value=window), \
+             patch.object(launch, "verify_ipc_owner", side_effect=[None, RuntimeError("different application process")]) as owner, \
+             patch.object(launch.unix, "query", return_value=0) as query:
+            result = launch.cleanup_runtime(evidence, self.root / "unused-helper", endpoint)
+        self.assertEqual([call.args for call in killed.call_args_list if call.args[1] != 0], [(PID, signal.SIGTERM)])
+        self.assertEqual(owner.call_count, 2)
+        self.assertEqual(query.call_count, 1, "Foreign IPC owner must not be queried")
+        self.assertIn("process_error", result)
+        self.assertTrue(endpoint.exists())
+
+    def test_changed_bundle_or_invalid_running_observation_after_term_refuses_kill(self):
+        evidence = self.failed()
+        endpoint = self.endpoint()
+        owned = {"running": True, "bundlePath": str(self.app), "launchTime": BASE.timestamp()}
+        for changed in ({**owned, "bundlePath": str(self.root / "foreign.app")},
+                        {**owned, "running": 1}, {**owned, "launchTime": False},
+                        {**owned, "launchTime": float("nan")}):
+            with self.subTest(changed=changed), patch.object(launch.os, "kill") as killed, \
+                 patch.object(evidence, "window", side_effect=[owned, changed]):
+                result = launch.cleanup_runtime(evidence, self.root / "unused-helper", endpoint)
+                self.assertEqual([call.args for call in killed.call_args_list if call.args[1] != 0], [(PID, signal.SIGTERM)])
+                self.assertIn("process_error", result)
+                self.assertTrue(endpoint.exists())
+
+    def test_native_ended_zombie_needs_no_kill_and_cleans_only_inactive_owned_socket(self):
+        evidence = self.failed()
+        endpoint = self.endpoint()
+        owned = {"running": True, "bundlePath": str(self.app), "launchTime": BASE.timestamp()}
+        ended = {"running": False, "bundlePath": ""}
+        with patch.object(launch.os, "kill") as killed, \
+             patch.object(evidence, "window", side_effect=[owned, ended, ended]) as checked:
+            result = launch.cleanup_runtime(evidence, self.root / "unused-helper", endpoint)
+        self.assertEqual([call.args for call in killed.call_args_list if call.args[1] != 0], [(PID, signal.SIGTERM)])
+        self.assertEqual(checked.call_count, 3, "Native-ended identity must be rechecked before deletion")
+        self.assertEqual(result, {"process": "terminated-owned-application", "endpoint": "removed-owned-endpoint"})
+        self.assertEqual(self.clock.value, 10, "Native-ended proof avoids zombie timeout")
+        self.assertFalse(endpoint.exists())
+
+    def test_native_ended_with_live_listener_or_reused_launch_preserves_endpoint(self):
+        evidence = self.failed()
+        endpoint = self.endpoint()
+        endpoint.unlink()
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.addCleanup(listener.close)
+        listener.bind(str(endpoint)); listener.listen(1)
+        ended = {"running": False, "bundlePath": ""}
+        with patch.object(launch.os, "kill") as killed, patch.object(evidence, "window", return_value=ended):
+            result = launch.cleanup_runtime(evidence, self.root / "unused-helper", endpoint)
+        self.assertFalse(any(call.args[1] != 0 for call in killed.call_args_list))
+        self.assertIn("endpoint_error", result)
+        self.assertTrue(endpoint.exists())
+        with patch.object(launch.os, "kill") as killed, patch.object(evidence, "window", side_effect=[
+                ended, {"running": True, "bundlePath": str(self.app), "launchTime": BASE.timestamp() + 1}]):
+            result = launch.cleanup_runtime(evidence, self.root / "unused-helper", endpoint)
+        self.assertFalse(any(call.args[1] != 0 for call in killed.call_args_list))
+        self.assertIn("endpoint_error", result)
+        self.assertTrue(endpoint.exists())
+
+    def test_never_exiting_owned_process_is_bounded_and_does_not_unlink(self):
+        evidence = self.failed()
+        endpoint = self.endpoint()
+        owned = {"running": True, "bundlePath": str(self.app), "launchTime": BASE.timestamp()}
+        with patch.object(launch.os, "kill") as killed, patch.object(evidence, "window", return_value=owned), \
+             patch.object(launch, "verify_ipc_owner") as owner, patch.object(launch.unix, "query", return_value=0) as query:
+            result = launch.cleanup_runtime(evidence, self.root / "unused-helper", endpoint)
+        self.assertEqual([call.args for call in killed.call_args_list if call.args[1] != 0], [(PID, signal.SIGTERM), (PID, signal.SIGKILL)])
+        self.assertEqual(owner.call_count, 2); self.assertEqual(query.call_count, 2)
+        self.assertLess(self.clock.value, 20.3)
+        self.assertIn("did not exit", result["process_error"])
+        self.assertTrue(endpoint.exists())
+
+    def test_native_ended_observation_is_allowed_only_for_cleanup(self):
+        evidence = self.failed()
+        ended = {"running": False, "bundlePath": ""}
+        with patch.object(evidence, "request", return_value=ended):
+            with self.assertRaisesRegex(RuntimeError, "different application bundle"):
+                evidence.window(self.root / "unused-helper")
+            self.assertEqual(evidence.window(self.root / "unused-helper", allow_terminated=True), ended)
 
 
 class ExactRuntimeTests(OwnedFixtures):
@@ -466,8 +685,8 @@ class ExactRuntimeTests(OwnedFixtures):
         self.addCleanup(connection.close)
         stage = {"warm": False}
         def request(helper, action, *arguments):
-            if action == "launch":
-                if arguments[-1] == "cold":
+            if action in ("ordinary","launch"):
+                if action == "ordinary":
                     connection.bind(str(endpoint))
                     endpoint.with_suffix(".pid").write_text(str(PID))
                     self.logs.mkdir()
@@ -491,12 +710,12 @@ class ExactRuntimeTests(OwnedFixtures):
     def test_warm_exit_stays_fatal_records_phase_and_independently_cleans(self):
         result = self.exercise_warm_exit()
         self.assertEqual(result["outcome"], "failure")
-        self.assertEqual(next(item for item in result["events"] if item["event"] == "test-failure")["phase"], "warm-visible-window")
+        self.assertEqual(next(item for item in result["events"] if item["event"] == "test-failure")["phase"], "fresh-warm-url-launch")
         self.assertEqual(result["cleanup"]["process"], "already-exited")
         self.assertEqual(result["cleanup"]["endpoint"], "removed-owned-endpoint")
         self.assertEqual((self.output / result["app_log_deltas"][0]["retained_file"]).read_bytes(), b"synthetic app exit evidence\n")
         self.assertTrue(result["report_absent"])
-        self.assertEqual(self.clock.value, 8, "Five-second stability plus bounded three-second diagnostic wait only")
+        self.assertEqual(self.clock.value, 3, "Bounded three-second diagnostic wait only")
 
     def test_failure_path_privacy_scan_still_runs_and_preserves_first_failure(self):
         result = self.exercise_warm_exit((launch.unix.TOKEN + " private app delta\n").encode())
@@ -512,38 +731,40 @@ class ExactRuntimeTests(OwnedFixtures):
     def test_complete_success_path_preserves_both_health_checks_and_owned_cleanup(self):
         endpoint = self.root / "runtime-ipc" / "ipc"
         endpoint.parent.mkdir()
-        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.addCleanup(connection.close)
-        stopped = False
-        launches = []
+        sockets=[]
+        stopped=set()
+        launches=[]
+        active_pid=PID
         def request(helper, action, *arguments):
-            if action == "launch":
-                launches.append(arguments[-1])
-                if arguments[-1] == "cold":
-                    connection.bind(str(endpoint))
-                    endpoint.with_suffix(".pid").write_text(str(PID))
-                return {"pid": PID, "bundlePath": str(self.app), "launchTime": BASE.timestamp()}
-            if action == "hide":
-                return {"requested": False}
-            return {"running": True, "visible": True, "hidden": False, "bundlePath": str(self.app), "launchTime": BASE.timestamp()}
+            nonlocal active_pid
+            if action in ("ordinary","launch"):
+                launches.append((action,arguments))
+                if action=="ordinary" or arguments[-1]=="cold":
+                    active_pid=PID if action=="ordinary" else PID+1
+                    connection=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)
+                    sockets.append(connection);self.addCleanup(connection.close)
+                    connection.bind(str(endpoint));endpoint.with_suffix(".pid").write_text(str(active_pid))
+                return {"pid":active_pid,"bundlePath":str(self.app),"launchTime":BASE.timestamp()+active_pid-PID}
+            if action=="hide":return {"requested":False}
+            return {"running":True,"visible":True,"hidden":False,"bundlePath":str(self.app),"launchTime":BASE.timestamp()+active_pid-PID}
         def kill(pid, action):
-            nonlocal stopped
-            self.assertEqual(pid, PID)
-            if action == signal.SIGTERM:
-                stopped = True
-            elif stopped:
-                raise ProcessLookupError
+            if action==signal.SIGTERM:stopped.add(pid)
+            elif pid in stopped:raise ProcessLookupError
         captured = io.StringIO()
         with patch.object(launch.unix, "IPC_PATH", endpoint), patch.object(launch.pwd, "getpwuid", return_value=SimpleNamespace(pw_dir=str(self.home))), patch.object(launch, "helper_request", request), patch.object(launch.os, "kill", kill), patch.object(launch.unix, "runtime_health", return_value=(1, True)) as health, redirect_stdout(captured):
             launch.runtime(self.app, self.root / "unused-helper", self.output)
         result = json.loads((self.output / "runtime.json").read_bytes())
-        self.assertEqual(launches, ["cold", "warm"])
+        self.assertEqual([item[0] for item in launches],["ordinary","launch","launch"])
+        self.assertEqual(launches[1][1][-2:],(launch.WARM_URI,"warm"))
+        self.assertEqual(launches[2][1][-2:],(launch.unix.URI,"cold"))
+        self.assertNotEqual(launch.WARM_TOKEN,launch.unix.TOKEN)
+        self.assertEqual(stopped,{PID,PID+1})
         self.assertEqual(health.call_count, 2)
-        self.assertTrue(all(call.args == (PID,) for call in health.call_args_list))
+        self.assertEqual([call.args for call in health.call_args_list],[(PID,),(PID+1,)])
         self.assertEqual(result["outcome"], "success")
         self.assertEqual(result["cleanup"]["endpoint"], "removed-owned-endpoint")
         self.assertFalse(result["customer_app_qualified"])
-        self.assertIn("warm macOS support URL activation", captured.getvalue())
+        self.assertIn("fresh warm support intent changes the same ordinary application", captured.getvalue())
         self.assertEqual(self.clock.value, 5)
 
     def test_wait_deadline_and_process_absence_remain_fatal(self):

@@ -59,6 +59,9 @@ def source_snapshot(source):
 
 
 def capture(source, target, newline=b'\n'):
+    with A.startup_baseline(source) as plain:
+        if plain != source.resolve():
+            return capture(plain, target, newline)
     sdk_owned = (source / S.OWNED).exists() or (source / S.OWNED).is_symlink()
     if sdk_owned:
         F.verify_previous_layers(source) if (source/F.GENERATED).exists() else S.apply(source, check=True)
@@ -370,6 +373,9 @@ def host_portability_controls(out):
 
 
 def flutter_controls(out, source, flutter):
+    with A.startup_baseline(source) as plain:
+        if plain != source.resolve():
+            return flutter_controls(out, plain, flutter)
     app = out / 'actual-full-app'
     shutil.copytree(source, app, ignore=shutil.ignore_patterns('.git', '.dart_tool', 'build', '.mixel-dependencies'))
     # Bring forward the exact locally owned plugins/provenance without caches.
@@ -424,6 +430,7 @@ def full_branding(out, upstream, bash):
                  'patch-support-fatal-crash.py','test-support-fatal-crash.py',
                  'patch-macos-update.py','test-macos-update.py','macos-update.scpt','macos-update-bundle.sh'):
         (copied / 'scripts' / name).write_bytes((ROOT / 'scripts' / name).read_bytes())
+    A.copy_current_pipeline_inputs(copied)
     script = copied / 'scripts/apply-branding.sh'
     text = script.read_text(encoding='utf-8')
     prefix = 'python3 "$(dirname "${BASH_SOURCE[0]}")/'
@@ -456,21 +463,22 @@ def full_branding(out, upstream, bash):
         env = dict(RDREPO=str(repo), BRANDING=str(copied / 'branding'))
         for attempt in (1, 2):
             run([bash, script], copied, out, f'pipeline-{label}-{attempt}', env)
-            F.verify_previous_layers(repo) if (repo/F.GENERATED).exists() else S.apply(repo, check=True)
-            for name in S.FILES:
-                original = S.regular(repo / S.OWNED, name)
-                assert S.digest(original) == S.FILES[name]
-                actual=S.normalize(S.regular(repo, name))[0]
-                if name in F.COMPOSED and (repo/F.GENERATED).exists(): actual=F.transform(name,actual,restore=True)
-                assert actual == S.transform(name, original)
-            for name in T.FILES:
-                original = T.regular(repo / 'flutter/.mixel-dependencies/macos_application_exit', name)
-                assert T.digest(original) == T.FILES[name]
-                actual = S.regular(repo / S.OWNED, name) if name in S.FILES else S.normalize(S.regular(repo, name))[0]
-                if name in F.COMPOSED and name not in S.FILES and (repo/F.GENERATED).exists(): actual=F.transform(name,actual,restore=True)
-                assert actual == T.transform(name, original), name
-            assert S.regular(repo, T.GENERATED) == T.UTILITY.encode()
-            assert S.regular(repo, P.GENERATED) == P.UTILITY.encode()
+            with A.startup_baseline(repo) as checked_repo:
+                F.verify_previous_layers(checked_repo) if (checked_repo/F.GENERATED).exists() else S.apply(checked_repo, check=True)
+                for name in S.FILES:
+                    original = S.regular(checked_repo / S.OWNED, name)
+                    assert S.digest(original) == S.FILES[name]
+                    actual=S.normalize(S.regular(checked_repo, name))[0]
+                    if name in F.COMPOSED and (checked_repo/F.GENERATED).exists(): actual=F.transform(name,actual,restore=True)
+                    assert actual == S.transform(name, original)
+                for name in T.FILES:
+                    original = T.regular(checked_repo / 'flutter/.mixel-dependencies/macos_application_exit', name)
+                    assert T.digest(original) == T.FILES[name]
+                    actual = S.regular(checked_repo / S.OWNED, name) if name in S.FILES else S.normalize(S.regular(checked_repo, name))[0]
+                    if name in F.COMPOSED and name not in S.FILES and (checked_repo/F.GENERATED).exists(): actual=F.transform(name,actual,restore=True)
+                    assert actual == T.transform(name, original), name
+                assert S.regular(checked_repo, T.GENERATED) == T.UTILITY.encode()
+                assert S.regular(checked_repo, P.GENERATED) == P.UTILITY.encode()
             current = {name: value for name, value in snapshot(repo).items() if not name.startswith('.git/') and '/.git/' not in name}
             if attempt == 1: first = current
             else: assert current == first, 'Composed full branding changed on the second pass'

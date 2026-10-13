@@ -44,7 +44,7 @@ OLD_CLOSE = """        if (renderer[key] != nil) {
         } else {
             result(false)
         }
-        
+\x20\x20\x20\x20\x20\x20\x20\x20
     case \"onRgba\":"""
 NEW_CLOSE = """        if let texture = renderer.removeValue(forKey: key) {
             // The raw-pointer retirement precedes close; keep this owner alive
@@ -58,7 +58,7 @@ NEW_CLOSE = """        if let texture = renderer.removeValue(forKey: key) {
         } else {
             result(false)
         }
-        
+\x20\x20\x20\x20\x20\x20\x20\x20
     case \"onRgba\":"""
 TEXT = "macos/Classes/TextRgba.swift"
 TEXT_SHA = "18c831c3510cdb0862abb05b22a89e5ded1edbdeb253ff38b8535c96e01d0a68"

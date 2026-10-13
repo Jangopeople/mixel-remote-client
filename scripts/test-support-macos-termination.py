@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('mixel_app_exit', ROOT/'scripts/patch-support-macos-termination.py')
 P = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(P)
+PROFILE = P.FILES
 
 sdk_spec=importlib.util.spec_from_file_location("mixel_sdk_compatibility_composition",ROOT/"scripts/patch-support-flutter-sdk-compatibility.py")
 S=importlib.util.module_from_spec(sdk_spec)
@@ -25,6 +26,8 @@ sdk_spec.loader.exec_module(S)
 file_transfer_spec=importlib.util.spec_from_file_location("mixel_file_transfer_composition",ROOT/"scripts/patch-support-file-transfer-window.py")
 F=importlib.util.module_from_spec(file_transfer_spec)
 file_transfer_spec.loader.exec_module(F)
+analysis_spec=importlib.util.spec_from_file_location("mixel_final_source_fixture",ROOT/"scripts/test-support-flutter-analysis.py")
+A=importlib.util.module_from_spec(analysis_spec);analysis_spec.loader.exec_module(A)
 
 
 def run(args, out, label, cwd=None):
@@ -54,6 +57,9 @@ def snapshot(root):
 
 
 def source_controls(source, out):
+    with A.startup_baseline(source) as plain:
+        if plain != source.resolve():
+            return source_controls(plain, out)
     if (source/F.GENERATED).exists(): F.apply(source,restore=True,check=True); F.verify_previous_layers(source)
     else: (S.apply(source,check=True) if (source/S.OWNED).exists() else P.apply(source,check=True))
     count = 0
@@ -62,7 +68,7 @@ def source_controls(source, out):
         fixture.mkdir()
         for name in ('Cargo.toml', *P.FILES):
             data = canonical(source,name) if name in P.FILES else (source/name).read_bytes().replace(b'\r\n', b'\n')
-            if name in P.FILES: assert P.digest(data) == P.FILES[name], name
+            if name in P.FILES: assert P.digest(data) == PROFILE[name], name
             target = fixture/name; target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data.replace(b'\n', ending))
         (fixture/'preserved-windows.bin').write_bytes(b'unchanged win\r\n')
@@ -145,9 +151,9 @@ def source_controls(source, out):
 def canonical(source,name):
     current,_=P.normalize(S.regular(source/S.OWNED,name) if (source/S.OWNED).exists() and name in S.FILES else P.regular(source,name))
     if name in F.COMPOSED and (source/F.GENERATED).exists(): current=F.transform(name,current,restore=True)
-    if P.digest(current)==P.FILES[name]: return current
+    if P.digest(current)==PROFILE[name]: return current
     original=P.regular(source/'flutter/.mixel-dependencies/macos_application_exit',name)
-    if P.digest(original)!=P.FILES[name] or current!=P.transform(name,original):
+    if P.digest(original)!=PROFILE[name] or current!=P.transform(name,original):
         raise RuntimeError('Unqualified application-exit source '+name)
     utility,_=P.normalize(P.regular(source,P.GENERATED))
     if utility!=P.UTILITY.encode(): raise RuntimeError('Unqualified application-exit utility')
@@ -171,7 +177,10 @@ def previous_cleanup_controls(out, fixture):
     before=snapshot(valid); P.apply(valid,check=True); assert snapshot(valid)==before
     # Source813 runtime identities were bound before adding this materialization guard.
     # Fixed byte hashes also work in shallow hosted Actions checkouts.
-    expected_runtime={'flutter/lib/common.dart': '390d75c80128850d598794502b6f5d265eb99750f64ebfc98140770661cb2cb0', 'flutter/lib/desktop/pages/desktop_home_page.dart': '51ea09a0714b2e92cde95e8676663b4666ba2489f0230f05dec48a95c3606874', 'flutter/lib/desktop/pages/desktop_tab_page.dart': 'db034e32b19d8e99482903e9adb83f9f91ee24bfeb509f0e7658a6217783d074', 'flutter/lib/desktop/widgets/tabbar_widget.dart': 'd05d6fd84b6c2f51775dfb7e2eb928367a81addbba0dbef56adc2494935685f6', 'flutter/lib/main.dart': '982765b4bd1bdf52aec77af49398ff590697978178248d546ec777b947e3d2b8', 'flutter/lib/mixel_support_app_exit.dart': '37b2f956dbbf07e4129c7b0db1d695d11dbdb1952699e4124238b9befcfbf06e', 'flutter/lib/models/ab_model.dart': 'b4c7038cb74488a2916dc2b34e33d25a3084d33a2dcf4989b4af249a2567e5fe', 'flutter/lib/models/native_model.dart': '0c78091698b2aa83fbf4ae4ed283a84c730d319336960f667b501c1eb52ef4b8', 'flutter/lib/models/server_model.dart': '0c85a7230d2277f9d2dea092b81883717b184f7c315f25833078bfd0824bcda8', 'flutter/lib/utils/multi_window_manager.dart': '27e065acf8f7feb2c80151437c071689a2dc33f1bdc9b8ce9ecacd8b74e2ede4', 'flutter/macos/Runner/AppDelegate.swift': '8a70d4f1af3f0ad28a4119d6cd887b2096f8869a559b7589fc54015d19d771a1', 'flutter/macos/Runner/MainFlutterWindow.swift': 'f497d07f72e4704a821faef262a9717c6b540957c613dc0d8db05410f2579aa1'}
+    historical_runtime={'flutter/lib/common.dart': '390d75c80128850d598794502b6f5d265eb99750f64ebfc98140770661cb2cb0', 'flutter/lib/desktop/pages/desktop_home_page.dart': '51ea09a0714b2e92cde95e8676663b4666ba2489f0230f05dec48a95c3606874', 'flutter/lib/desktop/pages/desktop_tab_page.dart': 'db034e32b19d8e99482903e9adb83f9f91ee24bfeb509f0e7658a6217783d074', 'flutter/lib/desktop/widgets/tabbar_widget.dart': 'd05d6fd84b6c2f51775dfb7e2eb928367a81addbba0dbef56adc2494935685f6', 'flutter/lib/main.dart': '982765b4bd1bdf52aec77af49398ff590697978178248d546ec777b947e3d2b8', 'flutter/lib/mixel_support_app_exit.dart': '37b2f956dbbf07e4129c7b0db1d695d11dbdb1952699e4124238b9befcfbf06e', 'flutter/lib/models/ab_model.dart': 'b4c7038cb74488a2916dc2b34e33d25a3084d33a2dcf4989b4af249a2567e5fe', 'flutter/lib/models/native_model.dart': '0c78091698b2aa83fbf4ae4ed283a84c730d319336960f667b501c1eb52ef4b8', 'flutter/lib/models/server_model.dart': '0c85a7230d2277f9d2dea092b81883717b184f7c315f25833078bfd0824bcda8', 'flutter/lib/utils/multi_window_manager.dart': '27e065acf8f7feb2c80151437c071689a2dc33f1bdc9b8ce9ecacd8b74e2ede4', 'flutter/macos/Runner/AppDelegate.swift': '8a70d4f1af3f0ad28a4119d6cd887b2096f8869a559b7589fc54015d19d771a1', 'flutter/macos/Runner/MainFlutterWindow.swift': 'f497d07f72e4704a821faef262a9717c6b540957c613dc0d8db05410f2579aa1'}
+    expected_runtime={'flutter/lib/common.dart': '090eb7733b1567a8aa2347039ec45966dad68e0620dd14904e4f6cca895b7c3c', 'flutter/lib/desktop/pages/desktop_home_page.dart': 'db693e0fc9c59bb8b15aacab256eac6df9b0622d2f7bf412b02d622b29e0cc7f', 'flutter/lib/desktop/pages/desktop_tab_page.dart': 'db034e32b19d8e99482903e9adb83f9f91ee24bfeb509f0e7658a6217783d074', 'flutter/lib/desktop/widgets/tabbar_widget.dart': 'd05d6fd84b6c2f51775dfb7e2eb928367a81addbba0dbef56adc2494935685f6', 'flutter/lib/main.dart': '982765b4bd1bdf52aec77af49398ff590697978178248d546ec777b947e3d2b8', 'flutter/lib/mixel_support_app_exit.dart': '37b2f956dbbf07e4129c7b0db1d695d11dbdb1952699e4124238b9befcfbf06e', 'flutter/lib/models/ab_model.dart': 'b4c7038cb74488a2916dc2b34e33d25a3084d33a2dcf4989b4af249a2567e5fe', 'flutter/lib/models/native_model.dart': 'd80cb9aa666b49c83de4ddbd3ce79cb99859a9fe16d479cbb36d5643cdb7d4df', 'flutter/lib/models/server_model.dart': '0c85a7230d2277f9d2dea092b81883717b184f7c315f25833078bfd0824bcda8', 'flutter/lib/utils/multi_window_manager.dart': '27e065acf8f7feb2c80151437c071689a2dc33f1bdc9b8ce9ecacd8b74e2ede4', 'flutter/macos/Runner/AppDelegate.swift': '8a70d4f1af3f0ad28a4119d6cd887b2096f8869a559b7589fc54015d19d771a1', 'flutter/macos/Runner/MainFlutterWindow.swift': 'f497d07f72e4704a821faef262a9717c6b540957c613dc0d8db05410f2579aa1'}
+    if PROFILE == P.HISTORICAL_FILES:
+        expected_runtime = historical_runtime
     assert set(expected_runtime)==set(P.FILES)|{P.GENERATED}
     conserved={}
     for name,expected in expected_runtime.items():
@@ -221,7 +230,7 @@ def previous_cleanup_controls(out, fixture):
     raw=b'    helper = regular(helper_path.parent, helper_path.name)\n'
     assert current.count(normalized)==1
     original=current.replace(normalized,raw)
-    assert P.digest(original)=='b0a82ff321131cb8b26dff1ec04d77a88a4c06ba20599910cda96b5d6df6b5b5'
+    assert P.digest(original)=='3f54cf5084df454de970aca15ef1183989f6c40fa0d35807cca9c1f6a639e513'
     for label,data,accepted in (('lf',helper,True),('crlf',helper.replace(b'\n',b'\r\n'),True),
         ('mixed',helper.replace(b'\n',b'\r\n',1),False),('tampered',helper+b'\n# altered verifier\n',False)):
         scripts=out/('prior-verifier-newline-'+label)/'scripts'; scripts.mkdir(parents=True)
@@ -250,9 +259,10 @@ def previous_cleanup_controls(out, fixture):
         'all_prior_targets_and_provenance_checked':12,'both_missing_inputs_rejected':True,
         'actual_projected_newline_guard':True,'prior_verifier_sha256':P.digest(helper),
         'actual_LF_CRLF_verifier_directories_pass':True,'actual_mixed_tampered_verifiers_refused':True,
-        'exact173_CRLF_original_failure_reproduced':True,
-        'all_813_generated_runtime_hashes_conserved':conserved},indent=2,sort_keys=True)+'\n',encoding='utf-8')
-    print(f'PASS: {count} earlier cleanup target/provenance/utility/inventory guards refuse before writes; all12 generated runtime files byte-identical to813.')
+        'composed_raw_hash_CRLF_failure_reproduced':True,
+        'historical_173_raw_verifier_sha256':'b0a82ff321131cb8b26dff1ec04d77a88a4c06ba20599910cda96b5d6df6b5b5',
+        'bound_generated_runtime_hashes_conserved':conserved, 'profile':'historical' if PROFILE == P.HISTORICAL_FILES else 'composed'},indent=2,sort_keys=True)+'\n',encoding='utf-8')
+    print(f'PASS: {count} earlier cleanup target/provenance/utility/inventory guards refuse before writes; all12 generated runtime files match the exact selected profile.')
 
 
 def pipeline_snapshot(root):
@@ -290,6 +300,7 @@ def full_branding(out,bash):
                  'patch-support-fatal-crash.py','test-support-fatal-crash.py',
                  'patch-macos-update.py','test-macos-update.py','macos-update.scpt','macos-update-bundle.sh'):
         shutil.copy2(ROOT/'scripts'/name,copied/'scripts'/name)
+    A.copy_current_pipeline_inputs(copied)
     verifier=copied/'scripts/patch-support-macos-cleanup.py'
     verifier_lf,_=P.normalize(verifier.read_bytes())
     assert P.digest(verifier_lf)=='197bc021abf3cb8563b92dfca30d5ba7f1c93328db4318cf56386baa9cf6a0fb'
@@ -314,22 +325,23 @@ def full_branding(out,bash):
             (out/f'full-branding-{label}-{attempt}.log').write_text(completed.stdout+completed.stderr,encoding='utf-8')
             assert completed.returncode==0,completed.stdout+completed.stderr
             assert 'coordinated bounded main-engine Mac application exit' in completed.stdout
-            for name in P.FILES:
-                original=P.regular(repo/'flutter/.mixel-dependencies/macos_application_exit',name)
-                assert P.digest(original)==P.FILES[name]
-                current,_=P.normalize(S.regular(repo/S.OWNED,name) if name in S.FILES else P.regular(repo,name))
-                # Existing complete branding already normalizes some targets
-                # to LF. The standalone controls prove our incoming-byte
-                # preservation; here both original checkout newline variants
-                # must produce exact corrected bodies and stable all-file bytes.
-                if name in F.COMPOSED and name not in S.FILES and (repo/F.GENERATED).exists(): current=F.transform(name,current,restore=True)
-                assert current==P.transform(name,original),name
-            F.verify_previous_layers(repo) if (repo/F.GENERATED).exists() else S.apply(repo,check=True)
-            for name in S.FILES:
-                original=S.regular(repo/S.OWNED,name)
-                actual=S.normalize(S.regular(repo,name))[0]
-                if name in F.COMPOSED and (repo/F.GENERATED).exists(): actual=F.transform(name,actual,restore=True)
-                assert actual==S.transform(name,original),name
+            with A.startup_baseline(repo) as checked_repo:
+                for name in P.FILES:
+                    original=P.regular(checked_repo/'flutter/.mixel-dependencies/macos_application_exit',name)
+                    assert P.digest(original)==P.FILES[name]
+                    current,_=P.normalize(S.regular(checked_repo/S.OWNED,name) if name in S.FILES else P.regular(checked_repo,name))
+                    # Existing complete branding already normalizes some targets
+                    # to LF. The standalone controls prove our incoming-byte
+                    # preservation; here both original checkout newline variants
+                    # must produce exact corrected bodies and stable all-file bytes.
+                    if name in F.COMPOSED and name not in S.FILES and (checked_repo/F.GENERATED).exists(): current=F.transform(name,current,restore=True)
+                    assert current==P.transform(name,original),name
+                F.verify_previous_layers(checked_repo) if (checked_repo/F.GENERATED).exists() else S.apply(checked_repo,check=True)
+                for name in S.FILES:
+                    original=S.regular(checked_repo/S.OWNED,name)
+                    actual=S.normalize(S.regular(checked_repo,name))[0]
+                    if name in F.COMPOSED and (checked_repo/F.GENERATED).exists(): actual=F.transform(name,actual,restore=True)
+                    assert actual==S.transform(name,original),name
             current=pipeline_snapshot(repo)
             if attempt==1: first=current
             else: assert first==current,'Whole branding changed on its second pass'
@@ -382,10 +394,16 @@ int main() { @autoreleasepool {
 '''
 
 
-def original_controls(out, framework=None):
+def original_controls(out, framework=None, sdk_version=None):
+    if framework is None and sdk_version is None:
+        for version in ('3.24.5', '3.27.4'):
+            destination = out/('pinned-engine-'+version)
+            destination.mkdir()
+            original_controls(destination, sdk_version=version)
+        return
     spec=importlib.util.spec_from_file_location('mixel_quit_sdk_profile',ROOT/'scripts/test-support-macos-window.py')
     window=importlib.util.module_from_spec(spec); spec.loader.exec_module(window)
-    version=window.framework_profile(framework.resolve()) if framework else '3.24.5'
+    version=window.framework_profile(framework.resolve()) if framework else sdk_version
     profile=window.SDK_PROFILES[version]
     revision=profile['engine']
     base='https://raw.githubusercontent.com/flutter/engine/'+revision+'/shell/platform/darwin/macos/framework/Source/'
@@ -940,6 +958,13 @@ def main():
         full_branding(args.output,bash)
         args.source=args.output/'full-branding-lf'
         args.full_branding=False
+    global PROFILE
+    provenance = args.source/'flutter/.mixel-dependencies/macos_application_exit'
+    if provenance.exists():
+        identities = {name:P.digest(P.normalize(P.regular(provenance,name))[0]) for name in P.FILES}
+        if identities not in (P.FILES, P.HISTORICAL_FILES):
+            raise RuntimeError('Mixed application-exit fixture profiles')
+        PROFILE = P.HISTORICAL_FILES if identities == P.HISTORICAL_FILES else P.FILES
     fixture=source_controls(args.source,args.output)
     previous_cleanup_controls(args.output,fixture)
     if shutil.which('xcrun'):

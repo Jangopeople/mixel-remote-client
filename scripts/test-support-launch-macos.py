@@ -18,6 +18,8 @@ import plistlib
 import pwd
 import re
 import signal
+import socket
+import struct
 import stat
 import subprocess
 import sys
@@ -29,6 +31,8 @@ SCRIPT_DIRECTORY = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location("mixel_unix_smoke", SCRIPT_DIRECTORY / "test-support-launch-linux.py")
 unix = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(unix)
+WARM_TOKEN = "inv_00000000-0000-0000-0000-000000000003"
+WARM_URI = unix.URI.replace(unix.TOKEN, WARM_TOKEN)
 
 SWIFT = r"""
 import AppKit
@@ -43,11 +47,10 @@ func emit(_ result: [String: Any]) {
 let arguments = CommandLine.arguments
 if arguments.count < 3 { exit(2) }
 let action = arguments[1]
-if action == "launch" {
-    if arguments.count != 5 { exit(2) }
+if action == "launch" || action == "ordinary" {
+    if arguments.count != (action == "launch" ? 5 : 3) { exit(2) }
     let application = URL(fileURLWithPath: arguments[2]).resolvingSymlinksInPath()
-    guard let supportURL = URL(string: arguments[3]) else { exit(2) }
-    if arguments[4] == "cold" && NSWorkspace.shared.runningApplications.contains(where: {
+    if (action == "ordinary" || arguments[4] == "cold") && NSWorkspace.shared.runningApplications.contains(where: {
         $0.bundleURL?.resolvingSymlinksInPath() == application
     }) { emit(["error": "Built application is already running"]); exit(1) }
     let configuration = NSWorkspace.OpenConfiguration()
@@ -57,7 +60,7 @@ if action == "launch" {
     configuration.addsToRecentItems = false
     var finished = false
     var result: [String: Any] = ["error": "App URL activation timed out"]
-    NSWorkspace.shared.open([supportURL], withApplicationAt: application, configuration: configuration) { app, error in
+    let completion: (NSRunningApplication?, Error?) -> Void = { app, error in
         if let app = app, error == nil {
             result = ["pid": app.processIdentifier,
                       "bundlePath": app.bundleURL?.resolvingSymlinksInPath().path ?? "",
@@ -66,6 +69,12 @@ if action == "launch" {
             result = ["error": "App URL activation failed"]
         }
         finished = true
+    }
+    if action == "ordinary" {
+        NSWorkspace.shared.openApplication(at: application, configuration: configuration, completionHandler: completion)
+    } else {
+        guard let supportURL = URL(string: arguments[3]) else { exit(2) }
+        NSWorkspace.shared.open([supportURL], withApplicationAt: application, configuration: configuration, completionHandler: completion)
     }
     let deadline = Date().addingTimeInterval(30)
     while !finished && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
@@ -191,7 +200,7 @@ def scoped_files(root: Path, *, recursive: bool):
 
 
 def privacy_issue(data: bytes):
-    sensitive = (unix.TOKEN.encode(), unix.API_KEY.encode(), b"mixel-remote://support/?invite=")
+    sensitive = (unix.TOKEN.encode(), WARM_TOKEN.encode(), unix.API_KEY.encode(), b"mixel-remote://support/?invite=")
     if any(value in data for value in sensitive):
         return True
     return bool(re.search(rb"(?i)bearer\s+\S+|inv_[0-9a-f-]{36}|(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|authorization)[\"']?\s*[=:]\s*[\"']?[^\s\"',}]+", data))
@@ -348,8 +357,12 @@ class RuntimeEvidence:
         self.mark("launchservices-response" if action == "launch" else action + "-response", response=allowed)
         return result
 
-    def window(self, helper):
+    def window(self, helper, *, allow_terminated=False):
         result = self.request(helper, "probe", str(self.pid))
+        # The native helper has no bundle when NSRunningApplication has ended.
+        # Only cleanup may use that observation; normal readiness stays strict.
+        if allow_terminated and result.get("running") is False and result.get("bundlePath") == "":
+            return result
         if result.get("bundlePath") != str(self.app):
             raise RuntimeError("Window probe targets a different application bundle")
         return result
@@ -462,7 +475,7 @@ def safe_error(error):
         return "Diagnostic text is not valid UTF-8"
     if isinstance(error, ValueError):
         return "Diagnostic value failed validation"
-    return str(error).replace(unix.URI, "[support URI]").replace(unix.TOKEN, "[invite]").replace(unix.API_KEY, "[API key]")[:1000]
+    return str(error).replace(unix.URI, "[support URI]").replace(WARM_URI, "[support URI]").replace(unix.TOKEN, "[invite]").replace(WARM_TOKEN, "[invite]").replace(unix.API_KEY, "[API key]")[:1000]
 
 
 def cleanup_endpoint(endpoint: Path, pid: int):
@@ -501,52 +514,78 @@ def cleanup_runtime(evidence, helper, endpoint):
         return {"process": "not-launched", "endpoint": "not-touched"}
     result = {"process": "unverified", "endpoint": "not-touched"}
     exited = False
+    native_ended = False
+
+    def owned_window():
+        current = evidence.window(helper, allow_terminated=True)
+        if current.get("running") is False and current.get("bundlePath") == "":
+            return False
+        launched = current.get("launchTime")
+        if (current.get("bundlePath") != str(evidence.app)
+                or type(launched) not in (int, float) or not math.isfinite(launched)
+                or launched != evidence.launch_time):
+            raise RuntimeError("Cleanup cannot verify the owned process bundle and launch identity")
+        if type(current.get("running")) is not bool:
+            raise RuntimeError("Cleanup native running observation is invalid")
+        return current["running"]
+
+    def before_signal():
+        if not owned_window():
+            return False
+        # No signal is allowed without a fresh kernel owner and exact integer
+        # count. bool False and floats are not authenticated zero-count proofs.
+        if not os.path.lexists(endpoint):
+            raise RuntimeError("Cleanup cannot verify the incoming IPC owner")
+        verify_ipc_owner(pid, endpoint)
+        count = unix.query("VideoConnCount")
+        if type(count) is not int or count != 0:
+            raise RuntimeError("Isolated fixture has an unverified or authenticated remote session")
+        return True
+
+    def wait_exit():
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return True, False
+            # NSRunningApplication can end while kill(0) still sees a zombie.
+            # Recognizing that is observation only, never permission to signal.
+            if not owned_window():
+                return True, True
+            time.sleep(0.1)
+        return False, False
+
     try:
+        if (type(pid) is not int or pid <= 0
+                or type(evidence.launch_time) not in (int, float)
+                or not math.isfinite(evidence.launch_time) or evidence.launch_time <= 0):
+            raise RuntimeError("Cleanup has no valid owned process identity")
         try:
             os.kill(pid, 0)
         except ProcessLookupError:
             exited = True
             result["process"] = "already-exited"
         if not exited:
-            current = evidence.window(helper)
-            launched = current.get("launchTime")
-            if evidence.launch_time is None or type(launched) not in (int, float) or launched != evidence.launch_time:
-                raise RuntimeError("Cleanup cannot verify the owned process launch identity")
-            if not current.get("running"):
-                exited = True
+            if not before_signal():
+                exited, native_ended = True, True
                 result["process"] = "already-terminated"
             else:
                 os.kill(pid, signal.SIGTERM)
-                deadline = time.monotonic() + 5
-                while time.monotonic() < deadline:
-                    try:
-                        os.kill(pid, 0)
-                    except ProcessLookupError:
-                        exited = True
-                        break
-                    time.sleep(0.1)
+                exited, native_ended = wait_exit()
                 if not exited:
-                    current = evidence.window(helper)
-                    if current.get("launchTime") != evidence.launch_time:
-                        raise RuntimeError("Cleanup PID was reused by a different launch")
-                    os.kill(pid, signal.SIGKILL)
-                    # Confirm exit before unlinking a socket; do not remove a
-                    # still-running or reused process's endpoint.
-                    deadline = time.monotonic() + 5
-                    while time.monotonic() < deadline:
-                        try:
-                            os.kill(pid, 0)
-                        except ProcessLookupError:
-                            exited = True
-                            break
-                        time.sleep(0.1)
+                    # TERM may have changed the connection count, IPC owner or
+                    # process launch. Recheck every boundary before escalation.
+                    if not before_signal():
+                        exited, native_ended = True, True
+                    else:
+                        os.kill(pid, signal.SIGKILL)
+                        exited, native_ended = wait_exit()
                 if not exited:
                     raise RuntimeError("Owned application did not exit during bounded cleanup")
                 result["process"] = "terminated-owned-application"
     except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
         result["process_error"] = safe_error(error)
-    # Endpoint cleanup is independent of an absent NSRunningApplication. A live
-    # or misattributed process is deliberately not eligible for file deletion.
     if exited:
         try:
             try:
@@ -554,9 +593,25 @@ def cleanup_runtime(evidence, helper, endpoint):
             except ProcessLookupError:
                 pass
             else:
-                raise RuntimeError("Cleanup PID is active again; IPC files were not touched")
+                if not native_ended or owned_window():
+                    raise RuntimeError("Cleanup PID is active again; IPC files were not touched")
+                # Retained zombie PIDs must have a repeated native-ended proof
+                # and an inactive socket. An active/replaced listener is never
+                # eligible, even when its marker still contains the owned PID.
+                if os.path.lexists(endpoint):
+                    endpoint_identity = file_identity(endpoint.lstat())
+                    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+                        connection.settimeout(2)
+                        try:
+                            connection.connect(str(endpoint))
+                        except (FileNotFoundError, ConnectionRefusedError):
+                            pass
+                        else:
+                            raise RuntimeError("Cleanup native-ended process still has an active IPC listener")
+                    if not os.path.lexists(endpoint) or file_identity(endpoint.lstat()) != endpoint_identity:
+                        raise RuntimeError("IPC endpoint changed during native-ended cleanup")
             result["endpoint"] = cleanup_endpoint(endpoint, pid)
-        except (OSError, RuntimeError, ValueError) as error:
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
             result["endpoint_error"] = safe_error(error)
     return result
 
@@ -616,12 +671,25 @@ def probe(helper: Path, pid: int, app: Path):
 
 def wait_health(pid: int, scenario: str, evidence=None) -> None:
     def ready():
+        verify_ipc_owner(pid)
         result = unix.runtime_health(pid)
         if evidence is not None:
             evidence.mark("incoming-health-response", online=result[0], key_confirmed=result[1])
         return result if result[0] > 0 and result[1] else None
     state, confirmed = wait_for(scenario + " incoming server", ready, pid, evidence=evidence)
     print(f"PASS: {scenario} actual incoming IPC proves attended-runtime-v2, branded relay, registered ID, online state={state}, keyConfirmed={str(confirmed).lower()}", flush=True)
+
+
+def verify_ipc_owner(pid: int, endpoint: Path = unix.IPC_PATH) -> None:
+    # The two launch agents can share a pathname while racing the .pid file.
+    # Darwin's kernel peer PID identifies the server actually receiving IPC.
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+        connection.settimeout(2)
+        connection.connect(str(endpoint))
+        # SDK sys/un.h: SOL_LOCAL=0 and LOCAL_PEERPID=0x002.
+        actual = struct.unpack("i", connection.getsockopt(0, 0x002, 4))[0]
+    if actual != pid:
+        raise RuntimeError("Actual incoming IPC belongs to a different application process")
 
 
 def runtime(app: Path, helper: Path, diagnostics: Path | None = None, app_archive: Path | None = None) -> None:
@@ -639,6 +707,48 @@ def runtime(app: Path, helper: Path, diagnostics: Path | None = None, app_archiv
     pid = None
     primary_error = None
     try:
+        evidence.phase = "ordinary-gui-launch"
+        ordinary = evidence.request(helper, "ordinary", str(app))
+        pid = ordinary.get("pid")
+        if type(pid) is not int or pid <= 0:
+            raise RuntimeError("macOS ordinary GUI launch returned no application PID")
+        evidence.pid = pid
+        launched_time = ordinary.get("launchTime")
+        if type(launched_time) in (int, float) and math.isfinite(launched_time) and launched_time > 0:
+            evidence.launch_time = launched_time
+        evidence.mark("owned-ordinary-application-launched")
+        wait_for("Ordinary customer window", lambda: evidence.window(helper).get("visible"), pid, evidence=evidence)
+        def ordinary_ready():
+            verify_ipc_owner(pid)
+            if int(unix.IPC_PATH.with_suffix(".pid").read_text().strip()) != pid:
+                raise RuntimeError("Ordinary GUI IPC PID file does not identify its owner")
+            if unix.query("Config", ["mixel-support-invite-attended", None]) != ["mixel-support-invite-attended", ""]:
+                raise RuntimeError("Ordinary GUI already has an attended guard; fresh warm intent cannot be proven")
+            if unix.query("VideoConnCount") != 0:
+                raise RuntimeError("Ordinary GUI unexpectedly has an authenticated remote session")
+            state = unix.query("OnlineStatus")
+            return isinstance(state, list) and len(state) == 2 and state[0] > 0 and state[1] is True
+        evidence.phase = "ordinary-unarmed-health"
+        wait_for("Ordinary unarmed incoming server", ordinary_ready, pid, evidence=evidence)
+        print("PASS: ordinary macOS GUI starts registered with no attended guard and no authenticated remote session", flush=True)
+        evidence.phase = "fresh-warm-hide-setup"
+        hidden = evidence.request(helper, "hide", str(pid)).get("requested") is True
+        if hidden:
+            wait_for("Warm support URL hide setup", lambda: evidence.window(helper).get("hidden") and not evidence.window(helper).get("visible"), pid, timeout=10, evidence=evidence)
+        evidence.phase = "fresh-warm-url-launch"
+        warm = evidence.request(helper, "launch", str(app), WARM_URI, "warm")
+        if warm.get("pid") != pid or warm.get("launchTime") != evidence.launch_time:
+            raise RuntimeError("macOS warm URL activation created a different customer application")
+        wait_for("Warm support URL customer window", lambda: evidence.window(helper).get("visible"), pid, evidence=evidence)
+        wait_health(pid, "Fresh ordinary-to-support warm URL launch", evidence)
+        print("PASS: fresh warm support intent changes the same ordinary application from empty guard to attended-runtime-v2", flush=True)
+        evidence.phase = "ordinary-to-warm-owned-cleanup"
+        warm_cleanup = cleanup_runtime(evidence, helper, unix.IPC_PATH)
+        evidence.mark("warm-cleanup-result", result=warm_cleanup)
+        if any(key.endswith("_error") for key in warm_cleanup) or warm_cleanup.get("process") not in ("already-exited", "already-terminated", "terminated-owned-application"):
+            raise RuntimeError("Warm application cleanup failed; distinct cold launch prohibited")
+        evidence.pid = pid = None
+        evidence.launch_time = None
         evidence.phase = "cold-url-launch"
         launched = evidence.request(helper, "launch", str(app), unix.URI, "cold")
         pid = launched.get("pid")
@@ -660,19 +770,6 @@ def runtime(app: Path, helper: Path, diagnostics: Path | None = None, app_archiv
         print("PASS: cold macOS support URL activation opens a stable visible customer window", flush=True)
         evidence.phase = "cold-incoming-health"
         wait_health(pid, "Cold support URL launch", evidence)
-        evidence.phase = "warm-hide-setup"
-        hidden = evidence.request(helper, "hide", str(pid)).get("requested") is True
-        if hidden:
-            wait_for("Warm support URL hide setup", lambda: evidence.window(helper).get("hidden") and not evidence.window(helper).get("visible"), pid, timeout=10, evidence=evidence)
-        evidence.phase = "warm-url-launch"
-        warm = evidence.request(helper, "launch", str(app), unix.URI, "warm")
-        if warm.get("pid") != pid:
-            raise RuntimeError("macOS warm URL activation created a different customer application")
-        evidence.phase = "warm-visible-window"
-        wait_for("Warm support URL customer window", lambda: evidence.window(helper).get("visible"), pid, evidence=evidence)
-        print("PASS: warm macOS support URL activation " + ("restores the same hidden customer application" if hidden else "reuses the same visible accessory customer application"), flush=True)
-        evidence.phase = "warm-incoming-health"
-        wait_health(pid, "Warm support URL launch", evidence)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         primary_error = error
         evidence.failure(error)
@@ -711,8 +808,38 @@ def runtime(app: Path, helper: Path, diagnostics: Path | None = None, app_archiv
     print("PASS: synthetic support invite bearer and API key absent from macOS app logs", flush=True)
 
 
+def cleanup_smoke_fixture(helper: Path, pid: int, app: Path, launch_time) -> None:
+    """Stop only the exact synthetic NSApplication created by self_test."""
+    if type(pid) is not int or pid <= 0 or type(launch_time) not in (int, float) or not math.isfinite(launch_time) or launch_time <= 0:
+        raise RuntimeError("Synthetic smoke cleanup lacks a valid launch identity")
+    current = probe(helper, pid, app)
+    if current.get("launchTime") != launch_time or current.get("running") is not True:
+        raise RuntimeError("Synthetic smoke cleanup cannot verify the exact live launch")
+    os.kill(pid, signal.SIGTERM)
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.1)
+    raise RuntimeError("Synthetic smoke application did not exit during bounded cleanup")
+
+
 def self_test(helper: Path, directory: Path) -> None:
     unix.self_test()
+    # A stale PID sidecar must not substitute for the kernel socket owner.
+    endpoint = directory / "owner-identity.sock"
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+        listener.bind(str(endpoint))
+        listener.listen(4)
+        verify_ipc_owner(os.getpid(), endpoint)
+        try:
+            verify_ipc_owner(os.getpid() + 1, endpoint)
+            raise AssertionError("A different actual IPC owner was accepted")
+        except RuntimeError:
+            pass
+    print("PASS: macOS kernel IPC peer ownership rejects stale sidecar attribution")
     response = helper_request(helper, "probe", str(os.getpid()))
     assert response.get("visible") is False, "A CLI process must not have an app window"
     app = (directory / "Smoke Fixture.app").resolve()
@@ -749,22 +876,21 @@ application.run()
     if compiled.returncode:
         raise RuntimeError("macOS smoke fixture compilation failed: " + compiled.stderr[-2000:])
     pid = None
+    launch_time = None
     try:
-        uri = "mixel-smoke-fixture://fixture"
-        pid = helper_request(helper, "launch", str(app), uri, "cold")["pid"]
+        uri = "mixel-smoke-fixture://ordinary-to-warm"
+        launched = helper_request(helper, "ordinary", str(app))
+        pid, launch_time = launched["pid"], launched.get("launchTime")
         wait_for("Mac window probe fixture", lambda: probe(helper, pid, app).get("visible"), pid, timeout=15)
         hidden = helper_request(helper, "hide", str(pid)).get("requested") is True
         if hidden:
             wait_for("Mac window probe fixture hide", lambda: probe(helper, pid, app).get("hidden"), pid, timeout=10)
         assert helper_request(helper, "launch", str(app), uri, "warm")["pid"] == pid
         wait_for("Mac window probe fixture warm restore", lambda: probe(helper, pid, app).get("visible"), pid, timeout=15)
-        print("PASS: actual macOS accessory fixture cold/warm URL activation and CoreGraphics visibility work without requesting TCC access")
+        print("PASS: actual macOS accessory fixture ordinary-to-warm URL activation and CoreGraphics visibility work without requesting TCC access")
     finally:
         if pid is not None:
-            try:
-                os.kill(pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
+            cleanup_smoke_fixture(helper, pid, app, launch_time)
 
 
 def main() -> int:

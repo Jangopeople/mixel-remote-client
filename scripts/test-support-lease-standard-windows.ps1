@@ -1,4 +1,4 @@
-# Normal native functional controls under the exact customer fixture's ordinary
+﻿# Normal native functional controls under the exact customer fixture's ordinary
 # token. No debugger, registry observation, product event, or customer payload.
 $ErrorActionPreference = 'Stop'
 if (-not $IsWindows -or $env:GITHUB_ACTIONS -cne 'true') {
@@ -408,7 +408,16 @@ if (-not ('MixelOrdinaryTokenFixture' -as [type])) {
     } finally { CloseHandle(token); }
   }
 '@
-  Add-Type -TypeDefinition ("using System.Collections.Generic;`n" + $normalSource.Insert($position, $comparison + "`n") + "`n" + $directorySecuritySource.Substring($directorySecurityClass))
+  $bridge = @'
+  public static System.Collections.Generic.Dictionary<string,string> ObserveOwnedNamespace(int pid) {
+    IntPtr process;
+    if (!StartedProcesses.TryGetValue(pid,out process) || WaitForSingleObject(process,0)!=0x102 || GetProcessId(process)!=checked((uint)pid)) throw new InvalidOperationException("Namespace observation requires an actual retained live owned process");
+    return MixelCI.MixelStandardNamespaceDiagnostics.Observe(process);
+  }
+'@
+  $normalSource = $normalSource.Insert($position,$comparison+"`n"+$bridge+"`n")
+  $diagnostics = Get-Content (Join-Path $PSScriptRoot 'windows-standard-namespace-diagnostics.cs') -Raw
+  Add-Type -TypeDefinition ("using System.Collections.Generic;`n"+$normalSource+"`n"+$diagnostics+"`n"+$directorySecuritySource.Substring($directorySecurityClass))
 }
 if (-not [MixelOrdinaryTokenFixture]::Elevated($PID)) { throw 'Owned standard-account qualification requires the elevated isolated runner.' }
 
@@ -639,7 +648,7 @@ function Write-LeaseContextFailure([ValidateSet('job-membership','job-limits','e
   $items = if ($actual -is [AggregateException]) { @($actual.Flatten().InnerExceptions) } else { @($actual) }
   $codes = @($items | Where-Object { $_ -is [ComponentModel.Win32Exception] } | ForEach-Object { $_.NativeErrorCode })
   $safeCodes = if ($codes.Count) { $codes -join ',' } else { 'none' }
-  Write-Host "FAIL: source-only read-only lease context observation; operation=$Operation; exceptionType=$($actual.GetType().Name); nativeErrors=$safeCodes; fatalAfterOriginalGate=True; namedDirectoryCauseEstablished=False."
+  try { Write-Host "FAIL: source-only read-only lease context observation; operation=$Operation; exceptionType=$($actual.GetType().Name); nativeErrors=$safeCodes; fatalAfterOriginalGate=True; namedDirectoryCauseEstablished=False." } catch {}
 }
 
 function Invoke-LeaseJobObservation([int]$ControlPid) {
@@ -1074,10 +1083,13 @@ function Complete-LeaseNtPendingProtocols {
       if (-not $context.childExited) {
         if (-not [MixelOrdinaryTokenFixture]::StartedStatus($context.pid).StartsWith('exited:')) { throw 'Pending exact NT child exit is not confirmed; binding remains owned.' }
         $context.childExited=$true
-        $context.binding.Dispose()
-        if (-not $context.facts.cleanupOkay) { Write-LeaseContextFailure nt-parent-pending-cleanup ([InvalidOperationException]::new('Pending owned parent binding cleanup failed; literal facts retained.')) }
       }
-      if ($context.files) { $context.files.Cleanup() }
+      $context.binding.Dispose()
+      if (-not $context.facts.cleanupOkay) { throw 'Pending owned parent binding cleanup failed; literal facts and ownership retained.' }
+      if ($context.files) {
+        try { $context.files.Cleanup() }
+        catch { [void]$script:ntPreservedRoots.Add($context.files.directory); throw }
+      }
       [void]$script:ntPendingProtocols.Remove($context)
     } catch { Write-LeaseContextFailure nt-pending-protocol-cleanup $_.Exception }
   }
@@ -1138,6 +1150,8 @@ function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner'
     [IO.File]::WriteAllText($unnamedRequest, 'observe', [Text.UTF8Encoding]::new($false))
   }
   if (Test-Path $resultPath) { Remove-Item -LiteralPath $resultPath }
+  $namespacePath = Join-Path $fixtureRoot 'fixture-namespace.json'
+  if (Test-Path $namespacePath) { Remove-Item -LiteralPath $namespacePath }
   foreach ($filename in @('fixture-thread-token-initial.json','fixture-thread-token-unnamed.json','fixture-job-limits.json','fixture-directory-access.json')) {
     $threadResult = Join-Path $fixtureRoot $filename
     if (Test-Path -LiteralPath $threadResult) { Remove-Item -LiteralPath $threadResult }
@@ -1191,6 +1205,49 @@ function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner'
     if ($text.Length -gt 4096) { throw 'Owned lease result exceeds its bound.' }
     $record = $text | ConvertFrom-Json
     Assert-StandardLeaseSafeResult $record $controlPid
+    Write-Host "OBSERVED: primary source lease result before secondary token diagnosis; $($record.sourceStatus); rawOpenError=$($record.rawOpenError); guardEmpty=$($record.attestation -ceq ''); guardConfirmed=$($record.attestation -ceq 'attended-runtime-v2')."
+    try {
+      if (Test-Path $namespacePath) {
+        if ((Get-Item -LiteralPath $namespacePath).Length -gt 4096) { throw 'Bounded child namespace observation exceeded its byte limit.' }
+        $namespaceText = [IO.File]::ReadAllText($namespacePath)
+        if ($namespaceText.Length -gt 4096) { throw 'Bounded child namespace observation exceeded its limit.' }
+        $namespaceRecord = $namespaceText | ConvertFrom-Json
+        if ($namespaceRecord.pid -ne $controlPid) { throw 'Child namespace observation does not belong to the actual owned PID.' }
+        foreach ($property in $namespaceRecord.PSObject.Properties) {
+          if ($property.Name -cnotmatch '\A(?:pid|session|observationError|GlobalAbsoluteEventError|SessionAbsoluteEventError|(?:Global|Local)Alias(?:OpenError|QueryError|TargetKind)|(?:root|sessions|sessionRoot|sessionObjects|globalObjects)(?:TraverseError|QueryError|CreateAccessError|CreateSubdirectoryAccessError|CombinedCreationAccessError|AllSpecificAccessError))\z' -or ($property.Value -isnot [long] -and $property.Value -isnot [int])) { throw 'Child namespace observation is not a bounded scalar record.' }
+          if ($property.Name -ceq 'observationError') {
+            if ($property.Value -lt -2147483648 -or $property.Value -gt 2147483647) { throw 'Child namespace native error exceeds its signed scalar domain.' }
+          } elseif ($property.Value -lt 0 -or $property.Value -gt 4294967295) { throw 'Child namespace DWORD exceeds its unsigned scalar domain.' }
+          if ($property.Name -cmatch '\A(?:Global|Local)AliasTargetKind\z' -and $property.Value -gt 3) { throw 'Child namespace alias target kind exceeds its numeric domain.' }
+        }
+        $namespaceNames = @($namespaceRecord.PSObject.Properties.Name)
+        if ($namespaceNames -ccontains 'observationError') {
+          if ($namespaceNames.Count -ne 2) { throw 'Child namespace error record contains unexpected fields.' }
+        } else {
+          if ($namespaceNames.Count -ne 40 -or $namespaceRecord.session -lt 0) { throw 'Child namespace observation is incomplete or has an invalid session.' }
+          foreach ($alias in @('Global','Local')) {
+            $open = $namespaceRecord.PSObject.Properties[$alias+'AliasOpenError'].Value
+            $query = $namespaceRecord.PSObject.Properties[$alias+'AliasQueryError'].Value
+            $kind = $namespaceRecord.PSObject.Properties[$alias+'AliasTargetKind'].Value
+            if (($open -ne 0 -and ($query -ne 4294967295 -or $kind -ne 0)) -or
+                ($open -eq 0 -and (($query -ne 0 -and $kind -ne 0) -or ($query -eq 0 -and $kind -eq 0)))) {
+              throw 'Child namespace alias observation has inconsistent numeric states.'
+            }
+          }
+        }
+        Write-Host ('OBSERVED: actual child-token namespace access; ' + ($namespaceRecord | ConvertTo-Json -Compress))
+      } else { Write-Host 'OBSERVED: secondary child namespace observation unavailable.' }
+    } catch { Write-Host 'OBSERVED: secondary child namespace observation invalid or unavailable; strict source gate remains required.' }
+    try {
+      $tokenObservation = [MixelOrdinaryTokenFixture]::ObserveOwnedNamespace($controlPid)
+      Write-Host ('OBSERVED: actual owned standard-token namespace access; ' + ($tokenObservation | ConvertTo-Json -Compress))
+    } catch {
+      $nativeFailure = $_.Exception
+      while ($nativeFailure.InnerException) { $nativeFailure = $nativeFailure.InnerException }
+      if ($nativeFailure -is [MixelCI.NamespaceRestoreException]) { throw }
+      $nativeCode = if ($nativeFailure -is [ComponentModel.Win32Exception]) { $nativeFailure.NativeErrorCode } else { $nativeFailure.HResult }
+      Write-Host "OBSERVED: secondary owned token namespace diagnosis unavailable; nativeCode=$nativeCode."
+    }
     if ($ntArmed) {
       try { $ntReply=Invoke-StandardNtChildObservation $ntBinding $ntFiles $controlPid $record $deadline }
       catch { $ntProbeFailed=$true; Write-LeaseContextFailure nt-child-self $_.Exception }
@@ -1270,15 +1327,15 @@ function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner'
       }
       # Original World ownership stays with the matrix. Its independently
       # verified binding is drained after the child, before the reused directory.
-      if ($ntBinding -and $ntExited) { $ntBinding.Dispose() }
-      elseif ($ntBinding) {
-        $script:ntPendingProtocols.Add([pscustomobject]@{binding=$ntBinding;facts=$ntFacts;files=$ntFiles;pid=$controlPid;worldHandle=$NtWorldHandle;childExited=$false})
+      if ($ntBinding) {
+        $script:ntPendingProtocols.Add([pscustomobject]@{binding=$ntBinding;facts=$ntFacts;files=$ntFiles;pid=$controlPid;worldHandle=$NtWorldHandle;childExited=$ntExited})
+        Complete-LeaseNtPendingProtocols
       }
       if ($ntFacts) {
         Write-Host "OBSERVED: parent existing World NT binding; scenario=global-existing-world-synchronize-event; controlPid=$controlPid; childExitConfirmed=$ntExited; originalWin32EventRouteUnmeasured=True; $($ntFacts | ConvertTo-Json -Depth 5 -Compress)."
         if (-not $ntFacts.cleanupOkay) { Write-LeaseContextFailure nt-parent-cleanup ([InvalidOperationException]::new('Owned parent NT binding/module cleanup failed; literal facts retained.')) }
       }
-      if ($ntFiles -and $ntExited) {
+      if ($ntFiles -and $ntExited -and -not $ntBinding) {
         try { $ntFiles.Cleanup() }
         catch { [void]$script:ntPreservedRoots.Add($fixtureRoot); Write-LeaseContextFailure nt-protocol-cleanup $_.Exception }
       }
@@ -1490,7 +1547,8 @@ $fixtureRoot = Join-Path ([Environment]::GetFolderPath('CommonApplicationData'))
 $eventName = 'Global\Mixel-Remote-Standard-Lease-' + [Guid]::NewGuid().ToString('N')
 $executable = Join-Path $fixtureRoot 'lease-standard.exe'
 $resultPath = Join-Path $fixtureRoot 'fixture-result.json'
-$desktopAccess = $null; $profileStarted = $false; $eventHandle = [IntPtr]::Zero; $failure = $null
+$script:namespaceRestorationKnown=$true; $script:namespaceFacts=$null
+$desktopAccess = $null; $namespaceAccess = $null; $profileStarted = $false; $eventHandle = [IntPtr]::Zero; $failure = $null
 $leaseContextFailures = [System.Collections.Generic.List[Exception]]::new()
 $originalDesktop = [MixelOrdinaryTokenFixture]::DesktopAclHashes()
 try {
@@ -1528,7 +1586,23 @@ try {
   # Supplemental current-caller UAC linked-token observations cannot satisfy
   # the disposable pure standard-account acceptance that follows unchanged.
   Invoke-OptionalCallerLinkedLeaseSubsystemObservations
+  # Preserve the original namespace-access classification as an A/B/A negative
+  # control. These observed values cannot satisfy any positive consent gate.
+  [void](Invoke-StandardLeaseControl -Mode probe -ObserveOnly -ObservationLabel 'global-original-before-owned-grant')
+  $beforeGrant = [IO.File]::ReadAllText($resultPath) | ConvertFrom-Json
   $absent = 'ownerFailed=false;ownerError=none;kernel=absent;probeError=none;memoryActive=false'
+  $unavailable = 'ownerFailed=false;ownerError=none;kernel=unavailable;probeError=5;memoryActive=false'
+  $initialAbsent = $beforeGrant.sourceStatus -ceq $absent -and $beforeGrant.rawOpenError -eq 2 -and $beforeGrant.attestation -ceq '' -and -not $beforeGrant.requiresClick -and -not $beforeGrant.ownerFailed
+  $initialDenied = $beforeGrant.sourceStatus -ceq $unavailable -and $beforeGrant.rawOpenError -eq 5 -and $beforeGrant.attestation -ceq 'guard-unavailable' -and $beforeGrant.requiresClick -and -not $beforeGrant.ownerFailed
+  if (-not $initialAbsent -and -not $initialDenied) { throw 'Original unprepared standard namespace is neither safely absent nor safely unavailable.' }
+  if (-not ('MixelCI.StandardNamespaceAccess' -as [type])) {
+    Add-Type -TypeDefinition (Get-Content (Join-Path $PSScriptRoot 'windows-standard-namespace-access.cs') -Raw)
+  }
+  $script:namespaceRestorationKnown=$false
+  $namespaceAccess = [MixelCI.StandardNamespaceAccess]::new($ownedSid, $ownedUser, [uint32](Get-Process -Id $PID).SessionId)
+  $script:namespaceFacts=$namespaceAccess.facts
+  Write-Host 'FIXTURE: exact caller-session namespace grants only object/subdirectory creation (mask12) to the owned disposable SID; product guard and event ACLs remain enforced.'
+
   $active = 'ownerFailed=false;ownerError=none;kernel=active;probeError=none;memoryActive=false'
   $activeOwner = 'ownerFailed=false;ownerError=none;kernel=active;probeError=none;memoryActive=true'
   [void](Invoke-StandardLeaseControl probe $absent 2 '' $false $false)
@@ -1554,6 +1628,12 @@ try {
   } finally { [MixelIsolatedLeaseControl]::Close($eventHandle); $eventHandle = [IntPtr]::Zero }
   [void](Invoke-StandardLeaseControl probe $absent 2 '' $false $false)
   Write-Host 'PASS: closed wrong-object control leaves no GUID lease or false readiness in a fresh actual standard-account process.'
+  [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses()
+  [MixelOrdinaryTokenFixture]::CloseStartedObservations()
+  $namespaceAccess.Dispose(); $script:namespaceRestorationKnown=$true; $namespaceAccess = $null
+  [void](Invoke-StandardLeaseControl probe $beforeGrant.sourceStatus ([int]$beforeGrant.rawOpenError) $beforeGrant.attestation ([bool]$beforeGrant.requiresClick) ([bool]$beforeGrant.ownerFailed))
+  Write-Host 'PASS: native A/B/A namespace preparation preserves the original absent-or-denied classification after exact DACL restoration; no false readiness remains.'
+
   if ($currentCallerFailure) { throw $currentCallerFailure }
   if ($leaseContextFailures.Count -gt 0) {
     throw [AggregateException]::new('Read-only source lease context observation failed after the unchanged original gate.', $leaseContextFailures)
@@ -1564,15 +1644,26 @@ try {
 } finally {
   $cleanup = [System.Collections.Generic.List[string]]::new()
   if ($eventHandle -ne [IntPtr]::Zero) { try { [MixelIsolatedLeaseControl]::Close($eventHandle) } catch { $cleanup.Add('Owned isolated event handle cleanup failed.') } }
-  try { [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses() } catch { $cleanup.Add('Exact owned standard lease process cleanup failed.') }
-  Complete-LeaseNtPendingProtocols
+  $ownedProcessesExited=$false
+  try { [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses(); $ownedProcessesExited=$true } catch { $cleanup.Add('Exact owned standard lease process cleanup failed.') }
+  try { Complete-LeaseNtPendingProtocols } catch { $cleanup.Add('Exact pending NT protocol drain failed.') }
   if ($script:ntPendingProtocols.Count -gt 0) { $cleanup.Add('Exact pending NT protocol ownership cleanup remains incomplete.') }
   if (@($script:ntPendingProtocols | Where-Object { -not $_.childExited }).Count -eq 0) { try { [MixelOrdinaryTokenFixture]::CloseStartedObservations() } catch { $cleanup.Add('Exact owned standard lease handle close failed.') } }
   if (@($script:ntPendingProtocols | Where-Object { -not $_.childExited }).Count -eq 0) { try { [MixelIsolatedLeaseControl]::ClosePending() } catch { $cleanup.Add('Owned retained isolated lease handle cleanup failed.') } }
-  if ($desktopAccess) { try { $desktopAccess.Dispose() } catch { $cleanup.Add('Owned standard lease desktop ACL restoration failed.') } }
-  try { if ([MixelOrdinaryTokenFixture]::DesktopAclHashes() -cne $originalDesktop) { $cleanup.Add('Owned standard lease desktop ACL hashes changed.') } }
-  catch { $cleanup.Add('Owned standard lease desktop ACL hash verification failed.') }
-  if ($profileStarted -and $ownedSid) {
+  if ($namespaceAccess) { try { $namespaceAccess.Dispose(); $script:namespaceRestorationKnown=$true } catch { $cleanup.Add('Owned standard lease namespace DACL restoration failed.') } }
+  $desktopRestorationKnown=$null -eq $desktopAccess
+  if ($desktopAccess) {
+    try { $desktopAccess.Dispose(); $desktopRestorationKnown=$true }
+    catch { $cleanup.Add('Owned standard lease desktop ACL restoration failed.') }
+  }
+  try {
+    if ([MixelOrdinaryTokenFixture]::DesktopAclHashes() -cne $originalDesktop) {
+      $desktopRestorationKnown=$false
+      $cleanup.Add('Owned standard lease desktop ACL hashes changed.')
+    }
+  } catch { $desktopRestorationKnown=$false; $cleanup.Add('Owned standard lease desktop ACL hash verification failed.') }
+  $ownedCleanupPermitted=$ownedProcessesExited -and $script:namespaceRestorationKnown -and $desktopRestorationKnown -and $script:ntPendingProtocols.Count -eq 0 -and $script:ntPreservedRoots.Count -eq 0
+  if ($ownedCleanupPermitted -and $profileStarted -and $ownedSid) {
     $removed = $false
     for ($attempt=0; $attempt -lt 5; $attempt++) {
       try { [MixelOrdinaryTokenFixture]::RemoveProfile($ownedSid); $removed=$true; break }
@@ -1580,14 +1671,15 @@ try {
     }
     if (-not $removed) { $cleanup.Add('Owned standard lease profile cleanup failed.') }
   }
-  if ($ownedSid) { try { Remove-LocalUser -SID ([Security.Principal.SecurityIdentifier]::new($ownedSid)) } catch { $cleanup.Add('Owned standard lease SID cleanup failed.') } }
+  if ($ownedCleanupPermitted -and $ownedSid) { try { Remove-LocalUser -SID ([Security.Principal.SecurityIdentifier]::new($ownedSid)) } catch { $cleanup.Add('Owned standard lease SID cleanup failed.') } }
   $ownedPassword = $null; $random = $null
-  if ($script:ntPendingProtocols.Count -eq 0 -and $script:ntPreservedRoots.Count -eq 0) {
+  if ($ownedCleanupPermitted) {
   if (Test-Path $fixtureRoot) { try { Remove-Item -LiteralPath $fixtureRoot -Recurse -Force } catch { $cleanup.Add('Owned standard lease files cleanup failed.') } }
-  } else { $cleanup.Add('Owned fixture files retained for incomplete NT child/protocol ownership cleanup.') }
+  } else { $cleanup.Add('Owned fixture account/profile/files retained for incomplete process exit, namespace/desktop restoration or NT protocol cleanup.') }
   if (Get-LocalUser -Name $ownedUser -ErrorAction SilentlyContinue) { $cleanup.Add('Owned standard lease account remains.') }
   if ($cleanup.Count -gt 0) {
-    if ($failure) { Write-Host ('FAIL: standard lease cleanup additionally failed: ' + ($cleanup -join ' ')) }
+    if ($failure) { try { Write-Host ('FAIL: standard lease cleanup additionally failed: ' + ($cleanup -join ' ')) } catch {} }
     else { throw ($cleanup -join ' ') }
-  } else { Write-Host 'PASS: standard-account lease controls remove only owned processes/profile/SID/files and restore exact original desktop ACLs.' }
+  } elseif ($failure) { try { Write-Host 'PASS: standard-account lease controls remove only owned processes/profile/SID/files and restore exact original desktop ACLs.' } catch {} }
+  else { Write-Host 'PASS: standard-account lease controls remove only owned processes/profile/SID/files and restore exact original desktop ACLs.' }
 }

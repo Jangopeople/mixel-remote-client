@@ -23,6 +23,8 @@ SOURCES = (
     "scripts/test-support-directory-security.cs",
     "scripts/test-support-nt-event-child.rs",
     "scripts/test-support-nt-event-binding.cs",
+    "scripts/rust_toolchain.py",
+    "scripts/windows-standard-namespace-readonly.rs",
 )
 
 
@@ -204,6 +206,8 @@ fn main() {
     assert!(std::env::args().len() == 1, "GUI connection observation accepts no command-line arguments");
     // Retain compilation coverage only; never execute legacy creation controls.
     let _ = lease_main as fn();
+    #[cfg(windows)]
+    let _ = standard_namespace_readonly::observe as fn(&str) -> std::io::Result<String>;
     let _ = mixel_support_lease::fixture_unnamed_create as fn() -> (&'static str, bool, u32, bool, u32);
     let _ = mixel_support_lease::fixture_enable_thread_tokens as fn(&std::path::Path);
     let _ = mixel_support_lease::fixture_flush_thread_tokens as fn(&std::path::Path, bool);
@@ -250,6 +254,10 @@ def generated_source(directory, event, original=None):
     original = original if original is not None else (ROOT / SOURCES[0]).read_text(encoding="utf-8")
     body = lease.standard_windows_fixture_body(original, directory, "mixel-gui-observe-" + event[-32:] + "-", event)
     harness = lease.standard_windows_harness(event)
+    marker = "MIXEL_STANDARD_FIXTURE_EVENT"
+    if harness.count(marker) != 1:
+        raise ValueError("Exact isolated readonly observer event boundary changed")
+    harness = harness.replace(marker, json.dumps(event), 1)
     if body.count(harness) != 1:
         raise ValueError("Exact generated standard child entry changed")
     return body.replace(harness, GUI_HELPER + MAIN, 1)

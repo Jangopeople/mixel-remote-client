@@ -1,5 +1,5 @@
-# PREPARED LOCAL QA ONLY. Run separately in an already authorized admin session.
-param([Parameter(Mandatory)][string]$Workspace,[Parameter(Mandatory)][string]$ExpectedManifestSha256,[string]$BundleRoot=$PSScriptRoot)
+﻿# PREPARED LOCAL QA ONLY. Run separately in an already authorized admin session.
+param([Parameter(Mandatory)][string]$Workspace,[Parameter(Mandatory)][string]$ExpectedManifestSha256,[Parameter(Mandatory)][uint32]$StandardParentPid,[string]$BundleRoot=$PSScriptRoot)
 $ErrorActionPreference='Stop'
 if([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT -or -not [Environment]::Is64BitProcess -or $PSVersionTable.PSVersion.Major -lt 5) { throw 'Requires actual x64 Windows PowerShell5 or later.' }
 function Assert-PortableLeaseInteger($Value,[long]$Minimum,[long]$Maximum) {
@@ -57,7 +57,7 @@ function Assert-PortableLeaseBundle([string]$Root,[string]$ExpectedManifestSha25
     $bytes=Read-PortableLeaseBytes $path 16777216
     if($bytes.Length -ne $member.bytes -or (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() -cne $member.sha256) { throw 'Portable bundle member hash or byte count changed.' }
   }
-  $sourceAllow=@('scripts/support-invite-guard.rs','scripts/test-support-lease.py','scripts/test-support-lease-standard-windows.ps1','scripts/test-support-directory-security.cs','scripts/test-support-nt-event-child.rs','scripts/test-support-nt-event-binding.cs','scripts/test-support-lease-interactive-windows.ps1','scripts/test-support-lease-negative-windows.ps1','scripts/build-standard-lease-qa-bundle.py','.github/workflows/preflight.yml','scripts/activate-windows-msvc.ps1','scripts/test-standard-lease-qa-bundle.py','scripts/test-support-lease-interactive-source.ps1','scripts/test-support-launch-windows.ps1')
+  $sourceAllow=@('scripts/support-invite-guard.rs','scripts/test-support-lease.py','scripts/test-support-lease-standard-windows.ps1','scripts/test-support-directory-security.cs','scripts/test-support-nt-event-child.rs','scripts/test-support-nt-event-binding.cs','scripts/test-support-lease-interactive-windows.ps1','scripts/test-support-lease-negative-windows.ps1','scripts/build-standard-lease-qa-bundle.py','.github/workflows/preflight.yml','scripts/activate-windows-msvc.ps1','scripts/test-standard-lease-qa-bundle.py','scripts/test-support-lease-interactive-source.ps1','scripts/rust_toolchain.py','scripts/windows-standard-namespace-readonly.rs','scripts/test-support-launch-windows.ps1')
   if($manifest.buildSourceBindings -isnot [array] -or $manifest.buildSourceBindings.Count -ne $sourceAllow.Count) { throw 'Portable build source binding count changed.' }
   $sourceSeen=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
   foreach($binding in $manifest.buildSourceBindings) {
@@ -97,11 +97,13 @@ try {
   if(-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Negative fixture requires its separately authorized admin setup process.' }
 } finally { $identity.Dispose() }
 $Workspace=[IO.Path]::GetFullPath($Workspace)
-$folder=Get-Item -LiteralPath $Workspace
-if(-not $folder.PSIsContainer -or ($folder.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $folder.Name -cnotmatch '\AMixelRemoteQA-lease-[0-9a-f]{32}\z') { throw 'Requires the exact owned local GUID fixture directory.' }
+$pipeName=[IO.Path]::GetFileName($Workspace.TrimEnd([IO.Path]::DirectorySeparatorChar))
+if($pipeName -cnotmatch '\AMixelRemoteQA-lease-[0-9a-f]{32}\z' -or $StandardParentPid -eq 0) { throw 'Requires the exact GUID-only pipe and standard parent PID.' }
 Add-Type @'
 using System;
 using System.ComponentModel;
+using System.IO;
+using System.Text;
 using System.Runtime.InteropServices;
 public static class MixelIsolatedLeaseControl {
   [StructLayout(LayoutKind.Sequential)] struct Attributes { public uint length; public IntPtr descriptor; public int inherit; }
@@ -145,49 +147,143 @@ public static class MixelIsolatedLeaseControl {
   }
   public static void Close(IntPtr handle) { if(handle!=IntPtr.Zero && !CloseHandle(handle)) throw new Win32Exception(); }
 }
+public sealed class MixelPortableLeaseChannel : IDisposable {
+  [StructLayout(LayoutKind.Sequential)] struct PipeAttributes { public int length; public IntPtr descriptor; public int inherit; }
+  [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern Microsoft.Win32.SafeHandles.SafePipeHandle CreateNamedPipeW(string name,uint open,uint mode,uint instances,uint output,uint input,uint timeout,ref PipeAttributes attributes);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetNamedPipeClientProcessId(Microsoft.Win32.SafeHandles.SafePipeHandle pipe,out uint pid);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetNamedPipeServerProcessId(Microsoft.Win32.SafeHandles.SafePipeHandle pipe,out uint pid);
+  readonly System.IO.Pipes.PipeStream stream;
+  readonly System.IO.Pipes.NamedPipeServerStream server;
+  public uint PeerPid { get; private set; }
+  public bool HasPeer { get { return stream.IsConnected; } }
+  static string Validate(string name) {
+    if(!System.Text.RegularExpressions.Regex.IsMatch(name,@"\AMixelRemoteQA-lease-[0-9a-f]{32}\z")) throw new InvalidOperationException("Expected new GUID-only local QA pipe");
+    return name;
+  }
+  public MixelPortableLeaseChannel(string name,bool createServer,uint expectedServerPid) {
+    Validate(name);
+    if(createServer) {
+      var security=new System.IO.Pipes.PipeSecurity();
+      security.SetAccessRuleProtection(true,false);
+      using(var identity=System.Security.Principal.WindowsIdentity.GetCurrent()) {
+        security.SetOwner(identity.User);
+        foreach(var sid in new[]{identity.User,new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.BuiltinAdministratorsSid,null),new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.LocalSystemSid,null)})
+          security.AddAccessRule(new System.IO.Pipes.PipeAccessRule(sid,System.IO.Pipes.PipeAccessRights.FullControl,System.Security.AccessControl.AccessControlType.Allow));
+      }
+      byte[] descriptor=security.GetSecurityDescriptorBinaryForm();
+      var pinned=GCHandle.Alloc(descriptor,GCHandleType.Pinned);
+      Microsoft.Win32.SafeHandles.SafePipeHandle handle=null;
+      try {
+        var attributes=new PipeAttributes{length=Marshal.SizeOf(typeof(PipeAttributes)),descriptor=pinned.AddrOfPinnedObject(),inherit=0};
+        // First-instance, overlapped, duplex; byte mode and reject remote clients.
+        handle=CreateNamedPipeW(@"\\.\pipe\"+name,0x40080003,8,1,4096,4096,0,ref attributes);
+        int error=handle.IsInvalid?Marshal.GetLastWin32Error():0;
+        if(handle.IsInvalid) throw new Win32Exception(error,"Private local QA pipe creation failed");
+        server=new System.IO.Pipes.NamedPipeServerStream(System.IO.Pipes.PipeDirection.InOut,true,false,handle);
+        stream=server; handle=null;
+      } finally { if(handle!=null)handle.Dispose(); pinned.Free(); }
+    } else {
+      if(expectedServerPid==0) throw new InvalidOperationException("Expected retained standard parent PID");
+      var client=new System.IO.Pipes.NamedPipeClientStream(".",name,System.IO.Pipes.PipeDirection.InOut,System.IO.Pipes.PipeOptions.Asynchronous);
+      try {
+        client.Connect(10000);
+        uint actual;
+        if(!GetNamedPipeServerProcessId(client.SafePipeHandle,out actual) || actual!=expectedServerPid) throw new InvalidOperationException("Local QA pipe is not the expected standard parent");
+        PeerPid=actual; stream=client;
+      } catch { client.Dispose(); throw; }
+    }
+  }
+  void Connected(int timeout) {
+    if(stream.IsConnected) return;
+    if(server==null) throw new InvalidOperationException("Local QA peer disconnected");
+    var pending=server.BeginWaitForConnection(null,null);
+    try {
+      if(!pending.AsyncWaitHandle.WaitOne(timeout)) { Dispose(); throw new InvalidOperationException("Local QA peer connection exceeded its bound"); }
+      server.EndWaitForConnection(pending);
+      uint actual;
+      if(!GetNamedPipeClientProcessId(server.SafePipeHandle,out actual) || actual==0) throw new InvalidOperationException("Local QA helper PID unavailable");
+      PeerPid=actual;
+    } finally { pending.AsyncWaitHandle.Close(); }
+  }
+  byte[] ReadExact(int length,DateTime deadline) {
+    var bytes=new byte[length]; int offset=0;
+    while(offset<length) {
+      int remaining=(int)Math.Ceiling((deadline-DateTime.UtcNow).TotalMilliseconds);
+      if(remaining<=0) { Dispose(); throw new InvalidOperationException("Local QA reply exceeded its bound"); }
+      var pending=stream.BeginRead(bytes,offset,length-offset,null,null);
+      try {
+        if(!pending.AsyncWaitHandle.WaitOne(remaining)) { Dispose(); throw new InvalidOperationException("Local QA reply exceeded its bound"); }
+        int received=stream.EndRead(pending);
+        if(received==0) throw new InvalidOperationException("Local QA peer closed an incomplete frame");
+        offset+=received;
+      } finally { pending.AsyncWaitHandle.Close(); }
+    }
+    return bytes;
+  }
+  public static byte[] Frame(string text) {
+    byte[] body=new UTF8Encoding(false,true).GetBytes(text);
+    if(body.Length<1 || body.Length>4096) throw new InvalidOperationException("Local QA frame exceeds its bound");
+    byte[] frame=new byte[body.Length+4];
+    Array.Copy(BitConverter.GetBytes(body.Length),frame,4); Array.Copy(body,0,frame,4,body.Length); return frame;
+  }
+  public static string Decode(byte[] header,byte[] body) {
+    if(header.Length!=4 || body.Length<1 || body.Length>4096 || BitConverter.ToInt32(header,0)!=body.Length) throw new InvalidOperationException("Local QA frame length changed");
+    return new UTF8Encoding(false,true).GetString(body);
+  }
+  public void Send(string text,int connectionTimeout) {
+    Connected(connectionTimeout);
+    var frame=Frame(text); var pending=stream.BeginWrite(frame,0,frame.Length,null,null);
+    try {
+      if(!pending.AsyncWaitHandle.WaitOne(2000)) { Dispose(); throw new InvalidOperationException("Local QA frame write exceeded its bound"); }
+      stream.EndWrite(pending);
+    } finally { pending.AsyncWaitHandle.Close(); }
+  }
+  public string Receive(int timeout) {
+    Connected(timeout);
+    DateTime deadline=DateTime.UtcNow.AddMilliseconds(timeout);
+    byte[] header=ReadExact(4,deadline); int length=BitConverter.ToInt32(header,0);
+    if(length<1 || length>4096) throw new InvalidOperationException("Local QA frame length is outside its bound");
+    return Decode(header,ReadExact(length,deadline));
+  }
+  public void Dispose() { stream.Dispose(); }
+}
+
 '@
-function Read-BoundedJson([string]$Path) {
-  $item=Get-Item -LiteralPath $Path
-  if($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $item.Length -gt 4096) { throw 'Negative request is not an ordinary bounded file.' }
-  $bytes=[IO.File]::ReadAllBytes($Path)
-  if($bytes.Length -gt 4096) { throw 'Negative request grew beyond its bound.' }
-  return ([Text.UTF8Encoding]::new($false,$true).GetString($bytes) | ConvertFrom-Json)
+function Receive-NegativeJson([int]$Timeout) {
+  try { return ($channel.Receive($Timeout)|ConvertFrom-Json) } catch { throw 'Bounded local QA request decoding failed.' }
 }
-function Write-AtomicJson([string]$Path,$Record) {
-  [IO.File]::WriteAllText(($Path+'.new'),($Record|ConvertTo-Json -Compress),[Text.UTF8Encoding]::new($false))
-  if([IO.File]::Exists($Path)) { [IO.File]::Replace(($Path+'.new'),$Path,$null) } else { [IO.File]::Move(($Path+'.new'),$Path) }
-}
+function Send-NegativeJson($Record) { $channel.Send(($Record|ConvertTo-Json -Compress),10000) }
 function Assert-NegativeRequest($Record) {
   if((@($Record.PSObject.Properties.Name|Sort-Object)-join ',') -cne 'eventName,mode,request' -or
       $Record.request -isnot [string] -or $Record.request -cnotmatch '\A[0-9a-f]{32}\z' -or
       $Record.eventName -isnot [string] -or $Record.eventName -cnotmatch '\AGlobal\\Mixel-Remote-Standard-Lease-[0-9a-f]{32}\z' -or $Record.eventName -cne $bundle.Manifest.eventName -or
       $Record.mode -isnot [string] -or $Record.mode -cnotin @('denied','wrong-object')) { throw 'Negative helper refuses any noncanonical GUID-only request.' }
 }
-$deadline=[DateTime]::UtcNow.AddSeconds(240); $seen=[Collections.Generic.HashSet[string]]::new(); $handle=[IntPtr]::Zero
+$seen=[Collections.Generic.HashSet[string]]::new(); $handle=[IntPtr]::Zero; $channel=$null
 try {
+  $channel=[MixelPortableLeaseChannel]::new($pipeName,$false,$StandardParentPid)
+  $deadline=[DateTime]::UtcNow.AddSeconds(240)
   while([DateTime]::UtcNow -lt $deadline) {
-    $finished=Join-Path $Workspace 'negative-finished.json'
-    if(Test-Path -LiteralPath $finished) {
-      $record=Read-BoundedJson $finished
-      if((@($record.PSObject.Properties.Name)-join ',') -cne 'finished' -or $record.finished -isnot [bool] -or -not $record.finished) { throw 'Invalid owned completion marker.' }
+    $remaining=[int][Math]::Ceiling(($deadline-[DateTime]::UtcNow).TotalMilliseconds)
+    $request=Receive-NegativeJson $remaining
+    if((@($request.PSObject.Properties.Name)-join ',') -ceq 'finished') {
+      if($request.finished -isnot [bool] -or -not $request.finished) { throw 'Invalid owned completion packet.' }
       break
     }
-    $requestPath=Join-Path $Workspace 'negative-request.json'
-    if(-not (Test-Path -LiteralPath $requestPath)) { Start-Sleep -Milliseconds 100; continue }
-    $request=Read-BoundedJson $requestPath
     Assert-NegativeRequest $request
-    if($seen.Contains($request.request)) { Start-Sleep -Milliseconds 100; continue }
-    if($seen.Count -ge 2) { throw 'Negative helper exceeds its two owned fixture phases.' }
+    if($seen.Contains($request.request) -or $seen.Count -ge 2) { throw 'Negative helper exceeds its two unique owned fixture phases.' }
     [void]$seen.Add($request.request)
     $handle=if($request.mode -ceq 'denied') { [MixelIsolatedLeaseControl]::DeniedEvent($request.eventName) } else { [MixelIsolatedLeaseControl]::WrongObject($request.eventName) }
     try {
-      Write-AtomicJson (Join-Path $Workspace 'negative-ready.json') ([ordered]@{request=$request.request;mode=$request.mode;eventName=$request.eventName;pid=$PID;created=$true})
-      $release=Join-Path $Workspace ('negative-release-'+$request.request); $releaseDeadline=[DateTime]::UtcNow.AddSeconds(60)
-      while(-not (Test-Path -LiteralPath $release) -and [DateTime]::UtcNow -lt $releaseDeadline) { Start-Sleep -Milliseconds 50 }
-      if(-not (Test-Path -LiteralPath $release) -or [IO.File]::ReadAllText($release) -cne 'verified') { throw 'Owned admin negative fixture release was not acknowledged.' }
+      Send-NegativeJson ([ordered]@{request=$request.request;mode=$request.mode;eventName=$request.eventName;pid=$PID;created=$true})
+      $release=Receive-NegativeJson 60000
+      if((@($release.PSObject.Properties.Name|Sort-Object)-join ',') -cne 'released,request' -or $release.request -isnot [string] -or $release.request -cne $request.request -or $release.released -isnot [bool] -or -not $release.released) { throw 'Owned admin negative fixture release was not acknowledged.' }
     } finally { [MixelIsolatedLeaseControl]::Close($handle); $handle=[IntPtr]::Zero }
-    Write-AtomicJson (Join-Path $Workspace 'negative-closed.json') ([ordered]@{request=$request.request;closed=$true})
+    Send-NegativeJson ([ordered]@{request=$request.request;closed=$true})
   }
   if([DateTime]::UtcNow -ge $deadline) { throw 'Owned admin negative fixture session exceeded its bound.' }
-  Write-Host 'PASS: separate owned admin helper closed only its isolated GUID negative-fixture handles; no account/desktop/namespace grants were made.'
-} finally { if($handle -ne [IntPtr]::Zero) { [MixelIsolatedLeaseControl]::Close($handle) } }
+  Write-Host 'PASS: separate owned admin helper closed only its isolated GUID negative-fixture handles; no account/desktop/namespace grants or workspace file access were made.'
+} finally {
+  try { if($handle -ne [IntPtr]::Zero) { [MixelIsolatedLeaseControl]::Close($handle) } }
+  finally { if($channel) { $channel.Dispose() } }
+}

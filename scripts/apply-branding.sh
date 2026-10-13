@@ -33,6 +33,15 @@ fi
 # shellcheck source=/dev/null
 source "$BRANDING/branding.env"
 
+# Validate every prior owner in an exact private final-overlay inverse first.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-macos-startup.py" --check-prior
+
+# Restore only the exact final startup overlay before prior owners see inputs.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-macos-startup.py" --restore
+
+# Restore the exact last Rust tray overlay before native-warning ownership.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-tray-url.py" --restore
+
 # Restore exact owned compatibility and Quit overlays in reverse order before
 # pinned earlier helpers see canonical inputs on repeated branding passes.
 # Validate file-transfer, keyboard and input ownership before any restore writes.
@@ -56,6 +65,11 @@ python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-termination.py" --re
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-rdev.py" --restore "$RDREPO"
 
 echo "→ Applying branding: $APP_NAME ($MACOS_BUNDLE_ID) on top of RustDesk $UPSTREAM_VERSION"
+
+# Runtime helper checks and update paths must use the same bundle identity as
+# the privilege templates. Keep ORG untouched so existing preferences remain.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-macos-service-label.py" "$MACOS_BUNDLE_ID"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-macos-update.py"
 
 # Install the customer-consented support invite handoff in each fresh upstream checkout.
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-invite.py"
@@ -1014,6 +1028,7 @@ require_string res/rustdesk-link.desktop "Exec=$APP_NAME_KEBAB %u"
 require_string res/DEBIAN/postinst "rm -f /etc/systemd/system/${APP_NAME_KEBAB}.service /usr/lib/systemd/system/${APP_NAME_KEBAB}.service /usr/lib/systemd/user/${APP_NAME_KEBAB}.service"
 require_string build.py "Depends: libgtk-3-0, libegl1, libgl1, libgles2, libgl1-mesa-dri, libxcb-randr0,"
 require_string flutter/macos/Runner/Info.plist "<string>$APP_NAME_KEBAB</string>"
+require_string src/common.rs "\"$MACOS_BUNDLE_ID\".to_owned()"
 require_string flutter/lib/common.dart "registerProtocol('$APP_NAME_KEBAB');"
 require_string libs/hbb_common/src/config.rs "(\"custom-rendezvous-server\".to_owned(), \"${RENDEZVOUS_SERVER}\".to_owned())"
 require_string libs/hbb_common/src/config.rs "(\"relay-server\".to_owned(), \"${RELAY_SERVER}\".to_owned())"
@@ -1032,5 +1047,11 @@ python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-native-warnings.py" --sour
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-fingerprint.py" "$RDREPO"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-fatal-crash.py" --source "$RDREPO"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-macos-update.py" --source "$RDREPO"
+
+# Tao owns the server NSApplication delegate; route its support URLs via ACK.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-tray-url.py"
+
+# Startup is applied last against one exact composed three-file input profile.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-macos-startup.py"
 
 echo "✓ Branding applied — product identity is $APP_NAME only."

@@ -15,7 +15,9 @@ MANAGER = 'flutter/lib/utils/multi_window_manager.dart'
 GENERATED = 'flutter/lib/utils/mixel_file_transfer_geometry.dart'
 PRISTINE = {COMMON: '95ffcc4fdc3d83564d19d5ad7c999adbe65cdc37829cf466d43d5a9684e7f8de',
             MANAGER: 'e94128aaf434d57d54dccb719633704e814b41fee052e142c4fa9ea4a5e13f3f'}
-COMPOSED = {COMMON: '390d75c80128850d598794502b6f5d265eb99750f64ebfc98140770661cb2cb0',
+HISTORICAL_COMPOSED = {COMMON: '390d75c80128850d598794502b6f5d265eb99750f64ebfc98140770661cb2cb0',
+            MANAGER: '27e065acf8f7feb2c80151437c071689a2dc33f1bdc9b8ce9ecacd8b74e2ede4'}
+COMPOSED = {COMMON: '090eb7733b1567a8aa2347039ec45966dad68e0620dd14904e4f6cca895b7c3c',
             MANAGER: '27e065acf8f7feb2c80151437c071689a2dc33f1bdc9b8ce9ecacd8b74e2ede4'}
 DART = r'''// Mixel file-transfer geometry uses window_size reported screen coordinates.
 import 'dart:ui';
@@ -179,12 +181,12 @@ def transform(name, data, restore=False):
             if original.count(a) != (2 if name == MANAGER and before == INITIAL else 1):
                 raise RuntimeError('Mixed file-transfer window source: ' + name)
             original = original.replace(a, b)
-    if sha(original) not in (PRISTINE[name], COMPOSED[name]):
+    if sha(original) not in (PRISTINE[name], COMPOSED[name], HISTORICAL_COMPOSED[name]):
         raise RuntimeError('Pinned file-transfer window source changed: ' + name)
     if restore:
         result = original
     else:
-        if sha(original) != COMPOSED[name]:
+        if sha(original) not in (COMPOSED[name], HISTORICAL_COMPOSED[name]):
             raise RuntimeError('File-transfer window requires completed branding: ' + name)
         result = original
         for before, after in REPLACEMENTS[name]:
@@ -221,7 +223,7 @@ def verify_previous_layers(repo):
         apply(repo, restore=True, check=True)
     folder = Path(__file__).absolute().parent
     sdk_data, _ = normalize(safe_path(folder, 'patch-support-flutter-sdk-compatibility.py'))
-    if sha(sdk_data) != '08473f59acb6ee2424b493f147a63e4dae443ca85103ee2aeb9685a59b61be19':
+    if sha(sdk_data) != '08255c1af27ea05c5e1eaf3c8d903070d26b4a1c8c3e02eb1c24107bbcf92010':
         raise RuntimeError('Changed file-transfer prior SDK verifier')
     namespace = {'__name__': 'mixel_file_transfer_prior_sdk', '__file__': str(folder/'patch-support-flutter-sdk-compatibility.py')}
     exec(compile(sdk_data, namespace['__file__'], 'exec'), namespace)
@@ -271,7 +273,7 @@ def apply(repo, restore=False, check=False):
     elif generated is not None:
         raise RuntimeError('Unexpected file-transfer geometry source')
     canonical_pair = {name: sha(normalize(data)[0]) for name, data in canonical_originals.items()}
-    if canonical_pair not in (PRISTINE, COMPOSED):
+    if canonical_pair not in (PRISTINE, COMPOSED, HISTORICAL_COMPOSED):
         raise RuntimeError('Mixed file-transfer window branding state')
     if not check:
         if not restore and generated is None:

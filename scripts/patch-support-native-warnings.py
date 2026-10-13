@@ -21,7 +21,7 @@ CHANGES = {'libs/libxdo-sys-stub/src/lib.rs': [['pub type useconds_t = c_uint;',
 
 CURRENT = {'libs/libxdo-sys-stub/src/lib.rs': '33f1f8a8afd6b46e6272369010f5a825a2a0438cde912a95eee3b1bfab2bf53d', 'libs/scrap/build.rs': '55b2774bfe7d068280fc6b99eeb82fa4cd77b57ce9993c8846edfb1397206786', 'libs/scrap/src/wayland/pipewire.rs': '553124f1826ddc7dd95404efc6e4635b98cc63ef96c581ea9a7cf519a5c5ea15', 'src/flutter_ffi.rs': 'aa8e999f1e64a86b294c69033dcc7aafb5376bd35a51eac11e8d592c6e7d8484', 'src/hbbs_http/sync.rs': '0503ffbfcaffd75b81a79ce9ccdbcb469276f14428202e03233ab7d852e667b6', 'src/platform/linux.rs': 'e88091c00c4d5040adaf3e4fafd459ae0896157a59b35c9ecc124de1e1d675d6', 'src/privacy_mode.rs': 'fd861b002dc058243288229bb275c91662116f9ad4cbe54a9a74dcd6fb0fcf7c', 'src/server/connection.rs': 'bd99eeb6abf8b10a1a57bbb5eeca68498b1dffd03c3132b19dc336e6e3a5df54', 'src/server/wayland.rs': '411e090fb780186deb58dcf47318c9c2b6798d165c39e33b9305c0cfac0c5381', 'src/tray.rs': '0f9410ed53f142e4dca83756bd29310f8cb9b019ab74e0f453df83592d597295'}
 FINAL = {'libs/libxdo-sys-stub/src/lib.rs': '2fecabe41a37d96cb2fe2e449299c91ed671f5894ba7fd7fce19e076ccbab66b', 'libs/scrap/build.rs': '2d3c917a1cd831d20a37d256ff731acf083f77846e1ef070c5b68d6f401dc1c7', 'libs/scrap/src/wayland/pipewire.rs': '8bbab38146fdb3e6c72bcee4e6817701c15e5296182bd6a8ea8b78bf6bb3f932', 'src/flutter_ffi.rs': '97e32fde66f3d2a283f5f4a37bae88a2539ac3ebc12fb8d4a06efcf109f068ab', 'src/hbbs_http/sync.rs': '376dc7c096fb16bc09e6f2dcb5d972f64bd58d6550458664a2e75cedc244f6b9', 'src/platform/linux.rs': 'c45151860adecdf10672f534e340ee27391c39326014d3d2d08ccc387b88724a', 'src/privacy_mode.rs': 'b88237fd685617e648adf745e3111f50cb299d2bf758c6d5d4ecda301270d114', 'src/server/connection.rs': '39950c3d3d3990bb5a7f651f6e440a462a704174959c9a6c80fd2c3152b36a6a', 'src/server/wayland.rs': '89a8edc825e974d6464a42f54210753e39342e0425dc1589003a0482028d5be6', 'src/tray.rs': '8e7e5b375d4b3e4c4588f4dd6bc7544a7fa2eb0b9cf16c684a96169f0e7aef3d'}
-PRIOR_FILE_TRANSFER_SHA = '53b69c1680c0c352a3fc51f045e8a45e5428b5706aaf34d69b2a83a224e38fad'
+PRIOR_FILE_TRANSFER_SHA = 'e484d69d6135133776db616fd6d56dc0b699004e6b38bf318019ec905bff27a8'
 
 def canonical(data: bytes) -> tuple[str, str]:
     text = data.decode("utf-8", errors="strict")
@@ -87,7 +87,7 @@ def verify_previous_layers(root: Path, texts: dict) -> None:
     transfer = prior_namespace("patch-support-file-transfer-window.py", PRIOR_FILE_TRANSFER_SHA)
     # Reuse the already pinned SDK loader rather than duplicating its guards.
     sdk = prior_namespace("patch-support-flutter-sdk-compatibility.py",
-                          "08473f59acb6ee2424b493f147a63e4dae443ca85103ee2aeb9685a59b61be19")
+                          "08255c1af27ea05c5e1eaf3c8d903070d26b4a1c8c3e02eb1c24107bbcf92010")
     termination = sdk["load_prior"]("patch-support-macos-termination.py", sdk["PRIOR_SHA"])
     cleanup = sdk["load_prior"]("patch-support-macos-cleanup.py", sdk["CLEANUP_SHA"])
     optional = {transfer["GENERATED"], termination["GENERATED"], cleanup["GENERATED"]}

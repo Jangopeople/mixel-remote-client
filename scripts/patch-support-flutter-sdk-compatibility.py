@@ -13,10 +13,12 @@ PIN = "1abc897c451c8b5bbff3792509a7fef9d12f2ce3"
 SDK = "3.27.4"
 ENGINE = "82bd5b7209295a5b7ff8cae0df96e7870171e3a5"
 OWNED = "flutter/.mixel-dependencies/flutter_sdk_compatibility"
-PRIOR_SHA = "71d47ada8303cc73fff887f91a8e9fceeb20cca44e71848275b8988795fad22c"
+PRIOR_SHA = "d065176a68d9eaeb5543f4b61000e0d9e646b0ffee19ef928ecb50bf183d1c4f"
 CLEANUP_SHA = "197bc021abf3cb8563b92dfca30d5ba7f1c93328db4318cf56386baa9cf6a0fb"
-FILES = {'flutter/lib/desktop/pages/desktop_setting_page.dart': '21633c93e76a9f1a57801855c8146366691549f8d3d1f20cedd779f9fed0a292', 'flutter/lib/desktop/pages/view_camera_page.dart': 'aa8c1b3fda2e12cb292dd73cdcd229c7b8c955f0a39fbfe74e03388db0507939', 'flutter/lib/desktop/widgets/material_mod_popup_menu.dart': 'b6f9d99567272fcb5a7642d8930e522be3ae6876322228ab3e46370ab710a354', 'flutter/lib/desktop/widgets/tabbar_widget.dart': 'd05d6fd84b6c2f51775dfb7e2eb928367a81addbba0dbef56adc2494935685f6', 'flutter/lib/web/bridge.dart': 'd8a81b4d7fee5186430d7624390db2b61a3978481b757e5d9fb791d74c26fbc6', 'flutter/pubspec.yaml': '7884f460420fba8aec82fa434fddcadc564c86ad54dce298705555e4e51b7d7b'}
-CORRECTED = {'flutter/lib/desktop/pages/desktop_setting_page.dart': '1e959f2600b854f9da9381909c01c188ed6b8ae03f9d1d26a4df26ea27e1cd9e', 'flutter/lib/desktop/pages/view_camera_page.dart': '52df8c3040764c2165406e8bff7b9a294154c02d5abb6aebad9c37763c773d4f', 'flutter/lib/desktop/widgets/material_mod_popup_menu.dart': '8628314244d77ab1eab59f2e7dad560936bd8e54174fcf347dffc3b22a94aca1', 'flutter/lib/desktop/widgets/tabbar_widget.dart': '41719ae626738fa169509768aca435f3ee51f05497f8ab185dd2d439bd27aa43', 'flutter/lib/web/bridge.dart': 'd4a2352d72b93ff32ebfd21c33a30f676a1c03f4b7a1382fc34d514a96432249', 'flutter/pubspec.yaml': '3c07d93a8a7368393d020be9965605f2dd79c17979334bff3816657b82e1f038'}
+HISTORICAL_FILES = {'flutter/lib/desktop/pages/desktop_setting_page.dart': '21633c93e76a9f1a57801855c8146366691549f8d3d1f20cedd779f9fed0a292', 'flutter/lib/desktop/pages/view_camera_page.dart': 'aa8c1b3fda2e12cb292dd73cdcd229c7b8c955f0a39fbfe74e03388db0507939', 'flutter/lib/desktop/widgets/material_mod_popup_menu.dart': 'b6f9d99567272fcb5a7642d8930e522be3ae6876322228ab3e46370ab710a354', 'flutter/lib/desktop/widgets/tabbar_widget.dart': 'd05d6fd84b6c2f51775dfb7e2eb928367a81addbba0dbef56adc2494935685f6', 'flutter/lib/web/bridge.dart': 'd8a81b4d7fee5186430d7624390db2b61a3978481b757e5d9fb791d74c26fbc6', 'flutter/pubspec.yaml': '7884f460420fba8aec82fa434fddcadc564c86ad54dce298705555e4e51b7d7b'}
+FILES = {'flutter/lib/desktop/pages/desktop_setting_page.dart': '21633c93e76a9f1a57801855c8146366691549f8d3d1f20cedd779f9fed0a292', 'flutter/lib/desktop/pages/view_camera_page.dart': 'aa8c1b3fda2e12cb292dd73cdcd229c7b8c955f0a39fbfe74e03388db0507939', 'flutter/lib/desktop/widgets/material_mod_popup_menu.dart': 'b6f9d99567272fcb5a7642d8930e522be3ae6876322228ab3e46370ab710a354', 'flutter/lib/desktop/widgets/tabbar_widget.dart': 'd05d6fd84b6c2f51775dfb7e2eb928367a81addbba0dbef56adc2494935685f6', 'flutter/lib/web/bridge.dart': 'd8a81b4d7fee5186430d7624390db2b61a3978481b757e5d9fb791d74c26fbc6', 'flutter/pubspec.yaml': 'e31830d4fe6473201a4b39d45c6f2370b31d665ecd9164f9a2903ed5206dc917'}
+HISTORICAL_CORRECTED = {'flutter/lib/desktop/pages/desktop_setting_page.dart': '1e959f2600b854f9da9381909c01c188ed6b8ae03f9d1d26a4df26ea27e1cd9e', 'flutter/lib/desktop/pages/view_camera_page.dart': '52df8c3040764c2165406e8bff7b9a294154c02d5abb6aebad9c37763c773d4f', 'flutter/lib/desktop/widgets/material_mod_popup_menu.dart': '8628314244d77ab1eab59f2e7dad560936bd8e54174fcf347dffc3b22a94aca1', 'flutter/lib/desktop/widgets/tabbar_widget.dart': '41719ae626738fa169509768aca435f3ee51f05497f8ab185dd2d439bd27aa43', 'flutter/lib/web/bridge.dart': 'd4a2352d72b93ff32ebfd21c33a30f676a1c03f4b7a1382fc34d514a96432249', 'flutter/pubspec.yaml': '3c07d93a8a7368393d020be9965605f2dd79c17979334bff3816657b82e1f038'}
+CORRECTED = {'flutter/lib/desktop/pages/desktop_setting_page.dart': '1e959f2600b854f9da9381909c01c188ed6b8ae03f9d1d26a4df26ea27e1cd9e', 'flutter/lib/desktop/pages/view_camera_page.dart': '52df8c3040764c2165406e8bff7b9a294154c02d5abb6aebad9c37763c773d4f', 'flutter/lib/desktop/widgets/material_mod_popup_menu.dart': '8628314244d77ab1eab59f2e7dad560936bd8e54174fcf347dffc3b22a94aca1', 'flutter/lib/desktop/widgets/tabbar_widget.dart': '41719ae626738fa169509768aca435f3ee51f05497f8ab185dd2d439bd27aa43', 'flutter/lib/web/bridge.dart': 'd4a2352d72b93ff32ebfd21c33a30f676a1c03f4b7a1382fc34d514a96432249', 'flutter/pubspec.yaml': 'cfa3c757fdd04e8a293b0f5bfcea286ec31e904786a4467d66867dbdd2ef5358'}
 FRESH = {'flutter/lib/desktop/pages/desktop_setting_page.dart': '175e5180774b6ebf115f1ed6f6af2a70463599496bc0e8ef3aec0068a9a1e291', 'flutter/lib/desktop/pages/view_camera_page.dart': 'e858a52ad5ab545f69526d9b6175d63c6eea7330ba3b7e46c8460ebf4fa4eaec', 'flutter/lib/desktop/widgets/material_mod_popup_menu.dart': 'b6f9d99567272fcb5a7642d8930e522be3ae6876322228ab3e46370ab710a354', 'flutter/lib/desktop/widgets/tabbar_widget.dart': 'd37441c9917f79895985cddc3dbd6862866712548aa37915a1459e7d23863cf5', 'flutter/lib/web/bridge.dart': '967688252dbbdce312c3c11e253da1d728d4d7a3acb6426d1a5fb896cd9bc050', 'flutter/pubspec.yaml': '5780140c6d70e49549d3cf57465fcce2f6a9ed2a9e3c904664fa728979ab69bc'}
 REPLACEMENTS = {'flutter/lib/desktop/pages/desktop_setting_page.dart': [['  const _Printer({super.key});', '  const _Printer();'], ["_LabeledTextField(\n    BuildContext context,\n    String label,\n    TextEditingController controller,\n    String errorText,\n    bool enabled,\n    bool secure) {\n  return Table(\n    columnWidths: const {\n      0: FixedColumnWidth(150),\n      1: FlexColumnWidth(),\n    },\n    defaultVerticalAlignment: TableCellVerticalAlignment.middle,\n    children: [\n      TableRow(\n        children: [\n          Padding(\n            padding: const EdgeInsets.only(right: 10),\n            child: Text(\n              '${translate(label)}:',\n              textAlign: TextAlign.right,\n              style: TextStyle(\n                fontSize: 16,\n                color: disabledTextColor(context, enabled),\n              ),\n            ),\n          ),\n          TextField(\n            controller: controller,\n            enabled: enabled,\n            obscureText: secure,\n            autocorrect: false,\n            decoration: InputDecoration(\n              errorText: errorText.isNotEmpty ? errorText : null,\n            ),\n            style: TextStyle(\n              color: disabledTextColor(context, enabled),\n            ),\n          ).workaroundFreezeLinuxMint(),\n        ],\n      ),\n    ],\n  ).marginOnly(bottom: 8);\n}\n", '']], 'flutter/lib/desktop/pages/view_camera_page.dart': [['  MouseCursor _buildCustomCursor(BuildContext context, double scale) {\n    final cursor = Provider.of<CursorModel>(context);\n    final cache = cursor.cache ?? preDefaultCursor.cache;\n    return buildCursorOfCache(cursor, scale, cache);\n  }\n', ''], ['  MouseCursor _buildDisabledCursor(BuildContext context, double scale) {\n    final cursor = Provider.of<CursorModel>(context);\n    final cache = preForbiddenCursor.cache;\n    return buildCursorOfCache(cursor, scale, cache);\n  }\n', ''], ["import 'package:flutter_hbb/native/custom_cursor.dart'\n    if (dart.library.html) 'package:flutter_hbb/web/custom_cursor.dart';\n", '']], 'flutter/lib/desktop/widgets/material_mod_popup_menu.dart': [['const double _kDefaultIconSize = 24.0;\n', '']], 'flutter/lib/desktop/widgets/tabbar_widget.dart': [["  _DesktopTabState() : super();\n\n  static RxString tablabelGetter(String peerId) {\n    final alias = bind.mainGetPeerOptionSync(id: peerId, key: 'alias');\n    return RxString(getDesktopTabLabel(peerId, alias));\n  }\n", '  _DesktopTabState() : super();\n\n']], 'flutter/lib/web/bridge.dart': [["final _privateConstructorUsedError = UnsupportedError(\n    'It seems like you constructed your class using `MyClass._()`. This constructor is only meant to be used by freezed and you are not supposed to need it nor use it.\\nPlease check the documentation here for more information: https://github.com/rrousselGit/freezed#adding-getters-and-methods-to-our-models');\n\nmixin _$EventToUI {\n  Object get field0 => throw _privateConstructorUsedError;\n}\n\n", '']], 'flutter/pubspec.yaml': [['  file_picker: ^5.1.0\n', '  file_picker: 8.1.2\n']]}
 
@@ -51,14 +53,16 @@ def normalize(data):
 
 
 def transform(name, data):
-    if name not in FILES or digest(data) != FILES[name]:
+    if name not in FILES or digest(data) not in (FILES[name], HISTORICAL_FILES[name]):
         raise RuntimeError('Changed SDK compatibility original: ' + name)
+    expected_corrected = (CORRECTED[name] if digest(data) == FILES[name]
+                          else HISTORICAL_CORRECTED[name])
     for before, after in REPLACEMENTS[name]:
         before, after = before.encode(), after.encode()
         if data.count(before) != 1:
             raise RuntimeError('Ambiguous SDK compatibility replacement: ' + name)
         data = data.replace(before, after)
-    if digest(data) != CORRECTED[name]:
+    if digest(data) != expected_corrected:
         raise RuntimeError('Changed SDK compatibility transformation: ' + name)
     return data
 
@@ -153,7 +157,7 @@ def apply(repo, restore=False, check=False):
     if restore and not owned.exists() and not owned.is_symlink():
         if identities == FRESH:
             return
-        if identities != FILES:
+        if identities not in (FILES, HISTORICAL_FILES):
             raise RuntimeError('Missing or mixed SDK compatibility restore ownership')
         validate_previous_layers(repo, current)
         return
@@ -177,15 +181,19 @@ def apply(repo, restore=False, check=False):
             raise RuntimeError('Missing SDK compatibility ownership')
         originals = dict(current)
     states = set()
+    original_identities = {}
     outputs = {}
     for name, original in originals.items():
-        if digest(original) != FILES[name]:
+        if digest(original) not in (FILES[name], HISTORICAL_FILES[name]):
             raise RuntimeError('Changed SDK compatibility original: ' + name)
+        original_identities[name] = digest(original)
         corrected = transform(name, original)
         if current[name] not in (original, corrected):
             raise RuntimeError('Changed SDK compatibility current source: ' + name)
         states.add('original' if current[name] == original else 'corrected')
         outputs[name] = (original if restore else corrected).replace(b'\n', newlines[name])
+    if original_identities not in (FILES, HISTORICAL_FILES):
+        raise RuntimeError('Mixed SDK compatibility input profiles')
     if len(states) != 1:
         raise RuntimeError('Mixed SDK compatibility pipeline targets')
     validate_previous_layers(repo, originals)

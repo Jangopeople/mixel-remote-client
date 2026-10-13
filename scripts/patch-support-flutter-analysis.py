@@ -14,8 +14,8 @@ PIN = "1abc897c451c8b5bbff3792509a7fef9d12f2ce3"
 # This helper belongs at the end of apply-branding, after every common patch.
 FILES = {
     "flutter/lib/common.dart": (
-        "0d47b1dce88586fbebb2faaf390f210020a7dbbbf00bd782e7897944bcad556f",
-        "65af38effd117b36c614c729192c1c20a69e2ac6a7a0ade89b1890b2cc9a7138",
+        "66f58cc2606eba8a240e0f960c39c8ba18c14616352ef60b83f6202af5cf605a",
+        "7d8953486dc5087cf7d87bc8c625710ca982f7d7bca5f7f58a4c85ecf3ab2695",
         "import 'dart:math';\n", "", 1),
     "flutter/lib/models/ab_model.dart": (
         "e1c79b068b46042f5d7a1c3a4437b656a10e6b64cd67b671969faf1c2ac7c176",
@@ -39,6 +39,10 @@ FILES = {
         "c695a84d23e738c6de52cad732a0d16d605de08fd75f6a06d8422b255fb059f5",
         ", true, false, false, false)", ", true, false, false)", 4),
 }
+# Keep the exact incoming-owner common.dart boundary as a historical variant.
+# The composed current variant above additionally contains our URI/ACK layers.
+HISTORICAL_COMMON = ("0d47b1dce88586fbebb2faaf390f210020a7dbbbf00bd782e7897944bcad556f",
+                     "65af38effd117b36c614c729192c1c20a69e2ac6a7a0ade89b1890b2cc9a7138")
 CLIENT = "flutter/lib/models/server_model.dart"
 CLIENT_SHA256 = "febc11a1baac03dac0d84b8f85a2655784a7ceffb0789c42359b22f0aef330f9"
 CLIENT_CONSTRUCTOR = """  Client(this.id, this.authorized, this.isFileTransfer, this.isViewCamera,
@@ -74,6 +78,8 @@ def transform(name, data):
     normalized, newline = normalize(data)
     original, corrected, before, after, count = FILES[name]
     identity = digest(normalized)
+    if name == "flutter/lib/common.dart" and identity in HISTORICAL_COMMON:
+        original, corrected = HISTORICAL_COMMON
     if identity == corrected:
         return data
     if identity != original:

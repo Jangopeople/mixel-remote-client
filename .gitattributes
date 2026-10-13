@@ -1,0 +1,5 @@
+# Preserve the exact pinned dependency and license bytes on Windows checkouts.
+scripts/vendor/uni_links_desktop/** -text
+# The embedded POSIX/AppleScript updater must retain LF on every checkout host.
+scripts/macos-update-bundle.sh text eol=lf
+scripts/macos-update.scpt text eol=lf

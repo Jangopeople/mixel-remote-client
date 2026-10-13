@@ -57,6 +57,10 @@ def snapshot(repo: Path) -> dict[str, dict[str, object]]:
     return result
 
 
+def config_path_function(source: str) -> str:
+    start = source.index("    pub fn path<P: AsRef<Path>>(p: P) -> PathBuf {")
+    end = source.index("\n    pub fn", start + 1)
+    return source[start:end]
 def full_source_snapshot(repo: Path) -> dict[str, tuple[str, str]]:
     """Include owned ignored sources and empty directories, excluding Git data."""
     result = {}
@@ -103,9 +107,10 @@ def write_corrupt_footer(path: Path) -> None:
     path.write_bytes(original.replace(expected, corrupted, 1))
 
 
-def require_footer_refusal(result: subprocess.CompletedProcess[str]) -> None:
+def require_footer_refusal(result: subprocess.CompletedProcess[str], startup: bool = False) -> None:
     assert result.returncode != 0, "Changed footer unexpectedly passed"
-    assert "Pinned file-transfer window source changed: flutter/lib/common.dart" in result.stderr, result.stderr[-4000:]
+    marker = "Pinned Mac startup input digest mismatch; refusing all writes" if startup else "Pinned file-transfer window source changed: flutter/lib/common.dart"
+    assert marker in result.stderr, result.stderr[-4000:]
 
 
 def footer_refusal_controls(base: Path) -> None:
@@ -128,6 +133,15 @@ def footer_refusal_controls(base: Path) -> None:
             raise AssertionError("Missing or duplicate footer accepted")
     marker = "Pinned file-transfer window source changed: flutter/lib/common.dart"
     require_footer_refusal(subprocess.CompletedProcess([], 1, "", marker))
+    startup_marker = "Pinned Mac startup input digest mismatch; refusing all writes"
+    require_footer_refusal(subprocess.CompletedProcess([], 1, "", startup_marker), startup=True)
+    for code, error in ((0, startup_marker), (1, marker), (1, "Mac startup overlay corruption; refusing all writes")):
+        try:
+            require_footer_refusal(subprocess.CompletedProcess([], code, "", error), startup=True)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError("Successful or wrong-layer startup footer refusal accepted")
     for code, error in ((0, marker), (1, "Changed SDK compatibility current source: flutter/lib/common.dart"),
                         (1, "Pinned file-transfer window source changed: flutter/lib/other.dart")):
         try:
@@ -146,6 +160,7 @@ with tempfile.TemporaryDirectory(prefix="mixel-branding-") as directory:
     run(["git", "clone", "--quiet", "--shared", str(SOURCE / "libs/hbb_common"), str(repo / "libs/hbb_common")])
     submodule_commit = run(["git", "-C", str(repo), "ls-tree", "HEAD", "libs/hbb_common"]).stdout.split()[2]
     run(["git", "-C", str(repo / "libs/hbb_common"), "checkout", "--quiet", submodule_commit])
+    original_config = (repo / "libs/hbb_common/src/config.rs").read_text(encoding="utf-8")
     # Deliberately omit RDREPO. The documented default is the current working
     # directory's ./rustdesk; the Python patch must never hit the original clone.
     env = {key: value for key, value in os.environ.items() if key != "RDREPO"}
@@ -204,6 +219,22 @@ with tempfile.TemporaryDirectory(prefix="mixel-branding-") as directory:
     assert "Event::XfixesSelectionNotify" in clipboard and "event.selection == selection" in clipboard
     plist = plistlib.loads((repo / "flutter/macos/Runner/Info.plist").read_bytes())
     assert plist["CFBundleURLTypes"][0]["CFBundleURLSchemes"] == ["mixel-remote"]
+    common = (repo / "src/common.rs").read_text(encoding="utf-8")
+    assert '"ch.mixel.remote".to_owned()' in common.split("pub fn get_full_name() -> String {", 1)[1].split("}\n", 1)[0]
+    config = (repo / "libs/hbb_common/src/config.rs").read_text(encoding="utf-8")
+    assert 'RwLock::new("com.carriez".to_owned())' in config, "retain the existing preference namespace"
+    assert config_path_function(config) == config_path_function(original_config), "keep actual config path resolution byte-identical"
+    macos = (repo / "src/platform/macos.rs").read_text(encoding="utf-8")
+    helper_calls = [line.strip() for line in macos.splitlines() if "get_full_name()" in line]
+    assert helper_calls == [
+        'let daemon = format!("{}_service.plist", crate::get_full_name());',
+        'let agent = format!("{}_server.plist", crate::get_full_name());',
+        'let agent = format!("{}_server.plist", crate::get_full_name());',
+        '.args(&["remove", &format!("{}_server", crate::get_full_name())])',
+        'let agent = format!("{}_server.plist", crate::get_full_name());',
+    ], "helper naming must affect only daemon/agent detection, update and removal"
+    run([sys.executable, str(ROOT / "scripts/test-macos-service-label.py")])
+    print("PASS: all five actual macOS helper uses agree on canonical service labels; ORG and config path resolution retained")
     print("PASS: branded GTK icon/titles, isolated Linux DBus, bundled library strip and macOS protocol registration")
 
     # Execute the pinned converter before the actual generated normalization
@@ -679,7 +710,7 @@ print("PASS: actual Debian generator child explicitly uses UTF-8 and preserves t
     before_rejected_footer = full_source_snapshot(footer_candidate)
     rejected = subprocess.run(BRANDING_COMMAND, cwd=base, env={**env, "RDREPO": footer_candidate.as_posix()},
                               capture_output=True, text=True, encoding="utf-8")
-    require_footer_refusal(rejected)
+    require_footer_refusal(rejected, startup=True)
     assert full_source_snapshot(footer_candidate) == before_rejected_footer, "Changed footer refusal must precede any pipeline mutation"
     assert full_source_snapshot(repo) == pristine, "Footer corruption control changed the composed baseline"
     print("PASS: full branding rejects a changed Flutter footer instead of retaining an unverified destination")

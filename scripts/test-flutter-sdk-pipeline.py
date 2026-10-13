@@ -128,31 +128,36 @@ class FlutterSdkPipelineTests(unittest.TestCase):
                                          (self.preflight, "upstream-source", "Exercise actual source patches and support reporter"),
                                          (self.preflight, "macos-runtime-harness", "Prove exact SDK source compatibility and composed branding")):
             script = run_text(step(job(workflow, name), gate_name))
-            for failure, expected in (("analysis", 41), ("sdk", 42)):
+            ordered = ["scripts/test-support-flutter-analysis.py",
+                       "scripts/test-macos-startup.py",
+                       "scripts/test-support-macos-tray-url.py",
+                       "scripts/test-support-launch-macos-tray-controls.py",
+                       "scripts/test-support-macos-termination-support.py",
+                       "scripts/test-support-flutter-sdk-compatibility.py"]
+            for position, expected in enumerate((41, 43, 44, 45, 46, 42)):
+                failure = ordered[position]
                 with self.subTest(job=name, failure=failure), tempfile.TemporaryDirectory(prefix="mixel SDK pipeline préflight ") as directory:
                     root = Path(directory)
                     shim = root / "record.py"
                     shim.write_text("import json,os,sys\nfrom pathlib import Path\n"
                                     "with Path(os.environ['MIXEL_CALLS']).open('a',encoding='utf-8') as out: out.write(json.dumps(sys.argv[1:])+'\\n')\n"
-                                    "name=sys.argv[1]\n"
-                                    "if name.endswith('test-support-flutter-analysis.py') and os.environ['MIXEL_FAIL']=='analysis': sys.exit(41)\n"
-                                    "if name.endswith('test-support-flutter-sdk-compatibility.py') and os.environ['MIXEL_FAIL']=='sdk': sys.exit(42)\n",
+                                    "if sys.argv[1]==os.environ['MIXEL_FAIL']: sys.exit(int(os.environ['MIXEL_CODE']))\n",
                                     encoding="utf-8")
                     prefix = 'python3() { "$MIXEL_PYTHON" "$MIXEL_SHIM" "$@"; }\n'
                     env = {**os.environ, "MIXEL_PYTHON": Path(sys.executable).resolve().as_posix(), "MIXEL_SHIM": shim.as_posix(),
-                           "MIXEL_CALLS": str(root / "calls"), "MIXEL_FAIL": failure,
+                           "MIXEL_CALLS": str(root / "calls"), "MIXEL_FAIL": failure, "MIXEL_CODE": str(expected),
                            "RUNNER_TEMP": (root / "runner temporary étape 🚀").as_posix(),
                            "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
                     result = subprocess.run([shell(), "-e", "-o", "pipefail", "-c", prefix + script], env=env,
                                             capture_output=True, text=True, encoding="utf-8", timeout=15)
                     self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
                     calls = [json.loads(line) for line in (root / "calls").read_text(encoding="utf-8").splitlines()]
-                    self.assertEqual([item[0] for item in calls], ["scripts/test-support-flutter-analysis.py"] +
-                                     (["scripts/test-support-flutter-sdk-compatibility.py"] if failure == "sdk" else []))
-                    if failure == "sdk":
-                        self.assertEqual(calls[1][1:3], ["--app", "rustdesk"] if workflow == self.build else
+                    self.assertEqual([item[0] for item in calls], ordered[:position + 1],
+                                     "Failure executed a later source/native command")
+                    if failure == ordered[-1]:
+                        self.assertEqual(calls[-1][1:3], ["--app", "rustdesk"] if workflow == self.build else
                                          ["--app", env["RUNNER_TEMP"] + "/mixel-sdk-source/pipeline-lf"])
-                        self.assertEqual("--flutter" in calls[1], workflow == self.build)
+                        self.assertEqual("--flutter" in calls[-1], workflow == self.build)
 
     def test_actual_framework_discovery_resolves_sdk_and_refuses_missing_header(self):
         name = "Prepare the exact release Flutter framework for native regression checks"
@@ -198,7 +203,8 @@ class FlutterSdkPipelineTests(unittest.TestCase):
     def test_actual_windows_dispatcher_stops_at_analyzer_or_sdk_failure(self):
         for full in ("false", "true"):
             for target, code, count in (("test-support-flutter-analysis.py", 41, 1),
-                                        ("test-support-flutter-sdk-compatibility.py", 42, 2)):
+                                        ("test-support-macos-termination-support.py", 46, 2),
+                                        ("test-support-flutter-sdk-compatibility.py", 42, 3)):
                 with self.subTest(full_app_request=full, failure=target), tempfile.TemporaryDirectory(prefix="mixel SDK dispatch étape ") as directory:
                     root = Path(directory)
                     scripts = root / "scripts"

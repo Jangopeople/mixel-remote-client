@@ -19,6 +19,9 @@ function Invoke-SessionDirectoryAba {
   $cleanupFailures=[Collections.Generic.List[Exception]]::new()
   $observations=[Collections.Generic.List[object]]::new()
   $sourceHash=(Get-FileHash -LiteralPath $executable -Algorithm SHA256).Hash.ToLowerInvariant()
+  # Preserve quarantine in the original outer finally even if this independent
+  # diagnostic fails before the later mask12 registration/lifecycle starts.
+  $script:namespaceRestorationKnown=$false
   try {
     $world=[MixelIsolatedLeaseControl]::WorldEvent($eventName)
     $scope=[MixelSessionDirectoryAba+Scope]::new([MixelSessionDirectoryAba+NativeApi]::new(),$sidBytes)
@@ -71,6 +74,7 @@ function Invoke-SessionDirectoryAba {
       ($scope -and $scope.facts.writeAttempted -and -not $scope.facts.restorationVerified)) {
     throw 'Incomplete temporary directory ACL/process ownership; original Standard gate must not run in an unknown modified environment.'
   }
+  $script:namespaceRestorationKnown=$true
   if ($bodyFailure -or $reportFailure) {
     $script:abaDeferredFailure=$(if($bodyFailure){$bodyFailure}else{$reportFailure})
     Write-Host 'FAIL: restored CI-only directory experiment failed; deferred behind unchanged original Standard gate.'
@@ -129,12 +133,16 @@ $pins=ConvertFrom-Json @'
   "support-invite-guard.rs": "4b48b7995b36cc9662958ef8753be70ef0b6cf35626b7264f0151bc553293f29",
   "test-session-directory-access.cs": "c562cf11de6dc395d4a6aae6d887dbe7fb970603bde74c8e4d111ac26956eb76",
   "test-support-directory-security.cs": "3f70bcef70508b264a9559dbb9f7fc9bdbb0c3e28ea7929008dc084dec6d973e",
-  "test-support-launch-windows.ps1": "012ad7b7a2e52ddc7bd1c2c7aae63b7726187dab2d6aa2291bbb39de82928dec",
-  "test-support-lease-standard-windows.ps1": "a9b0bf8ee68209f78a82ca4260c9d35faf10449a25f5976775731e98042a057f",
-  "test-support-lease.py": "d11b25c95232544eb64f5de78f0e31cbc54630dd832185c55edfb4a3157cd604",
+  "test-support-launch-windows.ps1": "a223245ce2299e341f25f2e3d035ae41ea940622bd6bdba43295e3c63036c4dd",
+  "test-support-lease-standard-windows.ps1": "c2897356a81f5410789fcebab4e845639a329da892b41cff4675aa08bc17f15e",
+  "test-support-lease.py": "bdba6cc24c0b247de85a3bcda79744dd932f00bb6e97d038eba14a7e43d1db64",
   "test-support-nt-event-binding.cs": "4f166e8e0fbdce7a5fb6786862e031c5bb175704e7490a0e4a9feaac9fac62ca",
   "test-support-nt-event-child.rs": "80cf1b1969b66568910d3a84ba46d4749db1c5744aac21b69777cd795dc0b034",
-  "test-windows-lease-observation.py": "bc64f1bd16d32d201de7654b04f26074428a742f896d18977a6012408329a75e"
+  "test-windows-lease-observation.py": "b12bd7ff19fbf91e921cbff2d6e685441111c2a74811983fac21be8a5b1543a6",
+  "rust_toolchain.py": "2156c1452df874462a5e2a569f25a800a339cc2cb92f5732340aa12a633afa3c",
+  "windows-standard-namespace-readonly.rs": "23e5fee444459cb68ed7c2bb2ac6c8696583697ce8874019101b16659334b705",
+  "windows-standard-namespace-access.cs": "7f04727ae8161b8e4da1d2e4a74a0324549996da5af52a08c14538ccf53b2589",
+  "windows-standard-namespace-diagnostics.cs": "980178cba4736f260d1365d3f19b3371158efcd0856d75fb12c036b0a093aad8"
 }
 '@
 foreach ($pin in $pins.PSObject.Properties) {

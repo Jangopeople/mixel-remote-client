@@ -12,7 +12,8 @@ import tempfile
 PIN = "1abc897c451c8b5bbff3792509a7fef9d12f2ce3"
 GENERATED = "flutter/lib/mixel_support_app_exit.dart"
 IMPORT = "import 'package:flutter_hbb/mixel_support_app_exit.dart';\n"
-FILES = {'flutter/macos/Runner/AppDelegate.swift': '5df2c6487e28b1042ba9863a965da1de0b16bf3d8b08b4f3e78fed8a21b5cf10', 'flutter/macos/Runner/MainFlutterWindow.swift': '92db632c368dbfb9954206b941de4d611c0bf3e98676fade05cb45cd6670af4c', 'flutter/lib/main.dart': 'd2960a121fb44da10670905494824091bdcfbeb34bea35719aadc05c1826ec80', 'flutter/lib/common.dart': '65af38effd117b36c614c729192c1c20a69e2ac6a7a0ade89b1890b2cc9a7138', 'flutter/lib/utils/multi_window_manager.dart': 'a0e9f3580f90e0398e3c1e5ff3a7cfa525b40e386227c8a16408d71efa6e5da5', 'flutter/lib/desktop/pages/desktop_home_page.dart': '3d182f2a82232bd8d57fa3ef44c002b65e03bbd9dd8c4fb1e536e4265c33cbf3', 'flutter/lib/desktop/pages/desktop_tab_page.dart': 'fac626f31e59978d36abb32d3322ef59978f37e265b9d150db7d155b90f1d8a9', 'flutter/lib/desktop/widgets/tabbar_widget.dart': '16e51a8d1ecccea6a9e978d88ce7f9be927f3f66e688702a5ecc18e457dd5101', 'flutter/lib/models/native_model.dart': '37e58276da1c97247a758f13e6fe00c90236fb11f795b794178393067b790bc3', 'flutter/lib/models/server_model.dart': 'febc11a1baac03dac0d84b8f85a2655784a7ceffb0789c42359b22f0aef330f9', 'flutter/lib/models/ab_model.dart': 'ac8118640a408db95028cb077471daf694f71e2ead9c6a4c2ee38c81e3b111a4'}
+HISTORICAL_FILES = {'flutter/macos/Runner/AppDelegate.swift': '5df2c6487e28b1042ba9863a965da1de0b16bf3d8b08b4f3e78fed8a21b5cf10', 'flutter/macos/Runner/MainFlutterWindow.swift': '92db632c368dbfb9954206b941de4d611c0bf3e98676fade05cb45cd6670af4c', 'flutter/lib/main.dart': 'd2960a121fb44da10670905494824091bdcfbeb34bea35719aadc05c1826ec80', 'flutter/lib/common.dart': '65af38effd117b36c614c729192c1c20a69e2ac6a7a0ade89b1890b2cc9a7138', 'flutter/lib/utils/multi_window_manager.dart': 'a0e9f3580f90e0398e3c1e5ff3a7cfa525b40e386227c8a16408d71efa6e5da5', 'flutter/lib/desktop/pages/desktop_home_page.dart': '3d182f2a82232bd8d57fa3ef44c002b65e03bbd9dd8c4fb1e536e4265c33cbf3', 'flutter/lib/desktop/pages/desktop_tab_page.dart': 'fac626f31e59978d36abb32d3322ef59978f37e265b9d150db7d155b90f1d8a9', 'flutter/lib/desktop/widgets/tabbar_widget.dart': '16e51a8d1ecccea6a9e978d88ce7f9be927f3f66e688702a5ecc18e457dd5101', 'flutter/lib/models/native_model.dart': '37e58276da1c97247a758f13e6fe00c90236fb11f795b794178393067b790bc3', 'flutter/lib/models/server_model.dart': 'febc11a1baac03dac0d84b8f85a2655784a7ceffb0789c42359b22f0aef330f9', 'flutter/lib/models/ab_model.dart': 'ac8118640a408db95028cb077471daf694f71e2ead9c6a4c2ee38c81e3b111a4'}
+FILES = {'flutter/macos/Runner/AppDelegate.swift': '5df2c6487e28b1042ba9863a965da1de0b16bf3d8b08b4f3e78fed8a21b5cf10', 'flutter/macos/Runner/MainFlutterWindow.swift': '92db632c368dbfb9954206b941de4d611c0bf3e98676fade05cb45cd6670af4c', 'flutter/lib/main.dart': 'd2960a121fb44da10670905494824091bdcfbeb34bea35719aadc05c1826ec80', 'flutter/lib/common.dart': '7d8953486dc5087cf7d87bc8c625710ca982f7d7bca5f7f58a4c85ecf3ab2695', 'flutter/lib/utils/multi_window_manager.dart': 'a0e9f3580f90e0398e3c1e5ff3a7cfa525b40e386227c8a16408d71efa6e5da5', 'flutter/lib/desktop/pages/desktop_home_page.dart': 'cbac0a6732e329b0e3b308aad97aac5d886789a62592d079e38e96059c34539e', 'flutter/lib/desktop/pages/desktop_tab_page.dart': 'fac626f31e59978d36abb32d3322ef59978f37e265b9d150db7d155b90f1d8a9', 'flutter/lib/desktop/widgets/tabbar_widget.dart': '16e51a8d1ecccea6a9e978d88ce7f9be927f3f66e688702a5ecc18e457dd5101', 'flutter/lib/models/native_model.dart': '9a54053dac984ed2519806bcd82ec742804b5862b0f18ff12d456cc17ca328f2', 'flutter/lib/models/server_model.dart': 'febc11a1baac03dac0d84b8f85a2655784a7ceffb0789c42359b22f0aef330f9', 'flutter/lib/models/ab_model.dart': 'ac8118640a408db95028cb077471daf694f71e2ead9c6a4c2ee38c81e3b111a4'}
 
 FRESH = {'flutter/macos/Runner/AppDelegate.swift': '5df2c6487e28b1042ba9863a965da1de0b16bf3d8b08b4f3e78fed8a21b5cf10', 'flutter/macos/Runner/MainFlutterWindow.swift': '92db632c368dbfb9954206b941de4d611c0bf3e98676fade05cb45cd6670af4c', 'flutter/lib/main.dart': 'd688a496b23e58cc9a57d85d8ebd9f1e6f43cec3d82ccad632098a0dec5fc0df', 'flutter/lib/common.dart': '95ffcc4fdc3d83564d19d5ad7c999adbe65cdc37829cf466d43d5a9684e7f8de', 'flutter/lib/utils/multi_window_manager.dart': 'e94128aaf434d57d54dccb719633704e814b41fee052e142c4fa9ea4a5e13f3f', 'flutter/lib/desktop/pages/desktop_home_page.dart': '84fd3df40fd02508de9e36df3092ff1c1d7359ce92466240d093df6dbf945af8', 'flutter/lib/desktop/pages/desktop_tab_page.dart': 'fac626f31e59978d36abb32d3322ef59978f37e265b9d150db7d155b90f1d8a9', 'flutter/lib/desktop/widgets/tabbar_widget.dart': 'd37441c9917f79895985cddc3dbd6862866712548aa37915a1459e7d23863cf5', 'flutter/lib/models/native_model.dart': 'dfb3af1de5b884dae7928535b09d575a591487e2cf6b0b89e11c1abf9bfe05a6', 'flutter/lib/models/server_model.dart': 'febc11a1baac03dac0d84b8f85a2655784a7ceffb0789c42359b22f0aef330f9', 'flutter/lib/models/ab_model.dart': 'e1c79b068b46042f5d7a1c3a4437b656a10e6b64cd67b671969faf1c2ac7c176'}
 
@@ -414,7 +415,7 @@ def register_after_handles(text, initializer):
 
 
 def transform(name, data):
-    if digest(data) != FILES[name]:
+    if digest(data) not in (FILES[name],HISTORICAL_FILES[name]):
         raise RuntimeError("Changed Mac application-exit source: " + name)
     text = data.decode('utf-8')
     stem = Path(name).stem
@@ -692,7 +693,56 @@ def transform(name, data):
         text = once(text, '  StreamEventHandler? _eventCallback;', '''  StreamEventHandler? _eventCallback;
   StreamSubscription<String>? _mixelGlobalSubscription;
   final _mixelExit = MixelExitOwner();''')
-        text = once(text, '    sink.listen((message) {\n      () async {', '''    if (isMacOS) _mixelExit.register(() async {
+        if '    final supportGeneration = isMacOS && isMain ? mixelSupportUrlGeneration : null;' in text:
+            text = once(text, '  final _mixelExit = MixelExitOwner();', """  final _mixelExit = MixelExitOwner();
+  bool _mixelGlobalStopperRegistered = false;
+  String? _mixelGlobalGeneration;""")
+            text = once(text, '  void _startListenEvent(RustdeskImpl rustdeskImpl) {', """  void _startListenEvent(RustdeskImpl rustdeskImpl) {
+    if (isMacOS && _mixelExit.stopping) return;
+    final previousSubscription = _mixelGlobalSubscription;
+    if (isMacOS && previousSubscription != null) {
+      _mixelExit.poll(previousSubscription.cancel);
+    }""")
+            text = once(text, "    if (!liveUi || (age != null && age.elapsed >= const Duration(milliseconds: 1500)) ||",
+                        "    if (_mixelExit.stopping || !liveUi || (age != null && age.elapsed >= const Duration(milliseconds: 1500)) ||")
+            text = once(text, """    () async {
+      try { await callback(event); }
+      catch (_) { debugPrint('Mixel support URL dispatch failed.'); }
+    }();""", """    _mixelExit.poll(() async {
+      try { await callback(event); }
+      catch (_) { debugPrint('Mixel support URL dispatch failed.'); }
+    });""")
+            text = once(text, '    final supportGeneration = isMacOS && isMain ? mixelSupportUrlGeneration : null;', """    final supportGeneration = isMacOS && isMain ? mixelSupportUrlGeneration : null;
+    _mixelGlobalGeneration = supportGeneration;
+    if (isMacOS) _mixelExit.register(() async {
+      if (isMain) {
+        final activeGeneration = _mixelGlobalGeneration;
+        if (activeGeneration == mixelSupportUrlGeneration) {
+          setMixelSupportUrlStreamReady(false, generation: activeGeneration);
+          setMixelSupportUrlCallbackReady(false);
+        }
+        _clearMixelSupportUrlPending();
+      }
+      await _mixelGlobalSubscription?.cancel();
+      _mixelGlobalSubscription = null;
+      _eventCallback = null;
+      _eventHandlers.clear();
+    });""")
+            text = once(text, '    void onEvent(String message) {\n      () async {',
+                '    void onEvent(String message) {\n      Future<void> dispatch() async {')
+            text = once(text, '      }();\n    }\n    if (isMacOS && isMain) {', """      }
+      if (isMacOS) {
+        _mixelExit.poll(dispatch);
+      } else {
+        dispatch();
+      }
+    }
+    if (isMacOS && isMain) {""")
+            text = once(text, '      sink.listen(onEvent, onDone:', '      _mixelGlobalSubscription = sink.listen(onEvent, onDone:')
+            text = once(text, '      sink.listen(onEvent);', """      final subscription = sink.listen(onEvent);
+      if (isMacOS) _mixelGlobalSubscription = subscription;""")
+        else:
+            text = once(text, '    sink.listen((message) {\n      () async {', '''    if (isMacOS) _mixelExit.register(() async {
       await _mixelGlobalSubscription?.cancel();
       _mixelGlobalSubscription = null;
       _eventCallback = null;
@@ -700,7 +750,7 @@ def transform(name, data):
     });
     final subscription = sink.listen((message) {
       Future<void> dispatch() async {''')
-        text = once(text, '      }();\n    });\n  }\n\n  void setEventCallback', '''      }
+            text = once(text, '      }();\n    });\n  }\n\n  void setEventCallback', '''      }
       if (isMacOS) {
         _mixelExit.poll(dispatch);
       } else {
@@ -823,6 +873,9 @@ def transform(name, data):
         anchor = ('_DesktopTabPageState() {' if stem == 'desktop_tab_page' else
                   'void _startListenEvent(' if stem == 'native_model' else 'void initState() {')
         text = register_after_handles(text, anchor)
+        if stem == 'native_model' and 'bool _mixelGlobalStopperRegistered = false;' in text:
+            text = once(text, '    if (isMacOS) {\n      _mixelExit.register(() async {',
+                        '    if (isMacOS && !_mixelGlobalStopperRegistered) {\n      _mixelGlobalStopperRegistered = true;\n      _mixelExit.register(() async {')
     return (IMPORT + text).encode()
 
 
@@ -928,12 +981,12 @@ def apply(repo, restore=False, check=False):
             for name in FILES:
                 current, _ = normalize(regular(repo, name))
                 identities[name] = digest(current)
-            if identities not in (FILES, FRESH):
+            if identities not in (FILES, HISTORICAL_FILES, FRESH):
                 raise RuntimeError('Noncanonical or mixed application-exit restore inputs')
             return
         for name in FILES:
             current, _ = normalize(regular(repo, name))
-            if digest(current) != FILES[name]:
+            if digest(current) not in (FILES[name],HISTORICAL_FILES[name]):
                 raise RuntimeError('Missing application-exit utility with noncanonical source')
     if originals.is_symlink():
         raise RuntimeError('Unsafe application-exit provenance')
@@ -955,16 +1008,20 @@ def apply(repo, restore=False, check=False):
             raise RuntimeError('Changed application-exit provenance inventory')
     else:
         if restore: raise RuntimeError('Missing application-exit provenance')
+    original_identities = {}
     for name in FILES:
         current, newline = normalize(regular(repo, name))
         original = regular(originals, name) if originals.exists() else current
-        if digest(original) != FILES[name]:
+        if digest(original) not in (FILES[name],HISTORICAL_FILES[name]):
             raise RuntimeError('Changed application-exit original source: ' + name)
+        original_identities[name] = digest(original)
         corrected = transform(name, original)
         if current not in (original, corrected):
             raise RuntimeError('Changed application-exit current source: ' + name)
         states.add('original' if current == original else 'corrected')
         prepared[name] = original, (original if restore else corrected).replace(b'\n', newline)
+    if original_identities not in (FILES,HISTORICAL_FILES):
+        raise RuntimeError('Mixed historical/composed application-exit source profile')
     if len(states) != 1:
         raise RuntimeError('Mixed application-exit pipeline targets')
     utility = UTILITY.encode()

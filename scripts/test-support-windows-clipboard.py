@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from rust_toolchain import rustc_command
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("clipboard_windows_patch", ROOT / "scripts/patch-support-windows-clipboard.py")
@@ -443,7 +444,7 @@ def run(output):
         obj = output / (label + (".obj" if os.name == "nt" else ".o"))
         compile_c(path, obj, output, label + "-object-compile", obj=True)
         executable = output / (label + "-rust-caller" + (".exe" if os.name == "nt" else ""))
-        command = [rustc, "--edition=2021", str(rust), "-o", str(executable), "-C", "link-arg=" + str(obj)]
+        command = rustc_command([rustc, "--edition=2021", str(rust), "-o", str(executable), "-C", "link-arg=" + str(obj)])
         native_environment = None
         if os.name == "nt":
             # MSVC's ASan C object carries the runtime directives into the linker.

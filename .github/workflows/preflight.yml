@@ -40,6 +40,9 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: '1.75'
       - name: Run release staging and configuration regression tests
         run: |
           python3 scripts/test-release-pipeline.py
@@ -50,6 +53,7 @@ jobs:
           python3 scripts/test-macos-native-minimum.py
           python3 scripts/test-macos-bundle-minimum.py
           python3 scripts/test-sdk-discovery.py
+          python3 scripts/test-rust-toolchain.py
           python3 scripts/test-pinned-source-archives.py
           python3 scripts/test-support-session-fixture.py
           python3 scripts/test-flutter-branding.py
@@ -66,8 +70,15 @@ jobs:
   windows-packaging:
     runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_source_runner == 'windows-2025' && 'windows-2025' || 'windows-2022' }}
     timeout-minutes: 45
+    env:
+      PYTHONUTF8: '1'
     steps:
       - uses: actions/checkout@v5
+      - name: Verify UTF-8 repository source decoding
+        shell: pwsh
+        run: |
+          python -c "import sys; from pathlib import Path; assert sys.flags.utf8_mode == 1; p = Path('.github/workflows/build.yml'); assert p.read_text() == p.read_text(encoding='utf-8'); print('PASS: Windows Python reads repository source as strict UTF-8')"
+          if ($LASTEXITCODE -ne 0) { throw 'Windows repository source encoding verification failed.' }
       - name: Exercise Windows payload preparation and IPC response validation
         shell: pwsh
         run: ./scripts/test-windows-pipeline.ps1
@@ -87,6 +98,11 @@ jobs:
         with:
           channel: stable
           flutter-version: '3.27.4'
+      - name: Resolve canonical Windows Dart executable
+        shell: pwsh
+        run: |
+          python -c "import os, sys; from pathlib import Path; sys.path.insert(0, 'scripts'); from sdk_discovery import find_dart; binary = find_dart(); assert binary and Path(binary).is_file(), 'Installed Dart SDK is missing'; assert not binary.lower().endswith('.exe') or binary.endswith('.exe'), 'Windows Dart executable suffix is not canonical'; stream = open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8', newline='\n'); stream.write('DART_BIN=' + binary + '\n'); stream.close(); print('PASS: canonical installed Windows Dart executable exported to unchanged source tests')"
+          if ($LASTEXITCODE -ne 0) { throw 'Windows Dart SDK resolution failed.' }
       - name: Fetch pinned complete Windows source
         shell: bash
         env:
@@ -126,6 +142,9 @@ jobs:
         run: |
           python scripts/test-support-windows-clipboard.py --evidence-dir windows-clipboard-proof
           if ($LASTEXITCODE -ne 0) { throw 'Native Windows clipboard C/Rust ownership qualification failed.' }
+      - name: Prove explicit MSVC selection under actual Git Bash coreutils shadow
+        shell: bash
+        run: python scripts/test-rust-toolchain.py --native-windows
       - name: Qualify actual native Rust linker after Git Bash startup
         shell: bash
         run: |
@@ -176,7 +195,7 @@ jobs:
         run: |
           if ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1 -or $PSVersionTable.PSEdition -cne 'Desktop' -or -not [Environment]::Is64BitProcess) { throw 'Requires actual stock x64 Windows PowerShell 5.1 Desktop.' }
           Write-Host ('PASS: actual stock Windows PowerShell ' + $PSVersionTable.PSVersion.ToString() + '; Desktop; x64; source controls only.')
-          ./scripts/test-support-lease-interactive-source.ps1
+          ./scripts/test-support-lease-interactive-source.ps1 -NativePipeControls
       - name: Verify portable source and malformed-input refusals
         shell: pwsh
         run: |
@@ -273,6 +292,10 @@ jobs:
       - name: Exercise actual source patches and support reporter
         run: |
           python3 scripts/test-support-flutter-analysis.py --dart "$(command -v dart)" --evidence-dir "$RUNNER_TEMP/mixel-sdk-source"
+          python3 scripts/test-macos-startup.py
+          python3 scripts/test-support-macos-tray-url.py
+          python3 scripts/test-support-launch-macos-tray-controls.py
+          python3 scripts/test-support-macos-termination-support.py --app "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf"
           python3 scripts/test-support-flutter-sdk-compatibility.py --app "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf"
           python3 scripts/test-support-native-warnings.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --source-only --output "$RUNNER_TEMP/mixel-native-warning-source"
           python3 scripts/test-macos-update.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --source-only
@@ -280,7 +303,12 @@ jobs:
           python3 scripts/test-support-macos-termination.py --flutter "$(command -v flutter)"
           python3 scripts/test-support-invite.py
           python3 scripts/test-generated-support-paths.py
+          python3 scripts/test-support-macos-uri-routing.py
+          python3 scripts/test-support-macos-url-ack.py
+          python3 scripts/test-support-macos-url-async-peer.py
+          python3 scripts/test-macos-update.py
           python3 scripts/test-support-lease.py
+          python3 scripts/test-windows-lease-error.py
           python3 scripts/test-support-network.py
           python3 scripts/test-secure-support.py
           python3 scripts/test-support-linux.py
@@ -303,10 +331,10 @@ jobs:
           dart scripts/test-support-invite.dart
   macos-runtime-harness:
     runs-on: macos-14
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
-      - name: Resolve the pinned native Mac source
+      - name: Resolve the pinned upstream version
         id: config
         run: python3 scripts/release-artifacts.py config
       - uses: dtolnay/rust-toolchain@v1
@@ -336,6 +364,10 @@ jobs:
       - name: Prove exact SDK source compatibility and composed branding
         run: |
           python3 scripts/test-support-flutter-analysis.py --dart "$(command -v dart)" --evidence-dir "$RUNNER_TEMP/mixel-sdk-source"
+          python3 scripts/test-macos-startup.py
+          python3 scripts/test-support-macos-tray-url.py
+          python3 scripts/test-support-launch-macos-tray-controls.py
+          python3 scripts/test-support-macos-termination-support.py --app "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf"
           python3 scripts/test-support-flutter-sdk-compatibility.py --app "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf"
           python3 scripts/test-support-native-warnings.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --source-only --output "$RUNNER_TEMP/mixel-native-warning-source"
           RUSTC_BIN="$(rustup which rustc)" python3 scripts/test-macos-update.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf"
@@ -360,6 +392,7 @@ jobs:
         run: |
           python3 scripts/test-support-launch-macos-diagnostics.py
           python3 scripts/test-support-launch-macos.py --self-test
+          python3 scripts/test-support-macos-uri-routing.py
           python3 scripts/test-macos-native-minimum.py
           python3 scripts/test-macos-bundle-minimum.py
       - uses: actions/upload-artifact@v6

@@ -67,8 +67,8 @@ public static class MixelOrdinaryTokenFixture {
   [DllImport("kernel32.dll", SetLastError = true)] static extern bool CheckRemoteDebuggerPresent(IntPtr process, out bool present);
   [DllImport("kernel32.dll", SetLastError = true)] static extern bool TerminateProcess(IntPtr process, uint code);
   [DllImport("kernel32.dll", SetLastError = true)] static extern bool CloseHandle(IntPtr handle);
-  [DllImport("kernel32.dll", SetLastError = true)] static extern bool DuplicateHandle(IntPtr source, IntPtr handle, IntPtr target, out IntPtr copy, uint access, bool inherit, uint options);
   [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern IntPtr OpenEventW(uint access, bool inherit, string name);
+  [DllImport("kernel32.dll", SetLastError = true)] static extern bool DuplicateHandle(IntPtr source, IntPtr handle, IntPtr target, out IntPtr copy, uint access, bool inherit, uint options);
   [DllImport("advapi32.dll", SetLastError = true)] static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
   [DllImport("advapi32.dll", SetLastError = true)] static extern bool GetTokenInformation(IntPtr token, int kind, IntPtr data, int size, out int required);
   [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool LogonUserW(string user, string domain, string password, uint logonType, uint provider, out IntPtr token);
@@ -155,6 +155,38 @@ public static class MixelOrdinaryTokenFixture {
   static readonly System.Collections.Generic.Dictionary<int, IntPtr> SuspendedThreads = new System.Collections.Generic.Dictionary<int, IntPtr>();
   static readonly System.Collections.Generic.HashSet<IntPtr> PendingProcesses = new System.Collections.Generic.HashSet<IntPtr>();
   static readonly System.Collections.Generic.HashSet<IntPtr> PendingThreads = new System.Collections.Generic.HashSet<IntPtr>();
+  public static System.Collections.Generic.Dictionary<string, string> SuspendedOwnedIdentity(int pid) {
+    IntPtr process, thread, token = IntPtr.Zero, integrity = IntPtr.Zero;
+    if (!StartedProcesses.TryGetValue(pid, out process) || !SuspendedThreads.TryGetValue(pid, out thread))
+      throw new InvalidOperationException("Identity qualification requires the retained owned suspended process and primary thread");
+    if (WaitForSingleObject(process, 0) != 0x102 || GetProcessId(process) != checked((uint)pid))
+      throw new InvalidOperationException("Owned suspended process identity is no longer live or does not match its kernel PID");
+    try {
+      if (!OpenProcessToken(process, 8, out token)) throw new Win32Exception();
+      var result = new System.Collections.Generic.Dictionary<string, string>();
+      result.Add("kernelPid", GetProcessId(process).ToString());
+      using (var identity = new WindowsIdentity(token)) { result.Add("sid", identity.User.Value); }
+      result.Add("elevated", ElevatedToken(token).ToString());
+      IntPtr session = Marshal.AllocHGlobal(4);
+      try {
+        int required;
+        if (!GetTokenInformation(token, 12, session, 4, out required) || required != 4) throw new Win32Exception();
+        result.Add("sessionId", Marshal.ReadInt32(session).ToString());
+      } finally { Marshal.FreeHGlobal(session); }
+      int size;
+      GetTokenInformation(token, 25, IntPtr.Zero, 0, out size);
+      if (size < IntPtr.Size + 4 || size > 65536) throw new InvalidOperationException("Invalid owned process integrity metadata size");
+      integrity = Marshal.AllocHGlobal(size);
+      int actual;
+      if (!GetTokenInformation(token, 25, integrity, size, out actual) || actual > size) throw new Win32Exception();
+      var label = new SecurityIdentifier(Marshal.ReadIntPtr(integrity));
+      result.Add("integritySid", label.Value);
+      return result;
+    } finally {
+      if (integrity != IntPtr.Zero) Marshal.FreeHGlobal(integrity);
+      if (token != IntPtr.Zero) CloseHandle(token);
+    }
+  }
   static int Started(ProcessInfo process, bool suspended = false) {
     // Successful creation owns these exact handles before PID attribution or
     // thread close. Keep every unresolved handle for bounded outer cleanup.
@@ -357,6 +389,38 @@ public static class MixelOrdinaryTokenFixture {
   public static void RemoveProfile(string sid) { if (!DeleteProfileW(sid, null, null) && Marshal.GetLastWin32Error() != 2) throw new Win32Exception(); }
   public static bool IsLeaseName(string name) {
     return name == "\\BaseNamedObjects\\Mixel-Remote-Attended-Runtime-v2" || name == "\\Sessions\\0\\BaseNamedObjects\\Mixel-Remote-Attended-Runtime-v2";
+  }
+  public static int LeaseProbeError() {
+    IntPtr handle = OpenEventW(0x100000, false, "Global\\Mixel-Remote-Attended-Runtime-v2");
+    if (handle == IntPtr.Zero) return Marshal.GetLastWin32Error();
+    if (!CloseHandle(handle)) throw new Win32Exception();
+    return 0;
+  }
+  public static int LeaseProbeErrorAsProcess(int pid) {
+    IntPtr process = OpenProcess(0x1000, false, pid), token = IntPtr.Zero;
+    bool impersonated = false;
+    // Negative results mean this optional token observation was unavailable;
+    // they are never treated as an absent event or an unguarded application.
+    if (process == IntPtr.Zero) {
+      int error = Marshal.GetLastWin32Error();
+      if (error == 0) throw new InvalidOperationException("Missing process observation has no native error");
+      return -error;
+    }
+    try {
+      if (!OpenProcessToken(process, 10, out token) || !ImpersonateLoggedOnUser(token)) {
+        int error = Marshal.GetLastWin32Error();
+        if (error == 0) throw new InvalidOperationException("Unavailable token observation has no native error");
+        return -error;
+      }
+      impersonated = true;
+      return LeaseProbeError();
+    } finally {
+      bool reverted = !impersonated || RevertToSelf();
+      int revertError = reverted ? 0 : Marshal.GetLastWin32Error();
+      if (token != IntPtr.Zero) CloseHandle(token);
+      CloseHandle(process);
+      if (!reverted) throw new Win32Exception(revertError);
+    }
   }
   static string ObjectText(IntPtr handle, int kind) {
     IntPtr data = Marshal.AllocHGlobal(65536);
@@ -652,7 +716,7 @@ public static class MixelPackagedQaTokenFacts {
 
 function Start-OwnedPackagedQaNamespace {
   if (-not $env:MIXEL_HOSTED_OWNED_QA_NAMESPACE) { return }
-  if ($env:MIXEL_HOSTED_OWNED_QA_NAMESPACE -cne '1' -or $script:qaNamespaceScope -or
+  if ($env:MIXEL_HOSTED_OWNED_QA_NAMESPACE -cne '1' -or $namespaceAccess -or
       $ownedUser -cnotmatch '\Amixelqs[0-9a-f]{10}\z' -or -not $ownedSid -or -not $desktopAccess -or
       (Get-LocalUser -SID ([Security.Principal.SecurityIdentifier]::new($ownedSid))).Name -cne $ownedUser) {
     throw 'Exact newly owned packaged QA fallback account and desktop setup required.'
@@ -677,7 +741,7 @@ function Start-OwnedPackagedQaNamespace {
   }
   if (-not ('MixelHostedQaNamespace' -as [type])) { Add-Type -TypeDefinition $helperText -CompilerOptions /warnaserror+ -ErrorAction Stop }
   # Constructor verifies the exact opt-in hosted tuple and performs no native call.
-  $api=[MixelHostedQaNamespace+NativeApi]::new('PackagedOrdinaryQa')
+  if (-not [MixelHostedQaNamespace]::HostedScopeAllowed([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT,[Environment]::Is64BitProcess,$env:GITHUB_ACTIONS,$env:GITHUB_REPOSITORY,$env:RUNNER_ENVIRONMENT,$env:GITHUB_JOB,$env:GITHUB_EVENT_NAME,$env:GITHUB_REF,$env:GITHUB_WORKFLOW_REF,$env:MIXEL_HOSTED_OWNED_QA_NAMESPACE,'PackagedOrdinaryQa')) { throw 'Exact opt-in hosted packaged scope required.' }
   $caller=[MixelPackagedQaTokenFacts]::RunnerTokenFacts()
   $fresh=[MixelPackagedQaTokenFacts]::FreshStandardTokenFacts($ownedUser,$ownedPassword,$ownedSid)
   if ($caller.unavailableKind -or $fresh.unavailableKind -or -not $caller.sessionKnown -or -not $fresh.sessionKnown -or
@@ -687,37 +751,27 @@ function Start-OwnedPackagedQaNamespace {
       $fresh.users -cne 'enabled' -or $fresh.authenticatedUsers -cne 'enabled' -or $fresh.interactive -cne 'enabled') {
     throw 'Exact High-to-Medium owned standard-token same-session facts required before packaged bootstrap.'
   }
-  $identity=[Security.Principal.SecurityIdentifier]::new($ownedSid)
-  $sidBytes=[byte[]]::new($identity.BinaryLength);$identity.GetBinaryForm($sidBytes,0)
-  $script:qaNamespaceScope=[MixelHostedQaNamespace+Scope]::new($api,$sidBytes)
+  if (-not ('MixelCI.StandardNamespaceAccess' -as [type])) {
+    Add-Type -TypeDefinition (Get-Content (Join-Path $PSScriptRoot 'windows-standard-namespace-access.cs') -Raw) -CompilerOptions /warnaserror+ -ErrorAction Stop
+  }
   $script:qaNamespaceCleanupOkay=$false
-  $script:qaNamespaceRestorationAttempted=$false
-  $script:qaNamespaceRestoreFailure=$null;$script:qaNamespaceDisposeFailure=$null
-  $script:qaNamespaceScope.Open()
-  $script:qaNamespaceScope.Apply()
-  Write-Host ('FIXTURE: isolated hosted owned packaged QA namespace before ordinary startup; ' +
-      ($script:qaNamespaceScope.facts | ConvertTo-Json -Depth 6 -Compress))
+  $script:namespaceRestorationKnown=$false
+  $script:namespaceAccess=[MixelCI.StandardNamespaceAccess]::new($ownedSid,$ownedUser,[uint32]$caller.sessionId)
+  $script:namespaceFacts=$script:namespaceAccess.facts
+  Write-Host 'FIXTURE: exact owned packaged High-to-Medium same-session account receives only mask12 creation grant; consent event DACL unchanged.'
 }
 
 function Restore-OwnedPackagedQaNamespace([bool]$OwnedProcessesExited) {
-  if (-not $script:qaNamespaceScope) { $script:qaNamespaceCleanupOkay=$true;return }
-  # Directory restoration is independent of process termination. Failed exit
-  # preserves the account/root, never an unnecessary temporary namespace grant.
-  if (-not $script:qaNamespaceRestorationAttempted) {
-    $script:qaNamespaceRestorationAttempted=$true
-    try { $script:qaNamespaceScope.Restore() } catch { $script:qaNamespaceRestoreFailure=$_ }
-    finally { try { $script:qaNamespaceScope.Dispose() } catch { $script:qaNamespaceDisposeFailure=$_ } }
+  $restoreFailure=$null
+  if ($script:namespaceAccess) {
+    try { $script:namespaceAccess.Dispose(); $script:namespaceRestorationKnown=$true; $script:namespaceAccess=$null }
+    catch { $restoreFailure=$_ }
   }
-  $restoreFailure=$script:qaNamespaceRestoreFailure;$disposeFailure=$script:qaNamespaceDisposeFailure
-  $facts=$script:qaNamespaceScope.facts
-  $script:qaNamespaceCleanupOkay=($OwnedProcessesExited -and $null -eq $restoreFailure -and $null -eq $disposeFailure -and
-      $facts.cleanupOkay -and (-not $facts.writeAttempted -or $facts.restorationVerified))
-  Write-Host ('OBSERVED: isolated hosted owned packaged QA namespace restoration; ' +
-      ([ordered]@{directory=$facts;ownedProcessesExited=$OwnedProcessesExited;
-        restoreFailed=($null -ne $restoreFailure);disposeFailed=($null -ne $disposeFailure);
-        accountCleanupPermitted=$script:qaNamespaceCleanupOkay;minimumMaskQualified=$false;
-        actualWin32RouteMeasured=$false;productPermissionChanged=$false;packagedAppQualified=$false} |
-        ConvertTo-Json -Depth 8 -Compress))
+  $script:qaNamespaceCleanupOkay=($OwnedProcessesExited -and $script:namespaceRestorationKnown -and $null -eq $restoreFailure -and
+      ($null -eq $script:namespaceFacts -or $script:namespaceFacts.cleanupOkay))
+  Write-Host ('OBSERVED: owned packaged mask12 namespace restoration; ' +
+      ([ordered]@{ownedProcessesExited=$OwnedProcessesExited;restorationKnown=$script:namespaceRestorationKnown;
+        accountCleanupPermitted=$script:qaNamespaceCleanupOkay;directory=$script:namespaceFacts} | ConvertTo-Json -Depth 6 -Compress))
   if (-not $script:qaNamespaceCleanupOkay) { throw 'Owned packaged process exit or namespace restoration/close remains unknown; account/root deletion prohibited.' }
 }
 
@@ -751,6 +805,7 @@ $ordinaryProfileRoot = $null
 $ownedUser = $null
 $ownedSid = $null
 $desktopAccess = $null
+$script:namespaceAccess = $null; $script:namespaceRestorationKnown=$true; $script:namespaceFacts=$null
 $baselineIncomingPid = $null
 $fixtureStage = 'customer launch'
 $primaryFailure = $null
@@ -1632,6 +1687,7 @@ function Stop-OwnedCustomerProcesses {
 
 try {
   if ($OrdinaryThenQuickSupport) {
+    Write-Host "FIXTURE: read-only global attended event before ordinary launch: win32Error=$([MixelOrdinaryTokenFixture]::LeaseProbeError())."
     if (-not $QuickSupport -or -not $ExpectedPayload -or (-not $Portable -and -not $CompiledQuickSupportDiagnostic)) {
       throw 'Ordinary-to-QuickSupport proof requires the actual portable QS launcher and exact signed payload, or explicit compiled-only diagnosis.'
     }
@@ -1735,10 +1791,19 @@ try {
     $baselineIncomingPid = $initialHealth.incomingPid
     $initialOwnsLease = [MixelOrdinaryTokenFixture]::OwnsLease($main.Id)
     $initialLeasePresent = [MixelOrdinaryTokenFixture]::LeasePresent()
-    Write-Host "FIXTURE: read-only ordinary baseline; guardEmpty=$($initialHealth.attendedProof -ceq ''), guardConfirmed=$($initialHealth.attendedReady), foregroundOwnsLease=$initialOwnsLease, globalLeasePresent=$initialLeasePresent; foregroundPid=$($main.Id)."
+    $initialGuardEmpty = $initialHealth.attendedProof -ceq ''
+    Write-Host "FIXTURE: read-only ordinary baseline: guardEmpty=$initialGuardEmpty, guardV2=$($initialHealth.attendedReady), foregroundOwnsLease=$initialOwnsLease, globalLeasePresent=$initialLeasePresent, runnerLeaseProbeWin32Error=$([MixelOrdinaryTokenFixture]::LeaseProbeError())."
+    $ordinaryTokenLeaseProbe = [MixelOrdinaryTokenFixture]::LeaseProbeErrorAsProcess($main.Id)
+    Write-Host "FIXTURE: optional actual-token event observation: nativeResult=$ordinaryTokenLeaseProbe (negative means unavailable token access, never an absent event)."
     if ($initialHealth.attendedProof -cne '' -or $initialOwnsLease) {
-      $leaseStatus = Get-MixelSupportLeaseDiagnostic $initialHealth.incomingPid
-      Write-Host "FIXTURE: failed ordinary baseline read-only native lease observation; $leaseStatus."
+      try {
+        $leaseStatus = Get-MixelSupportLeaseDiagnostic $initialHealth.incomingPid
+        Write-Host "FIXTURE: failed ordinary baseline read-only native lease observation; $leaseStatus."
+      } catch {
+        # Older retained signed artifacts may lack this diagnostic getter.
+        # Unavailable secondary evidence must preserve the failing baseline.
+        Write-Host 'FIXTURE: failed ordinary baseline read-only native lease observation unavailable; original guarded-state failure preserved.'
+      }
       if ($initialHealth.attendedProof -ceq 'guard-unavailable') {
         throw 'Ordinary-to-QS positive control cannot safely inspect the native consent lease; refusing an unavailable baseline.'
       }
@@ -1813,6 +1878,7 @@ try {
   }
   throw
 } finally {
+  $ownedPassword=$null; $random=$null
   if ($nativeCrash) {
     if ($ordinaryPid) {
       if ($nativeCrash.live) {
@@ -1836,7 +1902,7 @@ try {
   catch { $nativeCrashCleanupFailed=$true; Write-Host 'FAIL: exact owned packaged namespace restoration/disposal additionally failed.' }
   try { [MixelOrdinaryTokenFixture]::CloseStartedObservations() }
   catch { $nativeCrashCleanupFailed=$true; Write-Host 'FAIL: actual retained owned native handle close additionally failed.' }
-  if ($ordinaryRoot -or $ownedUser -or $desktopAccess) {
+  if ($ordinaryRoot -or $ownedUser -or $desktopAccess -or $namespaceAccess) {
     $cleanupErrors = [System.Collections.Generic.List[string]]::new()
     if ($nativeCrashCleanupFailed) { $cleanupErrors.Add('Owned native crash observation cleanup failed.') }
     Start-Sleep -Seconds 2

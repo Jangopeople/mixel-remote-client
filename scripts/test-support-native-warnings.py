@@ -364,7 +364,7 @@ fn main(){
 def context_copy(source, target):
     """Copy only the exact source/ownership inputs required by the prior chain."""
     transfer=P.prior_namespace('patch-support-file-transfer-window.py',P.PRIOR_FILE_TRANSFER_SHA)
-    sdk=P.prior_namespace('patch-support-flutter-sdk-compatibility.py','08473f59acb6ee2424b493f147a63e4dae443ca85103ee2aeb9685a59b61be19')
+    sdk=P.prior_namespace('patch-support-flutter-sdk-compatibility.py','08255c1af27ea05c5e1eaf3c8d903070d26b4a1c8c3e02eb1c24107bbcf92010')
     term=sdk['load_prior']('patch-support-macos-termination.py',sdk['PRIOR_SHA'])
     cleanup=sdk['load_prior']('patch-support-macos-cleanup.py',sdk['CLEANUP_SHA'])
     optional={transfer['GENERATED'],term['GENERATED'],cleanup['GENERATED']}
@@ -391,7 +391,10 @@ def production_snapshot(root):
 
 def composed_controls(source,out,full_branding=False,bash='bash'):
     source=source.absolute()
-    canonical=context_copy(source,out/'composed-canonical')
+    spec=importlib.util.spec_from_file_location("mixel_warning_final_projection",Path(__file__).with_name("test-support-flutter-analysis.py"))
+    analysis=importlib.util.module_from_spec(spec);spec.loader.exec_module(analysis)
+    with analysis.startup_baseline(source) as baseline:
+        canonical=context_copy(baseline,out/'composed-canonical')
     P.apply(canonical,restore=True)
     assert {name:P.digest(P.canonical((canonical/name).read_bytes())[0]) for name in P.FRESH}==P.CURRENT
     input_before=snapshot(canonical)
@@ -569,7 +572,7 @@ def wiring_controls(out,bash):
         result=run([bash,'-e','-o','pipefail','-c',prefix+body],out,'workflow-gate-'+str(number),env)
         assert result.returncode==27,result.stderr
         actual=[json.loads(line) for line in (folder/'calls.jsonl').read_text(encoding='utf-8').splitlines()]
-        assert [row[0] for row in actual]==['scripts/test-support-flutter-analysis.py','scripts/test-support-flutter-sdk-compatibility.py',source_only],actual
+        assert [row[0] for row in actual]==['scripts/test-support-flutter-analysis.py','scripts/test-macos-startup.py','scripts/test-support-macos-tray-url.py','scripts/test-support-launch-macos-tray-controls.py','scripts/test-support-macos-termination-support.py','scripts/test-support-flutter-sdk-compatibility.py',source_only],actual
         assert actual[-1][1:] == ['--source','rustdesk' if file=='build.yml' else env['RUNNER_TEMP']+'/mixel-sdk-source/pipeline-lf','--source-only','--output',env['RUNNER_TEMP']+'/mixel-native-warning-source']
         calls.append({'workflow':file,'job':job,'first_warning_gate_failure':27,'later_tests_unrun':True})
     dispatcher_source=(root/'scripts/test-windows-generated-source.sh').read_bytes()

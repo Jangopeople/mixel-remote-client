@@ -281,6 +281,10 @@ jobs:
           RDREPO: ./rustdesk
         run: |
           python3 scripts/test-support-flutter-analysis.py --dart "$(command -v dart)"
+          python3 scripts/test-macos-startup.py
+          python3 scripts/test-support-macos-tray-url.py
+          python3 scripts/test-support-launch-macos-tray-controls.py
+          python3 scripts/test-support-macos-termination-support.py --app rustdesk
           python3 scripts/test-support-flutter-sdk-compatibility.py --app rustdesk --flutter "$(command -v flutter)"
           python3 scripts/test-support-native-warnings.py --source rustdesk --source-only --output "$RUNNER_TEMP/mixel-native-warning-source"
           python3 scripts/test-macos-update.py --source rustdesk --source-only
@@ -288,6 +292,8 @@ jobs:
           python3 scripts/test-support-macos-termination.py --flutter "$(command -v flutter)"
           python3 scripts/test-support-invite.py
           python3 scripts/test-generated-support-paths.py
+          python3 scripts/test-support-macos-uri-routing.py
+          python3 scripts/test-support-macos-url-ack.py
           python3 scripts/test-support-lease.py
           python3 scripts/test-support-network.py
           python3 scripts/test-secure-support.py
@@ -538,6 +544,10 @@ jobs:
           MACOS_RUNTIME_LINK_TARGET: ${{ matrix.job.target }}
         run: |
           python3 scripts/test-support-flutter-analysis.py --dart "$(command -v dart)"
+          python3 scripts/test-macos-startup.py
+          python3 scripts/test-support-macos-tray-url.py
+          python3 scripts/test-support-launch-macos-tray-controls.py
+          python3 scripts/test-support-macos-termination-support.py --app rustdesk
           python3 scripts/test-support-flutter-sdk-compatibility.py --app rustdesk --flutter "$(command -v flutter)"
           python3 scripts/test-support-native-warnings.py --source rustdesk --source-only --output "$RUNNER_TEMP/mixel-native-warning-source"
           RUSTC_BIN="$(rustup which rustc)" python3 scripts/test-macos-update.py --source rustdesk
@@ -545,7 +555,11 @@ jobs:
           RUSTC_BIN="$(rustup which rustc)" python3 scripts/test-support-fatal-crash.py --source rustdesk --upstream-repo rustdesk --evidence-dir "$RUNNER_TEMP/mixel-fatal-crash-source"
           python3 scripts/test-support-invite.py
           python3 scripts/test-generated-support-paths.py
+          python3 scripts/test-support-macos-uri-routing.py
           python3 scripts/test-support-lease.py
+          python3 scripts/test-support-macos-url-ack.py
+          python3 scripts/test-support-macos-url-async-peer.py
+          python3 scripts/test-macos-update.py
           python3 scripts/test-support-network.py
           python3 scripts/test-secure-support.py
           python3 scripts/test-support-linux.py
@@ -678,6 +692,10 @@ jobs:
             python3 ../scripts/test-support-launch-macos.py --app "$APP_PATH" \
               --diagnostics "$DIAGNOSTICS/runtime" --diagnostic-app-zip "$DIAGNOSTIC_APP_ZIP"
 
+            mkdir -p ../runtime-diagnostics
+            python3 ../scripts/test-support-launch-macos-tray.py --app "$APP_PATH" \
+              --proofs "../runtime-diagnostics/macos-${{ matrix.job.arch }}-tray"
+
             # 3) Package stapled .app into DMG, then sign/notarize/staple DMG.
             create-dmg --window-size 800 400 \
               --icon "Mixel-Remote.app" 200 190 \
@@ -701,6 +719,14 @@ jobs:
             echo "⚠ Built unsigned DMG (no APPLE_CERT_P12_BASE64 secret)"
           fi
           ls -la ../dist/
+
+      - name: Retain macOS tray runtime proof
+        uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: macos-tray-runtime-proof-${{ matrix.job.arch }}
+          path: runtime-diagnostics/
+          if-no-files-found: warn
 
       - name: Retain failed macOS launch bundle and bounded diagnostics
         uses: actions/upload-artifact@v6
@@ -760,6 +786,7 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 180
     env:
+      PYTHONUTF8: '1'
       UPSTREAM_VERSION: ${{ needs.config.outputs.upstream_version }}
     steps:
       - uses: actions/checkout@v5
@@ -776,6 +803,12 @@ jobs:
         with:
           channel: stable
           flutter-version: ${{ env.FLUTTER_VERSION }}
+
+      - name: Resolve canonical Windows Dart executable
+        shell: pwsh
+        run: |
+          python -c "import os, sys; from pathlib import Path; sys.path.insert(0, 'scripts'); from sdk_discovery import find_dart; binary = find_dart(); assert binary and Path(binary).is_file(), 'Installed Dart SDK is missing'; assert not binary.lower().endswith('.exe') or binary.endswith('.exe'), 'Windows Dart executable suffix is not canonical'; stream = open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8', newline='\n'); stream.write('DART_BIN=' + binary + '\n'); stream.close(); print('PASS: canonical installed Windows Dart executable exported to unchanged source tests')"
+          if ($LASTEXITCODE -ne 0) { throw 'Windows Dart SDK resolution failed.' }
 
       - name: Restore compiled codec cache
         uses: actions/cache@v5
@@ -847,6 +880,10 @@ jobs:
       - name: Activate installed native MSVC clipboard regression toolchain
         shell: pwsh
         run: ./scripts/activate-windows-msvc.ps1 -ExportToGitHubEnvironment
+
+      - name: Prove explicit MSVC selection under actual Git Bash coreutils shadow
+        shell: bash
+        run: python scripts/test-rust-toolchain.py --native-windows
 
       - name: Prove native Windows clipboard ownership and Rust error cleanup
         shell: pwsh
@@ -1204,6 +1241,14 @@ jobs:
         env:
           MIXEL_HOSTED_OWNED_QA_NAMESPACE: "1"
         run: |
+          # Observe the genuine baseline and complete the same strict 95s
+          # compiled handoff before the optional live debugger can affect it.
+          # This remains signed-inner diagnosis, never customer release proof.
+          ./scripts/test-support-launch-windows.ps1 -Executable runtime-client/Mixel-Remote.exe -QuickSupport -ExpectedPayload runtime-client -OrdinaryThenQuickSupport -CompiledQuickSupportDiagnostic
+      - name: Diagnose signed compiled native crash attribution
+        if: ${{ !inputs.runtime_windows_release_gate }}
+        shell: pwsh
+        run: |
           # The retained artifact is the exact signed compiled payload. Pass the
           # native QS argument its portable launcher emits; the full build still
           # requires the actual signed customer QS outer launcher to pass 95s.
@@ -1317,6 +1362,8 @@ jobs:
           xcrun stapler validate "$APP_PATH"
           spctl --assess --type execute --verbose=2 "$APP_PATH"
           python3 scripts/test-support-launch-macos.py --app "$APP_PATH" | tee "runtime-diagnostics/macos-${EXPECTED_ARCH}.log"
+          python3 scripts/test-support-launch-macos-tray.py --app "$APP_PATH" \
+            --proofs "runtime-diagnostics/macos-${EXPECTED_ARCH}-tray"
       - uses: actions/upload-artifact@v6
         if: always()
         with:

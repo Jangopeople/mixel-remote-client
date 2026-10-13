@@ -15,6 +15,8 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('mixel_file_transfer_geometry', ROOT/'scripts/patch-support-file-transfer-window.py')
 P = importlib.util.module_from_spec(spec); spec.loader.exec_module(P)
+analysis_spec=importlib.util.spec_from_file_location("mixel_final_source_fixture",ROOT/"scripts/test-support-flutter-analysis.py")
+A=importlib.util.module_from_spec(analysis_spec);analysis_spec.loader.exec_module(A)
 
 
 def sha(data): return hashlib.sha256(data).hexdigest()
@@ -33,6 +35,9 @@ def snapshot(repo):
 
 
 def capture_source(app, out):
+    with A.startup_baseline(app) as plain:
+        if plain != app.resolve():
+            return capture_source(plain, out)
     P.apply(app.resolve(), restore=True, check=True)
     P.verify_previous_layers(app.resolve())
     result = {}

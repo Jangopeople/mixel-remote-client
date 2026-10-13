@@ -82,7 +82,19 @@ foreach($variant in 0..15) {
 $tokens=$null;$errors=$null;$ast=[Management.Automation.Language.Parser]::ParseInput($pipeline,[ref]$tokens,[ref]$errors)
 if($errors.Count) {throw 'Pipeline does not parse'}
 $writer=$ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Write-OwnedDesktopIdentityDiagnostic'},$true)
-$gate=$ast.FindAll({param($node) $node -is [Management.Automation.Language.IfStatementAst] -and $node.Extent.Text.StartsWith('if ($guiElevated -or ($predicateChildSession=')},$true)
+$actualGate=$ast.FindAll({param($node) $node -is [Management.Automation.Language.IfStatementAst] -and $node.Extent.Text.StartsWith('if ($guiIdentity[')},$true)
+if($actualGate.Count -ne 1) {throw 'Exact retained suspended identity predicate missing'}
+# Preserve the incoming diagnostic's historical short-circuit controls while
+# additionally executing the stronger retained-PID/SID/medium baseline below.
+$historicalSource=@'
+      if ($guiElevated -or ($predicateChildSession=$guiProcess.SessionId) -ne ($predicateCallerSession=(Get-Process -Id $PID).SessionId)) {
+        try { Write-OwnedDesktopIdentityDiagnostic $guiPid $ownedSid $mode $guiElevated $predicateChildSession $predicateCallerSession }
+        catch { try { Write-Host ('FIXTURE: fatal owned desktop identity diagnostic emission failed; exceptionType=' + $_.Exception.GetType().FullName) } catch {} }
+        throw 'Owned desktop control is not a genuine non-elevated process in the runner session.'
+      }
+'@
+$historicalAst=[Management.Automation.Language.Parser]::ParseInput($historicalSource,[ref]$tokens,[ref]$errors)
+$gate=$historicalAst.FindAll({param($node) $node -is [Management.Automation.Language.IfStatementAst]},$true) | Select-Object -First 1
 if($writer.Count -ne 1 -or $gate.Count -ne 1) {throw 'Exact diagnostic/predicate missing'}
 . ([scriptblock]::Create($writer[0].Extent.Text))
 $failureLiteral='Owned desktop control is not a genuine non-elevated process in the runner session.'
@@ -133,15 +145,41 @@ function Write-Host { throw 'Injected output failure' }
 $message='';try { & ([scriptblock]::Create($gate[0].Extent.Text)) 6>&1 | Out-Null } catch {$message=$_.Exception.Message}
 if($message -cne $failureLiteral) {throw 'Diagnostic fallback output failure replaced original fatal failure'}
 Remove-Item Function:Write-Host
+Remove-Item Function:Write-OwnedDesktopIdentityDiagnostic
+. ([scriptblock]::Create($writer[0].Extent.Text))
+$failureLiteral='Owned suspended desktop control does not have its created standard SID, medium-integrity non-elevated token and actual runner session.'
+$guiResult='private-synthetic-result';$script:resultPresent=$false
+function Test-Path {param($LiteralPath) return $script:resultPresent}
+foreach($field in @('valid','kernelPid','sid','elevated','integritySid','sessionId','result')) {
+  [MixelOrdinaryTokenFixture]::Reset(0)
+  $guiIdentity=@{kernelPid='403';sid=$ownedSid;elevated='False';integritySid='S-1-16-8192';sessionId='2'}
+  $script:resultPresent=$field -ceq 'result'
+  if($field -cnotin @('valid','result')) {$guiIdentity[$field]='invalid'}
+  $message='';try { & ([scriptblock]::Create($actualGate[0].Extent.Text)) 6>&1 | Out-Null } catch {$message=$_.Exception.Message}
+  if(($field -ceq 'valid' -and $message -cne '') -or ($field -cne 'valid' -and $message -cne $failureLiteral)) {throw 'Retained kernel/SID/medium/non-elevated/session/no-result baseline weakened'}
+}
+Write-Host 'PASS: actual retained suspended desktop gate refuses each kernel PID, SID, elevation, medium-integrity, session and premature-result mutation; historical diagnostic controls retained.'
 Write-Host "PASS: exact original/corrected desktop predicate retains same fatal failures, native elevation call and session short-circuit; structured facts preserve actual evaluated operands and primary owned-SID/session without raw identity. 16 mocked primary API/size/constructor/dispose/close/error0/unowned controls pass; complete actual augmented class compiles. PowerShell=$($PSVersionTable.PSVersion); edition=$($PSVersionTable.PSEdition). No native/app qualification."
 Write-Host 'PASS: all 17 primary/status observation scenarios and both diagnostic-emitter/output failures preserve the original fatal desktop failure, including failed read-only handle cleanup/error0; native process/ACL cleanup remains unchanged.'
 '''
+
+# Historical a19 three-argument lifecycle is preserved as a pinned source-only
+# profile. Its old whole-pipeline inverse identity remains recorded separately.
+HISTORICAL_WHOLE_INVERSE_SHA = "159f90310d01c2f6efe26e556cd3b69d61d74a5b98050c84b4224ad9c1d73348"
+HISTORICAL_EXIT_TRIAL = "      $guiPid = [MixelOrdinaryTokenFixture]::StartStandardUser($guiExecutable, $ownedUser, $ownedPassword)\n      if (Complete-OwnedNoncanonicalExitedDesktopControl $guiPid $ownedSid $mode $desktopControls) { continue }\n      try { $guiProcess = Get-Process -Id $guiPid }\n      catch {\n        if ($_.FullyQualifiedErrorId -ceq 'NoProcessFoundForGivenId,Microsoft.PowerShell.Commands.GetProcessCommand' -and\n            (Complete-OwnedNoncanonicalExitedDesktopControl $guiPid $ownedSid $mode $desktopControls)) { continue }\n        throw\n      }\n      $guiElevated=[MixelOrdinaryTokenFixture]::Elevated($guiPid)\n      $predicateChildSession=$null; $predicateCallerSession=$null\n      if ($guiElevated -or ($predicateChildSession=$guiProcess.SessionId) -ne ($predicateCallerSession=(Get-Process -Id $PID).SessionId)) {\n        if (-not $guiElevated -and $null -eq $predicateChildSession -and\n            (Complete-OwnedNoncanonicalExitedDesktopControl $guiPid $ownedSid $mode $desktopControls)) { continue }\n        try { Write-OwnedDesktopIdentityDiagnostic $guiPid $ownedSid $mode $guiElevated $predicateChildSession $predicateCallerSession }\n        catch { try { Write-Host ('FIXTURE: fatal owned desktop identity diagnostic emission failed; exceptionType=' + $_.Exception.GetType().FullName) } catch {} }\n        throw 'Owned desktop control is not a genuine non-elevated process in the runner session.'\n      }\n"
+HISTORICAL_EXIT_TRIAL_SHA = 'bebaab961dbeb6480492fc9ef718f0e8b4ac553d06f7de4de0d2c12f7de3f731'
+HISTORICAL_ORIGINAL_TRIAL = "      $guiPid = [MixelOrdinaryTokenFixture]::StartStandardUser($guiExecutable, $ownedUser, $ownedPassword)\n      $guiProcess = Get-Process -Id $guiPid\n      $guiElevated=[MixelOrdinaryTokenFixture]::Elevated($guiPid)\n      $predicateChildSession=$null; $predicateCallerSession=$null\n      if ($guiElevated -or ($predicateChildSession=$guiProcess.SessionId) -ne ($predicateCallerSession=(Get-Process -Id $PID).SessionId)) {\n        try { Write-OwnedDesktopIdentityDiagnostic $guiPid $ownedSid $mode $guiElevated $predicateChildSession $predicateCallerSession }\n        catch { try { Write-Host ('FIXTURE: fatal owned desktop identity diagnostic emission failed; exceptionType=' + $_.Exception.GetType().FullName) } catch {} }\n        throw 'Owned desktop control is not a genuine non-elevated process in the runner session.'\n      }\n"
+HISTORICAL_ORIGINAL_TRIAL_SHA = '9da344f4a269fb86e59627d8ae0f1655a2a83c9abbdd1f265a2917b03586d6ed'
+HISTORICAL_TRIAL_FINALLY = '{\n        $trialCleanup = [System.Collections.Generic.List[string]]::new()\n        try { [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses() } catch { $trialCleanup.Add(\'Owned retained desktop trial process cleanup failed.\') }\n        [MixelOrdinaryTokenFixture]::CloseStartedObservations()\n        if ($guiAccess) { try { $guiAccess.Dispose(); $guiAccess=$null } catch { $trialCleanup.Add(\'Owned desktop trial ACL restoration failed.\') } }\n        if ([MixelOrdinaryTokenFixture]::DesktopAclHashes() -cne $baselineAcls) { $trialCleanup.Add(\'Owned desktop trial did not restore the exact original station/desktop ACL hashes.\') }\n        if ($trialCleanup.Count -gt 0) {\n          if ($trialFailure) { Write-Host (\'FAIL: owned desktop trial cleanup additionally failed: \' + ($trialCleanup -join \' \')) }\n          else { throw ($trialCleanup -join \' \') }\n        } else { Write-Host "PASS: $mode owned desktop control restores the exact original station/desktop ACL hashes." }\n      }'
+HISTORICAL_TRIAL_FINALLY_SHA = '908a6691665098dbb932f21dfa0e5414397ddad30fe1dd42a3944ca0c907e654'
+HISTORICAL_EXIT_HELPER = 'function Complete-OwnedNoncanonicalExitedDesktopControl([int]$OwnedPid, [string]$ExpectedSid,\n    [string]$Mode, [System.Collections.Generic.List[object]]$Controls) {\n  # A failed minimal-rights trial is diagnostic only; the canonical trial still\n  # has to create a visible window/menu through the original mandatory gate.\n  if ($Mode -cnotin @(\'minimal-before\', \'minimal-after\')) { return $false }\n  $nativeStatus=[MixelOrdinaryTokenFixture]::StartedStatus($OwnedPid)\n  if ($nativeStatus -ceq \'still-running\') { return $false }\n  if ($nativeStatus -cnotmatch \'^exited:0x[0-9a-f]{8}$\') { throw \'Owned native desktop control exit status is unverified.\' }\n  $primary=[MixelOrdinaryTokenFixture]::ObserveOwnedDesktopPrimary($OwnedPid,$ExpectedSid)\n  $callerSession=(Get-Process -Id $PID).SessionId\n  $confirmedStatus=[MixelOrdinaryTokenFixture]::StartedStatus($OwnedPid)\n  $verified=($confirmedStatus -ceq $nativeStatus -and $primary.pid -eq $OwnedPid -and\n    $primary.retainedPidMatched -eq $true -and $primary.status -ceq \'available\' -and\n    $primary.operation -ceq \'complete\' -and $null -eq $primary.failureType -and\n    $null -eq $primary.nativeError -and $null -eq $primary.tokenCloseError -and\n    $primary.ownedSidMatched -eq $true -and $primary.elevated -eq $false -and\n    $null -ne $callerSession -and $primary.tokenSessionId -eq $callerSession -and\n    $primary.tokenOpened -eq $true -and $primary.tokenCloseAttempted -eq $true -and\n    $primary.tokenClosed -eq $true)\n  Write-Host (\'FIXTURE: noncanonical owned desktop exit observation; \' + ([ordered]@{\n    schema=1; mode=$Mode; ownedPid=$OwnedPid; nativeStatus=$nativeStatus;\n    confirmedNativeStatus=$confirmedStatus; callerSession=$callerSession;\n    primaryToken=$primary; identityVerified=$verified; failedDiagnostic=$true;\n    canonicalQualified=$false\n  } | ConvertTo-Json -Depth 4 -Compress))\n  if (-not $verified) { throw \'Owned desktop control is not a genuine non-elevated process in the runner session.\' }\n  $Controls.Add([pscustomobject]@{mode=$Mode; passed=$false; pid=$OwnedPid;\n    nativeStatus=$nativeStatus; result=@{}})\n  Write-Host "DIAGNOSTIC: $Mode control exited before its identity/window snapshot; nativeStatus=$nativeStatus."\n  return $true\n}'
+HISTORICAL_EXIT_HELPER_SHA = 'e2885d54c6a11aec5baaa2f97fa57594a1ffc3773e6cc2ba807720cd8513b5d3'
 
 EXIT_SCRIPT = r'''
 param([string]$Repository,[string]$ControlRoot,[string]$ExpectedEdition)
 $ErrorActionPreference='Stop'
 if($PSVersionTable.PSEdition -cne $ExpectedEdition) {throw 'Required PowerShell edition missing'}
-$pipeline=[IO.File]::ReadAllText((Join-Path $Repository 'scripts/test-windows-pipeline.ps1'))
+$pipeline=[IO.File]::ReadAllText((Join-Path $ControlRoot 'historical.ps1'))
 $original=[IO.File]::ReadAllText((Join-Path $ControlRoot 'original.ps1'))
 $ast=[Management.Automation.Language.Parser]::ParseInput($pipeline,[ref]$null,[ref]$null)
 $helper=@($ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Complete-OwnedNoncanonicalExitedDesktopControl'},$true))
@@ -265,6 +303,182 @@ Write-Host 'PASS: exact three original exit-timing failures pair with corrected 
 '''
 
 
+UNION_SCRIPT = r'''
+param([string]$Repository,[string]$ControlRoot,[string]$ExpectedEdition)
+$ErrorActionPreference='Stop'
+if($PSVersionTable.PSEdition -cne $ExpectedEdition) {throw 'Required PowerShell edition missing'}
+$pipeline=[IO.File]::ReadAllText((Join-Path $Repository 'scripts/test-windows-pipeline.ps1'))
+$tokens=$null;$errors=$null;$ast=[Management.Automation.Language.Parser]::ParseInput($pipeline,[ref]$tokens,[ref]$errors)
+if($errors.Count) {throw 'Current composed pipeline does not parse'}
+foreach($name in @('Write-OwnedDesktopIdentityDiagnostic','Complete-OwnedNoncanonicalExitedDesktopControl','Complete-OwnedDesktopCleanup')) {
+  $functions=@($ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq $name},$true))
+  if($functions.Count -ne 1) {throw 'Actual composed helper is missing or duplicated'}
+  . ([scriptblock]::Create($functions[0].Extent.Text))
+}
+function Add-UnionControlType([string]$Definition) {
+  if ($PSVersionTable.PSEdition -ceq 'Desktop') {
+    if ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1) { throw 'Actual stock Desktop5.1 compiler is required.' }
+    $parameters = [System.CodeDom.Compiler.CompilerParameters]::new()
+    $parameters.GenerateInMemory = $true
+    $parameters.TreatWarningsAsErrors = $true
+    $parameters.WarningLevel = 4
+    [void]$parameters.ReferencedAssemblies.Add('System.dll')
+    [void]$parameters.ReferencedAssemblies.Add('System.Core.dll')
+    Add-Type -TypeDefinition $Definition -CompilerParameters $parameters -ErrorAction Stop
+  } elseif ($PSVersionTable.PSEdition -ceq 'Core') {
+    Add-Type -TypeDefinition $Definition -CompilerOptions '/warnaserror+' -ErrorAction Stop
+  } else { throw 'Unknown actual PowerShell compiler edition.' }
+}
+# This warning must remain fatal before compiling the actual mock/helper.
+# Its diagnostic code proves a compiler warning, rather than another failure.
+$warningFailure = $null
+try { Add-UnionControlType 'public static class MixelUnionUnusedWarningControl { public static void Run() { int unused; } }' }
+catch { $warningFailure = $_ }
+$warningCode = $null
+if ($warningFailure) {
+  if ($PSVersionTable.PSEdition -ceq 'Desktop' -and $warningFailure.FullyQualifiedErrorId -cmatch '^SOURCE_CODE_ERROR(?:,|$)') {
+    # FullCLR Add-Type retains ErrorNumber in the public compiler-error target;
+    # its displayed ErrorText does not have to contain that separate code.
+    $warningCode = $warningFailure.TargetObject.ErrorNumber
+  } elseif ($PSVersionTable.PSEdition -ceq 'Core' -and $warningFailure.ToString() -cmatch '\bCS0168\b') { $warningCode = 'CS0168' }
+}
+if (-not $warningFailure -or $warningCode -isnot [string] -or $warningCode -cne 'CS0168' -or ('MixelUnionUnusedWarningControl' -as [type])) {
+  throw ('The actual source-control compiler did not refuse its unused-variable warning; edition=' + $PSVersionTable.PSEdition + '; throwSeen=' + [bool]$warningFailure + '; targetCode=' + $warningCode + '; typeLoaded=' + [bool]('MixelUnionUnusedWarningControl' -as [type]))
+}
+Write-Host ('PASS: actual ' + $PSVersionTable.PSEdition + ' C# compiler keeps CS0168 fatal; no warning suppression.')
+Add-UnionControlType ([IO.File]::ReadAllText((Join-Path $ControlRoot 'union-mock.cs')))
+function Get-Process {param([int]$Id)
+  if($Id -eq $PID) {return [pscustomobject]@{SessionId=2}}
+  if($Id -ne 403) {throw 'Unexpected process lookup subject'}
+  return [pscustomobject]@{SessionId=2}
+}
+function Test-Path {param([string]$Path)
+  if($Path -ceq 'private-root') {return $true}
+  return $script:resultPresent
+}
+function Remove-Item {param($Path,[switch]$Recurse,[switch]$Force) $script:roots++}
+function Remove-LocalUser {param($SID)
+  if($SID -cne 'mock-owned-sid') {throw 'Unexpected account deletion subject'}
+  $script:accounts++
+  if([MixelOrdinaryTokenFixture]::Fault -ceq 'account') {throw 'Injected account deletion failure'}
+}
+function Reset-Union {
+  [MixelOrdinaryTokenFixture]::Reset(0)
+  [MixelOrdinaryTokenFixture]::CurrentStatus='still-running'
+  [MixelOrdinaryTokenFixture]::Fault='normal'
+  [MixelOrdinaryTokenFixture]::IdentityCase='valid'
+  [MixelOrdinaryTokenFixture]::ExitAfterResume=$true
+  [MixelOrdinaryTokenFixture]::ResumeResult=1
+  [MixelOrdinaryTokenFixture]::Starts=0;[MixelOrdinaryTokenFixture]::Identities=0;[MixelOrdinaryTokenFixture]::Resumes=0
+  [MixelOrdinaryTokenFixture]::Stops=0;[MixelOrdinaryTokenFixture]::ObservationCloses=0
+  [MixelOrdinaryTokenFixture]::Restores=0;[MixelOrdinaryTokenFixture]::Hashes=0;[MixelOrdinaryTokenFixture]::Profiles=0
+  $script:resultPresent=$false;$script:roots=0;$script:accounts=0
+}
+$marker='      $guiPid = [MixelOrdinaryTokenFixture]::StartStandardUser($guiExecutable, $ownedUser, $ownedPassword, $true)'
+$start=$pipeline.IndexOf($marker);$end=$pipeline.IndexOf('      $deadline =',$start)
+if($start -lt 0 -or $end -le $start) {throw 'Actual suspended trial boundary missing'}
+$trial=$pipeline.Substring($start,$end-$start)
+$qualified=$trial.IndexOf("if (`$guiIdentity['kernelPid']")
+$resume=$trial.IndexOf('ResumeOwnedPrimaryThread($guiPid)')
+$classify=$trial.IndexOf('Complete-OwnedNoncanonicalExitedDesktopControl $guiPid')
+if($qualified -lt 0 -or $resume -le $qualified -or $classify -le $resume -or
+  $classify -ne $trial.LastIndexOf('Complete-OwnedNoncanonicalExitedDesktopControl $guiPid')) {throw 'Classification precedes retained qualification/resume or repeats'}
+$guiExecutable='private-executable';$ownedUser='private-user';$ownedPassword='private-secret';$ownedSid='private-owned-SID';$guiResult='private-result'
+$preFailure='Owned suspended desktop control does not have its created standard SID, medium-integrity non-elevated token and actual runner session.'
+foreach($field in @('kernelPid','sid','elevated','integritySid','sessionId','result','exited')) {
+  Reset-Union;[MixelOrdinaryTokenFixture]::IdentityCase=$field
+  $script:resultPresent=$field -ceq 'result'
+  if($field -ceq 'exited') {[MixelOrdinaryTokenFixture]::CurrentStatus='exited:0x8007045a'}
+  $mode='minimal-before';$desktopControls=[Collections.Generic.List[object]]::new();$message=''
+  try {& ([scriptblock]::Create('foreach($iteration in 0) {'+$trial+'}')) 6>&1 | Out-Null} catch {$message=$_.Exception.Message}
+  if($message -cne $preFailure -or [MixelOrdinaryTokenFixture]::Starts -ne 1 -or
+     [MixelOrdinaryTokenFixture]::Identities -ne 1 -or [MixelOrdinaryTokenFixture]::Resumes -ne 0 -or $desktopControls.Count) {throw 'Failed pre-resume tuple bypassed qualification or reached minimal classification'}
+}
+foreach($mode in @('minimal-before','minimal-after','canonical')) {
+  Reset-Union;$desktopControls=[Collections.Generic.List[object]]::new();$script:Reached=$false
+  & ([scriptblock]::Create('foreach($iteration in 0) {'+$trial+'; $script:Reached=$true }')) 6>&1 | Out-Null
+  $canonical=$mode -ceq 'canonical'
+  if([MixelOrdinaryTokenFixture]::Starts -ne 1 -or [MixelOrdinaryTokenFixture]::Identities -ne 1 -or
+     [MixelOrdinaryTokenFixture]::Resumes -ne 1 -or $script:Reached -ne $canonical -or
+     $desktopControls.Count -ne [int](-not $canonical)) {throw 'Qualified one-resume minimal/canonical ordering changed'}
+  if(-not $canonical -and $desktopControls[0].passed -ne $false) {throw 'Exited minimal diagnostic falsely qualified GUI'}
+}
+Reset-Union;[MixelOrdinaryTokenFixture]::ResumeResult=0;$mode='minimal-before';$desktopControls=[Collections.Generic.List[object]]::new();$message=''
+try {& ([scriptblock]::Create('foreach($iteration in 0) {'+$trial+'}')) 6>&1 | Out-Null} catch {$message=$_.Exception.Message}
+if($message -cne 'Owned desktop control primary thread did not resume its one retained suspension.' -or
+   [MixelOrdinaryTokenFixture]::Resumes -ne 1 -or $desktopControls.Count) {throw 'Invalid resume count reached diagnostic classification'}
+$canonicalGate=@($ast.FindAll({param($node) $node -is [Management.Automation.Language.IfStatementAst] -and
+  $node.Extent.Text.StartsWith('if ($canonical)') -and $node.Extent.Text.Contains('Canonical owned ordinary desktop fixture did not complete')},$true))
+if($canonicalGate.Count -ne 1) {throw 'Original mandatory canonical GUI gate absent'}
+$canonical=$true;$actualGui=@{};$nativeStatus='exited:0x8007045a';$message=''
+try {& ([scriptblock]::Create($canonicalGate[0].Extent.Text))} catch {$message=$_.Exception.Message}
+if(-not $message.StartsWith('Canonical owned ordinary desktop fixture did not complete')) {throw 'Canonical exited process was accepted as GUI success'}
+Write-Host 'PASS: exact composed trial rejects seven pre-resume tuple/result/exit mutations; one successful resume precedes two exited-minimal failed diagnostics; canonical GUI and invalid-resume gates remain fatal.'
+
+$trialFinal=@($ast.FindAll({param($node) $node -is [Management.Automation.Language.TryStatementAst] -and $node.Finally -and $node.Finally.Extent.Text.Contains('$trialCleanup =')},$true))
+$guiFinal=@($ast.FindAll({param($node) $node -is [Management.Automation.Language.TryStatementAst] -and $node.Finally -and $node.Finally.Extent.Text.Contains('$guiCleanup =')},$true))
+$accountFinal=@($ast.FindAll({param($node) $node -is [Management.Automation.Language.TryStatementAst] -and $node.Finally -and
+  $node.Finally.Extent.Text.Contains('$ownedPassword = $null') -and $node.Finally.Extent.Text.Contains('$guiCleanupKnown')},$true))
+if($trialFinal.Count -ne 1 -or $guiFinal.Count -ne 1 -or $accountFinal.Count -ne 1) {throw 'Actual complete cleanup scopes absent or duplicated'}
+$trialBody=($trialFinal[0].Finally.Statements | ForEach-Object {$_.Extent.Text}) -join "`n"
+$guiBody=($guiFinal[0].Finally.Statements | ForEach-Object {$_.Extent.Text}) -join "`n"
+$account=($accountFinal[0].Finally.Statements | ForEach-Object {$_.Extent.Text}) -join "`n"
+$sid='[Security.Principal.SecurityIdentifier]::new($ownedSid)'
+if($account.IndexOf($sid) -lt 0 -or $account.IndexOf($sid) -ne $account.LastIndexOf($sid)) {throw 'Exact account SID constructor seam changed'}
+$account=$account.Replace($sid,"'mock-owned-sid'")
+$checks=0
+foreach($scope in @('trial','gui')) {
+ foreach($fault in @('normal','stop','close','dispose','hash-drift','hash-query','stop-close-dispose')) {
+  foreach($primary in @($false,$true)) {
+    Reset-Union;[MixelOrdinaryTokenFixture]::Fault=$fault
+    $guiAccess=[MixelOrdinaryTokenFixture+DesktopAccess]::new();$baselineAcls='original'
+    $guiDesktopMayBeChanged=$true;$guiCleanupKnown=$false;$guiProfile=$true;$guiRoot='private-root'
+    $trialFailure=$null;$guiFailure=$null;$accountFailure=$null;$ownedPassword='secret';$random='secret'
+    $original=[Management.Automation.ErrorRecord]::new([InvalidOperationException]::new('ORIGINAL_TRIAL5'),'Original5',[Management.Automation.ErrorCategory]::InvalidOperation,$null)
+    if($primary) {$trialFailure=$original;$guiFailure=$original}
+    $body=if($scope -ceq 'trial') {$trialBody} else {$guiBody}
+    $caught=$null
+    try {try {if($primary) {throw $original}} finally {. ([scriptblock]::Create($body))}} catch {$caught=$_}
+    if([MixelOrdinaryTokenFixture]::Stops -ne 1 -or [MixelOrdinaryTokenFixture]::ObservationCloses -ne 1 -or
+       [MixelOrdinaryTokenFixture]::Restores -ne 1 -or [MixelOrdinaryTokenFixture]::Hashes -ne 1) {throw 'A failed cleanup prevented independent stop/close/dispose/hash attempts'}
+    $known=$fault -ceq 'normal'
+    if($guiCleanupKnown -ne $known -or ($primary -and $caught.Exception.Message -cne 'ORIGINAL_TRIAL5') -or
+       (-not $primary -and (($null -ne $caught) -eq $known))) {throw 'Cleanup uncertainty or first error was lost'}
+    if($scope -ceq 'gui' -and ([MixelOrdinaryTokenFixture]::Profiles -ne [int]$known -or $script:roots -ne [int]$known)) {throw 'Unknown exit/restoration deleted profile or files'}
+    $accountFailure=$caught;$accountCaught=$null
+    try {try {if($caught) {throw $caught}} finally {. ([scriptblock]::Create($account))}} catch {$accountCaught=$_}
+    if($script:accounts -ne [int]$known -or $null -ne $ownedPassword -or $null -ne $random -or
+       ($caught -and $accountCaught.Exception.Message -cne $caught.Exception.Message)) {throw 'Quarantine/account cleanup or credential clearing replaced first error'}
+    $checks++
+  }
+ }
+}
+# Account deletion errors preserve an existing trial error while memory-only
+# credentials are cleared; without a prior error the deletion error stays fatal.
+foreach($primary in @($false,$true)) {
+  Reset-Union;[MixelOrdinaryTokenFixture]::Fault='account'
+  $guiCleanupKnown=$true;$accountFailure=if($primary) {$original} else {$null}
+  $ownedPassword='secret';$random='secret';$accountCaught=$null
+  try {try {if($primary) {throw $original}} finally {. ([scriptblock]::Create($account))}} catch {$accountCaught=$_}
+  $expected=if($primary) {'ORIGINAL_TRIAL5'} else {'Injected account deletion failure'}
+  if($script:accounts -ne 1 -or $null -ne $ownedPassword -or $null -ne $random -or
+    $accountCaught.Exception.Message -cne $expected) {throw 'Account deletion failure replaced first error or retained credentials'}
+}
+# Reporter failures must not replace the original error after successful or failed cleanup.
+foreach($fault in @('normal','close')) {
+  Reset-Union;[MixelOrdinaryTokenFixture]::Fault=$fault;$guiAccess=[MixelOrdinaryTokenFixture+DesktopAccess]::new()
+  $guiDesktopMayBeChanged=$true;$baselineAcls='original';$trialFailure=$original
+  function Write-Host {throw 'Injected secondary output failure'}
+  $caught=$null
+  try {try {throw $original} finally {. ([scriptblock]::Create($trialBody))}} catch {$caught=$_}
+  Microsoft.PowerShell.Management\Remove-Item Function:Write-Host -ErrorAction Stop
+  if($caught.Exception.Message -cne 'ORIGINAL_TRIAL5' -or [MixelOrdinaryTokenFixture]::Restores -ne 1 -or
+    [MixelOrdinaryTokenFixture]::Hashes -ne 1) {throw 'Secondary output failure replaced first error or skipped restoration'}
+}
+Microsoft.PowerShell.Utility\Write-Host "PASS: exact trial/GUI/account finally bodies pass $checks normal/stop/close/dispose/hash/combined fault and first-error cases plus two account-deletion and two reporter failures; independent restoration, verified deletion/quarantine, credential clearing and secondary output failure retain original5. No native APIs called."
+'''
+
+
 class DesktopIdentityControls(unittest.TestCase):
     def test_actual_fragment_and_original_fatal_predicate(self):
         fragment = (ROOT / "scripts/support-windows-desktop-identity-diagnostic.cs").read_text(encoding="utf-8")
@@ -298,11 +512,18 @@ class DesktopIdentityControls(unittest.TestCase):
         self.assertEqual(mock.count(old_status), 1)
         mock = mock.replace(old_status, 'StatusCalls++;return ChangeAfterPrimary && StatusCalls>1 ? "still-running" : CurrentStatus;', 1)
         pipeline = (ROOT / "scripts/test-windows-pipeline.ps1").read_text(encoding="utf-8")
-        # Exact inverse defines the pre-correction source without historical
-        # Git availability in shallow Windows CI.
+        # Conserve the exact owner's old/new trial and cleanup profile while
+        # the actual composed retained-suspended gates are exercised separately.
+        import hashlib
+        for value, expected in ((HISTORICAL_EXIT_TRIAL, HISTORICAL_EXIT_TRIAL_SHA),
+                                (HISTORICAL_ORIGINAL_TRIAL, HISTORICAL_ORIGINAL_TRIAL_SHA),
+                                (HISTORICAL_TRIAL_FINALLY, HISTORICAL_TRIAL_FINALLY_SHA),
+                                (HISTORICAL_EXIT_HELPER, HISTORICAL_EXIT_HELPER_SHA)):
+            self.assertEqual(hashlib.sha256(value.encode()).hexdigest(), expected)
         helper_start = pipeline.index("function Complete-OwnedNoncanonicalExitedDesktopControl(")
-        helper_end = pipeline.index("# Compile the exact native OS fixture", helper_start)
-        original = pipeline[:helper_start] + pipeline[helper_end:]
+        helper_end = pipeline.index("function Complete-OwnedDesktopCleanup(", helper_start)
+        self.assertEqual(pipeline[helper_start:helper_end].strip(), HISTORICAL_EXIT_HELPER)
+        inverse = HISTORICAL_EXIT_TRIAL
         lookup = """      if (Complete-OwnedNoncanonicalExitedDesktopControl $guiPid $ownedSid $mode $desktopControls) { continue }
       try { $guiProcess = Get-Process -Id $guiPid }
       catch {
@@ -311,25 +532,88 @@ class DesktopIdentityControls(unittest.TestCase):
         throw
       }
 """
-        self.assertEqual(original.count(lookup), 1)
-        original = original.replace(lookup, "      $guiProcess = Get-Process -Id $guiPid\n", 1)
+        self.assertEqual(inverse.count(lookup), 1)
+        inverse = inverse.replace(lookup, "      $guiProcess = Get-Process -Id $guiPid\n", 1)
         late = """        if (-not $guiElevated -and $null -eq $predicateChildSession -and
             (Complete-OwnedNoncanonicalExitedDesktopControl $guiPid $ownedSid $mode $desktopControls)) { continue }
 """
-        self.assertEqual(original.count(late), 1)
-        original = original.replace(late, "", 1)
-        import hashlib
-        self.assertEqual(hashlib.sha256(original.encode()).hexdigest(), "159f90310d01c2f6efe26e556cd3b69d61d74a5b98050c84b4224ad9c1d73348")
+        self.assertEqual(inverse.count(late), 1)
+        self.assertEqual(inverse.replace(late, "", 1), HISTORICAL_ORIGINAL_TRIAL)
+        helpers = pipeline[pipeline.index("function Write-OwnedDesktopIdentityDiagnostic("):helper_end]
+        def profile(trial):
+            return helpers + "\nforeach ($mode in @('minimal-before')) { try {\n" + trial + "      $deadline = $null\n} finally " + HISTORICAL_TRIAL_FINALLY + "\n}\n"
+        original = profile(HISTORICAL_ORIGINAL_TRIAL)
+        historical = profile(HISTORICAL_EXIT_TRIAL)
         with tempfile.TemporaryDirectory(prefix="mixel-desktop-exit-ordering-") as temporary:
             root = Path(temporary)
             (root / "exit-mock.cs").write_bytes((mock + fragment + "\n}").encode())
             (root / "original.ps1").write_bytes(original.encode())
+            (root / "historical.ps1").write_bytes(historical.encode())
             script = root / "control.ps1"
             script.write_bytes(b"\xef\xbb\xbf" + EXIT_SCRIPT.encode())
             for engine, edition in controls.ObservationControls.powershell_engines():
                 result = subprocess.run([engine, "-NoProfile", "-File", str(script), "-Repository", str(ROOT), "-ControlRoot", str(root), "-ExpectedEdition", edition], capture_output=True, text=True, timeout=40)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 print(result.stdout, flush=True)
+
+    def test_composed_suspended_trial_and_independent_cleanup_faults(self):
+        fragment = (ROOT / "scripts/support-windows-desktop-identity-diagnostic.cs").read_text(encoding="utf-8")
+        extension = r'''
+  public static bool PredicateElevated;
+  public static string CurrentStatus="still-running",IdentityCase="valid",Fault="normal";
+  public static int Starts,Identities,Resumes,Stops,ObservationCloses,Restores,Hashes,Profiles;
+  public static bool ExitAfterResume=true;
+  public static int ResumeResult=1;
+  public static int StartStandardUser(string executable,string user,string password,bool suspended) {
+    if(!suspended || executable!="private-executable" || user!="private-user" || password!="private-secret")throw new Exception("Actual suspended launch arguments changed");
+    Starts++;return 403;
+  }
+  public static System.Collections.Generic.Dictionary<string,string> SuspendedOwnedIdentity(int pid) {
+    if(pid!=403)throw new Exception("Wrong retained identity subject");Identities++;
+    var result=new System.Collections.Generic.Dictionary<string,string>{{"kernelPid","403"},{"sid","private-owned-SID"},{"elevated","False"},{"integritySid","S-1-16-8192"},{"sessionId","2"}};
+    if(result.ContainsKey(IdentityCase))result[IdentityCase]="invalid";
+    return result;
+  }
+  public static int ResumeOwnedPrimaryThread(int pid) {
+    if(pid!=403)throw new Exception("Wrong retained resume subject");Resumes++;
+    if(ExitAfterResume)CurrentStatus="exited:0x8007045a";
+    return ResumeResult;
+  }
+  public static void StopOwnedStartedProcesses() {
+    Stops++;if(Fault.Contains("stop"))throw new Exception("Injected owned stop failure");
+  }
+  public static void CloseStartedObservations() {
+    ObservationCloses++;if(Fault.Contains("close"))throw new Exception("Injected owned observation close failure");
+  }
+  public static string DesktopAclHashes() {
+    Hashes++;if(Fault=="hash-query")throw new Exception("Injected exact hash query failure");
+    return Fault=="hash-drift" ? "foreign" : "original";
+  }
+  public static void RemoveProfile(string sid) {
+    if(sid!="private-owned-SID")throw new Exception("Wrong profile deletion subject");Profiles++;
+  }
+  public sealed class DesktopAccess:IDisposable {
+    public void Dispose(){Restores++;if(Fault.Contains("dispose"))throw new Exception("Injected exact desktop restore failure");}
+  }
+'''
+        self.assertEqual(MOCK.count("public static bool PredicateElevated;"), 1)
+        mock = MOCK.replace("public static bool PredicateElevated;", extension, 1)
+        self.assertEqual(mock.count('return "still-running";'), 1)
+        mock = mock.replace('return "still-running";', 'return CurrentStatus;', 1)
+        with tempfile.TemporaryDirectory(prefix="mixel-composed-desktop-source-") as temporary:
+            root = Path(temporary)
+            (root / "union-mock.cs").write_bytes((mock + fragment + "\n}").encode("utf-8"))
+            script = root / "control.ps1"
+            script.write_bytes(b"\xef\xbb\xbf" + UNION_SCRIPT.encode("utf-8"))
+            for engine, edition in controls.ObservationControls.powershell_engines():
+                result = subprocess.run([engine, "-NoProfile", "-NonInteractive", "-File", str(script),
+                                         "-Repository", str(ROOT), "-ControlRoot", str(root), "-ExpectedEdition", edition],
+                                        capture_output=True, text=True, encoding="utf-8", timeout=60)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("28 normal/stop/close/dispose/hash/combined fault", result.stdout)
+                self.assertIn("actual " + edition + " C# compiler keeps CS0168 fatal; no warning suppression.", result.stdout)
+                print(result.stdout, flush=True)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

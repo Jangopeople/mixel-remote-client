@@ -1,0 +1,38 @@
+name: windows-namespace-diagnostic
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['codex/**']
+    paths:
+      - '.github/workflows/windows-namespace-diagnostic.yml'
+      - 'scripts/windows-standard-namespace*'
+      - 'scripts/test-support-lease*'
+      - 'scripts/test-windows-standard-namespace-access.ps1'
+
+permissions:
+  contents: read
+
+jobs:
+  exact-source-namespace:
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: '1.75'
+      - name: Qualify the installed native MSVC environment
+        shell: pwsh
+        run: |
+          ./scripts/activate-windows-msvc.ps1 -ExportToGitHubEnvironment
+      - name: Verify bounded native security descriptor preparation
+        shell: pwsh
+        run: ./scripts/test-windows-standard-namespace-access.ps1
+      - name: Exercise the exact source lease and standard-account controls
+        shell: pwsh
+        run: |
+          # This source diagnostic has no application build or publication path.
+          # Full preflight and signed customer95 qualification remain required.
+          python scripts/test-support-lease.py
+          if ($LASTEXITCODE -ne 0) { throw 'Actual source namespace and attended lease qualification failed.' }
