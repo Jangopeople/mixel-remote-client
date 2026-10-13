@@ -1,5 +1,31 @@
 # Mixel-Remote — Agent Handoff / Current State
 
+## Continuation correction — 2026-10-13
+
+The automatic a19 preflight38355118352 and manual Windows2022/2025
+preflights38355539913/38355542299 completed FAILURE at one stale hosted source
+pin. Their native Standard eight, namespace setup/restoration and packaged95
+were unrun; retain the original results. Each original460 closure was fully
+root-rehashed. Linux and both Mac a19 builds remain a separate immutable baseline.
+
+The correction rebinds only the final observation-source pin to bc64f1bd… in
+three Windows wrappers and two historical inverse controls. Native/product
+bodies, permissions, gates, workflow bytes and all181 other tracked files are
+conserved before this documentation addition. The original historical workflow
+hash stays intact through five exact count==1 approved-control block inverses.
+Root copied-source results are mandatory8 LF13.570s and CRLF12.775s, optional7
+LF5.362s, directory9 LF6.820s and packaged9 LF35.299s, all OK. Owner206 and peer161
+closed proofs are fully root-rehashed. These are source/mock controls, with no
+Windows native account, ACL action or packaged qualification inferred.
+
+Public DSM authentication is now visibly confirmed and the independent PC01
+console is restored. The historical V5 controller currently reports exited at
+2026-10-13T06:18:27Z; that observation is not a root cleanup result. The physical
+Mac remains reserved by the authorized ISM workflow. That workflow found a
+service/tray support-URL delivery gap and another actual accessibility crash;
+its source correction and producer/engine attribution are still under review.
+Fresh final combined package and real desktop acceptance remain mandatory.
+
 ## Current checkpoint — 2026-10-13 (acceptance remains open)
 
 Verified code checkpoint is `104d5bf5face1bd08a3936669e49de5fad94940a`, tree

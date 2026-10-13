@@ -123,7 +123,7 @@ if($generated.IndexOf('Start-StandardValidQaNamespace') -lt 0 -or $generated.Ind
         # in the stopped full8 wrapper. Runtime setup/functions remain identical.
         driver = DRIVER.read_bytes()
         # Restore only exact final-carrier pins before the historical whole-file proof.
-        for actual, original in [(b'012ad7b7a2e52ddc7bd1c2c7aae63b7726187dab2d6aa2291bbb39de82928dec', b'765b98c6324161018321eadb3528a14a844dc4dd1bee1df158c9f68db6c8af8e'), (b'd11b25c95232544eb64f5de78f0e31cbc54630dd832185c55edfb4a3157cd604', b'f1051afc3860751cfea233216fa65cd1f7e29b639200f648c203dafc294530a9'), (b'410b9b1e86a39c6e7a4b5c9b7ba46b88ae4300ce814a0624e8e7af6462ae3930', b'6f1ea99ec821be91fe88c13d8b62743346265e145b694dc4f05a60e94bcb121e')]:
+        for actual, original in [(b'012ad7b7a2e52ddc7bd1c2c7aae63b7726187dab2d6aa2291bbb39de82928dec', b'765b98c6324161018321eadb3528a14a844dc4dd1bee1df158c9f68db6c8af8e'), (b'd11b25c95232544eb64f5de78f0e31cbc54630dd832185c55edfb4a3157cd604', b'f1051afc3860751cfea233216fa65cd1f7e29b639200f648c203dafc294530a9'), (b'bc64f1bd16d32d201de7654b04f26074428a742f896d18977a6012408329a75e', b'6f1ea99ec821be91fe88c13d8b62743346265e145b694dc4f05a60e94bcb121e')]:
             self.assertEqual(driver.count(actual), 1)
             driver = driver.replace(actual, original, 1)
         current = b'c562cf11de6dc395d4a6aae6d887dbe7fb970603bde74c8e4d111ac26956eb76'
@@ -143,6 +143,18 @@ if($generated.IndexOf('Start-StandardValidQaNamespace') -lt 0 -or $generated.Ind
             '- name: Observe six original World children around an exactly restored temporary directory DACL').replace(
             'run: ./scripts/observe-standard-valid-qa-windows.ps1 -EvidenceDirectory session-directory-aba-proof',
             'run: ./scripts/observe-session-directory-aba-windows.ps1 -EvidenceDirectory session-directory-aba-proof')
+        # Reverse only the exact approved control additions after the historical
+        # optional-wrapper baseline; the original whole-workflow pin stays intact.
+        later_controls = (
+            '          python3 scripts/test-pinned-source-archives.py\n',
+            '          targets: x86_64-unknown-linux-gnu,x86_64-pc-windows-msvc,aarch64-apple-darwin\n',
+            '          python3 scripts/test-support-native-warnings.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --source-only --output "$RUNNER_TEMP/mixel-native-warning-source"\n          python3 scripts/test-macos-update.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --source-only\n          python3 scripts/test-support-file-transfer-window.py --app "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --output "$RUNNER_TEMP/mixel-file-transfer-source" --flutter "$(command -v flutter)"\n',
+            '          python3 scripts/test-support-keyboard-default.py --source rustdesk --source-root "$PWD" --evidence-dir "$RUNNER_TEMP/mixel-keyboard-default-source" --linux-sysroot "$(rustc --print sysroot)"\n          python3 scripts/test-support-uinput-scroll.py --source rustdesk --evidence-dir "$RUNNER_TEMP/mixel-uinput-wheel-source" --linux-sysroot "$(rustc --print sysroot)"\n          python3 scripts/test-support-uinput-device.py --source rustdesk --wheel-helper scripts/patch-support-uinput-scroll.py --output "$RUNNER_TEMP/mixel-uinput-device-source" --rustc "$(command -v rustc)" --linux-sysroot "$(rustc --print sysroot)"\n          RUSTC_BIN="$(rustup which rustc)" python3 scripts/test-support-fingerprint.py --source rustdesk --evidence-dir "$RUNNER_TEMP/mixel-fingerprint-source"\n          RUSTC_BIN="$(rustup which rustc)" python3 scripts/test-support-fatal-crash.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --upstream-repo rustdesk --evidence-dir "$RUNNER_TEMP/mixel-fatal-crash-source" --linux-sysroot "$(rustc --print sysroot)"\n',
+            '          python3 scripts/test-support-native-warnings.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --source-only --output "$RUNNER_TEMP/mixel-native-warning-source"\n          RUSTC_BIN="$(rustup which rustc)" python3 scripts/test-macos-update.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf"\n      - name: Prove native fatal-crash handling with isolated owned children\n        run: RUSTC_BIN="$(rustup which rustc)" python3 scripts/test-support-fatal-crash.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --upstream-repo rustdesk --evidence-dir "$RUNNER_TEMP/mixel-fatal-crash-source"\n',
+        )
+        for control in later_controls:
+            self.assertEqual(restored.count(control), 1)
+            restored = restored.replace(control, '', 1)
         self.assertEqual(hashlib.sha256(restored.encode()).hexdigest(),
                          'e8c4e5fd3f7ee7126867122dca7e5e86b6e4e12eff80aec9f1307b3abd4654e4')
         job = workflow.split('\n  session-directory-access-observation:', 1)[1]
@@ -152,7 +164,7 @@ if($generated.IndexOf('Start-StandardValidQaNamespace') -lt 0 -or $generated.Ind
         self.assertNotIn('continue-on-error', job)
         original_test = (SCRIPTS / 'test-session-directory-access.py').read_bytes().replace(
             b"job.index('observe-standard-valid-qa-windows.ps1')", b"job.index('observe-session-directory-aba-windows.ps1')")
-        projection = "        # Reverse only the exact final-carrier source-family pin rebindings.\n        for current, original in [('012ad7b7a2e52ddc7bd1c2c7aae63b7726187dab2d6aa2291bbb39de82928dec', '765b98c6324161018321eadb3528a14a844dc4dd1bee1df158c9f68db6c8af8e'), ('d11b25c95232544eb64f5de78f0e31cbc54630dd832185c55edfb4a3157cd604', 'f1051afc3860751cfea233216fa65cd1f7e29b639200f648c203dafc294530a9'), ('410b9b1e86a39c6e7a4b5c9b7ba46b88ae4300ce814a0624e8e7af6462ae3930', '6f1ea99ec821be91fe88c13d8b62743346265e145b694dc4f05a60e94bcb121e')]:\n            self.assertEqual(wrapper.count(current), 1)\n            wrapper = wrapper.replace(current, original, 1)\n"
+        projection = "        # Reverse only the exact final-carrier source-family pin rebindings.\n        for current, original in [('012ad7b7a2e52ddc7bd1c2c7aae63b7726187dab2d6aa2291bbb39de82928dec', '765b98c6324161018321eadb3528a14a844dc4dd1bee1df158c9f68db6c8af8e'), ('d11b25c95232544eb64f5de78f0e31cbc54630dd832185c55edfb4a3157cd604', 'f1051afc3860751cfea233216fa65cd1f7e29b639200f648c203dafc294530a9'), ('bc64f1bd16d32d201de7654b04f26074428a742f896d18977a6012408329a75e', '6f1ea99ec821be91fe88c13d8b62743346265e145b694dc4f05a60e94bcb121e')]:\n            self.assertEqual(wrapper.count(current), 1)\n            wrapper = wrapper.replace(current, original, 1)\n"
         self.assertEqual(original_test.count(projection.encode()), 1)
         original_test = original_test.replace(projection.encode(), b'', 1)
         self.assertEqual(hashlib.sha256(original_test).hexdigest(),

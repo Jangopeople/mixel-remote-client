@@ -206,7 +206,7 @@ $pins=ConvertFrom-Json @'
   "test-support-lease.py": "d11b25c95232544eb64f5de78f0e31cbc54630dd832185c55edfb4a3157cd604",
   "test-support-nt-event-binding.cs": "4f166e8e0fbdce7a5fb6786862e031c5bb175704e7490a0e4a9feaac9fac62ca",
   "test-support-nt-event-child.rs": "80cf1b1969b66568910d3a84ba46d4749db1c5744aac21b69777cd795dc0b034",
-  "test-windows-lease-observation.py": "410b9b1e86a39c6e7a4b5c9b7ba46b88ae4300ce814a0624e8e7af6462ae3930"
+  "test-windows-lease-observation.py": "bc64f1bd16d32d201de7654b04f26074428a742f896d18977a6012408329a75e"
 }
 '@
 foreach ($pin in $pins.PSObject.Properties) {

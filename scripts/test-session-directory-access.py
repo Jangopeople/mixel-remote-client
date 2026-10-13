@@ -183,7 +183,7 @@ class Controls(unittest.TestCase):
                          'bf291d27fcdb4aec3cae1b19b29f70491c74159dafba5e49642746cbf6233379')
         wrapper=WRAPPER.read_text(encoding='utf-8')
         # Reverse only the exact final-carrier source-family pin rebindings.
-        for current, original in [('012ad7b7a2e52ddc7bd1c2c7aae63b7726187dab2d6aa2291bbb39de82928dec', '765b98c6324161018321eadb3528a14a844dc4dd1bee1df158c9f68db6c8af8e'), ('d11b25c95232544eb64f5de78f0e31cbc54630dd832185c55edfb4a3157cd604', 'f1051afc3860751cfea233216fa65cd1f7e29b639200f648c203dafc294530a9'), ('410b9b1e86a39c6e7a4b5c9b7ba46b88ae4300ce814a0624e8e7af6462ae3930', '6f1ea99ec821be91fe88c13d8b62743346265e145b694dc4f05a60e94bcb121e')]:
+        for current, original in [('012ad7b7a2e52ddc7bd1c2c7aae63b7726187dab2d6aa2291bbb39de82928dec', '765b98c6324161018321eadb3528a14a844dc4dd1bee1df158c9f68db6c8af8e'), ('d11b25c95232544eb64f5de78f0e31cbc54630dd832185c55edfb4a3157cd604', 'f1051afc3860751cfea233216fa65cd1f7e29b639200f648c203dafc294530a9'), ('bc64f1bd16d32d201de7654b04f26074428a742f896d18977a6012408329a75e', '6f1ea99ec821be91fe88c13d8b62743346265e145b694dc4f05a60e94bcb121e')]:
             self.assertEqual(wrapper.count(current), 1)
             wrapper = wrapper.replace(current, original, 1)
         self.assertEqual(wrapper.count(hashlib.sha256(CS.read_bytes()).hexdigest()),1)
