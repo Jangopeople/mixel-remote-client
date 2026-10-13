@@ -416,7 +416,8 @@ def full_branding(out, upstream, bash):
     for name in ('apply-branding.sh', 'patch-support-flutter-sdk-compatibility.py',
                  'test-support-flutter-sdk-compatibility.py', 'patch-support-macos-termination.py',
                  'patch-support-file-transfer-window.py', 'test-support-file-transfer-window.py',
-                 'patch-support-keyboard-default.py'):
+                 'patch-support-keyboard-default.py',
+                 'patch-support-uinput-scroll.py'):
         (copied / 'scripts' / name).write_bytes((ROOT / 'scripts' / name).read_bytes())
     script = copied / 'scripts/apply-branding.sh'
     text = script.read_text(encoding='utf-8')

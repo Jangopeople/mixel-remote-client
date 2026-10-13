@@ -282,7 +282,8 @@ def full_branding(out,bash):
                  'patch-support-flutter-sdk-compatibility.py','test-support-flutter-sdk-compatibility.py',
                  'test-support-flutter-analysis.py','test-support-macos-cleanup.py','test-support-macos-window.py',
                  'patch-support-file-transfer-window.py','test-support-file-transfer-window.py',
-                 'patch-support-keyboard-default.py'):
+                 'patch-support-keyboard-default.py',
+                 'patch-support-uinput-scroll.py'):
         shutil.copy2(ROOT/'scripts'/name,copied/'scripts'/name)
     verifier=copied/'scripts/patch-support-macos-cleanup.py'
     verifier_lf,_=P.normalize(verifier.read_bytes())
@@ -921,7 +922,7 @@ def main():
     analysis=importlib.util.module_from_spec(analysis_spec); analysis_spec.loader.exec_module(analysis)
     bash=analysis.branding_bash(args.bash,os.name=='nt')
     args.source=args.source.resolve()
-    args.output=args.output.resolve() if args.output else Path(tempfile.mkdtemp(prefix='mixel-app-exit-test-'))/'controls'
+    args.output=args.output.resolve() if args.output else (Path(tempfile.mkdtemp(prefix='mixel-app-exit-test-'))/'controls').resolve()
     for name in ('framework','app','flutter'):
         value=getattr(args,name)
         if value is not None: setattr(args,name,value.resolve())

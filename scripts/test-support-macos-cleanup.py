@@ -170,7 +170,8 @@ def full_branding(out, files, source, bash=None):
                  "test-support-flutter-sdk-compatibility.py","test-support-flutter-analysis.py",
                  "test-support-macos-termination.py","test-support-macos-window.py",
                  "patch-support-file-transfer-window.py","test-support-file-transfer-window.py",
-                 "patch-support-keyboard-default.py"):
+                 "patch-support-keyboard-default.py",
+                 "patch-support-uinput-scroll.py"):
         shutil.copyfile(ROOT/"scripts"/name,copied/"scripts"/name)
     script=copied/"scripts/apply-branding.sh"
     original=script.read_text()
@@ -1174,7 +1175,7 @@ def main():
     parser.add_argument("--bash",type=Path,help="Actual active Git Bash executable; required full path for Windows --full-branding")
     args=parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="mixel-cleanup-control-") as temporary:
-        out=args.evidence_dir.resolve() if args.evidence_dir else Path(temporary)
+        out=args.evidence_dir.resolve() if args.evidence_dir else Path(temporary).resolve()
         out.mkdir(parents=True,exist_ok=True)
         files=source_files(args.source)
         materialization(out,files)

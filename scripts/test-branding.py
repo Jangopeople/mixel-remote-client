@@ -96,7 +96,7 @@ def runtime_refusal_controls(paths: list[str]) -> None:
 
 
 with tempfile.TemporaryDirectory(prefix="mixel-branding-") as directory:
-    base = Path(directory)
+    base = Path(directory).resolve()
     repo = base / "rustdesk"
     run(["git", "clone", "--quiet", "--shared", "--branch", "1.4.6", str(SOURCE), str(repo)])
     run(["git", "clone", "--quiet", "--shared", str(SOURCE / "libs/hbb_common"), str(repo / "libs/hbb_common")])
@@ -635,7 +635,7 @@ print("PASS: actual Debian generator child explicitly uses UTF-8 and preserves t
     rejected = subprocess.run(BRANDING_COMMAND, cwd=base, env=env, capture_output=True, text=True, encoding="utf-8")
     assert snapshot(repo) == before_rejected_footer, "Changed footer refusal must precede any pipeline mutation"
     footer_source.write_text(original_footer, encoding="utf-8")
-    assert rejected.returncode != 0 and "Changed application-exit current source: flutter/lib/common.dart" in rejected.stderr, rejected.stderr[-4000:]
+    assert rejected.returncode != 0 and "Pinned file-transfer window source changed: flutter/lib/common.dart" in rejected.stderr, rejected.stderr[-4000:]
     assert full_source_snapshot(repo) == pristine, "Footer corruption control changed the composed baseline"
     print("PASS: full branding rejects a changed Flutter footer instead of retaining an unverified destination")
 

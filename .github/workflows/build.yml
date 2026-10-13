@@ -293,6 +293,7 @@ jobs:
           python3 scripts/test-support-signals.py
           python3 scripts/test-support-input.py
           python3 scripts/test-support-keyboard-default.py --source rustdesk --source-root "$PWD" --evidence-dir "$RUNNER_TEMP/mixel-keyboard-default-source" --linux-sysroot "$(rustc --print sysroot)"
+          python3 scripts/test-support-uinput-scroll.py --source rustdesk --evidence-dir "$RUNNER_TEMP/mixel-uinput-wheel-source" --linux-sysroot "$(rustc --print sysroot)"
           python3 scripts/test-support-clipboard.py --native-x11
           python3 scripts/test-support-video.py
           python3 scripts/test-support-macos.py

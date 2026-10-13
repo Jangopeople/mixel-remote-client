@@ -427,7 +427,8 @@ def pipeline(out,source,bash):
                  "test-support-macos-cleanup.py","test-support-macos-window.py",
                  "patch-support-macos-rdev.py","patch-support-input.py",
                  "patch-support-file-transfer-window.py","test-support-file-transfer-window.py",
-                 "patch-support-keyboard-default.py"):
+                 "patch-support-keyboard-default.py",
+                 "patch-support-uinput-scroll.py"):
         shutil.copyfile(ROOT/"scripts"/name,copied/"scripts"/name)
     script=copied/"scripts/apply-branding.sh"
     shell_source="$"+"{BASH_SOURCE[0]}"
@@ -800,7 +801,7 @@ def main():
         parser.error("--flutter and --analysis-checkout must be supplied together")
     bash=branding_bash(args.bash,os.name=="nt")
     with tempfile.TemporaryDirectory(prefix="mixel-flutter-analysis-") as temporary:
-        out=args.evidence_dir.resolve() if args.evidence_dir else Path(temporary)
+        out=args.evidence_dir.resolve() if args.evidence_dir else Path(temporary).resolve()
         out.mkdir(parents=True,exist_ok=True)
         encoding_controls(out)
         captured_stdout_controls(out)
