@@ -92,6 +92,38 @@ function Write-OwnedDesktopIdentityDiagnostic([int]$OwnedPid, [string]$ExpectedS
   Write-Host ('FIXTURE: fatal owned desktop identity observation; ' + ($record | ConvertTo-Json -Depth 4 -Compress))
 }
 
+function Complete-OwnedNoncanonicalExitedDesktopControl([int]$OwnedPid, [string]$ExpectedSid,
+    [string]$Mode, [System.Collections.Generic.List[object]]$Controls) {
+  # A failed minimal-rights trial is diagnostic only; the canonical trial still
+  # has to create a visible window/menu through the original mandatory gate.
+  if ($Mode -cnotin @('minimal-before', 'minimal-after')) { return $false }
+  $nativeStatus=[MixelOrdinaryTokenFixture]::StartedStatus($OwnedPid)
+  if ($nativeStatus -ceq 'still-running') { return $false }
+  if ($nativeStatus -cnotmatch '^exited:0x[0-9a-f]{8}$') { throw 'Owned native desktop control exit status is unverified.' }
+  $primary=[MixelOrdinaryTokenFixture]::ObserveOwnedDesktopPrimary($OwnedPid,$ExpectedSid)
+  $callerSession=(Get-Process -Id $PID).SessionId
+  $confirmedStatus=[MixelOrdinaryTokenFixture]::StartedStatus($OwnedPid)
+  $verified=($confirmedStatus -ceq $nativeStatus -and $primary.pid -eq $OwnedPid -and
+    $primary.retainedPidMatched -eq $true -and $primary.status -ceq 'available' -and
+    $primary.operation -ceq 'complete' -and $null -eq $primary.failureType -and
+    $null -eq $primary.nativeError -and $null -eq $primary.tokenCloseError -and
+    $primary.ownedSidMatched -eq $true -and $primary.elevated -eq $false -and
+    $null -ne $callerSession -and $primary.tokenSessionId -eq $callerSession -and
+    $primary.tokenOpened -eq $true -and $primary.tokenCloseAttempted -eq $true -and
+    $primary.tokenClosed -eq $true)
+  Write-Host ('FIXTURE: noncanonical owned desktop exit observation; ' + ([ordered]@{
+    schema=1; mode=$Mode; ownedPid=$OwnedPid; nativeStatus=$nativeStatus;
+    confirmedNativeStatus=$confirmedStatus; callerSession=$callerSession;
+    primaryToken=$primary; identityVerified=$verified; failedDiagnostic=$true;
+    canonicalQualified=$false
+  } | ConvertTo-Json -Depth 4 -Compress))
+  if (-not $verified) { throw 'Owned desktop control is not a genuine non-elevated process in the runner session.' }
+  $Controls.Add([pscustomobject]@{mode=$Mode; passed=$false; pid=$OwnedPid;
+    nativeStatus=$nativeStatus; result=@{}})
+  Write-Host "DIAGNOSTIC: $Mode control exited before its identity/window snapshot; nativeStatus=$nativeStatus."
+  return $true
+}
+
 # Compile the exact native OS fixture used by the real ordinary-to-QS runtime
 # test; its policy checks are testable without launching or changing an app.
 $launchSource = Get-Content (Join-Path $PSScriptRoot 'test-support-launch-windows.ps1') -Raw
@@ -340,10 +372,18 @@ public static class MixelOwnedDesktopControl {
       $guiProfile = $true
       $guiStartedAt = [DateTime]::UtcNow
       $guiPid = [MixelOrdinaryTokenFixture]::StartStandardUser($guiExecutable, $ownedUser, $ownedPassword)
-      $guiProcess = Get-Process -Id $guiPid
+      if (Complete-OwnedNoncanonicalExitedDesktopControl $guiPid $ownedSid $mode $desktopControls) { continue }
+      try { $guiProcess = Get-Process -Id $guiPid }
+      catch {
+        if ($_.FullyQualifiedErrorId -ceq 'NoProcessFoundForGivenId,Microsoft.PowerShell.Commands.GetProcessCommand' -and
+            (Complete-OwnedNoncanonicalExitedDesktopControl $guiPid $ownedSid $mode $desktopControls)) { continue }
+        throw
+      }
       $guiElevated=[MixelOrdinaryTokenFixture]::Elevated($guiPid)
       $predicateChildSession=$null; $predicateCallerSession=$null
       if ($guiElevated -or ($predicateChildSession=$guiProcess.SessionId) -ne ($predicateCallerSession=(Get-Process -Id $PID).SessionId)) {
+        if (-not $guiElevated -and $null -eq $predicateChildSession -and
+            (Complete-OwnedNoncanonicalExitedDesktopControl $guiPid $ownedSid $mode $desktopControls)) { continue }
         try { Write-OwnedDesktopIdentityDiagnostic $guiPid $ownedSid $mode $guiElevated $predicateChildSession $predicateCallerSession }
         catch { try { Write-Host ('FIXTURE: fatal owned desktop identity diagnostic emission failed; exceptionType=' + $_.Exception.GetType().FullName) } catch {} }
         throw 'Owned desktop control is not a genuine non-elevated process in the runner session.'
