@@ -200,7 +200,7 @@ $pins=ConvertFrom-Json @'
   "test-session-directory-access.cs": "c562cf11de6dc395d4a6aae6d887dbe7fb970603bde74c8e4d111ac26956eb76",
   "test-standard-qa-session-directory.cs": "310b613adc779fed71c2d2bc689041b6cfd07750dd7b9dff5f786c9c446c51a8",
   "test-support-directory-security.cs": "3f70bcef70508b264a9559dbb9f7fc9bdbb0c3e28ea7929008dc084dec6d973e",
-  "test-support-launch-windows.ps1": "a223245ce2299e341f25f2e3d035ae41ea940622bd6bdba43295e3c63036c4dd",
+  "test-support-launch-windows.ps1": "c1f3e99ebda0a146bce9b54f215feeebd0c6d19bec19f2a280259d311983c44b",
   "test-support-lease-standard-windows.ps1": "c2897356a81f5410789fcebab4e845639a329da892b41cff4675aa08bc17f15e",
   "test-support-lease.py": "bdba6cc24c0b247de85a3bcda79744dd932f00bb6e97d038eba14a7e43d1db64",
   "test-support-nt-event-binding.cs": "4f166e8e0fbdce7a5fb6786862e031c5bb175704e7490a0e4a9feaac9fac62ca",

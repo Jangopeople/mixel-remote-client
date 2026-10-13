@@ -1846,7 +1846,12 @@ try {
     }
     $finalHealth = Get-MixelSupportRuntimeHealth
     Assert-OwnedIncomingHealth $finalHealth
-    if (-not $finalHealth.attendedReady -or -not [MixelOrdinaryTokenFixture]::OwnsLease($main.Id)) { throw 'Foreground consent did not outlive the 90s memory deadline.' }
+    [uint32]$finalWindowOwner = 0
+    [uint32]$finalWindowThread = [MixelSupportWindowTest]::GetWindowThreadProcessId($originalWindow, [ref]$finalWindowOwner)
+    if (-not $finalHealth.attendedReady -or -not [MixelOrdinaryTokenFixture]::OwnsLease($main.Id) -or
+        $finalWindowThread -eq 0 -or $finalWindowOwner -ne $main.Id -or
+        -not [MixelSupportWindowTest]::IsWindowVisible($originalWindow) -or
+        [MixelSupportWindowTest]::IsIconic($originalWindow)) { throw 'Foreground consent or the same owned visible HWND did not outlive the 90s memory deadline.' }
     $handoffKind = if ($Portable) { 'actual customer QS portable launcher' } else { 'exact signed compiled QS argument (diagnostic)' }
     Write-Host "PASS: genuine ordinary GUI -> $handoffKind restores the same PID/HWND, and that foreground PID owns the kernel consent lease with v2 readiness after $([int]$started.Elapsed.TotalSeconds)s beyond the 90s memory deadline; transient launcher exited; foregroundPid=$($main.Id), incomingPipePid=$($finalHealth.incomingPid), hwnd=$($originalWindow.ToInt64())."
   }

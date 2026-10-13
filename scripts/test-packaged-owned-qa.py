@@ -24,10 +24,17 @@ HISTORICAL_ORIGINAL_SHA='765b98c6324161018321eadb3528a14a844dc4dd1bee1df158c9f68
 # Exact composed launcher after reversing only this three-function adapter.
 # Historical owner identity remains in the literal query binding below.
 ORIGINAL_SHA='8d68c6edd8928b64048cf533f16227fe8de144679e3ddab97d8f39e339c34e10'
+
+# Reverse only the exact final completion sample before historical whole-source proofs.
+TERMINAL_PREVIOUS="    if (-not $finalHealth.attendedReady -or -not [MixelOrdinaryTokenFixture]::OwnsLease($main.Id)) { throw 'Foreground consent did not outlive the 90s memory deadline.' }"
+TERMINAL_CURRENT="    [uint32]$finalWindowOwner = 0\n    [uint32]$finalWindowThread = [MixelSupportWindowTest]::GetWindowThreadProcessId($originalWindow, [ref]$finalWindowOwner)\n    if (-not $finalHealth.attendedReady -or -not [MixelOrdinaryTokenFixture]::OwnsLease($main.Id) -or\n        $finalWindowThread -eq 0 -or $finalWindowOwner -ne $main.Id -or\n        -not [MixelSupportWindowTest]::IsWindowVisible($originalWindow) -or\n        [MixelSupportWindowTest]::IsIconic($originalWindow)) { throw 'Foreground consent or the same owned visible HWND did not outlive the 90s memory deadline.' }"
+def restore_terminal_sample(source):
+ if source.count(TERMINAL_CURRENT)!=1:raise AssertionError('Exact terminal HWND assertion changed')
+ return source.replace(TERMINAL_CURRENT,TERMINAL_PREVIOUS,1)
 QUERY_SHA='539659449688beb79c3ff5dee18b817ef6e4c0a0542a5f3b3c735f6c9f4f9f50'
 
 def original_source():
- text=canonical_checkout_text(DRIVER);start=text.index(QUERY_OPEN);end=text.index('$executablePath = (Resolve-Path $Executable).Path',start)
+ text=restore_terminal_sample(canonical_checkout_text(DRIVER));start=text.index(QUERY_OPEN);end=text.index('$executablePath = (Resolve-Path $Executable).Path',start)
  text=text[:start]+text[end:]
  reversals=[
  ("$ordinaryStartedAt = $null\n$script:qaNamespaceScope=$null\n$script:qaNamespaceCleanupOkay=$true","$ordinaryStartedAt = $null"),
@@ -137,6 +144,79 @@ $script:namespaceAccess=$null;$script:namespaceRestorationKnown=$true;$script:na
 [MixelCI.StandardNamespaceAccess]::Mode='normal'
 '''
 class PackagedControls(unittest.TestCase):
+
+ def test_terminal_same_hwnd_and_native_consent_complete_sample(self):
+  # Execute the literal final block and literal incoming-PID/path validator.
+  # Native window/lease calls and health replies are mocked; no Win32 API runs.
+  text=canonical_checkout_text(DRIVER)
+  first='    $finalHealth = Get-MixelSupportRuntimeHealth\n'
+  last='  }\n\n  foreach ($logRoot in @('
+  self.assertEqual(text.count(first),1)
+  self.assertEqual(text.count(last),1)
+  final=text[text.index(first):text.index(last,text.index(first))]
+  self.assertEqual(final.count(TERMINAL_CURRENT),1)
+  old_final=final.replace(TERMINAL_CURRENT,TERMINAL_PREVIOUS,1)
+  mocked=r"""
+public static class MixelSupportWindowTest {
+ public static bool present=true,visible=true,iconic=false; public static uint thread=7,owner=42;
+ public static readonly System.Collections.Generic.List<string> Calls=new System.Collections.Generic.List<string>();
+ public static uint GetWindowThreadProcessId(System.IntPtr window,out uint pid){if(window.ToInt64()!=1001)throw new System.Exception("Foreign window handle queried");Calls.Add("owner");pid=owner;return thread;}
+ public static bool IsWindowVisible(System.IntPtr window){if(window.ToInt64()!=1001)throw new System.Exception("Foreign window handle queried");Calls.Add("visible");return present&&visible;}
+ public static bool IsIconic(System.IntPtr window){if(window.ToInt64()!=1001)throw new System.Exception("Foreign window handle queried");Calls.Add("iconic");return iconic;}
+}
+public static class MixelOrdinaryTokenFixture {
+ public static bool lease=true;
+ public static bool OwnsLease(int pid){if(pid!=42)throw new System.Exception("Foreign process lease queried");return lease;}
+}
+"""
+  body=r"""
+$t=$null;$e=$null;$tree=[Management.Automation.Language.Parser]::ParseFile('__DRIVER__',[ref]$t,[ref]$e)
+if($e.Count){throw 'Complete current launcher parse failed'}
+$functions=@($tree.EndBlock.Statements|Where-Object{$_ -is [Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -ceq 'Assert-OwnedIncomingHealth'})
+if($functions.Count-ne 1){throw 'Literal PID/path validator missing'}
+. ([scriptblock]::Create($functions[0].Extent.Text))
+function Get-MixelSupportRuntimeHealth{return [pscustomobject]@{incomingPid=$script:replyPid;attendedReady=$script:ready}}
+function Get-Process{param($Id);return [pscustomobject]@{Id=$Id;Path=$script:processPath}}
+$main=[pscustomobject]@{Id=42};$before=@(1,2);$baselineIncomingPid=42
+$runtimePath='owned-payload.exe';$ordinaryRoot=$null;$originalWindow=[IntPtr]1001
+$Portable=$true;$started=[pscustomobject]@{Elapsed=[pscustomobject]@{TotalSeconds=95}}
+$newBlock=__NEW__; $oldBlock=__OLD__
+foreach($profile in @('historical','current')){
+ foreach($case in @('visible','invisible','iconic','invalid-hwnd','thread-zero','wrong-window-owner','no-attended','no-lease','wrong-incoming','foreign-path','preexisting-pid')){
+  [MixelSupportWindowTest]::present=$true;[MixelSupportWindowTest]::visible=$true;[MixelSupportWindowTest]::iconic=$false
+  [MixelSupportWindowTest]::Calls.Clear();[MixelSupportWindowTest]::thread=7;[MixelSupportWindowTest]::owner=42;[MixelOrdinaryTokenFixture]::lease=$true
+  $script:ready=$true;$script:replyPid=42;$script:processPath='owned-payload.exe'
+  switch($case){
+   'invisible'{[MixelSupportWindowTest]::visible=$false}
+   'iconic'{[MixelSupportWindowTest]::iconic=$true}
+   'invalid-hwnd'{[MixelSupportWindowTest]::present=$false}
+   'thread-zero'{[MixelSupportWindowTest]::thread=0}
+   'wrong-window-owner'{[MixelSupportWindowTest]::owner=43}
+   'no-attended'{$script:ready=$false}
+   'no-lease'{[MixelOrdinaryTokenFixture]::lease=$false}
+   'wrong-incoming'{$script:replyPid=43}
+   'foreign-path'{$script:processPath='foreign-payload.exe'}
+   'preexisting-pid'{$script:replyPid=1}
+  }
+  $failed=$null;$captured=@();$block=if($profile-ceq 'current'){$newBlock}else{$oldBlock}
+  try{$captured=@(& ([scriptblock]::Create($block)) 6>&1)}catch{$failed=$_}
+  $shouldFail=if($profile-ceq 'current'){$case-cne 'visible'}else{$case-notin @('visible','invisible','iconic','invalid-hwnd','thread-zero','wrong-window-owner')}
+  if(($null-ne $failed)-ne $shouldFail){throw ('Wrong terminal outcome '+$profile+' '+$case)}
+  if($profile-ceq 'current' -and $case-ceq 'visible'){
+   if(([MixelSupportWindowTest]::Calls -join ',')-cne 'owner,visible,iconic'){throw 'Final HWND queries changed'}
+   if(($captured -join ' ')-cnotmatch 'same PID/HWND.*95s.*foregroundPid=42, incomingPipePid=42, hwnd=1001'){throw 'Actual final success identity/output changed'}
+  }
+  if($failed -and ($captured -join ' ')-match 'PASS: genuine ordinary GUI'){throw 'Failed final sample emitted acceptance'}
+  'OBSERVED: '+$profile+' '+$case+' terminalFailed='+($null-ne $failed)
+ }
+}
+'PASS: literal final completion22 outcomes; historical hidden/iconic/invalid/zero-thread/foreign-owner HWND acceptance reproduced; corrected rejects them and retains PID/path/preexisting/v2/kernel refusal; no native or duration claim.'
+""".replace('__DRIVER__',str(DRIVER).replace("'","''"))
+  quote=lambda value:"@'\n"+value+"\n'@"
+  body=body.replace('__NEW__',quote(final)).replace('__OLD__',quote(old_final))
+  result=invoke(body,mocked)
+  self.assertEqual(result.count('OBSERVED:'),22)
+  print(result.strip())
  def test_historical_mask15_scope_faults_remain_separate_from_current_adapter(self):
   candidate=canonical_checkout_text(DRIVER)
   start=candidate.index('function Start-OwnedPackagedQaNamespace {');end=candidate.index('function Restore-OwnedPackagedQaNamespace',start)
@@ -168,7 +248,7 @@ foreach($mode in @('normal','set-false','set-zero-false','set-throw','query-fail
   body+="try{[MixelHostedQaNamespace+NativeApi]::new('UnqualifiedSourceControl')|Out-Null;throw 'Unexpected local host constructor'}catch{if($_.Exception.Message -ceq 'Unexpected local host constructor'){throw}}\n'PASS: complete shared native ABI warning-fatal compilation; exact local host refusal before native Open.'\n"
   print(invoke(body).strip())
  def test_original_whole_functions_and_all_runtime_gates_conserved(self):
-  original=original_source();candidate=canonical_checkout_text(DRIVER)
+  original=original_source();candidate=restore_terminal_sample(canonical_checkout_text(DRIVER))
   body=r'''
 $t=$null;$e=$null;$a=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'original.ps1'),[ref]$t,[ref]$e);if($e.Count){throw 'Original parse'}
 $t=$null;$e=$null;$b=[Management.Automation.Language.Parser]::ParseFile('__NEW__',[ref]$t,[ref]$e);if($e.Count){throw 'Candidate parse'}

@@ -448,8 +448,8 @@ class DiagnosticControls(unittest.TestCase):
 
     def test_frozen_helper_contract_and_complete_source_parse(self):
         contract = v.helper_contract(ROOT)
-        self.assertEqual(contract["scripts/test-support-launch-macos-tray.py"], "586028ad845a1ec66637ce06a72be006d86895a87107c1ff3f536d171cbe04ac")
-        self.assertEqual(contract["scripts/test-support-launch-macos-tray-controls.py"], "6d5c919e1556df611227ffc79e9f2880d5467aef2a2eefb1053da02f00064beb")
+        self.assertEqual(contract["scripts/test-support-launch-macos-tray.py"], "80ebc3255a3898c9feb23c68e06fee28efb74109e5d30460b3ddb9e651ade9b4")
+        self.assertEqual(contract["scripts/test-support-launch-macos-tray-controls.py"], "b06623ec893cdcf43b3b27670eadbe12f49d4491d012d8b88debe88fb4e6184d")
         for source in (ROOT / "scripts").glob("*.py"):
             ast.parse(source.read_bytes(), filename=str(source))
 

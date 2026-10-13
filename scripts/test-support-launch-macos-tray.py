@@ -8,6 +8,7 @@ It never connects to a remote desktop or grants customer/OS permissions.
 import argparse
 import ctypes
 from datetime import datetime, timezone
+import errno
 import hashlib
 import importlib.util
 import json
@@ -185,9 +186,124 @@ def launch_identity(helper, app, pid):
     return value
 
 
+def gui_birth(app, pid, retained=None):
+    # A tray-spawned GUI is not launched by LaunchServices. AppKit's optional
+    # launchDate is not a birth lease for it; use immutable Darwin kernel data.
+    # SDK sys/proc_info.h: PROC_PIDTBSDINFO=3, proc_bsdinfo=136 bytes,
+    # pbi_pid/uid at 12/20 and pbi_start_tvsec/tvusec at 120/128.
+    if type(pid) is not int or not 0 < pid <= 0x7fffffff:
+        raise RuntimeError("GUI kernel birth PID is invalid")
+    uid = os.getuid()
+    if type(uid) is not int or not 0 < uid <= 0xffffffff:
+        raise RuntimeError("GUI kernel birth UID is invalid")
+    expected = app / "Contents/MacOS/Mixel-Remote"
+    if not app.is_absolute() or app != app.resolve() or expected != expected.resolve():
+        raise RuntimeError("GUI kernel birth application path is not canonical")
+    if retained is not None and (type(retained) is not tuple or len(retained) != 6
+            or retained[0] != "darwin-gui-birth-v1" or type(retained[1]) is not int
+            or retained[1] != pid or type(retained[2]) is not int or retained[2] != uid
+            or type(retained[3]) is not str or retained[3] != str(expected)
+            or type(retained[4]) is not int or not 0 < retained[4] <= time.time() + 5
+            or type(retained[5]) is not int or not 0 <= retained[5] < 1000000):
+        raise RuntimeError("Tray fixture cleanup process identity changed")
+    library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+    library.proc_pidinfo.argtypes = (ctypes.c_int, ctypes.c_int, ctypes.c_uint64,
+                                    ctypes.c_void_p, ctypes.c_int)
+    library.proc_pidinfo.restype = ctypes.c_int
+
+    def record():
+        buffer = ctypes.create_string_buffer(136)
+        ctypes.set_errno(0)
+        count = library.proc_pidinfo(pid, 3, 0, buffer, len(buffer))
+        result_errno = ctypes.get_errno()
+        if retained is not None and type(count) is int and count == 0 and result_errno == errno.ESRCH:
+            return None
+        if type(count) is not int or count != 136:
+            raise RuntimeError("GUI kernel birth record is unavailable or truncated")
+        fields = struct.unpack("=12I16s32s5Ii2Q", buffer.raw)
+        sec, usec = fields[-2:]
+        if (fields[3] != pid or fields[5] != uid or fields[7] != uid
+                or fields[9] != uid or sec <= 0 or sec > time.time() + 5
+                or not 0 <= usec < 1000000):
+            raise RuntimeError("GUI kernel birth record has an invalid PID, UID or start time")
+        if fields[1] not in (1, 2, 3, 4, 5):
+            raise RuntimeError("GUI kernel birth process status is invalid")
+        return (("darwin-gui-birth-v1", pid, uid, str(expected), sec, usec), fields[1])
+
+    if retained is not None:
+        def terminal(observed):
+            if observed is not None:
+                if observed[0] != retained:
+                    raise RuntimeError("Tray fixture cleanup process identity changed")
+                if observed[1] != 5:
+                    return False
+                if record() != observed:
+                    raise RuntimeError("Tray fixture cleanup process identity changed")
+                return True
+            # Darwin reports ESRCH for an exited, unreaped own child even
+            # while kill(pid, 0) still succeeds. Require two absent kernel
+            # records and two absent executable records, each with ESRCH;
+            # permission errors or generic missing metadata never mean exit.
+            library.proc_pidpath.argtypes = (ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32)
+            library.proc_pidpath.restype = ctypes.c_int
+            for observation in range(2):
+                buffer = ctypes.create_string_buffer(4096)
+                ctypes.set_errno(0)
+                count = library.proc_pidpath(pid, buffer, len(buffer))
+                result_errno = ctypes.get_errno()
+                if type(count) is not int or count != 0 or result_errno != errno.ESRCH:
+                    raise RuntimeError("Tray fixture cleanup process identity changed")
+                if observation == 0 and record() is not None:
+                    raise RuntimeError("Tray fixture cleanup process identity changed")
+            return True
+        # SDK sys/proc.h SZOMB=5: awaiting collection by parent. Scheduling
+        # status may change between alive observations; only birth is immutable.
+        first = record()
+        if terminal(first):
+            return None
+        try:
+            if process_path(pid) != expected:
+                raise RuntimeError("Tray fixture cleanup process identity changed")
+        except RuntimeError:
+            if terminal(record()):
+                return None
+            raise
+        second = record()
+        if terminal(second):
+            return None
+        try:
+            if process_path(pid) != expected:
+                raise RuntimeError("Tray fixture cleanup process identity changed")
+        except RuntimeError:
+            if terminal(record()):
+                return None
+            raise
+        return first[0]
+
+    if process_path(pid) != expected:
+        raise RuntimeError("GUI kernel birth executable differs from the exact application")
+    first = record()
+    second = record()
+    if process_path(pid) != expected or second is None or second[0] != first[0]:
+        raise RuntimeError("GUI kernel birth identity changed during observation")
+    if first[1] == 5 or second[1] == 5:
+        raise RuntimeError("GUI kernel birth process is already terminated")
+    return first[0]
+
+
 def terminate_owned(helper, app, pid, launch_time, server_pid):
     def authorize():
-        if process_path(pid) != app / "Contents/MacOS/Mixel-Remote" or launch_identity(helper, app, pid) != launch_time:
+        if type(launch_time) is tuple:
+            if (len(launch_time) != 6 or launch_time[0] != "darwin-gui-birth-v1"
+                    or type(launch_time[1]) is not int or launch_time[1] != pid
+                    or type(launch_time[2]) is not int or launch_time[2] != os.getuid()
+                    or type(launch_time[3]) is not str
+                    or launch_time[3] != str(app / "Contents/MacOS/Mixel-Remote")
+                    or type(launch_time[4]) is not int or launch_time[4] <= 0
+                    or type(launch_time[5]) is not int or not 0 <= launch_time[5] < 1000000
+                    or gui_birth(app, pid) != launch_time):
+                raise RuntimeError("Tray fixture cleanup process identity changed")
+        elif process_path(pid) != app / "Contents/MacOS/Mixel-Remote" or launch_identity(helper, app, pid) != launch_time:
             raise RuntimeError("Tray fixture cleanup process identity changed")
         if not no_connections(server_pid, app):
             raise RuntimeError("Tray fixture cleanup refused an authenticated connection")
@@ -199,7 +315,10 @@ def terminate_owned(helper, app, pid, launch_time, server_pid):
             os.kill(pid, 0)
         except ProcessLookupError:
             return
-        if not desktop.helper_request(helper, "probe", str(pid)).get("running"):
+        if type(launch_time) is tuple:
+            if gui_birth(app, pid, launch_time) is None:
+                return
+        elif not desktop.helper_request(helper, "probe", str(pid)).get("running"):
             return
         time.sleep(0.1)
     authorize()
@@ -210,7 +329,10 @@ def terminate_owned(helper, app, pid, launch_time, server_pid):
             os.kill(pid, 0)
         except ProcessLookupError:
             return
-        if not desktop.helper_request(helper, "probe", str(pid)).get("running"):
+        if type(launch_time) is tuple:
+            if gui_birth(app, pid, launch_time) is None:
+                return
+        elif not desktop.helper_request(helper, "probe", str(pid)).get("running"):
             return
         time.sleep(0.1)
     raise RuntimeError("Owned tray fixture did not exit after termination")
@@ -275,9 +397,13 @@ def runtime(app, helper, facts):
         gui_pid = wait("Distinct customer GUI", lambda: gui_owner(app, server_pid), server_pid)
         facts["guiPid"] = gui_pid
         phase = "customer-gui-launch-identity"
-        gui_launch = launch_identity(helper, app, gui_pid)
+        gui_launch = gui_birth(app, gui_pid)
         phase = "customer-gui-visible"
-        wait("Visible customer GUI", lambda: desktop.probe(helper, gui_pid, app).get("visible"), server_pid)
+        def visible_gui():
+            if gui_owner(app, server_pid) != gui_pid or gui_birth(app, gui_pid) != gui_launch:
+                raise RuntimeError("Tray fixture customer GUI birth or kernel owner changed")
+            return desktop.probe(helper, gui_pid, app).get("visible")
+        wait("Visible customer GUI", visible_gui, server_pid)
         phase = "attended-service-readiness"
         wait("Tray service attended readiness", lambda: health(server_pid, app, True), server_pid)
         facts["visibleGuiAndAttendedV2"] = True
@@ -296,7 +422,7 @@ def runtime(app, helper, facts):
             if gui_pid is None:
                 try:
                     gui_pid = gui_owner(app, server_pid)
-                    gui_launch = launch_identity(helper, app, gui_pid)
+                    gui_launch = gui_birth(app, gui_pid)
                 except (FileNotFoundError, ConnectionRefusedError, socket.timeout):
                     pass
             if gui_pid is not None:

@@ -8,7 +8,9 @@ are replaced by explicit in-memory fixtures. Only disposable local files exist.
 import argparse
 import ast
 import contextlib
+import ctypes
 from datetime import datetime, timezone
+import errno
 import hashlib
 import io
 import json
@@ -110,8 +112,10 @@ def extracted_namespace(source):
     native_os = SimpleNamespace(kill=forbidden, getuid=os.getuid, fsdecode=os.fsdecode,
                                 environ={}, path=os.path)
     namespace = {"__name__": "source_only_tray_gate", "argparse": argparse,
-                 "ctypes": SimpleNamespace(CDLL=forbidden), "datetime": datetime,
-                 "timezone": timezone, "hashlib": hashlib, "json": json,
+                 "ctypes": SimpleNamespace(CDLL=forbidden, c_int=ctypes.c_int,
+                                           c_uint64=ctypes.c_uint64, c_void_p=ctypes.c_void_p,
+                                           create_string_buffer=ctypes.create_string_buffer), "datetime": datetime,
+                 "timezone": timezone, "errno": errno, "hashlib": hashlib, "json": json,
                  "os": native_os, "Path": Path, "plistlib": plistlib,
                  "pwd": SimpleNamespace(getpwuid=forbidden), "signal": signal,
                  "socket": native_socket, "stat": stat, "struct": struct,
@@ -398,6 +402,12 @@ class TrayControls(unittest.TestCase):
         self.n["log_snapshot"] = lambda _: {}
         self.n["process_path"] = lambda _: app / "Contents/MacOS/Mixel-Remote"
         self.n["launch_identity"] = lambda _h, _a, pid: 100 if pid == 101 else 102
+        # Retain all original runtime controls with an explicit synthetic GUI
+        # kernel seam. The new class below executes the actual gui_birth body.
+        self.n["gui_birth"] = lambda _a, pid: (
+            "darwin-gui-birth-v1", pid, os.getuid(),
+            str(self.n["process_path"](pid)),
+            int(self.n["launch_identity"]("synthetic helper", _a, pid)), 0)
         self.n["desktop"].helper_request = lambda _h, action, *_: {"pid": 101, "launchTime": 100 if action == "tray" else activated_time}
         self.n["health"] = lambda *_: True
         self.n["new_tray_marker"] = lambda *_: True
@@ -805,6 +815,350 @@ class TrayControls(unittest.TestCase):
 
 
 
+class KernelBirthControls(unittest.TestCase):
+    def setUp(self):
+        self.n = extracted_namespace(SOURCE)
+        self.app = Path("/synthetic-ci/Mixel-Remote.app")
+        self.path = self.app / "Contents/MacOS/Mixel-Remote"
+        self.calls = []
+        self.responses = []
+        self.raw = self.kernel_record()
+        self.count = 136
+        self.info_errno = 0
+        self.path_responses = []
+        self.library_flags = []
+        control = self
+
+        class ProcPidInfo:
+            def __call__(self, pid, flavor, arg, buffer, size):
+                control.calls.append((pid, flavor, arg, size))
+                response = control.responses.pop(0) if control.responses else (control.raw, control.count)
+                raw, count = response[:2]
+                ctypes.set_errno(response[2] if len(response) == 3 else control.info_errno)
+                ctypes.memmove(buffer, raw, min(len(raw), size))
+                return count
+
+        class ProcPidPath:
+            def __call__(self, pid, buffer, size):
+                count, result_errno = control.path_responses.pop(0) if control.path_responses else (0, errno.ESRCH)
+                ctypes.set_errno(result_errno)
+                return count
+
+        self.library = SimpleNamespace(proc_pidinfo=ProcPidInfo(), proc_pidpath=ProcPidPath())
+        def load_library(path, **flags):
+            self.library_flags.append((path, flags))
+            return self.library
+        self.n["ctypes"] = SimpleNamespace(
+            CDLL=load_library, c_int=ctypes.c_int, c_uint32=ctypes.c_uint32,
+            c_uint64=ctypes.c_uint64, c_void_p=ctypes.c_void_p, get_errno=ctypes.get_errno, set_errno=ctypes.set_errno,
+            create_string_buffer=ctypes.create_string_buffer)
+        self.n["process_path"] = lambda _: self.path
+        self.actual_birth = self.n["gui_birth"]
+
+    def kernel_record(self, pid=102, uid=None, ruid=None, svuid=None, sec=100, usec=7, status=2):
+        uid = os.getuid() if uid is None else uid
+        ruid = uid if ruid is None else ruid
+        svuid = uid if svuid is None else svuid
+        fields = [0, status, 0, pid, 101, uid, 20, ruid, 20, svuid, 20, 0]
+        return struct.pack("=12I16s32s5Ii2Q", *fields, b"private-name", b"private-command",
+                           0, 0, 0, 0, 0, 0, sec, usec)
+
+    def lease(self):
+        return self.actual_birth(self.app, 102)
+
+    def test_missing_launchservices_date_original_refuses_kernel_identity_passes(self):
+        self.n["desktop"].probe = lambda *_: {"running": True, "launchTime": 0}
+        with self.assertRaisesRegex(RuntimeError, "no retained launch identity"):
+            self.n["launch_identity"]("helper", self.app, 102)
+        lease = self.lease()
+        self.assertEqual(lease, ("darwin-gui-birth-v1", 102, os.getuid(), str(self.path), 100, 7))
+        self.assertIs(type(lease), tuple)
+        self.assertEqual(self.calls, [(102, 3, 0, 136)] * 2)
+        self.assertEqual(self.library.proc_pidinfo.argtypes,
+                         (ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int))
+        self.assertIs(self.library.proc_pidinfo.restype, ctypes.c_int)
+        self.assertNotIn("private-name", str(lease))
+        self.assertNotIn("private-command", str(lease))
+
+    def test_kernel_record_refuses_missing_truncated_overlong_and_boolean_counts(self):
+        for count in (0, -1, 135, 137, False, True, 136.0, None):
+            with self.subTest(count=count):
+                self.count = count
+                with self.assertRaisesRegex(RuntimeError, "unavailable or truncated"):
+                    self.lease()
+
+    def test_kernel_record_refuses_wrong_pid_uid_and_invalid_birth(self):
+        for values in ({"pid": 103}, {"uid": os.getuid() + 1},
+                       {"ruid": os.getuid() + 1}, {"svuid": os.getuid() + 1},
+                       {"sec": 0}, {"sec": 206}, {"usec": 1000000}):
+            with self.subTest(values=values):
+                self.raw = self.kernel_record(**values)
+                with self.assertRaisesRegex(RuntimeError, "invalid PID, UID or start time"):
+                    self.lease()
+
+    def test_kernel_birth_refuses_invalid_requested_pid_uid_and_noncanonical_paths(self):
+        for pid in (False, True, 0, -1, 0x80000000, "102", 102.0, None):
+            with self.subTest(pid=pid), self.assertRaises(RuntimeError):
+                self.actual_birth(self.app, pid)
+        for uid in (False, True, 0, -1, 0x100000000, "501", 501.0, None):
+            self.n["os"].getuid = lambda: uid
+            with self.subTest(uid=uid), self.assertRaises(RuntimeError):
+                self.lease()
+        self.n["os"].getuid = os.getuid
+        for app in (Path("relative.app"), Path("/synthetic-ci/../Mixel-Remote.app")):
+            with self.subTest(app=app), self.assertRaises(RuntimeError):
+                self.actual_birth(app, 102)
+        with tempfile.TemporaryDirectory(prefix="mixel-kernel-canonical-", dir=Path(tempfile.gettempdir()).resolve()) as temporary:
+            root = Path(temporary)
+            app = root / "Mixel-Remote.app"
+            binary = app / "Contents/MacOS/Mixel-Remote"
+            binary.parent.mkdir(parents=True)
+            target = root / "different-binary"
+            target.write_bytes(b"not executable")
+            binary.symlink_to(target)
+            with self.assertRaises(RuntimeError):
+                self.actual_birth(app, 102)
+
+    def test_kernel_birth_refuses_executable_or_birth_change_during_double_observation(self):
+        self.n["process_path"] = lambda _: Path("/different-executable")
+        with self.assertRaisesRegex(RuntimeError, "executable differs"):
+            self.lease()
+        paths = iter((self.path, Path("/replacement")))
+        self.n["process_path"] = lambda _: next(paths)
+        with self.assertRaisesRegex(RuntimeError, "identity changed during observation"):
+            self.lease()
+        self.n["process_path"] = lambda _: self.path
+        self.responses = [(self.kernel_record(), 136), (self.kernel_record(usec=8), 136)]
+        with self.assertRaisesRegex(RuntimeError, "identity changed during observation"):
+            self.lease()
+
+    def prepare_termination(self):
+        ticks = iter(range(100))
+        self.n["time"].monotonic = lambda: next(ticks)
+        self.n["time"].sleep = lambda _: None
+        self.n["no_connections"] = lambda *_: True
+        self.n["desktop"].helper_request = forbidden
+        self.signals = []
+
+    def test_gui_termination_needs_no_appkit_launch_date_and_checks_birth_before_each_signal(self):
+        self.prepare_termination()
+        lease = self.lease()
+        def kill(pid, value):
+            if value:
+                self.signals.append((pid, value))
+            elif self.signals and self.signals[-1][1] == signal.SIGKILL:
+                raise ProcessLookupError
+        self.n["os"].kill = kill
+        self.n["terminate_owned"]("helper", self.app, 102, lease, 101)
+        self.assertEqual(self.signals, [(102, signal.SIGTERM), (102, signal.SIGKILL)])
+        self.assertGreaterEqual(len(self.calls), 6)
+
+    def test_gui_termination_refuses_pid_birth_uid_executable_drift_before_any_signal(self):
+        for changed in ("pid", "birth", "uid", "exe", "missing"):
+            with self.subTest(changed=changed):
+                self.setUp()
+                self.prepare_termination()
+                lease = self.lease()
+                if changed == "exe":
+                    self.n["process_path"] = lambda _: Path("/replacement")
+                elif changed == "missing":
+                    self.count = 0
+                else:
+                    self.raw = self.kernel_record(**{"pid": {"pid": 103}, "birth": {"usec": 8}, "uid": {"uid": os.getuid() + 1}}[changed])
+                self.n["os"].kill = lambda *args: self.signals.append(args)
+                with self.assertRaises(RuntimeError):
+                    self.n["terminate_owned"]("helper", self.app, 102, lease, 101)
+                self.assertEqual(self.signals, [])
+
+    def test_gui_termination_refuses_birth_uid_executable_or_connection_change_after_term(self):
+        for changed in ("birth", "uid", "exe", "connection", "unknown"):
+            with self.subTest(changed=changed):
+                self.setUp()
+                self.prepare_termination()
+                lease = self.lease()
+                def kill(pid, value):
+                    if value:
+                        self.signals.append((pid, value))
+                        if changed == "birth":
+                            self.raw = self.kernel_record(usec=8)
+                        elif changed == "uid":
+                            self.raw = self.kernel_record(uid=os.getuid() + 1)
+                        elif changed == "exe":
+                            self.n["process_path"] = lambda _: Path("/replacement")
+                        elif changed == "connection":
+                            self.n["no_connections"] = lambda *_: False
+                        else:
+                            self.n["no_connections"] = lambda *_: (_ for _ in ()).throw(RuntimeError("unknown incoming owner"))
+                self.n["os"].kill = kill
+                with self.assertRaises(RuntimeError):
+                    self.n["terminate_owned"]("helper", self.app, 102, lease, 101)
+                self.assertEqual(self.signals, [(102, signal.SIGTERM)])
+
+    def test_gui_termination_requires_strict_zero_auth_and_unknown_peer_never_signaled(self):
+        for value in (False, None, "0", 0.0, -1, 1):
+            with self.subTest(value=value):
+                self.setUp()
+                self.prepare_termination()
+                lease = self.lease()
+                self.n["no_connections"] = extracted_namespace(SOURCE)["no_connections"]
+                self.n["no_connections"].__globals__["query"] = lambda *_: value
+                self.n["os"].kill = lambda *args: self.signals.append(args)
+                with self.assertRaises(RuntimeError):
+                    self.n["terminate_owned"]("helper", self.app, 102, lease, 101)
+                self.assertEqual(self.signals, [])
+        self.setUp()
+        self.prepare_termination()
+        lease = self.lease()
+        self.n["no_connections"] = lambda *_: (_ for _ in ()).throw(RuntimeError("unknown kernel peer"))
+        self.n["os"].kill = lambda *args: self.signals.append(args)
+        with self.assertRaisesRegex(RuntimeError, "unknown kernel peer"):
+            self.n["terminate_owned"]("helper", self.app, 102, lease, 101)
+        self.assertEqual(self.signals, [])
+
+    def test_gui_termination_refuses_malformed_immutable_lease_before_native_queries(self):
+        good = self.lease()
+        for lease in (good[:-1], ("unknown",) + good[1:],
+                      good[:1] + (True,) + good[2:], good[:2] + (False,) + good[3:],
+                      good[:3] + ("/replacement",) + good[4:],
+                      good[:4] + (True,) + good[5:], good[:5] + (1000000,)):
+            self.prepare_termination()
+            self.n["gui_birth"] = forbidden
+            self.n["os"].kill = lambda *args: self.signals.append(args)
+            with self.subTest(lease=lease), self.assertRaises(RuntimeError):
+                self.n["terminate_owned"]("helper", self.app, 102, lease, 101)
+            self.assertEqual(self.signals, [])
+
+    def test_actual_runtime_missing_gui_launchservices_date_still_requires_visibility_and_v2(self):
+        with tempfile.TemporaryDirectory(prefix="mixel-kernel-runtime-", dir=Path(tempfile.gettempdir()).resolve()) as temporary:
+            app = TrayControls.prepare_runtime(self, temporary)
+            self.app, self.path = app, app / "Contents/MacOS/Mixel-Remote"
+            self.n["gui_birth"] = self.actual_birth
+            self.n["launch_identity"] = lambda _h, _a, pid: 100 if pid == 101 else forbidden()
+            self.n["desktop"].probe = lambda *_: {"running": True, "visible": True, "launchTime": 0}
+            health = []
+            self.n["health"] = lambda _p, _a, attended: health.append(attended) or True
+            facts = {"customerAcceptTested": False, "remoteDesktopConnected": False}
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.n["runtime"](app, "helper", facts)
+            self.assertEqual(health, [False, True])
+            self.assertTrue(facts["visibleGuiAndAttendedV2"])
+            self.assertFalse(facts["customerAcceptTested"])
+            self.assertFalse(facts["remoteDesktopConnected"])
+            self.assertEqual(self.terminated, [102, 101])
+
+    def test_actual_runtime_refuses_replaced_url_owner_before_visibility(self):
+        with tempfile.TemporaryDirectory(prefix="mixel-kernel-runtime-", dir=Path(tempfile.gettempdir()).resolve()) as temporary:
+            app = TrayControls.prepare_runtime(self, temporary)
+            self.app, self.path = app, app / "Contents/MacOS/Mixel-Remote"
+            self.n["gui_birth"] = self.actual_birth
+            owners = iter((102, 103))
+            self.n["gui_owner"] = lambda *_: next(owners)
+            self.n["desktop"].probe = forbidden
+            facts = {}
+            with contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(RuntimeError, "birth or kernel owner changed"):
+                self.n["runtime"](app, "helper", facts)
+            self.assertEqual(facts["runtimeFailure"]["phase"], "customer-gui-visible")
+            self.assertNotIn("visibleGuiAndAttendedV2", facts)
+
+    def test_retained_birth_accepts_only_double_kernel_and_path_esrch(self):
+        lease = self.lease()
+        self.count, self.info_errno = 0, errno.ESRCH
+        self.n["process_path"] = forbidden
+        self.assertIsNone(self.actual_birth(self.app, 102, lease))
+        self.assertEqual(self.library_flags[-1], ("/usr/lib/libproc.dylib", {"use_errno": True}))
+        self.assertEqual(self.library.proc_pidpath.argtypes,
+                         (ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32))
+        self.assertEqual(len(self.calls), 4)
+
+    def test_retained_birth_never_treats_generic_missing_or_permission_error_as_exit(self):
+        for count, result_errno in ((0, 0), (0, errno.EPERM), (0, errno.EACCES),
+                                    (-1, errno.ESRCH), (135, errno.ESRCH),
+                                    (False, errno.ESRCH), (True, errno.ESRCH)):
+            with self.subTest(count=count, result_errno=result_errno):
+                self.setUp()
+                lease = self.lease()
+                self.count, self.info_errno = count, result_errno
+                with self.assertRaises(RuntimeError):
+                    self.actual_birth(self.app, 102, lease)
+
+    def test_absent_birth_refuses_path_error_or_reappearing_kernel_identity(self):
+        for changed in ("path-present", "path-permission", "second-path-present", "second-birth"):
+            with self.subTest(changed=changed):
+                self.setUp()
+                lease = self.lease()
+                self.count, self.info_errno = 0, errno.ESRCH
+                if changed == "path-present":
+                    self.path_responses = [(10, 0)]
+                elif changed == "path-permission":
+                    self.path_responses = [(0, errno.EPERM)]
+                elif changed == "second-path-present":
+                    self.path_responses = [(0, errno.ESRCH), (10, 0)]
+                else:
+                    self.responses = [(self.raw, 0, errno.ESRCH), (self.kernel_record(usec=8), 136, 0)]
+                with self.assertRaises(RuntimeError):
+                    self.actual_birth(self.app, 102, lease)
+
+    def test_matching_retained_zombie_is_terminal_but_acquisition_or_changed_birth_is_refused(self):
+        lease = self.lease()
+        self.raw = self.kernel_record(status=5)
+        self.n["process_path"] = forbidden
+        self.assertIsNone(self.actual_birth(self.app, 102, lease))
+        self.n["process_path"] = lambda _: self.path
+        with self.assertRaisesRegex(RuntimeError, "already terminated"):
+            self.lease()
+        for values in ({"status": 5, "usec": 8}, {"status": 5, "uid": os.getuid() + 1}, {"status": 6}):
+            self.raw = self.kernel_record(**values)
+            with self.subTest(values=values), self.assertRaises(RuntimeError):
+                self.actual_birth(self.app, 102, lease)
+
+    def test_both_owned_signal_waits_accept_proven_unreaped_exit_without_cocoa(self):
+        for final_signal in (signal.SIGTERM, signal.SIGKILL):
+            with self.subTest(final_signal=final_signal):
+                self.setUp()
+                self.prepare_termination()
+                lease = self.lease()
+                def kill(pid, value):
+                    if value:
+                        self.signals.append((pid, value))
+                        if value == final_signal:
+                            self.count, self.info_errno = 0, errno.ESRCH
+                self.n["os"].kill = kill
+                self.n["terminate_owned"]("helper", self.app, 102, lease, 101)
+                expected = [(102, signal.SIGTERM)]
+                if final_signal == signal.SIGKILL:
+                    expected.append((102, signal.SIGKILL))
+                self.assertEqual(self.signals, expected)
+
+    def test_kill_wait_rechecks_kernel_birth_and_refuses_reuse_without_cocoa(self):
+        self.prepare_termination()
+        lease = self.lease()
+        def kill(pid, value):
+            if value:
+                self.signals.append((pid, value))
+                if value == signal.SIGKILL:
+                    self.raw = self.kernel_record(usec=8)
+        self.n["os"].kill = kill
+        with self.assertRaisesRegex(RuntimeError, "process identity changed"):
+            self.n["terminate_owned"]("helper", self.app, 102, lease, 101)
+        self.assertEqual(self.signals, [(102, signal.SIGTERM), (102, signal.SIGKILL)])
+
+    def test_scheduling_status_is_not_birth_and_mid_observation_exit_requires_exact_terminal_proof(self):
+        self.responses = [(self.kernel_record(status=2), 136), (self.kernel_record(status=3), 136)]
+        lease = self.lease()
+        self.responses = [(self.kernel_record(status=3), 136), (self.kernel_record(status=2), 136)]
+        self.assertEqual(self.actual_birth(self.app, 102, lease), lease)
+        for missing_errno in (errno.ESRCH, errno.EPERM):
+            with self.subTest(missing_errno=missing_errno):
+                self.responses = [(self.kernel_record(), 136)]
+                self.count, self.info_errno = 0, missing_errno
+                self.n["process_path"] = lambda _: (_ for _ in ()).throw(RuntimeError("Fixture process identity is unavailable"))
+                if missing_errno == errno.ESRCH:
+                    self.assertIsNone(self.actual_birth(self.app, 102, lease))
+                else:
+                    with self.assertRaises(RuntimeError):
+                        self.actual_birth(self.app, 102, lease)
+
+
 def main():
     global SOURCE
     parser = argparse.ArgumentParser(description=__doc__)
@@ -814,6 +1168,7 @@ def main():
     digest = hashlib.sha256(SOURCE.read_bytes()).hexdigest()
     print("Source-only Mac tray OS gate SHA256=" + digest, flush=True)
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(TrayControls)
+    suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(KernelBirthControls))
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     return 0 if result.wasSuccessful() else 1
 
