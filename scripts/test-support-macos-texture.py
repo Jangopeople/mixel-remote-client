@@ -18,6 +18,8 @@ import tempfile
 import textwrap
 from unittest.mock import patch
 
+from sdk_discovery import find_dart
+
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("mixel_texture_patch", ROOT / "scripts/patch-support-macos-texture.py")
 P = importlib.util.module_from_spec(spec)
@@ -515,7 +517,7 @@ def dart_controls(output, generated, originals):
     b = text.index("\nclass _GpuTexture {", a)
     fixture = output / "actual-pixelbuffer-lifecycle.dart"
     fixture.write_text(DART_STUBS + text[a:b] + DART_TEST)
-    dart = os.environ.get("DART_BIN") or shutil.which("dart")
+    dart = find_dart()
     if not dart:
         raise RuntimeError("Dart SDK required for async texture controls")
     print(run([dart, "analyze", str(fixture)], output, "dart-analyze.log").strip())

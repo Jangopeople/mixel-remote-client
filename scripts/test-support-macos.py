@@ -10,6 +10,8 @@ import subprocess
 import sys
 import tempfile
 
+from sdk_discovery import find_dart
+
 ROOT = Path(__file__).resolve().parents[1]
 UPSTREAM = Path(os.environ.get('RDREPO', ROOT / 'rustdesk'))
 spec = importlib.util.spec_from_file_location('mixel_macos_patch', ROOT / 'scripts/patch-support-macos.py')
@@ -353,6 +355,6 @@ else:
 # The standalone Mac source job has no Flutter SDK; complete source jobs run
 # the same lifecycle suite with actual Dart async controls as well.
 texture_arguments = [sys.executable, str(ROOT / 'scripts/test-support-macos-texture.py')]
-if platform.system() == 'Darwin' and not (os.environ.get('DART_BIN') or shutil.which('dart')):
+if platform.system() == 'Darwin' and not find_dart():
     texture_arguments.append('--native-only')
 subprocess.run(texture_arguments, check=True)
