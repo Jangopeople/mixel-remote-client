@@ -420,7 +420,8 @@ def full_branding(out, upstream, bash):
                  'patch-support-uinput-scroll.py',
                  'patch-support-uinput-device.py','test-support-uinput-device.py',
                  'patch-support-native-warnings.py','test-support-native-warnings.py',
-                 'patch-support-fingerprint.py','test-support-fingerprint.py'):
+                 'patch-support-fingerprint.py','test-support-fingerprint.py',
+                 'patch-support-fatal-crash.py','test-support-fatal-crash.py'):
         (copied / 'scripts' / name).write_bytes((ROOT / 'scripts' / name).read_bytes())
     script = copied / 'scripts/apply-branding.sh'
     text = script.read_text(encoding='utf-8')
