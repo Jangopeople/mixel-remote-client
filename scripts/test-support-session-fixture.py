@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import re
 import subprocess
 import sys
 import tempfile
@@ -930,6 +931,221 @@ class DesktopReadinessTests(unittest.TestCase):
             result = desktop.until("actual supervised signal status", lambda: next(iter(folder.glob("launch-*-exit.json")), None), timeout=3)
             self.assertEqual(json.loads(result.read_text())["pid"], pid)
             self.assertEqual(json.loads(result.read_text())["wait_status"], 137)
+
+
+class PendingAcceptWindowTests(unittest.TestCase):
+    BAD_WINDOW = "docker failed (1): X Error of failed request:  BadWindow (invalid Window parameter)\n  Major opcode: 14"
+    ORIGINAL = '''def pending_accept(self, label):
+        window = self.cm()
+        self.activate("host", window)
+        time.sleep(.7)
+        box = self.geometry("host", window)
+        # The real unauthorized CM renders blue Accept + white Cancel; an
+        # authorized Remote/FileTransfer session renders red Disconnect.
+        # This assertion covers FileTransfer too (VideoConnCount is Remote only).
+        point = (box["X"] + 25, box["Y"] + box["HEIGHT"] - 31)
+        def pending():
+            code = "from PIL import ImageGrab;import json;print(json.dumps(ImageGrab.grab().getpixel(" + repr(point) + ")[:3]))"
+            red, green, blue = json.loads(self.run("host", ["python3", "-c", code]).stdout)
+            return red < 80 and green > 75 and blue > 180
+        until(label + " actual unauthorized Accept UI", pending)
+        self.screenshot("host", label + "-customer-accept")
+        print("PASS: " + label + " real CM remains unauthorized with visible Accept before customer click", flush=True)
+        return box'''
+
+    def method(self, original=False):
+        if original:
+            # Exact source-extracted eef72095 method: it selects once and reads
+            # geometry outside its retry. This retains the reproduced negative.
+            self.assertEqual(hashlib.sha256(self.ORIGINAL.encode()).hexdigest(),
+                             "4afb6ec5d9d272c1e059462af2a2f2e6cf539082ddea50f82c67bc78815e07bd")
+            source = self.ORIGINAL
+        else:
+            source = textwrap.dedent(inspect.getsource(desktop.Session.pending_accept))
+        namespace = {"time": desktop.time, "json": json, "re": re, "until": desktop.until}
+        exec(compile(ast.parse(source), "source-extracted Session.pending_accept", "exec"), namespace)
+        return namespace["pending_accept"]
+
+    def exercise(self, *, original=False, select=None, geometry=None, activate=None, pixels=None, capture=None):
+        clock = types.SimpleNamespace(now=0.0)
+        events = []
+        counts = {"select": 0, "geometry": {}, "pixels": 0, "capture": 0}
+        current = types.SimpleNamespace(window=None)
+        session = desktop.Session(Path("proofs"), Path("synthetic.deb"), False, True)
+        session.ids["controller"] = "123456789"
+        box = {"X": 120, "Y": 60, "WIDTH": 300, "HEIGHT": 240}
+
+        def windows(role, pattern, visible):
+            self.assertEqual((role, pattern, visible), ("host", "^123456789.*Mixel-Remote$", False))
+            counts["select"] += 1
+            values = select(counts["select"]) if select else ["22"]
+            events.append(("select", tuple(values)))
+            return values
+
+        def focus(role, window):
+            self.assertEqual(role, "host")
+            current.window = window
+            events.append(("activate", window))
+            if activate:
+                activate(window)
+
+        def bounds(role, window):
+            self.assertEqual(role, "host")
+            counts["geometry"][window] = counts["geometry"].get(window, 0) + 1
+            events.append(("geometry", window))
+            return geometry(window, counts["geometry"][window]) if geometry else dict(box)
+
+        def pixel(role, arguments):
+            self.assertEqual(role, "host")
+            self.assertEqual(arguments[:2], ["python3", "-c"])
+            self.assertIn("ImageGrab.grab().getpixel", arguments[2])
+            events.append(("pixels", current.window))
+            counts["pixels"] += 1
+            value = pixels(counts["pixels"], clock) if pixels else [0, 100, 220]
+            return subprocess.CompletedProcess([], 0, value if isinstance(value, str) else json.dumps(value), "")
+
+        def screenshot(role, label):
+            self.assertEqual((role, label), ("host", "restart-customer-accept"))
+            events.append(("capture", current.window))
+            counts["capture"] += 1
+            if capture:
+                capture(counts["capture"], clock)
+
+        def sleep(seconds):
+            self.assertIn(seconds, (.4, .7))
+            clock.now += seconds
+
+        result, error = None, None
+        with patch.object(desktop.time, "monotonic", side_effect=lambda: clock.now), \
+                patch.object(desktop.time, "sleep", side_effect=sleep), \
+                patch.object(session, "cm", return_value="11"), \
+                patch.object(session, "windows", side_effect=windows), \
+                patch.object(session, "activate", side_effect=focus), \
+                patch.object(session, "geometry", side_effect=bounds), \
+                patch.object(session, "run", side_effect=pixel), \
+                patch.object(session, "screenshot", side_effect=screenshot), \
+                patch.object(session, "click") as click, patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            try:
+                result = self.method(original)(session, "restart")
+            except Exception as failure:
+                error = failure
+            click.assert_not_called()
+            passing = stdout.getvalue()
+        return types.SimpleNamespace(result=result, error=error, events=events, clock=clock.now, counts=counts, passing=passing)
+
+    def test_exact_original_disappearing_cm_fails_corrected_reacquires_owned_fresh_cm(self):
+        def geometry(window, _count):
+            if window == "11":
+                raise RuntimeError(self.BAD_WINDOW)
+            return {"X": 120, "Y": 60, "WIDTH": 300, "HEIGHT": 240}
+        old = self.exercise(original=True, geometry=geometry)
+        self.assertEqual(str(old.error), self.BAD_WINDOW)
+        self.assertNotIn("PASS:", old.passing)
+        fixed = self.exercise(select=lambda n: ["11"] if n == 1 else ["22"], geometry=geometry)
+        self.assertIsNone(fixed.error)
+        self.assertEqual(fixed.result["X"], 120)
+        self.assertEqual([x for x in fixed.events if x[0] == "capture"], [("capture", "22")])
+        self.assertEqual(fixed.counts["geometry"], {"11": 1, "22": 2})
+        self.assertIn("visible Accept before customer click", fixed.passing)
+
+    def test_disappearing_cm_during_activation_is_reacquired(self):
+        def activate(window):
+            if window == "11":
+                raise RuntimeError(self.BAD_WINDOW)
+        fixed = self.exercise(select=lambda n: ["11"] if n == 1 else ["22"], activate=activate)
+        self.assertIsNone(fixed.error)
+        self.assertEqual([x for x in fixed.events if x[0] == "capture"], [("capture", "22")])
+
+    def test_capture_of_disappeared_cm_does_not_pass_and_fresh_capture_is_required(self):
+        def geometry(window, count):
+            if window == "11" and count == 2:
+                raise RuntimeError(self.BAD_WINDOW)
+            return {"X": 120, "Y": 60, "WIDTH": 300, "HEIGHT": 240}
+        fixed = self.exercise(select=lambda n: ["11"] if n == 1 else ["22"], geometry=geometry)
+        self.assertIsNone(fixed.error)
+        self.assertEqual([x for x in fixed.events if x[0] == "capture"], [("capture", "11"), ("capture", "22")])
+        self.assertEqual(fixed.passing.count("PASS:"), 1)
+
+    def test_changed_geometry_after_capture_requires_another_pixel_and_capture(self):
+        def geometry(_window, count):
+            return {"X": 120 if count == 1 else 150, "Y": 60, "WIDTH": 300, "HEIGHT": 240}
+        fixed = self.exercise(geometry=geometry)
+        self.assertIsNone(fixed.error)
+        self.assertEqual(fixed.result["X"], 150)
+        self.assertEqual(fixed.counts["pixels"], 2)
+        self.assertEqual(fixed.counts["capture"], 2)
+
+    def test_postcapture_title_ownership_loss_requires_fresh_matching_cm(self):
+        fixed = self.exercise(select=lambda n: ["11"] if n == 1 else ["22"])
+        self.assertIsNone(fixed.error)
+        self.assertEqual([x for x in fixed.events if x[0] == "capture"], [("capture", "11"), ("capture", "22")])
+
+    def test_old_authorized_red_cm_cannot_mask_new_unauthorized_blue_cm(self):
+        fixed = self.exercise(select=lambda _n: ["11", "22"], pixels=lambda n, _clock: [220, 0, 0] if n == 1 else [0, 100, 220])
+        self.assertIsNone(fixed.error)
+        self.assertEqual([x for x in fixed.events if x[0] == "capture"], [("capture", "22")])
+
+    def test_persistent_badwindow_is_fatal_at_original_sixty_second_deadline(self):
+        def geometry(_window, _count):
+            raise RuntimeError(self.BAD_WINDOW)
+        failed = self.exercise(geometry=geometry)
+        self.assertIsInstance(failed.error, RuntimeError)
+        self.assertIn("Timed out: restart actual unauthorized Accept UI", str(failed.error))
+        self.assertIn("BadWindow", str(failed.error))
+        self.assertGreaterEqual(failed.clock, 60)
+        self.assertLess(failed.clock, 61.2)
+        self.assertEqual(failed.counts["capture"], 0)
+        self.assertNotIn("PASS:", failed.passing)
+
+    def test_absent_cm_and_blue_threshold_boundaries_still_timeout(self):
+        absent = self.exercise(select=lambda _n: [])
+        self.assertIsInstance(absent.error, RuntimeError)
+        self.assertGreaterEqual(absent.clock, 60)
+        self.assertLess(absent.clock, 60.5)
+        for color in ([80, 76, 181], [0, 75, 181], [0, 76, 180], [220, 0, 0]):
+            with self.subTest(color=color):
+                failed = self.exercise(pixels=lambda _n, _clock: color)
+                self.assertIsInstance(failed.error, RuntimeError)
+                self.assertGreaterEqual(failed.clock, 60)
+                self.assertLess(failed.clock, 61.2)
+                self.assertEqual(failed.counts["capture"], 0)
+                self.assertNotIn("PASS:", failed.passing)
+
+    def test_unrelated_window_errors_and_fixture_failures_remain_immediately_fatal(self):
+        for message in ("docker daemon unavailable", "docker failed (1): X Error of failed request:  BadMatch (invalid parameter attributes)",
+                        "other fixture failed: BadWindow", "docker failed (2): X Error of failed request:  BadWindow (invalid Window parameter)"):
+            for phase in ("activate", "geometry", "pixels", "capture"):
+                with self.subTest(message=message, phase=phase):
+                    def fail(*_args):
+                        raise RuntimeError(message)
+                    fixed = self.exercise(**{phase: fail})
+                    self.assertEqual(str(fixed.error), message)
+                    self.assertEqual(fixed.counts["select"], 1)
+                    self.assertLess(fixed.clock, 1)
+                    self.assertNotIn("PASS:", fixed.passing)
+        # Only xdotool activation/geometry can supply the retriable error.
+        for phase in ("pixels", "capture"):
+            def fail(*_args):
+                raise RuntimeError(self.BAD_WINDOW)
+            failed = self.exercise(**{phase: fail})
+            self.assertEqual(str(failed.error), self.BAD_WINDOW)
+            self.assertEqual(failed.counts["select"], 1)
+        malformed = self.exercise(pixels=lambda _n, _clock: "invalid JSON")
+        self.assertIsInstance(malformed.error, json.JSONDecodeError)
+        self.assertEqual(malformed.counts["select"], 1)
+
+    def test_blue_observation_or_capture_completing_after_deadline_cannot_pass(self):
+        def late_pixel(_n, clock):
+            clock.now = 61
+            return [0, 100, 220]
+        failed = self.exercise(pixels=late_pixel)
+        self.assertIsInstance(failed.error, RuntimeError)
+        self.assertEqual(failed.counts["capture"], 0)
+        def late_capture(_n, clock):
+            clock.now = 61
+        failed = self.exercise(capture=late_capture)
+        self.assertIsInstance(failed.error, RuntimeError)
+        self.assertNotIn("PASS:", failed.passing)
 
 
 if __name__ == "__main__":

@@ -17,7 +17,7 @@ mod standard_namespace_readonly {
     #[link(name="kernel32")]
     extern "system" {
         fn GetModuleHandleW(name: *const u16) -> *mut c_void;
-        fn GetProcAddress(module: *mut c_void, name: *const u8) -> *const c_void;
+        fn GetProcAddress(module: *mut c_void, name: *const u8) -> *mut c_void;
         fn GetCurrentProcessId() -> u32;
         fn ProcessIdToSessionId(pid: u32, session: *mut u32) -> i32;
         fn CloseHandle(handle: *mut c_void) -> i32;

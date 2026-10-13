@@ -6,6 +6,7 @@ import hashlib
 import importlib.util
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -14,6 +15,7 @@ from sdk_discovery import find_dart
 
 ROOT = Path(__file__).resolve().parents[1]
 UPSTREAM_PIN = "1abc897c451c8b5bbff3792509a7fef9d12f2ce3"
+SUPPORTED_DART_VERSIONS = ("3.5.4", "3.6.2")
 SCENARIOS = (
     "provider-error", "provider-retry", "acquire-release-race", "release-error",
     "synchronous-error", "desktop-reference-count", "duplicate-and-unknown-key",
@@ -46,13 +48,51 @@ def require(condition: bool, reason: str) -> None:
         raise RuntimeError(reason)
 
 
+def require_sdk_version(result: subprocess.CompletedProcess[str]) -> str:
+    banner = result.stdout + result.stderr
+    match = re.fullmatch(
+        r'Dart SDK version: ([0-9]+\.[0-9]+\.[0-9]+) \(stable\) '
+        r'\([^()\r\n]+\) on "[a-z0-9_]+"\r?\n?', banner)
+    require(result.returncode == 0 and match is not None and
+            match.group(1) in SUPPORTED_DART_VERSIONS,
+            "Pinned stable Dart 3.5.4 or 3.6.2 required for these production-source controls")
+    return match.group(1)
+
+
+def sdk_version_controls() -> None:
+    for version in SUPPORTED_DART_VERSIONS:
+        banner = f'Dart SDK version: {version} (stable) (fixture build date) on "windows_x64"'
+        for stdout, stderr in ((banner + "\n", ""), ("", banner + "\r\n")):
+            require(require_sdk_version(subprocess.CompletedProcess([], 0, stdout, stderr)) == version,
+                    "Exact supported stable Dart banner was refused")
+    banner = 'Dart SDK version: 3.6.2 (stable) (fixture build date) on "macos_arm64"\n'
+    rejected = (
+        subprocess.CompletedProcess([], 1, banner, ""),
+        subprocess.CompletedProcess([], 0, "", ""),
+        *(subprocess.CompletedProcess([], 0, banner.replace("3.6.2", version), "")
+          for version in ("3.5.3", "3.6.1", "3.7.0", "3.6.2-dev", "3.6.2.1")),
+        subprocess.CompletedProcess([], 0, banner.replace("(stable)", "(beta)"), ""),
+        subprocess.CompletedProcess([], 0, "unexpected\n" + banner, ""),
+        subprocess.CompletedProcess([], 0, banner, "unexpected\n"),
+        subprocess.CompletedProcess([], 0, banner + banner, ""),
+    )
+    for result in rejected:
+        try:
+            require_sdk_version(result)
+        except RuntimeError:
+            pass
+        else:
+            raise RuntimeError("Unsupported, malformed or failed Dart version query was accepted")
+    print("PASS exact stable Dart 3.5.4/3.6.2 version gates: 4 accepted and 11 fatal refusals")
+
+
 def main() -> None:
     repo = Path(os.environ.get("RDREPO", ROOT / "rustdesk")).resolve()
     dart = find_dart()
     require(bool(dart), "Dart SDK required: put dart on PATH or set DART_BIN")
     version = run([dart, "--version"])
-    require(version.returncode == 0 and "Dart SDK version: 3.5.4 " in version.stdout + version.stderr,
-            "Pinned Dart 3.5.4 required for these production-source controls")
+    sdk_version = require_sdk_version(version)
+    sdk_version_controls()
     revision = run(["git", "-C", str(repo), "rev-parse", "HEAD"])
     require(revision.returncode == 0 and revision.stdout.strip() == UPSTREAM_PIN,
             "Source-extracted controls require the exact pinned RustDesk 1.4.6 checkout")
@@ -132,7 +172,7 @@ def main() -> None:
                         "Queue growth control did not observe its single retained callback")
                 print(result.stderr.strip())
             print(result.stdout.strip())
-    print("PASS verified pinned source, Dart 3.5.4 analysis, CLI idempotence, neighboring bytes, and 7 fail-closed drift controls")
+    print(f"PASS verified pinned source, Dart {sdk_version} analysis, CLI idempotence, neighboring bytes, and 7 fail-closed drift controls")
     print("PASS keep-awake source regression: 5 actual original failures rejected; 13 generated scenarios passed")
 
 

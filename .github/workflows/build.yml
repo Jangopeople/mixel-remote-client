@@ -18,6 +18,11 @@ on:
         required: true
         type: boolean
         default: false
+      collect_windows_preflight_failure:
+        description: "Continue a failed Windows source preflight for unpublished diagnosis; the original failure still blocks release"
+        required: false
+        type: boolean
+        default: false
       runtime_windows_release_gate:
         description: "Debugger-free actual signed Windows QuickSupport95 gate (requires artifact run and publish=false)"
         required: false
@@ -40,9 +45,12 @@ permissions:
   contents: read
 
 env:
+  # Direct Python helpers and their inherited child processes share UTF-8 on Windows.
+  PYTHONUTF8: "1"
+  PYTHONIOENCODING: "utf-8"
   RUST_VERSION: "1.75"
   MAC_RUST_VERSION: "1.81"
-  FLUTTER_VERSION: "3.24.5"
+  FLUTTER_VERSION: "3.27.4"
   VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
   VCPKG_BINARY_SOURCES: "clear;files,${{ github.workspace }}/.vcpkg-binary-cache,readwrite"
 
@@ -52,7 +60,7 @@ jobs:
   # workflow_dispatch overrides it).
   # ===========================================================================
   config:
-    if: ${{ (github.event.inputs.runtime_artifact_run == '' && github.event.inputs.runtime_macos_artifact_run == '' && github.event.inputs.runtime_linux_artifact_run == '') || (inputs.runtime_windows_release_gate && inputs.runtime_artifact_run == '') }}
+    if: ${{ inputs.collect_windows_preflight_failure || (github.event.inputs.runtime_artifact_run == '' && github.event.inputs.runtime_macos_artifact_run == '' && github.event.inputs.runtime_linux_artifact_run == '') || (inputs.runtime_windows_release_gate && inputs.runtime_artifact_run == '') }}
     runs-on: ubuntu-22.04
     outputs:
       upstream_version: ${{ steps.ver.outputs.upstream_version }}
@@ -60,12 +68,26 @@ jobs:
       linux: ${{ steps.ver.outputs.linux }}
       macos: ${{ steps.ver.outputs.macos }}
       windows: ${{ steps.ver.outputs.windows }}
+      collect_windows_preflight_failure: ${{ steps.preflight_request.outputs.collect_windows_preflight_failure }}
     steps:
       - uses: actions/checkout@v5
       - name: Verify release staging and build configuration
         run: |
           python3 scripts/test-release-pipeline.py
+          python3 scripts/test-flutter-sdk-pipeline.py
           python3 scripts/test-notarize-macos.py
+          python3 scripts/test-windows-preflight-build.py
+      - id: preflight_request
+        name: Validate unpublished Windows preflight diagnostic request
+        env:
+          COLLECT_WINDOWS_PREFLIGHT_FAILURE: ${{ inputs.collect_windows_preflight_failure }}
+          INPUT_ONLY: ${{ inputs.only }}
+          PUBLISH_REQUESTED: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || inputs.publish_r2 }}
+          WINDOWS_RELEASE_GATE: ${{ inputs.runtime_windows_release_gate }}
+          RUNTIME_RUN_ID: ${{ inputs.runtime_artifact_run }}
+          RUNTIME_LINUX_RUN: ${{ inputs.runtime_linux_artifact_run }}
+          RUNTIME_MACOS_RUN: ${{ inputs.runtime_macos_artifact_run }}
+        run: python3 scripts/validate-windows-preflight-build.py request
       - name: Validate debugger-free Windows release gate request
         env:
           WINDOWS_RELEASE_GATE: ${{ inputs.runtime_windows_release_gate }}
@@ -130,6 +152,12 @@ jobs:
           git clone --depth 1 --branch "${UPSTREAM_VERSION}" --recurse-submodules \
             https://github.com/rustdesk/rustdesk.git rustdesk
 
+      - name: Apply exact SDK compatibility before bridge generation
+        run: ./scripts/apply-branding.sh
+        env:
+          RDREPO: ./rustdesk
+          BRANDING: ./branding
+
       - name: Install flutter_rust_bridge_codegen
         run: |
           cargo install flutter_rust_bridge_codegen --version 1.80.1 --features uuid --locked
@@ -137,6 +165,8 @@ jobs:
       - name: Generate bridge
         working-directory: rustdesk
         run: |
+          RDREPO=. python3 ../scripts/patch-support-macos-texture.py
+          RDREPO=. python3 ../scripts/patch-support-macos-window.py
           pushd flutter && sed -i -e 's/extended_text: 14.0.0/extended_text: 13.0.0/g' pubspec.yaml && flutter pub get && popd
           ~/.cargo/bin/flutter_rust_bridge_codegen \
             --rust-input ./src/flutter_ffi.rs \
@@ -191,7 +221,7 @@ jobs:
         uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: ${{ env.RUST_VERSION }}
-          targets: x86_64-unknown-linux-gnu
+          targets: x86_64-unknown-linux-gnu,x86_64-pc-windows-msvc,aarch64-apple-darwin
           components: rustfmt
 
       - name: Install Flutter
@@ -206,11 +236,11 @@ jobs:
           path: ${{ github.workspace }}/.vcpkg-binary-cache
           key: mixel-vcpkg-v1-ubuntu22.04-x64-linux-${{ env.VCPKG_COMMIT_ID }}
 
-      - name: Setup vcpkg + cache
+      - name: Setup pinned vcpkg
         uses: lukka/run-vcpkg@v11
         with:
           vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
-          doNotCache: false
+          doNotCache: true
 
       - name: Install vcpkg deps
         run: |
@@ -250,6 +280,16 @@ jobs:
           VCPKG_ROOT: ${{ github.workspace }}/vcpkg
           RDREPO: ./rustdesk
         run: |
+          python3 scripts/test-support-flutter-analysis.py --dart "$(command -v dart)"
+          python3 scripts/test-macos-startup.py
+          python3 scripts/test-support-macos-tray-url.py
+          python3 scripts/test-support-launch-macos-tray-controls.py
+          python3 scripts/test-support-macos-termination-support.py --app rustdesk
+          python3 scripts/test-support-flutter-sdk-compatibility.py --app rustdesk --flutter "$(command -v flutter)"
+          python3 scripts/test-support-native-warnings.py --source rustdesk --source-only --output "$RUNNER_TEMP/mixel-native-warning-source"
+          python3 scripts/test-macos-update.py --source rustdesk --source-only
+          python3 scripts/test-support-file-transfer-window.py --app rustdesk --output "$RUNNER_TEMP/mixel-file-transfer-source" --flutter "$(command -v flutter)"
+          python3 scripts/test-support-macos-termination.py --flutter "$(command -v flutter)"
           python3 scripts/test-support-invite.py
           python3 scripts/test-generated-support-paths.py
           python3 scripts/test-support-macos-uri-routing.py
@@ -260,9 +300,16 @@ jobs:
           python3 scripts/test-support-linux.py
           python3 scripts/test-support-signals.py
           python3 scripts/test-support-input.py
+          python3 scripts/test-support-keyboard-default.py --source rustdesk --source-root "$PWD" --evidence-dir "$RUNNER_TEMP/mixel-keyboard-default-source" --linux-sysroot "$(rustc --print sysroot)"
+          python3 scripts/test-support-uinput-scroll.py --source rustdesk --evidence-dir "$RUNNER_TEMP/mixel-uinput-wheel-source" --linux-sysroot "$(rustc --print sysroot)"
+          python3 scripts/test-support-uinput-device.py --source rustdesk --wheel-helper scripts/patch-support-uinput-scroll.py --output "$RUNNER_TEMP/mixel-uinput-device-source" --rustc "$(command -v rustc)" --linux-sysroot "$(rustc --print sysroot)"
+          RUSTC_BIN="$(rustup which rustc)" python3 scripts/test-support-fingerprint.py --source rustdesk --evidence-dir "$RUNNER_TEMP/mixel-fingerprint-source"
+          RUSTC_BIN="$(rustup which rustc)" python3 scripts/test-support-fatal-crash.py --source rustdesk --upstream-repo rustdesk --evidence-dir "$RUNNER_TEMP/mixel-fatal-crash-source" --linux-sysroot "$(rustc --print sysroot)"
           python3 scripts/test-support-clipboard.py --native-x11
           python3 scripts/test-support-video.py
           python3 scripts/test-support-macos.py
+          python3 scripts/test-support-macos-window.py
+          python3 scripts/test-support-macos-cleanup.py --dart "$(command -v dart)" --flutter "$(command -v flutter)"
           python3 scripts/test-support-wakelock.py
           python3 scripts/test-branding.py
           dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart
@@ -274,10 +321,17 @@ jobs:
           export VCPKG_ROOT="${{ github.workspace }}/vcpkg"
           python3 build.py --flutter
 
+      - name: Require the complete generated Flutter app to analyze without errors or warnings
+        working-directory: rustdesk/flutter
+        run: flutter analyze --no-pub --no-fatal-infos
+
       - name: Test compiled attended support guard
         env:
           VCPKG_ROOT: ${{ github.workspace }}/vcpkg
         run: python3 scripts/test-compiled-support-guard.py
+
+      - name: Verify compiled Flutter UI branding
+        run: python3 scripts/verify-flutter-branding.py --assets rustdesk/flutter/build/linux/x64/release/bundle/data/flutter_assets
 
       - name: Exercise actual Linux cold and warm support launches
         run: python3 scripts/test-support-launch-linux.py --executable rustdesk/flutter/build/linux/x64/release/bundle/mixel-remote
@@ -332,6 +386,17 @@ jobs:
             --proofs artifacts/linux-mixed --require-native --mixed-transports \
             --artifact-run-id "$GITHUB_RUN_ID" | tee artifacts/linux-mixed.log
 
+      - name: Prove production HTTPS support with fresh owned native desktops
+        if: ${{ !cancelled() && steps.locate.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          python3 scripts/test-support-session-linux.py \
+            --deb "dist/mixel-remote-${UPSTREAM_VERSION}-x86_64.deb" \
+            --proofs artifacts/linux-production-https --require-native --native-blocked \
+            --artifact-run-id "$GITHUB_RUN_ID" | tee artifacts/linux-production-https.log
+
       - uses: actions/upload-artifact@v6
         if: always()
         with:
@@ -373,16 +438,16 @@ jobs:
           unzip -q nasm-2.16.03-macosx.zip
           sudo cp nasm-2.16.03/nasm /usr/local/bin/nasm
           nasm --version
-          # Rosetta helps some Intel toolchain bits when cross-building x86_64.
-          if [[ "${{ matrix.job.arch }}" == "x86_64" ]]; then
-            softwareupdate --install-rosetta --agree-to-license || true
+          # Each Mac input qualification executes both native architectures.
+          if [[ "$(uname -m)" == "arm64" ]]; then
+            softwareupdate --install-rosetta --agree-to-license
           fi
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: ${{ env.MAC_RUST_VERSION }}
-          targets: ${{ matrix.job.target }}
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
           components: rustfmt
 
       - name: Install Flutter
@@ -391,17 +456,24 @@ jobs:
           channel: stable
           flutter-version: ${{ env.FLUTTER_VERSION }}
 
+      - name: Prepare the exact release Flutter framework for native regression checks
+        run: |
+          flutter precache --macos
+          mixel_flutter_framework="$(python3 -c 'import pathlib,shutil; print(pathlib.Path(shutil.which("flutter")).resolve().parents[1] / "bin/cache/artifacts/engine/darwin-x64-release/FlutterMacOS.xcframework/macos-arm64_x86_64/FlutterMacOS.framework")')"
+          test -f "$mixel_flutter_framework/Headers/FlutterEngine.h"
+          echo "MIXEL_FLUTTER_FRAMEWORK=$mixel_flutter_framework" >> "$GITHUB_ENV"
+
       - name: Restore compiled codec cache
         uses: actions/cache@v5
         with:
           path: ${{ github.workspace }}/.vcpkg-binary-cache
           key: mixel-vcpkg-v2-macos14-${{ matrix.job.arch }}-${{ env.MACOSX_DEPLOYMENT_TARGET }}-${{ hashFiles('.github/vcpkg-triplets/*.cmake') }}-${{ env.VCPKG_COMMIT_ID }}
 
-      - name: Setup vcpkg + cache
+      - name: Setup pinned vcpkg
         uses: lukka/run-vcpkg@v11
         with:
           vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
-          doNotCache: false
+          doNotCache: true
 
       - name: Install vcpkg deps
         run: |
@@ -449,6 +521,14 @@ jobs:
           name: bridge-artifact
           path: rustdesk
 
+      - name: Prove Mac input C ABI and borrowed-event safety on both architectures
+        env:
+          RDREPO: ./rustdesk
+        run: |
+          set -o pipefail
+          mkdir -p macos-rdev-proof
+          python3 scripts/test-support-macos-rdev.py --native --evidence-dir macos-rdev-proof 2>&1 | tee macos-rdev-proof/qualification.log
+
       - name: Import Apple Developer ID cert
         if: env.APPLE_CERT_P12_BASE64 != ''
         uses: apple-actions/import-codesign-certs@v6
@@ -463,6 +543,16 @@ jobs:
           RDREPO: ./rustdesk
           MACOS_RUNTIME_LINK_TARGET: ${{ matrix.job.target }}
         run: |
+          python3 scripts/test-support-flutter-analysis.py --dart "$(command -v dart)"
+          python3 scripts/test-macos-startup.py
+          python3 scripts/test-support-macos-tray-url.py
+          python3 scripts/test-support-launch-macos-tray-controls.py
+          python3 scripts/test-support-macos-termination-support.py --app rustdesk
+          python3 scripts/test-support-flutter-sdk-compatibility.py --app rustdesk --flutter "$(command -v flutter)"
+          python3 scripts/test-support-native-warnings.py --source rustdesk --source-only --output "$RUNNER_TEMP/mixel-native-warning-source"
+          RUSTC_BIN="$(rustup which rustc)" python3 scripts/test-macos-update.py --source rustdesk
+          python3 scripts/test-support-macos-termination.py --flutter "$(command -v flutter)" --framework "$MIXEL_FLUTTER_FRAMEWORK"
+          RUSTC_BIN="$(rustup which rustc)" python3 scripts/test-support-fatal-crash.py --source rustdesk --upstream-repo rustdesk --evidence-dir "$RUNNER_TEMP/mixel-fatal-crash-source"
           python3 scripts/test-support-invite.py
           python3 scripts/test-generated-support-paths.py
           python3 scripts/test-support-macos-uri-routing.py
@@ -478,6 +568,8 @@ jobs:
           python3 scripts/test-support-clipboard.py
           python3 scripts/test-support-video.py
           python3 scripts/test-support-macos.py
+          python3 scripts/test-support-macos-window.py --flutter-framework "$MIXEL_FLUTTER_FRAMEWORK"
+          python3 scripts/test-support-macos-cleanup.py --dart "$(command -v dart)" --flutter "$(command -v flutter)"
           python3 scripts/test-support-wakelock.py
           python3 scripts/test-branding.py
           dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart
@@ -504,13 +596,21 @@ jobs:
           echo "❌ build failed after 3 attempts"
           exit 1
 
+      - name: Require the complete generated Flutter app to analyze without errors or warnings
+        working-directory: rustdesk/flutter
+        run: flutter analyze --no-pub --no-fatal-infos
+
       - name: Test compiled attended support guard
         env:
           VCPKG_ROOT: ${{ github.workspace }}/vcpkg
           CARGO_BUILD_TARGET: ${{ matrix.job.target }}
         run: python3 scripts/test-compiled-support-guard.py
 
+      - name: Verify compiled Flutter UI branding
+        run: python3 scripts/verify-flutter-branding.py --assets rustdesk/flutter/build/macos/Build/Products/Release/Mixel-Remote.app/Contents/Frameworks/App.framework/Resources/flutter_assets
+
       - name: Package + sign + notarize (.app then .dmg)
+        id: macos_package
         working-directory: rustdesk
         run: |
           set -euo pipefail
@@ -574,14 +674,27 @@ jobs:
             ditto -c -k --keepParent "$APP_PATH" "$APP_ZIP"
             python3 ../scripts/notarize-macos.py "$APP_ZIP" \
               --log-dir "../dist/notary-app-${{ matrix.job.arch }}"
-            rm -f "$APP_ZIP"
             xcrun stapler staple "$APP_PATH"
             xcrun stapler validate "$APP_PATH"
             spctl --assess --type execute --verbose=2 "$APP_PATH"
 
+            # Keep the exact signed/stapled launch input outside customer dist.
+            # Only a failed package step uploads this diagnostic, never a DMG.
+            DIAGNOSTICS="../macos-launch-failure/${{ matrix.job.arch }}"
+            mkdir -p "$DIAGNOSTICS"
+            DIAGNOSTIC_APP_ZIP="$DIAGNOSTICS/signed-stapled-diagnostic-app.zip"
+            ditto -c -k --keepParent "$APP_PATH" "$DIAGNOSTIC_APP_ZIP"
+            rm -f "$APP_ZIP"
+            python3 ../scripts/test-support-launch-macos-diagnostics.py
+
             # Exercise this exact signed/stapled app through real URL activation
             # before it becomes a downloadable installer.
-            python3 ../scripts/test-support-launch-macos.py --app "$APP_PATH"
+            python3 ../scripts/test-support-launch-macos.py --app "$APP_PATH" \
+              --diagnostics "$DIAGNOSTICS/runtime" --diagnostic-app-zip "$DIAGNOSTIC_APP_ZIP"
+
+            mkdir -p ../runtime-diagnostics
+            python3 ../scripts/test-support-launch-macos-tray.py --app "$APP_PATH" \
+              --proofs "../runtime-diagnostics/macos-${{ matrix.job.arch }}-tray"
 
             # 3) Package stapled .app into DMG, then sign/notarize/staple DMG.
             create-dmg --window-size 800 400 \
@@ -606,6 +719,36 @@ jobs:
             echo "⚠ Built unsigned DMG (no APPLE_CERT_P12_BASE64 secret)"
           fi
           ls -la ../dist/
+
+      - name: Retain macOS tray runtime proof
+        uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: macos-tray-runtime-proof-${{ matrix.job.arch }}
+          path: runtime-diagnostics/
+          if-no-files-found: warn
+
+      - name: Retain failed macOS launch bundle and bounded diagnostics
+        uses: actions/upload-artifact@v6
+        if: ${{ always() && steps.macos_package.outcome == 'failure' }}
+        with:
+          name: macos-launch-failure-diagnostic-${{ matrix.job.arch }}
+          path: macos-launch-failure/
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: macos-rdev-${{ matrix.job.arch }}
+          path: |
+            macos-rdev-proof/*.log
+            macos-rdev-proof/*.json
+            macos-rdev-proof/native-harness/trampoline.c
+            macos-rdev-proof/native-harness/Cargo.toml
+            macos-rdev-proof/native-harness/Cargo.lock
+            macos-rdev-proof/native-harness/src/main.rs
+            macos-rdev-proof/native-harness/original-owned-wrapper.rs
+          if-no-files-found: warn
 
       - uses: actions/upload-artifact@v6
         if: always()
@@ -673,11 +816,11 @@ jobs:
           path: ${{ github.workspace }}/.vcpkg-binary-cache
           key: mixel-vcpkg-v1-windows2022-x64-windows-static-${{ env.VCPKG_COMMIT_ID }}
 
-      - name: Setup vcpkg + cache
+      - name: Setup pinned vcpkg
         uses: lukka/run-vcpkg@v11
         with:
           vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
-          doNotCache: false
+          doNotCache: true
 
       - name: Install vcpkg deps
         shell: bash
@@ -756,10 +899,14 @@ jobs:
           if-no-files-found: ignore
 
       - name: Preflight generated support source and reporter
+        id: preflight
+        continue-on-error: ${{ needs.config.outputs.collect_windows_preflight_failure == 'true' }}
         shell: bash
         env:
+          MIXEL_HOSTED_OWNED_QA_NAMESPACE: "1"
           VCPKG_ROOT: ${{ github.workspace }}/vcpkg
           RDREPO: ./rustdesk
+          MIXEL_SDK_FULL_APP_PREFLIGHT: "true"
         run: bash scripts/test-windows-generated-source.sh
 
       - name: Build (cargo + flutter via build.py)
@@ -771,6 +918,10 @@ jobs:
           source ../scripts/use-windows-msvc-bash.sh
           python build.py --flutter --skip-portable-pack
 
+      - name: Require the complete generated Flutter app to analyze without errors or warnings
+        working-directory: rustdesk/flutter
+        run: flutter analyze --no-pub --no-fatal-infos
+
       - name: Test compiled attended support guard
         shell: bash
         env:
@@ -778,6 +929,9 @@ jobs:
         run: |
           source scripts/use-windows-msvc-bash.sh
           python scripts/test-compiled-support-guard.py
+
+      - name: Verify compiled Flutter UI branding
+        run: python scripts/verify-flutter-branding.py --assets rustdesk/flutter/build/windows/x64/runner/Release/data/flutter_assets
 
       - name: Prepare full application directory for Store packaging
         shell: pwsh
@@ -854,6 +1008,7 @@ jobs:
           Copy-Item $release dist/Mixel-Remote-QS.exe
 
       - name: Verify Windows Authenticode signatures
+        id: windows_authenticode
         shell: pwsh
         run: |
           $installers = @(Get-ChildItem dist -File | Where-Object { $_.Extension -in '.exe', '.msi' }) +
@@ -892,6 +1047,8 @@ jobs:
 
       - name: Exercise the signed QuickSupport download without an invite
         shell: pwsh
+        env:
+          MIXEL_HOSTED_OWNED_QA_NAMESPACE: "1"
         run: |
           ./scripts/test-support-launch-windows.ps1 -Executable dist/Mixel-Remote-QS.exe -Portable -QuickSupport -ExpectedPayload store-payload
 
@@ -902,6 +1059,30 @@ jobs:
           name: windows-customer-launch-logs
           path: ${{ runner.temp }}/mixel-owned-ordinary-qs-logs/**/*.log
           if-no-files-found: ignore
+
+      - name: Require the original Windows source preflight before customer artifact upload
+        if: ${{ always() && !cancelled() }}
+        shell: pwsh
+        env:
+          COLLECT_WINDOWS_PREFLIGHT_FAILURE: ${{ inputs.collect_windows_preflight_failure }}
+          INPUT_ONLY: ${{ inputs.only }}
+          PUBLISH_REQUESTED: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || inputs.publish_r2 }}
+          WINDOWS_RELEASE_GATE: ${{ inputs.runtime_windows_release_gate }}
+          RUNTIME_RUN_ID: ${{ inputs.runtime_artifact_run }}
+          RUNTIME_LINUX_RUN: ${{ inputs.runtime_linux_artifact_run }}
+          RUNTIME_MACOS_RUN: ${{ inputs.runtime_macos_artifact_run }}
+          SOURCE_PREFLIGHT_OUTCOME: ${{ steps.preflight.outcome }}
+        run: |
+          python scripts/validate-windows-preflight-build.py outcome
+          if ($LASTEXITCODE -ne 0) { throw 'Original Windows source preflight still blocks customer release.' }
+
+      - name: Retain verified signed Windows installers for unpublished diagnosis
+        if: ${{ always() && !cancelled() && needs.config.outputs.collect_windows_preflight_failure == 'true' && steps.windows_authenticode.outcome == 'success' }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-unpublished-diagnostic
+          path: dist/
+          if-no-files-found: error
 
       - uses: actions/upload-artifact@v6
         with:
@@ -920,7 +1101,7 @@ jobs:
           (needs.macos.result == 'success' || needs.macos.result == 'skipped') &&
           (needs.windows.result == 'success' || needs.windows.result == 'skipped') &&
           ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
-           (github.event_name == 'workflow_dispatch' && inputs.publish_r2)) && !inputs.runtime_windows_release_gate }}
+           (github.event_name == 'workflow_dispatch' && inputs.publish_r2)) && !inputs.runtime_windows_release_gate && !inputs.collect_windows_preflight_failure }}
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     concurrency:
@@ -963,7 +1144,7 @@ jobs:
           PY
 
   runtime:
-    if: ${{ github.event.inputs.runtime_artifact_run != '' }}
+    if: ${{ github.event.inputs.runtime_artifact_run != '' && !inputs.collect_windows_preflight_failure }}
     permissions:
       actions: read
       contents: read
@@ -1057,6 +1238,8 @@ jobs:
       - name: Diagnose signed compiled ordinary-to-QuickSupport ownership
         if: ${{ !inputs.runtime_windows_release_gate }}
         shell: pwsh
+        env:
+          MIXEL_HOSTED_OWNED_QA_NAMESPACE: "1"
         run: |
           # Observe the genuine baseline and complete the same strict 95s
           # compiled handoff before the optional live debugger can affect it.
@@ -1073,6 +1256,8 @@ jobs:
       - name: Prove actual signed customer QuickSupport95 without debugger
         if: ${{ inputs.runtime_windows_release_gate }}
         shell: pwsh
+        env:
+          MIXEL_HOSTED_OWNED_QA_NAMESPACE: "1"
         run: |
           ./scripts/test-support-launch-windows.ps1 -Executable release-client/Mixel-Remote-QS.exe -Portable -QuickSupport -ExpectedPayload runtime-client -OrdinaryThenQuickSupport
       - name: Save synthetic runtime diagnostics
@@ -1102,7 +1287,7 @@ jobs:
           path: runtime-diagnostics/
 
   runtime-macos:
-    if: ${{ github.event.inputs.runtime_macos_artifact_run != '' }}
+    if: ${{ github.event.inputs.runtime_macos_artifact_run != '' && !inputs.collect_windows_preflight_failure }}
     permissions:
       actions: read
       contents: read
@@ -1177,6 +1362,8 @@ jobs:
           xcrun stapler validate "$APP_PATH"
           spctl --assess --type execute --verbose=2 "$APP_PATH"
           python3 scripts/test-support-launch-macos.py --app "$APP_PATH" | tee "runtime-diagnostics/macos-${EXPECTED_ARCH}.log"
+          python3 scripts/test-support-launch-macos-tray.py --app "$APP_PATH" \
+            --proofs "runtime-diagnostics/macos-${EXPECTED_ARCH}-tray"
       - uses: actions/upload-artifact@v6
         if: always()
         with:
@@ -1184,7 +1371,7 @@ jobs:
           path: runtime-diagnostics/
 
   runtime-linux:
-    if: ${{ github.event.inputs.runtime_linux_artifact_run != '' }}
+    if: ${{ github.event.inputs.runtime_linux_artifact_run != '' && !inputs.collect_windows_preflight_failure }}
     permissions:
       actions: read
       contents: read

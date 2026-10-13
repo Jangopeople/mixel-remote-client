@@ -2,6 +2,8 @@
 """Make the normal signed Mac updater transactional and propagate its actual result."""
 import argparse
 import os
+import hashlib
+import stat
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -327,49 +329,126 @@ FIXED_CLI = r"""        #[cfg(target_os = "macos")]
         }
 """
 
-def replace(data: bytes, old: str, new: str) -> bytes:
-    newline = b"\r\n" if b"\r\n" in data else b"\n"
-    before = old.encode().replace(b"\n", newline)
-    after = new.encode().replace(b"\n", newline)
-    if data.count(before) == 1 and data.count(after) == 0:
-        return data.replace(before, after, 1)
-    if data.count(before) == 0 and data.count(after) == 1:
-        return data
-    raise RuntimeError("macOS normal updater anchor missing, duplicated or partially modified")
+PROFILES = [{'name': 'pristine', 'macosOriginal': '906437a17fa5d11a8c62a212a665362d5b880074f17d1bc0c3d0d8aedc433ee6', 'macosCorrected': '5fa906b581c5f0960fb81c4b00d8cbb4feb62e306c093a75ccae9fde1ca29e48', 'coreOriginal': '3bc241c59d547352e77bfa1b44d6ea0e1200b3dd703ed4a63fbb720b07187512', 'coreCorrected': '46e786a17717b5a975d0f6756847bff6f8a8ef759c6bc8f8c3c9f6874f22962a', 'scriptOriginal': 'de71fc36ab00ade08f4c6c4dd0a373a70d4973e4bc755d43ac611151e66c1a4a', 'scriptLower': False}, {'name': 'composed', 'macosOriginal': '0a00cbfaf4ce4ba813405ad7351fae891dcd92309080c3eeba9ea77782eafcf8', 'macosCorrected': 'ae56277bd67d1788d137d5d9a3dc2252c498db425eac4944ffaabdb8c791b7cd', 'coreOriginal': 'c2c7909b4c7c4ed7ca173ac614bb017266e3ff220fb19bedc0b8dbbf0f2ca00d', 'coreCorrected': '879f5bf280e4c638a74c5144975575df4cf1fc4c64b680ef616301c5ab35ee67', 'scriptOriginal': '3de85ca3785c9eaa2fffa7110372affc9d43a2a8128f090474fb34202433a0f7', 'scriptLower': True}, {'name': 'composed_fatal', 'macosOriginal': '0a00cbfaf4ce4ba813405ad7351fae891dcd92309080c3eeba9ea77782eafcf8', 'macosCorrected': 'ae56277bd67d1788d137d5d9a3dc2252c498db425eac4944ffaabdb8c791b7cd', 'coreOriginal': 'da22c16e10d6dcc8816dae300336cf5f3897834c65221a5a5f5344ec69901bd3', 'coreCorrected': '1f4a190de22571e014c0fca0130516b4e158457e4a16a27ff3423bfdbeabf8a4', 'scriptOriginal': '3de85ca3785c9eaa2fffa7110372affc9d43a2a8128f090474fb34202433a0f7', 'scriptLower': True}]
+TEMPLATE_SHA = {'macos-update.scpt': 'b948c865226c50c4bcb061320fb2469e4ed2b4e648fb6f7a0c4919f98d641031', 'macos-update-bundle.sh': 'd0dd94eb484f86ca37f302a625d496c876e4cedd21c149749d51590702eff1cc'}
+
+FILES = ['src/platform/macos.rs', 'src/core_main.rs', 'src/platform/privileges_scripts/update.scpt', 'src/platform/privileges_scripts/update.sh']
+UPSTREAM = '1abc897c451c8b5bbff3792509a7fef9d12f2ce3'
 
 
-def patch(repo: Path) -> None:
-    macos = repo / "src/platform/macos.rs"
-    core = repo / "src/core_main.rs"
-    if macos.is_symlink() or core.is_symlink():
-        raise RuntimeError("macOS updater source must be ordinary files")
-    updated_macos = replace(macos.read_bytes(), ORIGINAL_DAEMON, FIXED_DAEMON)
-    updated_macos = replace(updated_macos, ORIGINAL_UPDATER, FIXED_UPDATER)
-    updated_core = replace(core.read_bytes(), ORIGINAL_CLI, FIXED_CLI)
-    resources = repo / "src/platform/privileges_scripts"
-    embedded = {"update.scpt": (ROOT / "macos-update.scpt").read_bytes(),
-                "update.sh": (ROOT / "macos-update-bundle.sh").read_bytes()}
-    if not resources.is_dir() or resources.is_symlink():
-        raise RuntimeError("macOS privilege resource directory missing")
-    script = resources / "update.scpt"
-    accepted_scripts = (
-            ORIGINAL_SCRIPT.encode(), ORIGINAL_SCRIPT.replace("com.carriez.RustDesk", "com.carriez.rustdesk").encode(),
-            embedded["update.scpt"])
-    accepted_scripts += tuple(data.replace(b"\n", b"\r\n") for data in accepted_scripts)
-    if not script.is_file() or script.is_symlink() or script.read_bytes() not in accepted_scripts:
-        raise RuntimeError("macOS privilege script missing or changed upstream")
-    shell = resources / "update.sh"
-    if shell.is_symlink() or (shell.exists() and (not shell.is_file() or shell.read_bytes() != embedded["update.sh"])):
-        raise RuntimeError("macOS transactional updater resource collision")
-    # Validate every source anchor before writing any generated file.
-    macos.write_bytes(updated_macos)
-    core.write_bytes(updated_core)
-    for name, content in embedded.items():
-        (resources / name).write_bytes(content)
+def digest(data):
+    return hashlib.sha256(data).hexdigest()
 
 
-if __name__ == "__main__":
+def canonical(raw):
+    if b'\r' in raw:
+        remainder = raw.replace(b'\r\n', b'')
+        if b'\r' in remainder or b'\n' in remainder:
+            raise RuntimeError('Mixed macOS updater source newlines')
+        return raw.replace(b'\r\n', b'\n'), b'\r\n'
+    return raw, b'\n'
+
+
+def safe_target(root, relative, optional=False):
+    root = Path(root).absolute()
+    target = root / relative
+    for parent in reversed(target.parents):
+        entry = parent.lstat()
+        if (not stat.S_ISDIR(entry.st_mode) or stat.S_ISLNK(entry.st_mode)
+                or getattr(entry, 'st_file_attributes', 0) & 0x400):
+            raise RuntimeError('Unsafe macOS updater source parent')
+    try:
+        entry = target.lstat()
+    except FileNotFoundError:
+        if optional:
+            return target
+        raise RuntimeError('Missing macOS updater source: ' + relative) from None
+    if (not stat.S_ISREG(entry.st_mode) or entry.st_nlink != 1
+            or entry.st_size > 1000000
+            or getattr(entry, 'st_file_attributes', 0) & 0x400):
+        raise RuntimeError('Unsafe macOS updater source file: ' + relative)
+    return target
+
+
+def templates():
+    result = []
+    for name in ['macos-update.scpt', 'macos-update-bundle.sh']:
+        data = canonical(safe_target(ROOT, name).read_bytes())[0]
+        if digest(data) != TEMPLATE_SHA[name]:
+            raise RuntimeError('Pinned macOS updater template changed: ' + name)
+        # Embed canonical LF shell bytes even when Git materialized CRLF templates.
+        result.append(data)
+    return result
+
+
+def transform(data, changes, restore=False):
+    for before, after in reversed(changes) if restore else changes:
+        old, new = (after, before) if restore else (before, after)
+        old, new = old.encode(), new.encode()
+        if data.count(old) != 1 or data.count(new) != 0:
+            raise RuntimeError('macOS updater source anchor changed')
+        data = data.replace(old, new, 1)
+    return data
+
+
+def project(macos, core, script, shell, restore=False):
+    embedded_script, embedded_shell = templates()
+    for profile in PROFILES:
+        if digest(macos) == profile['macosOriginal'] and digest(core) == profile['coreOriginal']:
+            if digest(script) != profile['scriptOriginal'] or shell is not None:
+                raise RuntimeError('macOS updater original resource changed or foreign shell exists')
+            m = transform(macos, [(ORIGINAL_DAEMON, FIXED_DAEMON), (ORIGINAL_UPDATER, FIXED_UPDATER)])
+            c = transform(core, [(ORIGINAL_CLI, FIXED_CLI)])
+            if digest(m) != profile['macosCorrected'] or digest(c) != profile['coreCorrected']:
+                raise RuntimeError('macOS updater corrected source mismatch')
+            return (macos, core, script, None) if restore else (m, c, embedded_script, embedded_shell)
+        if digest(macos) == profile['macosCorrected'] and digest(core) == profile['coreCorrected']:
+            if script != embedded_script or shell != embedded_shell:
+                raise RuntimeError('macOS updater owned resource changed or missing')
+            m = transform(macos, [(ORIGINAL_DAEMON, FIXED_DAEMON), (ORIGINAL_UPDATER, FIXED_UPDATER)], True)
+            c = transform(core, [(ORIGINAL_CLI, FIXED_CLI)], True)
+            old_script = ORIGINAL_SCRIPT.replace('com.carriez.RustDesk', 'com.carriez.rustdesk') if profile['scriptLower'] else ORIGINAL_SCRIPT
+            if (digest(m) != profile['macosOriginal'] or digest(c) != profile['coreOriginal']
+                    or digest(old_script.encode()) != profile['scriptOriginal']):
+                raise RuntimeError('macOS updater inverse source mismatch')
+            return (m, c, old_script.encode(), None) if restore else (macos, core, script, shell)
+    raise RuntimeError('Pinned macOS updater whole source profile changed or partially applied')
+
+
+def apply(root, restore=False, check=False):
+    paths = [safe_target(root, relative, optional=index == 3) for index, relative in enumerate(FILES)]
+    before = [path.read_bytes() if path.exists() else None for path in paths]
+    normalized = [canonical(data) if data is not None else (None, b'\n') for data in before]
+    desired = project(*(data for data, newline in normalized), restore=restore)
+    after = [data.replace(b'\n', normalized[index][1]) if data is not None else None for index, data in enumerate(desired)]
+    # Every source, resource and ownership check is complete before the first write.
+    if not check:
+        for path, old, new in zip(paths, before, after):
+            if old == new:
+                continue
+            if new is None:
+                path.unlink()
+            elif old is None:
+                with path.open('xb') as stream:
+                    stream.write(new)
+            else:
+                path.write_bytes(new)
+    return {relative: digest(data) if data is not None else None for relative, data in zip(FILES, after)}
+
+
+def patch(repo):
+    return apply(repo)
+
+
+def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.parse_args()
-    patch(Path(os.environ.get("RDREPO", "rustdesk")))
-    print("PASS: normal Mac updater validates staging/rollback and propagates actual failure")
+    parser.add_argument('--source', type=Path, default=Path(os.environ.get('RDREPO', 'rustdesk')))
+    parser.add_argument('--restore', action='store_true')
+    parser.add_argument('--check', action='store_true')
+    args = parser.parse_args()
+    apply(args.source, restore=args.restore, check=args.check)
+    print('PASS exact transactional Mac updater source, resources, failure propagation and inverse')
+
+
+if __name__ == '__main__':
+    main()

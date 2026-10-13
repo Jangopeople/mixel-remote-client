@@ -1,9 +1,13 @@
-# Normal native functional controls under the exact customer fixture's ordinary
+﻿# Normal native functional controls under the exact customer fixture's ordinary
 # token. No debugger, registry observation, product event, or customer payload.
 $ErrorActionPreference = 'Stop'
 if (-not $IsWindows -or $env:GITHUB_ACTIONS -cne 'true') {
   throw 'Disposable standard-account lease qualification requires an isolated Windows Actions runner.'
 }
+python (Join-Path $PSScriptRoot 'test-windows-lease-observation.py')
+if ($LASTEXITCODE -ne 0) { throw 'Calling-thread observation and fatal baseline source controls failed.' }
+$ntBindingSource = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'test-support-nt-event-binding.cs'))
+if (-not ('MixelNtEventBinding' -as [type])) { Add-Type -TypeDefinition $ntBindingSource -CompilerOptions /warnaserror+ -ErrorAction Stop }
 $launchSource = Get-Content (Join-Path $PSScriptRoot 'test-support-launch-windows.ps1') -Raw
 $class = $launchSource.IndexOf('public static class MixelOrdinaryTokenFixture {')
 $first = $launchSource.LastIndexOf('using System;', $class)
@@ -11,12 +15,79 @@ $last = $launchSource.IndexOf("`n'@ }", $class)
 if ($class -lt 0 -or $first -lt 0 -or $last -le $first) { throw 'Exact normal ordinary-token fixture is missing.' }
 if (-not ('MixelOrdinaryTokenFixture' -as [type])) {
   $normalSource = $launchSource.Substring($first, $last - $first)
+  $directorySecuritySource = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'test-support-directory-security.cs'))
+  $directorySecurityClass = $directorySecuritySource.IndexOf('public static class DirectorySecurityPrototype {')
+  if ($directorySecurityClass -lt 0 -or $directorySecurityClass -ne $directorySecuritySource.LastIndexOf('public static class DirectorySecurityPrototype {')) { throw 'Exact read-only directory security helper changed.' }
   $marker = '  public static int StartStandardUser(string executable, string username, string password) {'
   $position = $normalSource.IndexOf($marker)
   if ($position -lt 0 -or $position -ne $normalSource.LastIndexOf($marker)) { throw 'Exact normal standard-launch comparison boundary changed.' }
   # Add only a documented secondary-launch comparison and retained-token SID
   # check to the test class; preserve its original customer launch and cleanup.
   $comparison = @'
+  public static object RetainedNtEventProcesses(int pid) {
+    IntPtr process;
+    if(!StartedProcesses.TryGetValue(pid,out process) || process==IntPtr.Zero || process.ToInt64()==-1) throw new InvalidOperationException("Nt event diagnostic requires an exact retained child");
+    return StartedProcesses;
+  }
+  public static void StopRetainedNtEventChild(int pid) {
+    IntPtr process;
+    if(!StartedProcesses.TryGetValue(pid,out process)) throw new InvalidOperationException("Nt event cleanup child is not owned");
+    StopOwnedProcessHandle(process);
+  }
+  public static DirectorySecurityPrototype.Observation StartedDirectorySecurityFacts(int pid,string ownedSid) {
+    // The existing fixture created and verified this QA account locally. Only
+    // redacted byte equality leaves the helper; neither SID nor account name is output.
+    var identity=new SecurityIdentifier(ownedSid);
+    byte[] bytes=new byte[identity.BinaryLength];identity.GetBinaryForm(bytes,0);
+    return DirectorySecurityPrototype.ObserveRetained(new DirectorySecurityPrototype.NativeApi(),pid,StartedProcesses,bytes);
+  }
+  // Direct ordinary creation inherits only this Actions caller's existing
+  // context. It never substitutes a secondary/linked token or desktop.
+  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, ExactSpelling=true, SetLastError=true)]
+  static extern bool CreateProcessW(string application, StringBuilder command, IntPtr processAttributes, IntPtr threadAttributes, bool inheritHandles, uint creation, IntPtr environment, string directory, ref StartupInfo startup, out ProcessInfo process);
+  public static int StartCurrentCallerNative(string executable) {
+    var startup=new StartupInfo { cb=Marshal.SizeOf(typeof(StartupInfo)) }; ProcessInfo process;
+    bool success=CreateProcessW(executable,new StringBuilder("\""+executable+"\""),IntPtr.Zero,IntPtr.Zero,false,0,IntPtr.Zero,System.IO.Path.GetDirectoryName(executable),ref startup,out process);
+    int error=Marshal.GetLastWin32Error();
+    if(!success) throw new Win32Exception(error,"Current-caller source launch failed; nativeError="+error.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    return Started(process);
+  }
+  public static bool StartedCurrentCallerSidMatches(int pid) {
+    IntPtr process,token,caller=IntPtr.Zero;
+    bool callerOpened=false; Exception primaryFailure=null;
+    if(!StartedProcesses.TryGetValue(pid,out process)) throw new InvalidOperationException("Current-caller SID check does not own the retained process");
+    if(!OpenProcessToken(process,8,out token)) {
+      int error=Marshal.GetLastWin32Error();
+      throw new Win32Exception(error,"Current-caller child primary TOKEN_QUERY failed; nativeError="+error.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    }
+    try {
+      // CreateProcessW inherits the calling process's primary token even when
+      // its thread impersonates. GetCurrent() observes that effective thread
+      // first, so it is not the launch identity being compared here.
+      if(!OpenProcessToken(GetCurrentProcess(),8,out caller)) {
+        int error=Marshal.GetLastWin32Error();
+        throw new Win32Exception(error,"Current-caller process primary TOKEN_QUERY failed; nativeError="+error.ToString(System.Globalization.CultureInfo.InvariantCulture));
+      }
+      callerOpened=true;
+      using(var original=new WindowsIdentity(caller)) using(var child=new WindowsIdentity(token)) { return original.User.Value==child.User.Value; }
+    } catch(Exception error) {
+      primaryFailure=error; throw;
+    } finally {
+      var failures=new System.Collections.Generic.List<Exception>();
+      if(callerOpened && !CloseHandle(caller)) {
+        int error=Marshal.GetLastWin32Error();
+        failures.Add(new Win32Exception(error,"Current-caller primary read-only identity token close failed; nativeError="+error.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+      }
+      if(!CloseHandle(token)) {
+        int error=Marshal.GetLastWin32Error();
+        failures.Add(new Win32Exception(error,"Current-caller child read-only identity token close failed; nativeError="+error.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+      }
+      if(failures.Count!=0) {
+        if(primaryFailure!=null) failures.Insert(0,primaryFailure);
+        throw new AggregateException("Current-caller read-only identity cleanup failed",failures);
+      }
+    }
+  }
   // Exact public TOKEN_INFORMATION_CLASS values from Microsoft's winnt.h.
   // These queries observe the existing token; they never assign privileges,
   // token sessions, integrity levels, memberships or namespace permissions.
@@ -295,6 +366,17 @@ if (-not ('MixelOrdinaryTokenFixture' -as [type])) {
     if(!OpenProcessToken(process,8,out token)) throw new Win32Exception();
     try { return ReadObservedTokenFacts(token); } finally { CloseHandle(token); }
   }
+  [DllImport("kernel32.dll", ExactSpelling=true, SetLastError=true)]
+  static extern bool IsProcessInJob(IntPtr process, IntPtr job, out bool present);
+  public static bool StartedJobMembership(int pid) {
+    IntPtr process;
+    if(!StartedProcesses.TryGetValue(pid,out process)) throw new InvalidOperationException("Job observation does not own the retained process");
+    bool present;
+    bool success=IsProcessInJob(process,IntPtr.Zero,out present);
+    int error=Marshal.GetLastWin32Error();
+    if(!success) throw new Win32Exception(error,"Owned read-only job membership query failed; nativeError="+error.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    return present;
+  }
   public static ObservedTokenFacts FreshStandardTokenFacts(string username, string password, string expectedSid) {
     IntPtr token;
     if(!LogonUserW(username,".",password,2,0,out token)) throw new Win32Exception();
@@ -335,7 +417,7 @@ if (-not ('MixelOrdinaryTokenFixture' -as [type])) {
 '@
   $normalSource = $normalSource.Insert($position,$comparison+"`n"+$bridge+"`n")
   $diagnostics = Get-Content (Join-Path $PSScriptRoot 'windows-standard-namespace-diagnostics.cs') -Raw
-  Add-Type -TypeDefinition ($normalSource+"`n"+$diagnostics)
+  Add-Type -TypeDefinition ("using System.Collections.Generic;`n"+$normalSource+"`n"+$diagnostics+"`n"+$directorySecuritySource.Substring($directorySecurityClass))
 }
 if (-not [MixelOrdinaryTokenFixture]::Elevated($PID)) { throw 'Owned standard-account qualification requires the elevated isolated runner.' }
 
@@ -345,6 +427,8 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 public static class MixelIsolatedLeaseControl {
   static readonly System.Collections.Generic.HashSet<IntPtr> Owned = new System.Collections.Generic.HashSet<IntPtr>();
+  static readonly System.Collections.Generic.Dictionary<IntPtr,string> WorldNames = new System.Collections.Generic.Dictionary<IntPtr,string>();
+  static readonly System.Collections.Generic.HashSet<IntPtr> DiagnosticDescriptors = new System.Collections.Generic.HashSet<IntPtr>();
   [StructLayout(LayoutKind.Sequential)] struct Attributes { public uint length; public IntPtr descriptor; public int inherit; }
   [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool ConvertStringSecurityDescriptorToSecurityDescriptorW(string text, uint version, out IntPtr descriptor, IntPtr size);
   [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern IntPtr CreateEventExW(ref Attributes attributes, string name, uint flags, uint access);
@@ -369,7 +453,156 @@ public static class MixelIsolatedLeaseControl {
     return handle;
   }
   public static IntPtr DeniedEvent(string name) { return Event(name,"D:P(A;;GA;;;BA)(A;;GA;;;SY)"); }
-  public static IntPtr WorldEvent(string name) { return Event(name,"D:P(A;;0x00100000;;;WD)(A;;GA;;;BA)(A;;GA;;;SY)"); }
+  public static object RetainedNtWorldEvents(string name,IntPtr handle) {
+    string actual;
+    if(!Owned.Contains(handle) || !WorldNames.TryGetValue(handle,out actual) || actual!=name) throw new InvalidOperationException("Nt event binding requires the exact existing owned World event");
+    return WorldNames;
+  }
+  public static IntPtr WorldEvent(string name) {
+    IntPtr handle=Event(name,"D:P(A;;0x00100000;;;WD)(A;;GA;;;BA)(A;;GA;;;SY)");
+    WorldNames.Add(handle,name);
+    return handle;
+  }
+  // Diagnostic-only public read APIs. The original event's creation, access,
+  // ACL and lifetime stay unchanged. This separate handle requests READ_CONTROL
+  // only; LABEL_SECURITY_INFORMATION does not request the full audit SACL.
+  [DllImport("kernel32.dll", EntryPoint="OpenEventW", CharSet=CharSet.Unicode, ExactSpelling=true, SetLastError=true)]
+  static extern IntPtr ReadOnlyOpenEvent(uint access, bool inherit, string name);
+  [DllImport("advapi32.dll", EntryPoint="GetSecurityInfo", ExactSpelling=true)]
+  static extern uint ReadOnlyGetSecurityInfo(IntPtr handle, uint objectType, uint information, out IntPtr owner, out IntPtr group, out IntPtr dacl, out IntPtr sacl, out IntPtr descriptor);
+  [DllImport("advapi32.dll", EntryPoint="GetSecurityDescriptorDacl", ExactSpelling=true, SetLastError=true)]
+  static extern bool ReadOnlyGetDacl(IntPtr descriptor, out bool present, out IntPtr acl, out bool defaulted);
+  [DllImport("advapi32.dll", EntryPoint="GetSecurityDescriptorSacl", ExactSpelling=true, SetLastError=true)]
+  static extern bool ReadOnlyGetSacl(IntPtr descriptor, out bool present, out IntPtr acl, out bool defaulted);
+  [DllImport("kernel32.dll", EntryPoint="LocalFree", ExactSpelling=true, SetLastError=true)]
+  static extern IntPtr ReadOnlyLocalFree(IntPtr memory);
+  public sealed class SafeAceFacts {
+    public byte type, flags;
+    public uint mask;
+    public string trustee;
+  }
+  public sealed class SafeLabelFacts {
+    public byte type, flags;
+    public uint policy;
+    public uint? integrityRid;
+    public string classification;
+  }
+  public sealed class SafeDescriptorFacts {
+    public bool daclPresent, daclNull, labelAclPresent, labelAclNull;
+    public SafeAceFacts[] daclAces;
+    public SafeLabelFacts[] labels;
+  }
+  static byte[] ReadOnlyAcl(IntPtr pointer) {
+    if(pointer==IntPtr.Zero) return null;
+    int size=unchecked((ushort)Marshal.ReadInt16(pointer,2));
+    if(size<8) throw new InvalidOperationException("Owned descriptor ACL size is invalid");
+    byte[] bytes=new byte[size]; Marshal.Copy(pointer,bytes,0,size);
+    if((bytes[0]!=2 && bytes[0]!=4) || BitConverter.ToUInt16(bytes,4)>1024) throw new InvalidOperationException("Owned descriptor ACL header is invalid");
+    return bytes;
+  }
+  static uint[] ReadOnlySid(byte[] bytes,int offset,int end,out ulong authority) {
+    if(offset<0 || end>bytes.Length || offset>end-8 || bytes[offset]!=1 || bytes[offset+1]>15 || offset+8+bytes[offset+1]*4>end) throw new InvalidOperationException("Owned descriptor SID bounds are invalid");
+    authority=0; for(int i=2;i<8;i++) authority=(authority<<8)|bytes[offset+i];
+    uint[] parts=new uint[bytes[offset+1]];
+    for(int i=0;i<parts.Length;i++) parts[i]=BitConverter.ToUInt32(bytes,offset+8+i*4);
+    return parts;
+  }
+  static string ReadOnlyTrustee(byte[] bytes,int offset,int end) {
+    ulong authority; uint[] parts=ReadOnlySid(bytes,offset,end,out authority);
+    if(authority==1 && parts.Length==1 && parts[0]==0) return "World";
+    if(authority==5 && parts.Length==1 && parts[0]==18) return "SYSTEM";
+    if(authority==5 && parts.Length==2 && parts[0]==32 && parts[1]==544) return "Administrators";
+    return "other";
+  }
+  static int ReadOnlyAceEnd(byte[] bytes,int offset) {
+    if(offset<8 || offset>bytes.Length-4) throw new InvalidOperationException("Owned descriptor ACE header bounds are invalid");
+    int size=BitConverter.ToUInt16(bytes,offset+2);
+    if(size<4 || size>bytes.Length-offset) throw new InvalidOperationException("Owned descriptor ACE content bounds are invalid");
+    return offset+size;
+  }
+  static SafeDescriptorFacts ReadOnlyDescriptorFacts(bool daclPresent,IntPtr dacl,bool saclPresent,IntPtr sacl) {
+    // The descriptor getters leave the ACL output invalid when Present is false.
+    // Never inspect that output; absent and present-NULL remain distinct facts.
+    if(!daclPresent) dacl=IntPtr.Zero;
+    if(!saclPresent) sacl=IntPtr.Zero;
+    byte[] access=ReadOnlyAcl(dacl), labels=ReadOnlyAcl(sacl);
+    var result=new SafeDescriptorFacts { daclPresent=daclPresent, daclNull=dacl==IntPtr.Zero, labelAclPresent=saclPresent, labelAclNull=sacl==IntPtr.Zero };
+    var safeAces=new System.Collections.Generic.List<SafeAceFacts>();
+    if(access!=null) {
+      int offset=8, count=BitConverter.ToUInt16(access,4);
+      for(int i=0;i<count;i++) {
+        int end=ReadOnlyAceEnd(access,offset);
+        var ace=new SafeAceFacts { type=access[offset], flags=access[offset+1], trustee="other" };
+        if(ace.type==0 || ace.type==1) {
+          if(end-offset<16) throw new InvalidOperationException("Owned descriptor access ACE is truncated");
+          ace.mask=BitConverter.ToUInt32(access,offset+4);
+          ace.trustee=ReadOnlyTrustee(access,offset+8,end);
+        }
+        safeAces.Add(ace); offset=end;
+      }
+    }
+    var safeLabels=new System.Collections.Generic.List<SafeLabelFacts>();
+    if(labels!=null) {
+      int offset=8, count=BitConverter.ToUInt16(labels,4);
+      for(int i=0;i<count;i++) {
+        int end=ReadOnlyAceEnd(labels,offset);
+        var label=new SafeLabelFacts { type=labels[offset], flags=labels[offset+1], classification="other" };
+        if(label.type==0x11) {
+          if(end-offset<16) throw new InvalidOperationException("Owned descriptor integrity ACE is truncated");
+          label.policy=BitConverter.ToUInt32(labels,offset+4);
+          ulong authority; uint[] parts=ReadOnlySid(labels,offset+8,end,out authority);
+          if(authority==16 && parts.Length==1) { label.integrityRid=parts[0]; label.classification="mandatory-integrity"; }
+        }
+        safeLabels.Add(label); offset=end;
+      }
+    }
+    result.daclAces=safeAces.ToArray(); result.labels=safeLabels.ToArray();
+    return result;
+  }
+  static void FreeDiagnosticDescriptor(IntPtr descriptor) {
+    if(!DiagnosticDescriptors.Contains(descriptor)) throw new InvalidOperationException("Read-only descriptor allocation is not owned");
+    IntPtr failed=ReadOnlyLocalFree(descriptor);
+    int error=Marshal.GetLastWin32Error();
+    if(failed!=IntPtr.Zero) throw new Win32Exception(error,"Owned read-only descriptor free failed; nativeError="+error.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    DiagnosticDescriptors.Remove(descriptor);
+  }
+  public static SafeDescriptorFacts ObserveWorldDescriptor(string name,IntPtr original) {
+    Isolated(name); string actual;
+    if(!Owned.Contains(original) || !WorldNames.TryGetValue(original,out actual) || actual!=name) throw new InvalidOperationException("Descriptor query does not own this exact retained World event/name");
+    IntPtr handle=ReadOnlyOpenEvent(0x20000,false,name);
+    int openError=Marshal.GetLastWin32Error();
+    if(handle==IntPtr.Zero) throw new Win32Exception(openError,"Owned World event READ_CONTROL open failed; nativeError="+openError.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    if(!Owned.Add(handle)) throw new InvalidOperationException("Read-only event query returned an already-owned handle");
+    IntPtr descriptor=IntPtr.Zero; Exception primaryFailure=null;
+    try {
+      IntPtr owner,group,dacl,sacl;
+      uint result=ReadOnlyGetSecurityInfo(handle,6,0x14,out owner,out group,out dacl,out sacl,out descriptor);
+      // GetSecurityInfo returns its own DWORD error. Failed outputs do not
+      // establish allocation ownership, even when the output pointer is nonzero.
+      if(result!=0) { descriptor=IntPtr.Zero; throw new Win32Exception(unchecked((int)result),"Owned World event DACL/LABEL query failed; nativeError="+result.ToString(System.Globalization.CultureInfo.InvariantCulture)); }
+      if(descriptor==IntPtr.Zero) throw new InvalidOperationException("Owned World event descriptor query returned no allocation");
+      DiagnosticDescriptors.Add(descriptor);
+      // Read the requested label from the returned descriptor, independently
+      // of GetSecurityInfo's optional ppSacl output contract for a full SACL.
+      bool daclPresent,saclPresent,defaulted;
+      bool daclSuccess=ReadOnlyGetDacl(descriptor,out daclPresent,out dacl,out defaulted);
+      int daclError=Marshal.GetLastWin32Error();
+      if(!daclSuccess) throw new Win32Exception(daclError,"Owned World descriptor DACL read failed; nativeError="+daclError.ToString(System.Globalization.CultureInfo.InvariantCulture));
+      bool saclSuccess=ReadOnlyGetSacl(descriptor,out saclPresent,out sacl,out defaulted);
+      int saclError=Marshal.GetLastWin32Error();
+      if(!saclSuccess) throw new Win32Exception(saclError,"Owned World descriptor label read failed; nativeError="+saclError.ToString(System.Globalization.CultureInfo.InvariantCulture));
+      return ReadOnlyDescriptorFacts(daclPresent,dacl,saclPresent,sacl);
+    } catch(Exception error) { primaryFailure=error; throw; }
+    finally {
+      var failures=new System.Collections.Generic.List<Exception>();
+      if(descriptor!=IntPtr.Zero) { try { FreeDiagnosticDescriptor(descriptor); } catch(Exception error) { failures.Add(error); } }
+      try { Close(handle); } catch(Exception error) { failures.Add(error); }
+      if(failures.Count!=0) {
+        if(primaryFailure!=null) failures.Insert(0,primaryFailure);
+        throw new AggregateException("Owned World event read-only query cleanup failed",failures);
+      }
+    }
+  }
   public static IntPtr WrongObject(string name) {
     Isolated(name);
     // Grant the requested SYNCHRONIZE right to the ordinary account, so an
@@ -391,16 +624,281 @@ public static class MixelIsolatedLeaseControl {
     if(!Owned.Contains(handle)) throw new InvalidOperationException("Isolated lease handle is not owned");
     if(!CloseHandle(handle)) throw new Win32Exception(Marshal.GetLastWin32Error());
     Owned.Remove(handle);
+    WorldNames.Remove(handle);
   }
   public static void ClosePending() {
     var failures = new System.Collections.Generic.List<Exception>();
     foreach(IntPtr handle in new System.Collections.Generic.List<IntPtr>(Owned)) {
       try { Close(handle); } catch(Exception error) { failures.Add(error); }
     }
+    foreach(IntPtr descriptor in new System.Collections.Generic.List<IntPtr>(DiagnosticDescriptors)) {
+      try { FreeDiagnosticDescriptor(descriptor); } catch(Exception error) { failures.Add(error); }
+    }
     if(failures.Count!=0) throw new AggregateException("Owned isolated lease handle cleanup failed", failures);
   }
 }
 '@ }
+
+function Write-LeaseContextFailure([ValidateSet('job-membership','job-limits','explicit-directory-access','explicit-directory-security','owned-world-descriptor','nt-world-bind-arm','nt-child-self','nt-child-ack','nt-child-owned-exit','nt-parent-cleanup','nt-protocol-cleanup','nt-parent-pending-cleanup','nt-pending-protocol-cleanup','nt-world-still-held')][string]$Operation, [Exception]$Failure) {
+  $actual = $Failure
+  for ($depth = 0; $depth -lt 8 -and $actual -is [Management.Automation.MethodInvocationException] -and $actual.InnerException; $depth++) {
+    $actual = $actual.InnerException
+  }
+  $leaseContextFailures.Add($actual)
+  $items = if ($actual -is [AggregateException]) { @($actual.Flatten().InnerExceptions) } else { @($actual) }
+  $codes = @($items | Where-Object { $_ -is [ComponentModel.Win32Exception] } | ForEach-Object { $_.NativeErrorCode })
+  $safeCodes = if ($codes.Count) { $codes -join ',' } else { 'none' }
+  try { Write-Host "FAIL: source-only read-only lease context observation; operation=$Operation; exceptionType=$($actual.GetType().Name); nativeErrors=$safeCodes; fatalAfterOriginalGate=True; namedDirectoryCauseEstablished=False." } catch {}
+}
+
+function Invoke-LeaseJobObservation([int]$ControlPid) {
+  try {
+    $inJob = [MixelOrdinaryTokenFixture]::StartedJobMembership($ControlPid)
+    Write-Host "OBSERVED: retained owned source child job membership; controlPid=$ControlPid; inAnyJob=$inJob; query=IsProcessInJob(NULL); childJobLimitsMeasured=False; namedDirectoryMeasured=False."
+  } catch { Write-LeaseContextFailure job-membership $_.Exception }
+}
+
+function Read-StandardChildJobLimits([uint32]$ExpectedPid) {
+  $path = Join-Path $fixtureRoot 'fixture-job-limits.json'
+  if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw 'Owned child job-limit observation is missing.' }
+  $text = [IO.File]::ReadAllText($path)
+  if ($text.Length -gt 4096) { throw 'Owned child job-limit observation exceeds its bound.' }
+  # PS5/7 pipeline conversion unwraps singleton JSON arrays. The native
+  # publisher emits one object; reject any other root envelope before parsing.
+  if (-not $text.TrimStart().StartsWith('{') -or -not $text.TrimEnd().EndsWith('}')) { throw 'Owned child job-limit root must be an object.' }
+  $record = $text | ConvertFrom-Json
+  $names = @($record.PSObject.Properties.Name | Sort-Object)
+  $expected = @('schema','pid','inAnyJob','membershipStatus','membershipError','uiStatus','uiError','uiReturned','uiFlags','extendedStatus','extendedError','extendedReturned','extendedFlags') | Sort-Object
+  if (($names -join ',') -cne ($expected -join ',')) { throw 'Owned child job-limit fields changed.' }
+  foreach ($name in @('schema','pid','membershipError','uiError','uiReturned','extendedError','extendedReturned')) {
+    $value = $record.$name
+    if (-not ($value -is [int] -or $value -is [long] -or $value -is [uint32] -or $value -is [uint64]) -or
+        $value -lt 0 -or $value -gt [uint32]::MaxValue) { throw 'Owned child job-limit integer is not bounded.' }
+  }
+  if ($record.schema -ne 1 -or $ExpectedPid -eq 0 -or $record.pid -ne $ExpectedPid -or
+      $record.membershipStatus -isnot [string] -or $record.membershipStatus -cnotin @('available','error') -or
+      ($record.membershipStatus -ceq 'available' -and ($record.membershipError -ne 0 -or $record.inAnyJob -isnot [bool])) -or
+      ($record.membershipStatus -ceq 'error' -and $null -ne $record.inAnyJob)) { throw 'Owned child job membership facts are inconsistent.' }
+  foreach ($kind in @('ui','extended')) {
+    $status = $record.($kind + 'Status'); $errorCode = $record.($kind + 'Error')
+    $returned = $record.($kind + 'Returned'); $flags = $record.($kind + 'Flags')
+    $length = if ($kind -ceq 'ui') { 4 } else { 144 }
+    if ($status -isnot [string]) { throw 'Owned child job-limit status must be a scalar string.' }
+    if ($record.membershipStatus -ceq 'error' -or -not $record.inAnyJob) {
+      $unused = if ($record.membershipStatus -ceq 'error') { 'membership-error' } else { 'not-in-job' }
+      if ($status -cne $unused -or $errorCode -ne 0 -or $returned -ne 0 -or $null -ne $flags) { throw 'Unqueried child job limits contain invented facts.' }
+    } else {
+      if ($status -cnotin @('available','error','size') -or
+          ($status -cne 'error' -and $errorCode -ne 0) -or
+          ($status -ceq 'available' -and $returned -ne $length) -or
+          ($status -ceq 'size' -and $returned -eq $length)) { throw 'Child job query result/length is inconsistent.' }
+      if ($status -ceq 'available') {
+        if (-not ($flags -is [int] -or $flags -is [long] -or $flags -is [uint32] -or $flags -is [uint64]) -or
+            $flags -lt 0 -or $flags -gt [uint32]::MaxValue) { throw 'Child job flags are not a raw bounded DWORD.' }
+      } elseif ($null -ne $flags) { throw 'Failed or short child job query published unverified flags.' }
+    }
+  }
+  return $record
+}
+
+function Invoke-LeaseChildJobLimitsObservation([uint32]$ControlPid) {
+  try {
+    $record = Read-StandardChildJobLimits $ControlPid
+    $complete = $record.membershipStatus -ceq 'available' -and $record.inAnyJob -and
+        $record.uiStatus -ceq 'available' -and $record.extendedStatus -ceq 'available'
+    Write-Host "OBSERVED: owned source child immediate job limits; controlPid=$ControlPid; query=QueryInformationJobObject(NULL); immediateJobOnly=True; completeLimitsMeasured=$complete; namedDirectoryMeasured=False; causeEstablished=False; $($record | ConvertTo-Json -Compress)."
+    $failures = [Collections.Generic.List[Exception]]::new()
+    if ($record.membershipStatus -ceq 'error') {
+      $code = [BitConverter]::ToInt32([BitConverter]::GetBytes([uint32]$record.membershipError),0)
+      $failures.Add([ComponentModel.Win32Exception]::new($code,'Child self job membership query failed.'))
+    }
+    foreach ($kind in @('ui','extended')) {
+      if ($record.($kind + 'Status') -ceq 'error') {
+        $code = [BitConverter]::ToInt32([BitConverter]::GetBytes([uint32]$record.($kind + 'Error')),0)
+        $failures.Add([ComponentModel.Win32Exception]::new($code,"Child self $kind job query failed."))
+      } elseif ($record.($kind + 'Status') -ceq 'size') {
+        $failures.Add([InvalidOperationException]::new("Child self $kind job query returned a different structure length."))
+      }
+    }
+    if ($failures.Count -gt 0) { throw [AggregateException]::new('Owned child job-limit observation failed.', $failures) }
+  } catch { Write-LeaseContextFailure job-limits $_.Exception }
+}
+
+function Read-StandardChildDirectoryAccess([uint32]$ExpectedPid) {
+  $path = Join-Path $fixtureRoot 'fixture-directory-access.json'
+  if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw 'Owned explicit-directory observation is missing.' }
+  $text = [IO.File]::ReadAllText($path)
+  if ($text.Length -gt 4096) { throw 'Owned explicit-directory observation exceeds its bound.' }
+  if (-not $text.TrimStart().StartsWith('{') -or -not $text.TrimEnd().EndsWith('}')) { throw 'Owned explicit-directory root must be an object.' }
+  $record = $text | ConvertFrom-Json
+  $expected = @('schema','pid','scope','route','nameCreationAccessMeasured','objectsCreated','sessionStatus','sessionError','sessionId','loaderStatus','loaderError','unloadStatus','unloadError','records') | Sort-Object
+  if ((@($record.PSObject.Properties.Name | Sort-Object) -join ',') -cne ($expected -join ',')) { throw 'Owned explicit-directory fields changed.' }
+  foreach ($name in @('schema','pid','sessionError','loaderError','unloadError')) {
+    $value = $record.$name
+    if (-not ($value -is [int] -or $value -is [long] -or $value -is [uint32] -or $value -is [uint64]) -or
+        $value -lt 0 -or $value -gt [uint32]::MaxValue) { throw 'Owned explicit-directory integer is not bounded.' }
+  }
+  foreach ($name in @('scope','route','sessionStatus','loaderStatus','unloadStatus')) {
+    if ($record.$name -isnot [string]) { throw 'Owned explicit-directory classification must be a scalar string.' }
+  }
+  if ($record.schema -ne 1 -or $ExpectedPid -eq 0 -or $record.pid -ne $ExpectedPid -or
+      $record.scope -cne 'ExplicitDirectoryAccessOnly' -or $record.route -cne 'ActualEventRouteUnmeasured' -or
+      $record.nameCreationAccessMeasured -isnot [bool] -or $record.objectsCreated -isnot [bool] -or $record.objectsCreated -or
+      $record.sessionStatus -cnotin @('available','error','unqueried') -or
+      $record.loaderStatus -cnotin @('available','load-error','export-error','layout-error') -or
+      $record.unloadStatus -cnotin @('closed','failed','not-loaded') -or $record.records -isnot [array]) { throw 'Owned explicit-directory identity/scope changed.' }
+  if ($record.sessionStatus -ceq 'available') {
+    $value = $record.sessionId
+    if (-not ($value -is [int] -or $value -is [long] -or $value -is [uint32] -or $value -is [uint64]) -or
+        $value -lt 0 -or $value -gt [uint32]::MaxValue -or $record.sessionError -ne 0) { throw 'Owned directory session is not an actual bounded DWORD.' }
+  } elseif ($null -ne $record.sessionId -or ($record.sessionStatus -ceq 'unqueried' -and $record.sessionError -ne 0)) { throw 'Unmeasured directory session contains invented facts.' }
+  if (($record.loaderStatus -ceq 'layout-error') -ne ($record.sessionStatus -ceq 'unqueried') -or
+      ($record.loaderStatus -cin @('available','layout-error') -and $record.loaderError -ne 0) -or
+      ($record.loaderStatus -cin @('load-error','layout-error') -and ($record.unloadStatus -cne 'not-loaded' -or $record.unloadError -ne 0)) -or
+      ($record.loaderStatus -cin @('available','export-error') -and $record.unloadStatus -cnotin @('closed','failed')) -or
+      ($record.unloadStatus -cne 'failed' -and $record.unloadError -ne 0)) { throw 'Directory loader ownership facts are inconsistent.' }
+  $count = if ($record.loaderStatus -cne 'available') { 0 } elseif ($record.sessionStatus -ceq 'available') { 6 } else { 3 }
+  if ($record.records.Count -ne $count -or $record.nameCreationAccessMeasured -ne ($record.loaderStatus -ceq 'available')) { throw 'Directory open attempts are missing, duplicated or invented.' }
+  $creationStart = if ($record.sessionStatus -ceq 'available') { 4 } else { 2 }
+  for ($i = 0; $i -lt $count; $i++) {
+    $item = $record.records[$i]
+    $fields = @('directory','path','access','ntStatus','status','handleReturned','closeStatus','closeError') | Sort-Object
+    if ((@($item.PSObject.Properties.Name | Sort-Object) -join ',') -cne ($fields -join ',')) { throw 'Directory attempt fields changed.' }
+    foreach ($name in @('directory','path','status','closeStatus')) {
+      if ($item.$name -isnot [string]) { throw 'Directory attempt classification must be a scalar string.' }
+    }
+    foreach ($name in @('access','ntStatus','closeError')) {
+      $value = $item.$name
+      $minimum = if ($name -ceq 'ntStatus') { [int]::MinValue } else { 0 }
+      $maximum = if ($name -ceq 'ntStatus') { [int]::MaxValue } else { [uint32]::MaxValue }
+      if (-not ($value -is [int] -or $value -is [long] -or $value -is [uint32] -or $value -is [uint64]) -or
+          $value -lt $minimum -or $value -gt $maximum) { throw 'Directory attempt native integer is not bounded.' }
+    }
+    $kind = if ($i -lt 2 -or $i -eq $creationStart) { 'global' } else { 'session' }
+    $explicitPath = if ($kind -ceq 'global') { '\BaseNamedObjects' } else { "\Sessions\$($record.sessionId)\BaseNamedObjects" }
+    $access = if ($i -ge $creationStart) { 4 } else { 1 + ($i % 2) }
+    if ($item.directory -cne $kind -or $item.path -cne $explicitPath -or $item.access -ne $access -or
+        $item.handleReturned -isnot [bool] -or $item.status -cnotin @('opened','nt-result','contract-error')) { throw 'Explicit directory or independent access-only right changed.' }
+    if ($item.ntStatus -eq 0 -and $item.handleReturned) {
+      if ($item.status -cne 'opened' -or $item.closeStatus -cnotin @('closed','failed') -or
+          ($item.closeStatus -ceq 'closed' -and $item.closeError -ne 0)) { throw 'Owned directory handle close facts changed.' }
+    } else {
+      $status = if ($item.ntStatus -ge 0 -or $item.handleReturned) { 'contract-error' } else { 'nt-result' }
+      if ($item.status -cne $status -or $item.closeStatus -cne 'not-opened' -or $item.closeError -ne 0) { throw 'Unowned directory handle was closed or NTSTATUS was reclassified.' }
+    }
+  }
+  return $record
+}
+
+function Invoke-LeaseChildDirectoryAccessObservation([uint32]$ControlPid) {
+  try {
+    $record = Read-StandardChildDirectoryAccess $ControlPid
+    Write-Host "OBSERVED: owned source child explicit object directory access; controlPid=$ControlPid; ExplicitDirectoryAccessOnly=True; ActualEventRouteUnmeasured=True; nameCreationAccessMeasured=$($record.nameCreationAccessMeasured); objectsCreated=False; causeEstablished=False; $($record | ConvertTo-Json -Depth 5 -Compress)."
+    $failures = [Collections.Generic.List[Exception]]::new()
+    foreach ($kind in @('session','loader','unload')) {
+      if ($record.($kind + 'Status') -cin @('error','load-error','export-error','failed')) {
+        $code = [BitConverter]::ToInt32([BitConverter]::GetBytes([uint32]$record.($kind + 'Error')),0)
+        $failures.Add([ComponentModel.Win32Exception]::new($code,"Child self directory $kind observation failed."))
+      }
+    }
+    if ($record.loaderStatus -ceq 'layout-error') { $failures.Add([InvalidOperationException]::new('Directory diagnostic x64 layout is unavailable.')) }
+    foreach ($item in $record.records) {
+      if ($item.status -ceq 'contract-error') { $failures.Add([InvalidOperationException]::new("Directory open returned an unexpected status/output contract; rawNTSTATUS=$($item.ntStatus).")) }
+      if ($item.closeStatus -ceq 'failed') {
+        $code = [BitConverter]::ToInt32([BitConverter]::GetBytes([uint32]$item.closeError),0)
+        $failures.Add([ComponentModel.Win32Exception]::new($code,'Owned directory handle close failed.'))
+      }
+    }
+    # Access-denied/not-found NTSTATUS values are measured results, not
+    # invented Win32 errors or proof about CreateEvent's actual namespace.
+    if ($failures.Count -gt 0) { throw [AggregateException]::new('Owned explicit-directory observation failed.', $failures) }
+  } catch { Write-LeaseContextFailure explicit-directory-access $_.Exception }
+}
+
+function Invoke-LeaseDirectorySecurityObservation([uint32]$ExpectedPid) {
+  try {
+    if ($ExpectedPid -eq 0 -or -not $ownedSid) { throw 'Retained directory observation requires the exact child and owned QA identity.' }
+    $facts = [MixelOrdinaryTokenFixture]::StartedDirectorySecurityFacts($ExpectedPid,$ownedSid)
+    if ($facts -isnot [DirectorySecurityPrototype+Observation] -or $facts.schema -ne 1 -or $facts.pid -ne $ExpectedPid -or
+        $facts.scope -cne 'ExplicitDirectorySecurityOnly' -or $facts.context -cne 'ParentCall' -or
+        $facts.identityComparison -cne 'PrimaryTokensOnly' -or $facts.parentCallingThreadTokenMeasured -or
+        $facts.actualEventRouteMeasured -or $facts.effectiveAccessCalculated -or $facts.objectsCreated -or $facts.causeEstablished -or
+        $facts.directories.Count -ne 2 -or $facts.directories[0].pathKind -cne 'global' -or $facts.directories[1].pathKind -cne 'child-session') {
+      throw 'Read-only directory security facts changed their exact retained subject or measurement scope.'
+    }
+    $json = $facts | ConvertTo-Json -Depth 8 -Compress
+    if ($json.Length -gt 131072 -or $json.Contains('S-1-') -or $json.Contains('SecurityIdentifier')) { throw 'Read-only directory security output exceeds its bounded redacted schema.' }
+    Write-Host "OBSERVED: parent read-only explicit directory security; controlPid=$ExpectedPid; information=DACL4,LABEL16; requestedAccess=READ_CONTROL; ActualEventRouteUnmeasured=True; $json."
+    $failures = [Collections.Generic.List[Exception]]::new()
+    foreach ($stage in @('load','unload')) {
+      $expected = if ($stage -ceq 'load') { 'available' } else { 'unloaded' }
+      if ($facts.$stage -cne $expected) {
+        $failures.Add([InvalidOperationException]::new("Directory security module stage incomplete: $stage=$($facts.$stage)."))
+        $code = if ($stage -ceq 'load') { $facts.loadError } else { $facts.unloadError }
+        if (($stage -ceq 'unload' -and $facts.unload -ceq 'error') -or
+            ($stage -ceq 'load' -and $facts.load -cin @('system-directory-error','load-error','api-unavailable'))) {
+          if ($null -ne $code) { $failures.Add([ComponentModel.Win32Exception]::new([int]$code,"Directory security native module failure: stage=$stage.")) }
+        }
+      }
+    }
+    foreach ($subject in @('current','child')) {
+      $token = $facts.$subject
+      if ($token.open -cne 'available' -or $token.user -cne 'available' -or $token.logon -cnotin @('available','absent') -or
+          $token.integrity -cne 'available' -or $token.close -cne 'closed') {
+        $failures.Add([InvalidOperationException]::new("Directory security primary comparison incomplete: subject=$subject."))
+      }
+      foreach ($field in @('open','user','logon','integrity','close')) {
+        if ($token.$field -ceq 'error' -and $null -ne $token.($field + 'Error')) {
+          $failures.Add([ComponentModel.Win32Exception]::new([int]$token.($field + 'Error'),"Directory security native primary comparison failure: subject=$subject; stage=$field."))
+        }
+      }
+    }
+    foreach ($row in $facts.directories) {
+      # A literal nonzero NTSTATUS is an explicit read-access result. Do not
+      # invent a Win32 mapping or use it to diagnose the unchanged event route.
+      if ($row.open -ceq 'nt-error') {
+        if ($null -eq $row.ntStatus -or $row.ntStatus -eq 0 -or $row.close -cne 'not-opened') { throw 'Read-only directory security NT result or failed-output ownership changed.' }
+        continue
+      }
+      if ($row.open -cne 'opened' -or $row.ntStatus -ne 0 -or $row.close -cne 'closed') {
+        $failures.Add([InvalidOperationException]::new("Directory security open/close contract incomplete: path=$($row.pathKind)."))
+      }
+      if ($row.close -ceq 'error' -and $null -ne $row.closeError) {
+        $failures.Add([ComponentModel.Win32Exception]::new([int]$row.closeError,"Directory security owned directory close failed: path=$($row.pathKind)."))
+      }
+      foreach ($field in @('dacl','label')) {
+        $query = $row.$field
+        if ($query.information -ne $(if ($field -ceq 'dacl') { 4 } else { 16 }) -or $query.aces.Count -gt 64) {
+          throw 'Read-only directory security query identity or ACE bound changed.'
+        }
+        if ($query.status -ceq 'error') {
+          $code = [BitConverter]::ToInt32([BitConverter]::GetBytes([uint32]$query.nativeError),0)
+          $failures.Add([ComponentModel.Win32Exception]::new($code,"Directory security direct query failed: path=$($row.pathKind); information=$($query.information)."))
+        } elseif ($query.status -cne 'available' -or $query.free -cne 'freed' -or
+                  $query.parse -cnotin @('complete','empty','absent','null','unknown-ace')) {
+          $failures.Add([InvalidOperationException]::new("Directory security query/getter/cleanup incomplete: path=$($row.pathKind); information=$($query.information)."))
+        }
+        if ($query.parse -cin @('control-error','getter-error','acl-api-error') -and $null -ne $query.getterError) {
+          $failures.Add([ComponentModel.Win32Exception]::new([int]$query.getterError,"Directory security native descriptor/ACL getter failed: path=$($row.pathKind); information=$($query.information)."))
+        }
+        if ($query.free -ceq 'error' -and $null -ne $query.freeError) {
+          $failures.Add([ComponentModel.Win32Exception]::new([int]$query.freeError,"Directory security owned descriptor release failed: path=$($row.pathKind); information=$($query.information)."))
+        }
+        # Unknown ACEs are reported as incomplete facts, never a permission
+        # calculation. The bounded header facts remain useful and are not errors.
+      }
+    }
+    if ($failures.Count -gt 0) { throw [AggregateException]::new('Read-only explicit directory security observation incomplete.', $failures) }
+  } catch { Write-LeaseContextFailure explicit-directory-security $_.Exception }
+}
+
+function Invoke-LeaseWorldDescriptorObservation([string]$Name, [IntPtr]$Handle, [string]$Namespace) {
+  try {
+    if ($Namespace -cnotin @('bare','local','global')) { throw 'Unsafe descriptor namespace classification.' }
+    $facts = [MixelIsolatedLeaseControl]::ObserveWorldDescriptor($Name,$Handle)
+    Write-Host "OBSERVED: exact retained isolated World event descriptor; namespace=$Namespace; extraAccess=READ_CONTROL; information=DACL+LABEL; namedDirectoryMeasured=False; $($facts | ConvertTo-Json -Depth 5 -Compress)."
+  } catch { Write-LeaseContextFailure owned-world-descriptor $_.Exception }
+}
 
 function Assert-StandardLeaseSafeResult($Record, [uint32]$ExpectedPid) {
   $names = @($Record.PSObject.Properties.Name | Sort-Object)
@@ -490,11 +988,156 @@ function Assert-StandardUnnamedEventControl($Record, $Before) {
 }
 
 
+function Read-StandardCallingThreadTokens([uint32]$ExpectedPid, [switch]$Unnamed) {
+  $filename = if ($Unnamed) { 'fixture-thread-token-unnamed.json' } else { 'fixture-thread-token-initial.json' }
+  $path = Join-Path $fixtureRoot $filename
+  if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw 'Owned calling-thread token result is missing.' }
+  $text = [IO.File]::ReadAllText($path)
+  if ($text.Length -gt 32768) { throw 'Owned calling-thread token result exceeds its bound.' }
+  $record = $text | ConvertFrom-Json
+  foreach ($field in @('schema','pid')) {
+    $value = $record.$field
+    $numeric = $value -is [int] -or $value -is [long] -or $value -is [uint32] -or $value -is [uint64]
+    if (-not $numeric -or $value -lt 1 -or $value -gt [uint32]::MaxValue) { throw 'Owned calling-thread token metadata is not a bounded integer.' }
+  }
+  if ((@($record.PSObject.Properties.Name | Sort-Object) -join ',') -cne 'pid,records,schema' -or
+      $record.schema -ne 1 -or $record.pid -ne $ExpectedPid -or $ExpectedPid -eq 0 -or
+      $record.records -isnot [array] -or $record.records.Count -lt 1 -or $record.records.Count -gt 32) {
+    throw 'Owned calling-thread token result has invalid schema or retained PID.'
+  }
+  $expected = @('phase','tid','threadStatus','threadError','threadType','threadImpersonationLevel','primaryStatus','primaryError','primaryType','threadLogonMatchesPrimary','threadClose','threadCloseError','primaryClose','primaryCloseError') | Sort-Object
+  $tid = $null
+  foreach ($item in $record.records) {
+    foreach ($field in @('phase','threadStatus','primaryStatus','threadClose','primaryClose')) {
+      if ($item.$field -isnot [string]) { throw 'Owned calling-thread token classification is not a scalar string.' }
+    }
+    if ((@($item.PSObject.Properties.Name | Sort-Object) -join ',') -cne ($expected -join ',') -or
+        $item.phase -cnotin @('CreateEventExW','CreateEventExW-unnamed','OpenEventW') -or
+        $item.threadStatus -cnotin @('available','absent','open-error','statistics-error','statistics-size') -or
+        $item.primaryStatus -cnotin @('available','open-error','statistics-error','statistics-size') -or
+        $item.threadClose -cnotin @('closed','not-opened','failed') -or $item.primaryClose -cnotin @('closed','not-opened','failed')) {
+      throw 'Owned calling-thread token observation contains an unknown field or classification.'
+    }
+    foreach ($field in @('tid','threadError','threadType','threadImpersonationLevel','primaryError','primaryType','threadCloseError','primaryCloseError')) {
+      $value = $item.$field
+      $numeric = $value -is [int] -or $value -is [long] -or $value -is [uint32] -or $value -is [uint64]
+      if (-not $numeric -or $value -lt 0 -or $value -gt [uint32]::MaxValue) { throw 'Owned calling-thread token native value is not a bounded integer.' }
+    }
+    if ($item.tid -eq 0 -or ($null -ne $tid -and $item.tid -ne $tid)) { throw 'Source fixture event calls were not observed on the same actual calling thread.' }
+    $tid = $item.tid
+    $available = $item.threadStatus -ceq 'available' -and $item.primaryStatus -ceq 'available'
+    if (($available -and $item.threadLogonMatchesPrimary -isnot [bool]) -or
+        (-not $available -and $null -ne $item.threadLogonMatchesPrimary) -or
+        ($item.threadStatus -ceq 'available' -and ($item.threadType -ne 2 -or $item.threadImpersonationLevel -gt 3 -or $item.threadError -ne 0)) -or
+        ($item.primaryStatus -ceq 'available' -and ($item.primaryType -ne 1 -or $item.primaryError -ne 0)) -or
+        ($item.threadStatus -cne 'available' -and ($item.threadType -ne 0 -or $item.threadImpersonationLevel -ne 0)) -or
+        ($item.primaryStatus -cne 'available' -and $item.primaryType -ne 0) -or
+        ($item.threadStatus -ceq 'absent' -and ($item.threadError -ne 1008 -or $item.threadClose -cne 'not-opened'))) {
+      throw 'Owned calling-thread token observation contains inconsistent identity facts.'
+    }
+    foreach ($subject in @('thread','primary')) {
+      $opened = $item.("${subject}Status") -cin @('available','statistics-error','statistics-size')
+      $close = $item.("${subject}Close")
+      if (($opened -and $close -cnotin @('closed','failed')) -or
+          (-not $opened -and $close -cne 'not-opened') -or
+          ($close -cne 'failed' -and $item.("${subject}CloseError") -ne 0)) {
+        throw 'Owned calling-thread token observation contains inconsistent handle cleanup.'
+      }
+    }
+  }
+  $unnamedCalls = @($record.records | Where-Object { $_.phase -ceq 'CreateEventExW-unnamed' }).Count
+  $expectedUnnamedCalls = if ($Unnamed) { 1 } else { 0 }
+  if ($unnamedCalls -ne $expectedUnnamedCalls) { throw 'Owned calling-thread token result does not match the requested publication stage.' }
+  # All serialized fields are canonical classifications or bounded numeric
+  # facts. SID, LUID, token ID, credentials and raw arguments are absent.
+  return $record
+}
+
+function Read-StandardFixtureResult([string]$Path, [DateTime]$Deadline) {
+  $sharingFailure = $null
+  while ($true) {
+    if ($null -ne $sharingFailure -and [DateTime]::UtcNow -ge $Deadline) { throw $sharingFailure }
+    try { return [IO.File]::ReadAllText($Path) } catch {
+      $failure = $_.Exception
+      while ($failure -isnot [IO.IOException] -and $null -ne $failure.InnerException) {
+        $failure = $failure.InnerException
+      }
+      # Reuse the original readiness deadline. Only the observed Windows
+      # sharing violation may be transient; every other read failure is fatal.
+      if ($failure -isnot [IO.IOException] -or $failure.HResult -ne -2147024864) { throw }
+      if ($null -eq $sharingFailure) { $sharingFailure = $_ }
+      if ([DateTime]::UtcNow -ge $Deadline) { throw $sharingFailure }
+      Start-Sleep -Milliseconds 20
+    }
+  }
+}
+
+
+function Test-LeaseNtWorldPending([IntPtr]$WorldHandle) {
+  return @($script:ntPendingProtocols | Where-Object { $_.worldHandle -eq $WorldHandle -and -not $_.childExited }).Count -gt 0
+}
+
+function Complete-LeaseNtPendingProtocols {
+  foreach ($context in @($script:ntPendingProtocols)) {
+    try {
+      if (-not $context.childExited) {
+        if (-not [MixelOrdinaryTokenFixture]::StartedStatus($context.pid).StartsWith('exited:')) { throw 'Pending exact NT child exit is not confirmed; binding remains owned.' }
+        $context.childExited=$true
+      }
+      $context.binding.Dispose()
+      if (-not $context.facts.cleanupOkay) { throw 'Pending owned parent binding cleanup failed; literal facts and ownership retained.' }
+      if ($context.files) {
+        try { $context.files.Cleanup() }
+        catch { [void]$script:ntPreservedRoots.Add($context.files.directory); throw }
+      }
+      [void]$script:ntPendingProtocols.Remove($context)
+    } catch { Write-LeaseContextFailure nt-pending-protocol-cleanup $_.Exception }
+  }
+}
+
+function Read-StandardNtReplyBytes([string]$Path, [DateTime]$Deadline, [int]$ExpectedPid) {
+  $sharingFailure = $null
+  while ([DateTime]::UtcNow -lt $Deadline) {
+    if ([MixelOrdinaryTokenFixture]::StartedStatus($ExpectedPid) -cne 'still-running') { throw 'Exact retained NT child exited before reply.' }
+    try { return ,([MixelNtEventBinding+Transport]::ReadBoundedBytes($Path,2048)) }
+    catch {
+      $failure=$_.Exception
+      while ($failure.InnerException -and ($failure -is [Reflection.TargetInvocationException] -or $failure -is [Management.Automation.MethodInvocationException])) { $failure=$failure.InnerException }
+      if ($failure -is [IO.FileNotFoundException]) { }
+      elseif ($failure -is [IO.IOException] -and $failure.HResult -eq -2147024864) { $sharingFailure=$failure }
+      else { throw }
+    }
+    Start-Sleep -Milliseconds 20
+  }
+  if ($sharingFailure) { throw $sharingFailure }
+  throw 'Owned NT child reply exceeded the original result deadline.'
+}
+
+function Invoke-StandardNtChildObservation($Binding,$Files,[int]$ControlPid,$Original,[DateTime]$Deadline) {
+  $started=[Collections.Generic.Dictionary[int,IntPtr]][MixelOrdinaryTokenFixture]::RetainedNtEventProcesses($ControlPid)
+  $request=$Binding.IssueKnownChildRequest($ControlPid,[uint32]$Original.pid,$started)
+  [MixelNtEventBinding+Transport]::WriteRequest($Files.directory,$ControlPid,$request,$Files)
+  $path=Join-Path $Files.directory 'fixture-nt-event-result.json'
+  $bytes=Read-StandardNtReplyBytes $path $Deadline $ControlPid
+  $reply=[MixelNtEventBinding+Transport]::ReadReply($bytes)
+  $Binding.ValidateTransportReply($reply,$ControlPid,$started)
+  $Files.AdoptValidatedReply($path,$bytes,$Binding,$ControlPid,$started)
+  Write-Host "OBSERVED: same source World-event child direct NT open; scenario=global-existing-world-synchronize-event; controlPid=$ControlPid; originalWin32Error=$($Original.rawOpenError); sameRetainedPID=True; parentObjectIdentityBound=True; requestedAccess=1048576; originalWin32EventRouteUnmeasured=True; causeEstablished=False; $($reply | ConvertTo-Json -Depth 4 -Compress)."
+  if (-not $reply.cleanupOkay -or $reply.openStatus -cnotin @('opened','nt-status')) { throw 'Owned NT child API/lifecycle observation incomplete; literal reply retained.' }
+  return $reply
+}
+
 function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner')][string]$Mode, [string]$ExpectedStatus, [int]$ExpectedError,
     [string]$ExpectedProof, [bool]$ExpectedRequired, [bool]$ExpectedOwnerFailed, [switch]$KeepAlive,
     [switch]$ObserveOnly, [string]$ObservationLabel,
     [ValidateSet('with-logon','with-token','with-caller-linked')][string]$Launcher = 'with-logon',
-    [ValidateSet('console','windows')][string]$Subsystem = 'console', [switch]$UnnamedControl) {
+    [ValidateSet('console','windows')][string]$Subsystem = 'console', [switch]$UnnamedControl,
+    [switch]$ObserveNtEvent, [IntPtr]$NtWorldHandle = [IntPtr]::Zero, [string]$NtWorldName) {
+  $ntBinding=$null; $ntFacts=$null; $ntFiles=$null; $ntReply=$null; $ntArmed=$false; $ntProbeFailed=$false; $ntSkipLaunch=$false; $controlPid=0
+  if ($ObserveNtEvent -and ($Mode -cne 'probe' -or -not $ObserveOnly -or $KeepAlive -or $UnnamedControl -or
+      $Subsystem -cne 'console' -or $Launcher -cnotin @('with-logon','with-token') -or
+      $ObservationLabel -cne 'global-existing-world-synchronize-event' -or $NtWorldHandle -eq [IntPtr]::Zero -or
+      $NtWorldName -cnotmatch '\AGlobal\\Mixel-Remote-Standard-Lease-[0-9a-f]{32}\z')) { throw 'Internal NT observation is limited to the existing Global World matrix child.' }
   $expectedExecutable = if ($Subsystem -ceq 'windows') { 'lease-standard-gui.exe' } else { 'lease-standard.exe' }
   if ([IO.Path]::GetFileName($executable) -cne $expectedExecutable) { throw 'Owned source control executable does not match its declared subsystem.' }
   $unnamedRequest = Join-Path $fixtureRoot 'fixture-unnamed.request'
@@ -509,7 +1152,33 @@ function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner'
   if (Test-Path $resultPath) { Remove-Item -LiteralPath $resultPath }
   $namespacePath = Join-Path $fixtureRoot 'fixture-namespace.json'
   if (Test-Path $namespacePath) { Remove-Item -LiteralPath $namespacePath }
+  foreach ($filename in @('fixture-thread-token-initial.json','fixture-thread-token-unnamed.json','fixture-job-limits.json','fixture-directory-access.json')) {
+    $threadResult = Join-Path $fixtureRoot $filename
+    if (Test-Path -LiteralPath $threadResult) { Remove-Item -LiteralPath $threadResult }
+  }
+  [IO.File]::WriteAllText((Join-Path $fixtureRoot 'fixture-thread-token.request'), 'observe', [Text.UTF8Encoding]::new($false))
+  [IO.File]::WriteAllText((Join-Path $fixtureRoot 'fixture-job-limits.request'), 'observe', [Text.UTF8Encoding]::new($false))
+  [IO.File]::WriteAllText((Join-Path $fixtureRoot 'fixture-directory-access.request'), 'observe', [Text.UTF8Encoding]::new($false))
   [IO.File]::WriteAllText((Join-Path $fixtureRoot 'fixture-mode.txt'), $Mode, [Text.UTF8Encoding]::new($false))
+  if ($ObserveNtEvent) {
+    try {
+      $world=[Collections.Generic.Dictionary[IntPtr,string]][MixelIsolatedLeaseControl]::RetainedNtWorldEvents($NtWorldName,$NtWorldHandle)
+      $candidate='\BaseNamedObjects\'+$NtWorldName.Substring(7)
+      $ntBinding=[MixelNtEventBinding+ParentBinding]::Open([MixelNtEventBinding+KernelApi]::new(),$NtWorldHandle,$world,$candidate,[ref]$ntFacts)
+      if (-not $ntBinding) { throw 'Existing World event identity could not be verified; no child NT target issued.' }
+      $ntFiles=[MixelNtEventBinding+ProtocolFiles]::new($fixtureRoot)
+      [MixelNtEventBinding+Transport]::Arm($fixtureRoot,$ntFiles)
+      [IO.File]::WriteAllText((Join-Path $fixtureRoot 'fixture-mode.txt'), 'nt-world-probe', [Text.UTF8Encoding]::new($false))
+      $ntArmed=$true
+    } catch {
+      $ntSkipLaunch=$true
+      [void]$script:ntPreservedRoots.Add($fixtureRoot)
+      Write-LeaseContextFailure nt-world-bind-arm $_.Exception
+    }
+  }
+  $control = $null
+  try {
+  if ($ntSkipLaunch) { return 0 }
   if ($Launcher -ceq 'with-caller-linked') {
     if (-not $ObserveOnly) { throw 'Caller-linked UAC token cannot satisfy pure standard-account acceptance.' }
     $controlPid=[MixelOrdinaryTokenFixture]::StartCallerLinkedUser($executable)
@@ -518,8 +1187,6 @@ function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner'
   } else {
     $controlPid = [MixelOrdinaryTokenFixture]::StartStandardUser($executable, $ownedUser, $ownedPassword)
   }
-  $control = $null
-  try {
     $control = Get-Process -Id $controlPid
     $sidMatches = if ($Launcher -ceq 'with-caller-linked') { [MixelOrdinaryTokenFixture]::StartedUserSidMatchesCaller($controlPid) } else { [MixelOrdinaryTokenFixture]::StartedUserSidMatches($controlPid, $ownedSid) }
     $elevated = [MixelOrdinaryTokenFixture]::Elevated($controlPid)
@@ -534,7 +1201,7 @@ function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner'
       Start-Sleep -Milliseconds 50
     }
     if (-not (Test-Path $resultPath)) { throw 'Owned standard-account lease control did not produce its bounded native result.' }
-    $text = [IO.File]::ReadAllText($resultPath)
+    $text = Read-StandardFixtureResult $resultPath $deadline
     if ($text.Length -gt 4096) { throw 'Owned lease result exceeds its bound.' }
     $record = $text | ConvertFrom-Json
     Assert-StandardLeaseSafeResult $record $controlPid
@@ -581,11 +1248,24 @@ function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner'
       $nativeCode = if ($nativeFailure -is [ComponentModel.Win32Exception]) { $nativeFailure.NativeErrorCode } else { $nativeFailure.HResult }
       Write-Host "OBSERVED: secondary owned token namespace diagnosis unavailable; nativeCode=$nativeCode."
     }
+    if ($ntArmed) {
+      try { $ntReply=Invoke-StandardNtChildObservation $ntBinding $ntFiles $controlPid $record $deadline }
+      catch { $ntProbeFailed=$true; Write-LeaseContextFailure nt-child-self $_.Exception }
+    }
+    $threadTokens = Read-StandardCallingThreadTokens $controlPid
+    Write-Host "OBSERVED: owned child calling-thread token immediately before native event APIs; controlPid=$controlPid; mode=$Mode; $($threadTokens | ConvertTo-Json -Depth 4 -Compress)."
+    Invoke-LeaseJobObservation $controlPid
+    Invoke-LeaseChildJobLimitsObservation $controlPid
+    Invoke-LeaseChildDirectoryAccessObservation $controlPid
+    Invoke-LeaseDirectorySecurityObservation $controlPid
     if (-not $ObserveOnly -and ($record.sourceStatus -cne $ExpectedStatus -or
         $record.rawOpenError -ne $ExpectedError -or $record.attestation -cne $ExpectedProof -or
         $record.requiresClick -isnot [bool] -or $record.requiresClick -ne $ExpectedRequired -or
         $record.ownerFailed -isnot [bool] -or $record.ownerFailed -ne $ExpectedOwnerFailed)) {
       throw ('Actual standard-account source lease classification mismatch: ' + ($record | ConvertTo-Json -Compress))
+    }
+    if (@($threadTokens.records | Where-Object { $_.threadClose -ceq 'failed' -or $_.primaryClose -ceq 'failed' }).Count -gt 0) {
+      throw 'Owned read-only calling-thread token handle cleanup failed; native process cleanup is required.'
     }
     if ($ObserveOnly) {
       if ($ObservationLabel -cnotmatch '\A(?:bare|local|global)-[a-z]+(?:-[a-z]+)*\z') { throw 'Invalid safe namespace observation label.' }
@@ -604,21 +1284,156 @@ function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner'
         Start-Sleep -Milliseconds 50
       }
       $unnamed = Read-StandardUnnamedEventResult $controlPid
+      $threadTokens = Read-StandardCallingThreadTokens $controlPid -Unnamed
+      Write-Host "OBSERVED: owned child calling-thread token including exact unnamed event API; controlPid=$controlPid; $($threadTokens | ConvertTo-Json -Depth 4 -Compress)."
       Write-Host "OBSERVED: standard-token unnamed event control; launcher=$Launcher; subsystem=$Subsystem; controlPid=$controlPid; ordinarySessionId=$actualSession; ownedSidMatched=$sidMatches; elevated=$elevated; phase=$($unnamed.phase); created=$($unnamed.created); createError=$($unnamed.createError); closed=$($unnamed.closed); closeError=$($unnamed.closeError); sourceStatusAfter=$($unnamed.sourceStatusAfter); rawOpenErrorAfter=$($unnamed.rawOpenErrorAfter); guardEmptyAfter=$($unnamed.attestationAfter -ceq ''); guardConfirmedAfter=$($unnamed.attestationAfter -ceq 'attended-runtime-v2'); requiresClickAfter=$($unnamed.requiresClickAfter)."
       Assert-StandardUnnamedEventControl $unnamed $record
+      if (@($threadTokens.records | Where-Object { $_.threadClose -ceq 'failed' -or $_.primaryClose -ceq 'failed' }).Count -gt 0) {
+        throw 'Owned read-only calling-thread token handle cleanup failed; native process cleanup is required.'
+      }
     }
-    if (-not $KeepAlive) {
+    if ($ntArmed) {
+      try {
+        if ($ntProbeFailed) { [MixelOrdinaryTokenFixture]::StopRetainedNtEventChild($controlPid) }
+        else {
+          $started=[Collections.Generic.Dictionary[int,IntPtr]][MixelOrdinaryTokenFixture]::RetainedNtEventProcesses($controlPid)
+          $ntBinding.AcknowledgeTransport($ntReply,$controlPid,$started,$fixtureRoot,$ntFiles)
+          $ntExitDeadline=[DateTime]::UtcNow.AddSeconds(10)
+          while ([MixelOrdinaryTokenFixture]::StartedStatus($controlPid) -ceq 'still-running' -and [DateTime]::UtcNow -lt $ntExitDeadline) { Start-Sleep -Milliseconds 50 }
+          if ([MixelOrdinaryTokenFixture]::StartedStatus($controlPid) -cne 'exited:0x00000000') { throw 'Exact owned NT child did not exit successfully after acknowledgment.' }
+        }
+      } catch { $ntProbeFailed=$true; Write-LeaseContextFailure nt-child-ack $_.Exception }
+    }
+    if (-not $KeepAlive -and -not $ntArmed) {
       [IO.File]::WriteAllText((Join-Path $fixtureRoot "fixture-release-$controlPid"), 'verified')
       $deadline = [DateTime]::UtcNow.AddSeconds(10)
       while ([MixelOrdinaryTokenFixture]::StartedStatus($controlPid) -ceq 'still-running' -and [DateTime]::UtcNow -lt $deadline) {
         Start-Sleep -Milliseconds 50
       }
       if ([MixelOrdinaryTokenFixture]::StartedStatus($controlPid) -cne 'exited:0x00000000') { throw 'Exact owned functional lease process did not exit successfully.' }
-    } elseif ([MixelOrdinaryTokenFixture]::StartedStatus($controlPid) -cne 'still-running') {
+    } elseif ($KeepAlive -and [MixelOrdinaryTokenFixture]::StartedStatus($controlPid) -cne 'still-running') {
       throw 'Actual standard-account lease owner exited before independent observation.'
     }
     return $controlPid
-  } finally { if ($control) { $control.Dispose() } }
+  } finally {
+    if ($ObserveNtEvent) {
+      $ntExited=($controlPid -eq 0)
+      if ($controlPid -ne 0) {
+        try {
+          if ([MixelOrdinaryTokenFixture]::StartedStatus($controlPid) -ceq 'still-running') { [MixelOrdinaryTokenFixture]::StopRetainedNtEventChild($controlPid) }
+          $ntExited=[MixelOrdinaryTokenFixture]::StartedStatus($controlPid).StartsWith('exited:')
+          if (-not $ntExited) { throw 'Exact retained NT child exit was not confirmed.' }
+        } catch { Write-LeaseContextFailure nt-child-owned-exit $_.Exception }
+      }
+      # Original World ownership stays with the matrix. Its independently
+      # verified binding is drained after the child, before the reused directory.
+      if ($ntBinding) {
+        $script:ntPendingProtocols.Add([pscustomobject]@{binding=$ntBinding;facts=$ntFacts;files=$ntFiles;pid=$controlPid;worldHandle=$NtWorldHandle;childExited=$ntExited})
+        Complete-LeaseNtPendingProtocols
+      }
+      if ($ntFacts) {
+        Write-Host "OBSERVED: parent existing World NT binding; scenario=global-existing-world-synchronize-event; controlPid=$controlPid; childExitConfirmed=$ntExited; originalWin32EventRouteUnmeasured=True; $($ntFacts | ConvertTo-Json -Depth 5 -Compress)."
+        if (-not $ntFacts.cleanupOkay) { Write-LeaseContextFailure nt-parent-cleanup ([InvalidOperationException]::new('Owned parent NT binding/module cleanup failed; literal facts retained.')) }
+      }
+      if ($ntFiles -and $ntExited -and -not $ntBinding) {
+        try { $ntFiles.Cleanup() }
+        catch { [void]$script:ntPreservedRoots.Add($fixtureRoot); Write-LeaseContextFailure nt-protocol-cleanup $_.Exception }
+      }
+    }
+    if ($control) { $control.Dispose() }
+  }
+}
+
+function Invoke-CurrentCallerLeaseControl([ValidateSet('probe','owner')][string]$Mode, [string]$ExpectedStatus,
+    [int]$ExpectedError, [string]$ExpectedProof, [bool]$ExpectedRequired, [switch]$KeepAlive) {
+  if ([IO.Path]::GetFileName($executable) -cne 'lease-standard.exe') { throw 'Current-caller comparison requires the unchanged base console source fixture.' }
+  foreach ($filename in @('fixture-result.json','fixture-thread-token-initial.json','fixture-thread-token-unnamed.json','fixture-unnamed.request','fixture-unnamed-result.json','fixture-job-limits.json','fixture-directory-access.json')) {
+    $path = Join-Path $fixtureRoot $filename
+    if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path }
+  }
+  [IO.File]::WriteAllText((Join-Path $fixtureRoot 'fixture-thread-token.request'), 'observe', [Text.UTF8Encoding]::new($false))
+  [IO.File]::WriteAllText((Join-Path $fixtureRoot 'fixture-job-limits.request'), 'observe', [Text.UTF8Encoding]::new($false))
+  [IO.File]::WriteAllText((Join-Path $fixtureRoot 'fixture-directory-access.request'), 'observe', [Text.UTF8Encoding]::new($false))
+  [IO.File]::WriteAllText((Join-Path $fixtureRoot 'fixture-mode.txt'), $Mode, [Text.UTF8Encoding]::new($false))
+  $controlPid = [MixelOrdinaryTokenFixture]::StartCurrentCallerNative($executable)
+  $control = $null; $caller = $null
+  try {
+    $control = Get-Process -Id $controlPid
+    $caller = Get-Process -Id $PID
+    $sidMatches = [MixelOrdinaryTokenFixture]::StartedCurrentCallerSidMatches($controlPid)
+    $elevated = [MixelOrdinaryTokenFixture]::Elevated($controlPid)
+    $callerElevated = [MixelOrdinaryTokenFixture]::Elevated($PID)
+    $actualSession = $control.SessionId
+    $tokenFacts = [MixelOrdinaryTokenFixture]::StartedTokenFacts($controlPid)
+    if (-not $sidMatches -or $elevated -ne $callerElevated -or $actualSession -ne $caller.SessionId -or
+        -not $tokenFacts.sessionKnown -or $tokenFacts.sessionId -ne $actualSession -or
+        $tokenFacts.logonComparison -cne 'tokenLogonSidCount=1;tokenLogonSidMatchesCaller=true;tokenLogonSidQuerySubject=none;tokenLogonSidQueryFailure=none;tokenLogonSidQueryError=none;tokenLogonSidQueryReturnedLength=none') {
+      throw 'Direct current-caller source child did not preserve the actual caller SID/elevation/session/logon identity.'
+    }
+    $deadline = [DateTime]::UtcNow.AddSeconds(10)
+    while (-not (Test-Path -LiteralPath $resultPath -PathType Leaf) -and [DateTime]::UtcNow -lt $deadline) {
+      if ([MixelOrdinaryTokenFixture]::StartedStatus($controlPid).StartsWith('exited:')) { break }
+      Start-Sleep -Milliseconds 50
+    }
+    if (-not (Test-Path -LiteralPath $resultPath -PathType Leaf)) { throw 'Direct current-caller source child did not produce its bounded native result.' }
+    $text = Read-StandardFixtureResult $resultPath $deadline
+    if ($text.Length -gt 4096) { throw 'Direct current-caller native result exceeds its bound.' }
+    $record = $text | ConvertFrom-Json
+    Assert-StandardLeaseSafeResult $record $controlPid
+    $threadTokens = Read-StandardCallingThreadTokens $controlPid
+    Write-Host "OBSERVED: direct current Actions caller GUID functional control; tokenContext=unchanged-current-caller; genuineStandardQualified=False; fullEightQualified=False; customerAppQualified=False; mode=$Mode; controlPid=$controlPid; processSessionId=$actualSession; ownedCallerSidMatched=$sidMatches; elevated=$elevated; callerElevated=$callerElevated; $tokenFacts; $($record | ConvertTo-Json -Compress)."
+    Write-Host "OBSERVED: direct current Actions caller pre-API calling-thread tokens; controlPid=$controlPid; mode=$Mode; $($threadTokens | ConvertTo-Json -Depth 4 -Compress)."
+    Invoke-LeaseJobObservation $controlPid
+    Invoke-LeaseChildJobLimitsObservation $controlPid
+    Invoke-LeaseChildDirectoryAccessObservation $controlPid
+    Invoke-LeaseDirectorySecurityObservation $controlPid
+    if ($record.sourceStatus -cne $ExpectedStatus -or $record.rawOpenError -ne $ExpectedError -or
+        $record.attestation -cne $ExpectedProof -or $record.requiresClick -ne $ExpectedRequired -or $record.ownerFailed) {
+      throw ('Actual current-caller source lease classification mismatch: ' + ($record | ConvertTo-Json -Compress))
+    }
+    $failedTokenCloses = @($threadTokens.records | Where-Object { $_.threadClose -ceq 'failed' -or $_.primaryClose -ceq 'failed' })
+    if ($failedTokenCloses.Count -gt 0) { throw 'Direct current-caller read-only token handle cleanup failed.' }
+    if ($KeepAlive) {
+      if ([MixelOrdinaryTokenFixture]::StartedStatus($controlPid) -cne 'still-running') { throw 'Direct current-caller source owner exited before its fresh observer.' }
+    } else {
+      $releasePath = Join-Path $fixtureRoot "fixture-release-$controlPid"
+      [IO.File]::WriteAllText($releasePath, 'verified')
+      $deadline = [DateTime]::UtcNow.AddSeconds(10)
+      while ([MixelOrdinaryTokenFixture]::StartedStatus($controlPid) -ceq 'still-running' -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 50 }
+      if ([MixelOrdinaryTokenFixture]::StartedStatus($controlPid) -cne 'exited:0x00000000') { throw 'Direct current-caller source child did not exit successfully after acknowledgment.' }
+      # The same base directory is reused by the original standard terminal.
+      # A later reused PID must not inherit an earlier caller acknowledgment.
+      # The exact source child consumes this acknowledgment before exit. Only
+      # remove a residual file; cleanup errors for an existing file stay fatal.
+      if (Test-Path -LiteralPath $releasePath) { Remove-Item -LiteralPath $releasePath }
+    }
+    return $controlPid
+  } finally {
+    try { if ($control) { $control.Dispose() } }
+    finally { if ($caller) { $caller.Dispose() } }
+  }
+}
+
+function Invoke-CurrentCallerLeaseFour {
+  # The original terminal later uses this same executable and Global GUID.
+  # A passing caller comparison remains diagnostic, never standard/app proof.
+  $absent = 'ownerFailed=false;ownerError=none;kernel=absent;probeError=none;memoryActive=false'
+  $active = 'ownerFailed=false;ownerError=none;kernel=active;probeError=none;memoryActive=false'
+  $activeOwner = 'ownerFailed=false;ownerError=none;kernel=active;probeError=none;memoryActive=true'
+  try {
+    [void](Invoke-CurrentCallerLeaseControl probe $absent 2 '' $false)
+    $ownerPid = Invoke-CurrentCallerLeaseControl owner $activeOwner 0 'attended-runtime-v2' $true -KeepAlive
+    $observerPid = Invoke-CurrentCallerLeaseControl probe $active 0 'attended-runtime-v2' $true
+    if ($observerPid -eq $ownerPid) { throw 'Current-caller owner and fresh observer are not distinct retained processes.' }
+    [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses()
+    if ([MixelOrdinaryTokenFixture]::StartedStatus($ownerPid) -cne 'exited:0x00000001') { throw 'Exact retained current-caller owner did not observe its termination.' }
+    [MixelOrdinaryTokenFixture]::CloseStartedObservations()
+    [void](Invoke-CurrentCallerLeaseControl probe $absent 2 '' $false)
+    Write-Host 'PASS: diagnostic-only current Actions caller executes unchanged source/GUID absent2, own/live0 and confirmed owner-drop/absent2; genuineStandardQualified=False; fullEightQualified=False; customerAppQualified=False.'
+  } finally {
+    try { [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses() }
+    finally { [MixelOrdinaryTokenFixture]::CloseStartedObservations() }
+  }
 }
 
 function Invoke-StandardLeaseSubsystemObservations([ValidateSet('with-logon','with-token','with-caller-linked')][string]$Launcher) {
@@ -686,16 +1501,35 @@ function Invoke-StandardLeaseNamespaceObservations([ValidateSet('with-logon','wi
         finally { [MixelOrdinaryTokenFixture]::CloseStartedObservations() }
         [void](Invoke-StandardLeaseControl -Mode probe -Launcher $Launcher -ObserveOnly -ObservationLabel "$namespace-after-confirmed-owner-request-process-termination")
         $matrixHandle=[MixelIsolatedLeaseControl]::WorldEvent($endpoint)
-        [void](Invoke-StandardLeaseControl -Mode probe -Launcher $Launcher -ObserveOnly -ObservationLabel "$namespace-existing-world-synchronize-event")
-        [MixelIsolatedLeaseControl]::Close($matrixHandle)
-        $matrixHandle=[IntPtr]::Zero
-        [void](Invoke-StandardLeaseControl -Mode probe -Launcher $Launcher -ObserveOnly -ObservationLabel "$namespace-after-confirmed-world-event-close")
+        [void](Invoke-StandardLeaseControl -Mode probe -Launcher $Launcher -ObserveOnly -ObservationLabel "$namespace-existing-world-synchronize-event" -ObserveNtEvent:($namespace -ceq 'global') -NtWorldHandle $matrixHandle -NtWorldName $endpoint)
+        Invoke-LeaseWorldDescriptorObservation $endpoint $matrixHandle $namespace
+        if (-not (Test-LeaseNtWorldPending $matrixHandle)) {
+          [MixelIsolatedLeaseControl]::Close($matrixHandle)
+          $matrixHandle=[IntPtr]::Zero
+        }
+        if ($matrixHandle -eq [IntPtr]::Zero) {
+          [void](Invoke-StandardLeaseControl -Mode probe -Launcher $Launcher -ObserveOnly -ObservationLabel "$namespace-after-confirmed-world-event-close")
+        } else { Write-LeaseContextFailure nt-world-still-held ([InvalidOperationException]::new('Exact World handle remains held for an unexited owned child; no after-close observation issued.')) }
       } finally {
         try {
-          if ($matrixHandle -ne [IntPtr]::Zero) { [MixelIsolatedLeaseControl]::Close($matrixHandle); $matrixHandle=[IntPtr]::Zero }
+          if ($matrixHandle -ne [IntPtr]::Zero -and -not (Test-LeaseNtWorldPending $matrixHandle)) { [MixelIsolatedLeaseControl]::Close($matrixHandle); $matrixHandle=[IntPtr]::Zero }
         } finally {
           try { [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses() }
-          finally { [MixelOrdinaryTokenFixture]::CloseStartedObservations() }
+          finally {
+            try {
+              Complete-LeaseNtPendingProtocols
+              if ($matrixHandle -ne [IntPtr]::Zero -and -not (Test-LeaseNtWorldPending $matrixHandle)) { [MixelIsolatedLeaseControl]::Close($matrixHandle); $matrixHandle=[IntPtr]::Zero }
+            } finally {
+              if (@($script:ntPendingProtocols | Where-Object { -not $_.childExited }).Count -eq 0) {
+                [MixelOrdinaryTokenFixture]::CloseStartedObservations()
+              } else {
+                # The original subsequent fixture reuse/eight controls close their
+                # observation map. Do not enter them while this exact owned child
+                # still needs that borrowed identity and the verified World handle.
+                throw 'Exact pending NT child remains live after owned stop; retained process/World/protocol ownership prevents further fixture reuse.'
+              }
+            }
+          }
         }
       }
     }
@@ -704,13 +1538,18 @@ function Invoke-StandardLeaseNamespaceObservations([ValidateSet('with-logon','wi
   }
 }
 
+$script:ntPendingProtocols = [Collections.Generic.List[object]]::new()
+$script:ntPreservedRoots = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+
 $ownedUser = 'mixellease' + [Guid]::NewGuid().ToString('N').Substring(0,10)
 $ownedSid = $null; $ownedPassword = $null; $random = $null
 $fixtureRoot = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) ('mixel-standard-lease-' + [Guid]::NewGuid().ToString('N'))
 $eventName = 'Global\Mixel-Remote-Standard-Lease-' + [Guid]::NewGuid().ToString('N')
 $executable = Join-Path $fixtureRoot 'lease-standard.exe'
 $resultPath = Join-Path $fixtureRoot 'fixture-result.json'
+$script:namespaceRestorationKnown=$true; $script:namespaceFacts=$null
 $desktopAccess = $null; $namespaceAccess = $null; $profileStarted = $false; $eventHandle = [IntPtr]::Zero; $failure = $null
+$leaseContextFailures = [System.Collections.Generic.List[Exception]]::new()
 $originalDesktop = [MixelOrdinaryTokenFixture]::DesktopAclHashes()
 try {
   # Use the exact customer account bootstrap; its random password stays in memory.
@@ -734,6 +1573,12 @@ try {
   $freshFacts=[MixelOrdinaryTokenFixture]::FreshStandardTokenFacts($ownedUser,$ownedPassword,$ownedSid)
   Write-Host "OBSERVED: read-only native token classification; subject=runner; processSessionId=$((Get-Process -Id $PID).SessionId); $runnerFacts."
   Write-Host "OBSERVED: read-only native token classification; subject=fresh-standard-logon; processSessionId=none; ownedSidMatched=True; elevated=False; $freshFacts."
+  $currentCallerFailure = $null
+  try { Invoke-CurrentCallerLeaseFour }
+  catch {
+    $currentCallerFailure = $_
+    Write-Host ('FAIL: direct current-caller diagnostic remains fatal after the unchanged standard controls: ' + $_.Exception.Message)
+  }
   Invoke-StandardLeaseSubsystemObservations with-logon
   Invoke-StandardLeaseSubsystemObservations with-token
   Invoke-StandardLeaseNamespaceObservations with-logon
@@ -753,7 +1598,9 @@ try {
   if (-not ('MixelCI.StandardNamespaceAccess' -as [type])) {
     Add-Type -TypeDefinition (Get-Content (Join-Path $PSScriptRoot 'windows-standard-namespace-access.cs') -Raw)
   }
+  $script:namespaceRestorationKnown=$false
   $namespaceAccess = [MixelCI.StandardNamespaceAccess]::new($ownedSid, $ownedUser, [uint32](Get-Process -Id $PID).SessionId)
+  $script:namespaceFacts=$namespaceAccess.facts
   Write-Host 'FIXTURE: exact caller-session namespace grants only object/subdirectory creation (mask12) to the owned disposable SID; product guard and event ACLs remain enforced.'
 
   $active = 'ownerFailed=false;ownerError=none;kernel=active;probeError=none;memoryActive=false'
@@ -783,24 +1630,40 @@ try {
   Write-Host 'PASS: closed wrong-object control leaves no GUID lease or false readiness in a fresh actual standard-account process.'
   [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses()
   [MixelOrdinaryTokenFixture]::CloseStartedObservations()
-  $namespaceAccess.Dispose(); $namespaceAccess = $null
+  $namespaceAccess.Dispose(); $script:namespaceRestorationKnown=$true; $namespaceAccess = $null
   [void](Invoke-StandardLeaseControl probe $beforeGrant.sourceStatus ([int]$beforeGrant.rawOpenError) $beforeGrant.attestation ([bool]$beforeGrant.requiresClick) ([bool]$beforeGrant.ownerFailed))
   Write-Host 'PASS: native A/B/A namespace preparation preserves the original absent-or-denied classification after exact DACL restoration; no false readiness remains.'
 
+  if ($currentCallerFailure) { throw $currentCallerFailure }
+  if ($leaseContextFailures.Count -gt 0) {
+    throw [AggregateException]::new('Read-only source lease context observation failed after the unchanged original gate.', $leaseContextFailures)
+  }
 } catch {
   $failure = $_
   throw
 } finally {
   $cleanup = [System.Collections.Generic.List[string]]::new()
   if ($eventHandle -ne [IntPtr]::Zero) { try { [MixelIsolatedLeaseControl]::Close($eventHandle) } catch { $cleanup.Add('Owned isolated event handle cleanup failed.') } }
-  try { [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses() } catch { $cleanup.Add('Exact owned standard lease process cleanup failed.') }
-  try { [MixelOrdinaryTokenFixture]::CloseStartedObservations() } catch { $cleanup.Add('Exact owned standard lease handle close failed.') }
-  try { [MixelIsolatedLeaseControl]::ClosePending() } catch { $cleanup.Add('Owned retained isolated lease handle cleanup failed.') }
-  if ($namespaceAccess) { try { $namespaceAccess.Dispose() } catch { $cleanup.Add('Owned standard lease namespace DACL restoration failed.') } }
-  if ($desktopAccess) { try { $desktopAccess.Dispose() } catch { $cleanup.Add('Owned standard lease desktop ACL restoration failed.') } }
-  try { if ([MixelOrdinaryTokenFixture]::DesktopAclHashes() -cne $originalDesktop) { $cleanup.Add('Owned standard lease desktop ACL hashes changed.') } }
-  catch { $cleanup.Add('Owned standard lease desktop ACL hash verification failed.') }
-  if ($profileStarted -and $ownedSid) {
+  $ownedProcessesExited=$false
+  try { [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses(); $ownedProcessesExited=$true } catch { $cleanup.Add('Exact owned standard lease process cleanup failed.') }
+  try { Complete-LeaseNtPendingProtocols } catch { $cleanup.Add('Exact pending NT protocol drain failed.') }
+  if ($script:ntPendingProtocols.Count -gt 0) { $cleanup.Add('Exact pending NT protocol ownership cleanup remains incomplete.') }
+  if (@($script:ntPendingProtocols | Where-Object { -not $_.childExited }).Count -eq 0) { try { [MixelOrdinaryTokenFixture]::CloseStartedObservations() } catch { $cleanup.Add('Exact owned standard lease handle close failed.') } }
+  if (@($script:ntPendingProtocols | Where-Object { -not $_.childExited }).Count -eq 0) { try { [MixelIsolatedLeaseControl]::ClosePending() } catch { $cleanup.Add('Owned retained isolated lease handle cleanup failed.') } }
+  if ($namespaceAccess) { try { $namespaceAccess.Dispose(); $script:namespaceRestorationKnown=$true } catch { $cleanup.Add('Owned standard lease namespace DACL restoration failed.') } }
+  $desktopRestorationKnown=$null -eq $desktopAccess
+  if ($desktopAccess) {
+    try { $desktopAccess.Dispose(); $desktopRestorationKnown=$true }
+    catch { $cleanup.Add('Owned standard lease desktop ACL restoration failed.') }
+  }
+  try {
+    if ([MixelOrdinaryTokenFixture]::DesktopAclHashes() -cne $originalDesktop) {
+      $desktopRestorationKnown=$false
+      $cleanup.Add('Owned standard lease desktop ACL hashes changed.')
+    }
+  } catch { $desktopRestorationKnown=$false; $cleanup.Add('Owned standard lease desktop ACL hash verification failed.') }
+  $ownedCleanupPermitted=$ownedProcessesExited -and $script:namespaceRestorationKnown -and $desktopRestorationKnown -and $script:ntPendingProtocols.Count -eq 0 -and $script:ntPreservedRoots.Count -eq 0
+  if ($ownedCleanupPermitted -and $profileStarted -and $ownedSid) {
     $removed = $false
     for ($attempt=0; $attempt -lt 5; $attempt++) {
       try { [MixelOrdinaryTokenFixture]::RemoveProfile($ownedSid); $removed=$true; break }
@@ -808,12 +1671,15 @@ try {
     }
     if (-not $removed) { $cleanup.Add('Owned standard lease profile cleanup failed.') }
   }
-  if ($ownedSid) { try { Remove-LocalUser -SID ([Security.Principal.SecurityIdentifier]::new($ownedSid)) } catch { $cleanup.Add('Owned standard lease SID cleanup failed.') } }
+  if ($ownedCleanupPermitted -and $ownedSid) { try { Remove-LocalUser -SID ([Security.Principal.SecurityIdentifier]::new($ownedSid)) } catch { $cleanup.Add('Owned standard lease SID cleanup failed.') } }
   $ownedPassword = $null; $random = $null
+  if ($ownedCleanupPermitted) {
   if (Test-Path $fixtureRoot) { try { Remove-Item -LiteralPath $fixtureRoot -Recurse -Force } catch { $cleanup.Add('Owned standard lease files cleanup failed.') } }
+  } else { $cleanup.Add('Owned fixture account/profile/files retained for incomplete process exit, namespace/desktop restoration or NT protocol cleanup.') }
   if (Get-LocalUser -Name $ownedUser -ErrorAction SilentlyContinue) { $cleanup.Add('Owned standard lease account remains.') }
   if ($cleanup.Count -gt 0) {
-    if ($failure) { Write-Host ('FAIL: standard lease cleanup additionally failed: ' + ($cleanup -join ' ')) }
+    if ($failure) { try { Write-Host ('FAIL: standard lease cleanup additionally failed: ' + ($cleanup -join ' ')) } catch {} }
     else { throw ($cleanup -join ' ') }
-  } else { Write-Host 'PASS: standard-account lease controls remove only owned processes/profile/SID/files and restore exact original desktop ACLs.' }
+  } elseif ($failure) { try { Write-Host 'PASS: standard-account lease controls remove only owned processes/profile/SID/files and restore exact original desktop ACLs.' } catch {} }
+  else { Write-Host 'PASS: standard-account lease controls remove only owned processes/profile/SID/files and restore exact original desktop ACLs.' }
 }

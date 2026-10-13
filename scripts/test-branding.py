@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -60,10 +61,100 @@ def config_path_function(source: str) -> str:
     start = source.index("    pub fn path<P: AsRef<Path>>(p: P) -> PathBuf {")
     end = source.index("\n    pub fn", start + 1)
     return source[start:end]
+def full_source_snapshot(repo: Path) -> dict[str, tuple[str, str]]:
+    """Include owned ignored sources and empty directories, excluding Git data."""
+    result = {}
+    for path in repo.rglob("*"):
+        relative = path.relative_to(repo)
+        if ".git" in relative.parts:
+            continue
+        if path.is_symlink():
+            result[relative.as_posix()] = ("symlink", os.readlink(path))
+        elif path.is_file():
+            result[relative.as_posix()] = ("file", hashlib.sha256(path.read_bytes()).hexdigest())
+        elif path.is_dir():
+            result[relative.as_posix()] = ("directory", "")
+        else:
+            raise RuntimeError(f"Unexpected nonregular branding fixture source: {relative}")
+    return result
+
+
+def require_runtime_refusal(result: subprocess.CompletedProcess[str], path: str, label: str) -> None:
+    assert result.returncode != 0, f"Corrupt {label} unexpectedly passed"
+    assert f"Required runtime branding missing in {path}" in result.stderr, result.stderr[-4000:]
+
+
+def runtime_refusal_controls(paths: list[str]) -> None:
+    for path in paths:
+        marker = f"Required runtime branding missing in {path}"
+        require_runtime_refusal(subprocess.CompletedProcess([], 1, "", marker), path, "fixture")
+        for code, error in ((0, marker), (1, "Changed SDK compatibility current source: flutter/lib/desktop/widgets/tabbar_widget.dart"),
+                            (1, "Required runtime branding missing in a/different/path")):
+            try:
+                require_runtime_refusal(subprocess.CompletedProcess([], code, "", error), path, "fixture")
+            except AssertionError:
+                pass
+            else:
+                raise AssertionError("Unrelated, successful or misattributed runtime refusal accepted")
+    print("PASS: four exact runtime refusal paths accept; twelve successful, unrelated SDK or wrong-path results refuse")
+
+
+def write_corrupt_footer(path: Path) -> None:
+    original = path.read_bytes()
+    expected = b"launchUrl(Uri.parse('https://mixel.ch'));"
+    corrupted = b"launchUrl(Uri.parse('https://changed.example'));"
+    assert original.count(expected) == 1, "Exactly one verified footer destination required"
+    path.write_bytes(original.replace(expected, corrupted, 1))
+
+
+def require_footer_refusal(result: subprocess.CompletedProcess[str], startup: bool = False) -> None:
+    assert result.returncode != 0, "Changed footer unexpectedly passed"
+    marker = "Pinned Mac startup input digest mismatch; refusing all writes" if startup else "Pinned file-transfer window source changed: flutter/lib/common.dart"
+    assert marker in result.stderr, result.stderr[-4000:]
+
+
+def footer_refusal_controls(base: Path) -> None:
+    expected = b"launchUrl(Uri.parse('https://mixel.ch'));"
+    corrupted = b"launchUrl(Uri.parse('https://changed.example'));"
+    for profile, newline in (("LF", b"\n"), ("CRLF", b"\r\n")):
+        path = base / f"footer-{profile}.dart"
+        original = newline.join((b"// preserve surrounding source", expected, b"// preserve final newline", b""))
+        path.write_bytes(original)
+        write_corrupt_footer(path)
+        assert path.read_bytes() == original.replace(expected, corrupted, 1), profile
+    for index, malformed in enumerate((b"missing verified destination\n", expected + b"\n" + expected + b"\n")):
+        path = base / f"footer-malformed-{index}.dart"
+        path.write_bytes(malformed)
+        try:
+            write_corrupt_footer(path)
+        except AssertionError:
+            assert path.read_bytes() == malformed
+        else:
+            raise AssertionError("Missing or duplicate footer accepted")
+    marker = "Pinned file-transfer window source changed: flutter/lib/common.dart"
+    require_footer_refusal(subprocess.CompletedProcess([], 1, "", marker))
+    startup_marker = "Pinned Mac startup input digest mismatch; refusing all writes"
+    require_footer_refusal(subprocess.CompletedProcess([], 1, "", startup_marker), startup=True)
+    for code, error in ((0, startup_marker), (1, marker), (1, "Mac startup overlay corruption; refusing all writes")):
+        try:
+            require_footer_refusal(subprocess.CompletedProcess([], code, "", error), startup=True)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError("Successful or wrong-layer startup footer refusal accepted")
+    for code, error in ((0, marker), (1, "Changed SDK compatibility current source: flutter/lib/common.dart"),
+                        (1, "Pinned file-transfer window source changed: flutter/lib/other.dart")):
+        try:
+            require_footer_refusal(subprocess.CompletedProcess([], code, "", error))
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError("Successful, unrelated or wrong-path footer refusal accepted")
+    print("PASS: footer byte corruption preserves LF/CRLF; missing/duplicate sources and successful/unrelated/wrong-path refusals reject")
 
 
 with tempfile.TemporaryDirectory(prefix="mixel-branding-") as directory:
-    base = Path(directory)
+    base = Path(directory).resolve()
     repo = base / "rustdesk"
     run(["git", "clone", "--quiet", "--shared", "--branch", "1.4.6", str(SOURCE), str(repo)])
     run(["git", "clone", "--quiet", "--shared", str(SOURCE / "libs/hbb_common"), str(repo / "libs/hbb_common")])
@@ -77,6 +168,36 @@ with tempfile.TemporaryDirectory(prefix="mixel-branding-") as directory:
     first = run(BRANDING_COMMAND, cwd=base, env=env)
     assert "native loaders, protocol handlers, Linux app identity and relay defaults verified" in first.stdout
     assert (repo / "flutter/lib/mixel_support_invite.dart").is_file()
+    assert "path: .mixel-dependencies/desktop_multi_window" in (repo / "flutter/pubspec.yaml").read_text(encoding="utf-8")
+    owned_window = repo / "flutter/.mixel-dependencies/desktop_multi_window"
+    window_proof = json.loads((owned_window / ".mixel-source.json").read_bytes())
+    assert window_proof["commit"] == "b47e8385e5a75d38319ad706a64b0ead3108b093"
+    assert window_proof["tree"] == "ee184480a0e519b9f51f7496d3d90674782481d6"
+    window_source = (owned_window / "macos/Classes/FlutterWindow.swift").read_text(encoding="utf-8")
+    assert "guard flutterViewController.engine.run(withEntrypoint: nil) else {" in window_source
+    assert "window_engine_start_failed" in (owned_window / "macos/Classes/FlutterMultiWindowPlugin.swift").read_text(encoding="utf-8")
+    window_manager_source = (owned_window / "macos/Classes/MultiWindowManager.swift").read_text(encoding="utf-8")
+    assert "closingWindows[windowId] = window" in window_manager_source
+    assert "DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: timeout)" in window_manager_source
+    assert "finishClosingWindow(windowId: windowId, timedOut: false)" in window_manager_source
+    print("PASS: full branding resolves the owned exact Mac window plugin, propagates startup failure and bounds close acknowledgement")
+    assert (repo / "flutter/assets/icon.png").read_bytes() == (ROOT / "branding/icon-512.png").read_bytes()
+    assert not (repo / "flutter/assets/icon.svg").exists()
+    common = (repo / "flutter/lib/common.dart").read_text(encoding="utf-8")
+    assert "return Image.asset('assets/icon.png', width: size, height: size);" in common
+    assert "'assets/icon.svg'" not in common
+    assert "launchUrl(Uri.parse('https://mixel.ch'));" in common
+    for file in (repo / "src/lang").glob("*.rs"):
+        branded = file.read_text(encoding="utf-8")
+        upstream = run(["git", "-C", str(repo), "show", "HEAD:src/lang/" + file.name]).stdout
+        assert not re.search(r"Rust[Dd]esk", branded), file.name
+        # Lowercase lookup keys and the upstream documentation URLs retain
+        # their exact bytes while visible capitalized product values change.
+        assert re.findall(r'\("([^"\n]*rustdesk[^"\n]*)",', branded) == re.findall(r'\("([^"\n]*rustdesk[^"\n]*)",', upstream), file.name
+        assert re.findall(r'https://rustdesk\.com[^"\n]*', branded) == re.findall(r'https://rustdesk\.com[^"\n]*', upstream), file.name
+    assert '("powered_by_me", "Werkt met Mixel-Remote")' in (repo / "src/lang/nl.rs").read_text(encoding="utf-8")
+    assert '("About Mixel-Remote", "Про Mixel-Remote")' in (repo / "src/lang/uk.rs").read_text(encoding="utf-8")
+    print("PASS: actual Dutch/Ukrainian values and Flutter footer use Mixel; lowercase lookup keys and documentation URLs preserved")
     print("PASS: complete branding and support patch use the same fresh 1.4.6 checkout with default RDREPO")
 
     gtk = (repo / "flutter/linux/my_application.cc").read_text(encoding="utf-8")
@@ -559,15 +680,65 @@ print("PASS: actual Debian generator child explicitly uses UTF-8 and preserves t
         ("flutter/macos/Runner/Info.plist", '<string>mixel-remote</string>', '<string>missing-protocol</string>', "macOS URL handler"),
         ("libs/hbb_common/src/config.rs", '("relay-server".to_owned(), "rs.mixel.ch".to_owned())', '("relay-server".to_owned(), "wrong.example".to_owned())', "visible relay default"),
     ]
-    for path, expected, corrupted, label in cases:
-        file = repo / path
+    pristine = full_source_snapshot(repo)
+    runtime_refusal_controls([path for path, _, _, _ in cases])
+    for index, (path, expected, corrupted, label) in enumerate(cases):
+        # A fatal pipeline run may have reversed the final owned layers before
+        # reaching its runtime check. Each negative begins at the same complete
+        # composed source, while the documented default-RDREPO baseline stays intact.
+        candidate = base / f"runtime-corruption-{index}"
+        shutil.copytree(repo, candidate, symlinks=True)
+        assert full_source_snapshot(candidate) == pristine
+        file = candidate / path
         original = file.read_text(encoding="utf-8")
         assert expected in original
         file.write_text(original.replace(expected, corrupted), encoding="utf-8")
-        rejected = subprocess.run(BRANDING_COMMAND, cwd=base, env=env, capture_output=True, text=True, encoding="utf-8")
-        file.write_text(original, encoding="utf-8")
-        assert rejected.returncode != 0, f"Corrupt {label} unexpectedly passed"
-        assert f"Required runtime branding missing in {path}" in rejected.stderr, rejected.stderr[-4000:]
+        rejected = subprocess.run(BRANDING_COMMAND, cwd=base, env={**env, "RDREPO": candidate.as_posix()},
+                                  capture_output=True, text=True, encoding="utf-8")
+        require_runtime_refusal(rejected, path, label)
+        assert full_source_snapshot(repo) == pristine, "Runtime corruption control changed the composed baseline"
         print(f"PASS: full branding rejects a corrupt {label}")
+
+    # Recheck the untouched composed baseline before the later owned-source guards.
+    run(BRANDING_COMMAND, cwd=base, env=env)
+    assert full_source_snapshot(repo) == pristine, "Composed baseline changed before the footer control"
+    footer_refusal_controls(base)
+    footer_candidate = base / "footer-corruption"
+    shutil.copytree(repo, footer_candidate, symlinks=True)
+    assert full_source_snapshot(footer_candidate) == pristine
+    write_corrupt_footer(footer_candidate / "flutter/lib/common.dart")
+    before_rejected_footer = full_source_snapshot(footer_candidate)
+    rejected = subprocess.run(BRANDING_COMMAND, cwd=base, env={**env, "RDREPO": footer_candidate.as_posix()},
+                              capture_output=True, text=True, encoding="utf-8")
+    require_footer_refusal(rejected, startup=True)
+    assert full_source_snapshot(footer_candidate) == before_rejected_footer, "Changed footer refusal must precede any pipeline mutation"
+    assert full_source_snapshot(repo) == pristine, "Footer corruption control changed the composed baseline"
+    print("PASS: full branding rejects a changed Flutter footer instead of retaining an unverified destination")
+
+    startup_candidate = base / "window-startup-corruption"
+    shutil.copytree(repo, startup_candidate, symlinks=True)
+    assert full_source_snapshot(startup_candidate) == pristine
+    window_source_file = startup_candidate / "flutter/.mixel-dependencies/desktop_multi_window/macos/Classes/FlutterWindow.swift"
+    original_window = window_source_file.read_bytes()
+    window_source_file.write_bytes(original_window.replace(
+        b"guard flutterViewController.engine.run(withEntrypoint: nil) else {", b"guard true else {", 1))
+    rejected = subprocess.run(BRANDING_COMMAND, cwd=base, env={**env, "RDREPO": startup_candidate.as_posix()},
+                              capture_output=True, text=True, encoding="utf-8")
+    assert rejected.returncode != 0 and "Mac subwindow startup patch" in rejected.stderr, rejected.stderr[-4000:]
+    assert full_source_snapshot(repo) == pristine, "Window startup corruption control changed the composed baseline"
+    print("PASS: full branding refuses a corrupted subwindow startup guard instead of accepting a dead engine")
+
+    close_candidate = base / "window-close-corruption"
+    shutil.copytree(repo, close_candidate, symlinks=True)
+    assert full_source_snapshot(close_candidate) == pristine
+    manager_source_file = close_candidate / "flutter/.mixel-dependencies/desktop_multi_window/macos/Classes/MultiWindowManager.swift"
+    original_manager = manager_source_file.read_bytes()
+    manager_source_file.write_bytes(original_manager.replace(
+        b"closingWindows[windowId] = window", b"// closing engine retention removed", 1))
+    rejected = subprocess.run(BRANDING_COMMAND, cwd=base, env={**env, "RDREPO": close_candidate.as_posix()},
+                              capture_output=True, text=True, encoding="utf-8")
+    assert rejected.returncode != 0 and "Mac subwindow startup patch" in rejected.stderr, rejected.stderr[-4000:]
+    assert full_source_snapshot(repo) == pristine, "Window close corruption control changed the composed baseline"
+    print("PASS: full branding refuses a corrupted close acknowledgement lifetime guard")
 
 print("PASS: all full-pipeline branding regression checks")

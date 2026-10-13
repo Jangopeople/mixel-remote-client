@@ -88,6 +88,7 @@ def read_archive(path, name, digest):
         entries = archive.infolist()
         require(0 < len(entries) <= 64, 'Artifact file inventory exceeds its bound')
         for entry in entries:
+            require(entry.filename == entry.orig_filename, 'Artifact member name was truncated by ZIP parsing')
             require(not entry.is_dir() and '/' not in entry.filename and '\\' not in entry.filename and ':' not in entry.filename,
                     'Customer artifact must contain only canonical root files')
             require(entry.filename not in files, 'Duplicate artifact member')

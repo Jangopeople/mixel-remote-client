@@ -19,6 +19,8 @@ UPSTREAM = Path(os.environ.get("RDREPO", ROOT / "rustdesk"))
 PLUGIN_SHA = "692de81efc32ef72df56d428902afb5216d5f9e43d71c7b315d360acd7a1e115"
 ENGINE = "a18df97ca57a249df5d8d68cd0820600223ce262"  # Flutter 3.24.5.
 ENGINE_HEADER_SHA = "a2af9087215714bda2d9720a1fa765db8c1caf44f79f6da9b36fa8567190ace7"
+CURRENT_ENGINE = "82bd5b7209295a5b7ff8cae0df96e7870171e3a5"  # Flutter 3.27.4.
+CURRENT_ENGINE_HEADER_SHA = "a2af9087215714bda2d9720a1fa765db8c1caf44f79f6da9b36fa8567190ace7"
 PLUGIN_FILES = {
     "LICENSE", "pubspec.yaml", "macos/uni_links_desktop.podspec",
     "macos/Classes/UniLinksDesktopPlugin.swift", "lib/uni_links_desktop.dart",
@@ -268,13 +270,14 @@ def vendor_checkout_fixture(directory):
     print("PASS actual Git autocrlf negative control and exact 13-file vendor/license checkout bytes preserved by repository attributes")
 
 
-def swift_fixture(directory, plugin):
+def swift_fixture(directory, plugin, engine=ENGINE, expected_sha=ENGINE_HEADER_SHA):
+    directory.mkdir()
     # Execute only a synthetic plugin/engine fixture. No NSApplication,
     # NSWorkspace, app bundle, real URL launch or application termination.
     assert plugin.count("import FlutterMacOS") == 1
-    header_url = f"https://raw.githubusercontent.com/flutter/engine/{ENGINE}/shell/platform/darwin/macos/framework/Headers/FlutterAppLifecycleDelegate.h"
+    header_url = f"https://raw.githubusercontent.com/flutter/engine/{engine}/shell/platform/darwin/macos/framework/Headers/FlutterAppLifecycleDelegate.h"
     header = urlopen(header_url, timeout=20).read()
-    assert hashlib.sha256(header).hexdigest() == ENGINE_HEADER_SHA
+    assert hashlib.sha256(header).hexdigest() == expected_sha
     assert b"- (BOOL)handleOpenURLs:(NSArray<NSURL*>*)urls;" in header
     (directory / "FlutterAppLifecycleDelegate.h").write_bytes(header)
     (directory / "FlutterMacros.h").write_text("#define FLUTTER_DARWIN_EXPORT\n", encoding="utf-8", newline="\n")
@@ -345,7 +348,7 @@ print("PASS negative control reproduces dropped second warm support URI during a
     subprocess.run([str(output)], check=True)
     # Compile the actual generated repo-local plugin correction separately.
     # The baseline above must continue reproducing the original defect.
-    generated = directory / "dart/flutter/local_plugins/uni_links_desktop/macos/Classes/UniLinksDesktopPlugin.swift"
+    generated = directory.parent / "dart/flutter/local_plugins/uni_links_desktop/macos/Classes/UniLinksDesktopPlugin.swift"
     patched = generated.read_text(encoding="utf-8")
     assert patched.count("import FlutterMacOS") == 1
     baseline = swift.read_text(encoding="utf-8")
@@ -469,7 +472,8 @@ def main():
         plugin = pinned_vendor_fixture(directory / "dart")
         vendor_checkout_fixture(directory)
         if sys.platform == "darwin":
-            swift_fixture(directory, plugin)
+            swift_fixture(directory / "historical-engine-3.24.5", plugin)
+            swift_fixture(directory / "current-engine-3.27.4", plugin, CURRENT_ENGINE, CURRENT_ENGINE_HEADER_SHA)
         else:
             print("SKIP native Swift selector fixture: macOS required; generated Dart routing checks passed")
 

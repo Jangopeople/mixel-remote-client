@@ -217,22 +217,53 @@ class Session:
         return until("real customer connection manager", lambda: next(iter(self.windows("host", pattern, False)), None))
 
     def pending_accept(self, label):
-        window = self.cm()
-        self.activate("host", window)
-        time.sleep(.7)
-        box = self.geometry("host", window)
         # The real unauthorized CM renders blue Accept + white Cancel; an
         # authorized Remote/FileTransfer session renders red Disconnect.
         # This assertion covers FileTransfer too (VideoConnCount is Remote only).
-        point = (box["X"] + 25, box["Y"] + box["HEIGHT"] - 31)
-        def pending():
-            code = "from PIL import ImageGrab;import json;print(json.dumps(ImageGrab.grab().getpixel(" + repr(point) + ")[:3]))"
-            red, green, blue = json.loads(self.run("host", ["python3", "-c", code]).stdout)
-            return red < 80 and green > 75 and blue > 180
-        until(label + " actual unauthorized Accept UI", pending)
-        self.screenshot("host", label + "-customer-accept")
-        print("PASS: " + label + " real CM remains unauthorized with visible Accept before customer click", flush=True)
-        return box
+        pattern = "^" + self.ids["controller"] + ".*Mixel-Remote$"
+        deadline = time.monotonic() + 60
+        last = None
+
+        def current_geometry(window, activate=False):
+            nonlocal last
+            try:
+                if activate:
+                    self.activate("host", window)
+                    time.sleep(.7)
+                return self.geometry("host", window)
+            except RuntimeError as error:
+                # A CM from the terminated service can disappear between X11
+                # enumeration and geometry. Retry only this literal X11 error;
+                # Docker, IPC, capture and other fixture failures stay fatal.
+                if not re.match(r"^docker failed \(1\): X Error of failed request:\s+BadWindow \(invalid Window parameter\)(?:\r?\n|$)", str(error)):
+                    raise
+                last = error
+                return None
+
+        while time.monotonic() < deadline:
+            for window in self.windows("host", pattern, False):
+                if time.monotonic() >= deadline:
+                    break
+                box = current_geometry(window, activate=True)
+                if box is None:
+                    continue
+                point = (box["X"] + 25, box["Y"] + box["HEIGHT"] - 31)
+                code = "from PIL import ImageGrab;import json;print(json.dumps(ImageGrab.grab().getpixel(" + repr(point) + ")[:3]))"
+                red, green, blue = json.loads(self.run("host", ["python3", "-c", code]).stdout)
+                if not (red < 80 and green > 75 and blue > 180):
+                    continue
+                if time.monotonic() >= deadline:
+                    break
+                self.screenshot("host", label + "-customer-accept")
+                # The captured blue button must still belong to this matching
+                # CM at the same geometry before it can authorize a later click.
+                if (current_geometry(window) == box
+                        and window in self.windows("host", pattern, False)
+                        and time.monotonic() < deadline):
+                    print("PASS: " + label + " real CM remains unauthorized with visible Accept before customer click", flush=True)
+                    return box
+            time.sleep(.4)
+        raise RuntimeError(f"Timed out: {label} actual unauthorized Accept UI; {last or 'condition not met'}")
 
     def accept(self, label):
         box = self.pending_accept(label)

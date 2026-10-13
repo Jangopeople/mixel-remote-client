@@ -20,14 +20,21 @@ public sealed class StandardNamespaceAccess : IDisposable {
   [DllImport("advapi32.dll", SetLastError=true)] static extern bool GetKernelObjectSecurity(IntPtr handle, uint information, byte[] descriptor, uint length, out uint needed);
   [DllImport("advapi32.dll", SetLastError=true)] static extern bool SetKernelObjectSecurity(IntPtr handle, uint information, byte[] descriptor);
   IntPtr handle;
-  byte[] original, grantedAcl;
-  static byte[] Descriptor(IntPtr obj) {
+  Exception terminalFailure;
+  byte[] original, grantedAcl, originalLabel;
+  public sealed class Facts {
+    public int schema=1, grantMask=12;
+    public bool writeAttempted, restorationVerified, cleanupOkay;
+  }
+  public readonly Facts facts=new Facts();
+  static byte[] Descriptor(IntPtr obj) { return ReadDescriptor(obj,7); }
+  static byte[] ReadDescriptor(IntPtr obj,uint information) {
     uint required;
-    bool first=GetKernelObjectSecurity(obj,4,null,0,out required);
+    bool first=GetKernelObjectSecurity(obj,information,null,0,out required);
     int error=first ? 0 : Marshal.GetLastWin32Error();
     if(first || error!=122 || required<20 || required>65536) throw new InvalidOperationException("Invalid bounded namespace security descriptor");
     byte[] data=new byte[required]; uint actual;
-    if(!GetKernelObjectSecurity(obj,4,data,required,out actual)) { error=Marshal.GetLastWin32Error(); throw new Win32Exception(error); }
+    if(!GetKernelObjectSecurity(obj,information,data,required,out actual)) { error=Marshal.GetLastWin32Error(); throw new Win32Exception(error); }
     if(actual<20 || actual>required) throw new InvalidOperationException("Invalid actual namespace security descriptor size");
     return data;
   }
@@ -51,6 +58,21 @@ public sealed class StandardNamespaceAccess : IDisposable {
   static bool Equal(byte[] left,byte[] right) {
     if(left==null || right==null || left.Length!=right.Length) return false;
     int difference=0; for(int index=0;index<left.Length;index++) difference|=left[index]^right[index]; return difference==0;
+  }
+  static byte[] Metadata(byte[] bytes) {
+    Acl(bytes);
+    var value=new RawSecurityDescriptor(bytes,0);
+    if(value.Owner==null || value.Group==null) throw new InvalidOperationException("Native owner/group snapshot missing");
+    byte[] result=new byte[2+value.Owner.BinaryLength+value.Group.BinaryLength];
+    result[0]=bytes[2];result[1]=bytes[3];
+    value.Owner.GetBinaryForm(result,2);value.Group.GetBinaryForm(result,2+value.Owner.BinaryLength);
+    return result;
+  }
+  static bool SnapshotEquals(byte[] actual,byte[] baseline,byte[] expectedAcl,byte[] label,byte[] expectedLabel) {
+    return Equal(Acl(actual),expectedAcl)&&Equal(Metadata(actual),Metadata(baseline))&&Equal(label,expectedLabel);
+  }
+  bool CurrentEquals(byte[] expectedAcl) {
+    return SnapshotEquals(Descriptor(handle),original,expectedAcl,ReadDescriptor(handle,16),originalLabel);
   }
   static byte[] WithCreateAccess(byte[] bytes,SecurityIdentifier sid) {
     var descriptor=new RawSecurityDescriptor(bytes,0);
@@ -108,19 +130,24 @@ public sealed class StandardNamespaceAccess : IDisposable {
     if(!ProcessIdToSessionId(GetCurrentProcessId(),out actual)) throw new Win32Exception(Marshal.GetLastWin32Error());
     if(actual==0 || actual!=expectedSession) throw new InvalidOperationException("Namespace access requires the actual caller interactive session");
     handle=Open(actual);
-    bool applied=false;
+    bool writeAttempted=false;
     try {
-      original=Descriptor(handle); byte[] updated=WithCreateAccess(original,sid); grantedAcl=Acl(updated);
-      if(!Equal(Acl(Descriptor(handle)),Acl(original))) throw new InvalidOperationException("Namespace DACL changed before the owned grant; refusing to overwrite it");
-      Apply(handle,updated); applied=true;
-      if(!Equal(Acl(Descriptor(handle)),grantedAcl)) throw new InvalidOperationException("Namespace object/subdirectory grant changed unexpected DACL bytes");
+      original=Descriptor(handle); originalLabel=ReadDescriptor(handle,16); Metadata(original); byte[] updated=WithCreateAccess(original,sid); grantedAcl=Acl(updated);
+      if(!CurrentEquals(Acl(original))) throw new InvalidOperationException("Namespace DACL changed before the owned grant; refusing to overwrite it");
+      writeAttempted=true; facts.writeAttempted=true; Apply(handle,updated);
+      if(!CurrentEquals(grantedAcl)) throw new InvalidOperationException("Namespace object/subdirectory grant changed unexpected DACL bytes");
     } catch(Exception primary) {
       var failures=new List<Exception> {primary};
-      if(applied) {
+      if(writeAttempted) {
         try {
-          if(!Equal(Acl(Descriptor(handle)),grantedAcl)) throw new InvalidOperationException("Namespace DACL changed outside the constructor owned grant; refusing to overwrite it");
-          Apply(handle,original);
-          if(!Equal(Acl(Descriptor(handle)),Acl(original))) throw new InvalidOperationException("Namespace constructor did not restore its exact original DACL");
+          // A failed native setter may leave the exact original snapshot. Any
+          // third state is foreign or unknown and must not be overwritten.
+          if(!CurrentEquals(Acl(original))) {
+            if(!CurrentEquals(grantedAcl)) throw new InvalidOperationException("Namespace DACL changed outside the constructor owned grant; refusing to overwrite it");
+            Apply(handle,original);
+          }
+          if(!CurrentEquals(Acl(original))) throw new InvalidOperationException("Namespace constructor did not restore its exact original DACL");
+          facts.restorationVerified=true;
         } catch(Exception restoreFailure) { failures.Add(restoreFailure); }
       }
       var closingFailure=CloseOwned(); if(closingFailure!=null) failures.Add(closingFailure);
@@ -129,23 +156,24 @@ public sealed class StandardNamespaceAccess : IDisposable {
     }
   }
   Exception CloseOwned() {
-    IntPtr closing=handle; handle=IntPtr.Zero; original=null; grantedAcl=null;
+    IntPtr closing=handle; handle=IntPtr.Zero; original=null; grantedAcl=null; originalLabel=null;
     if(closing!=IntPtr.Zero && !CloseHandle(closing)) { int error=Marshal.GetLastWin32Error(); return new Win32Exception(error); }
+    facts.cleanupOkay=(!facts.writeAttempted||facts.restorationVerified);
     return null;
   }
 
   public void Dispose() {
-    if(handle==IntPtr.Zero) return;
+    if(handle==IntPtr.Zero) { if(terminalFailure!=null) ExceptionDispatchInfo.Capture(terminalFailure).Throw(); return; }
     Exception failure=null;
     try {
-      if(!Equal(Acl(Descriptor(handle)),grantedAcl)) throw new InvalidOperationException("Namespace DACL changed outside the owned grant; refusing to overwrite it");
+      if(!CurrentEquals(grantedAcl)) throw new InvalidOperationException("Namespace DACL changed outside the owned grant; refusing to overwrite it");
       Apply(handle,original);
-      if(!Equal(Acl(Descriptor(handle)),Acl(original))) throw new InvalidOperationException("Namespace original DACL restoration was not exact");
+      if(!CurrentEquals(Acl(original))) throw new InvalidOperationException("Namespace original DACL restoration was not exact");
+      facts.restorationVerified=true;
     } catch(Exception error) { failure=error; }
     var closingFailure=CloseOwned();
-    if(failure!=null && closingFailure!=null) throw new AggregateException("Namespace restoration and owned handle cleanup failed",failure,closingFailure);
-    if(failure!=null) ExceptionDispatchInfo.Capture(failure).Throw();
-    if(closingFailure!=null) throw closingFailure;
+    terminalFailure=(failure!=null && closingFailure!=null) ? new AggregateException("Namespace restoration and owned handle cleanup failed",failure,closingFailure) : (failure ?? closingFailure);
+    if(terminalFailure!=null) ExceptionDispatchInfo.Capture(terminalFailure).Throw();
   }
 }
 }

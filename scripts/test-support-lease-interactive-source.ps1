@@ -22,8 +22,24 @@ $originalParser=Section $original 'function Assert-StandardLeaseSafeResult' 'fun
 if($parser -cne $originalParser) { throw 'Actual source six-field parser drifted.' }
 . ([scriptblock]::Create($parser))
 $core=Section $source "  `$absent = 'ownerFailed=false;" "  Write-AtomicJson (Join-Path `$fixtureRoot 'negative-finished.json')"
-$originalCore=Section $original "  `$absent = 'ownerFailed=false;" "} catch {`n  `$failure = `$_`n  throw`n} finally {"
-$pattern='(?m)^\s*(?:\[void\]\(|\$ownerPid = )Invoke-StandardLeaseControl[^\r\n]+'
+function Read-OriginalStandardTerminal([string]$Text) {
+  $tokens=$null; $errors=$null
+  $ast=[Management.Automation.Language.Parser]::ParseInput($Text,[ref]$tokens,[ref]$errors)
+  if($errors.Count) { throw 'Original standard source does not parse.' }
+  # The current-caller comparison has its own $absent variable. Select only
+  # the original top-level terminal, never a function or nested observation.
+  $marker="[void](Invoke-StandardLeaseControl probe `$absent 2 '' `$false `$false)"
+  $terminals=@($ast.EndBlock.Statements|Where-Object {$_ -is [Management.Automation.Language.TryStatementAst] -and $_.Body.Extent.Text.Contains($marker)})
+  if($terminals.Count -ne 1) { throw 'Original standard terminal is missing or duplicated.' }
+  return $terminals[0].Body.Extent.Text
+}
+$originalCore=Read-OriginalStandardTerminal $original
+foreach($changed in @($original.Replace("[void](Invoke-StandardLeaseControl probe `$absent 2 '' `$false `$false)",'changed original call'),($original+"`ntry { [void](Invoke-StandardLeaseControl probe `$absent 2 '' `$false `$false) } finally {}"))) {
+  $refused=$false
+  try { [void](Read-OriginalStandardTerminal $changed) } catch { $refused=$true }
+  if(-not $refused) { throw 'Missing or duplicated original standard terminal was accepted.' }
+}
+$pattern='(?m)^\s*(?:\[void\]\(|\$ownerPid = )Invoke-StandardLeaseControl (?:probe|owner|failed-owner) [^\r\n]+'
 $actualCalls=@([regex]::Matches($core,$pattern)|ForEach-Object{$_.Value.Trim()})
 $originalCalls=@([regex]::Matches($originalCore,$pattern)|ForEach-Object{$_.Value.Trim()})
 if($originalCalls.Count -ne 9 -or $originalCalls[8] -cne '[void](Invoke-StandardLeaseControl probe $beforeGrant.sourceStatus ([int]$beforeGrant.rawOpenError) $beforeGrant.attestation ([bool]$beforeGrant.requiresClick) ([bool]$beforeGrant.ownerFailed))') { throw 'Mandatory hosted original-descriptor restoration assertion changed.' }
@@ -335,15 +351,54 @@ Add-Type -TypeDefinition $normalMock
 foreach($case in 1..17){[MixelNormalOwnershipSourceMock]::Run($case)}
 $normalFinally=Section $normal "  `$customerCleanupFailure = `$null" '  if ($ordinaryRoot -or $ownedUser -or $desktopAccess -or $namespaceAccess)'
 if(-not $normalFinally.Contains("try { [MixelOrdinaryTokenFixture]::CloseStartedObservations() }`n  catch")){throw 'Normal fixture close failure skips remaining outer cleanup.'}
-$standardFinally=Section $original "  try { [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses() } catch" '  if ($desktopAccess)'
+$tokens=$null;$errors=$null
+$standardOuterAst=[Management.Automation.Language.Parser]::ParseInput($original,[ref]$tokens,[ref]$errors)
+$standardOuter=@($standardOuterAst.EndBlock.Statements|Where-Object{$_ -is [Management.Automation.Language.TryStatementAst]})
+if($errors.Count -or $standardOuter.Count -ne 1 -or -not $standardOuter[0].Finally){throw 'Exact standard outer finally boundary changed.'}
+$standardFinally=$standardOuter[0].Finally.Extent.Text
 if(-not $standardFinally.Contains("try { [MixelOrdinaryTokenFixture]::CloseStartedObservations() } catch")){throw 'Standard source close failure skips remaining outer cleanup.'}
-if([regex]::Matches($original,'(?m)^\s+finally \{ \[MixelOrdinaryTokenFixture\]::CloseStartedObservations\(\) \}$').Count -ne 4){throw 'Source observation stop failures skip exact handle cleanup.'}
+function Assert-OriginalObservationCleanup([string]$Text) {
+  $tokens=$null; $errors=$null
+  $ast=[Management.Automation.Language.Parser]::ParseInput($Text,[ref]$tokens,[ref]$errors)
+  if($errors.Count) { throw 'Original observation source does not parse.' }
+  foreach($name in @('Invoke-StandardLeaseSubsystemObservations','Invoke-StandardLeaseNamespaceObservations')) {
+    $functions=@($ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq $name},$true))
+    if($functions.Count -ne 1) { throw 'Source observation cleanup function is missing or duplicated.' }
+    $text=$functions[0].Body.Extent.Text.Replace("`r`n","`n")
+    $expected=if($name -ceq 'Invoke-StandardLeaseSubsystemObservations'){2}else{1}
+    if([regex]::Matches($text,'(?m)^\s+finally \{ \[MixelOrdinaryTokenFixture\]::CloseStartedObservations\(\) \}$').Count -ne $expected) { throw 'Source observation stop failures skip exact handle cleanup.' }
+    if($name -ceq 'Invoke-StandardLeaseNamespaceObservations') {
+      $pending=@'
+            try {
+              Complete-LeaseNtPendingProtocols
+              if ($matrixHandle -ne [IntPtr]::Zero -and -not (Test-LeaseNtWorldPending $matrixHandle)) { [MixelIsolatedLeaseControl]::Close($matrixHandle); $matrixHandle=[IntPtr]::Zero }
+            } finally {
+              if (@($script:ntPendingProtocols | Where-Object { -not $_.childExited }).Count -eq 0) {
+                [MixelOrdinaryTokenFixture]::CloseStartedObservations()
+              } else {
+                # The original subsequent fixture reuse/eight controls close their
+                # observation map. Do not enter them while this exact owned child
+                # still needs that borrowed identity and the verified World handle.
+                throw 'Exact pending NT child remains live after owned stop; retained process/World/protocol ownership prevents further fixture reuse.'
+              }
+            }
+'@
+      if([regex]::Matches($text,[regex]::Escape($pending.Replace("`r`n","`n"))).Count -ne 1){throw 'Exact pending-child drain/zero-live guard/close-or-fatal ownership branch changed.'}
+    }
+  }
+}
+Assert-OriginalObservationCleanup $original
+foreach($changed in @($original.Replace('[MixelOrdinaryTokenFixture]::CloseStartedObservations()','changed-close'),$original.Replace('function Invoke-StandardLeaseNamespaceObservations(', 'function ChangedObservation('),$original.Replace('Complete-LeaseNtPendingProtocols','Changed-PendingDrain'),$original.Replace('Where-Object { -not $_.childExited }','Where-Object { $_.childExited }'),$original.Replace('Exact pending NT child remains live after owned stop;','Changed pending-child fatal;'))) {
+  $refused=$false
+  try { Assert-OriginalObservationCleanup $changed } catch { $refused=$true }
+  if(-not $refused) { throw 'Missing original observation cleanup was accepted.' }
+}
 Write-Host 'PASS: exact normal fixture ownership source passes seventeen fault/success controls; failed waits and closes retain ownership, later children still clean, thread-close/PID/partial-return failures refuse launch, resumed-thread close failure stays owned and retry never closes a successful handle twice.'
 
 # Keep the exact isolated event/mutex ownership bodies, substituting only their
 # API providers. No imported Windows declaration is compiled or invoked here.
 $isolatedPrefix="if (-not ('MixelIsolatedLeaseControl' -as [type])) { Add-Type @'"+"`n"
-$isolatedBlock=Section $original $isolatedPrefix "`n'@ }`n`nfunction Assert-StandardLeaseSafeResult"
+$isolatedBlock=Section $original $isolatedPrefix "`n'@ }"
 $isolated=$isolatedBlock.Substring($isolatedPrefix.Length)
 $providers=@{
   '  [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool ConvertStringSecurityDescriptorToSecurityDescriptorW(string text, uint version, out IntPtr descriptor, IntPtr size);'='  static bool ConvertStringSecurityDescriptorToSecurityDescriptorW(string text,uint version,out IntPtr descriptor,IntPtr size){if(version!=1||size!=IntPtr.Zero)throw new Exception("Descriptor arguments changed");LastSddl=text;descriptor=new IntPtr(9);return true;}'
@@ -351,6 +406,13 @@ $providers=@{
   '  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern IntPtr CreateMutexW(ref Attributes attributes, bool owner, string name);'='  static IntPtr CreateMutexW(ref Attributes attributes,bool owner,string name){if(owner||attributes.inherit!=0||attributes.descriptor!=new IntPtr(9))throw new Exception("Mutex arguments changed");return Created();}'
   '  [DllImport("kernel32.dll", SetLastError=true)] static extern bool CloseHandle(IntPtr handle);'='  static bool CloseHandle(IntPtr handle){long value=handle.ToInt64();int count;Closed.TryGetValue(value,out count);Closed[value]=count+1;SourceLastError=6;return !CloseFailure.Contains(value);}'
   '  [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr memory);'='  static IntPtr LocalFree(IntPtr memory){if(memory!=new IntPtr(9))throw new Exception("Descriptor ownership changed");Freed++;SourceLastError=0;return IntPtr.Zero;}'
+  # These read-only diagnostics are outside the original creation/ownership
+  # control. Throw if any is reached; compile the entire current class.
+  ('  [DllImport("kernel32.dll", EntryPoint="OpenEventW", CharSet=CharSet.Unicode, ExactSpelling=true, SetLastError=true)]'+"`n"+'  static extern IntPtr ReadOnlyOpenEvent(uint access, bool inherit, string name);')='  static IntPtr ReadOnlyOpenEvent(uint access,bool inherit,string name){throw new InvalidOperationException("Out-of-scope descriptor query");}'
+  ('  [DllImport("advapi32.dll", EntryPoint="GetSecurityInfo", ExactSpelling=true)]'+"`n"+'  static extern uint ReadOnlyGetSecurityInfo(IntPtr handle, uint objectType, uint information, out IntPtr owner, out IntPtr group, out IntPtr dacl, out IntPtr sacl, out IntPtr descriptor);')='  static uint ReadOnlyGetSecurityInfo(IntPtr handle,uint objectType,uint information,out IntPtr owner,out IntPtr group,out IntPtr dacl,out IntPtr sacl,out IntPtr descriptor){throw new InvalidOperationException("Out-of-scope descriptor query");}'
+  ('  [DllImport("advapi32.dll", EntryPoint="GetSecurityDescriptorDacl", ExactSpelling=true, SetLastError=true)]'+"`n"+'  static extern bool ReadOnlyGetDacl(IntPtr descriptor, out bool present, out IntPtr acl, out bool defaulted);')='  static bool ReadOnlyGetDacl(IntPtr descriptor,out bool present,out IntPtr acl,out bool defaulted){throw new InvalidOperationException("Out-of-scope descriptor query");}'
+  ('  [DllImport("advapi32.dll", EntryPoint="GetSecurityDescriptorSacl", ExactSpelling=true, SetLastError=true)]'+"`n"+'  static extern bool ReadOnlyGetSacl(IntPtr descriptor, out bool present, out IntPtr acl, out bool defaulted);')='  static bool ReadOnlyGetSacl(IntPtr descriptor,out bool present,out IntPtr acl,out bool defaulted){throw new InvalidOperationException("Out-of-scope descriptor query");}'
+  ('  [DllImport("kernel32.dll", EntryPoint="LocalFree", ExactSpelling=true, SetLastError=true)]'+"`n"+'  static extern IntPtr ReadOnlyLocalFree(IntPtr memory);')='  static IntPtr ReadOnlyLocalFree(IntPtr memory){throw new InvalidOperationException("Out-of-scope descriptor query");}'
 }
 foreach($declaration in $providers.Keys){
   if([regex]::Matches($isolated,[regex]::Escape($declaration)).Count -ne 1){throw 'Isolated ownership API provider boundary drifted.'}
@@ -385,21 +447,22 @@ $standardAst=[Management.Automation.Language.Parser]::ParseFile($StandardPath,[r
 if($errors.Count){throw 'Standard cleanup source does not parse.'}
 $namespace=@($standardAst.FindAll({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Invoke-StandardLeaseNamespaceObservations'},$true))
 if($namespace.Count -ne 1){throw 'Exact namespace cleanup function boundary changed.'}
-$matrix=@($namespace[0].FindAll({param($node)$node -is [Management.Automation.Language.TryStatementAst] -and $node.Finally -and $node.Finally.Extent.Text.Contains('if ($matrixHandle')},$true))
+$matrix=@($namespace[0].FindAll({param($node)$node -is [Management.Automation.Language.TryStatementAst] -and $node.Finally -and @($node.Body.Statements|Where-Object{$_.Extent.Text -ceq '$matrixHandle=[MixelIsolatedLeaseControl]::WorldEvent($endpoint)'}).Count -eq 1},$true))
 $main=@($standardAst.EndBlock.Statements|Where-Object{$_ -is [Management.Automation.Language.TryStatementAst]})
 if($matrix.Count -ne 1 -or $main.Count -ne 1){throw 'Exact outer cleanup finally boundaries changed.'}
 Add-Type @'
 using System;
 using System.Collections.Generic;
 public static class MixelStandardOuterSourceMock {
-  public static bool EventFails,StopFails,CloseFails,PendingFails,HashFails;
+  public static bool EventFails,StopFails,CloseFails,PendingFails,HashFails,DesktopFails,HashDrift;
   public static readonly List<string> Calls=new List<string>();
-  public static void Reset(){EventFails=StopFails=CloseFails=PendingFails=HashFails=false;Calls.Clear();}
+  public static void Reset(){EventFails=StopFails=CloseFails=PendingFails=HashFails=DesktopFails=HashDrift=false;Calls.Clear();}
   public static void Close(IntPtr handle){Calls.Add("eventClose");if(EventFails)throw new InvalidOperationException("Synthetic owned event close failure");}
   public static void ClosePending(){Calls.Add("pendingClose");if(PendingFails)throw new InvalidOperationException("Synthetic pending event close failure");}
   public static void StopOwnedStartedProcesses(){Calls.Add("stopOwned");if(StopFails)throw new InvalidOperationException("Synthetic owned stop failure");}
   public static void CloseStartedObservations(){Calls.Add("closeOwned");if(CloseFails)throw new InvalidOperationException("Synthetic owned process close failure");}
-  public static string DesktopAclHashes(){Calls.Add("hashRead");if(HashFails)throw new InvalidOperationException("Synthetic hash read failure");return "original";}
+  public static string DesktopAclHashes(){Calls.Add("hashRead");if(HashFails)throw new InvalidOperationException("Synthetic hash read failure");return HashDrift?"foreign":"original";}
+  public sealed class DesktopAccess {public void Dispose(){Calls.Add("desktopDispose");if(DesktopFails)throw new InvalidOperationException("Synthetic desktop restoration failure");}}
   public static void RemoveProfile(string sid){Calls.Add("profileCleanup");}
 }
 public sealed class MixelStandardOuterSidSourceMock {public MixelStandardOuterSidSourceMock(string value){if(value!="synthetic-owned-sid")throw new Exception("Mock SID attribution differs");}}
@@ -418,6 +481,11 @@ function Test-ActualStandardCleanup {
   function Get-LocalUser {param($Name,$SID,$ErrorAction) return $null}
   function Start-Sleep {param($Seconds,$Milliseconds)}
   function Write-Host {param($Object)}
+  function Test-LeaseNtWorldPending([IntPtr]$Handle){return @($script:ntPendingProtocols|Where-Object{-not $_.childExited}).Count -gt 0}
+  function Complete-LeaseNtPendingProtocols {if($script:syntheticConfirmNtExit){foreach($context in $script:ntPendingProtocols){$context.childExited=$true}}}
+  $script:ntPendingProtocols=[Collections.Generic.List[object]]::new()
+  $script:ntPreservedRoots=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+  $script:syntheticConfirmNtExit=$false
   foreach($case in 0..3){
     [MixelStandardOuterSourceMock]::Reset()
     [MixelStandardOuterSourceMock]::EventFails=$case -eq 1
@@ -425,27 +493,47 @@ function Test-ActualStandardCleanup {
     [MixelStandardOuterSourceMock]::CloseFails=$case -eq 3
     $matrixHandle=[IntPtr]555;$caught=$false
     try{. $matrixCleanup}catch{$caught=$true}
-    if($caught -ne ($case -ne 0) -or ([MixelStandardOuterSourceMock]::Calls -join ',') -cne 'eventClose,stopOwned,closeOwned' -or ($matrixHandle -ne [IntPtr]::Zero) -ne ($case -eq 1)){throw 'Actual matrix finally abandons cleanup or discards a failed event close.'}
+    $expectedCalls=if($case -eq 1){'eventClose,stopOwned,eventClose,closeOwned'}else{'eventClose,stopOwned,closeOwned'}
+    if($caught -ne ($case -ne 0) -or ([MixelStandardOuterSourceMock]::Calls -join ',') -cne $expectedCalls -or ($matrixHandle -ne [IntPtr]::Zero) -ne ($case -eq 1)){throw 'Actual matrix finally abandons cleanup or discards a failed event close.'}
   }
-  foreach($case in 0..5){
+  foreach($case in 0..3){
+    [MixelStandardOuterSourceMock]::Reset()
+    [MixelStandardOuterSourceMock]::StopFails=$case -eq 1
+    [MixelStandardOuterSourceMock]::EventFails=$case -eq 3
+    $script:ntPendingProtocols.Clear();$script:ntPendingProtocols.Add([pscustomobject]@{childExited=$false})
+    $script:syntheticConfirmNtExit=$case -ge 2
+    $matrixHandle=[IntPtr]555;$caught=$false
+    try{. $matrixCleanup}catch{$caught=$true}
+    $expectedCalls=if($case -lt 2){'stopOwned'}else{'stopOwned,eventClose,closeOwned'}
+    if($caught -ne ($case -ne 2) -or ([MixelStandardOuterSourceMock]::Calls -join ',') -cne $expectedCalls -or ($matrixHandle -ne [IntPtr]::Zero) -ne ($case -ne 2)){throw 'Actual pending-live/late-exit matrix cleanup loses ownership or skips an independent process close.'}
+  }
+  $script:ntPendingProtocols.Clear();$script:syntheticConfirmNtExit=$false
+  foreach($case in 0..8){
     [MixelStandardOuterSourceMock]::Reset()
     [MixelStandardOuterSourceMock]::EventFails=$case -eq 1
     [MixelStandardOuterSourceMock]::StopFails=$case -eq 2
     [MixelStandardOuterSourceMock]::CloseFails=$case -eq 3
     [MixelStandardOuterSourceMock]::PendingFails=$case -eq 4
-    [MixelStandardOuterSourceMock]::HashFails=$case -eq 5
-    $eventHandle=[IntPtr]555;$desktopAccess=$null;$originalDesktop='original'
+    [MixelStandardOuterSourceMock]::HashFails=$case -in @(5,8)
+    [MixelStandardOuterSourceMock]::DesktopFails=$case -in @(6,8)
+    [MixelStandardOuterSourceMock]::HashDrift=$case -eq 7
+    $eventHandle=[IntPtr]555;$desktopAccess=$null;$namespaceAccess=$null;$originalDesktop='original'
+    if($case -ge 6){$desktopAccess=[MixelStandardOuterSourceMock+DesktopAccess]::new()}
+    $script:namespaceRestorationKnown=$true
     $profileStarted=$true;$ownedSid='synthetic-owned-sid';$ownedUser='synthetic-owned-user'
     $ownedPassword='synthetic-nonsecret-marker';$random='synthetic-nonsecret-marker'
     $fixtureRoot=$temporaryCleanup;$failure='synthetic-prior-failure'
     . $mainCleanup
-    if(([MixelStandardOuterSourceMock]::Calls -join ',') -cne 'eventClose,stopOwned,closeOwned,pendingClose,hashRead,profileCleanup,sidCleanup,filesCleanup' -or $null -ne $ownedPassword -or $null -ne $random -or $cleanup.Count -ne ($case -ne 0)){throw 'Actual standard outer finally skips a later owned cleanup attempt or conceals a failure.'}
+    $expectedCalls='eventClose,stopOwned,closeOwned,pendingClose,'+$(if($case -ge 6){'desktopDispose,'}else{''})+'hashRead'
+    if($case -notin @(2,5,6,7,8)){$expectedCalls+=',profileCleanup,sidCleanup,filesCleanup'}
+    $expectedFailures=if($case -eq 8){3}elseif($case -in @(2,5,6,7)){2}else{[int]($case -ne 0)}
+    if(([MixelStandardOuterSourceMock]::Calls -join ',') -cne $expectedCalls -or $null -ne $ownedPassword -or $null -ne $random -or $cleanup.Count -ne $expectedFailures){throw 'Actual standard outer finally skips a later owned cleanup attempt, deletes ownership before known exit/restoration, or conceals a failure.'}
   }
 }
 $temporaryCleanup=Join-Path ([IO.Path]::GetTempPath()) ('mixel-source-cleanup-'+[Guid]::NewGuid().ToString('N'))
 [void][IO.Directory]::CreateDirectory($temporaryCleanup)
 try{Test-ActualStandardCleanup}finally{[IO.Directory]::Delete($temporaryCleanup,$true)}
-Write-Host 'PASS: exact matrix/main finally blocks pass ten pure failure/success cases; event, stop, close, pending-close and hash failures still attempt later owned cleanup, preserve failed ownership and clear memory-only markers.'
+Write-Host 'PASS: exact matrix/main finally blocks retain ten original and four pending-live/late-exit controls plus three desktop Dispose/hash/drift controls; independent hash verification follows failed Dispose, unknown exit or desktop restoration quarantines profile/account/root, and memory-only markers clear.'
 $nativeControlSource=@'
 using System;
 using System.IO;

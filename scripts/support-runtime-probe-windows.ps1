@@ -77,7 +77,7 @@ function Get-MixelSupportRuntimeHealth {
   $onlineReply = [MixelSupportIpcProbe]::RequestWithServerPid('{"t":"OnlineStatus","c":null}')
   $online = $onlineReply.Json | ConvertFrom-Json
   if ($online.t -isnot [string] -or $online.t -cne 'OnlineStatus' -or $online.c -isnot [array] -or $online.c.Count -ne 2 -or
-      $online.c[0] -isnot [long] -or $online.c[1] -isnot [bool]) {
+      ($online.c[0] -isnot [int] -and $online.c[0] -isnot [long]) -or $online.c[1] -isnot [bool]) {
     throw 'Incoming support IPC returned an unexpected online response.'
   }
   $optionsReply = [MixelSupportIpcProbe]::RequestWithServerPid('{"t":"Options","c":null}')

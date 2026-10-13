@@ -75,24 +75,34 @@ start_services() {
   /bin/launchctl kickstart -k "gui/$uid/$label" 2>/dev/null || /bin/launchctl kickstart -k "user/$uid/$label" 2>/dev/null || return 1
 }
 restore_plists() {
-  if [ "$had_daemon" -eq 1 ]; then /bin/cp -p "$work/daemon.old" "$daemon" || return 1; else /bin/rm -f "$daemon" || return 1; fi
-  if [ "$had_agent" -eq 1 ]; then /bin/cp -p "$work/agent.old" "$agent" || return 1; else /bin/rm -f "$agent" || return 1; fi
+  restore_ok=1
+  if [ "$had_daemon" -eq 1 ]; then /bin/cp -p "$work/daemon.old" "$daemon" || restore_ok=0; else /bin/rm -f "$daemon" || restore_ok=0; fi
+  if [ "$had_agent" -eq 1 ]; then /bin/cp -p "$work/agent.old" "$agent" || restore_ok=0; else /bin/rm -f "$agent" || restore_ok=0; fi
+  [ "$restore_ok" -eq 1 ]
 }
 cleanup() {
   result=$1
   trap - 0 HUP INT TERM
   if [ "$committed" -ne 1 ]; then
     rollback_ok=1
-    if [ "$new_moved" -eq 1 ]; then
+    if [ "$new_moved" -eq 1 ] && [ ! -e "$stage" ]; then
       [ "$with_service" -ne 1 ] || stop_services
       /bin/mv "$target" "$work/failed.app" || rollback_ok=0
     fi
     if [ "$old_moved" -eq 1 ]; then
-      if [ ! -e "$target" ] && /bin/mv "$backup" "$target" && verify_hashes "$target" "$work/old.sha256"; then :; else rollback_ok=0; fi
+      if [ -d "$backup" ]; then
+        if [ ! -e "$target" ] && /bin/mv "$backup" "$target" && verify_hashes "$target" "$work/old.sha256"; then :; else rollback_ok=0; fi
+      else
+        # A failed move may leave the original target in place; verify before cleanup.
+        verify_hashes "$target" "$work/old.sha256" || rollback_ok=0
+      fi
     fi
     if [ "$services_stopped" -eq 1 ]; then
-      restore_plists || rollback_ok=0
-      if [ "$had_daemon" -eq 1 ] && [ "$had_agent" -eq 1 ]; then start_services || rollback_ok=0; fi
+      if restore_plists; then
+        if [ "$had_daemon" -eq 1 ] && [ "$had_agent" -eq 1 ]; then start_services || rollback_ok=0; fi
+      else
+        rollback_ok=0
+      fi
     fi
     if [ "$rollback_ok" -ne 1 ]; then
       echo 'Mixel update failed; rollback requires recovery and private backup was retained.' >&2
@@ -131,9 +141,10 @@ fi
 if [ "$with_service" -eq 1 ]; then services_stopped=1; stop_services; fi
 pids=$(/usr/bin/pgrep -x "$app_name" | /usr/bin/grep -vx "$cur_pid" || true)
 if [ -n "$pids" ]; then printf '%s\n' "$pids" | /usr/bin/xargs /bin/kill -9 || true; fi
-if [ -d "$target" ]; then /bin/mv "$target" "$backup"; old_moved=1; fi
-/bin/mv "$stage" "$target"
+# Register each move obligation before its atomic rename, including signal boundaries.
+if [ -d "$target" ]; then old_moved=1; /bin/mv "$target" "$backup"; fi
 new_moved=1
+/bin/mv "$stage" "$target"
 validate_bundle "$target"
 verify_hashes "$target" "$work/new.sha256"
 if [ "$with_service" -eq 1 ]; then

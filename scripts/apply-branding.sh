@@ -33,6 +33,37 @@ fi
 # shellcheck source=/dev/null
 source "$BRANDING/branding.env"
 
+# Validate every prior owner in an exact private final-overlay inverse first.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-macos-startup.py" --check-prior
+
+# Restore only the exact final startup overlay before prior owners see inputs.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-macos-startup.py" --restore
+
+# Restore the exact last Rust tray overlay before native-warning ownership.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-tray-url.py" --restore
+
+# Restore exact owned compatibility and Quit overlays in reverse order before
+# pinned earlier helpers see canonical inputs on repeated branding passes.
+# Validate file-transfer, keyboard and input ownership before any restore writes.
+# The file-transfer check projects the exact prior SDK/Quit/cleanup chain.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-macos-update.py" --source "$RDREPO" --restore --check
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-fatal-crash.py" --source "$RDREPO" --restore --check
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-native-warnings.py" --source "$RDREPO" --restore --check --before-branding
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-fingerprint.py" --restore --check "$RDREPO"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-uinput-device.py" --source "$RDREPO" --restore --check
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-file-transfer-window.py" --restore --check --before-branding "$RDREPO"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-keyboard-default.py" --check
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-rdev.py" --restore --check "$RDREPO"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-macos-update.py" --source "$RDREPO" --restore
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-fatal-crash.py" --source "$RDREPO" --restore
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-fingerprint.py" --restore "$RDREPO"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-native-warnings.py" --source "$RDREPO" --restore
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-uinput-device.py" --source "$RDREPO" --restore
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-file-transfer-window.py" --restore "$RDREPO"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-flutter-sdk-compatibility.py" --restore "$RDREPO"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-termination.py" --restore "$RDREPO"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-rdev.py" --restore "$RDREPO"
+
 echo "→ Applying branding: $APP_NAME ($MACOS_BUNDLE_ID) on top of RustDesk $UPSTREAM_VERSION"
 
 # Runtime helper checks and update paths must use the same bundle identity as
@@ -47,11 +78,18 @@ python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-network.py"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-linux.py"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-signals.py"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-input.py"
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-rdev.py" "$RDREPO"
+fi
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-clipboard.py"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-windows-clipboard.py"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-video.py"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-texture.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-window.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-cleanup.py"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-wakelock.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-flutter-branding.py" --repo "$RDREPO" --branding "$BRANDING"
 
 # 1. custom.txt — RustDesk's build-time branding override file.
 cp "$BRANDING/custom.txt" "$RDREPO/custom.txt"
@@ -184,7 +222,7 @@ patch_string build.py \
 #    Safe because:
 #    - lang/*.rs literals never contain "RustDesk" as an identifier
 #      (the lowercase `rustdesk` in keys like `verify_rustdesk_password_tip`
-#      is preserved — case-sensitive sed).
+#      is preserved — only the capitalized RustDesk/Rustdesk spellings change).
 #    - The Cargo crate name (`rustdesk` in Cargo.toml) is lowercase, untouched.
 #    - The web bridge comparison `mainGetAppNameSync(hint) != "RustDesk"`
 #      is in flutter/lib/web/bridge.dart, deliberately NOT patched — it's
@@ -192,8 +230,8 @@ patch_string build.py \
 
 echo "→ Patching RustDesk → $APP_NAME in user-visible strings"
 for langfile in "$RDREPO"/src/lang/*.rs; do
-  if grep -q "RustDesk" "$langfile"; then
-    sed -i.bak "s/RustDesk/$APP_NAME/g" "$langfile" && rm -f "$langfile.bak"
+  if grep -q "Rust[Dd]esk" "$langfile"; then
+    sed -i.bak "s/Rust[Dd]esk/$APP_NAME/g" "$langfile" && rm -f "$langfile.bak"
   fi
 done
 echo "   patched src/lang/*.rs (47 files)"
@@ -996,5 +1034,24 @@ require_string libs/hbb_common/src/config.rs "(\"custom-rendezvous-server\".to_o
 require_string libs/hbb_common/src/config.rs "(\"relay-server\".to_owned(), \"${RELAY_SERVER}\".to_owned())"
 require_string libs/hbb_common/src/config.rs "(\"key\".to_owned(), \"${RS_PUB_KEY}\".to_owned())"
 echo "   native loaders, protocol handlers, Linux app identity and relay defaults verified"
+
+# common.dart must have its complete branded identity before this pinned check.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-flutter-analysis.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-termination.py" "$RDREPO"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-flutter-sdk-compatibility.py" "$RDREPO"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-file-transfer-window.py" "$RDREPO"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-keyboard-default.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-uinput-scroll.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-uinput-device.py" --source "$RDREPO"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-native-warnings.py" --source "$RDREPO" --after-branding
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-fingerprint.py" "$RDREPO"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-fatal-crash.py" --source "$RDREPO"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-macos-update.py" --source "$RDREPO"
+
+# Tao owns the server NSApplication delegate; route its support URLs via ACK.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-tray-url.py"
+
+# Startup is applied last against one exact composed three-file input profile.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-macos-startup.py"
 
 echo "✓ Branding applied — product identity is $APP_NAME only."

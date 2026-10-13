@@ -5,8 +5,12 @@ import importlib.util
 import os
 from pathlib import Path
 import platform
+import shutil
 import subprocess
+import sys
 import tempfile
+
+from sdk_discovery import find_dart
 
 ROOT = Path(__file__).resolve().parents[1]
 UPSTREAM = Path(os.environ.get('RDREPO', ROOT / 'rustdesk'))
@@ -347,3 +351,10 @@ if platform.system() == 'Darwin':
         print('PASS: actual corrected native permission functions execute read-only with prompt=false; no TCC grant or product launch')
 else:
     print('INFO: actual Apple SDK compilation/read-only permission query is exercised by Mac build preflight')
+
+# The standalone Mac source job has no Flutter SDK; complete source jobs run
+# the same lifecycle suite with actual Dart async controls as well.
+texture_arguments = [sys.executable, str(ROOT / 'scripts/test-support-macos-texture.py')]
+if platform.system() == 'Darwin' and not find_dart():
+    texture_arguments.append('--native-only')
+subprocess.run(texture_arguments, check=True)

@@ -59,7 +59,10 @@ def read_linux_package(archive, expected_digest):
     if actual != expected_digest:
         raise ValueError("Actual archive bytes differ from GitHub's artifact digest")
     with zipfile.ZipFile(archive) as contents:
-        files = [entry for entry in contents.infolist() if not entry.is_dir()]
+        entries = contents.infolist()
+        if any(entry.filename != entry.orig_filename for entry in entries):
+            raise ValueError("Artifact member name was truncated by ZIP parsing")
+        files = [entry for entry in entries if not entry.is_dir()]
         if len(files) != 1:
             raise ValueError("Linux archive must contain exactly one installer")
         entry = files[0]

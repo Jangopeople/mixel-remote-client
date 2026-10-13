@@ -9,10 +9,14 @@ import shutil
 import subprocess
 import tempfile
 import unittest
-from rust_toolchain import rustc_command
+import argparse
+import hashlib
+from types import SimpleNamespace
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent
 SOURCE = Path(os.environ.get("RDREPO", ROOT.parent / "rustdesk")).resolve()
+PROFILE_SOURCES = [SOURCE]
 spec = importlib.util.spec_from_file_location("macos_update", ROOT / "patch-macos-update.py")
 patch = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(patch)
@@ -24,6 +28,23 @@ CRITICAL = ("Contents/MacOS/Mixel-Remote", "Contents/MacOS/service",
 def run(command, **kwargs):
     return subprocess.run(command, capture_output=True, text=True, timeout=45, **kwargs)
 
+
+
+def make_source(repo, source, newline):
+    # Read only exact whole-file profiles; no synthetic anchor-only acceptance.
+    patch.apply(source, restore=True, check=True)
+    raw = [patch.safe_target(source, f, optional=i == 3).read_bytes() if (source / f).exists() else None for i, f in enumerate(patch.FILES)]
+    canonical = [patch.canonical(d)[0] if d is not None else None for d in raw]
+    original = patch.project(*canonical, restore=True)
+    for relative, data in zip(patch.FILES, original):
+        if data is not None:
+            path = repo / relative; path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data.replace(b'\n', newline))
+
+
+def snapshot(repo):
+    return {p.relative_to(repo).as_posix(): ('link:' + os.readlink(p)) if p.is_symlink() else hashlib.sha256(p.read_bytes()).hexdigest()
+            for p in repo.rglob('*') if p.is_file() or p.is_symlink()}
 
 MOCK_TOOL = r'''#!/usr/bin/env python3
 import json,os,plistlib,shutil,sys
@@ -54,16 +75,22 @@ if name=='plutil':
  try:plistlib.loads(Path(args[-1]).read_bytes())
  except Exception:sys.exit(1)
  sys.exit(0)
+if name=='cp':
+ if mode in ('restore-daemon-failed','restore-agent-failed') and Path(args[-2]).name==('daemon.old' if mode=='restore-daemon-failed' else 'agent.old'):sys.exit(1)
+ shutil.copy2(args[-2],args[-1]);sys.exit(0)
 if name=='pgrep':sys.exit(1)
 if name=='launchctl':
  target=base/'Applications/Mixel-Remote.app/Contents/MacOS/Mixel-Remote'
- if mode=='service-failed' and args[0]=='kickstart' and target.read_text()=='new':sys.exit(1)
+ if mode in ('service-failed','restore-daemon-failed','restore-agent-failed') and args[0]=='kickstart' and target.read_text()=='new':sys.exit(1)
  sys.exit(0)
 if name=='mv':
  source,target=map(Path,args)
  if mode=='swap-failed' and source.name=='new.app':sys.exit(1)
  if mode=='rollback-failed' and source.name=='old.app':sys.exit(1)
  shutil.move(str(source),str(target))
+ if (mode=='interrupt-old-move' and target.name=='old.app') or (mode=='interrupt-new-move' and source.name=='new.app'):
+  import signal
+  os.kill(os.getppid(),signal.SIGTERM)
  if mode=='target-hash' and source.name=='new.app':(target/'Contents/MacOS/service').write_text('tampered')
  sys.exit(0)
 raise Exception('Unapproved fixture tool')
@@ -98,7 +125,7 @@ class TransactionFixture:
         self.old_plists = [p.read_bytes() for p in self.plists]
         for tool in ("/usr/bin/id", "/usr/bin/stat", "/usr/bin/codesign", "/usr/libexec/PlistBuddy",
                      "/usr/bin/ditto", "/usr/sbin/chown", "/usr/bin/plutil", "/usr/bin/pgrep",
-                     "/bin/launchctl", "/bin/mv"):
+                     "/bin/launchctl", "/bin/mv", "/bin/cp"):
             path = self.tools / Path(tool).name
             path.write_text(MOCK_TOOL)
             path.chmod(0o755)
@@ -109,7 +136,7 @@ class TransactionFixture:
         shell = shell.replace('/Applications', str(self.root / 'Applications')).replace('/Library', str(self.root / 'Library'))
         for tool in ("/usr/bin/id", "/usr/bin/stat", "/usr/bin/codesign", "/usr/libexec/PlistBuddy",
                      "/usr/bin/ditto", "/usr/sbin/chown", "/usr/bin/plutil", "/usr/bin/pgrep",
-                     "/bin/launchctl", "/bin/mv"):
+                     "/bin/launchctl", "/bin/mv", "/bin/cp"):
             self.assert_once_or_used(shell, tool)
             shell = shell.replace(tool, str(self.tools / Path(tool).name))
         self.shell.write_text(shell)
@@ -198,26 +225,29 @@ class UpdaterTests(unittest.TestCase):
                 self.assertEqual(fixture.actions(), [])
 
     def test_patch_idempotency_newlines_and_atomic_anchor_rejection(self):
-        for newline in (b'\n', b'\r\n'):
-            with self.subTest(newline=newline), tempfile.TemporaryDirectory() as temporary:
-                repo = Path(temporary)
-                (repo / 'src/platform/privileges_scripts').mkdir(parents=True)
-                (repo / 'src/platform/privileges_scripts/update.scpt').write_bytes(patch.ORIGINAL_SCRIPT.encode().replace(b'\n', newline))
-                macos = repo / 'src/platform/macos.rs'
-                core = repo / 'src/core_main.rs'
-                macos.write_bytes(('prefix\n' + patch.ORIGINAL_DAEMON + patch.ORIGINAL_UPDATER + 'suffix\n').encode().replace(b'\n', newline))
-                core.write_bytes(patch.ORIGINAL_CLI.encode().replace(b'\n', newline))
-                patch.patch(repo)
-                first = {p.relative_to(repo).as_posix(): p.read_bytes() for p in repo.rglob('*') if p.is_file()}
-                patch.patch(repo)
-                self.assertEqual(first, {p.relative_to(repo).as_posix(): p.read_bytes() for p in repo.rglob('*') if p.is_file()})
-                core.write_bytes(core.read_bytes() + patch.FIXED_CLI.encode().replace(b'\n', newline))
-                before = macos.read_bytes()
-                with self.assertRaises(RuntimeError):
+        for source in PROFILE_SOURCES:
+            for newline in (b'\n', b'\r\n'):
+                with self.subTest(source=source, newline=newline), tempfile.TemporaryDirectory() as temporary:
+                    repo = Path(temporary).resolve() / 'repo'
+                    make_source(repo, source, newline)
+                    original = snapshot(repo)
+                    patch.apply(repo, check=True)
+                    self.assertEqual(snapshot(repo), original)
                     patch.patch(repo)
-                self.assertEqual(macos.read_bytes(), before)
-                if newline == b'\r\n':
-                    self.assertNotIn(b'\n', macos.read_bytes().replace(b'\r\n', b''))
+                    first = snapshot(repo)
+                    patch.patch(repo)
+                    self.assertEqual(snapshot(repo), first)
+                    patch.apply(repo, restore=True, check=True)
+                    self.assertEqual(snapshot(repo), first)
+                    patch.apply(repo, restore=True)
+                    self.assertEqual(snapshot(repo), original)
+                    patch.patch(repo)
+                    core = repo / 'src/core_main.rs'
+                    core.write_bytes(core.read_bytes() + patch.FIXED_CLI.encode().replace(b'\n', newline))
+                    before = snapshot(repo)
+                    with self.assertRaises(RuntimeError):
+                        patch.patch(repo)
+                    self.assertEqual(snapshot(repo), before)
 
     def test_actual_embedded_applescript_compiles_without_running(self):
         if not shutil.which('osacompile'):
@@ -227,27 +257,119 @@ class UpdaterTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_resource_drift_and_foreign_shell_rejected_without_source_write(self):
-        for case in ('script-drift', 'script-missing', 'foreign-shell', 'shell-symlink'):
+        for case in ('script-drift', 'script-missing', 'foreign-shell', 'shell-symlink', 'owned-shell-missing'):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as temporary:
-                repo = Path(temporary)
+                repo = Path(temporary).resolve() / 'repo'
+                make_source(repo, PROFILE_SOURCES[0], b'\n')
                 resources = repo / 'src/platform/privileges_scripts'
-                resources.mkdir(parents=True)
-                macos = repo / 'src/platform/macos.rs'
-                core = repo / 'src/core_main.rs'
-                macos.write_text(patch.ORIGINAL_DAEMON + patch.ORIGINAL_UPDATER)
-                core.write_text(patch.ORIGINAL_CLI)
                 script = resources / 'update.scpt'
-                script.write_text(patch.ORIGINAL_SCRIPT)
-                if case == 'script-drift':script.write_text(patch.ORIGINAL_SCRIPT + 'changed resource')
-                if case == 'script-missing':script.unlink()
-                if case == 'foreign-shell':(resources / 'update.sh').write_text('unrelated shell')
+                if case == 'script-drift': script.write_bytes(script.read_bytes() + b'changed resource')
+                if case == 'script-missing': script.unlink()
+                if case == 'foreign-shell': (resources / 'update.sh').write_text('unrelated shell')
                 if case == 'shell-symlink':
                     foreign = repo / 'foreign'
                     foreign.write_bytes((ROOT / 'macos-update-bundle.sh').read_bytes())
                     (resources / 'update.sh').symlink_to(foreign)
-                original = (macos.read_bytes(),core.read_bytes())
-                with self.assertRaises(RuntimeError):patch.patch(repo)
-                self.assertEqual((macos.read_bytes(),core.read_bytes()),original)
+                if case == 'owned-shell-missing':
+                    patch.patch(repo)
+                    (resources / 'update.sh').unlink()
+                before = snapshot(repo)
+                for restore in (False, True):
+                    with self.assertRaises(RuntimeError): patch.apply(repo, restore=restore, check=True)
+                    self.assertEqual(snapshot(repo), before)
+
+    def test_whole_profile_ownership_and_drift_refusals(self):
+        cases = ('drift', 'mixed-newline', 'partial', 'hardlink', 'symlink', 'directory', 'oversized', 'reparse-file', 'reparse-parent', 'reparse-root')
+        refusals = 0
+        for source in PROFILE_SOURCES:
+            for newline in (b'\n', b'\r\n'):
+                for case in cases:
+                    with self.subTest(source=source, newline=newline, case=case), tempfile.TemporaryDirectory() as temporary:
+                        repo = Path(temporary).resolve() / 'repo'
+                        make_source(repo, source, newline)
+                        leaf = repo / 'src/platform/macos.rs'
+                        context = mock.patch.object(patch, 'ROOT', ROOT)
+                        if case == 'drift': leaf.write_bytes(leaf.read_bytes() + newline + b'// unrelated')
+                        elif case == 'mixed-newline': leaf.write_bytes(leaf.read_bytes() + (b'\r\n' if newline == b'\n' else b'\n'))
+                        elif case == 'partial':
+                            m = patch.canonical(leaf.read_bytes())[0]
+                            leaf.write_bytes(patch.transform(m, [(patch.ORIGINAL_DAEMON, patch.FIXED_DAEMON), (patch.ORIGINAL_UPDATER, patch.FIXED_UPDATER)]).replace(b'\n', newline))
+                        elif case == 'hardlink':
+                            os.link(leaf, repo / 'outside-hardlink')
+                        elif case == 'symlink':
+                            foreign = repo / 'outside-source';leaf.rename(foreign);leaf.symlink_to(foreign)
+                        elif case == 'directory': leaf.unlink();leaf.mkdir()
+                        elif case == 'oversized': leaf.write_bytes(b'x' * 1000001)
+                        elif case.startswith('reparse'):
+                            poisoned = leaf if case == 'reparse-file' else (repo / 'src' if case == 'reparse-parent' else repo)
+                            original_lstat = Path.lstat
+                            def fake_lstat(path):
+                                entry = original_lstat(path)
+                                if path == poisoned:
+                                    return SimpleNamespace(st_mode=entry.st_mode, st_nlink=entry.st_nlink, st_size=entry.st_size, st_file_attributes=0x400)
+                                return entry
+                            context = mock.patch.object(patch.Path, 'lstat', fake_lstat)
+                        before = snapshot(repo)
+                        with context:
+                            for restore in (False, True):
+                                with self.assertRaises(RuntimeError): patch.apply(repo, restore=restore)
+                                refusals += 1
+                        self.assertEqual(snapshot(repo), before)
+        print('PASS:', refusals, 'whole-source ownership/drift refusals with zero file mutations; Windows reparse attributes modeled')
+
+    def test_owned_templates_normalize_only_homogeneous_newlines(self):
+        expected = None
+        for newline in (b'\n', b'\r\n'):
+            with self.subTest(newline=newline), tempfile.TemporaryDirectory() as temporary:
+                base = Path(temporary).resolve()
+                repo = base / 'repo'; make_source(repo, PROFILE_SOURCES[0], b'\n')
+                resources = base / 'templates'; resources.mkdir()
+                for name in patch.TEMPLATE_SHA:
+                    (resources / name).write_bytes(patch.canonical((ROOT / name).read_bytes())[0].replace(b'\n', newline))
+                with mock.patch.object(patch, 'ROOT', resources):
+                    patch.apply(repo)
+                self.assertNotIn(b'\r', (repo / patch.FILES[3]).read_bytes())
+                current = snapshot(repo)
+                if expected is None: expected = current
+                self.assertEqual(current, expected)
+                for name in patch.TEMPLATE_SHA:
+                    original = (resources / name).read_bytes()
+                    for fault in ('mixed', 'tampered'):
+                        (resources / name).write_bytes(original + (b'\r\n' if newline == b'\n' else b'\n') if fault == 'mixed' else original + b'changed')
+                        before = snapshot(repo)
+                        with mock.patch.object(patch, 'ROOT', resources):
+                            with self.assertRaises(RuntimeError): patch.apply(repo, restore=True)
+                        self.assertEqual(snapshot(repo), before)
+                        (resources / name).write_bytes(original)
+        print('PASS: exact owned template LF/CRLF canonical embedding; eight mixed/tampered refusals preserve all target bytes')
+
+    def test_interrupted_successful_moves_restore_the_owned_original(self):
+        for service in (False, True):
+            for mode in ('interrupt-old-move', 'interrupt-new-move'):
+                with self.subTest(service=service, mode=mode), tempfile.TemporaryDirectory() as temporary:
+                    fixture = TransactionFixture(Path(temporary))
+                    result = fixture.execute(mode, service=service)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(fixture.target_markers(), ['old'] * 4, result.stdout + result.stderr)
+                    self.assertEqual([p.read_bytes() for p in fixture.plists], fixture.old_plists)
+                    self.assertFalse(list((fixture.root / 'Applications').glob('.mixel-update.*')))
+        print('PASS: actual successful old/new moves interrupted by SIGTERM restore exact original bundle/plists in both service modes')
+
+    def test_plist_restore_attempts_are_independent_and_partial_state_is_not_started(self):
+        for mode in ('restore-daemon-failed', 'restore-agent-failed'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
+                fixture = TransactionFixture(Path(temporary))
+                result = fixture.execute(mode)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(fixture.target_markers(), ['old'] * 4)
+                self.assertIn('rollback requires recovery', result.stderr)
+                calls = fixture.actions()
+                restores = [r for r in calls if r['tool'] == 'cp' and Path(r['args'][-2]).name.endswith('.old')]
+                self.assertEqual([Path(r['args'][-2]).name for r in restores], ['daemon.old', 'agent.old'])
+                last_restore = max(i for i,r in enumerate(calls) if r in restores)
+                self.assertFalse(any(r['tool'] == 'launchctl' for r in calls[last_restore+1:]))
+                self.assertEqual(len(list((fixture.root / 'Applications').glob('.mixel-update.*'))), 1)
+        print('PASS: both original plists independently attempted; a partial restore never restarts services and retains private recovery backup')
 
     def test_generated_rust_and_cli_real_subprocess_failure_and_success(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -354,7 +476,7 @@ fn update_extracted(_target:&str)->ResultType<()>{Ok(())}
             executable = candidate / 'Mixel-Remote'
             compiler = os.environ.get('RUSTC_BIN') or shutil.which('rustc')
             self.assertTrue(compiler, 'Rust compiler required')
-            compile_result = run(rustc_command([compiler, '--edition=2021', '--deny=warnings', str(rust), '-o', str(executable)]))
+            compile_result = run([compiler, '--edition=2021', '--deny=warnings', str(rust), '-o', str(executable)])
             self.assertEqual(compile_result.returncode, 0, compile_result.stdout + compile_result.stderr)
             # Retain the exact faulty all-resource branding as a compiled
             # negative control; execute its captured shell in a private fixture.
@@ -364,7 +486,7 @@ fn update_extracted(_target:&str)->ResultType<()>{Ok(())}
             self.assertEqual(source.count(patch.FIXED_DAEMON), 1)
             rust.write_text(source.replace(patch.FIXED_DAEMON, faulty_daemon))
             faulty_executable = candidate / 'Mixel-Remote-faulty-branding'
-            faulty_compile = run(rustc_command([compiler, '--edition=2021', '--deny=warnings', str(rust), '-o', str(faulty_executable)]))
+            faulty_compile = run([compiler, '--edition=2021', '--deny=warnings', str(rust), '-o', str(faulty_executable)])
             self.assertEqual(faulty_compile.returncode, 0, faulty_compile.stdout + faulty_compile.stderr)
             (base / 'dmg/Mixel-Remote.app').mkdir(parents=True)
             agent = base / 'Library/LaunchAgents/ch.mixel.remote_server.plist'
@@ -379,7 +501,7 @@ fn update_extracted(_target:&str)->ResultType<()>{Ok(())}
             original += 'mod fixture_core {use crate::{log,translate};pub fn core_main()->Option<Vec<String>> {let args:Vec<String>=std::env::args().skip(1).collect();\n' + original_cli + '\nNone}}\nfn main(){fixture_core::core_main();}\n'
             rust.write_text(original)
             old_executable = candidate / 'Mixel-Remote-original'
-            old_compile = run(rustc_command([compiler, '--edition=2021', '--deny=warnings', str(rust), '-o', str(old_executable)]))
+            old_compile = run([compiler, '--edition=2021', '--deny=warnings', str(rust), '-o', str(old_executable)])
             self.assertEqual(old_compile.returncode, 0, old_compile.stdout + old_compile.stderr)
             actions = base / 'original-actions'
             old_env = {**os.environ, 'CASE':'cancel','SERVICE':'0','STOPPED':'',
@@ -454,4 +576,17 @@ fn update_extracted(_target:&str)->ResultType<()>{Ok(())}
 
 
 if __name__ == '__main__':
-    unittest.main()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--source', type=Path, default=SOURCE)
+    parser.add_argument('--profile-source', type=Path, action='append', default=[])
+    parser.add_argument('--source-only', action='store_true', help='Run every source/materialization guard without POSIX transaction or AppleScript execution')
+    args, test_args = parser.parse_known_args()
+    SOURCE = args.source.resolve()
+    PROFILE_SOURCES = [SOURCE, *(path.resolve() for path in args.profile_source)]
+    source_controls = ['UpdaterTests.test_patch_idempotency_newlines_and_atomic_anchor_rejection',
+                       'UpdaterTests.test_resource_drift_and_foreign_shell_rejected_without_source_write',
+                       'UpdaterTests.test_whole_profile_ownership_and_drift_refusals',
+                       'UpdaterTests.test_owned_templates_normalize_only_homogeneous_newlines']
+    if args.source_only and any(not argument.startswith('-') for argument in test_args):
+        parser.error('Source-only mode requires its complete fixed source-control list')
+    unittest.main(argv=[__file__, *test_args, *(source_controls if args.source_only else [])])
