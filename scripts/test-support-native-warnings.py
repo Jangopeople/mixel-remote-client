@@ -364,7 +364,7 @@ fn main(){
 def context_copy(source, target):
     """Copy only the exact source/ownership inputs required by the prior chain."""
     transfer=P.prior_namespace('patch-support-file-transfer-window.py',P.PRIOR_FILE_TRANSFER_SHA)
-    sdk=P.prior_namespace('patch-support-flutter-sdk-compatibility.py','08255c1af27ea05c5e1eaf3c8d903070d26b4a1c8c3e02eb1c24107bbcf92010')
+    sdk=P.prior_namespace('patch-support-flutter-sdk-compatibility.py','25538193da045b58ec9b44cf14f055963b649b3376a48568c221f2eef9da5a82')
     term=sdk['load_prior']('patch-support-macos-termination.py',sdk['PRIOR_SHA'])
     cleanup=sdk['load_prior']('patch-support-macos-cleanup.py',sdk['CLEANUP_SHA'])
     optional={transfer['GENERATED'],term['GENERATED'],cleanup['GENERATED']}
@@ -592,7 +592,11 @@ def wiring_controls(out,bash):
         assert actual[0].count('--bash')==1;active=actual[0][actual[0].index('--bash')+1]
         if profile=='windows':assert active==env['MIXEL_ACTIVE_BASH']
         else:
-            selected=run([bash,'-c','printf "%s\\n" "$BASH"'],out,'selected-active-bash-'+profile,env)
+            # Match the same selected-shell to native-Python argv boundary as the dispatcher.
+            probe=folder/'selected-active-bash.py'
+            probe.write_bytes(b'import sys\nsys.stdout.buffer.write(sys.argv[1].encode("utf-8")+b"\\n")\n')
+            selected_env=dict(env,MIXEL_BASH_ARGV_PROBE=str(probe.absolute()))
+            selected=run([bash,'-c','"$MIXEL_PYTHON" "$MIXEL_BASH_ARGV_PROBE" "$BASH"'],out,'selected-active-bash-'+profile,selected_env)
             assert selected.returncode==0,selected.stderr
             assert selected.stdout==active.encode('utf-8')+b'\n',(active,selected.stdout)
         assert actual[-1][0]==source_only and actual[-1][1:]==['--source',env['RUNNER_TEMP']+'/mixel-sdk-source/pipeline-lf','--source-only','--output',env['RUNNER_TEMP']+'/mixel-native-warning-source','--bash',active]

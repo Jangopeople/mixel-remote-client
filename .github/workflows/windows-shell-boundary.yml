@@ -1,0 +1,88 @@
+name: Windows active Bash boundary
+
+on:
+  pull_request:
+    paths:
+      - scripts/test-support-native-warnings.py
+      - scripts/test-support-flutter-analysis.py
+      - scripts/test-windows-generated-source.sh
+      - .github/workflows/windows-shell-boundary.yml
+      - .github/workflows/preflight.yml
+      - .github/workflows/build.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  active-bash-boundary:
+    name: Active Git Bash to native Python (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Prove the exact active shell and fatal source wiring boundary
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $proof = Join-Path $env:GITHUB_WORKSPACE 'shell-boundary-proof'
+          New-Item -ItemType Directory -Path $proof -ErrorAction Stop | Out-Null
+          $env:TMPDIR = Join-Path $proof 'temporary'
+          New-Item -ItemType Directory -Path $env:TMPDIR -ErrorAction Stop | Out-Null
+          $env:MIXEL_SHELL_BOUNDARY_EVIDENCE = $proof
+          @'
+          import json
+          import os
+          from pathlib import Path
+          import runpy
+
+          root = Path(os.environ['GITHUB_WORKSPACE']).resolve()
+          proof = Path(os.environ['MIXEL_SHELL_BOUNDARY_EVIDENCE']).resolve()
+          assert proof.parent == root and proof.name == 'shell-boundary-proof'
+          assert Path(os.environ['TMPDIR']).resolve() == proof / 'temporary'
+          controls = runpy.run_path(str(root / 'scripts/test-support-native-warnings.py'), run_name='mixel_shell_boundary_controls')
+          selected = Path(r'C:\Program Files\Git\bin\bash.exe')
+          bash = controls['qualified_bash'](selected, True)
+          assert bash == str(selected.resolve())
+          controls['shell_path_controls'](proof)
+          controls['wiring_controls'](proof, bash)
+          result_path = proof / 'boundary-result.json'
+          result_path.write_text(json.dumps({
+              'active_bash': bash,
+              'strict_existing_git_bash_validator': True,
+              'seven_non_git_refusals': True,
+              'real_windows_native_python_argv_boundary': True,
+              'four_unix_wiring_first_fatal': 27,
+              'windows_dispatch_first_fatal': 27,
+              'later_dart_unrun': True,
+              'native_application_or_signing_executed': False,
+          }, indent=2) + '\n', encoding='utf-8')
+          payload = result_path.read_bytes()
+          assert payload.endswith(b'\n') and not payload.endswith(b'\\n')
+          assert json.loads(payload)['native_application_or_signing_executed'] is False
+          print('PASS: exact installed Git Bash/native Python boundary and existing fatal wiring controls; application and signing gates remain separate.')
+          '@ | python -u - 2>&1 | Tee-Object -FilePath (Join-Path $proof 'stdout.log')
+          if ($LASTEXITCODE -ne 0) { throw 'Exact active Git Bash boundary controls failed.' }
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: windows-active-bash-boundary-${{ matrix.os }}
+          path: |
+            shell-boundary-proof/*.log
+            shell-boundary-proof/*.json
+            shell-boundary-proof/*.stdout
+            shell-boundary-proof/*.stderr
+            shell-boundary-proof/*/calls.jsonl
+          if-no-files-found: ignore
+          retention-days: 3
