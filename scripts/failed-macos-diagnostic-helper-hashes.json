@@ -1,7 +1,7 @@
 {
   "scripts/test-support-launch-linux.py": "90e343f7cddffb3f830c54ee129e7ae192c0d4b269bc336faab93fb5d95abe18",
-  "scripts/test-support-launch-macos-tray-controls.py": "9558792bbea3d2d703e76496879dc666c5b1a178c15cbc542f7121304c924a87",
-  "scripts/test-support-launch-macos-tray.py": "f99e32292e639faec758ff2866317c83a480fbf56d5377e1b05cbb0fe0055f4b",
+  "scripts/test-support-launch-macos-tray-controls.py": "6d5c919e1556df611227ffc79e9f2880d5467aef2a2eefb1053da02f00064beb",
+  "scripts/test-support-launch-macos-tray.py": "586028ad845a1ec66637ce06a72be006d86895a87107c1ff3f536d171cbe04ac",
   "scripts/test-support-launch-macos.py": "854bd6a7e34041d566c810cdd0fe3df238187198ea456381a725a18286968d65",
   "scripts/verify-macos-bundle-minimum.py": "fbd7652bdfaf26c86de97111668bd9726623880811367b99fb59a8190886dcdf",
   "scripts/verify-macos-native-minimum.py": "7ecd3c71f2afc000f0d5d90dc470be03fbdf4c69e02ee7f1bdaa835464710c92"

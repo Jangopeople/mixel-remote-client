@@ -165,7 +165,7 @@ def full_branding(out, files, source, bash=None):
                 target=copied/member.name
                 target.parent.mkdir(parents=True,exist_ok=True)
                 target.write_bytes(stream.extractfile(member).read())
-    for name in ("apply-branding.sh","patch-support-macos-cleanup.py","test-support-macos-cleanup.py",
+    for name in ("apply-branding.sh","patch-support-url-log-privacy.py","test-support-url-log-privacy.py","patch-support-macos-cleanup.py","test-support-macos-cleanup.py",
                  "patch-support-macos-termination.py","patch-support-flutter-sdk-compatibility.py",
                  "test-support-flutter-sdk-compatibility.py","test-support-flutter-analysis.py",
                  "test-support-macos-termination.py","test-support-macos-window.py",

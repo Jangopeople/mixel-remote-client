@@ -303,8 +303,18 @@ def runtime(app, helper, facts):
                 terminate_owned(helper, app, gui_pid, gui_launch, server_pid)
             terminate_owned(helper, app, server_pid, server_launch, server_pid)
             facts["ownedProcessesStopped"] = True
-            for endpoint, pid in ((URL_SOCKET, gui_pid), (unix.IPC_PATH, server_pid)):
-                cleanup_endpoint(endpoint, pid)
+            first_endpoint_error = None
+            endpoint_failures = []
+            for label, endpoint, pid in (("url", URL_SOCKET, gui_pid), ("incoming", unix.IPC_PATH, server_pid)):
+                try:
+                    cleanup_endpoint(endpoint, pid)
+                except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+                    if first_endpoint_error is None:
+                        first_endpoint_error = error
+                    endpoint_failures.append({"endpoint": label, "reason": desktop.safe_error(error)})
+            if first_endpoint_error is not None:
+                facts["endpointCleanupFailures"] = endpoint_failures
+                raise first_endpoint_error
 
 
 def main():

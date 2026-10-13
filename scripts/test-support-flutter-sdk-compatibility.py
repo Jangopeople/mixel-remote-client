@@ -419,7 +419,7 @@ def full_branding(out, upstream, bash):
             if member.isfile():
                 path = copied / member.name; path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(stream.extractfile(member).read())
-    for name in ('apply-branding.sh', 'patch-support-flutter-sdk-compatibility.py',
+    for name in ('apply-branding.sh','patch-support-url-log-privacy.py','test-support-url-log-privacy.py', 'patch-support-flutter-sdk-compatibility.py',
                  'test-support-flutter-sdk-compatibility.py', 'patch-support-macos-termination.py',
                  'patch-support-file-transfer-window.py', 'test-support-file-transfer-window.py',
                  'patch-support-keyboard-default.py',

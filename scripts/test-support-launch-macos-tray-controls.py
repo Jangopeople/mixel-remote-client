@@ -640,6 +640,170 @@ class TrayControls(unittest.TestCase):
             self.assertFalse(self.n["unix"].IPC_PATH.deleted)
             self.assert_no_private_diagnostic(private, facts, stderr)
 
+    def test_endpoint_drain_first_failure_attempts_incoming_and_retains_error(self):
+        for error_type in (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
+            with self.subTest(error=error_type.__name__), tempfile.TemporaryDirectory(prefix="mixel-tray-endpoint-drain-", dir=Path(tempfile.gettempdir()).resolve()) as temporary:
+                self.n = extracted_namespace(SOURCE)
+                app = self.prepare_runtime(temporary)
+                first = error_type("first endpoint failed")
+                calls = []
+                def cleanup(endpoint, pid):
+                    calls.append((endpoint, pid))
+                    if endpoint == self.n["URL_SOCKET"]:
+                        raise first
+                self.n["cleanup_endpoint"] = cleanup
+                facts = {}
+                with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(error_type) as raised:
+                    self.n["runtime"](app, "synthetic helper", facts)
+                self.assertIs(raised.exception, first)
+                self.assertEqual(calls, [(self.n["URL_SOCKET"], 102), (self.n["unix"].IPC_PATH, 101)])
+                self.assertEqual(self.terminated, [102, 101])
+                self.assertTrue(facts["ownedProcessesStopped"])
+                self.assertEqual(facts["endpointCleanupFailures"], [{"endpoint": "url", "reason": "fixed failure"}])
+
+    def test_endpoint_drain_two_failures_retains_first_and_records_both(self):
+        errors = (OSError, ValueError, RuntimeError, subprocess.SubprocessError)
+        for first_type in errors:
+            for second_type in errors:
+                with self.subTest(first=first_type.__name__, second=second_type.__name__), tempfile.TemporaryDirectory(prefix="mixel-tray-endpoint-drain-", dir=Path(tempfile.gettempdir()).resolve()) as temporary:
+                    self.n = extracted_namespace(SOURCE)
+                    app = self.prepare_runtime(temporary)
+                    first, second = first_type("first endpoint failed"), second_type("second endpoint failed")
+                    self.n["desktop"].safe_error = lambda error: "first fixed failure" if error is first else "second fixed failure"
+                    calls = []
+                    def cleanup(endpoint, pid):
+                        calls.append((endpoint, pid))
+                        raise first if endpoint == self.n["URL_SOCKET"] else second
+                    self.n["cleanup_endpoint"] = cleanup
+                    facts = {}
+                    with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(first_type) as raised:
+                        self.n["runtime"](app, "synthetic helper", facts)
+                    self.assertIs(raised.exception, first)
+                    self.assertEqual(calls, [(self.n["URL_SOCKET"], 102), (self.n["unix"].IPC_PATH, 101)])
+                    self.assertEqual(facts["endpointCleanupFailures"], [{"endpoint": "url", "reason": "first fixed failure"}, {"endpoint": "incoming", "reason": "second fixed failure"}])
+                    self.assertNotIn("runtimeFailure", facts)
+
+    def test_endpoint_drain_second_failure_is_fatal(self):
+        for error_type in (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
+            with self.subTest(error=error_type.__name__), tempfile.TemporaryDirectory(prefix="mixel-tray-endpoint-drain-", dir=Path(tempfile.gettempdir()).resolve()) as temporary:
+                self.n = extracted_namespace(SOURCE)
+                app = self.prepare_runtime(temporary)
+                second = error_type("second endpoint failed")
+                calls = []
+                def cleanup(endpoint, pid):
+                    calls.append((endpoint, pid))
+                    if endpoint == self.n["unix"].IPC_PATH:
+                        raise second
+                self.n["cleanup_endpoint"] = cleanup
+                facts = {}
+                with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(error_type) as raised:
+                    self.n["runtime"](app, "synthetic helper", facts)
+                self.assertIs(raised.exception, second)
+                self.assertEqual(calls, [(self.n["URL_SOCKET"], 102), (self.n["unix"].IPC_PATH, 101)])
+                self.assertEqual(facts["endpointCleanupFailures"], [{"endpoint": "incoming", "reason": "fixed failure"}])
+
+    def test_endpoint_drain_success_conserves_order_and_existing_facts(self):
+        with tempfile.TemporaryDirectory(prefix="mixel-tray-endpoint-drain-", dir=Path(tempfile.gettempdir()).resolve()) as temporary:
+            app = self.prepare_runtime(temporary)
+            calls = []
+            self.n["cleanup_endpoint"] = lambda endpoint, pid: calls.append((endpoint, pid))
+            facts = {"customerAcceptTested": False, "remoteDesktopConnected": False}
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                self.assertIsNone(self.n["runtime"](app, "synthetic helper", facts))
+            self.assertEqual(calls, [(self.n["URL_SOCKET"], 102), (self.n["unix"].IPC_PATH, 101)])
+            self.assertEqual(self.terminated, [102, 101])
+            self.assertEqual(set(facts), {"customerAcceptTested", "remoteDesktopConnected", "criticalHashes", "trayPid", "actualTrayDispatchObserved", "guiPid", "visibleGuiAndAttendedV2", "ownedProcessesStopped"})
+            self.assertTrue(facts["ownedProcessesStopped"])
+            self.assertNotIn("endpointCleanupFailures", facts)
+            self.assertIn("confirms attended-runtime-v2", output.getvalue())
+
+    def test_endpoint_drain_primary_fact_survives_both_failures(self):
+        with tempfile.TemporaryDirectory(prefix="mixel-tray-endpoint-drain-", dir=Path(tempfile.gettempdir()).resolve()) as temporary:
+            app = self.prepare_runtime(temporary)
+            private = self.prepare_primary_diagnostic_main()
+            primary = RuntimeError("Synthetic primary " + private["URI"])
+            first = RuntimeError("Synthetic URL cleanup " + private["API_KEY"])
+            second = RuntimeError("Synthetic incoming cleanup " + private["TOKEN"])
+            self.n["new_tray_marker"] = lambda *_: (_ for _ in ()).throw(primary)
+            calls = []
+            def cleanup(endpoint, pid):
+                calls.append((endpoint, pid))
+                raise first if endpoint == self.n["URL_SOCKET"] else second
+            self.n["cleanup_endpoint"] = cleanup
+            facts = {"customerAcceptTested": False, "remoteDesktopConnected": False}
+            with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(RuntimeError) as raised:
+                self.n["runtime"](app, "synthetic helper", facts)
+            self.assertIs(raised.exception, first)
+            self.assertEqual(facts["runtimeFailure"], {"phase": "tray-opened-dispatch", "reason": "Synthetic primary [support URI]"})
+            self.assertEqual(facts["endpointCleanupFailures"], [{"endpoint": "url", "reason": "Synthetic URL cleanup [API key]"}, {"endpoint": "incoming", "reason": "Synthetic incoming cleanup [invite]"}])
+            self.assertEqual(len(calls), 2)
+            self.assert_no_private_diagnostic(private, facts, self.n["sys"].stderr.getvalue())
+
+    def test_endpoint_drain_does_not_cross_auth_or_termination_refusal(self):
+        for refusal in ("authenticated", "unknown", "gui-termination", "server-termination"):
+            with self.subTest(refusal=refusal), tempfile.TemporaryDirectory(prefix="mixel-tray-endpoint-drain-", dir=Path(tempfile.gettempdir()).resolve()) as temporary:
+                self.n = extracted_namespace(SOURCE)
+                app = self.prepare_runtime(temporary)
+                calls = []
+                self.n["cleanup_endpoint"] = lambda *args: calls.append(args)
+                sentinel = RuntimeError("owned process refusal")
+                if refusal == "authenticated":
+                    self.n["no_connections"] = lambda *_: False
+                elif refusal == "unknown":
+                    self.n["no_connections"] = lambda *_: (_ for _ in ()).throw(sentinel)
+                else:
+                    def terminate(_h, _a, pid, *_):
+                        self.terminated.append(pid)
+                        if pid == (102 if refusal == "gui-termination" else 101):
+                            raise sentinel
+                    self.n["terminate_owned"] = terminate
+                facts = {}
+                with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(RuntimeError) as raised:
+                    self.n["runtime"](app, "synthetic helper", facts)
+                if refusal != "authenticated":
+                    self.assertIs(raised.exception, sentinel)
+                self.assertEqual(calls, [])
+                self.assertNotIn("ownedProcessesStopped", facts)
+                self.assertNotIn("endpointCleanupFailures", facts)
+
+    def test_endpoint_drain_real_identity_guards_stop_before_attempts(self):
+        for changed in ("path", "launch"):
+            with self.subTest(changed=changed), tempfile.TemporaryDirectory(prefix="mixel-tray-endpoint-drain-", dir=Path(tempfile.gettempdir()).resolve()) as temporary:
+                self.n = extracted_namespace(SOURCE)
+                terminate = self.n["terminate_owned"]
+                app = self.prepare_runtime(temporary)
+                self.n["terminate_owned"] = terminate
+                cleanup_started = []
+                self.n["no_connections"] = lambda *_: cleanup_started.append(True) or True
+                if changed == "path":
+                    self.n["process_path"] = lambda _: Path("/replacement") if cleanup_started else app / "Contents/MacOS/Mixel-Remote"
+                else:
+                    self.n["launch_identity"] = lambda _h, _a, pid: 999 if cleanup_started else (100 if pid == 101 else 102)
+                calls = []
+                self.n["cleanup_endpoint"] = lambda *args: calls.append(args)
+                facts = {}
+                with contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(RuntimeError, "cleanup process identity changed"):
+                    self.n["runtime"](app, "synthetic helper", facts)
+                self.assertEqual(calls, [])
+                self.assertNotIn("ownedProcessesStopped", facts)
+
+    def test_endpoint_drain_unexpected_failure_stays_immediate(self):
+        with tempfile.TemporaryDirectory(prefix="mixel-tray-endpoint-drain-", dir=Path(tempfile.gettempdir()).resolve()) as temporary:
+            app = self.prepare_runtime(temporary)
+            error = AssertionError("unexpected fixture programmer error")
+            calls = []
+            def cleanup(*args):
+                calls.append(args)
+                raise error
+            self.n["cleanup_endpoint"] = cleanup
+            facts = {}
+            with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(AssertionError) as raised:
+                self.n["runtime"](app, "synthetic helper", facts)
+            self.assertIs(raised.exception, error)
+            self.assertEqual(calls, [(self.n["URL_SOCKET"], 102)])
+            self.assertNotIn("endpointCleanupFailures", facts)
+
+
 
 def main():
     global SOURCE

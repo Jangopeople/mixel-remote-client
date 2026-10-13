@@ -493,7 +493,7 @@ def pipeline(out,source,bash):
                 path.write_bytes(stream.extractfile(member).read())
     # Include the exact current root integration and the reviewed new helpers,
     # without mutating root-owned files.
-    for name in ("apply-branding.sh","patch-support-macos-cleanup.py",
+    for name in ("apply-branding.sh","patch-support-url-log-privacy.py","test-support-url-log-privacy.py","patch-support-macos-cleanup.py",
                  "patch-macos-service-label.py","patch-macos-update.py",
                  "patch-support-invite.py","patch-secure-support.py",
                  "patch-support-network.py","patch-support-linux.py",

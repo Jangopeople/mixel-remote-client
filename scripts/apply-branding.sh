@@ -33,9 +33,13 @@ fi
 # shellcheck source=/dev/null
 source "$BRANDING/branding.env"
 
+# Validate the disjoint final URL privacy leaf before any owner writes.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-url-log-privacy.py" --root "$RDREPO" --restore --check
+
 # Validate every prior owner in an exact private final-overlay inverse first.
 # The final compiler inverse validates that unchanged complete prior chain.
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-compiler-cleanup.py" --root "$RDREPO" --restore --check --before-branding
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-url-log-privacy.py" --root "$RDREPO" --restore
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-compiler-cleanup.py" --root "$RDREPO" --restore
 
 # Restore only the exact final startup overlay before prior owners see inputs.
@@ -1058,5 +1062,8 @@ python3 "$(dirname "${BASH_SOURCE[0]}")/patch-macos-startup.py"
 
 # Apply the exact compiler-only final layer after all functional owners.
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-compiler-cleanup.py" --root "$RDREPO" --after-branding
+
+# Preserve callback delivery while removing full URLs from the final Mac logger.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-url-log-privacy.py" --root "$RDREPO"
 
 echo "✓ Branding applied — product identity is $APP_NAME only."

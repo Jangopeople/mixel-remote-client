@@ -47,6 +47,7 @@ jobs:
         run: |
           python3 scripts/test-release-pipeline.py
           python3 scripts/test-flutter-sdk-pipeline.py
+          python3 scripts/test-support-url-log-privacy.py
           python3 scripts/test-standard-lease-qa-bundle.py
           python3 scripts/test-windows-release-runtime.py
           python3 scripts/test-notarize-macos.py

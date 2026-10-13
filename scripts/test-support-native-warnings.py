@@ -560,6 +560,7 @@ def wiring_controls(out,bash):
         body=next(node for node in tree.body if isinstance(node,__import__('ast').FunctionDef) and node.name in ('pipeline','full_branding'))
         sets=[{x.value for x in node.elts if isinstance(x,__import__('ast').Constant)} for node in __import__('ast').walk(body) if isinstance(node,(__import__('ast').Tuple,__import__('ast').List))]
         assert any({'patch-support-native-warnings.py','test-support-native-warnings.py'}<=items for items in sets),name
+        assert any({'patch-support-url-log-privacy.py','test-support-url-log-privacy.py'}<=items for items in sets),name
     source_only='scripts/test-support-native-warnings.py'
     cases=(('build.yml','linux','Preflight generated support source and reporter'),('build.yml','macos','Preflight generated support source and reporter'),('preflight.yml','upstream-source','Exercise actual source patches and support reporter'),('preflight.yml','macos-runtime-harness','Prove exact SDK source compatibility and composed branding'))
     calls=[]

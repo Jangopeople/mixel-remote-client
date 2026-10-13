@@ -466,6 +466,7 @@ def wiring_controls(out, bash):
     for name in ['test-support-flutter-analysis.py','test-support-flutter-sdk-compatibility.py','test-support-macos-cleanup.py','test-support-macos-termination.py']:
         text = (root/'scripts'/name).read_text(encoding='utf-8')
         assert 'patch-support-compiler-cleanup.py' in text and 'test-support-compiler-cleanup.py' in text, name
+        assert 'patch-support-url-log-privacy.py' in text and 'test-support-url-log-privacy.py' in text, name
     # Execute exact native workflow Bash with a child shim; first C failure
     # remains fatal and no following source test is executed.
     calls = 0
