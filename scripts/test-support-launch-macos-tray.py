@@ -250,8 +250,10 @@ def runtime(app, helper, facts):
     baseline = log_snapshot(root)
     server_pid = gui_pid = None
     server_launch = gui_launch = None
+    phase = "tray-launch"
     try:
         launched = desktop.helper_request(helper, "tray", str(app))
+        phase = "tray-launch-identity"
         server_pid = launched.get("pid")
         if type(server_pid) is not int or server_pid <= 0 or process_path(server_pid) != app / "Contents/MacOS/Mixel-Remote":
             raise RuntimeError("Tray launch returned a different executable")
@@ -259,20 +261,32 @@ def runtime(app, helper, facts):
         server_launch = launch_identity(helper, app, server_pid)
         if launched.get("launchTime") != server_launch:
             raise RuntimeError("Tray launch identity changed before verification")
+        phase = "unarmed-tray-readiness"
         wait("Unarmed tray incoming service", lambda: health(server_pid, app, False), server_pid)
         print("PASS: exact packaged Mac tray starts with kernel-owned incoming service, confirmed relay and no attended guard or remote session", flush=True)
+        phase = "os-url-activation"
         activated = desktop.helper_request(helper, "launch", str(app), unix.URI, "warm")
         if activated.get("pid") != server_pid or activated.get("launchTime") != server_launch or launch_identity(helper, app, server_pid) != server_launch:
             raise RuntimeError("OS URL activation bypassed the existing tray process")
+        phase = "tray-opened-dispatch"
         wait("Actual Tao tray Opened dispatch", lambda: new_tray_marker(root, baseline), server_pid)
         facts["actualTrayDispatchObserved"] = True
+        phase = "customer-gui-owner"
         gui_pid = wait("Distinct customer GUI", lambda: gui_owner(app, server_pid), server_pid)
         facts["guiPid"] = gui_pid
+        phase = "customer-gui-launch-identity"
         gui_launch = launch_identity(helper, app, gui_pid)
+        phase = "customer-gui-visible"
         wait("Visible customer GUI", lambda: desktop.probe(helper, gui_pid, app).get("visible"), server_pid)
+        phase = "attended-service-readiness"
         wait("Tray service attended readiness", lambda: health(server_pid, app, True), server_pid)
         facts["visibleGuiAndAttendedV2"] = True
         print("PASS: actual OS URL reaches the packaged Tao tray, opens a distinct visible customer GUI and confirms attended-runtime-v2 on the original incoming service", flush=True)
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+        facts["runtimeFailure"] = {"phase": phase, "reason": desktop.safe_error(error)}
+        print("FAIL: tray runtime (" + phase + "): " + facts["runtimeFailure"]["reason"],
+              file=sys.stderr, flush=True)
+        raise
     finally:
         if server_pid is not None:
             # Refuse all process cleanup when this disposable fixture has a

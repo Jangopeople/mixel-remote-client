@@ -471,6 +471,176 @@ class TrayControls(unittest.TestCase):
                     self.assertEqual(facts["failure"], "fixed failure")
 
 
+
+    def prepare_primary_diagnostic_main(self):
+        # Extract only the actual bounded formatter; never import the native gate.
+        source = SOURCE.with_name("test-support-launch-macos.py")
+        parsed = ast.parse(source.read_text(encoding="utf-8"))
+        formatter = [node for node in parsed.body
+                     if isinstance(node, ast.FunctionDef) and node.name == "safe_error"]
+        self.assertEqual(len(formatter), 1)
+        private = {"URI": "mixelremote://synthetic-private-invite",
+                   "TOKEN": "synthetic-private-invite", "API_KEY": "synthetic-private-key"}
+        values = {"unix": SimpleNamespace(**private),
+                  "WARM_URI": "mixelremote://synthetic-private-warm",
+                  "WARM_TOKEN": "synthetic-private-warm"}
+        exec(compile(ast.Module(body=formatter, type_ignores=[]), str(source), "exec"), values)
+        self.n["desktop"].safe_error = values["safe_error"]
+        self.n["desktop"].SWIFT = "synthetic helper"
+        self.n["tray_swift"] = lambda value: value
+        self.n["desktop"].compile_helper = lambda _: Path("/never-executed/helper")
+        return private
+
+    def prepare_real_active_endpoint_refusal(self, endpoint_inactive, cleanup_endpoint):
+        # Initial IPC preflight is inactive; the unchanged real cleanup guard
+        # later observes a virtual active owned socket and must refuse removal.
+        self.n["unix"].IPC_PATH = VirtualPath("/synthetic-ci/ipc", attributes(mode=stat.S_IFSOCK | 0o600))
+        self.n["URL_SOCKET"] = VirtualPath("/synthetic-ci/ipc_url", attributes(mode=stat.S_IFSOCK | 0o600))
+        calls = []
+        def lexists(path):
+            calls.append(str(path))
+            return len(calls) > 2
+        self.n["os"].path = SimpleNamespace(lexists=lexists)
+        self.n["socket"].socket = lambda *_: Connection()
+        self.n["endpoint_inactive"] = endpoint_inactive
+        self.n["cleanup_endpoint"] = cleanup_endpoint
+        return calls
+
+    def assert_no_private_diagnostic(self, private, facts, stderr):
+        encoded = json.dumps(facts)
+        for value in private.values():
+            self.assertNotIn(value, encoded)
+            self.assertNotIn(value, stderr)
+        self.assertFalse(facts["customerAcceptTested"])
+        self.assertFalse(facts["remoteDesktopConnected"])
+
+    def test_primary_failure_and_active_cleanup_refusal_remain_visible_to_main(self):
+        phases = (("os-url-activation", None),
+                  ("tray-opened-dispatch", "Actual Tao tray Opened dispatch"),
+                  ("customer-gui-visible", "Visible customer GUI"),
+                  ("attended-service-readiness", "Tray service attended readiness"))
+        errors = (RuntimeError, ValueError, OSError, subprocess.SubprocessError)
+        for phase, description in phases:
+            for error_type in errors:
+                with self.subTest(phase=phase, error=error_type.__name__), tempfile.TemporaryDirectory(prefix="mixel-tray-primary-source-", dir=Path(tempfile.gettempdir()).resolve()) as temporary:
+                    self.n = extracted_namespace(SOURCE)
+                    original_endpoint = self.n["endpoint_inactive"]
+                    original_cleanup = self.n["cleanup_endpoint"]
+                    app = self.prepare_runtime(temporary)
+                    private = self.prepare_primary_diagnostic_main()
+                    raw = "Synthetic primary " + " ".join(private.values()) + " " + ("x" * 1100)
+                    primary = error_type(5, raw) if error_type is OSError else error_type(raw)
+                    helper_request = self.n["desktop"].helper_request
+                    def request(helper, action, *args):
+                        if description is None and action == "launch":
+                            raise primary
+                        return helper_request(helper, action, *args)
+                    self.n["desktop"].helper_request = request
+                    def wait(label, operation, pid):
+                        if label == description:
+                            raise primary
+                        return operation()
+                    self.n["wait"] = wait
+                    calls = self.prepare_real_active_endpoint_refusal(original_endpoint, original_cleanup)
+                    output = Path(temporary).resolve() / "owned-proof"
+                    stdout = io.StringIO()
+                    with contextlib.redirect_stdout(stdout), mock.patch.object(sys, "argv", ["source-only", "--app", str(app), "--proofs", str(output)]):
+                        result = self.n["main"]()
+                    facts = json.loads((output / "tray-runtime-safe-facts.json").read_text())
+                    stderr = self.n["sys"].stderr.getvalue()
+                    self.assertEqual(result, 1)
+                    self.assertFalse(facts["passed"])
+                    self.assertEqual(facts["runtimeFailure"]["phase"], phase)
+                    expected_primary = self.n["desktop"].safe_error(primary)
+                    self.assertEqual(facts["runtimeFailure"]["reason"], expected_primary)
+                    self.assertLessEqual(len(expected_primary), 1000)
+                    self.assertIn("FAIL: tray runtime (" + phase + "): " + expected_primary, stderr)
+                    self.assertEqual(facts["failure"], "A Mixel IPC endpoint is already active; refusing tray fixture")
+                    self.assertIn("FAIL: " + facts["failure"], stderr)
+                    self.assertEqual(self.terminated, [102, 101])
+                    self.assertGreaterEqual(len(calls), 3)
+                    self.assertFalse(self.n["URL_SOCKET"].deleted)
+                    self.assertFalse(self.n["unix"].IPC_PATH.deleted)
+                    self.assertNotIn("confirms attended-runtime-v2", stdout.getvalue())
+                    self.assert_no_private_diagnostic(private, facts, stderr)
+
+    def test_primary_exception_identity_is_preserved_when_cleanup_succeeds(self):
+        with tempfile.TemporaryDirectory(prefix="mixel-tray-primary-source-", dir=Path(tempfile.gettempdir()).resolve()) as temporary:
+            app = self.prepare_runtime(temporary)
+            private = self.prepare_primary_diagnostic_main()
+            primary = RuntimeError("Synthetic activation " + private["URI"])
+            helper_request = self.n["desktop"].helper_request
+            def request(helper, action, *args):
+                if action == "launch":
+                    raise primary
+                return helper_request(helper, action, *args)
+            self.n["desktop"].helper_request = request
+            facts = {"customerAcceptTested": False, "remoteDesktopConnected": False,
+                     "actualTrayDispatchObserved": False, "visibleGuiAndAttendedV2": False}
+            with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(RuntimeError) as raised:
+                self.n["runtime"](app, "synthetic helper", facts)
+            self.assertIs(raised.exception, primary)
+            self.assertEqual(facts["runtimeFailure"], {"phase": "os-url-activation", "reason": "Synthetic activation [support URI]"})
+            self.assertTrue(facts["ownedProcessesStopped"])
+            self.assertFalse(facts["actualTrayDispatchObserved"])
+            self.assertFalse(facts["visibleGuiAndAttendedV2"])
+            self.assert_no_private_diagnostic(private, facts, self.n["sys"].stderr.getvalue())
+
+    def test_primary_failure_preserves_authenticated_and_unknown_cleanup_refusals(self):
+        for refusal in ("authenticated", "unknown"):
+            with self.subTest(refusal=refusal), tempfile.TemporaryDirectory(prefix="mixel-tray-primary-source-", dir=Path(tempfile.gettempdir()).resolve()) as temporary:
+                self.n = extracted_namespace(SOURCE)
+                app = self.prepare_runtime(temporary)
+                private = self.prepare_primary_diagnostic_main()
+                primary = RuntimeError("Synthetic activation " + private["URI"])
+                helper_request = self.n["desktop"].helper_request
+                def request(helper, action, *args):
+                    if action == "launch":
+                        raise primary
+                    return helper_request(helper, action, *args)
+                self.n["desktop"].helper_request = request
+                def no_connections(*args):
+                    if refusal == "unknown":
+                        raise RuntimeError("Unknown owned IPC " + private["API_KEY"])
+                    return False
+                self.n["no_connections"] = no_connections
+                output = Path(temporary).resolve() / "owned-proof"
+                with contextlib.redirect_stdout(io.StringIO()), mock.patch.object(sys, "argv", ["source-only", "--app", str(app), "--proofs", str(output)]):
+                    self.assertEqual(self.n["main"](), 1)
+                facts = json.loads((output / "tray-runtime-safe-facts.json").read_text())
+                stderr = self.n["sys"].stderr.getvalue()
+                self.assertFalse(facts["passed"])
+                self.assertEqual(facts["runtimeFailure"]["reason"], "Synthetic activation [support URI]")
+                self.assertIn(facts["runtimeFailure"]["reason"], stderr)
+                expected = "Tray fixture cleanup refused an authenticated connection" if refusal == "authenticated" else "Unknown owned IPC [API key]"
+                self.assertEqual(facts["failure"], expected)
+                self.assertIn(expected, stderr)
+                self.assertEqual(self.terminated, [])
+                self.assertFalse(facts["ownedProcessesStopped"])
+                self.assert_no_private_diagnostic(private, facts, stderr)
+
+    def test_cleanup_only_refusal_is_fatal_without_inventing_primary_failure(self):
+        with tempfile.TemporaryDirectory(prefix="mixel-tray-primary-source-", dir=Path(tempfile.gettempdir()).resolve()) as temporary:
+            original_endpoint = self.n["endpoint_inactive"]
+            original_cleanup = self.n["cleanup_endpoint"]
+            app = self.prepare_runtime(temporary)
+            private = self.prepare_primary_diagnostic_main()
+            self.prepare_real_active_endpoint_refusal(original_endpoint, original_cleanup)
+            output = Path(temporary).resolve() / "owned-proof"
+            with contextlib.redirect_stdout(io.StringIO()), mock.patch.object(sys, "argv", ["source-only", "--app", str(app), "--proofs", str(output)]):
+                self.assertEqual(self.n["main"](), 1)
+            facts = json.loads((output / "tray-runtime-safe-facts.json").read_text())
+            stderr = self.n["sys"].stderr.getvalue()
+            self.assertFalse(facts["passed"])
+            self.assertNotIn("runtimeFailure", facts)
+            self.assertNotIn("FAIL: tray runtime", stderr)
+            self.assertEqual(facts["failure"], "A Mixel IPC endpoint is already active; refusing tray fixture")
+            self.assertIn(facts["failure"], stderr)
+            self.assertFalse(self.n["URL_SOCKET"].deleted)
+            self.assertFalse(self.n["unix"].IPC_PATH.deleted)
+            self.assert_no_private_diagnostic(private, facts, stderr)
+
+
 def main():
     global SOURCE
     parser = argparse.ArgumentParser(description=__doc__)

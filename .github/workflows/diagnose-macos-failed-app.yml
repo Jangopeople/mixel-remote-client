@@ -1,0 +1,85 @@
+name: Diagnose exact failed Mac ARM app
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/diagnose-macos-failed-app.yml
+      - scripts/diagnose-macos-failed-app.py
+      - scripts/run-failed-macos-tray-diagnostic.py
+      - scripts/test-diagnose-macos-failed-app.py
+      - scripts/failed-macos-diagnostic-helper-hashes.json
+      - scripts/test-support-launch-macos-tray.py
+      - scripts/test-support-launch-macos-tray-controls.py
+      - scripts/test-support-launch-macos.py
+      - scripts/test-support-launch-linux.py
+      - scripts/verify-macos-bundle-minimum.py
+      - scripts/verify-macos-native-minimum.py
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  static-controls:
+    if: github.repository == 'Jangopeople/mixel-remote-client'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out diagnostic source for nonnative controls
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Require complete source and mock controls
+        run: |
+          set -euo pipefail
+          python3 -B scripts/test-diagnose-macos-failed-app.py
+          python3 -B scripts/test-support-launch-macos-tray-controls.py
+  failed-arm-diagnostic:
+    if: github.repository == 'Jangopeople/mixel-remote-client' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/fix/remote-support-reliability' && github.run_attempt == 1
+    needs: static-controls
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - name: Check out the exact diagnostic source
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          path: diagnostic-source
+          persist-credentials: false
+      - name: Check out the immutable failed producer source
+        uses: actions/checkout@v5
+        with:
+          ref: 872869118b75fc941f1379a7428cbc8bcf85e967
+          path: producer-source
+          persist-credentials: false
+      - name: Require source and mock refusal controls
+        working-directory: diagnostic-source
+        run: |
+          set -euo pipefail
+          python3 -B scripts/test-diagnose-macos-failed-app.py
+          python3 -B scripts/test-support-launch-macos-tray-controls.py
+      - name: Validate and diagnose the exact failed signed app
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PYTHONUTF8: '1'
+          PYTHONIOENCODING: utf-8
+        run: |
+          set -euo pipefail
+          python3 -B "$GITHUB_WORKSPACE/diagnostic-source/scripts/diagnose-macos-failed-app.py" \
+            --diagnostic-checkout "$GITHUB_WORKSPACE/diagnostic-source" \
+            --producer-checkout "$GITHUB_WORKSPACE/producer-source" \
+            --destination "$RUNNER_TEMP/mixel-failed-arm-diagnostic" \
+            --safe-output "$GITHUB_WORKSPACE/failed-arm-safe-facts"
+      - name: Retain only allowlisted diagnostic facts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: exact-failed-arm-diagnostic-safe-facts
+          path: |
+            failed-arm-safe-facts/validation-receipt.json
+            failed-arm-safe-facts/tray-diagnostic-safe-facts.json
+          if-no-files-found: warn
+          include-hidden-files: false
+          retention-days: 7
