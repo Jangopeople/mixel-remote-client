@@ -782,9 +782,20 @@ class WorkflowScopeTests(unittest.TestCase):
         source = (ROOT / ".github/workflows/build.yml").read_text()
         package = source.split("      - name: Package + sign + notarize (.app then .dmg)\n", 1)[1].split("  # WINDOWS", 1)[0]
         self.assertIn("        id: macos_package\n", package)
-        markers = ['xcrun stapler staple "$APP_PATH"', 'spctl --assess --type execute --verbose=2 "$APP_PATH"',
+        markers = ['codesign --verify --deep --strict --verbose=2 "$APP_PATH"',
+                   'xcrun stapler staple "$APP_PATH"', 'xcrun stapler validate "$APP_PATH"',
+                   'spctl --assess --type execute --verbose=2 "$APP_PATH"',
                    'ditto -c -k --keepParent "$APP_PATH" "$DIAGNOSTIC_APP_ZIP"',
-                   "python3 ../scripts/test-support-launch-macos-diagnostics.py", "python3 ../scripts/test-support-launch-macos.py --app", "# 3) Package stapled .app into DMG"]
+                   "python3 ../scripts/test-support-launch-macos-diagnostics.py",
+                   'python3 ../scripts/test-support-launch-macos-concurrency.py --original-desktop --app "$APP_PATH" \\\n'
+                   '              --diagnostics "$DIAGNOSTICS/runtime" --diagnostic-app-zip "$DIAGNOSTIC_APP_ZIP"',
+                   'python3 ../scripts/test-support-launch-macos-concurrency.py --original-tray --app "$APP_PATH" \\\n'
+                   '              --proofs "$TRAY_PROOF_ROOT/macos-${{ matrix.job.arch }}-tray"',
+                   'python3 ../scripts/test-support-launch-macos-concurrency.py --app "$APP_PATH" \\\n'
+                   '              --proofs "$TRAY_PROOF_ROOT/macos-${{ matrix.job.arch }}-concurrency"',
+                   "# 3) Package stapled .app into DMG"]
+        for marker in markers:
+            self.assertEqual(package.count(marker), 1, f"Expected one exact mandatory macOS package gate: {marker}")
         positions = [package.index(marker) for marker in markers]
         self.assertEqual(positions, sorted(positions))
         self.assertIn("if: ${{ always() && steps.macos_package.outcome == 'failure' }}", package)
