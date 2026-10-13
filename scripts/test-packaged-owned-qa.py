@@ -6,13 +6,25 @@ S=ROOT/'scripts';DRIVER=S/'test-support-launch-windows.ps1';HELPER=S/'test-hoste
 spec=importlib.util.spec_from_file_location('previous',S/'test-session-directory-access.py');PREVIOUS=importlib.util.module_from_spec(spec);spec.loader.exec_module(PREVIOUS)
 EXPECTED_HELPER='b7f7886e2e6de9f7d76ef371473a436d8845b1396c12b63517331894d4611d4e'
 
+def canonical_checkout_bytes(raw):
+ if b'\r' in raw:
+  remaining=raw.replace(b'\r\n',b'')
+  if b'\r' in remaining or b'\n' in remaining:
+   raise AssertionError('Mixed or bare-CR checkout source refused')
+  raw=raw.replace(b'\r\n',b'\n')
+ raw.decode('utf-8')
+ return raw
+
+def canonical_checkout_text(path):
+ return canonical_checkout_bytes(path.read_bytes()).decode('utf-8')
+
 QUERY_OPEN="if (-not ('MixelPackagedQaTokenFacts' -as [type])) { Add-Type @'\n"
 QUERY_CLOSE="'@ -CompilerOptions /warnaserror+ -ErrorAction Stop }\n\n"
 ORIGINAL_SHA='765b98c6324161018321eadb3528a14a844dc4dd1bee1df158c9f68db6c8af8e'
 QUERY_SHA='539659449688beb79c3ff5dee18b817ef6e4c0a0542a5f3b3c735f6c9f4f9f50'
 
 def original_source():
- text=DRIVER.read_text();start=text.index(QUERY_OPEN);end=text.index('$executablePath = (Resolve-Path $Executable).Path',start)
+ text=canonical_checkout_text(DRIVER);start=text.index(QUERY_OPEN);end=text.index('$executablePath = (Resolve-Path $Executable).Path',start)
  text=text[:start]+text[end:]
  reversals=[
  ("$ordinaryStartedAt = $null\n$script:qaNamespaceScope=$null\n$script:qaNamespaceCleanupOkay=$true","$ordinaryStartedAt = $null"),
@@ -28,7 +40,7 @@ def original_source():
  return text
 
 def query_projection():
- text=DRIVER.read_text();start=text.index(QUERY_OPEN)+len(QUERY_OPEN);end=text.index(QUERY_CLOSE,start)
+ text=canonical_checkout_text(DRIVER);start=text.index(QUERY_OPEN)+len(QUERY_OPEN);end=text.index(QUERY_CLOSE,start)
  projection=text[start:end]
  if hashlib.sha256(projection.encode()).hexdigest()!=QUERY_SHA:raise AssertionError('Pinned literal query projection changed')
  return projection
@@ -43,7 +55,7 @@ ORIGINAL_PIN_LOADER="""  $helper=Join-Path $PSScriptRoot 'test-hosted-qa-session
 """
 
 def original_raw_loader_source():
- text=DRIVER.read_text();start=text.index("  $helper=Join-Path $PSScriptRoot 'test-hosted-qa-session-directory.cs'");end=text.index('  # Constructor verifies',start)
+ text=canonical_checkout_text(DRIVER);start=text.index("  $helper=Join-Path $PSScriptRoot 'test-hosted-qa-session-directory.cs'");end=text.index('  # Constructor verifies',start)
  return text[:start]+ORIGINAL_PIN_LOADER+text[end:]
 
 def invoke(body,csharp=None,helper_bytes=None,inputs=None):
@@ -53,8 +65,8 @@ def invoke(body,csharp=None,helper_bytes=None,inputs=None):
   for name,data in (inputs or {}).items():(folder/name).write_bytes(data)
   prefix="$ErrorActionPreference='Stop'\n"
   if csharp:
-   (folder/'helper.cs').write_text(csharp);prefix+="Add-Type -Path (Join-Path $PSScriptRoot 'helper.cs') -CompilerOptions /warnaserror+ -ErrorAction Stop\n"
-  (folder/'run.ps1').write_text(prefix+body,encoding='utf-8-sig')
+   (folder/'helper.cs').write_bytes(csharp.encode('utf-8'));prefix+="Add-Type -Path (Join-Path $PSScriptRoot 'helper.cs') -CompilerOptions /warnaserror+ -ErrorAction Stop\n"
+  (folder/'run.ps1').write_bytes((prefix+body).encode('utf-8-sig'))
   p=subprocess.run([shutil.which('pwsh'),'-NoProfile','-NonInteractive','-File',str(folder/'run.ps1')],capture_output=True,text=True,encoding='utf-8',timeout=90)
   if p.returncode:raise AssertionError(f'Exact source controls exit{p.returncode}\n{p.stdout}\n{p.stderr}')
   return p.stdout
@@ -90,20 +102,20 @@ $script:qaNamespaceScope=$null;$script:qaNamespaceCleanupOkay=$true;$primaryFail
 '''
 class PackagedControls(unittest.TestCase):
  def test_actual_shared_fence_compiles_and_unqualified_context_cannot_construct(self):
-  self.assertEqual(hashlib.sha256(HELPER.read_bytes()).hexdigest(),EXPECTED_HELPER)
+  self.assertEqual(hashlib.sha256(canonical_checkout_bytes(HELPER.read_bytes())).hexdigest(),EXPECTED_HELPER)
   body="Add-Type -Path '"+str(HELPER)+"' -CompilerOptions /warnaserror+ -ErrorAction Stop\n"
   body+="try{[MixelHostedQaNamespace+NativeApi]::new('UnqualifiedSourceControl')|Out-Null;throw 'Unexpected local host constructor'}catch{if($_.Exception.Message -ceq 'Unexpected local host constructor'){throw}}\n'PASS: complete shared native ABI warning-fatal compilation; exact local host refusal before native Open.'\n"
   print(invoke(body).strip())
  def test_original_whole_functions_and_all_runtime_gates_conserved(self):
-  original=original_source();candidate=DRIVER.read_text()
+  original=original_source();candidate=canonical_checkout_text(DRIVER)
   body=r'''
 $t=$null;$e=$null;$a=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'original.ps1'),[ref]$t,[ref]$e);if($e.Count){throw 'Original parse'}
 $t=$null;$e=$null;$b=[Management.Automation.Language.Parser]::ParseFile('__NEW__',[ref]$t,[ref]$e);if($e.Count){throw 'Candidate parse'}
 $old=@($a.EndBlock.Statements|Where-Object{$_ -is [Management.Automation.Language.FunctionDefinitionAst]})
 $new=@($b.EndBlock.Statements|Where-Object{$_ -is [Management.Automation.Language.FunctionDefinitionAst]})
-foreach($f in $old){$same=@($new|Where-Object{$_.Name -ceq $f.Name});if($same.Count-ne 1 -or $same[0].Extent.Text -cne $f.Extent.Text){throw ('Original function changed: '+$f.Name)}}
+foreach($f in $old){$same=@($new|Where-Object{$_.Name -ceq $f.Name});if($same.Count-ne 1 -or $same[0].Extent.Text.Replace("`r`n","`n") -cne $f.Extent.Text){throw ('Original function changed: '+$f.Name)}}
 if($new.Count -ne $old.Count+3){throw 'Unexpected function family delta'}
-'PASS: every complete original PowerShell function literal-byte conserved.'
+'PASS: every complete original PowerShell function canonical bytes conserved across LF/CRLF.'
 '''.replace('__NEW__',str(DRIVER).replace("'","''"))
   print(invoke(body,inputs={'original.ps1':original.encode()}).strip())
   cls=original[original.index('public static class MixelOrdinaryTokenFixture {'):original.index("\n'@ }",original.index('public static class MixelOrdinaryTokenFixture {'))]
@@ -123,8 +135,8 @@ if($new.Count -ne $old.Count+3){throw 'Unexpected function family delta'}
   self.assertGreater(deletion,candidate.rindex('if ($desktopAccess) { try { $desktopAccess.Dispose()'))
   self.assertLess(deletion,candidate.rindex('if ($ownedSid) {\n      $profileRemoved'))
  def test_exact_literal_query_projection_and_read_only_rights(self):
-  body=DRIVER.read_text();projection=query_projection();self.assertIn(projection,body)
-  original=(S/'test-support-lease-standard-windows.ps1').read_text()
+  body=canonical_checkout_text(DRIVER);projection=query_projection();self.assertIn(projection,body)
+  original=canonical_checkout_text(S/'test-support-lease-standard-windows.ps1')
   binding={'literal_block_sha256': {'[StructLayout(LayoutKind.Sequential)] struct ObservedGroupsHeader': '4052847b1ee42734b79becb6840b71ac899cd6e52a24a4b9a00e7d8c07f027e0', '[StructLayout(LayoutKind.Sequential)] struct ObservedSidAttributes': '7de3ef63fd444b7dc32d79b36fe86607f14395f539b721e98f33d15c5d36e737', 'enum ObservedTokenClass': 'e6c82863b35706f245c8973b123ce950294b08a607c41ac1f686b430459f7084', 'public sealed class ObservedTokenFacts': '6b6d90f987d349e6565ee6832029c5a185a7f873515bd2cd24059a4ff638bff0', 'public static ObservedTokenFacts FreshStandardTokenFacts': 'b69729d38e632d69c9a20789b8691d8930ceabaa93d4403390b94fd8921480f3', 'public static ObservedTokenFacts RunnerTokenFacts': 'd5d14777d27f0301b27051ed5bdbcc6ac3f5e2f49bd7f7bbf2bec98ee8df9afc', 'sealed class ObservedTokenQueryFailure': 'c93f7eb3cdac6ad0b397e44946e1788056683e98621e1767ffd74bf8f2b76ef0', 'static IntPtr ObservedTokenBuffer': 'ca693d4f4c840444ad3e4f95298f80db5bb2c92cd5cc5266765f77ed0cb77935', 'static ObservedTokenFacts ReadObservedTokenFacts': 'bf80765fe3cfc43c4146ffce0b64b8bd6905814398dee354fa12706bc96bff44', 'static bool ObservedLogonSidEqual': '7b0b0d34e2ed55d1f8a986be37aee6c6ab243418d10da8d62a6ccc624ff50030', 'static bool ObservedTokenBool(': '97adc5ed939034c85f0f28ab200aff0200f8600ba4976871d83ba88b6a596001', 'static bool ObservedTokenBoolValue': 'a44fc0d5e73ebd54312e4fdc35704e5e738ef217783ea79ee0f02115a4fb96ea', 'static byte[] ObservedLogonSid(': 'f3ce2949481b25d0acf7761f14f455312efe16e71e9a8180ebdb0fc3ec0cb3f2', 'static byte[] ObservedLogonSidBytes': '83395b84e9d671f402f720f0aadba6b33840e7e1bc30c28b4ae4ac33164cb250', 'static string ObserveLogonSidComparison': '6200f92cd8f5c87432c601766c6ffdba54c6b5f3c8021ac1682ac3d9ec852ad1', 'static string ObservedBufferedSid': 'f17974fc212bd5054dde9dc3e7cbbb51073cc98523708e75456f2a63bcbdb490', 'static uint ObservedIntegrityRid': 'debb0abe968406e891d8785a8b26bf14dca414bed0fe810566c945fa36806564', 'static uint ObservedTokenDword': '0fd865bd259ec0b9e0adf91a646116eda6c8c476779357fd952eca727c4f922f', 'static void ObservedMemberships': '20fa43d13fac47102b9515cde2a1cc410e75acc98687bb87d49c8268dc8d0d67'}, 'native_api_rights_changed': False, 'native_close_adapter': 'One attempt; FALSE including native0 throws; no retry, failed handle ownership remains unresolved until process exit or explicitly harness-only disposal.', 'original_elevated_token_block_sha256': '5462e7bcb57fc13456baed8982a7ba9ba5c2c3631016cdf3d55c7e2ae541e290', 'original_launch_ps_sha256': '765b98c6324161018321eadb3528a14a844dc4dd1bee1df158c9f68db6c8af8e', 'original_standard_ps_sha256': 'a9b0bf8ee68209f78a82ca4260c9d35faf10449a25f5976775731e98042a057f', 'source_head': '572336bc9445b98a071d9922f345c375da47f716'}
   # Actual brace extraction has already retained every selected complete declaration/method.
   for name,digest in binding['literal_block_sha256'].items():
@@ -201,7 +213,7 @@ if($p.sets-ne 2 -or $p.closes-ne 1 -or $p.unloads-ne 1){throw 'Repeated restored
 '''
   print(invoke(body,HELPER.read_text()+MOCK+FACTS).splitlines()[-1])
  def test_actual_canonical_helper_loader_lf_crlf_and_exact_fatal_profiles(self):
-  raw=HELPER.read_bytes();self.assertNotIn(b'\r',raw)
+  raw=canonical_checkout_bytes(HELPER.read_bytes());self.assertEqual(hashlib.sha256(raw).hexdigest(),EXPECTED_HELPER)
   constructor_replacement='.Replace("[MixelHostedQaNamespace+NativeApi]::new(\'PackagedOrdinaryQa\')",\'[AbaMock+Platform]::new()\')'
   real_loader_functions=FUNCTIONS.replace(constructor_replacement,'')
   self.assertNotEqual(real_loader_functions,FUNCTIONS)
@@ -232,6 +244,33 @@ if($reason-cne 'Pinned hosted QA namespace helper differs; no directory query or
 """
   self.assertIn('PASS: original raw LF-only',invoke(old,HELPER.read_text()+MOCK+FACTS,helper_bytes=raw.replace(b'\n',b'\r\n'),inputs={'old-loader.ps1':original_raw_loader_source().encode()}))
   print('PASS: literal LF/CRLF canonical Add-Type loader; four exact malformed refusals; original CRLF refusal preserved.')
+ def test_actual_complete_lf_crlf_checkout_profiles_and_strict_canonical_refusals(self):
+  cases=['PackagedControls.test_actual_shared_fence_compiles_and_unqualified_context_cannot_construct',
+         'PackagedControls.test_original_whole_functions_and_all_runtime_gates_conserved',
+         'PackagedControls.test_actual_canonical_helper_loader_lf_crlf_and_exact_fatal_profiles']
+  raw=canonical_checkout_bytes(HELPER.read_bytes())
+  self.assertEqual(hashlib.sha256(raw).hexdigest(),EXPECTED_HELPER)
+  self.assertEqual(canonical_checkout_bytes(raw.replace(b'\n',b'\r\n')),raw)
+  for malformed in (raw.replace(b'\n',b'\r\n',1),raw+b'\r'):
+   with self.assertRaisesRegex(AssertionError,'Mixed or bare-CR checkout source refused'):
+    canonical_checkout_bytes(malformed)
+  for changed in (raw+b'// changed\n',b'\xef\xbb\xbf'+raw):
+   self.assertNotEqual(hashlib.sha256(canonical_checkout_bytes(changed)).hexdigest(),EXPECTED_HELPER)
+  for profile in ('lf','crlf'):
+   with tempfile.TemporaryDirectory(prefix='mixel-packaged-fixture-profile-') as folder:
+    scripts=Path(folder)/'scripts'
+    shutil.copytree(S,scripts,ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
+    for path in scripts.rglob('*'):
+     if not path.is_file() or path.suffix not in ('.py','.sh','.ps1','.rs','.dart','.swift','.h','.mm','.c','.cpp','.cs','.bat'):
+      continue
+     source=canonical_checkout_bytes(path.read_bytes())
+     path.write_bytes(source if profile=='lf' else source.replace(b'\n',b'\r\n'))
+    result=subprocess.run([os.sys.executable,'-B','-Werror',str(scripts/'test-packaged-owned-qa.py'),*cases,'-v'],
+                          capture_output=True,text=True,encoding='utf-8',timeout=90)
+    self.assertEqual(result.returncode,0,result.stdout+'\n'+result.stderr)
+    self.assertIn('Ran 3 tests',result.stderr)
+    self.assertIn('\nOK\n',result.stderr)
+  print('PASS: three former packaged fixture failures from complete LF/CRLF checkouts; strict mixed/bare-CR/hash drift/BOM controls retained; no recursive profile test or native APIs.')
  def test_literal_complete_outer_finally_restores_after_stop_failures_and_retains_primary(self):
   body=FUNCTIONS+SETUP+r"""
 $t=$null;$e=$null;$ast=[Management.Automation.Language.Parser]::ParseFile('__DRIVER__',[ref]$t,[ref]$e)

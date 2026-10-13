@@ -29,7 +29,7 @@ def invoke(body, csharp=None):
         if csharp:
             (root / 'helper.cs').write_text(csharp, encoding='utf-8')
             prefix += "Add-Type -Path (Join-Path $PSScriptRoot 'helper.cs') -CompilerOptions /warnaserror+ -ErrorAction Stop\n"
-        (root / 'run.ps1').write_text(prefix + body, encoding='utf-8-sig')
+        (root / 'run.ps1').write_bytes((prefix + body).encode('utf-8-sig'))
         result = subprocess.run([shutil.which('pwsh'), '-NoProfile', '-NonInteractive', '-File', str(root / 'run.ps1')],
                                 capture_output=True, text=True, encoding='utf-8', timeout=60)
         if result.returncode:
@@ -128,7 +128,7 @@ class HostedFixtureControls(unittest.TestCase):
 
     def test_complete_generated_script_parses_before_any_execution(self):
             body = FUNCTIONS + r'''
-    $original=[IO.File]::ReadAllText('__ORIGINAL__')
+    $original=Read-PinnedHostedSource '__ORIGINAL__' 'a9b0bf8ee68209f78a82ca4260c9d35faf10449a25f5976775731e98042a057f'
     $generated=New-HostedStandardQaScript $original (($functions | ForEach-Object {$_.Extent.Text}) -join "`n")
     $path=Join-Path $PSScriptRoot 'generated.ps1'
     [IO.File]::WriteAllText($path,$generated,[Text.UTF8Encoding]::new($true))
@@ -138,6 +138,33 @@ class HostedFixtureControls(unittest.TestCase):
     'PASS: complete generated script plus all original functions parse before execution; no native or child launch.'
     '''.replace('__ORIGINAL__', str(ORIGINAL).replace("'", "''"))
             print(invoke(body).strip())
+
+    def test_actual_lf_crlf_checkout_fixture_profiles(self):
+        # Replay the three Windows failures from real independent whole-script
+        # checkout profiles, using literal production reader/composer functions.
+        cases = ['HostedFixtureControls.test_complete_generated_script_parses_before_any_execution',
+                 'HostedFixtureControls.test_literal_original_eight_and_outer_finally_fault_order',
+                 'HostedFixtureControls.test_source_normalization_original_eight_boundaries_and_default_refusal']
+        for profile in ('lf', 'crlf'):
+            with tempfile.TemporaryDirectory(prefix='mixel-hosted-fixture-profile-') as folder:
+                scripts=Path(folder)/'scripts'
+                shutil.copytree(SCRIPTS,scripts,ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
+                for path in scripts.rglob('*'):
+                    if not path.is_file() or path.suffix not in ('.py','.sh','.ps1','.rs','.dart','.swift','.h','.mm','.c','.cpp','.cs','.bat'):
+                        continue
+                    raw=path.read_bytes()
+                    if b'\r' in raw:
+                        remainder=raw.replace(b'\r\n',b'')
+                        self.assertNotIn(b'\r',remainder,str(path))
+                        self.assertNotIn(b'\n',remainder,str(path))
+                        raw=raw.replace(b'\r\n',b'\n')
+                    path.write_bytes(raw if profile=='lf' else raw.replace(b'\n',b'\r\n'))
+                result=subprocess.run([os.sys.executable,'-B','-Werror',str(scripts/'test-hosted-standard-qa.py'),*cases,'-v'],
+                                      capture_output=True,text=True,encoding='utf-8',timeout=90)
+                self.assertEqual(result.returncode,0,result.stdout+'\n'+result.stderr)
+                self.assertIn('Ran 3 tests',result.stderr)
+                self.assertIn('\nOK\n',result.stderr)
+        print('PASS: actual three former Windows fixture failures replayed from complete independent LF and CRLF script checkouts; strict source pins/refusals and original8/finally preserved.')
 
     def test_actual_scope_partial_failures_and_unknown_cleanup(self):
             mock = PREVIOUS.MOCK.split('public static class MixelOrdinaryTokenFixture', 1)[0]
@@ -199,7 +226,7 @@ class HostedFixtureControls(unittest.TestCase):
      if($script:originalFailure -and $script:eightCalls.Count -eq 1){throw 'ORIGINAL_NATIVE5'}
      return 512
     }
-    $original=[IO.File]::ReadAllText('__ORIGINAL__');$generated=New-HostedStandardQaScript $original 'PREFIX'
+    $original=Read-PinnedHostedSource '__ORIGINAL__' 'a9b0bf8ee68209f78a82ca4260c9d35faf10449a25f5976775731e98042a057f';$generated=New-HostedStandardQaScript $original 'PREFIX'
     $a=$original.IndexOf("  `$absent = 'ownerFailed=false;",$original.IndexOf("`n  Invoke-OptionalCallerLinkedLeaseSubsystemObservations`n"))
     $b=$original.IndexOf('  if ($currentCallerFailure)',$a);$eight=$original.Substring($a,$b-$a)
     $tailAnchor="} catch {`n  `$failure = `$_`n  throw`n} finally {`n  `$cleanup = [System.Collections.Generic.List[string]]::new()"
@@ -292,6 +319,12 @@ public static class HostedFenceCases {
     def test_source_normalization_original_eight_boundaries_and_default_refusal(self):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder);raw=ORIGINAL.read_bytes()
+            if b'\r' in raw:
+                remaining=raw.replace(b'\r\n',b'')
+                self.assertNotIn(b'\r',remaining)
+                self.assertNotIn(b'\n',remaining)
+                raw=raw.replace(b'\r\n',b'\n')
+            self.assertEqual(hashlib.sha256(raw).hexdigest(),'a9b0bf8ee68209f78a82ca4260c9d35faf10449a25f5976775731e98042a057f')
             lf=root/'lf.ps1';crlf=root/'crlf.ps1';mixed=root/'mixed.ps1';drift=root/'drift.ps1'
             lf.write_bytes(raw);crlf.write_bytes(raw.replace(b'\n',b'\r\n'));mixed.write_bytes(raw.replace(b'\n',b'\r\n',1));drift.write_bytes(raw+b'# changed\n')
             digest=hashlib.sha256(raw).hexdigest()
