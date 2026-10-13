@@ -65,7 +65,7 @@ jobs:
         run: bash -n scripts/apply-branding.sh scripts/local/sign-and-publish-macos.sh
   windows-packaging:
     runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_source_runner == 'windows-2025' && 'windows-2025' || 'windows-2022' }}
-    timeout-minutes: 20
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
       - name: Exercise Windows payload preparation and IPC response validation

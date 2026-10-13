@@ -143,6 +143,11 @@ if($generated.IndexOf('Start-StandardValidQaNamespace') -lt 0 -or $generated.Ind
             '- name: Observe six original World children around an exactly restored temporary directory DACL').replace(
             'run: ./scripts/observe-standard-valid-qa-windows.ps1 -EvidenceDirectory session-directory-aba-proof',
             'run: ./scripts/observe-session-directory-aba-windows.ps1 -EvidenceDirectory session-directory-aba-proof')
+        # Reverse only the exact hosted Windows source-job budget before its historical pin.
+        current_budget = "  windows-packaging:\n    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_source_runner == 'windows-2025' && 'windows-2025' || 'windows-2022' }}\n    timeout-minutes: 45\n"
+        historical_budget = current_budget.replace('    timeout-minutes: 45\n', '    timeout-minutes: 20\n', 1)
+        self.assertEqual(restored.count(current_budget), 1)
+        restored = restored.replace(current_budget, historical_budget, 1)
         # Reverse only the exact approved control additions after the historical
         # optional-wrapper baseline; the original whole-workflow pin stays intact.
         later_controls = (
