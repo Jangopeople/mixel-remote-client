@@ -201,6 +201,195 @@ def bounded_read_only_guards(tray, original_owner, deadline):
     return bounded_function(original_owner, deadline), connections, health
 
 
+KERNEL_WINDOW_SECONDS = 4
+KERNEL_FAILURE = "Tray fixture customer GUI birth or kernel owner changed"
+
+
+def valid_pid(value):
+    return type(value) is int and 0 < value < 2**31
+
+
+def birth_summary(value, app):
+    # Never export the tuple's executable path or arbitrary returned objects.
+    if (type(value) is not tuple or len(value) != 6 or value[0] != "darwin-gui-birth-v1"
+            or not valid_pid(value[1]) or type(value[2]) is not int or not 0 < value[2] < 2**32
+            or type(value[3]) is not str or type(value[4]) is not int or not 0 < value[4] < 2**40
+            or type(value[5]) is not int or not 0 <= value[5] < 1000000):
+        return None
+    return {"tag": value[0], "pid": value[1], "uid": value[2],
+            "executableMatch": value[3] == str(app / "Contents/MacOS/Mixel-Remote"),
+            "startSeconds": value[4], "startMicroseconds": value[5]}
+
+
+def observe_kernel_identity(tray, launch_facts=None):
+    """Observe original calls; retained identities confer no new authority."""
+    facts = {"schema": 1, "originalResultPreserved": True, "initialGuiPid": None,
+             "initialGuiBirth": None, "observations": [], "totalCalls": 0,
+             "observationLimitReached": False, "primaryComparison": None,
+             "postPrimary": {"attempted": False, "deadlineSeconds": KERNEL_WINDOW_SECONDS,
+                             "elapsedSeconds": 0, "status": "not-attempted", "ownerPid": None,
+                             "ownerChanged": None, "serverLaunchMatch": False, "zeroAuth": False}}
+    original_owner = tray.gui_owner
+    original_birth = getattr(tray, "gui_birth", None)
+    original_safe = getattr(tray.desktop, "safe_error", None)
+    context = {}
+    retained_birth = None
+    clock = time.monotonic()
+
+    def origin():
+        frame = sys._getframe(1)
+        try:
+            for _ in range(5):
+                if frame is None:
+                    break
+                if frame.f_code.co_name in ("visible_gui", "terminate_owned", "runtime"):
+                    return frame.f_code.co_name
+                frame = frame.f_back
+            return "other-original"
+        finally:
+            del frame
+
+    def append(operation, call_origin, pid, status, value=None, error=None, retained=False):
+        facts["totalCalls"] += 1
+        if len(facts["observations"]) >= MAX_OBSERVATIONS:
+            facts["observationLimitReached"] = True
+            return
+        row = {"sequence": facts["totalCalls"], "operation": operation, "origin": call_origin,
+               "pid": pid if valid_pid(pid) else None, "status": status,
+               "errorKind": ("os-error" if isinstance(error, OSError) else "value-error"
+                             if isinstance(error, ValueError) else "runtime-error"
+                             if isinstance(error, RuntimeError) else "subprocess-error"
+                             if isinstance(error, subprocess.SubprocessError) else "other-error") if error else None,
+               "elapsedSeconds": max(0, time.monotonic() - clock), "retainedArgument": retained,
+               "ownerPid": value if operation == "gui-owner" and valid_pid(value) else None,
+               "birth": birth_summary(value, context["app"]) if operation == "gui-birth" and "app" in context else None,
+               "differsFromInitial": None}
+        if operation == "gui-owner" and valid_pid(value) and facts["initialGuiPid"] is not None:
+            row["differsFromInitial"] = value != facts["initialGuiPid"]
+        elif operation == "gui-birth" and row["birth"] is not None and retained_birth is not None:
+            row["differsFromInitial"] = value != retained_birth
+        facts["observations"].append(row)
+
+    def owner(app, server_pid):
+        call_origin = origin()
+        try:
+            value = original_owner(app, server_pid)
+        except BaseException as error:
+            append("gui-owner", call_origin, server_pid, "error", error=error)
+            raise
+        if facts["initialGuiPid"] is None and valid_pid(value):
+            facts["initialGuiPid"] = value
+            context.update(app=app, server_pid=server_pid)
+        append("gui-owner", call_origin, server_pid, "returned", value)
+        return value
+
+    def birth(app, pid, *args, **kwargs):
+        nonlocal retained_birth
+        retained = args[0] if args else kwargs.get("retained")
+        call_origin = origin()
+        try:
+            value = original_birth(app, pid, *args, **kwargs)
+        except BaseException as error:
+            append("gui-birth", call_origin, pid, "error", error=error, retained=retained is not None)
+            raise
+        summary = birth_summary(value, app)
+        if (retained_birth is None and pid == facts["initialGuiPid"] and app == context.get("app")
+                and retained is None and summary is not None and summary["pid"] == pid and summary["executableMatch"]):
+            retained_birth = value
+            facts["initialGuiBirth"] = summary
+        append("gui-birth", call_origin, pid, "returned-none" if value is None else "returned",
+               value, retained=retained is not None)
+        return value
+
+    def after_primary(helper, app, server_pid):
+        window = facts["postPrimary"]
+        window["attempted"] = True
+        start = time.monotonic()
+        deadline = start + KERNEL_WINDOW_SECONDS
+        try:
+            tray.isolated_ci()
+            if app.absolute() != app.resolve(strict=True):
+                window["status"] = "noncanonical-app"
+                return
+            launches = launch_facts.get("launchObservations", []) if isinstance(launch_facts, dict) else []
+            expected = next((row.get("launchTime") for row in launches
+                             if row.get("action") == "tray" and row.get("pid") == server_pid), None)
+            if not finite_positive(expected):
+                window["status"] = "server-identity-unavailable"
+                return
+            def remaining():
+                value = deadline - time.monotonic()
+                if value <= 0:
+                    raise TimeoutError("Additive ownership deadline elapsed")
+                return value
+            state = bounded_gui_probe(helper, server_pid, app, min(1, remaining()))
+            summary = probe_summary(state, app)
+            if summary["running"] is not True or not summary["bundleMatch"] or summary["launchTime"] != expected:
+                window["status"] = "server-identity-changed"
+                return
+            window["serverLaunchMatch"] = True
+            owned_owner, connections, _ = bounded_read_only_guards(tray, original_owner, deadline)
+            remaining()
+            if connections(server_pid, app) is not True:
+                window["status"] = "authenticated-connection"
+                return
+            window["zeroAuth"] = True
+            remaining()
+            # This one metadata read may report another owner. Never probe,
+            # adopt, terminate, or authorize cleanup of that returned process.
+            value = owned_owner(app, server_pid)
+            remaining()
+            if not valid_pid(value):
+                window["status"] = "ownership-unavailable"
+                return
+            window.update(status="observed", ownerPid=value,
+                          ownerChanged=value != facts["initialGuiPid"])
+        except TimeoutError:
+            window["status"] = "deadline"
+        except Exception:
+            window["status"] = "observation-refused"
+        finally:
+            window["elapsedSeconds"] = max(0, time.monotonic() - start)
+
+    def safe_error(error):
+        result = original_safe(error)
+        frame = sys._getframe(1)
+        try:
+            runtime = getattr(tray, "runtime", None)
+            if (runtime is not None and frame.f_code is runtime.__code__
+                    and frame.f_locals.get("phase") == "customer-gui-visible"
+                    and str(error) == KERNEL_FAILURE and facts["primaryComparison"] is None):
+                rows = [] if facts["observationLimitReached"] else facts["observations"]
+                owner_row = next((r for r in reversed(rows) if r["origin"] == "visible_gui"
+                                  and r["operation"] == "gui-owner"), None)
+                birth_row = next((r for r in reversed(rows) if r["origin"] == "visible_gui"
+                                  and r["operation"] == "gui-birth"
+                                  and owner_row is not None and r["sequence"] > owner_row["sequence"]), None)
+                facts["primaryComparison"] = {
+                    "phase": "customer-gui-visible", "reason": KERNEL_FAILURE,
+                    "ownerSequence": owner_row["sequence"] if owner_row else None,
+                    "birthSequence": birth_row["sequence"] if birth_row else None,
+                    "ownerChanged": owner_row["differsFromInitial"] if owner_row else None,
+                    "birthEvaluated": birth_row is not None,
+                    "birthChanged": birth_row["differsFromInitial"] if birth_row else None}
+                app, pid = frame.f_locals.get("app"), frame.f_locals.get("server_pid")
+                if app == context.get("app") and pid == context.get("server_pid") and valid_pid(pid):
+                    after_primary(frame.f_locals.get("helper"), app, pid)
+        except Exception:
+            # Observation failure never replaces the original reporter or gate.
+            facts["postPrimary"]["status"] = "observation-refused"
+        finally:
+            del frame
+        return result
+
+    tray.gui_owner = owner
+    if original_birth is not None:
+        tray.gui_birth = birth
+    if original_safe is not None:
+        tray.desktop.safe_error = safe_error
+    return facts
+
+
 def observe_gui_identity(tray, launch_facts=None):
     """Observe original GUI probes and a refused identity without authorizing it."""
     desktop = tray.desktop
@@ -223,7 +412,8 @@ def observe_gui_identity(tray, launch_facts=None):
 
     def owner(app, server_pid):
         pid = original_owner(app, server_pid)
-        context.update(app=app, server_pid=server_pid, gui_pid=pid)
+        if "gui_pid" not in context:
+            context.update(app=app, server_pid=server_pid, gui_pid=pid)
         return pid
 
     def probe(helper, pid, app):
@@ -364,6 +554,7 @@ def main(argv=None):
     spec.loader.exec_module(tray)
     facts = observe_privacy(tray.desktop)
     launch_facts = observe_launchservices(tray.desktop)
+    kernel_facts = observe_kernel_identity(tray, launch_facts)
     gui_facts = observe_gui_identity(tray, launch_facts)
     original_argv = sys.argv
     try:
@@ -382,7 +573,8 @@ def main(argv=None):
                 raise RuntimeError("Privacy observation directory is not owned")
             for name, value in (("privacy-match-safe-facts.json", facts),
                                 ("launch-observation-safe-facts.json", launch_facts),
-                                ("gui-probe-safe-facts.json", gui_facts)):
+                                ("gui-probe-safe-facts.json", gui_facts),
+                                ("kernel-owner-safe-facts.json", kernel_facts)):
                 with (args.proofs / name).open("x", encoding="utf-8") as output:
                     os.chmod(output.name, 0o600)
                     json.dump(value, output, sort_keys=True, indent=2, allow_nan=False)

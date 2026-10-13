@@ -51,7 +51,7 @@ jobs:
       - name: Check out the immutable failed producer source
         uses: actions/checkout@v5
         with:
-          ref: cc95734a3980b93d63d9e8bf0cc7c3689bba846b
+          ref: 326e57cb9c9f9fbca660e41b0f730ae494318f6e
           path: producer-source
           persist-credentials: false
       - name: Require source and mock refusal controls

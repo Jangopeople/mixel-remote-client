@@ -43,11 +43,11 @@ def jobs():
     return {"total_count": 1, "jobs": [{"id": v.JOB, "run_id": v.RUN, "run_attempt": 1,
              "name": v.JOB_NAME, "status": "completed", "conclusion": "failure",
              "head_sha": v.SOURCE, "head_branch": v.BRANCH,
-             "started_at": "2026-10-13T15:46:04Z", "completed_at": "2026-10-13T16:24:06Z",
+             "started_at": "2026-10-13T17:45:22Z", "completed_at": "2026-10-13T18:32:29Z",
              "steps": [{"name": v.PACKAGE_STEP, "status": "completed", "conclusion": "failure",
-                        "started_at": "2026-10-13T16:22:23Z", "completed_at": "2026-10-13T16:23:41Z"},
+                        "started_at": "2026-10-13T18:31:00Z", "completed_at": "2026-10-13T18:32:02Z"},
                        {"name": v.UPLOAD_STEP, "status": "completed", "conclusion": "success",
-                        "started_at": "2026-10-13T16:23:43Z", "completed_at": "2026-10-13T16:23:46Z"}]}]}
+                        "started_at": "2026-10-13T18:32:05Z", "completed_at": "2026-10-13T18:32:08Z"}]}]}
 
 
 def artifact():
@@ -66,6 +66,11 @@ def facts():
             "runtimeFailure": {"phase": "os-url-activation",
                                "reason": "OS URL activation bypassed the existing tray process"},
             "failure": "A Mixel IPC endpoint is already active; refusing tray fixture"}
+
+
+def empty_kernel_facts():
+    tray = types.SimpleNamespace(gui_owner=lambda *args: 102, desktop=types.SimpleNamespace())
+    return d.observe_kernel_identity(tray)
 
 
 def zip_bytes(entries):
@@ -520,6 +525,7 @@ class DiagnosticControls(unittest.TestCase):
             (folder / "gui-probe-safe-facts.json").write_text(json.dumps({"schema": 1,
                 "originalResultPreserved": True, "probeObservations": [], "serviceObservations": [], "observationLimitReached": False,
                 "postFailureWindow": {"attempted": False, "deadlineSeconds": 14, "elapsedSeconds": 0, "refusalCategory": None}}))
+            (folder / "kernel-owner-safe-facts.json").write_text(json.dumps(empty_kernel_facts()))
             return subprocess.CompletedProcess(command, 1)
         output = io.StringIO()
         with patch.object(v, "hosted_context", return_value="b" * 40), patch.object(v, "api", side_effect=metadata), \
@@ -971,6 +977,275 @@ class GuiIdentityControls(unittest.TestCase):
         self.assertEqual(safe["postFailureWindow"]["refusalCategory"],"gui-owner-changed")
         self.assertEqual(safe["serviceObservations"][0]["status"],"ownership-unavailable")
         self.assertIsNone(safe["serviceObservations"][0]["attendedServiceReady"])
+
+
+class KernelIdentityControls(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory(prefix="mixel-kernel-observation-control-")
+        self.app = Path(self.directory.name).resolve()
+        self.native = patch.object(d.subprocess, "run", side_effect=AssertionError("Native/network operation forbidden"))
+        self.native.start()
+        self.clock = 0.0
+        self.timer = patch.object(d, "time", types.SimpleNamespace(monotonic=lambda: self.clock,
+            time=lambda: 1791900000.0 + self.clock, sleep=lambda seconds: setattr(self, "clock", self.clock + seconds)))
+        self.timer.start()
+        self.calls = []
+        self.birth = ("darwin-gui-birth-v1", 102, 501, str(self.app / "Contents/MacOS/Mixel-Remote"), 100, 2)
+
+    def tearDown(self):
+        self.timer.stop(); self.native.stop(); self.directory.cleanup()
+
+    def tray(self, owners=(102, 103, 104), births=None):
+        owners = iter(owners); births = iter(births or (self.birth, self.birth))
+        def owner(app, server_pid):
+            self.calls.append(("owner", server_pid))
+            return next(owners)
+        def birth(app, pid, retained=None):
+            self.calls.append(("birth", pid, retained))
+            return next(births)
+        def no_connections(server_pid, app):
+            self.calls.append(("zero-auth", server_pid))
+            return True
+        tray = types.SimpleNamespace(gui_owner=owner, gui_birth=birth, no_connections=no_connections,
+            isolated_ci=lambda: None, desktop=types.SimpleNamespace(safe_error=lambda error: str(error)))
+        # The predicate and exception text are copied literally from the
+        # hash-bound original helper. No success, retry, wait or cleanup gate
+        # is substituted by the diagnostic observer.
+        def runtime(app, helper, facts):
+            server_pid = 101
+            gui_pid = tray.gui_owner(app, server_pid)
+            gui_launch = tray.gui_birth(app, gui_pid)
+            phase = "customer-gui-visible"
+            def visible_gui():
+                if tray.gui_owner(app, server_pid) != gui_pid or tray.gui_birth(app, gui_pid) != gui_launch:
+                    raise RuntimeError("Tray fixture customer GUI birth or kernel owner changed")
+                return True
+            try:
+                return visible_gui()
+            except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+                facts["runtimeFailure"] = {"phase": phase, "reason": tray.desktop.safe_error(error)}
+                raise
+            finally:
+                self.calls.append(("original-finally", gui_pid))
+        tray.runtime = runtime
+        return tray
+
+    def launch(self):
+        return {"launchObservations": [{"action": "tray", "pid": 101, "launchTime": 123.5}]}
+
+    def server(self, helper, pid, app, timeout):
+        self.calls.append(("server-probe", pid, timeout))
+        self.assertEqual(pid, 101)
+        self.assertTrue(0 < timeout <= 1)
+        return {"running": True, "bundlePath": str(app), "launchTime": 123.5}
+
+    def test_every_original_call_preserves_results_errors_arguments_and_immutable_initial_identity(self):
+        tray = self.tray(owners=(102,103), births=(self.birth, tuple([*self.birth[:4],101,2]),None))
+        facts = d.observe_kernel_identity(tray)
+        self.assertEqual(tray.gui_owner(self.app,101),102)
+        self.assertIs(tray.gui_birth(self.app,102),self.birth)
+        self.assertEqual(tray.gui_owner(self.app,101),103)
+        self.assertNotEqual(tray.gui_birth(self.app,102),self.birth)
+        self.assertIsNone(tray.gui_birth(self.app,102,self.birth))
+        safe = v.safe_kernel_facts(facts)
+        self.assertEqual(safe["initialGuiPid"],102)
+        self.assertEqual(safe["initialGuiBirth"]["startSeconds"],100)
+        self.assertEqual([r["differsFromInitial"] for r in safe["observations"]], [False,False,True,True,None])
+        self.assertTrue(safe["observations"][-1]["retainedArgument"])
+        error = OSError("raw secret path")
+        for operation in ("gui_owner","gui_birth"):
+            other = self.tray()
+            setattr(other,operation,lambda *args: (_ for _ in ()).throw(error))
+            record = d.observe_kernel_identity(other)
+            with self.assertRaises(OSError) as raised:
+                getattr(other,operation)(self.app,102)
+            self.assertIs(raised.exception,error)
+            self.assertEqual(v.safe_kernel_facts(record)["observations"][0]["errorKind"],"os-error")
+            self.assertNotIn("raw secret",json.dumps(record))
+
+    def test_original_owner_short_circuit_and_post_primary_unknown_owner_never_followed_or_adopted(self):
+        tray = self.tray()
+        record = d.observe_kernel_identity(tray,self.launch())
+        original = {}
+        with patch.object(d,"bounded_gui_probe",side_effect=self.server), self.assertRaises(RuntimeError) as raised:
+            tray.runtime(self.app,"exact-helper",original)
+        self.assertEqual(str(raised.exception),d.KERNEL_FAILURE)
+        safe = v.safe_kernel_facts(record)
+        comparison = safe["primaryComparison"]
+        self.assertTrue(comparison["ownerChanged"])
+        self.assertFalse(comparison["birthEvaluated"])
+        self.assertIsNone(comparison["birthChanged"])
+        self.assertEqual(safe["postPrimary"]["ownerPid"],104)
+        self.assertTrue(safe["postPrimary"]["ownerChanged"])
+        self.assertEqual(safe["initialGuiPid"],102)
+        self.assertEqual([c[1] for c in self.calls if c[0]=="birth"],[102])
+        self.assertEqual(self.calls[-1],("original-finally",102))
+        self.assertEqual(original["runtimeFailure"]["reason"],d.KERNEL_FAILURE)
+        self.assertNotIn(str(self.app),json.dumps(safe))
+
+    def test_original_birth_tuple_inequality_retains_exact_operand_discriminator(self):
+        changed=(*self.birth[:4],101,2)
+        tray=self.tray(owners=(102,102,102),births=(self.birth,changed))
+        record=d.observe_kernel_identity(tray,self.launch())
+        with patch.object(d,"bounded_gui_probe",side_effect=self.server),self.assertRaises(RuntimeError):
+            tray.runtime(self.app,"helper",{})
+        comparison=v.safe_kernel_facts(record)["primaryComparison"]
+        self.assertFalse(comparison["ownerChanged"])
+        self.assertTrue(comparison["birthEvaluated"])
+        self.assertTrue(comparison["birthChanged"])
+        self.assertEqual(record["initialGuiBirth"]["startSeconds"],100)
+        self.assertEqual(record["observations"][3]["birth"]["startSeconds"],101)
+
+    def test_positive_original_condition_remains_success_and_triggers_no_additive_query(self):
+        tray=self.tray(owners=(102,102))
+        record=d.observe_kernel_identity(tray,self.launch())
+        with patch.object(d,"bounded_gui_probe",side_effect=AssertionError("No sampling on success")):
+            self.assertTrue(tray.runtime(self.app,"helper",{}))
+        self.assertIsNone(record["primaryComparison"])
+        self.assertFalse(v.safe_kernel_facts(record)["postPrimary"]["attempted"])
+        self.assertEqual(self.calls[-1],("original-finally",102))
+
+    def test_post_primary_identity_noauth_timeout_and_isolation_refuse_without_querying_unknown_owner(self):
+        for case in ("missing-launch","wrong-launch","auth","isolation","timeout"):
+            with self.subTest(case=case):
+                self.clock=0;self.calls=[]
+                tray=self.tray()
+                launch=self.launch() if case!="missing-launch" else {}
+                if case=="auth":tray.no_connections=lambda *args:False
+                if case=="isolation":tray.isolated_ci=lambda:(_ for _ in ()).throw(RuntimeError("private path"))
+                record=d.observe_kernel_identity(tray,launch)
+                def probe(*args):
+                    result=self.server(*args)
+                    if case=="wrong-launch":result["launchTime"]=124
+                    if case=="timeout":self.clock+=4
+                    return result
+                with patch.object(d,"bounded_gui_probe",side_effect=probe),self.assertRaises(RuntimeError) as raised:
+                    tray.runtime(self.app,"helper",{})
+                self.assertEqual(str(raised.exception),d.KERNEL_FAILURE)
+                safe=v.safe_kernel_facts(record)
+                self.assertEqual(len([c for c in self.calls if c[0]=="owner"]),2)
+                self.assertIsNone(safe["postPrimary"]["ownerPid"])
+                self.assertEqual(self.calls[-1],("original-finally",102))
+                self.assertNotIn("private path",json.dumps(safe))
+                self.assertEqual(safe["postPrimary"]["status"],{"missing-launch":"server-identity-unavailable",
+                    "wrong-launch":"server-identity-changed","auth":"authenticated-connection",
+                    "isolation":"observation-refused","timeout":"deadline"}[case])
+
+    def test_wrong_failure_other_frame_cleanup_failure_and_missing_context_never_authorize_observation(self):
+        tray=self.tray();record=d.observe_kernel_identity(tray,self.launch())
+        with patch.object(d,"bounded_gui_probe",side_effect=AssertionError("No unknown sampling")):
+            self.assertEqual(tray.desktop.safe_error(RuntimeError(d.KERNEL_FAILURE)),d.KERNEL_FAILURE)
+            self.assertEqual(tray.desktop.safe_error(RuntimeError("other failure")),"other failure")
+        self.assertIsNone(record["primaryComparison"])
+        self.assertFalse(v.safe_kernel_facts(record)["postPrimary"]["attempted"])
+
+    def test_kernel_schema_privacy_invalid_tuples_order_and_bounds_fail_closed(self):
+        tray=self.tray(owners=(102,));record=d.observe_kernel_identity(tray)
+        tray.gui_owner(self.app,101);tray.gui_birth(self.app,102)
+        for field,value in (("pid",True),("sequence",2),("origin","raw path"),("birth",{"path":"private"}),
+                             ("elapsedSeconds",float("nan")),("errorKind","private"),("rawArguments",[])):
+            altered=copy.deepcopy(record);altered["observations"][0][field]=value
+            with self.subTest(field=field),self.assertRaises(v.Refusal):v.safe_kernel_facts(altered)
+        for field,value in (("initialGuiPid",True),("totalCalls",True),("schema",True),("rawLogs",[])):
+            with self.subTest(field=field),self.assertRaises(v.Refusal):v.safe_kernel_facts(dict(record,**{field:value}))
+        for invalid in (("raw",),(*self.birth[:4],True,2),(*self.birth[:5],1000000)):
+            self.assertIsNone(d.birth_summary(invalid,self.app))
+        other=self.tray(owners=(102,));other.gui_owner=lambda *args:102
+        limited=d.observe_kernel_identity(other)
+        for _ in range(70):other.gui_owner(self.app,101)
+        safe=v.safe_kernel_facts(limited)
+        self.assertEqual(len(safe["observations"]),64)
+        self.assertEqual(safe["totalCalls"],70)
+        self.assertTrue(safe["observationLimitReached"])
+
+    def test_old_gui_observer_keeps_first_owner_after_kernel_owner_change(self):
+        tray=self.tray(owners=(102,103))
+        tray.desktop.probe=lambda *args:{}
+        tray.launch_identity=lambda *args:123
+        kernel=d.observe_kernel_identity(tray)
+        gui=d.observe_gui_identity(tray)
+        tray.gui_owner(self.app,101);tray.gui_owner(self.app,101)
+        tray.desktop.probe("helper",103,self.app)
+        tray.desktop.probe("helper",102,self.app)
+        self.assertEqual([r["pid"] for r in v.safe_gui_facts(gui)["probeObservations"]],[102])
+        self.assertEqual(v.safe_kernel_facts(kernel)["initialGuiPid"],102)
+
+    def test_exact_primary_reason_is_allowlisted_without_exporting_unknown_error_text(self):
+        self.assertEqual(v.safe_reason(d.KERNEL_FAILURE)["reason"],d.KERNEL_FAILURE)
+        self.assertEqual(v.safe_reason(d.KERNEL_FAILURE)["reasonCategory"],"fixed-reviewed-reason")
+        self.assertNotIn("raw private",json.dumps(v.safe_reason("raw private")))
+
+    def test_original_birth_argument_arity_keywords_and_exception_identity_are_unchanged(self):
+        tray=self.tray(owners=(102,));seen=[]
+        def spy(*args,**kwargs):
+            seen.append((args,kwargs))
+            return self.birth
+        tray.gui_birth=spy
+        facts=d.observe_kernel_identity(tray)
+        tray.gui_owner(self.app,101)
+        self.assertIs(tray.gui_birth(self.app,102),self.birth)
+        self.assertIs(tray.gui_birth(self.app,102,self.birth),self.birth)
+        self.assertIs(tray.gui_birth(self.app,102,retained=self.birth),self.birth)
+        self.assertEqual(seen,[((self.app,102),{}),((self.app,102,self.birth),{}),
+                               ((self.app,102),{"retained":self.birth})])
+        v.safe_kernel_facts(facts)
+
+    def test_original_cleanup_birth_queries_record_none_and_failure_without_new_cleanup_authority(self):
+        tray=self.tray(owners=(102,),births=(self.birth,None))
+        facts=d.observe_kernel_identity(tray)
+        tray.gui_owner(self.app,101);tray.gui_birth(self.app,102)
+        def terminate_owned():
+            return tray.gui_birth(self.app,102,self.birth)
+        self.assertIsNone(terminate_owned())
+        safe=v.safe_kernel_facts(facts)
+        self.assertEqual(safe["observations"][-1]["origin"],"terminate_owned")
+        self.assertEqual(safe["observations"][-1]["status"],"returned-none")
+        self.assertTrue(safe["observations"][-1]["retainedArgument"])
+        self.assertFalse(safe["postPrimary"]["attempted"])
+
+    def test_primary_schema_refuses_wrong_branch_operands_raw_tuple_and_authority_claims(self):
+        tray=self.tray(owners=(102,102,102),births=(self.birth,(*self.birth[:4],101,2)))
+        facts=d.observe_kernel_identity(tray,self.launch())
+        with patch.object(d,"bounded_gui_probe",side_effect=self.server),self.assertRaises(RuntimeError):
+            tray.runtime(self.app,"helper",{})
+        v.safe_kernel_facts(facts)
+        for field,value in (("birthSequence",2),("ownerSequence",1),("birthEvaluated",False),
+                             ("ownerChanged",True),("reason","raw private error"),("authorization",True)):
+            altered=copy.deepcopy(facts);altered["primaryComparison"][field]=value
+            with self.subTest(field=field),self.assertRaises(v.Refusal):v.safe_kernel_facts(altered)
+        impossible=copy.deepcopy(facts)
+        owner_sequence=impossible["primaryComparison"]["ownerSequence"]
+        impossible["observations"][owner_sequence-1].update(ownerPid=103,differsFromInitial=True)
+        impossible["primaryComparison"]["ownerChanged"]=True
+        with self.assertRaises(v.Refusal):v.safe_kernel_facts(impossible)
+        impossible=copy.deepcopy(facts)
+        birth_sequence=impossible["primaryComparison"]["birthSequence"]
+        impossible["observations"][birth_sequence-1].update(birth=copy.deepcopy(facts["initialGuiBirth"]),differsFromInitial=False)
+        impossible["primaryComparison"]["birthChanged"]=False
+        with self.assertRaises(v.Refusal):v.safe_kernel_facts(impossible)
+        impossible=copy.deepcopy(facts)
+        impossible["observations"][birth_sequence-1]["birth"]=copy.deepcopy(facts["initialGuiBirth"])
+        with self.assertRaises(v.Refusal):v.safe_kernel_facts(impossible)
+        for field,value in (("ownerPid",True),("zeroAuth",False),("serverLaunchMatch",False),
+                             ("deadlineSeconds",5),("rawPath",str(self.app)),("elapsedSeconds",6)):
+            altered=copy.deepcopy(facts);altered["postPrimary"][field]=value
+            with self.subTest(post=field),self.assertRaises(v.Refusal):v.safe_kernel_facts(altered)
+        altered=copy.deepcopy(facts);altered["initialGuiBirth"]["executablePath"]=str(self.app)
+        with self.assertRaises(v.Refusal):v.safe_kernel_facts(altered)
+
+    def test_fixed_artifact_plus_one_second_only_and_completed_job_bounds(self):
+        _,upload=v.validate_jobs(jobs())
+        v.validate_artifact(artifact(),upload)
+        for created in ("2026-10-13T18:32:08Z","2026-10-13T18:32:10Z","2099-10-13T18:32:09Z"):
+            altered=artifact();altered.update(created_at=created,updated_at=created)
+            with self.subTest(created=created),self.assertRaises(v.Refusal):v.validate_artifact(altered,upload)
+        for start,end in (("2026-10-13T18:32:10Z","2026-10-13T18:32:29Z"),
+                          ("2026-10-13T17:45:22Z","2026-10-13T18:32:08Z")):
+            altered=jobs();altered["jobs"][0].update(started_at=start,completed_at=end)
+            with self.assertRaises(v.Refusal):v.validate_jobs(altered)
+        for field,value in (("completed_at","2026-10-13T18:32:07Z"),("started_at","2026-10-13T18:32:04Z")):
+            with self.assertRaises(v.Refusal):v.validate_artifact(artifact(),dict(upload,**{field:value}))
+        with self.assertRaises(v.Refusal):v.validate_run(dict(run(),run_attempt=2))
 
 
 if __name__ == "__main__":

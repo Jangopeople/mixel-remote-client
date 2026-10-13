@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Hosted-only diagnosis of one failed ARM app; never package or qualify it."""
 import argparse
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import hashlib
 import json
 import math
@@ -20,24 +20,24 @@ import zipfile
 
 REPOSITORY = "Jangopeople/mixel-remote-client"
 REPOSITORY_ID = 1229987840
-SOURCE = "cc95734a3980b93d63d9e8bf0cc7c3689bba846b"
-SOURCE_TREE = "bcdf4e25e24e8fe5339faafc7d2bb230bb9e2f37"
+SOURCE = "326e57cb9c9f9fbca660e41b0f730ae494318f6e"
+SOURCE_TREE = "dec9392c8e66f64554a86993b81bfa6f25350973"
 BRANCH = "fix/remote-support-reliability"
-RUN = 38424276372
+RUN = 38440488804
 ATTEMPT = 1
-JOB = 115391416289
+JOB = 115447862901
 WORKFLOW_ID = 271445168
 WORKFLOW = ".github/workflows/build.yml"
 DIAGNOSTIC_WORKFLOW = ".github/workflows/diagnose-macos-failed-app.yml"
 JOB_NAME = "macos (aarch64, aarch64-apple-darwin)"
 PACKAGE_STEP = "Package + sign + notarize (.app then .dmg)"
 UPLOAD_STEP = "Retain failed macOS launch bundle and bounded diagnostics"
-ARTIFACT_ID = 11830478071
+ARTIFACT_ID = 11838916279
 ARTIFACT_NAME = "macos-launch-failure-diagnostic-aarch64"
-ARTIFACT_BYTES = 24568859
-ARTIFACT_SHA256 = "316235b50b6dc9714646dcf543601c6e927e11a7abebb5e674f60a8fd8eed76c"
-ARTIFACT_CREATED = "2026-10-13T16:23:46Z"
-ARTIFACT_EXPIRES = "2027-01-11T15:41:53Z"
+ARTIFACT_BYTES = 24568708
+ARTIFACT_SHA256 = "f0731db053adcd0c9a7e7d69dfbdb165c7eebebe22c51ba985b724a63d093e29"
+ARTIFACT_CREATED = "2026-10-13T18:32:09Z"
+ARTIFACT_EXPIRES = "2027-01-11T17:40:02Z"
 TEAM = "5277F8NDH4"
 APP = "Mixel-Remote.app"
 OUTER_APP = "aarch64/signed-stapled-diagnostic-app.zip"
@@ -83,6 +83,7 @@ SAFE_REASONS = {
     "Diagnostic text is not valid UTF-8", "Diagnostic value failed validation",
     "Unarmed tray incoming service did not become ready", "Actual Tao tray Opened dispatch did not become ready",
     "Distinct customer GUI did not become ready", "Visible customer GUI did not become ready",
+    "Tray fixture customer GUI birth or kernel owner changed",
     "Tray service attended readiness did not become ready",
 }
 
@@ -192,7 +193,8 @@ def validate_jobs(record):
             and job["run_attempt"] == ATTEMPT and job.get("head_sha") == SOURCE
             and job.get("head_branch") == BRANCH, "failed-job-provenance")
     start, end = utc(job.get("started_at")), utc(job.get("completed_at"))
-    require(start <= end, "failed-job-time")
+    require(start == utc("2026-10-13T17:45:22Z")
+            and end == utc("2026-10-13T18:32:29Z") and start <= end, "failed-job-time")
     required = {}
     steps = job.get("steps")
     require(isinstance(steps, list) and len(steps) <= 100, "failed-job-steps")
@@ -223,7 +225,11 @@ def validate_artifact(item, upload, now=None):
     require(item.get("expired") is False and item.get("created_at") == ARTIFACT_CREATED
             and item.get("updated_at") == ARTIFACT_CREATED and item.get("expires_at") == ARTIFACT_EXPIRES
             and utc(item["expires_at"]) > (now or datetime.now(timezone.utc)), "failed-artifact-expiry")
-    require(utc(upload["started_at"]) <= utc(item["created_at"]) <= utc(upload["completed_at"]),
+    # This fixed artifact is finalized exactly one second after its upload step.
+    # Preserve the exact original job timestamps; this is not a general lag policy.
+    require(upload.get("started_at") == "2026-10-13T18:32:05Z"
+            and upload.get("completed_at") == "2026-10-13T18:32:08Z"
+            and utc(item["created_at"]) == utc(upload["completed_at"]) + timedelta(seconds=1),
             "failed-artifact-attempt-window")
 
 
@@ -585,6 +591,109 @@ def safe_gui_facts(record):
     return record
 
 
+def safe_kernel_facts(record):
+    require(isinstance(record, dict) and set(record) == {"schema", "originalResultPreserved", "initialGuiPid",
+            "initialGuiBirth", "observations", "totalCalls", "observationLimitReached", "primaryComparison", "postPrimary"}
+            and type(record.get("schema")) is int and record["schema"] == 1
+            and record.get("originalResultPreserved") is True
+            and type(record.get("observationLimitReached")) is bool, "kernel-observation-schema")
+    def pid(value):
+        return type(value) is int and 0 < value < 2**31
+    def number(value, high):
+        try:
+            return type(value) in (int, float) and 0 <= value <= high and math.isfinite(value)
+        except OverflowError:
+            return False
+    def optional_bool(value):
+        return value is None or type(value) is bool
+    def birth(value):
+        return value is None or (isinstance(value, dict) and set(value) == {
+            "tag", "pid", "uid", "executableMatch", "startSeconds", "startMicroseconds"}
+            and value.get("tag") == "darwin-gui-birth-v1" and pid(value.get("pid"))
+            and type(value.get("uid")) is int and 0 < value["uid"] < 2**32
+            and type(value.get("executableMatch")) is bool
+            and type(value.get("startSeconds")) is int and 0 < value["startSeconds"] < 2**40
+            and type(value.get("startMicroseconds")) is int and 0 <= value["startMicroseconds"] < 1000000)
+    initial = record["initialGuiPid"]
+    require(initial is None or pid(initial), "kernel-initial-pid")
+    require(birth(record["initialGuiBirth"]) and (record["initialGuiBirth"] is None
+            or record["initialGuiBirth"]["pid"] == initial and record["initialGuiBirth"]["executableMatch"]),
+            "kernel-initial-birth")
+    rows = record["observations"]
+    require(isinstance(rows, list) and len(rows) <= 64 and type(record["totalCalls"]) is int
+            and len(rows) <= record["totalCalls"] <= 100000
+            and record["observationLimitReached"] == (record["totalCalls"] > 64), "kernel-observation-bound")
+    fields = {"sequence", "operation", "origin", "pid", "status", "errorKind", "elapsedSeconds",
+              "retainedArgument", "ownerPid", "birth", "differsFromInitial"}
+    for sequence, item in enumerate(rows, 1):
+        require(isinstance(item, dict) and set(item) == fields and type(item.get("sequence")) is int
+                and item["sequence"] == sequence and item.get("operation") in ("gui-owner", "gui-birth")
+                and item.get("origin") in ("runtime", "visible_gui", "terminate_owned", "other-original")
+                and (item.get("pid") is None or pid(item["pid"]))
+                and item.get("status") in ("returned", "returned-none", "error")
+                and item.get("errorKind") in (None, "os-error", "value-error", "runtime-error", "subprocess-error", "other-error")
+                and number(item.get("elapsedSeconds"), 420) and type(item.get("retainedArgument")) is bool
+                and (item.get("ownerPid") is None or pid(item["ownerPid"])) and birth(item.get("birth"))
+                and optional_bool(item.get("differsFromInitial")), "unsafe-kernel-observation")
+        require((item["status"] == "error") == (item["errorKind"] is not None), "kernel-error-state")
+        require(item["operation"] != "gui-owner" or item["birth"] is None and not item["retainedArgument"],
+                "kernel-owner-state")
+        require(item["operation"] != "gui-birth" or item["ownerPid"] is None, "kernel-birth-state")
+        require(item["status"] == "returned" or item["ownerPid"] is None and item["birth"] is None
+                and item["differsFromInitial"] is None, "kernel-refused-state")
+        require(item["operation"] != "gui-owner" or item["ownerPid"] is None or initial is None
+                or item["differsFromInitial"] == (item["ownerPid"] != initial), "kernel-owner-comparison")
+        require(item["operation"] != "gui-birth" or item["birth"] is None
+                or record["initialGuiBirth"] is None
+                or item["differsFromInitial"] == (item["birth"] != record["initialGuiBirth"]),
+                "kernel-birth-comparison")
+    comparison = record["primaryComparison"]
+    if comparison is not None:
+        require(isinstance(comparison, dict) and set(comparison) == {"phase", "reason", "ownerSequence",
+                "birthSequence", "ownerChanged", "birthEvaluated", "birthChanged"}
+                and comparison.get("phase") == "customer-gui-visible"
+                and comparison.get("reason") == "Tray fixture customer GUI birth or kernel owner changed"
+                and type(comparison.get("birthEvaluated")) is bool
+                and optional_bool(comparison.get("ownerChanged")) and optional_bool(comparison.get("birthChanged")),
+                "kernel-primary-schema")
+        for key, operation, changed in (("ownerSequence", "gui-owner", "ownerChanged"),
+                                        ("birthSequence", "gui-birth", "birthChanged")):
+            seq = comparison.get(key)
+            require(seq is None or type(seq) is int and 0 < seq <= len(rows), "kernel-primary-sequence")
+            if seq is not None:
+                row = rows[seq-1]
+                require(row["operation"] == operation and row["origin"] == "visible_gui"
+                        and comparison[changed] == row["differsFromInitial"], "kernel-primary-operands")
+            else:
+                require(comparison[changed] is None, "kernel-primary-unknown")
+        require(comparison["birthEvaluated"] == (comparison["birthSequence"] is not None)
+                and (not comparison["birthEvaluated"] or comparison["ownerSequence"] is not None
+                     and comparison["birthSequence"] > comparison["ownerSequence"]
+                     and comparison["ownerChanged"] is False
+                     and comparison["birthChanged"] is True), "kernel-primary-short-circuit")
+    window = record["postPrimary"]
+    require(isinstance(window, dict) and set(window) == {"attempted", "deadlineSeconds", "elapsedSeconds", "status",
+            "ownerPid", "ownerChanged", "serverLaunchMatch", "zeroAuth"}
+            and type(window.get("attempted")) is bool and type(window.get("deadlineSeconds")) is int
+            and window["deadlineSeconds"] == 4 and number(window.get("elapsedSeconds"), 5)
+            and window.get("status") in ("not-attempted", "noncanonical-app", "server-identity-unavailable",
+                 "server-identity-changed", "authenticated-connection", "ownership-unavailable", "observed",
+                 "deadline", "observation-refused")
+            and (window.get("ownerPid") is None or pid(window["ownerPid"]))
+            and optional_bool(window.get("ownerChanged")) and type(window.get("serverLaunchMatch")) is bool
+            and type(window.get("zeroAuth")) is bool, "kernel-post-primary-schema")
+    require(window["attempted"] or window == {"attempted": False, "deadlineSeconds": 4, "elapsedSeconds": 0,
+            "status": "not-attempted", "ownerPid": None, "ownerChanged": None, "serverLaunchMatch": False,
+            "zeroAuth": False}, "kernel-post-primary-state")
+    require(not window["attempted"] or comparison is not None, "kernel-primary-required")
+    require(window["status"] != "observed" or window["attempted"] and window["serverLaunchMatch"]
+            and window["zeroAuth"] and pid(window["ownerPid"])
+            and window["ownerChanged"] == (window["ownerPid"] != initial), "kernel-post-primary-authority")
+    require(window["status"] == "observed" or window["ownerPid"] is None and window["ownerChanged"] is None,
+            "kernel-post-primary-refusal")
+    return record
+
+
 def download_archive(destination):
     path = destination / "failed-arm-artifact.zip"
     with path.open("xb") as output:
@@ -669,6 +778,8 @@ def main(argv=None):
             private / "tray-runtime/launch-observation-safe-facts.json", MAX_FACTS)))
         sanitized["guiProbeObservations"] = safe_gui_facts(unique_json(bounded_read(
             private / "tray-runtime/gui-probe-safe-facts.json", MAX_FACTS)))
+        sanitized["kernelIdentityObservations"] = safe_kernel_facts(unique_json(bounded_read(
+            private / "tray-runtime/kernel-owner-safe-facts.json", MAX_FACTS)))
         if "criticalHashes" in sanitized:
             require(sanitized["criticalHashes"] == receipt["criticalHashes"], "runtime-exact-app-copy")
         else:
