@@ -30,7 +30,7 @@ file_transfer_spec.loader.exec_module(F)
 
 
 def source_files(source):
-    archive_args = ["git", "-C", str(source), "-c", "core.autocrlf=false", "archive", "--format=tar", P.PIN] + list(P.FILES)
+    archive_args = ["git", "-C", str(source), "-c", "core.autocrlf=false", "-c", "core.eol=lf", "archive", "--format=tar", P.PIN] + list(P.FILES)
     archive = subprocess.check_output(archive_args, timeout=60)
     inherited = dict(os.environ, GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="core.autocrlf", GIT_CONFIG_VALUE_0="true")
     assert subprocess.check_output(archive_args, env=inherited, timeout=60) == archive, "Inherited Git CRLF changed the pinned cleanup source"
@@ -154,7 +154,7 @@ def full_branding(out, files, source, bash=None):
     copied=out/"branding-pipeline-copy"
     copied.mkdir()
     revision=subprocess.check_output(["git","-C",str(ROOT),"rev-parse","HEAD"],text=True).strip()
-    archive_args=["git","-C",str(ROOT),"-c","core.autocrlf=false","archive","--format=tar",
+    archive_args=["git","-C",str(ROOT),"-c","core.autocrlf=false","-c","core.eol=lf","archive","--format=tar",
                   revision,"scripts","branding"]
     archive=subprocess.check_output(archive_args,timeout=60)
     inherited=dict(os.environ,GIT_CONFIG_COUNT="1",GIT_CONFIG_KEY_0="core.autocrlf",GIT_CONFIG_VALUE_0="true")

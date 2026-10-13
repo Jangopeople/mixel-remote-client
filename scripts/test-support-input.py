@@ -393,16 +393,50 @@ def queued_modifier_controls(repo: Path, dependency: Path) -> None:
     original = git_source(dependency, "src/linux/grab.rs")
     corrected = patcher.patch_grab(original)
     keyboard = git_source(dependency, "src/linux/keyboard.rs")
+    lint_help = subprocess.run([RUSTC, "-W", "help"], check=True, capture_output=True,
+                               text=True, encoding="utf-8", timeout=30)
+    has_static_mut_lint = re.search(r"(?m)^\s+static-mut-refs\s+", lint_help.stdout) is not None
+    # The literal inherited static access is exercised only by this sequential,
+    # single-threaded source fixture. Keep that code unchanged; allow its known
+    # lint on this one function when the compiler recognizes it, never in product
+    # source or as a crate/global warning policy.
+    fixture_attribute = "#[allow(static_mut_refs)]\n" if has_static_mut_lint else ""
     for mode, source in (("original", original), ("corrected", corrected)):
         harness = EVENT_STATE_HARNESS.replace("__ADD__", block(keyboard, "impl KeyboardState for Keyboard {"))
         for marker, name in (("__ISCONTROL__", "fn is_control("), ("__CONVERT__", "fn convert_event("), ("__READ__", "fn read_x_event(")):
             harness = harness.replace(marker, block(source, name))
         target = repo / ("queued-modifiers-" + mode + ".rs")
+        literal_harness = harness
+        conversion = block(source, "fn convert_event(")
+        assert harness.count(conversion) == 1
+        if has_static_mut_lint:
+            unannotated = repo / ("queued-modifiers-" + mode + "-unannotated.rs")
+            unannotated.write_text(harness, encoding="utf-8")
+            old_compilation = subprocess.run([RUSTC, "--edition=2021", "-D", "warnings", "--cfg", mode,
+                                             str(unannotated), "-o", str(unannotated.with_suffix(".exe" if os.name == "nt" else ""))],
+                                            capture_output=True, text=True, encoding="utf-8", timeout=90)
+            assert old_compilation.returncode != 0 and "static_mut_refs" in old_compilation.stderr, old_compilation.stderr
+            if args.evidence_dir:
+                shutil.copyfile(unannotated, args.evidence_dir / unannotated.name)
+                (args.evidence_dir / ("queued-modifiers-" + mode + "-unannotated-compile.log")).write_text(
+                    old_compilation.stdout + old_compilation.stderr, encoding="utf-8")
+        harness = harness.replace(conversion, fixture_attribute + conversion, 1)
+        assert harness.replace(fixture_attribute + conversion, conversion, 1) == literal_harness
         target.write_text(harness, encoding="utf-8")
         binary = target.with_suffix(".exe" if os.name == "nt" else "")
         compilation = subprocess.run([RUSTC, "--edition=2021", "-D", "warnings", "--cfg", mode, str(target), "-o", str(binary)],
                                      capture_output=True, text=True, encoding="utf-8", timeout=90)
         assert compilation.returncode == 0, compilation.stderr
+        warning_target = repo / ("queued-modifiers-" + mode + "-unrelated-warning.rs")
+        warning_target.write_text(harness + "\nfn unrelated_unused_fixture_function() {}\n", encoding="utf-8")
+        warning_compilation = subprocess.run([RUSTC, "--edition=2021", "-D", "warnings", "--cfg", mode,
+                                             str(warning_target), "-o", str(warning_target.with_suffix(".exe" if os.name == "nt" else ""))],
+                                            capture_output=True, text=True, encoding="utf-8", timeout=90)
+        assert warning_compilation.returncode != 0 and "unrelated_unused_fixture_function" in warning_compilation.stderr, warning_compilation.stderr
+        if args.evidence_dir:
+            shutil.copyfile(warning_target, args.evidence_dir / warning_target.name)
+            (args.evidence_dir / ("queued-modifiers-" + mode + "-unrelated-warning-compile.log")).write_text(
+                warning_compilation.stdout + warning_compilation.stderr, encoding="utf-8")
         executed = subprocess.run([str(binary)], capture_output=True, text=True, encoding="utf-8", timeout=15)
         assert executed.returncode == 0, executed.stderr
         print(executed.stdout.strip())

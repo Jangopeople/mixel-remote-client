@@ -230,7 +230,7 @@ def shell_controls(out,bash,source):
     archive_inputs={}
     for mode in ("true","false"):
         raw=subprocess.check_output(["git","-C",str(ROOT),"-c","core.autocrlf="+mode,
-            "archive","--format=tar","HEAD","scripts/apply-branding.sh","branding/branding.env"],timeout=60)
+            "-c","core.eol=lf","archive","--format=tar","HEAD","scripts/apply-branding.sh","branding/branding.env"],timeout=60)
         (out/("actual-shell-archive-autocrlf-"+mode+".tar")).write_bytes(raw)
         with tarfile.open(fileobj=io.BytesIO(raw)) as stream:
             archive_inputs[mode]={member.name:stream.extractfile(member).read()
@@ -388,7 +388,7 @@ def dependency_profile(out,dependency,setting,label):
         target=dependency/name
         assert target.is_file() and not target.is_symlink() and target.stat().st_nlink==1
         target.unlink()
-    run(["git","-C",str(dependency),"checkout","HEAD","--","."],out,label+"-checkout-all")
+    run(["git","-C",str(dependency),"-c","core.autocrlf="+setting,"-c","core.eol="+("crlf" if setting=="true" else "lf"),"checkout","HEAD","--","."],out,label+"-checkout-all")
     newline=b"\r\n" if setting=="true" else b"\n"
     for name in tracked:
         actual=(dependency/name).read_bytes()
@@ -411,7 +411,7 @@ def dependency_profile(out,dependency,setting,label):
 def pipeline(out,source,bash):
     copied=out/"pipeline-source"
     copied.mkdir()
-    archive=subprocess.check_output(["git","-C",str(ROOT),"-c","core.autocrlf=false","archive","--format=tar","HEAD","scripts","branding"],timeout=60)
+    archive=subprocess.check_output(["git","-C",str(ROOT),"-c","core.autocrlf=false","-c","core.eol=lf","archive","--format=tar","HEAD","scripts","branding"],timeout=60)
     with tarfile.open(fileobj=io.BytesIO(archive)) as stream:
         for member in stream:
             if member.isfile():
@@ -468,14 +468,14 @@ def pipeline(out,source,bash):
                           ["remote","add","origin",R.UPSTREAM],
                           ["fetch","--quiet","--depth","1","origin",R.PIN],
                           ["checkout","--quiet","--detach",R.PIN]):
-            run(["git","-C",str(dependency),*arguments],out,"pipeline-"+label+"-initial-"+arguments[0]+("-eol" if "core.eol" in arguments else ""))
+            run(["git","-C",str(dependency),"-c","core.autocrlf="+initial_profile,"-c","core.eol="+("crlf" if initial_profile=="true" else "lf"),*arguments],out,"pipeline-"+label+"-initial-"+arguments[0]+("-eol" if "core.eol" in arguments else ""))
         initial_tracked=snapshot(dependency)
         initial_newline=b"\r\n" if initial_profile=="true" else b"\n"
         for relative in initial_tracked:
             logical=subprocess.check_output(["git","-C",str(dependency),"cat-file","blob","HEAD:"+relative],timeout=60)
             assert (dependency/relative).read_bytes()==logical.replace(b"\n",initial_newline),relative
         (out/("pipeline-"+label+"-initial-tracked.json")).write_text(json.dumps(initial_tracked,sort_keys=True,indent=2)+"\n",encoding="utf-8")
-        env=dict(os.environ,RDREPO=repo.as_posix(),BRANDING=(copied/"branding").as_posix())
+        env=dict(os.environ,RDREPO=repo.as_posix(),BRANDING=(copied/"branding").as_posix(),GIT_CONFIG_COUNT="0")
         run([sys.executable,str(copied/"scripts/patch-support-input.py")],out,"pipeline-"+label+"-initial-input",env=env)
         run([bash,script.as_posix()],out,"pipeline-"+label+"-1",cwd=copied,env=env)
         F.verify_previous_layers(repo) if (repo/F.GENERATED).exists() else S.apply(repo,check=True)

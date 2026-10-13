@@ -50,6 +50,7 @@ jobs:
           python3 scripts/test-macos-native-minimum.py
           python3 scripts/test-macos-bundle-minimum.py
           python3 scripts/test-sdk-discovery.py
+          python3 scripts/test-pinned-source-archives.py
           python3 scripts/test-support-session-fixture.py
           python3 scripts/test-flutter-branding.py
           python3 scripts/test-support-video-sampling.py

@@ -269,7 +269,7 @@ def pipeline_snapshot(root):
 def full_branding(out,bash):
     copied=out/'branding-pipeline-copy'; copied.mkdir()
     revision=subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True).strip()
-    archive_args=['git','-C',str(ROOT),'-c','core.autocrlf=false','archive','--format=tar',revision,'scripts','branding']
+    archive_args=['git','-C',str(ROOT),'-c','core.autocrlf=false','-c','core.eol=lf','archive','--format=tar',revision,'scripts','branding']
     archive=subprocess.check_output(archive_args)
     inherited=dict(os.environ,GIT_CONFIG_COUNT='1',GIT_CONFIG_KEY_0='core.autocrlf',GIT_CONFIG_VALUE_0='true')
     assert subprocess.check_output(archive_args,env=inherited)==archive,'Inherited Git CRLF changed the exact pipeline source archive'
