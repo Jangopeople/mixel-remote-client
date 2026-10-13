@@ -176,8 +176,8 @@ if($generated.IndexOf('Start-StandardValidQaNamespace') -lt 0 -or $generated.Ind
         self.assertEqual(workflow.count(compiler_control), 2)
         workflow = workflow.replace(compiler_control, '', 2)
         # Reverse only the exact hosted Windows source-job budget before its historical pin.
-        current_budget = "  windows-packaging:\n    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_source_runner == 'windows-2025' && 'windows-2025' || 'windows-2022' }}\n    timeout-minutes: 45\n"
-        historical_budget = current_budget.replace('    timeout-minutes: 45\n', '    timeout-minutes: 20\n', 1)
+        current_budget = "  windows-packaging:\n    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_source_runner == 'windows-2025' && 'windows-2025' || 'windows-2022' }}\n    timeout-minutes: 60\n"
+        historical_budget = current_budget.replace('    timeout-minutes: 60\n', '    timeout-minutes: 20\n', 1)
         self.assertEqual(workflow.count(current_budget), 1)
         workflow = workflow.replace(current_budget, historical_budget, 1)
         for original, added, count in COMPOSED_WORKFLOW_PROJECTION:
