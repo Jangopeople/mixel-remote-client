@@ -1796,7 +1796,7 @@ Write-Host "Actual PowerShell version: $($PSVersionTable.PSVersion); $($PSVersio
 
 
     @staticmethod
-    def nt_control_run(body, csharp_controls=""):
+    def nt_control_run(body, csharp_controls="", alias_owned_path=False):
         with tempfile.TemporaryDirectory(prefix="mixel-same-child-nt-controls-") as temporary:
             root = Path(temporary)
             helper = (ROOT / "scripts/test-support-nt-event-binding.cs").read_text(encoding="utf-8")
@@ -1848,7 +1848,8 @@ Add-NtControlType ([IO.File]::ReadAllText($Source))
                 owned = root / edition
                 owned.mkdir()
                 result = subprocess.run([engine,"-NoProfile","-File",str(control),str(source),
-                    str(ROOT/"scripts/test-support-lease-standard-windows.ps1"),str(owned)],
+                    str(ROOT/"scripts/test-support-lease-standard-windows.ps1"),
+                    str(owned)+os.sep+"." if alias_owned_path else str(owned)],
                     capture_output=True,text=True,encoding="utf-8",timeout=90)
                 if result.returncode:
                     raise AssertionError(result.stdout + result.stderr)
@@ -2101,7 +2102,7 @@ $script:lines=[Collections.Generic.List[string]]::new()
 function Write-Host {param($Object)$script:lines.Add([string]$Object)}
 function Check($condition,$message){if(-not $condition){throw ($message+";mockFacts="+($script:lines -join " | ")+";mockErrors="+(@($leaseContextFailures | ForEach-Object {$_.Message}) -join " | "))}}
 function Reset($name,$scenario){
- $script:fixtureRoot=Join-Path $Owned $name;[IO.Directory]::CreateDirectory($fixtureRoot)|Out-Null
+ $script:fixtureRoot=[IO.Path]::GetFullPath((Join-Path $Owned $name));[IO.Directory]::CreateDirectory($fixtureRoot)|Out-Null
  $script:executable=Join-Path $fixtureRoot 'lease-standard.exe';[IO.File]::WriteAllText($executable,'same reused EXE')
  $script:resultPath=Join-Path $fixtureRoot 'fixture-result.json';$script:ownedUser='mockQA';$script:ownedPassword='mockOnly';$script:ownedSid='not serialized'
  $script:ntPendingProtocols=[Collections.Generic.List[object]]::new();$script:ntPreservedRoots=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
@@ -2198,6 +2199,9 @@ Check $refused 'Exited retained child could issue a qualified reply'
 Microsoft.PowerShell.Utility\Write-Host 'PASS: actual PS orchestration both launchers preserve original raw5/PID result, bind/issue/validate/ack/exit/drain in the same reused directory; wrong tuple/malformed reply/foreign arm/ordinary no opt-in/pending live+late exit/strict reporter/native5 precedence plus real byte/sharing/original-deadline controls. Native factory/process/account/child APIs mocked; POSIX owned-lock HRESULT35 is explicitly mapped to Windows32 only in this test wrapper, while Windows actual file errors remain unchanged.'
 """
         self.nt_control_run(body,controls)
+        # The real protocol ledger canonicalizes its owned directory. Exercise
+        # an actual filesystem alias as well, keeping every refusal/drain assertion.
+        self.nt_control_run(body,controls,alias_owned_path=True)
 
 
 if __name__ == "__main__":
