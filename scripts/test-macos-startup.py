@@ -257,7 +257,7 @@ class StartupTests(unittest.TestCase):
             # CI may invoke this gate before branding. Rebuild the exact full
             # product pipeline in a private pinned checkout, never the input.
             with tempfile.TemporaryDirectory(prefix="mixel-startup-source-") as directory:
-                root = Path(directory) / "rustdesk"
+                root = Path(directory).resolve() / "rustdesk"
                 def command(args, **kwargs):
                     result = subprocess.run(args, capture_output=True, text=True, timeout=90, **kwargs)
                     if result.returncode: raise RuntimeError(result.stdout[-3000:] + result.stderr[-3000:])

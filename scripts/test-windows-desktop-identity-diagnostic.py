@@ -315,7 +315,38 @@ foreach($name in @('Write-OwnedDesktopIdentityDiagnostic','Complete-OwnedNoncano
   if($functions.Count -ne 1) {throw 'Actual composed helper is missing or duplicated'}
   . ([scriptblock]::Create($functions[0].Extent.Text))
 }
-Add-Type -TypeDefinition ([IO.File]::ReadAllText((Join-Path $ControlRoot 'union-mock.cs'))) -CompilerOptions /warnaserror+ -ErrorAction Stop
+function Add-UnionControlType([string]$Definition) {
+  if ($PSVersionTable.PSEdition -ceq 'Desktop') {
+    if ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1) { throw 'Actual stock Desktop5.1 compiler is required.' }
+    $parameters = [System.CodeDom.Compiler.CompilerParameters]::new()
+    $parameters.GenerateInMemory = $true
+    $parameters.TreatWarningsAsErrors = $true
+    $parameters.WarningLevel = 4
+    [void]$parameters.ReferencedAssemblies.Add('System.dll')
+    [void]$parameters.ReferencedAssemblies.Add('System.Core.dll')
+    Add-Type -TypeDefinition $Definition -CompilerParameters $parameters -ErrorAction Stop
+  } elseif ($PSVersionTable.PSEdition -ceq 'Core') {
+    Add-Type -TypeDefinition $Definition -CompilerOptions '/warnaserror+' -ErrorAction Stop
+  } else { throw 'Unknown actual PowerShell compiler edition.' }
+}
+# This warning must remain fatal before compiling the actual mock/helper.
+# Its diagnostic code proves a compiler warning, rather than another failure.
+$warningFailure = $null
+try { Add-UnionControlType 'public static class MixelUnionUnusedWarningControl { public static void Run() { int unused; } }' }
+catch { $warningFailure = $_ }
+$warningCode = $null
+if ($warningFailure) {
+  if ($PSVersionTable.PSEdition -ceq 'Desktop' -and $warningFailure.FullyQualifiedErrorId -cmatch '^SOURCE_CODE_ERROR(?:,|$)') {
+    # FullCLR Add-Type retains ErrorNumber in the public compiler-error target;
+    # its displayed ErrorText does not have to contain that separate code.
+    $warningCode = $warningFailure.TargetObject.ErrorNumber
+  } elseif ($PSVersionTable.PSEdition -ceq 'Core' -and $warningFailure.ToString() -cmatch '\bCS0168\b') { $warningCode = 'CS0168' }
+}
+if (-not $warningFailure -or $warningCode -isnot [string] -or $warningCode -cne 'CS0168' -or ('MixelUnionUnusedWarningControl' -as [type])) {
+  throw ('The actual source-control compiler did not refuse its unused-variable warning; edition=' + $PSVersionTable.PSEdition + '; throwSeen=' + [bool]$warningFailure + '; targetCode=' + $warningCode + '; typeLoaded=' + [bool]('MixelUnionUnusedWarningControl' -as [type]))
+}
+Write-Host ('PASS: actual ' + $PSVersionTable.PSEdition + ' C# compiler keeps CS0168 fatal; no warning suppression.')
+Add-UnionControlType ([IO.File]::ReadAllText((Join-Path $ControlRoot 'union-mock.cs')))
 function Get-Process {param([int]$Id)
   if($Id -eq $PID) {return [pscustomobject]@{SessionId=2}}
   if($Id -ne 403) {throw 'Unexpected process lookup subject'}
@@ -580,6 +611,7 @@ class DesktopIdentityControls(unittest.TestCase):
                                         capture_output=True, text=True, encoding="utf-8", timeout=60)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertIn("28 normal/stop/close/dispose/hash/combined fault", result.stdout)
+                self.assertIn("actual " + edition + " C# compiler keeps CS0168 fatal; no warning suppression.", result.stdout)
                 print(result.stdout, flush=True)
 
 

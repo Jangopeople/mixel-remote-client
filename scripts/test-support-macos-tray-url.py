@@ -98,11 +98,34 @@ class TrayTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         current=(UPSTREAM/"src/tray.rs").read_text()
+        if patch.MARKER not in current and patch.digest(current.encode())==patch.PRISTINE_SHA256:
+            # CI also invokes this gate before branding. Materialize the exact
+            # full pipeline privately: never brand or relax pins on its input.
+            with tempfile.TemporaryDirectory(prefix="mixel-tray-source-") as directory:
+                root=Path(directory).resolve()/"rustdesk"
+                def command(args,**kwargs):
+                    result=subprocess.run(args,capture_output=True,text=True,timeout=90,**kwargs)
+                    if result.returncode:raise RuntimeError(result.stdout[-3000:]+result.stderr[-3000:])
+                    return result
+                command(["git","clone","--quiet","--shared","--branch","1.4.6",str(UPSTREAM.resolve()),str(root)])
+                assert command(["git","-C",str(root),"rev-parse","HEAD"]).stdout.strip()=="1abc897c451c8b5bbff3792509a7fef9d12f2ce3"
+                command(["git","clone","--quiet","--shared",str((UPSTREAM/"libs/hbb_common").resolve()),str(root/"libs/hbb_common")])
+                pin=command(["git","-C",str(root),"ls-tree","HEAD","libs/hbb_common"]).stdout.split()[2]
+                command(["git","-C",str(root/"libs/hbb_common"),"checkout","--quiet",pin])
+                command(["bash",str(SCRIPTS/"apply-branding.sh")],cwd=SCRIPTS.parent,
+                        env={**os.environ,"RDREPO":str(root),"BRANDING":str(SCRIPTS.parent/"branding")})
+                current=(root/"src/tray.rs").read_text()
+                assert patch.MARKER in current, "Exact full pipeline did not apply the Mac tray overlay"
+                cls.common=(root/"src/common.rs").read_text()
+                cls.queue=(root/"src/mixel_support_url.rs").read_text()
+        else:
+            cls.common=(UPSTREAM/"src/common.rs").read_text()
+            cls.queue=(UPSTREAM/"src/mixel_support_url.rs").read_text()
         cls.original=patch.transform(current,True) if patch.MARKER in current else current
         assert patch.digest(cls.original.encode())==patch.INPUT_SHA256
         cls.fixed=patch.transform(cls.original)
-        cls.common=(UPSTREAM/"src/common.rs").read_text()
-        cls.queue=(UPSTREAM/"src/mixel_support_url.rs").read_text()
+        if patch.MARKER in current:
+            assert cls.fixed==current, "Exact final Mac tray overlay was not materialized"
         cls.rustc=os.environ.get("RUSTC_BIN","rustc")
         if not shutil.which(cls.rustc):raise SystemExit("Rust compiler required for actual Mac Tao callback gate")
     def test_actual_generated_callback_worker_validator_and_existing_delegator(self):
