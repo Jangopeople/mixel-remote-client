@@ -31,15 +31,20 @@ def run(command, **kwargs):
 
 
 def make_source(repo, source, newline):
-    # Read only exact whole-file profiles; no synthetic anchor-only acceptance.
-    patch.apply(source, restore=True, check=True)
-    raw = [patch.safe_target(source, f, optional=i == 3).read_bytes() if (source / f).exists() else None for i, f in enumerate(patch.FILES)]
-    canonical = [patch.canonical(d)[0] if d is not None else None for d in raw]
-    original = patch.project(*canonical, restore=True)
-    for relative, data in zip(patch.FILES, original):
-        if data is not None:
-            path = repo / relative; path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(data.replace(b'\n', newline))
+    # Validate and invert only the complete late launch layer on a private copy.
+    spec = importlib.util.spec_from_file_location("updater_launch_projection", ROOT / "patch-support-macos-gui-launch.py")
+    launch = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(launch)
+    with launch.previous(source) as source:
+        # Read only exact whole-file profiles; no synthetic anchor-only acceptance.
+        patch.apply(source, restore=True, check=True)
+        raw = [patch.safe_target(source, f, optional=i == 3).read_bytes() if (source / f).exists() else None for i, f in enumerate(patch.FILES)]
+        canonical = [patch.canonical(d)[0] if d is not None else None for d in raw]
+        original = patch.project(*canonical, restore=True)
+        for relative, data in zip(patch.FILES, original):
+            if data is not None:
+                path = repo / relative; path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(data.replace(b'\n', newline))
 
 
 def snapshot(repo):

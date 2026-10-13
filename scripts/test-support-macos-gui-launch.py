@@ -540,7 +540,17 @@ fn test_command()->std::io::Result<std::process::Command> {
  let deadline=std::time::Instant::now()+std::time::Duration::from_secs(3);while LEASE_CALLS.load(std::sync::atomic::Ordering::SeqCst)==0{assert!(std::time::Instant::now()<deadline);std::thread::sleep(std::time::Duration::from_millis(5));}
  let offered=std::time::Instant::now();for _ in 0..64 {server::mixel_gui_launch::submit(SECOND.into());server::mixel_gui_launch::submit(String::new());}assert!(offered.elapsed()<std::time::Duration::from_millis(250));assert_eq!(*SPAWNS.lock().unwrap(),0);
  *LEASE_BLOCK.lock().unwrap()=false;LEASE_EVENT.notify_all();while *SPAWNS.lock().unwrap()==0{assert!(std::time::Instant::now()<deadline);std::thread::sleep(std::time::Duration::from_millis(5));}
- *CHILD_READY.lock().unwrap()=true;std::thread::sleep(std::time::Duration::from_millis(150));assert_eq!(*SPAWNS.lock().unwrap(),1);assert_eq!(DELIVERED.lock().unwrap().as_slice(),[SECOND.to_owned()]);password_security::actual_parent_not_owner();std::thread::sleep(std::time::Duration::from_millis(850));password_security::actual_parent_absent();
+ *CHILD_READY.lock().unwrap()=true;
+ // Observed spawn reservation precedes actual exec completion. Wait for the
+ // exact delivery inside the original three-second case budget.
+ while DELIVERED.lock().unwrap().is_empty(){assert!(std::time::Instant::now()<deadline,"latest delivery missing within original case budget");password_security::actual_parent_not_owner();std::thread::sleep(std::time::Duration::from_millis(5));}
+ assert!(std::time::Instant::now()<deadline,"latest delivery observed after original case budget");
+ assert_eq!(*SPAWNS.lock().unwrap(),1);assert_eq!(DELIVERED.lock().unwrap().as_slice(),[SECOND.to_owned()]);password_security::actual_parent_not_owner();
+ // Require actual kernel release after the owned child exits; every sample
+ // still forbids parent OWNER/memory state, and the case budget is unchanged.
+ while password_security::actual_kernel_active(){assert!(std::time::Instant::now()<deadline,"owned consent guard did not release within original case budget");password_security::actual_parent_not_owner();std::thread::sleep(std::time::Duration::from_millis(5));}
+ assert!(std::time::Instant::now()<deadline,"kernel release observed after original case budget");
+ password_security::actual_parent_absent();
 }
 #[test]fn newest_ingress_survives_64_callbacks_while_lease_worker_is_blocked(){
  let base=std::path::PathBuf::from(std::env::var_os("MIXEL_TEST_ROOT").unwrap()).join("blocked-lease-gate");std::fs::create_dir(&base).unwrap();

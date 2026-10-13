@@ -298,13 +298,23 @@ def native_controls(folder,source,rustc,original_platform):
     return result
 
 
-def main():
+def main(_projected_source=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source',type=Path,required=True)
     parser.add_argument('--upstream-repo',type=Path)
     parser.add_argument('--evidence-dir',type=Path)
     parser.add_argument('--linux-sysroot',type=Path)
     args=parser.parse_args()
+    if _projected_source is not None:
+        args.source = _projected_source
+    # Validate and reverse the final launch layer in a private read-only context
+    # before the original fatal owner/profile checks and native fixture setup.
+    launch_spec = importlib.util.spec_from_file_location('fatal_fixture_launch', HERE/'patch-support-macos-gui-launch.py')
+    launch = importlib.util.module_from_spec(launch_spec)
+    launch_spec.loader.exec_module(launch)
+    with launch.previous(args.source) as previous:
+        if previous != args.source.absolute():
+            return main(previous)
     # Validate supplied source before compiler/output/network work.
     input_paths=[P.safe_target(args.source,name) for name in P.FILES]
     raw=[path.read_bytes() for path in input_paths]
