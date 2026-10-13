@@ -274,11 +274,25 @@ class ReleasePipelineTests(unittest.TestCase):
         self.assertFalse((self.destination / "launcher.exe").exists())
 
 
+def original_mac_wrapper_calls(workflow):
+    prefixes = [['python3 ../scripts/test-support-launch-macos.py --app', 'python3 ../scripts/test-support-launch-macos-concurrency.py --original-desktop --app'], ['python3 ../scripts/test-support-launch-macos-tray.py --app', 'python3 ../scripts/test-support-launch-macos-concurrency.py --original-tray --app'], ['python3 scripts/test-support-launch-macos.py --app', 'python3 scripts/test-support-launch-macos-concurrency.py --original-desktop --app'], ['python3 scripts/test-support-launch-macos-tray.py --app', 'python3 scripts/test-support-launch-macos-concurrency.py --original-tray --app']]
+    counts = [workflow.count(current) for prior, current in prefixes]
+    if counts == [0] * len(prefixes):
+        if any(workflow.count(prior) != 1 for prior, current in prefixes):
+            raise AssertionError("Historical Mac callback callers changed")
+        return workflow
+    if counts != [1] * len(prefixes):
+        raise AssertionError("Partial or duplicate thread-safe Mac wrapper calls")
+    for prior, current in prefixes:
+        workflow = workflow.replace(current, prior, 1)
+    return workflow
+
+
 class MacTrayProofPathTests(unittest.TestCase):
     """Run the two actual caller snippets and real main path guards, no native app."""
 
     def callers(self):
-        workflow = (ROOT / ".github/workflows/build.yml").read_text(encoding="utf-8")
+        workflow = original_mac_wrapper_calls((ROOT / ".github/workflows/build.yml").read_text(encoding="utf-8"))
         producer = (
             'TRAY_PROOF_ROOT="$(cd ../runtime-diagnostics && pwd -P)"\n'
             'python3 ../scripts/test-support-launch-macos-tray.py --app "$APP_PATH" \\\n'

@@ -48,6 +48,7 @@ jobs:
           python3 scripts/test-release-pipeline.py
           python3 scripts/test-flutter-sdk-pipeline.py
           python3 scripts/test-support-url-log-privacy.py
+          python3 scripts/test-support-launch-macos-concurrency-controls.py --evidence-dir "$RUNNER_TEMP/mixel-macos-concurrency-source"
           python3 scripts/test-standard-lease-qa-bundle.py
           python3 scripts/test-windows-release-runtime.py
           python3 scripts/test-notarize-macos.py
@@ -394,7 +395,7 @@ jobs:
       - name: Exercise native macOS URL activation and window probe self-tests
         run: |
           python3 scripts/test-support-launch-macos-diagnostics.py
-          python3 scripts/test-support-launch-macos.py --self-test
+          python3 scripts/test-support-launch-macos-concurrency.py --original-desktop --self-test
           python3 scripts/test-support-macos-uri-routing.py
           python3 scripts/test-macos-native-minimum.py
           python3 scripts/test-macos-bundle-minimum.py

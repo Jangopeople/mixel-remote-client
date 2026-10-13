@@ -708,13 +708,15 @@ jobs:
 
             # Exercise this exact signed/stapled app through real URL activation
             # before it becomes a downloadable installer.
-            python3 ../scripts/test-support-launch-macos.py --app "$APP_PATH" \
+            python3 ../scripts/test-support-launch-macos-concurrency.py --original-desktop --app "$APP_PATH" \
               --diagnostics "$DIAGNOSTICS/runtime" --diagnostic-app-zip "$DIAGNOSTIC_APP_ZIP"
 
             mkdir -p ../runtime-diagnostics
             TRAY_PROOF_ROOT="$(cd ../runtime-diagnostics && pwd -P)"
-            python3 ../scripts/test-support-launch-macos-tray.py --app "$APP_PATH" \
+            python3 ../scripts/test-support-launch-macos-concurrency.py --original-tray --app "$APP_PATH" \
               --proofs "$TRAY_PROOF_ROOT/macos-${{ matrix.job.arch }}-tray"
+            python3 ../scripts/test-support-launch-macos-concurrency.py --app "$APP_PATH" \
+              --proofs "$TRAY_PROOF_ROOT/macos-${{ matrix.job.arch }}-concurrency"
 
             # 3) Package stapled .app into DMG, then sign/notarize/staple DMG.
             create-dmg --window-size 800 400 \
@@ -1381,10 +1383,12 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$APP_PATH"
           xcrun stapler validate "$APP_PATH"
           spctl --assess --type execute --verbose=2 "$APP_PATH"
-          python3 scripts/test-support-launch-macos.py --app "$APP_PATH" | tee "runtime-diagnostics/macos-${EXPECTED_ARCH}.log"
+          python3 scripts/test-support-launch-macos-concurrency.py --original-desktop --app "$APP_PATH" | tee "runtime-diagnostics/macos-${EXPECTED_ARCH}.log"
           TRAY_PROOF_ROOT="$(cd runtime-diagnostics && pwd -P)"
-          python3 scripts/test-support-launch-macos-tray.py --app "$APP_PATH" \
+          python3 scripts/test-support-launch-macos-concurrency.py --original-tray --app "$APP_PATH" \
             --proofs "$TRAY_PROOF_ROOT/macos-${EXPECTED_ARCH}-tray"
+          python3 scripts/test-support-launch-macos-concurrency.py --app "$APP_PATH" \
+            --proofs "$TRAY_PROOF_ROOT/macos-${EXPECTED_ARCH}-concurrency"
       - uses: actions/upload-artifact@v6
         if: always()
         with:

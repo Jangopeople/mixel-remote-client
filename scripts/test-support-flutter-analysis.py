@@ -72,6 +72,14 @@ def startup_baseline(source):
     This projection never accepts an unpinned input or changes supplied source.
     """
     source = Path(source).resolve()
+    launch_spec = importlib.util.spec_from_file_location("mixel_fixture_launch", ROOT / "scripts/patch-support-macos-gui-launch.py")
+    launch = importlib.util.module_from_spec(launch_spec)
+    launch_spec.loader.exec_module(launch)
+    if launch.has_layer(source):
+        with launch.previous(source) as previous:
+            with startup_baseline(previous) as checked:
+                yield checked
+        return
     spec = importlib.util.spec_from_file_location("mixel_fixture_startup", ROOT / "scripts/patch-macos-startup.py")
     startup = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(startup)
@@ -516,6 +524,7 @@ def pipeline(out,source,bash):
                  "patch-support-uinput-device.py","test-support-uinput-device.py",
                  "patch-support-native-warnings.py","test-support-native-warnings.py",
                  "patch-support-compiler-cleanup.py","test-support-compiler-cleanup.py",
+                 "patch-support-macos-gui-launch.py","test-support-macos-gui-launch.py","support-macos-gui-launch.rs",
                  "patch-support-fingerprint.py","test-support-fingerprint.py",
                  "patch-support-fatal-crash.py","test-support-fatal-crash.py",
                  "patch-macos-startup.py","test-macos-startup.py","test-macos-startup-ui.dart","macos-startup-failure.dart",

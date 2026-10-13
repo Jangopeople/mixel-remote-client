@@ -2,7 +2,8 @@
 """Execute exact Tao callback prefix/helper/delegator using private offline seams.
 
 No NSApplication, URI delivery, installed IPC, native app, services, preferences,
-process signals, HTTP or external socket is used. The URL representation, IPC
+app process signals or HTTP is used. The additive coordinator gate uses only
+owned fixture children and loopback peers on Mac; portable source controls elsewhere. The URL representation, IPC
 outcome and thread-builder failure are explicit in-memory fixture adapters.
 """
 import argparse
@@ -94,6 +95,14 @@ def fixture(original,fixed,common,queue):
     delegate=method(common,"pub fn handle_url_scheme(url: String)")
     return SEAMS+"mod server {pub(crate) mod mixel_support_url {"+queue+"}}\n"+delegate+"\n"+helper+callback("original_callback",old)+callback("corrected_callback",new)+TESTS
 
+def read_previous_tray_profile(root):
+    # The complete late launch layer is validated on the original input before
+    # its exact private inverse exposes the unchanged historical tray seam.
+    spec=importlib.util.spec_from_file_location("tray_launch_projection",SCRIPTS/"patch-support-macos-gui-launch.py")
+    launch=importlib.util.module_from_spec(spec);spec.loader.exec_module(launch)
+    with launch.previous(root) as prior:
+        return tuple((prior/name).read_text() for name in ("src/tray.rs","src/common.rs","src/mixel_support_url.rs"))
+
 class TrayTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -114,13 +123,10 @@ class TrayTests(unittest.TestCase):
                 command(["git","-C",str(root/"libs/hbb_common"),"checkout","--quiet",pin])
                 command(["bash",str(SCRIPTS/"apply-branding.sh")],cwd=SCRIPTS.parent,
                         env={**os.environ,"RDREPO":str(root),"BRANDING":str(SCRIPTS.parent/"branding")})
-                current=(root/"src/tray.rs").read_text()
+                current,cls.common,cls.queue=read_previous_tray_profile(root)
                 assert patch.MARKER in current, "Exact full pipeline did not apply the Mac tray overlay"
-                cls.common=(root/"src/common.rs").read_text()
-                cls.queue=(root/"src/mixel_support_url.rs").read_text()
         else:
-            cls.common=(UPSTREAM/"src/common.rs").read_text()
-            cls.queue=(UPSTREAM/"src/mixel_support_url.rs").read_text()
+            current,cls.common,cls.queue=read_previous_tray_profile(UPSTREAM)
         cls.original=patch.transform(current,True) if patch.MARKER in current else current
         assert patch.digest(cls.original.encode())==patch.INPUT_SHA256
         cls.fixed=patch.transform(cls.original)
@@ -169,6 +175,14 @@ class TrayTests(unittest.TestCase):
                 root=Path(temp);(root/"src").mkdir();path=root/"src/tray.rs";path.write_text(body)
                 with self.assertRaises(SystemExit):patch.apply(root)
                 self.assertEqual(path.read_text(),body)
+
+class LaunchCoordinatorControls(unittest.TestCase):
+    def test_compiled_coordinator_generation_transport_and_owned_lifecycle(self):
+        with tempfile.TemporaryDirectory(prefix="mixel-gui-launch-controls-") as temporary:
+            result=subprocess.run([sys.executable,str(SCRIPTS/"test-support-macos-gui-launch.py"),"--output",str(Path(temporary)/"proof")],capture_output=True,text=True,encoding="utf-8",timeout=90)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            self.assertIn("PASS exact support/ordinary typed sender",result.stdout)
+
 
 if __name__=="__main__":
     if sys.platform not in {"darwin","linux"}:raise SystemExit("Mac tray offline fixture runs on macOS/Linux; no Windows gate")

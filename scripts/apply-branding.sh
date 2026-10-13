@@ -33,6 +33,10 @@ fi
 # shellcheck source=/dev/null
 source "$BRANDING/branding.env"
 
+# Validate/invert the exact final launch layer before any previous owner writes.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-gui-launch.py" --root "$RDREPO" --restore --check --before-branding
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-gui-launch.py" --root "$RDREPO" --restore
+
 # Validate the disjoint final URL privacy leaf before any owner writes.
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-url-log-privacy.py" --root "$RDREPO" --restore --check
 
@@ -1065,5 +1069,8 @@ python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-compiler-cleanup.py" --roo
 
 # Preserve callback delivery while removing full URLs from the final Mac logger.
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-url-log-privacy.py" --root "$RDREPO"
+
+# Launch ownership is the final reversible functional layer.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-gui-launch.py" --root "$RDREPO" --after-branding
 
 echo "✓ Branding applied — product identity is $APP_NAME only."

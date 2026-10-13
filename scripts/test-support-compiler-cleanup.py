@@ -342,7 +342,12 @@ def composed_controls(source, out, bash):
               cwd=Path(__file__).resolve().parents[1], env=dict(os.environ,RDREPO=str(repo),BRANDING=str(Path(__file__).resolve().parents[1]/'branding')),
               capture_output=True,text=True,encoding='utf-8',timeout=180)
         (out/('macro-prior-refusal-'+str(index)+'.log')).write_text(result.stdout+result.stderr,encoding='utf-8')
-        assert result.returncode != 0 and ('Compiler prior' in result.stderr or 'Composed prior' in result.stderr), (name,result.returncode,result.stderr)
+        # L owns the exact final tray profile before C's prior-chain guard.
+        # This one overlapping negative must fail at that earlier full hash.
+        expected_refusal = ('Pinned or partial Mac launch profile changed' in result.stderr
+                            if name == 'src/tray.rs' else
+                            ('Compiler prior' in result.stderr or 'Composed prior' in result.stderr))
+        assert result.returncode != 0 and expected_refusal, (name,result.returncode,result.stderr)
         assert production_snapshot(repo) == before, name
         path.write_bytes(saved); attempted.append(name)
     # Names used by build caches must not conceal foreign owned inventory.
@@ -527,6 +532,14 @@ def main():
     shell=importlib.util.module_from_spec(shell_spec);shell_spec.loader.exec_module(shell)
     args.bash=shell.qualified_bash(args.bash,os.name=='nt')
     shell.shell_path_controls(args.evidence_dir)
+    launch_spec=importlib.util.spec_from_file_location('compiler_launch_previous',Path(__file__).with_name('patch-support-macos-gui-launch.py'))
+    launch=importlib.util.module_from_spec(launch_spec);launch_spec.loader.exec_module(launch)
+    with launch.previous(args.source) as previous:
+        args.source=previous
+        qualify_previous(args,parser)
+
+
+def qualify_previous(args,parser):
     before=production_snapshot(args.source)
     original=args.evidence_dir/'exact-original';original.mkdir()
     texts, _, (profile, state)=P.inventory(args.source)

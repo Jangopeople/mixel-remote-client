@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Remove URL payloads from two exact Mac callbacks without changing delivery.
+"""Keep Mac callback logs private and give tray support URLs one delivery owner.
 
 The RustDesk leaf can run on every source platform. The Tao leaf requires an
 explicit owned Cargo home: never discover or modify the user's Cargo checkout.
@@ -30,9 +30,15 @@ SOURCES = {
         'after': 'trace!("Get `application:openURLs:` URLs received.");',
     },
 }
+# The old privacy-only profile is accepted solely for exact restoration.
+# Apply then starts from the original whole file after the macro's early restore.
+PRIVACY_ONLY_RUSTDESK = '44df6e0cffbd3c2a02dd81c4b9867a44875a297fa866b3cb92c86d8bcadccd75'
+CALLBACK_ANCHOR = '            std::thread::spawn(move || crate::handle_url_scheme(theurl));'
+SUPPORT_OWNER_GUARD = '            // Tao invokes this native callback before emitting Event::Opened.\n            // Its tray route owns validated support intents; do not dispatch twice.\n            #[cfg(feature = "flutter")]\n            if matches!(std::env::args().nth(1).as_deref(), Some("--tray" | "--server"))\n                && crate::server::mixel_support_url::is_valid_support_url(&theurl)\n            {\n                continue;\n            }\n'
+
 # Whole-file corrected fingerprints are independently bound by source controls.
 CORRECTED = {
-    'rustdesk': '44df6e0cffbd3c2a02dd81c4b9867a44875a297fa866b3cb92c86d8bcadccd75',
+    'rustdesk': '17260041d58c152b8520c6c64a4a6030b9699f7e9ddce22bbf00acaeae2f27a1',
     'tao': '460ab62a629e3fda7f54603d2f6f68524ab5fb9be1092de37d2b9529c214d8b1',
 }
 
@@ -59,16 +65,34 @@ def transform(kind, data, restore=False):
         if text.count(spec['before']) != 1 or spec['after'] in text:
             raise RuntimeError('Original logger ownership mismatch')
         corrected = text.replace(spec['before'], spec['after'])
+        if kind == 'rustdesk':
+            if corrected.count(CALLBACK_ANCHOR) != 1:
+                raise RuntimeError('Original callback ownership mismatch')
+            corrected = corrected.replace(CALLBACK_ANCHOR, SUPPORT_OWNER_GUARD + CALLBACK_ANCHOR)
         if digest(corrected.encode()) != CORRECTED[kind]:
             raise RuntimeError('Corrected logger fingerprint mismatch')
         output = text if restore else corrected
     elif fingerprint == CORRECTED[kind]:
         if text.count(spec['after']) != 1 or spec['before'] in text:
             raise RuntimeError('Corrected logger ownership mismatch')
-        original = text.replace(spec['after'], spec['before'])
+        original = text
+        if kind == 'rustdesk':
+            if original.count(SUPPORT_OWNER_GUARD + CALLBACK_ANCHOR) != 1:
+                raise RuntimeError('Corrected callback ownership mismatch')
+            original = original.replace(SUPPORT_OWNER_GUARD + CALLBACK_ANCHOR, CALLBACK_ANCHOR)
+        original = original.replace(spec['after'], spec['before'])
         if digest(original.encode()) != spec['original']:
             raise RuntimeError('Logger inverse fingerprint mismatch')
         output = original if restore else text
+    elif kind == 'rustdesk' and fingerprint == PRIVACY_ONLY_RUSTDESK:
+        if not restore:
+            raise RuntimeError('Legacy privacy-only callback requires exact early restoration')
+        if text.count(spec['after']) != 1 or spec['before'] in text or SUPPORT_OWNER_GUARD in text:
+            raise RuntimeError('Legacy privacy-only callback ownership mismatch')
+        original = text.replace(spec['after'], spec['before'])
+        if digest(original.encode()) != spec['original']:
+            raise RuntimeError('Legacy privacy-only inverse fingerprint mismatch')
+        output = original
     else:
         raise RuntimeError('Pinned URL logger source changed: ' + kind)
     return output.replace('\n', profile).encode()

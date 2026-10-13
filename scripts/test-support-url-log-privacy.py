@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Source-only URL logger privacy and forwarding regression controls."""
+"""Source-only private URL logs and single-owner Mac support forwarding controls."""
 import ast
 import base64
 import hashlib
@@ -52,12 +52,121 @@ class PrivacyControls(unittest.TestCase):
                 normalized, eol = P.canonical(after)
                 self.assertEqual(eol.encode(), profile)
                 self.assertEqual(P.digest(normalized.encode()), P.CORRECTED[kind])
-                inverse = normalized.replace(P.SOURCES[kind]['after'], P.SOURCES[kind]['before'])
+                inverse = normalized
+                if kind == 'rustdesk':
+                    self.assertEqual(inverse.count(P.SUPPORT_OWNER_GUARD + P.CALLBACK_ANCHOR), 1)
+                    inverse = inverse.replace(P.SUPPORT_OWNER_GUARD + P.CALLBACK_ANCHOR, P.CALLBACK_ANCHOR)
+                inverse = inverse.replace(P.SOURCES[kind]['after'], P.SOURCES[kind]['before'])
                 self.assertEqual(inverse.encode(), original)
                 name = 'handle_open_urls' if kind == 'rustdesk' else 'application_open_urls'
                 self.assertEqual(function(inverse, name), function(original.decode(), name))
                 self.assertEqual(normalized.count(P.SOURCES[kind]['after']), 1)
                 self.assertNotIn(P.SOURCES[kind]['before'], normalized)
+
+    def test_old_privacy_only_profile_restores_exactly_before_new_apply(self):
+        original = source('rustdesk')
+        legacy = original.replace(P.SOURCES['rustdesk']['before'].encode(), P.SOURCES['rustdesk']['after'].encode())
+        self.assertEqual(P.digest(legacy), P.PRIVACY_ONLY_RUSTDESK)
+        for newline in (b'\n', b'\r\n'):
+            raw = legacy.replace(b'\n', newline)
+            with self.assertRaisesRegex(RuntimeError, 'requires exact early restoration'):
+                P.transform('rustdesk', raw)
+            restored = P.transform('rustdesk', raw, True)
+            self.assertEqual(restored, original.replace(b'\n', newline))
+            fixed = P.transform('rustdesk', restored)
+            self.assertEqual(P.transform('rustdesk', fixed, True), restored)
+            with tempfile.TemporaryDirectory(prefix='url-privacy-migration-') as directory:
+                root = Path(directory).resolve()
+                path = root / P.SOURCES['rustdesk']['path']
+                path.parent.mkdir(parents=True); path.write_bytes(raw)
+                self.assertEqual(P.apply(root, 'rustdesk', True, True), 0)
+                self.assertEqual(path.read_bytes(), raw)
+                self.assertEqual(P.apply(root, 'rustdesk', True), 1)
+                self.assertEqual(path.read_bytes(), restored)
+                self.assertEqual(P.apply(root, 'rustdesk'), 1)
+                self.assertEqual(path.read_bytes(), fixed)
+        for corruption in (legacy+b'// foreign\n', legacy.replace(b'URL received.', b'URL changed.'),
+                           legacy.replace(b'\n', b'\r\n', 1)):
+            for restore in (False, True):
+                with self.assertRaises(RuntimeError): P.transform('rustdesk', corruption, restore)
+
+    def test_actual_native_callback_scope_uses_existing_validator(self):
+        # Reuse the literal native-array adapters from the unchanged original
+        # compiled callback test; execute the actual complete callback bodies.
+        tree = ast.parse((ROOT/'scripts/test-support-url-log-privacy.py').read_text())
+        owner = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
+                     and n.name == 'test_compiled_actual_callback_forwarding_and_fixed_payloads')
+        assignment = next(n for n in owner.body if isinstance(n, ast.Assign)
+                          and any(isinstance(t, ast.Name) and t.id == 'harness' for t in n.targets))
+        harness = ast.literal_eval(assignment.value)
+        main = r"""fn main() {
+    let valid="mixel-remote://support/?invite=inv_00000000-0000-0000-0000-000000000001&apikey=synthetic-fixture-key-000000".to_owned();
+    let ordinary="mixel-remote://123456789".to_owned();
+    let invalid="mixel-remote://support/?invite=invalid&apikey=synthetic-fixture-key-000000".to_owned();
+    let values=vec![valid.clone(),ordinary.clone(),invalid.clone()];
+    let role=std::env::args().nth(1).unwrap_or_default();
+    let skip=cfg!(feature="flutter") && matches!(role.as_str(),"--tray"|"--server");
+    let expected=if skip {vec![ordinary,invalid]}else{values.clone()};
+    let array=FakeArray{urls:values.iter().map(|value|FakeUrl{string:CString::new(value.as_str()).unwrap()}).collect()};
+    application_open_urls(&Object(0),Sel(std::ptr::null()),std::ptr::null(),&array as *const FakeArray as id);
+    let mut forwarded=FORWARDED.lock().unwrap();
+    while forwarded.len()<expected.len(){let (next,result)=DONE.wait_timeout(forwarded,Duration::from_secs(5)).unwrap();forwarded=next;assert!(!result.timed_out());}
+    let mut actual=forwarded.clone();actual.sort();let mut sorted=expected;sorted.sort();assert_eq!(actual,sorted);
+    assert_eq!(*PARSED.lock().unwrap(),values); // Event::Opened retains all URLs.
+    assert_eq!(LOGS.lock().unwrap().iter().filter(|(level,_)|*level=="debug").count(),3);
+    println!("PASS: exact native callback scopes validated support to Tao only for Flutter tray/server; all other callbacks and URLs conserved");
+}
+"""
+        harness = harness[:harness.index('fn main() {')] + main
+        queue = (ROOT/'scripts/support-macos-url-queue.rs').resolve()
+        self.assertTrue(queue.is_file())
+        parser = 'mod server {pub(crate) mod mixel_support_url {\n' + queue.read_text() + '\n}}\n'
+        bodies = ('mod delegate { use super::{Object,Sel,id,cocoa,log}; use super::cocoa::foundation::NSString; #[no_mangle] '
+                  +function(P.transform('rustdesk',source('rustdesk')).decode(),'handle_open_urls')+' }\n'
+                  +'extern "C" { fn handle_open_urls(obj: &Object, sel: Sel, id: id, urls: id); }\n'
+                  +function(P.transform('tao',source('tao')).decode(),'application_open_urls'))
+        rustc=os.environ.get('RUSTC_BIN') or shutil.which('rustc')
+        self.assertIsNotNone(rustc)
+        with tempfile.TemporaryDirectory(prefix='url-single-owner-rust-') as directory:
+            root=Path(directory).resolve()
+            for enabled in (False, True):
+                path=root/('flutter.rs' if enabled else 'nonflutter.rs')
+                path.write_text(harness.replace('/* ACTUAL_CALLBACKS */',parser+bodies),encoding='utf-8',newline='\n')
+                binary=path.with_suffix('')
+                command=[str(rustc),'--edition=2021','--cfg','test','-Dwarnings',str(path),'-o',str(binary)]
+                if enabled:command.extend(['--cfg','feature="flutter"'])
+                result=subprocess.run(command,capture_output=True,text=True,timeout=60)
+                self.assertEqual(result.returncode,0,result.stderr)
+                for role in ('--tray','--server','--cm','--service','--connect','', '--tray-extra'):
+                    result=subprocess.run([str(binary),*([role] if role else [])],capture_output=True,text=True,timeout=15)
+                    self.assertEqual(result.returncode,0,result.stderr)
+                    self.assertEqual(result.stdout,'PASS: exact native callback scopes validated support to Tao only for Flutter tray/server; all other callbacks and URLs conserved\n')
+
+    def test_exact_support_owner_guard_drift_refuses_before_any_write(self):
+        corrected = P.transform('rustdesk', source('rustdesk'))
+        mutations = (
+            corrected.replace(b'feature = "flutter"', b'feature = "wrong"'),
+            corrected.replace(b'Some("--tray" | "--server")', b'Some("--tray" | "--cm")'),
+            corrected.replace(b'&& crate::server::mixel_support_url::is_valid_support_url(&theurl)', b'|| crate::server::mixel_support_url::is_valid_support_url(&theurl)'),
+            corrected.replace(b'                continue;\n', b'                return;\n'),
+            corrected.replace(P.SUPPORT_OWNER_GUARD.encode(), b'            // unknown callback owner\n'),
+            corrected.replace(P.SUPPORT_OWNER_GUARD.encode(), (P.SUPPORT_OWNER_GUARD*2).encode()),
+        )
+        self.assertTrue(all(raw != corrected for raw in mutations))
+        refused = 0
+        with tempfile.TemporaryDirectory(prefix='url-owner-refusals-') as directory:
+            root=Path(directory).resolve(); path=root/P.SOURCES['rustdesk']['path']
+            path.parent.mkdir(parents=True)
+            for raw in mutations:
+                for newline in (b'\n',b'\r\n'):
+                    before=raw.replace(b'\n',newline);path.write_bytes(before)
+                    for restore in (False,True):
+                        for check in (False,True):
+                            with self.assertRaisesRegex(RuntimeError,'Pinned URL logger source changed'):
+                                P.apply(root,'rustdesk',restore,check)
+                            self.assertEqual(path.read_bytes(),before)
+                            refused+=1
+        self.assertEqual(refused,48)
 
     def test_unknown_encoding_and_source_refused(self):
         for kind in P.SOURCES:
