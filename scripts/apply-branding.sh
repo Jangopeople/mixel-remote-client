@@ -35,9 +35,12 @@ source "$BRANDING/branding.env"
 
 # Restore exact owned compatibility and Quit overlays in reverse order before
 # pinned earlier helpers see canonical inputs on repeated branding passes.
-# Check the independent input dependency before either earlier overlay writes;
-# the SDK restore already validates the complete Quit/cleanup chain virtually.
+# Validate file-transfer, keyboard and input ownership before any restore writes.
+# The file-transfer check projects the exact prior SDK/Quit/cleanup chain.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-file-transfer-window.py" --restore --check --before-branding "$RDREPO"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-keyboard-default.py" --check
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-rdev.py" --restore --check "$RDREPO"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-file-transfer-window.py" --restore "$RDREPO"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-flutter-sdk-compatibility.py" --restore "$RDREPO"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-termination.py" --restore "$RDREPO"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-rdev.py" --restore "$RDREPO"
@@ -1011,5 +1014,7 @@ echo "   native loaders, protocol handlers, Linux app identity and relay default
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-flutter-analysis.py"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-termination.py" "$RDREPO"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-flutter-sdk-compatibility.py" "$RDREPO"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-file-transfer-window.py" "$RDREPO"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-keyboard-default.py"
 
 echo "✓ Branding applied — product identity is $APP_NAME only."

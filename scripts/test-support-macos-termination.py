@@ -22,6 +22,10 @@ sdk_spec=importlib.util.spec_from_file_location("mixel_sdk_compatibility_composi
 S=importlib.util.module_from_spec(sdk_spec)
 sdk_spec.loader.exec_module(S)
 
+file_transfer_spec=importlib.util.spec_from_file_location("mixel_file_transfer_composition",ROOT/"scripts/patch-support-file-transfer-window.py")
+F=importlib.util.module_from_spec(file_transfer_spec)
+file_transfer_spec.loader.exec_module(F)
+
 
 def run(args, out, label, cwd=None):
     if os.name=='nt' and Path(args[0]).suffix.lower()=='.bat':
@@ -50,7 +54,8 @@ def snapshot(root):
 
 
 def source_controls(source, out):
-    (S.apply(source,check=True) if (source/S.OWNED).exists() else P.apply(source,check=True))
+    if (source/F.GENERATED).exists(): F.apply(source,restore=True,check=True); F.verify_previous_layers(source)
+    else: (S.apply(source,check=True) if (source/S.OWNED).exists() else P.apply(source,check=True))
     count = 0
     for ending in (b'\n', b'\r\n'):
         fixture = out/('source-lf' if ending == b'\n' else 'source-crlf')
@@ -139,6 +144,7 @@ def source_controls(source, out):
 
 def canonical(source,name):
     current,_=P.normalize(S.regular(source/S.OWNED,name) if (source/S.OWNED).exists() and name in S.FILES else P.regular(source,name))
+    if name in F.COMPOSED and (source/F.GENERATED).exists(): current=F.transform(name,current,restore=True)
     if P.digest(current)==P.FILES[name]: return current
     original=P.regular(source/'flutter/.mixel-dependencies/macos_application_exit',name)
     if P.digest(original)!=P.FILES[name] or current!=P.transform(name,original):
@@ -274,7 +280,9 @@ def full_branding(out,bash):
                 target.write_bytes(stream.extractfile(member).read())
     for name in ('apply-branding.sh','patch-support-macos-termination.py','test-support-macos-termination.py',
                  'patch-support-flutter-sdk-compatibility.py','test-support-flutter-sdk-compatibility.py',
-                 'test-support-flutter-analysis.py','test-support-macos-cleanup.py','test-support-macos-window.py'):
+                 'test-support-flutter-analysis.py','test-support-macos-cleanup.py','test-support-macos-window.py',
+                 'patch-support-file-transfer-window.py','test-support-file-transfer-window.py',
+                 'patch-support-keyboard-default.py'):
         shutil.copy2(ROOT/'scripts'/name,copied/'scripts'/name)
     verifier=copied/'scripts/patch-support-macos-cleanup.py'
     verifier_lf,_=P.normalize(verifier.read_bytes())
@@ -308,11 +316,14 @@ def full_branding(out,bash):
                 # to LF. The standalone controls prove our incoming-byte
                 # preservation; here both original checkout newline variants
                 # must produce exact corrected bodies and stable all-file bytes.
+                if name in F.COMPOSED and name not in S.FILES and (repo/F.GENERATED).exists(): current=F.transform(name,current,restore=True)
                 assert current==P.transform(name,original),name
-            S.apply(repo,check=True)
+            F.verify_previous_layers(repo) if (repo/F.GENERATED).exists() else S.apply(repo,check=True)
             for name in S.FILES:
                 original=S.regular(repo/S.OWNED,name)
-                assert S.normalize(S.regular(repo,name))[0]==S.transform(name,original),name
+                actual=S.normalize(S.regular(repo,name))[0]
+                if name in F.COMPOSED and (repo/F.GENERATED).exists(): actual=F.transform(name,actual,restore=True)
+                assert actual==S.transform(name,original),name
             current=pipeline_snapshot(repo)
             if attempt==1: first=current
             else: assert first==current,'Whole branding changed on its second pass'
@@ -855,6 +866,8 @@ def dart_controls(out, app, flutter, pipeline):
     if app:
         copied=out/'app-fixture'
         shutil.copytree(app,copied,ignore=shutil.ignore_patterns('.git','build','__pycache__'))
+        file_transfer=(copied/F.GENERATED).exists() or (copied/F.GENERATED).is_symlink()
+        if file_transfer: F.apply(copied,restore=True)
         if (copied/S.OWNED).exists(): S.apply(copied,restore=True)
         for name in (*P.FILES,P.GENERATED):
             shutil.copy2(fixture/name,copied/name)
@@ -888,6 +901,7 @@ dev_dependencies:
         version=json.loads(run([str(flutter),'--version','--machine'],out,'actual-full-app-sdk-version',copied/'flutter'))['frameworkVersion']
         if version==S.SDK:
             S.apply(copied)
+            if file_transfer: F.apply(copied)
             run([str(flutter),'pub','get'],out,'actual-full-app-sdk-pub-get',copied/'flutter')
         run([str(flutter),'analyze','--no-pub','--no-fatal-infos'],out,'flutter-full-app-analysis',copied/'flutter')
     print('PASS: actual Flutter resource/handler controls'+(' and complete app analysis.' if app else '.'))

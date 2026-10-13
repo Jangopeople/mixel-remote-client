@@ -31,6 +31,10 @@ rdev_spec=importlib.util.spec_from_file_location("mixel_rdev_fixture_profiles",R
 R=importlib.util.module_from_spec(rdev_spec)
 rdev_spec.loader.exec_module(R)
 
+file_transfer_spec=importlib.util.spec_from_file_location("mixel_file_transfer_composition",ROOT/"scripts/patch-support-file-transfer-window.py")
+F=importlib.util.module_from_spec(file_transfer_spec)
+file_transfer_spec.loader.exec_module(F)
+
 
 def run(args,out,label,*,cwd=None,env=None,success=True):
     # The parent decoder cannot configure a captured Python child's encoder.
@@ -421,7 +425,9 @@ def pipeline(out,source,bash):
                  "patch-support-macos-termination.py","test-support-macos-termination.py",
                  "patch-support-flutter-sdk-compatibility.py","test-support-flutter-sdk-compatibility.py",
                  "test-support-macos-cleanup.py","test-support-macos-window.py",
-                 "patch-support-macos-rdev.py","patch-support-input.py"):
+                 "patch-support-macos-rdev.py","patch-support-input.py",
+                 "patch-support-file-transfer-window.py","test-support-file-transfer-window.py",
+                 "patch-support-keyboard-default.py"):
         shutil.copyfile(ROOT/"scripts"/name,copied/"scripts"/name)
     script=copied/"scripts/apply-branding.sh"
     shell_source="$"+"{BASH_SOURCE[0]}"
@@ -471,9 +477,10 @@ def pipeline(out,source,bash):
         env=dict(os.environ,RDREPO=repo.as_posix(),BRANDING=(copied/"branding").as_posix())
         run([sys.executable,str(copied/"scripts/patch-support-input.py")],out,"pipeline-"+label+"-initial-input",env=env)
         run([bash,script.as_posix()],out,"pipeline-"+label+"-1",cwd=copied,env=env)
-        S.apply(repo,check=True)
+        F.verify_previous_layers(repo) if (repo/F.GENERATED).exists() else S.apply(repo,check=True)
         for name,(_,corrected,*_) in P.FILES.items():
             actual=(repo/name).read_bytes().replace(b"\r\n",b"\n")
+            if name in F.COMPOSED and (repo/F.GENERATED).exists(): actual=F.transform(name,actual,restore=True)
             canonical=(T.regular(repo/"flutter/.mixel-dependencies/macos_application_exit",name)
                        if name in T.FILES else actual)
             assert sha(canonical)==corrected,name
@@ -558,7 +565,8 @@ def pipeline(out,source,bash):
         target.write_bytes(saved+b"// unapproved drift\n")
         before=snapshot(repo)
         failed=run([bash,script.as_posix()],out,"pipeline-"+label+"-refusal",cwd=copied,env=env,success=False)
-        assert_pipeline_refusal(failed,"Changed application-exit current source: flutter/lib/common.dart")
+        marker=("Pinned file-transfer window source changed: "+name) if (repo/F.GENERATED).exists() else "Changed application-exit current source: flutter/lib/common.dart"
+        assert_pipeline_refusal(failed,marker)
         assert snapshot(repo)==before,"Drift refusal changed another pipeline file"
         target.write_bytes(saved)
         if app_newlines=="lf":
@@ -712,7 +720,9 @@ def analyze_app(out,source,flutter,files):
     source_before=snapshot(source/"flutter")
     sdk_overlay=(source/S.OWNED).exists() or (source/S.OWNED).is_symlink()
     application_exit=(source/T.GENERATED).exists() or (source/T.GENERATED).is_symlink()
-    if sdk_overlay: S.apply(source,check=True)
+    file_transfer=(source/F.GENERATED).exists() or (source/F.GENERATED).is_symlink()
+    if file_transfer: F.apply(source,restore=True,check=True); F.verify_previous_layers(source)
+    elif sdk_overlay: S.apply(source,check=True)
     elif application_exit: T.apply(source,check=True)
     for name in P.FILES:
         canonical=(T.regular(source/"flutter/.mixel-dependencies/macos_application_exit",name)
@@ -730,6 +740,7 @@ def analyze_app(out,source,flutter,files):
         for name in T.FILES:
             target=checkout/name; target.parent.mkdir(parents=True,exist_ok=True)
             shutil.copyfile(source/name,target)
+    if file_transfer: F.apply(checkout,restore=True)
     if sdk_overlay: S.apply(checkout,restore=True)
     if application_exit: T.apply(checkout,restore=True)
     for name in P.FILES: (checkout/name).write_bytes(files[name])
@@ -758,6 +769,7 @@ def analyze_app(out,source,flutter,files):
     # original six-file correction retained its own independent byte boundary.
     if application_exit: T.apply(checkout)
     if version==S.SDK or sdk_overlay: S.apply(checkout)
+    if file_transfer: F.apply(checkout)
     corrected=run([str(flutter),"analyze","--no-pub","--no-fatal-infos"],out,"actual-full-app-corrected",cwd=checkout/"flutter",env=env)
     fixed,_=diagnostic_counts(corrected.stdout+corrected.stderr)
     assert fixed["error"]==0 and fixed["warning"]==0 and fixed["info"]==counts["info"],fixed

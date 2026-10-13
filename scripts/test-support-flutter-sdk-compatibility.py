@@ -30,6 +30,7 @@ S = load('patch-support-flutter-sdk-compatibility.py')
 T = load('patch-support-macos-termination.py')
 P = load('patch-support-macos-cleanup.py')
 A = load('test-support-flutter-analysis.py')
+F = load('patch-support-file-transfer-window.py')
 
 
 def snapshot(root):
@@ -52,16 +53,19 @@ def source_snapshot(source):
             files, directories = S.inventory(source, layer)
             result[layer] = {'files': {name: S.digest(data) for name, data in files.items()},
                              'directories': sorted(directories)}
+    if (source/F.GENERATED).exists() or (source/F.GENERATED).is_symlink():
+        result[F.GENERATED]=S.digest(F.safe_path(source,F.GENERATED))
     return result
 
 
 def capture(source, target, newline=b'\n'):
     sdk_owned = (source / S.OWNED).exists() or (source / S.OWNED).is_symlink()
     if sdk_owned:
-        S.apply(source, check=True)
+        F.verify_previous_layers(source) if (source/F.GENERATED).exists() else S.apply(source, check=True)
     target.mkdir()
     for name in {'Cargo.toml', *S.FILES, *T.FILES, *P.FILES, T.GENERATED, P.GENERATED}:
         data = S.regular(source, name)
+        if name in F.COMPOSED and (source/F.GENERATED).exists(): data=F.transform(name,data,restore=True)
         normalized, _ = S.normalize(data)
         path = target / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -370,7 +374,10 @@ def flutter_controls(out, source, flutter):
     shutil.copytree(source, app, ignore=shutil.ignore_patterns('.git', '.dart_tool', 'build', '.mixel-dependencies'))
     # Bring forward the exact locally owned plugins/provenance without caches.
     shutil.copytree(source / 'flutter/.mixel-dependencies', app / 'flutter/.mixel-dependencies')
+    file_transfer=(app/F.GENERATED).exists() or (app/F.GENERATED).is_symlink()
+    if file_transfer: F.apply(app,restore=True)
     S.apply(app)
+    if file_transfer: F.apply(app)
     run([flutter, '--version', '--machine'], app, out, 'actual-sdk-version')
     version = json.loads((out / 'actual-sdk-version.log').read_text())
     assert version['frameworkVersion'] == S.SDK and version['engineRevision'] == S.ENGINE
@@ -407,7 +414,9 @@ def full_branding(out, upstream, bash):
                 path = copied / member.name; path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(stream.extractfile(member).read())
     for name in ('apply-branding.sh', 'patch-support-flutter-sdk-compatibility.py',
-                 'test-support-flutter-sdk-compatibility.py', 'patch-support-macos-termination.py'):
+                 'test-support-flutter-sdk-compatibility.py', 'patch-support-macos-termination.py',
+                 'patch-support-file-transfer-window.py', 'test-support-file-transfer-window.py',
+                 'patch-support-keyboard-default.py'):
         (copied / 'scripts' / name).write_bytes((ROOT / 'scripts' / name).read_bytes())
     script = copied / 'scripts/apply-branding.sh'
     text = script.read_text(encoding='utf-8')
@@ -441,15 +450,18 @@ def full_branding(out, upstream, bash):
         env = dict(RDREPO=str(repo), BRANDING=str(copied / 'branding'))
         for attempt in (1, 2):
             run([bash, script], copied, out, f'pipeline-{label}-{attempt}', env)
-            S.apply(repo, check=True)
+            F.verify_previous_layers(repo) if (repo/F.GENERATED).exists() else S.apply(repo, check=True)
             for name in S.FILES:
                 original = S.regular(repo / S.OWNED, name)
                 assert S.digest(original) == S.FILES[name]
-                assert S.normalize(S.regular(repo, name))[0] == S.transform(name, original)
+                actual=S.normalize(S.regular(repo, name))[0]
+                if name in F.COMPOSED and (repo/F.GENERATED).exists(): actual=F.transform(name,actual,restore=True)
+                assert actual == S.transform(name, original)
             for name in T.FILES:
                 original = T.regular(repo / 'flutter/.mixel-dependencies/macos_application_exit', name)
                 assert T.digest(original) == T.FILES[name]
                 actual = S.regular(repo / S.OWNED, name) if name in S.FILES else S.normalize(S.regular(repo, name))[0]
+                if name in F.COMPOSED and name not in S.FILES and (repo/F.GENERATED).exists(): actual=F.transform(name,actual,restore=True)
                 assert actual == T.transform(name, original), name
             assert S.regular(repo, T.GENERATED) == T.UTILITY.encode()
             assert S.regular(repo, P.GENERATED) == P.UTILITY.encode()

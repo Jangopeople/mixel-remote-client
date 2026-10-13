@@ -221,7 +221,7 @@ jobs:
         uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: ${{ env.RUST_VERSION }}
-          targets: x86_64-unknown-linux-gnu
+          targets: x86_64-unknown-linux-gnu,x86_64-pc-windows-msvc,aarch64-apple-darwin
           components: rustfmt
 
       - name: Install Flutter
@@ -282,6 +282,7 @@ jobs:
         run: |
           python3 scripts/test-support-flutter-analysis.py --dart "$(command -v dart)"
           python3 scripts/test-support-flutter-sdk-compatibility.py --app rustdesk --flutter "$(command -v flutter)"
+          python3 scripts/test-support-file-transfer-window.py --app rustdesk --output "$RUNNER_TEMP/mixel-file-transfer-source" --flutter "$(command -v flutter)"
           python3 scripts/test-support-macos-termination.py --flutter "$(command -v flutter)"
           python3 scripts/test-support-invite.py
           python3 scripts/test-generated-support-paths.py
@@ -291,6 +292,7 @@ jobs:
           python3 scripts/test-support-linux.py
           python3 scripts/test-support-signals.py
           python3 scripts/test-support-input.py
+          python3 scripts/test-support-keyboard-default.py --source rustdesk --source-root "$PWD" --evidence-dir "$RUNNER_TEMP/mixel-keyboard-default-source" --linux-sysroot "$(rustc --print sysroot)"
           python3 scripts/test-support-clipboard.py --native-x11
           python3 scripts/test-support-video.py
           python3 scripts/test-support-macos.py

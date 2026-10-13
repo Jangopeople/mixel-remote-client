@@ -24,6 +24,10 @@ sdk_spec=importlib.util.spec_from_file_location("mixel_sdk_compatibility_composi
 S=importlib.util.module_from_spec(sdk_spec)
 sdk_spec.loader.exec_module(S)
 
+file_transfer_spec=importlib.util.spec_from_file_location("mixel_file_transfer_composition",ROOT/"scripts/patch-support-file-transfer-window.py")
+F=importlib.util.module_from_spec(file_transfer_spec)
+file_transfer_spec.loader.exec_module(F)
+
 
 def source_files(source):
     archive_args = ["git", "-C", str(source), "-c", "core.autocrlf=false", "archive", "--format=tar", P.PIN] + list(P.FILES)
@@ -164,7 +168,9 @@ def full_branding(out, files, source, bash=None):
     for name in ("apply-branding.sh","patch-support-macos-cleanup.py","test-support-macos-cleanup.py",
                  "patch-support-macos-termination.py","patch-support-flutter-sdk-compatibility.py",
                  "test-support-flutter-sdk-compatibility.py","test-support-flutter-analysis.py",
-                 "test-support-macos-termination.py","test-support-macos-window.py"):
+                 "test-support-macos-termination.py","test-support-macos-window.py",
+                 "patch-support-file-transfer-window.py","test-support-file-transfer-window.py",
+                 "patch-support-keyboard-default.py"):
         shutil.copyfile(ROOT/"scripts"/name,copied/"scripts"/name)
     script=copied/"scripts/apply-branding.sh"
     original=script.read_text()
@@ -199,7 +205,7 @@ def full_branding(out, files, source, bash=None):
             assert "patched bounded Mac page cleanup" in result.stdout
             assert "native loaders, protocol handlers, Linux app identity and relay defaults verified" in result.stdout
             before_check=pipeline_snapshot(repo)
-            S.apply(repo,check=True)
+            F.verify_previous_layers(repo) if (repo/F.GENERATED).exists() else S.apply(repo,check=True)
             assert pipeline_snapshot(repo)==before_check,"Final Quit validation mutated the pipeline"
             for name,data in files.items():
                 corrected=P.transform(name,data)
@@ -211,7 +217,9 @@ def full_branding(out, files, source, bash=None):
                     canonical=S.regular(repo/S.OWNED,name)
                     assert canonical==corrected,name
                     corrected=S.transform(name,canonical)
-                assert (repo/name).read_bytes()==corrected.replace(b"\n",newline),name
+                actual=(repo/name).read_bytes()
+                if name in F.COMPOSED and (repo/F.GENERATED).exists(): actual=F.transform(name,actual,restore=True)
+                assert actual==corrected.replace(b"\n",newline),name
                 assert (repo/P.OWNED/name).read_bytes()==data,name
             assert (repo/P.GENERATED).read_bytes()==P.UTILITY.encode()
             assert (repo/T.GENERATED).read_bytes()==T.UTILITY.encode()
