@@ -591,7 +591,10 @@ def wiring_controls(out,bash):
         actual=[json.loads(line) for line in (folder/'calls.jsonl').read_text(encoding='utf-8').splitlines()]
         assert actual[0].count('--bash')==1;active=actual[0][actual[0].index('--bash')+1]
         if profile=='windows':assert active==env['MIXEL_ACTIVE_BASH']
-        else:assert Path(active).resolve()==Path(shutil.which(bash) if bash=='bash' else bash).resolve()
+        else:
+            selected=run([bash,'-c','printf "%s\\n" "$BASH"'],out,'selected-active-bash-'+profile,env)
+            assert selected.returncode==0,selected.stderr
+            assert selected.stdout==active.encode('utf-8')+b'\n',(active,selected.stdout)
         assert actual[-1][0]==source_only and actual[-1][1:]==['--source',env['RUNNER_TEMP']+'/mixel-sdk-source/pipeline-lf','--source-only','--output',env['RUNNER_TEMP']+'/mixel-native-warning-source','--bash',active]
         assert 'scripts/test-support-lease.py' in [row[0] for row in actual] and 'dart' not in [row[0] for row in actual]
         calls.append({'dispatcher':'test-windows-generated-source.sh','profile':profile,'exactValidatedActiveBashForwarded':active,'warning_gate_failure':27,'original_source_tests_before_gate_conserved':True,'later_dart_unrun':True,'windowsPathConversionMocked':profile=='windows'})
