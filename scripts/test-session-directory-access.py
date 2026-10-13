@@ -383,7 +383,7 @@ foreach($mode in @('normal','set-false','set-throw','restore-false','restore-rea
         self.assertIn("MIXEL_SESSION_DIRECTORY_ABA: '1'",job)
         self.assertIn("GIT_CONFIG_KEY_1: core.eol",job)
         self.assertIn("GIT_CONFIG_VALUE_1: 'lf'",job)
-        self.assertLess(job.index('test-session-directory-access.py'),job.index('observe-session-directory-aba-windows.ps1'))
+        self.assertLess(job.index('test-session-directory-access.py'),job.index('observe-standard-valid-qa-windows.ps1'))
         self.assertIn('if: always()',job)
         self.assertNotIn('continue-on-error',job)
         self.assertNotIn('publish',job)
