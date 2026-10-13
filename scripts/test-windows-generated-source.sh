@@ -22,6 +22,8 @@ unset mixel_analyzer_bash
 for mixel_source_test in \
   test-support-invite \
   test-generated-support-paths \
+  test-hosted-standard-qa \
+  test-packaged-owned-qa \
   test-windows-lease-observation \
   test-support-lease \
   test-support-network \

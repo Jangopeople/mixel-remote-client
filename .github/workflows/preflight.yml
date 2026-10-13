@@ -144,6 +144,7 @@ jobs:
       - name: Exercise complete Windows generated source, keep-awake and native branding
         shell: bash
         env:
+          MIXEL_HOSTED_OWNED_QA_NAMESPACE: "1"
           RDREPO: ./rustdesk
           AOM_INCLUDE_DIR: ${{ github.workspace }}/native-aom-headers
         run: bash scripts/test-windows-generated-source.sh

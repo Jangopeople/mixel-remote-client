@@ -844,6 +844,7 @@ jobs:
         continue-on-error: ${{ needs.config.outputs.collect_windows_preflight_failure == 'true' }}
         shell: bash
         env:
+          MIXEL_HOSTED_OWNED_QA_NAMESPACE: "1"
           VCPKG_ROOT: ${{ github.workspace }}/vcpkg
           RDREPO: ./rustdesk
           MIXEL_SDK_FULL_APP_PREFLIGHT: "true"
@@ -987,6 +988,8 @@ jobs:
 
       - name: Exercise the signed QuickSupport download without an invite
         shell: pwsh
+        env:
+          MIXEL_HOSTED_OWNED_QA_NAMESPACE: "1"
         run: |
           ./scripts/test-support-launch-windows.ps1 -Executable dist/Mixel-Remote-QS.exe -Portable -QuickSupport -ExpectedPayload store-payload
 
@@ -1176,6 +1179,8 @@ jobs:
       - name: Diagnose signed compiled ordinary-to-QuickSupport ownership
         if: ${{ !inputs.runtime_windows_release_gate }}
         shell: pwsh
+        env:
+          MIXEL_HOSTED_OWNED_QA_NAMESPACE: "1"
         run: |
           # The retained artifact is the exact signed compiled payload. Pass the
           # native QS argument its portable launcher emits; the full build still
@@ -1184,6 +1189,8 @@ jobs:
       - name: Prove actual signed customer QuickSupport95 without debugger
         if: ${{ inputs.runtime_windows_release_gate }}
         shell: pwsh
+        env:
+          MIXEL_HOSTED_OWNED_QA_NAMESPACE: "1"
         run: |
           ./scripts/test-support-launch-windows.ps1 -Executable release-client/Mixel-Remote-QS.exe -Portable -QuickSupport -ExpectedPayload runtime-client -OrdinaryThenQuickSupport
       - name: Save synthetic runtime diagnostics

@@ -885,7 +885,12 @@ def main():
     if os.name == "nt":
         pwsh = shutil.which("pwsh")
         assert pwsh, "Actual Windows standard-account lease controls require PowerShell7"
-        subprocess.run([pwsh, "-NoProfile", "-File", str(ROOT / "scripts/test-support-lease-standard-windows.ps1")], check=True, timeout=180)
+        hosted_request = os.environ.get("MIXEL_HOSTED_OWNED_QA_NAMESPACE", "")
+        if hosted_request not in ("", "1"):
+            raise RuntimeError("Invalid hosted owned QA namespace request")
+        driver = ("invoke-hosted-standard-qa-windows.ps1" if hosted_request == "1"
+                  else "test-support-lease-standard-windows.ps1")
+        subprocess.run([pwsh, "-NoProfile", "-File", str(ROOT / "scripts" / driver)], check=True, timeout=180)
     print("Result: native cross-process attended lease lifecycle passed", flush=True)
 
 

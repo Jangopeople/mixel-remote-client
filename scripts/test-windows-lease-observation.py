@@ -908,6 +908,7 @@ if sys.argv[1]=='scripts/test-support-lease.py':
                 text=True, encoding="utf-8", timeout=15).strip()
             preceding = [
                 "scripts/test-support-invite.py", "scripts/test-generated-support-paths.py",
+                "scripts/test-hosted-standard-qa.py", "scripts/test-packaged-owned-qa.py",
                 "scripts/test-windows-lease-observation.py", "scripts/test-support-lease.py"]
             for full in (None, "", "false", "true", "TRUE", " true"):
                 with self.subTest(full_app_request=full):

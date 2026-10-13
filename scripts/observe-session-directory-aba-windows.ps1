@@ -129,12 +129,12 @@ $pins=ConvertFrom-Json @'
   "support-invite-guard.rs": "4b48b7995b36cc9662958ef8753be70ef0b6cf35626b7264f0151bc553293f29",
   "test-session-directory-access.cs": "c562cf11de6dc395d4a6aae6d887dbe7fb970603bde74c8e4d111ac26956eb76",
   "test-support-directory-security.cs": "3f70bcef70508b264a9559dbb9f7fc9bdbb0c3e28ea7929008dc084dec6d973e",
-  "test-support-launch-windows.ps1": "765b98c6324161018321eadb3528a14a844dc4dd1bee1df158c9f68db6c8af8e",
+  "test-support-launch-windows.ps1": "012ad7b7a2e52ddc7bd1c2c7aae63b7726187dab2d6aa2291bbb39de82928dec",
   "test-support-lease-standard-windows.ps1": "a9b0bf8ee68209f78a82ca4260c9d35faf10449a25f5976775731e98042a057f",
-  "test-support-lease.py": "f1051afc3860751cfea233216fa65cd1f7e29b639200f648c203dafc294530a9",
+  "test-support-lease.py": "d11b25c95232544eb64f5de78f0e31cbc54630dd832185c55edfb4a3157cd604",
   "test-support-nt-event-binding.cs": "4f166e8e0fbdce7a5fb6786862e031c5bb175704e7490a0e4a9feaac9fac62ca",
   "test-support-nt-event-child.rs": "80cf1b1969b66568910d3a84ba46d4749db1c5744aac21b69777cd795dc0b034",
-  "test-windows-lease-observation.py": "6f1ea99ec821be91fe88c13d8b62743346265e145b694dc4f05a60e94bcb121e"
+  "test-windows-lease-observation.py": "410b9b1e86a39c6e7a4b5c9b7ba46b88ae4300ce814a0624e8e7af6462ae3930"
 }
 '@
 foreach ($pin in $pins.PSObject.Properties) {

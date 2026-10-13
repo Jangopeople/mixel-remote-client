@@ -404,6 +404,330 @@ public static class MixelOrdinaryTokenFixture {
 }
 '@ }
 
+if (-not ('MixelPackagedQaTokenFacts' -as [type])) { Add-Type @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Security.Principal;
+public static class MixelPackagedQaTokenFacts {
+  [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
+  [DllImport("advapi32.dll", SetLastError=true)] static extern bool OpenProcessToken(IntPtr process,uint access,out IntPtr token);
+  [DllImport("advapi32.dll", SetLastError=true)] static extern bool GetTokenInformation(IntPtr token,int kind,IntPtr data,int size,out int required);
+  [DllImport("advapi32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool LogonUserW(string user,string domain,string password,uint logonType,uint provider,out IntPtr token);
+  [DllImport("kernel32.dll",EntryPoint="CloseHandle",ExactSpelling=true,SetLastError=true)] static extern bool CloseNativeHandle(IntPtr handle);
+  // One attempt, strict failure; literal query methods never silently lose ownership.
+  static bool CloseHandle(IntPtr handle) {
+    bool success=CloseNativeHandle(handle);int error=Marshal.GetLastWin32Error();
+    if(!success)throw new Win32Exception(error,"Owned packaged QA read-only token close failed");
+    return true;
+  }
+  static bool ElevatedToken(IntPtr token) {
+    IntPtr data = Marshal.AllocHGlobal(4);
+    try { int required; if (!GetTokenInformation(token, 20, data, 4, out required)) throw new Win32Exception(); return Marshal.ReadInt32(data) != 0; }
+    finally { Marshal.FreeHGlobal(data); }
+  }
+
+  enum ObservedTokenClass { Groups=2, Type=8, SessionId=12, ElevationType=18, LinkedToken=19, HasRestrictions=21, IntegrityLevel=25, LogonSid=28, IsAppContainer=29 }
+
+  [StructLayout(LayoutKind.Sequential)] struct ObservedSidAttributes { public IntPtr sid; public uint attributes; }
+
+  [StructLayout(LayoutKind.Sequential)] struct ObservedGroupsHeader { public uint count; public ObservedSidAttributes first; }
+
+  public sealed class ObservedTokenFacts {
+    public uint sessionId, integrityRid;
+    public bool sessionKnown=true;
+    public bool hasRestrictions, isAppContainer;
+    public uint hasRestrictionsReturnedLength, isAppContainerReturnedLength;
+    public string authenticatedUsers, interactive, users;
+    public string logonComparison="tokenLogonSidCount=unavailable;tokenLogonSidMatchesCaller=unavailable;tokenLogonSidQuerySubject=target;tokenLogonSidQueryFailure=not-measured;tokenLogonSidQueryError=none;tokenLogonSidQueryReturnedLength=none";
+    public string unavailableKind, unavailableFailure;
+    public int? unavailableError, unavailableLength;
+    public override string ToString() {
+      if(unavailableKind!=null) return "tokenSessionId=" + (sessionKnown ? sessionId.ToString(System.Globalization.CultureInfo.InvariantCulture) : "unavailable") +
+        ";tokenFacts=unavailable;tokenQueryKind=" + unavailableKind + ";tokenQueryFailure=" + unavailableFailure +
+        ";tokenQueryError=" + (unavailableError.HasValue ? unavailableError.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) : "none") +
+        ";tokenQueryReturnedLength=" + (unavailableLength.HasValue ? unavailableLength.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) : "none") + ";" + logonComparison;
+      return "tokenSessionId=" + sessionId.ToString(System.Globalization.CultureInfo.InvariantCulture) +
+        ";hasRestrictions=" + (hasRestrictions ? "true" : "false") +
+        ";hasRestrictionsReturnedLength=" + hasRestrictionsReturnedLength.ToString(System.Globalization.CultureInfo.InvariantCulture) +
+        ";isAppContainer=" + (isAppContainer ? "true" : "false") +
+        ";isAppContainerReturnedLength=" + isAppContainerReturnedLength.ToString(System.Globalization.CultureInfo.InvariantCulture) +
+        ";integrityRid=" + integrityRid.ToString(System.Globalization.CultureInfo.InvariantCulture) +
+        ";authenticatedUsers=" + authenticatedUsers + ";interactive=" + interactive + ";users=" + users + ";" + logonComparison;
+    }
+  }
+
+  sealed class ObservedTokenQueryFailure : InvalidOperationException {
+    public ObservedTokenClass kind;
+    public string failure;
+    public int? error, length;
+    public ObservedTokenQueryFailure(ObservedTokenClass kind, string failure, int? error, int? length) {
+      this.kind=kind; this.failure=failure; this.error=error; this.length=length;
+    }
+  }
+
+  static uint ObservedTokenDword(IntPtr token, ObservedTokenClass kind) {
+    IntPtr data=Marshal.AllocHGlobal(4);
+    try {
+      int required;
+      bool success=GetTokenInformation(token,(int)kind,data,4,out required);
+      int error=Marshal.GetLastWin32Error();
+      if (!success) throw new ObservedTokenQueryFailure(kind,"api-error",error,required);
+      if (required!=4) throw new ObservedTokenQueryFailure(kind,"returned-size",null,required);
+      return unchecked((uint)Marshal.ReadInt32(data));
+    } finally { Marshal.FreeHGlobal(data); }
+  }
+
+  static bool ObservedTokenBoolValue(IntPtr data, int required, ObservedTokenClass kind) {
+    // Actual GetTokenInformation class21 returned a successful one-byte value in a99. Read only
+    // that byte for this measured class; all other classes retain exact DWORD.
+    if(kind==ObservedTokenClass.HasRestrictions && required==1) return Marshal.ReadByte(data)!=0;
+    if(required==4) return Marshal.ReadInt32(data)!=0;
+    throw new ObservedTokenQueryFailure(kind,"returned-size",null,required);
+  }
+
+  static bool ObservedTokenBool(IntPtr token, ObservedTokenClass kind, out uint returnedLength) {
+    IntPtr data=Marshal.AllocHGlobal(4);
+    try {
+      int required;
+      bool success=GetTokenInformation(token,(int)kind,data,4,out required);
+      int error=Marshal.GetLastWin32Error();
+      if(!success) throw new ObservedTokenQueryFailure(kind,"api-error",error,required);
+      bool value=ObservedTokenBoolValue(data,required,kind);
+      returnedLength=checked((uint)required);
+      return value;
+    } finally { Marshal.FreeHGlobal(data); }
+  }
+
+  static IntPtr ObservedTokenBuffer(IntPtr token, ObservedTokenClass kind, out int length) {
+    bool initial=GetTokenInformation(token,(int)kind,IntPtr.Zero,0,out length);
+    int error=Marshal.GetLastWin32Error();
+    if(initial || error!=122 || length<=0 || length>65536) throw new ObservedTokenQueryFailure(kind,"size-contract",initial ? (int?)null : error,length);
+    int allocated=length; IntPtr data=Marshal.AllocHGlobal(allocated);
+    try {
+      bool success=GetTokenInformation(token,(int)kind,data,allocated,out length);
+      int outputError=Marshal.GetLastWin32Error();
+      if(!success) throw new ObservedTokenQueryFailure(kind,"api-error",outputError,length);
+      if(length<=0 || length>allocated) throw new ObservedTokenQueryFailure(kind,"size-contract",null,length);
+      return data;
+    } catch { Marshal.FreeHGlobal(data); throw; }
+  }
+
+  static string ObservedBufferedSid(IntPtr data, int length, IntPtr sid) {
+    long offset=sid.ToInt64()-data.ToInt64();
+    if(offset<0 || offset>length-8 || Marshal.ReadByte(sid)!=1) throw new InvalidOperationException("Read-only token SID header bounds failed");
+    int subAuthorities=Marshal.ReadByte(sid,1);
+    if(subAuthorities>15 || 8+subAuthorities*4>length-offset) throw new InvalidOperationException("Read-only token SID content bounds failed");
+    return new SecurityIdentifier(sid).Value;
+  }
+
+  static uint ObservedIntegrityRid(IntPtr token) {
+    int length; IntPtr data=ObservedTokenBuffer(token,ObservedTokenClass.IntegrityLevel,out length);
+    try {
+      if(length<Marshal.SizeOf(typeof(ObservedSidAttributes))) throw new InvalidOperationException("Read-only token integrity label bounds failed");
+      var label=(ObservedSidAttributes)Marshal.PtrToStructure(data,typeof(ObservedSidAttributes));
+      string sid=ObservedBufferedSid(data,length,label.sid);
+      if((label.attributes & 0x20)==0 || !System.Text.RegularExpressions.Regex.IsMatch(sid,@"\AS-1-16-(?:0|[1-9][0-9]{0,9})\z")) throw new InvalidOperationException("Read-only token integrity SID is not canonical");
+      uint rid;
+      if(!uint.TryParse(sid.Substring(7),System.Globalization.NumberStyles.None,System.Globalization.CultureInfo.InvariantCulture,out rid)) throw new InvalidOperationException("Read-only token integrity RID is out of range");
+      return rid;
+    } finally { Marshal.FreeHGlobal(data); }
+  }
+
+  static void ObservedMemberships(IntPtr token, ObservedTokenFacts facts) {
+    facts.authenticatedUsers="absent"; facts.interactive="absent"; facts.users="absent";
+    int length; IntPtr data=ObservedTokenBuffer(token,ObservedTokenClass.Groups,out length);
+    try {
+      int offset=Marshal.OffsetOf(typeof(ObservedGroupsHeader),"first").ToInt32();
+      int itemSize=Marshal.SizeOf(typeof(ObservedSidAttributes));
+      if(length<offset) throw new InvalidOperationException("Read-only token group header bounds failed");
+      uint count=unchecked((uint)Marshal.ReadInt32(data));
+      if(count>4096 || count>(uint)((length-offset)/itemSize)) throw new InvalidOperationException("Read-only token group count bounds failed");
+      var seen=new System.Collections.Generic.HashSet<string>();
+      for(uint i=0;i<count;i++) {
+        var group=(ObservedSidAttributes)Marshal.PtrToStructure(IntPtr.Add(data,offset+checked((int)i)*itemSize),typeof(ObservedSidAttributes));
+        string sid=ObservedBufferedSid(data,length,group.sid);
+        if(sid!="S-1-5-11" && sid!="S-1-5-4" && sid!="S-1-5-32-545") continue;
+        if(!seen.Add(sid) || (group.attributes & 0x14)==0x14) throw new InvalidOperationException("Read-only observed token membership is inconsistent");
+        string state=(group.attributes & 0x10)!=0 ? "deny-only" : (group.attributes & 4)!=0 ? "enabled" : "disabled";
+        if(sid=="S-1-5-11") facts.authenticatedUsers=state;
+        else if(sid=="S-1-5-4") facts.interactive=state;
+        else facts.users=state;
+      }
+    } finally { Marshal.FreeHGlobal(data); }
+  }
+
+  static byte[] ObservedLogonSidBytes(IntPtr data,int length,out uint count) {
+    int offset=Marshal.OffsetOf(typeof(ObservedGroupsHeader),"first").ToInt32();
+    int stride=Marshal.SizeOf(typeof(ObservedSidAttributes));
+    if(IntPtr.Size!=8 || offset!=8 || stride!=16 || length<offset) throw new InvalidOperationException("Read-only logon SID header bounds failed");
+    count=unchecked((uint)Marshal.ReadInt32(data));
+    if(count>1 || count>(uint)((length-offset)/stride)) throw new InvalidOperationException("Read-only logon SID count bounds failed");
+    if(count==0) return null;
+    var group=(ObservedSidAttributes)Marshal.PtrToStructure(IntPtr.Add(data,offset),typeof(ObservedSidAttributes));
+    long sidOffset=group.sid.ToInt64()-data.ToInt64();
+    if((group.attributes & 0xc0000000)!=0xc0000000 || sidOffset<offset+stride || sidOffset>length-20) throw new InvalidOperationException("Read-only logon SID pointer/attribute bounds failed");
+    // Canonical logon SID is S-1-5-5-X-Y. Its private X/Y bytes stay local;
+    // only count and comparison equality are serialized, never the SID or LUID.
+    if(Marshal.ReadByte(group.sid)!=1 || Marshal.ReadByte(group.sid,1)!=3 ||
+       Marshal.ReadByte(group.sid,2)!=0 || Marshal.ReadByte(group.sid,3)!=0 ||
+       Marshal.ReadByte(group.sid,4)!=0 || Marshal.ReadByte(group.sid,5)!=0 ||
+       Marshal.ReadByte(group.sid,6)!=0 || Marshal.ReadByte(group.sid,7)!=5 ||
+       Marshal.ReadInt32(group.sid,8)!=5) throw new InvalidOperationException("Read-only logon SID canonical shape failed");
+    byte[] value=new byte[20]; Marshal.Copy(group.sid,value,0,value.Length); return value;
+  }
+
+  static byte[] ObservedLogonSid(IntPtr token,out uint count) {
+    int length;IntPtr data=ObservedTokenBuffer(token,ObservedTokenClass.LogonSid,out length);
+    try { return ObservedLogonSidBytes(data,length,out count); } finally { Marshal.FreeHGlobal(data); }
+  }
+
+  static bool ObservedLogonSidEqual(byte[] first,byte[] second) {
+    if(first==null || second==null || first.Length!=20 || second.Length!=20) throw new InvalidOperationException("Read-only logon SID equality requires two bounded actual identities");
+    for(int i=0;i<20;i++) if(first[i]!=second[i]) return false;
+    return true;
+  }
+
+  static string ObserveLogonSidComparison(IntPtr target) {
+    uint? targetCount=null;string subject="target";
+    try {
+      uint count;byte[] first=ObservedLogonSid(target,out count);targetCount=count;
+      if(first==null) return "tokenLogonSidCount=0;tokenLogonSidMatchesCaller=unavailable;tokenLogonSidQuerySubject=target;tokenLogonSidQueryFailure=empty;tokenLogonSidQueryError=none;tokenLogonSidQueryReturnedLength=none";
+      subject="caller";IntPtr caller;
+      if(!OpenProcessToken(GetCurrentProcess(),8,out caller)) throw new ObservedTokenQueryFailure(ObservedTokenClass.LogonSid,"api-error",Marshal.GetLastWin32Error(),null);
+      try {
+        byte[] second=ObservedLogonSid(caller,out count);
+        if(second==null) return "tokenLogonSidCount=1;tokenLogonSidMatchesCaller=unavailable;tokenLogonSidQuerySubject=caller;tokenLogonSidQueryFailure=empty;tokenLogonSidQueryError=none;tokenLogonSidQueryReturnedLength=none";
+        bool equal=ObservedLogonSidEqual(first,second);
+        return "tokenLogonSidCount=1;tokenLogonSidMatchesCaller="+(equal?"true":"false")+";tokenLogonSidQuerySubject=none;tokenLogonSidQueryFailure=none;tokenLogonSidQueryError=none;tokenLogonSidQueryReturnedLength=none";
+      } finally { CloseHandle(caller); }
+    } catch(ObservedTokenQueryFailure failure) {
+      return "tokenLogonSidCount="+(targetCount.HasValue?targetCount.Value.ToString(System.Globalization.CultureInfo.InvariantCulture):"unavailable")+
+        ";tokenLogonSidMatchesCaller=unavailable;tokenLogonSidQuerySubject="+subject+";tokenLogonSidQueryFailure="+failure.failure+
+        ";tokenLogonSidQueryError="+(failure.error.HasValue?failure.error.Value.ToString(System.Globalization.CultureInfo.InvariantCulture):"none")+
+        ";tokenLogonSidQueryReturnedLength="+(failure.length.HasValue?failure.length.Value.ToString(System.Globalization.CultureInfo.InvariantCulture):"none");
+    } catch(InvalidOperationException) {
+      return "tokenLogonSidCount="+(targetCount.HasValue?targetCount.Value.ToString(System.Globalization.CultureInfo.InvariantCulture):"unavailable")+
+        ";tokenLogonSidMatchesCaller=unavailable;tokenLogonSidQuerySubject="+subject+";tokenLogonSidQueryFailure=content-contract;tokenLogonSidQueryError=none;tokenLogonSidQueryReturnedLength=none";
+    }
+  }
+
+  static ObservedTokenFacts ReadObservedTokenFacts(IntPtr token) {
+    var facts=new ObservedTokenFacts { sessionKnown=false };
+    var kind=ObservedTokenClass.SessionId;
+    try {
+      facts.sessionId=ObservedTokenDword(token,kind); facts.sessionKnown=true;
+      kind=ObservedTokenClass.HasRestrictions; facts.hasRestrictions=ObservedTokenBool(token,kind,out facts.hasRestrictionsReturnedLength);
+      kind=ObservedTokenClass.IsAppContainer; facts.isAppContainer=ObservedTokenBool(token,kind,out facts.isAppContainerReturnedLength);
+      kind=ObservedTokenClass.IntegrityLevel; facts.integrityRid=ObservedIntegrityRid(token);
+      kind=ObservedTokenClass.Groups; ObservedMemberships(token,facts);
+    } catch(ObservedTokenQueryFailure failure) {
+      facts.unavailableKind=failure.kind.ToString(); facts.unavailableFailure=failure.failure;
+      facts.unavailableError=failure.error; facts.unavailableLength=failure.length;
+    } catch(InvalidOperationException) {
+      facts.unavailableKind=kind.ToString(); facts.unavailableFailure="content-contract";
+    }
+    facts.logonComparison=ObserveLogonSidComparison(token);
+    return facts;
+  }
+
+  public static ObservedTokenFacts RunnerTokenFacts() {
+    IntPtr token;
+    if(!OpenProcessToken(GetCurrentProcess(),8,out token)) throw new Win32Exception();
+    try { return ReadObservedTokenFacts(token); } finally { CloseHandle(token); }
+  }
+
+  public static ObservedTokenFacts FreshStandardTokenFacts(string username, string password, string expectedSid) {
+    IntPtr token;
+    if(!LogonUserW(username,".",password,2,0,out token)) throw new Win32Exception();
+    try {
+      using(var identity=new WindowsIdentity(token)) {
+        if(identity.User.Value!=expectedSid || ElevatedToken(token)) throw new InvalidOperationException("Fresh observed logon token does not own the standard SID");
+      }
+      return ReadObservedTokenFacts(token);
+    } finally { CloseHandle(token); }
+  }
+}
+'@ -CompilerOptions /warnaserror+ -ErrorAction Stop }
+
+function Start-OwnedPackagedQaNamespace {
+  if (-not $env:MIXEL_HOSTED_OWNED_QA_NAMESPACE) { return }
+  if ($env:MIXEL_HOSTED_OWNED_QA_NAMESPACE -cne '1' -or $script:qaNamespaceScope -or
+      $ownedUser -cnotmatch '\Amixelqs[0-9a-f]{10}\z' -or -not $ownedSid -or -not $desktopAccess -or
+      (Get-LocalUser -SID ([Security.Principal.SecurityIdentifier]::new($ownedSid))).Name -cne $ownedUser) {
+    throw 'Exact newly owned packaged QA fallback account and desktop setup required.'
+  }
+  $helper=Join-Path $PSScriptRoot 'test-hosted-qa-session-directory.cs'
+  if (-not (Test-Path -LiteralPath $helper -PathType Leaf) -or
+      (Get-Item -LiteralPath $helper).Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)) {
+    throw 'Pinned hosted QA namespace helper must be a regular nonreparse file.'
+  }
+  $helperText=[Text.UTF8Encoding]::new($false,$true).GetString([IO.File]::ReadAllBytes($helper))
+  if ($helperText.Contains("`r")) {
+    $withoutPairs=$helperText.Replace("`r`n",'')
+    if ($withoutPairs.Contains("`r") -or $withoutPairs.Contains("`n")) { throw 'Mixed hosted QA helper newlines refused.' }
+    $helperText=$helperText.Replace("`r`n","`n")
+  }
+  $helperBytes=[Text.UTF8Encoding]::new($false,$true).GetBytes($helperText)
+  $helperHash=[Security.Cryptography.SHA256]::Create()
+  try { $actual=([BitConverter]::ToString($helperHash.ComputeHash($helperBytes))).Replace('-','').ToLowerInvariant() }
+  finally { $helperHash.Dispose() }
+  if ($actual -cne 'b7f7886e2e6de9f7d76ef371473a436d8845b1396c12b63517331894d4611d4e') {
+    throw 'Pinned hosted QA namespace helper differs; no directory query or write permitted.'
+  }
+  if (-not ('MixelHostedQaNamespace' -as [type])) { Add-Type -TypeDefinition $helperText -CompilerOptions /warnaserror+ -ErrorAction Stop }
+  # Constructor verifies the exact opt-in hosted tuple and performs no native call.
+  $api=[MixelHostedQaNamespace+NativeApi]::new('PackagedOrdinaryQa')
+  $caller=[MixelPackagedQaTokenFacts]::RunnerTokenFacts()
+  $fresh=[MixelPackagedQaTokenFacts]::FreshStandardTokenFacts($ownedUser,$ownedPassword,$ownedSid)
+  if ($caller.unavailableKind -or $fresh.unavailableKind -or -not $caller.sessionKnown -or -not $fresh.sessionKnown -or
+      $caller.integrityRid -ne 12288 -or $fresh.integrityRid -ne 8192 -or
+      $caller.hasRestrictions -or $caller.isAppContainer -or $fresh.hasRestrictions -or $fresh.isAppContainer -or
+      $caller.sessionId -ne $fresh.sessionId -or $caller.sessionId -ne (Get-Process -Id $PID).SessionId -or
+      $fresh.users -cne 'enabled' -or $fresh.authenticatedUsers -cne 'enabled' -or $fresh.interactive -cne 'enabled') {
+    throw 'Exact High-to-Medium owned standard-token same-session facts required before packaged bootstrap.'
+  }
+  $identity=[Security.Principal.SecurityIdentifier]::new($ownedSid)
+  $sidBytes=[byte[]]::new($identity.BinaryLength);$identity.GetBinaryForm($sidBytes,0)
+  $script:qaNamespaceScope=[MixelHostedQaNamespace+Scope]::new($api,$sidBytes)
+  $script:qaNamespaceCleanupOkay=$false
+  $script:qaNamespaceRestorationAttempted=$false
+  $script:qaNamespaceRestoreFailure=$null;$script:qaNamespaceDisposeFailure=$null
+  $script:qaNamespaceScope.Open()
+  $script:qaNamespaceScope.Apply()
+  Write-Host ('FIXTURE: isolated hosted owned packaged QA namespace before ordinary startup; ' +
+      ($script:qaNamespaceScope.facts | ConvertTo-Json -Depth 6 -Compress))
+}
+
+function Restore-OwnedPackagedQaNamespace([bool]$OwnedProcessesExited) {
+  if (-not $script:qaNamespaceScope) { $script:qaNamespaceCleanupOkay=$true;return }
+  # Directory restoration is independent of process termination. Failed exit
+  # preserves the account/root, never an unnecessary temporary namespace grant.
+  if (-not $script:qaNamespaceRestorationAttempted) {
+    $script:qaNamespaceRestorationAttempted=$true
+    try { $script:qaNamespaceScope.Restore() } catch { $script:qaNamespaceRestoreFailure=$_ }
+    finally { try { $script:qaNamespaceScope.Dispose() } catch { $script:qaNamespaceDisposeFailure=$_ } }
+  }
+  $restoreFailure=$script:qaNamespaceRestoreFailure;$disposeFailure=$script:qaNamespaceDisposeFailure
+  $facts=$script:qaNamespaceScope.facts
+  $script:qaNamespaceCleanupOkay=($OwnedProcessesExited -and $null -eq $restoreFailure -and $null -eq $disposeFailure -and
+      $facts.cleanupOkay -and (-not $facts.writeAttempted -or $facts.restorationVerified))
+  Write-Host ('OBSERVED: isolated hosted owned packaged QA namespace restoration; ' +
+      ([ordered]@{directory=$facts;ownedProcessesExited=$OwnedProcessesExited;
+        restoreFailed=($null -ne $restoreFailure);disposeFailed=($null -ne $disposeFailure);
+        accountCleanupPermitted=$script:qaNamespaceCleanupOkay;minimumMaskQualified=$false;
+        actualWin32RouteMeasured=$false;productPermissionChanged=$false;packagedAppQualified=$false} |
+        ConvertTo-Json -Depth 8 -Compress))
+  if (-not $script:qaNamespaceCleanupOkay) { throw 'Owned packaged process exit or namespace restoration/close remains unknown; account/root deletion prohibited.' }
+}
+
+function Assert-OwnedPackagedQaCleanupBeforeDeletion {
+  if ($script:qaNamespaceCleanupOkay) { return }
+  Write-Host 'FAIL: exact packaged namespace cleanup remains unknown; account/profile/payload retained; original error stays fatal.'
+  if ($primaryFailure) { throw $primaryFailure }
+  throw 'Owned packaged namespace remains unknown before account/root deletion.'
+}
+
 $executablePath = (Resolve-Path $Executable).Path
 if ($CompiledQuickSupportDiagnostic) {
   $expectedCompiledEntry = Join-Path (Resolve-Path $ExpectedPayload).Path 'Mixel-Remote.exe'
@@ -433,6 +757,8 @@ $primaryFailure = $null
 $nativeCrash = $null
 $nativeCrashCleanupFailed = $false
 $ordinaryStartedAt = $null
+$script:qaNamespaceScope=$null
+$script:qaNamespaceCleanupOkay=$true
 $launchScenario = if ($OrdinaryThenQuickSupport) { 'ordinary GUI to QuickSupport handoff' } elseif ($QuickSupport) { 'QuickSupport double-click' } else { 'support URI launch' }
 
 function Start-CustomerApp {
@@ -1345,6 +1671,8 @@ try {
         Add-LocalGroupMember -SID ([Security.Principal.SecurityIdentifier]::new('S-1-5-32-545')) -Member $ownedUser
         $fixtureStage = 'grant owned standard desktop access'
         $desktopAccess = [MixelOrdinaryTokenFixture+DesktopAccess]::new($ownedSid)
+        $fixtureStage = 'qualify isolated hosted packaged QA namespace'
+        Start-OwnedPackagedQaNamespace
         if ($NativeCrashDiagnostic) {
           $fixtureStage = 'qualify actual native debugger with synthetic exception control'
           Invoke-OwnedLiveCrashControl $ownedSid $ownedUser $ownedPassword
@@ -1497,11 +1825,15 @@ try {
     try { Stop-OwnedCrashObservation $nativeCrash }
     catch { $nativeCrashCleanupFailed=$true; Write-Host 'FAIL: owned native crash observation cleanup additionally failed.' }
   }
-  try { [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses() }
+  $qaNativeProcessesExited=$false
+  $qaCustomerProcessesExited=$false
+  try { [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses(); $qaNativeProcessesExited=$true }
   catch { $nativeCrashCleanupFailed=$true; Write-Host 'FAIL: actual retained owned native process termination additionally failed.' }
   $customerCleanupFailure = $null
-  try { Stop-OwnedCustomerProcesses }
+  try { Stop-OwnedCustomerProcesses; $qaCustomerProcessesExited=$true }
   catch { $customerCleanupFailure = $_ }
+  try { Restore-OwnedPackagedQaNamespace ($qaNativeProcessesExited -and $qaCustomerProcessesExited) }
+  catch { $nativeCrashCleanupFailed=$true; Write-Host 'FAIL: exact owned packaged namespace restoration/disposal additionally failed.' }
   try { [MixelOrdinaryTokenFixture]::CloseStartedObservations() }
   catch { $nativeCrashCleanupFailed=$true; Write-Host 'FAIL: actual retained owned native handle close additionally failed.' }
   if ($ordinaryRoot -or $ownedUser -or $desktopAccess) {
@@ -1527,6 +1859,7 @@ try {
       } catch { $cleanupErrors.Add('Owned ordinary runtime log preservation failed.') }
     }
     if ($desktopAccess) { try { $desktopAccess.Dispose() } catch { $cleanupErrors.Add('Owned desktop ACL restoration failed.') } }
+    Assert-OwnedPackagedQaCleanupBeforeDeletion
     if ($ownedSid) {
       $profileRemoved = $false
       for ($attempt = 0; $attempt -lt 5; $attempt++) {

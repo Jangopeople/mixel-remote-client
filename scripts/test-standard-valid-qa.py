@@ -122,6 +122,10 @@ if($generated.IndexOf('Start-StandardValidQaNamespace') -lt 0 -or $generated.Ind
         # Durable cold-CI conservation: only the already-reviewed helper pin changes
         # in the stopped full8 wrapper. Runtime setup/functions remain identical.
         driver = DRIVER.read_bytes()
+        # Restore only exact final-carrier pins before the historical whole-file proof.
+        for actual, original in [(b'012ad7b7a2e52ddc7bd1c2c7aae63b7726187dab2d6aa2291bbb39de82928dec', b'765b98c6324161018321eadb3528a14a844dc4dd1bee1df158c9f68db6c8af8e'), (b'd11b25c95232544eb64f5de78f0e31cbc54630dd832185c55edfb4a3157cd604', b'f1051afc3860751cfea233216fa65cd1f7e29b639200f648c203dafc294530a9'), (b'410b9b1e86a39c6e7a4b5c9b7ba46b88ae4300ce814a0624e8e7af6462ae3930', b'6f1ea99ec821be91fe88c13d8b62743346265e145b694dc4f05a60e94bcb121e')]:
+            self.assertEqual(driver.count(actual), 1)
+            driver = driver.replace(actual, original, 1)
         current = b'c562cf11de6dc395d4a6aae6d887dbe7fb970603bde74c8e4d111ac26956eb76'
         previous = b'65fc503abd02da1fc50f0e2abe73a747fd21468512298376cea73062422b0a64'
         self.assertEqual(driver.count(current), 1)
@@ -129,6 +133,9 @@ if($generated.IndexOf('Start-StandardValidQaNamespace') -lt 0 -or $generated.Ind
                          'e0b93f5d3b519877650e5cca61c37102c5f8897510d76fecfe8fd29867692126')
         self.assertEqual(hashlib.sha256((SCRIPTS / 'test-session-directory-access.cs').read_bytes()).hexdigest(), current.decode())
         workflow = (ROOT / '.github/workflows/preflight.yml').read_text()
+        flag = '          MIXEL_HOSTED_OWNED_QA_NAMESPACE: "1"\n'
+        self.assertEqual(workflow.count(flag), 1)
+        workflow = workflow.replace(flag, '', 1)
         suffix = "          python scripts/test-standard-valid-qa.py\n          if ($LASTEXITCODE -ne 0) { throw 'Valid owned QA original eight source and cleanup controls failed.' }\n"
         self.assertEqual(workflow.count(suffix), 1)
         restored = workflow.replace(suffix, '').replace(
@@ -145,6 +152,9 @@ if($generated.IndexOf('Start-StandardValidQaNamespace') -lt 0 -or $generated.Ind
         self.assertNotIn('continue-on-error', job)
         original_test = (SCRIPTS / 'test-session-directory-access.py').read_bytes().replace(
             b"job.index('observe-standard-valid-qa-windows.ps1')", b"job.index('observe-session-directory-aba-windows.ps1')")
+        projection = "        # Reverse only the exact final-carrier source-family pin rebindings.\n        for current, original in [('012ad7b7a2e52ddc7bd1c2c7aae63b7726187dab2d6aa2291bbb39de82928dec', '765b98c6324161018321eadb3528a14a844dc4dd1bee1df158c9f68db6c8af8e'), ('d11b25c95232544eb64f5de78f0e31cbc54630dd832185c55edfb4a3157cd604', 'f1051afc3860751cfea233216fa65cd1f7e29b639200f648c203dafc294530a9'), ('410b9b1e86a39c6e7a4b5c9b7ba46b88ae4300ce814a0624e8e7af6462ae3930', '6f1ea99ec821be91fe88c13d8b62743346265e145b694dc4f05a60e94bcb121e')]:\n            self.assertEqual(wrapper.count(current), 1)\n            wrapper = wrapper.replace(current, original, 1)\n"
+        self.assertEqual(original_test.count(projection.encode()), 1)
+        original_test = original_test.replace(projection.encode(), b'', 1)
         self.assertEqual(hashlib.sha256(original_test).hexdigest(),
                          '9b185f245cd60ae1d053712e36b56a3399cbbfc3092edb172a22ab98da9ca1a5')
 
