@@ -939,24 +939,35 @@ $failedBaseline = @($captureAst.FindAll({
 }, $true))
 if ($failedBaseline.Count -ne 1) { throw 'Exact failed ordinary-to-QS baseline gate missing.' }
 $failedBaselineBlock = [scriptblock]::Create($failedBaseline[0].Extent.Text)
-foreach ($unavailable in @($false, $true)) {
-  $failureMessage = & {
-    param([scriptblock]$ActualBlock, [bool]$Unavailable)
-    $initialHealth = [pscustomobject]@{ attendedProof = 'guard-unavailable'; incomingPid = 4321 }
-    $initialOwnsLease = $false
-    function Get-MixelSupportLeaseDiagnostic([uint32]$ExpectedIncomingPid) {
-      if ($ExpectedIncomingPid -ne 4321) { throw 'Secondary observation lost the actual incoming PID.' }
-      if ($Unavailable) { throw 'Retained older signed payload has no lease diagnostic getter.' }
-      return 'ownerFailed=false;ownerError=none;kernel=unavailable;probeError=5;memoryActive=false'
+foreach ($baseline in @(
+    @{ proof = 'attended-runtime-v2'; failure = 'Ordinary-to-QS positive control is already guarded; refusing a manufactured transition proof.' },
+    @{ proof = 'guard-unavailable'; failure = 'Ordinary-to-QS positive control cannot safely inspect the native consent lease; refusing an unavailable baseline.' })) {
+  foreach ($unavailable in @($false, $true)) {
+    $failureMessage = & {
+      param([scriptblock]$ActualBlock, [bool]$Unavailable, [string]$BaselineProof)
+      $initialHealth = [pscustomobject]@{ attendedProof = $BaselineProof; incomingPid = 4321 }
+      $initialOwnsLease = $false
+      $diagnosticSeen = @{ count = 0; incomingPid = $null }
+      function Get-MixelSupportLeaseDiagnostic([uint32]$ExpectedIncomingPid) {
+        $diagnosticSeen.count++
+        $diagnosticSeen.incomingPid = $ExpectedIncomingPid
+        if ($ExpectedIncomingPid -ne 4321) { throw 'Secondary observation lost the actual incoming PID.' }
+        if ($Unavailable) { throw 'Retained older signed payload has no lease diagnostic getter.' }
+        return 'ownerFailed=false;ownerError=none;kernel=unavailable;probeError=5;memoryActive=false'
+      }
+      try { & $ActualBlock; 'UNEXPECTED: guarded baseline accepted' }
+      catch { $_.Exception.Message }
+      if ($diagnosticSeen.count -ne 1 -or $diagnosticSeen.incomingPid -ne 4321) {
+        throw 'Secondary baseline observation must issue exactly one read-only query for the actual incoming PID.'
+      }
+    } $failedBaselineBlock $unavailable $baseline.proof
+    if ($failureMessage -isnot [string] -or $failureMessage -cne $baseline.failure) {
+      throw 'Secondary valid/unavailable lease diagnostics changed or masked the actual guarded-baseline failure.'
     }
-    try { & $ActualBlock; 'UNEXPECTED: guarded baseline accepted' }
-    catch { $_.Exception.Message }
-  } $failedBaselineBlock $unavailable
-  if ($failureMessage -isnot [string] -or $failureMessage -cne 'Ordinary-to-QS positive control is already guarded; refusing a manufactured transition proof.') {
-    throw 'Secondary valid/unavailable lease diagnostics changed or masked the actual guarded-baseline failure.'
   }
 }
-Write-Host 'PASS: exact ordinary-to-QS failing baseline stays fatal with either valid secondary lease evidence or an older signed payload lacking the diagnostic getter; no readiness is manufactured.'
+Write-Host 'PASS: exact ordinary-to-QS guarded and unavailable baseline failures remain separately fatal with either valid secondary lease evidence or an older signed payload lacking the diagnostic getter; each observes only the actual incoming PID once and no readiness is manufactured.'
+
 
 foreach ($invalid in @(
     '{"t":"OnlineStatus","c":[1,"false"]}',
