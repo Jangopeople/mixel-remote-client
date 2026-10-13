@@ -274,5 +274,181 @@ class ReleasePipelineTests(unittest.TestCase):
         self.assertFalse((self.destination / "launcher.exe").exists())
 
 
+class MacTrayProofPathTests(unittest.TestCase):
+    """Run the two actual caller snippets and real main path guards, no native app."""
+
+    def callers(self):
+        workflow = (ROOT / ".github/workflows/build.yml").read_text(encoding="utf-8")
+        producer = (
+            'TRAY_PROOF_ROOT="$(cd ../runtime-diagnostics && pwd -P)"\n'
+            'python3 ../scripts/test-support-launch-macos-tray.py --app "$APP_PATH" \\\n'
+            '  --proofs "$TRAY_PROOF_ROOT/macos-${{ matrix.job.arch }}-tray"\n'
+        )
+        consumer = (
+            'TRAY_PROOF_ROOT="$(cd runtime-diagnostics && pwd -P)"\n'
+            'python3 scripts/test-support-launch-macos-tray.py --app "$APP_PATH" \\\n'
+            '  --proofs "$TRAY_PROOF_ROOT/macos-${EXPECTED_ARCH}-tray"\n'
+        )
+        for snippet, indentation in ((producer, 12), (consumer, 10)):
+            self.assertEqual(workflow.count(textwrap.indent(snippet, " " * indentation)), 1,
+                             "Exact canonical Mac tray caller missing or duplicated")
+        return (("producer", producer), ("consumer", consumer))
+
+    def shell_call(self, snippet, cwd, app, shim, arch):
+        import json
+        import shutil
+        self.assertEqual(os.name, "posix", "Mac proof path controls require the POSIX source gate")
+        bash = shutil.which("bash")
+        self.assertIsNotNone(bash, "Actual Bash is required; path controls cannot be skipped")
+        snippet = snippet.replace("${{ matrix.job.arch }}", arch)
+        prefix = 'python3() { "$MIXEL_PROOF_PATH_PYTHON" "$MIXEL_PROOF_PATH_SHIM" "$@"; }\n'
+        env = {**os.environ, "PWD": str(cwd), "APP_PATH": str(app), "EXPECTED_ARCH": arch,
+               "MIXEL_PROOF_PATH_PYTHON": sys.executable, "MIXEL_PROOF_PATH_SHIM": str(shim)}
+        result = subprocess.run([bash, "-e", "-o", "pipefail", "-c", prefix + snippet],
+                                cwd=cwd, env=env, capture_output=True, text=True,
+                                encoding="utf-8", timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, "")
+        rows = result.stdout.splitlines()
+        self.assertEqual(len(rows), 1, "Caller must invoke the single tray helper exactly once")
+        row = json.loads(rows[0])
+        arguments = row["arguments"]
+        self.assertEqual(len(arguments), 5)
+        self.assertIn(arguments[0], ("../scripts/test-support-launch-macos-tray.py",
+                                     "scripts/test-support-launch-macos-tray.py"))
+        self.assertEqual(arguments[1:4], ["--app", str(app), "--proofs"])
+        self.assertEqual(row["bash_pwd"], str(cwd), "Logical symlink cwd must reach the actual Bash")
+        return Path(arguments[4])
+
+    def guard(self, app, output, cwd):
+        import json
+        from unittest import mock
+        controls = module("mixel_safe_tray_path_controls", "test-support-launch-macos-tray-controls.py")
+        namespace = controls.extracted_namespace(ROOT / "scripts/test-support-launch-macos-tray.py")
+        calls = []
+        namespace["isolated_ci"] = lambda: None
+        namespace["desktop"].SWIFT = "source-only helper placeholder"
+        namespace["tray_swift"] = lambda value: value
+        namespace["desktop"].compile_helper = lambda _: (calls.append("compile seam"), Path("/never-executed/helper"))[1]
+        namespace["desktop"].safe_error = lambda error: str(error)
+        def runtime(_app, _helper, facts):
+            calls.append("runtime seam")
+            facts["ownedProcessesStopped"] = True
+        namespace["runtime"] = runtime
+        previous = Path.cwd()
+        try:
+            os.chdir(cwd)
+            with mock.patch.object(sys, "argv", ["source-only-path-control", "--app", str(app), "--proofs", str(output)]):
+                status = namespace["main"]()
+            absolute = output.absolute()
+        finally:
+            os.chdir(previous)
+        facts = None
+        if status == 0:
+            facts = json.loads((absolute / "tray-runtime-safe-facts.json").read_bytes())
+            self.assertTrue(facts["passed"])
+            for name in ("customerAcceptTested", "remoteDesktopConnected",
+                         "actualTrayDispatchObserved", "visibleGuiAndAttendedV2"):
+                self.assertFalse(facts[name], "Source-only path controls must not claim native/consent success")
+        return status, calls, namespace["sys"].stderr.getvalue(), absolute, facts
+
+    def fixture(self, base):
+        physical = base / "physical workspace with spaces"
+        (physical / "rustdesk").mkdir(parents=True)
+        (physical / "runtime-diagnostics").mkdir()
+        app = physical / "empty source-only app"
+        app.mkdir()
+        linked = base / "logical workspace with spaces"
+        linked.symlink_to(physical, target_is_directory=True)
+        shim = base / "record-only-python.py"
+        shim.write_text("import json, os, sys\nprint(json.dumps({'arguments': sys.argv[1:], 'bash_pwd': os.environ.get('PWD')}))\n",
+                        encoding="utf-8")
+        return physical, linked, app, shim
+
+    def test_actual_both_callers_pass_real_path_guard_with_physical_and_symlinked_cwd(self):
+        completed = 0
+        for caller, snippet in self.callers():
+            for symlinked in (False, True):
+                for arch in ("x86_64", "aarch64"):
+                    with self.subTest(caller=caller, symlinked_cwd=symlinked, arch=arch), tempfile.TemporaryDirectory(prefix="mixel-tray-caller-path-") as directory:
+                        base = Path(directory).resolve()
+                        physical, linked, app, shim = self.fixture(base)
+                        cwd = linked if symlinked else physical
+                        if caller == "producer":
+                            cwd /= "rustdesk"
+                        output = self.shell_call(snippet, cwd, app, shim, arch)
+                        self.assertEqual(output, physical / "runtime-diagnostics" / ("macos-" + arch + "-tray"))
+                        self.assertEqual(output.parent, output.parent.resolve())
+                        status, calls, error, absolute, _ = self.guard(app, output, cwd)
+                        self.assertEqual((status, calls, error), (0, ["compile seam", "runtime seam"], ""))
+                        self.assertTrue(absolute.is_dir())
+                        completed += 1
+        self.assertEqual(completed, 8, "All eight caller/cwd/architecture cases must finish")
+        print("PASS: both actual Bash Mac tray callers canonicalize physical/symlinked cwd for both architectures; real main accepts only new owned output, no native app/Accept claim", flush=True)
+
+    def test_historical_producer_dotdot_is_rejected_before_owned_output_or_native_seams(self):
+        completed = 0
+        producer = dict(self.callers())["producer"]
+        assignment = 'TRAY_PROOF_ROOT="$(cd ../runtime-diagnostics && pwd -P)"\n'
+        current = '--proofs "$TRAY_PROOF_ROOT/macos-${{ matrix.job.arch }}-tray"'
+        previous = '--proofs "../runtime-diagnostics/macos-${{ matrix.job.arch }}-tray"'
+        self.assertEqual(producer.count(assignment), 1)
+        self.assertEqual(producer.count(current), 1)
+        historical = producer.replace(assignment, "", 1).replace(current, previous, 1)
+        for symlinked in (False, True):
+            with self.subTest(symlinked_cwd=symlinked), tempfile.TemporaryDirectory(prefix="mixel-tray-old-path-") as directory:
+                physical, linked, app, shim = self.fixture(Path(directory).resolve())
+                cwd = (linked if symlinked else physical) / "rustdesk"
+                output = self.shell_call(historical, cwd, app, shim, "x86_64")
+                self.assertEqual(str(output), "../runtime-diagnostics/macos-x86_64-tray")
+                status, calls, error, absolute, facts = self.guard(app, output, cwd)
+                self.assertEqual(status, 1)
+                self.assertEqual(calls, [])
+                self.assertIn("Tray proof parent is not a canonical directory", error)
+                self.assertFalse(absolute.exists())
+                self.assertIsNone(facts)
+                self.assertEqual(list((physical / "runtime-diagnostics").iterdir()), [])
+                completed += 1
+        self.assertEqual(completed, 2, "Both historical caller cwd cases must finish")
+        print("PASS: literal prior producer ../ path fails the real canonical-parent guard before output ownership, helper compilation or runtime", flush=True)
+
+    def test_existing_output_and_direct_symlink_parent_still_refuse_without_writes(self):
+        completed = 0
+        for fault in ("collision", "symlink-parent", "symlink-leaf"):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory(prefix="mixel-tray-proof-refusal-") as directory:
+                base = Path(directory).resolve()
+                physical, _, app, _ = self.fixture(base)
+                parent = physical / "runtime-diagnostics"
+                output = parent / "owned-proof"
+                if fault == "symlink-parent":
+                    alias = base / "direct linked parent"
+                    alias.symlink_to(parent, target_is_directory=True)
+                    output = alias / "unowned-proof"
+                else:
+                    retained = parent / "retained" if fault == "symlink-leaf" else output
+                    retained.mkdir()
+                    sentinel = retained / "tray-runtime-safe-facts.json"
+                    sentinel.write_bytes(b"already-owned facts must remain exact")
+                    if fault == "symlink-leaf":
+                        output.symlink_to(retained, target_is_directory=True)
+                before = {str(path.relative_to(base)): path.read_bytes()
+                          for path in base.rglob("*") if path.is_file() and not path.is_symlink()}
+                status, calls, error, _, facts = self.guard(app, output, physical)
+                self.assertEqual(status, 1)
+                self.assertEqual(calls, [])
+                self.assertIsNone(facts)
+                if fault == "symlink-parent":
+                    self.assertIn("Tray proof parent is not a canonical directory", error)
+                    self.assertFalse((parent / "unowned-proof").exists())
+                else:
+                    self.assertEqual(sentinel.read_bytes(), b"already-owned facts must remain exact")
+                after = {str(path.relative_to(base)): path.read_bytes()
+                         for path in base.rglob("*") if path.is_file() and not path.is_symlink()}
+                self.assertEqual(after, before)
+                completed += 1
+        self.assertEqual(completed, 3, "All collision/symlink refusals must finish")
+        print("PASS: real tray main still refuses existing/symlink output and noncanonical direct symlink parents before writes or native seams", flush=True)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -695,8 +695,9 @@ jobs:
               --diagnostics "$DIAGNOSTICS/runtime" --diagnostic-app-zip "$DIAGNOSTIC_APP_ZIP"
 
             mkdir -p ../runtime-diagnostics
+            TRAY_PROOF_ROOT="$(cd ../runtime-diagnostics && pwd -P)"
             python3 ../scripts/test-support-launch-macos-tray.py --app "$APP_PATH" \
-              --proofs "../runtime-diagnostics/macos-${{ matrix.job.arch }}-tray"
+              --proofs "$TRAY_PROOF_ROOT/macos-${{ matrix.job.arch }}-tray"
 
             # 3) Package stapled .app into DMG, then sign/notarize/staple DMG.
             create-dmg --window-size 800 400 \
@@ -1364,8 +1365,9 @@ jobs:
           xcrun stapler validate "$APP_PATH"
           spctl --assess --type execute --verbose=2 "$APP_PATH"
           python3 scripts/test-support-launch-macos.py --app "$APP_PATH" | tee "runtime-diagnostics/macos-${EXPECTED_ARCH}.log"
+          TRAY_PROOF_ROOT="$(cd runtime-diagnostics && pwd -P)"
           python3 scripts/test-support-launch-macos-tray.py --app "$APP_PATH" \
-            --proofs "runtime-diagnostics/macos-${EXPECTED_ARCH}-tray"
+            --proofs "$TRAY_PROOF_ROOT/macos-${EXPECTED_ARCH}-tray"
       - uses: actions/upload-artifact@v6
         if: always()
         with:
