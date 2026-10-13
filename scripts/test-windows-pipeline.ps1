@@ -17,6 +17,12 @@ function Assert-Fails([scriptblock]$Action, [string]$Scenario, [string[]]$Expect
   if (-not $failed) { throw "Expected failure was accepted: $Scenario" }
 }
 
+# Both modes use the exact launch-source AST for the baseline controls.
+$launchSource = Get-Content (Join-Path $PSScriptRoot 'test-support-launch-windows.ps1') -Raw
+$captureTokens=$null; $captureErrors=$null
+$captureAst=[System.Management.Automation.Language.Parser]::ParseInput($launchSource,[ref]$captureTokens,[ref]$captureErrors)
+if ($captureErrors.Count -gt 0) { throw "PowerShell parse failed: test-support-launch-windows.ps1: $captureErrors" }
+
 # The ordinary invocation still executes every existing pipeline control.
 # The additional stock-PS5 job exercises only the exact named-pipe health suite.
 if (-not $RuntimeProbeOnly) {
@@ -151,7 +157,6 @@ function Complete-OwnedDesktopCleanup($Access, [string]$ExpectedHashes, [bool]$D
 
 # Compile the exact native OS fixture used by the real ordinary-to-QS runtime
 # test; its policy checks are testable without launching or changing an app.
-$launchSource = Get-Content (Join-Path $PSScriptRoot 'test-support-launch-windows.ps1') -Raw
 $fixtureClass = $launchSource.IndexOf('public static class MixelOrdinaryTokenFixture {')
 $fixtureStart = $launchSource.LastIndexOf('using System;', $fixtureClass)
 $fixtureEnd = $launchSource.IndexOf("`n'@ }", $fixtureClass)
@@ -184,8 +189,6 @@ try {
   }
 } finally { if (Test-Path $dumpControl) { Remove-Item $dumpControl } }
 Write-Host 'PASS: exact native dump attribution decodes the actual process stream and rejects six malformed or unattributed dump controls.'
-$captureTokens=$null; $captureErrors=$null
-$captureAst=[System.Management.Automation.Language.Parser]::ParseInput($launchSource,[ref]$captureTokens,[ref]$captureErrors)
 $captureFunction=@($captureAst.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Read-OwnedHeapCapture'},$true))
 if ($captureFunction.Count -ne 1) { throw 'Exact bounded native heap-capture parser missing.' }
 . ([scriptblock]::Create($captureFunction[0].Extent.Text))
