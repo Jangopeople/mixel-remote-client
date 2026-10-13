@@ -428,7 +428,8 @@ def pipeline(out,source,bash):
                  "patch-support-macos-rdev.py","patch-support-input.py",
                  "patch-support-file-transfer-window.py","test-support-file-transfer-window.py",
                  "patch-support-keyboard-default.py",
-                 "patch-support-uinput-scroll.py"):
+                 "patch-support-uinput-scroll.py",
+                 "patch-support-native-warnings.py","test-support-native-warnings.py"):
         shutil.copyfile(ROOT/"scripts"/name,copied/"scripts"/name)
     script=copied/"scripts/apply-branding.sh"
     shell_source="$"+"{BASH_SOURCE[0]}"

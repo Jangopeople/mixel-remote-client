@@ -283,7 +283,8 @@ def full_branding(out,bash):
                  'test-support-flutter-analysis.py','test-support-macos-cleanup.py','test-support-macos-window.py',
                  'patch-support-file-transfer-window.py','test-support-file-transfer-window.py',
                  'patch-support-keyboard-default.py',
-                 'patch-support-uinput-scroll.py'):
+                 'patch-support-uinput-scroll.py',
+                 'patch-support-native-warnings.py','test-support-native-warnings.py'):
         shutil.copy2(ROOT/'scripts'/name,copied/'scripts'/name)
     verifier=copied/'scripts/patch-support-macos-cleanup.py'
     verifier_lf,_=P.normalize(verifier.read_bytes())

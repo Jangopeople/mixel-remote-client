@@ -18,7 +18,6 @@ else
   python scripts/test-support-flutter-sdk-compatibility.py --app "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --bash "$mixel_analyzer_bash"
 fi
 python scripts/test-support-macos-termination.py --flutter "$(command -v flutter)" --bash "$mixel_analyzer_bash"
-unset mixel_analyzer_bash
 for mixel_source_test in \
   test-support-invite \
   test-generated-support-paths \
@@ -39,5 +38,7 @@ for mixel_source_test in \
   test-branding; do
   python "scripts/$mixel_source_test.py"
 done
+python scripts/test-support-native-warnings.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --source-only --output "$RUNNER_TEMP/mixel-native-warning-source" --bash "$mixel_analyzer_bash"
+unset mixel_analyzer_bash
 dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart
 dart scripts/test-support-invite.dart

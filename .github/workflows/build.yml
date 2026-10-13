@@ -282,6 +282,7 @@ jobs:
         run: |
           python3 scripts/test-support-flutter-analysis.py --dart "$(command -v dart)"
           python3 scripts/test-support-flutter-sdk-compatibility.py --app rustdesk --flutter "$(command -v flutter)"
+          python3 scripts/test-support-native-warnings.py --source rustdesk --source-only --output "$RUNNER_TEMP/mixel-native-warning-source"
           python3 scripts/test-support-file-transfer-window.py --app rustdesk --output "$RUNNER_TEMP/mixel-file-transfer-source" --flutter "$(command -v flutter)"
           python3 scripts/test-support-macos-termination.py --flutter "$(command -v flutter)"
           python3 scripts/test-support-invite.py
@@ -523,6 +524,7 @@ jobs:
         run: |
           python3 scripts/test-support-flutter-analysis.py --dart "$(command -v dart)"
           python3 scripts/test-support-flutter-sdk-compatibility.py --app rustdesk --flutter "$(command -v flutter)"
+          python3 scripts/test-support-native-warnings.py --source rustdesk --source-only --output "$RUNNER_TEMP/mixel-native-warning-source"
           python3 scripts/test-support-macos-termination.py --flutter "$(command -v flutter)" --framework "$MIXEL_FLUTTER_FRAMEWORK"
           python3 scripts/test-support-invite.py
           python3 scripts/test-generated-support-paths.py
