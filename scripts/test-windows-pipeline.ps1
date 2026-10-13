@@ -1049,4 +1049,6 @@ Write-Host 'PASS: malformed online/relay/key/rendezvous/ID proofs, persisted con
 
 # Pure managed ACL regression uses exact helper bodies; actual native session
 # access/cleanup and original consent gates run in standard-account controls.
-& (Join-Path $PSScriptRoot 'test-windows-standard-namespace-access.ps1')
+if (-not $RuntimeProbeOnly) {
+  & (Join-Path $PSScriptRoot 'test-windows-standard-namespace-access.ps1')
+}

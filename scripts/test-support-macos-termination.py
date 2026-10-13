@@ -178,9 +178,17 @@ def previous_cleanup_controls(out, fixture):
     # Source813 runtime identities were bound before adding this materialization guard.
     # Fixed byte hashes also work in shallow hosted Actions checkouts.
     historical_runtime={'flutter/lib/common.dart': '390d75c80128850d598794502b6f5d265eb99750f64ebfc98140770661cb2cb0', 'flutter/lib/desktop/pages/desktop_home_page.dart': '51ea09a0714b2e92cde95e8676663b4666ba2489f0230f05dec48a95c3606874', 'flutter/lib/desktop/pages/desktop_tab_page.dart': 'db034e32b19d8e99482903e9adb83f9f91ee24bfeb509f0e7658a6217783d074', 'flutter/lib/desktop/widgets/tabbar_widget.dart': 'd05d6fd84b6c2f51775dfb7e2eb928367a81addbba0dbef56adc2494935685f6', 'flutter/lib/main.dart': '982765b4bd1bdf52aec77af49398ff590697978178248d546ec777b947e3d2b8', 'flutter/lib/mixel_support_app_exit.dart': '37b2f956dbbf07e4129c7b0db1d695d11dbdb1952699e4124238b9befcfbf06e', 'flutter/lib/models/ab_model.dart': 'b4c7038cb74488a2916dc2b34e33d25a3084d33a2dcf4989b4af249a2567e5fe', 'flutter/lib/models/native_model.dart': '0c78091698b2aa83fbf4ae4ed283a84c730d319336960f667b501c1eb52ef4b8', 'flutter/lib/models/server_model.dart': '0c85a7230d2277f9d2dea092b81883717b184f7c315f25833078bfd0824bcda8', 'flutter/lib/utils/multi_window_manager.dart': '27e065acf8f7feb2c80151437c071689a2dc33f1bdc9b8ce9ecacd8b74e2ede4', 'flutter/macos/Runner/AppDelegate.swift': '8a70d4f1af3f0ad28a4119d6cd887b2096f8869a559b7589fc54015d19d771a1', 'flutter/macos/Runner/MainFlutterWindow.swift': 'f497d07f72e4704a821faef262a9717c6b540957c613dc0d8db05410f2579aa1'}
-    expected_runtime={'flutter/lib/common.dart': '090eb7733b1567a8aa2347039ec45966dad68e0620dd14904e4f6cca895b7c3c', 'flutter/lib/desktop/pages/desktop_home_page.dart': 'db693e0fc9c59bb8b15aacab256eac6df9b0622d2f7bf412b02d622b29e0cc7f', 'flutter/lib/desktop/pages/desktop_tab_page.dart': 'db034e32b19d8e99482903e9adb83f9f91ee24bfeb509f0e7658a6217783d074', 'flutter/lib/desktop/widgets/tabbar_widget.dart': 'd05d6fd84b6c2f51775dfb7e2eb928367a81addbba0dbef56adc2494935685f6', 'flutter/lib/main.dart': '982765b4bd1bdf52aec77af49398ff590697978178248d546ec777b947e3d2b8', 'flutter/lib/mixel_support_app_exit.dart': '37b2f956dbbf07e4129c7b0db1d695d11dbdb1952699e4124238b9befcfbf06e', 'flutter/lib/models/ab_model.dart': 'b4c7038cb74488a2916dc2b34e33d25a3084d33a2dcf4989b4af249a2567e5fe', 'flutter/lib/models/native_model.dart': 'd80cb9aa666b49c83de4ddbd3ce79cb99859a9fe16d479cbb36d5643cdb7d4df', 'flutter/lib/models/server_model.dart': '0c85a7230d2277f9d2dea092b81883717b184f7c315f25833078bfd0824bcda8', 'flutter/lib/utils/multi_window_manager.dart': '27e065acf8f7feb2c80151437c071689a2dc33f1bdc9b8ce9ecacd8b74e2ede4', 'flutter/macos/Runner/AppDelegate.swift': '8a70d4f1af3f0ad28a4119d6cd887b2096f8869a559b7589fc54015d19d771a1', 'flutter/macos/Runner/MainFlutterWindow.swift': 'f497d07f72e4704a821faef262a9717c6b540957c613dc0d8db05410f2579aa1'}
+    expected_runtime={'flutter/lib/common.dart': '3ee4fd4229ffb0b664c8efdae5f85daf7d316391b86de0074135dbad6b258a3b', 'flutter/lib/desktop/pages/desktop_home_page.dart': 'db693e0fc9c59bb8b15aacab256eac6df9b0622d2f7bf412b02d622b29e0cc7f', 'flutter/lib/desktop/pages/desktop_tab_page.dart': 'db034e32b19d8e99482903e9adb83f9f91ee24bfeb509f0e7658a6217783d074', 'flutter/lib/desktop/widgets/tabbar_widget.dart': 'd05d6fd84b6c2f51775dfb7e2eb928367a81addbba0dbef56adc2494935685f6', 'flutter/lib/main.dart': '982765b4bd1bdf52aec77af49398ff590697978178248d546ec777b947e3d2b8', 'flutter/lib/mixel_support_app_exit.dart': '37b2f956dbbf07e4129c7b0db1d695d11dbdb1952699e4124238b9befcfbf06e', 'flutter/lib/models/ab_model.dart': 'b4c7038cb74488a2916dc2b34e33d25a3084d33a2dcf4989b4af249a2567e5fe', 'flutter/lib/models/native_model.dart': 'd80cb9aa666b49c83de4ddbd3ce79cb99859a9fe16d479cbb36d5643cdb7d4df', 'flutter/lib/models/server_model.dart': '0c85a7230d2277f9d2dea092b81883717b184f7c315f25833078bfd0824bcda8', 'flutter/lib/utils/multi_window_manager.dart': '27e065acf8f7feb2c80151437c071689a2dc33f1bdc9b8ce9ecacd8b74e2ede4', 'flutter/macos/Runner/AppDelegate.swift': '8a70d4f1af3f0ad28a4119d6cd887b2096f8869a559b7589fc54015d19d771a1', 'flutter/macos/Runner/MainFlutterWindow.swift': 'f497d07f72e4704a821faef262a9717c6b540957c613dc0d8db05410f2579aa1'}
     if PROFILE == P.HISTORICAL_FILES:
         expected_runtime = historical_runtime
+    else:
+        # The qualified current ACK profile retains its needed dart:math import.
+        # Prove its entire runtime is the earlier pinned composed body plus only
+        # that one import; keep the historical no-ACK profile byte-exact above.
+        common = P.regular(valid, 'flutter/lib/common.dart')
+        needed_math = b"import 'dart:math';\n"
+        assert common.count(needed_math) == 1
+        assert P.digest(common.replace(needed_math, b'', 1)) == '090eb7733b1567a8aa2347039ec45966dad68e0620dd14904e4f6cca895b7c3c'
     assert set(expected_runtime)==set(P.FILES)|{P.GENERATED}
     conserved={}
     for name,expected in expected_runtime.items():
@@ -230,7 +238,13 @@ def previous_cleanup_controls(out, fixture):
     raw=b'    helper = regular(helper_path.parent, helper_path.name)\n'
     assert current.count(normalized)==1
     original=current.replace(normalized,raw)
-    assert P.digest(original)=='3f54cf5084df454de970aca15ef1183989f6c40fa0d35807cca9c1f6a639e513'
+    # The production helper changed only its exact composed common.dart pin
+    # for the qualified needed-math foundation. Preserve the historical whole
+    # helper identity while executing the raw verifier with current inputs.
+    current_common_pin = b'66f58cc2606eba8a240e0f960c39c8ba18c14616352ef60b83f6202af5cf605a'
+    earlier_common_pin = b'7d8953486dc5087cf7d87bc8c625710ca982f7d7bca5f7f58a4c85ecf3ab2695'
+    assert original.count(current_common_pin) == 1
+    assert P.digest(original.replace(current_common_pin, earlier_common_pin, 1)) == '3f54cf5084df454de970aca15ef1183989f6c40fa0d35807cca9c1f6a639e513'
     for label,data,accepted in (('lf',helper,True),('crlf',helper.replace(b'\n',b'\r\n'),True),
         ('mixed',helper.replace(b'\n',b'\r\n',1),False),('tampered',helper+b'\n# altered verifier\n',False)):
         scripts=out/('prior-verifier-newline-'+label)/'scripts'; scripts.mkdir(parents=True)
@@ -890,7 +904,8 @@ def dart_controls(out, app, flutter, pipeline):
     fixture=out/'source-lf'
     if app:
         copied=out/'app-fixture'
-        shutil.copytree(app,copied,ignore=shutil.ignore_patterns('.git','build','__pycache__'))
+        with A.startup_baseline(app) as checked_app:
+            shutil.copytree(checked_app,copied,ignore=shutil.ignore_patterns('.git','build','__pycache__'))
         file_transfer=(copied/F.GENERATED).exists() or (copied/F.GENERATED).is_symlink()
         if file_transfer: F.apply(copied,restore=True)
         if (copied/S.OWNED).exists(): S.apply(copied,restore=True)

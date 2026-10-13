@@ -6,6 +6,7 @@ from pathlib import Path
 import runpy
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 PATCH = runpy.run_path(str(ROOT / "scripts/patch-flutter-branding.py"))
@@ -24,7 +25,7 @@ class BrandingTests(unittest.TestCase):
         self.source.parent.mkdir(parents=True)
         self.assets = self.repo / "flutter/assets"
         self.assets.mkdir(parents=True)
-        self.source.write_text("// unchanged prefix\n" + PATCH["ORIGINAL"] + "\n" + PATCH["FOOTER_ORIGINAL"] + "\n// unchanged suffix\n")
+        self.source.write_bytes(("// unchanged prefix\n" + PATCH["ORIGINAL"] + "\n" + PATCH["FOOTER_ORIGINAL"] + "\n// unchanged suffix\n").encode("utf-8"))
         self.svg = self.assets / "icon.svg"
         self.svg.write_bytes(SVG.read_bytes())
         self.compiled = self.root / "compiled/flutter_assets"
@@ -32,7 +33,7 @@ class BrandingTests(unittest.TestCase):
         self.png = self.compiled / "assets/icon.png"
         self.manifest = self.compiled / "AssetManifest.json"
         self.png.write_bytes(ICON.read_bytes())
-        self.manifest.write_text(json.dumps({"assets/icon.png": ["assets/icon.png"]}))
+        self.manifest.write_bytes(json.dumps({"assets/icon.png": ["assets/icon.png"]}).encode("utf-8"))
 
     def apply(self):
         PATCH["apply"](self.repo, ROOT / "branding")
@@ -65,11 +66,43 @@ class BrandingTests(unittest.TestCase):
         self.apply()
         self.assertEqual(self.source.read_bytes(), expected)
 
+    def test_host_text_translation_cannot_change_exact_binary_loader_fixtures(self):
+        original_write = Path.write_text
+        for ending in ("\n", "\r\n"):
+            def translated_write(target, data, *args, **kwargs):
+                if kwargs.get("newline") is None:
+                    kwargs["newline"] = ending
+                return original_write(target, data, *args, **kwargs)
+            with self.subTest(host_text_newline=repr(ending)), mock.patch.object(Path, "write_text", new=translated_write):
+                for name in (
+                    "test_original_loader_has_no_png_and_uses_unbranded_svg_corrected_is_idempotent",
+                    "test_windows_crlf_is_preserved_outside_exact_loader_and_idempotent",
+                ):
+                    result = unittest.TestResult()
+                    BrandingTests(name).run(result)
+                    self.assertTrue(result.wasSuccessful(), result.failures + result.errors)
+
+    def test_doubled_and_mixed_loader_newlines_refuse_before_asset_mutation(self):
+        before = self.source.read_bytes()
+        malformed = (
+            before.replace(b"\n", b"\r\r\n"),
+            before.replace(b"Widget loadIcon(double size) {\n", b"Widget loadIcon(double size) {\r\n", 1),
+            before.replace(b"Widget loadPowered(BuildContext context) {\n", b"Widget loadPowered(BuildContext context) {\r\n", 1),
+        )
+        for raw in malformed:
+            with self.subTest(source_sha256=hashlib.sha256(raw).hexdigest()):
+                self.source.write_bytes(raw)
+                with self.assertRaisesRegex(ValueError, "Pinned Flutter (icon loader|support footer) changed"):
+                    self.apply()
+                self.assertEqual(self.source.read_bytes(), raw)
+                self.assertEqual(self.svg.read_bytes(), SVG.read_bytes())
+                self.assertFalse((self.assets / "icon.png").exists())
+
     def test_source_drift_and_duplicate_loaders_fail_before_any_asset_mutation(self):
         for source in (PATCH["ORIGINAL"].replace("width: size", "width: size + 1"), PATCH["ORIGINAL"] * 2,
                        PATCH["ORIGINAL"] + PATCH["BRANDED"]):
             with self.subTest(source=source[:35]):
-                self.source.write_text(source + "\n" + PATCH["FOOTER_ORIGINAL"])
+                self.source.write_bytes((source + "\n" + PATCH["FOOTER_ORIGINAL"]).encode("utf-8"))
                 with self.assertRaisesRegex(ValueError, "Pinned Flutter icon loader changed"):
                     self.apply()
                 self.assertEqual(self.svg.read_bytes(), SVG.read_bytes())
@@ -80,7 +113,7 @@ class BrandingTests(unittest.TestCase):
                        PATCH["FOOTER_ORIGINAL"] * 2,
                        PATCH["FOOTER_ORIGINAL"] + PATCH["FOOTER_BRANDED"]):
             with self.subTest(footer=footer[:40]):
-                self.source.write_text(PATCH["ORIGINAL"] + "\n" + footer)
+                self.source.write_bytes((PATCH["ORIGINAL"] + "\n" + footer).encode("utf-8"))
                 with self.assertRaisesRegex(ValueError, "Pinned Flutter support footer changed"):
                     self.apply()
                 self.assertEqual(self.svg.read_bytes(), SVG.read_bytes())
@@ -120,7 +153,7 @@ class BrandingTests(unittest.TestCase):
     def test_original_packaged_svg_without_png_is_rejected(self):
         self.png.unlink()
         (self.compiled / "assets/icon.svg").write_bytes(SVG.read_bytes())
-        self.manifest.write_text(json.dumps({"assets/icon.svg": ["assets/icon.svg"]}))
+        self.manifest.write_bytes(json.dumps({"assets/icon.svg": ["assets/icon.svg"]}).encode("utf-8"))
         with self.assertRaises(ValueError):
             self.verify()
 
@@ -138,7 +171,7 @@ class BrandingTests(unittest.TestCase):
                       {"assets/icon.png": ["assets/icon.png"], "assets/icon.svg": []}, [],
                       '{"assets/icon.png":[],"assets/icon.png":["assets/icon.png"]}'):
             with self.subTest(value=value):
-                self.manifest.write_text(value if isinstance(value, str) else json.dumps(value))
+                self.manifest.write_bytes((value if isinstance(value, str) else json.dumps(value)).encode("utf-8"))
                 with self.assertRaises(ValueError):
                     self.verify()
 
