@@ -20,23 +20,24 @@ import zipfile
 
 REPOSITORY = "Jangopeople/mixel-remote-client"
 REPOSITORY_ID = 1229987840
-SOURCE = "872869118b75fc941f1379a7428cbc8bcf85e967"
+SOURCE = "cc95734a3980b93d63d9e8bf0cc7c3689bba846b"
+SOURCE_TREE = "bcdf4e25e24e8fe5339faafc7d2bb230bb9e2f37"
 BRANCH = "fix/remote-support-reliability"
-RUN = 38405174241
+RUN = 38424276372
 ATTEMPT = 1
-JOB = 115325385823
+JOB = 115391416289
 WORKFLOW_ID = 271445168
 WORKFLOW = ".github/workflows/build.yml"
 DIAGNOSTIC_WORKFLOW = ".github/workflows/diagnose-macos-failed-app.yml"
 JOB_NAME = "macos (aarch64, aarch64-apple-darwin)"
 PACKAGE_STEP = "Package + sign + notarize (.app then .dmg)"
 UPLOAD_STEP = "Retain failed macOS launch bundle and bounded diagnostics"
-ARTIFACT_ID = 11821416118
+ARTIFACT_ID = 11830478071
 ARTIFACT_NAME = "macos-launch-failure-diagnostic-aarch64"
-ARTIFACT_BYTES = 24567268
-ARTIFACT_SHA256 = "dd7039d43a0ea608a1f102375c97da5c6285681c4e8c871dd49878ae2eb3edba"
-ARTIFACT_CREATED = "2026-10-13T14:07:37Z"
-ARTIFACT_EXPIRES = "2027-01-11T13:28:02Z"
+ARTIFACT_BYTES = 24568859
+ARTIFACT_SHA256 = "316235b50b6dc9714646dcf543601c6e927e11a7abebb5e674f60a8fd8eed76c"
+ARTIFACT_CREATED = "2026-10-13T16:23:46Z"
+ARTIFACT_EXPIRES = "2027-01-11T15:41:53Z"
 TEAM = "5277F8NDH4"
 APP = "Mixel-Remote.app"
 OUTER_APP = "aarch64/signed-stapled-diagnostic-app.zip"
@@ -172,8 +173,8 @@ def validate_run(record):
         identity = record.get(field, {})
         require(identity.get("full_name") == REPOSITORY and type(identity.get("id")) is int
                 and identity["id"] == REPOSITORY_ID, "producer-repository")
-    require((record.get("status"), record.get("conclusion")) in
-            (("in_progress", None), ("completed", "failure")), "producer-diagnostic-state")
+    require((record.get("status"), record.get("conclusion")) ==
+            ("completed", "failure"), "producer-diagnostic-state")
 
 
 def validate_jobs(record):
@@ -408,6 +409,8 @@ def hosted_context(diagnostic, producer):
         require(stdout.decode().strip() == expected, "checkout-source")
         stdout, _ = capture(["git", "-C", str(checkout), "status", "--porcelain"], "checkout-status")
         require(stdout == b"", "checkout-dirty")
+    stdout, _ = capture(["git", "-C", str(producer), "rev-parse", "HEAD^{tree}"], "producer-tree")
+    require(stdout.decode().strip() == SOURCE_TREE, "producer-tree-source")
     old_workflow = bounded_read(producer / WORKFLOW, 1024 * 1024).decode()
     contract = ('DIAGNOSTIC_APP_ZIP="$DIAGNOSTICS/signed-stapled-diagnostic-app.zip"',
                 'ditto -c -k --keepParent "$APP_PATH" "$DIAGNOSTIC_APP_ZIP"',
@@ -522,6 +525,66 @@ def safe_launch_facts(record):
     return record
 
 
+
+def safe_gui_facts(record):
+    require(isinstance(record, dict) and set(record) == {"schema", "originalResultPreserved",
+            "probeObservations", "serviceObservations", "observationLimitReached", "postFailureWindow"}
+            and type(record.get("schema")) is int and record["schema"] == 1
+            and record.get("originalResultPreserved") is True
+            and type(record.get("observationLimitReached")) is bool, "gui-observation-schema")
+    window = record.get("postFailureWindow")
+    refusals = {"isolated-context", "noncanonical-app", "gui-owner-changed", "authenticated-connection",
+                "ownership-unavailable", "observation-operation-failed", "server-identity-changed", "service-health-unavailable"}
+    require(isinstance(window, dict) and set(window) == {"attempted", "deadlineSeconds", "elapsedSeconds", "refusalCategory"}
+            and type(window.get("attempted")) is bool and type(window.get("deadlineSeconds")) is int
+            and window["deadlineSeconds"] == 14 and window.get("refusalCategory") in refusals | {None},
+            "gui-observation-window")
+    def finite_range(value, low, high):
+        try:
+            return type(value) in (int, float) and low <= value <= high and math.isfinite(value)
+        except OverflowError:
+            return False
+    require(finite_range(window.get("elapsedSeconds"), 0, 15), "gui-observation-window-bound")
+    require(window["attempted"] or window["elapsedSeconds"] == 0 and window["refusalCategory"] is None,
+            "gui-observation-window-state")
+    observations = record.get("probeObservations")
+    require(isinstance(observations, list) and len(observations) <= 64, "gui-observation-bound")
+    fields = {"pid", "origin", "status", "observedUnixTime", "elapsedSeconds", "running", "visible", "hidden",
+              "launchTime", "launchTimeState", "bundleMatch"}
+    for item in observations:
+        require(isinstance(item, dict) and set(item) == fields and type(item.get("pid")) is int
+                and 0 < item["pid"] < 2**31 and item.get("origin") in ("fixture", "post-failure")
+                and item.get("status") in ("response", "probe-unavailable")
+                and finite_range(item.get("observedUnixTime"), 1, 2**40)
+                and finite_range(item.get("elapsedSeconds"), 0, 15)
+                and all(type(item.get(field)) is bool or item.get(field) is None for field in ("running", "visible", "hidden"))
+                and type(item.get("bundleMatch")) is bool and item.get("launchTimeState") in ("finite", "missing", "invalid"),
+                "unsafe-gui-observation")
+        launch = item["launchTime"]
+        require((item["launchTimeState"] == "finite" and finite_range(launch, 0, 2**40))
+                or item["launchTimeState"] in ("missing", "invalid") and launch is None, "gui-launch-time-state")
+        require(item["origin"] != "post-failure" or window["attempted"], "gui-post-failure-window-required")
+
+    services = record.get("serviceObservations")
+    require(isinstance(services, list) and len(services) <= 64, "service-observation-bound")
+    service_fields = {"pid", "observedUnixTime", "elapsedSeconds", "retainedServerLaunchTime",
+                      "serverLaunchMatch", "attendedServiceReady", "status"}
+    for item in services:
+        require(isinstance(item, dict) and set(item) == service_fields and type(item.get("pid")) is int
+                and 0 < item["pid"] < 2**31 and finite_range(item.get("observedUnixTime"), 1, 2**40)
+                and finite_range(item.get("elapsedSeconds"), 0, 15) and type(item.get("serverLaunchMatch")) is bool
+                and (type(item.get("attendedServiceReady")) is bool or item.get("attendedServiceReady") is None)
+                and item.get("status") in ("response", "server-identity-unavailable", "ownership-unavailable", "health-unavailable")
+                and (item.get("retainedServerLaunchTime") is None or finite_range(item["retainedServerLaunchTime"], 1, 2**40)),
+                "unsafe-service-observation")
+        require(item["status"] != "response" or item["serverLaunchMatch"] and type(item["attendedServiceReady"]) is bool
+                and finite_range(item["retainedServerLaunchTime"], 1, 2**40),
+                "service-response-requires-retained-identity")
+        require(item["status"] == "response" or item["attendedServiceReady"] is None, "service-refusal-unknown-only")
+        require(window["attempted"], "service-post-failure-window-required")
+    return record
+
+
 def download_archive(destination):
     path = destination / "failed-arm-artifact.zip"
     with path.open("xb") as output:
@@ -604,6 +667,8 @@ def main(argv=None):
             private / "tray-runtime/privacy-match-safe-facts.json", MAX_FACTS)))
         sanitized["launchServicesObservations"] = safe_launch_facts(unique_json(bounded_read(
             private / "tray-runtime/launch-observation-safe-facts.json", MAX_FACTS)))
+        sanitized["guiProbeObservations"] = safe_gui_facts(unique_json(bounded_read(
+            private / "tray-runtime/gui-probe-safe-facts.json", MAX_FACTS)))
         if "criticalHashes" in sanitized:
             require(sanitized["criticalHashes"] == receipt["criticalHashes"], "runtime-exact-app-copy")
         else:

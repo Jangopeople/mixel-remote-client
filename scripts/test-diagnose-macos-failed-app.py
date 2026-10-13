@@ -34,7 +34,7 @@ exec(compile(DRIVER_SOURCE.read_bytes(), str(DRIVER_SOURCE), "exec"), d.__dict__
 def run():
     return {"id": v.RUN, "head_sha": v.SOURCE, "head_branch": v.BRANCH,
             "event": "workflow_dispatch", "path": v.WORKFLOW, "workflow_id": v.WORKFLOW_ID,
-            "run_attempt": 1, "status": "in_progress", "conclusion": None,
+            "run_attempt": 1, "status": "completed", "conclusion": "failure",
             "repository": {"id": v.REPOSITORY_ID, "full_name": v.REPOSITORY},
             "head_repository": {"id": v.REPOSITORY_ID, "full_name": v.REPOSITORY}}
 
@@ -43,11 +43,11 @@ def jobs():
     return {"total_count": 1, "jobs": [{"id": v.JOB, "run_id": v.RUN, "run_attempt": 1,
              "name": v.JOB_NAME, "status": "completed", "conclusion": "failure",
              "head_sha": v.SOURCE, "head_branch": v.BRANCH,
-             "started_at": "2026-10-13T13:33:34Z", "completed_at": "2026-10-13T14:07:45Z",
+             "started_at": "2026-10-13T15:46:04Z", "completed_at": "2026-10-13T16:24:06Z",
              "steps": [{"name": v.PACKAGE_STEP, "status": "completed", "conclusion": "failure",
-                        "started_at": "2026-10-13T14:06:18Z", "completed_at": "2026-10-13T14:07:34Z"},
+                        "started_at": "2026-10-13T16:22:23Z", "completed_at": "2026-10-13T16:23:41Z"},
                        {"name": v.UPLOAD_STEP, "status": "completed", "conclusion": "success",
-                        "started_at": "2026-10-13T14:07:35Z", "completed_at": "2026-10-13T14:07:37Z"}]}]}
+                        "started_at": "2026-10-13T16:23:43Z", "completed_at": "2026-10-13T16:23:46Z"}]}]}
 
 
 def artifact():
@@ -103,9 +103,10 @@ class DiagnosticControls(unittest.TestCase):
         self.native.stop()
         self.directory.cleanup()
 
-    def test_exact_failed_job_is_sufficient_while_overall_producer_is_running(self):
+    def test_exact_terminal_failed_producer_and_job_are_required(self):
         v.validate_run(run())
-        v.validate_run(dict(run(), status="completed", conclusion="failure"))
+        with self.assertRaises(v.Refusal):
+            v.validate_run(dict(run(), status="in_progress", conclusion=None))
         job, upload = v.validate_jobs(jobs())
         self.assertEqual(job["id"], v.JOB)
         v.validate_artifact(artifact(), upload, datetime(2026, 10, 13, tzinfo=timezone.utc))
@@ -135,7 +136,7 @@ class DiagnosticControls(unittest.TestCase):
         for key, value in (("id", v.ARTIFACT_ID + 1), ("id", True), ("name", "macos-aarch64"),
                            ("digest", "sha256:" + "b" * 64), ("size_in_bytes", v.ARTIFACT_BYTES + 1),
                            ("size_in_bytes", True), ("expired", True), ("expires_at", "2026-01-01T00:00:00Z"),
-                           ("created_at", "2026-10-13T14:08:00Z"), ("updated_at", "2026-10-13T14:08:00Z")):
+                           ("created_at", "2026-10-13T16:23:50Z"), ("updated_at", "2026-10-13T16:23:50Z")):
             with self.subTest(field=key), self.assertRaises(v.Refusal):
                 v.validate_artifact(dict(artifact(), **{key: value}), upload)
         for key, value in (("id", v.RUN + 1), ("head_sha", "b" * 40), ("head_branch", "main"),
@@ -145,7 +146,7 @@ class DiagnosticControls(unittest.TestCase):
                 v.validate_artifact(altered, upload)
         with self.assertRaises(v.Refusal):
             v.validate_artifact(artifact(), upload, datetime(2028, 1, 1, tzinfo=timezone.utc))
-        late_upload = dict(upload, started_at="2026-10-13T14:07:38Z", completed_at="2026-10-13T14:07:39Z")
+        late_upload = dict(upload, started_at="2026-10-13T16:23:47Z", completed_at="2026-10-13T16:23:48Z")
         with self.assertRaises(v.Refusal):
             v.validate_artifact(artifact(), late_upload)
 
@@ -328,7 +329,7 @@ class DiagnosticControls(unittest.TestCase):
             v.safe_privacy_facts(dict(valid, originalResultPreserved=False))
 
     def test_driver_calls_frozen_main_and_retains_additive_facts_without_changing_argv_or_result(self):
-        desktop = types.SimpleNamespace(privacy_issue=lambda data: False, helper_request=lambda *args: {"pid": 101, "launchTime": 100.5})
+        desktop = types.SimpleNamespace(privacy_issue=lambda data: False, helper_request=lambda *args: {"pid": 101, "launchTime": 100.5}, probe=lambda *args: {})
         folder = self.root / "driver-proof"
         def frozen_main():
             self.assertEqual(d.sys.argv[1:], ["--app", str(self.root / v.APP), "--proofs", str(folder)])
@@ -337,7 +338,7 @@ class DiagnosticControls(unittest.TestCase):
             folder.mkdir()
             (folder / "tray-runtime-safe-facts.json").write_text("{}\n")
             return 1
-        tray = types.SimpleNamespace(desktop=desktop, main=frozen_main)
+        tray = types.SimpleNamespace(desktop=desktop, main=frozen_main, gui_owner=lambda *args: 102, launch_identity=lambda *args: 100.5)
         spec = types.SimpleNamespace(loader=types.SimpleNamespace(exec_module=lambda module: None))
         original_argv = d.sys.argv
         with patch.object(d.importlib.util, "spec_from_file_location", return_value=spec), \
@@ -348,6 +349,9 @@ class DiagnosticControls(unittest.TestCase):
         self.assertEqual(v.safe_privacy_facts(output)["matchedObservations"], [])
         launches = json.loads((folder / "launch-observation-safe-facts.json").read_text())
         self.assertEqual(v.safe_launch_facts(launches)["launchObservations"], [{"action": "tray", "pid": 101, "launchTime": 100.5}])
+        probes = json.loads((folder / "gui-probe-safe-facts.json").read_text())
+        self.assertEqual(v.safe_gui_facts(probes)["probeObservations"], [])
+        self.assertFalse(probes["postFailureWindow"]["attempted"])
 
     def test_launch_wrapper_preserves_same_result_object_and_exception_and_records_only_four_numeric_observations(self):
         result = {"pid": 101, "launchTime": 100.5, "rawResponse": "mixel-remote://support/?invite=private-value"}
@@ -429,11 +433,13 @@ class DiagnosticControls(unittest.TestCase):
             self.assertEqual(command[0], "git")
             if command[-1] == "HEAD":
                 return ((v.SOURCE if command[2] == str(producer) else "b" * 40) + "\n").encode(), b""
+            if command[-1] == "HEAD^{tree}":
+                return (v.SOURCE_TREE + "\n").encode(), b""
             return b"", b""
         with patch.dict(v.os.environ, environment, clear=True), patch.object(v.sys, "platform", "darwin"), \
              patch.object(v.platform, "machine", return_value="arm64"), patch.object(v, "capture", side_effect=git_only):
             self.assertEqual(v.hosted_context(self.root, producer), "b" * 40)
-        self.assertEqual(len(calls), 4)
+        self.assertEqual(len(calls), 5)
         for field, value in (("GITHUB_EVENT_NAME", "pull_request"), ("GITHUB_RUN_ATTEMPT", "2"),
                              ("GITHUB_REF", "refs/heads/main"), ("GITHUB_WORKFLOW_REF", "other/repo/file@refs/heads/main")):
             with patch.dict(v.os.environ, dict(environment, **{field: value}), clear=True), \
@@ -511,6 +517,9 @@ class DiagnosticControls(unittest.TestCase):
                 "originalResultPreserved": True, "matchedObservations": [], "observationLimitReached": False}))
             (folder / "launch-observation-safe-facts.json").write_text(json.dumps({"schema": 1,
                 "originalResultPreserved": True, "launchObservations": [], "observationLimitReached": False}))
+            (folder / "gui-probe-safe-facts.json").write_text(json.dumps({"schema": 1,
+                "originalResultPreserved": True, "probeObservations": [], "serviceObservations": [], "observationLimitReached": False,
+                "postFailureWindow": {"attempted": False, "deadlineSeconds": 14, "elapsedSeconds": 0, "refusalCategory": None}}))
             return subprocess.CompletedProcess(command, 1)
         output = io.StringIO()
         with patch.object(v, "hosted_context", return_value="b" * 40), patch.object(v, "api", side_effect=metadata), \
@@ -529,6 +538,439 @@ class DiagnosticControls(unittest.TestCase):
         self.assertNotIn(b"secret app log", serialized)
         self.assertFalse(any(path.suffix == ".log" for path in private.rglob("*")))
         self.assertEqual(json.loads((safe / "tray-diagnostic-safe-facts.json").read_text())["primaryFailure"]["phase"], "os-url-activation")
+
+
+
+class GuiIdentityControls(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory(prefix="mixel-gui-identity-source-control-")
+        self.app = Path(self.directory.name).resolve()
+        self.native = patch.object(d.subprocess, "run", side_effect=AssertionError("Native/network operation forbidden in local controls"))
+        self.native.start()
+        self.clock = 0.0
+        self.timer = patch.object(d, "time", types.SimpleNamespace(
+            monotonic=lambda: self.clock, time=lambda: 1791900000.0 + self.clock,
+            sleep=lambda seconds: setattr(self, "clock", self.clock + seconds)))
+        self.timer.start()
+
+    def tearDown(self):
+        self.timer.stop()
+        self.native.stop()
+        self.directory.cleanup()
+
+    def tray(self, state=None):
+        if state is None:
+            state = {"running": True, "visible": False, "hidden": False, "launchTime": 0,
+                     "bundlePath": str(self.app), "rawResponse": "mixel-remote://support/?invite=private"}
+        self.state = state
+        self.original_failure = RuntimeError("Tray fixture process has no retained launch identity")
+        self.calls = []
+        desktop = types.SimpleNamespace(probe=lambda *args: self.state)
+        def identity(helper, app, pid):
+            value = desktop.probe(helper, pid, app)
+            if not value.get("running") or not value.get("launchTime"):
+                raise self.original_failure
+            return value["launchTime"]
+        def owner(app, server_pid):
+            self.calls.append(("kernel-owner", server_pid))
+            return 102
+        def connections(server_pid, app):
+            self.calls.append(("connections", server_pid))
+            return True
+        tray = types.SimpleNamespace(desktop=desktop, gui_owner=owner, launch_identity=identity,
+                                     isolated_ci=lambda: None, no_connections=connections)
+        return tray
+
+    def test_gui_probe_pass_through_preserves_same_object_arguments_and_private_values(self):
+        tray = self.tray()
+        calls = []
+        result = self.state
+        def original(*args, **kwargs):
+            calls.append((args, kwargs))
+            return result
+        tray.desktop.probe = original
+        facts = d.observe_gui_identity(tray)
+        self.assertEqual(tray.gui_owner(self.app, 101), 102)
+        argument = object()
+        self.assertIs(tray.desktop.probe(argument, 102, self.app), result)
+        self.assertEqual(calls, [((argument, 102, self.app), {})])
+        self.assertIn("rawResponse", result)
+        safe = v.safe_gui_facts(facts)
+        self.assertEqual(safe["probeObservations"][0]["launchTime"], 0)
+        self.assertTrue(safe["probeObservations"][0]["bundleMatch"])
+        for value in ("mixel-remote://", "private", str(self.app), "rawResponse"):
+            self.assertNotIn(value, json.dumps(safe))
+
+    def test_original_probe_exception_identity_is_preserved_and_not_replaced(self):
+        tray = self.tray()
+        error = RuntimeError("raw secret never retained")
+        def failed(*args): raise error
+        tray.desktop.probe = failed
+        facts = d.observe_gui_identity(tray)
+        tray.gui_owner(self.app, 101)
+        with self.assertRaises(RuntimeError) as raised:
+            tray.desktop.probe("helper", 102, self.app)
+        self.assertIs(raised.exception, error)
+        self.assertEqual(v.safe_gui_facts(facts)["probeObservations"][0]["status"], "probe-unavailable")
+        self.assertNotIn("raw secret", json.dumps(facts))
+        self.assertFalse(facts["postFailureWindow"]["attempted"])
+
+    def test_failed_identity_stays_failed_after_late_visible_registration_and_original_cleanup_refusal(self):
+        tray = self.tray()
+        facts = d.observe_gui_identity(tray)
+        tray.gui_owner(self.app, 101)
+        timeouts = []
+        def later(helper, pid, app, timeout):
+            timeouts.append(timeout)
+            return {"running": True, "visible": self.clock >= 3, "hidden": False,
+                    "launchTime": 1791900000 if self.clock >= 3 else 0, "bundlePath": str(app)}
+        with patch.object(d, "bounded_gui_probe", side_effect=later), self.assertRaises(RuntimeError) as raised:
+            tray.launch_identity("helper", self.app, 102)
+        self.assertIs(raised.exception, self.original_failure)
+        self.assertEqual(self.clock, 10.5)
+        self.assertTrue(all(0 < value <= 1 for value in timeouts))
+        observations = v.safe_gui_facts(facts)["probeObservations"]
+        later = [row for row in observations if row["origin"] == "post-failure"]
+        self.assertTrue(any(row["launchTime"] == 0 and not row["visible"] for row in later))
+        self.assertTrue(any(row["launchTime"] > 0 and row["visible"] for row in later))
+        # The original retained identity remains unavailable; observation does
+        # not adopt the later launchTime or change the fixture/cleanup result.
+        with self.assertRaises(RuntimeError) as cleanup:
+            tray.launch_identity("helper", self.app, 102)
+        self.assertIs(cleanup.exception, self.original_failure)
+        self.assertEqual(self.clock, 10.5)
+        self.assertEqual(len([x for x in self.calls if x[0] == "connections"]), len(later))
+
+    def test_persistent_zero_launch_time_remains_distinct_from_late_registration(self):
+        tray = self.tray()
+        facts = d.observe_gui_identity(tray)
+        tray.gui_owner(self.app, 101)
+        with patch.object(d, "bounded_gui_probe", return_value=self.state), self.assertRaises(RuntimeError):
+            tray.launch_identity("helper", self.app, 102)
+        rows = v.safe_gui_facts(facts)["probeObservations"]
+        self.assertTrue(rows)
+        self.assertTrue(all(row["running"] and row["launchTime"] == 0 for row in rows))
+        self.assertEqual(facts["postFailureWindow"]["elapsedSeconds"], 10.5)
+
+    def test_missing_ns_running_application_is_safe_state_without_authorizing_its_empty_bundle(self):
+        result = {"running": False, "visible": False, "hidden": False, "bundlePath": ""}
+        response = subprocess.CompletedProcess(["fixture"], 0, json.dumps(result), "")
+        with patch.object(d.subprocess, "run", return_value=response):
+            self.assertEqual(d.bounded_gui_probe(Path("/owned/helper"), 102, self.app, 0.75), result)
+        summary = d.probe_summary(result, self.app)
+        self.assertFalse(summary["running"])
+        self.assertFalse(summary["bundleMatch"])
+        self.assertEqual(summary["launchTimeState"], "missing")
+        self.assertIsNone(summary["launchTime"])
+
+    def test_probe_only_command_has_bounded_timeout_and_refuses_malformed_or_excessive_response(self):
+        calls = []
+        valid = {"running": True, "bundlePath": str(self.app), "launchTime": 0}
+        def controlled(command, **kwargs):
+            calls.append((command, kwargs))
+            return subprocess.CompletedProcess(command, 0, json.dumps(valid), "")
+        with patch.object(d.subprocess, "run", side_effect=controlled):
+            self.assertEqual(d.bounded_gui_probe(Path("/owned/helper"), 102, self.app, 0.25), valid)
+        self.assertEqual(calls[0][0], ["/owned/helper", "probe", "102"])
+        self.assertEqual(calls[0][1]["timeout"], 0.25)
+        for code, output in ((0, "not json"), (1, "{}"), (0, '{"error":"raw secret"}'), (0, "x" * 4097)):
+            with patch.object(d.subprocess, "run", return_value=subprocess.CompletedProcess([], code, output, "")), self.assertRaises(RuntimeError):
+                d.bounded_gui_probe(Path("/owned/helper"), 102, self.app, 0.25)
+
+    def test_extra_sampling_refuses_wrong_kernel_owner_authentication_isolation_and_missing_owner(self):
+        for field, replacement, category in (
+                ("gui_owner", lambda *args: 103, "gui-owner-changed"),
+                ("no_connections", lambda *args: False, "authenticated-connection"),
+                ("isolated_ci", lambda: (_ for _ in ()).throw(RuntimeError("refused")), "isolated-context"),
+                ("gui_owner", lambda *args: (_ for _ in ()).throw(RuntimeError("no owner")), "ownership-unavailable")):
+            with self.subTest(field=field, category=category):
+                tray = self.tray()
+                original = d.observe_gui_identity(tray)
+                # original_owner is captured before wrapping, so modify the
+                # captured owner by making a fresh wrapper for each negative.
+                self.assertEqual(tray.gui_owner(self.app, 101), 102)
+                if field == "gui_owner":
+                    # Use a stateful original to preserve the first ownership
+                    # observation and refuse only the additional sample.
+                    counter = [0]
+                    fresh = self.tray()
+                    def changed(*args):
+                        counter[0] += 1
+                        return 102 if counter[0] == 1 else replacement(*args)
+                    fresh.gui_owner = changed
+                    facts = d.observe_gui_identity(fresh)
+                    fresh.gui_owner(self.app, 101)
+                    tray = fresh
+                else:
+                    facts = original
+                    setattr(tray, field, replacement)
+                with patch.object(d, "bounded_gui_probe", side_effect=AssertionError("No extra probe after ownership refusal")), self.assertRaises(RuntimeError) as raised:
+                    tray.launch_identity("helper", self.app, 102)
+                self.assertIs(raised.exception, self.original_failure)
+                self.assertEqual(facts["postFailureWindow"]["refusalCategory"], category)
+                self.assertEqual([row for row in facts["probeObservations"] if row["origin"] == "post-failure"], [])
+                v.safe_gui_facts(facts)
+
+    def test_unknown_gui_or_other_identity_error_never_starts_extra_observation(self):
+        for known, message in ((False, "Tray fixture process has no retained launch identity"), (True, "Different primary refusal")):
+            tray = self.tray()
+            error = RuntimeError(message)
+            tray.launch_identity = lambda *args: (_ for _ in ()).throw(error)
+            facts = d.observe_gui_identity(tray)
+            if known: tray.gui_owner(self.app, 101)
+            with patch.object(d, "bounded_gui_probe", side_effect=AssertionError("No observation permitted")), self.assertRaises(RuntimeError) as raised:
+                tray.launch_identity("helper", self.app, 102)
+            self.assertIs(raised.exception, error)
+            self.assertFalse(facts["postFailureWindow"]["attempted"])
+
+    def test_gui_schema_rejects_raw_paths_fields_invalid_pid_time_boolean_and_bounds(self):
+        tray = self.tray()
+        facts = d.observe_gui_identity(tray)
+        tray.gui_owner(self.app, 101)
+        tray.desktop.probe("helper", 102, self.app)
+        v.safe_gui_facts(facts)
+        for key, value in (("pid", True), ("pid", 0), ("origin", "native-launch"), ("status", "accepted"),
+                           ("observedUnixTime", float("nan")), ("elapsedSeconds", 16), ("running", "yes"),
+                           ("visible", 1), ("launchTime", -1), ("launchTimeState", "raw value"),
+                           ("bundleMatch", str(self.app)), ("bundlePath", str(self.app)), ("arguments", "raw bearer secret")):
+            changed = copy.deepcopy(facts);changed["probeObservations"][0][key] = value
+            with self.subTest(key=key), self.assertRaises(v.Refusal): v.safe_gui_facts(changed)
+        for key, value in (("deadlineSeconds", 15), ("elapsedSeconds", 16), ("refusalCategory", "raw exception"),
+                           ("attempted", "true"), ("launchTime", 12)):
+            changed = copy.deepcopy(facts);changed["postFailureWindow"][key] = value
+            with self.subTest(window=key), self.assertRaises(v.Refusal): v.safe_gui_facts(changed)
+        changed = copy.deepcopy(facts);changed["probeObservations"] *= 65
+        with self.assertRaises(v.Refusal): v.safe_gui_facts(changed)
+        for key, value in (("originalResultPreserved", False), ("schema", True), ("rawLogs", [])):
+            with self.subTest(record=key), self.assertRaises(v.Refusal): v.safe_gui_facts(dict(facts, **{key:value}))
+
+    def test_gui_summary_redacts_invalid_numeric_and_raw_boolean_fields(self):
+        for launch in (True, "secret", float("nan"), float("inf"), -1, 10**400):
+            result = d.probe_summary({"launchTime": launch, "running": "secret", "visible": 1,
+                                      "hidden": {}, "bundlePath": "mixel-remote://private"}, self.app)
+            self.assertIsNone(result["launchTime"])
+            self.assertEqual(result["launchTimeState"], "invalid")
+            self.assertTrue(all(result[field] is None for field in ("running", "visible", "hidden")))
+            self.assertFalse(result["bundleMatch"])
+
+
+
+    def test_timed_probe_failures_obey_deadline_preserve_primary_and_do_not_measure_after_owner_deadline(self):
+        tray = self.tray()
+        calls = [0]
+        def slow_owner(*args):
+            calls[0] += 1
+            if calls[0] > 1: self.clock += 1
+            return 102
+        tray.gui_owner = slow_owner
+        def slow_connections(*args):
+            self.clock += 2
+            return True
+        tray.no_connections = slow_connections
+        facts = d.observe_gui_identity(tray)
+        tray.gui_owner(self.app, 101)
+        deadlines = []
+        def timeout(helper, pid, app, seconds):
+            deadlines.append(seconds);self.clock += seconds
+            raise subprocess.TimeoutExpired(["read-only-probe"], seconds)
+        with patch.object(d, "bounded_gui_probe", side_effect=timeout), self.assertRaises(RuntimeError) as raised:
+            tray.launch_identity("helper", self.app, 102)
+        self.assertIs(raised.exception, self.original_failure)
+        self.assertEqual(self.clock, 13.5)
+        self.assertEqual(deadlines, [1, 1, 1])
+        window = v.safe_gui_facts(facts)["postFailureWindow"]
+        self.assertEqual(window["elapsedSeconds"], 13.5)
+        self.assertTrue(all(row["status"] == "probe-unavailable" for row in facts["probeObservations"][1:]))
+
+    def test_canonical_app_alias_is_refused_before_any_additive_probe(self):
+        tray = self.tray()
+        alias = self.app / "alias"
+        alias.symlink_to(self.app, target_is_directory=True)
+        facts = d.observe_gui_identity(tray)
+        tray.gui_owner(alias, 101)
+        with patch.object(d, "bounded_gui_probe", side_effect=AssertionError("No probe through app alias")), self.assertRaises(RuntimeError) as raised:
+            tray.launch_identity("helper", alias, 102)
+        self.assertIs(raised.exception, self.original_failure)
+        self.assertEqual(v.safe_gui_facts(facts)["postFailureWindow"]["refusalCategory"], "noncanonical-app")
+        self.assertEqual([row for row in facts["probeObservations"] if row["origin"] == "post-failure"], [])
+
+    def test_exact_cc_producer_tree_mismatch_is_refused_before_native_diagnosis(self):
+        producer = self.app / "producer"
+        (producer / ".github/workflows").mkdir(parents=True)
+        (producer / v.WORKFLOW).write_text((ROOT / v.WORKFLOW).read_text())
+        environment = {"GITHUB_ACTIONS": "true", "RUNNER_OS": "macOS", "GITHUB_REPOSITORY": v.REPOSITORY,
+                       "GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_SHA": "b" * 40,
+                       "GITHUB_RUN_ATTEMPT": "1", "GITHUB_REF": "refs/heads/" + v.BRANCH,
+                       "GITHUB_WORKFLOW_REF": v.REPOSITORY + "/" + v.DIAGNOSTIC_WORKFLOW + "@refs/heads/" + v.BRANCH}
+        def git_only(command, category):
+            self.assertEqual(command[0], "git")
+            if command[-1] == "HEAD":
+                return ((v.SOURCE if command[2] == str(producer) else "b" * 40) + "\n").encode(), b""
+            if command[-1] == "HEAD^{tree}": return ("c" * 40 + "\n").encode(), b""
+            return b"", b""
+        with patch.dict(v.os.environ, environment, clear=True), patch.object(v.sys, "platform", "darwin"), \
+             patch.object(v.platform, "machine", return_value="arm64"), patch.object(v, "capture", side_effect=git_only), self.assertRaises(v.Refusal) as raised:
+            v.hosted_context(self.app, producer)
+        self.assertEqual(str(raised.exception), "producer-tree-source")
+
+
+
+    def test_service_observation_distinguishes_late_gui_without_v2_and_late_v2_without_qualifying_either(self):
+        for becomes_ready in (False, True):
+            with self.subTest(becomes_ready=becomes_ready):
+                self.clock = 0
+                tray = self.tray()
+                health_calls = []
+                def health(server_pid, app, attended):
+                    health_calls.append((server_pid, attended))
+                    return becomes_ready and self.clock >= 3
+                tray.health = health
+                launches = {"launchObservations": [{"action": "tray", "pid": 101, "launchTime": 1791900000}]}
+                facts = d.observe_gui_identity(tray, launches)
+                tray.gui_owner(self.app, 101)
+                def later(helper, pid, app, timeout):
+                    return {"running": True, "visible": self.clock >= 3, "hidden": False,
+                            "launchTime": 1791900000 if pid == 101 or self.clock >= 3 else 0, "bundlePath": str(app)}
+                with patch.object(d, "bounded_gui_probe", side_effect=later), self.assertRaises(RuntimeError) as raised:
+                    tray.launch_identity("helper", self.app, 102)
+                self.assertIs(raised.exception, self.original_failure)
+                safe = v.safe_gui_facts(facts)
+                self.assertTrue(any(row["visible"] for row in safe["probeObservations"] if row["origin"] == "post-failure"))
+                values = [row["attendedServiceReady"] for row in safe["serviceObservations"]]
+                self.assertIn(False, values)
+                self.assertEqual(True in values, becomes_ready)
+                self.assertTrue(all(row["serverLaunchMatch"] for row in safe["serviceObservations"]))
+                self.assertTrue(all(pid == 101 and attended for pid, attended in health_calls))
+                self.assertNotIn("qualified", safe)
+                self.assertLessEqual(facts["postFailureWindow"]["elapsedSeconds"], 14)
+
+    def test_service_sampling_requires_retained_original_tray_identity_and_refuses_health_error(self):
+        for retained, server_launch, health_error in ((None, 1791900000, False),
+                                                     (1791900000, 1791900001, False),
+                                                     (1791900000, 1791900000, True)):
+            with self.subTest(retained=retained, server_launch=server_launch, health_error=health_error):
+                self.clock = 0
+                tray = self.tray()
+                health_calls = []
+                def health(*args):
+                    health_calls.append(args)
+                    raise RuntimeError("authenticated or unknown connection refused")
+                tray.health = health
+                launches = {"launchObservations": [{"action": "tray", "pid": 101, "launchTime": retained}]}
+                facts = d.observe_gui_identity(tray, launches)
+                tray.gui_owner(self.app, 101)
+                def observed(helper, pid, app, timeout):
+                    return {"running": True, "visible": True, "hidden": False,
+                            "launchTime": server_launch if pid == 101 else 1791900000, "bundlePath": str(app)}
+                with patch.object(d, "bounded_gui_probe", side_effect=observed), self.assertRaises(RuntimeError) as raised:
+                    tray.launch_identity("helper", self.app, 102)
+                self.assertIs(raised.exception, self.original_failure)
+                self.assertEqual(bool(health_calls), health_error)
+                self.assertTrue(all(row["attendedServiceReady"] is None for row in v.safe_gui_facts(facts)["serviceObservations"]))
+                self.assertNotIn("authenticated or unknown", json.dumps(facts))
+
+    def test_service_schema_refuses_raw_options_missing_identity_unknown_status_and_fake_readiness(self):
+        tray = self.tray()
+        tray.health = lambda *args: False
+        launches = {"launchObservations": [{"action": "tray", "pid": 101, "launchTime": 1791900000}]}
+        facts = d.observe_gui_identity(tray, launches)
+        tray.gui_owner(self.app, 101)
+        response = {"running": True, "visible": True, "hidden": False, "launchTime": 1791900000, "bundlePath": str(self.app)}
+        with patch.object(d, "bounded_gui_probe", return_value=response), self.assertRaises(RuntimeError):
+            tray.launch_identity("helper", self.app, 102)
+        v.safe_gui_facts(facts)
+        for key, value in (("pid", True), ("retainedServerLaunchTime", float("nan")), ("retainedServerLaunchTime", None), ("serverLaunchMatch", False),
+                           ("attendedServiceReady", "yes"), ("status", "connected"), ("options", {"private":"value"})):
+            changed = copy.deepcopy(facts);changed["serviceObservations"][0][key] = value
+            with self.subTest(key=key), self.assertRaises(v.Refusal):v.safe_gui_facts(changed)
+        changed = copy.deepcopy(facts);changed["serviceObservations"][0]["status"] = "health-unavailable"
+        changed["serviceObservations"][0]["attendedServiceReady"] = True
+        with self.assertRaises(v.Refusal):v.safe_gui_facts(changed)
+
+
+
+    def test_fragmented_observation_reads_cannot_renew_the_absolute_deadline(self):
+        timeouts = []
+        class FragmentedSocket:
+            def settimeout(inner, value): inner.timeout = value;timeouts.append(value)
+            def recv(inner, size):
+                if inner.timeout < 0.6:
+                    self.clock += inner.timeout
+                    raise TimeoutError("synthetic deadline")
+                self.clock += 0.6
+                return b"x"
+        connection = d.DeadlineSocket(FragmentedSocket(), 2)
+        connection.settimeout(2)
+        with self.assertRaises(TimeoutError):
+            for _ in range(20): connection.recv(1)
+        self.assertEqual(self.clock, 2)
+        self.assertGreater(timeouts[0], timeouts[-1])
+        self.assertTrue(all(0 < timeout <= 2 for timeout in timeouts))
+
+    def test_deadline_clones_keep_exact_original_health_query_guard_code_and_globals_unchanged(self):
+        source = ast.parse((ROOT / "scripts/test-support-launch-macos-tray.py").read_bytes())
+        selected = [node for node in source.body if isinstance(node, ast.FunctionDef) and node.name in ("query", "no_connections", "health")]
+        self.assertEqual(len(selected), 3)
+        requests = []
+        responses = [
+            {"t":"VideoConnCount","c":0},
+            {"t":"Config","c":["mixel-support-invite-attended","attended-runtime-v2"]},
+            {"t":"OnlineStatus","c":[1,True]},
+            {"t":"Options","c":{"custom-rendezvous-server":"rs.mixel.ch","relay-server":"rs.mixel.ch","key":"synthetic-public-key"}},
+        ]
+        class Socket:
+            def __enter__(inner):return inner
+            def __exit__(inner,*args):pass
+            def settimeout(inner,value):pass
+            def connect(inner,address):pass
+            def sendall(inner,data):requests.append(json.loads(data))
+        socket_module = types.SimpleNamespace(AF_UNIX=1,SOCK_STREAM=1,socket=lambda *args:Socket())
+        unix = types.SimpleNamespace(IPC_PATH=Path("/synthetic/incoming"),PUBLIC_KEY="synthetic-public-key",
+            frame=lambda data:data,read_frame=lambda connection:json.dumps(responses.pop(0)))
+        namespace = {"socket":socket_module,"json":json,"unix":unix,
+                     "peer_pid":lambda connection:101,
+                     "process_path":lambda pid:self.app/"Contents/MacOS/Mixel-Remote"}
+        exec(compile(ast.Module(body=selected,type_ignores=[]),"<exact-original-tray-read-only-guards>","exec"),namespace)
+        original_query = namespace["query"]
+        tray = types.SimpleNamespace(**{name:namespace[name] for name in ("query","no_connections","health")})
+        owner = lambda *args:102
+        bounded_owner, bounded_connections, bounded_health = d.bounded_read_only_guards(tray,owner,14)
+        self.assertIs(bounded_owner.__code__,owner.__code__)
+        self.assertIs(bounded_connections.__code__,tray.no_connections.__code__)
+        self.assertIs(bounded_health.__code__,tray.health.__code__)
+        self.assertIs(bounded_health.__globals__["query"].__code__,original_query.__code__)
+        self.assertIs(namespace["query"],original_query)
+        self.assertIs(namespace["socket"],socket_module)
+        self.assertTrue(bounded_health(101,self.app,True))
+        self.assertEqual([row["t"] for row in requests],["VideoConnCount","Config","OnlineStatus","Options"])
+        self.assertEqual(responses,[])
+        # The exact original guard refuses a different kernel owner before
+        # any send, and neither its module nor original callables are patched.
+        namespace["peer_pid"] = lambda connection:999
+        _,_,refused = d.bounded_read_only_guards(tray,owner,14)
+        before = list(requests)
+        with self.assertRaises(RuntimeError):refused(101,self.app,True)
+        self.assertEqual(requests,before)
+
+    def test_service_kernel_owner_change_stops_extra_reads_without_overriding_original_failure(self):
+        tray = self.tray()
+        calls = [0]
+        def owner(*args):
+            calls[0]+=1
+            return 102 if calls[0]<=2 else 103
+        tray.gui_owner=owner
+        tray.health=lambda *args:(_ for _ in ()).throw(AssertionError("No service query after GUI owner changed"))
+        launches={"launchObservations":[{"action":"tray","pid":101,"launchTime":1791900000}]}
+        facts=d.observe_gui_identity(tray,launches)
+        tray.gui_owner(self.app,101)
+        with patch.object(d,"bounded_gui_probe",return_value=self.state) as probe, self.assertRaises(RuntimeError) as raised:
+            tray.launch_identity("helper",self.app,102)
+        self.assertIs(raised.exception,self.original_failure)
+        self.assertEqual(probe.call_count,1)
+        safe=v.safe_gui_facts(facts)
+        self.assertEqual(safe["postFailureWindow"]["refusalCategory"],"gui-owner-changed")
+        self.assertEqual(safe["serviceObservations"][0]["status"],"ownership-unavailable")
+        self.assertIsNone(safe["serviceObservations"][0]["attendedServiceReady"])
 
 
 if __name__ == "__main__":
