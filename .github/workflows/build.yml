@@ -283,6 +283,7 @@ jobs:
           python3 scripts/test-support-flutter-analysis.py --dart "$(command -v dart)"
           python3 scripts/test-support-flutter-sdk-compatibility.py --app rustdesk --flutter "$(command -v flutter)"
           python3 scripts/test-support-native-warnings.py --source rustdesk --source-only --output "$RUNNER_TEMP/mixel-native-warning-source"
+          python3 scripts/test-macos-update.py --source rustdesk --source-only
           python3 scripts/test-support-file-transfer-window.py --app rustdesk --output "$RUNNER_TEMP/mixel-file-transfer-source" --flutter "$(command -v flutter)"
           python3 scripts/test-support-macos-termination.py --flutter "$(command -v flutter)"
           python3 scripts/test-support-invite.py
@@ -378,6 +379,17 @@ jobs:
             --deb "dist/mixel-remote-${UPSTREAM_VERSION}-x86_64.deb" \
             --proofs artifacts/linux-mixed --require-native --mixed-transports \
             --artifact-run-id "$GITHUB_RUN_ID" | tee artifacts/linux-mixed.log
+
+      - name: Prove production HTTPS support with fresh owned native desktops
+        if: ${{ !cancelled() && steps.locate.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          python3 scripts/test-support-session-linux.py \
+            --deb "dist/mixel-remote-${UPSTREAM_VERSION}-x86_64.deb" \
+            --proofs artifacts/linux-production-https --require-native --native-blocked \
+            --artifact-run-id "$GITHUB_RUN_ID" | tee artifacts/linux-production-https.log
 
       - uses: actions/upload-artifact@v6
         if: always()
@@ -528,6 +540,7 @@ jobs:
           python3 scripts/test-support-flutter-analysis.py --dart "$(command -v dart)"
           python3 scripts/test-support-flutter-sdk-compatibility.py --app rustdesk --flutter "$(command -v flutter)"
           python3 scripts/test-support-native-warnings.py --source rustdesk --source-only --output "$RUNNER_TEMP/mixel-native-warning-source"
+          RUSTC_BIN="$(rustup which rustc)" python3 scripts/test-macos-update.py --source rustdesk
           python3 scripts/test-support-macos-termination.py --flutter "$(command -v flutter)" --framework "$MIXEL_FLUTTER_FRAMEWORK"
           RUSTC_BIN="$(rustup which rustc)" python3 scripts/test-support-fatal-crash.py --source rustdesk --upstream-repo rustdesk --evidence-dir "$RUNNER_TEMP/mixel-fatal-crash-source"
           python3 scripts/test-support-invite.py

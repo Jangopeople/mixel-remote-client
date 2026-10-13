@@ -175,7 +175,8 @@ def full_branding(out, files, source, bash=None):
                  "patch-support-uinput-device.py","test-support-uinput-device.py",
                  "patch-support-native-warnings.py","test-support-native-warnings.py",
                  "patch-support-fingerprint.py","test-support-fingerprint.py",
-                 "patch-support-fatal-crash.py","test-support-fatal-crash.py"):
+                 "patch-support-fatal-crash.py","test-support-fatal-crash.py",
+                 "patch-macos-update.py","test-macos-update.py","macos-update.scpt","macos-update-bundle.sh"):
         shutil.copyfile(ROOT/"scripts"/name,copied/"scripts"/name)
     script=copied/"scripts/apply-branding.sh"
     original=script.read_text()

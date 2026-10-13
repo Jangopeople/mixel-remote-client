@@ -18,6 +18,7 @@ else
   python scripts/test-support-flutter-sdk-compatibility.py --app "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --bash "$mixel_analyzer_bash"
 fi
 python scripts/test-support-macos-termination.py --flutter "$(command -v flutter)" --bash "$mixel_analyzer_bash"
+python scripts/test-macos-update.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --source-only
 for mixel_source_test in \
   test-support-invite \
   test-generated-support-paths \

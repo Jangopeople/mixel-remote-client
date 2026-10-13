@@ -939,7 +939,8 @@ if sys.argv[1]=='scripts/test-support-lease.py':
                                                                      "--bash", expected_shell])
                     self.assertEqual(arguments[2][0:2], ["scripts/test-support-macos-termination.py", "--flutter"])
                     self.assertEqual(arguments[2][3:], ["--bash", expected_shell])
-                    self.assertEqual(arguments[3:], [[name] for name in preceding])
+                    self.assertEqual(arguments[3], ["scripts/test-macos-update.py", "--source", runner_temp.as_posix() + "/mixel-sdk-source/pipeline-lf", "--source-only"])
+                    self.assertEqual(arguments[4:], [[name] for name in preceding])
                     self.assertEqual((root / "actual-invocations.log").read_text(encoding="utf-8").splitlines(),
                                      [row[0] for row in arguments])
                     self.assertIn("CONTROL: unchanged fatal native gate", result.stdout)
