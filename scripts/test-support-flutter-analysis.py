@@ -670,7 +670,7 @@ def pipeline(out,source,bash):
         target.write_bytes(saved)
         if app_newlines=="lf":
             canonical=T.regular(repo/"flutter/.mixel-dependencies/macos_application_exit",name)
-            common=canonical.replace("import 'dart:convert';\n".encode(),"import 'dart:convert';\nimport 'dart:math';\n".encode(),1)
+            common=canonical
             assert sha(common)==P.FILES[name][0]
             originals[name]=common
     print("PASS: exact current complete branding, cleanup, analyzer and final Quit composition; app LF/CRLF crossed with complete initial LF/CRLF dependency checkouts, each twice byte-identical; whole tracked profiles and Dart/dependency drift fail without mutation")
@@ -697,17 +697,30 @@ def refusal(root,out):
 
 
 def source_controls(out,files):
-    for label,newline in (("lf",b"\n"),("crlf",b"\r\n")):
-        root=out/("source-"+label)
-        fixture(root,files,newline)
-        before=snapshot(root)
-        P.apply(root)
-        after=snapshot(root)
-        assert {name for name in before if before[name]!=after[name]}==set(P.FILES)
-        for name in P.FILES:
-            assert (root/name).read_bytes()==P.transform(name,files[name]).replace(b"\n",newline)
-        P.apply(root)
-        assert snapshot(root)==after
+    common="flutter/lib/common.dart"
+    assert sha(files[common])==P.FILES[common][0]
+    # Build the historical no-ACK fixture only by an exact pinned reversal.
+    begin=b"// Mixel Mac support forwarding readiness. Local runtime state, never saved preferences.\n"
+    end=b"// Mixel support invite handoff: presence only; customer accepts every connection.\n"
+    assert files[common].count(begin)==files[common].count(end)==1
+    historical=dict(files)
+    historical[common]=files[common][:files[common].index(begin)]+files[common][files[common].index(end):]
+    assert sha(historical[common])==P.HISTORICAL_COMMON[0]
+    for profile,inputs in (("current-ack",files),("historical-no-ack",historical)):
+        expected=set(P.FILES)-({common} if profile=="current-ack" else set())
+        assert len(expected)==(5 if profile=="current-ack" else 6)
+        for label,newline in (("lf",b"\n"),("crlf",b"\r\n")):
+            root=out/(("source-" if profile=="current-ack" else "historical-source-")+label)
+            fixture(root,inputs,newline)
+            before=snapshot(root)
+            P.apply(root)
+            after=snapshot(root)
+            assert {name for name in before if before[name]!=after[name]}==expected
+            for name in P.FILES:
+                assert (root/name).read_bytes()==P.transform(name,inputs[name]).replace(b"\n",newline)
+            assert (b"import 'dart:math';\n".replace(b"\n",newline) in (root/common).read_bytes())==(profile=="current-ack")
+            P.apply(root)
+            assert snapshot(root)==after
     count=0
     for name in list(P.FILES)+[P.CLIENT,"Cargo.toml"]:
         root=out/("refuse-"+name.replace("/","-").replace(".","-"))
@@ -737,7 +750,7 @@ def source_controls(out,files):
         shutil.copytree(out/"source-lf",root)
         (root/"Cargo.toml").write_bytes(data)
         refusal(root,out);count+=1
-    print("PASS: exactly six target files change; original/corrected hash guards, LF/CRLF byte idempotence and "+str(count)+" fatal source/constructor/link/newline controls")
+    print("PASS: current ACK changes exactly five targets and retains used dart:math; historical no-ACK changes six; LF/CRLF byte idempotence and "+str(count)+" fatal source/constructor/link/newline controls")
 
 
 def function(source,anchor):
@@ -815,6 +828,9 @@ def diagnostic_counts(text):
 
 
 def analyze_app(out,source,flutter,files):
+    with startup_baseline(source) as plain:
+        if plain != source.resolve():
+            return analyze_app(out,plain,flutter,files)
     # Validate every final ownership layer without changing the supplied app.
     source_before=snapshot(source/"flutter")
     sdk_overlay=(source/S.OWNED).exists() or (source/S.OWNED).is_symlink()
@@ -828,7 +844,7 @@ def analyze_app(out,source,flutter,files):
                    if application_exit and name in T.FILES else (source/name).read_bytes())
         P.transform(name,canonical)
     checkout=out/"complete-app-fixture"
-    for name in ("lib","test","assets",".mixel-dependencies"):
+    for name in ("lib","test","assets",".mixel-dependencies","local_plugins"):
         if (source/"flutter"/name).exists():
             shutil.copytree(source/"flutter"/name,checkout/"flutter"/name)
     for name in ("pubspec.yaml","pubspec.lock","analysis_options.yaml",".dart_tool/package_config.json"):
@@ -848,10 +864,12 @@ def analyze_app(out,source,flutter,files):
     version=json.loads(version_run.stdout)["frameworkVersion"]
     assert version in ("3.24.5",S.SDK),"Unqualified Flutter analyzer SDK"
     new_warnings=7 if version==S.SDK else 0
+    historical=sha(files["flutter/lib/common.dart"])==P.HISTORICAL_COMMON[0]
+    base_warnings=5 if historical else 4
     before=snapshot(checkout/"flutter")
     baseline=run([str(flutter),"analyze","--no-pub","--no-fatal-infos"],out,"actual-full-app-baseline",cwd=checkout/"flutter",env=env,success=False)
     counts,_=diagnostic_counts(baseline.stdout+baseline.stderr)
-    assert counts["error"]==4 and counts["warning"]==5+new_warnings,counts
+    assert counts["error"]==4 and counts["warning"]==base_warnings+new_warnings,counts
     for name in P.FILES:
         path=out/"actual-original"/name; path.parent.mkdir(parents=True,exist_ok=True)
         path.write_bytes((checkout/name).read_bytes())
@@ -860,12 +878,14 @@ def analyze_app(out,source,flutter,files):
     middle,_=diagnostic_counts(middle_run.stdout+middle_run.stderr)
     assert middle["error"]==0 and middle["warning"]==new_warnings and middle["info"]==counts["info"],middle
     middle_source=snapshot(checkout/"flutter")
-    assert {name for name in before if before[name]!=middle_source[name]}=={name.removeprefix("flutter/") for name in P.FILES}
+    expected_changes=set(P.FILES)-({"flutter/lib/common.dart"} if not historical else set())
+    assert len(expected_changes)==(6 if historical else 5)
+    assert {name for name in before if before[name]!=middle_source[name]}=={name.removeprefix("flutter/") for name in expected_changes}
     for name in P.FILES:
         path=out/"actual-corrected"/name; path.parent.mkdir(parents=True,exist_ok=True)
         path.write_bytes((checkout/name).read_bytes())
     # Reapply exact resource/Quit and SDK overlays only after proving that the
-    # original six-file correction retained its own independent byte boundary.
+    # original profile-specific correction retained its independent byte boundary.
     if application_exit: T.apply(checkout)
     if version==S.SDK or sdk_overlay: S.apply(checkout)
     if file_transfer: F.apply(checkout)
@@ -876,13 +896,15 @@ def analyze_app(out,source,flutter,files):
     (out/"complete-app-analysis-proof.json").write_text(json.dumps(
         {"flutter_version":version,"baseline_exit":baseline.returncode,"corrected_exit":corrected.returncode,
          "baseline":dict(counts),"original_analysis_layer_corrected":dict(middle),"corrected":dict(fixed),
-         "exact_six_target_conservation":True,"final_owned_layers_reapplied":{
+         "exact_six_target_inventory_conservation":True,
+         "analysis_profile":"historical-no-ack" if historical else "current-ack",
+         "exact_changed_targets":sorted(expected_changes),"final_owned_layers_reapplied":{
              "application_exit":application_exit,"sdk_overlay":version==S.SDK or sdk_overlay},
          "source_sha256":{name:sha((ROOT/"scripts"/name).read_bytes()) for name in (
              "patch-support-flutter-analysis.py","test-support-flutter-analysis.py",
              "patch-support-flutter-sdk-compatibility.py")}},sort_keys=True,indent=2)+"\n",encoding="utf-8")
-    print("PASS: real full Flutter"+version+" analyze: original4errors"+str(5+new_warnings)+
-          "warnings -> six-file analysis correction0errors"+str(new_warnings)+
+    print("PASS: real full Flutter"+version+" analyze: original4errors"+str(base_warnings+new_warnings)+
+          "warnings -> pinned analysis correction0errors"+str(new_warnings)+
           "warnings -> complete owned composition0errors0warnings; "+str(fixed["info"])+" existing infos")
 
 

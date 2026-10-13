@@ -16,7 +16,7 @@ import sys
 import tempfile
 
 SCRIPTS = Path(__file__).resolve().parent
-INPUT_HASHES = {'flutter/lib/models/native_model.dart': 'd80cb9aa666b49c83de4ddbd3ce79cb99859a9fe16d479cbb36d5643cdb7d4df', 'flutter/lib/main.dart': '982765b4bd1bdf52aec77af49398ff590697978178248d546ec777b947e3d2b8', 'flutter/lib/common.dart': '1bde36857cbe0c9f7734b4d989ad806c1c0773a823f0443dcb9962305a525cf5'}
+INPUT_HASHES = {'flutter/lib/models/native_model.dart': 'd80cb9aa666b49c83de4ddbd3ce79cb99859a9fe16d479cbb36d5643cdb7d4df', 'flutter/lib/main.dart': '982765b4bd1bdf52aec77af49398ff590697978178248d546ec777b947e3d2b8', 'flutter/lib/common.dart': '7e52f06cfc3efef147d9b3fb571166edd486e6b30537271f748cbe419ad04825'}
 MARKER = "MIXEL_MACOS_STARTUP_V1"
 RESOURCE = "flutter/lib/mixel_startup_failure.dart"
 
@@ -33,10 +33,6 @@ def operations():
 
     def add(path, before, after, count=1):
         changes.append((path, before, after, count))
-
-    # The final composed URL ACK queue uses Random.secure() on all desktops.
-    # Earlier historical analyzer ownership removes the formerly unused import.
-    add(common, "import 'dart:convert';\n", "import 'dart:convert';\nimport 'dart:math';\n")
 
     add(native, "  StreamEventHandler? _eventCallback;\n", """  StreamEventHandler? _eventCallback;
   // MIXEL_MACOS_STARTUP_V1: only critical initialization grants readiness.

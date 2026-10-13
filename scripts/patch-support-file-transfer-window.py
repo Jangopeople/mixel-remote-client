@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fit only file-transfer initial/restored windows to a reported screen work area."""
+"""Fit remote desktop and file-transfer initial/restored windows to a reported screen work area."""
 import argparse
 import contextlib
 import io
@@ -17,9 +17,9 @@ PRISTINE = {COMMON: '95ffcc4fdc3d83564d19d5ad7c999adbe65cdc37829cf466d43d5a9684e
             MANAGER: 'e94128aaf434d57d54dccb719633704e814b41fee052e142c4fa9ea4a5e13f3f'}
 HISTORICAL_COMPOSED = {COMMON: '390d75c80128850d598794502b6f5d265eb99750f64ebfc98140770661cb2cb0',
             MANAGER: '27e065acf8f7feb2c80151437c071689a2dc33f1bdc9b8ce9ecacd8b74e2ede4'}
-COMPOSED = {COMMON: '090eb7733b1567a8aa2347039ec45966dad68e0620dd14904e4f6cca895b7c3c',
+COMPOSED = {COMMON: '3ee4fd4229ffb0b664c8efdae5f85daf7d316391b86de0074135dbad6b258a3b',
             MANAGER: '27e065acf8f7feb2c80151437c071689a2dc33f1bdc9b8ce9ecacd8b74e2ede4'}
-DART = r'''// Mixel file-transfer geometry uses window_size reported screen coordinates.
+DART = r'''// Mixel session geometry uses window_size reported screen coordinates.
 import 'dart:ui';
 import 'package:flutter/foundation.dart';
 import 'package:window_size/window_size.dart' as window_size;
@@ -66,20 +66,41 @@ Rect fitMixelFileTransferFrame(Rect requested, List<Rect> workAreas,
 }
 
 Future<Rect> mixelFileTransferWindowFrame(Rect requested,
-    {bool center = false}) async {
+    {bool center = false, Future<Rect> Function()? nativeWindowFrame}) async {
   try {
     final screens = await window_size.getScreenList();
     Rect? preferredArea;
+    Rect? reportedWindowFrame;
     try {
-      preferredArea = (await window_size.getWindowInfo()).screen?.visibleFrame;
+      final info = await window_size.getWindowInfo();
+      preferredArea = info.screen?.visibleFrame;
+      reportedWindowFrame = info.frame;
     } catch (_) {
       // A missing current-window screen does not invalidate the screen list.
+      // Mac calibration still requires the current engine's reported frame.
     }
-    return fitMixelFileTransferFrame(requested,
-        screens.map((screen) => screen.visibleFrame).toList(),
+    var workAreas = screens.map((screen) => screen.visibleFrame).toList();
+    if (nativeWindowFrame != null) {
+      final nativeFrame = await nativeWindowFrame();
+      if (reportedWindowFrame == null ||
+          !_mixelFiniteRect(reportedWindowFrame) ||
+          !_mixelFiniteRect(nativeFrame) ||
+          (nativeFrame.left - reportedWindowFrame.left).abs() > 0.5 ||
+          (nativeFrame.width - reportedWindowFrame.width).abs() > 0.5 ||
+          (nativeFrame.height - reportedWindowFrame.height).abs() > 0.5) {
+        throw StateError('Current Mac window-frame observations do not match');
+      }
+      // The pinned Mac plugins use different vertical screen anchors. Convert
+      // only reported work areas into the existing native frame coordinate plane;
+      // saved frames and explicit-screen requests retain their native semantics.
+      final offset = Offset(0, nativeFrame.top - reportedWindowFrame.top);
+      workAreas = workAreas.map((area) => area.shift(offset)).toList();
+      preferredArea = preferredArea?.shift(offset);
+    }
+    return fitMixelFileTransferFrame(requested, workAreas,
         preferredArea: preferredArea, center: center);
   } catch (_) {
-    debugPrint('Mixel file-transfer work area is unavailable; retaining valid frame.');
+    debugPrint('Mixel session work area is unavailable; retaining valid frame.');
     return fitMixelFileTransferFrame(requested, const []);
   }
 }
@@ -96,11 +117,15 @@ INITIAL = '''    if (!withScreenRect) {
         ));
 '''
 INITIAL_NEW = '''    if (!withScreenRect) {
-      if (type == WindowType.FileTransfer) {
+      if (type == WindowType.FileTransfer ||
+          type == WindowType.RemoteDesktop) {
         final frame = await mixelFileTransferWindowFrame(
             const Offset(0, 0) &
                 Size(1280 + windowId * 20, 720 + windowId * 20),
-            center: true);
+            center: true,
+            nativeWindowFrame: isMacOS
+                ? WindowController.fromWindowId(kWindowId ?? kMainWindowId).getFrame
+                : null);
         await windowController.setFrame(frame);
         windowController.setTitle(getWindowNameWithId(
           remoteId,
@@ -121,10 +146,14 @@ NO_SAVED = '''      default:
         // No need to change the position of a sub window if no position is saved,
 '''
 NO_SAVED_NEW = '''      default:
-        if (type == WindowType.FileTransfer) {
+        if (type == WindowType.FileTransfer ||
+          type == WindowType.RemoteDesktop) {
           final wc = WindowController.fromWindowId(windowId!);
           final frame = await mixelFileTransferWindowFrame(await wc.getFrame(),
-              center: true);
+              center: true,
+              nativeWindowFrame: isMacOS
+                  ? WindowController.fromWindowId(kWindowId ?? kMainWindowId).getFrame
+                  : null);
           await wc.setFrame(frame);
         }
         // No need to change the position of a sub window if no position is saved,
@@ -144,11 +173,15 @@ SAVED_NEW = '''  var size = await _adjustRestoreMainWindowSize(lpos.width, lpos.
     size.width,
     size.height,
   );
-  if (type == WindowType.FileTransfer) {
+  if (type == WindowType.FileTransfer ||
+      type == WindowType.RemoteDesktop) {
     final frame = await mixelFileTransferWindowFrame(
         Rect.fromLTWH(lpos.offsetWidth ?? 0, lpos.offsetHeight ?? 0,
             size.width, size.height),
-        center: lpos.offsetWidth == null || lpos.offsetHeight == null);
+        center: lpos.offsetWidth == null || lpos.offsetHeight == null,
+        nativeWindowFrame: isMacOS
+            ? WindowController.fromWindowId(kWindowId ?? kMainWindowId).getFrame
+            : null);
     size = frame.size;
     offsetLeftTop = frame.topLeft;
   }
@@ -223,7 +256,7 @@ def verify_previous_layers(repo):
         apply(repo, restore=True, check=True)
     folder = Path(__file__).absolute().parent
     sdk_data, _ = normalize(safe_path(folder, 'patch-support-flutter-sdk-compatibility.py'))
-    if sha(sdk_data) != '08255c1af27ea05c5e1eaf3c8d903070d26b4a1c8c3e02eb1c24107bbcf92010':
+    if sha(sdk_data) != '25538193da045b58ec9b44cf14f055963b649b3376a48568c221f2eef9da5a82':
         raise RuntimeError('Changed file-transfer prior SDK verifier')
     namespace = {'__name__': 'mixel_file_transfer_prior_sdk', '__file__': str(folder/'patch-support-flutter-sdk-compatibility.py')}
     exec(compile(sdk_data, namespace['__file__'], 'exec'), namespace)
@@ -284,7 +317,7 @@ def apply(repo, restore=False, check=False):
                 (repo / name).write_bytes(data)
         if restore and corrected:
             (repo / GENERATED).unlink()
-    print('File-transfer window geometry verified: initial and saved reported screen coordinates; other window types preserved')
+    print('Remote desktop/file-transfer geometry verified: initial and saved reported screen coordinates; other window types preserved')
 
 
 if __name__ == '__main__':

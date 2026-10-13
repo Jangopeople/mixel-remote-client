@@ -15,7 +15,7 @@ PIN = "1abc897c451c8b5bbff3792509a7fef9d12f2ce3"
 FILES = {
     "flutter/lib/common.dart": (
         "66f58cc2606eba8a240e0f960c39c8ba18c14616352ef60b83f6202af5cf605a",
-        "7d8953486dc5087cf7d87bc8c625710ca982f7d7bca5f7f58a4c85ecf3ab2695",
+        "66f58cc2606eba8a240e0f960c39c8ba18c14616352ef60b83f6202af5cf605a",
         "import 'dart:math';\n", "", 1),
     "flutter/lib/models/ab_model.dart": (
         "e1c79b068b46042f5d7a1c3a4437b656a10e6b64cd67b671969faf1c2ac7c176",
@@ -39,6 +39,8 @@ FILES = {
         "c695a84d23e738c6de52cad732a0d16d605de08fd75f6a06d8422b255fb059f5",
         ", true, false, false, false)", ", true, false, false)", 4),
 }
+# The current URI/ACK profile uses Random.secure(), so its exact common.dart
+# retains dart:math. Historical no-ACK source still removes the unused import.
 # Keep the exact incoming-owner common.dart boundary as a historical variant.
 # The composed current variant above additionally contains our URI/ACK layers.
 HISTORICAL_COMMON = ("0d47b1dce88586fbebb2faaf390f210020a7dbbbf00bd782e7897944bcad556f",
@@ -110,7 +112,7 @@ def apply(repo):
     for name, (before, after) in prepared.items():
         if before != after:
             (repo / name).write_bytes(after)
-    print("   corrected pinned Flutter analyzer: four obsolete Client arguments, four unused imports and one redundant terminal null guard")
+    print("   corrected pinned Flutter analyzer: obsolete Client arguments, profile-specific unused imports and redundant terminal null guard; current ACK retains dart:math")
 
 
 if __name__ == "__main__":

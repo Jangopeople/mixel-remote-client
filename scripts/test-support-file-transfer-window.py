@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prove pinned file-transfer geometry, other-type conservation and source ownership."""
+"""Prove pinned remote desktop/file-transfer geometry, preserved modes and source ownership."""
 import argparse
 import contextlib
 import hashlib
@@ -111,6 +111,8 @@ void main() {
  test('original first transfer width exceeds actual1100 workarea; fixed initial fits',(){
   const original=Rect.fromLTWH(0,0,1300,740);
   expect(original.width>work.width,isTrue);
+  const observedNativeWork=Rect.fromLTWH(0,0,1100,800);
+  expect(fitMixelFileTransferFrame(original,[observedNativeWork],center:true),const Rect.fromLTWH(0,30,1100,740));
   expect(fitMixelFileTransferFrame(original,[work],center:true),const Rect.fromLTWH(0,24,1100,736));
  });
  test('fitting saved user frame remains exact; stale partial visibility clamps',(){
@@ -160,18 +162,19 @@ void main() {
 
 STUBS = r'''
 bool isWindows=false,isMacOS=false,isDesktop=true,isWebDesktop=false,isLinux=true;
-const kMobileDefaultDisplayWidth=720,kMobileDefaultDisplayHeight=1280,kDesktopMaxDisplaySize=6480,kMobileMaxDisplaySize=1280,kNewWindowOffset=20,kWindowId=1;
+const kMobileDefaultDisplayWidth=720,kMobileDefaultDisplayHeight=1280,kDesktopMaxDisplaySize=6480,kMobileMaxDisplaySize=1280,kNewWindowOffset=20,kMainWindowId=0;
+int? kWindowId=1;
 const windowFramePrefix='window_';
 const kWindowEventSetFullscreen='fullscreen';
 bool _ignoreDevicePixelRatio=false;
 final bind=Binding();
 class Binding {
- String option=''; String mainGetEnv({required String key})=>'';
- String mainGetPeerFlutterOptionSync({required String id,required String k})=>'';
+ String option='',peerOption=''; String mainGetEnv({required String key})=>'';
+ String mainGetPeerFlutterOptionSync({required String id,required String k})=>peerOption;
  String getLocalFlutterOption({required String k})=>option;
  bool isIncomingOnly()=>false;bool isOutgoingOnly()=>false;
 }
-class FullState {void setFullscreen(bool value){}}
+class FullState {final events=<bool>[];void setFullscreen(bool value){events.add(value);}}
 final stateGlobal=FullState();
 class MainManager {
  Future<void> center()async=>throw StateError('Main window touched');
@@ -189,10 +192,15 @@ class Controller {
  void setTitle(String title){events.add('title');}
  Future<void> show()async{events.add('show');}
  Future<void> maximize()async{events.add('maximize');}
- Future<Rect> getFrame()async=>frame;
+ Future<Rect> getFrame()async{frameReads.add(1);return frame;}
  int get windowId=>1;
 }
-class WindowController { static Controller fromWindowId(int id)=>controller; }
+class MainController extends Controller {
+ @override Future<Rect> getFrame()async{frameReads.add(0);return frame;}
+}
+class WindowController { static Controller fromWindowId(int id)=>id==0?mainController:controller; }
+final frameReads=<int>[];
+final mainController=MainController()..frame=const Rect.fromLTWH(0,0,800,600);
 final controller=Controller();
 class DesktopMultiWindow {
  static Future<Controller> createWindow(String message)async=>controller;
@@ -217,14 +225,14 @@ class Creation {
 /* EXTRACTED_RESTORE */
 '''
 EXTRACTED_TESTS = r'''
- test('literal initial creation preserves other window types and fits only FileTransfer',() async {
+ test('literal initial creation preserves other window types and fits transfer and remote desktop',() async {
   TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel,(call)async{
    if(call.method=='getScreenList')return [screen(work,1)];
    if(call.method=='getWindowInfo')return {'frame':[0.0,0.0,800.0,600.0],'scaleFactor':1.0,'screen':screen(work,1)};
    throw StateError('Unexpected native method');
   });
   final creation=Creation();
-  for(final type in [WindowType.RemoteDesktop,WindowType.ViewCamera,WindowType.PortForward,WindowType.Terminal]) {
+  for(final type in [WindowType.ViewCamera,WindowType.PortForward,WindowType.Terminal]) {
    controller.events.clear();
    await creation.newSessionWindow(type,'QA','',[],false);
    expect(controller.frame,const Rect.fromLTWH(0,0,1300,740));expect(controller.events,['frame','center','title']);
@@ -253,8 +261,144 @@ EXTRACTED_TESTS = r'''
   bind.option=jsonEncode({'width':900.0,'height':600.0,'offsetWidth':null,'offsetHeight':null,'isMaximized':false,'isFullscreen':false});
   await restoreWindowPosition(WindowType.FileTransfer,windowId:1);expect(controller.frame,const Rect.fromLTWH(100,92,900,600));
   bind.option='';controller.frame=const Rect.fromLTWH(0,0,1300,740);controller.events.clear();
-  await restoreWindowPosition(WindowType.RemoteDesktop,windowId:1);expect(controller.frame,const Rect.fromLTWH(0,0,1300,740));expect(controller.events,isEmpty);
+  await restoreWindowPosition(WindowType.ViewCamera,windowId:1);expect(controller.frame,const Rect.fromLTWH(0,0,1300,740));expect(controller.events,isEmpty);
  });
+ test('literal remote initial creation fits Linux Mac and Windows; explicit screen rect is preserved',()async {
+  final calls=<String>[];
+  TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel,(call)async{
+   calls.add(call.method);
+   if(call.method=='getScreenList')return [screen(work,2)];
+   if(call.method=='getWindowInfo')return {'frame':[0.0,0.0,800.0,600.0],'scaleFactor':2.0,'screen':screen(work,2)};
+   throw StateError('Unexpected native method');
+  });
+  final creation=Creation();kWindowId=null;
+  for(final platform in ['linux','macos','windows']) {
+   isMacOS=platform=='macos';isWindows=platform=='windows';isLinux=platform=='linux';
+   controller.events.clear();calls.clear();
+   await creation.newSessionWindow(WindowType.RemoteDesktop,'QA','',[],false);
+   await Future<void>.delayed(Duration.zero);
+   expect(controller.frame,const Rect.fromLTWH(0,24,1100,736),reason:platform);
+   expect(controller.events,[if(isWindows)'color','frame','title',if(isMacOS)'show']);
+   expect(calls,['getScreenList','getWindowInfo']);
+   controller.frame=const Rect.fromLTWH(-1920,-100,1920,1080);controller.events.clear();calls.clear();
+   await creation.newSessionWindow(WindowType.RemoteDesktop,'QA','',[],true);
+   await Future<void>.delayed(Duration.zero);
+   expect(controller.frame,const Rect.fromLTWH(-1920,-100,1920,1080));
+   expect(controller.events,[if(isWindows)'color','title',if(isMacOS)'show']);expect(calls,isEmpty);
+  }
+  isMacOS=false;isWindows=false;isLinux=true;kWindowId=1;
+ });
+ test('literal remote restore keeps peer precedence, local cascade and coordinates across monitors',()async {
+  var screens=[work];Rect current=work;
+  TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel,(call)async{
+   if(call.method=='getScreenList')return screens.map((rect)=>screen(rect,2)).toList();
+   if(call.method=='getWindowInfo')return {'frame':[0.0,0.0,800.0,600.0],'scaleFactor':2.0,'screen':screen(current,2)};
+   throw StateError('Unexpected native method');
+  });
+  String saved(double? left,double? top,double width,double height)=>jsonEncode({'width':width,'height':height,'offsetWidth':left,'offsetHeight':top,'isMaximized':false,'isFullscreen':false});
+  bind.option='';bind.peerOption='';controller.frame=const Rect.fromLTWH(0,40,1300,740);controller.events.clear();
+  expect(await restoreWindowPosition(WindowType.RemoteDesktop,windowId:1,peerId:'QA'),isTrue);
+  expect(controller.frame,const Rect.fromLTWH(0,24,1100,736));
+  bind.option=saved(60,60,900,600);
+  await restoreWindowPosition(WindowType.RemoteDesktop,windowId:1);expect(controller.frame,const Rect.fromLTWH(80,80,900,600));
+  bind.peerOption=saved(80,80,900,600);
+  await restoreWindowPosition(WindowType.RemoteDesktop,windowId:1,peerId:'QA');expect(controller.frame,const Rect.fromLTWH(80,80,900,600));
+  await restoreWindowPosition(WindowType.RemoteDesktop,windowId:1,peerId:'QA');expect(controller.frame,const Rect.fromLTWH(80,80,900,600));
+  await restoreWindowPosition(WindowType.RemoteDesktop,windowId:1,peerId:'QA',display:1);expect(controller.frame,const Rect.fromLTWH(100,100,900,600));
+  bind.peerOption=saved(1090,750,1280,720);
+  await restoreWindowPosition(WindowType.RemoteDesktop,windowId:1,peerId:'QA');expect(controller.frame,const Rect.fromLTWH(0,40,1100,720));
+  bind.peerOption=saved(null,null,900,600);
+  await restoreWindowPosition(WindowType.RemoteDesktop,windowId:1,peerId:'QA');expect(controller.frame,const Rect.fromLTWH(100,92,900,600));
+  const negative=Rect.fromLTWH(-1920,-100,1920,1040);screens=[negative,work];current=negative;
+  bind.peerOption=saved(-1900,-80,1200,800);
+  await restoreWindowPosition(WindowType.RemoteDesktop,windowId:1,peerId:'QA');expect(controller.frame,const Rect.fromLTWH(-1900,-80,1200,800));
+  screens=[work];current=work;
+  await restoreWindowPosition(WindowType.RemoteDesktop,windowId:1,peerId:'QA');expect(controller.frame,const Rect.fromLTWH(0,24,1100,736));
+  bind.option='';bind.peerOption='';
+ });
+ test('literal remote restore preserves saved maximize and fullscreen modes on Linux and Mac',()async {
+  TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel,(call)async{
+   if(call.method=='getScreenList')return [screen(work,1)];
+   if(call.method=='getWindowInfo')return {'frame':[0.0,0.0,800.0,600.0],'scaleFactor':1.0,'screen':screen(work,1)};
+   throw StateError('Unexpected native method');
+  });
+  bind.peerOption=jsonEncode({'width':1300.0,'height':740.0,'offsetWidth':0.0,'offsetHeight':40.0,'isMaximized':true,'isFullscreen':false});
+  controller.events.clear();stateGlobal.events.clear();
+  await restoreWindowPosition(WindowType.RemoteDesktop,windowId:1,peerId:'QA');
+  await Future<void>.delayed(const Duration(milliseconds:350));
+  expect(controller.frame,const Rect.fromLTWH(0,24,1100,736));expect(controller.events,['frame','maximize']);expect(stateGlobal.events,isEmpty);
+  bind.peerOption=jsonEncode({'width':1300.0,'height':740.0,'offsetWidth':0.0,'offsetHeight':40.0,'isMaximized':false,'isFullscreen':true});
+  for(final platform in ['linux','macos']) {
+   isMacOS=platform=='macos';isLinux=platform=='linux';
+   controller.frame=const Rect.fromLTWH(-1920,-100,1920,1080);controller.events.clear();stateGlobal.events.clear();
+   await restoreWindowPosition(WindowType.RemoteDesktop,windowId:1,peerId:'QA');
+   await Future<void>.delayed(const Duration(milliseconds:350));
+   expect(stateGlobal.events,[true]);
+   expect(controller.events,isMacOS?isEmpty:['frame']);
+   expect(controller.frame,isMacOS?const Rect.fromLTWH(-1920,-100,1920,1080):const Rect.fromLTWH(0,24,1100,736));
+  }
+  isMacOS=false;isLinux=true;bind.option='';bind.peerOption='';
+ });
+
+ test('Mac boundary calibrates same native frame without changing saved coordinates or scale',()async {
+  const globalWork=Rect.fromLTWH(0,824,1100,736);
+  const globalFrame=Rect.fromLTWH(0,800,800,600);
+  var reads=0;
+  TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel,(call)async{
+   if(call.method=='getScreenList')return [screen(globalWork,2)];
+   if(call.method=='getWindowInfo')return {'frame':[globalFrame.left,globalFrame.top,globalFrame.width,globalFrame.height],'scaleFactor':2.0,'screen':screen(globalWork,2)};
+   throw StateError('Unexpected native write');
+  });
+  Future<Rect> nativeFrame()async{reads++;return const Rect.fromLTWH(0,0,800,600);}
+  expect(await mixelFileTransferWindowFrame(const Rect.fromLTWH(0,0,1300,740),center:true,nativeWindowFrame:nativeFrame),const Rect.fromLTWH(0,24,1100,736));
+  const fitting=Rect.fromLTWH(80,80,900,600);
+  expect(await mixelFileTransferWindowFrame(fitting,nativeWindowFrame:nativeFrame),fitting);expect(reads,2);
+ });
+ test('Mac missing, changed-size, wrong-window and invalid observations preserve valid requested frame',()async {
+  const globalWork=Rect.fromLTWH(0,824,1100,736);
+  const desired=Rect.fromLTWH(0,0,1300,740);
+  TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel,(call)async{
+   if(call.method=='getScreenList')return [screen(globalWork,1)];
+   if(call.method=='getWindowInfo')return {'frame':[0.0,800.0,800.0,600.0],'scaleFactor':1.0,'screen':screen(globalWork,1)};
+   throw StateError('Unexpected native write');
+  });
+  for(final observed in [const Rect.fromLTWH(0,0,700,600),const Rect.fromLTWH(50,0,800,600),const Rect.fromLTWH(0,0,800,500),Rect.zero,const Rect.fromLTWH(0,double.nan,800,600)]) {
+   expect(await mixelFileTransferWindowFrame(desired,center:true,nativeWindowFrame:()async=>observed),desired);
+  }
+  expect(await mixelFileTransferWindowFrame(desired,center:true,nativeWindowFrame:()async=>throw StateError('No native frame')),desired);
+  TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel,(call)async{
+   if(call.method=='getScreenList')return [screen(globalWork,1)];
+   throw PlatformException(code:'No current frame');
+  });
+  expect(await mixelFileTransferWindowFrame(desired,center:true,nativeWindowFrame:()async=>const Rect.fromLTWH(0,0,800,600)),desired);
+ });
+ test('literal Mac creation and inactive reuse calibrate current engine; explicit-screen path stays exact',()async {
+  const globalWork=Rect.fromLTWH(0,824,1100,736);
+  var reported=const Rect.fromLTWH(0,800,800,600);
+  TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel,(call)async{
+   if(call.method=='getScreenList')return [screen(globalWork,2)];
+   if(call.method=='getWindowInfo')return {'frame':[reported.left,reported.top,reported.width,reported.height],'scaleFactor':2.0,'screen':screen(globalWork,2)};
+   throw StateError('Unexpected native write');
+  });
+  isMacOS=true;isLinux=false;isWindows=false;kWindowId=null;bind.option='';bind.peerOption='';
+  mainController.frame=const Rect.fromLTWH(0,0,800,600);frameReads.clear();controller.events.clear();
+  await Creation().newSessionWindow(WindowType.RemoteDesktop,'QA','',[],false);
+  await Future<void>.delayed(Duration.zero);
+  expect(controller.frame,const Rect.fromLTWH(0,24,1100,736));expect(frameReads,[0]);
+  controller.frame=const Rect.fromLTWH(-1920,-100,1920,1080);frameReads.clear();controller.events.clear();
+  await Creation().newSessionWindow(WindowType.RemoteDesktop,'QA','',[],true);
+  await Future<void>.delayed(Duration.zero);
+  expect(controller.frame,const Rect.fromLTWH(-1920,-100,1920,1080));expect(frameReads,isEmpty);expect(controller.events,['title','show']);
+  controller.frame=const Rect.fromLTWH(50,-70,900,600);frameReads.clear();
+  bind.peerOption=jsonEncode({'width':900.0,'height':600.0,'offsetWidth':80.0,'offsetHeight':80.0,'isMaximized':false,'isFullscreen':false});
+  await restoreWindowPosition(WindowType.RemoteDesktop,windowId:1,peerId:'QA');
+  expect(controller.frame,const Rect.fromLTWH(80,80,900,600));expect(frameReads,[0]);
+  kWindowId=1;reported=const Rect.fromLTWH(80,880,900,600);frameReads.clear();
+  await restoreWindowPosition(WindowType.RemoteDesktop,windowId:1,peerId:'QA');
+  expect(controller.frame,const Rect.fromLTWH(80,80,900,600));expect(frameReads,[1]);
+  isMacOS=false;isLinux=true;kWindowId=1;bind.option='';bind.peerOption='';
+ });
+
 '''
 
 
@@ -274,7 +418,7 @@ def flutter_controls(data, out, flutter):
         r=subprocess.run(list(map(str,args)),cwd=app,env=env,capture_output=True,text=True,encoding='utf-8',timeout=240)
         (out/('actual-dart-'+label+'.log')).write_text(r.stdout+r.stderr,encoding='utf-8')
         assert r.returncode==0,label+': '+r.stdout+r.stderr
-    print('PASS: actual Flutter compiled literal initial/restored branches, all other window types, reported screen coordinates at scale2 and eight geometry tests')
+    print('PASS: actual Flutter compiled literal initial/restored branches, remote initial Linux/Mac/Windows branches, saved peer/local cascade, fullscreen/maximize, all preserved window types and fourteen geometry tests with same-engine Mac boundary calibration')
 
 
 def main():
