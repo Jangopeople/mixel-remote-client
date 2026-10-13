@@ -373,6 +373,9 @@ def host_portability_controls(out):
 
 
 def flutter_controls(out, source, flutter):
+    with A.startup_baseline(source) as plain:
+        if plain != source.resolve():
+            return flutter_controls(out, plain, flutter)
     app = out / 'actual-full-app'
     shutil.copytree(source, app, ignore=shutil.ignore_patterns('.git', '.dart_tool', 'build', '.mixel-dependencies'))
     # Bring forward the exact locally owned plugins/provenance without caches.
