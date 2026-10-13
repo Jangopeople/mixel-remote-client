@@ -214,7 +214,13 @@ fn run_update_script(update_source_dir: &str, with_service: bool) -> ResultType<
         PRIVILEGES_SCRIPTS_DIR
             .get_file(name)
             .and_then(|file| file.contents_utf8())
-            .map(correct_app_name)
+            // Only upstream plist templates contain branding placeholders. The
+            // checked-in updater scripts must stay byte-exact, including the
+            // real liblibrustdesk.dylib filename used by the signed payload.
+            .map(|body| match name {
+                "daemon.plist" | "agent.plist" => correct_app_name(body),
+                _ => body.to_owned(),
+            })
             .ok_or_else(|| anyhow!("Embedded macOS updater resource missing: {}", name))
     };
     let status = Command::new("/usr/bin/osascript")

@@ -12,6 +12,7 @@ import unittest
 from rust_toolchain import rustc_command
 
 ROOT = Path(__file__).resolve().parent
+SOURCE = Path(os.environ.get("RDREPO", ROOT.parent / "rustdesk")).resolve()
 spec = importlib.util.spec_from_file_location("macos_update", ROOT / "patch-macos-update.py")
 patch = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(patch)
@@ -95,17 +96,22 @@ class TransactionFixture:
         for index, plist in enumerate(self.plists):
             plist.write_bytes(plistlib.dumps({"Label": "old-" + str(index)}))
         self.old_plists = [p.read_bytes() for p in self.plists]
-        shell = (ROOT / "macos-update-bundle.sh").read_text()
-        shell = shell.replace('/Applications', str(root / 'Applications')).replace('/Library', str(root / 'Library'))
         for tool in ("/usr/bin/id", "/usr/bin/stat", "/usr/bin/codesign", "/usr/libexec/PlistBuddy",
                      "/usr/bin/ditto", "/usr/sbin/chown", "/usr/bin/plutil", "/usr/bin/pgrep",
                      "/bin/launchctl", "/bin/mv"):
             path = self.tools / Path(tool).name
             path.write_text(MOCK_TOOL)
             path.chmod(0o755)
-            self.assert_once_or_used(shell, tool)
-            shell = shell.replace(tool, str(path))
         self.shell = root / "updater-fixture.sh"
+        self.write_shell((ROOT / "macos-update-bundle.sh").read_text())
+
+    def write_shell(self, shell):
+        shell = shell.replace('/Applications', str(self.root / 'Applications')).replace('/Library', str(self.root / 'Library'))
+        for tool in ("/usr/bin/id", "/usr/bin/stat", "/usr/bin/codesign", "/usr/libexec/PlistBuddy",
+                     "/usr/bin/ditto", "/usr/sbin/chown", "/usr/bin/plutil", "/usr/bin/pgrep",
+                     "/bin/launchctl", "/bin/mv"):
+            self.assert_once_or_used(shell, tool)
+            shell = shell.replace(tool, str(self.tools / Path(tool).name))
         self.shell.write_text(shell)
 
     @staticmethod
@@ -251,10 +257,14 @@ class UpdaterTests(unittest.TestCase):
             candidate.mkdir(parents=True)
             target.mkdir(parents=True)
             tool = base / 'mock-os-command'
-            tool.write_text('''#!/bin/sh
-printf '%s\\n' "$FIXTURE_COMMAND" >> "$FIXTURE_ACTIONS"
-case "$CASE:$FIXTURE_COMMAND" in cancel:osascript|copy-failed:osascript|open-failed:open) exit 1;; esac
-exit 0
+            tool.write_text('''#!/usr/bin/env python3
+import json,os,sys
+from pathlib import Path
+command=os.environ['FIXTURE_COMMAND']
+with Path(os.environ['FIXTURE_ACTIONS']).open('a') as stream:stream.write(command+'\\n')
+if command=='osascript' and os.environ.get('FIXTURE_ARGV'):
+ Path(os.environ['FIXTURE_ARGV']).write_text(json.dumps(sys.argv[1:]))
+sys.exit(1 if (os.environ['CASE'],command) in (('cancel','osascript'),('copy-failed','osascript'),('open-failed','open')) else 0)
 ''')
             tool.chmod(0o755)
             provider = r'''#![allow(dead_code)]
@@ -264,15 +274,10 @@ macro_rules! anyhow { ($($a:tt)*) => {std::io::Error::new(std::io::ErrorKind::Ot
 macro_rules! bail { ($($a:tt)*) => {return Err(anyhow!($($a)*).into())}; }
 #[macro_export] macro_rules! fixture_log { ($($a:tt)*) => { eprintln!($($a)*) }; }
 mod log { #[allow(unused_imports)] pub use crate::fixture_log as error; #[allow(unused_imports)] pub use crate::fixture_log as info; #[allow(unused_imports)] pub use crate::fixture_log as warn; }
-struct Resource;
-impl Resource {fn contents_utf8(&self)->Option<&'static str>{Some("synthetic-resource")}}
-struct Resources;
-impl Resources {fn get_file(&self,_name:&str)->Option<Resource>{Some(Resource)}}
-static PRIVILEGES_SCRIPTS_DIR:Resources=Resources;
-fn correct_app_name(s:&str)->String{s.to_owned()}
 fn get_active_username()->String{"synthetic-user".to_owned()}
 fn get_app_name()->String{"Mixel-Remote".to_owned()}
 fn get_full_name()->String{"ch.mixel.remote".to_owned()}
+fn get_bundle_id()->Option<String>{Some("ch.mixel.remote".to_owned())}
 fn is_installed_daemon(_prompt:bool)->bool{std::env::var("SERVICE").unwrap()=="1"}
 mod hbb_common {pub mod config {pub fn option2bool(_key:&str,value:&str)->bool{value=="Y"}}}
 mod ui_interface {pub fn get_option(_key:&str)->String{std::env::var("STOPPED").unwrap_or_default()}}
@@ -296,6 +301,47 @@ fn extract_dmg(_dmg:&str,_dest:&str)->ResultType<()> {
 fn translate(s:String)->String{s}
 fn update_extracted(_target:&str)->ResultType<()>{Ok(())}
 '''
+            # Compile the real pinned branding implementation, not an identity
+            # stub. Read real resources too, so argv catches filename rewriting
+            # before any signed build or administrator-authorized replacement.
+            pinned_macos = (SOURCE / 'src/platform/macos.rs').read_text()
+            anchor = 'fn correct_app_name(s: &str) -> String {'
+            self.assertEqual(pinned_macos.count(anchor), 1, 'Pinned branding function missing or duplicated')
+            start = pinned_macos.index(anchor)
+            end = pinned_macos.index('\n}\n', start) + 3
+            provider += pinned_macos[start:end]
+            resource_dir = base / 'real-resources'
+            resource_dir.mkdir()
+            resources = {}
+            for name in ('update.scpt', 'update.sh', 'daemon.plist', 'agent.plist'):
+                path = ROOT / ('macos-update.scpt' if name == 'update.scpt' else 'macos-update-bundle.sh') if name.startswith('update.') else SOURCE / 'src/platform/privileges_scripts' / name
+                body = path.read_text()
+                if name.endswith('.plist'):
+                    # The real pipeline normalizes this upstream bundle prefix
+                    # before runtime correct_app_name() applies app branding.
+                    body = body.replace('com.carriez.RustDesk', 'com.carriez.rustdesk')
+                resources[name] = body
+                (resource_dir / name).write_text(body)
+            provider += '\nstruct Resource(&\'static str);\nimpl Resource {fn contents_utf8(&self)->Option<&\'static str>{Some(self.0)}}\nstruct Resources;\nimpl Resources {fn get_file(&self,name:&str)->Option<Resource>{match name {\n'
+            for name in resources:
+                provider += json.dumps(name) + ' => Some(Resource(include_str!(' + json.dumps(str(resource_dir / name)) + '))),\n'
+            provider += '_ => None}}}\nstatic PRIVILEGES_SCRIPTS_DIR:Resources=Resources;\n'
+
+            def assert_resource_arguments(arguments):
+                self.assertEqual(len(arguments), 11)
+                self.assertEqual(arguments[0], '-e')
+                self.assertEqual(arguments[1], resources['update.scpt'])
+                self.assertEqual(arguments[7], resources['update.sh'])
+                self.assertIn('Contents/Frameworks/liblibrustdesk.dylib', arguments[7])
+                self.assertNotIn('liblibmixel-remote.dylib', arguments[7])
+                for index, name, suffix in ((2, 'daemon.plist', 'service'), (3, 'agent.plist', 'server')):
+                    expected = resources[name].replace('com.carriez.rustdesk', 'ch.mixel.remote').replace('rustdesk', 'mixel-remote').replace('RustDesk', 'Mixel-Remote')
+                    self.assertEqual(arguments[index], expected)
+                    plist = plistlib.loads(arguments[index].encode())
+                    self.assertEqual(plist['Label'], 'ch.mixel.remote_' + suffix)
+                    self.assertEqual(plist['AssociatedBundleIdentifiers'], 'ch.mixel.remote')
+                    self.assertIn('/Applications/Mixel-Remote.app/Contents/MacOS/', plist['WorkingDirectory'])
+
             updater = patch.FIXED_UPDATER.replace('format!("/Applications/{}.app", crate::get_app_name())',
                                                    'format!("{}/Applications/{}.app", std::env::var("FIXTURE_BASE").unwrap(), crate::get_app_name())')
             updater = updater.replace('format!("/Library/LaunchAgents/{}", agent)',
@@ -310,6 +356,16 @@ fn update_extracted(_target:&str)->ResultType<()>{Ok(())}
             self.assertTrue(compiler, 'Rust compiler required')
             compile_result = run(rustc_command([compiler, '--edition=2021', '--deny=warnings', str(rust), '-o', str(executable)]))
             self.assertEqual(compile_result.returncode, 0, compile_result.stdout + compile_result.stderr)
+            # Retain the exact faulty all-resource branding as a compiled
+            # negative control; execute its captured shell in a private fixture.
+            resource_map = '.map(|body| match name {\n                "daemon.plist" | "agent.plist" => correct_app_name(body),\n                _ => body.to_owned(),\n            })'
+            self.assertEqual(patch.FIXED_DAEMON.count(resource_map), 1)
+            faulty_daemon = patch.FIXED_DAEMON.replace(resource_map, '.map(correct_app_name)')
+            self.assertEqual(source.count(patch.FIXED_DAEMON), 1)
+            rust.write_text(source.replace(patch.FIXED_DAEMON, faulty_daemon))
+            faulty_executable = candidate / 'Mixel-Remote-faulty-branding'
+            faulty_compile = run(rustc_command([compiler, '--edition=2021', '--deny=warnings', str(rust), '-o', str(faulty_executable)]))
+            self.assertEqual(faulty_compile.returncode, 0, faulty_compile.stdout + faulty_compile.stderr)
             (base / 'dmg/Mixel-Remote.app').mkdir(parents=True)
             agent = base / 'Library/LaunchAgents/ch.mixel.remote_server.plist'
             agent.parent.mkdir(parents=True)
@@ -340,9 +396,12 @@ fn update_extracted(_target:&str)->ResultType<()>{Ok(())}
                     actions = base / 'rust-actions'
                     actions.unlink(missing_ok=True)
                     env = {**os.environ, 'CASE':mode,'SERVICE':service,'STOPPED':'', 'FIXTURE_BASE':str(base),
-                           'FIXTURE_ACTIONS':str(actions),'FIXTURE_TOOL':str(tool),'DMG_SOURCE':str(base/'dmg')}
+                           'FIXTURE_ACTIONS':str(actions),'FIXTURE_TOOL':str(tool),'DMG_SOURCE':str(base/'dmg'),
+                           'FIXTURE_ARGV':str(base/'captured-argv.json')}
                     result = run([str(executable),'--update',*(['synthetic.dmg'] if dmg else [])], env=env)
                     observed = actions.read_text().splitlines() if actions.exists() else []
+                    if mode != 'spawn-failed':
+                        assert_resource_arguments(json.loads((base/'captured-argv.json').read_text()))
                     if mode == 'success':
                         self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
                         self.assertIn('Update successfully!',result.stdout)
@@ -351,6 +410,37 @@ fn update_extracted(_target:&str)->ResultType<()>{Ok(())}
                         self.assertNotEqual(result.returncode,0)
                         self.assertNotIn('Update successfully!',result.stdout)
                         if mode != 'open-failed':self.assertNotIn('open',observed)
+            for faulty in (True, False):
+                with self.subTest(faulty_branding=faulty), tempfile.TemporaryDirectory() as temporary:
+                    fixture = TransactionFixture(Path(temporary))
+                    renamed = fixture.root / 'Mixel-Remote.app'
+                    fixture.source.rename(renamed)
+                    fixture.source = renamed
+                    captured = fixture.root / 'captured-argv.json'
+                    env = {**os.environ, 'CASE':'success','SERVICE':'1','STOPPED':'', 'FIXTURE_BASE':str(base),
+                           'FIXTURE_ACTIONS':str(fixture.root/'rust-actions'), 'FIXTURE_TOOL':str(tool),
+                           'DMG_SOURCE':str(fixture.root), 'FIXTURE_ARGV':str(captured)}
+                    generated = run([str(faulty_executable if faulty else executable), '--update', 'synthetic.dmg'], env=env)
+                    self.assertEqual(generated.returncode, 0, generated.stdout + generated.stderr)
+                    arguments = json.loads(captured.read_text())
+                    if faulty:
+                        self.assertIn('Contents/Frameworks/liblibmixel-remote.dylib', arguments[7])
+                        self.assertNotIn('Contents/Frameworks/liblibrustdesk.dylib', arguments[7])
+                    else:
+                        assert_resource_arguments(arguments)
+                    fixture.write_shell(arguments[7])
+                    transaction = run(['/bin/sh', str(fixture.shell), arguments[6], arguments[4], arguments[5],
+                                       arguments[8], arguments[9], arguments[10], arguments[2], arguments[3]],
+                                      env={**os.environ, 'CASE':'success', 'FIXTURE_ROOT':str(fixture.root)})
+                    self.assertEqual(transaction.returncode != 0, faulty, transaction.stdout + transaction.stderr)
+                    self.assertEqual(fixture.target_markers(), ['old' if faulty else 'new'] * 4)
+                    if faulty:
+                        self.assertEqual([p.read_bytes() for p in fixture.plists], fixture.old_plists)
+                        self.assertFalse(any(r['tool'] in ('launchctl','pgrep','mv') for r in fixture.actions()))
+                    else:
+                        for plist in fixture.plists:
+                            self.assertTrue(plistlib.loads(plist.read_bytes())['Label'].startswith('ch.mixel.remote_'))
+            print('PASS: actual pinned branding corrupts the real library filename in the compiled negative control and aborts before installed changes; fixed raw scripts/branded plists complete the real shell transaction')
             installed = target/'Contents/MacOS/Mixel-Remote'
             installed.parent.mkdir(parents=True)
             shutil.copy2(executable,installed)
