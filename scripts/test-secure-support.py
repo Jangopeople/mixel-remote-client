@@ -441,7 +441,76 @@ fn explicit_direct_listener_and_stock_host_keep_plaintext_compatibility() {
 '''
 
 
+
+def writer_controls() -> None:
+    # Execute the real four transforms and conditional write branch under both
+    # host text-output policies. ACK emits LF and invite emits host-native text.
+    import hashlib
+    import runpy
+    from unittest import mock
+
+    helper = ROOT / "scripts/patch-secure-support.py"
+    namespace = runpy.run_path(str(helper))
+    relative_patches = (("src/client.rs", "patch_client"),
+                        ("src/common.rs", "patch_common"),
+                        ("src/server.rs", "patch_server"),
+                        ("src/rendezvous_mediator.rs", "patch_direct_listener"))
+    originals = {relative: source(relative) for relative, _ in relative_patches}
+    expected = {relative: namespace[patch](originals[relative]).encode("utf-8")
+                for relative, patch in relative_patches}
+    corrected = helper.read_text(encoding="utf-8")
+    writer = 'path.write_text(modified, encoding="utf-8", newline="\\n" if relative == "src/server.rs" else None)'
+    previous = 'path.write_text(modified, encoding="utf-8")'
+    assert corrected.count(writer) == 1
+    historical = corrected.replace(writer, previous, 1)
+    assert hashlib.sha256(historical.encode("utf-8")).hexdigest() == "c553b404f9279f1c38fcffbb8b10f3ba796799c5eb96ffc6681477bb58a9df3b"
+    old_namespace = dict(namespace, __name__="mixel_original_secure_writer")
+    exec(compile(historical, str(helper), "exec"), old_namespace)
+    original_write = Path.write_text
+    def case(main, input_ending, host_ending):
+        with tempfile.TemporaryDirectory(prefix="mixel-secure-writer-") as temporary:
+            repository = Path(temporary)
+            for relative, text in originals.items():
+                path = repository / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(text.replace("\n", input_ending).encode("utf-8"))
+            def translated(target, data, *args, **kwargs):
+                if kwargs.get("newline") is None:
+                    kwargs["newline"] = host_ending
+                return original_write(target, data, *args, **kwargs)
+            with mock.patch.dict(os.environ, RDREPO=str(repository)), \
+                    mock.patch.object(Path, "write_text", new=translated):
+                main()
+                first = {relative: (repository / relative).read_bytes()
+                         for relative, _ in relative_patches}
+                # This is the actual ACK owner's explicit UTF-8/LF write policy,
+                # keeping the complete already-patched server text unchanged.
+                path = repository / "src/server.rs"
+                path.write_text(path.read_text(encoding="utf-8"),
+                                encoding="utf-8", newline="\n")
+                # Invite also unconditionally writes the common Rust source using
+                # the existing host-native policy between secure passes.
+                common = repository / "src/common.rs"
+                common.write_text(common.read_text(encoding="utf-8"), encoding="utf-8")
+                main()
+                second = {relative: (repository / relative).read_bytes()
+                          for relative, _ in relative_patches}
+            return first, second
+    first, second = case(old_namespace["main"], "\n", "\r\n")
+    assert set(name for name in first if first[name] != second[name]) == {"src/server.rs"}
+    assert first["src/server.rs"].replace(b"\r\n", b"\n") == second["src/server.rs"]
+    for input_ending in ("\n", "\r\n"):
+        for host_ending in ("\n", "\r\n"):
+            first, second = case(namespace["main"], input_ending, host_ending)
+            profiled_expected = {relative: (raw if relative == "src/server.rs" else
+                                  raw.replace(b"\n", host_ending.encode("ascii")))
+                                 for relative, raw in expected.items()}
+            assert first == profiled_expected == second
+    print("PASS: literal old conditional writer reproduces ACK CRLF-to-LF drift; "
+          "server-only LF and three unchanged native writers stay byte-idempotent in all four input/host profiles", flush=True)
+
 def main() -> None:
+    writer_controls()
     rustc = os.environ.get("RUSTC_BIN") or shutil.which("rustc")
     if not rustc:
         raise RuntimeError("rustc is required to execute actual handshake branches")

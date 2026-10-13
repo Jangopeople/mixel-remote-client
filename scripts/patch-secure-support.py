@@ -247,7 +247,7 @@ def main() -> None:
         original = path.read_text(encoding="utf-8")
         modified = patch(original)
         if original != modified:
-            path.write_text(modified, encoding="utf-8")
+            path.write_text(modified, encoding="utf-8", newline="\n" if relative == "src/server.rs" else None)
     print("   installed fail-closed authenticated encryption for pinned Mixel support")
 
 
