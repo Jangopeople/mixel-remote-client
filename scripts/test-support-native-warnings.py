@@ -409,15 +409,34 @@ def composed_controls(source,out,full_branding=False,bash='bash'):
         assert P.apply(repo,True,True,True)['writes']==0 and snapshot(repo)==final
         assert P.apply(repo,True)['writes']==10 and snapshot(repo)==old
         counts['newline_profiles']+=1
-    for name in P.FRESH:
-        repo=out/('composed-target-'+str(counts['fatal_zero_write']));shutil.copytree(canonical,repo)
+    counts.update(hash_drift_zero_write=0, deliberate_mixed_zero_write=0)
+    for profile,newline in (('lf','\n'),('crlf','\r\n')):
+        for name in P.FRESH:
+            repo=out/('composed-target-'+profile+'-'+str(counts['fatal_zero_write']));shutil.copytree(canonical,repo)
+            P.apply(repo,after_branding=True)
+            path=repo/name;text,_=P.canonical(path.read_bytes())
+            path.write_bytes((text.replace('\n',newline)+'// unrelated drift'+newline).encode('utf-8'))
+            assert P.canonical(path.read_bytes())[1]==newline
+            before=snapshot(repo)
+            for restore,check in modes:
+                try:P.apply(repo,restore,check,before_branding=restore and check)
+                except RuntimeError as error:assert str(error)=='Pinned native warning source changed: '+name
+                else:raise AssertionError('Changed branded warning source accepted')
+                assert snapshot(repo)==before;counts['fatal_zero_write']+=1;counts['hash_drift_zero_write']+=1
+    target=next(iter(P.FRESH))
+    for profile,newline,opposite in (('lf','\n','\r\n'),('crlf','\r\n','\n')):
+        repo=out/('composed-deliberate-mixed-'+profile);shutil.copytree(canonical,repo)
         P.apply(repo,after_branding=True)
-        path=repo/name;path.write_bytes(path.read_bytes()+b'// unrelated drift\n');before=snapshot(repo)
+        path=repo/target;text,_=P.canonical(path.read_bytes())
+        path.write_bytes((text.replace('\n',newline)+'// deliberate mixed drift'+opposite).encode('utf-8'))
+        before=snapshot(repo)
         for restore,check in modes:
             try:P.apply(repo,restore,check,before_branding=restore and check)
-            except RuntimeError as error:assert str(error)=='Pinned native warning source changed: '+name
-            else:raise AssertionError('Changed branded warning source accepted')
-            assert snapshot(repo)==before;counts['fatal_zero_write']+=1
+            except RuntimeError as error:assert str(error)=='Mixed or unsupported native warning source newlines'
+            else:raise AssertionError('Deliberately mixed branded warning source accepted')
+            assert snapshot(repo)==before;counts['fatal_zero_write']+=1;counts['deliberate_mixed_zero_write']+=1
+    assert counts['hash_drift_zero_write']==len(P.FRESH)*len(modes)*2
+    assert counts['deliberate_mixed_zero_write']==len(modes)*2
     prior_cases=[('flutter/lib/common.dart','drift'),
                  ('flutter/lib/desktop/pages/file_manager_page.dart','drift'),
                  ('flutter/lib/mixel_support_cleanup.dart','drift'),
