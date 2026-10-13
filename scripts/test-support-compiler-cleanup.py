@@ -18,7 +18,94 @@ SPEC.loader.exec_module(P)
 
 
 def snapshot(root):
-    return {str(p.relative_to(root)): p.read_bytes() for p in root.rglob('*') if p.is_file()}
+    return {p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob('*') if p.is_file()}
+
+
+def snapshot_path_controls(out):
+    # PureWindowsPath executes actual Windows path parsing/relative semantics.
+    # File bytes and is_file come from real owned local LF/CRLF fixtures; no
+    # Windows filesystem/native API execution is inferred on a non-Windows host.
+    import inspect
+    from pathlib import PurePosixPath, PureWindowsPath
+
+    current = inspect.getsource(snapshot)
+    expression = 'p.relative_to(root).as_posix()'
+    assert current.count(expression) == 1
+    historical = current.replace(expression, 'str(p.relative_to(root))', 1)
+    original = {}
+    exec(compile(historical, '<original-snapshot>', 'exec'), original)
+    cases = 0
+    for ending in ('\n', '\r\n'):
+        stage = out / ('snapshot-path-lf' if ending == '\n' else 'snapshot-path-crlf')
+        stage.mkdir()
+        names = [*P.ORIGINAL, 'nested space/Unicode é 🚀.txt']
+        expected = {}
+        for name in names:
+            target = stage / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            payload = ('owned snapshot payload: ' + name + ending).encode('utf-8')
+            target.write_bytes(payload)
+            expected[name] = payload
+        assert snapshot(stage) == expected
+        for flavor in (PurePosixPath, PureWindowsPath):
+            logical_root = flavor('C:/owned source' if flavor is PureWindowsPath else '/owned source')
+            class Entry:
+                def __init__(self, physical):
+                    self.physical = physical
+                    self.logical = logical_root.joinpath(*physical.relative_to(stage).parts)
+                def relative_to(self, root):
+                    return self.logical.relative_to(root.logical)
+                def is_file(self):
+                    return self.physical.is_file()
+                def read_bytes(self):
+                    return self.physical.read_bytes()
+            class Root:
+                logical = logical_root
+                def rglob(self, pattern):
+                    assert pattern == '*'
+                    return [Entry(path) for path in stage.rglob(pattern)]
+            root = Root()
+            before = snapshot(stage)
+            assert snapshot(root) == expected
+            legacy = original['snapshot'](root)
+            if flavor is PureWindowsPath:
+                assert 'src\\server.rs' in legacy and 'src/server.rs' not in legacy
+                try:
+                    legacy['src/server.rs']
+                except KeyError as error:
+                    assert error.args == ('src/server.rs',)
+                else:
+                    raise AssertionError('Original Windows key mismatch not reproduced')
+            else:
+                assert legacy == expected
+            assert snapshot(stage) == before
+            cases += 1
+    print(f'PASS: actual POSIX/Windows relative-path semantics across LF/CRLF bytes; {cases} canonical snapshot profiles; original Windows KeyError reproduced; files unchanged')
+
+
+    # On POSIX, a backslash is a legal literal filename character. Canonical
+    # path formatting must preserve it, unlike a generic separator replacement.
+    if os.name == 'nt':
+        print('SKIP: native POSIX literal-backslash filename fixture on Windows; four Windows/POSIX logical path profiles above remain mandatory')
+    else:
+        stage = out / 'snapshot-path-literal-backslash'
+        stage.mkdir()
+        expected = {r'literal\separator.txt': b'literal-backslash file\n',
+                    'literal/separator.txt': b'distinct nested file\n'}
+        for name, payload in expected.items():
+            target = stage / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(payload)
+        before = snapshot(stage)
+        assert before == expected
+        generic = current.replace(expression,
+                                  'str(p.relative_to(root)).replace("\\\\", "/")', 1)
+        incorrect = {}
+        exec(compile(generic, '<incorrect-generic-key-replacement>', 'exec'), incorrect)
+        collided = incorrect['snapshot'](stage)
+        assert collided != expected and set(collided) == {'literal/separator.txt'}
+        assert snapshot(stage) == before
+        print('PASS: actual POSIX literal-backslash filename remains distinct from slash-nested file; generic replacement collision refused; files unchanged')
 
 
 def fixture(source, dest, newline='\n'):
@@ -448,6 +535,7 @@ def main():
     for name, text in texts.items():
         target=original/name;target.parent.mkdir(parents=True,exist_ok=True)
         target.write_bytes(P.transform(name,text,True).encode('utf-8'))
+    snapshot_path_controls(args.evidence_dir)
     source_controls(original,args.evidence_dir)
     composed_controls(args.source,args.evidence_dir,args.bash)
     source_projection_controls(args.source,args.evidence_dir)
