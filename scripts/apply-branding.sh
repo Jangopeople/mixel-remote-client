@@ -34,7 +34,9 @@ fi
 source "$BRANDING/branding.env"
 
 # Validate every prior owner in an exact private final-overlay inverse first.
-python3 "$(dirname "${BASH_SOURCE[0]}")/patch-macos-startup.py" --check-prior
+# The final compiler inverse validates that unchanged complete prior chain.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-compiler-cleanup.py" --root "$RDREPO" --restore --check --before-branding
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-compiler-cleanup.py" --root "$RDREPO" --restore
 
 # Restore only the exact final startup overlay before prior owners see inputs.
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-macos-startup.py" --restore
@@ -1053,5 +1055,8 @@ python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-tray-url.py"
 
 # Startup is applied last against one exact composed three-file input profile.
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-macos-startup.py"
+
+# Apply the exact compiler-only final layer after all functional owners.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-compiler-cleanup.py" --root "$RDREPO" --after-branding
 
 echo "✓ Branding applied — product identity is $APP_NAME only."

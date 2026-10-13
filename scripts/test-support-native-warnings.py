@@ -493,7 +493,8 @@ def composed_controls(source,out,full_branding=False,bash='bash'):
             final=production_snapshot(repo)
             changed=[n for n in before if before[n]!=final[n]]
             assert sorted(changed)==sorted(P.FRESH) and set(before)==set(final),(changed,set(before)^set(final))
-            assert {name:P.digest(P.canonical((repo/name).read_bytes())[0]) for name in P.FRESH}==P.FINAL
+            with analysis.startup_baseline(repo) as prior:
+                assert {name:P.digest(P.canonical((prior/name).read_bytes())[0]) for name in P.FRESH}==P.FINAL
             result=run([bash,root/'scripts/apply-branding.sh'],out,'macro-'+profile+'-second',env)
             assert result.returncode==0,result.stderr[-4000:]
             assert production_snapshot(repo)==final,'Repeated macro changed production bytes'

@@ -174,10 +174,12 @@ def full_branding(out, files, source, bash=None):
                  "patch-support-uinput-scroll.py",
                  "patch-support-uinput-device.py","test-support-uinput-device.py",
                  "patch-support-native-warnings.py","test-support-native-warnings.py",
+                 "patch-support-compiler-cleanup.py","test-support-compiler-cleanup.py",
                  "patch-support-fingerprint.py","test-support-fingerprint.py",
                  "patch-support-fatal-crash.py","test-support-fatal-crash.py",
                  "patch-macos-update.py","test-macos-update.py","macos-update.scpt","macos-update-bundle.sh"):
         shutil.copyfile(ROOT/"scripts"/name,copied/"scripts"/name)
+    analyzer.copy_current_pipeline_inputs(copied)
     script=copied/"scripts/apply-branding.sh"
     original=script.read_text()
     shell_source="$"+"{BASH_SOURCE[0]}"
@@ -211,24 +213,25 @@ def full_branding(out, files, source, bash=None):
             assert "patched bounded Mac page cleanup" in result.stdout
             assert "native loaders, protocol handlers, Linux app identity and relay defaults verified" in result.stdout
             before_check=pipeline_snapshot(repo)
-            F.verify_previous_layers(repo) if (repo/F.GENERATED).exists() else S.apply(repo,check=True)
-            assert pipeline_snapshot(repo)==before_check,"Final Quit validation mutated the pipeline"
-            for name,data in files.items():
-                corrected=P.transform(name,data)
-                if name in T.FILES:
-                    canonical=T.regular(repo/"flutter/.mixel-dependencies/macos_application_exit",name)
-                    assert canonical==corrected,name
-                    corrected=T.transform(name,canonical)
-                if name in S.FILES:
-                    canonical=S.regular(repo/S.OWNED,name)
-                    assert canonical==corrected,name
-                    corrected=S.transform(name,canonical)
-                actual=(repo/name).read_bytes()
-                if name in F.COMPOSED and (repo/F.GENERATED).exists(): actual=F.transform(name,actual,restore=True)
-                assert actual==corrected.replace(b"\n",newline),name
-                assert (repo/P.OWNED/name).read_bytes()==data,name
-            assert (repo/P.GENERATED).read_bytes()==P.UTILITY.encode()
-            assert (repo/T.GENERATED).read_bytes()==T.UTILITY.encode()
+            with analyzer.startup_baseline(repo) as checked_repo:
+                F.verify_previous_layers(checked_repo) if (checked_repo/F.GENERATED).exists() else S.apply(checked_repo,check=True)
+                assert pipeline_snapshot(repo)==before_check,"Final Quit validation mutated the pipeline"
+                for name,data in files.items():
+                    corrected=P.transform(name,data)
+                    if name in T.FILES:
+                        canonical=T.regular(checked_repo/"flutter/.mixel-dependencies/macos_application_exit",name)
+                        assert canonical==corrected,name
+                        corrected=T.transform(name,canonical)
+                    if name in S.FILES:
+                        canonical=S.regular(checked_repo/S.OWNED,name)
+                        assert canonical==corrected,name
+                        corrected=S.transform(name,canonical)
+                    actual=(checked_repo/name).read_bytes()
+                    if name in F.COMPOSED and (checked_repo/F.GENERATED).exists(): actual=F.transform(name,actual,restore=True)
+                    assert actual==corrected.replace(b"\n",newline),name
+                    assert (checked_repo/P.OWNED/name).read_bytes()==data,name
+                assert (checked_repo/P.GENERATED).read_bytes()==P.UTILITY.encode()
+                assert (checked_repo/T.GENERATED).read_bytes()==T.UTILITY.encode()
             current=pipeline_snapshot(repo)
             if attempt==1:
                 first=current

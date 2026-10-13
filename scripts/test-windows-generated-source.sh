@@ -43,6 +43,7 @@ for mixel_source_test in \
   python "scripts/$mixel_source_test.py"
 done
 python scripts/test-support-native-warnings.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --source-only --output "$RUNNER_TEMP/mixel-native-warning-source" --bash "$mixel_analyzer_bash"
+python scripts/test-support-compiler-cleanup.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --source-only --output "$RUNNER_TEMP/mixel-compiler-cleanup-source" --bash "$mixel_analyzer_bash"
 unset mixel_analyzer_bash
 dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart
 dart scripts/test-support-invite.dart

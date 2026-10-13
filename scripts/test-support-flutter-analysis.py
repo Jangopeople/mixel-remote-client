@@ -75,15 +75,28 @@ def startup_baseline(source):
     spec = importlib.util.spec_from_file_location("mixel_fixture_startup", ROOT / "scripts/patch-macos-startup.py")
     startup = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(startup)
+    compiler_spec = importlib.util.spec_from_file_location("mixel_fixture_compiler", ROOT / "scripts/patch-support-compiler-cleanup.py")
+    compiler = importlib.util.module_from_spec(compiler_spec)
+    compiler_spec.loader.exec_module(compiler)
+    has_compiler = any((source/name).is_file() and hashlib.sha256((source/name).read_bytes().replace(b"\r\n", b"\n")).hexdigest() == expected
+                       for name, expected in compiler.CORRECTED.items())
     original = {name: (source / name).read_bytes() for name in startup.INPUT_HASHES}
     original["src/tray.rs"] = (source / "src/tray.rs").read_bytes()
-    if not any(startup.MARKER.encode() in value for value in original.values()):
+    if has_compiler:
+        # Validate actual supplied ownership before a copy can hide inventory
+        # or regularize a disjoint source link; this gate performs no writes.
+        assert compiler.apply(source,check=True,restore=True,before_branding=True)['writes']==0
+        original.update({name: (source/name).read_bytes() for name in compiler.ORIGINAL})
+    if not has_compiler and not any(startup.MARKER.encode() in value for value in original.values()):
         yield source
         return
     with tempfile.TemporaryDirectory(prefix="mixel-exact-startup-inverse-") as temporary:
         projected = Path(temporary).resolve() / "source"
-        shutil.copytree(source, projected, symlinks=True,
-                        ignore=shutil.ignore_patterns(".git", "build", ".dart_tool", "__pycache__"))
+        ignore=((lambda directory,names: compiler.projection_ignored(source,directory,names) | {".git"})
+                if has_compiler else shutil.ignore_patterns(".git", "build", ".dart_tool", "__pycache__"))
+        shutil.copytree(source, projected, symlinks=True,ignore=ignore)
+        if has_compiler:
+            compiler.apply(projected, restore=True)
         startup.apply(projected, restore=True)
         tray_spec = importlib.util.spec_from_file_location("mixel_fixture_tray", ROOT / "scripts/patch-support-macos-tray-url.py")
         tray = importlib.util.module_from_spec(tray_spec)
@@ -502,6 +515,7 @@ def pipeline(out,source,bash):
                  "patch-support-uinput-scroll.py",
                  "patch-support-uinput-device.py","test-support-uinput-device.py",
                  "patch-support-native-warnings.py","test-support-native-warnings.py",
+                 "patch-support-compiler-cleanup.py","test-support-compiler-cleanup.py",
                  "patch-support-fingerprint.py","test-support-fingerprint.py",
                  "patch-support-fatal-crash.py","test-support-fatal-crash.py",
                  "patch-macos-startup.py","test-macos-startup.py","test-macos-startup-ui.dart","macos-startup-failure.dart",
@@ -827,10 +841,14 @@ def diagnostic_counts(text):
     return collections.Counter(part[0].strip() for part in parts),parts
 
 
-def analyze_app(out,source,flutter,files):
+def analyze_app(out,source,flutter,files,package_config_source=None):
+    # Ownership projections omit generated caches. Retain the supplied app's
+    # exact resolved package configuration as a separate read-only fixture input.
+    if package_config_source is None:
+        package_config_source=source/"flutter/.dart_tool/package_config.json"
     with startup_baseline(source) as plain:
         if plain != source.resolve():
-            return analyze_app(out,plain,flutter,files)
+            return analyze_app(out,plain,flutter,files,package_config_source)
     # Validate every final ownership layer without changing the supplied app.
     source_before=snapshot(source/"flutter")
     sdk_overlay=(source/S.OWNED).exists() or (source/S.OWNED).is_symlink()
@@ -849,7 +867,7 @@ def analyze_app(out,source,flutter,files):
             shutil.copytree(source/"flutter"/name,checkout/"flutter"/name)
     for name in ("pubspec.yaml","pubspec.lock","analysis_options.yaml",".dart_tool/package_config.json"):
         target=checkout/"flutter"/name; target.parent.mkdir(parents=True,exist_ok=True)
-        shutil.copyfile(source/"flutter"/name,target)
+        shutil.copyfile(package_config_source if name==".dart_tool/package_config.json" else source/"flutter"/name,target)
     shutil.copyfile(source/"Cargo.toml",checkout/"Cargo.toml")
     if application_exit:
         for name in T.FILES:

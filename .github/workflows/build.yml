@@ -287,6 +287,7 @@ jobs:
           python3 scripts/test-support-macos-termination-support.py --app rustdesk
           python3 scripts/test-support-flutter-sdk-compatibility.py --app rustdesk --flutter "$(command -v flutter)"
           python3 scripts/test-support-native-warnings.py --source rustdesk --source-only --output "$RUNNER_TEMP/mixel-native-warning-source"
+          python3 scripts/test-support-compiler-cleanup.py --source rustdesk --source-only --output "$RUNNER_TEMP/mixel-compiler-cleanup-source"
           python3 scripts/test-macos-update.py --source rustdesk --source-only
           python3 scripts/test-support-file-transfer-window.py --app rustdesk --output "$RUNNER_TEMP/mixel-file-transfer-source" --flutter "$(command -v flutter)"
           python3 scripts/test-support-macos-termination.py --flutter "$(command -v flutter)"
@@ -550,6 +551,7 @@ jobs:
           python3 scripts/test-support-macos-termination-support.py --app rustdesk
           python3 scripts/test-support-flutter-sdk-compatibility.py --app rustdesk --flutter "$(command -v flutter)"
           python3 scripts/test-support-native-warnings.py --source rustdesk --source-only --output "$RUNNER_TEMP/mixel-native-warning-source"
+          python3 scripts/test-support-compiler-cleanup.py --source rustdesk --source-only --output "$RUNNER_TEMP/mixel-compiler-cleanup-source"
           RUSTC_BIN="$(rustup which rustc)" python3 scripts/test-macos-update.py --source rustdesk
           python3 scripts/test-support-macos-termination.py --flutter "$(command -v flutter)" --framework "$MIXEL_FLUTTER_FRAMEWORK"
           RUSTC_BIN="$(rustup which rustc)" python3 scripts/test-support-fatal-crash.py --source rustdesk --upstream-repo rustdesk --evidence-dir "$RUNNER_TEMP/mixel-fatal-crash-source"

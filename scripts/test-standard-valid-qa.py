@@ -170,6 +170,11 @@ if($generated.IndexOf('Start-StandardValidQaNamespace') -lt 0 -or $generated.Ind
                          'e0b93f5d3b519877650e5cca61c37102c5f8897510d76fecfe8fd29867692126')
         self.assertEqual(hashlib.sha256((SCRIPTS / 'test-session-directory-access.cs').read_bytes()).hexdigest(), current.decode())
         workflow = (ROOT / '.github/workflows/preflight.yml').read_text()
+        # Remove only the exact new mandatory compiler source controls before
+        # reconstructing the unchanged whole historical workflow below.
+        compiler_control = '          python3 scripts/test-support-compiler-cleanup.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --source-only --output "$RUNNER_TEMP/mixel-compiler-cleanup-source"\n'
+        self.assertEqual(workflow.count(compiler_control), 2)
+        workflow = workflow.replace(compiler_control, '', 2)
         # Reverse only the exact hosted Windows source-job budget before its historical pin.
         current_budget = "  windows-packaging:\n    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_source_runner == 'windows-2025' && 'windows-2025' || 'windows-2022' }}\n    timeout-minutes: 45\n"
         historical_budget = current_budget.replace('    timeout-minutes: 45\n', '    timeout-minutes: 20\n', 1)

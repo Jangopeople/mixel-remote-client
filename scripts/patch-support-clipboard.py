@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import stat
 
 UPSTREAM_URL = "https://github.com/rustdesk-org/clipboard-master"
 PIN = "ddc39f00a6211959489ae683aa6ae6eedf03a809"
@@ -13,6 +14,8 @@ DEPENDENCY = ".mixel-deps/clipboard-master"
 SOURCE = "src/master/x11.rs"
 SOURCE_SHA256 = "50c223801ce8c791aa81f59edc5fd5dd5144416df364eed77f7c853e3e3232e2"
 PATCH_TABLE = f'\n[patch."{UPSTREAM_URL}"]\nclipboard-master = {{ path = "{DEPENDENCY}" }}\n'
+LIB_SOURCE = "src/lib.rs"
+LIB_HASHES = {"bc385cb4cbfe35b1aacc471123c49f4077c92df849d521a410233f934c101afe", "71c82f00b19bdda4919e538764fe06365d66c98b622826893d715a6a0ba45a63"}
 MARKER = "// Mixel: retain the Xfixes subscription and its initial sequence."
 
 
@@ -74,6 +77,56 @@ def patch_lock(source: str) -> str:
     return source[:entry.start()] + text + source[entry.end():]
 
 
+def validate_lib(dependency: Path) -> None:
+    path = dependency / LIB_SOURCE
+    for parent in (dependency, path.parent):
+        info = parent.lstat()
+        if not stat.S_ISDIR(info.st_mode) or getattr(info, 'st_file_attributes', 0) & 0x400:
+            raise RuntimeError("Unsafe clipboard library source parent")
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or getattr(info, 'st_file_attributes', 0) & 0x400:
+        raise RuntimeError("Unowned clipboard library source")
+    raw = path.read_bytes()
+    normalized = raw.replace(b'\r\n', b'\n')
+    if b'\r' in normalized or (b'\r\n' in raw and b'\n' in raw.replace(b'\r\n', b'')):
+        raise RuntimeError("Mixed clipboard library source newlines")
+    if hashlib.sha256(normalized).hexdigest() not in LIB_HASHES:
+        raise RuntimeError("Pinned clipboard library source changed")
+
+
+def validate_dependency(dependency: Path):
+    if dependency.is_symlink() or run(["rev-parse", "HEAD"], dependency) != PIN:
+        raise RuntimeError("Local clipboard-master override must contain the exact locked revision")
+    if run(["remote", "get-url", "origin"], dependency) != UPSTREAM_URL:
+        raise RuntimeError("Local clipboard-master override has an unexpected upstream")
+    if any(path not in (SOURCE, LIB_SOURCE) for path in run(["diff", "--name-only", "HEAD"], dependency).splitlines()):
+        raise RuntimeError("Local clipboard-master override contains unrelated source changes")
+    if run(["ls-files", "--others"], dependency):
+        raise RuntimeError("Local clipboard-master override contains untracked files")
+    validate_lib(dependency)
+    original = subprocess.run(["git", "-C", str(dependency), "show", "HEAD:" + SOURCE],
+                              check=True, capture_output=True, text=True, encoding="utf-8").stdout
+    expected = patch_x11(original)
+    target = dependency / SOURCE
+    if target.read_text(encoding="utf-8") not in (original, expected):
+        raise RuntimeError("Local clipboard-master X11 override contains unexpected changes")
+    return target, expected
+
+
+def check_existing(repo: Path) -> None:
+    """Read-only refusal gate before any composed branding restore."""
+    dependency = repo / DEPENDENCY
+    manifest = (repo / "Cargo.toml").read_text(encoding="utf-8")
+    lock = (repo / "Cargo.lock").read_text(encoding="utf-8")
+    patch_manifest(manifest)
+    patch_lock(lock)
+    if not dependency.exists() and not dependency.is_symlink():
+        if PATCH_TABLE in manifest:
+            raise RuntimeError("Owned clipboard override checkout missing")
+        return
+    validate_dependency(dependency)
+
+
 def apply(repo: Path) -> None:
     manifest, lock = repo / "Cargo.toml", repo / "Cargo.lock"
     new_manifest = patch_manifest(manifest.read_text(encoding="utf-8"))
@@ -88,20 +141,7 @@ def apply(repo: Path) -> None:
             run(["fetch", "--quiet", "--depth", "1", "origin", PIN], fetched)
             run(["checkout", "--quiet", "--detach", PIN], fetched)
             fetched.rename(dependency)
-    if dependency.is_symlink() or run(["rev-parse", "HEAD"], dependency) != PIN:
-        raise RuntimeError("Local clipboard-master override must contain the exact locked revision")
-    if run(["remote", "get-url", "origin"], dependency) != UPSTREAM_URL:
-        raise RuntimeError("Local clipboard-master override has an unexpected upstream")
-    if any(path != SOURCE for path in run(["diff", "--name-only", "HEAD"], dependency).splitlines()):
-        raise RuntimeError("Local clipboard-master override contains unrelated source changes")
-    if run(["ls-files", "--others"], dependency):
-        raise RuntimeError("Local clipboard-master override contains untracked files")
-    original = subprocess.run(["git", "-C", str(dependency), "show", "HEAD:" + SOURCE],
-                              check=True, capture_output=True, text=True, encoding="utf-8").stdout
-    expected = patch_x11(original)
-    target = dependency / SOURCE
-    if target.read_text(encoding="utf-8") not in (original, expected):
-        raise RuntimeError("Local clipboard-master X11 override contains unexpected changes")
+    target, expected = validate_dependency(dependency)
     target.write_text(expected, encoding="utf-8")
     manifest.write_text(new_manifest, encoding="utf-8")
     lock.write_text(new_lock, encoding="utf-8")
