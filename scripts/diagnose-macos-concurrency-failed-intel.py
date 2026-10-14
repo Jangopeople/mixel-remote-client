@@ -18,8 +18,8 @@ import types
 import zipfile
 
 sys.dont_write_bytecode = True
-PROFILE_HASH = "a4601a4a6a1c1fe9049cdc1a1a127053f2e111708e375bea30b2b26bd9bac6dc"
-EXPECTED_PROFILE = json.loads("{\"schema\":1,\"scope\":\"fixed-failed-intel-rosetta-concurrency-diagnostic-only\",\"producerSource\":\"ca184ca219ceb1b087258e8f25d218eeba901abc\",\"producerTree\":\"825974868c0ae0c632f8f739cf6dc729140c5400\",\"producerRun\":38491157973,\"producerAttempt\":1,\"failedJob\":115617863123,\"artifactId\":11862454209,\"artifactBytes\":30894055,\"artifactSha256\":\"40d28fac26ad928ccfc6723cb3dbdec7134507258901a769f3d9daac221e0d1b\",\"artifactTimes\":{\"created_at\":\"2026-10-14T01:22:52Z\",\"updated_at\":\"2026-10-14T01:22:52Z\",\"expires_at\":\"2027-01-12T00:36:44Z\"},\"frozenHelpers\":{\"scripts/test-support-launch-linux.py\":\"90e343f7cddffb3f830c54ee129e7ae192c0d4b269bc336faab93fb5d95abe18\",\"scripts/test-support-launch-macos-tray-controls.py\":\"b06623ec893cdcf43b3b27670eadbe12f49d4491d012d8b88debe88fb4e6184d\",\"scripts/test-support-launch-macos-tray.py\":\"80ebc3255a3898c9feb23c68e06fee28efb74109e5d30460b3ddb9e651ade9b4\",\"scripts/test-support-launch-macos.py\":\"854bd6a7e34041d566c810cdd0fe3df238187198ea456381a725a18286968d65\",\"scripts/verify-macos-bundle-minimum.py\":\"fbd7652bdfaf26c86de97111668bd9726623880811367b99fb59a8190886dcdf\",\"scripts/verify-macos-native-minimum.py\":\"7ecd3c71f2afc000f0d5d90dc470be03fbdf4c69e02ee7f1bdaa835464710c92\"},\"reviewedSources\":{\"scripts/test-support-launch-macos-concurrency.py\":\"5b64fdbe9187440b51537703817889d2fb3c083be47a55566b7f0d8a918511a3\",\"scripts/test-support-launch-macos-concurrency-controls.py\":\"1cc906501eab29edfe16ecf0316b3e6e69dd363380b984f585f71e3f4a6c0643\",\"scripts/diagnose-macos-failed-app.py\":\"aad5c0590b8a9f8e16401c005419aebba0603676e735ce7cf45a9f77e5da6015\",\".github/workflows/diagnose-macos-failed-app.yml\":\"398579cbf8d089b9e193a78d7d867f94f9786dc219d0c1616ba263868bd100a0\"}}")
+PROFILE_HASH = 'ff63e7b24effc52fb023336011c0f4574c4e0acbc9172382338fa8f219388451'
+EXPECTED_PROFILE = {'artifactBytes': 30894055, 'artifactId': 11862454209, 'artifactSha256': '40d28fac26ad928ccfc6723cb3dbdec7134507258901a769f3d9daac221e0d1b', 'artifactTimes': {'created_at': '2026-10-14T01:22:52Z', 'expires_at': '2027-01-12T00:36:44Z', 'updated_at': '2026-10-14T01:22:52Z'}, 'failedJob': 115617863123, 'frozenHelpers': {'scripts/test-support-launch-linux.py': '90e343f7cddffb3f830c54ee129e7ae192c0d4b269bc336faab93fb5d95abe18', 'scripts/test-support-launch-macos-tray-controls.py': 'b06623ec893cdcf43b3b27670eadbe12f49d4491d012d8b88debe88fb4e6184d', 'scripts/test-support-launch-macos-tray.py': '80ebc3255a3898c9feb23c68e06fee28efb74109e5d30460b3ddb9e651ade9b4', 'scripts/test-support-launch-macos.py': '854bd6a7e34041d566c810cdd0fe3df238187198ea456381a725a18286968d65', 'scripts/verify-macos-bundle-minimum.py': 'fbd7652bdfaf26c86de97111668bd9726623880811367b99fb59a8190886dcdf', 'scripts/verify-macos-native-minimum.py': '7ecd3c71f2afc000f0d5d90dc470be03fbdf4c69e02ee7f1bdaa835464710c92'}, 'producerAttempt': 1, 'producerRun': 38491157973, 'producerSource': 'ca184ca219ceb1b087258e8f25d218eeba901abc', 'producerTree': '825974868c0ae0c632f8f739cf6dc729140c5400', 'reviewedSources': {'.github/workflows/diagnose-macos-failed-app.yml': '398579cbf8d089b9e193a78d7d867f94f9786dc219d0c1616ba263868bd100a0', 'scripts/diagnose-macos-failed-app.py': 'aad5c0590b8a9f8e16401c005419aebba0603676e735ce7cf45a9f77e5da6015', 'scripts/observe-macos-incoming-cleanup.py': '747f515ddaa36d40a5676ed5fd4fa1afb0851dcf27898aa6a5875428080ad61c', 'scripts/test-observe-macos-incoming-cleanup.py': '6f9ef1d4651bad511c62d6bfc2706f19aeb7c4e39956e8105519556dc4433817', 'scripts/test-support-launch-macos-concurrency-controls.py': '51a07dbacf3f0167ce87341d821b8550ff6478c627ce176e2b408bed234feea2', 'scripts/test-support-launch-macos-concurrency.py': '980c2f3b88ad5bb391550dd9a84bb0698b9204320cdb5fe11fc5931f854b857d'}, 'schema': 1, 'scope': 'fixed-failed-intel-rosetta-concurrency-diagnostic-only'}
 REPOSITORY = "Jangopeople/mixel-remote-client"
 REPOSITORY_ID = 1229987840
 SOURCE = "ca184ca219ceb1b087258e8f25d218eeba901abc"
@@ -43,8 +43,8 @@ OUTER_APP = "x86_64/signed-stapled-diagnostic-app.zip"
 OUTER_RUNTIME = "x86_64/runtime/runtime.json"
 LEGACY_HASH = "aad5c0590b8a9f8e16401c005419aebba0603676e735ce7cf45a9f77e5da6015"
 MANIFEST_HASH = "c7352ef1d6628035b4c275bed5f16def67fffb13b3002668bf81f837c4f71a45"
-CALLER_HASH = "5b64fdbe9187440b51537703817889d2fb3c083be47a55566b7f0d8a918511a3"
-CONTROLS_HASH = "1cc906501eab29edfe16ecf0316b3e6e69dd363380b984f585f71e3f4a6c0643"
+CALLER_HASH = '980c2f3b88ad5bb391550dd9a84bb0698b9204320cdb5fe11fc5931f854b857d'
+CONTROLS_HASH = '51a07dbacf3f0167ce87341d821b8550ff6478c627ce176e2b408bed234feea2'
 CRITICAL_HASHES = {
     "Contents/MacOS/Mixel-Remote": "25042c78c8abf8d4d4e965769f5f3d03ebdef359334936ef2f3dcf477de627df",
     "Contents/MacOS/service": "9834f1e22bb92cfb663200650027d7f78318b1392c1bd034ddd66106a49b31f4",
@@ -69,6 +69,7 @@ CLEANUP_CODES = {
     "unclassified-cleanup-error": "endpoint-cleanup",
 }
 SUPPORT = None
+OBSERVER = None
 MAX_LOG_STDERR = 16 * 1024
 TERMINAL_ESCAPE_REFUSAL = (b"the response contains terminal escape sequences; "
                            b"pass --allow-escape-sequences to output it anyway")
@@ -111,6 +112,7 @@ def frozen_support(root):
 
 
 def source_contract(root):
+    global OBSERVER
     support = frozen_support(root)
     raw = support.bounded_read(root / "scripts/failed-intel-concurrency-replay-profile.json", 65536)
     require(sha(raw) == PROFILE_HASH, "fixed-intel-profile-source")
@@ -122,6 +124,12 @@ def source_contract(root):
     for name, expected in {**profile["frozenHelpers"], **profile["reviewedSources"]}.items():
         require(sha(support.bounded_read(root / name, 1024 * 1024)) == expected,
                 "reviewed-replay-source-drift")
+    name = "scripts/observe-macos-incoming-cleanup.py"
+    raw_observer = support.bounded_read(root / name, 1024 * 1024)
+    require(sha(raw_observer) == profile["reviewedSources"][name], "reviewed-incoming-observer-source")
+    OBSERVER = types.ModuleType("reviewed_macos_incoming_cleanup_observer")
+    OBSERVER.__file__ = str(root / name)
+    exec(compile(raw_observer, str(root / name), "exec"), OBSERVER.__dict__)
     return profile
 
 
@@ -465,7 +473,8 @@ def safe_facts(record):
     count_fields = {"inventorySamples", "completionCount", "stabilitySamples"}
     allowed = {"scenario", "criticalHashes", "stabilitySecondsRequired", "runtimeFailure",
                "processCleanupFailures", "endpointCleanupFailures", "unknownSameBundlePids",
-               "unknownUrlOwnerPid"} | boolean_fields | pid_fields | count_fields
+               "unknownUrlOwnerPid", "incomingListenerObservations",
+               "incomingListenerObservationFailure"} | boolean_fields | pid_fields | count_fields
     for index, row in enumerate(rows):
         require(isinstance(row, dict) and {"scenario", "passed", "ownedProcessesStopped"} <= set(row)
                 and set(row) <= allowed and row["scenario"] == SCENARIOS[index], "scenario-schema-order")
@@ -510,6 +519,29 @@ def safe_facts(record):
                         and all(value is None or type(value) is int and 0 < value < 2**31 for value in values),
                         "unknown-process-observation-bound")
                 output[key] = row[key]
+        require(not {"incomingListenerObservations", "incomingListenerObservationFailure"} <= set(row),
+                "incoming-observation-conflicting-state")
+        if "incomingListenerObservations" in row:
+            require(OBSERVER is not None, "incoming-observer-contract-absent")
+            try:
+                require(OBSERVER.validate_facts(row["incomingListenerObservations"]) is True,
+                        "unsafe-incoming-listener-observation")
+            except ValueError:
+                raise Refusal("unsafe-incoming-listener-observation") from None
+            require(row.get("ownedProcessesStopped") is True
+                    and any(failure.get("endpoint") == "incoming"
+                            and failure.get("reasonCode") == "ipc-endpoint-active"
+                            for failure in row.get("endpointCleanupFailures", [])),
+                    "incoming-observation-without-original-failure")
+            output["incomingListenerObservations"] = row["incomingListenerObservations"]
+        if "incomingListenerObservationFailure" in row:
+            require(row["incomingListenerObservationFailure"] == "observer-unavailable"
+                    and row.get("ownedProcessesStopped") is True
+                    and any(failure.get("endpoint") == "incoming"
+                            and failure.get("reasonCode") == "ipc-endpoint-active"
+                            for failure in row.get("endpointCleanupFailures", [])),
+                    "unsafe-incoming-observation-failure")
+            output["incomingListenerObservationFailure"] = "observer-unavailable"
         safe["scenarios"].append(output)
     if "failure" in record:
         safe["failure"] = safe_error(record["failure"])
@@ -527,7 +559,8 @@ def require_runtime_pass(result, facts):
                 and row.get("completionCount") == (1 if row["scenario"] == "batch-two-support" else 2)
                 and row.get("stabilitySecondsRequired") == 5.0 and row.get("stabilitySamples", 0) > 0
                 and not any(key in row for key in ("runtimeFailure", "processCleanupFailures",
-                    "endpointCleanupFailures", "unknownSameBundlePids", "unknownUrlOwnerPid")),
+                    "endpointCleanupFailures", "unknownSameBundlePids", "unknownUrlOwnerPid",
+                    "incomingListenerObservations", "incomingListenerObservationFailure")),
                 "concurrency-cleanup-or-observation-failed")
 
 

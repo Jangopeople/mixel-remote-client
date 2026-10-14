@@ -347,6 +347,48 @@ class ConcurrencyControls(unittest.TestCase):
                 self.assertNotIn("/private", serialized)
                 self.assertNotIn(known, serialized)
 
+    def test_only_stopped_incoming_active_failure_observes_and_keeps_same_failure(self):
+        for label, message, should_observe in (
+                ("incoming", "A Mixel IPC endpoint is already active; refusing tray fixture", True),
+                ("url", "A Mixel IPC endpoint is already active; refusing tray fixture", False),
+                ("incoming", "Pre-existing IPC path is not this runner's socket", False)):
+            with self.subTest(label=label, should_observe=should_observe):
+                directory = self.directory / (label + ("active" if should_observe else "other"))
+                directory.mkdir()
+                f = RuntimeFixture(directory)
+                failure = RuntimeError(message)
+                f.endpoint_failures[label] = failure
+                observation = {"scope": "mock-only-readonly-observation"}
+                with mock.patch.object(C, "observe_incoming_after_stop", return_value=observation) as observer:
+                    with self.assertRaises(RuntimeError) as raised:
+                        f.run()
+                self.assertIs(raised.exception, failure)
+                self.assertTrue(f.facts["ownedProcessesStopped"])
+                self.assertEqual(observer.call_count, 1 if should_observe else 0)
+                self.assertEqual(f.endpoints(), ["url", "incoming"])
+                if should_observe:
+                    self.assertIs(f.facts["incomingListenerObservations"], observation)
+                    self.assertEqual(observer.call_args.args[0], f.app)
+                    self.assertEqual(observer.call_args.args[1], 101)
+                    self.assertEqual(observer.call_args.args[3], 202)
+                else:
+                    self.assertNotIn("incomingListenerObservations", f.facts)
+
+    def test_readonly_incoming_diagnostic_failure_never_replaces_active_cleanup_error(self):
+        failure = RuntimeError("A Mixel IPC endpoint is already active; refusing tray fixture")
+        for index, diagnostic_error in enumerate((RuntimeError("private observer detail"), KeyboardInterrupt("private interrupt"))):
+            directory = self.directory / ("observer-failure-" + str(index))
+            directory.mkdir()
+            f = RuntimeFixture(directory)
+            f.endpoint_failures["incoming"] = failure
+            with mock.patch.object(C, "observe_incoming_after_stop", side_effect=diagnostic_error):
+                with self.assertRaises(RuntimeError) as raised:
+                    f.run()
+            self.assertIs(raised.exception, failure)
+            self.assertEqual(f.facts["incomingListenerObservationFailure"], "observer-unavailable")
+            self.assertNotIn("incomingListenerObservations", f.facts)
+            self.assertNotIn("private", json.dumps(f.facts))
+
     def test_primary_failure_survives_independent_cleanup_failures(self):
         first = RuntimeError('private URI payload')
         self.f.primary = first

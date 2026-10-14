@@ -327,10 +327,10 @@ class StrictReplayControls(unittest.TestCase):
                          "repos/" + v.REPOSITORY + "/actions/runs/" + str(v.RUN)])
         self.assertNotIn("--allow-escape-sequences", metadata.call_args.args[0])
         profile = v.source_contract(ROOT)
-        self.assertEqual(v.PROFILE_HASH, "a4601a4a6a1c1fe9049cdc1a1a127053f2e111708e375bea30b2b26bd9bac6dc")
-        self.assertEqual(v.CONTROLS_HASH, "1cc906501eab29edfe16ecf0316b3e6e69dd363380b984f585f71e3f4a6c0643")
+        self.assertEqual(v.PROFILE_HASH, "ff63e7b24effc52fb023336011c0f4574c4e0acbc9172382338fa8f219388451")
+        self.assertEqual(v.CONTROLS_HASH, "51a07dbacf3f0167ce87341d821b8550ff6478c627ce176e2b408bed234feea2")
         self.assertEqual(profile["reviewedSources"]["scripts/test-support-launch-macos-concurrency-controls.py"], v.CONTROLS_HASH)
-        self.assertEqual(v.CALLER_HASH, "5b64fdbe9187440b51537703817889d2fb3c083be47a55566b7f0d8a918511a3")
+        self.assertEqual(v.CALLER_HASH, "980c2f3b88ad5bb391550dd9a84bb0698b9204320cdb5fe11fc5931f854b857d")
 
     def test_source_grounded_terminal_escape_refusal_is_exact_fixed_category_only(self):
         safe = {"httpStatus": None, "transportCategory": "terminal-escape-sequences-refused"}
@@ -463,6 +463,71 @@ class StrictReplayControls(unittest.TestCase):
             record = facts(); record["scenarios"][0][field] = False
             with self.subTest(field=field), self.assertRaises(v.Refusal):
                 v.require_runtime_pass(0, v.safe_facts(record))
+
+    def test_new_observer_and_controls_source_drift_refuses_before_native(self):
+        for relative in ("scripts/observe-macos-incoming-cleanup.py",
+                         "scripts/test-observe-macos-incoming-cleanup.py"):
+            carrier = self.root / Path(relative).name
+            shutil.copytree(ROOT / "scripts", carrier / "scripts")
+            (carrier / ".github/workflows").mkdir(parents=True)
+            shutil.copy2(ROOT / ".github/workflows/diagnose-macos-failed-app.yml",
+                         carrier / ".github/workflows/diagnose-macos-failed-app.yml")
+            with (carrier / relative).open("ab") as stream:
+                stream.write(b"\n# unreviewed observer source\n")
+            with self.subTest(relative=relative), self.assertRaises((v.Refusal, v.SUPPORT.Refusal)):
+                v.source_contract(carrier)
+
+    def test_readonly_observation_preserves_original_active_failure_and_never_passes(self):
+        record = facts(); record["passed"] = False
+        row = record["scenarios"][0]; row["passed"] = False
+        row["endpointCleanupFailures"] = [{"endpoint": "incoming", "reasonCategory": "runtime",
+            "errorType": "RuntimeError", "reasonCode": "ipc-endpoint-active",
+            "subphase": "endpoint-inactivity-check"}]
+        observation = v.OBSERVER._facts()
+        self.assertTrue(v.OBSERVER.validate_facts(observation))
+        row["incomingListenerObservations"] = observation
+        safe = v.safe_facts(record)
+        self.assertEqual(safe["scenarios"][0]["incomingListenerObservations"], observation)
+        self.assertEqual(safe["scenarios"][0]["endpointCleanupFailures"], row["endpointCleanupFailures"])
+        for result in (0, 1):
+            with self.assertRaises(v.Refusal): v.require_runtime_pass(result, safe)
+        # Even inconsistent PASS declarations cannot recover endpoint failure.
+        record["passed"] = row["passed"] = True
+        with self.assertRaises(v.Refusal): v.require_runtime_pass(0, v.safe_facts(record))
+
+    def test_readonly_observation_parser_rejects_raw_unknowns_and_missing_original_trigger(self):
+        record = facts(); row = record["scenarios"][0]
+        row["endpointCleanupFailures"] = [{"endpoint": "incoming", "reasonCategory": "runtime",
+            "errorType": "RuntimeError", "reasonCode": "ipc-endpoint-active",
+            "subphase": "endpoint-inactivity-check"}]
+        row["incomingListenerObservations"] = v.OBSERVER._facts()
+        for change in ("raw", "authority", "boolean", "trigger", "stopped", "conflict"):
+            value = copy.deepcopy(record); target = value["scenarios"][0]
+            if change == "raw": target["incomingListenerObservations"]["rawPath"] = "/private/secret-token"
+            elif change == "authority": target["incomingListenerObservations"]["cleanupAuthority"] = True
+            elif change == "boolean": target["incomingListenerObservations"]["elapsedMs"] = True
+            elif change == "trigger": target["endpointCleanupFailures"][0]["endpoint"] = "url"
+            elif change == "stopped": target["ownedProcessesStopped"] = False
+            elif change == "conflict": target["incomingListenerObservationFailure"] = "observer-unavailable"
+            with self.subTest(change=change), self.assertRaises(v.Refusal): v.safe_facts(value)
+        with patch.object(v.OBSERVER, "validate_facts", return_value=False), self.assertRaises(v.Refusal):
+            v.safe_facts(record)
+
+    def test_fixed_observer_failure_is_safe_only_after_exact_active_incoming_stop(self):
+        record = facts(); row = record["scenarios"][0]
+        row["endpointCleanupFailures"] = [{"endpoint": "incoming", "reasonCategory": "runtime",
+            "errorType": "RuntimeError", "reasonCode": "ipc-endpoint-active",
+            "subphase": "endpoint-inactivity-check"}]
+        row["incomingListenerObservationFailure"] = "observer-unavailable"
+        safe = v.safe_facts(record)
+        self.assertEqual(safe["scenarios"][0]["incomingListenerObservationFailure"], "observer-unavailable")
+        with self.assertRaises(v.Refusal): v.require_runtime_pass(0, safe)
+        for change in ("raw", "trigger", "stopped"):
+            value = copy.deepcopy(record); target = value["scenarios"][0]
+            if change == "raw": target["incomingListenerObservationFailure"] = "private-secret-error"
+            elif change == "trigger": target.pop("endpointCleanupFailures")
+            elif change == "stopped": target["ownedProcessesStopped"] = False
+            with self.subTest(change=change), self.assertRaises(v.Refusal): v.safe_facts(value)
 
     def test_native_caller_receives_original_arguments_and_no_provider_tokens(self):
         with patch.dict(os.environ, {"GH_TOKEN": "private", "GITHUB_TOKEN": "private", "HOME": "/fixture"}):
@@ -713,6 +778,16 @@ class StrictReplayControls(unittest.TestCase):
                     self.assertEqual(fact["scenarios"][0]["endpointCleanupFailures"][0]["reasonCode"], "pid-marker-unsafe")
                 if case == "caller-times-out":
                     self.assertEqual(receipt["refusalCategory"], "native-child-timeout-cleanup-unverified")
+
+
+def load_tests(loader, standard_tests, pattern):
+    # The mandatory existing CI command executes the new observer controls.
+    # source_contract has already pinned both observer and test source bytes.
+    path = ROOT / "scripts/test-observe-macos-incoming-cleanup.py"
+    spec = importlib.util.spec_from_file_location("bound_incoming_cleanup_observer_controls", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return unittest.TestSuite((standard_tests, loader.loadTestsFromModule(module)))
 
 
 if __name__ == "__main__":

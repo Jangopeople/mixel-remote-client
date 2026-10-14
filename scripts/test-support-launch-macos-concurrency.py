@@ -23,10 +23,12 @@ import subprocess
 import sys
 import tempfile
 import time
+import types
 
 sys.dont_write_bytecode = True
 SCRIPTS = Path(__file__).resolve(strict=True).parent
 MANIFEST_HASH = "c7352ef1d6628035b4c275bed5f16def67fffb13b3002668bf81f837c4f71a45"
+LISTENER_OBSERVER_HASH = "747f515ddaa36d40a5676ed5fd4fa1afb0851dcf27898aa6a5875428080ad61c"
 SCENARIOS = ("ordinary-and-support", "two-support", "batch-two-support")
 STABILITY_SECONDS = 5.0
 MAX_INVENTORY = 32
@@ -241,6 +243,20 @@ def endpoint_cleanup_fact(error):
     return {**error_fact(error), "reasonCode": reason_code, "subphase": subphase}
 
 
+def observe_incoming_after_stop(app, server_pid, server_birth, gui_pid, birth):
+    path = SCRIPTS / "observe-macos-incoming-cleanup.py"
+    source = safe_source(path)
+    if hashlib.sha256(source).hexdigest() != LISTENER_OBSERVER_HASH:
+        raise RuntimeError("Mac incoming observer source changed")
+    observer = types.ModuleType("mixel_readonly_incoming_cleanup_observer")
+    observer.__file__ = str(path)
+    exec(compile(source, str(path), "exec"), observer.__dict__)
+    facts = observer.observe(app, server_pid, server_birth, gui_pid, birth, tray.peer_pid)
+    if observer.validate_facts(facts) is not True:
+        raise RuntimeError("Mac incoming observer facts invalid")
+    return facts
+
+
 def completion_matches(value, app, server_pid, launch_time, expected_count=2):
     rows = value.get("completions") if isinstance(value, dict) else None
     if expected_count not in (1, 2) or not isinstance(rows, list) or len(rows) != expected_count:
@@ -318,7 +334,17 @@ def cleanup(helper, app, server_pid, launch_time, server_birth, gui_pid, birth, 
         except ERRORS as error:
             if first is None:
                 first = error
-            facts.setdefault("endpointCleanupFailures", []).append({"endpoint": label, **endpoint_cleanup_fact(error)})
+            failure = endpoint_cleanup_fact(error)
+            facts.setdefault("endpointCleanupFailures", []).append({"endpoint": label, **failure})
+            if (label == "incoming" and failure["reasonCode"] == "ipc-endpoint-active"
+                    and facts["ownedProcessesStopped"] is True):
+                try:
+                    facts["incomingListenerObservations"] = observe_incoming_after_stop(
+                        app, server_pid, server_birth, gui_pid, birth)
+                except BaseException:
+                    # Observation has no cleanup authority and cannot replace
+                    # this exact original endpoint-cleanup failure.
+                    facts["incomingListenerObservationFailure"] = "observer-unavailable"
     return first
 
 
