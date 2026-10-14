@@ -1,0 +1,31 @@
+{
+  "artifactBytes": 30894055,
+  "artifactId": 11862454209,
+  "artifactSha256": "40d28fac26ad928ccfc6723cb3dbdec7134507258901a769f3d9daac221e0d1b",
+  "artifactTimes": {
+    "created_at": "2026-10-14T01:22:52Z",
+    "expires_at": "2027-01-12T00:36:44Z",
+    "updated_at": "2026-10-14T01:22:52Z"
+  },
+  "failedJob": 115617863123,
+  "frozenHelpers": {
+    "scripts/test-support-launch-linux.py": "90e343f7cddffb3f830c54ee129e7ae192c0d4b269bc336faab93fb5d95abe18",
+    "scripts/test-support-launch-macos-tray-controls.py": "b06623ec893cdcf43b3b27670eadbe12f49d4491d012d8b88debe88fb4e6184d",
+    "scripts/test-support-launch-macos-tray.py": "80ebc3255a3898c9feb23c68e06fee28efb74109e5d30460b3ddb9e651ade9b4",
+    "scripts/test-support-launch-macos.py": "854bd6a7e34041d566c810cdd0fe3df238187198ea456381a725a18286968d65",
+    "scripts/verify-macos-bundle-minimum.py": "fbd7652bdfaf26c86de97111668bd9726623880811367b99fb59a8190886dcdf",
+    "scripts/verify-macos-native-minimum.py": "7ecd3c71f2afc000f0d5d90dc470be03fbdf4c69e02ee7f1bdaa835464710c92"
+  },
+  "producerAttempt": 1,
+  "producerRun": 38491157973,
+  "producerSource": "ca184ca219ceb1b087258e8f25d218eeba901abc",
+  "producerTree": "825974868c0ae0c632f8f739cf6dc729140c5400",
+  "reviewedSources": {
+    ".github/workflows/diagnose-macos-failed-app.yml": "398579cbf8d089b9e193a78d7d867f94f9786dc219d0c1616ba263868bd100a0",
+    "scripts/diagnose-macos-failed-app.py": "aad5c0590b8a9f8e16401c005419aebba0603676e735ce7cf45a9f77e5da6015",
+    "scripts/test-support-launch-macos-concurrency-controls.py": "27616cdbec0f2bcf73afd79b84d3a67af45480062f3c24bb9b2b6e1d7b5ae77e",
+    "scripts/test-support-launch-macos-concurrency.py": "5b64fdbe9187440b51537703817889d2fb3c083be47a55566b7f0d8a918511a3"
+  },
+  "schema": 1,
+  "scope": "fixed-failed-intel-rosetta-concurrency-diagnostic-only"
+}

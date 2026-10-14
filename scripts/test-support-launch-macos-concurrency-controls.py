@@ -284,6 +284,69 @@ class ConcurrencyControls(unittest.TestCase):
                 self.assertTrue(f.facts['ownedProcessesStopped'])
                 self.assertNotIn('sensitive', json.dumps(f.facts))
 
+    def test_endpoint_diagnostic_allowlist_is_bound_to_frozen_refusal_messages(self):
+        def messages(path, names):
+            parsed = ast.parse(path.read_text(encoding="utf-8"))
+            selected = [node for node in parsed.body if isinstance(node, ast.FunctionDef) and node.name in names]
+            self.assertEqual({node.name for node in selected}, set(names))
+            return {node.args[0].value for function in selected for node in ast.walk(function)
+                    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id == "RuntimeError" and len(node.args) == 1
+                    and isinstance(node.args[0], ast.Constant) and type(node.args[0].value) is str}
+        actual = messages(ROOT / "scripts/test-support-launch-macos-tray.py", ("endpoint_inactive", "cleanup_endpoint"))
+        actual |= messages(ROOT / "scripts/test-support-launch-macos.py", ("bounded_read",))
+        self.assertEqual(set(C.ENDPOINT_CLEANUP_REASONS), actual)
+        self.assertEqual(len(actual), 8)
+        for message in actual:
+            result = C.endpoint_cleanup_fact(RuntimeError(message))
+            self.assertEqual(result["reasonCategory"], "runtime")
+            self.assertEqual(result["errorType"], "RuntimeError")
+            self.assertNotEqual(result["reasonCode"], "unclassified-cleanup-error")
+            self.assertEqual(set(result), {"reasonCategory", "errorType", "reasonCode", "subphase"})
+            self.assertNotIn(message, json.dumps(result))
+
+    def test_successful_runtime_then_incoming_refusal_retains_exact_diagnostic_and_failure(self):
+        failure = RuntimeError("Tray fixture cleanup socket identity changed")
+        self.f.endpoint_failures["incoming"] = failure
+        with self.assertRaises(RuntimeError) as observed:
+            self.f.run()
+        self.assertIs(observed.exception, failure)
+        self.assertTrue(self.f.facts["visibleGuiAndAttendedV2"])
+        self.assertTrue(self.f.facts["oneRetainedGuiDuringBoundedStability"])
+        self.assertTrue(self.f.facts["ownedProcessesStopped"])
+        self.assertNotIn("runtimeFailure", self.f.facts)
+        self.assertEqual(self.f.endpoints(), ["url", "incoming"])
+        self.assertEqual(self.f.facts["endpointCleanupFailures"], [{
+            "endpoint": "incoming", "reasonCategory": "runtime", "errorType": "RuntimeError",
+            "reasonCode": "socket-identity-changed", "subphase": "socket-identity-check"}])
+
+    def test_endpoint_diagnostic_unknown_private_and_untrusted_values_never_format(self):
+        class PrivateValue:
+            def __str__(self):
+                raise AssertionError("Unknown exception value must never be formatted")
+        class UntrustedRuntimeError(RuntimeError):
+            def __str__(self):
+                raise AssertionError("Unknown exception subclass must never be formatted")
+        class UntrustedString(str):
+            def __str__(self):
+                raise AssertionError("Unknown string subclass must never be formatted")
+        private = "mixel-remote://support/?invite=inv_synthetic-private&apikey=synthetic-private-key /private/customer"
+        known = "Tray fixture cleanup socket identity changed"
+        cases = [RuntimeError(private), RuntimeError("x" * 4096), RuntimeError(PrivateValue()),
+                 RuntimeError(), RuntimeError(known, "private"), UntrustedRuntimeError(known),
+                 RuntimeError(UntrustedString(known)),
+                 ValueError(known), OSError(private)]
+        for error in cases:
+            with self.subTest(exception_type=type(error).__name__):
+                result = C.endpoint_cleanup_fact(error)
+                self.assertEqual(result["reasonCode"], "unclassified-cleanup-error")
+                self.assertEqual(result["subphase"], "endpoint-cleanup")
+                serialized = json.dumps(result)
+                self.assertNotIn("inv_", serialized)
+                self.assertNotIn("apikey", serialized)
+                self.assertNotIn("/private", serialized)
+                self.assertNotIn(known, serialized)
+
     def test_primary_failure_survives_independent_cleanup_failures(self):
         first = RuntimeError('private URI payload')
         self.f.primary = first

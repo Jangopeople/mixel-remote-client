@@ -32,6 +32,20 @@ STABILITY_SECONDS = 5.0
 MAX_INVENTORY = 32
 ERRORS = (OSError, ValueError, RuntimeError, subprocess.SubprocessError)
 
+# Exact messages from the frozen endpoint/PID reader only; never serialize them.
+# The caller cannot distinguish the two same-message socket rechecks.
+ENDPOINT_CLEANUP_REASONS = {
+    "Pre-existing IPC path is not this runner's socket": ("ipc-path-unsafe", "endpoint-inactivity-check"),
+    "A Mixel IPC endpoint is already active; refusing tray fixture": ("ipc-endpoint-active", "endpoint-inactivity-check"),
+    "Diagnostic file is not an owned regular file": ("pid-marker-unsafe", "pid-marker-read"),
+    "Diagnostic file exceeds its byte bound": ("pid-marker-oversized", "pid-marker-read"),
+    "Diagnostic file changed during open": ("pid-marker-open-race", "pid-marker-read"),
+    "Diagnostic file changed during read": ("pid-marker-read-race", "pid-marker-read"),
+    "Tray fixture cleanup process identity changed": ("pid-marker-identity-changed", "pid-marker-identity-check"),
+    "Tray fixture cleanup socket identity changed": ("socket-identity-changed", "socket-identity-check"),
+}
+ENDPOINT_CLEANUP_MESSAGE_LIMIT = 256
+
 
 def canonical(raw):
     text = raw.decode("utf-8")
@@ -216,6 +230,17 @@ def error_fact(error):
     return {"reasonCategory": category, "errorType": kind}
 
 
+def endpoint_cleanup_fact(error):
+    reason_code, subphase = "unclassified-cleanup-error", "endpoint-cleanup"
+    # Inspect only one bounded plain string from the exact exception class.
+    # Unknown objects/subclasses must not invoke __str__ or replace the failure.
+    if (type(error) is RuntimeError and len(error.args) == 1
+            and type(error.args[0]) is str
+            and len(error.args[0]) <= ENDPOINT_CLEANUP_MESSAGE_LIMIT):
+        reason_code, subphase = ENDPOINT_CLEANUP_REASONS.get(error.args[0], (reason_code, subphase))
+    return {**error_fact(error), "reasonCode": reason_code, "subphase": subphase}
+
+
 def completion_matches(value, app, server_pid, launch_time, expected_count=2):
     rows = value.get("completions") if isinstance(value, dict) else None
     if expected_count not in (1, 2) or not isinstance(rows, list) or len(rows) != expected_count:
@@ -293,7 +318,7 @@ def cleanup(helper, app, server_pid, launch_time, server_birth, gui_pid, birth, 
         except ERRORS as error:
             if first is None:
                 first = error
-            facts.setdefault("endpointCleanupFailures", []).append({"endpoint": label, **error_fact(error)})
+            facts.setdefault("endpointCleanupFailures", []).append({"endpoint": label, **endpoint_cleanup_fact(error)})
     return first
 
 
