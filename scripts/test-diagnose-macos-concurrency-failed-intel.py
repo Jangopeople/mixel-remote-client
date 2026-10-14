@@ -173,6 +173,89 @@ class StrictReplayControls(unittest.TestCase):
         with self.assertRaises(v.Refusal):
             v.validate_artifact(artifact(), datetime(2028, 1, 1, tzinfo=timezone.utc))
 
+    def observe_log(self, name, payload, exit_code, expected_bytes=None, expected_sha=None, replacement=None):
+        directory = self.root / name; directory.mkdir()
+        receipt = {}
+        def capture(command, **kwargs):
+            self.assertEqual(command, ["gh", "api", "--method", "GET", "repos/" + v.REPOSITORY
+                                      + "/actions/jobs/" + str(v.JOB) + "/logs"])
+            self.assertEqual(kwargs["stderr"], subprocess.DEVNULL)
+            self.assertEqual(kwargs["timeout"], 120)
+            kwargs["stdout"].write(payload)
+            if replacement:
+                path = directory / "original-failed-intel-job.log"
+                if replacement == "hardlink":
+                    os.link(path, directory / "extra-link")
+                elif replacement == "replace":
+                    path.unlink(); path.write_bytes(b"replacement-private-sentinel")
+                elif replacement == "symlink":
+                    path.unlink(); path.symlink_to(directory / "unowned-target")
+            return subprocess.CompletedProcess(command, exit_code)
+        with patch.object(v.subprocess, "run", side_effect=capture), \
+             patch.object(v, "LOG_BYTES", len(payload) if expected_bytes is None else expected_bytes), \
+             patch.object(v, "LOG_SHA256", hashlib.sha256(payload).hexdigest() if expected_sha is None else expected_sha):
+            try:
+                v.exact_original_log(directory, receipt)
+            except v.Refusal as error:
+                return receipt, str(error)
+        return receipt, None
+
+    def test_log_observation_exact_success_is_only_exit_bytes_and_opaque_hash(self):
+        secret = b"private-log-sentinel support://never-export-this"
+        receipt, refusal = self.observe_log("exact", secret, 0)
+        self.assertIsNone(refusal)
+        self.assertEqual(receipt, {"originalJobLogObservation": {"exitCode": 0, "bytes": len(secret),
+                               "sha256": hashlib.sha256(secret).hexdigest()}})
+        self.assertNotIn("private-log-sentinel", json.dumps(receipt))
+        self.assertNotIn("support://", json.dumps(receipt))
+
+    def test_log_zero_partial_nonzero_and_wrong_size_or_digest_remain_fatal(self):
+        for name, payload, exit_code, expected_bytes, expected_sha in (
+                ("empty", b"", 0, 713079, v.LOG_SHA256),
+                ("nonzero-empty", b"", 1, 713079, v.LOG_SHA256),
+                ("nonzero-exact", b"private-partial-sentinel", 1, None, None),
+                ("wrong-size", b"private-partial-sentinel", 0, 713079, v.LOG_SHA256),
+                ("wrong-hash", b"private-partial-sentinel", 0, None, "a" * 64)):
+            receipt, refusal = self.observe_log(name, payload, exit_code, expected_bytes, expected_sha)
+            with self.subTest(case=name):
+                self.assertEqual(refusal, "exact-original-job-log-attribution")
+                self.assertEqual(receipt["originalJobLogObservation"], {"exitCode": exit_code,
+                                 "bytes": len(payload), "sha256": hashlib.sha256(payload).hexdigest()})
+                self.assertNotIn("private-partial-sentinel", json.dumps(receipt))
+
+    def test_log_oversize_hardlink_replacement_or_symlink_never_hash_unstable_bytes(self):
+        for name, payload, replacement in (("oversize", b"x" * (v.SUPPORT.MAX_API + 1), None),
+                                            ("hardlink", b"private", "hardlink"),
+                                            ("replacement", b"private", "replace"),
+                                            ("symlink", b"private", "symlink")):
+            with patch.object(v, "sha", side_effect=AssertionError("Unsafe log bytes must not be hashed")):
+                receipt, refusal = self.observe_log(name, payload, 0, replacement=replacement)
+            with self.subTest(case=name):
+                self.assertEqual(refusal, "original-job-log-owned-byte-bound")
+                self.assertIsNone(receipt["originalJobLogObservation"]["sha256"])
+                self.assertEqual(set(receipt["originalJobLogObservation"]), {"exitCode", "bytes", "sha256"})
+
+    def test_log_read_race_retains_no_digest(self):
+        directory = self.root / "read-race"; directory.mkdir(); receipt = {}
+        def capture(command, **kwargs):
+            kwargs["stdout"].write(b"private-race-sentinel")
+            return subprocess.CompletedProcess(command, 0)
+        original = v.os.fstat
+        calls = []
+        def raced(fd):
+            value = original(fd); calls.append(value)
+            if len(calls) == 2:
+                fields = {key: getattr(value, key) for key in
+                          ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_mode", "st_uid", "st_nlink")}
+                fields["st_mtime_ns"] += 1
+                return SimpleNamespace(**fields)
+            return value
+        with patch.object(v.subprocess, "run", side_effect=capture), patch.object(v.os, "fstat", side_effect=raced), \
+             patch.object(v, "sha", side_effect=AssertionError("Raced log must not be hashed")):
+            with self.assertRaisesRegex(v.Refusal, "original-job-log-read-race"):
+                v.exact_original_log(directory, receipt)
+        self.assertIsNone(receipt["originalJobLogObservation"]["sha256"])
+
     def test_archive_intel_layout_and_frozen_traversal_duplicate_link_controls(self):
         base = [entry(v.OUTER_APP, b"nested"), entry(v.OUTER_RUNTIME, b"{}")]
         with zipfile.ZipFile(io.BytesIO(archive(base))) as zipped:
@@ -324,6 +407,7 @@ class StrictReplayControls(unittest.TestCase):
                                                "bytes": len(inner), "sha256": hashlib.sha256(inner).hexdigest()}}
         outer = archive([entry(v.OUTER_APP, inner), entry(v.OUTER_RUNTIME, json.dumps(embedded).encode())])
         events = []
+        original_log = v.exact_original_log
 
         def metadata(suffix):
             events.append("metadata")
@@ -335,6 +419,10 @@ class StrictReplayControls(unittest.TestCase):
 
         def native(command, **kwargs):
             if command[0] == "gh":
+                if "/actions/jobs/" in command[-1]:
+                    events.append("job-log-transport")
+                    self.assertEqual(kwargs["stderr"], subprocess.DEVNULL)
+                    return subprocess.CompletedProcess(command, 1)
                 events.append("download")
                 self.assertEqual(command[-1], "repos/" + v.REPOSITORY + "/actions/artifacts/" + str(v.ARTIFACT_ID) + "/zip")
                 kwargs["stdout"].write(outer)
@@ -396,7 +484,9 @@ class StrictReplayControls(unittest.TestCase):
         with patch.object(v, "CRITICAL_HASHES", critical), patch.object(v, "ARTIFACT_BYTES", len(outer)), \
              patch.object(v, "ARTIFACT_SHA256", hashlib.sha256(outer).hexdigest()), \
              patch.object(v, "hosted_context", return_value="b" * 40), patch.object(v, "api", side_effect=metadata), \
-             patch.object(v, "exact_original_log", side_effect=lambda _: events.append("exact-original-log")), \
+             patch.object(v, "exact_original_log", side_effect=lambda private, receipt:
+                          original_log(private, receipt) if case == "job-log-transport-fails"
+                          else events.append("exact-original-log")), \
              patch.object(v, "fresh_runtime_state", side_effect=lambda: events.append("fresh-runtime")), \
              patch.object(v, "stopped_runtime", side_effect=lambda: events.append("stopped-runtime")), \
              patch.object(v.subprocess, "run", side_effect=native):
@@ -427,6 +517,17 @@ class StrictReplayControls(unittest.TestCase):
         events, safe = self.mock_replay("producer-in-progress")
         self.assertEqual(events, ["metadata"])
         self.assertFalse(safe.exists())
+
+    def test_mock_log_transport_refusal_has_safe_observation_and_never_downloads_app(self):
+        events, safe = self.mock_replay("job-log-transport-fails")
+        self.assertEqual(events, ["metadata", "metadata", "metadata", "job-log-transport"])
+        receipt = json.loads((safe / "validation-receipt.json").read_bytes())
+        self.assertEqual(receipt["originalJobLogObservation"], {"exitCode": 1, "bytes": 0,
+                         "sha256": hashlib.sha256(b"").hexdigest()})
+        self.assertEqual(receipt["refusalCategory"], "exact-original-job-log-attribution")
+        self.assertFalse(receipt["nativeExecuted"])
+        self.assertFalse(receipt["validationPassed"])
+        self.assertFalse(receipt["runtimePassed"])
 
     def test_mock_prerequisite_failure_timeout_and_cleanup_failure_are_fatal_and_preserved(self):
         for case, children in (("desktop-fails", ["desktop"]), ("tray-fails", ["desktop", "tray"]),

@@ -206,15 +206,32 @@ def validate_artifact(item, now=None):
             "failed-artifact-expired")
 
 
-def exact_original_log(private):
+def exact_original_log(private, receipt):
     path = private / "original-failed-intel-job.log"
-    with path.open("xb") as output:
+    with path.open("x+b") as output:
         os.chmod(path, 0o600)
         result = subprocess.run(["gh", "api", "--method", "GET", "repos/" + REPOSITORY
                                  + "/actions/jobs/" + str(JOB) + "/logs"],
                                 stdout=output, stderr=subprocess.DEVNULL, timeout=120)
-    require(result.returncode == 0 and path.stat().st_size == LOG_BYTES
-            and SUPPORT.file_digest(path) == LOG_SHA256, "exact-original-job-log-attribution")
+        require(type(result.returncode) is int and -(2**31) <= result.returncode < 2**31,
+                "original-job-log-exit-code")
+        output.flush()
+        before = os.fstat(output.fileno())
+        observed = {"exitCode": result.returncode, "bytes": before.st_size, "sha256": None}
+        receipt["originalJobLogObservation"] = observed
+        identity = lambda value: (value.st_dev, value.st_ino, value.st_size,
+                                  value.st_mtime_ns, value.st_mode, value.st_uid, value.st_nlink)
+        require(stat.S_ISREG(before.st_mode) and before.st_uid == os.getuid()
+                and before.st_nlink == 1 and 0 <= before.st_size <= SUPPORT.MAX_API
+                and identity(path.lstat()) == identity(before), "original-job-log-owned-byte-bound")
+        output.seek(0)
+        data = output.read(SUPPORT.MAX_API + 1)
+        after = os.fstat(output.fileno())
+        require(len(data) == before.st_size and identity(before) == identity(after)
+                and identity(path.lstat()) == identity(after), "original-job-log-read-race")
+        observed["sha256"] = sha(data)
+    require(observed == {"exitCode": 0, "bytes": LOG_BYTES, "sha256": LOG_SHA256},
+            "exact-original-job-log-attribution")
 
 
 def validate_outer(archive):
@@ -473,7 +490,7 @@ def main(argv=None):
                "rawLogsIncluded": False, "nativeExecuted": False, "validationPassed": False,
                "runtimePassed": False, "prerequisites": []}
     try:
-        exact_original_log(private)
+        exact_original_log(private, receipt)
         outer = private / "exact-failed-intel-artifact.zip"
         with outer.open("xb") as stream:
             os.chmod(outer, 0o600)
