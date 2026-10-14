@@ -96,9 +96,12 @@ class StrictReplayControls(unittest.TestCase):
         self.root = Path(self.temp.name).resolve()
         self.forbid = patch.object(subprocess, "run", side_effect=AssertionError("Provider/native operation forbidden"))
         self.forbid.start()
+        self.forbid_popen = patch.object(subprocess, "Popen", side_effect=AssertionError("Provider/native child forbidden"))
+        self.forbid_popen.start()
 
     def tearDown(self):
         self.forbid.stop()
+        self.forbid_popen.stop()
         self.temp.cleanup()
 
     def test_exact_profile_and_frozen_helpers_bind_reviewed_caller_before_import(self):
@@ -176,12 +179,8 @@ class StrictReplayControls(unittest.TestCase):
     def observe_log(self, name, payload, exit_code, expected_bytes=None, expected_sha=None, replacement=None):
         directory = self.root / name; directory.mkdir()
         receipt = {}
-        def capture(command, **kwargs):
-            self.assertEqual(command, ["gh", "api", "--method", "GET", "repos/" + v.REPOSITORY
-                                      + "/actions/jobs/" + str(v.JOB) + "/logs"])
-            self.assertEqual(kwargs["stderr"], subprocess.DEVNULL)
-            self.assertEqual(kwargs["timeout"], 120)
-            kwargs["stdout"].write(payload)
+        def capture(output):
+            output.write(payload)
             if replacement:
                 path = directory / "original-failed-intel-job.log"
                 if replacement == "hardlink":
@@ -190,8 +189,8 @@ class StrictReplayControls(unittest.TestCase):
                     path.unlink(); path.write_bytes(b"replacement-private-sentinel")
                 elif replacement == "symlink":
                     path.unlink(); path.symlink_to(directory / "unowned-target")
-            return subprocess.CompletedProcess(command, exit_code)
-        with patch.object(v.subprocess, "run", side_effect=capture), \
+            return exit_code, b"", False
+        with patch.object(v, "capture_job_log_transport", side_effect=capture), \
              patch.object(v, "LOG_BYTES", len(payload) if expected_bytes is None else expected_bytes), \
              patch.object(v, "LOG_SHA256", hashlib.sha256(payload).hexdigest() if expected_sha is None else expected_sha):
             try:
@@ -205,7 +204,8 @@ class StrictReplayControls(unittest.TestCase):
         receipt, refusal = self.observe_log("exact", secret, 0)
         self.assertIsNone(refusal)
         self.assertEqual(receipt, {"originalJobLogObservation": {"exitCode": 0, "bytes": len(secret),
-                               "sha256": hashlib.sha256(secret).hexdigest()}})
+                               "sha256": hashlib.sha256(secret).hexdigest()},
+                               "originalJobLogTransport": {"httpStatus": None, "transportCategory": None}})
         self.assertNotIn("private-log-sentinel", json.dumps(receipt))
         self.assertNotIn("support://", json.dumps(receipt))
 
@@ -237,9 +237,9 @@ class StrictReplayControls(unittest.TestCase):
 
     def test_log_read_race_retains_no_digest(self):
         directory = self.root / "read-race"; directory.mkdir(); receipt = {}
-        def capture(command, **kwargs):
-            kwargs["stdout"].write(b"private-race-sentinel")
-            return subprocess.CompletedProcess(command, 0)
+        def capture(output):
+            output.write(b"private-race-sentinel")
+            return 0, b"", False
         original = v.os.fstat
         calls = []
         def raced(fd):
@@ -250,11 +250,128 @@ class StrictReplayControls(unittest.TestCase):
                 fields["st_mtime_ns"] += 1
                 return SimpleNamespace(**fields)
             return value
-        with patch.object(v.subprocess, "run", side_effect=capture), patch.object(v.os, "fstat", side_effect=raced), \
+        with patch.object(v, "capture_job_log_transport", side_effect=capture), patch.object(v.os, "fstat", side_effect=raced), \
              patch.object(v, "sha", side_effect=AssertionError("Raced log must not be hashed")):
             with self.assertRaisesRegex(v.Refusal, "original-job-log-read-race"):
                 v.exact_original_log(directory, receipt)
         self.assertIsNone(receipt["originalJobLogObservation"]["sha256"])
+
+    def test_http_classifier_exports_only_fixed_numeric_status_and_category(self):
+        for status in (403, 404, 500, 599):
+            secret = b"gh: private-token https://private.invalid/path?secret=value (HTTP " + str(status).encode() + b")\n"
+            safe = v.classify_job_log_stderr(secret)
+            self.assertEqual(safe, {"httpStatus": status, "transportCategory": "http-response-error"})
+            self.assertNotIn("private", json.dumps(safe)); self.assertNotIn("http://", json.dumps(safe))
+        null = {"httpStatus": None, "transportCategory": None}
+        for data in (b"", b"private-token", b"\xff\x00", b"gh: private (HTTP 403)",
+                     b"not-gh: private (HTTP 403)\n", b"gh: private (HTTP 403) trailing\n",
+                     b"gh: private (HTTP 40)\n", b"gh: private (HTTP 4030)\n",
+                     b"gh: private (HTTP 000)\n", b"gh: private (HTTP 600)\n",
+                     b"gh: private (HTTP 403)\ngh: private (HTTP 404)\n",
+                     b"unknown private-token prefix\ngh: private (HTTP 403)\n",
+                     b"gh: private (HTTP 403)\nunknown private-token suffix\n",
+                     b"gh: private (HTTP 403)\n\x00", b"x" * (v.MAX_LOG_STDERR + 1)):
+            with self.subTest(data=data[:40]): self.assertEqual(v.classify_job_log_stderr(data), null)
+        self.assertEqual(v.classify_job_log_stderr(b"gh: private (HTTP 403)\n", True), null)
+        class NeverString:
+            def __str__(self): raise AssertionError("Never stringify raw objects")
+        self.assertEqual(v.classify_job_log_stderr(NeverString()), null)
+
+    def test_stderr_pipe_drainer_retains_at_most_bound_and_discards_overflow(self):
+        for size in (0, v.MAX_LOG_STDERR, v.MAX_LOG_STDERR + 1, v.MAX_LOG_STDERR * 8):
+            child = SimpleNamespace(stderr=io.BytesIO(b"x" * size), wait=lambda timeout: 1)
+            with patch.object(v.subprocess, "Popen", return_value=child) as popen:
+                code, data, overflow = v.capture_job_log_transport(io.BytesIO())
+            self.assertEqual(code, 1); self.assertEqual(len(data), min(size, v.MAX_LOG_STDERR))
+            self.assertEqual(overflow, size > v.MAX_LOG_STDERR)
+            self.assertEqual(popen.call_args.args[0], ["gh", "api", "--method", "GET", "repos/" + v.REPOSITORY
+                                                     + "/actions/jobs/" + str(v.JOB) + "/logs"])
+            self.assertEqual(popen.call_args.kwargs["stderr"], subprocess.PIPE)
+            self.assertEqual(popen.call_args.kwargs["bufsize"], 0)
+            self.assertTrue(child.stderr.closed)
+
+    def test_source_grounded_terminal_escape_refusal_is_exact_fixed_category_only(self):
+        safe = {"httpStatus": None, "transportCategory": "terminal-escape-sequences-refused"}
+        null = {"httpStatus": None, "transportCategory": None}
+        literal = v.TERMINAL_ESCAPE_REFUSAL
+        for data in (literal + b"\n", literal + b"\r\n", b"gh: " + literal + b"\n"):
+            self.assertEqual(v.classify_job_log_stderr(data), safe)
+            self.assertNotIn("--allow-escape-sequences", json.dumps(v.classify_job_log_stderr(data)))
+        for data in (literal, b"private-token " + literal + b"\n", literal + b" private-token\n",
+                     b"private-token https://private.invalid\n" + literal + b"\n", literal[:-1] + b"\n"):
+            self.assertEqual(v.classify_job_log_stderr(data), null)
+        self.assertEqual(v.classify_job_log_stderr(literal + b"\n", True), null)
+        directory = self.root / "terminal-escape-refusal"; directory.mkdir(); receipt = {}
+        with patch.object(v, "capture_job_log_transport", return_value=(1, literal + b"\n", False)):
+            with self.assertRaisesRegex(v.Refusal, "^exact-original-job-log-attribution$"):
+                v.exact_original_log(directory, receipt)
+        self.assertEqual(receipt["originalJobLogTransport"], safe)
+        self.assertEqual(receipt["originalJobLogObservation"], {"exitCode": 1, "bytes": 0,
+                         "sha256": hashlib.sha256(b"").hexdigest()})
+
+    def test_private_stderr_is_bounded_owned_and_not_exported_on_http_refusal(self):
+        for overflow in (False, True):
+            directory = self.root / ("stderr-overflow" if overflow else "stderr-http"); directory.mkdir()
+            data = b"gh: private-token https://private.invalid/path?secret=value (HTTP 403)\n"
+            if overflow: data += b"x" * (v.MAX_LOG_STDERR - len(data))
+            receipt = {}
+            with patch.object(v, "capture_job_log_transport", return_value=(1, data, overflow)):
+                with self.assertRaises(v.Refusal): v.exact_original_log(directory, receipt)
+            path = directory / "original-failed-intel-job.stderr"
+            self.assertEqual(path.read_bytes(), data)
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(path.stat().st_uid, os.getuid())
+            self.assertLessEqual(path.stat().st_size, v.MAX_LOG_STDERR)
+            self.assertEqual(receipt["originalJobLogTransport"], {"httpStatus": None if overflow else 403,
+                             "transportCategory": None if overflow else "http-response-error"})
+            self.assertNotIn("private-token", json.dumps(receipt)); self.assertNotIn("private.invalid", json.dumps(receipt))
+
+    def test_stderr_read_error_is_fixed_refusal_without_exception_text(self):
+        class BadPipe:
+            def read(self, count): raise OSError("private-stderr-secret")
+            def close(self): pass
+        child = SimpleNamespace(stderr=BadPipe(), wait=lambda timeout: 1, kill=lambda: None)
+        with patch.object(v.subprocess, "Popen", return_value=child):
+            with self.assertRaisesRegex(v.Refusal, "^original-job-log-stderr-capture-failed$"):
+                v.capture_job_log_transport(io.BytesIO())
+
+    def test_owned_gh_startup_wait_and_timeout_failures_cleanup_and_preserve_primary(self):
+        for stage in ("constructor", "startup", "wait", "timeout", "secondary-cleanup-fails"):
+            primary = subprocess.TimeoutExpired("private-timeout-sentinel", 120) if stage == "timeout" else \
+                      OSError("private-wait-sentinel") if stage in ("wait", "secondary-cleanup-fails") else \
+                      RuntimeError("private-startup-sentinel")
+            events = []
+            class Pipe:
+                def close(self):
+                    events.append("pipe-close")
+                    if stage == "secondary-cleanup-fails": raise OSError("private-secondary-pipe")
+            def wait(timeout):
+                events.append(("wait", timeout))
+                if timeout == 120: raise primary
+                if stage == "secondary-cleanup-fails": raise subprocess.TimeoutExpired("private-secondary-wait", 5)
+                return -9
+            def kill():
+                events.append("kill")
+                if stage == "secondary-cleanup-fails": raise OSError("private-secondary-kill")
+            class Reader:
+                def start(self):
+                    events.append("reader-start")
+                    if stage == "startup": raise primary
+                def join(self, timeout): events.append(("join", timeout))
+                def is_alive(self): return False
+            def reader(*args, **kwargs):
+                if stage == "constructor": raise primary
+                return Reader()
+            child = SimpleNamespace(stderr=Pipe(), wait=wait, kill=kill)
+            with self.subTest(stage=stage), patch.object(v.subprocess, "Popen", return_value=child), \
+                 patch.object(v.threading, "Thread", side_effect=reader):
+                with self.assertRaises(type(primary)) as raised:
+                    v.capture_job_log_transport(io.BytesIO())
+                self.assertIs(raised.exception, primary)
+                self.assertIn("kill", events)
+                self.assertIn(("wait", 5), events)
+                self.assertIn("pipe-close", events)
+                if stage != "constructor": self.assertIn(("join", 5), events)
 
     def test_archive_intel_layout_and_frozen_traversal_duplicate_link_controls(self):
         base = [entry(v.OUTER_APP, b"nested"), entry(v.OUTER_RUNTIME, b"{}")]
@@ -408,6 +525,9 @@ class StrictReplayControls(unittest.TestCase):
         outer = archive([entry(v.OUTER_APP, inner), entry(v.OUTER_RUNTIME, json.dumps(embedded).encode())])
         events = []
         original_log = v.exact_original_log
+        def job_log_transport(output):
+            events.append("job-log-transport")
+            return 1, b"gh: private-token https://private.invalid/path?secret=value (HTTP 403)\n", False
 
         def metadata(suffix):
             events.append("metadata")
@@ -487,6 +607,7 @@ class StrictReplayControls(unittest.TestCase):
              patch.object(v, "exact_original_log", side_effect=lambda private, receipt:
                           original_log(private, receipt) if case == "job-log-transport-fails"
                           else events.append("exact-original-log")), \
+             patch.object(v, "capture_job_log_transport", side_effect=job_log_transport), \
              patch.object(v, "fresh_runtime_state", side_effect=lambda: events.append("fresh-runtime")), \
              patch.object(v, "stopped_runtime", side_effect=lambda: events.append("stopped-runtime")), \
              patch.object(v.subprocess, "run", side_effect=native):
@@ -525,6 +646,8 @@ class StrictReplayControls(unittest.TestCase):
         self.assertEqual(receipt["originalJobLogObservation"], {"exitCode": 1, "bytes": 0,
                          "sha256": hashlib.sha256(b"").hexdigest()})
         self.assertEqual(receipt["refusalCategory"], "exact-original-job-log-attribution")
+        self.assertEqual(receipt["originalJobLogTransport"], {"httpStatus": 403, "transportCategory": "http-response-error"})
+        self.assertNotIn("private-token", json.dumps(receipt)); self.assertNotIn("private.invalid", json.dumps(receipt))
         self.assertFalse(receipt["nativeExecuted"])
         self.assertFalse(receipt["validationPassed"])
         self.assertFalse(receipt["runtimePassed"])

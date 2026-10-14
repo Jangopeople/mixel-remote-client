@@ -13,6 +13,7 @@ import re
 import stat
 import subprocess
 import sys
+import threading
 import types
 import zipfile
 
@@ -68,6 +69,9 @@ CLEANUP_CODES = {
     "unclassified-cleanup-error": "endpoint-cleanup",
 }
 SUPPORT = None
+MAX_LOG_STDERR = 16 * 1024
+TERMINAL_ESCAPE_REFUSAL = (b"the response contains terminal escape sequences; "
+                           b"pass --allow-escape-sequences to output it anyway")
 
 
 class Refusal(RuntimeError):
@@ -206,18 +210,91 @@ def validate_artifact(item, now=None):
             "failed-artifact-expired")
 
 
+def classify_job_log_stderr(data, overflow=False):
+    safe = {"httpStatus": None, "transportCategory": None}
+    if (type(data) is not bytes or type(overflow) is not bool or overflow
+            or len(data) > MAX_LOG_STDERR or not data.endswith(b"\n")
+            or any(byte not in (9, 10, 13) and not 32 <= byte <= 126 for byte in data)):
+        return safe
+    if data in (TERMINAL_ESCAPE_REFUSAL + b"\n", TERMINAL_ESCAPE_REFUSAL + b"\r\n",
+                b"gh: " + TERMINAL_ESCAPE_REFUSAL + b"\n", b"gh: " + TERMINAL_ESCAPE_REFUSAL + b"\r\n"):
+        safe["transportCategory"] = "terminal-escape-sequences-refused"
+        return safe
+    status = re.fullmatch(rb"gh: [ -~]{0,2048} \(HTTP ([45][0-9]{2})\)\r?\n", data)
+    if status is not None:
+        safe["httpStatus"] = int(status[1])
+        safe["transportCategory"] = "http-response-error"
+    return safe
+
+
+def capture_job_log_transport(output):
+    command = ["gh", "api", "--method", "GET", "repos/" + REPOSITORY
+               + "/actions/jobs/" + str(JOB) + "/logs"]
+    retained = bytearray()
+    state = {"overflow": False, "readFailed": False}
+    def drain():
+        try:
+            while True:
+                chunk = child.stderr.read(4096)
+                if not chunk:
+                    break
+                if type(chunk) is not bytes:
+                    state["readFailed"] = True
+                    break
+                available = MAX_LOG_STDERR - len(retained)
+                retained.extend(chunk[:available])
+                state["overflow"] |= len(chunk) > available
+        except Exception:
+            state["readFailed"] = True
+        finally:
+            try:
+                child.stderr.close()
+            except Exception:
+                state["readFailed"] = True
+    reader = None
+    child = subprocess.Popen(command, stdout=output, stderr=subprocess.PIPE, bufsize=0)
+    try:
+        reader = threading.Thread(target=drain, daemon=True)
+        reader.start()
+        code = child.wait(timeout=120)
+        reader.join(timeout=5)
+        require(not reader.is_alive() and not state["readFailed"], "original-job-log-stderr-capture-failed")
+    except BaseException:
+        # Every failed startup/wait/read path disposes only this owned gh child.
+        # Secondary cleanup failures must not replace or stringify the primary.
+        for cleanup in (child.kill, lambda: child.wait(timeout=5)):
+            try:
+                cleanup()
+            except BaseException:
+                pass
+        if reader is not None:
+            try:
+                reader.join(timeout=5)
+            except BaseException:
+                pass
+        # Popen's unbuffered pipe has no BufferedReader lock held by the drainer.
+        try:
+            child.stderr.close()
+        except BaseException:
+            pass
+        raise
+    return code, bytes(retained), state["overflow"]
+
+
 def exact_original_log(private, receipt):
     path = private / "original-failed-intel-job.log"
     with path.open("x+b") as output:
         os.chmod(path, 0o600)
-        result = subprocess.run(["gh", "api", "--method", "GET", "repos/" + REPOSITORY
-                                 + "/actions/jobs/" + str(JOB) + "/logs"],
-                                stdout=output, stderr=subprocess.DEVNULL, timeout=120)
-        require(type(result.returncode) is int and -(2**31) <= result.returncode < 2**31,
+        code, stderr_data, stderr_overflow = capture_job_log_transport(output)
+        require(type(code) is int and -(2**31) <= code < 2**31,
                 "original-job-log-exit-code")
+        receipt["originalJobLogTransport"] = classify_job_log_stderr(stderr_data, stderr_overflow)
+        with (private / "original-failed-intel-job.stderr").open("xb") as stderr_output:
+            os.chmod(stderr_output.name, 0o600)
+            stderr_output.write(stderr_data)
         output.flush()
         before = os.fstat(output.fileno())
-        observed = {"exitCode": result.returncode, "bytes": before.st_size, "sha256": None}
+        observed = {"exitCode": code, "bytes": before.st_size, "sha256": None}
         receipt["originalJobLogObservation"] = observed
         identity = lambda value: (value.st_dev, value.st_ino, value.st_size,
                                   value.st_mtime_ns, value.st_mode, value.st_uid, value.st_nlink)
@@ -230,6 +307,7 @@ def exact_original_log(private, receipt):
         require(len(data) == before.st_size and identity(before) == identity(after)
                 and identity(path.lstat()) == identity(after), "original-job-log-read-race")
         observed["sha256"] = sha(data)
+    require(not stderr_overflow, "original-job-log-stderr-byte-bound")
     require(observed == {"exitCode": 0, "bytes": LOG_BYTES, "sha256": LOG_SHA256},
             "exact-original-job-log-attribution")
 
