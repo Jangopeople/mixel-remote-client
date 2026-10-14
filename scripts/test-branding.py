@@ -153,6 +153,107 @@ def footer_refusal_controls(base: Path) -> None:
     print("PASS: footer byte corruption preserves LF/CRLF; missing/duplicate sources and successful/unrelated/wrong-path refusals reject")
 
 
+def debian_alias_cleanup_controls(repo: Path, base: Path, environment: dict) -> None:
+    """Exercise only the exact generated alias cleanup, never a package build."""
+    import ast
+    import types
+    source = (repo / "build.py").read_text(encoding="utf-8")
+    alias = "tmpdeb/usr/bin/mixel-remote"
+    new = "system2('rm -f " + alias + "')"
+    old = "system2('rm " + alias + " || true')"
+    tree = ast.parse(source)
+    system = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "system2"]
+    assert len(system) == 1, "Exactly one unchanged upstream system2 required"
+    calls = []
+    for name in ("build_flutter_deb", "build_deb_from_folder"):
+        bodies = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == name]
+        assert len(bodies) == 1
+        selected = [node for node in ast.walk(bodies[0]) if isinstance(node, ast.Expr)
+                    and isinstance(node.value, ast.Call)
+                    and isinstance(node.value.func, ast.Name) and node.value.func.id == "system2"
+                    and len(node.value.args) == 1 and not node.value.keywords
+                    and isinstance(node.value.args[0], ast.Constant)
+                    and node.value.args[0].value == "rm -f " + alias]
+        assert len(selected) == 1, "Each actual Debian builder must remove only its exact alias"
+        calls.append(selected[0])
+    assert source.count(new) == 2 and old not in source
+    branding = SCRIPT.read_text(encoding="utf-8")
+    first = "# Remove only the stale package-local alias."
+    last = "# End exact Debian alias cleanup correction."
+    assert branding.count(first) == branding.count(last) == 1
+    patch = branding[branding.index(first):branding.index(last) + len(last)]
+    compiled = compile(patch, str(SCRIPT), "exec")
+    for newline in ("\n", "\r\n"):
+        current = source.replace("\n", newline)
+        original = current.replace(new, old)
+        for data in (original, current):
+            context = {"code": data, "os": types.SimpleNamespace(environ={"APP_NAME_KEBAB": "mixel-remote"})}
+            exec(compiled, context)
+            assert context["code"] == current, "Exact patch must be idempotent in both profiles"
+        negatives = [original.replace(old, "system2('rm -rf " + alias + " || true')", 1),
+                     original.replace(old, "pass", 1),
+                     original.replace(old, old + "\n    " + old, 1),
+                     original.replace(old, new, 1),
+                     original.replace("def build_flutter_deb(", "def changed_deb_builder(", 1)]
+        for data in negatives:
+            context = {"code": data, "os": types.SimpleNamespace(environ={"APP_NAME_KEBAB": "mixel-remote"})}
+            try:
+                exec(compiled, context)
+            except RuntimeError:
+                assert context["code"] == data, "Invalid alias source must refuse without mutation"
+            else:
+                raise AssertionError("Changed or mixed Debian alias cleanup accepted")
+    print("PASS: exact two-builder alias patch is LF/CRLF idempotent; ten drift/missing/duplicate/mixed/function controls refuse without mutation")
+    if os.name == "nt":
+        print("SKIP: actual Debian alias filesystem controls require native Unix semantics; strict generated source controls passed")
+        return
+    sandbox = base / "debian-alias-cleanup-controls"
+    sandbox.mkdir()
+    system_source = ast.unparse(system[0])
+    for index, statement in enumerate(calls):
+        for kind in ("missing", "file", "symlink", "dangling-symlink", "directory", "directory-symlink", "hardlink"):
+            owned = sandbox / (str(index) + "-" + kind)
+            parent = owned / "tmpdeb/usr/bin"
+            parent.mkdir(parents=True)
+            target = owned / "target"
+            sentinel = b"owned alias cleanup target must stay unchanged\n"
+            target.write_bytes(sentinel)
+            path = parent / "mixel-remote"
+            if kind == "file": path.write_bytes(b"stale alias")
+            elif kind == "symlink": path.symlink_to(target)
+            elif kind == "dangling-symlink": path.symlink_to(owned / "missing-target")
+            elif kind == "directory":
+                path.mkdir(); (path / "sentinel").write_bytes(sentinel)
+            elif kind == "directory-symlink":
+                directory = owned / "directory-target"
+                directory.mkdir(); (directory / "sentinel").write_bytes(sentinel)
+                path.symlink_to(directory, target_is_directory=True)
+            elif kind == "hardlink": os.link(target, path)
+            child = "import os, sys\n" + system_source + "\n" + ast.unparse(statement) + "\n" + ast.unparse(statement) + "\n"
+            result = subprocess.run([sys.executable, "-c", child], cwd=owned, env=environment,
+                                    capture_output=True, text=True, encoding="utf-8", timeout=15)
+            assert target.read_bytes() == sentinel, "Alias unlink followed or removed its target"
+            if kind == "directory":
+                assert result.returncode != 0 and "Error occurred when executing" in result.stderr
+                assert (path / "sentinel").read_bytes() == sentinel
+            else:
+                assert result.returncode == 0 and result.stdout == result.stderr == "", result.stderr
+                assert not path.exists() and not path.is_symlink()
+                if kind == "directory-symlink": assert (directory / "sentinel").read_bytes() == sentinel
+        for kind in ("missing", "directory"):
+            owned = sandbox / (str(index) + "-historical-" + kind)
+            parent = owned / "tmpdeb/usr/bin"
+            parent.mkdir(parents=True)
+            path = parent / "mixel-remote"
+            if kind == "directory": path.mkdir(); (path / "sentinel").write_bytes(b"retain")
+            child = "import os, sys\n" + system_source + "\nsystem2('rm " + alias + " || true')\n"
+            result = subprocess.run([sys.executable, "-c", child], cwd=owned, env=environment,
+                                    capture_output=True, text=True, encoding="utf-8", timeout=15)
+            assert result.returncode == 0 and result.stderr, "Original ignored rm failure was not reproduced"
+            if kind == "directory": assert (path / "sentinel").read_bytes() == b"retain"
+    print("PASS: both actual generated cleanup statements and upstream system2: fourteen missing/file/symlink/dangling/directory/hardlink fixtures; quiet repeated unlink, target preservation, fatal directory refusal; four historical ignored-error reproductions")
+
+
 with tempfile.TemporaryDirectory(prefix="mixel-branding-") as directory:
     base = Path(directory).resolve()
     repo = base / "rustdesk"
@@ -618,6 +719,8 @@ print("PASS: actual Debian generator child explicitly uses UTF-8 and preserves t
                     env={**env, "PYTHONUTF8": "1"})
     print(generated.stdout.strip())
     print("PASS: actual Debian control generator requires EGL, GL, GLES and Mesa software rendering on all package architectures")
+
+    debian_alias_cleanup_controls(repo, base, {**env, "PYTHONUTF8": "1"})
 
     # Execute the generated Debian upgrade path against an isolated filesystem.
     # Reproduces a legacy /etc service with missing /usr/lib unit copies; every

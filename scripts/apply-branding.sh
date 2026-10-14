@@ -677,6 +677,44 @@ new_dylib = '''_target = os.environ.get("CARGO_BUILD_TARGET")
 
 code = code.replace(old_dylib, new_dylib)
 
+# Remove only the stale package-local alias. A clean first build has no alias;
+# actual removal failures must still stop the unchanged upstream system2.
+import ast as _mixel_cleanup_ast
+_mixel_cleanup_alias = 'tmpdeb/usr/bin/' + os.environ['APP_NAME_KEBAB']
+_mixel_cleanup_old = "system2('rm " + _mixel_cleanup_alias + " || true')"
+_mixel_cleanup_new = "system2('rm -f " + _mixel_cleanup_alias + "')"
+_mixel_cleanup_states = []
+_mixel_cleanup_tree = _mixel_cleanup_ast.parse(code)
+for _mixel_cleanup_name in ('build_flutter_deb', 'build_deb_from_folder'):
+    _mixel_cleanup_functions = [node for node in _mixel_cleanup_tree.body
+                               if isinstance(node, _mixel_cleanup_ast.FunctionDef)
+                               and node.name == _mixel_cleanup_name]
+    if len(_mixel_cleanup_functions) != 1:
+        raise RuntimeError('Pinned upstream Debian alias cleanup function changed')
+    _mixel_cleanup_calls = [node for node in _mixel_cleanup_ast.walk(_mixel_cleanup_functions[0])
+                            if isinstance(node, _mixel_cleanup_ast.Call)
+                            and isinstance(node.func, _mixel_cleanup_ast.Name)
+                            and node.func.id == 'system2'
+                            and len(node.args) == 1 and not node.keywords
+                            and isinstance(node.args[0], _mixel_cleanup_ast.Constant)
+                            and isinstance(node.args[0].value, str)
+                            and node.args[0].value.startswith('rm ')
+                            and _mixel_cleanup_alias in node.args[0].value]
+    if len(_mixel_cleanup_calls) != 1:
+        raise RuntimeError('Pinned upstream Debian alias cleanup statement changed')
+    _mixel_cleanup_value = _mixel_cleanup_calls[0].args[0].value
+    if _mixel_cleanup_value not in ('rm ' + _mixel_cleanup_alias + ' || true',
+                                   'rm -f ' + _mixel_cleanup_alias):
+        raise RuntimeError('Pinned upstream Debian alias cleanup command changed')
+    _mixel_cleanup_states.append(_mixel_cleanup_value)
+if len(set(_mixel_cleanup_states)) != 1:
+    raise RuntimeError('Mixed upstream Debian alias cleanup state')
+if code.count(_mixel_cleanup_old) == 2 and code.count(_mixel_cleanup_new) == 0:
+    code = code.replace(_mixel_cleanup_old, _mixel_cleanup_new)
+elif code.count(_mixel_cleanup_old) != 0 or code.count(_mixel_cleanup_new) != 2:
+    raise RuntimeError('Pinned upstream Debian alias cleanup literal changed')
+# End exact Debian alias cleanup correction.
+
 # Flutter dynamically opens EGL/GLES in addition to GTK's GL context. A minimal
 # desktop can otherwise launch a black window. Mesa's DRI driver is an explicit
 # dependency because libegl-mesa0 does not depend on the software renderer.

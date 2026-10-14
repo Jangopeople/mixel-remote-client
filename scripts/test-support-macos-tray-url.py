@@ -7,8 +7,10 @@ owned fixture children and loopback peers on Mac; portable source controls elsew
 outcome and thread-builder failure are explicit in-memory fixture adapters.
 """
 import argparse
+import ast
 import hashlib
 import importlib.util
+import json
 import os
 from pathlib import Path
 import shutil
@@ -102,6 +104,195 @@ def read_previous_tray_profile(root):
     launch=importlib.util.module_from_spec(spec);spec.loader.exec_module(launch)
     with launch.previous(root) as prior:
         return tuple((prior/name).read_text() for name in ("src/tray.rs","src/common.rs","src/mixel_support_url.rs"))
+
+
+def literal_assignment(source, name):
+    values = [node.value for node in ast.parse(source).body
+              if isinstance(node, ast.Assign) and any(
+                  isinstance(target, ast.Name) and target.id == name
+                  for target in node.targets)]
+    if len(values) != 1:
+        raise AssertionError("Expected one actual source literal: " + name)
+    return ast.literal_eval(values[0])
+
+
+def final_tray_route_inputs():
+    # Read the final layer rather than the historical helper exposed by its
+    # inverse. The latter passed while the final packaged route lost its marker.
+    source = (SCRIPTS / "patch-support-macos-gui-launch.py").read_text(encoding="utf-8")
+    changes = literal_assignment(source, "CHANGES")
+    pairs = changes["src/tray.rs"]
+    if len(pairs) != 1 or pairs[0][0] != patch.HELPER:
+        raise AssertionError("Final tray replacement no longer has the exact historical input")
+    helper = pairs[0][1]
+    if not isinstance(helper, str):
+        raise AssertionError("Final tray replacement is not literal source")
+    queue = (SCRIPTS / "support-macos-url-queue.rs").read_text(encoding="utf-8")
+    expected = literal_assignment(source, "ORIGINAL")["src/mixel_support_url.rs"]
+    if hashlib.sha256(queue.encode()).hexdigest() != expected:
+        raise AssertionError("Actual queue validator resource differs from the pinned original input")
+    runtime = (SCRIPTS / "test-support-launch-macos-tray.py").read_text(encoding="utf-8")
+    marker = literal_assignment(runtime, "TRAY_MARKER")
+    if not isinstance(marker, bytes) or not marker or b"\0" in marker:
+        raise AssertionError("Runtime tray marker is not one nonempty byte literal")
+    return helper, patch.EVENT, queue, marker.decode("ascii")
+
+
+FINAL_ROUTE_SEAMS = r"""
+#![allow(dead_code, unused_imports)]
+use std::sync::{Mutex, OnceLock};
+#[derive(PartialEq, Eq)]
+enum RouteObservation { Info(&'static str), Submitted(String) }
+fn observations() -> &'static Mutex<Vec<RouteObservation>> {
+    static OBSERVATIONS: OnceLock<Mutex<Vec<RouteObservation>>> = OnceLock::new();
+    OBSERVATIONS.get_or_init(|| Mutex::new(Vec::new()))
+}
+// Actual info calls must contain one static literal. Formatting a URI/key is
+// rejected by this explicit offline adapter instead of entering proof output.
+#[macro_export]
+macro_rules! route_info {
+    ($message:literal) => {{
+        assert!(!$message.contains("inv_") && !$message.contains("apikey") &&
+            !$message.contains("mixel-remote://") && !$message.contains("bearer"),
+            "Final route info contains private fixture metadata");
+        crate::observations().lock().unwrap().push(crate::RouteObservation::Info($message));
+    }};
+    ($($argument:tt)*) => { compile_error!("Final route info must be a static literal without interpolation") };
+}
+mod log { pub use crate::route_info as info; }
+mod url {
+    pub struct Url(pub String);
+    impl Url { pub fn as_str(&self) -> &str { &self.0 } }
+}
+mod tao { pub mod event {
+    pub enum StartCause { Init }
+    pub enum Event { Opened { urls: Vec<crate::url::Url> }, NewEvents(StartCause), Other }
+} }
+fn reset() { observations().lock().unwrap().clear(); }
+fn uri(value: u8) -> String {
+    format!("mixel-remote://support/?invite=inv_00000000-0000-0000-0000-{:012x}&apikey=synthetic-final-tray-key-000000000000", value)
+}
+fn opened(values: Vec<String>) -> tao::event::Event {
+    tao::event::Event::Opened { urls: values.into_iter().map(url::Url).collect() }
+}
+fn assert_one(value: String) {
+    assert!(*observations().lock().unwrap() == vec![
+        RouteObservation::Info(EXPECTED_MARKER), RouteObservation::Submitted(value)],
+        "Final route must emit the runtime marker once immediately before the selected submission");
+}
+"""
+
+FINAL_ROUTE_TESTS = r"""
+#[test] fn valid_support_has_static_marker_before_exact_submit() {
+    reset(); callback(opened(vec![uri(1)])); assert_one(uri(1));
+}
+#[test] fn mixed_urls_select_latest_valid_with_one_marker() {
+    reset(); callback(opened(vec![uri(1), "mixel-remote://ordinary".into(), uri(2),
+        "mixel-remote://support/?invite=invalid&apikey=synthetic-invalid-key".into()]));
+    assert_one(uri(2));
+}
+#[test] fn repeated_opened_events_keep_each_marker_and_submission_order() {
+    reset(); callback(opened(vec![uri(1)])); callback(opened(vec![uri(2)]));
+    assert!(*observations().lock().unwrap() == vec![RouteObservation::Info(EXPECTED_MARKER),
+        RouteObservation::Submitted(uri(1)), RouteObservation::Info(EXPECTED_MARKER),
+        RouteObservation::Submitted(uri(2))], "Repeated final route observations differ");
+}
+#[test] fn empty_ordinary_malformed_and_oversized_urls_have_no_marker_or_submit() {
+    let base = uri(1);
+    for values in [vec![], vec!["mixel-remote://ordinary".into()],
+        vec![base.clone() + "#fragment"], vec![base.clone() + "&apikey=short"],
+        vec![base.replace("synthetic-final-tray-key-000000000000", &"A".repeat(17000))],
+        vec!["https://example.invalid".into()]] {
+        reset(); callback(opened(values));
+        assert!(observations().lock().unwrap().is_empty(), "Invalid intent emitted a marker or submission");
+    }
+}
+#[test] fn event_limit_excludes_valid_url_outside_last64() {
+    reset(); let mut values = vec![uri(1)];
+    values.extend((0..64).map(|_| "mixel-remote://ordinary".to_owned()));
+    callback(opened(values));
+    assert!(observations().lock().unwrap().is_empty(), "Tail bound emitted a marker or submission");
+}
+#[test] fn latest_valid_inside_tail_is_forwarded() {
+    reset(); let mut values = vec![uri(1)];
+    values.extend((0..64).map(|_| "mixel-remote://ordinary".to_owned())); values.push(uri(3));
+    callback(opened(values)); assert_one(uri(3));
+}
+#[test] fn non_opened_events_do_not_emit_marker_or_submit() {
+    reset(); callback(tao::event::Event::NewEvents(tao::event::StartCause::Init));
+    callback(tao::event::Event::Other);
+    assert!(observations().lock().unwrap().is_empty(), "Non-Opened event emitted a marker or submission");
+}
+"""
+
+
+def final_route_fixture(helper, event, queue, marker):
+    # Only the native-platform cfg is adapted. The actual final route, event
+    # prefix, queue validator and runtime marker otherwise remain literal.
+    cfg = '#[cfg(all(target_os = "macos", feature = "flutter"))]'
+    if helper.count(cfg) != 2 or event.count(cfg) != 1:
+        raise AssertionError("Final route/event native cfg surface changed")
+    helper = helper.replace(cfg, "#[cfg(test)]")
+    event = event.replace(cfg, "#[cfg(test)]")
+    return (FINAL_ROUTE_SEAMS + "\nconst EXPECTED_MARKER: &str = " + json.dumps(marker) + ";\n" +
+            "mod server { pub(crate) mod mixel_support_url {" + queue + "}\n" +
+            "pub(crate) mod mixel_gui_launch { pub(crate) fn submit(value: String) {" +
+            "crate::observations().lock().unwrap().push(crate::RouteObservation::Submitted(value)); } } }\n" +
+            helper + "\nfn callback(event: tao::event::Event) { let _ = &event;\n" + event + "}\n" + FINAL_ROUTE_TESTS)
+
+
+class FinalTrayDispatchMarkerControls(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.helper, cls.event, cls.queue, cls.marker = final_tray_route_inputs()
+        cls.rustc = os.environ.get("RUSTC_BIN", "rustc")
+        if not shutil.which(cls.rustc):
+            raise SystemExit("Rust compiler required for final tray marker coherence gate")
+
+    def compile_route(self, root, helper, event=None):
+        source, binary = root / "final-route.rs", root / "final-route"
+        source.write_text(final_route_fixture(helper, self.event if event is None else event,
+                                              self.queue, self.marker), encoding="utf-8", newline="\n")
+        compiled = subprocess.run([self.rustc, "--edition=2021", "--test", "-Dwarnings",
+                                   str(source), "-o", str(binary)], capture_output=True,
+                                  text=True, encoding="utf-8", timeout=45)
+        if compiled.returncode:
+            return compiled, None
+        executed = subprocess.run([str(binary), "--test-threads=1"], capture_output=True,
+                                  text=True, encoding="utf-8", timeout=15)
+        return compiled, executed
+
+    def test_literal_final_route_matches_actual_runtime_marker(self):
+        with tempfile.TemporaryDirectory(prefix="mixel-final-tray-route-") as temporary:
+            compiled, executed = self.compile_route(Path(temporary), self.helper)
+            self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
+            self.assertEqual(executed.returncode, 0, executed.stdout + executed.stderr)
+            print(executed.stdout, end="")
+
+    def test_missing_duplicate_wrong_private_interpolated_and_early_markers_fail(self):
+        statement = "log::info!(" + json.dumps(self.marker) + ");"
+        self.assertEqual(self.helper.count(statement), 1, "Actual final marker must be one exact static info call")
+        missing = self.helper.replace(statement, "", 1)
+        route = 'fn route_mixel_tray_support_urls(urls: &[url::Url]) {'
+        self.assertEqual(missing.count(route), 1)
+        variants = {
+            "missing": missing,
+            "duplicate": self.helper.replace(statement, statement + "\n        " + statement, 1),
+            "wrong": self.helper.replace(statement, 'log::info!("Wrong tray dispatch marker");', 1),
+            "private": self.helper.replace(statement, 'log::info!("inv_synthetic-private-metadata");', 1),
+            "interpolated": self.helper.replace(statement, 'log::info!("{}", selected.as_str());', 1),
+            "before-validation": missing.replace(route, route + "\n    " + statement, 1),
+        }
+        for name, helper in variants.items():
+            with self.subTest(marker_mutation=name), tempfile.TemporaryDirectory(prefix="mixel-final-tray-negative-") as temporary:
+                compiled, executed = self.compile_route(Path(temporary), helper)
+                if name == "interpolated":
+                    self.assertNotEqual(compiled.returncode, 0, "Interpolated marker compiled")
+                    self.assertIn("Final route info must be a static literal", compiled.stderr)
+                else:
+                    self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
+                    self.assertNotEqual(executed.returncode, 0, "Invalid final marker contract passed: " + name)
+        print("PASS: literal final route rejects missing, duplicate, wrong, private, interpolated and before-validation markers")
 
 class TrayTests(unittest.TestCase):
     @classmethod

@@ -33,7 +33,7 @@ def source_guards(layer, source, out):
     # Preserve exact nested Git metadata because prior native owners require it.
     result=layer.apply(stage,check=True,restore=True,verify=True)
     assert result['writes']==0
-    if result['profile'] in ('final','legacy'):layer.apply(stage,restore=True)
+    if result['profile'] in ('final','previous-final','legacy'):layer.apply(stage,restore=True)
     original=snapshot(stage)
     assert layer.apply(stage,verify=True)['writes']==len(layer.ORIGINAL)+1
     final=snapshot(stage)
