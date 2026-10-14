@@ -330,10 +330,10 @@ class StrictReplayControls(unittest.TestCase):
                          "repos/" + v.REPOSITORY + "/actions/runs/" + str(v.RUN)])
         self.assertNotIn("--allow-escape-sequences", metadata.call_args.args[0])
         profile = v.source_contract(ROOT)
-        self.assertEqual(v.PROFILE_HASH, "304fc3b8afdbaa48849775d72dd2aafc088982447ce6db6233de75fbc7ef27f6")
-        self.assertEqual(v.CONTROLS_HASH, "4253c9718a916952695f542c88084275057fbf42b30b4b846693f38ad6a09a9d")
+        self.assertEqual(v.PROFILE_HASH, "06be2c3e7a5ee27a3f6bf748564dc12d84b62be4902db7a9603d86acb3c371bb")
+        self.assertEqual(v.CONTROLS_HASH, "2c24a399c6c4cc1efa29e4ebad405fc0a4046fa0d4e4e2ef4c1fc9113bd57a9a")
         self.assertEqual(profile["reviewedSources"]["scripts/test-support-launch-macos-concurrency-controls.py"], v.CONTROLS_HASH)
-        self.assertEqual(v.CALLER_HASH, "8cb84580e1f330a6649a014f29f80769b0c5059081445c15bc07ccedbf319e9f")
+        self.assertEqual(v.CALLER_HASH, "9fb58a9c5333df460cc4a676dc1499ee08af4af78edca762d0e20c59f0d03fc0")
 
     def test_source_grounded_terminal_escape_refusal_is_exact_fixed_category_only(self):
         safe = {"httpStatus": None, "transportCategory": "terminal-escape-sequences-refused"}

@@ -1046,7 +1046,7 @@ class ConcurrencyControls(unittest.TestCase):
                 with f.seams(), contextlib.ExitStack() as stack:
                     if kind == 'guard': stack.enter_context(mock.patch.object(C, 'incoming_cleanup_lease_guard', guard))
                     elif kind.startswith('pid'):
-                        values = {'pid-error': [OSError(errno.ENOTCONN, 'private API detail')],
+                        values = {'pid-error': [OSError(errno.EPERM, 'private API detail')],
                                   'pid-foreign': [999], 'pid-changed': [101, 999]}[kind]
                         stack.enter_context(mock.patch.object(C.tray, 'peer_pid', side_effect=values))
                     else:
@@ -1136,6 +1136,259 @@ class ConcurrencyControls(unittest.TestCase):
                 self.assertIs(raised.exception, f.first_active[0]); self.assertEqual(f.cleanup_calls, [])
             else: f.cleanup(lease)
             self.assertNotIn('incomingInitialIdentityFailure', f.facts)
+
+
+    def test_closed_initial_peer_exact_signature_only_enters_fresh_refused_settlement(self):
+        f = IncomingSettlementFixture(self.f.app); lease = f.capture(); f.stopped = True
+        f.connections.clear(); f.outcomes = ['active', 'refused']; events = []
+        def peer(connection):
+            events.append(('pid', id(connection)))
+            raise OSError(errno.ENOTCONN, 'private closed peer')
+        def uid(connection):
+            events.append(('uid', id(connection)))
+            return f.uid
+        with f.seams(), mock.patch.object(C.tray, 'peer_pid', side_effect=peer), \
+                mock.patch.object(C, 'incoming_peer_uid', side_effect=uid):
+            C.cleanup_incoming_endpoint(f.app, 101, f.birth(101), 202, f.birth(202), lease, f.facts)
+        self.assertEqual([event[0] for event in events], ['pid', 'uid', 'pid', 'uid'])
+        self.assertEqual(len({event[1] for event in events}), 1)
+        self.assertEqual(len(f.connections), 2); self.assertTrue(all(c.closed for c in f.connections))
+        self.assertEqual(len(f.first_active), 1); self.assertEqual(len(f.cleanup_calls), 1)
+        self.assertEqual((f.facts['incomingEndpointSettlement']['state'], f.facts['incomingEndpointSettlement']['attempts']), ('settled', 1))
+        self.assertNotIn('incomingInitialIdentityFailure', f.facts)
+        self.assertNotIn('private', json.dumps(f.facts))
+
+    def test_closed_initial_peer_other_errno_subclass_or_unknown_errno_stays_first_fatal(self):
+        class ErrorSubclass(OSError): pass
+        class HiddenErrno(OSError):
+            @property
+            def errno(self): raise ValueError('private errno accessor')
+        errors = [OSError(number, 'private different error') for number in
+            sorted(C.INCOMING_INITIAL_IDENTITY_ERRNOS - {errno.ENOTCONN})]
+        errors += [ErrorSubclass(errno.ENOTCONN, 'private subclass'), HiddenErrno(), OSError(), OSError(True, 'private bool')]
+        for error in errors:
+            with self.subTest(error=type(error).__name__, errno=getattr(error, 'args', ())):
+                f = IncomingSettlementFixture(self.f.app); lease = f.capture(); f.stopped = True
+                f.connections.clear(); f.outcomes = ['active', 'refused']
+                with f.seams(), mock.patch.object(C.tray, 'peer_pid', side_effect=error), \
+                        mock.patch.object(C, 'incoming_peer_uid', side_effect=AssertionError('UID must not be read')):
+                    with self.assertRaises(RuntimeError) as raised:
+                        C.cleanup_incoming_endpoint(f.app, 101, f.birth(101), 202, f.birth(202), lease, f.facts)
+                self.assertIs(raised.exception, f.first_active[0]); self.assertEqual(f.cleanup_calls, [])
+                self.assertEqual(len(f.connections), 1)
+                self.assertEqual(f.facts['incomingInitialIdentityFailure']['subphase'], 'peer-pid-first')
+
+    def test_closed_initial_peer_repeat_must_remain_exact_native_notconnected(self):
+        class ErrorSubclass(OSError): pass
+        for result in (101, 999, 0, True, None, OSError(errno.EPERM, 'private'),
+                       ErrorSubclass(errno.ENOTCONN, 'private subclass'), RuntimeError('private')):
+            with self.subTest(result=type(result).__name__):
+                f = IncomingSettlementFixture(self.f.app); lease = f.capture(); f.stopped = True
+                f.connections.clear(); f.outcomes = ['active', 'refused']
+                with f.seams(), mock.patch.object(C.tray, 'peer_pid', side_effect=[OSError(errno.ENOTCONN, 'private'), result]):
+                    with self.assertRaises(RuntimeError) as raised:
+                        C.cleanup_incoming_endpoint(f.app, 101, f.birth(101), 202, f.birth(202), lease, f.facts)
+                self.assertIs(raised.exception, f.first_active[0]); self.assertEqual(f.cleanup_calls, [])
+                self.assertEqual(len(f.connections), 1)
+                self.assertEqual(f.facts['incomingInitialIdentityFailure']['subphase'], 'peer-pid-recheck')
+
+    def test_closed_initial_peer_uid_twice_must_match_exact_owned_uid(self):
+        for values in ([True], [None], [0], [os.getuid()+1], [OSError(errno.ENOTCONN, 'private')],
+                       [os.getuid(), True], [os.getuid(), None], [os.getuid(), os.getuid()+1],
+                       [os.getuid(), OSError(errno.ENOTCONN, 'private')]):
+            with self.subTest(values=[type(v).__name__ for v in values]):
+                f = IncomingSettlementFixture(self.f.app); lease = f.capture(); f.stopped = True
+                f.connections.clear(); f.outcomes = ['active', 'refused']
+                with f.seams(), mock.patch.object(C.tray, 'peer_pid', side_effect=OSError(errno.ENOTCONN, 'private')), \
+                        mock.patch.object(C, 'incoming_peer_uid', side_effect=values):
+                    with self.assertRaises(RuntimeError) as raised:
+                        C.cleanup_incoming_endpoint(f.app, 101, f.birth(101), 202, f.birth(202), lease, f.facts)
+                self.assertIs(raised.exception, f.first_active[0]); self.assertEqual(f.cleanup_calls, [])
+                self.assertEqual(len(f.connections), 1); self.assertNotIn('private', json.dumps(f.facts))
+
+    def test_closed_initial_peer_full_lease_and_terminal_birth_guard_every_read(self):
+        for step in ('first-uid', 'second-pid', 'second-uid', 'close'):
+            for resource in ('directory', 'socket', 'marker', 'markerBytes', 'birth', 'missing'):
+                with self.subTest(step=step, resource=resource):
+                    f = IncomingSettlementFixture(self.f.app); lease = f.capture(); f.stopped = True
+                    f.connections.clear(); f.outcomes = ['active', 'refused']; pid_reads = 0; uid_reads = 0
+                    def mutate():
+                        if resource == 'birth': f.birth_failure = RuntimeError('private reused birth')
+                        elif resource == 'markerBytes': f.snapshot_base[resource] = b'private replacement'
+                        elif resource == 'missing': f.snapshot_base.update(socket=None, marker=None, markerBytes=None)
+                        else:
+                            value = f.snapshot_base[resource]; f.snapshot_base[resource] = (value[0], value[1]+1, *value[2:])
+                    def peer(connection):
+                        nonlocal pid_reads
+                        pid_reads += 1
+                        if step == 'second-pid' and pid_reads == 2: mutate()
+                        raise OSError(errno.ENOTCONN, 'private')
+                    def uid(connection):
+                        nonlocal uid_reads
+                        uid_reads += 1
+                        if (step == 'first-uid' and uid_reads == 1) or (step == 'second-uid' and uid_reads == 2): mutate()
+                        if step == 'close' and uid_reads == 2:
+                            original_close = connection.close
+                            def close():
+                                original_close(); mutate()
+                            connection.close = close
+                        return f.uid
+                    with f.seams(), mock.patch.object(C.tray, 'peer_pid', side_effect=peer), \
+                            mock.patch.object(C, 'incoming_peer_uid', side_effect=uid):
+                        with self.assertRaises(RuntimeError) as raised:
+                            C.cleanup_incoming_endpoint(f.app, 101, f.birth(101), 202, f.birth(202), lease, f.facts)
+                    self.assertIs(raised.exception, f.first_active[0]); self.assertEqual(f.cleanup_calls, [])
+                    self.assertEqual(len(f.connections), 1); self.assertTrue(f.connections[0].closed)
+
+    def test_closed_initial_peer_close_error_is_fatal_original_active_and_no_retry(self):
+        f = IncomingSettlementFixture(self.f.app); lease = f.capture(); f.stopped = True
+        f.connections.clear(); f.outcomes = ['active', 'refused']
+        def peer(connection): raise OSError(errno.ENOTCONN, 'private')
+        def uid(connection):
+            def close():
+                connection.closed = True
+                raise OSError(errno.EIO, 'private close failure')
+            connection.close = close
+            return f.uid
+        with f.seams(), mock.patch.object(C.tray, 'peer_pid', side_effect=peer), \
+                mock.patch.object(C, 'incoming_peer_uid', side_effect=uid):
+            with self.assertRaises(RuntimeError) as raised:
+                C.cleanup_incoming_endpoint(f.app, 101, f.birth(101), 202, f.birth(202), lease, f.facts)
+        self.assertIs(raised.exception, f.first_active[0]); self.assertEqual(f.cleanup_calls, [])
+        self.assertEqual(len(f.connections), 1); self.assertTrue(f.connections[0].closed)
+
+    def test_closed_initial_peer_deadline_remains_fatal_original_active(self):
+        for step in ('first-uid', 'second-pid', 'second-uid'):
+            with self.subTest(step=step):
+                f = IncomingSettlementFixture(self.f.app); lease = f.capture(); f.stopped = True
+                f.connections.clear(); f.outcomes = ['active', 'refused']; pid_reads = 0; uid_reads = 0
+                def peer(connection):
+                    nonlocal pid_reads
+                    pid_reads += 1
+                    if step == 'second-pid' and pid_reads == 2: f.clock = 6.0
+                    raise OSError(errno.ENOTCONN, 'private')
+                def uid(connection):
+                    nonlocal uid_reads
+                    uid_reads += 1
+                    if (step == 'first-uid' and uid_reads == 1) or (step == 'second-uid' and uid_reads == 2): f.clock = 6.0
+                    return f.uid
+                original_errors = []
+                with f.seams(), mock.patch.object(C.tray, 'peer_pid', side_effect=peer), \
+                        mock.patch.object(C, 'incoming_peer_uid', side_effect=uid):
+                    bounded_probe = C.incoming_endpoint_inactive
+                    def record_original(*arguments):
+                        try: return bounded_probe(*arguments)
+                        except C.IncomingSettlementDeadline as error:
+                            original_errors.append(error.__cause__)
+                            raise
+                    with mock.patch.object(C, 'incoming_endpoint_inactive', side_effect=record_original), self.assertRaises(RuntimeError) as raised:
+                        C.cleanup_incoming_endpoint(f.app, 101, f.birth(101), 202, f.birth(202), lease, f.facts)
+                self.assertIs(raised.exception, original_errors[0]); self.assertEqual(f.cleanup_calls, [])
+                self.assertEqual(raised.exception.args, ('A Mixel IPC endpoint is already active; refusing tray fixture',))
+                self.assertEqual(len(f.connections), 1)
+
+    def test_closed_initial_peer_later_unknown_peer_or_error_never_recovers(self):
+        for outcome in ('foreign', 'foreign-uid', 'timeout', 'ambiguous'):
+            f = IncomingSettlementFixture(self.f.app); lease = f.capture(); f.stopped = True
+            f.connections.clear(); f.outcomes = ['active', outcome, 'refused']; reads = 0
+            original_peer = C.tray.peer_pid
+            def peer(connection):
+                nonlocal reads
+                reads += 1
+                if reads <= 2: raise OSError(errno.ENOTCONN, 'private')
+                return original_peer(connection)
+            with self.subTest(outcome=outcome), f.seams(), mock.patch.object(C.tray, 'peer_pid', side_effect=peer):
+                with self.assertRaises(RuntimeError) as raised:
+                    C.cleanup_incoming_endpoint(f.app, 101, f.birth(101), 202, f.birth(202), lease, f.facts)
+            self.assertIs(raised.exception, f.first_active[0]); self.assertEqual(f.cleanup_calls, [])
+            self.assertEqual(len(f.connections), 2)
+
+    def test_closed_initial_peer_fresh_monotonic_missing_still_uses_original_cleanup(self):
+        f = IncomingSettlementFixture(self.f.app); lease = f.capture(); f.stopped = True
+        f.connections.clear(); f.outcomes = ['active', 'missing']
+        f.after_initial = lambda: f.snapshot_base.update(socket=None, marker=None, markerBytes=None)
+        with f.seams(), mock.patch.object(C.tray, 'peer_pid', side_effect=OSError(errno.ENOTCONN, 'private')):
+            C.cleanup_incoming_endpoint(f.app, 101, f.birth(101), 202, f.birth(202), lease, f.facts)
+        self.assertEqual(len(f.cleanup_calls), 1)
+        self.assertEqual((f.facts['incomingEndpointSettlement']['state'], f.facts['incomingEndpointSettlement']['attempts']), ('settled', 1))
+        self.assertTrue(lease['missing']['socket']); self.assertTrue(lease['missing']['marker'])
+        self.assertTrue(all(c.closed for c in f.connections))
+
+    def test_closed_initial_peer_persistent_active_or_final_cleanup_refusal_preserves_original(self):
+        for final_error in (None, RuntimeError('private final cleanup')):
+            f = IncomingSettlementFixture(self.f.app); lease = f.capture(); f.stopped = True
+            f.connections.clear(); f.outcomes = ['active', 'refused'] if final_error else ['active']
+            f.cleanup_error = final_error; reads = 0; original_peer = C.tray.peer_pid
+            def peer(connection):
+                nonlocal reads
+                reads += 1
+                if reads <= 2: raise OSError(errno.ENOTCONN, 'private')
+                return original_peer(connection)
+            with self.subTest(final_error=bool(final_error)), f.seams(), mock.patch.object(C.tray, 'peer_pid', side_effect=peer):
+                with self.assertRaises(RuntimeError) as raised:
+                    C.cleanup_incoming_endpoint(f.app, 101, f.birth(101), 202, f.birth(202), lease, f.facts)
+            self.assertIs(raised.exception, f.first_active[0])
+            self.assertEqual(len(f.cleanup_calls), 1 if final_error else 0)
+            self.assertEqual(f.facts['incomingEndpointSettlement']['failureCode'], 'cleanup-refused' if final_error else 'active-timeout')
+            self.assertLessEqual(f.facts['incomingEndpointSettlement']['attempts'], 50)
+            self.assertLessEqual(f.clock, 5.01)
+
+    def test_exact_historical_caller_inverse_preserves_original_first_notconnected_failure(self):
+        source = HELPER.read_text(encoding='utf-8')
+        start = source.index('                phase("peer-pid-first")\n                try:\n')
+        end = source.index('                attribution["peerPidComparison"] = incoming_initial_identity_comparison(first_pid,', start)
+        source = source[:start] + '                phase("peer-pid-first")\n                first_pid = incoming_settlement_call(deadline, tray.peer_pid, self.connection)\n' + source[end:]
+        source = source.replace('            self.closed_peer_qualified = False\n', '', 1)
+        start = source.index('        def __exit__(self, *arguments):\n', source.index('def incoming_endpoint_inactive('))
+        end = source.index('        def settimeout(self, value):\n', start)
+        original_exit = '        def __exit__(self, *arguments):\n            self.connection.close()\n            try:\n                phase("post-close-lease-guard")\n                guard()\n            except BaseException as error:\n                remember(error)\n\n'
+        source = source[:start] + original_exit + source[end:]
+        source = source.replace('                except (ConnectionRefusedError, FileNotFoundError):\n                    inactive = True\n', '                except ConnectionRefusedError:\n                    inactive = True\n', 1)
+        self.assertEqual(hashlib.sha256(source.encode()).hexdigest(), '8cb84580e1f330a6649a014f29f80769b0c5059081445c15bc07ccedbf319e9f')
+        node = next(node for node in ast.parse(source).body if isinstance(node, ast.FunctionDef) and node.name == 'incoming_endpoint_inactive')
+        namespace = {}; exec(compile(ast.Module(body=[node], type_ignores=[]), '<exact-historical-caller>', 'exec'), namespace)
+        historical = type(C.incoming_endpoint_inactive)(namespace['incoming_endpoint_inactive'].__code__, C.__dict__)
+        f = IncomingSettlementFixture(self.f.app); lease = f.capture(); f.stopped = True
+        f.connections.clear(); f.outcomes = ['active', 'refused']
+        with mock.patch.object(C, 'incoming_endpoint_inactive', historical), f.seams(), \
+                mock.patch.object(C.tray, 'peer_pid', side_effect=OSError(errno.ENOTCONN, 'private historical')):
+            with self.assertRaises(RuntimeError) as raised:
+                C.cleanup_incoming_endpoint(f.app, 101, f.birth(101), 202, f.birth(202), lease, f.facts)
+        self.assertIs(raised.exception, f.first_active[0]); self.assertEqual(f.cleanup_calls, [])
+        self.assertEqual(len(f.connections), 1)
+        self.assertEqual(f.facts['incomingInitialIdentityFailure'], {'subphase':'peer-pid-first',
+            'reason':'peer-pid-unavailable', 'errorType':'OSError', 'errno':errno.ENOTCONN,
+            'peerPidComparison':'unavailable', 'peerUidComparison':'not-read'})
+
+    @unittest.skipUnless(sys.platform == 'darwin', 'Owned Darwin socket API regression')
+    def test_native_owned_closed_connection_pid_notconnected_uid_stays_cached(self):
+        # These sockets are all created by this Python process in its disposable
+        # owned test directory. No app/other-process socket or IPC payload is used.
+        native_directory = tempfile.TemporaryDirectory(prefix='mxl-peer-', dir='/tmp')
+        directory = Path(native_directory.name).resolve(strict=True)
+        endpoint = directory / 'owned.sock'
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        accepted = None
+        try:
+            listener.settimeout(1); client.settimeout(1)
+            listener.bind(str(endpoint)); listener.listen(1)
+            client.connect(str(endpoint)); accepted, _ = listener.accept()
+            self.assertEqual(C.tray.peer_pid(client), os.getpid())
+            self.assertEqual(C.incoming_peer_uid(client), os.getuid())
+            accepted.close(); accepted = None; listener.close()
+            for _ in range(2):
+                with self.assertRaises(OSError) as raised: C.tray.peer_pid(client)
+                self.assertIs(type(raised.exception), OSError)
+                self.assertIs(type(raised.exception.errno), int)
+                self.assertEqual(raised.exception.errno, errno.ENOTCONN)
+                self.assertEqual(C.incoming_peer_uid(client), os.getuid())
+        finally:
+            if accepted is not None: accepted.close()
+            client.close(); listener.close()
+        attributes = endpoint.lstat()
+        self.assertTrue(stat.S_ISSOCK(attributes.st_mode)); self.assertEqual(attributes.st_uid, os.getuid())
+        endpoint.unlink(); native_directory.cleanup()
 
 
 FOUNDATION_STORAGE_DRIVER = r"""

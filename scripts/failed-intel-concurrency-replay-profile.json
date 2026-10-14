@@ -25,8 +25,8 @@
     "scripts/diagnose-macos-failed-app.py": "aad5c0590b8a9f8e16401c005419aebba0603676e735ce7cf45a9f77e5da6015",
     "scripts/observe-macos-incoming-cleanup.py": "7b0397d0630d1b61d81dd922f27f84eed66213b406a4c22fa63406d80e9dddbf",
     "scripts/test-observe-macos-incoming-cleanup.py": "3299ad55dcfd570f34b76cf35c9d463a1a652d4a8eb0e7df70d9dea76089e4ae",
-    "scripts/test-support-launch-macos-concurrency-controls.py": "4253c9718a916952695f542c88084275057fbf42b30b4b846693f38ad6a09a9d",
-    "scripts/test-support-launch-macos-concurrency.py": "8cb84580e1f330a6649a014f29f80769b0c5059081445c15bc07ccedbf319e9f"
+    "scripts/test-support-launch-macos-concurrency-controls.py": "2c24a399c6c4cc1efa29e4ebad405fc0a4046fa0d4e4e2ef4c1fc9113bd57a9a",
+    "scripts/test-support-launch-macos-concurrency.py": "9fb58a9c5333df460cc4a676dc1499ee08af4af78edca762d0e20c59f0d03fc0"
   },
   "schema": 1,
   "scope": "fixed-failed-intel-rosetta-concurrency-diagnostic-only"

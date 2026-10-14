@@ -653,16 +653,23 @@ def incoming_endpoint_inactive(deadline, lease):
             if (family, kind) != (socket.AF_UNIX, socket.SOCK_STREAM):
                 raise RuntimeError("Incoming cleanup socket scope refused")
             guard()
+            self.closed_peer_qualified = False
             self.connection = incoming_settlement_call(deadline, socket.socket, family, kind)
 
         def __enter__(self):
             return self
 
         def __exit__(self, *arguments):
-            self.connection.close()
+            try:
+                self.connection.close()
+            except BaseException as error:
+                phase("post-close-lease-guard")
+                remember(error)
             try:
                 phase("post-close-lease-guard")
                 guard()
+                if self.closed_peer_qualified and any(lease["missing"].values()):
+                    raise RuntimeError("Incoming cleanup disconnected peer resource missing")
             except BaseException as error:
                 remember(error)
 
@@ -681,7 +688,53 @@ def incoming_endpoint_inactive(deadline, lease):
                 phase("post-connect-lease-guard")
                 guard()
                 phase("peer-pid-first")
-                first_pid = incoming_settlement_call(deadline, tray.peer_pid, self.connection)
+                try:
+                    first_pid = incoming_settlement_call(deadline, tray.peer_pid, self.connection)
+                except OSError as first_error:
+                    # Darwin retains cached credentials on a connected client
+                    # after its peer closes, but LOCAL_PEERPID then raises
+                    # ENOTCONN. This permits only a separate bounded probe;
+                    # neither this connection nor its cached UID is inactivity.
+                    if type(first_error) is not OSError or incoming_initial_identity_errno(first_error) != errno.ENOTCONN:
+                        raise
+                    attribution["peerPidComparison"] = "unavailable"
+
+                    def closed_peer_guard():
+                        phase("post-peer-lease-guard")
+                        guard()
+                        if any(lease["missing"].values()):
+                            raise RuntimeError("Incoming cleanup disconnected peer resource missing")
+
+                    closed_peer_guard()
+                    phase("peer-uid-first")
+                    closed_uid = incoming_settlement_call(deadline, incoming_peer_uid, self.connection)
+                    attribution["peerUidComparison"] = incoming_initial_identity_comparison(closed_uid, lease["uid"])
+                    if type(closed_uid) is not int or closed_uid != lease["uid"]:
+                        phase("peer-uid-comparison", "peer-uid-mismatch" if type(closed_uid) is int else "peer-uid-unavailable")
+                        raise RuntimeError("Incoming cleanup disconnected peer UID refused")
+                    closed_peer_guard()
+                    phase("peer-pid-recheck")
+                    try:
+                        observed_pid = incoming_settlement_call(deadline, tray.peer_pid, self.connection)
+                    except OSError as second_error:
+                        if type(second_error) is not OSError or incoming_initial_identity_errno(second_error) != errno.ENOTCONN:
+                            raise
+                    else:
+                        attribution["peerPidComparison"] = incoming_initial_identity_comparison(observed_pid, lease["serverPid"], pid=True)
+                        phase("peer-pid-recheck", "peer-pid-changed")
+                        raise RuntimeError("Incoming cleanup disconnected peer PID became available")
+                    closed_peer_guard()
+                    phase("peer-uid-recheck")
+                    observed_uid = incoming_settlement_call(deadline, incoming_peer_uid, self.connection)
+                    attribution["peerUidComparison"] = incoming_initial_identity_comparison(observed_uid, lease["uid"])
+                    if type(observed_uid) is not int or observed_uid != closed_uid:
+                        phase("peer-uid-recheck", "peer-uid-changed")
+                        raise RuntimeError("Incoming cleanup disconnected peer UID changed")
+                    closed_peer_guard()
+                    # Return the actual successful connect to the frozen
+                    # helper, which still creates its original active error.
+                    self.closed_peer_qualified = True
+                    return result
                 attribution["peerPidComparison"] = incoming_initial_identity_comparison(first_pid, lease["serverPid"], pid=True)
                 phase("peer-uid-first")
                 first_uid = incoming_settlement_call(deadline, incoming_peer_uid, self.connection)
@@ -809,7 +862,7 @@ def cleanup_incoming_endpoint(app, server_pid, server_birth, gui_pid, birth, lea
                 incoming_settlement_call(deadline, connection.settimeout, min(INCOMING_SETTLEMENT_CONNECT_SECONDS, remaining))
                 try:
                     incoming_settlement_call(deadline, connection.connect, str(unix.IPC_PATH))
-                except ConnectionRefusedError:
+                except (ConnectionRefusedError, FileNotFoundError):
                     inactive = True
                 if not inactive:
                     stage = "identity-refused"
