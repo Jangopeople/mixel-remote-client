@@ -99,7 +99,7 @@ def portable_fixture(fixture, launch, output):
     fixture=fixture.replace(block(fixture,'pub mod log'), '')
     fixture=fixture.replace(block(fixture,'mod ipc'), '')
     fixture=fixture.replace(block(fixture,'fn test_command()'), '')
-    for name in ('fn phase_pause','fn release_phase','fn wait_phase','fn fixture_poll'):
+    for name in ('fn phase_pause','fn release_phase','fn wait_phase','fn fixture_poll','fn worker_gate_marker'):
         fixture=fixture.replace(block(fixture,name), '')
     kept=('typed_transport_only_known_absence_authorizes_spawn','latest_intent_and_ordinary_open_cannot_resurrect_superseded_or_erase_latest','queue_contract_and_cold_accepted_route_preserved','generation_ttl_discards_only_same_stale_intent')
     import re
@@ -322,7 +322,26 @@ fn test_command()->std::io::Result<std::process::Command> {
  let mut command=std::process::Command::new(std::env::current_exe()?);
  command.args(["--exact","owned_sleep_child","--nocapture"]).env("MIXEL_CHILD_SLEEP","1").env("MIXEL_EXPECT_ATTENDED",if EXPECT_ORDINARY.load(std::sync::atomic::Ordering::SeqCst){"0"}else{"1"});Ok(command)
 }
-#[test]fn owned_sleep_child(){if std::env::var_os("MIXEL_CHILD_SLEEP").is_some(){assert!(server::mixel_gui_launch::adopt_inherited().unwrap());assert_eq!(LEASE_CALLS.load(std::sync::atomic::Ordering::SeqCst),usize::from(std::env::var("MIXEL_EXPECT_ATTENDED").ok().as_deref()==Some("1")));std::thread::sleep(std::time::Duration::from_millis(700))}}
+fn worker_gate_marker(path:&std::path::Path,uid:u32)->std::io::Result<bool>{
+ use std::os::unix::fs::MetadataExt;
+ match std::fs::symlink_metadata(path){
+  Ok(meta) if meta.is_dir()&&meta.uid()==uid&&meta.mode()&0o7777==0o700=>Ok(true),
+  Ok(_)=>Err(std::io::ErrorKind::PermissionDenied.into()),
+  Err(error) if error.kind()==std::io::ErrorKind::NotFound=>Ok(false),
+  Err(error)=>Err(error),
+ }
+}
+#[test]fn owned_sleep_child(){if std::env::var_os("MIXEL_CHILD_SLEEP").is_some(){
+ assert!(server::mixel_gui_launch::adopt_inherited().unwrap());assert_eq!(LEASE_CALLS.load(std::sync::atomic::Ordering::SeqCst),usize::from(std::env::var("MIXEL_EXPECT_ATTENDED").ok().as_deref()==Some("1")));
+ if let Some(marker)=std::env::var_os("MIXEL_WORKER_CHILD_GATE"){
+  use std::os::unix::fs::{DirBuilderExt,MetadataExt};assert_eq!(marker,"1");
+  let root=std::path::PathBuf::from(std::env::var_os("MIXEL_TEST_ROOT").unwrap());let uid=std::fs::symlink_metadata(&root).unwrap().uid();let gates=root.join("worker-child-gates");assert!(worker_gate_marker(&gates,uid).unwrap());
+  std::fs::DirBuilder::new().mode(0o700).create(gates.join("adopted")).unwrap();
+  let deadline=std::time::Instant::now()+std::time::Duration::from_secs(2);
+  while !worker_gate_marker(&gates.join("release"),uid).unwrap(){assert!(std::time::Instant::now()<deadline,"owned worker child release marker timeout");std::thread::sleep(std::time::Duration::from_millis(5));}
+  assert!(std::time::Instant::now()<deadline,"owned worker child release marker arrived after deadline");
+ }else{std::thread::sleep(std::time::Duration::from_millis(700));}
+}}
 #[test]fn typed_transport_only_known_absence_authorizes_spawn() {
  for mode in ["not-found","refused"] {*MODE.lock().unwrap()=mode;assert_eq!(poll(send_mixel_gui_intent_(FIRST.into())),Handoff::NoReceiver)}
  for mode in ["permission","unknown","peer-not-found","peer-refused","send-failed","reply-error","missing","wrong-type","wrong-name","wrong-value","rejected","busy","expired","timeout"] {*MODE.lock().unwrap()=mode;let result=poll(send_mixel_gui_intent_(FIRST.into()));assert_eq!(result,Handoff::ExistingNeedsRetry);assert!(!may_spawn(result,false))}
@@ -393,10 +412,17 @@ fn test_command()->std::io::Result<std::process::Command> {
  *MODE.lock().unwrap()="accepted";assert!(!server::mixel_gui_launch::cold_route(FIRST.into()));assert!(!server::mixel_gui_launch::cold_route("invalid".into()));password_security::actual_parent_absent();
 }
 \n#[test]fn actual_worker_rapid_urls_and_empty_open_single_child_until_exit(){
+ use std::os::unix::fs::{DirBuilderExt,MetadataExt};
+ let root=std::path::PathBuf::from(std::env::var_os("MIXEL_TEST_ROOT").unwrap());let uid=std::fs::symlink_metadata(&root).unwrap().uid();let gates=root.join("worker-child-gates");std::fs::DirBuilder::new().mode(0o700).create(&gates).unwrap();
+ struct OwnedChildGate{path:Option<std::path::PathBuf>}
+ impl Drop for OwnedChildGate{fn drop(&mut self){std::env::remove_var("MIXEL_WORKER_CHILD_GATE");if let Some(path)=self.path.as_ref(){let _=std::fs::DirBuilder::new().mode(0o700).create(path.join("release"));}}}
+ let mut gate=OwnedChildGate{path:Some(gates.clone())};std::env::set_var("MIXEL_WORKER_CHILD_GATE","1");
  *MODE.lock().unwrap()="not-found";*CHILD_READY.lock().unwrap()=false;
  server::mixel_gui_launch::submit(FIRST.into());server::mixel_gui_launch::submit(String::new());server::mixel_gui_launch::submit(SECOND.into());
  let deadline=std::time::Instant::now()+std::time::Duration::from_secs(2);
  while *SPAWNS.lock().unwrap()==0 {assert!(std::time::Instant::now()<deadline);std::thread::sleep(std::time::Duration::from_millis(10));}
+ while !worker_gate_marker(&gates.join("adopted"),uid).unwrap(){assert!(std::time::Instant::now()<deadline,"owned worker child did not adopt within original case budget");std::thread::sleep(std::time::Duration::from_millis(5));}
+ assert!(std::time::Instant::now()<deadline,"owned worker child adopted after original case budget");
  std::thread::sleep(std::time::Duration::from_millis(100));assert_eq!(*SPAWNS.lock().unwrap(),1);
  *MODE.lock().unwrap()="panic-after-spawn";
  while !PANICKED.load(std::sync::atomic::Ordering::SeqCst){assert!(std::time::Instant::now()<deadline);std::thread::sleep(std::time::Duration::from_millis(5));}
@@ -404,7 +430,16 @@ fn test_command()->std::io::Result<std::process::Command> {
  assert_eq!(server::mixel_gui_launch::reservation::Reservation::acquire(std::path::Path::new(&std::env::var_os("MIXEL_TEST_ROOT").unwrap())).err().unwrap().kind(),std::io::ErrorKind::WouldBlock);
  *MODE.lock().unwrap()="accepted";*CHILD_READY.lock().unwrap()=true;server::mixel_gui_launch::submit(SECOND.into());std::thread::sleep(std::time::Duration::from_millis(100));
  assert_eq!(*SPAWNS.lock().unwrap(),1);assert_eq!(DELIVERED.lock().unwrap().as_slice(),[SECOND.to_owned()]);password_security::actual_parent_not_owner();assert_eq!(server::mixel_gui_launch::reservation::Reservation::acquire(std::path::Path::new(&std::env::var_os("MIXEL_TEST_ROOT").unwrap())).err().unwrap().kind(),std::io::ErrorKind::WouldBlock);
- std::thread::sleep(std::time::Duration::from_millis(900));let r=server::mixel_gui_launch::reservation::Reservation::acquire(std::path::Path::new(&std::env::var_os("MIXEL_TEST_ROOT").unwrap())).unwrap();assert!(r.current().unwrap());drop(r);password_security::actual_parent_absent();
+ std::fs::DirBuilder::new().mode(0o700).create(gates.join("release")).unwrap();std::env::remove_var("MIXEL_WORKER_CHILD_GATE");
+ let r=loop{
+  assert!(std::time::Instant::now()<deadline,"owned worker child reservation did not release within original case budget");
+  match server::mixel_gui_launch::reservation::Reservation::acquire(&root){
+   Ok(owned)=>{assert!(std::time::Instant::now()<deadline,"owned worker child reservation released after original case budget");break owned;},
+   Err(error) if error.kind()==std::io::ErrorKind::WouldBlock=>std::thread::sleep(std::time::Duration::from_millis(5)),
+   Err(error)=>panic!("owned worker child reservation acquisition failed: {error}"),
+  }
+ };assert!(r.current().unwrap());drop(r);password_security::actual_parent_absent();
+ for marker in ["adopted","release"]{std::fs::remove_dir(gates.join(marker)).unwrap();}std::fs::remove_dir(&gates).unwrap();gate.path=None;
  EXPECT_ORDINARY.store(true,std::sync::atomic::Ordering::SeqCst);*MODE.lock().unwrap()="not-found";*CHILD_READY.lock().unwrap()=false;let leases=LEASE_CALLS.load(std::sync::atomic::Ordering::SeqCst);
  server::mixel_gui_launch::submit(String::new());let deadline=std::time::Instant::now()+std::time::Duration::from_secs(2);while *SPAWNS.lock().unwrap()<2{assert!(std::time::Instant::now()<deadline);std::thread::sleep(std::time::Duration::from_millis(10));}
  assert_eq!(LEASE_CALLS.load(std::sync::atomic::Ordering::SeqCst),leases);*MODE.lock().unwrap()="accepted";*CHILD_READY.lock().unwrap()=true;std::thread::sleep(std::time::Duration::from_millis(900));EXPECT_ORDINARY.store(false,std::sync::atomic::Ordering::SeqCst);
@@ -432,6 +467,8 @@ fn test_command()->std::io::Result<std::process::Command> {
 }
 #[test]fn inherited_child_gate(){
  if let Some(base)=std::env::var_os("MIXEL_INHERITED_CHILD_ROOT") {
+  use std::os::unix::fs::MetadataExt;
+  let root=std::path::Path::new(&base);let uid=std::fs::symlink_metadata(root).unwrap().uid();assert!(worker_gate_marker(root,uid).unwrap());
   let initial=std::env::var_os(server::mixel_gui_launch::reservation::INHERITED_FD).unwrap();
   let attended=std::env::var_os(server::mixel_gui_launch::reservation::ATTENDED_START).is_some();
   let old=LEASE_CALLS.load(std::sync::atomic::Ordering::SeqCst);
@@ -445,7 +482,9 @@ fn test_command()->std::io::Result<std::process::Command> {
   std::env::set_var(server::mixel_gui_launch::reservation::INHERITED_FD,initial);assert!(server::mixel_gui_launch::adopt_inherited().is_err());
   assert_eq!(server::mixel_gui_launch::reservation::Reservation::acquire(std::path::Path::new(&base)).err().unwrap().kind(),std::io::ErrorKind::WouldBlock);
   std::fs::write(std::path::Path::new(&base).join("adopted"),b"ready").unwrap();
-  std::thread::sleep(std::time::Duration::from_millis(800));
+  let deadline=std::time::Instant::now()+std::time::Duration::from_secs(3);
+  while !worker_gate_marker(&root.join("release"),uid).unwrap(){assert!(std::time::Instant::now()<deadline,"owned inherited child release marker timeout");std::thread::sleep(std::time::Duration::from_millis(5));}
+  assert!(std::time::Instant::now()<deadline,"owned inherited child release marker arrived after deadline");
  }
 }
 #[test]fn spawning_parent_gate(){
@@ -460,12 +499,27 @@ fn test_command()->std::io::Result<std::process::Command> {
 }
 #[test]fn inherited_description_survives_parent_exit_and_is_released_after_child_exit(){
  use server::mixel_gui_launch::reservation::Reservation;
- let base=std::path::PathBuf::from(std::env::var_os("MIXEL_TEST_ROOT").unwrap()).join("inherited-gate");std::fs::create_dir(&base).unwrap();
+ use std::os::unix::fs::DirBuilderExt;
+ let base=std::path::PathBuf::from(std::env::var_os("MIXEL_TEST_ROOT").unwrap()).join("inherited-gate");std::fs::DirBuilder::new().mode(0o700).create(&base).unwrap();
+ struct OwnedInheritedGate{path:Option<std::path::PathBuf>}
+ impl Drop for OwnedInheritedGate{fn drop(&mut self){if let Some(path)=self.path.as_ref(){let _=std::fs::DirBuilder::new().mode(0o700).create(path.join("release"));}}}
+ let mut gate=OwnedInheritedGate{path:Some(base.clone())};
  let mut parent=std::process::Command::new(std::env::current_exe().unwrap()).args(["--exact","spawning_parent_gate","--nocapture"]).env("MIXEL_SPAWNING_PARENT_ROOT",&base).spawn().unwrap();
  let deadline=std::time::Instant::now()+std::time::Duration::from_secs(3);
  while !base.join("adopted").exists(){assert!(std::time::Instant::now()<deadline);std::thread::sleep(std::time::Duration::from_millis(5));}
  assert!(parent.wait().unwrap().success());assert_eq!(Reservation::acquire(&base).err().unwrap().kind(),std::io::ErrorKind::WouldBlock);
- std::thread::sleep(std::time::Duration::from_millis(900));let owned=Reservation::acquire(&base).unwrap();assert!(owned.current().unwrap());drop(owned);
+ assert!(std::time::Instant::now()<deadline,"inherited child held proof completed after original case budget");
+ std::fs::DirBuilder::new().mode(0o700).create(base.join("release")).unwrap();
+ let owned=loop{
+  assert!(std::time::Instant::now()<deadline,"inherited child reservation did not release within original case budget");
+  match Reservation::acquire(&base){
+   Ok(owned)=>{assert!(std::time::Instant::now()<deadline,"inherited child reservation released after original case budget");break owned;},
+   Err(error) if error.kind()==std::io::ErrorKind::WouldBlock=>std::thread::sleep(std::time::Duration::from_millis(5)),
+   Err(error)=>panic!("inherited child reservation acquisition failed: {error}"),
+  }
+ };
+ assert!(owned.current().unwrap());drop(owned);
+ std::fs::remove_dir(base.join("release")).unwrap();gate.path=None;
 }
 #[test]fn malformed_inherited_markers_fail_closed_without_closing_foreign_fd(){
  use server::mixel_gui_launch::reservation::{INHERITED_FD,ATTENDED_START};
