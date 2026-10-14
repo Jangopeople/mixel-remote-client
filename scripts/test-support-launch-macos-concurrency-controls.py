@@ -7,6 +7,7 @@ controls use explicit in-memory AppKit/kernel/socket seams and disposable files.
 import argparse
 import ast
 import contextlib
+import errno
 import hashlib
 import importlib.util
 import json
@@ -1019,6 +1020,122 @@ class ConcurrencyControls(unittest.TestCase):
         self.assertIs(original.__globals__['socket'], globals_socket)
         self.assertTrue(f.connections[0].closed)
         self.assertTrue(all(value <= 0.2 for value in f.connections[0].timeouts))
+
+
+    def test_initial_identity_attribution_covers_all_nine_subphases_without_recovery(self):
+        cases = (
+            ('post-connect-lease-guard', 'guard', 3, 'lease-guard-refused'),
+            ('peer-pid-first', 'pid-error', None, 'peer-pid-unavailable'),
+            ('peer-uid-first', 'uid-error', None, 'peer-uid-unavailable'),
+            ('peer-pid-comparison', 'pid-foreign', None, 'peer-pid-mismatch'),
+            ('peer-uid-comparison', 'uid-foreign', None, 'peer-uid-mismatch'),
+            ('peer-pid-recheck', 'pid-changed', None, 'peer-pid-changed'),
+            ('peer-uid-recheck', 'uid-changed', None, 'peer-uid-changed'),
+            ('post-peer-lease-guard', 'guard', 4, 'lease-guard-refused'),
+            ('post-close-lease-guard', 'guard', 5, 'lease-guard-refused'))
+        for subphase, kind, guard_at, reason in cases:
+            with self.subTest(subphase=subphase):
+                f = IncomingSettlementFixture(self.f.app); lease = f.capture()
+                f.stopped = True; f.connections.clear(); f.outcomes = ['active', 'refused']
+                original_guard = C.incoming_cleanup_lease_guard; guard_calls = 0
+                def guard(*args, **kwargs):
+                    nonlocal guard_calls
+                    guard_calls += 1
+                    if guard_calls == guard_at: raise RuntimeError('private guard detail')
+                    return original_guard(*args, **kwargs)
+                with f.seams(), contextlib.ExitStack() as stack:
+                    if kind == 'guard': stack.enter_context(mock.patch.object(C, 'incoming_cleanup_lease_guard', guard))
+                    elif kind.startswith('pid'):
+                        values = {'pid-error': [OSError(errno.ENOTCONN, 'private API detail')],
+                                  'pid-foreign': [999], 'pid-changed': [101, 999]}[kind]
+                        stack.enter_context(mock.patch.object(C.tray, 'peer_pid', side_effect=values))
+                    else:
+                        values = {'uid-error': [OSError(errno.ENOTCONN, 'private API detail')],
+                                  'uid-foreign': [f.uid + 1], 'uid-changed': [f.uid, f.uid + 1]}[kind]
+                        stack.enter_context(mock.patch.object(C, 'incoming_peer_uid', side_effect=values))
+                    with self.assertRaises(RuntimeError) as raised:
+                        C.cleanup_incoming_endpoint(f.app, 101, f.birth(101), 202, f.birth(202), lease, f.facts)
+                self.assertIs(raised.exception, f.first_active[0])
+                self.assertEqual(raised.exception.args, ('A Mixel IPC endpoint is already active; refusing tray fixture',))
+                identity = f.facts['incomingInitialIdentityFailure']
+                self.assertEqual((identity['subphase'], identity['reason']), (subphase, reason))
+                self.assertEqual(f.facts['incomingEndpointSettlement']['attempts'], 0)
+                self.assertEqual(len(f.connections), 1); self.assertTrue(f.connections[0].closed)
+                self.assertEqual(f.cleanup_calls, []); self.assertNotIn('private', json.dumps(f.facts))
+
+    def test_initial_peer_pid_closed_nonpositive_and_invalid_api_results_stay_fatal(self):
+        for value, comparison, reason in ((0, 'nonpositive', 'peer-pid-nonpositive'),
+                (True, 'unavailable', 'peer-pid-unavailable'), (999, 'foreign', 'peer-pid-mismatch')):
+            with self.subTest(value=value):
+                f = IncomingSettlementFixture(self.f.app); lease = f.capture(); f.stopped = True
+                f.connections.clear(); f.outcomes = ['active', 'refused']
+                with f.seams(), mock.patch.object(C.tray, 'peer_pid', return_value=value):
+                    with self.assertRaises(RuntimeError) as raised:
+                        C.cleanup_incoming_endpoint(f.app, 101, f.birth(101), 202, f.birth(202), lease, f.facts)
+                self.assertIs(raised.exception, f.first_active[0]); self.assertEqual(f.cleanup_calls, [])
+                identity = f.facts['incomingInitialIdentityFailure']
+                self.assertEqual((identity['peerPidComparison'], identity['reason']), (comparison, reason))
+        f = IncomingSettlementFixture(self.f.app); lease = f.capture(); f.stopped = True
+        original_peer = C.tray.peer_pid
+        def zero_peer(connection):
+            with mock.patch.object(connection, 'getsockopt', return_value=struct.pack('i', 0)):
+                return original_peer(connection)
+        with f.seams(), mock.patch.object(C.tray, 'peer_pid', side_effect=zero_peer):
+            with self.assertRaises(RuntimeError) as raised:
+                C.cleanup_incoming_endpoint(f.app, 101, f.birth(101), 202, f.birth(202), lease, f.facts)
+        self.assertIs(raised.exception, f.first_active[0])
+        self.assertEqual(f.facts['incomingInitialIdentityFailure']['subphase'], 'peer-pid-first')
+        self.assertEqual(f.facts['incomingInitialIdentityFailure']['peerUidComparison'], 'not-read')
+
+    def test_initial_diagnostic_errno_or_ctypes_metadata_failure_preserves_original_error(self):
+        class PrivateOSError(OSError):
+            @property
+            def errno(self): raise ValueError('private metadata')
+            def __str__(self): raise AssertionError('Exception text read')
+        f = IncomingSettlementFixture(self.f.app); lease = f.capture(); f.stopped = True
+        f.connections.clear(); f.outcomes = ['active', 'refused']
+        with f.seams(), mock.patch.object(C.tray, 'peer_pid', side_effect=PrivateOSError()):
+            with self.assertRaises(RuntimeError) as raised:
+                C.cleanup_incoming_endpoint(f.app, 101, f.birth(101), 202, f.birth(202), lease, f.facts)
+        self.assertIs(raised.exception, f.first_active[0])
+        self.assertIsNone(f.facts['incomingInitialIdentityFailure']['errno'])
+        self.assertEqual(f.facts['incomingInitialIdentityFailure']['errorType'], 'OSError')
+        original_uid = C.incoming_peer_uid
+        function = mock.Mock(return_value=-1)
+        with mock.patch.object(C.ctypes, 'CDLL', return_value=SimpleNamespace(getpeereid=function)), \
+                mock.patch.object(C.ctypes, 'get_errno', side_effect=ValueError('private errno metadata')):
+            with self.assertRaises(RuntimeError) as uid_error:
+                original_uid(SimpleNamespace(fileno=lambda: 7))
+        self.assertEqual(uid_error.exception.args, ('Incoming cleanup peer credentials unavailable',))
+        self.assertIsNone(C.incoming_initial_identity_errno(uid_error.exception))
+        self.assertEqual(function.call_count, 1)
+
+    def test_initial_identity_extraction_is_closed_and_cannot_export_raw_metadata(self):
+        valid = {'subphase': 'peer-pid-first', 'reason': 'peer-pid-unavailable', 'errorType': 'OSError',
+            'errno': errno.ENOTCONN, 'peerPidComparison': 'unavailable', 'peerUidComparison': 'not-read'}
+        error = RuntimeError('private original text'); error._mixel_incoming_initial_identity_failure = valid
+        self.assertEqual(C.incoming_initial_identity_failure_fact(error), valid)
+        for key, value in (('subphase', 'private-stage'), ('reason', 'private-token'), ('errorType', []),
+                ('errno', True), ('errno', 0x7fffffff), ('peerPidComparison', 101), ('peerUidComparison', '501'),
+                ('rawPath', '/private/secret')):
+            with self.subTest(key=key):
+                error._mixel_incoming_initial_identity_failure = {**valid, key: value}
+                self.assertIsNone(C.incoming_initial_identity_failure_fact(error))
+        class DictTrap(dict):
+            def __iter__(self): raise AssertionError('private dict iteration')
+        error._mixel_incoming_initial_identity_failure = DictTrap(valid)
+        self.assertIsNone(C.incoming_initial_identity_failure_fact(error))
+        self.assertIsNone(C.incoming_initial_identity_failure_fact(SimpleNamespace()))
+        self.assertIsNone(C.incoming_initial_identity_errno(OSError(0x7fffffff, 'private token')))
+
+    def test_initial_attribution_is_absent_on_success_or_later_retry_refusal(self):
+        for outcomes in (['refused'], ['active', 'refused'], ['active', 'foreign', 'refused']):
+            f = IncomingSettlementFixture(self.f.app); lease = f.capture(); f.outcomes = list(outcomes)
+            if 'foreign' in outcomes:
+                with self.assertRaises(RuntimeError) as raised: f.cleanup(lease)
+                self.assertIs(raised.exception, f.first_active[0]); self.assertEqual(f.cleanup_calls, [])
+            else: f.cleanup(lease)
+            self.assertNotIn('incomingInitialIdentityFailure', f.facts)
 
 
 FOUNDATION_STORAGE_DRIVER = r"""

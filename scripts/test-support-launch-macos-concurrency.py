@@ -9,6 +9,7 @@ customer consent, TCC permissions, remote desktop, or a physical Mac session.
 """
 import argparse
 import ctypes
+import errno
 from datetime import datetime, timezone
 import hashlib
 import importlib.util
@@ -37,6 +38,22 @@ INCOMING_SETTLEMENT_SECONDS = 5.0
 INCOMING_SETTLEMENT_SAMPLES = 50
 INCOMING_SETTLEMENT_CONNECT_SECONDS = 0.2
 INCOMING_SETTLEMENT_POLL_SECONDS = 0.1
+INCOMING_INITIAL_IDENTITY_SUBPHASES = frozenset((
+    "post-connect-lease-guard", "peer-pid-first", "peer-uid-first",
+    "peer-pid-comparison", "peer-uid-comparison", "peer-pid-recheck",
+    "peer-uid-recheck", "post-peer-lease-guard", "post-close-lease-guard"))
+INCOMING_INITIAL_IDENTITY_REASONS = frozenset((
+    "unknown-error", "lease-guard-refused", "peer-pid-nonpositive",
+    "peer-pid-unavailable", "peer-uid-unavailable", "peer-pid-mismatch",
+    "peer-uid-mismatch", "peer-pid-changed", "peer-uid-changed", "deadline"))
+INCOMING_INITIAL_IDENTITY_ERROR_TYPES = frozenset(("OSError", "ValueError", "SubprocessError", "RuntimeError"))
+INCOMING_INITIAL_PID_COMPARISONS = frozenset(("not-read", "expected", "foreign", "nonpositive", "unavailable"))
+INCOMING_INITIAL_UID_COMPARISONS = frozenset(("not-read", "expected", "foreign", "unavailable"))
+INCOMING_INITIAL_IDENTITY_ERRNOS = frozenset((
+    errno.ENOTCONN, errno.ESRCH, errno.ENOENT, errno.EPERM, errno.EACCES,
+    errno.EBADF, errno.EINVAL, errno.EINTR, errno.EAGAIN, errno.EIO,
+    errno.ECONNRESET, errno.ECONNREFUSED, errno.ETIMEDOUT, errno.ENOTSOCK,
+    errno.ENOTSUP))
 ERRORS = (OSError, ValueError, RuntimeError, subprocess.SubprocessError)
 
 # Exact messages from the frozen endpoint/PID reader only; never serialize them.
@@ -345,7 +362,13 @@ def incoming_peer_uid(connection):
     uid, gid = ctypes.c_uint32(0xffffffff), ctypes.c_uint32(0xffffffff)
     ctypes.set_errno(0)
     if library.getpeereid(connection.fileno(), ctypes.byref(uid), ctypes.byref(gid)) != 0:
-        raise RuntimeError("Incoming cleanup peer credentials unavailable")
+        error = RuntimeError("Incoming cleanup peer credentials unavailable")
+        try:
+            number = ctypes.get_errno()
+        except BaseException:
+            number = None
+        error._mixel_incoming_errno = number if type(number) is int and number in INCOMING_INITIAL_IDENTITY_ERRNOS else None
+        raise error
     return uid.value
 
 
@@ -544,18 +567,83 @@ def capture_incoming_cleanup_lease(helper, app, server_pid, launch_time, server_
     return lease
 
 
+def incoming_initial_identity_errno(error):
+    # Only fixed numeric errno values are retained; exception text is never read.
+    try:
+        number = error.errno if isinstance(error, OSError) else (
+            error.__dict__.get("_mixel_incoming_errno") if type(error) is RuntimeError else None)
+    except BaseException:
+        return None
+    return number if type(number) is int and number in INCOMING_INITIAL_IDENTITY_ERRNOS else None
+
+
+def incoming_initial_identity_comparison(value, expected, pid=False):
+    if type(value) is not int:
+        return "unavailable"
+    if pid and value <= 0:
+        return "nonpositive"
+    return "expected" if value == expected else "foreign"
+
+
+def incoming_initial_identity_failure_fact(error):
+    # Validate the private attachment before copying it into public safe facts.
+    try:
+        if type(error) is not RuntimeError:
+            return None
+        value = error.__dict__.get("_mixel_incoming_initial_identity_failure")
+        keys = {"subphase", "reason", "errorType", "errno", "peerPidComparison", "peerUidComparison"}
+        if (type(value) is not dict or set(value) != keys
+                or type(value["subphase"]) is not str or value["subphase"] not in INCOMING_INITIAL_IDENTITY_SUBPHASES
+                or type(value["reason"]) is not str or value["reason"] not in INCOMING_INITIAL_IDENTITY_REASONS
+                or type(value["errorType"]) is not str or value["errorType"] not in INCOMING_INITIAL_IDENTITY_ERROR_TYPES
+                or (value["errno"] is not None and (type(value["errno"]) is not int or value["errno"] not in INCOMING_INITIAL_IDENTITY_ERRNOS))
+                or type(value["peerPidComparison"]) is not str or value["peerPidComparison"] not in INCOMING_INITIAL_PID_COMPARISONS
+                or type(value["peerUidComparison"]) is not str or value["peerUidComparison"] not in INCOMING_INITIAL_UID_COMPARISONS):
+            return None
+        return dict(value)
+    except BaseException:
+        return None
+
+
 def incoming_endpoint_inactive(deadline, lease):
     # Run identical frozen inactivity code with a private timeout-only socket
     # view. Neither frozen function bytes nor its module globals are mutated.
     function = tray.endpoint_inactive
     if type(function) is not types.FunctionType:
         raise RuntimeError("Frozen incoming inactivity helper changed")
-    sticky = {"code": "none"}
+    sticky = {"code": "none", "identity": None}
+    attribution = {"subphase": "post-connect-lease-guard", "reason": "unknown-error",
+                   "peerPidComparison": "not-read", "peerUidComparison": "not-read"}
+
+    def phase(subphase, reason="unknown-error"):
+        attribution["subphase"], attribution["reason"] = subphase, reason
 
     def remember(error):
         code = "active-timeout" if isinstance(error, IncomingSettlementDeadline) else "identity-refused"
-        if sticky["code"] != "identity-refused":
+        previous = sticky["code"]
+        if previous != "identity-refused":
             sticky["code"] = code
+        if sticky["identity"] is not None and (previous == "identity-refused" or code != "identity-refused"):
+            return
+        reason = "deadline" if isinstance(error, IncomingSettlementDeadline) else attribution["reason"]
+        pid_comparison = attribution["peerPidComparison"]
+        uid_comparison = attribution["peerUidComparison"]
+        subphase = attribution["subphase"]
+        if reason == "unknown-error":
+            if subphase in ("post-connect-lease-guard", "post-peer-lease-guard", "post-close-lease-guard"):
+                reason = "lease-guard-refused"
+            elif subphase in ("peer-pid-first", "peer-pid-recheck"):
+                # This is the sole frozen literal for a nonpositive LOCAL_PEERPID.
+                # No additional getsockopt call is made to classify the failure.
+                nonpositive = (type(error) is RuntimeError and len(error.args) == 1
+                    and type(error.args[0]) is str and error.args[0] == "Fixture IPC has no kernel process owner")
+                reason = "peer-pid-nonpositive" if nonpositive else "peer-pid-unavailable"
+                pid_comparison = "nonpositive" if nonpositive else "unavailable"
+            elif subphase in ("peer-uid-first", "peer-uid-recheck"):
+                reason, uid_comparison = "peer-uid-unavailable", "unavailable"
+        sticky["identity"] = {"subphase": subphase, "reason": reason,
+            "errorType": error_fact(error)["errorType"], "errno": incoming_initial_identity_errno(error),
+            "peerPidComparison": pid_comparison, "peerUidComparison": uid_comparison}
 
     def guard():
         return incoming_cleanup_lease_guard(lease["app"], lease["serverPid"], lease["serverBirth"], lease["guiPid"], lease["guiBirth"], lease, terminal=True, deadline=deadline)
@@ -573,6 +661,7 @@ def incoming_endpoint_inactive(deadline, lease):
         def __exit__(self, *arguments):
             self.connection.close()
             try:
+                phase("post-close-lease-guard")
                 guard()
             except BaseException as error:
                 remember(error)
@@ -589,14 +678,52 @@ def incoming_endpoint_inactive(deadline, lease):
             self.settimeout(INCOMING_SETTLEMENT_CONNECT_SECONDS)
             result = incoming_settlement_call(deadline, self.connection.connect, path)
             try:
+                phase("post-connect-lease-guard")
                 guard()
+                phase("peer-pid-first")
                 first_pid = incoming_settlement_call(deadline, tray.peer_pid, self.connection)
+                attribution["peerPidComparison"] = incoming_initial_identity_comparison(first_pid, lease["serverPid"], pid=True)
+                phase("peer-uid-first")
                 first_uid = incoming_settlement_call(deadline, incoming_peer_uid, self.connection)
-                if (type(first_pid) is not int or first_pid != lease["serverPid"]
-                        or type(first_uid) is not int or first_uid != lease["uid"]
-                        or incoming_settlement_call(deadline, tray.peer_pid, self.connection) != first_pid
-                        or incoming_settlement_call(deadline, incoming_peer_uid, self.connection) != first_uid):
+                attribution["peerUidComparison"] = incoming_initial_identity_comparison(first_uid, lease["uid"])
+
+                def pid_refused():
+                    phase("peer-pid-comparison")
+                    comparison = incoming_initial_identity_comparison(first_pid, lease["serverPid"], pid=True)
+                    attribution["peerPidComparison"] = comparison
+                    attribution["reason"] = ("peer-pid-nonpositive" if comparison == "nonpositive" else
+                        "peer-pid-unavailable" if comparison == "unavailable" else "peer-pid-mismatch")
+                    return type(first_pid) is not int or first_pid != lease["serverPid"]
+
+                def uid_refused():
+                    phase("peer-uid-comparison")
+                    comparison = incoming_initial_identity_comparison(first_uid, lease["uid"])
+                    attribution["peerUidComparison"] = comparison
+                    attribution["reason"] = "peer-uid-unavailable" if comparison == "unavailable" else "peer-uid-mismatch"
+                    return type(first_uid) is not int or first_uid != lease["uid"]
+
+                def pid_recheck_refused():
+                    phase("peer-pid-recheck")
+                    observed = incoming_settlement_call(deadline, tray.peer_pid, self.connection)
+                    refused = observed != first_pid
+                    attribution["peerPidComparison"] = incoming_initial_identity_comparison(observed, lease["serverPid"], pid=True)
+                    if refused:
+                        attribution["reason"] = "peer-pid-changed"
+                    return refused
+
+                def uid_recheck_refused():
+                    phase("peer-uid-recheck")
+                    observed = incoming_settlement_call(deadline, incoming_peer_uid, self.connection)
+                    refused = observed != first_uid
+                    attribution["peerUidComparison"] = incoming_initial_identity_comparison(observed, lease["uid"])
+                    if refused:
+                        attribution["reason"] = "peer-uid-changed"
+                    return refused
+
+                # Preserve the original condition's read and short-circuit order.
+                if pid_refused() or uid_refused() or pid_recheck_refused() or uid_recheck_refused():
                     raise RuntimeError("Incoming cleanup initial active peer identity refused")
+                phase("post-peer-lease-guard")
                 guard()
             except BaseException as error:
                 # Let identical frozen code create its exact active exception.
@@ -612,10 +739,12 @@ def incoming_endpoint_inactive(deadline, lease):
         original = error.__cause__ if isinstance(error, IncomingSettlementDeadline) else error
         if sticky["code"] != "none" and type(original) is RuntimeError:
             original._mixel_incoming_refusal_code = sticky["code"]
+            original._mixel_incoming_initial_identity_failure = dict(sticky["identity"])
         raise
     if sticky["code"] != "none":
         error = RuntimeError("Incoming cleanup initial identity refused")
         error._mixel_incoming_refusal_code = sticky["code"]
+        error._mixel_incoming_initial_identity_failure = dict(sticky["identity"])
         raise error
     return result
 
@@ -652,6 +781,9 @@ def cleanup_incoming_endpoint(app, server_pid, server_birth, gui_pid, birth, lea
             if endpoint_cleanup_fact(original)["reasonCode"] != "ipc-endpoint-active":
                 raise
             first_active = original
+            initial_failure = incoming_initial_identity_failure_fact(original)
+            if refusal in ("identity-refused", "active-timeout") and initial_failure is not None:
+                facts["incomingInitialIdentityFailure"] = initial_failure
             if refusal == "identity-refused":
                 raise original
             if refusal == "active-timeout":

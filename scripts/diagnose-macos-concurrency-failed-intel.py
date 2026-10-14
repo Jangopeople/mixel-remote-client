@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Fixed failed-producer Intel/Rosetta diagnostic; no customer qualification."""
 import argparse
+import errno
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -18,8 +19,8 @@ import types
 import zipfile
 
 sys.dont_write_bytecode = True
-PROFILE_HASH = '07259eea2c29ea25f2dd93eb9c46fee269450db2ae47ff5c8898f71e08dbd226'
-EXPECTED_PROFILE = {'artifactBytes': 30894055, 'artifactId': 11862454209, 'artifactSha256': '40d28fac26ad928ccfc6723cb3dbdec7134507258901a769f3d9daac221e0d1b', 'artifactTimes': {'created_at': '2026-10-14T01:22:52Z', 'expires_at': '2027-01-12T00:36:44Z', 'updated_at': '2026-10-14T01:22:52Z'}, 'failedJob': 115617863123, 'frozenHelpers': {'scripts/test-support-launch-linux.py': '90e343f7cddffb3f830c54ee129e7ae192c0d4b269bc336faab93fb5d95abe18', 'scripts/test-support-launch-macos-tray-controls.py': 'b06623ec893cdcf43b3b27670eadbe12f49d4491d012d8b88debe88fb4e6184d', 'scripts/test-support-launch-macos-tray.py': '80ebc3255a3898c9feb23c68e06fee28efb74109e5d30460b3ddb9e651ade9b4', 'scripts/test-support-launch-macos.py': '854bd6a7e34041d566c810cdd0fe3df238187198ea456381a725a18286968d65', 'scripts/verify-macos-bundle-minimum.py': 'fbd7652bdfaf26c86de97111668bd9726623880811367b99fb59a8190886dcdf', 'scripts/verify-macos-native-minimum.py': '7ecd3c71f2afc000f0d5d90dc470be03fbdf4c69e02ee7f1bdaa835464710c92'}, 'producerAttempt': 1, 'producerRun': 38491157973, 'producerSource': 'ca184ca219ceb1b087258e8f25d218eeba901abc', 'producerTree': '825974868c0ae0c632f8f739cf6dc729140c5400', 'reviewedSources': {'.github/workflows/diagnose-macos-failed-app.yml': '398579cbf8d089b9e193a78d7d867f94f9786dc219d0c1616ba263868bd100a0', 'scripts/diagnose-macos-failed-app.py': 'aad5c0590b8a9f8e16401c005419aebba0603676e735ce7cf45a9f77e5da6015', 'scripts/observe-macos-incoming-cleanup.py': '7b0397d0630d1b61d81dd922f27f84eed66213b406a4c22fa63406d80e9dddbf', 'scripts/test-observe-macos-incoming-cleanup.py': '3299ad55dcfd570f34b76cf35c9d463a1a652d4a8eb0e7df70d9dea76089e4ae', 'scripts/test-support-launch-macos-concurrency-controls.py': 'f4efcacdc5ad388d54e1a9cac6480940ae5580d88c332545b39b7029c02baa81', 'scripts/test-support-launch-macos-concurrency.py': '8b5c8c27f44ff88bb5bec63fd54fefe87c5d9889192f82131f1a08399d42dc51'}, 'schema': 1, 'scope': 'fixed-failed-intel-rosetta-concurrency-diagnostic-only'}
+PROFILE_HASH = '304fc3b8afdbaa48849775d72dd2aafc088982447ce6db6233de75fbc7ef27f6'
+EXPECTED_PROFILE = {'artifactBytes': 30894055, 'artifactId': 11862454209, 'artifactSha256': '40d28fac26ad928ccfc6723cb3dbdec7134507258901a769f3d9daac221e0d1b', 'artifactTimes': {'created_at': '2026-10-14T01:22:52Z', 'expires_at': '2027-01-12T00:36:44Z', 'updated_at': '2026-10-14T01:22:52Z'}, 'failedJob': 115617863123, 'frozenHelpers': {'scripts/test-support-launch-linux.py': '90e343f7cddffb3f830c54ee129e7ae192c0d4b269bc336faab93fb5d95abe18', 'scripts/test-support-launch-macos-tray-controls.py': 'b06623ec893cdcf43b3b27670eadbe12f49d4491d012d8b88debe88fb4e6184d', 'scripts/test-support-launch-macos-tray.py': '80ebc3255a3898c9feb23c68e06fee28efb74109e5d30460b3ddb9e651ade9b4', 'scripts/test-support-launch-macos.py': '854bd6a7e34041d566c810cdd0fe3df238187198ea456381a725a18286968d65', 'scripts/verify-macos-bundle-minimum.py': 'fbd7652bdfaf26c86de97111668bd9726623880811367b99fb59a8190886dcdf', 'scripts/verify-macos-native-minimum.py': '7ecd3c71f2afc000f0d5d90dc470be03fbdf4c69e02ee7f1bdaa835464710c92'}, 'producerAttempt': 1, 'producerRun': 38491157973, 'producerSource': 'ca184ca219ceb1b087258e8f25d218eeba901abc', 'producerTree': '825974868c0ae0c632f8f739cf6dc729140c5400', 'reviewedSources': {'.github/workflows/diagnose-macos-failed-app.yml': '398579cbf8d089b9e193a78d7d867f94f9786dc219d0c1616ba263868bd100a0', 'scripts/diagnose-macos-failed-app.py': 'aad5c0590b8a9f8e16401c005419aebba0603676e735ce7cf45a9f77e5da6015', 'scripts/observe-macos-incoming-cleanup.py': '7b0397d0630d1b61d81dd922f27f84eed66213b406a4c22fa63406d80e9dddbf', 'scripts/test-observe-macos-incoming-cleanup.py': '3299ad55dcfd570f34b76cf35c9d463a1a652d4a8eb0e7df70d9dea76089e4ae', 'scripts/test-support-launch-macos-concurrency-controls.py': '4253c9718a916952695f542c88084275057fbf42b30b4b846693f38ad6a09a9d', 'scripts/test-support-launch-macos-concurrency.py': '8cb84580e1f330a6649a014f29f80769b0c5059081445c15bc07ccedbf319e9f'}, 'schema': 1, 'scope': 'fixed-failed-intel-rosetta-concurrency-diagnostic-only'}
 REPOSITORY = "Jangopeople/mixel-remote-client"
 REPOSITORY_ID = 1229987840
 SOURCE = "ca184ca219ceb1b087258e8f25d218eeba901abc"
@@ -43,8 +44,8 @@ OUTER_APP = "x86_64/signed-stapled-diagnostic-app.zip"
 OUTER_RUNTIME = "x86_64/runtime/runtime.json"
 LEGACY_HASH = "aad5c0590b8a9f8e16401c005419aebba0603676e735ce7cf45a9f77e5da6015"
 MANIFEST_HASH = "c7352ef1d6628035b4c275bed5f16def67fffb13b3002668bf81f837c4f71a45"
-CALLER_HASH = '8b5c8c27f44ff88bb5bec63fd54fefe87c5d9889192f82131f1a08399d42dc51'
-CONTROLS_HASH = 'f4efcacdc5ad388d54e1a9cac6480940ae5580d88c332545b39b7029c02baa81'
+CALLER_HASH = '8cb84580e1f330a6649a014f29f80769b0c5059081445c15bc07ccedbf319e9f'
+CONTROLS_HASH = '4253c9718a916952695f542c88084275057fbf42b30b4b846693f38ad6a09a9d'
 CRITICAL_HASHES = {
     "Contents/MacOS/Mixel-Remote": "25042c78c8abf8d4d4e965769f5f3d03ebdef359334936ef2f3dcf477de627df",
     "Contents/MacOS/service": "9834f1e22bb92cfb663200650027d7f78318b1392c1bd034ddd66106a49b31f4",
@@ -474,7 +475,8 @@ def safe_facts(record):
     allowed = {"scenario", "criticalHashes", "stabilitySecondsRequired", "runtimeFailure",
                "processCleanupFailures", "endpointCleanupFailures", "unknownSameBundlePids",
                "unknownUrlOwnerPid", "incomingListenerObservations",
-               "incomingListenerObservationFailure", "incomingEndpointSettlement"} | boolean_fields | pid_fields | count_fields
+               "incomingListenerObservationFailure", "incomingEndpointSettlement",
+               "incomingInitialIdentityFailure"} | boolean_fields | pid_fields | count_fields
     for index, row in enumerate(rows):
         require(isinstance(row, dict) and {"scenario", "passed", "ownedProcessesStopped"} <= set(row)
                 and set(row) <= allowed and row["scenario"] == SCENARIOS[index], "scenario-schema-order")
@@ -547,6 +549,39 @@ def safe_facts(record):
                              or (settlement["state"] == "settled" and settlement["attempts"] > 0)),
                         "incoming-settlement-success-state")
             output["incomingEndpointSettlement"] = dict(settlement)
+        if "incomingInitialIdentityFailure" in row:
+            identity = row["incomingInitialIdentityFailure"]
+            require(type(identity) is dict and set(identity) == {
+                "subphase", "reason", "errorType", "errno", "peerPidComparison", "peerUidComparison"},
+                "initial-incoming-identity-schema")
+            require(type(identity["subphase"]) is str and identity["subphase"] in {
+                "post-connect-lease-guard", "peer-pid-first", "peer-uid-first", "peer-pid-comparison",
+                "peer-uid-comparison", "peer-pid-recheck", "peer-uid-recheck", "post-peer-lease-guard",
+                "post-close-lease-guard"}
+                and type(identity["reason"]) is str and identity["reason"] in {
+                    "unknown-error", "lease-guard-refused", "peer-pid-nonpositive", "peer-pid-unavailable",
+                    "peer-uid-unavailable", "peer-pid-mismatch", "peer-uid-mismatch", "peer-pid-changed",
+                    "peer-uid-changed", "deadline"}
+                and type(identity["errorType"]) is str
+                and identity["errorType"] in {"OSError", "RuntimeError", "ValueError", "SubprocessError"}
+                and type(identity["peerPidComparison"]) is str and identity["peerPidComparison"] in {
+                    "not-read", "expected", "foreign", "nonpositive", "unavailable"}
+                and type(identity["peerUidComparison"]) is str and identity["peerUidComparison"] in {
+                    "not-read", "expected", "foreign", "unavailable"}, "initial-incoming-identity-values")
+            known_errno = {57} | {getattr(errno, name) for name in (
+                "ENOTCONN", "ESRCH", "ENOENT", "EPERM", "EACCES", "EBADF", "EINVAL", "EINTR",
+                "EAGAIN", "EIO", "ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "ENOTSOCK", "ENOTSUP")}
+            require(identity["errno"] is None or type(identity["errno"]) is int and identity["errno"] in known_errno,
+                    "initial-incoming-identity-errno")
+            settlement = row.get("incomingEndpointSettlement", {})
+            require(row["passed"] is False and row["ownedProcessesStopped"] is True
+                    and settlement.get("state") == "failed" and settlement.get("leaseCapturedBeforeStop") is True
+                    and settlement.get("attempts") == 0 and settlement.get("failureCode") in {
+                        "identity-refused", "active-timeout"}
+                    and any(failure.get("endpoint") == "incoming" and failure.get("reasonCode") == "ipc-endpoint-active"
+                            for failure in row.get("endpointCleanupFailures", [])),
+                    "initial-incoming-identity-without-original-failure")
+            output["incomingInitialIdentityFailure"] = dict(identity)
         require(not {"incomingListenerObservations", "incomingListenerObservationFailure"} <= set(row),
                 "incoming-observation-conflicting-state")
         if "incomingListenerObservations" in row:
@@ -589,7 +624,8 @@ def require_runtime_pass(result, facts):
                 and row.get("stabilitySecondsRequired") == 5.0 and row.get("stabilitySamples", 0) > 0
                 and not any(key in row for key in ("runtimeFailure", "processCleanupFailures",
                     "endpointCleanupFailures", "unknownSameBundlePids", "unknownUrlOwnerPid",
-                    "incomingListenerObservations", "incomingListenerObservationFailure")),
+                    "incomingListenerObservations", "incomingListenerObservationFailure",
+                    "incomingInitialIdentityFailure")),
                 "concurrency-cleanup-or-observation-failed")
 
 

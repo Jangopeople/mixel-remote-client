@@ -2,6 +2,7 @@
 """Exact source/mock replay controls. No provider, native app or signal action."""
 import ast
 import copy
+import errno
 from datetime import datetime, timezone
 import hashlib
 import importlib.util
@@ -329,10 +330,10 @@ class StrictReplayControls(unittest.TestCase):
                          "repos/" + v.REPOSITORY + "/actions/runs/" + str(v.RUN)])
         self.assertNotIn("--allow-escape-sequences", metadata.call_args.args[0])
         profile = v.source_contract(ROOT)
-        self.assertEqual(v.PROFILE_HASH, "07259eea2c29ea25f2dd93eb9c46fee269450db2ae47ff5c8898f71e08dbd226")
-        self.assertEqual(v.CONTROLS_HASH, "f4efcacdc5ad388d54e1a9cac6480940ae5580d88c332545b39b7029c02baa81")
+        self.assertEqual(v.PROFILE_HASH, "304fc3b8afdbaa48849775d72dd2aafc088982447ce6db6233de75fbc7ef27f6")
+        self.assertEqual(v.CONTROLS_HASH, "4253c9718a916952695f542c88084275057fbf42b30b4b846693f38ad6a09a9d")
         self.assertEqual(profile["reviewedSources"]["scripts/test-support-launch-macos-concurrency-controls.py"], v.CONTROLS_HASH)
-        self.assertEqual(v.CALLER_HASH, "8b5c8c27f44ff88bb5bec63fd54fefe87c5d9889192f82131f1a08399d42dc51")
+        self.assertEqual(v.CALLER_HASH, "8cb84580e1f330a6649a014f29f80769b0c5059081445c15bc07ccedbf319e9f")
 
     def test_source_grounded_terminal_escape_refusal_is_exact_fixed_category_only(self):
         safe = {"httpStatus": None, "transportCategory": "terminal-escape-sequences-refused"}
@@ -565,6 +566,36 @@ class StrictReplayControls(unittest.TestCase):
         self.assertEqual(v.safe_facts(record)["scenarios"][0]["incomingEndpointSettlement"]["state"], "failed")
         row["incomingEndpointSettlement"]["failureCode"] = "identity-refused"
         with self.assertRaises(v.Refusal): v.safe_facts(record)
+
+    def test_initial_peer_identity_attribution_preserves_actual_failure_and_closed_errno(self):
+        record = facts(); record['passed'] = False; row = record['scenarios'][0]; row['passed'] = False
+        row['incomingEndpointSettlement'].update(state='failed', attempts=0, elapsedMs=3, failureCode='identity-refused')
+        row['endpointCleanupFailures'] = [{'endpoint': 'incoming', 'reasonCategory': 'runtime',
+            'errorType': 'RuntimeError', 'reasonCode': 'ipc-endpoint-active', 'subphase': 'endpoint-inactivity-check'}]
+        identity = {'subphase': 'peer-pid-first', 'reason': 'peer-pid-unavailable', 'errorType': 'OSError',
+            'errno': errno.ENOTCONN, 'peerPidComparison': 'unavailable', 'peerUidComparison': 'not-read'}
+        row['incomingInitialIdentityFailure'] = identity
+        safe = v.safe_facts(record)
+        for number in (57, errno.ENOTCONN, None):
+            bounded = copy.deepcopy(record); bounded['scenarios'][0]['incomingInitialIdentityFailure']['errno'] = number
+            self.assertEqual(v.safe_facts(bounded)['scenarios'][0]['incomingInitialIdentityFailure']['errno'], number)
+        self.assertEqual(safe['scenarios'][0]['incomingInitialIdentityFailure'], identity)
+        self.assertEqual(safe['scenarios'][0]['endpointCleanupFailures'], row['endpointCleanupFailures'])
+        for exit_code in (0, 1):
+            with self.assertRaises(v.Refusal): v.require_runtime_pass(exit_code, safe)
+        for key, value in (('subphase', 'private-secret'), ('reason', 'private-token'), ('errorType', 'PrivateError'), ('errorType', []),
+                ('errno', True), ('errno', 2147483647), ('peerPidComparison', 101), ('peerUidComparison', '501'),
+                ('rawPath', '/private/secret')):
+            bad = copy.deepcopy(record); bad['scenarios'][0]['incomingInitialIdentityFailure'][key] = value
+            with self.subTest(key=key), self.assertRaises(v.Refusal): v.safe_facts(bad)
+        for change in ('passed', 'owned', 'attempt', 'settled', 'endpoint'):
+            bad = copy.deepcopy(record); target = bad['scenarios'][0]
+            if change == 'passed': target['passed'] = True
+            elif change == 'owned': target['ownedProcessesStopped'] = False
+            elif change == 'attempt': target['incomingEndpointSettlement']['attempts'] = 1
+            elif change == 'settled': target['incomingEndpointSettlement'].update(state='settled', attempts=1, failureCode='none')
+            else: target['endpointCleanupFailures'][0]['endpoint'] = 'url'
+            with self.subTest(change=change), self.assertRaises(v.Refusal): v.safe_facts(bad)
 
     def test_native_caller_receives_original_arguments_and_no_provider_tokens(self):
         with patch.dict(os.environ, {"GH_TOKEN": "private", "GITHUB_TOKEN": "private", "HOME": "/fixture"}):
