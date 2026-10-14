@@ -180,6 +180,11 @@ if($generated.IndexOf('Start-StandardValidQaNamespace') -lt 0 -or $generated.Ind
         historical_budget = current_budget.replace('    timeout-minutes: 120\n', '    timeout-minutes: 20\n', 1)
         self.assertEqual(workflow.count(current_budget), 1)
         workflow = workflow.replace(current_budget, historical_budget, 1)
+        # Reverse only the exact Mac source-job budget before its historical pin.
+        mac_budget = "  macos-runtime-harness:\n    runs-on: macos-14\n    timeout-minutes: 60\n"
+        previous_mac_budget = mac_budget.replace('    timeout-minutes: 60\n', '    timeout-minutes: 30\n', 1)
+        self.assertEqual(workflow.count(mac_budget), 1)
+        workflow = workflow.replace(mac_budget, previous_mac_budget, 1)
         for original, added, count in COMPOSED_WORKFLOW_PROJECTION:
             self.assertEqual(workflow.count(added), count)
             workflow = workflow.replace(added, original)

@@ -107,6 +107,7 @@ class StrictReplayControls(unittest.TestCase):
     def test_exact_profile_and_frozen_helpers_bind_reviewed_caller_before_import(self):
         v.source_contract(ROOT)
         for relative in ("scripts/test-support-launch-macos-concurrency.py",
+                         "scripts/test-support-launch-macos-concurrency-controls.py",
                          "scripts/failed-macos-diagnostic-helper-hashes.json",
                          "scripts/failed-intel-concurrency-replay-profile.json",
                          "scripts/diagnose-macos-failed-app.py"):
@@ -284,11 +285,52 @@ class StrictReplayControls(unittest.TestCase):
                 code, data, overflow = v.capture_job_log_transport(io.BytesIO())
             self.assertEqual(code, 1); self.assertEqual(len(data), min(size, v.MAX_LOG_STDERR))
             self.assertEqual(overflow, size > v.MAX_LOG_STDERR)
-            self.assertEqual(popen.call_args.args[0], ["gh", "api", "--method", "GET", "repos/" + v.REPOSITORY
+            self.assertEqual(popen.call_args.args[0], ["gh", "api", "--allow-escape-sequences", "--method", "GET", "repos/" + v.REPOSITORY
                                                      + "/actions/jobs/" + str(v.JOB) + "/logs"])
             self.assertEqual(popen.call_args.kwargs["stderr"], subprocess.PIPE)
             self.assertEqual(popen.call_args.kwargs["bufsize"], 0)
             self.assertTrue(child.stderr.closed)
+
+    def test_raw_log_flag_is_private_non_tty_and_retains_ansi_bytes_exactly(self):
+        payload = b"\x1b[36;1mprivate-token https://private.invalid/path?secret=value\x1b[0m\r\n"
+        expected = hashlib.sha256(payload).hexdigest()
+        for wrong_digest in (False, True):
+            directory = self.root / ("flag-wrong-digest" if wrong_digest else "flag-exact"); directory.mkdir()
+            receipt = {}
+            def capture(command, **kwargs):
+                self.assertEqual(command, ["gh", "api", "--allow-escape-sequences", "--method", "GET",
+                    "repos/" + v.REPOSITORY + "/actions/jobs/" + str(v.JOB) + "/logs"])
+                output = kwargs["stdout"]; state = os.fstat(output.fileno())
+                self.assertTrue(stat.S_ISREG(state.st_mode))
+                self.assertEqual(state.st_uid, os.getuid()); self.assertEqual(state.st_nlink, 1)
+                self.assertEqual(state.st_mode & 0o777, 0o600)
+                self.assertFalse(os.isatty(output.fileno()))
+                self.assertEqual(Path(output.name), directory / "original-failed-intel-job.log")
+                output.write(payload)
+                return SimpleNamespace(stderr=io.BytesIO(b""), wait=lambda timeout: 0, kill=lambda: None)
+            with patch.object(v.subprocess, "Popen", side_effect=capture), patch.object(v, "LOG_BYTES", len(payload)), \
+                 patch.object(v, "LOG_SHA256", "a" * 64 if wrong_digest else expected):
+                if wrong_digest:
+                    with self.assertRaisesRegex(v.Refusal, "^exact-original-job-log-attribution$"):
+                        v.exact_original_log(directory, receipt)
+                else:
+                    v.exact_original_log(directory, receipt)
+            self.assertEqual((directory / "original-failed-intel-job.log").read_bytes(), payload)
+            self.assertEqual(receipt["originalJobLogObservation"], {"exitCode": 0, "bytes": len(payload), "sha256": expected})
+            safe = json.dumps(receipt)
+            self.assertNotIn("private-token", safe); self.assertNotIn("private.invalid", safe); self.assertNotIn("\x1b", safe)
+
+    def test_raw_log_flag_does_not_change_metadata_or_artifact_commands_and_new_profile_is_coherent(self):
+        with patch.object(v, "capture", return_value=(b'{"probe":1}', b"")) as metadata:
+            self.assertEqual(v.api("/actions/runs/" + str(v.RUN)), {"probe": 1})
+        self.assertEqual(metadata.call_args.args[0], ["gh", "api", "--method", "GET",
+                         "repos/" + v.REPOSITORY + "/actions/runs/" + str(v.RUN)])
+        self.assertNotIn("--allow-escape-sequences", metadata.call_args.args[0])
+        profile = v.source_contract(ROOT)
+        self.assertEqual(v.PROFILE_HASH, "a4601a4a6a1c1fe9049cdc1a1a127053f2e111708e375bea30b2b26bd9bac6dc")
+        self.assertEqual(v.CONTROLS_HASH, "1cc906501eab29edfe16ecf0316b3e6e69dd363380b984f585f71e3f4a6c0643")
+        self.assertEqual(profile["reviewedSources"]["scripts/test-support-launch-macos-concurrency-controls.py"], v.CONTROLS_HASH)
+        self.assertEqual(v.CALLER_HASH, "5b64fdbe9187440b51537703817889d2fb3c083be47a55566b7f0d8a918511a3")
 
     def test_source_grounded_terminal_escape_refusal_is_exact_fixed_category_only(self):
         safe = {"httpStatus": None, "transportCategory": "terminal-escape-sequences-refused"}
@@ -538,6 +580,7 @@ class StrictReplayControls(unittest.TestCase):
             return result
 
         def native(command, **kwargs):
+            self.assertNotIn("--allow-escape-sequences", command)
             if command[0] == "gh":
                 if "/actions/jobs/" in command[-1]:
                     events.append("job-log-transport")

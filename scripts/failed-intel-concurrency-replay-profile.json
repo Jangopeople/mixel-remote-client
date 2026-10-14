@@ -23,7 +23,7 @@
   "reviewedSources": {
     ".github/workflows/diagnose-macos-failed-app.yml": "398579cbf8d089b9e193a78d7d867f94f9786dc219d0c1616ba263868bd100a0",
     "scripts/diagnose-macos-failed-app.py": "aad5c0590b8a9f8e16401c005419aebba0603676e735ce7cf45a9f77e5da6015",
-    "scripts/test-support-launch-macos-concurrency-controls.py": "27616cdbec0f2bcf73afd79b84d3a67af45480062f3c24bb9b2b6e1d7b5ae77e",
+    "scripts/test-support-launch-macos-concurrency-controls.py": "1cc906501eab29edfe16ecf0316b3e6e69dd363380b984f585f71e3f4a6c0643",
     "scripts/test-support-launch-macos-concurrency.py": "5b64fdbe9187440b51537703817889d2fb3c083be47a55566b7f0d8a918511a3"
   },
   "schema": 1,

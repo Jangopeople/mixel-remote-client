@@ -512,6 +512,10 @@ class ConcurrencyControls(unittest.TestCase):
         previous_budget = budget.replace('    timeout-minutes: 120\n', '    timeout-minutes: 60\n', 1)
         self.assertEqual(text.count(budget), 1)
         text = text.replace(budget, previous_budget, 1)
+        mac_budget = "  macos-runtime-harness:\n    runs-on: macos-14\n    timeout-minutes: 60\n"
+        previous_mac_budget = mac_budget.replace('    timeout-minutes: 60\n', '    timeout-minutes: 30\n', 1)
+        self.assertEqual(text.count(mac_budget), 1)
+        text = text.replace(mac_budget, previous_mac_budget, 1)
         old = '          python3 scripts/test-support-launch-macos.py --self-test\n'
         current = '          python3 scripts/test-support-launch-macos-concurrency.py --original-desktop --self-test\n'
         control = '          python3 scripts/test-support-launch-macos-concurrency-controls.py --evidence-dir "$RUNNER_TEMP/mixel-macos-concurrency-source"\n'

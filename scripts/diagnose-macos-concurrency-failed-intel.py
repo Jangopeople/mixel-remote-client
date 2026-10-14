@@ -18,8 +18,8 @@ import types
 import zipfile
 
 sys.dont_write_bytecode = True
-PROFILE_HASH = "85035d98c3e16ab2aa68c15fa7c083644145be6b165143d012f33d7e9a3c497c"
-EXPECTED_PROFILE = json.loads("{\"schema\":1,\"scope\":\"fixed-failed-intel-rosetta-concurrency-diagnostic-only\",\"producerSource\":\"ca184ca219ceb1b087258e8f25d218eeba901abc\",\"producerTree\":\"825974868c0ae0c632f8f739cf6dc729140c5400\",\"producerRun\":38491157973,\"producerAttempt\":1,\"failedJob\":115617863123,\"artifactId\":11862454209,\"artifactBytes\":30894055,\"artifactSha256\":\"40d28fac26ad928ccfc6723cb3dbdec7134507258901a769f3d9daac221e0d1b\",\"artifactTimes\":{\"created_at\":\"2026-10-14T01:22:52Z\",\"updated_at\":\"2026-10-14T01:22:52Z\",\"expires_at\":\"2027-01-12T00:36:44Z\"},\"frozenHelpers\":{\"scripts/test-support-launch-linux.py\":\"90e343f7cddffb3f830c54ee129e7ae192c0d4b269bc336faab93fb5d95abe18\",\"scripts/test-support-launch-macos-tray-controls.py\":\"b06623ec893cdcf43b3b27670eadbe12f49d4491d012d8b88debe88fb4e6184d\",\"scripts/test-support-launch-macos-tray.py\":\"80ebc3255a3898c9feb23c68e06fee28efb74109e5d30460b3ddb9e651ade9b4\",\"scripts/test-support-launch-macos.py\":\"854bd6a7e34041d566c810cdd0fe3df238187198ea456381a725a18286968d65\",\"scripts/verify-macos-bundle-minimum.py\":\"fbd7652bdfaf26c86de97111668bd9726623880811367b99fb59a8190886dcdf\",\"scripts/verify-macos-native-minimum.py\":\"7ecd3c71f2afc000f0d5d90dc470be03fbdf4c69e02ee7f1bdaa835464710c92\"},\"reviewedSources\":{\"scripts/test-support-launch-macos-concurrency.py\":\"5b64fdbe9187440b51537703817889d2fb3c083be47a55566b7f0d8a918511a3\",\"scripts/test-support-launch-macos-concurrency-controls.py\":\"27616cdbec0f2bcf73afd79b84d3a67af45480062f3c24bb9b2b6e1d7b5ae77e\",\"scripts/diagnose-macos-failed-app.py\":\"aad5c0590b8a9f8e16401c005419aebba0603676e735ce7cf45a9f77e5da6015\",\".github/workflows/diagnose-macos-failed-app.yml\":\"398579cbf8d089b9e193a78d7d867f94f9786dc219d0c1616ba263868bd100a0\"}}")
+PROFILE_HASH = "a4601a4a6a1c1fe9049cdc1a1a127053f2e111708e375bea30b2b26bd9bac6dc"
+EXPECTED_PROFILE = json.loads("{\"schema\":1,\"scope\":\"fixed-failed-intel-rosetta-concurrency-diagnostic-only\",\"producerSource\":\"ca184ca219ceb1b087258e8f25d218eeba901abc\",\"producerTree\":\"825974868c0ae0c632f8f739cf6dc729140c5400\",\"producerRun\":38491157973,\"producerAttempt\":1,\"failedJob\":115617863123,\"artifactId\":11862454209,\"artifactBytes\":30894055,\"artifactSha256\":\"40d28fac26ad928ccfc6723cb3dbdec7134507258901a769f3d9daac221e0d1b\",\"artifactTimes\":{\"created_at\":\"2026-10-14T01:22:52Z\",\"updated_at\":\"2026-10-14T01:22:52Z\",\"expires_at\":\"2027-01-12T00:36:44Z\"},\"frozenHelpers\":{\"scripts/test-support-launch-linux.py\":\"90e343f7cddffb3f830c54ee129e7ae192c0d4b269bc336faab93fb5d95abe18\",\"scripts/test-support-launch-macos-tray-controls.py\":\"b06623ec893cdcf43b3b27670eadbe12f49d4491d012d8b88debe88fb4e6184d\",\"scripts/test-support-launch-macos-tray.py\":\"80ebc3255a3898c9feb23c68e06fee28efb74109e5d30460b3ddb9e651ade9b4\",\"scripts/test-support-launch-macos.py\":\"854bd6a7e34041d566c810cdd0fe3df238187198ea456381a725a18286968d65\",\"scripts/verify-macos-bundle-minimum.py\":\"fbd7652bdfaf26c86de97111668bd9726623880811367b99fb59a8190886dcdf\",\"scripts/verify-macos-native-minimum.py\":\"7ecd3c71f2afc000f0d5d90dc470be03fbdf4c69e02ee7f1bdaa835464710c92\"},\"reviewedSources\":{\"scripts/test-support-launch-macos-concurrency.py\":\"5b64fdbe9187440b51537703817889d2fb3c083be47a55566b7f0d8a918511a3\",\"scripts/test-support-launch-macos-concurrency-controls.py\":\"1cc906501eab29edfe16ecf0316b3e6e69dd363380b984f585f71e3f4a6c0643\",\"scripts/diagnose-macos-failed-app.py\":\"aad5c0590b8a9f8e16401c005419aebba0603676e735ce7cf45a9f77e5da6015\",\".github/workflows/diagnose-macos-failed-app.yml\":\"398579cbf8d089b9e193a78d7d867f94f9786dc219d0c1616ba263868bd100a0\"}}")
 REPOSITORY = "Jangopeople/mixel-remote-client"
 REPOSITORY_ID = 1229987840
 SOURCE = "ca184ca219ceb1b087258e8f25d218eeba901abc"
@@ -44,7 +44,7 @@ OUTER_RUNTIME = "x86_64/runtime/runtime.json"
 LEGACY_HASH = "aad5c0590b8a9f8e16401c005419aebba0603676e735ce7cf45a9f77e5da6015"
 MANIFEST_HASH = "c7352ef1d6628035b4c275bed5f16def67fffb13b3002668bf81f837c4f71a45"
 CALLER_HASH = "5b64fdbe9187440b51537703817889d2fb3c083be47a55566b7f0d8a918511a3"
-CONTROLS_HASH = "27616cdbec0f2bcf73afd79b84d3a67af45480062f3c24bb9b2b6e1d7b5ae77e"
+CONTROLS_HASH = "1cc906501eab29edfe16ecf0316b3e6e69dd363380b984f585f71e3f4a6c0643"
 CRITICAL_HASHES = {
     "Contents/MacOS/Mixel-Remote": "25042c78c8abf8d4d4e965769f5f3d03ebdef359334936ef2f3dcf477de627df",
     "Contents/MacOS/service": "9834f1e22bb92cfb663200650027d7f78318b1392c1bd034ddd66106a49b31f4",
@@ -228,7 +228,7 @@ def classify_job_log_stderr(data, overflow=False):
 
 
 def capture_job_log_transport(output):
-    command = ["gh", "api", "--method", "GET", "repos/" + REPOSITORY
+    command = ["gh", "api", "--allow-escape-sequences", "--method", "GET", "repos/" + REPOSITORY
                + "/actions/jobs/" + str(JOB) + "/logs"]
     retained = bytearray()
     state = {"overflow": False, "readFailed": False}
