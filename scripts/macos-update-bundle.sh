@@ -139,8 +139,30 @@ fi
 
 # No installed bundle or service is touched until the complete stage is verified.
 if [ "$with_service" -eq 1 ]; then services_stopped=1; stop_services; fi
-pids=$(/usr/bin/pgrep -x "$app_name" | /usr/bin/grep -vx "$cur_pid" || true)
-if [ -n "$pids" ]; then printf '%s\n' "$pids" | /usr/bin/xargs /bin/kill -9 || true; fi
+# A process name supplies no executable identity or retained kernel birth lease.
+# Keep the synchronous updater caller alive; every other match requires normal Quit.
+pgrep_status=0
+/usr/bin/pgrep -x "$app_name" > "$work/running.pids" 2> "$work/running.error" || pgrep_status=$?
+[ ! -s "$work/running.error" ] || { echo 'Mixel update refused: process observation failed.' >&2; exit 1; }
+case "$pgrep_status" in
+  0)
+    [ -s "$work/running.pids" ] || { echo 'Mixel update refused: process observation was incomplete.' >&2; exit 1; }
+    caller_seen=0
+    while IFS= read -r pid || [ -n "$pid" ]; do
+      case "$pid" in ''|0|*[!0-9]*) echo 'Mixel update refused: process identity was invalid.' >&2; exit 1 ;; esac
+      if [ "$pid" != "$cur_pid" ]; then
+        echo 'Mixel update refused: quit the installed app normally, then retry the update.' >&2
+        exit 1
+      fi
+      [ "$caller_seen" -eq 0 ] || { echo 'Mixel update refused: duplicate process observation.' >&2; exit 1; }
+      caller_seen=1
+    done < "$work/running.pids"
+    ;;
+  1)
+    [ ! -s "$work/running.pids" ] || { echo 'Mixel update refused: process observation was inconsistent.' >&2; exit 1; }
+    ;;
+  *) echo 'Mixel update refused: process observation failed.' >&2; exit 1 ;;
+esac
 # Register each move obligation before its atomic rename, including signal boundaries.
 if [ -d "$target" ]; then old_moved=1; /bin/mv "$target" "$backup"; fi
 new_moved=1

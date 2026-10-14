@@ -83,7 +83,17 @@ if name=='plutil':
 if name=='cp':
  if mode in ('restore-daemon-failed','restore-agent-failed') and Path(args[-2]).name==('daemon.old' if mode=='restore-daemon-failed' else 'agent.old'):sys.exit(1)
  shutil.copy2(args[-2],args[-1]);sys.exit(0)
-if name=='pgrep':sys.exit(1)
+if name=='pgrep':
+ if mode in ('foreign-same-name','target-running'):print(424242);sys.exit(0)
+ if mode=='updater-only':print(999999);sys.exit(0)
+ if mode=='duplicate-caller':print('999999\n999999');sys.exit(0)
+ if mode=='malformed-pid':print('999999\nnot-a-pid');sys.exit(0)
+ if mode=='pgrep-empty-success':sys.exit(0)
+ if mode=='pgrep-inconsistent':print(424242);sys.exit(1)
+ if mode=='pgrep-denied':print('permission denied',file=sys.stderr);sys.exit(2)
+ if mode=='pgrep-warning':print(999999);print('observation uncertain',file=sys.stderr);sys.exit(0)
+ sys.exit(1)
+if name=='kill':sys.exit(0)
 if name=='launchctl':
  target=base/'Applications/Mixel-Remote.app/Contents/MacOS/Mixel-Remote'
  if mode in ('service-failed','restore-daemon-failed','restore-agent-failed') and args[0]=='kickstart' and target.read_text()=='new':sys.exit(1)
@@ -184,6 +194,65 @@ class UpdaterTests(unittest.TestCase):
                 else:
                     self.assertNotIn('launchctl', tools)
                     self.assertEqual([p.read_bytes() for p in fixture.plists], fixture.old_plists)
+
+    def test_same_name_running_process_is_refused_without_signaling_or_replacement(self):
+        for mode in ('foreign-same-name', 'target-running'):
+            for service in (False, True):
+                with self.subTest(mode=mode, service=service), tempfile.TemporaryDirectory() as temporary:
+                    fixture = TransactionFixture(Path(temporary))
+                    result = fixture.execute(mode, service=service)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn('quit the installed app normally', result.stderr)
+                    self.assertEqual(fixture.target_markers(), ['old'] * 4)
+                    self.assertEqual([p.read_bytes() for p in fixture.plists], fixture.old_plists)
+                    self.assertFalse(any(r['tool'] in ('kill', 'mv') for r in fixture.actions()))
+                    self.assertFalse(list((fixture.root / 'Applications').glob('.mixel-update.*')))
+        print('PASS: target or foreign same-name processes are never signaled; exact installed bundle/plists survive refusal in both service modes')
+
+    def test_updater_caller_alone_can_complete_without_any_process_signal(self):
+        for service in (False, True):
+            with self.subTest(service=service), tempfile.TemporaryDirectory() as temporary:
+                fixture = TransactionFixture(Path(temporary))
+                result = fixture.execute('updater-only', service=service)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(fixture.target_markers(), ['new'] * 4)
+                self.assertFalse(any(r['tool'] == 'kill' for r in fixture.actions()))
+        print('PASS: the synchronous updater caller remains excluded; ordinary copy and managed service updates complete')
+
+    def test_process_observation_errors_or_malformed_pids_refuse_and_restore(self):
+        for mode in ('duplicate-caller', 'malformed-pid', 'pgrep-empty-success',
+                     'pgrep-inconsistent', 'pgrep-denied', 'pgrep-warning'):
+            for service in (False, True):
+                with self.subTest(mode=mode, service=service), tempfile.TemporaryDirectory() as temporary:
+                    fixture = TransactionFixture(Path(temporary))
+                    result = fixture.execute(mode, service=service)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(fixture.target_markers(), ['old'] * 4)
+                    self.assertEqual([p.read_bytes() for p in fixture.plists], fixture.old_plists)
+                    self.assertFalse(any(r['tool'] in ('kill', 'mv') for r in fixture.actions()))
+                    self.assertFalse(list((fixture.root / 'Applications').glob('.mixel-update.*')))
+        print('PASS: duplicate/malformed/empty/inconsistent/error/warning process observations fail closed and restore original state')
+
+    def test_original_same_name_kill_attempt_reproduced_only_through_mock_signal_tool(self):
+        current = (ROOT / 'macos-update-bundle.sh').read_text()
+        first = current.index('# A process name supplies no executable identity')
+        last = current.index('# Register each move obligation', first)
+        previous = current[:first] + '''pids=$(/usr/bin/pgrep -x "$app_name" | /usr/bin/grep -vx "$cur_pid" || true)
+if [ -n "$pids" ]; then printf '%s\\n' "$pids" | /usr/bin/xargs /bin/kill -9 || true; fi
+''' + current[last:]
+        self.assertEqual(hashlib.sha256(previous.encode()).hexdigest(), 'd0dd94eb484f86ca37f302a625d496c876e4cedd21c149749d51590702eff1cc')
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = TransactionFixture(Path(temporary))
+            signal_tool = fixture.tools / 'kill'
+            signal_tool.write_text(MOCK_TOOL); signal_tool.chmod(0o755)
+            fixture.write_shell(previous)
+            # This exact historical projection can only execute the owned mock,
+            # which records argv and never invokes any OS signal API.
+            fixture.shell.write_text(fixture.shell.read_text().replace('/bin/kill', str(signal_tool)))
+            result = fixture.execute('foreign-same-name', service=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual([r['args'] for r in fixture.actions() if r['tool'] == 'kill'], [['-9', '424242']])
+        print('PASS: exact historical updater attempts kill -9 on a same-name foreign PID; regression uses only a logging mock and sends zero real signals')
 
     def test_stage_failures_never_stop_or_replace_installed_app(self):
         for mode in ('copy-failed', 'stage-signature', 'stage-hash', 'bad-plist'):
