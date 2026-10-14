@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Source/mock-only observer controls. Native and mutation seams are forbidden."""
+"""Mock controls plus the explicitly authorized, current-PID-only parser smoke.
+
+Mock controls forbid native/mutation seams. The separate Darwin smoke reads
+only this test process: no PID enumeration, socket, application, signal or UI.
+"""
 import copy
 import ctypes
 import errno
@@ -12,6 +16,7 @@ import socket
 import stat
 import struct
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -77,6 +82,7 @@ class FakeBackend:
         self.connect_error = None
         self.timeouts = []
         self.sleep_calls = []
+        self.enumeration_uids = []
 
     def now(self):
         return self.clock
@@ -110,7 +116,10 @@ class FakeBackend:
     def path(self, pid):
         return self._read("path", self.paths.get(pid, (0, bytes(4096), errno.ESRCH)))
 
-    def pids(self):
+    def pids(self, uid):
+        if uid != UID:
+            raise AssertionError("Enumeration must use the exact own UID")
+        self.enumeration_uids.append(uid)
         return self._read("pids", self.ids)
 
     def socket_identity(self, endpoint):
@@ -177,6 +186,7 @@ class ObserverTests(unittest.TestCase):
         self.assertEqual(len(self.backend.connections), 3)
         self.assertTrue(all(connection.closed for connection in self.backend.connections))
         self.assertEqual(self.backend.peer_calls, 6)
+        self.assertEqual(self.backend.enumeration_uids, [UID, UID, UID])
         self.assertTrue(all(0 < timeout <= 0.2 for timeout in self.backend.timeouts))
         self.assertLessEqual(facts["elapsedMs"], 1500)
         for sample in facts["samples"]:
@@ -186,6 +196,7 @@ class ObserverTests(unittest.TestCase):
             self.assertIs(sample["gui"]["retainedBirthMatches"], True)
             self.assertEqual([row["executable"] for row in sample["inventory"]["members"]], ["main", "main", "service"])
             self.assertEqual(sample["peer"]["process"]["executable"], "service")
+            self.assertIs(sample["peer"]["socketIdentitySameAsBefore"], True)
 
     def test_foreign_uid_peer_is_observed_but_excluded_from_inventory(self):
         self.backend.records[30] = bsd(30, uid=0)
@@ -327,6 +338,52 @@ class ObserverTests(unittest.TestCase):
         self.backend.paths[30] = path_packet(raw, count=len(raw) + 1)
         self.assertEqual(self.observe()["samples"][0]["peer"]["process"]["state"], "stable")
 
+    def test_native_proven_nonzero_unused_path_tail_is_not_identity(self):
+        raw = os.fsencode(self.app / "Contents/MacOS/service")
+        tail = b"\xff\xfe" + SECRET.encode()
+        self.backend.paths[30] = (len(raw), (raw + b"\0" + tail).ljust(4096, b"\xa5"), 0)
+        facts = self.observe()
+        row = facts["samples"][0]["peer"]["process"]
+        self.assertEqual((row["state"], row["pathState"], row["executable"]), ("stable", "available", "service"))
+        self.assertNotIn(SECRET, json.dumps(facts))
+        self.assertNotIn("\\ufffd", json.dumps(facts))
+
+    def test_raw_unused_tail_never_changes_exact_main_classification(self):
+        raw = os.fsencode(self.app / "Contents/MacOS/Mixel-Remote")
+        self.backend.paths[20] = [(len(raw), (raw + b"\0" + SECRET.encode()).ljust(4096, b"\x01"), 0),
+                                  (len(raw), (raw + b"\0" + b"different-private-tail").ljust(4096, b"\x02"), 0)]
+        facts = self.observe()
+        row = facts["samples"][0]["gui"]
+        self.assertEqual((row["state"], row["executable"]), ("stable", "main"))
+        self.assertIs(row["retainedBirthMatches"], True)
+        self.assertNotIn(SECRET, json.dumps(facts))
+
+    def test_positive_success_errno_checks_remain_strict(self):
+        packet = bsd(30)
+        self.backend.records[30] = (packet[0], packet[1], errno.EPERM)
+        self.assertEqual(self.observe()["samples"][0]["peer"]["process"]["state"], "malformed")
+        self.backend = FakeBackend(self.app)
+        packet = path_packet(self.app / "Contents/MacOS/service")
+        self.backend.paths[30] = (packet[0], packet[1], errno.EPERM)
+        row = self.observe()["samples"][0]["peer"]["process"]
+        self.assertEqual((row["state"], row["pathState"]), ("kernel_only", "malformed"))
+
+    def test_uid_only_native_enumeration_exact_typeinfo_and_fixed_buffer(self):
+        native = observer._NativeBackend.__new__(observer._NativeBackend)
+        native.library = mock.Mock()
+        native._buffer_call = mock.Mock(return_value=pid_packet([10]))
+        native.pids(UID)
+        native._buffer_call.assert_called_once_with(native.library.proc_listpids, 16_384, 4, UID)
+
+    def test_uid_only_native_enumeration_rejects_malformed_uid_before_call(self):
+        native = observer._NativeBackend.__new__(observer._NativeBackend)
+        native.library = mock.Mock()
+        native._buffer_call = mock.Mock()
+        for invalid in (-1, True, observer.MAX_UID + 1, SECRET):
+            with self.assertRaises(ValueError):
+                native.pids(invalid)
+        native._buffer_call.assert_not_called()
+
     def test_missing_peer_pid_and_malformed_callback_results(self):
         for peer in (None, 0, -1, True, observer.MAX_PID + 1, SECRET):
             with self.subTest(peer_type=type(peer)):
@@ -364,6 +421,51 @@ class ObserverTests(unittest.TestCase):
     def test_socket_identity_change_remains_changed(self):
         self.backend.identity = [self.backend.identity, (stat.S_IFSOCK | 0o777, UID, 1, 43, 0, 1, 1)]
         self.assertEqual(self.observe()["samples"][0]["peer"]["state"], "changed")
+
+    def test_connection_refused_still_records_post_failure_socket_identity(self):
+        self.backend.connect_error = ConnectionRefusedError(SECRET)
+        facts = self.observe()
+        for sample in facts["samples"]:
+            peer = sample["peer"]
+            self.assertEqual((peer["state"], peer["reason"]), ("not_connected", "refused"))
+            self.assertIs(peer["socketIdentitySameAsBefore"], True)
+        self.assertEqual(sum(name == "socket_identity" for name, _ in self.backend.calls), 6)
+
+    def test_connection_refused_and_changed_socket_are_independent_facts(self):
+        self.backend.connect_error = ConnectionRefusedError(SECRET)
+        self.backend.identity = [self.backend.identity, (stat.S_IFSOCK | 0o777, UID, 1, 43, 0, 1, 1)]
+        peer = self.observe()["samples"][0]["peer"]
+        self.assertEqual((peer["state"], peer["reason"]), ("not_connected", "refused"))
+        self.assertIs(peer["socketIdentitySameAsBefore"], False)
+
+    def test_connection_refused_and_unavailable_post_socket_do_not_claim_same(self):
+        self.backend.connect_error = ConnectionRefusedError(SECRET)
+        self.backend.identity = [self.backend.identity, PermissionError(SECRET)]
+        facts = self.observe()
+        peer = facts["samples"][0]["peer"]
+        self.assertEqual(peer["reason"], "refused")
+        self.assertIsNone(peer["socketIdentitySameAsBefore"])
+        self.assertNotIn(SECRET, json.dumps(facts))
+
+    def test_malformed_peer_still_records_post_socket_identity(self):
+        self.backend.peer = None
+        peer = self.observe()["samples"][0]["peer"]
+        self.assertEqual(peer["state"], "malformed")
+        self.assertIs(peer["socketIdentitySameAsBefore"], True)
+
+    def test_connected_peer_with_unavailable_post_socket_is_inconclusive(self):
+        self.backend.identity = [self.backend.identity, PermissionError(SECRET)]
+        peer = self.observe()["samples"][0]["peer"]
+        self.assertEqual((peer["state"], peer["reason"]), ("unavailable", "identity_unavailable"))
+        self.assertIsNone(peer["socketIdentitySameAsBefore"])
+
+    def test_malformed_post_socket_metadata_has_no_raw_identity(self):
+        self.backend.identity = [self.backend.identity, (SECRET,)]
+        facts = self.observe()
+        peer = facts["samples"][0]["peer"]
+        self.assertEqual(peer["state"], "unavailable")
+        self.assertIsNone(peer["socketIdentitySameAsBefore"])
+        self.assertNotIn(SECRET, json.dumps(facts))
 
     def test_socket_wrong_type_or_uid_never_connects(self):
         for identity in ((stat.S_IFREG | 0o600, UID, 1, 42, 0, 1, 1), (stat.S_IFSOCK | 0o777, 0, 1, 42, 0, 1, 1)):
@@ -592,6 +694,66 @@ class ObserverTests(unittest.TestCase):
             facts["samples"][0]["gui"]["ruid"] = 0
             with self.assertRaises(ValueError):
                 observer.validate_facts(facts)
+
+    def test_validator_requires_typed_peer_identity_comparison(self):
+        for value in (1, SECRET, {}, None, False):
+            facts = self.observe()
+            facts["samples"][0]["peer"]["socketIdentitySameAsBefore"] = value
+            with self.assertRaises(ValueError):
+                observer.validate_facts(facts)
+
+
+class SelfPidParserTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "darwin", "Darwin current-PID-only parser smoke; skipped on this platform")
+    def test_native_current_python_pid_only_bsd_and_bounded_cstring(self):
+        # Root explicitly authorized this current-test-process metadata smoke.
+        # No public observe gate changes and no application/inventory/socket call.
+        own_pid = os.getpid()
+        native = observer._NativeBackend()
+        real_bsd = native.library.proc_pidinfo
+        real_path = native.library.proc_pidpath
+        called = []
+
+        def bsd_self(pid, flavor, arg, buffer, size):
+            self.assertEqual((pid, flavor, arg, size), (own_pid, 3, 0, 136))
+            called.append(("bsd", pid))
+            return real_bsd(pid, flavor, arg, buffer, size)
+
+        def path_self(pid, buffer, size):
+            self.assertEqual((pid, size), (own_pid, 4096))
+            called.append(("path", pid))
+            return real_path(pid, buffer, size)
+
+        forbidden = []
+        targets = [(native, "pids"), (native, "connect"), (native, "credentials"),
+                   (native, "socket_identity"), (native.library, "proc_listpids"),
+                   (native.system, "getpeereid"), (socket, "socket"), (os, "kill"), (os, "unlink")]
+        try:
+            for target, name in targets:
+                patcher = mock.patch.object(target, name, side_effect=AssertionError("Only current PID BSD/path APIs are authorized"))
+                forbidden.append((patcher, patcher.start()))
+            with mock.patch.object(native.library, "proc_pidinfo", side_effect=bsd_self), mock.patch.object(native.library, "proc_pidpath", side_effect=path_self):
+                ctx = observer._Context(native, {})
+                row = observer._observe_process(ctx, own_pid)
+            self.assertEqual((row["state"], row["pathState"], row["executable"]), ("stable", "available", "other"))
+            self.assertEqual(row["pid"], own_pid)
+            self.assertEqual((row["uid"], row["euid"], row["ruid"], row["svuid"]), (os.getuid(),) * 4)
+            self.assertGreater(row["startSec"], 0)
+            self.assertTrue(0 <= row["startUsec"] < 1_000_000)
+            self.assertIn(row["status"], (1, 2, 3, 4))
+            self.assertEqual(called, [("bsd", own_pid), ("path", own_pid), ("bsd", own_pid), ("path", own_pid)])
+            self.assertLess(ctx.elapsed(), 1500)
+        finally:
+            for patcher, patched in reversed(forbidden):
+                self.assertEqual(patched.call_count, 0)
+                patcher.stop()
+
+
+def load_tests(loader, tests, pattern):
+    # Both the mock-tail regression and the explicit self parser smoke are
+    # mandatory when the module is loaded as a test suite.
+    return unittest.TestSuite((loader.loadTestsFromTestCase(ObserverTests),
+                               loader.loadTestsFromTestCase(SelfPidParserTests)))
 
 
 if __name__ == "__main__":

@@ -23,10 +23,10 @@
   "reviewedSources": {
     ".github/workflows/diagnose-macos-failed-app.yml": "398579cbf8d089b9e193a78d7d867f94f9786dc219d0c1616ba263868bd100a0",
     "scripts/diagnose-macos-failed-app.py": "aad5c0590b8a9f8e16401c005419aebba0603676e735ce7cf45a9f77e5da6015",
-    "scripts/observe-macos-incoming-cleanup.py": "747f515ddaa36d40a5676ed5fd4fa1afb0851dcf27898aa6a5875428080ad61c",
-    "scripts/test-observe-macos-incoming-cleanup.py": "6f9ef1d4651bad511c62d6bfc2706f19aeb7c4e39956e8105519556dc4433817",
+    "scripts/observe-macos-incoming-cleanup.py": "7b0397d0630d1b61d81dd922f27f84eed66213b406a4c22fa63406d80e9dddbf",
+    "scripts/test-observe-macos-incoming-cleanup.py": "3299ad55dcfd570f34b76cf35c9d463a1a652d4a8eb0e7df70d9dea76089e4ae",
     "scripts/test-support-launch-macos-concurrency-controls.py": "51a07dbacf3f0167ce87341d821b8550ff6478c627ce176e2b408bed234feea2",
-    "scripts/test-support-launch-macos-concurrency.py": "980c2f3b88ad5bb391550dd9a84bb0698b9204320cdb5fe11fc5931f854b857d"
+    "scripts/test-support-launch-macos-concurrency.py": "b8a8935dcb59c769452d9e8d75ccfa3f2f441127f48d0d15af2739f3b84508f2"
   },
   "schema": 1,
   "scope": "fixed-failed-intel-rosetta-concurrency-diagnostic-only"

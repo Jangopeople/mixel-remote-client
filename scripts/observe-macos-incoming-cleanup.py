@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Bounded, observational Mac incoming-cleanup adjunct; never cleanup authority.
 
-Native provenance: Darwin SDK sys/proc_info.h PROC_ALL_PIDS=1,
+Native provenance: Darwin SDK sys/proc_info.h PROC_UID_ONLY=4,
 PROC_PIDTBSDINFO=3 and the 136-byte proc_bsdinfo layout; libproc.h
 proc_listpids/proc_pidinfo/proc_pidpath; sys/un.h LOCAL_PEERPID=2;
 getpeereid is also used by the exact producer's GUI IPC verifier. A connected
@@ -24,6 +24,7 @@ SCOPE = "macos-active-incoming-cleanup-observation-v1"
 BUDGET = 1.5
 OFFSETS = (0.0, 0.45, 0.9)
 PID_BYTES = 16_384
+PROC_UID_ONLY = 4
 MAX_MEMBERS = 32
 SOCKET_TIMEOUT = 0.2
 MAX_PID = 0x7fffffff
@@ -58,6 +59,7 @@ def _process(pid=None, state="unavailable"):
 def _peer(state="unavailable", reason="failed"):
     return {"state": state, "reason": reason, "pid": None,
             "credentialsState": "unavailable", "uid": None, "gid": None,
+            "socketIdentitySameAsBefore": None,
             "process": _process()}
 
 
@@ -110,9 +112,11 @@ class _NativeBackend:
     def path(self, pid):
         return self._buffer_call(self.library.proc_pidpath, 4096, pid)
 
-    def pids(self):
+    def pids(self, uid):
         # No sizing query, retry, growth, argv, AppKit or other process inventory.
-        return self._buffer_call(self.library.proc_listpids, PID_BYTES, 1, 0)
+        if not _integer(uid, 0, MAX_UID):
+            raise ValueError("Invalid fixed UID enumeration")
+        return self._buffer_call(self.library.proc_listpids, PID_BYTES, PROC_UID_ONLY, uid)
 
     def socket_identity(self, endpoint):
         attributes = endpoint.lstat()
@@ -206,8 +210,11 @@ def _path(ctx, pid):
         raise OSError(result_errno, "Executable unavailable")
     end = raw.find(b"\0")
     if (count >= 4096 or result_errno or end <= 0 or end >= 4096
-            or count not in (end, end + 1) or any(raw[end + 1:])):
+            or count not in (end, end + 1)):
         raise _Malformed()
+    # The self-PID native ABI proof establishes nonzero unused buffer tail.
+    # Only the bounded C string belongs to the path; tail bytes are never read
+    # for identity, decoded, retained or serialized.
     image = raw[:end]
     if (not image.startswith(b"/") or any(value < 32 or value == 127 for value in image)
             or posixpath.normpath(image) != image or image.startswith(b"//")):
@@ -312,14 +319,16 @@ def _credentials(ctx, connection):
 def _observe_peer(ctx, callback):
     row = _peer()
     connection = None
+    before = None
     endpoint = Path("/tmp/Mixel-Remote/ipc")
     try:
-        before = ctx.call(ctx.backend.socket_identity, endpoint)
-        if (type(before) is not tuple or len(before) != 7
-                or any(type(value) is not int or value < 0 for value in before)
-                or not stat.S_ISSOCK(before[0]) or before[1] != ctx.uid):
+        candidate = ctx.call(ctx.backend.socket_identity, endpoint)
+        if (type(candidate) is not tuple or len(candidate) != 7
+                or any(type(value) is not int or value < 0 for value in candidate)
+                or not stat.S_ISSOCK(candidate[0]) or candidate[1] != ctx.uid):
             row["reason"] = "unsafe_socket"
             return row
+        before = candidate
         timeout = min(SOCKET_TIMEOUT, ctx.deadline - ctx.clock())
         if timeout <= 0:
             raise _Deadline()
@@ -334,8 +343,7 @@ def _observe_peer(ctx, callback):
         row["process"] = _observe_process(ctx, pid)
         again = ctx.call(callback, connection)
         again_credentials = _credentials(ctx, connection)
-        after = ctx.call(ctx.backend.socket_identity, endpoint)
-        if (not _integer(again, 1, MAX_PID) or again != pid or after != before
+        if (not _integer(again, 1, MAX_PID) or again != pid
                 or again_credentials != (credentials, uid, gid)):
             row.update(state="changed", reason="changed")
         elif (credentials == "available" and row["process"]["uid"] is not None
@@ -357,12 +365,27 @@ def _observe_peer(ctx, callback):
                 connection.close()
             except Exception:
                 row.update(state="unavailable", reason="failed")
+        if before is not None:
+            # Also compare after failed connect/peer reads. Deadline exhaustion
+            # leaves an explicit unknown instead of granting further native work.
+            try:
+                after = ctx.call(ctx.backend.socket_identity, endpoint)
+                if (type(after) is tuple and len(after) == 7
+                        and all(type(value) is int and value >= 0 for value in after)):
+                    row["socketIdentitySameAsBefore"] = after == before
+                    if after != before and connection is not None:
+                        row.update(state="changed", reason="changed")
+                elif row["state"] == "connected":
+                    row.update(state="unavailable", reason="identity_unavailable")
+            except BaseException:
+                if row["state"] == "connected":
+                    row.update(state="unavailable", reason="identity_unavailable")
 
 
 def _observe_inventory(ctx):
     row = _inventory(attempted=True)
     try:
-        count, raw, result_errno = ctx.call(ctx.backend.pids)
+        count, raw, result_errno = ctx.call(ctx.backend.pids, ctx.uid)
         if (not _integer(count, -1, PID_BYTES) or type(raw) is not bytes
                 or len(raw) != PID_BYTES or not _integer(result_errno, 0, 0x7fffffff)):
             row["reason"] = "malformed"
@@ -578,6 +601,8 @@ def validate_facts(value):
         enum(peer["reason"], REASONS)
         number(peer["pid"], 1, MAX_PID, True)
         enum(peer["credentialsState"], ("available", "unavailable", "malformed"))
+        if peer["socketIdentitySameAsBefore"] is not None and type(peer["socketIdentitySameAsBefore"]) is not bool:
+            refuse()
         number(peer["uid"], 0, MAX_UID, True)
         number(peer["gid"], 0, MAX_UID, True)
         if (peer["credentialsState"] == "available") != (peer["uid"] is not None and peer["gid"] is not None):
@@ -587,7 +612,7 @@ def validate_facts(value):
         process(peer["process"])
         if peer["process"]["pid"] is not None and peer["process"]["pid"] != peer["pid"]:
             refuse()
-        if peer["state"] == "connected" and (peer["pid"] is None or peer["reason"] != "none" or peer["process"]["state"] not in ("stable", "foreign_uid") or peer["credentialsState"] != "available" or peer["uid"] != peer["process"]["uid"]):
+        if peer["state"] == "connected" and (peer["pid"] is None or peer["reason"] != "none" or peer["process"]["state"] not in ("stable", "foreign_uid") or peer["credentialsState"] != "available" or peer["uid"] != peer["process"]["uid"] or peer["socketIdentitySameAsBefore"] is not True):
             refuse()
         inventory = sample["inventory"]
         exact(inventory, _inventory())

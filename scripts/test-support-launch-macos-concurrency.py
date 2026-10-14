@@ -28,7 +28,7 @@ import types
 sys.dont_write_bytecode = True
 SCRIPTS = Path(__file__).resolve(strict=True).parent
 MANIFEST_HASH = "c7352ef1d6628035b4c275bed5f16def67fffb13b3002668bf81f837c4f71a45"
-LISTENER_OBSERVER_HASH = "747f515ddaa36d40a5676ed5fd4fa1afb0851dcf27898aa6a5875428080ad61c"
+LISTENER_OBSERVER_HASH = "7b0397d0630d1b61d81dd922f27f84eed66213b406a4c22fa63406d80e9dddbf"
 SCENARIOS = ("ordinary-and-support", "two-support", "batch-two-support")
 STABILITY_SECONDS = 5.0
 MAX_INVENTORY = 32
