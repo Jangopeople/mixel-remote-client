@@ -15,6 +15,9 @@ from pathlib import Path
 import plistlib
 import shutil
 import signal
+import socket
+import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -73,6 +76,7 @@ class RuntimeFixture:
         self.completions = None
         self.owner_failure = None
         self.primary = None
+        self.capture_failure = None
         self.probe_launch_time = 0  # AppKit GUI launchDate is not its kernel lease.
 
     def birth(self, pid):
@@ -121,6 +125,17 @@ class RuntimeFixture:
         if label in self.endpoint_failures:
             raise self.endpoint_failures[label]
 
+    def capture_lease(self, *args):
+        self.events.append(('incoming-lease',))
+        if self.capture_failure is not None:
+            raise self.capture_failure
+        return object()
+
+    def cleanup_incoming(self, app, server_pid, server_birth, gui_pid, birth, lease, facts):
+        if lease is None:
+            raise RuntimeError('Incoming cleanup lease unavailable')
+        self.endpoint(C.unix.IPC_PATH, server_pid)
+
     def wait(self, description, operation, pid):
         value = operation()
         if not value:
@@ -146,6 +161,8 @@ class RuntimeFixture:
                 (C.tray, 'new_tray_marker', lambda *args: True),
                 (C.tray, 'wait', self.wait),
                 (C.tray, 'cleanup_endpoint', self.endpoint),
+                (C, 'capture_incoming_cleanup_lease', self.capture_lease),
+                (C, 'cleanup_incoming_endpoint', self.cleanup_incoming),
                 (C.tray, 'os', SimpleNamespace(kill=self.kill, getuid=os.getuid)),
                 (C.tray, 'time', SimpleNamespace(monotonic=lambda: self.clock, sleep=self.sleep)),
                 (C.desktop, 'helper_request', self.request),
@@ -165,6 +182,130 @@ class RuntimeFixture:
 
     def endpoints(self):
         return [event[1] for event in self.events if event[0] == 'endpoint']
+
+
+class IncomingSettlementFixture:
+    def __init__(self, app):
+        self.app = app
+        self.uid = os.getuid()
+        self.clock = 0.0
+        self.stopped = False
+        self.birth_failure = None
+        self.connections = []
+        self.outcomes = []
+        self.first_active = []
+        self.after_initial = None
+        self.cleanup_error = None
+        self.cleanup_calls = []
+        self.auth_calls = 0
+        self.snapshot_base = {"directory": (1, 10, stat.S_IFDIR | 0o700, self.uid),
+            "socket": (1, 11, stat.S_IFSOCK | 0o600, self.uid, 1, 0, 0),
+            "marker": (1, 12, stat.S_IFREG | 0o600, self.uid, 1, 3, 0), "markerBytes": b"101"}
+        self.facts = {}
+        self.endpoint = SimpleNamespace(lstat=lambda: SimpleNamespace(
+            st_mode=stat.S_IFSOCK | 0o600, st_uid=self.uid))
+
+    def birth(self, pid):
+        return ('darwin-gui-birth-v1', pid, self.uid,
+                str(self.app / 'Contents/MacOS/Mixel-Remote'), 100, 1)
+
+    def kernel(self, app, pid, retained=None):
+        if self.birth_failure is not None:
+            raise self.birth_failure
+        return None if self.stopped and retained is not None else self.birth(pid)
+
+    def snapshot(self, deadline=None, allow_missing=False, expected=None, missing=None):
+        result = dict(self.snapshot_base)
+        for name in ('directory', 'socket', 'marker'):
+            if result[name] is None:
+                if not allow_missing: raise RuntimeError('Mock leased resource missing')
+                if missing is not None: missing[name] = True
+            elif missing is not None and missing[name]:
+                raise RuntimeError('Mock leased resource reappeared')
+            elif expected is not None and result[name] != expected[name]:
+                raise RuntimeError('Mock leased identity changed')
+        if expected is not None and result['marker'] is not None and result['markerBytes'] != expected['markerBytes']:
+            raise RuntimeError('Mock marker bytes changed')
+        return result
+
+    def authenticate(self, *args):
+        self.auth_calls += 1
+
+    def socket(self, family, kind):
+        if (family, kind) != (socket.AF_UNIX, socket.SOCK_STREAM):
+            raise AssertionError('Unscoped socket')
+        fixture = self
+        outcome = self.outcomes.pop(0) if self.outcomes else 'active'
+        class Connection:
+            def __init__(self):
+                self.pid = 999 if outcome == 'foreign' else 101
+                self.uid = fixture.uid + 1 if outcome == 'foreign-uid' else fixture.uid
+                self.closed = False
+                self.timeouts = []
+            def __enter__(self): return self
+            def __exit__(self, *args): self.close()
+            def close(self): self.closed = True
+            def settimeout(self, value):
+                if not 0 < value <= 0.2: raise AssertionError('Unbounded socket timeout')
+                self.timeouts.append(value)
+            def connect(self, path):
+                if path != str(fixture.endpoint): raise AssertionError('Unexpected socket path')
+                fixture.clock += 0.001
+                if outcome == 'refused': raise ConnectionRefusedError()
+                if outcome == 'missing': raise FileNotFoundError()
+                if outcome == 'timeout': raise TimeoutError('private timeout')
+                if outcome == 'ambiguous': raise OSError('private metadata uncertainty')
+            def getsockopt(self, level, option, size):
+                if (level, option, size) != (0, 0x002, 4): raise AssertionError('Unexpected peer query')
+                return struct.pack('i', self.pid)
+            def sendall(self, *args): raise AssertionError('No settlement IPC payload')
+            def recv(self, *args): raise AssertionError('No settlement IPC payload')
+        connection = Connection(); self.connections.append(connection)
+        return connection
+
+    def final_cleanup(self, endpoint, pid):
+        self.cleanup_calls.append((endpoint, pid))
+        if self.cleanup_error is not None: raise self.cleanup_error
+
+    def sleep(self, value):
+        if not 0 < value <= 0.1: raise AssertionError('Unbounded poll')
+        self.clock += value
+
+    @contextlib.contextmanager
+    def seams(self):
+        original_inactive = C.incoming_endpoint_inactive
+        def track_inactive(*args, **kwargs):
+            try: return original_inactive(*args, **kwargs)
+            except RuntimeError as error:
+                if C.endpoint_cleanup_fact(error)['reasonCode'] == 'ipc-endpoint-active':
+                    self.first_active.append(error)
+                    if self.after_initial is not None: self.after_initial()
+                raise
+        with contextlib.ExitStack() as stack:
+            for target, name, value in (
+                (C, 'server_same', self.authenticate), (C, 'incoming_cleanup_snapshot', self.snapshot),
+                (C, 'incoming_peer_uid', lambda connection: connection.uid),
+                (C, 'incoming_endpoint_inactive', track_inactive),
+                (C, 'socket', SimpleNamespace(socket=self.socket, AF_UNIX=socket.AF_UNIX, SOCK_STREAM=socket.SOCK_STREAM)),
+                (C, 'time', SimpleNamespace(monotonic=lambda: self.clock, sleep=self.sleep)),
+                (C.tray, 'gui_birth', self.kernel),
+                (C.tray, 'process_path', lambda pid: self.app / 'Contents/MacOS/Mixel-Remote'),
+                (C.tray, 'cleanup_endpoint', self.final_cleanup),
+                (C.tray, 'os', SimpleNamespace(getuid=lambda: self.uid, path=SimpleNamespace(lexists=lambda path: True))),
+                (C.unix, 'IPC_PATH', self.endpoint),
+                (C.os, 'kill', forbidden), (C.os, 'unlink', forbidden), (C.ctypes, 'CDLL', forbidden)):
+                stack.enter_context(mock.patch.object(target, name, value))
+            yield
+
+    def capture(self):
+        with self.seams():
+            return C.capture_incoming_cleanup_lease(Path('/source-only-helper'), self.app, 101, 100.5,
+                self.birth(101), 202, self.birth(202))
+
+    def cleanup(self, lease):
+        self.stopped = True
+        with self.seams():
+            return C.cleanup_incoming_endpoint(self.app, 101, self.birth(101), 202, self.birth(202), lease, self.facts)
 
 
 class ConcurrencyControls(unittest.TestCase):
@@ -388,6 +529,36 @@ class ConcurrencyControls(unittest.TestCase):
             self.assertEqual(f.facts["incomingListenerObservationFailure"], "observer-unavailable")
             self.assertNotIn("incomingListenerObservations", f.facts)
             self.assertNotIn("private", json.dumps(f.facts))
+
+    def test_incoming_lease_capture_failure_keeps_independent_owned_process_stops_and_url_drain(self):
+        failure = RuntimeError('private incoming lease uncertainty')
+        self.f.capture_failure = failure
+        with self.assertRaises(RuntimeError) as raised:
+            self.f.run()
+        self.assertIs(raised.exception, failure)
+        self.assertEqual(self.f.signals(), [202, 101])
+        self.assertTrue(self.f.facts['ownedProcessesStopped'])
+        self.assertEqual(self.f.endpoints(), ['url'])
+        self.assertEqual(self.f.facts['incomingEndpointSettlement']['failureCode'], 'lease-unavailable')
+        self.assertNotIn('private', json.dumps(self.f.facts))
+
+    def test_incoming_lease_failure_does_not_skip_second_owned_stop_or_replace_primary(self):
+        failure = RuntimeError('private lease failure')
+        self.f.capture_failure = failure
+        self.f.signal_failures[202] = RuntimeError('private GUI stop failure')
+        with self.assertRaises(RuntimeError) as raised:
+            self.f.run()
+        self.assertIs(raised.exception, failure)
+        self.assertEqual(self.f.signals(), [202, 101])
+        self.assertFalse(self.f.facts['ownedProcessesStopped'])
+        self.assertEqual(self.f.endpoints(), [])
+        directory = self.directory / 'primary-kept'; directory.mkdir()
+        f = RuntimeFixture(directory); primary = RuntimeError('private original runtime failure')
+        f.primary = primary; f.capture_failure = failure
+        with self.assertRaises(RuntimeError) as raised:
+            f.run()
+        self.assertIs(raised.exception, primary)
+        self.assertEqual(f.signals(), [101])
 
     def test_primary_failure_survives_independent_cleanup_failures(self):
         first = RuntimeError('private URI payload')
@@ -669,6 +840,186 @@ class ConcurrencyControls(unittest.TestCase):
         self.assertEqual(kw['timeout'], 60)
         self.assertIn('-warnings-as-errors', argv)
         self.assertEqual((self.directory / 'compile.stderr').read_bytes(), b'')
+
+    def test_live_incoming_lease_is_captured_before_stop_with_exact_peer_uid_and_kernel_birth(self):
+        f = IncomingSettlementFixture(self.f.app); lease = f.capture()
+        self.assertTrue(lease['capturedBeforeStop'])
+        self.assertEqual(lease['serverBirth'], f.birth(101)); self.assertEqual(lease['guiBirth'], f.birth(202))
+        self.assertEqual(lease['snapshot'], f.snapshot_base)
+        self.assertGreaterEqual(f.auth_calls, 2)
+        self.assertTrue(all(connection.closed for connection in f.connections))
+        self.assertEqual(f.cleanup_calls, [])
+
+    def test_live_incoming_lease_rejects_unknown_or_foreign_peer_and_unavailable_birth(self):
+        for outcome in ('foreign', 'foreign-uid', 'refused', 'timeout', 'ambiguous'):
+            f = IncomingSettlementFixture(self.f.app); f.outcomes = [outcome]
+            with self.subTest(outcome=outcome), self.assertRaises((RuntimeError, OSError)):
+                f.capture()
+            self.assertEqual(f.cleanup_calls, [])
+            self.assertTrue(all(connection.closed for connection in f.connections))
+        f = IncomingSettlementFixture(self.f.app); f.birth_failure = RuntimeError('private reused birth')
+        with self.assertRaises(RuntimeError): f.capture()
+        self.assertEqual(f.connections, [])
+
+    def test_incoming_settlement_transient_active_then_refused_runs_original_cleanup_once(self):
+        f = IncomingSettlementFixture(self.f.app); lease = f.capture(); f.connections.clear()
+        f.outcomes = ['active', 'refused']; f.cleanup(lease)
+        self.assertEqual(len(f.cleanup_calls), 1)
+        self.assertEqual(f.facts['incomingEndpointSettlement']['state'], 'settled')
+        self.assertGreater(f.facts['incomingEndpointSettlement']['attempts'], 0)
+        self.assertLessEqual(f.facts['incomingEndpointSettlement']['elapsedMs'], 5000)
+        self.assertTrue(all(connection.closed for connection in f.connections))
+        self.assertNotIn('snapshot', json.dumps(f.facts))
+
+    def test_incoming_settlement_initially_inactive_still_checks_terminal_birth_and_full_lease(self):
+        f = IncomingSettlementFixture(self.f.app); lease = f.capture(); f.outcomes = ['refused']
+        f.cleanup(lease)
+        self.assertEqual(f.facts['incomingEndpointSettlement']['state'], 'not-required')
+        self.assertEqual(len(f.cleanup_calls), 1)
+        for resource in ('directory', 'socket', 'marker', 'markerBytes'):
+            f = IncomingSettlementFixture(self.f.app); lease = f.capture(); f.outcomes = ['refused']
+            value = f.snapshot_base[resource]
+            f.snapshot_base[resource] = b'private replacement' if resource == 'markerBytes' else (value[0], value[1] + 1, *value[2:])
+            with self.subTest(resource=resource), self.assertRaises(RuntimeError): f.cleanup(lease)
+            self.assertEqual(f.cleanup_calls, [])
+
+    def test_unknown_or_foreign_initial_active_probe_is_sticky_before_later_refusal(self):
+        for outcome in ('foreign', 'foreign-uid'):
+            f = IncomingSettlementFixture(self.f.app); lease = f.capture(); f.connections.clear()
+            f.outcomes = [outcome, 'refused']
+            with self.subTest(outcome=outcome), self.assertRaises(RuntimeError): f.cleanup(lease)
+            self.assertEqual(f.cleanup_calls, [])
+            self.assertEqual(len(f.connections), 1)
+            self.assertEqual(f.facts['incomingEndpointSettlement']['state'], 'failed')
+
+    def test_known_active_then_unknown_foreign_timeout_or_ambiguous_probe_never_recovers(self):
+        for outcome in ('foreign', 'foreign-uid', 'timeout', 'ambiguous'):
+            f = IncomingSettlementFixture(self.f.app); lease = f.capture(); f.connections.clear()
+            f.outcomes = ['active', outcome, 'refused']
+            with self.subTest(outcome=outcome), self.assertRaises(RuntimeError) as raised: f.cleanup(lease)
+            self.assertIs(raised.exception, f.first_active[0])
+            self.assertEqual(f.cleanup_calls, [])
+            self.assertEqual(f.facts['incomingEndpointSettlement']['state'], 'failed')
+            self.assertTrue(all(connection.closed for connection in f.connections))
+            self.assertNotIn('private', json.dumps(f.facts))
+
+    def test_persistent_incoming_activity_has_five_second_cap_and_preserves_first_error(self):
+        f = IncomingSettlementFixture(self.f.app); lease = f.capture(); f.connections.clear()
+        with self.assertRaises(RuntimeError) as raised: f.cleanup(lease)
+        self.assertIs(raised.exception, f.first_active[0])
+        self.assertEqual(f.cleanup_calls, [])
+        summary = f.facts['incomingEndpointSettlement']
+        self.assertEqual((summary['state'], summary['failureCode']), ('failed', 'active-timeout'))
+        self.assertLessEqual(summary['attempts'], 50); self.assertLessEqual(f.clock, 5.01)
+        self.assertTrue(all(connection.closed for connection in f.connections))
+
+    def test_post_active_changed_namespace_marker_bytes_or_reused_birth_preserves_original_error(self):
+        for change in ('directory', 'socket', 'marker', 'markerBytes', 'birth'):
+            f = IncomingSettlementFixture(self.f.app); lease = f.capture(); f.outcomes = ['active', 'refused']
+            def mutate():
+                if change == 'birth': f.birth_failure = RuntimeError('private reused PID')
+                elif change == 'markerBytes': f.snapshot_base[change] = b'private replacement'
+                else:
+                    value = f.snapshot_base[change]; f.snapshot_base[change] = (value[0], value[1] + 1, *value[2:])
+            f.after_initial = mutate
+            with self.subTest(change=change), self.assertRaises(RuntimeError) as raised: f.cleanup(lease)
+            self.assertIs(raised.exception, f.first_active[0]); self.assertEqual(f.cleanup_calls, [])
+            self.assertNotIn('private', json.dumps(f.facts))
+
+    def test_settlement_final_frozen_cleanup_failure_keeps_original_active_error(self):
+        f = IncomingSettlementFixture(self.f.app); lease = f.capture(); f.outcomes = ['active', 'refused']
+        f.cleanup_error = RuntimeError('private final guard refusal')
+        with self.assertRaises(RuntimeError) as raised: f.cleanup(lease)
+        self.assertIs(raised.exception, f.first_active[0])
+        self.assertEqual(len(f.cleanup_calls), 1)
+        self.assertEqual(f.facts['incomingEndpointSettlement']['failureCode'], 'cleanup-refused')
+
+    def test_settlement_unleased_or_nonterminal_identity_cannot_call_cleanup(self):
+        f = IncomingSettlementFixture(self.f.app)
+        with self.assertRaises(RuntimeError): f.cleanup(None)
+        self.assertEqual(f.cleanup_calls, [])
+        self.assertFalse(f.facts['incomingEndpointSettlement']['leaseCapturedBeforeStop'])
+        f = IncomingSettlementFixture(self.f.app); lease = f.capture(); f.stopped = True
+        with f.seams(), mock.patch.object(C.tray, 'gui_birth', return_value=f.birth(101)):
+            with self.assertRaises(RuntimeError):
+                C.cleanup_incoming_endpoint(f.app, 101, f.birth(101), 202, f.birth(202), lease, f.facts)
+        self.assertEqual(f.cleanup_calls, []); self.assertEqual(len(f.connections), 1)
+
+    def test_actual_incoming_snapshot_binds_stable_namespace_full_socket_and_owned_bounded_marker(self):
+        uid = os.getuid()
+        def attributes(mode, ino, size=0):
+            return SimpleNamespace(st_dev=1, st_ino=ino, st_mode=mode, st_uid=uid,
+                st_nlink=1, st_size=size, st_mtime_ns=10)
+        nodes = {'directory': attributes(stat.S_IFDIR | 0o700, 1),
+            'socket': attributes(stat.S_IFSOCK | 0o600, 2),
+            'marker': attributes(stat.S_IFREG | 0o600, 3, 3)}
+        class Resource:
+            def __init__(self, name): self.name = name
+            def lstat(self):
+                if nodes[self.name] is None: raise FileNotFoundError()
+                return nodes[self.name]
+            @property
+            def parent(self): return Resource('directory')
+            def with_suffix(self, suffix):
+                if suffix != '.pid': raise AssertionError('Unexpected marker path')
+                return Resource('marker')
+        def read(path, maximum):
+            self.assertEqual((path.name, maximum), ('marker', 64))
+            return b'101', nodes['marker']
+        with mock.patch.object(C.unix, 'IPC_PATH', Resource('socket')), mock.patch.object(C.desktop, 'bounded_read', side_effect=read), mock.patch.object(C.os, 'kill', forbidden), mock.patch.object(C.os, 'unlink', forbidden):
+            original = C.incoming_cleanup_snapshot()
+            nodes['directory'].st_size += 3; nodes['directory'].st_mtime_ns += 1
+            self.assertEqual(C.incoming_cleanup_snapshot(expected=original), original)
+            for name, field, value in (('directory', 'st_ino', 999), ('socket', 'st_uid', uid + 1),
+                    ('socket', 'st_mode', stat.S_IFREG | 0o600), ('marker', 'st_nlink', 2),
+                    ('marker', 'st_size', 65), ('marker', 'st_uid', uid + 1)):
+                node = nodes[name]; previous = getattr(node, field); setattr(node, field, value)
+                with self.subTest(name=name, field=field), self.assertRaises(RuntimeError):
+                    C.incoming_cleanup_snapshot(expected=original)
+                setattr(node, field, previous)
+            with mock.patch.object(C.desktop, 'bounded_read', return_value=(b'private replacement', nodes['marker'])):
+                with self.assertRaises(RuntimeError): C.incoming_cleanup_snapshot(expected=original)
+            with mock.patch.object(C.desktop, 'bounded_read', return_value=(b'101', attributes(stat.S_IFREG | 0o600, 77, 3))):
+                with self.assertRaises(RuntimeError): C.incoming_cleanup_snapshot(expected=original)
+            flags = {'directory': False, 'socket': False, 'marker': False}
+            saved = nodes['socket']; nodes['socket'] = None
+            with self.assertRaises(RuntimeError): C.incoming_cleanup_snapshot(expected=original)
+            absent = C.incoming_cleanup_snapshot(allow_missing=True, expected=original, missing=flags)
+            self.assertIsNone(absent['socket']); self.assertTrue(flags['socket'])
+            nodes['socket'] = saved
+            with self.assertRaises(RuntimeError):
+                C.incoming_cleanup_snapshot(allow_missing=True, expected=original, missing=flags)
+
+    def test_terminal_monotonic_absence_follows_original_helper_without_recreating_resources(self):
+        f = IncomingSettlementFixture(self.f.app); lease = f.capture()
+        f.snapshot_base.update(socket=None, marker=None, markerBytes=None)
+        f.outcomes = ['refused']; f.cleanup(lease)
+        self.assertEqual(len(f.cleanup_calls), 1)
+        self.assertTrue(lease['missing']['socket']); self.assertTrue(lease['missing']['marker'])
+        f.snapshot_base['socket'] = lease['snapshot']['socket']
+        with self.assertRaises(RuntimeError): f.cleanup(lease)
+        self.assertEqual(len(f.cleanup_calls), 1)
+
+    def test_deadline_error_or_unknown_interruption_after_active_keeps_original_exception(self):
+        for error in (C.IncomingSettlementDeadline('private deadline'), KeyboardInterrupt('private interrupt')):
+            f = IncomingSettlementFixture(self.f.app); lease = f.capture(); f.outcomes = ['active', 'refused']
+            f.after_initial = lambda: setattr(f, 'birth_failure', error)
+            with self.subTest(kind=type(error).__name__), self.assertRaises(RuntimeError) as raised:
+                f.cleanup(lease)
+            self.assertIs(raised.exception, f.first_active[0])
+            self.assertEqual(f.cleanup_calls, []); self.assertNotIn('private', json.dumps(f.facts))
+
+    def test_incoming_original_probe_projection_keeps_frozen_code_globals_and_timeout_clamp(self):
+        f = IncomingSettlementFixture(self.f.app); lease = f.capture(); f.stopped = True; f.connections.clear()
+        original = C.tray.endpoint_inactive; globals_socket = original.__globals__['socket']
+        with f.seams():
+            with self.assertRaisesRegex(RuntimeError, '^A Mixel IPC endpoint is already active; refusing tray fixture$'):
+                C.incoming_endpoint_inactive(f.clock + 5, lease)
+        self.assertIs(C.tray.endpoint_inactive, original)
+        self.assertIs(original.__globals__['socket'], globals_socket)
+        self.assertTrue(f.connections[0].closed)
+        self.assertTrue(all(value <= 0.2 for value in f.connections[0].timeouts))
+
 
 FOUNDATION_STORAGE_DRIVER = r"""
 import Foundation

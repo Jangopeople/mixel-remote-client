@@ -8,6 +8,7 @@ They prove bounded GUI/process ownership and readiness, not invite consumption,
 customer consent, TCC permissions, remote desktop, or a physical Mac session.
 """
 import argparse
+import ctypes
 from datetime import datetime, timezone
 import hashlib
 import importlib.util
@@ -32,6 +33,10 @@ LISTENER_OBSERVER_HASH = "7b0397d0630d1b61d81dd922f27f84eed66213b406a4c22fa63406
 SCENARIOS = ("ordinary-and-support", "two-support", "batch-two-support")
 STABILITY_SECONDS = 5.0
 MAX_INVENTORY = 32
+INCOMING_SETTLEMENT_SECONDS = 5.0
+INCOMING_SETTLEMENT_SAMPLES = 50
+INCOMING_SETTLEMENT_CONNECT_SECONDS = 0.2
+INCOMING_SETTLEMENT_POLL_SECONDS = 0.1
 ERRORS = (OSError, ValueError, RuntimeError, subprocess.SubprocessError)
 
 # Exact messages from the frozen endpoint/PID reader only; never serialize them.
@@ -307,6 +312,406 @@ def observe(helper, app, server_pid, launch_time, server_birth, gui_pid, birth, 
     return visible is True and tray.health(server_pid, app, True)
 
 
+class IncomingSettlementDeadline(RuntimeError):
+    pass
+
+
+def incoming_settlement_call(deadline, operation, *arguments, **keywords):
+    before = time.monotonic()
+    if not math.isfinite(before) or before >= deadline:
+        raise IncomingSettlementDeadline("Incoming cleanup settlement deadline reached")
+    try:
+        result = operation(*arguments, **keywords)
+    except BaseException as error:
+        after = time.monotonic()
+        if not math.isfinite(after) or after < before or after >= deadline:
+            raise IncomingSettlementDeadline("Incoming cleanup settlement deadline reached") from error
+        raise
+    after = time.monotonic()
+    if not math.isfinite(after) or after < before or after >= deadline:
+        raise IncomingSettlementDeadline("Incoming cleanup settlement deadline reached")
+    return result
+
+
+def incoming_cleanup_call(deadline, operation, *arguments, **keywords):
+    return operation(*arguments, **keywords) if deadline is None else incoming_settlement_call(deadline, operation, *arguments, **keywords)
+
+
+def incoming_peer_uid(connection):
+    # Exact readonly getpeereid primitive used by the producer's GUI verifier.
+    library = ctypes.CDLL(None, use_errno=True)
+    library.getpeereid.argtypes = (ctypes.c_int, ctypes.POINTER(ctypes.c_uint32), ctypes.POINTER(ctypes.c_uint32))
+    library.getpeereid.restype = ctypes.c_int
+    uid, gid = ctypes.c_uint32(0xffffffff), ctypes.c_uint32(0xffffffff)
+    ctypes.set_errno(0)
+    if library.getpeereid(connection.fileno(), ctypes.byref(uid), ctypes.byref(gid)) != 0:
+        raise RuntimeError("Incoming cleanup peer credentials unavailable")
+    return uid.value
+
+
+def incoming_cleanup_inputs(app, server_pid, server_birth, gui_pid, birth):
+    uid = os.getuid()
+    if (type(uid) is not int or not 0 < uid <= 0xffffffff
+            or type(server_pid) is not int or not 0 < server_pid <= 0x7fffffff
+            or type(gui_pid) is not int or not 0 < gui_pid <= 0x7fffffff or server_pid == gui_pid):
+        raise RuntimeError("Incoming cleanup retained identity invalid")
+    expected = str(app / "Contents/MacOS/Mixel-Remote")
+    for pid, retained in ((server_pid, server_birth), (gui_pid, birth)):
+        if (type(retained) is not tuple or len(retained) != 6
+                or retained[0] != "darwin-gui-birth-v1" or type(retained[1]) is not int or retained[1] != pid
+                or type(retained[2]) is not int or retained[2] != uid
+                or type(retained[3]) is not str or retained[3] != expected
+                or type(retained[4]) is not int or retained[4] <= 0
+                or type(retained[5]) is not int or not 0 <= retained[5] < 1_000_000):
+            raise RuntimeError("Incoming cleanup retained identity invalid")
+    return uid
+
+
+def incoming_cleanup_snapshot(deadline=None, allow_missing=False, expected=None, missing=None):
+    endpoint = unix.IPC_PATH
+    directory = endpoint.parent
+    marker = endpoint.with_suffix(".pid")
+
+    missing = {name: False for name in ("directory", "socket", "marker")} if missing is None else missing
+
+    def absent(name):
+        if not allow_missing:
+            raise RuntimeError("Incoming cleanup leased resource missing")
+        missing[name] = True
+        return None
+
+    def attributes(name, path):
+        try:
+            value = incoming_cleanup_call(deadline, path.lstat)
+        except FileNotFoundError:
+            return absent(name)
+        if missing[name]:
+            raise RuntimeError("Incoming cleanup leased resource reappeared")
+        return value
+
+    def directory_identity():
+        value = attributes("directory", directory)
+        if value is None:
+            return None
+        if not stat.S_ISDIR(value.st_mode) or value.st_uid != os.getuid():
+            raise RuntimeError("Incoming cleanup namespace identity refused")
+        identity = (value.st_dev, value.st_ino, value.st_mode, value.st_uid)
+        if expected is not None and identity != expected["directory"]:
+            raise RuntimeError("Incoming cleanup namespace identity changed")
+        return identity
+
+    def socket_identity():
+        value = attributes("socket", endpoint)
+        if value is None:
+            return None
+        if not stat.S_ISSOCK(value.st_mode) or value.st_uid != os.getuid():
+            raise RuntimeError("Incoming cleanup socket identity refused")
+        identity = desktop.file_identity(value)
+        if expected is not None and identity != expected["socket"]:
+            raise RuntimeError("Incoming cleanup socket identity changed")
+        return identity
+
+    def marker_identity():
+        value = attributes("marker", marker)
+        if value is None:
+            return None, None
+        if not stat.S_ISREG(value.st_mode) or value.st_uid != os.getuid() or value.st_nlink != 1 or value.st_size > 64:
+            raise RuntimeError("Incoming cleanup PID marker identity refused")
+        identity = desktop.file_identity(value)
+        if expected is not None and identity != expected["marker"]:
+            raise RuntimeError("Incoming cleanup PID marker identity changed")
+        try:
+            data, read_attributes = incoming_cleanup_call(deadline, desktop.bounded_read, marker, 64)
+        except FileNotFoundError:
+            return absent("marker"), None
+        if (type(data) is not bytes or len(data) > 64 or desktop.file_identity(read_attributes) != identity
+                or (expected is not None and data != expected["markerBytes"])):
+            raise RuntimeError("Incoming cleanup PID marker identity changed")
+        after = attributes("marker", marker)
+        if after is None:
+            return None, None
+        if desktop.file_identity(after) != identity:
+            raise RuntimeError("Incoming cleanup PID marker identity changed")
+        return identity, data
+
+    first_directory = directory_identity()
+    first_socket = socket_identity()
+    first_marker, first_data = marker_identity()
+    final_marker, final_data = marker_identity()
+    final_socket = socket_identity()
+    final_directory = directory_identity()
+    for previous, current in ((first_directory, final_directory), (first_socket, final_socket), (first_marker, final_marker)):
+        if current is not None and current != previous:
+            raise RuntimeError("Incoming cleanup leased resource changed")
+    if final_marker is not None and final_data != first_data:
+        raise RuntimeError("Incoming cleanup PID marker identity changed")
+    if final_directory is None and (final_socket is not None or final_marker is not None):
+        raise RuntimeError("Incoming cleanup namespace absence is ambiguous")
+    return {"directory": final_directory, "socket": final_socket,
+            "marker": final_marker, "markerBytes": final_data}
+
+
+def incoming_cleanup_lease_guard(app, server_pid, server_birth, gui_pid, birth, lease, terminal=False, deadline=None):
+    uid = incoming_cleanup_inputs(app, server_pid, server_birth, gui_pid, birth)
+    if (type(lease) is not dict or set(lease) != {"schema", "app", "uid", "serverPid", "serverBirth", "guiPid", "guiBirth", "capturedBeforeStop", "snapshot", "missing"}
+            or type(lease["schema"]) is not int or lease["schema"] != 1
+            or lease["app"] != app or type(lease["uid"]) is not int or lease["uid"] != uid
+            or type(lease["serverPid"]) is not int or lease["serverPid"] != server_pid
+            or lease["serverBirth"] != server_birth or type(lease["guiPid"]) is not int or lease["guiPid"] != gui_pid
+            or lease["guiBirth"] != birth or lease["capturedBeforeStop"] is not True
+            or type(lease["snapshot"]) is not dict or set(lease["snapshot"]) != {"directory", "socket", "marker", "markerBytes"}
+            or type(lease["snapshot"]["markerBytes"]) is not bytes
+            or lease["snapshot"]["markerBytes"] != str(server_pid).encode("ascii")
+            or type(lease["missing"]) is not dict or set(lease["missing"]) != {"directory", "socket", "marker"}
+            or any(type(value) is not bool for value in lease["missing"].values())
+            or (not terminal and any(lease["missing"].values()))):
+        raise RuntimeError("Incoming cleanup lease identity refused")
+    captured = lease["snapshot"]
+    for name, length in (("directory", 4), ("socket", 7), ("marker", 7)):
+        value = captured[name]
+        if type(value) is not tuple or len(value) != length or any(type(field) is not int or field < 0 for field in value):
+            raise RuntimeError("Incoming cleanup captured identity invalid")
+        if value[3] != uid:
+            raise RuntimeError("Incoming cleanup captured UID refused")
+    if (not stat.S_ISDIR(captured["directory"][2]) or not stat.S_ISSOCK(captured["socket"][2])
+            or not stat.S_ISREG(captured["marker"][2]) or captured["marker"][4] != 1
+            or captured["marker"][5] != len(captured["markerBytes"])):
+        raise RuntimeError("Incoming cleanup captured identity invalid")
+
+    def snapshot_guard(value):
+        if type(value) is not dict or set(value) != {"directory", "socket", "marker", "markerBytes"}:
+            raise RuntimeError("Incoming cleanup observed identity invalid")
+        for name in ("directory", "socket", "marker"):
+            if value[name] is None:
+                if not terminal:
+                    raise RuntimeError("Incoming cleanup leased resource missing")
+                lease["missing"][name] = True
+            elif lease["missing"][name] or value[name] != captured[name]:
+                raise RuntimeError("Incoming cleanup leased resource changed or reappeared")
+        if ((value["marker"] is None and value["markerBytes"] is not None)
+                or (value["marker"] is not None and value["markerBytes"] != captured["markerBytes"])
+                or (value["directory"] is None and (value["socket"] is not None or value["marker"] is not None))):
+            raise RuntimeError("Incoming cleanup observed identity invalid")
+
+    if terminal:
+        for pid, retained in ((server_pid, server_birth), (gui_pid, birth)):
+            if incoming_cleanup_call(deadline, tray.gui_birth, app, pid, retained) is not None:
+                raise RuntimeError("Incoming cleanup retained identity changed")
+    before = incoming_cleanup_snapshot(deadline, terminal, lease["snapshot"], lease["missing"])
+    snapshot_guard(before)
+    for pid, retained in ((server_pid, server_birth), (gui_pid, birth)):
+        observed = incoming_cleanup_call(deadline, tray.gui_birth, app, pid, retained) if terminal else incoming_cleanup_call(deadline, tray.gui_birth, app, pid)
+        if (terminal and observed is not None) or (not terminal and observed != retained):
+            raise RuntimeError("Incoming cleanup retained identity changed")
+    after = incoming_cleanup_snapshot(deadline, terminal, lease["snapshot"], lease["missing"])
+    snapshot_guard(after)
+    for name in ("directory", "socket", "marker"):
+        if after[name] is not None and after[name] != before[name]:
+            raise RuntimeError("Incoming cleanup lease identity changed")
+    return True
+
+
+def capture_incoming_cleanup_lease(helper, app, server_pid, launch_time, server_birth, gui_pid, birth):
+    uid = incoming_cleanup_inputs(app, server_pid, server_birth, gui_pid, birth)
+    server_same(helper, app, server_pid, launch_time, server_birth)
+    if tray.gui_birth(app, gui_pid) != birth:
+        raise RuntimeError("Incoming cleanup GUI birth changed")
+    snapshot = incoming_cleanup_snapshot()
+    if snapshot["markerBytes"] != str(server_pid).encode("ascii"):
+        raise RuntimeError("Incoming cleanup PID marker does not match owned tray")
+    lease = {"schema": 1, "app": app, "uid": uid, "serverPid": server_pid,
+             "serverBirth": server_birth, "guiPid": gui_pid, "guiBirth": birth,
+             "capturedBeforeStop": True, "snapshot": snapshot,
+             "missing": {"directory": False, "socket": False, "marker": False}}
+    incoming_cleanup_lease_guard(app, server_pid, server_birth, gui_pid, birth, lease)
+    connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        connection.settimeout(INCOMING_SETTLEMENT_CONNECT_SECONDS)
+        connection.connect(str(unix.IPC_PATH))
+        peer = tray.peer_pid(connection)
+        peer_uid = incoming_peer_uid(connection)
+        if (type(peer) is not int or peer != server_pid or type(peer_uid) is not int or peer_uid != uid
+                or tray.process_path(server_pid) != app / "Contents/MacOS/Mixel-Remote"):
+            raise RuntimeError("Incoming cleanup live peer identity refused")
+        incoming_cleanup_lease_guard(app, server_pid, server_birth, gui_pid, birth, lease)
+        server_same(helper, app, server_pid, launch_time, server_birth)
+        if tray.peer_pid(connection) != peer or incoming_peer_uid(connection) != peer_uid:
+            raise RuntimeError("Incoming cleanup live peer identity changed")
+    finally:
+        connection.close()
+    server_same(helper, app, server_pid, launch_time, server_birth)
+    incoming_cleanup_lease_guard(app, server_pid, server_birth, gui_pid, birth, lease)
+    return lease
+
+
+def incoming_endpoint_inactive(deadline, lease):
+    # Run identical frozen inactivity code with a private timeout-only socket
+    # view. Neither frozen function bytes nor its module globals are mutated.
+    function = tray.endpoint_inactive
+    if type(function) is not types.FunctionType:
+        raise RuntimeError("Frozen incoming inactivity helper changed")
+    sticky = {"code": "none"}
+
+    def remember(error):
+        code = "active-timeout" if isinstance(error, IncomingSettlementDeadline) else "identity-refused"
+        if sticky["code"] != "identity-refused":
+            sticky["code"] = code
+
+    def guard():
+        return incoming_cleanup_lease_guard(lease["app"], lease["serverPid"], lease["serverBirth"], lease["guiPid"], lease["guiBirth"], lease, terminal=True, deadline=deadline)
+
+    class BoundedSocket:
+        def __init__(self, family, kind):
+            if (family, kind) != (socket.AF_UNIX, socket.SOCK_STREAM):
+                raise RuntimeError("Incoming cleanup socket scope refused")
+            guard()
+            self.connection = incoming_settlement_call(deadline, socket.socket, family, kind)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *arguments):
+            self.connection.close()
+            try:
+                guard()
+            except BaseException as error:
+                remember(error)
+
+        def settimeout(self, value):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise IncomingSettlementDeadline("Incoming cleanup settlement deadline reached")
+            incoming_settlement_call(deadline, self.connection.settimeout, min(float(value), INCOMING_SETTLEMENT_CONNECT_SECONDS, remaining))
+
+        def connect(self, path):
+            if path != str(unix.IPC_PATH):
+                raise RuntimeError("Incoming cleanup socket scope refused")
+            self.settimeout(INCOMING_SETTLEMENT_CONNECT_SECONDS)
+            result = incoming_settlement_call(deadline, self.connection.connect, path)
+            try:
+                guard()
+                first_pid = incoming_settlement_call(deadline, tray.peer_pid, self.connection)
+                first_uid = incoming_settlement_call(deadline, incoming_peer_uid, self.connection)
+                if (type(first_pid) is not int or first_pid != lease["serverPid"]
+                        or type(first_uid) is not int or first_uid != lease["uid"]
+                        or incoming_settlement_call(deadline, tray.peer_pid, self.connection) != first_pid
+                        or incoming_settlement_call(deadline, incoming_peer_uid, self.connection) != first_uid):
+                    raise RuntimeError("Incoming cleanup initial active peer identity refused")
+                guard()
+            except BaseException as error:
+                # Let identical frozen code create its exact active exception.
+                # This private fixed refusal prevents any later recovery route.
+                remember(error)
+            return result
+
+    view = types.SimpleNamespace(socket=BoundedSocket, AF_UNIX=socket.AF_UNIX, SOCK_STREAM=socket.SOCK_STREAM)
+    projected = types.FunctionType(function.__code__, {**function.__globals__, "socket": view}, function.__name__, function.__defaults__, function.__closure__)
+    try:
+        result = incoming_settlement_call(deadline, projected, unix.IPC_PATH)
+    except BaseException as error:
+        original = error.__cause__ if isinstance(error, IncomingSettlementDeadline) else error
+        if sticky["code"] != "none" and type(original) is RuntimeError:
+            original._mixel_incoming_refusal_code = sticky["code"]
+        raise
+    if sticky["code"] != "none":
+        error = RuntimeError("Incoming cleanup initial identity refused")
+        error._mixel_incoming_refusal_code = sticky["code"]
+        raise error
+    return result
+
+
+def incoming_settlement_elapsed(start):
+    elapsed = time.monotonic() - start
+    return min(0x7fffffff, max(0, int(elapsed * 1000))) if math.isfinite(elapsed) else 0
+
+
+def incoming_settlement_summary(facts, state, captured, start, attempts, code):
+    facts["incomingEndpointSettlement"] = {"state": state, "leaseCapturedBeforeStop": captured,
+        "maximumMs": 5000, "attempts": attempts, "elapsedMs": incoming_settlement_elapsed(start), "failureCode": code}
+
+
+def cleanup_incoming_endpoint(app, server_pid, server_birth, gui_pid, birth, lease, facts):
+    start = time.monotonic()
+    if lease is None:
+        incoming_settlement_summary(facts, "failed", False, start, 0, "lease-unavailable")
+        raise RuntimeError("Incoming cleanup lease unavailable")
+    deadline = start + INCOMING_SETTLEMENT_SECONDS
+    first_active = None
+    attempts = 0
+    stage = "identity-refused"
+    try:
+        incoming_cleanup_lease_guard(app, server_pid, server_birth, gui_pid, birth, lease, terminal=True, deadline=deadline)
+        stage = "probe-ambiguous"
+        try:
+            incoming_endpoint_inactive(deadline, lease)
+        except RuntimeError as error:
+            original = error.__cause__ if isinstance(error, IncomingSettlementDeadline) else error
+            refusal = getattr(original, "_mixel_incoming_refusal_code", "none")
+            if refusal in ("identity-refused", "active-timeout"):
+                stage = refusal
+            if endpoint_cleanup_fact(original)["reasonCode"] != "ipc-endpoint-active":
+                raise
+            first_active = original
+            if refusal == "identity-refused":
+                raise original
+            if refusal == "active-timeout":
+                raise IncomingSettlementDeadline("Incoming cleanup settlement deadline reached") from original
+            if original is not error:
+                raise
+        if first_active is None:
+            stage = "identity-refused"
+            incoming_cleanup_lease_guard(app, server_pid, server_birth, gui_pid, birth, lease, terminal=True, deadline=deadline)
+            stage = "cleanup-refused"
+            incoming_settlement_call(deadline, tray.cleanup_endpoint, unix.IPC_PATH, server_pid)
+            incoming_cleanup_lease_guard(app, server_pid, server_birth, gui_pid, birth, lease, terminal=True, deadline=deadline)
+            incoming_settlement_summary(facts, "not-required", True, start, 0, "none")
+            return
+        for attempts in range(1, INCOMING_SETTLEMENT_SAMPLES + 1):
+            stage = "identity-refused"
+            incoming_cleanup_lease_guard(app, server_pid, server_birth, gui_pid, birth, lease, terminal=True, deadline=deadline)
+            stage = "probe-ambiguous"
+            connection = incoming_settlement_call(deadline, socket.socket, socket.AF_UNIX, socket.SOCK_STREAM)
+            inactive = False
+            try:
+                remaining = deadline - time.monotonic()
+                incoming_settlement_call(deadline, connection.settimeout, min(INCOMING_SETTLEMENT_CONNECT_SECONDS, remaining))
+                try:
+                    incoming_settlement_call(deadline, connection.connect, str(unix.IPC_PATH))
+                except ConnectionRefusedError:
+                    inactive = True
+                if not inactive:
+                    stage = "identity-refused"
+                    peer = incoming_settlement_call(deadline, tray.peer_pid, connection)
+                    peer_uid = incoming_settlement_call(deadline, incoming_peer_uid, connection)
+                    if type(peer) is not int or peer != server_pid or type(peer_uid) is not int or peer_uid != lease["uid"]:
+                        raise RuntimeError("Incoming cleanup active peer identity refused")
+                    if (incoming_settlement_call(deadline, tray.peer_pid, connection) != peer
+                            or incoming_settlement_call(deadline, incoming_peer_uid, connection) != peer_uid):
+                        raise RuntimeError("Incoming cleanup active peer identity changed")
+            finally:
+                connection.close()
+            stage = "identity-refused"
+            incoming_cleanup_lease_guard(app, server_pid, server_birth, gui_pid, birth, lease, terminal=True, deadline=deadline)
+            if inactive:
+                incoming_cleanup_lease_guard(app, server_pid, server_birth, gui_pid, birth, lease, terminal=True, deadline=deadline)
+                stage = "cleanup-refused"
+                incoming_settlement_call(deadline, tray.cleanup_endpoint, unix.IPC_PATH, server_pid)
+                incoming_cleanup_lease_guard(app, server_pid, server_birth, gui_pid, birth, lease, terminal=True, deadline=deadline)
+                incoming_settlement_summary(facts, "settled", True, start, attempts, "none")
+                return
+            remaining = deadline - time.monotonic()
+            stage = "active-timeout"
+            if attempts == INCOMING_SETTLEMENT_SAMPLES or remaining <= 0:
+                raise IncomingSettlementDeadline("Incoming cleanup settlement deadline reached")
+            incoming_settlement_call(deadline, time.sleep, min(INCOMING_SETTLEMENT_POLL_SECONDS, remaining))
+    except BaseException as error:
+        code = "active-timeout" if isinstance(error, IncomingSettlementDeadline) else stage
+        incoming_settlement_summary(facts, "failed", True, start, attempts, code)
+        if first_active is not None:
+            raise first_active
+        raise
+
+
 def cleanup(helper, app, server_pid, launch_time, server_birth, gui_pid, birth, facts):
     if server_pid is None or launch_time is None or server_birth is None:
         return None
@@ -316,6 +721,13 @@ def cleanup(helper, app, server_pid, launch_time, server_birth, gui_pid, birth, 
         facts["processCleanupFailures"] = [{"process": "tray", **error_fact(error)}]
         return error
     first = None
+    lease = None
+    try:
+        lease = capture_incoming_cleanup_lease(helper, app, server_pid, launch_time, server_birth, gui_pid, birth)
+    except BaseException as error:
+        first = error
+        incoming_settlement_summary(facts, "failed", False, time.monotonic(), 0, "lease-unavailable")
+    stop_failure = None
     retained = [("gui", gui_pid, birth)] if gui_pid is not None and birth is not None else []
     retained.append(("tray", server_pid, server_birth))
     for label, pid, retained_birth in retained:
@@ -324,13 +736,20 @@ def cleanup(helper, app, server_pid, launch_time, server_birth, gui_pid, birth, 
         except ERRORS as error:
             if first is None:
                 first = error
+            if stop_failure is None:
+                stop_failure = error
             facts.setdefault("processCleanupFailures", []).append({"process": label, **error_fact(error)})
-    if first is not None:
+    if stop_failure is not None:
+        if lease is not None:
+            incoming_settlement_summary(facts, "failed", True, time.monotonic(), 0, "identity-refused")
         return first
     facts["ownedProcessesStopped"] = True
     for label, endpoint, pid in (("url", tray.URL_SOCKET, gui_pid), ("incoming", unix.IPC_PATH, server_pid)):
         try:
-            tray.cleanup_endpoint(endpoint, pid)
+            if label == "incoming":
+                cleanup_incoming_endpoint(app, server_pid, server_birth, gui_pid, birth, lease, facts)
+            else:
+                tray.cleanup_endpoint(endpoint, pid)
         except ERRORS as error:
             if first is None:
                 first = error

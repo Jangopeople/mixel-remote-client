@@ -68,6 +68,8 @@ def facts():
                  "criticalHashes": dict(v.CRITICAL_HASHES), "trayPid": 101, "guiPid": 202,
                  "inventorySamples": 15, "stabilitySamples": 13, "stabilitySecondsRequired": 5.0,
                  "completionCount": 1 if name == "batch-two-support" else 2,
+                 "incomingEndpointSettlement": {"state": "not-required", "leaseCapturedBeforeStop": True,
+                    "maximumMs": 5000, "attempts": 0, "elapsedMs": 0, "failureCode": "none"},
                  "completionsMatchOriginalTray": True, "actualTrayDispatchObserved": True,
                  "visibleGuiAndAttendedV2": True, "oneRetainedGuiDuringBoundedStability": True}
                 for name in v.SCENARIOS]}
@@ -327,10 +329,10 @@ class StrictReplayControls(unittest.TestCase):
                          "repos/" + v.REPOSITORY + "/actions/runs/" + str(v.RUN)])
         self.assertNotIn("--allow-escape-sequences", metadata.call_args.args[0])
         profile = v.source_contract(ROOT)
-        self.assertEqual(v.PROFILE_HASH, "af3d9302fc5dcd0f263548f9c8d4a4234e049d89e60e39b187b172c9c2cc97a0")
-        self.assertEqual(v.CONTROLS_HASH, "51a07dbacf3f0167ce87341d821b8550ff6478c627ce176e2b408bed234feea2")
+        self.assertEqual(v.PROFILE_HASH, "07259eea2c29ea25f2dd93eb9c46fee269450db2ae47ff5c8898f71e08dbd226")
+        self.assertEqual(v.CONTROLS_HASH, "f4efcacdc5ad388d54e1a9cac6480940ae5580d88c332545b39b7029c02baa81")
         self.assertEqual(profile["reviewedSources"]["scripts/test-support-launch-macos-concurrency-controls.py"], v.CONTROLS_HASH)
-        self.assertEqual(v.CALLER_HASH, "b8a8935dcb59c769452d9e8d75ccfa3f2f441127f48d0d15af2739f3b84508f2")
+        self.assertEqual(v.CALLER_HASH, "8b5c8c27f44ff88bb5bec63fd54fefe87c5d9889192f82131f1a08399d42dc51")
 
     def test_source_grounded_terminal_escape_refusal_is_exact_fixed_category_only(self):
         safe = {"httpStatus": None, "transportCategory": "terminal-escape-sequences-refused"}
@@ -528,6 +530,41 @@ class StrictReplayControls(unittest.TestCase):
             elif change == "trigger": target.pop("endpointCleanupFailures")
             elif change == "stopped": target["ownedProcessesStopped"] = False
             with self.subTest(change=change), self.assertRaises(v.Refusal): v.safe_facts(value)
+
+    def test_exact_settlement_receipts_allow_pass_only_with_complete_live_lease_and_final_cleanup(self):
+        record = facts(); settlement = record["scenarios"][0]["incomingEndpointSettlement"]
+        settlement.update(state="settled", attempts=2, elapsedMs=120)
+        safe = v.safe_facts(record); v.require_runtime_pass(0, safe)
+        self.assertEqual(safe["scenarios"][0]["incomingEndpointSettlement"], settlement)
+        record["scenarios"][0].pop("incomingEndpointSettlement")
+        with self.assertRaises(v.Refusal): v.require_runtime_pass(0, v.safe_facts(record))
+        record = facts(); row = record["scenarios"][0]; row["passed"] = False
+        row["incomingEndpointSettlement"].update(state="failed", attempts=50, elapsedMs=5000,
+            failureCode="active-timeout")
+        row["endpointCleanupFailures"] = [{"endpoint": "incoming", "reasonCategory": "runtime",
+            "errorType": "RuntimeError", "reasonCode": "ipc-endpoint-active",
+            "subphase": "endpoint-inactivity-check"}]
+        safe = v.safe_facts(record)
+        self.assertEqual(safe["scenarios"][0]["endpointCleanupFailures"], row["endpointCleanupFailures"])
+        with self.assertRaises(v.Refusal): v.require_runtime_pass(0, safe)
+        row["passed"] = True
+        with self.assertRaises(v.Refusal): v.safe_facts(record)
+
+    def test_settlement_receipts_reject_unleased_raw_ambiguous_boolean_or_overbound_success(self):
+        for key, value in (("leaseCapturedBeforeStop", False), ("maximumMs", True),
+                ("maximumMs", 5001), ("attempts", True), ("attempts", 51), ("elapsedMs", True),
+                ("elapsedMs", 5001), ("state", "unknown"), ("failureCode", "private-token"),
+                ("rawPath", "/private/secret")):
+            record = facts(); record["scenarios"][0]["incomingEndpointSettlement"][key] = value
+            with self.subTest(key=key, value=value), self.assertRaises(v.Refusal): v.safe_facts(record)
+        record = facts(); row = record["scenarios"][0]
+        row["incomingEndpointSettlement"].update(state="settled", attempts=0)
+        with self.assertRaises(v.Refusal): v.safe_facts(record)
+        row["incomingEndpointSettlement"].update(state="failed", leaseCapturedBeforeStop=False,
+            failureCode="lease-unavailable"); row["passed"] = False; row["ownedProcessesStopped"] = False
+        self.assertEqual(v.safe_facts(record)["scenarios"][0]["incomingEndpointSettlement"]["state"], "failed")
+        row["incomingEndpointSettlement"]["failureCode"] = "identity-refused"
+        with self.assertRaises(v.Refusal): v.safe_facts(record)
 
     def test_native_caller_receives_original_arguments_and_no_provider_tokens(self):
         with patch.dict(os.environ, {"GH_TOKEN": "private", "GITHUB_TOKEN": "private", "HOME": "/fixture"}):
