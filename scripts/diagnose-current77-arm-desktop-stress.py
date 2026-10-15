@@ -30,6 +30,19 @@ PARENT_WORKFLOW_SHA = "931aec5cdecc8a3dcf9dc63cc7a693b4b9f31e7565d2b38f76da221a5
 MAX_TOTAL = 28 * 1024 * 1024
 RAW_FILE = re.compile(r"owned-(?:app-log-[1-9][0-9]{0,2}\.log|crash-[1-9][0-9]{0,2}\.json)\Z")
 CREDENTIALS = frozenset({"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"})
+STDOUT_FIXED_PRIVACY_LINE = (
+    b"PASS: synthetic support invite bearer and API key absent from macOS app logs\n")
+
+
+def privacy_scan_input(name, data):
+    """Exclude one exact frozen status line from stdout scanning, never storage."""
+    if name == "desktop.stdout":
+        # Splitting only at LF preserves exact line boundaries and CRLF differences.
+        lines = data.split(b"\n")
+        for index, line in enumerate(lines[:-1]):
+            if line + b"\n" == STDOUT_FIXED_PRIVACY_LINE:
+                return b"\n".join(lines[:index] + lines[index + 1:])
+    return data
 
 
 def load_remaining(root):
@@ -260,8 +273,11 @@ def retain_originals(base, desktop, private, safe, app, code):
                     base.require(type(row.get("bytes")) is int and row["bytes"] == len(data),
                                  "desktop-stress-original-log-byte-count")
         base.require(referenced == set(names) - {"runtime.json"}, "desktop-stress-unreferenced-original-content")
-        base.require(all(not desktop.privacy_issue(data) for data in payloads.values()),
-                     "desktop-stress-original-content-privacy")
+        for name, data in payloads.items():
+            scan_input = privacy_scan_input(name, data)
+            if scan_input is not data:
+                manifest["files"][name]["fixedStatusLineExcludedFromPrivacyScan"] = True
+            base.require(not desktop.privacy_issue(scan_input), "desktop-stress-original-content-privacy")
         manifest["privacyAdmitted"] = True
         publish_originals(base, safe, payloads, manifest)
     except Exception as error:

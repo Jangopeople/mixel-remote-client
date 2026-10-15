@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Pure/file/mock stress controls; never run a native app or provider request."""
 import argparse
+import ast
 import copy
 import hashlib
 import importlib.util
@@ -395,6 +396,67 @@ class StressControls(unittest.TestCase):
         manifest = json.loads((safe/'diagnostic-originals-manifest.json').read_bytes())
         self.assertFalse(manifest['contentRetained']); self.assertTrue(manifest['withheld'])
         self.assertTrue(manifest['finalReplacementNotTouched'])
+
+
+    def test_exact_status_literal_matches_pinned_original_helper_print(self):
+        name = 'scripts/test-support-launch-macos.py'
+        raw = (ROOT/name).read_bytes()
+        self.assertEqual(b.sha(raw), b.FROZEN[name])
+        expected = v.STDOUT_FIXED_PRIVACY_LINE.decode('utf-8')[:-1]
+        matching = [node for node in ast.walk(ast.parse(raw))
+                    if isinstance(node,ast.Call) and isinstance(node.func,ast.Name)
+                    and node.func.id == 'print' and len(node.args) == 1
+                    and isinstance(node.args[0],ast.Constant) and node.args[0].value == expected]
+        self.assertEqual(len(matching),1)
+        self.assertEqual([(item.arg,ast.literal_eval(item.value)) for item in matching[0].keywords], [('flush',True)])
+        self.assertTrue(v.STDOUT_FIXED_PRIVACY_LINE.endswith(b'\n'))
+        self.assertTrue(self.desktop().privacy_issue(v.STDOUT_FIXED_PRIVACY_LINE))
+    def test_exact_stdout_status_line_scan_exception_preserves_raw_zip_bytes(self):
+        private, safe, runtime, app = self.raw_fixture()
+        raw = b'ordinary safe output\n' + v.STDOUT_FIXED_PRIVACY_LINE + b'following safe output\n'
+        (private/'desktop.stdout').write_bytes(raw)
+        manifest = v.retain_originals(b,self.desktop(),private,safe,app,0)
+        self.assertTrue(manifest['contentRetained'])
+        self.assertTrue(manifest['files']['desktop.stdout']['fixedStatusLineExcludedFromPrivacyScan'])
+        self.assertEqual(manifest['files']['desktop.stdout']['sha256'], b.sha(raw))
+        with zipfile.ZipFile(safe/'diagnostic-originals.zip') as archive:
+            self.assertEqual(archive.read('desktop.stdout'),raw)
+        self.assertEqual(v.privacy_scan_input('desktop.stdout',raw),b'ordinary safe output\nfollowing safe output\n')
+    def test_status_exception_is_only_exact_complete_lf_line_once(self):
+        line = v.STDOUT_FIXED_PRIVACY_LINE
+        desktop = self.desktop()
+        mutants = [b'prefix secret-' + line, line[:-1] + b'-suffix secret\n',
+                   line.replace(b'absent',b'present'), line[:-1], line.replace(b'\n',b'\r\n'),
+                   line + line, line + b'Authorization: Bearer secret-next-line\n',
+                   b'Authorization: Bearer secret-prior-line\n' + line,
+                   line + b'api_key=secret-another-line\n']
+        for raw in mutants:
+            with self.subTest(raw=raw):
+                self.assertTrue(desktop.privacy_issue(v.privacy_scan_input('desktop.stdout',raw)))
+    def test_other_files_never_receive_status_scan_exception(self):
+        line = v.STDOUT_FIXED_PRIVACY_LINE
+        for name in ['desktop.stderr','exit-observer-private.json','runtime/runtime.json',
+                     'runtime/owned-app-log-1.log','runtime/owned-crash-1.json']:
+            with self.subTest(name=name):
+                self.assertIs(v.privacy_scan_input(name,line),line)
+                self.assertTrue(self.desktop().privacy_issue(v.privacy_scan_input(name,line)))
+    def test_other_file_status_or_remaining_stdout_secret_withholds_archive(self):
+        for name, payload in [('desktop.stderr',v.STDOUT_FIXED_PRIVACY_LINE),
+                              ('desktop.stdout',v.STDOUT_FIXED_PRIVACY_LINE + b'Authorization: Bearer secret-next-line\n'),
+                              ('desktop.stdout',v.STDOUT_FIXED_PRIVACY_LINE*2)]:
+            with self.subTest(name=name), tempfile.TemporaryDirectory(prefix='stress-scan-refusal-') as directory:
+                old=self.root; self.root=Path(directory).resolve()
+                try:
+                    private,safe,runtime,app=self.raw_fixture(1)
+                    (private/name).write_bytes(payload)
+                    with self.assertRaises(b.Refusal):
+                        v.retain_originals(b,self.desktop(),private,safe,app,1)
+                    self.assertFalse((safe/'diagnostic-originals.zip').exists())
+                    manifest=json.loads((safe/'diagnostic-originals-manifest.json').read_bytes())
+                    self.assertFalse(manifest['contentRetained']); self.assertTrue(manifest['withheld'])
+                    self.assertEqual(manifest['files'][name]['sha256'],b.sha(payload))
+                finally:
+                    self.root=old
 
 
 def legacy_controls():
