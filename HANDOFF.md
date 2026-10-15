@@ -2,6 +2,23 @@
 
 ## Malformed support-link boundary — 2026-10-15
 
+The subsequent `f148d2b` comparison `38721736362` exposed two stale fixture
+fingerprints, on both Windows 2022 and 2025. Both original diagnostic ZIPs show
+the intended historical second-pass newline failure and exactly the original
+two changed files. The guarded server's current CRLF/LF hashes are
+`3b75312d2dd1af713454b6128bf5adcba20c29e012f3cd2ecfca666fdfb6b4e4` /
+`025aadf1e84975be76ae2046a9497a53b9a676af66a8f2d707202340bcb0169d`.
+Removing the exact new receiver guard, while preserving each raw newline
+profile, recovers both historical fingerprints. Only those two expected SHA
+literals are updated; all 23 assertions, other workflow bytes, 90-minute bound,
+matrix, baseline/current pipelines and uploader remain exact. Actual original
+byte replay passes five groups / 42 calls, including 38 malformed refusals.
+The closed 31-member source proof is
+`windows-baseline-native-guard-fingerprint-20261015/`; Root's independent replay
+is `root-windows-baseline-fixture-replay-20261015/`. The application code remains
+byte-identical to `f148d2b`. Its normal packages are held; final qualification
+must use the next exact clean source and fully green checks.
+
 Source review found a remaining confidentiality gap at `5df303f`: appending a
 fragment to a valid support invite failed strict validation, then reached the
 older unverified Mac `_url` transport before Dart rejected it. The source
