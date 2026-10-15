@@ -1390,7 +1390,7 @@ jobs:
           $tree = (& git rev-parse 'HEAD^{tree}').Trim()
           if ($LASTEXITCODE -ne 0) { throw 'Actual future QA harness tree unavailable.' }
           $owned = Join-Path $env:RUNNER_TEMP ('mixel-standard-foreground95-'+[Guid]::NewGuid().ToString('N'))
-          python -B scripts/prepare-standard-foreground95.py --repository $env:GITHUB_WORKSPACE --output $owned --root-gate $gate --root-gate-sha256 $gateHash --collection release-runtime-collection/artifact-provenance.json --harness-source $env:GITHUB_SHA --harness-tree $tree --live-state $env:NORMAL95_BEFORE
+          python -B scripts/prepare-standard-foreground95.py --repository $env:GITHUB_WORKSPACE --output $owned --root-gate $gate --root-gate-sha256 $gateHash --collection (Resolve-Path release-runtime-collection/artifact-provenance.json).Path --harness-source $env:GITHUB_SHA --harness-tree $tree --live-state $env:NORMAL95_BEFORE
           if ($LASTEXITCODE -ne 0) { throw 'Source1979 Standard foreground95 preparation refused.' }
           if (Test-Path -LiteralPath standard-foreground95-preparation.json) { throw 'Existing Standard foreground95 preparation evidence refused.' }
           Copy-Item -LiteralPath (Join-Path $owned 'preparation-manifest.json') -Destination standard-foreground95-preparation.json

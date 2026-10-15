@@ -25,7 +25,7 @@
     "scripts/diagnose-macos-failed-app.py": "aad5c0590b8a9f8e16401c005419aebba0603676e735ce7cf45a9f77e5da6015",
     "scripts/file_dialog_workflow_projection.py": "07d61633acee3a09fd505843664c3b560812276e41ba0fe02206278ae2b80bc8",
     "scripts/observe-macos-incoming-cleanup.py": "7b0397d0630d1b61d81dd922f27f84eed66213b406a4c22fa63406d80e9dddbf",
-    "scripts/standard_foreground95_workflow_projection.py": "4f1c736dc0bdf1406ddc3fe0babc5ba3960cc2e8d7a0a75a69840714dbf63c63",
+    "scripts/standard_foreground95_workflow_projection.py": "5c82b35d8266dbccef120b6a535faefc581cad42edbbdbde1d0c6782c67f541e",
     "scripts/test-observe-macos-incoming-cleanup.py": "3299ad55dcfd570f34b76cf35c9d463a1a652d4a8eb0e7df70d9dea76089e4ae",
     "scripts/test-support-launch-macos-concurrency-controls.py": "1f3fb2ec96e237a243fe36cf5d63263cbff6255014d3ef0aeed4745da108f8b0",
     "scripts/test-support-launch-macos-concurrency.py": "9fb58a9c5333df460cc4a676dc1499ee08af4af78edca762d0e20c59f0d03fc0"

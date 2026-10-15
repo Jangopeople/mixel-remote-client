@@ -276,6 +276,11 @@ if($argv.Count-ne$expected.Count){throw 'Actual caller changed native driver arg
 for($i=0;$i-lt$argv.Count;$i++){if($argv[$i]-cne$expected[$i]){throw 'Actual caller changed native signed-outer interface'}}
 $preparers=@($ast.FindAll({param($node)$node-is[Management.Automation.Language.CommandAst]-and$node.GetCommandName()-ceq'python'-and$node.Extent.Text.Contains('scripts/prepare-standard-foreground95.py')},$true))
 if($preparers.Count-ne1-or-not$preparers[0].Extent.Text.Contains('--harness-source $env:GITHUB_SHA --harness-tree $tree --live-state $env:NORMAL95_BEFORE')){throw 'Actual future harness attribution lost'}
+$prepareArgv=@($preparers[0].CommandElements)
+$collectionFlags=@(0..($prepareArgv.Count-1)|Where-Object{$prepareArgv[$_].Extent.Text-ceq'--collection'})
+if($collectionFlags.Count-ne1-or$collectionFlags[0]+1-ge$prepareArgv.Count){throw 'Exactly one actual collection provenance argument required'}
+$collection=$prepareArgv[$collectionFlags[0]+1]
+if($collection-isnot[Management.Automation.Language.MemberExpressionAst]-or$collection.Member.Value-cne'Path'-or$collection.Extent.Text-cne'(Resolve-Path release-runtime-collection/artifact-provenance.json).Path'){throw 'Actual collection provenance must be resolved canonically before Python'}
 'PASS: actual reviewed runtime PowerShell caller parses; one fresh native driver preserves all13 exact signed-outer arguments and separate future harness attribution; nothing was executed.'
 '''.replace('__CALLER__',str(path).replace("'","''"))
             self.assertIn('PASS:',pwsh(ps))
