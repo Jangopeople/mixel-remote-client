@@ -34,6 +34,11 @@ CHANGES = {
 }
 
 
+NATIVE_FRESH = {'src/mixel_support_url.rs': None, 'src/ipc.rs': '1ba2a64410ab24cdcf8ca67ccfb4564d97d8725653991a501b190510ac9a9953', 'src/common.rs': '1c133828b7fac67c90e9f1293a58f73204a78d2fd25425f2758a1ae217575ac2', 'src/core_main.rs': '3bc241c59d547352e77bfa1b44d6ea0e1200b3dd703ed4a63fbb720b07187512', 'src/server.rs': 'd6460bc6dba17253e6e4ba7947db1dfee9285294a3e3e3bdd71a646dd160663f'}
+NATIVE_ORIGINAL = {'src/mixel_support_url.rs': '15263ad5c9823ad0e0b5ae71cb3f2d8e2eec4a4d724f7e92b10446f1f32db1f5', 'src/ipc.rs': '2e69e5eb402628e73ceb36af73adce22ab7d6165533dfee2f38c3db7f5945e6f', 'src/common.rs': 'cd1ca8340689104c621d99becfec33485d66e3afefdd9ab74f901ac24ca40150', 'src/core_main.rs': '8a6541ba344d287a96b917f7bf0eaa8ff3002b5fb5d3aada7562f0c8d8463e1c', 'src/server.rs': 'adfe3dbc3c76a7408e7be47ab0e408bd32960115509e759e5a333d18baf95e6d'}
+NATIVE_FINAL = {'src/mixel_support_url.rs': '51794179244b2bfc6055c38edbc2961d6adb2bd6754b3fb855ebee1c5c64fc21', 'src/ipc.rs': '62386d3dbf579e1a72d77100f2bee744395d4c778f2749c97955b5d103a09849', 'src/common.rs': '996c4948ba464f8f6bee036b47454f2c34b285b8f12ed094c679c25f5261b985', 'src/core_main.rs': 'ae088f7f431712968424f0e8d842c00c746c1fd9ab28533b579d4327181ca2ee', 'src/server.rs': '025aadf1e84975be76ae2046a9497a53b9a676af66a8f2d707202340bcb0169d'}
+NATIVE_CHANGES = {'src/mixel_support_url.rs': [('pub(crate) fn accepted_ack(', '// Candidate recognition is deliberately independent of validity: malformed\n// support credentials must never reach the legacy unverified URL transport.\npub(crate) fn is_reserved_support_url(raw: &str) -> bool {\n    if let Some((_, rest)) = raw.split_once("://") {\n        let authority = rest.split([\'/\', \'?\', \'#\']).next().unwrap_or("");\n        let host_port = authority.rsplit(\'@\').next().unwrap_or("");\n        let host = host_port.split(\':\').next().unwrap_or("");\n        if let Some(host) = decode_query(host) {\n            let host: String = host.chars().filter(|value| !value.is_control()).collect();\n            if host.eq_ignore_ascii_case("support") { return true; }\n        }\n    }\n    // These names are reserved support credentials, even on an invalid host or\n    // scheme. Legacy remote links use key/password/relay/switch_uuid instead.\n    if let Some((_, query)) = raw.split_once(\'?\') {\n        for pair in query.split([\'&\', \'#\']) {\n            let name = pair.split_once(\'=\').map(|(name, _)| name).unwrap_or(pair);\n            if let Some(name) = decode_query(name) {\n                match name.to_lowercase().as_str() {\n                    "invite" | "apikey" => return true,\n                    _ => {}\n                }\n            }\n        }\n    }\n    false\n}\n\npub(crate) fn accepted_ack(')], 'src/ipc.rs': [('pub async fn send_url_scheme(url: String) -> ResultType<()> {\n', 'pub async fn send_url_scheme(url: String) -> ResultType<()> {\n    #[cfg(all(target_os = "macos", feature = "flutter"))]\n    if crate::server::mixel_support_url::is_reserved_support_url(&url)\n        && !crate::server::mixel_support_url::is_valid_support_url(&url) {\n        bail!("Mixel support URL handoff rejected malformed intent");\n    }\n')], 'src/common.rs': [('pub fn handle_url_scheme(url: String) {\n', 'pub fn handle_url_scheme(url: String) {\n    #[cfg(all(target_os = "macos", feature = "flutter"))]\n    if crate::server::mixel_support_url::is_reserved_support_url(&url)\n        && !crate::server::mixel_support_url::is_valid_support_url(&url) {\n        return;\n    }\n')], 'src/core_main.rs': [('    let _is_mixel_support_invite = args.first()\n', '    #[cfg(all(target_os = "macos", feature = "flutter"))]\n    if args.first().map(|url| crate::server::mixel_support_url::is_reserved_support_url(url)\n        && !crate::server::mixel_support_url::is_valid_support_url(url)).unwrap_or(false) {\n        return None;\n    }\n    let _is_mixel_support_invite = args.first()\n'), ('    #[cfg(target_os = "macos")]\n    {\n        #[cfg(feature = "flutter")]\n        if crate::server::mixel_support_url::is_valid_support_url(&uni_links) {\n', '    #[cfg(target_os = "macos")]\n    {\n        #[cfg(feature = "flutter")]\n        if crate::server::mixel_support_url::is_reserved_support_url(&uni_links)\n            && !crate::server::mixel_support_url::is_valid_support_url(&uni_links) {\n            return None;\n        }\n        #[cfg(feature = "flutter")]\n        if crate::server::mixel_support_url::is_valid_support_url(&uni_links) {\n')], 'src/server.rs': [('                        Data::UrlLink(url) => {\n                            if url.is_empty() {\n', '                        Data::UrlLink(url) => {\n                            if mixel_support_url::is_reserved_support_url(&url)\n                                && !mixel_support_url::is_valid_support_url(&url) {\n                                send_mixel_support_url_ack(&mut conn, mixel_support_url::Delivery::Unavailable).await;\n                                continue;\n                            }\n                            if url.is_empty() {\n')]}
+
 def digest(raw):
     return hashlib.sha256(raw).hexdigest()
 
@@ -84,6 +89,8 @@ def prior_compiler(prior):
 
 
 def transform(name, text, restore=False):
+    if name in NATIVE_ORIGINAL:
+        return transform_native(name, text, restore)
     before, after = (FINAL[name], ORIGINAL[name]) if restore else (ORIGINAL[name], FINAL[name])
     if digest(text.encode()) == after:
         return text
@@ -101,12 +108,48 @@ def transform(name, text, restore=False):
     return text
 
 
+
+def transform_native(name, text, restore=False):
+    before, after = (NATIVE_FINAL[name], NATIVE_ORIGINAL[name]) if restore else (NATIVE_ORIGINAL[name], NATIVE_FINAL[name])
+    if digest(text.encode()) == after:
+        return text
+    if digest(text.encode()) != before:
+        raise RuntimeError('Changed pinned native URI routing source: ' + name)
+    pairs = list(reversed(NATIVE_CHANGES[name])) if restore else NATIVE_CHANGES[name]
+    for old, new in pairs:
+        if restore:
+            old, new = new, old
+        if text.count(old) != 1:
+            raise RuntimeError('Changed exact native URI routing literal: ' + name)
+        text = text.replace(old, new, 1)
+    if digest(text.encode()) != after:
+        raise RuntimeError('Native URI routing whole-source inverse mismatch: ' + name)
+    return text
+
+
+def native_inventory(root):
+    texts, hashes = {}, {}
+    for name in NATIVE_ORIGINAL:
+        path = root / name
+        if not path.exists() and not path.is_symlink():
+            hashes[name] = None
+            continue
+        path = safe_source(root, name)
+        text, newline = canonical(path.read_bytes())
+        texts[name] = (path, text, newline)
+        hashes[name] = digest(text.encode())
+    matches = [state for state, pins in [('fresh', NATIVE_FRESH), ('original', NATIVE_ORIGINAL), ('final', NATIVE_FINAL)] if hashes == pins]
+    if len(matches) != 1:
+        raise RuntimeError('Changed or partial native URI routing profile')
+    return matches[0], texts
+
+
 def validate_prior(root, texts, state):
     prior = prior_namespace()
     compiler = prior_compiler(prior)
     # Validate the actual supplied ownership before a copy can conceal it.
     compiler['validate_projection_sources'](root)
-    if state == 'final':
+    if state in ('final', 'previous-final'):
         with tempfile.TemporaryDirectory(prefix='mixel-uri-routing-prior-') as temporary:
             stage = Path(temporary).resolve() / 'source'
             shutil.copytree(root, stage, symlinks=True,
@@ -128,17 +171,27 @@ def apply(root, check=False, restore=False, verify=True):
         text, newline = canonical(path.read_bytes())
         texts[name] = (path, text, newline)
         hashes[name] = digest(text.encode())
+    native_state, native_texts = native_inventory(root)
     states = [state for state, pins in [('fresh', FRESH), ('original', ORIGINAL), ('final', FINAL)]
               if hashes == pins]
     if len(states) != 1:
         raise RuntimeError('Changed or partial URI routing profile')
     state = states[0]
+    if state == 'final' and native_state == 'original':
+        state = 'previous-final'
+    elif native_state != state:
+        raise RuntimeError('Mixed Dart/native URI routing profile')
+    texts.update(native_texts)
+    if state == 'previous-final' and not restore:
+        raise RuntimeError('Historical native URI routing profile is restore-only')
     if state == 'fresh' and not restore:
         raise RuntimeError('URI routing terminal layer requires complete branding')
     planned = []
     for name, (path, text, newline) in texts.items():
         result = text if state == 'fresh' else transform(name, text, restore)
-        expected = FRESH[name] if state == 'fresh' else ORIGINAL[name] if restore else FINAL[name]
+        original_pins, final_pins, fresh_pins = ((ORIGINAL, FINAL, FRESH) if name in ORIGINAL
+                                                   else (NATIVE_ORIGINAL, NATIVE_FINAL, NATIVE_FRESH))
+        expected = fresh_pins[name] if state == 'fresh' else original_pins[name] if restore else final_pins[name]
         if digest(result.encode()) != expected:
             raise RuntimeError('URI routing profile inverse mismatch: ' + name)
         planned.append((path, result.replace('\n', newline).encode()))
@@ -148,12 +201,15 @@ def apply(root, check=False, restore=False, verify=True):
     for name, (path, text, newline) in texts.items():
         if safe_source(root, name) != path or path.read_bytes() != text.replace('\n', newline).encode():
             raise RuntimeError('URI routing source changed during verification')
-    writes = 0
+    writes = native_writes = 0
     for path, raw in planned:
         if not check and path.read_bytes() != raw:
             path.write_bytes(raw)
-            writes += 1
-    return {'profile': state, 'writes': writes, 'checkedFiles': len(texts)}
+            if path.relative_to(root).as_posix() in ORIGINAL:
+                writes += 1
+            else:
+                native_writes += 1
+    return {'profile': state, 'writes': writes, 'nativeWrites': native_writes, 'checkedFiles': len(texts)}
 
 
 def has_layer(root):
@@ -167,7 +223,9 @@ def has_layer(root):
     if model_hash not in (ORIGINAL[model], FINAL[model]):
         raise RuntimeError('Changed URI routing model presence source')
     return any(digest(canonical(safe_source(root, name).read_bytes())[0].encode()) == expected
-               for name, expected in FINAL.items())
+               for name, expected in FINAL.items()) or any(
+                   (root / name).is_file() and digest(canonical(safe_source(root, name).read_bytes())[0].encode()) == expected
+                   for name, expected in NATIVE_FINAL.items())
 
 
 @contextlib.contextmanager
@@ -180,7 +238,7 @@ def previous(root):
         return
     compiler = prior_compiler(prior_namespace())
     compiler['validate_projection_sources'](root)
-    originals = {name: safe_source(root, name).read_bytes() for name in ORIGINAL}
+    originals = {name: safe_source(root, name).read_bytes() for name in (*ORIGINAL, *NATIVE_ORIGINAL)}
     with tempfile.TemporaryDirectory(prefix='mixel-uri-routing-inverse-') as temporary:
         stage = Path(temporary).resolve() / 'source'
         shutil.copytree(root, stage, symlinks=True,

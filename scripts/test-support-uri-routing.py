@@ -264,6 +264,12 @@ class UriRoutingTests(unittest.TestCase):
             text, _ = patch.canonical(patch.safe_source(SOURCE, name).read_bytes())
             cls.original[name] = patch.transform(name, text, True)
             cls.final[name] = patch.transform(name, cls.original[name])
+        cls.native_original = {}
+        cls.native_final = {}
+        for name in patch.NATIVE_ORIGINAL:
+            text, _ = patch.canonical(patch.safe_source(SOURCE, name).read_bytes())
+            cls.native_original[name] = patch.transform_native(name, text, True)
+            cls.native_final[name] = patch.transform_native(name, cls.native_original[name])
         cls.prior = patch.prior_namespace()
         cls.compiler = patch.prior_compiler(cls.prior)
         cls.reporter = (SOURCE / 'flutter/lib/mixel_support_invite.dart').read_bytes()
@@ -276,7 +282,9 @@ class UriRoutingTests(unittest.TestCase):
 
     def pure(self, root, newline='\n', final=False):
         root.mkdir()
-        for name, text in (self.final if final else self.original).items():
+        combined = dict(self.final if final else self.original)
+        combined.update(self.native_final if final else self.native_original)
+        for name, text in combined.items():
             path = root / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(text.replace('\n', newline).encode())
@@ -419,8 +427,10 @@ class UriRoutingTests(unittest.TestCase):
             native_before = snapshot(root / native)
             self.assertEqual(patch.apply(root, verify=True)['writes'], 2)
             final = snapshot(root)
-            changed = {name for name in set(before) | set(final) if before.get(name) != final.get(name)}
+            all_changed = {name for name in set(before) | set(final) if before.get(name) != final.get(name)}
+            changed = all_changed & set(patch.ORIGINAL)
             self.assertEqual(changed, set(patch.ORIGINAL))
+            self.assertEqual(all_changed - changed, set(patch.NATIVE_ORIGINAL))
             self.assertEqual(snapshot(root / native), native_before)
             self.assertEqual(patch.apply(root, check=True, restore=True, verify=True)['profile'], 'final')
             self.assertEqual(snapshot(root), final)
@@ -436,7 +446,7 @@ class UriRoutingTests(unittest.TestCase):
             drifted = snapshot(root)
             with self.assertRaises(RuntimeError): patch.apply(root, verify=True)
             self.assertEqual(snapshot(root), drifted)
-        print('PASS complete actual prior-owner chain, final projection, exact two-source changes, native-family conservation, older-source refusal, supplied-tree conservation.')
+        print('PASS complete actual prior-owner chain, final projection, exact two-Dart/five-native-source changes, native dependency-family conservation, older-source refusal, supplied-tree conservation.')
 
     def test_06_prior_fresh_pins_and_cli_flags(self):
         linux = self.prior['prior_namespace']()
@@ -501,6 +511,112 @@ class UriRoutingTests(unittest.TestCase):
                             guard_calls += 1
         self.assertEqual(guard_calls, 48)
         print('PASS 48 LF/CRLF malformed-model has_layer and actual historical-consumer refusals before any copy; fresh/older/original/final presence behavior conserved.')
+
+
+    def test_08_native_source_lf_crlf_migration_and_exact_inverse(self):
+        for newline in ['\n', '\r\n']:
+            with self.subTest(newline=repr(newline)), tempfile.TemporaryDirectory(dir=OUTPUT) as temp:
+                root = self.pure(Path(temp) / 'source', newline)
+                before = snapshot(root)
+                # Preserve and execute the exact previous-final warm migration:
+                # old Dart terminal changes exist, native correction is absent.
+                for name, text in self.final.items():
+                    (root / name).write_bytes(text.replace('\n', newline).encode())
+                previous_final = snapshot(root)
+                status = patch.apply(root, check=True, restore=True, verify=False)
+                self.assertEqual((status['profile'], status['nativeWrites']), ('previous-final', 0))
+                self.assertEqual(snapshot(root), previous_final)
+                with self.assertRaisesRegex(RuntimeError, 'restore-only'):
+                    patch.apply(root, verify=False)
+                self.assertEqual(snapshot(root), previous_final)
+                patch.apply(root, restore=True, verify=False)
+                self.assertEqual(snapshot(root), before)
+                status = patch.apply(root, verify=False)
+                self.assertEqual((status['profile'], status['writes'], status['nativeWrites']), ('original', 2, 5))
+                final = snapshot(root)
+                status = patch.apply(root, verify=False)
+                self.assertEqual((status['profile'], status['writes'], status['nativeWrites']), ('final', 0, 0))
+                self.assertEqual(snapshot(root), final)
+                patch.apply(root, restore=True, verify=False)
+                self.assertEqual(snapshot(root), before)
+                status = patch.apply(root, verify=False)
+                self.assertEqual((status['writes'], status['nativeWrites']), (2, 5))
+                self.assertEqual(snapshot(root), final)
+        print('PASS exact old-final warm migration, LF/CRLF native idempotence and whole-file inverse; all original Dart assertions retained.')
+
+    def test_09_native_whole_profile_refusals_before_any_write(self):
+        refusals = 0
+        for name in patch.NATIVE_ORIGINAL:
+            for variant in ['append', 'partial', 'missing', 'mixed-newline', 'invalid-utf8', 'hardlink']:
+                with self.subTest(name=name, variant=variant), tempfile.TemporaryDirectory(dir=OUTPUT) as temp:
+                    root = self.pure(Path(temp) / 'source')
+                    path = root / name
+                    if variant == 'append': path.write_bytes(path.read_bytes() + b'// drift\n')
+                    elif variant == 'partial': path.write_text(self.native_final[name])
+                    elif variant == 'missing': path.unlink()
+                    elif variant == 'mixed-newline': path.write_bytes(path.read_bytes().replace(b'\n', b'\r\n', 1))
+                    elif variant == 'invalid-utf8': path.write_bytes(path.read_bytes() + b'\xff')
+                    else: os.link(path, root / 'unexpected-native-link')
+                    before = snapshot(root)
+                    for check, restore in [(False, False), (True, False), (False, True), (True, True)]:
+                        with self.assertRaises((RuntimeError, OSError, UnicodeError)):
+                            patch.apply(root, check=check, restore=restore, verify=False)
+                        self.assertEqual(snapshot(root), before)
+                        refusals += 1
+        self.assertEqual(refusals, 120)
+        print('PASS 120 exact native drift/partial/missing/newline/encoding/ownership refusals before any write.')
+
+    def test_10_actual_native_sender_common_core_and_receiver_boundaries(self):
+        directory = OUTPUT / 'actual-native-boundaries'
+        result = subprocess.run([os.sys.executable, str(BASE / 'test-support-native-uri-boundary.py'),
+                                 '--source', str(SOURCE), '--output', str(directory)],
+                                capture_output=True, text=True, timeout=120)
+        (OUTPUT / 'actual-native-boundaries.log').write_text(result.stdout + result.stderr)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('test result: ok.', result.stdout)
+        print(result.stdout.strip())
+
+
+    def test_11_exact_fresh_missing_queue_and_mixed_profiles(self):
+        for newline in ['\n', '\r\n']:
+            with self.subTest(newline=repr(newline)), tempfile.TemporaryDirectory(dir=OUTPUT) as temp:
+                root = self.pure(Path(temp) / 'source', newline)
+                for name in (*patch.FRESH, *patch.NATIVE_FRESH):
+                    expected = patch.FRESH.get(name, patch.NATIVE_FRESH.get(name))
+                    path = root / name
+                    if expected is None:
+                        path.unlink()
+                        continue
+                    raw = subprocess.check_output(['git', '-C', str(SOURCE), 'show', self.prior['prior_namespace']()['PIN'] + ':' + name])
+                    logical, _ = patch.canonical(raw)
+                    self.assertEqual(patch.digest(logical.encode()), expected)
+                    path.write_bytes(logical.replace('\n', newline).encode())
+                before = snapshot(root)
+                status = patch.apply(root, check=True, restore=True, verify=False)
+                self.assertEqual((status['profile'], status['writes'], status['nativeWrites']), ('fresh', 0, 0))
+                patch.apply(root, restore=True, verify=False)
+                self.assertEqual(snapshot(root), before)
+                with self.assertRaisesRegex(RuntimeError, 'requires complete branding'):
+                    patch.apply(root, verify=False)
+                self.assertEqual(snapshot(root), before)
+                # A module at this fresh upstream stage is a partial mixed tree,
+                # even if its bytes are a genuine lower-layer module.
+                path = root / 'src/mixel_support_url.rs'
+                path.write_bytes(self.native_original['src/mixel_support_url.rs'].replace('\n', newline).encode())
+                before = snapshot(root)
+                with self.assertRaises(RuntimeError):
+                    patch.apply(root, restore=True, check=True, verify=False)
+                self.assertEqual(snapshot(root), before)
+            with tempfile.TemporaryDirectory(dir=OUTPUT) as temp:
+                root = self.pure(Path(temp) / 'source', newline)
+                for name, text in self.native_final.items():
+                    (root / name).write_bytes(text.replace('\n', newline).encode())
+                before = snapshot(root)
+                for check, restore in [(False, False), (True, False), (False, True), (True, True)]:
+                    with self.assertRaisesRegex(RuntimeError, 'Mixed Dart/native'):
+                        patch.apply(root, check=check, restore=restore, verify=False)
+                    self.assertEqual(snapshot(root), before)
+        print('PASS exact LF/CRLF fresh absent-queue inventory and mixed-profile zero-write refusals; old-final restore-only remains separately exercised.')
 
 
 def main():

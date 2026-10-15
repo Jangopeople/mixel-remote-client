@@ -20,6 +20,14 @@ peer check. Their bounded verifier, owned-fixture and CI-budget corrections
 require a fresh fully green build and preflight before package acceptance.
 **Complete application acceptance remains unfinished.**
 
+Malformed support links are refused before legacy Mac IPC or fallback launch.
+Reserved host and credential-name recognition is independent of strict invite
+validation; valid links retain the existing authenticated peer handoff. The
+terminal source layer preserves exact historical restoration and refuses mixed
+profiles. Its mandatory URI controls include the generated native sender,
+handler, startup and receiver boundaries, with explicit fake transport seams.
+Source proofs and the held `5df303f` candidate do not qualify final installers.
+
 The candidate corrects native API/toolchain compatibility, input-device creation
 and button/wheel forwarding, fingerprint cache races, first-use keyboard mode,
 transfer-window fitting, unsafe fatal signal handling and exited Windows

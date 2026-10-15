@@ -1,5 +1,46 @@
 # Mixel-Remote — Agent Handoff / Current State
 
+## Malformed support-link boundary — 2026-10-15
+
+Source review found a remaining confidentiality gap at `5df303f`: appending a
+fragment to a valid support invite failed strict validation, then reached the
+older unverified Mac `_url` transport before Dart rejected it. The source
+finding is credential disclosure to a local foreign endpoint; it does not
+demonstrate a consent bypass or explain the reported valid-link ID error.
+Producer `38716696372` and preflight `38716704169` are held as diagnostic
+evidence, even if individual jobs pass. Do not collect or install their normal
+packages as the final candidate.
+
+The terminal URI owner now recognizes reserved support hosts and decoded
+credential names independently of validity. Invalid candidates return before
+the common handler's fallback launch, direct sender transport, CLI startup and
+receiver dispatch. The unchanged strict validator alone selects valid support
+handoff. The validator, protected sender and peer-before-framing connector are
+byte-identical; all 37 earlier patch helpers and the base queue resource remain
+unchanged. Earlier Dart-only final profiles are accepted only for exact
+restoration before the complete macro regenerates the current layer.
+
+Actual source controls pass 11 tests, retaining all 1,560 Dart assertions and
+53 original unittest assertions. Six original test bodies are exact; the
+seventh conservation check adds the five native paths alongside its existing
+two-Dart-path assertion. The Rust 1.75 pure fixture passes four groups covering
+29 malformed candidates and nine legacy routes. Independent compiled controls
+pass six groups with 33 malformed cases, eight valid invites and 11 legacy
+routes; the original two fragment controls fail as expected, reproducing the
+legacy write and fallback. These are explicit fake transport/launcher
+boundaries, not packaged IPC or desktop qualification.
+
+Whole-file source hashes are `e0677c2ade3cc980b17e69b93236f3533478abb95f8bc4dc78dd2e369b14c220`
+for the terminal owner, `168d406613b31bfe5aabc3fdb88489ec5b5af539ff5f81aeb6e854e611b2257f`
+for its routed tests, and `10fbaf6dcecdb5bc60e83c6f5e63d75d882a09fd7aec367196897f44eeaae463`
+for the new pure boundary fixture, invoked by the existing mandatory URI tests.
+Closed packets are `mac-reserved-url-terminal-20261015/` (103 members) and
+`independent-malformed-uri-final-controls-j8_1xkzj/` (24 members), both fully
+Root-rehashed. Root's unchanged complete source driver and old-final LF/CRLF
+warm migration run separately under `root-native-uri-complete-macros-20261015/`.
+Fresh all-platform private builds, mandatory preflight and every outstanding
+native acceptance path remain required; no public release is authorized here.
+
 ## Active reliability continuation — 2026-10-15 (acceptance remains open)
 
 Private source `d4825f1531b126236163008e7f0f4b965aebf7ae` was dispatched
