@@ -65,6 +65,33 @@ def copy_current_pipeline_inputs(destination):
 
 
 @contextlib.contextmanager
+def linux_close_baseline(source):
+    """Expose the exact previous owners without removing startup under test.
+
+    Validate each supplied late Linux layer before its private inverse copies
+    anything. The product helper pins and original input remain unchanged.
+    """
+    source = Path(source).resolve()
+    native_spec = importlib.util.spec_from_file_location("mixel_historical_native_close", ROOT / "scripts/patch-support-linux-child-window-close.py")
+    native_close = importlib.util.module_from_spec(native_spec)
+    native_spec.loader.exec_module(native_close)
+    if native_close.has_layer(source):
+        with native_close.previous(source) as previous:
+            with linux_close_baseline(previous) as checked:
+                yield checked
+        return
+    linux_spec = importlib.util.spec_from_file_location("mixel_historical_linux_close", ROOT / "scripts/patch-support-linux-window-close.py")
+    linux_close = importlib.util.module_from_spec(linux_spec)
+    linux_spec.loader.exec_module(linux_close)
+    if linux_close.has_layer(source):
+        with linux_close.previous(source) as previous:
+            with linux_close_baseline(previous) as checked:
+                yield checked
+        return
+    yield source
+
+
+@contextlib.contextmanager
 def startup_baseline(source):
     """Verify earlier layers in a private exact startup inverse; input is read-only.
 

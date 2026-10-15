@@ -36,6 +36,65 @@ ADDITIONS = (
 )
 
 
+def linux_close_workflow_projections(workflow):
+    """Exact approved adjacent checks and the unchanged surrounding gates."""
+    if workflow not in ('build.yml', 'preflight.yml'):
+        raise AssertionError('Unknown Linux close workflow projection')
+    source = 'rustdesk' if workflow == 'build.yml' else '"$RUNNER_TEMP/mixel-sdk-source/pipeline-lf"'
+    dart = 'python3 scripts/test-support-linux-window-close.py --source ' + source + ' --dart "$(command -v dart)"\n'
+    native = 'python3 scripts/test-support-linux-child-window-close.py --source ' + source + ' --output "$RUNNER_TEMP/mixel-linux-child-close"\n'
+    projections = [(
+        '          python3 scripts/test-support-macos-cleanup.py --dart "$(command -v dart)" --flutter "$(command -v flutter)"\n',
+        '          ' + dart + '          ' + native,
+        '          python3 scripts/test-support-wakelock.py\n',
+        2 if workflow == 'build.yml' else 1,
+    )]
+    if workflow == 'preflight.yml':
+        projections.append((
+            '      - name: Prove awaited Mac page and terminal cleanup with real Flutter widgets\n'
+            '        run: python3 scripts/test-support-macos-cleanup.py --dart "$(command -v dart)" --flutter "$(command -v flutter)"\n',
+            '      - name: Prove Linux terminal-close futures and conserved nonfinal window paths\n'
+            '        run: ' + dart +
+            '      - name: Prove Linux child close ownership and mouse-hook cleanup\n'
+            '        run: ' + native,
+            '      - name: Prove bounded main-engine Quit and owned resource cleanup\n'
+            '        run: python3 scripts/test-support-macos-termination.py --flutter "$(command -v flutter)" --framework "$MIXEL_FLUTTER_FRAMEWORK"\n',
+            1,
+        ))
+    return projections
+
+
+def inverse_linux_close_workflow_checks(text, workflow):
+    """Remove only the exact count and placement of approved regression checks."""
+    for before, addition, after, count in linux_close_workflow_projections(workflow):
+        current = before + addition + after
+        if text.count(addition) != count or text.count(current) != count:
+            raise AssertionError('Exact ordered Linux close workflow checks changed: ' + workflow)
+        text = text.replace(current, before + after, count)
+    return text
+
+
+def linux_close_bridge_projection():
+    before = ('      - name: Generate bridge\n'
+              '        working-directory: rustdesk\n'
+              '        run: |\n')
+    original = ('          RDREPO=. python3 ../scripts/patch-support-macos-texture.py\n'
+                '          RDREPO=. python3 ../scripts/patch-support-macos-window.py\n')
+    restore = '          python3 ../scripts/patch-support-linux-child-window-close.py --root . --restore\n'
+    reapply = '          python3 ../scripts/patch-support-linux-child-window-close.py --root . --after-branding\n'
+    after = "          pushd flutter && sed -i -e 's/extended_text: 14.0.0/extended_text: 13.0.0/g' pubspec.yaml && flutter pub get && popd\n"
+    return before, restore, original, reapply, after
+
+
+def inverse_linux_close_bridge_checks(text):
+    """Conserve both original bridge hooks while removing their exact brackets."""
+    before, restore, original, reapply, after = linux_close_bridge_projection()
+    current = before + restore + original + reapply + after
+    if any(text.count(value) != 1 for value in (restore, original, reapply, current)):
+        raise AssertionError('Exact ordered Linux child close bridge brackets changed')
+    return text.replace(current, before + original + after, 1)
+
+
 def forbidden(*args, **kwargs):
     raise AssertionError('A source-only test attempted a native action')
 
@@ -706,6 +765,8 @@ class ConcurrencyControls(unittest.TestCase):
 
     def test_workflow_whole_inverse_has_only_two_ordered_additions(self):
         value = C.canonical((ROOT / '.github/workflows/build.yml').read_bytes()).decode()
+        value = inverse_linux_close_workflow_checks(value, 'build.yml')
+        value = inverse_linux_close_bridge_checks(value)
         for prefix in ('../scripts/', 'scripts/'):
             for original, flag in (('test-support-launch-macos.py', '--original-desktop'), ('test-support-launch-macos-tray.py', '--original-tray')):
                 before = 'python3 ' + prefix + original + ' --app'
@@ -722,6 +783,7 @@ class ConcurrencyControls(unittest.TestCase):
 
     def test_preflight_wrapper_and_mandatory_source_command_exact_whole_inverse(self):
         text = C.canonical((ROOT / '.github/workflows/preflight.yml').read_bytes()).decode()
+        text = inverse_linux_close_workflow_checks(text, 'preflight.yml')
         budget = "  windows-packaging:\n    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_source_runner == 'windows-2025' && 'windows-2025' || 'windows-2022' }}\n    timeout-minutes: 120\n"
         previous_budget = budget.replace('    timeout-minutes: 120\n', '    timeout-minutes: 60\n', 1)
         self.assertEqual(text.count(budget), 1)
@@ -737,6 +799,72 @@ class ConcurrencyControls(unittest.TestCase):
         self.assertEqual(text.count(control), 1)
         text = text.replace(current, old, 1).replace(control, '', 1)
         self.assertEqual(hashlib.sha256(text.encode()).hexdigest(), 'a2b3ddcf8141d91a6e3f7af26e965642848f9752c49e8db13189e890277555fe')
+
+    def test_linux_close_workflow_projection_refuses_changed_missing_duplicate_reordered_or_moved_checks(self):
+        for workflow in ('build.yml', 'preflight.yml'):
+            text = C.canonical((ROOT / '.github/workflows' / workflow).read_bytes()).decode()
+            projected = inverse_linux_close_workflow_checks(text, workflow)
+            self.assertNotIn('test-support-linux-window-close.py', projected)
+            self.assertNotIn('test-support-linux-child-window-close.py', projected)
+            for before, addition, after, count in linux_close_workflow_projections(workflow):
+                lines = addition.splitlines(keepends=True)
+                first = ''.join(lines[:len(lines) // 2])
+                second = ''.join(lines[len(lines) // 2:])
+                mutations = {
+                    'missing': '', 'missing-first': second, 'missing-second': first,
+                    'duplicate': addition + addition, 'duplicate-first': first + addition,
+                    'changed': addition.replace('--source ', '--source changed ', 1),
+                    'reordered': second + first,
+                }
+                for kind, changed in mutations.items():
+                    with self.subTest(workflow=workflow, addition=addition, mutation=kind):
+                        with self.assertRaises(AssertionError):
+                            inverse_linux_close_workflow_checks(text.replace(addition, changed, 1), workflow)
+                moved = text.replace(addition, '', 1) + addition
+                for kind, changed in (
+                        ('moved', moved),
+                        ('preceding-gate', text.replace(before + addition + after, before.rstrip('\n') + ' # changed\n' + addition + after, 1)),
+                        ('following-gate', text.replace(before + addition + after, before + addition + after.rstrip('\n') + ' # changed\n', 1))):
+                    with self.subTest(workflow=workflow, addition=addition, mutation=kind):
+                        with self.assertRaises(AssertionError):
+                            inverse_linux_close_workflow_checks(changed, workflow)
+        with self.assertRaises(AssertionError):
+            inverse_linux_close_workflow_checks('', 'foreign.yml')
+
+    def test_linux_close_bridge_projection_refuses_changed_missing_duplicate_reordered_or_moved_brackets(self):
+        text = C.canonical((ROOT / '.github/workflows/build.yml').read_bytes()).decode()
+        before, restore, original, reapply, after = linux_close_bridge_projection()
+        current = restore + original + reapply
+        projected = inverse_linux_close_bridge_checks(text)
+        self.assertEqual(projected.count(before + original + after), 1)
+        self.assertNotIn(restore, projected)
+        self.assertNotIn(reapply, projected)
+        lines = current.splitlines(keepends=True)
+        mutations = {
+            'missing-restore': original + reapply,
+            'missing-reapply': restore + original,
+            'missing-original': restore + reapply,
+            'duplicate-restore': restore + current,
+            'duplicate-reapply': current + reapply,
+            'duplicate-original': restore + original + original + reapply,
+            'changed-restore': current.replace('--restore', '--restore changed', 1),
+            'changed-reapply': current.replace('--after-branding', '--after-branding changed', 1),
+            'changed-texture': current.replace('RDREPO=. ', 'RDREPO=changed ', 1),
+            'changed-window': current.replace('patch-support-macos-window.py', 'foreign-window.py', 1),
+        }
+        for index in range(len(lines) - 1):
+            swapped = lines[:]
+            swapped[index:index + 2] = reversed(swapped[index:index + 2])
+            mutations['reordered-' + str(index)] = ''.join(swapped)
+        for kind, changed in mutations.items():
+            with self.subTest(mutation=kind), self.assertRaises(AssertionError):
+                inverse_linux_close_bridge_checks(text.replace(current, changed, 1))
+        for kind, changed in (
+                ('moved', text.replace(current, original, 1) + restore + reapply),
+                ('preceding-gate', text.replace(before + current, before + '# changed\n' + current, 1)),
+                ('following-gate', text.replace(current + after, current + '# changed\n' + after, 1))):
+            with self.subTest(mutation=kind), self.assertRaises(AssertionError):
+                inverse_linux_close_bridge_checks(changed)
 
     def test_release_wrapper_inverse_refuses_partial_duplicate_and_missing_original_calls(self):
         spec = importlib.util.spec_from_file_location('owned_release_projection', ROOT / 'scripts/test-release-pipeline.py')

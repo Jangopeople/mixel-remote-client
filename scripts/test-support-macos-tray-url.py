@@ -24,6 +24,11 @@ UPSTREAM=Path(os.environ.get("RDREPO",SCRIPTS.parent/"rustdesk"))
 spec=importlib.util.spec_from_file_location("tray_url_patch",SCRIPTS/"patch-support-macos-tray-url.py")
 patch=importlib.util.module_from_spec(spec);spec.loader.exec_module(patch)
 
+fixture_spec = importlib.util.spec_from_file_location("mixel_historical_close_fixture", Path(__file__).with_name("test-support-flutter-analysis.py"))
+historical_fixture = importlib.util.module_from_spec(fixture_spec)
+fixture_spec.loader.exec_module(historical_fixture)
+
+
 def between(text,start,end):
     assert text.count(start)==1,start
     return text[text.index(start):text.index(end,text.index(start))]
@@ -102,8 +107,9 @@ def read_previous_tray_profile(root):
     # its exact private inverse exposes the unchanged historical tray seam.
     spec=importlib.util.spec_from_file_location("tray_launch_projection",SCRIPTS/"patch-support-macos-gui-launch.py")
     launch=importlib.util.module_from_spec(spec);spec.loader.exec_module(launch)
-    with launch.previous(root) as prior:
-        return tuple((prior/name).read_text() for name in ("src/tray.rs","src/common.rs","src/mixel_support_url.rs"))
+    with historical_fixture.linux_close_baseline(root) as historical:
+        with launch.previous(historical) as prior:
+            return tuple((prior/name).read_text() for name in ("src/tray.rs","src/common.rs","src/mixel_support_url.rs"))
 
 
 def literal_assignment(source, name):

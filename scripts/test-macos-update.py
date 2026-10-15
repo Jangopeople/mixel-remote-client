@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Run generated updater/CLI and transaction fixtures without an installed app or privileges."""
 import importlib.util
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -25,6 +26,11 @@ CRITICAL = ("Contents/MacOS/Mixel-Remote", "Contents/MacOS/service",
             "Contents/Frameworks/FlutterMacOS.framework/FlutterMacOS")
 
 
+fixture_spec = importlib.util.spec_from_file_location("mixel_historical_close_fixture", Path(__file__).with_name("test-support-flutter-analysis.py"))
+historical_fixture = importlib.util.module_from_spec(fixture_spec)
+fixture_spec.loader.exec_module(historical_fixture)
+
+
 def run(command, **kwargs):
     return subprocess.run(command, capture_output=True, text=True, timeout=45, **kwargs)
 
@@ -35,16 +41,17 @@ def make_source(repo, source, newline):
     spec = importlib.util.spec_from_file_location("updater_launch_projection", ROOT / "patch-support-macos-gui-launch.py")
     launch = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(launch)
-    with launch.previous(source) as source:
-        # Read only exact whole-file profiles; no synthetic anchor-only acceptance.
-        patch.apply(source, restore=True, check=True)
-        raw = [patch.safe_target(source, f, optional=i == 3).read_bytes() if (source / f).exists() else None for i, f in enumerate(patch.FILES)]
-        canonical = [patch.canonical(d)[0] if d is not None else None for d in raw]
-        original = patch.project(*canonical, restore=True)
-        for relative, data in zip(patch.FILES, original):
-            if data is not None:
-                path = repo / relative; path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes(data.replace(b'\n', newline))
+    with historical_fixture.linux_close_baseline(source) as historical:
+        with launch.previous(historical) as source:
+            # Read only exact whole-file profiles; no synthetic anchor-only acceptance.
+            patch.apply(source, restore=True, check=True)
+            raw = [patch.safe_target(source, f, optional=i == 3).read_bytes() if (source / f).exists() else None for i, f in enumerate(patch.FILES)]
+            canonical = [patch.canonical(d)[0] if d is not None else None for d in raw]
+            original = patch.project(*canonical, restore=True)
+            for relative, data in zip(patch.FILES, original):
+                if data is not None:
+                    path = repo / relative; path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(data.replace(b'\n', newline))
 
 
 def snapshot(repo):
@@ -663,4 +670,14 @@ if __name__ == '__main__':
                        'UpdaterTests.test_owned_templates_normalize_only_homogeneous_newlines']
     if args.source_only and any(not argument.startswith('-') for argument in test_args):
         parser.error('Source-only mode requires its complete fixed source-control list')
-    unittest.main(argv=[__file__, *test_args, *(source_controls if args.source_only else [])])
+    # Keep the exact validated prior owner tree alive for all 29 independent
+    # materializations. Each fixture still runs its complete updater profile
+    # guards; the supplied full source is validated and copied only once.
+    launch_spec = importlib.util.spec_from_file_location("updater_suite_launch_projection", ROOT / "patch-support-macos-gui-launch.py")
+    launch = importlib.util.module_from_spec(launch_spec)
+    launch_spec.loader.exec_module(launch)
+    with contextlib.ExitStack() as projections:
+        PROFILE_SOURCES = [projections.enter_context(launch.previous(
+            projections.enter_context(historical_fixture.linux_close_baseline(source))))
+            for source in PROFILE_SOURCES]
+        unittest.main(argv=[__file__, *test_args, *(source_controls if args.source_only else [])])

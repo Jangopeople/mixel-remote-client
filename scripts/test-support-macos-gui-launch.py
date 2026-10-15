@@ -7,6 +7,11 @@ ROOT=Path(__file__).resolve().parents[1]
 SCRIPTS=ROOT/'scripts'
 UPSTREAM=Path(os.environ.get('RDREPO', ROOT/'rustdesk'))
 
+fixture_spec = importlib.util.spec_from_file_location("mixel_historical_close_fixture", Path(__file__).with_name("test-support-flutter-analysis.py"))
+historical_fixture = importlib.util.module_from_spec(fixture_spec)
+fixture_spec.loader.exec_module(historical_fixture)
+
+
 def original(path):
     return subprocess.check_output(['git','-C',str(UPSTREAM),'show','HEAD:'+path]).decode()
 
@@ -194,13 +199,14 @@ def main():
     spec=importlib.util.spec_from_file_location("mixel_final_launch",SCRIPTS/'patch-support-macos-gui-launch.py');layer=importlib.util.module_from_spec(spec);spec.loader.exec_module(layer)
     names=tuple(layer.ORIGINAL)
     if args.source:
-        source_guards(layer,args.source.resolve(),args.output)
-        # Historical final-L input is restore-only. The exact read-only
-        # projection supplies the unchanged prior profile before new generation.
-        with layer.previous(args.source.resolve()) as previous:
-            for name in names:
-                raw=(previous/name).read_bytes();logical=raw.replace(b"\r\n",b"\n").decode()
-                dst=p/name;dst.parent.mkdir(parents=True,exist_ok=True);dst.write_bytes(layer.transform(name,logical).encode())
+        with historical_fixture.linux_close_baseline(args.source.resolve()) as historical:
+            source_guards(layer,historical,args.output)
+            # Historical final-L input is restore-only. The exact read-only
+            # projection supplies the unchanged prior profile before new generation.
+            with layer.previous(historical) as previous:
+                for name in names:
+                    raw=(previous/name).read_bytes();logical=raw.replace(b"\r\n",b"\n").decode()
+                    dst=p/name;dst.parent.mkdir(parents=True,exist_ok=True);dst.write_bytes(layer.transform(name,logical).encode())
         first={name:hashlib.sha256((p/name).read_bytes()).hexdigest() for name in names}
         assert first==layer.FINAL
         generated=(p/'src/ipc.rs').read_text()

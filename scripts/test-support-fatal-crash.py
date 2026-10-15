@@ -107,6 +107,11 @@ pub extern "C" fn owned_model_run(argument:*const std::os::raw::c_char)->i32 {
 '''
 
 
+fixture_spec = importlib.util.spec_from_file_location("mixel_historical_close_fixture", Path(__file__).with_name("test-support-flutter-analysis.py"))
+historical_fixture = importlib.util.module_from_spec(fixture_spec)
+fixture_spec.loader.exec_module(historical_fixture)
+
+
 def command(args, folder, label, expected=0, timeout=60):
     completed = subprocess.run([str(x) for x in args], capture_output=True, timeout=timeout)
     (folder/(label+'.stdout')).write_bytes(completed.stdout)
@@ -312,9 +317,10 @@ def main(_projected_source=None):
     launch_spec = importlib.util.spec_from_file_location('fatal_fixture_launch', HERE/'patch-support-macos-gui-launch.py')
     launch = importlib.util.module_from_spec(launch_spec)
     launch_spec.loader.exec_module(launch)
-    with launch.previous(args.source) as previous:
-        if previous != args.source.absolute():
-            return main(previous)
+    with historical_fixture.linux_close_baseline(args.source) as historical:
+        with launch.previous(historical) as previous:
+            if previous != args.source.absolute():
+                return main(previous)
     # Validate supplied source before compiler/output/network work.
     input_paths=[P.safe_target(args.source,name) for name in P.FILES]
     raw=[path.read_bytes() for path in input_paths]

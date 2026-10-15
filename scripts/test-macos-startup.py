@@ -15,6 +15,11 @@ patch = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(patch)
 
 
+fixture_spec = importlib.util.spec_from_file_location("mixel_historical_close_fixture", Path(__file__).with_name("test-support-flutter-analysis.py"))
+historical_fixture = importlib.util.module_from_spec(fixture_spec)
+fixture_spec.loader.exec_module(historical_fixture)
+
+
 def between(text, start, end):
     return text[text.index(start):text.index(end, text.index(start))]
 
@@ -248,10 +253,19 @@ def dart_fixture(baseline, generated):
     return fixture
 
 
+def read_startup_profile(source):
+    launch_spec = importlib.util.spec_from_file_location("startup_launch_projection", SCRIPTS / "patch-support-macos-gui-launch.py")
+    launch = importlib.util.module_from_spec(launch_spec)
+    launch_spec.loader.exec_module(launch)
+    with historical_fixture.linux_close_baseline(source) as prior:
+        with launch.previous(prior) as startup_source:
+            return {name: (startup_source / name).read_text() for name in patch.INPUT_HASHES}
+
+
 class StartupTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        current = {name: (UPSTREAM / name).read_text() for name in patch.INPUT_HASHES}
+        current = read_startup_profile(UPSTREAM)
         cls.baseline = patch.transform(current, reverse=True) if any(patch.MARKER in value for value in current.values()) else current
         if any(patch.digest(cls.baseline[name]) != value for name, value in patch.INPUT_HASHES.items()):
             # CI may invoke this gate before branding. Rebuild the exact full
@@ -268,7 +282,7 @@ class StartupTests(unittest.TestCase):
                 command(["git", "-C", str(root / "libs/hbb_common"), "checkout", "--quiet", pin])
                 command(["bash", str(SCRIPTS / "apply-branding.sh")], cwd=SCRIPTS.parent,
                         env={**os.environ, "RDREPO": str(root), "BRANDING": str(SCRIPTS.parent / "branding")})
-                current = {name: (root / name).read_text() for name in patch.INPUT_HASHES}
+                current = read_startup_profile(root)
                 cls.baseline = patch.transform(current, reverse=True)
         cls.generated = patch.transform(cls.baseline)
         cls.dart = find_dart()

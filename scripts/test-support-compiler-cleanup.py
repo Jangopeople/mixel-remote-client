@@ -17,6 +17,11 @@ P = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(P)
 
 
+fixture_spec = importlib.util.spec_from_file_location("mixel_historical_close_fixture", Path(__file__).with_name("test-support-flutter-analysis.py"))
+historical_fixture = importlib.util.module_from_spec(fixture_spec)
+fixture_spec.loader.exec_module(historical_fixture)
+
+
 def snapshot(root):
     return {p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob('*') if p.is_file()}
 
@@ -342,13 +347,44 @@ def composed_controls(source, out, bash):
               cwd=Path(__file__).resolve().parents[1], env=dict(os.environ,RDREPO=str(repo),BRANDING=str(Path(__file__).resolve().parents[1]/'branding')),
               capture_output=True,text=True,encoding='utf-8',timeout=180)
         (out/('macro-prior-refusal-'+str(index)+'.log')).write_text(result.stdout+result.stderr,encoding='utf-8')
-        # L owns the exact final tray profile before C's prior-chain guard.
-        # This one overlapping negative must fail at that earlier full hash.
-        expected_refusal = ('Pinned or partial Mac launch profile changed' in result.stderr
+        # Current outer owners must reject their exact overlapping profiles
+        # before C's prior-chain guard: Linux common, then the Mac tray seam.
+        expected_refusal = ('Pinned or partial Linux close profile changed' in result.stderr
+                            if name == 'flutter/lib/common.dart' else
+                            'Pinned or partial Mac launch profile changed' in result.stderr
                             if name == 'src/tray.rs' else
                             ('Compiler prior' in result.stderr or 'Composed prior' in result.stderr))
         assert result.returncode != 0 and expected_refusal, (name,result.returncode,result.stderr)
         assert production_snapshot(repo) == before, name
+        if name == 'flutter/lib/common.dart':
+            # Retain the original startup-owner failure independently. Only
+            # the six exact new Linux owner commands are absent in this
+            # historical macro; the supplied tree is already their exact inverse.
+            scripts = Path(__file__).resolve().parent
+            body = (scripts/'apply-branding.sh').read_text(encoding='utf-8')
+            lines = body.splitlines(keepends=True)
+            prefix = 'python3 "$(dirname "${BASH_SOURCE[0]}")/'
+            expected = [prefix+helper+'" --root "$RDREPO" '+flags+'\n'
+                        for helper,flags in (
+                            ('patch-support-linux-child-window-close.py','--restore --check --before-branding'),
+                            ('patch-support-linux-child-window-close.py','--restore'),
+                            ('patch-support-linux-window-close.py','--restore --check --before-branding'),
+                            ('patch-support-linux-window-close.py','--restore'),
+                            ('patch-support-linux-window-close.py','--after-branding'),
+                            ('patch-support-linux-child-window-close.py','--after-branding'))]
+            removed = [line for line in lines if '/patch-support-linux-window-close.py"' in line or '/patch-support-linux-child-window-close.py"' in line]
+            assert removed == expected and all(lines.count(line)==1 for line in expected), 'Exact terminal Linux owner commands changed'
+            historical = out/'prior-compiler-macro/scripts'
+            shutil.copytree(scripts,historical,ignore=shutil.ignore_patterns('__pycache__'))
+            macro = historical/'apply-branding.sh'
+            macro.write_text(''.join(line for line in lines if line not in removed),encoding='utf-8',newline='')
+            prior = subprocess.run([str(bash),str(macro)],cwd=Path(__file__).resolve().parents[1],
+                    env=dict(os.environ,RDREPO=str(repo),BRANDING=str(Path(__file__).resolve().parents[1]/'branding')),
+                    capture_output=True,text=True,encoding='utf-8',timeout=180)
+            (out/'macro-original-startup-refusal.log').write_text(prior.stdout+prior.stderr,encoding='utf-8')
+            marker = 'Compiler prior final startup/tray owner refused: Pinned Mac startup input digest mismatch; refusing all writes'
+            assert prior.returncode != 0 and marker in prior.stderr, prior.stderr
+            assert production_snapshot(repo)==before, 'Historical startup refusal changed source'
         path.write_bytes(saved); attempted.append(name)
     # Names used by build caches must not conceal foreign owned inventory.
     owned=repo/'flutter/.mixel-dependencies/macos_application_exit'
@@ -534,9 +570,10 @@ def main():
     shell.shell_path_controls(args.evidence_dir)
     launch_spec=importlib.util.spec_from_file_location('compiler_launch_previous',Path(__file__).with_name('patch-support-macos-gui-launch.py'))
     launch=importlib.util.module_from_spec(launch_spec);launch_spec.loader.exec_module(launch)
-    with launch.previous(args.source) as previous:
-        args.source=previous
-        qualify_previous(args,parser)
+    with historical_fixture.linux_close_baseline(args.source) as historical:
+        with launch.previous(historical) as previous:
+            args.source=previous
+            qualify_previous(args,parser)
 
 
 def qualify_previous(args,parser):

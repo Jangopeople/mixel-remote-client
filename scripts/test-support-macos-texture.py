@@ -592,8 +592,45 @@ def git_archive_controls(output, files):
     print("PASS: real Git core.autocrlf=true archive changes pinned source bytes and original inventory rejects; current exact-source archive command preserves all98 blobs without global setting changes")
 
 
-def workflow_controls(output, originals, files):
+def exact_bridge_native_close_commands(workflow):
+    original = [
+        ['../scripts/patch-support-macos-texture.py'],
+        ['../scripts/patch-support-macos-window.py'],
+    ]
+    native = '../scripts/patch-support-linux-child-window-close.py'
+    commands = [[native, '--root', '.', '--restore'], *original, [native, '--root', '.', '--after-branding']]
+    lines = ['          ' + ('RDREPO=. ' if arguments in original else '') + 'python3 ' + ' '.join(arguments) + '\n' for arguments in commands]
+    header = '      - name: Generate bridge\n        working-directory: rustdesk\n        run: |\n'
+    following = "          pushd flutter && sed -i -e 's/extended_text: 14.0.0/extended_text: 13.0.0/g' pubspec.yaml && flutter pub get && popd\n"
+    assert all(workflow.count(line) == 1 for line in lines), 'Exact native bracket/original hook count changed'
+    assert workflow.count(header + ''.join(lines) + following) == 1, 'Exact native bracket/original hook order or placement changed'
+    return commands
+
+
+def bridge_native_close_mutation_controls(workflow):
+    from itertools import permutations
+    commands = exact_bridge_native_close_commands(workflow)
+    lines = ['          ' + ('RDREPO=. ' if len(arguments) == 1 else '') + 'python3 ' + ' '.join(arguments) + '\n' for arguments in commands]
+    original = ''.join(lines)
+    mutations = []
+    for index, line in enumerate(lines):
+        mutations.extend((workflow.replace(line, '', 1), workflow.replace(line, line + line, 1),
+                          workflow.replace(line, line.rstrip('\n') + ' --extra\n', 1)))
+    mutations.extend(workflow.replace(original, ''.join(order), 1) for order in permutations(lines) if list(order) != lines)
+    mutations.append(workflow.replace(original, '', 1) + original)
+    for changed in mutations:
+        try:
+            exact_bridge_native_close_commands(changed)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError('Changed native bracket/original hook workflow accepted')
+    return len(mutations)
+
+
+def workflow_controls(output, originals, files, window_files=None):
     workflow = (ROOT / ".github/workflows/build.yml").read_text()
+    native_commands = exact_bridge_native_close_commands(workflow)
     helpers = ("patch-support-macos-texture.py", "patch-support-macos-window.py")
     hooks = tuple("          RDREPO=. python3 ../scripts/" + name + "\n" for name in helpers)
     assert all(workflow.count(hook) == 1 for hook in hooks)
@@ -606,18 +643,23 @@ def workflow_controls(output, originals, files):
     window_spec = importlib.util.spec_from_file_location("mixel_window_workflow", ROOT / "scripts" / helpers[1])
     window = importlib.util.module_from_spec(window_spec)
     window_spec.loader.exec_module(window)
-    window_files = window.fetch_source()
+    window_files = window.fetch_source() if window_files is None else dict(window_files)
     assert len(window_files) == 124 and window.inventory(window_files) == window.INVENTORY_SHA
+    native_spec = importlib.util.spec_from_file_location("mixel_native_bridge", ROOT / "scripts/patch-support-linux-child-window-close.py")
+    native = importlib.util.module_from_spec(native_spec)
+    native_spec.loader.exec_module(native)
+    native_assertions = "import hashlib\n" + "native_pins = " + repr(native.FINAL) + "\n" + \
+        "native_dependency = Path('.mixel-dependencies/desktop_multi_window') if Path('pubspec.yaml').is_file() else Path('flutter/.mixel-dependencies/desktop_multi_window')\nfor name, digest in native_pins.items():\n    assert hashlib.sha256((native_dependency / name).read_bytes()).hexdigest() == digest, 'Final native close layer missing before Flutter/codegen'\n"
     owner = output / "actual bridge étape"
     owner.mkdir()
 
-    def prepare_case(case):
+    def prepare_case(case, native_final=False):
         repo = case / "rustdesk"
         write_repo(repo, originals)
         (repo / "flutter/macos/Runner").mkdir(parents=True)
         (repo / "flutter/ios/Runner").mkdir(parents=True)
         (case / "scripts").mkdir()
-        for name in helpers:
+        for name in (*helpers, "patch-support-linux-child-window-close.py"):
             shutil.copyfile(ROOT / "scripts" / name, case / "scripts" / name)
         # Both actual child helpers validate their complete pinned archives;
         # only network retrieval is replaced with these exact source bytes.
@@ -626,9 +668,25 @@ def workflow_controls(output, originals, files):
                 for member_name, data in contents.items():
                     info = tarfile.TarInfo(member_name); info.size = len(data)
                     tar.addfile(info, io.BytesIO(data))
+        if native_final:
+            with patch.object(P, "fetch_source", return_value=dict(files)):
+                P.apply(repo)
+            with patch.object(window, "fetch_source", return_value=dict(window_files)):
+                window.apply(repo)
+            # Only the complete prior app-composition validator is a seam in this
+            # six-file fixture. Provenance, manager and exact native bytes remain real.
+            native.apply(repo, verify=False)
         return repo
 
-    repo = prepare_case(owner / "with-both-hooks")
+    repo = prepare_case(owner / "with-both-hooks", native_final=True)
+    before_unbracketed = snapshot(repo)
+    try:
+        window.apply(repo)
+    except RuntimeError as error:
+        assert str(error) == "Owned subwindow source or provenance changed"
+    else:
+        raise AssertionError("Original unbracketed window hook accepted the final native layer")
+    assert snapshot(repo) == before_unbracketed
     binary = owner / "bin"
     binary.mkdir()
     python = binary / "python3"
@@ -637,13 +695,27 @@ import importlib.util,json,os,sys
 from pathlib import Path
 allowed={'../scripts/patch-support-macos-texture.py':'pinned-renderer.tar',
          '../scripts/patch-support-macos-window.py':'pinned-window.tar'}
-assert len(sys.argv)==2 and sys.argv[1] in allowed, 'Unexpected bridge helper invocation'
-s=importlib.util.spec_from_file_location('actual_patch',sys.argv[1])
+native='../scripts/patch-support-linux-child-window-close.py'
+args=sys.argv[1:]
+assert ((len(args)==1 and args[0] in allowed) or
+        args in ([native,'--root','.','--restore'],[native,'--root','.','--after-branding'])), 'Unexpected bridge helper invocation'
+s=importlib.util.spec_from_file_location('actual_patch',args[0])
 p=importlib.util.module_from_spec(s);s.loader.exec_module(p)
-p.fetch_source=lambda:p.source_files((Path('..')/allowed[sys.argv[1]]).read_bytes())
-p.apply(Path(os.environ['RDREPO']))
-with Path('../actual-helper-invocations.jsonl').open('a') as log:
-    log.write(json.dumps(sys.argv[1:])+'\n')
+if args[0]==native:
+    # This owned six-file fixture has no whole application composition. Keep
+    # native CLI parsing/provenance/manager/exact transforms; seam only that validator.
+    p.validate_prior=lambda *arguments: None
+    if args[-1]=='--after-branding':
+        assert Path('flutter/.mixel-dependencies/desktop_multi_window').is_dir(), 'Original window hook must materialize its complete source before native reapply'
+    sys.argv=[args[0], *args[1:]]
+    p.main()
+else:
+    p.fetch_source=lambda:p.source_files((Path('..')/allowed[args[0]]).read_bytes())
+    p.apply(Path(os.environ['RDREPO']))
+    with Path('../actual-helper-invocations.jsonl').open('a') as log:
+        log.write(json.dumps(args)+'\n')
+with Path('../actual-bridge-invocations.jsonl').open('a') as log:
+    log.write(json.dumps(args)+'\n')
 ''')
     flutter = binary / "flutter"
     flutter.write_text('#!' + sys.executable + '\n' + r'''
@@ -652,6 +724,7 @@ assert 'session_unregister_pixelbuffer_texture_if_current' in Path('../src/flutt
 assert 'path: .mixel-dependencies/texture_rgba_renderer' in Path('pubspec.yaml').read_text()
 assert 'path: .mixel-dependencies/desktop_multi_window' in Path('pubspec.yaml').read_text()
 assert 'guard flutterViewController.engine.run(withEntrypoint: nil) else {' in Path('.mixel-dependencies/desktop_multi_window/macos/Classes/FlutterWindow.swift').read_text()
+NATIVE_FINAL_ASSERTIONS
 print('PASS: actual bridge step patched both pinned dependencies before Flutter resolution')
 ''')
     codegen = binary / "flutter_rust_bridge_codegen"
@@ -660,9 +733,12 @@ from pathlib import Path
 assert 'session_unregister_pixelbuffer_texture_if_current' in Path('src/flutter_ffi.rs').read_text()
 assert 'bool sessionUnregisterPixelbufferTextureIfCurrent(' in Path('flutter/lib/web/bridge.dart').read_text()
 assert 'guard flutterViewController.engine.run(withEntrypoint: nil) else {' in Path('flutter/.mixel-dependencies/desktop_multi_window/macos/Classes/FlutterWindow.swift').read_text()
+NATIVE_FINAL_ASSERTIONS
 Path('flutter/macos/Runner/bridge_generated.h').write_text('ordered bridge fixture')
 print('PASS: actual bridge step reaches codegen with both source hooks applied')
 ''')
+    for executable in (flutter, codegen):
+        executable.write_text(executable.read_text().replace('NATIVE_FINAL_ASSERTIONS', native_assertions))
     for executable in (python, flutter, codegen):
         executable.chmod(0o755)
     script = script.replace("~/.cargo/bin/flutter_rust_bridge_codegen", shlex.quote(codegen.as_posix()))
@@ -678,7 +754,12 @@ print('PASS: actual bridge step reaches codegen with both source hooks applied')
     assert result.returncode == 0, result.stdout + result.stderr
     assert (repo.parent / "actual-helper-invocations.jsonl").read_text().splitlines() == [json.dumps(["../scripts/" + name]) for name in helpers]
     assert len(P.existing_files(repo / "flutter" / P.DEPENDENCY)) == 98
+    assert (repo.parent / "actual-bridge-invocations.jsonl").read_text().splitlines() == [json.dumps(arguments) for arguments in native_commands]
+    final_before_inverse = snapshot(repo)
+    native.apply(repo, restore=True, verify=False)
     assert len(window.existing_files(repo / "flutter" / window.DEPENDENCY)) == 124
+    native.apply(repo, verify=False)
+    assert snapshot(repo) == final_before_inverse
     # Exact prior fixture bodies demonstrate why a second helper masked a
     # removed texture hook: the Python stand-in ignored its arguments and
     # always applied texture, while both downstream tools checked only texture.
@@ -715,7 +796,7 @@ print('PASS: actual bridge step reaches codegen with new retirement API')
     prior_script = script.replace("RDREPO=. python3 ../scripts/" + helpers[0] + "\n", "", 1)
     prior_script = prior_script.replace(shlex.quote(codegen.as_posix()), shlex.quote((prior_binary / "flutter_rust_bridge_codegen").as_posix()), 1)
     prior_result = subprocess.run([bash, "-e", "-o", "pipefail", "-c", prior_script], cwd=prior_repo,
-                                  env={**environment, "PATH": str(prior_binary) + os.pathsep + os.environ["PATH"]},
+                                  env={**environment, "RDREPO": ".", "PATH": str(prior_binary) + os.pathsep + os.environ["PATH"]},
                                   capture_output=True, text=True, timeout=30)
     (output / "bridge-prior-dispatch-without-texture-hook.log").write_text(prior_result.stdout + prior_result.stderr)
     assert prior_result.returncode == 0, prior_result.stdout + prior_result.stderr
@@ -734,14 +815,35 @@ print('PASS: actual bridge step reaches codegen with new retirement API')
         other = helpers[1] if name == helpers[0] else helpers[0]
         assert (negative.parent / "actual-helper-invocations.jsonl").read_text().splitlines() == [json.dumps(["../scripts/" + other])]
         negatives[name] = result.returncode
+    native_negatives = {}
+    bracket_lines = ["python3 " + " ".join(arguments) + "\n" for arguments in (native_commands[0], native_commands[-1])]
+    for label, changed in (
+            ('missing-restore', script.replace(bracket_lines[0], '', 1)),
+            ('missing-reapply', script.replace(bracket_lines[1], '', 1)),
+            ('reapply-before-window', script.replace(bracket_lines[1], '', 1).replace('RDREPO=. python3 ../scripts/' + helpers[1] + '\n', bracket_lines[1] + 'RDREPO=. python3 ../scripts/' + helpers[1] + '\n', 1))):
+        negative = prepare_case(owner / label, native_final=True)
+        result = subprocess.run([bash, "-e", "-o", "pipefail", "-c", changed], cwd=negative, env=environment, capture_output=True, text=True, timeout=30)
+        (output / ('bridge-' + label + '-negative.log')).write_text(result.stdout + result.stderr)
+        assert result.returncode != 0
+        expected = 'Final native close layer missing' if label == 'missing-reapply' else 'Owned subwindow source or provenance changed'
+        assert expected in result.stderr
+        native_negatives[label] = result.returncode
+    mutation_refusals = bridge_native_close_mutation_controls(workflow)
     before = snapshot(repo)
     before_invocations = (repo.parent / "actual-helper-invocations.jsonl").read_bytes()
-    for args in ([], ["../scripts/unexpected.py"], ["../scripts/" + helpers[0], "--extra"], ["../scripts/" + helpers[1], "--extra"]):
+    before_bridge_invocations = (repo.parent / "actual-bridge-invocations.jsonl").read_bytes()
+    native_path = '../scripts/patch-support-linux-child-window-close.py'
+    for args in ([], ["../scripts/unexpected.py"], ["../scripts/" + helpers[0], "--extra"], ["../scripts/" + helpers[1], "--extra"],
+                 [native_path], [native_path, '--root', 'foreign', '--restore'],
+                 [native_path, '--root', '.', '--restore', '--after-branding'],
+                 [native_path, '--root', '.', '--after-branding', '--extra'],
+                 [native_path, '--root', '.', '--wrong'], [native_path, '--restore', '--root', '.']):
         result = subprocess.run([sys.executable, str(python)] + args, cwd=repo, env={**environment, "RDREPO": "."}, capture_output=True, text=True, timeout=15)
         assert result.returncode != 0 and "Unexpected bridge helper invocation" in result.stderr
         assert snapshot(repo) == before and (repo.parent / "actual-helper-invocations.jsonl").read_bytes() == before_invocations
-    (output / "workflow-source-proof.json").write_text(json.dumps({"result":"passed", "workflow_sha256":P.sha(workflow.encode()), "head_workflow_sha256":P.sha(committed.encode()), "only_change":"test-only faithful dispatch of the two committed bridge hooks", "all_other_build_jobs_and_guards_byte_identical":True, "actual_source_step_executed":True, "pinned_renderer_files":98, "pinned_window_files":124, "prior_argument_ignoring_dispatch_false_pass_reproduced":True, "independent_missing_hook_exit_codes":negatives, "unexpected_helper_invocations_rejected":4, "compiler_and_Flutter_tools":"ordering stand-ins; actual pinned bridge generation is a separate required build check"}, indent=2) + "\n")
-    print("PASS: actual two-hook bridge step validates pinned98 renderer and124 window sources before dependency/codegen; removing either hook fails independently; four unexpected invocations refuse before writes; production workflow unchanged")
+        assert (repo.parent / "actual-bridge-invocations.jsonl").read_bytes() == before_bridge_invocations
+    (output / "workflow-source-proof.json").write_text(json.dumps({"result":"passed", "workflow_sha256":P.sha(workflow.encode()), "head_workflow_sha256":P.sha(committed.encode()), "only_change":"test-only faithful dispatch of exact native brackets around both original bridge hooks", "all_other_build_jobs_and_guards_byte_identical":True, "actual_source_step_executed":True, "pinned_renderer_files":98, "pinned_window_files":124, "prior_argument_ignoring_dispatch_false_pass_reproduced":True, "independent_missing_hook_exit_codes":negatives, "unexpected_helper_invocations_rejected":10, "native_bracket_runtime_negatives":native_negatives, "exact_order_count_mutations_refused":mutation_refusals, "native_prior_whole_app_composition":"explicit seam in this six-file fixture; native CLI/provenance/manager/exact2 real", "original_unbracketed_native_final_inventory_failure_reproduced":True, "native_projection_whole_fixture_restored":True, "compiler_and_Flutter_tools":"ordering stand-ins; actual pinned bridge generation is a separate required build check"}, indent=2) + "\n")
+    print("PASS: actual bracketed bridge step validates pinned98 renderer/124 window sources and exact native2 before Flutter/codegen; original missing hooks and three native bracket failures discriminate; exact order/count mutations and ten unexpected invocations refuse; whole fixture inverse conserves bytes; production workflow unchanged")
 
 
 def main():
