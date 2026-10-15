@@ -459,7 +459,8 @@ class DiagnosticControls(unittest.TestCase):
             ast.parse(source.read_bytes(), filename=str(source))
 
     def test_workflow_is_manual_read_only_exact_source_and_safe_output_only(self):
-        text = (ROOT / v.DIAGNOSTIC_WORKFLOW).read_text()
+        from current77_arm_workflow_projection import historical_workflow
+        text = historical_workflow((ROOT / v.DIAGNOSTIC_WORKFLOW).read_text())
         self.assertIn("on:\n  workflow_dispatch:\n", text)
         self.assertNotIn("inputs:", text)
         self.assertNotIn("workflow_run:", text)

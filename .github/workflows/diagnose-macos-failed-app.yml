@@ -36,6 +36,7 @@ jobs:
           set -euo pipefail
           python3 -B scripts/test-diagnose-macos-failed-app.py
           python3 -B scripts/test-support-launch-macos-tray-controls.py
+          python3 -B scripts/test-diagnose-current77-arm-warm-exit.py
   failed-arm-diagnostic:
     if: github.repository == 'Jangopeople/mixel-remote-client' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/fix/remote-support-reliability' && github.run_attempt == 1
     needs: static-controls
@@ -80,6 +81,60 @@ jobs:
           path: |
             failed-arm-safe-facts/validation-receipt.json
             failed-arm-safe-facts/tray-diagnostic-safe-facts.json
+          if-no-files-found: warn
+          include-hidden-files: false
+          retention-days: 7
+
+  current77-arm-warmexit-private:
+    if: github.repository == 'Jangopeople/mixel-remote-client' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/current77-arm-warmexit' && github.run_attempt == 1
+    needs: static-controls
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - name: Check out the reviewed private replay source
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          path: diagnostic-source
+          persist-credentials: false
+      - name: Check out exact current77 producer helpers
+        uses: actions/checkout@v5
+        with:
+          ref: 77a0acf1b0af2070c7d5d2d1fb172a343882dfc0
+          path: producer-source
+          persist-credentials: false
+      - name: Recheck complete nonnative current77 controls
+        working-directory: diagnostic-source
+        run: |
+          set -euo pipefail
+          OBSERVER_CONTROLS="$RUNNER_TEMP/current77-exit-observer-controls"
+          mkdir "$OBSERVER_CONTROLS"
+          cp scripts/darwin_exit_observer.py scripts/darwin_exit_adapter.py \
+            scripts/test_darwin_exit_observer.py scripts/test_darwin_exit_adapter.py "$OBSERVER_CONTROLS/"
+          python3 -B "$OBSERVER_CONTROLS/test_darwin_exit_observer.py"
+          python3 -B "$OBSERVER_CONTROLS/test_darwin_exit_adapter.py"
+          python3 -B scripts/test-diagnose-current77-arm-warm-exit.py
+      - name: Replay exact failed ARM signed app privately
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PYTHONUTF8: '1'
+          PYTHONIOENCODING: utf-8
+        run: |
+          set -euo pipefail
+          python3 -B "$GITHUB_WORKSPACE/diagnostic-source/scripts/diagnose-current77-arm-warm-exit.py" \
+            --diagnostic-checkout "$GITHUB_WORKSPACE/diagnostic-source" \
+            --producer-checkout "$GITHUB_WORKSPACE/producer-source" \
+            --gate "$GITHUB_WORKSPACE/diagnostic-source/verification/current77-arm-private-replay-gate.json" \
+            --destination "$RUNNER_TEMP/current77-arm-private-warmexit" \
+            --safe-output "$GITHUB_WORKSPACE/current77-arm-safe-facts"
+      - name: Retain only content-free private warm-exit facts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: current77-private-arm-warmexit-safe-facts
+          path: |
+            current77-arm-safe-facts/validation-receipt.json
+            current77-arm-safe-facts/warm-exit-observer-safe-facts.json
           if-no-files-found: warn
           include-hidden-files: false
           retention-days: 7

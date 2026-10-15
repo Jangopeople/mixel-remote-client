@@ -1,0 +1,1014 @@
+{
+  "artifact": {
+    "created_at": "2026-10-15T18:31:23Z",
+    "digest": "sha256:508043dfe1b75c3cba4bd0c40c0bf3e388911a70dccdcae573d560cd4cdd3f3b",
+    "expires_at": "2027-01-13T17:08:24Z",
+    "id": 11998810499,
+    "name": "macos-launch-failure-diagnostic-aarch64",
+    "size_in_bytes": 24589609,
+    "updated_at": "2026-10-15T18:31:23Z"
+  },
+  "customerAppQualified": false,
+  "decisionBy": "Primary Root after independent source/static review",
+  "failedJob": 116562140099,
+  "nativeReplayNotYetRun": true,
+  "nestedAppSha256": "8b2856100bcaca5c4a4e554301ecae0c4a9bf6819f8c107811930bc0aa6a3338",
+  "observedAdmission": {
+    "comparison": {
+      "conclusion": "success",
+      "id": 38774157532,
+      "status": "completed"
+    },
+    "comparisonLanes": [
+      {
+        "conclusion": "success",
+        "id": 116557333543,
+        "name": "Complete branding byte identity (windows-2025)",
+        "status": "completed"
+      },
+      {
+        "conclusion": "success",
+        "id": 116557334369,
+        "name": "Complete branding byte identity (windows-2022)",
+        "status": "completed"
+      }
+    ],
+    "failedArmJob": 116562140099,
+    "normalReleaseQualified": false,
+    "preflight": {
+      "conclusion": null,
+      "id": 38774157443,
+      "status": "in_progress"
+    },
+    "producer": {
+      "conclusion": null,
+      "id": 38774820528,
+      "status": "in_progress"
+    },
+    "wholeProducerGreen": false,
+    "windowsPreflight": {
+      "conclusion": null,
+      "id": 116557334151,
+      "status": "in_progress"
+    },
+    "windowsProducer": {
+      "conclusion": null,
+      "id": 116562140563,
+      "status": "in_progress"
+    }
+  },
+  "observedOriginals": {
+    "armJob": {
+      "completed_at": "2026-10-15T18:31:38Z",
+      "conclusion": "failure",
+      "head_branch": "fix/remote-support-reliability",
+      "head_sha": "77a0acf1b0af2070c7d5d2d1fb172a343882dfc0",
+      "id": 116562140099,
+      "labels": [
+        "macos-14"
+      ],
+      "name": "macos (aarch64, aarch64-apple-darwin)",
+      "run_attempt": 1,
+      "run_id": 38774820528,
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions",
+      "runner_name": "GitHub Actions 1000079537",
+      "started_at": "2026-10-15T17:13:47Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completed_at": "2026-10-15T17:13:51Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "started_at": "2026-10-15T17:13:48Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-15T17:13:53Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@v5",
+          "number": 2,
+          "started_at": "2026-10-15T17:13:51Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-15T17:13:54Z",
+          "conclusion": "success",
+          "name": "Reserve a job-owned Cargo home for the pinned Tao privacy leaf",
+          "number": 3,
+          "started_at": "2026-10-15T17:13:53Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-15T17:14:04Z",
+          "conclusion": "success",
+          "name": "Install build runtime",
+          "number": 4,
+          "started_at": "2026-10-15T17:13:54Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-15T17:14:17Z",
+          "conclusion": "success",
+          "name": "Install Rust",
+          "number": 5,
+          "started_at": "2026-10-15T17:14:04Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-15T17:15:27Z",
+          "conclusion": "success",
+          "name": "Install Flutter",
+          "number": 6,
+          "started_at": "2026-10-15T17:14:17Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-15T17:15:33Z",
+          "conclusion": "success",
+          "name": "Prepare the exact release Flutter framework for native regression checks",
+          "number": 7,
+          "started_at": "2026-10-15T17:15:27Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-15T17:15:36Z",
+          "conclusion": "success",
+          "name": "Restore compiled codec cache",
+          "number": 8,
+          "started_at": "2026-10-15T17:15:33Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-15T17:15:51Z",
+          "conclusion": "success",
+          "name": "Setup pinned vcpkg",
+          "number": 9,
+          "started_at": "2026-10-15T17:15:36Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-15T17:15:56Z",
+          "conclusion": "success",
+          "name": "Install vcpkg deps",
+          "number": 10,
+          "started_at": "2026-10-15T17:15:51Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-15T17:15:58Z",
+          "conclusion": "success",
+          "name": "Verify every native codec architecture and minimum",
+          "number": 11,
+          "started_at": "2026-10-15T17:15:56Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-15T17:15:59Z",
+          "conclusion": "success",
+          "name": "Fetch upstream RustDesk",
+          "number": 12,
+          "started_at": "2026-10-15T17:15:58Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-15T17:16:55Z",
+          "conclusion": "success",
+          "name": "Run Swatinem/rust-cache@v2",
+          "number": 13,
+          "started_at": "2026-10-15T17:15:59Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-15T17:17:41Z",
+          "conclusion": "success",
+          "name": "Apply Mixel-Remote branding",
+          "number": 14,
+          "started_at": "2026-10-15T17:16:55Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-15T17:17:54Z",
+          "conclusion": "success",
+          "name": "Fetch and protect the exact owned Tao URL logger",
+          "number": 15,
+          "started_at": "2026-10-15T17:17:41Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-15T17:17:56Z",
+          "conclusion": "success",
+          "name": "Restore bridge files",
+          "number": 16,
+          "started_at": "2026-10-15T17:17:54Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-15T17:19:10Z",
+          "conclusion": "success",
+          "name": "Prove Mac input C ABI and borrowed-event safety on both architectures",
+          "number": 17,
+          "started_at": "2026-10-15T17:17:56Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-15T17:19:11Z",
+          "conclusion": "success",
+          "name": "Import Apple Developer ID cert",
+          "number": 18,
+          "started_at": "2026-10-15T17:19:10Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-15T18:21:11Z",
+          "conclusion": "success",
+          "name": "Preflight generated support source and reporter",
+          "number": 19,
+          "started_at": "2026-10-15T17:19:11Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-15T18:21:13Z",
+          "conclusion": "success",
+          "name": "Preserve Mac file-dialog lifecycle evidence",
+          "number": 20,
+          "started_at": "2026-10-15T18:21:11Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-15T18:28:31Z",
+          "conclusion": "success",
+          "name": "Build (cargo + flutter via build.py)",
+          "number": 21,
+          "started_at": "2026-10-15T18:21:13Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-15T18:28:48Z",
+          "conclusion": "success",
+          "name": "Require the complete generated Flutter app to analyze without errors or warnings",
+          "number": 22,
+          "started_at": "2026-10-15T18:28:31Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-15T18:30:24Z",
+          "conclusion": "success",
+          "name": "Test compiled attended support guard",
+          "number": 23,
+          "started_at": "2026-10-15T18:28:48Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-15T18:30:24Z",
+          "conclusion": "success",
+          "name": "Verify compiled Flutter UI branding",
+          "number": 24,
+          "started_at": "2026-10-15T18:30:24Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-15T18:31:19Z",
+          "conclusion": "failure",
+          "name": "Package + sign + notarize (.app then .dmg)",
+          "number": 25,
+          "started_at": "2026-10-15T18:30:24Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-15T18:31:20Z",
+          "conclusion": "success",
+          "name": "Retain macOS tray runtime proof",
+          "number": 26,
+          "started_at": "2026-10-15T18:31:19Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-15T18:31:23Z",
+          "conclusion": "success",
+          "name": "Retain failed macOS launch bundle and bounded diagnostics",
+          "number": 27,
+          "started_at": "2026-10-15T18:31:20Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-15T18:31:24Z",
+          "conclusion": "success",
+          "name": "Run actions/upload-artifact@v6",
+          "number": 28,
+          "started_at": "2026-10-15T18:31:23Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-15T18:31:26Z",
+          "conclusion": "success",
+          "name": "Run actions/upload-artifact@v6",
+          "number": 29,
+          "started_at": "2026-10-15T18:31:24Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-15T18:31:27Z",
+          "conclusion": "success",
+          "name": "Run actions/upload-artifact@v6",
+          "number": 30,
+          "started_at": "2026-10-15T18:31:26Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-15T18:31:29Z",
+          "conclusion": "success",
+          "name": "Run actions/upload-artifact@v6",
+          "number": 31,
+          "started_at": "2026-10-15T18:31:27Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-15T18:31:29Z",
+          "conclusion": "skipped",
+          "name": "Run actions/upload-artifact@v6",
+          "number": 32,
+          "started_at": "2026-10-15T18:31:29Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-15T18:31:29Z",
+          "conclusion": "success",
+          "name": "Post Import Apple Developer ID cert",
+          "number": 60,
+          "started_at": "2026-10-15T18:31:29Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-15T18:31:29Z",
+          "conclusion": "skipped",
+          "name": "Post Run Swatinem/rust-cache@v2",
+          "number": 61,
+          "started_at": "2026-10-15T18:31:29Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-15T18:31:29Z",
+          "conclusion": "skipped",
+          "name": "Post Restore compiled codec cache",
+          "number": 62,
+          "started_at": "2026-10-15T18:31:29Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-15T18:31:29Z",
+          "conclusion": "success",
+          "name": "Post Install Flutter",
+          "number": 63,
+          "started_at": "2026-10-15T18:31:29Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-15T18:31:29Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@v5",
+          "number": 64,
+          "started_at": "2026-10-15T18:31:29Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-15T18:31:31Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 65,
+          "started_at": "2026-10-15T18:31:29Z",
+          "status": "completed"
+        }
+      ]
+    },
+    "artifact": {
+      "created_at": "2026-10-15T18:31:23Z",
+      "digest": "sha256:508043dfe1b75c3cba4bd0c40c0bf3e388911a70dccdcae573d560cd4cdd3f3b",
+      "expired": false,
+      "expires_at": "2027-01-13T17:08:24Z",
+      "id": 11998810499,
+      "name": "macos-launch-failure-diagnostic-aarch64",
+      "size_in_bytes": 24589609,
+      "updated_at": "2026-10-15T18:31:23Z",
+      "workflow_run": {
+        "head_branch": "fix/remote-support-reliability",
+        "head_repository_id": 1229987840,
+        "head_sha": "77a0acf1b0af2070c7d5d2d1fb172a343882dfc0",
+        "id": 38774820528,
+        "repository_id": 1229987840
+      }
+    },
+    "comparison": {
+      "conclusion": "success",
+      "event": "pull_request",
+      "head_branch": "fix/remote-support-reliability",
+      "head_repository": {
+        "full_name": "Jangopeople/mixel-remote-client",
+        "id": 1229987840
+      },
+      "head_sha": "77a0acf1b0af2070c7d5d2d1fb172a343882dfc0",
+      "id": 38774157532,
+      "path": ".github/workflows/windows-branding-idempotence.yml",
+      "repository": {
+        "full_name": "Jangopeople/mixel-remote-client",
+        "id": 1229987840
+      },
+      "run_attempt": 1,
+      "status": "completed",
+      "workflow_id": 383185287
+    },
+    "comparisonJobs": {
+      "jobs": [
+        {
+          "conclusion": "success",
+          "head_branch": "fix/remote-support-reliability",
+          "head_sha": "77a0acf1b0af2070c7d5d2d1fb172a343882dfc0",
+          "id": 116557333543,
+          "name": "Complete branding byte identity (windows-2025)",
+          "run_attempt": 1,
+          "run_id": 38774157532,
+          "status": "completed"
+        },
+        {
+          "conclusion": "success",
+          "head_branch": "fix/remote-support-reliability",
+          "head_sha": "77a0acf1b0af2070c7d5d2d1fb172a343882dfc0",
+          "id": 116557334369,
+          "name": "Complete branding byte identity (windows-2022)",
+          "run_attempt": 1,
+          "run_id": 38774157532,
+          "status": "completed"
+        }
+      ],
+      "total_count": 2
+    },
+    "preflight": {
+      "conclusion": null,
+      "event": "pull_request",
+      "head_branch": "fix/remote-support-reliability",
+      "head_repository": {
+        "full_name": "Jangopeople/mixel-remote-client",
+        "id": 1229987840
+      },
+      "head_sha": "77a0acf1b0af2070c7d5d2d1fb172a343882dfc0",
+      "id": 38774157443,
+      "path": ".github/workflows/preflight.yml",
+      "repository": {
+        "full_name": "Jangopeople/mixel-remote-client",
+        "id": 1229987840
+      },
+      "run_attempt": 1,
+      "status": "in_progress",
+      "workflow_id": 379498304
+    },
+    "preflightJobs": {
+      "jobs": [
+        {
+          "conclusion": "success",
+          "head_branch": "fix/remote-support-reliability",
+          "head_sha": "77a0acf1b0af2070c7d5d2d1fb172a343882dfc0",
+          "id": 116557333724,
+          "name": "https-registration-gateway",
+          "run_attempt": 1,
+          "run_id": 38774157443,
+          "status": "completed"
+        },
+        {
+          "conclusion": null,
+          "head_branch": "fix/remote-support-reliability",
+          "head_sha": "77a0acf1b0af2070c7d5d2d1fb172a343882dfc0",
+          "id": 116557334151,
+          "name": "windows-packaging",
+          "run_attempt": 1,
+          "run_id": 38774157443,
+          "status": "in_progress"
+        },
+        {
+          "conclusion": "success",
+          "head_branch": "fix/remote-support-reliability",
+          "head_sha": "77a0acf1b0af2070c7d5d2d1fb172a343882dfc0",
+          "id": 116557334166,
+          "name": "release-pipeline",
+          "run_attempt": 1,
+          "run_id": 38774157443,
+          "status": "completed"
+        },
+        {
+          "conclusion": "success",
+          "head_branch": "fix/remote-support-reliability",
+          "head_sha": "77a0acf1b0af2070c7d5d2d1fb172a343882dfc0",
+          "id": 116557334238,
+          "name": "macos-runtime-harness",
+          "run_attempt": 1,
+          "run_id": 38774157443,
+          "status": "completed"
+        },
+        {
+          "conclusion": "success",
+          "head_branch": "fix/remote-support-reliability",
+          "head_sha": "77a0acf1b0af2070c7d5d2d1fb172a343882dfc0",
+          "id": 116557334406,
+          "name": "upstream-source",
+          "run_attempt": 1,
+          "run_id": 38774157443,
+          "status": "completed"
+        },
+        {
+          "conclusion": "skipped",
+          "head_branch": "fix/remote-support-reliability",
+          "head_sha": "77a0acf1b0af2070c7d5d2d1fb172a343882dfc0",
+          "id": 116557335838,
+          "name": "portable-standard-lease-qa",
+          "run_attempt": 1,
+          "run_id": 38774157443,
+          "status": "completed"
+        },
+        {
+          "conclusion": "skipped",
+          "head_branch": "fix/remote-support-reliability",
+          "head_sha": "77a0acf1b0af2070c7d5d2d1fb172a343882dfc0",
+          "id": 116557335904,
+          "name": "session-directory-access-observation",
+          "run_attempt": 1,
+          "run_id": 38774157443,
+          "status": "completed"
+        },
+        {
+          "conclusion": "skipped",
+          "head_branch": "fix/remote-support-reliability",
+          "head_sha": "77a0acf1b0af2070c7d5d2d1fb172a343882dfc0",
+          "id": 116557335935,
+          "name": "standard-gui-connection-observation",
+          "run_attempt": 1,
+          "run_id": 38774157443,
+          "status": "completed"
+        }
+      ],
+      "total_count": 8
+    },
+    "producer": {
+      "conclusion": null,
+      "event": "workflow_dispatch",
+      "head_branch": "fix/remote-support-reliability",
+      "head_repository": {
+        "full_name": "Jangopeople/mixel-remote-client",
+        "id": 1229987840
+      },
+      "head_sha": "77a0acf1b0af2070c7d5d2d1fb172a343882dfc0",
+      "id": 38774820528,
+      "path": ".github/workflows/build.yml",
+      "repository": {
+        "full_name": "Jangopeople/mixel-remote-client",
+        "id": 1229987840
+      },
+      "run_attempt": 1,
+      "status": "in_progress",
+      "workflow_id": 271445168
+    },
+    "producerJobs": {
+      "jobs": [
+        {
+          "conclusion": "success",
+          "head_branch": "fix/remote-support-reliability",
+          "head_sha": "77a0acf1b0af2070c7d5d2d1fb172a343882dfc0",
+          "id": 116559628730,
+          "name": "config",
+          "run_attempt": 1,
+          "run_id": 38774820528,
+          "status": "completed"
+        },
+        {
+          "conclusion": "skipped",
+          "head_branch": "fix/remote-support-reliability",
+          "head_sha": "77a0acf1b0af2070c7d5d2d1fb172a343882dfc0",
+          "id": 116559630782,
+          "name": "runtime",
+          "run_attempt": 1,
+          "run_id": 38774820528,
+          "status": "completed"
+        },
+        {
+          "conclusion": "skipped",
+          "head_branch": "fix/remote-support-reliability",
+          "head_sha": "77a0acf1b0af2070c7d5d2d1fb172a343882dfc0",
+          "id": 116559630809,
+          "name": "runtime-macos",
+          "run_attempt": 1,
+          "run_id": 38774820528,
+          "status": "completed"
+        },
+        {
+          "conclusion": "skipped",
+          "head_branch": "fix/remote-support-reliability",
+          "head_sha": "77a0acf1b0af2070c7d5d2d1fb172a343882dfc0",
+          "id": 116559631350,
+          "name": "runtime-linux",
+          "run_attempt": 1,
+          "run_id": 38774820528,
+          "status": "completed"
+        },
+        {
+          "conclusion": "success",
+          "head_branch": "fix/remote-support-reliability",
+          "head_sha": "77a0acf1b0af2070c7d5d2d1fb172a343882dfc0",
+          "id": 116559715360,
+          "name": "bridge",
+          "run_attempt": 1,
+          "run_id": 38774820528,
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-15T18:31:38Z",
+          "conclusion": "failure",
+          "head_branch": "fix/remote-support-reliability",
+          "head_sha": "77a0acf1b0af2070c7d5d2d1fb172a343882dfc0",
+          "id": 116562140099,
+          "labels": [
+            "macos-14"
+          ],
+          "name": "macos (aarch64, aarch64-apple-darwin)",
+          "run_attempt": 1,
+          "run_id": 38774820528,
+          "runner_group_id": 0,
+          "runner_group_name": "GitHub Actions",
+          "runner_name": "GitHub Actions 1000079537",
+          "started_at": "2026-10-15T17:13:47Z",
+          "status": "completed",
+          "steps": [
+            {
+              "completed_at": "2026-10-15T17:13:51Z",
+              "conclusion": "success",
+              "name": "Set up job",
+              "number": 1,
+              "started_at": "2026-10-15T17:13:48Z",
+              "status": "completed"
+            },
+            {
+              "completed_at": "2026-10-15T17:13:53Z",
+              "conclusion": "success",
+              "name": "Run actions/checkout@v5",
+              "number": 2,
+              "started_at": "2026-10-15T17:13:51Z",
+              "status": "completed"
+            },
+            {
+              "completed_at": "2026-10-15T17:13:54Z",
+              "conclusion": "success",
+              "name": "Reserve a job-owned Cargo home for the pinned Tao privacy leaf",
+              "number": 3,
+              "started_at": "2026-10-15T17:13:53Z",
+              "status": "completed"
+            },
+            {
+              "completed_at": "2026-10-15T17:14:04Z",
+              "conclusion": "success",
+              "name": "Install build runtime",
+              "number": 4,
+              "started_at": "2026-10-15T17:13:54Z",
+              "status": "completed"
+            },
+            {
+              "completed_at": "2026-10-15T17:14:17Z",
+              "conclusion": "success",
+              "name": "Install Rust",
+              "number": 5,
+              "started_at": "2026-10-15T17:14:04Z",
+              "status": "completed"
+            },
+            {
+              "completed_at": "2026-10-15T17:15:27Z",
+              "conclusion": "success",
+              "name": "Install Flutter",
+              "number": 6,
+              "started_at": "2026-10-15T17:14:17Z",
+              "status": "completed"
+            },
+            {
+              "completed_at": "2026-10-15T17:15:33Z",
+              "conclusion": "success",
+              "name": "Prepare the exact release Flutter framework for native regression checks",
+              "number": 7,
+              "started_at": "2026-10-15T17:15:27Z",
+              "status": "completed"
+            },
+            {
+              "completed_at": "2026-10-15T17:15:36Z",
+              "conclusion": "success",
+              "name": "Restore compiled codec cache",
+              "number": 8,
+              "started_at": "2026-10-15T17:15:33Z",
+              "status": "completed"
+            },
+            {
+              "completed_at": "2026-10-15T17:15:51Z",
+              "conclusion": "success",
+              "name": "Setup pinned vcpkg",
+              "number": 9,
+              "started_at": "2026-10-15T17:15:36Z",
+              "status": "completed"
+            },
+            {
+              "completed_at": "2026-10-15T17:15:56Z",
+              "conclusion": "success",
+              "name": "Install vcpkg deps",
+              "number": 10,
+              "started_at": "2026-10-15T17:15:51Z",
+              "status": "completed"
+            },
+            {
+              "completed_at": "2026-10-15T17:15:58Z",
+              "conclusion": "success",
+              "name": "Verify every native codec architecture and minimum",
+              "number": 11,
+              "started_at": "2026-10-15T17:15:56Z",
+              "status": "completed"
+            },
+            {
+              "completed_at": "2026-10-15T17:15:59Z",
+              "conclusion": "success",
+              "name": "Fetch upstream RustDesk",
+              "number": 12,
+              "started_at": "2026-10-15T17:15:58Z",
+              "status": "completed"
+            },
+            {
+              "completed_at": "2026-10-15T17:16:55Z",
+              "conclusion": "success",
+              "name": "Run Swatinem/rust-cache@v2",
+              "number": 13,
+              "started_at": "2026-10-15T17:15:59Z",
+              "status": "completed"
+            },
+            {
+              "completed_at": "2026-10-15T17:17:41Z",
+              "conclusion": "success",
+              "name": "Apply Mixel-Remote branding",
+              "number": 14,
+              "started_at": "2026-10-15T17:16:55Z",
+              "status": "completed"
+            },
+            {
+              "completed_at": "2026-10-15T17:17:54Z",
+              "conclusion": "success",
+              "name": "Fetch and protect the exact owned Tao URL logger",
+              "number": 15,
+              "started_at": "2026-10-15T17:17:41Z",
+              "status": "completed"
+            },
+            {
+              "completed_at": "2026-10-15T17:17:56Z",
+              "conclusion": "success",
+              "name": "Restore bridge files",
+              "number": 16,
+              "started_at": "2026-10-15T17:17:54Z",
+              "status": "completed"
+            },
+            {
+              "completed_at": "2026-10-15T17:19:10Z",
+              "conclusion": "success",
+              "name": "Prove Mac input C ABI and borrowed-event safety on both architectures",
+              "number": 17,
+              "started_at": "2026-10-15T17:17:56Z",
+              "status": "completed"
+            },
+            {
+              "completed_at": "2026-10-15T17:19:11Z",
+              "conclusion": "success",
+              "name": "Import Apple Developer ID cert",
+              "number": 18,
+              "started_at": "2026-10-15T17:19:10Z",
+              "status": "completed"
+            },
+            {
+              "completed_at": "2026-10-15T18:21:11Z",
+              "conclusion": "success",
+              "name": "Preflight generated support source and reporter",
+              "number": 19,
+              "started_at": "2026-10-15T17:19:11Z",
+              "status": "completed"
+            },
+            {
+              "completed_at": "2026-10-15T18:21:13Z",
+              "conclusion": "success",
+              "name": "Preserve Mac file-dialog lifecycle evidence",
+              "number": 20,
+              "started_at": "2026-10-15T18:21:11Z",
+              "status": "completed"
+            },
+            {
+              "completed_at": "2026-10-15T18:28:31Z",
+              "conclusion": "success",
+              "name": "Build (cargo + flutter via build.py)",
+              "number": 21,
+              "started_at": "2026-10-15T18:21:13Z",
+              "status": "completed"
+            },
+            {
+              "completed_at": "2026-10-15T18:28:48Z",
+              "conclusion": "success",
+              "name": "Require the complete generated Flutter app to analyze without errors or warnings",
+              "number": 22,
+              "started_at": "2026-10-15T18:28:31Z",
+              "status": "completed"
+            },
+            {
+              "completed_at": "2026-10-15T18:30:24Z",
+              "conclusion": "success",
+              "name": "Test compiled attended support guard",
+              "number": 23,
+              "started_at": "2026-10-15T18:28:48Z",
+              "status": "completed"
+            },
+            {
+              "completed_at": "2026-10-15T18:30:24Z",
+              "conclusion": "success",
+              "name": "Verify compiled Flutter UI branding",
+              "number": 24,
+              "started_at": "2026-10-15T18:30:24Z",
+              "status": "completed"
+            },
+            {
+              "completed_at": "2026-10-15T18:31:19Z",
+              "conclusion": "failure",
+              "name": "Package + sign + notarize (.app then .dmg)",
+              "number": 25,
+              "started_at": "2026-10-15T18:30:24Z",
+              "status": "completed"
+            },
+            {
+              "completed_at": "2026-10-15T18:31:20Z",
+              "conclusion": "success",
+              "name": "Retain macOS tray runtime proof",
+              "number": 26,
+              "started_at": "2026-10-15T18:31:19Z",
+              "status": "completed"
+            },
+            {
+              "completed_at": "2026-10-15T18:31:23Z",
+              "conclusion": "success",
+              "name": "Retain failed macOS launch bundle and bounded diagnostics",
+              "number": 27,
+              "started_at": "2026-10-15T18:31:20Z",
+              "status": "completed"
+            },
+            {
+              "completed_at": "2026-10-15T18:31:24Z",
+              "conclusion": "success",
+              "name": "Run actions/upload-artifact@v6",
+              "number": 28,
+              "started_at": "2026-10-15T18:31:23Z",
+              "status": "completed"
+            },
+            {
+              "completed_at": "2026-10-15T18:31:26Z",
+              "conclusion": "success",
+              "name": "Run actions/upload-artifact@v6",
+              "number": 29,
+              "started_at": "2026-10-15T18:31:24Z",
+              "status": "completed"
+            },
+            {
+              "completed_at": "2026-10-15T18:31:27Z",
+              "conclusion": "success",
+              "name": "Run actions/upload-artifact@v6",
+              "number": 30,
+              "started_at": "2026-10-15T18:31:26Z",
+              "status": "completed"
+            },
+            {
+              "completed_at": "2026-10-15T18:31:29Z",
+              "conclusion": "success",
+              "name": "Run actions/upload-artifact@v6",
+              "number": 31,
+              "started_at": "2026-10-15T18:31:27Z",
+              "status": "completed"
+            },
+            {
+              "completed_at": "2026-10-15T18:31:29Z",
+              "conclusion": "skipped",
+              "name": "Run actions/upload-artifact@v6",
+              "number": 32,
+              "started_at": "2026-10-15T18:31:29Z",
+              "status": "completed"
+            },
+            {
+              "completed_at": "2026-10-15T18:31:29Z",
+              "conclusion": "success",
+              "name": "Post Import Apple Developer ID cert",
+              "number": 60,
+              "started_at": "2026-10-15T18:31:29Z",
+              "status": "completed"
+            },
+            {
+              "completed_at": "2026-10-15T18:31:29Z",
+              "conclusion": "skipped",
+              "name": "Post Run Swatinem/rust-cache@v2",
+              "number": 61,
+              "started_at": "2026-10-15T18:31:29Z",
+              "status": "completed"
+            },
+            {
+              "completed_at": "2026-10-15T18:31:29Z",
+              "conclusion": "skipped",
+              "name": "Post Restore compiled codec cache",
+              "number": 62,
+              "started_at": "2026-10-15T18:31:29Z",
+              "status": "completed"
+            },
+            {
+              "completed_at": "2026-10-15T18:31:29Z",
+              "conclusion": "success",
+              "name": "Post Install Flutter",
+              "number": 63,
+              "started_at": "2026-10-15T18:31:29Z",
+              "status": "completed"
+            },
+            {
+              "completed_at": "2026-10-15T18:31:29Z",
+              "conclusion": "success",
+              "name": "Post Run actions/checkout@v5",
+              "number": 64,
+              "started_at": "2026-10-15T18:31:29Z",
+              "status": "completed"
+            },
+            {
+              "completed_at": "2026-10-15T18:31:31Z",
+              "conclusion": "success",
+              "name": "Complete job",
+              "number": 65,
+              "started_at": "2026-10-15T18:31:29Z",
+              "status": "completed"
+            }
+          ]
+        },
+        {
+          "conclusion": "success",
+          "head_branch": "fix/remote-support-reliability",
+          "head_sha": "77a0acf1b0af2070c7d5d2d1fb172a343882dfc0",
+          "id": 116562140309,
+          "name": "linux",
+          "run_attempt": 1,
+          "run_id": 38774820528,
+          "status": "completed"
+        },
+        {
+          "conclusion": "success",
+          "head_branch": "fix/remote-support-reliability",
+          "head_sha": "77a0acf1b0af2070c7d5d2d1fb172a343882dfc0",
+          "id": 116562140491,
+          "name": "macos (x86_64, x86_64-apple-darwin)",
+          "run_attempt": 1,
+          "run_id": 38774820528,
+          "status": "completed"
+        },
+        {
+          "conclusion": null,
+          "head_branch": "fix/remote-support-reliability",
+          "head_sha": "77a0acf1b0af2070c7d5d2d1fb172a343882dfc0",
+          "id": 116562140563,
+          "name": "windows",
+          "run_attempt": 1,
+          "run_id": 38774820528,
+          "status": "in_progress"
+        }
+      ],
+      "total_count": 9
+    }
+  },
+  "observedRecordsAreSelectedAuthenticSubsets": true,
+  "ordinaryAssertionsDeadlinesCompilerAndCleanupChanged": false,
+  "physicalMacOrNormalReleaseAuthority": false,
+  "privateReplayAllowed": true,
+  "producerAttempt": 1,
+  "producerRun": 38774820528,
+  "producerSource": "77a0acf1b0af2070c7d5d2d1fb172a343882dfc0",
+  "producerTree": "fdd3807757b4c0e6085cf4def3f5eb338ba2b04f",
+  "publication": false,
+  "rawArtifactInventorySha256": "e8519538a9f416f93ed27f6fc17a4203dd82f726ffee3f1179d28e39070b52ff",
+  "rawOriginalEvidenceHashes": {
+    "armJob": "9fcb9f88ff2e4ccaed51044875f86b91cf0727992167bf2f117692b42b23a904",
+    "comparison": "3274d3fbe01a7d84eb9c08d1f8a719959c02c50675e4f23650291f7583219192",
+    "comparisonJobs": "37544d639564b34bf8989536f75f26cee34bfb6e0bf02bb4616f233560121d9f",
+    "preflight": "43dcaf7a9a2e3d45f0234e61c996fe45a90de83e3ea1bb159b499bfb0a13121f",
+    "preflightJobs": "930117625b9b29d2fd16c29395c9ecc062e50260367abc7ffe36fd2460c17025",
+    "producer": "0538f7d1c22b633b9d29a48042359b121e66bd0230241ccb45747c744c9ba922",
+    "producerJobs": "8fe4ff7319602612caafa8bb1d9c58c888a3522c30a9c722d6feb00dffffa089"
+  },
+  "releaseQualified": false,
+  "reviewedHarnessFiles": {
+    ".github/workflows/diagnose-macos-failed-app.yml": "561a113179fa036895ee6906e99e5b9a95241fb5e3c983ed77347103ac51c504",
+    "scripts/current77-arm-warmexit-observed-records.json": "603f029be552a651ac1cabf9686ffbe8bbc874bb50bd5db439bf782a8cc7e795",
+    "scripts/current77_arm_workflow_projection.py": "27d4f206d8820803e2b9b24e772fd44161ae2f52a3fb9967b435375ee8f86613",
+    "scripts/darwin_exit_adapter.py": "71f6297ab8566e3de0d1fcedc59836412910270f4709028458250e9202bb65fd",
+    "scripts/darwin_exit_observer.py": "f19af1bf38260edb33125fea2e446561f7048e39b6c81e5aa4efde378837eadf",
+    "scripts/diagnose-current77-arm-warm-exit.py": "30271d30fb3130d60e0aa790cbbb7724715b7b73de62b189e66d6bccc40d64cc",
+    "scripts/test-diagnose-current77-arm-warm-exit.py": "c78f942aceb59956deff72e389a594b3247522232fc6093956d4cbd9f1eeb4d8",
+    "scripts/test-diagnose-macos-failed-app.py": "b74bf7ead76088656a8ced7f8910908fbe79c39cd9cae879091d146b70d7d25a",
+    "scripts/test_darwin_exit_adapter.py": "86a9332af15c11d6fe7b5539094b2c251aa21a5924a2f817a0ca1a5864a6abfc",
+    "scripts/test_darwin_exit_observer.py": "a330be925b268d5a26d9863e4d3605b284fc972b65b1b5cfc84ae544e1f1f05c"
+  },
+  "rootDecisionUtc": "2026-10-15T19:07:24.163735+00:00",
+  "schema": 1,
+  "scope": "current77-failed-arm-warmexit-private-diagnostic-only"
+}
