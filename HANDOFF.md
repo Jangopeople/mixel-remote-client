@@ -1,5 +1,39 @@
 # Mixel-Remote — Agent Handoff / Current State
 
+## Windows URI fixture event ordering — 2026-10-15
+
+Original d13 Windows producer job `116385443734` failed its original-profile,
+macOS-flag warm-plugin case after the same valid link passed parser, direct and
+cold delivery. The complete original log is retained once at
+`root-d13-new-failure-originals-20261015/windows-116385443734/`, SHA256
+`ffdd6094b60a0ff8e1928b3c88925fdd4d9cd61fefaf91cc75283135c5bdede4`.
+The fixture checked after a fixed five-millisecond timer; asynchronous stream
+delivery registers the product's zero-delay report after that timer. A controlled
+pure timer facade reproduces the exact failure, then passes with a microtask
+barrier followed by an event barrier. A missing-report negative still fails.
+The original Windows callback schedule itself was not instrumented; this is
+source/fixture causality, not a demonstrated product refusal or the reported
+valid lowercase Mac link's identified cause.
+
+Only `DART_TESTS.flush` changes. All 79 current Python assertion-call ASTs,
+all 11 test bodies, all 1,560 Dart assertions, subprocess bounds and product
+sources remain exact. The complete corrected URI entrypoint exits 0 in 28.786
+seconds; Root independently replays original failure, corrected pass and the
+missing-report negative. Complete replacement SHA256 is
+`3d7b5f087b16dc08cefaf4d6e16b1e6545e609d68602d21bb61a045315d1bdbd`.
+Author323 and independent4 declared proof members are fully Root-rehashed.
+
+The b85 application source is unchanged. A bounded private Mac diagnosis may
+use its exact original signed artifacts only after its entire all-four-platform
+producer, mandatory preflight and both Windows comparisons complete successfully,
+plus the original full branding regression and corrected complete URI checks.
+Never ignore a failed b85 job, relabel a b85 binary with the fixture commit, or
+claim final delivery from this diagnostic permission. Normal endpoint reservations,
+human-only blocked native-link launch and public publication hold remain.
+Fresh source checks for this fixture correction remain required. Do not start
+another full application producer solely for this test correction before the
+current candidate's terminal results and private diagnostic strategy are resolved.
+
 ## Complete native URI test profiles — 2026-10-15
 
 The original `d13a17d` upstream job `116382785342` and Mac preflight

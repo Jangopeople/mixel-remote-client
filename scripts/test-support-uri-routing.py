@@ -100,7 +100,11 @@ String classify(){
  return 'refuse';
 }
 void reset(){outbound.clear();reports.clear();reportKeys.clear();shown=0;}
-Future<void> flush()async{await Future<void>.delayed(const Duration(milliseconds:5));}
+Future<void> flush()async{
+ // Deliver queued broadcast events before the report callback's timer barrier.
+ await Future<void>.microtask((){});
+ await Future<void>.delayed(Duration.zero);
+}
 const secondToken='inv_00000000-0000-0000-0000-000000000002';
 const secondKey='synthetic-second-public-key-000000000000';
 class QueryCase{
