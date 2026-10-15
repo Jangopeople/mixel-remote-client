@@ -115,6 +115,7 @@ class WindowsPreflightBuildTests(unittest.TestCase):
         text = (ROOT / '.github/workflows/build.yml').read_text(encoding='utf-8')
         config = re.search(r'^    if: (.+)$', job(text, 'config'), re.M)[1]
         context = {'inputs.collect_windows_preflight_failure': False,
+                   'inputs.runtime_windows_private_standard95': False,
                    'inputs.runtime_windows_release_gate': False, 'inputs.runtime_artifact_run': '',
                    'github.event.inputs.runtime_artifact_run': '',
                    'github.event.inputs.runtime_linux_artifact_run': '',

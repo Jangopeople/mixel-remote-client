@@ -1,0 +1,12 @@
+{
+  "scope": "METADATA_HOLDER_ONLY_NOT_A_ROOT_DECISION",
+  "privateDiagnosticGo": false,
+  "normal_qualified": false,
+  "release_qualified": false,
+  "publication": false,
+  "root_whole_green_verified": false,
+  "actualWindowsArtifactId": null,
+  "actualPayloadArtifactId": null,
+  "instruction": "Root must add actual final original metadata, checkout evidence, authentic Root collector derivative, exact archive identities and a separate reviewed tracked root gate. Never overwrite raw originals or turn this holder into a successful decision. Missing real gate deliberately refuses before provider or application work.",
+  "rootGateAbsentByDesign": "scripts/qa/current77-private-standard95-root-gate.json"
+}

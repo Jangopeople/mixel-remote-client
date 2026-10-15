@@ -23,6 +23,11 @@ on:
         required: false
         type: boolean
         default: false
+      runtime_windows_private_standard95:
+        description: "PRIVATE current77 Standard foreground95 diagnosis; ARM/whole producer failure stays failed"
+        required: false
+        type: boolean
+        default: false
       runtime_windows_release_gate:
         description: "Debugger-free actual signed Windows QuickSupport95 gate (requires artifact run and publish=false)"
         required: false
@@ -60,7 +65,7 @@ jobs:
   # workflow_dispatch overrides it).
   # ===========================================================================
   config:
-    if: ${{ inputs.collect_windows_preflight_failure || (github.event.inputs.runtime_artifact_run == '' && github.event.inputs.runtime_macos_artifact_run == '' && github.event.inputs.runtime_linux_artifact_run == '') || (inputs.runtime_windows_release_gate && inputs.runtime_artifact_run == '') }}
+    if: ${{ inputs.collect_windows_preflight_failure || (github.event.inputs.runtime_artifact_run == '' && github.event.inputs.runtime_macos_artifact_run == '' && github.event.inputs.runtime_linux_artifact_run == '') || ((inputs.runtime_windows_release_gate || inputs.runtime_windows_private_standard95) && inputs.runtime_artifact_run == '') }}
     runs-on: ubuntu-22.04
     outputs:
       upstream_version: ${{ steps.ver.outputs.upstream_version }}
@@ -99,6 +104,18 @@ jobs:
         run: |
           python3 scripts/test-windows-release-runtime.py
           python3 scripts/collect-windows-release-runtime.py request
+      - name: Validate isolated private Standard95 request
+        env:
+          PRIVATE_STANDARD95: ${{ inputs.runtime_windows_private_standard95 }}
+          RUNTIME_RUN_ID: ${{ inputs.runtime_artifact_run }}
+          PUBLISH_REQUESTED: ${{ inputs.publish_r2 }}
+          WINDOWS_RELEASE_GATE: ${{ inputs.runtime_windows_release_gate }}
+          COLLECT_WINDOWS_PREFLIGHT_FAILURE: ${{ inputs.collect_windows_preflight_failure }}
+          RUNTIME_LINUX_RUN: ${{ inputs.runtime_linux_artifact_run }}
+          RUNTIME_MACOS_RUN: ${{ inputs.runtime_macos_artifact_run }}
+          INPUT_ONLY: ${{ inputs.only }}
+          INPUT_UPSTREAM_VERSION: ${{ inputs.upstream_version }}
+        run: python3 -B scripts/capture-private-standard95-state.py request
       - id: ver
         name: Validate build configuration and publication credentials
         env:
@@ -1175,7 +1192,7 @@ jobs:
           (needs.macos.result == 'success' || needs.macos.result == 'skipped') &&
           (needs.windows.result == 'success' || needs.windows.result == 'skipped') &&
           ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
-           (github.event_name == 'workflow_dispatch' && inputs.publish_r2)) && !inputs.runtime_windows_release_gate && !inputs.collect_windows_preflight_failure }}
+           (github.event_name == 'workflow_dispatch' && inputs.publish_r2)) && !inputs.runtime_windows_release_gate && !inputs.runtime_windows_private_standard95 && !inputs.collect_windows_preflight_failure }}
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     concurrency:
@@ -1225,11 +1242,22 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, windows-2022]
+        os: [windows-2025, windows-2022]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
+    env:
+      MIXEL_PRIVATE_STANDARD95_SCOPE: ${{ inputs.runtime_windows_private_standard95 && 'OWNED_CURRENT77_WINDOWS_STANDARD_FOREGROUND95_DIAGNOSTIC_ONLY' || '' }}
     steps:
       - uses: actions/checkout@v5
+      - name: Restore exact private QA Git blob bytes before source checks
+        if: ${{ inputs.runtime_windows_private_standard95 }}
+        shell: pwsh
+        run: |
+          python -B scripts/capture-private-standard95-state.py restore-git-bytes --repository $env:GITHUB_WORKSPACE
+          if ($LASTEXITCODE -ne 0) { throw 'Private QA exact Git byte checkout failed.' }
+          if (-not (Test-Path scripts/qa/current77-private-standard95-root-gate.json -PathType Leaf)) {
+            throw 'Private Root gate is absent; no collection or application work permitted.'
+          }
       - name: Validate artifact-only diagnostic request
         id: request
         env:
@@ -1238,17 +1266,40 @@ jobs:
           WINDOWS_RELEASE_GATE: ${{ inputs.runtime_windows_release_gate }}
           RUNTIME_LINUX_RUN: ${{ inputs.runtime_linux_artifact_run }}
           RUNTIME_MACOS_RUN: ${{ inputs.runtime_macos_artifact_run }}
+          PRIVATE_STANDARD95: ${{ inputs.runtime_windows_private_standard95 }}
+          COLLECT_WINDOWS_PREFLIGHT_FAILURE: ${{ inputs.collect_windows_preflight_failure }}
+          INPUT_ONLY: ${{ inputs.only }}
+          INPUT_UPSTREAM_VERSION: ${{ inputs.upstream_version }}
         shell: pwsh
         run: |
+          python -B scripts/capture-private-standard95-state.py request
+          if ($LASTEXITCODE -ne 0) { throw 'Private Standard95 request refused.' }
           python scripts/release-artifacts.py runtime
           if ($LASTEXITCODE -ne 0) { throw 'Artifact-only Windows runtime request qualification failed.' }
           python scripts/collect-windows-release-runtime.py request
           if ($LASTEXITCODE -ne 0) { throw 'Debugger-free Windows release gate request qualification failed.' }
+      - name: Retain fresh original private Standard95 state before collection
+        id: private_before
+        if: ${{ inputs.runtime_windows_private_standard95 }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python -B scripts/test-private-standard-foreground95.py
+          if ($LASTEXITCODE -ne 0) { throw 'Private Standard95 source controls failed.' }
+          $gate = (Resolve-Path scripts/qa/current77-private-standard95-root-gate.json).Path
+          $gateHash = (Get-FileHash $gate -Algorithm SHA256).Hash.ToLowerInvariant()
+          $tree = (& git rev-parse 'HEAD^{tree}').Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'Private QA harness tree unavailable.' }
+          $fresh = Join-Path $env:RUNNER_TEMP ('mixel-private95-live-before-'+[Guid]::NewGuid().ToString('N'))
+          python -B scripts/capture-private-standard95-state.py --repository $env:GITHUB_WORKSPACE --root-gate $gate --root-gate-sha256 $gateHash --harness-source $env:GITHUB_SHA --harness-tree $tree --output $fresh --stage before
+          if ($LASTEXITCODE -ne 0) { throw 'Fresh private Standard95 pre-collection state refused.' }
+          "PRIVATE95_BEFORE=$fresh" >> $env:GITHUB_ENV
       - name: Qualify exact ordinary Windows desktop fixture
         shell: pwsh
         run: ./scripts/test-windows-pipeline.ps1
       - name: Prepare Microsoft native crash stack debugger
-        if: ${{ !inputs.runtime_windows_release_gate }}
+        if: ${{ !inputs.runtime_windows_release_gate && !inputs.runtime_windows_private_standard95 }}
         shell: pwsh
         run: |
           $cdb = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/Debuggers/x64/cdb.exe'
@@ -1270,7 +1321,7 @@ jobs:
             throw 'Native debugger is not validly signed by Microsoft.'
           }
       - uses: actions/download-artifact@v7
-        if: ${{ !inputs.runtime_windows_release_gate }}
+        if: ${{ !inputs.runtime_windows_release_gate && !inputs.runtime_windows_private_standard95 }}
         with:
           name: windows-msix-payload
           run-id: ${{ steps.request.outputs.run_id }}
@@ -1297,6 +1348,42 @@ jobs:
             if ($signature.Status -ne 'Valid') { throw 'Actual customer launcher Authenticode signature is not valid.' }
             Write-Host ('PASS: actual customer release signature Valid: '+$_.Name)
           }
+      - name: Collect exact signed current77 Windows inputs for PRIVATE Standard95 diagnosis
+        if: ${{ inputs.runtime_windows_private_standard95 }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WINDOWS_RELEASE_GATE: "true"
+          PUBLISH_REQUESTED: "false"
+          RUNTIME_RUN_ID: ${{ inputs.runtime_artifact_run }}
+          RUNTIME_LINUX_RUN: ""
+          RUNTIME_MACOS_RUN: ""
+        run: |
+          # The unchanged collector records completed producer FAILURE and
+          # Windows job SUCCESS. This is private input collection only.
+          python scripts/collect-windows-release-runtime.py collect --run-id $env:RUNTIME_RUN_ID --output release-runtime-collection
+          if ($LASTEXITCODE -ne 0) { throw 'Private exact Windows artifact collection failed.' }
+          New-Item -ItemType Directory signed-payload, release-client | Out-Null
+          Copy-Item release-runtime-collection/artifacts/windows-msix-payload/* signed-payload/
+          Copy-Item release-runtime-collection/artifacts/windows/* release-client/
+          Get-ChildItem release-client -File | ForEach-Object {
+            $signature = Get-AuthenticodeSignature $_.FullName
+            if ($signature.Status -ne 'Valid') { throw 'Actual private input customer launcher Authenticode signature is not valid.' }
+          }
+      - name: Prepare PRIVATE genuine Standard foreground95 before any customer app work
+        id: private_prepare
+        if: ${{ inputs.runtime_windows_private_standard95 }}
+        shell: pwsh
+        run: |
+          $gate = (Resolve-Path scripts/qa/current77-private-standard95-root-gate.json).Path
+          $gateHash = (Get-FileHash $gate -Algorithm SHA256).Hash.ToLowerInvariant()
+          $tree = (& git rev-parse 'HEAD^{tree}').Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'Private QA harness tree unavailable.' }
+          $owned = Join-Path $env:RUNNER_TEMP ('mixel-standard-foreground95-'+[Guid]::NewGuid().ToString('N'))
+          python -B scripts/prepare-private-standard-foreground95.py prepare --repository $env:GITHUB_WORKSPACE --output $owned --root-gate $gate --root-gate-sha256 $gateHash --collection (Resolve-Path release-runtime-collection).Path --harness-source $env:GITHUB_SHA --harness-tree $tree --live-state $env:PRIVATE95_BEFORE
+          if ($LASTEXITCODE -ne 0) { throw 'Private genuine Standard95 admission refused.' }
+          Copy-Item (Join-Path $owned 'preparation-manifest.json') private-standard95-preparation.json
+          "PRIVATE95_DRIVER=$(Join-Path $owned 'test-standard-foreground95.generated.ps1')" >> $env:GITHUB_ENV
       - name: Verify and extract signed payload
         shell: pwsh
         run: |
@@ -1310,7 +1397,7 @@ jobs:
         run: |
           ./scripts/test-support-launch-windows.ps1 -Executable runtime-client/Mixel-Remote.exe
       - name: Diagnose signed compiled ordinary-to-QuickSupport ownership
-        if: ${{ !inputs.runtime_windows_release_gate }}
+        if: ${{ !inputs.runtime_windows_release_gate && !inputs.runtime_windows_private_standard95 }}
         shell: pwsh
         env:
           MIXEL_HOSTED_OWNED_QA_NAMESPACE: "1"
@@ -1320,7 +1407,7 @@ jobs:
           # This remains signed-inner diagnosis, never customer release proof.
           ./scripts/test-support-launch-windows.ps1 -Executable runtime-client/Mixel-Remote.exe -QuickSupport -ExpectedPayload runtime-client -OrdinaryThenQuickSupport -CompiledQuickSupportDiagnostic
       - name: Diagnose signed compiled native crash attribution
-        if: ${{ !inputs.runtime_windows_release_gate }}
+        if: ${{ !inputs.runtime_windows_release_gate && !inputs.runtime_windows_private_standard95 }}
         shell: pwsh
         run: |
           # The retained artifact is the exact signed compiled payload. Pass the
@@ -1333,7 +1420,42 @@ jobs:
         env:
           MIXEL_HOSTED_OWNED_QA_NAMESPACE: "1"
         run: |
-          ./scripts/test-support-launch-windows.ps1 -Executable release-client/Mixel-Remote-QS.exe -Portable -QuickSupport -ExpectedPayload runtime-client -OrdinaryThenQuickSupport
+          $ErrorActionPreference = 'Stop'
+          python -B scripts/test-standard-foreground95-adapter.py
+          if ($LASTEXITCODE -ne 0) { throw 'Standard foreground95 adapter source controls failed.' }
+          $gate = (Resolve-Path scripts/qa/current77-standard-foreground95-root-gate.json).Path
+          $gateHash = (Get-FileHash -LiteralPath $gate -Algorithm SHA256).Hash.ToLowerInvariant()
+          $tree = (& git rev-parse 'HEAD^{tree}').Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'Actual future QA harness tree unavailable.' }
+          $owned = Join-Path $env:RUNNER_TEMP ('mixel-standard-foreground95-'+[Guid]::NewGuid().ToString('N'))
+          python -B scripts/prepare-standard-foreground95.py --repository $env:GITHUB_WORKSPACE --output $owned --root-gate $gate --root-gate-sha256 $gateHash --collection release-runtime-collection/artifact-provenance.json --harness-source $env:GITHUB_SHA --harness-tree $tree
+          if ($LASTEXITCODE -ne 0) { throw 'Source77 Standard foreground95 preparation refused.' }
+          if (Test-Path -LiteralPath standard-foreground95-preparation.json) { throw 'Existing Standard foreground95 preparation evidence refused.' }
+          Copy-Item -LiteralPath (Join-Path $owned 'preparation-manifest.json') -Destination standard-foreground95-preparation.json
+          $generated = Join-Path $owned 'test-standard-foreground95.generated.ps1'
+          & pwsh -NoLogo -NoProfile -NonInteractive -File $generated -Executable (Resolve-Path release-client/Mixel-Remote-QS.exe).Path -Portable -QuickSupport -ExpectedPayload (Resolve-Path runtime-client).Path -OrdinaryThenQuickSupport
+          if ($LASTEXITCODE -ne 0) { throw 'Actual signed Standard foreground95 failed.' }
+      - name: PRIVATE actual signed Standard foreground95 with original assertions and finally
+        if: ${{ inputs.runtime_windows_private_standard95 }}
+        shell: pwsh
+        env:
+          MIXEL_HOSTED_OWNED_QA_NAMESPACE: "1"
+        run: |
+          & pwsh -NoLogo -NoProfile -NonInteractive -File $env:PRIVATE95_DRIVER -Executable (Resolve-Path release-client/Mixel-Remote-QS.exe).Path -Portable -QuickSupport -ExpectedPayload (Resolve-Path runtime-client).Path -OrdinaryThenQuickSupport
+          if ($LASTEXITCODE -ne 0) { throw 'PRIVATE actual signed Standard foreground95 failed; no normal qualification.' }
+      - name: Retain fresh original private Standard95 state after original cleanup
+        if: ${{ always() && inputs.runtime_windows_private_standard95 && steps.private_before.outcome == 'success' }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $gate = (Resolve-Path scripts/qa/current77-private-standard95-root-gate.json).Path
+          $gateHash = (Get-FileHash $gate -Algorithm SHA256).Hash.ToLowerInvariant()
+          $tree = (& git rev-parse 'HEAD^{tree}').Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'Private QA harness tree unavailable after cleanup.' }
+          $fresh = Join-Path $env:RUNNER_TEMP ('mixel-private95-live-after-'+[Guid]::NewGuid().ToString('N'))
+          python -B scripts/capture-private-standard95-state.py --repository $env:GITHUB_WORKSPACE --root-gate $gate --root-gate-sha256 $gateHash --harness-source $env:GITHUB_SHA --harness-tree $tree --output $fresh --stage after
+          if ($LASTEXITCODE -ne 0) { throw 'Fresh private Standard95 post-cleanup state refused; previous failures remain fatal.' }
       - name: Save synthetic runtime diagnostics
         if: always()
         shell: pwsh
@@ -1349,6 +1471,15 @@ jobs:
           if (Test-Path release-runtime-collection/artifact-provenance.json) {
             Copy-Item release-runtime-collection/artifact-provenance.json runtime-diagnostics/customer-release-input-provenance.json
             Copy-Item release-runtime-collection/run-metadata.json runtime-diagnostics/customer-release-producer-run.json
+          }
+          if (Test-Path -LiteralPath standard-foreground95-preparation.json) {
+            Copy-Item -LiteralPath standard-foreground95-preparation.json -Destination runtime-diagnostics/standard-foreground95-preparation.json
+          }
+          if (Test-Path private-standard95-preparation.json) {
+            Copy-Item private-standard95-preparation.json runtime-diagnostics/private-standard95-preparation.json
+          }
+          Get-ChildItem $env:RUNNER_TEMP -Directory -Filter 'mixel-private95-live-*' | ForEach-Object {
+            Copy-Item -LiteralPath $_.FullName -Destination runtime-diagnostics -Recurse
           }
           $ownedLogs = Join-Path $env:RUNNER_TEMP 'mixel-owned-ordinary-qs-logs'
           if (Test-Path $ownedLogs) {

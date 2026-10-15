@@ -17,6 +17,10 @@ _lifecycle_spec = importlib.util.spec_from_file_location('mixel_lifecycle_workfl
 _lifecycle_projection = importlib.util.module_from_spec(_lifecycle_spec)
 _lifecycle_spec.loader.exec_module(_lifecycle_projection)
 inverse_lifecycle_workflow_checks = _lifecycle_projection.inverse_lifecycle_workflow_checks
+_standard95_spec = importlib.util.spec_from_file_location('mixel_standard95_workflow_projection', ROOT / 'scripts/standard_foreground95_workflow_projection.py')
+_standard95_projection = importlib.util.module_from_spec(_standard95_spec)
+_standard95_spec.loader.exec_module(_standard95_projection)
+inverse_standard_foreground95_runtime_checks = _standard95_projection.inverse_standard_foreground95_runtime_checks
 DRIVER = SCRIPTS / 'observe-standard-valid-qa-windows.ps1'
 KNOWN = SCRIPTS / 'test-standard-qa-session-directory.cs'
 ORIGINAL = SCRIPTS / 'test-support-lease-standard-windows.ps1'
@@ -214,6 +218,27 @@ foreach($fn in $functions){
 HISTORICAL_FUNCTIONS = FUNCTIONS.replace(str(DRIVER).replace("'", "''"), '__HISTORICAL_DRIVER__')
 
 class IgnoredFixtureControls(unittest.TestCase):
+    def test_standard_foreground95_runtime_inverse_preserves_app77_and_refuses_drift(self):
+        text = (ROOT / '.github/workflows/build.yml').read_text(encoding='utf-8')
+        from private_standard95_workflow_projection import inverse_private_standard95
+        text = inverse_private_standard95(text, 'build.yml')
+        projected = inverse_standard_foreground95_runtime_checks(text, 'build.yml')
+        self.assertEqual(hashlib.sha256(projected.encode()).hexdigest(), _standard95_projection.APP77_BUILD_WORKFLOW_SHA256)
+        preflight = (ROOT / '.github/workflows/preflight.yml').read_text(encoding='utf-8')
+        self.assertEqual(inverse_standard_foreground95_runtime_checks(preflight, 'preflight.yml'), preflight)
+        for original,current in _standard95_projection.HUNKS:
+            for mode,mutant in {
+                'missing':text.replace(current,'',1),
+                'duplicate':text.replace(current,current+current,1),
+                'changed':text.replace(current,current.replace('windows-2025','windows-latest',1) if 'windows-2025' in current else current+'          # drift\n',1),
+                'moved':text.replace(current,'',1)+current,
+                'wrong-job':text.replace('\n  runtime:\n','\n  foreign-runtime:\n',1),
+            }.items():
+                with self.subTest(mode=mode), self.assertRaises(AssertionError):
+                    inverse_standard_foreground95_runtime_checks(mutant, 'build.yml')
+        with self.assertRaises(AssertionError): inverse_standard_foreground95_runtime_checks('', 'foreign.yml')
+        with self.assertRaises(AssertionError): inverse_standard_foreground95_runtime_checks(preflight+_standard95_projection.CALLER_CURRENT, 'preflight.yml')
+
     def test_known_fifteen_only_class_rename_and_native_fence(self):
         raw = KNOWN.read_bytes()
         self.assertEqual(hashlib.sha256(raw).hexdigest(), '310b613adc779fed71c2d2bc689041b6cfd07750dd7b9dff5f786c9c446c51a8')
@@ -303,6 +328,7 @@ if($generated.IndexOf('Start-StandardValidQaNamespace') -lt 0 -or $generated.Ind
                          'e0b93f5d3b519877650e5cca61c37102c5f8897510d76fecfe8fd29867692126')
         self.assertEqual(hashlib.sha256((SCRIPTS / 'test-session-directory-access.cs').read_bytes()).hexdigest(), current.decode())
         workflow = (ROOT / '.github/workflows/preflight.yml').read_text()
+        workflow = inverse_standard_foreground95_runtime_checks(workflow, 'preflight.yml')
         workflow = inverse_lifecycle_workflow_checks(workflow, 'preflight.yml')
         workflow = inverse_windows_preflight_budget(workflow)
         workflow = inverse_windows_sdk_source_diagnostics(workflow, 'preflight.yml')

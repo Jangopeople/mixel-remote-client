@@ -112,7 +112,7 @@ class StrictReplayControls(unittest.TestCase):
         for relative in ("scripts/test-support-launch-macos-concurrency.py",
                          "scripts/test-support-launch-macos-concurrency-controls.py",
                          "scripts/failed-macos-diagnostic-helper-hashes.json",
-                         "scripts/failed-intel-concurrency-replay-profile.json",
+                         "scripts/failed-intel-concurrency-private-standard95-profile.json",
                          "scripts/diagnose-macos-failed-app.py"):
             carrier = self.root / Path(relative).name
             shutil.copytree(ROOT / "scripts", carrier / "scripts")
@@ -127,6 +127,29 @@ class StrictReplayControls(unittest.TestCase):
     def test_reviewed_workflow_projection_drift_refuses_before_provider_or_native(self):
         relative = "scripts/file_dialog_workflow_projection.py"
         carrier = self.root / "changed-reviewed-workflow-projection"
+        shutil.copytree(ROOT / "scripts", carrier / "scripts")
+        (carrier / ".github/workflows").mkdir(parents=True)
+        shutil.copy2(ROOT / ".github/workflows/diagnose-macos-failed-app.yml",
+                     carrier / ".github/workflows/diagnose-macos-failed-app.yml")
+        with (carrier / relative).open("ab") as stream:
+            stream.write(b"\n# unreviewed workflow projection\n")
+        destination = self.root / "never-created-private-output"
+        safe = self.root / "never-created-safe-output"
+        arguments = ["--diagnostic-checkout", str(carrier), "--producer-checkout", str(self.root),
+                     "--destination", str(destination), "--safe-output", str(safe)]
+        with patch.object(v, "hosted_context", return_value="b" * 40), \
+             patch.object(v, "api", side_effect=AssertionError("Provider metadata forbidden")) as provider, \
+             patch.object(v, "run_caller", side_effect=AssertionError("Native diagnostic forbidden")) as native:
+            with self.assertRaisesRegex(v.Refusal, "^reviewed-replay-source-drift$"):
+                v.main(arguments)
+            provider.assert_not_called()
+            native.assert_not_called()
+        self.assertFalse(destination.exists())
+        self.assertFalse(safe.exists())
+
+    def test_standard95_workflow_projection_drift_refuses_before_provider_or_native(self):
+        relative = "scripts/standard_foreground95_workflow_projection.py"
+        carrier = self.root / "changed-standard95-reviewed-workflow-projection"
         shutil.copytree(ROOT / "scripts", carrier / "scripts")
         (carrier / ".github/workflows").mkdir(parents=True)
         shutil.copy2(ROOT / ".github/workflows/diagnose-macos-failed-app.yml",
@@ -353,9 +376,11 @@ class StrictReplayControls(unittest.TestCase):
                          "repos/" + v.REPOSITORY + "/actions/runs/" + str(v.RUN)])
         self.assertNotIn("--allow-escape-sequences", metadata.call_args.args[0])
         profile = v.source_contract(ROOT)
-        self.assertEqual(v.PROFILE_HASH, "c8c969127e1a18878dc9feba38affada0fcf3bf142732e9ca5cef2cc8fd8ccb8")
-        self.assertEqual(v.CONTROLS_HASH, "c26c0bb27da29e4cda94726abe407a756f0009c49eb44dc4def5101f2b7af02f")
+        self.assertEqual(v.PROFILE_HASH, "a1c15cf2238a48991730c2846c9fc2ca92187ff1248cf1d7d994329e8480a896")
+        self.assertEqual(v.CONTROLS_HASH, "f0b220f189cabfd1686fd9995478428a5ce0ea0c380a2be3de08d7da88080cad")
         self.assertEqual(profile["reviewedSources"]["scripts/test-support-launch-macos-concurrency-controls.py"], v.CONTROLS_HASH)
+        self.assertEqual(profile["reviewedSources"]["scripts/standard_foreground95_workflow_projection.py"],
+                         "51d7105b6e31519e3fa325f908b84e203f35cb5a6e06b9a8e0136f3cd817836a")
         self.assertEqual(profile["reviewedSources"]["scripts/file_dialog_workflow_projection.py"],
                          "2c1cdb2f108ecb1766e9a88bf802d882731deda943420ac6f19fd27a47d0fd30")
         self.assertEqual(v.CALLER_HASH, "9fb58a9c5333df460cc4a676dc1499ee08af4af78edca762d0e20c59f0d03fc0")

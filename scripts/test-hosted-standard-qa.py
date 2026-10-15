@@ -112,6 +112,8 @@ class HostedFixtureControls(unittest.TestCase):
                           ('runtime', 'Prove actual signed customer QuickSupport95 without debugger')]}
         for filename, rows in workflow_rows.items():
             workflow = (ROOT / '.github/workflows' / filename).read_text()
+            from private_standard95_workflow_projection import inverse_private_standard95
+            workflow = inverse_private_standard95(workflow, filename)
             self.assertEqual(workflow.count('MIXEL_HOSTED_OWNED_QA_NAMESPACE:'), len(rows))
             for job, step in rows:
                 start = workflow.index('\n  ' + job + ':\n')

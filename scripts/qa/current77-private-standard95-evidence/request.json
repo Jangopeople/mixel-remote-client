@@ -1,0 +1,13 @@
+{
+  "ref": "fix/remote-support-reliability",
+  "inputs": {
+    "upstream_version": "",
+    "only": "",
+    "publish_r2": false,
+    "collect_windows_preflight_failure": false,
+    "runtime_windows_release_gate": false,
+    "runtime_artifact_run": "",
+    "runtime_linux_artifact_run": "",
+    "runtime_macos_artifact_run": ""
+  }
+}

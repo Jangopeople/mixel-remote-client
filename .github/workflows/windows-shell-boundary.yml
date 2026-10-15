@@ -117,6 +117,13 @@ jobs:
           print('PASS: native Dart argv spelling and original fatal dispatcher ordering; source controls only; host=' + sys.platform)
           '@ | python -u - 2>&1 | Tee-Object -FilePath (Join-Path $env:GITHUB_WORKSPACE 'shell-boundary-proof/dart-argv.log')
           if ($LASTEXITCODE -ne 0) { throw 'Native Dart argv source boundary controls failed.' }
+      - name: Probe PRIVATE95 source and read-only owner APIs on its isolated QA ref
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/current77-private95-source-probe'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -B scripts/probe-private95-windows-source-api.py 2>&1 | Tee-Object -FilePath (Join-Path $env:GITHUB_WORKSPACE 'shell-boundary-proof/private95-source-api.log')
+          if ($LASTEXITCODE -ne 0) { throw 'Isolated PRIVATE95 source/API controls failed; application qualification remains separate.' }
       - uses: actions/upload-artifact@v6
         if: always()
         with:
