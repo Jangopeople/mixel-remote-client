@@ -294,13 +294,14 @@ def shell_controls(out,bash,source):
         print("Actual exact Bash runtime paths:\n"+queried.stdout,flush=True)
         runtime=git_bash_runtime(str(selected),queried.stdout)
     tree=ast.parse(Path(__file__).read_text(encoding="utf-8"))
-    pipeline_node=next(node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name=="pipeline")
-    shell_runs=[call for call in ast.walk(pipeline_node)
+    pipeline_nodes=[node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name in ("pipeline", "common_drift_controls")]
+    assert {node.name for node in pipeline_nodes} == {"pipeline", "common_drift_controls"}
+    shell_runs=[call for node in pipeline_nodes for call in ast.walk(node)
         if isinstance(call,ast.Call) and isinstance(call.func,ast.Name) and call.func.id=="run"
         and call.args and isinstance(call.args[0],ast.List)
         and isinstance(call.args[0].elts[0],ast.Name) and call.args[0].elts[0].id=="bash"]
-    assert len(shell_runs)==9,"Full pipeline no longer uses the exact supplied shell for all nine calls"
-    # Execute the exact current pipeline with only its nine shell executables
+    assert len(shell_runs)==10,"Full pipeline no longer uses the supplied shell for the original nine calls and separate prior-owner control"
+    # Execute the exact current pipeline with only its ten shell executables
     # restored to the observed old bare `bash` boundary. Git/source operations
     # remain real; the Windows WSL process result alone is a labelled stand-in.
     # The full corrected pipeline below executes the supplied real shell.
@@ -313,7 +314,7 @@ def shell_controls(out,bash,source):
             raise AssertionError("Windows Subsystem for Linux has no installed distributions.")
         return run(args,*positional,**keywords)
     scope=dict(globals(),run=prior_shell_boundary)
-    exec(compile(ast.fix_missing_locations(ast.Module(body=[pipeline_node],type_ignores=[])),
+    exec(compile(ast.fix_missing_locations(ast.Module(body=pipeline_nodes,type_ignores=[])),
         "original-bare-bash-boundary","exec"),scope)
     legacy=out/"original-bare-bash-control"
     legacy.mkdir()
@@ -345,13 +346,14 @@ def shell_controls(out,bash,source):
         "runtime_path_refusals":runtime_refusals,
         "original_version_substring_false_refusal_reproduced_mocked_version_only":True,
         "installation_layout_controls_mocked_only":True,"path_refusals":refusals,
-        "existing_unix_default_preserved":True,"all_nine_pipeline_calls_exact_supplied_shell":True,
+        "existing_unix_default_preserved":True,"all_ten_pipeline_calls_exact_supplied_shell":True,
+        "original_nine_call_sites_and_separate_prior_owner_control_preserved":True,
         "original_bare_bash_failure_boundary_reproduced":True,
         "original_windows_wsl_process_result_mocked_only":True,
         "original_archive_autocrlf_conversion_reproduced":True,
         "corrected_private_shell_archive_equals_committed_lf_bytes":True
     },sort_keys=True,indent=2)+"\n",encoding="utf-8")
-    print("PASS: exact supplied Bash executes spaced Unicode script/argument/environment; seven missing/relative/WSL/non-Git paths refuse; Unix default and all nine exact pipeline calls preserved")
+    print("PASS: exact supplied Bash executes spaced Unicode script/argument/environment; seven missing/relative/WSL/non-Git paths refuse; Unix default, original nine calls and separate prior-owner shell control preserved")
 
 
 def encoding_controls(out):
