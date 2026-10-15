@@ -389,12 +389,20 @@ def dart_control(source, dart, evidence):
         assert result.returncode == 0, label+' actual source control failed'
 
 
-def main():
+def main(_projected_source=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source', type=Path, required=True, help='Exact fully composed application source')
     parser.add_argument('--dart', type=Path)
     parser.add_argument('--evidence-dir', type=Path)
     args = parser.parse_args()
+    if _projected_source is not None:
+        args.source = _projected_source
+    uri_spec = importlib.util.spec_from_file_location('linux_close_uri_fixture', Path(__file__).with_name('patch-support-uri-routing.py'))
+    uri = importlib.util.module_from_spec(uri_spec)
+    uri_spec.loader.exec_module(uri)
+    if uri.has_layer(args.source):
+        with uri.previous(args.source) as previous:
+            return main(previous)
     for name, expected in P.ORIGINAL.items():
         logical, _ = P.canonical((args.source/name).read_bytes())
         if P.digest(logical.encode()) == P.CORRECTED[name]:

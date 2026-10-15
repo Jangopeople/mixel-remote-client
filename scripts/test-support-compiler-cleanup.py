@@ -306,7 +306,31 @@ def production_snapshot(root):
     return records
 
 
+def terminal_uri_controls(source, out, bash):
+    """Retain the actual final URI refusal before historical compiler fixtures."""
+    uri_spec = importlib.util.spec_from_file_location('compiler_terminal_uri', Path(__file__).with_name('patch-support-uri-routing.py'))
+    uri = importlib.util.module_from_spec(uri_spec)
+    uri_spec.loader.exec_module(uri)
+    assert uri.apply(source, check=True, restore=True)['writes'] == 0
+    before = production_snapshot(source)
+    owned = out/'terminal-uri-source'
+    shutil.copytree(source, owned, symlinks=True,
+                    ignore=lambda directory,names:P.projection_ignored(source,directory,names))
+    scripts = Path(__file__).resolve().parent
+    historical_fixture.uri_common_drift_controls(out, owned, scripts.parent, str(bash),
+        scripts/'apply-branding.sh', dict(os.environ,RDREPO=str(owned),BRANDING=str(scripts.parent/'branding')), 'compiler-final')
+    assert production_snapshot(source)==before, 'Terminal URI controls changed supplied compiler input'
+
+
 def composed_controls(source, out, bash):
+    # This source has already passed the exact URI inverse before the compiler
+    # owner. Keep the original macro guards at that same historical boundary.
+    current_scripts = Path(__file__).resolve().parent
+    macro_scripts = out/'prior-uri-macro/scripts'
+    shutil.copytree(current_scripts,macro_scripts,ignore=shutil.ignore_patterns('__pycache__'))
+    macro_script = macro_scripts/'apply-branding.sh'
+    macro_script.write_text(historical_fixture.without_uri_owner_commands(macro_script.read_text(encoding='utf-8')),
+                            encoding='utf-8',newline='')
     repo = out/'complete-composed'; shutil.copytree(source, repo, symlinks=True,
                       ignore=lambda directory,names:P.projection_ignored(source,directory,names))
     P.apply(repo, restore=True)
@@ -343,7 +367,7 @@ def composed_controls(source, out, bash):
             else: raise AssertionError('Missing critical actual negative target: '+name)
         saved = path.read_bytes(); newline = b'\r\n' if b'\r\n' in saved else b'\n'
         path.write_bytes(saved+b'// disjoint prior-owner drift'+newline); before = production_snapshot(repo)
-        result = subprocess.run([str(bash), str(Path(__file__).resolve().parent/'apply-branding.sh')],
+        result = subprocess.run([str(bash), str(macro_script)],
               cwd=Path(__file__).resolve().parents[1], env=dict(os.environ,RDREPO=str(repo),BRANDING=str(Path(__file__).resolve().parents[1]/'branding')),
               capture_output=True,text=True,encoding='utf-8',timeout=180)
         (out/('macro-prior-refusal-'+str(index)+'.log')).write_text(result.stdout+result.stderr,encoding='utf-8')
@@ -360,7 +384,7 @@ def composed_controls(source, out, bash):
             # Retain the original startup-owner failure independently. Only
             # the six exact new Linux owner commands are absent in this
             # historical macro; the supplied tree is already their exact inverse.
-            scripts = Path(__file__).resolve().parent
+            scripts = macro_scripts
             body = (scripts/'apply-branding.sh').read_text(encoding='utf-8')
             lines = body.splitlines(keepends=True)
             prefix = 'python3 "$(dirname "${BASH_SOURCE[0]}")/'
@@ -401,7 +425,7 @@ def composed_controls(source, out, bash):
         if fault=='symlink':outside.write_bytes(saved);disjoint.unlink();disjoint.symlink_to(outside)
         else:os.link(disjoint,outside)
         before=production_snapshot(repo)
-        result=subprocess.run([str(bash),str(Path(__file__).resolve().parent/'apply-branding.sh')],
+        result=subprocess.run([str(bash),str(macro_script)],
                cwd=Path(__file__).resolve().parents[1],env=dict(os.environ,RDREPO=str(repo),BRANDING=str(Path(__file__).resolve().parents[1]/'branding')),
                capture_output=True,text=True,encoding='utf-8',timeout=180)
         (out/('disjoint-'+fault+'.log')).write_text(result.stdout+result.stderr,encoding='utf-8')
@@ -568,6 +592,7 @@ def main():
     shell=importlib.util.module_from_spec(shell_spec);shell_spec.loader.exec_module(shell)
     args.bash=shell.qualified_bash(args.bash,os.name=='nt')
     shell.shell_path_controls(args.evidence_dir)
+    terminal_uri_controls(args.source,args.evidence_dir,args.bash)
     launch_spec=importlib.util.spec_from_file_location('compiler_launch_previous',Path(__file__).with_name('patch-support-macos-gui-launch.py'))
     launch=importlib.util.module_from_spec(launch_spec);launch_spec.loader.exec_module(launch)
     with historical_fixture.linux_close_baseline(args.source) as historical:

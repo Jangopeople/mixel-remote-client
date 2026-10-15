@@ -1,5 +1,61 @@
 # Mixel-Remote — Agent Handoff / Current State
 
+## Active reliability continuation — 2026-10-15 (acceptance remains open)
+
+The candidate on top of private checkpoint `77e1fc7` corrects support-URI
+fallthrough: the reserved `support` host cannot become a legacy remote ID, and
+Rust-event delivery compares the product scheme case-insensitively while
+preserving the original payload. The complete final Dart app passes Flutter
+3.27.4 analysis with 0 errors, 0 warnings and 285 existing infos. Routing controls
+execute 1,560 Dart assertions. The reported valid lowercase Mac URL's ID error
+remains unexplained; these separate defects do not establish its cause.
+
+Source composition now preserves URI/native/Linux owners around bridge
+regeneration and historical fixture checks. All 37 prior product helpers remain
+byte-identical. Root's integrated suites pass 212 tests. LF/CRLF full macros pass
+twice with 1,291 identical production paths; the complete branding regression
+driver exits 0. Current URI, Linux and original startup refusal boundaries are
+independently retained. The Mac texture fixture resolves its owned temporary
+output; the strict product path guard remains unchanged. Preflight budgets are
+45 minutes upstream, 90 minutes Mac and 120 minutes Windows. These repair the
+original failed checkpoint 77 producer `38690913216` and preflight `38690864041`;
+those runs remain unqualified historical evidence.
+
+The Mac URI plugin adds only `import os.log` and five constant stage markers,
+without payloads or routing changes. Removing those six lines reproduces the
+original exactly. Final vendor SHA256 is
+`1d7f902eb30f66fead3161b0cc12fe1e05b888ae6eed52ddac395a1db976936d`.
+Warnings-as-errors builds pass Intel 10.14 and ARM 12.3. Seven actual FD-null
+unified-log cases pass exact PID/path, Default level, ordering and privacy checks;
+six parser tests pass. Two full warm macros exit 0: the first changes only the
+generated Swift, the second changes no production file. Both final Dart files
+and all 38 helpers are conserved. This proves synthetic trace capture, not
+physical app URL receipt or the reported connection error's resolution.
+
+Proof roots under `artifacts/verification-2026-10-09/` include
+`root-final-uri-integration-20261015/`, `uri-final-full-app-analysis-20261015/`,
+`branding-footer-guard-adaptation-20261015/`, and
+`swift-uri-os-log-trace-warm-macro-addendum-20261015/`. The separate native Swift
+54-member source packet and 3-member independent review are also root-rehashed
+and recorded in `root-final-uri-integration-20261015/final-swift-adoption.json`.
+
+PC01's independent NAS console is restored and Mixel-Test-VM is signed in.
+All five execution-policy scopes were freshly observed Undefined. Do not repeat
+account creation, login requests, or consumed policy approvals. The older GUI
+6636 and connection manager 7116 remain; requester 441335894 is unknown and must
+not be operated as an owned QA session. Read-only comparison proves it differs
+from the physical Mac host ID. The blocked native-URL browser action must not be
+retried through another automation route; the exact action requires human use.
+
+Delivery requires the exact final clean pushed commit/tree, a fresh private
+all-platform producer with publication disabled, fully green mandatory
+preflight, original hash-bound installers, genuine Windows Standard-user
+95-second checks, and real PC01/Mac/Linux acceptance. Repeat ordinary Linux
+window close with original exit 0, controlled crash/recovery, reconnect, consent,
+changing video/input, Unicode clipboard, file transfer, fitted windows and normal
+Quit on final packages. Earlier packaged normal-close exit -11 remains failed
+evidence. Public aliases and marketplace submissions remain held.
+
 ## Private composed Windows source qualification — 2026-10-13
 
 The final carrier deliberately composes the reviewed own Windows controls with

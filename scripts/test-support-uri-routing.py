@@ -1,0 +1,522 @@
+#!/usr/bin/env python3
+"""Exact full URI routing functions, strict source ownership and inverse controls."""
+import argparse
+import hashlib
+import importlib.util
+import json
+import os
+import shutil
+import subprocess
+import tempfile
+import unittest
+from unittest import mock
+from pathlib import Path
+BASE = Path(__file__).absolute().parent
+spec = importlib.util.spec_from_file_location('uri_routing_owner', BASE / 'patch-support-uri-routing.py')
+patch = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(patch)
+SOURCE = None
+OUTPUT = None
+DART = None
+
+DART_PRELUDE = r"""
+import 'dart:async';
+import 'dart:convert';
+import 'mixel_support_invite.dart';
+bool isLinux=false,isWeb=false,isWindows=false,isMacOS=true;
+const isMobile=false,isAndroid=false,isIOS=false;
+String webInitialLink='';
+String? initialLink;
+Future<String?> getInitialLink() async=>initialLink;
+void registerProtocol(String protocol){}
+void debugPrint(String message){}
+final links=StreamController<String?>.broadcast();
+Stream<String?> get linkStream=>links.stream;
+final outbound=<String>[];
+final reports=<String>[];
+final reportKeys=<String>[];
+var shown=0;
+void windowOnTop(int? id){shown++;}
+Timer? _supportInviteAttendedTimer;
+Future<bool> _renewSupportInviteAttended() async=>true;
+Future<void> _reportSupportInvite(String token,String apiKey)async{reports.add(token);reportKeys.add(apiKey);}
+void setEnvTerminalAdmin(){}
+class FakeBind{
+ String mainUriPrefixSync()=>'mixel-remote://';
+ Future<void> mainSetPermanentPassword({required String password})async{}
+ void sendUrlScheme({required String url}){throw StateError('Unexpected native reroute');}
+}
+final bind=FakeBind();
+class FakeManager{
+ void newRemoteDesktop(String id,{String? password,String? switchUuid,bool? forceRelay}){outbound.add(id);}
+ void newFileTransfer(String id,{String? password,bool? forceRelay}){outbound.add(id);}
+ void newViewCamera(String id,{String? password,bool? forceRelay}){outbound.add(id);}
+ void newPortForward(String id,bool rdp,{String? password,bool? forceRelay}){outbound.add(id);}
+ void newTerminal(String id,{String? password,bool? forceRelay}){outbound.add(id);}
+ Future<void> closeAllSubWindows()async{}
+}
+final rustDeskWinManager=FakeManager();
+class Get{static Object? context;}
+void connect(Object context,String id,{bool? isFileTransfer,bool? forceRelay,String? password,bool? isViewCamera,bool? isTerminal}){outbound.add(id);}
+void importConfig(Object? a,Object? b,String config){}
+String translate(String s)=>s;
+void showToast(String s){}
+const kUrlActionClose='close';
+class FakeWindowManager{void close(){}}
+final windowManager=FakeWindowManager();
+"""
+DART_TESTS = r"""
+const token='inv_00000000-0000-0000-0000-000000000001';
+const apiKey='synthetic-public-key-only-000000000000';
+const base='mixel-remote://support?invite=$token&apikey=$apiKey';
+class Case{
+ final String name,url,want;
+ const Case(this.name,this.url,this.want);
+}
+const cases=<Case>[
+ Case('valid_product',base,'report'),
+ Case('valid_product_slash','mixel-remote://support/?invite=$token&apikey=$apiKey','report'),
+ Case('proper_percent_encoding','mixel-remote://support?invite=$token&apikey=synthetic%26encoded-key-000000000000','report'),
+ Case('literal_html_ampersand','mixel-remote://support?invite=$token&amp;apikey=$apiKey','refuse'),
+ Case('wrong_rustdesk_scheme','rustdesk://support?invite=$token&apikey=$apiKey','legacy-support'),
+ Case('wrong_https_scheme','https://support?invite=$token&apikey=$apiKey','legacy-support'),
+ Case('missing_invite','mixel-remote://support?apikey=$apiKey','refuse'),
+ Case('missing_apikey','mixel-remote://support?invite=$token','refuse'),
+ Case('invalid_invite','mixel-remote://support?invite=invalid&apikey=$apiKey','refuse'),
+ Case('support_path_rejected','mixel-remote://support/r?invite=$token&apikey=$apiKey','refuse'),
+ Case('support_userinfo_rejected','mixel-remote://user@support?invite=$token&apikey=$apiKey','refuse'),
+ Case('support_port_rejected','mixel-remote://support:123?invite=$token&apikey=$apiKey','refuse'),
+ Case('support_fragment_rejected','mixel-remote://support?invite=$token&apikey=$apiKey#foo','refuse'),
+ Case('mixed_case_product','MiXeL-ReMoTe://SuPpOrT?invite=$token&apikey=$apiKey','report'),
+ Case('ordinary_remote_id','mixel-remote://123456789','remote-id'),
+ Case('ordinary_connect','mixel-remote://connect/123456789','remote-id'),
+ Case('ordinary_compat','mixel-remote://connection/new/123456789','remote-id'),
+ Case('ordinary_other_scheme_id','rustdesk://123456789','remote-id'),
+];
+void check(bool value,String message){if(!value)throw StateError(message);}
+String classify(){
+ if(reports.isNotEmpty){check(outbound.isEmpty,'Both support and outbound');return 'report';}
+ if(outbound.isNotEmpty){check(outbound.length==1,'Duplicate outbound');return outbound.single=='support'?'legacy-support':'remote-id';}
+ return 'refuse';
+}
+void reset(){outbound.clear();reports.clear();reportKeys.clear();shown=0;}
+Future<void> flush()async{await Future<void>.delayed(const Duration(milliseconds:5));}
+const secondToken='inv_00000000-0000-0000-0000-000000000002';
+const secondKey='synthetic-second-public-key-000000000000';
+class QueryCase{
+ final String name,url;
+ final String? expectedToken,expectedKey;
+ const QueryCase(this.name,this.url,this.expectedToken,this.expectedKey);
+}
+const queryCases=<QueryCase>[
+ QueryCase('duplicate_invite_two_valid','mixel-remote://support?invite=$token&invite=$secondToken&apikey=$apiKey',secondToken,apiKey),
+ QueryCase('duplicate_invite_final_invalid','mixel-remote://support?invite=$token&invite=invalid&apikey=$apiKey',null,null),
+ QueryCase('duplicate_invite_final_valid','mixel-remote://support?invite=invalid&invite=$token&apikey=$apiKey',token,apiKey),
+ QueryCase('duplicate_apikey_two_valid','mixel-remote://support?invite=$token&apikey=$apiKey&apikey=$secondKey',token,secondKey),
+ QueryCase('duplicate_apikey_final_invalid','mixel-remote://support?invite=$token&apikey=$apiKey&apikey=invalid',null,null),
+ QueryCase('duplicate_apikey_final_valid','mixel-remote://support?invite=$token&apikey=invalid&apikey=$apiKey',token,apiKey),
+ QueryCase('mixed_case_invite_two_valid','mixel-remote://support?invite=$token&INVITE=$secondToken&apikey=$apiKey',secondToken,apiKey),
+ QueryCase('mixed_case_invite_later_inserted_invalid','mixel-remote://support?invite=$token&INVITE=invalid&invite=$token&apikey=$apiKey',null,null),
+ QueryCase('mixed_case_invite_later_inserted_valid','mixel-remote://support?INVITE=invalid&invite=$token&INVITE=invalid&apikey=$apiKey',token,apiKey),
+ QueryCase('mixed_case_apikey_two_valid','mixel-remote://support?invite=$token&apikey=$apiKey&APIKEY=$secondKey',token,secondKey),
+ QueryCase('mixed_case_apikey_later_inserted_invalid','mixel-remote://support?invite=$token&apikey=$apiKey&APIKEY=invalid&apikey=$apiKey',null,null),
+ QueryCase('mixed_case_apikey_later_inserted_valid','mixel-remote://support?invite=$token&APIKEY=invalid&apikey=$apiKey&APIKEY=invalid',token,apiKey),
+ QueryCase('encoded_invite_alias_two_valid','mixel-remote://support?invite=$token&%69nvite=$secondToken&apikey=$apiKey',secondToken,apiKey),
+ QueryCase('encoded_invite_alias_final_invalid','mixel-remote://support?invite=$token&%69nvite=invalid&apikey=$apiKey',null,null),
+ QueryCase('encoded_invite_alias_final_valid','mixel-remote://support?%69nvite=invalid&invite=$token&apikey=$apiKey',token,apiKey),
+ QueryCase('encoded_apikey_alias_two_valid','mixel-remote://support?invite=$token&apikey=$apiKey&ap%69key=$secondKey',token,secondKey),
+ QueryCase('encoded_apikey_alias_final_invalid','mixel-remote://support?invite=$token&apikey=$apiKey&ap%69key=invalid',null,null),
+ QueryCase('encoded_apikey_alias_final_valid','mixel-remote://support?invite=$token&ap%69key=invalid&apikey=$apiKey',token,apiKey),
+ QueryCase('encoded_upper_alias_later_inserted_valid','mixel-remote://support?invite=$token&%41PIKEY=invalid&apikey=$apiKey&APIKEY=invalid',token,apiKey),
+ QueryCase('encoded_upper_alias_later_inserted_invalid','mixel-remote://support?invite=$token&apikey=$apiKey&%41PIKEY=invalid',null,null),
+ QueryCase('encoded_upper_invite_later_inserted_valid','mixel-remote://support?%49NVITE=invalid&invite=$token&INVITE=invalid&apikey=$apiKey',token,apiKey),
+ QueryCase('identical_repeated_keys_and_values','mixel-remote://support?invite=$token&invite=$token&apikey=$apiKey&apikey=$apiKey',token,apiKey),
+ QueryCase('both_parameters_final_valid_values','mixel-remote://support?invite=$token&apikey=$apiKey&invite=$secondToken&apikey=$secondKey',secondToken,secondKey),
+ QueryCase('unknown_duplicate_aliases_preserve_support','mixel-remote://support?invite=$token&apikey=$apiKey&other=invalid&%6fther=anything',token,apiKey),
+];
+Future<void> main(List<String> flags)async{
+ final platform=flags.isEmpty?'macos':flags.single;
+ isLinux=platform=='linux';isWindows=platform=='windows';isMacOS=platform=='macos';
+ check(isLinux||isWindows||isMacOS,'Invalid fixture platform');
+ final sub=listenUniLinks();
+ check((sub==null)==isLinux,'Actual platform listener guard differs');
+ var assertions=0;
+ final rows=<Map<String,String>>[];
+ for(final c in cases){
+   final parsed=urlLinkToCmdArgs(Uri.parse(c.url));
+   final parserClass=parsed==null?'refuse':parsed.first=='--support-invite'?'report':parsed.length>1&&parsed[1]=='support'?'legacy-support':'remote-id';
+   check(parserClass==c.want,'Parser case ${c.name}: $parserClass != ${c.want}'); assertions++;
+   for(final path in ['direct','cold_plugin','warm_plugin','rust_event','boot_args']){
+     reset();
+     switch(path){
+       case 'direct':handleUriLink(uriString:c.url);break;
+       case 'cold_plugin':initialLink=c.url;await initUniLinks();break;
+       case 'warm_plugin':links.add(c.url);break;
+       case 'rust_event':onUrlSchemeReceived({'url':c.url});break;
+       case 'boot_args':handleUriLink(cmdArgs:[c.url]);break;
+     }
+     await flush();
+     final actual=classify();
+     final want=isLinux&&(path=='cold_plugin'||path=='warm_plugin')||path=='rust_event'&&!c.url.startsWith(bind.mainUriPrefixSync())||path=='boot_args'&&!c.url.toLowerCase().startsWith(bind.mainUriPrefixSync())?'refuse':c.want;
+     check(actual==want,'${c.name}/$path: $actual != $want');assertions++;
+     rows.add({'case':c.name,'path':path,'result':actual});
+   }
+ }
+ var queryParityAssertions=0;
+ final queryRows=<Map<String,dynamic>>[];
+ for(final c in queryCases){
+   final parsed=urlLinkToCmdArgs(Uri.parse(c.url));
+   final valid=c.expectedToken!=null;
+   check(valid?(parsed!=null&&parsed.length==4&&parsed[0]=='--support-invite'&&
+       parsed[1]==c.expectedToken&&parsed[2]=='--support-apikey'&&parsed[3]==c.expectedKey):parsed==null,
+       'Duplicate query parser mapping differs: ${c.name}');
+   queryParityAssertions++;
+   for(final path in ['direct','cold_plugin','warm_plugin','rust_event','boot_args']){
+     reset();bool? outboundIntent;
+     switch(path){
+       case 'direct':outboundIntent=handleUriLink(uriString:c.url);break;
+       case 'cold_plugin':initialLink=c.url;outboundIntent=await initUniLinks();break;
+       case 'warm_plugin':links.add(c.url);break;
+       case 'rust_event':onUrlSchemeReceived({'url':c.url});break;
+       case 'boot_args':outboundIntent=handleUriLink(cmdArgs:[c.url]);break;
+     }
+     await flush();
+     final deliver=valid&&!(isLinux&&(path=='cold_plugin'||path=='warm_plugin'));
+     check(outbound.isEmpty&&outboundIntent!=true,'Duplicate query became outbound: ${c.name}/$path');
+     check(deliver?(reports.length==1&&reports.single==c.expectedToken&&reportKeys.length==1&&
+       reportKeys.single==c.expectedKey):(reports.isEmpty&&reportKeys.isEmpty),
+       'Duplicate query handler payload differs: ${c.name}/$path');
+     queryParityAssertions++;
+     queryRows.add({'case':c.name,'path':path,'result':deliver?'report':'refuse','noOutbound':true,'mappedPayloadMatches':true});
+   }
+ }
+ var legacyParityAssertions=0;
+ for(final entry in <String,String>{
+   'mixel-remote://support-other':'support-other',
+   'rustdesk://support-other':'support-other',
+   'mixel-remote://123456789/r':'123456789/r',
+   'mixel-remote://file-transfer/123456789':'123456789',
+ }.entries){
+   final parsed=urlLinkToCmdArgs(Uri.parse(entry.key));
+   check(parsed!=null&&parsed.length==2&&parsed[1]==entry.value,'Legacy parser parity changed');
+   legacyParityAssertions++;
+   reset();handleUriLink(uriString:entry.key);await flush();
+   check(outbound.length==1&&outbound.single==entry.value&&reports.isEmpty,'Legacy handler parity changed');
+   legacyParityAssertions++;
+ }
+ await sub?.cancel();await links.close();_supportInviteAttendedTimer?.cancel();
+ print(jsonEncode({'platform':platform,'assertions':assertions,'legacyParityAssertions':legacyParityAssertions,'queryCases':queryCases.length,'queryParityAssertions':queryParityAssertions,'query_results':queryRows,'cases':cases.length,'path_results':rows}));
+ print('PASS $platform exact full generated parser/handler and source-extracted initial/plugin/event/boot callers: $assertions assertions; no native, network, TCC or GUI action.');
+}
+"""
+
+
+def between(text, begin, end):
+    if text.count(begin) != 1:
+        raise AssertionError('Changed exact source boundary: ' + begin)
+    first = text.index(begin)
+    return text[first:text.index(end, first)]
+
+
+def fixture(common, model, final):
+    extracts = {
+        'enum': between(common, 'enum UriLinkType {', '\nsetEnvTerminalAdmin()'),
+        'initial': between(common, 'Future<bool> initUniLinks() async {', '/// Listen for uni links.'),
+        'listener': between(common, 'StreamSubscription? listenUniLinks({', '\nenum UriLinkType'),
+        'handler': between(common, 'bool handleUriLink({', '\nList<String>? urlLinkToCmdArgs('),
+        'parser': between(common, 'List<String>? urlLinkToCmdArgs(Uri uri) {', '\nconnectMainDesktop('),
+        'event': between(model, '  onUrlSchemeReceived(Map<String, dynamic> evt) {', '  /// Bind the event listener'),
+    }
+    # Extract every legacy branch and all caller prefix guards, unmodified.
+    tests = DART_TESTS
+    if final:
+        tests = tests.replace("apikey=$apiKey','legacy-support')", "apikey=$apiKey','refuse')")
+        tests = tests.replace("path=='rust_event'&&!c.url.startsWith(bind.mainUriPrefixSync())",
+                              "path=='rust_event'&&!c.url.toLowerCase().startsWith(bind.mainUriPrefixSync().toLowerCase())")
+    return DART_PRELUDE + '\n'.join(extracts.values()) + tests, extracts
+
+
+def snapshot(root):
+    result = {}
+    for path in sorted(root.rglob('*')):
+        relative = path.relative_to(root).as_posix()
+        info = path.lstat()
+        if path.is_symlink():
+            result[relative] = ('symlink', os.readlink(path), info.st_nlink)
+        elif path.is_file():
+            result[relative] = ('file', hashlib.sha256(path.read_bytes()).hexdigest(), info.st_nlink)
+        elif path.is_dir():
+            result[relative] = ('directory',)
+        else:
+            result[relative] = ('nonregular', info.st_mode)
+    return result
+
+
+class UriRoutingTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        check = patch.apply(SOURCE, check=True, restore=True)
+        if check['profile'] == 'fresh':
+            raise AssertionError('Tests require a complete branded source, not fresh upstream')
+        cls.original = {}
+        cls.final = {}
+        for name in patch.ORIGINAL:
+            text, _ = patch.canonical(patch.safe_source(SOURCE, name).read_bytes())
+            cls.original[name] = patch.transform(name, text, True)
+            cls.final[name] = patch.transform(name, cls.original[name])
+        cls.prior = patch.prior_namespace()
+        cls.compiler = patch.prior_compiler(cls.prior)
+        cls.reporter = (SOURCE / 'flutter/lib/mixel_support_invite.dart').read_bytes()
+        cls.bindings = {'inputProfile': check['profile'], 'original': patch.ORIGINAL,
+                        'final': patch.FINAL, 'fresh': patch.FRESH, 'priorVerifier': patch.PRIOR_SHA,
+                        'uriOwner': hashlib.sha256((BASE / 'patch-support-uri-routing.py').read_bytes()).hexdigest(),
+                        'uriTest': hashlib.sha256((BASE / 'test-support-uri-routing.py').read_bytes()).hexdigest(),
+                        'reporter': hashlib.sha256(cls.reporter).hexdigest()}
+        (OUTPUT / 'source-bindings.json').write_text(json.dumps(cls.bindings, indent=2) + '\n')
+
+    def pure(self, root, newline='\n', final=False):
+        root.mkdir()
+        for name, text in (self.final if final else self.original).items():
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(text.replace('\n', newline).encode())
+        return root
+
+    def test_01_full_source_routing_all_platform_callers_original_and_corrected(self):
+        counts = []
+        for final in [False, True]:
+            name = 'corrected' if final else 'original'
+            directory = OUTPUT / name
+            directory.mkdir()
+            texts = self.final if final else self.original
+            source, extracts = fixture(texts['flutter/lib/common.dart'], texts['flutter/lib/models/model.dart'], final)
+            dart_file = directory / 'routing.dart'
+            dart_file.write_text(source)
+            (directory / 'mixel_support_invite.dart').write_bytes(self.reporter)
+            for key, text in extracts.items():
+                (directory / (key + '.dart.txt')).write_text(text)
+            for platform in ['macos', 'linux', 'windows']:
+                result = subprocess.run([str(DART), str(dart_file), platform], capture_output=True,
+                                        text=True, timeout=30)
+                (directory / (platform + '.log')).write_text(result.stdout + result.stderr)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                data = json.loads(result.stdout.splitlines()[0])
+                self.assertEqual(data['assertions'], 108)
+                self.assertEqual(data['legacyParityAssertions'], 8)
+                self.assertEqual(data['queryCases'], 24)
+                self.assertEqual(data['queryParityAssertions'], 144)
+                self.assertEqual(len(data['query_results']), 120)
+                self.assertTrue(all(row['noOutbound'] and row['mappedPayloadMatches'] for row in data['query_results']))
+                rows = {(row['case'], row['path']): row['result'] for row in data['path_results']}
+                self.assertEqual(rows['valid_product', 'direct'], 'report')
+                self.assertEqual(rows['wrong_rustdesk_scheme', 'direct'], 'refuse' if final else 'legacy-support')
+                self.assertEqual(rows['mixed_case_product', 'rust_event'], 'report' if final else 'refuse')
+                counts.append(data['assertions'])
+        self.assertEqual(sum(counts), 648)
+        print('PASS 648 exact full parser/handler/caller assertions plus 48 numeric/non-support/transfer legacy parity assertions; baseline defects reproduced; corrected routes pass.')
+        print('PASS 864 duplicate-query parser/payload/caller assertions; 24 same-key/mixed-case/encoded-alias/value-order cases, valid mapped reports only and invalid refusal with zero outbound requests.')
+
+    def test_02_lf_crlf_idempotence_and_exact_inverse(self):
+        for newline in ['\n', '\r\n']:
+            with self.subTest(newline=repr(newline)), tempfile.TemporaryDirectory(dir=OUTPUT) as temp:
+                root = self.pure(Path(temp) / 'source', newline)
+                original = snapshot(root)
+                self.assertEqual(patch.apply(root, check=True, verify=False)['writes'], 0)
+                self.assertEqual(snapshot(root), original)
+                self.assertEqual(patch.apply(root, verify=False)['writes'], 2)
+                corrected = snapshot(root)
+                self.assertEqual(patch.apply(root, verify=False)['writes'], 0)
+                self.assertEqual(snapshot(root), corrected)
+                self.assertEqual(patch.apply(root, check=True, restore=True, verify=False)['writes'], 0)
+                self.assertEqual(snapshot(root), corrected)
+                self.assertEqual(patch.apply(root, restore=True, verify=False)['writes'], 2)
+                self.assertEqual(patch.apply(root, restore=True, verify=False)['writes'], 0)
+                self.assertEqual(snapshot(root), original)
+
+    def test_03_all_strict_refusals_are_zero_write(self):
+        variants = ['changed-common', 'changed-model', 'partial-common', 'partial-model', 'missing',
+                    'mixed-common', 'mixed-model', 'bare-cr', 'invalid-utf8', 'empty', 'symlink',
+                    'hardlink', 'symlink-parent', 'symlink-root']
+        refusals = 0
+        for variant in variants:
+            with self.subTest(variant=variant), tempfile.TemporaryDirectory(dir=OUTPUT) as temp:
+                base = Path(temp)
+                root = self.pure(base / 'source')
+                common = root / 'flutter/lib/common.dart'
+                model = root / 'flutter/lib/models/model.dart'
+                if variant == 'changed-common': common.write_bytes(common.read_bytes() + b'// changed\n')
+                elif variant == 'changed-model': model.write_bytes(model.read_bytes() + b'// changed\n')
+                elif variant == 'partial-common': common.write_text(self.final['flutter/lib/common.dart'])
+                elif variant == 'partial-model': model.write_text(self.final['flutter/lib/models/model.dart'])
+                elif variant == 'missing': model.unlink()
+                elif variant == 'mixed-common': common.write_bytes(common.read_bytes().replace(b'\n', b'\r\n', 1))
+                elif variant == 'mixed-model': model.write_bytes(model.read_bytes().replace(b'\n', b'\r\n', 1))
+                elif variant == 'bare-cr': model.write_bytes(model.read_bytes().replace(b'\n', b'\r', 1))
+                elif variant == 'invalid-utf8': model.write_bytes(model.read_bytes() + b'\xff')
+                elif variant == 'empty': model.write_bytes(b'')
+                elif variant == 'hardlink': os.link(common, root / 'linked')
+                elif variant in ['symlink', 'symlink-parent', 'symlink-root']:
+                    try:
+                        if variant == 'symlink':
+                            common.rename(root / 'held-common'); common.symlink_to(root / 'held-common')
+                        elif variant == 'symlink-parent':
+                            (root / 'flutter/lib/models').rename(root / 'held-models')
+                            (root / 'flutter/lib/models').symlink_to(root / 'held-models', target_is_directory=True)
+                        else:
+                            root.rename(base / 'held-root'); root.symlink_to(base / 'held-root', target_is_directory=True)
+                    except OSError:
+                        if os.name == 'nt': continue  # Platform cannot create a test symlink; other guards remain mandatory.
+                        raise
+                before = snapshot(base)
+                for check, restore in [(False, False), (True, False), (False, True), (True, True)]:
+                    with self.assertRaises((RuntimeError, OSError, UnicodeError)):
+                        patch.apply(root, check=check, restore=restore, verify=False)
+                    self.assertEqual(snapshot(base), before)
+                    refusals += 1
+        print('PASS %d actual malformed/partial/newline/ownership refusals; every call leaves complete fixture inventory unchanged.' % refusals)
+
+    def test_04_prior_ownership_and_verifier_refuse_before_copy(self):
+        for kind in ['hardlink', 'symlink', 'fifo']:
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory(dir=OUTPUT) as temp:
+                root = self.pure(Path(temp) / 'source')
+                path = root / 'unrelated-source.txt'
+                path.write_text('owned')
+                if kind == 'hardlink': os.link(path, root / 'unrelated-alias.txt')
+                elif kind == 'symlink':
+                    try: path.symlink_to(root / 'flutter/lib/common.dart')
+                    except FileExistsError:
+                        path.unlink()
+                        try: path.symlink_to(root / 'flutter/lib/common.dart')
+                        except OSError:
+                            if os.name == 'nt': continue
+                            raise
+                else:
+                    if not hasattr(os, 'mkfifo'): continue
+                    path.unlink(); os.mkfifo(path)
+                before = snapshot(root)
+                with self.assertRaises(RuntimeError): patch.apply(root, verify=True)
+                self.assertEqual(snapshot(root), before)
+        with tempfile.TemporaryDirectory(dir=OUTPUT) as temp:
+            directory = Path(temp)
+            (directory / patch.PRIOR_NAME).write_text((BASE / patch.PRIOR_NAME).read_text() + '# drift\n')
+            old = patch.SCRIPTS
+            patch.SCRIPTS = directory
+            try:
+                before = snapshot(directory)
+                with self.assertRaises(RuntimeError): patch.prior_namespace()
+                self.assertEqual(snapshot(directory), before)
+            finally: patch.SCRIPTS = old
+
+    def test_05_actual_complete_prior_final_projection_and_conservation(self):
+        self.compiler['validate_projection_sources'](SOURCE)
+        with tempfile.TemporaryDirectory(dir=OUTPUT) as temp:
+            root = Path(temp) / 'source'
+            shutil.copytree(SOURCE, root, symlinks=True,
+                            ignore=lambda directory, names: self.compiler['projection_ignored'](SOURCE, directory, names))
+            patch.apply(root, restore=True, verify=False)
+            before = snapshot(root)
+            native = self.prior['DEPENDENCY']
+            native_before = snapshot(root / native)
+            self.assertEqual(patch.apply(root, verify=True)['writes'], 2)
+            final = snapshot(root)
+            changed = {name for name in set(before) | set(final) if before.get(name) != final.get(name)}
+            self.assertEqual(changed, set(patch.ORIGINAL))
+            self.assertEqual(snapshot(root / native), native_before)
+            self.assertEqual(patch.apply(root, check=True, restore=True, verify=True)['profile'], 'final')
+            self.assertEqual(snapshot(root), final)
+            with patch.previous(root) as previous:
+                self.assertNotEqual(previous, root)
+                self.assertEqual(snapshot(previous), before)
+            self.assertEqual(snapshot(root), final)
+            patch.apply(root, restore=True, verify=False)
+            self.assertEqual(snapshot(root), before)
+            # Change a genuine older owned source, with safe regular ownership.
+            old_source = root / 'src/server.rs'
+            old_source.write_bytes(old_source.read_bytes() + b'// prior source drift\n')
+            drifted = snapshot(root)
+            with self.assertRaises(RuntimeError): patch.apply(root, verify=True)
+            self.assertEqual(snapshot(root), drifted)
+        print('PASS complete actual prior-owner chain, final projection, exact two-source changes, native-family conservation, older-source refusal, supplied-tree conservation.')
+
+    def test_06_prior_fresh_pins_and_cli_flags(self):
+        linux = self.prior['prior_namespace']()
+        self.assertEqual(patch.FRESH['flutter/lib/common.dart'], linux['FRESH']['flutter/lib/common.dart'])
+        self.assertEqual(patch.FRESH['flutter/lib/models/model.dart'], patch.ORIGINAL['flutter/lib/models/model.dart'])
+        for name, original in self.original.items():
+            self.assertEqual(patch.digest(original.encode()), patch.ORIGINAL[name])
+            self.assertEqual(patch.digest(patch.transform(name, original).encode()), patch.FINAL[name])
+        with tempfile.TemporaryDirectory(dir=OUTPUT) as temp:
+            root = self.pure(Path(temp) / 'source')
+            before = snapshot(root)
+            for flags in [['--before-branding'], ['--after-branding', '--restore']]:
+                result = subprocess.run([os.sys.executable, str(BASE / 'patch-support-uri-routing.py'),
+                                         '--root', str(root), *flags], capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(snapshot(root), before)
+
+    def test_07_presence_guard_and_actual_historical_consumers_before_copy(self):
+        historical_spec = importlib.util.spec_from_file_location('uri_actual_historical_consumers', BASE / 'test-support-flutter-analysis.py')
+        historical = importlib.util.module_from_spec(historical_spec)
+        historical_spec.loader.exec_module(historical)
+        linux = self.prior['prior_namespace']()
+        fresh_raw = subprocess.check_output(['git', '-C', str(SOURCE), 'show', linux['PIN'] + ':flutter/lib/common.dart'])
+        fresh, _ = patch.canonical(fresh_raw)
+        self.assertEqual(patch.digest(fresh.encode()), patch.FRESH['flutter/lib/common.dart'])
+        older = linux['transform']('flutter/lib/common.dart', self.original['flutter/lib/common.dart'], True)
+        self.assertEqual(patch.digest(older.encode()), linux['ORIGINAL']['flutter/lib/common.dart'])
+        commons = {'fresh': fresh, 'older-linux': older,
+                   'original': self.original['flutter/lib/common.dart'],
+                   'final': self.final['flutter/lib/common.dart']}
+        models = {'original': self.original['flutter/lib/models/model.dart'],
+                  'final': self.final['flutter/lib/models/model.dart']}
+        bad_models = {'appended-drift': models['final'] + '// unrelated drift\n',
+                      'marker-removed': models['final'].replace(patch.CHANGES['flutter/lib/models/model.dart'][0][1], '    if (false &&\n', 1)}
+        guard_calls = 0
+        for newline in ['\n', '\r\n']:
+            for common_name, common in commons.items():
+                for model_name, model in models.items():
+                    with self.subTest(valid=(repr(newline), common_name, model_name)), tempfile.TemporaryDirectory(dir=OUTPUT) as temp:
+                        root = self.pure(Path(temp) / 'source', newline)
+                        (root / 'flutter/lib/common.dart').write_bytes(common.replace('\n', newline).encode())
+                        (root / 'flutter/lib/models/model.dart').write_bytes(model.replace('\n', newline).encode())
+                        before = snapshot(root)
+                        self.assertEqual(patch.has_layer(root), common_name == 'final' or model_name == 'final')
+                        self.assertEqual(snapshot(root), before)
+                for model_name, model in bad_models.items():
+                    with self.subTest(invalid=(repr(newline), common_name, model_name)), tempfile.TemporaryDirectory(dir=OUTPUT) as temp:
+                        root = self.pure(Path(temp) / 'source', newline)
+                        (root / 'flutter/lib/common.dart').write_bytes(common.replace('\n', newline).encode())
+                        (root / 'flutter/lib/models/model.dart').write_bytes(model.replace('\n', newline).encode())
+                        before = snapshot(root)
+                        with self.assertRaisesRegex(RuntimeError, 'Changed URI routing model presence source'):
+                            patch.has_layer(root)
+                        guard_calls += 1
+                        for consumer in [historical.linux_close_baseline, historical.startup_baseline]:
+                            with mock.patch.object(shutil, 'copytree', side_effect=AssertionError('Unsafe source reached copy')) as copier:
+                                with self.assertRaisesRegex(RuntimeError, 'Changed URI routing model presence source'):
+                                    with consumer(root):
+                                        self.fail('Unsafe source reached historical consumer body')
+                                copier.assert_not_called()
+                            self.assertEqual(snapshot(root), before)
+                            guard_calls += 1
+        self.assertEqual(guard_calls, 48)
+        print('PASS 48 LF/CRLF malformed-model has_layer and actual historical-consumer refusals before any copy; fresh/older/original/final presence behavior conserved.')
+
+
+def main():
+    global SOURCE, OUTPUT, DART
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--source', required=True, type=Path)
+    parser.add_argument('--dart', required=True, type=Path)
+    parser.add_argument('--output', required=True, type=Path)
+    args = parser.parse_args()
+    SOURCE = args.source.absolute()
+    DART = args.dart.absolute()
+    OUTPUT = args.output.absolute()
+    OUTPUT.mkdir(mode=0o700)
+    result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(UriRoutingTests))
+    raise SystemExit(0 if result.wasSuccessful() else 1)
+
+
+if __name__ == '__main__':
+    main()

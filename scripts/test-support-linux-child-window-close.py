@@ -181,8 +181,13 @@ class NativeCloseTests(unittest.TestCase):
    self.assertEqual(patch.apply(root,restore=True,verify=False)['profile'],'fresh')
    with self.assertRaises(RuntimeError):patch.apply(root,verify=False)
 
-def main():
+def main(_projected_source=None):
  global OUTPUT,INPUT,PROOF,SOURCE
- p=argparse.ArgumentParser(description=__doc__);p.add_argument('--source',required=True,type=Path);p.add_argument('--output',required=True,type=Path);a=p.parse_args();SOURCE=a.source.absolute();INPUT=SOURCE/patch.DEPENDENCY/'linux';PROOF=SOURCE/patch.DEPENDENCY/'.mixel-source.json';OUTPUT=a.output.absolute();OUTPUT.mkdir(mode=0o700)
+ p=argparse.ArgumentParser(description=__doc__);p.add_argument('--source',required=True,type=Path);p.add_argument('--output',required=True,type=Path);a=p.parse_args()
+ if _projected_source is not None:a.source=_projected_source
+ uri_spec=importlib.util.spec_from_file_location('native_close_uri_fixture',BASE/'patch-support-uri-routing.py');uri=importlib.util.module_from_spec(uri_spec);uri_spec.loader.exec_module(uri)
+ if uri.has_layer(a.source):
+  with uri.previous(a.source) as previous:return main(previous)
+ SOURCE=a.source.absolute();INPUT=SOURCE/patch.DEPENDENCY/'linux';PROOF=SOURCE/patch.DEPENDENCY/'.mixel-source.json';OUTPUT=a.output.absolute();OUTPUT.mkdir(mode=0o700)
  result=unittest.TextTestRunner(verbosity=1).run(unittest.defaultTestLoader.loadTestsFromTestCase(NativeCloseTests));raise SystemExit(0 if result.wasSuccessful() else 1)
 if __name__=='__main__':main()

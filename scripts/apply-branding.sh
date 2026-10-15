@@ -33,6 +33,10 @@ fi
 # shellcheck source=/dev/null
 source "$BRANDING/branding.env"
 
+# Restore exact terminal URI routing before the native and earlier owner checks.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-uri-routing.py" --root "$RDREPO" --restore --check --before-branding
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-uri-routing.py" --root "$RDREPO" --restore
+
 # Restore native child lifetime before the Dart and earlier owner checks.
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-linux-child-window-close.py" --root "$RDREPO" --restore --check --before-branding
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-linux-child-window-close.py" --root "$RDREPO" --restore
@@ -1124,5 +1128,8 @@ python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-linux-window-close.py" --r
 
 # Child close callbacks must release their hooks and finish all reads before destruction.
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-linux-child-window-close.py" --root "$RDREPO" --after-branding
+
+# Reserve support URI dispatch after every previous functional owner.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-uri-routing.py" --root "$RDREPO" --after-branding
 
 echo "✓ Branding applied — product identity is $APP_NAME only."

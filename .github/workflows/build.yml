@@ -166,10 +166,12 @@ jobs:
       - name: Generate bridge
         working-directory: rustdesk
         run: |
+          python3 ../scripts/patch-support-uri-routing.py --root . --restore
           python3 ../scripts/patch-support-linux-child-window-close.py --root . --restore
           RDREPO=. python3 ../scripts/patch-support-macos-texture.py
           RDREPO=. python3 ../scripts/patch-support-macos-window.py
           python3 ../scripts/patch-support-linux-child-window-close.py --root . --after-branding
+          python3 ../scripts/patch-support-uri-routing.py --root . --after-branding
           pushd flutter && sed -i -e 's/extended_text: 14.0.0/extended_text: 13.0.0/g' pubspec.yaml && flutter pub get && popd
           ~/.cargo/bin/flutter_rust_bridge_codegen \
             --rust-input ./src/flutter_ffi.rs \
@@ -314,6 +316,7 @@ jobs:
           python3 scripts/test-support-macos.py
           python3 scripts/test-support-macos-window.py
           python3 scripts/test-support-macos-cleanup.py --dart "$(command -v dart)" --flutter "$(command -v flutter)"
+          python3 scripts/test-support-uri-routing.py --source rustdesk --dart "$(command -v dart)" --output "$RUNNER_TEMP/mixel-uri-routing"
           python3 scripts/test-support-linux-window-close.py --source rustdesk --dart "$(command -v dart)"
           python3 scripts/test-support-linux-child-window-close.py --source rustdesk --output "$RUNNER_TEMP/mixel-linux-child-close"
           python3 scripts/test-support-wakelock.py
@@ -593,6 +596,7 @@ jobs:
           python3 scripts/test-support-macos.py
           python3 scripts/test-support-macos-window.py --flutter-framework "$MIXEL_FLUTTER_FRAMEWORK"
           python3 scripts/test-support-macos-cleanup.py --dart "$(command -v dart)" --flutter "$(command -v flutter)"
+          python3 scripts/test-support-uri-routing.py --source rustdesk --dart "$(command -v dart)" --output "$RUNNER_TEMP/mixel-uri-routing"
           python3 scripts/test-support-linux-window-close.py --source rustdesk --dart "$(command -v dart)"
           python3 scripts/test-support-linux-child-window-close.py --source rustdesk --output "$RUNNER_TEMP/mixel-linux-child-close"
           python3 scripts/test-support-wakelock.py

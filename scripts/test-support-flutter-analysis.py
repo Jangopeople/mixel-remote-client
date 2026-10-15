@@ -72,6 +72,14 @@ def linux_close_baseline(source):
     anything. The product helper pins and original input remain unchanged.
     """
     source = Path(source).resolve()
+    uri_spec = importlib.util.spec_from_file_location("mixel_linux_close_baseline_uri", ROOT / "scripts/patch-support-uri-routing.py")
+    uri = importlib.util.module_from_spec(uri_spec)
+    uri_spec.loader.exec_module(uri)
+    if uri.has_layer(source):
+        with uri.previous(source) as previous:
+            with linux_close_baseline(previous) as checked:
+                yield checked
+        return
     native_spec = importlib.util.spec_from_file_location("mixel_historical_native_close", ROOT / "scripts/patch-support-linux-child-window-close.py")
     native_close = importlib.util.module_from_spec(native_spec)
     native_spec.loader.exec_module(native_close)
@@ -99,6 +107,14 @@ def startup_baseline(source):
     This projection never accepts an unpinned input or changes supplied source.
     """
     source = Path(source).resolve()
+    uri_spec = importlib.util.spec_from_file_location("mixel_startup_baseline_uri", ROOT / "scripts/patch-support-uri-routing.py")
+    uri = importlib.util.module_from_spec(uri_spec)
+    uri_spec.loader.exec_module(uri)
+    if uri.has_layer(source):
+        with uri.previous(source) as previous:
+            with startup_baseline(previous) as checked:
+                yield checked
+        return
     native_spec = importlib.util.spec_from_file_location("mixel_fixture_linux_child_close", ROOT / "scripts/patch-support-linux-child-window-close.py")
     native_close = importlib.util.module_from_spec(native_spec)
     native_spec.loader.exec_module(native_close)
@@ -321,14 +337,20 @@ def shell_controls(out,bash,source):
         print("Actual exact Bash runtime paths:\n"+queried.stdout,flush=True)
         runtime=git_bash_runtime(str(selected),queried.stdout)
     tree=ast.parse(Path(__file__).read_text(encoding="utf-8"))
-    pipeline_nodes=[node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name in ("pipeline", "common_drift_controls")]
-    assert {node.name for node in pipeline_nodes} == {"pipeline", "common_drift_controls"}
+    owners = {"pipeline", "common_drift_controls", "prior_uri_common_drift_controls", "uri_common_drift_controls"}
+    pipeline_nodes=[node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name in owners]
+    assert {node.name for node in pipeline_nodes} == owners
     shell_runs=[call for node in pipeline_nodes for call in ast.walk(node)
         if isinstance(call,ast.Call) and isinstance(call.func,ast.Name) and call.func.id=="run"
         and call.args and isinstance(call.args[0],ast.List)
         and isinstance(call.args[0].elts[0],ast.Name) and call.args[0].elts[0].id=="bash"]
-    assert len(shell_runs)==10,"Full pipeline no longer uses the supplied shell for the original nine calls and separate prior-owner control"
-    # Execute the exact current pipeline with only its ten shell executables
+    by_owner = {node.name: sum(isinstance(call,ast.Call) and isinstance(call.func,ast.Name) and call.func.id=="run"
+                    and bool(call.args) and isinstance(call.args[0],ast.List)
+                    and isinstance(call.args[0].elts[0],ast.Name) and call.args[0].elts[0].id=="bash"
+                    for call in ast.walk(node)) for node in pipeline_nodes}
+    assert by_owner == {"pipeline":8,"common_drift_controls":0,"prior_uri_common_drift_controls":2,"uri_common_drift_controls":1}, "Original ten Bash seams or terminal URI seam changed"
+    assert len(shell_runs)==11,"Full pipeline no longer uses the supplied shell for the original ten calls and independent URI control"
+    # Execute the exact current pipeline with only its eleven shell executables
     # restored to the observed old bare `bash` boundary. Git/source operations
     # remain real; the Windows WSL process result alone is a labelled stand-in.
     # The full corrected pipeline below executes the supplied real shell.
@@ -374,13 +396,14 @@ def shell_controls(out,bash,source):
         "original_version_substring_false_refusal_reproduced_mocked_version_only":True,
         "installation_layout_controls_mocked_only":True,"path_refusals":refusals,
         "existing_unix_default_preserved":True,"all_ten_pipeline_calls_exact_supplied_shell":True,
+        "all_eleven_pipeline_calls_exact_supplied_shell":True,"bash_call_owners":by_owner,
         "original_nine_call_sites_and_separate_prior_owner_control_preserved":True,
         "original_bare_bash_failure_boundary_reproduced":True,
         "original_windows_wsl_process_result_mocked_only":True,
         "original_archive_autocrlf_conversion_reproduced":True,
         "corrected_private_shell_archive_equals_committed_lf_bytes":True
     },sort_keys=True,indent=2)+"\n",encoding="utf-8")
-    print("PASS: exact supplied Bash executes spaced Unicode script/argument/environment; seven missing/relative/WSL/non-Git paths refuse; Unix default, original nine calls and separate prior-owner shell control preserved")
+    print("PASS: exact supplied Bash executes spaced Unicode script/argument/environment; seven missing/relative/WSL/non-Git paths refuse; Unix default, original nine calls, separate prior-owner and independent terminal URI shell controls preserved")
 
 
 def encoding_controls(out):
@@ -534,7 +557,52 @@ def dependency_profile(out,dependency,setting,label):
     },sort_keys=True,indent=2)+"\n",encoding="utf-8")
 
 
+def without_uri_owner_commands(body):
+    """Remove only the three literal terminal URI commands in historical macros."""
+    lines = body.splitlines(keepends=True)
+    prefix = 'python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-uri-routing.py" --root "$RDREPO" '
+    expected = [prefix + flags + '\n' for flags in (
+        '--restore --check --before-branding', '--restore', '--after-branding')]
+    actual = [line for line in lines if '/patch-support-uri-routing.py"' in line]
+    assert actual == expected and all(lines.count(line) == 1 for line in expected), "Exact terminal URI owner commands changed"
+    return ''.join(line for line in lines if line not in actual)
+
+
+def uri_common_drift_controls(out, repo, copied, bash, script, env, label):
+    """Require the actual outer URI whole-file refusal and conserve every byte."""
+    before_all = snapshot(repo)
+    target = repo / 'flutter/lib/common.dart'
+    saved = target.read_bytes()
+    try:
+        target.write_bytes(saved + b'// unapproved URI owner drift\n')
+        poisoned = snapshot(repo)
+        failed = run([bash, script.as_posix()], out, 'pipeline-' + label + '-uri-refusal',
+                     cwd=copied, env=env, success=False)
+        assert_pipeline_refusal(failed, 'Changed or partial URI routing profile')
+        assert snapshot(repo) == poisoned, 'Terminal URI refusal changed source'
+    finally:
+        target.write_bytes(saved)
+        assert snapshot(repo) == before_all, 'Terminal URI drift control changed supplied source'
+
+
 def common_drift_controls(out, repo, copied, bash, script, env, label):
+    before = snapshot(repo)
+    uri_common_drift_controls(out, repo, copied, bash, script, env, label)
+    uri_spec = importlib.util.spec_from_file_location('mixel_drift_terminal_uri', ROOT / 'scripts/patch-support-uri-routing.py')
+    uri = importlib.util.module_from_spec(uri_spec)
+    uri_spec.loader.exec_module(uri)
+    # Preserve both prior Linux and startup refusals on their exact historical
+    # source. Only the three strictly counted URI macro commands are removed.
+    with uri.previous(repo) as previous:
+        historical = copied / 'scripts' / ('prior-uri-refusal-' + label + '.sh')
+        historical.write_text(without_uri_owner_commands(script.read_text(encoding='utf-8')),
+                              encoding='utf-8', newline='')
+        prior_uri_common_drift_controls(out, previous, copied, bash, historical,
+                                       dict(env, RDREPO=previous.as_posix()), label)
+    assert snapshot(repo) == before, 'URI projection changed supplied source'
+
+
+def prior_uri_common_drift_controls(out, repo, copied, bash, script, env, label):
     supplied_before = snapshot(repo)
     try:
         name = "flutter/lib/common.dart"
@@ -622,6 +690,7 @@ def pipeline(out,source,bash):
                  "patch-support-uinput-device.py","test-support-uinput-device.py",
                  "patch-support-native-warnings.py","test-support-native-warnings.py",
                  "patch-support-compiler-cleanup.py","test-support-compiler-cleanup.py",
+                 "patch-support-uri-routing.py","test-support-uri-routing.py",
                  "patch-support-macos-gui-launch.py","test-support-macos-gui-launch.py","support-macos-gui-launch.rs",
                  "patch-support-linux-window-close.py","test-support-linux-window-close.py",
                  "patch-support-linux-child-window-close.py","test-support-linux-child-window-close.py",

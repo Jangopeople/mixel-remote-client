@@ -95,6 +95,84 @@ def inverse_linux_close_bridge_checks(text):
     return text.replace(current, before + original + after, 1)
 
 
+def uri_workflow_projections(workflow):
+    """Only the reviewed URI checks beside their unchanged Linux regression gates."""
+    if workflow not in ('build.yml', 'preflight.yml'):
+        raise AssertionError('Unknown URI workflow projection')
+    source = 'rustdesk' if workflow == 'build.yml' else '"$RUNNER_TEMP/mixel-sdk-source/pipeline-lf"'
+    uri = 'python3 scripts/test-support-uri-routing.py --source ' + source + ' --dart "$(command -v dart)" --output "$RUNNER_TEMP/mixel-uri-routing"\n'
+    linux = 'python3 scripts/test-support-linux-window-close.py --source ' + source + ' --dart "$(command -v dart)"\n'
+    projections = [(
+        '          python3 scripts/test-support-macos-cleanup.py --dart "$(command -v dart)" --flutter "$(command -v flutter)"\n',
+        '          ' + uri,
+        '          ' + linux,
+        2 if workflow == 'build.yml' else 1,
+    )]
+    if workflow == 'preflight.yml':
+        projections.append((
+            '      - name: Prove awaited Mac page and terminal cleanup with real Flutter widgets\n'
+            '        run: python3 scripts/test-support-macos-cleanup.py --dart "$(command -v dart)" --flutter "$(command -v flutter)"\n',
+            '      - name: Prove terminal support URI routing without ID fallthrough\n'
+            '        run: ' + uri,
+            '      - name: Prove Linux terminal-close futures and conserved nonfinal window paths\n'
+            '        run: ' + linux,
+            1,
+        ))
+    return projections
+
+
+def inverse_uri_workflow_checks(text, workflow):
+    if workflow == 'preflight.yml':
+        text = inverse_uri_preflight_budget(text)
+    for before, addition, after, count in uri_workflow_projections(workflow):
+        current = before + addition + after
+        if text.count(addition) != count or text.count(current) != count:
+            raise AssertionError('Exact URI workflow check count/order/placement changed: ' + workflow)
+        text = text.replace(current, before + after, count)
+    return text
+
+
+def uri_preflight_budget_projection():
+    before = '  upstream-source:\n    runs-on: ubuntu-22.04\n'
+    current = '    timeout-minutes: 45\n'
+    after = '    steps:\n      - uses: actions/checkout@v5\n'
+    return before, current, after
+
+
+def uri_mac_preflight_budget_projection():
+    before = '  macos-runtime-harness:\n    runs-on: macos-14\n'
+    current = '    timeout-minutes: 90\n'
+    after = '    steps:\n      - uses: actions/checkout@v5\n'
+    return before, current, after
+
+
+def inverse_uri_preflight_budget(text):
+    for projection, historical in ((uri_preflight_budget_projection(), '20'),
+                                   (uri_mac_preflight_budget_projection(), '60')):
+        before, current, after = projection
+        approved = before + current + after
+        if text.count(approved) != 1 or text.count(before) != 1:
+            raise AssertionError('Exact upstream/Mac URI source-job budget context changed')
+        text = text.replace(approved, before + '    timeout-minutes: ' + historical + '\n' + after, 1)
+    return text
+
+
+def uri_bridge_projection():
+    before, native_restore, original, native_after, after = linux_close_bridge_projection()
+    restore = '          python3 ../scripts/patch-support-uri-routing.py --root . --restore\n'
+    reapply = '          python3 ../scripts/patch-support-uri-routing.py --root . --after-branding\n'
+    return before, restore, native_restore + original + native_after, reapply, after
+
+
+def inverse_uri_bridge_checks(text):
+    before, restore, original, reapply, after = uri_bridge_projection()
+    current = before + restore + original + reapply + after
+    lines = (restore + original + reapply).splitlines(keepends=True)
+    if text.count(current) != 1 or any(text.count(line) != 1 for line in lines):
+        raise AssertionError('Exact six-command URI/native/original bridge sequence changed')
+    return text.replace(current, before + original + after, 1)
+
+
 def forbidden(*args, **kwargs):
     raise AssertionError('A source-only test attempted a native action')
 
@@ -765,6 +843,8 @@ class ConcurrencyControls(unittest.TestCase):
 
     def test_workflow_whole_inverse_has_only_two_ordered_additions(self):
         value = C.canonical((ROOT / '.github/workflows/build.yml').read_bytes()).decode()
+        value = inverse_uri_workflow_checks(value, 'build.yml')
+        value = inverse_uri_bridge_checks(value)
         value = inverse_linux_close_workflow_checks(value, 'build.yml')
         value = inverse_linux_close_bridge_checks(value)
         for prefix in ('../scripts/', 'scripts/'):
@@ -783,6 +863,7 @@ class ConcurrencyControls(unittest.TestCase):
 
     def test_preflight_wrapper_and_mandatory_source_command_exact_whole_inverse(self):
         text = C.canonical((ROOT / '.github/workflows/preflight.yml').read_bytes()).decode()
+        text = inverse_uri_workflow_checks(text, 'preflight.yml')
         text = inverse_linux_close_workflow_checks(text, 'preflight.yml')
         budget = "  windows-packaging:\n    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_source_runner == 'windows-2025' && 'windows-2025' || 'windows-2022' }}\n    timeout-minutes: 120\n"
         previous_budget = budget.replace('    timeout-minutes: 120\n', '    timeout-minutes: 60\n', 1)
@@ -803,6 +884,7 @@ class ConcurrencyControls(unittest.TestCase):
     def test_linux_close_workflow_projection_refuses_changed_missing_duplicate_reordered_or_moved_checks(self):
         for workflow in ('build.yml', 'preflight.yml'):
             text = C.canonical((ROOT / '.github/workflows' / workflow).read_bytes()).decode()
+            text = inverse_uri_workflow_checks(text, workflow)
             projected = inverse_linux_close_workflow_checks(text, workflow)
             self.assertNotIn('test-support-linux-window-close.py', projected)
             self.assertNotIn('test-support-linux-child-window-close.py', projected)
@@ -833,6 +915,7 @@ class ConcurrencyControls(unittest.TestCase):
 
     def test_linux_close_bridge_projection_refuses_changed_missing_duplicate_reordered_or_moved_brackets(self):
         text = C.canonical((ROOT / '.github/workflows/build.yml').read_bytes()).decode()
+        text = inverse_uri_bridge_checks(text)
         before, restore, original, reapply, after = linux_close_bridge_projection()
         current = restore + original + reapply
         projected = inverse_linux_close_bridge_checks(text)
@@ -865,6 +948,66 @@ class ConcurrencyControls(unittest.TestCase):
                 ('following-gate', text.replace(current + after, current + '# changed\n' + after, 1))):
             with self.subTest(mutation=kind), self.assertRaises(AssertionError):
                 inverse_linux_close_bridge_checks(changed)
+
+    def test_uri_workflow_projection_refuses_drift_missing_duplicate_or_disjoint_checks_before_commands(self):
+        for workflow in ('build.yml', 'preflight.yml'):
+            path = ROOT / '.github/workflows' / workflow
+            raw = path.read_bytes()
+            text = C.canonical(raw).decode()
+            with mock.patch.object(subprocess, 'run', forbidden), mock.patch.object(subprocess, 'Popen', forbidden):
+                projected = inverse_uri_workflow_checks(text, workflow)
+                self.assertNotIn('scripts/test-support-uri-routing.py', projected)
+                for before, addition, after, count in uri_workflow_projections(workflow):
+                    for kind, changed in (
+                            ('missing', text.replace(addition, '', 1)),
+                            ('duplicate', text.replace(addition, addition + addition, 1)),
+                            ('argument-drift', text.replace(addition, addition.replace('--source ', '--source foreign ', 1), 1)),
+                            ('disjoint', text.replace(before + addition + after, before + '# disjoint\n' + addition + after, 1)),
+                            ('reordered', text.replace(addition + after, after + addition, 1)),
+                            ('moved', text.replace(addition, '', 1) + addition)):
+                        with self.subTest(workflow=workflow, mutation=kind), self.assertRaises(AssertionError):
+                            inverse_uri_workflow_checks(changed, workflow)
+            if workflow == 'preflight.yml':
+                for before, current, after in (uri_preflight_budget_projection(), uri_mac_preflight_budget_projection()):
+                    for changed in (text.replace(before + current + after, before + after, 1),
+                                    text.replace(before + current + after, before + current + current + after, 1),
+                                    text.replace(before + current + after, before + current.replace(': ', ': 1', 1) + after, 1),
+                                    text.replace(before + current + after, before + after, 1) + current,
+                                    text.replace(before + current + after, before + '# disjoint\n' + current + after, 1)):
+                        with self.assertRaises(AssertionError):
+                            inverse_uri_workflow_checks(changed, workflow)
+            self.assertEqual(path.read_bytes(), raw)
+        with self.assertRaises(AssertionError):
+            inverse_uri_workflow_checks('', 'foreign.yml')
+
+    def test_uri_bridge_projection_refuses_changed_or_disjoint_six_command_sequence_before_commands(self):
+        path = ROOT / '.github/workflows/build.yml'
+        raw = path.read_bytes()
+        text = C.canonical(raw).decode()
+        before, restore, original, reapply, after = uri_bridge_projection()
+        current = restore + original + reapply
+        lines = current.splitlines(keepends=True)
+        with mock.patch.object(subprocess, 'run', forbidden), mock.patch.object(subprocess, 'Popen', forbidden):
+            projected = inverse_uri_bridge_checks(text)
+            self.assertEqual(projected.count(before + original + after), 1)
+            for index, line in enumerate(lines):
+                for kind, changed in (
+                        ('missing', text.replace(line, '', 1)),
+                        ('duplicate', text.replace(line, line + line, 1)),
+                        ('argument-drift', text.replace(line, line.rstrip('\n') + ' --extra\n', 1))):
+                    with self.subTest(index=index, mutation=kind), self.assertRaises(AssertionError):
+                        inverse_uri_bridge_checks(changed)
+            for index in range(len(lines) - 1):
+                swapped = lines[:]
+                swapped[index:index + 2] = reversed(swapped[index:index + 2])
+                with self.subTest(swap=index), self.assertRaises(AssertionError):
+                    inverse_uri_bridge_checks(text.replace(current, ''.join(swapped), 1))
+            for changed in (text.replace(current, '', 1) + current,
+                            text.replace(before + current, before + '# disjoint\n' + current, 1),
+                            text.replace(current + after, current + '# disjoint\n' + after, 1)):
+                with self.assertRaises(AssertionError):
+                    inverse_uri_bridge_checks(changed)
+        self.assertEqual(path.read_bytes(), raw)
 
     def test_release_wrapper_inverse_refuses_partial_duplicate_and_missing_original_calls(self):
         spec = importlib.util.spec_from_file_location('owned_release_projection', ROOT / 'scripts/test-release-pipeline.py')

@@ -20,6 +20,7 @@ else
 fi
 python scripts/test-support-macos-termination.py --flutter "$(command -v flutter)" --bash "$mixel_analyzer_bash"
 python scripts/test-macos-update.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --source-only
+python scripts/test-support-uri-routing.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --dart "$(command -v dart)" --output "$RUNNER_TEMP/mixel-uri-routing"
 python scripts/test-support-linux-window-close.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --dart "$(command -v dart)"
 for mixel_source_test in \
   test-support-invite \

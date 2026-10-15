@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Run the complete branding pipeline on a fresh pinned source clone."""
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -113,6 +114,69 @@ def require_footer_refusal(result: subprocess.CompletedProcess[str], startup: bo
     assert marker in result.stderr, result.stderr[-4000:]
 
 
+TERMINAL_FOOTER_LAYERS = {
+    'uri': ('patch-support-uri-routing.py', ''),
+    'native': ('patch-support-linux-child-window-close.py', 'flutter/.mixel-dependencies/desktop_multi_window/'),
+    'linux': ('patch-support-linux-window-close.py', ''),
+}
+TERMINAL_FOOTER_MARKERS = {
+    'uri': 'Changed or partial URI routing profile',
+    'linux': 'Pinned or partial Linux close profile changed',
+}
+
+
+def require_terminal_footer_refusal(result: subprocess.CompletedProcess[str], layer: str) -> None:
+    assert result.returncode != 0, 'Changed footer unexpectedly passed the ' + layer + ' owner'
+    marker = TERMINAL_FOOTER_MARKERS[layer]
+    assert marker in result.stderr, result.stderr[-4000:]
+
+
+def restore_footer_terminal_layers(repo: Path, layers: tuple[str, ...], base: Path, environment: dict) -> None:
+    """Run each actual strict CLI inverse and verify its exact complete source effect."""
+    for layer in layers:
+        filename, prefix = TERMINAL_FOOTER_LAYERS[layer]
+        owner_file = ROOT / 'scripts' / filename
+        spec = importlib.util.spec_from_file_location('footer_owner_' + layer, owner_file)
+        owner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(owner)
+        command = [sys.executable, str(owner_file), '--root', str(repo), '--restore']
+        before_check = full_source_snapshot(repo)
+        run([*command, '--check', '--before-branding'], cwd=base, env=environment)
+        assert full_source_snapshot(repo) == before_check, 'Terminal footer inverse check wrote source'
+        expected = dict(before_check)
+        for name in owner.ORIGINAL:
+            relative = prefix + name
+            text, newline = owner.canonical((repo / relative).read_bytes())
+            original = owner.transform(name, text, restore=True).replace('\n', newline).encode()
+            expected[relative] = ('file', hashlib.sha256(original).hexdigest())
+        run(command, cwd=base, env=environment)
+        assert full_source_snapshot(repo) == expected, 'Terminal footer inverse changed an unrelated source'
+
+
+def historical_footer_branding_command(base: Path, layers: tuple[str, ...]) -> list[str]:
+    """Remove only exact terminal CLI hooks from a private complete macro copy."""
+    directory = base / ('footer-historical-' + '-'.join(layers))
+    scripts = directory / 'scripts'
+    shutil.copytree(ROOT / 'scripts', scripts, ignore=shutil.ignore_patterns('__pycache__'))
+    source = SCRIPT.read_text(encoding='utf-8')
+    historical = source
+    for layer in layers:
+        filename, _ = TERMINAL_FOOTER_LAYERS[layer]
+        prefix = 'python3 "$(dirname "${BASH_SOURCE[0]}")/' + filename + '" --root "$RDREPO"'
+        for suffix in (' --restore --check --before-branding', ' --restore', ' --after-branding'):
+            line = prefix + suffix + '\n'
+            assert historical.count(line) == 1, 'Changed exact terminal footer macro hook'
+            historical = historical.replace(line, '', 1)
+        assert filename not in historical, 'Unexpected terminal footer macro invocation retained'
+    for path in (ROOT / 'scripts').rglob('*'):
+        if path.is_file() and '__pycache__' not in path.parts:
+            assert (scripts / path.relative_to(ROOT / 'scripts')).read_bytes() == path.read_bytes(), 'Historical footer projection changed a helper'
+    macro = scripts / SCRIPT.name
+    macro.write_text(historical, encoding='utf-8', newline='\n')
+    assert macro.read_text(encoding='utf-8') == historical
+    return [BASH, macro.as_posix()]
+
+
 def footer_refusal_controls(base: Path) -> None:
     expected = b"launchUrl(Uri.parse('https://mixel.ch'));"
     corrupted = b"launchUrl(Uri.parse('https://changed.example'));"
@@ -135,6 +199,16 @@ def footer_refusal_controls(base: Path) -> None:
     require_footer_refusal(subprocess.CompletedProcess([], 1, "", marker))
     startup_marker = "Pinned Mac startup input digest mismatch; refusing all writes"
     require_footer_refusal(subprocess.CompletedProcess([], 1, "", startup_marker), startup=True)
+    for layer, terminal_marker in TERMINAL_FOOTER_MARKERS.items():
+        require_terminal_footer_refusal(subprocess.CompletedProcess([], 1, '', terminal_marker), layer)
+        for code, error in ((0, terminal_marker), (1, startup_marker), (1, marker),
+                            (1, 'Unrelated terminal source refusal')):
+            try:
+                require_terminal_footer_refusal(subprocess.CompletedProcess([], code, '', error), layer)
+            except AssertionError:
+                pass
+            else:
+                raise AssertionError('Successful or wrong-layer terminal footer refusal accepted')
     for code, error in ((0, startup_marker), (1, marker), (1, "Mac startup overlay corruption; refusing all writes")):
         try:
             require_footer_refusal(subprocess.CompletedProcess([], code, "", error), startup=True)
@@ -806,12 +880,42 @@ print("PASS: actual Debian generator child explicitly uses UTF-8 and preserves t
     run(BRANDING_COMMAND, cwd=base, env=env)
     assert full_source_snapshot(repo) == pristine, "Composed baseline changed before the footer control"
     footer_refusal_controls(base)
+    terminal_footer_candidate = base / 'footer-current-uri-corruption'
+    shutil.copytree(repo, terminal_footer_candidate, symlinks=True)
+    assert full_source_snapshot(terminal_footer_candidate) == pristine
+    write_corrupt_footer(terminal_footer_candidate / 'flutter/lib/common.dart')
+    before_terminal_footer = full_source_snapshot(terminal_footer_candidate)
+    rejected = subprocess.run(BRANDING_COMMAND, cwd=base, env={**env, 'RDREPO': terminal_footer_candidate.as_posix()},
+                              capture_output=True, text=True, encoding='utf-8')
+    require_terminal_footer_refusal(rejected, 'uri')
+    assert full_source_snapshot(terminal_footer_candidate) == before_terminal_footer, 'Current URI footer refusal wrote source'
+    assert full_source_snapshot(repo) == pristine, 'Current URI footer control changed the composed baseline'
+    print('PASS: current full branding URI owner refuses the changed footer before any write')
+
+    linux_footer_candidate = base / 'footer-current-linux-corruption'
+    shutil.copytree(repo, linux_footer_candidate, symlinks=True)
+    assert full_source_snapshot(linux_footer_candidate) == pristine
+    linux_footer_env = {**env, 'RDREPO': linux_footer_candidate.as_posix()}
+    restore_footer_terminal_layers(linux_footer_candidate, ('uri',), base, linux_footer_env)
+    linux_footer_command = historical_footer_branding_command(base, ('uri',))
+    write_corrupt_footer(linux_footer_candidate / 'flutter/lib/common.dart')
+    before_linux_footer = full_source_snapshot(linux_footer_candidate)
+    rejected = subprocess.run(linux_footer_command, cwd=base, env=linux_footer_env,
+                              capture_output=True, text=True, encoding='utf-8')
+    require_terminal_footer_refusal(rejected, 'linux')
+    assert full_source_snapshot(linux_footer_candidate) == before_linux_footer, 'Current Linux footer refusal wrote source'
+    assert full_source_snapshot(repo) == pristine, 'Current Linux footer control changed the composed baseline'
+    print('PASS: exact URI source/macro inverse exposes the independent Linux footer refusal before any write')
+
     footer_candidate = base / "footer-corruption"
     shutil.copytree(repo, footer_candidate, symlinks=True)
     assert full_source_snapshot(footer_candidate) == pristine
+    footer_env = {**env, 'RDREPO': footer_candidate.as_posix()}
+    restore_footer_terminal_layers(footer_candidate, ('uri', 'native', 'linux'), base, footer_env)
+    footer_command = historical_footer_branding_command(base, ('uri', 'native', 'linux'))
     write_corrupt_footer(footer_candidate / "flutter/lib/common.dart")
     before_rejected_footer = full_source_snapshot(footer_candidate)
-    rejected = subprocess.run(BRANDING_COMMAND, cwd=base, env={**env, "RDREPO": footer_candidate.as_posix()},
+    rejected = subprocess.run(footer_command, cwd=base, env=footer_env,
                               capture_output=True, text=True, encoding="utf-8")
     require_footer_refusal(rejected, startup=True)
     assert full_source_snapshot(footer_candidate) == before_rejected_footer, "Changed footer refusal must precede any pipeline mutation"

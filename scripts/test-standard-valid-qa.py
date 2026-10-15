@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / 'scripts'
@@ -55,6 +56,68 @@ def inverse_linux_close_preflight_checks(text):
         if text.count(addition) != 1 or text.count(current) != 1:
             raise AssertionError('Exact ordered Linux close preflight checks changed')
         text = text.replace(current, before + after, 1)
+    return text
+
+
+def uri_workflow_projections(workflow):
+    """Only the reviewed URI checks beside their unchanged Linux regression gates."""
+    if workflow not in ('build.yml', 'preflight.yml'):
+        raise AssertionError('Unknown URI workflow projection')
+    source = 'rustdesk' if workflow == 'build.yml' else '"$RUNNER_TEMP/mixel-sdk-source/pipeline-lf"'
+    uri = 'python3 scripts/test-support-uri-routing.py --source ' + source + ' --dart "$(command -v dart)" --output "$RUNNER_TEMP/mixel-uri-routing"\n'
+    linux = 'python3 scripts/test-support-linux-window-close.py --source ' + source + ' --dart "$(command -v dart)"\n'
+    projections = [(
+        '          python3 scripts/test-support-macos-cleanup.py --dart "$(command -v dart)" --flutter "$(command -v flutter)"\n',
+        '          ' + uri,
+        '          ' + linux,
+        2 if workflow == 'build.yml' else 1,
+    )]
+    if workflow == 'preflight.yml':
+        projections.append((
+            '      - name: Prove awaited Mac page and terminal cleanup with real Flutter widgets\n'
+            '        run: python3 scripts/test-support-macos-cleanup.py --dart "$(command -v dart)" --flutter "$(command -v flutter)"\n',
+            '      - name: Prove terminal support URI routing without ID fallthrough\n'
+            '        run: ' + uri,
+            '      - name: Prove Linux terminal-close futures and conserved nonfinal window paths\n'
+            '        run: ' + linux,
+            1,
+        ))
+    return projections
+
+
+def inverse_uri_workflow_checks(text, workflow):
+    if workflow == 'preflight.yml':
+        text = inverse_uri_preflight_budget(text)
+    for before, addition, after, count in uri_workflow_projections(workflow):
+        current = before + addition + after
+        if text.count(addition) != count or text.count(current) != count:
+            raise AssertionError('Exact URI workflow check count/order/placement changed: ' + workflow)
+        text = text.replace(current, before + after, count)
+    return text
+
+
+def uri_preflight_budget_projection():
+    before = '  upstream-source:\n    runs-on: ubuntu-22.04\n'
+    current = '    timeout-minutes: 45\n'
+    after = '    steps:\n      - uses: actions/checkout@v5\n'
+    return before, current, after
+
+
+def uri_mac_preflight_budget_projection():
+    before = '  macos-runtime-harness:\n    runs-on: macos-14\n'
+    current = '    timeout-minutes: 90\n'
+    after = '    steps:\n      - uses: actions/checkout@v5\n'
+    return before, current, after
+
+
+def inverse_uri_preflight_budget(text):
+    for projection, historical in ((uri_preflight_budget_projection(), '20'),
+                                   (uri_mac_preflight_budget_projection(), '60')):
+        before, current, after = projection
+        approved = before + current + after
+        if text.count(approved) != 1 or text.count(before) != 1:
+            raise AssertionError('Exact upstream/Mac URI source-job budget context changed')
+        text = text.replace(approved, before + '    timeout-minutes: ' + historical + '\n' + after, 1)
     return text
 
 
@@ -202,6 +265,7 @@ if($generated.IndexOf('Start-StandardValidQaNamespace') -lt 0 -or $generated.Ind
                          'e0b93f5d3b519877650e5cca61c37102c5f8897510d76fecfe8fd29867692126')
         self.assertEqual(hashlib.sha256((SCRIPTS / 'test-session-directory-access.cs').read_bytes()).hexdigest(), current.decode())
         workflow = (ROOT / '.github/workflows/preflight.yml').read_text()
+        workflow = inverse_uri_workflow_checks(workflow, 'preflight.yml')
         workflow = inverse_linux_close_preflight_checks(workflow)
         # Remove only the exact new mandatory compiler source controls before
         # reconstructing the unchanged whole historical workflow below.
@@ -265,6 +329,7 @@ if($generated.IndexOf('Start-StandardValidQaNamespace') -lt 0 -or $generated.Ind
 
     def test_linux_close_preflight_inverse_refuses_changed_missing_duplicate_reordered_or_moved_checks(self):
         text = (ROOT / '.github/workflows/preflight.yml').read_text()
+        text = inverse_uri_workflow_checks(text, 'preflight.yml')
         projected = inverse_linux_close_preflight_checks(text)
         self.assertNotIn('test-support-linux-window-close.py', projected)
         self.assertNotIn('test-support-linux-child-window-close.py', projected)
@@ -287,6 +352,37 @@ if($generated.IndexOf('Start-StandardValidQaNamespace') -lt 0 -or $generated.Ind
                     ('following-gate', text.replace(before + addition + after, before + addition + after.rstrip('\n') + ' # changed\n', 1))):
                 with self.subTest(addition=addition, mutation=kind), self.assertRaises(AssertionError):
                     inverse_linux_close_preflight_checks(changed)
+
+    def test_uri_workflow_projection_refuses_drift_missing_duplicate_or_disjoint_checks_before_commands(self):
+        for workflow in ('preflight.yml',):
+            path = ROOT / '.github/workflows' / workflow
+            raw = path.read_bytes()
+            text = raw.decode()
+            with mock.patch.object(subprocess, 'run', side_effect=AssertionError('Source-only URI projection attempted a command')), mock.patch.object(subprocess, 'Popen', side_effect=AssertionError('Source-only URI projection attempted a command')):
+                projected = inverse_uri_workflow_checks(text, workflow)
+                self.assertNotIn('scripts/test-support-uri-routing.py', projected)
+                for before, addition, after, count in uri_workflow_projections(workflow):
+                    for kind, changed in (
+                            ('missing', text.replace(addition, '', 1)),
+                            ('duplicate', text.replace(addition, addition + addition, 1)),
+                            ('argument-drift', text.replace(addition, addition.replace('--source ', '--source foreign ', 1), 1)),
+                            ('disjoint', text.replace(before + addition + after, before + '# disjoint\n' + addition + after, 1)),
+                            ('reordered', text.replace(addition + after, after + addition, 1)),
+                            ('moved', text.replace(addition, '', 1) + addition)):
+                        with self.subTest(workflow=workflow, mutation=kind), self.assertRaises(AssertionError):
+                            inverse_uri_workflow_checks(changed, workflow)
+            if workflow == 'preflight.yml':
+                for before, current, after in (uri_preflight_budget_projection(), uri_mac_preflight_budget_projection()):
+                    for changed in (text.replace(before + current + after, before + after, 1),
+                                    text.replace(before + current + after, before + current + current + after, 1),
+                                    text.replace(before + current + after, before + current.replace(': ', ': 1', 1) + after, 1),
+                                    text.replace(before + current + after, before + after, 1) + current,
+                                    text.replace(before + current + after, before + '# disjoint\n' + current + after, 1)):
+                        with self.assertRaises(AssertionError):
+                            inverse_uri_workflow_checks(changed, workflow)
+            self.assertEqual(path.read_bytes(), raw)
+        with self.assertRaises(AssertionError):
+            inverse_uri_workflow_checks('', 'foreign.yml')
 
     def test_actual_scope_partial_failures_and_unknown_cleanup(self):
         mock = PREVIOUS.MOCK.split('public static class MixelOrdinaryTokenFixture', 1)[0]

@@ -1,4 +1,5 @@
 import Cocoa
+import os.log
 import FlutterMacOS
 
 
@@ -72,6 +73,7 @@ public class UniLinksDesktopPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
     }
     
     public func handleOpen(_ urls: [URL]) -> Bool {
+        os_log("MIXEL_REMOTE_URI_HANDLE_OPEN", type: .default)
         for url in urls {
             let urlString = url.absoluteString;
             if (_initialUrl == nil) {
@@ -80,8 +82,10 @@ public class UniLinksDesktopPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
             if (_eventSink != nil) {
                 if Self.isSupportInvite(urlString), let initial = _initialUrl,
                    Self.isSupportInvite(initial) { _initialSupportHandled = true }
+                os_log("MIXEL_REMOTE_URI_DIRECT_EVENT", type: .default)
                 _eventSink!(urlString)
             } else if Self.isSupportInvite(urlString) {
+                os_log("MIXEL_REMOTE_URI_QUEUE_SUPPORT", type: .default)
                 _pendingSupportUrl = urlString
             }
         }
@@ -100,6 +104,7 @@ public class UniLinksDesktopPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
                 let current = _pendingSupportUrl ?? initial
                 _pendingSupportUrl = nil
                 _initialSupportHandled = true
+                os_log("MIXEL_REMOTE_URI_INITIAL_REPLAY", type: .default)
                 result(current)
                 break
             }
@@ -117,6 +122,7 @@ public class UniLinksDesktopPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
             if let initial = _initialUrl, Self.isSupportInvite(initial) {
                 _initialSupportHandled = true
             }
+            os_log("MIXEL_REMOTE_URI_LISTENER_REPLAY", type: .default)
             events(pending)
         }
         return nil;
