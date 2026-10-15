@@ -527,30 +527,58 @@ if args[0]==os.environ['MIXEL_DIALOG_ORDER_FAIL']:
                                MIXEL_DIALOG_ORDER_BASH=r"C:\Program Files\Git préflight 🚀\bin\bash.exe",
                                RUNNER_TEMP=runner.as_posix(), MIXEL_SDK_FULL_APP_PREFLIGHT="false",
                                PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
-            probe = subprocess.run([bash, "-c", '''"$MIXEL_DIALOG_ORDER_PYTHON" "$MIXEL_DIALOG_ORDER_SHIM" --probe "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" "$(command -v dart)" "$RUNNER_TEMP/mixel-file-dialog-lifecycle"'''],
-                                   env=environment, capture_output=True, text=True, encoding="utf-8", timeout=15)
-            self.assertEqual(probe.returncode, 0, probe.stdout + probe.stderr)
-            expected_source, expected_dart, expected_output = json.loads(probe.stdout)
-            expected = [lifecycle, "--source", expected_source, "--dart", expected_dart,
-                        "--output", expected_output]
-            for profile in ("unix", "windows"):
-                for code in (23, 31):
-                    with self.subTest(profile=profile, failure=code):
-                        calls.unlink(missing_ok=True)
-                        case = dict(environment, OS="Windows_NT" if profile == "windows" else "Linux",
-                                    MIXEL_DIALOG_ORDER_FAIL=lifecycle, MIXEL_DIALOG_ORDER_CODE=str(code))
-                        result = subprocess.run([bash, str(dispatcher)], env=case, cwd=root,
-                                                capture_output=True, text=True, encoding="utf-8", timeout=30)
-                        rows = [json.loads(line) for line in calls.read_text(encoding="utf-8").splitlines()]
-                        (OUTPUT / f"dispatch-{profile}-{code}.json").write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
-                        self.assertEqual(result.returncode, code, result.stdout + result.stderr)
-                        self.assertEqual(rows[-1], expected)
-                        self.assertEqual([row[0] for row in rows[-3:]],
-                                         ["scripts/test-support-native-warnings.py",
-                                          "scripts/test-support-compiler-cleanup.py", lifecycle])
-                        self.assertEqual(sum(row[0] == lifecycle for row in rows), 1)
-                        self.assertFalse(any(row[0].startswith("--") for row in rows),
-                                         "Reporter Dart ran after fatal lifecycle regression")
+            selected_sdk = root / "actual selected SDK Zürich 🚀" / "dart.exe"
+            selected_sdk.parent.mkdir()
+            selected_sdk.write_bytes(b"Inert argv fixture; never executed as Dart")
+            for origin in ("PATH", "DART_BIN"):
+                selected_environment = dict(environment)
+                selected_environment.pop("DART_BIN", None)
+                if origin == "DART_BIN":
+                    selected_environment["DART_BIN"] = selected_sdk.as_posix()
+                probe = subprocess.run([bash, "-c", '''"$MIXEL_DIALOG_ORDER_PYTHON" "$MIXEL_DIALOG_ORDER_SHIM" --probe "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" "${DART_BIN:-$(command -v dart)}" "$RUNNER_TEMP/mixel-file-dialog-lifecycle"'''],
+                                       env=selected_environment, capture_output=True, text=True, encoding="utf-8", timeout=15)
+                self.assertEqual(probe.returncode, 0, probe.stdout + probe.stderr)
+                expected_source, expected_dart, expected_output = json.loads(probe.stdout)
+                if origin == "DART_BIN":
+                    self.assertEqual(expected_dart, selected_sdk.as_posix())
+                expected = [lifecycle, "--source", expected_source, "--dart", expected_dart,
+                            "--output", expected_output]
+                for profile in ("unix", "windows"):
+                    for code in (23, 31):
+                        with self.subTest(profile=profile, failure=code):
+                            calls.unlink(missing_ok=True)
+                            case = dict(selected_environment, OS="Windows_NT" if profile == "windows" else "Linux",
+                                        MIXEL_DIALOG_ORDER_FAIL=lifecycle, MIXEL_DIALOG_ORDER_CODE=str(code))
+                            result = subprocess.run([bash, str(dispatcher)], env=case, cwd=root,
+                                                    capture_output=True, text=True, encoding="utf-8", timeout=30)
+                            rows = [json.loads(line) for line in calls.read_text(encoding="utf-8").splitlines()]
+                            (OUTPUT / f"dispatch-{origin}-{profile}-{code}.json").write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+                            self.assertEqual(result.returncode, code, result.stdout + result.stderr)
+                            self.assertEqual(rows[-1], expected)
+                            self.assertEqual([row[0] for row in rows[-3:]],
+                                             ["scripts/test-support-native-warnings.py",
+                                              "scripts/test-support-compiler-cleanup.py", lifecycle])
+                            self.assertEqual(sum(row[0] == lifecycle for row in rows), 1)
+                            self.assertFalse(any(row[0].startswith("--") for row in rows),
+                                             "Reporter Dart ran after fatal lifecycle regression")
+            # Execute the literal previous dispatcher with the same exported
+            # native SDK fixture. It still forwards PATH's different spelling;
+            # this negative control proves the override scenario catches the bug.
+            original_dispatcher = scripts / "original-generated-source.sh"
+            corrected = dispatcher.read_text(encoding="utf-8")
+            selected = ' --dart "${DART_BIN:-$(command -v dart)}" --output "$RUNNER_TEMP/mixel-file-dialog-lifecycle"'
+            self.assertEqual(corrected.count(selected), 1)
+            original_dispatcher.write_text(corrected.replace(selected,
+                ' --dart "$(command -v dart)" --output "$RUNNER_TEMP/mixel-file-dialog-lifecycle"', 1), encoding="utf-8")
+            calls.unlink(missing_ok=True)
+            negative = dict(selected_environment, OS="Windows_NT", MIXEL_DIALOG_ORDER_FAIL=lifecycle,
+                            MIXEL_DIALOG_ORDER_CODE="23")
+            previous = subprocess.run([bash, str(original_dispatcher)], env=negative, cwd=root,
+                                      capture_output=True, text=True, encoding="utf-8", timeout=30)
+            self.assertEqual(previous.returncode, 23, previous.stdout + previous.stderr)
+            original_rows = [json.loads(line) for line in calls.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(original_rows[-1][0], lifecycle)
+            self.assertNotEqual(original_rows[-1][original_rows[-1].index("--dart") + 1], selected_sdk.as_posix())
             for target, code in (("scripts/test-support-lease.py", 23),
                                  ("scripts/test-support-compiler-cleanup.py", 29)):
                 calls.unlink(missing_ok=True)
@@ -561,7 +589,7 @@ if args[0]==os.environ['MIXEL_DIALOG_ORDER_FAIL']:
                 self.assertEqual(result.returncode, code, result.stdout + result.stderr)
                 self.assertEqual(rows[-1][0], target)
                 self.assertFalse(any(row[0] == lifecycle or row[0].startswith("--") for row in rows))
-        print("PASS: exact Windows dispatcher preserves source/Dart/output argv with Unicode/spaces; lifecycle exits 23/31 stop both reporters; prior lease/compiler failures still stop first", flush=True)
+        print("PASS: exact Windows dispatcher preserves PATH fallback and canonical exported Dart SDK argv with Unicode/spaces; original dispatcher rejects selected SDK; lifecycle exits 23/31 stop both reporters; prior lease/compiler failures still stop first", flush=True)
 
     def test_source_roundtrips(self):
         for newline in (b"\n", b"\r\n"):

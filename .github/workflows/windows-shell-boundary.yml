@@ -129,3 +129,120 @@ jobs:
             shell-boundary-proof/*/calls.jsonl
           if-no-files-found: ignore
           retention-days: 3
+
+  actual-windows-lifecycle-dart:
+    name: Real Dart lifecycle before complete source suite (${{ matrix.os }})
+    if: github.repository == 'Jangopeople/mixel-remote-client' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/current77-windows-lifecycle-dart'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.27.4'
+      - name: Check out only the two pinned upstream lifecycle inputs
+        uses: actions/checkout@v5
+        with:
+          repository: rustdesk/rustdesk
+          ref: 1.4.6
+          path: lifecycle-upstream
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /flutter/lib/utils/event_loop.dart
+            /flutter/lib/models/file_model.dart
+      - name: Resolve canonical installed Windows Dart executable
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -c "import os,sys; from pathlib import Path; sys.path.insert(0,'scripts'); from sdk_discovery import find_dart; binary=find_dart(); assert binary and Path(binary).is_file() and binary.endswith('.exe'); stream=open(os.environ['GITHUB_ENV'],'a',encoding='utf-8',newline='\n'); stream.write('DART_BIN='+binary+'\n'); stream.close()"
+          if ($LASTEXITCODE -ne 0) { throw 'Actual installed Dart SDK is required.' }
+      - name: Run all nine actual lifecycle controls through the corrected Bash caller
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          @'
+          import hashlib,importlib.util,json,os,re,subprocess,sys
+          from pathlib import Path
+          root=Path(os.environ['GITHUB_WORKSPACE']).resolve()
+          assert os.name=='nt' and sys.platform=='win32'
+          proof=root/'lifecycle-dart-proof';proof.mkdir()
+          runner=Path(os.environ['RUNNER_TEMP']).resolve()/'mixel-lifecycle-early';runner.mkdir()
+          spec=importlib.util.spec_from_file_location('pinned_lifecycle',root/'scripts/patch-support-file-dialog-lifecycle.py')
+          patch=importlib.util.module_from_spec(spec);spec.loader.exec_module(patch)
+          originals={patch.SOURCE:patch.ORIGINAL_SHA,patch.MODEL:patch.MODEL_SHA}
+          upstream=root/'lifecycle-upstream'
+          for name,expected in originals.items():
+              raw=subprocess.check_output(['git','-C',str(upstream),'show','HEAD:'+name],timeout=30)
+              assert hashlib.sha256(raw).hexdigest()==expected,'Exact original lifecycle input required'
+              path=runner/'mixel-sdk-source/pipeline-lf'/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(raw)
+          bash=Path(os.environ['ProgramFiles'])/'Git/bin/bash.exe';assert bash.is_file()
+          env=dict(os.environ,RUNNER_TEMP=runner.as_posix(),MIXEL_LIFECYCLE_PYTHON=Path(sys.executable).resolve().as_posix())
+          probe=proof/'probe.py'
+          probe.write_text('import json,sys; print(json.dumps(sys.argv[1:]))\n',encoding='utf-8')
+          env['MIXEL_LIFECYCLE_PROBE']=probe.as_posix()
+          selected=subprocess.run([str(bash),'-c','"$MIXEL_LIFECYCLE_PYTHON" "$MIXEL_LIFECYCLE_PROBE" "$(command -v dart)" "${DART_BIN:-$(command -v dart)}"'],env=env,cwd=root,capture_output=True,text=True,encoding='utf-8',timeout=15)
+          assert selected.returncode==0, 'Actual Bash/native Python argv observation failed'
+          legacy,actual=json.loads(selected.stdout)
+          assert Path(actual).is_file() and Path(actual).resolve()==Path(env['DART_BIN']).resolve()
+          record={'scope':'actual-Windows-Dart-lifecycle-source-tests-only','platform':sys.platform,
+              'runnerImage':os.environ.get('ImageOS'),'legacy_command_v_native_argv':legacy,
+              'legacy_argument_is_file':Path(legacy).is_file(),'selected_native_argv':actual,
+              'selected_argument_is_file':True,'canonical_export_selected':True,'originalSourceHashes':originals,
+              'nativeApplicationStarted':False,'customerAppQualified':False,'publication':False,'passed':False}
+          (proof/'dart-argv.json').write_text(json.dumps(record,indent=2)+'\n',encoding='utf-8')
+          dispatcher=(root/'scripts/test-windows-generated-source.sh').read_text(encoding='utf-8')
+          commands=[line for line in dispatcher.splitlines() if line.startswith('python scripts/test-support-file-dialog-lifecycle.py ')]
+          assert len(commands)==1 and ' --dart "${DART_BIN:-$(command -v dart)}" ' in commands[0]
+          prefix='python(){ "$MIXEL_LIFECYCLE_PYTHON" "$@"; }\n'
+          result=subprocess.run([str(bash),'-e','-o','pipefail','-c',prefix+commands[0]],env=env,cwd=root,capture_output=True,text=True,encoding='utf-8',timeout=180)
+          (proof/'lifecycle.stdout').write_text(result.stdout,encoding='utf-8')
+          (proof/'lifecycle.stderr').write_text(result.stderr,encoding='utf-8')
+          print(result.stdout);print(result.stderr,file=sys.stderr)
+          record.update(lifecycleExitCode=result.returncode,lifecyclePassed=result.returncode==0 and bool(re.search(r'Ran 9 tests in [^\n]+\n\nOK\n\Z',result.stderr)))
+          (proof/'dart-argv.json').write_text(json.dumps(record,indent=2)+'\n',encoding='utf-8')
+          assert record['lifecyclePassed'],'All nine real Dart lifecycle tests must run and pass without skips'
+          tail=[line for line in dispatcher.splitlines() if line.startswith('dart ')]
+          expected=['dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart','dart scripts/test-support-invite.dart']
+          assert tail==expected and dispatcher.count('\n'.join(tail))==1,'Exact untouched reporter tail required'
+          reporter=subprocess.run([str(bash),'-e','-o','pipefail','-c','\n'.join(tail)],env=env,cwd=root,capture_output=True,text=True,encoding='utf-8',timeout=120)
+          (proof/'reporter-tail.stdout').write_bytes(reporter.stdout.encode('utf-8'))
+          (proof/'reporter-tail.stderr').write_bytes(reporter.stderr.encode('utf-8'))
+          print(reporter.stdout);print(reporter.stderr,file=sys.stderr)
+          tail_receipt={'scope':'exact-dispatcher-reporter-tail-source-tests-only','commands':tail,'exitCode':reporter.returncode,
+              'stdoutSha256':hashlib.sha256(reporter.stdout.encode()).hexdigest(),'stderrSha256':hashlib.sha256(reporter.stderr.encode()).hexdigest(),
+              'nativeApplicationStarted':False,'customerAppQualified':False,'releaseQualified':False,'publication':False}
+          (proof/'reporter-tail-result.json').write_text(json.dumps(tail_receipt,indent=2)+'\n',encoding='utf-8')
+          record.update(reporterTailExitCode=reporter.returncode,reporterTailPassed=reporter.returncode==0,
+              passed=record['lifecyclePassed'] and reporter.returncode==0)
+          (proof/'dart-argv.json').write_text(json.dumps(record,indent=2)+'\n',encoding='utf-8')
+          assert record['passed'],'The exact reporter analyzer and execution tail must also pass'
+          print('PASS: actual Windows canonical Dart argv, all nine lifecycle controls and exact reporter tail; application/release qualification remains false.')
+          '@ | python -u -
+          if ($LASTEXITCODE -ne 0) { throw 'Real Windows Dart lifecycle failed before the complete source suite.' }
+      - name: Retain exact early lifecycle source and argv evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-real-dart-lifecycle-${{ matrix.os }}
+          path: |
+            lifecycle-dart-proof/*.json
+            lifecycle-dart-proof/*.stdout
+            lifecycle-dart-proof/*.stderr
+            ${{ runner.temp }}/mixel-lifecycle-early/mixel-file-dialog-lifecycle/
+          if-no-files-found: warn
+          retention-days: 7
