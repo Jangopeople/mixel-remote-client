@@ -1,5 +1,26 @@
 # Mixel-Remote — Agent Handoff / Current State
 
+## Current reviewed diagnostic caller — 2026-10-15
+
+Fresh f196b7d historical-diagnostic run38772256692 fails source-controls
+job116550825169 before any provider/native action: its fixed profile still pins
+the earlier concurrency test, which the reviewed lifecycle workflow inverse
+extended. The original13,367-byte job log is retained once at
+`root-f196-historical-diagnostic-failure-20261015/`, SHA256
+`e10e17646f9d29aa08560424a886dcd5b1250afc758e09f0820ba2a628b7aeae`.
+
+Only current reviewed-caller pins are rebound: the concurrency test is
+`c26c0bb27da29e4cda94726abe407a756f0009c49eb44dc4def5101f2b7af02f`
+and its pure workflow projection dependency is
+`2c1cdb2f108ecb1766e9a88bf802d882731deda943420ac6f19fd27a47d0fd30`.
+Every historical producer/run/tree/artifact/frozen-helper identity and every
+diagnostic function/class AST remain exact. A new corrupted-dependency case
+refuses before mocked API/native calls or output creation. Root independently
+passes the complete106 source/mock tests in1.881 seconds; peer concurrency77
+also passes. No application generator, runtime helper or build workflow changes
+since f196b7d. This fixes the current source-check caller and does not relabel
+historical artifacts or dispatch that historical native diagnosis.
+
 ## File-transfer dialog lifetime — 2026-10-15 (source verified; native acceptance open)
 
 The pinned event loop could recreate its periodic timer after its owner closed

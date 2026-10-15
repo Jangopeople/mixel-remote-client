@@ -124,6 +124,29 @@ class StrictReplayControls(unittest.TestCase):
             with self.subTest(relative=relative), self.assertRaises((v.Refusal, v.SUPPORT.Refusal)):
                 v.source_contract(carrier)
 
+    def test_reviewed_workflow_projection_drift_refuses_before_provider_or_native(self):
+        relative = "scripts/file_dialog_workflow_projection.py"
+        carrier = self.root / "changed-reviewed-workflow-projection"
+        shutil.copytree(ROOT / "scripts", carrier / "scripts")
+        (carrier / ".github/workflows").mkdir(parents=True)
+        shutil.copy2(ROOT / ".github/workflows/diagnose-macos-failed-app.yml",
+                     carrier / ".github/workflows/diagnose-macos-failed-app.yml")
+        with (carrier / relative).open("ab") as stream:
+            stream.write(b"\n# unreviewed workflow projection\n")
+        destination = self.root / "never-created-private-output"
+        safe = self.root / "never-created-safe-output"
+        arguments = ["--diagnostic-checkout", str(carrier), "--producer-checkout", str(self.root),
+                     "--destination", str(destination), "--safe-output", str(safe)]
+        with patch.object(v, "hosted_context", return_value="b" * 40), \
+             patch.object(v, "api", side_effect=AssertionError("Provider metadata forbidden")) as provider, \
+             patch.object(v, "run_caller", side_effect=AssertionError("Native diagnostic forbidden")) as native:
+            with self.assertRaisesRegex(v.Refusal, "^reviewed-replay-source-drift$"):
+                v.main(arguments)
+            provider.assert_not_called()
+            native.assert_not_called()
+        self.assertFalse(destination.exists())
+        self.assertFalse(safe.exists())
+
     def test_local_self_hosted_other_branch_or_workflow_source_refuses_before_command(self):
         env = {"GITHUB_ACTIONS": "true", "RUNNER_OS": "macOS", "RUNNER_ENVIRONMENT": "github-hosted",
                "GITHUB_REPOSITORY": v.REPOSITORY, "GITHUB_EVENT_NAME": "workflow_dispatch",
@@ -330,9 +353,11 @@ class StrictReplayControls(unittest.TestCase):
                          "repos/" + v.REPOSITORY + "/actions/runs/" + str(v.RUN)])
         self.assertNotIn("--allow-escape-sequences", metadata.call_args.args[0])
         profile = v.source_contract(ROOT)
-        self.assertEqual(v.PROFILE_HASH, "eac24207a3307f8bfea313e302ba790dbf94077b1cf38bfc1201759514b86cd3")
-        self.assertEqual(v.CONTROLS_HASH, "a5434c880949f228b866175e084c6feec78247116f11fcd347bb858e3a32b132")
+        self.assertEqual(v.PROFILE_HASH, "c8c969127e1a18878dc9feba38affada0fcf3bf142732e9ca5cef2cc8fd8ccb8")
+        self.assertEqual(v.CONTROLS_HASH, "c26c0bb27da29e4cda94726abe407a756f0009c49eb44dc4def5101f2b7af02f")
         self.assertEqual(profile["reviewedSources"]["scripts/test-support-launch-macos-concurrency-controls.py"], v.CONTROLS_HASH)
+        self.assertEqual(profile["reviewedSources"]["scripts/file_dialog_workflow_projection.py"],
+                         "2c1cdb2f108ecb1766e9a88bf802d882731deda943420ac6f19fd27a47d0fd30")
         self.assertEqual(v.CALLER_HASH, "9fb58a9c5333df460cc4a676dc1499ee08af4af78edca762d0e20c59f0d03fc0")
 
     def test_source_grounded_terminal_escape_refusal_is_exact_fixed_category_only(self):
