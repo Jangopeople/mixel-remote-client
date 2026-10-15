@@ -21,6 +21,17 @@ output; the strict product path guard remains unchanged. Preflight budgets are
 original failed checkpoint 77 producer `38690913216` and preflight `38690864041`;
 those runs remain unqualified historical evidence.
 
+The later original Windows producer job also exposed stale dispatcher mock
+argument expectations. The corrected fixture explicitly checks the new portable
+URI and Linux Dart invocations before every retained original command, preserves
+both exact argument boundaries and all full-app/invalid-request branches, and
+passes the complete 26-test observation suite plus the focused replay. Three
+wrapper source pins and two historical inverse consumers are exactly rebound;
+all historical hashes and original assertions remain. Hosted 9, optional 11,
+directory 9 and packaged 12 source/mock controls pass. All 38 product helpers
+and 232 unowned carrier inputs are unchanged. This is source/mock verification;
+Windows native Standard-user and packaged 95-second gates remain required.
+
 The Mac URI plugin adds only `import os.log` and five constant stage markers,
 without payloads or routing changes. Removing those six lines reproduces the
 original exactly. Final vendor SHA256 is

@@ -919,6 +919,14 @@ if sys.argv[1]==target:
             expected_shell = subprocess.check_output([bash, "-c",
                 'if [[ "${OS:-}" == Windows_NT ]]; then cygpath -w "$BASH"; else printf "%s\\n" "$BASH"; fi'],
                 text=True, encoding="utf-8", timeout=15).strip()
+            expected_dart = subprocess.run([bash, "-c", "command -v dart"], env=environment,
+                capture_output=True, text=True, encoding="utf-8", timeout=15).stdout.strip()
+            portable = [
+                ["scripts/test-support-uri-routing.py", "--source",
+                 runner_temp.as_posix() + "/mixel-sdk-source/pipeline-lf", "--dart", expected_dart,
+                 "--output", runner_temp.as_posix() + "/mixel-uri-routing"],
+                ["scripts/test-support-linux-window-close.py", "--source",
+                 runner_temp.as_posix() + "/mixel-sdk-source/pipeline-lf", "--dart", expected_dart]]
             preceding = [
                 "scripts/test-support-invite.py", "scripts/test-generated-support-paths.py",
                 "scripts/test-support-macos-uri-routing.py",
@@ -956,7 +964,7 @@ if sys.argv[1]==target:
                     self.assertEqual(arguments[3][0:2], ["scripts/test-support-macos-termination.py", "--flutter"])
                     self.assertEqual(arguments[3][3:], ["--bash", expected_shell])
                     self.assertEqual(arguments[4], ["scripts/test-macos-update.py", "--source", runner_temp.as_posix() + "/mixel-sdk-source/pipeline-lf", "--source-only"])
-                    self.assertEqual(arguments[5:], [[name] for name in preceding])
+                    self.assertEqual(arguments[5:], portable + [[name] for name in preceding])
                     self.assertEqual((root / "actual-invocations.log").read_text(encoding="utf-8").splitlines(),
                                      [row[0] for row in arguments])
                     self.assertIn("CONTROL: unchanged fatal native gate", result.stdout)
@@ -974,12 +982,12 @@ if sys.argv[1]==target:
                 "test-windows-lease-error", "test-support-network", "test-secure-support", "test-support-linux",
                 "test-support-signals", "test-support-input", "test-support-clipboard", "test-support-video",
                 "test-support-macos", "test-support-macos-cleanup", "test-support-wakelock", "test-branding")]
-            self.assertEqual(late_arguments[5:-1], [[name] for name in preceding + remaining])
+            self.assertEqual(late_arguments[5:-1], portable + [[name] for name in preceding + remaining])
             self.assertEqual(late_arguments[-1], ["scripts/test-support-native-warnings.py", "--source",
                 runner_temp.as_posix() + "/mixel-sdk-source/pipeline-lf", "--source-only", "--output",
                 runner_temp.as_posix() + "/mixel-native-warning-source", "--bash", expected_shell])
             self.assertIn("CONTROL: final native-warning source gate", late.stdout)
-            print("PASS: exact generated-source dispatcher preserves spaced Unicode runner/application paths, default/source and explicit full-app SDK gates, invalid-request refusal, analyzer/support-exit/SDK/Mac Quit/updater4 ordering and every retained reader/lease/later fixture; unchanged fatal native23 and final native-warning24 halt before downstream Dart execution.", flush=True)
+            print("PASS: exact generated-source dispatcher preserves spaced Unicode runner/application paths, default/source and explicit full-app SDK gates, invalid-request refusal, analyzer/support-exit/SDK/Mac Quit/updater4/URI+Linux Dart ordering and every retained reader/lease/later fixture; unchanged fatal native23 and final native-warning24 halt before downstream Dart execution.", flush=True)
 
     @staticmethod
     def mocked_bridge():
