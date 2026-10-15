@@ -97,7 +97,7 @@ class StagingTests(unittest.TestCase):
     def test_each_pinned_input_drift_refuses_before_output_or_native_seam(self):
         with tempfile.TemporaryDirectory(prefix='mixel-standard95-drift-') as folder:
             root = Path(folder).resolve(); (root/'scripts').mkdir()
-            for name,text in self.sources.items(): (root/'scripts'/name).write_text(text)
+            for name,text in self.sources.items(): (root/'scripts'/name).write_bytes(text.encode('utf-8'))
             for name in A.PINS:
                 path=root/'scripts'/name; original=path.read_bytes();path.write_bytes(original+b'\n# drift\n')
                 with self.subTest(name=name), self.assertRaisesRegex(ValueError,'Pinned source drift'): A.read_sources(root)

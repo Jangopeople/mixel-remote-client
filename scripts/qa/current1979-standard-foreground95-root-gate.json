@@ -68,7 +68,7 @@
     "scripts/support-windows-desktop-identity-diagnostic.cs": "e8e292ee6c5ab2604a2b4d45a6d09b74f86489d48df3dbb194ac552313b8e8d6",
     "scripts/test-diagnose-macos-concurrency-failed-intel.py": "996381a2360a2c28a5bc9977f0a4d185c325161f16f47cffd6aad3525633c97e",
     "scripts/test-hosted-qa-session-directory.cs": "b7f7886e2e6de9f7d76ef371473a436d8845b1396c12b63517331894d4611d4e",
-    "scripts/test-standard-foreground95-adapter.py": "1b1a47054ac6ae4539362d5f9552ad458a85396183256db497a6f091fddb4255",
+    "scripts/test-standard-foreground95-adapter.py": "6c39ede438b8b307e4ee9b11cdae460a92b638138887b1ae8440ca91318ef763",
     "scripts/test-standard-valid-qa.py": "9648ed225582489ad4318df8fff63c2bd089504af1e0c5a4a5c14325a3dfc68f",
     "scripts/test-standard95-normal-guards.py": "0fe4c277d0df2b9e7bffccb6b8e84030e87a1f3233426a7d1c09d1dafaf83cc4",
     "scripts/test-support-launch-macos-concurrency-controls.py": "1f3fb2ec96e237a243fe36cf5d63263cbff6255014d3ef0aeed4745da108f8b0",
