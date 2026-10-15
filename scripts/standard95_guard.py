@@ -259,13 +259,30 @@ def hosted_context(repository, here):
 
 def restore_git_bytes(repository, here):
     parent = hosted_context(repository, here)
-    names = subprocess.check_output(['git', '-C', str(repository), 'ls-files', '-z', '--', 'scripts',
-                                     '.github/workflows/build.yml'], timeout=30)
+    def git(*args):
+        raw = subprocess.check_output(['git', '-C', str(repository), *args], stderr=subprocess.PIPE, timeout=30)
+        require(len(raw) <= 8 * 1024 * 1024, 'Bounded normal Git state required')
+        return raw
+    names = git('ls-files', '-z', '--', 'scripts', '.github/workflows/build.yml')
     require(0 < len(names) <= 1_000_000 and names.endswith(b'\0'), 'Bounded normal source inventory required')
     paths = [value.decode('utf-8', errors='strict') for value in names[:-1].split(b'\0')]
     require(len(paths) == len(set(paths)) and all((name.startswith('scripts/') or name == '.github/workflows/build.yml')
             and '\\' not in name and not any(part in ('', '.', '..') for part in name.split('/')) for name in paths),
             'Exact scoped normal source paths required')
+    full_index = git('ls-files', '--stage', '-z')
+    head_tree = git('rev-parse', 'HEAD', 'HEAD^{tree}')
+    require(full_index and full_index.endswith(b'\0') and
+            re.fullmatch(rb'[0-9a-f]{40}\n[0-9a-f]{40}\n', head_tree), 'Exact normal Git identity required')
+    scoped_names = {name.encode('utf-8') for name in paths}
+    scoped_records = []; seen = set()
+    for record in full_index[:-1].split(b'\0'):
+        metadata, separator, name = record.partition(b'\t')
+        require(separator and name, 'Exact normal index inventory required')
+        if name in scoped_names:
+            require(name not in seen and re.fullmatch(rb'(100644|100755) [0-9a-f]{40} 0', metadata),
+                    'Exact unique stage-zero normal source required')
+            seen.add(name); scoped_records.append(record + b'\0')
+    require(seen == scoped_names, 'Complete scoped normal index records required')
     with tempfile.TemporaryDirectory(prefix='mixel-normal95-git-', dir=parent) as folder:
         prefix = Path(folder)
         subprocess.run(['git', '-C', str(repository), '-c', 'core.autocrlf=false', 'checkout-index', '--force',
@@ -277,3 +294,15 @@ def restore_git_bytes(repository, here):
                     not destination.is_symlink(), 'Regular scoped normal source required')
         for name in paths:
             shutil.copyfile(prefix / name, repository / name)
+        require(all((prefix / name).read_bytes() == (repository / name).read_bytes() for name in paths),
+                'Restored normal source bytes differ')
+        require(git('ls-files', '--stage', '-z') == full_index and
+                git('rev-parse', 'HEAD', 'HEAD^{tree}') == head_tree, 'Normal Git identity changed during restoration')
+        # LF restoration can invalidate CRLF checkout stat sizes. Reset only the
+        # same mode/blob/stage/path records, never re-add working-file content.
+        subprocess.run(['git', '-C', str(repository), 'update-index', '-z', '--index-info'],
+                       input=b''.join(scoped_records), check=True, timeout=30)
+        require(git('ls-files', '--stage', '-z') == full_index and
+                git('rev-parse', 'HEAD', 'HEAD^{tree}') == head_tree, 'Normal Git identity changed during stat reset')
+        require(git('status', '--porcelain', '--untracked-files=no') == b'',
+                'Normal restoration requires a clean exact checkout')

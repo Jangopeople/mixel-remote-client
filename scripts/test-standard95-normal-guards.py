@@ -261,10 +261,56 @@ class NormalGuards(unittest.TestCase):
         run('checkout-index','--index','--force','--all')
         for p,raw in originals.items():self.assertEqual(p.read_bytes(),raw.replace(b'\n',b'\r\n'))
         self.assertEqual(run('status','--porcelain','--untracked-files=no').stdout,b'')
+        head_tree=run('rev-parse','HEAD','HEAD^{tree}').stdout
+        full_index=run('ls-files','--stage','-z').stdout
         with patch.object(G,'hosted_context',return_value=self.root):G.restore_git_bytes(self.repo,scripts)
         for p,raw in originals.items():self.assertEqual(p.read_bytes(),raw)
+        self.assertEqual(run('status','--porcelain','--untracked-files=no').stdout,b'')
+        self.assertEqual(run('rev-parse','HEAD','HEAD^{tree}').stdout,head_tree)
+        self.assertEqual(run('ls-files','--stage','-z').stdout,full_index)
         self.assertNotIn('--skip', (HERE/'capture-standard95-state.py').read_text())
         self.assertNotIn('test-only-hosted', (HERE/'capture-standard95-state.py').read_text())
+
+    def test_git_stat_reset_refuses_real_changes_without_staging_or_overwriting(self):
+        git=shutil.which('git');self.assertIsNotNone(git)
+        scripts=self.repo/'scripts';source=scripts/'source.py';source.write_bytes(b'line1\nline2\n')
+        workflow=self.repo/'.github/workflows/build.yml';workflow.parent.mkdir(parents=True);workflow.write_bytes(b'on: workflow_dispatch\n')
+        actual_run=subprocess.run
+        def run(*argv):return actual_run([git,'-C',str(self.repo),*argv],check=True,capture_output=True,timeout=30)
+        run('init','-q');run('config','core.autocrlf','true');run('config','core.safecrlf','false')
+        run('add','.');run('-c','user.name=SourceControl','-c','user.email=source-control@example.invalid','commit','-qm','unit-only fixture')
+        run('checkout-index','--index','--force','--all')
+        self.assertEqual(run('status','--porcelain','--untracked-files=no').stdout,b'')
+        head_tree=run('rev-parse','HEAD','HEAD^{tree}').stdout;full_index=run('ls-files','--stage','-z').stdout
+        source_sha=head_tree.splitlines()[0].decode()
+        env=dict(GITHUB_SHA=source_sha,GITHUB_ACTIONS='true',RUNNER_ENVIRONMENT='github-hosted',GITHUB_JOB='runtime',
+            GITHUB_REPOSITORY=G.REPOSITORY,GITHUB_EVENT_NAME='workflow_dispatch',GITHUB_RUN_ATTEMPT='1',GITHUB_WORKFLOW_SHA=source_sha,
+            MIXEL_STANDARD95_SOURCE_SCOPE=G.SCOPE,WINDOWS_RELEASE_GATE='true',RUNTIME_RUN_ID=str(G.RUN),PUBLISH_REQUESTED='false',
+            GITHUB_REF='refs/heads/codex/normal95',GITHUB_WORKFLOW_REF=G.REPOSITORY+'/.github/workflows/build.yml@refs/heads/codex/normal95',
+            GITHUB_WORKSPACE=str(self.repo),RUNNER_TEMP=str(self.root))
+        modified=source.read_bytes()+b'# actual preexisting edit\n';source.write_bytes(modified)
+        with patch.object(G,'os',types.SimpleNamespace(name='nt',environ=env)),\
+                patch.object(G,'windows_directory_owner_matches_current_token',return_value=True),\
+                patch.object(G.shutil,'copyfile',side_effect=AssertionError('No copy before clean checkout')) as copy_file:
+            with self.assertRaisesRegex(ValueError,'clean exact checkout'):G.restore_git_bytes(self.repo,scripts)
+            copy_file.assert_not_called()
+        self.assertEqual(source.read_bytes(),modified)
+        self.assertEqual(run('ls-files','--stage','-z').stdout,full_index)
+        self.assertEqual(run('rev-parse','HEAD','HEAD^{tree}').stdout,head_tree)
+        self.assertEqual(run('status','--porcelain','--untracked-files=no').stdout,b' M scripts/source.py\n')
+        run('checkout-index','--index','--force','--all')
+        self.assertEqual(run('status','--porcelain','--untracked-files=no').stdout,b'')
+        injections=[]
+        def inject_real_edit(argv,**kwargs):
+            if argv[3:]==['update-index','-z','--index-info']:
+                modified=source.read_bytes()+b'# actual edit before stat reset\n';source.write_bytes(modified);injections.append(modified)
+            return actual_run(argv,**kwargs)
+        with patch.object(G,'hosted_context',return_value=self.root),patch.object(G.subprocess,'run',side_effect=inject_real_edit):
+            with self.assertRaisesRegex(ValueError,'clean exact checkout'):G.restore_git_bytes(self.repo,scripts)
+        self.assertEqual(len(injections),1);self.assertEqual(source.read_bytes(),injections[0])
+        self.assertEqual(run('ls-files','--stage','-z').stdout,full_index)
+        self.assertEqual(run('rev-parse','HEAD','HEAD^{tree}').stdout,head_tree)
+        self.assertEqual(run('status','--porcelain','--untracked-files=no').stdout,b' M scripts/source.py\n')
 
     def test_runtime_bootstrap_order_strict_inverse_both_oses_and_native_conservation(self):
         text=(ROOT/'.github/workflows/build.yml').read_text();runtime=text[text.index('\n  runtime:\n'):text.index('\n  runtime-macos:\n')]
