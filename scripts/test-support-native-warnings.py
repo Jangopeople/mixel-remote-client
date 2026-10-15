@@ -574,9 +574,25 @@ def wiring_controls(out,bash):
         result=run([bash,'-e','-o','pipefail','-c',prefix+body],out,'workflow-gate-'+str(number),env)
         assert result.returncode==27,result.stderr
         actual=[json.loads(line) for line in (folder/'calls.jsonl').read_text(encoding='utf-8').splitlines()]
+        # Preserve all original call/order assertions after validating only the
+        # reviewed lifecycle addition. Observe Dart through the same native
+        # Git Bash -> Python argv boundary; command -v may be /c/... on Windows.
+        probe=folder/'selected-lifecycle-dart.py'
+        probe.write_bytes(b'import json,sys\nprint(json.dumps(sys.argv[1]))\n')
+        selected_env=dict(env,MIXEL_DART_ARGV_PROBE=str(probe.absolute()))
+        selected=run([bash,'-c','"$MIXEL_PYTHON" "$MIXEL_DART_ARGV_PROBE" "$(command -v dart)"'],out,'selected-lifecycle-dart-'+str(number),selected_env)
+        assert selected.returncode==0,selected.stderr
+        expected_dart=json.loads(selected.stdout)
+        assert len(actual)==8,actual
+        assert actual[6]==['scripts/test-support-file-dialog-lifecycle.py','--source',
+                           'rustdesk' if file=='build.yml' else env['RUNNER_TEMP']+'/mixel-sdk-source/pipeline-lf',
+                           '--dart',expected_dart,'--output',env['RUNNER_TEMP']+'/mixel-file-dialog-lifecycle'],actual[6]
+        actual=actual[:6]+actual[7:]
         assert [row[0] for row in actual]==['scripts/test-support-flutter-analysis.py','scripts/test-macos-startup.py','scripts/test-support-macos-tray-url.py','scripts/test-support-launch-macos-tray-controls.py','scripts/test-support-macos-termination-support.py','scripts/test-support-flutter-sdk-compatibility.py',source_only],actual
         assert actual[-1][1:] == ['--source','rustdesk' if file=='build.yml' else env['RUNNER_TEMP']+'/mixel-sdk-source/pipeline-lf','--source-only','--output',env['RUNNER_TEMP']+'/mixel-native-warning-source']
-        calls.append({'workflow':file,'job':job,'first_warning_gate_failure':27,'later_tests_unrun':True})
+        calls.append({'workflow':file,'job':job,'first_warning_gate_failure':27,'later_tests_unrun':True,
+                      'reviewed_lifecycle_command_before_warning_gate':True,'lifecycle_dart_native_argv':expected_dart,
+                      'original_six_calls_and_warning_gate_conserved':True})
     dispatcher_source=(root/'scripts/test-windows-generated-source.sh').read_bytes()
     dispatcher_text=dispatcher_source.decode('utf-8')
     assert dispatcher_text.count('unset mixel_analyzer_bash')==1

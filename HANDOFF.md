@@ -1,5 +1,26 @@
 # Mixel-Remote — Agent Handoff / Current State
 
+## Native workflow fixture integration — 2026-10-15
+
+The970 fast Git-Bash matrix fails on both Windows2022/2025 before application
+execution: native-warning wiring still expects six earlier commands and its
+fatal gate, while the reviewed lifecycle test correctly adds one command after
+SDK verification. Both original job logs are retained once under
+`root-970-windows-fast-boundary-failure-20261015/`, hashes
+`1e906b87b2b7c560d4c05098b6c8a7f33adc56c4add5754fa7a14b045490d230`
+and `d63750fedd8c02bc7d90a7c24a95f1f1227555cc51dc938b0d78ead3a195bc67`.
+
+Only that wiring fixture changes. It validates the exact lifecycle command,
+source, independently observed native Dart argument and Unicode output path
+before projecting that one row away for every original assertion. All original
+assertion ASTs/fatal statuses remain. Complete native-warning and unchanged
+compiler-cleanup source gates exit0 in32.689/68.776 seconds with empty stderr;
+Root independently passes both actual wiring functions with spaced Unicode
+paths. Six missing/duplicate/reordered/wrong-argument controls refuse. Evidence
+is `970-lifecycle-wiring-peer-20261015/` and
+`root-970-lifecycle-wiring-readback-20261015/`. No application generator, runtime
+helper, workflow, observer533 or projection helper changes in this correction.
+
 ## Current reviewed diagnostic caller — 2026-10-15
 
 Fresh f196b7d historical-diagnostic run38772256692 fails source-controls
