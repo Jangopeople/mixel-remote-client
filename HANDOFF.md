@@ -1,5 +1,59 @@
 # Mixel-Remote — Agent Handoff / Current State
 
+## File-transfer dialog lifetime — 2026-10-15 (source verified; native acceptance open)
+
+The pinned event loop could recreate its periodic timer after its owner closed
+while awaiting a dialog, and repeated readiness could start multiple timers.
+The new terminal loop checks ownership after each await, drains no later work
+after close and cannot restart. Mobile's shared FileModel creates a fresh loop
+for its next session. Overwrite, cancellation and confirmation callbacks capture
+their originating loop/session; late replies cannot update a reopened session.
+Both complete source files and ownership chains validate before any write.
+The earliest branding hook is read-only; final application is idempotent.
+
+Root's independent actual Dart regression reports `Ran 9 tests in 19.860s / OK`
+at `root-file-dialog-mobile-lifecycle-20261015/`. It includes LF/CRLF real timers,
+actual FileModel declarations/methods, required original failures, unchanged
+normal behavior, two-file refusals, macro refusal preservation and the actual
+Windows dispatcher fatal boundary. Helper SHA256 is
+`e0bed448564e5eaa86d1086eea529a55ad4fe4c51bb8a89357fb40b5f5e4d7b5`;
+tests are `d1b09f71a0a6719c22fe4da3e20c590914821041b8a9be5031173ab74601acb0`.
+Patched event loop and FileModel hashes are respectively
+`36cb1808746680a6cc4c379aae4c5cc80ef9f8475f638a15fe2e048808c35d75` and
+`3c065afc5657f72c6718a098c8bfe09c322c59ad37c7563fbf1a9dba92c772db`.
+
+Linux, both Mac targets and Windows now run this gate and retain its evidence.
+Exact job-bound workflow inverses preserve the original historical hashes;
+peer verification passes concurrency77, Standard12 and Windows-preflight9.
+SDK-pipeline6, actionlint and followed-source shellcheck pass. Actual full Flutter
+3.27.4 analysis exits0 with no errors/warnings and the same285 informational
+diagnostics as before. Root rehashes all1,288 production files against the first
+final source snapshot plus the three exact generated/context additions. Analysis
+uses the retained resolved package configuration; it does not resolve dependencies
+again or qualify a native build. Evidence is
+`file-dialog-final-full-app-analysis-20261015/`. The complete unchanged branding
+driver exits0 in453.563 seconds with empty stderr, retaining all installer,
+idempotence and strict corruption/refusal controls at
+`file-dialog-complete-branding-peer-20261015/`. Root's separate complete newline
+composition matrix exits0 in1,205.256 seconds, preserving source hashes and all
+52 macro calls, four profiles, second-pass inventories and fatal refusals at
+`root-file-dialog-mobile-whole-branding-20261015/`. These source passes do not
+qualify installers. An artifact-only two-process performance experiment is kept
+separate; its ownership, bounded failure, output-path and native Windows gaps
+preclude canonical integration in this product checkpoint.
+The older 2b07abf producer/preflight remain baseline-only even if they pass.
+Fresh exact-source builds and native Windows/Mac/Linux acceptance remain required.
+
+The private b85 Linux full-flow repeat performed real keyboard/mouse input,
+both Unicode clipboard directions, three 65,536-byte file jobs, reconnect,
+fullscreen input, Disconnect, Settings and normal main-window close. Its direct
+supervisor records GUI11049 exit0 at 16:08:45 UTC, with roundtrip SHA256
+`2c4de308c38eb503c5ca2b558e16cb6be4eb504ac667569c052be79d366f3f16`.
+The prior GUI241 direct wait status134 remains unexplained and unresolved;
+neither this repeat nor the source timer defect establishes its cause. Known
+Flutter warnings remain retained. No final release, installed Mac replacement,
+customer alias change or marketplace action is qualified by these records.
+
 ## Windows native SDK argument boundary — 2026-10-15
 
 Original b85 Windows producer job `116408838388` fails five ordering assertions

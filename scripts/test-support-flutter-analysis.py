@@ -711,6 +711,7 @@ def pipeline(out,source,bash):
                  "test-support-macos-cleanup.py","test-support-macos-window.py",
                  "patch-support-macos-rdev.py","patch-support-input.py",
                  "patch-support-file-transfer-window.py","test-support-file-transfer-window.py",
+                 "patch-support-file-dialog-lifecycle.py","test-support-file-dialog-lifecycle.py",
                  "patch-support-keyboard-default.py",
                  "patch-support-uinput-scroll.py",
                  "patch-support-uinput-device.py","test-support-uinput-device.py",

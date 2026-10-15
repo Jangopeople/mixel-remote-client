@@ -186,6 +186,18 @@ jobs:
           name: windows-clipboard-source-native
           path: windows-clipboard-proof/*.log
           if-no-files-found: ignore
+      - name: Preserve Windows file-dialog lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-file-dialog-lifecycle
+          path: |
+            ${{ runner.temp }}/mixel-file-dialog-lifecycle/*.log
+            ${{ runner.temp }}/mixel-file-dialog-lifecycle/*.json
+            ${{ runner.temp }}/mixel-file-dialog-lifecycle/actual-*.dart
+          if-no-files-found: ignore
+          retention-days: 14
+
   portable-standard-lease-qa:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.portable_standard_lease_qa_bundle }}
     runs-on: windows-2022
@@ -309,6 +321,7 @@ jobs:
           python3 scripts/test-support-launch-macos-tray-controls.py
           python3 scripts/test-support-macos-termination-support.py --app "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf"
           python3 scripts/test-support-flutter-sdk-compatibility.py --app "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf"
+          python3 scripts/test-support-file-dialog-lifecycle.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --dart "$(command -v dart)" --output "$RUNNER_TEMP/mixel-file-dialog-lifecycle"
           python3 scripts/test-support-native-warnings.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --source-only --output "$RUNNER_TEMP/mixel-native-warning-source"
           python3 scripts/test-support-compiler-cleanup.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --source-only --output "$RUNNER_TEMP/mixel-compiler-cleanup-source"
           python3 scripts/test-macos-update.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --source-only
@@ -345,6 +358,15 @@ jobs:
           python3 scripts/test-branding.py
           dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart
           dart scripts/test-support-invite.dart
+      - name: Preserve Linux file-dialog lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: linux-file-dialog-lifecycle
+          path: ${{ runner.temp }}/mixel-file-dialog-lifecycle/
+          if-no-files-found: ignore
+          retention-days: 14
+
   macos-runtime-harness:
     runs-on: macos-14
     timeout-minutes: 90
@@ -385,6 +407,7 @@ jobs:
           python3 scripts/test-support-launch-macos-tray-controls.py
           python3 scripts/test-support-macos-termination-support.py --app "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf"
           python3 scripts/test-support-flutter-sdk-compatibility.py --app "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf"
+          python3 scripts/test-support-file-dialog-lifecycle.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --dart "$(command -v dart)" --output "$RUNNER_TEMP/mixel-file-dialog-lifecycle"
           python3 scripts/test-support-native-warnings.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --source-only --output "$RUNNER_TEMP/mixel-native-warning-source"
           python3 scripts/test-support-compiler-cleanup.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --source-only --output "$RUNNER_TEMP/mixel-compiler-cleanup-source"
           RUSTC_BIN="$(rustup which rustc)" python3 scripts/test-macos-update.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf"
@@ -431,6 +454,15 @@ jobs:
             macos-rdev-proof/native-harness/src/main.rs
             macos-rdev-proof/native-harness/original-owned-wrapper.rs
           if-no-files-found: warn
+
+      - name: Preserve Mac file-dialog lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: macos-file-dialog-lifecycle
+          path: ${{ runner.temp }}/mixel-file-dialog-lifecycle/
+          if-no-files-found: ignore
+          retention-days: 14
 
   session-directory-access-observation:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.session_directory_access_observation }}

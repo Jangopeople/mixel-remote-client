@@ -291,6 +291,7 @@ jobs:
           python3 scripts/test-support-launch-macos-tray-controls.py
           python3 scripts/test-support-macos-termination-support.py --app rustdesk
           python3 scripts/test-support-flutter-sdk-compatibility.py --app rustdesk --flutter "$(command -v flutter)"
+          python3 scripts/test-support-file-dialog-lifecycle.py --source rustdesk --dart "$(command -v dart)" --output "$RUNNER_TEMP/mixel-file-dialog-lifecycle"
           python3 scripts/test-support-native-warnings.py --source rustdesk --source-only --output "$RUNNER_TEMP/mixel-native-warning-source"
           python3 scripts/test-support-compiler-cleanup.py --source rustdesk --source-only --output "$RUNNER_TEMP/mixel-compiler-cleanup-source"
           python3 scripts/test-macos-update.py --source rustdesk --source-only
@@ -323,6 +324,15 @@ jobs:
           python3 scripts/test-branding.py
           dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart
           dart scripts/test-support-invite.dart
+
+      - name: Preserve Linux file-dialog lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: linux-file-dialog-lifecycle
+          path: ${{ runner.temp }}/mixel-file-dialog-lifecycle/
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Build (cargo + flutter via build.py)
         working-directory: rustdesk
@@ -574,6 +584,7 @@ jobs:
           python3 scripts/test-support-launch-macos-tray-controls.py
           python3 scripts/test-support-macos-termination-support.py --app rustdesk
           python3 scripts/test-support-flutter-sdk-compatibility.py --app rustdesk --flutter "$(command -v flutter)"
+          python3 scripts/test-support-file-dialog-lifecycle.py --source rustdesk --dart "$(command -v dart)" --output "$RUNNER_TEMP/mixel-file-dialog-lifecycle"
           python3 scripts/test-support-native-warnings.py --source rustdesk --source-only --output "$RUNNER_TEMP/mixel-native-warning-source"
           python3 scripts/test-support-compiler-cleanup.py --source rustdesk --source-only --output "$RUNNER_TEMP/mixel-compiler-cleanup-source"
           RUSTC_BIN="$(rustup which rustc)" python3 scripts/test-macos-update.py --source rustdesk
@@ -603,6 +614,15 @@ jobs:
           python3 scripts/test-branding.py
           dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart
           dart scripts/test-support-invite.dart
+
+      - name: Preserve Mac file-dialog lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: macos-file-dialog-lifecycle-${{ matrix.job.target }}
+          path: ${{ runner.temp }}/mixel-file-dialog-lifecycle/
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Build (cargo + flutter via build.py)
         working-directory: rustdesk
@@ -1131,6 +1151,18 @@ jobs:
           name: windows
           path: dist/
           if-no-files-found: error
+
+      - name: Preserve Windows file-dialog lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-file-dialog-lifecycle
+          path: |
+            ${{ runner.temp }}/mixel-file-dialog-lifecycle/*.log
+            ${{ runner.temp }}/mixel-file-dialog-lifecycle/*.json
+            ${{ runner.temp }}/mixel-file-dialog-lifecycle/actual-*.dart
+          if-no-files-found: ignore
+          retention-days: 14
 
   # ===========================================================================
   # Upload — R2, including stable customer-facing aliases.

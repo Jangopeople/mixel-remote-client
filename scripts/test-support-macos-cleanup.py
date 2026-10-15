@@ -170,6 +170,7 @@ def full_branding(out, files, source, bash=None):
                  "test-support-flutter-sdk-compatibility.py","test-support-flutter-analysis.py",
                  "test-support-macos-termination.py","test-support-macos-window.py",
                  "patch-support-file-transfer-window.py","test-support-file-transfer-window.py",
+                 "patch-support-file-dialog-lifecycle.py","test-support-file-dialog-lifecycle.py",
                  "patch-support-keyboard-default.py",
                  "patch-support-uinput-scroll.py",
                  "patch-support-uinput-device.py","test-support-uinput-device.py",

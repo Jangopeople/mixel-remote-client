@@ -13,6 +13,10 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / 'scripts'
+_lifecycle_spec = importlib.util.spec_from_file_location('mixel_lifecycle_workflow_projection', SCRIPTS / 'file_dialog_workflow_projection.py')
+_lifecycle_projection = importlib.util.module_from_spec(_lifecycle_spec)
+_lifecycle_spec.loader.exec_module(_lifecycle_projection)
+inverse_lifecycle_workflow_checks = _lifecycle_projection.inverse_lifecycle_workflow_checks
 DRIVER = SCRIPTS / 'observe-standard-valid-qa-windows.ps1'
 KNOWN = SCRIPTS / 'test-standard-qa-session-directory.cs'
 ORIGINAL = SCRIPTS / 'test-support-lease-standard-windows.ps1'
@@ -299,6 +303,7 @@ if($generated.IndexOf('Start-StandardValidQaNamespace') -lt 0 -or $generated.Ind
                          'e0b93f5d3b519877650e5cca61c37102c5f8897510d76fecfe8fd29867692126')
         self.assertEqual(hashlib.sha256((SCRIPTS / 'test-session-directory-access.cs').read_bytes()).hexdigest(), current.decode())
         workflow = (ROOT / '.github/workflows/preflight.yml').read_text()
+        workflow = inverse_lifecycle_workflow_checks(workflow, 'preflight.yml')
         workflow = inverse_windows_preflight_budget(workflow)
         workflow = inverse_windows_sdk_source_diagnostics(workflow, 'preflight.yml')
         workflow = inverse_uri_workflow_checks(workflow, 'preflight.yml')

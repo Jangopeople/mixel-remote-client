@@ -29,6 +29,10 @@ from unittest import mock
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parent.parent
+_lifecycle_spec = importlib.util.spec_from_file_location('mixel_lifecycle_workflow_projection', ROOT / 'scripts/file_dialog_workflow_projection.py')
+_lifecycle_projection = importlib.util.module_from_spec(_lifecycle_spec)
+_lifecycle_spec.loader.exec_module(_lifecycle_projection)
+inverse_lifecycle_workflow_checks = _lifecycle_projection.inverse_lifecycle_workflow_checks
 HELPER = ROOT / 'scripts/test-support-launch-macos-concurrency.py'
 BASE_WORKFLOW_HASH = '08abed8675c6206d56722af3a52b4ea3cc09c13d83838ed6b6443febb4c21018'
 ADDITIONS = (
@@ -876,8 +880,34 @@ class ConcurrencyControls(unittest.TestCase):
         # Canonicalizing the script root never relaxes individual source link refusal.
         self.assertIn('if path != path.resolve(strict=True):', HELPER.read_text())
 
+    def test_lifecycle_workflow_inverse_refuses_drift_missing_duplicate_moved_or_wrong_job(self):
+        for workflow in ('build.yml', 'preflight.yml'):
+            original = C.canonical((ROOT / '.github/workflows' / workflow).read_bytes()).decode()
+            projected = inverse_lifecycle_workflow_checks(original, workflow)
+            self.assertNotIn('file-dialog-lifecycle', projected)
+            for job, before, addition, after in _lifecycle_projection.lifecycle_workflow_projections(workflow):
+                exact = before + addition + after
+                changed = (addition.replace('--source ', '--source foreign ', 1)
+                           if '--source ' in addition else addition.replace('retention-days: 14', 'retention-days: 13', 1))
+                mutants = {
+                    'missing': original.replace(addition, '', 1),
+                    'duplicate': original.replace(addition, addition + addition, 1),
+                    'changed': original.replace(addition, changed, 1),
+                    'reordered': original.replace(exact, addition + before + after, 1),
+                    'moved': original.replace(addition, '', 1) + addition,
+                    'preceding-gate': original.replace(exact, before + '# foreign\n' + addition + after, 1),
+                    'following-gate': original.replace(exact, before + addition + '# foreign\n' + after, 1),
+                }
+                for mutation, text in mutants.items():
+                    with self.subTest(workflow=workflow, job=job, mutation=mutation):
+                        with self.assertRaises(AssertionError):
+                            inverse_lifecycle_workflow_checks(text, workflow)
+        with self.assertRaises(AssertionError):
+            inverse_lifecycle_workflow_checks('', 'foreign.yml')
+
     def test_workflow_whole_inverse_has_only_two_ordered_additions(self):
         value = C.canonical((ROOT / '.github/workflows/build.yml').read_bytes()).decode()
+        value = inverse_lifecycle_workflow_checks(value, 'build.yml')
         value = inverse_windows_sdk_source_diagnostics(value, 'build.yml')
         value = inverse_uri_workflow_checks(value, 'build.yml')
         value = inverse_uri_bridge_checks(value)
@@ -899,6 +929,7 @@ class ConcurrencyControls(unittest.TestCase):
 
     def test_preflight_wrapper_and_mandatory_source_command_exact_whole_inverse(self):
         text = C.canonical((ROOT / '.github/workflows/preflight.yml').read_bytes()).decode()
+        text = inverse_lifecycle_workflow_checks(text, 'preflight.yml')
         text = inverse_windows_preflight_budget(text)
         text = inverse_windows_sdk_source_diagnostics(text, 'preflight.yml')
         text = inverse_uri_workflow_checks(text, 'preflight.yml')

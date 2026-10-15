@@ -33,6 +33,10 @@ fi
 # shellcheck source=/dev/null
 source "$BRANDING/branding.env"
 
+# Validate the disjoint lifecycle pair without changing any source before the
+# complete prior-owner refusal gates. Reapplication at the end is idempotent.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-file-dialog-lifecycle.py" --root "$RDREPO" --check
+
 # Restore exact terminal URI routing before the native and earlier owner checks.
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-uri-routing.py" --root "$RDREPO" --restore --check --before-branding
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-uri-routing.py" --root "$RDREPO" --restore
@@ -1131,5 +1135,8 @@ python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-linux-child-window-close.p
 
 # Reserve support URI dispatch after every previous functional owner.
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-uri-routing.py" --root "$RDREPO" --after-branding
+
+# A file-transfer dialog completing after close must not restart its event loop.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-file-dialog-lifecycle.py" --root "$RDREPO"
 
 echo "✓ Branding applied — product identity is $APP_NAME only."
