@@ -138,7 +138,7 @@ jobs:
           retention-days: 7
 
   current77-arm-remaining-gates-private:
-    if: github.repository == 'Jangopeople/mixel-remote-client' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/current77-arm-remaining-gates' && github.run_attempt == 1
+    if: github.repository == 'Jangopeople/mixel-remote-client' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/current77-arm-remaining-gates-r2' && github.run_attempt == 1
     needs: static-controls
     runs-on: macos-14
     timeout-minutes: 30
@@ -176,7 +176,7 @@ jobs:
           python3 -B "$GITHUB_WORKSPACE/diagnostic-source/scripts/diagnose-current77-arm-remaining-gates.py" \
             --diagnostic-checkout "$GITHUB_WORKSPACE/diagnostic-source" \
             --producer-checkout "$GITHUB_WORKSPACE/producer-source" \
-            --gate "$GITHUB_WORKSPACE/diagnostic-source/verification/current77-arm-remaining-gates-private-gate.json" \
+            --gate "$GITHUB_WORKSPACE/diagnostic-source/verification/current77-arm-remaining-gates-r2-private-gate.json" \
             --destination "$RUNNER_TEMP/current77-arm-private-remaining-gates" \
             --safe-output "$GITHUB_WORKSPACE/current77-arm-remaining-safe-facts"
       - name: Retain only fixed private gate facts
@@ -187,6 +187,7 @@ jobs:
           path: |
             current77-arm-remaining-safe-facts/remaining-gates-validation-receipt.json
             current77-arm-remaining-safe-facts/warm-exit-observer-safe-facts.json
+            current77-arm-remaining-safe-facts/post-desktop-tray-admission-safe-facts.json
             current77-arm-remaining-safe-facts/original-tray-safe-facts.json
             current77-arm-remaining-safe-facts/original-concurrency-safe-facts.json
           if-no-files-found: warn

@@ -4,6 +4,10 @@ import argparse
 import contextlib
 import hashlib
 import json
+import math
+import re
+import socket
+import stat
 import os
 from pathlib import Path
 import subprocess
@@ -19,9 +23,9 @@ BASE = "scripts/diagnose-current77-arm-warm-exit.py"
 BASE_SHA = "30271d30fb3130d60e0aa790cbbb7724715b7b73de62b189e66d6bccc40d64cc"
 PARSER = "scripts/diagnose-macos-concurrency-failed-intel.py"
 PARSER_SHA = "45ff48039eafb005475340c68b9bb49a4596a577d5384c800a9da788aae98958"
-BRANCH = "codex/current77-arm-remaining-gates"
-GATE = "verification/current77-arm-remaining-gates-private-gate.json"
-SCOPE = "current77-failed-arm-remaining-gates-private-only"
+BRANCH = "codex/current77-arm-remaining-gates-r2"
+GATE = "verification/current77-arm-remaining-gates-r2-private-gate.json"
+SCOPE = "current77-failed-arm-remaining-gates-r2-private-only"
 CURRENT_FILES = {
     ".github/workflows/diagnose-macos-failed-app.yml": "561a113179fa036895ee6906e99e5b9a95241fb5e3c983ed77347103ac51c504",
     "scripts/current77-arm-warmexit-observed-records.json": "603f029be552a651ac1cabf9686ffbe8bbc874bb50bd5db439bf782a8cc7e795",
@@ -132,14 +136,142 @@ def original_child(base, producer, arguments, private, label, timeout):
     return result.returncode, output_hashes(base, stdout, stderr)
 
 
+def endpoint_snapshot(path, marker, expected_pid, base):
+    row = {"exists": False, "kind": "absent", "uidMatchesCurrent": None,
+           "stable": True, "markerPid": None, "markerMatchesOwnedColdPid": None}
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return row, None
+    except OSError:
+        row.update(kind="unavailable", stable=False)
+        return row, None
+    identity = (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_nlink, info.st_size, info.st_mtime_ns)
+    kind = ("socket" if stat.S_ISSOCK(info.st_mode) else "regular" if stat.S_ISREG(info.st_mode)
+            else "symlink" if stat.S_ISLNK(info.st_mode) else "directory" if stat.S_ISDIR(info.st_mode) else "other")
+    row.update(exists=True, kind=kind, uidMatchesCurrent=info.st_uid == os.getuid())
+    if marker and kind == "regular" and row["uidMatchesCurrent"] and info.st_nlink == 1:
+        try:
+            raw = base.read(path, 64)
+            if re.fullmatch(rb"[1-9][0-9]{0,9}\n?", raw) and int(raw) < 2**31:
+                row["markerPid"] = int(raw)
+                row["markerMatchesOwnedColdPid"] = type(expected_pid) is int and int(raw) == expected_pid
+        except (OSError, RuntimeError, ValueError):
+            row["stable"] = False
+    return row, identity
+
+
+def socket_inactivity(path, row):
+    if not row["exists"]:
+        return "not-present" if row["kind"] == "absent" else "unavailable"
+    if row["kind"] != "socket" or not row["uidMatchesCurrent"]:
+        return "unsafe-not-connected"
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            connection.settimeout(1)
+            try:
+                connection.connect(str(path))
+            except FileNotFoundError:
+                return "not-found"
+            except ConnectionRefusedError:
+                return "connection-refused"
+        return "active"
+    except OSError:
+        return "other-connect-error"
+
+
+def post_desktop_preconditions(base, parser, tray, app, private, safe, receipt):
+    """Observe only; admit exactly the frozen tray socket contract, never clean."""
+    facts = {"schema": 1, "scope": SCOPE + "/post-desktop-tray-admission", "admitted": False,
+        "customerAppQualified": False, "publication": False, "cleanupPerformed": False,
+        "ownedColdRuntimeVerified": False, "ownedColdPid": None, "ownedColdLaunchTime": None,
+        "originalRuntimeSha256": None, "liveMixelRolePids": [], "processInventoryVerified": False,
+        "endpoints": {}, "frozenTrayPreconditions": {"incoming": False, "url": False}}
+    error = None
+    try:
+        try:
+            raw = base.read(private / "runtime/runtime.json", 12 * 1024 * 1024)
+            facts["originalRuntimeSha256"] = base.sha(raw)
+            runtime = base.unique_json(raw)
+            base.require_identity(runtime, {"schema": 1, "scope": "macos-launch-smoke-diagnostic-not-customer-release",
+                "outcome": "success", "privacy_check_passed": True, "customer_app_qualified": False,
+                "screen_control_qualified": False, "publication": False, "bundle_path": str(app),
+                "executable_path": str(app / "Contents/MacOS/Mixel-Remote"), "executable_sha256": base.EXECUTABLE_SHA},
+                "post-desktop-owned-runtime-identity")
+            pid, launch = runtime.get("owned_pid"), runtime.get("owned_launch_time")
+            base.require(type(pid) is int and 1 < pid < 2**31 and type(launch) in (int, float)
+                and math.isfinite(launch) and launch > 0, "post-desktop-owned-cold-identity")
+            events = runtime.get("events")
+            base.require(isinstance(events, list) and len(events) <= 4096
+                and all(isinstance(e, dict) for e in events), "post-desktop-owned-events")
+            cold = [e for e in events if e.get("event") == "owned-application-launched"]
+            base.require(len(cold) == 1 and cold[0].get("phase") == "cold-url-launch"
+                and type(cold[0].get("pid")) is int and cold[0]["pid"] == pid, "post-desktop-cold-event-binding")
+            cleanup = runtime.get("cleanup")
+            base.require(isinstance(cleanup, dict) and cleanup.get("process") in
+                ("already-exited", "already-terminated", "terminated-owned-application")
+                and cleanup.get("endpoint") in ("absent", "removed-owned-endpoint")
+                and not any(k.endswith("_error") for k in cleanup), "post-desktop-original-cleanup-failed")
+            facts.update(ownedColdRuntimeVerified=True, ownedColdPid=pid, ownedColdLaunchTime=launch)
+        except (OSError, RuntimeError, ValueError, TypeError):
+            error = "post-desktop-owned-runtime-not-proven"
+        try:
+            pids = parser.process_inventory()
+            valid = isinstance(pids, list) and len(pids) <= 256 and all(type(pid) is int and 0 < pid < 2**31 for pid in pids)
+            facts["processInventoryVerified"] = valid
+            facts["liveMixelRolePids"] = pids if valid else []
+            if not valid or pids: error = error or "post-desktop-live-role-or-inventory-refused"
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
+            error = error or "post-desktop-process-inventory-unavailable"
+        paths = {"incoming": tray.unix.IPC_PATH, "url": tray.URL_SOCKET}
+        observed = {}
+        for label, endpoint in paths.items():
+            for marker, path, key in ((False, endpoint, label), (True, endpoint.with_suffix(".pid"), label + "Marker")):
+                row, identity = endpoint_snapshot(path, marker, facts["ownedColdPid"], base)
+                if not marker:
+                    row["kernelConnectResult"] = socket_inactivity(path, row)
+                facts["endpoints"][key] = row
+                observed[key] = (path, marker, identity)
+        # These are the exact next original fixture's preconditions. They only
+        # inspect/connect; no deletion, signalling or replacement is introduced.
+        for label, endpoint in paths.items():
+            try:
+                tray.endpoint_inactive(endpoint)
+                facts["frozenTrayPreconditions"][label] = True
+            except (OSError, RuntimeError, ValueError):
+                error = error or "post-desktop-original-tray-precondition-refused"
+        for key, (path, marker, identity) in observed.items():
+            row = facts["endpoints"][key]
+            after, after_identity = endpoint_snapshot(path, marker, facts["ownedColdPid"], base)
+            row["stable"] = row["stable"] and after["stable"] and identity == after_identity
+            if not row["stable"] or row["kind"] == "unavailable":
+                error = error or "post-desktop-endpoint-changed-or-unavailable"
+            if row["exists"]:
+                if not row["uidMatchesCurrent"] or row["kind"] != ("regular" if marker else "socket"):
+                    error = error or "post-desktop-endpoint-type-or-owner-refused"
+                elif marker and row["markerMatchesOwnedColdPid"] is not True:
+                    error = error or "post-desktop-marker-not-owned-cold-pid"
+                elif not marker and row["kernelConnectResult"] != "connection-refused":
+                    error = error or "post-desktop-socket-not-stably-inactive"
+        facts["admitted"] = error is None
+        if error: facts["refusalCategory"] = error
+    finally:
+        base.write(safe / "post-desktop-tray-admission-safe-facts.json", facts)
+        receipt["postDesktopAdmission"] = {"admitted": facts["admitted"],
+            "ownedColdPid": facts["ownedColdPid"], "originalRuntimeSha256": facts["originalRuntimeSha256"],
+            "noLiveMixelRoleVerified": facts["processInventoryVerified"] and not facts["liveMixelRolePids"]}
+    base.require(facts["admitted"], error or "post-desktop-admission-unavailable")
+    return facts
+
+
 def run_gates(base, support, parser, concurrency, observer, producer, app, nested, private, safe, receipt):
     receipt["phase"] = "original-desktop"
     code, hashes = original_desktop(base, concurrency, observer, app, nested, private)
     receipt["desktop"] = {"originalExitCode": code, "privateOutput": hashes}
     base.retain_observation(private, safe, app, receipt["desktop"], code, hashes)
     base.require(code == 0, "original-desktop-failed-later-gates-prohibited")
-    parser.stopped_runtime()
-    receipt["desktop"]["allRoleAndEndpointAbsenceVerified"] = True
+    post_desktop_preconditions(base, parser, concurrency.tray, app, private, safe, receipt["desktop"])
+    receipt["desktop"]["originalTrayPreconditionsVerified"] = True
 
     receipt["phase"] = "original-tray"
     tray_root = private / "tray"

@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -131,7 +132,7 @@ class RemainingGateControls(unittest.TestCase):
         for forbidden in ("create-dmg", "notarize", "upload-r2", "*.json", "stdout", "stderr", "include-hidden-files: true"):
             self.assertNotIn(forbidden, job)
         paths = job.split("          path: |\n", 1)[1].split("          if-no-files-found:", 1)[0]
-        self.assertEqual(len(paths.splitlines()), 4)
+        self.assertEqual(len(paths.splitlines()), 5)
         self.assertIn("original-concurrency-safe-facts.json", paths)
 
     def test_missing_gate_actual_cli_precedes_host_provider_native_and_output(self):
@@ -218,7 +219,144 @@ class RemainingGateControls(unittest.TestCase):
         child.assert_called_once(); self.assertEqual(code, 1)
         self.assertTrue(all(row["bytes"] == 0 for row in hashes.values()))
 
-    def exercise_gates(self, *, desktop_code=0, tray_code=0, concurrency_code=0, mutate_tray=None, mutate_concurrency=None, cleanup_error_at=None):
+    def admission_fixture(self, private, app):
+        directory = private / "runtime"; directory.mkdir(parents=True)
+        runtime = {"schema": 1, "scope": "macos-launch-smoke-diagnostic-not-customer-release",
+            "outcome": "success", "privacy_check_passed": True, "customer_app_qualified": False,
+            "screen_control_qualified": False, "publication": False, "bundle_path": str(app),
+            "executable_path": str(app / "Contents/MacOS/Mixel-Remote"), "executable_sha256": b.EXECUTABLE_SHA,
+            "owned_pid": 300, "owned_launch_time": 1792089000.25,
+            "events": [{"event": "owned-application-launched", "phase": "cold-url-launch", "pid": 300}],
+            "cleanup": {"process": "terminated-owned-application", "endpoint": "removed-owned-endpoint"}}
+        (directory / "runtime.json").write_text(json.dumps(runtime))
+        return runtime
+
+    @contextlib.contextmanager
+    def admission_environment(self, *, sockets=("url",), markers=(), active=False, wrong_owner=False, wrong_marker=False, wrong_type=False):
+        # These are regular temporary placeholder files, never actual sockets.
+        # Only the exact frozen lstat/connect observations use test stand-ins.
+        endpoint_root = self.root / "source-derived-endpoints"; endpoint_root.mkdir()
+        incoming, url = endpoint_root / "ipc", endpoint_root / "ipc_url"
+        wrapper = b.module(ROOT / "scripts/test-support-launch-macos-concurrency.py",
+                           b.FROZEN["scripts/test-support-launch-macos-concurrency.py"])
+        tray = wrapper.tray
+        paths = {"incoming": incoming, "url": url}
+        for name in sockets: paths[name].write_bytes(b"not-a-real-socket")
+        for name in markers: paths[name].with_suffix(".pid").write_text("301\n" if wrong_marker else "300\n")
+        original = Path.lstat
+        def lstat(path, *args, **kwargs):
+            info = original(path, *args, **kwargs)
+            if path in [paths[name] for name in sockets]:
+                return types.SimpleNamespace(st_dev=info.st_dev, st_ino=info.st_ino,
+                    st_mode=(stat.S_IFREG if wrong_type else stat.S_IFSOCK) | 0o600, st_uid=os.getuid() + 1 if wrong_owner else os.getuid(),
+                    st_nlink=1, st_size=0, st_mtime_ns=info.st_mtime_ns)
+            return info
+        connection = Mock()
+        connection.connect.side_effect = None if active else ConnectionRefusedError(61, "synthetic inactive")
+        factory = Mock(); factory.return_value.__enter__ = Mock(return_value=connection)
+        factory.return_value.__exit__ = Mock(return_value=False)
+        with patch.object(tray, "unix", types.SimpleNamespace(IPC_PATH=incoming)), patch.object(tray, "URL_SOCKET", url), \
+             patch.object(Path, "lstat", new=lstat), patch.object(v.socket, "socket", new=factory):
+            yield tray, connection
+
+    def actual_admission(self, tray, *, pids=(), mutate_runtime=None, inventory_error=None):
+        private = self.root / "private-admission"; private.mkdir()
+        safe = self.root / "safe-admission"; safe.mkdir()
+        app = self.root / "Mixel-Remote.app"
+        runtime = self.admission_fixture(private, app)
+        if mutate_runtime:
+            mutate_runtime(runtime)
+            (private / "runtime/runtime.json").write_text(json.dumps(runtime))
+        receipt = {}; parser = types.SimpleNamespace(process_inventory=Mock(side_effect=inventory_error) if inventory_error else Mock(return_value=list(pids)))
+        try:
+            facts = v.post_desktop_preconditions(b, parser, tray, app, private, safe, receipt)
+            error = None
+        except Exception as e:
+            error = e
+            facts = json.loads((safe / "post-desktop-tray-admission-safe-facts.json").read_bytes())
+        self.assertEqual(facts, json.loads((safe / "post-desktop-tray-admission-safe-facts.json").read_bytes()))
+        self.assertFalse(facts["cleanupPerformed"])
+        self.assertNotIn(str(self.root), json.dumps(facts))
+        return facts, receipt, error
+
+    def test_postdesktop_legitimate_inactive_url_without_marker_follows_original_contract(self):
+        with self.admission_environment() as (tray, connection):
+            facts, receipt, error = self.actual_admission(tray)
+        self.assertIsNone(error); self.assertTrue(facts["admitted"])
+        self.assertEqual(facts["endpoints"]["url"]["kernelConnectResult"], "connection-refused")
+        self.assertEqual(facts["endpoints"]["urlMarker"]["kind"], "absent")
+        self.assertEqual(facts["frozenTrayPreconditions"], {"incoming": True, "url": True})
+        self.assertEqual(facts["ownedColdPid"], 300)
+        self.assertEqual(connection.connect.call_count, 2)
+
+    def test_postdesktop_owned_inactive_endpoints_and_present_markers_bind_cold_pid(self):
+        with self.admission_environment(sockets=("incoming", "url"), markers=("incoming", "url")) as (tray, connection):
+            facts, receipt, error = self.actual_admission(tray)
+        self.assertIsNone(error)
+        for name in ("incomingMarker", "urlMarker"):
+            self.assertEqual(facts["endpoints"][name]["markerPid"], 300)
+            self.assertTrue(facts["endpoints"][name]["markerMatchesOwnedColdPid"])
+
+    def test_postdesktop_all_absent_original_preconditions_are_admitted(self):
+        with self.admission_environment(sockets=()) as (tray, connection):
+            facts, receipt, error = self.actual_admission(tray)
+        self.assertIsNone(error); self.assertTrue(facts["admitted"]); connection.connect.assert_not_called()
+
+    def test_postdesktop_active_url_refuses_with_actual_operand_witness(self):
+        with self.admission_environment(active=True) as (tray, connection):
+            facts, receipt, error = self.actual_admission(tray)
+        self.assertIsNotNone(error); self.assertFalse(facts["admitted"])
+        self.assertEqual(facts["endpoints"]["url"]["kernelConnectResult"], "active")
+        self.assertFalse(facts["frozenTrayPreconditions"]["url"])
+
+    def test_postdesktop_wrong_endpoint_type_refuses_without_connecting(self):
+        with self.admission_environment(wrong_type=True) as (tray, connection):
+            facts, receipt, error = self.actual_admission(tray)
+        self.assertIsNotNone(error); self.assertEqual(facts["endpoints"]["url"]["kind"], "regular")
+        connection.connect.assert_not_called()
+
+    def test_postdesktop_process_inventory_timeout_retains_endpoint_witness(self):
+        with self.admission_environment() as (tray, connection):
+            facts, receipt, error = self.actual_admission(tray, inventory_error=subprocess.TimeoutExpired("private path", 120))
+        self.assertIsNotNone(error); self.assertFalse(facts["processInventoryVerified"])
+        self.assertEqual(set(facts["endpoints"]), {"incoming", "incomingMarker", "url", "urlMarker"})
+        self.assertNotIn("private path", json.dumps(facts))
+
+    def test_postdesktop_wrong_socket_owner_refuses_without_connecting(self):
+        with self.admission_environment(wrong_owner=True) as (tray, connection):
+            facts, receipt, error = self.actual_admission(tray)
+        self.assertIsNotNone(error); self.assertFalse(facts["endpoints"]["url"]["uidMatchesCurrent"])
+        connection.connect.assert_not_called()
+
+    def test_postdesktop_wrong_marker_refuses_and_preserves_exact_pid_witness(self):
+        with self.admission_environment(markers=("url",), wrong_marker=True) as (tray, connection):
+            facts, receipt, error = self.actual_admission(tray)
+        self.assertIsNotNone(error); self.assertFalse(facts["admitted"])
+        self.assertEqual(facts["endpoints"]["urlMarker"]["markerPid"], 301)
+        self.assertFalse(facts["endpoints"]["urlMarker"]["markerMatchesOwnedColdPid"])
+
+    def test_postdesktop_other_live_role_refuses_with_safe_pid_inventory(self):
+        with self.admission_environment() as (tray, connection):
+            facts, receipt, error = self.actual_admission(tray, pids=(400,))
+        self.assertIsNotNone(error); self.assertEqual(facts["liveMixelRolePids"], [400])
+        self.assertFalse(receipt["postDesktopAdmission"]["noLiveMixelRoleVerified"])
+
+    def test_postdesktop_runtime_identity_mutant_refuses_but_retains_endpoints(self):
+        with self.admission_environment() as (tray, connection):
+            facts, receipt, error = self.actual_admission(tray, mutate_runtime=lambda r: r.update(owned_pid=301))
+        self.assertIsNotNone(error); self.assertFalse(facts["ownedColdRuntimeVerified"])
+        self.assertEqual(set(facts["endpoints"]), {"incoming", "incomingMarker", "url", "urlMarker"})
+        self.assertIsNotNone(facts["originalRuntimeSha256"])
+
+    def test_postdesktop_corrected_admission_advances_original_tray_exactly_once(self):
+        with self.admission_environment(markers=("url",)) as (tray, connection):
+            calls, receipt, safe, error, stopped = self.exercise_gates(real_admission=True, tray_module=tray)
+        self.assertIsNone(error); self.assertEqual(calls, ["desktop", "tray", "concurrency"])
+        self.assertEqual(calls.count("tray"), 1); self.assertEqual(stopped, 2)
+        self.assertTrue(receipt["desktop"]["postDesktopAdmission"]["admitted"])
+        self.assertTrue(receipt["allOriginalGatesPassed"])
+
+    def exercise_gates(self, *, desktop_code=0, tray_code=0, concurrency_code=0, mutate_tray=None, mutate_concurrency=None, cleanup_error_at=None, real_admission=False, tray_module=None):
         support, parser = self.parser(); tray, full = self.native_facts(parser)
         if mutate_tray: mutate_tray(tray)
         if mutate_concurrency: mutate_concurrency(full)
@@ -230,16 +368,20 @@ class RemainingGateControls(unittest.TestCase):
             filename = "tray-runtime-safe-facts.json" if label == "tray" else "concurrency-runtime-safe-facts.json"
             (directory / filename).write_text(json.dumps(tray if label == "tray" else full))
             return (tray_code if label == "tray" else concurrency_code), {"stdout": {}, "stderr": {}}
-        def desktop(*args): calls.append("desktop"); return desktop_code, {}
+        def desktop(*args):
+            calls.append("desktop")
+            if real_admission: self.admission_fixture(private, self.root / "Mixel-Remote.app")
+            return desktop_code, {}
+        actual_precondition = v.post_desktop_preconditions
         cleanup_count = 0
         def stopped():
             nonlocal cleanup_count
             cleanup_count += 1
             if cleanup_count == cleanup_error_at: raise RuntimeError("runtime-cleanup-absence-not-proven")
         with patch.object(v, "original_desktop", side_effect=desktop), patch.object(v, "original_child", side_effect=child), \
-             patch.object(b, "retain_observation", return_value={}), patch.object(parser, "stopped_runtime", side_effect=stopped):
+             patch.object(b, "retain_observation", return_value={}), patch.object(v, "post_desktop_preconditions", side_effect=lambda *args: actual_precondition(*args) if real_admission else {}), patch.object(parser, "process_inventory", return_value=[]), patch.object(parser, "stopped_runtime", side_effect=stopped):
             try:
-                v.run_gates(b, support, parser, object(), object(), ROOT, self.root / "Mixel-Remote.app",
+                v.run_gates(b, support, parser, types.SimpleNamespace(tray=tray_module), object(), ROOT, self.root / "Mixel-Remote.app",
                             self.root / "signed-stapled-diagnostic-app.zip", private, safe, receipt)
                 error = None
             except Exception as e: error = e
@@ -247,7 +389,7 @@ class RemainingGateControls(unittest.TestCase):
 
     def test_original_three_gates_exact_order_success_and_all_role_checks(self):
         calls, receipt, safe, error, stopped = self.exercise_gates()
-        self.assertIsNone(error); self.assertEqual(calls, ["desktop", "tray", "concurrency"]); self.assertEqual(stopped, 3)
+        self.assertIsNone(error); self.assertEqual(calls, ["desktop", "tray", "concurrency"]); self.assertEqual(stopped, 2)
         self.assertTrue(receipt["allOriginalGatesPassed"])
         for key in ("tray", "concurrency"): self.assertFalse(receipt[key]["kernelExitStatusObserved"])
         facts = json.loads((safe / "original-concurrency-safe-facts.json").read_bytes())
@@ -298,7 +440,7 @@ class RemainingGateControls(unittest.TestCase):
         self.assertFalse(receipt["allOriginalGatesPassed"])
 
     def test_role_or_endpoint_absence_failure_stops_later_gates(self):
-        calls, receipt, safe, error, stopped = self.exercise_gates(cleanup_error_at=2)
+        calls, receipt, safe, error, stopped = self.exercise_gates(cleanup_error_at=1)
         self.assertEqual(calls, ["desktop", "tray"]); self.assertIsNotNone(error)
         self.assertFalse(receipt["allOriginalGatesPassed"])
 
