@@ -33,6 +33,14 @@ fi
 # shellcheck source=/dev/null
 source "$BRANDING/branding.env"
 
+# Restore native child lifetime before the Dart and earlier owner checks.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-linux-child-window-close.py" --root "$RDREPO" --restore --check --before-branding
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-linux-child-window-close.py" --root "$RDREPO" --restore
+
+# Restore the exact Linux terminal-close layer before previous owner checks.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-linux-window-close.py" --root "$RDREPO" --restore --check --before-branding
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-linux-window-close.py" --root "$RDREPO" --restore
+
 # Validate/invert the exact final launch layer before any previous owner writes.
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-gui-launch.py" --root "$RDREPO" --restore --check --before-branding
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-gui-launch.py" --root "$RDREPO" --restore
@@ -1110,5 +1118,11 @@ python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-url-log-privacy.py" --root
 
 # Launch ownership is the final reversible functional layer.
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-gui-launch.py" --root "$RDREPO" --after-branding
+
+# Final Linux callbacks must not access a destroyed terminal main window.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-linux-window-close.py" --root "$RDREPO" --after-branding
+
+# Child close callbacks must release their hooks and finish all reads before destruction.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-linux-child-window-close.py" --root "$RDREPO" --after-branding
 
 echo "✓ Branding applied — product identity is $APP_NAME only."

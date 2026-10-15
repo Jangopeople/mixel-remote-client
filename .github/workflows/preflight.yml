@@ -328,6 +328,8 @@ jobs:
           python3 scripts/test-support-macos.py
           python3 scripts/test-support-macos-window.py
           python3 scripts/test-support-macos-cleanup.py --dart "$(command -v dart)" --flutter "$(command -v flutter)"
+          python3 scripts/test-support-linux-window-close.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --dart "$(command -v dart)"
+          python3 scripts/test-support-linux-child-window-close.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --output "$RUNNER_TEMP/mixel-linux-child-close"
           python3 scripts/test-support-wakelock.py
           python3 scripts/test-branding.py
           dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart
@@ -390,6 +392,10 @@ jobs:
         run: python3 scripts/test-support-macos-window.py --native --flutter-framework "$MIXEL_FLUTTER_FRAMEWORK"
       - name: Prove awaited Mac page and terminal cleanup with real Flutter widgets
         run: python3 scripts/test-support-macos-cleanup.py --dart "$(command -v dart)" --flutter "$(command -v flutter)"
+      - name: Prove Linux terminal-close futures and conserved nonfinal window paths
+        run: python3 scripts/test-support-linux-window-close.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --dart "$(command -v dart)"
+      - name: Prove Linux child close ownership and mouse-hook cleanup
+        run: python3 scripts/test-support-linux-child-window-close.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --output "$RUNNER_TEMP/mixel-linux-child-close"
       - name: Prove bounded main-engine Quit and owned resource cleanup
         run: python3 scripts/test-support-macos-termination.py --flutter "$(command -v flutter)" --framework "$MIXEL_FLUTTER_FRAMEWORK"
       - name: Exercise native macOS URL activation and window probe self-tests

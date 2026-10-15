@@ -72,6 +72,22 @@ def startup_baseline(source):
     This projection never accepts an unpinned input or changes supplied source.
     """
     source = Path(source).resolve()
+    native_spec = importlib.util.spec_from_file_location("mixel_fixture_linux_child_close", ROOT / "scripts/patch-support-linux-child-window-close.py")
+    native_close = importlib.util.module_from_spec(native_spec)
+    native_spec.loader.exec_module(native_close)
+    if native_close.has_layer(source):
+        with native_close.previous(source) as previous:
+            with startup_baseline(previous) as checked:
+                yield checked
+        return
+    linux_spec = importlib.util.spec_from_file_location("mixel_fixture_linux_close", ROOT / "scripts/patch-support-linux-window-close.py")
+    linux_close = importlib.util.module_from_spec(linux_spec)
+    linux_spec.loader.exec_module(linux_close)
+    if linux_close.has_layer(source):
+        with linux_close.previous(source) as previous:
+            with startup_baseline(previous) as checked:
+                yield checked
+        return
     launch_spec = importlib.util.spec_from_file_location("mixel_fixture_launch", ROOT / "scripts/patch-support-macos-gui-launch.py")
     launch = importlib.util.module_from_spec(launch_spec)
     launch_spec.loader.exec_module(launch)
@@ -489,6 +505,59 @@ def dependency_profile(out,dependency,setting,label):
     },sort_keys=True,indent=2)+"\n",encoding="utf-8")
 
 
+def common_drift_controls(out, repo, copied, bash, script, env, label):
+    supplied_before = snapshot(repo)
+    try:
+        name = "flutter/lib/common.dart"
+        target = repo / name
+        saved = target.read_bytes()
+        try:
+            target.write_bytes(saved + b"// unapproved drift\n")
+            before = snapshot(repo)
+            failed = run([bash,script.as_posix()], out, "pipeline-"+label+"-refusal", cwd=copied, env=env, success=False)
+            # The final Linux owner now verifies this entire file before earlier owners.
+            assert_pipeline_refusal(failed, "Pinned or partial Linux close profile changed")
+            assert snapshot(repo) == before, "Drift refusal changed another pipeline file"
+        finally:
+            target.write_bytes(saved)
+
+        native_spec = importlib.util.spec_from_file_location("mixel_drift_native_close", ROOT / "scripts/patch-support-linux-child-window-close.py")
+        native = importlib.util.module_from_spec(native_spec)
+        native_spec.loader.exec_module(native)
+        # Separately retain the original Mac startup refusal behind exact inverses.
+        with native.previous(repo) as without_native:
+            linux = native.prior_namespace()
+            with linux["previous"](without_native) as previous:
+                body = script.read_text(encoding="utf-8")
+                lines = body.splitlines(keepends=True)
+                removed = [line for line in lines if '/patch-support-linux-window-close.py"' in line or '/patch-support-linux-child-window-close.py"' in line]
+                prefix = 'python3 "$(dirname "${BASH_SOURCE[0]}")/'
+                expected = [prefix + helper + '" --root "$RDREPO" ' + flags + '\n'
+                            for helper, flags in (
+                                ("patch-support-linux-child-window-close.py", "--restore --check --before-branding"),
+                                ("patch-support-linux-child-window-close.py", "--restore"),
+                                ("patch-support-linux-window-close.py", "--restore --check --before-branding"),
+                                ("patch-support-linux-window-close.py", "--restore"),
+                                ("patch-support-linux-window-close.py", "--after-branding"),
+                                ("patch-support-linux-child-window-close.py", "--after-branding"))]
+                assert removed == expected and all(lines.count(line) == 1 for line in expected), "Exact final owner command inventory changed"
+                legacy_script = copied / "scripts" / ("prior-startup-refusal-"+label+".sh")
+                legacy_script.write_text("".join(line for line in lines if line not in removed), encoding="utf-8", newline="")
+                prior_target = previous / name
+                prior_saved = prior_target.read_bytes()
+                try:
+                    prior_target.write_bytes(prior_saved + b"// unapproved drift\n")
+                    before = snapshot(previous)
+                    failed = run([bash,legacy_script.as_posix()], out, "pipeline-"+label+"-prior-startup-refusal", cwd=copied,
+                                 env=dict(env, RDREPO=previous.as_posix()), success=False)
+                    assert_pipeline_refusal(failed, "Pinned Mac startup input digest mismatch; refusing all writes")
+                    assert snapshot(previous) == before, "Prior startup refusal changed another pipeline file"
+                finally:
+                    prior_target.write_bytes(prior_saved)
+    finally:
+        assert snapshot(repo) == supplied_before, "Drift controls changed supplied source bytes"
+
+
 def pipeline(out,source,bash):
     copied=out/"pipeline-source"
     copied.mkdir()
@@ -525,6 +594,8 @@ def pipeline(out,source,bash):
                  "patch-support-native-warnings.py","test-support-native-warnings.py",
                  "patch-support-compiler-cleanup.py","test-support-compiler-cleanup.py",
                  "patch-support-macos-gui-launch.py","test-support-macos-gui-launch.py","support-macos-gui-launch.rs",
+                 "patch-support-linux-window-close.py","test-support-linux-window-close.py",
+                 "patch-support-linux-child-window-close.py","test-support-linux-child-window-close.py",
                  "patch-support-fingerprint.py","test-support-fingerprint.py",
                  "patch-support-fatal-crash.py","test-support-fatal-crash.py",
                  "patch-macos-startup.py","test-macos-startup.py","test-macos-startup-ui.dart","macos-startup-failure.dart",
@@ -684,13 +755,7 @@ def pipeline(out,source,bash):
         name="flutter/lib/common.dart"
         target=repo/name
         saved=target.read_bytes()
-        target.write_bytes(saved+b"// unapproved drift\n")
-        before=snapshot(repo)
-        failed=run([bash,script.as_posix()],out,"pipeline-"+label+"-refusal",cwd=copied,env=env,success=False)
-        marker="Pinned Mac startup input digest mismatch; refusing all writes"
-        assert_pipeline_refusal(failed,marker)
-        assert snapshot(repo)==before,"Drift refusal changed another pipeline file"
-        target.write_bytes(saved)
+        common_drift_controls(out, repo, copied, bash, script, env, label)
         if app_newlines=="lf":
             canonical=T.regular(repo/"flutter/.mixel-dependencies/macos_application_exit",name)
             common=canonical
