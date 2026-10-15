@@ -170,6 +170,16 @@ jobs:
           RDREPO: ./rustdesk
           AOM_INCLUDE_DIR: ${{ github.workspace }}/native-aom-headers
         run: bash scripts/test-windows-generated-source.sh
+      - name: Preserve Windows SDK source diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-sdk-source-diagnostics
+          path: |
+            ${{ runner.temp }}/mixel-sdk-source/*.log
+            ${{ runner.temp }}/mixel-sdk-source/*.timing.json
+          if-no-files-found: ignore
+          retention-days: 14
       - uses: actions/upload-artifact@v6
         if: always()
         with:

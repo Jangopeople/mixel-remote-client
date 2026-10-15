@@ -85,6 +85,25 @@ def uri_workflow_projections(workflow):
     return projections
 
 
+WINDOWS_SDK_SOURCE_DIAGNOSTICS_UPLOAD = '      - name: Preserve Windows SDK source diagnostics\n        if: always()\n        uses: actions/upload-artifact@v6\n        with:\n          name: windows-sdk-source-diagnostics\n          path: |\n            ${{ runner.temp }}/mixel-sdk-source/*.log\n            ${{ runner.temp }}/mixel-sdk-source/*.timing.json\n          if-no-files-found: ignore\n          retention-days: 14\n'
+WINDOWS_SDK_SOURCE_DIAGNOSTICS_CONTEXTS = {'build.yml': ('windows', '      - name: Preflight generated support source and reporter\n        id: preflight\n        continue-on-error: ${{ needs.config.outputs.collect_windows_preflight_failure == \'true\' }}\n        shell: bash\n        env:\n          MIXEL_HOSTED_OWNED_QA_NAMESPACE: "1"\n          VCPKG_ROOT: ${{ github.workspace }}/vcpkg\n          RDREPO: ./rustdesk\n          MIXEL_SDK_FULL_APP_PREFLIGHT: "true"\n        run: bash scripts/test-windows-generated-source.sh\n', '\n      - name: Build (cargo + flutter via build.py)\n'), 'preflight.yml': ('windows-packaging', '      - name: Exercise complete Windows generated source, keep-awake and native branding\n        shell: bash\n        env:\n          MIXEL_HOSTED_OWNED_QA_NAMESPACE: "1"\n          RDREPO: ./rustdesk\n          AOM_INCLUDE_DIR: ${{ github.workspace }}/native-aom-headers\n        run: bash scripts/test-windows-generated-source.sh\n', '      - uses: actions/upload-artifact@v6\n')}
+
+def inverse_windows_sdk_source_diagnostics(text, workflow):
+    if workflow not in WINDOWS_SDK_SOURCE_DIAGNOSTICS_CONTEXTS:
+        raise AssertionError('Unknown Windows SDK diagnostics workflow')
+    job, before, after = WINDOWS_SDK_SOURCE_DIAGNOSTICS_CONTEXTS[workflow]
+    marker = '\n  ' + job + ':\n'
+    if text.count(marker) != 1 or text.count(WINDOWS_SDK_SOURCE_DIAGNOSTICS_UPLOAD) != 1:
+        raise AssertionError('Changed, missing or duplicate Windows SDK diagnostics upload')
+    start = text.index(marker)
+    tail = text[start + len(marker):]
+    match = re.search(r'\n  [A-Za-z][A-Za-z0-9_-]*:\n', tail)
+    segment = text[start:] if match is None else text[start:start + len(marker) + match.start()]
+    exact = before + WINDOWS_SDK_SOURCE_DIAGNOSTICS_UPLOAD + after
+    if segment.count(exact) != 1:
+        raise AssertionError('Changed or moved Windows SDK diagnostics upload context')
+    return text.replace(exact, before + after, 1)
+
 def inverse_uri_workflow_checks(text, workflow):
     if workflow == 'preflight.yml':
         text = inverse_uri_preflight_budget(text)
@@ -265,6 +284,7 @@ if($generated.IndexOf('Start-StandardValidQaNamespace') -lt 0 -or $generated.Ind
                          'e0b93f5d3b519877650e5cca61c37102c5f8897510d76fecfe8fd29867692126')
         self.assertEqual(hashlib.sha256((SCRIPTS / 'test-session-directory-access.cs').read_bytes()).hexdigest(), current.decode())
         workflow = (ROOT / '.github/workflows/preflight.yml').read_text()
+        workflow = inverse_windows_sdk_source_diagnostics(workflow, 'preflight.yml')
         workflow = inverse_uri_workflow_checks(workflow, 'preflight.yml')
         workflow = inverse_linux_close_preflight_checks(workflow)
         # Remove only the exact new mandatory compiler source controls before

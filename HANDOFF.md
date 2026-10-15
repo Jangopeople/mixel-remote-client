@@ -2,6 +2,39 @@
 
 ## Active reliability continuation — 2026-10-15 (acceptance remains open)
 
+Private source `1aff3cf0f9f2146ddb3418b3a28e14bbaa3c759f`, tree
+`16b88ddc0b57dda96834dadc0aea0957748f2dab`, was pushed clean and dispatched
+once as all-platform producer `38701016138`, attempt 1, with publication and
+diagnostic bypasses disabled. Mandatory PR preflight is `38700977507`; its API
+head is the same source and its separately recorded merge checkout has the same
+tree. Neither run qualifies the application. Windows producer job
+`116310927597` failed when an Android legacy-migration branding subprocess
+exceeded its 240-second verification limit. The original 211,562-byte job log is
+retained with SHA256
+`10716600148b9f8061d8c6f9ee37cb5e977ea5127b3b740213c11c85b79b37ee`.
+
+The verifier correction gives only explicit full-branding calls on Windows a
+bounded 600 seconds; Unix and other calls retain 240 seconds. It preserves raw
+timeout streams, adds per-call timing, emits bounded ASCII-safe diagnostics and
+rethrows the original timeout. All 11 macro call sites, their assertions and
+refusal ordering remain. Focused 7, SDK-pipeline 6 and pinned-archive 2 controls
+pass; this does not prove that a real Windows macro completes within 600 seconds.
+Fresh CI remains mandatory. The original timeout lost its partial output, so the
+specific slow helper and a minimum sufficient allowance are unmeasured. The
+closed 326-member source proof is recorded under
+`windows-fullmacro-timeout-retention-20261015/`; never qualify its stale
+intermediate candidates. All 38 product helpers remain unchanged by this fix.
+
+Both Windows source jobs also retain only fixed-root `mixel-sdk-source/*.log`
+and `*.timing.json` as `windows-sdk-source-diagnostics`, with `always()` and
+14-day retention. Full fixture trees, environment dumps and installers are not
+included. Exact job-bound inverses preserve every earlier workflow assertion;
+the diagnostic profile is rebound only to those reviewed source bytes. Windows
+workflow 9, concurrency 75, Standard source 11, SDK pipeline 6, release 21 and
+diagnostic 105 controls pass, as does actionlint. The closed 552-member proof is
+under `windows-sdk-source-diagnostic-upload-20261015/`. Real hosted artifact
+retention and macro timings must still be observed in the fresh run.
+
 The candidate on top of private checkpoint `77e1fc7` corrects support-URI
 fallthrough: the reserved `support` host cannot become a legacy remote ID, and
 Rust-event delivery compares the product scheme case-insensitively while
@@ -53,15 +86,22 @@ and recorded in `root-final-uri-integration-20261015/final-swift-adoption.json`.
 PC01's independent NAS console is restored and Mixel-Test-VM is signed in.
 All five execution-policy scopes were freshly observed Undefined. Do not repeat
 account creation, login requests, or consumed policy approvals. The older GUI
-6636 and connection manager 7116 remain; requester 441335894 is unknown and must
-not be operated as an owned QA session. Read-only comparison proves it differs
-from the physical Mac host ID. The blocked native-URL browser action must not be
+6636 and connection manager 7116 remain. Fresh visible inspection found
+441335894 and 500887284 only in disconnected File Transfer histories, both
+showing 00:00:00; their entries were preserved and no session was accepted or
+controlled. The main window was restored Ready with ID 304619778. These histories
+are not owned QA requesters. Refresh visible idle state and PID/start/path before
+an ordinary quit or update; do not infer current activity from cached titles.
+The blocked native-URL browser action must not be
 retried through another automation route; the exact action requires human use.
 
 Delivery requires the exact final clean pushed commit/tree, a fresh private
 all-platform producer with publication disabled, fully green mandatory
 preflight, original hash-bound installers, genuine Windows Standard-user
-95-second checks, and real PC01/Mac/Linux acceptance. Repeat ordinary Linux
+95-second customer checks on both actual Windows 2022 and latest/2025 runtime
+jobs, and real PC01/Mac/Linux acceptance. The single mandatory Windows preflight
+must also retain the original native Standard eight; a further manual whole
+2025 preflight is not inferred from the historical comparison runs. Repeat ordinary Linux
 window close with original exit 0, controlled crash/recovery, reconnect, consent,
 changing video/input, Unicode clipboard, file transfer, fitted windows and normal
 Quit on final packages. Earlier packaged normal-close exit -11 remains failed

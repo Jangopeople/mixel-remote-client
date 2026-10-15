@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 
 ROOT=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location("mixel_flutter_analysis",ROOT/"scripts/patch-support-flutter-analysis.py")
@@ -176,13 +177,38 @@ def startup_baseline(source):
             assert {name: (source / name).read_bytes() for name in original} == original, "Startup projection mutated supplied input"
 
 
-def run(args,out,label,*,cwd=None,env=None,success=True):
+def run(args,out,label,*,cwd=None,env=None,success=True,full_branding=False):
     # The parent decoder cannot configure a captured Python child's encoder.
     # Match both sides of this fixture's pipe without changing file encodings,
     # the caller's environment, or the real build's environment.
     child_env=dict(os.environ if env is None else env,PYTHONIOENCODING="utf-8")
-    result=subprocess.run(args,cwd=cwd,env=child_env,capture_output=True,text=True,encoding="utf-8",timeout=240)
+    timeout=600 if full_branding and os.name=="nt" else 240
+    started=time.monotonic()
+    try:
+        result=subprocess.run(args,cwd=cwd,env=child_env,capture_output=True,text=True,encoding="utf-8",timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        stdout=error.stdout if isinstance(error.stdout,bytes) else (error.stdout or "").encode("utf-8")
+        stderr=error.stderr if isinstance(error.stderr,bytes) else (error.stderr or "").encode("utf-8")
+        (out/(label+".stdout.log")).write_bytes(stdout)
+        (out/(label+".stderr.log")).write_bytes(stderr)
+        (out/(label+".log")).write_bytes(stdout+stderr)
+        (out/(label+".timing.json")).write_text(json.dumps({
+            "status":"timed-out","timeout_seconds":timeout,
+            "elapsed_seconds":round(time.monotonic()-started,3),
+            "full_branding":full_branding,"stdout_bytes":len(stdout),"stderr_bytes":len(stderr)
+        },sort_keys=True,indent=2)+"\n",encoding="utf-8")
+        stdout_tail=stdout[-4096:].decode("utf-8",errors="replace").encode("ascii",errors="backslashreplace").decode("ascii")[-4096:]
+        stderr_tail=stderr[-4096:].decode("utf-8",errors="replace").encode("ascii",errors="backslashreplace").decode("ascii")[-4096:]
+        diagnostic=("TIMEOUT: "+label+" after "+str(timeout)+" seconds; captured stdout/stderr retained.\n"
+                    +"stdout tail:\n"+stdout_tail+"\nstderr tail:\n"+stderr_tail)
+        print(diagnostic.encode("ascii",errors="backslashreplace").decode("ascii"),flush=True)
+        raise
     (out/(label+".log")).write_text(result.stdout+result.stderr,encoding="utf-8")
+    (out/(label+".timing.json")).write_text(json.dumps({
+        "status":"completed","timeout_seconds":timeout,
+        "elapsed_seconds":round(time.monotonic()-started,3),
+        "full_branding":full_branding,"returncode":result.returncode
+    },sort_keys=True,indent=2)+"\n",encoding="utf-8")
     if success:
         assert result.returncode==0,result.stdout+result.stderr
     return result
@@ -577,7 +603,7 @@ def uri_common_drift_controls(out, repo, copied, bash, script, env, label):
         target.write_bytes(saved + b'// unapproved URI owner drift\n')
         poisoned = snapshot(repo)
         failed = run([bash, script.as_posix()], out, 'pipeline-' + label + '-uri-refusal',
-                     cwd=copied, env=env, success=False)
+                     cwd=copied, env=env, success=False,full_branding=True)
         assert_pipeline_refusal(failed, 'Changed or partial URI routing profile')
         assert snapshot(repo) == poisoned, 'Terminal URI refusal changed source'
     finally:
@@ -611,7 +637,7 @@ def prior_uri_common_drift_controls(out, repo, copied, bash, script, env, label)
         try:
             target.write_bytes(saved + b"// unapproved drift\n")
             before = snapshot(repo)
-            failed = run([bash,script.as_posix()], out, "pipeline-"+label+"-refusal", cwd=copied, env=env, success=False)
+            failed = run([bash,script.as_posix()], out, "pipeline-"+label+"-refusal", cwd=copied, env=env, success=False,full_branding=True)
             # The final Linux owner now verifies this entire file before earlier owners.
             assert_pipeline_refusal(failed, "Pinned or partial Linux close profile changed")
             assert snapshot(repo) == before, "Drift refusal changed another pipeline file"
@@ -646,7 +672,7 @@ def prior_uri_common_drift_controls(out, repo, copied, bash, script, env, label)
                     prior_target.write_bytes(prior_saved + b"// unapproved drift\n")
                     before = snapshot(previous)
                     failed = run([bash,legacy_script.as_posix()], out, "pipeline-"+label+"-prior-startup-refusal", cwd=copied,
-                                 env=dict(env, RDREPO=previous.as_posix()), success=False)
+                                 env=dict(env, RDREPO=previous.as_posix()), success=False,full_branding=True)
                     assert_pipeline_refusal(failed, "Pinned Mac startup input digest mismatch; refusing all writes")
                     assert snapshot(previous) == before, "Prior startup refusal changed another pipeline file"
                 finally:
@@ -766,7 +792,7 @@ def pipeline(out,source,bash):
         (out/("pipeline-"+label+"-initial-tracked.json")).write_text(json.dumps(initial_tracked,sort_keys=True,indent=2)+"\n",encoding="utf-8")
         env=dict(os.environ,RDREPO=repo.as_posix(),BRANDING=(copied/"branding").as_posix(),GIT_CONFIG_COUNT="0")
         run([sys.executable,str(copied/"scripts/patch-support-input.py")],out,"pipeline-"+label+"-initial-input",env=env)
-        run([bash,script.as_posix()],out,"pipeline-"+label+"-1",cwd=copied,env=env)
+        run([bash,script.as_posix()],out,"pipeline-"+label+"-1",cwd=copied,env=env,full_branding=True)
         with startup_baseline(repo) as checked_repo:
             F.verify_previous_layers(checked_repo) if (checked_repo/F.GENERATED).exists() else S.apply(checked_repo,check=True)
             for name,(_,corrected,*_) in P.FILES.items():
@@ -777,7 +803,7 @@ def pipeline(out,source,bash):
                 assert sha(canonical)==corrected,name
                 assert actual==(T.transform(name,canonical) if name in T.FILES else canonical),name
         first=snapshot(repo)
-        run([bash,script.as_posix()],out,"pipeline-"+label+"-2",cwd=copied,env=env)
+        run([bash,script.as_posix()],out,"pipeline-"+label+"-2",cwd=copied,env=env,full_branding=True)
         assert snapshot(repo)==first,"Full pipeline second pass changed bytes"
         (out/("pipeline-"+label+"-snapshot.json")).write_text(json.dumps(first,sort_keys=True,indent=2)+"\n",encoding="utf-8")
         android_target=dependency/"src/keycodes/android.rs"
@@ -789,11 +815,11 @@ def pipeline(out,source,bash):
         # A previously branded exact old table may pass only the read-only
         # restore prefix; the input producer must fix it before Mac reapply.
         android_target.write_bytes(android_old.replace(b"\n",android_newline))
-        run([bash,script.as_posix()],out,"pipeline-"+label+"-android-legacy-migration",cwd=copied,env=env)
+        run([bash,script.as_posix()],out,"pipeline-"+label+"-android-legacy-migration",cwd=copied,env=env,full_branding=True)
         assert snapshot(repo)==first,"Exact old Android migration changed another final pipeline byte"
         android_target.write_bytes(android_saved.replace(b"    Quote, 75,",b"    Quote, 76,"))
         android_before=snapshot(repo)
-        android_failed=run([bash,script.as_posix()],out,"pipeline-"+label+"-android-drift-refusal",cwd=copied,env=env,success=False)
+        android_failed=run([bash,script.as_posix()],out,"pipeline-"+label+"-android-drift-refusal",cwd=copied,env=env,success=False,full_branding=True)
         assert_pipeline_refusal(android_failed,"Pinned Android input overlay is required")
         assert snapshot(repo)==android_before,"Android table drift restored an earlier valid overlay before refusal"
         android_target.write_bytes(android_saved)
@@ -811,20 +837,20 @@ def pipeline(out,source,bash):
                 inherited=dependency_target.read_bytes()
                 assert inherited==dependency_saved.replace(b"\r\n",b"\n").replace(b"\n",newline)
                 clean=snapshot(repo)
-                run([bash,script.as_posix()],out,"pipeline-"+label+"-rdev-clean-"+checkout_crlf,cwd=copied,env=env)
+                run([bash,script.as_posix()],out,"pipeline-"+label+"-rdev-clean-"+checkout_crlf,cwd=copied,env=env,full_branding=True)
                 assert snapshot(repo)==clean,"Clean inherited dependency checkout changed bytes"
                 if checkout_crlf=="true":
                     # Reproduce the old fixture failure: the source helper
                     # correctly refuses CRLF input with an LF-only suffix.
                     dependency_target.write_bytes(inherited+b"// unapproved dependency drift\n")
                     original_before=snapshot(repo)
-                    original_failed=run([bash,script.as_posix()],out,"pipeline-"+label+"-rdev-original-mixed-refusal",cwd=copied,env=env,success=False)
+                    original_failed=run([bash,script.as_posix()],out,"pipeline-"+label+"-rdev-original-mixed-refusal",cwd=copied,env=env,success=False,full_branding=True)
                     assert_pipeline_refusal(original_failed,"Mixed or unsupported dependency newlines")
                     assert "Unrelated rdev source drift" not in original_failed.stderr
                     assert snapshot(repo)==original_before,"Original mixed-newline refusal changed another file"
                 dependency_target.write_bytes(inherited+b"// unapproved dependency drift"+newline)
                 dependency_before=snapshot(repo)
-                dependency_failed=run([bash,script.as_posix()],out,"pipeline-"+label+"-rdev-refusal-"+checkout_crlf,cwd=copied,env=env,success=False)
+                dependency_failed=run([bash,script.as_posix()],out,"pipeline-"+label+"-rdev-refusal-"+checkout_crlf,cwd=copied,env=env,success=False,full_branding=True)
                 assert_pipeline_refusal(dependency_failed,"Unrelated rdev source drift")
                 assert snapshot(repo)==dependency_before,"Dependency refusal changed an earlier overlay file"
                 dependency_target.write_bytes(inherited)
@@ -845,7 +871,7 @@ def pipeline(out,source,bash):
         dependency.rename(missing_dependency)
         try:
             missing_before=snapshot(repo)
-            missing_failed=run([bash,script.as_posix()],out,"pipeline-"+label+"-rdev-missing-refusal",cwd=copied,env=env,success=False)
+            missing_failed=run([bash,script.as_posix()],out,"pipeline-"+label+"-rdev-missing-refusal",cwd=copied,env=env,success=False,full_branding=True)
             assert_pipeline_refusal(missing_failed,"Missing owned rdev dependency checkout")
             assert snapshot(repo)==missing_before,"Missing dependency refusal changed an earlier overlay file"
         finally:

@@ -940,6 +940,16 @@ jobs:
           RDREPO: ./rustdesk
           MIXEL_SDK_FULL_APP_PREFLIGHT: "true"
         run: bash scripts/test-windows-generated-source.sh
+      - name: Preserve Windows SDK source diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-sdk-source-diagnostics
+          path: |
+            ${{ runner.temp }}/mixel-sdk-source/*.log
+            ${{ runner.temp }}/mixel-sdk-source/*.timing.json
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Build (cargo + flutter via build.py)
         shell: bash

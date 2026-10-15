@@ -8,13 +8,15 @@ Read `HANDOFF.md` and `AGENTS.md` before working on releases. Product identity i
 `Mixel Remote` / `Mixel-Remote`, bundle ID `ch.mixel.remote`, and the configured
 rendezvous/relay is `rs.mixel.ch`. `branding/branding.env` is authoritative.
 
-## Current proof status — 2026-10-13
+## Current proof status — 2026-10-15
 
-The verified code checkpoint is `104d5bf5face1bd08a3936669e49de5fad94940a` on
-`fix/remote-support-reliability`
+Active reliability work is on `fix/remote-support-reliability`
 ([draft PR7](https://github.com/Jangopeople/mixel-remote-client/pull/7)).
-Private qualification binds the exact pushed HEAD/tree, including any later
-documentation-only checkpoint.
+`HANDOFF.md` records current source, failed runs and retained evidence. Private
+qualification binds the exact pushed HEAD/tree, including any later
+documentation-only checkpoint. A preceding private all-platform candidate exposed
+a Windows source-verification timeout; the bounded verifier correction
+requires a fresh fully green build and preflight before package acceptance.
 **Complete application acceptance remains unfinished.**
 
 The candidate corrects native API/toolchain compatibility, input-device creation

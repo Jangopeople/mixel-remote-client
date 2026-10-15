@@ -156,6 +156,37 @@ class WindowsPreflightBuildTests(unittest.TestCase):
         self.assertLess(windows.index('Require the original Windows source preflight'), windows.index('name: windows\n'))
         self.assertIn('!inputs.collect_windows_preflight_failure', job(text, 'upload'))
 
+    def test_windows_sdk_source_diagnostics_are_always_owned_log_files_only(self):
+        module_names = ('test-support-launch-macos-concurrency-controls.py', 'test-standard-valid-qa.py')
+        modules = []
+        for filename in module_names:
+            spec = importlib.util.spec_from_file_location('sdk_diagnostics_' + filename.replace('-', '_'), ROOT / 'scripts' / filename)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            modules.append(module)
+        upload = modules[0].WINDOWS_SDK_SOURCE_DIAGNOSTICS_UPLOAD
+        self.assertEqual(upload, modules[1].WINDOWS_SDK_SOURCE_DIAGNOSTICS_UPLOAD)
+        self.assertIn('        if: always()\n', upload)
+        self.assertIn('        uses: actions/upload-artifact@v6\n', upload)
+        self.assertIn('          name: windows-sdk-source-diagnostics\n', upload)
+        self.assertIn('          retention-days: 14\n', upload)
+        self.assertIn('          if-no-files-found: ignore\n', upload)
+        paths = [line.strip() for line in upload.splitlines() if line.startswith('            ')]
+        self.assertEqual(paths, ['${{ runner.temp }}/mixel-sdk-source/*.log', '${{ runner.temp }}/mixel-sdk-source/*.timing.json'])
+        for workflow, job_name in (('build.yml', 'windows'), ('preflight.yml', 'windows-packaging')):
+            text = (ROOT / '.github/workflows' / workflow).read_text(encoding='utf-8')
+            self.assertEqual(text.count(upload), 1)
+            self.assertEqual(job(text, job_name).count(upload), 1)
+            self.assertIn('        run: bash scripts/test-windows-generated-source.sh\n' + upload, text)
+            for module in modules:
+                self.assertEqual(module.inverse_windows_sdk_source_diagnostics(text, workflow), text.replace(upload, '', 1))
+                mutants = [text.replace(upload, '', 1), text + upload, text.replace(upload, '', 1) + upload]
+                for before, after in (('if: always()', 'if: success()'), ('retention-days: 14', 'retention-days: 13'), ('if-no-files-found: ignore', 'if-no-files-found: error'), ('name: windows-sdk-source-diagnostics', 'name: other-diagnostics'), ('mixel-sdk-source/*.log', 'mixel-sdk-source/**/*.log'), ('mixel-sdk-source/*.log', 'mixel-sdk-source/*.zip'), ('mixel-sdk-source/*.timing.json', 'mixel-sdk-source/*.json'), ('${{ runner.temp }}/mixel-sdk-source/', '${{ github.workspace }}/')):
+                    mutants.append(text.replace(upload, upload.replace(before, after), 1))
+                for mutation in mutants:
+                    with self.subTest(workflow=workflow, inverse=module.__name__), self.assertRaises(AssertionError):
+                        module.inverse_windows_sdk_source_diagnostics(mutation, workflow)
+
     def test_existing_compiled_signed_customer_and_quicksupport_commands_remain_mandatory(self):
         windows = job((ROOT / '.github/workflows/build.yml').read_text(encoding='utf-8'), 'windows')
         commands = ('python scripts/test-compiled-support-guard.py',
