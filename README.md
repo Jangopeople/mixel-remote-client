@@ -14,9 +14,10 @@ Active reliability work is on `fix/remote-support-reliability`
 ([draft PR7](https://github.com/Jangopeople/mixel-remote-client/pull/7)).
 `HANDOFF.md` records current source, failed runs and retained evidence. Private
 qualification binds the exact pushed HEAD/tree, including any later
-documentation-only checkpoint. A preceding private all-platform candidate exposed
-a Windows source-verification timeout; the bounded verifier correction
-requires a fresh fully green build and preflight before package acceptance.
+documentation-only checkpoint. Recent private candidates exposed a Windows
+verifier timeout and a Mac test-listener readiness failure before the product
+peer check. Their bounded verifier, owned-fixture and CI-budget corrections
+require a fresh fully green build and preflight before package acceptance.
 **Complete application acceptance remains unfinished.**
 
 The candidate corrects native API/toolchain compatibility, input-device creation
@@ -24,7 +25,7 @@ and button/wheel forwarding, fingerprint cache races, first-use keyboard mode,
 transfer-window fitting, unsafe fatal signal handling and exited Windows
 diagnostic ordering. Normal cleanup, manual GPU choices and Windows consent
 guards remain preserved. Actual source/native/composition tests pass; full
-Flutter3.27.4 analysis is0 errors/0 warnings with282 existing infos.
+Flutter3.27.4 analysis is0 errors/0 warnings with285 existing infos.
 
 Historical ce Linux → signed50bf Windows PC01 passes video/mouse, exact47B
 mixed-case/path typing before and after reconnect, both48B Unicode clipboard

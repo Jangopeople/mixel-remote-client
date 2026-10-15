@@ -152,6 +152,21 @@ def inverse_uri_workflow_checks(text, workflow):
     return text
 
 
+def windows_preflight_budget_projection():
+    before = "  windows-packaging:\n    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_source_runner == 'windows-2025' && 'windows-2025' || 'windows-2022' }}\n"
+    current = '    timeout-minutes: 180\n'
+    after = "    env:\n      PYTHONUTF8: '1'\n    steps:\n      - uses: actions/checkout@v5\n"
+    return before, current, after
+
+
+def inverse_windows_preflight_budget(text):
+    before, current, after = windows_preflight_budget_projection()
+    approved = before + current + after
+    if text.count(approved) != 1 or text.count(before) != 1 or text.count(current) != 1:
+        raise AssertionError('Exact Windows preflight 180-minute source-job budget context changed')
+    return text.replace(approved, before + '    timeout-minutes: 120\n' + after, 1)
+
+
 def uri_preflight_budget_projection():
     before = '  upstream-source:\n    runs-on: ubuntu-22.04\n'
     current = '    timeout-minutes: 45\n'
@@ -884,6 +899,7 @@ class ConcurrencyControls(unittest.TestCase):
 
     def test_preflight_wrapper_and_mandatory_source_command_exact_whole_inverse(self):
         text = C.canonical((ROOT / '.github/workflows/preflight.yml').read_bytes()).decode()
+        text = inverse_windows_preflight_budget(text)
         text = inverse_windows_sdk_source_diagnostics(text, 'preflight.yml')
         text = inverse_uri_workflow_checks(text, 'preflight.yml')
         text = inverse_linux_close_workflow_checks(text, 'preflight.yml')
@@ -970,6 +986,29 @@ class ConcurrencyControls(unittest.TestCase):
                 ('following-gate', text.replace(current + after, current + '# changed\n' + after, 1))):
             with self.subTest(mutation=kind), self.assertRaises(AssertionError):
                 inverse_linux_close_bridge_checks(changed)
+
+    def test_windows_preflight_budget_exact_inverse_refuses_drift_before_commands(self):
+        path = ROOT / '.github/workflows/preflight.yml'
+        raw = path.read_bytes()
+        text = raw.decode()
+        before, current, after = windows_preflight_budget_projection()
+        approved = before + current + after
+        forbidden = AssertionError('Budget source projection attempted a command')
+        with mock.patch.object(subprocess, 'run', side_effect=forbidden), mock.patch.object(subprocess, 'Popen', side_effect=forbidden):
+            projected = inverse_windows_preflight_budget(text)
+            self.assertEqual(projected, text.replace(current, '    timeout-minutes: 120\n', 1))
+            for changed in (
+                    text.replace(approved, before + after, 1),
+                    text.replace(current, current + current, 1),
+                    text.replace(approved, approved + approved, 1),
+                    text.replace(current, current.replace('180', '181'), 1),
+                    text.replace(current, current.replace('180', '120'), 1),
+                    text.replace(approved, before + after, 1) + current,
+                    text.replace(approved, before + '# disjoint\n' + current + after, 1),
+                    text.replace(before, before.replace('windows-packaging:', 'foreign-job:'), 1)):
+                with self.assertRaises(AssertionError):
+                    inverse_windows_preflight_budget(changed)
+        self.assertEqual(path.read_bytes(), raw)
 
     def test_uri_workflow_projection_refuses_drift_missing_duplicate_or_disjoint_checks_before_commands(self):
         for workflow in ('build.yml', 'preflight.yml'):

@@ -12,6 +12,74 @@ historical_fixture = importlib.util.module_from_spec(fixture_spec)
 fixture_spec.loader.exec_module(historical_fixture)
 
 
+FOREIGN_PEER_LISTENER = r'''use std::io::{Read, Write};
+use std::os::unix::net::UnixListener;
+use std::time::{Duration, Instant};
+
+fn checked<T>(phase: &str, result: std::io::Result<T>) -> std::io::Result<T> {
+    result.map_err(|error| { eprintln!("owned native peer phase={phase}; kind={:?}; native={:?}", error.kind(), error.raw_os_error()); error })
+}
+
+fn main() -> std::io::Result<()> {
+    let args = std::env::args_os().collect::<Vec<_>>();
+    if args.len() != 4 {
+        eprintln!("owned native peer phase=arguments; refused");
+        std::process::exit(2);
+    }
+    let mode = match args[1].to_str() {
+        Some(mode) if matches!(mode, "listen" | "early-exit" | "never-ready" | "wrong-pid") => mode,
+        _ => {
+            eprintln!("owned native peer phase=arguments; refused");
+            std::process::exit(2);
+        }
+    };
+    if mode == "early-exit" {
+        eprintln!("owned foreign listener deliberately exited before readiness");
+        std::process::exit(23);
+    }
+    let listener = checked("bind", UnixListener::bind(&args[2]))?;
+    if mode == "never-ready" {
+        std::thread::sleep(Duration::from_secs(10));
+        return Ok(());
+    }
+    let pid = std::process::id() + u32::from(mode == "wrong-pid");
+    println!("MIXEL_FOREIGN_PEER_READY {pid}");
+    std::io::stdout().flush()?;
+    checked("listener-nonblocking", listener.set_nonblocking(true))?;
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let (mut stream, _) = loop {
+        match listener.accept() {
+            Ok(pair) => break pair,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if Instant::now() >= deadline {
+                    return Err(std::io::ErrorKind::TimedOut.into());
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(error) => return checked("accept", Err(error)),
+        }
+    };
+    checked("stream-nonblocking", stream.set_nonblocking(true))?;
+    let read_deadline = Instant::now() + Duration::from_millis(400);
+    let mut bytes = [0u8; 16_384];
+    let mut count = 0;
+    while count < bytes.len() {
+        match stream.read(&mut bytes[count..]) {
+            Ok(0) => break,
+            Ok(read) => count += read,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => (),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if Instant::now() >= read_deadline { break; }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(error) => return checked("read", Err(error)),
+        }
+    }
+    std::fs::write(&args[3], count.to_string())?;
+    Ok(())
+}
+'''
+
 def original(path):
     return subprocess.check_output(['git','-C',str(UPSTREAM),'show','HEAD:'+path]).decode()
 
@@ -552,29 +620,106 @@ fn worker_gate_marker(path:&std::path::Path,uid:u32)->std::io::Result<bool>{
  assert_eq!(Reservation::acquire(&base).err().unwrap().kind(),std::io::ErrorKind::WouldBlock);first.kill().unwrap();first.wait().unwrap();drop(Reservation::acquire(&base).unwrap());
 }
 #[test]fn actual_foreign_executable_unix_peer_is_refused_before_bearer_write(){
- use std::os::unix::io::AsRawFd;
- let base=std::path::PathBuf::from(std::env::var_os("MIXEL_TEST_ROOT").unwrap());let socket=std::path::PathBuf::from("foreign-peer");let ready=base.join("foreign-peer-ready");let count=base.join("foreign-peer-count");
- let code="import socket,sys,pathlib\ns=socket.socket(socket.AF_UNIX);s.settimeout(3.0);s.bind(sys.argv[1]);s.listen(1);pathlib.Path(sys.argv[2]).write_bytes(b'ready');c,_=s.accept();c.settimeout(0.4)\ntry: data=c.recv(16384)\nexcept TimeoutError: data=b''\npathlib.Path(sys.argv[3]).write_text(str(len(data)));c.close();s.close()";
- struct OwnedPeer<'a>(&'a mut std::process::Child);
- impl Drop for OwnedPeer<'_>{fn drop(&mut self){let _=self.0.kill();let _=self.0.wait();}}
- let mut child=std::process::Command::new("/usr/bin/python3").args(["-c",code]).arg(&socket).arg(&ready).arg(&count).current_dir(&base).spawn().unwrap();
+ use std::io::{BufRead,Read,Write};
+ use std::os::unix::{fs::{FileTypeExt,MetadataExt},io::AsRawFd};
+ use std::process::{Child,Stdio};
+ const READY_BUDGET:std::time::Duration=std::time::Duration::from_secs(3);
+ let base=std::path::PathBuf::from(std::env::var_os("MIXEL_TEST_ROOT").unwrap());
+ let executable=std::path::PathBuf::from(env!("MIXEL_FOREIGN_PEER_EXECUTABLE"));
+ assert_ne!(std::fs::canonicalize(&executable).unwrap(),std::fs::canonicalize(std::env::current_exe().unwrap()).unwrap());
+ fn spawn_peer(executable:&std::path::Path,base:&std::path::Path,name:&str,mode:&str)->Child{
+  std::process::Command::new(executable).arg(mode).arg(name).arg(base.join(format!("{name}-count"))).current_dir(base).stdout(Stdio::piped()).stderr(Stdio::inherit()).spawn().unwrap()
+ }
+ struct OwnedPeer<'a>(&'a mut Child,std::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>,Option<std::thread::JoinHandle<()>>);
+ impl Drop for OwnedPeer<'_>{fn drop(&mut self){let _=self.0.kill();let _=self.0.wait();if let Some(reader)=self.2.take(){let _=reader.join();}}}
+ impl<'a> OwnedPeer<'a>{
+  fn new(child:&'a mut Child)->Self{
+   let (send,receive)=std::sync::mpsc::sync_channel(1);
+   let mut owned=Self(child,receive,None);
+   let stdout=owned.0.stdout.take().expect("owned listener stdout is piped");
+   owned.2=Some(std::thread::spawn(move||{
+    let mut line=Vec::new();let mut reader=std::io::BufReader::new(stdout).take(128);
+    let value=reader.read_until(b'\n',&mut line).map(|_|line);let _=send.send(value);
+   }));owned
+  }
+  fn ready(&mut self)->Result<(),String>{
+   let deadline=std::time::Instant::now()+READY_BUDGET;
+   let expected=format!("MIXEL_FOREIGN_PEER_READY {}\n",self.0.id()).into_bytes();
+   loop{
+    if let Some(status)=self.0.try_wait().map_err(|_|"owned listener status query failed")?{return Err(format!("owned listener exited before readiness: {status}"));}
+    if std::time::Instant::now()>=deadline{return Err("owned listener readiness deadline".into());}
+    match self.1.try_recv(){
+     Ok(Ok(line))=>{
+      if line!=expected{return Err("owned listener readiness PID/protocol mismatch".into());}
+      if std::time::Instant::now()>=deadline{return Err("owned listener readiness deadline".into());}
+      if self.0.try_wait().map_err(|_|"owned listener status query failed")?.is_some(){return Err("owned listener exited after readiness".into());}
+      return Ok(());
+     },
+     Ok(Err(_))|Err(std::sync::mpsc::TryRecvError::Disconnected)=>return Err("owned listener readiness stream ended".into()),
+     Err(std::sync::mpsc::TryRecvError::Empty)=>std::thread::sleep(std::time::Duration::from_millis(5)),
+    }
+   }
+  }
+ }
+ struct OwnedCwd(std::path::PathBuf);impl Drop for OwnedCwd{fn drop(&mut self){std::env::set_current_dir(&self.0).unwrap();}}
+ fn connect(base:&std::path::Path,name:&str)->std::os::unix::net::UnixStream{
+  let metadata=std::fs::symlink_metadata(base.join(name)).unwrap();assert!(metadata.file_type().is_socket());assert_eq!(metadata.uid(),std::fs::symlink_metadata(base).unwrap().uid());
+  let cwd=OwnedCwd(std::env::current_dir().unwrap());std::env::set_current_dir(base).unwrap();let stream=std::os::unix::net::UnixStream::connect(name).unwrap();drop(cwd);stream
+ }
+ let count=base.join("foreign-peer-count");let mut child=spawn_peer(&executable,&base,"foreign-peer","listen");
  {
-  let owned=OwnedPeer(&mut child);let deadline=std::time::Instant::now()+std::time::Duration::from_secs(3);
-  while !ready.exists(){assert!(std::time::Instant::now()<deadline);std::thread::sleep(std::time::Duration::from_millis(5));}
-  struct OwnedCwd(std::path::PathBuf);impl Drop for OwnedCwd{fn drop(&mut self){std::env::set_current_dir(&self.0).unwrap();}}
-  let cwd=OwnedCwd(std::env::current_dir().unwrap());std::env::set_current_dir(&base).unwrap();let stream=std::os::unix::net::UnixStream::connect(&socket).unwrap();drop(cwd);assert!(server::mixel_gui_launch::peer::verify(stream.as_raw_fd()).is_err());drop(stream);
+  let mut owned=OwnedPeer::new(&mut child);owned.ready().expect("owned listener must be ready before product peer guard");
+  let stream=connect(&base,"foreign-peer");assert!(server::mixel_gui_launch::peer::verify(stream.as_raw_fd()).is_err());drop(stream);
   assert!(owned.0.wait().unwrap().success());assert_eq!(std::fs::read_to_string(&count).unwrap(),"0");
  }
  assert!(child.try_wait().unwrap().is_some());
- // Exercise the same ownership guard on an assertion failure before accept.
- let failed_ready=base.join("foreign-peer-failure-ready");
- let mut failed=std::process::Command::new("/usr/bin/python3").args(["-c",code]).arg("foreign-peer-failure").arg(&failed_ready).arg(base.join("foreign-peer-failure-count")).current_dir(&base).spawn().unwrap();
- let refusal=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||{let _owned=OwnedPeer(&mut failed);let deadline=std::time::Instant::now()+std::time::Duration::from_secs(3);while !failed_ready.exists(){assert!(std::time::Instant::now()<deadline);std::thread::sleep(std::time::Duration::from_millis(5));}panic!("synthetic-owned-listener-readiness-refusal");}));
- assert!(refusal.is_err());assert!(failed.try_wait().unwrap().is_some());
+ // The byte counter is actual socket IO, not an always-zero stand-in.
+ let probe=b"synthetic-owned-peer-write";let mut positive=spawn_peer(&executable,&base,"foreign-peer-positive","listen");
+ {
+  let mut owned=OwnedPeer::new(&mut positive);owned.ready().unwrap();let mut stream=connect(&base,"foreign-peer-positive");stream.write_all(probe).unwrap();drop(stream);
+  assert!(owned.0.wait().unwrap().success());assert_eq!(std::fs::read_to_string(base.join("foreign-peer-positive-count")).unwrap(),probe.len().to_string());
+ }
+ assert!(positive.try_wait().unwrap().is_some());
+ // Exercise the original ownership guard on the exact intended assertion
+ // failure after successful readiness, not a readiness-timeout substitute.
+ let mut failed=spawn_peer(&executable,&base,"foreign-peer-failure","listen");
+ let refusal=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||{let mut owned=OwnedPeer::new(&mut failed);owned.ready().expect("cleanup negative requires actual readiness");panic!("synthetic-owned-listener-readiness-refusal");}));
+ assert!(refusal.is_err());assert_eq!(refusal.unwrap_err().downcast_ref::<&str>().copied(),Some("synthetic-owned-listener-readiness-refusal"));assert!(failed.try_wait().unwrap().is_some());
+ assert!(!base.join("foreign-peer-failure-count").exists());
+ // Early exit, missing readiness, and another PID all refuse before connect.
+ for (name,mode) in [("foreign-peer-early","early-exit"),("foreign-peer-never","never-ready"),("foreign-peer-wrong","wrong-pid")]{
+  let mut child=spawn_peer(&executable,&base,name,mode);let started=std::time::Instant::now();
+  {
+   let mut owned=OwnedPeer::new(&mut child);let error=owned.ready().unwrap_err();
+   if mode=="never-ready"{assert_eq!(error,"owned listener readiness deadline");assert!(started.elapsed()>=READY_BUDGET);}
+   if mode=="wrong-pid"{assert_eq!(error,"owned listener readiness PID/protocol mismatch");}
+  }
+  assert!(child.try_wait().unwrap().is_some());if mode=="early-exit"{assert_eq!(child.wait().unwrap().code(),Some(23));}
+  assert!(!base.join(format!("{name}-count")).exists());
+ }
+ // Actual bind failure emits bounded helper phase diagnostics through the
+ // already captured parent stderr, surviving a caller TemporaryDirectory.
+ let cwd=OwnedCwd(std::env::current_dir().unwrap());std::env::set_current_dir(&base).unwrap();
+ let occupied=std::os::unix::net::UnixListener::bind("foreign-peer-bind-failure").unwrap();drop(cwd);
+ let mut collision=spawn_peer(&executable,&base,"foreign-peer-bind-failure","listen");
+ {
+  let mut owned=OwnedPeer::new(&mut collision);assert!(owned.ready().is_err());
+  assert_eq!(owned.0.wait().unwrap().code(),Some(1));
+ }
+ assert!(collision.try_wait().unwrap().is_some());assert!(!base.join("foreign-peer-bind-failure-count").exists());drop(occupied);
+ assert_eq!(READY_BUDGET,std::time::Duration::from_secs(3));
+ std::fs::write(base.join("foreign-peer-control-result.json"),format!("{{\"foreignExecutableRefused\":true,\"rejectedPeerBytes\":0,\"positiveCounterBytes\":{},\"readinessBudgetMillis\":3000,\"exactSyntheticPanicAfterReady\":true,\"earlyExitNeverReadyWrongPidRefused\":true,\"bindFailureRefusedWithInheritedPhaseDiagnostic\":true,\"allSevenOwnedChildrenReaped\":true}}\n",probe.len())).unwrap();
+ println!("PASS owned native foreign listener: PID-bound readiness within original3s, actual peer refusal before0-byte delivery, positive byte counter, exact panic cleanup and4 readiness failures with inherited bounded diagnostics; all7 owned children reaped");
 }
 """
     native=sys.platform=='darwin' and not args.source_only
     if native:real_guard_controls(layer,args.output)
+    foreign_peer_binary=None
+    if native:
+        foreign_peer_source=args.output/'owned-foreign-peer.rs'
+        foreign_peer_binary=args.output/'owned-foreign-peer'
+        foreign_peer_source.write_text(FOREIGN_PEER_LISTENER,encoding='utf-8')
+        run(rustc_command([os.environ.get('RUSTC_BIN','rustc'),'--edition=2021','--deny=warnings',str(foreign_peer_source),'-o',str(foreign_peer_binary)]))
     fixture+=r"""
 #[test]fn actual_scoped_bridge_retries_and_replacements_keep_protection_until_current_terminal(){
  use std::sync::atomic::Ordering;
@@ -619,7 +764,9 @@ fn worker_gate_marker(path:&std::path::Path,uid:u32)->std::io::Result<bool>{
 }
 """
     target=args.output/'source-controls.rs';target.write_bytes(fixture.encode());binary=args.output/('source-controls.exe' if os.name=='nt' else 'source-controls')
-    run(rustc_command([os.environ.get('RUSTC_BIN','rustc'),'--edition=2021','--deny=warnings','--test','--cfg','feature="flutter"',str(target),'-o',str(binary)]))
+    compile_env=dict(os.environ)
+    if foreign_peer_binary is not None:compile_env['MIXEL_FOREIGN_PEER_EXECUTABLE']=str(foreign_peer_binary)
+    run(rustc_command([os.environ.get('RUSTC_BIN','rustc'),'--edition=2021','--deny=warnings','--test','--cfg','feature="flutter"',str(target),'-o',str(binary)]),env=compile_env)
     if native:
         listing=run([str(binary),'--list']).stdout.decode()
         tests=[line.removesuffix(': test') for line in listing.splitlines() if line.endswith(': test')]

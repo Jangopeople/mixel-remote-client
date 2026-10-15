@@ -2,6 +2,54 @@
 
 ## Active reliability continuation — 2026-10-15 (acceptance remains open)
 
+Private source `d4825f1531b126236163008e7f0f4b965aebf7ae` was dispatched
+once as producer `38707675987`, attempt 1, with publication disabled. Its
+Intel-labelled job `116333320538` failed in the foreign-listener fixture before
+socket connection or product peer verification. That fixture actually ran on
+macos-14 ARM with Rust 1.81; this is not evidence of an Intel/Rosetta product
+failure. The original 194,301-byte job log is retained under
+`root-d482-new-failure-originals-20261015/` with SHA256
+`c77d68df7fc63abe10a332c582561d0750d55364be72c7daf3f131356f8a0e20`.
+The hardcoded system-Python child never published readiness within three seconds;
+the precise startup cause is unproven. Linux producer and four mandatory
+preflight jobs, including Mac, passed; Windows and ARM producer verification
+remain separate requirements. No partial normal installer is promoted.
+
+The replacement fixture uses a separately compiled owned native listener with
+PID-bound readiness, preserving the original three-second limit and literal
+product identity rejection before any bearer write. Actual rejected reads are
+zero; the positive counter is 26 bytes. Exact intended-panic cleanup and four
+readiness failures reap all seven owned children. Bounded phase diagnostics
+survive failure and removal of the caller's temporary directory. Final local
+checks pass 21 native cases, 16 literal guard lifecycle commands, 32 prewrite
+refusals, tray 8 and portable 4. All 38 product helpers remain unchanged. The
+closed 4,902-member proof and separate prose correction are under
+`mac-foreign-peer-readiness-fixture-20261015/` and
+`mac-foreign-peer-readiness-fixture-doc-correction-20261015/`; neither proves a
+packaged application or hosted build. Final fixture SHA256 is
+`cfb9be3f01b17cccf03c68cb1c2ee8a4a555db45605691e8cd1ee5277d43ade5`.
+
+The preceding mandatory Windows preflight `116308800711` / `38700977507`
+was canceled at 120 minutes. Its original log shows complete LF/CRLF branding,
+52 application-exit and 106 cleanup guards passed before further source checks
+reached the cutoff. The original 177,729-byte job log has SHA256
+`e0ddee18e04cbffa54cba0b55bbb6f0c4e9bbafcae766300f9d3489892b75f68`;
+the original run ZIP is also retained once. A 180-minute Windows-only allowance
+matches the existing producer budget. Every remaining source/native test,
+per-call limit and historical strict workflow inverse remains required. This is
+a bounded allowance, not proof of a completed preflight.
+
+The separate Windows complete-branding comparison `38707685496` was canceled
+at its 30-minute job limit on both 2022 and 2025. Exact original diagnostics
+retain the intended historical second-pass assertion and incomplete current
+profiles. Completed current macros reach at most 87.157 seconds on 2022 and
+161.890 seconds on 2025, below their 600-second bounds. A bounded 90-minute job
+allowance preserves both baseline/current pipelines, every assertion, existing
+artifact retention and per-call 600/240 limits; it is not a measured complete
+runtime. Diagnostic ZIPs `11960283967` and `11960264383` were each collected once,
+CRC-checked and matched to original API digests. Original job-log endpoints are
+also consumed; do not fetch any of these original endpoints again.
+
 Private source `1aff3cf0f9f2146ddb3418b3a28e14bbaa3c759f`, tree
 `16b88ddc0b57dda96834dadc0aea0957748f2dab`, was pushed clean and dispatched
 once as all-platform producer `38701016138`, attempt 1, with publication and
