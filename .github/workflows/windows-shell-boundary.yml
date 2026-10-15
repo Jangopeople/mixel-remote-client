@@ -6,6 +6,9 @@ on:
       - scripts/test-support-native-warnings.py
       - scripts/test-support-flutter-analysis.py
       - scripts/test-windows-generated-source.sh
+      - scripts/test-windows-lease-observation.py
+      - scripts/test-support-lease.py
+      - scripts/test-support-directory-security.py
       - .github/workflows/windows-shell-boundary.yml
       - .github/workflows/preflight.yml
       - .github/workflows/build.yml
@@ -74,6 +77,46 @@ jobs:
           print('PASS: exact installed Git Bash/native Python boundary and existing fatal wiring controls; application and signing gates remain separate.')
           '@ | python -u - 2>&1 | Tee-Object -FilePath (Join-Path $proof 'stdout.log')
           if ($LASTEXITCODE -ne 0) { throw 'Exact active Git Bash boundary controls failed.' }
+      - name: Prove native Dart argv before the complete Windows source checks
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $proof = Join-Path $env:GITHUB_WORKSPACE 'shell-boundary-proof'
+          $env:TMPDIR = Join-Path $proof 'temporary'
+          @'
+          import json
+          import os
+          from pathlib import Path
+          import runpy
+          import sys
+          import unittest
+
+          assert sys.platform == 'win32', 'Requires the actual Windows source runner'
+          root = Path(os.environ['GITHUB_WORKSPACE']).resolve()
+          proof = root / 'shell-boundary-proof'
+          assert proof.is_dir() and Path(os.environ['TMPDIR']).resolve() == proof / 'temporary'
+          sdk = proof / 'Dart SDK préflight 🚀'
+          sdk.mkdir()
+          dart = sdk / 'dart'
+          dart.write_text('#!/bin/sh\nexit 73\n', encoding='utf-8')
+          dart.chmod(0o755)
+          os.environ['PATH'] = str(sdk) + os.pathsep + os.environ['PATH']
+          sys.path.insert(0, str(root / 'scripts'))
+          controls = runpy.run_path(str(root / 'scripts/test-windows-lease-observation.py'), run_name='mixel_native_dart_argv_controls')
+          case = controls['ObservationControls']('test_actual_source_dispatch_runs_reader_before_fatal_native_gate')
+          result = unittest.TextTestRunner(stream=sys.stdout, verbosity=2).run(unittest.TestSuite([case]))
+          assert result.testsRun == 1 and not result.skipped and result.wasSuccessful(), 'Native Dart argv source boundary failed'
+          (proof / 'dart-argv-result.json').write_text(json.dumps({
+              'source_test_count': result.testsRun,
+              'actual_windows_git_bash_to_native_python': sys.platform == 'win32',
+              'owned_sdk_path_contains_spaces_and_unicode': True,
+              'ordinary_and_complete_source_dispatch_checked': True,
+              'original_fatal_source_guards_23_and_24_preserved': True,
+              'native_application_signing_and_runtime_qualified': False,
+          }, indent=2) + '\n', encoding='utf-8')
+          print('PASS: native Dart argv spelling and original fatal dispatcher ordering; source controls only; host=' + sys.platform)
+          '@ | python -u - 2>&1 | Tee-Object -FilePath (Join-Path $env:GITHUB_WORKSPACE 'shell-boundary-proof/dart-argv.log')
+          if ($LASTEXITCODE -ne 0) { throw 'Native Dart argv source boundary controls failed.' }
       - uses: actions/upload-artifact@v6
         if: always()
         with:

@@ -1,5 +1,48 @@
 # Mixel-Remote — Agent Handoff / Current State
 
+## Windows native SDK argument boundary — 2026-10-15
+
+Original b85 Windows producer job `116408838388` fails five ordering assertions
+because Git Bash reports the SDK as `/c/...` while its native Python child
+receives `C:/...`. The original 307,816-byte log is retained once at
+`root-b85-failed-windows-original-20261015/`, SHA256
+`cc4881b9546229760ed6f2a0c89aba33e8d190ebdab81d2e6b38c047238210ac`.
+Its complete URI suite actually passes all 11 tests / 1,560 assertions in
+112.254 seconds. This later failure is a fixture path representation error,
+not an observed application or native consent failure.
+
+The expected Dart argument now comes from an independent read-only native
+Python argv printer reached through the same Git Bash boundary. All 189
+assertion-call ASTs, four assert statements, actual dispatcher bytes, native
+fatal exits and subprocess bounds remain exact. Six current SHA literals in
+five fixture wrappers/carriers are rebound; historical pins remain unchanged.
+Complete observation source SHA256 is
+`53303228566698b88eb4f8207bba6c3255f560d15824d293b5f5b8addce45c45`.
+Actual full26 and focused1 source tests pass, with dependent hosted9,
+Standard12, session9 and packaged12 controls passing. An explicit owned MSYS
+transport facade reproduces the original five failures, passes the correction,
+and still rejects five deliberately wrong dispatcher paths. It is not native
+Windows qualification. Root independently rehashes author141 and reviewer3
+proof files; all 38 product generators and build/preflight workflow bytes
+remain unchanged.
+
+The existing five-minute Windows 2022/2025 shell-boundary matrix adds a small
+source-only check using an inert SDK path with spaces and Unicode. It runs the
+exact ordering test before the long source builds can hide this class of error.
+The complete added Python step passes locally in 2.708 seconds with only its
+host assertion changed to Darwin; actual Windows CI remains required. Existing
+matrix, permissions, original checks, time bound and artifact retention remain.
+
+Whole b85 producer status is FAILURE and normal release/publication is held.
+Successful Mac and Linux artifacts are retained with their original b85 labels.
+No Mac update or Linux application activation occurred. A future private
+per-platform diagnostic decision must explicitly compose the known Windows
+fixture cause, corrected tests and unchanged application inputs; it must never
+rewrite raw CI status or claim normal release success. Current full source
+checks and real PC01/Mac/Linux acceptance, including signed Windows Standard
+95-second tests on both Windows versions, remain required. Public aliases,
+production client services and marketplaces remain unchanged.
+
 ## Windows URI fixture event ordering — 2026-10-15
 
 Original d13 Windows producer job `116385443734` failed its original-profile,

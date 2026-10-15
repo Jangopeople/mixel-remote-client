@@ -919,8 +919,11 @@ if sys.argv[1]==target:
             expected_shell = subprocess.check_output([bash, "-c",
                 'if [[ "${OS:-}" == Windows_NT ]]; then cygpath -w "$BASH"; else printf "%s\\n" "$BASH"; fi'],
                 text=True, encoding="utf-8", timeout=15).strip()
-            expected_dart = subprocess.run([bash, "-c", "command -v dart"], env=environment,
-                capture_output=True, text=True, encoding="utf-8", timeout=15).stdout.strip()
+            # Observe the same Git Bash -> native Python argv transport as the dispatcher.
+            # MSYS converts /c/... to C:/... at that boundary; compare its exact result.
+            expected_dart = json.loads(subprocess.run([bash, "-c",
+                "\"$MIXEL_SOURCE_ORDER_PYTHON\" -c 'import json,sys; print(json.dumps(sys.argv[1]))' \"$(command -v dart)\""],
+                env=environment, capture_output=True, text=True, encoding="utf-8", timeout=15, check=True).stdout)
             portable = [
                 ["scripts/test-support-uri-routing.py", "--source",
                  runner_temp.as_posix() + "/mixel-sdk-source/pipeline-lf", "--dart", expected_dart,
