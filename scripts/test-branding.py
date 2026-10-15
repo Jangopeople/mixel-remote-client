@@ -144,7 +144,10 @@ def restore_footer_terminal_layers(repo: Path, layers: tuple[str, ...], base: Pa
         run([*command, '--check', '--before-branding'], cwd=base, env=environment)
         assert full_source_snapshot(repo) == before_check, 'Terminal footer inverse check wrote source'
         expected = dict(before_check)
-        for name in owner.ORIGINAL:
+        owned = tuple(owner.ORIGINAL)
+        if layer == 'uri':
+            owned += tuple(owner.NATIVE_ORIGINAL)
+        for name in owned:
             relative = prefix + name
             text, newline = owner.canonical((repo / relative).read_bytes())
             original = owner.transform(name, text, restore=True).replace('\n', newline).encode()

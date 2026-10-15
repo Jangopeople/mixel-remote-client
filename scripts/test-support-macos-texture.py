@@ -635,7 +635,7 @@ def bridge_native_close_mutation_controls(workflow):
 
 
 def uri_bridge_fixture_sources(uri):
-    """Bind two actual prior-owner source files, including fresh-source CI jobs."""
+    """Bind all seven actual prior-owner URI sources, including fresh-source CI jobs."""
     explicit = os.environ.get('MIXEL_URI_FIXTURE_SOURCE')
     candidates = [Path(explicit).absolute()] if explicit else [Path(os.environ.get('RDREPO', ROOT / 'rustdesk')).absolute()]
     if not explicit and os.environ.get('RUNNER_TEMP'):
@@ -651,6 +651,16 @@ def uri_bridge_fixture_sources(uri):
             files = {name: uri.transform(name, value, restore=True) for name, value in files.items()}
         if {name: uri.digest(value.encode()) for name, value in files.items()} != uri.ORIGINAL:
             raise AssertionError('Changed URI bridge prior-owner fixture source')
+        # Keep the real complete-profile guard: a final Dart-only fixture can no
+        # longer stand in for the native sender/common/core/receiver/queue owner.
+        uri.apply(source, check=True, restore=True, verify=False)
+        native_files = {}
+        for name in uri.NATIVE_ORIGINAL:
+            value = uri.canonical(uri.safe_source(source, name).read_bytes())[0]
+            native_files[name] = uri.transform_native(name, value, restore=True)
+        if {name: uri.digest(value.encode()) for name, value in native_files.items()} != uri.NATIVE_ORIGINAL:
+            raise AssertionError('Changed native URI bridge prior-owner fixture source')
+        files.update(native_files)
         return {name: value.encode() for name, value in files.items()}
     raise AssertionError('URI bridge fixture needs complete branded source via RDREPO, RUNNER_TEMP/mixel-sdk-source/pipeline-lf or MIXEL_URI_FIXTURE_SOURCE')
 
@@ -680,7 +690,7 @@ def workflow_controls(output, originals, files, window_files=None):
     uri = importlib.util.module_from_spec(uri_spec)
     uri_spec.loader.exec_module(uri)
     uri_sources = uri_bridge_fixture_sources(uri)
-    uri_assertions = "import hashlib\nuri_pins = " + repr(uri.FINAL) + "\nuri_source = Path('..') if Path('pubspec.yaml').is_file() else Path('.')\nfor name, digest in uri_pins.items():\n    assert hashlib.sha256((uri_source / name).read_bytes()).hexdigest() == digest, 'Final URI routing layer missing before Flutter/codegen'\n"
+    uri_assertions = "import hashlib\nuri_pins = " + repr({**uri.FINAL, **uri.NATIVE_FINAL}) + "\nuri_source = Path('..') if Path('pubspec.yaml').is_file() else Path('.')\nfor name, digest in uri_pins.items():\n    assert hashlib.sha256((uri_source / name).read_bytes()).hexdigest() == digest, 'Final URI routing layer missing before Flutter/codegen'\n"
     native_assertions = "import hashlib\n" + "native_pins = " + repr(native.FINAL) + "\n" + \
         "native_dependency = Path('.mixel-dependencies/desktop_multi_window') if Path('pubspec.yaml').is_file() else Path('flutter/.mixel-dependencies/desktop_multi_window')\nfor name, digest in native_pins.items():\n    assert hashlib.sha256((native_dependency / name).read_bytes()).hexdigest() == digest, 'Final native close layer missing before Flutter/codegen'\n"
     owner = output / "actual bridge étape"
@@ -708,7 +718,7 @@ def workflow_controls(output, originals, files, window_files=None):
             with patch.object(window, "fetch_source", return_value=dict(window_files)):
                 window.apply(repo)
             # Only the complete prior app-composition validator is a seam in this
-            # eight-file fixture. Provenance, manager and exact native bytes remain real.
+            # thirteen-file fixture. Provenance, manager and exact native bytes remain real.
             native.apply(repo, verify=False)
             uri.apply(repo, verify=False)
         return repo
@@ -738,7 +748,7 @@ assert ((len(args)==1 and args[0] in allowed) or
 s=importlib.util.spec_from_file_location('actual_patch',args[0])
 p=importlib.util.module_from_spec(s);s.loader.exec_module(p)
 if args[0] in (native,uri):
-    # This owned eight-file fixture has no whole application composition. Keep
+    # This owned thirteen-file fixture has no whole application composition. Keep
     # native CLI parsing/provenance/manager/exact transforms; seam only that validator.
     p.validate_prior=lambda *arguments: None
     if args[0]==native and args[-1]=='--after-branding':
@@ -747,6 +757,7 @@ if args[0] in (native,uri):
         u=importlib.util.spec_from_file_location('fixture_uri_prior',uri)
         owner=importlib.util.module_from_spec(u);u.loader.exec_module(owner)
         assert {name:owner.digest(owner.canonical(Path(name).read_bytes())[0].encode()) for name in owner.ORIGINAL}==owner.ORIGINAL, 'URI layer must restore before native owner'
+        assert {name:owner.digest(owner.canonical(Path(name).read_bytes())[0].encode()) for name in owner.NATIVE_ORIGINAL}==owner.NATIVE_ORIGINAL, 'Native URI layer must restore before native owner'
     sys.argv=[args[0], *args[1:]]
     p.main()
 else:
@@ -902,8 +913,8 @@ print('PASS: actual bridge step reaches codegen with new retirement API')
         assert result.returncode != 0 and "Unexpected bridge helper invocation" in result.stderr
         assert snapshot(repo) == before and (repo.parent / "actual-helper-invocations.jsonl").read_bytes() == before_invocations
         assert (repo.parent / "actual-bridge-invocations.jsonl").read_bytes() == before_bridge_invocations
-    (output / "workflow-source-proof.json").write_text(json.dumps({"result":"passed", "workflow_sha256":P.sha(workflow.encode()), "head_workflow_sha256":P.sha(committed.encode()), "only_change":"test-only faithful dispatch of exact URI/native brackets around both original bridge hooks", "all_other_build_jobs_and_guards_byte_identical":True, "actual_source_step_executed":True, "pinned_renderer_files":98, "pinned_window_files":124, "prior_argument_ignoring_dispatch_false_pass_reproduced":True, "independent_missing_hook_exit_codes":negatives, "unexpected_helper_invocations_rejected":14, "uri_bracket_runtime_negatives":uri_negatives, "native_bracket_runtime_negatives":native_negatives, "exact_order_count_mutations_refused":mutation_refusals, "native_prior_whole_app_composition":"explicit seam in this eight-file fixture; native/URI CLI and exact source profiles real", "original_unbracketed_native_final_inventory_failure_reproduced":True, "native_projection_whole_fixture_restored":True, "compiler_and_Flutter_tools":"ordering stand-ins; actual pinned bridge generation is a separate required build check"}, indent=2) + "\n")
-    print("PASS: actual six-command bridge validates pinned98/124 and exact native2/URI2 before Flutter/codegen; original missing hooks plus native/URI bracket failures discriminate; bounded exact order/count mutations and fourteen unexpected invocations refuse; whole fixture inverse conserves bytes; production workflow unchanged")
+    (output / "workflow-source-proof.json").write_text(json.dumps({"result":"passed", "workflow_sha256":P.sha(workflow.encode()), "head_workflow_sha256":P.sha(committed.encode()), "only_change":"test-only faithful dispatch of exact URI/native brackets around both original bridge hooks", "all_other_build_jobs_and_guards_byte_identical":True, "actual_source_step_executed":True, "pinned_renderer_files":98, "pinned_window_files":124, "prior_argument_ignoring_dispatch_false_pass_reproduced":True, "independent_missing_hook_exit_codes":negatives, "unexpected_helper_invocations_rejected":14, "uri_bracket_runtime_negatives":uri_negatives, "native_bracket_runtime_negatives":native_negatives, "exact_order_count_mutations_refused":mutation_refusals, "native_prior_whole_app_composition":"explicit seam in this thirteen-file fixture; native/URI CLI and exact source profiles real", "original_unbracketed_native_final_inventory_failure_reproduced":True, "native_projection_whole_fixture_restored":True, "compiler_and_Flutter_tools":"ordering stand-ins; actual pinned bridge generation is a separate required build check"}, indent=2) + "\n")
+    print("PASS: actual six-command bridge validates pinned98/124 and exact native2/URI7 before Flutter/codegen; original missing hooks plus native/URI bracket failures discriminate; bounded exact order/count mutations and fourteen unexpected invocations refuse; whole fixture inverse conserves bytes; production workflow unchanged")
 
 
 def main():

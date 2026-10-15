@@ -1,5 +1,51 @@
 # Mixel-Remote — Agent Handoff / Current State
 
+## Complete native URI test profiles — 2026-10-15
+
+The original `d13a17d` upstream job `116382785342` and Mac preflight
+`116382785455` failed because the texture bridge fixture materialized only the
+two Dart files owned by the earlier URI layer. Their original job logs are
+retained once under `root-d13-new-failure-originals-20261015/`, with SHA256
+`591f9d5b0372f4b59c3859d186c0e8da56a7cc0afeab39d53dd9ae712d20c8bc`
+and `8a00988163a978f3f670af92a7a7b58ae0834a36563ae76ac9a84b14b9cdd38f`.
+The native profile guard correctly refused the incomplete fixture.
+
+The texture fixture now validates and supplies all seven exact prior-owner
+sources, and both bridge ordering tools check all seven final hashes. The
+branding footer fixture now includes the five native files in its expected URI
+inverse alongside its existing two Dart files. All 43 texture source assertions,
+98 branding assertions, historical refusals and strict product guards remain.
+All 38 product helpers, generator inputs and build workflows are unchanged.
+The complete replacement files have SHA256
+`2c7c45aad8d4f5cc5c87d3ad6789885c751ccbbe6b41262525ee0842f696f743`
+and `a10e28cc5fe3d75b680b87c82e9bd8b29169b85d00217862ff049f87ae9368c7`.
+
+Actual full texture and Mac source entrypoints exit 0 in 19.615 and 31.543
+seconds. Root's independent fixture replay passes five tests / 51 calls,
+including 42 source/ownership refusals. Both LF/CRLF branding inverse cascades
+pass, preserving the supplied complete source. The original whole branding
+run reached its final close corruption case before the local outer 1,200-second
+wrapper expired; it is retained as a timeout, never as a pass. The unchanged
+whole driver runs separately in a complete owned checkout with canonical
+internal temporary storage and a bounded 2,400-second outer wrapper at
+`root-branding-full-driver-internal-20261015/`. Its actual `result.json` is a
+required gate alongside whole-green fresh all-platform producer, mandatory
+preflight and Windows comparison. Starting private CI does not qualify a
+package or authorize normal installer collection.
+
+The earlier complete source driver passes all four fresh newline profiles
+and both old-final LF/CRLF migrations twice; second 1,288-file inventories are
+byte-identical. Its closed proof is
+`root-native-uri-complete-macros-20261015/proof-freeze.json`, SHA256
+`5fa4b371720bd1e55d1610c0fe7ee9df5af18ca0528c2f9068b4b556b175cf96`.
+The texture author packet (4,198 declared regular files and eight intentional
+ownership-test symlinks) and separate child-assertion addendum are fully
+Root-rehashed. The simple branding change has an exact 106-byte whole-file
+inverse. Final signatures, genuine Windows 2022/2025 signed Standard-user
+95-second tests and actual PC01/Mac/Linux desktop acceptance remain separate
+requirements. Customer aliases, production client infrastructure and marketplace
+submissions are unchanged by this source checkpoint.
+
 ## Malformed support-link boundary — 2026-10-15
 
 The subsequent `f148d2b` comparison `38721736362` exposed two stale fixture
