@@ -1,5 +1,60 @@
 # Mixel-Remote — Agent Handoff / Current State
 
+## Windows lifecycle SDK correction and current native proof — 2026-10-15
+
+The original77 Windows producer38774820528 and mandatory preflight38774157443
+are completed FAILURE, not release successes. Their complete Windows logs are
+retained once under `root-current77-windows-producer-failure-original-20261015`
+(SHA27588022374e00f2bad520c30a088f27e24056d4c497557312661a0cab12637a)
+and `root-current77-windows-preflight-failure-original-20261015`
+(SHA75377905ffc1794c011bb83adf0906f9a6e0487704478e2de70d2c810130ff77).
+Both reach the new lifecycle test with a Dart path that fails native file
+validation, before its nine tests run. No current77 signed Windows package was
+built, and the mandatory source gate blocked customer artifact upload.
+
+Only the Windows dispatcher lifecycle call now prefers the already verified
+`DART_BIN`, retaining PATH fallback and the strict invalid/missing SDK refusal.
+Actual Windows2022/2025 run38798203036/a1, source1635fe83f28408f6d6d9d0333a7a6cacc63eb71b,
+passes all four jobs. Both native receipts observe the legacy extensionless
+argument with `is_file=false`, and canonical dart.exe with `is_file=true`. The
+actual nine-test suites pass in42.664/45.917 seconds without skips; the exact
+previously unrun reporter tail reports `14 passed; 0 failed` on both. Originals
+and Root hash/source-checkout/CRC readback are retained in
+`root-windows-lifecycle-dart-native-originals-20261015`. This proves the SDK
+boundary correction, not signed Windows app or Standard95 acceptance.
+
+The same full nine tests now run immediately after upstream checkout in both
+Windows producer and mandatory preflight, with separate retained evidence; the
+later complete source gate remains mandatory. The outer Windows producer budget
+is240 minutes: the failed source stages alone took153m25s/158m25s, and the prior
+completed producer required another29m50s afterward. These failures were SDK
+refusals, not timeouts; the larger outer budget accounts for the measured work.
+Preflight180, every per-test/runtime95 deadline and all product generators remain
+unchanged. Exact job-bound inverses preserve historical workflow proofs; only
+current reviewed diagnostic caller pins are rebound. Root's combined correction
+passes79 concurrency,12 Standard,106 diagnostic,9 Windows and6 SDK controls,
+eight exact PowerShell firing/failure cases and workflow lint. Root separately
+passes all nine Dart tests in24.641 seconds. Complete corrected Windows producer
+and mandatory preflight still must run successfully before package acceptance.
+
+Current77 Linux private live flows pass moving video, actual keyboard/mouse, both
+Unicode clipboard directions, three complete SHA-matching file roundtrips,
+pending overwrite-owner close, fresh consent reconnect/fullscreen and normal
+main-window exit0 on both roles. Proof index SHA is
+10b5b938cca78d4aba77c377b2e38dde628115732afd914c2a07ac9fd6ce35c6.
+The exact original signed77 ARM app separately passes desktop, tray and all three
+concurrency scenarios in private run38795628381, preserving signatures and bytes.
+The original producer warm exit remains unexplained. The private Mac app and
+reversible rollback are staged; physical unlock, guarded installed update and
+real customer Accept/control remain pending. PC01's independent console is
+disconnected and NAS sign-in is missing. Existing native-URL manual-user guards
+and held warning/resource investigations remain in force.
+
+The production HTTPS gateway deployment recorded later under Deployment62 is
+the current state; older pending-approval paragraphs are historical. No public
+installer aliases or marketplace releases were changed by this correction.
+Full app acceptance and normal release qualification remain unfinished.
+
 ## Native workflow fixture integration — 2026-10-15
 
 The970 fast Git-Bash matrix fails on both Windows2022/2025 before application

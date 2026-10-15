@@ -46,7 +46,7 @@ for mixel_source_test in \
 done
 python scripts/test-support-native-warnings.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --source-only --output "$RUNNER_TEMP/mixel-native-warning-source" --bash "$mixel_analyzer_bash"
 python scripts/test-support-compiler-cleanup.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --source-only --output "$RUNNER_TEMP/mixel-compiler-cleanup-source" --bash "$mixel_analyzer_bash"
-python scripts/test-support-file-dialog-lifecycle.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --dart "$(command -v dart)" --output "$RUNNER_TEMP/mixel-file-dialog-lifecycle"
+python scripts/test-support-file-dialog-lifecycle.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --dart "${DART_BIN:-$(command -v dart)}" --output "$RUNNER_TEMP/mixel-file-dialog-lifecycle"
 unset mixel_analyzer_bash
 dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart
 dart scripts/test-support-invite.dart

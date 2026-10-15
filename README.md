@@ -12,13 +12,17 @@ rendezvous/relay is `rs.mixel.ch`. `branding/branding.env` is authoritative.
 
 Active reliability work is on `fix/remote-support-reliability`
 ([draft PR7](https://github.com/Jangopeople/mixel-remote-client/pull/7)).
-`HANDOFF.md` records current source, failed runs and retained evidence. Private
-qualification binds the exact pushed HEAD/tree, including any later
-documentation-only checkpoint. Recent private candidates exposed a Windows
-verifier timeout and a Mac test-listener readiness failure before the product
-peer check. Their bounded verifier, owned-fixture and CI-budget corrections
-require a fresh fully green build and preflight before package acceptance.
-**Complete application acceptance remains unfinished.**
+`HANDOFF.md` records exact source, failed runs and retained evidence. Current77
+Linux private sessions pass native input, clipboard, file transfer, reconnect
+and normal close. The unchanged signed ARM app passes separate private desktop,
+tray and concurrency checks; its original build-run warm exit remains unresolved.
+
+The Windows lifecycle SDK caller is corrected and proven on both Windows2022
+and2025 in run38798203036: all nine real Dart tests and fourteen reporter tests
+pass. The same checks now run before the long Windows source suite, while all
+later source/signing/runtime gates remain mandatory. Corrected full Windows
+producer/preflight, signed Standard95 and live Mac customer acceptance remain
+required. **Complete application acceptance remains unfinished.**
 
 Malformed support links are refused before legacy Mac IPC or fallback launch.
 Reserved host and credential-name recognition is independent of strict invite

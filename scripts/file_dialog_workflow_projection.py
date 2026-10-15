@@ -2,6 +2,24 @@
 import re
 
 
+def early_windows_lifecycle():
+    return ("      - name: Prove file-dialog lifecycle before complete Windows source checks\n"
+            "        shell: pwsh\n"
+            "        run: |\n"
+            "          if (-not $env:DART_BIN) { throw 'Canonical Windows Dart SDK is required for the early lifecycle gate.' }\n"
+            "          $early = Join-Path $env:RUNNER_TEMP 'mixel-file-dialog-lifecycle-early'\n"
+            "          python scripts/test-support-file-dialog-lifecycle.py --source rustdesk --dart $env:DART_BIN --output $early\n"
+            "          if ($LASTEXITCODE -ne 0) { throw 'Early actual file-dialog lifecycle controls failed.' }\n"
+            "      - name: Preserve early Windows file-dialog lifecycle evidence\n"
+            "        if: always()\n"
+            "        uses: actions/upload-artifact@v6\n"
+            "        with:\n"
+            "          name: windows-file-dialog-lifecycle-early\n"
+            "          path: ${{ runner.temp }}/mixel-file-dialog-lifecycle-early/\n"
+            "          if-no-files-found: ignore\n"
+            "          retention-days: 14\n\n")
+
+
 def lifecycle_upload(platform, name):
     paths = ("          path: |\n"
              "            ${{ runner.temp }}/mixel-file-dialog-lifecycle/*.log\n"
@@ -32,6 +50,9 @@ def lifecycle_workflow_projections(workflow):
     jobs = ("linux", "macos") if build else ("upstream-source", "macos-runtime-harness")
     result = [(job, sdk, command, native) for job in jobs]
     if build:
+        result.append(("windows",
+                       '            https://github.com/rustdesk/rustdesk.git rustdesk\n\n',
+                       early_windows_lifecycle(), '      - name: Apply Mixel-Remote branding\n'))
         for job, platform, name in (("linux", "Linux", "linux-file-dialog-lifecycle"),
                                     ("macos", "Mac", "macos-file-dialog-lifecycle-${{ matrix.job.target }}")):
             result.append((job, '          dart scripts/test-support-invite.dart\n\n',
@@ -40,6 +61,9 @@ def lifecycle_workflow_projections(workflow):
         result.append(("windows", '          name: windows\n          path: dist/\n          if-no-files-found: error\n\n',
                        lifecycle_upload("Windows", "windows-file-dialog-lifecycle"), '  # '))
     else:
+        result.append(("windows-packaging",
+                       '        run: git clone --depth 1 --branch "$UPSTREAM_VERSION" --recurse-submodules https://github.com/rustdesk/rustdesk.git rustdesk\n',
+                       early_windows_lifecycle(), '      - name: Fetch exact pinned native AV1 API headers without codec compilation\n'))
         result.extend((
             ("windows-packaging", '          name: windows-clipboard-source-native\n          path: windows-clipboard-proof/*.log\n          if-no-files-found: ignore\n',
              lifecycle_upload("Windows", "windows-file-dialog-lifecycle"), '  portable-standard-lease-qa:\n'),

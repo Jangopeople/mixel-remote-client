@@ -156,6 +156,17 @@ def inverse_uri_workflow_checks(text, workflow):
     return text
 
 
+def inverse_windows_producer_budget(text):
+    before = ("  windows:\n    needs: [config, bridge]\n"
+              "    if: ${{ needs.config.outputs.windows == 'true' }}\n    runs-on: windows-2022\n")
+    current = '    timeout-minutes: 240\n'
+    after = "    env:\n      PYTHONUTF8: '1'\n"
+    exact = before + current + after
+    if text.count(before) != 1 or text.count(current) != 1 or text.count(exact) != 1:
+        raise AssertionError('Exact Windows producer outer 240-minute budget context changed')
+    return text.replace(exact, before + '    timeout-minutes: 180\n' + after, 1)
+
+
 def windows_preflight_budget_projection():
     before = "  windows-packaging:\n    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_source_runner == 'windows-2025' && 'windows-2025' || 'windows-2022' }}\n"
     current = '    timeout-minutes: 180\n'
@@ -905,8 +916,59 @@ class ConcurrencyControls(unittest.TestCase):
         with self.assertRaises(AssertionError):
             inverse_lifecycle_workflow_checks('', 'foreign.yml')
 
+    def test_windows_producer_budget_has_only_one_exact_outer_job_change(self):
+        current = C.canonical((ROOT / '.github/workflows/build.yml').read_bytes()).decode()
+        budget_only = inverse_windows_producer_budget(current)
+        early = _lifecycle_projection.early_windows_lifecycle()
+        self.assertEqual(budget_only.count(early), 1)
+        original = budget_only.replace(early, '', 1)
+        self.assertEqual(hashlib.sha256(original.encode()).hexdigest(),
+                         'cfabeb31aef95f1c8a20df5946caf9ea83f9b95c37ca851a0f5c709a0645cdf8')
+        self.assertEqual(current.replace('    timeout-minutes: 240\n', '    timeout-minutes: 180\n', 1), budget_only)
+        self.assertEqual(current.count('    timeout-minutes: 180\n'), 2)
+        self.assertEqual(hashlib.sha256((ROOT / 'scripts/test-support-launch-windows.ps1').read_bytes()).hexdigest(),
+                         'c1f3e99ebda0a146bce9b54f215feeebd0c6d19bec19f2a280259d311983c44b')
+        for mutation in (current.replace('timeout-minutes: 240', 'timeout-minutes: 239'),
+                         current.replace('    timeout-minutes: 240\n', ''),
+                         current.replace('    timeout-minutes: 240\n', '    timeout-minutes: 240\n' * 2),
+                         current.replace('    runs-on: windows-2022\n    timeout-minutes: 240\n',
+                                         '    timeout-minutes: 240\n    runs-on: windows-2022\n'),
+                         current.replace('    timeout-minutes: 180\n', '    timeout-minutes: 240\n', 1)):
+            with self.subTest(digest=hashlib.sha256(mutation.encode()).hexdigest()), self.assertRaises(AssertionError):
+                inverse_windows_producer_budget(mutation)
+
+    def test_early_windows_lifecycle_is_fatal_native_dart_after_clone_before_composition(self):
+        early = _lifecycle_projection.early_windows_lifecycle()
+        for workflow, job, clone, composition, late in (
+                ('build.yml', 'windows', 'Fetch upstream RustDesk', 'Apply Mixel-Remote branding',
+                 'Preflight generated support source and reporter'),
+                ('preflight.yml', 'windows-packaging', 'Fetch pinned complete Windows source',
+                 'Fetch exact pinned native AV1 API headers without codec compilation',
+                 'Exercise complete Windows generated source, keep-awake and native branding')):
+            text = C.canonical((ROOT / '.github/workflows' / workflow).read_bytes()).decode()
+            section = re.search(r'^  ' + re.escape(job) + r':\n(.*?)(?=^  [A-Za-z][A-Za-z0-9_-]*:|\Z)',
+                                text, re.M | re.S).group(1)
+            self.assertEqual(section.count(early), 1)
+            self.assertLess(section.index('name: ' + clone), section.index(early))
+            self.assertLess(section.index(early), section.index('name: ' + composition))
+            self.assertLess(section.index('name: ' + composition), section.index('name: ' + late))
+            control = early.split('      - name: Preserve early Windows', 1)[0]
+            self.assertNotIn('        if:', control); self.assertNotIn('continue-on-error:', control)
+            self.assertIn('        shell: pwsh\n', control)
+            self.assertIn('--source rustdesk --dart $env:DART_BIN --output $early\n', control)
+            self.assertIn("if ($LASTEXITCODE -ne 0) { throw 'Early actual file-dialog lifecycle controls failed.' }", control)
+            self.assertIn("'mixel-file-dialog-lifecycle-early'", control)
+            self.assertNotIn('command -v', control)
+        suite = ast.parse((ROOT / 'scripts/test-support-file-dialog-lifecycle.py').read_text(encoding='utf-8'))
+        tests = next(node for node in suite.body if isinstance(node, ast.ClassDef) and node.name == 'LifecycleTests')
+        self.assertEqual(len([node for node in tests.body if isinstance(node, ast.FunctionDef)
+                              and node.name.startswith('test_')]), 9)
+        dispatcher = (ROOT / 'scripts/test-windows-generated-source.sh').read_text(encoding='utf-8')
+        self.assertEqual(dispatcher.count('python scripts/test-support-file-dialog-lifecycle.py --source '), 1)
+
     def test_workflow_whole_inverse_has_only_two_ordered_additions(self):
         value = C.canonical((ROOT / '.github/workflows/build.yml').read_bytes()).decode()
+        value = inverse_windows_producer_budget(value)
         value = inverse_lifecycle_workflow_checks(value, 'build.yml')
         value = inverse_windows_sdk_source_diagnostics(value, 'build.yml')
         value = inverse_uri_workflow_checks(value, 'build.yml')

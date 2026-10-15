@@ -110,6 +110,22 @@ jobs:
         env:
           UPSTREAM_VERSION: ${{ steps.config.outputs.upstream_version }}
         run: git clone --depth 1 --branch "$UPSTREAM_VERSION" --recurse-submodules https://github.com/rustdesk/rustdesk.git rustdesk
+      - name: Prove file-dialog lifecycle before complete Windows source checks
+        shell: pwsh
+        run: |
+          if (-not $env:DART_BIN) { throw 'Canonical Windows Dart SDK is required for the early lifecycle gate.' }
+          $early = Join-Path $env:RUNNER_TEMP 'mixel-file-dialog-lifecycle-early'
+          python scripts/test-support-file-dialog-lifecycle.py --source rustdesk --dart $env:DART_BIN --output $early
+          if ($LASTEXITCODE -ne 0) { throw 'Early actual file-dialog lifecycle controls failed.' }
+      - name: Preserve early Windows file-dialog lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-file-dialog-lifecycle-early
+          path: ${{ runner.temp }}/mixel-file-dialog-lifecycle-early/
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Fetch exact pinned native AV1 API headers without codec compilation
         shell: bash
         run: |
