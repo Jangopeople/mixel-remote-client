@@ -353,8 +353,8 @@ class StrictReplayControls(unittest.TestCase):
                          "repos/" + v.REPOSITORY + "/actions/runs/" + str(v.RUN)])
         self.assertNotIn("--allow-escape-sequences", metadata.call_args.args[0])
         profile = v.source_contract(ROOT)
-        self.assertEqual(v.PROFILE_HASH, "f3775a2475abfb94f861f027423716357d3f4cdf633b148e0fec782d70cfee3b")
-        self.assertEqual(v.CONTROLS_HASH, "88f8f9793da4165223a77f4227eeff26ae5225ec99eaf8d74884a326c72d9b87")
+        self.assertEqual(v.PROFILE_HASH, "be9f0a846ef4be5c17eaa302ce7c81fcd298f37e5c8d3afc9238845c8f091b33")
+        self.assertEqual(v.CONTROLS_HASH, "1f3fb2ec96e237a243fe36cf5d63263cbff6255014d3ef0aeed4745da108f8b0")
         self.assertEqual(profile["reviewedSources"]["scripts/test-support-launch-macos-concurrency-controls.py"], v.CONTROLS_HASH)
         self.assertEqual(profile["reviewedSources"]["scripts/file_dialog_workflow_projection.py"],
                          "07d61633acee3a09fd505843664c3b560812276e41ba0fe02206278ae2b80bc8")
@@ -871,6 +871,29 @@ class StrictReplayControls(unittest.TestCase):
                     self.assertEqual(fact["scenarios"][0]["endpointCleanupFailures"][0]["reasonCode"], "pid-marker-unsafe")
                 if case == "caller-times-out":
                     self.assertEqual(receipt["refusalCategory"], "native-child-timeout-cleanup-unverified")
+
+    def test_standard95_workflow_projection_drift_refuses_before_provider_or_native(self):
+        relative = "scripts/standard_foreground95_workflow_projection.py"
+        carrier = self.root / "changed-standard95-reviewed-workflow-projection"
+        shutil.copytree(ROOT / "scripts", carrier / "scripts")
+        (carrier / ".github/workflows").mkdir(parents=True)
+        shutil.copy2(ROOT / ".github/workflows/diagnose-macos-failed-app.yml",
+                     carrier / ".github/workflows/diagnose-macos-failed-app.yml")
+        with (carrier / relative).open("ab") as stream:
+            stream.write(b"\n# unreviewed workflow projection\n")
+        destination = self.root / "never-created-private-output"
+        safe = self.root / "never-created-safe-output"
+        arguments = ["--diagnostic-checkout", str(carrier), "--producer-checkout", str(self.root),
+                     "--destination", str(destination), "--safe-output", str(safe)]
+        with patch.object(v, "hosted_context", return_value="b" * 40), \
+             patch.object(v, "api", side_effect=AssertionError("Provider metadata forbidden")) as provider, \
+             patch.object(v, "run_caller", side_effect=AssertionError("Native diagnostic forbidden")) as native:
+            with self.assertRaisesRegex(v.Refusal, "^reviewed-replay-source-drift$"):
+                v.main(arguments)
+            provider.assert_not_called()
+            native.assert_not_called()
+        self.assertFalse(destination.exists())
+        self.assertFalse(safe.exists())
 
 
 def load_tests(loader, standard_tests, pattern):

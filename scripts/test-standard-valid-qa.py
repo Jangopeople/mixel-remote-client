@@ -17,6 +17,10 @@ _lifecycle_spec = importlib.util.spec_from_file_location('mixel_lifecycle_workfl
 _lifecycle_projection = importlib.util.module_from_spec(_lifecycle_spec)
 _lifecycle_spec.loader.exec_module(_lifecycle_projection)
 inverse_lifecycle_workflow_checks = _lifecycle_projection.inverse_lifecycle_workflow_checks
+_standard95_spec = importlib.util.spec_from_file_location('mixel_standard95_workflow_projection', ROOT / 'scripts/standard_foreground95_workflow_projection.py')
+_standard95_projection = importlib.util.module_from_spec(_standard95_spec)
+_standard95_spec.loader.exec_module(_standard95_projection)
+inverse_standard_foreground95_runtime_checks = _standard95_projection.inverse_standard_foreground95_runtime_checks
 DRIVER = SCRIPTS / 'observe-standard-valid-qa-windows.ps1'
 KNOWN = SCRIPTS / 'test-standard-qa-session-directory.cs'
 ORIGINAL = SCRIPTS / 'test-support-lease-standard-windows.ps1'
@@ -698,6 +702,25 @@ if($first -cne 'ABA_UNVERIFIED' -or $script:userRemoved -or [MixelOrdinaryTokenF
 'PASS: literal A/single-mask12/original8/restored-A and full outer finally sixteen fault scenarios; initialA precedes grant; original8 codes retained; restoration and desktop independent; ctor/desktop/hash/child/namespace uncertainty quarantines account/profile/root; pre-registration diagnostic quarantine and output error precedence held; temporary credentials cleared; original5 remains firstfatal.'
 '''.replace('__ORIGINAL__', str(ORIGINAL).replace("'", "''"))
         print(invoke(body, KNOWN.read_text() + mock + fixture).splitlines()[-1])
+
+    def test_standard_foreground95_runtime_inverse_preserves_app1979_and_refuses_drift(self):
+        text = (ROOT / '.github/workflows/build.yml').read_text(encoding='utf-8')
+        projected = inverse_standard_foreground95_runtime_checks(text, 'build.yml')
+        self.assertEqual(hashlib.sha256(projected.encode()).hexdigest(), _standard95_projection.APP_BUILD_WORKFLOW_SHA256)
+        preflight = (ROOT / '.github/workflows/preflight.yml').read_text(encoding='utf-8')
+        self.assertEqual(inverse_standard_foreground95_runtime_checks(preflight, 'preflight.yml'), preflight)
+        for original,current in _standard95_projection.HUNKS:
+            for mode,mutant in {
+                'missing':text.replace(current,'',1),
+                'duplicate':text.replace(current,current+current,1),
+                'changed':text.replace(current,current.replace('windows-2025','windows-latest',1) if 'windows-2025' in current else current+'          # drift\n',1),
+                'moved':text.replace(current,'',1)+current,
+                'wrong-job':text.replace('\n  runtime:\n','\n  foreign-runtime:\n',1),
+            }.items():
+                with self.subTest(mode=mode), self.assertRaises(AssertionError):
+                    inverse_standard_foreground95_runtime_checks(mutant, 'build.yml')
+        with self.assertRaises(AssertionError): inverse_standard_foreground95_runtime_checks('', 'foreign.yml')
+        with self.assertRaises(AssertionError): inverse_standard_foreground95_runtime_checks(preflight+_standard95_projection.CALLER_CURRENT, 'preflight.yml')
 
 
 if __name__ == '__main__':

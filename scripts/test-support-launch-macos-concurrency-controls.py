@@ -33,6 +33,10 @@ _lifecycle_spec = importlib.util.spec_from_file_location('mixel_lifecycle_workfl
 _lifecycle_projection = importlib.util.module_from_spec(_lifecycle_spec)
 _lifecycle_spec.loader.exec_module(_lifecycle_projection)
 inverse_lifecycle_workflow_checks = _lifecycle_projection.inverse_lifecycle_workflow_checks
+_standard95_spec = importlib.util.spec_from_file_location('mixel_standard95_workflow_projection', ROOT / 'scripts/standard_foreground95_workflow_projection.py')
+_standard95_projection = importlib.util.module_from_spec(_standard95_spec)
+_standard95_spec.loader.exec_module(_standard95_projection)
+inverse_standard_foreground95_runtime_checks = _standard95_projection.inverse_standard_foreground95_runtime_checks
 HELPER = ROOT / 'scripts/test-support-launch-macos-concurrency.py'
 BASE_WORKFLOW_HASH = '08abed8675c6206d56722af3a52b4ea3cc09c13d83838ed6b6443febb4c21018'
 ADDITIONS = (
@@ -918,6 +922,7 @@ class ConcurrencyControls(unittest.TestCase):
 
     def test_windows_producer_budget_has_only_one_exact_outer_job_change(self):
         current = C.canonical((ROOT / '.github/workflows/build.yml').read_bytes()).decode()
+        current = inverse_standard_foreground95_runtime_checks(current, 'build.yml')
         budget_only = inverse_windows_producer_budget(current)
         early = _lifecycle_projection.early_windows_lifecycle()
         self.assertEqual(budget_only.count(early), 1)
@@ -968,6 +973,7 @@ class ConcurrencyControls(unittest.TestCase):
 
     def test_workflow_whole_inverse_has_only_two_ordered_additions(self):
         value = C.canonical((ROOT / '.github/workflows/build.yml').read_bytes()).decode()
+        value = inverse_standard_foreground95_runtime_checks(value, 'build.yml')
         value = inverse_windows_producer_budget(value)
         value = inverse_lifecycle_workflow_checks(value, 'build.yml')
         value = inverse_windows_sdk_source_diagnostics(value, 'build.yml')
@@ -1814,6 +1820,25 @@ class ConcurrencyControls(unittest.TestCase):
         attributes = endpoint.lstat()
         self.assertTrue(stat.S_ISSOCK(attributes.st_mode)); self.assertEqual(attributes.st_uid, os.getuid())
         endpoint.unlink(); native_directory.cleanup()
+
+    def test_standard_foreground95_runtime_inverse_preserves_app1979_and_refuses_drift(self):
+        text = (ROOT / '.github/workflows/build.yml').read_text(encoding='utf-8')
+        projected = inverse_standard_foreground95_runtime_checks(text, 'build.yml')
+        self.assertEqual(hashlib.sha256(projected.encode()).hexdigest(), _standard95_projection.APP_BUILD_WORKFLOW_SHA256)
+        preflight = (ROOT / '.github/workflows/preflight.yml').read_text(encoding='utf-8')
+        self.assertEqual(inverse_standard_foreground95_runtime_checks(preflight, 'preflight.yml'), preflight)
+        for original,current in _standard95_projection.HUNKS:
+            for mode,mutant in {
+                'missing':text.replace(current,'',1),
+                'duplicate':text.replace(current,current+current,1),
+                'changed':text.replace(current,current.replace('windows-2025','windows-latest',1) if 'windows-2025' in current else current+'          # drift\n',1),
+                'moved':text.replace(current,'',1)+current,
+                'wrong-job':text.replace('\n  runtime:\n','\n  foreign-runtime:\n',1),
+            }.items():
+                with self.subTest(mode=mode), self.assertRaises(AssertionError):
+                    inverse_standard_foreground95_runtime_checks(mutant, 'build.yml')
+        with self.assertRaises(AssertionError): inverse_standard_foreground95_runtime_checks('', 'foreign.yml')
+        with self.assertRaises(AssertionError): inverse_standard_foreground95_runtime_checks(preflight+_standard95_projection.CALLER_CURRENT, 'preflight.yml')
 
 
 FOUNDATION_STORAGE_DRIVER = r"""

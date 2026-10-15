@@ -1,0 +1,95 @@
+{
+  "schema": 1,
+  "scope": "root-current1979-whole-green-before-standard-foreground95",
+  "root_whole_green_verified": true,
+  "source": "1979d9432c316f0b10d79fb170407cf6859b1127",
+  "tree": "4d36a5cf8a22ce4c473a8e270cbc1325d21a0cbe",
+  "producer_run": 38799293531,
+  "producer_attempt": 1,
+  "producer_windows_job": 116645947382,
+  "preflight_run": 38799071390,
+  "comparison_run": 38799071930,
+  "checks": {
+    "all_required_producer_jobs": "success",
+    "mandatory_preflight": "success",
+    "actual2022_source_comparison": "success",
+    "actual2025_source_comparison": "success"
+  },
+  "original_evidence_sha256": {
+    "producer": "c1a92dc400e923f81006f6790137f277e5b5cb88858efd3cd2b3a9cfefcce2b5",
+    "producerJobs": "cf1788bd5dd783ac9fb4b6749cf9755e0946519e6e4fa1f8d81ca7cb4d560e45",
+    "preflight": "cbd35d009425a0084b8ce0ff336809dc31f9237e7ca29712162de7b862196e19",
+    "preflightJobs": "d4548faf49994a79889fca2c55d37189d817011374972f53d8e261666f05c7b8",
+    "comparison": "e582ab7019a78b0891f138b65cf455f316bd3a9ca0078d77216a7c80b71ba71c",
+    "comparisonJobs": "c02ba6d2820e912ba8c0f8fcc06bacef9480e8bd1a2159e08478d05b2ca47359"
+  },
+  "references": {
+    "producer": {
+      "path": "scripts/qa/current1979-standard95-evidence/producer.json",
+      "bytes": 14243,
+      "sha256": "c1a92dc400e923f81006f6790137f277e5b5cb88858efd3cd2b3a9cfefcce2b5"
+    },
+    "producerJobs": {
+      "path": "scripts/qa/current1979-standard95-evidence/producerJobs.json",
+      "bytes": 40721,
+      "sha256": "cf1788bd5dd783ac9fb4b6749cf9755e0946519e6e4fa1f8d81ca7cb4d560e45"
+    },
+    "preflight": {
+      "path": "scripts/qa/current1979-standard95-evidence/preflight.json",
+      "bytes": 14311,
+      "sha256": "cbd35d009425a0084b8ce0ff336809dc31f9237e7ca29712162de7b862196e19"
+    },
+    "preflightJobs": {
+      "path": "scripts/qa/current1979-standard95-evidence/preflightJobs.json",
+      "bytes": 21383,
+      "sha256": "d4548faf49994a79889fca2c55d37189d817011374972f53d8e261666f05c7b8"
+    },
+    "comparison": {
+      "path": "scripts/qa/current1979-standard95-evidence/comparison.json",
+      "bytes": 14350,
+      "sha256": "e582ab7019a78b0891f138b65cf455f316bd3a9ca0078d77216a7c80b71ba71c"
+    },
+    "comparisonJobs": {
+      "path": "scripts/qa/current1979-standard95-evidence/comparisonJobs.json",
+      "bytes": 5154,
+      "sha256": "c02ba6d2820e912ba8c0f8fcc06bacef9480e8bd1a2159e08478d05b2ca47359"
+    }
+  },
+  "reviewed_harness_blobs": {
+    ".github/workflows/build.yml": "4a0a68690b7c0899ad8ddc433629237e30eb6945f5bb125cd4d2b35173690873",
+    "scripts/capture-standard95-state.py": "320c3e9b18395a78b47b6aac9ff2827afd9283ff57b965ef352240dcf4032d4e",
+    "scripts/collect-windows-release-runtime.py": "5bd875229f3311ff6c9bb87d35be8422fe380bd60324104784626d1a6f64429a",
+    "scripts/diagnose-macos-concurrency-failed-intel.py": "8145e9c8983620286d241377adc1ecaee109a3fc85eb3754e7d3425a7b3a17d8",
+    "scripts/failed-intel-concurrency-replay-profile.json": "be9f0a846ef4be5c17eaa302ce7c81fcd298f37e5c8d3afc9238845c8f091b33",
+    "scripts/prepare-standard-foreground95.py": "c300953614be8da4d941f9380dc56e9c821205133d61436154136981cbd02d86",
+    "scripts/standard95_guard.py": "f93c25d52da42a42ae7f45541a43aefa01955f1748a40980ebcdfcbc98e98ddf",
+    "scripts/standard_foreground95_workflow_projection.py": "4f1c736dc0bdf1406ddc3fe0babc5ba3960cc2e8d7a0a75a69840714dbf63c63",
+    "scripts/support-runtime-probe-windows.ps1": "6fda08837d4f8451ede9c02532b8f2bc40a76aec51839ec06fcc91be471fc28e",
+    "scripts/support-windows-desktop-identity-diagnostic.cs": "e8e292ee6c5ab2604a2b4d45a6d09b74f86489d48df3dbb194ac552313b8e8d6",
+    "scripts/test-diagnose-macos-concurrency-failed-intel.py": "996381a2360a2c28a5bc9977f0a4d185c325161f16f47cffd6aad3525633c97e",
+    "scripts/test-hosted-qa-session-directory.cs": "b7f7886e2e6de9f7d76ef371473a436d8845b1396c12b63517331894d4611d4e",
+    "scripts/test-standard-foreground95-adapter.py": "1b1a47054ac6ae4539362d5f9552ad458a85396183256db497a6f091fddb4255",
+    "scripts/test-standard-valid-qa.py": "9648ed225582489ad4318df8fff63c2bd089504af1e0c5a4a5c14325a3dfc68f",
+    "scripts/test-standard95-normal-guards.py": "0fe4c277d0df2b9e7bffccb6b8e84030e87a1f3233426a7d1c09d1dafaf83cc4",
+    "scripts/test-support-launch-macos-concurrency-controls.py": "1f3fb2ec96e237a243fe36cf5d63263cbff6255014d3ef0aeed4745da108f8b0",
+    "scripts/test-support-launch-windows.ps1": "c1f3e99ebda0a146bce9b54f215feeebd0c6d19bec19f2a280259d311983c44b",
+    "scripts/verify-windows-payload.ps1": "5c562f87f7e67b6dc8d73907f530fa82e7e255aa2837ab20ae4fd4c32dfbf32b",
+    "scripts/windows-standard-namespace-access.cs": "7f04727ae8161b8e4da1d2e4a74a0324549996da5af52a08c14538ccf53b2589",
+    "scripts/qa/current1979-standard95-evidence/producer.json": "c1a92dc400e923f81006f6790137f277e5b5cb88858efd3cd2b3a9cfefcce2b5",
+    "scripts/qa/current1979-standard95-evidence/producerJobs.json": "cf1788bd5dd783ac9fb4b6749cf9755e0946519e6e4fa1f8d81ca7cb4d560e45",
+    "scripts/qa/current1979-standard95-evidence/preflight.json": "cbd35d009425a0084b8ce0ff336809dc31f9237e7ca29712162de7b862196e19",
+    "scripts/qa/current1979-standard95-evidence/preflightJobs.json": "d4548faf49994a79889fca2c55d37189d817011374972f53d8e261666f05c7b8",
+    "scripts/qa/current1979-standard95-evidence/comparison.json": "e582ab7019a78b0891f138b65cf455f316bd3a9ca0078d77216a7c80b71ba71c",
+    "scripts/qa/current1979-standard95-evidence/comparisonJobs.json": "c02ba6d2820e912ba8c0f8fcc06bacef9480e8bd1a2159e08478d05b2ca47359"
+  },
+  "artifacts": {
+    "windows": {
+      "id": 12013042292,
+      "digest": "sha256:bada1d59840655d5b6d7378303a343b4f3f639466d4748d9b74c6d52182ee01a"
+    },
+    "windows-msix-payload": {
+      "id": 12013350933,
+      "digest": "sha256:4f201bba01c3b11998a36f1ea06ae72f9857c43444818607ec1dbd57f91f439a"
+    }
+  }
+}

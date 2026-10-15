@@ -1241,11 +1241,25 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, windows-2022]
+        os: [windows-2025, windows-2022]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
+    env:
+      MIXEL_STANDARD95_SOURCE_SCOPE: ${{ inputs.runtime_windows_release_gate && 'root-current1979-whole-green-before-standard-foreground95' || '' }}
+      WINDOWS_RELEASE_GATE: ${{ inputs.runtime_windows_release_gate }}
+      RUNTIME_RUN_ID: ${{ inputs.runtime_artifact_run }}
+      PUBLISH_REQUESTED: ${{ inputs.publish_r2 }}
     steps:
       - uses: actions/checkout@v5
+      - name: Restore exact normal QA Git bytes before source admission
+        if: ${{ inputs.runtime_windows_release_gate }}
+        shell: pwsh
+        run: |
+          python -B scripts/capture-standard95-state.py restore-git-bytes --repository $env:GITHUB_WORKSPACE
+          if ($LASTEXITCODE -ne 0) { throw 'Normal QA exact Git byte restoration failed.' }
+          if (-not (Test-Path scripts/qa/current1979-standard-foreground95-root-gate.json -PathType Leaf)) {
+            throw 'Normal Root gate absent; no collection or application work permitted.'
+          }
       - name: Validate artifact-only diagnostic request
         id: request
         env:
@@ -1260,6 +1274,25 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Artifact-only Windows runtime request qualification failed.' }
           python scripts/collect-windows-release-runtime.py request
           if ($LASTEXITCODE -ne 0) { throw 'Debugger-free Windows release gate request qualification failed.' }
+      - name: Admit normal whole-green source before collection or application work
+        id: normal_before
+        if: ${{ inputs.runtime_windows_release_gate }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python -B scripts/test-standard-foreground95-adapter.py
+          if ($LASTEXITCODE -ne 0) { throw 'Normal Standard95 adapter source controls failed.' }
+          python -B scripts/test-standard95-normal-guards.py
+          if ($LASTEXITCODE -ne 0) { throw 'Normal Standard95 source guard controls failed.' }
+          $gate = (Resolve-Path scripts/qa/current1979-standard-foreground95-root-gate.json).Path
+          $gateHash = (Get-FileHash $gate -Algorithm SHA256).Hash.ToLowerInvariant()
+          $tree = (& git rev-parse 'HEAD^{tree}').Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'Normal QA source tree unavailable.' }
+          $fresh = Join-Path $env:RUNNER_TEMP ('mixel-normal95-live-before-'+[Guid]::NewGuid().ToString('N'))
+          python -B scripts/capture-standard95-state.py --repository $env:GITHUB_WORKSPACE --root-gate $gate --root-gate-sha256 $gateHash --harness-source $env:GITHUB_SHA --harness-tree $tree --output $fresh --stage before
+          if ($LASTEXITCODE -ne 0) { throw 'Fresh normal whole-green facts refused before app work.' }
+          "NORMAL95_BEFORE=$fresh" >> $env:GITHUB_ENV
       - name: Qualify exact ordinary Windows desktop fixture
         shell: pwsh
         run: ./scripts/test-windows-pipeline.ps1
@@ -1349,7 +1382,34 @@ jobs:
         env:
           MIXEL_HOSTED_OWNED_QA_NAMESPACE: "1"
         run: |
-          ./scripts/test-support-launch-windows.ps1 -Executable release-client/Mixel-Remote-QS.exe -Portable -QuickSupport -ExpectedPayload runtime-client -OrdinaryThenQuickSupport
+          $ErrorActionPreference = 'Stop'
+          python -B scripts/test-standard-foreground95-adapter.py
+          if ($LASTEXITCODE -ne 0) { throw 'Standard foreground95 adapter source controls failed.' }
+          $gate = (Resolve-Path scripts/qa/current1979-standard-foreground95-root-gate.json).Path
+          $gateHash = (Get-FileHash -LiteralPath $gate -Algorithm SHA256).Hash.ToLowerInvariant()
+          $tree = (& git rev-parse 'HEAD^{tree}').Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'Actual future QA harness tree unavailable.' }
+          $owned = Join-Path $env:RUNNER_TEMP ('mixel-standard-foreground95-'+[Guid]::NewGuid().ToString('N'))
+          python -B scripts/prepare-standard-foreground95.py --repository $env:GITHUB_WORKSPACE --output $owned --root-gate $gate --root-gate-sha256 $gateHash --collection release-runtime-collection/artifact-provenance.json --harness-source $env:GITHUB_SHA --harness-tree $tree --live-state $env:NORMAL95_BEFORE
+          if ($LASTEXITCODE -ne 0) { throw 'Source1979 Standard foreground95 preparation refused.' }
+          if (Test-Path -LiteralPath standard-foreground95-preparation.json) { throw 'Existing Standard foreground95 preparation evidence refused.' }
+          Copy-Item -LiteralPath (Join-Path $owned 'preparation-manifest.json') -Destination standard-foreground95-preparation.json
+          $generated = Join-Path $owned 'test-standard-foreground95.generated.ps1'
+          & pwsh -NoLogo -NoProfile -NonInteractive -File $generated -Executable (Resolve-Path release-client/Mixel-Remote-QS.exe).Path -Portable -QuickSupport -ExpectedPayload (Resolve-Path runtime-client).Path -OrdinaryThenQuickSupport
+          if ($LASTEXITCODE -ne 0) { throw 'Actual signed Standard foreground95 failed.' }
+      - name: Retain fresh normal same-HEAD facts after original cleanup
+        if: ${{ always() && inputs.runtime_windows_release_gate && steps.normal_before.outcome == 'success' }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $gate = (Resolve-Path scripts/qa/current1979-standard-foreground95-root-gate.json).Path
+          $gateHash = (Get-FileHash $gate -Algorithm SHA256).Hash.ToLowerInvariant()
+          $tree = (& git rev-parse 'HEAD^{tree}').Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'Normal QA source tree unavailable after cleanup.' }
+          $fresh = Join-Path $env:RUNNER_TEMP ('mixel-normal95-live-after-'+[Guid]::NewGuid().ToString('N'))
+          python -B scripts/capture-standard95-state.py --repository $env:GITHUB_WORKSPACE --root-gate $gate --root-gate-sha256 $gateHash --harness-source $env:GITHUB_SHA --harness-tree $tree --output $fresh --stage after
+          if ($LASTEXITCODE -ne 0) { throw 'Fresh normal whole-green facts changed; qualification refused.' }
       - name: Save synthetic runtime diagnostics
         if: always()
         shell: pwsh
@@ -1365,6 +1425,12 @@ jobs:
           if (Test-Path release-runtime-collection/artifact-provenance.json) {
             Copy-Item release-runtime-collection/artifact-provenance.json runtime-diagnostics/customer-release-input-provenance.json
             Copy-Item release-runtime-collection/run-metadata.json runtime-diagnostics/customer-release-producer-run.json
+          }
+          if (Test-Path -LiteralPath standard-foreground95-preparation.json) {
+            Copy-Item -LiteralPath standard-foreground95-preparation.json -Destination runtime-diagnostics/standard-foreground95-preparation.json
+          }
+          Get-ChildItem $env:RUNNER_TEMP -Directory -Filter 'mixel-normal95-live-*' | ForEach-Object {
+            Copy-Item -LiteralPath $_.FullName -Destination runtime-diagnostics -Recurse
           }
           $ownedLogs = Join-Path $env:RUNNER_TEMP 'mixel-owned-ordinary-qs-logs'
           if (Test-Path $ownedLogs) {
