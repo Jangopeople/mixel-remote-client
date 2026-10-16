@@ -88,9 +88,35 @@ The complete24 downstream source/headless consumer sweep also passes, independen
 sealed and root-rehashed in `post-updater-source-consumers-7bced-peer-20261016-hu89ciu2/`.
 Do not repeat unchanged long suites merely because these QA-only files changed.
 
-Next: push this exact combined revision, dispatch one fresh all-four-platform
-private build with publish_r2=false and require same-source whole-green mandatory
-preflight/comparison. An unpublished producer requires nine successful jobs and
+Combined source33ed5ba9bdabc13680e20319c2913a48b7a103d5 actually passes bridge
+and all three native input-component jobs in producer38871006685. Supplemental
+Windows Bash run38871002799 then fails both2022/2025 solely because the existing
+QA expected SDK argument lists omit the new --output pair. Four accepted request
+variants fail exact list comparison; dispatcher ordering, invalid requests and
+fatal23/24 behavior remain intact. Original logs from jobs116874804464 and
+116874804823 are retained once in
+`root-33ed-windows-bash-boundary-original-20261016/`. Root requests cancellation
+of the obsolete33 producer/preflight/comparison; producer and comparison are
+terminal cancelled at the last readback, preflight cancellation is still pending.
+No33 package or whole workflow qualification is claimed.
+
+The next minimal six-file QA correction adds only the two exact expected output
+argument tails, updates three same-checkout wrapper integrity pins and three
+current AFTER-side projection literals. Historical BEFORE sides stay exact.
+Actual selected dispatcher test reproduces four failures at33 and passes after
+correction; all189 assertions, fatal states and15-second child deadlines remain.
+Root independently reverses all six complete files back to exact33. SDK helper95,
+updater936, both workflows, all product generators and18 product bytes are
+unchanged. Packet manifest SHA256 is
+`325f4029eddd4e93ef61f073e07a946bbf2731d76f4d43d7742c274780e83b3f`
+in `whole-ci-current-33ed-sdk-argv-expectations-20261016/`; Root receipt is
+`root-final-input-lifecycle-integration-20261016/ROOT-WINDOWS-ARGV6-ADOPTION.json`.
+Fresh33 Standard95/Linux recipes remain sealed pending historical packets; the
+corrected source requires new exact run bindings, never changed historical facts.
+
+Next: push this minimal QA correction and require actual fast Windows2022/2025
+boundary success before dispatching a fresh all-four-platform private build with
+publish_r2=false. Require same-source whole-green mandatory preflight/comparison. An unpublished producer requires nine successful jobs and
 exactly four skipped jobs including upload; never enable publication to satisfy QA.
 Only then collect/qualify the new signed packages, regenerate Standard95/Linux
 recipe facts for that exact source/run and execute fresh native acceptance.

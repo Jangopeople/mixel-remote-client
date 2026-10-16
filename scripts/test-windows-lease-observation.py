@@ -960,10 +960,12 @@ if sys.argv[1]==target:
                     expected_sdk = ["scripts/test-support-flutter-sdk-compatibility.py", "--app"]
                     if full == "true":
                         self.assertEqual(arguments[2][0:4], expected_sdk + [app.as_posix(), "--flutter"])
-                        self.assertEqual(arguments[2][5:], ["--bash", expected_shell])
+                        self.assertEqual(arguments[2][5:], ["--bash", expected_shell, "--output",
+                                                            runner_temp.as_posix() + "/mixel-sdk-compatibility"])
                     else:
                         self.assertEqual(arguments[2], expected_sdk + [runner_temp.as_posix() + "/mixel-sdk-source/pipeline-lf",
-                                                                     "--bash", expected_shell])
+                                                                     "--bash", expected_shell, "--output",
+                                                                      runner_temp.as_posix() + "/mixel-sdk-compatibility"])
                     self.assertEqual(arguments[3][0:2], ["scripts/test-support-macos-termination.py", "--flutter"])
                     self.assertEqual(arguments[3][3:], ["--bash", expected_shell])
                     self.assertEqual(arguments[4], ["scripts/test-macos-update.py", "--source", runner_temp.as_posix() + "/mixel-sdk-source/pipeline-lf", "--source-only"])
