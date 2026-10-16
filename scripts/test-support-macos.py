@@ -79,8 +79,79 @@ assert arm[1].count('MACOSX_DEPLOYMENT_TARGET = 12.3;') == 6
 assert "platform :osx, '12.3'" in arm[2]
 assert patcher.configure_target(*arm, info, 'aarch64') == arm
 intel = patcher.configure_target(*arm, info, 'x86_64')
-assert intel == (build, project, pods)
+assert intel == (build, patcher.patch_assemble_phase(project), pods)
 assert patcher.configure_target(*intel, info, 'x86_64') == intel
+# The target, complete phase, inputs and outputs remain exact apart from the
+# explicit existing every-build policy. Other shell phases are untouched.
+for ending in ('\n', '\r\n'):
+    before_phase = project.replace('\n', ending)
+    phase_fixed = patcher.patch_assemble_phase(before_phase)
+    assert patcher.patch_assemble_phase(phase_fixed) == phase_fixed
+    assert phase_fixed.replace(patcher.NEW_ASSEMBLE_PHASE.replace('\n', ending), patcher.OLD_ASSEMBLE_PHASE.replace('\n', ending), 1) == before_phase
+for changed in (
+    project.replace('33CC111E2044C6BF0003C045 /* ShellScript */,', '33CC111E2044C6BF0003C046 /* ShellScript */,', 1),
+    project.replace(patcher.ASSEMBLE_TARGET, patcher.ASSEMBLE_TARGET * 2, 1),
+    project.replace(patcher.OLD_ASSEMBLE_PHASE, patcher.OLD_ASSEMBLE_PHASE * 2, 1),
+    project.replace('macos_assemble.sh && touch', 'macos_assemble.sh embed && touch', 1),
+    project.replace('Flutter/ephemeral/tripwire,', 'Flutter/ephemeral/other,', 1),
+    project.replace('/* Begin PBXShellScriptBuildPhase section */', '/* Begin Other section */', 1),
+    project.replace(patcher.OLD_ASSEMBLE_PHASE, '', 1) + patcher.OLD_ASSEMBLE_PHASE,
+    patcher.patch_assemble_phase(project).replace('alwaysOutOfDate = 1;', 'alwaysOutOfDate = 0;'),
+    project.replace('\n', '\r\n', 1),
+):
+    reject(lambda changed=changed: patcher.patch_assemble_phase(changed))
+print('PASS: exact Flutter Assemble target/phase LF and CRLF inverse/idempotence; nine malformed/binding/duplicate/moved/newline controls refuse; script and file lists unchanged')
+for ending in ('\n', '\r\n', 'mixed'):
+    with tempfile.TemporaryDirectory(prefix='mixel-macos-phase-entry-') as directory:
+        repo = Path(directory)
+        paths = ['Cargo.toml', patcher.SOURCE, patcher.BUILD_SOURCE, 'build.py', 'flutter/macos/Runner.xcodeproj/project.pbxproj', 'flutter/macos/Podfile', 'flutter/macos/Runner/Info.plist']
+        for name in paths:
+            file = repo / name
+            file.parent.mkdir(parents=True, exist_ok=True)
+            data = source(name).encode()
+            if name.endswith('project.pbxproj'):
+                data = data.replace(b'\n', b'\r\n', 1) if ending == 'mixed' else data.replace(b'\n', ending.encode())
+            file.write_bytes(data)
+        before = {p: p.read_bytes() for p in repo.rglob('*') if p.is_file()}
+        if ending == 'mixed':
+            reject(lambda: patcher.apply(repo, 'x86_64'))
+            assert all(p.read_bytes() == raw for p, raw in before.items())
+        else:
+            patcher.apply(repo, 'x86_64')
+            file = repo / 'flutter/macos/Runner.xcodeproj/project.pbxproj'
+            fixed_project = file.read_bytes()
+            assert fixed_project.replace(patcher.NEW_ASSEMBLE_PHASE.replace('\n', ending).encode(), patcher.OLD_ASSEMBLE_PHASE.replace('\n', ending).encode(), 1) == before[file]
+            snapshot = {p: p.read_bytes() for p in repo.rglob('*') if p.is_file()}
+            patcher.apply(repo, 'x86_64')
+            assert all(p.read_bytes() == raw for p, raw in snapshot.items())
+print('PASS: actual apply entry preserves LF/CRLF Runner bytes except exact phase insertion, repeats idempotently and refuses mixed-EOL before all writes')
+for ending in ('\n', '\r\n', 'mixed'):
+    with tempfile.TemporaryDirectory(prefix='mixel-macos-phase-cli-') as directory:
+        repo = Path(directory)
+        for name in ['Cargo.toml', patcher.SOURCE, patcher.BUILD_SOURCE, 'build.py', 'flutter/macos/Runner.xcodeproj/project.pbxproj', 'flutter/macos/Podfile', 'flutter/macos/Runner/Info.plist']:
+            file = repo / name
+            file.parent.mkdir(parents=True, exist_ok=True)
+            data = source(name).encode()
+            if name.endswith('project.pbxproj'):
+                data = data.replace(b'\n', b'\r\n', 1) if ending == 'mixed' else data.replace(b'\n', ending.encode())
+            file.write_bytes(data)
+        before = {p: p.read_bytes() for p in repo.rglob('*') if p.is_file()}
+        arguments = [sys.executable, str(ROOT / 'scripts/patch-support-macos.py')]
+        environment = dict(os.environ, RDREPO=str(repo), MIXEL_MACOS_ARCH='x86_64')
+        result = subprocess.run(arguments, env=environment, text=True, capture_output=True, timeout=30)
+        if ending == 'mixed':
+            assert result.returncode != 0 and 'Mixed Runner project newlines' in result.stderr
+            assert all(p.read_bytes() == raw for p, raw in before.items())
+        else:
+            assert result.returncode == 0, result.stdout + result.stderr
+            file = repo / 'flutter/macos/Runner.xcodeproj/project.pbxproj'
+            assert file.read_bytes().replace(patcher.NEW_ASSEMBLE_PHASE.replace('\n', ending).encode(), patcher.OLD_ASSEMBLE_PHASE.replace('\n', ending).encode(), 1) == before[file]
+            snapshot = {p: p.read_bytes() for p in repo.rglob('*') if p.is_file()}
+            again = subprocess.run(arguments, env=environment, text=True, capture_output=True, timeout=30)
+            assert again.returncode == 0, again.stdout + again.stderr
+            assert all(p.read_bytes() == raw for p, raw in snapshot.items())
+print('PASS: actual subprocess CLI LF/CRLF exits0 and preserves exact project inverse/idempotence; mixed-EOL exits nonzero with every input byte unchanged')
+
 reject(lambda: patcher.configure_target(build, project, pods, info, 'arm64'))
 reject(lambda: patcher.configure_target(build.replace('MACOSX_DEPLOYMENT_TARGET=10.14', 'MACOSX_DEPLOYMENT_TARGET=11.0'), project, pods, info, 'aarch64'))
 reject(lambda: patcher.configure_target(build, project.replace('MACOSX_DEPLOYMENT_TARGET = 10.14;', 'MACOSX_DEPLOYMENT_TARGET = 11.0;', 1), pods, info, 'aarch64'))

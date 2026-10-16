@@ -1,5 +1,96 @@
 # Mixel-Remote — Agent Handoff / Current State
 
+## 2026-10-16 — Mac peer-close correction and renderer/build checks; delivery pending
+
+The current revision updates seven reviewed source files on top of
+7082cb476ebed496d37c4311a758cf48b0b74beb. Read the latest Git HEAD and Root's
+checkpoint for the exact new commit/run identities. Do not treat the old source
+cohort, signed Apple Silicon artifact or installed1979 baseline as acceptance of
+this revision. No new customer package is qualified or published.
+
+Producer38891227218/a1 at708: Linux116943060700 succeeds in all33 steps,
+including four real two-desktop transport scenarios. Apple Silicon116943060706
+succeeds with40 successful steps and one expected failure-only diagnostic skip;
+its full generated-app analysis has0errors/0warnings/286infos, production Flutter
+InputModel180 passes, Swift30 state tests pass with effects mocked, compiled
+guard17 passes, and app/DMG notarization succeeds. Intel116943060573 compiles,
+passes those input checks and app notarization/Gatekeeper, then fails packaged
+concurrency verification. This is not a certificate or Apple rejection.
+Windows shipping116943060552 and required Windows116939708551 are still running
+at the latest watcher snapshot13:05UTC. Comparison38890845725/a1 is whole SUCCESS.
+Mandatory preflight38890845862 is not whole qualified. Preserve the remaining
+Windows terminal result before any obsolete-run cleanup; never refetch originals.
+
+Root retained the Intel original log once:515684bytes, SHA256
+f07a8c7943da1a55618b067d4a617f706925f04c57e915d88e72bc26f321f136.
+QA-only artifact12046251438 has2377bytes, SHA256
+fac9ebc612c854a52d2c4da76169f58b3b88aeb9ccf6cfc929480ab98f09a973.
+Its safe facts show expected peerPID/UID followed by exact ENOTCONN57 on the
+second PID read. The helper already handled closure on its first read. The new
+second-read transition retains exact ownership/birth/UID/lease/no-missing guards,
+original active-endpoint exception, deadlines and later fresh inactivity proof.
+It never treats a successful connection or cached UID as endpoint inactivity.
+Ordinary successful rechecks and the first-read branch remain byte-identical.
+
+Three-file proof is in the durable artifact directory below,
+intel-peer-recheck708-1e28680e/final-three-file-proof. Its46-member manifest SHA256
+30531ed222052a36b70ceb72928fedb9a93a0c6f658a28ed357daf3d3e87545a;
+RESULT SHA25641f5eed98b2e1d83769308f9b6b98f8aa874c00bb56b5fddb1a8994737c8dca4.
+LF90+110 and faithful CRLF90+110 all pass with no skips. Exact inverses recover
+all three708 files. The historical runtime diagnostic/profile/workflow stays
+frozen and still refuses changed source. Its unit test supplies a finite17-file,
+strictly pinned historical source view; no old runtime resources are consulted.
+Five QA source consumers now use validated LF/CRLF logical views; original raw
+profiles, literal/hash guards and malformed-source refusal remain preserved.
+
+The two production generators and their two tests also change narrowly:
+TextureRgbaApi.m handles rejected frame submission explicitly while retaining its
+void C ABI and both Swift buffer implementations. Only this member of owned98
+changes;97 peers stay exact. Flutter Assemble's exact phase33CC111E gains
+alwaysOutOfDate=1; its target/body/file-list binding is pinned. The selected
+Runner project is read as physical UTF8 bytes so mixed endings refuse before
+writes. Actual CLI LF/CRLF idempotence and mixed-EOL no-write controls pass.
+Apple SDK ObjC/ObjC++ both-architecture compilation, actual C-to-generated-Swift-
+header-to-CoreVideo acceptance/rejection/retry/lifetime, existing CoreVideo/Rust/
+Dart controls pass. Original adapter reproduces unused-result compilation failure.
+
+Use ONLY the fresh-only warning packet: texture-assemble-fresh-only708 in the
+durable directory, manifest2219 SHA256
+4b72441e7031e71ddd43827d5d3b69a7a692fd13ac77ff24b584ef59d6e2ece0;
+RESULT SHA25600448cdfc0ca0fd37ccb5c5cfa22858cc63b9953e17b6ce33a3b4a47df1213a4.
+Root rehashes all members and preserves a durable copy. Earlier path-based and
+FD-migration proposals are SUPERSEDED. No in-place legacy source migration is
+shipped. Old owned sources refuse before any write and require fresh pinned
+upstream source, as the normal CI pipeline already provisions. Fresh/current
+profiles remain portable; customer app updating is unchanged. Generated
+CVPixelBuffer ownership and Flutter's hardcoded destination metadata diagnostics
+remain triaged separately; the source proof does not clear their old CI messages.
+
+Root combined-source verification passes:90 tests0.521s;110 tests0.728s;
+13 integration tests0.558s;11 logical-view tests0.820s; all OK. All seven Python
+files compile. All363 other tracked files and original modes stay exact before
+HANDOFF update. Proof: root-narrow-mac-fixes-708-adoption-20261016.
+The external disk stall was resolved by ordinary internal-clone work and a
+verified external fast-forward to708; all370 source blobs/modes were checked.
+Continue normal internal commit/push and verified external fast-forward; do not
+access any filesystem path under worktrees or overwrite unrelated changes.
+
+Durable proof root:
+/Users/michaellascar/.codex/artifacts/mixel-remote-reliability-20261016
+Authoritative progress checkpoint:
+/tmp/mixel-current708-authoritative-checkpoint-20261016.json
+The filename is historical; prefer its sourceHead/latest candidate/run fields.
+
+Require new-head early28 and both Windows13+11 success before one unpublished
+all-four-platform dispatch. Same-head producer, mandatory preflight and Windows
+comparison must ALL be whole SUCCESS before original normal package collection,
+signature qualification, fresh Standard95 or native Linux/Mac/PC01 acceptance.
+Historical source50c/658/708 recipes are closed. Physical Mac Shift and normal
+GUI close remain unproven on the new apps. Preserve shared Mac coordination and
+existing customer/test state. Public aliases/stores/main/production infra,
+human-only native URI Open, and automatically rejected GTK investigation remain
+held. Never retry/reassign/bypass that investigation or its held resources.
+
 ## 2026-10-16 — Directory entry guard corrected; native acceptance pending
 
 At source6581384, fast Windows run38888127090 passes all13 integration and11

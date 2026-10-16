@@ -180,6 +180,216 @@ def materialization_controls(output, originals, files):
     return root
 
 
+def adapter_controls(output, files):
+    output = Path(output).resolve(strict=True)
+    original = files[P.API].decode()
+    corrected = P.patch_api(original)
+    assert P.sha(original.encode()) == P.API_SHA
+    assert P.patch_api(corrected) == corrected and P.unpatch_api(corrected) == original
+    assert corrected.replace(P.NEW_API_CALL, P.OLD_API_CALL, 1) == original
+    for mutation in (original + "\n", original.replace("int len", "long len", 1),
+                     original.replace("\n", "\r\n"), corrected.replace("return;", "return 0;", 1),
+                     corrected.replace(P.NEW_API_CALL, P.NEW_API_CALL * 2, 1)):
+        try:
+            P.patch_api(mutation)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("C adapter drift accepted")
+    # A previous owned profile is never migrated in place. Refusal must precede
+    # every source write on both normal and unavailable-dir-fd environments.
+    owned = output / "adapter-old-profile-refusal"
+    shutil.copytree(output / "materialization", owned)
+    target = owned / "flutter" / P.DEPENDENCY
+    (target / P.API).write_bytes(files[P.API])
+    before = snapshot(owned)
+    modes = {p.relative_to(owned).as_posix(): p.stat().st_mode for p in owned.rglob("*")}
+    actual_open = Path.open
+    def read_only_open(path, mode="r", *args, **kwargs):
+        if any(marker in mode for marker in ("w", "a", "x", "+")):
+            raise AssertionError("Oldowned98 refusal attempted a source write")
+        return actual_open(path, mode, *args, **kwargs)
+    for unavailable in (False, True):
+        with patch.object(P.os, "supports_dir_fd", set() if unavailable else P.os.supports_dir_fd), patch.object(P.os, "O_NOFOLLOW", None if unavailable else getattr(P.os, "O_NOFOLLOW", None), create=True), patch.object(Path, "open", read_only_open), patch.object(P, "fetch_source", side_effect=AssertionError("old profile fetched")), patch.object(P.os, "replace", side_effect=AssertionError("old profile replaced a file")):
+            try:
+                P.existing_files(target)
+            except RuntimeError as error:
+                assert str(error) == "Owned renderer C adapter patch missing; reprovision fresh source from pinned upstream"
+            else:
+                raise AssertionError("Uncorrected adapter accepted as final")
+            try:
+                P.apply(owned)
+            except RuntimeError as error:
+                assert str(error) == "Owned renderer C adapter patch missing; reprovision fresh source from pinned upstream"
+            else:
+                raise AssertionError("Oldowned98 migrated in place")
+        assert snapshot(owned) == before
+        assert {p.relative_to(owned).as_posix(): p.stat().st_mode for p in owned.rglob("*")} == modes
+        portable = output / ("adapter-fresh-primitives-" + str(unavailable))
+        write_repo(portable, {name: (output / "materialization" / name).read_bytes() for name in FILES})
+        with patch.object(P.os, "supports_dir_fd", set() if unavailable else P.os.supports_dir_fd), patch.object(P.os, "O_NOFOLLOW", None if unavailable else getattr(P.os, "O_NOFOLLOW", None), create=True), patch.object(P, "fetch_source", return_value=dict(files)) as fetch:
+            P.apply(portable)
+            portable_before = snapshot(portable)
+            P.apply(portable)
+            assert fetch.call_count == 1 and snapshot(portable) == portable_before
+            assert len(P.existing_files(portable / "flutter" / P.DEPENDENCY)) == 98
+    for label, mutate in (
+        ("adapter-drift", lambda p: p.write_text(p.read_text().replace("int len", "long len", 1))),
+        ("adapter-symlink", lambda p: (p.unlink(), p.symlink_to(target / P.API))),
+        ("adapter-hardlink", lambda p: (p.unlink(), os.link(target / P.API, p))),
+    ):
+        case = output / label
+        shutil.copytree(output / "materialization", case)
+        member = case / "flutter" / P.DEPENDENCY / P.API
+        mutate(member)
+        before_case = snapshot(case)
+        with patch.object(P, "fetch_source", side_effect=AssertionError("unsafe adapter fetched")):
+            try:
+                P.apply(case)
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError(label + " accepted")
+        assert snapshot(case) == before_case
+        if label == "adapter-hardlink":
+            member.unlink()
+    print("PASS: exact C adapter inverse/idempotence/five drift refusals; oldowned98 refuses before any write with all bytes/modes preserved under present/absent dir-fd primitives; fresh98 materialization/corrected idempotence pass both; adapter drift/symlink/hardlink refuse")
+    if sys.platform != "darwin":
+        print("SOURCE SCOPE: actual SDK Objective-C adapter controls require macOS")
+        return
+    folder = output / "objc-adapter"
+    include = folder / "texture_rgba_renderer"
+    include.mkdir(parents=True)
+    header = include / "texture_rgba_renderer-Swift.h"
+    header.write_text(r"""#import <Foundation/Foundation.h>
+@interface TextRgba : NSObject
+@property(nonatomic) BOOL accepted;
+@property(nonatomic) NSInteger calls;
+@property(nonatomic) const uint8_t *seenBuffer;
+@property(nonatomic) NSInteger seenLen, seenWidth, seenHeight, seenAlignment;
+- (BOOL)markFrameAvaliableRawWithBuffer:(const uint8_t *)buffer len:(NSInteger)len width:(NSInteger)width height:(NSInteger)height stride_align:(NSInteger)stride_align __attribute__((warn_unused_result));
+@end
+""")
+    harness = folder / "main.m"
+    harness.write_text(r"""#import "texture_rgba_renderer/texture_rgba_renderer-Swift.h"
+#include <assert.h>
+#include <stdio.h>
+@implementation TextRgba
+- (BOOL)markFrameAvaliableRawWithBuffer:(const uint8_t *)buffer len:(NSInteger)len width:(NSInteger)width height:(NSInteger)height stride_align:(NSInteger)alignment {
+    self.calls++; self.seenBuffer=buffer; self.seenLen=len; self.seenWidth=width;
+    self.seenHeight=height; self.seenAlignment=alignment; return self.accepted;
+}
+@end
+extern void FlutterRgbaRendererPluginOnRgba(void *, const uint8_t *, int, int, int, int);
+static void (*const originalCAbi)(void *, const uint8_t *, int, int, int, int) = &FlutterRgbaRendererPluginOnRgba;
+int main(void) { @autoreleasepool {
+    uint8_t bytes[8]={1,2,3,4,5,6,7,8};
+    __weak TextRgba *weak;
+    @autoreleasepool {
+        TextRgba *texture=[TextRgba new]; weak=texture;
+        for (int accepted=0; accepted<=1; accepted++) {
+            texture.accepted=accepted;
+            originalCAbi((__bridge void *)texture, bytes, 8, 2, 1, 1);
+            assert(texture.calls==accepted+1 && texture.seenBuffer==bytes);
+            assert(texture.seenLen==8 && texture.seenWidth==2 && texture.seenHeight==1 && texture.seenAlignment==1);
+        }
+        originalCAbi((__bridge void *)texture, bytes, -1, -2, -3, -4);
+        assert(texture.calls==3 && texture.seenLen==-1 && texture.seenWidth==-2 && texture.seenHeight==-3 && texture.seenAlignment==-4);
+        originalCAbi(NULL, bytes, 8, 2, 1, 1);
+    }
+    assert(weak==nil);
+    puts("PASS: actual Objective-C adapter accepts/rejects once, forwards exact signed C arguments, tolerates nil, and does not retain the renderer; void C ABI links");
+} return 0; }
+""")
+    old = folder / "original.m"; old.write_text(original)
+    fixed = folder / "corrected.m"; fixed.write_text(corrected)
+    flags = ["xcrun", "clang", "-fobjc-arc", "-Werror=unused-result", "-I", str(folder)]
+    negative = subprocess.run(flags + ["-c", str(old), "-o", str(folder / "old.o")], text=True, capture_output=True, timeout=120)
+    (folder / "original-unused-result.log").write_text(negative.stdout + negative.stderr)
+    assert negative.returncode != 0 and "ignoring return value" in negative.stderr and "warn_unused_result" in negative.stderr
+    for architecture, minimum in (("arm64", "12.3"), ("x86_64", "10.14")):
+        run(flags + ["-arch", architecture, "-mmacosx-version-min=" + minimum, "-c", str(fixed), "-o", str(folder / (architecture + ".o"))], folder, architecture + "-compile.log")
+        run(["xcrun", "clang++", "-x", "objective-c++", "-fobjc-arc", "-Werror=unused-result", "-I", str(folder), "-arch", architecture, "-mmacosx-version-min=" + minimum, "-c", str(fixed), "-o", str(folder / (architecture + "-cpp.o"))], folder, architecture + "-cpp-compile.log")
+    for object_path in sorted(folder.glob("*.o")):
+        symbols = run(["nm", "-g", str(object_path)], folder, object_path.stem + "-symbols.log")
+        assert symbols.count(" _FlutterRgbaRendererPluginOnRgba") == 1
+        assert "__Z" not in symbols
+    executable = folder / "adapter-control"
+    run(flags + [str(fixed), str(harness), "-framework", "Foundation", "-o", str(executable)], folder, "link.log")
+    print(run([str(executable)], folder, "runtime.log").strip())
+    print("PASS: original adapter reproduces unused-result error; corrected adapter compiles against Apple SDK in Objective-C and Objective-C++ for arm64/macOS12.3 and x86_64/macOS10.14")
+    # Emit a real Apple Swift Objective-C header from the actual corrected
+    # TextRgba body. Only Flutter's external protocol/registry are fixture types;
+    # CoreVideo, queue, copy/retain and frame implementation remain real.
+    real = folder / "actual-swift"
+    (real / "texture_rgba_renderer").mkdir(parents=True)
+    text = P.patch_frame(files[P.TEXT].decode())
+    assert text.count("import FlutterMacOS\n") == 1
+    stubs = """import Foundation
+import CoreVideo
+@objc public protocol FlutterTexture { func copyPixelBuffer() -> Unmanaged<CVPixelBuffer>? }
+public protocol FlutterTextureRegistry {
+    func register(_ texture: FlutterTexture) -> Int64
+    func textureFrameAvailable(_ id: Int64)
+}
+"""
+    swift = real / "TextRgba.swift"
+    swift.write_text(stubs + text.replace("import FlutterMacOS\n", "", 1))
+    generated_header = real / "texture_rgba_renderer/texture_rgba_renderer-Swift.h"
+    run(["xcrun", "swiftc", "-emit-library", "-emit-module", "-module-name", "texture_rgba_renderer",
+         "-emit-objc-header", "-emit-objc-header-path", str(generated_header), str(swift),
+         "-o", str(real / "libtexture_rgba_renderer.dylib")], real, "swift-header.log")
+    generated = generated_header.read_text()
+    assert "markFrameAvaliableRawWithBuffer:" in generated and "SWIFT_WARN_UNUSED_RESULT" in generated
+    real_flags = ["xcrun", "clang", "-fobjc-arc", "-Werror=unused-result", "-I", str(real)]
+    negative = subprocess.run(real_flags + ["-c", str(old), "-o", str(real / "old.o")], text=True, capture_output=True, timeout=120)
+    (real / "original-unused-result.log").write_text(negative.stdout + negative.stderr)
+    assert negative.returncode != 0 and "ignoring return value" in negative.stderr
+    object_path = real / "adapter.o"
+    run(real_flags + ["-c", str(fixed), "-o", str(object_path)], real, "actual-generated-header-compile.log")
+    bridge = real / "adapter.h"
+    bridge.write_text("#include <stdint.h>\nvoid FlutterRgbaRendererPluginOnRgba(void *, const uint8_t *, int, int, int, int);\n")
+    main = real / "main.swift"
+    main.write_text(r"""import Foundation
+import CoreVideo
+final class ActualRegistry: FlutterTextureRegistry {
+    var frames=0
+    func register(_ texture: FlutterTexture) -> Int64 { return 1 }
+    func textureFrameAvailable(_ id: Int64) { precondition(id==1); frames+=1 }
+}
+let registry=ActualRegistry()
+var texture: TextRgba?=TextRgba.new(registry:registry)
+weak var weakTexture=texture
+let ptr=Unmanaged.passUnretained(texture!).toOpaque()
+let bytes:[UInt8]=[17,29,41,53]
+func submit(_ length: Int32) {
+    bytes.withUnsafeBufferPointer { FlutterRgbaRendererPluginOnRgba(ptr,$0.baseAddress!,length,1,1,1) }
+}
+submit(4)
+precondition(registry.frames==1)
+let first=texture!.copyPixelBuffer()!.takeRetainedValue()
+precondition(CVPixelBufferLockBaseAddress(first,[])==kCVReturnSuccess)
+let pixel=CVPixelBufferGetBaseAddress(first)!.assumingMemoryBound(to:UInt8.self)
+precondition(Array(UnsafeBufferPointer(start:pixel,count:4))==bytes)
+precondition(CVPixelBufferUnlockBaseAddress(first,[])==kCVReturnSuccess)
+submit(3)
+let afterRejected=texture!.copyPixelBuffer()!.takeRetainedValue()
+precondition(first===afterRejected && registry.frames==1)
+submit(4)
+precondition(registry.frames==2)
+let next=texture!.copyPixelBuffer()!.takeRetainedValue()
+precondition(first !== next)
+texture=nil
+precondition(weakTexture==nil)
+print("PASS: actual C adapter -> generated Swift header -> exact TextRgba/CoreVideo accepts a valid frame, preserves the same retained buffer and notification count on rejection, accepts retry and releases renderer")
+""")
+    executable = real / "actual-adapter-swift-control"
+    run(["xcrun", "swiftc", "-import-objc-header", str(bridge), str(swift), str(main), str(object_path),
+         "-o", str(executable)], real, "actual-swift-link.log")
+    print(run([str(executable)], real, "actual-swift-runtime.log").strip())
+    print("SOURCE SCOPE: generated CVPixelBuffer ownership metadata is untouched; ignored-attributes diagnostics, if emitted, remain in actual-generated-header-compile.log")
+
+
 SWIFT_STUBS = r'''
 import Foundation
 import CoreVideo
@@ -945,6 +1155,7 @@ def main():
         files = P.existing_files(target)
         files[P.PLUGIN] = P.unpatch_plugin(files[P.PLUGIN].decode()).encode()
         files[P.TEXT] = P.unpatch_frame(files[P.TEXT].decode()).encode()
+        files[P.API] = P.unpatch_api(files[P.API].decode()).encode()
     else:
         files = P.fetch_source()
     with tempfile.TemporaryDirectory(prefix="mixel-mac-texture-controls-") as temporary:
@@ -952,6 +1163,7 @@ def main():
         if args.output:
             output.mkdir(parents=True, exist_ok=False)
         generated = materialization_controls(output, originals, files)
+        adapter_controls(output, files)
         git_archive_controls(output, files)
         workflow_controls(output, originals, files)
         swift_controls(output, files)

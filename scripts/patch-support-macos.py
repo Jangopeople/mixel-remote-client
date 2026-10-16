@@ -102,10 +102,29 @@ def patch_runtime(text):
     return original.replace(OLD_RUNTIME, NEW_RUNTIME, 1)
 
 
+ASSEMBLE_TARGET = '\t\t33CC111A2044C6BA0003C045 /* Flutter Assemble */ = {\n\t\t\tisa = PBXAggregateTarget;\n\t\t\tbuildConfigurationList = 33CC111B2044C6BA0003C045 /* Build configuration list for PBXAggregateTarget "Flutter Assemble" */;\n\t\t\tbuildPhases = (\n\t\t\t\t33CC111E2044C6BF0003C045 /* ShellScript */,\n\t\t\t);\n\t\t\tdependencies = (\n\t\t\t);\n\t\t\tname = "Flutter Assemble";\n\t\t\tproductName = FLX;\n\t\t};\n'
+OLD_ASSEMBLE_PHASE = '\t\t33CC111E2044C6BF0003C045 /* ShellScript */ = {\n\t\t\tisa = PBXShellScriptBuildPhase;\n\t\t\tbuildActionMask = 2147483647;\n\t\t\tfiles = (\n\t\t\t);\n\t\t\tinputFileListPaths = (\n\t\t\t\tFlutter/ephemeral/FlutterInputs.xcfilelist,\n\t\t\t);\n\t\t\tinputPaths = (\n\t\t\t\tFlutter/ephemeral/tripwire,\n\t\t\t);\n\t\t\toutputFileListPaths = (\n\t\t\t\tFlutter/ephemeral/FlutterOutputs.xcfilelist,\n\t\t\t);\n\t\t\toutputPaths = (\n\t\t\t);\n\t\t\trunOnlyForDeploymentPostprocessing = 0;\n\t\t\tshellPath = /bin/sh;\n\t\t\tshellScript = "\\"$FLUTTER_ROOT\\"/packages/flutter_tools/bin/macos_assemble.sh && touch Flutter/ephemeral/tripwire";\n\t\t};\n'
+NEW_ASSEMBLE_PHASE = '\t\t33CC111E2044C6BF0003C045 /* ShellScript */ = {\n\t\t\tisa = PBXShellScriptBuildPhase;\n\t\t\talwaysOutOfDate = 1;\n\t\t\tbuildActionMask = 2147483647;\n\t\t\tfiles = (\n\t\t\t);\n\t\t\tinputFileListPaths = (\n\t\t\t\tFlutter/ephemeral/FlutterInputs.xcfilelist,\n\t\t\t);\n\t\t\tinputPaths = (\n\t\t\t\tFlutter/ephemeral/tripwire,\n\t\t\t);\n\t\t\toutputFileListPaths = (\n\t\t\t\tFlutter/ephemeral/FlutterOutputs.xcfilelist,\n\t\t\t);\n\t\t\toutputPaths = (\n\t\t\t);\n\t\t\trunOnlyForDeploymentPostprocessing = 0;\n\t\t\tshellPath = /bin/sh;\n\t\t\tshellScript = "\\"$FLUTTER_ROOT\\"/packages/flutter_tools/bin/macos_assemble.sh && touch Flutter/ephemeral/tripwire";\n\t\t};\n'
+
+def patch_assemble_phase(project):
+    eol = "\r\n" if "\r\n" in project else "\n"
+    logical = project.replace("\r\n", "\n")
+    if "\r" in logical or (eol == "\r\n" and "\n" in project.replace("\r\n", "")):
+        raise RuntimeError("Mixed Runner project newlines")
+    if logical.count(ASSEMBLE_TARGET) != 1 or logical.count("33CC111E2044C6BF0003C045") != 2:
+        raise RuntimeError("Pinned Flutter Assemble target binding changed")
+    original = logical.replace(NEW_ASSEMBLE_PHASE, OLD_ASSEMBLE_PHASE, 1) if logical.count(NEW_ASSEMBLE_PHASE) == 1 else logical
+    section = re.findall(r"/\* Begin PBXShellScriptBuildPhase section \*/(.*?)/\* End PBXShellScriptBuildPhase section \*/", original, re.S)
+    if len(section) != 1 or section[0].count(OLD_ASSEMBLE_PHASE) != 1 or original.count(OLD_ASSEMBLE_PHASE) != 1:
+        raise RuntimeError("Pinned Flutter Assemble script phase changed")
+    return original.replace(OLD_ASSEMBLE_PHASE, NEW_ASSEMBLE_PHASE, 1).replace("\n", eol)
+
+
 def configure_target(build, project, pods, info, architecture):
     targets = {'aarch64': '12.3', 'x86_64': '10.14'}
     if architecture not in targets:
         raise RuntimeError('Mac architecture must be aarch64 or x86_64')
+    project = patch_assemble_phase(project)
     minimum = targets[architecture]
     if re.findall(r'MACOSX_DEPLOYMENT_TARGET=([0-9.]+)', build) not in [['10.14'], ['12.3']]:
         raise RuntimeError('Pinned Mac core deployment target changed')
@@ -134,7 +153,7 @@ def apply(repo, architecture=None):
     }
     if architecture is not None:
         paths = ['build.py', 'flutter/macos/Runner.xcodeproj/project.pbxproj', 'flutter/macos/Podfile']
-        texts = [(repo / p).read_text() for p in paths]
+        texts = [(repo / p).read_bytes().decode('utf-8') if p.endswith('project.pbxproj') else (repo / p).read_text() for p in paths]
         configured = configure_target(*texts, (repo / 'flutter/macos/Runner/Info.plist').read_text(), architecture)
         changes.update({repo / path: text for path, text in zip(paths, configured)})
     # Validate every selected source before writing any file.

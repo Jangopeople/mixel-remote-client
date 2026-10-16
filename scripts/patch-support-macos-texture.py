@@ -16,6 +16,11 @@ URL = "https://github.com/rustdesk-org/flutter_texture_rgba_renderer.git"
 TREE = "c92d9fd866c068977d245323e0828446b1fbf71b"
 INVENTORY_SHA = "bbfe9564756aff1e8eb2f51d1b8f6fec31bef5956c36b62d1afceb28fdec7114"
 PLUGIN = "macos/Classes/TextureRgbaRendererPlugin.swift"
+
+API = "macos/Classes/TextureRgbaApi.m"
+API_SHA = 'dce9a6ae4c12264d19a193e55a11ebf37df39d4d905af7d4ef0feb879d7484ec'
+OLD_API_CALL = '    [texture_rgba markFrameAvaliableRawWithBuffer:buffer len:len width:width height:height stride_align: stride_align];'
+NEW_API_CALL = '    if (![texture_rgba markFrameAvaliableRawWithBuffer:buffer len:len width:width height:height stride_align: stride_align]) {\n        // A rejected frame leaves the last valid pixel buffer owned by Swift.\n        return;\n    }'
 PLUGIN_SHA = "6c802f3b20a7d92e4a2af729880701cbc4b98304e535875150f9a0d8b74ccd7a"
 CALLBACK_START = '    #[cfg(not(any(target_os = "android", target_os = "ios")))]\n    pub fn on_rgba('
 CALLBACK_END = '\n    #[cfg(feature = "vram")]\n    pub fn on_texture'
@@ -362,6 +367,18 @@ def patch_sources(repo):
     return texts
 
 
+
+def unpatch_api(text):
+    original = text.replace(NEW_API_CALL, OLD_API_CALL, 1) if text.count(NEW_API_CALL) == 1 else text
+    if sha(original.encode()) != API_SHA or original.count(OLD_API_CALL) != 1:
+        raise RuntimeError("Pinned renderer C adapter changed")
+    return original
+
+
+def patch_api(text):
+    return unpatch_api(text).replace(OLD_API_CALL, NEW_API_CALL, 1)
+
+
 def source_files(archive):
     if len(archive) > 2_000_000:
         raise RuntimeError("Pinned source archive exceeds bound")
@@ -422,6 +439,7 @@ def existing_files(target):
     original = dict(files)
     original[PLUGIN] = unpatch_plugin(original[PLUGIN].decode()).encode()
     original[TEXT] = unpatch_frame(original[TEXT].decode()).encode()
+    original[API] = unpatch_api(original[API].decode()).encode()
     inventory = {name: sha(data) for name, data in original.items()}
     expected = {"commit": PIN, "tree": TREE, "original_inventory_sha256": INVENTORY_SHA}
     if proof != expected or len(files) != 98 or sha(json.dumps(inventory, sort_keys=True, separators=(",", ":")).encode()) != INVENTORY_SHA:
@@ -434,6 +452,8 @@ def existing_files(target):
         raise RuntimeError("Owned renderer frame patch missing")
     if files[PLUGIN].decode() != patch_plugin(files[PLUGIN].decode()):
         raise RuntimeError("Owned renderer patch missing")
+    if files[API].decode() != patch_api(files[API].decode()):
+        raise RuntimeError("Owned renderer C adapter patch missing; reprovision fresh source from pinned upstream")
     return files
 
 
@@ -454,6 +474,7 @@ def apply(repo):
         files = fetch_source()
         files[PLUGIN] = patch_plugin(files[PLUGIN].decode()).encode()
         files[TEXT] = patch_frame(files[TEXT].decode()).encode()
+        files[API] = patch_api(files[API].decode()).encode()
         parent.mkdir(exist_ok=True)
         with tempfile.TemporaryDirectory(prefix=".mixel-texture-stage-", dir=parent) as directory:
             stage = Path(directory) / "texture_rgba_renderer"
