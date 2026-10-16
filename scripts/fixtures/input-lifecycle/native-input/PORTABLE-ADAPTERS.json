@@ -1,0 +1,35 @@
+{
+  "reviewInputsSHA256": "166968e5f7d436840f46251c09770e31aa46b0697e860243c602ca3815b01ceb",
+  "reviewRecords": 104,
+  "exactTemplateAdapterEdits": [
+    {
+      "path": "Cargo.lock",
+      "beforeSHA256": "86f58001762976928d83ad501739c59bb7ce060548d0d7401ac24859c88cf885",
+      "afterSHA256": "e13b1e0ad84eac6fdf0a01104212d27bdaa66e1e3fb54d4bd6c9c5fcceb29fca",
+      "old": "version = 4\n",
+      "new": "version = 3\n"
+    },
+    {
+      "path": "src/native_conversion.rs",
+      "beforeSHA256": "893e8a51735044cc4e9e1cffaf235c4e0cdbe61b444fe81ba424c10012b262a9",
+      "afterSHA256": "9642dc68edb51e8dcbbfd94d3f052e70662bd7c8cca03d444eb06970388fd72f",
+      "old": "static TO_RELEASE:std::sync::LazyLock<Mutex<std::collections::HashMap<Key,Event>>>=std::sync::LazyLock::new(||Mutex::new(std::collections::HashMap::new()));",
+      "new": "// Mock-only lazy mutex adapter supports shipping Rust1.75 (OnceLock:1.70).\nstruct ReleaseMap;\nimpl ReleaseMap {\n    fn lock(&self)->std::sync::LockResult<std::sync::MutexGuard<'static,std::collections::HashMap<Key,Event>>> {\n        static VALUE:std::sync::OnceLock<Mutex<std::collections::HashMap<Key,Event>>>=std::sync::OnceLock::new();\n        VALUE.get_or_init(||Mutex::new(std::collections::HashMap::new())).lock()\n    }\n}\nstatic TO_RELEASE:ReleaseMap=ReleaseMap;"
+    },
+    {
+      "path": "src/source_component.rs",
+      "beforeSHA256": "d99cd5cdeba1b6a92dd4f4b24246b394c7d5d58c6b65762fed5dd94ace6fc00c",
+      "afterSHA256": "0e0f0c4a2f9c6b01b79a9dcae9c2125d9dffbcf0e601b0a2af5565b6d601985b",
+      "old": "pub(crate) fn perform_boundary_for_native_fixture()",
+      "new": "#[cfg(target_os=\"macos\")]\npub(crate) fn perform_boundary_for_native_fixture()"
+    },
+    {
+      "path": "src/source_component.rs",
+      "beforeSHA256": "0e0f0c4a2f9c6b01b79a9dcae9c2125d9dffbcf0e601b0a2af5565b6d601985b",
+      "afterSHA256": "b8ef2b05be6feedb6b515e1d44917f1aa22770c738c7ec0b4185a149b090f5c9",
+      "old": "#[test] fn actual_refused_native_monitoring_keeps_all_owned_sessions_and_source_unchanged()",
+      "new": "#[cfg(target_os=\"macos\")]\n#[test] fn actual_refused_native_monitoring_keeps_all_owned_sessions_and_source_unchanged()"
+    }
+  ],
+  "historicalCompatibilityFixture": "scale_server_selected.rs retains the original persistent Scale receiver; current balanced receiver is freshly extracted"
+}

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Pinned exact native close/destructor sanitizer regressions; only owned fixture children."""
 import argparse,hashlib,importlib.util,json,os,shutil,signal,subprocess,tempfile,unittest
+
+import input_lifecycle_integration_projection as input_lifecycle
 from pathlib import Path
 BASE=Path(__file__).absolute().parent
 spec=importlib.util.spec_from_file_location('native_close',BASE/'patch-support-linux-child-window-close.py');patch=importlib.util.module_from_spec(spec);spec.loader.exec_module(patch)
@@ -181,13 +183,15 @@ class NativeCloseTests(unittest.TestCase):
    self.assertEqual(patch.apply(root,restore=True,verify=False)['profile'],'fresh')
    with self.assertRaises(RuntimeError):patch.apply(root,verify=False)
 
-def main(_projected_source=None):
+def main(_projected_source=None, _input_checked=False):
  global OUTPUT,INPUT,PROOF,SOURCE
  p=argparse.ArgumentParser(description=__doc__);p.add_argument('--source',required=True,type=Path);p.add_argument('--output',required=True,type=Path);a=p.parse_args()
  if _projected_source is not None:a.source=_projected_source
+ if not _input_checked:
+  with input_lifecycle.current_source(a.source) as previous_input:return main(previous_input,_input_checked=True)
  uri_spec=importlib.util.spec_from_file_location('native_close_uri_fixture',BASE/'patch-support-uri-routing.py');uri=importlib.util.module_from_spec(uri_spec);uri_spec.loader.exec_module(uri)
  if uri.has_layer(a.source):
-  with uri.previous(a.source) as previous:return main(previous)
+  with uri.previous(a.source) as previous:return main(previous,_input_checked=True)
  SOURCE=a.source.absolute();INPUT=SOURCE/patch.DEPENDENCY/'linux';PROOF=SOURCE/patch.DEPENDENCY/'.mixel-source.json';OUTPUT=a.output.absolute();OUTPUT.mkdir(mode=0o700)
  result=unittest.TextTestRunner(verbosity=1).run(unittest.defaultTestLoader.loadTestsFromTestCase(NativeCloseTests));raise SystemExit(0 if result.wasSuccessful() else 1)
 if __name__=='__main__':main()

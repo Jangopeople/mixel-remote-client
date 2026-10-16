@@ -8,62 +8,45 @@ Read `HANDOFF.md` and `AGENTS.md` before working on releases. Product identity i
 `Mixel Remote` / `Mixel-Remote`, bundle ID `ch.mixel.remote`, and the configured
 rendezvous/relay is `rs.mixel.ch`. `branding/branding.env` is authoritative.
 
-## Current proof status — 2026-10-15
+## Current proof status — 2026-10-16
 
-Active reliability work is on `fix/remote-support-reliability`
+Reliability work is on `fix/remote-support-reliability`
 ([draft PR7](https://github.com/Jangopeople/mixel-remote-client/pull/7)).
-`HANDOFF.md` records exact source, failed runs and retained evidence. Current77
-Linux private sessions pass native input, clipboard, file transfer, reconnect
-and normal close. The unchanged signed ARM app passes separate private desktop,
-tray and concurrency checks; its original build-run warm exit remains unresolved.
+`HANDOFF.md` distinguishes each source revision, retained failures, automated
+qualification and actual desktop tests. Complete application acceptance remains
+unfinished; no customer installer aliases or marketplace releases were changed.
 
-The Windows lifecycle SDK caller is corrected and proven on both Windows2022
-and2025 in run38798203036: all nine real Dart tests and fourteen reporter tests
-pass. The same checks now run before the long Windows source suite, while all
-later source/signing/runtime gates remain mandatory. Corrected full Windows
-producer/preflight, signed Standard95 and live Mac customer acceptance remain
-required. **Complete application acceptance remains unfinished.**
+The signed baseline at `1979d9432c316f0b10d79fb170407cf6859b1127` passes the
+complete four-platform producer, mandatory preflight and Windows comparison
+runs. Its dedicated Windows Standard-user foreground process also passes the
+95-second consent-guard test on Windows 2022 and 2025. That CI fixture does not
+qualify a complete Standard-user Explorer outer launch.
 
-Malformed support links are refused before legacy Mac IPC or fallback launch.
-Reserved host and credential-name recognition is independent of strict invite
-validation; valid links retain the existing authenticated peer handoff. The
-terminal source layer preserves exact historical restoration and refuses mixed
-profiles. Its mandatory URI controls include the generated native sender,
-handler, startup and receiver boundaries, with explicit fake transport seams.
-Source proofs and the held `5df303f` candidate do not qualify final installers.
+The same baseline passes real PC01 keyboard and mouse control, distinct Unicode
+clipboard copyback, three exact file roundtrips, its ordinary-process 95-second
+guard observation and normal main/connection-manager exit with code 0. Linux
+native sessions pass input, clipboard, file transfer, reconnect and normal exit.
+The installed signed Mac baseline passes incoming consent, actual mouse/basic
+input and outbound clipboard/file transfer; remaining native keyboard, focus,
+relative-cursor and link acceptance still need completion. These baseline tests
+do not qualify the next input-ownership revision.
 
-The candidate corrects native API/toolchain compatibility, input-device creation
-and button/wheel forwarding, fingerprint cache races, first-use keyboard mode,
-transfer-window fitting, unsafe fatal signal handling and exited Windows
-diagnostic ordering. Normal cleanup, manual GPU choices and Windows consent
-guards remain preserved. Actual source/native/composition tests pass; full
-Flutter3.27.4 analysis is0 errors/0 warnings with285 existing infos.
+The input revision adds per-session keyboard/button ownership, release recovery
+when permissions or input sources change, held modifier recovery, synchronous
+bridge ordering and relative-cursor window/session lifetime. Windows receiver
+scroll and shutdown paths now balance owned input. Actual tests pass180 Flutter,
+114 Rust component and30 extracted production Swift scenarios; OS effects in
+the Swift suite are mocked. All20 original Rust failure controls reproduce.
+Independent review clears the final18 source files. Actual final bridge/header
+generation and full Flutter analysis pass with no errors or warnings and286
+informational diagnostics. The complete branding and newline suites are running;
+native Windows/Linux/Mac component gates, signed installers and fresh desktop
+acceptance remain required. These source results do not qualify final packages.
 
-Historical ce Linux → signed50bf Windows PC01 passes video/mouse, exact47B
-mixed-case/path typing before and after reconnect, both48B Unicode clipboard
-directions with a distinct sentinel, a65,536B exact file roundtrip and fitted
-first/reopened transfer windows. These qualify the tested historical packages.
-Fresh combined-source packages, Mac connected-desktop acceptance and full signed
-Windows95 remain pending. Physical accented keys, native oversized stored frame
-and Wayland GUI are not inferred from other controls.
-
-The reviewed production HTTPS gateway is deployed with only loopback8090 and
-nginx `/ws/id` changed. Original native services, identities/start times and the
-existing PC01 connection were preserved. Actual signed/encryptedHTTPS35s and
-native UDP/TCP2s tests pass. Registration-send count is unmeasured; customer
-HTTPS desktop acceptance remains separate. No public package aliases or
-marketplace state changed.
-
-The Mac updater now stages and verifies replacement, preserves the old app,
-rolls back failures and propagates actual synchronous CLI results. Interrupted
-moves and incomplete plist recovery are covered. Root actual native13 reports
-`Ran 13 tests in 70.738s / OK`; combined fatal/cleanup/Quit, release18, SDK6,
-discovery11, dispatcher and lint checks pass. All four branding newline profiles
-and strict refusal controls pass independently. Privileged signatures/services
-are mocked in these isolated updater tests; installed/live GUI update remains
-unqualified. The next private Linux build also requires a full desktop session
-through the production HTTPS gateway. See `HANDOFF.md` for closed proof hashes,
-retained failures, consumed approvals and current NAS/shared-Mac access constraints.
+The production HTTPS gateway has separately passed encrypted HTTPS and native
+transport scenarios. Known Flutter/GTK warning and historical abnormal-exit
+investigations remain unresolved and are held; they are not relabeled as fixed.
+See `HANDOFF.md` for exact proof records and active access/automation holds.
 
 The following earlier checkpoint records are retained for provenance; the current
 checkpoint above supersedes their pending-state wording.

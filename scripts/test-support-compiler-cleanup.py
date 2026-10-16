@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Mandatory exact compiler cleanup and complete prior-owner source controls."""
 import argparse
+
+import input_lifecycle_integration_projection as input_lifecycle
 import hashlib
 import importlib.util
 import json
@@ -317,8 +319,12 @@ def terminal_uri_controls(source, out, bash):
     shutil.copytree(source, owned, symlinks=True,
                     ignore=lambda directory,names:P.projection_ignored(source,directory,names))
     scripts = Path(__file__).resolve().parent
+    macro_scripts = out/'prior-input-uri-macro/scripts'
+    shutil.copytree(scripts, macro_scripts, ignore=shutil.ignore_patterns('__pycache__'))
+    prior_macro = macro_scripts/'apply-branding.sh'
+    prior_macro.write_bytes(input_lifecycle.project_to_canonical((scripts/'apply-branding.sh').read_bytes(), 'scripts/apply-branding.sh'))
     historical_fixture.uri_common_drift_controls(out, owned, scripts.parent, str(bash),
-        scripts/'apply-branding.sh', dict(os.environ,RDREPO=str(owned),BRANDING=str(scripts.parent/'branding')), 'compiler-final')
+        prior_macro, dict(os.environ,RDREPO=str(owned),BRANDING=str(scripts.parent/'branding')), 'compiler-final')
     assert production_snapshot(source)==before, 'Terminal URI controls changed supplied compiler input'
 
 
@@ -329,7 +335,7 @@ def composed_controls(source, out, bash):
     macro_scripts = out/'prior-uri-macro/scripts'
     shutil.copytree(current_scripts,macro_scripts,ignore=shutil.ignore_patterns('__pycache__'))
     macro_script = macro_scripts/'apply-branding.sh'
-    macro_script.write_text(historical_fixture.without_uri_owner_commands(macro_script.read_text(encoding='utf-8')),
+    macro_script.write_text(historical_fixture.without_uri_owner_commands(input_lifecycle.project_to_canonical(macro_script.read_bytes(), 'scripts/apply-branding.sh').decode()),
                             encoding='utf-8',newline='')
     repo = out/'complete-composed'; shutil.copytree(source, repo, symlinks=True,
                       ignore=lambda directory,names:P.projection_ignored(source,directory,names))
@@ -489,14 +495,14 @@ def source_projection_controls(source,out):
     A=importlib.util.module_from_spec(spec);spec.loader.exec_module(A)
     stage=out/'projection-source';shutil.copytree(source,stage,symlinks=True,ignore=lambda directory,names:P.projection_ignored(source,directory,names))
     P.apply(stage,after_branding=True);final=production_snapshot(stage)
-    with A.startup_baseline(stage) as prior:
+    with A.startup_baseline(stage, _input_checked=True) as prior:
         assert {name:P.digest(P.canonical((prior/name).read_bytes())[0]) for name in P.ORIGINAL}==P.ORIGINAL
     assert production_snapshot(stage)==final
     owned=stage/'flutter/.mixel-dependencies/macos_application_exit';poison=owned/'build/foreign-owned-source.dart'
     poison.parent.mkdir();poison.write_bytes(b'// foreign owned inventory\n')
     before=production_snapshot(stage)
     try:
-        with A.startup_baseline(stage):pass
+        with A.startup_baseline(stage, _input_checked=True):pass
     except (RuntimeError,SystemExit):pass
     else:raise AssertionError('Actual analyzer C projection concealed owned build inventory')
     assert production_snapshot(stage)==before;poison.unlink();poison.parent.rmdir()
@@ -507,7 +513,7 @@ def source_projection_controls(source,out):
         else:os.link(target,outside)
         before=production_snapshot(stage)
         try:
-            with A.startup_baseline(stage):pass
+            with A.startup_baseline(stage, _input_checked=True):pass
         except RuntimeError as error:
             marker='Unsafe compiler prior source ownership' if fault=='symlink' else 'Hardlinked compiler prior source'
             assert marker in str(error),str(error)
@@ -584,7 +590,13 @@ def main():
     parser.add_argument('--source-only', action='store_true')
     parser.add_argument('--bash', type=Path)
     args = parser.parse_args()
-    args.source = args.source.resolve(strict=True)
+    args.source = args.source.absolute()
+    with input_lifecycle.current_source(args.source) as previous_input:
+        args.source = previous_input
+        return qualify_current(args, parser)
+
+
+def qualify_current(args, parser):
     args.evidence_dir = args.evidence_dir.absolute()
     args.evidence_dir.mkdir(exist_ok=False, parents=True)
     # Use the same already-qualified actual active Bash contract as W.

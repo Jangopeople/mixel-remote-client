@@ -118,6 +118,58 @@ jobs:
         run: python3 scripts/release-artifacts.py config
 
   # ===========================================================================
+  # INPUT REGRESSIONS — actual production components on all desktop hosts.
+  # ===========================================================================
+  input-regressions:
+    needs: config
+    strategy:
+      fail-fast: false
+      matrix:
+        job:
+          - { os: ubuntu-22.04, rust: '1.75', name: linux }
+          - { os: windows-2022, rust: '1.75', name: windows }
+          - { os: macos-14, rust: '1.81', name: macos }
+    runs-on: ${{ matrix.job.os }}
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
+    env:
+      UPSTREAM_VERSION: ${{ needs.config.outputs.upstream_version }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install pinned production Rust compiler
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: ${{ matrix.job.rust }}
+      - name: Fetch pinned upstream with submodules
+        run: |
+          git -c core.autocrlf=false clone --depth 1 --branch "${UPSTREAM_VERSION}" --recurse-submodules \
+            https://github.com/rustdesk/rustdesk.git rustdesk
+      - name: Apply complete reviewed branding and input ownership
+        run: ./scripts/apply-branding.sh
+        env:
+          RDREPO: ./rustdesk
+          BRANDING: ./branding
+      - name: Prove actual input components and required original failures
+        run: |
+          python3 scripts/fixtures/input-lifecycle/native-input/native_input_gate.py \
+            --source rustdesk --output "$RUNNER_TEMP/mixel-native-input" --online
+      - name: Preserve input regression evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: native-input-regressions-${{ matrix.job.name }}
+          path: |
+            ${{ runner.temp }}/mixel-native-input/
+            !${{ runner.temp }}/mixel-native-input/target/**
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # ===========================================================================
   # BRIDGE — generate flutter_rust_bridge codegen once for all platforms.
   # ===========================================================================
   bridge:
@@ -166,12 +218,15 @@ jobs:
       - name: Generate bridge
         working-directory: rustdesk
         run: |
+          python3 ../scripts/patch-support-input-lifecycle.py --root . --restore --check
+          python3 ../scripts/patch-support-input-lifecycle.py --root . --restore
           python3 ../scripts/patch-support-uri-routing.py --root . --restore
           python3 ../scripts/patch-support-linux-child-window-close.py --root . --restore
           RDREPO=. python3 ../scripts/patch-support-macos-texture.py
           RDREPO=. python3 ../scripts/patch-support-macos-window.py
           python3 ../scripts/patch-support-linux-child-window-close.py --root . --after-branding
           python3 ../scripts/patch-support-uri-routing.py --root . --after-branding
+          python3 ../scripts/patch-support-input-lifecycle.py --root .
           pushd flutter && sed -i -e 's/extended_text: 14.0.0/extended_text: 13.0.0/g' pubspec.yaml && flutter pub get && popd
           ~/.cargo/bin/flutter_rust_bridge_codegen \
             --rust-input ./src/flutter_ffi.rs \
@@ -194,7 +249,7 @@ jobs:
   # LINUX — produces .deb
   # ===========================================================================
   linux:
-    needs: [config, bridge]
+    needs: [config, bridge, input-regressions]
     if: ${{ needs.config.outputs.linux == 'true' }}
     runs-on: ubuntu-22.04
     timeout-minutes: 180
@@ -428,7 +483,7 @@ jobs:
   # x86_64 is cross-built on the Apple Silicon runner via the Rust target.
   # ===========================================================================
   macos:
-    needs: [config, bridge]
+    needs: [config, bridge, input-regressions]
     if: ${{ needs.config.outputs.macos == 'true' }}
     strategy:
       fail-fast: false
@@ -649,6 +704,33 @@ jobs:
         working-directory: rustdesk/flutter
         run: flutter analyze --no-pub --no-fatal-infos
 
+      - name: Prove desktop input lifetime regressions
+        run: |
+          python3 scripts/test-support-input-lifecycle-flutter.py \
+            --source rustdesk --flutter "$(command -v flutter)" \
+            --fixture scripts/fixtures/input-lifecycle/source2_pointer_modifiers_test.dart \
+            --expected-input a15f40adcf4887b146b78caa9c183938d1023fcb5dc31e71c64f17093d389b02 \
+            --expected-fixture 65d294d32c706c8d03e53428d1cae15fb69921ed3d53a9cf03cf6bdbb7a2a7d7 \
+            --relative-fixture scripts/fixtures/input-lifecycle/relative_mouse_late_enable_test.dart \
+            --expected-relative-fixture 7e4148cf60fa04cb9c39fc70bb00e1f346e55006089f15242f7ec8fcd05a1ab0 \
+            --expected-relative-model 99c3f74d8ca12bf27fa9269f74d9490fb7f859106cbc35a554938011d1edf9f6 \
+            --expected-count 180 \
+            --context-lock scripts/fixtures/input-lifecycle/flutter-test-context.lock \
+            --output "$RUNNER_TEMP/mixel-input-lifecycle-flutter"
+          python3 scripts/fixtures/input-lifecycle/native_lease_gate.py \
+            --source rustdesk --output "$RUNNER_TEMP/mixel-input-lifecycle-swift"
+
+      - name: Preserve desktop input lifetime regression evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: macos-input-lifecycle-${{ matrix.job.target }}
+          path: |
+            ${{ runner.temp }}/mixel-input-lifecycle-flutter/
+            ${{ runner.temp }}/mixel-input-lifecycle-swift/
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Test compiled attended support guard
         env:
           VCPKG_ROOT: ${{ github.workspace }}/vcpkg
@@ -833,7 +915,7 @@ jobs:
   # WINDOWS — signed application payload + portable EXE (+ optional MSI).
   # ===========================================================================
   windows:
-    needs: [config, bridge]
+    needs: [config, bridge, input-regressions]
     if: ${{ needs.config.outputs.windows == 'true' }}
     runs-on: windows-2022
     timeout-minutes: 240

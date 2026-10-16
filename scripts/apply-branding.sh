@@ -37,6 +37,10 @@ source "$BRANDING/branding.env"
 # complete prior-owner refusal gates. Reapplication at the end is idempotent.
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-file-dialog-lifecycle.py" --root "$RDREPO" --check
 
+# Validate and invert the complete desktop input layer before older owners write.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-input-lifecycle.py" --root "$RDREPO" --restore --check
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-input-lifecycle.py" --root "$RDREPO" --restore
+
 # Restore exact terminal URI routing before the native and earlier owner checks.
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-uri-routing.py" --root "$RDREPO" --restore --check --before-branding
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-uri-routing.py" --root "$RDREPO" --restore
@@ -1138,5 +1142,8 @@ python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-uri-routing.py" --root "$R
 
 # A file-transfer dialog completing after close must not restart its event loop.
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-file-dialog-lifecycle.py" --root "$RDREPO"
+
+# Apply desktop input ownership only after all previous functional layers.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-input-lifecycle.py" --root "$RDREPO"
 
 echo "✓ Branding applied — product identity is $APP_NAME only."

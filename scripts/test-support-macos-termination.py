@@ -56,10 +56,10 @@ def snapshot(root):
     return records
 
 
-def source_controls(source, out):
-    with A.startup_baseline(source) as plain:
+def source_controls(source, out, _input_checked=False):
+    with A.startup_baseline(source, _input_checked=_input_checked) as plain:
         if plain != source.resolve():
-            return source_controls(plain, out)
+            return source_controls(plain, out, _input_checked=True)
     if (source/F.GENERATED).exists(): F.apply(source,restore=True,check=True); F.verify_previous_layers(source)
     else: (S.apply(source,check=True) if (source/S.OWNED).exists() else P.apply(source,check=True))
     count = 0
@@ -307,6 +307,8 @@ def full_branding(out,bash):
                  'test-support-flutter-analysis.py','test-support-macos-cleanup.py','test-support-macos-window.py',
                  'patch-support-file-transfer-window.py','test-support-file-transfer-window.py',
                  'patch-support-file-dialog-lifecycle.py','test-support-file-dialog-lifecycle.py',
+                 "patch-support-input-lifecycle.py","support-input-lifecycle-engine.py","support-input-lifecycle-plan.json",
+                 "input_lifecycle_integration_projection.py",
                  'patch-support-keyboard-default.py',
                  'patch-support-uinput-scroll.py',
                  'patch-support-uinput-device.py','test-support-uinput-device.py',

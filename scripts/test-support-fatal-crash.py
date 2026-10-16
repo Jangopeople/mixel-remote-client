@@ -303,7 +303,7 @@ def native_controls(folder,source,rustc,original_platform):
     return result
 
 
-def main(_projected_source=None):
+def main(_projected_source=None, _input_checked=False):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source',type=Path,required=True)
     parser.add_argument('--upstream-repo',type=Path)
@@ -317,10 +317,10 @@ def main(_projected_source=None):
     launch_spec = importlib.util.spec_from_file_location('fatal_fixture_launch', HERE/'patch-support-macos-gui-launch.py')
     launch = importlib.util.module_from_spec(launch_spec)
     launch_spec.loader.exec_module(launch)
-    with historical_fixture.linux_close_baseline(args.source) as historical:
+    with historical_fixture.linux_close_baseline(args.source, _input_checked=_input_checked) as historical:
         with launch.previous(historical) as previous:
             if previous != args.source.absolute():
-                return main(previous)
+                return main(previous, _input_checked=True)
     # Validate supplied source before compiler/output/network work.
     input_paths=[P.safe_target(args.source,name) for name in P.FILES]
     raw=[path.read_bytes() for path in input_paths]

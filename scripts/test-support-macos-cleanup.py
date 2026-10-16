@@ -171,6 +171,8 @@ def full_branding(out, files, source, bash=None):
                  "test-support-macos-termination.py","test-support-macos-window.py",
                  "patch-support-file-transfer-window.py","test-support-file-transfer-window.py",
                  "patch-support-file-dialog-lifecycle.py","test-support-file-dialog-lifecycle.py",
+                 "patch-support-input-lifecycle.py","support-input-lifecycle-engine.py","support-input-lifecycle-plan.json",
+                 "input_lifecycle_integration_projection.py",
                  "patch-support-keyboard-default.py",
                  "patch-support-uinput-scroll.py",
                  "patch-support-uinput-device.py","test-support-uinput-device.py",

@@ -1,5 +1,77 @@
 # Mixel-Remote — Agent Handoff / Current State
 
+## Authoritative continuation checkpoint — 2026-10-16
+
+The current signed package baseline is `1979d9432c316f0b10d79fb170407cf6859b1127`.
+Earlier paragraphs below retain their historical failure/pending states; the
+completed baseline producer is run 38799293531, mandatory preflight 38799071390,
+Windows comparison 38799071930 and Standard95 R4 38824673157. All completed
+successfully. Standard95 qualifies the actual Standard foreground process and
+95-second pipe/guard lifetime, not a wholly Standard Explorer outer context.
+
+Actual PC01 baseline proof is frozen in
+`artifacts/verification-2026-10-09/root-current1979-pc01-bootstrap-7aa1d03726de-20261016/ROOT-PC01-BASELINE-PROOF-INDEX.json`
+(SHA256 `ad0da78992a51ecce1be165c9fa7fb687a8d26f6d9c758eb329410f0de840d1e`).
+Five receipts cross-check the same main process, native input, distinct Unicode
+copyback, three exact file roundtrips and normal main/CM exit codes `[0, 0]`.
+The QA PowerShell window is closed and that app instance has exited; never reuse
+its PID/HWND/pipe identity for a later test. The independent public NAS console
+was authenticated at this checkpoint. Ask for sign-in only after fresh expired
+session evidence. Use the existing Mixel-Test-VM account.
+
+The next input revision remains unqualified as an installer. Its final
+18-target source plan is frozen at SHA256
+`4cdb1d587768424dcd06dd87db66dd390e87b963a7b7c44f9722abebe73b6a71`:
+per-session keyboard and mouse ownership, denied-input release replay, source
+transition ordering, physical modifier recovery, balanced Windows Scale input,
+receiver button cleanup and relative-cursor/window lifetime are integrated.
+The complete Dart suite actually passes 180 tests; production Swift state
+passes 30 tests with OS effects mocked. Final R12 native components pass 114
+current tests and preserve all 20 original failure controls, with no ignored
+tests and warnings denied. Actual Rust/Cargo1.75 relocation passes. Independent
+review clears the final source; the R12 proof change conserves R11 product bytes.
+
+The complete18-file source composition validates fresh, previous and final
+profiles without writes. Actual final bridge generation, C header compilation
+with warnings denied and full Flutter analysis exit0, with no analyzer errors or
+warnings (286 infos). The adopted88-file portable gate is mandatory on native
+Windows, Linux and Mac CI hosts; other-platform test counts remain unqualified
+until those jobs actually run. The complete branding driver and four-profile
+newline/composition suite are currently running against these final inputs.
+Fresh signed builds and new native acceptance remain mandatory. Do not present
+provisional plans or baseline1979 desktop receipts as final-revision proof.
+
+Root's private integration checkout is under
+`artifacts/verification-2026-10-09/root-final-input-lifecycle-integration-20261016/pipeline`.
+The reviewed complete files were assembled in a detached Git clone of1979 for
+adoption into the existing draft branch. The terminal wrapper, full branding/
+bridge hooks, mandatory Mac Flutter/Swift gates and mandatory Linux/Windows/Mac
+Rust matrix are included. All245 fast integration controls and workflow lint
+pass, and the installed native gate verifies final production pins/extractions.
+Complete historical QA adapters use strict whole-source inverses and conserve
+original assertions. Their frozen receipts remain in the combined-input-lifecycle
+artifact directories. Any new producer must use this complete source revision,
+with publish_r2=false; its exact new run and native qualification must be recorded
+separately. No new installer is qualified at this checkpoint.
+
+Michael explicitly authorized coordination with the other Mac chat. It released
+the desktop for a short test, then received an explicit handback and resumed its
+owned Effects queue. Physical Mac UI input is held again until another short
+window is coordinated. The exclusive baseline recheck preserved live video and
+mouse control, but source1/source2 keyboard attempts did not change the target
+text. The same local CUA chord worked in the synthetic TextEdit document, which
+was restored exactly. Keyboard acceptance remains false and the cause is not
+assigned. Source2/Map was restored and visually verified. See
+`root-final-input-lifecycle-integration-20261016/MAC-COORDINATED-BASELINE-RECHECK.json`.
+The manual native-link Open hold remains. Never retry, reassign or bypass the held GTK warning investigation:
+automatic approval review rejected it as a possible cybersecurity risk. Historical
+B85 GUI exit134 and retained Flutter/GLib warnings remain unresolved. Held
+historical resources, previous1979 nonce760075f8b09b processes and their services
+must not be adopted, queried, signaled or cleaned up. Current isolated Linux
+controller/test pairs also remain preserved under their exact identity fences.
+No public download aliases, marketplace submissions or production infrastructure
+are authorized for change by this checkpoint.
+
 ## Windows lifecycle SDK correction and current native proof — 2026-10-15
 
 The original77 Windows producer38774820528 and mandatory preflight38774157443

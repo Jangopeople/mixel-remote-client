@@ -34,10 +34,10 @@ def snapshot(repo):
     return {p.relative_to(repo).as_posix(): ('symlink',os.readlink(p)) if p.is_symlink() else ('file',sha(p.read_bytes()),p.stat().st_nlink) if p.is_file() else ('directory',) for p in repo.rglob('*')}
 
 
-def capture_source(app, out):
-    with A.startup_baseline(app) as plain:
+def capture_source(app, out, _input_checked=False):
+    with A.startup_baseline(app, _input_checked=_input_checked) as plain:
         if plain != app.resolve():
-            return capture_source(plain, out)
+            return capture_source(plain, out, _input_checked=True)
     P.apply(app.resolve(), restore=True, check=True)
     P.verify_previous_layers(app.resolve())
     result = {}

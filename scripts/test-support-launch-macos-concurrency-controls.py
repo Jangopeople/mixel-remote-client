@@ -5,6 +5,8 @@ Swift compilation is optional and never executes the resulting binary. Runtime
 controls use explicit in-memory AppKit/kernel/socket seams and disposable files.
 """
 import argparse
+
+import input_lifecycle_integration_projection as input_lifecycle
 import ast
 import contextlib
 import errno
@@ -917,7 +919,7 @@ class ConcurrencyControls(unittest.TestCase):
             inverse_lifecycle_workflow_checks('', 'foreign.yml')
 
     def test_windows_producer_budget_has_only_one_exact_outer_job_change(self):
-        current = C.canonical((ROOT / '.github/workflows/build.yml').read_bytes()).decode()
+        current = input_lifecycle.inverse_blocks((ROOT / '.github/workflows/build.yml').read_bytes(), '.github/workflows/build.yml').decode()
         budget_only = inverse_windows_producer_budget(current)
         early = _lifecycle_projection.early_windows_lifecycle()
         self.assertEqual(budget_only.count(early), 1)
@@ -967,7 +969,7 @@ class ConcurrencyControls(unittest.TestCase):
         self.assertEqual(dispatcher.count('python scripts/test-support-file-dialog-lifecycle.py --source '), 1)
 
     def test_workflow_whole_inverse_has_only_two_ordered_additions(self):
-        value = C.canonical((ROOT / '.github/workflows/build.yml').read_bytes()).decode()
+        value = input_lifecycle.inverse_blocks((ROOT / '.github/workflows/build.yml').read_bytes(), '.github/workflows/build.yml').decode()
         value = inverse_windows_producer_budget(value)
         value = inverse_lifecycle_workflow_checks(value, 'build.yml')
         value = inverse_windows_sdk_source_diagnostics(value, 'build.yml')
@@ -1045,7 +1047,7 @@ class ConcurrencyControls(unittest.TestCase):
             inverse_linux_close_workflow_checks('', 'foreign.yml')
 
     def test_linux_close_bridge_projection_refuses_changed_missing_duplicate_reordered_or_moved_brackets(self):
-        text = C.canonical((ROOT / '.github/workflows/build.yml').read_bytes()).decode()
+        text = input_lifecycle.inverse_blocks((ROOT / '.github/workflows/build.yml').read_bytes(), '.github/workflows/build.yml').decode()
         text = inverse_uri_bridge_checks(text)
         before, restore, original, reapply, after = linux_close_bridge_projection()
         current = restore + original + reapply
@@ -1137,7 +1139,7 @@ class ConcurrencyControls(unittest.TestCase):
     def test_uri_bridge_projection_refuses_changed_or_disjoint_six_command_sequence_before_commands(self):
         path = ROOT / '.github/workflows/build.yml'
         raw = path.read_bytes()
-        text = C.canonical(raw).decode()
+        text = input_lifecycle.inverse_blocks(raw, '.github/workflows/build.yml').decode()
         before, restore, original, reapply, after = uri_bridge_projection()
         current = restore + original + reapply
         lines = current.splitlines(keepends=True)

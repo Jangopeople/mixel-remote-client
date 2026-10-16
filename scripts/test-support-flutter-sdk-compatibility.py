@@ -58,10 +58,10 @@ def source_snapshot(source):
     return result
 
 
-def capture(source, target, newline=b'\n'):
-    with A.startup_baseline(source) as plain:
+def capture(source, target, newline=b'\n', _input_checked=False):
+    with A.startup_baseline(source, _input_checked=_input_checked) as plain:
         if plain != source.resolve():
-            return capture(plain, target, newline)
+            return capture(plain, target, newline, _input_checked=True)
     sdk_owned = (source / S.OWNED).exists() or (source / S.OWNED).is_symlink()
     if sdk_owned:
         F.verify_previous_layers(source) if (source/F.GENERATED).exists() else S.apply(source, check=True)
@@ -372,10 +372,10 @@ def host_portability_controls(out):
     print(f'PASS: {count} Windows batch command/refusal controls and real UTF8 child capture.')
 
 
-def flutter_controls(out, source, flutter):
-    with A.startup_baseline(source) as plain:
+def flutter_controls(out, source, flutter, _input_checked=False):
+    with A.startup_baseline(source, _input_checked=_input_checked) as plain:
         if plain != source.resolve():
-            return flutter_controls(out, plain, flutter)
+            return flutter_controls(out, plain, flutter, _input_checked=True)
     app = out / 'actual-full-app'
     shutil.copytree(source, app, ignore=shutil.ignore_patterns('.git', '.dart_tool', 'build', '.mixel-dependencies'))
     # Bring forward the exact locally owned plugins/provenance without caches.
@@ -423,6 +423,8 @@ def full_branding(out, upstream, bash):
                  'test-support-flutter-sdk-compatibility.py', 'patch-support-macos-termination.py',
                  'patch-support-file-transfer-window.py', 'test-support-file-transfer-window.py',
                  'patch-support-file-dialog-lifecycle.py', 'test-support-file-dialog-lifecycle.py',
+                 "patch-support-input-lifecycle.py","support-input-lifecycle-engine.py","support-input-lifecycle-plan.json",
+                 "input_lifecycle_integration_projection.py",
                  'patch-support-keyboard-default.py',
                  'patch-support-uinput-scroll.py',
                  'patch-support-uinput-device.py','test-support-uinput-device.py',

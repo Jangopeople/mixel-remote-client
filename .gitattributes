@@ -3,3 +3,9 @@ scripts/vendor/uni_links_desktop/** -text
 # The embedded POSIX/AppleScript updater must retain LF on every checkout host.
 scripts/macos-update-bundle.sh text eol=lf
 scripts/macos-update.scpt text eol=lf
+
+# These regression fixtures and dependency locks have exact portable byte pins.
+scripts/fixtures/input-lifecycle/** -text
+# Exact upstream snapshots retain source whitespace for hash comparison.
+scripts/fixtures/input-lifecycle/native-input/template/protos/message.proto whitespace=-blank-at-eol
+scripts/fixtures/input-lifecycle/native-input/template/src/rdev_pure/** whitespace=-blank-at-eof

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Run exact source ownership and asynchronous Linux terminal-close regressions."""
 import argparse
+
+import input_lifecycle_integration_projection as input_lifecycle
 import importlib.util
 from pathlib import Path
 import subprocess
@@ -389,7 +391,7 @@ def dart_control(source, dart, evidence):
         assert result.returncode == 0, label+' actual source control failed'
 
 
-def main(_projected_source=None):
+def main(_projected_source=None, _input_checked=False):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source', type=Path, required=True, help='Exact fully composed application source')
     parser.add_argument('--dart', type=Path)
@@ -397,12 +399,15 @@ def main(_projected_source=None):
     args = parser.parse_args()
     if _projected_source is not None:
         args.source = _projected_source
+    if not _input_checked:
+        with input_lifecycle.current_source(args.source) as previous_input:
+            return main(previous_input, _input_checked=True)
     uri_spec = importlib.util.spec_from_file_location('linux_close_uri_fixture', Path(__file__).with_name('patch-support-uri-routing.py'))
     uri = importlib.util.module_from_spec(uri_spec)
     uri_spec.loader.exec_module(uri)
     if uri.has_layer(args.source):
         with uri.previous(args.source) as previous:
-            return main(previous)
+            return main(previous, _input_checked=True)
     for name, expected in P.ORIGINAL.items():
         logical, _ = P.canonical((args.source/name).read_bytes())
         if P.digest(logical.encode()) == P.CORRECTED[name]:

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Exact full URI routing functions, strict source ownership and inverse controls."""
 import argparse
+
+import input_lifecycle_integration_projection as input_lifecycle
 import hashlib
 import importlib.util
 import json
@@ -16,6 +18,7 @@ spec = importlib.util.spec_from_file_location('uri_routing_owner', BASE / 'patch
 patch = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(patch)
 SOURCE = None
+GIT_SOURCE = None
 OUTPUT = None
 DART = None
 
@@ -473,7 +476,7 @@ class UriRoutingTests(unittest.TestCase):
         historical = importlib.util.module_from_spec(historical_spec)
         historical_spec.loader.exec_module(historical)
         linux = self.prior['prior_namespace']()
-        fresh_raw = subprocess.check_output(['git', '-C', str(SOURCE), 'show', linux['PIN'] + ':flutter/lib/common.dart'])
+        fresh_raw = subprocess.check_output(['git', '-C', str(GIT_SOURCE), 'show', linux['PIN'] + ':flutter/lib/common.dart'])
         fresh, _ = patch.canonical(fresh_raw)
         self.assertEqual(patch.digest(fresh.encode()), patch.FRESH['flutter/lib/common.dart'])
         older = linux['transform']('flutter/lib/common.dart', self.original['flutter/lib/common.dart'], True)
@@ -508,7 +511,9 @@ class UriRoutingTests(unittest.TestCase):
                         for consumer in [historical.linux_close_baseline, historical.startup_baseline]:
                             with mock.patch.object(shutil, 'copytree', side_effect=AssertionError('Unsafe source reached copy')) as copier:
                                 with self.assertRaisesRegex(RuntimeError, 'Changed URI routing model presence source'):
-                                    with consumer(root):
+                                    # These are deliberately old two/seven-file unit fixtures;
+                                    # the complete actual SOURCE was checked at CLI admission.
+                                    with consumer(root, _input_checked=True):
                                         self.fail('Unsafe source reached historical consumer body')
                                 copier.assert_not_called()
                             self.assertEqual(snapshot(root), before)
@@ -591,7 +596,7 @@ class UriRoutingTests(unittest.TestCase):
                     if expected is None:
                         path.unlink()
                         continue
-                    raw = subprocess.check_output(['git', '-C', str(SOURCE), 'show', self.prior['prior_namespace']()['PIN'] + ':' + name])
+                    raw = subprocess.check_output(['git', '-C', str(GIT_SOURCE), 'show', self.prior['prior_namespace']()['PIN'] + ':' + name])
                     logical, _ = patch.canonical(raw)
                     self.assertEqual(patch.digest(logical.encode()), expected)
                     path.write_bytes(logical.replace('\n', newline).encode())
@@ -624,17 +629,20 @@ class UriRoutingTests(unittest.TestCase):
 
 
 def main():
-    global SOURCE, OUTPUT, DART
+    global SOURCE, GIT_SOURCE, OUTPUT, DART
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source', required=True, type=Path)
     parser.add_argument('--dart', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path)
     args = parser.parse_args()
     SOURCE = args.source.absolute()
+    GIT_SOURCE = SOURCE
     DART = args.dart.absolute()
     OUTPUT = args.output.absolute()
     OUTPUT.mkdir(mode=0o700)
-    result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(UriRoutingTests))
+    with input_lifecycle.current_source(SOURCE) as previous_input:
+        SOURCE = previous_input
+        result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(UriRoutingTests))
     raise SystemExit(0 if result.wasSuccessful() else 1)
 
 

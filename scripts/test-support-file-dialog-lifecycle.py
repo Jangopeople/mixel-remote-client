@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Run the actual pinned event loop across close/await races using real Dart timers."""
 import argparse
+
+import input_lifecycle_integration_projection as input_lifecycle
 import contextlib
 import hashlib
 import importlib.util
@@ -452,7 +454,10 @@ class LifecycleTests(unittest.TestCase):
             scripts = root / "scripts"
             scripts.mkdir()
             for name in ("apply-branding.sh", "patch-support-file-dialog-lifecycle.py"):
-                (scripts / name).write_bytes((HERE / name).read_bytes())
+                raw = (HERE / name).read_bytes()
+                if name == "apply-branding.sh":
+                    raw = input_lifecycle.project_to_canonical(raw, "scripts/apply-branding.sh")
+                (scripts / name).write_bytes(raw)
             # Run the complete actual macro up to the whole prior-owner gate.
             # The prior owner alone is inert and refuses before any of its writes.
             (scripts / "patch-support-uri-routing.py").write_bytes(b'''import sys

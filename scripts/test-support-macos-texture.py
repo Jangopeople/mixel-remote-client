@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Run pinned renderer lifecycle, frame-lock, async Dart and materialization controls."""
 import argparse
+
+import input_lifecycle_integration_projection as input_lifecycle
 import ast
 import hashlib
 import importlib.util
@@ -643,36 +645,43 @@ def uri_bridge_fixture_sources(uri):
     for source in candidates:
         if not source.exists():
             continue
-        files = {name: uri.canonical(uri.safe_source(source, name).read_bytes())[0] for name in uri.ORIGINAL}
-        hashes = {name: uri.digest(value.encode()) for name, value in files.items()}
-        if hashes == uri.FRESH and not explicit:
-            continue
-        if hashes == uri.FINAL:
-            files = {name: uri.transform(name, value, restore=True) for name, value in files.items()}
-        if {name: uri.digest(value.encode()) for name, value in files.items()} != uri.ORIGINAL:
-            raise AssertionError('Changed URI bridge prior-owner fixture source')
-        # Keep the real complete-profile guard: a final Dart-only fixture can no
-        # longer stand in for the native sender/common/core/receiver/queue owner.
-        uri.apply(source, check=True, restore=True, verify=False)
-        native_files = {}
-        for name in uri.NATIVE_ORIGINAL:
-            value = uri.canonical(uri.safe_source(source, name).read_bytes())[0]
-            native_files[name] = uri.transform_native(name, value, restore=True)
-        if {name: uri.digest(value.encode()) for name, value in native_files.items()} != uri.NATIVE_ORIGINAL:
-            raise AssertionError('Changed native URI bridge prior-owner fixture source')
-        files.update(native_files)
-        return {name: value.encode() for name, value in files.items()}
+        with input_lifecycle.current_source(source) as previous:
+            result = uri_bridge_fixture_sources_from_previous(uri, previous, explicit)
+        if result is not None:
+            return result
     raise AssertionError('URI bridge fixture needs complete branded source via RDREPO, RUNNER_TEMP/mixel-sdk-source/pipeline-lf or MIXEL_URI_FIXTURE_SOURCE')
 
 
+def uri_bridge_fixture_sources_from_previous(uri, source, explicit):
+    files = {name: uri.canonical(uri.safe_source(source, name).read_bytes())[0] for name in uri.ORIGINAL}
+    hashes = {name: uri.digest(value.encode()) for name, value in files.items()}
+    if hashes == uri.FRESH and not explicit:
+        return None
+    if hashes == uri.FINAL:
+        files = {name: uri.transform(name, value, restore=True) for name, value in files.items()}
+    if {name: uri.digest(value.encode()) for name, value in files.items()} != uri.ORIGINAL:
+        raise AssertionError('Changed URI bridge prior-owner fixture source')
+    # Keep the real complete-profile guard: a final Dart-only fixture can no
+    # longer stand in for the native sender/common/core/receiver/queue owner.
+    uri.apply(source, check=True, restore=True, verify=False)
+    native_files = {}
+    for name in uri.NATIVE_ORIGINAL:
+        value = uri.canonical(uri.safe_source(source, name).read_bytes())[0]
+        native_files[name] = uri.transform_native(name, value, restore=True)
+    if {name: uri.digest(value.encode()) for name, value in native_files.items()} != uri.NATIVE_ORIGINAL:
+        raise AssertionError('Changed native URI bridge prior-owner fixture source')
+    files.update(native_files)
+    return {name: value.encode() for name, value in files.items()}
+
+
 def workflow_controls(output, originals, files, window_files=None):
-    workflow = (ROOT / ".github/workflows/build.yml").read_text()
+    workflow = input_lifecycle.inverse_blocks((ROOT / ".github/workflows/build.yml").read_bytes(), ".github/workflows/build.yml").decode()
     native_commands = exact_bridge_native_close_commands(workflow)
     output = Path(output).resolve(strict=True)
     helpers = ("patch-support-macos-texture.py", "patch-support-macos-window.py")
     hooks = tuple("          RDREPO=. python3 ../scripts/" + name + "\n" for name in helpers)
     assert all(workflow.count(hook) == 1 for hook in hooks)
-    committed = subprocess.check_output(["git", "-C", str(ROOT), "show", "HEAD:.github/workflows/build.yml"]).decode()
+    committed = input_lifecycle.committed_workflow(subprocess.check_output(["git", "-C", str(ROOT), "show", "HEAD:.github/workflows/build.yml"]), ".github/workflows/build.yml").decode()
     assert workflow == committed, "No production build job, hook or guard may change for this fixture correction"
     match = re.search(r"      - name: Generate bridge\n        working-directory: rustdesk\n        run: \|\n((?:          .*\n)+)", workflow)
     assert match

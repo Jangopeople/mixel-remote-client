@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Run the complete branding pipeline on a fresh pinned source clone."""
 import hashlib
+import input_lifecycle_integration_projection as input_lifecycle
 import importlib.util
 import json
 import os
@@ -131,8 +132,32 @@ def require_terminal_footer_refusal(result: subprocess.CompletedProcess[str], la
     assert marker in result.stderr, result.stderr[-4000:]
 
 
+def restore_footer_input_layer(repo: Path, base: Path, environment: dict) -> None:
+    """Strict new whole-layer inverse before any historical footer owner."""
+    owner_file = ROOT / 'scripts' / input_lifecycle.WRAPPER
+    spec = importlib.util.spec_from_file_location('footer_input_owner', owner_file)
+    owner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(owner)
+    engine = owner.namespace()
+    plan = owner.source_plan(engine)
+    profile, states = engine['inspect'](repo, plan)
+    before_check = full_source_snapshot(repo)
+    command = [sys.executable, str(owner_file), '--root', str(repo), '--restore']
+    run([*command, '--check'], cwd=base, env=environment)
+    assert full_source_snapshot(repo) == before_check, 'Input footer inverse check wrote source'
+    expected = dict(before_check)
+    for name, raw in engine['projected'](plan, profile, states, restore=True).items():
+        if raw is None:
+            expected.pop(name, None)
+        else:
+            expected[name] = ('file', hashlib.sha256(raw).hexdigest())
+    run(command, cwd=base, env=environment)
+    assert full_source_snapshot(repo) == expected, 'Input footer inverse changed an unrelated source'
+
+
 def restore_footer_terminal_layers(repo: Path, layers: tuple[str, ...], base: Path, environment: dict) -> None:
     """Run each actual strict CLI inverse and verify its exact complete source effect."""
+    restore_footer_input_layer(repo, base, environment)
     for layer in layers:
         filename, prefix = TERMINAL_FOOTER_LAYERS[layer]
         owner_file = ROOT / 'scripts' / filename
@@ -161,7 +186,7 @@ def historical_footer_branding_command(base: Path, layers: tuple[str, ...]) -> l
     directory = base / ('footer-historical-' + '-'.join(layers))
     scripts = directory / 'scripts'
     shutil.copytree(ROOT / 'scripts', scripts, ignore=shutil.ignore_patterns('__pycache__'))
-    source = SCRIPT.read_text(encoding='utf-8')
+    source = input_lifecycle.project_to_canonical(SCRIPT.read_bytes(), 'scripts/apply-branding.sh').decode('utf-8')
     historical = source
     for layer in layers:
         filename, _ = TERMINAL_FOOTER_LAYERS[layer]

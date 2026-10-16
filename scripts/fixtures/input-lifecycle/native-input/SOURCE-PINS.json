@@ -1,0 +1,46 @@
+{
+  "src/client/io_loop.rs": {
+    "bytes": 117921,
+    "sha256": "580bd77792281830a29bc2e2a0d1def6f94a2e5fc37a25da81508423ae48382b"
+  },
+  "src/client/keyboard_state.rs": {
+    "bytes": 11355,
+    "sha256": "2fd12b50e665e80bdd8755a6d5a84b565d587e2d3805bbdac87abd3e6a11e0a3"
+  },
+  "src/client.rs": {
+    "bytes": 156877,
+    "sha256": "1946009329fb65c94ef80f6e003a61ed66dcb6ad532b217ced5eecb9037832cf"
+  },
+  "src/flutter_ffi.rs": {
+    "bytes": 96447,
+    "sha256": "c917cf5dd0038e958b9412d870006b14646620fad61343730ae2693b3533813b"
+  },
+  "src/keyboard.rs": {
+    "bytes": 59534,
+    "sha256": "c6e06b93f98e5ca67931e04fdcbe32ede5f5817b93dfeac465471651935fdbf8"
+  },
+  "src/server/connection.rs": {
+    "bytes": 236981,
+    "sha256": "00aa86af8c2075b709dfeb5dbf27b2bb4fef50ffe2778e669e8060ac7ebf21d8"
+  },
+  "src/server/input_service.rs": {
+    "bytes": 82044,
+    "sha256": "511227034fe75b8a24bdda26aec16f2b440bc92d00d0a4c71ee5763c8cf15024"
+  },
+  "src/server/portable_service.rs": {
+    "bytes": 39216,
+    "sha256": "94b9492dab05fb73a1e3cf8ccd141a137a2d904710fa73d80093ddb94e2af080"
+  },
+  "src/ui_session_interface.rs": {
+    "bytes": 72280,
+    "sha256": "971c91664f060d5268055b5879a0887101173432d0a727d8789eee1fc9e1a23d"
+  },
+  "src/common.rs": {
+    "bytes": 84895,
+    "sha256": "996c4948ba464f8f6bee036b47454f2c34b285b8f12ed094c679c25f5261b985"
+  },
+  "libs/hbb_common/protos/message.proto": {
+    "bytes": 20700,
+    "sha256": "1f5bd3293fe78f60b078589d724e1428eef0415494a44032557c8e22e8bdbc72"
+  }
+}

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Prove pinned analyzer fixes and unchanged Client/terminal behavior."""
 import argparse
+
+import input_lifecycle_integration_projection as input_lifecycle
 import ast
 import collections
 import contextlib
@@ -66,19 +68,25 @@ def copy_current_pipeline_inputs(destination):
 
 
 @contextlib.contextmanager
-def linux_close_baseline(source):
+def linux_close_baseline(source, _input_checked=False):
     """Expose the exact previous owners without removing startup under test.
 
     Validate each supplied late Linux layer before its private inverse copies
     anything. The product helper pins and original input remain unchanged.
     """
-    source = Path(source).resolve()
+    source = Path(source).absolute()
+    if not _input_checked:
+        with input_lifecycle.current_source(source) as previous:
+            with linux_close_baseline(previous, _input_checked=True) as checked:
+                yield checked
+        return
+    source = source.resolve()
     uri_spec = importlib.util.spec_from_file_location("mixel_linux_close_baseline_uri", ROOT / "scripts/patch-support-uri-routing.py")
     uri = importlib.util.module_from_spec(uri_spec)
     uri_spec.loader.exec_module(uri)
     if uri.has_layer(source):
         with uri.previous(source) as previous:
-            with linux_close_baseline(previous) as checked:
+            with linux_close_baseline(previous, _input_checked=True) as checked:
                 yield checked
         return
     native_spec = importlib.util.spec_from_file_location("mixel_historical_native_close", ROOT / "scripts/patch-support-linux-child-window-close.py")
@@ -86,7 +94,7 @@ def linux_close_baseline(source):
     native_spec.loader.exec_module(native_close)
     if native_close.has_layer(source):
         with native_close.previous(source) as previous:
-            with linux_close_baseline(previous) as checked:
+            with linux_close_baseline(previous, _input_checked=True) as checked:
                 yield checked
         return
     linux_spec = importlib.util.spec_from_file_location("mixel_historical_linux_close", ROOT / "scripts/patch-support-linux-window-close.py")
@@ -94,26 +102,32 @@ def linux_close_baseline(source):
     linux_spec.loader.exec_module(linux_close)
     if linux_close.has_layer(source):
         with linux_close.previous(source) as previous:
-            with linux_close_baseline(previous) as checked:
+            with linux_close_baseline(previous, _input_checked=True) as checked:
                 yield checked
         return
     yield source
 
 
 @contextlib.contextmanager
-def startup_baseline(source):
+def startup_baseline(source, _input_checked=False):
     """Verify earlier layers in a private exact startup inverse; input is read-only.
 
     The final startup suite qualifies its actual generated bodies separately.
     This projection never accepts an unpinned input or changes supplied source.
     """
-    source = Path(source).resolve()
+    source = Path(source).absolute()
+    if not _input_checked:
+        with input_lifecycle.current_source(source) as previous:
+            with startup_baseline(previous, _input_checked=True) as checked:
+                yield checked
+        return
+    source = source.resolve()
     uri_spec = importlib.util.spec_from_file_location("mixel_startup_baseline_uri", ROOT / "scripts/patch-support-uri-routing.py")
     uri = importlib.util.module_from_spec(uri_spec)
     uri_spec.loader.exec_module(uri)
     if uri.has_layer(source):
         with uri.previous(source) as previous:
-            with startup_baseline(previous) as checked:
+            with startup_baseline(previous, _input_checked=True) as checked:
                 yield checked
         return
     native_spec = importlib.util.spec_from_file_location("mixel_fixture_linux_child_close", ROOT / "scripts/patch-support-linux-child-window-close.py")
@@ -121,7 +135,7 @@ def startup_baseline(source):
     native_spec.loader.exec_module(native_close)
     if native_close.has_layer(source):
         with native_close.previous(source) as previous:
-            with startup_baseline(previous) as checked:
+            with startup_baseline(previous, _input_checked=True) as checked:
                 yield checked
         return
     linux_spec = importlib.util.spec_from_file_location("mixel_fixture_linux_close", ROOT / "scripts/patch-support-linux-window-close.py")
@@ -129,7 +143,7 @@ def startup_baseline(source):
     linux_spec.loader.exec_module(linux_close)
     if linux_close.has_layer(source):
         with linux_close.previous(source) as previous:
-            with startup_baseline(previous) as checked:
+            with startup_baseline(previous, _input_checked=True) as checked:
                 yield checked
         return
     launch_spec = importlib.util.spec_from_file_location("mixel_fixture_launch", ROOT / "scripts/patch-support-macos-gui-launch.py")
@@ -137,7 +151,7 @@ def startup_baseline(source):
     launch_spec.loader.exec_module(launch)
     if launch.has_layer(source):
         with launch.previous(source) as previous:
-            with startup_baseline(previous) as checked:
+            with startup_baseline(previous, _input_checked=True) as checked:
                 yield checked
         return
     spec = importlib.util.spec_from_file_location("mixel_fixture_startup", ROOT / "scripts/patch-macos-startup.py")
@@ -613,6 +627,16 @@ def uri_common_drift_controls(out, repo, copied, bash, script, env, label):
 
 def common_drift_controls(out, repo, copied, bash, script, env, label):
     before = snapshot(repo)
+    with input_lifecycle.current_source(repo) as previous_input:
+        prior_macro = copied / 'scripts' / ('prior-input-refusal-' + label + '.sh')
+        prior_macro.write_bytes(input_lifecycle.project_to_canonical(script.read_bytes(), 'scripts/apply-branding.sh'))
+        common_drift_controls_previous(out, previous_input, copied, bash, prior_macro,
+                                       dict(env, RDREPO=previous_input.as_posix()), label)
+    assert snapshot(repo) == before, 'Input lifecycle projection changed supplied source'
+
+
+def common_drift_controls_previous(out, repo, copied, bash, script, env, label):
+    before = snapshot(repo)
     uri_common_drift_controls(out, repo, copied, bash, script, env, label)
     uri_spec = importlib.util.spec_from_file_location('mixel_drift_terminal_uri', ROOT / 'scripts/patch-support-uri-routing.py')
     uri = importlib.util.module_from_spec(uri_spec)
@@ -712,6 +736,8 @@ def pipeline(out,source,bash):
                  "patch-support-macos-rdev.py","patch-support-input.py",
                  "patch-support-file-transfer-window.py","test-support-file-transfer-window.py",
                  "patch-support-file-dialog-lifecycle.py","test-support-file-dialog-lifecycle.py",
+                 "patch-support-input-lifecycle.py","support-input-lifecycle-engine.py","support-input-lifecycle-plan.json",
+                 "input_lifecycle_integration_projection.py",
                  "patch-support-keyboard-default.py",
                  "patch-support-uinput-scroll.py",
                  "patch-support-uinput-device.py","test-support-uinput-device.py",
@@ -1040,14 +1066,14 @@ def diagnostic_counts(text):
     return collections.Counter(part[0].strip() for part in parts),parts
 
 
-def analyze_app(out,source,flutter,files,package_config_source=None):
+def analyze_app(out,source,flutter,files,package_config_source=None,_input_checked=False):
     # Ownership projections omit generated caches. Retain the supplied app's
     # exact resolved package configuration as a separate read-only fixture input.
     if package_config_source is None:
         package_config_source=source/"flutter/.dart_tool/package_config.json"
-    with startup_baseline(source) as plain:
+    with startup_baseline(source, _input_checked=_input_checked) as plain:
         if plain != source.resolve():
-            return analyze_app(out,plain,flutter,files,package_config_source)
+            return analyze_app(out,plain,flutter,files,package_config_source,_input_checked=True)
     # Validate every final ownership layer without changing the supplied app.
     source_before=snapshot(source/"flutter")
     sdk_overlay=(source/S.OWNED).exists() or (source/S.OWNED).is_symlink()
