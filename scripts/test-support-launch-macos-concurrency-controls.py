@@ -50,6 +50,17 @@ ADDITIONS = (
 )
 
 
+def inverse_closed_pid_recheck_source(source):
+    """Remove only this exact additive recheck layer before old hash controls."""
+    before = '                def pid_recheck_refused():\n                    phase("peer-pid-recheck")\n                    observed = incoming_settlement_call(deadline, tray.peer_pid, self.connection)\n                    refused = observed != first_pid\n'
+    after = '                def pid_recheck_refused():\n                    phase("peer-pid-recheck")\n                    try:\n                        observed = incoming_settlement_call(deadline, tray.peer_pid, self.connection)\n                    except OSError as closed_error:\n                        # First PID and UID already matched this retained owner.\n                        # Darwin may close the peer before LOCAL_PEERPID\'s second\n                        # read. Cached UID is rechecked below; this successful\n                        # connect still means active, never endpoint inactivity.\n                        if type(closed_error) is not OSError or incoming_initial_identity_errno(closed_error) != errno.ENOTCONN:\n                            raise\n                        if type(first_pid) is not int or first_pid <= 0 or first_pid != lease["serverPid"] or type(first_uid) is not int or first_uid != lease["uid"]:\n                            raise RuntimeError("Incoming cleanup disconnected peer initial identity refused")\n                        phase("post-peer-lease-guard")\n                        guard()\n                        if any(lease["missing"].values()):\n                            raise RuntimeError("Incoming cleanup disconnected peer resource missing")\n                        self.closed_peer_qualified = True\n                        return False\n                    refused = observed != first_pid\n'
+    uid_before = '                    observed = incoming_settlement_call(deadline, incoming_peer_uid, self.connection)\n                    refused = observed != first_uid\n'
+    uid_after = '                    observed = incoming_settlement_call(deadline, incoming_peer_uid, self.connection)\n                    if self.closed_peer_qualified and type(observed) is not int:\n                        attribution["peerUidComparison"] = incoming_initial_identity_comparison(observed, lease["uid"])\n                        phase("peer-uid-recheck", "peer-uid-changed")\n                        raise RuntimeError("Incoming cleanup disconnected peer UID changed")\n                    refused = observed != first_uid\n'
+    if source.count(after) != 1 or source.count(uid_after) != 1:
+        raise AssertionError('Exact closed peer recheck layer changed')
+    return source.replace(after, before, 1).replace(uid_after, uid_before, 1)
+
+
 def linux_close_workflow_projections(workflow):
     """Exact approved adjacent checks and the unchanged surrounding gates."""
     if workflow not in ('build.yml', 'preflight.yml'):
@@ -935,7 +946,7 @@ class ConcurrencyControls(unittest.TestCase):
                          'cfabeb31aef95f1c8a20df5946caf9ea83f9b95c37ca851a0f5c709a0645cdf8')
         self.assertEqual(current.replace('    timeout-minutes: 240\n', '    timeout-minutes: 180\n', 1), budget_only)
         self.assertEqual(current.count('    timeout-minutes: 180\n'), 2)
-        self.assertEqual(hashlib.sha256((ROOT / 'scripts/test-support-launch-windows.ps1').read_bytes()).hexdigest(),
+        self.assertEqual(hashlib.sha256(C.canonical((ROOT / 'scripts/test-support-launch-windows.ps1').read_bytes())).hexdigest(),
                          'c1f3e99ebda0a146bce9b54f215feeebd0c6d19bec19f2a280259d311983c44b')
         for mutation in (current.replace('timeout-minutes: 240', 'timeout-minutes: 239'),
                          current.replace('    timeout-minutes: 240\n', ''),
@@ -976,7 +987,7 @@ class ConcurrencyControls(unittest.TestCase):
         self.assertEqual(dispatcher.count('python scripts/test-support-file-dialog-lifecycle.py --source '), 1)
 
     def test_workflow_whole_inverse_has_only_two_ordered_additions(self):
-        value = input_lifecycle.inverse_blocks((ROOT / '.github/workflows/build.yml').read_bytes(), '.github/workflows/build.yml').decode()
+        value = input_lifecycle.inverse_blocks(C.canonical((ROOT / '.github/workflows/build.yml').read_bytes()), '.github/workflows/build.yml').decode()
         value = inverse_windows_producer_budget(value)
         value = inverse_lifecycle_workflow_checks(value, 'build.yml')
         value = inverse_windows_sdk_source_diagnostics(value, 'build.yml')
@@ -1054,7 +1065,7 @@ class ConcurrencyControls(unittest.TestCase):
             inverse_linux_close_workflow_checks('', 'foreign.yml')
 
     def test_linux_close_bridge_projection_refuses_changed_missing_duplicate_reordered_or_moved_brackets(self):
-        text = input_lifecycle.inverse_blocks((ROOT / '.github/workflows/build.yml').read_bytes(), '.github/workflows/build.yml').decode()
+        text = input_lifecycle.inverse_blocks(C.canonical((ROOT / '.github/workflows/build.yml').read_bytes()), '.github/workflows/build.yml').decode()
         text = inverse_uri_bridge_checks(text)
         before, restore, original, reapply, after = linux_close_bridge_projection()
         current = restore + original + reapply
@@ -1092,7 +1103,7 @@ class ConcurrencyControls(unittest.TestCase):
     def test_windows_preflight_budget_exact_inverse_refuses_drift_before_commands(self):
         path = ROOT / '.github/workflows/preflight.yml'
         raw = path.read_bytes()
-        text = raw.decode()
+        text = C.canonical(raw).decode()
         before, current, after = windows_preflight_budget_projection()
         approved = before + current + after
         forbidden = AssertionError('Budget source projection attempted a command')
@@ -1146,7 +1157,7 @@ class ConcurrencyControls(unittest.TestCase):
     def test_uri_bridge_projection_refuses_changed_or_disjoint_six_command_sequence_before_commands(self):
         path = ROOT / '.github/workflows/build.yml'
         raw = path.read_bytes()
-        text = input_lifecycle.inverse_blocks(raw, '.github/workflows/build.yml').decode()
+        text = input_lifecycle.inverse_blocks(C.canonical(raw), '.github/workflows/build.yml').decode()
         before, restore, original, reapply, after = uri_bridge_projection()
         current = restore + original + reapply
         lines = current.splitlines(keepends=True)
@@ -1769,6 +1780,7 @@ class ConcurrencyControls(unittest.TestCase):
 
     def test_exact_historical_caller_inverse_preserves_original_first_notconnected_failure(self):
         source = HELPER.read_text(encoding='utf-8')
+        source = inverse_closed_pid_recheck_source(source)
         start = source.index('                phase("peer-pid-first")\n                try:\n')
         end = source.index('                attribution["peerPidComparison"] = incoming_initial_identity_comparison(first_pid,', start)
         source = source[:start] + '                phase("peer-pid-first")\n                first_pid = incoming_settlement_call(deadline, tray.peer_pid, self.connection)\n' + source[end:]
@@ -1793,6 +1805,215 @@ class ConcurrencyControls(unittest.TestCase):
         self.assertEqual(f.facts['incomingInitialIdentityFailure'], {'subphase':'peer-pid-first',
             'reason':'peer-pid-unavailable', 'errorType':'OSError', 'errno':errno.ENOTCONN,
             'peerPidComparison':'unavailable', 'peerUidComparison':'not-read'})
+
+    def test_exact_recheck_inverse_recovers_current_708_helper_bytes(self):
+        source = inverse_closed_pid_recheck_source(HELPER.read_text(encoding='utf-8'))
+        self.assertEqual(hashlib.sha256(source.encode()).hexdigest(), '9fb58a9c5333df460cc4a676dc1499ee08af4af78edca762d0e20c59f0d03fc0')
+
+    def test_exact_recheck_inverse_rejects_missing_duplicate_and_drifted_layers(self):
+        source = HELPER.read_text(encoding='utf-8')
+        for label, altered in (
+                ('missing-pid', source.replace('                def pid_recheck_refused():', '                def changed_recheck():', 1)),
+                ('duplicate-pid', source + source[source.index('                def pid_recheck_refused():'):source.index('                def uid_recheck_refused():')]),
+                ('missing-uid', source.replace('                    if self.closed_peer_qualified and type(observed) is not int:', '                    if self.closed_peer_qualified and False:', 1)),
+                ('duplicate-uid', source + '                    observed = incoming_settlement_call(deadline, incoming_peer_uid, self.connection)\n                    if self.closed_peer_qualified and type(observed) is not int:\n                        attribution["peerUidComparison"] = incoming_initial_identity_comparison(observed, lease["uid"])\n                        phase("peer-uid-recheck", "peer-uid-changed")\n                        raise RuntimeError("Incoming cleanup disconnected peer UID changed")\n                    refused = observed != first_uid\n'),
+                ('changed-errno', source.replace('if type(closed_error) is not OSError or incoming_initial_identity_errno(closed_error) != errno.ENOTCONN:', 'if type(closed_error) is not OSError or incoming_initial_identity_errno(closed_error) != errno.ECONNRESET:', 1))):
+            with self.subTest(malformed=label):
+                with self.assertRaisesRegex(AssertionError, '^Exact closed peer recheck layer changed$'):
+                    inverse_closed_pid_recheck_source(altered)
+
+    def test_closed_pid_recheck_owned_identity_requires_separate_fresh_inactivity(self):
+        for outcome in ('refused', 'missing'):
+            with self.subTest(outcome=outcome):
+                f = IncomingSettlementFixture(self.f.app); lease = f.capture(); f.stopped = True
+                f.connections.clear(); f.outcomes = ['active', outcome]; reads = []; uid_reads = []
+                def peer(connection):
+                    reads.append(id(connection))
+                    if len(reads) == 2: raise OSError(errno.ENOTCONN, 'private closed recheck')
+                    return 101
+                def uid(connection):
+                    uid_reads.append(id(connection)); return f.uid
+                with f.seams(), mock.patch.object(C.tray, 'peer_pid', side_effect=peer), mock.patch.object(C, 'incoming_peer_uid', side_effect=uid):
+                    C.cleanup_incoming_endpoint(f.app, 101, f.birth(101), 202, f.birth(202), lease, f.facts)
+                self.assertEqual(len(reads), 2); self.assertEqual(len(uid_reads), 2)
+                self.assertEqual(len(set(reads + uid_reads)), 1)
+                self.assertEqual(len(f.connections), 2); self.assertTrue(all(c.closed for c in f.connections))
+                self.assertEqual(len(f.first_active), 1); self.assertEqual(len(f.cleanup_calls), 1)
+                self.assertEqual((f.facts['incomingEndpointSettlement']['state'], f.facts['incomingEndpointSettlement']['attempts']), ('settled', 1))
+                self.assertNotIn('incomingInitialIdentityFailure', f.facts)
+                self.assertNotIn('private', json.dumps(f.facts))
+
+    def test_closed_pid_recheck_other_errors_remain_first_fatal_without_retry(self):
+        class ErrorSubclass(OSError): pass
+        class HiddenErrno(OSError):
+            @property
+            def errno(self): raise ValueError('private errno')
+        errors = [OSError(number, 'private') for number in sorted(C.INCOMING_INITIAL_IDENTITY_ERRNOS - {errno.ENOTCONN})]
+        errors += [ErrorSubclass(errno.ENOTCONN, 'private'), HiddenErrno(), OSError(), OSError(True, 'private'), RuntimeError('private')]
+        for error in errors:
+            f = IncomingSettlementFixture(self.f.app); lease = f.capture(); f.stopped = True
+            f.connections.clear(); f.outcomes = ['active', 'refused']; reads = 0
+            def peer(connection):
+                nonlocal reads
+                reads += 1
+                if reads == 2: raise error
+                return 101
+            with self.subTest(error=type(error).__name__), f.seams(), mock.patch.object(C.tray, 'peer_pid', side_effect=peer):
+                with self.assertRaises(RuntimeError) as raised:
+                    C.cleanup_incoming_endpoint(f.app, 101, f.birth(101), 202, f.birth(202), lease, f.facts)
+            self.assertIs(raised.exception, f.first_active[0]); self.assertEqual(f.cleanup_calls, [])
+            self.assertEqual(len(f.connections), 1); self.assertTrue(f.connections[0].closed)
+            self.assertEqual(f.facts['incomingInitialIdentityFailure']['subphase'], 'peer-pid-recheck')
+
+    def test_closed_pid_recheck_cached_uid_must_remain_exact_integer_owned_uid(self):
+        for value in (True, None, 0, os.getuid()+1, float(os.getuid()), OSError(errno.ENOTCONN, 'private'), RuntimeError('private')):
+            f = IncomingSettlementFixture(self.f.app); lease = f.capture(); f.stopped = True
+            f.connections.clear(); f.outcomes = ['active', 'refused']; reads = 0
+            def peer(connection):
+                nonlocal reads
+                reads += 1
+                if reads == 2: raise OSError(errno.ENOTCONN, 'private')
+                return 101
+            with self.subTest(uid=type(value).__name__), f.seams(), mock.patch.object(C.tray, 'peer_pid', side_effect=peer), mock.patch.object(C, 'incoming_peer_uid', side_effect=[f.uid, value]):
+                with self.assertRaises(RuntimeError) as raised:
+                    C.cleanup_incoming_endpoint(f.app, 101, f.birth(101), 202, f.birth(202), lease, f.facts)
+            self.assertIs(raised.exception, f.first_active[0]); self.assertEqual(f.cleanup_calls, [])
+            self.assertEqual(len(f.connections), 1); self.assertTrue(f.connections[0].closed)
+
+    def test_closed_pid_recheck_cannot_bypass_invalid_or_foreign_first_identity(self):
+        for pid, uid in ((999, os.getuid()), (0, os.getuid()), (True, os.getuid()), (None, os.getuid()), (101, os.getuid()+1), (101, True), (101, None)):
+            f = IncomingSettlementFixture(self.f.app); lease = f.capture(); f.stopped = True
+            f.connections.clear(); f.outcomes = ['active', 'refused']; reads = 0
+            def peer(connection):
+                nonlocal reads
+                reads += 1
+                if reads == 2: raise OSError(errno.ENOTCONN, 'private')
+                return pid
+            with self.subTest(pid=pid, uid=uid), f.seams(), mock.patch.object(C.tray, 'peer_pid', side_effect=peer), mock.patch.object(C, 'incoming_peer_uid', return_value=uid):
+                with self.assertRaises(RuntimeError) as raised:
+                    C.cleanup_incoming_endpoint(f.app, 101, f.birth(101), 202, f.birth(202), lease, f.facts)
+            self.assertIs(raised.exception, f.first_active[0]); self.assertEqual(reads, 1)
+            self.assertEqual(f.cleanup_calls, []); self.assertEqual(len(f.connections), 1)
+
+    def test_closed_pid_recheck_every_lease_resource_and_birth_stays_guarded(self):
+        for step in ('pid-recheck', 'uid-recheck', 'close'):
+            for resource in ('directory', 'socket', 'marker', 'markerBytes', 'birth', 'missing'):
+                f = IncomingSettlementFixture(self.f.app); lease = f.capture(); f.stopped = True
+                f.connections.clear(); f.outcomes = ['active', 'refused']; pid_reads = 0; uid_reads = 0
+                def mutate():
+                    if resource == 'birth': f.birth_failure = RuntimeError('private reused PID')
+                    elif resource == 'markerBytes': f.snapshot_base[resource] = b'private replacement'
+                    elif resource == 'missing': f.snapshot_base.update(socket=None, marker=None, markerBytes=None)
+                    else:
+                        value=f.snapshot_base[resource]; f.snapshot_base[resource]=(value[0],value[1]+1,*value[2:])
+                def peer(connection):
+                    nonlocal pid_reads
+                    pid_reads += 1
+                    if pid_reads == 2:
+                        if step == 'pid-recheck': mutate()
+                        raise OSError(errno.ENOTCONN, 'private')
+                    return 101
+                def uid(connection):
+                    nonlocal uid_reads
+                    uid_reads += 1
+                    if uid_reads == 2:
+                        if step == 'uid-recheck': mutate()
+                        if step == 'close':
+                            original_close=connection.close
+                            def close(): original_close(); mutate()
+                            connection.close=close
+                    return f.uid
+                with self.subTest(step=step, resource=resource), f.seams(), mock.patch.object(C.tray, 'peer_pid', side_effect=peer), mock.patch.object(C, 'incoming_peer_uid', side_effect=uid):
+                    with self.assertRaises(RuntimeError) as raised:
+                        C.cleanup_incoming_endpoint(f.app, 101, f.birth(101), 202, f.birth(202), lease, f.facts)
+                self.assertIs(raised.exception, f.first_active[0]); self.assertEqual(f.cleanup_calls, [])
+                self.assertEqual(len(f.connections), 1); self.assertTrue(f.connections[0].closed)
+
+    def test_closed_pid_recheck_deadline_and_close_errors_never_authorize_cleanup(self):
+        for step in ('pid-recheck', 'uid-recheck', 'close-error'):
+            f = IncomingSettlementFixture(self.f.app); lease = f.capture(); f.stopped = True
+            f.connections.clear(); f.outcomes = ['active', 'refused']; reads = 0
+            def peer(connection):
+                nonlocal reads
+                reads += 1
+                if reads == 2:
+                    if step == 'pid-recheck': f.clock=6.0
+                    if step == 'close-error':
+                        def close(): connection.closed=True; raise OSError(errno.EIO, 'private close')
+                        connection.close=close
+                    raise OSError(errno.ENOTCONN, 'private')
+                return 101
+            uid_reads = 0
+            def uid(connection):
+                nonlocal uid_reads
+                uid_reads += 1
+                if uid_reads==2 and step=='uid-recheck': f.clock=6.0
+                return f.uid
+            with self.subTest(step=step), f.seams(), mock.patch.object(C.tray, 'peer_pid', side_effect=peer), mock.patch.object(C, 'incoming_peer_uid', side_effect=uid):
+                with self.assertRaises(RuntimeError):
+                    C.cleanup_incoming_endpoint(f.app, 101, f.birth(101), 202, f.birth(202), lease, f.facts)
+            self.assertEqual(f.cleanup_calls, []); self.assertEqual(len(f.connections), 1)
+            self.assertTrue(f.connections[0].closed)
+            self.assertEqual(f.facts['incomingEndpointSettlement']['failureCode'], 'identity-refused' if step=='close-error' else 'active-timeout')
+
+    def test_closed_pid_recheck_later_foreign_listener_or_cleanup_refusal_preserves_first_error(self):
+        for outcome in ('foreign', 'foreign-uid', 'timeout', 'ambiguous', 'persistent', 'cleanup-refused'):
+            f=IncomingSettlementFixture(self.f.app); lease=f.capture(); f.stopped=True; f.connections.clear()
+            f.outcomes=['active'] if outcome=='persistent' else ['active', 'refused' if outcome=='cleanup-refused' else outcome, 'refused']
+            if outcome=='cleanup-refused': f.cleanup_error=RuntimeError('private final cleanup')
+            reads=0; original_peer=C.tray.peer_pid
+            def peer(connection):
+                nonlocal reads
+                reads+=1
+                if reads==2: raise OSError(errno.ENOTCONN, 'private')
+                return original_peer(connection)
+            with self.subTest(outcome=outcome), f.seams(), mock.patch.object(C.tray, 'peer_pid', side_effect=peer):
+                with self.assertRaises(RuntimeError) as raised:
+                    C.cleanup_incoming_endpoint(f.app, 101, f.birth(101), 202, f.birth(202), lease, f.facts)
+            self.assertIs(raised.exception, f.first_active[0])
+            self.assertEqual(len(f.cleanup_calls), 1 if outcome=='cleanup-refused' else 0)
+            self.assertLessEqual(f.facts['incomingEndpointSettlement']['attempts'], 50); self.assertLessEqual(f.clock, 5.01)
+            self.assertTrue(all(c.closed for c in f.connections))
+
+    def test_closed_pid_recheck_positive_integer_first_identity_is_required(self):
+        for pid, uid in ((101.0, os.getuid()), (-101, os.getuid()), (0, os.getuid()), (True, os.getuid()), (101, float(os.getuid())), (101, True)):
+            f=IncomingSettlementFixture(self.f.app); lease=f.capture(); f.stopped=True; f.connections.clear(); f.outcomes=['active','refused']
+            reads=0
+            def peer(connection):
+                nonlocal reads
+                reads+=1
+                if reads==2: raise OSError(errno.ENOTCONN, 'private')
+                return pid
+            with self.subTest(pid=type(pid).__name__,uid=type(uid).__name__), f.seams(), mock.patch.object(C.tray,'peer_pid',side_effect=peer), mock.patch.object(C,'incoming_peer_uid',return_value=uid):
+                with self.assertRaises(RuntimeError) as raised:
+                    C.cleanup_incoming_endpoint(f.app,101,f.birth(101),202,f.birth(202),lease,f.facts)
+            self.assertIs(raised.exception,f.first_active[0]); self.assertEqual(f.cleanup_calls,[])
+            self.assertEqual(reads,1); self.assertEqual(len(f.connections),1)
+
+    def test_added_logical_source_views_reject_mixed_newlines_before_strict_guards(self):
+        sources = {name: C.canonical((ROOT / name).read_bytes()) for name in (
+            '.github/workflows/build.yml', '.github/workflows/preflight.yml',
+            'scripts/test-support-launch-windows.ps1')}
+        cases = (
+            ('test_workflow_whole_inverse_has_only_two_ordered_additions', '.github/workflows/build.yml'),
+            ('test_linux_close_bridge_projection_refuses_changed_missing_duplicate_reordered_or_moved_brackets', '.github/workflows/build.yml'),
+            ('test_uri_bridge_projection_refuses_changed_or_disjoint_six_command_sequence_before_commands', '.github/workflows/build.yml'),
+            ('test_windows_preflight_budget_exact_inverse_refuses_drift_before_commands', '.github/workflows/preflight.yml'),
+            ('test_windows_producer_budget_has_only_one_exact_outer_job_change', 'scripts/test-support-launch-windows.ps1'),
+        )
+        for index, (method, relative) in enumerate(cases):
+            carrier = self.directory / ('mixed-source-view-' + str(index))
+            for name, logical in sources.items():
+                path = carrier / name; path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(logical)
+            path = carrier / relative
+            malformed = sources[relative].replace(b'\n', b'\r\n') + b'# bare LF is not the physical CRLF profile\n'
+            path.write_bytes(malformed)
+            with self.subTest(method=method), mock.patch.dict(globals(), {'ROOT': carrier}), \
+                    mock.patch.object(subprocess, 'run', forbidden), mock.patch.object(subprocess, 'Popen', forbidden):
+                with self.assertRaisesRegex(RuntimeError, '^Mixed concurrency fixture source newlines$'):
+                    getattr(self, method)()
+            self.assertEqual(path.read_bytes(), malformed)
 
     @unittest.skipUnless(sys.platform == 'darwin', 'Owned Darwin socket API regression')
     def test_native_owned_closed_connection_pid_notconnected_uid_stays_cached(self):

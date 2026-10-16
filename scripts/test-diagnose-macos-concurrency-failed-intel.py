@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exact source/mock replay controls. No provider, native app or signal action."""
 import ast
+import atexit
 import copy
 import errno
 from datetime import datetime, timezone
@@ -21,11 +22,142 @@ from unittest.mock import patch
 import warnings
 import zipfile
 
-ROOT = Path(__file__).resolve().parent.parent
-SOURCE = ROOT / "scripts/diagnose-macos-concurrency-failed-intel.py"
+PIPELINE_ROOT = Path(__file__).resolve().parent.parent
+SOURCE = PIPELINE_ROOT / "scripts/diagnose-macos-concurrency-failed-intel.py"
 SPEC = importlib.util.spec_from_file_location("fixed_intel_replay", SOURCE)
 v = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(v)
+
+# This unit suite supplies a historical source-only view to the frozen replay.
+# The runtime diagnostic and its exact profile continue to refuse current bytes.
+VIEW_SPEC = importlib.util.spec_from_file_location(
+    'fixed_intel_fixture_logical_view', PIPELINE_ROOT / 'scripts/input_lifecycle_integration_projection.py')
+VIEW = importlib.util.module_from_spec(VIEW_SPEC)
+VIEW_SPEC.loader.exec_module(VIEW)
+HISTORICAL_PAIR = {
+    'scripts/test-support-launch-macos-concurrency.py': '9fb58a9c5333df460cc4a676dc1499ee08af4af78edca762d0e20c59f0d03fc0',
+    'scripts/test-support-launch-macos-concurrency-controls.py': '599684dbbec5fb4e9a93967a964a3119b97df90a066b641664aa826221a1461b',
+}
+CURRENT_PAIR = {
+    'scripts/test-support-launch-macos-concurrency.py': '43c9c46ab0f38d8df48d64b4e7f0ce70861a73ae60e55aa55f58bc8148c3244b',
+    'scripts/test-support-launch-macos-concurrency-controls.py': 'e6d656b241755690ee275a5dfa3efadbb6009a1b72f7b7d56686e4ba73c88db4',
+}
+
+
+def fixture_pins():
+    return {**v.EXPECTED_PROFILE['frozenHelpers'], **v.EXPECTED_PROFILE['reviewedSources'],
+            'scripts/failed-macos-diagnostic-helper-hashes.json': v.MANIFEST_HASH,
+            'scripts/failed-intel-concurrency-replay-profile.json': v.PROFILE_HASH,
+            v.DIAGNOSTIC_WORKFLOW: '6d8998f305be3c4889fa6ed1c5d7dd71adeb2cd40801fef89b13f993e55ee744'}
+
+
+def fixture_logical_source(root, relative):
+    # Bound every read to one declared, owned, unchanged source file. Record the
+    # physical bytes before the established strict per-file LF/CRLF projection.
+    path = root / relative
+    v.require(path.resolve(strict=True) == path, 'unit-fixture-canonical-source')
+    before = path.lstat()
+    v.require(stat.S_ISREG(before.st_mode) and before.st_uid == os.getuid()
+              and before.st_nlink == 1 and 0 < before.st_size <= 1024 * 1024,
+              'unit-fixture-owned-source')
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), 'rb') as stream:
+        opened = os.fstat(stream.fileno())
+        raw = stream.read(1024 * 1024 + 1)
+        after = os.fstat(stream.fileno())
+    identity = lambda value: (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns)
+    v.require(identity(before) == identity(opened) == identity(after)
+              and len(raw) == before.st_size, 'unit-fixture-source-read-race')
+    logical, newline = VIEW.canonical(raw)
+    data = logical.encode('utf-8')
+    return data, {'rawSha256': v.sha(raw), 'rawBytes': len(raw),
+                  'rawMode': stat.S_IMODE(before.st_mode),
+                  'newline': 'CRLF' if newline == b'\r\n' else 'LF',
+                  'logicalSha256': v.sha(data)}
+
+
+def inverse_current_fixture_pair(sources):
+    caller = 'scripts/test-support-launch-macos-concurrency.py'
+    controls = 'scripts/test-support-launch-macos-concurrency-controls.py'
+    observed = {name: v.sha(sources[name]) for name in HISTORICAL_PAIR}
+    if observed == HISTORICAL_PAIR:
+        return dict(sources), 'exact-original708'
+    v.require(observed == CURRENT_PAIR, 'unit-fixture-unreviewed-or-partial-pair')
+    text = sources[controls].decode('utf-8')
+    tree = ast.parse(text)
+    nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef)
+             and node.name == 'inverse_closed_pid_recheck_source']
+    v.require(len(nodes) == 1, 'unit-fixture-exact-inverse-function')
+    namespace = {}
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), '<reviewed-peer-recheck-inverse>', 'exec'), namespace)
+    original_caller = namespace['inverse_closed_pid_recheck_source'](sources[caller].decode('utf-8'))
+    function_start = 'def inverse_closed_pid_recheck_source(source):\n'
+    function_end = 'def linux_close_workflow_projections(workflow):\n'
+    methods_start = '    def test_exact_recheck_inverse_recovers_current_708_helper_bytes(self):\n'
+    methods_end = "    @unittest.skipUnless(sys.platform == 'darwin', 'Owned Darwin socket API regression')\n"
+    call = '        source = inverse_closed_pid_recheck_source(source)\n'
+    for literal in (function_start, function_end, methods_start, methods_end, call):
+        v.require(text.count(literal) == 1, 'unit-fixture-exact-inverse-boundary')
+    start, end = text.index(methods_start), text.index(methods_end)
+    expected = {
+        'test_exact_recheck_inverse_recovers_current_708_helper_bytes',
+        'test_exact_recheck_inverse_rejects_missing_duplicate_and_drifted_layers',
+        'test_closed_pid_recheck_owned_identity_requires_separate_fresh_inactivity',
+        'test_closed_pid_recheck_other_errors_remain_first_fatal_without_retry',
+        'test_closed_pid_recheck_cached_uid_must_remain_exact_integer_owned_uid',
+        'test_closed_pid_recheck_cannot_bypass_invalid_or_foreign_first_identity',
+        'test_closed_pid_recheck_every_lease_resource_and_birth_stays_guarded',
+        'test_closed_pid_recheck_deadline_and_close_errors_never_authorize_cleanup',
+        'test_closed_pid_recheck_later_foreign_listener_or_cleanup_refusal_preserves_first_error',
+        'test_closed_pid_recheck_positive_integer_first_identity_is_required',
+        'test_added_logical_source_views_reject_mixed_newlines_before_strict_guards',
+    }
+    methods = ast.parse('class ReviewedAdditions:\n' + text[start:end]).body[0].body
+    v.require(len(methods) == len(expected) and all(isinstance(node, ast.FunctionDef) for node in methods)
+              and {node.name for node in methods} == expected, 'unit-fixture-exact-added-controls')
+    text = text[:start] + text[end:]
+    start, end = text.index(function_start), text.index(function_end)
+    text = text[:start] + text[end:]
+    text = text.replace(call, '', 1)
+    # Exact caller-level LF/CRLF view additions; old inverses and hashes stay fixed.
+    source_views = (("input_lifecycle.inverse_blocks((ROOT / '.github/workflows/build.yml').read_bytes(), '.github/workflows/build.yml').decode()", "input_lifecycle.inverse_blocks(C.canonical((ROOT / '.github/workflows/build.yml').read_bytes()), '.github/workflows/build.yml').decode()", 2), ("text = input_lifecycle.inverse_blocks(raw, '.github/workflows/build.yml').decode()", "text = input_lifecycle.inverse_blocks(C.canonical(raw), '.github/workflows/build.yml').decode()", 1), ("hashlib.sha256((ROOT / 'scripts/test-support-launch-windows.ps1').read_bytes()).hexdigest()", "hashlib.sha256(C.canonical((ROOT / 'scripts/test-support-launch-windows.ps1').read_bytes())).hexdigest()", 1), ('        text = raw.decode()\n        before, current, after = windows_preflight_budget_projection()', '        text = C.canonical(raw).decode()\n        before, current, after = windows_preflight_budget_projection()', 1))
+    for before, after, count in source_views:
+        v.require(text.count(after) == count, 'unit-fixture-exact-logical-view-inverse')
+        text = text.replace(after, before, count)
+    result = {**sources, caller: original_caller.encode('utf-8'), controls: text.encode('utf-8')}
+    v.require({name: v.sha(result[name]) for name in HISTORICAL_PAIR} == HISTORICAL_PAIR,
+              'unit-fixture-exact-original-pair-inverse')
+    return result, 'exact-current-layer-inverted-to708'
+
+
+def historical_source_fixture(source_root, destination):
+    v.require(not destination.exists(), 'unit-fixture-fresh-destination')
+    pins = fixture_pins()
+    sources, provenance = {}, {}
+    for relative in sorted(pins):
+        sources[relative], provenance[relative] = fixture_logical_source(source_root, relative)
+    sources, pair = inverse_current_fixture_pair(sources)
+    v.require({name: v.sha(data) for name, data in sources.items()} == pins,
+              'unit-fixture-original-source-hashes')
+    # Only the finite declared source set is copied; no directory scans, app,
+    # archive, Git-history lookup, process or remote resource is consulted.
+    destination.mkdir()
+    for relative, data in sources.items():
+        path = destination / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open('xb') as stream:
+            stream.write(data)
+        path.chmod(provenance[relative]['rawMode'])
+    return {'scope': 'synthetic historical unit-test ROOT only', 'sourcePair': pair,
+            'memberCount': len(pins), 'rawSources': provenance,
+            'historicalLogicalSha256': {name: v.sha(data) for name, data in sources.items()}}
+
+
+_HISTORICAL_TEMP = tempfile.TemporaryDirectory(prefix='mixel-intel-historical-source-only-')
+atexit.register(_HISTORICAL_TEMP.cleanup)
+ROOT = Path(_HISTORICAL_TEMP.name).resolve() / 'historical-root'
+HISTORICAL_VIEW_RECEIPT = historical_source_fixture(PIPELINE_ROOT, ROOT)
+
+
 v.source_contract(ROOT)
 
 
@@ -91,6 +223,85 @@ def archive(entries):
 
 def entry(name, data=b"fixture"):
     return name, data, stat.S_IFREG | 0o600
+
+
+class HistoricalSourceFixtureControls(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix='mixel-intel-fixture-profiles-')
+        self.root = Path(self.temporary.name).resolve()
+        self.forbid = patch.object(subprocess, 'run', side_effect=AssertionError('Provider/native operation forbidden'))
+        self.forbid.start()
+        self.forbid_popen = patch.object(subprocess, 'Popen', side_effect=AssertionError('Provider/native child forbidden'))
+        self.forbid_popen.start()
+
+    def tearDown(self):
+        self.forbid.stop()
+        self.forbid_popen.stop()
+        self.temporary.cleanup()
+
+    def inputs(self, name, newline=b'\n'):
+        destination = self.root / name
+        destination.mkdir()
+        for relative in fixture_pins():
+            logical, provenance = fixture_logical_source(PIPELINE_ROOT, relative)
+            path = destination / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(logical.replace(b'\n', newline))
+            path.chmod(provenance['rawMode'])
+        return destination
+
+    def test_exact_original_pair_remains_accepted_with_unchanged_hashes(self):
+        inputs = self.inputs('exact-original')
+        for relative in HISTORICAL_PAIR:
+            (inputs / relative).write_bytes((ROOT / relative).read_bytes())
+        output = self.root / 'view-original'
+        receipt = historical_source_fixture(inputs, output)
+        self.assertEqual(receipt['sourcePair'], 'exact-original708')
+        self.assertEqual({name: v.sha((output / name).read_bytes()) for name in HISTORICAL_PAIR}, HISTORICAL_PAIR)
+        v.source_contract(output)
+
+    def test_lf_crlf_views_preserve_physical_sources_and_exact_historical_hashes(self):
+        for newline in (b'\n', b'\r\n'):
+            with self.subTest(profile=repr(newline)):
+                label = 'lf' if newline == b'\n' else 'crlf'
+                inputs = self.inputs(label, newline)
+                before = {name: (inputs / name).read_bytes() for name in fixture_pins()}
+                output = self.root / ('view-' + label)
+                receipt = historical_source_fixture(inputs, output)
+                self.assertEqual(receipt['sourcePair'], 'exact-current-layer-inverted-to708')
+                self.assertEqual(receipt['memberCount'], len(fixture_pins()))
+                for name, raw in before.items():
+                    self.assertEqual((inputs / name).read_bytes(), raw)
+                    self.assertEqual(receipt['rawSources'][name]['rawSha256'], v.sha(raw))
+                    self.assertEqual(receipt['rawSources'][name]['newline'], label.upper())
+                    self.assertEqual(v.sha((output / name).read_bytes()), fixture_pins()[name])
+                v.source_contract(output)
+
+    def test_partial_pairs_and_bound_source_drift_refuse_before_view_is_created(self):
+        for label, relative, change in (
+                ('old-caller-only', next(iter(HISTORICAL_PAIR)), 'original'),
+                ('old-controls-only', 'scripts/test-support-launch-macos-concurrency-controls.py', 'original'),
+                ('caller-drift', next(iter(HISTORICAL_PAIR)), 'drift'),
+                ('projection-drift', 'scripts/file_dialog_workflow_projection.py', 'drift')):
+            with self.subTest(malformed=label):
+                inputs = self.inputs(label)
+                path = inputs / relative
+                path.write_bytes((ROOT / relative).read_bytes() if change == 'original' else path.read_bytes() + b'\n# unreviewed fixture drift\n')
+                output = self.root / ('refused-' + label)
+                with self.assertRaises(v.Refusal):
+                    historical_source_fixture(inputs, output)
+                self.assertFalse(output.exists())
+
+    def test_mixed_eol_is_refused_for_every_declared_source_before_view_creation(self):
+        for index, relative in enumerate(fixture_pins()):
+            with self.subTest(relative=relative):
+                inputs = self.inputs('mixed-' + str(index), b'\r\n')
+                path = inputs / relative
+                path.write_bytes(path.read_bytes() + b'# bare LF is not the physical CRLF profile\n')
+                output = self.root / ('refused-mixed-' + str(index))
+                with self.assertRaisesRegex(ValueError, '^Mixed integration source newlines$'):
+                    historical_source_fixture(inputs, output)
+                self.assertFalse(output.exists())
 
 
 class StrictReplayControls(unittest.TestCase):

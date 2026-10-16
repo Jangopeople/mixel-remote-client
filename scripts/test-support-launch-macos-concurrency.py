@@ -757,7 +757,23 @@ def incoming_endpoint_inactive(deadline, lease):
 
                 def pid_recheck_refused():
                     phase("peer-pid-recheck")
-                    observed = incoming_settlement_call(deadline, tray.peer_pid, self.connection)
+                    try:
+                        observed = incoming_settlement_call(deadline, tray.peer_pid, self.connection)
+                    except OSError as closed_error:
+                        # First PID and UID already matched this retained owner.
+                        # Darwin may close the peer before LOCAL_PEERPID's second
+                        # read. Cached UID is rechecked below; this successful
+                        # connect still means active, never endpoint inactivity.
+                        if type(closed_error) is not OSError or incoming_initial_identity_errno(closed_error) != errno.ENOTCONN:
+                            raise
+                        if type(first_pid) is not int or first_pid <= 0 or first_pid != lease["serverPid"] or type(first_uid) is not int or first_uid != lease["uid"]:
+                            raise RuntimeError("Incoming cleanup disconnected peer initial identity refused")
+                        phase("post-peer-lease-guard")
+                        guard()
+                        if any(lease["missing"].values()):
+                            raise RuntimeError("Incoming cleanup disconnected peer resource missing")
+                        self.closed_peer_qualified = True
+                        return False
                     refused = observed != first_pid
                     attribution["peerPidComparison"] = incoming_initial_identity_comparison(observed, lease["serverPid"], pid=True)
                     if refused:
@@ -767,6 +783,10 @@ def incoming_endpoint_inactive(deadline, lease):
                 def uid_recheck_refused():
                     phase("peer-uid-recheck")
                     observed = incoming_settlement_call(deadline, incoming_peer_uid, self.connection)
+                    if self.closed_peer_qualified and type(observed) is not int:
+                        attribution["peerUidComparison"] = incoming_initial_identity_comparison(observed, lease["uid"])
+                        phase("peer-uid-recheck", "peer-uid-changed")
+                        raise RuntimeError("Incoming cleanup disconnected peer UID changed")
                     refused = observed != first_uid
                     attribution["peerUidComparison"] = incoming_initial_identity_comparison(observed, lease["uid"])
                     if refused:
