@@ -3,7 +3,14 @@ name: Windows active Bash boundary
 on:
   pull_request:
     paths:
+      - 'scripts/**'
       - scripts/test-support-native-warnings.py
+      - scripts/test-workflow-logical-views.py
+      - scripts/test-support-macos-texture.py
+      - scripts/test-input-lifecycle-integration-projection.py
+      - scripts/test-branding.py
+      - scripts/test-support-compiler-cleanup.py
+      - scripts/input_lifecycle_integration_projection.py
       - scripts/test-support-flutter-analysis.py
       - scripts/test-windows-generated-source.sh
       - scripts/test-windows-lease-observation.py
@@ -117,6 +124,14 @@ jobs:
           print('PASS: native Dart argv spelling and original fatal dispatcher ordering; source controls only; host=' + sys.platform)
           '@ | python -u - 2>&1 | Tee-Object -FilePath (Join-Path $env:GITHUB_WORKSPACE 'shell-boundary-proof/dart-argv.log')
           if ($LASTEXITCODE -ne 0) { throw 'Native Dart argv source boundary controls failed.' }
+      - name: Prove strict workflow and macro logical views before the long source checks
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -B scripts/test-input-lifecycle-integration-projection.py -v 2>&1 | Tee-Object -FilePath (Join-Path $env:GITHUB_WORKSPACE 'shell-boundary-proof/integration-projection.log')
+          if ($LASTEXITCODE -ne 0) { throw 'Complete integration projection controls failed.' }
+          python -B scripts/test-workflow-logical-views.py -v 2>&1 | Tee-Object -FilePath (Join-Path $env:GITHUB_WORKSPACE 'shell-boundary-proof/workflow-logical-views.log')
+          if ($LASTEXITCODE -ne 0) { throw 'Strict workflow and macro logical views failed.' }
       - uses: actions/upload-artifact@v6
         if: always()
         with:

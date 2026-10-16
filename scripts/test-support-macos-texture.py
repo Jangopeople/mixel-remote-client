@@ -682,13 +682,13 @@ def uri_bridge_fixture_sources_from_previous(uri, source, explicit):
 
 
 def workflow_controls(output, originals, files, window_files=None):
-    workflow = input_lifecycle.inverse_blocks((ROOT / ".github/workflows/build.yml").read_bytes(), ".github/workflows/build.yml").decode()
+    workflow = input_lifecycle.canonical(input_lifecycle.inverse_blocks((ROOT / ".github/workflows/build.yml").read_bytes(), ".github/workflows/build.yml"))[0]
     native_commands = exact_bridge_native_close_commands(workflow)
     output = Path(output).resolve(strict=True)
     helpers = ("patch-support-macos-texture.py", "patch-support-macos-window.py")
     hooks = tuple("          RDREPO=. python3 ../scripts/" + name + "\n" for name in helpers)
     assert all(workflow.count(hook) == 1 for hook in hooks)
-    committed = input_lifecycle.committed_workflow(subprocess.check_output(["git", "-C", str(ROOT), "show", "HEAD:.github/workflows/build.yml"]), ".github/workflows/build.yml").decode()
+    committed = input_lifecycle.canonical(input_lifecycle.committed_workflow(subprocess.check_output(["git", "-C", str(ROOT), "show", "HEAD:.github/workflows/build.yml"]), ".github/workflows/build.yml"))[0]
     assert workflow == committed, "No production build job, hook or guard may change for this fixture correction"
     match = re.search(r"      - name: Generate bridge\n        working-directory: rustdesk\n        run: \|\n((?:          .*\n)+)", workflow)
     assert match

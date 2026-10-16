@@ -193,7 +193,7 @@ def historical_footer_branding_command(base: Path, layers: tuple[str, ...]) -> l
     directory = base / ('footer-historical-' + '-'.join(layers))
     scripts = directory / 'scripts'
     shutil.copytree(ROOT / 'scripts', scripts, ignore=shutil.ignore_patterns('__pycache__'))
-    source = input_lifecycle.project_to_canonical(SCRIPT.read_bytes(), 'scripts/apply-branding.sh').decode('utf-8')
+    source = input_lifecycle.canonical(input_lifecycle.project_to_canonical(SCRIPT.read_bytes(), 'scripts/apply-branding.sh'))[0]
     historical = source
     for layer in layers:
         filename, _ = TERMINAL_FOOTER_LAYERS[layer]

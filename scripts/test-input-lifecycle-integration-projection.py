@@ -76,15 +76,18 @@ class Controls(unittest.TestCase):
     def test_other_drift_stays_fatal_at_original_hash(self):
         for name in ('scripts/apply-branding.sh', '.github/workflows/build.yml'):
             final = (ROOT / name).read_bytes()
+            newline = P.canonical(final)[1]
+            unrelated = b'# unknown unrelated drift\n'.replace(b'\n', newline)
+            reviewed = b'# another independently reviewed layer\n'.replace(b'\n', newline)
             with self.assertRaisesRegex(ValueError, 'changed other canonical bytes'):
-                P.project_to_canonical(final + b'# unknown unrelated drift\n', name)
-            self.assertTrue(P.inverse_blocks(final + b'# another independently reviewed layer\n', name).endswith(b'# another independently reviewed layer\n'))
+                P.project_to_canonical(final + unrelated, name)
+            self.assertTrue(P.inverse_blocks(final + reviewed, name).endswith(reviewed))
 
     def test_actual_six_command_texture_guard_unchanged(self):
         guard = actual_functions('scripts/test-support-macos-texture.py', {'exact_bridge_native_close_commands'})['exact_bridge_native_close_commands']
         final = (ROOT / '.github/workflows/build.yml').read_bytes()
         with self.assertRaises(AssertionError): guard(final.decode())
-        old = P.project_to_canonical(final, '.github/workflows/build.yml').decode()
+        old = P.canonical(P.project_to_canonical(final, '.github/workflows/build.yml'))[0]
         self.assertEqual(len(guard(old)), 6)
 
     def test_actual_uri_linux_bridge_historical_guards_unchanged(self):
@@ -92,7 +95,7 @@ class Controls(unittest.TestCase):
             {'linux_close_bridge_projection', 'inverse_linux_close_bridge_checks', 'uri_bridge_projection', 'inverse_uri_bridge_checks'})
         final = (ROOT / '.github/workflows/build.yml').read_bytes()
         with self.assertRaises(AssertionError): namespace['inverse_uri_bridge_checks'](final.decode())
-        old = P.project_to_canonical(final, '.github/workflows/build.yml').decode()
+        old = P.canonical(P.project_to_canonical(final, '.github/workflows/build.yml'))[0]
         value = namespace['inverse_linux_close_bridge_checks'](namespace['inverse_uri_bridge_checks'](old))
         expected = P.BRIDGE_HEADER + '          RDREPO=. python3 ../scripts/patch-support-macos-texture.py\n          RDREPO=. python3 ../scripts/patch-support-macos-window.py\n' + P.BRIDGE_AFTER
         self.assertEqual(value.count(expected), 1)

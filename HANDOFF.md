@@ -1,5 +1,78 @@
 # Mixel-Remote — Agent Handoff / Current State
 
+## 2026-10-16 — Windows QA workflow views corrected; native acceptance unfinished
+
+The a5b Windows producer116881440164 and mandatory preflight116878781608
+finished with the same QA failure: `Exact native bracket/original hook count
+changed` in texture workflow_controls. Their original logs are retained once in
+`root-a5b-windows-final-failure-originals-20261016/`; producer log SHA256
+53fffe0b5d9e4bf39c559eeff05f60cb0f00ac472cb334e767600d16298f4177;
+preflight log SHA256c116c314ccf7e9bfbbd35f423d58df2123fbf7468251311e023042a799063f3b.
+Those Windows source stages ran5938 and6742seconds before failing. Root
+reproduces the unchanged guard on50c: LF passes all6 commands; exact CRLF fails.
+A complete369-path checkout with core.autocrlf=true/core.eol=crlf independently
+reproduces it. Strict inverses preserve CRLF correctly; QA callers then compared
+those bytes against LF-only literal hooks or an LF Git HEAD view.
+
+Six complete QA files are adopted after independent CLEAR review. Four existing
+consumers canonicalize only their logical text views after unchanged strict raw
+inverses. One deliberate hash-drift negative appends its already-validated input
+EOL, preserving the intended hash-drift predicate instead of accidentally reaching
+mixed-newline refusal first. Hook/count/order/mutation/hash guards and raw
+projection return profiles remain exact. A new11-method regression exercises
+actual consumer bodies up to explicit source/runtime boundaries. The existing
+fast Windows2022/2025 job now runs all13 integration tests and all11 new tests
+with independent immediate fatal handling and retained logs. Root additionally
+adds the single scripts/** PR filter so future macro/helper edits trigger them;
+removing that line recovers the reviewed YAML. Main build/preflight/comparison,
+all18 product files,53 generators and native drivers remain unchanged.
+
+Frozen combined proof: `windows-workflow-logical-views-proof-20261016-9wi8nf8v/`.
+PROOF-MANIFEST2245members SHA256
+61a723c5d8ab53e88a93647b5f4bef5bff01c047b87d54876abb01f2522f7329.
+Root and independent review rehash all34,054,158bytes. Use the original packet
+plus the assertion-scope correction SHA256
+6c4c1d76e5d6521a85f6cf0cd87bd3002f3e329cf208adbbe52c19ec415b705d;
+Root preserves it in `root-final-input-lifecycle-integration-20261016/root-windows-logical-views-adoption-20261016/ASSERTION-SCOPE-CORRECTION.json`.
+Only ordinary ast.Assert trees are all byte-logically conserved; unittest call
+counts are conserved, with one intentional same-EOL assertTrue argument change.
+Independent review FINAL-REVIEW SHA256
+5a523a9177c89c9d9db475cac648769b2437a51927ead8642e40b63df21db849;
+separate one-line trigger readback02728ba425396de4b121d9d103cc38f2fae409ddd556cfa8d2055cc256aa8bad.
+The unnecessary R2 proof copy remains unused; it is not an admission gate.
+
+Actual original files fail the unified regression with10 expected failures.
+Candidate LF:11tests0.744s/13tests0.543s OK; candidate CRLF:11tests0.759s/
+13tests0.679s OK. Full existing texture workflow fixture exits0 in21.7214215s,
+covering the actual6-command source brackets,28 hook mutations and14 invalid
+invocations. It uses the compatible retained prebridgeLFsource against actual
+CRLFworkflow, with one private startup asset aligned toLF and then restored.
+All1289golden files plus3 plugin.dart_tool files/modes remain exact before/after.
+Compiler/Flutter/codegen ordering stand-ins are fixture effects, not native proof.
+Both earlier incompatible source contexts fail closed and remain preserved.
+Root canonical output: `Ran 13 tests in 0.676s; OK` and
+`Ran 11 tests in 0.780s; OK`; actionlint exits0 with empty stdout/stderr.
+Complete root adoption and raw streams are in the folder above.
+
+The50c producer38884092242/preflight38883686828/comparison38883686593 are all
+terminal CANCELLED after the current CRLF defect was confirmed; no packages were
+collected. Its bridge and native component90/90/114 proofs remain source-bound
+and retained, with all original10/10/20 negative failures. Native recipes for50c
+stay historical and closed. Require actual new-head fast Windows13+11 and early
+inventory24 success before a fresh publish_r2=false all4 dispatch. A same-head
+whole-green producer/preflight/comparison cohort still precedes exact signed
+package collection/qualification, fresh Standard95 bothOS and Linux/Mac/PC01
+native input/consent/data/reconnect/normal-close tests. Do not regenerate native
+recipe bindings until real future identities and whole-green facts exist.
+
+No app/native acceptance or publication is claimed. Mac UI needs recoordination.
+Public aliases/stores/production infrastructure, manual-user native URI Open and
+automatically rejected GTK-warning investigation remain held. Never retry or
+bypass held work/resources. Preserve existing services/trays and all prior proof.
+No filesystem access under worktrees paths. Recent local commands returned
+promptly with workdir=/tmp, login=false and absolute repo paths/Git -C; use this
+for follow-up CLI work rather than duplicating pending operations.
+
 ## 2026-10-16 — Flutter post-build inventory correction; acceptance unfinished
 
 Both actual Mac lanes in unpublished producer38872380167/a1 compiled and passed

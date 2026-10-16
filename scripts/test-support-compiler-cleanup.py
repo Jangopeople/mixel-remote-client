@@ -342,7 +342,7 @@ def composed_controls(source, out, bash):
     macro_scripts = out/'prior-uri-macro/scripts'
     shutil.copytree(current_scripts,macro_scripts,ignore=shutil.ignore_patterns('__pycache__'))
     macro_script = macro_scripts/'apply-branding.sh'
-    macro_script.write_text(historical_fixture.without_uri_owner_commands(input_lifecycle.project_to_canonical(macro_script.read_bytes(), 'scripts/apply-branding.sh').decode()),
+    macro_script.write_text(historical_fixture.without_uri_owner_commands(input_lifecycle.canonical(input_lifecycle.project_to_canonical(macro_script.read_bytes(), 'scripts/apply-branding.sh'))[0]),
                             encoding='utf-8',newline='')
     repo = out/'complete-composed'; shutil.copytree(source, repo, symlinks=True,
                       ignore=lambda directory,names:P.projection_ignored(source,directory,names))
