@@ -44,9 +44,20 @@ original failures preserved. The first new producer stopped before packaging on
 QA import, mock cfg and wrapper invocation-path errors; their retained failures
 are followed by actual corrected boundary, bridge/header/analyzer and246-control
 passes. All application source pins stay exact. The complete100-assertion
-branding driver passes in952.756 seconds; newline/composition checks continue.
-Corrected native CI, signed installers and fresh desktop acceptance remain
-required. These source results do not qualify final packages.
+branding driver passes in952.756 seconds; the complete four-profile newline/
+composition check passes in2213.391 seconds. Current753 native component CI also
+passes on Windows90, Linux90 andMac114 tests, preserving every required original
+failure. All four signed-installer jobs and mandatory source checks are running.
+Fresh desktop acceptance remains required. These component/source results do not
+qualify final packages.
+
+The latest coordinated installed Mac baseline receives ordinary letters but loses
+Shift in source2/Map; source1 produces no text. The same chord works locally.
+Permissions are only inspected, not changed. Fresh final-revision testing must
+prove this fixed. A CodeQL privacy-test alert is corrected by keeping seven
+synthetic invalid credential-shaped fixtures in memory while retaining the real
+owned-file read and privacy-filter checks. All51 privacy and246 integration
+controls pass; actual new CodeQL analysis remains pending.
 
 The production HTTPS gateway has separately passed encrypted HTTPS and native
 transport scenarios. Known Flutter/GTK warning and historical abnormal-exit

@@ -326,9 +326,28 @@ class LogAndTimelineTests(OwnedFixtures):
         values = (launch.unix.TOKEN, launch.unix.API_KEY, launch.unix.URI,
                   "Authorization: Bearer synthetic-private", "password=synthetic-private",
                   '{"api_key": "synthetic-private"}', '{"password":"synthetic-private"}')
+        # Credential-shaped fixtures belong in memory. Exercise the real owned
+        # bounded read with same-sized zero-filled files, then supply each
+        # public invalid payload only at that read boundary. The real collector
+        # and privacy filter below are unchanged.
+        payloads = {}
         for index, value in enumerate(values):
-            (self.logs / f"owned-{index}.log").write_text(value)
-        evidence.collect_logs()
+            path = self.logs / f"owned-{index}.log"
+            payloads[path] = value.encode("utf-8")
+            path.write_bytes(bytes(len(payloads[path])))
+        bounded_read = launch.bounded_read
+        reads = []
+
+        def read_synthetic_log(path, limit):
+            data, attributes = bounded_read(path, limit)
+            self.assertEqual(data, bytes(len(payloads[path])))
+            reads.append(path)
+            return payloads[path], attributes
+
+        with patch.object(launch, "bounded_read", side_effect=read_synthetic_log):
+            evidence.collect_logs()
+        self.assertEqual(reads, sorted(payloads))
+        self.assertTrue(all(path.read_bytes() == bytes(len(payload)) for path, payload in payloads.items()))
         self.assertFalse(evidence.privacy_ok)
         self.assertEqual(len(evidence.logs), len(values))
         self.assertTrue(all("withheld" in item for item in evidence.logs))

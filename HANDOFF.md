@@ -123,6 +123,77 @@ preflight/comparison, signed Standard95 and native desktop acceptance remain
 required. No public aliases, marketplace state or production service changes
 were made.
 
+## Current753 native CI and privacy-test correction — 2026-10-16
+
+Application source753156b5c5062b2d11b7c68535b233962a9f8dad and tree
+797447f36a80094312c08204d465841c349b116a are the current installer producer inputs.
+All18 product files and all53 branding/generator inputs remain exact. Producer
+38863895406/a1 has passed bridge and all three actual native component jobs:
+Windows90/current plus1 normal and10 required old failures; Linux90/1/10;
+Mac114/1/20. The mixed suites pass91/10,91/10 and115/20 respectively, with warnings
+denied and no ignored tests. OS/transport effects are mocked: these component
+results are not native packaged remote input. Root has verified all95 proof
+members, four original artifact ZIPs and six generated bridge files against the
+local actual complete workflow proof. Its receipt is
+root-final-input-lifecycle-integration-20261016/ROOT-FRESH-FIRST-STAGE-READBACK.json.
+All four installer jobs, mandatory preflight38863875314 and Windows comparison
+38863875699 continue. Require whole SUCCESS and actual new package/signature/
+native acceptance before qualification; no current753 installer is yet qualified.
+The unpublished producer contract requires nine successful jobs and exactly four
+skips, including upload. Never enable public publishing to satisfy a QA rule.
+
+The complete four-profile source check has now exited0 in2213.391334541 seconds,
+with2982 stdout bytes and empty stderr. Its stdout SHA is
+0e51da54eb580d6f1873afa4988d6d59be597de0bcf56615ca99c33076315f50.
+Independent readback rehashes8179 evidence members, all four1289-file output
+snapshots, all72 final product pins and330 scripts/branding input members. All53
+product generators match current753. This qualifies complete source/newline/
+idempotence and actual extracted Dart controls; its command did not use
+--flutter/--analysis-checkout. Full Flutter analysis is independently qualified
+by the complete bridge workflow, not inferred from this source check. Readback:
+root-final-input-lifecycle-integration-20261016/FOUR-PROFILE-PEER-READBACK.json,
+SHA71c6bcc50faaf03aea759f71617179fe84fcd9f56dd55b456e6892d1721ee454.
+
+CodeQL aggregate116852311151 remains an original failed check at753. Exact alert18
+is py/clear-text-storage-sensitive-data in the Mac diagnostic privacy test. The
+traced API key is an explicit public invalid synthetic fixture, not a production
+credential. The reviewed one-test correction writes only same-sized zero files,
+uses the actual owned bounded-read validation, and supplies credential-shaped
+payloads in memory at that boundary. Real collect_logs/privacy filtering and all
+original206 assertion calls remain conserved. Actual original-vs-new storage
+reproduction observes seven old payload writes and zero corrected payload writes;
+bypassing the real filter still fails. All51 privacy controls, current246
+integration controls and30 historical Standard95 source controls pass. No product
+helper, workflow, source pin or frozen historical fact is changed. Fresh actual
+CodeQL reanalysis is still required; no alert is dismissed or suppressed.
+
+A new coordinated physical Mac baseline session, still installed1979, reconnects
+with actual fresh Accept for requester361225514. Source2/Map ordinary a succeeds,
+but Shift+a then a produces aa. Source1/Map produces no new text. The exact same
+CUA chord produces Aa in local TextEdit, which is restored byte-for-byte, and the
+synthetic target is restored to aa. Existing Mixel Accessibility is on; Input
+Monitoring shows No Items, which alone does not establish the IOHID API result.
+No permissions are changed. Current final18 synchronously reads actual source2
+back after a refused source1 request, but its native behavior and the modifier
+fix are not yet qualified. Source2 uses Flutter input, distinct from source1's
+rdev FlagsChanged path. Do not assign the observed failure to permission or claim
+that final18 fixes it without fresh packaged testing. Evidence:
+root-final-input-lifecycle-integration-20261016/MAC-FRESH-BASELINE-MODIFIER-COMPARISON.json,
+SHA04203513bef30101fad9dd6caf92b141ecbce25a78b46e2c0eab3576c8f503d4.
+The physical Mac/Chrome is handed back to the creative-app chat after this bounded
+window. Coordinate again before UI input. The manual native-link Open hold and
+all held warning/resource investigations remain unchanged.
+
+Standard95 and fresh Linux-pair recipes are prepared offline against exact753.
+Both require actual whole-green producer/preflight/comparison evidence and exact
+qualified package artifacts before admission. Standard95's false Root gate stays
+false until independent artifact qualification. The Linux recipe passes21 mocked
+offline controls; Root independently rehashes all11 files and passes its final
+fragmented-banner/deadline delta. Neither recipe has created new resources or run
+new packaged acceptance. Existing baseline resources remain preserved. Public
+aliases, marketplaces and production services are unchanged. Application
+acceptance remains unfinished.
+
 ## Windows lifecycle SDK correction and current native proof — 2026-10-15
 
 The original77 Windows producer38774820528 and mandatory preflight38774157443
