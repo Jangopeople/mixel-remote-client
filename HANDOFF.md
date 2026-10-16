@@ -72,6 +72,57 @@ controller/test pairs also remain preserved under their exact identity fences.
 No public download aliases, marketplace submissions or production infrastructure
 are authorized for change by this checkpoint.
 
+## First final-input integration run and corrections — 2026-10-16
+
+The complete source revision `f9c267d987d229c658ba794cee1124eeac2de1e1`
+was pushed to the existing draft branch. Producer38862472000/a1 completed
+FAILURE before any installer jobs ran. Its Mac component job passes; Windows
+and Linux component jobs reject an unused macOS-only test mock under warnings
+as errors. The bridge job correctly rejects the wrapper's relative `../scripts`
+path before generation, and fast Windows run38862474427 rejects a new adjacent
+QA import entered through stdin/runpy. Original provider logs/artifacts and raw
+whole-run failure remain retained; none is a qualified installer result.
+
+The corrections preserve all18 product files, generator/engine/plan bytes,
+assertions and required negative controls. Only the unused mock gains its proper
+macOS cfg. An actual isolated Linux/amd64 Rust/Cargo1.75 full gate now passes90
+current tests and1 original normal test, preserves10 required failures and the
+mixed91/10 outcome, with no ignored tests and warnings denied. All11 complete
+product source pins and36 extractions stay exact. The portable adapter's five
+precise inverses recover all78 frozen R12 template files. Native Windows CI still
+must execute the corrected gate; metadata facades do not substitute for it.
+
+Ten QA users now load the exact sibling projection module through file-based
+importlib entrypoints. Actual stdin/runpy reproduces the original import error
+and passes the correction through all original shell refusals and wiring fatal
+boundaries. All246 fast integration controls pass. Only current reviewed-caller
+hashes are rebound; historical producer, artifact and frozen-helper identities
+remain unchanged. Root independently rehashes all15 coordinated complete files
+and conserves436 original functions after the declared current hash literals
+and exact bridge-command recipe are inverted.
+
+The three new bridge invocations use the absolute GITHUB_WORKSPACE script path;
+the strict wrapper/engine traversal guards remain unchanged. Root actually runs
+fresh complete upstream branding, the entire corrected bridge shell block with
+default codegen1.80.1 behavior, C header compilation with warnings denied and full
+Flutter analysis. All exit0; all18 product pins and all5 generated ABI hashes
+match the prior final source proof. The only local tool substitution is the
+verified codegen executable's installation path. Initial local scratchr1 lacked
+three pinned plugin .dart_tool files and refused; its evidence is retained.
+Scratchr2 uses a real fresh source/submodule clone and passes the complete path.
+Evidence is `root-final-input-lifecycle-integration-20261016/actual-absolute-bridge-workflow-r2/`.
+
+The actual complete100-assertion branding driver exits0 in952.756 seconds with
+empty stderr and final `PASS: all full-pipeline branding regression checks`.
+It exercises complete application, byte idempotence, platform corruption and
+terminal/footer startup/close refusal paths on final18. The four-profile
+newline/source check continues against the exact unchanged app generators.
+Receipts retain their original caller revision; current bootstrap adapters
+conserve those function bodies. Fresh corrected-source all-platform producer,
+preflight/comparison, signed Standard95 and native desktop acceptance remain
+required. No public aliases, marketplace state or production service changes
+were made.
+
 ## Windows lifecycle SDK correction and current native proof — 2026-10-15
 
 The original77 Windows producer38774820528 and mandatory preflight38774157443

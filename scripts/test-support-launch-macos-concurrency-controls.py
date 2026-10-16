@@ -6,7 +6,6 @@ controls use explicit in-memory AppKit/kernel/socket seams and disposable files.
 """
 import argparse
 
-import input_lifecycle_integration_projection as input_lifecycle
 import ast
 import contextlib
 import errno
@@ -28,6 +27,14 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest import mock
+
+# Load the exact sibling helper for direct, runpy and file-spec entry points.
+_input_lifecycle_spec = importlib.util.spec_from_file_location(
+    "mixel_input_lifecycle_projection",
+    Path(__file__).with_name("input_lifecycle_integration_projection.py"),
+)
+input_lifecycle = importlib.util.module_from_spec(_input_lifecycle_spec)
+_input_lifecycle_spec.loader.exec_module(input_lifecycle)
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parent.parent

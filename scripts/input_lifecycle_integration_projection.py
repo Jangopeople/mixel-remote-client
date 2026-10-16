@@ -50,7 +50,7 @@ def hunks(name):
             'echo "✓ Branding applied — product identity is $APP_NAME only."\n',
         )]
     if name == '.github/workflows/build.yml':
-        command = '          python3 ../scripts/' + WRAPPER + ' --root .'
+        command = '          python3 "$GITHUB_WORKSPACE/scripts/' + WRAPPER + '" --root .'
         early = command + ' --restore --check\n' + command + ' --restore\n'
         late = command + '\n'
         native_before = '        run: python3 scripts/release-artifacts.py config\n\n'

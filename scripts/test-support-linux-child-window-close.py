@@ -2,8 +2,15 @@
 """Pinned exact native close/destructor sanitizer regressions; only owned fixture children."""
 import argparse,hashlib,importlib.util,json,os,shutil,signal,subprocess,tempfile,unittest
 
-import input_lifecycle_integration_projection as input_lifecycle
 from pathlib import Path
+# Load the exact sibling helper for direct, runpy and file-spec entry points.
+_input_lifecycle_spec = importlib.util.spec_from_file_location(
+    "mixel_input_lifecycle_projection",
+    Path(__file__).with_name("input_lifecycle_integration_projection.py"),
+)
+input_lifecycle = importlib.util.module_from_spec(_input_lifecycle_spec)
+_input_lifecycle_spec.loader.exec_module(input_lifecycle)
+
 BASE=Path(__file__).absolute().parent
 spec=importlib.util.spec_from_file_location('native_close',BASE/'patch-support-linux-child-window-close.py');patch=importlib.util.module_from_spec(spec);spec.loader.exec_module(patch)
 INPUT=None

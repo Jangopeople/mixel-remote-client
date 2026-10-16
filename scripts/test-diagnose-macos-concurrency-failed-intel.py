@@ -353,8 +353,8 @@ class StrictReplayControls(unittest.TestCase):
                          "repos/" + v.REPOSITORY + "/actions/runs/" + str(v.RUN)])
         self.assertNotIn("--allow-escape-sequences", metadata.call_args.args[0])
         profile = v.source_contract(ROOT)
-        self.assertEqual(v.PROFILE_HASH, "e94f980cc70628b53b641a31481adb4e0581201910b41245e68a7dce77f75d05")
-        self.assertEqual(v.CONTROLS_HASH, "2bbb1df4efd3a4c2f068028cbe84d2df6a23e871e96f24f5e5bb77f609bc432c")
+        self.assertEqual(v.PROFILE_HASH, "1d8ad6a75501b4fb78ab212f183917dafd83a2594f2dc6ee44f807a2e492be4d")
+        self.assertEqual(v.CONTROLS_HASH, "d0d7419f080ca0b7228026ff6c51ea51478c845780896e67f5fc7f0a8fc2305a")
         self.assertEqual(profile["reviewedSources"]["scripts/test-support-launch-macos-concurrency-controls.py"], v.CONTROLS_HASH)
         self.assertEqual(profile["reviewedSources"]["scripts/file_dialog_workflow_projection.py"],
                          "07d61633acee3a09fd505843664c3b560812276e41ba0fe02206278ae2b80bc8")

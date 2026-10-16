@@ -2,12 +2,19 @@
 """Run exact source ownership and asynchronous Linux terminal-close regressions."""
 import argparse
 
-import input_lifecycle_integration_projection as input_lifecycle
 import importlib.util
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+
+# Load the exact sibling helper for direct, runpy and file-spec entry points.
+_input_lifecycle_spec = importlib.util.spec_from_file_location(
+    "mixel_input_lifecycle_projection",
+    Path(__file__).with_name("input_lifecycle_integration_projection.py"),
+)
+input_lifecycle = importlib.util.module_from_spec(_input_lifecycle_spec)
+_input_lifecycle_spec.loader.exec_module(input_lifecycle)
 
 SPEC = importlib.util.spec_from_file_location('linux_close_patch', Path(__file__).with_name('patch-support-linux-window-close.py'))
 P = importlib.util.module_from_spec(SPEC)

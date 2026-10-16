@@ -320,6 +320,7 @@ mod flutter_ffi {
 mod platform {
     pub fn block_input(_on:bool)->(bool,String) {(true,String::new())}
     pub mod windows {pub fn try_change_desktop() {}}
+    #[cfg(target_os="macos")]
     pub mod macos {
         pub fn is_can_input_monitoring(_request:bool)->bool {crate::source_component::MONITOR_ALLOWED.load(std::sync::atomic::Ordering::SeqCst)}
     }

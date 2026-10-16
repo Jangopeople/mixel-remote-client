@@ -29,6 +29,13 @@
       "afterSHA256": "b8ef2b05be6feedb6b515e1d44917f1aa22770c738c7ec0b4185a149b090f5c9",
       "old": "#[test] fn actual_refused_native_monitoring_keeps_all_owned_sessions_and_source_unchanged()",
       "new": "#[cfg(target_os=\"macos\")]\n#[test] fn actual_refused_native_monitoring_keeps_all_owned_sessions_and_source_unchanged()"
+    },
+    {
+      "path": "src/lib.rs",
+      "beforeSHA256": "4178c4e1d6223842bf37e898ec81c16713acf34b5abe12f0ccffc04daf1a9e24",
+      "afterSHA256": "7df78d24a7b2b2bb02948831003f5b218077171c1b3a8f8ead91f5bffde57e86",
+      "old": "    pub mod macos {\n",
+      "new": "    #[cfg(target_os=\"macos\")]\n    pub mod macos {\n"
     }
   ],
   "historicalCompatibilityFixture": "scale_server_selected.rs retains the original persistent Scale receiver; current balanced receiver is freshly extracted"

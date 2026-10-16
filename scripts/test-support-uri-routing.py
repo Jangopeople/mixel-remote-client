@@ -2,7 +2,6 @@
 """Exact full URI routing functions, strict source ownership and inverse controls."""
 import argparse
 
-import input_lifecycle_integration_projection as input_lifecycle
 import hashlib
 import importlib.util
 import json
@@ -13,6 +12,14 @@ import tempfile
 import unittest
 from unittest import mock
 from pathlib import Path
+# Load the exact sibling helper for direct, runpy and file-spec entry points.
+_input_lifecycle_spec = importlib.util.spec_from_file_location(
+    "mixel_input_lifecycle_projection",
+    Path(__file__).with_name("input_lifecycle_integration_projection.py"),
+)
+input_lifecycle = importlib.util.module_from_spec(_input_lifecycle_spec)
+_input_lifecycle_spec.loader.exec_module(input_lifecycle)
+
 BASE = Path(__file__).absolute().parent
 spec = importlib.util.spec_from_file_location('uri_routing_owner', BASE / 'patch-support-uri-routing.py')
 patch = importlib.util.module_from_spec(spec)

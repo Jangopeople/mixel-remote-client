@@ -2,7 +2,6 @@
 """Prove pinned analyzer fixes and unchanged Client/terminal behavior."""
 import argparse
 
-import input_lifecycle_integration_projection as input_lifecycle
 import ast
 import collections
 import contextlib
@@ -19,6 +18,14 @@ import sys
 import tarfile
 import tempfile
 import time
+
+# Load the exact sibling helper for direct, runpy and file-spec entry points.
+_input_lifecycle_spec = importlib.util.spec_from_file_location(
+    "mixel_input_lifecycle_projection",
+    Path(__file__).with_name("input_lifecycle_integration_projection.py"),
+)
+input_lifecycle = importlib.util.module_from_spec(_input_lifecycle_spec)
+_input_lifecycle_spec.loader.exec_module(input_lifecycle)
 
 ROOT=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location("mixel_flutter_analysis",ROOT/"scripts/patch-support-flutter-analysis.py")

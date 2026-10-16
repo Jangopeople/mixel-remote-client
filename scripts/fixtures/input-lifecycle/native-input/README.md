@@ -16,6 +16,6 @@ Production selections include Session enqueue, IO permission/source/key/pointer 
 
 Original snippets remain historical negative controls. `scale_server_selected.rs` deliberately retains the original persistent Scale receiver for backward-compatibility tests; the current server receiver is freshly extracted into `scale_balanced_selected.rs`. The final retained-sender queue test proves the release marker while senders remain alive and before queue-end cleanup.
 
-The frozen R12 fixture differs only by Cargo.lock v4→v3, a mock LazyLock→OnceLock adapter compatible with Rust1.75, and the existing two macOS-only mock helper/monitoring guards. `modifier_swap.test-tail.rs` is the exact frozen test-only suffix used when recomposing the production swap methods. No production behavior is rewritten by these portability adapters. `PORTABLE-ADAPTERS.json` records the exact edits.
+The frozen R12 fixture differs only by Cargo.lock v4→v3, a mock LazyLock→OnceLock adapter compatible with Rust1.75, and the three macOS-only mock helper/monitoring guards. `modifier_swap.test-tail.rs` is the exact frozen test-only suffix used when recomposing the production swap methods. No production behavior is rewritten by these portability adapters. `PORTABLE-ADAPTERS.json` records the exact edits.
 
 Passing this component gate is source regression evidence. Installer builds, signatures and live peer/OS input acceptance remain separate requirements.

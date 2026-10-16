@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Run the complete branding pipeline on a fresh pinned source clone."""
 import hashlib
-import input_lifecycle_integration_projection as input_lifecycle
 import importlib.util
 import json
 import os
@@ -14,6 +13,14 @@ import sys
 import tempfile
 import time
 
+
+# Load the exact sibling helper for direct, runpy and file-spec entry points.
+_input_lifecycle_spec = importlib.util.spec_from_file_location(
+    "mixel_input_lifecycle_projection",
+    Path(__file__).with_name("input_lifecycle_integration_projection.py"),
+)
+input_lifecycle = importlib.util.module_from_spec(_input_lifecycle_spec)
+_input_lifecycle_spec.loader.exec_module(input_lifecycle)
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = Path(os.environ.get("RDREPO", ROOT / "rustdesk")).resolve()

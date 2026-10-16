@@ -9,7 +9,14 @@ import tempfile
 import unittest
 from unittest import mock
 
-import input_lifecycle_integration_projection as P
+
+# Load the exact sibling helper for direct, runpy and file-spec entry points.
+_input_lifecycle_spec = importlib.util.spec_from_file_location(
+    "mixel_input_lifecycle_projection",
+    Path(__file__).with_name("input_lifecycle_integration_projection.py"),
+)
+P = importlib.util.module_from_spec(_input_lifecycle_spec)
+_input_lifecycle_spec.loader.exec_module(P)
 
 ROOT = Path(__file__).absolute().parents[1]
 
@@ -212,6 +219,63 @@ class Controls(unittest.TestCase):
             text = (ROOT / 'scripts' / name).read_text()
             self.assertIn('input_lifecycle.current_source(', text)
             self.assertNotIn('except RuntimeError:', text[text.index('def main('):])
+
+
+    def test_adjacent_projection_imports_and_actual_stdin_loader_boundary(self):
+        import subprocess
+        import sys
+        names = (
+            'test-branding.py', 'test-input-lifecycle-integration-projection.py',
+            'test-support-compiler-cleanup.py', 'test-support-file-dialog-lifecycle.py',
+            'test-support-flutter-analysis.py',
+            'test-support-launch-macos-concurrency-controls.py',
+            'test-support-linux-child-window-close.py',
+            'test-support-linux-window-close.py', 'test-support-macos-texture.py',
+            'test-support-uri-routing.py',
+        )
+        for name in names:
+            path = ROOT / 'scripts' / name
+            tree = ast.parse(path.read_text(encoding='utf-8'))
+            nodes = [node for node in tree.body if (
+                isinstance(node, ast.Assign) and any(
+                    isinstance(target, ast.Name) and target.id in
+                    ('_input_lifecycle_spec', 'input_lifecycle', 'P')
+                    for target in node.targets) and
+                isinstance(node.value, ast.Call) and
+                isinstance(node.value.func, ast.Attribute) and
+                (node.value.func.attr == 'spec_from_file_location' or
+                 (node.value.func.attr == 'module_from_spec' and
+                  len(node.value.args) == 1 and
+                  isinstance(node.value.args[0], ast.Name) and
+                  node.value.args[0].id == '_input_lifecycle_spec'))
+            ) or (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call) and
+                  isinstance(node.value.func, ast.Attribute) and
+                  node.value.func.attr == 'exec_module' and
+                  isinstance(node.value.func.value, ast.Attribute) and
+                  isinstance(node.value.func.value.value, ast.Name) and
+                  node.value.func.value.value.id == '_input_lifecycle_spec')]
+            self.assertEqual(len(nodes), 3, name)
+            before = list(sys.path)
+            namespace = {'__file__': str(path), 'Path': Path, 'importlib': importlib}
+            exec(compile(ast.Module(body=nodes, type_ignores=[]), str(path), 'exec'), namespace)
+            module = namespace.get('input_lifecycle', namespace.get('P'))
+            self.assertEqual(module.WRAPPER, 'patch-support-input-lifecycle.py')
+            self.assertEqual(Path(namespace['_input_lifecycle_spec'].origin),
+                             path.with_name('input_lifecycle_integration_projection.py'))
+            self.assertEqual(sys.path, before)
+        body = """import runpy,sys
+from pathlib import Path
+root=Path(sys.argv[1]);proof=Path(sys.argv[2])
+controls=runpy.run_path(str(root/'scripts/test-support-native-warnings.py'),run_name='mixel_shell_boundary_controls')
+controls['shell_path_controls'](proof)
+print('PASS: actual isolated stdin/runpy/file-spec import and seven strict shell refusals')
+"""
+        with tempfile.TemporaryDirectory(prefix='mixel-import-boundary-') as temporary:
+            result = subprocess.run([sys.executable, '-I', '-', str(ROOT), temporary],
+                                    input=body, text=True, capture_output=True,
+                                    cwd=temporary, timeout=60)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn('seven strict shell refusals', result.stdout)
 
 
 if __name__ == '__main__':

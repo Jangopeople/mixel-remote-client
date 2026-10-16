@@ -39,9 +39,14 @@ scroll and shutdown paths now balance owned input. Actual tests pass180 Flutter,
 the Swift suite are mocked. All20 original Rust failure controls reproduce.
 Independent review clears the final18 source files. Actual final bridge/header
 generation and full Flutter analysis pass with no errors or warnings and286
-informational diagnostics. The complete branding and newline suites are running;
-native Windows/Linux/Mac component gates, signed installers and fresh desktop
-acceptance remain required. These source results do not qualify final packages.
+informational diagnostics. The corrected Linux/amd64 Rust1.75 gate also passes90 tests, with all10 required
+original failures preserved. The first new producer stopped before packaging on
+QA import, mock cfg and wrapper invocation-path errors; their retained failures
+are followed by actual corrected boundary, bridge/header/analyzer and246-control
+passes. All application source pins stay exact. The complete100-assertion
+branding driver passes in952.756 seconds; newline/composition checks continue.
+Corrected native CI, signed installers and fresh desktop acceptance remain
+required. These source results do not qualify final packages.
 
 The production HTTPS gateway has separately passed encrypted HTTPS and native
 transport scenarios. Known Flutter/GTK warning and historical abnormal-exit

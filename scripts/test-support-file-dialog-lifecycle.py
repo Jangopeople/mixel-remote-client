@@ -2,7 +2,6 @@
 """Run the actual pinned event loop across close/await races using real Dart timers."""
 import argparse
 
-import input_lifecycle_integration_projection as input_lifecycle
 import contextlib
 import hashlib
 import importlib.util
@@ -16,6 +15,14 @@ import subprocess
 import sys
 import tempfile
 import unittest
+
+# Load the exact sibling helper for direct, runpy and file-spec entry points.
+_input_lifecycle_spec = importlib.util.spec_from_file_location(
+    "mixel_input_lifecycle_projection",
+    Path(__file__).with_name("input_lifecycle_integration_projection.py"),
+)
+input_lifecycle = importlib.util.module_from_spec(_input_lifecycle_spec)
+_input_lifecycle_spec.loader.exec_module(input_lifecycle)
 
 HERE = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location("file_dialog_lifecycle", HERE / "patch-support-file-dialog-lifecycle.py")

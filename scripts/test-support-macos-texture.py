@@ -2,7 +2,6 @@
 """Run pinned renderer lifecycle, frame-lock, async Dart and materialization controls."""
 import argparse
 
-import input_lifecycle_integration_projection as input_lifecycle
 import ast
 import hashlib
 import importlib.util
@@ -21,6 +20,14 @@ import textwrap
 from unittest.mock import patch
 
 from sdk_discovery import find_dart
+
+# Load the exact sibling helper for direct, runpy and file-spec entry points.
+_input_lifecycle_spec = importlib.util.spec_from_file_location(
+    "mixel_input_lifecycle_projection",
+    Path(__file__).with_name("input_lifecycle_integration_projection.py"),
+)
+input_lifecycle = importlib.util.module_from_spec(_input_lifecycle_spec)
+_input_lifecycle_spec.loader.exec_module(input_lifecycle)
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("mixel_texture_patch", ROOT / "scripts/patch-support-macos-texture.py")
