@@ -10,7 +10,7 @@ SCRIPTS = Path(__file__).absolute().parent
 ENGINE_NAME = "support-input-lifecycle-engine.py"
 ENGINE_SHA = "99af62b84ce477915cc2a5b87aaa87288f77f53db2c3c40bc8e4560d9695f4de"
 PLAN_NAME = "support-input-lifecycle-plan.json"
-PLAN_SHA = "4cdb1d587768424dcd06dd87db66dd390e87b963a7b7c44f9722abebe73b6a71"
+PLAN_SHA = "2111e8c4877dcc59bfaab6ee21681ca13812ff4da42c2b71b6d1e9583a1e5f93"
 
 
 def namespace():

@@ -4,8 +4,8 @@
     "sha256": "580bd77792281830a29bc2e2a0d1def6f94a2e5fc37a25da81508423ae48382b"
   },
   "src/client/keyboard_state.rs": {
-    "bytes": 11355,
-    "sha256": "2fd12b50e665e80bdd8755a6d5a84b565d587e2d3805bbdac87abd3e6a11e0a3"
+    "bytes": 11372,
+    "sha256": "f33363e116d79d7fe174707961fe4dfb00926f100a69aceff097959cb7a8c76e"
   },
   "src/client.rs": {
     "bytes": 156877,

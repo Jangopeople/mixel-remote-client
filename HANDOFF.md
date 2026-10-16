@@ -1,5 +1,65 @@
 # Mixel-Remote — Agent Handoff / Current State
 
+## 2026-10-16 — Test-only epoch accessor corrected; delivery remains pending
+
+The Intel and Apple Silicon original271 app builds both succeed in40steps with
+one expected failure-only diagnostic skip. App/DMG notarizations and all six
+packaged launch concurrency scenarios pass. Both final analyzers report0errors,
+0warnings and286infos; these are Dart severities, not a native-warning-free claim.
+Intel reports41actual bundled Mach-O files/x86_64<=10.14; ARM reports22/arm64<=12.3.
+Both Windows comparison jobs succeed. Linux passes33steps/four real transport
+scenarios. At this entry,271 Windows shipping and mandatory Windows remain
+running. Their exact run identities and terminal originals are in the checkpoint;
+retain them once even after the source advances. No271 normal package is collected.
+
+A real owned warning is the new KeyboardState::epoch getter, used only by test
+observation APIs. The correction adds #[cfg(test)] only to that getter. The
+production epoch field/adopt/source/permission machinery and all17other final
+product rows stay byte-identical. Exactly three implementation files change:
+plan module/final hash, wrapper plan digest, native fixture module length/hash.
+The36extraction pins, ten other canonical native pins, engine, workflows,
+projection, compatibility wrappers and every test body/count remain unchanged.
+Current plan SHA2562111e8c4877dcc59bfaab6ee21681ca13812ff4da42c2b71b6d1e9583a1e5f93;
+module11372bytes SHA256f33363e116d79d7fe174707961fe4dfb00926f100a69aceff097959cb7a8c76e.
+Read current Git HEAD/tree and the authoritative checkpoint for the new source.
+
+Actual local native component output:114passed/0failed/0ignored; original normal
+control1passed; all20required original failures reproduced; mixed115passed and
+20expected failures. Local compiler is Rust1.99 on macOS, with warnings denied,
+locked/offline. The identical non-test carrier plus exact whole original module
+fails only for epoch dead_code; the corrected whole module exits0 with no compiler
+diagnostics. Compile progress remains on stderr; no empty-stderr claim is made.
+Root's adopted-checkout checks: Ran13tests in0.502s; OK; Ran28tests in0.099s; OK.
+These are integration projection/inventory checks, not Flutter180 or live input.
+
+Sealed319-member packet epoch-test-scope-271-r997f_xo under the durable directory
+has MANIFEST87ef9fb1b36ce903a552e4805f7b0e47ca13cd19b67b69517a0f92d8a5e4cb84
+and RESULT4dffdb856a61d37426925e2855a85aa151b1a2d1659c96b8b03e4c203e545b84.
+Root rehashes all319members/bytes/modes and all three complete inverses. Independent
+source c2cf9a4c9d68bf38726232bd606e20b25e4e4c2af110f242e33225167655125e and
+execution2ea5032cba0105b105f5313baad0ec09c2fbc0f861d0691f7fe7b1ebf75aaec8
+reviews are CLEAR within their stated local scope. Four invalid local setup/carrier
+attempts remain retained and explained; no product assertions were relaxed.
+Before this handoff entry, all367other tracked blobs and all370modes are exact.
+
+Require new-source early Linux and both Windows fast checks plus release/source
+controls before one unpublished all-four producer. Exact same-source whole
+producer, mandatory preflight and comparison success still precede normal package
+collection/qualification and fresh native acceptance. A fresh binding/admission
+receipt may use the existing unmodified runtime-only workflow. The old19path/
+38blob preparation output shape is not an application requirement; never change
+sources merely to fit it or reopen closed recipes. Actual signed outer95 and
+non-elevated foreground identity do not prove Standard Explorer outer context.
+
+Other native diagnostics remain recorded: rdev pattern, compatibility-wrapper
+dead code, legacy macOS API deprecations, generated Swift CVPixelBuffer ownership,
+Xcode destination ambiguity and Flutter migration advice. This getter fix clears
+only its owned warning; packaged compilation must still confirm the correction.
+Physical Mac Shift, real customer consent, normal GUI close, installer qualification
+and final native paths remain pending. Preserve the GTK automatic rejection,
+human-only URI Open, shared Mac ownership, old services/trays, no-worktrees access,
+and public/store/main/production holds. Never report this work as complete yet.
+
 ## 2026-10-16 — All app builds pass; Windows budget and strict QA consumers corrected
 
 Delivery is still pending. Read current Git HEAD and
