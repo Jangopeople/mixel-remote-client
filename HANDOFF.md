@@ -1,5 +1,64 @@
 # Mixel-Remote — Agent Handoff / Current State
 
+## 2026-10-16 — Flutter post-build inventory correction; acceptance unfinished
+
+Both actual Mac lanes in unpublished producer38872380167/a1 compiled and passed
+full Flutter analysis, then failed the post-build InputModel runner before its
+180 tests. The exact refusal was
+`windows/flutter/ephemeral/.plugin_symlinks/window_manager`. This was a QA
+inventory/copy boundary, not a compiler failure. Root retained each original
+provider job log once: Intel116881440302 SHA256ac492739690baf295c9a3d7dd051015737547220e0536a88de9522433217cc00;
+ARM116881440214 SHA256317eef47805995cb36685e8427a8fc8eeb3a47bbb709300790abc7e87e6aba9a.
+Linux succeeds, including four real transport/session scenarios. Mac mandatory
+harness and both Windows comparison jobs also succeed. Remaining old Windows
+producer/preflight results are still monitored; this failed cohort cannot admit
+packages and must not be relabeled as qualified.
+
+The bounded correction changes only the InputModel QA inventory/copy helper and
+adds24 focused controls plus an early supplemental Linux PR workflow. It prunes
+seven anchored real Flutter/CocoaPods cache directories derived from pinned
+platform Gitignore blobs. Unexpected source/root links, source drift and copy
+races remain fatal. Inventory and copy share a no-follow descriptor traversal.
+The whole old helper is recovered by the declared inventory/copy inverse; all
+run/timeout/raw-stream, fixture, dependency-lock, SDK and180-count guards remain
+exact. Product18 files and53 generators remain unchanged.
+
+Frozen candidate proof:
+`artifacts/verification-2026-10-09/flutter-postbuild-inventory-20261016-c1acauud/`.
+PROOF-MANIFEST2680members SHA2564144cdfe57830c72183556145fc5a70f2b564ba356eba2b27598c77930b8905e.
+Helper SHA256fdf884224d22c6466569a648d9dfae4b4428813e1eb7695c0fc76cdfef4c80e8.
+Actual focused output: `Ran24 tests in0.102s; OK`. Actual full production
+InputModel output: `PASS_ACTUAL_FULL_PRODUCTION_INPUTMODEL_FLUTTER_TEST` and
+`00:02 +180: All tests passed!`; exit0 in20.218340041s, stderr empty.
+All18 product pins,638 complete Flutter production files,209-package context,
+fixtures/context lock and14 generated links are unchanged before/after. These
+are headless widget/source tests with native effects mocked; physical Mac Shift,
+source transitions and relative cursor remain pending. The seven post-build
+cache trees were representative local fixtures. The first local R2 context
+failed on unpatched globalextended_text13; its failed compiler logs remain
+separate. The passing run uses the exact prior passing180 compatible resolved
+context, rebinding only the owned application identity and writing no global
+dependency state.
+
+Root applied the three exact complete files after verifying all367 base files
+and modes, the whole helper inverse, raw180 streams and identical before/after
+receipts. Canonical24 controls pass (`Ran24 tests in0.086s; OK`), and actionlint
+passes with empty output. Root evidence is under
+`artifacts/verification-2026-10-09/root-final-input-lifecycle-integration-20261016/root-flutter-generated-cache-adoption-20261016/`.
+After independent readback, commit/push this correction and require the real
+supplemental Linux24 check and existing fast Windows checks to succeed before
+dispatching a fresh unpublished all4 producer. Fresh exact-head producer,
+mandatory preflight and Windows comparison whole success still precede package
+collection/qualification and real native acceptance. Preserve all earlier
+source-bound proofs/recipes; create new bindings only for actual new identities.
+
+No new package/native acceptance is claimed. Mac UI requires recoordination.
+Public aliases, stores and production infrastructure stay held. Human-only
+native URI Open and the automatic rejection of GTK-warning investigation remain
+held; never retry or bypass those resources. Keep existing test services/trays
+and other owned resources preserved. No worktrees-path filesystem access.
+
+
 ## Authoritative continuation checkpoint — 2026-10-16
 
 Application acceptance remains unfinished. The installed signed baseline is

@@ -6,7 +6,7 @@ import json
 import os
 from pathlib import Path
 import re
-import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -61,18 +61,169 @@ def package_root(config_path, entry):
     return path
 
 
-def inventory(root):
+# Generated desktop/mobile dependency trees from the pinned platform .gitignores.
+# Only these anchored real directories are pruned; production directories with
+# the same basename, and generated-root symlink replacements, remain fatal.
+GENERATED_SOURCE_DIRS = frozenset({
+    ("windows", "flutter", "ephemeral"),
+    ("linux", "flutter", "ephemeral"),
+    ("macos", "Flutter", "ephemeral"),
+    ("macos", "Pods"),
+    ("ios", "Flutter", "ephemeral"),
+    ("ios", "Pods"),
+    ("ios", ".symlinks"),
+})
+SOURCE_CACHE_NAMES = frozenset({".dart_tool", "build", ".git"})
+
+
+def source_tree(root, destination=None):
+    """Inventory/copy the same pruned files without following raced links.
+
+    Directory descriptors bind every descent and file open to its checked parent.
+    O_NOFOLLOW and before/after identity checks refuse replacements instead of
+    allowing copytree's default dereferencing of generated or unexpected links.
+    """
+    root = Path(root).absolute()
+    flags = os.O_RDONLY | os.O_NOFOLLOW
+    directory_flags = flags | os.O_DIRECTORY
+
+    def identity(value):
+        return value.st_dev, value.st_ino, value.st_mode
+
+    def file_identity(value):
+        return identity(value) + (value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+
+    def checked_open(name, parent, value, directory):
+        descriptor = os.open(name, directory_flags if directory else flags | os.O_NONBLOCK, dir_fd=parent)
+        try:
+            if identity(os.fstat(descriptor)) != identity(value):
+                raise ValueError(f"Production source changed during open: {name}")
+            return descriptor
+        except BaseException:
+            os.close(descriptor)
+            raise
+
+    def open_directory_path(path):
+        # Bind every ancestor; O_NOFOLLOW on an absolute final component alone
+        # would still follow an earlier output/source ancestor replacement.
+        descriptor = os.open(path.anchor, directory_flags)
+        try:
+            for part in path.parts[1:]:
+                child = os.open(part, directory_flags, dir_fd=descriptor)
+                os.close(descriptor)
+                descriptor = child
+            return descriptor
+        except BaseException:
+            os.close(descriptor)
+            raise
+
+    def walk(parent, prefix, target):
+        directory_before = os.fstat(parent)
+        for name in sorted(os.listdir(parent)):
+            rel = prefix + (name,)
+            if name in SOURCE_CACHE_NAMES:
+                continue  # Preserve the previous any-component cache exclusions.
+            value = os.stat(name, dir_fd=parent, follow_symlinks=False)
+            if rel in GENERATED_SOURCE_DIRS:
+                if not stat.S_ISDIR(value.st_mode):
+                    raise ValueError(f"Generated source root must be a real directory: {'/'.join(rel)}")
+                continue  # Never enumerate, read or copy generated cache contents.
+            if stat.S_ISDIR(value.st_mode):
+                child = checked_open(name, parent, value, True)
+                copied = None
+                try:
+                    if target is not None:
+                        os.mkdir(name, 0o700, dir_fd=target)
+                        copied = os.open(name, directory_flags, dir_fd=target)
+                    walk(child, rel, copied)
+                    if copied is not None:
+                        os.fchmod(copied, stat.S_IMODE(value.st_mode))
+                    if identity(os.stat(name, dir_fd=parent, follow_symlinks=False)) != identity(value):
+                        raise ValueError(f"Production source directory changed: {'/'.join(rel)}")
+                finally:
+                    os.close(child)
+                    if copied is not None:
+                        os.close(copied)
+            elif stat.S_ISREG(value.st_mode):
+                child = checked_open(name, parent, value, False)
+                copied = None
+                digest = hashlib.sha256()
+                try:
+                    if target is not None:
+                        copied = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                                         0o600, dir_fd=target)
+                    while True:
+                        data = os.read(child, 1024 * 1024)
+                        if not data:
+                            break
+                        digest.update(data)
+                        if copied is not None:
+                            remaining = memoryview(data)
+                            while remaining:
+                                written = os.write(copied, remaining)
+                                if written <= 0:
+                                    raise OSError("Source copy made no progress")
+                                remaining = remaining[written:]
+                    if (file_identity(os.fstat(child)) != file_identity(value) or
+                            file_identity(os.stat(name, dir_fd=parent, follow_symlinks=False)) != file_identity(value)):
+                        raise ValueError(f"Production source file changed: {'/'.join(rel)}")
+                    if copied is not None:
+                        os.fchmod(copied, stat.S_IMODE(value.st_mode))
+                    result[str(Path(*rel))] = digest.hexdigest()
+                finally:
+                    os.close(child)
+                    if copied is not None:
+                        os.close(copied)
+            else:
+                raise ValueError(f"Production source symlink or special file refused: {'/'.join(rel)}")
+        if file_identity(os.fstat(parent)) != file_identity(directory_before):
+            raise ValueError(f"Production source directory entries changed: {'/'.join(prefix)}")
+
     result = {}
-    for path in root.rglob("*"):
-        rel = path.relative_to(root)
-        if any(x in (".dart_tool", "build", ".git") for x in rel.parts):
-            continue
-        if path.is_symlink():
-            raise ValueError(f"Production source symlink refused: {rel}")
-        if path.is_file():
-            result[str(rel)] = sha(regular(path))
+    root_before = root.lstat()
+    if not stat.S_ISDIR(root_before.st_mode):
+        raise ValueError("Production source root must be a real directory")
+    root_fd = open_directory_path(root)
+    try:
+        if identity(os.fstat(root_fd)) != identity(root_before):
+            raise ValueError("Production source root changed during open")
+    except BaseException:
+        os.close(root_fd)
+        raise
+    target_fd = None
+    target_parent = None
+    try:
+        if destination is not None:
+            destination = Path(destination).absolute()
+            # A fresh destination and no-follow parent open preserve the owned
+            # output-root boundary even if it is replaced before the copy starts.
+            target_parent = open_directory_path(destination.parent)
+            os.mkdir(destination.name, dir_fd=target_parent)
+            target_fd = os.open(destination.name, directory_flags, dir_fd=target_parent)
+        walk(root_fd, (), target_fd)
+        if identity(root.lstat()) != identity(root_before):
+            raise ValueError("Production source root changed during traversal")
+        if target_fd is not None:
+            os.fchmod(target_fd, stat.S_IMODE(root_before.st_mode))
+            target_before = os.fstat(target_fd)
+            target_named = os.stat(destination.name, dir_fd=target_parent, follow_symlinks=False)
+            if identity(target_before) != identity(target_named):
+                raise ValueError("Owned source copy root changed during traversal")
+    finally:
+        os.close(root_fd)
+        if target_fd is not None:
+            os.close(target_fd)
+        if target_parent is not None:
+            os.close(target_parent)
     return result
 
+
+def inventory(root):
+    return source_tree(root)
+
+
+def copy_source(root, destination):
+    return source_tree(root, destination)
 
 def run(args):
     if sys.platform != "darwin":
@@ -181,7 +332,7 @@ def run(args):
     if test_roots["flutter"] != source_roots["flutter"]:
         raise ValueError("Production and regression Flutter SDK roots differ")
     app = output / "app"
-    shutil.copytree(source, app, ignore=shutil.ignore_patterns(".dart_tool", "build", ".git"))
+    copy_source(source, app)
     if inventory(app) != production:
         raise ValueError("Source copy changed production paths or bytes")
     if sha(canonical(regular(app / "lib/models/input_model.dart")).encode()) != args.expected_input:
