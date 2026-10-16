@@ -47,9 +47,16 @@ passes. All application source pins stay exact. The complete100-assertion
 branding driver passes in952.756 seconds; the complete four-profile newline/
 composition check passes in2213.391 seconds. Current753 native component CI also
 passes on Windows90, Linux90 andMac114 tests, preserving every required original
-failure. All four signed-installer jobs and mandatory source checks are running.
-Fresh desktop acceptance remains required. These component/source results do not
-qualify final packages.
+failure. The753 producer and mandatory preflight fail before package qualification: the
+SDK test analyzes an older fixture against the current bridge, and the updater
+test projects its fixture twice. Both defects are reproduced and corrected. The
+complete matching-source SDK run now passes0errors/0warnings/286infos plus five
+dependency tests; updater source-only4, full17 and13 integration controls pass.
+All255 pipeline controls and the final15 SDK tests pass, with actionlint and
+shellcheck clean. Six CI SDK call sites retain raw failure logs and command data
+in immediate always() artifacts. A fresh combined-source four-platform build and
+mandatory preflight/comparison remain required before fresh native acceptance.
+These component/source results do not qualify final packages.
 
 The latest coordinated installed Mac baseline receives ordinary letters but loses
 Shift in source2/Map; source1 produces no text. The same chord works locally.
@@ -57,7 +64,9 @@ Permissions are only inspected, not changed. Fresh final-revision testing must
 prove this fixed. A CodeQL privacy-test alert is corrected by keeping seven
 synthetic invalid credential-shaped fixtures in memory while retaining the real
 owned-file read and privacy-filter checks. All51 privacy and246 integration
-controls pass; actual new CodeQL analysis remains pending.
+controls pass. Fresh CodeQL run38867146903 at7bced64 succeeds for Actions,
+Python and Rust with zero results; the PR alert instance is fixed without
+dismissal. All24 downstream source/headless consumers also pass.
 
 The production HTTPS gateway has separately passed encrypted HTTPS and native
 transport scenarios. Known Flutter/GTK warning and historical abnormal-exit

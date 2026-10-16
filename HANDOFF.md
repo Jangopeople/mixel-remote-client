@@ -2,75 +2,135 @@
 
 ## Authoritative continuation checkpoint — 2026-10-16
 
-The current signed package baseline is `1979d9432c316f0b10d79fb170407cf6859b1127`.
-Earlier paragraphs below retain their historical failure/pending states; the
-completed baseline producer is run 38799293531, mandatory preflight 38799071390,
-Windows comparison 38799071930 and Standard95 R4 38824673157. All completed
-successfully. Standard95 qualifies the actual Standard foreground process and
-95-second pipe/guard lifetime, not a wholly Standard Explorer outer context.
+Application acceptance remains unfinished. The installed signed baseline is
+`1979d9432c316f0b10d79fb170407cf6859b1127`; producer38799293531,
+mandatory preflight38799071390, Windows comparison38799071930 and Standard95
+R4 38824673157 all succeeded. Standard95 qualifies the actual Standard foreground
+process and its95-second pipe/guard lifetime, not a wholly Standard Explorer outer
+context. Those baseline packages do not qualify the new input revision.
 
-Actual PC01 baseline proof is frozen in
-`artifacts/verification-2026-10-09/root-current1979-pc01-bootstrap-7aa1d03726de-20261016/ROOT-PC01-BASELINE-PROOF-INDEX.json`
+The new18-target input plan remains exact at SHA256
+`4cdb1d587768424dcd06dd87db66dd390e87b963a7b7c44f9722abebe73b6a71`.
+It adds per-session keyboard/button ownership, release recovery across permission
+and source changes, physical modifier recovery, synchronous bridge ordering,
+balanced Windows Scale input, receiver shutdown cleanup and relative-cursor
+window/session lifetime. Actual180 Flutter tests,30 production Swift scenarios
+(OS effects mocked), complete100-assertion branding and four LF/CRLF source
+profiles pass. The complete four-profile check exits0 in2213.391334541 seconds;
+all53 product generators and18 final product pins remain exact. Actual complete
+bridge generation, C header compilation with warnings denied and full Flutter
+analysis pass with0errors/0warnings/286infos. Current753 native component CI
+passes90 Windows,90 Linux and114 Mac tests, with all required original failures
+preserved, warnings denied and no ignored tests. These are component/source
+results, not packaged remote-input acceptance.
+
+Producer38863895406 at753 is unqualified: its Linux job116853593746 fails the
+SDK test's complete-app analyzer. The QA wrapper had inverted the18 current app
+files into an older fixture while retaining the current generated SyncReturn
+bridge, producing eight use_of_void_result errors. Original provider logs are
+retained once under `root-753-producer-linux-failure-original-20261016/`.
+Mandatory preflight38863875314 also fails: upstream job116852125769 reports
+four updater tests with29 errors because make_source applies the strict historical
+projection twice. Its original log is retained under
+`root-753-upstream-source-failure-original-20261016/`. Root requested cancellation
+of the obsolete753 producer/preflight/comparison and7b preflight/comparison;
+terminal metadata belongs to `root-final-input-lifecycle-integration-20261016/obsolete-753-7b-source-runs/`.
+Never use these failed/cancelled runs as whole-green package evidence.
+
+The exact corrections are now adopted together. SDK helper SHA256
+`95d76b1dbbd9e4e5e6454a313ba6dd34dc94d6bc21aa256b8a9c552d7e9c544d`
+keeps the original strict overlay/inverse controls and analyzes the complete current
+app with the matching six original CI bridge files. Actual final execution passes
+in111.649863708 seconds: full analyzer0errors/0warnings/286infos and all five real
+desktop dependency tests. All18 source plus six bridge pins are unchanged before,
+after and in the analyzed copy. Child stdout/stderr bytes, command, exit status and
+timing are retained before strict UTF8 decoding; nonzero exits, timeouts, launch
+errors and invalid UTF8 remain fatal. SDK final79-member manifest SHA256 is
+`7b253296d343e55e6ad039231e4c34b55b54cde25ecb6e9773bbe9921c1ab9d1`
+in `sdk-composed-analyzer-peer-20261016/`. The extra prior-helper fullCLI run uses
+older helper2f8 and is separately attributed; it must never be relabeled final95.
+
+Updater test SHA256
+`9360093e51e3344b8daff2d7758e101023401da41e96d13b2d1e072592f85c47`
+removes only the duplicate fixture projection and preserves all17 test methods,
+103 assertions and the strict outer projection. Actual source-only4, full17 and
+13 integration controls pass. Real pinned Rust1.81 compilation uses warnings as
+errors; transaction fixtures execute their owned POSIX paths. The reporter retains
+original failure output for SystemExit, RuntimeError and KeyboardInterrupt without
+changing the original exception/status. Six reporter boundary cases and four
+pre-execution ownership refusals pass; the original four-test29-error defect still
+reproduces as a fatal negative control. Its84-member manifest SHA256 is
+`db0875875732aef7f968bd92064b892dbf276c63b2c9f2f7d20dd32b641aba4e`
+in `macos-updater-fixture-reentry-20261016-hp9nviug/`.
+
+All six SDK CI call sites now have explicit retained output locations and immediate
+always() log-only artifact uploads. The11-file retention packet conserves historical
+producer/artifact facts and frozen helpers; only current reviewed-source hashes
+are rebound. Exact inverses recover original workflow/test bodies. Its255 controls,
+actionlint and shellcheck pass; Root's canonical final SDK entrypoint also passes
+15 tests in5.641 seconds. Retention manifest SHA256 is
+`a6d573ff015e782d01a01e79c142b51ff5f8dcf7a92ffc78b64a59fe1a45340f`
+in `whole-ci-current-sdk-evidence-retention-20261016/`. Root independently rehashes
+all packet members and confirms only these13 QA/workflow files differ from7b,
+with all367 tracked modes and other bytes conserved. Receipts:
+`root-final-input-lifecycle-integration-20261016/ROOT-COMBINED13-PACKET-READBACK.json`
+and `ROOT-CANONICAL13-ADOPTION.json`.
+
+Privacy correction7bced64 keeps seven public invalid synthetic credential-shaped
+fixtures in memory at the actual owned-read boundary. All51 privacy controls pass;
+real filtering and original assertions remain conserved. Fresh CodeQL run
+38867146903 succeeds at exact7b: Actions, Python and Rust report zero results,
+aggregate116862675809 succeeds with zero annotations, and alert18's PR instance
+is fixed without dismissal. This is a PR-instance finding, not a global closure
+claim. Root rehashes all34 original proof members in
+`codeql-7bced-fresh-run38867146903-peer-20261016-obzh3eto/`.
+The complete24 downstream source/headless consumer sweep also passes, independently
+sealed and root-rehashed in `post-updater-source-consumers-7bced-peer-20261016-hu89ciu2/`.
+Do not repeat unchanged long suites merely because these QA-only files changed.
+
+Next: push this exact combined revision, dispatch one fresh all-four-platform
+private build with publish_r2=false and require same-source whole-green mandatory
+preflight/comparison. An unpublished producer requires nine successful jobs and
+exactly four skipped jobs including upload; never enable publication to satisfy QA.
+Only then collect/qualify the new signed packages, regenerate Standard95/Linux
+recipe facts for that exact source/run and execute fresh native acceptance.
+The offline753 recipes cannot admit failed753 evidence and must not be rebound
+by changing historical facts. No current new-input installer is qualified.
+
+Actual PC01 baseline proof remains frozen at
+`root-current1979-pc01-bootstrap-7aa1d03726de-20261016/ROOT-PC01-BASELINE-PROOF-INDEX.json`
 (SHA256 `ad0da78992a51ecce1be165c9fa7fb687a8d26f6d9c758eb329410f0de840d1e`).
-Five receipts cross-check the same main process, native input, distinct Unicode
-copyback, three exact file roundtrips and normal main/CM exit codes `[0, 0]`.
-The QA PowerShell window is closed and that app instance has exited; never reuse
-its PID/HWND/pipe identity for a later test. The independent public NAS console
-was authenticated at this checkpoint. Ask for sign-in only after fresh expired
-session evidence. Use the existing Mixel-Test-VM account.
+Native input, distinct Unicode copyback, three exact file roundtrips,95-second
+ordinary-process observation and normal main/CM exits[0,0] pass. The test app and
+QA PowerShell window are closed; all policy scopes are Undefined. Never reuse its
+old PID/HWND/pipe for new tests. Use the existing Mixel-Test-VM account; ask for
+NAS sign-in only after fresh expired-session evidence.
 
-The next input revision remains unqualified as an installer. Its final
-18-target source plan is frozen at SHA256
-`4cdb1d587768424dcd06dd87db66dd390e87b963a7b7c44f9722abebe73b6a71`:
-per-session keyboard and mouse ownership, denied-input release replay, source
-transition ordering, physical modifier recovery, balanced Windows Scale input,
-receiver button cleanup and relative-cursor/window lifetime are integrated.
-The complete Dart suite actually passes 180 tests; production Swift state
-passes 30 tests with OS effects mocked. Final R12 native components pass 114
-current tests and preserve all 20 original failure controls, with no ignored
-tests and warnings denied. Actual Rust/Cargo1.75 relocation passes. Independent
-review clears the final source; the R12 proof change conserves R11 product bytes.
+The physical Mac baseline still loses Shift in source2/Map and produces no input
+in source1/Map. Fresh ordinary letters work; the identical local CUA chord gives
+Aa. The synthetic TextEdit and target text are restored, source2/Map is restored,
+and no permissions change. Accessibility is on; Input Monitoring No Items alone
+is not an actual IOHID API result. Final18's synchronous refused-source readback
+and modifier behavior still require new packaged testing. See
+`root-final-input-lifecycle-integration-20261016/MAC-FRESH-BASELINE-MODIFIER-COMPARISON.json`.
+Root normally disconnected only owned outbound269587806@6c6879995ce5; the main
+Home returns Ready, existing services stay alive and no other sessions are claimed
+absent. See `MAC-OWNED-OUTBOUND-NORMAL-DISCONNECT.json`.
 
-The complete18-file source composition validates fresh, previous and final
-profiles without writes. Actual final bridge generation, C header compilation
-with warnings denied and full Flutter analysis exit0, with no analyzer errors or
-warnings (286 infos). The adopted88-file portable gate is mandatory on native
-Windows, Linux and Mac CI hosts; other-platform test counts remain unqualified
-until those jobs actually run. The complete branding driver and four-profile
-newline/composition suite are currently running against these final inputs.
-Fresh signed builds and new native acceptance remain mandatory. Do not present
-provisional plans or baseline1979 desktop receipts as final-revision proof.
-
-Root's private integration checkout is under
-`artifacts/verification-2026-10-09/root-final-input-lifecycle-integration-20261016/pipeline`.
-The reviewed complete files were assembled in a detached Git clone of1979 for
-adoption into the existing draft branch. The terminal wrapper, full branding/
-bridge hooks, mandatory Mac Flutter/Swift gates and mandatory Linux/Windows/Mac
-Rust matrix are included. All245 fast integration controls and workflow lint
-pass, and the installed native gate verifies final production pins/extractions.
-Complete historical QA adapters use strict whole-source inverses and conserve
-original assertions. Their frozen receipts remain in the combined-input-lifecycle
-artifact directories. Any new producer must use this complete source revision,
-with publish_r2=false; its exact new run and native qualification must be recorded
-separately. No new installer is qualified at this checkpoint.
-
-Michael explicitly authorized coordination with the other Mac chat. It released
-the desktop for a short test, then received an explicit handback and resumed its
-owned Effects queue. Physical Mac UI input is held again until another short
-window is coordinated. The exclusive baseline recheck preserved live video and
-mouse control, but source1/source2 keyboard attempts did not change the target
-text. The same local CUA chord worked in the synthetic TextEdit document, which
-was restored exactly. Keyboard acceptance remains false and the cause is not
-assigned. Source2/Map was restored and visually verified. See
-`root-final-input-lifecycle-integration-20261016/MAC-COORDINATED-BASELINE-RECHECK.json`.
-The manual native-link Open hold remains. Never retry, reassign or bypass the held GTK warning investigation:
+Michael authorized coordination with the creative-app chat, which currently owns
+Mac/Chrome UI again. Coordinate another short exclusive window before UI input;
+all seven creative apps stay closed during Remote's window. No local Mac Cargo,
+signing or media oracle while that chat owns the desktop. The manual native-link
+Open hold remains. Never retry, reassign or bypass the held GTK warning investigation:
 automatic approval review rejected it as a possible cybersecurity risk. Historical
-B85 GUI exit134 and retained Flutter/GLib warnings remain unresolved. Held
-historical resources, previous1979 nonce760075f8b09b processes and their services
-must not be adopted, queried, signaled or cleaned up. Current isolated Linux
-controller/test pairs also remain preserved under their exact identity fences.
-No public download aliases, marketplace submissions or production infrastructure
-are authorized for change by this checkpoint.
+B85 exit134 and Flutter/GLib warnings remain open. Held historical resources and
+old1979 nonce760075f8b09b processes/services must not be queried, adopted, signaled
+or cleaned up. Preserve all existing isolated Linux pairs under exact identities.
+Never access any */worktrees/* filesystem paths. Public download aliases,
+marketplace availability/review state and production infrastructure remain held.
+
+Earlier sections below preserve their original chronology. The checkpoint above
+supersedes their pending-state wording; failed runs remain failed.
 
 ## First final-input integration run and corrections — 2026-10-16
 

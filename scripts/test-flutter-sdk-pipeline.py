@@ -249,5 +249,198 @@ class FlutterSdkPipelineTests(unittest.TestCase):
             "rustdesk/flutter/macos/Runner/bridge_generated.h", "rustdesk/flutter/ios/Runner/bridge_generated.h"])
 
 
+class FlutterSdkEvidenceTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('mixel_sdk_evidence_controls',
+            ROOT / 'scripts/test-support-flutter-sdk-compatibility.py')
+        cls.suite = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.suite)
+
+    def test_actual_successful_unicode_child_retains_exact_streams_and_command(self):
+        with tempfile.TemporaryDirectory(prefix='mixel SDK evidence \u00e4 ') as directory:
+            out = Path(directory)
+            command = [sys.executable, '-c', "import sys; print('complete \\u2192'); print('stderr \\u00e4', file=sys.stderr)"]
+            value = self.suite.run(command, out, out, 'success')
+            self.assertEqual(value, 'complete \u2192\n')
+            self.assertEqual((out / 'success.stdout.log').read_bytes(), ('complete \u2192' + os.linesep).encode())
+            self.assertEqual((out / 'success.stderr.log').read_bytes(), ('stderr \u00e4' + os.linesep).encode())
+            self.assertEqual((out / 'success.log').read_bytes(), ('complete \u2192' + os.linesep + 'stderr \u00e4' + os.linesep).encode())
+            proof = json.loads((out / 'success.command.json').read_text())
+            self.assertEqual(proof['command'], command)
+            self.assertEqual(proof['cwd'], str(out.resolve()))
+            self.assertEqual((proof['status'], proof['returncode']), ('completed', 0))
+
+    def test_actual_nonzero_child_is_fatal_and_both_streams_survive(self):
+        import contextlib
+        import hashlib
+        import io
+        with tempfile.TemporaryDirectory(prefix='mixel SDK failed ') as directory:
+            out = Path(directory)
+            command = [sys.executable, '-c', "import sys; print('unqualified stdout \\u2192'); print('unqualified stderr \\u00e4', file=sys.stderr); sys.exit(17)"]
+            visible = io.StringIO()
+            with contextlib.redirect_stderr(visible), self.assertRaises(AssertionError):
+                self.suite.run(command, out, out, 'nonzero')
+            stdout, stderr = ('unqualified stdout \u2192' + os.linesep).encode(), ('unqualified stderr \u00e4' + os.linesep).encode()
+            self.assertEqual((out / 'nonzero.stdout.log').read_bytes(), stdout)
+            self.assertEqual((out / 'nonzero.stderr.log').read_bytes(), stderr)
+            proof = json.loads((out / 'nonzero.command.json').read_text())
+            self.assertEqual((proof['command'], proof['status'], proof['returncode']), (command, 'completed', 17))
+            self.assertEqual(proof['stdout_sha256'], hashlib.sha256(stdout).hexdigest())
+            self.assertEqual(proof['stderr_sha256'], hashlib.sha256(stderr).hexdigest())
+            self.assertIn('UNQUALIFIED: nonzero', visible.getvalue())
+            self.assertIn(stdout.decode().strip(), visible.getvalue())
+            self.assertIn(stderr.decode().strip(), visible.getvalue())
+
+    def test_actual_timeout_retains_partial_streams_and_remains_timeout(self):
+        import contextlib
+        import io
+        with tempfile.TemporaryDirectory(prefix='mixel SDK timeout ') as directory:
+            out = Path(directory)
+            command = [sys.executable, '-c', "import sys,time; print('partial stdout \\u2192', flush=True); print('partial stderr \\u00e4', file=sys.stderr, flush=True); time.sleep(30)"]
+            visible = io.StringIO()
+            with contextlib.redirect_stderr(visible), self.assertRaises(subprocess.TimeoutExpired):
+                self.suite.run(command, out, out, 'timeout', timeout=2)
+            self.assertEqual((out / 'timeout.stdout.log').read_bytes(), ('partial stdout \u2192' + os.linesep).encode())
+            self.assertEqual((out / 'timeout.stderr.log').read_bytes(), ('partial stderr \u00e4' + os.linesep).encode())
+            proof = json.loads((out / 'timeout.command.json').read_text())
+            self.assertEqual((proof['command'], proof['status'], proof['returncode'], proof['timeout_seconds']),
+                             (command, 'timed-out', None, 2))
+            self.assertIn('UNQUALIFIED: timeout; timed-out', visible.getvalue())
+
+    def test_actual_missing_executable_retains_launch_failure_and_remains_fatal(self):
+        import contextlib
+        import io
+        with tempfile.TemporaryDirectory(prefix='mixel SDK launch ') as directory:
+            out = Path(directory)
+            command = [str(out / 'nonexistent executable')]
+            visible = io.StringIO()
+            with contextlib.redirect_stderr(visible), self.assertRaises(OSError):
+                self.suite.run(command, out, out, 'launch')
+            proof = json.loads((out / 'launch.command.json').read_text())
+            self.assertEqual((proof['command'], proof['status'], proof['returncode']), (command, 'launch-failed', None))
+            self.assertEqual((out / 'launch.stdout.log').read_bytes(), b'')
+            self.assertTrue((out / 'launch.stderr.log').read_bytes())
+            self.assertIn('UNQUALIFIED: launch; launch-failed', visible.getvalue())
+
+    def test_actual_raw_crlf_and_lone_cr_streams_preserve_old_text_return_api(self):
+        with tempfile.TemporaryDirectory(prefix='mixel SDK newline ') as directory:
+            out = Path(directory)
+            stdout = b'first\r\nsecond\rthird\n'
+            stderr = b'error\r\nsecond\rthird\n'
+            command = [sys.executable, '-c', 'import sys; sys.stdout.buffer.write(' + repr(stdout) + '); sys.stderr.buffer.write(' + repr(stderr) + ')']
+            value = self.suite.run(command, out, out, 'newlines')
+            self.assertEqual(value, 'first\nsecond\nthird\n')
+            self.assertEqual((out / 'newlines.stdout.log').read_bytes(), stdout)
+            self.assertEqual((out / 'newlines.stderr.log').read_bytes(), stderr)
+
+    def test_actual_invalid_utf8_in_either_stream_retains_both_and_remains_fatal(self):
+        import contextlib
+        import hashlib
+        import io
+        with tempfile.TemporaryDirectory(prefix='mixel SDK decode ') as directory:
+            out = Path(directory)
+            for label, stdout, stderr in (('bad-stdout', b'out\xff', b'exact stderr'),
+                                          ('bad-stderr', b'exact stdout', b'err\xff')):
+                with self.subTest(stream=label):
+                    command = [sys.executable, '-c', 'import sys; sys.stdout.buffer.write(' + repr(stdout) + '); sys.stderr.buffer.write(' + repr(stderr) + ')']
+                    visible = io.StringIO()
+                    with contextlib.redirect_stderr(visible), self.assertRaises(UnicodeDecodeError):
+                        self.suite.run(command, out, out, label)
+                    self.assertEqual((out / (label + '.stdout.log')).read_bytes(), stdout)
+                    self.assertEqual((out / (label + '.stderr.log')).read_bytes(), stderr)
+                    self.assertEqual((out / (label + '.log')).read_bytes(), stdout + stderr)
+                    proof = json.loads((out / (label + '.command.json')).read_text())
+                    self.assertEqual((proof['command'], proof['status'], proof['returncode']), (command, 'decode-failed', 0))
+                    self.assertEqual(proof['stdout_sha256'], hashlib.sha256(stdout).hexdigest())
+                    self.assertEqual(proof['stderr_sha256'], hashlib.sha256(stderr).hexdigest())
+                    self.assertIn('UNQUALIFIED: ' + label + '; decode-failed', visible.getvalue())
+
+    def test_explicit_main_output_survives_fatal_child_unwind(self):
+        from unittest import mock
+        import contextlib
+        import io
+        with tempfile.TemporaryDirectory(prefix='mixel SDK main ') as directory:
+            root = Path(directory)
+            app, upstream, out = root / 'app', root / 'upstream', root / 'retained'
+            app.mkdir(); upstream.mkdir()
+            # These stand-ins isolate main's ownership/cleanup boundary. The
+            # failure and retained output come from an actual child process.
+            def fail(output, *unused):
+                self.suite.run([sys.executable, '-c', "import sys; print('retained after unwind'); sys.exit(19)"], root, output, 'main-failure')
+            argv = ['sdk-controls', '--app', str(app), '--source', str(upstream), '--output', str(out), '--flutter', str(root / 'fixture-sdk')]
+            with mock.patch.object(sys, 'argv', argv), mock.patch.object(self.suite, 'source_snapshot', return_value={}), \
+                 mock.patch.object(self.suite, 'archive_eol_controls'), mock.patch.object(self.suite, 'materialization'), \
+                 mock.patch.object(self.suite, 'previous_helper_controls'), mock.patch.object(self.suite, 'host_portability_controls'), \
+                 mock.patch.object(self.suite, 'flutter_controls', side_effect=fail), \
+                 contextlib.redirect_stderr(io.StringIO()), self.assertRaises(AssertionError):
+                self.suite.main()
+            self.assertEqual((out / 'main-failure.stdout.log').read_bytes(), ('retained after unwind' + os.linesep).encode())
+            self.assertEqual(json.loads((out / 'main-failure.command.json').read_text())['returncode'], 19)
+
+
+class FlutterSdkRetentionWorkflowTests(unittest.TestCase):
+    def test_every_sdk_caller_has_explicit_owned_output_and_immediate_always_log_upload(self):
+        cases = (("build.yml", "linux", "Preflight generated support source and reporter"),
+                 ("build.yml", "macos", "Preflight generated support source and reporter"),
+                 ("preflight.yml", "upstream-source", "Exercise actual source patches and support reporter"),
+                 ("preflight.yml", "macos-runtime-harness", "Prove exact SDK source compatibility and composed branding"))
+        wanted = ['${{ runner.temp }}/mixel-sdk-compatibility/*.log',
+                  '${{ runner.temp }}/mixel-sdk-compatibility/*.command.json']
+        for workflow, role, stage in cases:
+            body = job((ROOT / '.github/workflows' / workflow).read_text(), role)
+            gate = step(body, stage)
+            self.assertEqual(gate.count('--output "$RUNNER_TEMP/mixel-sdk-compatibility"'), 1)
+            self.assertNotIn('continue-on-error:', gate)
+            upload = step(body, 'Preserve SDK compatibility diagnostics')
+            ordered = steps(body)
+            self.assertEqual(ordered.index(upload), ordered.index(gate) + 1)
+            self.assertIn('        if: always()\n', upload)
+            self.assertIn('uses: actions/upload-artifact@v6', upload)
+            paths = [line.strip() for line in upload.splitlines() if line.strip().startswith('${{ runner.temp }}/')]
+            self.assertEqual(paths, wanted)
+            self.assertNotIn('actual-app', upload)
+        dispatcher = (ROOT / 'scripts/test-windows-generated-source.sh').read_text()
+        calls = [line for line in dispatcher.splitlines() if 'python scripts/test-support-flutter-sdk-compatibility.py --app ' in line]
+        self.assertEqual(len(calls), 2)
+        for call in calls:
+            self.assertEqual(call.count('--output "$RUNNER_TEMP/mixel-sdk-compatibility"'), 1)
+            self.assertIn('--bash "$mixel_analyzer_bash"', call)
+        self.assertIn('--app "$RDREPO" --flutter "$(command -v flutter)"', calls[0])
+        for workflow, role, stage in (("build.yml", "windows", "Preflight generated support source and reporter"),
+                                      ("preflight.yml", "windows-packaging", "Exercise complete Windows generated source, keep-awake and native branding")):
+            body = job((ROOT / '.github/workflows' / workflow).read_text(), role)
+            gate, upload = step(body, stage), step(body, 'Preserve Windows SDK source diagnostics')
+            self.assertEqual(steps(body).index(upload), steps(body).index(gate) + 1)
+            self.assertIn('        if: always()\n', upload)
+            paths = [line.strip() for line in upload.splitlines() if line.strip().startswith('${{ runner.temp }}/')]
+            self.assertEqual(paths, ['${{ runner.temp }}/mixel-sdk-source/*.log',
+                                     '${{ runner.temp }}/mixel-sdk-source/*.timing.json'] + wanted)
+
+    def test_exact_retention_inverse_refuses_missing_changed_duplicate_and_moved_hunks(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('sdk_retention_projection', ROOT / 'scripts/file_dialog_workflow_projection.py')
+        projection = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(projection)
+        for workflow in ('build.yml', 'preflight.yml'):
+            text = (ROOT / '.github/workflows' / workflow).read_text()
+            recovered = projection.inverse_sdk_compatibility_retention(text, workflow)
+            self.assertNotIn('mixel-sdk-compatibility', recovered)
+            for role, before, addition, after in projection.sdk_compatibility_workflow_projections(workflow):
+                changed = addition.replace('mixel-sdk-compatibility', 'foreign-sdk-output', 1)
+                exact = before + addition + after
+                for kind, mutant in (('missing', text.replace(addition, '', 1)),
+                                     ('changed', text.replace(addition, changed, 1)),
+                                     ('duplicate', text.replace(addition, addition + addition, 1)),
+                                     ('moved', text.replace(addition, '', 1) + addition),
+                                     ('preceding', text.replace(exact, before + '# foreign\n' + addition + after, 1))):
+                    with self.subTest(workflow=workflow, role=role, mutation=kind):
+                        with self.assertRaises(AssertionError):
+                            projection.inverse_sdk_compatibility_retention(mutant, workflow)
+        with self.assertRaises(AssertionError):
+            projection.inverse_sdk_compatibility_retention('', 'foreign.yml')
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

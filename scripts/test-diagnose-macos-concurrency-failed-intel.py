@@ -353,11 +353,11 @@ class StrictReplayControls(unittest.TestCase):
                          "repos/" + v.REPOSITORY + "/actions/runs/" + str(v.RUN)])
         self.assertNotIn("--allow-escape-sequences", metadata.call_args.args[0])
         profile = v.source_contract(ROOT)
-        self.assertEqual(v.PROFILE_HASH, "1d8ad6a75501b4fb78ab212f183917dafd83a2594f2dc6ee44f807a2e492be4d")
-        self.assertEqual(v.CONTROLS_HASH, "d0d7419f080ca0b7228026ff6c51ea51478c845780896e67f5fc7f0a8fc2305a")
+        self.assertEqual(v.PROFILE_HASH, "bcfce026c31de7093028c9beff10b8c8ce2dbfc25b3d707f0ec44f92539516e1")
+        self.assertEqual(v.CONTROLS_HASH, "599684dbbec5fb4e9a93967a964a3119b97df90a066b641664aa826221a1461b")
         self.assertEqual(profile["reviewedSources"]["scripts/test-support-launch-macos-concurrency-controls.py"], v.CONTROLS_HASH)
         self.assertEqual(profile["reviewedSources"]["scripts/file_dialog_workflow_projection.py"],
-                         "07d61633acee3a09fd505843664c3b560812276e41ba0fe02206278ae2b80bc8")
+                         "3aa22a9c14930219458f02cc1b33c3a6c7720289b7c92443341a62d87b04ce75")
         self.assertEqual(v.CALLER_HASH, "9fb58a9c5333df460cc4a676dc1499ee08af4af78edca762d0e20c59f0d03fc0")
 
     def test_source_grounded_terminal_escape_refusal_is_exact_fixed_category_only(self):

@@ -926,7 +926,7 @@ class ConcurrencyControls(unittest.TestCase):
             inverse_lifecycle_workflow_checks('', 'foreign.yml')
 
     def test_windows_producer_budget_has_only_one_exact_outer_job_change(self):
-        current = input_lifecycle.inverse_blocks((ROOT / '.github/workflows/build.yml').read_bytes(), '.github/workflows/build.yml').decode()
+        current = input_lifecycle.inverse_blocks(_lifecycle_projection.inverse_sdk_compatibility_retention(C.canonical((ROOT / '.github/workflows/build.yml').read_bytes()).decode(), 'build.yml').encode(), '.github/workflows/build.yml').decode()
         budget_only = inverse_windows_producer_budget(current)
         early = _lifecycle_projection.early_windows_lifecycle()
         self.assertEqual(budget_only.count(early), 1)

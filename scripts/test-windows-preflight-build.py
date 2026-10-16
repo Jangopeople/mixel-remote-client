@@ -175,6 +175,7 @@ class WindowsPreflightBuildTests(unittest.TestCase):
         self.assertEqual(paths, ['${{ runner.temp }}/mixel-sdk-source/*.log', '${{ runner.temp }}/mixel-sdk-source/*.timing.json'])
         for workflow, job_name in (('build.yml', 'windows'), ('preflight.yml', 'windows-packaging')):
             text = (ROOT / '.github/workflows' / workflow).read_text(encoding='utf-8')
+            text = modules[0]._lifecycle_projection.inverse_sdk_compatibility_retention(text, workflow)
             self.assertEqual(text.count(upload), 1)
             self.assertEqual(job(text, job_name).count(upload), 1)
             self.assertIn('        run: bash scripts/test-windows-generated-source.sh\n' + upload, text)

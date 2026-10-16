@@ -194,6 +194,8 @@ jobs:
           path: |
             ${{ runner.temp }}/mixel-sdk-source/*.log
             ${{ runner.temp }}/mixel-sdk-source/*.timing.json
+            ${{ runner.temp }}/mixel-sdk-compatibility/*.log
+            ${{ runner.temp }}/mixel-sdk-compatibility/*.command.json
           if-no-files-found: ignore
           retention-days: 14
       - uses: actions/upload-artifact@v6
@@ -336,7 +338,7 @@ jobs:
           python3 scripts/test-support-macos-tray-url.py
           python3 scripts/test-support-launch-macos-tray-controls.py
           python3 scripts/test-support-macos-termination-support.py --app "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf"
-          python3 scripts/test-support-flutter-sdk-compatibility.py --app "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf"
+          python3 scripts/test-support-flutter-sdk-compatibility.py --app "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --output "$RUNNER_TEMP/mixel-sdk-compatibility"
           python3 scripts/test-support-file-dialog-lifecycle.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --dart "$(command -v dart)" --output "$RUNNER_TEMP/mixel-file-dialog-lifecycle"
           python3 scripts/test-support-native-warnings.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --source-only --output "$RUNNER_TEMP/mixel-native-warning-source"
           python3 scripts/test-support-compiler-cleanup.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --source-only --output "$RUNNER_TEMP/mixel-compiler-cleanup-source"
@@ -374,6 +376,17 @@ jobs:
           python3 scripts/test-branding.py
           dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart
           dart scripts/test-support-invite.dart
+      - name: Preserve SDK compatibility diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: upstream-source-sdk-compatibility
+          path: |
+            ${{ runner.temp }}/mixel-sdk-compatibility/*.log
+            ${{ runner.temp }}/mixel-sdk-compatibility/*.command.json
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Preserve Linux file-dialog lifecycle evidence
         if: always()
         uses: actions/upload-artifact@v6
@@ -422,11 +435,22 @@ jobs:
           python3 scripts/test-support-macos-tray-url.py
           python3 scripts/test-support-launch-macos-tray-controls.py
           python3 scripts/test-support-macos-termination-support.py --app "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf"
-          python3 scripts/test-support-flutter-sdk-compatibility.py --app "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf"
+          python3 scripts/test-support-flutter-sdk-compatibility.py --app "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --output "$RUNNER_TEMP/mixel-sdk-compatibility"
           python3 scripts/test-support-file-dialog-lifecycle.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --dart "$(command -v dart)" --output "$RUNNER_TEMP/mixel-file-dialog-lifecycle"
           python3 scripts/test-support-native-warnings.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --source-only --output "$RUNNER_TEMP/mixel-native-warning-source"
           python3 scripts/test-support-compiler-cleanup.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --source-only --output "$RUNNER_TEMP/mixel-compiler-cleanup-source"
           RUSTC_BIN="$(rustup which rustc)" python3 scripts/test-macos-update.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf"
+      - name: Preserve SDK compatibility diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: macos-runtime-harness-sdk-compatibility
+          path: |
+            ${{ runner.temp }}/mixel-sdk-compatibility/*.log
+            ${{ runner.temp }}/mixel-sdk-compatibility/*.command.json
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Prove native fatal-crash handling with isolated owned children
         run: RUSTC_BIN="$(rustup which rustc)" python3 scripts/test-support-fatal-crash.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --upstream-repo rustdesk --evidence-dir "$RUNNER_TEMP/mixel-fatal-crash-source"
       - name: Prove native Mac failure boundaries and actual pinned Rust final link

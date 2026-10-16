@@ -2,6 +2,8 @@
 """Run generated updater/CLI and transaction fixtures without an installed app or privileges."""
 import importlib.util
 import contextlib
+import io
+import sys
 import json
 import os
 from pathlib import Path
@@ -37,21 +39,18 @@ def run(command, **kwargs):
 
 
 def make_source(repo, source, newline):
-    # Validate and invert only the complete late launch layer on a private copy.
-    spec = importlib.util.spec_from_file_location("updater_launch_projection", ROOT / "patch-support-macos-gui-launch.py")
-    launch = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(launch)
-    with historical_fixture.linux_close_baseline(source) as historical:
-        with launch.previous(historical) as source:
-            # Read only exact whole-file profiles; no synthetic anchor-only acceptance.
-            patch.apply(source, restore=True, check=True)
-            raw = [patch.safe_target(source, f, optional=i == 3).read_bytes() if (source / f).exists() else None for i, f in enumerate(patch.FILES)]
-            canonical = [patch.canonical(d)[0] if d is not None else None for d in raw]
-            original = patch.project(*canonical, restore=True)
-            for relative, data in zip(patch.FILES, original):
-                if data is not None:
-                    path = repo / relative; path.parent.mkdir(parents=True, exist_ok=True)
-                    path.write_bytes(data.replace(b'\n', newline))
+    # The suite entry validates the complete supplied tree and keeps its exact
+    # prior-owner projection alive. This private historical tree must not enter
+    # the complete-tree terminal inspector a second time.
+    # Read only exact whole-file profiles; no synthetic anchor-only acceptance.
+    patch.apply(source, restore=True, check=True)
+    raw = [patch.safe_target(source, f, optional=i == 3).read_bytes() if (source / f).exists() else None for i, f in enumerate(patch.FILES)]
+    canonical = [patch.canonical(d)[0] if d is not None else None for d in raw]
+    original = patch.project(*canonical, restore=True)
+    for relative, data in zip(patch.FILES, original):
+        if data is not None:
+            path = repo / relative; path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data.replace(b'\n', newline))
 
 
 def snapshot(repo):
@@ -680,4 +679,21 @@ if __name__ == '__main__':
         PROFILE_SOURCES = [projections.enter_context(launch.previous(
             projections.enter_context(historical_fixture.linux_close_baseline(source))))
             for source in PROFILE_SOURCES]
-        unittest.main(argv=[__file__, *test_args, *(source_controls if args.source_only else [])])
+        # subTest records failures and continues; release PASS summaries only
+        # after unittest has succeeded. Retain all other output as unqualified
+        # diagnostics, without changing any exit status or exception.
+        output = io.StringIO()
+        succeeded = False
+        try:
+            with contextlib.redirect_stdout(output):
+                try:
+                    unittest.main(argv=[__file__, *test_args, *(source_controls if args.source_only else [])])
+                except SystemExit as result:
+                    succeeded = result.code is None or result.code == 0
+                    raise
+        finally:
+            if succeeded:
+                sys.stdout.write(output.getvalue())
+            else:
+                print('UNQUALIFIED updater fixture stdout (unittest did not succeed):', file=sys.stderr)
+                sys.stderr.write(output.getvalue())

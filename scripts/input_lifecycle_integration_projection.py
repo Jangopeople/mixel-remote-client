@@ -209,7 +209,7 @@ def compose(raw, name):
     if name == '.github/workflows/build.yml':
         text = project_shipping_dependencies(text, restore=False)
         text = project_job_hunks(text, restore=False)
-    return text.encode().replace(b'\n', newline)
+    return sdk_retention_projection(text.encode().replace(b'\n', newline), name, restore=False)
 
 
 def inverse_blocks(raw, name):
@@ -233,7 +233,7 @@ def inverse_blocks(raw, name):
 
 
 def project_to_canonical(raw, name):
-    result = inverse_blocks(raw, name)
+    result = inverse_blocks(sdk_retention_projection(raw, name, restore=True), name)
     logical, _ = canonical(result)
     if digest(logical.encode()) != BASE_SHA[name]:
         raise ValueError('Terminal integration inverse changed other canonical bytes')
@@ -270,3 +270,19 @@ def committed_workflow(raw, name):
     if digest(text.encode()) == BASE_SHA[name]:
         return raw
     return inverse_blocks(raw, name)
+
+
+def sdk_retention_projection(raw, name, restore):
+    """Compose only the exact separately reviewed SDK evidence workflow layer."""
+    if name not in ('.github/workflows/build.yml', '.github/workflows/preflight.yml'):
+        return raw
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location(
+        'mixel_sdk_retention_projection', Path(__file__).with_name('file_dialog_workflow_projection.py'))
+    projection = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(projection)
+    text, newline = canonical(raw)
+    operation = (projection.inverse_sdk_compatibility_retention if restore else
+                 projection.compose_sdk_compatibility_retention)
+    return operation(text, Path(name).name).encode().replace(b'\n', newline)

@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -346,10 +347,48 @@ def run(args, cwd, out, label, env=None, timeout=300):
     # Git Bash resolves Flutter's extensionless shell entry point on Windows.
     # Prefer the SDK's actual batch launcher and the current host command shell.
     args = native_command(args, os.name == 'nt')
-    result = subprocess.run(args, cwd=cwd, env=actual_env, capture_output=True, text=True, encoding='utf-8', timeout=timeout)
-    (out / (label + '.log')).write_text(result.stdout + result.stderr, encoding='utf-8')
+    started = time.monotonic()
+
+    def retain(stdout, stderr, status, returncode=None):
+        stdout = stdout if isinstance(stdout, bytes) else (stdout or '').encode('utf-8')
+        stderr = stderr if isinstance(stderr, bytes) else (stderr or '').encode('utf-8')
+        (out / (label + '.stdout.log')).write_bytes(stdout)
+        (out / (label + '.stderr.log')).write_bytes(stderr)
+        (out / (label + '.log')).write_bytes(stdout + stderr)
+        (out / (label + '.command.json')).write_text(json.dumps({
+            'command': args, 'cwd': str(Path(cwd).resolve()), 'status': status,
+            'returncode': returncode, 'timeout_seconds': timeout,
+            'elapsed_seconds': round(time.monotonic() - started, 6),
+            'stdout_bytes': len(stdout), 'stderr_bytes': len(stderr),
+            'stdout_sha256': hashlib.sha256(stdout).hexdigest(),
+            'stderr_sha256': hashlib.sha256(stderr).hexdigest()
+        }, indent=2) + '\n', encoding='utf-8')
+        if status != 'completed' or returncode != 0:
+            print('UNQUALIFIED: ' + label + '; ' + status +
+                  '; exact command and captured output retained at ' + str(out), file=sys.stderr)
+            for name, data in (('stdout', stdout), ('stderr', stderr)):
+                tail = data[-4096:].decode('utf-8', errors='replace')
+                print(name + ' tail:\n' + tail, file=sys.stderr)
+
+    try:
+        result = subprocess.run(args, cwd=cwd, env=actual_env, capture_output=True, timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        retain(error.stdout, error.stderr, 'timed-out')
+        raise
+    except OSError as error:
+        retain('', str(error), 'launch-failed')
+        raise
+    # Retain both original byte streams before strict decoding can fail.
+    # Keep the old UTF8/universal-newline return contract for successful callers.
+    retain(result.stdout, result.stderr, 'completed', result.returncode)
+    try:
+        stdout = result.stdout.decode('utf-8').replace('\r\n', '\n').replace('\r', '\n')
+        result.stderr.decode('utf-8')
+    except UnicodeDecodeError:
+        retain(result.stdout, result.stderr, 'decode-failed', result.returncode)
+        raise
     assert result.returncode == 0, label + ' failed; see retained log'
-    return result.stdout
+    return stdout
 
 
 def host_portability_controls(out):
@@ -372,10 +411,11 @@ def host_portability_controls(out):
     print(f'PASS: {count} Windows batch command/refusal controls and real UTF8 child capture.')
 
 
-def flutter_controls(out, source, flutter, _input_checked=False):
+def flutter_controls(out, source, flutter, _input_checked=False, _analysis_source=None):
     with A.startup_baseline(source, _input_checked=_input_checked) as plain:
         if plain != source.resolve():
-            return flutter_controls(out, plain, flutter, _input_checked=True)
+            return flutter_controls(out, plain, flutter, _input_checked=True,
+                                    _analysis_source=source if _analysis_source is None else _analysis_source)
     app = out / 'actual-full-app'
     shutil.copytree(source, app, ignore=shutil.ignore_patterns('.git', '.dart_tool', 'build', '.mixel-dependencies'))
     # Bring forward the exact locally owned plugins/provenance without caches.
@@ -384,6 +424,16 @@ def flutter_controls(out, source, flutter, _input_checked=False):
     if file_transfer: F.apply(app,restore=True)
     S.apply(app)
     if file_transfer: F.apply(app)
+    if _analysis_source is not None:
+        # The strict outer projection above validates all current ownership.
+        # Its inverse is only for the original SDK-overlay controls: analyzing
+        # historical Dart against the current generated SyncReturn ABI is invalid.
+        # Analyze the complete supplied composition, including its exact bridge,
+        # after those unchanged overlay controls have passed on the private copy.
+        assert (_analysis_source / S.OWNED).is_dir(), 'Composed analyzer source lacks the verified SDK overlay'
+        app = out / 'actual-composed-full-app'
+        shutil.copytree(_analysis_source, app, ignore=shutil.ignore_patterns('.git', '.dart_tool', 'build', '.mixel-dependencies'))
+        shutil.copytree(_analysis_source / 'flutter/.mixel-dependencies', app / 'flutter/.mixel-dependencies')
     run([flutter, '--version', '--machine'], app, out, 'actual-sdk-version')
     version = json.loads((out / 'actual-sdk-version.log').read_text())
     assert version['frameworkVersion'] == S.SDK and version['engineRevision'] == S.ENGINE

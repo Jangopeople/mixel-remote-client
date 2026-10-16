@@ -14,9 +14,9 @@ case "${MIXEL_SDK_FULL_APP_PREFLIGHT:-false}" in
   *) echo "Invalid complete SDK application preflight request" >&2; exit 1 ;;
 esac
 if [[ "${MIXEL_SDK_FULL_APP_PREFLIGHT:-false}" == true ]]; then
-  python scripts/test-support-flutter-sdk-compatibility.py --app "$RDREPO" --flutter "$(command -v flutter)" --bash "$mixel_analyzer_bash"
+  python scripts/test-support-flutter-sdk-compatibility.py --app "$RDREPO" --flutter "$(command -v flutter)" --bash "$mixel_analyzer_bash" --output "$RUNNER_TEMP/mixel-sdk-compatibility"
 else
-  python scripts/test-support-flutter-sdk-compatibility.py --app "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --bash "$mixel_analyzer_bash"
+  python scripts/test-support-flutter-sdk-compatibility.py --app "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --bash "$mixel_analyzer_bash" --output "$RUNNER_TEMP/mixel-sdk-compatibility"
 fi
 python scripts/test-support-macos-termination.py --flutter "$(command -v flutter)" --bash "$mixel_analyzer_bash"
 python scripts/test-macos-update.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --source-only

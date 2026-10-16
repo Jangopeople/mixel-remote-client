@@ -345,7 +345,7 @@ jobs:
           python3 scripts/test-support-macos-tray-url.py
           python3 scripts/test-support-launch-macos-tray-controls.py
           python3 scripts/test-support-macos-termination-support.py --app rustdesk
-          python3 scripts/test-support-flutter-sdk-compatibility.py --app rustdesk --flutter "$(command -v flutter)"
+          python3 scripts/test-support-flutter-sdk-compatibility.py --app rustdesk --flutter "$(command -v flutter)" --output "$RUNNER_TEMP/mixel-sdk-compatibility"
           python3 scripts/test-support-file-dialog-lifecycle.py --source rustdesk --dart "$(command -v dart)" --output "$RUNNER_TEMP/mixel-file-dialog-lifecycle"
           python3 scripts/test-support-native-warnings.py --source rustdesk --source-only --output "$RUNNER_TEMP/mixel-native-warning-source"
           python3 scripts/test-support-compiler-cleanup.py --source rustdesk --source-only --output "$RUNNER_TEMP/mixel-compiler-cleanup-source"
@@ -379,6 +379,17 @@ jobs:
           python3 scripts/test-branding.py
           dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart
           dart scripts/test-support-invite.dart
+
+      - name: Preserve SDK compatibility diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: linux-sdk-compatibility
+          path: |
+            ${{ runner.temp }}/mixel-sdk-compatibility/*.log
+            ${{ runner.temp }}/mixel-sdk-compatibility/*.command.json
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Preserve Linux file-dialog lifecycle evidence
         if: always()
@@ -638,7 +649,7 @@ jobs:
           python3 scripts/test-support-macos-tray-url.py
           python3 scripts/test-support-launch-macos-tray-controls.py
           python3 scripts/test-support-macos-termination-support.py --app rustdesk
-          python3 scripts/test-support-flutter-sdk-compatibility.py --app rustdesk --flutter "$(command -v flutter)"
+          python3 scripts/test-support-flutter-sdk-compatibility.py --app rustdesk --flutter "$(command -v flutter)" --output "$RUNNER_TEMP/mixel-sdk-compatibility"
           python3 scripts/test-support-file-dialog-lifecycle.py --source rustdesk --dart "$(command -v dart)" --output "$RUNNER_TEMP/mixel-file-dialog-lifecycle"
           python3 scripts/test-support-native-warnings.py --source rustdesk --source-only --output "$RUNNER_TEMP/mixel-native-warning-source"
           python3 scripts/test-support-compiler-cleanup.py --source rustdesk --source-only --output "$RUNNER_TEMP/mixel-compiler-cleanup-source"
@@ -669,6 +680,17 @@ jobs:
           python3 scripts/test-branding.py
           dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart
           dart scripts/test-support-invite.dart
+
+      - name: Preserve SDK compatibility diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: macos-sdk-compatibility-${{ matrix.job.target }}
+          path: |
+            ${{ runner.temp }}/mixel-sdk-compatibility/*.log
+            ${{ runner.temp }}/mixel-sdk-compatibility/*.command.json
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Preserve Mac file-dialog lifecycle evidence
         if: always()
@@ -1066,6 +1088,8 @@ jobs:
           path: |
             ${{ runner.temp }}/mixel-sdk-source/*.log
             ${{ runner.temp }}/mixel-sdk-source/*.timing.json
+            ${{ runner.temp }}/mixel-sdk-compatibility/*.log
+            ${{ runner.temp }}/mixel-sdk-compatibility/*.command.json
           if-no-files-found: ignore
           retention-days: 14
 
