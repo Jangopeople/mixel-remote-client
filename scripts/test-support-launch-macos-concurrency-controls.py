@@ -189,7 +189,7 @@ def inverse_windows_producer_budget(text):
 
 def windows_preflight_budget_projection():
     before = "  windows-packaging:\n    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_source_runner == 'windows-2025' && 'windows-2025' || 'windows-2022' }}\n"
-    current = '    timeout-minutes: 180\n'
+    current = '    timeout-minutes: 240\n'
     after = "    env:\n      PYTHONUTF8: '1'\n    steps:\n      - uses: actions/checkout@v5\n"
     return before, current, after
 
@@ -198,7 +198,7 @@ def inverse_windows_preflight_budget(text):
     before, current, after = windows_preflight_budget_projection()
     approved = before + current + after
     if text.count(approved) != 1 or text.count(before) != 1 or text.count(current) != 1:
-        raise AssertionError('Exact Windows preflight 180-minute source-job budget context changed')
+        raise AssertionError('Exact Windows preflight 240-minute source-job budget context changed')
     return text.replace(approved, before + '    timeout-minutes: 120\n' + after, 1)
 
 
@@ -1114,8 +1114,9 @@ class ConcurrencyControls(unittest.TestCase):
                     text.replace(approved, before + after, 1),
                     text.replace(current, current + current, 1),
                     text.replace(approved, approved + approved, 1),
-                    text.replace(current, current.replace('180', '181'), 1),
-                    text.replace(current, current.replace('180', '120'), 1),
+                    text.replace(current, current.replace('240', '241'), 1),
+                    text.replace(current, current.replace('240', '180'), 1),
+                    text.replace(current, current.replace('240', '120'), 1),
                     text.replace(approved, before + after, 1) + current,
                     text.replace(approved, before + '# disjoint\n' + current + after, 1),
                     text.replace(before, before.replace('windows-packaging:', 'foreign-job:'), 1)):

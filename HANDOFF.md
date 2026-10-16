@@ -1,5 +1,58 @@
 # Mixel-Remote — Agent Handoff / Current State
 
+## 2026-10-16 — All app builds pass; Windows budget and strict QA consumers corrected
+
+Delivery is still pending. Read current Git HEAD and
+`/tmp/mixel-current708-authoritative-checkpoint-20261016.json` for the exact
+latest source/run identities; that checkpoint filename is historical.
+
+Source b982d6d34be3361eb02ab6611b09296e815e0b09 builds all four platforms
+successfully in producer38906552674/a1. Both Mac app/DMG notarizations and all
+six packaged concurrency scenarios pass, including Intel endpoint settlement.
+Both Mac full-app analyzers report0errors/0warnings/286infos; native compiler
+deprecation/destination/generated-header warnings remain separately triaged.
+Linux passes33steps and four actual relay/HTTPS/recovery session scenarios.
+Its471-member QA archive and12 retained PNG clocks were independently checked;
+file transfers are hash assertions, with file bytes and normal DEB uncollected.
+None of these results proves physical Mac Shift or normal GUI close.
+
+Comparison38905912604/a1 succeeds on both Windows hosts. Mandatory
+preflight38905912516/a1 is CANCELLED: provider annotation explicitly reports
+the3hour job limit. The successful same-source Windows shipping job spends
+190m08s in the shared source checks and226m49s overall. All558 retained Windows
+timing-archive members verify; no individual child timeout occurred. The first
+fix, f25d0f9380d95d1449f021b0e1fa9cb046d5ea94, aligns mandatory180to240minutes
+and adds a relational budget regression;22release tests and actionlint pass.
+
+Its early28 and both Windows13+11 checks pass. Two existing QA inverses still
+require180, so the f25 release and Intel source fixtures fail immediately.
+Root preserved their original logs once and intentionally cancelled obsolete
+mandatory38948134079 and comparison38948133779. No f25 producer was dispatched.
+
+The follow-up changes only those QA consumers: exact240 context still inverses
+to historical120, with241/180/120, missing/duplicate/disjoint/foreign budgets
+refused before commands. A closed whole-hash unit-fixture profile projects the
+new controls back to b982, then through the existing exact708 inverse. Old
+profiles stay accepted in that synthetic17-file unit view. The historical
+runtime diagnostic, profile, helper manifest and workflow stay byte-identical
+and continue to refuse current runtime source; never repurpose that replay.
+LF90+112 and faithful CRLF90+112 all pass with0skips. All21exact release-job
+commands pass, including IPC self-tests, Python compilation and Bash syntax.
+Root rehashes all74 declared proof files and verifies both complete inverses.
+Proof: f25-preflight-consumer-fix-iakr7gfk under the durable directory below;
+manifest72de812a8c0561aa078456fa2ff512ca0b829aa452c83e5e3397ac8795af43d7.
+Two closed local IO timeouts are retained; healthy finite retries pass. No IO
+root cause is claimed. Application generators and inputs remain unchanged.
+
+Require fresh early Linux28, Windows13+11 on both hosts, release-pipeline and
+source-only diagnostic controls to pass before one unpublished all-four build.
+Same-head whole producer, mandatory preflight and comparison must all succeed
+before normal package collection, signature qualification or fresh native
+candidate tests. Original normal customer packages remain uncollected.
+Preserve GTK automatic rejection, human-only native URI Open, shared Mac
+coordination, existing services/trays, and public/store/main/production holds.
+Never access filesystem paths under worktrees. Never report this as complete.
+
 ## 2026-10-16 — Mac peer-close correction and renderer/build checks; delivery pending
 
 The current revision updates seven reviewed source files on top of

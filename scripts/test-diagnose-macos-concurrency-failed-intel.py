@@ -44,6 +44,28 @@ CURRENT_PAIR = {
 }
 
 
+BUDGET_PAIR = {**CURRENT_PAIR,
+    'scripts/test-support-launch-macos-concurrency-controls.py': 'b5d645b7ec84d10cf1b2a88abab769de29fa0eb29789e64973fec61561db4f9f',
+}
+# A closed source-only inverse for the reviewed 180-to-240 minute QA update.
+# The frozen runtime profile remains unchanged; only these unit inputs project.
+BUDGET_CONTROL_CHANGES = (
+    (b'    current = \'    timeout-minutes: 180\\n\'\n    after = "    env:\\n      PYTHONUTF8: \'1\'\\n    steps:\\n      - uses: actions/checkout@v5\\n"', b'    current = \'    timeout-minutes: 240\\n\'\n    after = "    env:\\n      PYTHONUTF8: \'1\'\\n    steps:\\n      - uses: actions/checkout@v5\\n"'),
+    (b'Exact Windows preflight 180-minute source-job budget context changed', b'Exact Windows preflight 240-minute source-job budget context changed'),
+    (b"                    text.replace(current, current.replace('180', '181'), 1),\n                    text.replace(current, current.replace('180', '120'), 1),", b"                    text.replace(current, current.replace('240', '241'), 1),\n                    text.replace(current, current.replace('240', '180'), 1),\n                    text.replace(current, current.replace('240', '120'), 1),"),
+)
+
+
+def inverse_current_budget_controls(data):
+    controls = 'scripts/test-support-launch-macos-concurrency-controls.py'
+    v.require(v.sha(data) == BUDGET_PAIR[controls], 'unit-fixture-exact-budget-controls')
+    for original, current in BUDGET_CONTROL_CHANGES:
+        v.require(data.count(current) == 1, 'unit-fixture-exact-budget-inverse-literal')
+        data = data.replace(current, original, 1)
+    v.require(v.sha(data) == CURRENT_PAIR[controls], 'unit-fixture-exact-budget-inverse')
+    return data
+
+
 def fixture_pins():
     return {**v.EXPECTED_PROFILE['frozenHelpers'], **v.EXPECTED_PROFILE['reviewedSources'],
             'scripts/failed-macos-diagnostic-helper-hashes.json': v.MANIFEST_HASH,
@@ -81,6 +103,9 @@ def inverse_current_fixture_pair(sources):
     observed = {name: v.sha(sources[name]) for name in HISTORICAL_PAIR}
     if observed == HISTORICAL_PAIR:
         return dict(sources), 'exact-original708'
+    if observed == BUDGET_PAIR:
+        sources = {**sources, controls: inverse_current_budget_controls(sources[controls])}
+        observed = {name: v.sha(sources[name]) for name in HISTORICAL_PAIR}
     v.require(observed == CURRENT_PAIR, 'unit-fixture-unreviewed-or-partial-pair')
     text = sources[controls].decode('utf-8')
     tree = ast.parse(text)
@@ -259,6 +284,32 @@ class HistoricalSourceFixtureControls(unittest.TestCase):
         self.assertEqual(receipt['sourcePair'], 'exact-original708')
         self.assertEqual({name: v.sha((output / name).read_bytes()) for name in HISTORICAL_PAIR}, HISTORICAL_PAIR)
         v.source_contract(output)
+
+    def test_previous_exact_current_pair_remains_accepted(self):
+        inputs = self.inputs('exact-previous-current')
+        relative = 'scripts/test-support-launch-macos-concurrency-controls.py'
+        path = inputs / relative
+        path.write_bytes(inverse_current_budget_controls(path.read_bytes()))
+        self.assertEqual(v.sha(path.read_bytes()), CURRENT_PAIR[relative])
+        output = self.root / 'view-previous-current'
+        receipt = historical_source_fixture(inputs, output)
+        self.assertEqual(receipt['sourcePair'], 'exact-current-layer-inverted-to708')
+        self.assertEqual({name: v.sha((output / name).read_bytes()) for name in HISTORICAL_PAIR}, HISTORICAL_PAIR)
+        v.source_contract(output)
+
+    def test_exact_budget_inverse_rejects_partial_historical_and_foreign_controls(self):
+        relative = 'scripts/test-support-launch-macos-concurrency-controls.py'
+        current, _ = fixture_logical_source(PIPELINE_ROOT, relative)
+        self.assertEqual(v.sha(current), BUDGET_PAIR[relative])
+        previous = inverse_current_budget_controls(current)
+        self.assertEqual(v.sha(previous), CURRENT_PAIR[relative])
+        mutations = [previous, (ROOT / relative).read_bytes(), current + b'# foreign\n']
+        for original, replacement in BUDGET_CONTROL_CHANGES:
+            self.assertEqual(current.count(replacement), 1)
+            mutations.append(current.replace(replacement, original, 1))
+        for index, malformed in enumerate(mutations):
+            with self.subTest(malformed=index), self.assertRaises(v.Refusal):
+                inverse_current_budget_controls(malformed)
 
     def test_lf_crlf_views_preserve_physical_sources_and_exact_historical_hashes(self):
         for newline in (b'\n', b'\r\n'):
