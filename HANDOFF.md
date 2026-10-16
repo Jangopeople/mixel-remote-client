@@ -1,5 +1,57 @@
 # Mixel-Remote — Agent Handoff / Current State
 
+## 2026-10-16 — Directory entry guard corrected; native acceptance pending
+
+At source6581384, fast Windows run38888127090 passes all13 integration and11
+logical-view tests on2022 and2025. Early Linux inventory38888126999/a1 fails
+test_entry_added_after_enumeration_is_refused: ValueError was not raised. Original
+job116930780319 log SHA2563478f49e4b9ef9a91ea4220a3b82b9ae44c4a87731155c12e77709816058972e
+is retained once in root-658-flutter-inventory-failure-original-20261016. Both
+obsolete preflight38888127020 and comparison38888127054 are terminal CANCELLED.
+No658 all4 producer was dispatched, and no package qualification is claimed.
+
+The deterministic gap is directory membership drift while observed fstat metadata
+collides. The precise provider clock mechanism was not captured and is an
+inference. The helper now saves sorted entry names and checks a fresh sorted
+enumeration after traversal, retaining the metadata check. Its two-statement
+inverse recovers the entire prior helper. All existing24 tests/four setup helpers
+retain exact ASTs. Four new methods exercise real adds/removals with colliding
+owned-directory metadata, harmless enumeration reordering and fatal final list
+errors. No sleeps/retries are used. All no-follow/ancestor/file/mode/run/raw-stream/
+SDK/fixture/context/count guards, all18 product files and53 generators stay exact.
+
+Frozen packet flutter-inventory-enumeration-658-20261016-_9ykdiwl has687 members
+and7,910,450 bytes; manifest SHA256
+992f56c3b21fbf68ac6eb254c9d1026a19579ab0cfc4eb2839f262b3b2a9cec8,
+RESULT SHA256d5957b87691547d9a4f5235d8f5a5370289b7fc21585a747d7da171f24f38378.
+Root rehashes all687 content/size pins; observed modes are not manifest pins.
+Independent CLEAR review in flutter-enumeration-independent-review-20261016-xur12q
+has FINAL-REVIEW SHA256d6f728d2d0aaaa2827424b604c16f81e50ca36616d47e46f7b8e6d4d53fb8351.
+Complete helper SHA2560dcf3c1375f96dd1682a0e031d555eb4a7d6b86f5082c9d812f56e3ca72b6b29;
+complete test SHA256cb3c98cdcd9dee075cfdb046f583c323715475d6a08ce2435803f23664db5e76.
+
+Actual candidate: Ran28 tests in0.132s; OK. New four-method loop repeated16 times:
+Ran64 tests in0.361s; OK. Original helper fails12 new deterministic controls,
+while its original24 pass. Fresh complete production InputModel run exits0 in
+15.659405291s with empty stderr and actual output:
+PASS_ACTUAL_FULL_PRODUCTION_INPUTMODEL_FLUTTER_TEST
+00:01 +180: All tests passed!
+All18 product/six original generated bridge pins,638 Flutter production files,
+compatible209-package context, fixtures and14 links remain exact before/after.
+Native effects are mocked; packaged and physical acceptance remains unfinished.
+
+Root's external-volume adoption stalled before commit; its exact eventual file
+state must be reconciled rather than overwritten. A fresh ordinary internal clone
+at exact658 HEAD/tree is used for the reviewed commit, with all370 source blobs/
+modes checked before adoption. Root proof is /tmp/mixel-inventory-adoption-proof-20261016.
+No filesystem worktrees paths are accessed. No project data is removed.
+Require new-head early Linux28 and Windows2022/2025 full13+11 success before
+one publish_r2=false all4 dispatch. Same-head producer/preflight/comparison whole
+SUCCESS precedes original signed package qualification, fresh Standard95 and
+Linux/physical Mac/PC01 tests. Historical recipe bindings remain closed. Public
+aliases/stores/production infrastructure, human-only native URI Open and the
+automatically rejected GTK-warning investigation remain held; never bypass them.
+
 ## 2026-10-16 — Windows QA workflow views corrected; native acceptance unfinished
 
 The a5b Windows producer116881440164 and mandatory preflight116878781608

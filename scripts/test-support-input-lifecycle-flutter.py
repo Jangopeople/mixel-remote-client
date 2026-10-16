@@ -119,7 +119,8 @@ def source_tree(root, destination=None):
 
     def walk(parent, prefix, target):
         directory_before = os.fstat(parent)
-        for name in sorted(os.listdir(parent)):
+        names_before = sorted(os.listdir(parent))
+        for name in names_before:
             rel = prefix + (name,)
             if name in SOURCE_CACHE_NAMES:
                 continue  # Preserve the previous any-component cache exclusions.
@@ -176,7 +177,8 @@ def source_tree(root, destination=None):
                         os.close(copied)
             else:
                 raise ValueError(f"Production source symlink or special file refused: {'/'.join(rel)}")
-        if file_identity(os.fstat(parent)) != file_identity(directory_before):
+        if (sorted(os.listdir(parent)) != names_before or
+                file_identity(os.fstat(parent)) != file_identity(directory_before)):
             raise ValueError(f"Production source directory entries changed: {'/'.join(prefix)}")
 
     result = {}

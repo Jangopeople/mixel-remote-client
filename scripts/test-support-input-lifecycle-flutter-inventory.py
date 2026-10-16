@@ -362,6 +362,116 @@ class ProductionTreeTests(unittest.TestCase):
         self.assertTrue(changed)
         self.assertFalse((self.base / "copy/race-fifo.txt").exists())
 
+    def test_added_entry_with_colliding_metadata_is_refused_for_both_orders(self):
+        for mode in ("inventory", "copy"):
+            for order in ("forward", "reverse"):
+                for added_name in ("00-added.dart", "zz-added.dart"):
+                    with self.subTest(mode=mode, order=order, added=added_name):
+                        root = self.base / (mode + order + added_name)
+                        root.mkdir()
+                        (root / "a.txt").write_bytes(b"first production file\n")
+                        (root / "z.txt").write_bytes(b"last production file\n")
+                        before = root.stat()
+                        real_fstat, real_listdir = os.fstat, os.listdir
+                        added = []
+
+                        def colliding_metadata(fd):
+                            value = real_fstat(fd)
+                            return before if (value.st_dev, value.st_ino) == (before.st_dev, before.st_ino) else value
+
+                        def add_after_listing(fd):
+                            names = real_listdir(fd)
+                            value = real_fstat(fd)
+                            if (value.st_dev, value.st_ino) == (before.st_dev, before.st_ino) and not added:
+                                added.append(True)
+                                (root / added_name).write_bytes(b"real entry added after enumeration\n")
+                            return list(reversed(names)) if order == "reverse" else names
+
+                        with mock.patch.object(HELPER.os, "fstat", side_effect=colliding_metadata), \
+                                mock.patch.object(HELPER.os, "listdir", side_effect=add_after_listing):
+                            with self.assertRaisesRegex(ValueError, "source directory entries changed"):
+                                if mode == "inventory":
+                                    HELPER.inventory(root)
+                                else:
+                                    HELPER.copy_source(root, self.base / (root.name + "-copy"))
+                        self.assertTrue(added)
+                        self.assertEqual(set(x.name for x in root.iterdir()), {"a.txt", "z.txt", added_name})
+
+    def test_processed_entry_removed_with_colliding_metadata_is_refused(self):
+        for mode in ("inventory", "copy"):
+            with self.subTest(mode=mode):
+                root = self.base / ("remove-" + mode)
+                root.mkdir()
+                processed = root / "a-processed.txt"
+                processed.write_bytes(b"already read before removal\n")
+                trigger = root / "z-trigger.txt"
+                trigger.write_bytes(b"later file triggers real removal\n")
+                trigger_inode = trigger.stat().st_ino
+                before = root.stat()
+                real_fstat, real_read = os.fstat, os.read
+                removed = []
+
+                def colliding_metadata(fd):
+                    value = real_fstat(fd)
+                    return before if (value.st_dev, value.st_ino) == (before.st_dev, before.st_ino) else value
+
+                def remove_processed_after_read(fd, count):
+                    data = real_read(fd, count)
+                    if data and real_fstat(fd).st_ino == trigger_inode and not removed:
+                        removed.append(True)
+                        processed.unlink()
+                    return data
+
+                with mock.patch.object(HELPER.os, "fstat", side_effect=colliding_metadata), \
+                        mock.patch.object(HELPER.os, "read", side_effect=remove_processed_after_read):
+                    with self.assertRaisesRegex(ValueError, "source directory entries changed"):
+                        if mode == "inventory":
+                            HELPER.inventory(root)
+                        else:
+                            HELPER.copy_source(root, self.base / (root.name + "-copy"))
+                self.assertTrue(removed)
+                self.assertFalse(processed.exists())
+
+    def test_changed_enumeration_order_with_same_entries_is_accepted(self):
+        self.write("a-first.txt")
+        self.write("z-last.txt")
+        expected = HELPER.inventory(self.source)
+        real_listdir = os.listdir
+        calls = {}
+
+        def alternate_order(fd):
+            names = real_listdir(fd)
+            value = os.fstat(fd)
+            key = value.st_dev, value.st_ino
+            calls[key] = calls.get(key, 0) + 1
+            return list(reversed(sorted(names))) if calls[key] % 2 else sorted(names)
+
+        with mock.patch.object(HELPER.os, "listdir", side_effect=alternate_order):
+            self.assertEqual(HELPER.inventory(self.source), expected)
+            self.assertEqual(HELPER.copy_source(self.source, self.base / "copy"), expected)
+        self.assertEqual(HELPER.inventory(self.base / "copy"), expected)
+
+    def test_final_enumeration_error_is_fatal(self):
+        for mode in ("inventory", "copy"):
+            with self.subTest(mode=mode):
+                inode = self.source.stat().st_ino
+                real_listdir = os.listdir
+                calls = []
+
+                def fail_final_listing(fd):
+                    if os.fstat(fd).st_ino == inode:
+                        calls.append(True)
+                        if len(calls) == 2:
+                            raise PermissionError("owned final enumeration failure")
+                    return real_listdir(fd)
+
+                with mock.patch.object(HELPER.os, "listdir", side_effect=fail_final_listing):
+                    with self.assertRaisesRegex(PermissionError, "owned final enumeration failure"):
+                        if mode == "inventory":
+                            HELPER.inventory(self.source)
+                        else:
+                            HELPER.copy_source(self.source, self.base / "copy")
+
     def test_special_files_are_refused(self):
         os.mkfifo(self.source / "unexpected-fifo")
         self.assert_both_refuse()
