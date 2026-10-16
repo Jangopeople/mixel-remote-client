@@ -75,6 +75,23 @@ class WorkflowPythonEncodingTests(unittest.TestCase):
                 self.assertEqual(old_environment["PYTHONIOENCODING"], "cp1252")
 
 
+class WindowsSourceBudgetTests(unittest.TestCase):
+    def test_mandatory_source_budget_covers_the_shipping_source_budget(self):
+        budgets = {}
+        for workflow_name, job_name in (("preflight.yml", "windows-packaging"),
+                                        ("build.yml", "windows")):
+            workflow = (ROOT / ".github/workflows" / workflow_name).read_text(encoding="utf-8")
+            jobs = re.findall(r"^  " + re.escape(job_name) + r":\n(.*?)(?=^  [\w-]+:|\Z)",
+                              workflow, flags=re.M | re.S)
+            self.assertEqual(len(jobs), 1, workflow_name)
+            self.assertIn("        run: bash scripts/test-windows-generated-source.sh\n", jobs[0])
+            limits = re.findall(r"^    timeout-minutes: ([0-9]+)$", jobs[0], flags=re.M)
+            self.assertEqual(len(limits), 1, workflow_name)
+            budgets[workflow_name] = int(limits[0])
+        self.assertGreaterEqual(budgets["preflight.yml"], budgets["build.yml"],
+                                "Mandatory Windows preflight must accommodate the shipping source checks")
+
+
 class PinnedDependencyRetryTests(unittest.TestCase):
     def test_actual_platform_steps_retry_transient_failure_and_preserve_fatal_exit(self):
         workflow = (ROOT / ".github/workflows/build.yml").read_text(encoding="utf-8")
