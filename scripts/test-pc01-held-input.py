@@ -219,6 +219,18 @@ class EvidenceControls(unittest.TestCase):
             rows[3]['highBits']=rows[2]['highBits'];rows[4]['highBits']=rows[2]['highBits']
             with self.assertRaises(ValueError): M.join_case(b,case,rows,event,ui,'e'*64)
 
+    def test_wall_clock_jump_cannot_substitute_for_stable_native_release_duration(self):
+        b,rows,event,ui=evidence('viewer-loss-shift')
+        rows[-1]['monotonicMilliseconds']=rows[-2]['monotonicMilliseconds']+1
+        with self.assertRaisesRegex(ValueError,'independent-auth0-accepted-held-released-sequence'):
+            M.join_case(b,'viewer-loss-shift',rows,event,ui,'e'*64)
+
+    def test_foreground_session_boolean_cannot_substitute_for_actual_session(self):
+        b,rows,event,ui=evidence('viewer-loss-shift')
+        rows[0]['foregroundSession']=True
+        with self.assertRaisesRegex(ValueError,'accessible-actual-input-desktop-and-foreground'):
+            M.join_case(b,'viewer-loss-shift',rows,event,ui,'e'*64)
+
     def test_late_revival_after_up_refused(self):
         b,rows,event,ui=evidence(M.CASES[0]);rows.append(sample(b,M.CASES[0],26,1,rows[2]['highBits']))
         with self.assertRaisesRegex(ValueError,'late-input'): M.join_case(b,M.CASES[0],rows,event,ui,'e'*64)

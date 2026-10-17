@@ -220,7 +220,8 @@ def verify_observation(binding, r, expected_count=None):
     parse_time(r.get('observedAtUTC'))
     need(r.get('inputDesktop') == 'Default' and r.get('observerDesktop') == 'Default'
          and positive(r.get('foregroundPid')) and positive(r.get('foregroundBirth'))
-         and r.get('foregroundSid') == h['Sid'] and r.get('foregroundSession') == h['Session']
+         and r.get('foregroundSid') == h['Sid'] and type(r.get('foregroundSession')) is int
+         and r['foregroundSession'] == h['Session']
          and type(r.get('foregroundIntegrity')) is int and r['foregroundIntegrity'] == 8192
          and r.get('foregroundElevated') is False
          and r.get('desktopAccess') == 'existing-token-dacl-hook-and-journal',
@@ -249,7 +250,8 @@ def stable_release(rows):
         context=tuple(row[k] for k in fields)
         if context!=prior:
             first=row;prior=context
-        elif (parse_time(row['observedAtUTC'])-parse_time(first['observedAtUTC'])).total_seconds()>=1:
+        elif ((parse_time(row['observedAtUTC'])-parse_time(first['observedAtUTC'])).total_seconds()>=1
+              and row['monotonicMilliseconds']-first['monotonicMilliseconds']>=1000):
             return True
     return False
 
