@@ -662,7 +662,7 @@ class UriRoutingTests(unittest.TestCase):
 class ColdWindowsControls(unittest.TestCase):
     """Execute only extracted PowerShell predicates, with no native API calls."""
 
-    def invoke(self, body, names):
+    def invoke(self, body, names, driver_newlines=(None,)):
         pwsh = shutil.which('pwsh')
         if not pwsh:
             self.skipTest('PowerShell predicate engine unavailable; Windows CI remains required')
@@ -681,11 +681,12 @@ foreach($name in __NAMES__){
 }
 '''.replace('__SOURCE__', str(BASE / 'test-support-cold-windows.ps1').replace("'", "''"))
             prefix = prefix.replace('__NAMES__', '@(' + ','.join("'" + name + "'" for name in names) + ')')
-            script.write_text(prefix + body, encoding='utf-8-sig')
-            completed = subprocess.run([pwsh, '-NoProfile', '-NonInteractive', '-File', str(script)],
-                                       capture_output=True, text=True, encoding='utf-8', timeout=20)
-            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
-            self.assertIn('PASS:', completed.stdout)
+            for newline in driver_newlines:
+                script.write_text(prefix + body, encoding='utf-8-sig', newline=newline)
+                completed = subprocess.run([pwsh, '-NoProfile', '-NonInteractive', '-File', str(script)],
+                                           capture_output=True, text=True, encoding='utf-8', timeout=20)
+                self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+                self.assertIn('PASS:', completed.stdout)
 
     def test_actual_identity_rejects_high_foreign_pid_sid_session_path_and_birth(self):
         self.invoke(r'''
@@ -794,6 +795,8 @@ $new=@'
     if ($elapsedSeconds -ge 95) { break }
 '@
 $source=$source.Replace("`r`n","`n")
+$old=$old.Replace("`r`n","`n")
+$new=$new.Replace("`r`n","`n")
 if(($source.Split(@($new),[StringSplitOptions]::None).Count-1)-ne 1-or $source.Contains($old)) { throw 'Exact current clock snapshot source required' }
 $previous=$source.Replace($new,$old)
 function Read-ClockRecordingStatements([string]$text,[bool]$single){
@@ -842,7 +845,7 @@ foreach($case in @('cross-boundary','exact-boundary','already-past')){
  }
 }
 'PASS: original actual two-read loop records94.999 then stops at95.001; current actual single snapshot records its own >=95 boundary without padding; exact/past boundaries pass.'
-'''.replace('__SOURCE__', str(BASE / 'test-support-cold-windows.ps1').replace("'", "''")), [])
+'''.replace('__SOURCE__', str(BASE / 'test-support-cold-windows.ps1').replace("'", "''")), [], driver_newlines=('\n', '\r\n'))
 
     def test_frozen_launcher_and_cold_gate_workflow_required_order(self):
         workflow = (BASE.parent / '.github/workflows/build.yml').read_text()
