@@ -3,6 +3,7 @@ name = "mixel-receiver-input-component"
 version = "0.0.0"
 edition = "2021"
 [dependencies]
+bytes = "=1.10.1"
 protobuf = { version = "=3.7.2", features = ["with-bytes"] }
 uuid = { version = "=1.16.0", features = ["v4"] }
 [target.'cfg(target_os = "macos")'.dependencies]
