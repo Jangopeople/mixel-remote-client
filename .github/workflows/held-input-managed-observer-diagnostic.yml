@@ -48,10 +48,11 @@ jobs:
           }
           $identity = Get-Content -LiteralPath 'scripts/fixtures/pc01-held-input/ReadOnlyIdentity.cs' -Raw -Encoding UTF8
           $keys = Get-Content -LiteralPath 'scripts/fixtures/pc01-held-input/KeyState.cs' -Raw -Encoding UTF8
-          # Match the actual Initialize function's compile sequence. No observer
-          # function or compiled type method is invoked by this diagnostic.
-          Add-Type -TypeDefinition $identity -CompilerOptions '/warnaserror+' -ErrorAction Stop
-          Add-Type -TypeDefinition $keys -CompilerOptions '/warnaserror+' -ErrorAction Stop
+          # The parser above permits declarations only. Register them, then run
+          # the same exact-source compiler helper as Initialize. No compiled
+          # observation method, native call or admission action is invoked.
+          . $script
+          Compile-MixelHeldManagedSources $identity $keys
           $tree = & git rev-parse 'HEAD^{tree}'
           if($LASTEXITCODE -ne 0) { throw 'Source tree identity unavailable' }
           [ordered]@{source=$env:GITHUB_SHA;tree=$tree;engine=$PSVersionTable.PSVersion.ToString();

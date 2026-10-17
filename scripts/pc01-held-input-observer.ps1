@@ -13,6 +13,36 @@ function Get-MixelHeldLogicalSHA([string]$Text) {
     [Text.Encoding]::UTF8.GetBytes($v)))).Replace('-','').ToLowerInvariant() }
   finally { $h.Dispose() }
 }
+function Compile-MixelHeldManagedSources([string]$IdentitySource,[string]$KeyStateSource) {
+  if((Get-MixelHeldLogicalSHA $IdentitySource) -cne
+     '1b0b4fd52a307f2076e3296722b8891fbe11c05b3361be3fce0f47ed5433efe8' -or
+     (Get-MixelHeldLogicalSHA $KeyStateSource) -cne 'eb64c8b3f35be4c3f11ff743e2912f767e45c1b22f91ca5c92bf2f24127374ac') {
+    throw 'Exact read-only source literals required'
+  }
+  if(('MixelPc01ReadOnly070' -as [type]) -or ('MixelHeldInputReadOnly' -as [type])) {
+    throw 'Fresh PowerShell process required for exact managed sources'
+  }
+  # Windows PowerShell 5.1 has no Add-Type -CompilerOptions. Compile the two
+  # exact source units together so the key observer resolves the identity type.
+  # Compilation loads definitions only; no compiled observation method runs.
+  $provider=New-Object Microsoft.CSharp.CSharpCodeProvider
+  try {
+    $options=New-Object System.CodeDom.Compiler.CompilerParameters
+    $options.GenerateExecutable=$false
+    $options.GenerateInMemory=$true
+    $options.TreatWarningsAsErrors=$true
+    $options.WarningLevel=4
+    [void]$options.ReferencedAssemblies.Add('System.dll')
+    [void]$options.ReferencedAssemblies.Add('System.Core.dll')
+    $result=$provider.CompileAssemblyFromSource($options,[string[]]@($IdentitySource,$KeyStateSource))
+    if($result.Errors.Count -ne 0) {
+      $diagnostic=($result.Errors|ForEach-Object { $_.ToString() }) -join "`n"
+      throw ('Exact managed source compilation failed: '+$diagnostic)
+    }
+    [void]$result.CompiledAssembly.GetType('MixelPc01ReadOnly070',$true,$false)
+    [void]$result.CompiledAssembly.GetType('MixelHeldInputReadOnly',$true,$false)
+  } finally { $provider.Dispose() }
+}
 function Initialize-MixelHeldObserver([string]$RootAdmissionJson,[string]$ExpectedSHA256,
                                     [string]$IdentitySource,[string]$KeyStateSource) {
   if($ExpectedSHA256 -cnotmatch '\A[0-9a-f]{64}\z') { throw 'Root hash required' }
@@ -43,13 +73,7 @@ function Initialize-MixelHeldObserver([string]$RootAdmissionJson,[string]$Expect
     Main=[pscustomobject]@{Path=$H.MainPath;Sha256=$H.MainSHA256};
     Core=[pscustomobject]@{Path=$H.CorePath;Sha256=$H.CoreSHA256}}
   Assert-HeldHostBinding $B
-  if((Get-MixelHeldLogicalSHA $IdentitySource) -cne
-     '1b0b4fd52a307f2076e3296722b8891fbe11c05b3361be3fce0f47ed5433efe8' -or
-     (Get-MixelHeldLogicalSHA $KeyStateSource) -cne 'eb64c8b3f35be4c3f11ff743e2912f767e45c1b22f91ca5c92bf2f24127374ac') {
-    throw 'Exact read-only source literals required'
-  }
-  Add-Type -TypeDefinition $IdentitySource -CompilerOptions '/warnaserror+' -ErrorAction Stop
-  Add-Type -TypeDefinition $KeyStateSource -CompilerOptions '/warnaserror+' -ErrorAction Stop
+  Compile-MixelHeldManagedSources $IdentitySource $KeyStateSource
   return $B
 }
 function Assert-HeldHostBinding($B) {
