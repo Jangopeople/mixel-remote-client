@@ -140,6 +140,7 @@ jobs:
           python3 scripts/test-release-pipeline.py
           python3 scripts/test-receiver-input-integration.py
           python3 scripts/test-app-rust-check.py
+          python3 scripts/test-safe-pipeline-copy.py
           python3 scripts/test-flutter-sdk-pipeline.py
           python3 scripts/test-support-url-log-privacy.py
           python3 scripts/test-support-launch-macos-concurrency-controls.py --evidence-dir "$RUNNER_TEMP/mixel-macos-concurrency-source"

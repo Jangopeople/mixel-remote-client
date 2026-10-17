@@ -30,7 +30,7 @@
         },
         {
           "old": "        run: |\n          python3 scripts/test-release-pipeline.py\n          python3 scripts/test-flutter-sdk-pipeline.py\n          python3 scripts/test-support-url-log-privacy.py\n",
-          "new": "        run: |\n          python3 scripts/test-release-pipeline.py\n          python3 scripts/test-receiver-input-integration.py\n          python3 scripts/test-app-rust-check.py\n          python3 scripts/test-flutter-sdk-pipeline.py\n          python3 scripts/test-support-url-log-privacy.py\n"
+          "new": "        run: |\n          python3 scripts/test-release-pipeline.py\n          python3 scripts/test-receiver-input-integration.py\n          python3 scripts/test-app-rust-check.py\n          python3 scripts/test-safe-pipeline-copy.py\n          python3 scripts/test-flutter-sdk-pipeline.py\n          python3 scripts/test-support-url-log-privacy.py\n"
         },
         {
           "old": "          RDREPO: ./rustdesk\n          BRANDING: ./branding\n      - name: Prove actual input components and required original failures\n        run: |\n          python3 scripts/fixtures/input-lifecycle/native-input/native_input_gate.py \\\n            --source rustdesk --output \"$RUNNER_TEMP/mixel-native-input\" --online\n",
@@ -75,7 +75,7 @@
         },
         {
           "old": "        run: |\n          python3 scripts/test-release-pipeline.py\n          python3 scripts/test-flutter-sdk-pipeline.py\n          python3 scripts/test-support-url-log-privacy.py\n",
-          "new": "        run: |\n          python3 scripts/test-release-pipeline.py\n          python3 scripts/test-receiver-input-integration.py\n          python3 scripts/test-app-rust-check.py\n          python3 scripts/test-flutter-sdk-pipeline.py\n          python3 scripts/test-support-url-log-privacy.py\n"
+          "new": "        run: |\n          python3 scripts/test-release-pipeline.py\n          python3 scripts/test-receiver-input-integration.py\n          python3 scripts/test-app-rust-check.py\n          python3 scripts/test-safe-pipeline-copy.py\n          python3 scripts/test-flutter-sdk-pipeline.py\n          python3 scripts/test-support-url-log-privacy.py\n"
         },
         {
           "old": "        run: bash -n scripts/apply-branding.sh scripts/local/sign-and-publish-macos.sh\n  windows-packaging:\n    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_source_runner == 'windows-2025' && 'windows-2025' || 'windows-2022' }}\n    timeout-minutes: 240\n",
