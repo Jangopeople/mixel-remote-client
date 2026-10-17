@@ -16,7 +16,8 @@ HERE = Path(__file__).absolute().parent
 PLAN = HERE / 'receiver-input-integration-plan.json'
 BASE_OWNERS = ('patch-support-receiver-input.py', 'patch-support-receiver-native.py')
 OWNERS = (*BASE_OWNERS, 'patch-support-receiver-uinput.py',
-          'patch-support-receiver-uinput-deps.py', 'patch-support-receiver-sas.py')
+          'patch-support-receiver-uinput-deps.py', 'patch-support-receiver-sas.py',
+          'patch-support-receiver-custodian.py')
 LATER_OWNERS = OWNERS[3:]
 
 

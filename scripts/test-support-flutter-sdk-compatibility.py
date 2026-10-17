@@ -484,6 +484,8 @@ def full_branding(out, upstream, bash):
                  "patch-support-receiver-uinput.py","support-receiver-uinput-plan.json",
                  "support-receiver-uinput.rs","support-receiver-uinput-core.rs","support-receiver-uinput-kernel.rs",
                  "patch-support-receiver-sas.py","support-receiver-sas-plan.json","support-receiver-sas-windows.rs",
+                 "patch-support-receiver-custodian.py","support-receiver-custodian-plan.json",
+                 "support-receiver-custodian-windows.rs","support-receiver-custodian-epoch-windows.rs",
                  "patch-support-receiver-uinput-deps.py","support-receiver-uinput-deps-plan.json",
                  'patch-support-keyboard-default.py',
                  'patch-support-uinput-scroll.py',

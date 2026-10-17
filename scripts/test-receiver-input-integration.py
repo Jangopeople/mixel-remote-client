@@ -4,6 +4,7 @@ import contextlib
 import hashlib
 import importlib.util
 from pathlib import Path
+import re
 import tempfile
 import unittest
 from unittest import mock
@@ -29,6 +30,40 @@ class Controls(unittest.TestCase):
             self.assertNotIn('if:', step)
             self.assertNotIn('continue-on-error', step)
             self.assertNotIn('||', step)
+        for name, job_name in (('build.yml', 'input-regressions'), ('preflight.yml', 'receiver-native')):
+            text = (ROOT / '.github/workflows' / name).read_text()
+            job = text.split('  ' + job_name + ':\n', 1)[1]
+            job = re.split(r'\n  [a-zA-Z0-9_-]+:\n', job, maxsplit=1)[0]
+            inert = job.split('      - name: Verify Windows custody source and inert component preparation\n', 1)[1].split('      - ', 1)[0]
+            self.assertEqual(inert.count('python3 scripts/test-receiver-custodian.py\n'), 1)
+            self.assertEqual(inert.count('python3 scripts/fixtures/receiver-custodian-native/prepare.py \\\n'), 1)
+            self.assertIn('--output "$RUNNER_TEMP/mixel-receiver-custodian-prepared"\n', inert)
+            self.assertNotIn('if:', inert)
+            native = job.split('      - name: Prove actual Windows helper custody on the complete generated source\n', 1)[1].split('      - ', 1)[0]
+            self.assertIn("if: runner.os == 'Windows'\n", native)
+            self.assertIn('RDREPO: ./rustdesk\n', native)
+            self.assertIn('source scripts/use-windows-msvc-bash.sh\n', native)
+            self.assertEqual(native.count('python scripts/fixtures/receiver-custodian-native/prepare.py \\\n'), 1)
+            self.assertIn('--output "$RUNNER_TEMP/mixel-receiver-custodian-native" --source-root "$RDREPO" --run\n', native)
+            for step in (inert, native):
+                self.assertNotIn('continue-on-error', step)
+                self.assertNotIn('||', step)
+            for pattern in ('mixel-receiver-custodian-prepared/SOURCE-BINDINGS.json',
+                            'mixel-receiver-custodian-prepared/PREPARED-MANIFEST.json',
+                            'mixel-receiver-custodian-native/*.json',
+                            'mixel-receiver-custodian-native/*.jsonl',
+                            'mixel-receiver-custodian-native/*.stdout',
+                            'mixel-receiver-custodian-native/*.stderr',
+                            '!${{ runner.temp }}/mixel-receiver-custodian-native/target/**'):
+                self.assertIn(pattern, job)
+            if name == 'preflight.yml':
+                self.assertIn('timeout-minutes: 25\n', job)
+                self.assertLess(job.index('Resolve the pinned complete Windows custody source'), job.index('Fetch pinned complete Windows custody source'))
+                self.assertLess(job.index('Fetch pinned complete Windows custody source'), job.index('Apply complete reviewed Windows custody source ownership'))
+                self.assertLess(job.index('Apply complete reviewed Windows custody source ownership'), job.index('Prove actual Windows helper custody'))
+                self.assertIn('python scripts/release-artifacts.py config\n', job)
+                self.assertIn('UPSTREAM_VERSION: ${{ steps.custody_config.outputs.upstream_version }}\n', job)
+                self.assertIn('git -c core.autocrlf=false clone --depth 1 --branch "$UPSTREAM_VERSION" --recurse-submodules', job)
 
     def test_actual_whole_prior_files_recover_and_compose_without_other_changes(self):
         for name, row in P.plan()['files'].items():
@@ -194,6 +229,7 @@ class Controls(unittest.TestCase):
                 events.append(('plan' if check else 'inverse', self.name, root))
         self_outer = self
         names = tuple(reversed(P.LATER_OWNERS))
+        self.assertEqual(names[0], 'patch-support-receiver-custodian.py')
         self.assertTrue(names)
         owners = {name: Outer(name) for name in names}
         @contextlib.contextmanager

@@ -162,6 +162,11 @@ jobs:
         run: |
           python3 scripts/test-receiver-sas.py --source rustdesk
           python3 scripts/fixtures/receiver-sas-native/test_prepare.py
+      - name: Verify Windows custody source and inert component preparation
+        run: |
+          python3 scripts/test-receiver-custodian.py
+          python3 scripts/fixtures/receiver-custodian-native/prepare.py \
+            --output "$RUNNER_TEMP/mixel-receiver-custodian-prepared"
       - name: Activate Windows component linker
         if: runner.os == 'Windows'
         shell: pwsh
@@ -172,6 +177,14 @@ jobs:
           source scripts/use-windows-msvc-bash.sh
           python scripts/fixtures/receiver-sas-native/prepare.py \
             --output "$RUNNER_TEMP/mixel-receiver-sas" --run
+      - name: Prove actual Windows helper custody on the complete generated source
+        if: runner.os == 'Windows'
+        env:
+          RDREPO: ./rustdesk
+        run: |
+          source scripts/use-windows-msvc-bash.sh
+          python scripts/fixtures/receiver-custodian-native/prepare.py \
+            --output "$RUNNER_TEMP/mixel-receiver-custodian-native" --source-root "$RDREPO" --run
       - name: Prove actual input components and required original failures
         run: |
           python3 scripts/test-support-receiver-input.py --source rustdesk
@@ -203,6 +216,13 @@ jobs:
             ${{ runner.temp }}/mixel-receiver-sas/*/stdout
             ${{ runner.temp }}/mixel-receiver-sas/*/stderr
             ${{ runner.temp }}/mixel-receiver-sas/*/*.json
+            ${{ runner.temp }}/mixel-receiver-custodian-prepared/SOURCE-BINDINGS.json
+            ${{ runner.temp }}/mixel-receiver-custodian-prepared/PREPARED-MANIFEST.json
+            ${{ runner.temp }}/mixel-receiver-custodian-native/*.json
+            ${{ runner.temp }}/mixel-receiver-custodian-native/*.jsonl
+            ${{ runner.temp }}/mixel-receiver-custodian-native/*.stdout
+            ${{ runner.temp }}/mixel-receiver-custodian-native/*.stderr
+            !${{ runner.temp }}/mixel-receiver-custodian-native/target/**
             ${{ runner.temp }}/mixel-native-input/
             !${{ runner.temp }}/mixel-native-input/target/**
           if-no-files-found: ignore
@@ -258,6 +278,8 @@ jobs:
         working-directory: rustdesk
         run: |
           python3 "$GITHUB_WORKSPACE/scripts/receiver_input_integration_projection.py" --root . --check-priors
+          python3 "$GITHUB_WORKSPACE/scripts/patch-support-receiver-custodian.py" --root . --restore --check
+          python3 "$GITHUB_WORKSPACE/scripts/patch-support-receiver-custodian.py" --root . --restore
           python3 "$GITHUB_WORKSPACE/scripts/patch-support-receiver-sas.py" --root . --restore --check
           python3 "$GITHUB_WORKSPACE/scripts/patch-support-receiver-sas.py" --root . --restore
           python3 "$GITHUB_WORKSPACE/scripts/patch-support-receiver-uinput-deps.py" --root . --restore --check
@@ -282,6 +304,7 @@ jobs:
           python3 "$GITHUB_WORKSPACE/scripts/patch-support-receiver-uinput.py" --root .
           python3 "$GITHUB_WORKSPACE/scripts/patch-support-receiver-uinput-deps.py" --root .
           python3 "$GITHUB_WORKSPACE/scripts/patch-support-receiver-sas.py" --root .
+          python3 "$GITHUB_WORKSPACE/scripts/patch-support-receiver-custodian.py" --root .
           pushd flutter && sed -i -e 's/extended_text: 14.0.0/extended_text: 13.0.0/g' pubspec.yaml && flutter pub get && popd
           ~/.cargo/bin/flutter_rust_bridge_codegen \
             --rust-input ./src/flutter_ffi.rs \

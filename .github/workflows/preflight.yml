@@ -44,7 +44,7 @@ jobs:
   receiver-native:
     name: receiver-native (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -93,6 +93,12 @@ jobs:
         run: |
           python3 scripts/test-receiver-sas.py
           python3 scripts/fixtures/receiver-sas-native/test_prepare.py
+      - name: Verify Windows custody source and inert component preparation
+        shell: bash
+        run: |
+          python3 scripts/test-receiver-custodian.py
+          python3 scripts/fixtures/receiver-custodian-native/prepare.py \
+            --output "$RUNNER_TEMP/mixel-receiver-custodian-prepared"
       - name: Activate Windows component linker
         if: runner.os == 'Windows'
         shell: pwsh
@@ -104,6 +110,37 @@ jobs:
           source scripts/use-windows-msvc-bash.sh
           python scripts/fixtures/receiver-sas-native/prepare.py \
             --output "$RUNNER_TEMP/mixel-receiver-sas" --run
+      - name: Resolve the pinned complete Windows custody source
+        if: runner.os == 'Windows'
+        id: custody_config
+        shell: pwsh
+        run: |
+          python scripts/release-artifacts.py config
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned Windows custody source configuration failed.' }
+      - name: Fetch pinned complete Windows custody source
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          UPSTREAM_VERSION: ${{ steps.custody_config.outputs.upstream_version }}
+        run: |
+          git -c core.autocrlf=false clone --depth 1 --branch "$UPSTREAM_VERSION" --recurse-submodules \
+            https://github.com/rustdesk/rustdesk.git rustdesk
+      - name: Apply complete reviewed Windows custody source ownership
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          RDREPO: ./rustdesk
+          BRANDING: ./branding
+        run: ./scripts/apply-branding.sh
+      - name: Prove actual Windows helper custody on the complete generated source
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          RDREPO: ./rustdesk
+        run: |
+          source scripts/use-windows-msvc-bash.sh
+          python scripts/fixtures/receiver-custodian-native/prepare.py \
+            --output "$RUNNER_TEMP/mixel-receiver-custodian-native" --source-root "$RDREPO" --run
       - name: Compile and exercise exact receiver capability component
         if: ${{ !cancelled() && steps.receiver_source.outcome == 'success' }}
         shell: bash
@@ -128,6 +165,13 @@ jobs:
             ${{ runner.temp }}/mixel-receiver-sas/*/stdout
             ${{ runner.temp }}/mixel-receiver-sas/*/stderr
             ${{ runner.temp }}/mixel-receiver-sas/*/*.json
+            ${{ runner.temp }}/mixel-receiver-custodian-prepared/SOURCE-BINDINGS.json
+            ${{ runner.temp }}/mixel-receiver-custodian-prepared/PREPARED-MANIFEST.json
+            ${{ runner.temp }}/mixel-receiver-custodian-native/*.json
+            ${{ runner.temp }}/mixel-receiver-custodian-native/*.jsonl
+            ${{ runner.temp }}/mixel-receiver-custodian-native/*.stdout
+            ${{ runner.temp }}/mixel-receiver-custodian-native/*.stderr
+            !${{ runner.temp }}/mixel-receiver-custodian-native/target/**
           if-no-files-found: error
           retention-days: 14
   release-pipeline:
