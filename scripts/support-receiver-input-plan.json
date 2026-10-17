@@ -22,11 +22,11 @@
     "final": {
       "src/server/connection.rs": "59f9fe7114c954c7437e83266f311ed6b51dec4c902982d1e3de5c21196c4c0d",
       "src/server.rs": "4fb7df5363849646f2ec0352ffa7b3c04e69fca0edb5c178801cdcfce1921f01",
-      "src/ipc.rs": "01816ea9cc025b38533029209c79da2a508fdd8413e11c19e9f9cb8429d15c76",
-      "src/server/portable_service.rs": "855171128d6036cbd0cb9aedf52b56eadce2e484981ae335b60f85ec22d7dacf",
+      "src/ipc.rs": "28d2226b7af121aa64616d6e71942f91e35a061a3ad2ec8d19b6fdf198dad05d",
+      "src/server/portable_service.rs": "b31e4c629b872c82ced88baffe10d3c2694df4ff578fab77d6c7c0880dc4c1a5",
       "src/platform/windows.rs": "7efe6ac71743538ad7f0764c56fbb8f376aa3ba4039d87236cd67ac5026c6d08",
-      "src/server/mixel_receiver_input.rs": "929a687bbc066295bfae88ece02059ce8ab7f573e2849d078fc15d79af29c7a1",
-      "src/server/mixel_receiver_input_windows.rs": "4ae48a3fe9b68318db722c9bc58e9afe9758ca66293306d7630fd32e47f8a271"
+      "src/server/mixel_receiver_input.rs": "3c1f8033b98ec2d819aedf82beee5b31ef470edcee6dacf0464b1dff04751e95",
+      "src/server/mixel_receiver_input_windows.rs": "9f3f1e554bcc9c20589dc0a0172df7ca759d26532221e58e9e6d8bb2bf4a5f75"
     },
     "previous": {
       "src/server/connection.rs": "5a78e048ce5a90e8aa491ee77dfbbe413817cb7e71d8e225558d9f0795d2d0b4",
@@ -39,8 +39,8 @@
     }
   },
   "templates": {
-    "src/server/mixel_receiver_input.rs": "929a687bbc066295bfae88ece02059ce8ab7f573e2849d078fc15d79af29c7a1",
-    "src/server/mixel_receiver_input_windows.rs": "4ae48a3fe9b68318db722c9bc58e9afe9758ca66293306d7630fd32e47f8a271"
+    "src/server/mixel_receiver_input.rs": "3c1f8033b98ec2d819aedf82beee5b31ef470edcee6dacf0464b1dff04751e95",
+    "src/server/mixel_receiver_input_windows.rs": "9f3f1e554bcc9c20589dc0a0172df7ca759d26532221e58e9e6d8bb2bf4a5f75"
   },
   "changes": {
     "src/server/connection.rs": [
@@ -171,6 +171,10 @@
       [
         "        crate::server::mixel_receiver_input::pipe_peer(self.inner.get_ref().as_raw_handle().cast(), server_peer)\n    }\n}",
         "        crate::server::mixel_receiver_input::pipe_peer(self.inner.get_ref().as_raw_handle().cast(), server_peer)\n    }\n    pub(crate) fn receiver_pipe_publisher(&self, transferred: Option<u64>) -> Option<crate::server::mixel_receiver_input::Peer> {\n        use std::os::windows::io::AsRawHandle;\n        crate::server::mixel_receiver_input::pipe_publisher(self.inner.get_ref().as_raw_handle().cast(), transferred)\n    }\n}"
+      ],
+      [
+        "    ReceiverInputRefused(String),",
+        "    ReceiverInputRefused(String),\n    ReceiverBlock((String,String,i32,u8,String)),\n    ReceiverBlockReply((String,String,bool)),\n    ReceiverRetire((String,String,u8)),"
       ]
     ],
     "src/server/portable_service.rs": [
@@ -253,6 +257,54 @@
       [
         "                                                                nack = 0;\n                                                                *RUNNING.lock().unwrap() = true;",
         "                                                                if !crate::server::mixel_receiver_input::startup_confirmed(&receiver_peer, || { *RUNNING.lock().unwrap() = true; }) { break; }\n                                                                nack = 0;"
+      ],
+      [
+        "                let Some(receiver_peer) = stream.receiver_pipe_publisher(transferred) else { return; };",
+        "                let Some(receiver_peer) = stream.receiver_pipe_publisher(transferred) else { return; };\n                let (receiver_reply_tx, mut receiver_replies) = mpsc::channel::<Data>(256);\n                let receiver_reply_failed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));\n                let receiver_reply_failed_writer = receiver_reply_failed.clone();\n                let receiver_reply: std::sync::Arc<dyn Fn(crate::server::mixel_receiver_input::PortableReply)->bool+Send+Sync> = std::sync::Arc::new(move |reply| {\n                    use crate::server::mixel_receiver_input::PortableReply;\n                    let data = match reply { PortableReply::Refused(owner) => ReceiverInputRefused(owner), PortableReply::Block(owner,request,ok) => ReceiverBlockReply((owner,request,ok)) };\n                    let sent = receiver_reply_tx.try_send(Data::DataPortableService(data)).is_ok();\n                    if !sent { receiver_reply_failed_writer.store(true,std::sync::atomic::Ordering::SeqCst); }\n                    sent\n                });"
+      ],
+      [
+        "                                    ReceiverInput(packet) => {\n                                        let owner = packet.0.clone();\n                                        if !crate::server::mixel_receiver_input::receive(packet, &receiver_peer) {\n                                            stream.send(&Data::DataPortableService(ReceiverInputRefused(owner))).await.ok();\n                                        }\n                                    },",
+        "                                    ReceiverInput(packet) => {\n                                        let owner = packet.0.clone();\n                                        if !crate::server::mixel_receiver_input::receive_async(packet, &receiver_peer, receiver_reply.clone()) {\n                                            if !receiver_reply(crate::server::mixel_receiver_input::PortableReply::Refused(owner)) { break; }\n                                        }\n                                    },\n                                    ReceiverBlock((owner,target,conn,role,request)) => {\n                                        if !crate::server::mixel_receiver_input::receive_block(owner.clone(),target,conn,role,request.clone(),&receiver_peer,receiver_reply.clone()) {\n                                            if !receiver_reply(crate::server::mixel_receiver_input::PortableReply::Block(owner,request,false)) { break; }\n                                        }\n                                    },\n                                    ReceiverRetire((owner,target,role)) => {\n                                        crate::server::mixel_receiver_input::receive_retire(owner,target,role,&receiver_peer);\n                                    },"
+      ],
+      [
+        "                        _ = timer.tick() => {\n                            nack+=1;",
+        "                        Some(reply) = receiver_replies.recv() => {\n                            if stream.send(&reply).await.is_err() { break; }\n                        }\n                        _ = timer.tick() => {\n                            if receiver_reply_failed.load(std::sync::atomic::Ordering::SeqCst) { break; }\n                            nack+=1;"
+      ],
+      [
+        "        static ref SENDER : Mutex<mpsc::Sender<ipc::Data>> = Mutex::new(client::start_ipc_server());",
+        "        static ref SENDER : Mutex<mpsc::Sender<ipc::Data>> = Mutex::new(client::start_ipc_server());\n        static ref CONTROL_SENDER: Mutex<Option<mpsc::Sender<ipc::Data>>> = Mutex::new(None);"
+      ],
+      [
+        "        let (tx, rx) = mpsc::channel::<Data>(256);\n        std::thread::spawn(move || start_ipc_server_async(rx));",
+        "        let (tx, rx) = mpsc::channel::<Data>(256);\n        let (control_tx, control_rx) = mpsc::channel::<Data>(128);\n        *CONTROL_SENDER.lock().unwrap() = Some(control_tx);\n        std::thread::spawn(move || start_ipc_server_async(rx,control_rx));"
+      ],
+      [
+        "async fn start_ipc_server_async(rx: mpsc::Receiver<Data>)",
+        "async fn start_ipc_server_async(rx: mpsc::Receiver<Data>, control: mpsc::Receiver<Data>)"
+      ],
+      [
+        "        let rx = Arc::new(tokio::sync::Mutex::new(rx));",
+        "        let rx = Arc::new(tokio::sync::Mutex::new((rx,control)));"
+      ],
+      [
+        "                                        let mut rx = rx_clone.lock().await;",
+        "                                        let mut receivers = rx_clone.lock().await;\n                                        let (rx, control) = &mut *receivers;"
+      ],
+      [
+        "                                                Some(data) = rx.recv() => {",
+        "                                                Some(data) = control.recv() => {\n                                                    if stream.send(&data).await.is_err() { break; }\n                                                }\n                                                Some(data) = rx.recv() => {"
+      ],
+      [
+        "                                                            ReceiverInputRefused(owner) => { crate::server::mixel_receiver_input::portable_refused(&owner); },",
+        "                                                            ReceiverInputRefused(owner) => { crate::server::mixel_receiver_input::portable_refused(&owner); },\n                                                            ReceiverBlockReply((owner,request,ok)) => { crate::server::mixel_receiver_input::block_reply(&owner,&request,ok,&receiver_peer); },"
+      ],
+      [
+        "    pub(crate) fn send_receiver_input(token:",
+        "    fn receiver_control(data: DataPortableService) -> bool {\n        // Initialize the data listener once before consulting its control sender.\n        { let _initialized = SENDER.lock().unwrap(); }\n        CONTROL_SENDER.lock().unwrap().as_ref().map(|sender| sender.try_send(Data::DataPortableService(data)).is_ok()).unwrap_or(false)\n    }\n    pub(crate) fn send_receiver_block(token:&str,target:&str,conn:i32,role:u8,request:&str)->bool {\n        receiver_control(DataPortableService::ReceiverBlock((token.to_owned(),target.to_owned(),conn,role,request.to_owned())))\n    }\n    pub(crate) fn send_receiver_retire(token:&str,target:&str,role:u8)->bool {\n        receiver_control(DataPortableService::ReceiverRetire((token.to_owned(),target.to_owned(),role)))\n    }\n    pub(crate) fn send_receiver_input(token:"
+      ],
+      [
+        "                        res = stream.next() => {\n                            match res {",
+        "                        res = stream.next() => {\n                            if receiver_reply_failed.load(std::sync::atomic::Ordering::SeqCst) { break; }\n                            match res {"
       ]
     ],
     "src/platform/windows.rs": [
@@ -391,6 +443,10 @@
       [
         "erver_peer: bool) -> Option<crate::server::mixel_receiver_input::Peer> {\n        use std::os::windows::io::AsRawHandle;\n        crate::server::mixel_receiver_input::pipe_peer(self.inner.get_ref().as_raw_handle().cast(), server_peer)\n    }\n    pub(crate) fn receiver_pipe_publisher(&self, transferred: Option<u64>) -> Option<crate::server::mixel_receiver_input::Peer> {\n        use std::os::windows::io::AsRawHandle;\n        crate::server::mixel_receiver_input::pipe_publisher(self.inner.get_ref().as_raw_handle().cast(), transferred)\n    }\n}\n\nimpl<T> ConnectionTmpl<T>\nwhere\n    T: AsyncRead + AsyncWrite + std::marker::Unpin,\n{\n    pub fn new(conn: T) -> Self ",
         "erver_peer: bool) -> Option<crate::server::mixel_receiver_input::Peer> {\n        use std::os::windows::io::AsRawHandle;\n        crate::server::mixel_receiver_input::pipe_peer(self.inner.get_ref().as_raw_handle().cast(), server_peer)\n    }\n}\n\nimpl<T> ConnectionTmpl<T>\nwhere\n    T: AsyncRead + AsyncWrite + std::marker::Unpin,\n{\n    pub fn new(conn: T) -> Self "
+      ],
+      [
+        "nter((Vec<u8>, i32)),\n    Key(Vec<u8>),\n    ReceiverInput((String, String, i32, u8, Vec<u8>, String, u32, bool, bool)),\n    ReceiverInputRefused(String),\n    ReceiverBlock((String,String,i32,u8,String)),\n    ReceiverBlockReply((String,String,bool)),\n    ReceiverRetire((String,String,u8)),\n    ReceiverPublisherHandle(Option<u64>),\n    RequestStart,\n    WillClose,\n    CmShowElevation(bool),\n}\n\n#[derive(Debug",
+        "nter((Vec<u8>, i32)),\n    Key(Vec<u8>),\n    ReceiverInput((String, String, i32, u8, Vec<u8>, String, u32, bool, bool)),\n    ReceiverInputRefused(String),\n    ReceiverPublisherHandle(Option<u64>),\n    RequestStart,\n    WillClose,\n    CmShowElevation(bool),\n}\n\n#[derive(Debug"
       ]
     ],
     "src/server/portable_service.rs": [
@@ -473,6 +529,54 @@
       [
         "ixel_receiver_input::portable_refused(&owner); },\n                                                            Pong => {\n                                                                if !crate::server::mixel_receiver_input::startup_confirmed(&receiver_peer, || { *RUNNING.lock().unwrap() = true; }) { break; }\n                                                                nack = 0;\n                                                            },\n                                                        ",
         "ixel_receiver_input::portable_refused(&owner); },\n                                                            Pong => {\n                                                                nack = 0;\n                                                                *RUNNING.lock().unwrap() = true;\n                                                            },\n                                                        "
+      ],
+      [
+        "::DataPortableService(ReceiverPublisherHandle(handle)))) => handle,\n                    _ => return,\n                };\n                let Some(receiver_peer) = stream.receiver_pipe_publisher(transferred) else { return; };\n                let (receiver_reply_tx, mut receiver_replies) = mpsc::channel::<Data>(256);\n                let receiver_reply_failed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));\n                let receiver_reply_failed_writer = receiver_reply_failed.clone();\n                let receiver_reply: std::sync::Arc<dyn Fn(crate::server::mixel_receiver_input::PortableReply)->bool+Send+Sync> = std::sync::Arc::new(move |reply| {\n                    use crate::server::mixel_receiver_input::PortableReply;\n                    let data = match reply { PortableReply::Refused(owner) => ReceiverInputRefused(owner), PortableReply::Block(owner,request,ok) => ReceiverBlockReply((owner,request,ok)) };\n                    let sent = receiver_reply_tx.try_send(Data::DataPortableService(data)).is_ok();\n                    if !sent { receiver_reply_failed_writer.store(true,std::sync::atomic::Ordering::SeqCst); }\n                    sent\n                });\n                let mut timer =\n                    crate::rustdesk_interval(tokio::time::interval(Duration::from_secs(",
+        "::DataPortableService(ReceiverPublisherHandle(handle)))) => handle,\n                    _ => return,\n                };\n                let Some(receiver_peer) = stream.receiver_pipe_publisher(transferred) else { return; };\n                let mut timer =\n                    crate::rustdesk_interval(tokio::time::interval(Duration::from_secs("
+      ],
+      [
+        "                                 break;\n                                        }\n                                    }\n                                    ReceiverInput(packet) => {\n                                        let owner = packet.0.clone();\n                                        if !crate::server::mixel_receiver_input::receive_async(packet, &receiver_peer, receiver_reply.clone()) {\n                                            if !receiver_reply(crate::server::mixel_receiver_input::PortableReply::Refused(owner)) { break; }\n                                        }\n                                    },\n                                    ReceiverBlock((owner,target,conn,role,request)) => {\n                                        if !crate::server::mixel_receiver_input::receive_block(owner.clone(),target,conn,role,request.clone(),&receiver_peer,receiver_reply.clone()) {\n                                            if !receiver_reply(crate::server::mixel_receiver_input::PortableReply::Block(owner,request,false)) { break; }\n                                        }\n                                    },\n                                    ReceiverRetire((owner,target,role)) => {\n                                        crate::server::mixel_receiver_input::receive_retire(owner,target,role,&receiver_peer);\n                                    },\n                                    // Old protocol has no scope and cannot authorize effects.\n                        ",
+        "                                 break;\n                                        }\n                                    }\n                                    ReceiverInput(packet) => {\n                                        let owner = packet.0.clone();\n                                        if !crate::server::mixel_receiver_input::receive(packet, &receiver_peer) {\n                                            stream.send(&Data::DataPortableService(ReceiverInputRefused(owner))).await.ok();\n                                        }\n                                    },\n                                    // Old protocol has no scope and cannot authorize effects.\n                        "
+      ],
+      [
+        "                     },\n                                _ => {}\n                            }\n                        }\n                        Some(reply) = receiver_replies.recv() => {\n                            if stream.send(&reply).await.is_err() { break; }\n                        }\n                        _ = timer.tick() => {\n                            if receiver_reply_failed.load(std::sync::atomic::Ordering::SeqCst) { break; }\n                            nack+=1;\n                            if nack > MAX_NACK {\n                                log::info!(\"max ping nack, exit\");\n   ",
+        "                     },\n                                _ => {}\n                            }\n                        }\n                        _ = timer.tick() => {\n                            nack+=1;\n                            if nack > MAX_NACK {\n                                log::info!(\"max ping nack, exit\");\n   "
+      ],
+      [
+        "Arc<Mutex<bool>> = Default::default();\n        static ref SHMEM: Arc<Mutex<Option<SharedMemory>>> = Default::default();\n        static ref SENDER : Mutex<mpsc::Sender<ipc::Data>> = Mutex::new(client::start_ipc_server());\n        static ref CONTROL_SENDER: Mutex<Option<mpsc::Sender<ipc::Data>>> = Mutex::new(None);\n        static ref QUICK_SUPPORT: Arc<Mutex<bool>> = Default::default();\n    }\n\n    pub enum StartPara {\n        Direct",
+        "Arc<Mutex<bool>> = Default::default();\n        static ref SHMEM: Arc<Mutex<Option<SharedMemory>>> = Default::default();\n        static ref SENDER : Mutex<mpsc::Sender<ipc::Data>> = Mutex::new(client::start_ipc_server());\n        static ref QUICK_SUPPORT: Arc<Mutex<bool>> = Default::default();\n    }\n\n    pub enum StartPara {\n        Direct"
+      ],
+      [
+        "fn set_output_texture(&mut self, _texture: bool) {}\n    }\n\n    pub(super) fn start_ipc_server() -> mpsc::Sender<Data> {\n        let (tx, rx) = mpsc::channel::<Data>(256);\n        let (control_tx, control_rx) = mpsc::channel::<Data>(128);\n        *CONTROL_SENDER.lock().unwrap() = Some(control_tx);\n        std::thread::spawn(move || start_ipc_server_async(rx,control_rx));\n        tx\n    }\n\n    #[tokio::main(flavor = \"current_thread\")]\n    async fn start_ipc_server_async(rx: mpsc::Receiver<",
+        "fn set_output_texture(&mut self, _texture: bool) {}\n    }\n\n    pub(super) fn start_ipc_server() -> mpsc::Sender<Data> {\n        let (tx, rx) = mpsc::channel::<Data>(256);\n        std::thread::spawn(move || start_ipc_server_async(rx));\n        tx\n    }\n\n    #[tokio::main(flavor = \"current_thread\")]\n    async fn start_ipc_server_async(rx: mpsc::Receiver<"
+      ],
+      [
+        "awn(move || start_ipc_server_async(rx,control_rx));\n        tx\n    }\n\n    #[tokio::main(flavor = \"current_thread\")]\n    async fn start_ipc_server_async(rx: mpsc::Receiver<Data>, control: mpsc::Receiver<Data>) {\n        use DataPortableService::*;\n        let rx = Arc::new(tokio::sync::Mutex::new(rx));\n        let postfix = IPC",
+        "awn(move || start_ipc_server_async(rx,control_rx));\n        tx\n    }\n\n    #[tokio::main(flavor = \"current_thread\")]\n    async fn start_ipc_server_async(rx: mpsc::Receiver<Data>) {\n        use DataPortableService::*;\n        let rx = Arc::new(tokio::sync::Mutex::new(rx));\n        let postfix = IPC"
+      ],
+      [
+        "n start_ipc_server_async(rx: mpsc::Receiver<Data>, control: mpsc::Receiver<Data>) {\n        use DataPortableService::*;\n        let rx = Arc::new(tokio::sync::Mutex::new((rx,control)));\n        let postfix = IPC_SUFFIX;\n        let quick_support = QUICK_SUPPORT.lock().unwrap().clone();\n\n        match new",
+        "n start_ipc_server_async(rx: mpsc::Receiver<Data>, control: mpsc::Receiver<Data>) {\n        use DataPortableService::*;\n        let rx = Arc::new(tokio::sync::Mutex::new(rx));\n        let postfix = IPC_SUFFIX;\n        let quick_support = QUICK_SUPPORT.lock().unwrap().clone();\n\n        match new"
+      ],
+      [
+        "desk_interval(tokio::time::interval(Duration::from_secs(1)));\n                                        let mut nack = 0;\n                                        let mut receivers = rx_clone.lock().await;\n                                        let (rx, control) = &mut *receivers;\n                                        loop {\n                                            tokio::select! {\n           ",
+        "desk_interval(tokio::time::interval(Duration::from_secs(1)));\n                                        let mut nack = 0;\n                                        let mut rx = rx_clone.lock().await;\n                                        loop {\n                                            tokio::select! {\n           "
+      ],
+      [
+        "            stream.send(&Data::DataPortableService(Ping)).await.ok();\n                                                }\n                                                Some(data) = control.recv() => {\n                                                    if stream.send(&data).await.is_err() { break; }\n                                                }\n                                                Some(data) = rx.recv() => {\n                                                    allow_err!(stream.send(&data).await);\n                             ",
+        "            stream.send(&Data::DataPortableService(Ping)).await.ok();\n                                                }\n                                                Some(data) = rx.recv() => {\n                                                    allow_err!(stream.send(&data).await);\n                             "
+      ],
+      [
+        "stream.send(&Data::DataPortableService(Pong)).await.ok();\n                                                            }\n                                                            ReceiverInputRefused(owner) => { crate::server::mixel_receiver_input::portable_refused(&owner); },\n                                                            ReceiverBlockReply((owner,request,ok)) => { crate::server::mixel_receiver_input::block_reply(&owner,&request,ok,&receiver_peer); },\n                                                            Pong => {\n                                                 ",
+        "stream.send(&Data::DataPortableService(Pong)).await.ok();\n                                                            }\n                                                            ReceiverInputRefused(owner) => { crate::server::mixel_receiver_input::portable_refused(&owner); },\n                                                            Pong => {\n                                                 "
+      ],
+      [
+        ";\n        sender\n            .try_send(data)\n            .map_err(|_| anyhow!(\"portable IPC queue unavailable\"))\n    }\n\n    fn receiver_control(data: DataPortableService) -> bool {\n        // Initialize the data listener once before consulting its control sender.\n        { let _initialized = SENDER.lock().unwrap(); }\n        CONTROL_SENDER.lock().unwrap().as_ref().map(|sender| sender.try_send(Data::DataPortableService(data)).is_ok()).unwrap_or(false)\n    }\n    pub(crate) fn send_receiver_block(token:&str,target:&str,conn:i32,role:u8,request:&str)->bool {\n        receiver_control(DataPortableService::ReceiverBlock((token.to_owned(),target.to_owned(),conn,role,request.to_owned())))\n    }\n    pub(crate) fn send_receiver_retire(token:&str,target:&str,role:u8)->bool {\n        receiver_control(DataPortableService::ReceiverRetire((token.to_owned(),target.to_owned(),role)))\n    }\n    pub(crate) fn send_receiver_input(token: &str, target: &str, conn: i32, action: &crate::server::mixel_receiver_input::Action) -> bool {\n        crate::server::m",
+        ";\n        sender\n            .try_send(data)\n            .map_err(|_| anyhow!(\"portable IPC queue unavailable\"))\n    }\n\n    pub(crate) fn send_receiver_input(token: &str, target: &str, conn: i32, action: &crate::server::mixel_receiver_input::Action) -> bool {\n        crate::server::m"
+      ],
+      [
+        "Duration::from_secs(1)));\n                let mut nack = 0;\n                loop {\n                    tokio::select! {\n                        res = stream.next() => {\n                            if receiver_reply_failed.load(std::sync::atomic::Ordering::SeqCst) { break; }\n                            match res {\n                                Err(err) => {\n                                    log::error!(\n                        ",
+        "Duration::from_secs(1)));\n                let mut nack = 0;\n                loop {\n                    tokio::select! {\n                        res = stream.next() => {\n                            match res {\n                                Err(err) => {\n                                    log::error!(\n                        "
       ]
     ],
     "src/platform/windows.rs": [

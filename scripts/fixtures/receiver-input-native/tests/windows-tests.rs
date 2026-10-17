@@ -51,6 +51,12 @@ impl Publisher {
         (self.token.clone(),target,44,1,key.write_to_bytes().unwrap(),String::new(),0,false,false)
     }
 }
+// Exercise the exact live asynchronous admission and wait only in the fixture.
+fn receive(packet:(String,String,i32,u8,Vec<u8>,String,u32,bool,bool),peer:&Peer)->bool{
+    let token=packet.0.clone();if !receive_async(packet,peer,Arc::new(|_|true)){return false;}
+    let remote=remotes().lock().unwrap().get(&token).cloned();let Some(remote)=remote else{return false;};
+    wait_until(||!remote.scheduled.load(Ordering::SeqCst));remote.lease.active()
+}
 fn native_create_new_readonly_and_peer_binding() {
     let mut publisher=Publisher::start();let consumer=Lease::open(&publisher.token,&publisher.peer).unwrap();assert!(consumer.active());
     assert_eq!(unsafe{SetEvent(consumer.event.raw())},0,"consumer must not possess EVENT_MODIFY_STATE");
@@ -74,6 +80,12 @@ fn native_abandoned_mutex_poison_cannot_reopen_scope() {
 }
 pub(crate) fn run_native_tests() {
     for(name,case)in [
+        ("Windows helper Block ownership, same-thread input and failed Off retry",native_portable_block_owners_and_thread_affinity as fn()),
+        ("Windows queued stale BlockOn denied before effect",native_portable_queued_block_on_is_denied as fn()),
+        ("Windows portable text chunks preserve order and admit control",native_portable_text_chunks_and_control as fn()),
+        ("Windows bounded portable packets overflow closes ownership",native_portable_packet_overflow as fn()),
+        ("Windows correlated Block replies bind exact peer and first outcome",native_portable_block_reply_correlation as fn()),
+        ("Windows keyboard revoke releases ordinary block and preserves privacy",native_portable_receiver_block_lifecycle as fn()),
         ("Windows create-new, readonly handles, kernel pipe peer and revoke",native_create_new_readonly_and_peer_binding as fn()),
         ("Windows owner death independent cleanup and restart target",native_owner_death_cleanup_without_next_data_and_old_restart_packets as fn()),
         ("Windows abandoned mutex permanently poisons scope",native_abandoned_mutex_poison_cannot_reopen_scope as fn()),
@@ -168,4 +180,62 @@ fn native_stale_failure_cannot_disarm_fresh_attempt() {
     let old=begin_transition().unwrap();request_recovery(old);poll_transition_recovery();assert!(!TRANSITION.load(Ordering::SeqCst));
     let fresh=begin_transition().unwrap();assert_ne!(old,fresh);request_recovery(old);poll_transition_recovery();assert!(TRANSITION.load(Ordering::SeqCst),"old watchdog cannot recover a fresh pending attempt");
     request_recovery(fresh);poll_transition_recovery();assert!(!TRANSITION.load(Ordering::SeqCst));
+}
+
+fn own_target()->String{format!("{}-{}",unsafe{GetCurrentProcessId()},birth(unsafe{GetCurrentProcess()}).unwrap())}
+fn wait_until(test:impl Fn()->bool){let deadline=std::time::Instant::now()+Duration::from_secs(4);while !test(){assert!(std::time::Instant::now()<deadline,"bounded actual-effect completion");std::thread::sleep(Duration::from_millis(1));}}
+fn block_on(publisher:&Publisher,role:u8)->bool{
+    let(tx,rx)=mpsc::sync_channel(1);let reply:Reply=Arc::new(move|value|{if let PortableReply::Block(_,_,ok)=value{tx.try_send(ok).is_ok()}else{false}});
+    assert!(receive_block(publisher.token.clone(),own_target(),44,role,uuid::Uuid::new_v4().simple().to_string(),&publisher.peer,reply));rx.recv_timeout(Duration::from_secs(4)).unwrap()
+}
+fn native_portable_block_owners_and_thread_affinity(){
+    let mut failed=Publisher::start();let failed_lease=Lease::open(&failed.token,&failed.peer).unwrap();super::super::super::BLOCK_FAILURES.store(1,Ordering::SeqCst);assert!(!block_on(&failed,1));assert!(!remote_blocks().lock().unwrap().contains(&failed.token));failed.command(1);wait_until(||failed_lease.cleaned());failed.command(0);assert!(failed.child.wait().unwrap().success());
+    let begin=super::super::super::block_calls().lock().unwrap().len();let mut ordinary=Publisher::start();let mut privacy=Publisher::start();let mut data=Publisher::start();
+    assert!(block_on(&ordinary,1));assert!(block_on(&ordinary,1));assert!(block_on(&privacy,2));assert!(receive(data.packet(),&data.peer));
+    assert!(!receive_async(ordinary.packet(),&ordinary.peer,Arc::new(|_|true)),"a block lease cannot authorize keyboard input");
+    assert!(!receive_block(data.token.clone(),own_target(),44,1,uuid::Uuid::new_v4().simple().to_string(),&data.peer,Arc::new(|_|true)),"an input lease cannot change role");
+    let on=super::super::super::block_calls().lock().unwrap()[begin];assert!(on.0);assert_eq!(super::super::super::input_threads().lock().unwrap().last().copied(),Some(on.1));
+    let ordinary_lease=Lease::open(&ordinary.token,&ordinary.peer).unwrap();ordinary.command(1);wait_until(||ordinary_lease.cleaned());assert_eq!(super::super::super::block_calls().lock().unwrap().len(),begin+1,"privacy owns remaining aggregate block");
+    let privacy_lease=Lease::open(&privacy.token,&privacy.peer).unwrap();super::super::super::UNBLOCK_FAILURES.store(100_000,Ordering::SeqCst);privacy.command(1);std::thread::sleep(Duration::from_millis(40));assert!(!privacy_lease.cleaned(),"failed native Off must retain owner and refuse retirement ack");
+    super::super::super::UNBLOCK_FAILURES.store(0,Ordering::SeqCst);wait_until(||privacy_lease.cleaned());let off=super::super::super::block_calls().lock().unwrap()[begin+1];assert!(!off.0);assert_eq!(off.1,on.1);
+    ordinary.command(0);privacy.command(0);data.command(1);data.command(0);assert!(ordinary.child.wait().unwrap().success());assert!(privacy.child.wait().unwrap().success());assert!(data.child.wait().unwrap().success());
+    let mut death=Publisher::start();let lease=Lease::open(&death.token,&death.peer).unwrap();assert!(block_on(&death,2));death.command(0);assert!(death.child.wait().unwrap().success());wait_until(||lease.cleaned());assert!(!remote_blocks().lock().unwrap().contains(&death.token),"publisher death retires block without next data");
+}
+fn native_portable_queued_block_on_is_denied(){
+    let mut publisher=Publisher::start();let lease=Lease::open(&publisher.token,&publisher.peer).unwrap();let before=super::super::super::block_calls().lock().unwrap().len();
+    let(entered,ready)=mpsc::sync_channel(1);let(release,wait)=mpsc::sync_channel(1);assert!(native_enqueue(true,Box::new(move||{entered.send(()).unwrap();wait.recv_timeout(Duration::from_secs(4)).unwrap();true})));ready.recv_timeout(Duration::from_secs(4)).unwrap();
+    let(tx,rx)=mpsc::sync_channel(1);let reply:Reply=Arc::new(move|value|{if let PortableReply::Block(_,_,ok)=value{tx.try_send(ok).is_ok()}else{false}});
+    assert!(receive_block(publisher.token.clone(),own_target(),44,1,uuid::Uuid::new_v4().simple().to_string(),&publisher.peer,reply));publisher.command(1);release.send(()).unwrap();assert!(!rx.recv_timeout(Duration::from_secs(4)).unwrap());wait_until(||lease.cleaned());assert_eq!(super::super::super::block_calls().lock().unwrap().len(),before);publisher.command(0);assert!(publisher.child.wait().unwrap().success());
+}
+fn native_portable_text_chunks_and_control(){
+    let mut data=Publisher::start();let mut block=Publisher::start();let mut packet=data.packet();let mut key=KeyEvent::new();key.set_seq("å".repeat(200));packet.4=key.write_to_bytes().unwrap();
+    super::super::super::ENTERED.store(false,Ordering::SeqCst);super::super::super::PAUSE.store(true,Ordering::SeqCst);let reply:Reply=Arc::new(|_|true);assert!(receive_async(packet,&data.peer,reply.clone()));wait_until(||super::super::super::ENTERED.load(Ordering::SeqCst));
+    let mut tail=data.packet();let mut key=KeyEvent::new();key.set_seq("TAIL".to_owned());tail.4=key.write_to_bytes().unwrap();assert!(receive_async(tail,&data.peer,reply));
+    let(tx,rx)=mpsc::sync_channel(1);let token=data.token.clone();let reply:Reply=Arc::new(move|value|{if let PortableReply::Block(_,_,ok)=value{let count=super::super::super::observed().lock().unwrap().iter().filter(|v|v.owner==token&&v.text=="å").count();tx.try_send((ok,count)).is_ok()}else{false}});
+    assert!(receive_block(block.token.clone(),own_target(),44,1,uuid::Uuid::new_v4().simple().to_string(),&block.peer,reply));super::super::super::PAUSE.store(false,Ordering::SeqCst);
+    let(ok,count)=rx.recv_timeout(Duration::from_secs(4)).unwrap();assert!(ok);assert_eq!(count,64,"queued control executes exactly after first bounded scalar chunk");
+    wait_until(||super::super::super::observed().lock().unwrap().iter().filter(|v|v.owner==data.token&&v.text!="cleanup").count()==204);
+    let events:Vec<_>=super::super::super::observed().lock().unwrap().iter().filter(|v|v.owner==data.token&&v.text!="cleanup").map(|v|v.text.clone()).collect();assert_eq!(events.concat(),format!("{}TAIL","å".repeat(200)),"queued text remainder preserves scalar and same-owner FIFO order");
+    data.command(1);block.command(1);data.command(0);block.command(0);assert!(data.child.wait().unwrap().success());assert!(block.child.wait().unwrap().success());
+}
+fn native_portable_packet_overflow(){
+    wait_until(||PACKETS.load(Ordering::SeqCst)==0);
+    let mut publisher=Publisher::start();let(entered,ready)=mpsc::sync_channel(1);let(release,wait)=mpsc::sync_channel(1);assert!(native_enqueue(true,Box::new(move||{entered.send(()).unwrap();wait.recv_timeout(Duration::from_secs(4)).unwrap();true})));ready.recv_timeout(Duration::from_secs(4)).unwrap();
+    let reply:Reply=Arc::new(|_|true);for _ in 0..MAX_PENDING{assert!(receive_async(publisher.packet(),&publisher.peer,reply.clone()));}assert!(!receive_async(publisher.packet(),&publisher.peer,reply));assert!(!remotes().lock().unwrap().get(&publisher.token).unwrap().lease.active());release.send(()).unwrap();wait_until(||PACKETS.load(Ordering::SeqCst)==0);assert!(!super::super::super::observed().lock().unwrap().iter().any(|v|v.owner==publisher.token&&v.down));publisher.command(0);assert!(publisher.child.wait().unwrap().success());
+}
+fn native_portable_block_reply_correlation(){
+    let mut publisher=Publisher::start();let request=uuid::Uuid::new_v4().simple().to_string();let pending=Arc::new(PendingBlock{token:publisher.token.clone(),target:identity(&publisher.peer),result:AtomicUsize::new(0)});pending_blocks().lock().unwrap().insert(request.clone(),pending.clone());
+    block_reply("wrong",&request,true,&publisher.peer);block_reply(&publisher.token,"unknown",true,&publisher.peer);let mut forged=publisher.peer.clone();forged.born+=1;block_reply(&publisher.token,&request,true,&forged);assert_eq!(pending.result.load(Ordering::SeqCst),0);
+    block_reply(&publisher.token,&request,true,&publisher.peer);block_reply(&publisher.token,&request,false,&publisher.peer);assert_eq!(pending.result.load(Ordering::SeqCst),1);pending_blocks().lock().unwrap().remove(&request);
+    let cancelled=Arc::new(PendingBlock{token:publisher.token.clone(),target:identity(&publisher.peer),result:AtomicUsize::new(0)});pending_blocks().lock().unwrap().insert(request.clone(),cancelled.clone());cancel_block(&publisher.token);assert_eq!(cancelled.result.load(Ordering::SeqCst),2);pending_blocks().lock().unwrap().remove(&request);publisher.command(0);assert!(publisher.child.wait().unwrap().success());
+}
+fn native_portable_receiver_block_lifecycle(){
+    use super::super::portable_service::client;
+    let process=Arc::new(Owned::from(unsafe{OpenProcess(SYNC|0x1000,0,GetCurrentProcessId())}).unwrap());let sid=process_sid(process.raw()).unwrap();let peer=verified_peer(unsafe{GetCurrentProcessId()},process,sid).unwrap();*helper().lock().unwrap()=Some(peer.clone());client::RUNNING.store(true,Ordering::SeqCst);
+    let source=peer.clone();*client::block_transport().lock().unwrap()=Some(Arc::new(move|token,target,conn,role,request|{let reply_source=source.clone();let reply:Reply=Arc::new(move|reply|{if let PortableReply::Block(token,request,ok)=reply{block_reply(&token,&request,ok,&reply_source);true}else{false}});receive_block(token.to_owned(),target.to_owned(),conn,role,request.to_owned(),&source,reply)}));
+    let source=peer.clone();*client::retire_transport().lock().unwrap()=Some(Arc::new(move|token,target,role|receive_retire(token.to_owned(),target.to_owned(),role,&source)));
+    let receiver=Receiver::new(96);assert!(receiver.authorize(true));assert!(receiver.block(true,false));assert!(receiver.block(true,true));let ordinary=receiver.inner.state.lock().unwrap().portable_blocks[0].clone().unwrap();let privacy=receiver.inner.state.lock().unwrap().portable_blocks[1].clone().unwrap();assert_ne!(ordinary.token,privacy.token);
+    assert!(receiver.block(false,false));assert!(ordinary.kernel.cleaned());assert!(receiver.block(true,false));let fresh=receiver.inner.state.lock().unwrap().portable_blocks[0].clone().unwrap();assert_ne!(fresh.token,ordinary.token,"Off/On creates a new nonreusable block lease");
+    assert!(receiver.set_permission(false));assert!(fresh.kernel.cleaned());assert!(ordinary.kernel.cleaned());assert!(privacy.active.load(Ordering::SeqCst));assert!(remote_blocks().lock().unwrap().contains(&privacy.token));assert!(!remote_blocks().lock().unwrap().contains(&ordinary.token));assert!(receiver.close());assert!(privacy.kernel.cleaned());assert!(!remote_blocks().lock().unwrap().contains(&privacy.token));
+    client::RUNNING.store(false,Ordering::SeqCst);*helper().lock().unwrap()=None;client::block_transport().lock().unwrap().take();client::retire_transport().lock().unwrap().take();
 }

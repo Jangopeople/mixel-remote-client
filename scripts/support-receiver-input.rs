@@ -15,6 +15,7 @@ pub(crate) enum Action {
     Pointer(PointerDeviceEvent),
 }
 impl Action {
+    fn valid(&self) -> bool { match self { Self::Key(v,_) => v.modifiers.len() <= 16, Self::Mouse(v, ..) => v.modifiers.len() <= 16, Self::Pointer(_) => true } }
     fn size(&self) -> usize { match self {
         Self::Mouse(v, name, ..) => v.compute_size() as usize + name.len(),
         Self::Key(v, _) => v.compute_size() as usize,
@@ -25,6 +26,12 @@ struct Generation {
     token: String,
     effect_id: i32,
     conn: i32,
+    #[cfg(windows)]
+    role: u8,
+    #[cfg(windows)]
+    block_status: AtomicUsize,
+    #[cfg(windows)]
+    retire_sent: AtomicBool,
     failure: Arc<AtomicBool>,
     #[cfg(windows)]
     owner: std::sync::Weak<Inner>,
@@ -40,7 +47,9 @@ struct Generation {
     kernel: windows::Lease,
 }
 impl Generation {
-    fn new(inner: &Arc<Inner>) -> Option<Arc<Self>> {
+    fn new(inner: &Arc<Inner>) -> Option<Arc<Self>> { Self::new_role(inner, 0) }
+    fn new_role(inner: &Arc<Inner>, role: u8) -> Option<Arc<Self>> {
+        #[cfg(not(windows))] let _ = role;
         #[cfg(windows)] if TRANSITION.load(Ordering::SeqCst) { return None; }
         let conn = inner.conn; let failure = inner.failed.clone();
         let registry = generations()?;
@@ -57,6 +66,9 @@ impl Generation {
             #[cfg(windows)] token: kernel.token.clone(),
             #[cfg(not(windows))] token: nonce,
             effect_id, conn, failure,
+            #[cfg(windows)] role,
+            #[cfg(windows)] block_status: AtomicUsize::new(0),
+            #[cfg(windows)] retire_sent: AtomicBool::new(false),
             #[cfg(windows)] owner: Arc::downgrade(inner),
             active: AtomicBool::new(true), serial: Mutex::new(()),
             cleanup_done: AtomicBool::new(false), cleanup_requested: AtomicBool::new(false),
@@ -77,6 +89,11 @@ impl Generation {
     }
     fn try_retired(self: &Arc<Self>) -> bool {
         if self.active.load(Ordering::SeqCst) { return false; }
+        #[cfg(windows)] if self.role!=0&&self.portable_used.load(Ordering::SeqCst)!=0&&!self.kernel.cleaned()&&!self.retire_sent.swap(true,Ordering::SeqCst){
+            if let windows::Backend::Portable(target)=&self.backend {
+                if !super::portable_service::client::send_receiver_retire(&self.token,target,self.role){self.retire_sent.store(false,Ordering::SeqCst);}
+            }
+        }
         schedule_cleanup(self.clone());
         if !self.cleanup_done.load(Ordering::SeqCst) { return false; }
         #[cfg(windows)] {
@@ -87,7 +104,7 @@ impl Generation {
     }
     fn deny(&self) -> bool {
         self.active.store(false,Ordering::SeqCst);
-        #[cfg(windows)] { self.kernel.revoke() }
+        #[cfg(windows)] { windows::cancel_block(&self.token); self.block_status.store(3,Ordering::SeqCst); self.kernel.revoke() }
         #[cfg(not(windows))] { true }
     }
     fn revoke(self: &Arc<Self>) -> bool {
@@ -115,6 +132,7 @@ fn generations() -> Option<&'static Arc<Mutex<HashMap<String, Slot>>>> {
         std::thread::Builder::new().name("mixel-input-retirement".to_owned()).spawn(move || loop {
             std::thread::sleep(Duration::from_millis(10));
             let candidates: Vec<_> = worker.lock().unwrap_or_else(|e| e.into_inner()).values().filter_map(Slot::get).collect();
+            #[cfg(windows)] for generation in &candidates {if generation.active.load(Ordering::SeqCst)&&!generation.admitted(){generation.deny();}}
             let retired: Vec<_> = candidates.into_iter().filter(|g| !g.active.load(Ordering::SeqCst) && g.try_retired()).map(|g| g.token.clone()).collect();
             let mut slots = worker.lock().unwrap_or_else(|e| e.into_inner());
             for token in retired { slots.remove(&token); }
@@ -123,7 +141,9 @@ fn generations() -> Option<&'static Arc<Mutex<HashMap<String, Slot>>>> {
         }).ok().map(|_| registry)
     }).as_ref()
 }
-struct State { alive: bool, authorized: bool, generation: Option<Arc<Generation>>, cursor: Option<Arc<Generation>>, retiring: Vec<Arc<Generation>> }
+struct State { alive: bool, authorized: bool, permission_epoch:u64, generation: Option<Arc<Generation>>, cursor: Option<Arc<Generation>>, retiring: Vec<Arc<Generation>>,
+    #[cfg(windows)] portable_blocks: [Option<Arc<Generation>>;2],
+}
 struct Inner { state: Mutex<State>, pending: AtomicUsize, pending_bytes: AtomicUsize, control: String, conn: i32, failed: Arc<AtomicBool>, alive: AtomicBool, owners: AtomicUsize }
 struct Work { inner: Arc<Inner>, generation: Arc<Generation>, action: Action, bytes: usize }
 impl Drop for Work { fn drop(&mut self) { self.inner.pending.fetch_sub(1, Ordering::SeqCst); self.inner.pending_bytes.fetch_sub(self.bytes, Ordering::SeqCst); } }
@@ -136,7 +156,7 @@ impl Drop for Receiver {
 }
 impl Receiver {
     pub(crate) fn new(conn: i32) -> Self {
-        let inner = Arc::new(Inner { state: Mutex::new(State { alive: true, authorized: false, generation: None, cursor: None, retiring: Vec::new() }), pending: AtomicUsize::new(0), pending_bytes: AtomicUsize::new(0), control: uuid::Uuid::new_v4().simple().to_string(), conn, failed: Arc::new(AtomicBool::new(false)), alive: AtomicBool::new(true), owners: AtomicUsize::new(1) });
+        let inner = Arc::new(Inner { state: Mutex::new(State { alive: true, authorized: false, permission_epoch:0, generation: None, cursor: None, retiring: Vec::new(), #[cfg(windows)] portable_blocks: [None,None] }), pending: AtomicUsize::new(0), pending_bytes: AtomicUsize::new(0), control: uuid::Uuid::new_v4().simple().to_string(), conn, failed: Arc::new(AtomicBool::new(false)), alive: AtomicBool::new(true), owners: AtomicUsize::new(1) });
         let (sender, receiver) = mpsc::sync_channel::<Work>(MAX_PENDING);
         if std::thread::Builder::new().name("mixel-receiver-input".to_owned()).spawn(move || while let Ok(work) = receiver.recv() { dispatch(work); }).is_err() {
             inner.failed.store(true, Ordering::SeqCst); inner.alive.store(false, Ordering::SeqCst);
@@ -160,40 +180,72 @@ impl Receiver {
     pub(crate) fn block(&self, enabled: bool, privacy: bool) -> bool {
         let state = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
         if !state.alive || !state.authorized || !self.inner.alive.load(Ordering::SeqCst) || self.failed() { return false; }
-        #[cfg(windows)] if enabled && (super::portable_service::client::running()
-            || state.generation.as_ref().or(state.cursor.as_ref()).map(|g|matches!(&g.backend,windows::Backend::Portable(_))).unwrap_or(false)) {
-            // BlockInput permits injection only from its exact owning OS thread.
-            // A foreground block cannot authorize an elevated helper's thread.
-            return false;
+        if enabled&&!state.cursor.as_ref().map(|g|g.admitted()).unwrap_or(false){return false;}
+        #[cfg(windows)] if state.cursor.as_ref().map(|g|matches!(&g.backend,windows::Backend::Portable(_))).unwrap_or(false) {
+            drop(state); return self.portable_block(enabled,privacy);
         }
         drop(state);
         set_block(&self.inner, enabled, privacy)
     }
+    #[cfg(windows)]
+    fn portable_block(&self, enabled:bool, privacy:bool)->bool {
+        let index=usize::from(privacy);
+        if !enabled {
+            { let mut state=self.inner.state.lock().unwrap_or_else(|e|e.into_inner());
+              if let Some(scope)=state.portable_blocks[index].take(){scope.deny();state.retiring.push(scope);} }
+            return retire_pending(&self.inner);
+        }
+        // A fresh grant can never rearm a previous monotonic lease.
+        if !retire_pending(&self.inner) { return false; }
+        let scope={let mut state=self.inner.state.lock().unwrap_or_else(|e|e.into_inner());
+            if !state.alive||!state.authorized||!self.inner.alive.load(Ordering::SeqCst)||self.failed(){return false;}
+            if state.portable_blocks[index].is_none(){state.portable_blocks[index]=Generation::new_role(&self.inner,1+index as u8);}
+            let Some(scope)=state.portable_blocks[index].clone()else{return false;};
+            if !matches!(&scope.backend,windows::Backend::Portable(_)){return false;}scope
+        };
+        if windows::request_block(&scope)&&scope.admitted()&&self.inner.alive.load(Ordering::SeqCst){return true;}
+        scope.deny();
+        {let mut state=self.inner.state.lock().unwrap_or_else(|e|e.into_inner());
+            if state.portable_blocks[index].as_ref().map(|s|Arc::ptr_eq(s,&scope)).unwrap_or(false){state.portable_blocks[index].take();}
+            if !state.retiring.iter().any(|s|Arc::ptr_eq(s,&scope)){state.retiring.push(scope);}}
+        let _=retire_pending(&self.inner);false
+    }
     pub(crate) fn set_permission(&self, enabled: bool) -> bool {
-        let mut state = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
-        if !state.alive || !state.authorized || !self.inner.alive.load(Ordering::SeqCst) || self.failed() { return false; }
-        if enabled == state.generation.is_some() { return true; }
-        if let Some(previous) = state.generation.take() { previous.deny(); state.retiring.push(previous); }
-        if !retire(&mut state) { state.alive = false; self.inner.alive.store(false,Ordering::SeqCst); return false; }
-        if enabled { state.generation = Generation::new(&self.inner); state.generation.is_some() }
-        else { set_block(&self.inner, false, false) }
+        let epoch={let mut state = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
+            if !state.alive || !state.authorized || !self.inner.alive.load(Ordering::SeqCst) || self.failed() { return false; }
+            if enabled && state.generation.is_some() { return true; }
+            let Some(epoch)=state.permission_epoch.checked_add(1)else{return false;};state.permission_epoch=epoch;
+            if let Some(previous) = state.generation.take() { previous.deny(); state.retiring.push(previous); }
+            #[cfg(windows)] if !enabled { if let Some(scope)=state.portable_blocks[0].take(){scope.deny();state.retiring.push(scope);} }
+            epoch
+        };
+        // No State or actual-effect mutex is held during a cleanup/IPC wait.
+        if !retire_pending(&self.inner) { self.inner.alive.store(false,Ordering::SeqCst); return false; }
+        if !enabled { return set_block(&self.inner,false,false)&&self.inner.state.lock().unwrap_or_else(|e|e.into_inner()).permission_epoch==epoch; }
+        let mut state=self.inner.state.lock().unwrap_or_else(|e|e.into_inner());
+        if !state.alive||state.permission_epoch!=epoch||!self.inner.alive.load(Ordering::SeqCst)||self.failed(){return false;}
+        if state.generation.is_none(){state.generation=Generation::new(&self.inner);}
+        state.generation.is_some()
     }
     pub(crate) fn close(&self) -> bool {
-        let mut state = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
-        state.alive = false; self.inner.alive.store(false, Ordering::SeqCst);
-        if let Some(cursor) = state.cursor.take() { state.retiring.push(cursor); }
-        if let Some(previous) = state.generation.take() { state.retiring.push(previous); }
-        // Publish every scope's deny before the first OS-unblock/cleanup wait.
-        for generation in &state.retiring { generation.deny(); }
+        {let mut state = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
+            state.alive = false; self.inner.alive.store(false, Ordering::SeqCst);
+            if let Some(cursor) = state.cursor.take() { state.retiring.push(cursor); }
+            if let Some(previous) = state.generation.take() { state.retiring.push(previous); }
+            #[cfg(windows)] for index in 0..2 {if let Some(scope)=state.portable_blocks[index].take(){state.retiring.push(scope);}}
+            // Publish every scope's deny before the first OS-unblock/cleanup wait.
+            for generation in &state.retiring { generation.deny(); }
+        }
         let ordinary = set_block(&self.inner, false, false);
         let privacy = set_block(&self.inner, false, true);
-        retire(&mut state) && ordinary && privacy
+        retire_pending(&self.inner) && ordinary && privacy
     }
     pub(crate) fn enqueue(&self, action: Action) {
         let state = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
         let cursor_only = matches!(&action, Action::Mouse(_, _, _, false, true));
         let scope = if cursor_only { &state.cursor } else { &state.generation };
         let Some(generation) = scope.as_ref().filter(|g| state.alive && state.authorized && g.active.load(Ordering::SeqCst)) else { return; };
+        if !action.valid(){drop(state);self.fail();return;}
         let bytes = action.size();
         let counted = self.inner.pending.fetch_update(Ordering::SeqCst, Ordering::SeqCst,
             |v| (v < MAX_PENDING).then_some(v + 1)).is_ok();
@@ -208,10 +260,11 @@ impl Receiver {
         if !sent { self.fail(); }
     }
 }
-fn retire(state: &mut State) -> bool {
-    state.retiring.retain(|generation| {
-        !generation.revoke()
-    });
+fn retire_pending(inner:&Arc<Inner>)->bool {
+    let pending=inner.state.lock().unwrap_or_else(|e|e.into_inner()).retiring.clone();
+    let retired:Vec<_>=pending.into_iter().filter(|scope|scope.revoke()).collect();
+    let mut state=inner.state.lock().unwrap_or_else(|e|e.into_inner());
+    state.retiring.retain(|scope|!retired.iter().any(|done|Arc::ptr_eq(scope,done)));
     state.retiring.is_empty()
 }
 fn dispatch(work: Work) {
@@ -308,6 +361,11 @@ fn schedule_cleanup(generation: Arc<Generation>) {
 // BlockInput has its own authorization/lifetime, separate from keyboard data.
 // Privacy/plugin calls retain their existing caller checks; only connection close
 // invalidates both categories. No BlockOn is allowed to sit behind data work.
+fn block_owner_allowed(owner:&Inner)->bool{
+    if !owner.alive.load(Ordering::SeqCst)||owner.failed.load(Ordering::SeqCst){return false;}
+    #[cfg(windows)] {let state=owner.state.lock().unwrap_or_else(|e|e.into_inner());return state.cursor.as_ref().map(|g|g.admitted()).unwrap_or(false);}
+    #[cfg(not(windows))] {true}
+}
 struct BlockRequest { desired: bool, owner: std::sync::Weak<Inner>, status: AtomicUsize }
 struct BlockState { actual: bool, inflight: bool, requests: HashMap<(String, bool), Arc<BlockRequest>> }
 struct Blocks { state: Mutex<BlockState>, changed: std::sync::Condvar }
@@ -325,7 +383,7 @@ fn block_worker(shared: Arc<Blocks>) {
     loop {
         let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
         for request in state.requests.values() {
-            if request.desired && !request.owner.upgrade().map(|v| v.alive.load(Ordering::SeqCst)&&!v.failed.load(Ordering::SeqCst)).unwrap_or(false) {
+            if request.desired && !request.owner.upgrade().map(|v| block_owner_allowed(&v)).unwrap_or(false) {
                 request.status.store(2, Ordering::SeqCst);
             }
         }
@@ -337,9 +395,10 @@ fn block_worker(shared: Arc<Blocks>) {
             let checked = shared.clone();
             let effect = move || {
                 let state = checked.state.lock().unwrap_or_else(|e| e.into_inner());
-                let current = state.requests.values().any(|r| r.desired && r.status.load(Ordering::SeqCst) != 2 && r.owner.upgrade().map(|owner| owner.alive.load(Ordering::SeqCst)&&!owner.failed.load(Ordering::SeqCst)).unwrap_or(false));
+                let current = state.requests.values().any(|r| r.desired && r.status.load(Ordering::SeqCst) != 2 && r.owner.upgrade().map(|owner| block_owner_allowed(&owner)).unwrap_or(false));
                 drop(state);
-                let success = current == wanted && crate::platform::block_input(wanted).0;
+                #[cfg(windows)] let success = current == wanted && windows::native_block_owner("local-process",wanted);
+                #[cfg(not(windows))] let success = current == wanted && crate::platform::block_input(wanted).0;
                 let mut state = checked.state.lock().unwrap_or_else(|e| e.into_inner());
                 if success { state.actual = wanted; }
                 state.inflight = false; checked.changed.notify_all(); success
@@ -461,7 +520,8 @@ pub(crate) fn portable_refused(token: &str) {
     let generation = generations().and_then(|registry| registry.lock().ok()?.get(token)?.get());
     if let Some(generation) = generation {
         if generation.active.load(Ordering::SeqCst) {
-            generation.failure.store(true, Ordering::SeqCst); let _ = generation.revoke();
+            generation.failure.store(true, Ordering::SeqCst); generation.deny();
+            if let Some(registry)=generations(){registry.lock().unwrap_or_else(|e|e.into_inner()).insert(generation.token.clone(),Slot::Retiring(generation));}
         }
     }
 }
@@ -478,4 +538,4 @@ pub(crate) fn encode(token: &str, target: &str, conn: i32, action: &Action) -> O
 #[path = "mixel_receiver_input_windows.rs"]
 mod windows;
 #[cfg(windows)]
-pub(crate) use windows::{receive, pipe_peer, pipe_publisher, publisher_handle, startup_confirmed, launch_with_logon, launch_direct, SecretCredential, Peer, shutdown as portable_shutdown};
+pub(crate) use windows::{receive_async, receive_block, receive_retire, block_reply, PortableReply, pipe_peer, pipe_publisher, publisher_handle, startup_confirmed, launch_with_logon, launch_direct, SecretCredential, Peer, shutdown as portable_shutdown};

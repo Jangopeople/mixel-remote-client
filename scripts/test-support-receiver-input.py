@@ -52,6 +52,19 @@ def source_contracts(module):
     assert 'cleanup_done' in core and 'input_service::release_receiver_owner(token)' in core
     assert 'clear_relative_mouse_active' not in core and 'fn relative()' not in core
     assert 'enum Backend { Local, Portable(String) }' in windows
+    assert 'portable_blocks: [Option<Arc<Generation>>;2]' in core
+    assert 'state.portable_blocks[0].take()' in core and 'permission_epoch' in core
+    assert 'fn retire_pending(inner:&Arc<Inner>)' in core and 'fn retire(state:' not in core
+    assert 'fn pending_blocks()' in windows and 'map.len()>=MAX_PENDING' in windows
+    assert 'p.target==identity(peer)&&peer.alive()' in windows and 'compare_exchange(0,if success' in windows
+    assert 'fn native_block_owner(' in windows and 'NATIVE_THREAD.with' in windows
+    assert 'owners.len()==1&&!crate::platform::block_input(false).0{return false;}' in windows
+    assert 'receive_async' in windows and 'char_indices().nth(64)' in windows
+    assert 'PACKETS.fetch_update' in windows and 'native_enqueue_reserved' in windows
+    assert 'pending.push_front(item)' in windows and 'control_burst < 8' in windows
+    assert 'fn receive(packet:' not in windows, 'Live helper must never wait for a whole input action'
+    assert 'role>2' in windows and 'remote.role==role' in windows
+    assert 'v.modifiers.len() <= 16' in core
     assert 'GetNamedPipeServerProcessId' in windows and 'GetNamedPipeClientProcessId' in windows
     assert 'source == 0 || source != target' in windows and 'process: Some(peer.process.clone())' in windows
     assert 'OpenEventW(SYNC,0' in windows and 'OpenMutexW(MUTEX_ACCESS,0' in windows
@@ -68,6 +81,10 @@ def source_contracts(module):
     changes = '\n'.join(after for pairs in plan['changes'].values() for _, after in pairs)
     assert 'Mouse(_) | Pointer(_) | Key(_) => {}' in changes
     assert 'Receiver::new(id)' in changes and 'receiver_pipe_peer' in changes
+    assert 'mpsc::channel::<Data>(128)' in changes and 'Some(data) = control.recv()' in changes
+    assert 'ReceiverBlockReply' in changes and 'ReceiverRetire' in changes
+    assert 'receive_async(packet, &receiver_peer, receiver_reply.clone())' in changes
+    assert 'receiver_reply_failed_writer.store(true' in changes
     assert 'ReceiverPublisherHandle' in changes and 'receiver_pipe_publisher' in changes and 'SecretCredential::new(password)' in changes
     assert changes.index('if !conn.receiver_input.close()') < changes.index('conn.chat_unanswered = false;')
     workflow = (HERE.parent / '.github/workflows/preflight.yml').read_text(encoding='utf-8')

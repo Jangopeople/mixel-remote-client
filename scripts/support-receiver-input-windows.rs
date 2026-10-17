@@ -147,7 +147,7 @@ impl Lease {
             OBJECT => Some(Serial(&self.mutex, std::marker::PhantomData)),
             ABANDONED => {
                 self.poisoned.store(true, Ordering::SeqCst);
-                let serial = Serial(&self.mutex, std::marker::PhantomData); if cleanup(&self.token) { self.mark_cleaned(); } drop(serial); None
+                let serial = Serial(&self.mutex, std::marker::PhantomData); drop(serial); None
             },
             _ => None,
         }
@@ -338,98 +338,188 @@ impl Backend {
         }
     }
 }
+// Replies contain no capability handles. The portable loop alone writes the pipe.
+pub(crate) enum PortableReply { Refused(String), Block(String,String,bool) }
+type Reply = Arc<dyn Fn(PortableReply)->bool+Send+Sync>;
+struct PendingBlock { token:String, target:String, result:AtomicUsize }
+fn pending_blocks()->&'static Mutex<HashMap<String,Arc<PendingBlock>>>{static P:OnceLock<Mutex<HashMap<String,Arc<PendingBlock>>>>=OnceLock::new();P.get_or_init(||Mutex::new(HashMap::new()))}
+pub(super) fn cancel_block(token:&str){for pending in pending_blocks().lock().unwrap_or_else(|e|e.into_inner()).values().filter(|p|p.token==token){pending.result.store(2,Ordering::SeqCst);}}
+pub(crate) fn block_reply(token:&str,request:&str,success:bool,peer:&Peer){
+    let pending=pending_blocks().lock().unwrap_or_else(|e|e.into_inner()).get(request).cloned();
+    if let Some(p)=pending.filter(|p|p.token==token&&p.target==identity(peer)&&peer.alive()){
+        let _=p.result.compare_exchange(0,if success{1}else{2},Ordering::SeqCst,Ordering::SeqCst);
+    }
+}
+pub(super) fn request_block(scope:&Arc<Generation>)->bool{
+    let Backend::Portable(target)=&scope.backend else{return false;};
+    if scope.block_status.compare_exchange(0,1,Ordering::SeqCst,Ordering::SeqCst).is_ok(){
+        let request=uuid::Uuid::new_v4().simple().to_string();let pending=Arc::new(PendingBlock{token:scope.token.clone(),target:target.clone(),result:AtomicUsize::new(0)});
+        {let mut map=pending_blocks().lock().unwrap_or_else(|e|e.into_inner());if map.len()>=MAX_PENDING{scope.block_status.store(3,Ordering::SeqCst);return false;}map.insert(request.clone(),pending.clone());}
+        // Count before enqueue: a fast native effect must already have cleanup responsibility.
+        scope.portable_used.fetch_add(1,Ordering::SeqCst);
+        let sent=scope.admitted()&&super::super::portable_service::client::send_receiver_block(&scope.token,target,scope.conn,scope.role,&request);
+        if !sent{scope.portable_used.fetch_sub(1,Ordering::SeqCst);pending.result.store(2,Ordering::SeqCst);}
+        let deadline=std::time::Instant::now()+Duration::from_secs(5);
+        while pending.result.load(Ordering::SeqCst)==0&&scope.admitted()&&std::time::Instant::now()<deadline{std::thread::sleep(Duration::from_millis(1));}
+        let success=pending.result.load(Ordering::SeqCst)==1&&scope.admitted();
+        pending_blocks().lock().unwrap_or_else(|e|e.into_inner()).remove(&request);
+        let _=scope.block_status.compare_exchange(1,if success{2}else{3},Ordering::SeqCst,Ordering::SeqCst);
+    }else{
+        let deadline=std::time::Instant::now()+Duration::from_secs(5);
+        while scope.block_status.load(Ordering::SeqCst)==1&&scope.admitted()&&std::time::Instant::now()<deadline{std::thread::sleep(Duration::from_millis(1));}
+    }
+    scope.block_status.load(Ordering::SeqCst)==2&&scope.admitted()
+}
+struct PacketPermit;
+static PACKETS:AtomicUsize=AtomicUsize::new(0);
+impl PacketPermit{fn acquire()->Option<Self>{PACKETS.fetch_update(Ordering::SeqCst,Ordering::SeqCst,|v|(v<MAX_PENDING).then_some(v+1)).ok().map(|_|Self)}}
+impl Drop for PacketPermit{fn drop(&mut self){PACKETS.fetch_sub(1,Ordering::SeqCst);}}
+struct PendingInput{action:Action,conn:i32,reply:Reply,_permit:PacketPermit}
 #[derive(Clone)]
-struct Remote { lease: Arc<Lease>, effect_id: i32 }
+struct Remote { lease: Arc<Lease>, effect_id: i32, role:u8, pending:Arc<Mutex<std::collections::VecDeque<PendingInput>>>, scheduled:Arc<AtomicBool>, retiring:Arc<AtomicBool> }
 fn remotes() -> &'static Mutex<HashMap<String,Remote>> {
     static REMOTES: OnceLock<Mutex<HashMap<String,Remote>>> = OnceLock::new();
     REMOTES.get_or_init(|| Mutex::new(HashMap::new()))
 }
-fn retire_remote(remote: Remote) -> bool {
-    native_effect(true, Box::new(move || {
-        if remote.lease.active() { return false; }
-        let Some(_serial) = remote.lease.lock() else { return false; };
-        cleanup(&remote.lease.token) && remote.lease.mark_cleaned()
-    }))
+fn remote_scope(token:&str,target:&str,role:u8,peer:&Peer)->Option<Remote>{
+    let current=unsafe{GetCurrentProcessId()};
+    if role>2||!peer.alive()||Some(target.to_owned())!=birth(unsafe{GetCurrentProcess()}).map(|born|format!("{current}-{born}")){return None;}
+    if names(token).map(|(_,_,_,pid,born)|(pid,born))!=Some((peer.pid,peer.born))||!start_sweeper(){return None;}
+    let mut entries=remotes().lock().ok()?;
+    if let Some(remote)=entries.get(token){return (remote.role==role&&remote.lease.active()).then(||remote.clone());}
+    if entries.len()>=256{return None;}
+    let lease=Lease::open(token,peer)?;if !lease.active(){return None;}
+    let effect_id=NEXT_EFFECT.fetch_update(Ordering::SeqCst,Ordering::SeqCst,|v|v.checked_sub(1)).ok()?;
+    let remote=Remote{lease:Arc::new(lease),effect_id,role,pending:Arc::new(Mutex::new(std::collections::VecDeque::new())),scheduled:Arc::new(AtomicBool::new(false)),retiring:Arc::new(AtomicBool::new(false))};
+    entries.insert(token.to_owned(),remote.clone());Some(remote)
 }
-fn sweep() {
-    let candidates: Vec<_> = remotes().lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|(_,r)| !r.lease.active()).map(|(token,r)| (token.clone(),r.clone())).collect();
-    for (token,remote) in candidates {
-        let remove = retire_remote(remote.clone()) && !(remote.lease.poisoned.load(Ordering::SeqCst) && remote.lease.authority_live());
-        if remove { remotes().lock().unwrap_or_else(|e| e.into_inner()).remove(&token); }
+// Accessed only on the shared actual-effect OS thread. Failed final Off retains
+// its owner in this set; no timeout can discard the obligation to unblock.
+fn remote_blocks()->&'static Mutex<std::collections::HashSet<String>>{static B:OnceLock<Mutex<std::collections::HashSet<String>>>=OnceLock::new();B.get_or_init(||Mutex::new(std::collections::HashSet::new()))}
+pub(super) fn native_block_owner(token:&str,enabled:bool)->bool{
+    if !NATIVE_THREAD.with(std::cell::Cell::get){return false;}
+    let mut owners=remote_blocks().lock().unwrap_or_else(|e|e.into_inner());
+    if enabled{if owners.contains(token){return true;}if owners.is_empty()&&!crate::platform::block_input(true).0{return false;}owners.insert(token.to_owned());true}
+    else{if !owners.contains(token){return true;}if owners.len()==1&&!crate::platform::block_input(false).0{return false;}owners.remove(token);true}
+}
+fn apply_block_on(remote:&Remote)->bool{
+    let Some(_serial)=remote.lease.effect()else{return false;};
+    if !remote.lease.active(){return false;}
+    native_block_owner(&remote.lease.token,true)&&remote.lease.active()
+}
+fn cleanup_remote_actual(remote:&Remote)->bool{
+    if remote.lease.active(){return false;}
+    let Some(_serial)=remote.lease.lock()else{return false;};
+    if remote.role!=0&&!native_block_owner(&remote.lease.token,false){return false;}
+    cleanup(&remote.lease.token)&&remote.lease.mark_cleaned()
+}
+fn retire_remote(remote:Remote)->bool{native_effect(true,Box::new(move||cleanup_remote_actual(&remote)))}
+fn sweep(){
+    let candidates:Vec<_>=remotes().lock().unwrap_or_else(|e|e.into_inner()).iter().filter(|(_,r)|!r.lease.active()).map(|(token,r)|(token.clone(),r.clone())).collect();
+    for(token,remote)in candidates{
+        remote.pending.lock().unwrap_or_else(|e|e.into_inner()).clear();
+        if remote.lease.cleaned()&&!(remote.lease.poisoned.load(Ordering::SeqCst)&&remote.lease.authority_live()){
+            remotes().lock().unwrap_or_else(|e|e.into_inner()).remove(&token);continue;
+        }
+        if remote.retiring.swap(true,Ordering::SeqCst){continue;}
+        let task=remote.clone();if !native_enqueue(true,Box::new(move||{let done=cleanup_remote_actual(&task);task.retiring.store(false,Ordering::SeqCst);done})){remote.retiring.store(false,Ordering::SeqCst);}
     }
 }
-fn start_sweeper() -> bool {
-    static STARTED: OnceLock<bool> = OnceLock::new();
-    *STARTED.get_or_init(|| std::thread::Builder::new().name("mixel-portable-input-cleanup".to_owned()).spawn(|| loop {
-        std::thread::sleep(Duration::from_millis(10)); sweep();
-    }).is_ok())
+fn start_sweeper()->bool{
+    static STARTED:OnceLock<bool>=OnceLock::new();*STARTED.get_or_init(||std::thread::Builder::new().name("mixel-portable-input-cleanup".to_owned()).spawn(||loop{std::thread::sleep(Duration::from_millis(10));sweep();}).is_ok())
 }
-pub(crate) fn receive(packet: (String,String,i32,u8,Vec<u8>,String,u32,bool,bool), peer: &Peer) -> bool {
-    let (token,target,conn,kind,bytes,name,argb,a,b) = packet;
-    let current = unsafe { GetCurrentProcessId() };
-    if !peer.alive() || Some(target) != birth(unsafe { GetCurrentProcess() }).map(|born| format!("{current}-{born}")) { return false; }
-    if names(&token).map(|(_,_,_,pid,born)| (pid,born)) != Some((peer.pid,peer.born)) { return false; }
-    if bytes.len() + name.len() > MAX_BYTES { return false; }
-    let action = match kind {
-        0 => MouseEvent::parse_from_bytes(&bytes).ok().map(|v| Action::Mouse(v,name,argb,a,b)),
-        1 if name.is_empty() && argb == 0 && !b => KeyEvent::parse_from_bytes(&bytes).ok().map(|v| Action::Key(v,a)),
-        2 if name.is_empty() && argb == 0 && !a && !b => PointerDeviceEvent::parse_from_bytes(&bytes).ok().map(Action::Pointer),
-        _ => None,
-    };
-    let Some(action) = action else { return false; };
-    if !start_sweeper() { return false; }
-    sweep();
-    let mut entries = remotes().lock().unwrap_or_else(|e| e.into_inner());
-    if !entries.contains_key(&token) {
-        if entries.len() >= 256 { return false; }
-        let Some(lease) = Lease::open(&token,peer) else { return false; };
-        let Ok(effect_id) = NEXT_EFFECT.fetch_update(Ordering::SeqCst,Ordering::SeqCst,|v| v.checked_sub(1)) else { return false; };
-        entries.insert(token.clone(), Remote { lease: Arc::new(lease), effect_id });
-    }
-    let remote = entries.get(&token).unwrap().clone(); drop(entries);
-    native_effect(false, Box::new(move || {
-        let Some(_serial) = remote.lease.effect() else {
-            if !remote.lease.active() { if let Some(_retire) = remote.lease.lock() { if cleanup(&token) { remote.lease.mark_cleaned(); } } }
-            return false;
-        };
-        let lease = remote.lease.clone(); let deferred = remote.clone();
-        let runner: Deferred = Arc::new(move |effect| {
-            let deferred = deferred.clone();
-            native_enqueue(false, Box::new(move || {
-                let Some(_serial) = deferred.lease.effect() else { return false; };
-                effect(); true
-            }))
-        });
-        apply(&token,remote.effect_id,conn,&action,Arc::new(move || lease.active()),runner);
-        true
+fn parse_action(kind:u8,bytes:&[u8],name:String,argb:u32,a:bool,b:bool)->Option<Action>{
+    if bytes.len()+name.len()>MAX_BYTES{return None;}
+    let action=match kind{
+        0=>MouseEvent::parse_from_bytes(bytes).ok().map(|v|Action::Mouse(v,name,argb,a,b)),
+        1 if name.is_empty()&&argb==0&&!b=>KeyEvent::parse_from_bytes(bytes).ok().map(|v|Action::Key(v,a)),
+        2 if name.is_empty()&&argb==0&&!a&&!b=>PointerDeviceEvent::parse_from_bytes(bytes).ok().map(Action::Pointer),_=>None,
+    }?;action.valid().then_some(action)
+}
+fn remote_runner(remote:Remote)->Deferred{Arc::new(move|effect|{let remote=remote.clone();native_enqueue(false,Box::new(move||{let Some(_serial)=remote.lease.effect()else{return false;};effect();true}))})}
+fn apply_remote(remote:&Remote,conn:i32,action:&Action)->bool{
+    let Some(_serial)=remote.lease.effect()else{return false;};
+    let lease=remote.lease.clone();apply(&lease.token,remote.effect_id,conn,action,Arc::new({let lease=lease.clone();move||lease.active()}),remote_runner(remote.clone()));true
+}
+// Split text at scalar boundaries. One packet keeps its queue position until all
+// chunks finish; later keys from the same owner cannot overtake its text.
+fn chunk(action:&mut Action)->Option<Action>{
+    let Action::Key(event,press)=action else{return None;};
+    let Some(hbb_common::message_proto::key_event::Union::Seq(text))=event.union.as_mut()else{return None;};
+    let boundary=text.char_indices().nth(64).map(|(offset,_)|offset)?;
+    let rest=text.split_off(boundary);let head=std::mem::replace(text,rest);
+    let mut part=event.clone();part.set_seq(head);Some(Action::Key(part,*press))
+}
+fn schedule_remote(remote:Remote)->bool{
+    native_enqueue_reserved(Box::new(move||{
+        let item=remote.pending.lock().unwrap_or_else(|e|e.into_inner()).pop_front();
+        let Some(mut item)=item else{remote.scheduled.store(false,Ordering::SeqCst);return true;};
+        let part=chunk(&mut item.action);let action=part.as_ref().unwrap_or(&item.action);
+        let success=apply_remote(&remote,item.conn,action);
+        if !success{remote.lease.poisoned.store(true,Ordering::SeqCst);(item.reply)(PortableReply::Refused(remote.lease.token.clone()));}
+        let mut pending=remote.pending.lock().unwrap_or_else(|e|e.into_inner());
+        if success&&part.is_some(){pending.push_front(item);}else{drop(item);}
+        if !remote.lease.active(){pending.clear();}
+        if pending.is_empty(){remote.scheduled.store(false,Ordering::SeqCst);return success;}
+        drop(pending);
+        if !schedule_remote(remote.clone()){
+            remote.lease.poisoned.store(true,Ordering::SeqCst);let mut pending=remote.pending.lock().unwrap_or_else(|e|e.into_inner());
+            if let Some(item)=pending.front(){(item.reply)(PortableReply::Refused(remote.lease.token.clone()));}pending.clear();remote.scheduled.store(false,Ordering::SeqCst);return false;
+        }success
     }))
 }
-pub(crate) fn shutdown() {
-    // A stream dying invalidates every actual owner before owned cleanup is
-    // scheduled. Do not remove responsibility when native cleanup fails.
-    let entries: Vec<_> = remotes().lock().unwrap_or_else(|e| e.into_inner()).values().cloned().collect();
-    for remote in entries { remote.lease.poisoned.store(true,Ordering::SeqCst); let _ = retire_remote(remote); }
-    sweep();
+pub(crate) fn receive_async(packet:(String,String,i32,u8,Vec<u8>,String,u32,bool,bool),peer:&Peer,reply:Reply)->bool{
+    let(token,target,conn,kind,bytes,name,argb,a,b)=packet;
+    let Some(action)=parse_action(kind,&bytes,name,argb,a,b)else{return false;};
+    let Some(remote)=remote_scope(&token,&target,0,peer)else{return false;};
+    let Some(permit)=PacketPermit::acquire()else{remote.lease.poisoned.store(true,Ordering::SeqCst);return false;};
+    let mut pending=remote.pending.lock().unwrap_or_else(|e|e.into_inner());pending.push_back(PendingInput{action,conn,reply,_permit:permit});
+    if remote.scheduled.swap(true,Ordering::SeqCst){return true;}drop(pending);
+    if schedule_remote(remote.clone()){true}else{remote.lease.poisoned.store(true,Ordering::SeqCst);remote.pending.lock().unwrap_or_else(|e|e.into_inner()).clear();remote.scheduled.store(false,Ordering::SeqCst);false}
+}
+pub(crate) fn receive_block(token:String,target:String,_conn:i32,role:u8,request:String,peer:&Peer,reply:Reply)->bool{
+    if !(1..=2).contains(&role)||request.len()!=32||!request.bytes().all(|c|c.is_ascii_hexdigit()){return false;}
+    let Some(remote)=remote_scope(&token,&target,role,peer)else{return false;};
+    native_enqueue(true,Box::new(move||{let success=apply_block_on(&remote);let sent=reply(PortableReply::Block(token,request,success));if !sent{remote.lease.poisoned.store(true,Ordering::SeqCst);}success&&sent}))
+}
+pub(crate) fn receive_retire(token:String,target:String,role:u8,peer:&Peer)->bool{
+    if !(1..=2).contains(&role)||names(&token).map(|(_,_,_,pid,born)|(pid,born))!=Some((peer.pid,peer.born)){return false;}
+    let current=unsafe{GetCurrentProcessId()};if Some(target)!=birth(unsafe{GetCurrentProcess()}).map(|born|format!("{current}-{born}")){return false;}
+    let known=remotes().lock().unwrap_or_else(|e|e.into_inner()).get(&token).cloned();
+    if let Some(remote)=known{if remote.role!=role||remote.lease.active(){return false;}sweep();return true;}
+    // A capacity-refused On still needs an independent retirement acknowledgment.
+    // No cached owner means no effect existed; only a denied genuine peer lease
+    // can receive CLEANED. This path cannot create a usable input scope.
+    let Some(lease)=Lease::open(&token,peer)else{return false;};if lease.active(){return false;}
+    native_enqueue(true,Box::new(move||{if lease.active(){return false;}let Some(_serial)=lease.lock()else{return false;};lease.mark_cleaned()}))
+}
+pub(crate) fn shutdown(){
+    let entries:Vec<_>=remotes().lock().unwrap_or_else(|e|e.into_inner()).values().cloned().collect();
+    // Deny every owner before the first native cleanup wait; a slow/failed
+    // release for one scope must not leave another queued scope authorized.
+    for remote in &entries{remote.lease.poisoned.store(true,Ordering::SeqCst);remote.pending.lock().unwrap_or_else(|e|e.into_inner()).clear();}
+    for remote in entries{let _=retire_remote(remote);}sweep();
 }
 
 // BlockInput, SendInput and every owned release share one actual OS thread.
 // The queues carry closures, never acquired mutex guards. Control has priority,
 // with a finite burst so an unrelated control flood cannot starve data forever.
 type NativeTask = Box<dyn FnOnce() -> bool + Send>;
-struct NativeState { control: std::collections::VecDeque<NativeTask>, data: std::collections::VecDeque<NativeTask> }
+struct NativeState { control: std::collections::VecDeque<NativeTask>, data: std::collections::VecDeque<NativeTask>, reserved:std::collections::VecDeque<NativeTask> }
 struct Native { state: Mutex<NativeState>, changed: std::sync::Condvar }
 thread_local! { static NATIVE_THREAD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
 fn native() -> Option<&'static Arc<Native>> {
     static NATIVE: OnceLock<Option<Arc<Native>>> = OnceLock::new();
     NATIVE.get_or_init(|| {
-        let shared = Arc::new(Native { state: Mutex::new(NativeState { control: std::collections::VecDeque::new(), data: std::collections::VecDeque::new() }), changed: std::sync::Condvar::new() });
+        let shared = Arc::new(Native { state: Mutex::new(NativeState { control: std::collections::VecDeque::new(), data: std::collections::VecDeque::new(), reserved:std::collections::VecDeque::new() }), changed: std::sync::Condvar::new() });
         let worker = shared.clone();
         std::thread::Builder::new().name("mixel-native-input".to_owned()).spawn(move || {
-            NATIVE_THREAD.with(|v| v.set(true)); let mut control_burst = 0;
+            NATIVE_THREAD.with(|v| v.set(true)); let mut control_burst = 0; let mut reserved_turn=false;
             loop {
                 let mut state = worker.state.lock().unwrap_or_else(|e| e.into_inner());
-                while state.control.is_empty() && state.data.is_empty() { state = worker.changed.wait(state).unwrap_or_else(|e| e.into_inner()); }
-                let task = if !state.control.is_empty() && (control_burst < 8 || state.data.is_empty()) { control_burst += 1; state.control.pop_front() } else { control_burst = 0; state.data.pop_front() };
+                while state.control.is_empty() && state.data.is_empty() && state.reserved.is_empty() { state = worker.changed.wait(state).unwrap_or_else(|e| e.into_inner()); }
+                let task = if !state.control.is_empty() && (control_burst < 8 || (state.data.is_empty()&&state.reserved.is_empty())) { control_burst += 1; state.control.pop_front() } else { control_burst=0;reserved_turn=!reserved_turn;
+                    if !state.reserved.is_empty()&&(reserved_turn||state.data.is_empty()){state.reserved.pop_front()}else{state.data.pop_front()} };
                 drop(state); if let Some(task) = task { task(); }
             }
         }).ok().map(|_| shared)
@@ -441,6 +531,12 @@ pub(super) fn native_enqueue(control: bool, task: NativeTask) -> bool {
     let queue = if control { &mut state.control } else { &mut state.data };
     if queue.len() >= MAX_PENDING { return false; }
     queue.push_back(task); shared.changed.notify_one(); true
+}
+fn native_enqueue_reserved(task:NativeTask)->bool{
+    let Some(shared)=native()else{return false;};let mut state=shared.state.lock().unwrap_or_else(|e|e.into_inner());
+    // A packet reservation remains owned across every continuation. There can
+    // never be more than MAX_PENDING reserved tasks including the running one.
+    if state.reserved.len()>=MAX_PENDING{return false;}state.reserved.push_back(task);shared.changed.notify_one();true
 }
 pub(super) fn native_effect(control: bool, task: NativeTask) -> bool {
     if NATIVE_THREAD.with(std::cell::Cell::get) { return task(); }

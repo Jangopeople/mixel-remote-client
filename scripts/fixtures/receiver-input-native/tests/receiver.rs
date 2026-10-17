@@ -11,11 +11,13 @@ fn observed() -> &'static Mutex<Vec<Observed>> { static V: OnceLock<Mutex<Vec<Ob
 static PAUSE: AtomicBool = AtomicBool::new(false);
 static ENTERED: AtomicBool = AtomicBool::new(false);
 static RELEASE_FAILURES: AtomicUsize = AtomicUsize::new(0);
+static BLOCK_FAILURES: AtomicUsize = AtomicUsize::new(0);
 static UNBLOCK_FAILURES: AtomicUsize = AtomicUsize::new(0);
 fn input_threads() -> &'static Mutex<Vec<std::thread::ThreadId>> { static V: OnceLock<Mutex<Vec<std::thread::ThreadId>>> = OnceLock::new(); V.get_or_init(|| Mutex::new(Vec::new())) }
 fn block_calls() -> &'static Mutex<Vec<(bool,std::thread::ThreadId)>> { static V: OnceLock<Mutex<Vec<(bool,std::thread::ThreadId)>>> = OnceLock::new(); V.get_or_init(|| Mutex::new(Vec::new())) }
 mod platform {
     pub fn block_input(enabled: bool) -> (bool,String) {
+        if enabled && super::BLOCK_FAILURES.fetch_update(super::Ordering::SeqCst,super::Ordering::SeqCst,|v|v.checked_sub(1)).is_ok(){return (false,"controlled On failure".to_owned());}
         if !enabled && super::UNBLOCK_FAILURES.fetch_update(super::Ordering::SeqCst,super::Ordering::SeqCst,|v| v.checked_sub(1)).is_ok() { return (false,"controlled failure".to_owned()); }
         super::block_calls().lock().unwrap().push((enabled,std::thread::current().id())); (true,String::new())
     }
@@ -46,6 +48,12 @@ mod server {
     #[cfg(windows)] pub(crate) mod portable_service { pub(crate) mod client {
         pub(crate) static RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
         pub(crate) fn running()->bool {RUNNING.load(std::sync::atomic::Ordering::SeqCst)}
+        type BlockSend=std::sync::Arc<dyn Fn(&str,&str,i32,u8,&str)->bool+Send+Sync>;
+        type RetireSend=std::sync::Arc<dyn Fn(&str,&str,u8)->bool+Send+Sync>;
+        pub(crate) fn block_transport()->&'static std::sync::Mutex<Option<BlockSend>>{static S:std::sync::OnceLock<std::sync::Mutex<Option<BlockSend>>>=std::sync::OnceLock::new();S.get_or_init(||std::sync::Mutex::new(None))}
+        pub(crate) fn retire_transport()->&'static std::sync::Mutex<Option<RetireSend>>{static S:std::sync::OnceLock<std::sync::Mutex<Option<RetireSend>>>=std::sync::OnceLock::new();S.get_or_init(||std::sync::Mutex::new(None))}
+        pub(crate) fn send_receiver_block(token:&str,target:&str,conn:i32,role:u8,request:&str)->bool{let send=block_transport().lock().unwrap().clone();send.map(|f|f(token,target,conn,role,request)).unwrap_or(false)}
+        pub(crate) fn send_receiver_retire(token:&str,target:&str,role:u8)->bool{let send=retire_transport().lock().unwrap().clone();send.map(|f|f(token,target,role)).unwrap_or(false)}
         pub(crate) fn send_receiver_input(_token:&str,_target:&str,_conn:i32,_action:&super::super::mixel_receiver_input::Action)->bool {false}
     }}
     #[path="../mixel_receiver_input.rs"]
