@@ -1,5 +1,36 @@
 # Mixel-Remote — Agent Handoff / Current State
 
+## 2026-10-17 — Standard helper session identity and bridge generation fixes
+
+The new9cc producer passes actual Linux and Mac input components; mandatory
+Linux/Mac receiver jobs pass too. Windows still fails, and the bridge generator
+fails before any installer job starts. All actual logs are preserved once.
+
+The Standard child reaches phase2 and gets native5 while verifying its publisher.
+The transferred process handle deliberately has only synchronization and limited
+query rights; ProcessIdToSessionId requires the stronger query-information right.
+Pipe peers now get PID and session from the same actual kernel pipe, retaining
+the transferred process PID/birth/image/liveness checks and own nonzero-session
+comparison. Direct child startup keeps its independent session check. No process
+rights, token rights or DACLs expand. New numeric API observations and invalid
+object/zero-session/wrong-session cases require actual hosted Windows execution.
+
+The bridge original reaches cbindgen0.24.3 and panics `Sender is not generic`.
+The new private SAS Sender type has been renamed SasPublisherLease; reversing
+the three renamed tokens reproduces the old complete leaf byte-for-byte. The
+four external SAS rows stay identical. Whole-leaf source20 and preparation6 pass;
+actual code generation remains required. Its preparation negative now exercises
+LF/CRLF hash drift separately from mixed-newline refusal on every host.
+
+Integration continues in the ordinary clone
+`/private/tmp/mixel-receiver-next-integration-20261017`. The previous integration
+clone/source remain stable for the long historical LF/CRLF matrix. A fresh exact
+1abc/hbb source at `/private/tmp/mixel-receiver-peer-composition-20261017/rustdesk`
+passed complete first composition with the new Windows peer checks. Its five
+actual custody predecessor files are sealed; the independent custody owner is
+rebinding its final prefix and preparing real-child/mock-effect Windows cases.
+No current whole-app, signed installer, native desktop or release qualification.
+
 ## 2026-10-17 — Normal f9 build prerequisites diagnosed and corrected
 
 Normal producer39052310259 and mandatory preflight39052312400 atf9aa66a both
