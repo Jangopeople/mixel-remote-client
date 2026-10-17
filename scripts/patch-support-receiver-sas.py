@@ -13,7 +13,7 @@ import tempfile
 
 HERE = Path(__file__).absolute().parent
 PLAN = HERE / 'support-receiver-sas-plan.json'
-PLAN_SHA = '74d5c1fd6fd2ac343f04317cac8f723a7133e801e83cf93ecb2402c3e2740e9b'
+PLAN_SHA = 'bf8d3b3a48f222f2a867701ddb1501d4558800bb1dab04c0843a90c6204f6932'
 
 
 def sha(raw):

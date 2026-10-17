@@ -96,7 +96,7 @@
   ],
   "prefixPlanSHA256": {
     "support-receiver-native-plan.json": "bc4269ace34c3ea2ceeb82a2b77ae7486b7daca041e8f3f7d6f6fa24afae8146",
-    "support-receiver-input-plan.json": "82f4a8e2697ac17e564299817ff23566ed4c330a708c58643fe373879dd289a5",
+    "support-receiver-input-plan.json": "23951a75336f4230c9a40fa90775fe6572714708aa90c9ec74037fa06a226fcd",
     "support-receiver-uinput-plan.json": "f43e19dff27d33912f1dbc560576679909920cc2c6b0738db9dfbdb66c59e18f"
   }
 }
