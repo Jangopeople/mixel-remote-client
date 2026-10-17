@@ -80,17 +80,23 @@ def source_contracts(module):
     print('PASS: receiver source contracts, pinned templates, backend/lease boundaries and normal CI gates', flush=True)
 
 
-def actual_profile(module, source):
+def actual_profile(module, source, physical_newline=None):
     if module.inspect(source,module.load_plan())[1] in ('final','previous'):
         with module.previous(source) as prior:
-            return actual_profile(module, prior)
+            return actual_profile(module, prior, physical_newline)
+    if physical_newline is None:
+        for newline in ('\n', '\r\n'):
+            actual_profile(module, source, newline)
+        return
     plan = module.load_plan()
     changed_files = len(plan['profiles']['fresh'])
     with tempfile.TemporaryDirectory(prefix='mixel-receiver-source-controls-') as tmp:
         root = Path(tmp).resolve() / 'source'; root.mkdir()
         for name in plan['profiles']['fresh']:
             if name in module.LEAVES: continue
-            dst = root / name; dst.parent.mkdir(parents=True, exist_ok=True); shutil.copyfile(source / name, dst)
+            dst = root / name; dst.parent.mkdir(parents=True, exist_ok=True)
+            logical, _ = module.canonical((source / name).read_bytes())
+            dst.write_bytes(logical.replace('\n', physical_newline).encode())
         original = snapshot(root)
         assert module.apply(root, check=True)['writes'] == changed_files and snapshot(root) == original
         assert module.apply(root)['writes'] == changed_files
@@ -107,12 +113,14 @@ def actual_profile(module, source):
         assert not module.is_current(root)
         prior = dict(original)
         for name,pairs in plan['migration']['inverse'].items():
-            text = prior[name].decode('utf-8')
+            text, newline = module.canonical(prior[name])
             for after,before in pairs:
                 assert text.count(before) == 1
                 text = text.replace(before,after,1)
-            prior[name] = text.encode()
-        for name,text in plan['migration']['owned'].items(): prior[name] = text.encode()
+            prior[name] = text.replace('\n', newline).encode()
+        owned_newline = module.canonical(original['src/server.rs'])[1]
+        for name,text in plan['migration']['owned'].items():
+            prior[name] = text.replace('\n', owned_newline).encode()
         for name,raw in prior.items(): (root / name).write_bytes(raw)
         assert not module.is_current(root)
         assert module.apply(root, check=True)['profile'] == 'previous' and snapshot(root) == prior
@@ -128,7 +136,8 @@ def actual_profile(module, source):
             if path.exists(): path.unlink()
         target = root / 'src/ipc.rs'; other = root / 'hardlink.rs'; other.hardlink_to(target); must_refuse(module, root); other.unlink()
         raw = target.read_bytes(); target.write_bytes(raw.replace(b'\n', b'\r\n', 1)); must_refuse(module, root); target.write_bytes(raw)
-        for name, raw in original.items(): (root / name).write_bytes(raw.replace(b'\n', b'\r\n'))
+        for name, raw in original.items():
+            (root / name).write_bytes(raw.replace(b'\r\n', b'\n').replace(b'\n', b'\r\n'))
         crlf = snapshot(root); module.apply(root); module.apply(root, restore=True); assert snapshot(root) == crlf
     with tempfile.TemporaryDirectory(prefix='mixel-receiver-checkout-crlf-') as tmp:
         folder = Path(tmp).resolve(); scripts = folder / 'scripts'; scripts.mkdir()
