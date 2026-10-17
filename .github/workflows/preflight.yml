@@ -1,0 +1,562 @@
+name: client-preflight
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      windows_source_runner:
+        description: 'Windows source-only comparison runner'
+        type: choice
+        default: windows-2022
+        options:
+          - windows-2022
+          - windows-2025
+      portable_standard_lease_qa_bundle:
+        description: 'Compile a GUID-only portable desktop QA fixture; does not qualify standard-user consent or release readiness'
+        type: boolean
+        default: false
+      standard_gui_connection_observation:
+        description: 'Observe isolated standard-child GUI initialization A/B/A; preserves native outcomes and never qualifies consent or applications'
+        type: boolean
+        default: false
+
+      session_directory_access_observation:
+        description: 'Disposable CI-only session directory DACL experiment; original Standard gate remains fatal'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  # Direct Python helpers and their inherited child processes share UTF-8 on Windows.
+  PYTHONUTF8: "1"
+  PYTHONIOENCODING: "utf-8"
+
+jobs:
+  release-pipeline:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: '1.75'
+      - name: Run release staging and configuration regression tests
+        run: |
+          python3 scripts/test-release-pipeline.py
+          python3 scripts/test-flutter-sdk-pipeline.py
+          python3 scripts/test-support-url-log-privacy.py
+          python3 scripts/test-support-launch-macos-concurrency-controls.py --evidence-dir "$RUNNER_TEMP/mixel-macos-concurrency-source"
+          python3 scripts/test-standard-lease-qa-bundle.py
+          python3 scripts/test-windows-release-runtime.py
+          python3 scripts/test-notarize-macos.py
+          python3 scripts/test-macos-native-minimum.py
+          python3 scripts/test-macos-bundle-minimum.py
+          python3 scripts/test-sdk-discovery.py
+          python3 scripts/test-rust-toolchain.py
+          python3 scripts/test-pinned-source-archives.py
+          python3 scripts/test-support-session-fixture.py
+          python3 scripts/test-flutter-branding.py
+          python3 scripts/test-support-video-sampling.py
+          python3 scripts/test-linux-runtime-artifact.py
+          python3 scripts/test-relay-ws-bridge-lifecycle.py
+          python3 scripts/test-owned-xvfb.py
+      - name: Exercise Unix runtime IPC and window probe self-tests
+        run: python3 scripts/test-support-launch-linux.py --self-test
+      - name: Parse all Python source
+        run: python3 -m compileall -q scripts
+      - name: Validate branding shell syntax
+        run: bash -n scripts/apply-branding.sh scripts/local/sign-and-publish-macos.sh
+  windows-packaging:
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_source_runner == 'windows-2025' && 'windows-2025' || 'windows-2022' }}
+    timeout-minutes: 240
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v5
+      - name: Verify UTF-8 repository source decoding
+        shell: pwsh
+        run: |
+          python -c "import sys; from pathlib import Path; assert sys.flags.utf8_mode == 1; p = Path('.github/workflows/build.yml'); assert p.read_text() == p.read_text(encoding='utf-8'); print('PASS: Windows Python reads repository source as strict UTF-8')"
+          if ($LASTEXITCODE -ne 0) { throw 'Windows repository source encoding verification failed.' }
+      - name: Exercise Windows payload preparation and IPC response validation
+        shell: pwsh
+        run: ./scripts/test-windows-pipeline.ps1
+      - name: Exercise exact runtime health IPC with stock Windows PowerShell 5
+        shell: powershell
+        run: ./scripts/test-windows-pipeline.ps1 -RuntimeProbeOnly -RequireStockWindowsPowerShell5
+      - name: Resolve the pinned Windows clipboard source
+        id: config
+        shell: pwsh
+        run: |
+          python scripts/release-artifacts.py config
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned Windows source configuration failed.' }
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: '1.75'
+      - name: Prove early Windows acknowledgment publication
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          ./scripts/activate-windows-msvc.ps1 -ExportToGitHubEnvironment
+          python scripts/test-support-lease-ack.py
+          if ($LASTEXITCODE -ne 0) { throw 'Actual Windows acknowledgment controls failed.' }
+      - name: Prove early actual standard-token lease lifecycle
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          $env:MIXEL_HOSTED_OWNED_QA_NAMESPACE='1'
+          ./scripts/invoke-hosted-standard-qa-windows.ps1 -EvidenceDirectory (Join-Path $env:RUNNER_TEMP 'mixel-early-standard-qa')
+      - name: Preserve early Windows standard-token lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-lease-ack-early
+          path: ${{ runner.temp }}/mixel-early-standard-qa/
+          if-no-files-found: ignore
+          retention-days: 14
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.27.4'
+      - name: Resolve canonical Windows Dart executable
+        shell: pwsh
+        run: |
+          python -c "import os, sys; from pathlib import Path; sys.path.insert(0, 'scripts'); from sdk_discovery import find_dart; binary = find_dart(); assert binary and Path(binary).is_file(), 'Installed Dart SDK is missing'; assert not binary.lower().endswith('.exe') or binary.endswith('.exe'), 'Windows Dart executable suffix is not canonical'; stream = open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8', newline='\n'); stream.write('DART_BIN=' + binary + '\n'); stream.close(); print('PASS: canonical installed Windows Dart executable exported to unchanged source tests')"
+          if ($LASTEXITCODE -ne 0) { throw 'Windows Dart SDK resolution failed.' }
+      - name: Fetch pinned complete Windows source
+        shell: bash
+        env:
+          UPSTREAM_VERSION: ${{ steps.config.outputs.upstream_version }}
+        run: git clone --depth 1 --branch "$UPSTREAM_VERSION" --recurse-submodules https://github.com/rustdesk/rustdesk.git rustdesk
+      - name: Prove file-dialog lifecycle before complete Windows source checks
+        shell: pwsh
+        run: |
+          if (-not $env:DART_BIN) { throw 'Canonical Windows Dart SDK is required for the early lifecycle gate.' }
+          $early = Join-Path $env:RUNNER_TEMP 'mixel-file-dialog-lifecycle-early'
+          python scripts/test-support-file-dialog-lifecycle.py --source rustdesk --dart $env:DART_BIN --output $early
+          if ($LASTEXITCODE -ne 0) { throw 'Early actual file-dialog lifecycle controls failed.' }
+      - name: Preserve early Windows file-dialog lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-file-dialog-lifecycle-early
+          path: ${{ runner.temp }}/mixel-file-dialog-lifecycle-early/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Fetch exact pinned native AV1 API headers without codec compilation
+        shell: bash
+        run: |
+          git init native-aom-headers
+          git -C native-aom-headers config core.autocrlf false
+          git -C native-aom-headers fetch --depth 1 https://aomedia.googlesource.com/aom d6f30ae474dd6c358f26de0a0fc26a0d7340a84c
+          git -C native-aom-headers checkout --detach FETCH_HEAD
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          expected = {
+              'aomcx.h': '64f38ce6d05edf08fb9838d0ac3af352108e588e5f04d17139aaa93e08587e5f',
+              'aom_codec.h': 'ace046167692a42a258a9f017aa78dde723d2a40d00de70e4af207fc517de22c',
+          }
+          for name, digest in expected.items():
+              actual = hashlib.sha256((Path('native-aom-headers/aom') / name).read_bytes()).hexdigest()
+              if actual != digest:
+                  raise RuntimeError('Pinned native libaom API header differs: ' + name)
+          print('PASS: exact libaom headers match the pinned Windows producer API bytes; no codec library build required.')
+          PY
+      - name: Qualify actual installed MSVC with a spaced Unicode temporary path
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP ('mixel MSVC préflight ' + [Guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Path $root | Out-Null
+          try {
+            ./scripts/activate-windows-msvc.ps1 -TemporaryRoot $root -ExportToGitHubEnvironment
+            if (@(Get-ChildItem -LiteralPath $root -Force).Count -ne 0) { throw 'Owned MSVC temporary batch was not cleaned.' }
+          } finally { Remove-Item -LiteralPath $root -Force }
+      - name: Prove actual native Windows clipboard C and Rust ownership
+        shell: pwsh
+        run: |
+          python scripts/test-support-windows-clipboard.py --evidence-dir windows-clipboard-proof
+          if ($LASTEXITCODE -ne 0) { throw 'Native Windows clipboard C/Rust ownership qualification failed.' }
+      - name: Prove explicit MSVC selection under actual Git Bash coreutils shadow
+        shell: bash
+        run: python scripts/test-rust-toolchain.py --native-windows
+      - name: Qualify actual native Rust linker after Git Bash startup
+        shell: bash
+        run: |
+          source scripts/use-windows-msvc-bash.sh
+          python - <<'PY'
+          import subprocess
+          import tempfile
+          from pathlib import Path
+          with tempfile.TemporaryDirectory(prefix='mixel native Rust préflight ') as folder:
+              root = Path(folder)
+              source = root / 'native.rs'
+              binary = root / 'native.exe'
+              source.write_text('fn main() { assert_eq!(std::env::args().nth(1).as_deref(), Some("mixel préflight")); println!("PASS: actual standalone Rust links with MSVC and runs under Git Bash after native environment import."); }\n', encoding='utf-8')
+              subprocess.run(['rustc', '--edition=2021', '--deny=warnings', str(source), '-o', str(binary)], check=True, timeout=60)
+              subprocess.run([str(binary), 'mixel préflight'], check=True, timeout=10)
+          PY
+      - name: Exercise complete Windows generated source, keep-awake and native branding
+        shell: bash
+        env:
+          MIXEL_HOSTED_OWNED_QA_NAMESPACE: "1"
+          RDREPO: ./rustdesk
+          AOM_INCLUDE_DIR: ${{ github.workspace }}/native-aom-headers
+        run: bash scripts/test-windows-generated-source.sh
+      - name: Preserve Windows SDK source diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-sdk-source-diagnostics
+          path: |
+            ${{ runner.temp }}/mixel-sdk-source/*.log
+            ${{ runner.temp }}/mixel-sdk-source/*.timing.json
+            ${{ runner.temp }}/mixel-sdk-compatibility/*.log
+            ${{ runner.temp }}/mixel-sdk-compatibility/*.command.json
+          if-no-files-found: ignore
+          retention-days: 14
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: windows-clipboard-source-native
+          path: windows-clipboard-proof/*.log
+          if-no-files-found: ignore
+      - name: Preserve Windows file-dialog lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-file-dialog-lifecycle
+          path: |
+            ${{ runner.temp }}/mixel-file-dialog-lifecycle/*.log
+            ${{ runner.temp }}/mixel-file-dialog-lifecycle/*.json
+            ${{ runner.temp }}/mixel-file-dialog-lifecycle/actual-*.dart
+          if-no-files-found: ignore
+          retention-days: 14
+
+  portable-standard-lease-qa:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.portable_standard_lease_qa_bundle }}
+    runs-on: windows-2022
+    timeout-minutes: 10
+    env:
+      GIT_CONFIG_COUNT: '1'
+      GIT_CONFIG_KEY_0: core.autocrlf
+      GIT_CONFIG_VALUE_0: 'false'
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: '1.75'
+      - name: Activate the existing native x64 compiler for source-only QA
+        shell: pwsh
+        run: ./scripts/activate-windows-msvc.ps1 -ExportToGitHubEnvironment
+      - name: Verify exact adapters with stock Windows PowerShell 5
+        shell: powershell
+        run: |
+          if ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1 -or $PSVersionTable.PSEdition -cne 'Desktop' -or -not [Environment]::Is64BitProcess) { throw 'Requires actual stock x64 Windows PowerShell 5.1 Desktop.' }
+          Write-Host ('PASS: actual stock Windows PowerShell ' + $PSVersionTable.PSVersion.ToString() + '; Desktop; x64; source controls only.')
+          ./scripts/test-support-lease-interactive-source.ps1 -NativePipeControls
+      - name: Verify portable source and malformed-input refusals
+        shell: pwsh
+        run: |
+          python scripts/test-standard-lease-qa-bundle.py
+          if ($LASTEXITCODE -ne 0) { throw 'Portable source/binary boundary controls failed.' }
+      - name: Compile static-CRT GUID-only console and GUI fixtures with scoped loader smoke
+        shell: pwsh
+        run: |
+          python scripts/build-standard-lease-qa-bundle.py --output standard-lease-qa-bundle
+          if ($LASTEXITCODE -ne 0) { throw 'Portable GUID-only source fixture compilation failed.' }
+      - name: Upload source-bound compilation package without release qualification
+        uses: actions/upload-artifact@v6
+        with:
+          name: portable-standard-lease-qa-source-only
+          path: standard-lease-qa-bundle/
+          if-no-files-found: error
+          retention-days: 7
+  standard-gui-connection-observation:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.standard_gui_connection_observation }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_source_runner == 'windows-2025' && 'windows-2025' || 'windows-2022' }}
+    timeout-minutes: 10
+    env:
+      MIXEL_GUI_CONNECTION_OBSERVATION: '1'
+      GIT_CONFIG_COUNT: '1'
+      GIT_CONFIG_KEY_0: core.autocrlf
+      GIT_CONFIG_VALUE_0: 'false'
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: '1.75'
+      - name: Activate the existing native x64 compiler for isolated observation
+        shell: pwsh
+        run: ./scripts/activate-windows-msvc.ps1 -ExportToGitHubEnvironment
+      - name: Exercise GUI observation source and cleanup controls without native calls
+        shell: pwsh
+        run: |
+          python scripts/test-standard-gui-connection.py
+          if ($LASTEXITCODE -ne 0) { throw 'GUI connection source controls failed.' }
+          ./scripts/test-standard-gui-connection-source.ps1
+      - name: Observe exact standard-child GUI connection without consent qualification
+        shell: pwsh
+        run: ./scripts/observe-standard-gui-connection-windows.ps1 -EvidenceDirectory gui-connection-proof
+      - name: Preserve literal source-bound observations and cleanup outcomes
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: standard-gui-connection-observation
+          path: gui-connection-proof/
+          if-no-files-found: error
+          retention-days: 7
+  https-registration-gateway:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - name: Exercise bounded gateway sockets and the actual pinned hbbs and hbbr
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p gateway-proof
+          python3 scripts/test-relay-ws-bridge-docker.py 2>&1 | tee gateway-proof/registration.log
+          python3 scripts/test-relay-ws-bridge-deployment.py --docker 2>&1 | tee gateway-proof/deployment.log
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: https-registration-gateway-proof
+          path: gateway-proof
+          if-no-files-found: error
+  upstream-source:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - name: Resolve the pinned upstream version
+        id: config
+        run: python3 scripts/release-artifacts.py config
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.27.4'
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: '1.75'
+          targets: x86_64-unknown-linux-gnu,x86_64-pc-windows-msvc,aarch64-apple-darwin
+      - name: Install native clipboard and codec regression dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb xclip libaom-dev
+      - name: Fetch pinned upstream source
+        env:
+          UPSTREAM_VERSION: ${{ steps.config.outputs.upstream_version }}
+        run: git clone --depth 1 --branch "$UPSTREAM_VERSION" --recurse-submodules https://github.com/rustdesk/rustdesk.git rustdesk
+      - name: Exercise actual source patches and support reporter
+        run: |
+          python3 scripts/test-support-flutter-analysis.py --dart "$(command -v dart)" --evidence-dir "$RUNNER_TEMP/mixel-sdk-source"
+          python3 scripts/test-macos-startup.py
+          python3 scripts/test-support-macos-tray-url.py
+          python3 scripts/test-support-launch-macos-tray-controls.py
+          python3 scripts/test-support-macos-termination-support.py --app "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf"
+          python3 scripts/test-support-flutter-sdk-compatibility.py --app "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --output "$RUNNER_TEMP/mixel-sdk-compatibility"
+          python3 scripts/test-support-file-dialog-lifecycle.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --dart "$(command -v dart)" --output "$RUNNER_TEMP/mixel-file-dialog-lifecycle"
+          python3 scripts/test-support-native-warnings.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --source-only --output "$RUNNER_TEMP/mixel-native-warning-source"
+          python3 scripts/test-support-compiler-cleanup.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --source-only --output "$RUNNER_TEMP/mixel-compiler-cleanup-source"
+          python3 scripts/test-macos-update.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --source-only
+          python3 scripts/test-support-file-transfer-window.py --app "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --output "$RUNNER_TEMP/mixel-file-transfer-source" --flutter "$(command -v flutter)"
+          python3 scripts/test-support-macos-termination.py --flutter "$(command -v flutter)"
+          python3 scripts/test-support-invite.py
+          python3 scripts/test-generated-support-paths.py
+          python3 scripts/test-support-macos-uri-routing.py
+          python3 scripts/test-support-macos-url-ack.py
+          python3 scripts/test-support-macos-url-async-peer.py
+          python3 scripts/test-macos-update.py
+          python3 scripts/test-support-lease.py
+          python3 scripts/test-windows-lease-error.py
+          python3 scripts/test-support-network.py
+          python3 scripts/test-secure-support.py
+          python3 scripts/test-support-linux.py
+          python3 scripts/test-support-signals.py
+          python3 scripts/test-support-input.py
+          python3 scripts/test-support-keyboard-default.py --source rustdesk --source-root "$PWD" --evidence-dir "$RUNNER_TEMP/mixel-keyboard-default-source" --linux-sysroot "$(rustc --print sysroot)"
+          python3 scripts/test-support-uinput-scroll.py --source rustdesk --evidence-dir "$RUNNER_TEMP/mixel-uinput-wheel-source" --linux-sysroot "$(rustc --print sysroot)"
+          python3 scripts/test-support-uinput-device.py --source rustdesk --wheel-helper scripts/patch-support-uinput-scroll.py --output "$RUNNER_TEMP/mixel-uinput-device-source" --rustc "$(command -v rustc)" --linux-sysroot "$(rustc --print sysroot)"
+          RUSTC_BIN="$(rustup which rustc)" python3 scripts/test-support-fingerprint.py --source rustdesk --evidence-dir "$RUNNER_TEMP/mixel-fingerprint-source"
+          RUSTC_BIN="$(rustup which rustc)" python3 scripts/test-support-fatal-crash.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --upstream-repo rustdesk --evidence-dir "$RUNNER_TEMP/mixel-fatal-crash-source" --linux-sysroot "$(rustc --print sysroot)"
+          python3 scripts/test-support-clipboard.py --native-x11
+          python3 scripts/test-support-windows-clipboard.py
+          python3 scripts/test-support-video.py
+          python3 scripts/test-support-macos.py
+          python3 scripts/test-support-macos-window.py
+          python3 scripts/test-support-macos-cleanup.py --dart "$(command -v dart)" --flutter "$(command -v flutter)"
+          python3 scripts/test-support-uri-routing.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --dart "$(command -v dart)" --output "$RUNNER_TEMP/mixel-uri-routing"
+          python3 scripts/test-support-linux-window-close.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --dart "$(command -v dart)"
+          python3 scripts/test-support-linux-child-window-close.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --output "$RUNNER_TEMP/mixel-linux-child-close"
+          python3 scripts/test-support-wakelock.py
+          python3 scripts/test-branding.py
+          dart analyze scripts/support-invite-reporter.dart scripts/test-support-invite.dart
+          dart scripts/test-support-invite.dart
+      - name: Preserve SDK compatibility diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: upstream-source-sdk-compatibility
+          path: |
+            ${{ runner.temp }}/mixel-sdk-compatibility/*.log
+            ${{ runner.temp }}/mixel-sdk-compatibility/*.command.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Preserve Linux file-dialog lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: linux-file-dialog-lifecycle
+          path: ${{ runner.temp }}/mixel-file-dialog-lifecycle/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  macos-runtime-harness:
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+      - name: Resolve the pinned upstream version
+        id: config
+        run: python3 scripts/release-artifacts.py config
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: '1.81'
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.27.4'
+      - name: Prepare the exact release Flutter framework for native regression checks
+        run: |
+          flutter precache --macos
+          mixel_flutter_framework="$(python3 -c 'import pathlib,shutil; print(pathlib.Path(shutil.which("flutter")).resolve().parents[1] / "bin/cache/artifacts/engine/darwin-x64-release/FlutterMacOS.xcframework/macos-arm64_x86_64/FlutterMacOS.framework")')"
+          test -f "$mixel_flutter_framework/Headers/FlutterEngine.h"
+          echo "MIXEL_FLUTTER_FRAMEWORK=$mixel_flutter_framework" >> "$GITHUB_ENV"
+
+      - name: Prepare Intel execution on an Apple Silicon runner
+        run: |
+          if [[ "$(uname -m)" == "arm64" ]]; then
+            softwareupdate --install-rosetta --agree-to-license
+          fi
+      - name: Fetch pinned native Mac source and common library
+        env:
+          UPSTREAM_VERSION: ${{ steps.config.outputs.upstream_version }}
+        run: git clone --depth 1 --branch "$UPSTREAM_VERSION" --recurse-submodules https://github.com/rustdesk/rustdesk.git rustdesk
+      - name: Prove exact SDK source compatibility and composed branding
+        run: |
+          python3 scripts/test-support-flutter-analysis.py --dart "$(command -v dart)" --evidence-dir "$RUNNER_TEMP/mixel-sdk-source"
+          python3 scripts/test-macos-startup.py
+          python3 scripts/test-support-macos-tray-url.py
+          python3 scripts/test-support-launch-macos-tray-controls.py
+          python3 scripts/test-support-macos-termination-support.py --app "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf"
+          python3 scripts/test-support-flutter-sdk-compatibility.py --app "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --output "$RUNNER_TEMP/mixel-sdk-compatibility"
+          python3 scripts/test-support-file-dialog-lifecycle.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --dart "$(command -v dart)" --output "$RUNNER_TEMP/mixel-file-dialog-lifecycle"
+          python3 scripts/test-support-native-warnings.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --source-only --output "$RUNNER_TEMP/mixel-native-warning-source"
+          python3 scripts/test-support-compiler-cleanup.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --source-only --output "$RUNNER_TEMP/mixel-compiler-cleanup-source"
+          RUSTC_BIN="$(rustup which rustc)" python3 scripts/test-macos-update.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf"
+      - name: Preserve SDK compatibility diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: macos-runtime-harness-sdk-compatibility
+          path: |
+            ${{ runner.temp }}/mixel-sdk-compatibility/*.log
+            ${{ runner.temp }}/mixel-sdk-compatibility/*.command.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Prove native fatal-crash handling with isolated owned children
+        run: RUSTC_BIN="$(rustup which rustc)" python3 scripts/test-support-fatal-crash.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --upstream-repo rustdesk --evidence-dir "$RUNNER_TEMP/mixel-fatal-crash-source"
+      - name: Prove native Mac failure boundaries and actual pinned Rust final link
+        env:
+          MACOS_RUNTIME_LINK_TARGET: x86_64-apple-darwin
+        run: python3 scripts/test-support-macos.py
+      - name: Prove Mac input C ABI and borrowed-event safety on both architectures
+        run: |
+          set -o pipefail
+          mkdir -p macos-rdev-proof
+          python3 scripts/test-support-macos-rdev.py --native --dependency "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf/.mixel-deps/rdev" --evidence-dir macos-rdev-proof 2>&1 | tee macos-rdev-proof/qualification.log
+      - name: Prove native Mac subwindow startup and failure propagation
+        run: python3 scripts/test-support-macos-window.py --native --flutter-framework "$MIXEL_FLUTTER_FRAMEWORK"
+      - name: Prove awaited Mac page and terminal cleanup with real Flutter widgets
+        run: python3 scripts/test-support-macos-cleanup.py --dart "$(command -v dart)" --flutter "$(command -v flutter)"
+      - name: Prove terminal support URI routing without ID fallthrough
+        run: python3 scripts/test-support-uri-routing.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --dart "$(command -v dart)" --output "$RUNNER_TEMP/mixel-uri-routing"
+      - name: Prove Linux terminal-close futures and conserved nonfinal window paths
+        run: python3 scripts/test-support-linux-window-close.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --dart "$(command -v dart)"
+      - name: Prove Linux child close ownership and mouse-hook cleanup
+        run: python3 scripts/test-support-linux-child-window-close.py --source "$RUNNER_TEMP/mixel-sdk-source/pipeline-lf" --output "$RUNNER_TEMP/mixel-linux-child-close"
+      - name: Prove bounded main-engine Quit and owned resource cleanup
+        run: python3 scripts/test-support-macos-termination.py --flutter "$(command -v flutter)" --framework "$MIXEL_FLUTTER_FRAMEWORK"
+      - name: Exercise native macOS URL activation and window probe self-tests
+        run: |
+          python3 scripts/test-support-launch-macos-diagnostics.py
+          python3 scripts/test-support-launch-macos-concurrency.py --original-desktop --self-test
+          python3 scripts/test-support-macos-uri-routing.py
+          python3 scripts/test-macos-native-minimum.py
+          python3 scripts/test-macos-bundle-minimum.py
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: macos-rdev-preflight
+          path: |
+            macos-rdev-proof/*.log
+            macos-rdev-proof/*.json
+            macos-rdev-proof/native-harness/trampoline.c
+            macos-rdev-proof/native-harness/Cargo.toml
+            macos-rdev-proof/native-harness/Cargo.lock
+            macos-rdev-proof/native-harness/src/main.rs
+            macos-rdev-proof/native-harness/original-owned-wrapper.rs
+          if-no-files-found: warn
+
+      - name: Preserve Mac file-dialog lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: macos-file-dialog-lifecycle
+          path: ${{ runner.temp }}/mixel-file-dialog-lifecycle/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  session-directory-access-observation:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.session_directory_access_observation }}
+    runs-on: ${{ inputs.windows_source_runner == 'windows-2025' && 'windows-2025' || 'windows-2022' }}
+    timeout-minutes: 15
+    env:
+      MIXEL_SESSION_DIRECTORY_ABA: '1'
+      GIT_CONFIG_COUNT: '2'
+      GIT_CONFIG_KEY_0: core.autocrlf
+      GIT_CONFIG_VALUE_0: 'false'
+      GIT_CONFIG_KEY_1: core.eol
+      GIT_CONFIG_VALUE_1: 'lf'
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: '1.75'
+      - name: Activate existing native compiler without permission changes
+        shell: pwsh
+        run: ./scripts/activate-windows-msvc.ps1 -ExportToGitHubEnvironment
+      - name: Validate the source-bound directory experiment before any native ACL action
+        shell: pwsh
+        run: |
+          python scripts/test-session-directory-access.py
+          if ($LASTEXITCODE -ne 0) { throw 'Directory experiment source and ownership controls failed.' }
+          python scripts/test-standard-valid-qa.py
+          if ($LASTEXITCODE -ne 0) { throw 'Valid owned QA original eight source and cleanup controls failed.' }
+      - name: Observe original World children then run exact eight in an independently restored owned QA fixture
+        shell: pwsh
+        run: ./scripts/observe-standard-valid-qa-windows.ps1 -EvidenceDirectory session-directory-aba-proof
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: session-directory-aba-source-only
+          path: session-directory-aba-proof/*.json
+          if-no-files-found: ignore

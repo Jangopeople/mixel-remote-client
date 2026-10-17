@@ -1,0 +1,22 @@
+services:
+  registration-bridge:
+    build: .
+    image: mixel-remote-registration-bridge:1.0.0
+    network_mode: host
+    restart: unless-stopped
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 128m
+    cpus: 0.5
+    pids_limit: 32
+    ulimits:
+      nofile:
+        soft: 4096
+        hard: 4096
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"

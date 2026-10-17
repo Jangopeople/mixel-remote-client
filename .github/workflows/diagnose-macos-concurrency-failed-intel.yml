@@ -1,0 +1,95 @@
+name: Diagnose exact failed Mac Intel concurrency cleanup
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/diagnose-macos-concurrency-failed-intel.yml
+      - scripts/diagnose-macos-concurrency-failed-intel.py
+      - scripts/test-diagnose-macos-concurrency-failed-intel.py
+      - scripts/failed-intel-concurrency-replay-profile.json
+      - scripts/test-support-launch-macos-concurrency.py
+      - scripts/test-support-launch-macos-concurrency-controls.py
+      - scripts/diagnose-macos-failed-app.py
+      - scripts/failed-macos-diagnostic-helper-hashes.json
+      - scripts/test-support-launch-macos-tray.py
+      - scripts/test-support-launch-macos-tray-controls.py
+      - scripts/test-support-launch-macos.py
+      - scripts/test-support-launch-linux.py
+      - scripts/verify-macos-bundle-minimum.py
+      - scripts/verify-macos-native-minimum.py
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: exact-failed-intel-concurrency-run-38491157973
+  cancel-in-progress: false
+
+jobs:
+  source-controls:
+    if: github.repository == 'Jangopeople/mixel-remote-client'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out exact diagnostic source for source and mock controls
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Require fixed profile and complete source and mock refusal controls
+        run: |
+          set -euo pipefail
+          python3 -B scripts/test-diagnose-macos-concurrency-failed-intel.py
+          python3 -B scripts/test-support-launch-macos-concurrency-controls.py \
+            --evidence-dir "$RUNNER_TEMP/mixel-intel-replay-linux-source-controls"
+
+  failed-intel-concurrency-diagnostic:
+    if: github.repository == 'Jangopeople/mixel-remote-client' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/fix/remote-support-reliability' && github.run_attempt == 1
+    needs: source-controls
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - name: Check out the exact diagnostic source
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          path: diagnostic-source
+          persist-credentials: false
+      - name: Check out the immutable failed producer source
+        uses: actions/checkout@v5
+        with:
+          ref: ca184ca219ceb1b087258e8f25d218eeba901abc
+          path: producer-source
+          persist-credentials: false
+      - name: Require fixed profile and complete source and mock refusal controls
+        working-directory: diagnostic-source
+        run: |
+          set -euo pipefail
+          python3 -B scripts/test-diagnose-macos-concurrency-failed-intel.py
+          python3 -B scripts/test-support-launch-macos-concurrency-controls.py \
+            --evidence-dir "$RUNNER_TEMP/mixel-intel-replay-macos-source-controls"
+      - name: Validate and replay exact failed Intel concurrency cleanup
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PYTHONUTF8: '1'
+          PYTHONIOENCODING: utf-8
+        run: |
+          set -euo pipefail
+          python3 -B "$GITHUB_WORKSPACE/diagnostic-source/scripts/diagnose-macos-concurrency-failed-intel.py" \
+            --diagnostic-checkout "$GITHUB_WORKSPACE/diagnostic-source" \
+            --producer-checkout "$GITHUB_WORKSPACE/producer-source" \
+            --destination "$RUNNER_TEMP/mixel-failed-intel-concurrency-private" \
+            --safe-output "$GITHUB_WORKSPACE/failed-intel-concurrency-safe-facts"
+      - name: Retain only allowlisted diagnostic facts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: exact-failed-intel-concurrency-safe-facts
+          path: |
+            failed-intel-concurrency-safe-facts/validation-receipt.json
+            failed-intel-concurrency-safe-facts/concurrency-diagnostic-safe-facts.json
+          if-no-files-found: warn
+          include-hidden-files: false
+          retention-days: 7

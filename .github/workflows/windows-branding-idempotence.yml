@@ -1,0 +1,312 @@
+name: Windows complete branding idempotence
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/windows-branding-idempotence.yml
+      - scripts/patch-secure-support.py
+      - scripts/test-secure-support.py
+      - scripts/test-support-flutter-analysis.py
+      - scripts/apply-branding.sh
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  branding-idempotence:
+    name: Complete branding byte identity (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    env:
+      MIXEL_BRANDING_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Bind the actual executing Git Bash
+        shell: bash
+        run: |
+          set -euo pipefail
+          native_bash="$(cygpath -m "$BASH")"
+          printf 'MIXEL_BRANDING_BASH=%s\n' "$native_bash" >> "$GITHUB_ENV"
+          printf 'Selected active native Bash: %s\n' "$native_bash"
+      - name: Observe the historical failure and qualify the unchanged complete pipeline
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $proof = Join-Path $env:GITHUB_WORKSPACE 'branding-idempotence-proof'
+          New-Item -ItemType Directory -Path $proof -ErrorAction Stop | Out-Null
+          $env:TMPDIR = Join-Path $proof 'temporary'
+          New-Item -ItemType Directory -Path $env:TMPDIR -ErrorAction Stop | Out-Null
+          $env:TMP = $env:TMPDIR
+          $env:TEMP = $env:TMPDIR
+          $env:MIXEL_BRANDING_IDEMPOTENCE_EVIDENCE = $proof
+          @'
+          import hashlib
+          import importlib.util
+          import json
+          import os
+          from pathlib import Path
+          import shutil
+          import subprocess
+          import sys
+          import traceback
+          
+          
+          def write_json(path, value):
+              with path.open('xb') as stream:
+                  stream.write((json.dumps(value, indent=2, sort_keys=True) + '\n').encode('utf-8'))
+          
+          
+          class SnapshotRecorder:
+              """Observe exact original snapshots; return the original result unchanged."""
+              def __init__(self, destination, original):
+                  self.destination = destination
+                  self.original = original
+                  self.previous = None
+                  self.calls = 0
+                  self.differences = []
+                  (destination / 'snapshots').mkdir()
+                  (destination / 'changes').mkdir()
+          
+              def __call__(self, repository):
+                  result = self.original(repository)
+                  repository = Path(repository).resolve()
+                  captured = {}
+                  total = 0
+                  for relative, expected in result.items():
+                      name = Path(relative)
+                      if name.is_absolute() or '..' in name.parts:
+                          raise ValueError('Unsafe observed snapshot member')
+                      path = repository / name
+                      if expected.startswith('symlink:'):
+                          if not path.is_symlink() or 'symlink:' + os.readlink(path) != expected:
+                              raise ValueError('Observed link changed while retaining snapshot')
+                          captured[relative] = None
+                          continue
+                      data = path.read_bytes()
+                      if len(data) > 64 * 1024 * 1024:
+                          raise ValueError('Observed source member exceeds retention bound')
+                      total += len(data)
+                      if total > 512 * 1024 * 1024:
+                          raise ValueError('Observed source snapshot exceeds retention bound')
+                      if hashlib.sha256(data).hexdigest() != expected:
+                          raise ValueError('Observed source changed while retaining snapshot')
+                      captured[relative] = data
+                  self.calls += 1
+                  write_json(self.destination / 'snapshots' / ('%04d.json' % self.calls),
+                             {'repository': str(repository), 'snapshot': result,
+                              'retained_source_bytes': total})
+                  if self.previous is not None and self.previous[0] == repository:
+                      previous_map, previous_bytes = self.previous[1:]
+                      changed = sorted(name for name in set(result) | set(previous_map)
+                                       if result.get(name) != previous_map.get(name))
+                      if changed:
+                          folder = self.destination / 'changes' / ('%04d' % self.calls)
+                          folder.mkdir()
+                          entries = []
+                          for index, name in enumerate(changed):
+                              before = previous_bytes.get(name)
+                              after = captured.get(name)
+                              entry = {'relative_path': name, 'before_digest': previous_map.get(name),
+                                       'after_digest': result.get(name), 'files': {}}
+                              for side, data in (('before', before), ('after', after)):
+                                  if data is not None:
+                                      member = '%04d.%s.bin' % (index, side)
+                                      with (folder / member).open('xb') as stream:
+                                          stream.write(data)
+                                      entry['files'][side] = {'name': member, 'bytes': len(data),
+                                                              'sha256': hashlib.sha256(data).hexdigest(),
+                                                              'crlf_pairs': data.count(b'\r\n'),
+                                                              'bare_lf': data.count(b'\n') - data.count(b'\r\n'),
+                                                              'bare_cr': data.count(b'\r') - data.count(b'\r\n')}
+                              if before is not None and after is not None:
+                                  entry['canonical_lf_bytes_equal'] = before.replace(b'\r\n', b'\n') == after.replace(b'\r\n', b'\n')
+                                  entry['first_different_offset'] = next((i for i, (a, b) in enumerate(zip(before, after)) if a != b), min(len(before), len(after)))
+                              entries.append(entry)
+                          write_json(folder / 'changed-files.json',
+                                     {'previous_call': self.calls - 1, 'current_call': self.calls,
+                                      'repository': str(repository), 'changes': entries})
+                          self.differences.append({'call': self.calls, 'repository': str(repository),
+                                                   'changed_files': changed, 'directory': folder.name})
+                  self.previous = (repository, dict(result), captured)
+                  return result
+          
+          
+          def command(arguments):
+              return subprocess.check_output(arguments, text=True, encoding='utf-8', timeout=120).strip()
+          
+          
+          def baseline_secure(current):
+              normalized = current.replace(b'\r\n', b'\n')
+              if b'\r' in normalized or (b'\r\n' in current and b'\n' in current.replace(b'\r\n', b'')):
+                  raise AssertionError('Secure helper has mixed or unsupported newlines')
+              corrected = b'path.write_text(modified, encoding="utf-8", newline="\\n" if relative == "src/server.rs" else None)'
+              original = b'path.write_text(modified, encoding="utf-8")'
+              assert normalized.count(corrected) == 1, 'Expected the exact qualified secure writer correction'
+              baseline = normalized.replace(corrected, original, 1)
+              assert hashlib.sha256(baseline).hexdigest() == 'c553b404f9279f1c38fcffbb8b10f3ba796799c5eb96ffc6681477bb58a9df3b', 'Secure helper differs from the exact one-argument correction'
+              return baseline
+          
+          
+          def require_baseline_failure(error, recorder):
+              assert type(error) is AssertionError and str(error) == 'Full pipeline second pass changed bytes', 'Baseline failed outside the original idempotence assertion'
+              assert len(recorder.differences) == 1, 'Baseline had an unexpected earlier snapshot difference'
+              difference = recorder.differences[0]
+              # The final launch layer inherits its resource newline from server.rs.
+              # Bind both exact current generated byte pairs; unrelated drift is fatal.
+              expected = {
+                  'src/mixel_gui_launch.rs': ('4b5859d755008402fbe9749a97d259751f778915ef5d0b0238aaf74952ee13d2', '6e47bf810517fa5c511cdfcf7b05ff6994ebe442e61331e6f7535e94bf471b4e'),
+                  'src/server.rs': ('3b75312d2dd1af713454b6128bf5adcba20c29e012f3cd2ecfca666fdfb6b4e4', '025aadf1e84975be76ae2046a9497a53b9a676af66a8f2d707202340bcb0169d'),
+              }
+              assert difference['changed_files'] == sorted(expected), 'Baseline changed another source file'
+              folder = recorder.destination / 'changes' / difference['directory']
+              entries = json.loads((folder / 'changed-files.json').read_bytes())['changes']
+              assert len(entries) == len(expected) and sorted(entry['relative_path'] for entry in entries) == sorted(expected)
+              for entry in entries:
+                  before = (folder / entry['files']['before']['name']).read_bytes()
+                  after = (folder / entry['files']['after']['name']).read_bytes()
+                  before_hash, after_hash = expected[entry['relative_path']]
+                  assert hashlib.sha256(before).hexdigest() == before_hash
+                  assert hashlib.sha256(after).hexdigest() == after_hash
+                  assert b'\r\n' in before and b'\n' not in before.replace(b'\r\n', b'') and b'\r' not in before.replace(b'\r\n', b'')
+                  assert b'\r' not in after and before.replace(b'\r\n', b'\n') == after
+          
+          
+          def run_pipeline(A, destination, source, bash, baseline):
+              destination.mkdir()
+              pipeline = destination / 'pipeline'
+              pipeline.mkdir()
+              recorder = SnapshotRecorder(destination, A.snapshot)
+              original_copy = A.copy_current_pipeline_inputs
+              result = {'schema': 1, 'baseline_payload': baseline is not None,
+                        'pipeline_completed': False, 'expected_baseline_assertion_observed': False,
+                        'unchanged_A_pipeline': True, 'unchanged_original_assertions': True}
+              def copy_inputs(target):
+                  original_copy(target)
+                  secure = Path(target) / 'scripts/patch-secure-support.py'
+                  if baseline is not None:
+                      assert baseline_secure(secure.read_bytes()) == baseline
+                      # Only this private copied helper uses the exact historical writer.
+                      secure.write_bytes(baseline)
+              try:
+                  A.snapshot = recorder
+                  A.copy_current_pipeline_inputs = copy_inputs
+                  try:
+                      A.pipeline(pipeline, source, bash)
+                  except Exception as error:
+                      result['error_type'] = type(error).__name__
+                      result['bounded_error'] = str(error)[:8192]
+                      traceback.print_exc()
+                      if baseline is None:
+                          raise
+                      require_baseline_failure(error, recorder)
+                      result['expected_baseline_assertion_observed'] = True
+                  else:
+                      assert baseline is None, 'Historical baseline unexpectedly passed; no corrected comparison qualified'
+                      labels = ('lf-initial-false', 'lf-initial-true', 'crlf-initial-false', 'crlf-initial-true')
+                      for label in labels:
+                          assert (pipeline / ('pipeline-' + label + '-snapshot.json')).is_file()
+                          restoration = json.loads((pipeline / ('pipeline-' + label + '-restoration.json')).read_bytes())
+                          assert restoration['complete_checkout_bytes_restored'] is True and restoration['original_git_config_bytes_restored'] is True
+                      result['all_four_original_profiles_passed'] = True
+                      result['pipeline_completed'] = True
+              finally:
+                  A.snapshot = recorder.original
+                  A.copy_current_pipeline_inputs = original_copy
+                  result['snapshot_calls'] = recorder.calls
+                  result['observed_differences'] = recorder.differences
+                  write_json(destination / 'pipeline-result.json', result)
+              return result
+          
+          
+          def main():
+              assert os.name == 'nt' and sys.platform == 'win32', 'This probe requires the actual native Windows host'
+              root = Path(os.environ['GITHUB_WORKSPACE']).resolve()
+              proof = Path(os.environ['MIXEL_BRANDING_IDEMPOTENCE_EVIDENCE']).resolve()
+              assert proof.parent == root and proof.name == 'branding-idempotence-proof'
+              assert Path(os.environ['TMPDIR']).resolve() == proof / 'temporary'
+              sys.path.insert(0, str(root / 'scripts'))
+              spec = importlib.util.spec_from_file_location('actual_branding_pipeline', root / 'scripts/test-support-flutter-analysis.py')
+              A = importlib.util.module_from_spec(spec)
+              spec.loader.exec_module(A)
+              assert A.ROOT == root
+              assert A.P.PIN == '1abc897c451c8b5bbff3792509a7fef9d12f2ce3'
+              expected_head = os.environ['MIXEL_BRANDING_SOURCE_SHA']
+              assert len(expected_head) == 40 and all(value in '0123456789abcdef' for value in expected_head)
+              assert command(['git', '-C', str(root), 'rev-parse', 'HEAD']) == expected_head
+              tracked = command(['git', '-C', str(root), 'ls-files', '-z', '--', 'scripts', 'branding']).split('\0')
+              tracked = [name for name in tracked if name]
+              input_hashes = {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in tracked}
+              bash = A.branding_bash(Path(os.environ['MIXEL_BRANDING_BASH']), True)
+              source = proof / 'temporary' / 'pinned-upstream'
+              secure = (root / 'scripts/patch-secure-support.py').read_bytes()
+              baseline = baseline_secure(secure)
+              result = {'schema': 1, 'source_head': expected_head, 'workflow_event_sha': os.environ['GITHUB_SHA'],
+                        'actual_bash': bash, 'git_version': command(['git', '--version']),
+                        'python': sys.version, 'magick_available': bool(shutil.which('magick')),
+                        'upstream_pin': A.P.PIN, 'input_sha256': input_hashes,
+                        'unchanged_A_pipeline': True, 'unchanged_original_assertions': True,
+                        'flutter_invoked': False, 'application_built': False,
+                        'standard8_qualified': False, 'signed_customer_or_consent_qualified': False,
+                        'baseline_secure_sha256': hashlib.sha256(baseline).hexdigest(),
+                        'current_secure_canonical_sha256': hashlib.sha256(secure.replace(b'\r\n', b'\n')).hexdigest(),
+                        'pipeline_completed': False}
+              write_json(proof / 'input-context.json', result)
+              try:
+                  subprocess.run(['git', 'clone', '--quiet', '--depth', '1', '--branch', '1.4.6',
+                                  'https://github.com/rustdesk/rustdesk.git', str(source)], check=True, timeout=180)
+                  assert command(['git', '-C', str(source), 'rev-parse', 'HEAD']) == A.P.PIN
+                  hbb_pin = command(['git', '-C', str(source), 'ls-tree', 'HEAD', 'libs/hbb_common']).split()[2]
+                  subprocess.run(['git', 'clone', '--quiet', 'https://github.com/rustdesk/hbb_common',
+                                  str(source / 'libs/hbb_common')], check=True, timeout=180)
+                  subprocess.run(['git', '-C', str(source / 'libs/hbb_common'), 'checkout', '--quiet', hbb_pin], check=True, timeout=120)
+                  assert command(['git', '-C', str(source / 'libs/hbb_common'), 'rev-parse', 'HEAD']) == hbb_pin
+                  result['hbb_common_pin'] = hbb_pin
+                  result['baseline'] = run_pipeline(A, proof / 'baseline', source, bash, baseline)
+                  result['current'] = run_pipeline(A, proof / 'current', source, bash, None)
+                  result['pipeline_completed'] = True
+                  print('PASS: exact historical server CRLF-to-LF assertion retained; current complete four-profile pipeline and original refusal/restoration controls passed. Application, Standard8 and signing remain separate.')
+              except Exception as error:
+                  result['error_type'] = type(error).__name__
+                  result['bounded_error'] = str(error)[:8192]
+                  traceback.print_exc()
+                  raise
+              finally:
+                  result['root_inputs_unchanged'] = input_hashes == {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in tracked}
+                  write_json(proof / 'probe-result.json', result)
+                  if not result['root_inputs_unchanged']:
+                      raise AssertionError('Private probe changed root-owned source inputs')
+          
+          
+          if __name__ == '__main__':
+              main()
+          '@ | python -u - 2>&1 | Tee-Object -FilePath (Join-Path $proof 'stdout.log')
+          if ($LASTEXITCODE -ne 0) { throw 'Original baseline or corrected complete branding comparison failed.' }
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: windows-complete-branding-idempotence-${{ matrix.os }}
+          path: |
+            branding-idempotence-proof/*.log
+            branding-idempotence-proof/*.json
+            branding-idempotence-proof/*/pipeline-result.json
+            branding-idempotence-proof/*/pipeline/*.log
+            branding-idempotence-proof/*/pipeline/*.json
+            branding-idempotence-proof/*/snapshots/*.json
+            branding-idempotence-proof/*/changes/**/*.json
+            branding-idempotence-proof/*/changes/**/*.bin
+          if-no-files-found: ignore
+          retention-days: 3

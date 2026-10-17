@@ -1,0 +1,70 @@
+name: unpublished Linux installer systemd QA
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/linux-installer-systemd.yml
+      - scripts/linux-installer-systemd.py
+      - scripts/linux-installer-systemd-guest.py
+      - scripts/test-linux-installer-systemd.py
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  installer-systemd:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.base.repo.full_name == github.repository)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    env:
+      EXPECTED_QA_SOURCE: ${{ github.event.pull_request.head.sha || github.sha }}
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - name: Select fresh owned output path
+        if: github.event_name == 'workflow_dispatch'
+        run: echo "QA_ROOT=${RUNNER_TEMP}/mixel-linux-installer-systemd-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify inert safety controls
+        run: python3 scripts/test-linux-installer-systemd.py
+      - name: Report source-only pull request scope
+        if: github.event_name == 'pull_request'
+        run: |
+          echo "Pull request source-only controls passed."
+          echo "No normal artifact download, package installation, or systemd service lifecycle ran."
+          echo "This result does not qualify this pull request's application or service runtime."
+      - name: Bind exact QA checkout and unchanged application inputs
+        if: github.event_name == 'workflow_dispatch'
+        run: python3 scripts/linux-installer-systemd.py prepare --output "$QA_ROOT"
+      - name: Require fresh healthy real Ubuntu systemd host
+        if: github.event_name == 'workflow_dispatch'
+        run: sudo -n env RUNNER_TEMP="$RUNNER_TEMP" GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" python3 scripts/linux-installer-systemd.py host --output "$QA_ROOT"
+      - name: Collect the exact existing normal Linux artifact once
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/linux-installer-systemd.py collect --output "$QA_ROOT"
+      - name: Prepare authenticated official Ubuntu dependencies
+        if: github.event_name == 'workflow_dispatch'
+        run: sudo -n env RUNNER_TEMP="$RUNNER_TEMP" GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" python3 scripts/linux-installer-systemd.py dependencies --output "$QA_ROOT"
+      - name: Prove real package and systemd service lifecycle
+        if: github.event_name == 'workflow_dispatch'
+        run: sudo -n env RUNNER_TEMP="$RUNNER_TEMP" GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" python3 scripts/linux-installer-systemd.py run --output "$QA_ROOT"
+      - name: Retain owned evidence and clean only this test package
+        if: always() && github.event_name == 'workflow_dispatch'
+        run: sudo -n env RUNNER_TEMP="$RUNNER_TEMP" GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" python3 scripts/linux-installer-systemd.py cleanup --output "$QA_ROOT"
+      - uses: actions/upload-artifact@v6
+        if: always() && github.event_name == 'workflow_dispatch'
+        with:
+          name: linux-installer-systemd-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.QA_ROOT }}/evidence/
+          if-no-files-found: warn
+          retention-days: 14

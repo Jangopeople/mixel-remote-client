@@ -10,8 +10,20 @@
 
 set -euo pipefail
 
+# Git Bash sed defaults to Windows text IO, which turns Python-written CRLF
+# into LF only on the first matching branding pass. Preserve the original
+# newline bytes so repeated shell/Python patches are byte-identical.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    sed() { command sed --binary "$@"; }
+    ;;
+esac
+
 RDREPO="${RDREPO:-./rustdesk}"
 BRANDING="${BRANDING:-./branding}"
+# The Python handoff patch must use the same checkout as the shell patches,
+# including when this script is invoked from a different working directory.
+export RDREPO
 
 if [[ ! -d "$RDREPO" ]]; then
   echo "❌ RustDesk source not found at $RDREPO" >&2
@@ -21,10 +33,93 @@ fi
 # shellcheck source=/dev/null
 source "$BRANDING/branding.env"
 
+# Validate the disjoint lifecycle pair without changing any source before the
+# complete prior-owner refusal gates. Reapplication at the end is idempotent.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-file-dialog-lifecycle.py" --root "$RDREPO" --check
+
+# Validate and invert the complete desktop input layer before older owners write.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-input-lifecycle.py" --root "$RDREPO" --restore --check
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-input-lifecycle.py" --root "$RDREPO" --restore
+
+# Restore exact terminal URI routing before the native and earlier owner checks.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-uri-routing.py" --root "$RDREPO" --restore --check --before-branding
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-uri-routing.py" --root "$RDREPO" --restore
+
+# Restore native child lifetime before the Dart and earlier owner checks.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-linux-child-window-close.py" --root "$RDREPO" --restore --check --before-branding
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-linux-child-window-close.py" --root "$RDREPO" --restore
+
+# Restore the exact Linux terminal-close layer before previous owner checks.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-linux-window-close.py" --root "$RDREPO" --restore --check --before-branding
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-linux-window-close.py" --root "$RDREPO" --restore
+
+# Validate/invert the exact final launch layer before any previous owner writes.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-gui-launch.py" --root "$RDREPO" --restore --check --before-branding
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-gui-launch.py" --root "$RDREPO" --restore
+
+# Validate the disjoint final URL privacy leaf before any owner writes.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-url-log-privacy.py" --root "$RDREPO" --restore --check
+
+# Validate every prior owner in an exact private final-overlay inverse first.
+# The final compiler inverse validates that unchanged complete prior chain.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-compiler-cleanup.py" --root "$RDREPO" --restore --check --before-branding
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-url-log-privacy.py" --root "$RDREPO" --restore
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-compiler-cleanup.py" --root "$RDREPO" --restore
+
+# Restore only the exact final startup overlay before prior owners see inputs.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-macos-startup.py" --restore
+
+# Restore the exact last Rust tray overlay before native-warning ownership.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-tray-url.py" --restore
+
+# Restore exact owned compatibility and Quit overlays in reverse order before
+# pinned earlier helpers see canonical inputs on repeated branding passes.
+# Validate file-transfer, keyboard and input ownership before any restore writes.
+# The file-transfer check projects the exact prior SDK/Quit/cleanup chain.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-macos-update.py" --source "$RDREPO" --restore --check
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-fatal-crash.py" --source "$RDREPO" --restore --check
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-native-warnings.py" --source "$RDREPO" --restore --check --before-branding
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-fingerprint.py" --restore --check "$RDREPO"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-uinput-device.py" --source "$RDREPO" --restore --check
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-file-transfer-window.py" --restore --check --before-branding "$RDREPO"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-keyboard-default.py" --check
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-rdev.py" --restore --check "$RDREPO"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-macos-update.py" --source "$RDREPO" --restore
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-fatal-crash.py" --source "$RDREPO" --restore
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-fingerprint.py" --restore "$RDREPO"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-native-warnings.py" --source "$RDREPO" --restore
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-uinput-device.py" --source "$RDREPO" --restore
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-file-transfer-window.py" --restore "$RDREPO"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-flutter-sdk-compatibility.py" --restore "$RDREPO"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-termination.py" --restore "$RDREPO"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-rdev.py" --restore "$RDREPO"
+
 echo "→ Applying branding: $APP_NAME ($MACOS_BUNDLE_ID) on top of RustDesk $UPSTREAM_VERSION"
+
+# Runtime helper checks and update paths must use the same bundle identity as
+# the privilege templates. Keep ORG untouched so existing preferences remain.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-macos-service-label.py" "$MACOS_BUNDLE_ID"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-macos-update.py"
 
 # Install the customer-consented support invite handoff in each fresh upstream checkout.
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-invite.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-secure-support.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-network.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-linux.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-signals.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-input.py"
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-rdev.py" "$RDREPO"
+fi
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-clipboard.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-windows-clipboard.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-video.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-texture.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-window.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-cleanup.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-wakelock.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-flutter-branding.py" --repo "$RDREPO" --branding "$BRANDING"
 
 # 1. custom.txt — RustDesk's build-time branding override file.
 cp "$BRANDING/custom.txt" "$RDREPO/custom.txt"
@@ -84,7 +179,9 @@ if [[ -d "$(dirname "$MACOS_ICNS")" ]]; then
     iconutil -c icns "$TMP_ICONSET" -o "$MACOS_ICNS"
     echo "   wrote AppIcon.icns via iconutil"
   elif command -v magick >/dev/null 2>&1; then
-    magick "$BRANDING/icon-1024.png" "$MACOS_ICNS"
+    # The ICNS encoder embeds a PNG; exclude generated time metadata so
+    # repeated branding preserves the exact same asset bytes.
+    magick "$BRANDING/icon-1024.png" -define png:exclude-chunks=date,time "$MACOS_ICNS"
     echo "   wrote AppIcon.icns via magick (single-resolution fallback)"
   else
     echo "   ⚠ Neither iconutil nor magick available; AppIcon.icns not updated" >&2
@@ -155,7 +252,7 @@ patch_string build.py \
 #    Safe because:
 #    - lang/*.rs literals never contain "RustDesk" as an identifier
 #      (the lowercase `rustdesk` in keys like `verify_rustdesk_password_tip`
-#      is preserved — case-sensitive sed).
+#      is preserved — only the capitalized RustDesk/Rustdesk spellings change).
 #    - The Cargo crate name (`rustdesk` in Cargo.toml) is lowercase, untouched.
 #    - The web bridge comparison `mainGetAppNameSync(hint) != "RustDesk"`
 #      is in flutter/lib/web/bridge.dart, deliberately NOT patched — it's
@@ -163,8 +260,8 @@ patch_string build.py \
 
 echo "→ Patching RustDesk → $APP_NAME in user-visible strings"
 for langfile in "$RDREPO"/src/lang/*.rs; do
-  if grep -q "RustDesk" "$langfile"; then
-    sed -i.bak "s/RustDesk/$APP_NAME/g" "$langfile" && rm -f "$langfile.bak"
+  if grep -q "Rust[Dd]esk" "$langfile"; then
+    sed -i.bak "s/Rust[Dd]esk/$APP_NAME/g" "$langfile" && rm -f "$langfile.bak"
   fi
 done
 echo "   patched src/lang/*.rs (47 files)"
@@ -336,6 +433,99 @@ if [[ -f "$WIN_MAIN" ]]; then
     -e "s|RustDesk \[|${APP_NAME} [|g" \
     "$WIN_MAIN"
   rm -f "$WIN_MAIN.bak"
+  python3 - "$WIN_MAIN" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+source = path.read_text(encoding="utf-8")
+original = source
+before = '    argument.erase(argument.find_last_not_of(" \\n\\r\\t"));'
+previous = '''    const auto last = argument.find_last_not_of(" \\n\\r\\t");
+    argument.erase(last == std::string::npos ? 0 : last + 1);'''
+after = '''    // Utf8FromUtf16 includes the command-line UTF-8 NUL sentinel.
+    // Remove it before trimming whitespace, preserving every argument byte.
+    if (!argument.empty() && argument.back() == '\\0') argument.pop_back();
+    const auto last = argument.find_last_not_of(" \\n\\r\\t");
+    argument.erase(last == std::string::npos ? 0 : last + 1);'''
+if after not in source:
+    matches = [candidate for candidate in (before, previous) if source.count(candidate) == 1]
+    if len(matches) != 1:
+        raise RuntimeError("Pinned Windows command-line normalization changed")
+    source = source.replace(matches[0], after, 1)
+# The portable QS launcher supplies a command flag, while uni_links_desktop
+# forwards argv[1] as a URI string. Sending that flag to the URI parser cannot
+# restore a minimized window. Deliver the exact raw intent to the existing GUI
+# so it owns the consent lease; protocol links and the whitelist keep dispatch.
+before = '''      if (!command_line_arguments.empty()) {
+        // Dispatch command line arguments
+        DispatchToUniLinksDesktop(hwnd);
+      } else {
+        // Not called with arguments, or just open the app shortcut on desktop.
+        // So we just show the main window instead.
+        ::ShowWindow(hwnd, SW_NORMAL);
+        ::SetForegroundWindow(hwnd);
+      }'''
+after = '''      const bool quick_support_reopen =
+          command_line_arguments.size() == 1 &&
+          command_line_arguments.front() == "--quick_support";
+      const bool attended_handoff_unavailable =
+          std::find(rust_args.begin(), rust_args.end(),
+                    "--mixel-attended-handoff-unavailable") != rust_args.end();
+      if (attended_handoff_unavailable) {
+        // Native IPC did not acknowledge the old service's memory guard.
+        // Keep this invocation's foreground lease and create its attended GUI.
+        allow_multiple_instances = true;
+      }
+      if (!command_line_arguments.empty() && !quick_support_reopen) {
+        // Protocol links are forwarded as URI strings by uni_links_desktop.
+        if (!attended_handoff_unavailable) DispatchToUniLinksDesktop(hwnd);
+      } else {
+        // A shortcut or QS double-click restores the same GUI.
+        ::ShowWindow(hwnd, SW_RESTORE);
+        ::SetForegroundWindow(hwnd);
+        if (quick_support_reopen && !attended_handoff_unavailable) {
+          // Match the locked uni_links_desktop UTF-8/NUL WM_COPYDATA framing.
+          // Its receiver delivers raw strings, so the existing GUI can acquire
+          // its own attended lease even if it started as an ordinary app.
+          const char attended_argument[] = "--quick_support";
+          COPYDATASTRUCT data = {};
+          data.dwData = UNI_LINKS_DESKTOP_MSG_ID;
+          data.cbData = static_cast<DWORD>(sizeof(attended_argument));
+          data.lpData = const_cast<char*>(attended_argument);
+          DWORD_PTR result = 0;
+          if (::SendMessageTimeoutW(hwnd, WM_COPYDATA, 0,
+                  reinterpret_cast<LPARAM>(&data), SMTO_BLOCK | SMTO_ABORTIFHUNG,
+                  5000, &result) == 0) {
+            // Keep this invocation's owned guard and create its attended GUI
+            // if the old window cannot receive the intent. Never exit here.
+            allow_multiple_instances = true;
+          }
+        }
+      }'''
+if after not in source:
+    if source.count(before) != 1:
+        raise RuntimeError("Pinned Windows existing-window dispatch changed")
+    source = source.replace(before, after, 1)
+# A failed bounded delivery falls through to the cold Flutter construction;
+# the new invocation already holds the native QuickSupport lifetime lease.
+before = '''      return EXIT_FAILURE;
+    }
+  }
+
+  // Attach to console'''
+after = '''      if (!allow_multiple_instances) return EXIT_FAILURE;
+    }
+  }
+
+  // Attach to console'''
+if after not in source:
+    if source.count(before) != 1:
+        raise RuntimeError("Pinned Windows existing-window exit changed")
+    source = source.replace(before, after, 1)
+if source != original:
+    path.write_text(source, encoding="utf-8")
+PY
   echo "   patched flutter/windows/runner/main.cpp fallback app_name"
 fi
 
@@ -352,6 +542,24 @@ for cmake in \
     echo "   patched $(basename "$(dirname "$cmake")")/CMakeLists.txt BINARY_NAME"
   fi
 done
+
+# Linux's native GTK window is visible before Dart finishes initialising. Its
+# icon lookup must use the icon installed by the branded Debian package.
+patch_string flutter/linux/my_application.cc \
+  'gtk_icon_theme_load_icon(theme, "rustdesk",' \
+  "gtk_icon_theme_load_icon(theme, \"$APP_NAME_KEBAB\","
+patch_string flutter/linux/my_application.cc \
+  'gtk_header_bar_set_title(header_bar, "rustdesk");' \
+  "gtk_header_bar_set_title(header_bar, \"$APP_DISPLAY_NAME\");"
+patch_string flutter/linux/my_application.cc \
+  'gtk_window_set_title(window, "rustdesk");' \
+  "gtk_window_set_title(window, \"$APP_DISPLAY_NAME\");"
+
+# Stock RustDesk and Mixel Remote can be installed on the same Linux computer.
+# A shared bus name sends a Mixel support invite to whichever app started first.
+patch_string src/server/dbus.rs \
+  'const DBUS_NAME: &str = "org.rustdesk.rustdesk";' \
+  "const DBUS_NAME: &str = \"$MACOS_BUNDLE_ID\";"
 
 # macOS URL scheme (deep links) — drop com.carriez.rustdesk / rustdesk://.
 MAC_PLIST="$RDREPO/flutter/macos/Runner/Info.plist"
@@ -421,11 +629,20 @@ for debfile in \
   fi
 done
 
+# Some older installs contain only the /etc override, without both /usr/lib
+# copies. With set -e, plain rm aborts the upgrade before installing the service.
+patch_string res/DEBIAN/postinst \
+  "rm /etc/systemd/system/${APP_NAME_KEBAB}.service /usr/lib/systemd/system/${APP_NAME_KEBAB}.service /usr/lib/systemd/user/${APP_NAME_KEBAB}.service" \
+  "rm -f /etc/systemd/system/${APP_NAME_KEBAB}.service /usr/lib/systemd/system/${APP_NAME_KEBAB}.service /usr/lib/systemd/user/${APP_NAME_KEBAB}.service"
+
 # Rename packaging assets so build.py / postinst agree on filenames.
 if [[ -f "$SERVICE" ]]; then
   cp "$SERVICE" "$RDREPO/res/${APP_NAME_KEBAB}.service"
   echo "   wrote res/${APP_NAME_KEBAB}.service"
 fi
+# Guard service lifecycle only after branding and the exact unit asset exist.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-debian-service-lifecycle.py" --root "$RDREPO"
+
 if [[ -f "$RDREPO/res/pam.d/rustdesk.debian" ]]; then
   cp "$RDREPO/res/pam.d/rustdesk.debian" "$RDREPO/res/pam.d/${APP_NAME_KEBAB}.debian"
   echo "   wrote res/pam.d/${APP_NAME_KEBAB}.debian"
@@ -464,9 +681,10 @@ if [[ -f "$BUILDPY" ]]; then
   echo "   patched build.py packaging identity"
 
   # Support target-specific paths on macOS cross-compilation when CARGO_BUILD_TARGET is set
-  export BUILDPY
+  export BUILDPY APP_NAME_KEBAB
   python3 << 'EOF'
 import os
+import re
 build_py = os.environ.get("BUILDPY")
 with open(build_py, 'r', encoding='utf-8') as f:
     code = f.read()
@@ -481,14 +699,73 @@ new_dylib = '''_target = os.environ.get("CARGO_BUILD_TARGET")
         shutil.copy2(f"{_prefix}/liblibrustdesk.dylib", "target/release/librustdesk.dylib")'''
 
 code = code.replace(old_dylib, new_dylib)
+
+# Remove only the stale package-local alias. A clean first build has no alias;
+# actual removal failures must still stop the unchanged upstream system2.
+import ast as _mixel_cleanup_ast
+_mixel_cleanup_alias = 'tmpdeb/usr/bin/' + os.environ['APP_NAME_KEBAB']
+_mixel_cleanup_old = "system2('rm " + _mixel_cleanup_alias + " || true')"
+_mixel_cleanup_new = "system2('rm -f " + _mixel_cleanup_alias + "')"
+_mixel_cleanup_states = []
+_mixel_cleanup_tree = _mixel_cleanup_ast.parse(code)
+for _mixel_cleanup_name in ('build_flutter_deb', 'build_deb_from_folder'):
+    _mixel_cleanup_functions = [node for node in _mixel_cleanup_tree.body
+                               if isinstance(node, _mixel_cleanup_ast.FunctionDef)
+                               and node.name == _mixel_cleanup_name]
+    if len(_mixel_cleanup_functions) != 1:
+        raise RuntimeError('Pinned upstream Debian alias cleanup function changed')
+    _mixel_cleanup_calls = [node for node in _mixel_cleanup_ast.walk(_mixel_cleanup_functions[0])
+                            if isinstance(node, _mixel_cleanup_ast.Call)
+                            and isinstance(node.func, _mixel_cleanup_ast.Name)
+                            and node.func.id == 'system2'
+                            and len(node.args) == 1 and not node.keywords
+                            and isinstance(node.args[0], _mixel_cleanup_ast.Constant)
+                            and isinstance(node.args[0].value, str)
+                            and node.args[0].value.startswith('rm ')
+                            and _mixel_cleanup_alias in node.args[0].value]
+    if len(_mixel_cleanup_calls) != 1:
+        raise RuntimeError('Pinned upstream Debian alias cleanup statement changed')
+    _mixel_cleanup_value = _mixel_cleanup_calls[0].args[0].value
+    if _mixel_cleanup_value not in ('rm ' + _mixel_cleanup_alias + ' || true',
+                                   'rm -f ' + _mixel_cleanup_alias):
+        raise RuntimeError('Pinned upstream Debian alias cleanup command changed')
+    _mixel_cleanup_states.append(_mixel_cleanup_value)
+if len(set(_mixel_cleanup_states)) != 1:
+    raise RuntimeError('Mixed upstream Debian alias cleanup state')
+if code.count(_mixel_cleanup_old) == 2 and code.count(_mixel_cleanup_new) == 0:
+    code = code.replace(_mixel_cleanup_old, _mixel_cleanup_new)
+elif code.count(_mixel_cleanup_old) != 0 or code.count(_mixel_cleanup_new) != 2:
+    raise RuntimeError('Pinned upstream Debian alias cleanup literal changed')
+# End exact Debian alias cleanup correction.
+
+# Flutter dynamically opens EGL/GLES in addition to GTK's GL context. A minimal
+# desktop can otherwise launch a black window. Mesa's DRI driver is an explicit
+# dependency because libegl-mesa0 does not depend on the software renderer.
+old_graphics = 'Depends: libgtk-3-0, libxcb-randr0,'
+new_graphics = 'Depends: libgtk-3-0, libegl1, libgl1, libgles2, libgl1-mesa-dri, libxcb-randr0,'
+if new_graphics not in code:
+    if code.count(old_graphics) != 1:
+        raise RuntimeError('Pinned upstream Debian graphics dependencies changed')
+    code = code.replace(old_graphics, new_graphics, 1)
 code = code.replace(
     "'cp -rf ../target/release/service ",
     "f'cp -rf ../target/{os.environ.get(\"CARGO_BUILD_TARGET\") + \"/\" if os.environ.get(\"CARGO_BUILD_TARGET\") else \"\"}release/service "
 )
 
+# The upstream scalable icon is RustDesk's logo. Let GTK scale the already
+# installed Mixel PNG instead of shipping the upstream vector under our name.
+code = re.sub(
+    r"(?m)^([ \t]+)system2\(\n[ \t]+'cp (?:\.\./)?res/scalable\.svg "
+    r"tmpdeb/usr/share/icons/hicolor/scalable/apps/" + re.escape(os.environ["APP_NAME_KEBAB"]) + r"\.svg'\)\n",
+    lambda match: match[1] + "# The branded PNG above supplies the desktop icon at every size.\n",
+    code,
+)
+
 with open(build_py, 'w', encoding='utf-8') as f:
     f.write(code)
 EOF
+  # Normalize archive ownership without changing the CI staging tree's owner.
+  python3 "$(dirname "${BASH_SOURCE[0]}")/patch-debian-archive-ownership.py" "$BUILDPY"
   echo "   patched build.py to support target-specific build directories"
 fi
 
@@ -729,6 +1006,10 @@ patch_string flutter/linux/main.cc \
 patch_string flutter/linux/main.cc \
   'Failed to load \"librustdesk.so\"' \
   "Failed to load \\\"${LIBNAME}.so\\\""
+# Arch packaging strips the bundled library after CMake has renamed it.
+patch_string build.py \
+  'strip {flutter_build_dir}/lib/librustdesk.so' \
+  "strip {flutter_build_dir}/lib/${LIBNAME}.so"
 
 # Guards — a missed rename ships a rustdesk-named core or, worse, a runtime
 # that can't find its library. Fail loudly at branding time.
@@ -792,5 +1073,82 @@ if [[ "$leak" -ne 0 ]]; then
   exit 1
 fi
 echo "   leak check passed"
+
+# Positive checks catch a missing file or changed upstream expression. Merely
+# checking for absence of the old name can pass even when the app cannot load.
+require_string () {
+  local file="$1" expected="$2"
+  if [[ ! -f "$RDREPO/$file" ]] || ! grep -qF -- "$expected" "$RDREPO/$file"; then
+    echo "❌ Required runtime branding missing in $file: $expected" >&2
+    exit 1
+  fi
+}
+require_string flutter/windows/CMakeLists.txt "COMPONENT Runtime RENAME ${LIBNAME}.dll)"
+require_string flutter/windows/runner/main.cpp "LoadLibraryA(\"${LIBNAME}.dll\")"
+require_string flutter/windows/runner/main.cpp "command_line_arguments.front() == \"--quick_support\";"
+require_string flutter/windows/runner/main.cpp "::ShowWindow(hwnd, SW_RESTORE);"
+require_string flutter/windows/runner/main.cpp "if (!allow_multiple_instances) return EXIT_FAILURE;"
+require_string flutter/linux/CMakeLists.txt "COMPONENT Runtime RENAME ${LIBNAME}.so)"
+require_string flutter/linux/main.cc "#define RUSTDESK_LIB_PATH \"${LIBNAME}.so\""
+require_string flutter/lib/models/native_model.dart "DynamicLibrary.open('${LIBNAME}.dll')"
+require_string flutter/lib/models/native_model.dart "DynamicLibrary.open('${LIBNAME}.so')"
+require_string flutter/linux/my_application.cc "gtk_icon_theme_load_icon(theme, \"$APP_NAME_KEBAB\","
+require_string flutter/linux/my_application.cc "gtk_header_bar_set_title(header_bar, \"$APP_DISPLAY_NAME\");"
+require_string flutter/linux/my_application.cc "gtk_window_set_title(window, \"$APP_DISPLAY_NAME\");"
+require_string src/server/dbus.rs "const DBUS_NAME: &str = \"$MACOS_BUNDLE_ID\";"
+require_string res/rustdesk-link.desktop "MimeType=x-scheme-handler/$APP_NAME_KEBAB;"
+require_string res/rustdesk-link.desktop "Exec=$APP_NAME_KEBAB %u"
+require_string res/DEBIAN/postinst "deb-systemd-invoke start ${APP_NAME_KEBAB}.service"
+require_string build.py "Depends: libgtk-3-0, libegl1, libgl1, libgles2, libgl1-mesa-dri, libxcb-randr0,"
+require_string flutter/macos/Runner/Info.plist "<string>$APP_NAME_KEBAB</string>"
+require_string src/common.rs "\"$MACOS_BUNDLE_ID\".to_owned()"
+require_string flutter/lib/common.dart "registerProtocol('$APP_NAME_KEBAB');"
+require_string libs/hbb_common/src/config.rs "(\"custom-rendezvous-server\".to_owned(), \"${RENDEZVOUS_SERVER}\".to_owned())"
+require_string libs/hbb_common/src/config.rs "(\"relay-server\".to_owned(), \"${RELAY_SERVER}\".to_owned())"
+require_string libs/hbb_common/src/config.rs "(\"key\".to_owned(), \"${RS_PUB_KEY}\".to_owned())"
+echo "   native loaders, protocol handlers, Linux app identity and relay defaults verified"
+
+# common.dart must have its complete branded identity before this pinned check.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-flutter-analysis.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-termination.py" "$RDREPO"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-flutter-sdk-compatibility.py" "$RDREPO"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-file-transfer-window.py" "$RDREPO"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-keyboard-default.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-uinput-scroll.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-uinput-device.py" --source "$RDREPO"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-native-warnings.py" --source "$RDREPO" --after-branding
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-fingerprint.py" "$RDREPO"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-fatal-crash.py" --source "$RDREPO"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-macos-update.py" --source "$RDREPO"
+
+# Tao owns the server NSApplication delegate; route its support URLs via ACK.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-tray-url.py"
+
+# Startup is applied last against one exact composed three-file input profile.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-macos-startup.py"
+
+# Apply the exact compiler-only final layer after all functional owners.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-compiler-cleanup.py" --root "$RDREPO" --after-branding
+
+# Preserve callback delivery while removing full URLs from the final Mac logger.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-url-log-privacy.py" --root "$RDREPO"
+
+# Launch ownership is the final reversible functional layer.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-macos-gui-launch.py" --root "$RDREPO" --after-branding
+
+# Final Linux callbacks must not access a destroyed terminal main window.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-linux-window-close.py" --root "$RDREPO" --after-branding
+
+# Child close callbacks must release their hooks and finish all reads before destruction.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-linux-child-window-close.py" --root "$RDREPO" --after-branding
+
+# Reserve support URI dispatch after every previous functional owner.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-uri-routing.py" --root "$RDREPO" --after-branding
+
+# A file-transfer dialog completing after close must not restart its event loop.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-file-dialog-lifecycle.py" --root "$RDREPO"
+
+# Apply desktop input ownership only after all previous functional layers.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-input-lifecycle.py" --root "$RDREPO"
 
 echo "✓ Branding applied — product identity is $APP_NAME only."

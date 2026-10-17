@@ -1,0 +1,21 @@
+name: Flutter input inventory controls
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    name: Generated Flutter source inventory and copy controls
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Prove generated caches, source ownership and non-following copies
+        run: python3 -B scripts/test-support-input-lifecycle-flutter-inventory.py -v

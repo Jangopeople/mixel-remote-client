@@ -8,6 +8,8 @@ rustdesk/
 # Local CI debug
 *.log
 .cache/
+__pycache__/
+*.py[cod]
 
 # OS
 .DS_Store
