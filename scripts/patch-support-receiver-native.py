@@ -17,7 +17,7 @@ import tempfile
 
 SCRIPTS = Path(__file__).resolve().parent
 PLAN = SCRIPTS / 'support-receiver-native-plan.json'
-PLAN_SHA = 'b495a3eefdb2d3a6d5d1b00bf66dcd81b442072f40c14a9e49dd59036303a7a0'
+PLAN_SHA = 'a4f7dc7c6470d6c942743533e63c7ecd2aae3dcf8685e3680aa82aabb9a47397'
 
 
 def sha(raw):

@@ -272,6 +272,89 @@ class NativeSourceControls(unittest.TestCase):
         self.assertNotIn('rdev::simulate_unicode(', native)
         self.assertIn('receiver_unicode_event(unit, down)', native)
 
+    def test_windows_translate_shortcuts_keep_physical_owned_pulses(self):
+        value, modules = P.plan()
+        row = next(row for row in value['files'] if row['name'] == 'src/server/input_service.rs')
+        source = P.transform(row['beforeSource'].encode(), row).decode()
+        start = source.index('fn translate_keyboard_mode(')
+        seq = source[start:source.index('Some(key_event::Union::Chr(..))', start)]
+        native = modules['src/server/mixel_receiver_native.rs'].decode()
+        start = native.index('pub(super) fn key_sequence_hotkey(')
+        physical = native[start:native.index('pub(super) fn key_sequence(', start)]
+
+        def require_shortcut_dispatch(block):
+            hotkey = block.index('if is_hot_key_modifiers_down(&mut en) {')
+            pulse = block.index('receiver_native::key_sequence_hotkey(&mut en, seq);', hotkey)
+            done = block.index('return;', pulse)
+            plain = block.index('receiver_native::key_sequence(&mut en, seq);', done)
+            self.assertLess(done, plain)
+            # Shift belongs to the complete shortcut while its physical key is
+            # dispatched; only ordinary text releases this owner's Shift first.
+            self.assertLess(done, block.index('receiver_native::key_up(&mut en, Key::Shift);'))
+
+        require_shortcut_dispatch(seq)
+        # This reproduces the reviewed regression: Ctrl/Alt/Meta Seq took the
+        # ordinary Unicode branch because the physical dispatch was absent.
+        broken = seq.replace('receiver_native::key_sequence_hotkey(&mut en, seq);',
+                             'receiver_native::key_sequence(&mut en, seq);')
+        with self.assertRaises(ValueError):
+            require_shortcut_dispatch(broken)
+        self.assertIn('if simulate_win_hot_key {\n                        rdev::simulate_char(chr, true).ok();', row['beforeSource'])
+        self.assertIn('for character in text.chars()', physical)
+        self.assertLess(physical.index('if !admitted() { return; }'), physical.index('key_click_checked('))
+        self.assertIn('key_click_checked(en, Key::Layout(character))', physical)
+        self.assertNotIn('receiver_unicode_event', physical)
+        click = native[native.index('fn key_click_checked('):native.index('pub(super) fn key_click(')]
+        self.assertIn('with_key_pulse(', click)
+        self.assertIn('key_down_kind(en, key, false).and_then(|_| release(en, Alias::Enigo(key), false))', click)
+
+    def test_macos_snapshot_flags_reach_prepared_native_emitter(self):
+        value, modules = P.plan()
+        row = next(row for row in value['files'] if row['name'] == 'src/server/input_service.rs')
+        source = P.transform(row['beforeSource'].encode(), row).decode()
+        native = modules['src/server/mixel_receiver_native.rs'].decode()
+        prepare = native[native.index('fn prepare_enigo('):native.index('fn prepare_raw(')]
+        mac = prepare[prepare.index('#[cfg(target_os="macos")]'):prepare.index('#[cfg(target_os="linux")]')]
+
+        def require_flag_route(block):
+            self.assertIn('let (code, modifiers) = en.receiver_key_plan(key)?;', block)
+            self.assertIn('id: Physical(code), route: Route::Enigo(Key::Raw(code as _)), modifiers', block)
+            self.assertNotIn('route: Route::Raw(', block)
+
+        require_flag_route(mac)
+        # The reviewed raw replacement kept the keycode but silently dropped
+        # the Enigo.flags snapshots used by Legacy shortcuts and LockScreen.
+        broken = mac.replace('Route::Enigo(Key::Raw(code as _))', 'Route::Raw(RawKey::MacVirtualKeycode(code as _))')
+        with self.assertRaises(AssertionError):
+            require_flag_route(broken)
+        self.assertIn('add_flags_to_enigo(en, key_event);', source)
+        flags = source[source.index('fn add_flags_to_enigo('):source.index('fn get_control_key_value(')]
+        self.assertIn('for ck in key_event.modifiers.iter()', flags)
+        self.assertIn('en.add_flag(key);', flags)
+        self.assertIn('key_event.modifiers.push(ControlKey::Meta.into());', source)
+        self.assertIn('key_event.modifiers.push(ControlKey::Control.into());', source)
+        self.assertIn("key_event.set_chr('q' as _);", source)
+        self.assertIn('Route::Enigo(key) => (if down { en.key_down(key) } else { en.key_up_checked(key) })', native)
+        # Raw Map/Translate input still shares the physical identity while
+        # retaining its own native primitive and exact side-specific keycode.
+        raw = native[native.index('fn prepare_raw('):native.index('fn raw_key(')]
+        self.assertIn('RawKey::MacVirtualKeycode(code) => code as u32', raw)
+        self.assertIn('Route::Raw(RawKey::MacVirtualKeycode(code as _))', raw)
+        self.assertIn('Some(Prepared { id: Physical(code), route, modifiers: 0 })', raw)
+        # A raw Up after Legacy Down must execute the retained checked Enigo
+        # route, rather than reject it at a raw-only emitter. Lock order matches
+        # acquire/release/retire, and the exact generated raw call graph below
+        # contains no caller holding an Enigo guard across simulate_.
+        simulate = native[native.index('pub(super) fn simulate('):native.index('pub(super) fn key_sequence_hotkey(')]
+        self.assertLess(simulate.index('let mut en = ENIGO.lock()'), simulate.index('receipts().lock()'))
+        self.assertIn('state.up(&owner, Alias::Raw(raw), Some(plan.id), |route, down| emit(&mut en, route, down))', simulate)
+        self.assertNotIn('Some(plan.id), emit_raw)', simulate)
+        callers = [line.strip() for line in source.splitlines()
+                   if 'simulate_(' in line and not line.startswith('fn simulate_(')]
+        self.assertEqual(callers, ['simulate_(&event_type);', 'simulate_(&event_type);',
+            'simulate_(&EventType::KeyPress(RdevKey::RawKey(rdev::RawKey::MacVirtualKeycode(rdev::kVK_CapsLock))));',
+            'simulate_(&EventType::KeyRelease(RdevKey::RawKey(rdev::RawKey::MacVirtualKeycode(rdev::kVK_CapsLock))));'])
+
     def test_numeric_boundaries_and_cancellation_chunks(self):
         _, modules = P.plan()
         native = modules['src/server/mixel_receiver_native.rs'].decode()

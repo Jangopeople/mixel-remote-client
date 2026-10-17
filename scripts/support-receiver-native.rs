@@ -159,7 +159,9 @@ fn prepare_enigo(en: &mut Enigo, key: Key) -> Option<Prepared> {
     #[cfg(target_os="macos")]
     {
         let (code, modifiers) = en.receiver_key_plan(key)?;
-        return Some(Prepared { id: Physical(code), route: Route::Raw(RawKey::MacVirtualKeycode(code as _)), modifiers });
+        // Legacy modifier snapshots live in Enigo.flags. Keep that emitter while
+        // sharing the same physical key identity with raw Map/Translate input.
+        return Some(Prepared { id: Physical(code), route: Route::Enigo(Key::Raw(code as _)), modifiers });
     }
     #[cfg(target_os="linux")]
     {
@@ -242,15 +244,30 @@ pub(super) fn key_click(en: &mut Enigo, key: Key) {
 pub(super) fn simulate(event: &EventType) {
     let (key, down) = match event { EventType::KeyPress(key) => (*key, true), EventType::KeyRelease(key) => (*key, false), _ => { if admitted() { if let Err(error) = super::simulate_native_result(event) { native_error(error); } } return; } };
     let Some(raw) = raw_key(key) else { native_error("native raw key preparation failed"); return; };
-    // Raw callers can already hold ENIGO. The native raw route is independent.
+    // Generated raw callers do not hold ENIGO. Use the same emitter lock for
+    // retained Legacy routes, so a mode switch can release that exact receipt.
     let result = (|| -> Result<(), String> {
         let owner = claim(false).ok_or("missing native owner")?;
         let plan = prepare_raw(raw).ok_or("invalid native raw key")?;
+        let mut en = ENIGO.lock().map_err(|_| "native Enigo lock was poisoned")?;
         let mut state = receipts().lock().map_err(|_| "native receipt ledger was poisoned")?;
-        if down { state.down(owner, Alias::Raw(raw), plan.id, plan.route, true, Instant::now(), admitted, emit_raw) }
-        else { state.up(&owner, Alias::Raw(raw), Some(plan.id), emit_raw) }
+        if down { state.down(owner, Alias::Raw(raw), plan.id, plan.route, true, Instant::now(), admitted, |route, down| emit(&mut en, route, down)) }
+        else { state.up(&owner, Alias::Raw(raw), Some(plan.id), |route, down| emit(&mut en, route, down)) }
     })();
     if let Err(error) = result { native_error(error); }
+}
+
+#[cfg(target_os="windows")]
+pub(super) fn key_sequence_hotkey(en: &mut Enigo, text: &str) {
+    // VK_PACKET text does not carry Ctrl/Alt/Meta shortcut semantics. Use the
+    // prepared physical character path, with owned temporary Downs and Ups.
+    for character in text.chars() {
+        if !admitted() { return; }
+        if let Err(error) = key_click_checked(en, Key::Layout(character)) {
+            native_error(error);
+            return;
+        }
+    }
 }
 
 pub(super) fn key_sequence(en: &mut Enigo, text: &str) {
