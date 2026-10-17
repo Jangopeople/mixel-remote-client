@@ -1,7 +1,7 @@
 {
   "schema": "mixel-receiver-integration-v1",
   "owners": {
-    "patch-support-receiver-input.py": "a3f5286a0e1e0827d0896dc3dad94cfab4c0a7a5a02ec2e406e04e3527ab7f7d",
+    "patch-support-receiver-input.py": "e30ee7e10a662d874074b19d99822824459aa40704d8d748cac1429f3d2938cd",
     "patch-support-receiver-native.py": "5da1817ae16cfa1a8a486dca1f526254c5d9da5fdfdf6d111200232eb93dce9a"
   },
   "files": {
