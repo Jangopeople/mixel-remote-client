@@ -46,10 +46,17 @@ class PreparationControls(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             leaf = root / 'leaf.rs'
-            leaf.write_bytes(module.LEAF.read_bytes() + b'// drift\n')
-            with patch.object(module, 'LEAF', leaf), self.assertRaisesRegex(ValueError, 'pin drift'):
-                module.prepare(root / 'drift-output')
-            self.assertFalse((root / 'drift-output').exists())
+            logical = module.logical(module.LEAF.read_bytes())
+            for index, newline in enumerate((b'\n', b'\r\n')):
+                output = root / ('drift-output-' + str(index))
+                leaf.write_bytes(logical.replace(b'\n', newline) + b'// drift' + newline)
+                with patch.object(module, 'LEAF', leaf), self.assertRaisesRegex(ValueError, 'pin drift'):
+                    module.prepare(output)
+                self.assertFalse(output.exists())
+            leaf.write_bytes(logical.replace(b'\n', b'\r\n', 1))
+            with patch.object(module, 'LEAF', leaf), self.assertRaisesRegex(ValueError, 'Uniform fixture source newlines'):
+                module.prepare(root / 'mixed-output')
+            self.assertFalse((root / 'mixed-output').exists())
             linked = root / 'linked.rs'
             linked.symlink_to(module.LEAF)
             with patch.object(module, 'LEAF', linked), self.assertRaisesRegex(ValueError, 'single-link'):
