@@ -147,6 +147,9 @@ def command(output,label,argv,env,bound):
             print(tail.decode('utf-8','replace'),flush=True)
             print('END retained '+label+' '+kind+' bounded tail',flush=True)
         raise ValueError('native command failed; complete raw evidence retained: '+label)
+    print('PASS: custody command '+label+'; exit=0; stdoutSHA256='+sha(stdout)+'; stderrSHA256='+sha(stderr),flush=True)
+    passed=[line for line in stdout.splitlines() if line.startswith(b'PASS:')]
+    for line in passed[-40:]:print(line[:1024].decode('utf-8','replace')[:1024],flush=True)
     return stdout
 def run(output,bindings):
     require(sys.platform=='win32','--run requires actual Windows')

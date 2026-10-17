@@ -408,6 +408,16 @@ class WholePrefixFixtureControls(unittest.TestCase):
             self.assertEqual((output/'compile.stderr').read_bytes(),result.stderr)
             self.assertIn('actual compiler failure',visible.getvalue())
             self.assertEqual(json.loads((output/'compile.json').read_text())['exit'],1)
+    def test_success_keeps_raw_and_emits_only_bounded_actual_pass_lines(self):
+        import unittest.mock,io
+        with tempfile.TemporaryDirectory()as t:
+            output=Path(t).resolve();result=type('Result',(),dict(returncode=0,stdout=b'PASS: actual owned case\nnot a passing line\n'+b'PASS:'+b'x'*5000+b'\n',stderr=b''))()
+            with unittest.mock.patch.object(self.driver.subprocess,'run',return_value=result),contextlib.redirect_stdout(io.StringIO())as visible:
+                self.assertEqual(self.driver.command(output,'run-custody',['held-executable'],{},1),result.stdout)
+            self.assertEqual((output/'run-custody.stdout').read_bytes(),result.stdout)
+            lines=visible.getvalue().splitlines();self.assertEqual(len(lines),3)
+            self.assertIn('exit=0; stdoutSHA256=',lines[0]);self.assertEqual(lines[1],'PASS: actual owned case')
+            self.assertLessEqual(len(lines[2]),1024);self.assertNotIn('not a passing line',visible.getvalue())
     def test_compiler_timeout_is_failure_and_raw_preserved_without_execution(self):
         import unittest.mock,io,subprocess
         with tempfile.TemporaryDirectory()as t:

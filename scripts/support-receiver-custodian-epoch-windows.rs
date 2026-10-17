@@ -44,8 +44,12 @@ fn sd(text:&str)->Option<Memory>{let mut raw=ptr::null_mut();(unsafe{ConvertStri
 fn text(raw:*const u16,max:usize)->Option<String>{let mut n=0;while n<max&&unsafe{*raw.add(n)}!=0{n+=1;}if n==max{return None;}String::from_utf16(unsafe{std::slice::from_raw_parts(raw,n)}).ok()}
 fn descriptor_text(raw:Handle)->Option<String>{let mut value=ptr::null_mut();if unsafe{ConvertSecurityDescriptorToStringSecurityDescriptorW(raw,1,4|16,&mut value,ptr::null_mut())}==0{return None;}let owned=Memory(value.cast());let result=text(value,16384);drop(owned);result}
 fn exact_sd(handle:Handle,kind:u32,expected:&str)->bool{
-    let mut raw=ptr::null_mut();if unsafe{GetSecurityInfo(handle,kind,4|16,ptr::null_mut(),ptr::null_mut(),ptr::null_mut(),ptr::null_mut(),&mut raw)}!=0{return false;}
-    let actual=Memory(raw);let result=sd(expected).and_then(|value|descriptor_text(value.0)).zip(descriptor_text(actual.0)).map(|(a,b)|a==b).unwrap_or(false);result
+    let mut raw=ptr::null_mut();let status=unsafe{GetSecurityInfo(handle,kind,4|16,ptr::null_mut(),ptr::null_mut(),ptr::null_mut(),ptr::null_mut(),&mut raw)};
+    if status!=0{#[cfg(test)] eprintln!("CUSTODY_SD kind={kind} GetSecurityInfo={status}");return false;}
+    let actual=Memory(raw);let wanted=sd(expected).and_then(|value|descriptor_text(value.0));let observed=descriptor_text(actual.0);
+    let result=wanted.as_ref().zip(observed.as_ref()).map(|(a,b)|a==b).unwrap_or(false);
+    #[cfg(test)] if !result{eprintln!("CUSTODY_SD kind={kind} expected={wanted:?} actual={observed:?}");}
+    result
 }
 fn sid_text(sid:Handle)->Option<String>{let mut raw=ptr::null_mut();if unsafe{ConvertSidToStringSidW(sid,&mut raw)}==0{return None;}let owned=Memory(raw.cast());let result=text(raw,256);drop(owned);result}
 fn trusted_owner(sid:&str)->bool{matches!(sid,"S-1-5-18"|"S-1-5-32-544"|"S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464")}
