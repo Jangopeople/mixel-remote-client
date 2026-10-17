@@ -12,7 +12,7 @@ from pathlib import Path
 
 HERE = Path(__file__).absolute().parent
 PLAN = HERE / 'support-receiver-input-plan.json'
-PLAN_SHA = "3c90f72fac5bd848056339fa19d57214f66b00571be0b918971c4a4428aaa3c4"
+PLAN_SHA = "0c52a74161368b6083bc30ed5bc009293be99ffacc383ff6db4b96938d336513"
 LEAVES = {'src/server/mixel_receiver_input.rs': 'support-receiver-input.rs',
           'src/server/mixel_receiver_input_windows.rs': 'support-receiver-input-windows.rs'}
 
@@ -53,7 +53,7 @@ def target(root, name, absent=False):
 def load_plan():
     ordinary(PLAN)
     raw = PLAN.read_bytes()
-    if digest(raw.replace(b'\r\n',b'\n')) != PLAN_SHA:
+    if digest(canonical(raw)[0].encode()) != PLAN_SHA:
         raise RuntimeError('Receiver pinned plan drift')
     def unique(pairs):
         result = {}
@@ -67,7 +67,7 @@ def load_plan():
     for name, template in LEAVES.items():
         source = HERE / template
         ordinary(source)
-        if digest(source.read_bytes()) != value['templates'][name]:
+        if digest(canonical(source.read_bytes())[0].encode()) != value['templates'][name]:
             raise RuntimeError('Receiver template drift: ' + template)
     return value
 
@@ -138,7 +138,7 @@ def apply(root, restore=False, check=False):
     planned = {}
     for name in hashes:
         if name in LEAVES:
-            result = None if restore else (HERE / LEAVES[name]).read_bytes()
+            result = None if restore else canonical((HERE / LEAVES[name]).read_bytes())[0].encode()
         else:
             text, newline = logical[name]
             if profile != destination:

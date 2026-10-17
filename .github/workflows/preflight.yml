@@ -63,6 +63,11 @@ jobs:
       - name: Verify receiver source and migration contracts
         shell: bash
         run: python3 scripts/test-support-receiver-input.py
+      - name: Verify actual native receipt source and transition core
+        shell: bash
+        run: |
+          python3 scripts/test-receiver-native.py --source-only
+          python3 scripts/test-receiver-native.py --native --proof-root receiver-native-receipts-proof
       - name: Compile and exercise exact receiver capability component
         shell: bash
         run: python3 scripts/test-support-receiver-input-native.py --output receiver-native-proof
@@ -77,6 +82,7 @@ jobs:
             receiver-native-proof/component/Cargo.toml
             receiver-native-proof/component/Cargo.lock
             receiver-native-proof/component/tests/*.rs
+            receiver-native-receipts-proof/
           if-no-files-found: error
           retention-days: 14
   release-pipeline:

@@ -22,12 +22,12 @@
       "src/server.rs": "4fb7df5363849646f2ec0352ffa7b3c04e69fca0edb5c178801cdcfce1921f01",
       "src/ipc.rs": "443d25118ffbb1e715196c9b32bde3e100e750e0c4c8ef4ac75efbfaf93c5d2f",
       "src/server/portable_service.rs": "f9a221b7d322334528d57179c6450774cc7c9cde8d450d5a0ba11374b43dab07",
-      "src/server/mixel_receiver_input.rs": "0966d838f185b4204015a91fb3ac04bb96bde5b3a51a18315bac6eff659f7fe2",
+      "src/server/mixel_receiver_input.rs": "c4b17e7852dd106e7d4d5944359ed2fc32ffc4c7173db179112f7c643b3a8fb2",
       "src/server/mixel_receiver_input_windows.rs": "96ba3bafaa3977460c3c14faf79ce62c048672192b4857623f63cafc4dcdabeb"
     }
   },
   "templates": {
-    "src/server/mixel_receiver_input.rs": "0966d838f185b4204015a91fb3ac04bb96bde5b3a51a18315bac6eff659f7fe2",
+    "src/server/mixel_receiver_input.rs": "c4b17e7852dd106e7d4d5944359ed2fc32ffc4c7173db179112f7c643b3a8fb2",
     "src/server/mixel_receiver_input_windows.rs": "96ba3bafaa3977460c3c14faf79ce62c048672192b4857623f63cafc4dcdabeb"
   },
   "changes": {

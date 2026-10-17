@@ -46,7 +46,8 @@ def source_contracts(module):
     windows = (HERE / 'support-receiver-input-windows.rs').read_text(encoding='utf-8')
     assert 'sync_channel::<Work>(MAX_PENDING)' in core and 'pending_bytes.fetch_update' in core
     assert 'with_receiver_owner_scope_checked' in core and 'with_receiver_owner_checked(' not in core
-    assert 'cleanup_done' in core and 'if !input_service::release_receiver_owner(token) { return false; }' in core
+    assert 'cleanup_done' in core and 'input_service::release_receiver_owner(token)' in core
+    assert 'clear_relative_mouse_active' not in core and 'fn relative()' not in core
     assert 'enum Backend { Local, Portable(String) }' in windows
     assert 'GetNamedPipeServerProcessId' in windows and 'GetNamedPipeClientProcessId' in windows
     assert 'source == 0 || source != target' in windows and 'process: Some(peer.process.clone())' in windows
@@ -70,15 +71,19 @@ def source_contracts(module):
 
 
 def actual_profile(module, source):
+    if module.is_current(source):
+        with module.previous(source) as prior:
+            return actual_profile(module, prior)
     plan = module.load_plan()
+    changed_files = len(plan['profiles']['fresh'])
     with tempfile.TemporaryDirectory(prefix='mixel-receiver-source-controls-') as tmp:
         root = Path(tmp).resolve() / 'source'; root.mkdir()
         for name in plan['profiles']['fresh']:
             if name in module.LEAVES: continue
             dst = root / name; dst.parent.mkdir(parents=True, exist_ok=True); shutil.copyfile(source / name, dst)
         original = snapshot(root)
-        assert module.apply(root, check=True)['writes'] == 6 and snapshot(root) == original
-        assert module.apply(root)['writes'] == 6
+        assert module.apply(root, check=True)['writes'] == changed_files and snapshot(root) == original
+        assert module.apply(root)['writes'] == changed_files
         final = snapshot(root); assert module.apply(root)['writes'] == 0 and snapshot(root) == final
         assert module.is_current(root)
         mode = (root / 'src/ipc.rs').stat().st_mode
@@ -87,8 +92,8 @@ def actual_profile(module, source):
             assert (prior / 'src/ipc.rs').stat().st_mode == mode
             (prior / 'src/ipc.rs').write_bytes(b'private mutation only')
         assert snapshot(root) == final
-        assert module.apply(root, restore=True, check=True)['writes'] == 6 and snapshot(root) == final
-        assert module.apply(root, restore=True)['writes'] == 6 and snapshot(root) == original
+        assert module.apply(root, restore=True, check=True)['writes'] == changed_files and snapshot(root) == final
+        assert module.apply(root, restore=True)['writes'] == changed_files and snapshot(root) == original
         assert not module.is_current(root)
         for name in list(original):
             path = root / name; before = path.read_bytes(); path.write_bytes(before + b'\n// rejected drift\n'); must_refuse(module, root); path.write_bytes(before)
@@ -101,7 +106,20 @@ def actual_profile(module, source):
         raw = target.read_bytes(); target.write_bytes(raw.replace(b'\n', b'\r\n', 1)); must_refuse(module, root); target.write_bytes(raw)
         for name, raw in original.items(): (root / name).write_bytes(raw.replace(b'\n', b'\r\n'))
         crlf = snapshot(root); module.apply(root); module.apply(root, restore=True); assert snapshot(root) == crlf
-    print('PASS: actual whole-source apply/check/idempotence/private inverse, drift/partial/hardlink/newline refusals and CRLF restoration', flush=True)
+    with tempfile.TemporaryDirectory(prefix='mixel-receiver-checkout-crlf-') as tmp:
+        folder = Path(tmp).resolve(); scripts = folder / 'scripts'; scripts.mkdir()
+        for name in ('patch-support-receiver-input.py', 'support-receiver-input-plan.json', *module.LEAVES.values()):
+            raw = (HERE / name).read_bytes().replace(b'\r\n', b'\n')
+            (scripts / name).write_bytes(raw.replace(b'\n', b'\r\n'))
+        spec = importlib.util.spec_from_file_location('mixel_receiver_crlf_checkout', scripts / 'patch-support-receiver-input.py')
+        checkout = importlib.util.module_from_spec(spec); spec.loader.exec_module(checkout)
+        root = folder / 'source'; root.mkdir()
+        for name in plan['profiles']['fresh']:
+            if name in module.LEAVES: continue
+            dst = root / name; dst.parent.mkdir(parents=True, exist_ok=True); shutil.copyfile(source / name, dst)
+        original = snapshot(root); checkout.apply(root); assert checkout.is_current(root); checkout.apply(root, restore=True); assert snapshot(root) == original
+        changed = scripts / 'support-receiver-input.rs'; changed.write_bytes(changed.read_bytes().replace(b'\r\n', b'\n', 1)); must_refuse(checkout, root)
+    print('PASS: actual whole-source apply/check/idempotence/private inverse, drift/partial/hardlink/newline refusals and CRLF source/checkout restoration', flush=True)
 
 
 def main():

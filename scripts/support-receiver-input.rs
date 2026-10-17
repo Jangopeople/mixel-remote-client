@@ -362,19 +362,8 @@ fn set_block(inner: &Arc<Inner>, enabled: bool, privacy: bool) -> bool {
         state = waited.0;
     }
 }
-struct Held { conn: i32 }
-fn ledger() -> &'static Mutex<HashMap<String, Held>> {
-    static LEDGER: OnceLock<Mutex<HashMap<String, Held>>> = OnceLock::new();
-    LEDGER.get_or_init(|| Mutex::new(HashMap::new()))
-}
-fn relative() -> &'static Mutex<HashMap<i32,String>> {
-    static RELATIVE: OnceLock<Mutex<HashMap<i32,String>>> = OnceLock::new(); RELATIVE.get_or_init(|| Mutex::new(HashMap::new()))
-}
 fn apply(token: &str, effect_id: i32, conn: i32, action: &Action, allowed: Arc<dyn Fn() -> bool + Send + Sync>, runner: Deferred) {
-    // Lock order: generation serial/kernel mutex -> this ledger -> native sink.
-    let mut owners = ledger().lock().unwrap_or_else(|e| e.into_inner());
-    owners.entry(token.to_owned()).or_insert_with(|| Held { conn });
-    drop(owners);
+    // Actual successful receipt ownership is maintained only by the native adapter.
     match action {
         Action::Key(original, press) => input_service::with_receiver_owner_scope_checked(token, effect_id, allowed.clone(), runner.clone(), || {
             let mut event = original.clone(); event.press = false;
@@ -395,25 +384,15 @@ fn apply(token: &str, effect_id: i32, conn: i32, action: &Action, allowed: Arc<d
             }
         }),
         Action::Mouse(event, name, argb, simulate, cursor) => {
-            if *simulate {
-                if matches!(event.mask & 7, 0 | 5) { relative().lock().unwrap_or_else(|e| e.into_inner()).insert(conn,token.to_owned()); }
-            }
             input_service::with_receiver_owner_scope_checked(token, effect_id, allowed, runner, || input_service::handle_mouse_(event, conn, name.clone(), *argb, *simulate, *cursor));
         }
         Action::Pointer(event) => input_service::with_receiver_owner_scope_checked(token, effect_id, allowed, runner, || input_service::handle_pointer_(event, conn)),
     }
 }
 fn cleanup(token: &str) -> bool {
-    let owners = ledger().lock().unwrap_or_else(|e| e.into_inner());
-    let Some(held) = owners.get(token) else { return true; };
-    let conn = held.conn; drop(owners);
-    if !input_service::release_receiver_owner(token) { return false; }
-    ledger().lock().unwrap_or_else(|e| e.into_inner()).remove(token);
-    let mut relative = relative().lock().unwrap_or_else(|e| e.into_inner());
-    if relative.get(&conn).map(String::as_str) == Some(token) {
-        relative.remove(&conn); input_service::clear_relative_mouse_active(conn);
-    }
-    true
+    // The native adapter owns canonical keys, buttons, and generation-relative
+    // state. Clearing a real peer here could erase a fresh parallel generation.
+    input_service::release_receiver_owner(token)
 }
 
 #[cfg(windows)]
