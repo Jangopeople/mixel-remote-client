@@ -20,6 +20,18 @@ BRIDGE_OLD = (
 )
 BRIDGE_AFTER = "          pushd flutter && sed -i -e 's/extended_text: 14.0.0/extended_text: 13.0.0/g' pubspec.yaml && flutter pub get && popd\n"
 
+DEBIAN_LIFECYCLE_OWNER_SHA = 'd28823e63c3070a0d92f4bd1a9c37f38d4c24ba3f7cfa5e0d7c2f3ff2428d196'
+DEBIAN_PREVIOUS_BRANDING_SHA = 'a2f7c5a982429368b714ea71fa549a2d4ecd2fa5bb0d57f6c2374daf526b1383'
+DEBIAN_LIFECYCLE_MACRO = ('  echo "   wrote res/${APP_NAME_KEBAB}.service"\nfi\n',
+ '# Guard service lifecycle only after branding and the exact unit asset exist.\n'
+ 'python3 "$(dirname "${BASH_SOURCE[0]}")/patch-debian-service-lifecycle.py" --root "$RDREPO"\n'
+ '\n',
+ 'if [[ -f "$RDREPO/res/pam.d/rustdesk.debian" ]]; then\n',
+ 'require_string res/DEBIAN/postinst "rm -f /etc/systemd/system/${APP_NAME_KEBAB}.service '
+ '/usr/lib/systemd/system/${APP_NAME_KEBAB}.service '
+ '/usr/lib/systemd/user/${APP_NAME_KEBAB}.service"\n',
+ 'require_string res/DEBIAN/postinst "deb-systemd-invoke start ${APP_NAME_KEBAB}.service"\n')
+
 
 def digest(raw):
     return hashlib.sha256(raw).hexdigest()
@@ -214,7 +226,8 @@ def compose(raw, name):
     if name == '.github/workflows/build.yml':
         text = project_shipping_dependencies(text, restore=False)
         text = project_job_hunks(text, restore=False)
-    return sdk_retention_projection(text.encode().replace(b'\n', newline), name, restore=False)
+    return debian_lifecycle_branding_projection(
+        sdk_retention_projection(text.encode().replace(b'\n', newline), name, restore=False), name, restore=False)
 
 
 def inverse_blocks(raw, name):
@@ -223,6 +236,7 @@ def inverse_blocks(raw, name):
     Other independently reviewed workflow additions may compose outside these
     exact hunks, then be inversed by their own unchanged guard owners.
     """
+    raw = debian_lifecycle_branding_projection(raw, name, restore=True)
     text, newline = canonical(raw)
     if name == '.github/workflows/build.yml':
         text = project_job_hunks(text, restore=True)
@@ -245,6 +259,54 @@ def project_to_canonical(raw, name):
     return result
 
 
+def debian_lifecycle_branding_projection(raw, name, restore):
+    """Exact current packaging hook/guard only; historical whole hashes stay fatal."""
+    if name != 'scripts/apply-branding.sh':
+        return raw
+    text, newline = canonical(raw)
+    before, addition, after, original_guard, current_guard = DEBIAN_LIFECYCLE_MACRO
+    old, new = (current_guard, original_guard) if restore else (original_guard, current_guard)
+    if restore:
+        if (text.count(addition) != 1 or text.count(before + addition + after) != 1
+                or text.count(current_guard) != 1 or original_guard in text):
+            raise ValueError('Changed/missing/moved Debian lifecycle hook or guard')
+        text = text.replace(before + addition + after, before + after, 1)
+    else:
+        if addition in text or text.count(before + after) != 1 or current_guard in text or text.count(original_guard) != 1:
+            raise ValueError('Changed exact Debian lifecycle insertion context')
+        text = text.replace(before + after, before + addition + after, 1)
+    text = text.replace(old, new, 1)
+    return text.encode().replace(b'\n', newline)
+
+
+def debian_lifecycle_owner():
+    """Load only the reviewed exact helper; never a best-effort layer selector."""
+    import importlib.util
+    from pathlib import Path
+    path = Path(__file__).with_name('patch-debian-service-lifecycle.py')
+    text, _ = canonical(path.read_bytes())
+    if digest(text.encode()) != DEBIAN_LIFECYCLE_OWNER_SHA:
+        raise ValueError('Changed exact Debian lifecycle helper')
+    spec = importlib.util.spec_from_file_location('mixel_debian_lifecycle_owner', path)
+    owner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(owner)
+    return owner
+
+
+def previous_debian_lifecycle(terminal, root):
+    """Validate first, then inverse exactly three scripts in the owned prior copy."""
+    import contextlib
+    from pathlib import Path
+    owner = debian_lifecycle_owner()
+    owner.apply(Path(root), restore=True, check=True)
+    @contextlib.contextmanager
+    def previous():
+        with terminal.previous(root) as stage:
+            owner.apply(Path(stage), restore=True)
+            yield stage
+    return previous()
+
+
 def current_source(root):
     """Strict complete-tree entry only; internal historical fixtures never call this.
 
@@ -261,7 +323,7 @@ def current_source(root):
     spec.loader.exec_module(terminal)
     final = terminal.has_layer(root)  # Strict inspect, never an error fallback.
     if final:
-        return terminal.previous(root)
+        return previous_debian_lifecycle(terminal, root)
     return contextlib.nullcontext(Path(root))
 
 
@@ -274,6 +336,8 @@ def committed_workflow(raw, name):
     text, _ = canonical(raw)
     if digest(text.encode()) == BASE_SHA[name]:
         return raw
+    if name == 'scripts/apply-branding.sh' and digest(text.encode()) == DEBIAN_PREVIOUS_BRANDING_SHA:
+        raw = debian_lifecycle_branding_projection(raw, name, restore=False)
     return inverse_blocks(raw, name)
 
 

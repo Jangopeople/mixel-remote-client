@@ -293,8 +293,9 @@ try {
     $lease=Get-MixelSupportLeaseDiagnostic $mainPid
     if ($lease -cnotmatch '\AownerFailed=false;ownerError=none;kernel=active;probeError=none;memoryActive=(true|false)\z') { throw 'Cold native lease state is not kernel-active and healthy.' }
     if ((Get-ColdMainWindow $mainPid) -ne $originalWindow) { throw 'Cold incoming process lost the same visible branded main HWND.' }
-    $samples.Add([ordered]@{seconds=$clock.Elapsed.TotalSeconds;incomingPid=$mainPid;birth=$facts.birth;medium=$true;attendedReady=$current.attendedReady;relayReady=$true;stableId=$true;kernelLease=$true;remoteAuthenticated=0;senderExited=$true;hwnd=$originalWindow})
-    if ($clock.Elapsed.TotalSeconds -ge 95) { break }
+    $elapsedSeconds=$clock.Elapsed.TotalSeconds
+    $samples.Add([ordered]@{seconds=$elapsedSeconds;incomingPid=$mainPid;birth=$facts.birth;medium=$true;attendedReady=$current.attendedReady;relayReady=$true;stableId=$true;kernelLease=$true;remoteAuthenticated=0;senderExited=$true;hwnd=$originalWindow})
+    if ($elapsedSeconds -ge 95) { break }
     Start-Sleep -Seconds 3
   } while ($true)
   Read-ColdStarts

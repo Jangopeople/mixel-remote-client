@@ -107,6 +107,7 @@ class HostedFixtureControls(unittest.TestCase):
         workflow_rows = {
             'preflight.yml': [('windows-packaging', 'Exercise complete Windows generated source, keep-awake and native branding')],
             'build.yml': [('windows', 'Preflight generated support source and reporter'),
+                          ('windows', 'Prove cold signed QuickSupport starts as a fresh Standard user without UAC'),
                           ('windows', 'Exercise the signed QuickSupport download without an invite'),
                           ('runtime', 'Diagnose signed compiled ordinary-to-QuickSupport ownership'),
                           ('runtime', 'Prove actual signed customer QuickSupport95 without debugger')]}
@@ -126,7 +127,7 @@ class HostedFixtureControls(unittest.TestCase):
         for name in ('test-hosted-standard-qa', 'test-packaged-owned-qa'):
             self.assertEqual(dispatcher.count('  ' + name + ' \\\n'), 1)
             self.assertLess(dispatcher.index('  ' + name + ' \\\n'), dispatcher.index('  test-support-lease \\\n'))
-        print('PASS: literal native caller14 unset/empty/exact1/invalid and native5 cases; export paths preserved; timeout180/check=True unchanged; five exact step-only environments; both mandatory adapter controls before native gate.')
+        print('PASS: literal native caller14 unset/empty/exact1/invalid and native5 cases; export paths preserved; timeout180/check=True unchanged; six exact step-only environments; both mandatory adapter controls before native gate.')
 
     def test_complete_generated_script_parses_before_any_execution(self):
             body = FUNCTIONS + r'''

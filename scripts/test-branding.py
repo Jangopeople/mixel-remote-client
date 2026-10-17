@@ -162,8 +162,23 @@ def restore_footer_input_layer(repo: Path, base: Path, environment: dict) -> Non
     assert full_source_snapshot(repo) == expected, 'Input footer inverse changed an unrelated source'
 
 
+def restore_footer_debian_lifecycle(repo: Path) -> None:
+    """Restore the exact three-script profile before a historical macro copy."""
+    owner = input_lifecycle.debian_lifecycle_owner()
+    before = full_source_snapshot(repo)
+    owner.apply(repo, restore=True, check=True)
+    assert full_source_snapshot(repo) == before, 'Debian footer inverse check wrote source'
+    original = {name: (repo / 'res/DEBIAN' / name).read_bytes() for name in owner.ORIGINAL_SHA256}
+    expected = dict(before)
+    for name, raw in owner.transform(original, restore=True).items():
+        expected['res/DEBIAN/' + name] = ('file', hashlib.sha256(raw).hexdigest())
+    owner.apply(repo, restore=True)
+    assert full_source_snapshot(repo) == expected, 'Debian footer inverse changed unrelated source'
+
+
 def restore_footer_terminal_layers(repo: Path, layers: tuple[str, ...], base: Path, environment: dict) -> None:
     """Run each actual strict CLI inverse and verify its exact complete source effect."""
+    restore_footer_debian_lifecycle(repo)
     restore_footer_input_layer(repo, base, environment)
     for layer in layers:
         filename, prefix = TERMINAL_FOOTER_LAYERS[layer]
@@ -965,24 +980,32 @@ print("PASS: actual Debian generator child explicitly uses UTF-8 and preserves t
     # Reproduces a legacy /etc service with missing /usr/lib unit copies; every
     # filesystem operation is redirected into this disposable directory.
     if os.name != "nt":
+        lifecycle = run([sys.executable, str(ROOT / "scripts/test-debian-service-lifecycle.py"),
+                         "--source", str(repo)], cwd=base, env=env)
+        assert "Ran 44 tests" in lifecycle.stderr and lifecycle.stderr.endswith("\nOK\n") and "skipped" not in lifecycle.stderr
+        print("PASS: 44 strict Debian lifecycle source and isolated Bash controls; real package/service execution remains separate")
         sandbox = base / "package-root"
         for path in ("proc/1", "etc/systemd/system", "usr/bin", "usr/share/mixel-remote/files/systemd", "commands"):
             (sandbox / path).mkdir(parents=True, exist_ok=True)
         (sandbox / "proc/1/exe").symlink_to("/fixture/systemd")
-        (sandbox / "etc/systemd/system/mixel-remote.service").write_text("legacy override", encoding="utf-8")
-        (sandbox / "usr/share/mixel-remote/files/systemd/mixel-remote.service").write_text("fixture service", encoding="utf-8")
+        unit_bytes = (repo / "res/mixel-remote.service").read_bytes()
+        (sandbox / "etc/systemd/system/mixel-remote.service").write_bytes(unit_bytes)
+        (sandbox / "usr/share/mixel-remote/files/systemd/mixel-remote.service").write_bytes(unit_bytes)
+        hash_tool = sandbox / "commands/sha256sum"
+        hash_tool.write_text("#!" + sys.executable + "\nimport hashlib,sys\nfrom pathlib import Path\np=Path(sys.argv[-1])\nassert str(p) == " + repr(str(sandbox / "etc/systemd/system/mixel-remote.service")) + "\nprint(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+str(p))\n", encoding="utf-8")
+        hash_tool.chmod(0o755)
         systemctl = sandbox / "commands/systemctl"
         systemctl.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         systemctl.chmod(0o755)
         maintainer = (repo / "res/DEBIAN/postinst").read_text(encoding="utf-8")
-        for prefix in ("/proc/", "/etc/", "/usr/"):
-            maintainer = maintainer.replace(prefix, str(sandbox) + prefix)
+        maintainer = re.sub(r"/(?:proc|etc|usr|run|lib)/",
+                            lambda match: str(sandbox) + match.group(), maintainer)
         fixture = sandbox / "postinst"
         fixture.write_text(maintainer, encoding="utf-8")
         package_env = {**env, "PATH": str(sandbox / "commands") + os.pathsep + env.get("PATH", "")}
         run([BASH, str(fixture), "configure"], env=package_env)
         assert not (sandbox / "etc/systemd/system/mixel-remote.service").exists()
-        assert (sandbox / "usr/lib/systemd/system/mixel-remote.service").read_text(encoding="utf-8") == "fixture service"
+        assert (sandbox / "usr/lib/systemd/system/mixel-remote.service").read_bytes() == unit_bytes
         assert (sandbox / "usr/bin/mixel-remote").is_symlink()
         print("PASS: actual generated Debian postinst upgrades legacy service with missing unit copies")
     else:

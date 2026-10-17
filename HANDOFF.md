@@ -1,5 +1,60 @@
 # Mixel-Remote — Agent Handoff / Current State
 
+## 2026-10-17 — Debian lifecycle correction built; Windows QA gaps closed
+
+Read current Git HEAD and the authoritative checkpoint before older entries.
+The current source adds a narrow Debian maintainer correction and the exact QA
+consumer admissions. Only generated preinst, prerm and postinst change among
+1,295 generated files; all compiled application source, unit/KillMode and postrm
+remain unchanged. First and repeated full composition pass with byte/mode
+idempotence. The new scripts skip an absent service instead of hiding stop errors,
+respect Debian start/stop policy, preserve administrator overrides/masks/foreign
+links and linked targets, and keep genuine operation failures fatal.
+
+Root ran44 closed source/Bash controls with zero skips. The combined focused
+source suites pass18+119+11+92+1+8 tests, zero skips. Frozen historical runtime
+profiles/workflows stay unchanged; current source views invert only the exact
+new hook and three scripts into their private prior copies. Actual private
+full-chain source inversion and committed-source gates are recorded separately.
+
+The real070 normal DEB already passed31 actual Ubuntu22.04/systemd commands,
+30-second stability, restart/stop/start, enable/disable, remove/purge, cleanup and
+unrelated-sentinel preservation. That proof retains first-install/remove warnings.
+The correction has now been built with actual dpkg-deb in a fresh unprivileged,
+network-none container, using the retained exact070 package and only the three
+new control scripts. Derived private DEB SHA256 is
+0666ca6f87008654c8e06d17a9555ea6e207d4fec3491b10abee076308a9bd58.
+All130 payload bytes/modes/links/UID/GIDs and the other control entries match.
+It is not a new normal producer package or a real-service pass for the correction.
+Proof: durable artifact root-private-debian-control-rebuild-rjzrs0yd/output-r2.
+The first builder attempt refused before extraction on an xz-versus-zst format
+assumption; its failure is preserved and the corrected build passes.
+
+Actual070 mandatory Windows failed a QA inventory: the cold-QS step added a
+fifth namespace environment but the test still listed four. The exact row is
+now covered; no namespace permissions or native assertions changed. Its focused
+source/mock test passes. The cold95 evidence loop also uses one elapsed snapshot
+for recording and its stop decision. The original94.999/95.001 boundary defect
+reproduces; corrected LF8 and CRLF8 pure-PowerShell controls pass without native
+APIs. New signed Windows cold launch and physical PC01 acceptance remain required;
+the old070 producer cannot be qualified by these source results.
+
+The4a Mac mandatory harness is now SUCCESS25steps at run39027248480,
+job117380561628. Its actual log confirms public Flutter/CoreVideo texture
+ownership after autorelease-scope retirement, a deliberately retained-owner
+negative control, both-target ObjC/ObjC++ ownership compilation and the real
+pinned Rust final link. The two normal Mac shipping jobs remain separate and
+in progress. No new normal Mac package/native update is qualified yet.
+
+The authenticated NAS console is available and PC01 remains on the old6c Ready
+GUI. New Windows staging has not happened. Native Chrome reads work on the Mac;
+exact installed Mixel selection still times out after fresh same-birth/auth0
+checks. Do not call the Mac locked, retry unchanged selections, force kill or
+relaunch it. Human normal Mac Quit and native URI Open remain pending. Adobe's
+Photo release tests retain the local compiler window; use hosted checks.
+Preserve the automatic GTK rejection without retry, all protected old resources,
+the no-worktree rule and public/main/store/production holds. Delivery is incomplete.
+
 ## 2026-10-17 — Real ARM CocoaPods integration fixed; next full build required
 
 Read current Git HEAD and the authoritative current checkpoint before older

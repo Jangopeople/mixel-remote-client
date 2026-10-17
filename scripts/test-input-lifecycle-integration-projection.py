@@ -90,7 +90,7 @@ class Controls(unittest.TestCase):
         self.assertIn('patch-debian-archive-ownership.py', addition)
         self.assertEqual(final.count(before + addition + after), 1)
         self.assertEqual(final.count('patch-debian-archive-ownership.py'), 1)
-        prior = final.replace(addition, '', 1).encode()
+        prior = P.debian_lifecycle_branding_projection(final.replace(addition, '', 1).encode(), name, restore=True)
         self.assertEqual(hashlib.sha256(prior).hexdigest(), 'b9df7b9cfc1d52e7d7a40fad64a67698190a360181862e3d02ea40328fe1988a')
         for mutated in (final.replace(addition, '', 1), final.replace(addition, addition * 2, 1),
                         final.replace(addition, addition.replace('$BUILDPY', '$OTHER'), 1),
@@ -98,6 +98,71 @@ class Controls(unittest.TestCase):
                         final.replace(before + addition + after, before + '# disjoint\n' + addition + after, 1)):
             with self.assertRaises(ValueError):
                 current_to_canonical(mutated.encode(), name)
+
+    def test_debian_lifecycle_hook_guard_whole_inverse_and_lf_crlf_refuse_drift(self):
+        name = 'scripts/apply-branding.sh'
+        final = P.canonical((ROOT / name).read_bytes())[0]
+        before, addition, after, old_guard, new_guard = P.DEBIAN_LIFECYCLE_MACRO
+        for ending in (b'\n', b'\r\n'):
+            raw = final.encode().replace(b'\n', ending)
+            prior = P.debian_lifecycle_branding_projection(raw, name, restore=True)
+            self.assertEqual(P.digest(P.canonical(prior)[0].encode()), P.DEBIAN_PREVIOUS_BRANDING_SHA)
+            self.assertEqual(P.debian_lifecycle_branding_projection(prior, name, restore=False), raw)
+            self.assertEqual(P.canonical(prior)[1], ending)
+            self.assertEqual(P.digest(P.canonical(current_to_canonical(raw, name))[0].encode()), P.BASE_SHA[name])
+            for changed in (final.replace(addition, '', 1), final.replace(addition, addition * 2, 1),
+                            final.replace(addition, '', 1) + addition,
+                            final.replace(before + addition + after, before + '# disjoint\n' + addition + after, 1),
+                            final.replace(addition, addition.replace('--root', '--foreign-root'), 1),
+                            final.replace(new_guard, old_guard, 1),
+                            final.replace(new_guard, new_guard + new_guard, 1),
+                            final.replace(new_guard, new_guard.replace('start', 'stop'), 1)):
+                self.assertNotEqual(changed, final)
+                with self.assertRaises(ValueError):
+                    current_to_canonical(changed.encode().replace(b'\n', ending), name)
+            with self.assertRaises(ValueError):
+                P.debian_lifecycle_branding_projection(prior, name, restore=True)
+            self.assertEqual(P.committed_workflow(prior, name), P.inverse_blocks(raw, name))
+
+    def test_debian_private_source_validates_before_copy_and_only_changes_owned_stage(self):
+        import contextlib
+        import shutil
+        events = []
+        with tempfile.TemporaryDirectory(prefix='mixel-debian-prior-source-') as temporary:
+            root = Path(temporary) / 'source'; root.mkdir()
+            (root / 'synthetic').write_bytes(b'current')
+            stage = Path(temporary) / 'stage'
+            class Owner:
+                def apply(self, path, restore=False, check=False):
+                    self_outer.assertTrue(restore)
+                    events.append(('check' if check else 'restore', Path(path).name))
+                    if check:
+                        self_outer.assertEqual(Path(path), root)
+                    else:
+                        self_outer.assertEqual(Path(path), stage)
+                        (Path(path) / 'synthetic').write_bytes(b'prior')
+            class Terminal:
+                @contextlib.contextmanager
+                def previous(self, path):
+                    events.append(('copy', Path(path).name))
+                    shutil.copytree(path, stage)
+                    yield stage
+            self_outer = self
+            with mock.patch.object(P, 'debian_lifecycle_owner', return_value=Owner()):
+                with P.previous_debian_lifecycle(Terminal(), root) as previous:
+                    self.assertEqual(previous, stage)
+                    self.assertEqual((stage / 'synthetic').read_bytes(), b'prior')
+                    self.assertEqual((root / 'synthetic').read_bytes(), b'current')
+            self.assertEqual(events, [('check', 'source'), ('copy', 'source'), ('restore', 'stage')])
+            terminal = mock.Mock()
+            with mock.patch.object(P, 'debian_lifecycle_owner') as factory:
+                factory.return_value.apply.side_effect = RuntimeError('strict three-file profile refusal')
+                with self.assertRaisesRegex(RuntimeError, 'strict three-file'):
+                    P.previous_debian_lifecycle(terminal, root)
+                terminal.previous.assert_not_called()
+        with mock.patch.object(P, 'digest', return_value='0' * 64):
+            with self.assertRaisesRegex(ValueError, 'Changed exact Debian lifecycle helper'):
+                P.debian_lifecycle_owner()
 
     def test_cold_independent_view_preserves_both_profiles_and_rejects_malformed_layers(self):
         name = '.github/workflows/build.yml'
