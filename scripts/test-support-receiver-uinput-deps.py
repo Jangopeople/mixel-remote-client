@@ -18,6 +18,23 @@ PLAN = OWNER.load_plan()
 UINPUT, LEAVES = OWNER.FILES.load_plan()
 
 
+def source_owner(filename):
+    spec = importlib.util.spec_from_file_location('pinned_'+filename.replace('-', '_'), HERE/filename)
+    owner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(owner)
+    return owner
+
+
+def input_prefix(root, newline):
+    owner = source_owner('patch-support-input.py')
+    for row in PLAN['files']:
+        patch = owner.patch_manifest if row['name'] == 'Cargo.toml' else owner.patch_lock
+        source = patch(row['freshSource']).encode()
+        if OWNER.FILES.sha(source) != PLAN['priorProfiles']['input'][row['name']]['sha256']:
+            raise AssertionError('actual input-only source differs from whole pinned prior')
+        (root/row['name']).write_bytes(source.replace(b'\n', newline))
+
+
 def inventory(root):
     result = {}
     for path in root.rglob('*'):
@@ -119,6 +136,61 @@ class DependencyControls(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'mixed uinput dependency profile'):
                     OWNER.apply(root, restore=True, check=True)
                 self.assertEqual(inventory(root), mixed)
+
+    def test_input_only_prior_is_exact_noop_and_never_forward_authority(self):
+        for newline in (b'\n', b'\r\n'):
+            with self.subTest(newline=newline), fixture(newline, fresh=True) as root:
+                input_prefix(root, newline)
+                before = inventory(root)
+                self.assertEqual(OWNER.inspect(root)[2], 'prior')
+                self.assertFalse(OWNER.is_current(root))
+                for check in (False, True):
+                    self.assertEqual(OWNER.apply(root, restore=True, check=check), {'profile': 'prior', 'writes': 0})
+                    with self.assertRaisesRegex(ValueError, 'require complete branding'):
+                        OWNER.apply(root, check=check)
+                    self.assertEqual(inventory(root), before)
+                with OWNER.previous(root) as stage:
+                    self.assertEqual(inventory(stage), before)
+                self.assertEqual(inventory(root), before)
+                for row in PLAN['files']:
+                    path = root/row['name']
+                    prior = path.read_bytes()
+                    for source in (row['freshSource'], row['beforeSource'], row['afterSource']):
+                        path.write_bytes(source.encode().replace(b'\n', newline))
+                        altered = inventory(root)
+                        with self.assertRaisesRegex(ValueError, 'mixed uinput dependency profile'):
+                            OWNER.apply(root, restore=True, check=True)
+                        self.assertEqual(inventory(root), altered)
+                    path.write_bytes(prior)
+
+    def test_prior_cannot_adopt_any_owned_dependency_installation(self):
+        for count in (1, 2):
+            with self.subTest(count=count), fixture(fresh=True) as root:
+                input_prefix(root, b'\n')
+                for dep in PLAN['dependencies'][:count]:
+                    OWNER.snapshot(root/dep['path'], dep)
+                before = inventory(root)
+                with self.assertRaisesRegex(ValueError, 'partial|mixed'):
+                    OWNER.apply(root, restore=True, check=True)
+                self.assertEqual(inventory(root), before)
+
+    def test_full_common_and_macos_profiles_match_actual_pinned_root_helpers(self):
+        capture = source_owner('patch-support-input.py')
+        clipboard = source_owner('patch-support-clipboard.py')
+        macos = source_owner('patch-support-macos-rdev.py')
+        fresh = {row['name']: row['freshSource'] for row in PLAN['files']}
+        manifest = capture.patch_manifest(fresh['Cargo.toml'])
+        old = 'LegalCopyright = "Copyright © 2025 Purslane Ltd. All rights reserved."'
+        new = 'LegalCopyright = "Copyright © 2026 Mixel IT and Corporate Services GmbH. All rights reserved."'
+        self.assertEqual(manifest.count(old), 1)
+        manifest = clipboard.patch_manifest(manifest.replace(old, new, 1))
+        lock = capture.patch_lock(fresh['Cargo.lock'])
+        for variant, candidate in (('common', lock), ('macos', macos.lock_pair(lock)[1])):
+            with self.subTest(variant=variant):
+                actual = {'Cargo.toml': manifest, 'Cargo.lock': clipboard.patch_lock(candidate)}
+                for row in OWNER.root_variant(PLAN, variant)['files']:
+                    self.assertEqual(actual[row['name']], row['beforeSource'])
+                    self.assertEqual(OWNER.FILES.sha(actual[row['name']].encode()), row['beforeSha256'])
 
     def test_generated_git_identity_is_literal_lf_without_text_translation(self):
         original = Path.write_text

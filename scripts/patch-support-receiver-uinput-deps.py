@@ -20,7 +20,7 @@ import tempfile
 import zlib
 
 HERE = Path(__file__).resolve().parent
-PLAN_SHA = '72651050e17c22936f3d846380b06125a624722b9d645ffb14aec14500727daa'
+PLAN_SHA = 'e4780992dd241375ffd9a14897db279ef4fa189c5885625d27dbc9a09fb484b3'
 SPEC = importlib.util.spec_from_file_location('mixel_uinput_dependency_files', HERE/'patch-support-receiver-uinput.py')
 FILES = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(FILES)
@@ -57,6 +57,15 @@ def load_plan():
             for profile in ('before', 'after'):
                 if FILES.sha(row[profile+'Source'].encode()) != row[profile+'Sha256']:
                     raise ValueError('uinput dependency root variant drift')
+    if set(plan['priorProfiles']) != {'input'}:
+        raise ValueError('uinput dependency prior profiles changed')
+    for prior in plan['priorProfiles'].values():
+        if set(prior) != {row['name'] for row in plan['files']}:
+            raise ValueError('uinput dependency incomplete prior profile')
+        for row in prior.values():
+            if (set(row) != {'sha256'} or not isinstance(row['sha256'], str)
+                    or len(row['sha256']) != 64 or set(row['sha256'])-set('0123456789abcdef')):
+                raise ValueError('uinput dependency prior source drift')
     for dep in plan['dependencies']:
         names = set()
         for row in dep['files']:
@@ -215,7 +224,7 @@ def walk_source(path, expected_files):
 def inspect(root):
     root = FILES.root_path(root)
     plan = load_plan()
-    current, profiles = {}, {'fresh', 'before:macos', 'after:macos', 'before:common', 'after:common'}
+    current, profiles = {}, {'fresh', 'prior:input', 'before:macos', 'after:macos', 'before:common', 'after:common'}
     for row in plan['files']:
         value = FILES.state(root, row['name'])
         current[row['name']] = value
@@ -224,6 +233,8 @@ def inspect(root):
             if profile == 'fresh':
                 return digest == row['freshSha256']
             stage, variant = profile.split(':')
+            if stage == 'prior':
+                return digest == plan['priorProfiles'][variant][row['name']]['sha256']
             expected = next(item for item in root_variant(plan, variant)['files'] if item['name'] == row['name'])
             return digest == expected[stage+'Sha256']
         profiles &= {profile for profile in profiles if matches(profile)}
@@ -252,6 +263,8 @@ def inspect(root):
     if profile == 'fresh':
         return root, plan, profile, current, deps
     stage, variant = profile.split(':')
+    if stage == 'prior':
+        return root, plan, stage, current, deps
     return root, root_variant(plan, variant), stage, current, deps
 
 
@@ -295,7 +308,7 @@ def snapshot(path, dep):
 def apply(root, restore=False, check=False):
     root, plan, profile, current, deps = inspect(root)
     desired = 'before' if restore else 'after'
-    if profile == 'fresh':
+    if profile in ('fresh', 'prior'):
         if not restore:
             raise ValueError('uinput dependency adapters require complete branding')
         return {'profile': profile, 'writes': 0}
