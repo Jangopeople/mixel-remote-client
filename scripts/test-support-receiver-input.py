@@ -93,6 +93,10 @@ def source_contracts(module):
     assert 'receiver-native:' in workflow and 'receiver_native_only:' in workflow
     assert "type: boolean\n        default: false" in workflow
     assert 'matrix.os' in workflow and 'test-support-receiver-input-native.py' in workflow
+    assert "- { os: ubuntu-22.04, rust: '1.75' }" in workflow
+    assert "- { os: windows-2022, rust: '1.75' }" in workflow
+    assert "- { os: macos-14, rust: '1.81' }" in workflow
+    assert 'toolchain: ${{ matrix.rust }}' in workflow
     skip = "if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.receiver_native_only) }}"
     assert workflow.count(skip) == 5, 'Normal mandatory jobs must retain only the manual diagnostic exception'
     assert 'PYTHONUNBUFFERED: "1"' in workflow
