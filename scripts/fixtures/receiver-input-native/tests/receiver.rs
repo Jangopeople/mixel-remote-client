@@ -62,6 +62,8 @@ mod server {
     pub(crate) mod mixel_receiver_input;
 }
 fn main() {
+    #[cfg(windows)] if std::env::args().any(|arg|arg=="--portable-service") { server::mixel_receiver_input::windows_cross_sid_child(); return; }
+    #[cfg(windows)] if std::env::args().any(|arg|arg=="--mixel-cross-sid-parent") { server::mixel_receiver_input::windows_cross_sid_parent(); return; }
     #[cfg(windows)] if std::env::args().any(|arg|arg=="--mixel-lease-publisher") { server::mixel_receiver_input::windows_child(); return; }
     #[cfg(windows)] if std::env::args().any(|arg|arg=="--mixel-receiver-query-child") { server::mixel_receiver_input::windows_query_child(); return; }
     server::mixel_receiver_input::run_component_tests();

@@ -35,11 +35,13 @@ def prepare(output):
             ('support-receiver-input-windows.rs', 'windows-tests.rs', 'mixel_receiver_input_windows.rs')):
         raw = (HERE / template).read_bytes().replace(b'\r\n', b'\n')
         test = (stage / 'tests' / tail).read_bytes().replace(b'\r\n', b'\n')
+        if template == 'support-receiver-input-windows.rs':
+            test += b'\n' + (stage / 'tests/windows-cross-sid-tests.rs').read_bytes().replace(b'\r\n', b'\n')
         generated = raw + b'\n// Exact component regression tail; product prefix above is unchanged.\n' + test
         (stage / 'tests' / target).write_bytes(generated)
         assert generated[:len(raw)] == raw
         manifest['templates'][template] = {'sha256': sha(raw), 'prefix_bytes': len(raw), 'compiled_sha256': sha(generated)}
-    for name in ('Cargo.toml', 'Cargo.lock', 'build.rs', 'protos/message.proto', 'tests/receiver.rs'):
+    for name in ('Cargo.toml', 'Cargo.lock', 'build.rs', 'protos/message.proto', 'tests/receiver.rs', 'tests/core-tests.rs', 'tests/windows-tests.rs', 'tests/windows-cross-sid-tests.rs'):
         manifest.setdefault('fixture', {})[name] = sha((stage / name).read_bytes())
     (output / 'source-binding.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
     return stage

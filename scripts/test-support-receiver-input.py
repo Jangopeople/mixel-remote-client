@@ -102,6 +102,18 @@ def source_contracts(module):
     skip = "if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.receiver_native_only) }}"
     assert workflow.count(skip) == 5, 'Normal mandatory jobs must retain only the manual diagnostic exception'
     assert 'PYTHONUNBUFFERED: "1"' in workflow
+    qa = (HERE / 'fixtures/receiver-input-native/tests/windows-cross-sid-tests.rs').read_text(encoding='utf-8')
+    assert 'RUNNER_ENVIRONMENT' in qa and 'github-hosted' in qa and 'GITHUB_ACTIONS' in qa
+    assert 'SecretCredential::new' in qa and 'LogonUserW' in qa and 'launch_with_logon(&account.name,account.password.as_str()' in qa
+    assert 'NetUserAdd' in qa and 'NetUserDel' in qa and 'DeleteProfileW' in qa
+    assert 'marker!=self.marker||sid!=self.sid' in qa and 'qa_account(&self.name)' in qa
+    assert '0x001200a9' in qa and 'SetKernelObjectSecurity' in qa and 'qa_dacl(&self.file),self.before_file' in qa
+    assert 'S-1-5-32-544' in qa and 'S-1-16-8192' in qa
+    assert 'SetEvent(lease.event.raw())' in qa and 'lease.mark_cleaned()' in qa
+    assert 'publisher_handle(&peer).unwrap().unwrap()' in qa and 'pipe_publisher(pipe.as_raw_handle()' in qa
+    assert 'QA_CLEANUP_FAILED' in qa and 'root retained' in qa
+    for forbidden in ('DesktopAccess', 'SetUserObjectSecurity', 'SetPrivilege', 'SeDebugPrivilege', ';;;WD)', 'PasswordNeverExpires -Password'):
+        assert forbidden not in qa, forbidden
     print('PASS: receiver source contracts, pinned templates, backend/lease boundaries and normal CI gates', flush=True)
 
 

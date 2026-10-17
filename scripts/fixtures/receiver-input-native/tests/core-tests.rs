@@ -139,3 +139,6 @@ fn stale_ordinary_block_epoch_does_not_regrant(){
     let receiver=Receiver::new(98);assert!(receiver.authorize(true));let epoch=receiver.inner.state.lock().unwrap().permission_epoch;assert!(receiver.set_permission(false));
     let before=super::super::block_calls().lock().unwrap().len();assert!(!set_block_epoch(&receiver.inner,true,false,Some(epoch)));assert_eq!(super::super::block_calls().lock().unwrap().len(),before,"a request admitted before revoke cannot restore ordinary block");assert!(receiver.block(true,true));assert!(receiver.close());
 }
+
+#[cfg(windows)] pub(crate) fn windows_cross_sid_child(){windows::cross_sid_logon_child();}
+#[cfg(windows)] pub(crate) fn windows_cross_sid_parent(){windows::cross_sid_parent();}
