@@ -8,6 +8,7 @@ import shutil
 import stat
 import tempfile
 import unittest
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 SPEC = importlib.util.spec_from_file_location('uinput_dependencies', HERE/'patch-support-receiver-uinput-deps.py')
@@ -204,6 +205,37 @@ class DependencyControls(unittest.TestCase):
             spec.loader.exec_module(owner)
             with self.assertRaisesRegex(ValueError, 'plan drift'):
                 owner.load_plan()
+
+    def test_worktrees_reject_before_scandir_or_read_below_child(self):
+        for relative in ('.git/worktrees', '.git/objects/worktrees', 'worktrees', 'src/worktrees'):
+            with self.subTest(relative=relative), fixture() as root:
+                OWNER.apply(root)
+                dep = PLAN['dependencies'][0]
+                forbidden = root/dep['path']/relative
+                forbidden.mkdir(parents=True)
+                (forbidden/'sentinel').write_text('Must never be enumerated or read.')
+                scan, read = OWNER.os.scandir, Path.read_bytes
+                def guarded_scan(path):
+                    if not isinstance(path, int) and 'worktrees' in Path(path).parts:
+                        self.fail('scandir descended into a worktrees child')
+                    return scan(path)
+                def guarded_read(path):
+                    if 'worktrees' in path.parts:
+                        self.fail('read descended into a worktrees child')
+                    return read(path)
+                with mock.patch.object(OWNER.os, 'scandir', guarded_scan), mock.patch.object(Path, 'read_bytes', guarded_read):
+                    with self.assertRaisesRegex(ValueError, 'worktree'):
+                        OWNER.inspect(root)
+
+    def test_untrusted_owned_config_refuses_before_any_git_call(self):
+        with fixture() as root:
+            OWNER.apply(root)
+            dep = PLAN['dependencies'][0]
+            config = root/dep['path']/'.git/config'
+            config.write_bytes(config.read_bytes()+b'\n[include]\n\tpath = /external/config\n')
+            with mock.patch.object(OWNER, 'git', side_effect=AssertionError('untrusted local config reached Git')):
+                with self.assertRaisesRegex(ValueError, 'owned Git config'):
+                    OWNER.inspect(root)
 
 
 if __name__ == '__main__':

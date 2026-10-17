@@ -87,19 +87,57 @@ def directory(path):
         raise ValueError('unsafe uinput dependency directory')
 
 
+def config(dep):
+    return ('[core]\n\trepositoryformatversion = 0\n\tbare = false\n\tfilemode = '
+        +('false' if os.name == 'nt' else 'true')+'\n\tautocrlf = false\n[remote "origin"]\n\turl = '
+        +dep['url']+'\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n').encode()
+
+
+def walk(path, allowed_files, allowed_directories):
+    """Check every child name before os.walk can descend into that child."""
+    for current, directories, files in os.walk(path, topdown=True, followlinks=False):
+        if 'worktrees' in directories or 'worktrees' in files:
+            raise ValueError('worktree dependency paths are forbidden')
+        for name in directories:
+            child = Path(current)/name
+            relative = child.relative_to(path).as_posix()
+            if relative not in allowed_directories:
+                raise ValueError('unexpected uinput dependency directory')
+            directory(child)
+        for name in files:
+            child = Path(current)/name
+            relative = child.relative_to(path).as_posix()
+            if relative not in allowed_files:
+                raise ValueError('unexpected uinput dependency file')
+            yield child
+
+
+def parents(names):
+    return {parent.as_posix() for name in names for parent in Path(name).parents if parent != Path('.')}
+
+
 def inventory(root, dep):
     path = root/dep['path']
     for parent in (path, path.parent):
         directory(parent)
     metadata = path/'.git'
     directory(metadata)
-    for item in metadata.rglob('*'):
-        info = item.lstat()
-        if getattr(info, 'st_file_attributes', 0) & 0x400 or (not stat.S_ISDIR(info.st_mode) and (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1)):
-            raise ValueError('linked/nonregular uinput dependency metadata')
-    for forbidden in ('commondir', 'gitdir', 'objects/info/alternates'):
-        if (metadata/forbidden).exists():
-            raise ValueError('external uinput dependency Git metadata')
+    object_names = {row['oid'] for row in dep['files']+dep['objects']}
+    metadata_files = {'HEAD', 'config', 'shallow', 'index'}|{'objects/'+value[:2]+'/'+value[2:] for value in object_names}
+    metadata_directories = parents(metadata_files)|{'refs', 'refs/heads'}
+    found_metadata = set()
+    for item in walk(metadata, metadata_files, metadata_directories):
+        name = item.relative_to(metadata).as_posix()
+        FILES.state(metadata, name)
+        found_metadata.add(name)
+    if found_metadata != metadata_files:
+        raise ValueError('partial uinput dependency Git metadata')
+    # Authenticate local config before invoking Git: no include/filter/helper,
+    # alternate object database, replacement ref, worktree or global override.
+    if (FILES.state(metadata, 'config')[1] != config(dep)
+            or FILES.state(metadata, 'HEAD')[1] != (dep['pin']+'\n').encode()
+            or FILES.state(metadata, 'shallow')[1] != (dep['pin']+'\n').encode()):
+        raise ValueError('uinput dependency owned Git config changed')
     if git(path, 'rev-parse', 'HEAD').decode().strip() != dep['pin'] or git(path, 'config', '--get', 'remote.origin.url').decode().strip() != dep['url']:
         raise ValueError('uinput dependency identity changed')
     expected_tree = {(row['path'], row['oid'], row['mode']) for row in dep['files']}
@@ -116,15 +154,11 @@ def inventory(root, dep):
         raise ValueError('uinput dependency tracked tree changed')
     expected = {row['path']: row for row in dep['files']}
     result, found, profiles = {}, set(), {'before', 'after'}
-    for item in path.rglob('*'):
+    expected_files = set(expected)
+    # The metadata subtree was authenticated separately. Prune it before this
+    # source traversal; neither traversal ever visits a worktrees child.
+    for item in walk_source(path, expected_files):
         relative = item.relative_to(path)
-        if relative.parts[0] == '.git':
-            continue
-        info = item.lstat()
-        if stat.S_ISDIR(info.st_mode) and not getattr(info, 'st_file_attributes', 0) & 0x400:
-            if not any(name.startswith(relative.as_posix()+'/') for name in expected):
-                raise ValueError('unexpected uinput dependency directory')
-            continue
         name = relative.as_posix()
         if name not in expected:
             raise ValueError('unexpected uinput dependency file')
@@ -141,6 +175,25 @@ def inventory(root, dep):
     if found != set(expected) or len(profiles) != 1:
         raise ValueError('changed/partial uinput dependency source')
     return profiles.pop(), result
+
+
+def walk_source(path, expected_files):
+    allowed_directories = parents(expected_files)
+    for current, directories, files in os.walk(path, topdown=True, followlinks=False):
+        if 'worktrees' in directories or 'worktrees' in files:
+            raise ValueError('worktree dependency paths are forbidden')
+        if Path(current) == path:
+            directories.remove('.git')
+        for name in directories:
+            child = Path(current)/name
+            if child.relative_to(path).as_posix() not in allowed_directories:
+                raise ValueError('unexpected uinput dependency directory')
+            directory(child)
+        for name in files:
+            child = Path(current)/name
+            if child.relative_to(path).as_posix() not in expected_files:
+                raise ValueError('unexpected uinput dependency file')
+            yield child
 
 
 def inspect(root):
@@ -193,7 +246,7 @@ def snapshot(path, dep):
     (metadata/'refs/heads').mkdir(parents=True)
     (metadata/'HEAD').write_text(dep['pin']+'\n')
     (metadata/'shallow').write_text(dep['pin']+'\n')
-    (metadata/'config').write_text('[core]\n\trepositoryformatversion = 0\n\tbare = false\n\tfilemode = '+('false' if os.name == 'nt' else 'true')+'\n\tautocrlf = false\n[remote "origin"]\n\turl = '+dep['url']+'\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n')
+    (metadata/'config').write_bytes(config(dep))
     def object_file(kind, raw, expected):
         if oid(kind, raw) != expected:
             raise ValueError('uinput dependency snapshot object mismatch')
