@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import stat
 from pathlib import Path
 import subprocess
 import tempfile
@@ -571,6 +572,250 @@ class Admission(unittest.TestCase):
             targeted = [(label, timeout, bound) for label, timeout, bound in calls if label.startswith("host-mnt-")]
             self.assertEqual(len(targeted), 3)
             self.assertTrue(all(timeout == 8 and bound == 65536 for label, timeout, bound in targeted))
+
+    def repair_proof_fixture(self, root):
+        evidence = root / "evidence"; evidence.mkdir()
+        source = {"githubActions": True, "runnerEnvironment": "github-hosted", "runnerImageOS": "ubuntu22",
+                  "applicationSource": qa.APP, "applicationTree": qa.TREE, "allOtherTrackedBlobsAndModesEqual": True,
+                  "qaSource": "a" * 40, "qaTree": "b" * 40, "executedCheckoutStdout": "a" * 40,
+                  "guestSHA256": qa.GUEST_SHA}
+        (evidence / "SOURCE.json").write_text(json.dumps(source))
+        (evidence / "HOST-FRESH-PRECONDITIONS.json").write_text(json.dumps({
+            "fresh": True, "actualPID1Systemd": True, "root": True, "productPathsAbsent": True,
+            "packageAbsent": True, "release": {"ID": "ubuntu", "VERSION_ID": "22.04"}}))
+        properties = b"Where=/mnt\nWhat=ephemeral0\nType=\nResult=exit-code\nId=mnt.mount\nSourcePath=/etc/fstab\n"
+        rows = [
+            ("host-failed-units", ["systemctl", "--failed", "--no-pager", "--plain", "--no-legend"], 0, b"mnt.mount loaded failed failed /mnt\n"),
+            ("host-pending-jobs", ["systemctl", "list-jobs", "--no-pager", "--no-legend"], 0, b""),
+            ("host-mnt-properties", ["systemctl", "show", "--all", "--property=Id,What,Where,Type,SourcePath,Result", "mnt.mount"], 0, properties),
+            ("host-mnt-journal", ["journalctl", "-b", "-u", "mnt.mount", "--no-pager", "--output=short-iso", "-n", "60"], 0,
+             b"mount: /mnt: special device ephemeral0 does not exist.\nmnt.mount: Mount process exited, code=exited, status=32/n/a\n"),
+            ("host-mnt-findmnt", ["findmnt", "--mountpoint", "/mnt", "--json", "--output", "SOURCE,TARGET,FSTYPE"], 1, b""),
+        ]
+        for label, argv, code, output in rows:
+            folder = evidence / label; folder.mkdir()
+            (folder / "COMMAND.json").write_text(json.dumps({"argv": argv}))
+            (folder / "stdout").write_bytes(output); (folder / "stderr").write_bytes(b"")
+            self.repair_fixture_output(root, label, output, code)
+
+    def repair_fixture_output(self, root, label, output, code=0, stderr=b"", error=None):
+        folder = root / "evidence" / label
+        (folder / "stdout").write_bytes(output); (folder / "stderr").write_bytes(stderr)
+        (folder / "RESULT.json").write_text(json.dumps({"exit": code, "error": error,
+            "stdoutBytes": len(output), "stderrBytes": len(stderr),
+            "stdoutSHA256": hashlib.sha256(output).hexdigest(), "stderrSHA256": hashlib.sha256(stderr).hexdigest()}))
+
+    def test_exact_stale_mount_proof_and_foreign_state_refusals(self):
+        variants = ["exact", "other-unit", "pending", "foreign-device", "other-target", "different-journal",
+                    "mounted", "findmnt-error", "device-exists", "not-hosted", "wrong-app", "not-fresh"]
+        for variant in variants:
+            with self.subTest(variant=variant), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder); self.repair_proof_fixture(root)
+                if variant == "other-unit": self.repair_fixture_output(root, "host-failed-units", b"mnt.mount loaded failed failed /mnt\nother.service loaded failed failed foreign\n")
+                if variant == "pending": self.repair_fixture_output(root, "host-pending-jobs", b"1 other.service start running\n")
+                if variant in ("foreign-device", "other-target"):
+                    p = root / "evidence/host-mnt-properties/stdout"; data = p.read_bytes()
+                    data = data.replace(b"ephemeral0", b"foreign") if variant == "foreign-device" else data.replace(b"Where=/mnt", b"Where=/foreign")
+                    self.repair_fixture_output(root, "host-mnt-properties", data)
+                if variant == "different-journal": self.repair_fixture_output(root, "host-mnt-journal", b"unrelated mount failure\n")
+                if variant == "mounted": self.repair_fixture_output(root, "host-mnt-findmnt", b'{"filesystems":[]}', 0)
+                if variant == "findmnt-error": self.repair_fixture_output(root, "host-mnt-findmnt", b"", 1, b"unexpected error\n")
+                if variant in ("not-hosted", "wrong-app"):
+                    p = root / "evidence/SOURCE.json"; data = json.loads(p.read_text())
+                    data["runnerEnvironment" if variant == "not-hosted" else "applicationSource"] = "foreign"; p.write_text(json.dumps(data))
+                if variant == "not-fresh":
+                    p = root / "evidence/HOST-FRESH-PRECONDITIONS.json"; data = json.loads(p.read_text()); data["packageAbsent"] = False; p.write_text(json.dumps(data))
+                with patch.object(qa.os, "geteuid", return_value=0), patch.object(qa.os.path, "lexists", return_value=variant == "device-exists"):
+                    if variant == "exact": self.assertEqual(qa.stale_mnt_proof(root)["initialFailure"], "missing-device-exit32")
+                    else:
+                        with self.assertRaises(ValueError): qa.stale_mnt_proof(root)
+
+    def test_real_fstab_comment_preserves_other_bytes_owner_mode_and_private_backup(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve(); fstab = root / "fstab"
+            line = b"  ephemeral0\t/mnt auto defaults,nofail,fixture-only=synthetic 0 2\r\n"
+            before = b"# unchanged header\r\nUUID=example / ext4 defaults 0 1\n" + line + b"# unchanged tail\n"
+            fstab.write_bytes(before); fstab.chmod(0o640); owner = fstab.stat()
+            result = qa.comment_stale_fstab(fstab, root / "private-host-backup")
+            self.assertEqual(fstab.read_bytes(), before.replace(line, b"# Mixel disposable QA stale missing-device entry: " + line, 1))
+            after = fstab.stat(); self.assertEqual((after.st_uid, after.st_gid, after.st_mode), (owner.st_uid, owner.st_gid, owner.st_mode))
+            backup = root / "private-host-backup/fstab.original"
+            self.assertEqual(backup.read_bytes(), before); self.assertEqual(backup.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(backup.parent.stat().st_mode & 0o777, 0o700)
+            self.assertEqual(result["removedLineSHA256"], hashlib.sha256(line).hexdigest())
+            self.assertNotIn("fixture-only", json.dumps(result)); self.assertNotIn("defaults", json.dumps(result))
+
+    def test_invalid_duplicate_or_foreign_fstab_refuses_without_mutation(self):
+        valid = b"ephemeral0 /mnt auto defaults 0 2\n"
+        cases = [valid + valid, b"foreign /mnt auto defaults 0 2\n", b"ephemeral0 /mnt auto defaults 0\n",
+                 b"# ephemeral0 /mnt auto defaults 0 2\n", valid + b"foreign /mnt auto defaults 0 2\n",
+                 valid + b"\x00", b"ephemeral0 /mnt auto defaults x 2\n"]
+        for content in cases:
+            with self.subTest(content=content), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder); path = root / "fstab"; path.write_bytes(content); path.chmod(0o640)
+                with self.assertRaises(ValueError): qa.comment_stale_fstab(path, root / "private-host-backup")
+                self.assertEqual(path.read_bytes(), content); self.assertEqual(path.stat().st_mode & 0o777, 0o640)
+                self.assertFalse((root / "private-host-backup").exists())
+
+    def test_fstab_symlink_hardlink_foreign_owner_and_bound_refuse(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); original = root / "original"; original.write_bytes(b"ephemeral0 /mnt auto defaults 0 2\n")
+            link = root / "symlink"; link.symlink_to(original)
+            with self.assertRaises(ValueError): qa.fstab_snapshot(link)
+            hard = root / "hardlink"; os.link(original, hard)
+            with self.assertRaises(ValueError): qa.fstab_snapshot(hard)
+            hard.unlink()
+            with patch.object(qa.os, "geteuid", return_value=os.geteuid() + 1):
+                with self.assertRaises(ValueError): qa.fstab_snapshot(original)
+            original.write_bytes(b"x" * 65537)
+            with self.assertRaises(ValueError): qa.fstab_snapshot(original)
+
+    def test_actual_fifo_fstab_is_refused_before_any_open(self):
+        with tempfile.TemporaryDirectory() as folder:
+            fifo = Path(folder) / "fstab-fifo"; os.mkfifo(fifo, 0o600)
+            self.assertTrue(stat.S_ISFIFO(fifo.lstat().st_mode))
+            with patch.object(qa.os, "open") as opened:
+                with self.assertRaisesRegex(ValueError, "not-owned-regular"): qa.fstab_snapshot(fifo)
+                opened.assert_not_called()
+
+    def test_fstab_preopen_replacement_identity_refuses_before_any_read(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); fstab = root / "fstab"; content = b"ephemeral0 /mnt auto defaults 0 2\n"
+            fstab.write_bytes(content); fstab.chmod(0o644); before = fstab.lstat(); real_open = qa.os.open
+            def replaced(path, flags):
+                self.assertTrue(flags & os.O_NOFOLLOW); self.assertTrue(flags & os.O_NONBLOCK)
+                replacement = root / "replacement"; replacement.write_bytes(content); replacement.chmod(0o644)
+                os.replace(replacement, path); self.assertNotEqual(path.lstat().st_ino, before.st_ino)
+                return real_open(path, flags)
+            with patch.object(qa.os, "open", side_effect=replaced), patch.object(qa.os, "read") as read:
+                with self.assertRaisesRegex(ValueError, "recheck-mismatch"): qa.fstab_snapshot(fstab)
+                read.assert_not_called()
+            self.assertEqual(fstab.read_bytes(), content)
+
+    def test_fstab_same_identity_and_bytes_recheck_prevents_overwrite(self):
+        real = qa.fstab_snapshot
+        for mutation in ("bytes", "inode"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder); path = root / "fstab"; content = b"ephemeral0 /mnt auto defaults 0 2\n"; path.write_bytes(content)
+                count = 0
+                def snapshot(target):
+                    nonlocal count
+                    count += 1
+                    if count == 2:
+                        if mutation == "bytes": target.write_bytes(b"# changed concurrently\n" + content)
+                        else:
+                            replacement = root / "replacement"; replacement.write_bytes(content); os.replace(replacement, target)
+                    return real(target)
+                with patch.object(qa, "fstab_snapshot", side_effect=snapshot):
+                    with self.assertRaisesRegex(ValueError, "recheck-mismatch"): qa.comment_stale_fstab(path, root / "private-host-backup")
+                expected = b"# changed concurrently\n" + content if mutation == "bytes" else content
+                self.assertEqual(path.read_bytes(), expected)
+
+    def test_repair_uses_only_reload_exact_reset_and_strict_postconditions(self):
+        for health, failed, accepted in [(b"running\n", b"", True), (b"degraded\n", b"", False),
+                                        (b"running\n", b"other.service loaded failed failed\n", False)]:
+            with self.subTest(health=health, failed=failed), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder); (root / "evidence").mkdir(); calls = []
+                def observed(root, label, argv, *args):
+                    calls.append(argv)
+                    return health if label.endswith("-health") else failed if label.endswith("-failed-units") else b""
+                with patch.object(qa, "stale_mnt_proof", return_value={"unit": "mnt.mount"}), \
+                     patch.object(qa, "confirm_mnt_identity"), \
+                     patch.object(qa, "comment_stale_fstab", return_value={"beforeSHA256": "a", "afterSHA256": "b"}), \
+                     patch.object(qa, "command", side_effect=observed):
+                    if accepted: qa.repair_stale_mnt(root)
+                    else:
+                        with self.assertRaises(ValueError): qa.repair_stale_mnt(root)
+                self.assertEqual(calls[:2], [["systemctl", "daemon-reload"], ["systemctl", "reset-failed", "mnt.mount"]])
+                self.assertTrue(all(argv[0] == "systemctl" for argv in calls))
+                self.assertFalse(any(any(v in argv for v in ("mount", "umount", "start", "stop", "reboot")) for argv in calls))
+                self.assertEqual((root / "evidence/HOST-MNT-REPAIR.json").exists(), accepted)
+
+    def test_repair_refusal_never_mutates_or_runs_manager_commands(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); (root / "evidence").mkdir()
+            with patch.object(qa, "stale_mnt_proof", side_effect=ValueError("foreign proof")), \
+                 patch.object(qa, "comment_stale_fstab") as mutate, patch.object(qa, "command") as manager:
+                with self.assertRaises(ValueError): qa.repair_stale_mnt(root)
+                mutate.assert_not_called(); manager.assert_not_called()
+
+    def test_actual_current_unit_parser_and_override_observation_gate_before_write(self):
+        expected = {"Id": "mnt.mount", "LoadState": "loaded", "FragmentPath": "/run/systemd/generator/mnt.mount",
+                    "DropInPaths": "", "ActiveState": "failed", "SubState": "failed", "What": "ephemeral0",
+                    "Where": "/mnt", "SourcePath": "/etc/fstab", "Result": "exit-code"}
+        variants = ["exact", "drop-in", "foreign-fragment", "active", "duplicate-property", "diagnostic-failure"]
+        variants += [prefix + "/systemd/system/mnt.mount" + suffix for prefix in ("/etc", "/run", "/usr/lib") for suffix in ("", ".d")]
+        for variant in variants:
+            with self.subTest(variant=variant), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder); (root / "evidence").mkdir()
+                def observed(root, label, argv, timeout=8, bound=65536):
+                    self.assertEqual((timeout, bound), (8, 65536))
+                    self.assertEqual(argv, ["systemctl", "show", "--all",
+                        "--property=Id,LoadState,FragmentPath,DropInPaths,ActiveState,SubState,What,Where,SourcePath,Result", "mnt.mount"])
+                    props = expected.copy()
+                    if variant == "drop-in": props["DropInPaths"] = "/etc/systemd/system/mnt.mount.d/foreign.conf"
+                    if variant == "foreign-fragment": props["FragmentPath"] = "/etc/systemd/system/mnt.mount"
+                    if variant == "active": props["ActiveState"] = "active"
+                    raw = ("".join(k + "=" + v + "\n" for k, v in props.items())).encode()
+                    if variant == "duplicate-property": raw += b"Id=mnt.mount\n"
+                    target = root / "evidence" / label; target.mkdir()
+                    (target / "COMMAND.json").write_text(json.dumps({"argv": argv}))
+                    self.repair_fixture_output(root, label, raw, 1 if variant == "diagnostic-failure" else 0)
+                with patch.object(qa, "stale_mnt_proof", return_value={"unit": "mnt.mount"}), \
+                     patch.object(qa, "bounded_diagnostic", side_effect=observed), \
+                     patch.object(qa.os.path, "lexists", side_effect=lambda p: p == variant), \
+                     patch.object(qa, "comment_stale_fstab", return_value={"hashesOnly": True}) as mutate, \
+                     patch.object(qa, "command", side_effect=lambda root, label, argv, *args: b"running\n" if label.endswith("-health") else b"") as manager:
+                    if variant == "exact":
+                        qa.repair_stale_mnt(root); mutate.assert_called_once(); self.assertEqual(manager.call_count, 4)
+                    else:
+                        with self.assertRaises(ValueError): qa.repair_stale_mnt(root)
+                        mutate.assert_not_called(); manager.assert_not_called()
+
+    def test_real_fstab_insecure_modes_refuse_before_backup_or_write(self):
+        for mode in (0o666, 0o664, 0o646, 0o744, 0o654, 0o645, 0o4644, 0o2644, 0o1644, 0o444):
+            with self.subTest(mode=oct(mode)), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder); fstab = root / "fstab"; original = b"ephemeral0 /mnt auto defaults 0 2\n"
+                fstab.write_bytes(original); fstab.chmod(mode)
+                with self.assertRaises(ValueError): qa.comment_stale_fstab(fstab, root / "private-host-backup")
+                self.assertEqual(fstab.read_bytes(), original)
+                self.assertFalse((root / "private-host-backup").exists())
+
+    def test_repair_refusal_receipt_is_private_fixed_code_and_redacts_exception_data(self):
+        cases = [(ValueError("mnt-repair-pending-jobs"), "ValueError", "mnt-repair-pending-jobs"),
+                 (ValueError("mnt-repair-unknown-secret-option=synthetic-password"), "ValueError", "redacted"),
+                 (RuntimeError("fstab-secret-option=synthetic-password"), "OtherException", "redacted"),
+                 (ValueError("mnt-repair-pending-jobs", "synthetic-password"), "ValueError", "redacted")]
+        for error, expected_type, expected_code in cases:
+            with self.subTest(expected_type=expected_type, expected_code=expected_code), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder); (root / "evidence").mkdir(); original = ValueError("initial health failure")
+                with patch.object(qa, "command", side_effect=original), patch.object(qa, "diagnose_host"), \
+                     patch.object(qa, "repair_stale_mnt", side_effect=error):
+                    with self.assertRaises(ValueError) as caught: qa.require_healthy_systemd(root)
+                    self.assertIs(caught.exception, original)
+                path = root / "evidence/HOST-MNT-REPAIR-FAILED.json"; data = json.loads(path.read_text())
+                self.assertEqual(data, {"exceptionType": expected_type, "refusalCode": expected_code,
+                    "repairCompleted": False, "candidateExecuted": False, "originalHealthFailurePreserved": True})
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+                self.assertNotIn("synthetic-password", path.read_text()); self.assertNotIn("fstab-secret", path.read_text())
+
+    def test_repair_refusal_receipt_save_failure_cannot_replace_original_health_error(self):
+        original = ValueError("original health failure")
+        with patch.object(qa, "command", side_effect=original), patch.object(qa, "diagnose_host"), \
+             patch.object(qa, "repair_stale_mnt", side_effect=ValueError("mnt-repair-pending-jobs")), \
+             patch.object(qa, "save", side_effect=PermissionError("synthetic private write failure")) as retained:
+            with self.assertRaises(ValueError) as caught: qa.require_healthy_systemd(Path("unused"))
+            self.assertIs(caught.exception, original); retained.assert_called_once()
+
+    def test_repair_failure_retains_original_health_failure_and_requires_recovery(self):
+        original = ValueError("original health failure")
+        with patch.object(qa, "command", side_effect=original), patch.object(qa, "diagnose_host"), \
+             patch.object(qa, "repair_stale_mnt", side_effect=ValueError("post-repair health still failed")):
+            with self.assertRaises(ValueError) as caught: qa.require_healthy_systemd(Path("unused"))
+            self.assertIs(caught.exception, original)
+        with patch.object(qa, "command", side_effect=original), patch.object(qa, "diagnose_host"), \
+             patch.object(qa, "repair_stale_mnt", return_value=None) as repaired:
+            qa.require_healthy_systemd(Path("unused")); repaired.assert_called_once()
 
 
 if __name__ == "__main__":

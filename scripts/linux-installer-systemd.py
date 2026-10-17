@@ -18,6 +18,7 @@ import selectors
 import shutil
 import stat
 import subprocess
+import tempfile
 import time
 
 REPO = "Jangopeople/mixel-remote-client"
@@ -193,6 +194,8 @@ def prepare(root):
          "outputOwner": {"uid": os.geteuid(), "gid": os.getegid()},
          "guestSHA256": GUEST_SHA, "runnerImageOS": os.environ.get("ImageOS"),
          "runnerImageVersion": os.environ.get("ImageVersion"), "publication": False,
+         "githubActions": os.environ.get("GITHUB_ACTIONS") == "true",
+         "runnerEnvironment": os.environ.get("RUNNER_ENVIRONMENT"),
          "nativeQualified": False, "normalReleaseQualified": False, "taskComplete": False,
          "runnerNetworkQEMUIsolated": False})
 
@@ -211,9 +214,11 @@ def host(root):
                  "/root/.config/mixel-remote", "/var/tmp/mixel-systemd-qa", "/mnt/mixel-candidate",
                  "/var/lib/mixel-systemd-qa-unrelated-sentinel"):
         require(not os.path.lexists(path), "host-not-fresh-" + path)
-    require_healthy_systemd(root)
     r = subprocess.run(["dpkg-query", "-W", "-f=${db:Status-Status}", "mixel-remote"], capture_output=True, timeout=30)
     require(r.returncode == 1 and not r.stdout, "existing-Mixel-package")
+    save(root / "evidence/HOST-FRESH-PRECONDITIONS.json", {"fresh": True, "actualPID1Systemd": True,
+         "root": True, "release": release, "productPathsAbsent": True, "packageAbsent": True})
+    require_healthy_systemd(root)
     save(root / "evidence/HOST.json", {"fresh": True, "actualPID1Systemd": True, "root": True, "release": release})
 
 
@@ -297,10 +302,205 @@ def require_healthy_systemd(root):
     except Exception:
         try:
             diagnose_host(root)
-        except Exception:
-            # Diagnostic collection cannot replace the original health failure.
-            pass
+            repair_stale_mnt(root)
+        except Exception as error:
+            # Retain only fixed guard codes, never exception text or fstab/options.
+            try:
+                allowed_codes = {
+                    'mnt-repair-current-unit-identity-mismatch',
+                    'mnt-repair-device-or-mounted-target-present',
+                    'mnt-repair-diagnostic-bytes-mismatch',
+                    'mnt-repair-diagnostic-outcome-mismatch',
+                    'mnt-repair-different-mount-failure',
+                    'mnt-repair-failed-units-remain',
+                    'mnt-repair-foreign-mount',
+                    'mnt-repair-foreign-or-invalid-fstab-entry',
+                    'mnt-repair-foreign-unit-or-override',
+                    'mnt-repair-fstab-after-mismatch',
+                    'mnt-repair-fstab-changed-during-read',
+                    'mnt-repair-fstab-entry-not-unique',
+                    'mnt-repair-fstab-not-owned-regular',
+                    'mnt-repair-fstab-recheck-mismatch',
+                    'mnt-repair-global-health-not-running',
+                    'mnt-repair-host-not-fresh',
+                    'mnt-repair-invalid-fstab',
+                    'mnt-repair-not-source-bound-hosted-QA',
+                    'mnt-repair-other-failed-unit',
+                    'mnt-repair-pending-jobs',
+                    'mnt-repair-root-required',
+                }
+                code = error.args[0] if type(error) is ValueError and len(error.args) == 1 else None
+                code = code if type(code) is str and code in allowed_codes else "redacted"
+                known_types = (ValueError, TypeError, OSError, PermissionError, FileNotFoundError,
+                               UnicodeDecodeError, json.JSONDecodeError, subprocess.TimeoutExpired)
+                save(root / "evidence/HOST-MNT-REPAIR-FAILED.json", {
+                    "exceptionType": type(error).__name__ if type(error) in known_types else "OtherException",
+                    "refusalCode": code, "repairCompleted": False, "candidateExecuted": False,
+                    "originalHealthFailurePreserved": True})
+            except Exception:
+                pass  # Even failure to retain this receipt cannot replace original health failure.
+        else:
+            return  # Repair itself requires global running and zero failed units.
         raise
+
+
+def diagnostic_evidence(root, label, argv, exitcode):
+    folder = root / "evidence" / label
+    receipt = json.loads((folder / "RESULT.json").read_text())
+    require(json.loads((folder / "COMMAND.json").read_text())["argv"] == argv
+            and type(receipt.get("exit")) is int and receipt["exit"] == exitcode and receipt.get("error") is None,
+            "mnt-repair-diagnostic-outcome-mismatch")
+    output, error = (folder / "stdout").read_bytes(), (folder / "stderr").read_bytes()
+    require(len(output) <= 65536 and not error
+            and receipt.get("stdoutBytes") == len(output)
+            and receipt.get("stdoutSHA256") == hashlib.sha256(output).hexdigest()
+            and receipt.get("stderrSHA256") == hashlib.sha256(error).hexdigest(),
+            "mnt-repair-diagnostic-bytes-mismatch")
+    return output
+
+
+def stale_mnt_proof(root):
+    require(os.geteuid() == 0, "mnt-repair-root-required")
+    source = json.loads((root / "evidence/SOURCE.json").read_text())
+    require(source.get("githubActions") is True and source.get("runnerEnvironment") == "github-hosted"
+            and source.get("runnerImageOS") == "ubuntu22" and source.get("applicationSource") == APP
+            and source.get("applicationTree") == TREE and source.get("allOtherTrackedBlobsAndModesEqual") is True
+            and re.fullmatch(r"[0-9a-f]{40}", source.get("qaSource", ""))
+            and re.fullmatch(r"[0-9a-f]{40}", source.get("qaTree", ""))
+            and source.get("executedCheckoutStdout") == source["qaSource"]
+            and source.get("guestSHA256") == GUEST_SHA, "mnt-repair-not-source-bound-hosted-QA")
+    fresh = json.loads((root / "evidence/HOST-FRESH-PRECONDITIONS.json").read_text())
+    require(all(fresh.get(k) is True for k in ("fresh", "actualPID1Systemd", "root", "productPathsAbsent", "packageAbsent"))
+            and fresh.get("release", {}).get("ID", "").strip('"') == "ubuntu"
+            and fresh["release"].get("VERSION_ID", "").strip('"') == "22.04", "mnt-repair-host-not-fresh")
+    failed = diagnostic_evidence(root, "host-failed-units", ["systemctl", "--failed", "--no-pager", "--plain", "--no-legend"], 0)
+    rows = [row.split() for row in failed.splitlines() if row.strip()]
+    require(len(rows) == 1 and rows[0][:4] == [b"mnt.mount", b"loaded", b"failed", b"failed"], "mnt-repair-other-failed-unit")
+    pending = diagnostic_evidence(root, "host-pending-jobs", ["systemctl", "list-jobs", "--no-pager", "--no-legend"], 0)
+    require(not pending.strip(), "mnt-repair-pending-jobs")
+    raw = diagnostic_evidence(root, "host-mnt-properties", ["systemctl", "show", "--all",
+                              "--property=Id,What,Where,Type,SourcePath,Result", "mnt.mount"], 0)
+    properties = dict(row.split("=", 1) for row in raw.decode().splitlines())
+    require(len(raw.splitlines()) == 6 and properties == {"Id": "mnt.mount", "What": "ephemeral0",
+            "Where": "/mnt", "Type": "", "SourcePath": "/etc/fstab", "Result": "exit-code"}, "mnt-repair-foreign-mount")
+    journal = diagnostic_evidence(root, "host-mnt-journal", ["journalctl", "-b", "-u", "mnt.mount",
+                                 "--no-pager", "--output=short-iso", "-n", "60"], 0)
+    require(b"special device ephemeral0 does not exist" in journal
+            and b"mnt.mount: Mount process exited, code=exited, status=32" in journal,
+            "mnt-repair-different-mount-failure")
+    mounted = diagnostic_evidence(root, "host-mnt-findmnt", ["findmnt", "--mountpoint", "/mnt", "--json",
+                                 "--output", "SOURCE,TARGET,FSTYPE"], 1)
+    require(not mounted and not os.path.lexists("/dev/ephemeral0"), "mnt-repair-device-or-mounted-target-present")
+    return {"qaSource": source["qaSource"], "qaTree": source["qaTree"], "unit": "mnt.mount",
+            "device": "ephemeral0", "target": "/mnt", "initialFailure": "missing-device-exit32"}
+
+
+def fstab_snapshot(path):
+    identity = lambda s: (s.st_dev, s.st_ino, s.st_mode, s.st_uid, s.st_gid, s.st_nlink, s.st_size, s.st_mtime_ns)
+    def owned_regular(info):
+        require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_uid == os.geteuid()
+                and 0 < info.st_size <= 65536 and info.st_mode & 0o200
+                and not info.st_mode & (0o022 | 0o7111), "mnt-repair-fstab-not-owned-regular")
+    preopen = path.lstat()
+    owned_regular(preopen)  # Never open a known FIFO/device/socket/symlink.
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        before = os.fstat(fd)
+        owned_regular(before)
+        require(identity(before) == identity(preopen), "mnt-repair-fstab-recheck-mismatch")
+        data = os.read(fd, 65537)
+        after = os.fstat(fd)
+        require(len(data) == before.st_size and identity(before) == identity(after), "mnt-repair-fstab-changed-during-read")
+        return data, before
+    finally:
+        os.close(fd)
+
+
+def commented_stale_entry(data):
+    require(b"\x00" not in data, "mnt-repair-invalid-fstab")
+    lines = data.splitlines(keepends=True); matches = []
+    for index, line in enumerate(lines):
+        if not line.strip() or line.lstrip(b" \t").startswith(b"#"): continue
+        fields = line.split()
+        if len(fields) > 1 and fields[1] == b"/mnt":
+            require(len(fields) == 6 and fields[:2] == [b"ephemeral0", b"/mnt"]
+                    and re.fullmatch(rb"[A-Za-z0-9_.+-]+", fields[2])
+                    and re.fullmatch(rb"[0-9]+", fields[4]) and re.fullmatch(rb"[0-9]+", fields[5]),
+                    "mnt-repair-foreign-or-invalid-fstab-entry")
+            matches.append(index)
+    require(len(matches) == 1, "mnt-repair-fstab-entry-not-unique")
+    index = matches[0]; original = lines[index]
+    lines[index] = b"# Mixel disposable QA stale missing-device entry: " + original
+    return b"".join(lines), hashlib.sha256(original).hexdigest()
+
+
+def comment_stale_fstab(path, backup_root):
+    """Same-owner utility; production caller separately requires real root QA."""
+    original, before = fstab_snapshot(path)
+    replacement, removed_hash = commented_stale_entry(original)
+    backup_root.mkdir(mode=0o700)
+    backup = backup_root / "fstab.original"
+    with backup.open("xb") as file:
+        os.fchmod(file.fileno(), 0o600); file.write(original); file.flush(); os.fsync(file.fileno())
+    for directory in (backup_root, backup_root.parent):
+        fd = os.open(directory, os.O_RDONLY)
+        try: os.fsync(fd)
+        finally: os.close(fd)
+    current, info = fstab_snapshot(path)
+    identity = lambda s: (s.st_dev, s.st_ino, s.st_mode, s.st_uid, s.st_gid, s.st_size, s.st_mtime_ns)
+    require(current == original and identity(info) == identity(before), "mnt-repair-fstab-recheck-mismatch")
+    fd, temporary = tempfile.mkstemp(prefix=".mixel-qa-fstab-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as file:
+            os.fchown(file.fileno(), before.st_uid, before.st_gid)
+            os.fchmod(file.fileno(), stat.S_IMODE(before.st_mode))
+            file.write(replacement); file.flush(); os.fsync(file.fileno())
+        # Recheck immediately before replacing this exact original inode/bytes.
+        current, info = fstab_snapshot(path)
+        require(current == original and identity(info) == identity(before), "mnt-repair-fstab-recheck-mismatch")
+        os.replace(temporary, path)
+        fd = os.open(path.parent, os.O_RDONLY)
+        try: os.fsync(fd)
+        finally: os.close(fd)
+    finally:
+        if os.path.lexists(temporary): os.unlink(temporary)
+    after, after_info = fstab_snapshot(path)
+    require(after == replacement and (after_info.st_mode, after_info.st_uid, after_info.st_gid)
+            == (before.st_mode, before.st_uid, before.st_gid), "mnt-repair-fstab-after-mismatch")
+    return {"beforeSHA256": hashlib.sha256(original).hexdigest(), "afterSHA256": hashlib.sha256(after).hexdigest(),
+            "removedLineSHA256": removed_hash, "privateBackup": "private-host-backup/fstab.original",
+            "mode": stat.S_IMODE(before.st_mode), "uid": before.st_uid, "gid": before.st_gid,
+            "allOtherBytesPreserved": True}
+
+
+def confirm_mnt_identity(root):
+    for prefix in ("/etc", "/run", "/usr/lib"):
+        unit = prefix + "/systemd/system/mnt.mount"
+        require(not os.path.lexists(unit) and not os.path.lexists(unit + ".d"), "mnt-repair-foreign-unit-or-override")
+    argv = ["systemctl", "show", "--all",
+            "--property=Id,LoadState,FragmentPath,DropInPaths,ActiveState,SubState,What,Where,SourcePath,Result", "mnt.mount"]
+    bounded_diagnostic(root, "host-mnt-repair-identity", argv)
+    raw = diagnostic_evidence(root, "host-mnt-repair-identity", argv, 0)
+    properties = dict(row.split("=", 1) for row in raw.decode().splitlines())
+    require(len(raw.splitlines()) == 10 and properties == {"Id": "mnt.mount", "LoadState": "loaded",
+            "FragmentPath": "/run/systemd/generator/mnt.mount", "DropInPaths": "", "ActiveState": "failed",
+            "SubState": "failed", "What": "ephemeral0", "Where": "/mnt", "SourcePath": "/etc/fstab",
+            "Result": "exit-code"}, "mnt-repair-current-unit-identity-mismatch")
+
+
+def repair_stale_mnt(root):
+    proof = stale_mnt_proof(root)
+    save(root / "evidence/HOST-MNT-REPAIR-INTENT.json", proof)
+    confirm_mnt_identity(root)  # Last bounded observation before the fstab CAS/write.
+    changed = comment_stale_fstab(Path("/etc/fstab"), root / "private-host-backup")
+    save(root / "evidence/HOST-MNT-FSTAB-CHANGE.json", changed)  # Hashes only; never fstab/options.
+    command(root, "host-mnt-repair-reload", ["systemctl", "daemon-reload"], 30)
+    command(root, "host-mnt-repair-reset", ["systemctl", "reset-failed", "mnt.mount"], 30)
+    require(command(root, "host-mnt-repair-health", ["systemctl", "is-system-running", "--wait"], 60).strip() == b"running", "mnt-repair-global-health-not-running")
+    require(not command(root, "host-mnt-repair-failed-units", ["systemctl", "--failed", "--no-pager", "--plain", "--no-legend"], 30).strip(), "mnt-repair-failed-units-remain")
+    save(root / "evidence/HOST-MNT-REPAIR.json", {"underlyingStaleEntryCommented": True,
+         "actualGlobalRunning": True, "actualFailedUnitsEmpty": True, "mountOperations": 0,
+         "genericResetFailed": False, "candidateExecuted": False, "serviceAccepted": False})
 
 
 def api(root, label, endpoint):
