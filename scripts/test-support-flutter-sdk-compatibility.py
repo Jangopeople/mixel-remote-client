@@ -195,7 +195,8 @@ def materialization(out, source, upstream):
         for name, value in baseline.items():
             if name not in S.FILES: assert corrected[name] == value, name
         S.apply(fixture, restore=True)
-        for name, value in baseline.items(): assert snapshot(fixture)[name] == value, name
+        restored = snapshot(fixture)
+        for name, value in baseline.items(): assert restored[name] == value, name
         S.apply(fixture, restore=True); S.apply(fixture)
         assert snapshot(fixture) == corrected
         controls += 5

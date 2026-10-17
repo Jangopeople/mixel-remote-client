@@ -258,6 +258,68 @@ class FlutterSdkEvidenceTests(unittest.TestCase):
         cls.suite = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(cls.suite)
 
+    def restore_baseline_check(self, fixture, baseline, snapshot):
+        # Execute the actual post-restore assertion block without invoking the
+        # surrounding application materialization or any external tools.
+        tree = ast.parse(Path(self.suite.__file__).read_text(encoding='utf-8'))
+        function = next(node for node in tree.body
+                        if isinstance(node, ast.FunctionDef) and node.name == 'materialization')
+        loop = next(node for node in function.body if isinstance(node, ast.For))
+        restores = [index for index, node in enumerate(loop.body)
+                    if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
+                    and isinstance(node.value.func, ast.Attribute)
+                    and isinstance(node.value.func.value, ast.Name)
+                    and node.value.func.value.id == 'S' and node.value.func.attr == 'apply'
+                    and len(node.value.args) == 1 and isinstance(node.value.args[0], ast.Name)
+                    and node.value.args[0].id == 'fixture'
+                    and [(item.arg, getattr(item.value, 'value', None))
+                         for item in node.value.keywords] == [('restore', True)]]
+        self.assertEqual(len(restores), 2, 'SDK restoration assertion boundary changed')
+        block = ast.Module(body=loop.body[restores[0] + 1:restores[1]], type_ignores=[])
+        exec(compile(block, self.suite.__file__, 'exec'),
+             {'fixture': fixture, 'baseline': baseline, 'snapshot': snapshot})
+
+    def test_restore_reads_one_full_snapshot_independent_of_baseline_size(self):
+        from unittest import mock
+        for count in (1, 8, 64):
+            with self.subTest(files=count), tempfile.TemporaryDirectory() as directory:
+                fixture = Path(directory)
+                for index in range(count):
+                    (fixture / str(index)).write_bytes(('fixture ' + str(index)).encode())
+                baseline = self.suite.snapshot(fixture)
+                with mock.patch.object(self.suite, 'snapshot', wraps=self.suite.snapshot) as snapshot:
+                    self.restore_baseline_check(fixture, baseline, snapshot)
+                self.assertEqual(snapshot.call_count, 1, 'Restoration reread the full tree per file')
+
+    def test_restore_still_rejects_missing_and_corrupt_baseline_files(self):
+        from unittest import mock
+        for mutation in ('missing', 'corrupt'):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
+                fixture = Path(directory)
+                target = fixture / 'baseline'
+                target.write_bytes(b'exact baseline bytes')
+                baseline = self.suite.snapshot(fixture)
+                if mutation == 'missing': target.unlink()
+                else: target.write_bytes(b'changed baseline bytes')
+                with mock.patch.object(self.suite, 'snapshot', wraps=self.suite.snapshot) as snapshot:
+                    with self.assertRaises(KeyError if mutation == 'missing' else AssertionError):
+                        self.restore_baseline_check(fixture, baseline, snapshot)
+                self.assertEqual(snapshot.call_count, 1)
+
+    def test_restore_still_rejects_changed_file_type_and_link_count(self):
+        for mutation in ('directory', 'hardlink'):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
+                fixture = Path(directory)
+                target = fixture / 'baseline'
+                target.write_bytes(b'exact baseline bytes')
+                baseline = self.suite.snapshot(fixture)
+                if mutation == 'directory':
+                    target.unlink(); target.mkdir()
+                else:
+                    os.link(target, fixture / 'second-link')
+                with self.assertRaises(KeyError if mutation == 'directory' else AssertionError):
+                    self.restore_baseline_check(fixture, baseline, self.suite.snapshot)
+
     def test_actual_successful_unicode_child_retains_exact_streams_and_command(self):
         with tempfile.TemporaryDirectory(prefix='mixel SDK evidence \u00e4 ') as directory:
             out = Path(directory)
