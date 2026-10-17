@@ -220,12 +220,23 @@ def apply(root, restore=False, check=False):
 @contextlib.contextmanager
 def previous(root):
     root, value, _, profile, current = inspect(root)
-    # Copy only source; retain symlinks as symlinks and never follow excluded
-    # repository/build/cache directories. This layer validates only its 10 owners.
-    ignored = {'.git', 'target', 'build', '.dart_tool', 'worktrees', '__pycache__'}
+    # Retain dependency Git metadata: historical exact owners verify its pinned
+    # revision and origin. Exclude only established, anchored application caches.
+    def ignored(directory, names):
+        relative = Path(directory).relative_to(root).as_posix()
+        result = {'worktrees'} & set(names)
+        if relative == '.':
+            result.update(name for name in names if name in ('build', 'target', '.dart_tool', '__pycache__'))
+        elif relative == 'flutter':
+            result.update(name for name in names if name in ('build', '.dart_tool'))
+        if relative in ('flutter/macos/Flutter', 'flutter/windows/flutter', 'flutter/linux/flutter'):
+            result.update(name for name in names if name == 'ephemeral')
+        return result
     with tempfile.TemporaryDirectory(prefix='mixel-native-prior-') as temporary:
-        stage = Path(temporary) / 'source'
-        shutil.copytree(root, stage, symlinks=True, ignore=lambda _path, names: [name for name in names if name in ignored])
+        # This directory was just created by us. Canonicalize its own TMPDIR
+        # ancestry so later strict owners do not follow macOS /var aliases.
+        stage = Path(temporary).resolve(strict=True) / 'source'
+        shutil.copytree(root, stage, symlinks=True, ignore=ignored)
         if profile == 'after':
             apply(stage, restore=True)
         recheck(root, value, current)

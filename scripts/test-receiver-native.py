@@ -85,6 +85,27 @@ class NativeSourceControls(unittest.TestCase):
                 for mode in bad:
                     self.assertFalse(P.owned_mode(mode, 0o644))
 
+    def test_private_copy_keeps_owned_dependency_metadata_and_nested_source_names(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture(root)
+            sentinels = {'.mixel-deps/rdev/.git/HEAD': b'pinned dependency identity\n',
+                         '.mixel-deps/rdev/build/owned.rs': b'owned source, not a root cache\n',
+                         '.mixel-deps/rdev/target/owned.rs': b'owned source, not a root cache\n'}
+            for name, raw in sentinels.items():
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(raw)
+            cached = root / 'target/cache-only'; cached.parent.mkdir(); cached.write_bytes(b'ignored root build cache')
+            before = snapshot(root)
+            with P.previous(root) as stage:
+                self.assertEqual(stage, stage.resolve(strict=True))
+                for name, raw in sentinels.items():
+                    self.assertEqual((stage / name).read_bytes(), raw)
+                self.assertFalse((stage / 'target').exists())
+                (stage / '.mixel-deps/rdev/.git/HEAD').write_bytes(b'private mutation')
+            self.assertEqual(snapshot(root), before)
+
     def test_complete_forward_inverse_and_idempotence_lf_crlf(self):
         for newline in (b'\n', b'\r\n'):
             with self.subTest(newline=newline), tempfile.TemporaryDirectory() as directory:
@@ -98,6 +119,7 @@ class NativeSourceControls(unittest.TestCase):
                 self.assertEqual(P.apply(root)['writes'], 0)
                 P.apply(root, check=True)
                 with P.previous(root) as stage:
+                    self.assertEqual(stage, stage.resolve(strict=True))
                     self.assertEqual(snapshot(stage), before)
                     self.assertEqual(snapshot(root), after)
                 P.apply(root, restore=True)

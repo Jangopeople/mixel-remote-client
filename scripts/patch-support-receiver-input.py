@@ -116,7 +116,7 @@ def previous(root):
         with tempfile.TemporaryDirectory(prefix='mixel-receiver-prior-') as temporary:
             stage = Path(temporary).resolve() / 'source'
             shutil.copytree(root, stage, symlinks=True,
-                ignore=lambda directory, names: compiler['projection_ignored'](root, directory, names) | {'.git'})
+                ignore=lambda directory, names: compiler['projection_ignored'](root, directory, names) | {'worktrees'})
             apply(stage, restore=True)
             if inspect(root, plan)[1:3] != (profile, originals):
                 raise RuntimeError('Receiver source changed during private inverse')
