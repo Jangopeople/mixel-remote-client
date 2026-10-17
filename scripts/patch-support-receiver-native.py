@@ -118,6 +118,14 @@ def transform(raw, row, restore=False):
     return result.replace(b'\n', newline)
 
 
+def owned_mode(actual, expected):
+    # Windows chmod exposes only the read-only attribute: an ordinary writable
+    # .rs file reports 0666 after chmod(0644). POSIX modes remain exact.
+    if os.name == 'nt':
+        return expected == 0o644 and actual == 0o666
+    return actual == expected
+
+
 def inspect(root):
     root = root_path(root)
     value, module = plan()
@@ -139,7 +147,7 @@ def inspect(root):
         if item[1] is None:
             absent_owners = True
             profiles.discard('after')
-        elif sha(canonical(item[1])[0]) == owner['sha256'] and item[2] == owner['mode']:
+        elif sha(canonical(item[1])[0]) == owner['sha256'] and owned_mode(item[2], owner['mode']):
             present_owners = True
             profiles &= {'after'}
         else:
@@ -184,14 +192,15 @@ def apply(root, restore=False, check=False):
     desired = 'before' if restore else 'after'
     if profile == desired:
         return {'profile': profile, 'writes': 0, 'files': 10}
-    if check:
-        raise ValueError('required native receipt source profile is absent')
     output = {row['name']: transform(current[row['name']][1], row, restore) for row in value['files']}
     owned_names = {row['name'] for row in value['owned']}
     for owner in value['owned']:
         newline = canonical(current[owner['newlineFrom']][1])[1]
         output[owner['name']] = None if restore else module[owner['name']].replace(b'\n', newline)
     recheck(root, value, current)
+    if check:
+        return {'profile': profile, 'plannedProfile': desired, 'writes': 0,
+                'plannedWrites': len(output), 'files': len(current)}
     writes = 0
     for name, raw in output.items():
         path, original, mode = current[name]

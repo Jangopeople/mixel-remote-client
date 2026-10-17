@@ -47,7 +47,8 @@ class NativeAcceptanceTests(unittest.TestCase):
                 with self.assertRaises(ValueError): P.apply(root, check=True)
                 P.apply(root)
                 after = snapshot(root)
-                self.assertTrue(all(mode == 0o640 for _, mode in after.values()))
+                self.assertEqual({name: mode for name, (_, mode) in after.items()},
+                                 {name: mode for name, (_, mode) in before.items()})
                 for row in P.plan():
                     self.assertEqual(after[row['name']][0], fixture_bytes('candidate', row['name']).replace(b'\n', newline))
                 P.apply(root); P.apply(root, check=True)

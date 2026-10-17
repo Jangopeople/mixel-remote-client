@@ -16,6 +16,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 SCRIPTS = Path(__file__).resolve().parent
 
@@ -55,6 +56,35 @@ def snapshot(root):
 
 
 class NativeSourceControls(unittest.TestCase):
+    def test_native_prospective_check_validates_without_writing_in_both_directions(self):
+        for newline in (b'\n', b'\r\n'):
+            with self.subTest(newline=newline), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                fixture(root, newline=newline)
+                before = snapshot(root)
+                result = P.apply(root, check=True)
+                self.assertEqual(result['plannedProfile'], 'after')
+                self.assertEqual(result['writes'], 0)
+                self.assertEqual(result['plannedWrites'], 10)
+                self.assertEqual(snapshot(root), before)
+                P.apply(root)
+                after = snapshot(root)
+                result = P.apply(root, restore=True, check=True)
+                self.assertEqual(result['plannedProfile'], 'before')
+                self.assertEqual(result['writes'], 0)
+                self.assertEqual(result['plannedWrites'], 10)
+                self.assertEqual(snapshot(root), after)
+                P.apply(root, restore=True)
+                self.assertEqual(snapshot(root), before)
+
+    def test_owned_mode_matches_actual_platform_representation(self):
+        for platform, good, bad in (('nt', 0o666, (0o444, 0o644, 0o777)),
+                                   ('posix', 0o644, (0o444, 0o666, 0o777))):
+            with mock.patch.object(P.os, 'name', platform):
+                self.assertTrue(P.owned_mode(good, 0o644))
+                for mode in bad:
+                    self.assertFalse(P.owned_mode(mode, 0o644))
+
     def test_complete_forward_inverse_and_idempotence_lf_crlf(self):
         for newline in (b'\n', b'\r\n'):
             with self.subTest(newline=newline), tempfile.TemporaryDirectory() as directory:
