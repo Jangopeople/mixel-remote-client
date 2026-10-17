@@ -20,12 +20,12 @@
       "src/server/mixel_receiver_input_windows.rs": null
     },
     "final": {
-      "src/server/connection.rs": "5a78e048ce5a90e8aa491ee77dfbbe413817cb7e71d8e225558d9f0795d2d0b4",
+      "src/server/connection.rs": "59f9fe7114c954c7437e83266f311ed6b51dec4c902982d1e3de5c21196c4c0d",
       "src/server.rs": "4fb7df5363849646f2ec0352ffa7b3c04e69fca0edb5c178801cdcfce1921f01",
       "src/ipc.rs": "01816ea9cc025b38533029209c79da2a508fdd8413e11c19e9f9cb8429d15c76",
       "src/server/portable_service.rs": "fa7bdbdf95c226c0b95290e8823822f4a800e003774737727427b436611bf092",
       "src/platform/windows.rs": "7efe6ac71743538ad7f0764c56fbb8f376aa3ba4039d87236cd67ac5026c6d08",
-      "src/server/mixel_receiver_input.rs": "e644251329ec09c674ddfb1a0ee00f7af1043d64895bfdac6593a63819240d83",
+      "src/server/mixel_receiver_input.rs": "c6d0ebcec2c6b16fc226479dc2a6f1989785d85a004749a3627432cf8882c289",
       "src/server/mixel_receiver_input_windows.rs": "2da648e27ba3d255c91c827aebba0d668842b2c3a95081ed91a61e617dc302d3"
     },
     "previous": {
@@ -39,7 +39,7 @@
     }
   },
   "templates": {
-    "src/server/mixel_receiver_input.rs": "e644251329ec09c674ddfb1a0ee00f7af1043d64895bfdac6593a63819240d83",
+    "src/server/mixel_receiver_input.rs": "c6d0ebcec2c6b16fc226479dc2a6f1989785d85a004749a3627432cf8882c289",
     "src/server/mixel_receiver_input_windows.rs": "2da648e27ba3d255c91c827aebba0d668842b2c3a95081ed91a61e617dc302d3"
   },
   "changes": {
@@ -143,6 +143,10 @@
       [
         "                        self.tx_input.send(MessageInput::BlockOff).ok();",
         "                        #[cfg(not(any(target_os = \"android\", target_os = \"ios\")))]\n                        { let ok = self.receiver_input.block(false, false);\n                          if !ok { if let Some(tx) = &self.inner.tx { Self::send_block_input_error(tx, back_notification::BlockInputState::BlkOffFailed, \"Input release unavailable\".to_owned()); } }\n                        }"
+      ],
+      [
+        "    fn drop(&mut self) {\n        #[cfg(not(any(target_os = \"android\", target_os = \"ios\")))]\n        self.release_pressed_modifiers();",
+        "    fn drop(&mut self) {\n        #[cfg(all(feature = \"flutter\", feature = \"plugin_framework\"))]\n        #[cfg(not(any(target_os = \"android\", target_os = \"ios\")))]\n        {\n            let mut owners = PLUGIN_BLOCK_INPUT_TXS.lock().unwrap();\n            if owners.get(&self.lr.my_id).map(|owner| owner.same_owner(&self.receiver_input)).unwrap_or(false) {\n                owners.remove(&self.lr.my_id);\n            }\n        }\n        #[cfg(not(any(target_os = \"android\", target_os = \"ios\")))]\n        self.release_pressed_modifiers();"
       ]
     ],
     "src/server.rs": [
@@ -359,6 +363,10 @@
       [
         "r unavailable\".to_owned()); } }\n                        }\n                    }\n                    BoolOption::No => {\n                        #[cfg(not(any(target_os = \"android\", target_os = \"ios\")))]\n                        { let ok = self.receiver_input.block(false, false);\n                          if !ok { if let Some(tx) = &self.inner.tx { Self::send_block_input_error(tx, back_notification::BlockInputState::BlkOffFailed, \"Input release unavailable\".to_owned()); } }\n                        }\n                    }\n                    _ => {}\n                }\n            } else {\n                if q != BoolOp",
         "r unavailable\".to_owned()); } }\n                        }\n                    }\n                    BoolOption::No => {\n                        self.tx_input.send(MessageInput::BlockOff).ok();\n                    }\n                    _ => {}\n                }\n            } else {\n                if q != BoolOp"
+      ],
+      [
+        "evated: Default::default(),\n            last_running: Default::default(),\n        }\n    }\n}\n\nimpl Drop for Connection {\n    fn drop(&mut self) {\n        #[cfg(all(feature = \"flutter\", feature = \"plugin_framework\"))]\n        #[cfg(not(any(target_os = \"android\", target_os = \"ios\")))]\n        {\n            let mut owners = PLUGIN_BLOCK_INPUT_TXS.lock().unwrap();\n            if owners.get(&self.lr.my_id).map(|owner| owner.same_owner(&self.receiver_input)).unwrap_or(false) {\n                owners.remove(&self.lr.my_id);\n            }\n        }\n        #[cfg(not(any(target_os = \"android\", target_os = \"ios\")))]\n        self.release_pressed_modifiers();\n        #[cfg(not(any(target_os = \"android\", target_os = \"ios\")))]\n        let _retired = self.receiver_input.close();\n",
+        "evated: Default::default(),\n            last_running: Default::default(),\n        }\n    }\n}\n\nimpl Drop for Connection {\n    fn drop(&mut self) {\n        #[cfg(not(any(target_os = \"android\", target_os = \"ios\")))]\n        self.release_pressed_modifiers();\n        #[cfg(not(any(target_os = \"android\", target_os = \"ios\")))]\n        let _retired = self.receiver_input.close();\n"
       ]
     ],
     "src/server.rs": [

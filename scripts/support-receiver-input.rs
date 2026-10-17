@@ -145,6 +145,7 @@ impl Receiver {
         }
         self.set_permission(enabled)
     }
+    pub(crate) fn same_owner(&self, other: &Self) -> bool { Arc::ptr_eq(&self.inner,&other.inner) }
     pub(crate) fn failed(&self) -> bool { self.inner.failed.load(Ordering::SeqCst) }
     pub(crate) fn fail(&self) { self.inner.failed.store(true, Ordering::SeqCst); let _ = self.close(); }
     pub(crate) fn block(&self, enabled: bool, privacy: bool) -> bool {
@@ -271,7 +272,7 @@ fn schedule_cleanup(generation: Arc<Generation>) {
         retired
     };
     #[cfg(windows)] {
-        if !windows::native_effect(true, Box::new(run)) { generation.cleanup_requested.store(false, Ordering::SeqCst); }
+        if !windows::native_enqueue(true, Box::new(run)) { generation.cleanup_requested.store(false, Ordering::SeqCst); }
     }
     #[cfg(target_os = "macos")] {
         if on_main_thread() { run(); } else { dispatch::Queue::main().exec_async(move || { run(); }); }
