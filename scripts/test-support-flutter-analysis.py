@@ -49,29 +49,131 @@ file_transfer_spec.loader.exec_module(F)
 
 
 def copy_current_pipeline_inputs(destination):
-    """Bind every current tracked/incoming fixture resource into private copies.
+    """Copy exact current pipeline inputs without discovering worktree contents.
 
-    Git selects scripts/branding inputs; generated caches and ignored runtime
-    files are excluded. HEAD's archive remains the baseline, then these exact
-    regular current files supply the reviewed integration under test.
+    Tracked names come only from index metadata. Incoming discovery prunes unsafe
+    names before filesystem access, then applies Git's actual ignore decisions
+    in bounded batches. Current regular-file bytes and modes replace the archive.
     """
-    names = subprocess.check_output(["git", "-C", str(ROOT), "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "scripts", "branding"])
-    for raw_name in sorted(set(names.decode("utf-8").split("\0")) - {""}):
-        relative = Path(raw_name)
-        if relative.is_absolute() or ".." in relative.parts or relative.parts[0] not in ("scripts", "branding"):
+    scopes = {"scripts", "branding"}
+    if any(part.casefold() == "worktrees" for part in ROOT.parts):
+        raise RuntimeError("Worktree pipeline roots are forbidden")
+
+    def safe_name(name):
+        relative = Path(name)
+        if (not relative.parts or relative.is_absolute() or ".." in relative.parts
+                or relative.parts[0] not in scopes or "\\" in name
+                or any(part.casefold() == "worktrees" for part in relative.parts)):
             raise RuntimeError("Unsafe current fixture input name")
+        return relative
+
+    # --others performs its own recursive discovery; never ask Git to scan an
+    # untrusted worktrees directory before Python can exclude that directory.
+    raw = subprocess.check_output(["git", "-C", str(ROOT), "ls-files", "-z", "--cached", "--", "scripts", "branding"])
+    tracked = set(raw.decode("utf-8").split("\0")) - {""}
+    if len(tracked) > 100_000:
+        raise RuntimeError("Current fixture tracked inventory is too large")
+    for name in tracked:
+        safe_name(name)  # reject every tracked worktrees name before lstat/read
+
+    def ignored(names):
+        result = set()
+        batch, size = [], 0
+        def query():
+            if not batch:
+                return
+            request = "\0".join(batch).encode("utf-8") + b"\0"
+            run = subprocess.run(["git", "-C", str(ROOT), "check-ignore", "--no-index", "-z", "--stdin"],
+                input=request, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+            values = set(run.stdout.decode("utf-8").split("\0")) - {""}
+            if run.returncode not in (0, 1) or not values <= set(batch) or (run.returncode == 0) != bool(values):
+                raise RuntimeError("Current fixture Git ignore query failed")
+            result.update(values)
+        for name in names:
+            safe_name(name)
+            length = len(name.encode("utf-8")) + 1
+            if length > 32768:
+                raise RuntimeError("Current fixture input name is too large")
+            if batch and (len(batch) >= 128 or size + length > 32768):
+                query(); batch, size = [], 0
+            batch.append(name); size += length
+        query()
+        return result
+
+    def ordinary_directory(path):
+        entry = path.lstat()
+        if not stat.S_ISDIR(entry.st_mode) or getattr(entry, "st_file_attributes", 0) & 0x400:
+            raise RuntimeError("Unsafe current fixture input parent")
+
+    ordinary_directory(ROOT)
+    pending, names = [], set(tracked)
+    for scope in sorted(scopes):
+        path = ROOT / scope
+        try:
+            ordinary_directory(path)
+        except FileNotFoundError:
+            continue
+        pending.append(path)
+    ignored_roots = ignored([path.relative_to(ROOT).as_posix() for path in pending])
+    pending = [path for path in pending if path.relative_to(ROOT).as_posix() not in ignored_roots]
+    observed = 0
+    while pending:
+        candidates = []
+        for directory in pending:
+            ordinary_directory(directory)
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    observed += 1
+                    if observed > 100_000:
+                        raise RuntimeError("Current fixture incoming inventory is too large")
+                    # Inspect only the name before pruning: no is_dir/stat/read
+                    # of any case-insensitive worktrees entry or its descendants.
+                    if entry.name.casefold() == "worktrees":
+                        continue
+                    path = directory / entry.name
+                    relative = path.relative_to(ROOT).as_posix()
+                    safe_name(relative)
+                    if relative in tracked:
+                        continue
+                    status = path.lstat()
+                    is_directory = stat.S_ISDIR(status.st_mode) and not getattr(status, "st_file_attributes", 0) & 0x400
+                    candidate = relative
+                    candidates.append((path, candidate, status, is_directory))
+        ignored_names = ignored([item[1] for item in candidates])
+        pending = []
+        for path, candidate, status, is_directory in candidates:
+            if candidate in ignored_names:
+                continue
+            if is_directory:
+                if path.name.casefold() == ".git":
+                    raise RuntimeError("Incoming fixture Git metadata is not a source input")
+                pending.append(path)
+            elif stat.S_ISREG(status.st_mode) and not getattr(status, "st_file_attributes", 0) & 0x400:
+                names.add(candidate)
+            else:
+                raise RuntimeError("Unowned current fixture incoming input")
+
+    for name in sorted(names):
+        relative = safe_name(name)
+        # Validate ancestry from outside inward before lstat can follow any
+        # source parent link into an excluded or external directory.
+        parent = ROOT
+        for part in relative.parts[:-1]:
+            parent /= part
+            ordinary_directory(parent)
         source = ROOT / relative
         status = source.lstat()
         if not stat.S_ISREG(status.st_mode) or status.st_nlink != 1 or status.st_size > 10_000_000 or getattr(status, "st_file_attributes", 0) & 0x400:
             raise RuntimeError("Unowned current fixture input")
-        for parent in source.parents:
-            if parent == ROOT: break
-            entry = parent.lstat()
-            if not stat.S_ISDIR(entry.st_mode) or getattr(entry, "st_file_attributes", 0) & 0x400:
-                raise RuntimeError("Unsafe current fixture input parent")
+        contents = source.read_bytes()
+        after = source.lstat()
+        identity = lambda value: (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_mode, value.st_nlink)
+        if identity(status) != identity(after):
+            raise RuntimeError("Current fixture input changed while reading")
         target = Path(destination) / relative
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(source.read_bytes())
+        target.write_bytes(contents)
+        target.chmod(stat.S_IMODE(status.st_mode))
 
 
 @contextlib.contextmanager

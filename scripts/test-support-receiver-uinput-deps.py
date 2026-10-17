@@ -212,9 +212,14 @@ class DependencyControls(unittest.TestCase):
                 OWNER.apply(root)
                 dep = PLAN['dependencies'][0]
                 forbidden = root/dep['path']/relative
-                forbidden.mkdir(parents=True)
-                (forbidden/'sentinel').write_text('Must never be enumerated or read.')
-                scan, read = OWNER.os.scandir, Path.read_bytes
+                forbidden.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    forbidden.symlink_to(root, target_is_directory=True)
+                except OSError:
+                    if os.name != 'nt':
+                        raise
+                    forbidden.mkdir()  # opaque empty fallback, no descendants
+                scan, read, lstat = OWNER.os.scandir, Path.read_bytes, Path.lstat
                 def guarded_scan(path):
                     if not isinstance(path, int) and 'worktrees' in Path(path).parts:
                         self.fail('scandir descended into a worktrees child')
@@ -223,9 +228,19 @@ class DependencyControls(unittest.TestCase):
                     if 'worktrees' in path.parts:
                         self.fail('read descended into a worktrees child')
                     return read(path)
-                with mock.patch.object(OWNER.os, 'scandir', guarded_scan), mock.patch.object(Path, 'read_bytes', guarded_read):
-                    with self.assertRaisesRegex(ValueError, 'worktree'):
-                        OWNER.inspect(root)
+                def guarded_lstat(path, *args, **kwargs):
+                    if 'worktrees' in path.parts:
+                        self.fail('lstat inspected an opaque worktrees entry')
+                    return lstat(path, *args, **kwargs)
+                try:
+                    with mock.patch.object(OWNER.os, 'scandir', guarded_scan), mock.patch.object(Path, 'read_bytes', guarded_read), mock.patch.object(Path, 'lstat', guarded_lstat):
+                        with self.assertRaisesRegex(ValueError, 'worktree'):
+                            OWNER.inspect(root)
+                finally:
+                    if forbidden.is_symlink():
+                        forbidden.unlink()
+                    else:
+                        forbidden.rmdir()
 
     def test_untrusted_owned_config_refuses_before_any_git_call(self):
         with fixture() as root:
