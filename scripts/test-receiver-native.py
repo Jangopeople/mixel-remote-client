@@ -71,7 +71,10 @@ def receipt_compile_argv(compiler, main, executable, environment, windows):
 
 
 def diagnostic_tail(raw):
-    return b'\n'.join(raw.splitlines()[-120:])[-12000:].decode('utf-8', errors='replace')
+    text = '\n'.join(raw.decode('utf-8', errors='replace').splitlines()[-120:])
+    # Bound emitted UTF-8 bytes after replacement decoding. Only an incomplete
+    # leading character introduced by this exact slice may be discarded.
+    return text.encode('utf-8')[-12000:].decode('utf-8', errors='ignore')
 
 
 class NativeSourceControls(unittest.TestCase):
@@ -98,14 +101,15 @@ class NativeSourceControls(unittest.TestCase):
                                          {'CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER': value}, True)
 
     def test_native_failure_diagnostic_preserves_final_error_with_bounded_output(self):
-        raw = b'old line\n' * 300 + b'x' * 30000 + b'\nactual final compiler error\n'
-        tail = diagnostic_tail(raw)
-        self.assertLessEqual(len(tail.encode()), 12000)
-        self.assertTrue(tail.endswith('actual final compiler error'))
-        self.assertNotIn('old line', tail)
+        for content in (b'x' * 30000, b'\xff' * 30000, ('\u00e9\u754c' * 10000).encode()):
+            raw = b'old line\n' * 300 + content + b'\nactual final compiler error\n'
+            tail = diagnostic_tail(raw)
+            self.assertLessEqual(len(tail.encode()), 12000)
+            self.assertTrue(tail.endswith('actual final compiler error'))
+            self.assertNotIn('old line', tail)
 
     def test_native_compile_failure_keeps_raw_diagnostic_and_stays_fatal(self):
-        failure = subprocess.CompletedProcess(['held-rustc'], 1, b'', b'x' * 30000 + b'\nactual compiler error\n')
+        failure = subprocess.CompletedProcess(['held-rustc'], 1, b'', b'\xff' * 30000 + b'\nactual compiler error\n')
         with tempfile.TemporaryDirectory() as directory:
             proof = Path(directory) / 'proof'
             with mock.patch.object(shutil, 'which', return_value='held-rustc'), \
