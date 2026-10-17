@@ -1229,6 +1229,16 @@ jobs:
         run: |
           ./scripts/test-support-launch-windows.ps1 -Executable dist/Mixel-Remote-Support-Windows.exe -Portable -ExpectedPayload store-payload
 
+      - name: Prove cold signed QuickSupport starts as a fresh Standard user without UAC
+        timeout-minutes: 8
+        shell: pwsh
+        env:
+          MIXEL_HOSTED_OWNED_QA_NAMESPACE: "1"
+        run: |
+          python scripts/test-support-uri-routing.py --cold-source-controls
+          if ($LASTEXITCODE -ne 0) { throw 'Cold Standard source controls failed.' }
+          ./scripts/test-support-cold-windows.ps1 -Executable dist/Mixel-Remote-QS.exe -ExpectedPayload store-payload -EvidenceDirectory (Join-Path $env:RUNNER_TEMP 'mixel-owned-ordinary-qs-logs/cold-support')
+
       - name: Exercise the signed QuickSupport download without an invite
         shell: pwsh
         env:
@@ -1241,7 +1251,9 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: windows-customer-launch-logs
-          path: ${{ runner.temp }}/mixel-owned-ordinary-qs-logs/**/*.log
+          path: |
+            ${{ runner.temp }}/mixel-owned-ordinary-qs-logs/**/*.log
+            ${{ runner.temp }}/mixel-owned-ordinary-qs-logs/cold-support/*.json
           if-no-files-found: ignore
 
       - name: Require the original Windows source preflight before customer artifact upload

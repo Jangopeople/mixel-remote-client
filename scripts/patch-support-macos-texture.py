@@ -21,6 +21,8 @@ API = "macos/Classes/TextureRgbaApi.m"
 API_SHA = 'dce9a6ae4c12264d19a193e55a11ebf37df39d4d905af7d4ef0feb879d7484ec'
 OLD_API_CALL = '    [texture_rgba markFrameAvaliableRawWithBuffer:buffer len:len width:width height:height stride_align: stride_align];'
 NEW_API_CALL = '    if (![texture_rgba markFrameAvaliableRawWithBuffer:buffer len:len width:width height:height stride_align: stride_align]) {\n        // A rejected frame leaves the last valid pixel buffer owned by Swift.\n        return;\n    }'
+OLD_API_IMPORT = '#import "texture_rgba_renderer/texture_rgba_renderer-Swift.h"'
+NEW_API_IMPORT = '#import "MixelTextureBase.h"\n' + OLD_API_IMPORT
 PLUGIN_SHA = "6c802f3b20a7d92e4a2af729880701cbc4b98304e535875150f9a0d8b74ccd7a"
 CALLBACK_START = '    #[cfg(not(any(target_os = "android", target_os = "ios")))]\n    pub fn on_rgba('
 CALLBACK_END = '\n    #[cfg(feature = "vram")]\n    pub fn on_texture'
@@ -67,6 +69,46 @@ NEW_CLOSE = """        if let texture = renderer.removeValue(forKey: key) {
     case \"onRgba\":"""
 TEXT = "macos/Classes/TextRgba.swift"
 TEXT_SHA = "18c831c3510cdb0862abb05b22a89e5ded1edbdeb253ff38b8535c96e01d0a68"
+OLD_TEXTURE_BASE = '@objc public class TextRgba: NSObject, FlutterTexture {'
+NEW_TEXTURE_BASE = '@objc public class TextRgba: MixelTextureBase {'
+OLD_PIXEL_COPY = """    public func copyPixelBuffer() -> Unmanaged<CVPixelBuffer>? {
+        queue.sync {
+            if (data == nil) {
+                return nil
+            }
+            return Unmanaged.passRetained(data!)
+        }
+    }"""
+NEW_PIXEL_COPY = """    public override func retainedPixelBufferPointer() -> UnsafeMutableRawPointer? {
+        queue.sync {
+            if (data == nil) {
+                return nil
+            }
+            return Unmanaged.passRetained(data!).toOpaque()
+        }
+    }"""
+OWNED = {
+    "macos/Classes/MixelTextureBase.h": """// Mixel-owned retained-return bridge; Flutter's selector stays Objective-C.
+#import <FlutterMacOS/FlutterTexture.h>
+
+NS_ASSUME_NONNULL_BEGIN
+@interface MixelTextureBase : NSObject <FlutterTexture>
+// Returns exactly the +1 reference supplied by Swift, or NULL for no frame.
+- (void * _Nullable)retainedPixelBufferPointer;
+@end
+NS_ASSUME_NONNULL_END
+""",
+    "macos/Classes/MixelTextureBase.m": """#import "MixelTextureBase.h"
+
+@implementation MixelTextureBase
+- (void *)retainedPixelBufferPointer { return NULL; }
+- (CVPixelBufferRef)copyPixelBuffer {
+    // Flutter consumes the existing +1; this bridge must not retain or release.
+    return (CVPixelBufferRef)[self retainedPixelBufferPointer];
+}
+@end
+""",
+}
 OLD_FRAME = """    private func _markFrameAvaliable(buffer: UnsafePointer<UInt8>, len: Int, width: Int, height: Int, stride_align: Int) -> Bool {
         var pixelBufferCopy: CVPixelBuffer?
         // macOS only support 32BGRA currently.
@@ -247,6 +289,13 @@ def unpatch_plugin(text):
 
 def patch_frame(text):
     original = text
+    ownership = ((OLD_TEXTURE_BASE, NEW_TEXTURE_BASE), (OLD_PIXEL_COPY, NEW_PIXEL_COPY))
+    new_counts = [original.count(new) for _, new in ownership]
+    if new_counts == [1, 1]:
+        for old, new in ownership:
+            original = original.replace(new, old, 1)
+    elif new_counts != [0, 0]:
+        raise RuntimeError("Partial or duplicate retained-return bridge")
     for old, new in ((OLD_FRAME, NEW_FRAME), (OLD_DATA, NEW_DATA)):
         if original.count(new) == 1:
             original = original.replace(new, old, 1)
@@ -256,11 +305,16 @@ def patch_frame(text):
         if original.count(old) != 1:
             raise RuntimeError("Pinned renderer frame boundary changed")
         original = original.replace(old, new, 1)
+    for old, new in ownership:
+        if original.count(old) != 1:
+            raise RuntimeError("Pinned retained-return boundary changed")
+        original = original.replace(old, new, 1)
     return original
 
 
 def unpatch_frame(text):
-    return patch_frame(text).replace(NEW_FRAME, OLD_FRAME, 1).replace(NEW_DATA, OLD_DATA, 1)
+    return (patch_frame(text).replace(NEW_FRAME, OLD_FRAME, 1).replace(NEW_DATA, OLD_DATA, 1)
+            .replace(NEW_TEXTURE_BASE, OLD_TEXTURE_BASE, 1).replace(NEW_PIXEL_COPY, OLD_PIXEL_COPY, 1))
 
 
 def insert(text, start, end, digest, addition):
@@ -370,13 +424,15 @@ def patch_sources(repo):
 
 def unpatch_api(text):
     original = text.replace(NEW_API_CALL, OLD_API_CALL, 1) if text.count(NEW_API_CALL) == 1 else text
+    original = original.replace(NEW_API_IMPORT, OLD_API_IMPORT, 1) if original.count(NEW_API_IMPORT) == 1 else original
     if sha(original.encode()) != API_SHA or original.count(OLD_API_CALL) != 1:
         raise RuntimeError("Pinned renderer C adapter changed")
     return original
 
 
 def patch_api(text):
-    return unpatch_api(text).replace(OLD_API_CALL, NEW_API_CALL, 1)
+    return (unpatch_api(text).replace(OLD_API_CALL, NEW_API_CALL, 1)
+            .replace(OLD_API_IMPORT, NEW_API_IMPORT, 1))
 
 
 def source_files(archive):
@@ -437,12 +493,15 @@ def existing_files(target):
     except (KeyError, ValueError):
         raise RuntimeError("Missing owned renderer provenance") from None
     original = dict(files)
+    for name, text in OWNED.items():
+        if original.pop(name, None) != text.encode():
+            raise RuntimeError("Owned renderer retained-return bridge missing or changed; reprovision fresh source from pinned upstream")
     original[PLUGIN] = unpatch_plugin(original[PLUGIN].decode()).encode()
     original[TEXT] = unpatch_frame(original[TEXT].decode()).encode()
     original[API] = unpatch_api(original[API].decode()).encode()
     inventory = {name: sha(data) for name, data in original.items()}
     expected = {"commit": PIN, "tree": TREE, "original_inventory_sha256": INVENTORY_SHA}
-    if proof != expected or len(files) != 98 or sha(json.dumps(inventory, sort_keys=True, separators=(",", ":")).encode()) != INVENTORY_SHA:
+    if proof != expected or len(files) != 98 + len(OWNED) or sha(json.dumps(inventory, sort_keys=True, separators=(",", ":")).encode()) != INVENTORY_SHA:
         raise RuntimeError("Owned renderer content or provenance changed")
     expected_dirs = {parent.as_posix() for name in files for parent in PurePosixPath(name).parents if str(parent) != "."}
     actual_dirs = {path.relative_to(target).as_posix() for path in target.rglob("*") if path.is_dir()}
@@ -475,6 +534,7 @@ def apply(repo):
         files[PLUGIN] = patch_plugin(files[PLUGIN].decode()).encode()
         files[TEXT] = patch_frame(files[TEXT].decode()).encode()
         files[API] = patch_api(files[API].decode()).encode()
+        files.update({name: text.encode() for name, text in OWNED.items()})
         parent.mkdir(exist_ok=True)
         with tempfile.TemporaryDirectory(prefix=".mixel-texture-stage-", dir=parent) as directory:
             stage = Path(directory) / "texture_rgba_renderer"

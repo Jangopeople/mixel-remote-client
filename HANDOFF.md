@@ -1,5 +1,103 @@
 # Mixel-Remote — Agent Handoff / Current State
 
+## 2026-10-17 — Cold QuickSupport fix and Mac native source composed
+
+The current candidate adds an explicit asInvoker/uiAccess=false outer Windows
+manifest and prevents automatic portable-service elevation when attended
+QuickSupport starts non-elevated. Explicit user Elevate/RunAsSystem/Install and
+already-elevated service behavior are preserved. The guard belongs to the final
+URI source owner; the input-layer loaders rebind only their exact predecessor
+hashes. The early invite generator and existing Windows launcher remain exact.
+
+A separate required shipping step launches the actual signed QS outer under a
+fresh Standard-user profile with UAC enabled and credential prompts available.
+It requires observed outer/main process starts, exact Medium identities and
+signed payload hashes, no observed consent process, the same visible main HWND,
+stable ID/branded relay/native v2 guard, zero authenticated Remote peers, and
+95 seconds of the same incoming owner after the outer exits. Seven predicate
+controls and independent source review pass. Actual new Windows execution is
+still pending; the older warm proof does not qualify this cold case.
+
+The entire new Mac/Windows patch stack has now run on a fresh pinned upstream
+checkout, then run again with all1,294 generated files byte/mode identical.
+The first pass took42.919s, the repeat181.633s. Seventy-five release/configuration
+unit tests pass. Proof: durable artifact directory
+`root-cold-mac-composition-5a0v75r2` and
+`root-current-config-source-gates-5cmc0y1z` below the current artifact root.
+These are source/configuration results, not a new signed product qualification.
+
+The exact official Flutter3.27.4 ARM SDK is provisioned in a new isolated
+ordinary directory, with universal ARM/Intel macOS engine frameworks verified.
+The normal CocoaPods plugin-only module/header/link runner is prepared, but its
+execution is held pending the next coordinated short compiler window. The
+already-passing focused Mac authorization/display and real-header texture
+lifetime gates remain separate proofs. Full new builds, native customer Accept,
+input/clipboard/files/reconnect, managed Mac update and physical acceptance are
+still required. Current signed package proofs remain bound to6c0ab10c only.
+
+Do not query or alter protected old resources or any worktree. Preserve the GTK
+automatic rejection, human-only native Open and normal Mac Quit requirements,
+shared authenticator input hold, and all public/main/store/production holds.
+Delivery remains incomplete.
+
+## 2026-10-17 — Real Linux service green; cold Windows elevation defect found
+
+Read the current Git HEAD and
+`/tmp/mixel-current708-authoritative-checkpoint-20261016.json` before relying on
+older entries. Committed source is169a3229; the existing four-platform private
+application build is6c0ab10c. Subsequent product source changes are still WIP.
+Publishing, main, marketplace and production infrastructure remain held.
+
+The exact current Linux DEB now passes the actual Ubuntu22.04/systemd lifecycle:
+run39015596759, job117346960818, all13 steps successful. Root verified31 real
+commands, four distinct service PID/birth owners,30-second stability, restart,
+stop/start, disable/enable, removal/purge, unrelated sentinel preservation and
+empty final dpkg audit. The earlier failed hosted attempts remain failures.
+Proof: durable artifact `ROOT-169A-LINUX-REAL-SYSTEMD-QUALIFIED.json` and
+`169a-linux-real-systemd-actual-passing-output-20261017.txt` under
+`/Users/michaellascar/.codex/artifacts/mixel-remote-reliability-20261016`.
+
+The private6c QS executable was transferred through authenticated NAS VMM media,
+not a public link or browser security workaround. PC01 sees D: MIXELQA6C0. Both
+media and fresh non-overwriting user-temp copy hash to8daf1361e5a3a58ebde0261f2c3ee4603af81ca87eddbcaa0b2f7c061ed270bd;
+length22,929,776. Actual Windows Authenticode reports Valid, publisher Mixel
+International Services SARLS. The earlier GitHub sign-in request is obsolete for
+staging. Only the previously empty Additional ISO drive was changed; restore it
+to Unmounted after testing. Boot disk/order, boot ISO and VM power were unchanged.
+
+Actual first QS launch exposed a cold-start UAC prompt. Root sent visible Esc;
+no elevation was approved. Case is not the cause: both classifiers lowercase the
+basename. Cold uninstalled QS automatically starts the portable service, whose
+background path explicitly reaches ShellExecute runas. The outer signed PE also
+lacks requestedExecutionLevel; the inner PE already declares asInvoker. The
+earlier95-second ordinary-to-QS proof is a warm path and cannot qualify this cold
+path. The Windows source owner is correcting default non-elevated attended
+startup, preserving explicit Elevate/RunAsSystem/Install and already-elevated
+service behavior, and adding an exact signed-outer cold-launch gate. Require the
+ordinary incoming listener, stable ID/relay readiness and attended guard, then
+actual customer Accept/control; merely suppressing a prompt or showing a GUI is
+not acceptance. No corrected Windows build has been dispatched yet.
+
+Four frozen Mac helper/test WIP files remove the dormant authorization execution
+branch, free authorization on denied/cancelled rights, use public GUI-usable
+display-mode metadata, cancel a begun configuration after Configure failure, and
+move the retained pixel-buffer selector to an Objective-C base. Actual focused
+gates pass8 C compilations plus48 runtime cases across ARM12.3/Intel10.14, and21
+exact-public-header commands including the native ARM C/Swift/CoreVideo path and
+1,000 concurrent replacements/copies/retirements. Root rehashed366 packet files.
+Proof: `root-mac-native-and-pc01-staging-c326p4wc/MAC-NATIVE-GATES-ROOT-VERIFIED.json`
+in the durable artifact directory. These are standalone gates, not a normal
+CocoaPods/full app build. The local Intel SDK libc++ old-target warning remains
+recorded separately. Real framework composition and physical Mac acceptance are
+still required. No new product build or native Mac update has been claimed.
+
+The sole legitimate ISM staff page currently needs a human authenticator check;
+one request is pending in the authorized ISM chat. Hold shared Chrome/native
+input while the human types. No fresh customer invite or native URI Open has
+been prepared. Human normal Mac Quit remains pending; do not relaunch or force
+kill it. Preserve the automatic GTK rejection without retry, all protected old
+resources, the no-worktree rule and public release holds. Delivery is not done.
+
 
 ## 2026-10-17 — Windows fixture acknowledgment correction; native gate pending
 

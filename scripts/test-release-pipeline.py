@@ -4,6 +4,7 @@ import ast
 import importlib.util
 import os
 import re
+import struct
 import subprocess
 import sys
 import tempfile
@@ -310,6 +311,8 @@ class ReleasePipelineTests(unittest.TestCase):
         (payload / "Mixel-Remote.exe").write_bytes(b"signed-main")
         generator = repo / "libs/portable/generate.py"
         generator.parent.mkdir(parents=True)
+        (repo / 'res').mkdir()
+        (repo / 'res/manifest.xml').write_text(portable.PORTABLE_MANIFEST_ORIGINAL, encoding='utf-8')
         generator.write_text("def generate_md5_table(folder, level):\n return {}\ndef write_package_metadata(table, output, exe):\n assert exe == './Mixel-Remote.exe'\ndef write_app_metadata(output):\n pass\n", encoding="utf-8")
         stale = repo / "target/release/rustdesk-portable-packer.exe"
         stale.parent.mkdir(parents=True)
@@ -325,6 +328,153 @@ class ReleasePipelineTests(unittest.TestCase):
         self.assertEqual(Path.cwd(), previous)
         self.assertFalse(stale.exists())
         self.assertFalse((self.destination / "launcher.exe").exists())
+
+
+class PortableExecutionManifestTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix='mixel-portable-manifest-')
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+
+    @staticmethod
+    def fixed_xml():
+        anchor = '<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">\n'
+        return portable.PORTABLE_MANIFEST_ORIGINAL.replace(anchor, anchor + portable.PORTABLE_AS_INVOKER, 1).encode()
+
+    @staticmethod
+    def resource_pe(manifests):
+        # Real inert AMD64/PE32+ resource-only DLL bytes: no code, imports or
+        # entry point. The production reader, not a fake VersionInfo object,
+        # walks the actual resource directory and every manifest language.
+        data_offset = 64 + 8 * len(manifests)
+        payload_offset = data_offset + 16 * len(manifests)
+        resource = bytearray(payload_offset)
+        struct.pack_into('<HHII', resource, 12, 0, 1, 24, 0x80000018)
+        struct.pack_into('<HHII', resource, 36, 0, 1, 1, 0x80000030)
+        struct.pack_into('<HH', resource, 60, 0, len(manifests))
+        for i, (language, xml) in enumerate(manifests):
+            leaf = data_offset + i * 16
+            struct.pack_into('<II', resource, 64 + i * 8, language, leaf)
+            struct.pack_into('<IIII', resource, leaf, 0x1000 + len(resource), len(xml), 65001, 0)
+            resource.extend(xml)
+        raw_size = (len(resource) + 511) & ~511
+        raw = bytearray(512 + raw_size)
+        raw[:2] = b'MZ'
+        struct.pack_into('<I', raw, 60, 128)
+        raw[128:132] = b'PE\0\0'
+        struct.pack_into('<HHIIIHH', raw, 132, 0x8664, 1, 0, 0, 0, 240, 0x2022)
+        optional = 152
+        struct.pack_into('<H', raw, optional, 0x20b)
+        struct.pack_into('<II', raw, optional + 32, 4096, 512)
+        struct.pack_into('<II', raw, optional + 56, (4096 + len(resource) + 4095) & ~4095, 512)
+        struct.pack_into('<H', raw, optional + 68, 2)
+        struct.pack_into('<I', raw, optional + 108, 16)
+        struct.pack_into('<II', raw, optional + 128, 4096, len(resource))
+        raw[392:400] = b'.rsrc\0\0\0'
+        struct.pack_into('<IIII', raw, 400, len(resource), 4096, raw_size, 512)
+        struct.pack_into('<I', raw, 428, 0x40000040)
+        raw[512:512 + len(resource)] = resource
+        return bytes(raw)
+
+    def test_exact_source_patch_inverse_idempotence_and_newlines(self):
+        for ending in ('\n', '\r\n'):
+            path = self.root / ('crlf' if ending == '\r\n' else 'lf') / 'res/manifest.xml'
+            path.parent.mkdir(parents=True)
+            before = portable.PORTABLE_MANIFEST_ORIGINAL.replace('\n', ending).encode()
+            path.write_bytes(before)
+            portable.prepare_portable_manifest(path.parent.parent)
+            after = path.read_bytes()
+            self.assertEqual(after.replace(portable.PORTABLE_AS_INVOKER.replace('\n', ending).encode(), b'', 1), before)
+            portable.prepare_portable_manifest(path.parent.parent)
+            self.assertEqual(path.read_bytes(), after)
+
+    def test_source_drift_duplicate_policy_and_mixed_newlines_refuse_before_write(self):
+        fixed = self.fixed_xml().decode()
+        for text in (portable.PORTABLE_MANIFEST_ORIGINAL + '\n',
+                     fixed.replace('asInvoker', 'requireAdministrator'),
+                     fixed.replace(portable.PORTABLE_AS_INVOKER, portable.PORTABLE_AS_INVOKER * 2),
+                     portable.PORTABLE_MANIFEST_ORIGINAL.replace('\n', '\r\n', 1)):
+            path = self.root / 'res/manifest.xml'
+            path.parent.mkdir(exist_ok=True)
+            before = text.encode()
+            path.write_bytes(before)
+            with self.assertRaises(ValueError):
+                portable.prepare_portable_manifest(self.root)
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_actual_pe_manifest_missing_policy_negative_and_corrected_positive(self):
+        for xml, accepted in ((portable.PORTABLE_MANIFEST_ORIGINAL.encode(), False), (self.fixed_xml(), True)):
+            path = self.root / 'inert.dll'
+            before = self.resource_pe([(1033, xml)])
+            path.write_bytes(before)
+            if accepted:
+                portable.verify_portable_manifest(path)
+            else:
+                with self.assertRaisesRegex(ValueError, 'explicit execution policy'):
+                    portable.verify_portable_manifest(path)
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_all_languages_require_exact_nonprivileged_policy(self):
+        xml = self.fixed_xml()
+        bad = [xml.replace(b'asInvoker', b'requireAdministrator'), xml.replace(b'asInvoker', b'highestAvailable'),
+               xml.replace(b'uiAccess="false"', b'uiAccess="true"'),
+               xml.replace(b'<requestedExecutionLevel ', b'<requestedExecutionLevel extra="drift" '),
+               xml.replace(b'</requestedPrivileges>', b'<requestedExecutionLevel level="asInvoker" uiAccess="false" /></requestedPrivileges>')]
+        for second in bad:
+            path = self.root / 'inert.dll'
+            path.write_bytes(self.resource_pe([(1033, xml), (1031, second)]))
+            with self.assertRaises(ValueError):
+                portable.verify_portable_manifest(path)
+        path.write_bytes(self.resource_pe([(1033, xml), (1031, xml)]))
+        portable.verify_portable_manifest(path)
+        path.write_bytes(self.resource_pe([(1033, xml), (1033, xml)]))
+        with self.assertRaisesRegex(ValueError, 'duplicate'):
+            portable.verify_portable_manifest(path)
+
+    def test_pe_resource_bounds_and_xml_entities_refuse(self):
+        good = self.resource_pe([(1033, self.fixed_xml())])
+        for raw in (b'', good[:200], good[:60] + b'\xff\xff\xff\xff' + good[64:],
+                    good[:532] + b'\xff\xff\xff\xff' + good[536:]):
+            with self.assertRaises(ValueError):
+                portable.read_pe_manifests(raw)
+        for xml in (b'', b'<broken', b'<!DOCTYPE assembly><assembly />', b'<!ENTITY x "value"><assembly />'):
+            with self.assertRaises(ValueError):
+                portable.validate_manifest_xml(xml)
+
+    def test_real_packaging_path_reads_actual_output_before_copying(self):
+        repo = self.root / 'repo'
+        payload = self.root / 'payload'
+        payload.mkdir()
+        (payload / 'Mixel-Remote.exe').write_bytes(b'signed-main-fixture')
+        generator = repo / 'libs/portable/generate.py'
+        generator.parent.mkdir(parents=True)
+        generator.write_text('def generate_md5_table(*a): return {}\ndef write_package_metadata(*a): pass\ndef write_app_metadata(*a): pass\n')
+        (repo / 'res').mkdir()
+        (repo / 'res/manifest.xml').write_text(portable.PORTABLE_MANIFEST_ORIGINAL)
+        binary = repo / 'target/release/rustdesk-portable-packer.exe'
+        binary.parent.mkdir(parents=True)
+        destination = self.root / 'output.exe'
+        for xml, accepted in ((portable.PORTABLE_MANIFEST_ORIGINAL.encode(), False), (self.fixed_xml(), True)):
+            produced = self.resource_pe([(1033, xml)])
+            def runner(command, **kwargs):
+                self.assertIn('--locked', command)
+                self.assertTrue(kwargs['check'])
+                binary.write_bytes(produced)
+            if accepted:
+                portable.build_portable(repo, payload, destination, runner)
+                self.assertEqual(destination.read_bytes(), produced)
+            else:
+                with self.assertRaises(ValueError):
+                    portable.build_portable(repo, payload, destination, runner)
+                self.assertFalse(destination.exists())
+
+    def test_actual_manifest_cli_reads_only_inert_pe(self):
+        path = self.root / 'fixture.dll'
+        for xml, success in ((portable.PORTABLE_MANIFEST_ORIGINAL.encode(), False), (self.fixed_xml(), True)):
+            path.write_bytes(self.resource_pe([(1033, xml)]))
+            run = subprocess.run([sys.executable, str(ROOT / 'scripts/build-windows-portable.py'), '--verify-manifest', str(path)],
+                                 capture_output=True, timeout=20)
+            self.assertEqual(run.returncode == 0, success, run.stderr)
 
 
 def original_mac_wrapper_calls(workflow):

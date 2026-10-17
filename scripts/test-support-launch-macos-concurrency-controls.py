@@ -176,6 +176,19 @@ def inverse_uri_workflow_checks(text, workflow):
     return text
 
 
+def cold_windows_workflow_projection():
+    """Unit-only exact current cold gate; historical workflow hashes stay fixed."""
+    return ('      - name: Exercise the signed portable customer download\n        shell: pwsh\n        run: |\n          ./scripts/test-support-launch-windows.ps1 -Executable dist/Mixel-Remote-Support-Windows.exe -Portable -ExpectedPayload store-payload\n\n', '      - name: Prove cold signed QuickSupport starts as a fresh Standard user without UAC\n        timeout-minutes: 8\n        shell: pwsh\n        env:\n          MIXEL_HOSTED_OWNED_QA_NAMESPACE: "1"\n        run: |\n          python scripts/test-support-uri-routing.py --cold-source-controls\n          if ($LASTEXITCODE -ne 0) { throw \'Cold Standard source controls failed.\' }\n          ./scripts/test-support-cold-windows.ps1 -Executable dist/Mixel-Remote-QS.exe -ExpectedPayload store-payload -EvidenceDirectory (Join-Path $env:RUNNER_TEMP \'mixel-owned-ordinary-qs-logs/cold-support\')\n\n', '      - name: Exercise the signed QuickSupport download without an invite\n', '          name: windows-customer-launch-logs\n', '          path: ${{ runner.temp }}/mixel-owned-ordinary-qs-logs/**/*.log\n', '          path: |\n            ${{ runner.temp }}/mixel-owned-ordinary-qs-logs/**/*.log\n            ${{ runner.temp }}/mixel-owned-ordinary-qs-logs/cold-support/*.json\n', '          if-no-files-found: ignore\n')
+
+
+def inverse_cold_windows_workflow(text):
+    before, addition, after, log_before, old_log, new_log, log_after = cold_windows_workflow_projection()
+    if (text.count(addition) != 1 or text.count(before + addition + after) != 1
+            or text.count(new_log) != 1 or text.count(log_before + new_log + log_after) != 1):
+        raise AssertionError('Exact required cold Standard Windows step/log binding changed, moved or duplicated')
+    return text.replace(before + addition + after, before + after, 1).replace(new_log, old_log, 1)
+
+
 def inverse_windows_producer_budget(text):
     before = ("  windows:\n    needs: [config, bridge]\n"
               "    if: ${{ needs.config.outputs.windows == 'true' }}\n    runs-on: windows-2022\n")
@@ -947,8 +960,29 @@ class ConcurrencyControls(unittest.TestCase):
         with self.assertRaises(AssertionError):
             inverse_lifecycle_workflow_checks('', 'foreign.yml')
 
+    def test_cold_windows_whole_workflow_inverse_refuses_partial_moved_or_optional_gate(self):
+        text = C.canonical((ROOT / '.github/workflows/build.yml').read_bytes()).decode()
+        before, addition, after, log_before, old_log, new_log, log_after = cold_windows_workflow_projection()
+        baseline = inverse_cold_windows_workflow(text)
+        self.assertEqual(text.replace(addition, '', 1).replace(new_log, old_log, 1), baseline)
+        for changed in (
+                text.replace(addition, '', 1),
+                text.replace(addition, addition * 2, 1),
+                text.replace(before + addition + after, before + after + addition, 1),
+                text.replace(addition, addition.replace('        timeout-minutes: 8\n', '        timeout-minutes: 7\n'), 1),
+                text.replace(addition, addition.replace('        shell: pwsh\n', '        continue-on-error: true\n        shell: pwsh\n'), 1),
+                text.replace(addition, addition.replace('        shell: pwsh\n', '        if: false\n        shell: pwsh\n'), 1),
+                text.replace(new_log, old_log, 1),
+                text.replace(new_log, new_log * 2, 1),
+                text.replace(log_before + new_log + log_after, new_log + log_before + log_after, 1),
+                text.replace(new_log, new_log.replace('cold-support', 'foreign'), 1)):
+            with self.subTest(digest=hashlib.sha256(changed.encode()).hexdigest()), self.assertRaises(AssertionError):
+                inverse_cold_windows_workflow(changed)
+        with self.assertRaises(AssertionError):
+            inverse_cold_windows_workflow(baseline)
+
     def test_windows_producer_budget_has_only_one_exact_outer_job_change(self):
-        current = input_lifecycle.inverse_blocks(_lifecycle_projection.inverse_sdk_compatibility_retention(C.canonical((ROOT / '.github/workflows/build.yml').read_bytes()).decode(), 'build.yml').encode(), '.github/workflows/build.yml').decode()
+        current = inverse_cold_windows_workflow(input_lifecycle.inverse_blocks(_lifecycle_projection.inverse_sdk_compatibility_retention(C.canonical((ROOT / '.github/workflows/build.yml').read_bytes()).decode(), 'build.yml').encode(), '.github/workflows/build.yml').decode())
         budget_only = inverse_windows_producer_budget(current)
         early = _lifecycle_projection.early_windows_lifecycle()
         self.assertEqual(budget_only.count(early), 1)
@@ -998,7 +1032,7 @@ class ConcurrencyControls(unittest.TestCase):
         self.assertEqual(dispatcher.count('python scripts/test-support-file-dialog-lifecycle.py --source '), 1)
 
     def test_workflow_whole_inverse_has_only_two_ordered_additions(self):
-        value = input_lifecycle.inverse_blocks(C.canonical((ROOT / '.github/workflows/build.yml').read_bytes()), '.github/workflows/build.yml').decode()
+        value = inverse_cold_windows_workflow(input_lifecycle.inverse_blocks(C.canonical((ROOT / '.github/workflows/build.yml').read_bytes()), '.github/workflows/build.yml').decode())
         value = inverse_windows_producer_budget(value)
         value = inverse_lifecycle_workflow_checks(value, 'build.yml')
         value = inverse_windows_sdk_source_diagnostics(value, 'build.yml')
@@ -1141,6 +1175,8 @@ class ConcurrencyControls(unittest.TestCase):
             path = ROOT / '.github/workflows' / workflow
             raw = path.read_bytes()
             text = C.canonical(raw).decode()
+            if workflow == 'build.yml':
+                text = inverse_cold_windows_workflow(text)
             with mock.patch.object(subprocess, 'run', forbidden), mock.patch.object(subprocess, 'Popen', forbidden):
                 projected = inverse_uri_workflow_checks(text, workflow)
                 self.assertNotIn('scripts/test-support-uri-routing.py', projected)

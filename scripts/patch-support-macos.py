@@ -62,9 +62,102 @@ OLD_AUTH_EXECUTE = '''        FILE *pipe = NULL;
 NEW_AUTH_EXECUTE = '''        // Mixel: this caller has no stream reader; request no unused pipe.
         status = AuthorizationExecuteWithPrivileges(authRef, process, kAuthorizationFlagDefaults, args, NULL);'''
 
+# Closed authorization-only replacement. The former C execution helper has no
+# non-NULL application caller; Rust's actual elevation path remains independent.
+OLD_AUTHORIZATION = r'''extern "C" bool Elevate(char* process, char** args) {
+    AuthorizationRef authRef;
+    OSStatus status;
+
+    status = AuthorizationCreate(NULL, kAuthorizationEmptyEnvironment,
+                                kAuthorizationFlagDefaults, &authRef);
+    if (status != errAuthorizationSuccess) {
+        printf("Failed to create AuthorizationRef\n");
+        return false;
+    }
+
+    AuthorizationItem authItem = {kAuthorizationRightExecute, 0, NULL, 0};
+    AuthorizationRights authRights = {1, &authItem};
+    AuthorizationFlags flags = kAuthorizationFlagDefaults |
+                                kAuthorizationFlagInteractionAllowed |
+                                kAuthorizationFlagPreAuthorize |
+                                kAuthorizationFlagExtendRights;
+    status = AuthorizationCopyRights(authRef, &authRights, kAuthorizationEmptyEnvironment, flags, NULL);
+    if (status != errAuthorizationSuccess) {
+        printf("Failed to authorize\n");
+        return false;
+    }
+
+    if (process != NULL) {
+        FILE *pipe = NULL;
+        status = AuthorizationExecuteWithPrivileges(authRef, process, kAuthorizationFlagDefaults, args, &pipe);
+        if (status != errAuthorizationSuccess) {
+            printf("Failed to run as root\n");
+            AuthorizationFree(authRef, kAuthorizationFlagDefaults);
+            return false;
+        }
+    }
+
+    AuthorizationFree(authRef, kAuthorizationFlagDefaults);
+    return true;
+}
+
+extern "C" bool MacCheckAdminAuthorization() {
+    return Elevate(NULL, NULL);
+}'''
+NEW_AUTHORIZATION = r'''static bool CheckAdminAuthorization() {
+    AuthorizationRef authRef;
+    OSStatus status;
+
+    status = AuthorizationCreate(NULL, kAuthorizationEmptyEnvironment,
+                                kAuthorizationFlagDefaults, &authRef);
+    if (status != errAuthorizationSuccess) {
+        printf("Failed to create AuthorizationRef\n");
+        return false;
+    }
+
+    AuthorizationItem authItem = {kAuthorizationRightExecute, 0, NULL, 0};
+    AuthorizationRights authRights = {1, &authItem};
+    AuthorizationFlags flags = kAuthorizationFlagDefaults |
+                                kAuthorizationFlagInteractionAllowed |
+                                kAuthorizationFlagPreAuthorize |
+                                kAuthorizationFlagExtendRights;
+    status = AuthorizationCopyRights(authRef, &authRights, kAuthorizationEmptyEnvironment, flags, NULL);
+    if (status != errAuthorizationSuccess) {
+        printf("Failed to authorize\n");
+        // Mixel: cancellation/error still owns the successful-create reference.
+        AuthorizationFree(authRef, kAuthorizationFlagDefaults);
+        return false;
+    }
+
+    AuthorizationFree(authRef, kAuthorizationFlagDefaults);
+    return true;
+}
+
+extern "C" bool MacCheckAdminAuthorization() {
+    return CheckAdminAuthorization();
+}'''
+
+OLD_CONFIG_HELPER = 'static bool setDisplayToMode(CGDirectDisplayID display, CGDisplayModeRef mode) {\n    CGError rc;\n    CGDisplayConfigRef config;\n    rc = CGBeginDisplayConfiguration(&config);\n    if (rc != kCGErrorSuccess) {\n        return false;\n    }\n    rc = CGConfigureDisplayWithDisplayMode(config, display, mode, NULL);\n    if (rc != kCGErrorSuccess) {\n        return false;\n    }\n    rc = CGCompleteDisplayConfiguration(config, kCGConfigureForSession);\n    if (rc != kCGErrorSuccess) {\n        return false;\n    }\n    return true;\n}'
+NEW_CONFIG_HELPER = 'static bool setDisplayToMode(CGDirectDisplayID display, CGDisplayModeRef mode) {\n    CGError rc;\n    CGDisplayConfigRef config;\n    rc = CGBeginDisplayConfiguration(&config);\n    if (rc != kCGErrorSuccess) {\n        return false;\n    }\n    rc = CGConfigureDisplayWithDisplayMode(config, display, mode, NULL);\n    if (rc != kCGErrorSuccess) {\n        // Begin succeeded; only this failure path still owns the config.\n        CGCancelDisplayConfiguration(config);\n        return false;\n    }\n    rc = CGCompleteDisplayConfiguration(config, kCGConfigureForSession);\n    if (rc != kCGErrorSuccess) {\n        return false;\n    }\n    return true;\n}'
+
+OLD_MODE_HELPER = '// https://github.com/jhford/screenresolution/blob/master/cg_utils.c\n// https://github.com/jdoupe/screenres/blob/master/setgetscreen.m\n\nsize_t bitDepth(CGDisplayModeRef mode) {\n    size_t depth = 0;\n    // Deprecated, same display same bpp? \n    // https://stackoverflow.com/questions/8210824/how-to-avoid-cgdisplaymodecopypixelencoding-to-get-bpp\n    // https://github.com/libsdl-org/SDL/pull/6628\n\tCFStringRef pixelEncoding = CGDisplayModeCopyPixelEncoding(mode);\t\n    // my numerical representation for kIO16BitFloatPixels and kIO32bitFloatPixels\t\n    // are made up and possibly non-sensical\t\n    if (kCFCompareEqualTo == CFStringCompare(pixelEncoding, CFSTR(kIO32BitFloatPixels), kCFCompareCaseInsensitive)) {\t\n        depth = 96;\t\n    } else if (kCFCompareEqualTo == CFStringCompare(pixelEncoding, CFSTR(kIO64BitDirectPixels), kCFCompareCaseInsensitive)) {\t\n        depth = 64;\t\n    } else if (kCFCompareEqualTo == CFStringCompare(pixelEncoding, CFSTR(kIO16BitFloatPixels), kCFCompareCaseInsensitive)) {\t\n        depth = 48;\t\n    } else if (kCFCompareEqualTo == CFStringCompare(pixelEncoding, CFSTR(IO32BitDirectPixels), kCFCompareCaseInsensitive)) {\t\n        depth = 32;\t\n    } else if (kCFCompareEqualTo == CFStringCompare(pixelEncoding, CFSTR(kIO30BitDirectPixels), kCFCompareCaseInsensitive)) {\t\n        depth = 30;\t\n    } else if (kCFCompareEqualTo == CFStringCompare(pixelEncoding, CFSTR(IO16BitDirectPixels), kCFCompareCaseInsensitive)) {\t\n        depth = 16;\t\n    } else if (kCFCompareEqualTo == CFStringCompare(pixelEncoding, CFSTR(IO8BitIndexedPixels), kCFCompareCaseInsensitive)) {\t\n        depth = 8;\t\n    }\t\n    CFRelease(pixelEncoding);\t\n    return depth;\t\n}'
+NEW_MODE_HELPER = "// Display suitability is independent of the capture stream's BGRA output.\nstatic bool isUsableDisplayMode(CGDisplayModeRef mode) {\n    return mode != NULL && CGDisplayModeIsUsableForDesktopGUI(mode);\n}"
+OLD_MODE_FILTER = 'bitDepth(currentMode) == bitDepth(mode)'
+NEW_MODE_FILTER = 'isUsableDisplayMode(mode)'
+
 
 def patch_permissions(text):
     original = text
+    if original.count(NEW_CONFIG_HELPER) == 1:
+        original = original.replace(NEW_CONFIG_HELPER, OLD_CONFIG_HELPER, 1)
+    if original.count(NEW_MODE_HELPER) == 1:
+        original = original.replace(NEW_MODE_HELPER, OLD_MODE_HELPER, 1)
+    if original.count(NEW_MODE_FILTER) == 2:
+        original = original.replace(NEW_MODE_FILTER, OLD_MODE_FILTER, 2)
+    if original.count(NEW_AUTHORIZATION) == 1:
+        original = original.replace(NEW_AUTHORIZATION, OLD_AUTHORIZATION, 1)
+    # Accept only exact prior owned failure/pipe fixes before the full upstream
+    # hash check, so an existing corrected checkout upgrades without drift.
     for old, new in ((OLD_PIXEL_ENCODING, NEW_PIXEL_ENCODING),
                      (OLD_AUTH_FAILURE, NEW_AUTH_FAILURE),
                      (OLD_AUTH_EXECUTE, NEW_AUTH_EXECUTE)):
@@ -84,13 +177,15 @@ def patch_permissions(text):
     if original.count(OLD_CAPTURE) != 1 or original.count(OLD_INPUT) != 1:
         raise RuntimeError('Pinned Mac permission call anchors changed')
     fixed = original.replace(OLD_CAPTURE, NEW_CAPTURE, 1).replace(OLD_INPUT, NEW_INPUT, 1)
-    for old, new in ((OLD_PIXEL_ENCODING, NEW_PIXEL_ENCODING),
-                     (OLD_AUTH_FAILURE, NEW_AUTH_FAILURE),
-                     (OLD_AUTH_EXECUTE, NEW_AUTH_EXECUTE)):
+    for old, new in ((OLD_MODE_HELPER, NEW_MODE_HELPER),
+                     (OLD_CONFIG_HELPER, NEW_CONFIG_HELPER),
+                     (OLD_AUTHORIZATION, NEW_AUTHORIZATION)):
         if fixed.count(old) != 1:
             raise RuntimeError('Pinned Mac native failure boundary changed')
         fixed = fixed.replace(old, new, 1)
-    return fixed
+    if fixed.count(OLD_MODE_FILTER) != 2:
+        raise RuntimeError("Pinned Mac display mode filter changed")
+    return fixed.replace(OLD_MODE_FILTER, NEW_MODE_FILTER, 2)
 
 
 def patch_runtime(text):
@@ -160,7 +255,7 @@ def apply(repo, architecture=None):
     for path, text in changes.items():
         with path.open('w', encoding='utf-8', newline='\n') as out:
             out.write(text)
-    print('   patched native Mac permission availability, nullable display metadata and authorization ownership' + ('; aligned ' + architecture + ' core/Runner/advertised minimum' if architecture else ''))
+    print('   patched native Mac permission availability, desktop-usable display modes and authorization ownership' + ('; aligned ' + architecture + ' core/Runner/advertised minimum' if architecture else ''))
 
 
 if __name__ == '__main__':

@@ -59,6 +59,21 @@ BUDGET_CONTROL_CHANGES = (
 EARLY_GATE_PAIR = {**BUDGET_PAIR, 'scripts/test-support-launch-macos-concurrency-controls.py': '49114e6cb8c25070337b6c52df23caeda308f909633a45853881c65a379abd3c'}
 EARLY_GATE_CONTROL_CHANGES = [("        raise AssertionError('Exact Windows producer outer 240-minute budget context changed')\n    return text.replace(exact, before + '    timeout-minutes: 180\\n' + after, 1)\n\n\n", '        raise AssertionError(\'Exact Windows producer outer 240-minute budget context changed\')\n    return text.replace(exact, before + \'    timeout-minutes: 180\\n\' + after, 1)\n\n\ndef inverse_early_windows_lease_gate(text):\n    """Unit-only inverse of the exact early private fixture gate and upload."""\n    before = "      - uses: dtolnay/rust-toolchain@v1\\n        with:\\n          toolchain: \'1.75\'\\n"\n    addition = "      - name: Prove early Windows acknowledgment publication\\n        timeout-minutes: 3\\n        shell: pwsh\\n        run: |\\n          ./scripts/activate-windows-msvc.ps1 -ExportToGitHubEnvironment\\n          python scripts/test-support-lease-ack.py\\n          if ($LASTEXITCODE -ne 0) { throw \'Actual Windows acknowledgment controls failed.\' }\\n      - name: Prove early actual standard-token lease lifecycle\\n        timeout-minutes: 5\\n        shell: pwsh\\n        run: |\\n          $env:MIXEL_HOSTED_OWNED_QA_NAMESPACE=\'1\'\\n          ./scripts/invoke-hosted-standard-qa-windows.ps1 -EvidenceDirectory (Join-Path $env:RUNNER_TEMP \'mixel-early-standard-qa\')\\n      - name: Preserve early Windows standard-token lifecycle evidence\\n        if: always()\\n        uses: actions/upload-artifact@v6\\n        with:\\n          name: windows-lease-ack-early\\n          path: ${{ runner.temp }}/mixel-early-standard-qa/\\n          if-no-files-found: ignore\\n          retention-days: 14\\n"\n    after = \'      - uses: subosito/flutter-action@v2\\n\'\n    exact = before + addition + after\n    if text.count(addition) != 1 or text.count(exact) != 1:\n        raise AssertionError(\'Exact early Windows lease gate changed, moved or duplicated\')\n    return text.replace(exact, before + after, 1)\n\n\n', 1), ("        text = C.canonical((ROOT / '.github/workflows/preflight.yml').read_bytes()).decode()\n        text = inverse_lifecycle_workflow_checks(text, 'preflight.yml')\n        text = inverse_windows_preflight_budget(text)\n        text = inverse_windows_sdk_source_diagnostics(text, 'preflight.yml')\n", "        text = C.canonical((ROOT / '.github/workflows/preflight.yml').read_bytes()).decode()\n        text = inverse_lifecycle_workflow_checks(text, 'preflight.yml')\n        text = inverse_early_windows_lease_gate(text)\n        text = inverse_windows_preflight_budget(text)\n        text = inverse_windows_sdk_source_diagnostics(text, 'preflight.yml')\n", 1)]
 
+COLD_WINDOWS_PAIR = {**EARLY_GATE_PAIR, 'scripts/test-support-launch-macos-concurrency-controls.py': 'f0e7a348e29fe9a7b4dc605fdcb376ab41d8e23e4eebe6aef9e5bc8de03512c5'}
+COLD_WINDOWS_CONTROL_INVERSE = (("            raise AssertionError('Exact URI workflow check count/order/placement changed: ' + workflow)\n        text = text.replace(current, before + after, count)\n    return text\n\n\ndef inverse_windows_producer_budget(text):\n", '            raise AssertionError(\'Exact URI workflow check count/order/placement changed: \' + workflow)\n        text = text.replace(current, before + after, count)\n    return text\n\n\ndef cold_windows_workflow_projection():\n    """Unit-only exact current cold gate; historical workflow hashes stay fixed."""\n    return (\'      - name: Exercise the signed portable customer download\\n        shell: pwsh\\n        run: |\\n          ./scripts/test-support-launch-windows.ps1 -Executable dist/Mixel-Remote-Support-Windows.exe -Portable -ExpectedPayload store-payload\\n\\n\', \'      - name: Prove cold signed QuickSupport starts as a fresh Standard user without UAC\\n        timeout-minutes: 8\\n        shell: pwsh\\n        env:\\n          MIXEL_HOSTED_OWNED_QA_NAMESPACE: "1"\\n        run: |\\n          python scripts/test-support-uri-routing.py --cold-source-controls\\n          if ($LASTEXITCODE -ne 0) { throw \\\'Cold Standard source controls failed.\\\' }\\n          ./scripts/test-support-cold-windows.ps1 -Executable dist/Mixel-Remote-QS.exe -ExpectedPayload store-payload -EvidenceDirectory (Join-Path $env:RUNNER_TEMP \\\'mixel-owned-ordinary-qs-logs/cold-support\\\')\\n\\n\', \'      - name: Exercise the signed QuickSupport download without an invite\\n\', \'          name: windows-customer-launch-logs\\n\', \'          path: ${{ runner.temp }}/mixel-owned-ordinary-qs-logs/**/*.log\\n\', \'          path: |\\n            ${{ runner.temp }}/mixel-owned-ordinary-qs-logs/**/*.log\\n            ${{ runner.temp }}/mixel-owned-ordinary-qs-logs/cold-support/*.json\\n\', \'          if-no-files-found: ignore\\n\')\n\n\ndef inverse_cold_windows_workflow(text):\n    before, addition, after, log_before, old_log, new_log, log_after = cold_windows_workflow_projection()\n    if (text.count(addition) != 1 or text.count(before + addition + after) != 1\n            or text.count(new_log) != 1 or text.count(log_before + new_log + log_after) != 1):\n        raise AssertionError(\'Exact required cold Standard Windows step/log binding changed, moved or duplicated\')\n    return text.replace(before + addition + after, before + after, 1).replace(new_log, old_log, 1)\n\n\ndef inverse_windows_producer_budget(text):\n'), ("        with self.assertRaises(AssertionError):\n            inverse_lifecycle_workflow_checks('', 'foreign.yml')\n\n    def test_windows_producer_budget_has_only_one_exact_outer_job_change(self):\n        current = input_lifecycle.inverse_blocks(_lifecycle_projection.inverse_sdk_compatibility_retention(C.canonical((ROOT / '.github/workflows/build.yml').read_bytes()).decode(), 'build.yml').encode(), '.github/workflows/build.yml').decode()\n        budget_only = inverse_windows_producer_budget(current)\n        early = _lifecycle_projection.early_windows_lifecycle()\n        self.assertEqual(budget_only.count(early), 1)\n", "        with self.assertRaises(AssertionError):\n            inverse_lifecycle_workflow_checks('', 'foreign.yml')\n\n    def test_cold_windows_whole_workflow_inverse_refuses_partial_moved_or_optional_gate(self):\n        text = C.canonical((ROOT / '.github/workflows/build.yml').read_bytes()).decode()\n        before, addition, after, log_before, old_log, new_log, log_after = cold_windows_workflow_projection()\n        baseline = inverse_cold_windows_workflow(text)\n        self.assertEqual(text.replace(addition, '', 1).replace(new_log, old_log, 1), baseline)\n        for changed in (\n                text.replace(addition, '', 1),\n                text.replace(addition, addition * 2, 1),\n                text.replace(before + addition + after, before + after + addition, 1),\n                text.replace(addition, addition.replace('        timeout-minutes: 8\\n', '        timeout-minutes: 7\\n'), 1),\n                text.replace(addition, addition.replace('        shell: pwsh\\n', '        continue-on-error: true\\n        shell: pwsh\\n'), 1),\n                text.replace(addition, addition.replace('        shell: pwsh\\n', '        if: false\\n        shell: pwsh\\n'), 1),\n                text.replace(new_log, old_log, 1),\n                text.replace(new_log, new_log * 2, 1),\n                text.replace(log_before + new_log + log_after, new_log + log_before + log_after, 1),\n                text.replace(new_log, new_log.replace('cold-support', 'foreign'), 1)):\n            with self.subTest(digest=hashlib.sha256(changed.encode()).hexdigest()), self.assertRaises(AssertionError):\n                inverse_cold_windows_workflow(changed)\n        with self.assertRaises(AssertionError):\n            inverse_cold_windows_workflow(baseline)\n\n    def test_windows_producer_budget_has_only_one_exact_outer_job_change(self):\n        current = inverse_cold_windows_workflow(input_lifecycle.inverse_blocks(_lifecycle_projection.inverse_sdk_compatibility_retention(C.canonical((ROOT / '.github/workflows/build.yml').read_bytes()).decode(), 'build.yml').encode(), '.github/workflows/build.yml').decode())\n        budget_only = inverse_windows_producer_budget(current)\n        early = _lifecycle_projection.early_windows_lifecycle()\n        self.assertEqual(budget_only.count(early), 1)\n"), ("        self.assertEqual(dispatcher.count('python scripts/test-support-file-dialog-lifecycle.py --source '), 1)\n\n    def test_workflow_whole_inverse_has_only_two_ordered_additions(self):\n        value = input_lifecycle.inverse_blocks(C.canonical((ROOT / '.github/workflows/build.yml').read_bytes()), '.github/workflows/build.yml').decode()\n        value = inverse_windows_producer_budget(value)\n        value = inverse_lifecycle_workflow_checks(value, 'build.yml')\n        value = inverse_windows_sdk_source_diagnostics(value, 'build.yml')\n", "        self.assertEqual(dispatcher.count('python scripts/test-support-file-dialog-lifecycle.py --source '), 1)\n\n    def test_workflow_whole_inverse_has_only_two_ordered_additions(self):\n        value = inverse_cold_windows_workflow(input_lifecycle.inverse_blocks(C.canonical((ROOT / '.github/workflows/build.yml').read_bytes()), '.github/workflows/build.yml').decode())\n        value = inverse_windows_producer_budget(value)\n        value = inverse_lifecycle_workflow_checks(value, 'build.yml')\n        value = inverse_windows_sdk_source_diagnostics(value, 'build.yml')\n"), ("            path = ROOT / '.github/workflows' / workflow\n            raw = path.read_bytes()\n            text = C.canonical(raw).decode()\n            with mock.patch.object(subprocess, 'run', forbidden), mock.patch.object(subprocess, 'Popen', forbidden):\n                projected = inverse_uri_workflow_checks(text, workflow)\n                self.assertNotIn('scripts/test-support-uri-routing.py', projected)\n", "            path = ROOT / '.github/workflows' / workflow\n            raw = path.read_bytes()\n            text = C.canonical(raw).decode()\n            if workflow == 'build.yml':\n                text = inverse_cold_windows_workflow(text)\n            with mock.patch.object(subprocess, 'run', forbidden), mock.patch.object(subprocess, 'Popen', forbidden):\n                projected = inverse_uri_workflow_checks(text, workflow)\n                self.assertNotIn('scripts/test-support-uri-routing.py', projected)\n"))
+
+def inverse_current_cold_windows_controls(data):
+    controls = 'scripts/test-support-launch-macos-concurrency-controls.py'
+    v.require(v.sha(data) == COLD_WINDOWS_PAIR[controls], 'unit-fixture-exact-cold-windows-controls')
+    text = data.decode('utf-8')
+    for original, current in COLD_WINDOWS_CONTROL_INVERSE:
+        v.require(text.count(current) == 1, 'unit-fixture-exact-cold-windows-inverse-literal')
+        text = text.replace(current, original, 1)
+    data = text.encode('utf-8')
+    v.require(v.sha(data) == EARLY_GATE_PAIR[controls], 'unit-fixture-exact-cold-windows-whole-inverse')
+    return data
+
+
 def inverse_current_early_gate_controls(data):
     controls = 'scripts/test-support-launch-macos-concurrency-controls.py'
     v.require(v.sha(data) == EARLY_GATE_PAIR[controls], 'unit-fixture-exact-early-gate-controls')
@@ -141,6 +156,9 @@ def inverse_current_fixture_pair(sources):
     observed = {name: v.sha(sources[name]) for name in HISTORICAL_PAIR}
     if observed == HISTORICAL_PAIR:
         return dict(sources), 'exact-original708'
+    if observed == COLD_WINDOWS_PAIR:
+        sources = {**sources, controls: inverse_current_cold_windows_controls(sources[controls])}
+        observed = {name: v.sha(sources[name]) for name in HISTORICAL_PAIR}
     if observed == EARLY_GATE_PAIR:
         sources = {**sources, controls: inverse_current_early_gate_controls(sources[controls])}
         observed = {name: v.sha(sources[name]) for name in HISTORICAL_PAIR}
@@ -318,6 +336,20 @@ class HistoricalSourceFixtureControls(unittest.TestCase):
             path.chmod(provenance['rawMode'])
         return destination
 
+    def test_current_cold_windows_unit_view_whole_inverse_and_drift_refusal(self):
+        name = 'scripts/test-support-launch-macos-concurrency-controls.py'
+        data = (PIPELINE_ROOT / name).read_bytes().replace(b'\r\n', b'\n')
+        original = inverse_current_cold_windows_controls(data)
+        self.assertEqual(v.sha(original), EARLY_GATE_PAIR[name])
+        self.assertEqual(v.sha(data), COLD_WINDOWS_PAIR[name])
+        for malformed in (data + b'# drift\n', data[:-1], original):
+            with self.subTest(digest=v.sha(malformed)), self.assertRaises(v.Refusal):
+                inverse_current_cold_windows_controls(malformed)
+        for before, current in COLD_WINDOWS_CONTROL_INVERSE:
+            malformed = data.replace(current.encode(), before.encode(), 1)
+            with self.subTest(partial=v.sha(malformed)), self.assertRaises(v.Refusal):
+                inverse_current_cold_windows_controls(malformed)
+
     def test_exact_original_pair_remains_accepted_with_unchanged_hashes(self):
         inputs = self.inputs('exact-original')
         for relative in HISTORICAL_PAIR:
@@ -356,7 +388,7 @@ class HistoricalSourceFixtureControls(unittest.TestCase):
         inputs = self.inputs('exact-previous-current')
         relative = 'scripts/test-support-launch-macos-concurrency-controls.py'
         path = inputs / relative
-        path.write_bytes(inverse_current_budget_controls(inverse_current_early_gate_controls(path.read_bytes())))
+        path.write_bytes(inverse_current_budget_controls(inverse_current_early_gate_controls(inverse_current_cold_windows_controls(path.read_bytes()))))
         self.assertEqual(v.sha(path.read_bytes()), CURRENT_PAIR[relative])
         output = self.root / 'view-previous-current'
         receipt = historical_source_fixture(inputs, output)
@@ -367,6 +399,7 @@ class HistoricalSourceFixtureControls(unittest.TestCase):
     def test_exact_early_gate_inverse_and_previous_budget_pair_stay_closed(self):
         relative = 'scripts/test-support-launch-macos-concurrency-controls.py'
         current, _ = fixture_logical_source(PIPELINE_ROOT, relative)
+        current = inverse_current_cold_windows_controls(current)
         self.assertEqual(v.sha(current), EARLY_GATE_PAIR[relative])
         budget = inverse_current_early_gate_controls(current)
         self.assertEqual(v.sha(budget), BUDGET_PAIR[relative])
@@ -387,6 +420,7 @@ class HistoricalSourceFixtureControls(unittest.TestCase):
     def test_exact_budget_inverse_rejects_partial_historical_and_foreign_controls(self):
         relative = 'scripts/test-support-launch-macos-concurrency-controls.py'
         current, _ = fixture_logical_source(PIPELINE_ROOT, relative)
+        current = inverse_current_cold_windows_controls(current)
         current = inverse_current_early_gate_controls(current)
         self.assertEqual(v.sha(current), BUDGET_PAIR[relative])
         previous = inverse_current_budget_controls(current)

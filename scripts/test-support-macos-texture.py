@@ -44,6 +44,132 @@ def run(args, output, name):
     return result.stdout
 
 
+# Exact public headers mapped into FlutterMacOS by engine framework_common.gni.
+# The tiny module wrapper used below is a fixture, not a complete Flutter SDK.
+FLUTTER_ENGINE = "82bd5b7209295a5b7ff8cae0df96e7870171e3a5"
+FLUTTER_HEADERS = {
+    'FlutterTexture.h': ('25ca4de1af6cbfac729e50f7462eb5d4de72f87a2ea545a9da1cab21707f23c6', r"""// Copyright 2013 The Flutter Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+#ifndef FLUTTER_SHELL_PLATFORM_DARWIN_COMMON_FRAMEWORK_HEADERS_FLUTTERTEXTURE_H_
+#define FLUTTER_SHELL_PLATFORM_DARWIN_COMMON_FRAMEWORK_HEADERS_FLUTTERTEXTURE_H_
+
+#import <CoreMedia/CoreMedia.h>
+#import <Foundation/Foundation.h>
+
+#import "FlutterMacros.h"
+
+NS_ASSUME_NONNULL_BEGIN
+
+FLUTTER_DARWIN_EXPORT
+/**
+ * Represents a texture that can be shared with Flutter.
+ *
+ * See also: https://github.com/flutter/plugins/tree/master/packages/camera
+ */
+@protocol FlutterTexture <NSObject>
+/**
+ * Copy the contents of the texture into a `CVPixelBuffer`.
+ *
+ * The type of the pixel buffer is one of the following:
+ * - `kCVPixelFormatType_32BGRA`
+ * - `kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange`
+ * - `kCVPixelFormatType_420YpCbCr8BiPlanarFullRange`
+ */
+- (CVPixelBufferRef _Nullable)copyPixelBuffer;
+
+/**
+ * Called when the texture is unregistered.
+ *
+ * Called on the raster thread.
+ */
+@optional
+- (void)onTextureUnregistered:(NSObject<FlutterTexture>*)texture;
+@end
+
+FLUTTER_DARWIN_EXPORT
+/**
+ * A collection of registered `FlutterTexture`'s.
+ */
+@protocol FlutterTextureRegistry <NSObject>
+/**
+ * Registers a `FlutterTexture` for usage in Flutter and returns an id that can be used to reference
+ * that texture when calling into Flutter with channels. Textures must be registered on the
+ * platform thread. On success returns the pointer to the registered texture, else returns 0.
+ */
+- (int64_t)registerTexture:(NSObject<FlutterTexture>*)texture;
+/**
+ * Notifies Flutter that the content of the previously registered texture has been updated.
+ *
+ * This will trigger a call to `-[FlutterTexture copyPixelBuffer]` on the raster thread.
+ */
+- (void)textureFrameAvailable:(int64_t)textureId;
+/**
+ * Unregisters a `FlutterTexture` that has previously regeistered with `registerTexture:`. Textures
+ * must be unregistered on the platform thread.
+ *
+ * @param textureId The result that was previously returned from `registerTexture:`.
+ */
+- (void)unregisterTexture:(int64_t)textureId;
+@end
+
+NS_ASSUME_NONNULL_END
+
+#endif  // FLUTTER_SHELL_PLATFORM_DARWIN_COMMON_FRAMEWORK_HEADERS_FLUTTERTEXTURE_H_
+"""),
+    'FlutterMacros.h': ('79b0551d265c52701b378851718ab7b6db7afbecf561b73c2954988554e80f99', r"""// Copyright 2013 The Flutter Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+#ifndef FLUTTER_SHELL_PLATFORM_DARWIN_COMMON_FRAMEWORK_HEADERS_FLUTTERMACROS_H_
+#define FLUTTER_SHELL_PLATFORM_DARWIN_COMMON_FRAMEWORK_HEADERS_FLUTTERMACROS_H_
+
+#if defined(FLUTTER_FRAMEWORK)
+
+#define FLUTTER_DARWIN_EXPORT __attribute__((visibility("default")))
+
+#else  // defined(FLUTTER_SDK)
+
+#define FLUTTER_DARWIN_EXPORT
+
+#endif  // defined(FLUTTER_SDK)
+
+#ifndef NS_ASSUME_NONNULL_BEGIN
+#define NS_ASSUME_NONNULL_BEGIN _Pragma("clang assume_nonnull begin")
+#define NS_ASSUME_NONNULL_END _Pragma("clang assume_nonnull end")
+#endif  // defined(NS_ASSUME_NONNULL_BEGIN)
+
+/**
+ * Indicates that the API has been deprecated for the specified reason. Code
+ * that uses the deprecated API will continue to work as before. However, the
+ * API will soon become unavailable and users are encouraged to immediately take
+ * the appropriate action mentioned in the deprecation message and the BREAKING
+ * CHANGES section present in the Flutter.h umbrella header.
+ */
+#define FLUTTER_DEPRECATED(msg) __attribute__((__deprecated__(msg)))
+
+/**
+ * Indicates that the previously deprecated API is now unavailable. Code that
+ * uses the API will not work and the declaration of the API is only a stub
+ * meant to display the given message detailing the actions for the user to take
+ * immediately.
+ */
+#define FLUTTER_UNAVAILABLE(msg) __attribute__((__unavailable__(msg)))
+
+#if __has_feature(objc_arc)
+#define FLUTTER_ASSERT_ARC
+#define FLUTTER_ASSERT_NOT_ARC #error ARC must be disabled !
+#else
+#define FLUTTER_ASSERT_ARC #error ARC must be enabled !
+#define FLUTTER_ASSERT_NOT_ARC
+#endif
+
+#endif  // FLUTTER_SHELL_PLATFORM_DARWIN_COMMON_FRAMEWORK_HEADERS_FLUTTERMACROS_H_
+"""),
+}
+
+
 def original_source(repo):
     return {name: subprocess.check_output(["git", "-C", str(repo), "show", "HEAD:" + name]) for name in FILES}
 
@@ -70,7 +196,7 @@ def materialization_controls(output, originals, files):
         P.apply(root)
         assert fetch.call_count == 1 and snapshot(root) == first
     target = root / "flutter" / P.DEPENDENCY
-    assert len(P.existing_files(target)) == 98
+    assert len(P.existing_files(target)) == 98 + len(P.OWNED)
     checks = 0
     for name in ("src/flutter.rs", "src/flutter_ffi.rs", "flutter/lib/web/bridge.dart", "flutter/lib/models/desktop_render_texture.dart", "flutter/pubspec.yaml"):
         owned = output / f"drift-{checks}"
@@ -176,17 +302,115 @@ def materialization_controls(output, originals, files):
         else:
             raise AssertionError("failed network silently accepted")
         assert call.call_count == 3
-    print(f"PASS: pinned98 source inventory/owned materialization/idempotence; {checks + 2} drift/path/fetch refusal controls before source writes")
+    print(f"PASS: pinned98 source inventory plus exact two-file base/owned100 materialization/idempotence; {checks + 2} drift/path/fetch refusal controls before source writes")
     return root
 
 
-def adapter_controls(output, files):
+def ownership_source_controls(output, files):
+    original = files[P.TEXT].decode()
+    fixed = P.patch_frame(original)
+    assert P.patch_frame(fixed) == fixed and P.unpatch_frame(fixed) == original
+    previous = fixed.replace(P.NEW_TEXTURE_BASE, P.OLD_TEXTURE_BASE, 1).replace(P.NEW_PIXEL_COPY, P.OLD_PIXEL_COPY, 1)
+    assert P.patch_frame(previous) == fixed and P.unpatch_frame(previous) == original
+    inverse = fixed.replace(P.NEW_TEXTURE_BASE, P.OLD_TEXTURE_BASE, 1).replace(P.NEW_PIXEL_COPY, P.OLD_PIXEL_COPY, 1)
+    assert inverse == original.replace(P.OLD_FRAME, P.NEW_FRAME, 1).replace(P.OLD_DATA, P.NEW_DATA, 1)
+    assert 'Unmanaged.passRetained(data!).toOpaque()' in P.NEW_PIXEL_COPY
+    assert P.NEW_PIXEL_COPY.replace('    public override func retainedPixelBufferPointer() -> UnsafeMutableRawPointer? {', '    public func copyPixelBuffer() -> Unmanaged<CVPixelBuffer>? {').replace('.toOpaque()', '') == P.OLD_PIXEL_COPY
+    for name, (digest, body) in FLUTTER_HEADERS.items():
+        assert P.sha(body.encode()) == digest, 'Exact engine public header changed: ' + name
+    assert '- (CVPixelBufferRef _Nullable)copyPixelBuffer;' in FLUTTER_HEADERS['FlutterTexture.h'][1]
+    header = P.OWNED['macos/Classes/MixelTextureBase.h']
+    implementation = P.OWNED['macos/Classes/MixelTextureBase.m']
+    assert '<FlutterMacOS/FlutterTexture.h>' in header and ': NSObject <FlutterTexture>' in header
+    assert '- (CVPixelBufferRef)copyPixelBuffer {' in implementation
+    assert 'return (CVPixelBufferRef)[self retainedPixelBufferPointer];' in implementation
+    assert not any(word in implementation for word in ('CFRetain', 'CFRelease', '@property', '__strong', '__weak'))
+    mutations = [original + '\n', fixed.replace('passRetained', 'passUnretained', 1),
+                 fixed.replace('queue.sync {', 'queue.async {', 1),
+                 fixed.replace(P.NEW_TEXTURE_BASE, P.OLD_TEXTURE_BASE, 1),
+                 fixed.replace(P.NEW_PIXEL_COPY, P.OLD_PIXEL_COPY, 1),
+                 fixed.replace(P.NEW_PIXEL_COPY, P.NEW_PIXEL_COPY * 2, 1),
+                 fixed.replace(P.NEW_TEXTURE_BASE, P.NEW_TEXTURE_BASE * 2, 1),
+                 fixed.replace('.toOpaque()', '.toOpaque()!', 1)]
+    for changed in mutations:
+        try:
+            P.patch_frame(changed)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError('Partial/changed retained-return source accepted')
+    api = P.patch_api(files[P.API].decode())
+    assert api.count(P.NEW_API_IMPORT) == 1
+    assert api.index('#import "MixelTextureBase.h"') < api.index(P.OLD_API_IMPORT)
+    assert P.unpatch_api(api) == files[P.API].decode()
+    root = output / 'materialization'
+    cases = (
+        ('missing-base-header', lambda d: (d / 'macos/Classes/MixelTextureBase.h').unlink()),
+        ('missing-base-implementation', lambda d: (d / 'macos/Classes/MixelTextureBase.m').unlink()),
+        ('base-extra-retain', lambda d: (d / 'macos/Classes/MixelTextureBase.m').write_text(implementation.replace('return (CVPixelBufferRef)', 'return (CVPixelBufferRef)CFRetain', 1))),
+        ('base-extra-release', lambda d: (d / 'macos/Classes/MixelTextureBase.m').write_text(implementation + '\nCFRelease(NULL);\n')),
+        ('base-changed-header', lambda d: (d / 'macos/Classes/MixelTextureBase.h').write_text(header + '\n')),
+        ('base-symlink', lambda d: ((d / 'macos/Classes/MixelTextureBase.m').unlink(), (d / 'macos/Classes/MixelTextureBase.m').symlink_to(root / 'flutter' / P.DEPENDENCY / 'macos/Classes/MixelTextureBase.m'))),
+        ('base-hardlink', lambda d: ((d / 'macos/Classes/MixelTextureBase.m').unlink(), os.link(root / 'flutter' / P.DEPENDENCY / 'macos/Classes/MixelTextureBase.m', d / 'macos/Classes/MixelTextureBase.m'))),
+        ('base-import-missing', lambda d: (d / P.API).write_text((d / P.API).read_text().replace(P.NEW_API_IMPORT, P.OLD_API_IMPORT, 1))),
+        ('base-partial-class', lambda d: (d / P.TEXT).write_text((d / P.TEXT).read_text().replace(P.NEW_TEXTURE_BASE, P.OLD_TEXTURE_BASE, 1))),
+        ('base-partial-hook', lambda d: (d / P.TEXT).write_text((d / P.TEXT).read_text().replace(P.NEW_PIXEL_COPY, P.OLD_PIXEL_COPY, 1))),
+    )
+    for label, mutate in cases:
+        case = output / label
+        shutil.copytree(root, case)
+        target = case / 'flutter' / P.DEPENDENCY
+        mutate(target)
+        before = snapshot(case)
+        modes = {x.relative_to(case).as_posix(): x.stat().st_mode for x in case.rglob('*')}
+        with patch.object(P, 'fetch_source', side_effect=AssertionError('Changed bridge fetched')):
+            try:
+                P.apply(case)
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError(label + ' accepted')
+        assert snapshot(case) == before
+        assert {x.relative_to(case).as_posix(): x.stat().st_mode for x in case.rglob('*')} == modes
+        if label == 'base-hardlink':
+            (target / 'macos/Classes/MixelTextureBase.m').unlink()
+    old_case = output / 'old-owned98-refuses-bridge-migration'
+    shutil.copytree(root, old_case)
+    old_target = old_case / 'flutter' / P.DEPENDENCY
+    for name in P.OWNED:
+        (old_target / name).unlink()
+    (old_target / P.TEXT).write_text(previous)
+    (old_target / P.API).write_text(api.replace(P.NEW_API_IMPORT, P.OLD_API_IMPORT, 1))
+    before = snapshot(old_case)
+    modes = {x.relative_to(old_case).as_posix(): x.stat().st_mode for x in old_case.rglob('*')}
+    with patch.object(P, 'fetch_source', side_effect=AssertionError('Old bridge profile fetched')):
+        try:
+            P.apply(old_case)
+        except RuntimeError as error:
+            assert str(error) == 'Owned renderer retained-return bridge missing or changed; reprovision fresh source from pinned upstream'
+        else:
+            raise AssertionError('Old owned98 migrated in place')
+    assert snapshot(old_case) == before
+    assert {x.relative_to(old_case).as_posix(): x.stat().st_mode for x in old_case.rglob('*')} == modes
+    (output / 'ownership-source-proof.json').write_text(json.dumps({
+        'result': 'passed', 'exact_original98_inventory': P.INVENTORY_SHA,
+        'new_owned_base_files': {name: P.sha(body.encode()) for name, body in P.OWNED.items()},
+        'original_Swift': P.sha(original.encode()), 'corrected_Swift': P.sha(fixed.encode()),
+        'source_drift_refusals': len(mutations), 'owned_path_content_refusals': len(cases),
+        'old_owned98_refused_without_writes': True, 'whole_inverse': True,
+        'exact_public_headers': {name: digest for name, (digest, _) in FLUTTER_HEADERS.items()},
+        'scope': 'Python-only source/materialization checks; no compiler/native/app qualification'
+    }, indent=2) + '\n')
+    print('PASS: retained-return full inverse/idempotence; eight source and ten owned path/content refusals; old owned98 refuses before writes; exact Flutter protocol/macros pins; serial queue/passRetained/BOOL/row and owner-retirement source conserved')
+
+
+def adapter_controls(output, files, *, native=True):
     output = Path(output).resolve(strict=True)
     original = files[P.API].decode()
     corrected = P.patch_api(original)
     assert P.sha(original.encode()) == P.API_SHA
     assert P.patch_api(corrected) == corrected and P.unpatch_api(corrected) == original
-    assert corrected.replace(P.NEW_API_CALL, P.OLD_API_CALL, 1) == original
+    assert corrected.replace(P.NEW_API_CALL, P.OLD_API_CALL, 1).replace(P.NEW_API_IMPORT, P.OLD_API_IMPORT, 1) == original
     for mutation in (original + "\n", original.replace("int len", "long len", 1),
                      original.replace("\n", "\r\n"), corrected.replace("return;", "return 0;", 1),
                      corrected.replace(P.NEW_API_CALL, P.NEW_API_CALL * 2, 1)):
@@ -232,7 +456,7 @@ def adapter_controls(output, files):
             portable_before = snapshot(portable)
             P.apply(portable)
             assert fetch.call_count == 1 and snapshot(portable) == portable_before
-            assert len(P.existing_files(portable / "flutter" / P.DEPENDENCY)) == 98
+            assert len(P.existing_files(portable / "flutter" / P.DEPENDENCY)) == 98 + len(P.OWNED)
     for label, mutate in (
         ("adapter-drift", lambda p: p.write_text(p.read_text().replace("int len", "long len", 1))),
         ("adapter-symlink", lambda p: (p.unlink(), p.symlink_to(target / P.API))),
@@ -253,13 +477,14 @@ def adapter_controls(output, files):
         assert snapshot(case) == before_case
         if label == "adapter-hardlink":
             member.unlink()
-    print("PASS: exact C adapter inverse/idempotence/five drift refusals; oldowned98 refuses before any write with all bytes/modes preserved under present/absent dir-fd primitives; fresh98 materialization/corrected idempotence pass both; adapter drift/symlink/hardlink refuse")
-    if sys.platform != "darwin":
-        print("SOURCE SCOPE: actual SDK Objective-C adapter controls require macOS")
+    print("PASS: exact C adapter inverse/idempotence/five drift refusals; previous adapter refuses before any write with all bytes/modes preserved under present/absent dir-fd primitives; fresh owned100 materialization/corrected idempotence pass both; adapter drift/symlink/hardlink refuse")
+    if sys.platform != "darwin" or not native:
+        print("SOURCE SCOPE: actual SDK Objective-C adapter controls require macOS and explicit compiler admission")
         return
     folder = output / "objc-adapter"
     include = folder / "texture_rgba_renderer"
     include.mkdir(parents=True)
+    (folder / "MixelTextureBase.h").write_text("// Adapter-only fixture; real base/public headers are exercised below.\n")
     header = include / "texture_rgba_renderer-Swift.h"
     header.write_text(r"""#import <Foundation/Foundation.h>
 @interface TextRgba : NSObject
@@ -318,46 +543,83 @@ int main(void) { @autoreleasepool {
     run(flags + [str(fixed), str(harness), "-framework", "Foundation", "-o", str(executable)], folder, "link.log")
     print(run([str(executable)], folder, "runtime.log").strip())
     print("PASS: original adapter reproduces unused-result error; corrected adapter compiles against Apple SDK in Objective-C and Objective-C++ for arm64/macOS12.3 and x86_64/macOS10.14")
-    # Emit a real Apple Swift Objective-C header from the actual corrected
-    # TextRgba body. Only Flutter's external protocol/registry are fixture types;
-    # CoreVideo, queue, copy/retain and frame implementation remain real.
+    # The actual pinned public protocol and macro bytes, with a tiny module map,
+    # exercise the real ObjC base. This is not a full Flutter framework build.
     real = folder / "actual-swift"
     (real / "texture_rgba_renderer").mkdir(parents=True)
+    public = real / "FlutterMacOS"
+    public.mkdir()
+    for name, (digest, body) in FLUTTER_HEADERS.items():
+        assert P.sha(body.encode()) == digest
+        (public / name).write_text(body)
+    (public / "module.modulemap").write_text('module FlutterMacOS { header "FlutterTexture.h" export * }\n')
+    for name, body in P.OWNED.items():
+        (real / Path(name).name).write_text(body)
+    registry_header = real / "ActualRegistry.h"
+    registry_header.write_text(r"""#import <FlutterMacOS/FlutterTexture.h>
+@interface MixelTestTextureRegistry : NSObject <FlutterTextureRegistry>
+@property(nonatomic) NSInteger frames;
+@end
+""")
+    registry_impl = real / "ActualRegistry.m"
+    registry_impl.write_text(r"""#import "ActualRegistry.h"
+#include <assert.h>
+@implementation MixelTestTextureRegistry
+- (int64_t)registerTexture:(NSObject<FlutterTexture>*)texture { assert(texture); return 1; }
+- (void)textureFrameAvailable:(int64_t)textureId { assert(textureId == 1); self.frames++; }
+- (void)unregisterTexture:(int64_t)textureId { assert(textureId == 1); }
+@end
+""")
+    bridge = real / "adapter.h"
+    bridge.write_text('#import "MixelTextureBase.h"\n#import "ActualRegistry.h"\n#include <stdint.h>\nvoid FlutterRgbaRendererPluginOnRgba(void *, const uint8_t *, int, int, int, int);\n')
+    real_flags = ["xcrun", "clang", "-fobjc-arc", "-fmodules", "-Werror=unused-result", "-Werror=ignored-attributes", "-I", str(real)]
+    base_object = real / "base.o"
+    registry_object = real / "registry.o"
+    run(real_flags + ["-c", str(real / "MixelTextureBase.m"), "-o", str(base_object)], real, "actual-base-compile.log")
+    run(real_flags + ["-c", str(registry_impl), "-o", str(registry_object)], real, "actual-registry-compile.log")
     text = P.patch_frame(files[P.TEXT].decode())
-    assert text.count("import FlutterMacOS\n") == 1
-    stubs = """import Foundation
-import CoreVideo
-@objc public protocol FlutterTexture { func copyPixelBuffer() -> Unmanaged<CVPixelBuffer>? }
-public protocol FlutterTextureRegistry {
-    func register(_ texture: FlutterTexture) -> Int64
-    func textureFrameAvailable(_ id: Int64)
-}
-"""
     swift = real / "TextRgba.swift"
-    swift.write_text(stubs + text.replace("import FlutterMacOS\n", "", 1))
+    swift.write_text(text)
     generated_header = real / "texture_rgba_renderer/texture_rgba_renderer-Swift.h"
-    run(["xcrun", "swiftc", "-emit-library", "-emit-module", "-module-name", "texture_rgba_renderer",
-         "-emit-objc-header", "-emit-objc-header-path", str(generated_header), str(swift),
+    run(["xcrun", "swiftc", "-I", str(real), "-import-objc-header", str(bridge), "-emit-library", "-emit-module", "-module-name", "texture_rgba_renderer",
+         "-emit-objc-header", "-emit-objc-header-path", str(generated_header), str(swift), str(base_object), str(registry_object),
          "-o", str(real / "libtexture_rgba_renderer.dylib")], real, "swift-header.log")
     generated = generated_header.read_text()
     assert "markFrameAvaliableRawWithBuffer:" in generated and "SWIFT_WARN_UNUSED_RESULT" in generated
-    real_flags = ["xcrun", "clang", "-fobjc-arc", "-Werror=unused-result", "-I", str(real)]
-    negative = subprocess.run(real_flags + ["-c", str(old), "-o", str(real / "old.o")], text=True, capture_output=True, timeout=120)
+    assert "retainedPixelBufferPointer" in generated and "CVPixelBufferRef _Nullable __unsafe_unretained" not in generated
+    # Keep the negative adapter gate independent of generated-header imports.
+    negative = subprocess.run(real_flags + ["-include", str(real / "MixelTextureBase.h"), "-c", str(old), "-o", str(real / "old.o")], text=True, capture_output=True, timeout=120)
     (real / "original-unused-result.log").write_text(negative.stdout + negative.stderr)
     assert negative.returncode != 0 and "ignoring return value" in negative.stderr
     object_path = real / "adapter.o"
     run(real_flags + ["-c", str(fixed), "-o", str(object_path)], real, "actual-generated-header-compile.log")
-    bridge = real / "adapter.h"
-    bridge.write_text("#include <stdint.h>\nvoid FlutterRgbaRendererPluginOnRgba(void *, const uint8_t *, int, int, int, int);\n")
+    # Original current Swift ABI reproduces the ownership warning; candidate
+    # generated headers must compile for both supported targets in ObjC/ObjC++.
+    original_swift = real / "OriginalTextRgba.swift"
+    original_swift.write_text(text.replace(P.NEW_TEXTURE_BASE, P.OLD_TEXTURE_BASE, 1).replace(P.NEW_PIXEL_COPY, P.OLD_PIXEL_COPY, 1))
+    for architecture, minimum in (("arm64", "12.3"), ("x86_64", "10.14")):
+        target = architecture + "-apple-macosx" + minimum
+        run(real_flags + ["-target", target, "-c", str(real / "MixelTextureBase.m"), "-o", str(real / (architecture + "-base.o"))], real, architecture + "-actual-base-compile.log")
+        for label, source in (("original", original_swift), ("corrected", swift)):
+            emitted = real / (architecture + "-" + label + ".h")
+            run(["xcrun", "swiftc", "-I", str(real), "-import-objc-header", str(bridge), "-target", target,
+                 "-parse-as-library", "-emit-module", "-emit-module-path", str(real / (architecture + "-" + label + ".swiftmodule")),
+                 "-emit-objc-header", "-emit-objc-header-path", str(emitted), str(source)], real, architecture + "-" + label + "-emit.log")
+            include = real / (architecture + "-" + label + "-include.m")
+            include.write_text('#import "MixelTextureBase.h"\n#import "' + emitted.name + '"\n')
+            for language in ("objective-c", "objective-c++"):
+                command = real_flags + ["-target", target, "-x", language, "-fsyntax-only", str(include)]
+                result = subprocess.run(command, capture_output=True, text=True, timeout=120)
+                log = architecture + "-" + label + "-" + language + "-header.log"
+                (real / log).write_text(result.stdout + result.stderr)
+                if label == "original":
+                    assert result.returncode != 0 and "objc_ownership" in result.stderr and "ignored-attributes" in result.stderr
+                else:
+                    assert result.returncode == 0, result.stdout + result.stderr
     main = real / "main.swift"
     main.write_text(r"""import Foundation
 import CoreVideo
-final class ActualRegistry: FlutterTextureRegistry {
-    var frames=0
-    func register(_ texture: FlutterTexture) -> Int64 { return 1 }
-    func textureFrameAvailable(_ id: Int64) { precondition(id==1); frames+=1 }
-}
-let registry=ActualRegistry()
+let registry=MixelTestTextureRegistry()
 var texture: TextRgba?=TextRgba.new(registry:registry)
 weak var weakTexture=texture
 let ptr=Unmanaged.passUnretained(texture!).toOpaque()
@@ -381,19 +643,32 @@ let next=texture!.copyPixelBuffer()!.takeRetainedValue()
 precondition(first !== next)
 texture=nil
 precondition(weakTexture==nil)
-print("PASS: actual C adapter -> generated Swift header -> exact TextRgba/CoreVideo accepts a valid frame, preserves the same retained buffer and notification count on rejection, accepts retry and releases renderer")
+precondition(CVPixelBufferLockBaseAddress(next,[])==kCVReturnSuccess)
+precondition(CVPixelBufferGetBaseAddress(next)!.load(as:UInt8.self)==17)
+precondition(CVPixelBufferUnlockBaseAddress(next,[])==kCVReturnSuccess)
+weakTexture=nil
+print("PASS: actual public Flutter protocol + ObjC retained-return base + C adapter/generated Swift/CoreVideo accepts valid frame, preserves retained buffer on rejection, survives owner retirement with no cycle and consumes each returned +1 once")
 """)
     executable = real / "actual-adapter-swift-control"
-    run(["xcrun", "swiftc", "-import-objc-header", str(bridge), str(swift), str(main), str(object_path),
+    run(["xcrun", "swiftc", "-I", str(real), "-import-objc-header", str(bridge), str(swift), str(main), str(object_path), str(base_object), str(registry_object),
          "-o", str(executable)], real, "actual-swift-link.log")
     print(run([str(executable)], real, "actual-swift-runtime.log").strip())
-    print("SOURCE SCOPE: generated CVPixelBuffer ownership metadata is untouched; ignored-attributes diagnostics, if emitted, remain in actual-generated-header-compile.log")
+    print("PASS: exact original Swift-generated ownership diagnostic reproduced; corrected public-header bridge compiles ObjC/ObjC++ for both targets (other retained SDK warnings remain separate)")
 
 
 SWIFT_STUBS = r'''
 import Foundation
 import CoreVideo
 public protocol FlutterTexture { func copyPixelBuffer() -> Unmanaged<CVPixelBuffer>? }
+// Swift-only lifetime fixture; the real Objective-C bridge/public headers are
+// tested separately. Preserve its exact one-retain transfer semantics here.
+public class MixelTextureBase: NSObject, FlutterTexture {
+    public func retainedPixelBufferPointer() -> UnsafeMutableRawPointer? { nil }
+    public func copyPixelBuffer() -> Unmanaged<CVPixelBuffer>? {
+        guard let pointer = retainedPixelBufferPointer() else { return nil }
+        return Unmanaged<CVPixelBuffer>.fromOpaque(pointer)
+    }
+}
 public protocol FlutterTextureRegistry {
     func register(_ texture: FlutterTexture) -> Int64
     func unregisterTexture(_ id: Int64)
@@ -1032,7 +1307,7 @@ print('PASS: actual bridge step reaches codegen with both source hooks applied')
     (output / "actual-bridge-step-output.log").write_text(result.stdout + result.stderr)
     assert result.returncode == 0, result.stdout + result.stderr
     assert (repo.parent / "actual-helper-invocations.jsonl").read_text().splitlines() == [json.dumps(["../scripts/" + name]) for name in helpers]
-    assert len(P.existing_files(repo / "flutter" / P.DEPENDENCY)) == 98
+    assert len(P.existing_files(repo / "flutter" / P.DEPENDENCY)) == 98 + len(P.OWNED)
     assert (repo.parent / "actual-bridge-invocations.jsonl").read_text().splitlines() == [json.dumps(arguments) for arguments in native_commands]
     final_before_inverse = snapshot(repo)
     uri.apply(repo, restore=True, verify=False)
@@ -1081,7 +1356,7 @@ print('PASS: actual bridge step reaches codegen with new retirement API')
                                   capture_output=True, text=True, timeout=30)
     (output / "bridge-prior-dispatch-without-texture-hook.log").write_text(prior_result.stdout + prior_result.stderr)
     assert prior_result.returncode == 0, prior_result.stdout + prior_result.stderr
-    assert len(P.existing_files(prior_repo / "flutter" / P.DEPENDENCY)) == 98
+    assert len(P.existing_files(prior_repo / "flutter" / P.DEPENDENCY)) == 98 + len(P.OWNED)
     assert not (prior_repo / "flutter" / window.DEPENDENCY).exists()
     print("PASS: reproduced prior argument-ignoring Python fixture falsely passing a removed texture hook through the window invocation")
     negatives = {}
@@ -1156,6 +1431,8 @@ def main():
         files[P.PLUGIN] = P.unpatch_plugin(files[P.PLUGIN].decode()).encode()
         files[P.TEXT] = P.unpatch_frame(files[P.TEXT].decode()).encode()
         files[P.API] = P.unpatch_api(files[P.API].decode()).encode()
+        for name in P.OWNED:
+            files.pop(name)
     else:
         files = P.fetch_source()
     with tempfile.TemporaryDirectory(prefix="mixel-mac-texture-controls-") as temporary:
@@ -1163,6 +1440,7 @@ def main():
         if args.output:
             output.mkdir(parents=True, exist_ok=False)
         generated = materialization_controls(output, originals, files)
+        ownership_source_controls(output, files)
         adapter_controls(output, files)
         git_archive_controls(output, files)
         workflow_controls(output, originals, files)

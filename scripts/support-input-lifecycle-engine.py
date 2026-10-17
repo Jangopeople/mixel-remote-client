@@ -14,7 +14,7 @@ import unicodedata
 
 SCRIPTS = Path(__file__).absolute().parent
 PRIOR_NAME = 'patch-support-uri-routing.py'
-PRIOR_SHA = 'e0677c2ade3cc980b17e69b93236f3533478abb95f8bc4dc78dd2e369b14c220'
+PRIOR_SHA = '874a1543113472448d28935526003a9d383b1ae4592594301d01ba5f5ca921c4'
 SCHEMA = 'mixel-terminal-source-plan-v1'
 PROFILES = ('fresh', 'original', 'final')
 MAX_SOURCE = 1_000_000

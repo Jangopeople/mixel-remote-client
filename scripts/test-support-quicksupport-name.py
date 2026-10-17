@@ -49,12 +49,12 @@ SCAFFOLD = r'''#![allow(dead_code,unused_variables,unused_mut,unused_assignments
 use std::cell::RefCell;
 use std::path::PathBuf;
 #[derive(Default)]
-struct Trace{installed:bool,elevated:bool,pre_elevate:bool,quick:bool,clear_setup:bool,leases:u32,service:u32,forwarded:Vec<String>,same_window:bool,handoff_failed:bool,window_queries:u32}
+struct Trace{installed:bool,elevated:bool,elevation_query_failed:bool,pre_elevate:bool,quick:bool,clear_setup:bool,leases:u32,service:u32,forwarded:Vec<String>,same_window:bool,handoff_failed:bool,window_queries:u32}
 thread_local!{static TRACE:RefCell<Trace>=RefCell::new(Trace::default());}
 fn reset(installed:bool,elevated:bool,pre_elevate:bool){TRACE.with(|t|*t.borrow_mut()=Trace{installed,elevated,pre_elevate,..Trace::default()});}
 mod platform{
     pub fn is_installed()->bool{super::TRACE.with(|t|t.borrow().installed)}
-    pub fn is_elevated(_:Option<()>)->Option<bool>{Some(super::TRACE.with(|t|t.borrow().elevated))}
+    pub fn is_elevated(_:Option<()>)->Result<bool,&'static str>{super::TRACE.with(|t|{let t=t.borrow();if t.elevation_query_failed{Err("synthetic token query failure")}else{Ok(t.elevated)}})}
 }
 mod config{pub struct LocalConfig;impl LocalConfig{
     pub fn get_option(key:&str)->String{assert_eq!(key,"pre-elevate-service");super::TRACE.with(|t|if t.borrow().pre_elevate{"Y".into()}else{String::new()})}
@@ -90,6 +90,7 @@ fn core_dispatch(argv:Vec<String>,click_setup:bool)->(bool,Vec<String>){
 
 TESTS = r'''
 fn argv(exe:&str,args:&[&str])->Vec<String>{std::iter::once(exe.to_owned()).chain(args.iter().map(|s|s.to_string())).collect()}
+fn legacy_medium_service()->u32{u32::from(cfg!(any(original,warm_original,cold_original)))}
 #[cfg(original)]
 #[test]
 fn actual_original_reproduces_directory_qs_and_missing_customer_alias(){
@@ -122,11 +123,11 @@ fn exact_generated_detectors_match_customer_alias_copies_and_legacy_basenames(){
         assert!(is_quick_support_exe(name),"core {name}");assert!(win::is_quick_support_exe(name),"wrapper {name}");
         reset(false,false,false);assert_eq!(wrapper_dispatch(argv(name,&[])),vec!["--quick_support"]);
         reset(false,false,false);assert!(core_dispatch(argv(name,&[]),false).0);
-        TRACE.with(|t|{let t=t.borrow();assert!(t.quick);assert!(t.leases>0);assert_eq!(t.service,1);});
+        TRACE.with(|t|{let t=t.borrow();assert!(t.quick);assert!(t.leases>0);assert_eq!(t.service,legacy_medium_service());});
         // The real wrapper launches the ordinary technical payload basename
         // with its explicit flag; the actual core argv parser retains intent.
         reset(false,false,false);assert!(core_dispatch(argv("payload/Mixel-Remote.exe",&["--quick_support"]),false).0);
-        TRACE.with(|t|{let t=t.borrow();assert!(t.leases>0);assert_eq!(t.service,1);});
+        TRACE.with(|t|{let t=t.borrow();assert!(t.leases>0);assert_eq!(t.service,legacy_medium_service());});
     }
 }
 #[cfg(not(original))]
@@ -171,7 +172,7 @@ fn explicit_flags_and_original_argument_install_elevation_gates_remain_intact(){
             TRACE.with(|t|assert_eq!(t.borrow().clear_setup,flags.contains(&"--silent-install")));
             reset(false,false,false);
             assert_eq!(core_dispatch(argv(name,flags),false).0,flags == ["--quick_support"]);
-            TRACE.with(|t|assert_eq!(t.borrow().service,u32::from(flags == ["--quick_support"])));
+            TRACE.with(|t|assert_eq!(t.borrow().service,if flags == ["--quick_support"]{legacy_medium_service()}else{0}));
         }
     }
     reset(false,false,false);assert_eq!(wrapper_dispatch(argv(r"C:\mixel-ordinary-qs-123\Mixel-Remote-Install.exe",&[])),["--install"]);
@@ -188,7 +189,7 @@ fn explicit_flags_and_original_argument_install_elevation_gates_remain_intact(){
     TRACE.with(|t|assert_eq!(t.borrow().service,0));
     reset(false,false,false);assert!(!core_dispatch(argv("Mixel-Remote-Support-Windows.exe",&["--connect","123456789"]),false).0);
 }
-#[cfg(all(not(original),not(warm_original)))]
+#[cfg(all(not(original),not(warm_original),not(cold_original)))]
 #[test]
 fn warm_same_image_acknowledged_window_skips_only_automatic_direct_bootstrap(){
     reset(false,false,false);
@@ -196,7 +197,7 @@ fn warm_same_image_acknowledged_window_skips_only_automatic_direct_bootstrap(){
     let (quick,flags)=core_dispatch(argv("payload/Mixel-Remote.exe",&["--quick_support"]),false);
     assert!(quick);assert!(flags.contains(&"--mixel-attended".to_owned()));
     TRACE.with(|t|{let t=t.borrow();assert_eq!(t.service,0);assert_eq!(t.window_queries,1);assert!(t.leases>0);assert!(t.quick);});
-    reset(false,false,false);
+    reset(false,true,false);
     TRACE.with(|t|{let mut t=t.borrow_mut();t.same_window=true;t.handoff_failed=true;});
     let (_,flags)=core_dispatch(argv("payload/Mixel-Remote.exe",&["--quick_support"]),false);
     assert!(flags.contains(&"--mixel-attended-handoff-unavailable".to_owned()));
@@ -206,12 +207,45 @@ fn warm_same_image_acknowledged_window_skips_only_automatic_direct_bootstrap(){
         core_dispatch(argv("payload/Mixel-Remote.exe",flags),false);
         TRACE.with(|t|{let t=t.borrow();assert_eq!(t.service,0);assert_eq!(t.window_queries,0);});
     }
-    // A missing/replaced/query-failed window leaves the original cold Direct path.
-    reset(false,false,false);core_dispatch(argv("payload/Mixel-Remote.exe",&["--quick_support"]),false);
+    // Already elevated cold callers retain automatic Direct startup.
+    reset(false,true,false);core_dispatch(argv("payload/Mixel-Remote.exe",&["--quick_support"]),false);
     TRACE.with(|t|assert_eq!(t.borrow().service,1));
     reset(false,false,false);TRACE.with(|t|t.borrow_mut().same_window=true);
     assert!(!core_dispatch(argv("payload/Mixel-Remote.exe",&[]),false).0);
     TRACE.with(|t|assert_eq!(t.borrow().window_queries,0));
+}
+#[cfg(cold_original)]
+#[test]
+fn actual_previous_cold_gate_requests_privileged_service_from_medium_token(){
+    reset(false,false,false);
+    core_dispatch(argv("payload/Mixel-Remote.exe",&["--quick_support"]),false);
+    TRACE.with(|t|{let t=t.borrow();assert!(t.quick);assert!(t.leases>0);assert_eq!(t.service,1);});
+}
+#[cfg(all(not(original),not(warm_original),not(cold_original)))]
+#[test]
+fn cold_attended_gui_never_auto_elevates_medium_or_unqueryable_token(){
+    for (exe,flags) in [("mIXEL-rEMOTE-qs.EXE",vec![]),
+        ("Mixel-Remote-Support-Windows.exe",vec![]),
+        ("payload/Mixel-Remote.exe",vec!["--quick_support"]),
+        ("payload/Mixel-Remote.exe",vec!["mixel-remote://support?invite=synthetic&proof=synthetic"])]{
+        for pref in [false,true]{
+            for failed in [false,true]{
+                reset(false,false,pref);TRACE.with(|t|t.borrow_mut().elevation_query_failed=failed);
+                let (_,flutter)=core_dispatch(argv(exe,&flags),false);
+                TRACE.with(|t|{let t=t.borrow();assert!(t.leases>0);assert_eq!(t.service,0);});
+                assert!(flutter.contains(&"--mixel-attended".to_owned()) || !flags.is_empty());
+            }
+        }
+    }
+    for pref in [false,true]{
+        reset(false,true,pref);core_dispatch(argv("Mixel-Remote-QS.exe",&[]),false);
+        TRACE.with(|t|assert_eq!(t.borrow().service,1));
+        reset(false,true,pref);TRACE.with(|t|t.borrow_mut().elevation_query_failed=true);
+        core_dispatch(argv("Mixel-Remote-QS.exe",&[]),false);
+        TRACE.with(|t|assert_eq!(t.borrow().service,0));
+    }
+    reset(false,false,true);core_dispatch(argv("Mixel-Remote.exe",&[]),false);
+    TRACE.with(|t|{let t=t.borrow();assert!(t.quick);assert!(t.leases>0);assert_eq!(t.service,0);});
 }
 #[cfg(warm_original)]
 #[test]
@@ -285,8 +319,13 @@ mod winapi{
         subprocess.run([str(binary),"--test-threads=1"],check=True)
     print("PASS: exact same-image warm window helper; 3 positive and 16 conservative API/path/ownership/race cases; failed close remains unresolved in mock",flush=True)
 
+cold_service_guard = """        // Cold attended support never asks for administrator credentials.
+        // A stored pre-elevate-service preference still selects attended mode;
+        // elevation requires the existing explicit user action instead.
+        && crate::platform::is_elevated(None).unwrap_or(false)
+"""
 with tempfile.TemporaryDirectory(prefix="mixel-quick-support-name-") as temporary:
-    for variant in ("original", "warm_original", "patched"):
+    for variant in ("original", "warm_original", "cold_original", "patched"):
         core = original("src/core_main.rs") if variant == "original" else (arguments.source / "src/core_main.rs").read_text(encoding="utf-8")
         portable = original("libs/portable/src/main.rs") if variant == "original" else (arguments.source / "libs/portable/src/main.rs").read_text(encoding="utf-8")
         core_detector = function(core, "fn is_quick_support_exe(exe: &str) -> bool")
@@ -304,6 +343,10 @@ with tempfile.TemporaryDirectory(prefix="mixel-quick-support-name-") as temporar
         selector = core[start:core.index("    }\n    let mut log_name", start)]
         start = core.index("    if !crate::platform::is_installed()\n")
         service_gate = function(core, core[start:core.index(" {", start)])
+        if variant != "original":
+            assert service_gate.count(cold_service_guard) == 1
+        if variant in ("warm_original", "cold_original"):
+            service_gate = service_gate.replace(cold_service_guard, "", 1)
         if variant == "warm_original":
             assert service_gate.count("        && !(_mixel_attended_handoff_confirmed && mixel_has_same_executable_main_window())\n") == 1
             service_gate = service_gate.replace("        && !(_mixel_attended_handoff_confirmed && mixel_has_same_executable_main_window())\n", "", 1)
@@ -324,6 +367,8 @@ with tempfile.TemporaryDirectory(prefix="mixel-quick-support-name-") as temporar
             command += ["--cfg", "original"]
         if variant == "warm_original":
             command += ["--cfg", "warm_original"]
+        if variant == "cold_original":
+            command += ["--cfg", "cold_original"]
         subprocess.run(command + ["--test", str(source), "-o", str(binary)], check=True)
         subprocess.run([str(binary), "--test-threads=1"], check=True)
 run_same_image_window_controls(temporary=None)

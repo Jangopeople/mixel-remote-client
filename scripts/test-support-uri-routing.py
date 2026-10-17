@@ -634,6 +634,166 @@ class UriRoutingTests(unittest.TestCase):
                     self.assertEqual(snapshot(root), before)
         print('PASS exact LF/CRLF fresh absent-queue inventory and mixed-profile zero-write refusals; old-final restore-only remains separately exercised.')
 
+    def test_12_cold_standard_guard_is_terminal_and_whole_source_reversible(self):
+        name = 'src/core_main.rs'
+        self.assertEqual(len(patch.NATIVE_CHANGES[name]), 3)
+        before, after = patch.NATIVE_CHANGES[name][-1]
+        self.assertEqual(after.count('crate::platform::is_elevated(None).unwrap_or(false)'), 1)
+        self.assertTrue(after.startswith(before))
+        self.assertIn('!_is_elevate\n        && !_is_run_as_system\n', before)
+        self.assertIn('_mixel_attended_handoff_confirmed && mixel_has_same_executable_main_window()', before)
+        previous = self.native_final[name].replace(after, before, 1)
+        self.assertEqual(hashlib.sha256(previous.encode()).hexdigest(),
+                         'ae088f7f431712968424f0e8d842c00c746c1fd9ab28533b579d4327181ca2ee')
+        self.assertEqual(patch.transform_native(name, self.native_final[name], True), self.native_original[name])
+        self.assertEqual(patch.transform_native(name, self.native_original[name]), self.native_final[name])
+        for mutation in (self.native_final[name].replace(after, before, 1),
+                         self.native_final[name].replace(after, after + after, 1),
+                         self.native_final[name].replace('unwrap_or(false)\n    {\n        use crate::portable_service',
+                                                       'unwrap_or(true)\n    {\n        use crate::portable_service', 1)):
+            self.assertNotEqual(mutation, self.native_final[name])
+            with self.assertRaises(RuntimeError):
+                patch.transform_native(name, mutation, True)
+        # Existing LF/CRLF full-chain tests run this final owner after the
+        # unchanged crash/Mac-launch owners and restore it before those owners.
+        print('PASS terminal cold Standard guard, fail-closed token query, explicit elevation/system paths conserved; exact new/previous/full-prior source inverses and missing/duplicate/drift refusals.')
+
+
+class ColdWindowsControls(unittest.TestCase):
+    """Execute only extracted PowerShell predicates, with no native API calls."""
+
+    def invoke(self, body, names):
+        pwsh = shutil.which('pwsh')
+        if not pwsh:
+            self.skipTest('PowerShell predicate engine unavailable; Windows CI remains required')
+        with tempfile.TemporaryDirectory(prefix='mixel-cold-source-controls-') as temporary:
+            root = Path(temporary)
+            script = root / 'control.ps1'
+            prefix = r'''
+$ErrorActionPreference='Stop'
+$t=$null;$e=$null
+$ast=[Management.Automation.Language.Parser]::ParseFile('__SOURCE__',[ref]$t,[ref]$e)
+if($e.Count){throw 'Complete cold test does not parse'}
+foreach($name in __NAMES__){
+ $found=@($ast.EndBlock.Statements|Where-Object{$_ -is [Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -ceq $name})
+ if($found.Count-ne 1){throw 'Exact predicate extraction failed'}
+ . ([scriptblock]::Create($found[0].Extent.Text))
+}
+'''.replace('__SOURCE__', str(BASE / 'test-support-cold-windows.ps1').replace("'", "''"))
+            prefix = prefix.replace('__NAMES__', '@(' + ','.join("'" + name + "'" for name in names) + ')')
+            script.write_text(prefix + body, encoding='utf-8-sig')
+            completed = subprocess.run([pwsh, '-NoProfile', '-NonInteractive', '-File', str(script)],
+                                       capture_output=True, text=True, encoding='utf-8', timeout=20)
+            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            self.assertIn('PASS:', completed.stdout)
+
+    def test_actual_identity_rejects_high_foreign_pid_sid_session_path_and_birth(self):
+        self.invoke(r'''
+foreach($case in @('valid','pid','sid','session','high','integrity','birth','path')){
+ $f=[pscustomobject]@{pid=42;sid='synthetic-owned';session=2;elevated=$false;integrity=8192;birth=100;path='owned.exe'}
+ switch($case){'pid'{$f.pid=43};'sid'{$f.sid='foreign'};'session'{$f.session=3};'high'{$f.elevated=$true};'integrity'{$f.integrity=12288};'birth'{$f.birth=0};'path'{$f.path='foreign.exe'}}
+ $failed=$false;try{Assert-ColdIdentity $f 42 'synthetic-owned' 2 'owned.exe'}catch{$failed=$true}
+ if($failed-ne ($case-cne 'valid')){throw ('Wrong identity result '+$case)}
+}
+'PASS: actual cold identity predicate8 Standard/Medium/foreign/high controls.'
+''', ['Assert-ColdIdentity'])
+
+    def test_actual_health_requires_stable_incoming_id_relay_and_v2(self):
+        self.invoke(r'''
+foreach($case in @('valid','pid','ready','proof','relay','offline','key','server','id')){
+ $h=[pscustomobject]@{incomingPid=42;attendedReady=$true;attendedProof='attended-runtime-v2';brandedRelay=$true;rendezvousState=1;keyConfirmed=$true;rendezvousServer='rs.mixel.ch:21116';registeredId='synthetic-id'}
+ switch($case){'pid'{$h.incomingPid=43};'ready'{$h.attendedReady=$false};'proof'{$h.attendedProof='guard-unavailable'};'relay'{$h.brandedRelay=$false};'offline'{$h.rendezvousState=0};'key'{$h.keyConfirmed=$false};'server'{$h.rendezvousServer='foreign'};'id'{$h.registeredId='changed'}}
+ $failed=$false;try{Assert-ColdHealth $h 42 'synthetic-id'}catch{$failed=$true}
+ if($failed-ne ($case-cne 'valid')){throw ('Wrong native health result '+$case)}
+}
+'PASS: actual cold health predicate9 PID/stableID/relay/key/v2 controls.'
+''', ['Assert-ColdHealth'])
+
+    def test_actor_is_exact_pinned_ast_without_original_top_level_execution(self):
+        self.invoke(r'''
+$source=Read-ColdPinnedText '__LAUNCHER__' 'c1f3e99ebda0a146bce9b54f215feeebd0c6d19bec19f2a280259d311983c44b'
+$t=$null;$e=$null;$actor=[Management.Automation.Language.Parser]::ParseInput($source,[ref]$t,[ref]$e)
+if($e.Count){throw 'Actor source parse failed'}
+foreach($type in @('MixelSupportWindowTest','MixelOrdinaryTokenFixture','MixelPackagedQaTokenFacts')){
+ $found=@($actor.FindAll({param($n)$n -is [Management.Automation.Language.StringConstantExpressionAst] -and $n.Value.Contains('public static class '+$type+' {')},$true))
+ if($found.Count-ne 1){throw 'Actor class literal ambiguity'}
+}
+foreach($name in @('Start-OwnedPackagedQaNamespace','Restore-OwnedPackagedQaNamespace','Assert-OwnedPackagedQaCleanupBeforeDeletion')){
+ $found=@($actor.EndBlock.Statements|Where-Object{$_ -is [Management.Automation.Language.FunctionDefinitionAst]-and $_.Name-ceq $name})
+ if($found.Count-ne 1){throw 'Namespace predicate ambiguity'}
+}
+'PASS: whole pinned actor and exact three class/three function AST inputs; no Add-Type or top-level launch executed.'
+'''.replace('__LAUNCHER__', str(BASE / 'test-support-launch-windows.ps1').replace("'", "''")), ['Read-ColdPinnedText'])
+
+    def test_actual_process_event_gate_refuses_uac_foreign_and_bound(self):
+        # Only process-token capture is an API stand-in; the event-loop body,
+        # identity predicate and its finally-removal execute as actual source.
+        source = (BASE / 'test-support-cold-windows.ps1').read_text()
+        self.assertEqual(source.count('[MixelColdProcessObserver]::Capture($child)'), 1)
+        self.invoke(r'''
+$fn=(Get-Command Read-ColdStarts).ScriptBlock.ToString()
+$fn=$fn.Replace('[MixelColdProcessObserver]::Capture($child)','(Get-ColdMockFacts $child)')
+Set-Item Function:Read-ColdStarts ([scriptblock]::Create($fn))
+function Get-ColdMockFacts($id){$script:queries++;[pscustomobject]@{pid=$id;sid='owned';session=2;elevated=$script:high;integrity=8192;birth=1;path='owned.exe'}}
+function Get-FileHash{[pscustomobject]@{Hash='HASH'}}
+function Get-Event{param($SourceIdentifier,$ErrorAction);return $script:event}
+function Remove-Event{param($EventIdentifier,$ErrorAction);$script:removed++}
+foreach($case in @('outer','child','uac','foreign','high','overflow')){
+ $script:queries=0;$script:removed=0;$script:high=($case-ceq 'high');$outerPid=41;$ownedSid='owned';$callerSession=2;$runtimePath='owned.exe';$expectedMainHash='HASH';$eventSource='synthetic'
+ $events=[Collections.Generic.List[object]]::new();if($case-ceq 'overflow'){for($i=0;$i-lt 512;$i++){$events.Add([object]$i)}}
+ $name=if($case-ceq 'uac'){'consent.exe'}elseif($case-ceq 'foreign'){'foreign.exe'}else{'Mixel-Remote.exe'}
+ $id=if($case-ceq 'outer'){41}else{42}
+ $script:event=[pscustomobject]@{EventIdentifier=1;SourceEventArgs=[pscustomobject]@{NewEvent=[pscustomobject]@{ProcessName=$name;ProcessID=$id;ParentProcessID=41;SessionID=2}}}
+ $failed=$false;try{Read-ColdStarts}catch{$failed=$true}
+ if($failed-ne ($case-notin @('outer','child'))-or $script:removed-ne 1){throw ('Wrong actual event outcome '+$case)}
+ if($case-in @('uac','foreign','overflow','outer')-and $script:queries-ne 0){throw 'Forbidden native token query reached'}
+}
+'PASS: actual event gate6 controls; UAC/foreign/overflow refuse, Standard child accepted, event removal always runs.'
+''', ['Read-ColdStarts', 'Assert-ColdIdentity'])
+
+    def test_actual_positive_event_witness_requires_delivery_time_session_and_ancestry(self):
+        self.invoke(r'''
+foreach($case in @('valid','empty','missing-main','time','session','parent','duplicate','cycle')){
+ $outer=[pscustomobject]@{name='Mixel-Remote-QS.exe';pid=41;parent=1;session=2;birth=100;timeCreated=101}
+ $main=[pscustomobject]@{name='Mixel-Remote.exe';pid=42;parent=41;session=2;birth=102;timeCreated=103}
+ $rows=@($outer,$main)
+ switch($case){'empty'{$rows=@()};'missing-main'{$rows=@($outer)};'time'{$main.timeCreated=1};'session'{$main.session=3};'parent'{$main.parent=99};'duplicate'{$rows=@($outer,$main,$main)};'cycle'{$main.parent=42}}
+ $failed=$false;try{Assert-ColdStartWitnesses $rows 41 42 2}catch{$failed=$true}
+ if($failed-ne ($case-cne 'valid')){throw ('Wrong witness outcome '+$case)}
+}
+'PASS: actual positive WMI witness8 controls; empty/blind subscription, PID reuse/time, foreign session/ancestry and cycles refuse.'
+''', ['Assert-ColdStartWitnesses'])
+
+    def test_actual_auth0_reply_refuses_foreign_server_and_coercible_counts(self):
+        self.invoke(r'''
+$fn=(Get-Command Assert-ColdUnauthenticatedRemote).ScriptBlock.ToString()
+$fn=$fn.Replace('[MixelSupportIpcProbe]::RequestWithServerPid(', '(Get-ColdReply ')
+Set-Item Function:Assert-ColdUnauthenticatedRemote ([scriptblock]::Create($fn))
+function Get-ColdReply($request){if($request-cne '{"t":"VideoConnCount","c":null}'){throw 'Wrong read-only IPC request'};return $script:reply}
+foreach($case in @('zero','active','bool','string','array','null','kind','pid')){
+ $script:reply=[pscustomobject]@{ServerPid=42;Json='{"t":"VideoConnCount","c":0}'}
+ switch($case){'active'{$reply.Json='{"t":"VideoConnCount","c":1}'};'bool'{$reply.Json='{"t":"VideoConnCount","c":false}'};'string'{$reply.Json='{"t":"VideoConnCount","c":"0"}'};'array'{$reply.Json='{"t":"VideoConnCount","c":[0]}'};'null'{$reply.Json='{"t":"VideoConnCount","c":null}'};'kind'{$reply.Json='{"t":"Other","c":0}'};'pid'{$reply.ServerPid=43}}
+ $failed=$false;try{Assert-ColdUnauthenticatedRemote 42}catch{$failed=$true}
+ if($failed-ne ($case-cne 'zero')){throw ('Wrong actual auth0 outcome '+$case)}
+}
+'PASS: actual same-server VideoConnCount8 controls reject authenticated peers, wrong PID/type and coercible zero.'
+''', ['Assert-ColdUnauthenticatedRemote'])
+
+    def test_frozen_launcher_and_cold_gate_workflow_required_order(self):
+        workflow = (BASE.parent / '.github/workflows/build.yml').read_text()
+        cold = '      - name: Prove cold signed QuickSupport starts as a fresh Standard user without UAC\n'
+        warm = '      - name: Exercise the signed QuickSupport download without an invite\n'
+        self.assertEqual(workflow.count(cold), 1)
+        self.assertLess(workflow.index('      - name: Verify Windows Authenticode signatures\n'), workflow.index(cold))
+        self.assertLess(workflow.index(cold), workflow.index(warm))
+        step = workflow.split(cold, 1)[1].split('\n      - ', 1)[0]
+        self.assertNotIn('continue-on-error', step)
+        self.assertNotIn('if:', step)
+        self.assertIn('-Executable dist/Mixel-Remote-QS.exe -ExpectedPayload store-payload', step)
+        self.assertIn('mixel-owned-ordinary-qs-logs/cold-support/*.json', workflow)
+        raw = (BASE / 'test-support-launch-windows.ps1').read_bytes().replace(b'\r\n', b'\n')
+        self.assertEqual(hashlib.sha256(raw).hexdigest(), 'c1f3e99ebda0a146bce9b54f215feeebd0c6d19bec19f2a280259d311983c44b')
+
 
 def main():
     global SOURCE, GIT_SOURCE, OUTPUT, DART
@@ -654,4 +814,7 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    if os.sys.argv[1:] == ['--cold-source-controls']:
+        unittest.main(argv=[os.sys.argv[0]], defaultTest='ColdWindowsControls', verbosity=2)
+    else:
+        main()
