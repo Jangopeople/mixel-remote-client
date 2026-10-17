@@ -161,7 +161,7 @@ fn native_recovery_waits_for_receipts_and_block_off() {
     super::super::super::RELEASE_FAILURES.store(0,Ordering::SeqCst);
     let deadline=std::time::Instant::now()+Duration::from_secs(3);while !receiver.inner.state.lock().unwrap().generation.as_ref().unwrap().cleanup_done.load(Ordering::SeqCst){assert!(std::time::Instant::now()<deadline);std::thread::sleep(Duration::from_millis(5));}
     assert!(TRANSITION.load(Ordering::SeqCst),"failed OS unblock retains barrier after key receipts retire");
-    super::super::super::UNBLOCK_FAILURES.store(0,Ordering::SeqCst);while TRANSITION.load(Ordering::SeqCst){assert!(std::time::Instant::now()<deadline);std::thread::sleep(Duration::from_millis(5));}
+    super::super::super::UNBLOCK_FAILURES.store(0,Ordering::SeqCst);let deadline=std::time::Instant::now()+Duration::from_secs(3);while TRANSITION.load(Ordering::SeqCst){assert!(std::time::Instant::now()<deadline);std::thread::sleep(Duration::from_millis(5));}
     assert!(receiver.close());let fresh=Receiver::new(86);assert!(fresh.authorize(true));assert!(fresh.close());
 }
 fn native_stale_failure_cannot_disarm_fresh_attempt() {

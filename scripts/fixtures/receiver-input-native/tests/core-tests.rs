@@ -95,7 +95,7 @@ fn cleanup_must_complete_before_ack_and_deferred_is_fenced() {
 }
 #[cfg(windows)] fn helper_transition_with_held_down_fails_closed() {
     clear_observed();let receiver=Receiver::new(32);assert!(receiver.authorize(true));run_actual(captured(&receiver,key_action(true)));
-    super::portable_service::client::RUNNING.store(true,Ordering::SeqCst);receiver.enqueue(key_action(false));pump_until(||receiver.failed());
+    super::portable_service::client::RUNNING.store(true,Ordering::SeqCst);assert!(!receiver.block(true,false));assert!(!receiver.block(true,true));receiver.enqueue(key_action(false));pump_until(||receiver.failed());
     super::portable_service::client::RUNNING.store(false,Ordering::SeqCst);assert!(receiver.close());
     assert!(super::super::observed().lock().unwrap().iter().any(|event|event.text=="cleanup"));
 }

@@ -160,6 +160,12 @@ impl Receiver {
     pub(crate) fn block(&self, enabled: bool, privacy: bool) -> bool {
         let state = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
         if !state.alive || !state.authorized || !self.inner.alive.load(Ordering::SeqCst) || self.failed() { return false; }
+        #[cfg(windows)] if enabled && (super::portable_service::client::running()
+            || state.generation.as_ref().or(state.cursor.as_ref()).map(|g|matches!(&g.backend,windows::Backend::Portable(_))).unwrap_or(false)) {
+            // BlockInput permits injection only from its exact owning OS thread.
+            // A foreground block cannot authorize an elevated helper's thread.
+            return false;
+        }
         drop(state);
         set_block(&self.inner, enabled, privacy)
     }
