@@ -48,6 +48,22 @@ def write(path, value):
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + '\n')
 
 
+def actor_compile_command(output, linker):
+    # The actor is std + kernel32 only. Cargo --bin would also compile the
+    # intentionally private harness library without cfg(test), where its
+    # uncalled product APIs become artificial dead_code errors under -Dwarnings.
+    return ['rustc', '+1.75.0', '--edition=2021', '--target',
+            'x86_64-pc-windows-msvc', '-Dwarnings',
+            '-C', 'linker=' + linker,
+            '-o', str(output / 'kernel_actor.exe'),
+            str(output / 'harness/src/bin/kernel_actor.rs')]
+
+
+def report_compiler_failure(label, code, stderr):
+    print(f'FAIL: {label}; compiler exit={code}; complete output retained', flush=True)
+    print(stderr[-12000:].decode('utf-8', errors='replace'), flush=True)
+
+
 def prepare(output):
     source = read(LEAF)
     if sha(logical(source)) != LEAF_SHA256:
@@ -129,6 +145,8 @@ def run_windows(output, binding):
             write(directory / 'RESULT.json', value)
             commands.append({'label': label, **value})
             if result.returncode:
+                if label in ('02-compile-entire-leaf', '03-build-owned-kernel-actor'):
+                    report_compiler_failure(label, result.returncode, result.stderr)
                 raise RuntimeError(label + ' failed; retained without retry')
             return result.stdout.decode('utf-8', errors='strict')
 
@@ -137,8 +155,11 @@ def run_windows(output, binding):
             raise ValueError('Exact Rust1.75.0 required')
         common = ['--locked', '--manifest-path', str(manifest), '--target', 'x86_64-pc-windows-msvc']
         command('02-compile-entire-leaf', ['cargo', '+1.75.0', 'test', *common, '--lib', '--no-run'], 100)
-        command('03-build-owned-kernel-actor', ['cargo', '+1.75.0', 'build', *common, '--bin', 'kernel_actor'], 60)
-        actor = output / 'target/x86_64-pc-windows-msvc/debug/kernel_actor.exe'
+        linker = env.get('CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER', '')
+        if not Path(linker).is_absolute() or not Path(linker).is_file() or Path(linker).name.lower() != 'link.exe':
+            raise ValueError('Exact activated x64 MSVC linker required for the independent actor')
+        command('03-build-owned-kernel-actor', actor_compile_command(output, linker), 60)
+        actor = output / 'kernel_actor.exe'
         if not actor.is_file():
             raise ValueError('Newly compiled own component actor absent')
         env['SAS_COMPONENT_ACTOR'] = str(actor)

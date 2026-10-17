@@ -3,6 +3,8 @@
 from pathlib import Path
 import hashlib
 import importlib.util
+import contextlib
+import io
 import json
 import tempfile
 import sys
@@ -18,6 +20,33 @@ spec.loader.exec_module(module)
 
 
 class PreparationControls(unittest.TestCase):
+    def test_std_only_actor_compiles_independently_with_exact_target_and_warnings(self):
+        root = Path('owned space \u2603')
+        linker = str(Path('exact MSVC \u2603') / 'link.exe')
+        argv = module.actor_compile_command(root, linker)
+        self.assertEqual(argv[:2], ['rustc', '+1.75.0'])
+        self.assertIn('--edition=2021', argv)
+        self.assertEqual(argv[argv.index('--target') + 1], 'x86_64-pc-windows-msvc')
+        self.assertIn('-Dwarnings', argv)
+        self.assertEqual(argv[argv.index('-C') + 1], 'linker=' + linker)
+        self.assertEqual(argv[argv.index('-o') + 1], str(root / 'kernel_actor.exe'))
+        self.assertEqual(argv[-1], str(root / 'harness/src/bin/kernel_actor.rs'))
+        self.assertNotIn('cargo', argv)
+        actor = (HERE / 'kernel-actor.rs').read_text()
+        self.assertNotIn('hbb_common', actor)
+        self.assertNotIn('tokio', actor)
+
+    def test_failed_compiler_diagnostic_is_bounded_and_keeps_actual_error(self):
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            module.report_compiler_failure('03-build-owned-kernel-actor', 1,
+                b'old-prefix-not-in-tail' + b'x' * 13000 + b'\nerror[E0001]: controlled compile refusal\xff')
+        output = buffer.getvalue()
+        self.assertIn('compiler exit=1', output)
+        self.assertIn('error[E0001]: controlled compile refusal', output)
+        self.assertNotIn('old-prefix-not-in-tail', output)
+        self.assertLess(len(output), 12200)
+
     def test_default_preparation_has_exact_entire_leaf_and_no_process_calls(self):
         with tempfile.TemporaryDirectory() as temporary, patch.object(module.subprocess, 'run', side_effect=AssertionError('no process')):
             output, result = module.prepare(Path(temporary).resolve() / 'prepared')
