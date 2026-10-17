@@ -11,7 +11,8 @@ import tempfile
 import unittest
 import sys
 import zipfile
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
+from types import SimpleNamespace
 
 BASE = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("systemd_qa", BASE / "scripts/linux-installer-systemd.py")
@@ -249,6 +250,279 @@ class Admission(unittest.TestCase):
                         with self.assertRaises(ValueError): qa.archive_once(root)
                     with self.assertRaises(FileExistsError): qa.archive_once(root)
                     self.assertEqual(child.call_count, 1)
+
+    def test_original_host_failure_has_priority_over_diagnostic_failure(self):
+        original = ValueError("original health error")
+        with patch.object(qa, "command", side_effect=original), \
+             patch.object(qa, "diagnose_host", side_effect=OSError("diagnostic write failed")):
+            with self.assertRaises(ValueError) as caught: qa.require_healthy_systemd(Path("unused"))
+            self.assertIs(caught.exception, original)
+        with patch.object(qa, "command", return_value=b"running\n"), patch.object(qa, "diagnose_host") as diagnostic:
+            qa.require_healthy_systemd(Path("unused")); diagnostic.assert_not_called()
+        with patch.object(qa, "command", return_value=b"degraded\n"), patch.object(qa, "diagnose_host"):
+            with self.assertRaisesRegex(ValueError, "unhealthy-systemd"): qa.require_healthy_systemd(Path("unused"))
+
+    def test_failed_unit_names_are_bounded_valid_and_unique(self):
+        raw = b"valid.service loaded failed failed description\nvalid.service duplicate\n"
+        raw += b"bad;name.service invalid\n../escape.service invalid\n--property=Environment.service invalid\n"
+        raw += b"a" * 256 + b".service invalid\n"
+        raw += b"escaped\\x2dname.socket loaded failed failed\n"
+        raw += b"".join(f"test-{i}.service loaded failed failed\n".encode() for i in range(40))
+        names = qa.failed_unit_names(raw)
+        self.assertEqual(len(names), 16)
+        self.assertEqual(names[:2], ["valid.service", "escaped\\x2dname.socket"])
+        self.assertEqual(len(set(names)), 16)
+        self.assertFalse(any(";" in name or "/" in name or "=" in name for name in names))
+
+    def test_diagnostics_only_use_explicit_read_only_properties(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); (root / "evidence").mkdir()
+            failed = b"".join(f"unit-{i}.service loaded failed failed\n".encode() for i in range(30))
+            calls = []
+            def observe(root, label, argv):
+                calls.append((label, argv)); return failed if label == "host-failed-units" else b""
+            with patch.object(qa, "bounded_diagnostic", side_effect=observe): qa.diagnose_host(root)
+            self.assertEqual(len(calls), 18)
+            self.assertEqual(calls[0][1], ["systemctl", "--failed", "--no-pager", "--plain", "--no-legend"])
+            self.assertEqual(calls[1][1], ["systemctl", "list-jobs", "--no-pager", "--no-legend"])
+            for label, argv in calls[2:]:
+                self.assertEqual(argv[:3], ["systemctl", "show", "--no-pager"])
+                self.assertEqual(argv[3], "--property=Id,ActiveState,SubState,Result,FragmentPath,ExecMainCode,ExecMainStatus")
+                self.assertEqual(argv[4], "--")
+            self.assertNotIn("Environment", repr(calls))
+            self.assertNotIn("ExecStart", repr(calls))
+            self.assertNotIn("journalctl", repr(calls))
+
+    def test_real_inert_diagnostic_child_output_and_time_bounds(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); (root / "evidence").mkdir()
+            qa.bounded_diagnostic(root, "large", [sys.executable, "-c", "import sys;sys.stdout.write('x'*1000);sys.stderr.write('y'*1000)"], bound=64)
+            result = json.loads((root / "evidence/large/RESULT.json").read_text())
+            self.assertEqual(result["error"], "diagnostic-output-bound")
+            self.assertLessEqual(result["stdoutBytes"], 64); self.assertLessEqual(result["stderrBytes"], 64)
+            self.assertFalse(result["healthAccepted"])
+            qa.bounded_diagnostic(root, "timed", [sys.executable, "-c", "import time;time.sleep(3)"], timeout=0.03)
+            result = json.loads((root / "evidence/timed/RESULT.json").read_text())
+            self.assertEqual(result["error"], "diagnostic-timeout")
+            self.assertNotEqual(result["exit"], 0)
+
+    def test_package_identity_states_and_foreign_refusals(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); (root / "evidence").mkdir()
+            cases = [(1, b"", None)]
+            cases += [(0, f"mixel-remote\t1.4.6\tamd64\t{s}\n".encode(), s) for s in ("installed", "unpacked", "config-files")]
+            cases += [(0, row, "REFUSE") for row in (
+                b"other\t1.4.6\tamd64\tinstalled\n", b"mixel-remote\t9\tamd64\tinstalled\n",
+                b"mixel-remote\t1.4.6\tarm64\tinstalled\n", b"mixel-remote\t1.4.6\tamd64\thalf-installed\n")]
+            cases += [(1, b"ambiguous", "REFUSE")]
+            for i, (exitcode, raw, expected) in enumerate(cases):
+                label = f"query-{i}"; p = root / "evidence" / label; p.mkdir(); qa.save(p / "RESULT.json", {"exit": exitcode})
+                with patch.object(qa, "command", return_value=raw):
+                    if expected == "REFUSE":
+                        with self.assertRaises(ValueError): qa.package_state(root, label)
+                    else: self.assertEqual(qa.package_state(root, label), expected)
+
+    def cleanup_fixture(self, root, state, owner=None):
+        """Call the actual cleanup function; replace only OS observations/actions."""
+        actions = []
+        def observed(root, label, argv, *args, **kwargs):
+            actions.append((label, argv))
+            return b"Purg mixel-remote [1.4.6]\n" if label == "cleanup-purge-plan" else b""
+        return actions, [patch.object(qa, "cleanup_binding"),
+                         patch.object(qa, "package_state", side_effect=[state, None] if state else [None]),
+                         patch.object(qa, "inspect_cleanup_service", return_value=owner),
+                         patch.object(qa, "verify_cleanup_payload_if_present"),
+                         patch.object(qa, "require_cleanup_absence"),
+                         patch.object(qa, "process_birth", return_value=None),
+                         patch.object(qa, "service_cgroup_empty", return_value=True),
+                         patch.object(qa, "command", side_effect=observed)]
+
+    def test_actual_cleanup_handles_config_files_and_partial_unpack_without_main(self):
+        from contextlib import ExitStack
+        for state in ("config-files", "unpacked", "installed"):
+            with self.subTest(state=state), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder); actions, controls = self.cleanup_fixture(root, state)
+                with ExitStack() as stack:
+                    for control in controls: stack.enter_context(control)
+                    result = qa.cleanup_package(root)
+                self.assertEqual(result, {"packageInitially": state, "packageAndOwnedPathsAbsent": True})
+                self.assertIn("cleanup-owned-package", [name for name, argv in actions])
+                self.assertNotIn("cleanup-owned-service", [name for name, argv in actions])
+
+    def test_remove_then_assertion_failure_keeps_failure_and_purges_residual_config(self):
+        from contextlib import ExitStack
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); (root / "evidence").mkdir()
+            qa.save(root / "evidence/CANDIDATE-EXECUTION-INTENT.json", qa.execution_intent(root))
+            failed = root / "evidence/guest-FAILED.json"
+            failed.write_bytes(b'{"error":"assertion failed after apt remove","serviceAccepted":false}\n')
+            before = failed.read_bytes(); actions, controls = self.cleanup_fixture(root, "config-files")
+            with ExitStack() as stack:
+                for control in controls: stack.enter_context(control)
+                stack.enter_context(patch.object(qa, "retain_guest_evidence"))
+                qa.cleanup(root)
+            self.assertEqual(failed.read_bytes(), before)
+            self.assertIn("cleanup-owned-package", [name for name, argv in actions])
+            result = json.loads((root / "evidence/CLEANUP.json").read_text())
+            self.assertTrue(result["cleanupVerified"])
+            self.assertFalse(result["taskComplete"])
+
+    def test_owned_service_is_proven_and_stopped_before_purge(self):
+        from contextlib import ExitStack
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); actions, controls = self.cleanup_fixture(root, "installed", {"pid": 123, "birth": "owned-birth"})
+            with ExitStack() as stack:
+                for control in controls: stack.enter_context(control)
+                qa.cleanup_package(root)
+            labels = [label for label, argv in actions]
+            self.assertLess(labels.index("cleanup-owned-service"), labels.index("cleanup-owned-package"))
+            self.assertEqual(actions[0][1], ["systemctl", "stop", "mixel-remote.service"])
+
+    def test_foreign_package_or_unit_refuses_before_stop_or_purge(self):
+        root = Path("unused")
+        with patch.object(qa, "cleanup_binding"), patch.object(qa, "package_state", side_effect=ValueError("foreign version")), \
+             patch.object(qa, "command") as action:
+            with self.assertRaises(ValueError): qa.cleanup_package(root)
+            action.assert_not_called()
+        with patch.object(qa, "cleanup_binding"), patch.object(qa, "package_state", return_value="installed"), \
+             patch.object(qa, "inspect_cleanup_service", side_effect=ValueError("unknown unit")), patch.object(qa, "command") as action:
+            with self.assertRaises(ValueError): qa.cleanup_package(root)
+            action.assert_not_called()
+
+    def test_absent_package_is_benign_only_after_unit_and_path_absence(self):
+        from contextlib import ExitStack
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); actions, controls = self.cleanup_fixture(root, None)
+            with ExitStack() as stack:
+                for control in controls: stack.enter_context(control)
+                result = qa.cleanup_package(root)
+            self.assertEqual(result["packageInitially"], "absent"); self.assertEqual(actions, [])
+        with patch.object(qa, "cleanup_binding"), patch.object(qa, "package_state", return_value=None), \
+             patch.object(qa, "inspect_cleanup_service", return_value={"pid": 123, "birth": "foreign"}), patch.object(qa, "command") as action:
+            with self.assertRaises(ValueError): qa.cleanup_package(Path("unused"))
+            action.assert_not_called()
+
+    def test_cleanup_requires_fresh_host_and_exact_intent_before_staged_access(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); (root / "evidence").mkdir()
+            qa.save(root / "evidence/HOST.json", {"fresh": False, "actualPID1Systemd": True, "root": True})
+            with self.assertRaisesRegex(ValueError, "fresh-host"): qa.cleanup_binding(root)
+            (root / "evidence/HOST.json").unlink()
+            qa.save(root / "evidence/HOST.json", {"fresh": True, "actualPID1Systemd": True, "root": True})
+            qa.save(root / "evidence/CANDIDATE-EXECUTION-INTENT.json", dict(qa.execution_intent(root), instance="foreign"))
+            with self.assertRaisesRegex(ValueError, "intent-not-owned"): qa.cleanup_binding(root)
+
+    def test_purge_plan_refuses_any_other_package_change(self):
+        qa.validate_purge_plan(b"Purg mixel-remote [1.4.6]\n")
+        for raw in (b"Remv unrelated [1]\n", b"Inst unrelated (1 Ubuntu)\n", b"Conf unrelated (1)\n", b"no action\n"):
+            with self.assertRaises(ValueError): qa.validate_purge_plan(raw)
+
+    def test_retention_error_survives_cleanup_error_and_both_are_retained(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); (root / "evidence").mkdir(); qa.save(root / "evidence/CANDIDATE-EXECUTION-INTENT.json", {})
+            original = OSError("original retention failure")
+            with patch.object(qa, "retain_guest_evidence", side_effect=original), patch.object(qa, "cleanup_package", side_effect=ValueError("cleanup refused foreign unit")):
+                with self.assertRaises(OSError) as caught: qa.cleanup(root)
+                self.assertIs(caught.exception, original)
+            receipt = json.loads((root / "evidence/CLEANUP-FAILED.json").read_text())
+            self.assertFalse(receipt["cleanupVerified"])
+            self.assertEqual(receipt["cleanupError"], "cleanup refused foreign unit")
+
+    def test_actual_apt_context_modes_under_private_umask(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder) / "new-run"
+            identity = SimpleNamespace(pw_uid=os.geteuid(), pw_gid=os.getegid())
+            before = os.umask(0o077)
+            try:
+                with patch.object(qa.pwd, "getpwnam", return_value=identity) as sandbox:
+                    context, sources = qa.official_apt_context(root, Path(folder))
+                    sandbox.assert_called_once_with("_apt")
+            finally: os.umask(before)
+            self.assertEqual(context.stat().st_mode & 0o777, 0o755)
+            self.assertEqual(sources.stat().st_mode & 0o777, 0o644)
+            self.assertEqual((context / "lists").stat().st_mode & 0o777, 0o755)
+            self.assertEqual((context / "lists/partial").stat().st_mode & 0o777, 0o700)
+            self.assertEqual((context / "lists/partial").stat().st_uid, identity.pw_uid)
+
+    def test_actual_unit_inspection_refuses_unknown_foreign_or_residual_unit(self):
+        props = {"Id": "mixel-remote.service", "LoadState": "not-found", "FragmentPath": "",
+                 "MainPID": "0", "ControlGroup": "", "ActiveState": "inactive", "SubState": "dead", "DropInPaths": ""}
+        def raw(properties): return "".join(f"{k}={v}\n" for k, v in properties.items()).encode()
+        with patch.object(qa, "command", return_value=raw(props)) as query, patch.object(qa, "service_cgroup_empty", return_value=True):
+            self.assertIsNone(qa.inspect_cleanup_service(Path("unused"), "query"))
+            self.assertEqual(query.call_args.args[2], ["systemctl", "show", "--all", "mixel-remote.service",
+                             "--property=Id,LoadState,FragmentPath,MainPID,ControlGroup,ActiveState,SubState,DropInPaths"])
+        for field, value in [("Id", "other.service"), ("MainPID", "123"), ("ControlGroup", "/foreign"),
+                             ("LoadState", "masked"), ("FragmentPath", "/foreign.service"), ("ActiveState", "active")]:
+            changed = dict(props, **{field: value})
+            with patch.object(qa, "command", return_value=raw(changed)), patch.object(qa, "service_cgroup_empty", return_value=True):
+                with self.subTest(field=field), self.assertRaises(ValueError): qa.inspect_cleanup_service(Path("unused"), "query")
+
+    def test_actual_process_inspection_requires_root_exe_hash_birth_and_cgroup(self):
+        process = MagicMock(); process.stat.return_value = SimpleNamespace(st_uid=0)
+        executable = MagicMock(); process.__truediv__.return_value = executable
+        cgroup = MagicMock(); cgroup.read_text.return_value = "123\n"
+        def path(value):
+            return process if str(value) == "/proc/123" else cgroup
+        with patch.object(qa, "Path", side_effect=path), patch.object(qa.os, "readlink", return_value="/usr/share/mixel-remote/mixel-remote"), \
+             patch.object(qa, "sha", return_value=qa.MAIN_SHA), patch.object(qa, "process_birth", return_value="owned-birth"):
+            self.assertEqual(qa.inspect_service_process(123), {"pid": 123, "birth": "owned-birth"})
+            process.stat.return_value = SimpleNamespace(st_uid=1001)
+            with self.assertRaises(ValueError): qa.inspect_service_process(123)
+            process.stat.return_value = SimpleNamespace(st_uid=0); cgroup.read_text.return_value = "999\n"
+            with self.assertRaises(ValueError): qa.inspect_service_process(123)
+        with patch.object(qa, "Path", side_effect=path), patch.object(qa.os, "readlink", return_value="/foreign/executable"), \
+             patch.object(qa, "sha", return_value=qa.MAIN_SHA):
+            with self.assertRaises(ValueError): qa.inspect_service_process(123)
+
+    def test_actual_parser_refuses_foreign_dropin_even_with_matching_fragment(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); fragment = root / "mixel-remote.service"; fragment.write_bytes(b"inert exact unit fixture")
+            props = {"Id": "mixel-remote.service", "LoadState": "loaded", "FragmentPath": str(fragment),
+                     "MainPID": "123", "ControlGroup": "/system.slice/mixel-remote.service",
+                     "ActiveState": "active", "SubState": "running", "DropInPaths": ""}
+            def raw(): return "".join(f"{k}={v}\n" for k, v in props.items()).encode()
+            def resolved(value):
+                return "/expected-unit" if str(value) in (str(fragment), "/usr/lib/systemd/system/mixel-remote.service") else str(value)
+            owner = {"pid": 123, "birth": "owned"}
+            with patch.object(qa, "INSTALLED_UNIT", hashlib.sha256(fragment.read_bytes()).hexdigest()), \
+                 patch.object(qa.os.path, "realpath", side_effect=resolved), \
+                 patch.object(qa, "inspect_service_process", return_value=owner):
+                with patch.object(qa, "command", return_value=raw()):
+                    self.assertEqual(qa.inspect_cleanup_service(root, "positive"), owner)
+                props["DropInPaths"] = "/run/systemd/system/mixel-remote.service.d/foreign.conf"
+                calls = []
+                def observe(root, label, argv, *args, **kwargs):
+                    calls.append((label, argv)); return raw()
+                with patch.object(qa, "cleanup_binding"), patch.object(qa, "package_state", return_value="installed"), \
+                     patch.object(qa, "command", side_effect=observe):
+                    with self.assertRaisesRegex(ValueError, "dropin"): qa.cleanup_package(root)
+                self.assertEqual([label for label, argv in calls], ["cleanup-unit-before"])
+
+    def test_fresh_host_override_roots_use_lexists_including_dangling_symlink(self):
+        # Execute the actual host guard through its filesystem observation seam.
+        roots = {"/etc/systemd/system/mixel-remote.service.d", "/run/systemd/system/mixel-remote.service.d",
+                 "/usr/lib/systemd/system/mixel-remote.service.d"}
+        original_path = Path
+        original_lexists = os.path.lexists
+        with tempfile.TemporaryDirectory() as folder:
+            base = Path(folder).resolve(); (base / "evidence").mkdir()
+            dangling = base / "dangling"; dangling.symlink_to(base / "absent")
+            release = MagicMock(); release.read_text.return_value = 'ID=ubuntu\nVERSION_ID="22.04"\n'
+            pid1 = MagicMock(); pid1.resolve.return_value.name = "systemd"
+            controllers = MagicMock(); controllers.is_file.return_value = True
+            def observed_path(value):
+                return {"/etc/os-release": release, "/proc/1/exe": pid1,
+                        "/sys/fs/cgroup/cgroup.controllers": controllers}.get(str(value), original_path(value))
+            for override in roots:
+                def exists(value): return original_lexists(dangling) if str(value) == override else False
+                with patch.object(qa, "Path", side_effect=observed_path), patch.object(qa.os, "geteuid", return_value=0), \
+                     patch.object(qa.os, "uname", return_value=SimpleNamespace(machine="x86_64")), \
+                     patch.object(qa.os.path, "lexists", side_effect=exists), \
+                     patch.object(qa.subprocess, "run", side_effect=AssertionError("must refuse before any host command")), \
+                     patch.object(qa, "require_healthy_systemd") as health:
+                    with self.assertRaisesRegex(ValueError, "host-not-fresh"): qa.host(base)
+                    health.assert_not_called()
 
 
 if __name__ == "__main__":

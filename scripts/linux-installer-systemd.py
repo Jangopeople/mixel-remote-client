@@ -12,6 +12,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import pwd
 import re
 import selectors
 import shutil
@@ -83,11 +84,12 @@ def root_path(value):
     return p
 
 
-def command(root, label, argv, timeout=120, env=None):
+def command(root, label, argv, timeout=120, env=None, allowed=(0,)):
     require(re.fullmatch(r"[a-z0-9-]+", label), "unsafe-command-label")
     folder = root / "evidence" / label
     folder.mkdir(mode=0o700)
-    save(folder / "COMMAND.json", {"argv": argv, "timeoutSeconds": timeout, "automaticRetry": False})
+    save(folder / "COMMAND.json", {"argv": argv, "timeoutSeconds": timeout,
+         "expectedExitCodes": list(allowed), "automaticRetry": False})
     status, error = None, None
     with (folder / "stdout").open("xb") as out, (folder / "stderr").open("xb") as err:
         os.fchmod(out.fileno(), 0o600); os.fchmod(err.fileno(), 0o600)
@@ -100,7 +102,7 @@ def command(root, label, argv, timeout=120, env=None):
     save(folder / "RESULT.json", {"exit": status, "error": error,
          "stdoutBytes": (folder / "stdout").stat().st_size,
          "stdoutSHA256": sha(folder / "stdout"), "stderrSHA256": sha(folder / "stderr")})
-    require(status == 0 and error is None, "command-failed-" + label)
+    require(status in allowed and error is None, "command-failed-" + label)
     return (folder / "stdout").read_bytes()
 
 
@@ -203,14 +205,94 @@ def host(root):
     require(not Path("/usr/sbin/policy-rc.d").exists(), "policy-rc.d-refused")
     for path in ("/usr/bin/mixel-remote", "/usr/share/mixel-remote", "/usr/lib/systemd/system/mixel-remote.service",
                  "/etc/systemd/system/mixel-remote.service", "/run/systemd/system/mixel-remote.service",
+                 "/etc/systemd/system/mixel-remote.service.d", "/run/systemd/system/mixel-remote.service.d",
+                 "/usr/lib/systemd/system/mixel-remote.service.d",
                  "/etc/systemd/system/multi-user.target.wants/mixel-remote.service",
                  "/root/.config/mixel-remote", "/var/tmp/mixel-systemd-qa", "/mnt/mixel-candidate",
                  "/var/lib/mixel-systemd-qa-unrelated-sentinel"):
         require(not os.path.lexists(path), "host-not-fresh-" + path)
-    require(command(root, "host-systemd", ["systemctl", "is-system-running", "--wait"], 60).strip() == b"running", "unhealthy-systemd")
+    require_healthy_systemd(root)
     r = subprocess.run(["dpkg-query", "-W", "-f=${db:Status-Status}", "mixel-remote"], capture_output=True, timeout=30)
     require(r.returncode == 1 and not r.stdout, "existing-Mixel-package")
     save(root / "evidence/HOST.json", {"fresh": True, "actualPID1Systemd": True, "root": True, "release": release})
+
+
+def bounded_diagnostic(root, label, argv, timeout=8, bound=65536):
+    """Read-only boot diagnostics; retain bounded raw bytes, never grant health."""
+    folder = root / "evidence" / label; folder.mkdir(mode=0o700)
+    save(folder / "COMMAND.json", {"argv": argv, "timeoutSeconds": timeout,
+         "maxBytesPerStream": bound, "automaticRetry": False, "diagnosticOnly": True})
+    data = {"stdout": bytearray(), "stderr": bytearray()}; child = None; error = None
+    try:
+        child = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE, cwd=BASE)
+        deadline = time.monotonic() + timeout
+        with selectors.DefaultSelector() as selector:
+            for stream, name in ((child.stdout, "stdout"), (child.stderr, "stderr")):
+                selector.register(stream, selectors.EVENT_READ, name)
+            while selector.get_map():
+                require(time.monotonic() < deadline, "diagnostic-timeout")
+                for key, _ in selector.select(min(0.1, max(0, deadline - time.monotonic()))):
+                    block = os.read(key.fileobj.fileno(), 65536)
+                    if not block:
+                        selector.unregister(key.fileobj); continue
+                    output = data[key.data]; remaining = bound - len(output)
+                    output.extend(block[:remaining])
+                    require(len(block) <= remaining, "diagnostic-output-bound")
+        child.wait(timeout=1)
+    except Exception as exc:
+        error = str(exc)
+    finally:
+        if child is not None:
+            if child.poll() is None:
+                child.terminate()
+                try: child.wait(timeout=1)
+                except subprocess.TimeoutExpired: child.kill(); child.wait(timeout=1)
+            child.stdout.close(); child.stderr.close()
+    for name, content in data.items():
+        with (folder / name).open("xb") as f:
+            os.fchmod(f.fileno(), 0o600); f.write(content); f.flush(); os.fsync(f.fileno())
+    save(folder / "RESULT.json", {"exit": child.returncode if child else None, "error": error,
+         "stdoutBytes": len(data["stdout"]), "stderrBytes": len(data["stderr"]),
+         "stdoutSHA256": hashlib.sha256(data["stdout"]).hexdigest(),
+         "stderrSHA256": hashlib.sha256(data["stderr"]).hexdigest(), "healthAccepted": False})
+    return bytes(data["stdout"])
+
+
+def failed_unit_names(raw):
+    names = []
+    pattern = r"(?:[A-Za-z0-9_.@:-]|\\x[0-9A-Fa-f]{2})+\.(?:service|socket|mount|automount|path|timer|target|scope|slice|swap|device)"
+    for row in raw.decode("utf-8", errors="replace").splitlines():
+        fields = row.split()
+        if fields and len(fields[0]) <= 255 and re.fullmatch(pattern, fields[0]) and fields[0] not in names:
+            names.append(fields[0])
+            if len(names) == 16: break
+    return names
+
+
+def diagnose_host(root):
+    failed = bounded_diagnostic(root, "host-failed-units", ["systemctl", "--failed", "--no-pager", "--plain", "--no-legend"])
+    bounded_diagnostic(root, "host-pending-jobs", ["systemctl", "list-jobs", "--no-pager", "--no-legend"])
+    names = failed_unit_names(failed)
+    properties = "Id,ActiveState,SubState,Result,FragmentPath,ExecMainCode,ExecMainStatus"
+    for index, name in enumerate(names):
+        bounded_diagnostic(root, f"host-failed-unit-{index:02d}", ["systemctl", "show", "--no-pager",
+                           "--property=" + properties, "--", name])
+    save(root / "evidence/HOST-DIAGNOSTICS.json", {"failedUnits": names, "unitLimit": 16,
+         "maxBytesPerCommandStream": 65536, "timeoutSecondsPerCommand": 8,
+         "readOnly": True, "healthAccepted": False, "candidateExecuted": False})
+
+
+def require_healthy_systemd(root):
+    try:
+        require(command(root, "host-systemd", ["systemctl", "is-system-running", "--wait"], 60).strip() == b"running", "unhealthy-systemd")
+    except Exception:
+        try:
+            diagnose_host(root)
+        except Exception:
+            # Diagnostic collection cannot replace the original health failure.
+            pass
+        raise
 
 
 def api(root, label, endpoint):
@@ -286,9 +368,8 @@ def validate_apt_plan(text):
             require(r.returncode == 1, "dependency-downgrade-or-invalid-version-" + name)
 
 
-def dependencies(root):
-    require(os.geteuid() == 0 and (root / "evidence/COLLECTION.json").is_file(), "uncollected-dependencies-request")
-    context = Path("/var/tmp") / (root.name + "-official-apt")
+def official_apt_context(root, parent=Path("/var/tmp")):
+    context = parent / (root.name + "-official-apt")
     context.mkdir(mode=0o755); context.chmod(0o755)
     sources = context / "ubuntu.list"
     signed = "deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] "
@@ -298,6 +379,15 @@ def dependencies(root):
     sources.chmod(0o644)  # Public signed repository configuration, readable by _apt.
     (context / "lists/partial").mkdir(parents=True)
     (context / "lists").chmod(0o755)
+    sandbox = pwd.getpwnam("_apt")
+    os.chown(context / "lists/partial", sandbox.pw_uid, sandbox.pw_gid)
+    (context / "lists/partial").chmod(0o700)
+    return context, sources
+
+
+def dependencies(root):
+    require(os.geteuid() == 0 and (root / "evidence/COLLECTION.json").is_file(), "uncollected-dependencies-request")
+    context, sources = official_apt_context(root)
     apt = ["apt-get", "-o", "Dir::Etc::sourcelist=" + str(sources), "-o", "Dir::Etc::sourceparts=-",
            "-o", "Dir::State::lists=" + str(context / "lists"), "-o", "Acquire::AllowInsecureRepositories=false",
            "-o", "APT::Get::AllowUnauthenticated=false", "-o", "Debug::Acquire::gpgv=true",
@@ -326,7 +416,7 @@ def run_guest(root):
     shutil.copyfile(root / "candidate.deb", stage / "candidate.deb"); (stage / "candidate.deb").chmod(0o400)
     save(stage / "expected.json", {"DEBSHA256": DEB_SHA, "mainSHA256": MAIN_SHA,
          "packagedUnitSHA256": PACKAGED_UNIT, "installedUnitSHA256": INSTALLED_UNIT, "instance": root.name})
-    save(root / "evidence/CANDIDATE-EXECUTION-INTENT.json", {"DEBSHA256": DEB_SHA, "guestSHA256": GUEST_SHA, "networkQEMUIsolated": False})
+    save(root / "evidence/CANDIDATE-EXECUTION-INTENT.json", execution_intent(root))
     env = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "HOME": "/root", "LC_ALL": "C", "DEBIAN_FRONTEND": "noninteractive"}
     command(root, "real-systemd-lifecycle", ["timeout", "--signal=TERM", "--kill-after=30s", "15m", "python3", "-u", str(BASE / "scripts/linux-installer-systemd-guest.py")], 960, env)
     result = json.loads(Path("/var/tmp/mixel-systemd-qa/RESULT.json").read_text())
@@ -383,22 +473,149 @@ def retain_guest_evidence(root):
     command(root, "final-service-journal", ["journalctl", "-b", "-u", "mixel-remote.service", "--no-pager"], 60)
 
 
-def cleanup_package(root):
+def execution_intent(root):
+    return {"DEBSHA256": DEB_SHA, "guestSHA256": GUEST_SHA, "networkQEMUIsolated": False,
+            "instance": root.name, "applicationSource": APP}
+
+
+def cleanup_binding(root):
+    host_data = json.loads((root / "evidence/HOST.json").read_text())
+    require(all(host_data.get(k) is True for k in ("fresh", "actualPID1Systemd", "root")), "cleanup-requires-fresh-host-proof")
+    require(json.loads((root / "evidence/CANDIDATE-EXECUTION-INTENT.json").read_text()) == execution_intent(root), "cleanup-intent-not-owned")
+    stage = Path("/mnt/mixel-candidate")
+    require(not stage.is_symlink() and stage.is_dir() and stage.resolve() == stage
+            and stage.stat().st_uid == 0, "cleanup-staging-not-owned")
+    for name in ("candidate.deb", "expected.json"):
+        path = stage / name; info = path.lstat()
+        require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_uid == 0, "cleanup-staged-file-not-exclusive")
+    require(sha(stage / "candidate.deb") == DEB_SHA, "cleanup-candidate-hash-mismatch")
+    require(json.loads((stage / "expected.json").read_text()) == {
+        "DEBSHA256": DEB_SHA, "mainSHA256": MAIN_SHA, "packagedUnitSHA256": PACKAGED_UNIT,
+        "installedUnitSHA256": INSTALLED_UNIT, "instance": root.name}, "cleanup-staged-instance-mismatch")
+
+
+def package_state(root, label):
+    raw = command(root, label, ["dpkg-query", "-W", "-f=${binary:Package}\t${Version}\t${Architecture}\t${db:Status-Status}\n", "mixel-remote"], 30, allowed=(0, 1))
+    outcome = json.loads((root / "evidence" / label / "RESULT.json").read_text())
+    require(len(raw) <= 4096, "cleanup-package-query-bound")
+    if outcome["exit"] == 1:
+        require(not raw, "cleanup-ambiguous-package-absence")
+        return None
+    rows = raw.decode().splitlines()
+    require(len(rows) == 1 and len(rows[0].split("\t")) == 4, "cleanup-invalid-package-identity")
+    name, version, architecture, state = rows[0].split("\t")
+    require(name in ("mixel-remote", "mixel-remote:amd64") and version == "1.4.6"
+            and architecture == "amd64" and state in ("installed", "unpacked", "config-files"), "cleanup-foreign-package-or-state")
+    return state
+
+
+def process_birth(pid):
+    try: return Path(f"/proc/{pid}/stat").read_text().rsplit(") ", 1)[1].split()[19]
+    except FileNotFoundError: return None
+
+
+def service_cgroup_empty():
+    path = Path("/sys/fs/cgroup/system.slice/mixel-remote.service/cgroup.procs")
+    return not path.exists() or not path.read_text().strip()
+
+
+def inspect_service_process(pid):
+    process = Path(f"/proc/{pid}"); executable = process / "exe"
+    require(process.stat().st_uid == 0 and os.readlink(executable) in (
+            "/usr/share/mixel-remote/mixel-remote", "/usr/share/mixel-remote/mixel-remote (deleted)")
+            and sha(executable) == MAIN_SHA, "cleanup-foreign-service-process")
+    members = Path("/sys/fs/cgroup/system.slice/mixel-remote.service/cgroup.procs").read_text().split()
+    require(str(pid) in members, "cleanup-main-not-in-service-cgroup")
+    birth = process_birth(pid); require(birth is not None, "cleanup-owner-exited-during-inspection")
+    return {"pid": pid, "birth": birth}
+
+
+def inspect_cleanup_service(root, label):
+    fields = "Id,LoadState,FragmentPath,MainPID,ControlGroup,ActiveState,SubState,DropInPaths"
+    raw = command(root, label, ["systemctl", "show", "--all", "mixel-remote.service", "--property=" + fields], 30, allowed=(0, 1, 4))
+    rows = raw.decode().splitlines(); require(len(rows) == 8 and all("=" in r for r in rows), "cleanup-unknown-unit")
+    unit = dict(row.split("=", 1) for row in rows)
+    require(set(unit) == set(fields.split(",")) and unit["Id"] == "mixel-remote.service"
+            and unit["MainPID"].isdigit() and unit["DropInPaths"] == "", "cleanup-invalid-unit-identity-or-dropin")
+    pid = int(unit["MainPID"])
+    if unit["LoadState"] == "not-found":
+        require(pid == 0 and not unit["FragmentPath"] and not unit["ControlGroup"]
+                and unit["ActiveState"] == "inactive" and unit["SubState"] == "dead"
+                and service_cgroup_empty(), "cleanup-unknown-residual-service")
+        return None
+    fragment = Path(unit["FragmentPath"])
+    require(unit["LoadState"] == "loaded" and os.path.realpath(fragment) == os.path.realpath("/usr/lib/systemd/system/mixel-remote.service")
+            and not fragment.is_symlink() and fragment.is_file() and sha(fragment) == INSTALLED_UNIT,
+            "cleanup-foreign-unit")
+    if pid:
+        require(pid > 1 and unit["ControlGroup"] == "/system.slice/mixel-remote.service", "cleanup-foreign-service-cgroup")
+        return inspect_service_process(pid)
+    require(service_cgroup_empty(), "cleanup-orphan-service-children")
+    return None
+
+
+def require_cleanup_absence(root):
+    require(inspect_cleanup_service(root, "cleanup-final-unit") is None and service_cgroup_empty(), "cleanup-service-still-owned")
+    for path in ("/usr/bin/mixel-remote", "/usr/share/mixel-remote", "/usr/lib/systemd/system/mixel-remote.service",
+                 "/etc/systemd/system/mixel-remote.service", "/etc/systemd/system/multi-user.target.wants/mixel-remote.service",
+                 "/root/.config/mixel-remote"):
+        require(not os.path.lexists(path), "cleanup-residual-owned-path-" + path)
+
+
+def validate_purge_plan(raw):
+    actions = []
+    for row in raw.decode().splitlines():
+        if row.startswith(("Inst ", "Conf ", "Remv ", "Purg ")):
+            fields = row.split()
+            require(fields[0] in ("Remv", "Purg") and len(fields) > 1
+                    and fields[1] in ("mixel-remote", "mixel-remote:amd64"), "cleanup-purge-would-change-other-package")
+            actions.append(fields[1])
+    require(actions, "cleanup-purge-plan-missing-owned-package")
+
+
+def verify_cleanup_payload_if_present():
     main = Path("/usr/share/mixel-remote/mixel-remote")
-    if main.exists():
-        require(sha(main) == MAIN_SHA, "cleanup-refuses-other-payload")
+    if os.path.lexists(main):
+        require(not main.is_symlink() and main.is_file() and main.stat().st_uid == 0
+                and sha(main) == MAIN_SHA, "cleanup-refuses-other-payload")
+
+
+def cleanup_package(root):
+    cleanup_binding(root)
+    state = package_state(root, "cleanup-package-before")
+    owner = inspect_cleanup_service(root, "cleanup-unit-before")
+    if state is None:
+        require(owner is None, "cleanup-unregistered-active-package")
+        require_cleanup_absence(root)
+        return {"packageInitially": "absent", "packageAndOwnedPathsAbsent": True}
+    verify_cleanup_payload_if_present()
+    if owner is not None:
         command(root, "cleanup-owned-service", ["systemctl", "stop", "mixel-remote.service"], 60)
-        command(root, "cleanup-owned-package", ["apt-get", "--yes", "--no-download", "--no-auto-remove", "purge", "mixel-remote"], 120)
+        require(process_birth(owner["pid"]) != owner["birth"] and service_cgroup_empty(), "cleanup-owned-process-not-settled")
+    plan = command(root, "cleanup-purge-plan", ["apt-get", "--simulate", "--no-download", "--no-auto-remove", "purge", "mixel-remote"], 60)
+    validate_purge_plan(plan)
+    command(root, "cleanup-owned-package", ["apt-get", "--yes", "--no-download", "--no-auto-remove", "purge", "mixel-remote"], 120)
+    command(root, "cleanup-unit-reload", ["systemctl", "daemon-reload"], 30)
+    require(package_state(root, "cleanup-package-after") is None, "cleanup-package-still-present")
+    require_cleanup_absence(root)
+    return {"packageInitially": state, "packageAndOwnedPathsAbsent": True}
 
 
 def cleanup(root):
     evidence = root / "evidence"
     if (evidence / "CANDIDATE-EXECUTION-INTENT.json").is_file():
-        try:
-            retain_guest_evidence(root)
-        finally:
-            cleanup_package(root)
-        save(evidence / "CLEANUP.json", {"scope": "Only fresh-run Mixel package; original failure stays failure", "taskComplete": False})
+        first_error = None
+        try: retain_guest_evidence(root)
+        except Exception as error: first_error = error
+        try: outcome = cleanup_package(root)
+        except Exception as error:
+            save(evidence / "CLEANUP-FAILED.json", {"retentionError": str(first_error) if first_error else None,
+                 "cleanupError": str(error), "cleanupVerified": False, "taskComplete": False})
+            if first_error is not None: raise first_error
+            raise
+        if first_error is not None: raise first_error
+        save(evidence / "CLEANUP.json", {"scope": "Only fresh-run Mixel package; original failure stays failure",
+             "outcome": outcome, "cleanupVerified": True, "taskComplete": False})
 
 
 def main():
