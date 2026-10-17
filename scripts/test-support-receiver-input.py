@@ -54,6 +54,8 @@ def source_contracts(module):
     assert 'enum Backend { Local, Portable(String) }' in windows
     assert 'portable_blocks: [Option<Arc<Generation>>;2]' in core
     assert 'state.portable_blocks[0].take()' in core and 'permission_epoch' in core
+    assert 'state.permission_epoch!=epoch' in core and 'set_block_epoch' in core
+    assert 'epoch:Option<u64>' in core and 'epoch!=state.permission_epoch' in core
     assert 'fn retire_pending(inner:&Arc<Inner>)' in core and 'fn retire(state:' not in core
     assert 'fn pending_blocks()' in windows and 'map.len()>=MAX_PENDING' in windows
     assert 'p.target==identity(peer)&&peer.alive()' in windows and 'compare_exchange(0,if success' in windows

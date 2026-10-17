@@ -556,8 +556,8 @@ pub(super) fn native_enqueue(control: bool, task: NativeTask) -> bool {
 }
 fn native_enqueue_reserved(task:NativeTask)->bool{
     let Some(shared)=native()else{return false;};let mut state=shared.state.lock().unwrap_or_else(|e|e.into_inner());
-    // A packet reservation remains owned across every continuation. There can
-    // never be more than MAX_PENDING reserved tasks including the running one.
+    // Work retains its admission permit across continuations. The shared queue
+    // stays bounded; rejected continuations deny their owner and retain cleanup.
     if state.reserved.len()>=MAX_PENDING{return false;}state.reserved.push_back(task);shared.changed.notify_one();true
 }
 pub(super) fn native_effect(control: bool, task: NativeTask) -> bool {

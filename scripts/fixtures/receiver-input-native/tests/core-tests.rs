@@ -100,13 +100,14 @@ fn cleanup_must_complete_before_ack_and_deferred_is_fenced() {
     assert!(super::super::observed().lock().unwrap().iter().any(|event|event.text=="cleanup"));
 }
 pub(crate) fn run_component_tests() {
-    let cases:[(&str,fn());7]=[
+    let cases:[(&str,fn());8]=[
         ("stale revoke/regrant/close",stale_revoke_regrant_close),
         ("count and byte overflow",count_and_byte_overflow_fail_closed),
         ("parallel owner and real cursor peer",independent_parallel_owner_and_cursor_real_peer),
         ("bounded backlog at actual dispatch",bounded_backlog_revocation_at_real_dispatch),
         ("long text per-scalar cancellation",long_text_is_admitted_and_interruptible),
         ("owned BlockInput actual-thread affinity and retry",block_control_has_independent_native_thread_and_failed_unblock_retry),
+        ("stale ordinary BlockOn epoch and independent privacy",stale_ordinary_block_epoch_does_not_regrant),
         ("cleanup acknowledgment and nonblocking deferred revoke",cleanup_must_complete_before_ack_and_deferred_is_fenced),
     ];
     for(name,case)in cases {case();println!("PASS: {name}");}
@@ -132,4 +133,9 @@ pub(crate) fn run_component_tests() {
     assert!(receiver.close());assert!(generation.cleanup_done.load(Ordering::SeqCst));
     let done=Arc::new(AtomicBool::new(false));let seen=done.clone();dispatch::Queue::main().exec_async(move||{seen.store(true,Ordering::SeqCst);});pump_until(||done.load(Ordering::SeqCst));
     assert_eq!(super::super::observed().lock().unwrap().iter().filter(|e|e.owner==generation.token&&e.text=="cleanup").count(),1,"observer duplicate must not perform second cleanup");
+}
+
+fn stale_ordinary_block_epoch_does_not_regrant(){
+    let receiver=Receiver::new(98);assert!(receiver.authorize(true));let epoch=receiver.inner.state.lock().unwrap().permission_epoch;assert!(receiver.set_permission(false));
+    let before=super::super::block_calls().lock().unwrap().len();assert!(!set_block_epoch(&receiver.inner,true,false,Some(epoch)));assert_eq!(super::super::block_calls().lock().unwrap().len(),before,"a request admitted before revoke cannot restore ordinary block");assert!(receiver.block(true,true));assert!(receiver.close());
 }

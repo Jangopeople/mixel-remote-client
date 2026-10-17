@@ -185,14 +185,15 @@ impl Receiver {
         let state = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
         if !state.alive || !state.authorized || !self.inner.alive.load(Ordering::SeqCst) || self.failed() { return false; }
         if enabled&&!state.cursor.as_ref().map(|g|g.admitted()).unwrap_or(false){return false;}
+        let epoch=state.permission_epoch;
         #[cfg(windows)] if state.cursor.as_ref().map(|g|matches!(&g.backend,windows::Backend::Portable(_))).unwrap_or(false) {
-            drop(state); return self.portable_block(enabled,privacy);
+            drop(state); return self.portable_block(enabled,privacy,epoch);
         }
         drop(state);
-        set_block(&self.inner, enabled, privacy)
+        set_block_epoch(&self.inner, enabled, privacy,if enabled&&!privacy{Some(epoch)}else{None})
     }
     #[cfg(windows)]
-    fn portable_block(&self, enabled:bool, privacy:bool)->bool {
+    fn portable_block(&self, enabled:bool, privacy:bool,epoch:u64)->bool {
         let index=usize::from(privacy);
         if !enabled {
             { let mut state=self.inner.state.lock().unwrap_or_else(|e|e.into_inner());
@@ -202,7 +203,7 @@ impl Receiver {
         // A fresh grant can never rearm a previous monotonic lease.
         if !retire_pending(&self.inner) { return false; }
         let scope={let mut state=self.inner.state.lock().unwrap_or_else(|e|e.into_inner());
-            if !state.alive||!state.authorized||!self.inner.alive.load(Ordering::SeqCst)||self.failed(){return false;}
+            if !state.alive||!state.authorized||(!privacy&&state.permission_epoch!=epoch)||!self.inner.alive.load(Ordering::SeqCst)||self.failed(){return false;}
             if state.portable_blocks[index].is_none(){state.portable_blocks[index]=Generation::new_role(&self.inner,1+index as u8);}
             let Some(scope)=state.portable_blocks[index].clone()else{return false;};
             if !matches!(&scope.backend,windows::Backend::Portable(_)){return false;}scope
@@ -364,12 +365,14 @@ fn schedule_cleanup(generation: Arc<Generation>) {
 // BlockInput has its own authorization/lifetime, separate from keyboard data.
 // Privacy/plugin calls retain their existing caller checks; only connection close
 // invalidates both categories. No BlockOn is allowed to sit behind data work.
-fn block_owner_allowed(owner:&Inner)->bool{
+fn block_owner_allowed(owner:&Inner,epoch:Option<u64>)->bool{
     if !owner.alive.load(Ordering::SeqCst)||owner.failed.load(Ordering::SeqCst){return false;}
-    #[cfg(windows)] {let state=owner.state.lock().unwrap_or_else(|e|e.into_inner());return state.cursor.as_ref().map(|g|g.admitted()).unwrap_or(false);}
+    let state=owner.state.lock().unwrap_or_else(|e|e.into_inner());
+    if epoch.map(|epoch|epoch!=state.permission_epoch).unwrap_or(false){return false;}
+    #[cfg(windows)] {return state.cursor.as_ref().map(|g|g.admitted()).unwrap_or(false);}
     #[cfg(not(windows))] {true}
 }
-struct BlockRequest { desired: bool, owner: std::sync::Weak<Inner>, status: AtomicUsize }
+struct BlockRequest { desired: bool, owner: std::sync::Weak<Inner>, epoch:Option<u64>, status: AtomicUsize }
 struct BlockState { actual: bool, inflight: bool, requests: HashMap<(String, bool), Arc<BlockRequest>> }
 struct Blocks { state: Mutex<BlockState>, changed: std::sync::Condvar }
 fn blocks() -> Option<&'static Arc<Blocks>> {
@@ -386,7 +389,7 @@ fn block_worker(shared: Arc<Blocks>) {
     loop {
         let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
         for request in state.requests.values() {
-            if request.desired && !request.owner.upgrade().map(|v| block_owner_allowed(&v)).unwrap_or(false) {
+            if request.desired && !request.owner.upgrade().map(|v| block_owner_allowed(&v,request.epoch)).unwrap_or(false) {
                 request.status.store(2, Ordering::SeqCst);
             }
         }
@@ -398,7 +401,7 @@ fn block_worker(shared: Arc<Blocks>) {
             let checked = shared.clone();
             let effect = move || {
                 let state = checked.state.lock().unwrap_or_else(|e| e.into_inner());
-                let current = state.requests.values().any(|r| r.desired && r.status.load(Ordering::SeqCst) != 2 && r.owner.upgrade().map(|owner| block_owner_allowed(&owner)).unwrap_or(false));
+                let current = state.requests.values().any(|r| r.desired && r.status.load(Ordering::SeqCst) != 2 && r.owner.upgrade().map(|owner| block_owner_allowed(&owner,r.epoch)).unwrap_or(false));
                 drop(state);
                 #[cfg(windows)] let success = current == wanted && windows::native_block_owner("local-process",wanted);
                 #[cfg(not(windows))] let success = current == wanted && crate::platform::block_input(wanted).0;
@@ -424,11 +427,13 @@ fn block_worker(shared: Arc<Blocks>) {
         let _wait = shared.changed.wait_timeout(state, Duration::from_millis(5)).unwrap_or_else(|e| e.into_inner());
     }
 }
-fn set_block(inner: &Arc<Inner>, enabled: bool, privacy: bool) -> bool {
+fn set_block(inner: &Arc<Inner>, enabled: bool, privacy: bool) -> bool {set_block_epoch(inner,enabled,privacy,None)}
+fn set_block_epoch(inner:&Arc<Inner>,enabled:bool,privacy:bool,epoch:Option<u64>)->bool{
     let Some(shared) = blocks() else { return false; };
     let key = (inner.control.clone(), privacy);
-    let request = Arc::new(BlockRequest { desired: enabled, owner: Arc::downgrade(inner), status: AtomicUsize::new(0) });
+    let request = Arc::new(BlockRequest { desired: enabled, owner: Arc::downgrade(inner), epoch, status: AtomicUsize::new(0) });
     let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+    if enabled&&!block_owner_allowed(inner,epoch){return false;}
     if !enabled && !state.requests.contains_key(&key) && !state.inflight { return true; }
     if !state.requests.contains_key(&key) && state.requests.len() >= 512 { return false; }
     if let Some(old) = state.requests.insert(key.clone(), request.clone()) { old.status.store(2, Ordering::SeqCst); }
@@ -442,7 +447,7 @@ fn set_block(inner: &Arc<Inner>, enabled: bool, privacy: bool) -> bool {
             // until the same native thread actually releases the last OS block.
             if enabled && state.requests.get(&key).map(|v| Arc::ptr_eq(v, &request)).unwrap_or(false) {
                 request.status.store(2, Ordering::SeqCst);
-                state.requests.insert(key, Arc::new(BlockRequest { desired: false, owner: Arc::downgrade(inner), status: AtomicUsize::new(0) }));
+                state.requests.insert(key, Arc::new(BlockRequest { desired: false, owner: Arc::downgrade(inner), epoch:None, status: AtomicUsize::new(0) }));
                 shared.changed.notify_all();
             }
             return false;
