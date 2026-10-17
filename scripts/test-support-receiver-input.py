@@ -70,6 +70,13 @@ def source_contracts(module):
     assert 'role>2' in windows and 'remote.role==role' in windows
     assert 'v.modifiers.len() <= 16' in core
     assert 'GetNamedPipeServerProcessId' in windows and 'GetNamedPipeClientProcessId' in windows
+    assert 'GetNamedPipeServerSessionId(pipe,&mut session)' in windows and 'GetNamedPipeClientSessionId(pipe,&mut session)' in windows
+    assert 'let session = pipe_session(pipe,server_peer)?;' in windows
+    publisher = windows.split('pub(crate) fn pipe_publisher(',1)[1].split('struct Started',1)[0]
+    assert 'let pid = pipe_pid(pipe,true)?;' in publisher and 'let source = pipe_session(pipe,true)?;' in publisher
+    assert 'verified_peer_session(pid,Arc::new(Owned::from(raw)?),String::new(),source)' in publisher
+    assert 'ProcessIdToSessionId(pid,' not in publisher and 'OpenProcess(' not in publisher, 'Transferred limited-query process identity must not reopen the publisher by PID'
+    assert 'ProcessIdToSessionId(pid,&mut source)' in windows.split('fn verified_peer(',1)[1].split('fn verified_peer_session(',1)[0], 'Direct owned startup retains its separate session validation'
     assert 'source == 0 || source != target' in windows and 'process: Some(peer.process.clone())' in windows
     assert 'OpenEventW(SYNC,0' in windows and 'OpenMutexW(MUTEX_ACCESS,0' in windows
     assert 'GetLastError() } == 183' in windows and 'D:P(A;;GA;;;' in windows
@@ -125,6 +132,11 @@ def source_contracts(module):
     assert 'for _ in 0..=24' in qa and 'if byte[0]==0xf0' in qa, 'Different-SID diagnostics must be bounded and failures fatal'
     assert 'std::panic::catch_unwind(std::panic::AssertUnwindSafe(||{' in qa
     assert 'failure.extend_from_slice(&native.to_le_bytes())' in qa and 'std::process::exit(1)' in qa
+    assert 'fn qa_publisher_probes(' in qa and 'qa_publisher_probes(&mut pipe,transferred)' in qa
+    assert 'qa_api_result(pipe,5,ok!=0,native)' in qa and 'ProcessIdToSessionId(pid,&mut legacy)' in qa
+    assert 'qa_api_result(pipe,6,ok!=0&&session!=0,native)' in qa and 'GetNamedPipeServerSessionId(pipe.raw(),&mut session)' in qa
+    assert 'if byte[0]==0xf1' in qa and 'publisher API {} ok={} native={}' in qa
+    assert '1..=8' in qa and 'detail[1]<=1' in qa, 'Additional actual API diagnostics carry only bounded fixed IDs, booleans and native error numbers'
     assert 'qa_dacl(&executable),qa_dacl(&marker)' in qa, 'Non-image ACL oracle must exactly match executable ACL'
     assert 'same executable DACL must deny marker write through actual kernel access check' in qa
     for forbidden in ('DesktopAccess', 'SetUserObjectSecurity', 'SetPrivilege', 'SeDebugPrivilege', ';;;WD)', 'PasswordNeverExpires -Password'):

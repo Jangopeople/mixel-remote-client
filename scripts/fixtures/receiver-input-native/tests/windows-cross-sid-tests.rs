@@ -207,11 +207,30 @@ fn qa_parent_body(){
 }
 pub(crate) fn cross_sid_parent(){assert!(hosted_receiver_qa());let result=std::panic::catch_unwind(qa_parent_body);assert!(!QA_CLEANUP_FAILED.load(Ordering::SeqCst),"owned CI cleanup must complete");if let Err(error)=result{std::panic::resume_unwind(error);}println!("PASS: exact owned CI standard account/profile and private directory DACL cleanup");}
 fn qa_phase(pipe:&mut QaPipe,phase:&mut u8,next:u8){assert!((1..=16).contains(&next));*phase=next;qa_pipe_send(pipe,&[0x80|next]);}
+fn qa_api_result(pipe:&mut QaPipe,api:u8,ok:bool,native:u32){
+    assert!((1..=8).contains(&api));let mut result=vec![0xf1,api,u8::from(ok)];result.extend_from_slice(&(if ok{0}else{native}).to_le_bytes());qa_pipe_send(pipe,&result);
+}
+fn qa_publisher_probes(pipe:&mut QaPipe,transferred:u64){
+    // Fixed numeric observations only: no PID, handle, session, image, SID or
+    // credential values. These borrowed queries never take/close the transfer.
+    let raw=usize::try_from(transferred).expect("publisher handle fits this process")as Handle;
+    let mut pid=0;let ok=unsafe{GetNamedPipeServerProcessId(pipe.raw(),&mut pid)};let native=unsafe{GetLastError()};qa_api_result(pipe,1,ok!=0&&pid!=0,native);
+    let actual=unsafe{GetProcessId(raw)};let native=unsafe{GetLastError()};qa_api_result(pipe,2,actual!=0&&actual==pid,if actual==0{native}else{0});
+    let born=birth(raw);let native=unsafe{GetLastError()};qa_api_result(pipe,3,born.is_some(),native);
+    let observed=image(raw);let native=unsafe{GetLastError()};let current=image(unsafe{GetCurrentProcess()});qa_api_result(pipe,4,observed.is_some()&&observed==current,if observed.is_none(){native}else{0});
+    // Reproduce the old cross-account PID lookup independently; failure is an
+    // observation, never permission to skip corrected publisher verification.
+    let mut legacy=0;let ok=unsafe{ProcessIdToSessionId(pid,&mut legacy)};let native=unsafe{GetLastError()};qa_api_result(pipe,5,ok!=0,native);
+    let mut session=0;let ok=unsafe{GetNamedPipeServerSessionId(pipe.raw(),&mut session)};let native=unsafe{GetLastError()};qa_api_result(pipe,6,ok!=0&&session!=0,native);
+    let mut own=0;let ok=unsafe{ProcessIdToSessionId(GetCurrentProcessId(),&mut own)};let native=unsafe{GetLastError()};qa_api_result(pipe,7,ok!=0&&own!=0&&own==session,if ok==0{native}else{0});
+    let wait=unsafe{WaitForSingleObject(raw,0)};let native=unsafe{GetLastError()};qa_api_result(pipe,8,wait==TIMEOUT,if wait==u32::MAX{native}else{0});
+}
 fn qa_reply(pipe:&mut QaPipe,expected:u8){
     for _ in 0..=24{
         let mut byte=[0];qa_pipe_wait(pipe,&mut byte);
         if byte[0]==expected{return;}
         if (0x81..=0x90).contains(&byte[0]){println!("CI cross-SID: child verification phase {}",byte[0]&0x1f);continue;}
+        if byte[0]==0xf1{let mut detail=[0;6];qa_pipe_wait(pipe,&mut detail);assert!((1..=8).contains(&detail[0])&&detail[1]<=1);println!("CI cross-SID: publisher API {} ok={} native={}",detail[0],detail[1],u32::from_le_bytes(detail[2..].try_into().unwrap()));continue;}
         if byte[0]==0xf0{let mut detail=[0;5];qa_pipe_wait(pipe,&mut detail);panic!("different-SID child verification failed at phase {}; native={}",detail[0],u32::from_le_bytes(detail[1..].try_into().unwrap()));}
         panic!("unexpected different-SID fixture reply tag");
     }
@@ -222,7 +241,7 @@ pub(crate) fn cross_sid_logon_child(){
     let(mut phase,mut native)=(0u8,0u32);
     let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||{
         qa_phase(&mut pipe,&mut phase,1);let mut transferred=[0;8];qa_pipe_wait(&mut pipe,&mut transferred);
-        qa_phase(&mut pipe,&mut phase,2);let publisher=pipe_publisher(pipe.raw(),Some(u64::from_le_bytes(transferred)));native=unsafe{GetLastError()};let publisher=publisher.expect("actual transferred publisher process identity");native=0;pipe.peer=Some(publisher.process.clone());
+        qa_phase(&mut pipe,&mut phase,2);let transferred=u64::from_le_bytes(transferred);qa_publisher_probes(&mut pipe,transferred);let publisher=pipe_publisher(pipe.raw(),Some(transferred));native=unsafe{GetLastError()};let publisher=publisher.expect("actual transferred publisher process identity");native=0;pipe.peer=Some(publisher.process.clone());
         qa_phase(&mut pipe,&mut phase,3);let expected=qa_read_text(&mut pipe);assert_eq!(process_sid(unsafe{GetCurrentProcess()}).as_deref(),Some(expected.as_str()));
         qa_phase(&mut pipe,&mut phase,4);let mut token=ptr::null_mut();let opened=unsafe{OpenProcessToken(GetCurrentProcess(),8,&mut token)};native=unsafe{GetLastError()};assert_ne!(opened,0);native=0;let token=Owned::from(token).unwrap();qa_standard_token(token.raw());
         // The marker has the byte-identical executable DACL, but is not a mapped

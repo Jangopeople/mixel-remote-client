@@ -12,7 +12,7 @@ from pathlib import Path
 
 HERE = Path(__file__).absolute().parent
 PLAN = HERE / 'support-receiver-input-plan.json'
-PLAN_SHA = "82f4a8e2697ac17e564299817ff23566ed4c330a708c58643fe373879dd289a5"
+PLAN_SHA = "23951a75336f4230c9a40fa90775fe6572714708aa90c9ec74037fa06a226fcd"
 LEAVES = {'src/server/mixel_receiver_input.rs': 'support-receiver-input.rs',
           'src/server/mixel_receiver_input_windows.rs': 'support-receiver-input-windows.rs'}
 

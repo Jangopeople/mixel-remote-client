@@ -114,9 +114,13 @@ pub(crate) fn query_child() {
     let raw=loop{let h=unsafe{CreateFileW(wide(&path).as_ptr(),0xc0000000,0,ptr::null_mut(),3,0,ptr::null_mut())};if !h.is_null()&&h as isize != -1{break h;}assert!(std::time::Instant::now()<deadline);std::thread::sleep(Duration::from_millis(5));};
     let mut file=unsafe{std::fs::File::from_raw_handle(raw)};let mut bytes=[0u8;8];file.read_exact(&mut bytes).unwrap();let transferred=u64::from_le_bytes(bytes);
     let object=create_object(&format!("Local\\Mixel-Input-Untrusted-Handle-{}",uuid::Uuid::new_v4().simple()),false).unwrap();
+    assert!(pipe_session(object.raw(),true).is_none(),"an unrelated kernel object is never pipe-session authority");
     assert!(pipe_publisher(file.as_raw_handle(),Some(object.0 as u64)).is_none());
     assert_eq!(unsafe{WaitForSingleObject(object.raw(),0)},OBJECT,"rejected supplied handle must never close an unrelated object");unsafe{ReleaseMutex(object.raw());}
     let peer=pipe_publisher(file.as_raw_handle(),Some(transferred)).expect("kernel-bound transferred publisher query handle");assert_eq!(peer.pid,pipe_pid(file.as_raw_handle(),true).unwrap());assert!(peer.alive());
+    let session=pipe_session(file.as_raw_handle(),true).expect("actual retained pipe server session");let mut current=0;assert_ne!(unsafe{ProcessIdToSessionId(GetCurrentProcessId(),&mut current)},0);assert_eq!(session,current);assert_ne!(session,0);
+    assert!(verified_peer_session(peer.pid,peer.process.clone(),peer.sid.clone(),0).is_none(),"session zero must fail closed despite an otherwise valid retained process");
+    assert!(verified_peer_session(peer.pid,peer.process.clone(),peer.sid.clone(),session.checked_add(1).unwrap()).is_none(),"different session must fail closed despite valid retained process identity");
     drop(peer);assert_eq!(unsafe{WaitForSingleObject(transferred as usize as Handle,0)},u32::MAX,"accepted transferred handle is owned and closed exactly once");
     file.write_all(&[1]).unwrap();file.flush().unwrap();
 }

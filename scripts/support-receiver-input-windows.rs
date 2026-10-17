@@ -16,6 +16,8 @@ extern "system" {
     fn CreateMutexExW(a: *const Attributes, name: *const u16, flags: u32, access: u32) -> Handle;
     fn GetNamedPipeServerProcessId(pipe: Handle, pid: *mut u32) -> i32;
     fn GetNamedPipeClientProcessId(pipe: Handle, pid: *mut u32) -> i32;
+    fn GetNamedPipeServerSessionId(pipe: Handle, session: *mut u32) -> i32;
+    fn GetNamedPipeClientSessionId(pipe: Handle, session: *mut u32) -> i32;
     fn OpenEventW(access: u32, inherit: i32, name: *const u16) -> Handle;
     fn OpenMutexW(access: u32, inherit: i32, name: *const u16) -> Handle;
     fn SetEvent(handle: Handle) -> i32;
@@ -188,17 +190,28 @@ fn pipe_pid(pipe: Handle, server_peer: bool) -> Option<u32> {
     let ok = unsafe { if server_peer { GetNamedPipeServerProcessId(pipe,&mut pid) } else { GetNamedPipeClientProcessId(pipe,&mut pid) } };
     (ok != 0 && pid != 0).then_some(pid)
 }
+fn pipe_session(pipe: Handle, server_peer: bool) -> Option<u32> {
+    let mut session = 0;
+    let ok = unsafe { if server_peer { GetNamedPipeServerSessionId(pipe,&mut session) } else { GetNamedPipeClientSessionId(pipe,&mut session) } };
+    (ok != 0 && session != 0).then_some(session)
+}
 fn verified_peer(pid: u32, process: Arc<Owned>, sid: String) -> Option<Peer> {
+    let mut source = 0;
+    if unsafe { ProcessIdToSessionId(pid,&mut source) } == 0 { return None; }
+    verified_peer_session(pid,process,sid,source)
+}
+fn verified_peer_session(pid: u32, process: Arc<Owned>, sid: String, source: u32) -> Option<Peer> {
     if unsafe { GetProcessId(process.raw()) } != pid { return None; }
     let born = birth(process.raw())?;
     if image(process.raw())? != image(unsafe { GetCurrentProcess() })? { return None; }
-    let (mut source,mut target) = (u32::MAX,u32::MAX);
-    if unsafe { ProcessIdToSessionId(pid,&mut source) } == 0 || unsafe { ProcessIdToSessionId(GetCurrentProcessId(),&mut target) } == 0 || source == 0 || source != target { return None; }
+    let mut target = u32::MAX;
+    if unsafe { ProcessIdToSessionId(GetCurrentProcessId(),&mut target) } == 0 || source == 0 || source != target { return None; }
     let peer = Peer { pid, born, sid, process };
     peer.alive().then_some(peer)
 }
 pub(crate) fn pipe_peer(pipe: Handle, server_peer: bool) -> Option<Peer> {
     let pid = pipe_pid(pipe,server_peer)?;
+    let session = pipe_session(pipe,server_peer)?;
     // An explicitly credentialed child has a retained real startup process
     // handle and exact logon-token SID, so no different-account token query.
     let retained = if !server_peer {
@@ -207,12 +220,12 @@ pub(crate) fn pipe_peer(pipe: Handle, server_peer: bool) -> Option<Peer> {
         startup.as_ref().filter(|s| s.peer.pid == pid).map(|s| s.peer.clone())
     } else { None };
     let peer = if let Some(peer) = retained {
-        let verified = verified_peer(pid,peer.process.clone(),peer.sid.clone())?;
+        let verified = verified_peer_session(pid,peer.process.clone(),peer.sid.clone(),session)?;
         if verified.born != peer.born { return None; } verified
     } else {
         let process = Owned::from(unsafe { OpenProcess(SYNC | 0x1000,0,pid) })?;
         let sid = if server_peer { String::new() } else { process_sid(process.raw())? };
-        verified_peer(pid,Arc::new(process),sid)?
+        verified_peer_session(pid,Arc::new(process),sid,session)?
     };
     if !server_peer { *helper().lock().ok()? = Some(peer.clone()); }
     Some(peer)
@@ -220,14 +233,18 @@ pub(crate) fn pipe_peer(pipe: Handle, server_peer: bool) -> Option<Peer> {
 pub(crate) fn pipe_publisher(pipe: Handle, transferred: Option<u64>) -> Option<Peer> {
     let Some(raw) = transferred else { return pipe_peer(pipe,true); };
     let pid = pipe_pid(pipe,true)?;
+    let source = pipe_session(pipe,true)?;
     let raw = usize::try_from(raw).ok()? as Handle;
     if raw.is_null() || unsafe { GetProcessId(raw) } != pid { return None; }
     // Inspect borrowed first. Never close an unvalidated packet-supplied handle
     // (it might name an unrelated child object); a failed child then exits.
     if birth(raw).is_none() || image(raw)? != image(unsafe { GetCurrentProcess() })? { return None; }
-    let (mut a,mut b) = (0,0);
-    if unsafe { ProcessIdToSessionId(pid,&mut a) } == 0 || unsafe { ProcessIdToSessionId(GetCurrentProcessId(),&mut b) } == 0 || a == 0 || a != b || unsafe { WaitForSingleObject(raw,0) } != TIMEOUT { return None; }
-    verified_peer(pid,Arc::new(Owned::from(raw)?),String::new())
+    // The actual pipe binds both peer PID and session. A PID session lookup
+    // would reopen the publisher and reject an intended different-account
+    // helper even though its exact limited-query process handle was transferred.
+    let mut target = 0;
+    if unsafe { ProcessIdToSessionId(GetCurrentProcessId(),&mut target) } == 0 || source == 0 || source != target || unsafe { WaitForSingleObject(raw,0) } != TIMEOUT { return None; }
+    verified_peer_session(pid,Arc::new(Owned::from(raw)?),String::new(),source)
 }
 struct Started { peer: Peer, publisher: Option<u64>, confirmed: Arc<AtomicUsize> }
 fn started() -> &'static Mutex<Option<Started>> { static STARTED: OnceLock<Mutex<Option<Started>>> = OnceLock::new(); STARTED.get_or_init(|| Mutex::new(None)) }
