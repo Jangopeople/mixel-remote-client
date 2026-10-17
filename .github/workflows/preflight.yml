@@ -103,6 +103,7 @@ jobs:
       - name: Run release staging and configuration regression tests
         run: |
           python3 scripts/test-release-pipeline.py
+          python3 scripts/test-receiver-input-integration.py
           python3 scripts/test-flutter-sdk-pipeline.py
           python3 scripts/test-support-url-log-privacy.py
           python3 scripts/test-support-launch-macos-concurrency-controls.py --evidence-dir "$RUNNER_TEMP/mixel-macos-concurrency-source"

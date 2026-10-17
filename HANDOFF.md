@@ -1,5 +1,44 @@
 # Mixel-Remote — Agent Handoff / Current State
 
+## 2026-10-17 — Receiver revocation component passes; application acceptance remains open
+
+Read current Git HEAD and the authoritative checkpoint before older entries.
+The canonical checkout remains73e7c3d. Receiver integration is in the ordinary
+clone `/private/tmp/mixel-receiver-integration-20261017`; do not confuse its
+source/component results with a new installed application qualification.
+
+Diagnostic39046065139 passes all three desktop hosts at exactb9b91f4,
+treea18c2e6d. Each host passes26 source controls and14 actual Rust receipt-core
+tests. The receiver components pass15 Windows,8 Mac and7 Linux scenarios.
+These exercise actual Windows lease/process primitives and actual Mac main-queue
+dispatch with mocked native input effects. Windows also passes the required
+non-Send mutex-guard compile-failure control. The earlier Mac queued-cleanup
+deadlock is reproduced and fixed; the Windows test-clock underflow is corrected
+without changing the production receipt core. Original failures remain retained.
+Proof: durable artifact `receiver-b9b91f4-final-readback-ylaehcx_/RESULT.json`,
+SHA2567dc8db9aed1ae199692c6ea1f666823da67fb1b72353ff48ca52e0c9cc0acf58.
+The observer is closed; do not refetch its logs or artifacts.
+
+The new terminal owners enforce bounded per-generation admission, cancellation
+at the actual dispatch point, successful native receipt ownership and truthful
+retirement acknowledgments. Their strict whole-source inverses run before
+historical owners; the older source pins and failure controls remain fatal.
+The pipeline now runs the new components before shipping and runs integration
+inverse/order controls in both release configuration entrypoints. Subsequent
+helper startup-failure recovery is source-integrated at eb33771 and has a
+separate component diagnostic39046916831; its final result is in the checkpoint.
+
+Delivery is incomplete. Linux own-uinput needs an authoritative service-side
+scope; portable Windows BlockInput needs the same helper thread as SendInput.
+The interim wrong-process portable BlockOn returns failure explicitly. Scoped
+remote secure attention and arbitrary injector-death retirement remain open.
+Full application compilation, new signed cold95 Windows execution and actual
+PC01/Mac consent/input/clipboard/files/reconnect acceptance are still required.
+Keep publication, main, store and production holds. Preserve protected old
+resources, the no-worktree rule, the GTK automatic rejection and human-only
+normal Mac Quit/native URI Open. Local compilers require a fresh confirmed
+coordination window with the Adobe task; old windows are expired.
+
 ## 2026-10-17 — Debian lifecycle correction built; Windows QA gaps closed
 
 Read current Git HEAD and the authoritative checkpoint before older entries.

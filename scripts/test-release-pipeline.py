@@ -79,6 +79,8 @@ class WorkflowPythonEncodingTests(unittest.TestCase):
 class WindowsEarlyLeaseGateTests(unittest.TestCase):
     def test_early_private_gate_exact_context_and_closed_source_inverses(self):
         workflow = (ROOT / '.github/workflows/preflight.yml').read_text()
+        receiver = module('mixel_receiver_early_gate_prior', 'receiver_input_integration_projection.py')
+        workflow = receiver.inverse(workflow.encode(), '.github/workflows/preflight.yml').decode()
         before = "      - uses: dtolnay/rust-toolchain@v1\n        with:\n          toolchain: '1.75'\n"
         addition = "      - name: Prove early Windows acknowledgment publication\n        timeout-minutes: 3\n        shell: pwsh\n        run: |\n          ./scripts/activate-windows-msvc.ps1 -ExportToGitHubEnvironment\n          python scripts/test-support-lease-ack.py\n          if ($LASTEXITCODE -ne 0) { throw 'Actual Windows acknowledgment controls failed.' }\n      - name: Prove early actual standard-token lease lifecycle\n        timeout-minutes: 5\n        shell: pwsh\n        run: |\n          $env:MIXEL_HOSTED_OWNED_QA_NAMESPACE='1'\n          ./scripts/invoke-hosted-standard-qa-windows.ps1 -EvidenceDirectory (Join-Path $env:RUNNER_TEMP 'mixel-early-standard-qa')\n      - name: Preserve early Windows standard-token lifecycle evidence\n        if: always()\n        uses: actions/upload-artifact@v6\n        with:\n          name: windows-lease-ack-early\n          path: ${{ runner.temp }}/mixel-early-standard-qa/\n          if-no-files-found: ignore\n          retention-days: 14\n"
         after = '      - uses: subosito/flutter-action@v2\n'

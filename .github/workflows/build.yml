@@ -75,6 +75,7 @@ jobs:
       - name: Verify release staging and build configuration
         run: |
           python3 scripts/test-release-pipeline.py
+          python3 scripts/test-receiver-input-integration.py
           python3 scripts/test-flutter-sdk-pipeline.py
           python3 scripts/test-support-url-log-privacy.py
           python3 scripts/test-notarize-macos.py
@@ -157,6 +158,11 @@ jobs:
           BRANDING: ./branding
       - name: Prove actual input components and required original failures
         run: |
+          python3 scripts/test-support-receiver-input.py --source rustdesk
+          python3 scripts/test-support-receiver-input-native.py \
+            --output "$RUNNER_TEMP/mixel-receiver-input"
+          python3 scripts/test-receiver-native.py --native \
+            --proof-root "$RUNNER_TEMP/mixel-receiver-native-receipts"
           python3 scripts/fixtures/input-lifecycle/native-input/native_input_gate.py \
             --source rustdesk --output "$RUNNER_TEMP/mixel-native-input" --online
       - name: Preserve input regression evidence
@@ -165,6 +171,9 @@ jobs:
         with:
           name: native-input-regressions-${{ matrix.job.name }}
           path: |
+            ${{ runner.temp }}/mixel-receiver-input/
+            !${{ runner.temp }}/mixel-receiver-input/target/**
+            ${{ runner.temp }}/mixel-receiver-native-receipts/
             ${{ runner.temp }}/mixel-native-input/
             !${{ runner.temp }}/mixel-native-input/target/**
           if-no-files-found: ignore
@@ -219,6 +228,10 @@ jobs:
       - name: Generate bridge
         working-directory: rustdesk
         run: |
+          python3 "$GITHUB_WORKSPACE/scripts/patch-support-receiver-input.py" --root . --restore --check
+          python3 "$GITHUB_WORKSPACE/scripts/patch-support-receiver-native.py" --root . --restore --check
+          python3 "$GITHUB_WORKSPACE/scripts/patch-support-receiver-input.py" --root . --restore
+          python3 "$GITHUB_WORKSPACE/scripts/patch-support-receiver-native.py" --root . --restore
           python3 "$GITHUB_WORKSPACE/scripts/patch-support-input-lifecycle.py" --root . --restore --check
           python3 "$GITHUB_WORKSPACE/scripts/patch-support-input-lifecycle.py" --root . --restore
           python3 ../scripts/patch-support-uri-routing.py --root . --restore
@@ -228,6 +241,8 @@ jobs:
           python3 ../scripts/patch-support-linux-child-window-close.py --root . --after-branding
           python3 ../scripts/patch-support-uri-routing.py --root . --after-branding
           python3 "$GITHUB_WORKSPACE/scripts/patch-support-input-lifecycle.py" --root .
+          python3 "$GITHUB_WORKSPACE/scripts/patch-support-receiver-native.py" --root .
+          python3 "$GITHUB_WORKSPACE/scripts/patch-support-receiver-input.py" --root .
           pushd flutter && sed -i -e 's/extended_text: 14.0.0/extended_text: 13.0.0/g' pubspec.yaml && flutter pub get && popd
           ~/.cargo/bin/flutter_rust_bridge_codegen \
             --rust-input ./src/flutter_ffi.rs \

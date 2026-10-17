@@ -1,0 +1,103 @@
+{
+  "schema": "mixel-receiver-integration-v1",
+  "owners": {
+    "patch-support-receiver-input.py": "a3f5286a0e1e0827d0896dc3dad94cfab4c0a7a5a02ec2e406e04e3527ab7f7d",
+    "patch-support-receiver-native.py": "5da1817ae16cfa1a8a486dca1f526254c5d9da5fdfdf6d111200232eb93dce9a"
+  },
+  "files": {
+    "scripts/apply-branding.sh": {
+      "prior_sha256": "37c9b9762cebc0771488f3d7330e78a87f683c128b476989b97b569e076761fa",
+      "changes": [
+        {
+          "old": "# complete prior-owner refusal gates. Reapplication at the end is idempotent.\npython3 \"$(dirname \"${BASH_SOURCE[0]}\")/patch-support-file-dialog-lifecycle.py\" --root \"$RDREPO\" --check\n\n# Validate and invert the complete desktop input layer before older owners write.\n",
+          "new": "# complete prior-owner refusal gates. Reapplication at the end is idempotent.\npython3 \"$(dirname \"${BASH_SOURCE[0]}\")/patch-support-file-dialog-lifecycle.py\" --root \"$RDREPO\" --check\n\n# Validate both receiver layers before their exact inverses or older owners write.\npython3 \"$(dirname \"${BASH_SOURCE[0]}\")/patch-support-receiver-input.py\" --root \"$RDREPO\" --restore --check\npython3 \"$(dirname \"${BASH_SOURCE[0]}\")/patch-support-receiver-native.py\" --root \"$RDREPO\" --restore --check\npython3 \"$(dirname \"${BASH_SOURCE[0]}\")/patch-support-receiver-input.py\" --root \"$RDREPO\" --restore\npython3 \"$(dirname \"${BASH_SOURCE[0]}\")/patch-support-receiver-native.py\" --root \"$RDREPO\" --restore\n\n# Validate and invert the complete desktop input layer before older owners write.\n"
+        },
+        {
+          "old": "python3 \"$(dirname \"${BASH_SOURCE[0]}\")/patch-support-input-lifecycle.py\" --root \"$RDREPO\"\n\necho \"\u2713 Branding applied \u2014 product identity is $APP_NAME only.\"\n",
+          "new": "python3 \"$(dirname \"${BASH_SOURCE[0]}\")/patch-support-input-lifecycle.py\" --root \"$RDREPO\"\n\n# Receipts precede receiver generations at every actual native input sink.\npython3 \"$(dirname \"${BASH_SOURCE[0]}\")/patch-support-receiver-native.py\" --root \"$RDREPO\"\npython3 \"$(dirname \"${BASH_SOURCE[0]}\")/patch-support-receiver-input.py\" --root \"$RDREPO\"\n\necho \"\u2713 Branding applied \u2014 product identity is $APP_NAME only.\"\n"
+        }
+      ]
+    },
+    ".github/workflows/build.yml": {
+      "prior_sha256": "44057c2c59bc980b45a281c094ce2420d5a24364025b8a40f4a9d75749c8493f",
+      "changes": [
+        {
+          "old": "  PYTHONUTF8: \"1\"\n  PYTHONIOENCODING: \"utf-8\"\n  RUST_VERSION: \"1.75\"\n  MAC_RUST_VERSION: \"1.81\"\n",
+          "new": "  PYTHONUTF8: \"1\"\n  PYTHONIOENCODING: \"utf-8\"\n  PYTHONUNBUFFERED: \"1\"\n  RUST_VERSION: \"1.75\"\n  MAC_RUST_VERSION: \"1.81\"\n"
+        },
+        {
+          "old": "        run: |\n          python3 scripts/test-release-pipeline.py\n          python3 scripts/test-flutter-sdk-pipeline.py\n          python3 scripts/test-support-url-log-privacy.py\n",
+          "new": "        run: |\n          python3 scripts/test-release-pipeline.py\n          python3 scripts/test-receiver-input-integration.py\n          python3 scripts/test-flutter-sdk-pipeline.py\n          python3 scripts/test-support-url-log-privacy.py\n"
+        },
+        {
+          "old": "      - name: Prove actual input components and required original failures\n        run: |\n          python3 scripts/fixtures/input-lifecycle/native-input/native_input_gate.py \\\n            --source rustdesk --output \"$RUNNER_TEMP/mixel-native-input\" --online\n",
+          "new": "      - name: Prove actual input components and required original failures\n        run: |\n          python3 scripts/test-support-receiver-input.py --source rustdesk\n          python3 scripts/test-support-receiver-input-native.py \\\n            --output \"$RUNNER_TEMP/mixel-receiver-input\"\n          python3 scripts/test-receiver-native.py --native \\\n            --proof-root \"$RUNNER_TEMP/mixel-receiver-native-receipts\"\n          python3 scripts/fixtures/input-lifecycle/native-input/native_input_gate.py \\\n            --source rustdesk --output \"$RUNNER_TEMP/mixel-native-input\" --online\n"
+        },
+        {
+          "old": "          name: native-input-regressions-${{ matrix.job.name }}\n          path: |\n            ${{ runner.temp }}/mixel-native-input/\n            !${{ runner.temp }}/mixel-native-input/target/**\n",
+          "new": "          name: native-input-regressions-${{ matrix.job.name }}\n          path: |\n            ${{ runner.temp }}/mixel-receiver-input/\n            !${{ runner.temp }}/mixel-receiver-input/target/**\n            ${{ runner.temp }}/mixel-receiver-native-receipts/\n            ${{ runner.temp }}/mixel-native-input/\n            !${{ runner.temp }}/mixel-native-input/target/**\n"
+        },
+        {
+          "old": "        working-directory: rustdesk\n        run: |\n          python3 \"$GITHUB_WORKSPACE/scripts/patch-support-input-lifecycle.py\" --root . --restore --check\n          python3 \"$GITHUB_WORKSPACE/scripts/patch-support-input-lifecycle.py\" --root . --restore\n",
+          "new": "        working-directory: rustdesk\n        run: |\n          python3 \"$GITHUB_WORKSPACE/scripts/patch-support-receiver-input.py\" --root . --restore --check\n          python3 \"$GITHUB_WORKSPACE/scripts/patch-support-receiver-native.py\" --root . --restore --check\n          python3 \"$GITHUB_WORKSPACE/scripts/patch-support-receiver-input.py\" --root . --restore\n          python3 \"$GITHUB_WORKSPACE/scripts/patch-support-receiver-native.py\" --root . --restore\n          python3 \"$GITHUB_WORKSPACE/scripts/patch-support-input-lifecycle.py\" --root . --restore --check\n          python3 \"$GITHUB_WORKSPACE/scripts/patch-support-input-lifecycle.py\" --root . --restore\n"
+        },
+        {
+          "old": "          python3 ../scripts/patch-support-uri-routing.py --root . --after-branding\n          python3 \"$GITHUB_WORKSPACE/scripts/patch-support-input-lifecycle.py\" --root .\n          pushd flutter && sed -i -e 's/extended_text: 14.0.0/extended_text: 13.0.0/g' pubspec.yaml && flutter pub get && popd\n          ~/.cargo/bin/flutter_rust_bridge_codegen \\\n",
+          "new": "          python3 ../scripts/patch-support-uri-routing.py --root . --after-branding\n          python3 \"$GITHUB_WORKSPACE/scripts/patch-support-input-lifecycle.py\" --root .\n          python3 \"$GITHUB_WORKSPACE/scripts/patch-support-receiver-native.py\" --root .\n          python3 \"$GITHUB_WORKSPACE/scripts/patch-support-receiver-input.py\" --root .\n          pushd flutter && sed -i -e 's/extended_text: 14.0.0/extended_text: 13.0.0/g' pubspec.yaml && flutter pub get && popd\n          ~/.cargo/bin/flutter_rust_bridge_codegen \\\n"
+        }
+      ]
+    },
+    ".github/workflows/preflight.yml": {
+      "prior_sha256": "afb543cdba4db4717f9ca6cf16dc97c37937fbca9fd22623c968ada0107832e1",
+      "changes": [
+        {
+          "old": "  workflow_dispatch:\n    inputs:\n      windows_source_runner:\n        description: 'Windows source-only comparison runner'\n",
+          "new": "  workflow_dispatch:\n    inputs:\n      receiver_native_only:\n        description: 'Diagnostic exact receiver component only; never qualifies an application release'\n        type: boolean\n        default: false\n      windows_source_runner:\n        description: 'Windows source-only comparison runner'\n"
+        },
+        {
+          "old": "  PYTHONUTF8: \"1\"\n  PYTHONIOENCODING: \"utf-8\"\n\njobs:\n  release-pipeline:\n    runs-on: ubuntu-22.04\n    steps:\n",
+          "new": "  PYTHONUTF8: \"1\"\n  PYTHONIOENCODING: \"utf-8\"\n  PYTHONUNBUFFERED: \"1\"\n\njobs:\n  receiver-native:\n    name: receiver-native (${{ matrix.os }})\n    runs-on: ${{ matrix.os }}\n    timeout-minutes: 15\n    strategy:\n      fail-fast: false\n      matrix:\n        os: [ubuntu-22.04, macos-14, windows-2022]\n    steps:\n      - uses: actions/checkout@v5\n      - name: Record immutable source identity\n        shell: bash\n        run: |\n          mkdir -p receiver-native-source-proof\n          git rev-parse HEAD | tee receiver-native-source-proof/head.log\n          git rev-parse 'HEAD^{tree}' | tee receiver-native-source-proof/tree.log\n          git status --short | tee receiver-native-source-proof/status.log\n      - uses: dtolnay/rust-toolchain@v1\n        with:\n          toolchain: '1.81'\n      - name: Verify receiver source and migration contracts\n        id: receiver_source\n        shell: bash\n        run: |\n          set -o pipefail\n          python3 scripts/test-support-receiver-input.py 2>&1 | tee receiver-native-source-proof/source-controls.log\n      - name: Verify actual native receipt source and transition core\n        shell: bash\n        run: |\n          set -o pipefail\n          python3 scripts/test-receiver-native.py --source-only 2>&1 | tee receiver-native-source-proof/receipt-source-controls.log\n          python3 scripts/test-receiver-native.py --native --proof-root receiver-native-receipts-proof 2>&1 | tee receiver-native-source-proof/receipt-native.log\n      - name: Compile and exercise exact receiver capability component\n        if: ${{ !cancelled() && steps.receiver_source.outcome == 'success' }}\n        shell: bash\n        run: python3 scripts/test-support-receiver-input-native.py --output receiver-native-proof\n      - name: Retain actual receiver component output and source bindings\n        if: always()\n        uses: actions/upload-artifact@v6\n        with:\n          name: receiver-native-${{ matrix.os }}\n          path: |\n            receiver-native-proof/*.log\n            receiver-native-proof/*.json\n            receiver-native-proof/component/Cargo.toml\n            receiver-native-proof/component/Cargo.lock\n            receiver-native-proof/component/tests/*.rs\n            receiver-native-receipts-proof/\n            receiver-native-source-proof/\n          if-no-files-found: error\n          retention-days: 14\n  release-pipeline:\n    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.receiver_native_only) }}\n    runs-on: ubuntu-22.04\n    steps:\n"
+        },
+        {
+          "old": "        run: |\n          python3 scripts/test-release-pipeline.py\n          python3 scripts/test-flutter-sdk-pipeline.py\n          python3 scripts/test-support-url-log-privacy.py\n",
+          "new": "        run: |\n          python3 scripts/test-release-pipeline.py\n          python3 scripts/test-receiver-input-integration.py\n          python3 scripts/test-flutter-sdk-pipeline.py\n          python3 scripts/test-support-url-log-privacy.py\n"
+        },
+        {
+          "old": "        run: bash -n scripts/apply-branding.sh scripts/local/sign-and-publish-macos.sh\n  windows-packaging:\n    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_source_runner == 'windows-2025' && 'windows-2025' || 'windows-2022' }}\n    timeout-minutes: 240\n",
+          "new": "        run: bash -n scripts/apply-branding.sh scripts/local/sign-and-publish-macos.sh\n  windows-packaging:\n    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.receiver_native_only) }}\n    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_source_runner == 'windows-2025' && 'windows-2025' || 'windows-2022' }}\n    timeout-minutes: 240\n"
+        },
+        {
+          "old": "          retention-days: 7\n  https-registration-gateway:\n    runs-on: ubuntu-22.04\n    timeout-minutes: 15\n",
+          "new": "          retention-days: 7\n  https-registration-gateway:\n    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.receiver_native_only) }}\n    runs-on: ubuntu-22.04\n    timeout-minutes: 15\n"
+        },
+        {
+          "old": "          if-no-files-found: error\n  upstream-source:\n    runs-on: ubuntu-22.04\n    timeout-minutes: 45\n",
+          "new": "          if-no-files-found: error\n  upstream-source:\n    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.receiver_native_only) }}\n    runs-on: ubuntu-22.04\n    timeout-minutes: 45\n"
+        },
+        {
+          "old": "\n  macos-runtime-harness:\n    runs-on: macos-14\n    timeout-minutes: 90\n",
+          "new": "\n  macos-runtime-harness:\n    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.receiver_native_only) }}\n    runs-on: macos-14\n    timeout-minutes: 90\n"
+        }
+      ]
+    }
+  },
+  "targets": [
+    "libs/enigo/src/lib.rs",
+    "libs/enigo/src/linux/nix_impl.rs",
+    "libs/enigo/src/linux/xdo.rs",
+    "libs/enigo/src/macos/macos_impl.rs",
+    "libs/enigo/src/win/win_impl.rs",
+    "src/ipc.rs",
+    "src/platform/windows.rs",
+    "src/server.rs",
+    "src/server/connection.rs",
+    "src/server/input_service.rs",
+    "src/server/mixel_receiver_input.rs",
+    "src/server/mixel_receiver_input_windows.rs",
+    "src/server/mixel_receiver_native.rs",
+    "src/server/mixel_receiver_receipts.rs",
+    "src/server/portable_service.rs",
+    "src/server/rdp_input.rs",
+    "src/server/uinput.rs"
+  ]
+}

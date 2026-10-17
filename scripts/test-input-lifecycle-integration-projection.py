@@ -64,9 +64,14 @@ def cold_workflow_view(raw, restore):
 
 
 def current_to_canonical(raw, name):
+    return previous_receiver_to_canonical(P.receiver_projection().inverse(raw, name), name)
+
+
+def previous_receiver_to_canonical(raw, name):
+    """Historical controls retain their exact bytes after strict new-hunk inverse."""
     if name == '.github/workflows/build.yml':
         raw = cold_workflow_view(raw, restore=True)
-    return P.project_to_canonical(raw, name)
+    return P.project_to_canonical(P.receiver_projection().compose(raw, name), name)
 
 
 def compose_current(raw, name):
@@ -85,7 +90,7 @@ def terminal():
 class Controls(unittest.TestCase):
     def test_debian_ownership_hook_is_exactly_packaging_bound_and_original_bytes_recover(self):
         name = 'scripts/apply-branding.sh'
-        final = (ROOT / name).read_text(encoding='utf-8')
+        final = P.canonical(P.receiver_projection().inverse((ROOT / name).read_bytes(), name))[0]
         before, addition, after = P.hunks(name)[-1]
         self.assertIn('patch-debian-archive-ownership.py', addition)
         self.assertEqual(final.count(before + addition + after), 1)
@@ -97,11 +102,11 @@ class Controls(unittest.TestCase):
                         final.replace(addition, '', 1) + addition,
                         final.replace(before + addition + after, before + '# disjoint\n' + addition + after, 1)):
             with self.assertRaises(ValueError):
-                current_to_canonical(mutated.encode(), name)
+                previous_receiver_to_canonical(mutated.encode(), name)
 
     def test_debian_lifecycle_hook_guard_whole_inverse_and_lf_crlf_refuse_drift(self):
         name = 'scripts/apply-branding.sh'
-        final = P.canonical((ROOT / name).read_bytes())[0]
+        final = P.canonical(P.receiver_projection().inverse((ROOT / name).read_bytes(), name))[0]
         before, addition, after, old_guard, new_guard = P.DEBIAN_LIFECYCLE_MACRO
         for ending in (b'\n', b'\r\n'):
             raw = final.encode().replace(b'\n', ending)
@@ -109,7 +114,7 @@ class Controls(unittest.TestCase):
             self.assertEqual(P.digest(P.canonical(prior)[0].encode()), P.DEBIAN_PREVIOUS_BRANDING_SHA)
             self.assertEqual(P.debian_lifecycle_branding_projection(prior, name, restore=False), raw)
             self.assertEqual(P.canonical(prior)[1], ending)
-            self.assertEqual(P.digest(P.canonical(current_to_canonical(raw, name))[0].encode()), P.BASE_SHA[name])
+            self.assertEqual(P.digest(P.canonical(previous_receiver_to_canonical(raw, name))[0].encode()), P.BASE_SHA[name])
             for changed in (final.replace(addition, '', 1), final.replace(addition, addition * 2, 1),
                             final.replace(addition, '', 1) + addition,
                             final.replace(before + addition + after, before + '# disjoint\n' + addition + after, 1),
@@ -119,10 +124,10 @@ class Controls(unittest.TestCase):
                             final.replace(new_guard, new_guard.replace('start', 'stop'), 1)):
                 self.assertNotEqual(changed, final)
                 with self.assertRaises(ValueError):
-                    current_to_canonical(changed.encode().replace(b'\n', ending), name)
+                    previous_receiver_to_canonical(changed.encode().replace(b'\n', ending), name)
             with self.assertRaises(ValueError):
                 P.debian_lifecycle_branding_projection(prior, name, restore=True)
-            self.assertEqual(P.committed_workflow(prior, name), P.inverse_blocks(raw, name))
+            self.assertEqual(P.committed_workflow(prior, name), P.inverse_previous_receiver_blocks(raw, name))
 
     def test_debian_private_source_validates_before_copy_and_only_changes_owned_stage(self):
         import contextlib
@@ -230,7 +235,7 @@ class Controls(unittest.TestCase):
 
     def test_missing_duplicate_moved_changed_and_reordered_hunks_refuse(self):
         for name in ('scripts/apply-branding.sh', '.github/workflows/build.yml'):
-            final = (ROOT / name).read_text(encoding='utf-8')
+            final = P.canonical(P.receiver_projection().inverse((ROOT / name).read_bytes(), name))[0]
             for before, addition, after in P.hunks(name):
                 without = final.replace(addition, '', 1)
                 mutants = [without, final.replace(addition, addition * 2, 1),
@@ -242,7 +247,7 @@ class Controls(unittest.TestCase):
                     with self.subTest(name=name, block=addition[:60]):
                         self.assertNotEqual(raw, final)
                         with self.assertRaises(ValueError):
-                            current_to_canonical(raw.encode(), name)
+                            previous_receiver_to_canonical(raw.encode(), name)
 
     def test_missing_working_layer_is_not_a_historical_head_fallback(self):
         for name in ('scripts/apply-branding.sh', '.github/workflows/build.yml'):
@@ -302,7 +307,7 @@ class Controls(unittest.TestCase):
 
     def test_native_job_missing_duplicate_moved_mutated_or_reordered_refuses(self):
         name = '.github/workflows/build.yml'
-        final = (ROOT / name).read_text(encoding='utf-8')
+        final = P.canonical(P.receiver_projection().inverse((ROOT / name).read_bytes(), name))[0]
         block = P.NATIVE_REGRESSIONS
         self.assertEqual(final.count(block), 1)
         self.assertIn('native-input/native_input_gate.py', block)
@@ -321,7 +326,7 @@ class Controls(unittest.TestCase):
             final.replace(block, reordered, 1)]
         for changed in mutants:
             self.assertNotEqual(changed, final)
-            with self.assertRaises(ValueError): current_to_canonical(changed.encode(), name)
+            with self.assertRaises(ValueError): previous_receiver_to_canonical(changed.encode(), name)
 
     def test_all_three_dependencies_are_exact_shipping_job_owned(self):
         name = '.github/workflows/build.yml'

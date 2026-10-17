@@ -178,6 +178,13 @@ def restore_footer_debian_lifecycle(repo: Path) -> None:
 
 def restore_footer_terminal_layers(repo: Path, layers: tuple[str, ...], base: Path, environment: dict) -> None:
     """Run each actual strict CLI inverse and verify its exact complete source effect."""
+    receiver = input_lifecycle.receiver_projection()
+    before_receiver = full_source_snapshot(repo)
+    receiver.restore_private(repo)
+    after_receiver = full_source_snapshot(repo)
+    changed_receiver = {name for name in set(before_receiver) | set(after_receiver)
+                        if before_receiver.get(name) != after_receiver.get(name)}
+    assert changed_receiver <= receiver.owned_targets(), 'Receiver footer inverse changed unrelated source'
     restore_footer_debian_lifecycle(repo)
     restore_footer_input_layer(repo, base, environment)
     for layer in layers:

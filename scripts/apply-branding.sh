@@ -37,6 +37,12 @@ source "$BRANDING/branding.env"
 # complete prior-owner refusal gates. Reapplication at the end is idempotent.
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-file-dialog-lifecycle.py" --root "$RDREPO" --check
 
+# Validate both receiver layers before their exact inverses or older owners write.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-receiver-input.py" --root "$RDREPO" --restore --check
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-receiver-native.py" --root "$RDREPO" --restore --check
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-receiver-input.py" --root "$RDREPO" --restore
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-receiver-native.py" --root "$RDREPO" --restore
+
 # Validate and invert the complete desktop input layer before older owners write.
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-input-lifecycle.py" --root "$RDREPO" --restore --check
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-input-lifecycle.py" --root "$RDREPO" --restore
@@ -1150,5 +1156,9 @@ python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-file-dialog-lifecycle.py" 
 
 # Apply desktop input ownership only after all previous functional layers.
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-input-lifecycle.py" --root "$RDREPO"
+
+# Receipts precede receiver generations at every actual native input sink.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-receiver-native.py" --root "$RDREPO"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-receiver-input.py" --root "$RDREPO"
 
 echo "✓ Branding applied — product identity is $APP_NAME only."

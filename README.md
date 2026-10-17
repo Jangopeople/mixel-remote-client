@@ -8,7 +8,15 @@ Read `HANDOFF.md` and `AGENTS.md` before working on releases. Product identity i
 `Mixel Remote` / `Mixel-Remote`, bundle ID `ch.mixel.remote`, and the configured
 rendezvous/relay is `rs.mixel.ch`. `branding/branding.env` is authoritative.
 
-## Current proof status — 2026-10-16
+## Current proof status — 2026-10-17
+
+Receiver revocation diagnostic39046065139 now passes Windows, macOS and Linux:
+26 source controls and14 compiled receipt-core tests per host, plus platform
+receiver scenarios. These component tests include kernel lease/main-queue
+behavior with mocked input effects. They do not qualify a complete application.
+Helper recovery, Linux service-side input revocation and portable Windows
+blocking are under integration; full new builds and desktop acceptance remain
+required. See the newest `HANDOFF.md` entry and current checkpoint.
 
 Reliability work is on `fix/remote-support-reliability`
 ([draft PR7](https://github.com/Jangopeople/mixel-remote-client/pull/7)).

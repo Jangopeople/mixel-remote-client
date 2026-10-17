@@ -3,7 +3,7 @@
 The output must not exist. Offline by default; --online permits Cargo downloads.
 """
 from pathlib import Path
-import argparse,hashlib,json,os,shutil,subprocess,sys,time,platform
+import argparse,hashlib,importlib.util,json,os,shutil,subprocess,sys,time,platform
 from source_io import read_inputs
 from extract_session import extract as extract_session
 from extract_receiver_components import extract as extract_receivers
@@ -36,7 +36,10 @@ def main():
     a=argparse.ArgumentParser(description=__doc__);a.add_argument('--source',type=Path,required=True);a.add_argument('--output',type=Path,required=True);a.add_argument('--cargo',default='cargo');a.add_argument('--rustc');a.add_argument('--online',action='store_true');a.add_argument('--prepare-only',action='store_true');args=a.parse_args()
     source=args.source.resolve();out=args.output.resolve();assert not out.exists(),'fresh output required'
     pins=json.loads((P/'SOURCE-PINS.json').read_text(encoding='utf-8'))
-    inputs,raw_witnesses=read_inputs(source,pins)
+    projection_spec=importlib.util.spec_from_file_location('mixel_receiver_historical_component',P.parents[2]/'receiver_input_integration_projection.py')
+    projection=importlib.util.module_from_spec(projection_spec);projection_spec.loader.exec_module(projection)
+    with projection.previous(source) as historical:
+        inputs,raw_witnesses=read_inputs(historical,pins)
     shutil.copytree(P/'template',out/'harness')
     for name,b in inputs.items():
         f=out/'candidate'/name;f.parent.mkdir(parents=True,exist_ok=True);f.write_bytes(b)
@@ -66,7 +69,7 @@ def main():
     extraction={n:sha((out/'harness/src'/n).read_bytes())for n in extract_names}
     expected=json.loads((P/'CURRENT-EXTRACTIONS.json').read_text(encoding='utf-8'))
     assert extraction==expected,'extracted production components differ from reviewed final fixture'
-    (out/'EXTRACTION.json').write_bytes((json.dumps({'productionCanonicalLFPins':pins,'productionRawWitnesses':raw_witnesses,'extractedSHA256':extraction,'mockSeams':'Session/registry/config/current-session/physical-key/layout/transport and server OS-effect recorders; actual protobuf, rdev pure tables and FRB1.80.1 executor; no OS input/network app session','negativeFixtures':'Pinned original/rejected production snippets; original persistent Scale receiver is a compatibility fixture, current balanced receiver is freshly extracted','portableAdapter':'Cargo.lock v4→v3; mock LazyLock→OnceLock mutex; macOS-only monitoring/helper fixture cfg; production bodies unchanged'},indent=2)+'\n').encode('utf-8'))
+    (out/'EXTRACTION.json').write_bytes((json.dumps({'scope':'historical input components after exact receiver/native inverse; new terminal receiver/receipt gates run separately','productionCanonicalLFPins':pins,'productionRawWitnesses':raw_witnesses,'extractedSHA256':extraction,'mockSeams':'Session/registry/config/current-session/physical-key/layout/transport and server OS-effect recorders; actual protobuf, rdev pure tables and FRB1.80.1 executor; no OS input/network app session','negativeFixtures':'Pinned original/rejected production snippets; original persistent Scale receiver is a compatibility fixture, current balanced receiver is freshly extracted','portableAdapter':'Cargo.lock v4→v3; mock LazyLock→OnceLock mutex; macOS-only monitoring/helper fixture cfg; production bodies unchanged'},indent=2)+'\n').encode('utf-8'))
     if args.prepare_only:print('PASS: exact production pins and component extraction; no tests requested.');return
     env=os.environ.copy();env['RUSTFLAGS']='-D warnings';env['CARGO_TARGET_DIR']=str(out/'target')
     if args.rustc:

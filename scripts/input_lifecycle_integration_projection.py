@@ -226,8 +226,9 @@ def compose(raw, name):
     if name == '.github/workflows/build.yml':
         text = project_shipping_dependencies(text, restore=False)
         text = project_job_hunks(text, restore=False)
-    return debian_lifecycle_branding_projection(
+    prior = debian_lifecycle_branding_projection(
         sdk_retention_projection(text.encode().replace(b'\n', newline), name, restore=False), name, restore=False)
+    return receiver_projection().compose(prior, name)
 
 
 def inverse_blocks(raw, name):
@@ -236,6 +237,11 @@ def inverse_blocks(raw, name):
     Other independently reviewed workflow additions may compose outside these
     exact hunks, then be inversed by their own unchanged guard owners.
     """
+    return inverse_previous_receiver_blocks(receiver_projection().inverse(raw, name), name)
+
+
+def inverse_previous_receiver_blocks(raw, name):
+    """Unchanged historical inverse after the exact receiver integration owner."""
     raw = debian_lifecycle_branding_projection(raw, name, restore=True)
     text, newline = canonical(raw)
     if name == '.github/workflows/build.yml':
@@ -308,6 +314,17 @@ def previous_debian_lifecycle(terminal, root):
 
 
 def current_source(root):
+    """Strict receiver → native receipts → historical input source projection."""
+    import contextlib
+    @contextlib.contextmanager
+    def current():
+        with receiver_projection().previous(root) as prior:
+            with previous_receiver_source(prior) as historical:
+                yield historical
+    return current()
+
+
+def previous_receiver_source(root):
     """Strict complete-tree entry only; internal historical fixtures never call this.
 
     Every target must be one whole fresh/original/final profile, including absence
@@ -338,7 +355,19 @@ def committed_workflow(raw, name):
         return raw
     if name == 'scripts/apply-branding.sh' and digest(text.encode()) == DEBIAN_PREVIOUS_BRANDING_SHA:
         raw = debian_lifecycle_branding_projection(raw, name, restore=False)
-    return inverse_blocks(raw, name)
+    return inverse_previous_receiver_blocks(receiver_projection().committed(raw, name), name)
+
+
+def receiver_projection():
+    """Adjacent exact owner; never infer a layer from a marker or caught error."""
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location(
+        'mixel_receiver_input_integration',
+        Path(__file__).with_name('receiver_input_integration_projection.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def sdk_retention_projection(raw, name, restore):
