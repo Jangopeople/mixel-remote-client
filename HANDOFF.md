@@ -1,5 +1,34 @@
 # Mixel-Remote — Agent Handoff / Current State
 
+## 2026-10-17 — Normal f9 build prerequisites diagnosed and corrected
+
+Normal producer39052310259 and mandatory preflight39052312400 atf9aa66a both
+ended in failure. Mac input and receiver components passed. The real Linux
+timer reversal now passes, alongside13 receipt,13 kernel and2 positive Tokio
+cases. No shipping installer job started; these runs do not qualify an app.
+
+The first shared failure was an overly narrow dependency lock profile: the Mac
+lock includes the conditional rdev foreign-types edge, while Linux/Windows use
+the complete common-platform lock. Both exact whole profiles are now pinned;
+partial/mixed changes still refuse. Owned Git HEAD/shallow use literal LF bytes
+on Windows. Thirteen dependency controls pass, including physical LF/CRLF
+roundtrips and metadata integrity. The mandatory receiver matrix now explicitly
+installs Python3.11 before the SAS preparation checks that require tomllib.
+
+Windows overlapped cancellation/reuse/peer-close passed. The actual different-SID
+Standard child reached the authenticated pipe and lease-audience setup, then
+closed before Ready. Its next fixture uses a non-image ACL oracle with the exact
+same executable DACL, and bounded numeric child phases/native errors over the
+authenticated pipe. Failure remains fatal; this is an unqualified diagnosis
+improvement until hosted execution passes. No account/security rights expand.
+
+Source-only receiver contracts, central13, dependency13, release30, SDK18 and
+SAS preparation6 pass; actionlint and whitespace checks pass. Current product
+custody stage and actual full application/native acceptance remain unfinished.
+Each failed original is collected once by its assigned owner; see the checkpoint
+for exact paths and the remaining Windows packaging diagnosis. All previous
+public/main/store/production, GTK, no-worktree and desktop/compiler holds remain.
+
 ## 2026-10-17 — Five input owners composed; earlier full-app compile required
 
 The private integration now composes native receipts, receiver capabilities,
