@@ -20,7 +20,7 @@ import tempfile
 import zlib
 
 HERE = Path(__file__).resolve().parent
-PLAN_SHA = 'd11f764a8c484b09485aae9cb4caa61a2626cc60432cf6be5615a109104e9b59'
+PLAN_SHA = '72651050e17c22936f3d846380b06125a624722b9d645ffb14aec14500727daa'
 SPEC = importlib.util.spec_from_file_location('mixel_uinput_dependency_files', HERE/'patch-support-receiver-uinput.py')
 FILES = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(FILES)
@@ -48,6 +48,15 @@ def load_plan():
         for profile in ('fresh', 'before', 'after'):
             if FILES.sha(row[profile+'Source'].encode()) != row[profile+'Sha256']:
                 raise ValueError('uinput dependency root source drift')
+    if set(plan['rootVariants']) != {'common'} or set(plan['rootVariants']['common']) != {'Cargo.lock'}:
+        raise ValueError('uinput dependency complete root variants changed')
+    for variant in plan['rootVariants'].values():
+        for row in variant.values():
+            if set(row) != {'beforeSource', 'afterSource', 'beforeSha256', 'afterSha256'}:
+                raise ValueError('uinput dependency root variant shape changed')
+            for profile in ('before', 'after'):
+                if FILES.sha(row[profile+'Source'].encode()) != row[profile+'Sha256']:
+                    raise ValueError('uinput dependency root variant drift')
     for dep in plan['dependencies']:
         names = set()
         for row in dep['files']:
@@ -70,6 +79,13 @@ def load_plan():
         if sum(entry['kind'] == 'commit' and entry['oid'] == dep['pin'] for entry in dep['objects']) != 1:
             raise ValueError('uinput dependency commit identity drift')
     return plan
+
+
+def root_variant(plan, variant):
+    if variant not in ('macos', 'common'):
+        raise ValueError('unknown uinput dependency root variant')
+    overrides = {} if variant == 'macos' else plan['rootVariants'][variant]
+    return dict(plan, files=[dict(row, **overrides.get(row['name'], {})) for row in plan['files']])
 
 
 def git(root, *arguments):
@@ -199,12 +215,18 @@ def walk_source(path, expected_files):
 def inspect(root):
     root = FILES.root_path(root)
     plan = load_plan()
-    current, profiles = {}, {'fresh', 'before', 'after'}
+    current, profiles = {}, {'fresh', 'before:macos', 'after:macos', 'before:common', 'after:common'}
     for row in plan['files']:
         value = FILES.state(root, row['name'])
         current[row['name']] = value
         digest = FILES.sha(FILES.canonical(value[1])[0])
-        profiles &= {profile for profile in profiles if digest == row[profile+'Sha256']}
+        def matches(profile):
+            if profile == 'fresh':
+                return digest == row['freshSha256']
+            stage, variant = profile.split(':')
+            expected = next(item for item in root_variant(plan, variant)['files'] if item['name'] == row['name'])
+            return digest == expected[stage+'Sha256']
+        profiles &= {profile for profile in profiles if matches(profile)}
     deps = {}
     parent = root/'.mixel-deps'
     if parent.exists() or parent.is_symlink():
@@ -213,7 +235,7 @@ def inspect(root):
         path = root/dep['path']
         if not path.exists() and not path.is_symlink():
             deps[dep['name']] = None
-            profiles.discard('after')
+            profiles -= {'after:macos', 'after:common'}
         else:
             profile, values = inventory(root, dep)
             if profile != 'after':
@@ -221,12 +243,16 @@ def inspect(root):
                 # pre-existing or half-restored clones cannot be adopted.
                 raise ValueError('unowned original uinput dependency clone')
             deps[dep['name']] = values
-            profiles &= {'after'}
+            profiles &= {'after:macos', 'after:common'}
     if any(value is None for value in deps.values()) and any(value is not None for value in deps.values()):
         raise ValueError('partial uinput dependency installation')
     if len(profiles) != 1:
         raise ValueError('changed, partial, or mixed uinput dependency profile')
-    return root, plan, profiles.pop(), current, deps
+    profile = profiles.pop()
+    if profile == 'fresh':
+        return root, plan, profile, current, deps
+    stage, variant = profile.split(':')
+    return root, root_variant(plan, variant), stage, current, deps
 
 
 def is_current(root):
@@ -244,8 +270,8 @@ def snapshot(path, dep):
     metadata = path/'.git'
     (metadata/'objects').mkdir(parents=True)
     (metadata/'refs/heads').mkdir(parents=True)
-    (metadata/'HEAD').write_text(dep['pin']+'\n')
-    (metadata/'shallow').write_text(dep['pin']+'\n')
+    (metadata/'HEAD').write_bytes((dep['pin']+'\n').encode('ascii'))
+    (metadata/'shallow').write_bytes((dep['pin']+'\n').encode('ascii'))
     (metadata/'config').write_bytes(config(dep))
     def object_file(kind, raw, expected):
         if oid(kind, raw) != expected:

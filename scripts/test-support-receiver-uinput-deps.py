@@ -28,7 +28,7 @@ def inventory(root):
 
 
 @contextlib.contextmanager
-def fixture(newline=b'\n', fresh=False, uinput=True):
+def fixture(newline=b'\n', fresh=False, uinput=True, variant='macos'):
     with tempfile.TemporaryDirectory(prefix='mixel-uinput-dependency-test-') as temporary:
         root = Path(temporary).resolve()/'source'
         root.mkdir()
@@ -41,7 +41,7 @@ def fixture(newline=b'\n', fresh=False, uinput=True):
                 path.chmod(row['inheritedMode'] or 0o640)
         if not fresh and uinput:
             OWNER.FILES.apply(root)
-        for row in PLAN['files']:
+        for row in OWNER.root_variant(PLAN, variant)['files']:
             path = root/row['name']
             path.write_bytes(row['freshSource' if fresh else 'beforeSource'].encode().replace(b'\n', newline))
             path.chmod(0o640)
@@ -85,6 +85,7 @@ class DependencyControls(unittest.TestCase):
             with self.assertRaises(ValueError):
                 OWNER.apply(root, check=True)
             self.assertEqual(inventory(root), before)
+
         with fixture(uinput=False) as root:
             before = inventory(root)
             self.assertEqual(OWNER.inspect(root)[2], 'before')
@@ -92,6 +93,46 @@ class DependencyControls(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'complete own-uinput'):
                 OWNER.apply(root, check=True)
             self.assertEqual(inventory(root), before)
+
+    def test_complete_common_platform_profile_roundtrips_lf_and_crlf(self):
+        for newline in (b'\n', b'\r\n'):
+            with self.subTest(newline=newline), fixture(newline, variant='common') as root:
+                before = inventory(root)
+                selected = OWNER.inspect(root)
+                self.assertEqual(selected[2], 'before')
+                lock = next(row for row in selected[1]['files'] if row['name'] == 'Cargo.lock')
+                self.assertEqual(lock['beforeSha256'], PLAN['rootVariants']['common']['Cargo.lock']['beforeSha256'])
+                self.assertEqual(OWNER.apply(root, check=True)['writes'], 0)
+                self.assertEqual(inventory(root), before)
+                OWNER.apply(root)
+                self.assertTrue(OWNER.is_current(root))
+                after = inventory(root)
+                with OWNER.previous(root) as stage:
+                    self.assertEqual(inventory(stage), before)
+                self.assertEqual(inventory(root), after)
+                OWNER.apply(root, restore=True)
+                self.assertEqual(inventory(root), before)
+                # An exact complete alternate is authority; a mixed stage is not.
+                manifest = next(row for row in PLAN['files'] if row['name'] == 'Cargo.toml')
+                (root/'Cargo.toml').write_bytes(manifest['afterSource'].encode().replace(b'\n', newline))
+                mixed = inventory(root)
+                with self.assertRaisesRegex(ValueError, 'mixed uinput dependency profile'):
+                    OWNER.apply(root, restore=True, check=True)
+                self.assertEqual(inventory(root), mixed)
+
+    def test_generated_git_identity_is_literal_lf_without_text_translation(self):
+        original = Path.write_text
+        def forbid_text_identity(path, *args, **kwargs):
+            if path.parent.name == '.git' and path.name in ('HEAD', 'shallow', 'config'):
+                self.fail('owned Git identity must use literal bytes on every host')
+            return original(path, *args, **kwargs)
+        with fixture() as root:
+            with mock.patch.object(Path, 'write_text', forbid_text_identity):
+                OWNER.apply(root)
+            for dep in PLAN['dependencies']:
+                for name in ('HEAD', 'shallow'):
+                    self.assertEqual((root/dep['path']/'.git'/name).read_bytes(), (dep['pin']+'\n').encode('ascii'))
+                self.assertEqual((root/dep['path']/'.git/config').read_bytes(), OWNER.config(dep))
 
     def test_each_root_source_byte_mode_and_mixed_profile_refuses(self):
         for after in (False, True):
@@ -193,18 +234,20 @@ class DependencyControls(unittest.TestCase):
                 self.assertNotIn(forbidden, dep['addition'])
 
     def test_pinned_dependency_plan_drift_refuses(self):
-        with tempfile.TemporaryDirectory(prefix='mixel-uinput-dependency-carrier-') as temporary:
-            root = Path(temporary).resolve()
-            for name in ('patch-support-receiver-uinput-deps.py', 'support-receiver-uinput-deps-plan.json',
-                         'patch-support-receiver-uinput.py'):
-                shutil.copy2(HERE/name, root/name)
-            target = root/'support-receiver-uinput-deps-plan.json'
-            target.write_bytes(target.read_bytes()+b'\n')
-            spec = importlib.util.spec_from_file_location('changed_uinput_dependency_owner', root/'patch-support-receiver-uinput-deps.py')
-            owner = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(owner)
-            with self.assertRaisesRegex(ValueError, 'plan drift'):
-                owner.load_plan()
+        for newline in (b'\n', b'\r\n'):
+            with self.subTest(newline=newline), tempfile.TemporaryDirectory(prefix='mixel-uinput-dependency-carrier-') as temporary:
+                root = Path(temporary).resolve()
+                for name in ('patch-support-receiver-uinput-deps.py', 'support-receiver-uinput-deps-plan.json',
+                             'patch-support-receiver-uinput.py'):
+                    shutil.copy2(HERE/name, root/name)
+                target = root/'support-receiver-uinput-deps-plan.json'
+                raw = OWNER.FILES.canonical(target.read_bytes())[0].replace(b'\n', newline)
+                target.write_bytes(raw+OWNER.FILES.canonical(raw)[1])
+                spec = importlib.util.spec_from_file_location('changed_uinput_dependency_owner', root/'patch-support-receiver-uinput-deps.py')
+                owner = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(owner)
+                with self.assertRaisesRegex(ValueError, 'plan drift'):
+                    owner.load_plan()
 
     def test_worktrees_reject_before_scandir_or_read_below_child(self):
         for relative in ('.git/worktrees', '.git/objects/worktrees', 'worktrees', 'src/worktrees'):
