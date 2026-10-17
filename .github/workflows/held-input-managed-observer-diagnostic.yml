@@ -9,6 +9,16 @@ permissions:
   contents: read
 
 jobs:
+  controller-source:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Exercise inert Linux-controller admission and evidence-join controls
+        run: python3 scripts/test-pc01-held-input.py
   compile:
     runs-on: windows-2022
     timeout-minutes: 10
@@ -18,12 +28,6 @@ jobs:
       PYTHONUNBUFFERED: '1'
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
-      - name: Exercise inert admission and evidence-join controls
-        shell: bash
-        run: python scripts/test-pc01-held-input.py
       - name: Parse and compile exact observer sources in Windows PowerShell 5.1
         shell: powershell
         run: |

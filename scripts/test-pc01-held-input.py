@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Inert controls only: no Docker, process, compiler, Win32 or network calls."""
+"""Inert POSIX-controller controls; Windows observer compilation is separate.
+
+No Docker, process, compiler, Win32 or network calls are made by this suite.
+"""
 import ast
 import copy
 import datetime as dt
@@ -9,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import stat
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -17,6 +21,7 @@ ROOT = Path(__file__).absolute().parents[1]
 SPEC = importlib.util.spec_from_file_location('held', ROOT/'scripts/pc01-held-input-controller.py')
 M = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(M)
+TEST_TEMP_ROOT = '/private/tmp' if sys.platform == 'darwin' else '/tmp'
 
 
 def binding():
@@ -157,7 +162,7 @@ class BindingControls(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'ordinary-Windows'): M.validate_binding(b)
 
     def test_symlink_and_hardlink_pin_refused(self):
-        with tempfile.TemporaryDirectory(dir='/private/tmp', prefix='mixel-held-inert-') as tmp:
+        with tempfile.TemporaryDirectory(dir=TEST_TEMP_ROOT, prefix='mixel-held-inert-') as tmp:
             d=Path(tmp); p=d/'source'; p.write_bytes(b'inert')
             link=d/'link'; link.symlink_to(p)
             pin=dict(path=str(link), bytes=5, sha256=M.sha(b'inert'))
@@ -167,7 +172,7 @@ class BindingControls(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'single-link'): M.read_pin(pin)
 
     def test_nonsecret_guest_projection_modes_and_drift(self):
-        with tempfile.TemporaryDirectory(dir='/private/tmp', prefix='mixel-held-inert-') as tmp:
+        with tempfile.TemporaryDirectory(dir=TEST_TEMP_ROOT, prefix='mixel-held-inert-') as tmp:
             root=Path(tmp); payload=root/'payload'; payload.mkdir(mode=0o700)
             names=['client.deb','mixel-proof.bin','ipc_probe.py','controller-primitives.py','viewer-monitor.py']
             expected={}
@@ -182,7 +187,7 @@ class BindingControls(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'extra'): M.project(payload,expected)
 
     def test_admission_requires_real_pinned_receipts_before_mutation(self):
-        with tempfile.TemporaryDirectory(dir='/private/tmp', prefix='mixel-held-admission-') as tmp:
+        with tempfile.TemporaryDirectory(dir=TEST_TEMP_ROOT, prefix='mixel-held-admission-') as tmp:
             d=Path(tmp);a=admission_fixture(d)
             raw=json.dumps(a).encode()
             self.assertEqual(M.admission(raw,M.sha(raw),now=BASE),a)
@@ -279,7 +284,7 @@ class EvidenceControls(unittest.TestCase):
 
     def test_current_index_cannot_launder_old_coherent_case_before_output(self):
         import sys
-        with tempfile.TemporaryDirectory(dir='/private/tmp',prefix='mixel-held-join-inert-') as tmp:
+        with tempfile.TemporaryDirectory(dir=TEST_TEMP_ROOT,prefix='mixel-held-join-inert-') as tmp:
             root=Path(tmp);a=admission_fixture(root)
             raw=json.dumps(a).encode();ap=root/'admission';ap.write_bytes(raw);current=M.sha(raw)
             def pin(name,value):
