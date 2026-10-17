@@ -302,6 +302,7 @@ try:
  require(run(['dpkg','--audit'])=='','final-dpkg-audit-findings');run(['journalctl','-b','-u','mixel-remote.service','--no-pager'])
  baselineCommands=seq;require(baselineCommands==31,'baseline31-command-phase-changed');reject_baseline_avoidable_warnings()
  extraCases=extra_lifecycle_cases(candidate)
+ require(sha(sentinel)==sentinelhash,'unrelated-sentinel-changed-after-extra-cases')
  result={'status':'PASS-real-systemd-installer-service-lifecycle','DEBSHA256':EXPECTED['DEBSHA256'],'mainSHA256':EXPECTED['mainSHA256'],'identity':release,'commands':seq,'baselineCommands':baselineCommands,'baselineDEBSHA256':BASELINE_DEB_SHA,'privateExtraCases':extraCases,'binarySource':'070da25001f97fabf67d08401e2cb15bde37a33b','packagingSource':'73e7c3decf800ba5db5867c135bff5ef42080b83','actualPID1Systemd':True,'rootMainPIDExecutableProven':True,'stable30Seconds':True,'restartStopStartDisableEnableRemovePurgeProven':True,'unrelatedSentinelPreserved':True,'serviceOwners':[first,second,third,fourth],'nativeQualified':False,'normalReleaseQualified':False,'publication':False,'taskComplete':False}
  (OUT/'RESULT.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result))
 except Exception as error:

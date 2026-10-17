@@ -1120,6 +1120,15 @@ class PrivateDerivedControls(unittest.TestCase):
                 with self.assertRaises(ValueError)as error:guest.extra_case('inert',fail)
             self.assertIs(error.exception,primary)
 
+    def test_final_sentinel_check_follows_all_extra_cases_before_success_result(self):
+        tree=ast.parse((BASE/'scripts/linux-installer-systemd-guest.py').read_text())
+        body=next(n for n in tree.body if isinstance(n,ast.Try)).body
+        extra=next(i for i,n in enumerate(body)if isinstance(n,ast.Assign)and any(isinstance(t,ast.Name)and t.id=='extraCases'for t in n.targets))
+        result=next(i for i,n in enumerate(body)if isinstance(n,ast.Assign)and any(isinstance(t,ast.Name)and t.id=='result'for t in n.targets))
+        expected=ast.parse("require(sha(sentinel)==sentinelhash,'unrelated-sentinel-changed-after-extra-cases')").body[0]
+        self.assertEqual(result,extra+2)
+        self.assertEqual(ast.dump(body[extra+1],include_attributes=False),ast.dump(expected,include_attributes=False))
+
     def test_baseline_original_functions_and_31_command_phase_remain_exact(self):
         source=ast.parse((BASE/'scripts/linux-installer-systemd-guest.py').read_text())
         names=('require','sha','run','birth','properties','live','gone','inactive')
