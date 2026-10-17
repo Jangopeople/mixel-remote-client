@@ -39,6 +39,33 @@ def metadata():
 
 
 class Admission(unittest.TestCase):
+
+    def test_current070_exact_immutable_source_archive_and_guest_bindings(self):
+        self.assertEqual((qa.APP, qa.TREE, qa.RUN, qa.ATTEMPT, qa.JOB, qa.ARTIFACT),
+                         ("070da25001f97fabf67d08401e2cb15bde37a33b", "4411c8027836673ded7f1b0b22f7bdac47c32242",
+                          39022433327, 1, 117367740409, 12098846059))
+        self.assertEqual((qa.ARCHIVE_BYTES, qa.ARCHIVE_SHA, qa.DEB_SHA),
+                         (23831101, "51944fc004743d9a56cddbb6c86266d02f69f2fa83a5a53dd5e7b374a95c1a06",
+                          "993f516763f85cd749faff8752e52ad5ac7be40b21e78d5878ec3a40422abc47"))
+        guest = (BASE / "scripts/linux-installer-systemd-guest.py").read_bytes()
+        self.assertEqual(guest.count(qa.DEB_SHA.encode()), 1)
+        self.assertNotIn(b"d63c5b624e55312bee8e52f5a2db16355fc3a06f5e12cee332f5567c57c391f1", guest)
+        self.assertEqual(hashlib.sha256(guest).hexdigest(), qa.GUEST_SHA)
+        self.assertEqual((qa.MAIN_SHA, qa.PACKAGED_UNIT, qa.INSTALLED_UNIT),
+                         ("ec180ea8503f85167949d74498baa1f08f908dd614a5a953ecd0e84cc082a437",
+                          "d5f9c6da03e3a87b77687d8282b6615c209aea3ea5bca6fbf9fe3df8074c2173",
+                          "5f9370df93f15c416ed7c1cd2803387a28c3baaa90027ed8fbe447056aba2410"))
+
+    def test_previous6c_source_run_job_and_archive_metadata_cannot_be_admitted(self):
+        mutations = ((0, "head_sha", "6c0ab10cd2ef7b666615864fbc602e4097aacca9"),
+                     (0, "id", 38999506750), (1, "id", 117300405310),
+                     (2, "id", 12089394040), (2, "size_in_bytes", 23831223),
+                     (2, "digest", "sha256:11b0cf1261847e8625d9192ffcf4c041622d563f126520890390dea36e24b0a0"))
+        for index, key, value in mutations:
+            with self.subTest(index=index, key=key):
+                data = metadata(); data[index][key] = value
+                with self.assertRaises(ValueError): qa.validate_metadata(*data)
+
     def test_exact_current_linux_success_accepts_without_whole_build_claim(self):
         qa.validate_metadata(*metadata())
 
@@ -887,6 +914,232 @@ class Admission(unittest.TestCase):
         with patch.object(qa, "command", side_effect=original), patch.object(qa, "diagnose_host"), \
              patch.object(qa, "repair_stale_mnt", return_value=None) as repaired:
             qa.require_healthy_systemd(Path("unused")); repaired.assert_called_once()
+
+
+class PrivateDerivedControls(unittest.TestCase):
+    """Inert source/fixture controls only, never a package or systemd execution."""
+
+    def packaging_fixture(self):
+        return qa.packaging_blobs()
+
+    def receipt_fixture(self, root):
+        (root / 'evidence').mkdir()
+        qa.save(root / 'evidence/SOURCE.json', {'qaSource':'a'*40,'outputOwner':{'uid':os.geteuid(),'gid':os.getegid()}})
+        qa.save(root / 'evidence/PACKAGING-SOURCE.json', {'scope':'private-derived-control-only-real-systemd-qa',
+            'binarySource':qa.APP,'binaryTree':qa.TREE,'packagingSource':qa.PACKAGING_SOURCE,
+            'packagingTree':qa.PACKAGING_TREE,'exactQAChangedPaths':sorted(qa.PRIVATE_QA_PATHS),'qaSource':'a'*40})
+        qa.save(root / 'evidence/DERIVATION.json', {'scope':'private-derived-control-only-real-systemd-qa',
+            'binarySource':qa.APP,'packagingSource':qa.PACKAGING_SOURCE,'baselineDEBSHA256':qa.DEB_SHA,
+            'derivedDEBSHA256':qa.DERIVED_SHA,'derivedBytes':qa.DERIVED_BYTES,
+            'all130PayloadEntriesUnchanged':True,'controlEntries':7,'newControlSHA256':qa.NEW_CONTROLS})
+
+    def guest_fixture(self, root):
+        import types
+        source=(BASE/'scripts/linux-installer-systemd-guest.py').read_text()
+        tree=ast.parse(source)
+        nodes=[n for n in tree.body if isinstance(n,ast.FunctionDef)]
+        ns={'P':Path,'os':os,'stat':stat,'json':json,'hashlib':hashlib,
+            'OUT':root,'EXPECTED':{'instance':'mixel-linux-installer-systemd-123-1'},
+            'FIXTURE_UID':os.geteuid(),'FIXTURE_GID':os.getegid(),'LEDGER':root/'owned-fixtures.json',
+            'FIXTURE_PATHS':{n:root/n for n in ('override','wants','policy','policy-events')},
+            'run':MagicMock(side_effect=AssertionError('No actual service command permitted'))}
+        exec(compile(ast.Module(body=nodes,type_ignores=[]),'only-inert-guest-definitions','exec'),ns)
+        ns['run']=MagicMock(side_effect=AssertionError('No actual service command permitted'))
+        return types.SimpleNamespace(ns=ns,**{k:v for k,v in ns.items()if callable(v)})
+
+    def test_exact_H_source_and_pure_transform_refuse_wrong_tree_mode_bytes(self):
+        blobs=self.packaging_fixture();self.assertEqual(set(blobs),set(qa.PACKAGING_FILES))
+        transform=qa.packaging_transform(blobs)
+        with self.assertRaises(RuntimeError):transform({'preinst':b'inert'})
+        with self.assertRaises(RuntimeError):transform({n:b'inert'for n in qa.NEW_CONTROLS})
+        wrong=dict(blobs);wrong['scripts/patch-debian-service-lifecycle.py']+=b'\n'
+        with self.assertRaises(ValueError):qa.packaging_transform(wrong)
+        real_git=qa.git
+        def altered(*args):
+            raw=real_git(*args)
+            if args[0]=='ls-tree':return raw.replace(b'100755',b'100644',1)
+            return raw
+        with patch.object(qa,'git',side_effect=altered),self.assertRaisesRegex(ValueError,'packaging-file-mode'):
+            qa.packaging_blobs()
+        with patch.object(qa,'git',return_value=b'0'*40),self.assertRaises(ValueError):qa.packaging_blobs()
+
+    def test_private_four_path_fence_refuses_extra_QA_even_if_old_allowlist_admits(self):
+        def rows(paths):return b''.join(b'100644 blob '+(b'b'*40)+b'\t'+p.encode()+b'\0'for p in paths)
+        actual='a'*40;original=rows(['branding/branding.env'])
+        for extra in ('HANDOFF.md','scripts/apply-branding.sh'):
+            changed=rows(['branding/branding.env',*qa.PRIVATE_QA_PATHS,extra])
+            with tempfile.TemporaryDirectory()as folder:
+                root=Path(folder)/'never-created'
+                with patch.object(qa,'git',side_effect=[actual.encode(),original,changed]),patch.object(qa,'prepare')as old,patch.object(qa,'packaging_blobs')as packaging:
+                    with self.assertRaises(ValueError):qa.prepare_derived(root)
+                    old.assert_not_called();packaging.assert_not_called()
+                self.assertFalse(root.exists())
+
+    def test_private_regular_rejects_links_fifo_hash_and_mutated_read_before_use(self):
+        with tempfile.TemporaryDirectory()as folder:
+            root=Path(folder);p=root/'inert';raw=b'inert fixture, no executable';p.write_bytes(raw);p.chmod(0o600)
+            digest=hashlib.sha256(raw).hexdigest();qa.private_regular(p,digest,len(raw),os.geteuid())
+            with self.assertRaises(ValueError):qa.private_regular(p,'0'*64,len(raw),os.geteuid())
+            link=root/'link';link.symlink_to(p)
+            with self.assertRaises(ValueError):qa.private_regular(link,digest,len(raw),os.geteuid())
+            hard=root/'hard';os.link(p,hard)
+            with self.assertRaises(ValueError):qa.private_regular(p,digest,len(raw),os.geteuid())
+            hard.unlink()
+            if hasattr(os,'mkfifo'):
+                fifo=root/'fifo';os.mkfifo(fifo)
+                with patch.object(qa.os,'open')as opened,self.assertRaises(ValueError):qa.private_regular(fifo,digest,len(raw),os.geteuid())
+                opened.assert_not_called()
+
+    def test_actual_tar_reader_rejects_traversal_links_owners_modes_duplicates(self):
+        import io,tarfile
+        def archive(names,uid=0,mode=0o644,link=None):
+            out=io.BytesIO()
+            with tarfile.open(fileobj=out,mode='w:')as z:
+                for name in names:
+                    n=tarfile.TarInfo(name);n.uid=n.gid=uid;n.mode=mode
+                    if link is not None:n.type=tarfile.SYMTYPE;n.linkname=link;z.addfile(n)
+                    else:n.size=3;z.addfile(n,io.BytesIO(b'abc'))
+            return out.getvalue()
+        good=qa.private_tar_inventory(archive(['./inert']))
+        self.assertEqual(good['./inert']['sha256'],hashlib.sha256(b'abc').hexdigest())
+        for raw in (archive(['../outside']),archive(['/absolute']),archive(['./a','./a']),archive(['./a'],uid=1001),archive(['./a'],mode=0o4755),archive(['./a'],link='../../outside'),archive(['./a'],link='/outside')):
+            with self.assertRaises(ValueError):qa.private_tar_inventory(raw)
+
+    def test_derived_context_requires_actual_closed_receipts_and_restores_baseline(self):
+        with tempfile.TemporaryDirectory()as folder:
+            root=Path(folder);self.receipt_fixture(root);before=qa.DEB_SHA
+            with patch.object(qa,'private_regular')as check:
+                with self.assertRaisesRegex(RuntimeError,'synthetic-primary'):
+                    with qa.derived_context(root):
+                        self.assertEqual(qa.DEB_SHA,qa.DERIVED_SHA)
+                        raise RuntimeError('synthetic-primary')
+                self.assertEqual(check.call_count,2)
+            self.assertEqual(qa.DEB_SHA,before)
+            path=root/'evidence/DERIVATION.json';data=json.loads(path.read_text());data['all130PayloadEntriesUnchanged']=False;path.write_text(json.dumps(data))
+            with patch.object(qa,'private_regular')as check,self.assertRaises(ValueError):
+                with qa.derived_context(root):self.fail('inadmissible')
+            check.assert_not_called()
+
+    def test_actual_serialization_suffix_refuses_before_candidate_rename(self):
+        source=ast.parse((BASE/'scripts/linux-installer-systemd.py').read_text())
+        node=next(n for n in source.body if isinstance(n,ast.FunctionDef)and n.name=='derive_private')
+        at=next(i for i,n in enumerate(node.body)if isinstance(n,ast.Assign)and any(isinstance(t,ast.Name)and t.id=='digest'for t in n.targets))
+        suffix=ast.Module(body=node.body[at:],type_ignores=[])
+        with tempfile.TemporaryDirectory()as folder:
+            root=Path(folder);(root/'evidence').mkdir();candidate=root/'candidate.deb';candidate.write_bytes(b'inert-baseline')
+            derived=root/'inert-derived';derived.write_bytes(b'inert differently serialized package')
+            ns=dict(qa.__dict__,root=root,candidate=candidate,derived=derived)
+            with self.assertRaisesRegex(ValueError,'serialization-refusal-before-install'):
+                exec(compile(suffix,'actual-serialization-decision-suffix','exec'),ns)
+            self.assertEqual(candidate.read_bytes(),b'inert-baseline');self.assertFalse((root/'baseline.deb').exists())
+            self.assertFalse((root/'evidence/DERIVATION.json').exists())
+            self.assertFalse(json.loads((root/'evidence/DERIVATION-OBSERVED.json').read_text())['serializationMatchesQualified0666'])
+
+    def test_real_inert_child_derive_stream_once_bounds_exit_and_expired_deadline(self):
+        real=subprocess.Popen
+        with tempfile.TemporaryDirectory()as folder:
+            root=Path(folder);(root/'evidence').mkdir()
+            def spawn(raw,status):
+                def start(argv,**kwargs):
+                    self.assertEqual(argv,['dpkg-deb','--version'])
+                    return real([sys.executable,'-c',f'import sys;sys.stdout.buffer.write({raw!r});sys.exit({status})'],**kwargs)
+                return start
+            for name,raw,status,accepted in [('good',b'abc',0,True),('bound',b'abcd',0,False),('exit',b'abc',42,False)]:
+                with patch.object(qa.subprocess,'Popen',side_effect=spawn(raw,status)):
+                    if accepted:self.assertEqual(qa.derive_tool(root,'derive-'+name,['dpkg-deb','--version'],3),b'abc')
+                    else:
+                        with self.assertRaises(ValueError):qa.derive_tool(root,'derive-'+name,['dpkg-deb','--version'],3)
+                self.assertLessEqual((root/'evidence'/('derive-'+name)/'stdout').stat().st_size,3)
+            with patch.object(qa.subprocess,'Popen')as call:
+                with self.assertRaises(FileExistsError):qa.derive_tool(root,'derive-good',['dpkg-deb','--version'],3)
+                with self.assertRaises(ValueError):qa.derive_tool(root,'derive-expired',['dpkg-deb','--version'],3,total_deadline=qa.time.monotonic()-1)
+                call.assert_not_called()
+
+    def test_real_owned_fixture_regular_and_mask_foreign_replacement_refuse_before_mutation(self):
+        with tempfile.TemporaryDirectory()as folder:
+            root=Path(folder);guest=self.guest_fixture(root)
+            guest.create_fixture('override',raw=b'synthetic custom unit')
+            path=root/'override';path.write_bytes(b'foreign modified override')
+            with self.assertRaises(RuntimeError):guest.cleanup_fixtures()
+            self.assertEqual(path.read_bytes(),b'foreign modified override');guest.ns['run'].assert_not_called()
+        with tempfile.TemporaryDirectory()as folder:
+            root=Path(folder);guest=self.guest_fixture(root);guest.create_fixture('override',target='/dev/null')
+            path=root/'override';path.unlink();path.symlink_to('/foreign')
+            with self.assertRaises(RuntimeError):guest.cleanup_fixtures()
+            self.assertEqual(os.readlink(path),'/foreign');guest.ns['run'].assert_not_called()
+
+    def test_actual_fixture_creation_failure_removes_only_same_owned_inode(self):
+        with tempfile.TemporaryDirectory()as folder:
+            root=Path(folder);guest=self.guest_fixture(root);sentinel=root/'unrelated';sentinel.write_bytes(b'unchanged')
+            with patch.dict(guest.ns,{'save_fixture_ledger':MagicMock(side_effect=OSError('inert ledger failure'))}):
+                with self.assertRaises(OSError):guest.create_fixture('policy',raw=b'inert',mode=0o700)
+            self.assertFalse((root/'policy').exists());self.assertEqual(sentinel.read_bytes(),b'unchanged')
+
+    def test_policy_event_log_allows_only_owned_bounded_Mixel_start_stop(self):
+        with tempfile.TemporaryDirectory()as folder:
+            root=Path(folder);guest=self.guest_fixture(root);prefix=guest.ns['EXPECTED']['instance']+'\n'
+            guest.create_fixture('policy-events',raw=prefix.encode(),mode=0o600)
+            p=root/'policy-events';p.write_text(prefix+'mixel-remote.service:start\nmixel-remote.service:stop\n')
+            guest.require_fixture('policy-events')
+            p.write_text(prefix+'foreign.service:stop\n')
+            with self.assertRaises(RuntimeError):guest.require_fixture('policy-events')
+            p.write_text(prefix+'x'*4096)
+            with self.assertRaises(RuntimeError):guest.require_fixture('policy-events')
+
+    def test_guest_cleanup_failure_does_not_replace_primary_case_failure(self):
+        with tempfile.TemporaryDirectory()as folder:
+            guest=self.guest_fixture(Path(folder));primary=ValueError('original-inert-case-failure')
+            def fail():raise primary
+            with patch.dict(guest.ns,{'cleanup_fixtures':MagicMock(side_effect=RuntimeError('secondary-inert-cleanup'))}):
+                with self.assertRaises(ValueError)as error:guest.extra_case('inert',fail)
+            self.assertIs(error.exception,primary)
+
+    def test_derived_cleanup_attempts_existing_cleanup_and_preserves_fixture_primary_error(self):
+        import contextlib
+        with tempfile.TemporaryDirectory()as folder:
+            root=Path(folder);(root/'evidence').mkdir();(root/'evidence/CANDIDATE-EXECUTION-INTENT.json').write_text('{}')
+            primary=OSError('inert fixture-cleanup failed')
+            with patch.object(qa,'derived_context',return_value=contextlib.nullcontext()),patch.object(qa,'cleanup_binding'),patch.object(qa,'command',side_effect=primary),patch.object(qa,'cleanup')as existing:
+                with self.assertRaises(OSError)as error:qa.cleanup_derived(root)
+                self.assertIs(error.exception,primary);existing.assert_called_once_with(root)
+
+    def test_owned_mask_cleanup_unlinks_only_verified_mask_and_preserves_sentinel(self):
+        with tempfile.TemporaryDirectory()as folder:
+            root=Path(folder);guest=self.guest_fixture(root);sentinel=root/'unrelated';sentinel.write_bytes(b'unchanged')
+            guest.create_fixture('override',target='/dev/null')
+            guest.ns['run']=MagicMock(return_value='')
+            guest.cleanup_fixtures()
+            self.assertFalse(os.path.lexists(root/'override'));self.assertEqual(sentinel.read_bytes(),b'unchanged')
+            guest.ns['run'].assert_called_once_with(['systemctl','daemon-reload'])
+
+    def test_guest_refusal_receipt_write_failure_cannot_replace_primary_error(self):
+        with tempfile.TemporaryDirectory()as folder:
+            guest=self.guest_fixture(Path(folder));primary=ValueError('original-inert-case-failure')
+            def fail():raise primary
+            with patch.dict(guest.ns,{'cleanup_fixtures':MagicMock(side_effect=RuntimeError('secondary-inert-cleanup'))}),patch.object(Path,'write_text',side_effect=OSError('inert receipt disk failure')):
+                with self.assertRaises(ValueError)as error:guest.extra_case('inert',fail)
+            self.assertIs(error.exception,primary)
+
+    def test_baseline_original_functions_and_31_command_phase_remain_exact(self):
+        source=ast.parse((BASE/'scripts/linux-installer-systemd-guest.py').read_text())
+        names=('require','sha','run','birth','properties','live','gone','inactive')
+        nodes=[n for n in source.body if isinstance(n,ast.FunctionDef)and n.name in names]
+        digest=hashlib.sha256(ast.dump(ast.Module(body=nodes,type_ignores=[]),include_attributes=False).encode()).hexdigest()
+        self.assertEqual(digest,'5bab461be5785b13a1e06e62533d01962fd89f700f645bff08b05952b33371df')
+        node=next(n for n in source.body if isinstance(n,ast.Try))
+        stop=next(i for i,n in enumerate(node.body)if isinstance(n,ast.Assign)and any(isinstance(t,ast.Name)and t.id=='baselineCommands'for t in n.targets))
+        prefix=ast.Module(body=node.body[:stop],type_ignores=[])
+        class OriginalLiteral(ast.NodeTransformer):
+            def visit_Constant(self,node):
+                if node.value==qa.DERIVED_SHA:return ast.copy_location(ast.Constant(value=qa.DEB_SHA),node)
+                return node
+        prefix=OriginalLiteral().visit(prefix)
+        self.assertEqual(hashlib.sha256(ast.dump(prefix,include_attributes=False).encode()).hexdigest(),'08b96b503de270a69fb9f67c4517e41c634a3e82318e4e07dbabaa8d5a83c413')
+        text=(BASE/'.github/workflows/linux-installer-systemd.yml').read_text()
+        block=next(v for v in re.split(r'(?m)^      - ',text)if 'scripts/linux-installer-systemd.py derive --output'in v)
+        self.assertIn("if: github.event_name == 'workflow_dispatch'",block)
+        main=ast.get_source_segment((BASE/'scripts/linux-installer-systemd.py').read_text(),next(n for n in ast.parse((BASE/'scripts/linux-installer-systemd.py').read_text()).body if isinstance(n,ast.FunctionDef)and n.name=='main'))
+        for value in ('prepare_derived','derive_private','run_derived','cleanup_derived'):self.assertIn(value,main)
 
 
 if __name__ == "__main__":

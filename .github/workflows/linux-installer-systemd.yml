@@ -41,21 +41,24 @@ jobs:
           echo "Pull request source-only controls passed."
           echo "No normal artifact download, package installation, or systemd service lifecycle ran."
           echo "This result does not qualify this pull request's application or service runtime."
-      - name: Bind exact QA checkout and unchanged application inputs
+      - name: Bind exact070 binary source and separate H packaging source
         if: github.event_name == 'workflow_dispatch'
         run: python3 scripts/linux-installer-systemd.py prepare --output "$QA_ROOT"
       - name: Require fresh healthy real Ubuntu systemd host
         if: github.event_name == 'workflow_dispatch'
         run: sudo -n env RUNNER_TEMP="$RUNNER_TEMP" GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" python3 scripts/linux-installer-systemd.py host --output "$QA_ROOT"
-      - name: Collect the exact existing normal Linux artifact once
+      - name: Collect exact070 baseline normal Linux artifact once
         if: github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 scripts/linux-installer-systemd.py collect --output "$QA_ROOT"
+      - name: Derive only three private lifecycle control scripts and require exact0666
+        if: github.event_name == 'workflow_dispatch'
+        run: python3 scripts/linux-installer-systemd.py derive --output "$QA_ROOT"
       - name: Prepare authenticated official Ubuntu dependencies
         if: github.event_name == 'workflow_dispatch'
         run: sudo -n env RUNNER_TEMP="$RUNNER_TEMP" GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" python3 scripts/linux-installer-systemd.py dependencies --output "$QA_ROOT"
-      - name: Prove real package and systemd service lifecycle
+      - name: Prove private derived-control service and owned override mask policy lifecycle
         if: github.event_name == 'workflow_dispatch'
         run: sudo -n env RUNNER_TEMP="$RUNNER_TEMP" GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" python3 scripts/linux-installer-systemd.py run --output "$QA_ROOT"
       - name: Retain owned evidence and clean only this test package

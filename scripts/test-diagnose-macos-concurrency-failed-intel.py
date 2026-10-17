@@ -123,100 +123,6 @@ PACKAGING_PROJECTION_ADDITION = b'''        ), (
 '''
 
 
-DEBIAN_LIFECYCLE_PROJECTION_SHA = '97d60f3c74d7691b8b2b7b35da58e3e0dcd0245020d0dd5d179a56ec213a4048'
-DEBIAN_LIFECYCLE_PROJECTION_INVERSE = [('',
-  '\n'
-  'DEBIAN_LIFECYCLE_OWNER_SHA = '
-  "'d28823e63c3070a0d92f4bd1a9c37f38d4c24ba3f7cfa5e0d7c2f3ff2428d196'\n"
-  'DEBIAN_PREVIOUS_BRANDING_SHA = '
-  "'a2f7c5a982429368b714ea71fa549a2d4ecd2fa5bb0d57f6c2374daf526b1383'\n"
-  'DEBIAN_LIFECYCLE_MACRO = (\'  echo "   wrote res/${APP_NAME_KEBAB}.service"\\nfi\\n\',\n'
-  " '# Guard service lifecycle only after branding and the exact unit asset exist.\\n'\n"
-  ' \'python3 "$(dirname "${BASH_SOURCE[0]}")/patch-debian-service-lifecycle.py" --root '
-  '"$RDREPO"\\n\'\n'
-  " '\\n',\n"
-  ' \'if [[ -f "$RDREPO/res/pam.d/rustdesk.debian" ]]; then\\n\',\n'
-  ' \'require_string res/DEBIAN/postinst "rm -f /etc/systemd/system/${APP_NAME_KEBAB}.service \'\n'
-  " '/usr/lib/systemd/system/${APP_NAME_KEBAB}.service '\n"
-  ' \'/usr/lib/systemd/user/${APP_NAME_KEBAB}.service"\\n\',\n'
-  ' \'require_string res/DEBIAN/postinst "deb-systemd-invoke start '
-  '${APP_NAME_KEBAB}.service"\\n\')\n'),
- ("    return sdk_retention_projection(text.encode().replace(b'\\n', newline), name, "
-  'restore=False)\n',
-  '    return debian_lifecycle_branding_projection(\n'
-  "        sdk_retention_projection(text.encode().replace(b'\\n', newline), name, restore=False), "
-  'name, restore=False)\n'),
- ('', '    raw = debian_lifecycle_branding_projection(raw, name, restore=True)\n'),
- ('',
-  'def debian_lifecycle_branding_projection(raw, name, restore):\n'
-  '    """Exact current packaging hook/guard only; historical whole hashes stay fatal."""\n'
-  "    if name != 'scripts/apply-branding.sh':\n"
-  '        return raw\n'
-  '    text, newline = canonical(raw)\n'
-  '    before, addition, after, original_guard, current_guard = DEBIAN_LIFECYCLE_MACRO\n'
-  '    old, new = (current_guard, original_guard) if restore else (original_guard, current_guard)\n'
-  '    if restore:\n'
-  '        if (text.count(addition) != 1 or text.count(before + addition + after) != 1\n'
-  '                or text.count(current_guard) != 1 or original_guard in text):\n'
-  "            raise ValueError('Changed/missing/moved Debian lifecycle hook or guard')\n"
-  '        text = text.replace(before + addition + after, before + after, 1)\n'
-  '    else:\n'
-  '        if addition in text or text.count(before + after) != 1 or current_guard in text or '
-  'text.count(original_guard) != 1:\n'
-  "            raise ValueError('Changed exact Debian lifecycle insertion context')\n"
-  '        text = text.replace(before + after, before + addition + after, 1)\n'
-  '    text = text.replace(old, new, 1)\n'
-  "    return text.encode().replace(b'\\n', newline)\n"
-  '\n'
-  '\n'
-  'def debian_lifecycle_owner():\n'
-  '    """Load only the reviewed exact helper; never a best-effort layer selector."""\n'
-  '    import importlib.util\n'
-  '    from pathlib import Path\n'
-  "    path = Path(__file__).with_name('patch-debian-service-lifecycle.py')\n"
-  '    text, _ = canonical(path.read_bytes())\n'
-  '    if digest(text.encode()) != DEBIAN_LIFECYCLE_OWNER_SHA:\n'
-  "        raise ValueError('Changed exact Debian lifecycle helper')\n"
-  "    spec = importlib.util.spec_from_file_location('mixel_debian_lifecycle_owner', path)\n"
-  '    owner = importlib.util.module_from_spec(spec)\n'
-  '    spec.loader.exec_module(owner)\n'
-  '    return owner\n'
-  '\n'
-  '\n'
-  'def previous_debian_lifecycle(terminal, root):\n'
-  '    """Validate first, then inverse exactly three scripts in the owned prior copy."""\n'
-  '    import contextlib\n'
-  '    from pathlib import Path\n'
-  '    owner = debian_lifecycle_owner()\n'
-  '    owner.apply(Path(root), restore=True, check=True)\n'
-  '    @contextlib.contextmanager\n'
-  '    def previous():\n'
-  '        with terminal.previous(root) as stage:\n'
-  '            owner.apply(Path(stage), restore=True)\n'
-  '            yield stage\n'
-  '    return previous()\n'
-  '\n'
-  '\n'),
- ('        return terminal.previous(root)\n',
-  '        return previous_debian_lifecycle(terminal, root)\n'),
- ('',
-  "    if name == 'scripts/apply-branding.sh' and digest(text.encode()) == "
-  'DEBIAN_PREVIOUS_BRANDING_SHA:\n'
-  '        raw = debian_lifecycle_branding_projection(raw, name, restore=False)\n')]
-
-
-def inverse_current_debian_lifecycle_projection(data):
-    """Unit-only complete-byte inverse; frozen runtime/profile stay unchanged."""
-    if v.sha(data) in (PACKAGING_PROJECTION_SHA, v.EXPECTED_PROFILE['reviewedSources']['scripts/input_lifecycle_integration_projection.py']):
-        return data
-    v.require(v.sha(data) == DEBIAN_LIFECYCLE_PROJECTION_SHA, 'unit-fixture-exact-Debian-lifecycle-projection')
-    for original, current in reversed(DEBIAN_LIFECYCLE_PROJECTION_INVERSE):
-        v.require(data.count(current.encode()) == 1, 'unit-fixture-exact-Debian-lifecycle-inverse-literal')
-        data = data.replace(current.encode(), original.encode(), 1)
-    v.require(v.sha(data) == PACKAGING_PROJECTION_SHA, 'unit-fixture-exact-Debian-lifecycle-inverse')
-    return data
-
-
 def inverse_current_packaging_projection(data):
     relative = 'scripts/input_lifecycle_integration_projection.py'
     original = v.EXPECTED_PROFILE['reviewedSources'][relative]
@@ -333,7 +239,7 @@ def historical_source_fixture(source_root, destination):
     for relative in sorted(pins):
         sources[relative], provenance[relative] = fixture_logical_source(source_root, relative)
     projection = 'scripts/input_lifecycle_integration_projection.py'
-    sources[projection] = inverse_current_packaging_projection(inverse_current_debian_lifecycle_projection(sources[projection]))
+    sources[projection] = inverse_current_packaging_projection(sources[projection])
     sources, pair = inverse_current_fixture_pair(sources)
     v.require({name: v.sha(data) for name, data in sources.items()} == pins,
               'unit-fixture-original-source-hashes')
@@ -491,7 +397,6 @@ class HistoricalSourceFixtureControls(unittest.TestCase):
     def test_packaging_projection_inverse_preserves_original_and_current_whole_profiles(self):
         relative = 'scripts/input_lifecycle_integration_projection.py'
         current, _ = fixture_logical_source(PIPELINE_ROOT, relative)
-        current = inverse_current_debian_lifecycle_projection(current)
         self.assertEqual(v.sha(current), PACKAGING_PROJECTION_SHA)
         original = inverse_current_packaging_projection(current)
         self.assertEqual(v.sha(original), fixture_pins()[relative])
@@ -501,7 +406,6 @@ class HistoricalSourceFixtureControls(unittest.TestCase):
     def test_packaging_projection_drift_and_partial_hook_refuse_before_fixture_creation(self):
         relative = 'scripts/input_lifecycle_integration_projection.py'
         current, _ = fixture_logical_source(PIPELINE_ROOT, relative)
-        current = inverse_current_debian_lifecycle_projection(current)
         mutations = [current + b'# foreign\n',
                      current.replace(PACKAGING_PROJECTION_ADDITION, PACKAGING_PROJECTION_ADDITION * 2, 1),
                      current.replace(b'patch-debian-archive-ownership.py', b'patch-another-archive.py', 1),
@@ -510,33 +414,6 @@ class HistoricalSourceFixtureControls(unittest.TestCase):
             inputs = self.inputs('packaging-drift-' + str(index))
             (inputs / relative).write_bytes(data)
             output = self.root / ('refused-packaging-' + str(index))
-            with self.assertRaises(v.Refusal):
-                historical_source_fixture(inputs, output)
-            self.assertFalse(output.exists())
-
-    def test_debian_projection_whole_inverse_preserves_each_exact_prior_profile(self):
-        relative = 'scripts/input_lifecycle_integration_projection.py'
-        current, _ = fixture_logical_source(PIPELINE_ROOT, relative)
-        self.assertEqual(v.sha(current), DEBIAN_LIFECYCLE_PROJECTION_SHA)
-        previous = inverse_current_debian_lifecycle_projection(current)
-        self.assertEqual(v.sha(previous), PACKAGING_PROJECTION_SHA)
-        self.assertEqual(inverse_current_debian_lifecycle_projection(previous), previous)
-        original = inverse_current_packaging_projection(previous)
-        self.assertEqual(inverse_current_debian_lifecycle_projection(original), original)
-        self.assertEqual(v.sha(original), fixture_pins()[relative])
-
-    def test_debian_projection_drift_or_partial_layer_refuses_before_fixture_creation(self):
-        relative = 'scripts/input_lifecycle_integration_projection.py'
-        current, _ = fixture_logical_source(PIPELINE_ROOT, relative)
-        mutations = [current + b'# unrelated drift\n',
-                     current.replace(b'patch-debian-service-lifecycle.py', b'patch-foreign-service-lifecycle.py', 1),
-                     current.replace(b'previous_debian_lifecycle(terminal, root)', b'previous_debian_lifecycle(terminal, foreign)', 1),
-                     current.replace(b" --root \"$RDREPO\"", b" --root \"$FOREIGN\"", 1)]
-        for index, data in enumerate(mutations):
-            self.assertNotEqual(data, current)
-            inputs = self.inputs('debian-lifecycle-drift-' + str(index))
-            (inputs / relative).write_bytes(data)
-            output = self.root / ('refused-debian-lifecycle-' + str(index))
             with self.assertRaises(v.Refusal):
                 historical_source_fixture(inputs, output)
             self.assertFalse(output.exists())

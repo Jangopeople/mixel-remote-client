@@ -640,9 +640,6 @@ if [[ -f "$SERVICE" ]]; then
   cp "$SERVICE" "$RDREPO/res/${APP_NAME_KEBAB}.service"
   echo "   wrote res/${APP_NAME_KEBAB}.service"
 fi
-# Guard service lifecycle only after branding and the exact unit asset exist.
-python3 "$(dirname "${BASH_SOURCE[0]}")/patch-debian-service-lifecycle.py" --root "$RDREPO"
-
 if [[ -f "$RDREPO/res/pam.d/rustdesk.debian" ]]; then
   cp "$RDREPO/res/pam.d/rustdesk.debian" "$RDREPO/res/pam.d/${APP_NAME_KEBAB}.debian"
   echo "   wrote res/pam.d/${APP_NAME_KEBAB}.debian"
@@ -1098,7 +1095,7 @@ require_string flutter/linux/my_application.cc "gtk_window_set_title(window, \"$
 require_string src/server/dbus.rs "const DBUS_NAME: &str = \"$MACOS_BUNDLE_ID\";"
 require_string res/rustdesk-link.desktop "MimeType=x-scheme-handler/$APP_NAME_KEBAB;"
 require_string res/rustdesk-link.desktop "Exec=$APP_NAME_KEBAB %u"
-require_string res/DEBIAN/postinst "deb-systemd-invoke start ${APP_NAME_KEBAB}.service"
+require_string res/DEBIAN/postinst "rm -f /etc/systemd/system/${APP_NAME_KEBAB}.service /usr/lib/systemd/system/${APP_NAME_KEBAB}.service /usr/lib/systemd/user/${APP_NAME_KEBAB}.service"
 require_string build.py "Depends: libgtk-3-0, libegl1, libgl1, libgles2, libgl1-mesa-dri, libxcb-randr0,"
 require_string flutter/macos/Runner/Info.plist "<string>$APP_NAME_KEBAB</string>"
 require_string src/common.rs "\"$MACOS_BUNDLE_ID\".to_owned()"

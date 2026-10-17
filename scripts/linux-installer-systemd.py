@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unpublished fixed-6c0 normal-DEB QA on a fresh real Ubuntu systemd runner.
+"""Unpublished fixed-070 normal-DEB QA on a fresh real Ubuntu systemd runner.
 
 The hosted transfer is a new, explicitly counted normal-artifact GET, separate
 from retained local archives. This does not qualify a release or restrict the
@@ -7,11 +7,15 @@ runner's network like QEMU restrict=on. The repository and CI artifacts may be
 public; no application secrets or customer data are used. No GUI is tested.
 """
 import argparse
+import ast
+import contextlib
+import io
+import tarfile
 import hashlib
 import importlib.util
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import pwd
 import re
 import selectors
@@ -23,14 +27,14 @@ import time
 
 REPO = "Jangopeople/mixel-remote-client"
 REPO_ID = 1229987840
-APP = "6c0ab10cd2ef7b666615864fbc602e4097aacca9"
-TREE = "a33f33a562a18ef0143069bf17db533835da8839"
-RUN, ATTEMPT, JOB, ARTIFACT = 38999506750, 1, 117300405310, 12089394040
-ARCHIVE_BYTES = 23831223
-ARCHIVE_SHA = "11b0cf1261847e8625d9192ffcf4c041622d563f126520890390dea36e24b0a0"
-DEB_SHA = "d63c5b624e55312bee8e52f5a2db16355fc3a06f5e12cee332f5567c57c391f1"
+APP = "070da25001f97fabf67d08401e2cb15bde37a33b"
+TREE = "4411c8027836673ded7f1b0b22f7bdac47c32242"
+RUN, ATTEMPT, JOB, ARTIFACT = 39022433327, 1, 117367740409, 12098846059
+ARCHIVE_BYTES = 23831101
+ARCHIVE_SHA = "51944fc004743d9a56cddbb6c86266d02f69f2fa83a5a53dd5e7b374a95c1a06"
+DEB_SHA = "993f516763f85cd749faff8752e52ad5ac7be40b21e78d5878ec3a40422abc47"
 MAIN_SHA = "ec180ea8503f85167949d74498baa1f08f908dd614a5a953ecd0e84cc082a437"
-GUEST_SHA = "db15588cac49de04d3aead2d590cf4fc65b9df1a78937fa6dc08f51c66417795"
+GUEST_SHA = "da0fe8b9aad194ed5d1ed555fde509cd9235210a20c058460d0c307bbae8e331"
 COLLECTOR_SHA = "56ce340dedd4030ec1145b103a09171c2fff7f872ae8c21142239853deb95271"
 PACKAGED_UNIT = "d5f9c6da03e3a87b77687d8282b6615c209aea3ea5bca6fbf9fe3df8074c2173"
 INSTALLED_UNIT = "5f9370df93f15c416ed7c1cd2803387a28c3baaa90027ed8fbe447056aba2410"
@@ -826,16 +830,314 @@ def cleanup(root):
              "outcome": outcome, "cleanupVerified": True, "taskComplete": False})
 
 
+
+BASELINE_DATA_INVENTORY_SHA = '758f8ef55bdcfcf3959c42e79f57c4e9b13f0b6eb5d8797a3b23f38d0ed4ce26'
+BASELINE_CONTROL_INVENTORY_SHA = 'ef1f9b0c32083d70d2751b16e695da2b1970a8f9b3fc8a1e8cef2db085950e3d'
+DERIVED_CONTROL_INVENTORY_SHA = 'e892efb62c6afe7582de74a954e407ed0552bbd4807ad982d1bb23a23f1f2b44'
+# This private route has three separate identities: 070 binaries, H packaging,
+# and the exact isolated QA checkout. It never changes the normal collector gate.
+PACKAGING_SOURCE = "73e7c3decf800ba5db5867c135bff5ef42080b83"
+PACKAGING_TREE = "010d963e96f84377ba573a249e74124e666529f6"
+PACKAGING_FILES = {
+    "scripts/apply-branding.sh": ("100755", "37c9b9762cebc0771488f3d7330e78a87f683c128b476989b97b569e076761fa"),
+    "scripts/patch-debian-service-lifecycle.py": ("100644", "d28823e63c3070a0d92f4bd1a9c37f38d4c24ba3f7cfa5e0d7c2f3ff2428d196"),
+    "scripts/test-debian-service-lifecycle.py": ("100644", "3b562d5674ef5d9b3f0ed28cb30301b43cb1ba82ade89019250183a69d0a50f2"),
+}
+PRIVATE_QA_PATHS = frozenset((".github/workflows/linux-installer-systemd.yml",
+    "scripts/linux-installer-systemd.py", "scripts/linux-installer-systemd-guest.py",
+    "scripts/test-linux-installer-systemd.py"))
+DERIVED_SHA = "0666ca6f87008654c8e06d17a9555ea6e207d4fec3491b10abee076308a9bd58"
+DERIVED_BYTES = 24576176
+NEW_CONTROLS = {
+    "preinst": "b4464d9b45e73e2fb29706007e9fe4c9eb7b78a70fdc23f561017539ebb4cba2",
+    "prerm": "afddb4b05e9c6008ed8a6a16c603cf6ba9ffa557f6492a16da76ab2c3abe854e",
+    "postinst": "b0e203772a832ec4cfcbd0e45259f2e873661350737acb29c2d8a60279d147c0",
+}
+
+
+def packaging_blobs():
+    require(git("rev-parse", PACKAGING_SOURCE + "^{tree}").decode().strip() == PACKAGING_TREE,
+            "packaging-tree-mismatch")
+    rows = parse_tree(git("ls-tree", "-r", "-z", PACKAGING_SOURCE, "--", *PACKAGING_FILES))
+    require(set(rows) == set(PACKAGING_FILES), "packaging-file-inventory")
+    blobs = {}
+    for path, (mode, digest) in PACKAGING_FILES.items():
+        require(rows[path][0] == mode, "packaging-file-mode")
+        raw = git("show", PACKAGING_SOURCE + ":" + path)
+        require(0 < len(raw) <= 131072 and hashlib.sha256(raw).hexdigest() == digest,
+                "packaging-file-source")
+        blobs[path] = raw
+    return blobs
+
+
+def packaging_transform(blobs):
+    raw = blobs["scripts/patch-debian-service-lifecycle.py"]
+    require(hashlib.sha256(raw).hexdigest() == PACKAGING_FILES["scripts/patch-debian-service-lifecycle.py"][1],
+            "packaging-transform-source")
+    tree = ast.parse(raw)
+    names = {"ORIGINAL_SHA256", "CURRENT_SHA256", "UNIT_SHA256", "REPLACEMENTS", "logical", "transform"}
+    nodes = [n for n in tree.body if (isinstance(n, ast.FunctionDef) and n.name in names)
+             or (isinstance(n, ast.Assign) and len(n.targets) == 1
+                 and isinstance(n.targets[0], ast.Name) and n.targets[0].id in names)]
+    require(len(nodes) == len(names), "packaging-transform-AST-inventory")
+    namespace = {"hashlib": hashlib}
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), "pinned-H-packaging-transform", "exec"), namespace)
+    require(namespace["CURRENT_SHA256"] == NEW_CONTROLS and namespace["UNIT_SHA256"] == PACKAGED_UNIT,
+            "packaging-transform-profile")
+    return namespace["transform"]
+
+
+def prepare_derived(root):
+    actual = git("rev-parse", "HEAD").decode().strip()
+    original = parse_tree(git("ls-tree", "-r", "-z", APP))
+    current = parse_tree(git("ls-tree", "-r", "-z", actual))
+    changed = compare_trees(original, current)
+    require(set(changed) == PRIVATE_QA_PATHS, "private-QA-four-file-fence")
+    blobs = packaging_blobs()
+    packaging_transform(blobs)
+    prepare(root)
+    save(root / "evidence/PACKAGING-SOURCE.json", {
+        "scope": "private-derived-control-only-real-systemd-qa",
+        "binarySource": APP, "binaryTree": TREE,
+        "packagingSource": PACKAGING_SOURCE, "packagingTree": PACKAGING_TREE,
+        "qaSource": actual, "qaTree": git("rev-parse", "HEAD^{tree}").decode().strip(),
+        "exactQAChangedPaths": sorted(PRIVATE_QA_PATHS),
+        "allOtherTrackedBlobsAndModesEqualBinary070": True,
+        "packagingSourceApplicationInputsUnchanged": False,
+        "packagingFiles": {p: {"mode": v[0], "sha256": v[1]} for p, v in PACKAGING_FILES.items()},
+        "applicationCompilation": False, "wholeThreeQualified": False,
+        "normalReleaseQualified": False, "nativeQualified": False, "taskComplete": False})
+
+
+def private_tar_inventory(raw):
+    require(0 < len(raw) <= 192 * 1024 * 1024, "bounded-package-tar")
+    records = {}
+    with tarfile.open(fileobj=io.BytesIO(raw), mode="r:") as archive:
+        for item in archive:
+            path = PurePosixPath(item.name)
+            require(not path.is_absolute() and ".." not in path.parts and "worktrees" not in path.parts
+                    and item.name not in records and not any(c in item.name for c in "\x00\r\n\\"), "safe-package-tar-path")
+            require(item.isfile() or item.isdir() or item.issym(), "package-tar-type")
+            require(item.uid == item.gid == 0 and item.mode & 0o7000 == 0, "root-owned-package-tar")
+            row = {"type": item.type.decode("ascii"), "mode": item.mode, "uid": item.uid,
+                   "gid": item.gid, "size": item.size, "link": item.linkname}
+            if item.issym():
+                target = PurePosixPath(item.linkname)
+                require(not target.is_absolute() and ".." not in target.parts and "worktrees" not in target.parts
+                        and not any(c in item.linkname for c in "\x00\r\n\\"), "safe-package-link")
+            if item.isfile():
+                require(item.size <= 128 * 1024 * 1024, "bounded-package-file")
+                row["sha256"] = hashlib.sha256(archive.extractfile(item).read()).hexdigest()
+            records[item.name] = row
+            require(len(records) <= 150, "bounded-package-member-count")
+    return records
+
+
+def private_inventory_digest(value):
+    return hashlib.sha256((json.dumps(value, indent=2, sort_keys=True) + "\n").encode()).hexdigest()
+
+
+def derive_tool(root, label, argv, bound=192 * 1024 * 1024, total_deadline=None):
+    require(re.fullmatch(r"derive-[a-z-]+", label) and argv[0] == "dpkg-deb", "private-derive-command")
+    require(type(bound) is int and 0 < bound <= 192 * 1024 * 1024, "private-derive-output-limit")
+    require(total_deadline is None or time.monotonic() < total_deadline <= time.monotonic() + 300,
+            "private-derive-total-deadline")
+    folder = root / "evidence" / label; folder.mkdir(mode=0o700)
+    save(folder / "COMMAND.json", {"argv": argv, "timeoutSeconds": 180,
+         "stdoutLimit": bound, "stderrLimit": 1048576, "automaticRetry": False})
+    env = {**os.environ, "SOURCE_DATE_EPOCH": "1792236317", "DPKG_DEB_THREADS_MAX": "1", "LC_ALL": "C"}
+    status = None; failure = None; process = None
+    with (folder / "stdout").open("xb") as out, (folder / "stderr").open("xb") as err:
+        os.fchmod(out.fileno(), 0o600); os.fchmod(err.fileno(), 0o600)
+        try:
+            process = subprocess.Popen(argv, cwd=BASE, stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+            with selectors.DefaultSelector() as events:
+                events.register(process.stdout, selectors.EVENT_READ, (out, bound))
+                events.register(process.stderr, selectors.EVENT_READ, (err, 1048576))
+                deadline = min(time.monotonic() + 180, total_deadline) if total_deadline is not None else time.monotonic() + 180
+                while events.get_map():
+                    require(time.monotonic() < deadline, "private-derive-timeout")
+                    for key, _ in events.select(min(0.25, max(0, deadline - time.monotonic()))):
+                        chunk = os.read(key.fileobj.fileno(), 65536)
+                        if not chunk:
+                            events.unregister(key.fileobj); continue
+                        destination, maximum = key.data
+                        require(destination.tell() + len(chunk) <= maximum, "private-derive-stream-bound")
+                        destination.write(chunk)
+                status = process.wait(timeout=max(0.01, deadline - time.monotonic()))
+        except BaseException as error:
+            failure = type(error).__name__
+            if process is not None and process.poll() is None:
+                process.kill(); process.wait(timeout=5)
+            raise
+        finally:
+            if process is not None:
+                for stream in (process.stdout, process.stderr):
+                    if stream is not None: stream.close()
+            out.flush(); err.flush(); os.fsync(out.fileno()); os.fsync(err.fileno())
+            save(folder / "RESULT.json", {"exit": status, "failure": failure,
+                "stdoutSHA256": sha(folder / "stdout"), "stderrSHA256": sha(folder / "stderr")})
+    require(status == 0, "private-derive-tool-failed-" + label)
+    return (folder / "stdout").read_bytes()
+
+
+def private_regular(path, digest, size, owner):
+    info = path.lstat()
+    require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_uid == owner
+            and info.st_mode & 0o022 == 0 and info.st_size == size and 0 < size <= 33554432,
+            "private-package-not-exclusive-regular")
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        opened = os.fstat(fd)
+        key = lambda s: (s.st_dev, s.st_ino, s.st_mode, s.st_uid, s.st_gid, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+        require(key(opened) == key(info), "private-package-preopen-replacement")
+        result = hashlib.sha256(); total = 0
+        while total < size:
+            chunk = os.read(fd, min(1048576, size - total))
+            require(bool(chunk), "private-package-short-read")
+            result.update(chunk); total += len(chunk)
+        require(key(os.fstat(fd)) == key(info) and key(path.lstat()) == key(info)
+                and result.hexdigest() == digest, "private-package-bytes-changed")
+    finally:
+        os.close(fd)
+
+
+def require_packaging_receipt(root):
+    data = json.loads((root / "evidence/PACKAGING-SOURCE.json").read_text())
+    require(data.get("scope") == "private-derived-control-only-real-systemd-qa"
+            and data.get("binarySource") == APP and data.get("binaryTree") == TREE
+            and data.get("packagingSource") == PACKAGING_SOURCE and data.get("packagingTree") == PACKAGING_TREE
+            and data.get("exactQAChangedPaths") == sorted(PRIVATE_QA_PATHS), "private-packaging-receipt")
+    require(data.get("qaSource") == json.loads((root / "evidence/SOURCE.json").read_text()).get("qaSource"),
+            "private-QA-source-join")
+    return data
+
+
+def derive_private(root):
+    require(os.geteuid() != 0, "private-derive-must-be-unprivileged")
+    require_packaging_receipt(root)
+    deadline = time.monotonic() + 300
+    collection = json.loads((root / "evidence/COLLECTION.json").read_text())
+    require(collection.get("DEBSHA256") == DEB_SHA and collection.get("artifactId") == ARTIFACT,
+            "private-baseline-collection")
+    candidate = root / "candidate.deb"
+    owner = json.loads((root / "evidence/SOURCE.json").read_text())["outputOwner"]["uid"]
+    private_regular(candidate, DEB_SHA, 23858480, owner)
+    work = root / "private-derive"; work.mkdir(mode=0o700)
+    before_data = private_tar_inventory(derive_tool(root, "derive-before-data", ["dpkg-deb", "--fsys-tarfile", str(candidate)], total_deadline=deadline))
+    before_control_raw = derive_tool(root, "derive-before-control", ["dpkg-deb", "--ctrl-tarfile", str(candidate)], total_deadline=deadline)
+    before_control = private_tar_inventory(before_control_raw)
+    require(private_inventory_digest(before_data) == BASELINE_DATA_INVENTORY_SHA
+            and private_inventory_digest(before_control) == BASELINE_CONTROL_INVENTORY_SHA,
+            "private-baseline-inventory")
+    originals = {}
+    with tarfile.open(fileobj=io.BytesIO(before_control_raw), mode="r:") as archive:
+        for name in NEW_CONTROLS:
+            member = archive.getmember("./" + name)
+            require(member.isfile() and member.size <= 65536, "private-control-type")
+            originals[name] = archive.extractfile(member).read()
+    transformed = packaging_transform(packaging_blobs())(originals)
+    require(set(transformed) == set(NEW_CONTROLS) and all(
+        hashlib.sha256(transformed[n]).hexdigest() == NEW_CONTROLS[n] for n in NEW_CONTROLS), "private-control-source")
+    stage = work / "stage"
+    derive_tool(root, "derive-extract", ["dpkg-deb", "--raw-extract", str(candidate), str(stage)], 1048576, total_deadline=deadline)
+    for name, raw in transformed.items():
+        target = stage / "DEBIAN" / name; info = target.lstat()
+        require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1
+                and hashlib.sha256(target.read_bytes()).hexdigest() == before_control["./" + name]["sha256"],
+                "private-extracted-control")
+        target.write_bytes(raw); target.chmod(before_control["./" + name]["mode"])
+    derived = work / "candidate.deb"
+    derive_tool(root, "derive-build", ["dpkg-deb", "-Zxz", "-z1", "--root-owner-group", "--build", str(stage), str(derived)], 1048576, total_deadline=deadline)
+    after_data = private_tar_inventory(derive_tool(root, "derive-after-data", ["dpkg-deb", "--fsys-tarfile", str(derived)], total_deadline=deadline))
+    after_control = private_tar_inventory(derive_tool(root, "derive-after-control", ["dpkg-deb", "--ctrl-tarfile", str(derived)], total_deadline=deadline))
+    require(after_data == before_data and len(after_data) == 130
+            and private_inventory_digest(after_control) == DERIVED_CONTROL_INVENTORY_SHA,
+            "private-derived-inventory")
+    digest = sha(derived); size = derived.stat().st_size
+    save(root / "evidence/DERIVATION-OBSERVED.json", {
+        "baselineDEBSHA256": DEB_SHA, "observedDerivedSHA256": digest, "observedBytes": size,
+        "binarySource": APP, "packagingSource": PACKAGING_SOURCE,
+        "all130PayloadEntriesUnchanged": True, "controlEntries": 7,
+        "newControlSHA256": NEW_CONTROLS, "sourceDateEpoch": 1792236317,
+        "serializationMatchesQualified0666": digest == DERIVED_SHA and size == DERIVED_BYTES,
+        "packageInstalled": False, "normalReleaseQualified": False, "taskComplete": False})
+    require(digest == DERIVED_SHA and size == DERIVED_BYTES, "private-derived-serialization-refusal-before-install")
+    baseline = root / "baseline.deb"
+    require(not os.path.lexists(baseline), "private-baseline-already-retained")
+    candidate.rename(baseline); derived.rename(candidate); candidate.chmod(0o400)
+    save(root / "evidence/DERIVATION.json", {
+        "scope": "private-derived-control-only-real-systemd-qa", "binarySource": APP,
+        "packagingSource": PACKAGING_SOURCE, "baselineDEBSHA256": DEB_SHA,
+        "derivedDEBSHA256": DERIVED_SHA, "derivedBytes": DERIVED_BYTES,
+        "all130PayloadEntriesUnchanged": True, "controlEntries": 7,
+        "newControlSHA256": NEW_CONTROLS, "applicationRecompiled": False,
+        "normalReleaseQualified": False, "taskComplete": False})
+
+
+@contextlib.contextmanager
+def derived_context(root):
+    global DEB_SHA
+    require_packaging_receipt(root)
+    data = json.loads((root / "evidence/DERIVATION.json").read_text())
+    require(data.get("scope") == "private-derived-control-only-real-systemd-qa"
+            and data.get("binarySource") == APP and data.get("packagingSource") == PACKAGING_SOURCE
+            and data.get("baselineDEBSHA256") == DEB_SHA and data.get("derivedDEBSHA256") == DERIVED_SHA
+            and data.get("derivedBytes") == DERIVED_BYTES and data.get("newControlSHA256") == NEW_CONTROLS
+            and data.get("all130PayloadEntriesUnchanged") is True and data.get("controlEntries") == 7,
+            "private-derived-receipt")
+    owner = json.loads((root / "evidence/SOURCE.json").read_text())["outputOwner"]["uid"]
+    private_regular(root / "baseline.deb", DEB_SHA, 23858480, owner)
+    private_regular(root / "candidate.deb", DERIVED_SHA, DERIVED_BYTES, owner)
+    original = DEB_SHA
+    try:
+        DEB_SHA = DERIVED_SHA
+        yield
+    finally:
+        DEB_SHA = original
+
+
+def host_derived(root):
+    require(not os.path.lexists("/usr/sbin/policy-rc.d"), "private-host-policy-path-present")
+    return host(root)
+
+
+def run_derived(root):
+    with derived_context(root):
+        run_guest(root)
+
+
+def cleanup_derived(root):
+    if not (root / "evidence/CANDIDATE-EXECUTION-INTENT.json").exists():
+        return cleanup(root)
+    with derived_context(root):
+        cleanup_binding(root)
+        first = None
+        try:
+            command(root, "cleanup-owned-fixtures", ["timeout", "--signal=TERM", "--kill-after=5s", "45s",
+                    "python3", "-u", str(BASE / "scripts/linux-installer-systemd-guest.py"), "--cleanup-owned-fixtures"], 55,
+                    {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "HOME": "/root", "LC_ALL": "C"})
+        except Exception as error:
+            first = error
+        try:
+            cleanup(root)
+        except Exception:
+            if first is not None: raise first
+            raise
+        if first is not None: raise first
+
+
 def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("prepare", "host", "collect", "dependencies", "run", "cleanup"))
+    parser.add_argument("operation", choices=("prepare", "host", "collect", "derive", "dependencies", "run", "cleanup"))
     parser.add_argument("--output", required=True)
     args = parser.parse_args(); root = root_path(args.output)
     if args.operation == "cleanup" and not (root / "evidence/SOURCE.json").is_file():
         return
-    operation = {"prepare": prepare, "host": host, "collect": collect, "dependencies": dependencies,
-                 "run": run_guest, "cleanup": cleanup}[args.operation]
+    operation = {"prepare": prepare_derived, "host": host_derived, "collect": collect, "derive": derive_private,
+                 "dependencies": dependencies, "run": run_derived, "cleanup": cleanup_derived}[args.operation]
     if args.operation in ("host", "dependencies", "run", "cleanup"):
         require(os.geteuid() == 0, "privileged-phase-requires-root")
         owner = evidence_owner(root)
