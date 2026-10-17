@@ -162,6 +162,11 @@ def load(name, path):
 COMPOSED_WRAPPER_PROJECTION = [('  $scope=$null; $world=[IntPtr]::Zero; $bodyFailure=$null; $restoreFailure=$null; $reportFailure=$null\n  $cleanupFailures=[Collections.Generic.List[Exception]]::new()\n  $observations=[Collections.Generic.List[object]]::new()\n  $sourceHash=(Get-FileHash -LiteralPath $executable -Algorithm SHA256).Hash.ToLowerInvariant()\n  try {\n    $world=[MixelIsolatedLeaseControl]::WorldEvent($eventName)\n    $scope=[MixelSessionDirectoryAba+Scope]::new([MixelSessionDirectoryAba+NativeApi]::new(),$sidBytes)\n    $scope.Open()\n', '  $scope=$null; $world=[IntPtr]::Zero; $bodyFailure=$null; $restoreFailure=$null; $reportFailure=$null\n  $cleanupFailures=[Collections.Generic.List[Exception]]::new()\n  $observations=[Collections.Generic.List[object]]::new()\n  $sourceHash=(Get-FileHash -LiteralPath $executable -Algorithm SHA256).Hash.ToLowerInvariant()\n  # Preserve quarantine in the original outer finally even if this independent\n  # diagnostic fails before the later mask12 registration/lifecycle starts.\n  $script:namespaceRestorationKnown=$false\n  try {\n    $world=[MixelIsolatedLeaseControl]::WorldEvent($eventName)\n    $scope=[MixelSessionDirectoryAba+Scope]::new([MixelSessionDirectoryAba+NativeApi]::new(),$sidBytes)\n    $scope.Open()\n', 1), ("  if ($restoreFailure -or $cleanupFailures.Count -gt 0 -or\n      ($scope -and $scope.facts.writeAttempted -and -not $scope.facts.restorationVerified)) {\n    throw 'Incomplete temporary directory ACL/process ownership; original Standard gate must not run in an unknown modified environment.'\n  }\n  if ($bodyFailure -or $reportFailure) {\n    $script:abaDeferredFailure=$(if($bodyFailure){$bodyFailure}else{$reportFailure})\n    Write-Host 'FAIL: restored CI-only directory experiment failed; deferred behind unchanged original Standard gate.'\n  }\n", "  if ($restoreFailure -or $cleanupFailures.Count -gt 0 -or\n      ($scope -and $scope.facts.writeAttempted -and -not $scope.facts.restorationVerified)) {\n    throw 'Incomplete temporary directory ACL/process ownership; original Standard gate must not run in an unknown modified environment.'\n  }\n  $script:namespaceRestorationKnown=$true\n  if ($bodyFailure -or $reportFailure) {\n    $script:abaDeferredFailure=$(if($bodyFailure){$bodyFailure}else{$reportFailure})\n    Write-Host 'FAIL: restored CI-only directory experiment failed; deferred behind unchanged original Standard gate.'\n  }\n", 1), ('{\n  "support-invite-guard.rs": "4b48b7995b36cc9662958ef8753be70ef0b6cf35626b7264f0151bc553293f29",\n  "test-session-directory-access.cs": "c562cf11de6dc395d4a6aae6d887dbe7fb970603bde74c8e4d111ac26956eb76",\n  "test-support-directory-security.cs": "3f70bcef70508b264a9559dbb9f7fc9bdbb0c3e28ea7929008dc084dec6d973e",\n  "test-support-launch-windows.ps1": "012ad7b7a2e52ddc7bd1c2c7aae63b7726187dab2d6aa2291bbb39de82928dec",\n  "test-support-lease-standard-windows.ps1": "a9b0bf8ee68209f78a82ca4260c9d35faf10449a25f5976775731e98042a057f",\n  "test-support-lease.py": "d11b25c95232544eb64f5de78f0e31cbc54630dd832185c55edfb4a3157cd604",\n  "test-support-nt-event-binding.cs": "4f166e8e0fbdce7a5fb6786862e031c5bb175704e7490a0e4a9feaac9fac62ca",\n  "test-support-nt-event-child.rs": "80cf1b1969b66568910d3a84ba46d4749db1c5744aac21b69777cd795dc0b034",\n  "test-windows-lease-observation.py": "bc64f1bd16d32d201de7654b04f26074428a742f896d18977a6012408329a75e"\n}\n\'@\nforeach ($pin in $pins.PSObject.Properties) {\n  $path=Join-Path $PSScriptRoot $pin.Name\n', '{\n  "support-invite-guard.rs": "4b48b7995b36cc9662958ef8753be70ef0b6cf35626b7264f0151bc553293f29",\n  "test-session-directory-access.cs": "c562cf11de6dc395d4a6aae6d887dbe7fb970603bde74c8e4d111ac26956eb76",\n  "test-support-directory-security.cs": "3f70bcef70508b264a9559dbb9f7fc9bdbb0c3e28ea7929008dc084dec6d973e",\n  "test-support-launch-windows.ps1": "c1f3e99ebda0a146bce9b54f215feeebd0c6d19bec19f2a280259d311983c44b",\n  "test-support-lease-standard-windows.ps1": "c2897356a81f5410789fcebab4e845639a329da892b41cff4675aa08bc17f15e",\n  "test-support-lease.py": "bdba6cc24c0b247de85a3bcda79744dd932f00bb6e97d038eba14a7e43d1db64",\n  "test-support-nt-event-binding.cs": "4f166e8e0fbdce7a5fb6786862e031c5bb175704e7490a0e4a9feaac9fac62ca",\n  "test-support-nt-event-child.rs": "80cf1b1969b66568910d3a84ba46d4749db1c5744aac21b69777cd795dc0b034",\n  "test-windows-lease-observation.py": "2de9b36dc99e76523572f8db19fdeba0b2747769a87b476a10819470690f23f9",\n  "rust_toolchain.py": "2156c1452df874462a5e2a569f25a800a339cc2cb92f5732340aa12a633afa3c",\n  "windows-standard-namespace-readonly.rs": "23e5fee444459cb68ed7c2bb2ac6c8696583697ce8874019101b16659334b705",\n  "windows-standard-namespace-access.cs": "7f04727ae8161b8e4da1d2e4a74a0324549996da5af52a08c14538ccf53b2589",\n  "windows-standard-namespace-diagnostics.cs": "980178cba4736f260d1365d3f19b3371158efcd0856d75fb12c036b0a093aad8"\n}\n\'@\nforeach ($pin in $pins.PSObject.Properties) {\n  $path=Join-Path $PSScriptRoot $pin.Name\n', 1)]
 HISTORICAL_WRAPPER_SHA = '5d81c7737eb2e9040fbb7f2c0046ec6649f774ca46098f3f61faceacb8a97b46'
 
+ACK_VIEW = load('ack_unit_view', SCRIPTS / 'test-support-directory-security.py')
+inverse_current_ack_source = ACK_VIEW.inverse_current_ack_source
+ACK_SOURCE_INVERSES = ACK_VIEW.ACK_SOURCE_INVERSES
+
+
 class Controls(unittest.TestCase):
     def ps(self, body, *, include_mock=False):
         with tempfile.TemporaryDirectory(prefix='mixel-aba-source-') as folder:
@@ -278,6 +283,16 @@ class Controls(unittest.TestCase):
             self.assertIn('Explicit optional disposable hosted Windows CI scope required',result.stderr)
             self.assertFalse(destination.exists())
 
+    def test_ack_unit_view_closed_inverse_and_drift_refusal(self):
+        for name, binding in ACK_SOURCE_INVERSES.items():
+            data=(SCRIPTS/name).read_bytes().replace(b'\r\n',b'\n')
+            for raw in (data, data.replace(b'\n',b'\r\n')):
+                self.assertEqual(hashlib.sha256(inverse_current_ack_source(name,raw)).hexdigest(),binding['inputSHA256'])
+            for raw in (data+b'# changed\n', data.replace(b'\n',b'\r\n',1), data[:-1]):
+                with self.assertRaises(AssertionError):
+                    inverse_current_ack_source(name,raw)
+        print('PASS: exact three current ack fixture byte inverses recover the frozen optional family in LF/CRLF; drift, mixed and truncated sources refuse. Frozen runtime helpers remain unchanged.')
+
     def test_actual_composition_preserves_original_source_and_gate(self):
         original=SCRIPTS/'test-support-lease-standard-windows.ps1'
         body=r'''
@@ -306,7 +321,7 @@ if($first -cne 'ORIGINAL_NATIVE5'){throw 'Original native gate priority changed'
         wrapper=WRAPPER.read_text(encoding='utf-8')
         pins=json.loads(re.search(r"\$pins=ConvertFrom-Json @'\n(.*?)\n'@",wrapper,re.S).group(1))
         for name,digest in pins.items():
-            self.assertEqual(hashlib.sha256((SCRIPTS/name).read_bytes()).hexdigest(),digest,name)
+            self.assertEqual(hashlib.sha256(inverse_current_ack_source(name, (SCRIPTS/name).read_bytes())).hexdigest(),digest,name)
 
     def test_literal_powershell_orchestration_restoration_and_error_precedence(self):
         body=r'''

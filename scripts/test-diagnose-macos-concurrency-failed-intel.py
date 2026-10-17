@@ -56,6 +56,21 @@ BUDGET_CONTROL_CHANGES = (
 )
 
 
+EARLY_GATE_PAIR = {**BUDGET_PAIR, 'scripts/test-support-launch-macos-concurrency-controls.py': '49114e6cb8c25070337b6c52df23caeda308f909633a45853881c65a379abd3c'}
+EARLY_GATE_CONTROL_CHANGES = [("        raise AssertionError('Exact Windows producer outer 240-minute budget context changed')\n    return text.replace(exact, before + '    timeout-minutes: 180\\n' + after, 1)\n\n\n", '        raise AssertionError(\'Exact Windows producer outer 240-minute budget context changed\')\n    return text.replace(exact, before + \'    timeout-minutes: 180\\n\' + after, 1)\n\n\ndef inverse_early_windows_lease_gate(text):\n    """Unit-only inverse of the exact early private fixture gate and upload."""\n    before = "      - uses: dtolnay/rust-toolchain@v1\\n        with:\\n          toolchain: \'1.75\'\\n"\n    addition = "      - name: Prove early Windows acknowledgment publication\\n        timeout-minutes: 3\\n        shell: pwsh\\n        run: |\\n          ./scripts/activate-windows-msvc.ps1 -ExportToGitHubEnvironment\\n          python scripts/test-support-lease-ack.py\\n          if ($LASTEXITCODE -ne 0) { throw \'Actual Windows acknowledgment controls failed.\' }\\n      - name: Prove early actual standard-token lease lifecycle\\n        timeout-minutes: 5\\n        shell: pwsh\\n        run: |\\n          $env:MIXEL_HOSTED_OWNED_QA_NAMESPACE=\'1\'\\n          ./scripts/invoke-hosted-standard-qa-windows.ps1 -EvidenceDirectory (Join-Path $env:RUNNER_TEMP \'mixel-early-standard-qa\')\\n      - name: Preserve early Windows standard-token lifecycle evidence\\n        if: always()\\n        uses: actions/upload-artifact@v6\\n        with:\\n          name: windows-lease-ack-early\\n          path: ${{ runner.temp }}/mixel-early-standard-qa/\\n          if-no-files-found: ignore\\n          retention-days: 14\\n"\n    after = \'      - uses: subosito/flutter-action@v2\\n\'\n    exact = before + addition + after\n    if text.count(addition) != 1 or text.count(exact) != 1:\n        raise AssertionError(\'Exact early Windows lease gate changed, moved or duplicated\')\n    return text.replace(exact, before + after, 1)\n\n\n', 1), ("        text = C.canonical((ROOT / '.github/workflows/preflight.yml').read_bytes()).decode()\n        text = inverse_lifecycle_workflow_checks(text, 'preflight.yml')\n        text = inverse_windows_preflight_budget(text)\n        text = inverse_windows_sdk_source_diagnostics(text, 'preflight.yml')\n", "        text = C.canonical((ROOT / '.github/workflows/preflight.yml').read_bytes()).decode()\n        text = inverse_lifecycle_workflow_checks(text, 'preflight.yml')\n        text = inverse_early_windows_lease_gate(text)\n        text = inverse_windows_preflight_budget(text)\n        text = inverse_windows_sdk_source_diagnostics(text, 'preflight.yml')\n", 1)]
+
+def inverse_current_early_gate_controls(data):
+    controls = 'scripts/test-support-launch-macos-concurrency-controls.py'
+    v.require(v.sha(data) == EARLY_GATE_PAIR[controls], 'unit-fixture-exact-early-gate-controls')
+    text = data.decode('utf-8')
+    for original, current, count in EARLY_GATE_CONTROL_CHANGES:
+        v.require(text.count(current) == count, 'unit-fixture-exact-early-gate-inverse-literal')
+        text = text.replace(current, original, count)
+    data = text.encode('utf-8')
+    v.require(v.sha(data) == BUDGET_PAIR[controls], 'unit-fixture-exact-early-gate-inverse')
+    return data
+
+
 def inverse_current_budget_controls(data):
     controls = 'scripts/test-support-launch-macos-concurrency-controls.py'
     v.require(v.sha(data) == BUDGET_PAIR[controls], 'unit-fixture-exact-budget-controls')
@@ -126,6 +141,9 @@ def inverse_current_fixture_pair(sources):
     observed = {name: v.sha(sources[name]) for name in HISTORICAL_PAIR}
     if observed == HISTORICAL_PAIR:
         return dict(sources), 'exact-original708'
+    if observed == EARLY_GATE_PAIR:
+        sources = {**sources, controls: inverse_current_early_gate_controls(sources[controls])}
+        observed = {name: v.sha(sources[name]) for name in HISTORICAL_PAIR}
     if observed == BUDGET_PAIR:
         sources = {**sources, controls: inverse_current_budget_controls(sources[controls])}
         observed = {name: v.sha(sources[name]) for name in HISTORICAL_PAIR}
@@ -338,7 +356,7 @@ class HistoricalSourceFixtureControls(unittest.TestCase):
         inputs = self.inputs('exact-previous-current')
         relative = 'scripts/test-support-launch-macos-concurrency-controls.py'
         path = inputs / relative
-        path.write_bytes(inverse_current_budget_controls(path.read_bytes()))
+        path.write_bytes(inverse_current_budget_controls(inverse_current_early_gate_controls(path.read_bytes())))
         self.assertEqual(v.sha(path.read_bytes()), CURRENT_PAIR[relative])
         output = self.root / 'view-previous-current'
         receipt = historical_source_fixture(inputs, output)
@@ -346,9 +364,30 @@ class HistoricalSourceFixtureControls(unittest.TestCase):
         self.assertEqual({name: v.sha((output / name).read_bytes()) for name in HISTORICAL_PAIR}, HISTORICAL_PAIR)
         v.source_contract(output)
 
+    def test_exact_early_gate_inverse_and_previous_budget_pair_stay_closed(self):
+        relative = 'scripts/test-support-launch-macos-concurrency-controls.py'
+        current, _ = fixture_logical_source(PIPELINE_ROOT, relative)
+        self.assertEqual(v.sha(current), EARLY_GATE_PAIR[relative])
+        budget = inverse_current_early_gate_controls(current)
+        self.assertEqual(v.sha(budget), BUDGET_PAIR[relative])
+        inputs = self.inputs('exact-previous-budget')
+        (inputs / relative).write_bytes(budget)
+        output = self.root / 'view-previous-budget'
+        historical_source_fixture(inputs, output)
+        self.assertEqual({name: v.sha((output / name).read_bytes()) for name in HISTORICAL_PAIR}, HISTORICAL_PAIR)
+        mutations = [budget, current+b'# foreign\n']
+        for original, replacement, count in EARLY_GATE_CONTROL_CHANGES:
+            self.assertEqual(current.count(replacement.encode()), count)
+            mutations.append(current.replace(replacement.encode(), original.encode(), count))
+            mutations.append(current.replace(replacement.encode(), (replacement+replacement).encode(), count))
+        for malformed in mutations:
+            with self.assertRaises(v.Refusal):
+                inverse_current_early_gate_controls(malformed)
+
     def test_exact_budget_inverse_rejects_partial_historical_and_foreign_controls(self):
         relative = 'scripts/test-support-launch-macos-concurrency-controls.py'
         current, _ = fixture_logical_source(PIPELINE_ROOT, relative)
+        current = inverse_current_early_gate_controls(current)
         self.assertEqual(v.sha(current), BUDGET_PAIR[relative])
         previous = inverse_current_budget_controls(current)
         self.assertEqual(v.sha(previous), CURRENT_PAIR[relative])

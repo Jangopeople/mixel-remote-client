@@ -75,6 +75,42 @@ class WorkflowPythonEncodingTests(unittest.TestCase):
                 self.assertEqual(old_environment["PYTHONIOENCODING"], "cp1252")
 
 
+class WindowsEarlyLeaseGateTests(unittest.TestCase):
+    def test_early_private_gate_exact_context_and_closed_source_inverses(self):
+        workflow = (ROOT / '.github/workflows/preflight.yml').read_text()
+        before = "      - uses: dtolnay/rust-toolchain@v1\n        with:\n          toolchain: '1.75'\n"
+        addition = "      - name: Prove early Windows acknowledgment publication\n        timeout-minutes: 3\n        shell: pwsh\n        run: |\n          ./scripts/activate-windows-msvc.ps1 -ExportToGitHubEnvironment\n          python scripts/test-support-lease-ack.py\n          if ($LASTEXITCODE -ne 0) { throw 'Actual Windows acknowledgment controls failed.' }\n      - name: Prove early actual standard-token lease lifecycle\n        timeout-minutes: 5\n        shell: pwsh\n        run: |\n          $env:MIXEL_HOSTED_OWNED_QA_NAMESPACE='1'\n          ./scripts/invoke-hosted-standard-qa-windows.ps1 -EvidenceDirectory (Join-Path $env:RUNNER_TEMP 'mixel-early-standard-qa')\n      - name: Preserve early Windows standard-token lifecycle evidence\n        if: always()\n        uses: actions/upload-artifact@v6\n        with:\n          name: windows-lease-ack-early\n          path: ${{ runner.temp }}/mixel-early-standard-qa/\n          if-no-files-found: ignore\n          retention-days: 14\n"
+        after = '      - uses: subosito/flutter-action@v2\n'
+        self.assertEqual(workflow.count(before + addition + after), 1)
+        job = workflow.split('\n  windows-packaging:\n', 1)[1].split('\n  portable-standard-lease-qa:', 1)[0]
+        self.assertLess(job.index('Prove early Windows acknowledgment'), job.index('subosito/flutter-action'))
+        self.assertIn('timeout-minutes: 3', addition)
+        self.assertIn('timeout-minutes: 5', addition)
+        self.assertLess(job.index('Prove early actual standard-token lease'), job.index('subosito/flutter-action'))
+        self.assertIn('invoke-hosted-standard-qa-windows.ps1 -EvidenceDirectory', addition)
+        self.assertLess(job.index('Prove early Windows acknowledgment'), job.index('Fetch pinned complete Windows source'))
+        self.assertIn('Qualify actual installed MSVC with a spaced Unicode temporary path', job)
+        self.assertIn('bash scripts/test-windows-generated-source.sh', job)
+        for filename in ('test-support-launch-macos-concurrency-controls.py', 'test-standard-valid-qa.py'):
+            text = (ROOT / 'scripts' / filename).read_text()
+            tree = ast.parse(text)
+            nodes = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'inverse_early_windows_lease_gate']
+            self.assertEqual(len(nodes), 1)
+            namespace = {}
+            exec(compile(ast.Module(body=nodes, type_ignores=[]), filename, 'exec'), namespace)
+            inverse = namespace['inverse_early_windows_lease_gate']
+            restored = inverse(workflow)
+            import hashlib
+            self.assertEqual(hashlib.sha256(restored.encode()).hexdigest(), 'c40f88b5c6c36e9c5fd1685e95c616a616360b1768a392f1c288b2e29d63c0b5')
+            for changed in (workflow.replace(addition, '', 1), workflow.replace(addition, addition+addition, 1),
+                            workflow.replace(addition, addition.replace('test-support-lease-ack.py','foreign.py'),1),
+                            workflow.replace(before+addition+after, before+after,1)+addition,
+                            workflow.replace(before+addition+after,before+'# disjoint\n'+addition+after,1)):
+                with self.assertRaises(AssertionError):
+                    inverse(changed)
+        print('PASS: early native Windows gate is exact after Rust/before Flutter; both source-only inverses recover whole6c workflow and reject missing, moved, duplicate, drift and disjoint gates; existing later checks remain.')
+
+
 class WindowsSourceBudgetTests(unittest.TestCase):
     def test_mandatory_source_budget_covers_the_shipping_source_budget(self):
         budgets = {}

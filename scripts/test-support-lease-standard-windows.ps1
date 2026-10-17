@@ -1127,6 +1127,45 @@ function Invoke-StandardNtChildObservation($Binding,$Files,[int]$ControlPid,$Ori
   return $reply
 }
 
+function Publish-StandardLeaseRelease([int]$ControlPid) {
+  if ($ControlPid -le 0) { throw 'Exact positive owned child PID required for acknowledgment.' }
+  $releasePath=Join-Path $fixtureRoot "fixture-release-$ControlPid"
+  $partial=$releasePath+'.new'
+  # The child may observe the final name immediately. Publish only closed bytes;
+  # the parent owns deletion after the retained native process has exited.
+  $stream=[IO.File]::Open($partial,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+  try {
+    $bytes=[Text.UTF8Encoding]::new($false).GetBytes('verified')
+    $stream.Write($bytes,0,$bytes.Length);$stream.Flush($true)
+  } finally { $stream.Dispose() }
+  [IO.File]::Move($partial,$releasePath)
+}
+
+function Write-StandardLeaseExitObservation([int]$ControlPid,[string]$Phase) {
+  $status=[MixelOrdinaryTokenFixture]::StartedStatus($ControlPid)
+  $lifecycle=$null;$diagnostic='unavailable';$diagnosticError=$null
+  $path=Join-Path $fixtureRoot "fixture-lifecycle-$ControlPid.json"
+  try {
+    if (Test-Path -LiteralPath $path -PathType Leaf) {
+      $item=Get-Item -LiteralPath $path -Force
+      if ($item.Attributes.HasFlag([IO.FileAttributes]::ReparsePoint) -or $item.Length -gt 4096) { throw 'Invalid owned lifecycle file.' }
+      $text=[IO.File]::ReadAllText($path)
+      if ($text.Length -gt 4096) { throw 'Owned lifecycle text exceeds its bound.' }
+      $value=$text | ConvertFrom-Json
+      if (@($value.PSObject.Properties).Count -ne 4 -or $value.schema -ne 1 -or $value.pid -ne $ControlPid -or
+          ($value.phase -isnot [long] -and $value.phase -isnot [int]) -or $value.phase -lt 1 -or $value.phase -gt 7 -or
+          $value.message -isnot [string] -or $value.message.Length -gt 1024 -or $value.message -cmatch '[^\x20-\x7e]') {
+        throw 'Owned lifecycle PID/phase/message differs.'
+      }
+      $lifecycle=$value;$diagnostic='available'
+    }
+  } catch { $diagnostic='invalid-or-unreadable';$diagnosticError=$_.Exception.HResult }
+  Write-Host ('OBSERVED: exact owned source child lifecycle before cleanup; '+
+    ([ordered]@{pid=$ControlPid;parentPhase=$Phase;nativeStatus=$status;diagnostic=$diagnostic;
+      diagnosticError=$diagnosticError;lifecycle=$lifecycle} | ConvertTo-Json -Depth 4 -Compress))
+  return $status
+}
+
 function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner')][string]$Mode, [string]$ExpectedStatus, [int]$ExpectedError,
     [string]$ExpectedProof, [bool]$ExpectedRequired, [bool]$ExpectedOwnerFailed, [switch]$KeepAlive,
     [switch]$ObserveOnly, [string]$ObservationLabel,
@@ -1305,12 +1344,15 @@ function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner'
       } catch { $ntProbeFailed=$true; Write-LeaseContextFailure nt-child-ack $_.Exception }
     }
     if (-not $KeepAlive -and -not $ntArmed) {
-      [IO.File]::WriteAllText((Join-Path $fixtureRoot "fixture-release-$controlPid"), 'verified')
+      Publish-StandardLeaseRelease $controlPid
       $deadline = [DateTime]::UtcNow.AddSeconds(10)
       while ([MixelOrdinaryTokenFixture]::StartedStatus($controlPid) -ceq 'still-running' -and [DateTime]::UtcNow -lt $deadline) {
         Start-Sleep -Milliseconds 50
       }
-      if ([MixelOrdinaryTokenFixture]::StartedStatus($controlPid) -cne 'exited:0x00000000') { throw 'Exact owned functional lease process did not exit successfully.' }
+      $nativeExit=Write-StandardLeaseExitObservation $controlPid 'after-release'
+      if ($nativeExit -cne 'exited:0x00000000') { throw "Exact owned functional lease process did not exit successfully; nativeStatus=$nativeExit; pid=$controlPid; mode=$Mode; launcher=$Launcher; subsystem=$Subsystem." }
+      $releasePath=Join-Path $fixtureRoot "fixture-release-$controlPid"
+      if (Test-Path -LiteralPath $releasePath) { Remove-Item -LiteralPath $releasePath }
     } elseif ($KeepAlive -and [MixelOrdinaryTokenFixture]::StartedStatus($controlPid) -cne 'still-running') {
       throw 'Actual standard-account lease owner exited before independent observation.'
     }
@@ -1340,6 +1382,7 @@ function Invoke-StandardLeaseControl([ValidateSet('probe','owner','failed-owner'
         catch { [void]$script:ntPreservedRoots.Add($fixtureRoot); Write-LeaseContextFailure nt-protocol-cleanup $_.Exception }
       }
     }
+    if ($controlPid -gt 0) { try { [void](Write-StandardLeaseExitObservation $controlPid 'standard-finally') } catch { Write-Host ('OBSERVED: exact owned source child status unavailable before cleanup; hresult='+$_.Exception.HResult) } }
     if ($control) { $control.Dispose() }
   }
 }
@@ -1397,18 +1440,20 @@ function Invoke-CurrentCallerLeaseControl([ValidateSet('probe','owner')][string]
       if ([MixelOrdinaryTokenFixture]::StartedStatus($controlPid) -cne 'still-running') { throw 'Direct current-caller source owner exited before its fresh observer.' }
     } else {
       $releasePath = Join-Path $fixtureRoot "fixture-release-$controlPid"
-      [IO.File]::WriteAllText($releasePath, 'verified')
+      Publish-StandardLeaseRelease $controlPid
       $deadline = [DateTime]::UtcNow.AddSeconds(10)
       while ([MixelOrdinaryTokenFixture]::StartedStatus($controlPid) -ceq 'still-running' -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 50 }
-      if ([MixelOrdinaryTokenFixture]::StartedStatus($controlPid) -cne 'exited:0x00000000') { throw 'Direct current-caller source child did not exit successfully after acknowledgment.' }
+      $nativeExit=Write-StandardLeaseExitObservation $controlPid 'current-caller-after-release'
+      if ($nativeExit -cne 'exited:0x00000000') { throw "Direct current-caller source child did not exit successfully after acknowledgment; nativeStatus=$nativeExit; pid=$controlPid; mode=$Mode." }
       # The same base directory is reused by the original standard terminal.
       # A later reused PID must not inherit an earlier caller acknowledgment.
-      # The exact source child consumes this acknowledgment before exit. Only
-      # remove a residual file; cleanup errors for an existing file stay fatal.
+      # The parent owns this acknowledgment through the retained child exit.
+      # Cleanup errors for an existing file stay fatal.
       if (Test-Path -LiteralPath $releasePath) { Remove-Item -LiteralPath $releasePath }
     }
     return $controlPid
   } finally {
+    if ($controlPid -gt 0) { try { [void](Write-StandardLeaseExitObservation $controlPid 'current-caller-finally') } catch { Write-Host ('OBSERVED: exact owned current-caller child status unavailable before cleanup; hresult='+$_.Exception.HResult) } }
     try { if ($control) { $control.Dispose() } }
     finally { if ($caller) { $caller.Dispose() } }
   }

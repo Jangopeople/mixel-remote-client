@@ -1,6 +1,47 @@
 # Mixel-Remote — Agent Handoff / Current State
 
 
+## 2026-10-17 — Windows fixture acknowledgment correction; native gate pending
+
+Current application source is6c0ab10cd2ef7b666615864fbc602e4097aacca9.
+Its mandatory Windows job117298857216 failed in the source-only standard-account
+fixture after a valid native result, at the retained child exit assertion. The
+original log omits that child’s exit code/panic; the occurrence’s cause remains
+unknown. The source-visible acknowledgment race is corrected: the parent flushes
+and closes a new file before atomic publication, the child validates its bytes,
+and the parent removes it only after exact native exit0. Bounded child phase/panic
+and retained native status are logged before cleanup. Product consent/error5,
+token identity, namespace/desktop restoration and failure priority remain strict.
+Historical runtime diagnostic helpers/profiles remain frozen; only closed unit
+views project current test sources back to their exact historical inputs.
+
+Mandatory Windows now runs this focused real Windows gate immediately after Rust
+and MSVC setup, before Flutter/upstream work, and retains early namespace evidence.
+The real Windows sharing-error regression and standard-token path still require
+that new CI execution. No new producer has been dispatched by the fixture editor.
+Product generators, branding, signing/staging and build.yml remain identical to6c.
+Any reuse of exact6c Linux/Mac packages with a later QA source requires Root’s
+explicit product-input/provenance review; existing collector gates are unchanged.
+
+Root verified the exact current Linux normal DEB d63c5b62… through actual non-systemd
+install/reinstall/remove/purge and all130 payload ownership/mode checks. Current
+Linux transport proofs retain470 members,86 screenshots,11 decoded clocks and a
+saved-password attended wait of14.066s/22 auth0 observations before actual Accept.
+Both current Mac normal packages pass all13 readonly signature/notary/identity
+checks. The new Mac candidate has not been updated or launched: Chrome control
+works, while exact Mixel getApp fails before a handle; human normal Quit remains
+pending and Adobe UI work is paused. NAS access is restored and PC01 WHOAMI is
+desktop-t0bmcum\mixel-test-vm; synthetic clipboard seeding passed. Genuine native
+Mac/PC01 sessions, Windows package/native95 acceptance and release remain pending.
+
+The private systemd VM run3 was OOM-killed before SSH; no Mixel candidate/service
+ran there. Root rejected it in receipt42a38b22e7d02b512bd802f6dc79b259c0d3aca428c6b0404ebbe61bcc25f385.
+Actual systemd service acceptance is unproven; a hosted test is being prepared.
+Preserve all GTK, old-resource, no-worktree, public/store/main/production holds.
+Do not report delivery complete.
+
+
+
 ## 2026-10-17 — Installer ownership and Windows resource corrections; delivery pending
 
 Read Git HEAD and `/tmp/mixel-current708-authoritative-checkpoint-20261016.json`

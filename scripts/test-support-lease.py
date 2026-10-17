@@ -576,6 +576,27 @@ fn main() {
     }
     #[cfg(windows)] {
         let directory = std::env::current_exe().unwrap().parent().unwrap().to_owned();
+        static PHASE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+        fn lifecycle(directory: &std::path::Path, phase: u32, message: &str) {
+            let safe: String = message.chars().take(1024)
+                .map(|c| if c.is_ascii_graphic() || c == ' ' { c } else { '?' }).collect();
+            let escaped = safe.replace('\\', "\\\\").replace('"', "\\\"");
+            let text = format!("{{\"schema\":1,\"pid\":{},\"phase\":{},\"message\":\"{}\"}}\n", std::process::id(), phase, escaped);
+            let partial = directory.join(format!("fixture-lifecycle-{}.new", std::process::id()));
+            let path = directory.join(format!("fixture-lifecycle-{}.json", std::process::id()));
+            if std::fs::write(&partial, text).is_ok() { let _ = std::fs::rename(partial, path); }
+        }
+        let panic_directory = directory.clone();
+        let original_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let message = if let Some(value) = info.payload().downcast_ref::<String>() { value.as_str() }
+                else if let Some(value) = info.payload().downcast_ref::<&str>() { value }
+                else { "non-string panic payload" };
+            lifecycle(&panic_directory, PHASE.load(std::sync::atomic::Ordering::SeqCst), message);
+            original_hook(info);
+        }));
+        lifecycle(&directory, 1, "");
+        PHASE.store(2, std::sync::atomic::Ordering::SeqCst);
         mixel_support_lease::fixture_observe_directory_access(&directory);
         mixel_support_lease::fixture_observe_job_limits(&directory);
         mixel_support_lease::fixture_enable_thread_tokens(&directory);
@@ -607,6 +628,8 @@ fn main() {
         std::fs::write(directory.join("fixture-result.new"), result).unwrap();
         mixel_support_lease::fixture_flush_thread_tokens(&directory,false);
         std::fs::rename(directory.join("fixture-result.new"), directory.join("fixture-result.json")).unwrap();
+        PHASE.store(3, std::sync::atomic::Ordering::SeqCst);
+        lifecycle(&directory, 3, "");
         // This test-only request is absent from the strict normal baseline.
         // The result never acquires/renews an attended lease or exports ready.
         let unnamed_request = directory.join("fixture-unnamed.request");
@@ -625,6 +648,8 @@ fn main() {
             mixel_support_lease::fixture_flush_thread_tokens(&directory,true);
             std::fs::rename(directory.join("fixture-unnamed-result.new"), directory.join("fixture-unnamed-result.json")).unwrap();
         }
+        PHASE.store(4, std::sync::atomic::Ordering::SeqCst);
+        lifecycle(&directory, 4, "");
         if mode == "owner" {
             std::thread::sleep(std::time::Duration::from_secs(120));
         } else {
@@ -636,7 +661,13 @@ fn main() {
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
             assert!(release.is_file(), "Owned standard-account result was not acknowledged");
-            std::fs::remove_file(release).unwrap();
+            PHASE.store(5, std::sync::atomic::Ordering::SeqCst);
+            lifecycle(&directory, 5, "");
+            assert_eq!(std::fs::read_to_string(&release).unwrap(), "verified", "Owned acknowledgment bytes differ");
+            // The parent owns this path and deletes it after retained exit0.
+            // Child deletion could race the publisher's open file on Windows.
+            PHASE.store(7, std::sync::atomic::Ordering::SeqCst);
+            lifecycle(&directory, 7, "");
         }
     }
     #[cfg(not(windows))]

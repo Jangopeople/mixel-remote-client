@@ -501,13 +501,28 @@ Write-Host "PASS: exact result reader reproduces original real FileShare.None re
                 self.assertIn("preserves expiry/other IO/error0/non-IO/malformed/oversize/native5 fatal", result.stdout)
                 print(result.stdout, flush=True)
 
+    def test_actual_ack_publication_consumption_and_failure_diagnostics(self):
+        result = subprocess.run([sys.executable, "-B", "-Werror", str(ROOT / "scripts/test-support-lease-ack.py")],
+                                capture_output=True, text=True, encoding="utf-8", timeout=60)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Ran 5 tests", result.stderr)
+        if os.name == "nt":
+            self.assertNotIn("skipped", result.stderr)
+            self.assertIn("actual Windows open writer reproduces original child-delete sharing error32/nonzero", result.stdout)
+        else:
+            self.assertIn("OK (skipped=1)", result.stderr)
+        print(result.stdout, flush=True)
+        print("PASS: actual acknowledgment subprocess suite integrated; Windows sharing semantics remain pending on non-Windows hosts.", flush=True)
+
     def test_current_caller_four_actual_functions_strict_results_and_cleanup(self):
         # The compiled fixture acknowledges its retained result by consuming the
         # exact release path before a successful exit. Model that real lifecycle,
         # as well as a residual acknowledgment that still requires parent cleanup.
         fixture_source = (ROOT / "scripts/test-support-lease.py").read_text(encoding="utf-8")
         self.assertIn('let release = directory.join(format!("fixture-release-{}", std::process::id()));', fixture_source)
-        self.assertIn('assert!(release.is_file(), "Owned standard-account result was not acknowledged");\n            std::fs::remove_file(release).unwrap();', fixture_source)
+        self.assertIn('assert!(release.is_file(), "Owned standard-account result was not acknowledged");', fixture_source)
+        self.assertNotIn('std::fs::remove_file(release).unwrap();', fixture_source)
+        self.assertIn('The parent owns this path and deletes it after retained exit0.', fixture_source)
         with tempfile.TemporaryDirectory(prefix="mixel-current-caller-controls-") as temporary:
             root = Path(temporary)
             script = root / "control.ps1"
@@ -519,7 +534,7 @@ Write-Host "Actual mocked four-phase control PowerShell: $($PSVersionTable.PSVer
 $source=[IO.File]::ReadAllText((Join-Path $Repository 'scripts/test-support-lease-standard-windows.ps1'))
 $tokens=$null;$errors=$null;$ast=[Management.Automation.Language.Parser]::ParseInput($source,[ref]$tokens,[ref]$errors)
 if($errors.Count) { throw 'Current helper does not parse' }
-foreach($name in @('Write-LeaseContextFailure','Invoke-LeaseJobObservation','Read-StandardChildJobLimits','Invoke-LeaseChildJobLimitsObservation','Read-StandardChildDirectoryAccess','Invoke-LeaseChildDirectoryAccessObservation','Assert-StandardLeaseSafeResult','Read-StandardCallingThreadTokens','Read-StandardFixtureResult','Invoke-CurrentCallerLeaseControl','Invoke-CurrentCallerLeaseFour')) {
+foreach($name in @('Publish-StandardLeaseRelease','Write-StandardLeaseExitObservation','Write-LeaseContextFailure','Invoke-LeaseJobObservation','Read-StandardChildJobLimits','Invoke-LeaseChildJobLimitsObservation','Read-StandardChildDirectoryAccess','Invoke-LeaseChildDirectoryAccessObservation','Assert-StandardLeaseSafeResult','Read-StandardCallingThreadTokens','Read-StandardFixtureResult','Invoke-CurrentCallerLeaseControl','Invoke-CurrentCallerLeaseFour')) {
   $matches=$ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq $name},$true)
   if($matches.Count -ne 1) { throw "Missing exact current function $name" }
   if($name -ceq 'Invoke-CurrentCallerLeaseControl') { $correctedControl=$matches[0].Extent.Text }
@@ -603,7 +618,8 @@ foreach($scenario in $scenarios) {
   if($positive) {
     if(([MixelOrdinaryTokenFixture]::Calls -join ',') -cne 'probe:4001,owner:4002,probe:4003,stop,close,probe:4004,stop,close' -or [MixelOrdinaryTokenFixture]::Disposed -ne 8) {throw 'Four phase ownership/order or wrapper disposal changed'}
     if(@(Get-ChildItem -LiteralPath $fixtureRoot -Filter 'fixture-release-*').Count -ne 0) {throw 'Confirmed exited caller acknowledgment can leak into the unchanged standard terminal after PID reuse'}
-    if($script:printed.Count -ne 21 -or @($script:printed | Where-Object {$_ -like 'OBSERVED: direct current Actions caller GUID functional control;*' -and $_.Contains('genuineStandardQualified=False; fullEightQualified=False; customerAppQualified=False;')}).Count -ne 4 -or
+    if($script:printed.Count -ne 28 -or @($script:printed | Where-Object {$_ -like 'OBSERVED: exact owned source child lifecycle before cleanup;*'}).Count -ne 7 -or
+       @($script:printed | Where-Object {$_ -like 'OBSERVED: direct current Actions caller GUID functional control;*' -and $_.Contains('genuineStandardQualified=False; fullEightQualified=False; customerAppQualified=False;')}).Count -ne 4 -or
        @($script:printed | Where-Object {$_ -like 'OBSERVED: retained owned source child job membership;*' -and $_.Contains('childJobLimitsMeasured=False; namedDirectoryMeasured=False.')}).Count -ne 4 -or
        @($script:printed | Where-Object {$_ -like 'OBSERVED: owned source child immediate job limits;*' -and $_.Contains('immediateJobOnly=True; completeLimitsMeasured=True; namedDirectoryMeasured=False; causeEstablished=False;')}).Count -ne 4 -or
        @($script:printed | Where-Object {$_ -like 'OBSERVED: owned source child explicit object directory access;*' -and $_.Contains('ExplicitDirectoryAccessOnly=True; ActualEventRouteUnmeasured=True; nameCreationAccessMeasured=True; objectsCreated=False; causeEstablished=False;')}).Count -ne 4 -or $leaseContextFailures.Count -ne 0) {throw 'Diagnostic output silently became standard/app qualification or lost native records'}
@@ -2088,7 +2104,7 @@ public static class MixelIsolatedLeaseControl {
 $raw=[IO.File]::ReadAllText($Standard);$tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseInput($raw,[ref]$tokens,[ref]$errors)
 if($errors.Count){throw 'Actual integrated source does not parse'}
-$functions=@('Write-LeaseContextFailure','Assert-StandardLeaseSafeResult','Read-StandardFixtureResult','Test-LeaseNtWorldPending','Complete-LeaseNtPendingProtocols','Read-StandardNtReplyBytes','Invoke-StandardNtChildObservation','Invoke-StandardLeaseControl')
+$functions=@('Publish-StandardLeaseRelease','Write-StandardLeaseExitObservation','Write-LeaseContextFailure','Assert-StandardLeaseSafeResult','Read-StandardFixtureResult','Test-LeaseNtWorldPending','Complete-LeaseNtPendingProtocols','Read-StandardNtReplyBytes','Invoke-StandardNtChildObservation','Invoke-StandardLeaseControl')
 foreach($name in $functions){
  $found=$ast.FindAll({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq $name},$true)
  if($found.Count -ne 1){throw "Actual NT function extraction failed $name"}

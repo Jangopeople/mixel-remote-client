@@ -187,6 +187,17 @@ def inverse_windows_producer_budget(text):
     return text.replace(exact, before + '    timeout-minutes: 180\n' + after, 1)
 
 
+def inverse_early_windows_lease_gate(text):
+    """Unit-only inverse of the exact early private fixture gate and upload."""
+    before = "      - uses: dtolnay/rust-toolchain@v1\n        with:\n          toolchain: '1.75'\n"
+    addition = "      - name: Prove early Windows acknowledgment publication\n        timeout-minutes: 3\n        shell: pwsh\n        run: |\n          ./scripts/activate-windows-msvc.ps1 -ExportToGitHubEnvironment\n          python scripts/test-support-lease-ack.py\n          if ($LASTEXITCODE -ne 0) { throw 'Actual Windows acknowledgment controls failed.' }\n      - name: Prove early actual standard-token lease lifecycle\n        timeout-minutes: 5\n        shell: pwsh\n        run: |\n          $env:MIXEL_HOSTED_OWNED_QA_NAMESPACE='1'\n          ./scripts/invoke-hosted-standard-qa-windows.ps1 -EvidenceDirectory (Join-Path $env:RUNNER_TEMP 'mixel-early-standard-qa')\n      - name: Preserve early Windows standard-token lifecycle evidence\n        if: always()\n        uses: actions/upload-artifact@v6\n        with:\n          name: windows-lease-ack-early\n          path: ${{ runner.temp }}/mixel-early-standard-qa/\n          if-no-files-found: ignore\n          retention-days: 14\n"
+    after = '      - uses: subosito/flutter-action@v2\n'
+    exact = before + addition + after
+    if text.count(addition) != 1 or text.count(exact) != 1:
+        raise AssertionError('Exact early Windows lease gate changed, moved or duplicated')
+    return text.replace(exact, before + after, 1)
+
+
 def windows_preflight_budget_projection():
     before = "  windows-packaging:\n    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_source_runner == 'windows-2025' && 'windows-2025' || 'windows-2022' }}\n"
     current = '    timeout-minutes: 240\n'
@@ -1012,6 +1023,7 @@ class ConcurrencyControls(unittest.TestCase):
     def test_preflight_wrapper_and_mandatory_source_command_exact_whole_inverse(self):
         text = C.canonical((ROOT / '.github/workflows/preflight.yml').read_bytes()).decode()
         text = inverse_lifecycle_workflow_checks(text, 'preflight.yml')
+        text = inverse_early_windows_lease_gate(text)
         text = inverse_windows_preflight_budget(text)
         text = inverse_windows_sdk_source_diagnostics(text, 'preflight.yml')
         text = inverse_uri_workflow_checks(text, 'preflight.yml')
