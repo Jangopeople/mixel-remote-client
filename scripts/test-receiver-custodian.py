@@ -38,10 +38,17 @@ class ExactOwnerControls(unittest.TestCase):
                 root=Path(t).resolve();fixture(root);row=PLAN['files'][2];p=root/row['name']
                 if kind=='drift':p.write_bytes(p.read_bytes()+b'\n')
                 elif kind=='partial':p.write_text(row['afterSource'])
-                else:p.chmod(0o600)
+                else:
+                    # Windows maps writable POSIX modes to0666;0444 is the
+                    # real representable readonly mismatch on both platforms.
+                    p.chmod(0o444)
+                    self.assertEqual(stat.S_IMODE(p.stat().st_mode),0o444)
                 before=snapshot(root)
-                with self.assertRaises(ValueError):P.apply(root)
-                self.assertEqual(snapshot(root),before)
+                try:
+                    with self.assertRaises(ValueError):P.apply(root)
+                    self.assertEqual(snapshot(root),before)
+                finally:
+                    if kind=='mode':p.chmod(0o644)
     def test_link_and_hardlink_refused(self):
         for hard in (False,True):
             with tempfile.TemporaryDirectory() as t:
@@ -443,7 +450,7 @@ class WholePrefixFixtureControls(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError,'single-link source'):self.driver.regular(source)
     def test_current_cross_sid_helper_and_closed_transport_dependencies(self):
         helper=(HERE/'fixtures/receiver-input-native/tests/windows-cross-sid-tests.rs').read_bytes()
-        self.assertEqual(P.sha(helper),'5636ce4a977bd7464fbdce87f89c324af7b6c0be51294dad49f95eb9d0ffc755')
+        self.assertEqual(P.sha(self.driver.logical(helper)),'5636ce4a977bd7464fbdce87f89c324af7b6c0be51294dad49f95eb9d0ffc755')
         with tempfile.TemporaryDirectory()as t:
             output=Path(t).resolve()/'prepared';self.driver.prepare(output)
             staged=(output/'mixel_receiver_input_windows.rs').read_text()
@@ -452,6 +459,35 @@ class WholePrefixFixtureControls(unittest.TestCase):
             self.assertIn('3|QA_OVERLAPPED,0,1,4096,4096,5000',staged)
             self.assertIn('QaPipe::from_owned(pipe,Some(process.clone()));qa_pipe_connect(&file)',staged)
             self.assertIn('assert_eq!(peer.pid,unsafe{GetProcessId(process.raw())})',staged)
+    def test_current_helper_physical_crlf_pin_and_mixed_refusal(self):
+        helper=self.driver.logical((HERE/'fixtures/receiver-input-native/tests/windows-cross-sid-tests.rs').read_bytes())
+        crlf=helper.replace(b'\n',b'\r\n')
+        self.assertNotEqual(P.sha(crlf),'5636ce4a977bd7464fbdce87f89c324af7b6c0be51294dad49f95eb9d0ffc755')
+        self.assertEqual(P.sha(self.driver.logical(crlf)),'5636ce4a977bd7464fbdce87f89c324af7b6c0be51294dad49f95eb9d0ffc755')
+        self.assertEqual(self.driver.byte_binding(crlf)['physicalSHA256'],P.sha(crlf))
+        for raw in (crlf.replace(b'\r\n',b'\n',1),helper+b'\r'):
+            with self.assertRaisesRegex(ValueError,'mixed or bare-CR'):self.driver.logical(raw)
+    def test_actual_current_test_executes_against_physical_crlf_pipeline_helper(self):
+        # Execute the actual corrected unit method from a physical CRLF copy,
+        # with all its real pinned prepare inputs also CRLF. No process or
+        # compiler is invoked, and no alternate helper hash is admitted.
+        with tempfile.TemporaryDirectory()as t:
+            root=Path(t).resolve();pipeline=root/'pipeline'
+            names=list(json.loads((HERE/'fixtures/receiver-custodian-native/SOURCE-PINS.json').read_text()))
+            names+=['scripts/fixtures/receiver-custodian-native/SOURCE-PINS.json','scripts/test-receiver-custodian.py']
+            for name in names:
+                raw=self.driver.logical((HERE.parent/name).read_bytes())
+                path=pipeline/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(raw.replace(b'\n',b'\r\n'))
+            path=pipeline/'scripts/test-receiver-custodian.py';raw=path.read_bytes()
+            self.assertIn(b'\r\n',raw)
+            namespace={'__name__':'custody_actual_crlf_boundary','__file__':str(path)}
+            exec(compile(raw,str(path),'exec'),namespace)
+            suite=namespace['WholePrefixFixtureControls'];suite.setUpClass()
+            result=unittest.TestResult()
+            suite('test_current_cross_sid_helper_and_closed_transport_dependencies').run(result)
+            self.assertEqual(result.testsRun,1)
+            self.assertEqual(result.errors,[])
+            self.assertEqual(result.failures,[])
     def test_cross_sid_actor_inherits_only_owned_accessible_working_directory(self):
         source=(HERE/'fixtures/receiver-custodian-native/native-tests.rs').read_text()
         self.assertIn('.arg("--qa-cross-parent").current_dir(&root).spawn()',source)
