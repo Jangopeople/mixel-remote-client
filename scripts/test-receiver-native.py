@@ -5,8 +5,10 @@ The native fixture compiles the actual receipt core without any OS input sink.
 It proves receipt transitions, not platform/API or target application delivery.
 """
 import argparse
+import contextlib
 import hashlib
 import importlib.util
+import io
 import json
 import math
 import os
@@ -55,7 +57,68 @@ def snapshot(root):
             for path in root.rglob('*') if path.is_file() and not path.is_symlink()}
 
 
+def receipt_compile_argv(compiler, main, executable, environment, windows):
+    argv = [compiler, '--edition=2021', '--test', str(main), '-o', str(executable)]
+    # Cargo's target linker environment does not configure a direct rustc call.
+    # Use the same activated linker when this step follows MSVC activation.
+    linker = environment.get('CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER')
+    if windows and linker is not None:
+        path = Path(linker)
+        if not path.is_absolute() or path.name.casefold() != 'link.exe' or not path.is_file():
+            raise ValueError('activated Windows receipt linker must be an existing absolute link.exe')
+        argv += ['-C', 'linker=' + str(path)]
+    return argv
+
+
+def diagnostic_tail(raw):
+    return b'\n'.join(raw.splitlines()[-120:])[-12000:].decode('utf-8', errors='replace')
+
+
 class NativeSourceControls(unittest.TestCase):
+    def test_direct_receipt_rustc_uses_activated_linker_as_one_argument(self):
+        with tempfile.TemporaryDirectory(prefix='receipt linker Unicode-') as directory:
+            root = Path(directory)
+            linker = root / 'link.exe'
+            linker.write_bytes(b'inert fixture; never executed')
+            env = {'CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER': str(linker)}
+            argv = receipt_compile_argv('held-rustc', root / 'main.rs', root / 'out.exe', env, True)
+            self.assertEqual(argv[-2:], ['-C', 'linker=' + str(linker)])
+            self.assertEqual(env, {'CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER': str(linker)})
+            self.assertNotIn('-C', receipt_compile_argv('held-rustc', root / 'main.rs', root / 'out', env, False))
+            self.assertNotIn('-C', receipt_compile_argv('held-rustc', root / 'main.rs', root / 'out', {}, True))
+
+    def test_direct_receipt_rustc_refuses_invalid_explicit_linker(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            wrong = root / 'other.exe'
+            wrong.write_bytes(b'inert fixture; never executed')
+            for value in ('', 'link.exe', str(root / 'missing' / 'link.exe'), str(wrong)):
+                with self.subTest(value=value), self.assertRaisesRegex(ValueError, 'activated Windows receipt linker'):
+                    receipt_compile_argv('held-rustc', root / 'main.rs', root / 'out.exe',
+                                         {'CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER': value}, True)
+
+    def test_native_failure_diagnostic_preserves_final_error_with_bounded_output(self):
+        raw = b'old line\n' * 300 + b'x' * 30000 + b'\nactual final compiler error\n'
+        tail = diagnostic_tail(raw)
+        self.assertLessEqual(len(tail.encode()), 12000)
+        self.assertTrue(tail.endswith('actual final compiler error'))
+        self.assertNotIn('old line', tail)
+
+    def test_native_compile_failure_keeps_raw_diagnostic_and_stays_fatal(self):
+        failure = subprocess.CompletedProcess(['held-rustc'], 1, b'', b'x' * 30000 + b'\nactual compiler error\n')
+        with tempfile.TemporaryDirectory() as directory:
+            proof = Path(directory) / 'proof'
+            with mock.patch.object(shutil, 'which', return_value='held-rustc'), \
+                    mock.patch.object(subprocess, 'run', return_value=failure) as child, \
+                    contextlib.redirect_stdout(io.StringIO()) as visible:
+                with self.assertRaisesRegex(RuntimeError, 'native receipt fixture failed'):
+                    native_controls(proof)
+            self.assertEqual(child.call_count, 1, 'a failed compile must never execute its output')
+            self.assertEqual((proof / '1-stderr').read_bytes(), failure.stderr)
+            self.assertEqual(json.loads((proof / '1-RESULT.json').read_text())['exit'], 1)
+            self.assertIn('actual compiler error', visible.getvalue())
+            self.assertLess(len(visible.getvalue().encode()), 13000)
+
     def test_native_prospective_check_validates_without_writing_in_both_directions(self):
         for newline in (b'\n', b'\r\n'):
             with self.subTest(newline=newline), tempfile.TemporaryDirectory() as directory:
@@ -454,7 +517,7 @@ def native_controls(proof):
     if not compiler:
         raise RuntimeError('native receipt compiler unavailable; fixture did not run')
     executable = proof / ('receipt-controls.exe' if os.name == 'nt' else 'receipt-controls')
-    commands = [[compiler, '--edition=2021', '--test', str(proof / 'main.rs'), '-o', str(executable)],
+    commands = [receipt_compile_argv(compiler, proof / 'main.rs', executable, os.environ, os.name == 'nt'),
                 [str(executable), '--test-threads=1', '--nocapture']]
     results = []
     for index, argv in enumerate(commands, 1):
@@ -472,9 +535,15 @@ def native_controls(proof):
         (proof / f'{index}-stderr').write_bytes(result.stderr)
         results.append({'exit': result.returncode, 'elapsed': time.time()-started})
         (proof / f'{index}-RESULT.json').write_text(json.dumps(results[-1])+'\n')
-        print(result.stdout.decode(errors='replace'), end='')
         if result.returncode:
+            print('BEGIN retained native receipt stdout bounded tail', flush=True)
+            print(diagnostic_tail(result.stdout), flush=True)
+            print('END retained native receipt stdout bounded tail', flush=True)
+            print('BEGIN retained native receipt stderr bounded tail', flush=True)
+            print(diagnostic_tail(result.stderr), flush=True)
+            print('END retained native receipt stderr bounded tail', flush=True)
             raise RuntimeError('native receipt fixture failed; retained ' + str(proof))
+        print(result.stdout.decode(errors='replace'), end='')
     (proof / 'RESULT.json').write_text(json.dumps({'pass': True, 'coreSha256': hashlib.sha256(core).hexdigest(), 'results': results,
         'nativeApiInjection': False, 'targetApplicationConsumption': False})+'\n')
     print('PASS: actual pure production receipt core compiled and executed; no native OS input')
