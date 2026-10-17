@@ -14,11 +14,13 @@ static RELEASE_FAILURES: AtomicUsize = AtomicUsize::new(0);
 static BLOCK_FAILURES: AtomicUsize = AtomicUsize::new(0);
 static UNBLOCK_FAILURES: AtomicUsize = AtomicUsize::new(0);
 fn input_threads() -> &'static Mutex<Vec<std::thread::ThreadId>> { static V: OnceLock<Mutex<Vec<std::thread::ThreadId>>> = OnceLock::new(); V.get_or_init(|| Mutex::new(Vec::new())) }
+fn block_prefixes()->&'static Mutex<Vec<usize>>{static V:OnceLock<Mutex<Vec<usize>>>=OnceLock::new();V.get_or_init(||Mutex::new(Vec::new()))}
 fn block_calls() -> &'static Mutex<Vec<(bool,std::thread::ThreadId)>> { static V: OnceLock<Mutex<Vec<(bool,std::thread::ThreadId)>>> = OnceLock::new(); V.get_or_init(|| Mutex::new(Vec::new())) }
 mod platform {
     pub fn block_input(enabled: bool) -> (bool,String) {
         if enabled && super::BLOCK_FAILURES.fetch_update(super::Ordering::SeqCst,super::Ordering::SeqCst,|v|v.checked_sub(1)).is_ok(){return (false,"controlled On failure".to_owned());}
         if !enabled && super::UNBLOCK_FAILURES.fetch_update(super::Ordering::SeqCst,super::Ordering::SeqCst,|v| v.checked_sub(1)).is_ok() { return (false,"controlled failure".to_owned()); }
+        super::block_prefixes().lock().unwrap().push(super::observed().lock().unwrap().iter().filter(|event|event.text=="å").count());
         super::block_calls().lock().unwrap().push((enabled,std::thread::current().id())); (true,String::new())
     }
 }

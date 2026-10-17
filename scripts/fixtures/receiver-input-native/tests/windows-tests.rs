@@ -80,6 +80,7 @@ fn native_abandoned_mutex_poison_cannot_reopen_scope() {
 }
 pub(crate) fn run_native_tests() {
     for(name,case)in [
+        ("Windows local text chunks preserve FIFO and allow Block controls",native_local_text_chunks_and_control as fn()),
         ("Windows helper Block ownership, same-thread input and failed Off retry",native_portable_block_owners_and_thread_affinity as fn()),
         ("Windows queued stale BlockOn denied before effect",native_portable_queued_block_on_is_denied as fn()),
         ("Windows portable text chunks preserve order and admit control",native_portable_text_chunks_and_control as fn()),
@@ -208,6 +209,7 @@ fn native_portable_queued_block_on_is_denied(){
     assert!(receive_block(publisher.token.clone(),own_target(),44,1,uuid::Uuid::new_v4().simple().to_string(),&publisher.peer,reply));publisher.command(1);release.send(()).unwrap();assert!(!rx.recv_timeout(Duration::from_secs(4)).unwrap());wait_until(||lease.cleaned());assert_eq!(super::super::super::block_calls().lock().unwrap().len(),before);publisher.command(0);assert!(publisher.child.wait().unwrap().success());
 }
 fn native_portable_text_chunks_and_control(){
+    wait_until(||remotes().lock().unwrap().is_empty());assert!(native_effect(true,Box::new(||true)));
     let mut data=Publisher::start();let mut block=Publisher::start();let mut packet=data.packet();let mut key=KeyEvent::new();key.set_seq("å".repeat(200));packet.4=key.write_to_bytes().unwrap();
     super::super::super::ENTERED.store(false,Ordering::SeqCst);super::super::super::PAUSE.store(true,Ordering::SeqCst);let reply:Reply=Arc::new(|_|true);assert!(receive_async(packet,&data.peer,reply.clone()));wait_until(||super::super::super::ENTERED.load(Ordering::SeqCst));
     let mut tail=data.packet();let mut key=KeyEvent::new();key.set_seq("TAIL".to_owned());tail.4=key.write_to_bytes().unwrap();assert!(receive_async(tail,&data.peer,reply));
@@ -238,4 +240,13 @@ fn native_portable_receiver_block_lifecycle(){
     assert!(receiver.block(false,false));assert!(ordinary.kernel.cleaned());assert!(receiver.block(true,false));let fresh=receiver.inner.state.lock().unwrap().portable_blocks[0].clone().unwrap();assert_ne!(fresh.token,ordinary.token,"Off/On creates a new nonreusable block lease");
     assert!(receiver.set_permission(false));assert!(fresh.kernel.cleaned());assert!(ordinary.kernel.cleaned());assert!(privacy.active.load(Ordering::SeqCst));assert!(remote_blocks().lock().unwrap().contains(&privacy.token));assert!(!remote_blocks().lock().unwrap().contains(&ordinary.token));assert!(receiver.close());assert!(privacy.kernel.cleaned());assert!(!remote_blocks().lock().unwrap().contains(&privacy.token));
     client::RUNNING.store(false,Ordering::SeqCst);*helper().lock().unwrap()=None;client::block_transport().lock().unwrap().take();client::retire_transport().lock().unwrap().take();
+}
+
+fn native_local_text_chunks_and_control(){
+    wait_until(||generations().unwrap().lock().unwrap().is_empty());assert!(native_effect(true,Box::new(||true)));
+    super::clear_observed();let receiver=Receiver::new(97);assert!(receiver.authorize(true));let mut key=KeyEvent::new();key.set_seq("å".repeat(200));super::super::super::PAUSE.store(true,Ordering::SeqCst);receiver.enqueue(Action::Key(key,false));wait_until(||super::super::super::ENTERED.load(Ordering::SeqCst));
+    let mut tail=KeyEvent::new();tail.set_seq("TAIL".to_owned());receiver.enqueue(Action::Key(tail,false));let copy=receiver.clone();let block=std::thread::spawn(move||copy.block(true,false));
+    wait_until(||native().unwrap().state.lock().unwrap().control.len()>0);let begin=super::super::super::block_prefixes().lock().unwrap().len();super::super::super::PAUSE.store(false,Ordering::SeqCst);assert!(block.join().unwrap());
+    assert_eq!(super::super::super::block_prefixes().lock().unwrap()[begin],64,"local Block executes between bounded text chunks");wait_until(||receiver.inner.pending.load(Ordering::SeqCst)==0);
+    let text:String=super::super::super::observed().lock().unwrap().iter().filter(|event|event.text!="cleanup").map(|event|event.text.as_str()).collect();assert_eq!(text,format!("{}TAIL","å".repeat(200)));assert!(!receiver.failed());assert!(receiver.close());
 }

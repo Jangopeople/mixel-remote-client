@@ -445,10 +445,32 @@ fn apply_remote(remote:&Remote,conn:i32,action:&Action)->bool{
 // chunks finish; later keys from the same owner cannot overtake its text.
 fn chunk(action:&mut Action)->Option<Action>{
     let Action::Key(event,press)=action else{return None;};
-    let Some(hbb_common::message_proto::key_event::Union::Seq(text))=event.union.as_mut()else{return None;};
-    let boundary=text.char_indices().nth(64).map(|(offset,_)|offset)?;
-    let rest=text.split_off(boundary);let head=std::mem::replace(text,rest);
-    let mut part=event.clone();part.set_seq(head);Some(Action::Key(part,*press))
+    let union=event.union.take()?;
+    let mut text=match union{hbb_common::message_proto::key_event::Union::Seq(text)=>text,other=>{event.union=Some(other);return None;}};
+    let Some(boundary)=text.char_indices().nth(64).map(|(offset,_)|offset)else{event.set_seq(text);return None;};
+    let rest=text.split_off(boundary);
+    // Clone metadata while the union is empty: never copy the large remainder
+    // a second time merely to construct a 64-scalar native chunk.
+    let mut part=event.clone();part.set_seq(text);event.set_seq(rest);Some(Action::Key(part,*press))
+}
+fn fail_local(generation:&Arc<Generation>){generation.failure.store(true,Ordering::SeqCst);generation.deny();}
+pub(super) fn enqueue_local(work:Work){
+    let generation=work.generation.clone();let mut pending=generation.local_pending.lock().unwrap_or_else(|e|e.into_inner());
+    if !generation.active.load(Ordering::SeqCst){return;}pending.push_back(work);
+    if generation.local_scheduled.swap(true,Ordering::SeqCst){return;}drop(pending);
+    if !schedule_local(generation.clone()){fail_local(&generation);generation.local_scheduled.store(false,Ordering::SeqCst);}
+}
+fn schedule_local(generation:Arc<Generation>)->bool{
+    native_enqueue_reserved(Box::new(move||{
+        let item=generation.local_pending.lock().unwrap_or_else(|e|e.into_inner()).pop_front();
+        let Some(mut work)=item else{generation.local_scheduled.store(false,Ordering::SeqCst);return true;};
+        let part=chunk(&mut work.action);let success=apply_local_part(&work,part.as_ref().unwrap_or(&work.action));
+        let mut pending=generation.local_pending.lock().unwrap_or_else(|e|e.into_inner());
+        if success&&part.is_some()&&generation.active.load(Ordering::SeqCst){pending.push_front(work);}else{drop(work);}
+        if !generation.active.load(Ordering::SeqCst){pending.clear();}
+        if pending.is_empty(){generation.local_scheduled.store(false,Ordering::SeqCst);return success;}drop(pending);
+        if !schedule_local(generation.clone()){fail_local(&generation);generation.local_scheduled.store(false,Ordering::SeqCst);return false;}success
+    }))
 }
 fn schedule_remote(remote:Remote)->bool{
     native_enqueue_reserved(Box::new(move||{

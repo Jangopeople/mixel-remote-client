@@ -32,6 +32,8 @@ struct Generation {
     block_status: AtomicUsize,
     #[cfg(windows)]
     retire_sent: AtomicBool,
+    #[cfg(windows)] local_pending:Mutex<std::collections::VecDeque<Work>>,
+    #[cfg(windows)] local_scheduled:AtomicBool,
     failure: Arc<AtomicBool>,
     #[cfg(windows)]
     owner: std::sync::Weak<Inner>,
@@ -69,6 +71,8 @@ impl Generation {
             #[cfg(windows)] role,
             #[cfg(windows)] block_status: AtomicUsize::new(0),
             #[cfg(windows)] retire_sent: AtomicBool::new(false),
+            #[cfg(windows)] local_pending:Mutex::new(std::collections::VecDeque::new()),
+            #[cfg(windows)] local_scheduled:AtomicBool::new(false),
             #[cfg(windows)] owner: Arc::downgrade(inner),
             active: AtomicBool::new(true), serial: Mutex::new(()),
             cleanup_done: AtomicBool::new(false), cleanup_requested: AtomicBool::new(false),
@@ -104,7 +108,7 @@ impl Generation {
     }
     fn deny(&self) -> bool {
         self.active.store(false,Ordering::SeqCst);
-        #[cfg(windows)] { windows::cancel_block(&self.token); self.block_status.store(3,Ordering::SeqCst); self.kernel.revoke() }
+        #[cfg(windows)] { self.local_pending.lock().unwrap_or_else(|e|e.into_inner()).clear();windows::cancel_block(&self.token); self.block_status.store(3,Ordering::SeqCst); self.kernel.revoke() }
         #[cfg(not(windows))] { true }
     }
     fn revoke(self: &Arc<Self>) -> bool {
@@ -283,10 +287,7 @@ fn dispatch(work: Work) {
             }
             return;
         }
-        let generation = work.generation.clone(); let inner = work.inner.clone();
-        if !windows::native_effect(false, Box::new(move || { apply_local(work); true })) {
-            inner.failed.store(true, Ordering::SeqCst); let _ = generation.revoke();
-        }
+        windows::enqueue_local(work);
         return;
     }
     #[cfg(target_os = "macos")]
@@ -294,18 +295,20 @@ fn dispatch(work: Work) {
     #[cfg(not(any(windows, target_os = "macos")))]
     apply_local(work);
 }
-fn apply_local(work: Work) {
+#[cfg(not(windows))]
+fn apply_local(work: Work) { let _=apply_local_part(&work,&work.action); }
+fn apply_local_part(work:&Work, action:&Action)->bool {
     let generation = &work.generation;
-    let Ok(_serial) = generation.serial.lock() else { work.inner.failed.store(true, Ordering::SeqCst); return; };
-    if !generation.active.load(Ordering::SeqCst) { return; }
+    let Ok(_serial) = generation.serial.lock() else { work.inner.failed.store(true, Ordering::SeqCst); return false; };
+    if !generation.active.load(Ordering::SeqCst) { return false; }
     #[cfg(windows)] if !generation.backend.matches_current() {
-        generation.active.store(false,Ordering::SeqCst); let _ = generation.kernel.revoke(); work.inner.failed.store(true,Ordering::SeqCst); return;
+        generation.active.store(false,Ordering::SeqCst); let _ = generation.kernel.revoke(); work.inner.failed.store(true,Ordering::SeqCst); return false;
     }
     #[cfg(windows)]
-    let Some(_kernel) = generation.kernel.effect() else { work.inner.failed.store(true, Ordering::SeqCst); return; };
+    let Some(_kernel) = generation.kernel.effect() else { work.inner.failed.store(true, Ordering::SeqCst); return false; };
     let active = generation.clone();
-    apply(&generation.token, generation.effect_id, generation.conn, &work.action,
-        Arc::new(move || active.admitted()), local_runner(generation.clone()));
+    apply(&generation.token, generation.effect_id, generation.conn, action,
+        Arc::new(move || active.admitted()), local_runner(generation.clone()));true
 }
 type Deferred = Arc<dyn Fn(Box<dyn FnOnce() + Send>) -> bool + Send + Sync>;
 static DEFERRED_PENDING: AtomicUsize = AtomicUsize::new(0);

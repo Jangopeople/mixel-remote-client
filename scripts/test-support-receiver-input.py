@@ -59,6 +59,8 @@ def source_contracts(module):
     assert 'p.target==identity(peer)&&peer.alive()' in windows and 'compare_exchange(0,if success' in windows
     assert 'fn native_block_owner(' in windows and 'NATIVE_THREAD.with' in windows
     assert 'owners.len()==1&&!crate::platform::block_input(false).0{return false;}' in windows
+    assert 'windows::enqueue_local(work)' in core and 'local_pending:Mutex' in core
+    assert 'fn schedule_local(' in windows and 'apply_local_part(&work,part.as_ref()' in windows
     assert 'receive_async' in windows and 'char_indices().nth(64)' in windows
     assert 'PACKETS.fetch_update' in windows and 'native_enqueue_reserved' in windows
     assert 'pending.push_front(item)' in windows and 'control_burst < 8' in windows

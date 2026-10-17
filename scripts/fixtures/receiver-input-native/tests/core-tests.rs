@@ -21,7 +21,7 @@ fn captured(receiver:&Receiver,action:Action)->Work {
     Work{inner:receiver.inner.clone(),generation,action,bytes}
 }
 fn run_actual(work: Work) {
-    #[cfg(windows)] assert!(windows::native_effect(false,Box::new(move || {apply_local(work);true})));
+    #[cfg(windows)] assert!(windows::native_effect(false,Box::new(move || {let _=apply_local_part(&work,&work.action);true})));
     #[cfg(not(windows))] apply_local(work);
 }
 fn clear_observed(){super::super::observed().lock().unwrap().clear();super::super::ENTERED.store(false,Ordering::SeqCst);}
