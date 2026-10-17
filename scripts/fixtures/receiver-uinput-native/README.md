@@ -31,3 +31,17 @@ generations and old Bind refusal, actual process exit, changed executable,
 same-executable re-exec and a saturated Unix socket send deadline. Complete
 application build and native Wayland customer consent/control remain separate
 required proofs.
+
+Each generation and device kind selects one strong service-generated channel
+instance through a once-published slot in the revoke page. Both native effects
+and cleanup ACKs require that instance. Reconnecting a backend requires retiring
+the old generation and fresh customer authorization; an empty replacement ledger
+cannot acknowledge an old device's held keys. Cleanup slices cap process probes
+and stable receipt scans, and reset their deadline after work.
+
+Add `--tokio` to a Linux `--run` command to exercise the exact production send
+observer against real Tokio timers and slow counted cleanup callbacks. The
+fixture also reverses only its priority/reset correction and requires the
+original starvation control to fail with its exact bounded panic marker. This
+requires Cargo and the pinned Tokio 1.44.2 dependency. These scenarios still do
+not compile or qualify the complete application leaf or actual desktop input.

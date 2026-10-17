@@ -1,13 +1,15 @@
 //! Successful actual-device claims. The caller supplies the final sink and deny check.
-use std::{collections::{HashMap,HashSet}, time::{Duration, Instant}};
+use std::{collections::{HashMap,HashSet,VecDeque}, time::{Duration, Instant}};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(super) struct Claim { pub owner: String, pub temporary: u64 }
-struct Held { claims: HashMap<Claim, Instant> }
+struct Held { stamp:u64, claims: HashMap<Claim, Instant> }
 #[derive(Default)]
 pub(super) struct Ledger {
     keys: HashMap<u16, Held>,
     aliases: HashMap<(Claim, String), u16>,
+    pending:VecDeque<(u16,u64)>,
+    next_stamp:u64,
 }
 impl Ledger {
     pub fn down(&mut self, claim: Claim, alias: &str, key: u16, repeat: bool,
@@ -24,9 +26,12 @@ impl Ledger {
             }
             held.claims.insert(claim, Instant::now());
         } else {
+            if self.pending.len()>=8192 {return Err("uinput receipt scan bound exceeded".into());}
+            let stamp=self.next_stamp.checked_add(1).ok_or("uinput receipt identity exhausted")?;
             if !admitted() { return Err("uinput generation is denied".into()); }
             emit(key, true)?;
-            self.keys.insert(key, Held { claims: HashMap::from([(claim, Instant::now())]) });
+            self.keys.insert(key, Held { stamp, claims: HashMap::from([(claim, Instant::now())]) });
+            self.next_stamp=stamp;self.pending.push_back((key,stamp));
         }
         self.aliases.insert(alias_key, key);
         Ok(())
@@ -57,6 +62,30 @@ impl Ledger {
         }
         complete
     }
+    /// Scan bounded stable receipt instances. Stale queue entries never alias
+    /// a later Down of the same physical key and count against the work budget.
+    pub fn retire_some(&mut self, maximum:usize,mut selected:impl FnMut(&Claim,Instant)->bool,
+        mut emit:impl FnMut(u16,bool)->Result<(),String>)->bool {
+        let count=maximum.min(self.pending.len());let mut complete=true;
+        for _ in 0..count {
+            let (key,stamp)=self.pending.pop_front().unwrap();
+            let Some(held)=self.keys.get_mut(&key).filter(|held|held.stamp==stamp) else {continue;};
+            let retiring:Vec<_>=held.claims.iter().filter(|(claim,time)|selected(claim,**time)).map(|(claim,_)|claim.clone()).collect();
+            if !retiring.is_empty() {
+                if retiring.len()==held.claims.len() {
+                    if emit(key,false).is_err(){complete=false;}else{
+                        self.keys.remove(&key);
+                        self.aliases.retain(|(claim,_),physical|*physical!=key || !retiring.contains(claim));
+                    }
+                }else{
+                    for claim in &retiring {held.claims.remove(claim);}
+                    self.aliases.retain(|(claim,_),physical|*physical!=key || !retiring.contains(claim));
+                }
+            }
+            if self.keys.get(&key).is_some_and(|held|held.stamp==stamp){self.pending.push_back((key,stamp));}
+        }
+        complete
+    }
     pub fn held(&self, owner: &str) -> bool { self.keys.values().any(|held| held.claims.keys().any(|claim| claim.owner == owner)) }
     pub fn pressed(&self, key: u16) -> bool { self.keys.contains_key(&key) }
     pub fn pressed_by(&self, key:u16, owner:&str)->bool { self.keys.get(&key).is_some_and(|held|held.claims.keys().any(|claim|claim.owner==owner)) }
@@ -66,7 +95,7 @@ impl Ledger {
 
 /// No registry limit can evict an active or failed-final-Up receipt.
 pub(super) fn reap_retired<T>(caps:&mut HashMap<String,T>,ledger:&Ledger,mut retired:impl FnMut(&T)->bool) {
-    caps.retain(|owner,cap|ledger.held(owner) || !retired(cap));
+    caps.retain(|owner,cap|!retired(cap) || ledger.held(owner));
 }
 
 /// This is only an RPC optimization. Forgetting a binding must re-Bind the same
@@ -112,6 +141,21 @@ mod tests {
         assert!(!state.retire(|_,_|true,|_,_|Err("Up failed".into())));reap_retired(&mut caps,&state,|retired|*retired);assert!(caps.contains_key("active"));
         assert!(state.retire(|_,_|true,|_,_|Ok(())));reap_retired(&mut caps,&state,|retired|*retired);assert!(!caps.contains_key("active"));
     }
+    #[test] fn bounded_cleanup_visits_receipts_fairly_and_retains_failed_up() {
+        let mut state=Ledger::default();for key in 1..=300 {state.down(who("A",0),&format!("key-{}",key),key,false,||true,|_,_|Ok(())).unwrap();}
+        let mut all=Vec::new();
+        for _ in 0..3 {
+            let mut this=Vec::new();state.retire_some(128,|_,_|true,|key,_|{this.push(key);if key==1 {Err("failed final Up".into())}else{Ok(())}});
+            assert!(this.len()<=128);all.extend(this);
+        }
+        assert!((2..=300).all(|key|all.contains(&key)));assert!(state.pressed(1));
+        state.retire_some(128,|_,_|true,|_,_|Ok(()));assert!(state.empty());
+    }
+    #[test] fn stale_cleanup_entry_never_retires_new_key_instance_twice() {
+        let mut state=Ledger::default();press(&mut state,"A",0,29);state.up(&who("A",0),"key",Some(29),|_,_|Ok(())).unwrap();press(&mut state,"B",0,29);
+        let mut calls=0;state.retire_some(1,|_,_|true,|_,_|{calls+=1;Ok(())});assert_eq!(calls,0);assert!(state.held("B"));
+        state.retire_some(1,|_,_|true,|_,_|{calls+=1;Ok(())});assert_eq!(calls,1);assert!(state.empty());
+    }
     #[test] fn failed_actual_down_never_becomes_receipt() {
         let mut state=Ledger::default();
         assert!(state.down(who("A",0),"map",29,true,||true,|_,_|Err("write failed".into())).is_err());
@@ -146,7 +190,7 @@ mod tests {
         assert_eq!(keys,[(29,false)]);assert!(state.held("B"));
     }
     #[test] fn cleanup_attempts_other_receipts_after_failure() {
-        let mut state=Ledger::default();press(&mut state,"A",0,29);press(&mut state,"A",0,42);
+        let mut state=Ledger::default();press(&mut state,"A",0,29);state.down(who("A",0),"other",42,false,||true,|_,_|Ok(())).unwrap();
         let mut attempted=Vec::new();assert!(!state.retire(|_,_|true,|key,_|{attempted.push(key);if key==29 {Err("failure".into())}else{Ok(())}}));
         attempted.sort();assert_eq!(attempted,[29,42]);assert!(state.pressed(29));assert!(!state.pressed(42));
     }

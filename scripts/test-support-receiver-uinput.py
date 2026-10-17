@@ -279,6 +279,20 @@ class OwnerControls(unittest.TestCase):
         self.assertIn('core::reap_retired', source)
         self.assertIn('libc::F_SEAL_WRITE', kernel)
         self.assertIn('publisher_descriptors_match', kernel)
+        self.assertIn('self.set(BIND_READY,kind)', kernel)
+        self.assertIn('publisher.bind(kind,&reply.instance)', source)
+        self.assertIn('cap.bound_to(kind,&self.instance)', source)
+        self.assertIn('cap.bound_to(KEYBOARD,&state.instance)', source)
+        self.assertIn('cap.bound_to(MOUSE,&state.instance)', source)
+        self.assertIn('instance:uuid::Uuid::new_v4()', source)
+        self.assertIn('CAP_SCAN.min(self.cap_scan.len())', source)
+        self.assertIn('self.ledger.retire_some(KEY_SCAN', source)
+        observer = source[source.index('async fn send_observed('):source.index('fn keyboard_state(')]
+        self.assertLess(observer.index('_=&mut deadline'), observer.index('result=&mut send'))
+        self.assertLess(observer.index('result=&mut send'), observer.index('_=timer.tick()'))
+        self.assertIn('timer.reset_after', observer)
+        self.assertEqual(source.count('set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay)'), 2)
+
 
 
 

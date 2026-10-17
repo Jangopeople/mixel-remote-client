@@ -87,6 +87,16 @@ fn main(){
         let old=kernel::Consumer::open(&peer,&publisher.wire).unwrap();assert!(!old.allowed(&peer));
     }
     passed("4100-completed-generations-reaped-old-bind-stays-denied");
+    let publisher=kernel::Publisher::create(&nonce(700)).unwrap();let old_instance=nonce(701);let new_instance=nonce(702);
+    assert!(publisher.bind(1,&old_instance));let old=kernel::Consumer::open(&peer,&publisher.wire).unwrap();assert!(old.bound_to(1,&old_instance));
+    publisher.mark_used(1);old.deny();old.ack.set(WORD,1);assert!(!publisher.retired());
+    let new=kernel::Consumer::open(&peer,&publisher.wire).unwrap();assert!(new.allowed(&peer));assert!(!new.bound_to(1,&new_instance));
+    // Simulate a service/client restart. Its empty device cannot ACK the old
+    // selected ledger, nor inject a new Down under this generation.
+    assert!(!publisher.bind(1,&new_instance));assert!(!new.allowed(&peer));assert!(!new.bound_to(1,&new_instance));
+    let mut fresh=core::Ledger::default();let mut effects=0;
+    assert!(fresh.down(core::Claim{owner:nonce(700),temporary:0},"new Down",29,true,||new.allowed(&peer)&&new.bound_to(1,&new_instance),|_,_|{effects+=1;Ok(())}).is_err());
+    assert_eq!(effects,0);assert!(fresh.empty());assert!(publisher.retired());passed("sticky-old-ack-cannot-authorize-new-backend-instance");
     let (mut process,mut stream,child_peer,directory)=spawn("publisher",7);let mut line=String::new();BufReader::new(stream.try_clone().unwrap()).read_line(&mut line).unwrap();let fields:Vec<_>=line.split_whitespace().collect();
     let wire=WireLease{nonce:fields[0].into(),revoke_fd:fields[1].parse().unwrap(),ack_fd:fields[2].parse().unwrap()};let consumer=kernel::Consumer::open(&child_peer,&wire).unwrap();assert!(consumer.allowed(&child_peer));
     stream.write_all(&[1]).unwrap();assert!(process.wait().unwrap().success());wait_until(||!child_peer.alive());assert!(!consumer.allowed(&child_peer));std::fs::remove_dir_all(directory).unwrap();passed("publisher-normal-exit-denies-retained-mapping-via-pidfd");
@@ -98,5 +108,5 @@ fn main(){
     let (mut sender,_receiver)=UnixStream::pair().unwrap();sender.set_nonblocking(true).unwrap();let bytes=[0u8;65536];
     loop {match sender.write(&bytes){Ok(0)=>panic!("closed test socket"),Ok(_)=>{},Err(error) if error.kind()==std::io::ErrorKind::WouldBlock=>break,Err(error)=>panic!("saturating test socket: {}",error)}}
     sender.set_nonblocking(false).unwrap();sender.set_write_timeout(Some(Duration::from_millis(10))).unwrap();let started=Instant::now();assert!(sender.write(&bytes).is_err());assert!(started.elapsed()<Duration::from_secs(1));passed("saturated-kernel-send-has-finite-timeout");
-    println!("12 native kernel scenarios passed; evdev callbacks are counted component sinks, not desktop input proof");
+    println!("13 native kernel scenarios passed; evdev callbacks are counted component sinks, not desktop input proof");
 }

@@ -209,21 +209,21 @@
     {
       "name": "src/server/mixel_receiver_uinput.rs",
       "template": "support-receiver-uinput.rs",
-      "sha256": "1ce3473827284873e05b34ef667be520f8e477851c61468c6c2ce6c4c7d3e03d",
+      "sha256": "051ea6f673950617ccf01275a58873cefb2e527aed29b567781378f7ad7a0229",
       "mode": 420,
       "newlineFrom": "src/server/uinput.rs"
     },
     {
       "name": "src/server/mixel_receiver_uinput_core.rs",
       "template": "support-receiver-uinput-core.rs",
-      "sha256": "633a7b3f7e157ec06089f71246b49259c8b0d43d462c174f4ce4fbc0dbfb2dd5",
+      "sha256": "a865fcc894983db61f4be835f76a6b01bfac0b68b5dd8cf5efe9faede9c1fcd4",
       "mode": 420,
       "newlineFrom": "src/server/uinput.rs"
     },
     {
       "name": "src/server/mixel_receiver_uinput_kernel.rs",
       "template": "support-receiver-uinput-kernel.rs",
-      "sha256": "9a0352df53e6712b101d9d4ede7aca2bab5b7d66a295343d173cfe30b8124195",
+      "sha256": "f1ced5f2e7a7c587ed5b645732cfe81cbd6f45d97517e36a2aaf349aa55339f5",
       "mode": 420,
       "newlineFrom": "src/server/uinput.rs"
     }

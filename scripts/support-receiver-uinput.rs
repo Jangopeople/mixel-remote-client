@@ -1,11 +1,13 @@
 //! Linux own-uinput final-sink capability and actual-device receipt owner.
 //! A pipe write is never an input receipt. The separate revoke page bypasses FIFO.
 use super::*;
-use std::{collections::HashMap, os::unix::io::{AsRawFd, RawFd}, sync::{Arc, Mutex, OnceLock, atomic::{AtomicU64, Ordering}}};
+use std::{collections::{HashMap,HashSet,VecDeque}, os::unix::io::{AsRawFd, RawFd}, sync::{Arc, Mutex, OnceLock, atomic::{AtomicU64, Ordering}}};
 #[path = "mixel_receiver_uinput_core.rs"]
 mod core;
 use core::{Claim, Ledger};
 
+const CAP_SCAN:usize=64;
+const KEY_SCAN:usize=256;
 const PAGE: usize = 4096;
 const WORD: usize = 64;
 pub(super) const KEYBOARD: u64 = 1;
@@ -27,7 +29,7 @@ pub(crate) enum Operation {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Packet { lease: WireLease, sequence: u64, operation: Operation }
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub(crate) struct Reply { nonce: String, sequence: u64, accepted: bool, pressed: bool }
+pub(crate) struct Reply { nonce: String, sequence: u64, instance:String, kind:u64, accepted: bool, pressed: bool }
 
 #[path = "mixel_receiver_uinput_kernel.rs"]
 mod kernel;
@@ -74,7 +76,10 @@ pub(super) fn request(stream: &mut Connection, runtime: &Runtime, bound: &mut st
             tokio::time::timeout(std::time::Duration::from_millis(IPC_REQUEST_TIMEOUT),stream.send(&Data::UinputReceiver(packet))).await
         }).map_err(|_|"uinput send deadline exceeded".to_owned())?.map_err(|error|error.to_string())?;
         match runtime.block_on(stream.next_timeout(IPC_REQUEST_TIMEOUT)).map_err(|error|error.to_string())? {
-            Some(Data::UinputReceiverResponse(reply)) if reply.sequence==sequence && reply.nonce==publisher.wire.nonce && reply.accepted=>Ok(reply),
+            Some(Data::UinputReceiverResponse(reply)) if reply.sequence==sequence && reply.nonce==publisher.wire.nonce && reply.kind==kind && reply.accepted=>{
+                if !publisher.bind(kind,&reply.instance) {return Err("uinput receiver backend instance changed".into());}
+                Ok(reply)
+            },
             _=>Err("uinput actual sink did not acknowledge acceptance".into()),
         }
     };
@@ -116,33 +121,42 @@ pub(crate) fn mouse_button(en:&mut enigo::Enigo,button:MouseButton,down:bool)->R
     mouse.receiver(Operation::Mouse(if down {DataMouse::Down(button)}else{DataMouse::Up(button)},0)).map(|_|())
 }
 
-struct Sink { peer:Arc<Peer>, caps:HashMap<String,Arc<Consumer>>, ledger:Ledger, pending_sync:bool }
+struct Sink { instance:String, peer:Arc<Peer>, caps:HashMap<String,Arc<Consumer>>, ledger:Ledger, cap_scan:VecDeque<String>, pending_sync:bool }
 impl Sink {
-    fn new(peer:Peer)->Self { Self {peer:Arc::new(peer),caps:HashMap::new(),ledger:Ledger::default(),pending_sync:false} }
+    fn new(peer:Peer)->Self { Self {instance:uuid::Uuid::new_v4().simple().to_string(),peer:Arc::new(peer),caps:HashMap::new(),ledger:Ledger::default(),cap_scan:VecDeque::new(),pending_sync:false} }
     fn cap(&mut self,packet:&Packet)->Option<Arc<Consumer>> {
         if packet.sequence==0 || !nonce_valid(&packet.lease.nonce) { return None; }
         if let Some(cap)=self.caps.get(&packet.lease.nonce) {
             return (cap.wire==packet.lease).then(||cap.clone());
         }
-        if (!matches!(packet.operation,Operation::Bind) && !is_cleanup(&packet.operation)) || self.caps.len()>=4096 { return None; }
+        if (!matches!(packet.operation,Operation::Bind) && !is_cleanup(&packet.operation)) || self.caps.len()>=4096 || self.cap_scan.len()>=8192 { return None; }
         let cap=Arc::new(Consumer::open(&self.peer,&packet.lease)?);
         if !matches!(packet.operation,Operation::Bind) && !cap.permanently_revoked() {return None;}
-        self.caps.insert(packet.lease.nonce.clone(),cap.clone());Some(cap)
+        self.cap_scan.push_back(packet.lease.nonce.clone());self.caps.insert(packet.lease.nonce.clone(),cap.clone());Some(cap)
     }
     fn deny_all(&self) { for cap in self.caps.values() {cap.deny();} }
     fn sweep(&mut self,kind:u64,mut emit:impl FnMut(u16,bool)->Result<(),String>,mut flush:impl FnMut()->Result<(),String>) -> bool {
-        let caps=&self.caps;let peer=&self.peer;let mut attempted=false;
-        self.ledger.retire(|claim,time|caps.get(&claim.owner).map(|cap|!cap.allowed(peer)).unwrap_or(true) || Ledger::expired(time),|key,down|{attempted=true;emit(key,down)});
+        let mut visited=Vec::new();
+        for _ in 0..CAP_SCAN.min(self.cap_scan.len()) {
+            let owner=self.cap_scan.pop_front().unwrap();
+            let Some(cap)=self.caps.get(&owner).cloned() else {continue;};
+            cap.allowed(&self.peer); // at most CAP_SCAN process/fd probes
+            visited.push((owner.clone(),cap));self.cap_scan.push_back(owner);
+        }
+        let caps=&self.caps;let mut attempted=false;
+        self.ledger.retire_some(KEY_SCAN,|claim,time|caps.get(&claim.owner).map(|cap|cap.denied.load(Ordering::SeqCst)).unwrap_or(true) || Ledger::expired(time),|key,down|{attempted=true;emit(key,down)});
         if self.pending_sync || attempted {self.pending_sync=flush().is_err();}
-        for (owner,cap) in &self.caps {
-            // Failed final Ups or SYN_REPORT retain responsibility and cannot acknowledge.
-            if !cap.allowed(peer) && !self.ledger.held(owner) && !self.pending_sync {cap.ack.set(WORD,kind);}
+        let mut retiring=HashSet::new();
+        for (owner,cap) in visited {
+            // Only the selected immutable actual channel can publish this kind's
+            // ACK. A reconnect's empty ledger can never acknowledge its old peer.
+            if cap.bound_to(kind,&self.instance) && cap.denied.load(Ordering::SeqCst) && !self.ledger.held(&owner) && !self.pending_sync {cap.ack.set(WORD,kind);}
+            if !self.pending_sync && cap.denied.load(Ordering::SeqCst) && cap.permanently_revoked()
+                && (!cap.bound_to(kind,&self.instance) || cap.ack.load(WORD)&kind!=0) {retiring.insert(owner);}
         }
-        // Retire only a permanently denied original capability. A queued old
-        // Bind reopens that exact sealed deny page and still cannot admit input.
-        if !self.pending_sync {
-            core::reap_retired(&mut self.caps,&self.ledger,|cap|cap.denied.load(Ordering::SeqCst) && cap.permanently_revoked() && cap.ack.load(WORD)&kind!=0);
-        }
+        // The pure reaper still refuses any active/failed-Up receipt, even if a
+        // bad retirement candidate were accidentally selected above.
+        core::reap_retired(&mut self.caps,&self.ledger,|cap|retiring.contains(&cap.wire.nonce));
         !self.pending_sync
     }
     fn drained(&self)->bool {!self.pending_sync && self.ledger.empty() && self.caps.values().all(|cap|cap.denied.load(Ordering::SeqCst))}
@@ -264,9 +278,9 @@ fn mouse_operation(state:&mut Sink,cap:&Consumer,mouse:&super::mouce::UInputMous
         _=>Err("keyboard packet on uinput mouse channel".into()),
     }
 }
-fn response(packet:&Packet,result:Result<bool,String>)->Reply {
+fn response(packet:&Packet,instance:&str,kind:u64,result:Result<bool,String>)->Reply {
     if let Err(error)=&result {log::error!("Owned uinput effect was not accepted: {}",error);}
-    Reply {nonce:packet.lease.nonce.clone(),sequence:packet.sequence,accepted:result.is_ok(),pressed:result.unwrap_or(false)}
+    Reply {nonce:packet.lease.nonce.clone(),sequence:packet.sequence,instance:instance.to_owned(),kind,accepted:result.is_ok(),pressed:result.unwrap_or(false)}
 }
 
 thread_local! {
@@ -292,9 +306,9 @@ async fn send_observed(stream:&mut Connection,data:&Data,state:&mut Sink,timer:&
     let send=stream.send(data);tokio::pin!(send);
     let deadline=tokio::time::sleep(std::time::Duration::from_millis(IPC_REQUEST_TIMEOUT));tokio::pin!(deadline);
     loop {tokio::select! {biased;
-        _=timer.tick()=>{state.sweep(kind,&mut emit,&mut flush);}
         _=&mut deadline=>return false,
         result=&mut send=>return result.is_ok(),
+        _=timer.tick()=>{state.sweep(kind,&mut emit,&mut flush);timer.reset_after(std::time::Duration::from_millis(10));}
     }}
 }
 fn keyboard_state(keyboard:&VirtualDevice,key:Key)->bool {
@@ -316,11 +330,13 @@ pub(super) fn spawn_keyboard(mut stream:Connection) {
         let keyboard=match service::create_uinput_keyboard(){Ok(value)=>value,Err(error)=>{log::error!("Failed to create uinput keyboard: {}",error);return;}};
         let mut state=Sink::new(peer);let mut connected=true;
         let mut timer=tokio::time::interval(std::time::Duration::from_millis(10));
+        timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! { biased;
                 _=timer.tick()=>{
-                    // Independent priority cleanup does not queue behind data.
+                    // Independent bounded cleanup does not queue behind data.
                     state.sweep(KEYBOARD,|key,down|keyboard_emit(&keyboard,key,down),||keyboard_flush(&keyboard));
+                    timer.reset_after(std::time::Duration::from_millis(10));
                     if !connected && state.drained(){break;}
                 }
                 value=stream.next(),if connected=>{
@@ -328,10 +344,10 @@ pub(super) fn spawn_keyboard(mut stream:Connection) {
                         Ok(Some(Data::UinputReceiver(packet)))=>{
                             let reply=if let Some(cap)=state.cap(&packet){
                                 state.sweep(KEYBOARD,|key,down|keyboard_emit(&keyboard,key,down),||keyboard_flush(&keyboard));
-                                let result=if !matches!(packet.operation,Operation::Bind) && !is_cleanup(&packet.operation) && !cap.allowed(&state.peer){Err("uinput generation revoked at sink".into())}else{keyboard_operation(&mut state,&cap,&keyboard,&packet)};
+                                let result=if !matches!(packet.operation,Operation::Bind) && (!cap.bound_to(KEYBOARD,&state.instance) || (!is_cleanup(&packet.operation) && !cap.allowed(&state.peer))){Err("uinput generation revoked at sink".into())}else{keyboard_operation(&mut state,&cap,&keyboard,&packet)};
                                 let result=if !state.sweep(KEYBOARD,|key,down|keyboard_emit(&keyboard,key,down),||keyboard_flush(&keyboard)){cap.deny();Err("uinput synchronization remains pending".into())}else{result};
-                                response(&packet,result)
-                            }else{response(&packet,Err("invalid uinput capability or channel bound".into()))};
+                                response(&packet,&state.instance,KEYBOARD,result)
+                            }else{response(&packet,&state.instance,KEYBOARD,Err("invalid uinput capability or channel bound".into()))};
                             state.sweep(KEYBOARD,|key,down|keyboard_emit(&keyboard,key,down),||keyboard_flush(&keyboard));
                             if !send_observed(&mut stream,&Data::UinputReceiverResponse(reply),&mut state,&mut timer,KEYBOARD,|key,down|keyboard_emit(&keyboard,key,down),||keyboard_flush(&keyboard)).await{connected=false;state.deny_all();}
                         }
@@ -353,10 +369,12 @@ pub(super) fn spawn_mouse(mut stream:Connection,rng_x:(i32,i32),rng_y:(i32,i32))
         let mut mouse=match super::mouce::UInputMouseManager::new(rng_x,rng_y){Ok(value)=>value,Err(error)=>{log::error!("Failed to create uinput mouse: {}",error);return;}};
         let mut state=Sink::new(peer);let mut connected=true;let mut pending_refresh=None;
         let mut timer=tokio::time::interval(std::time::Duration::from_millis(10));
+        timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! { biased;
                 _=timer.tick()=>{
                     state.sweep(MOUSE,|key,down|mouse_emit(&mouse,key,down),||with_owned_up(true,||mouse.receiver_flush()).map_err(|error|error.to_string()));
+                    timer.reset_after(std::time::Duration::from_millis(10));
                     if connected && state.ledger.empty() && !state.pending_sync {
                         if let Some((rng_x,rng_y))=pending_refresh.take() {
                             match super::mouce::UInputMouseManager::new(rng_x,rng_y){Ok(value)=>mouse=value,Err(error)=>{log::error!("uinput resolution refresh failed: {}",error);connected=false;state.deny_all();}}
@@ -369,10 +387,10 @@ pub(super) fn spawn_mouse(mut stream:Connection,rng_x:(i32,i32),rng_y:(i32,i32))
                         Ok(Some(Data::UinputReceiver(packet)))=>{
                             let reply=if let Some(cap)=state.cap(&packet){
                                 state.sweep(MOUSE,|key,down|mouse_emit(&mouse,key,down),||with_owned_up(true,||mouse.receiver_flush()).map_err(|error|error.to_string()));
-                                let result=if !matches!(packet.operation,Operation::Bind) && !is_cleanup(&packet.operation) && !cap.allowed(&state.peer){Err("uinput generation revoked at sink".into())}else{with_device_scope(cap.clone(),state.peer.clone(),||mouse_operation(&mut state,&cap,&mouse,&packet))};
+                                let result=if !matches!(packet.operation,Operation::Bind) && (!cap.bound_to(MOUSE,&state.instance) || (!is_cleanup(&packet.operation) && !cap.allowed(&state.peer))){Err("uinput generation revoked at sink".into())}else{with_device_scope(cap.clone(),state.peer.clone(),||mouse_operation(&mut state,&cap,&mouse,&packet))};
                                 let result=if !state.sweep(MOUSE,|key,down|mouse_emit(&mouse,key,down),||with_owned_up(true,||mouse.receiver_flush()).map_err(|error|error.to_string())){cap.deny();Err("uinput synchronization remains pending".into())}else{result};
-                                response(&packet,result)
-                            }else{response(&packet,Err("invalid uinput capability or channel bound".into()))};
+                                response(&packet,&state.instance,MOUSE,result)
+                            }else{response(&packet,&state.instance,MOUSE,Err("invalid uinput capability or channel bound".into()))};
                             state.sweep(MOUSE,|key,down|mouse_emit(&mouse,key,down),||with_owned_up(true,||mouse.receiver_flush()).map_err(|error|error.to_string()));
                             if !send_observed(&mut stream,&Data::UinputReceiverResponse(reply),&mut state,&mut timer,MOUSE,|key,down|mouse_emit(&mouse,key,down),||with_owned_up(true,||mouse.receiver_flush()).map_err(|error|error.to_string())).await{connected=false;state.deny_all();}
                         }

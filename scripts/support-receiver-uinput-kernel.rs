@@ -1,5 +1,7 @@
 //! Shared kernel capability bodies; compiled by the Linux native fixture too.
 use super::{WireLease, PAGE, WORD, SEALS};
+const BIND_READY:usize=80;
+fn binding_offset(kind:u64)->Option<usize> {match kind {1=>Some(128),2=>Some(192),_=>None}}
 use std::{fs::{File,OpenOptions},io::Write,os::unix::{fs::{MetadataExt,OpenOptionsExt,PermissionsExt},io::{AsRawFd,FromRawFd,RawFd}},path::PathBuf,sync::{Mutex,atomic::{AtomicBool,AtomicU64,Ordering}}};
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Identity { pid: i32, uid: u32, birth: u64, session: i32, executable: (u64,u64) }
@@ -63,11 +65,25 @@ impl Mapping {
         unsafe {libc::munmap(mapping.pointer.cast(),PAGE);std::ptr::read(&mapping.file)}
     }
     fn word(&self, offset: usize) -> &AtomicU64 {
-        assert!(offset==WORD);
+        assert!(matches!(offset,WORD|BIND_READY));
         unsafe { &*self.pointer.add(offset).cast::<AtomicU64>() }
     }
     pub(super) fn load(&self, offset: usize) -> u64 { self.word(offset).load(Ordering::SeqCst) }
     pub(super) fn set(&self, offset: usize, bits: u64) { assert!(self.writable); self.word(offset).fetch_or(bits,Ordering::SeqCst); }
+    fn binding_matches(&self,kind:u64,instance:&str)->bool {
+        let Some(offset)=binding_offset(kind) else {return false;};
+        self.load(BIND_READY)&kind!=0 && instance.len()==32
+            && unsafe {std::slice::from_raw_parts(self.pointer.add(offset),32)}==instance.as_bytes()
+    }
+    fn bind(&self,kind:u64,instance:&str)->bool {
+        let Some(offset)=binding_offset(kind) else {return false;};
+        if self.load(BIND_READY)&kind!=0 {return self.binding_matches(kind,instance);}
+        if !self.writable || self.load(WORD)!=0 || !nonce_valid(instance) {return false;}
+        // Revocation's publisher mutex serializes writers. The ready bit
+        // publishes an immutable slot; readers never inspect a partial string.
+        unsafe {std::ptr::copy_nonoverlapping(instance.as_ptr(),self.pointer.add(offset),32);}
+        self.set(BIND_READY,kind);true
+    }
     fn nonce_matches(&self, nonce: &str) -> bool {
         nonce.len() == 32 && unsafe { std::slice::from_raw_parts(self.pointer,32) } == nonce.as_bytes()
     }
@@ -114,6 +130,9 @@ impl Revocation {
     pub(super) fn load(&self,_offset:usize)->u64 {
         self.mapping.lock().unwrap_or_else(|error|error.into_inner()).as_ref().map(|value|value.load(WORD)).unwrap_or(1)
     }
+    pub(super) fn bind(&self,kind:u64,instance:&str)->bool {
+        self.mapping.lock().unwrap_or_else(|error|error.into_inner()).as_ref().map(|mapping|mapping.bind(kind,instance)).unwrap_or(false)
+    }
     pub(super) fn revoke(&self)->bool {
         let mut current=self.mapping.lock().unwrap_or_else(|error|error.into_inner());
         let Some(mapping)=current.as_ref() else {return false;};
@@ -137,6 +156,9 @@ impl Publisher {
         if !nonce_valid(nonce) {return None;}
         let nonce=nonce.to_owned();let revoke=create_mapping(&nonce,"revoke",true)?;let ack=create_mapping(&nonce,"ack",false)?;
         Some(Self {wire:WireLease {nonce,revoke_fd:revoke.file.as_raw_fd(),ack_fd:ack.file.as_raw_fd()},revoke:Revocation::new(revoke),ack,failed:AtomicBool::new(false),used:AtomicU64::new(0)})
+    }
+    pub(super) fn bind(&self,kind:u64,instance:&str)->bool {
+        if self.revoke.bind(kind,instance) {true}else{self.fail();false}
     }
     pub(super) fn denied(&self)->bool {self.revoke.load(WORD)!=0}
     pub(super) fn mark_used(&self,kind:u64) {self.used.fetch_or(kind,Ordering::SeqCst);}
@@ -163,6 +185,7 @@ impl Consumer {
         if self.revoke.load(WORD)!=0 || !peer.alive() || !self.publisher_descriptors_match(peer) { self.denied.store(true,Ordering::SeqCst);return false; }
         true
     }
+    pub(super) fn bound_to(&self,kind:u64,instance:&str)->bool {self.revoke.binding_matches(kind,instance)}
     pub(super) fn permanently_revoked(&self)->bool {
         self.revoke.load(WORD)!=0 && (unsafe {libc::fcntl(self.revoke.file.as_raw_fd(),libc::F_GET_SEALS)}) == (SEALS|libc::F_SEAL_WRITE)
     }
