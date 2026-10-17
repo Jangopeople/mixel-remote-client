@@ -28,7 +28,7 @@ def plan():
     value = PLAN.lstat()
     if not stat.S_ISREG(value.st_mode) or value.st_nlink != 1:
         raise ValueError('native acceptance plan is not a regular owned file')
-    data = PLAN.read_bytes()
+    data, _ = normalize(PLAN.read_bytes())
     if digest(data) != PLAN_SHA256:
         raise ValueError('native acceptance plan changed')
     result = json.loads(data)

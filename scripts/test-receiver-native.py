@@ -74,6 +74,40 @@ class NativeSourceControls(unittest.TestCase):
                 self.assertEqual(snapshot(root), before)
                 P.apply(root, restore=True, check=True)
 
+    def test_windows_checkout_plan_templates_and_fixtures_uniform_crlf(self):
+        with tempfile.TemporaryDirectory() as directory:
+            checkout = Path(directory) / 'checkout'
+            scripts = checkout / 'scripts'
+            scripts.mkdir(parents=True)
+            names = ('patch-support-receiver-native.py', 'support-receiver-native-plan.json',
+                     'support-receiver-native.rs', 'support-receiver-receipts.rs',
+                     'patch-support-receiver-native-enigo.py', 'support-receiver-native-enigo-plan.json',
+                     'test-receiver-native-enigo.py')
+            for name in names:
+                raw = P.canonical((SCRIPTS / name).read_bytes())[0]
+                (scripts / name).write_bytes(raw.replace(b'\n', b'\r\n'))
+            for path in (SCRIPTS / 'fixtures/receiver-native-enigo').rglob('*.rs'):
+                target = scripts / path.relative_to(SCRIPTS)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(P.canonical(path.read_bytes())[0].replace(b'\n', b'\r\n'))
+            copied = module('mixel_native_crlf_checkout', scripts / names[0])
+            value, _ = copied.plan()
+            target = Path(directory) / 'target'
+            target.mkdir()
+            for row in value['files']:
+                path = target / row['name']
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(row['beforeSource'].encode().replace(b'\n', b'\r\n'))
+            before = snapshot(target)
+            copied.apply(target)
+            self.assertTrue(copied.is_current(target))
+            copied.apply(target, restore=True)
+            self.assertEqual(snapshot(target), before)
+            old = module('mixel_native_crlf_enigo_controls', scripts / 'test-receiver-native-enigo.py')
+            result = unittest.TestResult()
+            unittest.defaultTestLoader.loadTestsFromTestCase(old.NativeAcceptanceTests).run(result)
+            self.assertTrue(result.wasSuccessful(), str(result.errors) + str(result.failures))
+
     def test_exact_fresh_only_restore_and_private_previous(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

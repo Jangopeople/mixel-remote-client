@@ -16,6 +16,10 @@ spec.loader.exec_module(P)
 FIXTURES = ROOT / 'scripts/fixtures/receiver-native-enigo'
 
 
+def fixture_bytes(profile, name):
+    return P.normalize((FIXTURES / profile / name).read_bytes())[0]
+
+
 def snapshot(root):
     return {path.relative_to(root).as_posix(): (path.read_bytes(), path.stat().st_mode & 0o777)
             for path in root.rglob('*') if path.is_file()}
@@ -28,8 +32,8 @@ class NativeAcceptanceTests(unittest.TestCase):
                 root = Path(directory)
                 for row in P.plan():
                     name = row['name']
-                    original = (FIXTURES / 'original' / name).read_bytes()
-                    final = (FIXTURES / 'candidate' / name).read_bytes()
+                    original = fixture_bytes('original', name)
+                    final = fixture_bytes('candidate', name)
                     self.assertEqual(P.digest(original), row['beforeSha256'])
                     self.assertEqual(P.digest(final), row['afterSha256'])
                     self.assertEqual(P.transform(original, row), final)
@@ -45,7 +49,7 @@ class NativeAcceptanceTests(unittest.TestCase):
                 after = snapshot(root)
                 self.assertTrue(all(mode == 0o640 for _, mode in after.values()))
                 for row in P.plan():
-                    self.assertEqual(after[row['name']][0], (FIXTURES / 'candidate' / row['name']).read_bytes().replace(b'\n', newline))
+                    self.assertEqual(after[row['name']][0], fixture_bytes('candidate', row['name']).replace(b'\n', newline))
                 P.apply(root); P.apply(root, check=True)
                 self.assertEqual(snapshot(root), after)
                 P.apply(root, restore=True); P.apply(root, restore=True)
@@ -61,7 +65,7 @@ class NativeAcceptanceTests(unittest.TestCase):
                 if mutation == 'missing': target.unlink()
                 elif mutation == 'tampered': target.write_bytes(target.read_bytes() + b'// drift\n')
                 elif mutation == 'mixed-newlines': target.write_bytes(target.read_bytes().replace(b'\n', b'\r\n', 1))
-                else: target.write_bytes((FIXTURES / 'candidate' / row['name']).read_bytes())
+                else: target.write_bytes(fixture_bytes('candidate', row['name']))
                 before = snapshot(root)
                 for restore in (False, True):
                     with self.assertRaises((ValueError, OSError)): P.apply(root, restore=restore)
