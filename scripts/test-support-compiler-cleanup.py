@@ -614,7 +614,9 @@ def qualify_current(args, parser):
     terminal_uri_controls(args.source,args.evidence_dir,args.bash)
     launch_spec=importlib.util.spec_from_file_location('compiler_launch_previous',Path(__file__).with_name('patch-support-macos-gui-launch.py'))
     launch=importlib.util.module_from_spec(launch_spec);launch_spec.loader.exec_module(launch)
-    with historical_fixture.linux_close_baseline(args.source) as historical:
+    # main already validated and inverted every terminal input owner. Reusing
+    # that exact historical view must not attempt a second terminal projection.
+    with historical_fixture.linux_close_baseline(args.source, _input_checked=True) as historical:
         with launch.previous(historical) as previous:
             args.source=previous
             qualify_previous(args,parser)

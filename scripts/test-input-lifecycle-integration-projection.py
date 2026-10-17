@@ -406,6 +406,99 @@ class Controls(unittest.TestCase):
             self.assertIn('input_lifecycle.current_source(', text)
             self.assertNotIn('except RuntimeError:', text[text.index('def main('):])
 
+    def test_actual_compiler_gate_projects_input_once_before_historical_close(self):
+        import argparse
+        import contextlib
+        import sys
+        from types import SimpleNamespace
+
+        namespace = actual_functions('scripts/test-support-compiler-cleanup.py',
+                                     {'main', 'qualify_current'})
+        calls = []
+        with tempfile.TemporaryDirectory(prefix='mixel compiler one projection ') as temporary:
+            root = Path(temporary).resolve()
+            current, historical, closed, launched = (
+                root / name for name in ('current', 'historical', 'closed', 'launched'))
+
+            @contextlib.contextmanager
+            def strict_current(source):
+                calls.append(('strict-input', source))
+                if source != current:
+                    raise ValueError('Changed, mixed or partial scoped SAS source')
+                yield historical
+
+            @contextlib.contextmanager
+            def close_baseline(source, _input_checked=False):
+                calls.append(('historical-close', source, _input_checked))
+                # This seam reproduces the real baseline's strict re-entry
+                # boundary without compiling or materializing application code.
+                if not _input_checked:
+                    with strict_current(source):
+                        raise AssertionError('A second projection must refuse first')
+                self.assertEqual(source, historical)
+                yield closed
+
+            @contextlib.contextmanager
+            def launch_previous(source):
+                self.assertEqual(source, closed)
+                yield launched
+
+            shell = SimpleNamespace(qualified_bash=lambda path, windows: path,
+                                    shell_path_controls=lambda out: None)
+            launch = SimpleNamespace(previous=launch_previous)
+            def spec_from_file_location(name, path):
+                self.assertIn(name, ('compiler_shell', 'compiler_launch_previous'))
+                return SimpleNamespace(name=name,
+                    loader=SimpleNamespace(exec_module=lambda module: None))
+            util = SimpleNamespace(spec_from_file_location=spec_from_file_location,
+                                   module_from_spec=lambda spec: shell if spec.name == 'compiler_shell' else launch)
+            namespace.update(argparse=argparse, os=os, __file__=str(ROOT / 'scripts/test-support-compiler-cleanup.py'),
+                input_lifecycle=SimpleNamespace(current_source=strict_current),
+                historical_fixture=SimpleNamespace(linux_close_baseline=close_baseline),
+                importlib=SimpleNamespace(util=util),
+                terminal_uri_controls=lambda source, out, bash: self.assertEqual(source, historical),
+                qualify_previous=lambda args, parser: calls.append(('qualified', args.source)))
+            with mock.patch.object(sys, 'argv', ['compiler-source', '--source', str(current),
+                    '--source-only', '--output', str(root / 'proof'), '--bash', str(root / 'bash')]):
+                namespace['main']()
+            self.assertEqual(calls, [('strict-input', current),
+                ('historical-close', historical, True), ('qualified', launched)])
+
+            # Reverse only this correction and execute the actual prior caller:
+            # the historical baseline must try the second strict admission and
+            # reproduce its refusal before the compiler fixture can run.
+            corrected = namespace['qualify_current']
+            old_tree = ast.parse((ROOT / 'scripts/test-support-compiler-cleanup.py').read_text())
+            old_caller = next(node for node in old_tree.body
+                if isinstance(node, ast.FunctionDef) and node.name == 'qualify_current')
+            baseline_calls = [node for node in ast.walk(old_caller)
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == 'linux_close_baseline']
+            self.assertEqual(len(baseline_calls), 1)
+            self.assertEqual([item.arg for item in baseline_calls[0].keywords], ['_input_checked'])
+            baseline_calls[0].keywords = []
+            exec(compile(ast.Module(body=[old_caller], type_ignores=[]),
+                         '<original-double-input-projection>', 'exec'), namespace)
+            calls.clear()
+            with mock.patch.object(sys, 'argv', ['compiler-source', '--source', str(current),
+                    '--source-only', '--output', str(root / 'original-proof')]):
+                with self.assertRaisesRegex(ValueError, 'Changed, mixed or partial scoped SAS source'):
+                    namespace['main']()
+            self.assertEqual(calls, [('strict-input', current),
+                ('historical-close', historical, False), ('strict-input', historical)])
+            namespace['qualify_current'] = corrected
+
+            # The initial complete-owner refusal must remain fatal. The checked
+            # flag exists only inside the validated call chain, never in argv.
+            calls.clear()
+            with mock.patch.object(sys, 'argv', ['compiler-source', '--source', str(historical),
+                    '--source-only', '--output', str(root / 'refused-proof')]):
+                with self.assertRaisesRegex(ValueError, 'Changed, mixed or partial scoped SAS source'):
+                    namespace['main']()
+            self.assertEqual(calls, [('strict-input', historical)])
+            self.assertFalse((root / 'refused-proof').exists())
+            self.assertNotIn('--input-checked', namespace['main'].__code__.co_consts)
+
 
     def test_adjacent_projection_imports_and_actual_stdin_loader_boundary(self):
         import subprocess
