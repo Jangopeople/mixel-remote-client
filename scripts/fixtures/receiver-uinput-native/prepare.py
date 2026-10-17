@@ -15,6 +15,7 @@ import sys
 
 HERE = Path(__file__).resolve().parent
 SCRIPTS = HERE.parents[1]
+LOCK_SHA = '3f0bf68edf80523aac1e3fd98eaad4059a6f17f71e7fff33ab0c9e939a32b21d'
 
 
 def sha(raw):
@@ -32,6 +33,8 @@ def main():
     owner = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(owner)
     _plan, templates = owner.load_plan()
+    if sha(owner.canonical((HERE/'Cargo.lock').read_bytes())[0]) != LOCK_SHA:
+        raise ValueError('pinned Tokio fixture lock drift')
     if args.output.exists():
         raise ValueError('native fixture output must be new')
     args.output.mkdir(parents=True)
@@ -52,7 +55,7 @@ def main():
         raise ValueError('production observer priority changed')
     (output/'send-observed-original.rs').write_text(observer.replace(current_order, original_order, 1))
 
-    for name in ('tokio-main.rs', 'Cargo.toml'):
+    for name in ('tokio-main.rs', 'Cargo.toml', 'Cargo.lock'):
         (output/name).write_bytes((HERE/name).read_bytes())
 
     extension = '.exe' if platform.system() == 'Windows' else ''
@@ -63,12 +66,12 @@ def main():
         [str(output/('native-tests'+extension))],
     ]
     if args.tokio:
-        commands.append(['cargo', 'run', '--manifest-path', str(output/'Cargo.toml'), '--bin', 'timer-component'])
-        commands.append(['cargo', 'run', '--manifest-path', str(output/'Cargo.toml'), '--bin', 'timer-component', '--features', 'original-timer'])
+        commands.append(['cargo', 'run', '--locked', '--manifest-path', str(output/'Cargo.toml'), '--bin', 'timer-component'])
+        commands.append(['cargo', 'run', '--locked', '--manifest-path', str(output/'Cargo.toml'), '--bin', 'timer-component', '--features', 'original-timer'])
     result = {'schema': 'mixel-uinput-native-component-v1', 'scope': 'real Linux kernel capabilities and actual production receipt core; counted evdev callbacks',
               'planSha256': owner.PLAN_SHA, 'prepared': True, 'run': args.run,
               'platform': platform.system(), 'commands': commands, 'commandResults': [],
-              'inputs': {name: sha((output/name).read_bytes()) for name in ('mixel_receiver_uinput_kernel.rs', 'mixel_receiver_uinput_core.rs', 'native-main.rs', 'core-main.rs', 'send-observed.rs', 'send-observed-original.rs', 'tokio-main.rs', 'Cargo.toml')},
+              'inputs': {name: sha((output/name).read_bytes()) for name in ('mixel_receiver_uinput_kernel.rs', 'mixel_receiver_uinput_core.rs', 'native-main.rs', 'core-main.rs', 'send-observed.rs', 'send-observed-original.rs', 'tokio-main.rs', 'Cargo.toml', 'Cargo.lock')},
               'nativeComponentPassed': False, 'tokioObserverRequested': args.tokio, 'tokioOriginalStarvationReproduced': False, 'applicationBuildPassed': False, 'desktopInputPassed': False}
     try:
         if args.run:

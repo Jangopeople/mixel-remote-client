@@ -43,5 +43,9 @@ Add `--tokio` to a Linux `--run` command to exercise the exact production send
 observer against real Tokio timers and slow counted cleanup callbacks. The
 fixture also reverses only its priority/reset correction and requires the
 original starvation control to fail with its exact bounded panic marker. This
-requires Cargo and the pinned Tokio 1.44.2 dependency. These scenarios still do
+requires Cargo and the pinned Tokio 1.44.2 dependency. The format-3 Cargo.lock
+retains the product's versions and checksums, including macro dependencies;
+both Cargo commands use --locked. The prepared closure still requires actual
+Cargo qualification and must fail rather than resolve a replacement lock.
+These scenarios still do
 not compile or qualify the complete application leaf or actual desktop input.
