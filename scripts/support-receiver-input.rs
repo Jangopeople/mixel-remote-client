@@ -396,6 +396,23 @@ fn cleanup(token: &str) -> bool {
 }
 
 #[cfg(windows)]
+pub(crate) fn quiesce_helper_transition() -> bool {
+    let Some(registry) = generations() else { return false; };
+    let generations: Vec<_> = registry.lock().unwrap_or_else(|e| e.into_inner()).values().filter_map(Slot::get).collect();
+    // Publish every deny before waiting for any other generation's native cleanup.
+    for generation in &generations { generation.failure.store(true,Ordering::SeqCst); generation.deny(); }
+    {
+        let mut registry = registry.lock().unwrap_or_else(|e| e.into_inner());
+        for generation in &generations { registry.insert(generation.token.clone(),Slot::Retiring(generation.clone())); }
+    }
+    let deadline = std::time::Instant::now()+Duration::from_secs(5);
+    loop {
+        if generations.iter().all(Generation::try_retired) { return true; }
+        if std::time::Instant::now() >= deadline { return false; }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+#[cfg(windows)]
 pub(crate) fn portable_refused(token: &str) {
     let generation = generations().and_then(|registry| registry.lock().ok()?.get(token)?.get());
     if let Some(generation) = generation {
@@ -417,4 +434,4 @@ pub(crate) fn encode(token: &str, target: &str, conn: i32, action: &Action) -> O
 #[path = "mixel_receiver_input_windows.rs"]
 mod windows;
 #[cfg(windows)]
-pub(crate) use windows::{receive, pipe_peer, Peer, shutdown as portable_shutdown};
+pub(crate) use windows::{receive, pipe_peer, pipe_publisher, publisher_handle, startup_confirmed, launch_with_logon, SecretCredential, Peer, shutdown as portable_shutdown};

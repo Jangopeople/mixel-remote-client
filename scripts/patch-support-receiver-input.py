@@ -12,7 +12,7 @@ from pathlib import Path
 
 HERE = Path(__file__).absolute().parent
 PLAN = HERE / 'support-receiver-input-plan.json'
-PLAN_SHA = "0c52a74161368b6083bc30ed5bc009293be99ffacc383ff6db4b96938d336513"
+PLAN_SHA = "7bc29b2a6e1f74defae2cc99fb67eee17a545e4f8dd87a30c9d489d3dc4a664e"
 LEAVES = {'src/server/mixel_receiver_input.rs': 'support-receiver-input.rs',
           'src/server/mixel_receiver_input_windows.rs': 'support-receiver-input-windows.rs'}
 
@@ -141,7 +141,15 @@ def apply(root, restore=False, check=False):
             result = None if restore else canonical((HERE / LEAVES[name]).read_bytes())[0].encode()
         else:
             text, newline = logical[name]
-            if profile != destination:
+            effective = profile
+            if profile == 'previous':
+                for old, new in reversed(plan['migration']['inverse'].get(name, [])):
+                    if text.count(old) != 1: raise RuntimeError('Changed pinned previous receiver inverse')
+                    text = text.replace(old, new, 1)
+                if digest(text.encode()) != plan['profiles']['original'][name]:
+                    raise RuntimeError('Previous receiver whole-source inverse mismatch')
+                effective = 'original'
+            if effective != destination:
                 changes = list(reversed(plan['inverse'][name])) if restore else plan['changes'][name]
                 for old, new in changes:
                     if text.count(old) != 1:

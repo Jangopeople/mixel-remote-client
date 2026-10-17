@@ -26,6 +26,10 @@ extern "system" {
     fn LocalFree(handle: Handle) -> Handle;
     fn GetCurrentProcess() -> Handle;
     fn GetCurrentProcessId() -> u32;
+    fn GetProcessId(process: Handle) -> u32;
+    fn DuplicateHandle(source_process: Handle, source: Handle, target_process: Handle, target: *mut Handle, access: u32, inherit: i32, options: u32) -> i32;
+    fn ResumeThread(thread: Handle) -> u32;
+    fn TerminateProcess(process: Handle, code: u32) -> i32;
     fn OpenProcess(access: u32, inherit: i32, pid: u32) -> Handle;
     fn GetProcessTimes(process: Handle, born: *mut FileTime, exit: *mut FileTime, kernel: *mut FileTime, user: *mut FileTime) -> i32;
     fn QueryFullProcessImageNameW(process: Handle, flags: u32, name: *mut u16, count: *mut u32) -> i32;
@@ -34,6 +38,8 @@ extern "system" {
 #[link(name="advapi32")]
 extern "system" {
     fn ConvertStringSecurityDescriptorToSecurityDescriptorW(s: *const u16, revision: u32, descriptor: *mut Handle, size: *mut u32) -> i32;
+    fn LogonUserW(user: *const u16, domain: *const u16, password: *const u16, kind: u32, provider: u32, token: *mut Handle) -> i32;
+    fn CreateProcessWithLogonW(user: *const u16, domain: *const u16, password: *const u16, flags: u32, application: *const u16, command: *mut u16, creation: u32, environment: Handle, directory: *const u16, startup: *mut StartupInfo, info: *mut ProcessInfo) -> i32;
     fn OpenProcessToken(process: Handle, access: u32, token: *mut Handle) -> i32;
     fn GetTokenInformation(token: Handle, class: u32, data: Handle, size: u32, needed: *mut u32) -> i32;
     fn ConvertSidToStringSidW(sid: Handle, text: *mut *mut u16) -> i32;
@@ -59,12 +65,16 @@ fn image(process: Handle) -> Option<String> {
 fn process_sid(process: Handle) -> Option<String> {
     let mut token = ptr::null_mut();
     if unsafe { OpenProcessToken(process,8,&mut token) } == 0 { return None; }
-    let token = Owned::from(token)?; let mut needed = 0;
-    unsafe { GetTokenInformation(token.raw(),1,ptr::null_mut(),0,&mut needed); }
+    let token = Owned::from(token)?;
+    token_sid(token.raw())
+}
+fn token_sid(token: Handle) -> Option<String> {
+    let mut needed = 0;
+    unsafe { GetTokenInformation(token,1,ptr::null_mut(),0,&mut needed); }
     if !(std::mem::size_of::<usize>() as u32..=65536).contains(&needed) { return None; }
     // usize alignment is required by TOKEN_USER's SID_AND_ATTRIBUTES pointer.
     let mut buffer = vec![0usize; (needed as usize + std::mem::size_of::<usize>() - 1) / std::mem::size_of::<usize>()];
-    if unsafe { GetTokenInformation(token.raw(),1,buffer.as_mut_ptr().cast(),needed,&mut needed) } == 0 { return None; }
+    if unsafe { GetTokenInformation(token,1,buffer.as_mut_ptr().cast(),needed,&mut needed) } == 0 { return None; }
     let sid = unsafe { *(buffer.as_ptr() as *const Handle) }; let mut text = ptr::null_mut();
     if unsafe { ConvertSidToStringSidW(sid,&mut text) } == 0 { return None; }
     let mut length = 0; while length < 256 && unsafe { *text.add(length) } != 0 { length += 1; }
@@ -172,19 +182,112 @@ impl Peer { fn alive(&self) -> bool { (unsafe { WaitForSingleObject(self.process
 fn helper() -> &'static Mutex<Option<Peer>> {
     static HELPER: OnceLock<Mutex<Option<Peer>>> = OnceLock::new(); HELPER.get_or_init(|| Mutex::new(None))
 }
-pub(crate) fn pipe_peer(pipe: Handle, server_peer: bool) -> Option<Peer> {
+fn pipe_pid(pipe: Handle, server_peer: bool) -> Option<u32> {
     let mut pid = 0;
     let ok = unsafe { if server_peer { GetNamedPipeServerProcessId(pipe,&mut pid) } else { GetNamedPipeClientProcessId(pipe,&mut pid) } };
-    if ok == 0 || pid == 0 { return None; }
-    let process = Owned::from(unsafe { OpenProcess(SYNC | 0x1000,0,pid) })?;
+    (ok != 0 && pid != 0).then_some(pid)
+}
+fn verified_peer(pid: u32, process: Arc<Owned>, sid: String) -> Option<Peer> {
+    if unsafe { GetProcessId(process.raw()) } != pid { return None; }
     let born = birth(process.raw())?;
     if image(process.raw())? != image(unsafe { GetCurrentProcess() })? { return None; }
     let (mut source,mut target) = (u32::MAX,u32::MAX);
     if unsafe { ProcessIdToSessionId(pid,&mut source) } == 0 || unsafe { ProcessIdToSessionId(GetCurrentProcessId(),&mut target) } == 0 || source == 0 || source != target { return None; }
-    let peer = Peer { pid, born, sid: process_sid(process.raw())?, process: Arc::new(process) };
-    if !peer.alive() { return None; }
+    let peer = Peer { pid, born, sid, process };
+    peer.alive().then_some(peer)
+}
+pub(crate) fn pipe_peer(pipe: Handle, server_peer: bool) -> Option<Peer> {
+    let pid = pipe_pid(pipe,server_peer)?;
+    // An explicitly credentialed child has a retained real startup process
+    // handle and exact logon-token SID, so no different-account token query.
+    let retained = if !server_peer {
+        let mut startup = started().lock().ok()?;
+        if startup.as_ref().map(|s| !s.peer.alive()).unwrap_or(false) { startup.take(); }
+        startup.as_ref().filter(|s| s.peer.pid == pid).map(|s| s.peer.clone())
+    } else { None };
+    let peer = if let Some(peer) = retained {
+        let verified = verified_peer(pid,peer.process.clone(),peer.sid.clone())?;
+        if verified.born != peer.born { return None; } verified
+    } else {
+        let process = Owned::from(unsafe { OpenProcess(SYNC | 0x1000,0,pid) })?;
+        let sid = if server_peer { String::new() } else { process_sid(process.raw())? };
+        verified_peer(pid,Arc::new(process),sid)?
+    };
     if !server_peer { *helper().lock().ok()? = Some(peer.clone()); }
     Some(peer)
+}
+pub(crate) fn pipe_publisher(pipe: Handle, transferred: Option<u64>) -> Option<Peer> {
+    let Some(raw) = transferred else { return pipe_peer(pipe,true); };
+    let pid = pipe_pid(pipe,true)?;
+    let raw = usize::try_from(raw).ok()? as Handle;
+    if raw.is_null() || unsafe { GetProcessId(raw) } != pid { return None; }
+    // Inspect borrowed first. Never close an unvalidated packet-supplied handle
+    // (it might name an unrelated child object); a failed child then exits.
+    if birth(raw).is_none() || image(raw)? != image(unsafe { GetCurrentProcess() })? { return None; }
+    let (mut a,mut b) = (0,0);
+    if unsafe { ProcessIdToSessionId(pid,&mut a) } == 0 || unsafe { ProcessIdToSessionId(GetCurrentProcessId(),&mut b) } == 0 || a == 0 || a != b || unsafe { WaitForSingleObject(raw,0) } != TIMEOUT { return None; }
+    verified_peer(pid,Arc::new(Owned::from(raw)?),String::new())
+}
+struct Started { peer: Peer, publisher: Option<u64>, confirmed: Arc<AtomicBool> }
+fn started() -> &'static Mutex<Option<Started>> { static STARTED: OnceLock<Mutex<Option<Started>>> = OnceLock::new(); STARTED.get_or_init(|| Mutex::new(None)) }
+pub(crate) fn publisher_handle(peer: &Peer) -> Option<Option<u64>> {
+    let mut startup = started().lock().ok()?;
+    if let Some(startup) = startup.as_mut().filter(|s| s.peer.pid == peer.pid && s.peer.born == peer.born) {
+        return startup.publisher.take().map(Some);
+    }
+    Some(None)
+}
+pub(crate) fn startup_confirmed(peer: &Peer) {
+    if let Ok(startup) = started().lock() { if let Some(startup) = startup.as_ref().filter(|s| s.peer.pid == peer.pid && s.peer.born == peer.born) { startup.confirmed.store(true,Ordering::SeqCst); } }
+}
+#[repr(C)] struct StartupInfo {
+    size: u32, reserved: *mut u16, desktop: *mut u16, title: *mut u16,
+    x: u32, y: u32, xsize: u32, ysize: u32, columns: u32, rows: u32, fill: u32, flags: u32,
+    show: u16, reserved_size: u16, reserved_bytes: *mut u8, stdin: Handle, stdout: Handle, stderr: Handle,
+}
+#[repr(C)] struct ProcessInfo { process: Handle, thread: Handle, pid: u32, tid: u32 }
+struct Secret(Vec<u16>);
+impl Drop for Secret { fn drop(&mut self) { for unit in &mut self.0 { unsafe { ptr::write_volatile(unit,0); } } std::sync::atomic::compiler_fence(Ordering::SeqCst); } }
+pub(crate) struct SecretCredential(String);
+impl SecretCredential { pub(crate) fn new(value:String)->Self { Self(value) } pub(crate) fn as_str(&self)->&str { &self.0 } }
+impl Drop for SecretCredential { fn drop(&mut self) { let mut bytes = std::mem::take(&mut self.0).into_bytes(); for byte in &mut bytes { unsafe { ptr::write_volatile(byte,0); } } std::sync::atomic::compiler_fence(Ordering::SeqCst); } }
+struct Suspended { process: Arc<Owned>, thread: Option<Owned>, resumed: bool }
+impl Drop for Suspended { fn drop(&mut self) { if !self.resumed { unsafe {
+    if TerminateProcess(self.process.raw(),1) == 0 && WaitForSingleObject(self.process.raw(),0) != OBJECT { if let Some(thread) = &self.thread { ResumeThread(thread.raw()); } }
+    WaitForSingleObject(self.process.raw(),5_000);
+} } } }
+pub(crate) fn launch_with_logon(user: &str, password: &str, exe: &str, arg: &str) -> Option<()> {
+    if arg != "--portable-service" || user.is_empty() || password.is_empty() || [user,password,exe,arg].iter().any(|s| s.contains('\0')) { return None; }
+    let mut startup = started().lock().ok()?;
+    if startup.as_ref().map(|s| s.peer.alive()).unwrap_or(false) { return None; }
+    let (domain,user) = user.rsplit_once('\\').map(|(d,u)| (Some(d),u)).unwrap_or_else(|| (if user.contains('@') { None } else { Some(".") },user));
+    let domain = domain.map(wide); let domain = domain.as_ref().map(|v|v.as_ptr()).unwrap_or(ptr::null());
+    let user = wide(user); let password = Secret(wide(password)); let mut token = ptr::null_mut();
+    if unsafe { LogonUserW(user.as_ptr(),domain,password.0.as_ptr(),2,0,&mut token) } == 0 { return None; }
+    let token = Owned::from(token)?; let sid = token_sid(token.raw())?;
+    if !quiesce_helper_transition() { return None; }
+    let mut command = wide(&format!("\"{}\" {}",exe,arg)); let exe = wide(exe);
+    let mut info: StartupInfo = unsafe { std::mem::zeroed() }; info.size = std::mem::size_of::<StartupInfo>() as u32; info.flags = 1;
+    let mut process: ProcessInfo = unsafe { std::mem::zeroed() };
+    if unsafe { CreateProcessWithLogonW(user.as_ptr(),domain,password.0.as_ptr(),1,exe.as_ptr(),command.as_mut_ptr(),0x400 | 4,ptr::null_mut(),ptr::null(),&mut info,&mut process) } == 0 { return None; }
+    let thread = Owned::from(process.thread);
+    let mut suspended = Suspended { process: Arc::new(Owned::from(process.process)?), thread, resumed: false };
+    if suspended.thread.is_none() { return None; }
+    let peer = verified_peer(process.pid,suspended.process.clone(),sid)?;
+    let mut publisher = ptr::null_mut();
+    // Duplicate directly into this exact still-suspended owned child; minimal
+    // read/wait rights, never inherited and never a process ACL/privilege change.
+    if unsafe { DuplicateHandle(GetCurrentProcess(),GetCurrentProcess(),suspended.process.raw(),&mut publisher,SYNC | 0x1000,0,0) } == 0 { return None; }
+    let confirmed = Arc::new(AtomicBool::new(false));
+    let watch = confirmed.clone(); let owned = suspended.process.clone();
+    std::thread::Builder::new().name("mixel-helper-startup".to_owned()).spawn(move || {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !watch.load(Ordering::SeqCst) && std::time::Instant::now() < deadline && unsafe { WaitForSingleObject(owned.raw(),0) } == TIMEOUT { std::thread::sleep(Duration::from_millis(10)); }
+        if !watch.load(Ordering::SeqCst) && unsafe { WaitForSingleObject(owned.raw(),0) } == TIMEOUT { unsafe { TerminateProcess(owned.raw(),1); } }
+    }).ok()?;
+    *startup = Some(Started { peer, publisher: Some(publisher as usize as u64), confirmed });
+    if unsafe { ResumeThread(suspended.thread.as_ref()?.raw()) } == u32::MAX { startup.take(); return None; }
+    suspended.resumed = true; Some(())
 }
 #[derive(Clone)]
 pub(super) enum Backend { Local, Portable(String) }

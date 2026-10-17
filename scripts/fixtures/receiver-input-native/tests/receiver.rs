@@ -53,6 +53,7 @@ mod server {
 }
 fn main() {
     #[cfg(windows)] if std::env::args().any(|arg|arg=="--mixel-lease-publisher") { server::mixel_receiver_input::windows_child(); return; }
+    #[cfg(windows)] if std::env::args().any(|arg|arg=="--mixel-receiver-query-child") { server::mixel_receiver_input::windows_query_child(); return; }
     server::mixel_receiver_input::run_component_tests();
     println!("PASS: exact receiver capability component; mocked native effects, actual kernel leases and actual Mac dispatch where applicable; application acceptance remains separate");
 }

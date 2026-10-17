@@ -113,3 +113,5 @@ pub(crate) fn run_component_tests() {
     #[cfg(windows)] { helper_transition_with_held_down_fails_closed(); println!("PASS: helper transition held modifier fails closed"); windows::run_native_tests(); }
 }
 #[cfg(windows)] pub(crate) fn windows_child(){windows::publisher_child();}
+
+#[cfg(windows)] pub(crate) fn windows_query_child(){windows::query_child();}

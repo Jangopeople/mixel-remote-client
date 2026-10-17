@@ -77,7 +77,49 @@ pub(crate) fn run_native_tests() {
         ("Windows create-new, readonly handles, kernel pipe peer and revoke",native_create_new_readonly_and_peer_binding as fn()),
         ("Windows owner death independent cleanup and restart target",native_owner_death_cleanup_without_next_data_and_old_restart_packets as fn()),
         ("Windows abandoned mutex permanently poisons scope",native_abandoned_mutex_poison_cannot_reopen_scope as fn()),
+        ("Windows retained startup identity and once-only query-handle transfer",native_startup_identity_transfer_and_unrelated_handle_refusal as fn()),
+        ("Windows exact owned suspended startup failure cleanup",native_partial_start_guard_terminates_only_owned_suspended_child as fn()),
     ] {case();println!("PASS: {name}");}
 }
 #[cfg(feature="guard-must-not-send")]
 fn acquired_mutex_guard_must_not_migrate(serial:Serial<'static>){std::thread::spawn(move||drop(serial));}
+
+#[link(name="kernel32")]
+extern "system" {
+    fn SetNamedPipeHandleState(pipe:Handle,mode:*const u32,maximum:*const u32,timeout:*const u32)->i32;
+    fn CreateProcessW(application:*const u16,command:*mut u16,process_attributes:Handle,thread_attributes:Handle,inherit:i32,creation:u32,environment:Handle,directory:*const u16,startup:*mut StartupInfo,info:*mut ProcessInfo)->i32;
+}
+pub(crate) fn query_child() {
+    use std::{os::windows::io::{FromRawHandle,AsRawHandle},io::{Read,Write}};
+    let path=std::env::var("MIXEL_RECEIVER_TEST_PIPE").unwrap();let deadline=std::time::Instant::now()+Duration::from_secs(5);
+    let raw=loop{let h=unsafe{CreateFileW(wide(&path).as_ptr(),0xc0000000,0,ptr::null_mut(),3,0,ptr::null_mut())};if !h.is_null()&&h as isize != -1{break h;}assert!(std::time::Instant::now()<deadline);std::thread::sleep(Duration::from_millis(5));};
+    let mut file=unsafe{std::fs::File::from_raw_handle(raw)};let mut bytes=[0u8;8];file.read_exact(&mut bytes).unwrap();let transferred=u64::from_le_bytes(bytes);
+    let object=create_object(&format!("Local\\Mixel-Input-Untrusted-Handle-{}",uuid::Uuid::new_v4().simple()),false).unwrap();
+    assert!(pipe_publisher(file.as_raw_handle(),Some(object.0 as u64)).is_none());
+    assert_eq!(unsafe{WaitForSingleObject(object.raw(),0)},OBJECT,"rejected supplied handle must never close an unrelated object");unsafe{ReleaseMutex(object.raw());}
+    let peer=pipe_publisher(file.as_raw_handle(),Some(transferred)).expect("kernel-bound transferred publisher query handle");assert_eq!(peer.pid,pipe_pid(file.as_raw_handle(),true).unwrap());assert!(peer.alive());
+    drop(peer);assert_eq!(unsafe{WaitForSingleObject(transferred as usize as Handle,0)},u32::MAX,"accepted transferred handle is owned and closed exactly once");
+    file.write_all(&[1]).unwrap();file.flush().unwrap();
+}
+fn native_startup_identity_transfer_and_unrelated_handle_refusal() {
+    use std::{os::windows::io::{FromRawHandle,AsRawHandle},io::{Read,Write}};
+    let path=format!("\\\\.\\pipe\\Mixel-Input-Query-{}",uuid::Uuid::new_v4().simple());
+    let pipe=unsafe{CreateNamedPipeW(wide(&path).as_ptr(),3,1,1,4096,4096,5000,ptr::null_mut())};assert!(!pipe.is_null()&&pipe as isize != -1);let pipe=Owned::from(pipe).unwrap();
+    let mut child=OwnedChild(std::process::Command::new(std::env::current_exe().unwrap()).arg("--mixel-receiver-query-child").env("MIXEL_RECEIVER_TEST_PIPE",&path).spawn().unwrap());
+    let process=Owned::from(unsafe{OpenProcess(SYNC|0x1000|0x40,0,child.id())}).unwrap();let sid=process_sid(process.raw()).unwrap();let peer=verified_peer(child.id(),Arc::new(process),sid).unwrap();
+    let mut transfer=ptr::null_mut();assert_ne!(unsafe{DuplicateHandle(GetCurrentProcess(),GetCurrentProcess(),peer.process.raw(),&mut transfer,SYNC|0x1000,0,0)},0);
+    *started().lock().unwrap()=Some(Started{peer:peer.clone(),publisher:Some(transfer as usize as u64),confirmed:Arc::new(AtomicBool::new(false))});
+    let deadline=std::time::Instant::now()+Duration::from_secs(5);loop{if unsafe{ConnectNamedPipe(pipe.raw(),ptr::null_mut())}!=0||unsafe{GetLastError()}==535{break;}assert!(std::time::Instant::now()<deadline);std::thread::sleep(Duration::from_millis(5));}
+    let mode=0;assert_ne!(unsafe{SetNamedPipeHandleState(pipe.raw(),&mode,ptr::null(),ptr::null())},0);
+    let authenticated=pipe_peer(pipe.raw(),false).unwrap();assert_eq!(authenticated.pid,peer.pid);assert_eq!(authenticated.born,peer.born);assert_eq!(authenticated.sid,peer.sid);
+    let transferred=publisher_handle(&authenticated).unwrap().unwrap();assert_eq!(transferred,transfer as usize as u64);assert!(publisher_handle(&authenticated).is_none(),"startup query handle transfers exactly once");
+    let raw=pipe.raw();std::mem::forget(pipe);let mut file=unsafe{std::fs::File::from_raw_handle(raw)};file.write_all(&transferred.to_le_bytes()).unwrap();file.flush().unwrap();let mut reply=[0u8;1];file.read_exact(&mut reply).unwrap();assert_eq!(reply,[1]);assert!(child.wait().unwrap().success());
+    started().lock().unwrap().take();*helper().lock().unwrap()=None;
+}
+fn native_partial_start_guard_terminates_only_owned_suspended_child() {
+    let exe=std::env::current_exe().unwrap();let exe=wide(exe.to_str().unwrap());let mut command=wide("\"receiver-component\" --mixel-receiver-query-child");
+    let mut info:StartupInfo=unsafe{std::mem::zeroed()};info.size=std::mem::size_of::<StartupInfo>()as u32;let mut process:ProcessInfo=unsafe{std::mem::zeroed()};
+    assert_ne!(unsafe{CreateProcessW(exe.as_ptr(),command.as_mut_ptr(),ptr::null_mut(),ptr::null_mut(),0,4,ptr::null_mut(),ptr::null(),&mut info,&mut process)},0);
+    let observer=Arc::new(Owned::from(process.process).unwrap());let guard=Suspended{process:observer.clone(),thread:Some(Owned::from(process.thread).unwrap()),resumed:false};drop(guard);
+    assert_eq!(unsafe{WaitForSingleObject(observer.raw(),0)},OBJECT,"partial startup cannot leave its exact new child suspended");
+}
