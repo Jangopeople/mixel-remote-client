@@ -39,6 +39,33 @@ def metadata():
 
 
 class Admission(unittest.TestCase):
+
+    def test_current070_exact_immutable_source_archive_and_guest_bindings(self):
+        self.assertEqual((qa.APP, qa.TREE, qa.RUN, qa.ATTEMPT, qa.JOB, qa.ARTIFACT),
+                         ("070da25001f97fabf67d08401e2cb15bde37a33b", "4411c8027836673ded7f1b0b22f7bdac47c32242",
+                          39022433327, 1, 117367740409, 12098846059))
+        self.assertEqual((qa.ARCHIVE_BYTES, qa.ARCHIVE_SHA, qa.DEB_SHA),
+                         (23831101, "51944fc004743d9a56cddbb6c86266d02f69f2fa83a5a53dd5e7b374a95c1a06",
+                          "993f516763f85cd749faff8752e52ad5ac7be40b21e78d5878ec3a40422abc47"))
+        guest = (BASE / "scripts/linux-installer-systemd-guest.py").read_bytes()
+        self.assertEqual(guest.count(qa.DEB_SHA.encode()), 1)
+        self.assertNotIn(b"d63c5b624e55312bee8e52f5a2db16355fc3a06f5e12cee332f5567c57c391f1", guest)
+        self.assertEqual(hashlib.sha256(guest).hexdigest(), qa.GUEST_SHA)
+        self.assertEqual((qa.MAIN_SHA, qa.PACKAGED_UNIT, qa.INSTALLED_UNIT),
+                         ("ec180ea8503f85167949d74498baa1f08f908dd614a5a953ecd0e84cc082a437",
+                          "d5f9c6da03e3a87b77687d8282b6615c209aea3ea5bca6fbf9fe3df8074c2173",
+                          "5f9370df93f15c416ed7c1cd2803387a28c3baaa90027ed8fbe447056aba2410"))
+
+    def test_previous6c_source_run_job_and_archive_metadata_cannot_be_admitted(self):
+        mutations = ((0, "head_sha", "6c0ab10cd2ef7b666615864fbc602e4097aacca9"),
+                     (0, "id", 38999506750), (1, "id", 117300405310),
+                     (2, "id", 12089394040), (2, "size_in_bytes", 23831223),
+                     (2, "digest", "sha256:11b0cf1261847e8625d9192ffcf4c041622d563f126520890390dea36e24b0a0"))
+        for index, key, value in mutations:
+            with self.subTest(index=index, key=key):
+                data = metadata(); data[index][key] = value
+                with self.assertRaises(ValueError): qa.validate_metadata(*data)
+
     def test_exact_current_linux_success_accepts_without_whole_build_claim(self):
         qa.validate_metadata(*metadata())
 

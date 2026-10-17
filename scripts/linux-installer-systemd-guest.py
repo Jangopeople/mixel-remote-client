@@ -41,7 +41,7 @@ try:
  for p in ['/usr/bin/mixel-remote','/usr/lib/systemd/system/mixel-remote.service','/etc/systemd/system/mixel-remote.service','/usr/share/mixel-remote','/root/.config/mixel-remote']:
   require(not os.path.lexists(p),'guest-not-fresh-'+p)
  require(run(['dpkg-query','-W','-f=${db:Status-Status}','mixel-remote'],(1,))=='','guest-package-present')
- candidate=P('/mnt/mixel-candidate/candidate.deb');require(sha(candidate)==EXPECTED['DEBSHA256']=='d63c5b624e55312bee8e52f5a2db16355fc3a06f5e12cee332f5567c57c391f1','wrong-qualified-candidate')
+ candidate=P('/mnt/mixel-candidate/candidate.deb');require(sha(candidate)==EXPECTED['DEBSHA256']=='993f516763f85cd749faff8752e52ad5ac7be40b21e78d5878ec3a40422abc47','wrong-qualified-candidate')
  sentinel=P('/var/lib/mixel-systemd-qa-unrelated-sentinel');sentinel.write_text(EXPECTED['instance']+'\n');sentinelhash=sha(sentinel)
  run(['dpkg','--install',str(candidate)])
  require(run(['dpkg-query','-W','-f=${Status}','mixel-remote'])=='install ok installed','package-not-configured')

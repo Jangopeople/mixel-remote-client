@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unpublished fixed-6c0 normal-DEB QA on a fresh real Ubuntu systemd runner.
+"""Unpublished fixed-070 normal-DEB QA on a fresh real Ubuntu systemd runner.
 
 The hosted transfer is a new, explicitly counted normal-artifact GET, separate
 from retained local archives. This does not qualify a release or restrict the
@@ -23,14 +23,14 @@ import time
 
 REPO = "Jangopeople/mixel-remote-client"
 REPO_ID = 1229987840
-APP = "6c0ab10cd2ef7b666615864fbc602e4097aacca9"
-TREE = "a33f33a562a18ef0143069bf17db533835da8839"
-RUN, ATTEMPT, JOB, ARTIFACT = 38999506750, 1, 117300405310, 12089394040
-ARCHIVE_BYTES = 23831223
-ARCHIVE_SHA = "11b0cf1261847e8625d9192ffcf4c041622d563f126520890390dea36e24b0a0"
-DEB_SHA = "d63c5b624e55312bee8e52f5a2db16355fc3a06f5e12cee332f5567c57c391f1"
+APP = "070da25001f97fabf67d08401e2cb15bde37a33b"
+TREE = "4411c8027836673ded7f1b0b22f7bdac47c32242"
+RUN, ATTEMPT, JOB, ARTIFACT = 39022433327, 1, 117367740409, 12098846059
+ARCHIVE_BYTES = 23831101
+ARCHIVE_SHA = "51944fc004743d9a56cddbb6c86266d02f69f2fa83a5a53dd5e7b374a95c1a06"
+DEB_SHA = "993f516763f85cd749faff8752e52ad5ac7be40b21e78d5878ec3a40422abc47"
 MAIN_SHA = "ec180ea8503f85167949d74498baa1f08f908dd614a5a953ecd0e84cc082a437"
-GUEST_SHA = "db15588cac49de04d3aead2d590cf4fc65b9df1a78937fa6dc08f51c66417795"
+GUEST_SHA = "56f2aba4861929e30a3ccae5293c4e7cea93aba8f23fb5f4700d9af2b7d363da"
 COLLECTOR_SHA = "56ce340dedd4030ec1145b103a09171c2fff7f872ae8c21142239853deb95271"
 PACKAGED_UNIT = "d5f9c6da03e3a87b77687d8282b6615c209aea3ea5bca6fbf9fe3df8074c2173"
 INSTALLED_UNIT = "5f9370df93f15c416ed7c1cd2803387a28c3baaa90027ed8fbe447056aba2410"
