@@ -1129,21 +1129,38 @@ class PrivateDerivedControls(unittest.TestCase):
         self.assertEqual(result,extra+2)
         self.assertEqual(ast.dump(body[extra+1],include_attributes=False),ast.dump(expected,include_attributes=False))
 
-    def test_baseline_original_functions_and_31_command_phase_remain_exact(self):
-        source=ast.parse((BASE/'scripts/linux-installer-systemd-guest.py').read_text())
+    def exact_original_guest_source_fingerprints(self, source):
+        # AST is used only to locate raw source spans; no ast.dump fingerprint
+        # depends on the Python interpreter's evolving AST field representation.
+        tree=ast.parse(source)
         names=('require','sha','run','birth','properties','live','gone','inactive')
-        nodes=[n for n in source.body if isinstance(n,ast.FunctionDef)and n.name in names]
-        digest=hashlib.sha256(ast.dump(ast.Module(body=nodes,type_ignores=[]),include_attributes=False).encode()).hexdigest()
-        self.assertEqual(digest,'5bab461be5785b13a1e06e62533d01962fd89f700f645bff08b05952b33371df')
-        node=next(n for n in source.body if isinstance(n,ast.Try))
-        stop=next(i for i,n in enumerate(node.body)if isinstance(n,ast.Assign)and any(isinstance(t,ast.Name)and t.id=='baselineCommands'for t in n.targets))
-        prefix=ast.Module(body=node.body[:stop],type_ignores=[])
-        class OriginalLiteral(ast.NodeTransformer):
-            def visit_Constant(self,node):
-                if node.value==qa.DERIVED_SHA:return ast.copy_location(ast.Constant(value=qa.DEB_SHA),node)
-                return node
-        prefix=OriginalLiteral().visit(prefix)
-        self.assertEqual(hashlib.sha256(ast.dump(prefix,include_attributes=False).encode()).hexdigest(),'08b96b503de270a69fb9f67c4517e41c634a3e82318e4e07dbabaa8d5a83c413')
+        nodes=[n for n in tree.body if isinstance(n,ast.FunctionDef)and n.name in names]
+        self.assertEqual(tuple(n.name for n in nodes),names)
+        function_bytes=b'\0'.join(ast.get_source_segment(source,n).encode('utf-8')for n in nodes)
+        body=next(n for n in tree.body if isinstance(n,ast.Try)).body
+        stop=next(n for n in body if isinstance(n,ast.Assign)and any(isinstance(t,ast.Name)and t.id=='baselineCommands'for t in n.targets))
+        prefix=''.join(source.splitlines(keepends=True)[body[0].lineno-1:stop.lineno-1])
+        current="==EXPECTED['DEBSHA256']=='"+qa.DERIVED_SHA+"'"
+        original="==EXPECTED['DEBSHA256']=='"+qa.DEB_SHA+"'"
+        self.assertEqual(prefix.count(current),1)
+        self.assertNotIn(original,prefix)
+        prefix=prefix.replace(current,original)
+        return hashlib.sha256(function_bytes).hexdigest(),hashlib.sha256(prefix.encode('utf-8')).hexdigest()
+
+    def test_exact_source_fingerprints_refuse_guard_phase_and_candidate_literal_drift(self):
+        source=(BASE/'scripts/linux-installer-systemd-guest.py').read_text()
+        functions,phase=self.exact_original_guest_source_fingerprints(source)
+        changed=source.replace('pid>1','pid>=1',1)
+        self.assertNotEqual(self.exact_original_guest_source_fingerprints(changed)[0],functions)
+        changed=source.replace("['systemctl','restart','mixel-remote.service']","['systemctl','stop','mixel-remote.service']",1)
+        self.assertNotEqual(self.exact_original_guest_source_fingerprints(changed)[1],phase)
+        changed=source.replace("==EXPECTED['DEBSHA256']=='"+qa.DERIVED_SHA+"'","==EXPECTED['DEBSHA256']=='"+'0'*64+"'",1)
+        with self.assertRaises(AssertionError):self.exact_original_guest_source_fingerprints(changed)
+
+    def test_baseline_original_functions_and_31_command_phase_remain_exact(self):
+        source=(BASE/'scripts/linux-installer-systemd-guest.py').read_text()
+        self.assertEqual(self.exact_original_guest_source_fingerprints(source),
+                         ('21a7043ebd3921ae0470bfe8e60e6dc1426bd5aa87bce2f531d90769cc456841','0253e86e4b5e0effa386a27743779b0db86f9f7a145c56822fb624df987b7ab5'))
         text=(BASE/'.github/workflows/linux-installer-systemd.yml').read_text()
         block=next(v for v in re.split(r'(?m)^      - ',text)if 'scripts/linux-installer-systemd.py derive --output'in v)
         self.assertIn("if: github.event_name == 'workflow_dispatch'",block)
