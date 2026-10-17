@@ -1,0 +1,107 @@
+name: Private attended PC01 Linux controller
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/pc01-linux-controller.yml'
+      - 'scripts/pc01-linux-controller.py'
+      - 'scripts/test-pc01-linux-controller.py'
+  workflow_dispatch:
+    inputs:
+      admission_json:
+        description: Root-reviewed current070 admission JSON; no credentials
+        required: true
+        type: string
+      admission_sha256:
+        description: Exact SHA256 of admission_json UTF-8 bytes
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-PC01-controller
+  cancel-in-progress: false
+
+jobs:
+  inert-controls:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 3
+    outputs:
+      scope: ${{ steps.scope.outputs.scope }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run only inert source/refusal controls
+        run: python3 scripts/test-pc01-linux-controller.py
+      - name: Record source-only scope
+        id: scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'scope=source-only-inert-controller-controls' >> "$GITHUB_OUTPUT"
+          python3 - <<'PY'
+          import json,os
+          print(json.dumps({'scope':'source-only-inert-controller-controls',
+            'qaCheckout':os.environ['GITHUB_SHA'],'runtimeActions':0,
+            'providerRequests':0,'packageDownloads':0,'PC01Qualified':False,
+            'nativeQualified':False,'taskComplete':False}))
+          PY
+  pc01-controller:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    permissions:
+      contents: read
+      actions: read
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run inert controller/refusal controls
+        run: python3 scripts/test-pc01-linux-controller.py
+      - name: Retain exact Root admission outside the clean checkout
+        env:
+          ROOT_ADMISSION_JSON: ${{ inputs.admission_json }}
+          ROOT_ADMISSION_SHA256: ${{ inputs.admission_sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib,os,re
+          from pathlib import Path
+          b=os.environ['ROOT_ADMISSION_JSON'].encode('utf-8')
+          h=os.environ['ROOT_ADMISSION_SHA256']
+          assert len(b)<=32768 and re.fullmatch('[0-9a-f]{64}',h)
+          assert hashlib.sha256(b).hexdigest()==h
+          p=Path(os.environ['RUNNER_TEMP'])/'pc01-root-admission.json'
+          with p.open('xb') as f:
+              os.chmod(p,0o600);f.write(b);f.flush();os.fsync(f.fileno())
+          PY
+      - name: One owned controller; independent NAS Accept at every request
+        env:
+          ROOT_ADMISSION_SHA256: ${{ inputs.admission_sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=60s 30m python3 scripts/pc01-linux-controller.py \
+            --run --admission "$RUNNER_TEMP/pc01-root-admission.json" \
+            --admission-sha256 "$ROOT_ADMISSION_SHA256" \
+            --output "$RUNNER_TEMP/pc01-controller-proof"
+      - name: Retain private success or failure evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: private-PC01-controller-proof
+          path: ${{ runner.temp }}/pc01-controller-proof
+          if-no-files-found: error
+          retention-days: 14
