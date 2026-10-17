@@ -1,5 +1,45 @@
 # Mixel-Remote — Agent Handoff / Current State
 
+## 2026-10-17 — Five input owners composed; earlier full-app compile required
+
+The private integration now composes native receipts, receiver capabilities,
+Linux uinput, pinned raw-FD dependency adapters, then scoped Windows SAS. Both
+normal branding and bridge generation inverse the exact reverse order only
+after the complete historical no-write guard succeeds. One private source copy
+is used for the current whole-source view. Actual complete composition repeats
+with1,337 byte/mode/link entries identical and exit0; this is source proof.
+
+The evdev/parity adapters expose only their genuine existing descriptor handles.
+Their complete original Git inventories/objects/revisions are pinned and built
+offline; both API target files, root Cargo sources, metadata/config and traversal
+are strictly verified. SAS binds the retained service-launched process, actual
+pipe PID/birth/session/SYSTEM token, read-only captured handles and a finite
+Capture/Ready/Commit sequence. Independent source review finds no remaining
+concrete product blocker. Its14-case entire-leaf Windows harness is required;
+the NOWAIT readiness fixture now waits for an actual connected kernel PID.
+
+Normal Linux/Windows/Mac ARM/Intel jobs now require an early real entire-app
+cargo check using shipping targets/features/dependencies in a private source
+copy, before the long existing source preflight. All full builds, analysis,
+signing and runtime gates remain. Driver25, central13, SAS20 plus6 inert harness
+controls pass. The local source-only checkout correctly refuses this driver
+because generated Rust bridge files are absent; normal CI generates/restores
+those files before invoking the actual compiler. No local compiler was run.
+
+Diagnostic615 ended with Mac passing, receipt14 on all3, and Linux13core plus
+13kernel plus2 positive timer cases passing. Its timer negative, Windows mode
+assertion and positive Standard-account pipe fixture failed. Source successors
+correct the timer baseline/modes and use a private working directory plus finite
+overlapped pipe completion/cancellation. Hosted reruns remain required.
+
+A confirmed Windows helper-death gap is being fixed in a separate custody stage:
+actual successful key/button receipts must survive both local and portable
+broker death. A same-token child will own effect execution and cleanup; no
+post-effect mirror, reset-all-key fallback, automatic elevation or fake CLEANED.
+This stage is not integrated or qualified yet. Physical PC01/Mac, full new signed
+packages and installed-service secure attention remain required. Delivery is
+incomplete; retain all existing public/main/store/production and access holds.
+
 ## 2026-10-17 — Receiver and Linux device ownership integration
 
 The private receiver component at b1779fe passed Windows Rust1.75, Linux

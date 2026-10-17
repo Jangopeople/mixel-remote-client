@@ -25,6 +25,13 @@ fn main() {
         Some("pipe")=> {
             let name=args.next().expect("owned component pipe name");assert!(args.next().is_none());
             assert!(name.starts_with("\\\\.\\pipe\\Mixel-SAS-Component-"));
+            let connect_name=format!("Local\\{}-connect",name.strip_prefix("\\\\.\\pipe\\").unwrap());
+            let connect_wide:Vec<u16>=connect_name.encode_utf16().chain(Some(0)).collect();
+            let connect=unsafe { OpenEventW(0x00100000,0,connect_wide.as_ptr()) };
+            assert!(!connect.is_null() && connect as isize != -1);
+            let ready=unsafe { WaitForSingleObject(connect,5000) };
+            assert_ne!(unsafe { CloseHandle(connect) },0);
+            assert_eq!(ready,0,"own pipe parent connect deadline");
             let wide:Vec<u16>=name.encode_utf16().chain(Some(0)).collect();
             let handle=unsafe { CreateFileW(wide.as_ptr(),0xc0000000,0,ptr::null_mut(),3,0,ptr::null_mut()) };
             assert!(!handle.is_null() && handle as isize != -1,"connect only named own component pipe");

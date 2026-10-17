@@ -112,13 +112,24 @@ mod kernel_controls {
         let pipe=Owned::new(unsafe { CreateNamedPipeW(wide(&name).as_ptr(),3,1,1,1024,1024,0,ptr::null_mut()) }).expect("create own private component pipe");
         let release_name=format!("Local\\{}-release",name.strip_prefix("\\\\.\\pipe\\").unwrap());
         let release=Owned::new(unsafe { CreateEventW(ptr::null_mut(),1,0,wide(&release_name).as_ptr()) }).expect("own pipe actor release event");
+        let connect_name=format!("Local\\{}-connect",name.strip_prefix("\\\\.\\pipe\\").unwrap());
+        let connect=Owned::new(unsafe { CreateEventW(ptr::null_mut(),1,0,wide(&connect_name).as_ptr()) }).expect("own pipe actor connect event");
         let mut child=actor("pipe",Some(&name));
+        // A successful first NOWAIT call merely makes the pipe available. The
+        // actor is deliberately held before CreateFileW, so this cannot be a
+        // connection acknowledgment on any scheduler.
+        let initial=unsafe { ConnectNamedPipe(pipe.0,ptr::null_mut()) };
+        let initial_error=if initial==0 { unsafe { GetLastError() } } else { 0 };
+        assert!(initial!=0 || initial_error==536,"initial own pipe availability {}",initial_error);
+        assert_eq!(pipe_pid(pipe.0,false),None,"initial pipe availability is not an actual connected peer");
+        assert_ne!(unsafe { SetEvent(connect.0) },0);
         let deadline=Instant::now()+Duration::from_secs(3);
         loop {
             let ok=unsafe { ConnectNamedPipe(pipe.0,ptr::null_mut()) };
             let error=if ok==0 { unsafe { GetLastError() } } else { 0 };
-            if ok!=0 || error==535 { break; }
-            assert!(error==536 || error==232,"unexpected own component pipe error {}",error);
+            if error==535 && pipe_pid(pipe.0,false)==Some(child.0.id()) { break; }
+            assert!(ok!=0 || error==535 || error==536 || error==232,"unexpected own component pipe error {}",error);
+            assert!(child.0.try_wait().expect("query exact owned pipe actor").is_none(),"owned pipe actor exited before connection");
             assert!(Instant::now()<deadline,"own pipe actor connect deadline");
             std::thread::sleep(Duration::from_millis(5));
         }

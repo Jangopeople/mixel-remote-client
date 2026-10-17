@@ -80,10 +80,27 @@ jobs:
         shell: bash
         run: |
           python3 scripts/test-support-receiver-uinput.py
+          python3 scripts/test-support-receiver-uinput-deps.py
           if [ "$RUNNER_OS" = "Linux" ]; then
             python3 scripts/fixtures/receiver-uinput-native/prepare.py \
               --output "$RUNNER_TEMP/mixel-receiver-uinput" --run --tokio
           fi
+      - name: Verify scoped Windows secure-attention source and component preparation
+        shell: bash
+        run: |
+          python3 scripts/test-receiver-sas.py
+          python3 scripts/fixtures/receiver-sas-native/test_prepare.py
+      - name: Activate Windows component linker
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/activate-windows-msvc.ps1 -ExportToGitHubEnvironment
+      - name: Compile entire Windows secure-attention leaf and exercise kernel refusals
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          source scripts/use-windows-msvc-bash.sh
+          python scripts/fixtures/receiver-sas-native/prepare.py \
+            --output "$RUNNER_TEMP/mixel-receiver-sas" --run
       - name: Compile and exercise exact receiver capability component
         if: ${{ !cancelled() && steps.receiver_source.outcome == 'success' }}
         shell: bash
@@ -104,6 +121,10 @@ jobs:
             ${{ runner.temp }}/mixel-receiver-uinput/*.json
             ${{ runner.temp }}/mixel-receiver-uinput/*.stdout
             ${{ runner.temp }}/mixel-receiver-uinput/*.stderr
+            ${{ runner.temp }}/mixel-receiver-sas/*.json
+            ${{ runner.temp }}/mixel-receiver-sas/*/stdout
+            ${{ runner.temp }}/mixel-receiver-sas/*/stderr
+            ${{ runner.temp }}/mixel-receiver-sas/*/*.json
           if-no-files-found: error
           retention-days: 14
   release-pipeline:
@@ -118,6 +139,7 @@ jobs:
         run: |
           python3 scripts/test-release-pipeline.py
           python3 scripts/test-receiver-input-integration.py
+          python3 scripts/test-app-rust-check.py
           python3 scripts/test-flutter-sdk-pipeline.py
           python3 scripts/test-support-url-log-privacy.py
           python3 scripts/test-support-launch-macos-concurrency-controls.py --evidence-dir "$RUNNER_TEMP/mixel-macos-concurrency-source"

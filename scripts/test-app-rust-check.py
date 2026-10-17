@@ -454,5 +454,31 @@ class Controls(unittest.TestCase):
         self.assertIn('run_environment(config, source, output, os.environ)', text)
 
 
+class ShippingWorkflowControls(unittest.TestCase):
+    def test_each_real_shipping_job_requires_early_app_check_and_retains_evidence(self):
+        root = Path(__file__).resolve().parents[1]
+        text = (root / '.github/workflows/build.yml').read_text()
+        for job, following, target, label in (
+                ('linux', 'macos', 'x86_64-unknown-linux-gnu', 'linux'),
+                ('macos', 'windows', '${{ matrix.job.target }}', '${{ matrix.job.target }}'),
+                ('windows', 'upload', 'x86_64-pc-windows-msvc', 'windows')):
+            section = text.split('  '+job+':\n', 1)[1].split('  '+following+':\n', 1)[0]
+            early = section.split('      - name: Typecheck the complete application with shipping Rust and native dependencies\n',1)[1].split('      - ',1)[0]
+            self.assertIn('--target "'+target+'" --run', early)
+            self.assertIn('--output "$RUNNER_TEMP/mixel-app-rust-'+label+'"', early)
+            self.assertIn('timeout-minutes: 40', early)
+            for bypass in ('if:', 'continue-on-error', '||', 'source-only'):
+                self.assertNotIn(bypass, early)
+            self.assertLess(section.index('Typecheck the complete application'), section.index('Preflight generated support source and reporter'))
+            self.assertLess(section.index('Preflight generated support source and reporter'), section.index('Build (cargo + flutter via build.py)'))
+            evidence = section.split('      - name: Preserve early complete application compiler evidence\n',1)[1].split('      - ',1)[0]
+            self.assertIn('if: always()', evidence)
+            self.assertIn('mixel-app-rust-'+label+'/*.json', evidence)
+            self.assertIn('mixel-app-rust-'+label+'/*.log', evidence)
+            self.assertNotIn('/source', evidence); self.assertNotIn('/target', evidence)
+        for workflow in ('build.yml', 'preflight.yml'):
+            self.assertEqual((root / '.github/workflows' / workflow).read_text().count('          python3 scripts/test-app-rust-check.py\n'), 1)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

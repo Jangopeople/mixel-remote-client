@@ -41,6 +41,10 @@ python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-file-dialog-lifecycle.py" 
 python3 "$(dirname "${BASH_SOURCE[0]}")/receiver_input_integration_projection.py" --root "$RDREPO" --check-priors
 
 # Validate the device sink before receiver layers or older owners write.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-receiver-sas.py" --root "$RDREPO" --restore --check
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-receiver-sas.py" --root "$RDREPO" --restore
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-receiver-uinput-deps.py" --root "$RDREPO" --restore --check
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-receiver-uinput-deps.py" --root "$RDREPO" --restore
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-receiver-uinput.py" --root "$RDREPO" --restore --check
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-receiver-uinput.py" --root "$RDREPO" --restore
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-receiver-input.py" --root "$RDREPO" --restore --check
@@ -1166,5 +1170,7 @@ python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-input-lifecycle.py" --root
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-receiver-native.py" --root "$RDREPO"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-receiver-input.py" --root "$RDREPO"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-receiver-uinput.py" --root "$RDREPO"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-receiver-uinput-deps.py" --root "$RDREPO"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-receiver-sas.py" --root "$RDREPO"
 
 echo "✓ Branding applied — product identity is $APP_NAME only."

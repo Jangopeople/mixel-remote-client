@@ -76,6 +76,7 @@ jobs:
         run: |
           python3 scripts/test-release-pipeline.py
           python3 scripts/test-receiver-input-integration.py
+          python3 scripts/test-app-rust-check.py
           python3 scripts/test-flutter-sdk-pipeline.py
           python3 scripts/test-support-url-log-privacy.py
           python3 scripts/test-notarize-macos.py
@@ -156,10 +157,25 @@ jobs:
         env:
           RDREPO: ./rustdesk
           BRANDING: ./branding
+      - name: Verify scoped Windows secure-attention source and component preparation
+        run: |
+          python3 scripts/test-receiver-sas.py --source rustdesk
+          python3 scripts/fixtures/receiver-sas-native/test_prepare.py
+      - name: Activate Windows component linker
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/activate-windows-msvc.ps1 -ExportToGitHubEnvironment
+      - name: Compile entire Windows secure-attention leaf and exercise kernel refusals
+        if: runner.os == 'Windows'
+        run: |
+          source scripts/use-windows-msvc-bash.sh
+          python scripts/fixtures/receiver-sas-native/prepare.py \
+            --output "$RUNNER_TEMP/mixel-receiver-sas" --run
       - name: Prove actual input components and required original failures
         run: |
           python3 scripts/test-support-receiver-input.py --source rustdesk
           python3 scripts/test-support-receiver-uinput.py
+          python3 scripts/test-support-receiver-uinput-deps.py
           if [ "$RUNNER_OS" = "Linux" ]; then
             python3 scripts/fixtures/receiver-uinput-native/prepare.py \
               --output "$RUNNER_TEMP/mixel-receiver-uinput" --run --tokio
@@ -182,6 +198,10 @@ jobs:
             ${{ runner.temp }}/mixel-receiver-uinput/*.json
             ${{ runner.temp }}/mixel-receiver-uinput/*.stdout
             ${{ runner.temp }}/mixel-receiver-uinput/*.stderr
+            ${{ runner.temp }}/mixel-receiver-sas/*.json
+            ${{ runner.temp }}/mixel-receiver-sas/*/stdout
+            ${{ runner.temp }}/mixel-receiver-sas/*/stderr
+            ${{ runner.temp }}/mixel-receiver-sas/*/*.json
             ${{ runner.temp }}/mixel-native-input/
             !${{ runner.temp }}/mixel-native-input/target/**
           if-no-files-found: ignore
@@ -237,6 +257,10 @@ jobs:
         working-directory: rustdesk
         run: |
           python3 "$GITHUB_WORKSPACE/scripts/receiver_input_integration_projection.py" --root . --check-priors
+          python3 "$GITHUB_WORKSPACE/scripts/patch-support-receiver-sas.py" --root . --restore --check
+          python3 "$GITHUB_WORKSPACE/scripts/patch-support-receiver-sas.py" --root . --restore
+          python3 "$GITHUB_WORKSPACE/scripts/patch-support-receiver-uinput-deps.py" --root . --restore --check
+          python3 "$GITHUB_WORKSPACE/scripts/patch-support-receiver-uinput-deps.py" --root . --restore
           python3 "$GITHUB_WORKSPACE/scripts/patch-support-receiver-uinput.py" --root . --restore --check
           python3 "$GITHUB_WORKSPACE/scripts/patch-support-receiver-uinput.py" --root . --restore
           python3 "$GITHUB_WORKSPACE/scripts/patch-support-receiver-input.py" --root . --restore --check
@@ -255,6 +279,8 @@ jobs:
           python3 "$GITHUB_WORKSPACE/scripts/patch-support-receiver-native.py" --root .
           python3 "$GITHUB_WORKSPACE/scripts/patch-support-receiver-input.py" --root .
           python3 "$GITHUB_WORKSPACE/scripts/patch-support-receiver-uinput.py" --root .
+          python3 "$GITHUB_WORKSPACE/scripts/patch-support-receiver-uinput-deps.py" --root .
+          python3 "$GITHUB_WORKSPACE/scripts/patch-support-receiver-sas.py" --root .
           pushd flutter && sed -i -e 's/extended_text: 14.0.0/extended_text: 13.0.0/g' pubspec.yaml && flutter pub get && popd
           ~/.cargo/bin/flutter_rust_bridge_codegen \
             --rust-input ./src/flutter_ffi.rs \
@@ -362,6 +388,25 @@ jobs:
         with:
           name: bridge-artifact
           path: rustdesk
+
+      - name: Typecheck the complete application with shipping Rust and native dependencies
+        timeout-minutes: 40
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+        run: |
+          python3 scripts/check-app-rust.py \
+            --source rustdesk --output "$RUNNER_TEMP/mixel-app-rust-linux" \
+            --target "x86_64-unknown-linux-gnu" --run
+      - name: Preserve early complete application compiler evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: app-rust-check-linux
+          path: |
+            ${{ runner.temp }}/mixel-app-rust-linux/*.json
+            ${{ runner.temp }}/mixel-app-rust-linux/*.log
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Preflight generated support source and reporter
         env:
@@ -662,6 +707,25 @@ jobs:
           p12-file-base64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
           p12-password: ${{ secrets.APPLE_CERT_P12_PASSWORD }}
           keychain: mixel-build
+
+      - name: Typecheck the complete application with shipping Rust and native dependencies
+        timeout-minutes: 40
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+        run: |
+          python3 scripts/check-app-rust.py \
+            --source rustdesk --output "$RUNNER_TEMP/mixel-app-rust-${{ matrix.job.target }}" \
+            --target "${{ matrix.job.target }}" --run
+      - name: Preserve early complete application compiler evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: app-rust-check-${{ matrix.job.target }}
+          path: |
+            ${{ runner.temp }}/mixel-app-rust-${{ matrix.job.target }}/*.json
+            ${{ runner.temp }}/mixel-app-rust-${{ matrix.job.target }}/*.log
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Preflight generated support source and reporter
         env:
@@ -1094,6 +1158,27 @@ jobs:
           name: windows-clipboard-source-native
           path: windows-clipboard-proof/*.log
           if-no-files-found: ignore
+
+      - name: Typecheck the complete application with shipping Rust and native dependencies
+        timeout-minutes: 40
+        shell: bash
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+        run: |
+          source scripts/use-windows-msvc-bash.sh
+          python scripts/check-app-rust.py \
+            --source rustdesk --output "$RUNNER_TEMP/mixel-app-rust-windows" \
+            --target "x86_64-pc-windows-msvc" --run
+      - name: Preserve early complete application compiler evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: app-rust-check-windows
+          path: |
+            ${{ runner.temp }}/mixel-app-rust-windows/*.json
+            ${{ runner.temp }}/mixel-app-rust-windows/*.log
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Preflight generated support source and reporter
         id: preflight

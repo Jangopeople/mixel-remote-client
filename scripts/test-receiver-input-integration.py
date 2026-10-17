@@ -131,19 +131,19 @@ class Controls(unittest.TestCase):
                       P.BASE_OWNERS[0]: Base('receiver', left), P.BASE_OWNERS[1]: Base('native', right)}
             with mock.patch.object(P, 'owner', side_effect=owners.__getitem__):
                 if left is True and right is True:
-                    with P.previous(source) as prior: self.assertEqual(prior, source / 'receiver')
+                    with P._device_previous(source) as prior: self.assertEqual(prior, source / 'receiver')
                     self.assertEqual(events, [('inspect', 'uinput'), ('inspect', 'receiver'),
                         ('inspect', 'native'), ('copy', 'receiver'), ('inverse', 'native', False)])
                 else:
                     with self.assertRaises(RuntimeError):
-                        with P.previous(source): self.fail('Partial/drift source admitted')
+                        with P._device_previous(source): self.fail('Partial/drift source admitted')
                     self.assertFalse(any(event[0] == 'copy' for event in events))
         for profile in ('fresh', 'prior'):
             events.clear()
             owners = {'patch-support-receiver-uinput.py': Outer(profile),
                       P.BASE_OWNERS[0]: Base('receiver', False), P.BASE_OWNERS[1]: Base('native', False)}
             with mock.patch.object(P, 'owner', side_effect=owners.__getitem__):
-                with P.previous(source) as prior: self.assertEqual(prior, source)
+                with P._device_previous(source) as prior: self.assertEqual(prior, source)
             self.assertEqual(events, [('inspect', 'uinput'), ('inspect', 'receiver'), ('inspect', 'native')])
 
     def test_latest_owner_inverses_first_in_one_private_snapshot(self):
@@ -167,7 +167,7 @@ class Controls(unittest.TestCase):
         owners = {'patch-support-receiver-uinput.py': Outer(),
                   P.BASE_OWNERS[0]: Base('receiver'), P.BASE_OWNERS[1]: Base('native')}
         with mock.patch.object(P, 'owner', side_effect=owners.__getitem__):
-            with P.previous(source) as prior: self.assertEqual(prior, private)
+            with P._device_previous(source) as prior: self.assertEqual(prior, private)
         self.assertEqual(events, ['outer-check', 'copy+outer-inverse', 'receiver-check', 'native-check',
                                  'receiver-plan', 'native-plan', 'receiver-inverse', 'native-inverse'])
 
@@ -175,9 +175,44 @@ class Controls(unittest.TestCase):
         outer = mock.Mock(); outer.inspect.side_effect = ValueError('exact device sink drift')
         with mock.patch.object(P, 'owner', return_value=outer) as load:
             with self.assertRaisesRegex(ValueError, 'device sink drift'):
-                with P.previous(Path('/unused-pure-control')): self.fail('drift admitted')
+                with P._device_previous(Path('/unused-pure-control')): self.fail('drift admitted')
         load.assert_called_once_with('patch-support-receiver-uinput.py')
         outer.previous.assert_not_called()
+
+    def test_newer_owners_inverse_latest_first_without_a_second_copy(self):
+        supplied, private = Path('/unused-supplied'), Path('/unused-private')
+        events = []
+        class Outer:
+            def __init__(self, name): self.name = name
+            def is_current(self, root):
+                events.append(('inspect', self.name, root)); return True
+            @contextlib.contextmanager
+            def previous(self, root):
+                events.append(('copy', self.name, root)); yield private
+            def apply(self, root, restore=False, check=False):
+                self_outer.assertEqual(root, private); self_outer.assertTrue(restore)
+                events.append(('plan' if check else 'inverse', self.name, root))
+        self_outer = self
+        names = tuple(reversed(P.LATER_OWNERS))
+        self.assertTrue(names)
+        owners = {name: Outer(name) for name in names}
+        @contextlib.contextmanager
+        def device(root, private=False):
+            self.assertEqual(root, Path('/unused-private')); self.assertTrue(private)
+            events.append(('earlier', 'device', root)); yield root
+        with mock.patch.object(P, 'owner', side_effect=owners.__getitem__), \
+                mock.patch.object(P, '_device_previous', device):
+            with P.previous(supplied) as prior: self.assertEqual(prior, private)
+        expected = [('inspect', names[0], supplied), ('copy', names[0], supplied)]
+        for name in names[1:]:
+            expected.extend((('inspect', name, private), ('plan', name, private), ('inverse', name, private)))
+        expected.append(('earlier', 'device', private)); self.assertEqual(events, expected)
+        failed = mock.Mock(); failed.is_current.side_effect = ValueError('outer drift')
+        with mock.patch.object(P, 'owner', return_value=failed) as load, \
+                mock.patch.object(P, '_device_previous') as inner:
+            with self.assertRaisesRegex(ValueError, 'outer drift'):
+                with P.previous(supplied): self.fail('drift admitted')
+            load.assert_called_once_with(names[0]); inner.assert_not_called(); failed.previous.assert_not_called()
 
     def test_historical_failure_checks_private_source_before_supplied_inverse(self):
         with tempfile.TemporaryDirectory(prefix='mixel-receiver-prior-refusal-') as temporary:
@@ -214,14 +249,16 @@ class Controls(unittest.TestCase):
                 self_outer.assertTrue(restore); events.append((self.name, check))
                 if not check: self.final = False
         self_outer = self
-        owners = dict(zip(P.OWNERS, (Base('receiver'), Base('native'), Base('uinput'))))
+        labels = {name: name.removeprefix('patch-support-receiver-').removesuffix('.py') for name in P.OWNERS}
+        owners = {name: Base(labels[name]) for name in P.OWNERS}
         @contextlib.contextmanager
         def previous(root):
             events.append(('entire-chain-private-check', True)); yield Path('/unused-private')
         with mock.patch.object(P, 'owner', side_effect=owners.__getitem__), mock.patch.object(P, 'previous', previous):
             P.restore_private(Path('/unused-pure-control'))
-        self.assertEqual(events, [('entire-chain-private-check', True), ('uinput', True), ('uinput', False),
-                                  ('receiver', True), ('native', True), ('receiver', False), ('native', False)])
+        self.assertEqual(events, [('entire-chain-private-check', True)] +
+            [(labels[name], check) for name in reversed(P.OWNERS[2:]) for check in (True, False)] +
+            [('input', True), ('native', True), ('input', False), ('native', False)])
         events.clear()
         with mock.patch.object(P, 'previous', side_effect=ValueError('inner owner drift')), \
                 mock.patch.object(P, 'owner') as owner:

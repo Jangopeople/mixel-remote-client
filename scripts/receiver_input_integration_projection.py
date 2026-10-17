@@ -15,7 +15,9 @@ from pathlib import Path
 HERE = Path(__file__).absolute().parent
 PLAN = HERE / 'receiver-input-integration-plan.json'
 BASE_OWNERS = ('patch-support-receiver-input.py', 'patch-support-receiver-native.py')
-OWNERS = (*BASE_OWNERS, 'patch-support-receiver-uinput.py')
+OWNERS = (*BASE_OWNERS, 'patch-support-receiver-uinput.py',
+          'patch-support-receiver-uinput-deps.py', 'patch-support-receiver-sas.py')
+LATER_OWNERS = OWNERS[3:]
 
 
 def digest(raw):
@@ -137,44 +139,89 @@ def checked_owners(root):
 
 
 @contextlib.contextmanager
+def _outer_previous(root, names, private=False):
+    """Inverse newer complete owners in one copy; never recover from drift."""
+    if not names:
+        yield root, private
+        return
+    outer = owner(names[0])
+    if outer.is_current(root):
+        if private:
+            outer.apply(root, restore=True, check=True)
+            outer.apply(root, restore=True)
+            with _outer_previous(root, names[1:], True) as result:
+                yield result
+        else:
+            with outer.previous(root) as stage:
+                with _outer_previous(stage, names[1:], True) as result:
+                    yield result
+    else:
+        with _outer_previous(root, names[1:], private) as result:
+            yield result
+
+
+@contextlib.contextmanager
 def before_receiver(root):
-    """Strictly invert only later device-sink ownership for receiver controls."""
+    """Strictly invert only later sink owners for the receiver's own controls."""
     root = Path(root).absolute()
+    with _outer_previous(root, tuple(reversed(LATER_OWNERS))) as (stage, private):
+        uinput = owner(OWNERS[2])
+        if uinput.inspect(stage)[3] != 'after':
+            yield stage
+        elif private:
+            uinput.apply(stage, restore=True, check=True)
+            uinput.apply(stage, restore=True)
+            yield stage
+        else:
+            with uinput.previous(stage) as prior:
+                yield prior
+
+
+@contextlib.contextmanager
+def _base_previous(root, private, expected_final):
+    receiver, native, final = checked_owners(root)
+    if final != expected_final:
+        raise RuntimeError('Inconsistent exact receiver/device-sink prefix')
+    if not final:
+        yield root
+    elif private:
+        receiver.apply(root, restore=True, check=True)
+        native.apply(root, restore=True, check=True)
+        receiver.apply(root, restore=True)
+        native.apply(root, restore=True)
+        yield root
+    else:
+        with receiver.previous(root) as stage:
+            native.apply(stage, restore=True)
+            yield stage
+
+
+@contextlib.contextmanager
+def _device_previous(root, private=False):
     uinput = owner(OWNERS[2])
     profile = uinput.inspect(root)[3]
     if profile == 'after':
-        with uinput.previous(root) as stage:
-            yield stage
+        if private:
+            uinput.apply(root, restore=True, check=True)
+            uinput.apply(root, restore=True)
+            with _base_previous(root, True, True) as prior:
+                yield prior
+        else:
+            with uinput.previous(root) as stage:
+                with _base_previous(stage, True, True) as prior:
+                    yield prior
     else:
-        yield root
+        with _base_previous(root, private, profile == 'before') as prior:
+            yield prior
 
 
 @contextlib.contextmanager
 def previous(root):
-    """Remove exact terminal layers in one private copy, latest owner first."""
+    """Remove exact terminal layers, latest owner first, in one private copy."""
     root = Path(root).absolute()
-    uinput = owner(OWNERS[2])
-    profile = uinput.inspect(root)[3]
-    if profile == 'after':
-        with uinput.previous(root) as stage:
-            receiver, native, final = checked_owners(stage)
-            if not final:
-                raise RuntimeError('Device sink requires both complete receiver layers')
-            receiver.apply(stage, restore=True, check=True)
-            native.apply(stage, restore=True, check=True)
-            receiver.apply(stage, restore=True)
-            native.apply(stage, restore=True)
-            yield stage
-        return
-    receiver, native, final = checked_owners(root)
-    if final != (profile == 'before'):
-        raise RuntimeError('Inconsistent exact receiver/device-sink prefix')
-    if not final:
-        yield root
-        return
-    with receiver.previous(root) as stage:
-        native.apply(stage, restore=True)
-        yield stage
+    with _outer_previous(root, tuple(reversed(LATER_OWNERS))) as (stage, private):
+        with _device_previous(stage, private) as prior:
+            yield prior
 
 
 def prior_owner():
@@ -197,15 +244,16 @@ def restore_private(root):
     # can change. A later malformed inner owner cannot leave an outer inverse.
     with previous(root):
         pass
-    uinput = owner(OWNERS[2])
-    uinput.apply(root, restore=True, check=True)
-    uinput.apply(root, restore=True)
+    for name in reversed(OWNERS[2:]):
+        layer = owner(name)
+        layer.apply(root, restore=True, check=True)
+        layer.apply(root, restore=True)
     receiver, native, _ = checked_owners(root)
     receiver.apply(root, restore=True, check=True)
     native.apply(root, restore=True, check=True)
     receiver.apply(root, restore=True)
     native.apply(root, restore=True)
-    if receiver.is_current(root) or native.is_current(root) or uinput.is_current(root):
+    if any(owner(name).is_current(root) for name in OWNERS):
         raise RuntimeError('Receiver private fixture inverse did not retire every terminal layer')
 
 
