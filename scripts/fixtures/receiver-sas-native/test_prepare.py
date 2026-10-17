@@ -20,7 +20,7 @@ spec.loader.exec_module(module)
 class PreparationControls(unittest.TestCase):
     def test_default_preparation_has_exact_entire_leaf_and_no_process_calls(self):
         with tempfile.TemporaryDirectory() as temporary, patch.object(module.subprocess, 'run', side_effect=AssertionError('no process')):
-            output, result = module.prepare(Path(temporary) / 'prepared')
+            output, result = module.prepare(Path(temporary).resolve() / 'prepared')
             raw = module.LEAF.read_bytes()
             self.assertTrue((output / 'harness/src/sas_leaf_under_test.rs').read_bytes().startswith(raw + b'\n'))
             self.assertEqual(result['entireLeafPrefixBytes'], len(raw))
@@ -32,7 +32,7 @@ class PreparationControls(unittest.TestCase):
 
     def test_physical_crlf_production_prefix_is_preserved_not_rewritten(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             raw = module.logical(module.LEAF.read_bytes()).replace(b'\n', b'\r\n')
             leaf = root / 'production.rs'
             leaf.write_bytes(raw)
@@ -44,7 +44,7 @@ class PreparationControls(unittest.TestCase):
 
     def test_drifted_or_linked_leaf_is_refused_before_output_creation(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             leaf = root / 'leaf.rs'
             leaf.write_bytes(module.LEAF.read_bytes() + b'// drift\n')
             with patch.object(module, 'LEAF', leaf), self.assertRaisesRegex(ValueError, 'pin drift'):
@@ -58,7 +58,7 @@ class PreparationControls(unittest.TestCase):
 
     def test_existing_output_refuses_and_non_windows_run_never_spawns(self):
         with tempfile.TemporaryDirectory() as temporary, patch.object(module.subprocess, 'run', side_effect=AssertionError('no process')):
-            output = Path(temporary) / 'prepared'
+            output = Path(temporary).resolve() / 'prepared'
             output.mkdir()
             sentinel = output / 'sentinel'
             sentinel.write_bytes(b'owned synthetic')
