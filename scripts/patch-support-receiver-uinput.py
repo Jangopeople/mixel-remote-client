@@ -3,6 +3,8 @@
 
 previous() inverses only this owner into a private ordinary copy. It never calls
 or weakens any earlier source owner. Inverse order is uinput -> receiver -> native.
+The complete pinned pre-native/receiver profile is recognized for read-only
+projection; applying this layer still requires the complete before profile.
 """
 import argparse
 import contextlib
@@ -16,7 +18,7 @@ import tempfile
 
 HERE = Path(__file__).resolve().parent
 PLAN = HERE / 'support-receiver-uinput-plan.json'
-PLAN_SHA = 'e7ade1c324daebc658cb3925f64433d3471308d6f724c61c0c6f5dca4d51ee7d'
+PLAN_SHA = 'f43e19dff27d33912f1dbc560576679909920cc2c6b0738db9dfbdb66c59e18f'
 
 
 def sha(raw):
@@ -105,8 +107,10 @@ def load_plan():
     if len(names) != len(set(names)):
         raise ValueError('duplicate uinput source owner')
     for row in plan['files']:
-        if (row['freshSource'] is None) != (row['freshSha256'] is None) or (row['freshSource'] is not None and sha(row['freshSource'].encode()) != row['freshSha256']):
-            raise ValueError('uinput fresh fixture drift')
+        for profile in ('fresh', 'prior'):
+            source, digest = row[profile+'Source'], row[profile+'Sha256']
+            if (source is None) != (digest is None) or (source is not None and sha(source.encode()) != digest):
+                raise ValueError('uinput '+profile+' fixture drift')
         if sha(row['beforeSource'].encode()) != row['beforeSha256']:
             raise ValueError('uinput predecessor fixture changed')
         transform(row['beforeSource'].encode(), row)
@@ -123,14 +127,14 @@ def load_plan():
 def inspect(root):
     root = root_path(root)
     plan, templates = load_plan()
-    current, profiles = {}, {'fresh', 'before', 'after'}
+    current, profiles = {}, {'fresh', 'prior', 'before', 'after'}
     for row in plan['files']:
         value = state(root, row['name'], absent=row['freshSha256'] is None)
         current[row['name']] = value
         if value[1] is not None and row['inheritedMode'] is not None and not (value[2] == row['inheritedMode'] or os.name == 'nt' and value[2] == 0o666):
             raise ValueError('inherited source owner mode changed')
         digest = None if value[1] is None else sha(canonical(value[1])[0])
-        profiles &= {profile for profile in ('fresh', 'before', 'after')
+        profiles &= {profile for profile in ('fresh', 'prior', 'before', 'after')
                      if digest == row[profile+'Sha256']}
     for row in plan['owned']:
         value = state(root, row['name'], absent=True)
@@ -173,7 +177,7 @@ def atomic(path, raw, mode):
 
 def apply(root, restore=False, check=False):
     root, plan, templates, profile, current = inspect(root)
-    if profile == 'fresh':
+    if profile in ('fresh', 'prior'):
         if not restore:
             raise ValueError('uinput owner requires full native+receiver branding')
         return {'profile': profile, 'writes': 0, 'files': len(current)}

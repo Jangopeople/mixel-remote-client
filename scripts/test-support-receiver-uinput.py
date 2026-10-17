@@ -28,12 +28,12 @@ def inventory(root):
 
 
 @contextlib.contextmanager
-def fixture(newline=b'\n', fresh=False):
+def fixture(newline=b'\n', fresh=False, profile=None):
     with tempfile.TemporaryDirectory(prefix='mixel-uinput-control-') as temporary:
         root = Path(temporary).resolve()/'source'
         root.mkdir()
         for index, row in enumerate(PLAN['files']):
-            raw = row['freshSource'] if fresh else row['beforeSource']
+            raw = row[(profile or ('fresh' if fresh else 'before'))+'Source']
             path = root/row['name']
             path.parent.mkdir(parents=True, exist_ok=True)
             if raw is not None:
@@ -75,6 +75,64 @@ class OwnerControls(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     OWNER.apply(root, check=True)
                 self.assertEqual(inventory(root), before)
+
+    def test_exact_pre_native_receiver_prior_is_readonly(self):
+        for newline in (b'\n', b'\r\n'):
+            with self.subTest(newline=newline), fixture(newline, profile='prior') as root:
+                before = inventory(root)
+                self.assertEqual(OWNER.inspect(root)[3], 'prior')
+                self.assertFalse(OWNER.is_current(root))
+                for check in (False, True):
+                    self.assertEqual(OWNER.apply(root, restore=True, check=check)['writes'], 0)
+                    with self.assertRaisesRegex(ValueError, 'requires full native\\+receiver'):
+                        OWNER.apply(root, check=check)
+                with OWNER.previous(root) as stage:
+                    self.assertEqual(OWNER.inspect(stage)[3], 'prior')
+                    self.assertEqual(inventory(stage), before)
+                self.assertEqual(inventory(root), before)
+
+    def test_every_mixed_prefix_profile_refuses_before_writes(self):
+        # Include absent native/receiver leaves and absent terminal leaves in
+        # the complete profiles; a plausible single-file prefix is no authority.
+        for base in ('fresh', 'prior', 'before', 'after'):
+            for donor in ('fresh', 'prior', 'before', 'after'):
+                if base == donor:
+                    continue
+                with fixture(profile='before' if base == 'after' else base) as root:
+                    if base == 'after':
+                        OWNER.apply(root)
+                    baseline = inventory(root)
+                    for row in PLAN['files']+PLAN['owned']:
+                        path = root/row['name']
+                        original = path.read_bytes() if path.exists() else None
+                        if row in PLAN['owned']:
+                            replacement = TEMPLATES[row['name']] if donor == 'after' else None
+                        elif donor == 'after':
+                            replacement = OWNER.transform(row['beforeSource'].encode(), row)
+                        else:
+                            raw = row[donor+'Source']
+                            replacement = raw.encode() if raw is not None else None
+                        if original == replacement:
+                            continue
+                        with self.subTest(base=base, donor=donor, name=row['name']):
+                            if replacement is None:
+                                path.unlink()
+                            else:
+                                path.write_bytes(replacement)
+                                path.chmod(0o644)
+                            mixed = inventory(root)
+                            for operation in (lambda: OWNER.is_current(root),
+                                              lambda: OWNER.apply(root, check=True),
+                                              lambda: OWNER.apply(root, restore=True)):
+                                with self.assertRaises(ValueError):
+                                    operation()
+                            self.assertEqual(inventory(root), mixed)
+                            if original is None:
+                                path.unlink()
+                            else:
+                                path.write_bytes(original)
+                                path.chmod(baseline[row['name']][0])
+                    self.assertEqual(inventory(root), baseline)
 
     def test_each_prior_and_final_whole_source_drift_refuses(self):
         for after in (False, True):
