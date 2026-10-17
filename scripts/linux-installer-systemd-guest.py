@@ -43,7 +43,7 @@ try:
  require(run(['dpkg-query','-W','-f=${db:Status-Status}','mixel-remote'],(1,))=='','guest-package-present')
  candidate=P('/mnt/mixel-candidate/candidate.deb');require(sha(candidate)==EXPECTED['DEBSHA256']=='d63c5b624e55312bee8e52f5a2db16355fc3a06f5e12cee332f5567c57c391f1','wrong-qualified-candidate')
  sentinel=P('/var/lib/mixel-systemd-qa-unrelated-sentinel');sentinel.write_text(EXPECTED['instance']+'\n');sentinelhash=sha(sentinel)
- run(['apt-get','--yes','--no-download','--no-install-recommends','install',str(candidate)])
+ run(['dpkg','--install',str(candidate)])
  require(run(['dpkg-query','-W','-f=${Status}','mixel-remote'])=='install ok installed','package-not-configured')
  require(os.readlink('/usr/bin/mixel-remote')=='/usr/share/mixel-remote/mixel-remote','wrong-postinst-alias')
  main=P('/usr/share/mixel-remote/mixel-remote');require(sha(main)==EXPECTED['mainSHA256']and main.stat().st_uid==main.stat().st_gid==0 and main.stat().st_mode&0o777==0o755,'installed-main-hash-owner-mode')

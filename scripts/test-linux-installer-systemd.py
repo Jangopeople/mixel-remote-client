@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Offline admission/refusal controls; no provider, app, service or apt runs."""
+import ast
 import copy
 import hashlib
 import importlib.util
@@ -141,6 +142,29 @@ class Admission(unittest.TestCase):
                               "restartStopStartDisableEnableRemovePurgeProven", "unrelatedSentinelPreserved",
                               "require(run(['dpkg','--audit'])=='',", "policy-rc.d-must-not-mask-real-service"]:
             self.assertIn(text_required, text)
+
+    def test_real_local_dpkg_install_requires_dependencies_and_exact_guest_binding(self):
+        guest = ast.parse((BASE / "scripts/linux-installer-systemd-guest.py").read_text())
+        calls = [node for node in ast.walk(guest) if isinstance(node, ast.Call)
+                 and isinstance(node.func, ast.Name) and node.func.id == "run" and node.args
+                 and isinstance(node.args[0], ast.List) and node.args[0].elts
+                 and isinstance(node.args[0].elts[0], ast.Constant) and node.args[0].elts[0].value == "dpkg"
+                 and len(node.args[0].elts) > 1 and isinstance(node.args[0].elts[1], ast.Constant)
+                 and node.args[0].elts[1].value == "--install"]
+        self.assertEqual(len(calls), 1); observed = []
+        eval(compile(ast.Expression(body=calls[0]), "actual-guest-install", "eval"), {
+            "run": lambda argv: observed.append(argv), "str": str,
+            "candidate": Path("/mnt/mixel-candidate/candidate.deb")})
+        self.assertEqual(observed, [["dpkg", "--install", "/mnt/mixel-candidate/candidate.deb"]])
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); (root / "evidence").mkdir()
+            with patch.object(qa.os, "geteuid", return_value=0), patch.object(qa, "command") as execute, patch.object(qa, "sha") as digest:
+                with self.assertRaisesRegex(ValueError, "dependencies-not-ready"): qa.run_guest(root)
+                digest.assert_not_called(); execute.assert_not_called()
+            (root / "evidence/DEPENDENCIES.json").write_text("{}")
+            with patch.object(qa.os, "geteuid", return_value=0), patch.object(qa, "command") as execute, patch.object(qa, "sha", side_effect=[qa.DEB_SHA, "wrong-guest-source"]):
+                with self.assertRaisesRegex(ValueError, "execution-bytes-differ"): qa.run_guest(root)
+                execute.assert_not_called()
 
     def test_workflow_is_private_dedicated_same_repo_no_secrets_or_container(self):
         text = (BASE / ".github/workflows/linux-installer-systemd.yml").read_text()
