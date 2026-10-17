@@ -524,6 +524,54 @@ class Admission(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, "host-not-fresh"): qa.host(base)
                     health.assert_not_called()
 
+    def test_targeted_mount_diagnostics_trigger_only_exact_validated_mnt_unit(self):
+        target = [
+            ["systemctl", "show", "--all", "--property=Id,What,Where,Type,SourcePath,Result", "mnt.mount"],
+            ["journalctl", "-b", "-u", "mnt.mount", "--no-pager", "--output=short-iso", "-n", "60"],
+            ["findmnt", "--mountpoint", "/mnt", "--json", "--output", "SOURCE,TARGET,FSTYPE"],
+        ]
+        for failed, trigger in [(b"mnt.mount loaded failed failed /mnt\n", True),
+                                (b"other.mount loaded failed failed /mnt\n", False),
+                                (b"fake.service loaded failed failed mnt.mount\n", False),
+                                (b"../mnt.mount loaded failed failed\n", False)]:
+            with self.subTest(failed=failed), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder); (root / "evidence").mkdir(); calls = []
+                def observe(root, label, argv):
+                    calls.append((label, argv)); return failed if label == "host-failed-units" else b""
+                with patch.object(qa, "bounded_diagnostic", side_effect=observe): qa.diagnose_host(root)
+                actual = [argv for label, argv in calls if label.startswith("host-mnt-")]
+                self.assertEqual(actual, target if trigger else [])
+                self.assertFalse(any("Options" in value or "Environment" in value for argv in actual for value in argv))
+                summary = json.loads((root / "evidence/HOST-DIAGNOSTICS.json").read_text())
+                self.assertEqual(summary["targetedMntDiagnostics"], trigger)
+                self.assertFalse(summary["healthAccepted"])
+
+    def test_targeted_mount_diagnostic_failure_keeps_original_health_error(self):
+        original = ValueError("strict original health failure")
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); (root / "evidence").mkdir(); calls = []
+            def observe(root, label, argv):
+                calls.append(label)
+                if label == "host-failed-units": return b"mnt.mount loaded failed failed /mnt\n"
+                if label == "host-mnt-properties": raise OSError("targeted diagnostic failed")
+                return b""
+            with patch.object(qa, "command", side_effect=original), patch.object(qa, "bounded_diagnostic", side_effect=observe):
+                with self.assertRaises(ValueError) as caught: qa.require_healthy_systemd(root)
+                self.assertIs(caught.exception, original)
+            self.assertIn("host-mnt-properties", calls)
+
+    def test_targeted_mount_commands_inherit_same_stream_and_time_bounds(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); (root / "evidence").mkdir()
+            calls = []
+            def observe(root, label, argv, timeout=8, bound=65536):
+                calls.append((label, timeout, bound))
+                return b"mnt.mount loaded failed failed /mnt\n" if label == "host-failed-units" else b""
+            with patch.object(qa, "bounded_diagnostic", side_effect=observe): qa.diagnose_host(root)
+            targeted = [(label, timeout, bound) for label, timeout, bound in calls if label.startswith("host-mnt-")]
+            self.assertEqual(len(targeted), 3)
+            self.assertTrue(all(timeout == 8 and bound == 65536 for label, timeout, bound in targeted))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

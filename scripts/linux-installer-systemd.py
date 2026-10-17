@@ -278,8 +278,16 @@ def diagnose_host(root):
     for index, name in enumerate(names):
         bounded_diagnostic(root, f"host-failed-unit-{index:02d}", ["systemctl", "show", "--no-pager",
                            "--property=" + properties, "--", name])
+    if "mnt.mount" in names:
+        bounded_diagnostic(root, "host-mnt-properties", ["systemctl", "show", "--all",
+                           "--property=Id,What,Where,Type,SourcePath,Result", "mnt.mount"])
+        bounded_diagnostic(root, "host-mnt-journal", ["journalctl", "-b", "-u", "mnt.mount",
+                           "--no-pager", "--output=short-iso", "-n", "60"])
+        bounded_diagnostic(root, "host-mnt-findmnt", ["findmnt", "--mountpoint", "/mnt",
+                           "--json", "--output", "SOURCE,TARGET,FSTYPE"])
     save(root / "evidence/HOST-DIAGNOSTICS.json", {"failedUnits": names, "unitLimit": 16,
          "maxBytesPerCommandStream": 65536, "timeoutSecondsPerCommand": 8,
+         "targetedMntDiagnostics": "mnt.mount" in names,
          "readOnly": True, "healthAccepted": False, "candidateExecuted": False})
 
 
