@@ -76,6 +76,14 @@ jobs:
           set -o pipefail
           python3 scripts/test-receiver-native.py --source-only 2>&1 | tee receiver-native-source-proof/receipt-source-controls.log
           python3 scripts/test-receiver-native.py --native --proof-root receiver-native-receipts-proof 2>&1 | tee receiver-native-source-proof/receipt-native.log
+      - name: Verify actual Linux input-device ownership and bounded cancellation
+        shell: bash
+        run: |
+          python3 scripts/test-support-receiver-uinput.py
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            python3 scripts/fixtures/receiver-uinput-native/prepare.py \
+              --output "$RUNNER_TEMP/mixel-receiver-uinput" --run --tokio
+          fi
       - name: Compile and exercise exact receiver capability component
         if: ${{ !cancelled() && steps.receiver_source.outcome == 'success' }}
         shell: bash
@@ -93,6 +101,9 @@ jobs:
             receiver-native-proof/component/tests/*.rs
             receiver-native-receipts-proof/
             receiver-native-source-proof/
+            ${{ runner.temp }}/mixel-receiver-uinput/*.json
+            ${{ runner.temp }}/mixel-receiver-uinput/*.stdout
+            ${{ runner.temp }}/mixel-receiver-uinput/*.stderr
           if-no-files-found: error
           retention-days: 14
   release-pipeline:

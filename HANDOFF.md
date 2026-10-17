@@ -1,5 +1,35 @@
 # Mixel-Remote — Agent Handoff / Current State
 
+## 2026-10-17 — Receiver and Linux device ownership integration
+
+The private receiver component at b1779fe passed Windows Rust1.75, Linux
+Rust1.75 and macOS Rust1.81, including owned helper BlockInput, bounded text FIFO,
+stale permission-epoch refusal and recovery after failed helper startup. Each
+original job log was retained once; this is component proof, not app acceptance.
+
+The terminal Linux device owner now binds cleanup acknowledgments to one actual
+fresh device/channel UUID, checks revocation at accepted EV_KEY/SYN boundaries,
+and bounds cleanup slices without timer catch-up starving transport/deadlines.
+Independent source review and17 source controls pass. Its exact Rust core/kernel
+and real-Tokio reversal fixtures are required on hosted Linux, with a format3
+frozen dependency lock. The normal source/bridge pipeline inverses this terminal
+before receiver/native layers and preserves the complete older no-write guards.
+The complete actual source repeat passes with1,303 byte/mode/link entries equal.
+New integration12, historical18, release30, SDK18 and concurrency92 source controls
+pass; actual receiver LF/CRLF migration and whole old-chain refusal checks pass.
+
+A new hosted Windows fixture creates only its own Standard account and protected
+private executable copy, then exercises the real different-SID suspended logon,
+pipe/process identity, minimum kernel rights, revoke and exact owned cleanup.
+Its source preparation passes; actual Windows compile/execution remains pending.
+
+Delivery remains incomplete. Two real Linux raw-fd dependency API mismatches were
+identified before app compilation; strict read-only dependency adapters are being
+prepared. Scoped Windows SAS source/harness and early full-app typecheck are also
+being integrated. No new whole application build, signed package or native
+PC01/Mac acceptance is qualified. Keep all existing public/main/store/production,
+GTK rejection, no-worktree, shared compiler and human-only desktop holds.
+
 ## 2026-10-17 — Receiver revocation component passes; application acceptance remains open
 
 Read current Git HEAD and the authoritative checkpoint before older entries.

@@ -195,7 +195,11 @@ def actual_profile(module, source, physical_newline=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__); parser.add_argument('--source', type=Path); args = parser.parse_args()
     module = helper(); source_contracts(module)
-    if args.source: actual_profile(module, args.source.absolute())
+    if args.source:
+        spec = importlib.util.spec_from_file_location('mixel_receiver_outer_view', HERE / 'receiver_input_integration_projection.py')
+        projection = importlib.util.module_from_spec(spec); spec.loader.exec_module(projection)
+        with projection.before_receiver(args.source.absolute()) as source:
+            actual_profile(module, source)
 
 
 if __name__ == '__main__': main()

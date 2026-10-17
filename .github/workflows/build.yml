@@ -159,6 +159,11 @@ jobs:
       - name: Prove actual input components and required original failures
         run: |
           python3 scripts/test-support-receiver-input.py --source rustdesk
+          python3 scripts/test-support-receiver-uinput.py
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            python3 scripts/fixtures/receiver-uinput-native/prepare.py \
+              --output "$RUNNER_TEMP/mixel-receiver-uinput" --run --tokio
+          fi
           python3 scripts/test-support-receiver-input-native.py \
             --output "$RUNNER_TEMP/mixel-receiver-input"
           python3 scripts/test-receiver-native.py --native \
@@ -174,6 +179,9 @@ jobs:
             ${{ runner.temp }}/mixel-receiver-input/
             !${{ runner.temp }}/mixel-receiver-input/target/**
             ${{ runner.temp }}/mixel-receiver-native-receipts/
+            ${{ runner.temp }}/mixel-receiver-uinput/*.json
+            ${{ runner.temp }}/mixel-receiver-uinput/*.stdout
+            ${{ runner.temp }}/mixel-receiver-uinput/*.stderr
             ${{ runner.temp }}/mixel-native-input/
             !${{ runner.temp }}/mixel-native-input/target/**
           if-no-files-found: ignore
@@ -229,6 +237,8 @@ jobs:
         working-directory: rustdesk
         run: |
           python3 "$GITHUB_WORKSPACE/scripts/receiver_input_integration_projection.py" --root . --check-priors
+          python3 "$GITHUB_WORKSPACE/scripts/patch-support-receiver-uinput.py" --root . --restore --check
+          python3 "$GITHUB_WORKSPACE/scripts/patch-support-receiver-uinput.py" --root . --restore
           python3 "$GITHUB_WORKSPACE/scripts/patch-support-receiver-input.py" --root . --restore --check
           python3 "$GITHUB_WORKSPACE/scripts/patch-support-receiver-native.py" --root . --restore --check
           python3 "$GITHUB_WORKSPACE/scripts/patch-support-receiver-input.py" --root . --restore
@@ -244,6 +254,7 @@ jobs:
           python3 "$GITHUB_WORKSPACE/scripts/patch-support-input-lifecycle.py" --root .
           python3 "$GITHUB_WORKSPACE/scripts/patch-support-receiver-native.py" --root .
           python3 "$GITHUB_WORKSPACE/scripts/patch-support-receiver-input.py" --root .
+          python3 "$GITHUB_WORKSPACE/scripts/patch-support-receiver-uinput.py" --root .
           pushd flutter && sed -i -e 's/extended_text: 14.0.0/extended_text: 13.0.0/g' pubspec.yaml && flutter pub get && popd
           ~/.cargo/bin/flutter_rust_bridge_codegen \
             --rust-input ./src/flutter_ffi.rs \

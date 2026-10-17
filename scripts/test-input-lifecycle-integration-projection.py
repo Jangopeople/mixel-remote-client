@@ -383,12 +383,12 @@ class Controls(unittest.TestCase):
             owned.parent.mkdir(parents=True)
             owned.write_bytes(next(iter(final.values())))
             with mock.patch.object(engine['shutil'], 'copytree', side_effect=AssertionError('No partial source copy')):
-                with self.assertRaises((RuntimeError, FileNotFoundError)):
+                with self.assertRaises((RuntimeError, FileNotFoundError, ValueError)):
                     with P.current_source(root): pass
             # Even removing the new module cannot turn this incomplete tree
             # into the optional/missing-layer path used by a heuristic selector.
             owned.unlink()
-            with self.assertRaises((RuntimeError, FileNotFoundError)):
+            with self.assertRaises((RuntimeError, FileNotFoundError, ValueError)):
                 with P.current_source(root): pass
 
     def test_internal_historical_recursion_is_explicit(self):

@@ -40,7 +40,9 @@ python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-file-dialog-lifecycle.py" 
 # A later prior-owner refusal must leave the supplied terminal layers intact.
 python3 "$(dirname "${BASH_SOURCE[0]}")/receiver_input_integration_projection.py" --root "$RDREPO" --check-priors
 
-# Validate both receiver layers before their exact inverses or older owners write.
+# Validate the device sink before receiver layers or older owners write.
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-receiver-uinput.py" --root "$RDREPO" --restore --check
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-receiver-uinput.py" --root "$RDREPO" --restore
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-receiver-input.py" --root "$RDREPO" --restore --check
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-receiver-native.py" --root "$RDREPO" --restore --check
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-receiver-input.py" --root "$RDREPO" --restore
@@ -1163,5 +1165,6 @@ python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-input-lifecycle.py" --root
 # Receipts precede receiver generations at every actual native input sink.
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-receiver-native.py" --root "$RDREPO"
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-receiver-input.py" --root "$RDREPO"
+python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-receiver-uinput.py" --root "$RDREPO"
 
 echo "✓ Branding applied — product identity is $APP_NAME only."

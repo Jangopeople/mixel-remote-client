@@ -1,6 +1,6 @@
 """Strict terminal receiver integration; historical whole-source guards stay fatal.
 
-The two new owners are inverted in private copies before historical component
+The terminal owners are inverted in private copies before historical component
 fixtures inspect their exact original sources. Their own compiled fixtures test
 the new receiver and receipt implementations separately.
 """
@@ -14,7 +14,8 @@ from pathlib import Path
 
 HERE = Path(__file__).absolute().parent
 PLAN = HERE / 'receiver-input-integration-plan.json'
-OWNERS = ('patch-support-receiver-input.py', 'patch-support-receiver-native.py')
+BASE_OWNERS = ('patch-support-receiver-input.py', 'patch-support-receiver-native.py')
+OWNERS = (*BASE_OWNERS, 'patch-support-receiver-uinput.py')
 
 
 def digest(raw):
@@ -127,7 +128,7 @@ def committed(raw, name):
 
 def checked_owners(root):
     """Inspect both complete owners before any copy or inverse can start."""
-    receiver, native = (owner(name) for name in OWNERS)
+    receiver, native = (owner(name) for name in BASE_OWNERS)
     receiver_final = receiver.is_current(root)
     native_final = native.is_current(root)
     if receiver_final != native_final:
@@ -136,18 +137,44 @@ def checked_owners(root):
 
 
 @contextlib.contextmanager
-def previous(root):
-    """Remove only these terminal layers, retaining exact older input ownership."""
+def before_receiver(root):
+    """Strictly invert only later device-sink ownership for receiver controls."""
     root = Path(root).absolute()
+    uinput = owner(OWNERS[2])
+    profile = uinput.inspect(root)[3]
+    if profile == 'after':
+        with uinput.previous(root) as stage:
+            yield stage
+    else:
+        yield root
+
+
+@contextlib.contextmanager
+def previous(root):
+    """Remove exact terminal layers in one private copy, latest owner first."""
+    root = Path(root).absolute()
+    uinput = owner(OWNERS[2])
+    profile = uinput.inspect(root)[3]
+    if profile == 'after':
+        with uinput.previous(root) as stage:
+            receiver, native, final = checked_owners(stage)
+            if not final:
+                raise RuntimeError('Device sink requires both complete receiver layers')
+            receiver.apply(stage, restore=True, check=True)
+            native.apply(stage, restore=True, check=True)
+            receiver.apply(stage, restore=True)
+            native.apply(stage, restore=True)
+            yield stage
+        return
     receiver, native, final = checked_owners(root)
+    if final != (profile == 'before'):
+        raise RuntimeError('Inconsistent exact receiver/device-sink prefix')
     if not final:
         yield root
         return
-    with receiver.previous(root) as previous_receiver:
-        # This directory is already our private snapshot. Invert the disjoint
-        # native owner here rather than copying the entire application again.
-        native.apply(previous_receiver, restore=True)
-        yield previous_receiver
+    with receiver.previous(root) as stage:
+        native.apply(stage, restore=True)
+        yield stage
 
 
 def prior_owner():
@@ -166,13 +193,20 @@ def check_priors(root):
 
 def restore_private(root):
     """Explicit in-place inverse for a caller-owned historical negative fixture."""
+    # Check the entire new chain in a private copy before the supplied fixture
+    # can change. A later malformed inner owner cannot leave an outer inverse.
+    with previous(root):
+        pass
+    uinput = owner(OWNERS[2])
+    uinput.apply(root, restore=True, check=True)
+    uinput.apply(root, restore=True)
     receiver, native, _ = checked_owners(root)
     receiver.apply(root, restore=True, check=True)
     native.apply(root, restore=True, check=True)
     receiver.apply(root, restore=True)
     native.apply(root, restore=True)
-    if receiver.is_current(root) or native.is_current(root):
-        raise RuntimeError('Receiver private fixture inverse did not retire both layers')
+    if receiver.is_current(root) or native.is_current(root) or uinput.is_current(root):
+        raise RuntimeError('Receiver private fixture inverse did not retire every terminal layer')
 
 
 def owned_targets():
