@@ -1,0 +1,102 @@
+name: custody-fixture-lock-resolution
+
+on:
+  push:
+    branches: [diagnostic/custody-lock-resolution-20261017-r1]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    runs-on: windows-2022
+    timeout-minutes: 12
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: '1.75.0'
+      - name: Resolve only the copied fixture graph and prove locked metadata
+        shell: bash
+        run: |
+          python - <<'PY'
+          import base64, hashlib, importlib.util, json, os, pathlib, subprocess, sys, tomllib
+          if not (sys.platform == 'win32' and os.environ.get('GITHUB_ACTIONS') == 'true'
+                  and os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted'
+                  and os.environ.get('RUNNER_OS') == 'Windows'):
+              raise RuntimeError('isolated hosted Windows diagnostic only')
+          root = pathlib.Path.cwd()
+          here = root / 'scripts/fixtures/receiver-custodian-native'
+          inputs = {name: (here / name).read_bytes() for name in ('Cargo.toml', 'Cargo.lock', 'LOCK-PROVENANCE.json')}
+          spec = importlib.util.spec_from_file_location('custody_fixture_prepare', here / 'prepare.py')
+          fixture = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(fixture)
+          output = pathlib.Path(os.environ['RUNNER_TEMP']) / 'mixel-custody-lock-resolution'
+          fixture.prepare(output)
+          env = os.environ.copy()
+          env['CARGO_HOME'] = str(output / 'cargo-home')
+          env['CARGO_TARGET_DIR'] = str(output / 'target')
+          commands = []
+          def command(label, argv):
+              result = subprocess.run(argv, cwd=output, env=env, capture_output=True, timeout=300)
+              (output / (label + '.stdout')).write_bytes(result.stdout)
+              (output / (label + '.stderr')).write_bytes(result.stderr)
+              commands.append({'label': label, 'argv': argv, 'exit': result.returncode})
+              if result.returncode:
+                  print(result.stderr.decode('utf-8', 'replace')[-24000:], flush=True)
+                  raise RuntimeError(label + ' failed; full raw diagnostics retained')
+              return result.stdout
+          version = command('cargo-version', ['cargo', '+1.75.0', '--version']).decode()
+          if not version.startswith('cargo 1.75.0 '):
+              raise RuntimeError('exact Cargo 1.75.0 required')
+          # This diagnostic resolves metadata only. It never compiles or runs a
+          # build script, fixture actor, native API or application. All actual
+          # fixture compilation continues to require its checked-in --locked.
+          metadata = ['cargo', '+1.75.0', 'metadata', '--format-version=1']
+          command('resolve-copied-lock', metadata)
+          candidate = (output / 'Cargo.lock').read_bytes()
+          old = tomllib.loads(inputs['Cargo.lock'].decode('utf-8'))
+          new = tomllib.loads(candidate.decode('utf-8'))
+          def identity(package):
+              return (package['name'], package['version'], package.get('source'), package.get('checksum'))
+          before = {identity(package) for package in old['package']}
+          after = {identity(package) for package in new['package']}
+          if len(before) != len(old['package']) or len(after) != len(new['package']):
+              raise RuntimeError('duplicate locked package identity')
+          unexpected = sorted(after - before, key=str)
+          report = {
+              'source': os.environ['GITHUB_SHA'], 'cargo': version.strip(),
+              'originalLockSHA256': hashlib.sha256(inputs['Cargo.lock']).hexdigest(),
+              'manifestSHA256': hashlib.sha256(inputs['Cargo.toml']).hexdigest(),
+              'candidateBytes': len(candidate), 'candidateSHA256': hashlib.sha256(candidate).hexdigest(),
+              'oldPackages': len(before), 'candidatePackages': len(after),
+              'unexpectedPackages': unexpected, 'removedPackages': sorted(before - after, key=str),
+              'compilationRequested': False, 'nativeExecutionRequested': False, 'applicationQualified': False,
+          }
+          if len(candidate) > 40000:
+              raise RuntimeError('bounded candidate lock output required')
+          # Print the exact candidate even on a strict package refusal so its
+          # source can be reviewed from one original log; refusal remains fatal.
+          print('MIXEL_CUSTODY_LOCK_REPORT ' + json.dumps(report, sort_keys=True), flush=True)
+          print('MIXEL_CUSTODY_LOCK_BASE64_BEGIN', flush=True)
+          encoded = base64.b64encode(candidate).decode('ascii')
+          for offset in range(0, len(encoded), 76):
+              print(encoded[offset:offset + 76], flush=True)
+          print('MIXEL_CUSTODY_LOCK_BASE64_END', flush=True)
+          if unexpected:
+              raise RuntimeError('candidate package/version/source/checksum absent from held graph; no adoption')
+          command('verify-candidate-locked', metadata + ['--locked'])
+          if (output / 'Cargo.lock').read_bytes() != candidate:
+              raise RuntimeError('locked metadata changed the candidate')
+          if any((here / name).read_bytes() != raw for name, raw in inputs.items()):
+              raise RuntimeError('supplied fixture inputs changed')
+          print('MIXEL_CUSTODY_LOCK_VERIFIED ' + json.dumps({'commands': commands, 'candidateSHA256': report['candidateSHA256'], 'sourceInputsUnchanged': True, 'compilationRequested': False, 'nativeExecutionRequested': False}, sort_keys=True), flush=True)
+          PY
