@@ -171,7 +171,7 @@ fn prepare_enigo(en: &mut Enigo, key: Key) -> Option<Prepared> {
             Key::Layout(character) if x11 => x11::character(character)?,
             _ => { let (code, shift) = super::super::uinput::service::map_key(&key).ok()?; (code.code() as u32 + 8, u8::from(shift)) },
         };
-        if code < 8 || code > u16::MAX as u32 { return None; }
+        if code < 8 || code > u16::MAX as u32 || (x11 && code > 255) { return None; }
         let route = if x11 { Route::Raw(RawKey::LinuxXorgKeycode(code as _)) } else { Route::Enigo(Key::Raw(code as _)) };
         return Some(Prepared { id: Physical(code), route, modifiers });
     }
@@ -186,6 +186,8 @@ fn prepare_raw(raw: RawKey) -> Option<Prepared> {
     let code = match raw { RawKey::MacVirtualKeycode(code) => code as u32, _ => return None };
     #[cfg(target_os="linux")]
     let code = match raw { RawKey::LinuxXorgKeycode(code) => code as u32, _ => return None };
+    #[cfg(target_os="linux")]
+    if crate::platform::linux::is_x11() && !(8..=255).contains(&code) { return None; }
     if code > u16::MAX as u32 { return None; }
     #[cfg(target_os="windows")]
     if code == 0 { return None; }

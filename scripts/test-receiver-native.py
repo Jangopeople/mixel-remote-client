@@ -355,6 +355,30 @@ class NativeSourceControls(unittest.TestCase):
             'simulate_(&EventType::KeyPress(RdevKey::RawKey(rdev::RawKey::MacVirtualKeycode(rdev::kVK_CapsLock))));',
             'simulate_(&EventType::KeyRelease(RdevKey::RawKey(rdev::RawKey::MacVirtualKeycode(rdev::kVK_CapsLock))));'])
 
+    def test_x11_raw_keycodes_refuse_outside_protocol_byte_range_before_route(self):
+        import re
+        _, modules = P.plan()
+        native = modules['src/server/mixel_receiver_native.rs'].decode()
+        raw = native[native.index('fn prepare_raw('):native.index('fn raw_key(')]
+        gate = re.search(r'if crate::platform::linux::is_x11\(\) && !\((\d+)\.\.=(\d+)\)\.contains\(&code\) \{ return None; \}', raw)
+        self.assertIsNotNone(gate)
+        minimum, maximum = map(int, gate.groups())
+        self.assertEqual((minimum, maximum), (8, 255))
+        self.assertLess(gate.start(), raw.index('let route = if crate::platform::linux::is_x11()'))
+        # Interpret the exact production gate's extracted bounds. Wayland
+        # retains its separate wider u16 range; X11 rejects before dispatch.
+        for code in (0, 1, 7, 256, 767, 65535, 65536):
+            self.assertFalse(minimum <= code <= maximum, code)
+        for code in (8, 9, 38, 194, 254, 255):
+            self.assertTrue(minimum <= code <= maximum, code)
+        broken = raw[:gate.start()] + raw[gate.end():]
+        self.assertIsNone(re.search(r'is_x11\(\) && !\(\d+\.\.=\d+\)\.contains\(&code\)', broken))
+        enigo = native[native.index('fn prepare_enigo('):native.index('fn prepare_raw(')]
+        linux = enigo[enigo.index('#[cfg(target_os="linux")]'):]
+        self.assertIn('if code < 8 || code > u16::MAX as u32 || (x11 && code > 255) { return None; }', linux)
+        self.assertLess(linux.index('(x11 && code > 255)'), linux.index('let route = if x11'))
+        self.assertIn('if code > u16::MAX as u32 { return None; }', raw)
+
     def test_numeric_boundaries_and_cancellation_chunks(self):
         _, modules = P.plan()
         native = modules['src/server/mixel_receiver_native.rs'].decode()

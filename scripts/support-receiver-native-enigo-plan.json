@@ -19,7 +19,7 @@
     {
       "name": "libs/enigo/src/win/win_impl.rs",
       "beforeSha256": "c4e44fc28a698810cb510e1be884ee71b5ed2111736244ee767f3416e47f548e",
-      "afterSha256": "3fc1896380c4e6cad9d5d01ced372d7e0104dfb99e7f8d22cb066546b2e09147",
+      "afterSha256": "86ba9189cc5d0df51102f8b86cdc61dc77996fdbe28895f41268e9519301fd13",
       "changes": [
         {
           "before": "    fn key_down(&mut self, key: Key) -> crate::ResultType {\n        match &key {\n            Key::Layout(c) => {\n                // to-do: dup code\n                // https://github.com/rustdesk/rustdesk/blob/1bc0dd791ed8344997024dc46626bd2ca7df73d2/src/server/input_service.rs#L1348\n                let code = self.get_layoutdependent_keycode(*c);\n                if code as u16 != 0xFFFF {\n                    let vk = code & 0x00FF;\n                    let flag = code >> 8;\n                    let modifiers = [Key::Shift, Key::Control, Key::Alt];\n                    let mod_len = modifiers.len();\n                    for pos in 0..mod_len {\n                        if flag & (0x0001 << pos) != 0 {\n                            self.key_down(modifiers[pos])?;\n                        }\n                    }\n\n                    let res = keybd_event(0, vk, 0);\n                    let err = if res == 0 { get_error() } else { \"\".to_owned() };\n\n                    for pos in 0..mod_len {\n                        let rpos = mod_len - 1 - pos;\n                        if flag & (0x0001 << rpos) != 0 {\n                            self.key_up(modifiers[rpos]);\n                        }\n                    }\n\n                    if !err.is_empty() {\n                        return Err(err.into());\n                    }\n                } else {\n                    return Err(format!(\"Failed to get keycode of {}\", c).into());\n                }\n            }\n            _ => {\n                let code = self.key_to_keycode(key);\n                if code == 0 || code == 65535 {\n                    return Err(\"\".into());\n                }\n                let res = keybd_event(0, code, 0);\n                if res == 0 {\n                    let err = get_error();\n                    if !err.is_empty() {\n                        return Err(err.into());\n                    }\n                }\n            }\n        }\n        Ok(())\n    }\n",
@@ -44,6 +44,10 @@
         {
           "before": "impl Enigo {\n",
           "after": "impl Enigo {\n    pub fn receiver_unicode_event(&mut self, unit: u16, down: bool) -> crate::ResultType {\n        let flags = KEYEVENTF_UNICODE | if down { 0 } else { KEYEVENTF_KEYUP };\n        let accepted = keybd_event(flags, 0, unit);\n        if accepted != 1 { return Err(format!(\"SendInput accepted {} of 1 Unicode event\", accepted).into()); }\n        Ok(())\n    }\n"
+        },
+        {
+          "before": "            (buff_size + 1) as u32,",
+          "after": "            buff.len() as u32,"
         }
       ]
     },

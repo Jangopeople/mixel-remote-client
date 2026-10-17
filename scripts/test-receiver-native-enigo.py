@@ -108,6 +108,26 @@ class NativeAcceptanceTests(unittest.TestCase):
         self.assertIn('for modifier in applied.into_iter().rev()', down)
         self.assertNotIn('if !err.is_empty()', down)
 
+    def test_windows_error_buffer_size_matches_initialized_storage(self):
+        original = fixture_bytes('original', 'libs/enigo/src/win/win_impl.rs').decode()
+        current = fixture_bytes('candidate', 'libs/enigo/src/win/win_impl.rs').decode()
+        old = original[original.index('fn get_error()'):original.index('impl MouseControllable')]
+        fixed = current[current.index('fn get_error()'):current.index('impl MouseControllable')]
+        self.assertIn('buff.resize(buff_size, 0);', old)
+        self.assertIn('(buff_size + 1) as u32,', old)
+        self.assertIn('buff.resize(buff_size, 0);', fixed)
+        call = re.search(r'FormatMessageW\((.*?)\n        \);', fixed, re.S)[1]
+        self.assertIn('buff.as_mut_ptr(),\n            buff.len() as u32,', call)
+        self.assertNotIn('buff_size + 1', fixed)
+        # The old call promised one extra writable u16 beyond initialized Vec
+        # storage. The corrected count is the exact length passed by the Vec.
+        size = int(re.search(r'let buff_size = (\d+);', fixed)[1])
+        self.assertEqual(size, 256)
+        self.assertGreater(size + 1, size)
+        self.assertEqual(len([0] * size), size)
+        row = next(row for row in P.plan() if row['name'] == 'libs/enigo/src/win/win_impl.rs')
+        self.assertEqual(P.transform(original.encode(), row), current.encode())
+
     def test_macos_requires_source_and_event_before_four_dispatches(self):
         rows = [row for row in P.plan() if row['name'].endswith('macos/macos_impl.rs')]
         self.assertEqual(len(rows), 1)

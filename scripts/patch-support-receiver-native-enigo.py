@@ -9,7 +9,7 @@ import stat
 import tempfile
 
 PLAN = Path(__file__).with_name('support-receiver-native-enigo-plan.json')
-PLAN_SHA256 = '50231377c56e69ab25aa9756ef4068fffbdd66560d77e4c6e9908b8e9700e3b5'
+PLAN_SHA256 = '0a73a060d24aaca98897feab93e5dcb75fd3d78005022b5eef41a63585630e82'
 
 
 def digest(data):

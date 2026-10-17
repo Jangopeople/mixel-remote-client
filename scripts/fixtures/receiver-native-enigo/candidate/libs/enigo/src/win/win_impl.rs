@@ -95,7 +95,7 @@ fn get_error() -> String {
             errno,
             0,
             buff.as_mut_ptr(),
-            (buff_size + 1) as u32,
+            buff.len() as u32,
             std::ptr::null_mut(),
         );
         if chars_copied == 0 {
