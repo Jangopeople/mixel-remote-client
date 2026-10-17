@@ -139,7 +139,7 @@ fn stored()->&'static Mutex<Option<Arc<Broker>>>{BROKER.get_or_init(||Mutex::new
 fn broker()->Option<Arc<Broker>> {
     if CHILD.get().is_some(){return None;}
     let mut slot=stored().lock().ok()?;
-    if let Some(old)=slot.as_ref(){match old.state.load(Ordering::SeqCst){0|1=>return Some(old.clone()),4=>{},_=>return None;}}
+    if let Some(old)=slot.as_ref(){match old.state.load(Ordering::SeqCst){0|1=>return Some(old.clone()),4=>{},_=>return None,}}
     let(tx,rx)=tokio::sync::mpsc::channel(MAX_PENDING);let(control,control_rx)=tokio::sync::mpsc::channel(MAX_PENDING);
     let value=Arc::new(Broker{state:AtomicUsize::new(0),epoch:Mutex::new(None),sender:tx,control});let worker=value.clone();
     std::thread::Builder::new().name("mixel-input-custodian-broker".to_owned()).spawn(move||{

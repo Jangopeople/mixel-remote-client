@@ -6,7 +6,7 @@
     "patch-support-receiver-uinput.py": "8df8f5843af8864827465c68f5b639a5199a1bffec2dbc2539b7e3d69303a8ce",
     "patch-support-receiver-uinput-deps.py": "50b162b877bd7ec92402629ab8fcb9912fd193f1b8a788763e54926749899a6f",
     "patch-support-receiver-sas.py": "77c80f0817c717703dbec0d2b29a118894cf56a6b49ff4b2319415719f4c35da",
-    "patch-support-receiver-custodian.py": "0fdc155ee0ca7fc3c6637bfaf7df92fa7ce98b797cba6d84e2a262ea687f0936"
+    "patch-support-receiver-custodian.py": "0b33ff58a6d603b2f1e57d3057af8ea2d40e02cb9f4e2497df278f98203174a1"
   },
   "files": {
     "scripts/apply-branding.sh": {

@@ -109,7 +109,12 @@ def prepare(output,source_root=None):
     original=rows['src/server/mixel_receiver_input.rs']['beforeSource'].encode()+regular(HERE/'original-tests.rs')
     files['original/mixel_receiver_input.rs']=original
     files['original/mixel_receiver_input_windows.rs']=rows['src/server/mixel_receiver_input_windows.rs']['beforeSource'].encode()
-    files['native-main-original.rs']=files['native-main.rs'].replace(b'#[path="../mixel_receiver_input.rs"]',b'#[path="../original/mixel_receiver_input.rs"]').replace(b'fn main(){server::mixel_receiver_input::custody_fixture_main();}',b'fn main(){server::mixel_receiver_input::original_negative_main();}')
+    original_main=files['native-main.rs'].replace(b'#[path="../mixel_receiver_input.rs"]',b'#[path="../original/mixel_receiver_input.rs"]').replace(b'fn main(){server::mixel_receiver_input::custody_fixture_main();}',b'fn main(){server::mixel_receiver_input::original_negative_main();}')
+    # Preserve the exact frozen before-source, including its known unused_mut.
+    # Keep that warning visible in the negative target; the corrected target's
+    # deny remains unchanged and no production prefix is edited for this lint.
+    require(original_main.count(b'#![deny(unused_mut)]')==1,'closed negative fixture lint boundary')
+    files['native-main-original.rs']=original_main.replace(b'#![deny(unused_mut)]',b'// Frozen before-source retains its known unused_mut warning.\n#![warn(unused_mut)]')
     files['server/mixel_receiver_receipts.rs']=regular(REPO/'scripts/support-receiver-receipts.rs')
     files['protos/message.proto']=regular(REPO/'scripts/fixtures/receiver-input-native/protos/message.proto')
     (output/'server/input_service').mkdir(parents=True)

@@ -1,7 +1,7 @@
 // Appended only after the exact final production Windows leaf.
 #[cfg(test)] mod custody_qa {
 use super::*;
-use hbb_common::futures_util::StreamExt;
+use hbb_common::{futures_util::StreamExt, timeout};
 use std::{os::windows::io::{AsRawHandle,FromRawHandle},time::Instant};
 #[link(name="kernel32")]extern "system"{
     fn CreateNamedPipeW(name:*const u16,access:u32,mode:u32,instances:u32,out_size:u32,in_size:u32,timeout:u32,security:Handle)->Handle;

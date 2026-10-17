@@ -333,6 +333,18 @@ class WholePrefixFixtureControls(unittest.TestCase):
             path=source/'src/server/mixel_receiver_input_windows.rs';path.write_bytes(path.read_bytes()+b'\n')
             with self.assertRaisesRegex(ValueError,'actual final generated prefix drift'):
                 self.driver.prepare(root/'prepared',source)
+    def test_frozen_negative_lint_does_not_weaken_corrected_target_or_rewrite_before_source(self):
+        with tempfile.TemporaryDirectory()as t:
+            output=Path(t).resolve()/'prepared';self.driver.prepare(output)
+            final=(output/'native-main.rs').read_bytes();original=(output/'native-main-original.rs').read_bytes()
+            self.assertEqual(final.count(b'#![deny(unused_mut)]'),1)
+            self.assertNotIn(b'#![warn(unused_mut)]',final)
+            self.assertEqual(original.count(b'#![warn(unused_mut)]'),1)
+            self.assertNotIn(b'#![deny(unused_mut)]',original)
+            for name in ('mixel_receiver_input.rs','mixel_receiver_input_windows.rs'):
+                row=next(r for r in PLAN['files']if r['name']=='src/server/'+name)
+                self.assertTrue((output/'original'/name).read_bytes().startswith(row['beforeSource'].encode()))
+            self.assertIn('let mut state=attempt().lock()',next(r for r in PLAN['files']if r['name']=='src/server/mixel_receiver_input_windows.rs')['beforeSource'])
     def test_actual_crlf_pipeline_and_source_preserve_compiled_physical_prefixes(self):
         import unittest.mock
         with tempfile.TemporaryDirectory()as t:
