@@ -121,6 +121,12 @@ def source_contracts(module):
     assert 'peer_exit:known.then_some(exit)' in qa and 'GetExitCodeProcess(peer.raw()' in qa
     assert 'native_qa_overlapped_transport' in qa and 'timed-out request must complete cancellation' in qa
     assert 'closed peer must not be retried until timeout' in qa
+    assert 'qa_reply(&mut pipe,1)' in qa and 'qa_reply(&mut pipe,2)' in qa
+    assert 'for _ in 0..=24' in qa and 'if byte[0]==0xf0' in qa, 'Different-SID diagnostics must be bounded and failures fatal'
+    assert 'std::panic::catch_unwind(std::panic::AssertUnwindSafe(||{' in qa
+    assert 'failure.extend_from_slice(&native.to_le_bytes())' in qa and 'std::process::exit(1)' in qa
+    assert 'qa_dacl(&executable),qa_dacl(&marker)' in qa, 'Non-image ACL oracle must exactly match executable ACL'
+    assert 'same executable DACL must deny marker write through actual kernel access check' in qa
     for forbidden in ('DesktopAccess', 'SetUserObjectSecurity', 'SetPrivilege', 'SeDebugPrivilege', ';;;WD)', 'PasswordNeverExpires -Password'):
         assert forbidden not in qa, forbidden
     print('PASS: receiver source contracts, pinned templates, backend/lease boundaries and normal CI gates', flush=True)

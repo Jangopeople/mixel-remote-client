@@ -180,11 +180,11 @@ fn native_qa_overlapped_transport(){
     let client=std::thread::spawn(move||{
         let deadline=std::time::Instant::now()+QA_PIPE_LIMIT;
         let raw=loop{let raw=unsafe{CreateFileW(wide(&path).as_ptr(),0xc0000000,0,ptr::null_mut(),3,QA_OVERLAPPED,ptr::null_mut())};if !raw.is_null()&&raw as isize != -1{break raw;}assert!(std::time::Instant::now()<deadline);std::thread::sleep(Duration::from_millis(1));};
-        let mut pipe=QaPipe::from_owned(Owned::from(raw).unwrap(),None);let mut packet=[0;32];qa_pipe_wait(&mut pipe,&mut packet);assert_eq!(packet,[9;32]);ready.send(()).unwrap();go.recv_timeout(QA_PIPE_LIMIT).unwrap();qa_pipe_send(&mut pipe,&[7]);
+        let mut pipe=QaPipe::from_owned(Owned::from(raw).unwrap(),None);let mut packet=[0;32];qa_pipe_wait(&mut pipe,&mut packet);assert_eq!(packet,[9;32]);ready.send(()).unwrap();go.recv_timeout(QA_PIPE_LIMIT).unwrap();qa_pipe_send(&mut pipe,&[7]);let mut phase=0;qa_phase(&mut pipe,&mut phase,1);qa_pipe_send(&mut pipe,&[1]);
     });
     let mut pipe=QaPipe::from_owned(server,None);qa_pipe_connect(&pipe);qa_pipe_send(&mut pipe,&[9;32]);wait.recv_timeout(QA_PIPE_LIMIT).unwrap();
     let failure=qa_pipe_io(&pipe,QaOperation::Read,vec![0;1],Duration::from_millis(30)).unwrap_err();assert!(failure.timeout);assert_eq!(failure.operation,"read");assert!(failure.native.is_none()&&failure.peer_exit.is_none());assert!(!QA_CLEANUP_FAILED.load(Ordering::SeqCst),"timed-out request must complete cancellation before its buffer is freed");
-    send.send(()).unwrap();let mut byte=[0];qa_pipe_wait(&mut pipe,&mut byte);assert_eq!(byte,[7]);client.join().unwrap();
+    send.send(()).unwrap();let mut byte=[0];qa_pipe_wait(&mut pipe,&mut byte);assert_eq!(byte,[7]);qa_reply(&mut pipe,1);client.join().unwrap();
     let started=std::time::Instant::now();let result=qa_pipe_io(&pipe,QaOperation::Read,vec![0;1],QA_PIPE_LIMIT);assert!(matches!(&result,Ok((_,0)))||matches!(&result,Err(QaIoError{native:Some(109|233),..})),"closed peer must be an explicit terminal result");assert!(started.elapsed()<Duration::from_secs(2),"closed peer must not be retried until timeout");
 }
 fn qa_send_text(file:&mut QaPipe,text:&str){assert!(text.len()<=256);qa_pipe_send(file,&(text.len()as u32).to_le_bytes());qa_pipe_send(file,text.as_bytes());}
@@ -195,23 +195,53 @@ fn qa_parent_body(){
     assert!(hosted_receiver_qa());let mut caller_token=ptr::null_mut();assert_ne!(unsafe{OpenProcessToken(GetCurrentProcess(),8,&mut caller_token)},0);let caller_token=Owned::from(caller_token).unwrap();let elevation=qa_token_buffer(caller_token.raw(),20);assert_eq!(unsafe{*(elevation.as_ptr()as *const u32)},1,"isolated hosted caller must actually be elevated");let root=qa_root();let executable=std::env::current_exe().unwrap();let mut account=QaAccount::create();let original_root=qa_dacl(&root);let original_file=qa_dacl(&executable);let marker=root.join("owner.marker");let original_marker=qa_dacl(&marker);
     struct AclRestore{root:std::path::PathBuf,file:std::path::PathBuf,marker:std::path::PathBuf,before_root:Vec<u8>,before_file:Vec<u8>,before_marker:Vec<u8>}
     impl Drop for AclRestore{fn drop(&mut self){let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||{qa_set_acl(&self.file,None,false);qa_set_acl(&self.marker,None,false);qa_set_acl(&self.root,None,true);assert_eq!(qa_dacl(&self.file),self.before_file);assert_eq!(qa_dacl(&self.marker),self.before_marker);assert_eq!(qa_dacl(&self.root),self.before_root);}));if result.is_err(){QA_CLEANUP_FAILED.store(true,Ordering::SeqCst);eprintln!("FAIL: exact private CI directory DACL restoration");}}}
-    let _restore=AclRestore{root:root.clone(),file:executable.clone(),marker:marker.clone(),before_root:original_root,before_file:original_file,before_marker:original_marker};qa_set_acl(&root,Some(&account.sid),true);qa_set_acl(&executable,Some(&account.sid),false);qa_set_acl(&marker,Some(&account.sid),false);
+    let _restore=AclRestore{root:root.clone(),file:executable.clone(),marker:marker.clone(),before_root:original_root,before_file:original_file,before_marker:original_marker};qa_set_acl(&root,Some(&account.sid),true);qa_set_acl(&executable,Some(&account.sid),false);qa_set_acl(&marker,Some(&account.sid),false);assert_eq!(qa_dacl(&executable),qa_dacl(&marker),"ACL oracle must be byte-identical to executable DACL");
     let own_sid=process_sid(unsafe{GetCurrentProcess()}).unwrap();assert_ne!(own_sid,account.sid);let sddl=wide(&format!("D:P(A;;GA;;;{own_sid})(A;;GRGW;;;{})",account.sid));let mut descriptor=ptr::null_mut();assert_ne!(unsafe{ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.as_ptr(),1,&mut descriptor,ptr::null_mut())},0);let descriptor=OwnedDescriptor(descriptor as usize);let attributes=Attributes{length:std::mem::size_of::<Attributes>()as u32,descriptor:descriptor.0 as Handle,inherit:0};
     let raw=unsafe{CreateNamedPipeW(wide(&qa_pipe_path()).as_ptr(),3|QA_OVERLAPPED,0,1,4096,4096,5000,(&attributes as *const Attributes)as Handle)};assert!(!raw.is_null()&&raw as isize != -1);let pipe=Owned::from(raw).unwrap();account.profile_attempted=true;
     assert!(launch_with_logon(&account.name,account.password.as_str(),executable.to_str().unwrap(),"--portable-service").is_some(),"actual valid different-SID suspended logon launch");let process=started().lock().unwrap().as_ref().unwrap().peer.process.clone();let _child=QaChild{process:process.clone()};
     println!("CI cross-SID: valid retained startup created");let mut pipe=QaPipe::from_owned(pipe,Some(process.clone()));qa_pipe_connect(&pipe);
     let peer=pipe_peer(pipe.raw(),false).expect("actual retained different-SID startup identity");assert_eq!(peer.sid,account.sid);assert_eq!(peer.pid,unsafe{GetProcessId(process.raw())});let transferred=publisher_handle(&peer).unwrap().unwrap();assert!(publisher_handle(&peer).is_none());
-    let lease=Lease::create(&uuid::Uuid::new_v4().simple().to_string()).unwrap();assert!(lease.prepare_helper().is_some());println!("CI cross-SID: kernel-bound pipe peer and intended lease audience ready");qa_pipe_send(&mut pipe,&transferred.to_le_bytes());qa_send_text(&mut pipe,&account.sid);qa_send_text(&mut pipe,&lease.token);let mut ready=[0];qa_pipe_wait(&mut pipe,&mut ready);assert_eq!(ready,[1]);assert!(startup_confirmed(&peer,||{}));assert!(!TRANSITION.load(Ordering::SeqCst));
-    assert!(lease.revoke());let mut cleaned=[0];qa_pipe_wait(&mut pipe,&mut cleaned);assert_eq!(cleaned,[2]);assert!(lease.cleaned());qa_pipe_send(&mut pipe,&[3]);assert_eq!(unsafe{WaitForSingleObject(process.raw(),5000)},OBJECT);let mut code=1;assert_ne!(unsafe{GetExitCodeProcess(process.raw(),&mut code)},0);assert_eq!(code,0,"actual different-SID helper component exited successfully");
+    let lease=Lease::create(&uuid::Uuid::new_v4().simple().to_string()).unwrap();assert!(lease.prepare_helper().is_some());println!("CI cross-SID: kernel-bound pipe peer and intended lease audience ready");qa_pipe_send(&mut pipe,&transferred.to_le_bytes());qa_send_text(&mut pipe,&account.sid);qa_send_text(&mut pipe,&lease.token);qa_reply(&mut pipe,1);assert!(startup_confirmed(&peer,||{}));assert!(!TRANSITION.load(Ordering::SeqCst));
+    assert!(lease.revoke());qa_reply(&mut pipe,2);assert!(lease.cleaned());qa_pipe_send(&mut pipe,&[3]);assert_eq!(unsafe{WaitForSingleObject(process.raw(),5000)},OBJECT);let mut code=1;assert_ne!(unsafe{GetExitCodeProcess(process.raw(),&mut code)},0);assert_eq!(code,0,"actual different-SID helper component exited successfully");
     drop(pipe);drop(peer);drop(lease);started().lock().unwrap().take();helper().lock().unwrap().take();attempt().lock().unwrap().candidate.take();account.verify();println!("PASS: actual different-SID standard logon, retained startup/pipe publisher identity, minimum intended kernel rights and revoke acknowledgment");
 }
 pub(crate) fn cross_sid_parent(){assert!(hosted_receiver_qa());let result=std::panic::catch_unwind(qa_parent_body);assert!(!QA_CLEANUP_FAILED.load(Ordering::SeqCst),"owned CI cleanup must complete");if let Err(error)=result{std::panic::resume_unwind(error);}println!("PASS: exact owned CI standard account/profile and private directory DACL cleanup");}
+fn qa_phase(pipe:&mut QaPipe,phase:&mut u8,next:u8){assert!((1..=16).contains(&next));*phase=next;qa_pipe_send(pipe,&[0x80|next]);}
+fn qa_reply(pipe:&mut QaPipe,expected:u8){
+    for _ in 0..=24{
+        let mut byte=[0];qa_pipe_wait(pipe,&mut byte);
+        if byte[0]==expected{return;}
+        if (0x81..=0x90).contains(&byte[0]){println!("CI cross-SID: child verification phase {}",byte[0]&0x1f);continue;}
+        if byte[0]==0xf0{let mut detail=[0;5];qa_pipe_wait(pipe,&mut detail);panic!("different-SID child verification failed at phase {}; native={}",detail[0],u32::from_le_bytes(detail[1..].try_into().unwrap()));}
+        panic!("unexpected different-SID fixture reply tag");
+    }
+    panic!("bounded different-SID diagnostic reply count");
+}
 pub(crate) fn cross_sid_logon_child(){
     let path=qa_pipe_path();let deadline=std::time::Instant::now()+Duration::from_secs(5);let raw=loop{let raw=unsafe{CreateFileW(wide(&path).as_ptr(),0xc0000000,0,ptr::null_mut(),3,QA_OVERLAPPED,ptr::null_mut())};if !raw.is_null()&&raw as isize != -1{break raw;}assert!(std::time::Instant::now()<deadline,"exact different-SID helper pipe");std::thread::sleep(Duration::from_millis(1));};let mut pipe=QaPipe::from_owned(Owned::from(raw).unwrap(),None);
-    let mut transferred=[0;8];qa_pipe_wait(&mut pipe,&mut transferred);let publisher=pipe_publisher(pipe.raw(),Some(u64::from_le_bytes(transferred))).expect("actual transferred publisher process identity");pipe.peer=Some(publisher.process.clone());let expected=qa_read_text(&mut pipe);assert_eq!(process_sid(unsafe{GetCurrentProcess()}).as_deref(),Some(expected.as_str()));let mut token=ptr::null_mut();assert_ne!(unsafe{OpenProcessToken(GetCurrentProcess(),8,&mut token)},0);let token=Owned::from(token).unwrap();qa_standard_token(token.raw());
-    let file=std::env::current_exe().unwrap();let denied=unsafe{CreateFileW(wide(file.to_str().unwrap()).as_ptr(),0x40000000,7,ptr::null_mut(),3,0,ptr::null_mut())};assert!(denied as isize == -1||denied.is_null(),"intended account must have Read/Execute only on fixture executable");assert_eq!(unsafe{GetLastError()},5);
-    let nonce=qa_read_text(&mut pipe);let lease=Lease::open(&nonce,&publisher).expect("intended different-SID consumer opens exact minimum lease handles");assert!(lease.active());assert_eq!(unsafe{SetEvent(lease.event.raw())},0,"consumer cannot publish or reset REVOKED");assert_eq!(unsafe{GetLastError()},5);{let _effect=lease.effect().expect("consumer SYNCHRONIZE mutex effect ownership");}
-    qa_pipe_send(&mut pipe,&[1]);let deadline=std::time::Instant::now()+Duration::from_secs(5);while lease.active(){assert!(std::time::Instant::now()<deadline);std::thread::sleep(Duration::from_millis(1));}assert!(lease.effect().is_none());assert!(lease.mark_cleaned(),"only intended helper may acknowledge CLEANED");qa_pipe_send(&mut pipe,&[2]);let mut exit=[0];qa_pipe_wait(&mut pipe,&mut exit);assert_eq!(exit,[3]);
+    let(mut phase,mut native)=(0u8,0u32);
+    let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||{
+        qa_phase(&mut pipe,&mut phase,1);let mut transferred=[0;8];qa_pipe_wait(&mut pipe,&mut transferred);
+        qa_phase(&mut pipe,&mut phase,2);let publisher=pipe_publisher(pipe.raw(),Some(u64::from_le_bytes(transferred)));native=unsafe{GetLastError()};let publisher=publisher.expect("actual transferred publisher process identity");native=0;pipe.peer=Some(publisher.process.clone());
+        qa_phase(&mut pipe,&mut phase,3);let expected=qa_read_text(&mut pipe);assert_eq!(process_sid(unsafe{GetCurrentProcess()}).as_deref(),Some(expected.as_str()));
+        qa_phase(&mut pipe,&mut phase,4);let mut token=ptr::null_mut();let opened=unsafe{OpenProcessToken(GetCurrentProcess(),8,&mut token)};native=unsafe{GetLastError()};assert_ne!(opened,0);native=0;let token=Owned::from(token).unwrap();qa_standard_token(token.raw());
+        // The marker has the byte-identical executable DACL, but is not a mapped
+        // image. It therefore proves ACL denial rather than image sharing denial.
+        qa_phase(&mut pipe,&mut phase,5);let marker=qa_root().join("owner.marker");let denied=unsafe{CreateFileW(wide(marker.to_str().unwrap()).as_ptr(),0x40000000,7,ptr::null_mut(),3,0,ptr::null_mut())};native=unsafe{GetLastError()};if !denied.is_null()&&denied as isize != -1{drop(Owned::from(denied));native=0;panic!("intended account acquired write access to exact RX marker");}assert_eq!(native,5,"same executable DACL must deny marker write through actual kernel access check");native=0;
+        qa_phase(&mut pipe,&mut phase,6);let nonce=qa_read_text(&mut pipe);
+        qa_phase(&mut pipe,&mut phase,7);let lease=Lease::open(&nonce,&publisher);native=unsafe{GetLastError()};let lease=lease.expect("intended different-SID consumer opens exact minimum lease handles");native=0;assert!(lease.active());
+        qa_phase(&mut pipe,&mut phase,8);let modified=unsafe{SetEvent(lease.event.raw())};native=unsafe{GetLastError()};assert_eq!(modified,0,"consumer cannot publish or reset REVOKED");assert_eq!(native,5);native=0;
+        qa_phase(&mut pipe,&mut phase,9);{let _effect=lease.effect().expect("consumer SYNCHRONIZE mutex effect ownership");}
+        qa_phase(&mut pipe,&mut phase,10);qa_pipe_send(&mut pipe,&[1]);let deadline=std::time::Instant::now()+Duration::from_secs(5);while lease.active(){assert!(std::time::Instant::now()<deadline);std::thread::sleep(Duration::from_millis(1));}
+        qa_phase(&mut pipe,&mut phase,11);assert!(lease.effect().is_none());assert!(lease.mark_cleaned(),"only intended helper may acknowledge CLEANED");qa_pipe_send(&mut pipe,&[2]);let mut exit=[0];qa_pipe_wait(&mut pipe,&mut exit);assert_eq!(exit,[3]);
+    }));
+    if result.is_err(){
+        // Only fixed phase/native numbers cross the authenticated fixture pipe;
+        // never forward panic text, SID, handle values, nonce or credentials.
+        let mut failure=vec![0xf0,phase];failure.extend_from_slice(&native.to_le_bytes());qa_pipe_send(&mut pipe,&failure);
+        let _=qa_pipe_io(&pipe,QaOperation::Read,vec![0;1],Duration::from_secs(1));
+        std::process::exit(1);
+    }
 }
 fn native_valid_different_sid_ci_startup(){
     if !hosted_receiver_qa(){println!("SKIP: account-mutating different-SID fixture requires isolated hosted Windows CI");return;}
