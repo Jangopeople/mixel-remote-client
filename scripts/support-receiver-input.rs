@@ -267,10 +267,21 @@ fn local_runner(generation: Arc<Generation>) -> Deferred {
 #[cfg(target_os = "macos")]
 fn on_main_thread() -> bool { extern "C" { fn pthread_main_np() -> i32; } unsafe { pthread_main_np() != 0 } }
 fn schedule_cleanup(generation: Arc<Generation>) {
-    if generation.cleanup_done.load(Ordering::SeqCst) || generation.cleanup_requested.swap(true, Ordering::SeqCst) { return; }
+    if generation.cleanup_done.load(Ordering::SeqCst) { return; }
+    #[cfg(target_os = "macos")] if on_main_thread() {
+        // A prior observer may already have queued this cleanup on main. Main
+        // must not wait for its own queue; execute under the same serial now.
+        if let Ok(_serial) = generation.serial.try_lock() {
+            generation.cleanup_done.store(cleanup(&generation.token),Ordering::SeqCst);
+            generation.cleanup_requested.store(false,Ordering::SeqCst);
+        }
+        return;
+    }
+    if generation.cleanup_requested.swap(true, Ordering::SeqCst) { return; }
     let cleanup_generation = generation.clone();
     let run = move || {
-        let retired = if let Ok(_serial) = cleanup_generation.serial.try_lock() { cleanup(&cleanup_generation.token) } else { false };
+        let retired = if cleanup_generation.cleanup_done.load(Ordering::SeqCst) { true }
+            else if let Ok(_serial) = cleanup_generation.serial.try_lock() { cleanup(&cleanup_generation.token) } else { false };
         cleanup_generation.cleanup_done.store(retired, Ordering::SeqCst);
         cleanup_generation.cleanup_requested.store(false, Ordering::SeqCst);
         retired

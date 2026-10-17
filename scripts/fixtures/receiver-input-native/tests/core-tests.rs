@@ -110,6 +110,7 @@ pub(crate) fn run_component_tests() {
         ("cleanup acknowledgment and nonblocking deferred revoke",cleanup_must_complete_before_ack_and_deferred_is_fenced),
     ];
     for(name,case)in cases {case();println!("PASS: {name}");}
+    #[cfg(target_os="macos")] { main_thread_can_complete_observer_queued_cleanup();println!("PASS: main-thread close completes already-queued observer cleanup"); }
     #[cfg(windows)] { startup_barrier_retires_input_and_both_blocks();println!("PASS: startup admission barrier retires keys and both BlockInput owners"); helper_transition_with_held_down_fails_closed(); println!("PASS: helper transition held modifier fails closed"); windows::run_native_tests(); }
 }
 #[cfg(windows)] pub(crate) fn windows_child(){windows::publisher_child();}
@@ -121,4 +122,13 @@ pub(crate) fn run_component_tests() {
     assert!(quiesce_helper_transition());assert!(receiver.failed());assert!(!receiver.inner.alive.load(Ordering::SeqCst));assert!(!receiver.block(true,true));assert!(!receiver.set_permission(true));
     let fresh=Receiver::new(56);assert!(!fresh.authorize(true));assert!(receiver.close());assert!(fresh.close());
     assert!(!blocks().unwrap().state.lock().unwrap().actual);TRANSITION.store(false,Ordering::SeqCst);
+}
+
+#[cfg(target_os="macos")] fn main_thread_can_complete_observer_queued_cleanup() {
+    clear_observed();let receiver=Receiver::new(61);assert!(receiver.authorize(true));run_actual(captured(&receiver,key_action(true)));
+    let generation=receiver.inner.state.lock().unwrap().generation.clone().unwrap();generation.active.store(false,Ordering::SeqCst);
+    let observer=generation.clone();std::thread::spawn(move||schedule_cleanup(observer)).join().unwrap();
+    assert!(generation.cleanup_requested.load(Ordering::SeqCst));assert!(!generation.cleanup_done.load(Ordering::SeqCst));
+    assert!(receiver.close());assert!(generation.cleanup_done.load(Ordering::SeqCst));
+    pump_until(||receiver.inner.pending.load(Ordering::SeqCst)==0);
 }
