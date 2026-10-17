@@ -147,7 +147,7 @@ def run(output,bindings):
     require(sys.platform=='win32','--run requires actual Windows')
     require(os.environ.get('GITHUB_ACTIONS')=='true' and os.environ.get('RUNNER_ENVIRONMENT')=='github-hosted' and os.environ.get('RUNNER_OS')=='Windows','isolated hosted Windows only')
     require(bindings['actualGeneratedSourceProvided'],'--run requires the actual final generated source root')
-    env=os.environ.copy();env['MIXEL_CUSTODY_QA_NAMESPACE']=uuid.uuid4().hex;env['MIXEL_CUSTODY_QA_OUTPUT']=str(output);env['MIXEL_CUSTODY_QA_CASE']='component-decisions'
+    env=os.environ.copy();env['CARGO_TARGET_DIR']=str(output/'target');env['MIXEL_CUSTODY_QA_NAMESPACE']=uuid.uuid4().hex;env['MIXEL_CUSTODY_QA_OUTPUT']=str(output);env['MIXEL_CUSTODY_QA_CASE']='component-decisions'
     raw=command(output,'rust-version',['rustc','+1.75.0','--version'],env,15);require(raw.decode().startswith('rustc 1.75.0 '),'exact held Rust compiler')
     raw=command(output,'compile',['cargo','+1.75.0','test','--locked','--no-run','--test','custody','--test','original-negative','--message-format=json-render-diagnostics'],env,240)
     artifacts={}

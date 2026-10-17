@@ -40,8 +40,8 @@
     "sha256": "b30239cae2c506d6a96d0f939a4b4b49bff03ffbafdd8355c0399b7fbc74374b"
   },
   "scripts/fixtures/receiver-custodian-native/prepare.py": {
-    "bytes": 12325,
-    "sha256": "e0ef2ab27815bb002ab844b27b8c9af1e7a470fa75197309ef0425bdc8e11385"
+    "bytes": 12370,
+    "sha256": "ea3e73dc4f2c2c089484a7aad7e826c7dd4c77e63004e7b1f18ab627e79ea08c"
   },
   "scripts/fixtures/receiver-input-native/protos/message.proto": {
     "bytes": 20700,

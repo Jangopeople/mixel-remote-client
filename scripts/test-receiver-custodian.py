@@ -369,6 +369,17 @@ class WholePrefixFixtureControls(unittest.TestCase):
         self.assertIn("'--locked','--no-run','--test','custody','--test','original-negative'",source)
         self.assertIn("label+'.stdout'",source);self.assertIn("label+'.stderr'",source)
         self.assertIn("actualGeneratedSourceProvided",source)
+        self.assertIn("env['CARGO_TARGET_DIR']=str(output/'target')",source)
+    def test_driver_overrides_inherited_target_before_any_command(self):
+        import unittest.mock
+        with tempfile.TemporaryDirectory()as t:
+            output=Path(t).resolve();observed=[]
+            def held_command(root,label,argv,env,bound):
+                observed.append((root,env['CARGO_TARGET_DIR']))
+                raise ValueError('held before compiler execution')
+            with unittest.mock.patch.object(self.driver.sys,'platform','win32'),unittest.mock.patch.dict(os.environ,{'GITHUB_ACTIONS':'true','RUNNER_ENVIRONMENT':'github-hosted','RUNNER_OS':'Windows','CARGO_TARGET_DIR':'untrusted-shared-cache'}),unittest.mock.patch.object(self.driver,'command',side_effect=held_command):
+                with self.assertRaisesRegex(ValueError,'held before compiler'):self.driver.run(output,{'actualGeneratedSourceProvided':True})
+            self.assertEqual(observed,[(output,str(output/'target'))]);self.assertFalse((output/'NATIVE-RESULT.json').exists())
     def test_failed_compiler_keeps_complete_raw_and_prints_bounded_tail(self):
         import unittest.mock,io
         with tempfile.TemporaryDirectory()as t:
