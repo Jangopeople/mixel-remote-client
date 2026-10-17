@@ -47,5 +47,18 @@ requires Cargo and the pinned Tokio 1.44.2 dependency. The format-3 Cargo.lock
 retains the product's versions and checksums, including macro dependencies;
 both Cargo commands use --locked. The prepared closure still requires actual
 Cargo qualification and must fail rather than resolve a replacement lock.
-These scenarios still do
-not compile or qualify the complete application leaf or actual desktop input.
+These scenarios still do not compile or qualify the complete application leaf
+or actual desktop input.
+
+The complete app also requires the separate terminal
+`patch-support-receiver-uinput-deps.py` source owner after own-uinput. The pinned
+evdev VirtualDevice and parity Unix Connection otherwise expose no raw file
+descriptor. Its two adapters implement AsRawFd over their existing private
+handles; they do not change emit, SYN, setup, transport, or dependency edges.
+The owner embeds genuine pinned commit/tree/blob snapshots and creates ordinary
+shallow Git checkouts offline, retaining exact upstream origins/revisions. It
+pins complete Cargo before/after sources and every tracked dependency byte and
+mode. `--check` creates nothing. Private `previous()` removes only the two fully
+authenticated new snapshots in its copy, preserving the supplied source and Git
+metadata. Inverse order is deps, own-uinput, receiver, native. These source/Git
+controls still do not replace a complete Linux application build.
