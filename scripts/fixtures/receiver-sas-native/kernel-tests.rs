@@ -67,7 +67,7 @@ mod kernel_controls {
     fn revoked_generation_is_real_signaled_event() {
         let source=event(false);
         let copy=duplicate(unsafe { GetCurrentProcess() },source.0,SYNC).expect("read-only generation event");
-        let sender=Sender { revoked:copy,effect:mutex(false) };
+        let sender=SasPublisherLease { revoked:copy,effect:mutex(false) };
         assert!(sender.active());
         assert_ne!(unsafe { SetEvent(source.0) },0);
         assert!(!sender.active(),"actual signaled revoke denies generation");

@@ -201,7 +201,7 @@ class SourceControls(unittest.TestCase):
     def test_readonly_capture_ready_commit_preserves_handle_lifetime(self):
         _, raw = P.plan(); text = raw.decode()
         request = text[text.index('pub(crate) async fn request'):text.index('struct Serial')]
-        self.assertLess(request.index('Sender::open'), request.index('Data::SASScoped'))
+        self.assertLess(request.index('SasPublisherLease::open'), request.index('Data::SASScoped'))
         self.assertLess(request.index('Data::SASScoped'), request.index('Data::SASReady'))
         self.assertLess(request.index('Data::SASReady'), request.index('Data::SASCommit'))
         self.assertNotIn('WaitForSingleObject(self.effect', request)

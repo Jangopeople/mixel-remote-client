@@ -13,7 +13,7 @@ import time
 
 HERE = Path(__file__).resolve().parent
 LEAF = HERE.parents[1] / 'support-receiver-sas-windows.rs'
-LEAF_SHA256 = 'd009940084f3ed5ed6c8afbe28b8ed3c6c3882b67fafa6d207eda8adfbe80855'
+LEAF_SHA256 = '3cff92bc3dc0ae0041084a36dc970f95a35240e77bf1844a97bde82dd90804ff'
 FILES = {
     'source-Cargo.toml': 'harness/Cargo.toml',
     'source-Cargo.lock': 'harness/Cargo.lock',

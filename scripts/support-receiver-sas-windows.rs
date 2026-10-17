@@ -118,8 +118,8 @@ fn service_policy() -> bool {
     RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey_with_flags("Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",KEY_READ)
         .ok().and_then(|key|key.get_value::<u32,_>("SoftwareSASGeneration").ok()).map(|v|policy_eligible(Some(v))).unwrap_or(false)
 }
-struct Sender { revoked: Owned, effect: Owned }
-impl Sender {
+struct SasPublisherLease { revoked: Owned, effect: Owned }
+impl SasPublisherLease {
     fn open(owner: &str) -> Option<Self> {
         let (pid,born)=identity(owner)?;
         if pid!=unsafe { GetCurrentProcessId() } || birth(unsafe { GetCurrentProcess() })?!=born { return None; }
@@ -139,7 +139,7 @@ fn service_peer(pipe: Handle) -> Option<Owned> {
 /// Capture ACK imports handles before sender closes them. Commit precedes the
 /// sink mutex wait; sender returns and releases its already-held generation guard.
 pub(crate) async fn request(owner: &str) -> ResultType<()> {
-    let Some(lease)=Sender::open(owner) else { bail!("SAS requires the current installed-server receiver generation"); };
+    let Some(lease)=SasPublisherLease::open(owner) else { bail!("SAS requires the current installed-server receiver generation"); };
     let mut stream=crate::ipc::connect(1000,crate::POSTFIX_SERVICE).await
         .map_err(|error|hbb_common::anyhow::anyhow!("SAS requires the installed Mixel SYSTEM service; start/install it through an explicit administrator action (no automatic elevation): {}",error))?;
     let Some(service)=service_peer(stream.sas_pipe_handle()) else { bail!("SAS service identity could not be authenticated"); };
