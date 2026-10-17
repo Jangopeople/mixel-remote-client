@@ -1,5 +1,49 @@
 # Mixel-Remote — Agent Handoff / Current State
 
+## 2026-10-17 — Exact Windows custody compiler and QA observer repairs
+
+Continue in the ordinary integration clone
+`/private/tmp/mixel-receiver-next-integration-20261017`; canonical H73 stays
+untouched. Read the authoritative checkpoint for exact run/job/original-log
+bindings. Root alone observes new Actions metadata and collects each original
+once; no new artifact/archive GETs. Existing production/publication, GTK,
+case-insensitive held-path, desktop and local compiler holds remain.
+
+Hosted Cargo1.75 metadata resolved the custody fixture's exact held graph from
+97 to87 packages without new package/version/source/checksum identities. Locked
+metadata repeats unchanged; the adopted lock SHA is
+`cb8cc31c4fbcd47a14c0203acdeb3438415ff80277488c757a0cfadef893e584`.
+Actual Windows compilation then reached the subject and found a match-arm
+semicolon, a missing fixture timeout import, and a known unused-mut warning in
+the frozen negative prefix. Repair387d5a0 changes one product character, imports
+the fixture timeout, and permits only that generated original-negative main to
+warn while current code retains deny. Original product prefixes remain exact.
+All54 custody and16 central source controls pass; actual generated-prefix inert
+preparation and the complete historical no-write guard pass. Focused run
+39064023972 is in progress; actual native qualification is still pending.
+
+The footer inverse now permits only59 exact owned files plus removal of the six
+reviewed evdev/parity namespace directories, deriving those names from the pinned
+dependency plan. Unknown directories and kind changes remain fatal. Sixteen
+controls pass against the actual complete inverse snapshot. Full hosted source
+regression remains required. Existing full-six bridge generation and mandatory
+Mac real Flutter/SDK/resource/handler runtime gates passed at c43738c; its long
+Windows source/packaging job117468428987 remains active. No shipping build started.
+
+The separate held-input QA source391b889 is adopted without changing the frozen
+03 Linux controller. Its31 inert controller/admission/evidence controls pass.
+Actual Windows PowerShell5.1 rejected Add-Type's unavailable CompilerOptions;
+68b9ed1 uses one exact-source, warnings-fatal in-memory CodeDom compilation of
+both unchanged C# units. Hosted run39064073562 passes the Linux31 and actual
+WindowsPS5.1.20348.5622 parser/compiler. No observation method/native API/PC01
+case ran. Corrective independent review of foreground/desktop/token eligibility
+and per-row admission remains pending. Never call this app or desktop proof.
+
+The current task is incomplete: actual custody component execution, full new
+application builds, signed cold Windows execution, physical PC01/Mac acceptance,
+held-key/button cleanup, clipboard/files/reconnect/crash tests still need proof.
+No current full app, native desktop, release or publication qualification.
+
 ## 2026-10-17 — Standard helper session identity and bridge generation fixes
 
 The new9cc producer passes actual Linux and Mac input components; mandatory
