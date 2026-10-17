@@ -130,5 +130,6 @@ pub(crate) fn run_component_tests() {
     let observer=generation.clone();std::thread::spawn(move||schedule_cleanup(observer)).join().unwrap();
     assert!(generation.cleanup_requested.load(Ordering::SeqCst));assert!(!generation.cleanup_done.load(Ordering::SeqCst));
     assert!(receiver.close());assert!(generation.cleanup_done.load(Ordering::SeqCst));
-    pump_until(||receiver.inner.pending.load(Ordering::SeqCst)==0);
+    let done=Arc::new(AtomicBool::new(false));let seen=done.clone();dispatch::Queue::main().exec_async(move||{seen.store(true,Ordering::SeqCst);});pump_until(||done.load(Ordering::SeqCst));
+    assert_eq!(super::super::observed().lock().unwrap().iter().filter(|e|e.owner==generation.token&&e.text=="cleanup").count(),1,"observer duplicate must not perform second cleanup");
 }

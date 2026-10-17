@@ -237,9 +237,19 @@ pub(crate) fn publisher_handle(peer: &Peer) -> Option<Option<u64>> {
     }
     Some(None)
 }
+fn transition_previous() -> &'static Mutex<Option<String>> { static PREVIOUS:OnceLock<Mutex<Option<String>>> = OnceLock::new(); PREVIOUS.get_or_init(||Mutex::new(None)) }
+pub(super) fn begin_transition() {
+    let mut previous=transition_previous().lock().unwrap_or_else(|e|e.into_inner());
+    *previous=helper().lock().unwrap_or_else(|e|e.into_inner()).as_ref().map(|peer|format!("{}-{}",peer.pid,peer.born));
+    TRANSITION.store(true,Ordering::SeqCst);
+}
 pub(crate) fn startup_confirmed(peer: &Peer) {
     // Caller publishes RUNNING first, so a fresh grant can never select Local.
-    TRANSITION.store(false,Ordering::SeqCst);
+    {
+        let previous=transition_previous().lock().unwrap_or_else(|e|e.into_inner());
+        if TRANSITION.load(Ordering::SeqCst) && previous.as_deref()==Some(&format!("{}-{}",peer.pid,peer.born)) { return; }
+        TRANSITION.store(false,Ordering::SeqCst);
+    }
     if let Ok(startup) = started().lock() { if let Some(startup) = startup.as_ref().filter(|s| s.peer.pid == peer.pid && s.peer.born == peer.born) { startup.confirmed.store(true,Ordering::SeqCst); } }
 }
 #[repr(C)] struct StartupInfo {

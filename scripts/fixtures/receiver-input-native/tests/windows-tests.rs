@@ -79,6 +79,7 @@ pub(crate) fn run_native_tests() {
         ("Windows abandoned mutex permanently poisons scope",native_abandoned_mutex_poison_cannot_reopen_scope as fn()),
         ("Windows retained startup identity and once-only query-handle transfer",native_startup_identity_transfer_and_unrelated_handle_refusal as fn()),
         ("Windows exact owned suspended startup failure cleanup",native_partial_start_guard_terminates_only_owned_suspended_child as fn()),
+        ("Windows late retiring-helper Pong cannot reopen admission",native_old_helper_pong_cannot_reopen_transition as fn()),
     ] {case();println!("PASS: {name}");}
 }
 #[cfg(feature="guard-must-not-send")]
@@ -122,4 +123,10 @@ fn native_partial_start_guard_terminates_only_owned_suspended_child() {
     assert_ne!(unsafe{CreateProcessW(exe.as_ptr(),command.as_mut_ptr(),ptr::null_mut(),ptr::null_mut(),0,4,ptr::null_mut(),ptr::null(),&mut info,&mut process)},0);
     let observer=Arc::new(Owned::from(process.process).unwrap());let guard=Suspended{process:observer.clone(),thread:Some(Owned::from(process.thread).unwrap()),resumed:false};drop(guard);
     assert_eq!(unsafe{WaitForSingleObject(observer.raw(),0)},OBJECT,"partial startup cannot leave its exact new child suspended");
+}
+
+fn native_old_helper_pong_cannot_reopen_transition() {
+    let pid=unsafe{GetCurrentProcessId()};let process=Owned::from(unsafe{OpenProcess(SYNC|0x1000,0,pid)}).unwrap();let sid=process_sid(process.raw()).unwrap();let peer=verified_peer(pid,Arc::new(process),sid).unwrap();
+    *helper().lock().unwrap()=Some(peer.clone());begin_transition();assert!(TRANSITION.load(Ordering::SeqCst));startup_confirmed(&peer);assert!(TRANSITION.load(Ordering::SeqCst),"late retiring-helper Pong cannot admit Local/old-backend scopes");
+    *helper().lock().unwrap()=None;TRANSITION.store(false,Ordering::SeqCst);
 }

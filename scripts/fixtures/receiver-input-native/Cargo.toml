@@ -16,4 +16,6 @@ path = "tests/receiver.rs"
 harness = false
 [features]
 guard-must-not-send = []
+flutter = []
+plugin_framework = []
 [workspace]

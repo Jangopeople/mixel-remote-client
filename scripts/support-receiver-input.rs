@@ -26,6 +26,7 @@ struct Generation {
     effect_id: i32,
     conn: i32,
     failure: Arc<AtomicBool>,
+    #[cfg(windows)]
     owner: std::sync::Weak<Inner>,
     active: AtomicBool,
     serial: Mutex<()>,
@@ -55,7 +56,9 @@ impl Generation {
         let generation = Arc::new(Self {
             #[cfg(windows)] token: kernel.token.clone(),
             #[cfg(not(windows))] token: nonce,
-            effect_id, conn, failure, owner: Arc::downgrade(inner), active: AtomicBool::new(true), serial: Mutex::new(()),
+            effect_id, conn, failure,
+            #[cfg(windows)] owner: Arc::downgrade(inner),
+            active: AtomicBool::new(true), serial: Mutex::new(()),
             cleanup_done: AtomicBool::new(false), cleanup_requested: AtomicBool::new(false),
             #[cfg(windows)] backend,
             #[cfg(windows)] portable_used: AtomicUsize::new(0),
@@ -149,6 +152,7 @@ impl Receiver {
         }
         self.set_permission(enabled)
     }
+    #[cfg(all(feature="flutter",feature="plugin_framework"))]
     pub(crate) fn same_owner(&self, other: &Self) -> bool { Arc::ptr_eq(&self.inner,&other.inner) }
     pub(crate) fn failed(&self) -> bool { self.inner.failed.load(Ordering::SeqCst) }
     pub(crate) fn fail(&self) { self.inner.failed.store(true, Ordering::SeqCst); let _ = self.close(); }
@@ -415,7 +419,7 @@ fn cleanup(token: &str) -> bool {
 static TRANSITION: AtomicBool = AtomicBool::new(false);
 #[cfg(windows)]
 pub(crate) fn quiesce_helper_transition() -> bool {
-    TRANSITION.store(true,Ordering::SeqCst);
+    windows::begin_transition();
     let Some(registry) = generations() else { return false; };
     let generations: Vec<_> = registry.lock().unwrap_or_else(|e| e.into_inner()).values().filter_map(Slot::get).collect();
     // Publish every deny before waiting for any other generation's native cleanup.
