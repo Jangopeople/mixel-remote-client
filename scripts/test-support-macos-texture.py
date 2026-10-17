@@ -302,7 +302,7 @@ def materialization_controls(output, originals, files):
         else:
             raise AssertionError("failed network silently accepted")
         assert call.call_count == 3
-    print(f"PASS: pinned98 source inventory plus exact two-file base/owned100 materialization/idempotence; {checks + 2} drift/path/fetch refusal controls before source writes")
+    print(f"PASS: pinned98 source inventory plus exact three-file public header/base/owned101 materialization/idempotence; {checks + 2} drift/path/fetch refusal controls before source writes")
     return root
 
 
@@ -404,6 +404,66 @@ def ownership_source_controls(output, files):
     print('PASS: retained-return full inverse/idempotence; eight source and ten owned path/content refusals; old owned98 refuses before writes; exact Flutter protocol/macros pins; serial queue/passRetained/BOOL/row and owner-retirement source conserved')
 
 
+def public_header_controls(output, files):
+    # Swift's real generated Objective-C header imports the module-named public
+    # header. CocoaPods' source glob must export it alongside our base header.
+    name = 'macos/Classes/texture_rgba_renderer.h'
+    assert P.OWNED[name] == '#import "MixelTextureBase.h"\n'
+    root = output / 'materialization'
+    target = root / 'flutter' / P.DEPENDENCY
+    podspec = (target / 'macos/texture_rgba_renderer.podspec').read_text()
+    source_globs = re.findall(r"^\s*s\.source_files\s*=\s*'([^']+)'\s*$", podspec, re.M)
+    assert source_globs == ['Classes/**/*']
+    exported = {p.relative_to(target / 'macos').as_posix()
+                for p in (target / 'macos').glob(source_globs[0]) if p.is_file()}
+    assert 'Classes/texture_rgba_renderer.h' in exported
+    assert 'Classes/MixelTextureBase.h' in exported
+    assert (target / name).read_bytes() == P.OWNED[name].encode()
+    current = P.existing_files(target)
+    original = dict(current)
+    for owned_name in P.OWNED:
+        original.pop(owned_name)
+    original[P.PLUGIN] = P.unpatch_plugin(original[P.PLUGIN].decode()).encode()
+    original[P.TEXT] = P.unpatch_frame(original[P.TEXT].decode()).encode()
+    original[P.API] = P.unpatch_api(original[P.API].decode()).encode()
+    assert len(current) == 101 and len(original) == 98 and original == files
+    cases = (
+        ('previous-owned100-missing-module-header', lambda p: p.unlink()),
+        ('module-header-wrong-import', lambda p: p.write_text('#import "ForeignBase.h"\n')),
+        ('module-header-extra-declaration', lambda p: p.write_text(P.OWNED[name] + '@interface Foreign : NSObject @end\n')),
+        ('module-header-symlink', lambda p: (p.unlink(), p.symlink_to(target / name))),
+        ('module-header-hardlink', lambda p: (p.unlink(), os.link(target / name, p))),
+    )
+    for label, mutate in cases:
+        case = output / label
+        shutil.copytree(root, case)
+        member = case / 'flutter' / P.DEPENDENCY / name
+        mutate(member)
+        before = snapshot(case)
+        modes = {p.relative_to(case).as_posix(): p.lstat().st_mode for p in case.rglob('*')}
+        with patch.object(P, 'fetch_source', side_effect=AssertionError('Incomplete public header fetched')):
+            try:
+                P.apply(case)
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError(label + ' accepted')
+        assert snapshot(case) == before
+        assert {p.relative_to(case).as_posix(): p.lstat().st_mode for p in case.rglob('*')} == modes
+        if label == 'module-header-hardlink':
+            member.unlink()
+    (output / 'public-header-source-proof.json').write_text(json.dumps({
+        'result': 'passed', 'owned_product_members': len(current),
+        'upstream_members_after_exact_inverse': len(original),
+        'public_header': name, 'public_header_sha256': P.sha(P.OWNED[name].encode()),
+        'actual_podspec_source_glob': source_globs[0],
+        'previous_owned100_refused_without_writes': True,
+        'header_path_content_refusals': len(cases),
+        'scope': 'Python-only exact source/materialization and CocoaPods public-header discovery; actual module compilation remains separate'
+    }, indent=2) + '\n')
+    print('PASS: module-named public header is exported by the actual podspec glob; whole owned101 inverse recovers exact upstream98; previous owned100 and four changed/unsafe header cases refuse before writes')
+
+
 def adapter_controls(output, files, *, native=True):
     output = Path(output).resolve(strict=True)
     original = files[P.API].decode()
@@ -477,7 +537,7 @@ def adapter_controls(output, files, *, native=True):
         assert snapshot(case) == before_case
         if label == "adapter-hardlink":
             member.unlink()
-    print("PASS: exact C adapter inverse/idempotence/five drift refusals; previous adapter refuses before any write with all bytes/modes preserved under present/absent dir-fd primitives; fresh owned100 materialization/corrected idempotence pass both; adapter drift/symlink/hardlink refuse")
+    print("PASS: exact C adapter inverse/idempotence/five drift refusals; previous adapter refuses before any write with all bytes/modes preserved under present/absent dir-fd primitives; fresh owned101 materialization/corrected idempotence pass both; adapter drift/symlink/hardlink refuse")
     if sys.platform != "darwin" or not native:
         print("SOURCE SCOPE: actual SDK Objective-C adapter controls require macOS and explicit compiler admission")
         return
@@ -1441,6 +1501,7 @@ def main():
             output.mkdir(parents=True, exist_ok=False)
         generated = materialization_controls(output, originals, files)
         ownership_source_controls(output, files)
+        public_header_controls(output, files)
         adapter_controls(output, files)
         git_archive_controls(output, files)
         workflow_controls(output, originals, files)

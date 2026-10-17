@@ -123,9 +123,13 @@ class LogicalViews(unittest.TestCase):
             raw = (ROOT / name).read_bytes()
             for ending in (b'\n', b'\r\n'):
                 current = profile(raw, ending)
-                inverse = P.project_to_canonical(current, name)
+                controls_spec = importlib.util.spec_from_file_location(
+                    'mixel_independent_cold_unit_views', ROOT / 'scripts/test-input-lifecycle-integration-projection.py')
+                controls = importlib.util.module_from_spec(controls_spec)
+                controls_spec.loader.exec_module(controls)
+                inverse = controls.current_to_canonical(current, name)
                 self.assertEqual(P.canonical(inverse)[1], ending)
-                self.assertEqual(P.compose(inverse, name), current)
+                self.assertEqual(controls.compose_current(inverse, name), current)
 
     def test_mixed_bare_cr_bom_invalid_utf8_working_views_refuse(self):
         raw = profile((ROOT / NAME).read_bytes(), b'\n')
@@ -213,7 +217,7 @@ class LogicalViews(unittest.TestCase):
         nodes = [node for node in ast.parse(path.read_text(encoding='utf-8')).body
                  if isinstance(node, ast.FunctionDef) and node.name in functions]
         assert len(nodes) == len(functions)
-        namespace = {'Path': Path}
+        namespace = {'Path': Path, 're': re}
         exec(compile(ast.Module(body=nodes, type_ignores=[]), str(path), 'exec'), namespace)
         return namespace
 

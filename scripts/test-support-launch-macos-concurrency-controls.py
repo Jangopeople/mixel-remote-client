@@ -189,6 +189,25 @@ def inverse_cold_windows_workflow(text):
     return text.replace(before + addition + after, before + after, 1).replace(new_log, old_log, 1)
 
 
+def macos_nasm_workflow_projection():
+    """Unit-only exact official-bottle runtime change; historical hashes stay fixed."""
+    return ('      - name: Reserve a job-owned Cargo home for the pinned Tao privacy leaf\n        run: |\n          mixel_cargo_home="$RUNNER_TEMP/mixel-owned-cargo-${{ matrix.job.arch }}"\n          python3 scripts/patch-support-url-log-privacy.py --reserve-cargo-home "$mixel_cargo_home"\n          echo "CARGO_HOME=$mixel_cargo_home" >> "$GITHUB_ENV"\n\n      - name: Install build runtime\n        run: |\n          brew install autoconf automake libtool pkg-config create-dmg imagemagick\n          wget https://www.nasm.us/pub/nasm/releasebuilds/2.16.03/macosx/nasm-2.16.03-macosx.zip\n          unzip -q nasm-2.16.03-macosx.zip\n          sudo cp nasm-2.16.03/nasm /usr/local/bin/nasm\n          nasm --version\n          # Each Mac input qualification executes both native architectures.\n          if [[ "$(uname -m)" == "arm64" ]]; then\n            softwareupdate --install-rosetta --agree-to-license\n          fi\n\n      - name: Install Rust\n', '      - name: Reserve a job-owned Cargo home for the pinned Tao privacy leaf\n        run: |\n          mixel_cargo_home="$RUNNER_TEMP/mixel-owned-cargo-${{ matrix.job.arch }}"\n          python3 scripts/patch-support-url-log-privacy.py --reserve-cargo-home "$mixel_cargo_home"\n          echo "CARGO_HOME=$mixel_cargo_home" >> "$GITHUB_ENV"\n\n      - name: Install build runtime\n        run: |\n          brew install autoconf automake libtool pkg-config create-dmg imagemagick nasm\n          nasm --version\n          # Each Mac input qualification executes both native architectures.\n          if [[ "$(uname -m)" == "arm64" ]]; then\n            softwareupdate --install-rosetta --agree-to-license\n          fi\n\n      - name: Install Rust\n')
+
+
+def restore_current_macos_runtime_workflow(text):
+    before, current = macos_nasm_workflow_projection()
+    marker = "\n  macos:\n"
+    if text.count(marker) != 1 or text.count(current) != 1 or before in text:
+        raise AssertionError("Exact Mac NASM runtime block missing, duplicated or changed")
+    start = text.index(marker)
+    tail = text[start + len(marker):]
+    following = re.search(r"\n  [A-Za-z][A-Za-z0-9_-]*:\n", tail)
+    segment = text[start:] if following is None else text[start:start + len(marker) + following.start()]
+    if segment.count(current) != 1:
+        raise AssertionError("Exact Mac NASM runtime block moved outside the Mac job")
+    return text.replace(current, before, 1)
+
+
 def inverse_windows_producer_budget(text):
     before = ("  windows:\n    needs: [config, bridge]\n"
               "    if: ${{ needs.config.outputs.windows == 'true' }}\n    runs-on: windows-2022\n")
@@ -960,6 +979,28 @@ class ConcurrencyControls(unittest.TestCase):
         with self.assertRaises(AssertionError):
             inverse_lifecycle_workflow_checks('', 'foreign.yml')
 
+    def test_macos_nasm_runtime_whole_inverse_and_required_order_refuse_drift(self):
+        text = C.canonical((ROOT / ".github/workflows/build.yml").read_bytes()).decode()
+        before, current = macos_nasm_workflow_projection()
+        original = restore_current_macos_runtime_workflow(text)
+        self.assertEqual(hashlib.sha256(original.encode()).hexdigest(), "813e6ea2bca0fa0e947983488a4bd2617d93da0d90fedd274b12d689f8b052bc")
+        self.assertEqual(original.replace(before, current, 1), text)
+        self.assertIn("imagemagick nasm\n          nasm --version\n", current)
+        self.assertNotIn("wget", current)
+        for changed in (text.replace(current, "", 1), text.replace(current, current * 2, 1),
+                        current + text.replace(current, "", 1),
+                        text.replace(current, current.replace("imagemagick nasm", "imagemagick"), 1),
+                        text.replace(current, current.replace("imagemagick nasm", "imagemagick nasm nasm"), 1),
+                        text.replace(current, current.replace("          nasm --version\n", ""), 1),
+                        text.replace(current, current.replace("          nasm --version\n", "          nasm --help\n"), 1),
+                        text.replace(current, current.replace("          nasm --version\n", "          nasm --version\n          wget https://www.nasm.us/foreign.zip\n"), 1),
+                        text.replace(current, current.replace("          brew install", "          nasm --version\n          brew install", 1).replace("nasm\n          nasm --version\n", "nasm\n", 1), 1),
+                        text.replace(current, current.replace("      - name: Install Rust\n", "      - name: Foreign Rust\n"), 1)):
+            with self.subTest(digest=hashlib.sha256(changed.encode()).hexdigest()), self.assertRaises(AssertionError):
+                restore_current_macos_runtime_workflow(changed)
+        with self.assertRaises(AssertionError):
+            restore_current_macos_runtime_workflow(original)
+
     def test_cold_windows_whole_workflow_inverse_refuses_partial_moved_or_optional_gate(self):
         text = C.canonical((ROOT / '.github/workflows/build.yml').read_bytes()).decode()
         before, addition, after, log_before, old_log, new_log, log_after = cold_windows_workflow_projection()
@@ -982,7 +1023,7 @@ class ConcurrencyControls(unittest.TestCase):
             inverse_cold_windows_workflow(baseline)
 
     def test_windows_producer_budget_has_only_one_exact_outer_job_change(self):
-        current = inverse_cold_windows_workflow(input_lifecycle.inverse_blocks(_lifecycle_projection.inverse_sdk_compatibility_retention(C.canonical((ROOT / '.github/workflows/build.yml').read_bytes()).decode(), 'build.yml').encode(), '.github/workflows/build.yml').decode())
+        current = inverse_cold_windows_workflow(restore_current_macos_runtime_workflow(input_lifecycle.inverse_blocks(_lifecycle_projection.inverse_sdk_compatibility_retention(C.canonical((ROOT / '.github/workflows/build.yml').read_bytes()).decode(), 'build.yml').encode(), '.github/workflows/build.yml').decode()))
         budget_only = inverse_windows_producer_budget(current)
         early = _lifecycle_projection.early_windows_lifecycle()
         self.assertEqual(budget_only.count(early), 1)
@@ -1032,7 +1073,7 @@ class ConcurrencyControls(unittest.TestCase):
         self.assertEqual(dispatcher.count('python scripts/test-support-file-dialog-lifecycle.py --source '), 1)
 
     def test_workflow_whole_inverse_has_only_two_ordered_additions(self):
-        value = inverse_cold_windows_workflow(input_lifecycle.inverse_blocks(C.canonical((ROOT / '.github/workflows/build.yml').read_bytes()), '.github/workflows/build.yml').decode())
+        value = inverse_cold_windows_workflow(restore_current_macos_runtime_workflow(input_lifecycle.inverse_blocks(C.canonical((ROOT / '.github/workflows/build.yml').read_bytes()), '.github/workflows/build.yml').decode()))
         value = inverse_windows_producer_budget(value)
         value = inverse_lifecycle_workflow_checks(value, 'build.yml')
         value = inverse_windows_sdk_source_diagnostics(value, 'build.yml')
@@ -1176,7 +1217,7 @@ class ConcurrencyControls(unittest.TestCase):
             raw = path.read_bytes()
             text = C.canonical(raw).decode()
             if workflow == 'build.yml':
-                text = inverse_cold_windows_workflow(text)
+                text = inverse_cold_windows_workflow(restore_current_macos_runtime_workflow(text))
             with mock.patch.object(subprocess, 'run', forbidden), mock.patch.object(subprocess, 'Popen', forbidden):
                 projected = inverse_uri_workflow_checks(text, workflow)
                 self.assertNotIn('scripts/test-support-uri-routing.py', projected)

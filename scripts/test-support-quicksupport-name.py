@@ -6,6 +6,7 @@ negative and generated positive selectors, argv parser, wrapper main and
 portable-service gate execute as actual Rust 1.75 compatible source.
 """
 import argparse
+import ast
 import hashlib
 import os
 from pathlib import Path
@@ -324,10 +325,28 @@ cold_service_guard = """        // Cold attended support never asks for administ
         // elevation requires the existing explicit user action instead.
         && crate::platform::is_elevated(None).unwrap_or(false)
 """
+# The early invite regression supplies its own exact generated layer, while
+# the complete product already includes the terminal URI layer. Compose only
+# that owner's actual cold Windows pair; never change the supplied source file.
+uri_tree = ast.parse((ROOT / "scripts/patch-support-uri-routing.py").read_bytes())
+uri_rows = [ast.literal_eval(node.value) for node in uri_tree.body
+            if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name)
+            and target.id == "NATIVE_CHANGES" for target in node.targets)]
+assert len(uri_rows) == 1
+cold_pairs = [(old, new) for old, new in uri_rows[0]["src/core_main.rs"] if cold_service_guard in new]
+assert len(cold_pairs) == 1
+cold_before, cold_after = cold_pairs[0]
+assert cold_after == cold_before + cold_service_guard
+
 with tempfile.TemporaryDirectory(prefix="mixel-quick-support-name-") as temporary:
     for variant in ("original", "warm_original", "cold_original", "patched"):
         core = original("src/core_main.rs") if variant == "original" else (arguments.source / "src/core_main.rs").read_text(encoding="utf-8")
         portable = original("libs/portable/src/main.rs") if variant == "original" else (arguments.source / "libs/portable/src/main.rs").read_text(encoding="utf-8")
+        if variant != "original":
+            assert core.count(cold_before) == 1
+            if cold_after not in core:
+                core = core.replace(cold_before, cold_after, 1)
+            assert core.count(cold_after) == 1
         core_detector = function(core, "fn is_quick_support_exe(exe: &str) -> bool")
         portable_detector = function(portable, "pub(super) fn is_quick_support_exe(exe: &str) -> bool")
         assert re.sub(r"\s+", "", core_detector) == re.sub(r"\s+", "", portable_detector.replace("pub(super) ", "")), "Native and wrapper executable detectors must stay identical"
@@ -339,6 +358,10 @@ with tempfile.TemporaryDirectory(prefix="mixel-quick-support-name-") as temporar
         wrapper = wrapper[:-1] + "    TRACE.with(|t|t.borrow().forwarded.clone())\n}"
         start = core.index("    let mut args = Vec::new();")
         argv_parser = core[start:core.index('    #[cfg(any(target_os = "linux", target_os = "windows"))]', start)].replace("std::env::args()", "argv")
+        # Execute Windows cfg semantics even when this Rust carrier runs on
+        # macOS: its terminal Mac-only URI branches are separately exercised.
+        argv_parser = argv_parser.replace('#[cfg(all(target_os = "macos", feature = "flutter"))]', '#[cfg(any())]')
+        argv_parser = argv_parser.replace('#[cfg(not(all(target_os = "macos", feature = "flutter")))]', '#[cfg(all())]')
         start = core.index("        _is_quick_support |= !crate::platform::is_installed()")
         selector = core[start:core.index("    }\n    let mut log_name", start)]
         start = core.index("    if !crate::platform::is_installed()\n")

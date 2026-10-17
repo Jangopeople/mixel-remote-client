@@ -6,6 +6,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import stat
 from pathlib import Path
 import subprocess
@@ -176,6 +177,52 @@ class Admission(unittest.TestCase):
             self.assertNotIn(banned, text)
         self.assertEqual(text.count("GH_TOKEN:"), 1)
         self.assertEqual(text.count('sudo -n env RUNNER_TEMP="$RUNNER_TEMP"'), 4)
+
+    def test_pull_request_reports_source_only_without_runtime_qualification(self):
+        text = (BASE / ".github/workflows/linux-installer-systemd.yml").read_text()
+        blocks = re.split(r"(?m)^      - ", text.split("    steps:\n", 1)[1])[1:]
+        reports = [block for block in blocks if block.startswith("name: Report source-only pull request scope\n")]
+        self.assertEqual(len(reports), 1)
+        self.assertIn("if: github.event_name == 'pull_request'", reports[0])
+        self.assertIn("Pull request source-only controls passed.", reports[0])
+        self.assertIn("No normal artifact download, package installation, or systemd service lifecycle ran.", reports[0])
+        self.assertIn("does not qualify this pull request's application or service runtime.", reports[0])
+        controls = [block for block in blocks if block.startswith("name: Verify inert safety controls\n")]
+        self.assertEqual(len(controls), 1)
+        self.assertNotIn("        if:", controls[0])
+
+    def test_every_fixed_application_runtime_step_is_dispatch_only(self):
+        text = (BASE / ".github/workflows/linux-installer-systemd.yml").read_text()
+        blocks = re.split(r"(?m)^      - ", text.split("    steps:\n", 1)[1])[1:]
+        for operation in ["prepare", "host", "collect", "dependencies", "run", "cleanup"]:
+            with self.subTest(operation=operation):
+                selected = [block for block in blocks if "scripts/linux-installer-systemd.py " + operation + " --output" in block]
+                self.assertEqual(len(selected), 1)
+                self.assertIn("if: " + ("always() && " if operation == "cleanup" else "") + "github.event_name == 'workflow_dispatch'", selected[0])
+        outputs = [block for block in blocks if block.startswith("name: Select fresh owned output path\n")]
+        artifacts = [block for block in blocks if block.startswith("uses: actions/upload-artifact@v6\n")]
+        self.assertEqual(len(outputs), 1); self.assertEqual(len(artifacts), 1)
+        self.assertIn("if: github.event_name == 'workflow_dispatch'", outputs[0])
+        self.assertIn("if: always() && github.event_name == 'workflow_dispatch'", artifacts[0])
+        self.assertEqual(text.count("GH_TOKEN:"), 1)
+        self.assertNotIn("continue-on-error", text)
+
+    def test_dispatch_product_drift_still_fatal_before_runtime_or_output(self):
+        with tempfile.TemporaryDirectory() as folder:
+            parent = Path(folder); root = parent / "never-created"
+            event = parent / "event.json"
+            event.write_text(json.dumps({"repository": {"id": qa.REPO_ID, "full_name": qa.REPO}}))
+            actual = "a" * 40
+            original = b"100644 blob " + b"b" * 40 + b"\tbranding/branding.env\0"
+            changed = original.replace(b"b" * 40, b"c" * 40)
+            env = {"EXPECTED_QA_SOURCE": actual, "GITHUB_EVENT_PATH": str(event), "GITHUB_EVENT_NAME": "workflow_dispatch"}
+            with patch.dict(os.environ, env), patch.object(qa.os, "geteuid", return_value=1001), \
+                    patch.object(qa, "git", side_effect=[actual.encode(), qa.TREE.encode(), original, changed]), \
+                    patch.object(qa, "command") as runtime, patch.object(qa, "save") as evidence:
+                with self.assertRaisesRegex(ValueError, "application-input-drift"):
+                    qa.prepare(root)
+                runtime.assert_not_called(); evidence.assert_not_called()
+            self.assertFalse(root.exists())
 
     def test_once_intent_and_durable_writes_refuse_reentry(self):
         with tempfile.TemporaryDirectory() as folder:

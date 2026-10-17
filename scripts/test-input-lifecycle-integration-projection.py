@@ -4,6 +4,7 @@ import ast
 import hashlib
 import importlib.util
 import os
+import re
 from pathlib import Path
 import tempfile
 import unittest
@@ -25,9 +26,52 @@ def actual_functions(name, functions):
     tree = ast.parse((ROOT / name).read_text(encoding='utf-8'))
     selected = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in functions]
     assert len(selected) == len(functions)
-    namespace = {"Path": Path}
+    namespace = {"Path": Path, "re": re}
     exec(compile(ast.Module(body=selected, type_ignores=[]), str(ROOT / name), 'exec'), namespace)
     return namespace
+
+
+def cold_workflow_view(raw, restore):
+    """Unit-only independent runtime layers; shared terminal projection stays exact."""
+    text, newline = P.canonical(raw)
+    owner = actual_functions('scripts/test-support-launch-macos-concurrency-controls.py',
+        {'cold_windows_workflow_projection', 'inverse_cold_windows_workflow',
+         'macos_nasm_workflow_projection', 'restore_current_macos_runtime_workflow'})
+    if restore:
+        try:
+            text = owner['restore_current_macos_runtime_workflow'](text)
+            text = owner['inverse_cold_windows_workflow'](text)
+        except AssertionError as error:
+            raise ValueError('Changed exact cold workflow unit view') from error
+    else:
+        before, addition, after, log_before, old_log, new_log, log_after = owner['cold_windows_workflow_projection']()
+        if (text.count(before + after) != 1 or addition in text or
+                text.count(log_before + old_log + log_after) != 1 or new_log in text):
+            raise ValueError('Changed exact cold workflow unit composition')
+        text = text.replace(before + after, before + addition + after, 1)
+        text = text.replace(log_before + old_log + log_after, log_before + new_log + log_after, 1)
+        old_runtime, current_runtime = owner['macos_nasm_workflow_projection']()
+        if text.count(old_runtime) != 1 or current_runtime in text:
+            raise ValueError('Changed exact Mac runtime unit composition')
+        previous = text
+        text = text.replace(old_runtime, current_runtime, 1)
+        try:
+            if owner['restore_current_macos_runtime_workflow'](text) != previous:
+                raise ValueError('Mac runtime composition inverse changed other bytes')
+        except AssertionError as error:
+            raise ValueError('Changed exact Mac runtime job context') from error
+    return text.encode().replace(b'\n', newline)
+
+
+def current_to_canonical(raw, name):
+    if name == '.github/workflows/build.yml':
+        raw = cold_workflow_view(raw, restore=True)
+    return P.project_to_canonical(raw, name)
+
+
+def compose_current(raw, name):
+    current = P.compose(raw, name)
+    return cold_workflow_view(current, restore=False) if name == '.github/workflows/build.yml' else current
 
 
 def terminal():
@@ -53,16 +97,69 @@ class Controls(unittest.TestCase):
                         final.replace(addition, '', 1) + addition,
                         final.replace(before + addition + after, before + '# disjoint\n' + addition + after, 1)):
             with self.assertRaises(ValueError):
-                P.project_to_canonical(mutated.encode(), name)
+                current_to_canonical(mutated.encode(), name)
+
+    def test_cold_independent_view_preserves_both_profiles_and_rejects_malformed_layers(self):
+        name = '.github/workflows/build.yml'
+        raw = (ROOT / name).read_bytes()
+        text = P.canonical(raw)[0]
+        owner = actual_functions('scripts/test-support-launch-macos-concurrency-controls.py',
+            {'cold_windows_workflow_projection', 'inverse_cold_windows_workflow'})
+        before, addition, after, log_before, old_log, new_log, log_after = owner['cold_windows_workflow_projection']()
+        without = text.replace(addition, '', 1)
+        negatives = [without, text.replace(addition, addition * 2, 1), without + addition,
+            text.replace(addition, addition.replace('timeout-minutes: 8', 'timeout-minutes: 9'), 1),
+            text.replace(before + addition + after, before + '# disjoint\n' + addition + after, 1),
+            text.replace(new_log, old_log, 1), text.replace(new_log, new_log * 2, 1),
+            text.replace(new_log, new_log.replace('cold-support', 'foreign'), 1),
+            text.replace(log_before + new_log + log_after, log_before + '# disjoint\n' + new_log + log_after, 1)]
+        for ending in (b'\n', b'\r\n'):
+            actual = text.encode().replace(b'\n', ending)
+            projected = cold_workflow_view(actual, restore=True)
+            self.assertEqual(cold_workflow_view(projected, restore=False), actual)
+            self.assertEqual(P.canonical(projected)[1], ending)
+            self.assertEqual(hashlib.sha256(P.canonical(current_to_canonical(actual, name))[0].encode()).hexdigest(), P.BASE_SHA[name])
+            for bad in negatives:
+                with self.subTest(ending=ending, malformed=bad[:40]):
+                    with self.assertRaises(ValueError):
+                        current_to_canonical(bad.encode().replace(b'\n', ending), name)
+        self.assertEqual((ROOT / name).read_bytes(), raw)
+
+    def test_nasm_independent_view_preserves_both_profiles_and_rejects_malformed_layers(self):
+        name = '.github/workflows/build.yml'
+        raw = (ROOT / name).read_bytes()
+        text = P.canonical(raw)[0]
+        owner = actual_functions('scripts/test-support-launch-macos-concurrency-controls.py',
+            {'macos_nasm_workflow_projection', 'restore_current_macos_runtime_workflow'})
+        old, new = owner['macos_nasm_workflow_projection']()
+        without = text.replace(new, '', 1)
+        marker = '\n  macos:\n'
+        negatives = [text.replace(new, old, 1), text.replace(new, new * 2, 1),
+            without + new, text.replace(new, new.replace(' nasm\n', '\n'), 1),
+            text.replace(new, new.replace('nasm --version', 'nasm --help'), 1),
+            text.replace(new, new.replace('      - name: Install Rust', '      # disjoint\n      - name: Install Rust'), 1),
+            text.replace(marker, '\n  foreign:\n', 1), text + marker]
+        for ending in (b'\n', b'\r\n'):
+            actual = text.encode().replace(b'\n', ending)
+            prior = current_to_canonical(actual, name)
+            self.assertEqual(compose_current(prior, name), actual)
+            self.assertEqual(P.canonical(prior)[1], ending)
+            self.assertEqual(hashlib.sha256(P.canonical(prior)[0].encode()).hexdigest(), P.BASE_SHA[name])
+            for bad in negatives:
+                with self.subTest(ending=ending, malformed=bad[:40]):
+                    self.assertNotEqual(bad, text)
+                    with self.assertRaises(ValueError):
+                        current_to_canonical(bad.encode().replace(b'\n', ending), name)
+        self.assertEqual((ROOT / name).read_bytes(), raw)
 
     def test_complete_lf_crlf_exact_inverse_preserves_every_old_byte(self):
         for name in ('scripts/apply-branding.sh', '.github/workflows/build.yml'):
             final = (ROOT / name).read_bytes()
-            baseline = P.project_to_canonical(final, name)
+            baseline = current_to_canonical(final, name)
             for ending in (b'\n', b'\r\n'):
                 raw = baseline.replace(b'\r\n', b'\n').replace(b'\n', ending)
-                composed = P.compose(raw, name)
-                self.assertEqual(P.project_to_canonical(composed, name), raw)
+                composed = compose_current(raw, name)
+                self.assertEqual(current_to_canonical(composed, name), raw)
                 self.assertEqual(P.canonical(composed)[1], ending)
                 self.assertEqual(P.canonical(composed)[0], P.canonical(final)[0])
 
@@ -80,11 +177,11 @@ class Controls(unittest.TestCase):
                     with self.subTest(name=name, block=addition[:60]):
                         self.assertNotEqual(raw, final)
                         with self.assertRaises(ValueError):
-                            P.project_to_canonical(raw.encode(), name)
+                            current_to_canonical(raw.encode(), name)
 
     def test_missing_working_layer_is_not_a_historical_head_fallback(self):
         for name in ('scripts/apply-branding.sh', '.github/workflows/build.yml'):
-            old = P.project_to_canonical((ROOT / name).read_bytes(), name)
+            old = current_to_canonical((ROOT / name).read_bytes(), name)
             with self.assertRaises(ValueError): P.inverse_blocks(old, name)
             self.assertEqual(P.committed_workflow(old, name), old)
             with self.assertRaises(ValueError): P.committed_workflow(old + b'# drift\n', name)
@@ -96,14 +193,14 @@ class Controls(unittest.TestCase):
             unrelated = b'# unknown unrelated drift\n'.replace(b'\n', newline)
             reviewed = b'# another independently reviewed layer\n'.replace(b'\n', newline)
             with self.assertRaisesRegex(ValueError, 'changed other canonical bytes'):
-                P.project_to_canonical(final + unrelated, name)
+                current_to_canonical(final + unrelated, name)
             self.assertTrue(P.inverse_blocks(final + reviewed, name).endswith(reviewed))
 
     def test_actual_six_command_texture_guard_unchanged(self):
         guard = actual_functions('scripts/test-support-macos-texture.py', {'exact_bridge_native_close_commands'})['exact_bridge_native_close_commands']
         final = (ROOT / '.github/workflows/build.yml').read_bytes()
         with self.assertRaises(AssertionError): guard(final.decode())
-        old = P.canonical(P.project_to_canonical(final, '.github/workflows/build.yml'))[0]
+        old = P.canonical(current_to_canonical(final, '.github/workflows/build.yml'))[0]
         self.assertEqual(len(guard(old)), 6)
 
     def test_actual_uri_linux_bridge_historical_guards_unchanged(self):
@@ -111,7 +208,7 @@ class Controls(unittest.TestCase):
             {'linux_close_bridge_projection', 'inverse_linux_close_bridge_checks', 'uri_bridge_projection', 'inverse_uri_bridge_checks'})
         final = (ROOT / '.github/workflows/build.yml').read_bytes()
         with self.assertRaises(AssertionError): namespace['inverse_uri_bridge_checks'](final.decode())
-        old = P.canonical(P.project_to_canonical(final, '.github/workflows/build.yml'))[0]
+        old = P.canonical(current_to_canonical(final, '.github/workflows/build.yml'))[0]
         value = namespace['inverse_linux_close_bridge_checks'](namespace['inverse_uri_bridge_checks'](old))
         expected = P.BRIDGE_HEADER + '          RDREPO=. python3 ../scripts/patch-support-macos-texture.py\n          RDREPO=. python3 ../scripts/patch-support-macos-window.py\n' + P.BRIDGE_AFTER
         self.assertEqual(value.count(expected), 1)
@@ -134,9 +231,9 @@ class Controls(unittest.TestCase):
         for changed in mutants:
             self.assertNotEqual(changed, final)
             with self.assertRaises(ValueError):
-                P.project_to_canonical(changed.encode(), name)
+                current_to_canonical(changed.encode(), name)
         # Another job with an identical analyzer command cannot own this block.
-        self.assertEqual(P.project_to_canonical(final.encode(), name), P.project_to_canonical(P.compose(P.project_to_canonical(final.encode(), name), name), name))
+        self.assertEqual(current_to_canonical(final.encode(), name), current_to_canonical(compose_current(current_to_canonical(final.encode(), name), name), name))
 
     def test_native_job_missing_duplicate_moved_mutated_or_reordered_refuses(self):
         name = '.github/workflows/build.yml'
@@ -159,7 +256,7 @@ class Controls(unittest.TestCase):
             final.replace(block, reordered, 1)]
         for changed in mutants:
             self.assertNotEqual(changed, final)
-            with self.assertRaises(ValueError): P.project_to_canonical(changed.encode(), name)
+            with self.assertRaises(ValueError): current_to_canonical(changed.encode(), name)
 
     def test_all_three_dependencies_are_exact_shipping_job_owned(self):
         name = '.github/workflows/build.yml'
@@ -180,7 +277,7 @@ class Controls(unittest.TestCase):
                 missing.replace('  bridge:\n    needs: config\n', '  bridge:\n' + current, 1)]
             for changed in mutants:
                 self.assertNotEqual(changed, final)
-                with self.assertRaises(ValueError): P.project_to_canonical(changed.encode(), name)
+                with self.assertRaises(ValueError): current_to_canonical(changed.encode(), name)
 
     def test_actual_historical_footer_macro_inverts_terminal_first(self):
         import shutil
@@ -199,7 +296,7 @@ class Controls(unittest.TestCase):
                 for layer in layers:
                     self.assertNotIn(namespace['TERMINAL_FOOTER_LAYERS'][layer][0], text)
                 self.assertIn('patch-support-file-dialog-lifecycle.py', text)
-                self.assertEqual((ROOT/'scripts/apply-branding.sh').read_bytes(), P.compose(P.project_to_canonical((ROOT/'scripts/apply-branding.sh').read_bytes(), 'scripts/apply-branding.sh'), 'scripts/apply-branding.sh'))
+                self.assertEqual((ROOT/'scripts/apply-branding.sh').read_bytes(), compose_current(current_to_canonical((ROOT/'scripts/apply-branding.sh').read_bytes(), 'scripts/apply-branding.sh'), 'scripts/apply-branding.sh'))
 
     def test_complete_tree_entry_uses_strict_inspect_and_never_falls_back(self):
         _, engine, plan = terminal()

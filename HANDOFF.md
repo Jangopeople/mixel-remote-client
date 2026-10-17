@@ -1,5 +1,59 @@
 # Mixel-Remote — Agent Handoff / Current State
 
+## 2026-10-17 — Real ARM CocoaPods integration fixed; next full build required
+
+Read current Git HEAD and the authoritative current checkpoint before older
+entries. Candidate ecb305e exposed real failures and its private producer was
+cancelled, not qualified: both Mac jobs failed before compilation because the
+NASM HTTPS server refused connections. A separate actual normal CocoaPods build
+found the generated Swift header importing a missing module-named public header.
+
+The renderer now owns a third exact public header, texture_rgba_renderer.h,
+forwarding to MixelTextureBase.h. Its101 product files retain the previous100
+bytes/modes and recover the exact original98 after inverse. The old100 package,
+wrong/extra header content, symlink and hardlink cases refuse before writes.
+Actual normal CocoaPods ARM compilation and linking now pass: arm64, minimum
+macOS12.3, real FlutterMacOS load, one base-class definition, actual generated
+Swift header and both public headers verified. Source/Pods/SDK hashes are
+unchanged afterward. Proof: durable artifact
+`mac-texture-normal101-ARM-and-Intel-limit-x515yamd/RESULT.json`. Actual Intel
+compilation remains required on supported CI: local Xcode27 rejects target10.14
+before compilation (minimum12.0); the product minimum was not raised. A local
+AppIntents metadata warning is retained, without a warning-free build claim.
+The old missing-header failure and later CLI argument error remain recorded.
+
+The cold Windows Rust regression now executes five real compiler invocations
+with warnings denied and20 passing test executions, zero ignored and blank
+stderr. It binds full core7f668c3c and portablebc13809c. The fixture composes only
+the terminal owner's exact cold pair and executes Windows cfg semantics on a
+Mac host. Prior invocation/fixture failures remain separate. Proof:
+`windows-cold-QS-rust-native-r3-dqpx_9_e/RESULT.json`. Actual signed Windows cold
+Standard-user launch, 95-second guard and customer Accept/control still require
+the new package; this component result does not replace them.
+
+Mac runtime setup now installs nasm through the existing official Homebrew
+package path and records nasm --version, replacing the refused direct ZIP and
+sudo copy. This changes the host assembler version; the next complete codec and
+both Mac builds must verify it. Exact cold/NASM workflow inverses preserve the
+frozen historical views. Shared projection/runtime helpers remain unchanged.
+The Windows integration unit controls pass16; the unchanged working==HEAD
+logical-view assertion requires a Root post-commit rerun before push.
+
+Linux systemd PR checks now run source controls only and state that scope
+explicitly. All59 controls pass. Actual prepare/host/collect/dependencies/run,
+cleanup and artifact upload require workflow_dispatch. The controller, guest,
+exact old6c artifact bindings and fatal product-drift guard are unchanged.
+Rebind and run the actual new DEB only after its next producer qualifies; the
+old successful service proof does not qualify changed product source.
+
+Superseded mandatory1d6 and ecb mandatory/comparison runs have explicit scoped
+cancellation requests; their original owners retain terminal logs once and mark
+incomplete/cancelled scope. All completed early outcomes and failures remain.
+No customer aliases, main, marketplace or production changes occurred. The
+shared authenticator input hold, human native Open/normal Mac Quit, protected
+old-resource/no-worktree rules and automatic GTK rejection remain in force.
+Delivery is incomplete until the next full builds and real desktop tests pass.
+
 ## 2026-10-17 — Cold QuickSupport fix and Mac native source composed
 
 The current candidate adds an explicit asInvoker/uiAccess=false outer Windows

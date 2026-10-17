@@ -88,6 +88,8 @@ NEW_PIXEL_COPY = """    public override func retainedPixelBufferPointer() -> Uns
         }
     }"""
 OWNED = {
+    "macos/Classes/texture_rgba_renderer.h": """#import "MixelTextureBase.h"
+""",
     "macos/Classes/MixelTextureBase.h": """// Mixel-owned retained-return bridge; Flutter's selector stays Objective-C.
 #import <FlutterMacOS/FlutterTexture.h>
 
