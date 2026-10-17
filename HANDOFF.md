@@ -11,8 +11,11 @@ The first shared failure was an overly narrow dependency lock profile: the Mac
 lock includes the conditional rdev foreign-types edge, while Linux/Windows use
 the complete common-platform lock. Both exact whole profiles are now pinned;
 partial/mixed changes still refuse. Owned Git HEAD/shallow use literal LF bytes
-on Windows. Thirteen dependency controls pass, including physical LF/CRLF
-roundtrips and metadata integrity. The mandatory receiver matrix now explicitly
+on Windows. Sixteen dependency controls pass, including physical LF/CRLF
+roundtrips, metadata integrity, and the exact input-only historical prefix.
+That prefix permits a read-only inverse; forward installation still requires
+the complete branded predecessor. Both common/Mac locks are checked against
+the actual pinned transformation helpers. The mandatory receiver matrix explicitly
 installs Python3.11 before the SAS preparation checks that require tomllib.
 
 Windows overlapped cancellation/reuse/peer-close passed. The actual different-SID
