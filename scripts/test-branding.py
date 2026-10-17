@@ -176,15 +176,35 @@ def restore_footer_debian_lifecycle(repo: Path) -> None:
     assert full_source_snapshot(repo) == expected, 'Debian footer inverse changed unrelated source'
 
 
+def require_receiver_footer_ownership(before, after, receiver) -> None:
+    """Keep exact file ownership and admit only removed generated dependency dirs."""
+    targets = receiver.owned_targets()
+    dependencies = receiver.owner('patch-support-receiver-uinput-deps.py')
+    directories = set()
+    for dependency in dependencies.load_plan()['dependencies']:
+        root = dependency['path']
+        directories.add(root)
+        directories.update(root + '/' + parent for parent in
+                           dependencies.parents({row['path'] for row in dependency['files']}))
+    for name in set(before) | set(after):
+        if before.get(name) == after.get(name):
+            continue
+        if name in targets:
+            assert all(value is None or value[0] == 'file'
+                       for value in (before.get(name), after.get(name))), \
+                'Receiver footer inverse changed an owned file into another kind'
+        else:
+            assert name in directories and before.get(name) == ('directory', '') and name not in after, \
+                'Receiver footer inverse changed unrelated source'
+
+
 def restore_footer_terminal_layers(repo: Path, layers: tuple[str, ...], base: Path, environment: dict) -> None:
     """Run each actual strict CLI inverse and verify its exact complete source effect."""
     receiver = input_lifecycle.receiver_projection()
     before_receiver = full_source_snapshot(repo)
     receiver.restore_private(repo)
     after_receiver = full_source_snapshot(repo)
-    changed_receiver = {name for name in set(before_receiver) | set(after_receiver)
-                        if before_receiver.get(name) != after_receiver.get(name)}
-    assert changed_receiver <= receiver.owned_targets(), 'Receiver footer inverse changed unrelated source'
+    require_receiver_footer_ownership(before_receiver, after_receiver, receiver)
     restore_footer_debian_lifecycle(repo)
     restore_footer_input_layer(repo, base, environment)
     for layer in layers:

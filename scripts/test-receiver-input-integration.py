@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise exact terminal hook inverses and complete receiver prior admissions."""
 import contextlib
+import ast
 import hashlib
 import importlib.util
 from pathlib import Path
@@ -18,7 +19,60 @@ P = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(P)
 
 
+def footer_guard():
+    source = (ROOT / 'scripts/test-branding.py').read_text()
+    tree = ast.parse(source)
+    functions = [node for node in tree.body if isinstance(node, ast.FunctionDef)
+                 and node.name == 'require_receiver_footer_ownership']
+    if len(functions) != 1:
+        raise AssertionError('Exact actual footer ownership guard required')
+    namespace = {}
+    exec(compile(ast.Module(body=functions, type_ignores=[]), 'actual-footer-ownership', 'exec'), namespace)
+    return namespace['require_receiver_footer_ownership'], tree
+
+
 class Controls(unittest.TestCase):
+    def test_footer_inverse_accepts_only_exact_dependency_directory_removals(self):
+        guard, _ = footer_guard()
+        directories = {'.mixel-deps/' + name + suffix
+                       for name in ('evdev', 'parity-tokio-ipc')
+                       for suffix in ('', '/examples', '/src')}
+        before = {name: ('file', 'before') for name in P.owned_targets()}
+        before.update({name: ('directory', '') for name in directories})
+        after = {name: ('file', 'after') for name in P.owned_targets()}
+        changed = {name for name in set(before) | set(after) if before.get(name) != after.get(name)}
+        self.assertFalse(changed <= P.owned_targets(), 'Original file-only guard must reproduce the real refusal')
+        guard(before, after, P)
+        guard(after, after, P)
+
+    def test_footer_inverse_still_refuses_foreign_files_directories_and_kind_changes(self):
+        guard, _ = footer_guard()
+        for name, old, new in (
+                ('.mixel-deps', ('directory', ''), None),
+                ('src/server', ('directory', ''), None),
+                ('.mixel-deps/evdev/foreign', ('directory', ''), None),
+                ('.mixel-deps/evdev/notes', ('file', 'old'), None),
+                ('.mixel-deps/evdev', ('symlink', 'elsewhere'), None),
+                ('.mixel-deps/evdev', ('directory', ''), ('file', 'new')),
+                ('.mixel-deps/evdev', None, ('directory', '')),
+                ('src/core_main.rs', ('file', 'old'), ('symlink', 'elsewhere'))):
+            with self.subTest(name=name, old=old, new=new):
+                before = {} if old is None else {name: old}
+                after = {} if new is None else {name: new}
+                with self.assertRaises(AssertionError):
+                    guard(before, after, P)
+
+    def test_actual_footer_inverse_calls_the_guard_and_keeps_plan_drift_fatal(self):
+        guard, tree = footer_guard()
+        caller = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                      and node.name == 'restore_footer_terminal_layers')
+        calls = [node for node in ast.walk(caller) if isinstance(node, ast.Call)
+                 and isinstance(node.func, ast.Name) and node.func.id == 'require_receiver_footer_ownership']
+        self.assertEqual(len(calls), 1)
+        with mock.patch.object(P, 'owner', side_effect=ValueError('exact owner drift')):
+            with self.assertRaisesRegex(ValueError, 'exact owner drift'):
+                guard({}, {}, P)
+
     def test_controls_are_required_by_both_release_entrypoints(self):
         for name, heading in (('build.yml', 'Verify release staging and build configuration'),
                               ('preflight.yml', 'Run release staging and configuration regression tests')):
