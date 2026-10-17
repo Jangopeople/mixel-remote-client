@@ -1,15 +1,15 @@
 {
   "scripts/fixtures/receiver-custodian-native/Cargo.lock": {
-    "bytes": 22983,
-    "sha256": "ff302a7d3961fccc83ce2a4a4fb4808d45c9dc5b364a3f33246e3a500116c175"
+    "bytes": 19949,
+    "sha256": "cb8cc31c4fbcd47a14c0203acdeb3438415ff80277488c757a0cfadef893e584"
   },
   "scripts/fixtures/receiver-custodian-native/Cargo.toml": {
     "bytes": 800,
     "sha256": "a2a3aae783a9615d6111c3daf9bbc0b24601790510858d577d8482c44c934ece"
   },
   "scripts/fixtures/receiver-custodian-native/LOCK-PROVENANCE.json": {
-    "bytes": 562,
-    "sha256": "ee2a4c8da7d6456afdd7c32c16cf36d8b20522e9f4ae60f0fc19f9fc2624ae21"
+    "bytes": 1463,
+    "sha256": "5dca3ff3d197d1bc994c61b8efe300d439f924646fcf962d025e11c499add0f7"
   },
   "scripts/fixtures/receiver-custodian-native/build.rs": {
     "bytes": 158,

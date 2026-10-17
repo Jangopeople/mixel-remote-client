@@ -1,6 +1,6 @@
 {
   "productionLockSHA256": "188f2b45efb35b043b203ff9ddbe2db3d4bdf2a44dd457a8ec253289bcc2c72e",
-  "exactRegistryPackages": 96,
+  "exactRegistryPackages": 86,
   "rootDependencies": {
     "anyhow": "1.0.98",
     "bytes": "1.10.1",
@@ -13,5 +13,22 @@
     "uuid": "1.16.0",
     "protobuf-codegen": "3.7.2"
   },
-  "selection": "exact recursive dependency closure; original registry checksums and versioned edges retained; no Cargo resolution or compiler invoked"
+  "selection": "Cargo 1.75.0 resolved the fixture feature graph from the held exact production closure; package versions, sources and registry checksums are unchanged. Locked metadata then passed with identical candidate bytes; no fixture compilation or native execution requested.",
+  "previousClosureRegistryPackages": 96,
+  "lockResolution": {
+    "source": "7642c491d944910e34f5386f0e0f80b9b74f80dc",
+    "run": 39062695070,
+    "attempt": 1,
+    "job": 117483766141,
+    "url": "https://github.com/Jangopeople/mixel-remote-client/actions/runs/39062695070",
+    "previousLogicalLockSHA256": "ff302a7d3961fccc83ce2a4a4fb4808d45c9dc5b364a3f33246e3a500116c175",
+    "resolvedLockSHA256": "cb8cc31c4fbcd47a14c0203acdeb3438415ff80277488c757a0cfadef893e584",
+    "originalJobLogSHA256": "3d863b4f7920dc2fc2672e7974d80763901afe2df0a6a534a78c5affd8e2bcaa",
+    "oldPackages": 97,
+    "resolvedPackages": 87,
+    "newPackageIdentities": 0,
+    "rootDependencyNamesUnchanged": true,
+    "lockedMetadataSucceeded": true,
+    "applicationQualified": false
+  }
 }
