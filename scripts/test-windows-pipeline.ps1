@@ -685,6 +685,7 @@ foreach ($required in @(
 }
 
 
+function Test-MixelWindowsStorePayload([string]$ScriptsDirectory = $PSScriptRoot) {
 $temporary = Join-Path ([IO.Path]::GetTempPath()) ('mixel-windows-pipeline-' + [Guid]::NewGuid())
 try {
   $build = Join-Path $temporary 'build'
@@ -694,27 +695,50 @@ try {
   foreach ($file in @('mixel-remote.exe', 'libmixel-remote.dll', 'flutter_windows.dll', 'data/icudtl.dat', 'data/flutter_assets/AssetManifest.json')) {
     Set-Content (Join-Path $release $file) -Value 'compiled-test-fixture' -Encoding utf8
   }
+  $plugin = Join-Path $release 'desktop_multi_window_plugin.dll'
+  $fixtureWriter = Join-Path $ScriptsDirectory 'create-windows-payload-metadata-fixture.py'
+  & python $fixtureWriter --output $plugin
+  if ($LASTEXITCODE -ne 0) { throw 'Inert native plugin metadata fixture generation failed.' }
+  $pluginBytes = [IO.File]::ReadAllBytes($plugin)
   New-Item -ItemType Directory -Force $payload | Out-Null
   Set-Content (Join-Path $payload 'stale.dll') -Value 'must-be-removed'
-  & (Join-Path $PSScriptRoot 'prepare-windows-store-payload.ps1') -BuildRoot $build -Destination $payload
+  & (Join-Path $ScriptsDirectory 'prepare-windows-store-payload.ps1') -BuildRoot $build -Destination $payload
   if (-not (Test-Path (Join-Path $payload 'Mixel-Remote.exe')) -or (Test-Path (Join-Path $payload 'stale.dll'))) {
     throw 'Payload preparation failed to normalize the main name or remove stale bytes.'
   }
+  if ((Get-FileHash (Join-Path $payload 'desktop_multi_window_plugin.dll') -Algorithm SHA256).Hash -cne (Get-FileHash $plugin -Algorithm SHA256).Hash) {
+    throw 'Store staging changed the actual plugin resource fixture bytes.'
+  }
   Write-Host 'PASS: payload preparation starts clean and preserves the compiled application and assets.'
+  Remove-Item -LiteralPath $plugin
+  Assert-Fails { & (Join-Path $ScriptsDirectory 'prepare-windows-store-payload.ps1') -BuildRoot $build -Destination $payload } 'Store payload missing plugin' @('Windows payload must contain exactly one desktop_multi_window_plugin.dll.')
+  foreach ($profile in @('corrupt', 'retired')) {
+    $changed = Join-Path $temporary ($profile + '.dll')
+    & python $fixtureWriter --output $changed --profile $profile
+    if ($LASTEXITCODE -ne 0) { throw "Inert $profile resource fixture generation failed." }
+    Copy-Item -LiteralPath $changed -Destination $plugin
+    $expected = if ($profile -ceq 'retired') { 'Retired Windows payload metadata: desktop_multi_window_plugin.dll: CompanyName.' } else { 'Invalid owned plugin metadata: desktop_multi_window_plugin.dll: CompanyName.' }
+    Assert-Fails { & (Join-Path $ScriptsDirectory 'prepare-windows-store-payload.ps1') -BuildRoot $build -Destination $payload } "Store payload $profile resource" @($expected)
+  }
+  [IO.File]::WriteAllBytes($plugin, $pluginBytes)
+  Write-Host 'PASS: actual Store staging copies a real VERSIONINFO-only plugin unchanged and rejects missing, corrupt and retired resources; no PE executes.'
   Remove-Item (Join-Path $release 'data/flutter_assets/AssetManifest.json')
-  Assert-Fails { & (Join-Path $PSScriptRoot 'prepare-windows-store-payload.ps1') -BuildRoot $build -Destination $payload } 'empty Flutter assets'
+  Assert-Fails { & (Join-Path $ScriptsDirectory 'prepare-windows-store-payload.ps1') -BuildRoot $build -Destination $payload } 'empty Flutter assets'
   Set-Content (Join-Path $release 'data/flutter_assets/AssetManifest.json') -Value '{}'
   Remove-Item (Join-Path $release 'libmixel-remote.dll')
-  Assert-Fails { & (Join-Path $PSScriptRoot 'prepare-windows-store-payload.ps1') -BuildRoot $build -Destination $payload } 'missing core DLL'
+  Assert-Fails { & (Join-Path $ScriptsDirectory 'prepare-windows-store-payload.ps1') -BuildRoot $build -Destination $payload } 'missing core DLL'
   Set-Content (Join-Path $release 'libmixel-remote.dll') -Value 'compiled-test-fixture'
   $duplicate = Join-Path $build 'other/Release'
   New-Item -ItemType Directory -Force $duplicate | Out-Null
   Set-Content (Join-Path $duplicate 'mixel-remote.exe') -Value 'ambiguous-build'
-  Assert-Fails { & (Join-Path $PSScriptRoot 'prepare-windows-store-payload.ps1') -BuildRoot $build -Destination $payload } 'ambiguous compiled application'
+  Assert-Fails { & (Join-Path $ScriptsDirectory 'prepare-windows-store-payload.ps1') -BuildRoot $build -Destination $payload } 'ambiguous compiled application'
   Write-Host 'PASS: incomplete and ambiguous Windows builds fail closed.'
 } finally {
   if (Test-Path $temporary) { Remove-Item $temporary -Recurse -Force }
 }
+}
+Test-MixelWindowsStorePayload
+
 
 }
 

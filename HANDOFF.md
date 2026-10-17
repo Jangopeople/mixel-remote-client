@@ -46,7 +46,16 @@ results do not override the actual source85 package branding/ownership blockers.
 All detailed immutable source, compilation and independent receipts are in the
 checkpoint's durable artifact directory; do not recollect source85 originals.
 
-Require corrected-source complete branding, private rebuilt all-four producer,
+The corrected source passes the complete fresh-upstream branding pipeline,
+including byte-identical repeat application, plus Root's combined syntax,
+14 projection,28 inventory and22 release checks. The first new mandatory Windows
+run correctly rejects the old Store test fixture because its text-file payload
+has no required plugin. The fixture correction constructs an inert resource-only
+x64 DLL with real VERSIONINFO and exercises unchanged staging for valid, missing,
+corrupt and retired resources. Production guards remain strict. Require actual
+early Windows staging success before dispatching the next all-four producer.
+
+Require private rebuilt all-four producer,
 mandatory preflight and Windows comparison, package qualification and fresh native
 acceptance. Only the producer needs manual workflow dispatch: pushing this PR
 already starts preflight and the comparison because apply-branding.sh changes.
