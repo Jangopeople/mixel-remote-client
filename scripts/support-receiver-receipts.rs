@@ -122,8 +122,9 @@ mod tests {
         calls.sort();assert_eq!(calls,vec![29,42]);assert_eq!(errors.len(),1);assert!(s.keys.contains_key(&29));assert!(!s.keys.contains_key(&42));
     }
     #[test] fn timeout_is_per_claim() {
-        let mut s=Test::default();let now=Instant::now();
-        s.down(owner("a",0),1,29,29,true,now-Duration::from_secs(400),||true,|_,_|Ok(())).unwrap();
+        let mut s=Test::default();let base=Instant::now();
+        let now=base+Duration::from_secs(400);
+        s.down(owner("a",0),1,29,29,true,base,||true,|_,_|Ok(())).unwrap();
         s.down(owner("b",0),2,29,29,true,now,||true,|_,_|Ok(())).unwrap();
         s.retire(|_,t|now.duration_since(*t)>Duration::from_secs(360),|_,_|panic!("fresh owner released"));
         assert!(!s.keys[&29].claims.contains_key(&owner("a",0)));assert!(s.keys[&29].claims.contains_key(&owner("b",0)));

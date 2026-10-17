@@ -379,6 +379,34 @@ class NativeSourceControls(unittest.TestCase):
         self.assertLess(linux.index('(x11 && code > 255)'), linux.index('let route = if x11'))
         self.assertIn('if code > u16::MAX as u32 { return None; }', raw)
 
+    def test_receipt_timeout_fixture_advances_clock_without_backdating_boot(self):
+        import re
+        _, modules = P.plan()
+        core = modules['src/server/mixel_receiver_receipts.rs'].decode()
+        start = core.index('fn timeout_is_per_claim()')
+        test = core[start:core.index('    #[test]', start)]
+        self.assertIn('let base=Instant::now();', test)
+        shift = re.search(r'let now=base\+Duration::from_secs\((\d+)\);', test)
+        self.assertIsNotNone(shift)
+        elapsed = int(shift[1])
+        self.assertEqual(elapsed, 400)
+        self.assertNotIn('now-Duration::', test)
+        self.assertIn('s.down(owner("a",0),1,29,29,true,base,', test)
+        self.assertIn('s.down(owner("b",0),2,29,29,true,now,', test)
+        threshold = int(re.search(r'now.duration_since\(\*t\)>Duration::from_secs\((\d+)\)', test)[1])
+        self.assertEqual(threshold, 360)
+        # The earlier backdate is unrepresentable on a recently booted Windows
+        # monotonic clock. Advancing observation time keeps both exact ages.
+        for base in (0, 1, 60, 399, 400, 10000):
+            now = base + elapsed
+            self.assertGreaterEqual(now, base)
+            self.assertEqual((now - base, now - now), (400, 0))
+            self.assertTrue(now - base > threshold)
+            self.assertFalse(now - now > threshold)
+        self.assertIn('panic!("fresh owner released")', test)
+        self.assertIn('assert!(!s.keys[&29].claims.contains_key(&owner("a",0)))', test)
+        self.assertIn('assert!(s.keys[&29].claims.contains_key(&owner("b",0)))', test)
+
     def test_numeric_boundaries_and_cancellation_chunks(self):
         _, modules = P.plan()
         native = modules['src/server/mixel_receiver_native.rs'].decode()

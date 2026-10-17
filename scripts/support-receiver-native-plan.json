@@ -238,7 +238,7 @@
     {
       "name": "src/server/mixel_receiver_receipts.rs",
       "template": "support-receiver-receipts.rs",
-      "sha256": "cbe497eba58390ebbcc8366d4db6309306861d0743f7810be405dde0ce2acc13",
+      "sha256": "c436a401639b4af73e71484ac4ce1a2aad773f1a0ccf9ac42a85606a0113d0c6",
       "mode": 420,
       "newlineFrom": "src/server/input_service.rs"
     }
