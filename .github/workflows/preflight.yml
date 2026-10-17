@@ -54,20 +54,24 @@ jobs:
       - name: Record immutable source identity
         shell: bash
         run: |
-          git rev-parse HEAD
-          git rev-parse 'HEAD^{tree}'
-          git status --short
+          mkdir -p receiver-native-source-proof
+          git rev-parse HEAD | tee receiver-native-source-proof/head.log
+          git rev-parse 'HEAD^{tree}' | tee receiver-native-source-proof/tree.log
+          git status --short | tee receiver-native-source-proof/status.log
       - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: '1.81'
       - name: Verify receiver source and migration contracts
         shell: bash
-        run: python3 scripts/test-support-receiver-input.py
+        run: |
+          set -o pipefail
+          python3 scripts/test-support-receiver-input.py 2>&1 | tee receiver-native-source-proof/source-controls.log
       - name: Verify actual native receipt source and transition core
         shell: bash
         run: |
-          python3 scripts/test-receiver-native.py --source-only
-          python3 scripts/test-receiver-native.py --native --proof-root receiver-native-receipts-proof
+          set -o pipefail
+          python3 scripts/test-receiver-native.py --source-only 2>&1 | tee receiver-native-source-proof/receipt-source-controls.log
+          python3 scripts/test-receiver-native.py --native --proof-root receiver-native-receipts-proof 2>&1 | tee receiver-native-source-proof/receipt-native.log
       - name: Compile and exercise exact receiver capability component
         shell: bash
         run: python3 scripts/test-support-receiver-input-native.py --output receiver-native-proof
@@ -83,6 +87,7 @@ jobs:
             receiver-native-proof/component/Cargo.lock
             receiver-native-proof/component/tests/*.rs
             receiver-native-receipts-proof/
+            receiver-native-source-proof/
           if-no-files-found: error
           retention-days: 14
   release-pipeline:
