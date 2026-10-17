@@ -48,6 +48,7 @@ env:
   # Direct Python helpers and their inherited child processes share UTF-8 on Windows.
   PYTHONUTF8: "1"
   PYTHONIOENCODING: "utf-8"
+  PYTHONUNBUFFERED: "1"
   RUST_VERSION: "1.75"
   MAC_RUST_VERSION: "1.81"
   FLUTTER_VERSION: "3.27.4"

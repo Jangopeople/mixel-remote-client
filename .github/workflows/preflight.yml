@@ -6,6 +6,10 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
+      receiver_native_only:
+        description: 'Diagnostic exact receiver component only; never qualifies an application release'
+        type: boolean
+        default: false
       windows_source_runner:
         description: 'Windows source-only comparison runner'
         type: choice
@@ -34,9 +38,49 @@ env:
   # Direct Python helpers and their inherited child processes share UTF-8 on Windows.
   PYTHONUTF8: "1"
   PYTHONIOENCODING: "utf-8"
+  PYTHONUNBUFFERED: "1"
 
 jobs:
+  receiver-native:
+    name: receiver-native (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-14, windows-2022]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Record immutable source identity
+        shell: bash
+        run: |
+          git rev-parse HEAD
+          git rev-parse 'HEAD^{tree}'
+          git status --short
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: '1.81'
+      - name: Verify receiver source and migration contracts
+        shell: bash
+        run: python3 scripts/test-support-receiver-input.py
+      - name: Compile and exercise exact receiver capability component
+        shell: bash
+        run: python3 scripts/test-support-receiver-input-native.py --output receiver-native-proof
+      - name: Retain actual receiver component output and source bindings
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: receiver-native-${{ matrix.os }}
+          path: |
+            receiver-native-proof/*.log
+            receiver-native-proof/*.json
+            receiver-native-proof/component/Cargo.toml
+            receiver-native-proof/component/Cargo.lock
+            receiver-native-proof/component/tests/*.rs
+          if-no-files-found: error
+          retention-days: 14
   release-pipeline:
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.receiver_native_only) }}
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v5
@@ -70,6 +114,7 @@ jobs:
       - name: Validate branding shell syntax
         run: bash -n scripts/apply-branding.sh scripts/local/sign-and-publish-macos.sh
   windows-packaging:
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.receiver_native_only) }}
     runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_source_runner == 'windows-2025' && 'windows-2025' || 'windows-2022' }}
     timeout-minutes: 240
     env:
@@ -311,6 +356,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
   https-registration-gateway:
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.receiver_native_only) }}
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     steps:
@@ -329,6 +375,7 @@ jobs:
           path: gateway-proof
           if-no-files-found: error
   upstream-source:
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.receiver_native_only) }}
     runs-on: ubuntu-22.04
     timeout-minutes: 45
     steps:
@@ -418,6 +465,7 @@ jobs:
           retention-days: 14
 
   macos-runtime-harness:
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.receiver_native_only) }}
     runs-on: macos-14
     timeout-minutes: 90
     steps:
