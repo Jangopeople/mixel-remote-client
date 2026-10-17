@@ -80,6 +80,10 @@ pub(crate) fn run_native_tests() {
         ("Windows retained startup identity and once-only query-handle transfer",native_startup_identity_transfer_and_unrelated_handle_refusal as fn()),
         ("Windows exact owned suspended startup failure cleanup",native_partial_start_guard_terminates_only_owned_suspended_child as fn()),
         ("Windows late retiring-helper Pong cannot reopen admission",native_old_helper_pong_cannot_reopen_transition as fn()),
+        ("Windows pending receipts and failed BlockOff retain recovery barrier",native_recovery_waits_for_receipts_and_block_off as fn()),
+        ("Windows stale failure cannot disarm a fresh startup attempt",native_stale_failure_cannot_disarm_fresh_attempt as fn()),
+        ("Windows invalid logon/create failure recover fresh admission",native_create_failure_and_invalid_logon_recover_fresh_admission as fn()),
+        ("Windows owned handshake timeout recovers after exact child death",native_unconfirmed_owned_startup_times_out_then_recovers as fn()),
     ] {case();println!("PASS: {name}");}
 }
 #[cfg(feature="guard-must-not-send")]
@@ -88,7 +92,6 @@ fn acquired_mutex_guard_must_not_migrate(serial:Serial<'static>){std::thread::sp
 #[link(name="kernel32")]
 extern "system" {
     fn SetNamedPipeHandleState(pipe:Handle,mode:*const u32,maximum:*const u32,timeout:*const u32)->i32;
-    fn CreateProcessW(application:*const u16,command:*mut u16,process_attributes:Handle,thread_attributes:Handle,inherit:i32,creation:u32,environment:Handle,directory:*const u16,startup:*mut StartupInfo,info:*mut ProcessInfo)->i32;
 }
 pub(crate) fn query_child() {
     use std::{os::windows::io::{FromRawHandle,AsRawHandle},io::{Read,Write}};
@@ -109,7 +112,7 @@ fn native_startup_identity_transfer_and_unrelated_handle_refusal() {
     let mut child=OwnedChild(std::process::Command::new(std::env::current_exe().unwrap()).arg("--mixel-receiver-query-child").env("MIXEL_RECEIVER_TEST_PIPE",&path).spawn().unwrap());
     let process=Owned::from(unsafe{OpenProcess(SYNC|0x1000|0x40,0,child.id())}).unwrap();let sid=process_sid(process.raw()).unwrap();let peer=verified_peer(child.id(),Arc::new(process),sid).unwrap();
     let mut transfer=ptr::null_mut();assert_ne!(unsafe{DuplicateHandle(GetCurrentProcess(),GetCurrentProcess(),peer.process.raw(),&mut transfer,SYNC|0x1000,0,0)},0);
-    *started().lock().unwrap()=Some(Started{peer:peer.clone(),publisher:Some(transfer as usize as u64),confirmed:Arc::new(AtomicBool::new(false))});
+    *started().lock().unwrap()=Some(Started{peer:peer.clone(),publisher:Some(transfer as usize as u64),confirmed:Arc::new(AtomicUsize::new(0))});
     let deadline=std::time::Instant::now()+Duration::from_secs(5);loop{if unsafe{ConnectNamedPipe(pipe.raw(),ptr::null_mut())}!=0||unsafe{GetLastError()}==535{break;}assert!(std::time::Instant::now()<deadline);std::thread::sleep(Duration::from_millis(5));}
     let mode=0;assert_ne!(unsafe{SetNamedPipeHandleState(pipe.raw(),&mode,ptr::null(),ptr::null())},0);
     let authenticated=pipe_peer(pipe.raw(),false).unwrap();assert_eq!(authenticated.pid,peer.pid);assert_eq!(authenticated.born,peer.born);assert_eq!(authenticated.sid,peer.sid);
@@ -127,6 +130,42 @@ fn native_partial_start_guard_terminates_only_owned_suspended_child() {
 
 fn native_old_helper_pong_cannot_reopen_transition() {
     let pid=unsafe{GetCurrentProcessId()};let process=Owned::from(unsafe{OpenProcess(SYNC|0x1000,0,pid)}).unwrap();let sid=process_sid(process.raw()).unwrap();let peer=verified_peer(pid,Arc::new(process),sid).unwrap();
-    *helper().lock().unwrap()=Some(peer.clone());begin_transition();assert!(TRANSITION.load(Ordering::SeqCst));startup_confirmed(&peer);assert!(TRANSITION.load(Ordering::SeqCst),"late retiring-helper Pong cannot admit Local/old-backend scopes");
+    *helper().lock().unwrap()=Some(peer.clone());assert!(begin_transition().is_some());assert!(TRANSITION.load(Ordering::SeqCst));assert!(!startup_confirmed(&peer,||panic!("retired helper cannot publish RUNNING")));assert!(TRANSITION.load(Ordering::SeqCst),"late retiring-helper Pong cannot admit Local/old-backend scopes");
     *helper().lock().unwrap()=None;TRANSITION.store(false,Ordering::SeqCst);
+}
+
+fn native_create_failure_and_invalid_logon_recover_fresh_admission() {
+    let exe=std::env::current_exe().unwrap();let exe=exe.to_str().unwrap();
+    let absent=format!("MixelAbsent{}",&uuid::Uuid::new_v4().simple().to_string()[..8]);let secret=SecretCredential::new(uuid::Uuid::new_v4().simple().to_string());
+    assert!(launch_with_logon(&absent,secret.as_str(),exe,"--portable-service").is_none());assert!(!TRANSITION.load(Ordering::SeqCst),"invalid credentials do not alter admission");
+    let sid=process_sid(unsafe{GetCurrentProcess()}).unwrap();assert!(launch_owned(exe,"--portable-service",sid,|_,_|0).is_none());
+    let deadline=std::time::Instant::now()+Duration::from_secs(3);while TRANSITION.load(Ordering::SeqCst){assert!(std::time::Instant::now()<deadline);std::thread::sleep(Duration::from_millis(5));}
+    let receiver=Receiver::new(81);assert!(receiver.authorize(true));assert!(receiver.close());
+}
+fn native_unconfirmed_owned_startup_times_out_then_recovers() {
+    // The owned child blocks waiting for a GUID-only fixture pipe, sends no
+    // application Pong, and is killed only by its exact startup watchdog.
+    let path=format!("\\\\.\\pipe\\Mixel-Input-Timeout-{}",uuid::Uuid::new_v4().simple());
+    let exe=std::env::current_exe().unwrap();let application=wide(exe.to_str().unwrap());let mut command=wide(&format!("\"{}\" --mixel-lease-publisher",exe.display()));
+    let old=std::env::var_os("MIXEL_RECEIVER_TEST_PIPE");std::env::set_var("MIXEL_RECEIVER_TEST_PIPE",path);
+    let sid=process_sid(unsafe{GetCurrentProcess()}).unwrap();assert!(launch_owned(exe.to_str().unwrap(),"--portable-service",sid,|info,process|unsafe{CreateProcessW(application.as_ptr(),command.as_mut_ptr(),ptr::null_mut(),ptr::null_mut(),0,4,ptr::null_mut(),ptr::null(),info,process)}).is_some());
+    if let Some(old)=old{std::env::set_var("MIXEL_RECEIVER_TEST_PIPE",old);}else{std::env::remove_var("MIXEL_RECEIVER_TEST_PIPE");}
+    let owned=started().lock().unwrap().as_ref().unwrap().peer.process.clone();assert!(TRANSITION.load(Ordering::SeqCst));let fresh=Receiver::new(82);assert!(!fresh.authorize(true));assert!(fresh.close());
+    let deadline=std::time::Instant::now()+Duration::from_secs(15);while TRANSITION.load(Ordering::SeqCst){assert!(std::time::Instant::now()<deadline);std::thread::sleep(Duration::from_millis(10));}
+    assert_eq!(unsafe{WaitForSingleObject(owned.raw(),0)},OBJECT);let fresh=Receiver::new(83);assert!(fresh.authorize(true));assert!(fresh.close());started().lock().unwrap().take();*helper().lock().unwrap()=None;
+}
+fn native_recovery_waits_for_receipts_and_block_off() {
+    let receiver=Receiver::new(84);assert!(receiver.authorize(true));super::run_actual(super::captured(&receiver,super::key_action(true)));assert!(receiver.block(true,false));
+    super::super::super::RELEASE_FAILURES.store(100_000,Ordering::SeqCst);super::super::super::UNBLOCK_FAILURES.store(100_000,Ordering::SeqCst);
+    assert!(!quiesce_helper_transition());assert!(TRANSITION.load(Ordering::SeqCst));let fresh=Receiver::new(85);assert!(!fresh.authorize(true));assert!(fresh.close());
+    super::super::super::RELEASE_FAILURES.store(0,Ordering::SeqCst);
+    let deadline=std::time::Instant::now()+Duration::from_secs(3);while !receiver.inner.state.lock().unwrap().generation.as_ref().unwrap().cleanup_done.load(Ordering::SeqCst){assert!(std::time::Instant::now()<deadline);std::thread::sleep(Duration::from_millis(5));}
+    assert!(TRANSITION.load(Ordering::SeqCst),"failed OS unblock retains barrier after key receipts retire");
+    super::super::super::UNBLOCK_FAILURES.store(0,Ordering::SeqCst);while TRANSITION.load(Ordering::SeqCst){assert!(std::time::Instant::now()<deadline);std::thread::sleep(Duration::from_millis(5));}
+    assert!(receiver.close());let fresh=Receiver::new(86);assert!(fresh.authorize(true));assert!(fresh.close());
+}
+fn native_stale_failure_cannot_disarm_fresh_attempt() {
+    let old=begin_transition().unwrap();request_recovery(old);poll_transition_recovery();assert!(!TRANSITION.load(Ordering::SeqCst));
+    let fresh=begin_transition().unwrap();assert_ne!(old,fresh);request_recovery(old);poll_transition_recovery();assert!(TRANSITION.load(Ordering::SeqCst),"old watchdog cannot recover a fresh pending attempt");
+    request_recovery(fresh);poll_transition_recovery();assert!(!TRANSITION.load(Ordering::SeqCst));
 }

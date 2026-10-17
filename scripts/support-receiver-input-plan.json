@@ -23,10 +23,10 @@
       "src/server/connection.rs": "59f9fe7114c954c7437e83266f311ed6b51dec4c902982d1e3de5c21196c4c0d",
       "src/server.rs": "4fb7df5363849646f2ec0352ffa7b3c04e69fca0edb5c178801cdcfce1921f01",
       "src/ipc.rs": "01816ea9cc025b38533029209c79da2a508fdd8413e11c19e9f9cb8429d15c76",
-      "src/server/portable_service.rs": "ee2ddcaa9f88797aa8961e4e1bd5e4b8c8838d7cbf62ad7d275ec728a67542eb",
+      "src/server/portable_service.rs": "855171128d6036cbd0cb9aedf52b56eadce2e484981ae335b60f85ec22d7dacf",
       "src/platform/windows.rs": "7efe6ac71743538ad7f0764c56fbb8f376aa3ba4039d87236cd67ac5026c6d08",
-      "src/server/mixel_receiver_input.rs": "8367b44f4457776085263e43d6bbbe602d4bd36761f49371996280b8b0875032",
-      "src/server/mixel_receiver_input_windows.rs": "839e6ca410b2110d3963070b3ba4b26bb4ae65b8f4960f972a899d9ec30c49d0"
+      "src/server/mixel_receiver_input.rs": "604249f1879f5dc024f650cc21c15cced09c35e341cdd3746f0e8b80af985028",
+      "src/server/mixel_receiver_input_windows.rs": "4ae48a3fe9b68318db722c9bc58e9afe9758ca66293306d7630fd32e47f8a271"
     },
     "previous": {
       "src/server/connection.rs": "5a78e048ce5a90e8aa491ee77dfbbe413817cb7e71d8e225558d9f0795d2d0b4",
@@ -39,8 +39,8 @@
     }
   },
   "templates": {
-    "src/server/mixel_receiver_input.rs": "8367b44f4457776085263e43d6bbbe602d4bd36761f49371996280b8b0875032",
-    "src/server/mixel_receiver_input_windows.rs": "839e6ca410b2110d3963070b3ba4b26bb4ae65b8f4960f972a899d9ec30c49d0"
+    "src/server/mixel_receiver_input.rs": "604249f1879f5dc024f650cc21c15cced09c35e341cdd3746f0e8b80af985028",
+    "src/server/mixel_receiver_input_windows.rs": "4ae48a3fe9b68318db722c9bc58e9afe9758ca66293306d7630fd32e47f8a271"
   },
   "changes": {
     "src/server/connection.rs": [
@@ -235,10 +235,6 @@
         "    pub fn handle_mouse(\n        _evt: &MouseEvent, _conn: i32, _username: String, _argb: u32,\n        _simulate: bool, _show_cursor: bool,\n    ) { /* Legacy portable input has no receiver capability. */ }\n\n    pub fn handle_pointer(_evt: &PointerDeviceEvent, _conn: i32) { }\n    pub fn handle_key(_evt: &KeyEvent) { }\n\n"
       ],
       [
-        "            StartPara::Direct => {",
-        "            StartPara::Direct => {\n                if !crate::server::mixel_receiver_input::quiesce_helper_transition() { bail!(\"Input retirement pending; helper startup denied\"); }"
-      ],
-      [
         "            StartPara::Logon(username, password) => {",
         "            StartPara::Logon(username, password) => {\n                let password = crate::server::mixel_receiver_input::SecretCredential::new(password);"
       ],
@@ -251,8 +247,12 @@
         "                                        let Some(receiver_peer) = stream.receiver_pipe_peer(false) else { return; };\n                                        let Some(publisher_handle) = crate::server::mixel_receiver_input::publisher_handle(&receiver_peer) else { return; };\n                                        if stream.send(&Data::DataPortableService(ReceiverPublisherHandle(publisher_handle))).await.is_err() { return; }"
       ],
       [
-        "                                                                *RUNNING.lock().unwrap() = true;",
-        "                                                                *RUNNING.lock().unwrap() = true;\n                                                                crate::server::mixel_receiver_input::startup_confirmed(&receiver_peer);"
+        "            StartPara::Direct => {\n                if let Err(e) = crate::platform::run_background(\n                    &std::env::current_exe()?.to_string_lossy().to_string(),\n                    \"--portable-service\",\n                ) {\n                    *SHMEM.lock().unwrap() = None;\n                    bail!(\"Failed to run portable service process: {}\", e);\n                }\n            }\n",
+        "            StartPara::Direct => {\n                if crate::server::mixel_receiver_input::launch_direct(\n                    &std::env::current_exe()?.to_string_lossy(), \"--portable-service\").is_none() {\n                    *SHMEM.lock().unwrap() = None;\n                    bail!(\"Portable helper startup identity could not be established\");\n                }\n            }\n"
+      ],
+      [
+        "                                                                nack = 0;\n                                                                *RUNNING.lock().unwrap() = true;",
+        "                                                                if !crate::server::mixel_receiver_input::startup_confirmed(&receiver_peer, || { *RUNNING.lock().unwrap() = true; }) { break; }\n                                                                nack = 0;"
       ]
     ],
     "src/platform/windows.rs": [
@@ -455,10 +455,6 @@
         "eme| get_cursor_info_(sheme, pci))\n        } else {\n            unsafe { winuser::GetCursorInfo(pci) }\n        }\n    }\n\n    pub fn handle_mouse(\n        evt: &MouseEvent,\n        conn: i32,\n        username: String,\n        argb: u32,\n        simulate: bool,\n        show_cursor: bool,\n    ) {\n        if RUNNING.lock().unwrap().clone() {\n            crate::input_service::update_latest_input_cursor_time(conn);\n            handle_mouse_(evt, conn, username, argb, simulate, show_cursor).ok();\n        } else {\n            crate::input_service::handle_mouse_(evt, conn, username, argb, simulate, show_cursor);\n        }\n    }\n\n    pub fn handle_pointer(evt: &PointerDeviceEvent, conn: i32) {\n        if RUNNING.lock().unwrap().clone() {\n            crate::input_service::update_latest_input_cursor_time(conn);\n            handle_pointer_(evt, conn).ok();\n        } else {\n            crate::input_service::handle_pointer_(evt, conn);\n        }\n    }\n\n    pub fn handle_key(evt: &KeyEvent) {\n        if RUNNING.lock().unwrap().clone() {\n            handle_key_(evt).ok();\n        } else {\n            crate::input_service::handle_key_(evt);\n        }\n    }\n\n    pub fn running() -> bool {\n        RUNNING.lock().unwrap().clone()\n    }\n}\n\n#[repr(C)]\npub struct CapturerPara {\n   "
       ],
       [
-        " {\n                libc::memset(shmem.as_ptr() as _, 0, shmem.len() as _);\n            }\n        }\n        match para {\n            StartPara::Direct => {\n                if !crate::server::mixel_receiver_input::quiesce_helper_transition() { bail!(\"Input retirement pending; helper startup denied\"); }\n                if let Err(e) = crate::platform::run_background(\n                    &std::env::current_exe()?.to_strin",
-        " {\n                libc::memset(shmem.as_ptr() as _, 0, shmem.len() as _);\n            }\n        }\n        match para {\n            StartPara::Direct => {\n                if let Err(e) = crate::platform::run_background(\n                    &std::env::current_exe()?.to_strin"
-      ],
-      [
         "p() = None;\n                    bail!(\"Failed to run portable service process: {}\", e);\n                }\n            }\n            StartPara::Logon(username, password) => {\n                let password = crate::server::mixel_receiver_input::SecretCredential::new(password);\n                #[allow(unused_mut)]\n                let mut exe = std::env::current_exe()?.to_string_lossy().to_string",
         "p() = None;\n                    bail!(\"Failed to run portable service process: {}\", e);\n                }\n            }\n            StartPara::Logon(username, password) => {\n                #[allow(unused_mut)]\n                let mut exe = std::env::current_exe()?.to_string_lossy().to_string"
       ],
@@ -471,8 +467,12 @@
         "            tokio::spawn(async move {\n                                        let mut stream = Connection::new(stream);\n                                        let Some(_receiver_peer) = stream.receiver_pipe_peer(false) else { return; };\n                                        let postfix = postfix.to_owned();\n                                        let m"
       ],
       [
-        "                                    Pong => {\n                                                                nack = 0;\n                                                                *RUNNING.lock().unwrap() = true;\n                                                                crate::server::mixel_receiver_input::startup_confirmed(&receiver_peer);\n                                                            },\n                                                        ",
-        "                                    Pong => {\n                                                                nack = 0;\n                                                                *RUNNING.lock().unwrap() = true;\n                                                            },\n                                                        "
+        " {\n                libc::memset(shmem.as_ptr() as _, 0, shmem.len() as _);\n            }\n        }\n        match para {\n            StartPara::Direct => {\n                if crate::server::mixel_receiver_input::launch_direct(\n                    &std::env::current_exe()?.to_string_lossy(), \"--portable-service\").is_none() {\n                    *SHMEM.lock().unwrap() = None;\n                    bail!(\"Portable helper startup identity could not be established\");\n                }\n            }\n            StartPara::Logon(username, password) => {\n                let password = crate::server::mixel_receiver_input",
+        " {\n                libc::memset(shmem.as_ptr() as _, 0, shmem.len() as _);\n            }\n        }\n        match para {\n            StartPara::Direct => {\n                if let Err(e) = crate::platform::run_background(\n                    &std::env::current_exe()?.to_string_lossy().to_string(),\n                    \"--portable-service\",\n                ) {\n                    *SHMEM.lock().unwrap() = None;\n                    bail!(\"Failed to run portable service process: {}\", e);\n                }\n            }\n            StartPara::Logon(username, password) => {\n                let password = crate::server::mixel_receiver_input"
+      ],
+      [
+        "ixel_receiver_input::portable_refused(&owner); },\n                                                            Pong => {\n                                                                if !crate::server::mixel_receiver_input::startup_confirmed(&receiver_peer, || { *RUNNING.lock().unwrap() = true; }) { break; }\n                                                                nack = 0;\n                                                            },\n                                                        ",
+        "ixel_receiver_input::portable_refused(&owner); },\n                                                            Pong => {\n                                                                nack = 0;\n                                                                *RUNNING.lock().unwrap() = true;\n                                                            },\n                                                        "
       ]
     ],
     "src/platform/windows.rs": [

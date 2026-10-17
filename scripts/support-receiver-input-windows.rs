@@ -27,6 +27,7 @@ extern "system" {
     fn GetCurrentProcess() -> Handle;
     fn GetCurrentProcessId() -> u32;
     fn GetProcessId(process: Handle) -> u32;
+    fn CreateProcessW(application:*const u16,command:*mut u16,process_attributes:Handle,thread_attributes:Handle,inherit:i32,creation:u32,environment:Handle,directory:*const u16,startup:*mut StartupInfo,info:*mut ProcessInfo)->i32;
     fn DuplicateHandle(source_process: Handle, source: Handle, target_process: Handle, target: *mut Handle, access: u32, inherit: i32, options: u32) -> i32;
     fn ResumeThread(thread: Handle) -> u32;
     fn TerminateProcess(process: Handle, code: u32) -> i32;
@@ -228,7 +229,7 @@ pub(crate) fn pipe_publisher(pipe: Handle, transferred: Option<u64>) -> Option<P
     if unsafe { ProcessIdToSessionId(pid,&mut a) } == 0 || unsafe { ProcessIdToSessionId(GetCurrentProcessId(),&mut b) } == 0 || a == 0 || a != b || unsafe { WaitForSingleObject(raw,0) } != TIMEOUT { return None; }
     verified_peer(pid,Arc::new(Owned::from(raw)?),String::new())
 }
-struct Started { peer: Peer, publisher: Option<u64>, confirmed: Arc<AtomicBool> }
+struct Started { peer: Peer, publisher: Option<u64>, confirmed: Arc<AtomicUsize> }
 fn started() -> &'static Mutex<Option<Started>> { static STARTED: OnceLock<Mutex<Option<Started>>> = OnceLock::new(); STARTED.get_or_init(|| Mutex::new(None)) }
 pub(crate) fn publisher_handle(peer: &Peer) -> Option<Option<u64>> {
     let mut startup = started().lock().ok()?;
@@ -237,21 +238,40 @@ pub(crate) fn publisher_handle(peer: &Peer) -> Option<Option<u64>> {
     }
     Some(None)
 }
-fn transition_previous() -> &'static Mutex<Option<String>> { static PREVIOUS:OnceLock<Mutex<Option<String>>> = OnceLock::new(); PREVIOUS.get_or_init(||Mutex::new(None)) }
-pub(super) fn begin_transition() {
-    let mut previous=transition_previous().lock().unwrap_or_else(|e|e.into_inner());
-    *previous=helper().lock().unwrap_or_else(|e|e.into_inner()).as_ref().map(|peer|format!("{}-{}",peer.pid,peer.born));
-    TRANSITION.store(true,Ordering::SeqCst);
+struct Attempt { epoch:u64, retired:HashMap<String,Peer>, candidate:Option<Arc<Owned>>, recover:bool }
+fn attempt()->&'static Mutex<Attempt> { static ATTEMPT:OnceLock<Mutex<Attempt>>=OnceLock::new();ATTEMPT.get_or_init(||Mutex::new(Attempt{epoch:0,retired:HashMap::new(),candidate:None,recover:false})) }
+fn identity(peer:&Peer)->String{format!("{}-{}",peer.pid,peer.born)}
+pub(super) fn begin_transition()->Option<u64> {
+    let mut state=attempt().lock().ok()?;
+    if TRANSITION.load(Ordering::SeqCst) { return None; }
+    state.retired.retain(|_,peer|peer.alive());
+    let old=helper().lock().ok()?.clone().filter(Peer::alive);
+    if let Some(peer)=old { let key=identity(&peer);if !state.retired.contains_key(&key)&&state.retired.len()>=256{return None;}state.retired.insert(key,peer); }
+    state.epoch=state.epoch.checked_add(1)?;state.candidate=None;state.recover=false;
+    TRANSITION.store(true,Ordering::SeqCst);Some(state.epoch)
 }
-pub(crate) fn startup_confirmed(peer: &Peer) {
-    // Caller publishes RUNNING first, so a fresh grant can never select Local.
-    {
-        let previous=transition_previous().lock().unwrap_or_else(|e|e.into_inner());
-        if TRANSITION.load(Ordering::SeqCst) && previous.as_deref()==Some(&format!("{}-{}",peer.pid,peer.born)) { return; }
-        TRANSITION.store(false,Ordering::SeqCst);
-    }
-    if let Ok(startup) = started().lock() { if let Some(startup) = startup.as_ref().filter(|s| s.peer.pid == peer.pid && s.peer.born == peer.born) { startup.confirmed.store(true,Ordering::SeqCst); } }
+fn request_recovery(epoch:u64) { let mut state=attempt().lock().unwrap_or_else(|e|e.into_inner());if state.epoch==epoch&&TRANSITION.load(Ordering::SeqCst){state.recover=true;} }
+pub(super) fn recover_transition(epoch:u64) { request_recovery(epoch); }
+pub(super) fn poll_transition_recovery() {
+    let epoch={let state=attempt().lock().unwrap_or_else(|e|e.into_inner());if !state.recover||!TRANSITION.load(Ordering::SeqCst)||state.candidate.as_ref().map(|p|unsafe{WaitForSingleObject(p.raw(),0)}==TIMEOUT).unwrap_or(false){return;}state.epoch};
+    if !transition_retired() { return; }
+    let mut state=attempt().lock().unwrap_or_else(|e|e.into_inner());
+    if state.epoch==epoch&&state.recover&&!state.candidate.as_ref().map(|p|unsafe{WaitForSingleObject(p.raw(),0)}==TIMEOUT).unwrap_or(false){state.candidate=None;state.recover=false;TRANSITION.store(false,Ordering::SeqCst);}
 }
+pub(crate) fn startup_confirmed(peer:&Peer,publish:impl FnOnce())->bool {
+    let approved={let startup=started().lock().unwrap_or_else(|e|e.into_inner());startup.as_ref().filter(|s|s.peer.pid==peer.pid&&s.peer.born==peer.born).map(|s|s.confirmed.clone())};
+    let Some(confirmed)=approved else{return false;};
+    let mut state=attempt().lock().unwrap_or_else(|e|e.into_inner());
+    if state.retired.contains_key(&identity(peer))||state.recover{return false;}
+    if state.candidate.as_ref().map(|p|unsafe{GetProcessId(p.raw())}!=peer.pid||birth(p.raw())!=Some(peer.born)).unwrap_or(true){return false;}
+    // Publish RUNNING under the admission barrier, after identity/quarantine
+    // checks. A retiring helper never publishes status or revives old epochs.
+    if confirmed.compare_exchange(0,1,Ordering::SeqCst,Ordering::SeqCst).is_err()&&confirmed.load(Ordering::SeqCst)!=1{return false;}
+    if !peer.alive(){return false;}
+    publish();TRANSITION.store(false,Ordering::SeqCst);true
+}
+struct Recovery(u64,bool);
+impl Drop for Recovery {fn drop(&mut self){if !self.1{request_recovery(self.0);}}}
 #[repr(C)] struct StartupInfo {
     size: u32, reserved: *mut u16, desktop: *mut u16, title: *mut u16,
     x: u32, y: u32, xsize: u32, ysize: u32, columns: u32, rows: u32, fill: u32, flags: u32,
@@ -268,38 +288,42 @@ impl Drop for Suspended { fn drop(&mut self) { if !self.resumed { unsafe {
     if TerminateProcess(self.process.raw(),1) == 0 && WaitForSingleObject(self.process.raw(),0) != OBJECT { if let Some(thread) = &self.thread { ResumeThread(thread.raw()); } }
     WaitForSingleObject(self.process.raw(),5_000);
 } } } }
-pub(crate) fn launch_with_logon(user: &str, password: &str, exe: &str, arg: &str) -> Option<()> {
-    if arg != "--portable-service" || user.is_empty() || password.is_empty() || [user,password,exe,arg].iter().any(|s| s.contains('\0')) { return None; }
-    let mut startup = started().lock().ok()?;
-    if startup.as_ref().map(|s| s.peer.alive()).unwrap_or(false) { return None; }
-    let (domain,user) = user.rsplit_once('\\').map(|(d,u)| (Some(d),u)).unwrap_or_else(|| (if user.contains('@') { None } else { Some(".") },user));
-    let domain = domain.map(wide); let domain = domain.as_ref().map(|v|v.as_ptr()).unwrap_or(ptr::null());
-    let user = wide(user); let password = Secret(wide(password)); let mut token = ptr::null_mut();
-    if unsafe { LogonUserW(user.as_ptr(),domain,password.0.as_ptr(),2,0,&mut token) } == 0 { return None; }
-    let token = Owned::from(token)?; let sid = token_sid(token.raw())?;
-    if !quiesce_helper_transition() { return None; }
-    let mut command = wide(&format!("\"{}\" {}",exe,arg)); let exe = wide(exe);
-    let mut info: StartupInfo = unsafe { std::mem::zeroed() }; info.size = std::mem::size_of::<StartupInfo>() as u32; info.flags = 1;
-    let mut process: ProcessInfo = unsafe { std::mem::zeroed() };
-    if unsafe { CreateProcessWithLogonW(user.as_ptr(),domain,password.0.as_ptr(),1,exe.as_ptr(),command.as_mut_ptr(),0x400 | 4,ptr::null_mut(),ptr::null(),&mut info,&mut process) } == 0 { return None; }
-    let thread = Owned::from(process.thread);
-    let mut suspended = Suspended { process: Arc::new(Owned::from(process.process)?), thread, resumed: false };
-    if suspended.thread.is_none() { return None; }
-    let peer = verified_peer(process.pid,suspended.process.clone(),sid)?;
-    let mut publisher = ptr::null_mut();
-    // Duplicate directly into this exact still-suspended owned child; minimal
-    // read/wait rights, never inherited and never a process ACL/privilege change.
-    if unsafe { DuplicateHandle(GetCurrentProcess(),GetCurrentProcess(),suspended.process.raw(),&mut publisher,SYNC | 0x1000,0,0) } == 0 { return None; }
-    let confirmed = Arc::new(AtomicBool::new(false));
-    let watch = confirmed.clone(); let owned = suspended.process.clone();
-    std::thread::Builder::new().name("mixel-helper-startup".to_owned()).spawn(move || {
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        while !watch.load(Ordering::SeqCst) && std::time::Instant::now() < deadline && unsafe { WaitForSingleObject(owned.raw(),0) } == TIMEOUT { std::thread::sleep(Duration::from_millis(10)); }
-        if !watch.load(Ordering::SeqCst) && unsafe { WaitForSingleObject(owned.raw(),0) } == TIMEOUT { unsafe { TerminateProcess(owned.raw(),1); } }
+pub(crate) fn launch_with_logon(user:&str,password:&str,exe:&str,arg:&str)->Option<()> {
+    if user.is_empty()||password.is_empty()||[user,password,exe,arg].iter().any(|s|s.contains('\0')){return None;}
+    let (domain,user)=user.rsplit_once('\\').map(|(d,u)|(Some(d),u)).unwrap_or_else(||(if user.contains('@'){None}else{Some(".")},user));
+    let domain=domain.map(wide);let domain=domain.as_ref().map(|v|v.as_ptr()).unwrap_or(ptr::null());let user=wide(user);let password=Secret(wide(password));let mut token=ptr::null_mut();
+    if unsafe{LogonUserW(user.as_ptr(),domain,password.0.as_ptr(),2,0,&mut token)}==0{return None;}
+    let token=Owned::from(token)?;let sid=token_sid(token.raw())?;
+    let app=wide(exe);let mut command=wide(&format!("\"{}\" {}",exe,arg));
+    launch_owned(exe,arg,sid,|info,process|unsafe{CreateProcessWithLogonW(user.as_ptr(),domain,password.0.as_ptr(),1,app.as_ptr(),command.as_mut_ptr(),0x400|4,ptr::null_mut(),ptr::null(),info,process)})
+}
+pub(crate) fn launch_direct(exe:&str,arg:&str)->Option<()> {
+    if [exe,arg].iter().any(|s|s.contains('\0')){return None;}
+    let sid=process_sid(unsafe{GetCurrentProcess()})?;let app=wide(exe);let mut command=wide(&format!("\"{}\" {}",exe,arg));
+    launch_owned(exe,arg,sid,|info,process|unsafe{CreateProcessW(app.as_ptr(),command.as_mut_ptr(),ptr::null_mut(),ptr::null_mut(),0,0x400|4,ptr::null_mut(),ptr::null(),info,process)})
+}
+fn launch_owned(exe:&str,arg:&str,sid:String,create:impl FnOnce(*mut StartupInfo,*mut ProcessInfo)->i32)->Option<()> {
+    if exe.is_empty()||arg!="--portable-service"{return None;}
+    let mut startup=started().lock().ok()?;
+    if startup.as_ref().map(|s|s.peer.alive()).unwrap_or(false){return None;}
+    if !quiesce_helper_transition(){return None;}
+    let epoch=attempt().lock().ok()?.epoch;let mut recovery=Recovery(epoch,false);
+    let mut info:StartupInfo=unsafe{std::mem::zeroed()};info.size=std::mem::size_of::<StartupInfo>()as u32;info.flags=1;let mut process:ProcessInfo=unsafe{std::mem::zeroed()};
+    if create(&mut info,&mut process)==0{return None;}
+    let thread=Owned::from(process.thread);let mut suspended=Suspended{process:Arc::new(Owned::from(process.process)?),thread,resumed:false};
+    attempt().lock().ok()?.candidate=Some(suspended.process.clone());
+    if suspended.thread.is_none(){return None;}
+    let peer=verified_peer(process.pid,suspended.process.clone(),sid)?;let mut publisher=ptr::null_mut();
+    if unsafe{DuplicateHandle(GetCurrentProcess(),GetCurrentProcess(),suspended.process.raw(),&mut publisher,SYNC|0x1000,0,0)}==0{return None;}
+    let confirmed=Arc::new(AtomicUsize::new(0));let watch=confirmed.clone();let owned=suspended.process.clone();
+    std::thread::Builder::new().name("mixel-helper-startup".to_owned()).spawn(move||{
+        let deadline=std::time::Instant::now()+Duration::from_secs(10);
+        while watch.load(Ordering::SeqCst)==0&&std::time::Instant::now()<deadline&&unsafe{WaitForSingleObject(owned.raw(),0)}==TIMEOUT{std::thread::sleep(Duration::from_millis(10));}
+        if watch.compare_exchange(0,2,Ordering::SeqCst,Ordering::SeqCst).is_ok(){if unsafe{WaitForSingleObject(owned.raw(),0)}==TIMEOUT{unsafe{TerminateProcess(owned.raw(),1);WaitForSingleObject(owned.raw(),5_000);}}request_recovery(epoch);}
     }).ok()?;
-    *startup = Some(Started { peer, publisher: Some(publisher as usize as u64), confirmed });
-    if unsafe { ResumeThread(suspended.thread.as_ref()?.raw()) } == u32::MAX { startup.take(); return None; }
-    suspended.resumed = true; Some(())
+    *startup=Some(Started{peer,publisher:Some(publisher as usize as u64),confirmed});
+    if unsafe{ResumeThread(suspended.thread.as_ref()?.raw())}==u32::MAX{startup.take();return None;}
+    suspended.resumed=true;recovery.1=true;Some(())
 }
 #[derive(Clone)]
 pub(super) enum Backend { Local, Portable(String) }

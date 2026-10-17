@@ -54,10 +54,12 @@ def source_contracts(module):
     assert 'OpenEventW(SYNC,0' in windows and 'OpenMutexW(MUTEX_ACCESS,0' in windows
     assert 'GetLastError() } == 183' in windows and 'D:P(A;;GA;;;' in windows
     assert 'PhantomData<std::rc::Rc<()>>' in windows
-    assert 'LogonUserW' in windows and '0x400 | 4' in windows and 'ResumeThread' in windows
+    assert 'LogonUserW' in windows and '0x400|4' in windows.replace(' ','') and 'ResumeThread' in windows
     assert 'DuplicateHandle(GetCurrentProcess(),GetCurrentProcess(),suspended.process.raw()' in windows
     assert 'startup.publisher.take().map(Some)' in windows and 'struct SecretCredential' in windows
     assert 'pub(crate) fn quiesce_helper_transition()' in core
+    assert 'poll_transition_recovery' in windows and 'state.epoch==epoch' in windows
+    assert 'launch_direct' in windows and 'state.retired.contains_key' in windows
     for forbidden in ('ResetEvent', 'Global\\\\', ';;;WD)', 'INFINITE', 'std::process::abort'):
         assert forbidden not in windows, forbidden
     changes = '\n'.join(after for pairs in plan['changes'].values() for _, after in pairs)

@@ -118,7 +118,8 @@ fn generations() -> Option<&'static Arc<Mutex<HashMap<String, Slot>>>> {
             let retired: Vec<_> = candidates.into_iter().filter(|g| !g.active.load(Ordering::SeqCst) && g.try_retired()).map(|g| g.token.clone()).collect();
             let mut slots = worker.lock().unwrap_or_else(|e| e.into_inner());
             for token in retired { slots.remove(&token); }
-            slots.retain(|_, slot| slot.get().is_some());
+            slots.retain(|_,slot|slot.get().is_some());drop(slots);
+            #[cfg(windows)] windows::poll_transition_recovery();
         }).ok().map(|_| registry)
     }).as_ref()
 }
@@ -145,7 +146,7 @@ impl Receiver {
     }
     pub(crate) fn authorize(&self, enabled: bool) -> bool {
         { let mut state = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
-          if !state.alive || !self.inner.alive.load(Ordering::SeqCst) { return false; }
+          if !state.alive || !self.inner.alive.load(Ordering::SeqCst) || self.failed() { return false; }
           state.authorized = true;
           if state.cursor.is_none() { state.cursor = Generation::new(&self.inner); }
           if state.cursor.is_none() { return false; }
@@ -158,13 +159,13 @@ impl Receiver {
     pub(crate) fn fail(&self) { self.inner.failed.store(true, Ordering::SeqCst); let _ = self.close(); }
     pub(crate) fn block(&self, enabled: bool, privacy: bool) -> bool {
         let state = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
-        if !state.alive || !state.authorized || !self.inner.alive.load(Ordering::SeqCst) { return false; }
+        if !state.alive || !state.authorized || !self.inner.alive.load(Ordering::SeqCst) || self.failed() { return false; }
         drop(state);
         set_block(&self.inner, enabled, privacy)
     }
     pub(crate) fn set_permission(&self, enabled: bool) -> bool {
         let mut state = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
-        if !state.alive || !state.authorized || !self.inner.alive.load(Ordering::SeqCst) { return false; }
+        if !state.alive || !state.authorized || !self.inner.alive.load(Ordering::SeqCst) || self.failed() { return false; }
         if enabled == state.generation.is_some() { return true; }
         if let Some(previous) = state.generation.take() { previous.deny(); state.retiring.push(previous); }
         if !retire(&mut state) { state.alive = false; self.inner.alive.store(false,Ordering::SeqCst); return false; }
@@ -318,7 +319,7 @@ fn block_worker(shared: Arc<Blocks>) {
     loop {
         let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
         for request in state.requests.values() {
-            if request.desired && !request.owner.upgrade().map(|v| v.alive.load(Ordering::SeqCst)).unwrap_or(false) {
+            if request.desired && !request.owner.upgrade().map(|v| v.alive.load(Ordering::SeqCst)&&!v.failed.load(Ordering::SeqCst)).unwrap_or(false) {
                 request.status.store(2, Ordering::SeqCst);
             }
         }
@@ -330,7 +331,7 @@ fn block_worker(shared: Arc<Blocks>) {
             let checked = shared.clone();
             let effect = move || {
                 let state = checked.state.lock().unwrap_or_else(|e| e.into_inner());
-                let current = state.requests.values().any(|r| r.desired && r.status.load(Ordering::SeqCst) != 2 && r.owner.upgrade().map(|owner| owner.alive.load(Ordering::SeqCst)).unwrap_or(false));
+                let current = state.requests.values().any(|r| r.desired && r.status.load(Ordering::SeqCst) != 2 && r.owner.upgrade().map(|owner| owner.alive.load(Ordering::SeqCst)&&!owner.failed.load(Ordering::SeqCst)).unwrap_or(false));
                 drop(state);
                 let success = current == wanted && crate::platform::block_input(wanted).0;
                 let mut state = checked.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -419,8 +420,8 @@ fn cleanup(token: &str) -> bool {
 static TRANSITION: AtomicBool = AtomicBool::new(false);
 #[cfg(windows)]
 pub(crate) fn quiesce_helper_transition() -> bool {
-    windows::begin_transition();
-    let Some(registry) = generations() else { return false; };
+    let Some(epoch)=windows::begin_transition() else{return false;};
+    let Some(registry)=generations() else{windows::recover_transition(epoch);return false;};
     let generations: Vec<_> = registry.lock().unwrap_or_else(|e| e.into_inner()).values().filter_map(Slot::get).collect();
     // Publish every deny before waiting for any other generation's native cleanup.
     let mut owners = HashMap::new();
@@ -435,11 +436,19 @@ pub(crate) fn quiesce_helper_transition() -> bool {
     let deadline = std::time::Instant::now()+Duration::from_secs(5);
     loop {
         if generations.iter().all(Generation::try_retired) {
-            return owners.values().all(|owner| set_block(owner,false,false) && set_block(owner,false,true));
+            let retired=owners.values().all(|owner|set_block(owner,false,false)&&set_block(owner,false,true));
+            if !retired{windows::recover_transition(epoch);}return retired;
         }
-        if std::time::Instant::now() >= deadline { return false; }
+        if std::time::Instant::now()>=deadline{windows::recover_transition(epoch);return false;}
         std::thread::sleep(Duration::from_millis(1));
     }
+}
+#[cfg(windows)]
+fn transition_retired()->bool {
+    let Some(registry)=generations() else{return false;};
+    let scopes:Vec<_>=registry.lock().unwrap_or_else(|e|e.into_inner()).values().filter_map(Slot::get).collect();
+    if scopes.iter().any(|g|g.active.load(Ordering::SeqCst)||!g.try_retired()){return false;}
+    let Some(blocks)=blocks()else{return false;};let state=blocks.state.lock().unwrap_or_else(|e|e.into_inner());!state.actual&&!state.inflight
 }
 #[cfg(windows)]
 pub(crate) fn portable_refused(token: &str) {
@@ -463,4 +472,4 @@ pub(crate) fn encode(token: &str, target: &str, conn: i32, action: &Action) -> O
 #[path = "mixel_receiver_input_windows.rs"]
 mod windows;
 #[cfg(windows)]
-pub(crate) use windows::{receive, pipe_peer, pipe_publisher, publisher_handle, startup_confirmed, launch_with_logon, SecretCredential, Peer, shutdown as portable_shutdown};
+pub(crate) use windows::{receive, pipe_peer, pipe_publisher, publisher_handle, startup_confirmed, launch_with_logon, launch_direct, SecretCredential, Peer, shutdown as portable_shutdown};
