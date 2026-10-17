@@ -39,6 +39,22 @@ def terminal():
 
 
 class Controls(unittest.TestCase):
+    def test_debian_ownership_hook_is_exactly_packaging_bound_and_original_bytes_recover(self):
+        name = 'scripts/apply-branding.sh'
+        final = (ROOT / name).read_text(encoding='utf-8')
+        before, addition, after = P.hunks(name)[-1]
+        self.assertIn('patch-debian-archive-ownership.py', addition)
+        self.assertEqual(final.count(before + addition + after), 1)
+        self.assertEqual(final.count('patch-debian-archive-ownership.py'), 1)
+        prior = final.replace(addition, '', 1).encode()
+        self.assertEqual(hashlib.sha256(prior).hexdigest(), 'b9df7b9cfc1d52e7d7a40fad64a67698190a360181862e3d02ea40328fe1988a')
+        for mutated in (final.replace(addition, '', 1), final.replace(addition, addition * 2, 1),
+                        final.replace(addition, addition.replace('$BUILDPY', '$OTHER'), 1),
+                        final.replace(addition, '', 1) + addition,
+                        final.replace(before + addition + after, before + '# disjoint\n' + addition + after, 1)):
+            with self.assertRaises(ValueError):
+                P.project_to_canonical(mutated.encode(), name)
+
     def test_complete_lf_crlf_exact_inverse_preserves_every_old_byte(self):
         for name in ('scripts/apply-branding.sh', '.github/workflows/build.yml'):
             final = (ROOT / name).read_bytes()
@@ -57,7 +73,7 @@ class Controls(unittest.TestCase):
                 without = final.replace(addition, '', 1)
                 mutants = [without, final.replace(addition, addition * 2, 1),
                     without + addition,
-                    final.replace(addition, addition.replace('--root ', '--unknown-root ', 1) if '--root ' in addition else addition.replace('--source ', '--unknown-source ', 1), 1),
+                    final.replace(addition, addition.replace('--root ', '--unknown-root ', 1) if '--root ' in addition else addition.replace('--source ', '--unknown-source ', 1) if '--source ' in addition else addition.replace('$BUILDPY', '$OTHER', 1), 1),
                     without.replace(before, addition + before, 1),
                     final.replace(addition, addition + '# foreign\n', 1)]
                 for raw in mutants:

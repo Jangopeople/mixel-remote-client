@@ -262,6 +262,135 @@ def footer_refusal_controls(base: Path) -> None:
     print("PASS: footer byte corruption preserves LF/CRLF; missing/duplicate sources and successful/unrelated/wrong-path refusals reject")
 
 
+def debian_archive_ownership_controls(repo: Path, base: Path, environment: dict) -> None:
+    """Run exact command guards everywhere and inert dpkg fixtures on Linux."""
+    import ast
+    import io
+    import tarfile
+    source = (repo / "build.py").read_bytes()
+    spec = importlib.util.spec_from_file_location(
+        "mixel_debian_archive_ownership", ROOT / "scripts/patch-debian-archive-ownership.py")
+    owner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(owner)
+    option = b"dpkg-deb --root-owner-group -b "
+    original = source.replace(option, b"dpkg-deb -b ")
+    assert source.count(option) == 3 and original.count(b"dpkg-deb -b ") == 3
+    for newline in (b"\n", b"\r\n"):
+        final = source.replace(b"\r\n", b"\n").replace(b"\n", newline)
+        prior = original.replace(b"\r\n", b"\n").replace(b"\n", newline)
+        assert owner.transform(prior) == owner.transform(final) == final
+        # The inverse is whole-byte exact: all build flags, compilation,
+        # metadata generation, output arguments and cleanup stay unchanged.
+        assert final.replace(option, b"dpkg-deb -b ") == prior
+        assembly = b"system2('dpkg-deb -b tmpdeb mixel-remote.deb;')"
+        mutants = [
+            prior.replace(assembly, b"pass", 1),
+            prior.replace(assembly, assembly + newline + b"    " + assembly, 1),
+            prior.replace(assembly, assembly.replace(b" -b ", b" --build "), 1),
+            prior.replace(assembly, assembly.replace(b" tmpdeb ", b" foreign/ "), 1),
+            prior.replace(assembly, assembly.replace(b"mixel-remote.deb", b"other.deb"), 1),
+            prior.replace(assembly, assembly.replace(b"system2", b"other"), 1),
+            prior.replace(assembly, assembly.replace(b"system2('", b"system2(f'"), 1),
+            prior.replace(assembly, assembly.replace(b"system2('", b'system2("').replace(b"')", b'")'), 1),
+            prior.replace(b"def build_flutter_deb(", b"def changed_deb_builder(", 1),
+            prior.replace(b"dpkg-deb -b ", option, 1),
+            prior.replace(b"; /bin/rm -rf tmpdeb/", b"; /bin/rm -rf another/", 1),
+            prior.replace(b"dpkg-deb -R ", b"dpkg-deb --raw-extract ", 1),
+            prior + newline + assembly + newline,
+            prior + newline + b"# unknown dpkg-deb assembly" + newline,
+        ]
+        for candidate in mutants:
+            assert candidate != prior
+            try:
+                owner.transform(candidate)
+            except (RuntimeError, SyntaxError):
+                pass
+            else:
+                raise AssertionError("Drifted, partial or additional Debian assembly accepted")
+    for candidate in (source.replace(b"\n", b"\r\n", 1), source.replace(b"\n", b"\r", 1)):
+        try:
+            owner.transform(candidate)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("Mixed Debian newlines accepted")
+    tree = ast.parse(source.decode("utf-8"))
+    system = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "system2"]
+    assert len(system) == 1
+    calls = []
+    for name in ("build_flutter_deb", "build_deb_from_folder", "main"):
+        body = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == name]
+        assert len(body) == 1
+        selected = [node for node in ast.walk(body[0]) if isinstance(node, ast.Expr)
+                    and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)
+                    and node.value.func.id == "system2" and len(node.value.args) == 1
+                    and isinstance(node.value.args[0], ast.Constant)
+                    and str(node.value.args[0].value).startswith("dpkg-deb --root-owner-group -b ")]
+        assert len(selected) == 1
+        calls.append(selected[0])
+    print("PASS: all three exact Debian assembly paths; LF/CRLF whole-byte inverse and idempotency; 30 drift/partial/inventory/newline refusals")
+    dpkg = shutil.which("dpkg-deb")
+    if not sys.platform.startswith("linux"):
+        print("NOT RUN: actual dpkg-deb package fixtures require Linux; exact source controls passed")
+        return
+    assert dpkg, "Linux source preflight must run the actual dpkg-deb ownership regression"
+    assert os.geteuid() != 0, "Ownership regression requires the ordinary non-root CI runner"
+    sandbox = base / "debian-archive-ownership-controls"
+    sandbox.mkdir()
+    payload = b"inert Mixel ownership fixture; never execute\n"
+    control = ("Package: mixel-remote-ownership-fixture\nVersion: 1.0\nArchitecture: all\n"
+               "Maintainer: Mixel QA <support@mixel.ch>\nDescription: Inert archive ownership regression\n")
+    postinst = b"#!/bin/sh\nexit 97\n"
+    for index, statement in enumerate(calls + [calls[0]]):
+        directory = sandbox / str(index)
+        stage = directory / "tmpdeb"
+        for path in ("DEBIAN", "usr/bin", "usr/share/mixel-remote"):
+            (stage / path).mkdir(parents=True)
+        (stage / "DEBIAN/control").write_text(control, encoding="utf-8")
+        (stage / "DEBIAN/control").chmod(0o644)
+        (stage / "DEBIAN/postinst").write_bytes(postinst)
+        (stage / "DEBIAN/postinst").chmod(0o755)
+        executable = stage / "usr/share/mixel-remote/mixel-remote"
+        executable.write_bytes(payload)
+        executable.chmod(0o755)
+        (stage / "usr/share/mixel-remote/fixture.txt").write_bytes(payload)
+        (stage / "usr/share/mixel-remote/fixture.txt").chmod(0o644)
+        (stage / "usr/bin/mixel-remote").symlink_to("../share/mixel-remote/mixel-remote")
+        before_owner = executable.stat().st_uid, executable.stat().st_gid
+        assert before_owner == (os.geteuid(), os.getegid()) and before_owner[0] != 0
+        command = ast.unparse(statement)
+        if index == 3:
+            command = command.replace("--root-owner-group ", "")
+        child = "import os, sys\n" + ast.unparse(system[0]) + "\n" + command + "\n"
+        result = subprocess.run([sys.executable, "-c", child], cwd=directory, env=environment,
+                                capture_output=True, text=True, encoding="utf-8", timeout=30)
+        assert result.returncode == 0, result.stdout + result.stderr
+        archive = directory / "mixel-remote.deb"
+        for argument, is_control in (("--ctrl-tarfile", True), ("--fsys-tarfile", False)):
+            # dpkg already normalizes control.tar; the defect and original
+            # negative control concern the installed data.tar payload.
+            expected_owner = (0, 0) if index < 3 or is_control else before_owner
+            result = subprocess.run([dpkg, argument, str(archive)], capture_output=True, timeout=30)
+            assert result.returncode == 0, result.stderr
+            with tarfile.open(fileobj=io.BytesIO(result.stdout), mode="r:") as stream:
+                members = stream.getmembers()
+                assert members and all((member.uid, member.gid) == expected_owner for member in members)
+                files = {member.name.removeprefix("./"): member for member in members}
+                if is_control:
+                    assert stream.extractfile(files["control"]).read() == control.encode()
+                    assert stream.extractfile(files["postinst"]).read() == postinst
+                    assert files["control"].mode == 0o644 and files["postinst"].mode == 0o755
+                else:
+                    for path, mode in (("usr/share/mixel-remote/mixel-remote", 0o755),
+                                       ("usr/share/mixel-remote/fixture.txt", 0o644)):
+                        assert stream.extractfile(files[path]).read() == payload and files[path].mode == mode
+                    alias = files["usr/bin/mixel-remote"]
+                    assert alias.issym() and alias.linkname == "../share/mixel-remote/mixel-remote"
+        if stage.exists():
+            assert (executable.stat().st_uid, executable.stat().st_gid) == before_owner
+    print("PASS: actual dpkg-deb: three generated assembly commands produce root-owned control+data archives; bytes/modes/symlink and staging owner preserved; original command reproduces runner ownership")
+
+
 def debian_alias_cleanup_controls(repo: Path, base: Path, environment: dict) -> None:
     """Exercise only the exact generated alias cleanup, never a package build."""
     import ast
@@ -830,6 +959,7 @@ print("PASS: actual Debian generator child explicitly uses UTF-8 and preserves t
     print("PASS: actual Debian control generator requires EGL, GL, GLES and Mesa software rendering on all package architectures")
 
     debian_alias_cleanup_controls(repo, base, {**env, "PYTHONUTF8": "1"})
+    debian_archive_ownership_controls(repo, base, {**env, "PYTHONUTF8": "1"})
 
     # Execute the generated Debian upgrade path against an isolated filesystem.
     # Reproduces a legacy /etc service with missing /usr/lib unit copies; every

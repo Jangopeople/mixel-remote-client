@@ -20,4 +20,5 @@ foreach ($required in @('Mixel-Remote.exe', 'libmixel-remote.dll', 'flutter_wind
 if (@(Get-ChildItem (Join-Path $Destination 'data/flutter_assets') -Recurse -File).Count -eq 0) {
   throw 'Compiled Store payload is incomplete: Flutter assets are empty.'
 }
+& (Join-Path $PSScriptRoot 'verify-windows-payload-metadata.ps1') -Payload $Destination
 Write-Host 'PASS: Store payload contains the compiled desktop executable, core, Flutter runtime and assets.'

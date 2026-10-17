@@ -66,6 +66,29 @@ def inverse_current_budget_controls(data):
     return data
 
 
+# Unit-only complete-byte inverse of the reviewed Debian assembly hook. The
+# frozen diagnostic and its reviewedSources/profile continue to reject it.
+PACKAGING_PROJECTION_SHA = 'e2be5527f2d389b4d3e43a256187b3a5d42ab0d0c6f772524b14a0b795fba125'
+PACKAGING_PROJECTION_ADDITION = b'''        ), (
+            'EOF\\n',
+            '  # Normalize archive ownership without changing the CI staging tree\\'s owner.\\n'
+            '  python3 "$(dirname "${BASH_SOURCE[0]}")/patch-debian-archive-ownership.py" "$BUILDPY"\\n',
+            '  echo "   patched build.py to support target-specific build directories"\\n',
+'''
+
+
+def inverse_current_packaging_projection(data):
+    relative = 'scripts/input_lifecycle_integration_projection.py'
+    original = v.EXPECTED_PROFILE['reviewedSources'][relative]
+    if v.sha(data) == original:
+        return data
+    v.require(v.sha(data) == PACKAGING_PROJECTION_SHA, 'unit-fixture-exact-packaging-projection')
+    v.require(data.count(PACKAGING_PROJECTION_ADDITION) == 1, 'unit-fixture-exact-packaging-inverse-literal')
+    data = data.replace(PACKAGING_PROJECTION_ADDITION, b'', 1)
+    v.require(v.sha(data) == original, 'unit-fixture-exact-packaging-inverse')
+    return data
+
+
 def fixture_pins():
     return {**v.EXPECTED_PROFILE['frozenHelpers'], **v.EXPECTED_PROFILE['reviewedSources'],
             'scripts/failed-macos-diagnostic-helper-hashes.json': v.MANIFEST_HASH,
@@ -160,6 +183,8 @@ def historical_source_fixture(source_root, destination):
     sources, provenance = {}, {}
     for relative in sorted(pins):
         sources[relative], provenance[relative] = fixture_logical_source(source_root, relative)
+    projection = 'scripts/input_lifecycle_integration_projection.py'
+    sources[projection] = inverse_current_packaging_projection(sources[projection])
     sources, pair = inverse_current_fixture_pair(sources)
     v.require({name: v.sha(data) for name, data in sources.items()} == pins,
               'unit-fixture-original-source-hashes')
@@ -284,6 +309,30 @@ class HistoricalSourceFixtureControls(unittest.TestCase):
         self.assertEqual(receipt['sourcePair'], 'exact-original708')
         self.assertEqual({name: v.sha((output / name).read_bytes()) for name in HISTORICAL_PAIR}, HISTORICAL_PAIR)
         v.source_contract(output)
+
+    def test_packaging_projection_inverse_preserves_original_and_current_whole_profiles(self):
+        relative = 'scripts/input_lifecycle_integration_projection.py'
+        current, _ = fixture_logical_source(PIPELINE_ROOT, relative)
+        self.assertEqual(v.sha(current), PACKAGING_PROJECTION_SHA)
+        original = inverse_current_packaging_projection(current)
+        self.assertEqual(v.sha(original), fixture_pins()[relative])
+        self.assertEqual(inverse_current_packaging_projection(original), original)
+        self.assertEqual(original.replace(b'        )]\n', PACKAGING_PROJECTION_ADDITION + b'        )]\n', 1), current)
+
+    def test_packaging_projection_drift_and_partial_hook_refuse_before_fixture_creation(self):
+        relative = 'scripts/input_lifecycle_integration_projection.py'
+        current, _ = fixture_logical_source(PIPELINE_ROOT, relative)
+        mutations = [current + b'# foreign\n',
+                     current.replace(PACKAGING_PROJECTION_ADDITION, PACKAGING_PROJECTION_ADDITION * 2, 1),
+                     current.replace(b'patch-debian-archive-ownership.py', b'patch-another-archive.py', 1),
+                     current.replace(b'without changing the CI', b'changing the CI', 1)]
+        for index, data in enumerate(mutations):
+            inputs = self.inputs('packaging-drift-' + str(index))
+            (inputs / relative).write_bytes(data)
+            output = self.root / ('refused-packaging-' + str(index))
+            with self.assertRaises(v.Refusal):
+                historical_source_fixture(inputs, output)
+            self.assertFalse(output.exists())
 
     def test_previous_exact_current_pair_remains_accepted(self):
         inputs = self.inputs('exact-previous-current')

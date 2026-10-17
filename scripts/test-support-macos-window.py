@@ -6,6 +6,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -87,7 +88,39 @@ def refusal(operation):
     raise AssertionError("Drift or invalid ownership accepted")
 
 
+def windows_resource_controls(files):
+    original = files["windows/icon.rc"]
+    corrected = P.patch_file("windows/icon.rc", original)
+    text = corrected.decode("utf-8")
+    expected = {
+        "CompanyName": "Mixel IT and Corporate Services GmbH",
+        "FileDescription": "Mixel Remote",
+        "InternalName": "desktop_multi_window_plugin",
+        "LegalCopyright": "Copyright © 2026 Mixel IT and Corporate Services GmbH. All rights reserved.",
+        "OriginalFilename": "desktop_multi_window_plugin.dll",
+        "ProductName": "Mixel Remote",
+    }
+    values = dict(re.findall(r'^\s*VALUE "([^"]+)", "([^"]*)"', text, re.M))
+    assert all(values.get(key) == value for key, value in expected.items())
+    assert '#define VERSION_AS_NUMBER 1,4,6,0' in text
+    assert '#define VERSION_AS_STRING "1.4.6"' in text
+    assert ' FILETYPE VFT_DLL' in text and ' FILETYPE VFT_APP' not in text
+    assert not re.search(r'^\s*[^/\s]+\s+ICON\s', text, re.M)
+    assert not re.search(r'com\.carriez|Purslane|RustDesk|flutter_hbb', text, re.I)
+    # The actual plugin asks the process executable for its icon, so its own
+    # upstream app icon can be omitted without changing window icon loading.
+    window = files["windows/flutter_window.cc"].decode("utf-8")
+    assert 'window_class.hInstance = GetModuleHandle(nullptr);' in window
+    assert 'LoadIcon(window_class.hInstance, MAKEINTRESOURCE(IDI_APP_ICON));' in window
+    assert '"icon.rc"' in files["windows/CMakeLists.txt"].decode("utf-8")
+    assert P.original_file("windows/icon.rc", corrected) == original
+    assert P.patch_file("windows/icon.rc", corrected) == corrected
+    assert b'com.carriez' in original and b'VFT_APP' in original
+    print("PASS: original plugin publisher leak reproduced; corrected exact DLL identity/version/type and omitted unused executable-owned icon; complete resource inverse/idempotence")
+
+
 def materialization(output, files):
+    windows_resource_controls(files)
     original = b"name: rustdesk\n" + P.OLD_DEP + b"\n  untouched: ^1.0\n"
     for label, pubspec in (("lf", original), ("crlf", original.replace(b"\n", b"\r\n"))):
         root = output / label
@@ -148,6 +181,13 @@ def materialization(output, files):
         ("hardlink", lambda d: os.link(d / "pubspec.yaml", d / "linked")),
         ("wrong-provenance", lambda d: (d / ".mixel-source.json").write_text("{}")),
         ("other-platform-drift", lambda d: (d / "windows/flutter_multi_window_plugin.cpp").write_text("drift")),
+        ("old-Mac-only-owned-profile", lambda d: (d / "windows/icon.rc").write_bytes(files["windows/icon.rc"])),
+        ("restored-upstream-plugin-icon", lambda d: (d / "windows/icon.rc").write_bytes(
+            (d / "windows/icon.rc").read_bytes().replace(
+                P.REPLACEMENTS["windows/icon.rc"][1][0][1].encode(),
+                P.REPLACEMENTS["windows/icon.rc"][1][0][0].encode(), 1))),
+        ("plugin-resource-drift", lambda d: (d / "windows/icon.rc").write_bytes(
+            (d / "windows/icon.rc").read_bytes().replace(b"Mixel Remote", b"Changed Remote", 1))),
     ):
         root = output / label
         shutil.copytree(output / "lf", root)
@@ -183,7 +223,7 @@ def materialization(output, files):
             archive.addfile(member, io.BytesIO(b""))
         refusal(lambda: P.source_files(stream.getvalue()))
         checks += 1
-    print(f"PASS: LF/CRLF byte preservation, exact 124-file owned inventory, idempotence, unchanged other platforms and {checks} fatal drift/ownership/archive controls")
+    print(f"PASS: LF/CRLF byte preservation, exact 124-file owned inventory, idempotence, unchanged unpatched sources and {checks} fatal drift/ownership/archive controls")
 
 
 def extract_function(source, anchor):

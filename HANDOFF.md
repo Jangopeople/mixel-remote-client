@@ -1,5 +1,62 @@
 # Mixel-Remote — Agent Handoff / Current State
 
+
+## 2026-10-17 — Installer ownership and Windows resource corrections; delivery pending
+
+Read Git HEAD and `/tmp/mixel-current708-authoritative-checkpoint-20261016.json`
+for the current source and runs. Older entries below describe historical candidates.
+All three source85 runs succeeded: producer38964769339, preflight38964055604 and
+comparison38964055738. All five original normal archives were collected once,
+reusing the two previously retained Mac archives. This did not qualify release:
+actual installer inspection found Linux runner-owned root-service files and
+`desktop_multi_window_plugin.dll` resources naming com.carriez/flutter_hbb.
+
+The Linux generator now guards all three exact Debian assembly expressions and
+adds `--root-owner-group`, preserving their other flags, output and cleanup.
+A real non-root UID/GID1001 Linux ARM64 container assembled all three inert
+fixtures with root-owned control/data archives; the unchanged original reproduced
+control UID0/data UID1001. Bytes, modes, symlinks and staging ownership were
+checked. No fixture executable or maintainer script ran. Local source suites and
+30 drift refusals pass. The final customer DEB still requires a new build and
+actual archive/install qualification.
+
+The pinned124-file multi-window source owner now also owns the exact Windows
+resource correction and its full inverse. The DLL has Mixel product/company
+metadata, version1.4.6, its actual DLL filename and VFT_DLL. Its unused upstream
+app icon is omitted: actual window code loads the already-branded process
+executable's icon. Swift, CMake, ICO source and ABI stay unchanged. Real GNU
+windres/PE linking checks passed original/corrected Release/Debug cases; exact
+Mixel strings, Unicode copyright, numeric1.4.6.0, DLL type2 and absence of embedded
+icons were read from inert resource-only DLLs. No PE ran. Final Microsoft RC and
+signed packaged-plugin checks remain required.
+
+Payload verification and Store staging now check every EXE/DLL's selected native
+VERSIONINFO fields and exact owned-plugin identity. Both metadata and signature
+enumerations include hidden/system files with `-Force`; WinTrust's existing
+Status Valid requirement is preserved. Both physical LF/CRLF source controls pass
+62 cases. This native guard does not inspect all languages/custom resource keys:
+mandatory postbuild pefile qualification must inspect all VERSIONINFO tables and
+custom keys/values, plus the plugin's fixed type/version and absent icon resources.
+
+Source85 Windows crypto alone passed18 PE files/16 unique signatures, with
+Microsoft's independently authenticated root and signed current code/TSA CRLs in
+a verification-only bundle. System trust stores were not changed. Earlier failed
+local verifier attempts are retained and corrected narrowly. Those valid crypto
+results do not override the actual source85 package branding/ownership blockers.
+All detailed immutable source, compilation and independent receipts are in the
+checkpoint's durable artifact directory; do not recollect source85 originals.
+
+Require corrected-source complete branding, private rebuilt all-four producer,
+mandatory preflight and Windows comparison, package qualification and fresh native
+acceptance. Only the producer needs manual workflow dispatch: pushing this PR
+already starts preflight and the comparison because apply-branding.sh changes.
+No duplicate manual preflight/comparison requests. Publishing stays false.
+Physical Mac Shift, PC01/customer consent, normal GUI close, native revocation,
+SmartScreen and human-only URI Open remain unproved for the corrected candidate.
+The Mac still reported locked and NAS sign-in expired at the last access check.
+Preserve the GTK automatic rejection, no-worktrees rule, old services/trays and
+all public/store/main/production holds. Do not report this work complete.
+
 ## 2026-10-16 — Test-only epoch accessor corrected; delivery remains pending
 
 The Intel and Apple Silicon original271 app builds both succeed in40steps with

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Guard pinned Mac frame readiness, startup, lifecycle and close acknowledgement."""
+"""Guard pinned subwindow lifecycle and branded Windows DLL resources."""
 import hashlib
 import io
 import json
@@ -24,6 +24,20 @@ NEW_DEP = b"""  desktop_multi_window:
     # Exact b47e8385; guarded Mac frame readiness, startup, lifecycle and close acknowledgement.
     path: .mixel-dependencies/desktop_multi_window"""
 REPLACEMENTS = {
+    "windows/icon.rc": (
+        "62b1745666222f3e9762676daa678ae6997e95aa8f5c981da35ce85e96ab7ed9",
+        (
+            ('IDI_APP_ICON            ICON                    "resources\\\\app_icon.ico"', '// Subwindows load the Mixel executable icon; no unused app icon is embedded in this DLL.'),
+            ('#ifdef FLUTTER_BUILD_NUMBER\n#define VERSION_AS_NUMBER FLUTTER_BUILD_NUMBER\n#else\n#define VERSION_AS_NUMBER 1,0,0\n#endif\n\n#ifdef FLUTTER_BUILD_NAME\n#define VERSION_AS_STRING #FLUTTER_BUILD_NAME\n#else\n#define VERSION_AS_STRING "1.0.0"\n#endif', '#define VERSION_AS_NUMBER 1,4,6,0\n#define VERSION_AS_STRING "1.4.6"'),
+            (' FILETYPE VFT_APP', ' FILETYPE VFT_DLL'),
+            ('VALUE "CompanyName", "com.carriez"', 'VALUE "CompanyName", "Mixel IT and Corporate Services GmbH"'),
+            ('VALUE "FileDescription", "flutter_hbb"', 'VALUE "FileDescription", "Mixel Remote"'),
+            ('VALUE "InternalName", "flutter_hbb"', 'VALUE "InternalName", "desktop_multi_window_plugin"'),
+            ('VALUE "LegalCopyright", "Copyright (C) 2022 com.carriez. All rights reserved."', 'VALUE "LegalCopyright", "Copyright © 2026 Mixel IT and Corporate Services GmbH. All rights reserved."'),
+            ('VALUE "OriginalFilename", "flutter_hbb.exe"', 'VALUE "OriginalFilename", "desktop_multi_window_plugin.dll"'),
+            ('VALUE "ProductName", "flutter_hbb"', 'VALUE "ProductName", "Mixel Remote"'),
+        ),
+    ),
     "macos/Classes/FlutterWindow.swift": (
         "d1e005aee1857b358fb42f469a84e7436ab73ef1cf90793c7d9e6f9a0d1052cf",
         (

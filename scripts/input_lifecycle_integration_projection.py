@@ -48,6 +48,11 @@ def hunks(name):
             'python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-file-dialog-lifecycle.py" --root "$RDREPO"\n\n',
             late,
             'echo "✓ Branding applied — product identity is $APP_NAME only."\n',
+        ), (
+            'EOF\n',
+            '  # Normalize archive ownership without changing the CI staging tree\'s owner.\n'
+            '  python3 "$(dirname "${BASH_SOURCE[0]}")/patch-debian-archive-ownership.py" "$BUILDPY"\n',
+            '  echo "   patched build.py to support target-specific build directories"\n',
         )]
     if name == '.github/workflows/build.yml':
         command = '          python3 "$GITHUB_WORKSPACE/scripts/' + WRAPPER + '" --root .'

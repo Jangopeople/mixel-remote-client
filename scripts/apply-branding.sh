@@ -761,6 +761,8 @@ code = re.sub(
 with open(build_py, 'w', encoding='utf-8') as f:
     f.write(code)
 EOF
+  # Normalize archive ownership without changing the CI staging tree's owner.
+  python3 "$(dirname "${BASH_SOURCE[0]}")/patch-debian-archive-ownership.py" "$BUILDPY"
   echo "   patched build.py to support target-specific build directories"
 fi
 

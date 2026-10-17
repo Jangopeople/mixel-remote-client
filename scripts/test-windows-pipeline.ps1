@@ -17,6 +17,72 @@ function Assert-Fails([scriptblock]$Action, [string]$Scenario, [string[]]$Expect
   if (-not $failed) { throw "Expected failure was accepted: $Scenario" }
 }
 
+function Test-MixelWindowsPayloadMetadata([string]$ScriptsDirectory = $PSScriptRoot) {
+  $metadataPath = Join-Path $ScriptsDirectory 'verify-windows-payload-metadata.ps1'
+  $metadataTokens = $null; $metadataErrors = $null
+  $metadataAst = [System.Management.Automation.Language.Parser]::ParseFile($metadataPath, [ref]$metadataTokens, [ref]$metadataErrors)
+  if ($metadataErrors.Count -gt 0) { throw "Metadata verifier does not parse: $metadataErrors" }
+  $guards = @($metadataAst.FindAll({ param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Assert-MixelPayloadVersionMetadata'
+  }, $true))
+  if ($guards.Count -ne 1) { throw 'Expected exactly one production metadata guard.' }
+  . ([scriptblock]::Create($guards[0].Extent.Text))
+  $valid = [ordered]@{
+    CompanyName = 'Mixel IT and Corporate Services GmbH'; FileDescription = 'Mixel Remote'
+    FileVersion = '1.4.6'; InternalName = 'desktop_multi_window_plugin'
+    LegalCopyright = 'Copyright © 2026 Mixel IT and Corporate Services GmbH. All rights reserved.'
+    OriginalFilename = 'desktop_multi_window_plugin.dll'; ProductName = 'Mixel Remote'; ProductVersion = '1.4.6'
+  }
+  $plugin = [pscustomobject]@{ Name = 'desktop_multi_window_plugin.dll'; VersionInfo = [pscustomobject]$valid }
+  Assert-MixelPayloadVersionMetadata $plugin
+  # Third-party DLLs can have their own legitimate metadata or no version table.
+  Assert-MixelPayloadVersionMetadata ([pscustomobject]@{ Name = 'vendor.dll'; VersionInfo = [pscustomobject]@{ CompanyName = 'Microsoft Corporation'; ProductName = 'A separate runtime' } })
+  Assert-MixelPayloadVersionMetadata ([pscustomobject]@{ Name = 'runtime.dll'; VersionInfo = [pscustomobject]@{} })
+  $checks = 3
+  foreach ($field in $valid.Keys) {
+    $changed = @{}; foreach ($key in $valid.Keys) { $changed[$key] = $valid[$key] }
+    $changed[$field] = 'wrong'
+    $bad = [pscustomobject]@{ Name = 'desktop_multi_window_plugin.dll'; VersionInfo = [pscustomobject]$changed }
+    Assert-Fails { Assert-MixelPayloadVersionMetadata $bad } "owned plugin $field" @("Invalid owned plugin metadata: desktop_multi_window_plugin.dll: $field.")
+    $checks++
+  }
+  foreach ($field in @('Comments', 'CompanyName', 'FileDescription', 'FileVersion', 'InternalName',
+      'LegalCopyright', 'LegalTrademarks', 'OriginalFilename', 'PrivateBuild', 'ProductName', 'ProductVersion', 'SpecialBuild')) {
+    foreach ($retired in @('RustDesk', 'Purslane', 'COM.CARRIEZ', 'FLUTTER_HBB')) {
+      $bad = [pscustomobject]@{ Name = 'vendor.dll'; VersionInfo = [pscustomobject]@{ $field = $retired } }
+      Assert-Fails { Assert-MixelPayloadVersionMetadata $bad } "retired $field $retired" @("Retired Windows payload metadata: vendor.dll: $field.")
+      $checks++
+    }
+  }
+  $empty = Join-Path ([IO.Path]::GetTempPath()) ('mixel-resource-metadata-' + [Guid]::NewGuid().ToString('N'))
+  New-Item -ItemType Directory -Path $empty | Out-Null
+  try {
+    Assert-Fails { & $metadataPath -Payload $empty } 'missing owned plugin' @('Windows payload must contain exactly one desktop_multi_window_plugin.dll.')
+    $checks++
+    [IO.File]::WriteAllBytes((Join-Path $empty 'visible.dll'), [byte[]]@(0))
+    $hidden = Join-Path $empty '.hidden-system.exe'
+    [IO.File]::WriteAllBytes($hidden, [byte[]]@(0))
+    [IO.File]::SetAttributes($hidden, ([IO.FileAttributes]::Hidden -bor [IO.FileAttributes]::System))
+    foreach ($scriptName in @('verify-windows-payload-metadata.ps1', 'verify-windows-payload.ps1')) {
+      $tokens = $null; $errors = $null
+      $ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path $ScriptsDirectory $scriptName), [ref]$tokens, [ref]$errors)
+      if ($errors.Count -gt 0) { throw "Payload enumeration script does not parse: $scriptName" }
+      $assignments = @($ast.FindAll({ param($node)
+        $node -is [Management.Automation.Language.AssignmentStatementAst] -and
+        $node.Left -is [Management.Automation.Language.VariableExpressionAst] -and $node.Left.VariablePath.UserPath -ceq 'binaries'
+      }, $true))
+      if ($assignments.Count -ne 1) { throw "Ambiguous payload enumeration: $scriptName" }
+      $Payload = $empty
+      . ([scriptblock]::Create($assignments[0].Extent.Text))
+      if (@($binaries).Count -ne 2 -or @($binaries.Name) -cnotcontains '.hidden-system.exe') {
+        throw "Hidden/system PE omitted from payload enumeration: $scriptName"
+      }
+      $checks++
+    }
+  } finally { Remove-Item -LiteralPath $empty -Recurse -Force }
+  Write-Host "PASS: $checks Windows payload metadata controls cover exact owned identity, all descriptive fields, preserved third-party metadata and missing plugin refusal."
+}
+
 # Both modes use the exact launch-source AST for the baseline controls.
 $launchSource = Get-Content (Join-Path $PSScriptRoot 'test-support-launch-windows.ps1') -Raw
 $captureTokens=$null; $captureErrors=$null
@@ -29,6 +95,7 @@ if (-not $RuntimeProbeOnly) {
 & python (Join-Path $PSScriptRoot 'test-windows-desktop-identity-diagnostic.py')
 if ($LASTEXITCODE -ne 0) { throw 'Owned desktop identity diagnostic source controls failed.' }
 & (Join-Path $PSScriptRoot 'test-windows-customer-cleanup.ps1')
+Test-MixelWindowsPayloadMetadata
 $repository = Split-Path $PSScriptRoot -Parent
 foreach ($file in (Get-ChildItem $PSScriptRoot -Filter '*.ps1' -File)) {
   $tokens = $null
