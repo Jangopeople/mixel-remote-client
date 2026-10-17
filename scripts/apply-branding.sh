@@ -37,6 +37,9 @@ source "$BRANDING/branding.env"
 # complete prior-owner refusal gates. Reapplication at the end is idempotent.
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-file-dialog-lifecycle.py" --root "$RDREPO" --check
 
+# A later prior-owner refusal must leave the supplied terminal layers intact.
+python3 "$(dirname "${BASH_SOURCE[0]}")/receiver_input_integration_projection.py" --root "$RDREPO" --check-priors
+
 # Validate both receiver layers before their exact inverses or older owners write.
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-receiver-input.py" --root "$RDREPO" --restore --check
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-receiver-native.py" --root "$RDREPO" --restore --check

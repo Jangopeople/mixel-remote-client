@@ -228,6 +228,7 @@ jobs:
       - name: Generate bridge
         working-directory: rustdesk
         run: |
+          python3 "$GITHUB_WORKSPACE/scripts/receiver_input_integration_projection.py" --root . --check-priors
           python3 "$GITHUB_WORKSPACE/scripts/patch-support-receiver-input.py" --root . --restore --check
           python3 "$GITHUB_WORKSPACE/scripts/patch-support-receiver-native.py" --root . --restore --check
           python3 "$GITHUB_WORKSPACE/scripts/patch-support-receiver-input.py" --root . --restore

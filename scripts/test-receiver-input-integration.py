@@ -117,14 +117,20 @@ class Controls(unittest.TestCase):
             def previous(self, source):
                 events.append(('copy', self.name))
                 yield Path(source) / self.name
+            def apply(self, source, restore=False):
+                self_outer.assertEqual(source, source_root / 'receiver')
+                self_outer.assertTrue(restore)
+                events.append(('inverse', self.name))
+        self_outer = self
         with tempfile.TemporaryDirectory(prefix='mixel-receiver-admission-') as temporary:
             source = Path(temporary)
+            source_root = source
             receiver, native = Owner('receiver', True), Owner('native', True)
             with mock.patch.object(P, 'owner', side_effect=[receiver, native]):
                 with P.previous(source) as prior:
-                    self.assertEqual(prior, source / 'receiver/native')
+                    self.assertEqual(prior, source / 'receiver')
             self.assertEqual(events, [('inspect', 'receiver'), ('inspect', 'native'),
-                                      ('copy', 'receiver'), ('copy', 'native')])
+                                      ('copy', 'receiver'), ('inverse', 'native')])
             for left, right in ((True, False), (False, True),
                                 (RuntimeError('receiver drift'), True),
                                 (True, RuntimeError('native drift'))):
@@ -139,6 +145,32 @@ class Controls(unittest.TestCase):
                 with P.previous(source) as prior:
                     self.assertEqual(prior, source)
             self.assertEqual(events, [('inspect', 'receiver'), ('inspect', 'native')])
+
+    def test_historical_failure_checks_private_source_before_supplied_inverse(self):
+        with tempfile.TemporaryDirectory(prefix='mixel-receiver-prior-refusal-') as temporary:
+            supplied = Path(temporary) / 'supplied'
+            private = Path(temporary) / 'private'
+            supplied.mkdir(); private.mkdir()
+            marker = supplied / 'unchanged'
+            marker.write_bytes(b'terminal receiver remains intact')
+            failure = RuntimeError('exact historical refusal')
+            historical = mock.Mock()
+            historical.apply.side_effect = failure
+            with mock.patch.object(P, 'previous', return_value=contextlib.nullcontext(private)), \
+                    mock.patch.object(P, 'prior_owner', return_value=historical):
+                with self.assertRaises(RuntimeError) as caught:
+                    P.check_priors(supplied)
+            self.assertIs(caught.exception, failure)
+            historical.apply.assert_called_once_with(private, restore=True, check=True)
+            self.assertEqual(marker.read_bytes(), b'terminal receiver remains intact')
+        macro = (ROOT / 'scripts/apply-branding.sh').read_text()
+        command = 'receiver_input_integration_projection.py" --root "$RDREPO" --check-priors\n'
+        self.assertEqual(macro.count(command), 1)
+        self.assertLess(macro.index(command), macro.index('patch-support-receiver-input.py" --root "$RDREPO" --restore\n'))
+        workflow = (ROOT / '.github/workflows/build.yml').read_text()
+        bridge = workflow.split('      - name: Generate bridge\n', 1)[1].split('      - ', 1)[0]
+        self.assertEqual(bridge.count('receiver_input_integration_projection.py" --root . --check-priors\n'), 1)
+        self.assertLess(bridge.index('--check-priors\n'), bridge.index('patch-support-receiver-input.py" --root . --restore\n'))
 
     def test_private_restore_checks_both_before_writing_and_requires_original_after(self):
         events = []

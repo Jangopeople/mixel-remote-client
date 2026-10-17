@@ -144,8 +144,24 @@ def previous(root):
         yield root
         return
     with receiver.previous(root) as previous_receiver:
-        with native.previous(previous_receiver) as previous_native:
-            yield previous_native
+        # This directory is already our private snapshot. Invert the disjoint
+        # native owner here rather than copying the entire application again.
+        native.apply(previous_receiver, restore=True)
+        yield previous_receiver
+
+
+def prior_owner():
+    path = HERE / 'patch-support-input-lifecycle.py'
+    spec = importlib.util.spec_from_file_location('mixel_receiver_historical_guard', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def check_priors(root):
+    """Run the unchanged whole prior chain before any supplied-tree inverse."""
+    with previous(root) as prior:
+        prior_owner().apply(prior, restore=True, check=True)
 
 
 def restore_private(root):
@@ -161,3 +177,13 @@ def restore_private(root):
 
 def owned_targets():
     return frozenset(plan()['targets'])
+
+
+if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--root', type=Path, required=True)
+    parser.add_argument('--check-priors', action='store_true', required=True)
+    arguments = parser.parse_args()
+    check_priors(arguments.root)
+    print('PASS: exact receiver inverse preserves the complete historical no-write refusal chain')
