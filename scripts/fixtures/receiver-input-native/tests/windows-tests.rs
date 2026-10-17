@@ -80,6 +80,7 @@ fn native_abandoned_mutex_poison_cannot_reopen_scope() {
 }
 pub(crate) fn run_native_tests() {
     for(name,case)in [
+        ("Windows fixture overlapped completion cancellation and peer close",native_qa_overlapped_transport as fn()),
         ("Windows valid different-SID hosted startup and capability audience",native_valid_different_sid_ci_startup as fn()),
         ("Windows local text chunks preserve FIFO and allow Block controls",native_local_text_chunks_and_control as fn()),
         ("Windows helper Block ownership, same-thread input and failed Off retry",native_portable_block_owners_and_thread_affinity as fn()),

@@ -85,34 +85,130 @@ fn qa_root()->std::path::PathBuf{
     let root=std::env::current_exe().unwrap().parent().unwrap().to_path_buf();let name=root.file_name().unwrap().to_str().unwrap();let nonce=name.strip_prefix("MixelReceiverLogon-").expect("exact owned CI root prefix");assert_eq!(nonce.len(),32);assert!(nonce.bytes().all(|c|c.is_ascii_hexdigit()&&!c.is_ascii_uppercase()));assert_eq!(std::fs::read(root.join("owner.marker")).unwrap(),nonce.as_bytes());root
 }
 fn qa_pipe_path()->String{format!("\\\\.\\pipe\\{}",qa_root().file_name().unwrap().to_str().unwrap())}
-fn qa_pipe_wait(file:&mut std::fs::File,bytes:&mut [u8]){
-    use std::io::Read;let deadline=std::time::Instant::now()+Duration::from_secs(5);let mut offset=0;while offset<bytes.len(){match file.read(&mut bytes[offset..]){Ok(0)=>panic!("owned fixture peer exited"),Ok(size)=>offset+=size,Err(error)if matches!(error.raw_os_error(),Some(232|536|231))=>{},Err(error)=>panic!("owned pipe read failed; native={:?}",error.raw_os_error())}assert!(std::time::Instant::now()<deadline,"bounded pipe read");std::thread::sleep(Duration::from_millis(1));}
+// PIPE_WAIT + true overlapped operations give finite waits without treating
+// NOWAIT listening/empty-buffer results as either data or connection readiness.
+#[repr(C)] struct QaOverlapped { internal:usize,internal_high:usize,offset:u32,offset_high:u32,event:Handle }
+#[link(name="kernel32")] extern "system" {
+    fn ReadFile(file:Handle,data:Handle,size:u32,transferred:*mut u32,overlapped:*mut QaOverlapped)->i32;
+    fn WriteFile(file:Handle,data:*const c_void,size:u32,transferred:*mut u32,overlapped:*mut QaOverlapped)->i32;
+    fn GetOverlappedResult(file:Handle,overlapped:*mut QaOverlapped,transferred:*mut u32,wait:i32)->i32;
+    fn CancelIoEx(file:Handle,overlapped:*mut QaOverlapped)->i32;
 }
-fn qa_pipe_send(file:&mut std::fs::File,bytes:&[u8]){
-    use std::io::Write;let deadline=std::time::Instant::now()+Duration::from_secs(5);let mut offset=0;while offset<bytes.len(){match file.write(&bytes[offset..]){Ok(size)=>offset+=size,Err(error)if matches!(error.raw_os_error(),Some(232|536|231))=>{},Err(error)=>panic!("owned pipe write failed; native={:?}",error.raw_os_error())}assert!(std::time::Instant::now()<deadline,"bounded pipe write");std::thread::sleep(Duration::from_millis(1));}
+const QA_OVERLAPPED:u32=0x40000000;
+const QA_PIPE_LIMIT:Duration=Duration::from_secs(5);
+#[derive(Clone,Copy)] enum QaOperation{Connect,Read,Write}
+impl QaOperation{fn name(self)->&'static str{match self{Self::Connect=>"connect",Self::Read=>"read",Self::Write=>"write"}}}
+#[derive(Debug)] struct QaIoError{operation:&'static str,native:Option<u32>,peer_exit:Option<u32>,timeout:bool}
+struct QaRequest{overlapped:QaOverlapped,data:Vec<u8>,event:Owned}
+struct QaPending{pipe:Handle,request:Option<Box<QaRequest>>,pending:bool}
+impl Drop for QaPending{fn drop(&mut self){
+    if !self.pending{return;}
+    let request=self.request.as_mut().unwrap();unsafe{CancelIoEx(self.pipe,&mut request.overlapped);}
+    let completed=unsafe{WaitForSingleObject(request.event.raw(),5000)}==OBJECT;
+    let mut transferred=0;
+    let retired=completed&&(unsafe{GetOverlappedResult(self.pipe,&mut request.overlapped,&mut transferred,0)}!=0||unsafe{GetLastError()}!=996);
+    if !retired{
+        // Never free a buffer/OVERLAPPED still borrowed by the kernel. This is a
+        // fatal owned-CI condition; quarantine its storage until process exit.
+        QA_CLEANUP_FAILED.store(true,Ordering::SeqCst);
+        let _=Box::leak(self.request.take().unwrap());
+        eprintln!("FAIL: owned fixture pipe cancellation unconfirmed; account/profile/root retained");
+    }
+}}
+struct QaPipe{file:std::fs::File,peer:Option<Arc<Owned>>}
+impl QaPipe{
+    fn from_owned(pipe:Owned,peer:Option<Arc<Owned>>)->Self{
+        use std::os::windows::io::FromRawHandle;
+        let raw=pipe.raw();std::mem::forget(pipe);Self{file:unsafe{std::fs::File::from_raw_handle(raw)},peer}
+    }
+    fn raw(&self)->Handle{use std::os::windows::io::AsRawHandle;self.file.as_raw_handle()}
 }
-fn qa_send_text(file:&mut std::fs::File,text:&str){assert!(text.len()<=256);qa_pipe_send(file,&(text.len()as u32).to_le_bytes());qa_pipe_send(file,text.as_bytes());}
-fn qa_read_text(file:&mut std::fs::File)->String{let mut bytes=[0;4];qa_pipe_wait(file,&mut bytes);let size=u32::from_le_bytes(bytes)as usize;assert!(size<=256);let mut text=vec![0;size];qa_pipe_wait(file,&mut text);String::from_utf8(text).unwrap()}
+fn qa_pipe_io(pipe:&QaPipe,operation:QaOperation,data:Vec<u8>,limit:Duration)->Result<(Vec<u8>,usize),QaIoError>{
+    assert!(data.len()<=4096);assert!(limit>Duration::ZERO&&limit<=QA_PIPE_LIMIT);
+    let event=Owned::from(unsafe{CreateEventExW(ptr::null(),ptr::null(),1,EVENT_ACCESS)}).expect("owned fixture completion event");
+    let overlapped=QaOverlapped{internal:0,internal_high:0,offset:0,offset_high:0,event:event.raw()};
+    let mut pending=QaPending{pipe:pipe.raw(),request:Some(Box::new(QaRequest{overlapped,data,event})),pending:false};
+    let request=pending.request.as_mut().unwrap();let mut transferred=0;
+    let success=unsafe{match operation{
+        QaOperation::Connect=>ConnectNamedPipe(pipe.raw(),(&mut request.overlapped as *mut QaOverlapped).cast()),
+        QaOperation::Read=>ReadFile(pipe.raw(),request.data.as_mut_ptr().cast(),request.data.len()as u32,&mut transferred,&mut request.overlapped),
+        QaOperation::Write=>WriteFile(pipe.raw(),request.data.as_ptr().cast(),request.data.len()as u32,&mut transferred,&mut request.overlapped),
+    }};
+    let code=if success==0{Some(unsafe{GetLastError()})}else{None};
+    if success==0&&!(matches!(operation,QaOperation::Connect)&&code==Some(535)){
+        if code!=Some(997){return Err(QaIoError{operation:operation.name(),native:code,peer_exit:None,timeout:false});}
+        pending.pending=true;let deadline=std::time::Instant::now()+limit;
+        loop{
+            let request=pending.request.as_mut().unwrap();
+            match unsafe{WaitForSingleObject(request.event.raw(),10)}{
+                OBJECT=>{
+                    let ok=unsafe{GetOverlappedResult(pipe.raw(),&mut request.overlapped,&mut transferred,0)};
+                    let code=if ok==0{Some(unsafe{GetLastError()})}else{None};
+                    if code!=Some(996){pending.pending=false;}
+                    if ok==0{return Err(QaIoError{operation:operation.name(),native:code,peer_exit:None,timeout:false});}
+                    break;
+                },
+                TIMEOUT=>{},
+                _=>return Err(QaIoError{operation:operation.name(),native:Some(unsafe{GetLastError()}),peer_exit:None,timeout:false}),
+            }
+            if let Some(peer)=&pipe.peer{if unsafe{WaitForSingleObject(peer.raw(),0)}!=TIMEOUT{
+                let mut exit=0;let known=unsafe{GetExitCodeProcess(peer.raw(),&mut exit)}!=0;
+                return Err(QaIoError{operation:operation.name(),native:None,peer_exit:known.then_some(exit),timeout:false});
+            }}
+            if std::time::Instant::now()>=deadline{return Err(QaIoError{operation:operation.name(),native:None,peer_exit:None,timeout:true});}
+        }
+    }
+    if matches!(operation,QaOperation::Connect){transferred=0;}else if success!=0{
+        let request=pending.request.as_mut().unwrap();
+        if unsafe{GetOverlappedResult(pipe.raw(),&mut request.overlapped,&mut transferred,0)}==0{return Err(QaIoError{operation:operation.name(),native:Some(unsafe{GetLastError()}),peer_exit:None,timeout:false});}
+    }
+    let data=std::mem::take(&mut pending.request.as_mut().unwrap().data);
+    if transferred as usize>data.len(){return Err(QaIoError{operation:operation.name(),native:Some(13),peer_exit:None,timeout:false});}
+    Ok((data,transferred as usize))
+}
+fn qa_pipe_connect(pipe:&QaPipe){qa_pipe_io(pipe,QaOperation::Connect,Vec::new(),QA_PIPE_LIMIT).expect("actual bounded different-SID pipe connect");}
+fn qa_pipe_wait(pipe:&mut QaPipe,bytes:&mut [u8]){
+    let mut offset=0;while offset<bytes.len(){let(data,size)=qa_pipe_io(pipe,QaOperation::Read,vec![0;bytes.len()-offset],QA_PIPE_LIMIT).expect("actual bounded owned fixture pipe read");assert!(size>0,"owned fixture peer closed the pipe");bytes[offset..offset+size].copy_from_slice(&data[..size]);offset+=size;}
+}
+fn qa_pipe_send(pipe:&mut QaPipe,bytes:&[u8]){
+    let mut offset=0;while offset<bytes.len(){let(_,size)=qa_pipe_io(pipe,QaOperation::Write,bytes[offset..].to_vec(),QA_PIPE_LIMIT).expect("actual bounded owned fixture pipe write");assert!(size>0,"owned fixture pipe write made no progress");offset+=size;}
+}
+fn native_qa_overlapped_transport(){
+    let path=format!("\\\\.\\pipe\\Mixel-Input-QA-Transport-{}",uuid::Uuid::new_v4().simple());
+    let server=Owned::from(unsafe{CreateNamedPipeW(wide(&path).as_ptr(),3|QA_OVERLAPPED,0,1,4096,4096,5000,ptr::null_mut())}).unwrap();assert!(server.raw()as isize != -1);
+    let(ready,wait)=mpsc::sync_channel(1);let(send,go)=mpsc::sync_channel(1);
+    let client=std::thread::spawn(move||{
+        let deadline=std::time::Instant::now()+QA_PIPE_LIMIT;
+        let raw=loop{let raw=unsafe{CreateFileW(wide(&path).as_ptr(),0xc0000000,0,ptr::null_mut(),3,QA_OVERLAPPED,ptr::null_mut())};if !raw.is_null()&&raw as isize != -1{break raw;}assert!(std::time::Instant::now()<deadline);std::thread::sleep(Duration::from_millis(1));};
+        let mut pipe=QaPipe::from_owned(Owned::from(raw).unwrap(),None);let mut packet=[0;32];qa_pipe_wait(&mut pipe,&mut packet);assert_eq!(packet,[9;32]);ready.send(()).unwrap();go.recv_timeout(QA_PIPE_LIMIT).unwrap();qa_pipe_send(&mut pipe,&[7]);
+    });
+    let mut pipe=QaPipe::from_owned(server,None);qa_pipe_connect(&pipe);qa_pipe_send(&mut pipe,&[9;32]);wait.recv_timeout(QA_PIPE_LIMIT).unwrap();
+    let failure=qa_pipe_io(&pipe,QaOperation::Read,vec![0;1],Duration::from_millis(30)).unwrap_err();assert!(failure.timeout);assert_eq!(failure.operation,"read");assert!(failure.native.is_none()&&failure.peer_exit.is_none());assert!(!QA_CLEANUP_FAILED.load(Ordering::SeqCst),"timed-out request must complete cancellation before its buffer is freed");
+    send.send(()).unwrap();let mut byte=[0];qa_pipe_wait(&mut pipe,&mut byte);assert_eq!(byte,[7]);client.join().unwrap();
+    let started=std::time::Instant::now();let result=qa_pipe_io(&pipe,QaOperation::Read,vec![0;1],QA_PIPE_LIMIT);assert!(matches!(&result,Ok((_,0)))||matches!(&result,Err(QaIoError{native:Some(109|233),..})),"closed peer must be an explicit terminal result");assert!(started.elapsed()<Duration::from_secs(2),"closed peer must not be retried until timeout");
+}
+fn qa_send_text(file:&mut QaPipe,text:&str){assert!(text.len()<=256);qa_pipe_send(file,&(text.len()as u32).to_le_bytes());qa_pipe_send(file,text.as_bytes());}
+fn qa_read_text(file:&mut QaPipe)->String{let mut bytes=[0;4];qa_pipe_wait(file,&mut bytes);let size=u32::from_le_bytes(bytes)as usize;assert!(size<=256);let mut text=vec![0;size];qa_pipe_wait(file,&mut text);String::from_utf8(text).unwrap()}
 struct QaChild{process:Arc<Owned>}
 impl Drop for QaChild{fn drop(&mut self){if unsafe{WaitForSingleObject(self.process.raw(),0)}==TIMEOUT{unsafe{TerminateProcess(self.process.raw(),1);}if unsafe{WaitForSingleObject(self.process.raw(),5000)}!=OBJECT{QA_CLEANUP_FAILED.store(true,Ordering::SeqCst);eprintln!("FAIL: exact owned CI child exit is unconfirmed");}}}}
 fn qa_parent_body(){
-    use std::os::windows::io::{AsRawHandle,FromRawHandle};assert!(hosted_receiver_qa());let mut caller_token=ptr::null_mut();assert_ne!(unsafe{OpenProcessToken(GetCurrentProcess(),8,&mut caller_token)},0);let caller_token=Owned::from(caller_token).unwrap();let elevation=qa_token_buffer(caller_token.raw(),20);assert_eq!(unsafe{*(elevation.as_ptr()as *const u32)},1,"isolated hosted caller must actually be elevated");let root=qa_root();let executable=std::env::current_exe().unwrap();let mut account=QaAccount::create();let original_root=qa_dacl(&root);let original_file=qa_dacl(&executable);let marker=root.join("owner.marker");let original_marker=qa_dacl(&marker);
+    assert!(hosted_receiver_qa());let mut caller_token=ptr::null_mut();assert_ne!(unsafe{OpenProcessToken(GetCurrentProcess(),8,&mut caller_token)},0);let caller_token=Owned::from(caller_token).unwrap();let elevation=qa_token_buffer(caller_token.raw(),20);assert_eq!(unsafe{*(elevation.as_ptr()as *const u32)},1,"isolated hosted caller must actually be elevated");let root=qa_root();let executable=std::env::current_exe().unwrap();let mut account=QaAccount::create();let original_root=qa_dacl(&root);let original_file=qa_dacl(&executable);let marker=root.join("owner.marker");let original_marker=qa_dacl(&marker);
     struct AclRestore{root:std::path::PathBuf,file:std::path::PathBuf,marker:std::path::PathBuf,before_root:Vec<u8>,before_file:Vec<u8>,before_marker:Vec<u8>}
     impl Drop for AclRestore{fn drop(&mut self){let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||{qa_set_acl(&self.file,None,false);qa_set_acl(&self.marker,None,false);qa_set_acl(&self.root,None,true);assert_eq!(qa_dacl(&self.file),self.before_file);assert_eq!(qa_dacl(&self.marker),self.before_marker);assert_eq!(qa_dacl(&self.root),self.before_root);}));if result.is_err(){QA_CLEANUP_FAILED.store(true,Ordering::SeqCst);eprintln!("FAIL: exact private CI directory DACL restoration");}}}
     let _restore=AclRestore{root:root.clone(),file:executable.clone(),marker:marker.clone(),before_root:original_root,before_file:original_file,before_marker:original_marker};qa_set_acl(&root,Some(&account.sid),true);qa_set_acl(&executable,Some(&account.sid),false);qa_set_acl(&marker,Some(&account.sid),false);
     let own_sid=process_sid(unsafe{GetCurrentProcess()}).unwrap();assert_ne!(own_sid,account.sid);let sddl=wide(&format!("D:P(A;;GA;;;{own_sid})(A;;GRGW;;;{})",account.sid));let mut descriptor=ptr::null_mut();assert_ne!(unsafe{ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.as_ptr(),1,&mut descriptor,ptr::null_mut())},0);let descriptor=OwnedDescriptor(descriptor as usize);let attributes=Attributes{length:std::mem::size_of::<Attributes>()as u32,descriptor:descriptor.0 as Handle,inherit:0};
-    let raw=unsafe{CreateNamedPipeW(wide(&qa_pipe_path()).as_ptr(),3,1,1,4096,4096,5000,(&attributes as *const Attributes)as Handle)};assert!(!raw.is_null()&&raw as isize != -1);let pipe=Owned::from(raw).unwrap();account.profile_attempted=true;
+    let raw=unsafe{CreateNamedPipeW(wide(&qa_pipe_path()).as_ptr(),3|QA_OVERLAPPED,0,1,4096,4096,5000,(&attributes as *const Attributes)as Handle)};assert!(!raw.is_null()&&raw as isize != -1);let pipe=Owned::from(raw).unwrap();account.profile_attempted=true;
     assert!(launch_with_logon(&account.name,account.password.as_str(),executable.to_str().unwrap(),"--portable-service").is_some(),"actual valid different-SID suspended logon launch");let process=started().lock().unwrap().as_ref().unwrap().peer.process.clone();let _child=QaChild{process:process.clone()};
-    let deadline=std::time::Instant::now()+Duration::from_secs(5);loop{if unsafe{ConnectNamedPipe(pipe.raw(),ptr::null_mut())}!=0||unsafe{GetLastError()}==535{break;}assert!(std::time::Instant::now()<deadline,"different-SID pipe connect");std::thread::sleep(Duration::from_millis(1));}
+    println!("CI cross-SID: valid retained startup created");let mut pipe=QaPipe::from_owned(pipe,Some(process.clone()));qa_pipe_connect(&pipe);
     let peer=pipe_peer(pipe.raw(),false).expect("actual retained different-SID startup identity");assert_eq!(peer.sid,account.sid);assert_eq!(peer.pid,unsafe{GetProcessId(process.raw())});let transferred=publisher_handle(&peer).unwrap().unwrap();assert!(publisher_handle(&peer).is_none());
-    let lease=Lease::create(&uuid::Uuid::new_v4().simple().to_string()).unwrap();assert!(lease.prepare_helper().is_some());let raw=pipe.raw();std::mem::forget(pipe);let mut pipe=unsafe{std::fs::File::from_raw_handle(raw)};qa_pipe_send(&mut pipe,&transferred.to_le_bytes());qa_send_text(&mut pipe,&account.sid);qa_send_text(&mut pipe,&lease.token);let mut ready=[0];qa_pipe_wait(&mut pipe,&mut ready);assert_eq!(ready,[1]);assert!(startup_confirmed(&peer,||{}));assert!(!TRANSITION.load(Ordering::SeqCst));
+    let lease=Lease::create(&uuid::Uuid::new_v4().simple().to_string()).unwrap();assert!(lease.prepare_helper().is_some());println!("CI cross-SID: kernel-bound pipe peer and intended lease audience ready");qa_pipe_send(&mut pipe,&transferred.to_le_bytes());qa_send_text(&mut pipe,&account.sid);qa_send_text(&mut pipe,&lease.token);let mut ready=[0];qa_pipe_wait(&mut pipe,&mut ready);assert_eq!(ready,[1]);assert!(startup_confirmed(&peer,||{}));assert!(!TRANSITION.load(Ordering::SeqCst));
     assert!(lease.revoke());let mut cleaned=[0];qa_pipe_wait(&mut pipe,&mut cleaned);assert_eq!(cleaned,[2]);assert!(lease.cleaned());qa_pipe_send(&mut pipe,&[3]);assert_eq!(unsafe{WaitForSingleObject(process.raw(),5000)},OBJECT);let mut code=1;assert_ne!(unsafe{GetExitCodeProcess(process.raw(),&mut code)},0);assert_eq!(code,0,"actual different-SID helper component exited successfully");
     drop(pipe);drop(peer);drop(lease);started().lock().unwrap().take();helper().lock().unwrap().take();attempt().lock().unwrap().candidate.take();account.verify();println!("PASS: actual different-SID standard logon, retained startup/pipe publisher identity, minimum intended kernel rights and revoke acknowledgment");
 }
 pub(crate) fn cross_sid_parent(){assert!(hosted_receiver_qa());let result=std::panic::catch_unwind(qa_parent_body);assert!(!QA_CLEANUP_FAILED.load(Ordering::SeqCst),"owned CI cleanup must complete");if let Err(error)=result{std::panic::resume_unwind(error);}println!("PASS: exact owned CI standard account/profile and private directory DACL cleanup");}
 pub(crate) fn cross_sid_logon_child(){
-    use std::os::windows::io::{AsRawHandle,FromRawHandle};let path=qa_pipe_path();let deadline=std::time::Instant::now()+Duration::from_secs(5);let raw=loop{let raw=unsafe{CreateFileW(wide(&path).as_ptr(),0xc0000000,0,ptr::null_mut(),3,0,ptr::null_mut())};if !raw.is_null()&&raw as isize != -1{break raw;}assert!(std::time::Instant::now()<deadline,"exact different-SID helper pipe");std::thread::sleep(Duration::from_millis(1));};let mode=1;assert_ne!(unsafe{SetNamedPipeHandleState(raw,&mode,ptr::null(),ptr::null())},0);let mut pipe=unsafe{std::fs::File::from_raw_handle(raw)};
-    let mut transferred=[0;8];qa_pipe_wait(&mut pipe,&mut transferred);let publisher=pipe_publisher(pipe.as_raw_handle(),Some(u64::from_le_bytes(transferred))).expect("actual transferred publisher process identity");let expected=qa_read_text(&mut pipe);assert_eq!(process_sid(unsafe{GetCurrentProcess()}).as_deref(),Some(expected.as_str()));let mut token=ptr::null_mut();assert_ne!(unsafe{OpenProcessToken(GetCurrentProcess(),8,&mut token)},0);let token=Owned::from(token).unwrap();qa_standard_token(token.raw());
+    let path=qa_pipe_path();let deadline=std::time::Instant::now()+Duration::from_secs(5);let raw=loop{let raw=unsafe{CreateFileW(wide(&path).as_ptr(),0xc0000000,0,ptr::null_mut(),3,QA_OVERLAPPED,ptr::null_mut())};if !raw.is_null()&&raw as isize != -1{break raw;}assert!(std::time::Instant::now()<deadline,"exact different-SID helper pipe");std::thread::sleep(Duration::from_millis(1));};let mut pipe=QaPipe::from_owned(Owned::from(raw).unwrap(),None);
+    let mut transferred=[0;8];qa_pipe_wait(&mut pipe,&mut transferred);let publisher=pipe_publisher(pipe.raw(),Some(u64::from_le_bytes(transferred))).expect("actual transferred publisher process identity");pipe.peer=Some(publisher.process.clone());let expected=qa_read_text(&mut pipe);assert_eq!(process_sid(unsafe{GetCurrentProcess()}).as_deref(),Some(expected.as_str()));let mut token=ptr::null_mut();assert_ne!(unsafe{OpenProcessToken(GetCurrentProcess(),8,&mut token)},0);let token=Owned::from(token).unwrap();qa_standard_token(token.raw());
     let file=std::env::current_exe().unwrap();let denied=unsafe{CreateFileW(wide(file.to_str().unwrap()).as_ptr(),0x40000000,7,ptr::null_mut(),3,0,ptr::null_mut())};assert!(denied as isize == -1||denied.is_null(),"intended account must have Read/Execute only on fixture executable");assert_eq!(unsafe{GetLastError()},5);
     let nonce=qa_read_text(&mut pipe);let lease=Lease::open(&nonce,&publisher).expect("intended different-SID consumer opens exact minimum lease handles");assert!(lease.active());assert_eq!(unsafe{SetEvent(lease.event.raw())},0,"consumer cannot publish or reset REVOKED");assert_eq!(unsafe{GetLastError()},5);{let _effect=lease.effect().expect("consumer SYNCHRONIZE mutex effect ownership");}
     qa_pipe_send(&mut pipe,&[1]);let deadline=std::time::Instant::now()+Duration::from_secs(5);while lease.active(){assert!(std::time::Instant::now()<deadline);std::thread::sleep(Duration::from_millis(1));}assert!(lease.effect().is_none());assert!(lease.mark_cleaned(),"only intended helper may acknowledge CLEANED");qa_pipe_send(&mut pipe,&[2]);let mut exit=[0];qa_pipe_wait(&mut pipe,&mut exit);assert_eq!(exit,[3]);
@@ -120,5 +216,5 @@ pub(crate) fn cross_sid_logon_child(){
 fn native_valid_different_sid_ci_startup(){
     if !hosted_receiver_qa(){println!("SKIP: account-mutating different-SID fixture requires isolated hosted Windows CI");return;}
     use std::os::windows::fs::MetadataExt;let base=std::path::PathBuf::from(std::env::var_os("ProgramData").expect("hosted ProgramData"));assert_eq!(std::fs::symlink_metadata(&base).unwrap().file_attributes()&0x400,0);let nonce=uuid::Uuid::new_v4().simple().to_string();let root=base.join(format!("MixelReceiverLogon-{nonce}"));std::fs::create_dir(&root).unwrap();qa_set_acl(&root,None,true);std::fs::write(root.join("owner.marker"),nonce.as_bytes()).unwrap();qa_set_acl(&root.join("owner.marker"),None,false);let executable=root.join("receiver-cross-sid.exe");std::fs::copy(std::env::current_exe().unwrap(),&executable).unwrap();qa_set_acl(&executable,None,false);
-    let mut child=OwnedChild(std::process::Command::new(&executable).arg("--mixel-cross-sid-parent").spawn().expect("launch exact private CI fixture copy"));let deadline=std::time::Instant::now()+Duration::from_secs(90);let status=loop{if let Some(status)=child.try_wait().unwrap(){break status;}assert!(std::time::Instant::now()<deadline,"bounded owned CI fixture; private root retained on failure");std::thread::sleep(Duration::from_millis(20));};assert!(status.success(),"different-SID qualification failed; private owned root retained for recovery");assert_eq!(std::fs::read(root.join("owner.marker")).unwrap(),nonce.as_bytes());assert_eq!(std::fs::symlink_metadata(&root).unwrap().file_attributes()&0x400,0);std::fs::remove_dir_all(root).unwrap();
+    let mut child=OwnedChild(std::process::Command::new(&executable).arg("--mixel-cross-sid-parent").current_dir(&root).spawn().expect("launch exact private CI fixture copy"));let deadline=std::time::Instant::now()+Duration::from_secs(90);let status=loop{if let Some(status)=child.try_wait().unwrap(){break status;}assert!(std::time::Instant::now()<deadline,"bounded owned CI fixture; private root retained on failure");std::thread::sleep(Duration::from_millis(20));};assert!(status.success(),"different-SID qualification failed; private owned root retained for recovery");assert_eq!(std::fs::read(root.join("owner.marker")).unwrap(),nonce.as_bytes());assert_eq!(std::fs::symlink_metadata(&root).unwrap().file_attributes()&0x400,0);std::fs::remove_dir_all(root).unwrap();
 }

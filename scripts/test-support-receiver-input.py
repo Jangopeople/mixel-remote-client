@@ -110,8 +110,17 @@ def source_contracts(module):
     assert '0x001200a9' in qa and 'SetKernelObjectSecurity' in qa and 'qa_dacl(&self.file),self.before_file' in qa
     assert 'S-1-5-32-544' in qa and 'S-1-16-8192' in qa
     assert 'SetEvent(lease.event.raw())' in qa and 'lease.mark_cleaned()' in qa
-    assert 'publisher_handle(&peer).unwrap().unwrap()' in qa and 'pipe_publisher(pipe.as_raw_handle()' in qa
+    assert 'publisher_handle(&peer).unwrap().unwrap()' in qa and 'pipe_publisher(pipe.raw()' in qa
     assert 'QA_CLEANUP_FAILED' in qa and 'root retained' in qa
+    assert '.arg("--mixel-cross-sid-parent").current_dir(&root).spawn()' in qa, 'Different-SID launch must inherit its exact owned RX directory'
+    assert '3|QA_OVERLAPPED,0,1' in qa and '3,QA_OVERLAPPED,ptr::null_mut())' in qa, 'Both fixture pipe endpoints must use real overlapped PIPE_WAIT I/O'
+    assert 'SetNamedPipeHandleState' not in qa and 'Some(232|536|231)' not in qa, 'No NOWAIT/data/connection state collapse in positive-SID transport'
+    assert 'impl Drop for QaPending' in qa
+    assert 'CancelIoEx(self.pipe,&mut request.overlapped)' in qa and 'GetOverlappedResult' in qa
+    assert 'Box::leak(self.request.take().unwrap())' in qa, 'A kernel-borrowed OVERLAPPED/buffer cannot be freed before cancellation completes'
+    assert 'peer_exit:known.then_some(exit)' in qa and 'GetExitCodeProcess(peer.raw()' in qa
+    assert 'native_qa_overlapped_transport' in qa and 'timed-out request must complete cancellation' in qa
+    assert 'closed peer must not be retried until timeout' in qa
     for forbidden in ('DesktopAccess', 'SetUserObjectSecurity', 'SetPrivilege', 'SeDebugPrivilege', ';;;WD)', 'PasswordNeverExpires -Password'):
         assert forbidden not in qa, forbidden
     print('PASS: receiver source contracts, pinned templates, backend/lease boundaries and normal CI gates', flush=True)
