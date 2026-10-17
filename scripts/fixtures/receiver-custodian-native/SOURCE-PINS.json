@@ -1,0 +1,74 @@
+{
+  "scripts/fixtures/receiver-custodian-native/Cargo.lock": {
+    "bytes": 22983,
+    "sha256": "ff302a7d3961fccc83ce2a4a4fb4808d45c9dc5b364a3f33246e3a500116c175"
+  },
+  "scripts/fixtures/receiver-custodian-native/Cargo.toml": {
+    "bytes": 800,
+    "sha256": "a2a3aae783a9615d6111c3daf9bbc0b24601790510858d577d8482c44c934ece"
+  },
+  "scripts/fixtures/receiver-custodian-native/LOCK-PROVENANCE.json": {
+    "bytes": 562,
+    "sha256": "ee2a4c8da7d6456afdd7c32c16cf36d8b20522e9f4ae60f0fc19f9fc2624ae21"
+  },
+  "scripts/fixtures/receiver-custodian-native/build.rs": {
+    "bytes": 158,
+    "sha256": "f0f522a0c9d4a353f8b0617c9ce72637814e8dd0d8fefcbdd398745004675d84"
+  },
+  "scripts/fixtures/receiver-custodian-native/core-tests.rs": {
+    "bytes": 1630,
+    "sha256": "56072c9855b016ff8e237c65a6ab93db61bfacfdb300a8577d4e04163fcf0542"
+  },
+  "scripts/fixtures/receiver-custodian-native/custodian-tests.rs": {
+    "bytes": 4137,
+    "sha256": "85ee5f78c1d89b17177b4b2672e36f4adc391a22cc0125ad05ae86d869c08767"
+  },
+  "scripts/fixtures/receiver-custodian-native/epoch-tests.rs": {
+    "bytes": 1929,
+    "sha256": "85236c4e51066bba621ec32cdccdd68e40d5e75390c5e5e83a5bf0a31a9c02a9"
+  },
+  "scripts/fixtures/receiver-custodian-native/native-main.rs": {
+    "bytes": 8284,
+    "sha256": "dad5f8b4becc2e033bea6926e5a92c8f84a0ef53ae586684d53b9a4b97fe32db"
+  },
+  "scripts/fixtures/receiver-custodian-native/native-tests.rs": {
+    "bytes": 18241,
+    "sha256": "a69b76ebb44469a50fc2081f331288585fcea92962a335a09d3b7da102793e48"
+  },
+  "scripts/fixtures/receiver-custodian-native/original-tests.rs": {
+    "bytes": 2154,
+    "sha256": "b30239cae2c506d6a96d0f939a4b4b49bff03ffbafdd8355c0399b7fbc74374b"
+  },
+  "scripts/fixtures/receiver-custodian-native/prepare.py": {
+    "bytes": 9386,
+    "sha256": "c2ffc97e3d987650978cbc774b3444ff6da0c557acd8b7d88bb42fec1bd67f15"
+  },
+  "scripts/fixtures/receiver-input-native/protos/message.proto": {
+    "bytes": 20700,
+    "sha256": "1f5bd3293fe78f60b078589d724e1428eef0415494a44032557c8e22e8bdbc72"
+  },
+  "scripts/fixtures/receiver-input-native/tests/windows-cross-sid-tests.rs": {
+    "bytes": 22335,
+    "sha256": "798fadd23b062ecf97a28c65e7f4b7aec144b21e7cd8ae1db29ca72e53527f77"
+  },
+  "scripts/patch-support-receiver-custodian.py": {
+    "bytes": 9609,
+    "sha256": "0fdc155ee0ca7fc3c6637bfaf7df92fa7ce98b797cba6d84e2a262ea687f0936"
+  },
+  "scripts/support-receiver-custodian-epoch-windows.rs": {
+    "bytes": 14267,
+    "sha256": "cf59d4d06d6244e1f8314564f47e370de5ad42a458427525b36ecd3c044814e7"
+  },
+  "scripts/support-receiver-custodian-plan.json": {
+    "bytes": 430648,
+    "sha256": "847704b424e95664deecabafec145ebe96bbbc3152e6a0363063a212a31893ce"
+  },
+  "scripts/support-receiver-custodian-windows.rs": {
+    "bytes": 33165,
+    "sha256": "321eb9186032c6e84fd739fbe63ee0d31b78e9552f6e56c5ae19ea9fe1148fc0"
+  },
+  "scripts/support-receiver-receipts.rs": {
+    "bytes": 8756,
+    "sha256": "c436a401639b4af73e71484ac4ce1a2aad773f1a0ccf9ac42a85606a0113d0c6"
+  }
+}

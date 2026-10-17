@@ -1,0 +1,17 @@
+{
+  "productionLockSHA256": "188f2b45efb35b043b203ff9ddbe2db3d4bdf2a44dd457a8ec253289bcc2c72e",
+  "exactRegistryPackages": 96,
+  "rootDependencies": {
+    "anyhow": "1.0.98",
+    "bytes": "1.10.1",
+    "futures-util": "0.3.31",
+    "log": "0.4.22",
+    "protobuf": "3.7.2",
+    "serde": "1.0.228",
+    "serde_json": "1.0.118",
+    "tokio": "1.44.2",
+    "uuid": "1.16.0",
+    "protobuf-codegen": "3.7.2"
+  },
+  "selection": "exact recursive dependency closure; original registry checksums and versioned edges retained; no Cargo resolution or compiler invoked"
+}
