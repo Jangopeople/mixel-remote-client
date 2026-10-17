@@ -680,34 +680,52 @@ int main(void) { @autoreleasepool {
     main.write_text(r"""import Foundation
 import CoreVideo
 let registry=MixelTestTextureRegistry()
-var texture: TextRgba?=TextRgba.new(registry:registry)
-weak var weakTexture=texture
-let ptr=Unmanaged.passUnretained(texture!).toOpaque()
+weak var weakTexture: TextRgba?
 let bytes:[UInt8]=[17,29,41,53]
-func submit(_ length: Int32) {
-    bytes.withUnsafeBufferPointer { FlutterRgbaRendererPluginOnRgba(ptr,$0.baseAddress!,length,1,1,1) }
+// Scope every temporary/ObjC receiver inside the drained pool; only the
+// independently retained pixel buffer crosses the owner-retirement boundary.
+let next: CVPixelBuffer=autoreleasepool {
+    let texture=TextRgba.new(registry:registry)
+    weakTexture=texture
+    let ptr=Unmanaged.passUnretained(texture).toOpaque()
+    func submit(_ length: Int32) {
+        bytes.withUnsafeBufferPointer { FlutterRgbaRendererPluginOnRgba(ptr,$0.baseAddress!,length,1,1,1) }
+    }
+    submit(4)
+    precondition(registry.frames==1)
+    let first=texture.copyPixelBuffer()!.takeRetainedValue()
+    precondition(CVPixelBufferLockBaseAddress(first,[])==kCVReturnSuccess)
+    let pixel=CVPixelBufferGetBaseAddress(first)!.assumingMemoryBound(to:UInt8.self)
+    precondition(Array(UnsafeBufferPointer(start:pixel,count:4))==bytes)
+    precondition(CVPixelBufferUnlockBaseAddress(first,[])==kCVReturnSuccess)
+    submit(3)
+    let afterRejected=texture.copyPixelBuffer()!.takeRetainedValue()
+    precondition(first===afterRejected && registry.frames==1)
+    submit(4)
+    precondition(registry.frames==2)
+    let next=texture.copyPixelBuffer()!.takeRetainedValue()
+    precondition(first !== next)
+    return next
 }
-submit(4)
-precondition(registry.frames==1)
-let first=texture!.copyPixelBuffer()!.takeRetainedValue()
-precondition(CVPixelBufferLockBaseAddress(first,[])==kCVReturnSuccess)
-let pixel=CVPixelBufferGetBaseAddress(first)!.assumingMemoryBound(to:UInt8.self)
-precondition(Array(UnsafeBufferPointer(start:pixel,count:4))==bytes)
-precondition(CVPixelBufferUnlockBaseAddress(first,[])==kCVReturnSuccess)
-submit(3)
-let afterRejected=texture!.copyPixelBuffer()!.takeRetainedValue()
-precondition(first===afterRejected && registry.frames==1)
-submit(4)
-precondition(registry.frames==2)
-let next=texture!.copyPixelBuffer()!.takeRetainedValue()
-precondition(first !== next)
-texture=nil
 precondition(weakTexture==nil)
 precondition(CVPixelBufferLockBaseAddress(next,[])==kCVReturnSuccess)
 precondition(CVPixelBufferGetBaseAddress(next)!.load(as:UInt8.self)==17)
 precondition(CVPixelBufferUnlockBaseAddress(next,[])==kCVReturnSuccess)
-weakTexture=nil
-print("PASS: actual public Flutter protocol + ObjC retained-return base + C adapter/generated Swift/CoreVideo accepts valid frame, preserves retained buffer on rejection, survives owner retirement with no cycle and consumes each returned +1 once")
+// Deliberately retain a different owner: the same weak-nil retirement check
+// must detect that persistent reference, then pass only after its release.
+var retainedOwner: TextRgba?
+weak var weakRetainedOwner: TextRgba?
+autoreleasepool {
+    let owner=TextRgba.new(registry:nil)
+    retainedOwner=owner
+    weakRetainedOwner=owner
+}
+let retainedOwnerLooksRetired=autoreleasepool { weakRetainedOwner==nil }
+precondition(!retainedOwnerLooksRetired)
+withExtendedLifetime(retainedOwner) {}
+autoreleasepool { retainedOwner=nil }
+precondition(weakRetainedOwner==nil)
+print("PASS: actual public Flutter protocol + ObjC retained-return base + C adapter/generated Swift/CoreVideo accepts valid frame, preserves retained buffer on rejection, survives drained owner retirement, detects a deliberately retained owner and consumes each returned +1 once")
 """)
     executable = real / "actual-adapter-swift-control"
     run(["xcrun", "swiftc", "-I", str(real), "-import-objc-header", str(bridge), str(swift), str(main), str(object_path), str(base_object), str(registry_object),
