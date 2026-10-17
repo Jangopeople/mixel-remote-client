@@ -85,6 +85,8 @@ class PreparationControls(unittest.TestCase):
         self.assertIn('WaitForSingleObject(copy.0,WAIT_MS)', kernel)
         self.assertIn('TIMEOUT', kernel)
         self.assertIn('CloseHandle(handle)', actor)
+        self.assertNotIn('std::thread::sleep', actor)
+        self.assertIn('own pipe parent release deadline', actor)
         self.assertIn('WaitForSingleObject(handle,5000)', actor)
         for forbidden in ('SendSAS(', 'ImpersonateLoggedOnUser(', 'SetTokenInformation(', 'CreateService', 'RegSetValue', 'powershell', 'cmd.exe'):
             self.assertNotIn(forbidden, actor)

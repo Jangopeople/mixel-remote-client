@@ -110,6 +110,8 @@ mod kernel_controls {
         let name=format!("\\\\.\\pipe\\Mixel-SAS-Component-{}-{}",unsafe { GetCurrentProcessId() },stamp);
         // Byte pipe, nonblocking connect only; no public ports/global objects.
         let pipe=Owned::new(unsafe { CreateNamedPipeW(wide(&name).as_ptr(),3,1,1,1024,1024,0,ptr::null_mut()) }).expect("create own private component pipe");
+        let release_name=format!("Local\\{}-release",name.strip_prefix("\\\\.\\pipe\\").unwrap());
+        let release=Owned::new(unsafe { CreateEventW(ptr::null_mut(),1,0,wide(&release_name).as_ptr()) }).expect("own pipe actor release event");
         let mut child=actor("pipe",Some(&name));
         let deadline=Instant::now()+Duration::from_secs(3);
         loop {
@@ -127,6 +129,7 @@ mod kernel_controls {
         let revoke=event(false);let effect=mutex(false);
         let target=session(pid).filter(|s|*s!=0).unwrap_or(1);
         assert!(Captured::capture(pipe.0,&owner,1,revoke.0 as usize as u64,effect.0 as usize as u64,own,target).is_err(),"foreign actual pipe client cannot impersonate retained launched server");
+        assert_ne!(unsafe { SetEvent(release.0) },0);
         drop(pipe);finish(&mut child);
     }
 }

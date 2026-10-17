@@ -1,7 +1,7 @@
 //! Bounded owned kernel-test child only; no application, service or SAS calls.
 #[cfg(not(windows))]
 compile_error!("Windows-only component actor");
-use std::{ffi::c_void,ptr,time::Duration};
+use std::{ffi::c_void,ptr};
 type Handle=*mut c_void;
 #[link(name="kernel32")]
 extern "system" {
@@ -28,8 +28,14 @@ fn main() {
             let wide:Vec<u16>=name.encode_utf16().chain(Some(0)).collect();
             let handle=unsafe { CreateFileW(wide.as_ptr(),0xc0000000,0,ptr::null_mut(),3,0,ptr::null_mut()) };
             assert!(!handle.is_null() && handle as isize != -1,"connect only named own component pipe");
-            std::thread::sleep(Duration::from_millis(1000));
+            let release_name=format!("Local\\{}-release",name.strip_prefix("\\\\.\\pipe\\").unwrap());
+            let release_wide:Vec<u16>=release_name.encode_utf16().chain(Some(0)).collect();
+            let release=unsafe { OpenEventW(0x00100000,0,release_wide.as_ptr()) };
+            assert!(!release.is_null() && release as isize != -1);
+            let result=unsafe { WaitForSingleObject(release,5000) };
+            assert_ne!(unsafe { CloseHandle(release) },0);
             assert_ne!(unsafe { CloseHandle(handle) },0);
+            assert_eq!(result,0,"own pipe parent release deadline");
         },
         _=>panic!("unsupported component actor route"),
     }
