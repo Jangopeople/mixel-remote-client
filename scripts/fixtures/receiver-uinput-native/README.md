@@ -41,8 +41,9 @@ and stable receipt scans, and reset their deadline after work.
 
 Add `--tokio` to a Linux `--run` command to exercise the exact production send
 observer against real Tokio timers and slow counted cleanup callbacks. The
-fixture also reverses only its priority/reset correction and requires the
-original starvation control to fail with its exact bounded panic marker. This
+fixture also restores the original priority, missing reset and Burst behavior,
+using a real three-second missed-tick backlog. It requires the original
+starvation control to fail with its exact bounded panic marker. This
 requires Cargo and the pinned Tokio 1.44.2 dependency. The format-3 Cargo.lock
 retains the product's versions and checksums, including macro dependencies;
 both Cargo commands use --locked. The prepared closure still requires actual

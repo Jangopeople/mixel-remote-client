@@ -261,7 +261,7 @@ class OwnerControls(unittest.TestCase):
                     path = stage/name
                     if name.endswith('/retained') or '/.git/' in name:
                         self.assertEqual(path.read_bytes(), raw)
-                        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o640)
+                        self.assertEqual(stat.S_IMODE(path.stat().st_mode), before[name][0])
                     else:
                         self.assertFalse(path.exists())
             self.assertEqual(inventory(root), before)
