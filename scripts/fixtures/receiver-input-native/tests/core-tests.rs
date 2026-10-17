@@ -110,8 +110,15 @@ pub(crate) fn run_component_tests() {
         ("cleanup acknowledgment and nonblocking deferred revoke",cleanup_must_complete_before_ack_and_deferred_is_fenced),
     ];
     for(name,case)in cases {case();println!("PASS: {name}");}
-    #[cfg(windows)] { helper_transition_with_held_down_fails_closed(); println!("PASS: helper transition held modifier fails closed"); windows::run_native_tests(); }
+    #[cfg(windows)] { startup_barrier_retires_input_and_both_blocks();println!("PASS: startup admission barrier retires keys and both BlockInput owners"); helper_transition_with_held_down_fails_closed(); println!("PASS: helper transition held modifier fails closed"); windows::run_native_tests(); }
 }
 #[cfg(windows)] pub(crate) fn windows_child(){windows::publisher_child();}
 
 #[cfg(windows)] pub(crate) fn windows_query_child(){windows::query_child();}
+
+#[cfg(windows)] fn startup_barrier_retires_input_and_both_blocks() {
+    clear_observed();let receiver=Receiver::new(55);assert!(receiver.authorize(true));assert!(receiver.block(true,false));assert!(receiver.block(true,true));run_actual(captured(&receiver,key_action(true)));
+    assert!(quiesce_helper_transition());assert!(receiver.failed());assert!(!receiver.inner.alive.load(Ordering::SeqCst));assert!(!receiver.block(true,true));assert!(!receiver.set_permission(true));
+    let fresh=Receiver::new(56);assert!(!fresh.authorize(true));assert!(receiver.close());assert!(fresh.close());
+    assert!(!blocks().unwrap().state.lock().unwrap().actual);TRANSITION.store(false,Ordering::SeqCst);
+}

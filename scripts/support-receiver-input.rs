@@ -26,6 +26,7 @@ struct Generation {
     effect_id: i32,
     conn: i32,
     failure: Arc<AtomicBool>,
+    owner: std::sync::Weak<Inner>,
     active: AtomicBool,
     serial: Mutex<()>,
     cleanup_done: AtomicBool,
@@ -38,7 +39,9 @@ struct Generation {
     kernel: windows::Lease,
 }
 impl Generation {
-    fn new(conn: i32, failure: Arc<AtomicBool>) -> Option<Arc<Self>> {
+    fn new(inner: &Arc<Inner>) -> Option<Arc<Self>> {
+        #[cfg(windows)] if TRANSITION.load(Ordering::SeqCst) { return None; }
+        let conn = inner.conn; let failure = inner.failed.clone();
         let registry = generations()?;
         let mut slots = registry.lock().ok()?;
         slots.retain(|_, slot| slot.get().is_some());
@@ -52,12 +55,13 @@ impl Generation {
         let generation = Arc::new(Self {
             #[cfg(windows)] token: kernel.token.clone(),
             #[cfg(not(windows))] token: nonce,
-            effect_id, conn, failure, active: AtomicBool::new(true), serial: Mutex::new(()),
+            effect_id, conn, failure, owner: Arc::downgrade(inner), active: AtomicBool::new(true), serial: Mutex::new(()),
             cleanup_done: AtomicBool::new(false), cleanup_requested: AtomicBool::new(false),
             #[cfg(windows)] backend,
             #[cfg(windows)] portable_used: AtomicUsize::new(0),
             #[cfg(windows)] kernel,
         });
+        #[cfg(windows)] if TRANSITION.load(Ordering::SeqCst) { return None; }
         slots.insert(generation.token.clone(), Slot::Active(Arc::downgrade(&generation)));
         Some(generation)
     }
@@ -138,9 +142,9 @@ impl Receiver {
     }
     pub(crate) fn authorize(&self, enabled: bool) -> bool {
         { let mut state = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
-          if !state.alive { return false; }
+          if !state.alive || !self.inner.alive.load(Ordering::SeqCst) { return false; }
           state.authorized = true;
-          if state.cursor.is_none() { state.cursor = Generation::new(self.inner.conn, self.inner.failed.clone()); }
+          if state.cursor.is_none() { state.cursor = Generation::new(&self.inner); }
           if state.cursor.is_none() { return false; }
         }
         self.set_permission(enabled)
@@ -150,17 +154,17 @@ impl Receiver {
     pub(crate) fn fail(&self) { self.inner.failed.store(true, Ordering::SeqCst); let _ = self.close(); }
     pub(crate) fn block(&self, enabled: bool, privacy: bool) -> bool {
         let state = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
-        if !state.alive || !state.authorized { return false; }
+        if !state.alive || !state.authorized || !self.inner.alive.load(Ordering::SeqCst) { return false; }
         drop(state);
         set_block(&self.inner, enabled, privacy)
     }
     pub(crate) fn set_permission(&self, enabled: bool) -> bool {
         let mut state = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
-        if !state.alive || !state.authorized { return false; }
+        if !state.alive || !state.authorized || !self.inner.alive.load(Ordering::SeqCst) { return false; }
         if enabled == state.generation.is_some() { return true; }
         if let Some(previous) = state.generation.take() { previous.deny(); state.retiring.push(previous); }
         if !retire(&mut state) { state.alive = false; self.inner.alive.store(false,Ordering::SeqCst); return false; }
-        if enabled { state.generation = Generation::new(self.inner.conn, self.inner.failed.clone()); state.generation.is_some() }
+        if enabled { state.generation = Generation::new(&self.inner); state.generation.is_some() }
         else { set_block(&self.inner, false, false) }
     }
     pub(crate) fn close(&self) -> bool {
@@ -397,18 +401,27 @@ fn cleanup(token: &str) -> bool {
 }
 
 #[cfg(windows)]
+static TRANSITION: AtomicBool = AtomicBool::new(false);
+#[cfg(windows)]
 pub(crate) fn quiesce_helper_transition() -> bool {
+    TRANSITION.store(true,Ordering::SeqCst);
     let Some(registry) = generations() else { return false; };
     let generations: Vec<_> = registry.lock().unwrap_or_else(|e| e.into_inner()).values().filter_map(Slot::get).collect();
     // Publish every deny before waiting for any other generation's native cleanup.
-    for generation in &generations { generation.failure.store(true,Ordering::SeqCst); generation.deny(); }
+    let mut owners = HashMap::new();
+    for generation in &generations {
+        generation.failure.store(true,Ordering::SeqCst); generation.deny();
+        if let Some(owner) = generation.owner.upgrade() { owner.alive.store(false,Ordering::SeqCst); owners.insert(owner.control.clone(),owner); }
+    }
     {
         let mut registry = registry.lock().unwrap_or_else(|e| e.into_inner());
         for generation in &generations { registry.insert(generation.token.clone(),Slot::Retiring(generation.clone())); }
     }
     let deadline = std::time::Instant::now()+Duration::from_secs(5);
     loop {
-        if generations.iter().all(Generation::try_retired) { return true; }
+        if generations.iter().all(Generation::try_retired) {
+            return owners.values().all(|owner| set_block(owner,false,false) && set_block(owner,false,true));
+        }
         if std::time::Instant::now() >= deadline { return false; }
         std::thread::sleep(Duration::from_millis(1));
     }

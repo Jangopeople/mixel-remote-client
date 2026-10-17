@@ -238,6 +238,8 @@ pub(crate) fn publisher_handle(peer: &Peer) -> Option<Option<u64>> {
     Some(None)
 }
 pub(crate) fn startup_confirmed(peer: &Peer) {
+    // Caller publishes RUNNING first, so a fresh grant can never select Local.
+    TRANSITION.store(false,Ordering::SeqCst);
     if let Ok(startup) = started().lock() { if let Some(startup) = startup.as_ref().filter(|s| s.peer.pid == peer.pid && s.peer.born == peer.born) { startup.confirmed.store(true,Ordering::SeqCst); } }
 }
 #[repr(C)] struct StartupInfo {

@@ -23,10 +23,10 @@
       "src/server/connection.rs": "59f9fe7114c954c7437e83266f311ed6b51dec4c902982d1e3de5c21196c4c0d",
       "src/server.rs": "4fb7df5363849646f2ec0352ffa7b3c04e69fca0edb5c178801cdcfce1921f01",
       "src/ipc.rs": "01816ea9cc025b38533029209c79da2a508fdd8413e11c19e9f9cb8429d15c76",
-      "src/server/portable_service.rs": "fa7bdbdf95c226c0b95290e8823822f4a800e003774737727427b436611bf092",
+      "src/server/portable_service.rs": "ee2ddcaa9f88797aa8961e4e1bd5e4b8c8838d7cbf62ad7d275ec728a67542eb",
       "src/platform/windows.rs": "7efe6ac71743538ad7f0764c56fbb8f376aa3ba4039d87236cd67ac5026c6d08",
-      "src/server/mixel_receiver_input.rs": "c6d0ebcec2c6b16fc226479dc2a6f1989785d85a004749a3627432cf8882c289",
-      "src/server/mixel_receiver_input_windows.rs": "2da648e27ba3d255c91c827aebba0d668842b2c3a95081ed91a61e617dc302d3"
+      "src/server/mixel_receiver_input.rs": "0ed2dfc467040d3d7ccddd391014a53501f84864f9b0ad15002f16b83668d614",
+      "src/server/mixel_receiver_input_windows.rs": "dba3ae4d03b3fa9f30d607af5039f803db4090d2728e32319719c5314edaa031"
     },
     "previous": {
       "src/server/connection.rs": "5a78e048ce5a90e8aa491ee77dfbbe413817cb7e71d8e225558d9f0795d2d0b4",
@@ -39,8 +39,8 @@
     }
   },
   "templates": {
-    "src/server/mixel_receiver_input.rs": "c6d0ebcec2c6b16fc226479dc2a6f1989785d85a004749a3627432cf8882c289",
-    "src/server/mixel_receiver_input_windows.rs": "2da648e27ba3d255c91c827aebba0d668842b2c3a95081ed91a61e617dc302d3"
+    "src/server/mixel_receiver_input.rs": "0ed2dfc467040d3d7ccddd391014a53501f84864f9b0ad15002f16b83668d614",
+    "src/server/mixel_receiver_input_windows.rs": "dba3ae4d03b3fa9f30d607af5039f803db4090d2728e32319719c5314edaa031"
   },
   "changes": {
     "src/server/connection.rs": [
@@ -251,8 +251,8 @@
         "                                        let Some(receiver_peer) = stream.receiver_pipe_peer(false) else { return; };\n                                        let Some(publisher_handle) = crate::server::mixel_receiver_input::publisher_handle(&receiver_peer) else { return; };\n                                        if stream.send(&Data::DataPortableService(ReceiverPublisherHandle(publisher_handle))).await.is_err() { return; }"
       ],
       [
-        "                                                            Pong => {",
-        "                                                            Pong => {\n                                                                crate::server::mixel_receiver_input::startup_confirmed(&receiver_peer);"
+        "                                                                *RUNNING.lock().unwrap() = true;",
+        "                                                                *RUNNING.lock().unwrap() = true;\n                                                                crate::server::mixel_receiver_input::startup_confirmed(&receiver_peer);"
       ]
     ],
     "src/platform/windows.rs": [
@@ -471,8 +471,8 @@
         "            tokio::spawn(async move {\n                                        let mut stream = Connection::new(stream);\n                                        let Some(_receiver_peer) = stream.receiver_pipe_peer(false) else { return; };\n                                        let postfix = postfix.to_owned();\n                                        let m"
       ],
       [
-        "                     ReceiverInputRefused(owner) => { crate::server::mixel_receiver_input::portable_refused(&owner); },\n                                                            Pong => {\n                                                                crate::server::mixel_receiver_input::startup_confirmed(&receiver_peer);\n                                                                nack = 0;\n                                             ",
-        "                     ReceiverInputRefused(owner) => { crate::server::mixel_receiver_input::portable_refused(&owner); },\n                                                            Pong => {\n                                                                nack = 0;\n                                             "
+        "                                    Pong => {\n                                                                nack = 0;\n                                                                *RUNNING.lock().unwrap() = true;\n                                                                crate::server::mixel_receiver_input::startup_confirmed(&receiver_peer);\n                                                            },\n                                                        ",
+        "                                    Pong => {\n                                                                nack = 0;\n                                                                *RUNNING.lock().unwrap() = true;\n                                                            },\n                                                        "
       ]
     ],
     "src/platform/windows.rs": [
