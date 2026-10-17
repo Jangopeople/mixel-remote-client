@@ -22,6 +22,7 @@ SPEC = importlib.util.spec_from_file_location('mixel_scoped_sas_owner', HERE / '
 P = importlib.util.module_from_spec(SPEC); SPEC.loader.exec_module(P)
 SOURCE = None
 UPSTREAM_SOURCE = None
+PREFIX_PLANS = HERE
 
 
 def snapshot(root):
@@ -45,6 +46,90 @@ def fixture(root, ending=b'\n'):
     return value
 
 
+
+def exact_prefix_sources():
+    value, _ = P.plan()
+    documents = {}
+    for name, digest in value['prefixPlanSHA256'].items():
+        raw = (PREFIX_PLANS / name).read_bytes()
+        if P.sha(P.canonical(raw)[0].encode()) != digest:
+            raise ValueError('Pinned complete-prefix plan drift: ' + name)
+        documents[name] = json.loads(P.canonical(raw)[0])
+    native = documents['support-receiver-native-plan.json']
+    receiver = documents['support-receiver-input-plan.json']
+    uinput = documents['support-receiver-uinput-plan.json']
+    rows = {row['name']: row for row in uinput['files']}
+    before = {}
+    for row in value['files']:
+        raw = (SOURCE / row['name']).read_bytes()
+        if P.sha(P.canonical(raw)[0].encode()) == row['afterSha256']:
+            raw = P.transform(raw, row, restore=True)
+        raw = P.canonical(raw)[0].encode()
+        if P.sha(raw) != row['beforeSha256']:
+            raise ValueError('Current exact SAS predecessor changed')
+        before[row['name']] = raw
+    def planned(raw, row):
+        if P.sha(raw) != row['beforeSha256']:
+            raise ValueError('Known predecessor source snapshot changed')
+        text = raw.decode()
+        for pair in row['changes']:
+            if text.count(pair['before']) != 1:
+                raise ValueError('Known predecessor transform cardinality changed')
+            text = text.replace(pair['before'], pair['after'], 1)
+        if P.sha(text.encode()) != row['afterSha256']:
+            raise ValueError('Known predecessor prospective snapshot changed')
+        return text.encode()
+    for name in before:
+        if name in rows and planned(rows[name]['beforeSource'].encode(), rows[name]) != before[name]:
+            raise ValueError('Current predecessor does not match exact uinput transform')
+    windows = before['src/platform/windows.rs'].decode()
+    if P.sha(windows.encode()) != receiver['profiles']['final']['src/platform/windows.rs']:
+        raise ValueError('Exact receiver Windows final changed')
+    for old, new in reversed(receiver['changes']['src/platform/windows.rs']):
+        if windows.count(new) != 1:
+            raise ValueError('Exact receiver Windows inverse cardinality changed')
+        windows = windows.replace(new, old, 1)
+    if P.sha(windows.encode()) != receiver['profiles']['original']['src/platform/windows.rs']:
+        raise ValueError('Exact H73 Windows snapshot changed')
+    prior = {'src/platform/windows.rs': windows.encode(),
+             'src/ipc.rs': rows['src/ipc.rs']['priorSource'].encode(),
+             'src/server/input_service.rs': rows['src/server/input_service.rs']['priorSource'].encode(),
+             'src/server/mixel_receiver_native.rs': None}
+    if P.sha(prior['src/ipc.rs']) != receiver['profiles']['original']['src/ipc.rs']:
+        raise ValueError('Exact H73 IPC snapshot changed')
+    native_input = next(row for row in native['files'] if row['name'] == 'src/server/input_service.rs')
+    if prior['src/server/input_service.rs'] != native_input['beforeSource'].encode():
+        raise ValueError('Exact native predecessor snapshot changed')
+    native_prefix = dict(prior)
+    native_prefix['src/server/input_service.rs'] = planned(prior['src/server/input_service.rs'], native_input)
+    native_prefix['src/server/mixel_receiver_native.rs'] = rows['src/server/mixel_receiver_native.rs']['beforeSource'].encode()
+    expected_native = next(row['sha256'] for row in native['owned'] if row['name'] == 'src/server/mixel_receiver_native.rs')
+    if P.sha(native_prefix['src/server/mixel_receiver_native.rs']) != expected_native:
+        raise ValueError('Exact owned native leaf changed')
+    pre_uinput = {name: (rows[name]['beforeSource'].encode() if name in rows else raw)
+                  for name, raw in before.items()}
+    if P.sha(pre_uinput['src/ipc.rs']) != receiver['profiles']['final']['src/ipc.rs']:
+        raise ValueError('Exact b177 receiver IPC snapshot changed')
+    profiles = {'prior': prior, 'native': native_prefix, 'preUinput': pre_uinput, 'before': before}
+    for profile, files in profiles.items():
+        for row in value['files']:
+            raw = files[row['name']]
+            if (None if raw is None else P.sha(raw)) != row[profile + 'Sha256']:
+                raise ValueError('Complete source prefix vector changed')
+    return profiles
+
+
+def prefix_fixture(root, profile, ending=b'\n'):
+    value, _ = P.plan()
+    for name, raw in exact_prefix_sources()[profile].items():
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if raw is not None:
+            path.write_bytes(raw.replace(b'\n', ending))
+            path.chmod(0o644)
+    return value
+
+
 def pure_item(source, marker):
     start = source.index(marker); opening = source.index('{', start); level = 1; index = opening + 1
     while level:
@@ -62,7 +147,9 @@ class SourceControls(unittest.TestCase):
             'src/server/mixel_receiver_native.rs'})
         self.assertEqual(value['owned']['name'], 'src/server/mixel_receiver_sas_windows.rs')
         self.assertEqual(hashlib.sha256(template).hexdigest(), value['owned']['sha256'])
-        self.assertEqual(value['predecessorSource'], '4364200eb2aa3e4cdc88e13ea969be3926f714b7')
+        self.assertEqual(value['predecessorSource'], '1a1356a0490337183ff3f44ef61d8766cf246dfd')
+        self.assertEqual(value['readOnlyProfiles'], ['fresh', 'prior', 'native', 'preUinput'])
+        self.assertEqual(set(value['prefixPlanSHA256']), {'support-receiver-native-plan.json', 'support-receiver-input-plan.json', 'support-receiver-uinput-plan.json'})
 
     def test_original_bare_sink_is_a_required_negative_and_candidate_refuses_it(self):
         value, _ = P.plan()
@@ -158,6 +245,87 @@ class SourceControls(unittest.TestCase):
 
 
 class ActualSourceControls(unittest.TestCase):
+    def test_declared_complete_prefixes_restore_without_writes_lf_crlf(self):
+        for profile in ('prior', 'native', 'preUinput'):
+            for ending in (b'\n', b'\r\n'):
+                with self.subTest(profile=profile, ending=ending), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory).resolve()
+                    prefix_fixture(root, profile, ending)
+                    before = snapshot(root)
+                    self.assertEqual(P.inspect(root)[3], profile)
+                    self.assertFalse(P.is_current(root))
+                    for check in (False, True):
+                        self.assertEqual(P.apply(root, restore=True, check=check), {'profile': profile, 'writes': 0, 'files': 5})
+                        with self.assertRaisesRegex(ValueError, 'complete predecessor branding'):
+                            P.apply(root, check=check)
+                        self.assertEqual(snapshot(root), before)
+
+    def test_mixed_prefix_vectors_and_unknown_prior_drift_refuse_without_writes(self):
+        profiles = exact_prefix_sources()
+        for first in ('prior', 'native', 'preUinput', 'before'):
+            for second in ('prior', 'native', 'preUinput', 'before'):
+                if first == second:
+                    continue
+                for name in profiles[first]:
+                    old, foreign = profiles[first][name], profiles[second][name]
+                    if old == foreign:
+                        continue
+                    with self.subTest(first=first, second=second, name=name), tempfile.TemporaryDirectory() as directory:
+                        root = Path(directory).resolve()
+                        prefix_fixture(root, first)
+                        path = root / name
+                        if foreign is None:
+                            path.unlink(missing_ok=True)
+                        else:
+                            path.write_bytes(foreign)
+                            path.chmod(0o644)
+                        changed = snapshot(root)
+                        for restore in (False, True):
+                            with self.assertRaises(ValueError):
+                                P.apply(root, restore=restore)
+                            self.assertEqual(snapshot(root), changed)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            prefix_fixture(root, 'prior')
+            path = root / 'src/ipc.rs'
+            path.write_bytes(path.read_bytes() + b'// unrelated prior drift\n')
+            changed = snapshot(root)
+            with self.assertRaises(ValueError):
+                with P.previous(root):
+                    self.fail('Unknown prefix must not enter projection')
+            self.assertEqual(snapshot(root), changed)
+
+    def test_known_prefix_plan_drift_refuses_fixture_derivation(self):
+        global PREFIX_PLANS
+        old = PREFIX_PLANS
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            value, _ = P.plan()
+            for name in value['prefixPlanSHA256']:
+                (root / name).write_bytes((old / name).read_bytes())
+            path = root / 'support-receiver-uinput-plan.json'
+            path.write_bytes(path.read_bytes() + b' ')
+            try:
+                PREFIX_PLANS = root
+                with self.assertRaisesRegex(ValueError, 'Pinned complete-prefix plan drift'):
+                    exact_prefix_sources()
+            finally:
+                PREFIX_PLANS = old
+
+    def test_inherited_source_mode_drift_refuses_without_writes(self):
+        if os.name == 'nt':
+            self.assertIn("0o666 if os.name == 'nt' else row['mode']", (HERE / 'patch-support-receiver-sas.py').read_text())
+            return
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture(root)
+            path = root / 'src/ipc.rs'
+            path.chmod(0o755)
+            changed = snapshot(root)
+            with self.assertRaisesRegex(ValueError, 'inherited source mode'):
+                P.apply(root)
+            self.assertEqual(snapshot(root), changed)
+
     def test_whole_actual_forward_reverse_idempotence_check_and_modes_lf_crlf(self):
         for ending in (b'\n', b'\r\n'):
             with self.subTest(ending=ending), tempfile.TemporaryDirectory() as directory:
@@ -274,13 +442,15 @@ fn valid() -> Authority { Authority { pipe_pid:Some(10),launched_pid:10,born:20,
 
 
 def main():
-    global SOURCE, UPSTREAM_SOURCE
+    global SOURCE, UPSTREAM_SOURCE, PREFIX_PLANS
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source', type=Path)
     parser.add_argument('--upstream-source', type=Path, help='Explicit source-only Git carrier for fresh-profile tests; defaults to --source')
+    parser.add_argument('--prefix-plans', type=Path, default=HERE, help='Exact native/receiver/uinput plan directory; defaults to current pipeline scripts')
     parser.add_argument('--prepare-component', type=Path)
     args = parser.parse_args(); SOURCE = args.source.resolve(strict=True) if args.source else None
     UPSTREAM_SOURCE = args.upstream_source.resolve(strict=True) if args.upstream_source else SOURCE
+    PREFIX_PLANS = args.prefix_plans.resolve(strict=True)
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(SourceControls)
     if SOURCE is not None: suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(ActualSourceControls))
     result = unittest.TextTestRunner(verbosity=2).run(suite)

@@ -13,7 +13,7 @@ import tempfile
 
 HERE = Path(__file__).absolute().parent
 PLAN = HERE / 'support-receiver-sas-plan.json'
-PLAN_SHA = '713e328aee1ac9e96c199e8a5966418d82ce778c00a3c5e40978e95a5f5704da'
+PLAN_SHA = 'f9d38c5d943bc8815c0243bb50486440ba46bdf7da201dc2ad9c20256eeb5dc9'
 
 
 def sha(raw):
@@ -84,6 +84,8 @@ def plan():
     value = json.loads(logical, object_pairs_hook=unique)
     if value['schema'] != 'mixel-receiver-scoped-sas-v1' or len(value['files']) != 4:
         raise ValueError('Scoped SAS plan shape changed')
+    if value.get('readOnlyProfiles') != ['fresh', 'prior', 'native', 'preUinput']:
+        raise ValueError('Scoped SAS complete prefix profiles changed')
     names = [row['name'] for row in value['files']] + [value['owned']['name']]
     if len(set(names)) != 5:
         raise ValueError('Duplicate scoped SAS source owner')
@@ -98,10 +100,12 @@ def inspect(root):
     root = root_path(root)
     value, template = plan()
     current = {}
-    profiles = {'fresh', 'before', 'after'}
+    profiles = {'fresh', 'prior', 'native', 'preUinput', 'before', 'after'}
     for row in value['files']:
         item = read(root, row['name'], row['freshSha256'] is None)
         current[row['name']] = item
+        if item[1] is not None and item[2] != (0o666 if os.name == 'nt' else row['mode']):
+            raise ValueError('Scoped SAS inherited source mode changed')
         digest = None if item[1] is None else sha(canonical(item[1])[0].encode())
         profiles &= {profile for profile in profiles if digest == row[profile + 'Sha256']}
     owned = value['owned']
@@ -155,7 +159,7 @@ def atomic(path, raw, mode):
 
 def apply(root, restore=False, check=False):
     root, value, template, profile, current = inspect(root)
-    if profile == 'fresh':
+    if profile in ('fresh', 'prior', 'native', 'preUinput'):
         if not restore:
             raise ValueError('Scoped SAS requires complete predecessor branding')
         return {'profile': profile, 'writes': 0, 'files': len(current)}

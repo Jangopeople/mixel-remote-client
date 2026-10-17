@@ -1,7 +1,7 @@
 {
   "schema": "mixel-receiver-scoped-sas-v1",
-  "predecessorSource": "4364200eb2aa3e4cdc88e13ea969be3926f714b7",
-  "predecessorTree": "d348bdab81e3ef9f3d1cfd2360d99ab9bc1aa0bc",
+  "predecessorSource": "1a1356a0490337183ff3f44ef61d8766cf246dfd",
+  "predecessorTree": "9676339f3300f84eb84d27bb4bb7c987f7cceab2",
   "files": [
     {
       "name": "src/platform/windows.rs",
@@ -17,13 +17,17 @@
           "before": "// https://docs.microsoft.com/en-us/windows/win32/api/sas/nf-sas-sendsas\n// https://www.cnblogs.com/doutu/p/4892726.html\npub fn send_sas() {\n    #[link(name = \"sas\")]\n    extern \"system\" {\n        pub fn SendSAS(AsUser: BOOL);\n    }\n    unsafe {\n        log::info!(\"SAS received\");\n\n        // Check and temporarily set SoftwareSASGeneration if needed\n        let mut original_value: Option<u32> = None;\n        let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);\n\n        if let Ok(policy_key) = hklm.open_subkey_with_flags(\n            \"Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Policies\\\\System\",\n            KEY_READ | KEY_WRITE,\n        ) {\n            // Read current value\n            match policy_key.get_value::<u32, _>(\"SoftwareSASGeneration\") {\n                Ok(value) => {\n                    /*\n                    - 0 = None (disabled)\n                    - 1 = Services\n                    - 2 = Ease of Access applications\n                    - 3 = Services and Ease of Access applications (Both)\n                                      */\n                    if value != 1 && value != 3 {\n                        original_value = Some(value);\n                        log::info!(\"SoftwareSASGeneration is {}, setting to 1\", value);\n                        // Set to 1 for SendSAS to work\n                        if let Err(e) = policy_key.set_value(\"SoftwareSASGeneration\", &1u32) {\n                            log::error!(\"Failed to set SoftwareSASGeneration: {}\", e);\n                        }\n                    }\n                }\n                Err(e) => {\n                    log::info!(\n                        \"SoftwareSASGeneration not found or error reading: {}, setting to 1\",\n                        e\n                    );\n                    original_value = Some(0); // Mark that we need to restore (delete) it\n                                              // Create and set to 1\n                    if let Err(e) = policy_key.set_value(\"SoftwareSASGeneration\", &1u32) {\n                        log::error!(\"Failed to set SoftwareSASGeneration: {}\", e);\n                    }\n                }\n            }\n        } else {\n            log::error!(\"Failed to open registry key for SoftwareSASGeneration\");\n        }\n\n        // Send SAS\n        SendSAS(FALSE);\n\n        // Restore original value if we changed it\n        if let Some(original) = original_value {\n            if let Ok(policy_key) = hklm.open_subkey_with_flags(\n                \"Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Policies\\\\System\",\n                KEY_WRITE,\n            ) {\n                if original == 0 {\n                    // It didn't exist before, delete it\n                    if let Err(e) = policy_key.delete_value(\"SoftwareSASGeneration\") {\n                        log::error!(\"Failed to delete SoftwareSASGeneration: {}\", e);\n                    } else {\n                        log::info!(\"Deleted SoftwareSASGeneration (restored to original state)\");\n                    }\n                } else {\n                    // Restore the original value\n                    if let Err(e) = policy_key.set_value(\"SoftwareSASGeneration\", &original) {\n                        log::error!(\n                            \"Failed to restore SoftwareSASGeneration to {}: {}\",\n                            original,\n                            e\n                        );\n                    } else {\n                        log::info!(\"Restored SoftwareSASGeneration to {}\", original);\n                    }\n                }\n            }\n        }\n    }\n}\n\n",
           "after": "// Secure attention is invoked only by the authenticated scoped service broker.\n\n"
         }
-      ]
+      ],
+      "mode": 420,
+      "priorSha256": "2558d69740a8ff0fb38d784de1ec662ba76fccdd4489d5f22a0e3f61e2f7c52a",
+      "nativeSha256": "2558d69740a8ff0fb38d784de1ec662ba76fccdd4489d5f22a0e3f61e2f7c52a",
+      "preUinputSha256": "7efe6ac71743538ad7f0764c56fbb8f376aa3ba4039d87236cd67ac5026c6d08"
     },
     {
       "name": "src/ipc.rs",
       "freshSha256": "1ba2a64410ab24cdcf8ca67ccfb4564d97d8725653991a501b190510ac9a9953",
-      "beforeSha256": "01816ea9cc025b38533029209c79da2a508fdd8413e11c19e9f9cb8429d15c76",
-      "afterSha256": "49312a9e4fc5e2f205a67bb67a3658b26157b686a07b82a59006f4c0489fed88",
+      "beforeSha256": "f6ec9038d34972d200b84d77666d21886fb78a2c8e8d138a07395d1ff289b3e4",
+      "afterSha256": "0cee8dc29f39dcf30a76cfb8f52cce7fa602f29e17c0ae5810d96dae1a6387a6",
       "changes": [
         {
           "before": "    #[cfg(windows)]\n    SAS,\n",
@@ -37,31 +41,43 @@
           "before": "    pub(crate) fn receiver_pipe_peer(&self, server_peer: bool)",
           "after": "    pub(crate) fn sas_pipe_handle(&self) -> *mut std::ffi::c_void {\n        self.inner.get_ref().as_raw_handle().cast()\n    }\n    pub(crate) fn receiver_pipe_peer(&self, server_peer: bool)"
         }
-      ]
+      ],
+      "mode": 420,
+      "priorSha256": "62386d3dbf579e1a72d77100f2bee744395d4c778f2749c97955b5d103a09849",
+      "nativeSha256": "62386d3dbf579e1a72d77100f2bee744395d4c778f2749c97955b5d103a09849",
+      "preUinputSha256": "28d2226b7af121aa64616d6e71942f91e35a061a3ad2ec8d19b6fdf198dad05d"
     },
     {
       "name": "src/server/input_service.rs",
       "freshSha256": "623a248c86d115ac383b9dd419c3073ad70584850e7a21084592714be32684d0",
-      "beforeSha256": "6ee3b512805e2c2a0a21f1a112de5fa9aac91c0290b82cfa1044b8358efc3ef8",
-      "afterSha256": "ec40d3870d9dd4ae671b6d984524b70c13c3d9558a933f4068b9569b86986d00",
+      "beforeSha256": "c56fc4d11a96262d7ea76e7b46ce91abef1d880c42c2ea79b84a8bd7591ab4f6",
+      "afterSha256": "7f0180f6a4d67c0d06b09464b4ef127752c2e3d4f4bb256323575a57f525a81c",
       "changes": [
         {
           "before": "#[cfg(windows)]\n#[tokio::main(flavor = \"current_thread\")]\nasync fn send_sas() -> ResultType<()> {\n    if receiver_native::remote_scope() { bail!(\"scoped secure-attention service is unavailable\"); }\n    if crate::platform::is_physical_console_session().unwrap_or(true) {\n        let mut stream = crate::ipc::connect(1000, crate::POSTFIX_SERVICE).await?;\n        if !receiver_native::effect_admitted() { bail!(\"receiver generation was revoked before SAS\"); }\n        timeout(1000, stream.send(&crate::ipc::Data::SAS)).await??;\n    } else {\n        if !receiver_native::effect_admitted() { bail!(\"receiver generation was revoked before SAS\"); }\n        crate::platform::send_sas();\n    };\n    Ok(())\n}\n\n",
           "after": "#[cfg(windows)]\npub(crate) fn sas_effect_admitted() -> bool { receiver_native::effect_admitted() }\n\n#[cfg(windows)]\n#[tokio::main(flavor = \"current_thread\")]\nasync fn send_sas() -> ResultType<()> {\n    let Some(owner) = receiver_native::secure_attention_owner() else {\n        bail!(\"SAS requires an active attended receiver generation and installed service\");\n    };\n    crate::ipc::receiver_sas::request(&owner).await\n}\n\n"
         }
-      ]
+      ],
+      "mode": 420,
+      "priorSha256": "511227034fe75b8a24bdda26aec16f2b440bc92d00d0a4c71ee5763c8cf15024",
+      "nativeSha256": "6ee3b512805e2c2a0a21f1a112de5fa9aac91c0290b82cfa1044b8358efc3ef8",
+      "preUinputSha256": "6ee3b512805e2c2a0a21f1a112de5fa9aac91c0290b82cfa1044b8358efc3ef8"
     },
     {
       "name": "src/server/mixel_receiver_native.rs",
       "freshSha256": null,
-      "beforeSha256": "bd00cb4611fe85b7ca78379586d2ba9e44650d0ce83e3b6f8c1a77cb5c35dc86",
-      "afterSha256": "c768695e88b172d6a98cb7914549fbd8050b5ceaa80d00807c5c701dbe4c0883",
+      "beforeSha256": "19ccc2522a6213fa71fdcf38337951b6c656ffa6b40d22f9f9e7ac6c722c0ee0",
+      "afterSha256": "717330631fa85a0ceb40af2cd20fed977644b63f1840ecfb61ba6287abb9dfd6",
       "changes": [
         {
           "before": "pub(super) fn remote_scope() -> bool { context().map(|scope| scope.owner != \"@trusted-native-input\").unwrap_or(false) }\n",
           "after": "pub(super) fn remote_scope() -> bool { context().map(|scope| scope.owner != \"@trusted-native-input\").unwrap_or(false) }\n\n#[cfg(target_os=\"windows\")]\npub(super) fn secure_attention_owner() -> Option<String> {\n    context().filter(|scope| scope.owner != \"@trusted-native-input\" && (scope.admit)())\n        .map(|scope| scope.owner)\n}\n"
         }
-      ]
+      ],
+      "mode": 420,
+      "priorSha256": null,
+      "nativeSha256": "bd00cb4611fe85b7ca78379586d2ba9e44650d0ce83e3b6f8c1a77cb5c35dc86",
+      "preUinputSha256": "bd00cb4611fe85b7ca78379586d2ba9e44650d0ce83e3b6f8c1a77cb5c35dc86"
     }
   ],
   "owned": {
@@ -70,5 +86,17 @@
     "sha256": "d009940084f3ed5ed6c8afbe28b8ed3c6c3882b67fafa6d207eda8adfbe80855",
     "mode": 420
   },
-  "scope": "Installed SYSTEM service only, authenticated launched-server receiver generation; no automatic elevation or portable verifier relaxation. Policy read only; VOID invocation is not delivery."
+  "scope": "Installed SYSTEM service only, authenticated launched-server receiver generation; no automatic elevation or portable verifier relaxation. Policy read only; VOID invocation is not delivery.",
+  "order": "complete-branding -> native -> receiver(Block) -> uinput -> SAS; inverse SAS -> uinput -> receiver -> native",
+  "readOnlyProfiles": [
+    "fresh",
+    "prior",
+    "native",
+    "preUinput"
+  ],
+  "prefixPlanSHA256": {
+    "support-receiver-native-plan.json": "bc4269ace34c3ea2ceeb82a2b77ae7486b7daca041e8f3f7d6f6fa24afae8146",
+    "support-receiver-input-plan.json": "82f4a8e2697ac17e564299817ff23566ed4c330a708c58643fe373879dd289a5",
+    "support-receiver-uinput-plan.json": "f43e19dff27d33912f1dbc560576679909920cc2c6b0738db9dfbdb66c59e18f"
+  }
 }
