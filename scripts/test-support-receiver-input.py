@@ -34,6 +34,9 @@ def must_refuse(module, root, operation=None):
 
 def source_contracts(module):
     plan = module.load_plan()
+    fixture = HERE / 'fixtures/receiver-input-native'
+    assert '\nversion = 3\n\n[[package]]\n' in (fixture / 'Cargo.lock').read_text(), 'Receiver lock must be readable by the pinned Rust 1.75 shipping Cargo'
+    assert '\nrust-version = "1.75"\n' in (fixture / 'Cargo.toml').read_text(), 'Receiver component must retain the shipping minimum compiler'
     assert set(plan['profiles']) == {'fresh', 'original', 'final', 'previous'}
     assert all(set(v) == set(plan['profiles']['fresh']) for v in plan['profiles'].values())
     assert set(plan['changes']) == set(plan['inverse']) == set(plan['profiles']['fresh']) - set(module.LEAVES)

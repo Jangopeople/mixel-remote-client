@@ -981,6 +981,7 @@ class ConcurrencyControls(unittest.TestCase):
 
     def test_macos_nasm_runtime_whole_inverse_and_required_order_refuse_drift(self):
         text = C.canonical((ROOT / ".github/workflows/build.yml").read_bytes()).decode()
+        text = input_lifecycle.receiver_projection().inverse(text.encode(), '.github/workflows/build.yml').decode()
         before, current = macos_nasm_workflow_projection()
         original = restore_current_macos_runtime_workflow(text)
         self.assertEqual(hashlib.sha256(original.encode()).hexdigest(), "813e6ea2bca0fa0e947983488a4bd2617d93da0d90fedd274b12d689f8b052bc")
@@ -1097,6 +1098,7 @@ class ConcurrencyControls(unittest.TestCase):
 
     def test_preflight_wrapper_and_mandatory_source_command_exact_whole_inverse(self):
         text = C.canonical((ROOT / '.github/workflows/preflight.yml').read_bytes()).decode()
+        text = input_lifecycle.receiver_projection().inverse(text.encode(), '.github/workflows/preflight.yml').decode()
         text = inverse_lifecycle_workflow_checks(text, 'preflight.yml')
         text = inverse_early_windows_lease_gate(text)
         text = inverse_windows_preflight_budget(text)
@@ -1122,6 +1124,7 @@ class ConcurrencyControls(unittest.TestCase):
     def test_linux_close_workflow_projection_refuses_changed_missing_duplicate_reordered_or_moved_checks(self):
         for workflow in ('build.yml', 'preflight.yml'):
             text = C.canonical((ROOT / '.github/workflows' / workflow).read_bytes()).decode()
+            text = input_lifecycle.receiver_projection().inverse(text.encode(), '.github/workflows/' + workflow).decode()
             text = inverse_uri_workflow_checks(text, workflow)
             projected = inverse_linux_close_workflow_checks(text, workflow)
             self.assertNotIn('test-support-linux-window-close.py', projected)
@@ -1191,6 +1194,7 @@ class ConcurrencyControls(unittest.TestCase):
         path = ROOT / '.github/workflows/preflight.yml'
         raw = path.read_bytes()
         text = C.canonical(raw).decode()
+        text = input_lifecycle.receiver_projection().inverse(text.encode(), '.github/workflows/preflight.yml').decode()
         before, current, after = windows_preflight_budget_projection()
         approved = before + current + after
         forbidden = AssertionError('Budget source projection attempted a command')
@@ -1216,6 +1220,7 @@ class ConcurrencyControls(unittest.TestCase):
             path = ROOT / '.github/workflows' / workflow
             raw = path.read_bytes()
             text = C.canonical(raw).decode()
+            text = input_lifecycle.receiver_projection().inverse(text.encode(), '.github/workflows/' + workflow).decode()
             if workflow == 'build.yml':
                 text = inverse_cold_windows_workflow(restore_current_macos_runtime_workflow(text))
             with mock.patch.object(subprocess, 'run', forbidden), mock.patch.object(subprocess, 'Popen', forbidden):
