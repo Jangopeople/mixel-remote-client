@@ -326,6 +326,26 @@ class WholePrefixFixtureControls(unittest.TestCase):
             path=source/'src/server/mixel_receiver_input_windows.rs';path.write_bytes(path.read_bytes()+b'\n')
             with self.assertRaisesRegex(ValueError,'actual final generated prefix drift'):
                 self.driver.prepare(root/'prepared',source)
+    def test_actual_crlf_pipeline_and_source_preserve_compiled_physical_prefixes(self):
+        import unittest.mock
+        with tempfile.TemporaryDirectory()as t:
+            root=Path(t).resolve();pipeline=root/'pipeline';source=root/'source';source.mkdir();fixture(source,True);P.apply(source)
+            names=json.loads((HERE/'fixtures/receiver-custodian-native/SOURCE-PINS.json').read_text())
+            names=list(names)+['scripts/fixtures/receiver-custodian-native/SOURCE-PINS.json']
+            for name in names:
+                raw=(HERE.parent/name).read_bytes();canonical=self.driver.logical(raw);target=pipeline/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(canonical.replace(b'\n',b'\r\n'))
+            with unittest.mock.patch.object(self.driver,'REPO',pipeline),unittest.mock.patch.object(self.driver,'HERE',pipeline/'scripts/fixtures/receiver-custodian-native'):
+                output=root/'prepared';binding=self.driver.prepare(output,source)
+            for name in ('mixel_receiver_input.rs','mixel_receiver_input_windows.rs','mixel_receiver_custodian_windows.rs','mixel_receiver_custodian_epoch_windows.rs'):
+                raw=(source/'src/server'/name).read_bytes();self.assertIn(b'\r\n',raw)
+                self.assertTrue((output/name).read_bytes().startswith(raw),name)
+                pin=binding['compiledProductionPrefixes']['src/server/'+name]
+                self.assertEqual(pin['physicalSHA256'],P.sha(raw));self.assertEqual(pin['logicalSHA256'],P.sha(raw.replace(b'\r\n',b'\n')))
+            self.assertTrue(all(pin['physicalNewlines']=='CRLF'for pin in binding['verifiedPhysicalAndLogicalSourceInputs'].values()))
+    def test_source_newlines_must_be_uniform(self):
+        self.assertEqual(self.driver.logical(b'a\r\nb\r\n'),b'a\nb\n')
+        for raw in (b'a\r\nb\n',b'a\rb'):
+            with self.assertRaisesRegex(ValueError,'mixed or bare-CR'):self.driver.logical(raw)
     def test_default_is_source_only_and_run_requires_actual_generated_source(self):
         import unittest.mock
         with tempfile.TemporaryDirectory()as t:
@@ -366,5 +386,65 @@ class WholePrefixFixtureControls(unittest.TestCase):
                 with self.assertRaises(ValueError):self.driver.command(output,'compile',['held-compiler'],{},1)
             self.assertEqual((output/'compile.stderr').read_bytes(),b'partial stderr')
             result=json.loads((output/'compile.json').read_text());self.assertIsNone(result['exit']);self.assertIn('cleanup not qualified',result['error'])
+    def test_held_output_entry_refused_before_any_path_operation(self):
+        import unittest.mock
+        with unittest.mock.patch.object(Path,'lstat',side_effect=AssertionError('no held entry access')),unittest.mock.patch.object(Path,'mkdir',side_effect=AssertionError('no mkdir')):
+            with self.assertRaisesRegex(ValueError,'held path entry'):self.driver.prepare(Path('/private/tmp/worktrees'))
+    def test_mixedcase_held_source_entry_refused_before_output_creation(self):
+        import unittest.mock
+        with unittest.mock.patch.object(Path,'lstat',side_effect=AssertionError('no held entry access')),unittest.mock.patch.object(Path,'mkdir',side_effect=AssertionError('no mkdir')):
+            with self.assertRaisesRegex(ValueError,'held path entry'):self.driver.prepare(Path('/private/tmp/source-fixture-output'),Path('/private/tmp/WoRkTrEeS'))
+    def test_mocked_name_boundary_refuses_held_name_before_descendant_processing(self):
+        for parts in [('/','owned','worktrees','opaque-next'),('/','owned','WoRkTrEeS','opaque-next')]:
+            with self.assertRaisesRegex(ValueError,'held path entry'):self.driver.name_first(parts)
+    def test_linked_output_parent_preserves_separate_external_sentinel(self):
+        with tempfile.TemporaryDirectory()as t,tempfile.TemporaryDirectory(prefix='custody-external-safe-')as e:
+            root=Path(t).resolve();external=Path(e).resolve();sentinel=external/'sentinel';sentinel.write_bytes(b'unchanged');alias=root/'alias';alias.symlink_to(external,target_is_directory=True)
+            with self.assertRaisesRegex(ValueError,'linked or reparse'):self.driver.prepare(alias/'output')
+            self.assertEqual(sentinel.read_bytes(),b'unchanged');self.assertFalse((external/'output').exists());alias.unlink()
+    def test_linked_source_root_refused_before_output_creation(self):
+        with tempfile.TemporaryDirectory()as t:
+            root=Path(t).resolve();actual=root/'actual';actual.mkdir();alias=root/'source-alias';alias.symlink_to(actual,target_is_directory=True)
+            with self.assertRaisesRegex(ValueError,'linked or reparse'):self.driver.prepare(root/'output',alias)
+            self.assertFalse((root/'output').exists());alias.unlink()
+    def test_mocked_reparse_ancestor_refused_without_descending(self):
+        import unittest.mock,types
+        with tempfile.TemporaryDirectory()as t:
+            root=Path(t).resolve();entry=root/'mocked-reparse';original=Path.lstat
+            def lstat(path,*a,**kw):
+                if path==entry:return types.SimpleNamespace(st_mode=stat.S_IFDIR|0o700,st_file_attributes=0x400)
+                return original(path,*a,**kw)
+            with unittest.mock.patch.object(Path,'lstat',lstat):
+                with self.assertRaisesRegex(ValueError,'linked or reparse'):self.driver.prepare(entry/'output')
+    def test_pin_paths_prevalidated_before_join_read(self):
+        import unittest.mock
+        for name in ('../outside','scripts/WoRkTrEeS','/absolute','scripts/../outside'):
+            with tempfile.TemporaryDirectory()as t:
+                root=Path(t).resolve()
+                with unittest.mock.patch.object(self.driver,'regular',return_value=json.dumps({name:{'bytes':0,'sha256':'0'*64}}).encode())as read:
+                    with self.assertRaises(ValueError):self.driver.prepare(root/'output')
+                    self.assertEqual(read.call_count,1,'only the ordinary trusted pin manifest may be read')
+    def test_hardlinked_source_refused_before_bytes_read(self):
+        import unittest.mock
+        with tempfile.TemporaryDirectory()as t:
+            root=Path(t).resolve();source=root/'source';source.write_bytes(b'actual');os.link(source,root/'second')
+            with unittest.mock.patch.object(Path,'read_bytes',side_effect=AssertionError('no hardlinked source read')):
+                with self.assertRaisesRegex(ValueError,'single-link source'):self.driver.regular(source)
+    def test_current_cross_sid_helper_and_closed_transport_dependencies(self):
+        helper=(HERE/'fixtures/receiver-input-native/tests/windows-cross-sid-tests.rs').read_bytes()
+        self.assertEqual(P.sha(helper),'5636ce4a977bd7464fbdce87f89c324af7b6c0be51294dad49f95eb9d0ffc755')
+        with tempfile.TemporaryDirectory()as t:
+            output=Path(t).resolve()/'prepared';self.driver.prepare(output)
+            staged=(output/'mixel_receiver_input_windows.rs').read_text()
+            self.assertEqual(staged.count('fn qa_phase('),1);self.assertEqual(staged.count('fn qa_reply('),1)
+            self.assertIn('struct QaPipe{',staged);self.assertIn('struct QaPending{',staged)
+            self.assertIn('3|QA_OVERLAPPED,0,1,4096,4096,5000',staged)
+            self.assertIn('QaPipe::from_owned(pipe,Some(process.clone()));qa_pipe_connect(&file)',staged)
+            self.assertIn('assert_eq!(peer.pid,unsafe{GetProcessId(process.raw())})',staged)
+    def test_cross_sid_actor_inherits_only_owned_accessible_working_directory(self):
+        source=(HERE/'fixtures/receiver-custodian-native/native-tests.rs').read_text()
+        self.assertIn('.arg("--qa-cross-parent").current_dir(&root).spawn()',source)
+        self.assertNotIn('let mode=1',source)
+        self.assertIn('pipe.peer=Some(publisher.process.clone())',source)
 
 if __name__=='__main__':unittest.main()

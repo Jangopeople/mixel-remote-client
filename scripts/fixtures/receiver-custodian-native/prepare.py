@@ -7,23 +7,72 @@ account, pipe, input or namespace operation occurs without --run on Windows CI.
 from pathlib import Path
 import argparse,hashlib,json,os,re,shutil,stat,subprocess,sys,time,uuid
 
-HERE=Path(__file__).resolve().parent
+HERE=Path(__file__).absolute().parent
 REPO=HERE.parents[2]
 def sha(raw):return hashlib.sha256(raw).hexdigest()
 def require(value,message):
     if not value:raise ValueError(message)
+def name_first(parts):
+    require(all(p.casefold()!='worktrees' for p in parts),'held path entry')
+    require('..' not in parts,'parent path component')
+def absolute_name(path):
+    # absolute() only anchors text to cwd. Do not resolve/stat/open before this
+    # name-first boundary, including for a synthetic owned fixture entry.
+    name_first(path.parts)
+    path=path if path.is_absolute()else Path.cwd()/path
+    name_first(path.parts);return path
+def ordinary(path,exists=True):
+    path=absolute_name(path);current=Path(path.anchor)
+    if os.name=='nt':require(re.fullmatch(r'[A-Za-z]:[\\/]',path.anchor)is not None,'ordinary local drive required')
+    parts=path.parts[1:]
+    for index,part in enumerate(parts):
+        current=current/part
+        try:info=current.lstat()
+        except FileNotFoundError:
+            require(not exists and index==len(parts)-1,'ordinary existing ancestors required')
+            return path
+        require(not stat.S_ISLNK(info.st_mode) and not getattr(info,'st_file_attributes',0)&0x400,'linked or reparse source/output ancestry')
+        if index<len(parts)-1:require(stat.S_ISDIR(info.st_mode),'directory ancestor required')
+    return path
 def regular(path):
+    path=ordinary(path)
     info=path.lstat();require(stat.S_ISREG(info.st_mode) and info.st_nlink==1,'regular single-link source required: '+str(path))
     return path.read_bytes()
+def logical(raw):
+    if b'\r' in raw:
+        remainder=raw.replace(b'\r\n',b'')
+        require(b'\r' not in remainder and b'\n' not in remainder,'mixed or bare-CR source newlines')
+        return raw.replace(b'\r\n',b'\n')
+    return raw
+def byte_binding(raw):
+    canonical=logical(raw)
+    return dict(physicalBytes=len(raw),physicalSHA256=sha(raw),logicalBytes=len(canonical),logicalSHA256=sha(canonical),physicalNewlines='CRLF'if b'\r\n'in raw else'LF')
 def save(path,raw):
     require(not path.exists(),'exclusive output: '+str(path));path.parent.mkdir(parents=True,exist_ok=True)
     with path.open('xb')as out:out.write(raw);out.flush();os.fsync(out.fileno())
 def data(path,value):save(path,(json.dumps(value,indent=2,sort_keys=True)+'\n').encode())
 def prepare(output,source_root=None):
-    require(not output.exists(),'new exclusive output required');output.mkdir(mode=0o700,parents=True)
+    # Validate BOTH raw roots before any output creation or source resolution.
+    output=absolute_name(output)
+    if source_root is not None:source_root=absolute_name(source_root)
+    ordinary(output,exists=False)
+    if source_root is not None:
+        ordinary(source_root);require(stat.S_ISDIR(source_root.lstat().st_mode),'source root directory required')
+    ordinary(HERE);ordinary(REPO)
+    try:output.lstat()
+    except FileNotFoundError:pass
+    else:raise ValueError('new exclusive output required')
+    output.mkdir(mode=0o700)
     pins=json.loads(regular(HERE/'SOURCE-PINS.json'))
+    for name in pins:
+        parts=name.split('/')
+        name_first(parts)
+        require(name.startswith('scripts/') and all(p and re.fullmatch(r'[A-Za-z0-9_.-]+',p)for p in parts) and not Path(name).is_absolute(),'closed relative source pin path')
+    verified={}
     for name,pin in pins.items():
-        raw=regular(REPO/name);require(sha(raw)==pin['sha256'] and len(raw)==pin['bytes'],'source pin drift: '+name)
+        raw=regular(REPO/name);canonical=logical(raw)
+        require(sha(canonical)==pin['sha256'] and len(canonical)==pin['bytes'],'logical source pin drift: '+name)
+        verified[name]=byte_binding(raw)
     plan=json.loads(regular(REPO/'scripts/support-receiver-custodian-plan.json'))
     rows={row['name']:row for row in plan['files']}
     expected={name:row['afterSha256'] for name,row in rows.items()}
@@ -31,11 +80,9 @@ def prepare(output,source_root=None):
     expected.update({name:row['sha256'] for name,row in leaves.items()})
     actual={}
     if source_root is not None:
-        source_root=source_root.resolve(strict=True)
-        require('worktrees' not in {p.casefold() for p in source_root.parts},'held path')
         for name,digest in expected.items():
-            raw=regular(source_root/name);require(sha(raw.replace(b'\r\n',b'\n'))==digest,'actual final generated prefix drift: '+name)
-            actual[name]=raw.replace(b'\r\n',b'\n')
+            raw=regular(source_root/name);require(sha(logical(raw))==digest,'actual final generated prefix drift: '+name)
+            actual[name]=raw
     else:
         for name,row in rows.items():actual[name]=row['afterSource'].encode()
         for name,row in leaves.items():actual[name]=regular(REPO/'scripts'/row['template'])
@@ -49,7 +96,13 @@ def prepare(output,source_root=None):
     }
     helpers=regular(REPO/'scripts/fixtures/receiver-input-native/tests/windows-cross-sid-tests.rs')
     cut=b'fn qa_parent_body(){';require(helpers.count(cut)==1,'closed existing memory-only account helper boundary')
-    helpers=helpers[:helpers.index(cut)]
+    # Exact current bounded OVERLAPPED transport has one inert self-test whose
+    # two helpers occur later in the source. Include those exact closed bodies,
+    # never an arbitrary function/name fallback or the old NOWAIT transport.
+    full_helpers=helpers;helpers=full_helpers[:full_helpers.index(cut)]
+    for begin,end in [(b'fn qa_phase(',b'fn qa_api_result('),(b'fn qa_reply(',b'pub(crate) fn cross_sid_logon_child(')]:
+        require(full_helpers.count(begin)==1 and full_helpers.count(end)==1,'closed current transport helper boundaries')
+        a=full_helpers.index(begin);b=full_helpers.index(end,a);helpers+=full_helpers[a:b]
     native_tests=regular(HERE/'native-tests.rs');marker=b'// @EXACT_ACCOUNT_HELPERS@';require(native_tests.count(marker)==1,'closed account insertion')
     files['mixel_receiver_input_windows.rs']+=b'\n'+native_tests.replace(marker,helpers)
     for name in ('Cargo.toml','Cargo.lock','build.rs','native-main.rs'):files[name]=regular(HERE/name)
@@ -62,7 +115,8 @@ def prepare(output,source_root=None):
     (output/'server/input_service').mkdir(parents=True)
     for name,raw in files.items():save(output/name,raw)
     bindings=dict(scope='whole final production prefixes; mock native input effects only',actualGeneratedSourceProvided=source_root is not None,
-        sourceRoot=str(source_root)if source_root else None,sourcePins=pins,compiledProductionPrefixes={name:dict(bytes=len(raw),sha256=sha(raw))for name,raw in actual.items()},
+        sourceRoot=str(source_root)if source_root else None,sourcePins=pins,verifiedPhysicalAndLogicalSourceInputs=verified,
+        compiledProductionPrefixes={name:byte_binding(raw)for name,raw in actual.items()},
         originalNegativePrefixes={name:row['beforeSha256']for name,row in rows.items()},
         rust='1.75.0',desktopInput=False,SendSAS=False,UAC=False,publication=False,applicationQualified=False,
         boundary='Custodian/OS death cannot prove native cleanup. Unknown dirty custody refuses regrant; only own cfg(test) mock namespace is removed after test actors exit.')

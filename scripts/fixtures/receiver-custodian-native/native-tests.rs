@@ -87,7 +87,7 @@ fn qa_journal_acl(path:&std::path::Path,sid:&str){
     let mut descriptor=ptr::null_mut();assert_ne!(unsafe{ConvertStringSecurityDescriptorToSecurityDescriptorW(text.as_ptr(),1,&mut descriptor,ptr::null_mut())},0);let descriptor=OwnedDescriptor(descriptor as usize);let object=qa_file(path,0xe0000);assert_ne!(unsafe{SetKernelObjectSecurity(object.raw(),1|4|0x80000000,descriptor.0 as Handle)},0);
 }
 fn qa_cross_parent(){
-    assert!(hosted_receiver_qa());let root=qa_root();let executable=std::env::current_exe().unwrap();let mut account=QaAccount::create();
+    assert!(hosted_receiver_qa());let mut caller=ptr::null_mut();assert_ne!(unsafe{OpenProcessToken(GetCurrentProcess(),8,&mut caller)},0);let caller=Owned::from(caller).unwrap();let elevation=qa_token_buffer(caller.raw(),20);assert_eq!(unsafe{*(elevation.as_ptr()as *const u32)},1,"isolated hosted caller must actually be elevated before creating its fresh QA account");let root=qa_root();let executable=std::env::current_exe().unwrap();let mut account=QaAccount::create();
     let before_root=qa_dacl(&root);let before_file=qa_dacl(&executable);let marker=root.join("owner.marker");let before_marker=qa_dacl(&marker);
     struct Restore{root:std::path::PathBuf,exe:std::path::PathBuf,marker:std::path::PathBuf,before:[Vec<u8>;3]}
     impl Drop for Restore{fn drop(&mut self){let good=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||{qa_set_acl(&self.exe,None,false);qa_set_acl(&self.marker,None,false);qa_set_acl(&self.root,None,true);assert_eq!(qa_dacl(&self.root),self.before[0]);assert_eq!(qa_dacl(&self.exe),self.before[1]);assert_eq!(qa_dacl(&self.marker),self.before[2]);}));if good.is_err(){QA_CLEANUP_FAILED.store(true,Ordering::SeqCst);}}}
@@ -97,11 +97,11 @@ fn qa_cross_parent(){
     std::env::set_var("MIXEL_CUSTODY_QA_OUTPUT",&journal);std::env::set_var("MIXEL_CUSTODY_QA_CASE","different-sid-helper-death");
     let own_sid=process_sid(unsafe{GetCurrentProcess()}).unwrap();assert_ne!(own_sid,account.sid);
     let sddl=wide(&format!("D:P(A;;GA;;;{own_sid})(A;;GRGW;;;{})",account.sid));let mut descriptor=ptr::null_mut();assert_ne!(unsafe{ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.as_ptr(),1,&mut descriptor,ptr::null_mut())},0);let descriptor=OwnedDescriptor(descriptor as usize);let attributes=Attributes{length:std::mem::size_of::<Attributes>()as u32,descriptor:descriptor.0 as Handle,inherit:0};
-    let raw=unsafe{CreateNamedPipeW(wide(&qa_pipe_path()).as_ptr(),3,1,1,4096,4096,5000,(&attributes as *const Attributes)as Handle)};assert!(!raw.is_null()&&raw as isize!=-1);let pipe=Owned::from(raw).unwrap();account.profile_attempted=true;
+    let raw=unsafe{CreateNamedPipeW(wide(&qa_pipe_path()).as_ptr(),3|QA_OVERLAPPED,0,1,4096,4096,5000,(&attributes as *const Attributes)as Handle)};assert!(!raw.is_null()&&raw as isize!=-1);let pipe=Owned::from(raw).unwrap();account.profile_attempted=true;
     assert!(launch_with_logon(&account.name,account.password.as_str(),executable.to_str().unwrap(),"--portable-service").is_some());let process=started().lock().unwrap().as_ref().unwrap().peer.process.clone();let _child=QaChild{process:process.clone()};
-    let end=Instant::now()+Duration::from_secs(5);loop{if unsafe{ConnectNamedPipe(pipe.raw(),ptr::null_mut())}!=0||unsafe{GetLastError()}==535{break;}assert!(Instant::now()<end);std::thread::sleep(Duration::from_millis(1));}
-    let peer=pipe_peer(pipe.raw(),false).unwrap();assert_eq!(peer.sid,account.sid);let transferred=publisher_handle(&peer).unwrap().unwrap();assert!(publisher_handle(&peer).is_none());
-    let lease=Lease::create(&uuid::Uuid::new_v4().simple().to_string()).unwrap();assert!(lease.prepare_helper().is_some());let raw=pipe.raw();std::mem::forget(pipe);let mut file=unsafe{std::fs::File::from_raw_handle(raw)};
+    let mut file=QaPipe::from_owned(pipe,Some(process.clone()));qa_pipe_connect(&file);
+    let peer=pipe_peer(file.raw(),false).unwrap();assert_eq!(peer.sid,account.sid);assert_eq!(peer.pid,unsafe{GetProcessId(process.raw())});let transferred=publisher_handle(&peer).unwrap().unwrap();assert!(publisher_handle(&peer).is_none());
+    let lease=Lease::create(&uuid::Uuid::new_v4().simple().to_string()).unwrap();assert!(lease.prepare_helper().is_some());
     qa_pipe_send(&mut file,&transferred.to_le_bytes());qa_send_text(&mut file,&account.sid);qa_send_text(&mut file,&lease.token);
     let mut ready=[0];qa_pipe_wait(&mut file,&mut ready);assert_eq!(ready,[1]);assert!(startup_confirmed(&peer,||{}));
     let child_identity=qa_read_text(&mut file);let(pid,born)=child_identity.split_once('-').unwrap();let pid=pid.parse::<u32>().unwrap();let born=born.parse::<u64>().unwrap();
@@ -116,8 +116,8 @@ fn qa_cross_parent(){
     println!("PASS: actual different-SID Medium helper and same-token custodian; original publisher lives; one mock Up/CLEANED after helper death");
 }
 fn qa_cross_child(){
-    let path=qa_pipe_path();let end=Instant::now()+Duration::from_secs(5);let raw=loop{let raw=unsafe{CreateFileW(wide(&path).as_ptr(),0xc0000000,0,ptr::null_mut(),3,0,ptr::null_mut())};if !raw.is_null()&&raw as isize!=-1{break raw;}assert!(Instant::now()<end);std::thread::sleep(Duration::from_millis(1));};let mode=1;assert_ne!(unsafe{SetNamedPipeHandleState(raw,&mode,ptr::null(),ptr::null())},0);let mut pipe=unsafe{std::fs::File::from_raw_handle(raw)};
-    let mut handle=[0;8];qa_pipe_wait(&mut pipe,&mut handle);let publisher=pipe_publisher(pipe.as_raw_handle(),Some(u64::from_le_bytes(handle))).unwrap();let sid=qa_read_text(&mut pipe);assert_eq!(process_sid(unsafe{GetCurrentProcess()}).as_deref(),Some(sid.as_str()));
+    let path=qa_pipe_path();let end=Instant::now()+Duration::from_secs(5);let raw=loop{let raw=unsafe{CreateFileW(wide(&path).as_ptr(),0xc0000000,0,ptr::null_mut(),3,QA_OVERLAPPED,ptr::null_mut())};if !raw.is_null()&&raw as isize!=-1{break raw;}assert!(Instant::now()<end);std::thread::sleep(Duration::from_millis(1));};let mut pipe=QaPipe::from_owned(Owned::from(raw).unwrap(),None);
+    let mut handle=[0;8];qa_pipe_wait(&mut pipe,&mut handle);let publisher=pipe_publisher(pipe.raw(),Some(u64::from_le_bytes(handle))).unwrap();pipe.peer=Some(publisher.process.clone());let sid=qa_read_text(&mut pipe);assert_eq!(process_sid(unsafe{GetCurrentProcess()}).as_deref(),Some(sid.as_str()));
     let mut token=ptr::null_mut();assert_ne!(unsafe{OpenProcessToken(GetCurrentProcess(),8,&mut token)},0);let token=Owned::from(token).unwrap();qa_standard_token(token.raw());
     let nonce=qa_read_text(&mut pipe);let lease=Lease::open(&nonce,&publisher).unwrap();assert!(lease.active());assert_eq!(unsafe{SetEvent(lease.event.raw())},0);assert_eq!(unsafe{GetLastError()},5);
     assert!(custodian::ready());let packet=(nonce,current(),88,1,key().write_to_bytes().unwrap(),String::new(),0,false,false);
@@ -130,7 +130,7 @@ fn cross_sid_case(){
     use std::os::windows::fs::MetadataExt;let base=std::path::PathBuf::from(std::env::var_os("ProgramData").unwrap());assert_eq!(std::fs::symlink_metadata(&base).unwrap().file_attributes()&0x400,0);
     let nonce=uuid::Uuid::new_v4().simple().to_string();let root=base.join(format!("MixelReceiverLogon-{nonce}"));std::fs::create_dir(&root).unwrap();qa_set_acl(&root,None,true);std::fs::write(root.join("owner.marker"),&nonce).unwrap();qa_set_acl(&root.join("owner.marker"),None,false);
     let executable=root.join("custody-cross-sid.exe");std::fs::copy(std::env::current_exe().unwrap(),&executable).unwrap();qa_set_acl(&executable,None,false);
-    let mut child=OwnedChild(std::process::Command::new(&executable).arg("--qa-cross-parent").spawn().unwrap());let end=Instant::now()+Duration::from_secs(90);while child.try_wait().unwrap().is_none(){assert!(Instant::now()<end,"bounded owned different-SID child; cleanup unqualified on timeout");std::thread::sleep(Duration::from_millis(20));}assert!(child.wait().unwrap().success(),"different-SID custody case");
+    let mut child=OwnedChild(std::process::Command::new(&executable).arg("--qa-cross-parent").current_dir(&root).spawn().unwrap());let end=Instant::now()+Duration::from_secs(90);while child.try_wait().unwrap().is_none(){assert!(Instant::now()<end,"bounded owned different-SID child; cleanup unqualified on timeout");std::thread::sleep(Duration::from_millis(20));}assert!(child.wait().unwrap().success(),"different-SID custody case");
     let output=std::path::PathBuf::from(std::env::var_os("MIXEL_CUSTODY_QA_OUTPUT").unwrap());for entry in std::fs::read_dir(root.join("custody-journal")).unwrap(){let entry=entry.unwrap();assert!(entry.file_type().unwrap().is_file());std::fs::copy(entry.path(),output.join(entry.file_name())).unwrap();}
     assert_eq!(std::fs::read(root.join("owner.marker")).unwrap(),nonce.as_bytes());assert_eq!(std::fs::symlink_metadata(&root).unwrap().file_attributes()&0x400,0);std::fs::remove_dir_all(root).unwrap();
 }
