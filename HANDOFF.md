@@ -2,6 +2,43 @@
 
 ## 2026-11-03 evening — Real R5 Accept, input, clipboard, files and reconnect PASS
 
+Latest source checkpoint990d4535bcbe33cf2b06bfa9c18d619e6b0d0082 is clean and
+pushed to the existing branch (SOURCE BACKUP ONLY; no Actions). Final Windows
+source-only capsule `_scratch/windows-bridge-final-990d453` and transfer
+`_scratch/windows-build-transfer-990d453` verify all461pipeline files,574Rust inputs,
+sixbridge outputs and complete-history bundle. Earlier transfer sets are retained
+but superseded for actual compilation. Final driver also isolates child Python
+user-site imports; exact loader flags are0x900 (adjacent DLL directory+System32).
+Actual targeted25controls pass; source fix has independent review clearance.
+
+Windows bootstrap launcher is now actually C#5/x64/warnings-fatal compiled on
+WIN-BUILD, defaultnoop,37fake controls and query-onlyinspect all exit0. Actual
+source18d77a45.../EXEff654916...; refusal cleanup checks termination and bounded
+wait. Raw source/EXEs/commands/outputs/actual exits were read back and hash-verified
+under `_scratch/verification/task-owner-native-bootstrap-68813735/candidate-r2`.
+Remote tiny compiler bootstrap remains under existing builder TEMP
+`MixelRemote-TaskOwner-Bootstrap-68813735f78940daa29b0e6ad4cde22c`; retain until next
+native acceptance then clean own files only. NO --run/detached-token mutation or
+OwnerProbe execution. Full native owner-conservation still must pass before build.
+
+Scratch tool provisioning under `_scratch/windows-build-transfer/tools` is source
+ready:16controls pass and all4exactPS1s parse on nativeWindowsPowerShell5 with0errors,
+as DATA only. No protected script execution. Official LLVM20.1.8 Windows tar.xz
+is actually downloaded939541912bytes, exactSHA f229769f11d6a6edc8ada599c0cda964b7dee6ab1a08c6cf9dd7f513e85b107f,
+with isolated GPG signature VALID from the published LLVM release keys. Its5010
+members are ordinary/no links; AMD64 bin/libclang.dll+resourceheaders exist. No
+Windows tools installed, codecs compiled or app build started.
+
+REQUIRED USER APPROVALS STILL PENDING (do not infer approval from elapsed time):
+1.New128GiB disk on VM110 samsung-fast/sata1 plus controlled idle shutdown/start,
+  initialize ONLY newdisk NTFSW: and new private workspace parent. Existing C:/
+  Recovery/data untouched. Exact proposal `_scratch/windows-build-volume-proposal`.
+2.RemoteSigned only for this task WIN-BUILD setup/build/test processes+children;
+  all persistent policy scopes unchanged. Current actual policy Restricted/all5
+  Undefined. No policy-setting, protected script, VMpower/disk/ACL operation ran.
+All independent preparation above is complete. New Windows app build/sign/cold/
+customer flow and strict held-disconnect remain mandatory; task NOT COMPLETE.
+
 The task is NOT COMPLETE. Current live evidence is
 `_scratch/native-proof/r5/live/live-proof.json`, with separate file hash/runtime
 receipts in that folder. This supersedes the older access/runtime checkpoint below.
