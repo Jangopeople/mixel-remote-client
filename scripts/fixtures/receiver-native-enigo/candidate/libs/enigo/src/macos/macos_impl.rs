@@ -489,6 +489,10 @@ impl KeyboardControllable for Enigo {
 }
 
 impl Enigo {
+    /// Post one Unicode text event without holding a physical key.
+    /// Returns `Err` if the event source is unavailable or event creation fails.
+    /// Returns `Ok(())` after posting; CoreGraphics provides no delivery or
+    /// target-application consumption acknowledgment for this post.
     pub fn receiver_text_event(&mut self, character: char) -> crate::ResultType {
         let source = self.event_source.as_ref().ok_or("CGEvent text source unavailable")?;
         let event = CGEvent::new_keyboard_event(source.clone(), 0, true)
@@ -498,6 +502,9 @@ impl Enigo {
         // Existing Unicode text dispatch is one event, not a physical hold.
         Ok(())
     }
+    /// Resolve the backend key code without posting input.
+    /// Returns `None` for an unmapped `u16::MAX` code; otherwise returns the code
+    /// and zero modifier bits because this plan adds no layout modifiers.
     pub fn receiver_key_plan(&mut self, key: Key) -> Option<(u32, u8)> {
         let code = self.key_to_keycode(key);
         (code != u16::MAX).then_some((code as u32, 0))

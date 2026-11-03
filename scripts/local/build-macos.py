@@ -249,6 +249,147 @@ def require_json(path, **expected):
     return value
 
 
+def command_evidence(previous, label, *, successful=True):
+    paths = list((owned_directory(previous / "commands")).glob("*-" + label + ".command.json"))
+    if len(paths) != 1:
+        raise Refusal("expected one closed previous command: " + label)
+    command_path = regular_file(paths[0])
+    stem = command_path.name.removesuffix(".command.json")
+    result_path = regular_file(command_path.with_name(stem + ".result.json"))
+    command = json.loads(command_path.read_text())
+    result = json.loads(result_path.read_text())
+    if (result.get("argv") != command.get("argv") or result.get("cwd") != command.get("cwd") or
+            type(result.get("returncode")) is not int or result.get("status") not in ("passed", "failed")):
+        raise Refusal("previous command is not closed with an actual exit: " + label)
+    if successful and (result["status"] != "passed" or result["returncode"] != 0):
+        raise Refusal("previous required command did not pass: " + label)
+    raw = {}
+    for stream in ("stdout", "stderr"):
+        path = regular_file(command_path.with_name(stem + "." + stream + ".log"))
+        if digest(path) != result.get(stream + "Sha256"):
+            raise Refusal("previous raw command evidence changed: " + label)
+        raw[stream] = path
+    return command, result, raw
+
+
+def cache_inventory(cache):
+    entries = []
+    def visit(directory):
+        owned_directory(directory)
+        for path in sorted(directory.iterdir()):
+            info = path.lstat()
+            if stat.S_ISDIR(info.st_mode) and not getattr(info, "st_file_attributes", 0) & 0x400:
+                visit(path)
+            else:
+                regular_file(path)
+                entries.append({"path": path.relative_to(cache).as_posix(), "sha256": digest(path)})
+    visit(cache)
+    if not entries:
+        raise Refusal("previous codec cache is empty")
+    return entries
+
+
+def admit_reuse(previous, root, output):
+    previous = owned_directory(previous)
+    if previous == root or not inside(previous, root) or inside(output, previous) or inside(previous, output):
+        raise Refusal("reuse input must be a separate closed descendant of the current run root")
+    if stat.S_IMODE(previous.lstat().st_mode) != 0o700:
+        raise Refusal("previous build output must retain private 0700 permissions")
+    for parent in previous.parents:
+        owned_directory(parent)
+        if parent == root:
+            break
+    if (previous / "build-active.json").exists() or (previous / "build-active.json").is_symlink():
+        raise Refusal("previous build is active or lacks a clean close")
+    result_path = regular_file(previous / "build.result.json")
+    result = require_json(result_path, suppliedSourceUnchanged=True, suppliedVcpkgUnchanged=True,
+                          pipelineInputsUnchanged=True, target=TARGET, minimum=MINIMUM)
+    if (type(result.get("buildQualified")) is not bool or any(result.get(key) is not True for key in
+            ("suppliedSourceUnchanged", "suppliedVcpkgUnchanged", "pipelineInputsUnchanged"))):
+        raise Refusal("previous result does not contain exact closed ownership outcomes")
+    # Legacy closed outputs predate the active marker. Their final result exists
+    # only after all commands returned; additionally require every original raw
+    # command/result pair to be closed, including a genuine failed last command.
+    commands = list((owned_directory(previous / "commands")).glob("*.command.json"))
+    if not commands or len(commands) > 1000:
+        raise Refusal("previous output has no bounded closed command inventory")
+    for path in commands:
+        label = path.name.split("-", 1)[1].removesuffix(".command.json")
+        command_evidence(previous, label, successful=False)
+    inputs = require_json(previous / "inputs.json", vcpkgHead=VCPKG_HEAD, flutterHead=FLUTTER_HEAD,
+                          upstreamHead=UPSTREAM_HEAD, hbbHead=HBB_HEAD)
+    require_json(previous / "native-codecs.json", status="passed", architecture="arm64", advertised_minimum=MINIMUM)
+    codegen_install(previous)
+    return {"root": previous, "closedResult": result, "closedResultSha256": digest(result_path),
+            "inputs": inputs, "codecCache": previous / "codec-cache", "cacheInventory": cache_inventory(previous / "codec-cache")}
+
+
+def triplet_hashes(repo):
+    return {path.relative_to(repo).as_posix(): digest(regular_file(path))
+            for path in sorted((repo / ".github/vcpkg-triplets").glob("*.cmake"))}
+
+
+def reuse_profile(previous, current):
+    old = previous["root"]
+    pipeline = require_json(old / "pipeline-inputs.json")
+    entries = {item["path"]: item["sha256"] for item in pipeline.get("entries", [])}
+    triplets = {name: value for name, value in entries.items()
+                if name.startswith(".github/vcpkg-triplets/") and name.endswith(".cmake")}
+    if not triplets or any(value is None for value in triplets.values()):
+        raise Refusal("previous current-triplet hashes are absent")
+    historical = {"vcpkgHead": previous["inputs"]["vcpkgHead"], "target": TARGET, "minimum": MINIMUM,
+                  "triplets": triplets,
+                  "flutterIdentity": require_json(old / "flutter-identity.json"),
+                  "flutterHashes": require_json(old / "flutter-input-hashes.json")}
+    for key, label in (("rustcVersion", "rustc-version"), ("cargoVersion", "cargo-version"),
+                       ("sdkPath", "macos-sdk"), ("clangPath", "macos-clang")):
+        _, _, raw = command_evidence(old, label)
+        value = raw["stdout"].read_text().strip()
+        # Retain the exact version-bearing xcrun identity AND the canonical
+        # SDKROOT actually used by tools; neither may drift between builds.
+        if key == "sdkPath":
+            historical["sdkCanonicalPath"] = str(ordinary_directory(Path(value).resolve(strict=True)))
+        historical[key] = value
+    if historical != current:
+        raise Refusal("previous codec/codegen toolchain, SDK, Flutter, vcpkg or overlay profile differs")
+    return historical
+
+
+def codegen_install(old):
+    command, result, _ = command_evidence(old, "install-bridge-codegen")
+    expected = ["rustup", "run", TOOLCHAIN, "cargo", "install", "flutter_rust_bridge_codegen",
+                "--version", "1.80.1", "--features", "uuid", "--locked", "--root", str(old / "codegen")]
+    if command["argv"] != expected:
+        raise Refusal("previous FRB install is not the exact locked uuid1.80.1 install")
+    source = regular_file(old / "codegen/bin/flutter_rust_bridge_codegen")
+    return source, result
+
+
+def reuse_codegen(previous, destination, runner, repo):
+    source, result = codegen_install(previous["root"])
+    before = digest(source)
+    destination.parent.mkdir(parents=True, mode=0o700)
+    shutil.copy2(source, destination)
+    regular_file(destination)
+    if digest(destination) != before or digest(source) != before:
+        raise Refusal("FRB executable changed during independent copying")
+    version = runner.call("reuse-codegen-version", [destination, "--version"], repo, read=True).decode().strip()
+    if not re.fullmatch(r"(?:flutter_rust_bridge_codegen\s+)?1\.80\.1", version):
+        raise Refusal("reused FRB executable did not report actual version1.80.1")
+    if digest(destination) != before or digest(source) != before:
+        raise Refusal("FRB executable changed while verifying version")
+    return {"oldExecutable": str(source), "copiedExecutable": str(destination), "sha256": before,
+            "version": version, "successfulInstallResult": result}
+
+
+def verify_lock(app, before, result, phase):
+    after = digest(regular_file(app / "Cargo.lock"))
+    result.update(cargoLockBeforeSha256=before, cargoLockAfterSha256=after, cargoLockUnchanged=before == after)
+    result["cargoLockAfter" + phase + "Sha256"] = after
+    if after != before:
+        raise Refusal(phase + " changed the held private application Cargo.lock")
+
+
 def owned_inventory(check, root):
     entries = check.inventory(root)
     for entry in entries:
@@ -378,6 +519,7 @@ def build(args, repo):
         if (original_vcpkg / name).exists() or (original_vcpkg / name).is_symlink():
             raise Refusal("provide a source-only pinned vcpkg checkout; private build/cache output belongs to this driver: " + name)
     output.mkdir(mode=0o700)
+    write_json(output / "build-active.json", {"pid": os.getpid(), "target": TARGET, "jobs": jobs})
     runner = Runner(output, environment)
     argv, ignored_result = ignored
     (output / "root-admission.stdout.log").write_bytes(ignored_result.stdout)
@@ -386,9 +528,13 @@ def build(args, repo):
                "stdoutSha256": digest(output / "root-admission.stdout.log"),
                "stderrSha256": digest(output / "root-admission.stderr.log"), "runRoot": str(root)})
     result = {"buildQualified": False, "target": TARGET, "minimum": MINIMUM, "jobs": jobs,
+              "reuseFrom": str(args.reuse_from) if args.reuse_from is not None else None,
               "limitations": "Unsigned app build only. Additional mandatory source/native tests and physical remote-support acceptance remain separate."}
-    before = vcpkg_before = pipeline_before = None
+    before = vcpkg_before = pipeline_before = previous = lock_before = None
     try:
+        if args.reuse_from is not None:
+            previous = admit_reuse(args.reuse_from, root, output)
+            shutil.copyfile(previous["root"] / "build.result.json", output / "reuse-previous-build.result.json")
         def git(label, directory, *arguments):
             return runner.call(label, ["git", "-C", directory, *arguments], repo, read=True, timeout=30)
         source_head = git("pipeline-head", repo, "rev-parse", "--verify", "HEAD").decode("ascii").strip()
@@ -473,13 +619,28 @@ def build(args, repo):
                    "flutterScriptSha256": digest(flutter / "bin/flutter"),
                    "dartBinarySha256": digest(flutter / "bin/cache/dart-sdk/bin/dart"),
                    "frameworkBinarySha256": digest(framework_binary), "frameworkHeaderSha256": digest(header)})
-        sdk_root = Path(runner.call("macos-sdk", ["xcrun", "--sdk", "macosx", "--show-sdk-path"], repo, read=True).decode().strip()).resolve(strict=True)
+        sdk_reported = runner.call("macos-sdk", ["xcrun", "--sdk", "macosx", "--show-sdk-path"], repo, read=True).decode().strip()
+        sdk_root = Path(sdk_reported).resolve(strict=True)
         ordinary_directory(sdk_root)
         clang_lookup = Path(runner.call("macos-clang", ["xcrun", "--find", "clang"], repo, read=True).decode().strip())
         clang = clang_lookup.resolve(strict=True)
         regular_file(clang, owned=False)
         libclang = regular_file((clang_lookup.parent.parent / "lib/libclang.dylib").resolve(strict=True), owned=False)
         environment.update(SDKROOT=str(sdk_root), LIBCLANG_PATH=str(libclang.parent))
+        profile = {"vcpkgHead": VCPKG_HEAD, "target": TARGET, "minimum": MINIMUM, "triplets": triplet_hashes(repo),
+                   "rustcVersion": rust_version.strip(), "cargoVersion": cargo_version.strip(),
+                   "sdkPath": sdk_reported, "sdkCanonicalPath": str(sdk_root), "clangPath": str(clang_lookup), "flutterIdentity": sdk_identity,
+                   "flutterHashes": require_json(output / "flutter-input-hashes.json")}
+        write_json(output / "native-reuse-profile.json", profile)
+        if previous is not None:
+            matched = reuse_profile(previous, profile)
+            environment["VCPKG_BINARY_SOURCES"] = ("clear;files," + str(previous["codecCache"]) + ",read;files," +
+                                                    str(output / "codec-cache") + ",readwrite")
+            write_json(output / "reuse-admission.json", {"previousOutput": str(previous["root"]),
+                       "previousBuildQualified": previous["closedResult"]["buildQualified"],
+                       "previousClosedResultSha256": previous["closedResultSha256"], "matchedProfile": matched,
+                       "codecCacheAccess": "read", "codecCacheInventory": previous["cacheInventory"],
+                       "cargoHomeReused": False, "applicationOutputsReused": False})
         runner.call("bootstrap-vcpkg", ["bash", vcpkg / "bootstrap-vcpkg.sh", "-disableMetrics"], vcpkg)
         runner.call("install-codecs", [vcpkg / "vcpkg", "install", "--overlay-triplets=" + environment["VCPKG_OVERLAY_TRIPLETS"],
                                       "--triplet", "arm64-osx", "libvpx", "libyuv", "opus", "aom", "libjpeg-turbo"], vcpkg)
@@ -488,14 +649,19 @@ def build(args, repo):
         require_json(output / "native-codecs.json", status="passed", architecture="arm64", advertised_minimum=MINIMUM)
         runner.call("apply-branding", ["bash", repo / "scripts/apply-branding.sh"], repo)
         lock_before = digest(app / "Cargo.lock")
+        result["cargoLockBeforeSha256"] = lock_before
         runner.call("fetch-locked", ["rustup", "run", TOOLCHAIN, "cargo", "fetch", "--locked", "--target", TARGET], app)
         if digest(app / "Cargo.lock") != lock_before:
             raise Refusal("locked application fetch changed Cargo.lock")
         script("patch-owned-tao", "patch-support-url-log-privacy.py", "--cargo-home", home)
         script("verify-owned-tao", "patch-support-url-log-privacy.py", "--cargo-home", home, "--check")
         check.verify_cargo_home(home, patched=True)
-        runner.call("install-bridge-codegen", ["rustup", "run", TOOLCHAIN, "cargo", "install", "flutter_rust_bridge_codegen",
-                                               "--version", "1.80.1", "--features", "uuid", "--locked", "--root", codegen_root], repo)
+        if previous is None:
+            runner.call("install-bridge-codegen", ["rustup", "run", TOOLCHAIN, "cargo", "install", "flutter_rust_bridge_codegen",
+                                                   "--version", "1.80.1", "--features", "uuid", "--locked", "--root", codegen_root], repo)
+        else:
+            codegen_proof = reuse_codegen(previous, codegen_root / "bin/flutter_rust_bridge_codegen", runner, repo)
+            write_json(output / "codegen-reuse.json", codegen_proof)
         codegen = regular_file(codegen_root / "bin/flutter_rust_bridge_codegen")
         for index, (command, extra) in enumerate(bridge_commands):
             script(f"bridge-patch-{index + 1:02d}", command[0], *command[1:], cwd=app, extra=extra)
@@ -525,8 +691,10 @@ def build(args, repo):
                "--target", TARGET, "--run", "--local-run-root", root)
         require_json(output / "rust-check/check.result.json", status="passed", compiled=True, sourceUnchanged=True)
         runner.call("build-entire-app", [python, "build.py", "--flutter", "--unix-file-copy-paste"], app)
+        verify_lock(app, lock_before, result, "Build")
         runner.call("analyze-entire-flutter", [flutter / "bin/flutter", "analyze", "--no-pub", "--no-fatal-infos"], app / "flutter")
         script("compiled-support-guard", "test-compiled-support-guard.py")
+        verify_lock(app, lock_before, result, "Guard")
         bundle = app / "flutter/build/macos/Build/Products/Release/Mixel-Remote.app"
         owned_directory(bundle)
         script("compiled-branding", "verify-flutter-branding.py", "--assets",
@@ -545,6 +713,17 @@ def build(args, repo):
         raise
     finally:
         try:
+            if lock_before is not None:
+                lock_after = digest(regular_file(app / "Cargo.lock"))
+                result.update(cargoLockBeforeSha256=lock_before, cargoLockAfterSha256=lock_after,
+                              cargoLockUnchanged=lock_before == lock_after)
+                if lock_before != lock_after:
+                    result.update(buildQualified=False, error="held private application Cargo.lock changed")
+            if previous is not None:
+                cache_unchanged = previous["cacheInventory"] == cache_inventory(previous["codecCache"])
+                result["previousCodecCacheUnchanged"] = cache_unchanged
+                if not cache_unchanged:
+                    result.update(buildQualified=False, error="read-only previous codec cache changed")
             unchanged = before is not None and before == owned_inventory(check, original)
             vcpkg_unchanged = vcpkg_before is not None and vcpkg_before == owned_inventory(check, original_vcpkg)
             pipeline_unchanged = pipeline_before is not None and pipeline_before == pipeline_inventory(repo, pipeline_names)
@@ -555,7 +734,9 @@ def build(args, repo):
                     result["error"] = "supplied source/vcpkg/pipeline immutability check failed"
         except Exception as error:
             result.update(buildQualified=False, error="input recheck failed: " + str(error))
+        result["buildClosed"] = True
         write_json(output / "build.result.json", result)
+        (output / "build-active.json").unlink()
     if not result["buildQualified"]:
         raise Refusal(result.get("error", "local build did not qualify"))
     print("PASS: unsigned ARM application built and verified; app tree SHA256=" + result["appTreeSha256"], flush=True)
@@ -573,11 +754,14 @@ def main():
     parser.add_argument("--run", action="store_true", help="explicitly run dependency fetches and native build tools")
     parser.add_argument("--jobs", type=job_count, default=1,
                         help="owned Cargo/CMake/vcpkg concurrency, 1–8 (default: 1)")
+    parser.add_argument("--reuse-from", type=Path,
+                        help="closed private output with matching codec profile and exact successful FRB install")
     args = parser.parse_args()
     if not args.run:
         print("PLAN ONLY: pass --run after the local native compiler reservation is granted; no commands or writes performed.")
         print(json.dumps({"target": TARGET, "minimum": MINIMUM, "jobs": args.jobs,
-                          "paths": {key: str(value) for key, value in vars(args).items() if key not in ("run", "jobs")}}, sort_keys=True))
+                          "reuseFrom": str(args.reuse_from) if args.reuse_from is not None else None,
+                          "paths": {key: str(value) for key, value in vars(args).items() if key not in ("run", "jobs", "reuse_from")}}, sort_keys=True))
         return 0
     try:
         build(args, Path(__file__).absolute().parents[2])

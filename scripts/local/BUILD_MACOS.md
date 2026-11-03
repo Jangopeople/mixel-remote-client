@@ -43,10 +43,30 @@ Mach-O architecture/minimum. It stops at the first failure without retrying.
 `CARGO_BUILD_JOBS`, `CMAKE_BUILD_PARALLEL_LEVEL` and `VCPKG_MAX_CONCURRENCY`, replacing
 inherited values. The plan and final result record the selected concurrency.
 
+For a fresh retry, add `--reuse-from "$repo/_scratch/local-build/arm64-build"`
+and select a new output such as `--output "$repo/_scratch/local-build/arm64-build-r2"`.
+The previous output must be a closed private owned descendant of the same run
+root, with unchanged source/vcpkg/pipeline results and complete command evidence.
+A failed overall build is accepted as failed evidence; it is never promoted.
+Reuse requires identical recorded Rust/Cargo versions, selected platform SDK and
+Clang paths, exact Flutter source/used bytes, vcpkg pin, native ARM12.3 proof and
+all current overlay hashes. The previous codec cache is supplied read-only to a
+fresh vcpkg build, and every resulting archive is verified again. The exact
+successful locked UUID FRB1.80.1 install is checked, its unaliased owned binary is
+copied independently, hashed and executed with `--version`. Original app output,
+Rust targets and Cargo home are never reused. No graph-resolution fallback occurs.
+Retain the original output that contains the actual successful FRB install when
+making further retries. `reuse-previous-build.result.json` preserves its actual
+overall result; reuse proofs and raw version output belong to the new output.
+
 `build.result.json` is successful only after all gates pass and both supplied
 source trees remain unchanged. `commands/` contains every exact argv, working
 directory, exit status and raw stdout/stderr. `app-manifest.json` binds the complete
-unsigned `.app` tree by SHA256. The driver does not package, sign, notarize, publish,
+unsigned `.app` tree by SHA256. After both `build.py` and the compiled guard the
+private `Cargo.lock` must equal the pre-fetch baseline; before/after hashes and
+`cargoLockUnchanged` are retained even on failure. Active markers and complete
+closed command results prevent reuse of an unfinished run.
+The driver does not package, sign, notarize, publish,
 install, launch an app, change OS privacy grants, or establish native remote-support
 acceptance. Run the other mandatory source/native checks separately, followed by
 the authorized signing and physical acceptance workflows.

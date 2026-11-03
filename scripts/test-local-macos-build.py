@@ -60,6 +60,7 @@ class LocalMacBuildControls(unittest.TestCase):
         put(self.rust_bin, "cargo", mode=0o755)
         self.sdk = self.root / "Xcode/MacOSX.sdk"
         self.sdk.mkdir(parents=True)
+        self.sdk_reported = self.sdk
         self.clang = put(self.root, "Xcode/Toolchains/usr/bin/clang", mode=0o755)
         put(self.clang.parent.parent, "lib/libclang.dylib")
         put(self.repo, ".github/workflows/build.yml", (ROOT / ".github/workflows/build.yml").read_bytes())
@@ -70,7 +71,7 @@ class LocalMacBuildControls(unittest.TestCase):
             put(self.repo, "scripts/" + name)
         put(self.repo, ".github/vcpkg-triplets/arm64-osx.cmake")
         self.args = argparse.Namespace(source=self.source, flutter=self.flutter, vcpkg=self.vcpkg,
-                                       run_root=self.run_root, output=self.output, run=True, jobs=1)
+                                       run_root=self.run_root, output=self.output, run=True, jobs=1, reuse_from=None)
         self.processes = []
         self.labels = []
         self.fail_label = None
@@ -80,6 +81,7 @@ class LocalMacBuildControls(unittest.TestCase):
         self.omit_proof = False
         self.corrupt_bundle_proof = False
         self.mutate_original = False
+        self.mutate_lock_at = None
         self.stack = contextlib.ExitStack()
         self.stack.enter_context(mock.patch.object(DRIVER.platform, "system", return_value="Darwin"))
         self.stack.enter_context(mock.patch.object(DRIVER.platform, "machine", return_value="arm64"))
@@ -112,7 +114,7 @@ class LocalMacBuildControls(unittest.TestCase):
             if "check-ignore" in argv:
                 output = b""
             elif "ls-files" in argv:
-                output = b".github/workflows/build.yml\0scripts/apply-branding.sh\0scripts/check-app-rust.py\0"
+                output = b".github/workflows/build.yml\0scripts/apply-branding.sh\0scripts/check-app-rust.py\0.github/vcpkg-triplets/arm64-osx.cmake\0"
             elif "rev-parse" in argv:
                 directory = Path(argv[2])
                 head = (DRIVER.HBB_HEAD if directory.name == "hbb_common" else DRIVER.VCPKG_HEAD if directory == self.vcpkg
@@ -133,7 +135,9 @@ class LocalMacBuildControls(unittest.TestCase):
         elif argv[-2:] == ["--version", "--machine"]:
             output = json.dumps({"frameworkVersion": self.sdk_version, "frameworkRevision": DRIVER.FLUTTER_HEAD}).encode()
         elif argv[0] == "xcrun":
-            output = (str(self.clang if argv[1] == "--find" else self.sdk) + "\n").encode()
+            output = (str(self.clang if argv[1] == "--find" else self.sdk_reported) + "\n").encode()
+        elif Path(argv[0]).name == "flutter_rust_bridge_codegen" and argv[-1:] == ["--version"]:
+            output = b"flutter_rust_bridge_codegen 1.80.1\n"
         if code == 0:
             if "--reserve-cargo-home" in argv:
                 Path(argv[-1]).mkdir(mode=0o700)
@@ -141,7 +145,7 @@ class LocalMacBuildControls(unittest.TestCase):
                 put(Path(argv[argv.index("--root") + 1]), "bin/flutter_rust_bridge_codegen", mode=0o755)
             elif "verify-macos-native-minimum.py" in [Path(item).name for item in argv] and not self.omit_proof:
                 put(self.output, "native-codecs.json", json.dumps({"status": "passed", "architecture": "arm64", "advertised_minimum": "12.3"}).encode())
-            elif Path(argv[0]).name == "flutter_rust_bridge_codegen":
+            elif Path(argv[0]).name == "flutter_rust_bridge_codegen" and "--version" not in argv:
                 for name in DRIVER.BRIDGE_FILES:
                     if name == "flutter/ios/Runner/bridge_generated.h":
                         continue
@@ -158,6 +162,10 @@ class LocalMacBuildControls(unittest.TestCase):
                     "bundle_identifier": "ch.mixel.remote", "bundle_executable": "Mixel-Remote"}).encode())
             if self.mutate_original and current_label == "compiled-support-guard":
                 (self.source / "src/lib.rs").write_bytes(b"unexpected original-source change\n")
+            if current_label == "install-codecs":
+                put(self.output, "codec-cache/inert-codec.zip", b"inert owned codec cache\n")
+            if self.mutate_lock_at == current_label:
+                (self.output / "rustdesk/Cargo.lock").write_bytes(b"unexpected unlocked resolution\n")
         if kwargs.get("stdout") == subprocess.PIPE:
             return subprocess.CompletedProcess(argv, code, output, b"")
         kwargs["stdout"].write(output)
@@ -170,6 +178,19 @@ class LocalMacBuildControls(unittest.TestCase):
 
     def result(self):
         return json.loads((self.output / "build.result.json").read_text())
+
+    def previous_failure(self):
+        self.fail_label = "check-entire-app"
+        with self.assertRaises(DRIVER.Refusal):
+            self.build()
+        old = self.output
+        self.output = self.run_root / "fresh-arm-r2"
+        self.args.output = self.output
+        self.args.reuse_from = old
+        self.fail_label = None
+        self.labels.clear()
+        self.processes.clear()
+        return old
 
     def test_mocked_end_to_end_preserves_supplied_source_and_binds_app_hash(self):
         before = CHECK.inventory(self.source)
@@ -309,6 +330,98 @@ class LocalMacBuildControls(unittest.TestCase):
             self.build()
         self.assertFalse(self.result()["buildQualified"])
         self.assertFalse(self.result()["suppliedSourceUnchanged"])
+
+    def test_successful_build_or_guard_cannot_change_the_held_cargo_lock(self):
+        self.mutate_lock_at = "build-entire-app"
+        with self.assertRaisesRegex(DRIVER.Refusal, "Cargo.lock"):
+            self.build()
+        result = self.result()
+        self.assertFalse(result["buildQualified"])
+        self.assertFalse(result["cargoLockUnchanged"])
+        self.assertNotEqual(result["cargoLockBeforeSha256"], result["cargoLockAfterSha256"])
+        self.assertNotIn("compiled-support-guard", self.labels)
+
+    def test_successful_guard_cannot_change_the_held_cargo_lock(self):
+        self.mutate_lock_at = "compiled-support-guard"
+        with self.assertRaisesRegex(DRIVER.Refusal, "Cargo.lock"):
+            self.build()
+        result = self.result()
+        self.assertFalse(result["buildQualified"])
+        self.assertFalse(result["cargoLockUnchanged"])
+        self.assertNotIn("compiled-branding", self.labels)
+
+    def test_closed_failed_build_reuses_only_readonly_codec_cache_and_copied_codegen(self):
+        old = self.previous_failure()
+        closed = (old / "build.result.json").read_bytes()
+        before_cache = DRIVER.cache_inventory(old / "codec-cache")
+        result = self.build()
+        self.assertTrue(result["buildQualified"])
+        self.assertTrue(result["cargoLockUnchanged"])
+        self.assertTrue(result["previousCodecCacheUnchanged"])
+        self.assertNotIn("install-bridge-codegen", self.labels)
+        self.assertIn("reuse-codegen-version", self.labels)
+        self.assertIn("generate-bridge", self.labels)
+        self.assertIn("build-entire-app", self.labels)
+        self.assertEqual((old / "build.result.json").read_bytes(), closed)
+        self.assertEqual(DRIVER.cache_inventory(old / "codec-cache"), before_cache)
+        admission = json.loads((self.output / "reuse-admission.json").read_text())
+        self.assertFalse(admission["previousBuildQualified"])
+        self.assertFalse(admission["cargoHomeReused"])
+        self.assertFalse(admission["applicationOutputsReused"])
+        self.assertEqual((self.output / "reuse-previous-build.result.json").read_bytes(), closed)
+        self.assertNotEqual((old / "codegen/bin/flutter_rust_bridge_codegen").stat().st_ino,
+                            (self.output / "codegen/bin/flutter_rust_bridge_codegen").stat().st_ino)
+        install = next(kwargs for argv, kwargs in self.processes if Path(argv[0]).name == "vcpkg")
+        self.assertEqual(install["env"]["VCPKG_BINARY_SOURCES"], "clear;files," + str(old / "codec-cache") +
+                         ",read;files," + str(self.output / "codec-cache") + ",readwrite")
+        self.assertEqual(install["env"]["CARGO_HOME"], str(self.output / "cargo-home"))
+
+    def test_active_previous_build_refuses_without_native_commands(self):
+        old = self.previous_failure()
+        put(old, "build-active.json", b"{}")
+        with self.assertRaisesRegex(DRIVER.Refusal, "active"):
+            self.build()
+        self.assertFalse(self.labels)
+        self.assertFalse(self.result()["buildQualified"])
+
+    def test_legacy_closed_output_and_versioned_sdk_alias_match_canonical_sdk(self):
+        old = self.previous_failure()
+        (old / "native-reuse-profile.json").unlink()
+        result_path = old / "build.result.json"
+        result = json.loads(result_path.read_text())
+        result.pop("buildClosed")
+        result_path.write_text(json.dumps(result))
+        alias = self.sdk.parent / "MacOSX27.2.sdk"
+        alias.symlink_to(self.sdk, target_is_directory=True)
+        self.sdk_reported = alias
+        stdout = next((old / "commands").glob("*-macos-sdk.stdout.log"))
+        receipt = (str(alias) + "\n").encode()
+        stdout.write_bytes(receipt)
+        command_result = next((old / "commands").glob("*-macos-sdk.result.json"))
+        data = json.loads(command_result.read_text())
+        data["stdoutSha256"] = DRIVER.digest(stdout)
+        command_result.write_text(json.dumps(data))
+        self.assertTrue(self.build()["buildQualified"])
+        self.assertEqual(stdout.read_bytes(), receipt)
+        admission = json.loads((self.output / "reuse-admission.json").read_text())
+        self.assertEqual(admission["matchedProfile"]["sdkPath"], str(alias))
+        self.assertEqual(admission["matchedProfile"]["sdkCanonicalPath"], str(self.sdk))
+
+    def test_changed_overlay_profile_refuses_before_vcpkg_or_codegen(self):
+        self.previous_failure()
+        (self.repo / ".github/vcpkg-triplets/arm64-osx.cmake").write_bytes(b"different overlay")
+        with self.assertRaisesRegex(DRIVER.Refusal, "profile differs"):
+            self.build()
+        self.assertNotIn("bootstrap-vcpkg", self.labels)
+        self.assertNotIn("reuse-codegen-version", self.labels)
+        self.assertFalse(self.result()["buildQualified"])
+
+    def test_reuse_unsafe_cache_alias_and_codegen_hardlink_refuse(self):
+        old = self.previous_failure()
+        os.link(old / "codegen/bin/flutter_rust_bridge_codegen", old / "codegen/extra-link")
+        with self.assertRaisesRegex(DRIVER.Refusal, "unaliased"):
+            self.build()
+        self.assertFalse(self.labels)
 
     def test_wrong_flutter_and_missing_required_proofs_cannot_qualify(self):
         self.sdk_version = "3.99.0"

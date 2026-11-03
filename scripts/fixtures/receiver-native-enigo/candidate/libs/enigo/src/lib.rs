@@ -206,7 +206,10 @@ pub trait MouseControllable {
     /// ```
     fn mouse_up(&mut self, button: MouseButton);
 
-    /// Checked release; a void/no-op backend is not successful receipt proof.
+    /// Request one mouse-button release and report the backend submission result.
+    /// Returns `Ok(())` after backend-specific checked submission, not proof that
+    /// a target application consumed the event. This default emits no input and
+    /// returns `Err` because checked release is unavailable.
     fn mouse_up_checked(&mut self, _button: MouseButton) -> ResultType {
         Err("checked mouse release is unavailable for this backend".into())
     }
@@ -493,8 +496,10 @@ pub trait KeyboardControllable {
     /// [key_down](trait.KeyboardControllable.html#tymethod.key_down)
     fn key_up(&mut self, key: Key);
 
-    /// Return acceptance of an exact key release. Backends must opt in rather
-    /// than convert a void/no-op release into successful receipt evidence.
+    /// Request one key release and report the backend submission result.
+    /// Returns `Ok(())` after backend-specific checked submission, not proof that
+    /// a target application consumed the event. This default emits no input and
+    /// returns `Err` because checked release is unavailable.
     fn key_up_checked(&mut self, _key: Key) -> ResultType {
         Err("checked key release is unavailable for this backend".into())
     }

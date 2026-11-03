@@ -313,13 +313,20 @@ impl KeyboardControllable for Enigo {
 }
 
 impl Enigo {
+    /// Submit one UTF-16 code unit as a Unicode key press or release.
+    /// A true `down` selects a press; false selects a release. Returns `Ok(())`
+    /// only when `SendInput` accepts exactly one event, otherwise `Err`.
+    /// Acceptance does not prove that a target application consumed the event.
     pub fn receiver_unicode_event(&mut self, unit: u16, down: bool) -> crate::ResultType {
         let flags = KEYEVENTF_UNICODE | if down { 0 } else { KEYEVENTF_KEYUP };
         let accepted = keybd_event(flags, 0, unit);
         if accepted != 1 { return Err(format!("SendInput accepted {} of 1 Unicode event", accepted).into()); }
         Ok(())
     }
-    /// Preparation only: code and layout modifier bits used by this backend.
+    /// Resolve a virtual-key code and layout modifier bits without injecting input.
+    /// Returns `None` for unresolved zero or `0xFFFF` mappings. Otherwise returns
+    /// the virtual-key code and required layout modifier bits; non-layout keys
+    /// return zero modifier bits.
     pub fn receiver_key_plan(&mut self, key: Key) -> Option<(u32, u8)> {
         let code = match key { Key::Layout(c) => self.get_layoutdependent_keycode(c), _ => self.key_to_keycode(key) };
         if code == 0 || code == 0xFFFF { None }

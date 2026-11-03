@@ -37,16 +37,34 @@ the failed invocation is retained separately.
 
 The local full-app check has an explicit owned Mac run-root admission instead
 of requiring false GitHub identity. A new build-only ARM driver implements the
-pinned codec/bridge/Rust/Flutter/branding/bundle path, with18 inert controls. It
-has not compiled an app yet. Fresh upstream1abc/hbb48c, Flutter3.27.4 revision
+pinned codec/bridge/Rust/Flutter/branding/bundle path, with21 inert controls before the cache-reuse revision. The first real run
+compiled all required native codecs and reached the complete Rust application
+check; it failed on two newly exposed missing API docs in the Mac Enigo wrapper.
+The lint stays enforced. Six accurate docblocks across the shared/Mac/Windows
+receiver APIs now preserve behavior and recover the three old whole-source
+hashes exactly when reversed.32 native,16 integration,9 SAS,8 preparation and
+57 custody source controls pass. The failed private build stays immutable at
+`_scratch/local-build/arm64-build`, with exact command060 stderr retained. Its
+result is unqualified and all three supplied/pipeline immutable checks passed. Fresh upstream1abc/hbb48c, Flutter3.27.4 revision
 d8a9f9a52e5af486f80d932e838ee93861ffd863 (official ZIP SHA
 cc4d6e6c5b1049e9ca8c7e6444430d916ef08eaf2fd8bca059fa79e424051990), and
-vcpkg120de source are prepared inside this worktree. Adobe's current Film release
-LTO suite holds shared native resources; fresh compiler allocation was requested.
-Do not reuse October's expired grant or interfere with that build.
+vcpkg120de source are prepared inside this worktree. The actual codec proof
+validates all951 members of6 archives as ARM64 with minimum12.3. A fresh
+resource-bounded run used nice15/jobs1 under the user's current express local
+build instruction, with a new coordination notice to Adobe; no Film processes
+or desktop UI were touched. No October grant was reused. The first run stopped
+before full app build, analysis, bundle generation or native acceptance. Final
+post-build/guard/exceptional-exit lock rechecks and verified read-only codec /
+independently copied codegen reuse are now implemented.28 inert controls pass,
+including post-build lock drift and the actual versioned/canonical SDK alias.
+The old failed output remains unqualified; fresh source/targets/logs and all
+application gates are required in a second output. No unsigned app is qualified yet.
 
 The user signed into the fresh NAS tab. After one documented browser reset,
-Root verified the DSM desktop and opened VMM; PC01 console selection is ongoing.
+Root verified the DSM desktop and opened PC01 through VMM. Its console is
+connected but Windows remains at the existing Mixel-Test-VM sign-in screen.
+The UI reports CapsLock on; one known-password attempt failed, and manual
+unlock was requested without further credential attempts.
 Use only the supplied existing Mixel-Test-VM account. Fresh real customer link,
 Ready, technician Connect, customer Accept before control, warning path, input,
 clipboard/files/reconnect and cleanup proof remain mandatory. No new installer,

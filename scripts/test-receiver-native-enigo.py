@@ -25,7 +25,80 @@ def snapshot(root):
             for path in root.rglob('*') if path.is_file()}
 
 
+def api_docs(source, declaration):
+    """Read the actual contiguous Rust docs attached to one public API."""
+    token = '    ' + declaration
+    if source.count(token) != 1:
+        raise AssertionError('Exact receiver API declaration required')
+    prefix = source[:source.index(token)]
+    match = re.search(r'(?:^    ///[^\n]*\n)+\Z', prefix, re.M)
+    if match is None:
+        raise AssertionError('Public receiver API is missing attached Rust documentation')
+    return match.group()
+
+
 class NativeAcceptanceTests(unittest.TestCase):
+    def test_all_new_public_receiver_apis_have_effect_and_result_documentation(self):
+        expected = {
+            'libs/enigo/src/win/win_impl.rs': {
+                'receiver_unicode_event': ('UTF-16', 'SendInput', 'exactly one', 'Ok(())', 'Err', 'consumed'),
+                'receiver_key_plan': ('without injecting input', 'None', '0xFFFF', 'zero modifier'),
+            },
+            'libs/enigo/src/macos/macos_impl.rs': {
+                'receiver_text_event': ('without holding a physical key', 'Err', 'Ok(())', 'CoreGraphics', 'no delivery'),
+                'receiver_key_plan': ('without posting input', 'None', 'u16::MAX', 'zero modifier'),
+            },
+            'libs/enigo/src/linux/xdo.rs': {},
+            'libs/enigo/src/linux/nix_impl.rs': {},
+        }
+        for name, contracts in expected.items():
+            original = fixture_bytes('original', name).decode()
+            current = fixture_bytes('candidate', name).decode()
+            public = lambda source: set(re.findall(r'(?m)^    pub fn ([a-z_][a-z0-9_]*)\(', source))
+            self.assertEqual(public(current) - public(original), set(contracts), name)
+            for function, required in contracts.items():
+                declaration = 'pub fn ' + function + '('
+                docs = api_docs(current, declaration)
+                for token in required:
+                    self.assertIn(token, docs, name + ':' + function)
+                with self.assertRaisesRegex(AssertionError, 'missing attached'):
+                    api_docs(current.replace(docs, '', 1), declaration)
+        name = 'libs/enigo/src/lib.rs'
+        original = fixture_bytes('original', name).decode()
+        current = fixture_bytes('candidate', name).decode()
+        functions = lambda source: set(re.findall(r'(?m)^    fn ([a-z_][a-z0-9_]*)\(', source))
+        self.assertEqual(functions(current) - functions(original), {'key_up_checked', 'mouse_up_checked'})
+        self.assertIn('#![deny(missing_docs)]', current)
+        self.assertNotRegex(current, r'#\s*!?\s*\[\s*(?:allow|warn)\s*\([^)]*missing_docs')
+        for function in ('key_up_checked', 'mouse_up_checked'):
+            docs = api_docs(current, 'fn ' + function + '(')
+            for token in ('backend-specific checked submission', 'Ok(())', 'Err', 'default emits no input',
+                          'target application consumed'):
+                self.assertIn(token, docs)
+
+    def test_api_documentation_is_the_only_change_to_the_previous_complete_profiles(self):
+        previous = {
+            'libs/enigo/src/lib.rs': ('dac383b1e4900f99f6123c4ed1df35181c44a77c8c42f2111f02939cbe3d2457', {
+                'fn mouse_up_checked(': '    /// Checked release; a void/no-op backend is not successful receipt proof.\n',
+                'fn key_up_checked(': '    /// Return acceptance of an exact key release. Backends must opt in rather\n'
+                                      '    /// than convert a void/no-op release into successful receipt evidence.\n',
+            }),
+            'libs/enigo/src/win/win_impl.rs': ('86ba9189cc5d0df51102f8b86cdc61dc77996fdbe28895f41268e9519301fd13', {
+                'pub fn receiver_unicode_event(': '',
+                'pub fn receiver_key_plan(': '    /// Preparation only: code and layout modifier bits used by this backend.\n',
+            }),
+            'libs/enigo/src/macos/macos_impl.rs': ('424c11ff52d5ffecde4d60bf42661ea121b19e0a6968e5c44215f92f1046a454', {
+                'pub fn receiver_text_event(': '',
+                'pub fn receiver_key_plan(': '',
+            }),
+        }
+        for name, (expected, replacements) in previous.items():
+            source = fixture_bytes('candidate', name).decode()
+            for declaration, old in replacements.items():
+                docs = api_docs(source, declaration)
+                source = source.replace(docs, old, 1)
+            self.assertEqual(hashlib.sha256(source.encode()).hexdigest(), expected, name)
+
     def test_all_seven_real_source_profiles_inverse_modes_and_idempotence(self):
         for newline in (b'\n', b'\r\n'):
             with self.subTest(newline=newline), tempfile.TemporaryDirectory() as directory:
