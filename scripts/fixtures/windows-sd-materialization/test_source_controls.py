@@ -16,7 +16,7 @@ MANIFEST = json.loads((HERE / 'source-manifest.json').read_text())
 class SourceControls(unittest.TestCase):
     def test_complete_current_rust_epoch_source_is_exactly_bound_and_copied(self):
         digest = hashlib.sha256(EPOCH).hexdigest()
-        self.assertEqual(digest, 'b662ed35b2bea75c7f02214424186b983096565ab79bfbcb5625b5a165e6aeb7')
+        self.assertEqual(digest, 'f362530835fd3a45cb98d8616dc7517cc077189d700a1790e7700a434085c9a2')
         self.assertIn('private const string EpochSha256 = "' + digest + '";', CS)
         self.assertEqual((HERE / 'support-receiver-custodian-epoch-windows.rs').read_bytes(), EPOCH)
         self.assertLess(CS.index('hash.ComputeHash(File.ReadAllBytes(args[1]))'), CS.index('string sid = ProcessSid(out token)'))
@@ -62,11 +62,11 @@ class SourceControls(unittest.TestCase):
                           'ProgramData', 'Mixel-Remote-Input-Custody-v1'):
             self.assertNotIn(forbidden, CS)
 
-    def test_all_fifteen_positive_and_negative_controls_are_present(self):
+    def test_all_sixteen_positive_and_negative_controls_are_present(self):
         calls = re.findall(r'^            Check\("([^"]+)"', CS, re.M)
-        self.assertEqual(len(calls), 15)
+        self.assertEqual(len(calls), 16)
         self.assertEqual(sum('corrected AI' in value or value == 'mutex concrete masks' for value in calls), 3)
-        self.assertEqual(sum('old no-AI' in value for value in calls), 2)
+        self.assertEqual(sum('old no-AI' in value for value in calls), 3)
         self.assertEqual(sum('widened rights' in value for value in calls), 3)
         self.assertEqual(sum('changed label' in value for value in calls), 3)
         self.assertEqual(sum('unprotected DACL' in value for value in calls), 3)

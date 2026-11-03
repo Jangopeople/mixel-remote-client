@@ -11,9 +11,9 @@ using System.Web.Script.Serialization;
 
 internal static class WindowsSdProbe
 {
-    private const string EpochSha256 = "b662ed35b2bea75c7f02214424186b983096565ab79bfbcb5625b5a165e6aeb7";
+    private const string EpochSha256 = "f362530835fd3a45cb98d8616dc7517cc077189d700a1790e7700a434085c9a2";
     private const string RootSd = "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x001200a9;;;AU)(A;;0x00000002;;;AU)(A;;RC;;;OW)S:AI(ML;;NW;;;ME)";
-    private const string MutexSd = "D:P(A;;0x001f0001;;;SY)(A;;0x001f0001;;;BA)(A;;0x00120000;;;AU)(A;;RC;;;OW)S:(ML;;NW;;;ME)";
+    private const string MutexSd = "D:P(A;;0x001f0001;;;SY)(A;;0x001f0001;;;BA)(A;;0x00120000;;;AU)(A;;RC;;;OW)S:AI(ML;;NW;;;ME)";
     private const string MarkerSd = "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x0013019f;;;{sid})(A;;RC;;;OW)S:AI(ML;;NW;;;ME)";
     private static readonly IntPtr InvalidHandle = new IntPtr(-1);
     private static readonly List<object> Checks = new List<object>();
@@ -299,6 +299,7 @@ internal static class WindowsSdProbe
             string mutexObserved = ReadDescriptor(mutex, 6);
             Observed.Add("mutex", mutexObserved);
             Check("mutex concrete masks", mutexObserved, MutexSd, true);
+            Check("mutex old no-AI refuses", mutexObserved, MutexSd.Replace("S:AI(", "S:("), false);
             Check("mutex generic masks differ", mutexObserved, MutexSd.Replace("(A;;0x001f0001;;;", "(A;;GA;;;"), false);
             Check("mutex widened rights refuses", mutexObserved, MutexSd.Replace("0x00120000;;;AU", "0x00120001;;;AU"), false);
             Check("mutex changed label refuses", mutexObserved, MutexSd.Replace(";;;ME)", ";;;HI)"), false);
@@ -351,7 +352,7 @@ internal static class WindowsSdProbe
             try { Close(ref parent); } catch (Exception error) { Failure("cleanup:TEMP", error); }
             try { Close(ref token); } catch (Exception error) { Failure("cleanup:token", error); }
         }
-        bool pass = Errors.Count == 0 && Checks.Count == 15;
+        bool pass = Errors.Count == 0 && Checks.Count == 16;
         Dictionary<string, object> result = new Dictionary<string, object> {
             { "scope", "native SD materialization primitive only; not hosted custody, cross-SID isolation, input, SAS or app qualification" },
             { "epochSourceSHA256", EpochSha256 }, { "pass", pass }, { "checks", Checks },

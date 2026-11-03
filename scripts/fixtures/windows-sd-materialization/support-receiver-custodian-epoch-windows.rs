@@ -18,7 +18,8 @@ fn mutex_name(epoch:&SessionEpoch)->String{format!("Local\\{}-{}-{}",root_name()
 // Pin that observed descriptor metadata; keep every ACE and exact comparison.
 const ROOT_SD:&str="D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x001200a9;;;AU)(A;;0x00000002;;;AU)(A;;RC;;;OW)S:AI(ML;;NW;;;ME)";
 // The object manager maps GA to MUTEX_ALL_ACCESS before readback.
-const MUTEX_SD:&str="D:P(A;;0x001f0001;;;SY)(A;;0x001f0001;;;BA)(A;;0x00120000;;;AU)(A;;RC;;;OW)S:(ML;;NW;;;ME)";
+// It also materializes the explicit medium label with SE_SACL_AUTO_INHERITED.
+const MUTEX_SD:&str="D:P(A;;0x001f0001;;;SY)(A;;0x001f0001;;;BA)(A;;0x00120000;;;AU)(A;;RC;;;OW)S:AI(ML;;NW;;;ME)";
 #[repr(C)] struct Guid{_a:u32,_b:u16,_c:u16,_d:[u8;8]}
 const PROGRAM_DATA:Guid=Guid{_a:0x62ab5d82,_b:0xfdc1,_c:0x4dc3,_d:[0xa9,0xdd,0x07,0x0d,0x1d,0x49,0x5d,0x97]};
 #[repr(C)] struct WtsLevel1{session:u32,state:i32,_flags:i32,_station:[u16;33],_user:[u16;21],_domain:[u16;18],logon:i64,_connect:i64,_disconnect:i64,_last_input:i64,current:i64,_incoming:u32,_outgoing:u32,_in_frames:u32,_out_frames:u32,_in_compressed:u32,_out_compressed:u32}

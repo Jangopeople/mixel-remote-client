@@ -13,7 +13,7 @@ import tempfile
 
 HERE = Path(__file__).absolute().parent
 PLAN = HERE / 'support-receiver-custodian-plan.json'
-PLAN_SHA = '12a829f9cae27ded190e36a662537954c89f2efe0ee1f318dae4970ccff11e58'
+PLAN_SHA = 'd1612126db5d4b4784674fa4b5778344845de2aaf00d1c5345c7f2ab89bdd366'
 
 
 def sha(raw):

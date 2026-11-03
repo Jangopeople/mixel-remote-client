@@ -24,8 +24,8 @@
     "sha256": "85ee5f78c1d89b17177b4b2672e36f4adc391a22cc0125ad05ae86d869c08767"
   },
   "scripts/fixtures/receiver-custodian-native/epoch-tests.rs": {
-    "bytes": 3438,
-    "sha256": "9a94d611f89f778455f86df8ae75b9ff9024a815a6c7bf6202716bd8fa687205"
+    "bytes": 3575,
+    "sha256": "954c2f47ee11371c4b806869a0db5124878b15221b670c145d3e47a618651704"
   },
   "scripts/fixtures/receiver-custodian-native/native-main.rs": {
     "bytes": 8284,
@@ -53,15 +53,15 @@
   },
   "scripts/patch-support-receiver-custodian.py": {
     "bytes": 9609,
-    "sha256": "a4193b8f4e59eb9134354a23ae8ce3658a3a39d495ca6cac519e41477da5228b"
+    "sha256": "5cb0ce5fbbba1cf951066c11a8c955bf7e5b223c0f0ccd612e7445f07ff076c3"
   },
   "scripts/support-receiver-custodian-epoch-windows.rs": {
-    "bytes": 14781,
-    "sha256": "b662ed35b2bea75c7f02214424186b983096565ab79bfbcb5625b5a165e6aeb7"
+    "bytes": 14862,
+    "sha256": "f362530835fd3a45cb98d8616dc7517cc077189d700a1790e7700a434085c9a2"
   },
   "scripts/support-receiver-custodian-plan.json": {
     "bytes": 430648,
-    "sha256": "12a829f9cae27ded190e36a662537954c89f2efe0ee1f318dae4970ccff11e58"
+    "sha256": "d1612126db5d4b4784674fa4b5778344845de2aaf00d1c5345c7f2ab89bdd366"
   },
   "scripts/support-receiver-custodian-windows.rs": {
     "bytes": 33165,

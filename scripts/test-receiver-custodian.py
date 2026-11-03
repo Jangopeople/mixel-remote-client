@@ -292,10 +292,14 @@ class SessionEpochControls(unittest.TestCase):
         import re
         original='D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x00120000;;;AU)(A;;RC;;;OW)S:(ML;;NW;;;ME)'
         actual=re.search(r'const MUTEX_SD:&str="([^"]+)";',EPOCH).group(1)
-        self.assertEqual(actual,original.replace('(A;;GA;;;','(A;;0x001f0001;;;'))
+        self.assertEqual(actual,original.replace('(A;;GA;;;','(A;;0x001f0001;;;').replace('S:(','S:AI('))
+        previous=EPOCH.replace('// It also materializes the explicit medium label with SE_SACL_AUTO_INHERITED.\n','',1)
+        previous=previous.replace('const MUTEX_SD:&str="'+actual+'";','const MUTEX_SD:&str="'+actual.replace('S:AI(','S:(')+'";',1)
+        self.assertEqual(P.sha(previous.encode()),'b662ed35b2bea75c7f02214424186b983096565ab79bfbcb5625b5a165e6aeb7')
         self.assertIn('(A;;0x0013019f;;;{sid})(A;;RC;;;OW)S:AI(ML;;NW;;;ME)',EPOCH)
         native=(HERE/'fixtures/receiver-custodian-native/epoch-tests.rs').read_text()
         self.assertIn('!exact_sd(epoch.mutex.raw(),6,&wrong_mutex)',native)
+        self.assertIn('!exact_sd(epoch.mutex.raw(),6,&MUTEX_SD.replace("S:AI(","S:("))',native)
         self.assertIn('0x0017019f',native)
         self.assertIn('!exact_sd(marker.raw(),1,',native)
     def test_authority_failure_latches_before_cleanup_and_reconnect(self):

@@ -13,6 +13,7 @@
     }
     println!("PASS: exact NTFS namespace metadata; widened rights, changed label and protection refuse without ACL writes");
     assert!(exact_sd(epoch.mutex.raw(),6,MUTEX_SD));
+    assert!(!exact_sd(epoch.mutex.raw(),6,&MUTEX_SD.replace("S:AI(","S:(")),"old mutex label metadata must refuse");
     let wrong_mutex=MUTEX_SD.replace("0x00120000;;;AU","0x00120001;;;AU");
     assert!(!exact_sd(epoch.mutex.raw(),6,&wrong_mutex),"additional unprivileged mutex rights must refuse");
     let sid=process_sid(unsafe{GetCurrentProcess()}).unwrap();
@@ -21,7 +22,7 @@
     assert!(exact_sd(marker.raw(),1,&marker_sd));
     assert!(!exact_sd(marker.raw(),1,&marker_sd.replace("0x0013019f","0x0017019f")),"marker DACL takeover rights must refuse");
     assert!(!exact_sd(marker.raw(),1,&marker_sd.replace(";;;ME)",";;;HI)")),"changed marker label must refuse");
-    println!("PASS: exact materialized mutex and marker descriptors; wider rights and changed labels refuse");
+    println!("PASS: exact materialized mutex and marker descriptors; old mutex metadata, wider rights and changed labels refuse");
     let other=peer.clone();let blocked=std::thread::spawn(move||Epoch::acquire(&other).is_err()).join().unwrap();assert!(blocked,"same physical local/portable session cannot overlap");
     assert!(epoch.finish());let mut next=Epoch::acquire(&peer).expect("true cleanup retirement permits a fresh physical epoch");assert!(next.finish());
     println!("PASS: real physical-session shared fence and exact ACL policy; no input or SAS effect");
