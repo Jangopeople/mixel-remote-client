@@ -1,6 +1,75 @@
 # Mixel-Remote — Agent Handoff / Current State
 
-## 2026-11-03 — Current local build and Windows repair state
+## 2026-11-03 evening — Real R5 Accept, input, clipboard, files and reconnect PASS
+
+The task is NOT COMPLETE. Current live evidence is
+`_scratch/native-proof/r5/live/live-proof.json`, with separate file hash/runtime
+receipts in that folder. This supersedes the older access/runtime checkpoint below.
+NAS access is restored with a fresh PC01 console, existing Mixel-Test-VM unlocked.
+Signed R5 Mac viewer361225514 connected to PC01 ID304619778 on the configured server.
+Before ordinary blue Akzeptieren, no desktop was delivered. After acceptance,
+live VP9 desktop, mouse and Notepad launch worked. Independent PC01 screenshots
+prove the formerly failing physical Shift sequence now produces `Mixel QA 2026`
+then `Aa 123`. Control-Shift-Left selects123; Shift+B then b yields `Aa Bb`, proving
+modifier release during normal input.
+
+Unicode clipboard round trip PASS: known native Chrome field source
+`Mixel Clip Aa Grüezi 中文 😀` appeared on PC01, then Windows added ` r5x`; the exact
+returned native Mac field and rendered screenshot matched. Earlier Flutter AX-only
+fixture values contradicted rendering and are NOT proof. The misleadingly named
+`mac-unicode-clipboard-source.png` preserves that failed fixture setup (renders304).
+The later `mac-native-unicode-source.png`, `pc01-unicode-clipboard-received.jpg`
+and `mac-unicode-round-trip.png` are the genuine native proof. No product code
+change was needed for fixture setup. Native context Paste is reliable for transfer
+path fields; App.typeText/paste and rapid generic shortcut attempts require actual
+render verification. Double-click file rows with two real click calls; native
+clickCount2 alone did not invoke this Flutter file-manager double-click path.
+
+Native file transfer passed separate ordinary blue consent. A71-byte UTF8 file
+and65536-byte deterministic binary went Mac→PC01→new empty Mac round-trip directory.
+Both returned byte-exact with original SHA256s (b40fd1ee... and efedf3da...).
+Full hashes are in `file-transfer-hash-proof.json`. The original Windows native
+security-probe JSON was also retrieved byte-for-byte via that native transfer:
+`_scratch/native-proof/transfer-inputs/round-trip/WindowsSdProbe-result.json`, SHA
+06f08a32e27054724cc8c47f0322471649237f7609b675eded7071f36d6be125.
+It confirms all16 primitive checks pass, errors empty, cleanupVerifiedtrue, exact
+current epochf3625308... . This is primitive evidence, not a new Windows app test.
+
+Fresh desktop reconnect required NEW blue consent, then live video and exact
+`Reconnect OK b` input passed. Both desktop sessions and the file session closed
+normally; synthetic Notepad content was discarded. Mac R5 and PC01 left Ready,
+no active sessions, actual rendered target304619778. Two known QA files remain in
+the existing task-owned PC01 TEMP -r2 directory; original probe remains there.
+R5 exact loaded AOT remains PID87379 and full signed app manifest is unchanged:
+7c2569e189a42ce52409f4900e753671ff6a9b0265c68306983f2e05d34e5e5b.
+Mac desktop explicitly released to authorized Adobe chat19:03:06UTC; coordinate
+freshly before further native UI. Genuine held-disconnect causality remains NOT
+YET RUN: a sequential key hold/autoUp then Close cannot prove it; moving the source
+pointer out also releases before Close. Do not relabel ordinary release as this
+strict test. Existing native observer is Shift-only and Linux actor-specific.
+
+User directed Windows build resource discovery to Proxmox. Existing aliases
+mixel-proxmox/root@10.124.1.20 and win-build/builder@10.124.1.50 work via configured
+keys, BatchMode and existing strict host key. VM110 win-build is running, Windows
+10.0.26200.9711,12GiB RAM,150GiB boot disk. C: has59.13GiB free, below80GiB gate.
+A Recovery partition follows C:, so direct boot-disk growth cannot safely extend
+C: without touching Recovery. No spare data volume exists. Existing samsung-fast
+lvmthin has ample capacity; a NEW128GiB build disk at free sata1 is being prepared
+as an exact Phase4(a) resource proposal, NOT EXECUTED. No VM/disk/power/account/ACL
+changes. VM133 qa-win10 only80GB total is not a qualified80GiB-free build host.
+VS2022 BuildTools17.14, x64MSVC14.44 and bundledCMake/Ninja/GitBash exist offPATH;
+several pinned toolchains still need preparation. No corrected Windows app built.
+
+`_scratch/windows-build-transfer` contains verified branch bundle, clean source seed
+and intact current capsule, total18,054,298 bytes. Complete Git history verified;
+all archive members match untouched originals. No source re-export required: all
+461bound pipeline files/six bridge files/574inputs match current code. This is
+preparation, not native compilation. Azure login has now completed in Chrome;
+CLI login exit0 and codesigning token expiry-only query exit0 (20:53:46 expiry).
+No token printed. No public aliases, production infrastructure or Actions changes.
+Current details are also tracked in `_scratch/STATE.json`.
+
+## 2026-11-03 earlier — Local build and Windows repair state
 
 Latest checkpoint: source repair is backed up at ac31fd1a86f26f85a1ea25816149f8bdf5b85a96.
 R5 is now BUILT, SIGNED, NOTARIZED and NATIVE-STARTUP tested, but the task is
