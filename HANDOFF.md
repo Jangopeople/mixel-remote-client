@@ -15,8 +15,18 @@ Its compile/original-negative pass, then namespace check fails solely because
 NTFS returns `S:AI(ML;;NW;;;ME)` rather than requested `S:(ML;;NW;;;ME)`.
 Committed84b6 requests/checks exact materialized namespace+marker metadata and
 concrete mutex-all masks for existing SY/BA ACEs; AU/OW rights and exact refusal
-remain unchanged.57 source controls pass. Actual new Windows mutex/marker and
-complete custody runtime are STILL NOT RUN. Do not call the old trace a new pass.
+remain unchanged.57 source controls pass. Actual PC01 primitive run at60313d6 now compiles with built-in Framework64
+csc (x64/C#5/warnings fatal), exit0. Namespace AI and four refusal cases PASS;
+mutex exact assertion FAILS because its SACL also returns S:AI. Five checks pass,
+sixth fails, exit1; cleanupVerified=true. Marker is unreached. The original JSON
+is preserved in the owned PC01 TEMP tools directory, plus screenshot/transcribed
+evidence at `_scratch/verification/pc01-windows-sd`. Exact mutexAI repair is now committed ca41522f41c11502fab6557d735621ae186bd1b5,
+with old-no-AI mutex refusal and a16-check native primitive. Root actual source
+custody57/probe6/integration16 pass; independent review clears. New epoch SHA
+f362530835fd3a45cb98d8616dc7517cc077189d700a1790e7700a434085c9a2.
+The fresh native rerun is PENDING human UAC response; no comparison normalization
+or rights change occurred.
+Complete custody runtime remains UNRUN; do not relabel either failed trace.
 
 Held-input proof now rejects any release/auth loss before Disconnect/viewer loss,
 including timing uncertainty;92 old-source negatives reproduced the gap and38
@@ -25,6 +35,7 @@ input19 and original app-check39 source controls pass. Frozen03 controller/test
 bytes remain exact. No new held-input desktop test was executed.
 
 Actual local Mac build stages (all inside `_scratch/local-build`):
+
 - First `arm64-build` at84b6 reached the full app check, then failed new Enigo
   missing_docs. Six accurate docs were added without code/lint/version changes;
   reversing them recovers all3 original whole-source hashes. Native32/integration16/
@@ -53,6 +64,17 @@ Actual local Mac build stages (all inside `_scratch/local-build`):
   controls and actual read-only R2 admission pass. Restored manifest is bound
   to the existing reviewed compatibility profile SHA cfa3c757fdd04e8a293b0f5bfcea286ec31e904786a4467d66867dbdd2ef5358.
   Do not recompile unchanged Rust unnecessarily or relabel any prior failed run.
+- `arm64-build-r4` at4551044e is CLOSED/QUALIFIED for the unsigned ARM build.
+  Only the reviewed Podfile and exact shipping14 pubspec bytes differ from R2;
+  completed Rust products/resources/version/6bridges/lock are bound unchanged.
+  Actual fresh Flutter build PASS; full Flutter analyze exit0 with0 errors,
+  0 warnings and286 infos. Actual compiled support guard:17 passed/0 failed.
+  Compiled branding and ARM64/minimum12.3 bundle gates PASS. All14 commands pass;
+  held Cargo.lock before/build/guard/final SHA is
+  188f2b45efb35b043b203ff9ddbe2db3d4bdf2a44dd457a8ec253289bcc2c72e.
+  Supplied source/vcpkg, pipeline, old R2 products/result remain unchanged.
+  Unsigned app tree SHA7cfb81a9b4ca237ce70217889c2875d4777272d7ec5b91e5e5eb3b67625cb639.
+  Actual result: `_scratch/local-build/arm64-build-r4/build.result.json`.
 
 Official inputs are exact upstream1abc897c/hbb48c37de3, vcpkg120deac, Flutter3.27.4
 revisiond8a9f9a52e5af486f80d932e838ee93861ffd863. Source/SDK directories are
@@ -69,21 +91,56 @@ Windows local typecheck admission is adopted: actual nativeAMD64, tokenSID/priva
 DACL/fixedNTFS file identity checked READ-ONLY; no account/ACL/policy/CI identity is
 created.39 existing+14 new source controls pass. Root corrected version-dependent
 ast.dump pins using original exact function-source bytes (baselinea3b7aa90);
-14 pass on Python3.11 and3.14. Windows APIs/compiler are NOT yet exercised.
-PC01 NAS/VMM access is restored, but existing Mixel-Test-VM is visibly Windows-
-locked with CapsLock on. One supplied-password attempt failed; manual unlock was
-requested; no further credential attempts. Use ONLY this existing account, never
-create QA accounts or claim genuine Standard qualification from admin membership.
-Fresh customer link/Ready/Connect/Accept-before-control/clipboard/files/reconnect/
-held cleanup proof are still REQUIRED and UNRUN. Current screenshots live under
-`_scratch/access-proof`; CUA IAB tab3 is the fresh PC01 console, tab2 NAS.
+14 pass on Python3.11 and3.14. Windows local app-check APIs are not exercised;
+the separate native primitive compiler/API run above is actual but failed.
+PC01 existing Mixel-Test-VM is now signed in successfully through the existing
+account; desktop proof is `_scratch/access-proof/pc01-desktop-signed-in.jpg`.
+The earlier locked/password-attempt screenshot remains historical. Root's actual
+PowerShell inventory reports only fixed C: volume,9.44GiB free of49.44GiB;
+Git/Rust/Flutter are absent from PATH; standard ProgramFiles(x86) Visual Studio
+directory is absent (alternate paths not excluded). Built-in csc is available and
+actually compiled the primitive. One53.687GB disk is fully allocated; D/E are
+empty CD-ROMs. A Windows build workspace with80GB free was requested; no VM/disk
+or user-data changes are authorized. Root owns Windows live UI/prerequisites.
+Existing Mixel1979PC01 Quick Support normal launch reached a verified-publisher
+Windows UAC prompt. Human Nein response is pending; no elevation, customer Accept
+or remote session occurred. Screenshot: `_scratch/access-proof/pc01-customer-launch-uac.jpg`. Use ONLY the existing
+account; never create QA accounts or infer genuine Standard qualification from
+admin membership. Actual new Windows custody/runtime remains UNRUN. Customer
+link/Connect/Accept-before-control/control/clipboard/files/reconnect/held cleanup
+proof remains REQUIRED and UNRUN. Mac Ready/startup proof below is narrower.
 
-Mac DeveloperID identity832784665DFBC9516AB4E7414285F5B8C54AA01A/team5277F8NDH4
-exists; mixel-notary history actually authenticates. Scratch signing-only worker
-`_scratch/macos-local-signing` is reviewed with7 inert controls, NOT EXECUTED.
-It independently copies qualified input, signs inside out, notarizes/staples/
-verifies, optionally makes local hdiutilUDZO DMG; no Finder/UI/publication.
-Do NOT run sign-and-publish-macos.sh: it uploadsR2. Azure cached account is NOT
+Actual local signing/notarization is COMPLETE for the ARM QA artifacts under
+`_scratch/macos-local-signing/finalized-r4-r2`. DeveloperID identity
+832784665DFBC9516AB4E7414285F5B8C54AA01A/team5277F8NDH4 is verified from the
+actual leaf; exact main entitlements, Hardened Runtime and secure timestamp pass.
+App notary Accepted ID c0a0480b-a7d2-4ec8-a10e-b7e5a4a77a49 was reused without
+fresh app signing/notary. App ticket/strict verify/Gatekeeper and complete native
+ARM64/minimum12.3 pass. Local hdiutilUDZO DMG was signed, notarized Accepted ID
+c30835ff-3662-49af-acb7-a02303d90056, stapled/validated/strict-verified and
+Gatekeeper accepted as Notarized Developer ID. Final signingQualified is true;
+parent app/evidence and original unsigned app remain unchanged. App tree SHA
+ccf7679eb3b4dc842b6edef9906d446ae99da72e71695c0ddc63d605c8a9f66e;
+DMG SHAaf15971fd850b475b0ac5ffeaebd0dfe3d0de07703f484a00a7b5c257433a69d;
+stapled ZIP SHAa67a6ea7c93b22f6dd922cbe22585ac21e7ce314cf3ce672d59556b7c1e3fa3b.
+Historical signing attempts stay false: signed-r4 failed certificate-prefix argv;
+signed-r4-r2 reached accepted app/staple but used absent /usr/bin/spctl (no
+Gatekeeper rejection); finalized-r4 failed an absolute manifest app-path compare.
+Correct paths/one-argument extraction/copy-path binding now have11 signer and10
+finalizer source controls. Preserve all original evidence. No upload/install/
+publication occurred. Do NOT run sign-and-publish-macos.sh: it uploadsR2.
+
+Native Mac proof is now COMPLETE for startup/normal Quit/relaunch only:
+`_scratch/native-proof/mac-first-start.json` and `mac-native-startup.json` bind
+the exact final executable SHA14f25e60381333dd3e705e12e1c8016874acfd54b4d2ff06041a02f85dddbfc6.
+Ready was observed, normal menu Quit removed first PID1888, and relaunch showed
+Ready with distinct PID8626. About displays1.4.6 (64); no recent product diagnostic
+report names were found in the scoped lookup. Screenshots: mac-ready.png,
+mac-about.png, mac-ready-after-relaunch.png in the same directory. These checks
+prove native startup/relaunch, not customer connection, file transfer or held-input
+cleanup. Physical control was released at2026-11-03T12:36:57Z.
+
+Azure cached account is NOT
 usable: actual queryAADSTS50173 grant revoked. CLI device renewal reached human
 Microsoft approval, then timed outAADSTS70016 without approval/token/logout.
 Do not repeatedly restart unattended. Fresh human sign-in is needed for Windows
@@ -91,23 +148,33 @@ signing. JSign7.6 Mac route exists with private in-memory token/env handoff;
 it is not installed/run and no Azure roles were changed. Auth tab5 is stale.
 
 User authorized coordination with Adobe chat01a1338e-1a2b-7820-903f-e46a1c920793.
-Fresh notice sent; Film retains physical Mac desktop until visual testing ends.
-No fresh desktop grant yet. Local builds are current-user-authorized, nice15/jobs1;
-no Film processes/UI were touched and no October grant/PID/birth was reused.
+Fresh notices and local nice15/jobs1 builds were used. Root subsequently completed
+the scoped Mac native proof above; its receipt records desktop control released.
+Do not infer a continuing desktop grant. No Film process was scanned/signalled or
+October grant/PID/birth reused; any further native UI needs current coordination.
 
 Sixteen Rust product warnings plus pinned rdev duplicate-empty-code warning are
 audited at `_scratch/warning-audit/r2-rust-warnings.json`: no disconnected live
 Mac input/cleanup found; do not call this warning-free. Pod warning audit retains
 CoreSimulator version mismatch, inferred Mac destination and modified-AppDelegate
 secure-restoration migration note. No global SDK/service restarts or11-owner
-AppDelegate chain weakening; no simulator qualification. New file-selector API
-deprecation appeared in R3 and still needs scoped audit. Continue fix/retest loop.
+AppDelegate chain weakening; no simulator qualification. R4 file_selector_macos
+0.9.4+2 allowedFileTypes deprecation is audited at
+`_scratch/warning-audit/r4-file-selector-deprecation.json`: source uses modern
+allowedContentTypes on normal macOS11+; the deprecated fallback preserves pre11
+compatibility (needed for Intel10.14). Accept this visible warning for the pinned
+ARM QA artifact; do not suppress globally or mutate qualified dependencies. A
+future SDK/removal or warnings-as-errors can break builds; dependency repair must
+preserve availability/type-filter behavior and rerun native open/save/cancel plus
+remote file acceptance. Current file-panel/transfer behavior is still untested.
 
 Safety remains: prior GTK auto-review rejection MUST NOT be retried/reassigned/
 bypassed. No VM power/disk/reset, broad process scans/signals/forcequit, raw auth
 scraping, protected old worktrees or production/public download/marketplace changes.
-Native URI/TCC/UAC/MFA/security warning actions are HUMAN-ONLY. All whole-app,
-native desktop, customer Accept, publication and task-complete flags remain false.
+Native URI/TCC/UAC/MFA/security warning actions are HUMAN-ONLY. Mac unsigned-build,
+local artifact-signing and scoped native startup proofs are true. Task-wide
+cross-platform whole-app/native/customer acceptance, publication and task-complete
+flags remain false; Windows builds/runtime and real customer flows remain open.
 
 ## 2026-10-17 — Exact Windows custody compiler and QA observer repairs
 
