@@ -82,7 +82,7 @@ class Controls(unittest.TestCase):
         self.stack.enter_context(mock.patch.dict(sys.modules,{'brotli':types.SimpleNamespace()}))
         import rust_toolchain
         self.stack.enter_context(mock.patch.object(rust_toolchain,'find_msvc_linker',return_value=self.tools/'link.exe'))
-        self.stack.enter_context(mock.patch.dict(os.environ,{'PATH':str(self.tools),'SystemRoot':str(self.repo),'VSCMD_ARG_TGT_ARCH':'x64','VSCMD_ARG_HOST_ARCH':'x64','INCLUDE':'inert','LIB':'inert','WindowsSdkDir':str(self.sdk),'WindowsSDKVersion':'10.0','PSExecutionPolicyPreference':'RemoteSigned','LIBCLANG_PATH':'untrusted caller path'},clear=True))
+        self.stack.enter_context(mock.patch.dict(os.environ,{'PATH':str(self.tools),'SystemRoot':str(self.repo),'VSCMD_ARG_TGT_ARCH':'x64','VSCMD_ARG_HOST_ARCH':'x64','INCLUDE':'inert','LIB':'inert','WindowsSdkDir':str(self.sdk),'WindowsSDKVersion':'10.0','PSExecutionPolicyPreference':'RemoteSigned','LIBCLANG_PATH':'untrusted caller path','PYTHONNOUSERSITE':'0','PYTHONPATH':'untrusted','PYTHONUSERBASE':'untrusted'},clear=True))
         old_call=W.Runner.call
         def recording(runner,label,*args,**kw):self.labels.append(label);return old_call(runner,label,*args,**kw)
         self.stack.enter_context(mock.patch.object(W.Runner,'call',recording))
@@ -137,6 +137,7 @@ class Controls(unittest.TestCase):
         self.assertEqual(build[1:],['build.py','--flutter','--skip-portable-pack'])
         for label,_,env in self.calls:
             self.assertNotIn('GITHUB_ACTIONS',env);self.assertNotIn('RUNNER_TEMP',env)
+            self.assertEqual(env['PYTHONNOUSERSITE'],'1');self.assertNotIn('PYTHONPATH',env);self.assertNotIn('PYTHONUSERBASE',env)
             if label=='build-entire-app':
                 self.assertNotIn('CARGO_BUILD_TARGET',env);self.assertEqual(env['CARGO_BUILD_JOBS'],'1');self.assertEqual(env['VCPKG_MAX_CONCURRENCY'],'1')
             if label in ('fetch-locked','check-entire-app','build-entire-app','compiled-support-guard'):
@@ -199,8 +200,9 @@ class Controls(unittest.TestCase):
     def test_batch_arguments_and_environment_refuse_injection_and_secrets(self):
         for value in ('C:/x&exit/ flutter.bat','C:/%TOKEN%/flutter.bat','C:/x!bad/flutter.bat'):
             with self.assertRaises(RuntimeError):W.batch(Path('cmd.exe'),Path(value),'pub','get')
-        env=W.safe_environment({'Path':'safe','AZURE_CLIENT_SECRET':'secret','GITHUB_ACTIONS':'true','RUNNER_TEMP':'spoof','CARGO_BUILD_JOBS':'99'})
+        env=W.safe_environment({'Path':'safe','AZURE_CLIENT_SECRET':'secret','GITHUB_ACTIONS':'true','RUNNER_TEMP':'spoof','CARGO_BUILD_JOBS':'99','PYTHONNOUSERSITE':'0','PYTHONPATH':'untrusted','PYTHONUSERBASE':'untrusted'})
         self.assertEqual(env['PATH'],'safe');self.assertFalse(any('secret' in x for x in env.values()));self.assertNotIn('RUNNER_TEMP',env)
+        self.assertEqual(env['PYTHONNOUSERSITE'],'1');self.assertNotIn('PYTHONPATH',env);self.assertNotIn('PYTHONUSERBASE',env)
 
     def test_only_existing_explicit_remotesigned_process_context_is_preserved(self):
         env=W.safe_environment({'PSExecutionPolicyPreference':'RemoteSigned','LIBCLANG_PATH':'untrusted','LLVM_CONFIG_PATH':'untrusted'})

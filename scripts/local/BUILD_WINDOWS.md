@@ -82,7 +82,7 @@ Unknown bytes, mixed profiles and any other Rust/native/Cargo change refuse.
 Example from the exact repository root in the activated Windows developer shell:
 
 ```powershell
-python scripts/local/build-windows.py --source "$PWD/rustdesk" `
+python -I scripts/local/build-windows.py --source "$PWD/rustdesk" `
   --flutter "$PWD/_scratch/flutter" --vcpkg "$PWD/_scratch/vcpkg" `
   --bridge "$PWD/_scratch/windows-bridge-r4-final" `
   --libclang "$PWD/_scratch/llvm/bin/libclang.dll" `
@@ -95,6 +95,9 @@ caches, applies existing branding and only the six bound bridge outputs, require
 shipping extended_text14 and reruns pub get. Normal locked build-dependency fetches
 are allowed; no prewarmed cache is required. Private TEMP/TMP avoids global build
 output. Jobs1 is the default (bounded1–8) and overrides Cargo/CMake/vcpkg concurrency.
+Use the private prefix's Python with `-I` for the parent invocation. The driver
+constructs `PYTHONNOUSERSITE=1` for all child processes and discards inherited
+`PYTHONPATH`/`PYTHONUSERBASE`; parent `-I` alone does not propagate to child Python.
 
 It runs existing local `check-app-rust.py --run --local-run-root`, actual
 `build.py --flutter --skip-portable-pack`, full Flutter analyze with errors/warnings

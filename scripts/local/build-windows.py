@@ -195,7 +195,7 @@ def safe_environment(inherited):
         selected[key.upper()]=value
     result=B.git_environment(selected)
     if process_policy:result['PSExecutionPolicyPreference']='RemoteSigned'
-    result.update(PYTHONUTF8='1',PYTHONIOENCODING='utf-8',PYTHONUNBUFFERED='1',CI='true',FLUTTER_SUPPRESS_ANALYTICS='true',DART_SUPPRESS_ANALYTICS='true')
+    result.update(PYTHONUTF8='1',PYTHONIOENCODING='utf-8',PYTHONUNBUFFERED='1',PYTHONNOUSERSITE='1',CI='true',FLUTTER_SUPPRESS_ANALYTICS='true',DART_SUPPRESS_ANALYTICS='true')
     return result
 
 
