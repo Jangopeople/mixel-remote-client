@@ -2,6 +2,79 @@
 
 ## 2026-11-03 — Current local build and Windows repair state
 
+Latest checkpoint: source repair is backed up at ac31fd1a86f26f85a1ea25816149f8bdf5b85a96.
+R5 is now BUILT, SIGNED, NOTARIZED and NATIVE-STARTUP tested, but the task is
+NOT COMPLETE: its new live PC01 Shift/clipboard/file/held-cleanup verification and
+the actual new Windows build still need access/resources described below.
+
+The Mac modifier fix is exactly2 Dart leaves: input_model.dart SHA
+ d3a8027e2c49534c7d685a847eeb4709774290d4fa3afa5ae7b717aa17b65607
+and common/widgets/remote_input.dart SHA
+ ec033296823b36e0d122c08693a4c6545f32fbcd34085d9aeb10b5458cb6a5fa.
+The current raw-Mac modifier snapshot is bound to non-synthesized source2 Focus
+callbacks. Matching registered physical/remapped owners are retained per family;
+no character-case inference or stale raw/hardware union is used. Baseline
+reproduced6 new failures while all180 old tests passed; first candidate fixed the
+new cases but exposed10 old remap regressions, retained as failures. Revised
+candidate passes ACTUAL189 production Flutter tests. Root source17/21/11/10,
+worker17, LF/CRLF/inverse/unknown-drift checks and independent review all pass.
+Evidence: `_scratch/mac-generic-modifiers/final-source-conservation.json` and
+`candidate-v3/RESULT.json`. Original R4 source and evidence remain unchanged.
+
+Actual R5 output `_scratch/local-build/arm64-build-r5` closed qualified, all14
+commands exit0. Flutter release PASS73.535s; analyze0errors/0warnings/288infos;
+compiled support guard17passed/0failed. All native minimum/branding/lock/source/
+old-product/pipeline gates pass. R5 keeps exact R2 Rust/native/Cargo/version/6bridge
+bytes and old Windows-cfg leaf; composite source is base455 plus the exact2 Dart
+changes, with current pipelineSnapshotHead ac31fd recorded SEPARATELY. Do not claim
+all current pipeline source was applied to this Mac composite. Unsigned tree SHA
+f499ba415596ff0d65a940c1b9ac28d8d495a4feccc400750ef37f6085f098b9.
+Independent audit: `_scratch/verification/mac-shift-r5-independent-audit.json`.
+Two new analyzer infos are deprecated RawKeyboard/instance; the pinned engine
+loses generic-only flags from HardwareKeyboard, while RawKeyboard synchronizes
+before Focus. This bounded compatibility path is intentionally retained with
+189 tests/SDK pins; no diagnostics were suppressed. Future SDK/API/order changes
+require regression and native requalification. Other accepted warnings below persist.
+
+Full fresh R5 signing (no R4 ticket reuse) completed under
+`_scratch/macos-local-signing/signed-r5`; signer exit0/signingQualifiedtrue.
+App notary65609eeb-b8a1-4e7a-bd54-2591ff135142 and DMG notary
+60087d76-2495-4478-8218-d6e3499bf605 accepted; both stapled/validated/strict verified/
+Gatekeeper accepted. Team5277F8NDH4/identity832784665DFBC9516AB4E7414285F5B8C54AA01A.
+App tree7c2569e189a42ce52409f4900e753671ff6a9b0265c68306983f2e05d34e5e5b;
+local `Mixel-Remote-local-QA-arm64.dmg` SHA
+c4519f357f2bae522e2a419446f57ebc97ae986499c20a9f0e8a9f3f8143b06a.
+Unsigned input is unchanged; no install/publication/customer alias changes.
+
+R5 actual native startup/About/normal Quit/relaunch PASS. R4 PID8626 quit normally;
+new R5 PID85907 at exact signed-r5 path reached Ready/About1.4.6(64), quit normally
+and disappeared; relaunch PID87379 reached Ready. Its loaded App.framework/AOT
+path is verified with exact-file lsof; whole signed app tree remains exact after
+native use. Main SHA483f7ed49071d6f38b14fb8e1169847879549479f545e7d7ebe906d48e248c54;
+AOT SHA60bd40e43c09e827d9c82a09abdb98467f1dd46a09757eb5aa36797f443f3878.
+Proof/screenshots: `_scratch/native-proof/r5/native-startup-proof.json`.
+R5 remains idle Ready, NO remote session. Mac desktop released14:25:07UTC;
+coordinate freshly with authorized Adobe chat before further native UI.
+
+ACCESS BLOCKERS: PC01 noVNC disconnected after NAS login expired. Normal console
+Connect failed; DSM explicitly invalidated login. Root resumed authorized mladmin
+sign-in to the genuine SecureSignIn phone challenge without password guessing or
+permission changes. Phone approval was requested but timed out; NAS tab2 now has
+Try Again. DO NOT repeatedly restart unattended challenges. A human must select
+Try Again/approve the current phone request when available; then restore a fresh
+VMM console. Old tab3 console retains its prior URL but is disconnected. Do not
+claim the R5 Shift live test passed, reuse an old phone approval, or bypass consent.
+Windows local build resource question remains unanswered: PC01 only9.44GiB free;
+require a real native Windows build workspace with80GiB FREE plus preinstalled
+qualified tools. No VM/disk/reset/data changes are authorized. Source-only bridge
+capsule freshly exported from qualified R4 and current code at
+`_scratch/windows-bridge-final-ac31fd1`; this is preparation, not a Windows build.
+71-byte UTF8 +64KiB deterministic transfer files are prepared only under
+`_scratch/native-proof/transfer-inputs`; no new native transfer/clipboard claim.
+
+
+Earlier November 3 build stages and retained failures follow; the latest checkpoint above controls current actions.
+
 Task is NOT COMPLETE. Current owned worktree is `.worktrees/remote-reliability`,
 branch `fix/native-local-reliability`; current source/evidence/runtime state is
 `_scratch/STATE.json`. Canonical H73/PR7 remain unchanged. GitHub is SOURCE BACKUP
