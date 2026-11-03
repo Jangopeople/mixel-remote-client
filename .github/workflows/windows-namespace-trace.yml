@@ -8,17 +8,6 @@ on:
         type: boolean
         required: false
         default: false
-  push:
-    branches: ['codex/**']
-    paths:
-      - '.github/workflows/windows-namespace-trace.yml'
-      - 'scripts/windows-namespace-cdb.py'
-      - 'scripts/windows_namespace_probe.py'
-      - 'scripts/windows_namespace_engine.py'
-      - 'scripts/windows-namespace-engine-readonly.cpp'
-      - 'scripts/test-windows-namespace-cdb.py'
-      - 'scripts/test-windows-namespace-trace.ps1'
-
 permissions:
   contents: read
 

@@ -14,8 +14,11 @@ fn root_name()->String{
     ROOT_NAME.to_owned()
 }
 fn mutex_name(epoch:&SessionEpoch)->String{format!("Local\\{}-{}-{}",root_name(),epoch.session,epoch.logon)}
-const ROOT_SD:&str="D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x001200a9;;;AU)(A;;0x00000002;;;AU)(A;;RC;;;OW)S:(ML;;NW;;;ME)";
-const MUTEX_SD:&str="D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x00120000;;;AU)(A;;RC;;;OW)S:(ML;;NW;;;ME)";
+// NTFS materializes this explicit medium label with SE_SACL_AUTO_INHERITED.
+// Pin that observed descriptor metadata; keep every ACE and exact comparison.
+const ROOT_SD:&str="D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x001200a9;;;AU)(A;;0x00000002;;;AU)(A;;RC;;;OW)S:AI(ML;;NW;;;ME)";
+// The object manager maps GA to MUTEX_ALL_ACCESS before readback.
+const MUTEX_SD:&str="D:P(A;;0x001f0001;;;SY)(A;;0x001f0001;;;BA)(A;;0x00120000;;;AU)(A;;RC;;;OW)S:(ML;;NW;;;ME)";
 #[repr(C)] struct Guid{_a:u32,_b:u16,_c:u16,_d:[u8;8]}
 const PROGRAM_DATA:Guid=Guid{_a:0x62ab5d82,_b:0xfdc1,_c:0x4dc3,_d:[0xa9,0xdd,0x07,0x0d,0x1d,0x49,0x5d,0x97]};
 #[repr(C)] struct WtsLevel1{session:u32,state:i32,_flags:i32,_station:[u16;33],_user:[u16;21],_domain:[u16;18],logon:i64,_connect:i64,_disconnect:i64,_last_input:i64,current:i64,_incoming:u32,_outgoing:u32,_in_frames:u32,_out_frames:u32,_in_compressed:u32,_out_compressed:u32}
@@ -118,7 +121,7 @@ impl Epoch{
         for item in std::fs::read_dir(&path)?{let item=item?;count+=1;if count>4096{bail!("Bounded custody directory inventory exceeded");}let name=item.file_name();let Some(name)=name.to_str()else{bail!("Custody filename encoding changed");};if name.starts_with(&prefix){bail!("Prior dirty input epoch remains; no automatic restart or regrant");}}
         if !epoch.live()||!broker.alive(){bail!("Custody logon/broker changed before grant");}
         let name=format!("{}{}.dirty",prefix,uuid::Uuid::new_v4().simple());let marker_path=path.join(name);let file:Vec<u16>=marker_path.as_os_str().encode_wide().chain(Some(0)).collect();let sid=process_sid(unsafe{GetCurrentProcess()}).ok_or_else(||hbb_common::anyhow::anyhow!("Custodian SID unavailable"))?;
-        let marker_sd=format!("D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x0013019f;;;{sid})(A;;RC;;;OW)S:(ML;;NW;;;ME)");let descriptor=sd(&marker_sd).ok_or_else(||hbb_common::anyhow::anyhow!("Custody marker descriptor unavailable"))?;let attributes=Attributes{length:std::mem::size_of::<Attributes>()as u32,descriptor:descriptor.0,inherit:0};
+        let marker_sd=format!("D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x0013019f;;;{sid})(A;;RC;;;OW)S:AI(ML;;NW;;;ME)");let descriptor=sd(&marker_sd).ok_or_else(||hbb_common::anyhow::anyhow!("Custody marker descriptor unavailable"))?;let attributes=Attributes{length:std::mem::size_of::<Attributes>()as u32,descriptor:descriptor.0,inherit:0};
         let raw=unsafe{CreateFileW(file.as_ptr(),0x0013019f,1,&attributes,1,0x00200080,ptr::null_mut())};if raw as isize == -1{bail!("Exclusive custody marker creation failed");}let marker=Owned::from(raw).ok_or_else(||hbb_common::anyhow::anyhow!("Custody marker handle absent"))?;
         let mut info:FileInfo=unsafe{std::mem::zeroed()};if unsafe{GetFileInformationByHandle(marker.raw(),&mut info)}==0||info.attributes&(0x400|0x10)!=0||info.links!=1||!exact_sd(marker.raw(),1,&marker_sd){bail!("Unsafe custody marker identity/mode");}
         let body=format!("mixel-input-custody-v1\nsession={}\nlogon={}\nbroker={}-{}\ncustodian={}\n",epoch.session,epoch.logon,broker.pid,broker.born,current_identity().ok_or_else(||hbb_common::anyhow::anyhow!("Custodian identity unavailable"))?);let mut written=0;

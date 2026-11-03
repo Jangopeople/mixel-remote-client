@@ -1,13 +1,6 @@
 name: Windows complete branding idempotence
 
 on:
-  pull_request:
-    paths:
-      - .github/workflows/windows-branding-idempotence.yml
-      - scripts/patch-secure-support.py
-      - scripts/test-secure-support.py
-      - scripts/test-support-flutter-analysis.py
-      - scripts/apply-branding.sh
   workflow_dispatch:
 
 permissions:

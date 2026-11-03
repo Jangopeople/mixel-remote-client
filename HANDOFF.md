@@ -1,5 +1,59 @@
 # Mixel-Remote — Agent Handoff / Current State
 
+## 2026-11-03 — Local build recovery and exact Windows descriptor repair
+
+Current active worktree: `.worktrees/remote-reliability`, branch
+`fix/native-local-reliability`, recovered from source backup27fbe245 after the
+old temporary integration checkout disappeared. Canonical checkout stays73e7c3d.
+Current operational state and local evidence live in `_scratch/STATE.json`;
+older October receipts remain historical. Do not claim any current app/native
+qualification from those old receipts.
+
+Read the current parent AGENTS.md: GitHub is source backup only. All14 active
+workflows are now manual break-glass; no Actions dispatch/runner was created.
+The strict policy projection recovers the original whole workflow SHA values
+for historical controls. Two PC01 test invocations use a private source wrapper;
+the old controller/test bytes and their pins remain unchanged. Actual physical
+admission file hashes remain checked before the separate historical projection.
+
+Root retrieved the previously uncollected a99 original once, read-only, without
+starting CI. Its actual Windows compile/original-negative passed, then the new
+namespace rejected this sole descriptor delta: expected `S:(ML;;NW;;;ME)`, actual
+`S:AI(ML;;NW;;;ME)`. Root now requests/checks that exact NTFS metadata for the
+namespace and marker, and uses concrete mutex-all masks for the two existing
+SY/BA generic-all ACEs. AU/OW rights and the exact comparator are preserved.
+Kernel negative cases for changed rights/labels/protection were added.57 local
+source controls pass. Mutex/marker materialization and the new complete Windows
+runtime still require actual Windows execution; their correctness is not yet
+proven by the old namespace trace.
+
+Held-input proof now refuses release/auth loss observed before Disconnect or
+viewer-loss, including uncertainty boundaries and later rehold.92 old-source
+negative cases reproduced the gap;38 current controls pass. Stable release also
+requires a full monotonic second. Manual policy10, receiver16, logical11, frozen
+controller31, input19 and app-check39 source controls pass. Root's first aggregate
+used the wrong frozen-wrapper filename; the corrected actual31 run passes and
+the failed invocation is retained separately.
+
+The local full-app check has an explicit owned Mac run-root admission instead
+of requiring false GitHub identity. A new build-only ARM driver implements the
+pinned codec/bridge/Rust/Flutter/branding/bundle path, with18 inert controls. It
+has not compiled an app yet. Fresh upstream1abc/hbb48c, Flutter3.27.4 revision
+d8a9f9a52e5af486f80d932e838ee93861ffd863 (official ZIP SHA
+cc4d6e6c5b1049e9ca8c7e6444430d916ef08eaf2fd8bca059fa79e424051990), and
+vcpkg120de source are prepared inside this worktree. Adobe's current Film release
+LTO suite holds shared native resources; fresh compiler allocation was requested.
+Do not reuse October's expired grant or interfere with that build.
+
+The user signed into the fresh NAS tab. After one documented browser reset,
+Root verified the DSM desktop and opened VMM; PC01 console selection is ongoing.
+Use only the supplied existing Mixel-Test-VM account. Fresh real customer link,
+Ready, technician Connect, customer Accept before control, warning path, input,
+clipboard/files/reconnect and cleanup proof remain mandatory. No new installer,
+real session, release, publication or marketplace state is qualified or changed.
+Keep the prior GTK rejection, no auth/security bypass, human native approvals,
+protected old resources, and fresh physical UI coordination requirements.
+
 ## 2026-10-17 — Exact Windows custody compiler and QA observer repairs
 
 Continue in the ordinary integration clone

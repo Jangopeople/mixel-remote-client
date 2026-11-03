@@ -451,7 +451,247 @@ class Controls(unittest.TestCase):
         self.assertIn('source.input.json', text)
         self.assertIn('stdout.log', text)
         self.assertIn('stderr.log', text)
-        self.assertIn('run_environment(config, source, output, os.environ)', text)
+        self.assertIn('run_environment(config, source, output, os.environ, local_run_root=local_run_root)', text)
+
+
+@unittest.skipUnless(os.name == "posix", "local Mac admission uses POSIX ownership")
+class LocalAdmissionControls(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="mixel-app-local-admission-")
+        self.root = Path(self.temporary.name).resolve(strict=True)
+        self.repo = self.root / "repository"
+        git_metadata(self.repo / ".git")
+        put(self.repo, ".gitignore", b".cache/\n")
+        self.script = put(self.repo, "scripts/check-app-rust.py", SCRIPT.read_bytes())
+        put(self.repo, "scripts/patch-support-url-log-privacy.py",
+            SCRIPT.with_name("patch-support-url-log-privacy.py").read_bytes())
+        self.run_root = self.repo / ".cache/qualification"
+        self.run_root.mkdir(parents=True, mode=0o700)
+        self.app = self.repo / "rustdesk"
+        source(self.app)
+        self.output = self.run_root / "fresh-check"
+        self.target = "aarch64-apple-darwin"
+        self.config = DRIVER.matrix(self.target, "Darwin", "arm64")
+        self.stack = contextlib.ExitStack()
+        self.stack.enter_context(mock.patch.object(DRIVER, "__file__", str(self.script)))
+        self.stack.enter_context(mock.patch.object(DRIVER.Path, "cwd", return_value=self.repo))
+        # These are inert admission controls on every source host, not Mac proof.
+        self.stack.enter_context(mock.patch.object(DRIVER.platform, "system", return_value="Darwin"))
+        self.stack.enter_context(mock.patch.object(DRIVER.platform, "machine", return_value="arm64"))
+        self.capture = self.stack.enter_context(mock.patch.object(DRIVER, "capture", side_effect=AssertionError("compiler forbidden")))
+
+    def tearDown(self):
+        self.stack.close()
+        self.temporary.cleanup()
+
+    def prepare(self):
+        return DRIVER.prepare(self.app, self.output, self.target, local_run_root=self.run_root)
+
+    def environment(self):
+        vcpkg = self.repo / ".cache/vcpkg"
+        (vcpkg / "installed/arm64-osx/lib").mkdir(parents=True)
+        overlay = self.repo / ".github/vcpkg-triplets"
+        put(overlay, "arm64-osx.cmake")
+        home = self.repo / ".cache/owned-cargo"
+        home.mkdir(mode=0o700)
+        return {"VCPKG_ROOT": str(vcpkg), "MACOSX_DEPLOYMENT_TARGET": "12.3",
+                "VCPKG_OVERLAY_TRIPLETS": str(overlay), "CARGO_HOME": str(home)}
+
+    def test_local_root_is_explicit_and_private_output_is_fresh(self):
+        self.prepare()
+        self.assertEqual(stat.S_IMODE(self.output.stat().st_mode), 0o700)
+        self.assertTrue((self.output / "source/src/bridge_generated.rs").is_file())
+        with self.assertRaises(DRIVER.Refusal):
+            self.prepare()
+        self.capture.assert_not_called()
+
+    def test_scratch_is_allowed_without_git_ignore_and_nonignored_root_refuses(self):
+        self.run_root = self.repo / "_scratch/native"
+        self.run_root.mkdir(parents=True, mode=0o700)
+        self.output = self.run_root / "fresh-check"
+        self.prepare()
+        other = self.repo / "untracked-build"
+        other.mkdir(mode=0o700)
+        with self.assertRaisesRegex(DRIVER.Refusal, "Git-ignored"):
+            DRIVER.prepare(self.app, other / "proof", self.target, local_run_root=other)
+        self.assertFalse((other / "proof").exists())
+        self.capture.assert_not_called()
+
+    def test_local_wrong_cwd_outside_root_and_relative_root_refuse_before_copy_or_command(self):
+        outside = self.root / "outside"
+        outside.mkdir(mode=0o700)
+        cases = ((outside, outside / "proof"), (self.run_root, outside / "proof"),
+                 (Path(".cache/qualification"), self.output))
+        with mock.patch.object(DRIVER.shutil, "copytree", side_effect=AssertionError("copy forbidden")):
+            for root, output in cases:
+                with self.subTest(root=root, output=output), self.assertRaises(DRIVER.Refusal):
+                    DRIVER.prepare(self.app, output, self.target, local_run_root=root)
+            with mock.patch.object(DRIVER.Path, "cwd", return_value=self.app):
+                with self.assertRaisesRegex(DRIVER.Refusal, "repository root"):
+                    self.prepare()
+        self.assertFalse(self.output.exists())
+        self.capture.assert_not_called()
+
+    def test_local_root_symlink_and_permissions_refuse_before_command(self):
+        alias = self.repo / ".cache/alias"
+        outside = self.root / "outside"
+        outside.mkdir(mode=0o700)
+        alias.symlink_to(outside, target_is_directory=True)
+        with self.assertRaises(DRIVER.Refusal):
+            DRIVER.prepare(self.app, alias / "proof", self.target, local_run_root=alias)
+        self.run_root.chmod(0o777)
+        with self.assertRaisesRegex(DRIVER.Refusal, "group/other write"):
+            self.prepare()
+        self.run_root.chmod(0o700)
+        with mock.patch.object(DRIVER.os, "getuid", return_value=os.getuid() + 1):
+            with self.assertRaisesRegex(DRIVER.Refusal, "current user"):
+                self.prepare()
+        self.assertFalse(self.output.exists())
+        self.capture.assert_not_called()
+
+    def test_local_driver_alias_cannot_change_the_repository_binding(self):
+        original = self.root / "external-driver.py"
+        self.script.rename(original)
+        self.script.symlink_to(original)
+        with self.assertRaisesRegex(DRIVER.Refusal, "ordinary current-user-owned driver"):
+            self.prepare()
+        self.assertFalse(self.output.exists())
+        self.capture.assert_not_called()
+
+    def test_local_source_symlink_hardlink_and_reparse_refuse(self):
+        alias = self.app / "src/alias.rs"
+        alias.symlink_to("lib.rs")
+        with self.assertRaisesRegex(DRIVER.Refusal, "indirect entry"):
+            self.prepare()
+        alias.unlink()
+        os.link(self.app / "src/lib.rs", alias)
+        with self.assertRaisesRegex(DRIVER.Refusal, "hardlinked"):
+            self.prepare()
+        alias.unlink()
+        original = Path.lstat
+        def reparse(path, *args, **kwargs):
+            value = original(path, *args, **kwargs)
+            if path == self.app / "src/lib.rs":
+                return mock.Mock(st_mode=value.st_mode, st_file_attributes=0x400)
+            return value
+        with mock.patch.object(Path, "lstat", reparse):
+            with self.assertRaisesRegex(DRIVER.Refusal, "reparse point"):
+                self.prepare()
+        self.assertFalse(self.output.exists())
+        self.capture.assert_not_called()
+
+    def test_local_mode_never_admits_windows_or_a_foreign_host(self):
+        for config, host in ((DRIVER.matrix("x86_64-pc-windows-msvc", "Windows", "AMD64"), "Darwin"),
+                             (self.config, "Linux")):
+            with mock.patch.object(DRIVER.platform, "system", return_value=host):
+                with self.assertRaisesRegex(DRIVER.Refusal, "native macOS"):
+                    DRIVER.local_admission(self.run_root, self.app, self.output, config, prepared=False)
+        self.capture.assert_not_called()
+
+    def test_local_environment_needs_no_runner_identity_and_preserves_exact_command(self):
+        self.prepare()
+        env = self.environment()
+        with mock.patch.object(DRIVER, "git_identity", return_value={"head": DRIVER.VCPKG_COMMIT}), \
+                mock.patch.object(DRIVER, "verify_cargo_home") as verify:
+            result = DRIVER.run_environment(self.config, self.app, self.output, env, local_run_root=self.run_root)
+        verify.assert_called_once_with(Path(env["CARGO_HOME"]), patched=True)
+        for key in ("GITHUB_ACTIONS", "RUNNER_ENVIRONMENT", "RUNNER_OS", "RUNNER_TEMP"):
+            self.assertNotIn(key, result)
+        self.assertEqual(DRIVER.command(self.config), ["rustup", "run", "1.81", "cargo", "check", "--locked",
+                         "--release", "--lib", "--features", "flutter,unix-file-copy-paste", "--target", self.target])
+        evidence = json.loads((self.output / "check.environment.json").read_text())
+        self.assertEqual(evidence["admission"], "local-macos")
+        self.assertEqual(evidence["localRunRoot"], str(self.run_root))
+        self.capture.assert_not_called()
+
+    def test_local_dependencies_wrappers_and_owned_cargo_are_not_bypassed(self):
+        self.prepare()
+        env = self.environment()
+        failures = (("CARGO_HOME", ""), ("CARGO_HOME", str(self.output)),
+                    ("CARGO_HOME", str(self.repo)), ("RUSTC_WRAPPER", "unexpected"),
+                    ("CARGO_BUILD_TARGET", "x86_64-apple-darwin"),
+                    ("MACOSX_DEPLOYMENT_TARGET", "10.14"), ("VCPKG_OVERLAY_TRIPLETS", ""))
+        with mock.patch.object(DRIVER, "git_identity", return_value={"head": DRIVER.VCPKG_COMMIT}):
+            for key, value in failures:
+                with self.subTest(key=key, value=value), self.assertRaises((OSError, RuntimeError)):
+                    DRIVER.run_environment(self.config, self.app, self.output, {**env, key: value}, local_run_root=self.run_root)
+            # A merely existing directory is not a reserved/patched Cargo home.
+            with self.assertRaises((OSError, RuntimeError)):
+                DRIVER.run_environment(self.config, self.app, self.output, env, local_run_root=self.run_root)
+        self.assertFalse((self.output / "check.environment.json").exists())
+        self.capture.assert_not_called()
+
+    def test_local_cargo_verifier_requires_actual_pinned_patch_after_ownership_check(self):
+        home = self.repo / ".cache/owned-cargo"
+        home.mkdir(mode=0o700)
+        checkout = home / "fixture-tao"
+        leaf = put(checkout, "logger.rs", b"original")
+        privacy = mock.Mock(SOURCES={"tao": {"path": "logger.rs"}})
+        privacy.tao_checkout.return_value = checkout
+        privacy.safe_file.return_value = (leaf, leaf.stat())
+        privacy.transform.return_value = b"patched"
+        with mock.patch.object(DRIVER, "privacy_module", return_value=privacy):
+            with self.assertRaisesRegex(DRIVER.Refusal, "already contain"):
+                DRIVER.verify_cargo_home(home, patched=True)
+            leaf.write_bytes(b"patched")
+            DRIVER.verify_cargo_home(home, patched=True)
+        self.assertEqual(privacy.validate_cargo_home.call_count, 2)
+        privacy.tao_checkout.assert_called_with(home)
+        privacy.safe_file.assert_called_with(checkout, "logger.rs")
+        self.capture.assert_not_called()
+
+    def test_local_revalidation_refuses_changed_root_before_compiler_and_records_failure(self):
+        source_path, output, config, before = self.prepare()
+        self.run_root.chmod(0o777)
+        with self.assertRaises(DRIVER.Refusal):
+            DRIVER.execute(source_path, output, config, before, local_run_root=self.run_root)
+        result = json.loads((output / "check.result.json").read_text())
+        self.assertFalse(result["compiled"])
+        self.assertTrue(result["sourceUnchanged"])
+        self.run_root.chmod(0o700)
+        self.capture.assert_not_called()
+
+    def test_cli_invalid_local_root_cannot_prepare_or_invoke_compiler(self):
+        args = [str(self.script), "--source", str(self.app), "--output", str(self.output),
+                "--target", self.target, "--run", "--local-run-root", str(self.root)]
+        with mock.patch("sys.argv", args), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(DRIVER.main(), 1)
+        self.assertFalse(self.output.exists())
+        self.capture.assert_not_called()
+
+    def test_cli_local_root_cannot_change_prepare_only_semantics(self):
+        args = [str(self.script), "--source", str(self.app), "--output", str(self.output),
+                "--target", self.target, "--local-run-root", str(self.run_root)]
+        with mock.patch("sys.argv", args), contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as refusal:
+                DRIVER.main()
+        self.assertEqual(refusal.exception.code, 2)
+        self.assertFalse(self.output.exists())
+        self.capture.assert_not_called()
+
+    def test_mocked_local_cli_reaches_all_actual_compile_gates_without_hosted_variables(self):
+        env = self.environment()
+        env["PATH"] = os.environ.get("PATH", os.defpath)
+        identity = DRIVER.git_identity
+        def dependency_identity(path):
+            if path == Path(env["VCPKG_ROOT"]):
+                return {"head": DRIVER.VCPKG_COMMIT}
+            return identity(path)
+        args = [str(self.script), "--source", str(self.app), "--output", str(self.output),
+                "--target", self.target, "--run", "--local-run-root", str(self.run_root)]
+        self.capture.side_effect = None
+        with mock.patch("sys.argv", args), mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch.object(DRIVER, "git_identity", side_effect=dependency_identity), \
+                mock.patch.object(DRIVER, "verify_cargo_home") as verify, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(DRIVER.main(), 0)
+        self.assertEqual(self.capture.call_count, 3)
+        self.assertEqual([call.args[-1] for call in self.capture.call_args_list],
+                         ["rustc-identity", "cargo-identity", "cargo-check"])
+        self.assertEqual(self.capture.call_args_list[-1].args[0], DRIVER.command(self.config))
+        verify.assert_called_once_with(Path(env["CARGO_HOME"]), patched=True)
+        for call in self.capture.call_args_list:
+            self.assertNotIn("GITHUB_ACTIONS", call.args[2])
+            self.assertNotIn("RUNNER_TEMP", call.args[2])
 
 
 class ShippingWorkflowControls(unittest.TestCase):

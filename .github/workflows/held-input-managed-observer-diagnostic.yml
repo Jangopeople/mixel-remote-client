@@ -1,8 +1,6 @@
 name: held-input-managed-observer-diagnostic
 
 on:
-  push:
-    branches: [diagnostic/held-input-managed-20261017-r1]
   workflow_dispatch:
 
 permissions:

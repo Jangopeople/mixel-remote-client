@@ -191,6 +191,13 @@ class BindingControls(unittest.TestCase):
             d=Path(tmp);a=admission_fixture(d)
             raw=json.dumps(a).encode()
             self.assertEqual(M.admission(raw,M.sha(raw),now=BASE),a)
+            name='.github/workflows/pc01-linux-controller.yml'
+            self.assertNotEqual(a['actorSources'][name]['sha256'],M.FROZEN[name])
+            substituted=copy.deepcopy(a)
+            substituted['actorSources'][name]['sha256']=M.FROZEN[name]
+            changed=json.dumps(substituted).encode()
+            with self.assertRaisesRegex(ValueError,'actual-file-pin'):
+                M.admission(changed,M.sha(changed),now=BASE)
             del a['receipts']['cold95'];raw=json.dumps(a).encode()
             with self.assertRaisesRegex(ValueError,'receipts-required'):
                 M.admission(raw,M.sha(raw),now=BASE)
@@ -204,6 +211,78 @@ class EvidenceControls(unittest.TestCase):
             r=M.join_case(b,case,rows,event,ui,'e'*64)
             self.assertTrue(r['independentHostHeldAndReleased'])
             self.assertFalse(r['nativeQualified'])
+
+    def test_native_release_before_action_refused_for_every_case(self):
+        for case in M.CASES:
+            for count in (0, 1):
+                with self.subTest(case=case, auth=count):
+                    b,rows,event,ui=evidence(case)
+                    rows.insert(3,sample(b,case,20,count))
+                    with self.assertRaisesRegex(ValueError,'uninterrupted-authenticated-held'):
+                        M.join_case(b,case,rows,event,ui,'e'*64)
+
+    def test_native_auth_loss_before_action_refused_for_every_case(self):
+        for case in M.CASES:
+            with self.subTest(case=case):
+                b,rows,event,ui=evidence(case)
+                rows.insert(3,sample(b,case,20,0,rows[2]['highBits']))
+                with self.assertRaisesRegex(ValueError,'uninterrupted-authenticated-held'):
+                    M.join_case(b,case,rows,event,ui,'e'*64)
+
+    def test_pre_action_recovery_cannot_hide_earlier_release_or_auth_loss(self):
+        for case in M.CASES:
+            for lost_auth in (False, True):
+                with self.subTest(case=case, lost_auth=lost_auth):
+                    b,rows,event,ui=evidence(case)
+                    bits=rows[2]['highBits']
+                    rows[3:3]=[sample(b,case,15,0 if lost_auth else 1,bits if lost_auth else None),
+                               sample(b,case,20,1,bits)]
+                    with self.assertRaisesRegex(ValueError,'uninterrupted-authenticated-held'):
+                        M.join_case(b,case,rows,event,ui,'e'*64)
+
+    def test_uncertain_action_boundary_cannot_admit_native_release_or_auth_loss(self):
+        for case in M.CASES:
+            for uncertainty in (0, 100, 250):
+                for offset in (-1000, 0, 1000):
+                    for lost_auth in (False, True):
+                        with self.subTest(case=case, uncertainty=uncertainty, offset=offset,
+                                          lost_auth=lost_auth):
+                            b,rows,event,ui=evidence(case)
+                            bits=rows[2]['highBits']
+                            # The earliest possible sample time equals the action;
+                            # it does not establish that cleanup followed the action.
+                            rows.insert(3,sample(b,case,21+uncertainty/1000,
+                                                0 if lost_auth else 1,bits if lost_auth else None))
+                            ui['clockUncertaintyMilliseconds']=uncertainty
+                            ui['controllerToHostClockOffsetMilliseconds']=offset
+                            for row in rows:
+                                row['observedAtUTC']=(M.parse_time(row['observedAtUTC'])+
+                                                      dt.timedelta(milliseconds=offset)).isoformat()
+                            if case.startswith('normal-disconnect-'):
+                                ui['disconnectAtUTC']=utc(21+offset/1000)
+                            with self.assertRaisesRegex(ValueError,'uninterrupted-authenticated-held'):
+                                M.join_case(b,case,rows,event,ui,'e'*64)
+
+    def test_uninterrupted_hold_and_release_definitely_after_action_preserved(self):
+        for case in M.CASES:
+            for uncertainty in (0, 100, 250):
+                for offset in (-1000, 0, 1000):
+                    with self.subTest(case=case, uncertainty=uncertainty, offset=offset):
+                        b,rows,event,ui=evidence(case)
+                        bits=rows[2]['highBits']
+                        rows[3:3]=[sample(b,case,20,1,bits),
+                                   sample(b,case,21+uncertainty/1000,1,bits),
+                                   sample(b,case,21+(uncertainty+1)/1000,0)]
+                        ui['clockUncertaintyMilliseconds']=uncertainty
+                        ui['controllerToHostClockOffsetMilliseconds']=offset
+                        for row in rows:
+                            row['observedAtUTC']=(M.parse_time(row['observedAtUTC'])+
+                                                  dt.timedelta(milliseconds=offset)).isoformat()
+                        if case.startswith('normal-disconnect-'):
+                            ui['disconnectAtUTC']=utc(21+offset/1000)
+                        result=M.join_case(b,case,rows,event,ui,'e'*64)
+                        self.assertTrue(result['independentHostHeldAndReleased'])
+                        self.assertFalse(result['nativeQualified'])
 
     def test_old_releases_before_disconnect_is_negative(self):
         b,rows,event,ui=evidence(M.CASES[0]);event['sourceReleaseAtUTC']=utc(20)
@@ -339,7 +418,9 @@ class EvidenceControls(unittest.TestCase):
 class SourceControls(unittest.TestCase):
     def test_frozen_three_sources_exact(self):
         for name, expected in M.FROZEN.items():
-            self.assertEqual(M.sha((ROOT/name).read_bytes()),expected)
+            self.assertEqual(M.sha(M.frozen_source_bytes(ROOT,name)),expected)
+            with self.assertRaises(ValueError):
+                M.frozen_source_projection((ROOT/name).read_bytes()+b'\n# foreign source drift\n',name)
 
     def test_actual_frozen_primitive_import_performs_no_process_calls(self):
         with mock.patch.object(M.subprocess,'run',side_effect=AssertionError('no runtime')) as run,             mock.patch.object(M.subprocess,'check_output',side_effect=AssertionError('no Git/provider')) as check:

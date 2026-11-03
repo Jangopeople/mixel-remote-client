@@ -1,24 +1,6 @@
 name: Windows active Bash boundary
 
 on:
-  pull_request:
-    paths:
-      - 'scripts/**'
-      - scripts/test-support-native-warnings.py
-      - scripts/test-workflow-logical-views.py
-      - scripts/test-support-macos-texture.py
-      - scripts/test-input-lifecycle-integration-projection.py
-      - scripts/test-branding.py
-      - scripts/test-support-compiler-cleanup.py
-      - scripts/input_lifecycle_integration_projection.py
-      - scripts/test-support-flutter-analysis.py
-      - scripts/test-windows-generated-source.sh
-      - scripts/test-windows-lease-observation.py
-      - scripts/test-support-lease.py
-      - scripts/test-support-directory-security.py
-      - .github/workflows/windows-shell-boundary.yml
-      - .github/workflows/preflight.yml
-      - .github/workflows/build.yml
   workflow_dispatch:
 
 permissions:

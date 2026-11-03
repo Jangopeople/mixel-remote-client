@@ -10,6 +10,7 @@ import argparse
 import ast
 import datetime as dt
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path, PureWindowsPath
@@ -94,6 +95,32 @@ def read_pin(pin, *, limit=8*1024*1024):
          (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
          and len(raw) == pin['bytes'] and sha(raw) == pin['sha256'], 'actual-file-pin')
     return raw
+
+
+def frozen_source_projection(raw, name):
+    """Preserve physical admission pins, then prove the unchanged frozen source."""
+    need(name in FROZEN, 'exact-frozen-actor-source-name')
+    if name == '.github/workflows/pc01-linux-controller.yml':
+        path = Path(__file__).with_name('manual_workflow_policy_projection.py')
+        spec = importlib.util.spec_from_file_location('mixel_held_manual_workflow_policy', path)
+        policy = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(policy)
+        raw = policy.project_to_historical(raw, name)
+    need(sha(raw) == FROZEN[name], 'frozen03-source-bytes-only')
+    return raw
+
+
+def frozen_source_bytes(root, name):
+    """Read ordinary physical bytes; only the strict policy inverse is allowed."""
+    need(name in FROZEN, 'exact-frozen-actor-source-name')
+    path = ordinary(ordinary(root) / name, file=True)
+    before = path.stat()
+    raw = path.read_bytes()
+    after = path.stat()
+    need((before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) ==
+         (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns),
+         'frozen-source-changed-during-read')
+    return frozen_source_projection(raw, name)
 
 
 def parse_time(value):
@@ -188,8 +215,9 @@ def admission(raw, expected, now=None):
          'current-driver-qa-binding')
     need(type(a['actorSources']) is dict and set(a['actorSources']) == set(FROZEN), 'exact-frozen-actor-source-pins')
     for name, pin in a['actorSources'].items():
-        need(pin['sha256'] == FROZEN[name] and sha(read_pin(pin, limit=128*1024)) == FROZEN[name],
-             'frozen03-source-bytes-only')
+        # read_pin first proves the actual physical bytes/size/ordinary path.
+        # The historical projection is a separate proof, never a pin substitute.
+        frozen_source_projection(read_pin(pin, limit=128*1024), name)
     # The Root host baseline receipt is bound, recent, and carries the same actual
     # identity and package hashes; it cannot be a source-only readiness template.
     baseline = json.loads(read_pin(a['receipts']['hostBaseline']))
@@ -296,6 +324,13 @@ def join_case(binding, case, rows, event, ui, expected_admission):
     up = [r for r in rows if effect + uncertainty < host_time(r) and host_time(r) + uncertainty < release
           and r['remoteAuthenticated'] == 0 and released(r['highBits'])]
     need(before and accepted and down and len(up) >= 2 and stable_release(up), 'independent-auth0-accepted-held-released-sequence')
+    # A later good held sample cannot erase an earlier observed release or
+    # authentication loss. Include the action's uncertainty boundary: cleanup
+    # is attributable to the action only when its sample is definitely later.
+    need(all(r['remoteAuthenticated'] == 1 and held(r['highBits'], case) for r in rows
+             if r['monotonicMilliseconds'] >= down[0]['monotonicMilliseconds']
+             and host_time(r) - uncertainty <= effect),
+         'uninterrupted-authenticated-held-input-until-action')
     need(all(r['remoteAuthenticated'] == 0 and released(r['highBits']) for r in rows
              if host_time(up[0]) <= host_time(r) and host_time(r) + uncertainty < release),
          'no-late-input-or-auth-revival-before-source-release')
@@ -333,7 +368,7 @@ def join_case(binding, case, rows, event, ui, expected_admission):
 def source_inputs(root):
     root = ordinary(root)
     for name, expected in FROZEN.items():
-        need(sha(ordinary(root/name, file=True).read_bytes()) == expected, 'frozen03-input-unchanged')
+        need(sha(frozen_source_bytes(root, name)) == expected, 'frozen03-input-unchanged')
     # Importing declarations performs no process/API calls; old main is excluded.
     path = root/'scripts/pc01-linux-controller.py'
     namespace = {'__name__': 'mixel_frozen_controller', '__file__': str(path)}

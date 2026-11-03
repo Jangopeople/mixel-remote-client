@@ -1,8 +1,6 @@
 name: custody-fixture-lock-resolution
 
 on:
-  push:
-    branches: [diagnostic/custody-lock-resolution-20261017-r1]
   workflow_dispatch:
 
 permissions:

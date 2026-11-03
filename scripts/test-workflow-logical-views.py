@@ -178,9 +178,32 @@ class LogicalViews(unittest.TestCase):
 
     def test_missing_duplicate_and_changed_input_owner_hunks_still_refuse(self):
         raw = profile((ROOT / NAME).read_bytes(), b'\n')
+        receiver = P.receiver_projection()
+        previous = receiver.inverse(raw, NAME)
         block = P.NATIVE_REGRESSIONS.encode()
-        values = (raw.replace(block, b'', 1), raw.replace(block, block * 2, 1),
-                  raw.replace(b'--expected-count 180', b'--expected-count 179', 1))
+        self.assertEqual(previous.count(block), 1)
+        self.assertEqual(receiver.compose(previous, NAME), raw)
+        # Bind the actual terminal job by its strict receiver recipe. Replacing
+        # the old job directly in terminal source was a no-op after that owner
+        # added its new steps, so those two negatives previously tested no drift.
+        terminal_block = block
+        for hunk in receiver.plan()['files'][NAME]['changes']:
+            old, new = hunk['old'].encode(), hunk['new'].encode()
+            if old in terminal_block:
+                self.assertEqual(terminal_block.count(old), 1)
+                terminal_block = terminal_block.replace(old, new, 1)
+        self.assertEqual(raw.count(terminal_block), 1)
+        self.assertEqual(previous.count(b'--expected-count 180'), 1)
+        self.assertEqual(raw.count(b'--expected-count 180'), 1)
+        prior_values = (previous.replace(block, b'', 1), previous.replace(block, block * 2, 1),
+                        previous.replace(b'--expected-count 180', b'--expected-count 179', 1),
+                        previous.replace(block, b'', 1) + block)
+        values = (raw.replace(terminal_block, b'', 1), raw.replace(terminal_block, terminal_block * 2, 1),
+                  raw.replace(b'--expected-count 180', b'--expected-count 179', 1),
+                  raw.replace(terminal_block, b'', 1) + terminal_block)
+        for prior_value, value in zip(prior_values, values):
+            self.assertNotEqual(prior_value, previous)
+            self.assertNotEqual(value, raw)
         with tempfile.TemporaryDirectory(prefix='mixel exact hunks ') as temporary:
             root = Path(temporary)
             for ending in (b'\n', b'\r\n'):

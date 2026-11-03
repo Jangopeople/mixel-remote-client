@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare an isolated real application cargo check; compilation requires --run in CI.
+"""Prepare an isolated real application cargo check; compilation requires --run.
 
 This is an early typecheck gate, not a replacement for complete platform builds,
 Flutter analysis, signing, application execution or the existing release gates.
@@ -255,10 +255,98 @@ def require_source(root):
             raise Refusal("required application input is empty: " + name)
 
 
-def run_environment(config, source, output, environment):
-    # No local desktop compiler operation is permitted by --run. GitHub-hosted
-    # runners are ephemeral and already own the shipping toolchain/dependencies.
-    if (environment.get("GITHUB_ACTIONS") != "true" or
+def owned_directory(path):
+    path = ordinary_path(path, exists=True)
+    info = path.lstat()
+    if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o022:
+        raise Refusal("local directory must belong to the current user without group/other write access")
+    return path
+
+
+def local_admission(root, source, output, config, *, prepared):
+    """Admit only an explicit Mac checkout-local workspace, never Windows effects."""
+    if os.name != "posix" or platform.system() != "Darwin" or config["host"] != "Darwin":
+        raise Refusal("local application typecheck admission requires native macOS")
+    if not Path(root).is_absolute():
+        raise Refusal("local run root must be an explicit absolute path")
+    script = Path(__file__).absolute()
+    owned_directory(script.parent)
+    info = script.lstat()
+    if (not stat.S_ISREG(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400 or
+            info.st_uid != os.getuid() or info.st_nlink != 1):
+        raise Refusal("local admission requires this repository's ordinary current-user-owned driver")
+    repo = owned_directory(script.parents[1])
+    if ordinary_path(Path.cwd(), exists=True) != repo:
+        raise Refusal("local application typecheck must start from this script's repository root")
+    root = owned_directory(root)
+    if root == repo or not inside(root, repo):
+        raise Refusal("local run root must be inside this repository")
+    relative = root.relative_to(repo)
+    if relative.parts[0] != "_scratch":
+        environment = {key: value for key, value in os.environ.items() if not key.upper().startswith("GIT_")}
+        environment.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
+                           GIT_OPTIONAL_LOCKS="0")
+        ignored = subprocess.run(["git", "-C", str(repo), "-c", "core.excludesFile=" + os.devnull,
+                                  "check-ignore", "--no-index", "--quiet", "--", relative.as_posix() + "/"],
+                                 env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+        if ignored.returncode != 0:
+            raise Refusal("local run root must be under _scratch or a Git-ignored build directory")
+    for path in (root, *root.parents):
+        owned_directory(path)
+        if path == repo:
+            break
+    source = owned_directory(source)
+    if not inside(source, repo):
+        raise Refusal("local application source must be inside this repository")
+    for path in source.parents:
+        owned_directory(path)
+        if path == repo:
+            break
+    output = ordinary_path(output, exists=prepared)
+    if (output == root or not inside(output, root) or inside(root, source) or
+            inside(output, source) or inside(source, output)):
+        raise Refusal("local output must be separate from source and strictly inside its admitted root")
+    if prepared and stat.S_IMODE(output.lstat().st_mode) != 0o700:
+        raise Refusal("local output must retain its private preparation permissions")
+    first = output if prepared else output.parent
+    for path in (first, *first.parents):
+        owned_directory(path)
+        if path == root:
+            break
+    # The existing inventory prunes protected worktrees/caches before inspection.
+    # Local input must additionally be owned and unaliased, including Git objects.
+    for entry in inventory(source):
+        info = (source / entry["path"]).lstat()
+        if entry["kind"] == "symlink" or getattr(info, "st_file_attributes", 0) & 0x400:
+            raise Refusal("local application source contains an indirect entry")
+        if info.st_uid != os.getuid() or (stat.S_ISREG(info.st_mode) and info.st_nlink != 1):
+            raise Refusal("local application source must be current-user owned without hardlinked files")
+    return root
+
+
+def privacy_module():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("app_check_url_privacy", Path(__file__).with_name("patch-support-url-log-privacy.py"))
+    privacy = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(privacy)
+    return privacy
+
+
+def verify_cargo_home(home, *, patched=False):
+    privacy = privacy_module()
+    privacy.validate_cargo_home(home)
+    if patched:
+        checkout = privacy.tao_checkout(home)
+        path, _ = privacy.safe_file(checkout, privacy.SOURCES["tao"]["path"])
+        current = path.read_bytes()
+        if current != privacy.transform("tao", current):
+            raise Refusal("local Cargo home must already contain the exact patched pinned Tao source")
+
+
+def run_environment(config, source, output, environment, *, local_run_root=None):
+    if local_run_root is not None:
+        local_admission(local_run_root, source, output, config, prepared=True)
+    elif (environment.get("GITHUB_ACTIONS") != "true" or
             environment.get("RUNNER_ENVIRONMENT") != "github-hosted" or
             environment.get("RUNNER_OS") != {"Darwin": "macOS", "Linux": "Linux", "Windows": "Windows"}[config["host"]]):
         raise Refusal("--run requires the matching GitHub-hosted CI runner")
@@ -285,22 +373,20 @@ def run_environment(config, source, output, environment):
         overlay = environment.get("VCPKG_OVERLAY_TRIPLETS", "")
         if not overlay or not ordinary_path(overlay, exists=True).joinpath(config["triplet"] + ".cmake").is_file():
             raise Refusal("shipping macOS overlay triplet is absent")
-    runner_temp = environment.get("RUNNER_TEMP", "")
-    if not runner_temp or not inside(output, ordinary_path(runner_temp, exists=True)):
-        raise Refusal("CI output must be private to RUNNER_TEMP")
+    if local_run_root is None:
+        runner_temp = environment.get("RUNNER_TEMP", "")
+        if not runner_temp or not inside(output, ordinary_path(runner_temp, exists=True)):
+            raise Refusal("CI output must be private to RUNNER_TEMP")
     cargo_home = environment.get("CARGO_HOME", "")
     if config["host"] == "Darwin" and not cargo_home:
         raise Refusal("macOS requires its already-patched owned shipping CARGO_HOME")
     if cargo_home:
         home = ordinary_path(cargo_home, exists=True)
-        if inside(home, source) or inside(home, output):
+        if inside(home, source) or inside(home, output) or (local_run_root is not None and (
+                inside(source, home) or inside(output, home))):
             raise Refusal("Cargo registry must be an external installed dependency")
         if config["host"] == "Darwin":
-            import importlib.util
-            spec = importlib.util.spec_from_file_location("app_check_url_privacy", Path(__file__).with_name("patch-support-url-log-privacy.py"))
-            privacy = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(privacy)
-            privacy.validate_cargo_home(home)
+            verify_cargo_home(home, patched=local_run_root is not None)
     result = dict(environment)
     result["CARGO_TARGET_DIR"] = str(output / "target")
     result["CARGO_BUILD_TARGET"] = config["target"]
@@ -316,6 +402,8 @@ def run_environment(config, source, output, environment):
         "cargoTargetDir": result["CARGO_TARGET_DIR"], "target": result["CARGO_BUILD_TARGET"],
         "macosMinimum": config["macosMinimum"],
         "msvcLinker": result.get("CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER"),
+        "admission": "local-macos" if local_run_root is not None else "github-hosted",
+        "localRunRoot": str(local_run_root) if local_run_root is not None else None,
     })
     return result
 
@@ -379,12 +467,14 @@ def capture(argv, cwd, environment, output, stem):
     return result
 
 
-def prepare(source, output, target):
+def prepare(source, output, target, *, local_run_root=None):
     source = ordinary_path(source, exists=True)
     output = ordinary_path(output, exists=False)
     if inside(output, source) or inside(source, output) or not output.parent.is_dir():
         raise Refusal("new output must have an existing parent and be separate from source")
     config = matrix(target)
+    if local_run_root is not None:
+        local_admission(local_run_root, source, output, config, prepared=False)
     output.mkdir(mode=0o700)
     # Reserve evidence before source validation/copying so even an absent bridge
     # or preparation refusal leaves an owned diagnostic artifact, never a retry.
@@ -421,13 +511,13 @@ def prepare(source, output, target):
     return source, output, config, before
 
 
-def execute(source, output, config, before):
+def execute(source, output, config, before, *, local_run_root=None):
     result = {"status": "failed", "compiled": False}
     try:
-        environment = run_environment(config, source, output, os.environ)
+        environment = run_environment(config, source, output, os.environ, local_run_root=local_run_root)
         private = output / "source"
         # These identities are real installed shipping tools, not a substituted
-        # fixture. They run only after the explicit hosted-CI authorization gate.
+        # fixture. They run only after explicit hosted or local admission.
         capture(["rustup", "run", config["toolchain"], "rustc", "-Vv"], private, environment, output, "rustc-identity")
         capture(["rustup", "run", config["toolchain"], "cargo", "-V"], private, environment, output, "cargo-identity")
         capture(command(config), private, environment, output, "cargo-check")
@@ -455,12 +545,16 @@ def main():
     parser.add_argument("--source", type=Path, required=True, help="complete branded application with restored bridge")
     parser.add_argument("--output", type=Path, required=True, help="new private evidence/source/target directory")
     parser.add_argument("--target", required=True, choices=tuple(MATRIX))
-    parser.add_argument("--run", action="store_true", help="run real cargo check, exclusively on matching hosted CI")
+    parser.add_argument("--run", action="store_true", help="run the real cargo check after hosted or explicit local admission")
+    parser.add_argument("--local-run-root", type=Path,
+                        help="admit a native Mac run under this repository's owned _scratch or ignored build root")
     args = parser.parse_args()
+    if args.local_run_root is not None and not args.run:
+        parser.error("--local-run-root requires --run")
     try:
-        source, output, config, before = prepare(args.source, args.output, args.target)
+        source, output, config, before = prepare(args.source, args.output, args.target, local_run_root=args.local_run_root)
         if args.run:
-            execute(source, output, config, before)
+            execute(source, output, config, before, local_run_root=args.local_run_root)
             print("PASS: real entire-application cargo check; supplied source unchanged", flush=True)
         else:
             print("PREPARED: private application source and exact shipping cargo command; compiler not run", flush=True)

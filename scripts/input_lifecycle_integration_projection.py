@@ -234,6 +234,7 @@ def compose(raw, name):
 def inverse_blocks(raw, name):
     """Strict new hunks only; historical caller's existing final hash stays fatal.
 
+    The receiver entry first restores the exact historical trigger header.
     Other independently reviewed workflow additions may compose outside these
     exact hunks, then be inversed by their own unchanged guard owners.
     """

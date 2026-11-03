@@ -85,6 +85,9 @@ def project(raw, name, restore):
     reviewed = plan()
     if name not in reviewed['files']:
         raise ValueError('Unknown receiver integration file')
+    workflow = name.startswith('.github/workflows/')
+    if restore and workflow:
+        raw = workflow_policy().project_to_historical(raw, name)
     text, newline = canonical(raw)
     changes = reviewed['files'][name]['changes']
     positions = []
@@ -107,7 +110,17 @@ def project(raw, name, restore):
     if restore and any(token in text for token in
             (*OWNERS, 'receiver_native_only', '  receiver-native:')):
         raise ValueError('Additional unreviewed receiver integration invocation: ' + name)
-    return text.replace('\n', newline).encode()
+    result = text.replace('\n', newline).encode()
+    return workflow_policy().compose_manual(result, name) if workflow and not restore else result
+
+
+def workflow_policy():
+    """Strict policy source view; old receiver pins and hunks remain unchanged."""
+    spec = importlib.util.spec_from_file_location(
+        'mixel_receiver_manual_workflow_policy', HERE / 'manual_workflow_policy_projection.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def compose(raw, name):

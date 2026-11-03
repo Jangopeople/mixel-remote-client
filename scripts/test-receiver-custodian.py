@@ -277,6 +277,27 @@ class SessionEpochControls(unittest.TestCase):
         self.assertIn('info.attributes&(0x400|0x10)',EPOCH)
         self.assertIn('Prior dirty input epoch remains',EPOCH)
         self.assertNotIn('SetNamedSecurityInfo',EPOCH)
+    def test_ntfs_materialized_label_metadata_is_exact_without_permission_relaxation(self):
+        import re
+        original='D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x001200a9;;;AU)(A;;0x00000002;;;AU)(A;;RC;;;OW)S:(ML;;NW;;;ME)'
+        actual=re.search(r'const ROOT_SD:&str="([^"]+)";',EPOCH).group(1)
+        self.assertEqual(actual,original.replace('S:(','S:AI('))
+        self.assertIn('wanted.as_ref().zip(observed.as_ref()).map(|(a,b)|a==b)',EPOCH)
+        native=(HERE/'fixtures/receiver-custodian-native/epoch-tests.rs').read_text()
+        self.assertIn('0x00000006;;;AU',native)
+        self.assertIn(';;;HI)',native)
+        self.assertIn('S:AI(',native)
+        self.assertIn('!exact_sd(namespace.raw(),1,&wrong)',native)
+    def test_mutex_generic_mapping_and_marker_metadata_preserve_exact_rights(self):
+        import re
+        original='D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x00120000;;;AU)(A;;RC;;;OW)S:(ML;;NW;;;ME)'
+        actual=re.search(r'const MUTEX_SD:&str="([^"]+)";',EPOCH).group(1)
+        self.assertEqual(actual,original.replace('(A;;GA;;;','(A;;0x001f0001;;;'))
+        self.assertIn('(A;;0x0013019f;;;{sid})(A;;RC;;;OW)S:AI(ML;;NW;;;ME)',EPOCH)
+        native=(HERE/'fixtures/receiver-custodian-native/epoch-tests.rs').read_text()
+        self.assertIn('!exact_sd(epoch.mutex.raw(),6,&wrong_mutex)',native)
+        self.assertIn('0x0017019f',native)
+        self.assertIn('!exact_sd(marker.raw(),1,',native)
     def test_authority_failure_latches_before_cleanup_and_reconnect(self):
         self.assertIn('if !helper_alive||!same_session{link.store(false,Ordering::SeqCst);}',TEXT)
         self.assertIn('if !v.link.load(Ordering::SeqCst){return false;}',TEXT)

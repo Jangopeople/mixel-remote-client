@@ -2,14 +2,6 @@ name: windows-namespace-diagnostic
 
 on:
   workflow_dispatch:
-  push:
-    branches: ['codex/**']
-    paths:
-      - '.github/workflows/windows-namespace-diagnostic.yml'
-      - 'scripts/windows-standard-namespace*'
-      - 'scripts/test-support-lease*'
-      - 'scripts/test-windows-standard-namespace-access.ps1'
-
 permissions:
   contents: read
 
