@@ -9,8 +9,12 @@ R2 is closed/unqualified; its Cargo.lock is unchanged and pipeline/supplied
 inputs/old codec cache all remain unchanged. Exact raw command061 and separate
 `_scratch/local-build/r2-stage-proof.json` retain the failure. Do not relabel it
 as a complete app. The Podfile hook now clamps every config to the declared
-architecture minimum, preserving higher pod requirements and Intel10.14. Six
-actual Ruby hook tests and the existing Mac source suite pass. Fresh old/new
+architecture minimum and preserves higher direct/project/base/included
+requirements before and after Flutter defaults, including when ENV carries
+12.3. Deployment ENV is excluded only during read resolution and restored.
+Unresolved/conditional/missing/cyclic declarations refuse. Eight actual Ruby
+controls, including real Xcodeproj1.28.1 inheritance regressions, and the
+existing Mac source suite pass. Independent final review clears this P2. Fresh old/new
 composition confirms ONLY Podfile bytes differ; Rust/native/build.py/Runner
 and generated ABI remain identical, supporting carefully bound Rust-product
 reuse in a fresh Flutter continuation. No global SDK/simulator changes occurred.

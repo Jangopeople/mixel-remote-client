@@ -210,7 +210,8 @@ end
 '''
 
 
-def pod_post_install(minimum):
+def previous_pod_post_install(minimum):
+    """Recognize only the exact prior direct-setting hook during upgrades."""
     if minimum not in ('10.14', '12.3'):
         raise RuntimeError('Unsupported advertised CocoaPods minimum')
     return '''post_install do |installer|
@@ -233,6 +234,85 @@ end
 '''.replace('@MINIMUM@', minimum)
 
 
+def pod_post_install(minimum):
+    if minimum not in ('10.14', '12.3'):
+        raise RuntimeError('Unsupported advertised CocoaPods minimum')
+    return '''post_install do |installer|
+  mixel_key = 'MACOSX_DEPLOYMENT_TARGET'
+  mixel_advertised_minimum = Gem::Version.new('@MINIMUM@')
+  mixel_build_minimum = Gem::Version.new(ENV.fetch(mixel_key, mixel_advertised_minimum.to_s))
+  unless mixel_build_minimum == mixel_advertised_minimum
+    raise 'Mixel CocoaPods minimum differs from the advertised application minimum'
+  end
+  mixel_version = lambda do |value|
+    unless value.is_a?(String) && value.match?(/\\A[0-9]+(?:\\.[0-9]+)*\\z/)
+      raise "Unresolved Mixel CocoaPods deployment minimum: #{value.inspect}"
+    end
+    Gem::Version.new(value)
+  end
+  mixel_xcconfig_settings = lambda do |path, parents|
+    raise "Missing Mixel CocoaPods base configuration: #{path}" unless path.file?
+    path = path.realpath
+    raise "Cyclic Mixel CocoaPods base configuration: #{path}" if parents.include?(path)
+    config = Xcodeproj::Config.new(path)
+    [config.attributes] + config.includes.flat_map do |included|
+      mixel_xcconfig_settings.call(path.dirname.join(included), parents + [path])
+    end
+  end
+  mixel_declared_minimum = lambda do |configuration, target|
+    versions = []
+    inherited = false
+    project_configuration = configuration.project.build_configuration_list[configuration.name]
+    [project_configuration, configuration].compact.uniq.each do |scope|
+      settings = [scope.build_settings]
+      if scope.base_configuration_reference
+        path = scope.base_configuration_reference.real_path
+        settings.concat(mixel_xcconfig_settings.call(path, []))
+      end
+      settings.each do |declared|
+        if declared.keys.any? { |key| key.start_with?(mixel_key + '[') }
+          raise 'Conditional Mixel CocoaPods deployment minimum is unresolved'
+        end
+        value = declared[mixel_key]
+        next if value.nil?
+        if ['$(inherited)', '${inherited}'].include?(value)
+          inherited = true
+        else
+          versions << mixel_version.call(value)
+        end
+      end
+    end
+    # Xcodeproj appends ENV last; exclude only this key while resolving the
+    # declared project/xcconfig inheritance, then restore it before Flutter.
+    environment_minimum = ENV.delete(mixel_key)
+    begin
+      resolved = configuration.resolve_build_setting(mixel_key, target)
+    ensure
+      ENV[mixel_key] = environment_minimum unless environment_minimum.nil?
+    end
+    versions << mixel_version.call(resolved) unless resolved.nil?
+    if inherited && versions.empty?
+      raise 'Inherited Mixel CocoaPods deployment minimum is unresolved'
+    end
+    versions.max
+  end
+  installer.pods_project.targets.each do |target|
+    before_flutter = target.build_configurations.to_h do |configuration|
+      [configuration, mixel_declared_minimum.call(configuration, target)]
+    end
+    flutter_additional_macos_build_settings(target)
+    target.build_configurations.each do |configuration|
+      # Preserve higher direct, project and base-xcconfig declarations even
+      # when Flutter removes or replaces the original direct setting.
+      minimum = [mixel_build_minimum, before_flutter[configuration],
+                 mixel_declared_minimum.call(configuration, target)].compact.max
+      configuration.build_settings[mixel_key] = minimum.to_s
+    end
+  end
+end
+'''.replace('@MINIMUM@', minimum)
+
+
 def patch_pod_minimum(pods, minimum):
     """Clamp each generated pod configuration to the exact advertised minimum."""
     newline = '\r\n' if '\r\n' in pods else '\n'
@@ -241,7 +321,8 @@ def patch_pod_minimum(pods, minimum):
         raise RuntimeError('Mixed CocoaPods source newlines')
     if re.findall(r"^platform :osx, '([0-9.]+)'$", logical, re.M) not in [['10.14'], ['12.3']]:
         raise RuntimeError('Pinned CocoaPods minimum changed')
-    profiles = (OLD_POD_POST_INSTALL, pod_post_install('10.14'), pod_post_install('12.3'))
+    profiles = (OLD_POD_POST_INSTALL, previous_pod_post_install('10.14'),
+                previous_pod_post_install('12.3'), pod_post_install('10.14'), pod_post_install('12.3'))
     if sum(logical.count(profile) for profile in profiles) != 1:
         raise RuntimeError('Pinned CocoaPods post-install hook changed')
     for profile in profiles[1:]:
