@@ -1,124 +1,113 @@
 # Mixel-Remote — Agent Handoff / Current State
 
-## 2026-11-03 — Local build recovery and exact Windows descriptor repair
+## 2026-11-03 — Current local build and Windows repair state
 
-Later Nov3 actual progress (all qualification remains explicit): full local R2
-Rust app check PASS8m42, actual release Rust compile PASS14m47. Flutter then
-failed at CocoaPods10.13/10.14 targets rejected by Xcode27.2 (supported>=12.0).
-R2 is closed/unqualified; its Cargo.lock is unchanged and pipeline/supplied
-inputs/old codec cache all remain unchanged. Exact raw command061 and separate
-`_scratch/local-build/r2-stage-proof.json` retain the failure. Do not relabel it
-as a complete app. The Podfile hook now clamps every config to the declared
-architecture minimum and preserves higher direct/project/base/included
-requirements before and after Flutter defaults, including when ENV carries
-12.3. Deployment ENV is excluded only during read resolution and restored.
-Unresolved/conditional/missing/cyclic declarations refuse. Eight actual Ruby
-controls, including real Xcodeproj1.28.1 inheritance regressions, and the
-existing Mac source suite pass. Independent final review clears this P2. Fresh old/new
-composition confirms ONLY Podfile bytes differ; Rust/native/build.py/Runner
-and generated ABI remain identical, supporting carefully bound Rust-product
-reuse in a fresh Flutter continuation. No global SDK/simulator changes occurred.
+Task is NOT COMPLETE. Current owned worktree is `.worktrees/remote-reliability`,
+branch `fix/native-local-reliability`; current source/evidence/runtime state is
+`_scratch/STATE.json`. Canonical H73/PR7 remain unchanged. GitHub is SOURCE BACKUP
+ONLY: all14 workflows are manual break-glass; no Actions runner/run was created.
+Use local builds, owned ignored scratch, and normal branch backup. Old October
+entries below are historical; their temporary checkouts are gone.
 
-Windows local application-check admission is now adopted: actual nativeAMD64,
-current SID/private DACL and fixedNTFS object identity are checked read-only;
-no CI identity or accounts/permissions are created.39 existing and14 new source
-controls pass. Root fixed a new cross-Python test serialization defect by
-pinning actual original function-source bytes (baselinea3b7aa90), rather than
-version-dependent ast.dump;14 pass on Python3.11 and3.14. Windows APIs/compiler
-and customer Accept are STILL not run. PC01 is visibly Windows-locked with
-CapsLock on, despite working NAS/VMM access. Existing human unlock request is
-pending; no further password attempts occurred.
+Windows repair: original a99 run39064626010/job117489565737 was collected once,
+read-only, at `_scratch/recovery/a99-original.log` (SHA9370c89644b5c8313b58eddc7f09d35da5b73cd463141ee88032fd3f7600fcb2).
+Its compile/original-negative pass, then namespace check fails solely because
+NTFS returns `S:AI(ML;;NW;;;ME)` rather than requested `S:(ML;;NW;;;ME)`.
+Committed84b6 requests/checks exact materialized namespace+marker metadata and
+concrete mutex-all masks for existing SY/BA ACEs; AU/OW rights and exact refusal
+remain unchanged.57 source controls pass. Actual new Windows mutex/marker and
+complete custody runtime are STILL NOT RUN. Do not call the old trace a new pass.
 
-Mac signing prerequisites were actually checked: expected DeveloperID identity
-832784665DFBC9516AB4E7414285F5B8C54AA01A/team5277F8NDH4 exists, and existing
-mixel-notary profile history authenticated. A scratch signing-only worker is
-source-reviewed/tested, not executed; it never uploads or launches UI. Azure
-CLI cached account exists but actual resource access failedAADSTS50173 (grant
-revoked). Device renewal reached the human-only Microsoft approval screen but
-timed out pending (AADSTS70016), without approval/token extraction/logout. Do
-not keep restarting it unattended. A fresh human sign-in will be needed for
-Windows signing. JSign7.6 can use the existing ArtifactSigning account/profile
-from Mac via private in-memory Azure token/env handoff; it is not installed/run.
+Held-input proof now rejects any release/auth loss before Disconnect/viewer loss,
+including timing uncertainty;92 old-source negatives reproduced the gap and38
+current controls pass. Manual policy10, receiver16, logical11, frozen-controller31,
+input19 and original app-check39 source controls pass. Frozen03 controller/test
+bytes remain exact. No new held-input desktop test was executed.
 
-Sixteen actual Rust product warnings plus the pinned rdev duplicate-empty-code
-warning are audited at `_scratch/warning-audit/r2-rust-warnings.json`: no live
-Mac input/cleanup disconnection found. These are retained documented warnings,
-not a warning-free or native-acceptance claim. Flutter also reports the existing
-CoreSimulator version mismatch, multiple matching Mac destinations and a
-modified-AppDelegate secure-restoration migration note. Scope/current causes
-are audited; do not restart/update shared simulator services or weaken the
-11-owner AppDelegate termination chain to hide a nonblocking notice.
+Actual local Mac build stages (all inside `_scratch/local-build`):
+- First `arm64-build` at84b6 reached the full app check, then failed new Enigo
+  missing_docs. Six accurate docs were added without code/lint/version changes;
+  reversing them recovers all3 original whole-source hashes. Native32/integration16/
+  SAS9/preparation8 source controls pass. Six actual generated ABI outputs remain
+  identical before/after docs (`bridge-docs-conservation.json`).
+- `arm64-build-r2` atd89: full actual Rust app check PASS8m42, actual release Rust
+  compile PASS14m47. Six codec archives/all951 members prove ARM64/minimum12.3.
+  Flutter failed old CocoaPods10.13/10.14 targets rejected by Xcode27.2.
+  Cargo.lock unchanged; pipeline/supplied inputs/old cache unchanged. CLOSED and
+  UNQUALIFIED. Preserve raw command061 and `r2-stage-proof.json`.
+- Pod repair now preserves higher direct/project/base/included minima before and
+  after Flutter, temporarily excludes deployment ENV only during read resolution,
+  restores ENV reliably, and rejects unresolved/conditional/missing/cyclic values.
+  Eight actual Ruby/Xcodeproj1.28.1 controls and Mac source suite pass; fresh both-
+  architecture compositions prove ONLY Podfile differs. ARM12.3/Intel10.14 conserved.
+  Independent P2 review cleared; source committedf7f8515.
+- `arm64-build-r3` atf7 uses independently copied exact R2 Rust products with full
+  Rust/native/resource/version/6bridge/lock/minimum/flags binding. Pods now pass.
+  Flutter kernel then fails extended_text13 against Flutter3.27.4. Root diagnosed
+  a LOCAL DRIVER BUG: bridge-only13 downgrade leaked into application build;
+  workflow normally archives only six generated outputs, leaving fresh app14.
+  R3 is CLOSED/UNQUALIFIED; old source/products/result and held lock remain unchanged.
+  Driver fix now restores exact pre-bridge pubspec14 even on generator failure,
+  then runs fresh application pub-get before typecheck/build.31 driver controls
+  pass. R4 permits only exact Podfile+13-to14 source deltas;12 continuation
+  controls and actual read-only R2 admission pass. Restored manifest is bound
+  to the existing reviewed compatibility profile SHA cfa3c757fdd04e8a293b0f5bfcea286ec31e904786a4467d66867dbdd2ef5358.
+  Do not recompile unchanged Rust unnecessarily or relabel any prior failed run.
 
+Official inputs are exact upstream1abc897c/hbb48c37de3, vcpkg120deac, Flutter3.27.4
+revisiond8a9f9a52e5af486f80d932e838ee93861ffd863. Source/SDK directories are
+`rustdesk`, `_scratch/local-build/vcpkg`, `_scratch/local-build/flutter-sdk/flutter`.
+Official FlutterZIP SHAcc4d6e6c5b1049e9ca8c7e6444430d916ef08eaf2fd8bca059fa79e424051990.
+Local driver owns nice15/jobs1 and all caches; explicit --run required. Final lock
+checks run after build, guard and exceptional exits.31 current inert driver
+controls pass. Scratch Flutter continuation worker/tests/doc are under
+`_scratch/macos-flutter-continuation`; current12 controls and actual R2 read-only
+admission pass. It has no target/CargoHome cache reuse and uses genuine --skip-cargo.
+All Flutter analysis/compiled guard/branding/bundle/lock gates remain mandatory.
 
-Current active worktree: `.worktrees/remote-reliability`, branch
-`fix/native-local-reliability`, recovered from source backup27fbe245 after the
-old temporary integration checkout disappeared. Canonical checkout stays73e7c3d.
-Current operational state and local evidence live in `_scratch/STATE.json`;
-older October receipts remain historical. Do not claim any current app/native
-qualification from those old receipts.
+Windows local typecheck admission is adopted: actual nativeAMD64, tokenSID/private
+DACL/fixedNTFS file identity checked READ-ONLY; no account/ACL/policy/CI identity is
+created.39 existing+14 new source controls pass. Root corrected version-dependent
+ast.dump pins using original exact function-source bytes (baselinea3b7aa90);
+14 pass on Python3.11 and3.14. Windows APIs/compiler are NOT yet exercised.
+PC01 NAS/VMM access is restored, but existing Mixel-Test-VM is visibly Windows-
+locked with CapsLock on. One supplied-password attempt failed; manual unlock was
+requested; no further credential attempts. Use ONLY this existing account, never
+create QA accounts or claim genuine Standard qualification from admin membership.
+Fresh customer link/Ready/Connect/Accept-before-control/clipboard/files/reconnect/
+held cleanup proof are still REQUIRED and UNRUN. Current screenshots live under
+`_scratch/access-proof`; CUA IAB tab3 is the fresh PC01 console, tab2 NAS.
 
-Read the current parent AGENTS.md: GitHub is source backup only. All14 active
-workflows are now manual break-glass; no Actions dispatch/runner was created.
-The strict policy projection recovers the original whole workflow SHA values
-for historical controls. Two PC01 test invocations use a private source wrapper;
-the old controller/test bytes and their pins remain unchanged. Actual physical
-admission file hashes remain checked before the separate historical projection.
+Mac DeveloperID identity832784665DFBC9516AB4E7414285F5B8C54AA01A/team5277F8NDH4
+exists; mixel-notary history actually authenticates. Scratch signing-only worker
+`_scratch/macos-local-signing` is reviewed with7 inert controls, NOT EXECUTED.
+It independently copies qualified input, signs inside out, notarizes/staples/
+verifies, optionally makes local hdiutilUDZO DMG; no Finder/UI/publication.
+Do NOT run sign-and-publish-macos.sh: it uploadsR2. Azure cached account is NOT
+usable: actual queryAADSTS50173 grant revoked. CLI device renewal reached human
+Microsoft approval, then timed outAADSTS70016 without approval/token/logout.
+Do not repeatedly restart unattended. Fresh human sign-in is needed for Windows
+signing. JSign7.6 Mac route exists with private in-memory token/env handoff;
+it is not installed/run and no Azure roles were changed. Auth tab5 is stale.
 
-Root retrieved the previously uncollected a99 original once, read-only, without
-starting CI. Its actual Windows compile/original-negative passed, then the new
-namespace rejected this sole descriptor delta: expected `S:(ML;;NW;;;ME)`, actual
-`S:AI(ML;;NW;;;ME)`. Root now requests/checks that exact NTFS metadata for the
-namespace and marker, and uses concrete mutex-all masks for the two existing
-SY/BA generic-all ACEs. AU/OW rights and the exact comparator are preserved.
-Kernel negative cases for changed rights/labels/protection were added.57 local
-source controls pass. Mutex/marker materialization and the new complete Windows
-runtime still require actual Windows execution; their correctness is not yet
-proven by the old namespace trace.
+User authorized coordination with Adobe chat01a1338e-1a2b-7820-903f-e46a1c920793.
+Fresh notice sent; Film retains physical Mac desktop until visual testing ends.
+No fresh desktop grant yet. Local builds are current-user-authorized, nice15/jobs1;
+no Film processes/UI were touched and no October grant/PID/birth was reused.
 
-Held-input proof now refuses release/auth loss observed before Disconnect or
-viewer-loss, including uncertainty boundaries and later rehold.92 old-source
-negative cases reproduced the gap;38 current controls pass. Stable release also
-requires a full monotonic second. Manual policy10, receiver16, logical11, frozen
-controller31, input19 and app-check39 source controls pass. Root's first aggregate
-used the wrong frozen-wrapper filename; the corrected actual31 run passes and
-the failed invocation is retained separately.
+Sixteen Rust product warnings plus pinned rdev duplicate-empty-code warning are
+audited at `_scratch/warning-audit/r2-rust-warnings.json`: no disconnected live
+Mac input/cleanup found; do not call this warning-free. Pod warning audit retains
+CoreSimulator version mismatch, inferred Mac destination and modified-AppDelegate
+secure-restoration migration note. No global SDK/service restarts or11-owner
+AppDelegate chain weakening; no simulator qualification. New file-selector API
+deprecation appeared in R3 and still needs scoped audit. Continue fix/retest loop.
 
-The local full-app check has an explicit owned Mac run-root admission instead
-of requiring false GitHub identity. A new build-only ARM driver implements the
-pinned codec/bridge/Rust/Flutter/branding/bundle path, with21 inert controls before the cache-reuse revision. The first real run
-compiled all required native codecs and reached the complete Rust application
-check; it failed on two newly exposed missing API docs in the Mac Enigo wrapper.
-The lint stays enforced. Six accurate docblocks across the shared/Mac/Windows
-receiver APIs now preserve behavior and recover the three old whole-source
-hashes exactly when reversed.32 native,16 integration,9 SAS,8 preparation and
-57 custody source controls pass. The failed private build stays immutable at
-`_scratch/local-build/arm64-build`, with exact command060 stderr retained. Its
-result is unqualified and all three supplied/pipeline immutable checks passed. Fresh upstream1abc/hbb48c, Flutter3.27.4 revision
-d8a9f9a52e5af486f80d932e838ee93861ffd863 (official ZIP SHA
-cc4d6e6c5b1049e9ca8c7e6444430d916ef08eaf2fd8bca059fa79e424051990), and
-vcpkg120de source are prepared inside this worktree. The actual codec proof
-validates all951 members of6 archives as ARM64 with minimum12.3. A fresh
-resource-bounded run used nice15/jobs1 under the user's current express local
-build instruction, with a new coordination notice to Adobe; no Film processes
-or desktop UI were touched. No October grant was reused. The first run stopped
-before full app build, analysis, bundle generation or native acceptance. Final
-post-build/guard/exceptional-exit lock rechecks and verified read-only codec /
-independently copied codegen reuse are now implemented.28 inert controls pass,
-including post-build lock drift and the actual versioned/canonical SDK alias.
-The old failed output remains unqualified; fresh source/targets/logs and all
-application gates are required in a second output. No unsigned app is qualified yet.
-
-The user signed into the fresh NAS tab. After one documented browser reset,
-Root verified the DSM desktop and opened PC01 through VMM. Its console is
-connected but Windows remains at the existing Mixel-Test-VM sign-in screen.
-The UI reports CapsLock on; one known-password attempt failed, and manual
-unlock was requested without further credential attempts.
-Use only the supplied existing Mixel-Test-VM account. Fresh real customer link,
-Ready, technician Connect, customer Accept before control, warning path, input,
-clipboard/files/reconnect and cleanup proof remain mandatory. No new installer,
-real session, release, publication or marketplace state is qualified or changed.
-Keep the prior GTK rejection, no auth/security bypass, human native approvals,
-protected old resources, and fresh physical UI coordination requirements.
+Safety remains: prior GTK auto-review rejection MUST NOT be retried/reassigned/
+bypassed. No VM power/disk/reset, broad process scans/signals/forcequit, raw auth
+scraping, protected old worktrees or production/public download/marketplace changes.
+Native URI/TCC/UAC/MFA/security warning actions are HUMAN-ONLY. All whole-app,
+native desktop, customer Accept, publication and task-complete flags remain false.
 
 ## 2026-10-17 — Exact Windows custody compiler and QA observer repairs
 

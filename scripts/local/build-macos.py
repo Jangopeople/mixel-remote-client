@@ -667,24 +667,36 @@ def build(args, repo):
             script(f"bridge-patch-{index + 1:02d}", command[0], *command[1:], cwd=app, extra=extra)
         pubspec = regular_file(app / "flutter/pubspec.yaml")
         raw = pubspec.read_bytes()
-        if raw.count(b"extended_text: 14.0.0") + raw.count(b"extended_text: 13.0.0") != 1:
-            raise Refusal("reviewed extended_text bridge dependency changed")
-        pubspec.write_bytes(raw.replace(b"extended_text: 14.0.0", b"extended_text: 13.0.0"))
-        runner.call("bridge-pub-get", [flutter / "bin/flutter", "pub", "get"], app / "flutter")
-        stale_bridge = {}
-        for name in BRIDGE_FILES:
-            path = app / name
-            if path.exists() or path.is_symlink():
-                stale_bridge[name] = digest(regular_file(path))
-                path.unlink()
-        write_json(output / "bridge-before-generation.json", {"removedOnlyFromPrivateCopy": stale_bridge})
-        runner.call("generate-bridge", [codegen, "--rust-input", "./src/flutter_ffi.rs", "--dart-output", "./flutter/lib/generated_bridge.dart",
-                                        "--c-output", "./flutter/macos/Runner/bridge_generated.h"], app)
-        shutil.copyfile(app / "flutter/macos/Runner/bridge_generated.h", app / "flutter/ios/Runner/bridge_generated.h")
-        bridge = {name: digest(regular_file(app / name)) for name in BRIDGE_FILES if (app / name).stat().st_size > 0}
-        if set(bridge) != set(BRIDGE_FILES):
-            raise Refusal("all six nonempty generated bridge outputs are mandatory")
-        write_json(output / "bridge-files.json", bridge)
+        if raw.count(b"extended_text: 14.0.0") != 1 or b"extended_text: 13.0.0" in raw:
+            raise Refusal("reviewed shipping extended_text14 dependency changed")
+        bridge_pubspec = raw.replace(b"extended_text: 14.0.0", b"extended_text: 13.0.0")
+        pubspec.write_bytes(bridge_pubspec)
+        try:
+            runner.call("bridge-pub-get", [flutter / "bin/flutter", "pub", "get"], app / "flutter")
+            stale_bridge = {}
+            for name in BRIDGE_FILES:
+                path = app / name
+                if path.exists() or path.is_symlink():
+                    stale_bridge[name] = digest(regular_file(path))
+                    path.unlink()
+            write_json(output / "bridge-before-generation.json", {"removedOnlyFromPrivateCopy": stale_bridge})
+            runner.call("generate-bridge", [codegen, "--rust-input", "./src/flutter_ffi.rs", "--dart-output", "./flutter/lib/generated_bridge.dart",
+                                            "--c-output", "./flutter/macos/Runner/bridge_generated.h"], app)
+            shutil.copyfile(app / "flutter/macos/Runner/bridge_generated.h", app / "flutter/ios/Runner/bridge_generated.h")
+            bridge = {name: digest(regular_file(app / name)) for name in BRIDGE_FILES if (app / name).stat().st_size > 0}
+            if set(bridge) != set(BRIDGE_FILES):
+                raise Refusal("all six nonempty generated bridge outputs are mandatory")
+            write_json(output / "bridge-files.json", bridge)
+        finally:
+            # The workflow transports only six generated files into a fresh
+            # shipping clone. Its codegen-only dependency must not reach the app.
+            pubspec.write_bytes(raw)
+        runner.call("shipping-pub-get", [flutter / "bin/flutter", "pub", "get"], app / "flutter")
+        if pubspec.read_bytes() != raw:
+            raise Refusal("shipping pub get changed the exact pre-bridge pubspec.yaml")
+        write_json(output / "bridge-pubspec.json", {"shippingBeforeSha256": hashlib.sha256(raw).hexdigest(),
+                   "bridgeOnlySha256": hashlib.sha256(bridge_pubspec).hexdigest(),
+                   "shippingAfterSha256": digest(pubspec), "shippingBytesRestored": True})
         if digest(app / "Cargo.lock") != lock_before:
             raise Refusal("bridge generation changed the held application Cargo.lock")
         script("check-entire-app", "check-app-rust.py", "--source", app, "--output", output / "rust-check",

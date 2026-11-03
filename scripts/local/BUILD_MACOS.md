@@ -39,6 +39,12 @@ dependencies, generates all six bridge files in the exact reviewed order, checks
 the full Rust app, builds the full Flutter app, analyzes it with fatal errors and
 warnings, runs the compiled support guard, and verifies branding and every bundled
 Mach-O architecture/minimum. It stops at the first failure without retrying.
+The workflow's extended_text13 dependency is used only while generating the
+bridge. After all six outputs exist, the driver restores the exact pre-bridge
+pubspec.yaml bytes with shipping extended_text14 and runs Flutter pub get again
+before the full Rust check or application build. The restoration hashes are
+recorded in bridge-pubspec.json; failed bridge generation also restores the
+shipping manifest before closing the failed output.
 `--jobs` accepts integers from 1 through 8 and defaults to 1. The driver owns
 `CARGO_BUILD_JOBS`, `CMAKE_BUILD_PARALLEL_LEVEL` and `VCPKG_MAX_CONCURRENCY`, replacing
 inherited values. The plan and final result record the selected concurrency.

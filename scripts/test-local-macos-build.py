@@ -82,6 +82,7 @@ class LocalMacBuildControls(unittest.TestCase):
         self.corrupt_bundle_proof = False
         self.mutate_original = False
         self.mutate_lock_at = None
+        self.pubspec_at_labels = {}
         self.stack = contextlib.ExitStack()
         self.stack.enter_context(mock.patch.object(DRIVER.platform, "system", return_value="Darwin"))
         self.stack.enter_context(mock.patch.object(DRIVER.platform, "machine", return_value="arm64"))
@@ -106,6 +107,9 @@ class LocalMacBuildControls(unittest.TestCase):
         self.processes.append((argv, kwargs))
         output = b"inert process output; not a native build\n"
         current_label = self.labels[-1] if self.labels else "root-admission"
+        pubspec = self.output / "rustdesk/flutter/pubspec.yaml"
+        if pubspec.exists():
+            self.pubspec_at_labels[current_label] = pubspec.read_bytes()
         if self.fail_label == current_label:
             code = 23
         else:
@@ -216,7 +220,7 @@ class LocalMacBuildControls(unittest.TestCase):
         sequence = ["reserve-cargo", "flutter-version", "flutter-precache", "bootstrap-vcpkg", "install-codecs", "verify-codecs",
                     "apply-branding", "fetch-locked", "patch-owned-tao", "verify-owned-tao", "install-bridge-codegen",
                     *[f"bridge-patch-{index:02d}" for index in range(1, len(DRIVER.BRIDGE_PATCHES) + 1)],
-                    "bridge-pub-get", "generate-bridge", "check-entire-app", "build-entire-app", "analyze-entire-flutter",
+                    "bridge-pub-get", "generate-bridge", "shipping-pub-get", "check-entire-app", "build-entire-app", "analyze-entire-flutter",
                     "compiled-support-guard", "compiled-branding", "verify-entire-bundle"]
         positions = [self.labels.index(label) for label in sequence]
         self.assertEqual(positions, sorted(positions))
@@ -231,6 +235,38 @@ class LocalMacBuildControls(unittest.TestCase):
         install = next(item for item in records if "install" in item["argv"] and "flutter_rust_bridge_codegen" in item["argv"])
         for flag in ("--locked", "--root", "uuid", "1.80.1"):
             self.assertIn(flag, install["argv"])
+
+    def test_bridge13_is_temporary_and_shipping_pubspec_is_restored_exactly(self):
+        raw = b"# preserve exact shipping bytes\r\ndependencies:\r\n  extended_text: 14.0.0\r\n"
+        (self.source / "flutter/pubspec.yaml").write_bytes(raw)
+        self.build()
+        temporary = raw.replace(b"extended_text: 14.0.0", b"extended_text: 13.0.0")
+        for label in ("bridge-pub-get", "generate-bridge"):
+            self.assertEqual(self.pubspec_at_labels[label], temporary)
+        for label in ("shipping-pub-get", "check-entire-app", "build-entire-app", "analyze-entire-flutter"):
+            self.assertEqual(self.pubspec_at_labels[label], raw)
+        self.assertEqual((self.output / "rustdesk/flutter/pubspec.yaml").read_bytes(), raw)
+        proof = json.loads((self.output / "bridge-pubspec.json").read_text())
+        self.assertTrue(proof["shippingBytesRestored"])
+        self.assertEqual(proof["shippingBeforeSha256"], proof["shippingAfterSha256"])
+        self.assertNotEqual(proof["bridgeOnlySha256"], proof["shippingAfterSha256"])
+
+    def test_failed_bridge_also_restores_shipping_manifest_before_closing(self):
+        raw = (self.source / "flutter/pubspec.yaml").read_bytes()
+        self.fail_label = "generate-bridge"
+        with self.assertRaises(DRIVER.Refusal):
+            self.build()
+        self.assertEqual((self.output / "rustdesk/flutter/pubspec.yaml").read_bytes(), raw)
+        self.assertFalse(self.result()["buildQualified"])
+        self.assertNotIn("shipping-pub-get", self.labels)
+        self.assertNotIn("check-entire-app", self.labels)
+
+    def test_bridge13_input_cannot_be_accepted_as_shipping_manifest(self):
+        (self.source / "flutter/pubspec.yaml").write_bytes(b"dependencies:\n  extended_text: 13.0.0\n")
+        with self.assertRaisesRegex(DRIVER.Refusal, "shipping extended_text14"):
+            self.build()
+        self.assertNotIn("bridge-pub-get", self.labels)
+        self.assertNotIn("build-entire-app", self.labels)
 
     def test_failed_command_keeps_actual_exit_raw_logs_and_cannot_qualify(self):
         self.fail_label = "compiled-support-guard"
