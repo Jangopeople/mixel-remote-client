@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exact new integration brackets and complete-tree historical admissions."""
 import ast
+import copy
 import hashlib
 import importlib.util
 import os
@@ -88,6 +89,58 @@ def terminal():
 
 
 class Controls(unittest.TestCase):
+    def test_mac_raw_modifier_plan_has_only_two_exact_source_successors(self):
+        _, _, plan = terminal()
+        names = {'flutter/lib/models/input_model.dart', 'flutter/lib/common/widgets/remote_input.dart'}
+        binding = lambda value: hashlib.sha256(__import__('json').dumps(
+            value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+        self.assertEqual(binding([row for row in plan['files'] if row['name'] not in names]),
+                         '87e22683d8b7cf1213b447c494b07e131d82a81c134bb121f273c7e4325e9868')
+        rows = {row['name']: copy.deepcopy(row) for row in plan['files'] if row['name'] in names}
+        focus = rows['flutter/lib/common/widgets/remote_input.dart']
+        self.assertEqual(focus['changes'][-1]['before'], '                    inputModel.handleKeyEvent(event),')
+        self.assertEqual(focus['changes'][-1]['after'], '                    inputModel.handleFocusKeyEvent(event),')
+        focus['changes'].pop()
+        focus['profiles']['final'] = '2f2ac295d9cd3500797e863d566fabb4b3cfb7ab253836a6a094faa85112eb56'
+        self.assertEqual(binding(focus), '65509ae0d41f48993d4132aa9116b078435ca545c401268600da93e10cb74f61')
+        model = rows['flutter/lib/models/input_model.dart']
+        field = ('  // Non-synthesized Focus callbacks run after the current raw Mac message\n'
+                 '  // synchronized RawKeyboard. Never retain that snapshot outside the callback.\n'
+                 '  List<KeyDownEvent>? _macCurrentRawModifiers;\n')
+        getter = ('    final currentRaw = _macCurrentRawModifiers;\n'
+                  '    if (currentRaw != null) return currentRaw;\n')
+        chunk = model['changes'][1]
+        self.assertEqual(chunk['after'].count(field), 1)
+        self.assertEqual(chunk['after'].count(getter), 1)
+        chunk['after'] = chunk['after'].replace(field, '', 1).replace(getter, '', 1)
+        chunk['afterSha256'] = hashlib.sha256(chunk['after'].encode()).hexdigest()
+        chunk = model['changes'][5]
+        first = chunk['after'].index('  // The pinned Mac embedder\'s KeyData observes side-specific modifier bits;')
+        last = chunk['after'].index('  KeyEventResult handleKeyEvent(KeyEvent e) {')
+        self.assertIn('    if (!_usesMacFlutterModifiers || event.synthesized)', chunk['after'][first:last])
+        self.assertIn('    } finally {\n      _macCurrentRawModifiers = previous;', chunk['after'][first:last])
+        chunk['after'] = chunk['after'][:first] + chunk['after'][last:]
+        chunk['afterSha256'] = hashlib.sha256(chunk['after'].encode()).hexdigest()
+        model['profiles']['final'] = 'a15f40adcf4887b146b78caa9c183938d1023fcb5dc31e71c64f17093d389b02'
+        self.assertEqual(binding(model), 'f156c830d2a830489f48f09003e989cb8d7962bfb9bc7866a844490704b19b1c')
+
+    def test_mac_generic_fixture_retains_every_prior_production_assertion(self):
+        text = (ROOT/'scripts/fixtures/input-lifecycle/source2_pointer_modifiers_test.dart').read_text()
+        marker = '\n  // Model the pinned macOS embedder\'s generic-only flags:'
+        self.assertEqual(text.count(marker), 1)
+        prior = text.split(marker)[0] + '}\n'
+        prior = prior.replace("import 'dart:ui' as ui show KeyData, KeyEventType;\n", '', 1)
+        prior = prior.replace('  int? failSynchronouslyOnHid;\n', '', 1)
+        method = ('Future<void> sessionHandleFlutterKeyEvent({required UuidValue sessionId, required String character, '
+                  'required int usbHid, required int lockModes, required bool downOrUp, dynamic hint})')
+        refusal = ("\n    if (usbHid == failSynchronouslyOnHid) {\n"
+                   "      throw StateError('owned synchronous bridge refusal');\n    }")
+        self.assertEqual(prior.count(method + ' {' + refusal), 1)
+        prior = prior.replace(method + ' {' + refusal, method + ' async {', 1)
+        prior = prior.replace('    return Future<void>.value();\n', '', 1)
+        self.assertEqual(hashlib.sha256(prior.encode()).hexdigest(),
+                         '65d294d32c706c8d03e53428d1cae15fb69921ed3d53a9cf03cf6bdbb7a2a7d7')
+
     def test_debian_ownership_hook_is_exactly_packaging_bound_and_original_bytes_recover(self):
         name = 'scripts/apply-branding.sh'
         final = P.canonical(P.receiver_projection().inverse((ROOT / name).read_bytes(), name))[0]
@@ -285,7 +338,7 @@ class Controls(unittest.TestCase):
 
     def test_mac_regressions_are_exact_job_bound_and_fatal_if_missing(self):
         name = '.github/workflows/build.yml'
-        final = (ROOT / name).read_text(encoding='utf-8')
+        final = P.canonical(P.receiver_projection().inverse((ROOT / name).read_bytes(), name))[0]
         block = P.MAC_REGRESSIONS
         self.assertEqual(final.count(block), 1)
         before, addition, after = P.workflow_hunks()['macos'][0]
@@ -301,9 +354,10 @@ class Controls(unittest.TestCase):
         for changed in mutants:
             self.assertNotEqual(changed, final)
             with self.assertRaises(ValueError):
-                current_to_canonical(changed.encode(), name)
+                previous_receiver_to_canonical(changed.encode(), name)
         # Another job with an identical analyzer command cannot own this block.
-        self.assertEqual(current_to_canonical(final.encode(), name), current_to_canonical(compose_current(current_to_canonical(final.encode(), name), name), name))
+        prior = previous_receiver_to_canonical(final.encode(), name)
+        self.assertEqual(prior, current_to_canonical(compose_current(prior, name), name))
 
     def test_native_job_missing_duplicate_moved_mutated_or_reordered_refuses(self):
         name = '.github/workflows/build.yml'

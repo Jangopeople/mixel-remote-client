@@ -130,6 +130,30 @@ class Controls(unittest.TestCase):
                     self.assertEqual(P.compose(previous, name), final)
                     self.assertEqual(P.canonical(previous)[1], newline)
 
+    def test_mac_raw_modifier_recipe_profiles_are_exact_and_job_bound(self):
+        name = '.github/workflows/build.yml'
+        text = P.canonical((ROOT/name).read_bytes())[0]
+        start = text.index('      - name: Prove desktop input lifetime regressions\n')
+        end = text.index('          python3 scripts/fixtures/input-lifecycle/native_lease_gate.py', start)
+        block = text[start:end]
+        for newline in ('\n', '\r\n'):
+            final = text.replace('\n', newline).encode()
+            prior = P.mac_raw_modifier_workflow(final, name)
+            self.assertEqual(P.canonical(prior)[1], newline)
+            self.assertEqual(P.mac_raw_modifier_workflow(prior, name), prior)
+            self.assertEqual(P.mac_raw_modifier_workflow(prior, name, restore=False), final)
+        self.assertIn('--expected-count 189', block)
+        for changed in (text.replace(block, '', 1), text.replace(block, block*2, 1),
+                        text.replace(block, '', 1) + block,
+                        text.replace('--expected-count 189', '--expected-count 188', 1),
+                        text.replace('--expected-count 189', '--expected-count 180', 1),
+                        text.replace('d3a8027e2c49534c7d685a847eeb4709774290d4fa3afa5ae7b717aa17b65607', '0'*64, 1)):
+            self.assertNotEqual(changed, text)
+            with self.assertRaises(ValueError):
+                P.mac_raw_modifier_workflow(changed.encode(), name)
+        drift = b'# unrelated body drift\n'
+        self.assertTrue(P.mac_raw_modifier_workflow(text.encode()+drift, name).endswith(drift))
+
     def test_each_missing_duplicate_changed_moved_or_reordered_hunk_refuses(self):
         for name, row in P.plan()['files'].items():
             text, _ = P.canonical((ROOT / name).read_bytes())

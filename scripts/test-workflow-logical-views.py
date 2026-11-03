@@ -194,12 +194,12 @@ class LogicalViews(unittest.TestCase):
                 terminal_block = terminal_block.replace(old, new, 1)
         self.assertEqual(raw.count(terminal_block), 1)
         self.assertEqual(previous.count(b'--expected-count 180'), 1)
-        self.assertEqual(raw.count(b'--expected-count 180'), 1)
+        self.assertEqual(raw.count(b'--expected-count 189'), 1)
         prior_values = (previous.replace(block, b'', 1), previous.replace(block, block * 2, 1),
                         previous.replace(b'--expected-count 180', b'--expected-count 179', 1),
                         previous.replace(block, b'', 1) + block)
         values = (raw.replace(terminal_block, b'', 1), raw.replace(terminal_block, terminal_block * 2, 1),
-                  raw.replace(b'--expected-count 180', b'--expected-count 179', 1),
+                  raw.replace(b'--expected-count 189', b'--expected-count 188', 1),
                   raw.replace(terminal_block, b'', 1) + terminal_block)
         for prior_value, value in zip(prior_values, values):
             self.assertNotEqual(prior_value, previous)

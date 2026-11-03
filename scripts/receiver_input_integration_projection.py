@@ -80,6 +80,26 @@ def owner(name):
     return module
 
 
+def mac_raw_modifier_workflow(raw, name, restore=True):
+    """Project only the exact successor Mac test recipe for historical guards."""
+    if name != '.github/workflows/build.yml':
+        return raw
+    text, newline = canonical(raw)
+    before = '      - name: Prove desktop input lifetime regressions\n        run: |\n          python3 scripts/test-support-input-lifecycle-flutter.py \\\n            --source rustdesk --flutter "$(command -v flutter)" \\\n            --fixture scripts/fixtures/input-lifecycle/source2_pointer_modifiers_test.dart \\\n            --expected-input a15f40adcf4887b146b78caa9c183938d1023fcb5dc31e71c64f17093d389b02 \\\n            --expected-fixture 65d294d32c706c8d03e53428d1cae15fb69921ed3d53a9cf03cf6bdbb7a2a7d7 \\\n            --relative-fixture scripts/fixtures/input-lifecycle/relative_mouse_late_enable_test.dart \\\n            --expected-relative-fixture 7e4148cf60fa04cb9c39fc70bb00e1f346e55006089f15242f7ec8fcd05a1ab0 \\\n            --expected-relative-model 99c3f74d8ca12bf27fa9269f74d9490fb7f859106cbc35a554938011d1edf9f6 \\\n            --expected-count 180 \\\n            --context-lock scripts/fixtures/input-lifecycle/flutter-test-context.lock \\\n            --output "$RUNNER_TEMP/mixel-input-lifecycle-flutter"\n'
+    after = '      - name: Prove desktop input lifetime regressions\n        run: |\n          python3 scripts/test-support-input-lifecycle-flutter.py \\\n            --source rustdesk --flutter "$(command -v flutter)" \\\n            --fixture scripts/fixtures/input-lifecycle/source2_pointer_modifiers_test.dart \\\n            --expected-input d3a8027e2c49534c7d685a847eeb4709774290d4fa3afa5ae7b717aa17b65607 \\\n            --expected-fixture 37b91c62c3be6d148d6f3f95f781d9108df608c5335630d8c4d20a6c2d4553c4 \\\n            --relative-fixture scripts/fixtures/input-lifecycle/relative_mouse_late_enable_test.dart \\\n            --expected-relative-fixture 7e4148cf60fa04cb9c39fc70bb00e1f346e55006089f15242f7ec8fcd05a1ab0 \\\n            --expected-relative-model 99c3f74d8ca12bf27fa9269f74d9490fb7f859106cbc35a554938011d1edf9f6 \\\n            --expected-count 189 \\\n            --context-lock scripts/fixtures/input-lifecycle/flutter-test-context.lock \\\n            --output "$RUNNER_TEMP/mixel-input-lifecycle-flutter"\n'
+    if text.count(before) + text.count(after) != 1:
+        raise ValueError('Changed/missing/duplicate Mac raw-modifier test recipe')
+    selected = after if text.count(after) else before
+    # The complete block must remain in the shipping Mac job. Other drift is
+    # preserved for the existing complete historical workflow hash to reject.
+    mac = text.index('  macos:\n')
+    windows = text.index('  windows:\n', mac)
+    if not mac < text.index(selected) < windows:
+        raise ValueError('Moved Mac raw-modifier test recipe')
+    wanted = before if restore else after
+    return text.replace(selected, wanted, 1).replace('\n', newline).encode()
+
+
 def project(raw, name, restore):
     """Inverse only exact ordered hunks, preserving other layers for their guards."""
     reviewed = plan()
@@ -88,6 +108,7 @@ def project(raw, name, restore):
     workflow = name.startswith('.github/workflows/')
     if restore and workflow:
         raw = workflow_policy().project_to_historical(raw, name)
+        raw = mac_raw_modifier_workflow(raw, name, restore=True)
     text, newline = canonical(raw)
     changes = reviewed['files'][name]['changes']
     positions = []
@@ -111,7 +132,10 @@ def project(raw, name, restore):
             (*OWNERS, 'receiver_native_only', '  receiver-native:')):
         raise ValueError('Additional unreviewed receiver integration invocation: ' + name)
     result = text.replace('\n', newline).encode()
-    return workflow_policy().compose_manual(result, name) if workflow and not restore else result
+    if workflow and not restore:
+        result = workflow_policy().compose_manual(result, name)
+        result = mac_raw_modifier_workflow(result, name, restore=False)
+    return result
 
 
 def workflow_policy():

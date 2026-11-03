@@ -1,4 +1,5 @@
 import 'dart:ui' show PointerDeviceKind;
+import 'dart:ui' as ui show KeyData, KeyEventType;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
@@ -20,6 +21,7 @@ class RecordingBridge implements RustdeskImpl {
   final List<String> calls = [];
   final List<String> legacyUps = [];
   bool remoteKeyboardEnabled = true;
+  int? failSynchronouslyOnHid;
   final Set<int> remoteHeld = {};
   final List<String> ignoredKeys = [];
   String source = 'Input source 2';
@@ -34,7 +36,10 @@ class RecordingBridge implements RustdeskImpl {
     calls.add('sessionEnterOrLeave:$enter');
   }
   @override
-  Future<void> sessionHandleFlutterKeyEvent({required UuidValue sessionId, required String character, required int usbHid, required int lockModes, required bool downOrUp, dynamic hint}) async {
+  Future<void> sessionHandleFlutterKeyEvent({required UuidValue sessionId, required String character, required int usbHid, required int lockModes, required bool downOrUp, dynamic hint}) {
+    if (usbHid == failSynchronouslyOnHid) {
+      throw StateError('owned synchronous bridge refusal');
+    }
     keys.add('${downOrUp ? 'down' : 'up'}:$usbHid');
     calls.add('key:${keys.last}');
     // Match the real server permission boundary: denied KeyEvents, including
@@ -46,6 +51,7 @@ class RecordingBridge implements RustdeskImpl {
     } else {
       remoteHeld.remove(usbHid);
     }
+    return Future<void>.value();
   }
   @override
   Future<void> sessionSendMouse({required UuidValue sessionId, required String msg, dynamic hint}) async {
@@ -1015,6 +1021,145 @@ void main() {
     expect(bridge.calls, isEmpty);
     expect(bridge.keys, isEmpty);
     expect(bridge.legacyUps, isEmpty);
+    expect(bridge.remoteHeld, isEmpty);
+    await mouse.removePointer();
+  });
+
+  // Model the pinned macOS embedder's generic-only flags: no side-bit KeyData
+  // Shift/Control/Alt/Meta event, followed by the actual raw Mac mask. The real
+  // KeyEventManager and Focus dispatch own the ordering; no modifier is inferred
+  // from the printable character.
+  int rawTimestamp = 0;
+  Future<void> rawMacM(WidgetTester tester, int modifiers,
+      {bool down = true, bool repeat = false, String character = 'M'}) async {
+    final manager = ServicesBinding.instance.keyEventManager;
+    manager.handleKeyData(ui.KeyData(
+        timeStamp: Duration(microseconds: ++rawTimestamp),
+        type: down ? (repeat ? ui.KeyEventType.repeat : ui.KeyEventType.down) : ui.KeyEventType.up,
+        physical: PhysicalKeyboardKey.keyM.usbHidUsage,
+        logical: LogicalKeyboardKey.keyM.keyId,
+        character: down ? character : null,
+        synthesized: false));
+    await manager.handleRawKeyMessage(<String, dynamic>{
+      'keymap': 'macos', 'type': down ? 'keydown' : 'keyup',
+      'keyCode': 46, 'characters': character, 'charactersIgnoringModifiers': 'm',
+      'modifiers': modifiers, 'repeat': repeat,
+    });
+    await tester.pump();
+  }
+
+  const genericFamilies = <(String, int, PhysicalKeyboardKey, PhysicalKeyboardKey)>[
+    ('Shift', RawKeyEventDataMacOs.modifierShift, PhysicalKeyboardKey.shiftLeft, PhysicalKeyboardKey.shiftRight),
+    ('Control', RawKeyEventDataMacOs.modifierControl, PhysicalKeyboardKey.controlLeft, PhysicalKeyboardKey.controlRight),
+    ('Alt', RawKeyEventDataMacOs.modifierOption, PhysicalKeyboardKey.altLeft, PhysicalKeyboardKey.altRight),
+    ('Meta', RawKeyEventDataMacOs.modifierCommand, PhysicalKeyboardKey.metaLeft, PhysicalKeyboardKey.metaRight),
+  ];
+  for (final family in genericFamilies) {
+    testWidgets('generic-only Mac ${family.$1} flags precede M and retire on clear', (tester) async {
+      final mouse = await mount(tester);
+      bridge.keys.clear();
+      await rawMacM(tester, family.$2);
+      final raw = RawKeyboard.instance.physicalKeysPressed;
+      final hardware = HardwareKeyboard.instance.physicalKeysPressed;
+      final sent = List<String>.of(bridge.keys);
+      await rawMacM(tester, 0, down: false, character: 'm');
+      expect(raw, containsAll([family.$3, family.$4]));
+      expect(hardware, isNot(contains(family.$3)));
+      expect(hardware, isNot(contains(family.$4)));
+      expect(sent, [wire('down', family.$3), wire('down', family.$4), wire('down', PhysicalKeyboardKey.keyM)]);
+      expect(bridge.remoteHeld, isEmpty);
+      expect(bridge.keys.where((key) => key == wire('up', family.$3)), hasLength(1));
+      expect(bridge.keys.where((key) => key == wire('up', family.$4)), hasLength(1));
+      await mouse.removePointer();
+    });
+  }
+
+  testWidgets('generic Mac both sides become explicit right then clear without extra Down', (tester) async {
+    final mouse = await mount(tester);
+    bridge.keys.clear();
+    await rawMacM(tester, RawKeyEventDataMacOs.modifierShift);
+    final first = List<String>.of(bridge.keys);
+    await rawMacM(tester, RawKeyEventDataMacOs.modifierShift | RawKeyEventDataMacOs.modifierRightShift, repeat: true);
+    final second = List<String>.of(bridge.keys);
+    await rawMacM(tester, 0, down: false, character: 'm');
+    expect(first, [wire('down', PhysicalKeyboardKey.shiftLeft), wire('down', PhysicalKeyboardKey.shiftRight), wire('down', PhysicalKeyboardKey.keyM)]);
+    expect(second.skip(first.length), [wire('up', PhysicalKeyboardKey.shiftLeft), wire('down', PhysicalKeyboardKey.keyM)]);
+    expect(bridge.keys.where((key) => key == wire('up', PhysicalKeyboardKey.shiftRight)), hasLength(1));
+    expect(bridge.remoteHeld, isEmpty);
+    await mouse.removePointer();
+  });
+
+  testWidgets('uppercase character and CapsLock never infer a Shift owner', (tester) async {
+    final mouse = await mount(tester);
+    bridge.keys.clear();
+    await rawMacM(tester, RawKeyEventDataMacOs.modifierCapsLock);
+    await rawMacM(tester, 0, down: false, character: 'm');
+    expect(bridge.keys, [wire('down', PhysicalKeyboardKey.keyM), wire('up', PhysicalKeyboardKey.keyM)]);
+    expect(bridge.remoteHeld, isEmpty);
+    await mouse.removePointer();
+  });
+
+  testWidgets('stale raw Mac flags never restore modifiers for synthetic or direct cleanup events', (tester) async {
+    final mouse = await mount(tester);
+    await rawMacM(tester, RawKeyEventDataMacOs.modifierShift);
+    final before = bridge.keys.length;
+    final manager = ServicesBinding.instance.keyEventManager;
+    for (final down in [true, false]) {
+      manager.handleKeyData(ui.KeyData(timeStamp: Duration(microseconds: ++rawTimestamp),
+          type: down ? ui.KeyEventType.down : ui.KeyEventType.up,
+          physical: PhysicalKeyboardKey.keyA.usbHidUsage, logical: LogicalKeyboardKey.keyA.keyId,
+          character: null, synthesized: true));
+    }
+    input.handleKeyEvent(const KeyDownEvent(physicalKey: PhysicalKeyboardKey.keyB,
+        logicalKey: LogicalKeyboardKey.keyB, timeStamp: Duration.zero));
+    input.handleKeyEvent(const KeyUpEvent(physicalKey: PhysicalKeyboardKey.keyB,
+        logicalKey: LogicalKeyboardKey.keyB, timeStamp: Duration.zero));
+    await tester.pump();
+    final after = bridge.keys.skip(before).toList();
+    await rawMacM(tester, 0, down: false, character: 'm');
+    expect(after, isNot(contains(wire('down', PhysicalKeyboardKey.shiftLeft))));
+    expect(after, isNot(contains(wire('down', PhysicalKeyboardKey.shiftRight))));
+    expect(bridge.remoteHeld, isEmpty);
+    await mouse.removePointer();
+  });
+
+  testWidgets('raw Mac callback exception restores the prior modifier snapshot boundary', (tester) async {
+    final mouse = await mount(tester);
+    bridge.keys.clear();
+    bridge.failSynchronouslyOnHid = PhysicalKeyboardKey.keyM.usbHidUsage & 0xffff;
+    await rawMacM(tester, RawKeyEventDataMacOs.modifierShift);
+    expect(tester.takeException(), isA<StateError>());
+    bridge.failSynchronouslyOnHid = null;
+    bridge.keys.clear();
+    input.handleKeyEvent(const KeyDownEvent(physicalKey: PhysicalKeyboardKey.keyB,
+        logicalKey: LogicalKeyboardKey.keyB, timeStamp: Duration.zero));
+    input.handleKeyEvent(const KeyUpEvent(physicalKey: PhysicalKeyboardKey.keyB,
+        logicalKey: LogicalKeyboardKey.keyB, timeStamp: Duration.zero));
+    final sent = List<String>.of(bridge.keys);
+    await rawMacM(tester, 0, down: false, character: 'm');
+    expect(sent.take(2), [wire('up', PhysicalKeyboardKey.shiftLeft), wire('up', PhysicalKeyboardKey.shiftRight)]);
+    expect(bridge.remoteHeld, isEmpty);
+    await mouse.removePointer();
+  });
+
+  testWidgets('generic Shift coexists with exact remapped Control and clear flags release stale hardware', (tester) async {
+    final mouse = await mount(tester);
+    await down(tester, PhysicalKeyboardKey.capsLock, LogicalKeyboardKey.controlLeft);
+    expect(bridge.remoteHeld, contains(PhysicalKeyboardKey.capsLock.usbHidUsage & 0xffff));
+    bridge.keys.clear();
+    await rawMacM(tester, RawKeyEventDataMacOs.modifierShift |
+        RawKeyEventDataMacOs.modifierControl | RawKeyEventDataMacOs.modifierLeftControl);
+    final sent = List<String>.of(bridge.keys);
+    await rawMacM(tester, 0, down: false, character: 'm');
+    // The current raw clear is authoritative even though the KeyData physical
+    // CapsLock->Control owner remains registered until its own later Up.
+    expect(HardwareKeyboard.instance.lookUpLayout(PhysicalKeyboardKey.capsLock), LogicalKeyboardKey.controlLeft);
+    final heldAfterClear = Set<int>.of(bridge.remoteHeld);
+    await up(tester, PhysicalKeyboardKey.capsLock, LogicalKeyboardKey.controlLeft);
+    expect(sent, [wire('down', PhysicalKeyboardKey.shiftLeft), wire('down', PhysicalKeyboardKey.shiftRight),
+      wire('down', PhysicalKeyboardKey.keyM)]);
+    expect(sent, isNot(contains(wire('down', PhysicalKeyboardKey.controlLeft))));
+    expect(heldAfterClear, isEmpty);
     expect(bridge.remoteHeld, isEmpty);
     await mouse.removePointer();
   });

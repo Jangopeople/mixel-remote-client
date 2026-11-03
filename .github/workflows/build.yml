@@ -842,12 +842,12 @@ jobs:
           python3 scripts/test-support-input-lifecycle-flutter.py \
             --source rustdesk --flutter "$(command -v flutter)" \
             --fixture scripts/fixtures/input-lifecycle/source2_pointer_modifiers_test.dart \
-            --expected-input a15f40adcf4887b146b78caa9c183938d1023fcb5dc31e71c64f17093d389b02 \
-            --expected-fixture 65d294d32c706c8d03e53428d1cae15fb69921ed3d53a9cf03cf6bdbb7a2a7d7 \
+            --expected-input d3a8027e2c49534c7d685a847eeb4709774290d4fa3afa5ae7b717aa17b65607 \
+            --expected-fixture 37b91c62c3be6d148d6f3f95f781d9108df608c5335630d8c4d20a6c2d4553c4 \
             --relative-fixture scripts/fixtures/input-lifecycle/relative_mouse_late_enable_test.dart \
             --expected-relative-fixture 7e4148cf60fa04cb9c39fc70bb00e1f346e55006089f15242f7ec8fcd05a1ab0 \
             --expected-relative-model 99c3f74d8ca12bf27fa9269f74d9490fb7f859106cbc35a554938011d1edf9f6 \
-            --expected-count 180 \
+            --expected-count 189 \
             --context-lock scripts/fixtures/input-lifecycle/flutter-test-context.lock \
             --output "$RUNNER_TEMP/mixel-input-lifecycle-flutter"
           python3 scripts/fixtures/input-lifecycle/native_lease_gate.py \
