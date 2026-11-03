@@ -201,6 +201,57 @@ ASSEMBLE_TARGET = '\t\t33CC111A2044C6BA0003C045 /* Flutter Assemble */ = {\n\t\t
 OLD_ASSEMBLE_PHASE = '\t\t33CC111E2044C6BF0003C045 /* ShellScript */ = {\n\t\t\tisa = PBXShellScriptBuildPhase;\n\t\t\tbuildActionMask = 2147483647;\n\t\t\tfiles = (\n\t\t\t);\n\t\t\tinputFileListPaths = (\n\t\t\t\tFlutter/ephemeral/FlutterInputs.xcfilelist,\n\t\t\t);\n\t\t\tinputPaths = (\n\t\t\t\tFlutter/ephemeral/tripwire,\n\t\t\t);\n\t\t\toutputFileListPaths = (\n\t\t\t\tFlutter/ephemeral/FlutterOutputs.xcfilelist,\n\t\t\t);\n\t\t\toutputPaths = (\n\t\t\t);\n\t\t\trunOnlyForDeploymentPostprocessing = 0;\n\t\t\tshellPath = /bin/sh;\n\t\t\tshellScript = "\\"$FLUTTER_ROOT\\"/packages/flutter_tools/bin/macos_assemble.sh && touch Flutter/ephemeral/tripwire";\n\t\t};\n'
 NEW_ASSEMBLE_PHASE = '\t\t33CC111E2044C6BF0003C045 /* ShellScript */ = {\n\t\t\tisa = PBXShellScriptBuildPhase;\n\t\t\talwaysOutOfDate = 1;\n\t\t\tbuildActionMask = 2147483647;\n\t\t\tfiles = (\n\t\t\t);\n\t\t\tinputFileListPaths = (\n\t\t\t\tFlutter/ephemeral/FlutterInputs.xcfilelist,\n\t\t\t);\n\t\t\tinputPaths = (\n\t\t\t\tFlutter/ephemeral/tripwire,\n\t\t\t);\n\t\t\toutputFileListPaths = (\n\t\t\t\tFlutter/ephemeral/FlutterOutputs.xcfilelist,\n\t\t\t);\n\t\t\toutputPaths = (\n\t\t\t);\n\t\t\trunOnlyForDeploymentPostprocessing = 0;\n\t\t\tshellPath = /bin/sh;\n\t\t\tshellScript = "\\"$FLUTTER_ROOT\\"/packages/flutter_tools/bin/macos_assemble.sh && touch Flutter/ephemeral/tripwire";\n\t\t};\n'
 
+ORIGINAL_PODFILE_SHA256 = '3c88490591c27fd84832e68a0ecede1fc9a79c6d49a341acc5ee1a5ea7ec5687'
+OLD_POD_POST_INSTALL = '''post_install do |installer|
+  installer.pods_project.targets.each do |target|
+    flutter_additional_macos_build_settings(target)
+  end
+end
+'''
+
+
+def pod_post_install(minimum):
+    if minimum not in ('10.14', '12.3'):
+        raise RuntimeError('Unsupported advertised CocoaPods minimum')
+    return '''post_install do |installer|
+  mixel_advertised_minimum = Gem::Version.new('@MINIMUM@')
+  mixel_build_minimum = Gem::Version.new(ENV.fetch('MACOSX_DEPLOYMENT_TARGET', mixel_advertised_minimum.to_s))
+  unless mixel_build_minimum == mixel_advertised_minimum
+    raise 'Mixel CocoaPods minimum differs from the advertised application minimum'
+  end
+  installer.pods_project.targets.each do |target|
+    flutter_additional_macos_build_settings(target)
+    # Apply after Flutter's defaults; retain every higher dependency minimum.
+    target.build_configurations.each do |configuration|
+      existing = configuration.build_settings['MACOSX_DEPLOYMENT_TARGET']
+      if existing.nil? || Gem::Version.new(existing.to_s) < mixel_build_minimum
+        configuration.build_settings['MACOSX_DEPLOYMENT_TARGET'] = mixel_build_minimum.to_s
+      end
+    end
+  end
+end
+'''.replace('@MINIMUM@', minimum)
+
+
+def patch_pod_minimum(pods, minimum):
+    """Clamp each generated pod configuration to the exact advertised minimum."""
+    newline = '\r\n' if '\r\n' in pods else '\n'
+    logical = pods.replace('\r\n', '\n')
+    if '\r' in logical or logical.replace('\n', newline) != pods:
+        raise RuntimeError('Mixed CocoaPods source newlines')
+    if re.findall(r"^platform :osx, '([0-9.]+)'$", logical, re.M) not in [['10.14'], ['12.3']]:
+        raise RuntimeError('Pinned CocoaPods minimum changed')
+    profiles = (OLD_POD_POST_INSTALL, pod_post_install('10.14'), pod_post_install('12.3'))
+    if sum(logical.count(profile) for profile in profiles) != 1:
+        raise RuntimeError('Pinned CocoaPods post-install hook changed')
+    for profile in profiles[1:]:
+        logical = logical.replace(profile, OLD_POD_POST_INSTALL, 1)
+    original = re.sub(r"^platform :osx, '(?:10\.14|12\.3)'$", "platform :osx, '10.14'", logical, flags=re.M)
+    if hashlib.sha256(original.encode()).hexdigest() != ORIGINAL_PODFILE_SHA256:
+        raise RuntimeError('Pinned complete CocoaPods source changed')
+    configured = re.sub(r"^platform :osx, '(?:10\.14|12\.3)'$", "platform :osx, '" + minimum + "'", original, flags=re.M)
+    return configured.replace(OLD_POD_POST_INSTALL, pod_post_install(minimum), 1).replace('\n', newline)
+
 def patch_assemble_phase(project):
     eol = "\r\n" if "\r\n" in project else "\n"
     logical = project.replace("\r\n", "\n")
@@ -226,14 +277,13 @@ def configure_target(build, project, pods, info, architecture):
     current = re.findall(r'MACOSX_DEPLOYMENT_TARGET = ([0-9.]+);', project)
     if len(current) != 6 or len(set(current)) != 1 or current[0] not in ('10.14', '12.3'):
         raise RuntimeError('Pinned Runner deployment targets changed')
-    if re.findall(r"^platform :osx, '([0-9.]+)'$", pods, re.M) not in [['10.14'], ['12.3']]:
-        raise RuntimeError('Pinned CocoaPods minimum changed')
+    configured_pods = patch_pod_minimum(pods, minimum)
     if info.count('<key>LSMinimumSystemVersion</key>\n\t<string>$(MACOSX_DEPLOYMENT_TARGET)</string>') != 1:
         raise RuntimeError('Runner minimum OS metadata no longer follows its target')
     return (
         re.sub(r'MACOSX_DEPLOYMENT_TARGET=(?:10\.14|12\.3)', 'MACOSX_DEPLOYMENT_TARGET=' + minimum, build),
         re.sub(r'MACOSX_DEPLOYMENT_TARGET = (?:10\.14|12\.3);', 'MACOSX_DEPLOYMENT_TARGET = ' + minimum + ';', project),
-        re.sub(r"^platform :osx, '(?:10\.14|12\.3)'$", "platform :osx, '" + minimum + "'", pods, flags=re.M),
+        configured_pods,
     )
 
 

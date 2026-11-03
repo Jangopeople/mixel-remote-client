@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import stat
 import subprocess
@@ -263,7 +264,7 @@ def owned_directory(path):
     return path
 
 
-def local_admission(root, source, output, config, *, prepared):
+def macos_local_admission(root, source, output, config, *, prepared):
     """Admit only an explicit Mac checkout-local workspace, never Windows effects."""
     if os.name != "posix" or platform.system() != "Darwin" or config["host"] != "Darwin":
         raise Refusal("local application typecheck admission requires native macOS")
@@ -322,6 +323,247 @@ def local_admission(root, source, output, config, *, prepared):
         if info.st_uid != os.getuid() or (stat.S_ISREG(info.st_mode) and info.st_nlink != 1):
             raise Refusal("local application source must be current-user owned without hardlinked files")
     return root
+
+
+def require_windows_native_x64(process_machine, native_machine, pointer_bytes):
+    # IsWow64Process2 reports UNKNOWN for a native (non-WOW64) process. AMD64
+    # emulation on ARM64 and x86 WOW64 must not qualify a native x64 build host.
+    if (process_machine, native_machine, pointer_bytes) != (0, 0x8664, 8):
+        raise Refusal("local Windows admission requires actual native Windows x64")
+
+
+class WindowsSecurityProbe:
+    """Read the actual token SID and file owner/DACL; never alter security."""
+    def __init__(self):
+        if os.name != "nt" or platform.system() != "Windows":
+            raise Refusal("local Windows admission requires actual native Windows x64")
+        import ctypes
+        from ctypes import wintypes
+        self.ctypes, self.types = ctypes, wintypes
+        self.kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        self.security = ctypes.WinDLL("advapi32", use_last_error=True)
+        pointer = ctypes.c_void_p
+        self.kernel.GetCurrentProcess.restype = wintypes.HANDLE
+        self.kernel.IsWow64Process2.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.WORD), ctypes.POINTER(wintypes.WORD)]
+        self.kernel.IsWow64Process2.restype = wintypes.BOOL
+        process_machine, native_machine = wintypes.WORD(), wintypes.WORD()
+        if not self.kernel.IsWow64Process2(self.kernel.GetCurrentProcess(), ctypes.byref(process_machine), ctypes.byref(native_machine)):
+            raise Refusal("cannot query actual Windows process/native architecture")
+        require_windows_native_x64(process_machine.value, native_machine.value, ctypes.sizeof(pointer))
+        self.kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        self.kernel.CloseHandle.restype = wintypes.BOOL
+        self.kernel.LocalFree.argtypes = [pointer]
+        self.kernel.LocalFree.restype = pointer
+        self.security.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+        self.security.OpenProcessToken.restype = wintypes.BOOL
+        self.security.GetTokenInformation.argtypes = [wintypes.HANDLE, ctypes.c_int, pointer, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
+        self.security.GetTokenInformation.restype = wintypes.BOOL
+        self.security.ConvertSidToStringSidW.argtypes = [pointer, ctypes.POINTER(wintypes.LPWSTR)]
+        self.security.ConvertSidToStringSidW.restype = wintypes.BOOL
+        self.security.IsValidSid.argtypes = [pointer]
+        self.security.IsValidSid.restype = wintypes.BOOL
+        token = wintypes.HANDLE()
+        if not self.security.OpenProcessToken(self.kernel.GetCurrentProcess(), 0x0008, ctypes.byref(token)):
+            raise Refusal("cannot query the actual Windows process token")
+        try:
+            needed = wintypes.DWORD()
+            self.security.GetTokenInformation(token, 1, None, 0, ctypes.byref(needed))
+            if ctypes.get_last_error() != 122 or not 0 < needed.value <= 65536:
+                raise Refusal("actual Windows token identity size is invalid")
+            raw = ctypes.create_string_buffer(needed.value)
+            if not self.security.GetTokenInformation(token, 1, raw, needed, ctypes.byref(needed)):
+                raise Refusal("cannot read the actual Windows token user")
+            sid = ctypes.cast(raw, ctypes.POINTER(pointer))[0]
+            self.user_sid = self.sid_text(sid)
+        finally:
+            if not self.kernel.CloseHandle(token):
+                raise Refusal("Windows token query handle did not close")
+        self.kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, pointer, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+        self.kernel.CreateFileW.restype = wintypes.HANDLE
+        self.kernel.GetDriveTypeW.argtypes = [wintypes.LPCWSTR]
+        self.kernel.GetDriveTypeW.restype = wintypes.UINT
+        self.kernel.GetVolumeInformationW.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD,
+            ctypes.POINTER(wintypes.DWORD), ctypes.POINTER(wintypes.DWORD), ctypes.POINTER(wintypes.DWORD),
+            wintypes.LPWSTR, wintypes.DWORD]
+        self.kernel.GetVolumeInformationW.restype = wintypes.BOOL
+        self.volume_serials = {}
+        self.security.GetSecurityInfo.argtypes = [wintypes.HANDLE, ctypes.c_int, wintypes.DWORD,
+            ctypes.POINTER(pointer), ctypes.POINTER(pointer), ctypes.POINTER(pointer), ctypes.POINTER(pointer), ctypes.POINTER(pointer)]
+        self.security.GetSecurityInfo.restype = wintypes.DWORD
+        self.security.IsValidAcl.argtypes = [pointer]
+        self.security.IsValidAcl.restype = wintypes.BOOL
+        self.security.GetAce.argtypes = [pointer, wintypes.DWORD, ctypes.POINTER(pointer)]
+        self.security.GetAce.restype = wintypes.BOOL
+
+    def sid_text(self, sid):
+        c, w = self.ctypes, self.types
+        if not sid or not self.security.IsValidSid(sid):
+            raise Refusal("invalid Windows security identifier")
+        value = w.LPWSTR()
+        if not self.security.ConvertSidToStringSidW(sid, c.byref(value)):
+            raise Refusal("cannot read a Windows security identifier")
+        try:
+            return value.value
+        finally:
+            self.kernel.LocalFree(c.cast(value, c.c_void_p))
+
+    def inspect(self, path):
+        c, w = self.ctypes, self.types
+        path = Path(path)
+        if not path.is_absolute() or not re.fullmatch(r"[A-Za-z]:\\", path.anchor):
+            raise Refusal("local Windows source/output must use an ordinary local drive")
+        if self.kernel.GetDriveTypeW(path.anchor) != 3:
+            raise Refusal("local Windows source/output must use a fixed local drive")
+        if path.anchor not in self.volume_serials:
+            serial = w.DWORD()
+            filesystem = c.create_unicode_buffer(64)
+            if not self.kernel.GetVolumeInformationW(path.anchor, None, 0, c.byref(serial), None, None, filesystem, 64):
+                raise Refusal("cannot read the actual local Windows volume identity")
+            if filesystem.value != "NTFS":
+                # The legacy 64-bit file index is a unique NTFS identity; ReFS
+                # would require a separately reviewed 128-bit FileIdInfo path.
+                raise Refusal("local Windows admission requires NTFS file identities and DACLs")
+            self.volume_serials[path.anchor] = (serial.value, filesystem.value)
+        # READ_CONTROL | FILE_READ_ATTRIBUTES, no write/delete/security-change
+        # access. OPEN_REPARSE_POINT keeps the final component uninterpreted.
+        handle = self.kernel.CreateFileW(str(path), 0x00020080, 3, None, 3, 0x02200000, None)
+        if handle is None or handle == c.c_void_p(-1).value:
+            raise Refusal("cannot read Windows file identity and security")
+        descriptor = c.c_void_p()
+        try:
+            class FileTime(c.Structure):
+                _fields_ = [("low", w.DWORD), ("high", w.DWORD)]
+            class FileInfo(c.Structure):
+                _fields_ = [("attributes", w.DWORD), ("created", FileTime), ("accessed", FileTime),
+                    ("written", FileTime), ("volume", w.DWORD), ("size_high", w.DWORD),
+                    ("size_low", w.DWORD), ("links", w.DWORD), ("index_high", w.DWORD), ("index_low", w.DWORD)]
+            self.kernel.GetFileInformationByHandle.argtypes = [w.HANDLE, c.POINTER(FileInfo)]
+            self.kernel.GetFileInformationByHandle.restype = w.BOOL
+            info = FileInfo()
+            if not self.kernel.GetFileInformationByHandle(handle, c.byref(info)):
+                raise Refusal("cannot read Windows file attributes/link count")
+            owner, dacl = c.c_void_p(), c.c_void_p()
+            status = self.security.GetSecurityInfo(handle, 1, 0x00000005, c.byref(owner), None,
+                                                   c.byref(dacl), None, c.byref(descriptor))
+            if status or not owner.value or not dacl.value or not self.security.IsValidAcl(dacl):
+                raise Refusal("Windows owner and non-null valid DACL are required")
+            class Acl(c.Structure):
+                _fields_ = [("revision", w.BYTE), ("reserved", w.BYTE), ("size", w.WORD),
+                            ("count", w.WORD), ("reserved2", w.WORD)]
+            acl = c.cast(dacl, c.POINTER(Acl)).contents
+            if acl.count > 4096:
+                raise Refusal("Windows DACL exceeds its finite bound")
+            entries = []
+            for index in range(acl.count):
+                ace = c.c_void_p()
+                if not self.security.GetAce(dacl, index, c.byref(ace)) or not ace.value:
+                    raise Refusal("cannot enumerate Windows DACL entries")
+                kind = c.c_ubyte.from_address(ace.value).value
+                flags = c.c_ubyte.from_address(ace.value + 1).value
+                size = c.c_ushort.from_address(ace.value + 2).value
+                if kind not in (0, 1) or size < 16:
+                    raise Refusal("unreviewed Windows DACL ACE type")
+                mask = w.DWORD.from_address(ace.value + 4).value
+                entries.append({"type": kind, "flags": flags, "mask": mask,
+                                "sid": self.sid_text(c.c_void_p(ace.value + 8))})
+            return {"ownerSid": self.sid_text(owner), "dacl": entries,
+                    "attributes": info.attributes, "links": info.links,
+                    "fileIndex": (info.index_high << 32) | info.index_low,
+                    "volumeSerial": info.volume, "driveVolumeSerial": self.volume_serials[path.anchor][0],
+                    "fileSystem": self.volume_serials[path.anchor][1],
+                    "directory": bool(info.attributes & 0x10)}
+        finally:
+            if descriptor.value:
+                self.kernel.LocalFree(descriptor)
+            if not self.kernel.CloseHandle(handle):
+                raise Refusal("Windows file-security query handle did not close")
+
+
+def windows_private_entry(path, probe, *, directory):
+    """Require real current-SID ownership and a private, ordinary NTFS object."""
+    before = path.lstat()
+    if (stat.S_ISLNK(before.st_mode) or getattr(before, "st_file_attributes", 0) & 0x400 or
+            (not directory and (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1)) or
+            (directory and not stat.S_ISDIR(before.st_mode))):
+        raise Refusal("local Windows entry must be ordinary without links/reparse points")
+    value = probe.inspect(path)
+    if (value["ownerSid"] != probe.user_sid or value["attributes"] & 0x400 or
+            value["directory"] != directory or (not directory and value["links"] != 1) or
+            not value["fileIndex"] or value["fileIndex"] != before.st_ino or
+            value["volumeSerial"] != value["driveVolumeSerial"] or value["fileSystem"] != "NTFS"):
+        raise Refusal("local Windows entry must be owned by the actual token SID and unaliased")
+    trusted = {probe.user_sid, "S-1-5-18", "S-1-5-32-544"}
+    owner_allow = False
+    if not value["dacl"]:
+        raise Refusal("local Windows entry requires a non-empty private DACL")
+    for ace in value["dacl"]:
+        if ace["type"] not in (0, 1):
+            raise Refusal("unreviewed private DACL ACE type")
+        if ace["type"] == 1:
+            continue
+        if ace["sid"] == "S-1-3-0" and ace["flags"] & 0x08:
+            continue  # Inherit-only CREATOR OWNER cannot grant another SID access.
+        if ace["sid"] not in trusted:
+            raise Refusal("local Windows DACL grants access beyond current owner, SYSTEM and Administrators")
+        if ace["sid"] == probe.user_sid and not ace["flags"] & 0x08 and ace["mask"]:
+            owner_allow = True
+    if not owner_allow:
+        raise Refusal("private Windows DACL must grant the actual owner direct access")
+    after = path.lstat()
+    identity = lambda item: (item.st_dev, item.st_ino, item.st_size, item.st_mtime_ns, item.st_mode, item.st_nlink)
+    if identity(before) != identity(after) or value["fileIndex"] != after.st_ino:
+        raise Refusal("local Windows entry changed while its security was read")
+
+
+def windows_local_admission(root, source, output, config, *, prepared):
+    """Explicit local compilation only: no account, desktop, service or policy effects."""
+    if config != matrix("x86_64-pc-windows-msvc"):
+        raise Refusal("local Windows admission requires the exact shipping x64 configuration")
+    probe = WindowsSecurityProbe()
+    if not Path(root).is_absolute():
+        raise Refusal("local Windows run root must be an explicit absolute path")
+    script = Path(__file__).absolute()
+    repo = ordinary_path(script.parents[1], exists=True)
+    if ordinary_path(Path.cwd(), exists=True) != repo:
+        raise Refusal("local Windows typecheck must start from this script's repository root")
+    windows_private_entry(script, probe, directory=False)
+    windows_private_entry(script.parent, probe, directory=True)
+    windows_private_entry(repo, probe, directory=True)
+    root = ordinary_path(root, exists=True)
+    source = ordinary_path(source, exists=True)
+    output = ordinary_path(output, exists=prepared)
+    if (root == repo or not inside(root, repo) or not inside(source, repo) or source == repo or
+            output == root or not inside(output, root) or inside(root, source) or
+            inside(output, source) or inside(source, output)):
+        raise Refusal("local Windows source/output must be separate inside the owned repository/run root")
+    environment = {key: value for key, value in os.environ.items() if not key.upper().startswith("GIT_")}
+    environment.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, GIT_OPTIONAL_LOCKS="0")
+    for ignored_path in (root, output):
+        relative = ignored_path.relative_to(repo).as_posix() + "/"
+        ignored = subprocess.run(["git", "-C", str(repo), "-c", "core.excludesFile=" + os.devnull,
+                                  "check-ignore", "--no-index", "--quiet", "--", relative],
+                                 env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+        if ignored.returncode != 0:
+            raise Refusal("local Windows run root and output must be Git-ignored")
+    for first, stop in ((root, repo), (source, repo), (output if prepared else output.parent, root)):
+        for path in (first, *first.parents):
+            windows_private_entry(path, probe, directory=True)
+            if path == stop:
+                break
+    for tree in ((source, output / "source") if prepared else (source,)):
+        ordinary_path(tree, exists=True)
+        windows_private_entry(tree, probe, directory=True)
+        for entry in inventory(tree):
+            if entry["kind"] == "symlink":
+                raise Refusal("local Windows source contains an indirect entry")
+            windows_private_entry(tree / entry["path"], probe, directory=entry["kind"] == "directory")
+    return root
+
+
+def local_admission(root, source, output, config, *, prepared):
+    if platform.system() == "Windows":
+        return windows_local_admission(root, source, output, config, prepared=prepared)
+    return macos_local_admission(root, source, output, config, prepared=prepared)
 
 
 def privacy_module():
@@ -402,7 +644,7 @@ def run_environment(config, source, output, environment, *, local_run_root=None)
         "cargoTargetDir": result["CARGO_TARGET_DIR"], "target": result["CARGO_BUILD_TARGET"],
         "macosMinimum": config["macosMinimum"],
         "msvcLinker": result.get("CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER"),
-        "admission": "local-macos" if local_run_root is not None else "github-hosted",
+        "admission": ("local-windows" if config["host"] == "Windows" else "local-macos") if local_run_root is not None else "github-hosted",
         "localRunRoot": str(local_run_root) if local_run_root is not None else None,
     })
     return result
@@ -476,6 +718,10 @@ def prepare(source, output, target, *, local_run_root=None):
     if local_run_root is not None:
         local_admission(local_run_root, source, output, config, prepared=False)
     output.mkdir(mode=0o700)
+    if local_run_root is not None and config["host"] == "Windows":
+        # NTFS ignores POSIX 0700 as a privacy proof. Inspect the newly created
+        # output before writing evidence or copying any source; never chmod ACLs.
+        windows_private_entry(output, WindowsSecurityProbe(), directory=True)
     # Reserve evidence before source validation/copying so even an absent bridge
     # or preparation refusal leaves an owned diagnostic artifact, never a retry.
     write_json(output / "prepare.attempt.json", {"schema": SCHEMA, "source": str(source),
@@ -547,7 +793,7 @@ def main():
     parser.add_argument("--target", required=True, choices=tuple(MATRIX))
     parser.add_argument("--run", action="store_true", help="run the real cargo check after hosted or explicit local admission")
     parser.add_argument("--local-run-root", type=Path,
-                        help="admit a native Mac run under this repository's owned _scratch or ignored build root")
+                        help="admit a native Mac or Windows run under this repository's owned private ignored build root")
     args = parser.parse_args()
     if args.local_run_root is not None and not args.run:
         parser.error("--local-run-root requires --run")

@@ -2,6 +2,50 @@
 
 ## 2026-11-03 — Local build recovery and exact Windows descriptor repair
 
+Later Nov3 actual progress (all qualification remains explicit): full local R2
+Rust app check PASS8m42, actual release Rust compile PASS14m47. Flutter then
+failed at CocoaPods10.13/10.14 targets rejected by Xcode27.2 (supported>=12.0).
+R2 is closed/unqualified; its Cargo.lock is unchanged and pipeline/supplied
+inputs/old codec cache all remain unchanged. Exact raw command061 and separate
+`_scratch/local-build/r2-stage-proof.json` retain the failure. Do not relabel it
+as a complete app. The Podfile hook now clamps every config to the declared
+architecture minimum, preserving higher pod requirements and Intel10.14. Six
+actual Ruby hook tests and the existing Mac source suite pass. Fresh old/new
+composition confirms ONLY Podfile bytes differ; Rust/native/build.py/Runner
+and generated ABI remain identical, supporting carefully bound Rust-product
+reuse in a fresh Flutter continuation. No global SDK/simulator changes occurred.
+
+Windows local application-check admission is now adopted: actual nativeAMD64,
+current SID/private DACL and fixedNTFS object identity are checked read-only;
+no CI identity or accounts/permissions are created.39 existing and14 new source
+controls pass. Root fixed a new cross-Python test serialization defect by
+pinning actual original function-source bytes (baselinea3b7aa90), rather than
+version-dependent ast.dump;14 pass on Python3.11 and3.14. Windows APIs/compiler
+and customer Accept are STILL not run. PC01 is visibly Windows-locked with
+CapsLock on, despite working NAS/VMM access. Existing human unlock request is
+pending; no further password attempts occurred.
+
+Mac signing prerequisites were actually checked: expected DeveloperID identity
+832784665DFBC9516AB4E7414285F5B8C54AA01A/team5277F8NDH4 exists, and existing
+mixel-notary profile history authenticated. A scratch signing-only worker is
+source-reviewed/tested, not executed; it never uploads or launches UI. Azure
+CLI cached account exists but actual resource access failedAADSTS50173 (grant
+revoked). Device renewal reached the human-only Microsoft approval screen but
+timed out pending (AADSTS70016), without approval/token extraction/logout. Do
+not keep restarting it unattended. A fresh human sign-in will be needed for
+Windows signing. JSign7.6 can use the existing ArtifactSigning account/profile
+from Mac via private in-memory Azure token/env handoff; it is not installed/run.
+
+Sixteen actual Rust product warnings plus the pinned rdev duplicate-empty-code
+warning are audited at `_scratch/warning-audit/r2-rust-warnings.json`: no live
+Mac input/cleanup disconnection found. These are retained documented warnings,
+not a warning-free or native-acceptance claim. Flutter also reports the existing
+CoreSimulator version mismatch, multiple matching Mac destinations and a
+modified-AppDelegate secure-restoration migration note. Scope/current causes
+are audited; do not restart/update shared simulator services or weaken the
+11-owner AppDelegate termination chain to hide a nonblocking notice.
+
+
 Current active worktree: `.worktrees/remote-reliability`, branch
 `fix/native-local-reliability`, recovered from source backup27fbe245 after the
 old temporary integration checkout disappeared. Canonical checkout stays73e7c3d.

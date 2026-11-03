@@ -120,7 +120,7 @@ assert arm[1].count('MACOSX_DEPLOYMENT_TARGET = 12.3;') == 6
 assert "platform :osx, '12.3'" in arm[2]
 assert patcher.configure_target(*arm, info, 'aarch64') == arm
 intel = patcher.configure_target(*arm, info, 'x86_64')
-assert intel == (build, patcher.patch_assemble_phase(project), pods)
+assert intel == (build, patcher.patch_assemble_phase(project), patcher.patch_pod_minimum(pods, '10.14'))
 assert patcher.configure_target(*intel, info, 'x86_64') == intel
 # The target, complete phase, inputs and outputs remain exact apart from the
 # explicit existing every-build policy. Other shell phases are untouched.
