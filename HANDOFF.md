@@ -24,8 +24,14 @@ evidence at `_scratch/verification/pc01-windows-sd`. Exact mutexAI repair is now
 with old-no-AI mutex refusal and a16-check native primitive. Root actual source
 custody57/probe6/integration16 pass; independent review clears. New epoch SHA
 f362530835fd3a45cb98d8616dc7517cc077189d700a1790e7700a434085c9a2.
-The fresh native rerun is PENDING human UAC response; no comparison normalization
-or rights change occurred.
+Fresh native rerun NOW PASS on PC01: actual csc x64/C#5/warnings-fatal compile0;
+probe exit0, pass=true, checks16, cleanup=true, errors0. It covers exact namespace,
+mutex and marker positives plus old/no-AI, rights/label/protection refusals.
+No comparison normalization or rights change occurred. Source+screenshots and
+screen-verified summary: `_scratch/verification/pc01-windows-sd/native-corrected-pass.json`.
+Original raw JSON remains in its owned PC01 TEMP -r2 tools directory pending
+native file transfer; it is not yet byte-transferred locally. This is primitive
+API proof, not full Rust custody/cross-SID/Windows application qualification.
 Complete custody runtime remains UNRUN; do not relabel either failed trace.
 
 Held-input proof now rejects any release/auth loss before Disconnect/viewer loss,
@@ -103,12 +109,32 @@ actually compiled the primitive. One53.687GB disk is fully allocated; D/E are
 empty CD-ROMs. A Windows build workspace with80GB free was requested; no VM/disk
 or user-data changes are authorized. Root owns Windows live UI/prerequisites.
 Existing Mixel1979PC01 Quick Support normal launch reached a verified-publisher
-Windows UAC prompt. Human Nein response is pending; no elevation, customer Accept
-or remote session occurred. Screenshot: `_scratch/access-proof/pc01-customer-launch-uac.jpg`. Use ONLY the existing
+Windows UAC prompt. The human/OS resolved it and the client reached Ready.
+Ordinary blue Accept was used twice without the elevation button. Screenshot: `_scratch/access-proof/pc01-customer-launch-uac.jpg`. Use ONLY the existing
 account; never create QA accounts or infer genuine Standard qualification from
-admin membership. Actual new Windows custody/runtime remains UNRUN. Customer
-link/Connect/Accept-before-control/control/clipboard/files/reconnect/held cleanup
-proof remains REQUIRED and UNRUN. Mac Ready/startup proof below is narrower.
+admin membership. Full new Windows custody/application runtime remains UNRUN.
+Root observed actual Windows PID1796 at LocalAppData/mixel-remote/Mixel-Remote.exe,
+SHA65266ed5d8ff05ccc52bf899d130a3e44a3da1b2b26f27a6ba4399952e41d63e,
+Authenticode Valid. All5 execution-policy scopes are Undefined; task PowerShell
+closed normally. No source revision is inferred from the cached runtime image.
+New local Windows wrapper is committed13625569:15 actual inert controls and
+independent source review pass; source-only bridge binding matches574 native
+inputs with only the exact Windows epoch pair. This is preparation, not a Windows
+compile. Export capsule again after all pipeline source is stable/tracked.
+
+Actual new Mac455 -> existing PC01 connection now PASS for ordinary Connect,
+waiting/no-desktop before blue Accept, live VP9, mouse focus/Start/Notepad, basic
+letters/digits/Space/Return, normal viewer close, fresh blue-consent reconnect,
+video and normal close. Proof: `_scratch/native-proof/mac-pc01-session-proof.json`.
+Shift is NOT qualified: native CUA Shift chords produce lowercase remotely in
+source2/Map, while identical local Shift+M yields M. Generic-only NSEvent flags
+versus Flutter3.27.4 side-bit handling is under focused repair in2 Dart leaves;
+actual native event flags were not captured. A diagnostic AX setValue restoration
+did not change Flutter model; invalid target M failed ID-does-not-exist and is
+excluded from reconnect proof. Normal typeText restored verified PC01 ID.
+Disposable Notepad closed without saving, test field cleared, both sessions ended.
+Current native customer-link/URI, cross-OS clipboard/files and held cleanup remain
+unqualified, as does every new Windows application acceptance gate.
 
 Actual local signing/notarization is COMPLETE for the ARM QA artifacts under
 `_scratch/macos-local-signing/finalized-r4-r2`. DeveloperID identity
@@ -138,7 +164,9 @@ Ready with distinct PID8626. About displays1.4.6 (64); no recent product diagnos
 report names were found in the scoped lookup. Screenshots: mac-ready.png,
 mac-about.png, mac-ready-after-relaunch.png in the same directory. These checks
 prove native startup/relaunch, not customer connection, file transfer or held-input
-cleanup. Physical control was released at2026-11-03T12:36:57Z.
+cleanup. Startup physical control was released at2026-11-03T12:36:57Z. Subsequent actual
+PC01 session testing above ended and desktop was released at13:23:54UTC.
+No current Mac desktop reservation; coordinate freshly before further native UI.
 
 Azure cached account is NOT
 usable: actual queryAADSTS50173 grant revoked. CLI device renewal reached human
