@@ -51,13 +51,19 @@ class Controls(unittest.TestCase):
         self.sdk=self.repo/'sdk'
         for name in ('Include/10.0/um/Windows.h','Lib/10.0/um/x64/kernel32.lib','Lib/10.0/ucrt/x64/ucrt.lib'):put(self.sdk,name)
         put(self.repo,'System32/cmd.exe')
+        self.llvm=self.repo/'llvm'
+        self.libclang=put(self.llvm,'bin/libclang.dll')
+        put(self.llvm,'bin/llvm-runtime.dll')
+        put(self.llvm,'lib/clang/19/include/stddef.h')
+        put(self.llvm,'build/retained-input.dat')
         self.pipeline=['scripts/local/build-windows.py','scripts/apply-branding.sh']
         for name in self.pipeline:put(self.repo,name)
         self.bridge=self.repo/'bridge';self.bridge.mkdir()
         self.files={name:hashlib.sha256((name+' generated').encode()).hexdigest() for name in B.BRIDGE_FILES}
         for name in B.BRIDGE_FILES:put(self.bridge,name,(name+' generated').encode())
         self.output=self.root/'fresh'
-        self.args=argparse.Namespace(source=self.source,flutter=self.flutter,vcpkg=self.vcpkg,bridge=self.bridge,run_root=self.root,output=self.output,jobs=1)
+        self.args=argparse.Namespace(source=self.source,flutter=self.flutter,vcpkg=self.vcpkg,bridge=self.bridge,libclang=self.libclang,run_root=self.root,output=self.output,jobs=1)
+        self.policy={'effective':'RemoteSigned','processEnvironment':'RemoteSigned','scopes':{'MachinePolicy':'Undefined','UserPolicy':'Undefined','Process':'RemoteSigned','CurrentUser':'Undefined','LocalMachine':'Undefined'}}
         self.labels=[];self.calls=[];self.fail=None;self.drift=None;self.stack=contextlib.ExitStack();self.addCleanup(self.stack.close)
         self.stack.enter_context(mock.patch.object(W,'EPOCH_BEFORE',hashlib.sha256(self.before).hexdigest()))
         self.stack.enter_context(mock.patch.object(W,'EPOCH_AFTER',hashlib.sha256(self.after).hexdigest()))
@@ -69,13 +75,14 @@ class Controls(unittest.TestCase):
         self.stack.enter_context(mock.patch.object(C.platform,'system',return_value='Windows'))
         self.stack.enter_context(mock.patch.object(C.platform,'machine',return_value='AMD64'))
         self.stack.enter_context(mock.patch.object(W,'pe_x64'))
+        self.native_clang=self.stack.enter_context(mock.patch.object(W,'libclang_version',return_value='clang version 19.1.5 (inert)'))
         self.stack.enter_context(mock.patch.object(W.shutil,'which',side_effect=lambda name,**kw:str(self.tools/name)))
         self.stack.enter_context(mock.patch.object(W.shutil,'disk_usage',return_value=types.SimpleNamespace(free=100*1024**3)))
         self.stack.enter_context(mock.patch.object(W.subprocess,'run',side_effect=self.process))
         self.stack.enter_context(mock.patch.dict(sys.modules,{'brotli':types.SimpleNamespace()}))
         import rust_toolchain
         self.stack.enter_context(mock.patch.object(rust_toolchain,'find_msvc_linker',return_value=self.tools/'link.exe'))
-        self.stack.enter_context(mock.patch.dict(os.environ,{'PATH':str(self.tools),'SystemRoot':str(self.repo),'VSCMD_ARG_TGT_ARCH':'x64','VSCMD_ARG_HOST_ARCH':'x64','INCLUDE':'inert','LIB':'inert','WindowsSdkDir':str(self.sdk),'WindowsSDKVersion':'10.0'},clear=True))
+        self.stack.enter_context(mock.patch.dict(os.environ,{'PATH':str(self.tools),'SystemRoot':str(self.repo),'VSCMD_ARG_TGT_ARCH':'x64','VSCMD_ARG_HOST_ARCH':'x64','INCLUDE':'inert','LIB':'inert','WindowsSdkDir':str(self.sdk),'WindowsSDKVersion':'10.0','PSExecutionPolicyPreference':'RemoteSigned','LIBCLANG_PATH':'untrusted caller path'},clear=True))
         old_call=W.Runner.call
         def recording(runner,label,*args,**kw):self.labels.append(label);return old_call(runner,label,*args,**kw)
         self.stack.enter_context(mock.patch.object(W.Runner,'call',recording))
@@ -99,6 +106,7 @@ class Controls(unittest.TestCase):
         elif label=='installed-rust-targets':out=(W.TARGET+'\n').encode()
         elif label=='flutter-version':out=json.dumps({'frameworkVersion':B.FLUTTER_VERSION,'frameworkRevision':B.FLUTTER_HEAD}).encode()
         elif label=='tool-pwsh.exe':out=b'7.5.0\n'
+        elif label=='powershell-execution-policy':out=json.dumps(self.policy).encode()
         if code==0:
             app=self.output/'rustdesk'
             if label=='apply-branding':(app/W.EPOCH).write_bytes(self.after)
@@ -117,6 +125,11 @@ class Controls(unittest.TestCase):
     def test_mocked_full_build_keeps_unsigned_scope_exact_order_and_input_identity(self):
         before=C.inventory(self.source);result=self.build()
         self.assertTrue(result['buildQualified']);self.assertEqual(before,C.inventory(self.source))
+        self.assertTrue(result['suppliedLibclangUnchanged']);self.assertTrue(result['executionPolicyQualified'])
+        clang=json.loads((self.output/'libclang-admission.json').read_text())
+        self.assertEqual(clang['dllSha256'],B.digest(self.libclang));self.assertEqual(clang['version'],'clang version 19.1.5 (inert)')
+        self.assertIn('build/retained-input.dat',{row['path'] for row in clang['inputs']})
+        self.native_clang.assert_called_once_with(self.libclang)
         for flag in ('nativeRuntimeQualified','signingQualified','publish'):self.assertIs(result[flag],False)
         sequence=['apply-branding','shared-bridge-rdev-profile','fetch-locked','shipping-pub-get','check-entire-app','build-entire-app','analyze-entire-flutter','compiled-support-guard','compiled-branding','prepare-unsigned-payload','package-unsigned-outer','verify-outer-manifest']
         self.assertEqual([self.labels.index(x) for x in sequence],sorted(self.labels.index(x) for x in sequence))
@@ -126,6 +139,11 @@ class Controls(unittest.TestCase):
             self.assertNotIn('GITHUB_ACTIONS',env);self.assertNotIn('RUNNER_TEMP',env)
             if label=='build-entire-app':
                 self.assertNotIn('CARGO_BUILD_TARGET',env);self.assertEqual(env['CARGO_BUILD_JOBS'],'1');self.assertEqual(env['VCPKG_MAX_CONCURRENCY'],'1')
+            if label in ('fetch-locked','check-entire-app','build-entire-app','compiled-support-guard'):
+                self.assertEqual(env['LIBCLANG_PATH'],str(self.libclang.parent))
+                self.assertEqual(env['PSExecutionPolicyPreference'],'RemoteSigned')
+        self.assertLess(self.labels.index('powershell-execution-policy'),self.labels.index('apply-branding'))
+        self.assertTrue(all('Set-ExecutionPolicy' not in ' '.join(argv) for _,argv,_ in self.calls))
         self.assertFalse((self.output/'build-active.json').exists())
         receipts=[json.loads(p.read_text()) for p in (self.output/'commands').glob('*.command.json')]
         self.assertTrue(all(p['scope']=='local unsigned native Windows x64 application build' for p in receipts))
@@ -183,6 +201,103 @@ class Controls(unittest.TestCase):
             with self.assertRaises(RuntimeError):W.batch(Path('cmd.exe'),Path(value),'pub','get')
         env=W.safe_environment({'Path':'safe','AZURE_CLIENT_SECRET':'secret','GITHUB_ACTIONS':'true','RUNNER_TEMP':'spoof','CARGO_BUILD_JOBS':'99'})
         self.assertEqual(env['PATH'],'safe');self.assertFalse(any('secret' in x for x in env.values()));self.assertNotIn('RUNNER_TEMP',env)
+
+    def test_only_existing_explicit_remotesigned_process_context_is_preserved(self):
+        env=W.safe_environment({'PSExecutionPolicyPreference':'RemoteSigned','LIBCLANG_PATH':'untrusted','LLVM_CONFIG_PATH':'untrusted'})
+        self.assertEqual(env['PSExecutionPolicyPreference'],'RemoteSigned');self.assertNotIn('LIBCLANG_PATH',env);self.assertNotIn('LLVM_CONFIG_PATH',env)
+        for value in ('Bypass','Unrestricted','Restricted','AllSigned','Undefined',''):
+            with self.subTest(value=value),self.assertRaisesRegex(RuntimeError,'existing explicit RemoteSigned'):
+                W.safe_environment({'PSExecutionPolicyPreference':value})
+        with mock.patch.dict(os.environ,{},clear=True):
+            with self.assertRaisesRegex(RuntimeError,'caller must explicitly authorize'):self.build()
+        self.assertFalse(self.calls);self.assertFalse(self.output.exists())
+
+    def test_execution_policy_requires_complete_effective_process_and_gpo_metadata(self):
+        self.assertEqual(W.execution_policy(json.dumps(self.policy)),self.policy)
+        mutations=[]
+        for key in ('MachinePolicy','UserPolicy','Process'):
+            changed=json.loads(json.dumps(self.policy));changed['scopes'][key]='Restricted';mutations.append(changed)
+        for key in ('effective','processEnvironment'):
+            changed=json.loads(json.dumps(self.policy));changed[key]='Bypass';mutations.append(changed)
+        changed=json.loads(json.dumps(self.policy));del changed['scopes']['LocalMachine'];mutations.append(changed)
+        for changed in mutations:
+            with self.subTest(changed=changed),self.assertRaises(RuntimeError):W.execution_policy(json.dumps(changed))
+
+    def test_restrictive_gpo_is_recorded_and_stops_before_branding(self):
+        self.policy['scopes']['MachinePolicy']='AllSigned';self.policy['effective']='AllSigned'
+        with self.assertRaisesRegex(RuntimeError,'Group Policy'):self.build()
+        result=json.loads((self.output/'build.result.json').read_text());self.assertFalse(result['buildQualified']);self.assertFalse(result['executionPolicyQualified'])
+        self.assertEqual(json.loads((self.output/'execution-policy.json').read_text()),self.policy)
+        self.assertNotIn('apply-branding',self.labels);self.assertIn('Group Policy',result['error'])
+
+    def test_libclang_requires_absolute_separate_ordinary_native_dependency(self):
+        for path in (Path('llvm/bin/libclang.dll'),self.tools/'clang.exe',self.source/'bin/libclang.dll',self.output/'bin/libclang.dll',self.repo.parent/'foreign/bin/libclang.dll'):
+            if path.is_absolute():put(path.parent,path.name)
+            with self.subTest(path=path),self.assertRaises(RuntimeError):
+                W.admit_libclang(path,self.repo,self.source,self.output,self.probe)
+        if self.output.exists():shutil.rmtree(self.output)
+        self.native_clang.side_effect=RuntimeError('actual DLL load refused')
+        with self.assertRaisesRegex(RuntimeError,'DLL load refused'):self.build()
+        self.assertFalse(self.calls);self.assertFalse(self.output.exists())
+
+    def test_missing_libclang_resource_headers_and_foreign_native_pe_refuse(self):
+        header=self.llvm/'lib/clang/19/include/stddef.h';header.unlink()
+        with self.assertRaisesRegex(RuntimeError,'resource headers'):self.build()
+        put(self.llvm,'lib/clang/19/include/stddef.h')
+        with mock.patch.object(W,'pe_x64',side_effect=RuntimeError('non-AMD64 DLL')):
+            with self.assertRaisesRegex(RuntimeError,'non-AMD64'):
+                W.admit_libclang(self.libclang,self.repo,self.source,self.output,self.probe)
+        self.assertFalse(self.calls);self.assertFalse(self.output.exists())
+
+    def test_libclang_links_and_untrusted_dependency_owner_refuse(self):
+        alias=self.llvm/'bin/alias.dll';os.link(self.libclang,alias)
+        with self.assertRaises(RuntimeError):self.build()
+        alias.unlink()
+        link=self.llvm/'lib/clang/19/include/indirect.h';link.symlink_to(self.llvm/'lib/clang/19/include/stddef.h')
+        with self.assertRaises(RuntimeError):self.build()
+        link.unlink()
+        def refuse(path,probe,*,directory):
+            if Path(path)==self.llvm:raise RuntimeError('untrusted dependency owner')
+        with mock.patch.object(C,'windows_private_entry',side_effect=refuse):
+            with self.assertRaisesRegex(RuntimeError,'untrusted dependency owner'):self.build()
+        self.assertFalse(self.calls);self.assertFalse(self.output.exists())
+
+    def test_wrapper_rejects_llvm_flutter_overlap_before_native_load_or_output(self):
+        nested=self.llvm/'flutter-sdk';nested.mkdir()
+        for flutter in (self.llvm,nested):
+            with self.subTest(flutter=flutter):
+                self.args.flutter=flutter
+                with self.assertRaisesRegex(RuntimeError,'separate owned dependency'):self.build()
+                self.native_clang.assert_not_called()
+                self.assertFalse(self.calls);self.assertFalse(self.output.exists())
+        self.args.flutter=self.flutter
+        original=self.libclang
+        self.args.libclang=put(self.flutter,'llvm/bin/libclang.dll')
+        with self.assertRaisesRegex(RuntimeError,'separate owned dependency'):self.build()
+        self.native_clang.assert_not_called();self.assertFalse(self.calls);self.assertFalse(self.output.exists())
+        self.args.libclang=original
+
+    def test_libclang_tree_change_during_identity_refuses_before_output(self):
+        def changed(path):
+            (self.llvm/'bin/llvm-runtime.dll').write_bytes(b'changed dependency');return 'clang version 19.1.5'
+        self.native_clang.side_effect=changed
+        with self.assertRaisesRegex(RuntimeError,'changed during admission'):self.build()
+        self.assertFalse(self.calls);self.assertFalse(self.output.exists())
+
+    def test_libclang_resource_or_dll_drift_cannot_qualify(self):
+        old_process=self.process
+        for index,name in enumerate(('lib/clang/19/include/stddef.h','bin/libclang.dll','build/retained-input.dat')):
+            with self.subTest(name=name):
+                self.output=self.root/('drift-'+str(index));self.args.output=self.output
+                target=self.llvm/name;before=target.read_bytes()
+                def changed(argv,**kw):
+                    result=old_process(argv,**kw)
+                    if self.labels[-1]=='compiled-support-guard':target.write_bytes(b'changed LLVM input')
+                    return result
+                with mock.patch.object(W.subprocess,'run',side_effect=changed):
+                    with self.assertRaises(RuntimeError):self.build()
+                result=json.loads((self.output/'build.result.json').read_text());self.assertFalse(result['buildQualified']);self.assertFalse(result['suppliedLibclangUnchanged'])
+                target.write_bytes(before)
     def test_default_plan_has_no_process_or_writes(self):
         with mock.patch.object(sys,'argv',['driver']),mock.patch.object(W,'build') as build,contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(W.main(),0);build.assert_not_called()
@@ -218,6 +333,18 @@ class Controls(unittest.TestCase):
 
 
 class FormatControls(unittest.TestCase):
+    def test_libclang_identity_uses_confined_loader_and_disposes_actual_version(self):
+        import ctypes
+        path=Path('/inert/llvm/bin/libclang.dll')
+        library=types.SimpleNamespace(**{name:mock.Mock() for name in ('clang_createIndex','clang_disposeIndex','clang_parseTranslationUnit2','clang_getClangVersion','clang_getCString','clang_disposeString')})
+        value=object();library.clang_getClangVersion.return_value=value;library.clang_getCString.return_value=b'clang version 19.1.5 (inert)'
+        with mock.patch.object(W.os,'name','nt'),mock.patch.object(ctypes,'CDLL',return_value=library) as loader:
+            self.assertEqual(W.libclang_version(path),'clang version 19.1.5 (inert)')
+        loader.assert_called_once_with(str(path),winmode=0x900);library.clang_disposeString.assert_called_once_with(value)
+        del library.clang_parseTranslationUnit2
+        with mock.patch.object(W.os,'name','nt'),mock.patch.object(ctypes,'CDLL',return_value=library):
+            with self.assertRaisesRegex(RuntimeError,'could not expose'):W.libclang_version(path)
+
     def test_actual_pe_parser_requires_amd64_and_allows_system_hardlinks_only(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary).resolve();data=bytearray(86);data[:2]=b'MZ';struct.pack_into('<I',data,60,80);data[80:86]=b'PE\0\0\x64\x86'
@@ -231,6 +358,8 @@ class FormatControls(unittest.TestCase):
         if os.name=='nt':self.skipTest('this control qualifies the non-Windows refusal')
         with self.assertRaisesRegex(RuntimeError,'actual native Windows|native Windows x64'):
             C.WindowsSecurityProbe()
+        with self.assertRaisesRegex(RuntimeError,'native Windows'):
+            W.libclang_version(Path('unused.dll'))
 
 Refusal=C.Refusal
 if __name__=='__main__':unittest.main(verbosity=2)

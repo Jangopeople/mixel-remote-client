@@ -18,6 +18,22 @@ Required existing Windows inputs:
   prerequisites include VC.Tools.x86.x64 and VC.CMake.Project. Driver activation
   does not create/import a shell or install a workload; start it from the already
   activated native developer shell.
+- A preinstalled native x64 LLVM dependency copied into a separate owned ordinary
+  directory inside this repository, with `bin/libclang.dll`, its adjacent runtime
+  dependencies and `lib/clang/<version>/include/stddef.h`. Pass the absolute DLL
+  path with `--libclang`; the driver queries its actual Clang version and required
+  exports, checks its AMD64 PE, and holds every file in that LLVM tree before and
+  after the build. Rust `libs/scrap/build.rs` uses bindgen, so the DLL and resource
+  headers are required independently of MSVC. The driver supplies only the admitted
+  DLL directory as `LIBCLANG_PATH`; inherited LLVM/libclang overrides are discarded.
+- A separately authorized, already active `RemoteSigned` **Process** execution
+  context. The driver preserves only an existing
+  `PSExecutionPolicyPreference=RemoteSigned`; it never sets execution policy,
+  unblocks files or accepts `Bypass`/`Unrestricted`. It queries actual effective
+  policy and all five scopes through the qualified PowerShell executable, saves
+  the metadata, and refuses restrictive Group Policy or a different effective
+  policy. Machine/User Policy remains authoritative. An approval to prepare
+  these sources does not authorize changing the caller's execution context.
 - Rust/Cargo1.75.0, host and installed target x86_64-pc-windows-msvc.
 - Official complete Flutter3.27.4 SDK, revision
   d8a9f9a52e5af486f80d932e838ee93861ffd863, including native Dart and the precached
@@ -69,6 +85,7 @@ Example from the exact repository root in the activated Windows developer shell:
 python scripts/local/build-windows.py --source "$PWD/rustdesk" `
   --flutter "$PWD/_scratch/flutter" --vcpkg "$PWD/_scratch/vcpkg" `
   --bridge "$PWD/_scratch/windows-bridge-r4-final" `
+  --libclang "$PWD/_scratch/llvm/bin/libclang.dll" `
   --run-root "$PWD/_scratch/windows-builds" `
   --output "$PWD/_scratch/windows-builds/x64-build" --jobs 1 --run
 ```
@@ -92,6 +109,10 @@ exit. Supplied source/installed vcpkg/capsule/pipeline/toolchain hashes are rech
 Raw argv/stdout/stderr/actual exits, codec members, tool identities, bridge inputs,
 payload and outer hashes are saved only under the fresh output. Failed or partial
 commands cannot qualify; output is never reused.
+`libclang-admission.json` retains the exact DLL version/hash and complete LLVM
+dependency inventory, including directories that would be application caches in
+a source tree. `execution-policy.json` retains the actual policy query even when
+it refuses. A changed LLVM runtime, header or DLL cannot qualify the build.
 
 A pass qualifies only an **unsigned** local payload and
 `dist/Mixel-Remote-UNSIGNED-local-QA.exe`. This outer embeds unsigned input; the

@@ -179,6 +179,9 @@ def admit_bridge(capsule,app,probe,repo):
 
 
 def safe_environment(inherited):
+    process_policy=[value for key,value in inherited.items() if key.casefold()=='psexecutionpolicypreference']
+    if process_policy and (any(value.casefold()!='remotesigned' for value in process_policy)):
+        raise Refusal('only an existing explicit RemoteSigned Process execution policy is admitted')
     for name in ('RUSTC','RUSTC_WRAPPER','RUSTC_WORKSPACE_WRAPPER','RUSTDOC','CARGO_TARGET_DIR','CARGO_BUILD_TARGET'):
         if inherited.get(name):raise Refusal('unexpected compiler/output override: '+name)
     keep={'path','systemroot','windir','comspec','temp','tmp','userprofile','home','appdata','localappdata','programfiles','programfiles(x86)',
@@ -191,8 +194,92 @@ def safe_environment(inherited):
         if key.upper() in selected and selected[key.upper()]!=value:raise Refusal('conflicting Windows environment aliases: '+key)
         selected[key.upper()]=value
     result=B.git_environment(selected)
+    if process_policy:result['PSExecutionPolicyPreference']='RemoteSigned'
     result.update(PYTHONUTF8='1',PYTHONIOENCODING='utf-8',PYTHONUNBUFFERED='1',CI='true',FLUTTER_SUPPRESS_ANALYTICS='true',DART_SUPPRESS_ANALYTICS='true')
     return result
+
+
+POLICY_QUERY="$scopes=@{}; foreach($scope in @('MachinePolicy','UserPolicy','Process','CurrentUser','LocalMachine')) { $scopes[$scope]=[string](Get-ExecutionPolicy -Scope $scope) }; [ordered]@{effective=[string](Get-ExecutionPolicy);scopes=$scopes;processEnvironment=$env:PSExecutionPolicyPreference} | ConvertTo-Json -Depth 3 -Compress"
+
+
+def execution_policy(raw):
+    proof=json.loads(raw)
+    scopes=('MachinePolicy','UserPolicy','Process','CurrentUser','LocalMachine')
+    if (set(proof)!= {'effective','scopes','processEnvironment'} or
+            not isinstance(proof['scopes'],dict) or set(proof['scopes'])!=set(scopes)):
+        raise Refusal('complete actual PowerShell execution-policy metadata required')
+    if any(proof['scopes'][scope] not in ('Undefined','RemoteSigned') for scope in ('MachinePolicy','UserPolicy')):
+        raise Refusal('Group Policy does not permit the explicit RemoteSigned process context')
+    if (proof['effective']!='RemoteSigned' or proof['scopes']['Process']!='RemoteSigned' or
+            proof['processEnvironment']!='RemoteSigned'):
+        raise Refusal('actual effective and explicit Process execution policy must both be RemoteSigned')
+    return proof
+
+
+def dependency_inventory(root,probe):
+    """Hold every LLVM dependency byte; application cache exclusions do not apply."""
+    entries=[]
+    def visit(directory):
+        C.windows_private_entry(directory,probe,directory=True)
+        for path in sorted(directory.iterdir()):
+            info=path.lstat();name=path.relative_to(root).as_posix()
+            directory_entry=stat.S_ISDIR(info.st_mode)
+            C.windows_private_entry(path,probe,directory=directory_entry)
+            if directory_entry:
+                entries.append({'path':name,'kind':'directory'});visit(path)
+            elif stat.S_ISREG(info.st_mode) and info.st_nlink==1:
+                entries.append({'path':name,'kind':'file','size':info.st_size,'sha256':B.digest(file(path))})
+            else:raise Refusal('ordinary independent LLVM dependency entries required')
+    visit(root)
+    return entries
+
+
+def libclang_version(path):
+    """Query the actual admitted DLL, without parsing or compiling source."""
+    if os.name!='nt':raise Refusal('libclang identity query requires native Windows')
+    import ctypes
+    class CXString(ctypes.Structure):
+        _fields_=[('data',ctypes.c_void_p),('private_flags',ctypes.c_uint)]
+    try:
+        # LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32:
+        # resolve private adjacent dependencies and OS runtimes, never cwd/PATH.
+        library=ctypes.CDLL(str(path),winmode=0x900)
+        for name in ('clang_createIndex','clang_disposeIndex','clang_parseTranslationUnit2'):
+            getattr(library,name)
+        library.clang_getClangVersion.argtypes=[];library.clang_getClangVersion.restype=CXString
+        library.clang_getCString.argtypes=[CXString];library.clang_getCString.restype=ctypes.c_char_p
+        library.clang_disposeString.argtypes=[CXString];library.clang_disposeString.restype=None
+        value=library.clang_getClangVersion()
+        try:
+            raw=library.clang_getCString(value)
+            if not raw or len(raw)>4096:raise Refusal('missing or oversized actual libclang version')
+            version=raw.decode('utf-8')
+        finally:library.clang_disposeString(value)
+    except (OSError,AttributeError,UnicodeError) as error:
+        raise Refusal('admitted native libclang DLL could not expose its actual identity') from error
+    if re.search(r'clang version \d+',version) is None:raise Refusal('unexpected actual libclang version')
+    return version
+
+
+def admit_libclang(path,repo,source,output,probe,dependencies=()):
+    path=Path(path)
+    if not path.is_absolute() or path.name.casefold()!='libclang.dll' or path.parent.name.casefold()!='bin':
+        raise Refusal('--libclang must be an absolute preinstalled bin/libclang.dll path')
+    C.ordinary_path(path.parent,exists=True);path=file(path);root=path.parent.parent
+    if (root==repo or not root.is_relative_to(repo) or any(root.is_relative_to(other) or other.is_relative_to(root)
+            for other in (source,output,*dependencies))):
+        raise Refusal('LLVM must be a separate owned dependency inside the repository')
+    for parent in (root,*root.parents):
+        C.windows_private_entry(parent,probe,directory=True)
+        if parent==repo:break
+    before=dependency_inventory(root,probe);pe_x64(path)
+    headers=sorted(root.glob('lib/clang/*/include/stddef.h'))
+    if not headers:raise Refusal('preinstalled LLVM resource headers are missing')
+    version=libclang_version(path)
+    if before!=dependency_inventory(root,probe):raise Refusal('LLVM dependency changed during admission')
+    return {'dll':str(path),'root':str(root),'directory':str(path.parent),'dllSha256':B.digest(path),
+            'version':version,'resourceHeaders':[p.relative_to(root).as_posix() for p in headers],
+            'inputs':before,'inputsSha256':C.binding(before)}
 
 
 def pe_x64(path):
@@ -278,6 +365,8 @@ class Runner(B.Runner):
 
 def build(args,repo=REPO):
     jobs=B.job_count(args.jobs);env=safe_environment(os.environ)
+    if env.get('PSExecutionPolicyPreference')!='RemoteSigned':
+        raise Refusal('caller must explicitly authorize an existing RemoteSigned Process context; driver never changes policy')
     probe=C.WindowsSecurityProbe() # Actual IsWow64Process2/token SID, never OS/env spoofing.
     if sys.version_info[:2]!=(3,11):raise Refusal('preinstalled native Python3.11 required')
     pe_x64(Path(sys.executable))
@@ -288,6 +377,8 @@ def build(args,repo=REPO):
         C.ordinary_path(value,exists=True);C.windows_private_entry(value,probe,directory=True)
         if not value.is_relative_to(repo) or value.is_relative_to(output) or output.is_relative_to(value):raise Refusal('dependency/capsule must be separate inside repository')
     if shutil.disk_usage(root).free<MIN_FREE_GIB*1024**3:raise Refusal('at least80GiB free on owned output volume required; no disk/VM change is performed')
+    flutter=C.ordinary_path(args.flutter,exists=True)
+    libclang=admit_libclang(args.libclang,repo,args.source,output,probe,(args.vcpkg,args.bridge,flutter))
     from rust_toolchain import find_msvc_linker,windows_environment_value
     linker=find_msvc_linker(env);pe_x64(linker);pe_x64(linker.with_name('cl.exe'))
     if any(windows_environment_value(env,name)!='x64' for name in ('VSCMD_ARG_TGT_ARCH','VSCMD_ARG_HOST_ARCH')):
@@ -304,7 +395,6 @@ def build(args,repo=REPO):
     bash_parent=Path(tools['bash.exe']).parent
     if not any(path.is_file() for path in (bash_parent/'msys-2.0.dll',bash_parent.parent/'usr/bin/msys-2.0.dll')):
         raise Refusal('actual installed Git Bash/MSYS runtime required; WSL is not the native Windows build shell')
-    flutter=C.ordinary_path(args.flutter,exists=True)
     flutter_bat=file(flutter/'bin/flutter.bat');dart=file(flutter/'bin/cache/dart-sdk/bin/dart.exe');pe_x64(dart)
     engine=file(flutter/'bin/cache/artifacts/engine/windows-x64-release/flutter_windows.dll');pe_x64(engine)
     file(flutter/'bin/cache/artifacts/engine/windows-x64-release/flutter_windows.dll.lib')
@@ -314,11 +404,14 @@ def build(args,repo=REPO):
     output.mkdir(mode=0o700);C.windows_private_entry(output,probe,directory=True)
     B.write_json(output/'build-active.json',{'pid':os.getpid(),'target':TARGET,'jobs':jobs})
     runner=Runner(output,env)
-    result={'buildQualified':False,'target':TARGET,'jobs':jobs,'unsignedOnly':True,'nativeRuntimeQualified':False,'signingQualified':False,'publish':False}
+    B.write_json(output/'libclang-admission.json',libclang)
+    result={'buildQualified':False,'target':TARGET,'jobs':jobs,'unsignedOnly':True,'nativeRuntimeQualified':False,'signingQualified':False,'publish':False,'executionPolicyQualified':False}
     before=vcpkg_before=vcpkg_metadata_before=capsule_before=pipeline=tool_inputs=None;lock=None;app=output/'rustdesk'
     try:
         def call(label,argv,cwd=repo,read=False):return runner.call(label,argv,cwd,read=read)
         def git(label,path,*args):return call(label,[tools['git.exe'],'-C',path,*args],read=True)
+        policy=json.loads(call('powershell-execution-policy',[tools['pwsh.exe'],'-NoLogo','-NoProfile','-NonInteractive','-Command',POLICY_QUERY],read=True))
+        B.write_json(output/'execution-policy.json',policy);execution_policy(json.dumps(policy));result['executionPolicyQualified']=True
         head=git('pipeline-head',repo,'rev-parse','HEAD').decode().strip()
         names=git('pipeline-files',repo,'ls-files','-z','--','scripts','branding','.github/workflows/build.yml').decode().split('\0')
         names=list(filter(None,names))+['scripts/local/build-windows.py'];pipeline=pipeline_files(repo,names)
@@ -346,9 +439,9 @@ def build(args,repo=REPO):
             argsv=['-NoLogo','-NoProfile','-NonInteractive','-Command','$PSVersionTable.PSVersion.ToString()'] if tool=='pwsh.exe' else ['-version' if tool=='magick.exe' else '--version']
             actual=call('tool-'+tool, [tools[tool],*argsv],read=True)
             if tool=='pwsh.exe' and not re.match(rb'7\.',actual.strip()):raise Refusal('preinstalled PowerShell7 required')
-        tool_inputs={str(path):B.digest(path) for path in (*rust_paths.values(),linker,linker.with_name('cl.exe'),*sdk_inputs,flutter_bat,dart,engine)}
+        tool_inputs={str(path):B.digest(path) for path in (*rust_paths.values(),linker,linker.with_name('cl.exe'),*sdk_inputs,flutter_bat,dart,engine,Path(libclang['dll']))}
         B.write_json(output/'toolchains.json',{'rustcVersion':rust.strip(),'cargoVersion':cargo.strip(),'sdkVersion':sdk_version,
-                     'flutterIdentity':identity,'actualInputHashes':tool_inputs})
+                     'flutterIdentity':identity,'actualInputHashes':tool_inputs,'libclangVersion':libclang['version']})
         owned_bin=output/'tools-bin';owned_bin.mkdir()
         (owned_bin/'python3').write_bytes(b'#!/usr/bin/env bash\nexec "$MIXEL_LOCAL_PYTHON" "$@"\n')
         home=output/'cargo-home';home.mkdir();pub=output/'pub-cache';pub.mkdir();temporary=output/'tmp';temporary.mkdir()
@@ -360,6 +453,7 @@ def build(args,repo=REPO):
                    CARGO_BUILD_JOBS=str(jobs),CMAKE_BUILD_PARALLEL_LEVEL=str(jobs),VCPKG_MAX_CONCURRENCY=str(jobs),
                    COMSPEC=str(command),OS='Windows_NT',
                    TEMP=str(temporary),TMP=str(temporary),
+                   LIBCLANG_PATH=libclang['directory'],
                    RDREPO=str(app).replace('\\','/'),BRANDING=str(repo/'branding').replace('\\','/'),MIXEL_LOCAL_PYTHON=sys.executable.replace('\\','/'))
         # Windows hardcodes target/release in build.py; native host target was proved above.
         for key in list(env):
@@ -406,12 +500,14 @@ def build(args,repo=REPO):
                 suppliedVcpkgUnchanged=vcpkg_before is not None and vcpkg_before==inventory(args.vcpkg/'installed'/TRIPLET,probe)
                     and vcpkg_metadata_before==inventory(args.vcpkg/'installed/vcpkg',probe),
                 bridgeInputUnchanged=capsule_before is not None and capsule_before==inventory(args.bridge,probe),
+                suppliedLibclangUnchanged=libclang['inputs']==dependency_inventory(Path(libclang['root']),probe),
                 pipelineInputsUnchanged=pipeline is not None and pipeline==pipeline_files(repo,names),
                 toolchainInputsUnchanged=tool_inputs is not None and all(B.digest(file(Path(p),independent=False))==sha for p,sha in tool_inputs.items()))
             if lock is not None:
                 current=B.digest(file(app/'Cargo.lock'));result.update(cargoLockBeforeSha256=lock,cargoLockAfterSha256=current,cargoLockUnchanged=current==lock,cargoLockAfterFinalSha256=current)
-            if not all(result.get(k) is True for k in ('suppliedSourceUnchanged','suppliedVcpkgUnchanged','bridgeInputUnchanged','pipelineInputsUnchanged','toolchainInputsUnchanged','cargoLockUnchanged')):
-                result.update(buildQualified=False,error='held lock or supplied source/dependency/capsule/pipeline changed or was not admitted')
+            if not all(result.get(k) is True for k in ('suppliedSourceUnchanged','suppliedVcpkgUnchanged','suppliedLibclangUnchanged','bridgeInputUnchanged','pipelineInputsUnchanged','toolchainInputsUnchanged','cargoLockUnchanged')):
+                result['buildQualified']=False
+                result.setdefault('error','held lock or supplied source/dependency/capsule/pipeline changed or was not admitted')
         except Exception as error:result.update(buildQualified=False,error=str(error))
         result['buildClosed']=True;B.write_json(output/'build.result.json',result);(output/'build-active.json').unlink()
     if not result['buildQualified']:raise Refusal(result.get('error','Windows build did not qualify'))
@@ -421,7 +517,7 @@ def build(args,repo=REPO):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    for name in ('source','flutter','vcpkg','bridge','run-root','output','mac-build','export-bridge'):parser.add_argument('--'+name,type=Path)
+    for name in ('source','flutter','vcpkg','bridge','libclang','run-root','output','mac-build','export-bridge'):parser.add_argument('--'+name,type=Path)
     parser.add_argument('--jobs',type=B.job_count,default=1);parser.add_argument('--run',action='store_true')
     args=parser.parse_args()
     try:
@@ -429,7 +525,7 @@ def main():
             if args.run or not args.mac_build:parser.error('--export-bridge requires --mac-build and cannot compile')
             export_bridge(args.mac_build,args.export_bridge)
         elif args.run:
-            if not all(getattr(args,n) for n in ('source','flutter','vcpkg','bridge','run_root','output')):parser.error('--run requires source/flutter/vcpkg/bridge/run-root/output')
+            if not all(getattr(args,n) for n in ('source','flutter','vcpkg','bridge','libclang','run_root','output')):parser.error('--run requires source/flutter/vcpkg/bridge/libclang/run-root/output')
             build(args)
         else:print('PLAN ONLY: native Windows x64, preinstalled pinned tools/codecs, private NTFS ignored output, exact six-file Mac bridge capsule; unsigned build/package only; jobs='+str(args.jobs)+'. No commands/writes.')
     except (OSError,ValueError,RuntimeError) as error:print('FAIL: '+str(error),file=sys.stderr);return 1

@@ -60,6 +60,24 @@ changes. VM133 qa-win10 only80GB total is not a qualified80GiB-free build host.
 VS2022 BuildTools17.14, x64MSVC14.44 and bundledCMake/Ninja/GitBash exist offPATH;
 several pinned toolchains still need preparation. No corrected Windows app built.
 
+The local Windows driver now requires a separate admitted native x64 libclang
+DLL/runtime/header tree, records its actual version and holds the complete tree,
+and forwards only that exact LIBCLANG_PATH. It preserves only an already explicit
+RemoteSigned Process context, records effective/all-five-scope policy and refuses
+restrictive Group Policy; it never changes policy. Independent review clears the
+3-file driver/test/doc change. Actual targeted25 controls pass, with related
+Windows-admission14, Rust-toolchain8 and app-check39 passing. Root raw logs are in
+`_scratch/verification/windows-driver-llvm-policy-root`. Actual WIN-BUILD policy is
+Restricted (all5 scopes Undefined): separate task-process RemoteSigned approval
+is PENDING, as is the new-disk/controlled-restart approval. Neither was executed.
+
+Read-only native token metadata also confirms builder User SID differs from its
+default Owner SID (Administrators). A task-only detached-token launcher is being
+prepared to set only the new child token's default owner to its own user SID,
+without changing user/groups/privileges, existing objects or parent tokens.
+No token mutation has been run. Do not relax current-SID ownership admission or
+repair/adopt existing source ownership. Provisioning remains scratch-only/inert.
+
 `_scratch/windows-build-transfer` contains verified branch bundle, clean source seed
 and intact current capsule, total18,054,298 bytes. Complete Git history verified;
 all archive members match untouched originals. No source re-export required: all
