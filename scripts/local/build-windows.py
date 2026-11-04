@@ -39,6 +39,14 @@ EPOCH_BEFORE='b662ed35b2bea75c7f02214424186b983096565ab79bfbcb5625b5a165e6aeb7'
 EPOCH_AFTER='f362530835fd3a45cb98d8616dc7517cc077189d700a1790e7700a434085c9a2'
 SHIPPING_PUBSPEC='cfa3c757fdd04e8a293b0f5bfcea286ec31e904786a4467d66867dbdd2ef5358'
 CODECS=('vpx','yuv','opus','aom','jpeg','turbojpeg')
+FLUTTER_PLUGIN_REGISTRANTS=frozenset({
+    'flutter/ios/Runner/GeneratedPluginRegistrant.h',
+    'flutter/ios/Runner/GeneratedPluginRegistrant.m',
+    'flutter/linux/flutter/generated_plugin_registrant.cc',
+    'flutter/linux/flutter/generated_plugin_registrant.h',
+    'flutter/windows/flutter/generated_plugin_registrant.cc',
+    'flutter/windows/flutter/generated_plugin_registrant.h',
+})
 Refusal=C.Refusal
 
 
@@ -78,11 +86,11 @@ def logical_file(path):
 
 
 def bridge_inputs(entries,root):
-    """Complete Rust/native/local dependency trees plus every Cargo/build input."""
+    """Authored Rust/native inputs; Flutter regenerates its plugin registrants."""
     result=[]
     for item in entries:
         name=item['path'];parts=Path(name).parts
-        if item['kind']!='file' or '.git' in parts or name in B.BRIDGE_FILES or name=='src/version.rs':continue
+        if item['kind']!='file' or '.git' in parts or name in B.BRIDGE_FILES or name=='src/version.rs' or name in FLUTTER_PLUGIN_REGISTRANTS:continue
         if (parts[0] in ('src','libs','.mixel-deps','.cargo') or
                 Path(name).name in ('Cargo.toml','Cargo.lock','build.rs') or
                 Path(name).suffix in ('.rs','.c','.h','.cpp','.hpp','.cc','.m','.mm','.S')):

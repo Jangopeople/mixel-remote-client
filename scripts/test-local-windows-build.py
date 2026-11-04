@@ -133,6 +133,17 @@ class Controls(unittest.TestCase):
         self.assertTrue(result['toolchainInputsUnchanged'])
         with self.assertRaises(RuntimeError):W.file(command)
 
+    def test_only_exact_generated_plugin_registrants_are_outside_rust_bridge_inputs(self):
+        before=W.bridge_inputs(C.inventory(self.source),self.source)
+        for name in W.FLUTTER_PLUGIN_REGISTRANTS:put(self.source,name,b'Flutter-generated registration\n')
+        self.assertEqual(W.bridge_inputs(C.inventory(self.source),self.source),before)
+        authored='flutter/windows/runner/flutter_window.cpp'
+        put(self.source,authored,b'authored native integration\n')
+        rows=W.bridge_inputs(C.inventory(self.source),self.source)
+        self.assertIn(authored,{row['path'] for row in rows})
+        for name in W.FLUTTER_PLUGIN_REGISTRANTS:(self.source/name).unlink()
+        self.assertEqual(W.bridge_inputs(C.inventory(self.source),self.source),rows)
+
     def test_system_command_drift_prevents_qualification(self):
         command=self.repo/'System32/cmd.exe';old_process=self.process
         def drift(argv,**kw):
