@@ -20,8 +20,8 @@
     "sha256": "56072c9855b016ff8e237c65a6ab93db61bfacfdb300a8577d4e04163fcf0542"
   },
   "scripts/fixtures/receiver-custodian-native/custodian-tests.rs": {
-    "bytes": 4137,
-    "sha256": "85ee5f78c1d89b17177b4b2672e36f4adc391a22cc0125ad05ae86d869c08767"
+    "bytes": 5906,
+    "sha256": "749ccff70e087014127211b2d8a93cb519b03bfe2fddd41031d232ca806d1117"
   },
   "scripts/fixtures/receiver-custodian-native/epoch-tests.rs": {
     "bytes": 3575,
@@ -53,11 +53,11 @@
   },
   "scripts/patch-support-receiver-custodian.py": {
     "bytes": 9609,
-    "sha256": "5cb0ce5fbbba1cf951066c11a8c955bf7e5b223c0f0ccd612e7445f07ff076c3"
+    "sha256": "6c07b73bc2ac889be3717746d586c3fcb094ec78d31427b295c534dabdeb3d37"
   },
   "scripts/patch-windows-compiler-integration.py": {
     "bytes": 4957,
-    "sha256": "02f6e1dcb031e04a1c28f802fbe7530a20771f70c034ca7027eaa724f380e7d8"
+    "sha256": "8a774fdccaa1e0f595c734b5873392619e234e37f01949be2d22ebf3a6a02a8f"
   },
   "scripts/support-receiver-custodian-epoch-windows.rs": {
     "bytes": 14862,
@@ -65,18 +65,18 @@
   },
   "scripts/support-receiver-custodian-plan.json": {
     "bytes": 430648,
-    "sha256": "d1612126db5d4b4784674fa4b5778344845de2aaf00d1c5345c7f2ab89bdd366"
+    "sha256": "4d474e5a58515ad193aa89c3ff2878d548ed038ec2cc048556b7fb2d44e75adb"
   },
   "scripts/support-receiver-custodian-windows.rs": {
-    "bytes": 33165,
-    "sha256": "41b02e7d52cc96812eeaf9ff7ae38e22396e308ee238573fd4a2ae364f7f5835"
+    "bytes": 36176,
+    "sha256": "79d9bb803c9a9bee7cf403fd919689ac6c18ae8fced88987b80fde022ece8bae"
   },
   "scripts/support-receiver-receipts.rs": {
     "bytes": 8756,
     "sha256": "c436a401639b4af73e71484ac4ce1a2aad773f1a0ccf9ac42a85606a0113d0c6"
   },
   "scripts/windows-compiler-integration-plan.json": {
-    "bytes": 8568,
-    "sha256": "5b7ca2c139ab305204ce6103a88d34ecace6f091eba33c72cd0bd4a574960903"
+    "bytes": 8682,
+    "sha256": "f52d8055d1161995b3c7f7b2196c3e9ecfc4363e301e3a5b538f7b6ff838a317"
   }
 }

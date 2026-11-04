@@ -274,7 +274,7 @@
     {
       "name": "src/server/mixel_receiver_custodian_windows.rs",
       "template": "support-receiver-custodian-windows.rs",
-      "sha256": "41b02e7d52cc96812eeaf9ff7ae38e22396e308ee238573fd4a2ae364f7f5835",
+      "sha256": "79d9bb803c9a9bee7cf403fd919689ac6c18ae8fced88987b80fde022ece8bae",
       "mode": 420
     },
     {

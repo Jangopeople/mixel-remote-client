@@ -12,7 +12,7 @@ from pathlib import Path
 import stat
 
 PLAN = Path(__file__).with_name('windows-compiler-integration-plan.json')
-PLAN_SHA = '5b7ca2c139ab305204ce6103a88d34ecace6f091eba33c72cd0bd4a574960903'
+PLAN_SHA = 'f52d8055d1161995b3c7f7b2196c3e9ecfc4363e301e3a5b538f7b6ff838a317'
 
 
 def sha(raw):

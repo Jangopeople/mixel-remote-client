@@ -35,7 +35,7 @@ impl Operation {
 struct Request { sequence:u64,publisher_handle:u64,publisher_session:u32,operation:Operation }
 #[derive(Serialize,Deserialize)]
 #[serde(deny_unknown_fields)]
-enum Response { Ready, Queued(u64), Refused(String), Block(String,String,bool), Cleaned(String), Retiring, Finished }
+enum Response { Ready, Queued(u64,Option<u64>), Refused(String), Block(String,String,bool), Cleaned(String,u64), Retiring, Finished }
 struct ChildAuthority { helper:Peer, session:epoch::SessionEpoch, link:AtomicBool }
 /// The original publisher event/process remains mandatory. This adds the
 /// expendable broker's lifetime only in the actual custodian process.
@@ -182,13 +182,53 @@ pub(crate) fn disconnect()->bool {
     // Timeout cannot manufacture CLOSED or admit another custodian epoch.
     value.state.load(Ordering::SeqCst)==4
 }
-struct RouteReply { peer:Peer,role:u8,reply:Reply }
-fn deliver(response:Response,routes:&mut HashMap<String,RouteReply>,awaited:Option<u64>,broker:&Broker)->ResultType<bool> {
+// Each authenticated child capture has its own request sequence. A CLEANED
+// frame can cross a later request for the same already-revoked token. Keep the
+// pending request until its capture ACK arrives; never confuse two captures,
+// ignore an unknown receipt, or manufacture a native cleanup acknowledgment.
+#[derive(Default,Debug,PartialEq,Eq)]
+struct CaptureReceipts { pending:Option<u64>, captured:Option<u64> }
+impl CaptureReceipts {
+    fn begin(&mut self,sequence:u64)->bool {
+        if sequence==0||self.pending.is_some()||self.captured.map(|old|sequence<=old).unwrap_or(false){return false;}
+        self.pending=Some(sequence);true
+    }
+    fn queued(&mut self,sequence:u64,capture:Option<u64>)->bool {
+        if self.pending!=Some(sequence){return false;}
+        let valid=match capture {
+            Some(value) if value==sequence=>self.captured.is_none(),
+            Some(value) if value>0&&value<sequence=>self.captured==Some(value),
+            None=>self.captured.is_none(),
+            _=>false,
+        };
+        if !valid{return false;}
+        self.captured=capture;self.pending=None;true
+    }
+    fn cleaned(&mut self,capture:u64)->bool {
+        if capture==0||self.captured!=Some(capture){return false;}
+        self.captured=None;true
+    }
+    fn idle(&self)->bool {self.pending.is_none()&&self.captured.is_none()}
+}
+struct RouteReply { peer:Peer,role:u8,reply:Reply,receipts:CaptureReceipts }
+fn deliver(response:Response,routes:&mut HashMap<String,RouteReply>,awaited:Option<(u64,&str)>,broker:&Broker)->ResultType<bool> {
     match response {
-        Response::Queued(sequence)=>{if Some(sequence)!=awaited{bail!("custodian acknowledgment identity");}Ok(true)},
+        Response::Queued(sequence,capture)=>{
+            let Some((expected,token))=awaited else{bail!("custodian unsolicited queue acknowledgment");};
+            if sequence!=expected{bail!("custodian acknowledgment identity");}
+            let route=routes.get_mut(token).ok_or_else(||hbb_common::anyhow::anyhow!("custodian queue route missing"))?;
+            if !route.receipts.queued(sequence,capture){bail!("custodian capture acknowledgment identity");}
+            if route.receipts.idle(){routes.remove(token);}
+            Ok(true)
+        },
         Response::Refused(token)=>{let route=routes.get(&token).ok_or_else(||hbb_common::anyhow::anyhow!("custodian unknown refusal"))?;if !(route.reply)(PortableReply::Refused(token)){bail!("custodian refusal delivery failed");}Ok(false)},
         Response::Block(token,request,ok)=>{let route=routes.get(&token).filter(|r|r.role!=0).ok_or_else(||hbb_common::anyhow::anyhow!("custodian unknown Block reply"))?;if !(route.reply)(PortableReply::Block(token,request,ok)){bail!("custodian Block delivery failed");}Ok(false)},
-        Response::Cleaned(token)=>{if routes.remove(&token).is_none(){bail!("custodian unknown cleanup receipt");}Ok(false)},
+        Response::Cleaned(token,capture)=>{
+            let route=routes.get_mut(&token).ok_or_else(||hbb_common::anyhow::anyhow!("custodian unknown cleanup receipt"))?;
+            if !route.receipts.cleaned(capture){bail!("custodian cleanup capture identity");}
+            if route.receipts.idle(){routes.remove(&token);}
+            Ok(false)
+        },
         Response::Retiring=>{
             // Authenticated child has permanently latched deny. Stop admission,
             // but drain already-owned frames before the final Close barrier.
@@ -263,11 +303,13 @@ async fn broker_loop(broker:Arc<Broker>,mut input:tokio::sync::mpsc::Receiver<Br
                     }
                     let reply=work.reply.take().ok_or_else(||hbb_common::anyhow::anyhow!("custodian reply route missing"))?;
                     // Retirement cannot overwrite a live native refusal/Block callback.
-                    if !matches!(&operation,Operation::Retire{..})||!routes.contains_key(&token){routes.insert(token.clone(),RouteReply{peer:source.clone(),role,reply});}
+                    let sequence=next;next=next.checked_add(1).ok_or_else(||hbb_common::anyhow::anyhow!("custodian request identity exhausted"))?;
+                    let route=routes.entry(token.clone()).or_insert_with(||RouteReply{peer:source.clone(),role,reply:reply.clone(),receipts:CaptureReceipts::default()});
+                    if !matches!(&operation,Operation::Retire{..}){route.reply=reply;}
+                    if !route.receipts.begin(sequence){bail!("custodian overlapping route admission");}
                     let mut transferred=ptr::null_mut();
                     if unsafe{DuplicateHandle(GetCurrentProcess(),source.process.raw(),child.process.raw(),&mut transferred,SYNC|0x1000,0,0)}==0{bail!("custodian readonly publisher transfer failed");}
                     operation.set_target(identity(&peer));
-                    let sequence=next;next=next.checked_add(1).ok_or_else(||hbb_common::anyhow::anyhow!("custodian request identity exhausted"))?;
                     send(&mut stream,&Request{sequence,publisher_handle:transferred as usize as u64,publisher_session,operation}).await?;
                     let until=std::time::Instant::now()+Duration::from_secs(1);
                     loop {
@@ -275,7 +317,7 @@ async fn broker_loop(broker:Arc<Broker>,mut input:tokio::sync::mpsc::Receiver<Br
                         let remaining=until.saturating_duration_since(std::time::Instant::now()).as_millis().min(1000)as u64;
                         if remaining==0{bail!("custodian queue admission unknown; no retry");}
                         let response=decode(stream.next_timeout(remaining).await?)?;
-                        if deliver(response,&mut routes,Some(sequence),&broker)?{break;}
+                        if deliver(response,&mut routes,Some((sequence,&token)),&broker)?{break;}
                     }
         }Ok(())
     }.await;
@@ -320,7 +362,7 @@ async fn child_loop(postfix:&str)->ResultType<()> {
         let response=match value{PortableReply::Refused(token)=>Response::Refused(token),PortableReply::Block(token,request,ok)=>Response::Block(token,request,ok)};
         tx.try_send(response).is_ok()
     });
-    let mut known=HashMap::<String,Owned>::new();
+    let mut known=HashMap::<String,(u64,Owned)>::new();
     let mut graceful=false;let mut retiring=false;let mut last=0u64;let mut timer=tokio::time::interval(Duration::from_millis(10));
     let result:ResultType<()>=async {
         send(&mut stream,&Response::Ready).await?;
@@ -337,7 +379,7 @@ async fn child_loop(postfix:&str)->ResultType<()> {
                     }
                     // Native callbacks precede their CLEANED event. Drain them
                     // first; completion cannot overtake a Block/refusal reply.
-                    if replies.is_empty(){flush_completions(&mut stream,&mut known,8).await?;}
+                    if replies.is_empty(){flush_completions(&mut stream,&mut known,&mut replies,8).await?;}
                 },
                 response=replies.recv()=>{if let Some(response)=response{send(&mut stream,&response).await?;}else{bail!("custodian reply path closed");}},
                 data=stream.next()=>{
@@ -347,14 +389,14 @@ async fn child_loop(postfix:&str)->ResultType<()> {
                     let publisher=borrowed_process(request.publisher_handle,request.publisher_session).ok_or_else(||hbb_common::anyhow::anyhow!("custodian publisher capability invalid"))?;
                     if !source_owned(&request.operation,&publisher)||!current_target(request.operation.target()){bail!("custodian scope/authority mismatch");}
                     let token=request.operation.token().to_owned();let refused_token=token.clone();
-                    let captured=if known.contains_key(&token){true}else if known.len()>=256{false}else{
+                    let capture=if let Some((sequence,_))=known.get(&token){Some(*sequence)}else if known.len()>=256{None}else{
                         // Retain read-only completion identity BEFORE queue ACK.
                         // SetEvent plus every other handle closing cannot erase
                         // the completion observation or leak this route forever.
                         let event=names(&token).and_then(|(_,_,name,_,_)|Owned::from(unsafe{OpenEventW(SYNC,0,wide(&name).as_ptr())}));
-                        if let Some(event)=event{known.insert(token.clone(),event);true}else{false}
+                        if let Some(event)=event{known.insert(token.clone(),(request.sequence,event));Some(request.sequence)}else{None}
                     };
-                    let accepted=captured&&match request.operation{
+                    let accepted=capture.is_some()&&match request.operation{
                         Operation::Input(packet)=>{
                             let token=packet.0.clone();
                             if receive_async(packet,&publisher,reply.clone()){true}
@@ -374,7 +416,7 @@ async fn child_loop(postfix:&str)->ResultType<()> {
                         send(&mut stream,&Response::Refused(refused_token)).await?;
                     }
                     // Queued only, never a native Down/Up acceptance assertion.
-                    send(&mut stream,&Response::Queued(request.sequence)).await?;
+                    send(&mut stream,&Response::Queued(request.sequence,capture)).await?;
                 }
             }
         }Ok(())
@@ -398,7 +440,7 @@ async fn child_loop(postfix:&str)->ResultType<()> {
         // then all retained completion handles, before authenticated Finished.
         while let Ok(response)=replies.try_recv(){send(&mut stream,&response).await?;}
         while !known.is_empty(){
-            if flush_completions(&mut stream,&mut known,8).await?==0{bail!("custodian missing actual cleanup receipt");}
+            if flush_completions(&mut stream,&mut known,&mut replies,8).await?==0{bail!("custodian missing actual cleanup receipt");}
         }
         send(&mut stream,&Response::Finished).await?;
     }
@@ -462,10 +504,19 @@ fn retire_denied_scope(token:&str,role:u8,publisher:&Peer)->bool{
 
 /// A bounded direct drain cannot overflow the native callback channel. Retain
 /// each exact event and route until its authenticated notification was sent.
-async fn flush_completions(stream:&mut crate::ipc::Connection,known:&mut HashMap<String,Owned>,bound:usize)->ResultType<usize>{
-    let finished:Vec<_>=known.iter().filter(|(_,event)|unsafe{WaitForSingleObject(event.raw(),0)}==OBJECT)
-        .take(bound.min(8)).map(|(token,_)|token.clone()).collect();
+async fn flush_completions(stream:&mut crate::ipc::Connection,known:&mut HashMap<String,(u64,Owned)>,replies:&mut tokio::sync::mpsc::Receiver<Response>,bound:usize)->ResultType<usize>{
+    let finished:Vec<_>=known.iter().filter(|(_,(_,event))|unsafe{WaitForSingleObject(event.raw(),0)}==OBJECT)
+        .take(bound.min(8)).map(|(token,(capture,_))|(token.clone(),*capture)).collect();
     let count=finished.len();
-    for token in finished{send(stream,&Response::Cleaned(token.clone())).await?;known.remove(&token);}
+    // Seeing CLEANED means the actual effect thread already enqueued its final
+    // callbacks. Snapshot AFTER observing those events, then drain that finite
+    // FIFO prefix before releasing any corresponding route. The outer
+    // is_empty check alone races a callback followed immediately by SetEvent.
+    let callbacks=replies.len();
+    for _ in 0..callbacks {
+        let response=replies.try_recv().map_err(|_|hbb_common::anyhow::anyhow!("custodian callback snapshot changed"))?;
+        send(stream,&response).await?;
+    }
+    for (token,capture) in finished{send(stream,&Response::Cleaned(token.clone(),capture)).await?;known.remove(&token);}
     Ok(count)
 }

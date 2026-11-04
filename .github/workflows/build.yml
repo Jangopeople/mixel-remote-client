@@ -169,6 +169,8 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./scripts/activate-windows-msvc.ps1 -ExportToGitHubEnvironment
+      - name: Verify cleanup capture routing regression
+        run: python3 scripts/test-custodian-capture-routes.py --output _scratch/custodian-capture-routes-ci
       - name: Compile entire Windows secure-attention leaf and exercise kernel refusals
         if: runner.os == 'Windows'
         run: |

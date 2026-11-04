@@ -4,8 +4,8 @@
   "files": [
     {
       "path": "src/server/mixel_receiver_custodian_windows.rs",
-      "beforeSha256": "41b02e7d52cc96812eeaf9ff7ae38e22396e308ee238573fd4a2ae364f7f5835",
-      "afterSha256": "a3f79cee76ae40b4ea1af09ee56e7d1de7fc78cbbeff8e293b55f795f257a40c",
+      "beforeSha256": "79d9bb803c9a9bee7cf403fd919689ac6c18ae8fced88987b80fde022ece8bae",
+      "afterSha256": "3bde45ea4c4c8fda973606702c59ab872b9eb8bacdb01db85df0d09ae47b5822",
       "changes": [
         {
           "before": "use hbb_common::{bail, futures_util::StreamExt, timeout, ResultType};",
@@ -15,12 +15,12 @@
         {
           "before": "async fn send<T:Serialize>(stream:&mut crate::ipc::Connection,value:&T)->ResultType<()> {",
           "after": "async fn send<T:Serialize,S>(stream:&mut crate::ipc::ConnectionTmpl<S>,value:&T)->ResultType<()>\nwhere S:tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin {",
-          "offset": 6086
+          "offset": 6102
         },
         {
-          "before": "async fn flush_completions(stream:&mut crate::ipc::Connection,known:&mut HashMap<String,Owned>,bound:usize)->ResultType<usize>{",
-          "after": "async fn flush_completions<S>(stream:&mut crate::ipc::ConnectionTmpl<S>,known:&mut HashMap<String,Owned>,bound:usize)->ResultType<usize>\nwhere S:tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin {",
-          "offset": 32765
+          "before": "async fn flush_completions(stream:&mut crate::ipc::Connection,known:&mut HashMap<String,(u64,Owned)>,replies:&mut tokio::sync::mpsc::Receiver<Response>,bound:usize)->ResultType<usize>{",
+          "after": "async fn flush_completions<S>(stream:&mut crate::ipc::ConnectionTmpl<S>,known:&mut HashMap<String,(u64,Owned)>,replies:&mut tokio::sync::mpsc::Receiver<Response>,bound:usize)->ResultType<usize>\nwhere S:tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin {",
+          "offset": 35139
         }
       ]
     },

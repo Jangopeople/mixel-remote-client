@@ -125,7 +125,7 @@ class ActualRoutingControls(unittest.TestCase):
         self.assertIn('a==b',TEXT)
         self.assertIn('GetTokenInformation(token,25',TEXT)
         self.assertIn('GetTokenInformation(token.raw(),20',TEXT)
-        self.assertLess(TEXT.index('borrowed_process(request.publisher_handle,request.publisher_session)'),TEXT.index('send(&mut stream,&Response::Queued(request.sequence))'))
+        self.assertLess(TEXT.index('borrowed_process(request.publisher_handle,request.publisher_session)'),TEXT.index('send(&mut stream,&Response::Queued(request.sequence,capture))'))
         self.assertIn('names(operation.token()).map',TEXT)
         self.assertNotIn('DUPLICATE_CLOSE_SOURCE',TEXT)
     def test_broker_death_denies_before_actual_owned_cleanup(self):
@@ -175,18 +175,18 @@ class ActualRoutingControls(unittest.TestCase):
             raw=json.dumps({'sequence':2**64-1,'publisher_handle':2**64-1,'operation':{'Input':packet}},separators=(',',':')).encode()
             self.assertLessEqual(len(raw),262144*6+4096)
     def test_completion_handle_retained_before_ack_after_other_handles_close(self):
-        self.assertIn('let mut known=HashMap::<String,Owned>::new()',TEXT)
-        self.assertIn('known.insert(token.clone(),event)',TEXT)
-        self.assertIn('filter(|(_,event)|unsafe{WaitForSingleObject(event.raw(),0)}==OBJECT)',TEXT)
+        self.assertIn('let mut known=HashMap::<String,(u64,Owned)>::new()',TEXT)
+        self.assertIn('known.insert(token.clone(),(request.sequence,event))',TEXT)
+        self.assertIn('filter(|(_,(_,event))|unsafe{WaitForSingleObject(event.raw(),0)}==OBJECT)',TEXT)
         self.assertNotIn('fn cleaned(token:',TEXT)
-        self.assertLess(TEXT.index('known.insert(token.clone(),event)'),TEXT.index('send(&mut stream,&Response::Queued(request.sequence))'))
+        self.assertLess(TEXT.index('known.insert(token.clone(),(request.sequence,event))'),TEXT.index('send(&mut stream,&Response::Queued(request.sequence,capture))'))
     def test_refusal_not_cleanup_and_bounded_queues(self):
         self.assertIn('mpsc::channel(MAX_PENDING)',TEXT)
         self.assertIn('*sum<=QUEUE_BYTES',TEXT)
         self.assertIn('admission unknown; no retry',TEXT)
-        self.assertIn('Response::Cleaned(token)',TEXT)
-        self.assertIn('send(stream,&Response::Cleaned(token.clone())).await?;known.remove(&token)',TEXT)
-        self.assertIn('!matches!(&operation,Operation::Retire{..})||!routes.contains_key',TEXT)
+        self.assertIn('Response::Cleaned(token,capture)',TEXT)
+        self.assertIn('send(stream,&Response::Cleaned(token.clone(),capture)).await?;known.remove(&token)',TEXT)
+        self.assertIn('if !matches!(&operation,Operation::Retire{..}){route.reply=reply;}',TEXT)
         self.assertNotIn('mark_cleaned()',TEXT)
 
     def test_revoked_block_before_capture_registers_real_cleanup_and_false_reply(self):
@@ -219,7 +219,7 @@ class ActualRoutingControls(unittest.TestCase):
             batch=known[:8];sent.extend(batch);del known[:len(batch)]
         self.assertEqual(sent,list(range(256)))
     def test_authenticated_spontaneous_retirement_drains_before_epoch_finished(self):
-        self.assertIn('enum Response { Ready, Queued(u64), Refused(String), Block(String,String,bool), Cleaned(String), Retiring, Finished }',TEXT)
+        self.assertIn('enum Response { Ready, Queued(u64,Option<u64>), Refused(String), Block(String,String,bool), Cleaned(String,u64), Retiring, Finished }',TEXT)
         self.assertIn('retiring=true;deny_child();',TEXT)
         self.assertIn('send(&mut stream,&Response::Retiring).await?',TEXT)
         self.assertIn('control.try_recv().ok().or_else(||input.try_recv().ok())',TEXT)
