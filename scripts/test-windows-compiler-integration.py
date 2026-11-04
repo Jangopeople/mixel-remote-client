@@ -22,7 +22,7 @@ class Controls(unittest.TestCase):
             after = before.replace(f'old {i}', f'new {i}')
             row = {'path': f'f{i}.rs', 'beforeSha256': P.sha(before.encode()),
                    'afterSha256': P.sha(after.encode()),
-                   'changes': [{'before': f'old {i}', 'after': f'new {i}'}]}
+                   'changes': [{'before': f'old {i}', 'after': f'new {i}', 'offset': before.index(f'old {i}')}]}
             self.rows.append(row)
             (self.root / row['path']).write_bytes(before.encode())
 
@@ -43,8 +43,9 @@ class Controls(unittest.TestCase):
         self.assertEqual(after.count('tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin'), 2)
         self.assertNotIn('bail!(', after)
         key = rows['.mixel-deps/rdev/src/keycodes/chrome.rs']['changes']
-        self.assertEqual(key, [{'before': '                    $code => Key::$key,',
-                                'after': '                    value if value == $code => Key::$key,'}])
+        self.assertEqual(key[0]['before'], '                    $code => Key::$key,')
+        self.assertEqual(key[0]['after'], '                    value if value == $code => Key::$key,')
+        self.assertIsInstance(key[0]['offset'], int)
 
     def test_default_check_does_not_write(self):
         before = self.snapshot()
@@ -66,6 +67,16 @@ class Controls(unittest.TestCase):
         self.assertTrue(all(b'\r\n' in raw and b'\n' not in raw.replace(b'\r\n', b'') for raw in self.snapshot().values()))
         self.run_layer(write=True, restore=True)
         self.assertEqual(before, self.snapshot())
+
+    def test_removed_import_inverse_uses_closed_offset_not_empty_string_search(self):
+        row = self.rows[-1]
+        before = (self.root / row['path']).read_text()
+        row['changes'][0]['after'] = ''
+        row['afterSha256'] = P.sha(before.replace('old 5', '', 1).encode())
+        snapshot = self.snapshot()
+        self.run_layer(write=True)
+        self.run_layer(write=True, restore=True)
+        self.assertEqual(snapshot, self.snapshot())
 
     def test_changed_or_mixed_source_refuses_without_partial_writes(self):
         for change in ('drift', 'new 5'):

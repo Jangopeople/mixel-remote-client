@@ -12,7 +12,7 @@ from pathlib import Path
 import stat
 
 PLAN = Path(__file__).with_name('windows-compiler-integration-plan.json')
-PLAN_SHA = 'd1f33a750751567ce808bf87314ec79696a443b609c840b9407944269b405886'
+PLAN_SHA = '5b7ca2c139ab305204ce6103a88d34ecace6f091eba33c72cd0bd4a574960903'
 
 
 def sha(raw):
@@ -59,9 +59,10 @@ def transform(row, raw, *, restore=False):
     if current[0] != desired:
         for pair in reversed(row['changes']) if restore else row['changes']:
             before, after = (pair['after'], pair['before']) if restore else (pair['before'], pair['after'])
-            if text.count(before) != 1:
+            offset = pair['offset']
+            if text[offset:offset + len(before)] != before or (before and text.count(before) != 1):
                 raise ValueError('Compiler literal coordinate/cardinality drift')
-            text = text.replace(before, after, 1)
+            text = text[:offset] + after + text[offset + len(before):]
     if sha(text.encode()) != row[desired + 'Sha256']:
         raise ValueError('Compiler complete output/inverse drift')
     return text.replace('\n', ending).encode()

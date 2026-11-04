@@ -9,15 +9,18 @@
       "changes": [
         {
           "before": "use hbb_common::{bail, futures_util::StreamExt, timeout, ResultType};",
-          "after": "use hbb_common::{bail, log, timeout, tokio, ResultType};"
+          "after": "use hbb_common::{bail, log, timeout, tokio, ResultType};",
+          "offset": 229
         },
         {
           "before": "async fn send<T:Serialize>(stream:&mut crate::ipc::Connection,value:&T)->ResultType<()> {",
-          "after": "async fn send<T:Serialize,S>(stream:&mut crate::ipc::ConnectionTmpl<S>,value:&T)->ResultType<()>\nwhere S:tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin {"
+          "after": "async fn send<T:Serialize,S>(stream:&mut crate::ipc::ConnectionTmpl<S>,value:&T)->ResultType<()>\nwhere S:tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin {",
+          "offset": 6086
         },
         {
           "before": "async fn flush_completions(stream:&mut crate::ipc::Connection,known:&mut HashMap<String,Owned>,bound:usize)->ResultType<usize>{",
-          "after": "async fn flush_completions<S>(stream:&mut crate::ipc::ConnectionTmpl<S>,known:&mut HashMap<String,Owned>,bound:usize)->ResultType<usize>\nwhere S:tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin {"
+          "after": "async fn flush_completions<S>(stream:&mut crate::ipc::ConnectionTmpl<S>,known:&mut HashMap<String,Owned>,bound:usize)->ResultType<usize>\nwhere S:tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin {",
+          "offset": 32765
         }
       ]
     },
@@ -28,7 +31,8 @@
       "changes": [
         {
           "before": "use super::*;",
-          "after": "use super::*;\nuse hbb_common::{log, tokio};"
+          "after": "use super::*;\nuse hbb_common::{log, tokio};",
+          "offset": 86
         }
       ]
     },
@@ -39,11 +43,13 @@
       "changes": [
         {
           "before": "OpenProcessToken, ProcessIdToSessionId, PROCESS_INFORMATION, STARTUPINFOW,",
-          "after": "OpenProcessToken, ProcessIdToSessionId,"
+          "after": "OpenProcessToken, ProcessIdToSessionId,",
+          "offset": 1389
         },
         {
           "before": "    use hbb_common::sysinfo::System;\n",
-          "after": ""
+          "after": "",
+          "offset": 119175
         }
       ]
     },
@@ -54,15 +60,18 @@
       "changes": [
         {
           "before": "pub(crate) use receiver_native::{with_receiver_owner, with_receiver_owner_checked,",
-          "after": "#[cfg(not(windows))]\npub(crate) use receiver_native::with_receiver_owner;\npub(crate) use receiver_native::{with_receiver_owner_checked,"
+          "after": "#[cfg(not(windows))]\npub(crate) use receiver_native::with_receiver_owner;\npub(crate) use receiver_native::{with_receiver_owner_checked,",
+          "offset": 186
         },
         {
           "before": "    time::{self, Duration, Instant},",
-          "after": "    time::{self, Instant},"
+          "after": "    time::{self, Instant},",
+          "offset": 1238
         },
         {
           "before": "\n\nconst INVALID_CURSOR_POS:",
-          "after": "\n#[cfg(not(windows))]\nuse std::time::Duration;\n\nconst INVALID_CURSOR_POS:"
+          "after": "\n#[cfg(not(windows))]\nuse std::time::Duration;\n\nconst INVALID_CURSOR_POS:",
+          "offset": 1268
         }
       ]
     },
@@ -73,11 +82,13 @@
       "changes": [
         {
           "before": "    use hbb_common::message_proto::PointerDeviceEvent;\n\n",
-          "after": ""
+          "after": "",
+          "offset": 6700
         },
         {
           "before": "    protobuf::Message,\n",
-          "after": ""
+          "after": "",
+          "offset": 134
         }
       ]
     },
@@ -88,7 +99,8 @@
       "changes": [
         {
           "before": "                    $code => Key::$key,",
-          "after": "                    value if value == $code => Key::$key,"
+          "after": "                    value if value == $code => Key::$key,",
+          "offset": 453
         }
       ]
     },
@@ -97,11 +109,13 @@
       "changes": [
         {
           "before": "    pub(crate) fn receiver_pipe_peer(&self, server_peer: bool) -> Option<crate::server::mixel_receiver_input::Peer> {\n        use std::os::windows::io::AsRawHandle;",
-          "after": "    pub(crate) fn receiver_pipe_peer(&self, server_peer: bool) -> Option<crate::server::mixel_receiver_input::Peer> {"
+          "after": "    pub(crate) fn receiver_pipe_peer(&self, server_peer: bool) -> Option<crate::server::mixel_receiver_input::Peer> {",
+          "offset": 38867
         },
         {
           "before": "    pub(crate) fn receiver_pipe_publisher(&self, transferred: Option<u64>) -> Option<crate::server::mixel_receiver_input::Peer> {\n        use std::os::windows::io::AsRawHandle;",
-          "after": "    pub(crate) fn receiver_pipe_publisher(&self, transferred: Option<u64>) -> Option<crate::server::mixel_receiver_input::Peer> {"
+          "after": "    pub(crate) fn receiver_pipe_publisher(&self, transferred: Option<u64>) -> Option<crate::server::mixel_receiver_input::Peer> {",
+          "offset": 39104
         }
       ],
       "beforeSha256": "0cee8dc29f39dcf30a76cfb8f52cce7fa602f29e17c0ae5810d96dae1a6387a6",
@@ -112,11 +126,13 @@
       "changes": [
         {
           "before": "let mut input_pipe = open_pipe(input_pipe_name, true)?;",
-          "after": "let input_pipe = open_pipe(input_pipe_name, true)?;"
+          "after": "let input_pipe = open_pipe(input_pipe_name, true)?;",
+          "offset": 29336
         },
         {
           "before": "let mut output_pipe = open_pipe(output_pipe_name, false)?;",
-          "after": "let output_pipe = open_pipe(output_pipe_name, false)?;"
+          "after": "let output_pipe = open_pipe(output_pipe_name, false)?;",
+          "offset": 29392
         }
       ],
       "beforeSha256": "7d377a356ee325ca0187c6fb878cb1d91eea10d11af133d9b4fe3d87f8699030",
@@ -127,23 +143,28 @@
       "changes": [
         {
           "before": "pub fn event_to_key_events(",
-          "after": "#[cfg(any(not(windows), test))]\npub fn event_to_key_events("
+          "after": "#[cfg(any(not(windows), test))]\npub fn event_to_key_events(",
+          "offset": 30778
         },
         {
           "before": "pub fn send_key_event(key_event: &KeyEvent) {",
-          "after": "#[cfg(any(not(windows), test))]\npub fn send_key_event(key_event: &KeyEvent) {"
+          "after": "#[cfg(any(not(windows), test))]\npub fn send_key_event(key_event: &KeyEvent) {",
+          "offset": 32843
         },
         {
           "before": "pub fn legacy_keyboard_mode(event: &Event, key_event: KeyEvent) -> Vec<KeyEvent> {",
-          "after": "#[cfg(any(not(windows), test))]\npub fn legacy_keyboard_mode(event: &Event, key_event: KeyEvent) -> Vec<KeyEvent> {"
+          "after": "#[cfg(any(not(windows), test))]\npub fn legacy_keyboard_mode(event: &Event, key_event: KeyEvent) -> Vec<KeyEvent> {",
+          "offset": 36603
         },
         {
           "before": "    pub fn lock_screen() {",
-          "after": "    #[cfg(any(not(windows), test))]\n    pub fn lock_screen() {"
+          "after": "    #[cfg(any(not(windows), test))]\n    pub fn lock_screen() {",
+          "offset": 14051
         },
         {
           "before": "    pub fn ctrl_alt_del() {",
-          "after": "    #[cfg(any(not(windows), test))]\n    pub fn ctrl_alt_del() {"
+          "after": "    #[cfg(any(not(windows), test))]\n    pub fn ctrl_alt_del() {",
+          "offset": 14752
         }
       ],
       "beforeSha256": "c6e06b93f98e5ca67931e04fdcbe32ede5f5817b93dfeac465471651935fdbf8",
@@ -154,23 +175,28 @@
       "changes": [
         {
           "before": "enum Route { Raw(RawKey), Enigo(Key),",
-          "after": "enum Route { Raw(RawKey), #[cfg(not(windows))] Enigo(Key),"
+          "after": "enum Route { Raw(RawKey), #[cfg(not(windows))] Enigo(Key),",
+          "offset": 1791
         },
         {
           "before": "        Route::Enigo(_) =>",
-          "after": "        #[cfg(not(windows))]\n        Route::Enigo(_) =>"
+          "after": "        #[cfg(not(windows))]\n        Route::Enigo(_) =>",
+          "offset": 2588
         },
         {
           "before": "        Route::Enigo(key) =>",
-          "after": "        #[cfg(not(windows))]\n        Route::Enigo(key) =>"
+          "after": "        #[cfg(not(windows))]\n        Route::Enigo(key) =>",
+          "offset": 3092
         },
         {
           "before": "pub(super) fn captured(effect:",
-          "after": "#[cfg(any(not(windows), test))]\npub(super) fn captured(effect:"
+          "after": "#[cfg(any(not(windows), test))]\npub(super) fn captured(effect:",
+          "offset": 24270
         },
         {
           "before": "pub(super) fn remote_scope()",
-          "after": "#[cfg(test)]\npub(super) fn remote_scope()"
+          "after": "#[cfg(test)]\npub(super) fn remote_scope()",
+          "offset": 26921
         }
       ],
       "beforeSha256": "717330631fa85a0ceb40af2cd20fed977644b63f1840ecfb61ba6287abb9dfd6",

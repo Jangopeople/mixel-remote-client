@@ -56,8 +56,8 @@
     "sha256": "5cb0ce5fbbba1cf951066c11a8c955bf7e5b223c0f0ccd612e7445f07ff076c3"
   },
   "scripts/patch-windows-compiler-integration.py": {
-    "bytes": 4840,
-    "sha256": "2de905e935c050c200b586f8696ba81c7358613d13df15374181b3a233b1a842"
+    "bytes": 4957,
+    "sha256": "02f6e1dcb031e04a1c28f802fbe7530a20771f70c034ca7027eaa724f380e7d8"
   },
   "scripts/support-receiver-custodian-epoch-windows.rs": {
     "bytes": 14862,
@@ -76,7 +76,7 @@
     "sha256": "c436a401639b4af73e71484ac4ce1a2aad773f1a0ccf9ac42a85606a0113d0c6"
   },
   "scripts/windows-compiler-integration-plan.json": {
-    "bytes": 7884,
-    "sha256": "d1f33a750751567ce808bf87314ec79696a443b609c840b9407944269b405886"
+    "bytes": 8568,
+    "sha256": "5b7ca2c139ab305204ce6103a88d34ecace6f091eba33c72cd0bd4a574960903"
   }
 }
