@@ -1145,6 +1145,7 @@ jobs:
             export PATH="$MAGICK_DIR:$PATH"
           fi
           ./scripts/apply-branding.sh
+          python scripts/patch-windows-compiler-integration.py --root rustdesk --apply
         env:
           RDREPO: ./rustdesk
           BRANDING: ./branding

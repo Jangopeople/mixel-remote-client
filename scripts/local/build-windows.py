@@ -487,6 +487,10 @@ def build(args,repo=REPO):
         # matching the bridge's source physically avoids a platform-guessing inverse.
         call('shared-bridge-rdev-profile',[sys.executable,repo/'scripts/patch-support-macos-rdev.py',app])
         bridge=admit_bridge(args.bridge,app,probe,repo);B.write_json(output/'bridge-admission.json',bridge)
+        # The shared Mac bridge predates these private Windows compiler-only
+        # corrections. Admit its complete original input closure first, then
+        # apply one exact ten-file profile; generated API/wire types are unchanged.
+        call('windows-compiler-integration',[sys.executable,repo/'scripts/patch-windows-compiler-integration.py','--root',app,'--apply'])
         lock=B.digest(file(app/'Cargo.lock'))
         def hold(phase):
             current=B.digest(file(app/'Cargo.lock'));result.update(cargoLockBeforeSha256=lock,cargoLockAfterSha256=current,cargoLockUnchanged=current==lock)

@@ -3,7 +3,7 @@
 #![allow(dead_code, unused_imports)]
 #![deny(unused_mut)]
 extern crate self as hbb_common;
-pub use {anyhow, bytes, futures_util, protobuf, tokio};
+pub use {anyhow, bytes, futures_util, log, protobuf, tokio};
 pub use anyhow::bail;
 pub type ResultType<T> = anyhow::Result<T>;
 pub async fn timeout<T>(ms:u64,value:impl std::future::Future<Output=T>)->Result<T,tokio::time::error::Elapsed>{
@@ -75,27 +75,29 @@ mod ipc {
     use std::{os::windows::io::AsRawHandle,pin::Pin,task::{Context,Poll}};
     use tokio::{io::{AsyncReadExt,AsyncWriteExt},net::windows::named_pipe::{NamedPipeServer,NamedPipeClient,ServerOptions,ClientOptions}};
     #[derive(serde::Serialize,serde::Deserialize)] pub(crate) enum Data{Config((String,Option<String>))}
-    enum Pipe{Server(NamedPipeServer),Client(NamedPipeClient)}
-    pub(crate) struct Connection(Pipe);
-    impl Connection{
-        pub(crate) fn new(raw:NamedPipeServer)->Self{Self(Pipe::Server(raw))}
-        pub(crate) fn sas_pipe_handle(&self)->*mut std::ffi::c_void{match &self.0{Pipe::Server(v)=>v.as_raw_handle(),Pipe::Client(v)=>v.as_raw_handle()}}
+    pub(crate) struct ConnectionTmpl<T>(T);
+    pub(crate) type Connection = ConnectionTmpl<NamedPipeServer>;
+    impl<T> ConnectionTmpl<T> {
+        pub(crate) fn new(raw:T)->Self{Self(raw)}
+    }
+    impl<T:AsRawHandle> ConnectionTmpl<T> {
+        pub(crate) fn sas_pipe_handle(&self)->*mut std::ffi::c_void{self.0.as_raw_handle()}
         pub(crate) fn receiver_pipe_peer(&self,server_peer:bool)->Option<server::mixel_receiver_input::Peer>{server::mixel_receiver_input::pipe_peer(self.sas_pipe_handle(),server_peer)}
+    }
+    impl<T:tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin> ConnectionTmpl<T> {
         pub(crate) async fn send(&mut self,value:&Data)->ResultType<()>{
             let data=serde_json::to_vec(value)?;if data.len()>2*1024*1024{bail!("fixture frame bound");}
-            macro_rules! write{($v:expr)=>{{ $v.write_u32_le(data.len()as u32).await?;$v.write_all(&data).await?;$v.flush().await?; }}}
-            match &mut self.0{Pipe::Server(v)=>write!(v),Pipe::Client(v)=>write!(v)};Ok(())
+            self.0.write_u32_le(data.len()as u32).await?;self.0.write_all(&data).await?;self.0.flush().await?;Ok(())
         }
         pub(crate) async fn next(&mut self)->ResultType<Option<Data>>{
-            macro_rules! read{($v:expr)=>{{
-                let size=match $v.read_u32_le().await{Ok(v)=>v,Err(error)if error.kind()==std::io::ErrorKind::UnexpectedEof=>return Ok(None),Err(error)=>return Err(error.into())};
-                if size>2*1024*1024{bail!("fixture read bound");}let mut data=vec![0;size as usize];$v.read_exact(&mut data).await?;serde_json::from_slice(&data)?
-            }}}
-            Ok(Some(match &mut self.0{Pipe::Server(v)=>read!(v),Pipe::Client(v)=>read!(v)}))
+            let size=match self.0.read_u32_le().await{Ok(v)=>v,Err(error)if error.kind()==std::io::ErrorKind::UnexpectedEof=>return Ok(None),Err(error)=>return Err(error.into())};
+            if size>2*1024*1024{bail!("fixture read bound");}let mut data=vec![0;size as usize];self.0.read_exact(&mut data).await?;
+            Ok(Some(serde_json::from_slice(&data)?))
         }
         pub(crate) async fn next_timeout(&mut self,ms:u64)->ResultType<Option<Data>>{timeout(ms,self.next()).await?}
     }
     pub(crate) struct Listener{rx:tokio::sync::mpsc::Receiver<ResultType<NamedPipeServer>>}
+    impl Listener{pub(crate) async fn next(&mut self)->Option<ResultType<NamedPipeServer>>{self.rx.recv().await}}
     impl futures_util::Stream for Listener{type Item=ResultType<NamedPipeServer>;fn poll_next(mut self:Pin<&mut Self>,cx:&mut Context<'_>)->Poll<Option<Self::Item>>{self.rx.poll_recv(cx)}}
     fn pipe_name(postfix:&str)->String{assert!(postfix.len()<150&&postfix.bytes().all(|b|b.is_ascii_alphanumeric()||b"_-".contains(&b)));format!("\\\\.\\pipe\\Mixel-owned-custody-QA-{postfix}")}
     pub(crate) async fn new_listener(postfix:&str)->ResultType<Listener>{
@@ -109,9 +111,9 @@ mod ipc {
             }
         });Ok(Listener{rx})
     }
-    pub(crate) async fn connect(ms:u64,postfix:&str)->ResultType<Connection>{
+    pub(crate) async fn connect(ms:u64,postfix:&str)->ResultType<ConnectionTmpl<NamedPipeClient>>{
         let name=pipe_name(postfix);let until=std::time::Instant::now()+std::time::Duration::from_millis(ms);
-        loop{match ClientOptions::new().open(&name){Ok(v)=>return Ok(Connection(Pipe::Client(v))),Err(error)=>{if std::time::Instant::now()>=until{return Err(error.into());}}}tokio::time::sleep(std::time::Duration::from_millis(5)).await;}
+        loop{match ClientOptions::new().open(&name){Ok(v)=>return Ok(ConnectionTmpl::new(v)),Err(error)=>{if std::time::Instant::now()>=until{return Err(error.into());}}}tokio::time::sleep(std::time::Duration::from_millis(5)).await;}
     }
     pub(crate) mod receiver_sas{pub(crate) async fn request(_scope:&str)->super::ResultType<()>{super::bail!("fixture never sends SAS")}}
 }

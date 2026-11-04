@@ -28,8 +28,8 @@ fn count(case:&str,down:bool)->usize{effects().iter().filter(|v|v["case"]==case&
 fn key()->KeyEvent{let mut value=KeyEvent::new();value.set_chr(30);value.down=true;value}
 fn current()->String{custodian::current_identity().unwrap()}
 fn completion(token:&str)->Owned{let(_,_,name,_,_)=names(token).unwrap();Owned::from(unsafe{OpenEventW(SYNC,0,wide(&name).as_ptr())}).unwrap()}
-async fn text_send(stream:&mut crate::ipc::Connection,value:&str){stream.send(&crate::ipc::Data::Config(("qa".into(),Some(value.into())))).await.unwrap();}
-async fn text_read(stream:&mut crate::ipc::Connection)->String{match stream.next_timeout(15000).await.unwrap(){Some(crate::ipc::Data::Config((key,Some(value))))if key=="qa"=>value,_=>panic!("actual owned QA control message")}}
+async fn text_send<T:tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin>(stream:&mut crate::ipc::ConnectionTmpl<T>,value:&str){stream.send(&crate::ipc::Data::Config(("qa".into(),Some(value.into())))).await.unwrap();}
+async fn text_read<T:tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin>(stream:&mut crate::ipc::ConnectionTmpl<T>)->String{match stream.next_timeout(15000).await.unwrap(){Some(crate::ipc::Data::Config((key,Some(value))))if key=="qa"=>value,_=>panic!("actual owned QA control message")}}
 fn assert_child(peer:&Peer,child:&OwnedChild){assert_eq!(peer.pid,child.id());assert_eq!(image(peer.process.raw()),image(unsafe{GetCurrentProcess()}));assert!(peer.alive());}
 fn local_actor(postfix:&str){runtime().block_on(async{
     let mut stream=crate::ipc::connect(5000,postfix).await.unwrap();assert!(stream.receiver_pipe_peer(true).is_some());

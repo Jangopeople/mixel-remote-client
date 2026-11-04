@@ -336,9 +336,16 @@ class WholePrefixFixtureControls(unittest.TestCase):
         path=HERE/'fixtures/receiver-custodian-native/prepare.py'
         spec=importlib.util.spec_from_file_location('custody_fixture_prepare',path)
         cls.driver=importlib.util.module_from_spec(spec);spec.loader.exec_module(cls.driver)
+    def compiler_prefixes(self,source):
+        spec=importlib.util.spec_from_file_location('custody_test_compiler',HERE/'patch-windows-compiler-integration.py')
+        compiler=importlib.util.module_from_spec(spec);spec.loader.exec_module(compiler)
+        for row in compiler.plan()['files']:
+            path=source/row['path']
+            if path.exists():path.write_bytes(compiler.transform(row,path.read_bytes()))
     def test_prepare_compiles_whole_actual_final_prefixes_and_original_negative(self):
         with tempfile.TemporaryDirectory()as t:
             root=Path(t).resolve();source=root/'source';source.mkdir();fixture(source);P.apply(source)
+            self.compiler_prefixes(source)
             output=root/'prepared';binding=self.driver.prepare(output,source)
             self.assertTrue(binding['actualGeneratedSourceProvided'])
             names={'mixel_receiver_input.rs','mixel_receiver_input_windows.rs','mixel_receiver_custodian_windows.rs','mixel_receiver_custodian_epoch_windows.rs'}
@@ -355,6 +362,7 @@ class WholePrefixFixtureControls(unittest.TestCase):
     def test_actual_source_drift_refused_before_any_compiler(self):
         with tempfile.TemporaryDirectory()as t:
             root=Path(t).resolve();source=root/'source';source.mkdir();fixture(source);P.apply(source)
+            self.compiler_prefixes(source)
             path=source/'src/server/mixel_receiver_input_windows.rs';path.write_bytes(path.read_bytes()+b'\n')
             with self.assertRaisesRegex(ValueError,'actual final generated prefix drift'):
                 self.driver.prepare(root/'prepared',source)
@@ -374,6 +382,7 @@ class WholePrefixFixtureControls(unittest.TestCase):
         import unittest.mock
         with tempfile.TemporaryDirectory()as t:
             root=Path(t).resolve();pipeline=root/'pipeline';source=root/'source';source.mkdir();fixture(source,True);P.apply(source)
+            self.compiler_prefixes(source)
             names=json.loads((HERE/'fixtures/receiver-custodian-native/SOURCE-PINS.json').read_text())
             names=list(names)+['scripts/fixtures/receiver-custodian-native/SOURCE-PINS.json']
             for name in names:

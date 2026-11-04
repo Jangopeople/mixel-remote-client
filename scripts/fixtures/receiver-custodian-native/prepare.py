@@ -5,7 +5,7 @@ Default performs finite source/hash construction only. No compiler, API, process
 account, pipe, input or namespace operation occurs without --run on Windows CI.
 """
 from pathlib import Path
-import argparse,hashlib,json,os,re,shutil,stat,subprocess,sys,time,uuid
+import argparse,hashlib,importlib.util,json,os,re,shutil,stat,subprocess,sys,time,uuid
 
 HERE=Path(__file__).absolute().parent
 REPO=HERE.parents[2]
@@ -78,6 +78,12 @@ def prepare(output,source_root=None):
     expected={name:row['afterSha256'] for name,row in rows.items()}
     leaves={row['name']:row for row in plan['owned']}
     expected.update({name:row['sha256'] for name,row in leaves.items()})
+    compiler_spec=importlib.util.spec_from_file_location('custody_compiler_integration',REPO/'scripts/patch-windows-compiler-integration.py')
+    compiler=importlib.util.module_from_spec(compiler_spec);compiler_spec.loader.exec_module(compiler)
+    compiler_rows={row['path']:row for row in compiler.plan()['files']}
+    # The native fixture must compile the same final complete files as the app,
+    # including the private client/server pipe type correction.
+    expected.update({name:row['afterSha256'] for name,row in compiler_rows.items() if name in expected})
     actual={}
     if source_root is not None:
         for name,digest in expected.items():
@@ -86,6 +92,8 @@ def prepare(output,source_root=None):
     else:
         for name,row in rows.items():actual[name]=row['afterSource'].encode()
         for name,row in leaves.items():actual[name]=regular(REPO/'scripts'/row['template'])
+    for name in actual:
+        if name in compiler_rows:actual[name]=compiler.transform(compiler_rows[name],actual[name])
     # Every actual compiled prefix is whole bytes, not extracted decisions or
     # pre-custody templates. Test code is appended only at an explicit EOF.
     files={

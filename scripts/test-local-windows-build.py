@@ -188,7 +188,7 @@ class Controls(unittest.TestCase):
         self.assertIn('build/retained-input.dat',{row['path'] for row in clang['inputs']})
         self.native_clang.assert_called_once_with(self.libclang)
         for flag in ('nativeRuntimeQualified','signingQualified','publish'):self.assertIs(result[flag],False)
-        sequence=['apply-branding','shared-bridge-rdev-profile','fetch-locked','shipping-pub-get','check-entire-app','build-entire-app','analyze-entire-flutter','compiled-support-guard','compiled-branding','prepare-unsigned-payload','package-unsigned-outer','verify-outer-manifest']
+        sequence=['apply-branding','shared-bridge-rdev-profile','windows-compiler-integration','fetch-locked','shipping-pub-get','check-entire-app','build-entire-app','analyze-entire-flutter','compiled-support-guard','compiled-branding','prepare-unsigned-payload','package-unsigned-outer','verify-outer-manifest']
         self.assertEqual([self.labels.index(x) for x in sequence],sorted(self.labels.index(x) for x in sequence))
         build=next(argv for label,argv,_ in self.calls if label=='build-entire-app')
         self.assertEqual(build[1:],['build.py','--flutter','--skip-portable-pack'])
@@ -212,6 +212,13 @@ class Controls(unittest.TestCase):
         receipt=next((self.output/'commands').glob('*-build-entire-app.result.json'))
         self.assertEqual(json.loads(receipt.read_text())['returncode'],23)
         self.assertNotIn('package-unsigned-outer',self.labels)
+    def test_compiler_integration_refusal_stops_before_fetch_and_compile(self):
+        self.fail='windows-compiler-integration'
+        with self.assertRaises(RuntimeError):self.build()
+        result=json.loads((self.output/'build.result.json').read_text())
+        self.assertFalse(result['buildQualified'])
+        self.assertNotIn('fetch-locked',self.labels)
+        self.assertNotIn('check-entire-app',self.labels)
     def test_final_lock_drift_cannot_false_pass(self):
         self.drift='compiled-support-guard'
         with self.assertRaises(RuntimeError):self.build()

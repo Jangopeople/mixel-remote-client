@@ -845,6 +845,12 @@ from Mixel’s signed downloads or the platform store’s normal update mechanis
   Each Bash step that compiles Rust then sources
   `scripts/use-windows-msvc-bash.sh` after shell initialization, checks the exact
   installed compiler/linker identity and prevents Git's `link.exe` taking priority.
+- After shared bridge admission, the local Windows builder applies
+  `patch-windows-compiler-integration.py`. Its complete file hashes bind the
+  async-runtime imports and private generic client/server pipe helpers. The
+  Windows workflow applies the same layer after branding. The custody fixture
+  uses distinct native pipe types and the same final production file bodies.
+  Compiler-only checks do not qualify an installer or a customer session.
 - Linux produces a branded Debian package and verifies its actual cold/warm
   customer launch under an isolated X11/DBus desktop.
 
