@@ -125,14 +125,14 @@ runpy.run_path(sys.argv[1], run_name='__main__')
     manifest.write_bytes(windows_manifest)
     original_manifest = windows_manifest
     for raises in (False, True):
-        def fake_cargo(command, check):
+        def fake_cargo(command, check, **kwargs):
             modified = manifest.read_text(encoding="utf-8")
             assert 'webrtc = { version = "0.14.0", optional = true }' in modified
             assert 'webrtc = "0.14.0"' not in modified.split("[dev-dependencies]", 1)[1]
             assert all(option in command for option in ("--locked", "--release", "--no-default-features", "hbb_common"))
             if raises:
                 raise RuntimeError("simulated Cargo process failure")
-            return SimpleNamespace(returncode=3)
+            return SimpleNamespace(returncode=3, stdout="simulated Cargo failure\n")
         try:
             result = guard_runner.run_guard_tests(repo, fake_cargo)
             assert not raises and result == 3
@@ -140,6 +140,32 @@ runpy.run_path(sys.argv[1], run_name='__main__')
             assert raises and str(error) == "simulated Cargo process failure"
         assert manifest.read_bytes() == original_manifest, "narrow test must restore upstream manifest on every failure path"
     print("PASS: actual guard test retains optional WebRTC and restores upstream manifest after Cargo failures")
+    for output, accepted in (("test result: ok. 0 passed; 0 failed; 27 filtered out;", False),
+                             ("test result: ok. 17 passed; 0 failed; 27 filtered out;", True)):
+        def fake_result(*args, **kwargs):
+            return SimpleNamespace(returncode=0, stdout=output)
+        try:
+            assert guard_runner.run_guard_tests(repo, fake_result) == 0
+            assert accepted
+        except RuntimeError as error:
+            assert not accepted and str(error) == "Compiled support guard ran no passing tests"
+        assert manifest.read_bytes() == original_manifest
+    print("PASS: zero matching guard tests cannot qualify; positive execution is required")
+    guard_source = repo / "libs/hbb_common/src/password_security.rs"
+    guard_original = guard_source.read_bytes()
+    try:
+        guard_source.write_bytes(guard_original.replace(b'mod mixel_support_invite_tests {',
+                                                       b'mod unrelated_tests {'))
+        try:
+            guard_runner.run_guard_tests(repo, lambda *a, **k: (_ for _ in ()).throw(
+                AssertionError("unbranded source must fail before Cargo")))
+            raise AssertionError("unbranded guard source was accepted")
+        except RuntimeError as error:
+            assert "Built branded support guard source required" in str(error)
+        assert manifest.read_bytes() == original_manifest
+    finally:
+        guard_source.write_bytes(guard_original)
+    print("PASS: unbranded source cannot masquerade as a compiled support guard check")
     french = (repo / "src/lang/fr.rs").read_bytes()
     assert "d’assistance Mixel Remote installé doit être mis à jour".encode("utf-8") in french
     assert "d’assistance Mixel Remote installé doit être mis à jour" in french.decode("utf-8")

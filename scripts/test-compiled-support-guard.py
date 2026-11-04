@@ -24,6 +24,9 @@ def guard_test_manifest(source: str) -> str:
 def run_guard_tests(repo: Path, runner=subprocess.run) -> int:
     manifest = repo / "libs/hbb_common/Cargo.toml"
     library = repo / "libs/hbb_common/src/lib.rs"
+    guard = repo / "libs/hbb_common/src/password_security.rs"
+    if 'mod mixel_support_invite_tests {' not in guard.read_text(encoding="utf-8"):
+        raise RuntimeError("Built branded support guard source required; refusing zero-test success")
     if '#[cfg(feature = "webrtc")]\npub mod webrtc;' not in library.read_text(encoding="utf-8"):
         raise RuntimeError("WebRTC must remain feature-gated for narrow guard tests")
     original = manifest.read_bytes()
@@ -32,7 +35,13 @@ def run_guard_tests(repo: Path, runner=subprocess.run) -> int:
         manifest.write_bytes(modified.encode("utf-8"))
         command = ["cargo", "test", "--locked", "--release", "--manifest-path", str(repo / "Cargo.toml"),
                    "-p", "hbb_common", "--no-default-features", "--lib", "mixel_support_"]
-        return runner(command, check=False).returncode
+        result = runner(command, check=False, stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT, text=True)
+        print(result.stdout, end="", flush=True)
+        if result.returncode == 0 and not re.search(
+                r'test result: ok\. [1-9][0-9]* passed; 0 failed;', result.stdout):
+            raise RuntimeError("Compiled support guard ran no passing tests")
+        return result.returncode
     finally:
         # Byte-for-byte restore even if Cargo raises or its tests fail. The
         # signed product and future feature tests retain the upstream manifest.
