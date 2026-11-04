@@ -506,7 +506,7 @@ class WholePrefixFixtureControls(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError,'single-link source'):self.driver.regular(source)
     def test_current_cross_sid_helper_and_closed_transport_dependencies(self):
         helper=(HERE/'fixtures/receiver-input-native/tests/windows-cross-sid-tests.rs').read_bytes()
-        self.assertEqual(P.sha(self.driver.logical(helper)),'5636ce4a977bd7464fbdce87f89c324af7b6c0be51294dad49f95eb9d0ffc755')
+        self.assertEqual(P.sha(self.driver.logical(helper)),'9190db5a280ec3d4fdc8ab3fc3e687373f53a45af193adcf34df658283d8bb98')
         with tempfile.TemporaryDirectory()as t:
             output=Path(t).resolve()/'prepared';self.driver.prepare(output)
             staged=(output/'mixel_receiver_input_windows.rs').read_text()
@@ -518,8 +518,8 @@ class WholePrefixFixtureControls(unittest.TestCase):
     def test_current_helper_physical_crlf_pin_and_mixed_refusal(self):
         helper=self.driver.logical((HERE/'fixtures/receiver-input-native/tests/windows-cross-sid-tests.rs').read_bytes())
         crlf=helper.replace(b'\n',b'\r\n')
-        self.assertNotEqual(P.sha(crlf),'5636ce4a977bd7464fbdce87f89c324af7b6c0be51294dad49f95eb9d0ffc755')
-        self.assertEqual(P.sha(self.driver.logical(crlf)),'5636ce4a977bd7464fbdce87f89c324af7b6c0be51294dad49f95eb9d0ffc755')
+        self.assertNotEqual(P.sha(crlf),'9190db5a280ec3d4fdc8ab3fc3e687373f53a45af193adcf34df658283d8bb98')
+        self.assertEqual(P.sha(self.driver.logical(crlf)),'9190db5a280ec3d4fdc8ab3fc3e687373f53a45af193adcf34df658283d8bb98')
         self.assertEqual(self.driver.byte_binding(crlf)['physicalSHA256'],P.sha(crlf))
         for raw in (crlf.replace(b'\r\n',b'\n',1),helper+b'\r'):
             with self.assertRaisesRegex(ValueError,'mixed or bare-CR'):self.driver.logical(raw)

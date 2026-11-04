@@ -48,8 +48,8 @@
     "sha256": "1f5bd3293fe78f60b078589d724e1428eef0415494a44032557c8e22e8bdbc72"
   },
   "scripts/fixtures/receiver-input-native/tests/windows-cross-sid-tests.rs": {
-    "bytes": 34259,
-    "sha256": "5636ce4a977bd7464fbdce87f89c324af7b6c0be51294dad49f95eb9d0ffc755"
+    "bytes": 34280,
+    "sha256": "9190db5a280ec3d4fdc8ab3fc3e687373f53a45af193adcf34df658283d8bb98"
   },
   "scripts/patch-support-receiver-custodian.py": {
     "bytes": 9609,

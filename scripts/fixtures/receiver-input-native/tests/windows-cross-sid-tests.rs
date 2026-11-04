@@ -89,8 +89,8 @@ fn qa_pipe_path()->String{format!("\\\\.\\pipe\\{}",qa_root().file_name().unwrap
 // NOWAIT listening/empty-buffer results as either data or connection readiness.
 #[repr(C)] struct QaOverlapped { internal:usize,internal_high:usize,offset:u32,offset_high:u32,event:Handle }
 #[link(name="kernel32")] extern "system" {
-    fn ReadFile(file:Handle,data:Handle,size:u32,transferred:*mut u32,overlapped:*mut QaOverlapped)->i32;
-    fn WriteFile(file:Handle,data:*const c_void,size:u32,transferred:*mut u32,overlapped:*mut QaOverlapped)->i32;
+    fn ReadFile(file:Handle,data:*mut u8,size:u32,transferred:*mut u32,overlapped:Handle)->i32;
+    fn WriteFile(file:Handle,data:*const u8,size:u32,transferred:*mut u32,overlapped:Handle)->i32;
     fn GetOverlappedResult(file:Handle,overlapped:*mut QaOverlapped,transferred:*mut u32,wait:i32)->i32;
     fn CancelIoEx(file:Handle,overlapped:*mut QaOverlapped)->i32;
 }
@@ -131,8 +131,8 @@ fn qa_pipe_io(pipe:&QaPipe,operation:QaOperation,data:Vec<u8>,limit:Duration)->R
     let request=pending.request.as_mut().unwrap();let mut transferred=0;
     let success=unsafe{match operation{
         QaOperation::Connect=>ConnectNamedPipe(pipe.raw(),(&mut request.overlapped as *mut QaOverlapped).cast()),
-        QaOperation::Read=>ReadFile(pipe.raw(),request.data.as_mut_ptr().cast(),request.data.len()as u32,&mut transferred,&mut request.overlapped),
-        QaOperation::Write=>WriteFile(pipe.raw(),request.data.as_ptr().cast(),request.data.len()as u32,&mut transferred,&mut request.overlapped),
+        QaOperation::Read=>ReadFile(pipe.raw(),request.data.as_mut_ptr(),request.data.len()as u32,&mut transferred,(&mut request.overlapped as *mut QaOverlapped).cast()),
+        QaOperation::Write=>WriteFile(pipe.raw(),request.data.as_ptr(),request.data.len()as u32,&mut transferred,(&mut request.overlapped as *mut QaOverlapped).cast()),
     }};
     let code=if success==0{Some(unsafe{GetLastError()})}else{None};
     if success==0&&!(matches!(operation,QaOperation::Connect)&&code==Some(535)){

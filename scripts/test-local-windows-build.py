@@ -276,6 +276,13 @@ class Controls(unittest.TestCase):
         for value in ('Bypass','Unrestricted','Restricted','AllSigned','Undefined',''):
             with self.subTest(value=value),self.assertRaisesRegex(RuntimeError,'existing explicit RemoteSigned'):
                 W.safe_environment({'PSExecutionPolicyPreference':value})
+    def test_visual_studio_catalog_os_directories_survive_child_environment(self):
+        env=W.safe_environment({'ProgramData':r'C:\ProgramData','SystemDrive':'C:',
+                               'AZURE_CLIENT_SECRET':'never inherit','GITHUB_ACTIONS':'true'})
+        self.assertEqual(env['PROGRAMDATA'],r'C:\ProgramData')
+        self.assertEqual(env['SYSTEMDRIVE'],'C:')
+        self.assertNotIn('AZURE_CLIENT_SECRET',env)
+        self.assertNotIn('GITHUB_ACTIONS',env)
         with mock.patch.dict(os.environ,{},clear=True):
             with self.assertRaisesRegex(RuntimeError,'caller must explicitly authorize'):self.build()
         self.assertFalse(self.calls);self.assertFalse(self.output.exists())

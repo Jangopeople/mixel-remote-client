@@ -197,6 +197,9 @@ def safe_environment(inherited):
     # verifies the actual process/native machine via IsWow64Process2.
     keep={'path','systemroot','windir','comspec','temp','tmp','userprofile','home','appdata','localappdata','programfiles','programfiles(x86)',
           'processor_architecture','processor_architew6432',
+          # Visual Studio's setup query resolves its installed-instance catalog
+          # through these OS directories, including when Flutter invokes it.
+          'programdata','systemdrive',
           'vctoolsinstalldir','vcinstalldir','vsinstalldir','visualstudioversion','vscmd_arg_tgt_arch','vscmd_arg_host_arch',
           'windowssdkdir','windowssdkversion','windowssdkbinpath','windowssdkverbinpath','universalcrtsdkdir','ucrtversion',
           'include','lib','libpath','rustup_home','http_proxy','https_proxy','no_proxy','ssl_cert_file','ssl_cert_dir'}
