@@ -192,7 +192,11 @@ def safe_environment(inherited):
         raise Refusal('only an existing explicit RemoteSigned Process execution policy is admitted')
     for name in ('RUSTC','RUSTC_WRAPPER','RUSTC_WORKSPACE_WRAPPER','RUSTDOC','CARGO_TARGET_DIR','CARGO_BUILD_TARGET'):
         if inherited.get(name):raise Refusal('unexpected compiler/output override: '+name)
+    # CPython's Windows platform.machine() reads these inherited OS values.
+    # Preserve them for child admission; WindowsSecurityProbe independently
+    # verifies the actual process/native machine via IsWow64Process2.
     keep={'path','systemroot','windir','comspec','temp','tmp','userprofile','home','appdata','localappdata','programfiles','programfiles(x86)',
+          'processor_architecture','processor_architew6432',
           'vctoolsinstalldir','vcinstalldir','vsinstalldir','visualstudioversion','vscmd_arg_tgt_arch','vscmd_arg_host_arch',
           'windowssdkdir','windowssdkversion','windowssdkbinpath','windowssdkverbinpath','universalcrtsdkdir','ucrtversion',
           'include','lib','libpath','rustup_home','http_proxy','https_proxy','no_proxy','ssl_cert_file','ssl_cert_dir'}

@@ -257,7 +257,9 @@ class Controls(unittest.TestCase):
     def test_batch_arguments_and_environment_refuse_injection_and_secrets(self):
         for value in ('C:/x&exit/ flutter.bat','C:/%TOKEN%/flutter.bat','C:/x!bad/flutter.bat'):
             with self.assertRaises(RuntimeError):W.batch(Path('cmd.exe'),Path(value),'pub','get')
-        env=W.safe_environment({'Path':'safe','AZURE_CLIENT_SECRET':'secret','GITHUB_ACTIONS':'true','RUNNER_TEMP':'spoof','CARGO_BUILD_JOBS':'99','PYTHONNOUSERSITE':'0','PYTHONPATH':'untrusted','PYTHONUSERBASE':'untrusted'})
+        env=W.safe_environment({'Path':'safe','PROCESSOR_ARCHITECTURE':'AMD64','PROCESSOR_ARCHITEW6432':'AMD64','AZURE_CLIENT_SECRET':'secret','GITHUB_ACTIONS':'true','RUNNER_TEMP':'spoof','CARGO_BUILD_JOBS':'99','PYTHONNOUSERSITE':'0','PYTHONPATH':'untrusted','PYTHONUSERBASE':'untrusted'})
+        self.assertEqual(env['PROCESSOR_ARCHITECTURE'],'AMD64')
+        self.assertEqual(env['PROCESSOR_ARCHITEW6432'],'AMD64')
         self.assertEqual(env['PATH'],'safe');self.assertFalse(any('secret' in x for x in env.values()));self.assertNotIn('RUNNER_TEMP',env)
         self.assertEqual(env['PYTHONNOUSERSITE'],'1');self.assertNotIn('PYTHONPATH',env);self.assertNotIn('PYTHONUSERBASE',env)
 
