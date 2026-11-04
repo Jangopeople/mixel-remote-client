@@ -398,7 +398,9 @@ def build(args,repo=REPO):
     flutter_bat=file(flutter/'bin/flutter.bat');dart=file(flutter/'bin/cache/dart-sdk/bin/dart.exe');pe_x64(dart)
     engine=file(flutter/'bin/cache/artifacts/engine/windows-x64-release/flutter_windows.dll');pe_x64(engine)
     file(flutter/'bin/cache/artifacts/engine/windows-x64-release/flutter_windows.dll.lib')
-    command=file(Path(windows_environment_value(env,'SystemRoot'))/'System32/cmd.exe');pe_x64(command)
+    # Windows services this OS binary through WinSxS hard links, like SDK inputs.
+    # Build-owned files remain single-link; hold the system command bytes below.
+    command=file(Path(windows_environment_value(env,'SystemRoot'))/'System32/cmd.exe',independent=False);pe_x64(command)
     try:import brotli
     except ImportError as error:raise Refusal('preinstall Python Brotli from pinned portable requirements; no pip runs in this driver') from error
     output.mkdir(mode=0o700);C.windows_private_entry(output,probe,directory=True)
@@ -439,7 +441,7 @@ def build(args,repo=REPO):
             argsv=['-NoLogo','-NoProfile','-NonInteractive','-Command','$PSVersionTable.PSVersion.ToString()'] if tool=='pwsh.exe' else ['-version' if tool=='magick.exe' else '--version']
             actual=call('tool-'+tool, [tools[tool],*argsv],read=True)
             if tool=='pwsh.exe' and not re.match(rb'7\.',actual.strip()):raise Refusal('preinstalled PowerShell7 required')
-        tool_inputs={str(path):B.digest(path) for path in (*rust_paths.values(),linker,linker.with_name('cl.exe'),*sdk_inputs,flutter_bat,dart,engine,Path(libclang['dll']))}
+        tool_inputs={str(path):B.digest(path) for path in (*rust_paths.values(),linker,linker.with_name('cl.exe'),*sdk_inputs,command,flutter_bat,dart,engine,Path(libclang['dll']))}
         B.write_json(output/'toolchains.json',{'rustcVersion':rust.strip(),'cargoVersion':cargo.strip(),'sdkVersion':sdk_version,
                      'flutterIdentity':identity,'actualInputHashes':tool_inputs,'libclangVersion':libclang['version']})
         owned_bin=output/'tools-bin';owned_bin.mkdir()

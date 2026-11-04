@@ -122,6 +122,28 @@ class Controls(unittest.TestCase):
         return subprocess.CompletedProcess(argv,code)
     def build(self):
         with contextlib.redirect_stdout(io.StringIO()):return W.build(self.args,self.repo)
+
+    def test_system_command_servicing_hardlink_is_admitted_and_hash_bound(self):
+        command=self.repo/'System32/cmd.exe'
+        alias=self.repo/'WinSxS/cmd.exe';alias.parent.mkdir();os.link(command,alias)
+        self.build()
+        tools=json.loads((self.output/'toolchains.json').read_text())
+        self.assertEqual(tools['actualInputHashes'][str(command)],hashlib.sha256(command.read_bytes()).hexdigest())
+        result=json.loads((self.output/'build.result.json').read_text())
+        self.assertTrue(result['toolchainInputsUnchanged'])
+        with self.assertRaises(RuntimeError):W.file(command)
+
+    def test_system_command_drift_prevents_qualification(self):
+        command=self.repo/'System32/cmd.exe';old_process=self.process
+        def drift(argv,**kw):
+            result=old_process(argv,**kw)
+            if self.labels[-1]=='compiled-support-guard':command.write_bytes(b'changed system command')
+            return result
+        with mock.patch.object(W.subprocess,'run',side_effect=drift):
+            with self.assertRaises(RuntimeError):self.build()
+        result=json.loads((self.output/'build.result.json').read_text())
+        self.assertFalse(result['buildQualified']);self.assertFalse(result['toolchainInputsUnchanged'])
+
     def test_mocked_full_build_keeps_unsigned_scope_exact_order_and_input_identity(self):
         before=C.inventory(self.source);result=self.build()
         self.assertTrue(result['buildQualified']);self.assertEqual(before,C.inventory(self.source))
