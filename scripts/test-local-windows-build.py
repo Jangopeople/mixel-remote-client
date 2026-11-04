@@ -155,6 +155,30 @@ class Controls(unittest.TestCase):
         result=json.loads((self.output/'build.result.json').read_text())
         self.assertFalse(result['buildQualified']);self.assertFalse(result['toolchainInputsUnchanged'])
 
+    def test_git_longpaths_config_is_private_scoped_and_hash_held(self):
+        inherited=dict(os.environ);self.build()
+        config=self.output/'cargo-home/xdg/git/config'
+        self.assertEqual(config.read_bytes(),b'[core]\n\tlongpaths = true\n')
+        for label,_,environment in self.calls:
+            if label in ('fetch-locked','check-entire-app','build-entire-app'):
+                self.assertEqual(environment['XDG_CONFIG_HOME'],str(config.parent.parent))
+                self.assertEqual(environment['GIT_CONFIG_GLOBAL'],str(config))
+                self.assertNotIn('HOME',environment)
+        self.assertEqual(dict(os.environ),inherited)
+        tools=json.loads((self.output/'toolchains.json').read_text())
+        self.assertEqual(tools['actualInputHashes'][str(config)],hashlib.sha256(config.read_bytes()).hexdigest())
+
+    def test_private_git_config_drift_prevents_qualification(self):
+        old_process=self.process
+        def drift(argv,**kw):
+            result=old_process(argv,**kw)
+            if self.labels[-1]=='compiled-support-guard':(self.output/'cargo-home/xdg/git/config').write_bytes(b'[core]\nlongpaths=false\n')
+            return result
+        with mock.patch.object(W.subprocess,'run',side_effect=drift):
+            with self.assertRaises(RuntimeError):self.build()
+        result=json.loads((self.output/'build.result.json').read_text())
+        self.assertFalse(result['buildQualified']);self.assertFalse(result['toolchainInputsUnchanged'])
+
     def test_mocked_full_build_keeps_unsigned_scope_exact_order_and_input_identity(self):
         before=C.inventory(self.source);result=self.build()
         self.assertTrue(result['buildQualified']);self.assertEqual(before,C.inventory(self.source))

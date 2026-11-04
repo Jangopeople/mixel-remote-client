@@ -450,13 +450,20 @@ def build(args,repo=REPO):
             actual=call('tool-'+tool, [tools[tool],*argsv],read=True)
             if tool=='pwsh.exe' and not re.match(rb'7\.',actual.strip()):raise Refusal('preinstalled PowerShell7 required')
         tool_inputs={str(path):B.digest(path) for path in (*rust_paths.values(),linker,linker.with_name('cl.exe'),*sdk_inputs,command,flutter_bat,dart,engine,Path(libclang['dll']))}
-        B.write_json(output/'toolchains.json',{'rustcVersion':rust.strip(),'cargoVersion':cargo.strip(),'sdkVersion':sdk_version,
-                     'flutterIdentity':identity,'actualInputHashes':tool_inputs,'libclangVersion':libclang['version']})
         owned_bin=output/'tools-bin';owned_bin.mkdir()
         (owned_bin/'python3').write_bytes(b'#!/usr/bin/env bash\nexec "$MIXEL_LOCAL_PYTHON" "$@"\n')
         home=output/'cargo-home';home.mkdir();pub=output/'pub-cache';pub.mkdir();temporary=output/'tmp';temporary.mkdir()
-        for directory in (owned_bin,home,pub,temporary):C.windows_private_entry(directory,probe,directory=True)
+        # Cargo1.75's embedded libgit2 also reads the XDG config. Keep this
+        # option private to the build; never edit account/system Git or HOME.
+        git_xdg=home/'xdg';git_xdg.mkdir();git_directory=git_xdg/'git';git_directory.mkdir()
+        git_config=git_directory/'config';git_config.write_bytes(b'[core]\n\tlongpaths = true\n')
+        for directory in (owned_bin,home,pub,temporary,git_xdg,git_directory):C.windows_private_entry(directory,probe,directory=True)
         C.windows_private_entry(owned_bin/'python3',probe,directory=False)
+        C.windows_private_entry(git_config,probe,directory=False)
+        tool_inputs[str(git_config)]=B.digest(file(git_config))
+        B.write_json(output/'toolchains.json',{'rustcVersion':rust.strip(),'cargoVersion':cargo.strip(),'sdkVersion':sdk_version,
+                     'flutterIdentity':identity,'actualInputHashes':tool_inputs,'libclangVersion':libclang['version'],
+                     'privateGitConfig':str(git_config),'privateGitConfigScope':'child environment only; no account/system changes'})
         env.update(PATH=os.pathsep.join((str(linker.parent),str(rust_paths['cargo'].parent),str(owned_bin),str(flutter/'bin'),env.get('PATH',env.get('Path','')))),
                    CARGO_HOME=str(home),PUB_CACHE=str(pub),RUSTUP_TOOLCHAIN=TOOLCHAIN,VCPKG_ROOT=str(args.vcpkg),VCPKG_DEFAULT_TRIPLET=TRIPLET,
                    VCPKG_DEFAULT_HOST_TRIPLET=TRIPLET,CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=str(linker),
@@ -464,6 +471,7 @@ def build(args,repo=REPO):
                    COMSPEC=str(command),OS='Windows_NT',
                    TEMP=str(temporary),TMP=str(temporary),
                    LIBCLANG_PATH=libclang['directory'],
+                   XDG_CONFIG_HOME=str(git_xdg),GIT_CONFIG_GLOBAL=str(git_config),
                    RDREPO=str(app).replace('\\','/'),BRANDING=str(repo/'branding').replace('\\','/'),MIXEL_LOCAL_PYTHON=sys.executable.replace('\\','/'))
         # Windows hardcodes target/release in build.py; native host target was proved above.
         for key in list(env):
