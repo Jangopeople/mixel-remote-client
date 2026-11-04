@@ -34,8 +34,9 @@ public static class MixelHeldInputReadOnly {
     static IntPtr TokenData(IntPtr token, int kind, out int size) {
         int needed;
         bool first=GetTokenInformation(token,kind,IntPtr.Zero,0,out needed);
-        if(first || Marshal.GetLastWin32Error()!=122 || needed<4 || needed>65536)
-            throw new InvalidOperationException("Read-only token bounds");
+        int firstError=Marshal.GetLastWin32Error();
+        if(first || firstError!=122 || needed<4 || needed>65536)
+            throw new InvalidOperationException("Read-only token bounds kind="+kind+" first="+first+" error="+firstError+" needed="+needed);
         IntPtr p=Marshal.AllocHGlobal(needed);
         int actual;
         if(!GetTokenInformation(token,kind,p,needed,out actual) || actual<4 || actual>needed) {
@@ -43,10 +44,29 @@ public static class MixelHeldInputReadOnly {
         }
         size=actual;return p;
     }
-    static int Scalar(IntPtr token,int kind) {
-        int size;IntPtr p=TokenData(token,kind,out size);
-        try { if(size!=4)throw new InvalidOperationException("Token scalar size");return Marshal.ReadInt32(p); }
+    internal static void RequireNoRestrictedSids(int size,int count) {
+        if(size<4 || size>65536 || count!=0)
+            throw new InvalidOperationException("Restricted token or malformed restricted SID groups");
+    }
+    static void NoRestrictedSids(IntPtr token) {
+        // TokenHasRestrictions means ever filtered, including ordinary UAC
+        // limited tokens; its runtime layout can also be one byte. Query the
+        // actual restricted SID list instead. Deny-only groups remain handled
+        // conservatively by TokenSids and the existing desktop DACL check.
+        int size;IntPtr p=TokenData(token,11,out size); // TokenRestrictedSids
+        try { RequireNoRestrictedSids(size,Marshal.ReadInt32(p)); }
         finally { Marshal.FreeHGlobal(p); }
+    }
+    static int Scalar(IntPtr token,int kind) {
+        // Fixed DWORD queries need a fixed buffer. TokenElevation can return
+        // ERROR_BAD_LENGTH rather than INSUFFICIENT_BUFFER for a size probe.
+        IntPtr p=Marshal.AllocHGlobal(4);
+        try {
+            int actual;
+            if(!GetTokenInformation(token,kind,p,4,out actual))throw new Win32Exception();
+            if(actual!=4)throw new InvalidOperationException("Token scalar size");
+            return Marshal.ReadInt32(p);
+        } finally { Marshal.FreeHGlobal(p); }
     }
     static string BoundedSid(IntPtr root,int size,IntPtr sid) {
         long offset=sid.ToInt64()-root.ToInt64();
@@ -93,7 +113,8 @@ public static class MixelHeldInputReadOnly {
         if(Marshal.GetLastWin32Error()!=1008)throw new Win32Exception();
         if(!OpenProcessToken(GetCurrentProcess(),8,out token))throw new Win32Exception();
         try {
-            if(Scalar(token,21)!=0 || Scalar(token,29)!=0 || Scalar(token,20)!=0)
+            NoRestrictedSids(token);
+            if(Scalar(token,29)!=0 || Scalar(token,20)!=0)
                 throw new InvalidOperationException("Restricted/appcontainer/elevated observer refused");
             int labelSize;IntPtr label=TokenData(token,25,out labelSize);
             try {

@@ -16,7 +16,7 @@ function Get-MixelHeldLogicalSHA([string]$Text) {
 function Compile-MixelHeldManagedSources([string]$IdentitySource,[string]$KeyStateSource) {
   if((Get-MixelHeldLogicalSHA $IdentitySource) -cne
      '1b0b4fd52a307f2076e3296722b8891fbe11c05b3361be3fce0f47ed5433efe8' -or
-     (Get-MixelHeldLogicalSHA $KeyStateSource) -cne 'eb64c8b3f35be4c3f11ff743e2912f767e45c1b22f91ca5c92bf2f24127374ac') {
+     (Get-MixelHeldLogicalSHA $KeyStateSource) -cne '65001efe657304f1eafdbe1a6030e1513ee0cfb5a34e952ad70f1994ec60f7c5') {
     throw 'Exact read-only source literals required'
   }
   if(('MixelPc01ReadOnly070' -as [type]) -or ('MixelHeldInputReadOnly' -as [type])) {
