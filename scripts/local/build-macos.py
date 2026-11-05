@@ -536,7 +536,9 @@ def build(args, repo):
             previous = admit_reuse(args.reuse_from, root, output)
             shutil.copyfile(previous["root"] / "build.result.json", output / "reuse-previous-build.result.json")
         def git(label, directory, *arguments):
-            return runner.call(label, ["git", "-C", directory, *arguments], repo, read=True, timeout=30)
+            # A cold Flutter SDK index on an external volume can exceed 30s.
+            # Keep the complete clean-source check, with a bounded read budget.
+            return runner.call(label, ["git", "-C", directory, *arguments], repo, read=True, timeout=120)
         source_head = git("pipeline-head", repo, "rev-parse", "--verify", "HEAD").decode("ascii").strip()
         if not re.fullmatch(r"[0-9a-f]{40}", source_head):
             raise Refusal("pipeline source HEAD is unavailable")
