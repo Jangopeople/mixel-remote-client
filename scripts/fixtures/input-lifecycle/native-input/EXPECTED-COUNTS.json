@@ -1,0 +1,14 @@
+{
+  "Darwin": {
+    "current": 114,
+    "requiredNegative": 20
+  },
+  "Linux": {
+    "current": 90,
+    "requiredNegative": 10
+  },
+  "Windows": {
+    "current": 90,
+    "requiredNegative": 10
+  }
+}

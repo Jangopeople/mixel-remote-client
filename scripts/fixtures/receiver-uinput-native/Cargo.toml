@@ -1,0 +1,13 @@
+[package]
+name = "mixel-uinput-timer-component"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.75"
+[dependencies]
+tokio = { version = "=1.44.2", features = ["rt", "time", "macros"] }
+[[bin]]
+name = "timer-component"
+path = "tokio-main.rs"
+[features]
+original-timer = []
+[workspace]

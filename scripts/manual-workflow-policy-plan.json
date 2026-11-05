@@ -1,0 +1,112 @@
+{
+  "schema": "mixel-manual-workflow-policy-v1",
+  "workflows": {
+    ".github/workflows/build.yml": {
+      "prefix": "name: build\n\n",
+      "historicalHeader": "on:\n  push:\n    tags: [\"v*\"]\n  workflow_dispatch:\n    inputs:\n      upstream_version:\n        description: \"RustDesk upstream version to fork from (empty = branding/branding.env)\"\n        required: false\n        default: \"\"\n      only:\n        description: \"Comma list of platform jobs to run: linux,macos,windows (empty = all). Saves CI minutes on partial rebuilds.\"\n        required: false\n        default: \"\"\n      publish_r2:\n        description: \"Publish the build to the live customer download bucket\"\n        required: true\n        type: boolean\n        default: false\n      collect_windows_preflight_failure:\n        description: \"Continue a failed Windows source preflight for unpublished diagnosis; the original failure still blocks release\"\n        required: false\n        type: boolean\n        default: false\n      runtime_windows_release_gate:\n        description: \"Debugger-free actual signed Windows QuickSupport95 gate (requires artifact run and publish=false)\"\n        required: false\n        type: boolean\n        default: false\n      runtime_artifact_run:\n        description: \"Read-only runtime diagnostic using an existing signed payload run (empty = build)\"\n        required: false\n        default: \"\"\n      runtime_linux_artifact_run:\n        description: \"Artifact-only native Linux session diagnostic using an existing customer DEB run (empty = build)\"\n        required: false\n        default: \"\"\n      runtime_macos_artifact_run:\n        description: \"Artifact-only macOS runtime diagnostic using an existing signed DMG run (empty = build)\"\n        required: false\n        default: \"\"\n\n",
+      "manualHeader": "on:\n  workflow_dispatch:\n    inputs:\n      upstream_version:\n        description: \"RustDesk upstream version to fork from (empty = branding/branding.env)\"\n        required: false\n        default: \"\"\n      only:\n        description: \"Comma list of platform jobs to run: linux,macos,windows (empty = all). Saves CI minutes on partial rebuilds.\"\n        required: false\n        default: \"\"\n      publish_r2:\n        description: \"Publish the build to the live customer download bucket\"\n        required: true\n        type: boolean\n        default: false\n      collect_windows_preflight_failure:\n        description: \"Continue a failed Windows source preflight for unpublished diagnosis; the original failure still blocks release\"\n        required: false\n        type: boolean\n        default: false\n      runtime_windows_release_gate:\n        description: \"Debugger-free actual signed Windows QuickSupport95 gate (requires artifact run and publish=false)\"\n        required: false\n        type: boolean\n        default: false\n      runtime_artifact_run:\n        description: \"Read-only runtime diagnostic using an existing signed payload run (empty = build)\"\n        required: false\n        default: \"\"\n      runtime_linux_artifact_run:\n        description: \"Artifact-only native Linux session diagnostic using an existing customer DEB run (empty = build)\"\n        required: false\n        default: \"\"\n      runtime_macos_artifact_run:\n        description: \"Artifact-only macOS runtime diagnostic using an existing signed DMG run (empty = build)\"\n        required: false\n        default: \"\"\n\n",
+      "bodyChanges": [],
+      "historicalSHA256": null
+    },
+    ".github/workflows/custody-fixture-lock-resolution.yml": {
+      "prefix": "name: custody-fixture-lock-resolution\n\n",
+      "historicalHeader": "on:\n  push:\n    branches: [diagnostic/custody-lock-resolution-20261017-r1]\n  workflow_dispatch:\n\n",
+      "manualHeader": "on:\n  workflow_dispatch:\n\n",
+      "bodyChanges": [],
+      "historicalSHA256": null
+    },
+    ".github/workflows/diagnose-macos-concurrency-failed-intel.yml": {
+      "prefix": "name: Diagnose exact failed Mac Intel concurrency cleanup\n\n",
+      "historicalHeader": "on:\n  workflow_dispatch:\n  pull_request:\n    paths:\n      - .github/workflows/diagnose-macos-concurrency-failed-intel.yml\n      - scripts/diagnose-macos-concurrency-failed-intel.py\n      - scripts/test-diagnose-macos-concurrency-failed-intel.py\n      - scripts/failed-intel-concurrency-replay-profile.json\n      - scripts/test-support-launch-macos-concurrency.py\n      - scripts/test-support-launch-macos-concurrency-controls.py\n      - scripts/diagnose-macos-failed-app.py\n      - scripts/failed-macos-diagnostic-helper-hashes.json\n      - scripts/test-support-launch-macos-tray.py\n      - scripts/test-support-launch-macos-tray-controls.py\n      - scripts/test-support-launch-macos.py\n      - scripts/test-support-launch-linux.py\n      - scripts/verify-macos-bundle-minimum.py\n      - scripts/verify-macos-native-minimum.py\n\n",
+      "manualHeader": "on:\n  workflow_dispatch:\n",
+      "bodyChanges": [],
+      "historicalSHA256": null
+    },
+    ".github/workflows/diagnose-macos-failed-app.yml": {
+      "prefix": "name: Diagnose exact failed Mac ARM app\n\n",
+      "historicalHeader": "on:\n  workflow_dispatch:\n  pull_request:\n    paths:\n      - .github/workflows/diagnose-macos-failed-app.yml\n      - scripts/diagnose-macos-failed-app.py\n      - scripts/run-failed-macos-tray-diagnostic.py\n      - scripts/test-diagnose-macos-failed-app.py\n      - scripts/failed-macos-diagnostic-helper-hashes.json\n      - scripts/test-support-launch-macos-tray.py\n      - scripts/test-support-launch-macos-tray-controls.py\n      - scripts/test-support-launch-macos.py\n      - scripts/test-support-launch-linux.py\n      - scripts/verify-macos-bundle-minimum.py\n      - scripts/verify-macos-native-minimum.py\n\n",
+      "manualHeader": "on:\n  workflow_dispatch:\n",
+      "bodyChanges": [],
+      "historicalSHA256": null
+    },
+    ".github/workflows/flutter-input-inventory-controls.yml": {
+      "prefix": "name: Flutter input inventory controls\n\n",
+      "historicalHeader": "on:\n  pull_request:\n  workflow_dispatch:\n\n",
+      "manualHeader": "on:\n  workflow_dispatch:\n\n",
+      "bodyChanges": [],
+      "historicalSHA256": null
+    },
+    ".github/workflows/held-input-managed-observer-diagnostic.yml": {
+      "prefix": "name: held-input-managed-observer-diagnostic\n\n",
+      "historicalHeader": "on:\n  push:\n    branches: [diagnostic/held-input-managed-20261017-r1]\n  workflow_dispatch:\n\n",
+      "manualHeader": "on:\n  workflow_dispatch:\n\n",
+      "bodyChanges": [],
+      "historicalSHA256": null
+    },
+    ".github/workflows/linux-installer-systemd.yml": {
+      "prefix": "name: unpublished Linux installer systemd QA\n\n",
+      "historicalHeader": "on:\n  workflow_dispatch:\n  pull_request:\n    paths:\n      - .github/workflows/linux-installer-systemd.yml\n      - scripts/linux-installer-systemd.py\n      - scripts/linux-installer-systemd-guest.py\n      - scripts/test-linux-installer-systemd.py\n\n",
+      "manualHeader": "on:\n  workflow_dispatch:\n",
+      "bodyChanges": [],
+      "historicalSHA256": null
+    },
+    ".github/workflows/pc01-linux-controller.yml": {
+      "prefix": "name: Private attended PC01 Linux controller\n\n",
+      "historicalHeader": "on:\n  pull_request:\n    paths:\n      - '.github/workflows/pc01-linux-controller.yml'\n      - 'scripts/pc01-linux-controller.py'\n      - 'scripts/test-pc01-linux-controller.py'\n  workflow_dispatch:\n    inputs:\n      admission_json:\n        description: Root-reviewed current070 admission JSON; no credentials\n        required: true\n        type: string\n      admission_sha256:\n        description: Exact SHA256 of admission_json UTF-8 bytes\n        required: true\n        type: string\n\n",
+      "manualHeader": "on:\n  workflow_dispatch:\n    inputs:\n      admission_json:\n        description: Root-reviewed current070 admission JSON; no credentials\n        required: true\n        type: string\n      admission_sha256:\n        description: Exact SHA256 of admission_json UTF-8 bytes\n        required: true\n        type: string\n\n",
+      "bodyChanges": [
+        {
+          "old": "      - name: Run only inert source/refusal controls\n        run: python3 scripts/test-pc01-linux-controller.py\n",
+          "new": "      - name: Run only inert source/refusal controls\n        run: python3 scripts/test-pc01-linux-controller-frozen.py\n"
+        },
+        {
+          "old": "      - name: Run inert controller/refusal controls\n        run: python3 scripts/test-pc01-linux-controller.py\n",
+          "new": "      - name: Run inert controller/refusal controls\n        run: python3 scripts/test-pc01-linux-controller-frozen.py\n"
+        }
+      ],
+      "historicalSHA256": "2007f8deca8f2a60a0acde3a1f9fb8d816a85942891c6231c57f3a8202304980"
+    },
+    ".github/workflows/preflight.yml": {
+      "prefix": "name: client-preflight\n\n",
+      "historicalHeader": "on:\n  pull_request:\n  push:\n    branches: [main]\n  workflow_dispatch:\n    inputs:\n      receiver_native_only:\n        description: 'Diagnostic exact receiver component only; never qualifies an application release'\n        type: boolean\n        default: false\n      windows_source_runner:\n        description: 'Windows source-only comparison runner'\n        type: choice\n        default: windows-2022\n        options:\n          - windows-2022\n          - windows-2025\n      portable_standard_lease_qa_bundle:\n        description: 'Compile a GUID-only portable desktop QA fixture; does not qualify standard-user consent or release readiness'\n        type: boolean\n        default: false\n      standard_gui_connection_observation:\n        description: 'Observe isolated standard-child GUI initialization A/B/A; preserves native outcomes and never qualifies consent or applications'\n        type: boolean\n        default: false\n\n      session_directory_access_observation:\n        description: 'Disposable CI-only session directory DACL experiment; original Standard gate remains fatal'\n        type: boolean\n        default: false\n\n",
+      "manualHeader": "on:\n  workflow_dispatch:\n    inputs:\n      receiver_native_only:\n        description: 'Diagnostic exact receiver component only; never qualifies an application release'\n        type: boolean\n        default: false\n      windows_source_runner:\n        description: 'Windows source-only comparison runner'\n        type: choice\n        default: windows-2022\n        options:\n          - windows-2022\n          - windows-2025\n      portable_standard_lease_qa_bundle:\n        description: 'Compile a GUID-only portable desktop QA fixture; does not qualify standard-user consent or release readiness'\n        type: boolean\n        default: false\n      standard_gui_connection_observation:\n        description: 'Observe isolated standard-child GUI initialization A/B/A; preserves native outcomes and never qualifies consent or applications'\n        type: boolean\n        default: false\n\n      session_directory_access_observation:\n        description: 'Disposable CI-only session directory DACL experiment; original Standard gate remains fatal'\n        type: boolean\n        default: false\n\n",
+      "bodyChanges": [],
+      "historicalSHA256": null
+    },
+    ".github/workflows/sentinel-code-guard.yml": {
+      "prefix": "# Sentinel Code Guard (self-contained, distributed to all Jangopeople repos)\n#\n# Runs free OSS scanners (Gitleaks, Semgrep, Trivy) on every push/PR and reports\n# findings into MIXEL Sentinel. The reporter is inlined (base64) so this is the\n# ONLY file each repo needs. Managed centrally from Jangopeople/mixel-sentinel.\nname: Sentinel Code Guard\n\n",
+      "historicalHeader": "on:\n  push:\n    branches: [main]\n  pull_request:\n  workflow_dispatch:\n\n",
+      "manualHeader": "on:\n  workflow_dispatch:\n\n",
+      "bodyChanges": [],
+      "historicalSHA256": null
+    },
+    ".github/workflows/windows-branding-idempotence.yml": {
+      "prefix": "name: Windows complete branding idempotence\n\n",
+      "historicalHeader": "on:\n  pull_request:\n    paths:\n      - .github/workflows/windows-branding-idempotence.yml\n      - scripts/patch-secure-support.py\n      - scripts/test-secure-support.py\n      - scripts/test-support-flutter-analysis.py\n      - scripts/apply-branding.sh\n  workflow_dispatch:\n\n",
+      "manualHeader": "on:\n  workflow_dispatch:\n\n",
+      "bodyChanges": [],
+      "historicalSHA256": null
+    },
+    ".github/workflows/windows-namespace-diagnostic.yml": {
+      "prefix": "name: windows-namespace-diagnostic\n\n",
+      "historicalHeader": "on:\n  workflow_dispatch:\n  push:\n    branches: ['codex/**']\n    paths:\n      - '.github/workflows/windows-namespace-diagnostic.yml'\n      - 'scripts/windows-standard-namespace*'\n      - 'scripts/test-support-lease*'\n      - 'scripts/test-windows-standard-namespace-access.ps1'\n\n",
+      "manualHeader": "on:\n  workflow_dispatch:\n",
+      "bodyChanges": [],
+      "historicalSHA256": null
+    },
+    ".github/workflows/windows-namespace-trace.yml": {
+      "prefix": "name: windows-namespace-trace\n\n",
+      "historicalHeader": "on:\n  workflow_dispatch:\n    inputs:\n      attach_after_main_barrier:\n        description: 'Separate source-only attach-after-main-barrier experiment; no customer release qualification'\n        type: boolean\n        required: false\n        default: false\n  push:\n    branches: ['codex/**']\n    paths:\n      - '.github/workflows/windows-namespace-trace.yml'\n      - 'scripts/windows-namespace-cdb.py'\n      - 'scripts/windows_namespace_probe.py'\n      - 'scripts/windows_namespace_engine.py'\n      - 'scripts/windows-namespace-engine-readonly.cpp'\n      - 'scripts/test-windows-namespace-cdb.py'\n      - 'scripts/test-windows-namespace-trace.ps1'\n\n",
+      "manualHeader": "on:\n  workflow_dispatch:\n    inputs:\n      attach_after_main_barrier:\n        description: 'Separate source-only attach-after-main-barrier experiment; no customer release qualification'\n        type: boolean\n        required: false\n        default: false\n",
+      "bodyChanges": [],
+      "historicalSHA256": null
+    },
+    ".github/workflows/windows-shell-boundary.yml": {
+      "prefix": "name: Windows active Bash boundary\n\n",
+      "historicalHeader": "on:\n  pull_request:\n    paths:\n      - 'scripts/**'\n      - scripts/test-support-native-warnings.py\n      - scripts/test-workflow-logical-views.py\n      - scripts/test-support-macos-texture.py\n      - scripts/test-input-lifecycle-integration-projection.py\n      - scripts/test-branding.py\n      - scripts/test-support-compiler-cleanup.py\n      - scripts/input_lifecycle_integration_projection.py\n      - scripts/test-support-flutter-analysis.py\n      - scripts/test-windows-generated-source.sh\n      - scripts/test-windows-lease-observation.py\n      - scripts/test-support-lease.py\n      - scripts/test-support-directory-security.py\n      - .github/workflows/windows-shell-boundary.yml\n      - .github/workflows/preflight.yml\n      - .github/workflows/build.yml\n  workflow_dispatch:\n\n",
+      "manualHeader": "on:\n  workflow_dispatch:\n\n",
+      "bodyChanges": [],
+      "historicalSHA256": null
+    }
+  }
+}

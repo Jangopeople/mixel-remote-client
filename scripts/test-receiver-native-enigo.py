@@ -1,0 +1,248 @@
+#!/usr/bin/env python3
+"""Pure source/profile controls; no compiler, native API or application runs."""
+import hashlib
+import importlib.util
+import os
+from pathlib import Path
+import re
+import shutil
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+spec = importlib.util.spec_from_file_location('receiver_native_enigo', ROOT / 'scripts/patch-support-receiver-native-enigo.py')
+P = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(P)
+FIXTURES = ROOT / 'scripts/fixtures/receiver-native-enigo'
+
+
+def fixture_bytes(profile, name):
+    return P.normalize((FIXTURES / profile / name).read_bytes())[0]
+
+
+def snapshot(root):
+    return {path.relative_to(root).as_posix(): (path.read_bytes(), path.stat().st_mode & 0o777)
+            for path in root.rglob('*') if path.is_file()}
+
+
+def api_docs(source, declaration):
+    """Read the actual contiguous Rust docs attached to one public API."""
+    token = '    ' + declaration
+    if source.count(token) != 1:
+        raise AssertionError('Exact receiver API declaration required')
+    prefix = source[:source.index(token)]
+    match = re.search(r'(?:^    ///[^\n]*\n)+\Z', prefix, re.M)
+    if match is None:
+        raise AssertionError('Public receiver API is missing attached Rust documentation')
+    return match.group()
+
+
+class NativeAcceptanceTests(unittest.TestCase):
+    def test_all_new_public_receiver_apis_have_effect_and_result_documentation(self):
+        expected = {
+            'libs/enigo/src/win/win_impl.rs': {
+                'receiver_unicode_event': ('UTF-16', 'SendInput', 'exactly one', 'Ok(())', 'Err', 'consumed'),
+                'receiver_key_plan': ('without injecting input', 'None', '0xFFFF', 'zero modifier'),
+            },
+            'libs/enigo/src/macos/macos_impl.rs': {
+                'receiver_text_event': ('without holding a physical key', 'Err', 'Ok(())', 'CoreGraphics', 'no delivery'),
+                'receiver_key_plan': ('without posting input', 'None', 'u16::MAX', 'zero modifier'),
+            },
+            'libs/enigo/src/linux/xdo.rs': {},
+            'libs/enigo/src/linux/nix_impl.rs': {},
+        }
+        for name, contracts in expected.items():
+            original = fixture_bytes('original', name).decode()
+            current = fixture_bytes('candidate', name).decode()
+            public = lambda source: set(re.findall(r'(?m)^    pub fn ([a-z_][a-z0-9_]*)\(', source))
+            self.assertEqual(public(current) - public(original), set(contracts), name)
+            for function, required in contracts.items():
+                declaration = 'pub fn ' + function + '('
+                docs = api_docs(current, declaration)
+                for token in required:
+                    self.assertIn(token, docs, name + ':' + function)
+                with self.assertRaisesRegex(AssertionError, 'missing attached'):
+                    api_docs(current.replace(docs, '', 1), declaration)
+        name = 'libs/enigo/src/lib.rs'
+        original = fixture_bytes('original', name).decode()
+        current = fixture_bytes('candidate', name).decode()
+        functions = lambda source: set(re.findall(r'(?m)^    fn ([a-z_][a-z0-9_]*)\(', source))
+        self.assertEqual(functions(current) - functions(original), {'key_up_checked', 'mouse_up_checked'})
+        self.assertIn('#![deny(missing_docs)]', current)
+        self.assertNotRegex(current, r'#\s*!?\s*\[\s*(?:allow|warn)\s*\([^)]*missing_docs')
+        for function in ('key_up_checked', 'mouse_up_checked'):
+            docs = api_docs(current, 'fn ' + function + '(')
+            for token in ('backend-specific checked submission', 'Ok(())', 'Err', 'default emits no input',
+                          'target application consumed'):
+                self.assertIn(token, docs)
+
+    def test_api_documentation_is_the_only_change_to_the_previous_complete_profiles(self):
+        previous = {
+            'libs/enigo/src/lib.rs': ('dac383b1e4900f99f6123c4ed1df35181c44a77c8c42f2111f02939cbe3d2457', {
+                'fn mouse_up_checked(': '    /// Checked release; a void/no-op backend is not successful receipt proof.\n',
+                'fn key_up_checked(': '    /// Return acceptance of an exact key release. Backends must opt in rather\n'
+                                      '    /// than convert a void/no-op release into successful receipt evidence.\n',
+            }),
+            'libs/enigo/src/win/win_impl.rs': ('86ba9189cc5d0df51102f8b86cdc61dc77996fdbe28895f41268e9519301fd13', {
+                'pub fn receiver_unicode_event(': '',
+                'pub fn receiver_key_plan(': '    /// Preparation only: code and layout modifier bits used by this backend.\n',
+            }),
+            'libs/enigo/src/macos/macos_impl.rs': ('424c11ff52d5ffecde4d60bf42661ea121b19e0a6968e5c44215f92f1046a454', {
+                'pub fn receiver_text_event(': '',
+                'pub fn receiver_key_plan(': '',
+            }),
+        }
+        for name, (expected, replacements) in previous.items():
+            source = fixture_bytes('candidate', name).decode()
+            for declaration, old in replacements.items():
+                docs = api_docs(source, declaration)
+                source = source.replace(docs, old, 1)
+            self.assertEqual(hashlib.sha256(source.encode()).hexdigest(), expected, name)
+
+    def test_all_seven_real_source_profiles_inverse_modes_and_idempotence(self):
+        for newline in (b'\n', b'\r\n'):
+            with self.subTest(newline=newline), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                for row in P.plan():
+                    name = row['name']
+                    original = fixture_bytes('original', name)
+                    final = fixture_bytes('candidate', name)
+                    self.assertEqual(P.digest(original), row['beforeSha256'])
+                    self.assertEqual(P.digest(final), row['afterSha256'])
+                    self.assertEqual(P.transform(original, row), final)
+                    self.assertEqual(P.transform(final, row, restore=True), original)
+                    path = root / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(original.replace(b'\n', newline))
+                    path.chmod(0o640)
+                before = snapshot(root)
+                P.apply(root, restore=True, check=True)
+                with self.assertRaises(ValueError): P.apply(root, check=True)
+                P.apply(root)
+                after = snapshot(root)
+                self.assertEqual({name: mode for name, (_, mode) in after.items()},
+                                 {name: mode for name, (_, mode) in before.items()})
+                for row in P.plan():
+                    self.assertEqual(after[row['name']][0], fixture_bytes('candidate', row['name']).replace(b'\n', newline))
+                P.apply(root); P.apply(root, check=True)
+                self.assertEqual(snapshot(root), after)
+                P.apply(root, restore=True); P.apply(root, restore=True)
+                self.assertEqual(snapshot(root), before)
+
+    def test_missing_tampered_mixed_and_partial_profiles_refuse_before_any_write(self):
+        for mutation in ('missing', 'tampered', 'mixed-newlines', 'partial'):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory) / 'source'
+                shutil.copytree(FIXTURES / 'original', root)
+                row = P.plan()[0]
+                target = root / row['name']
+                if mutation == 'missing': target.unlink()
+                elif mutation == 'tampered': target.write_bytes(target.read_bytes() + b'// drift\n')
+                elif mutation == 'mixed-newlines': target.write_bytes(target.read_bytes().replace(b'\n', b'\r\n', 1))
+                else: target.write_bytes(fixture_bytes('candidate', row['name']))
+                before = snapshot(root)
+                for restore in (False, True):
+                    with self.assertRaises((ValueError, OSError)): P.apply(root, restore=restore)
+                    self.assertEqual(snapshot(root), before)
+
+    def test_symlink_hardlink_and_parent_symlink_refuse_without_mutation(self):
+        for mutation in ('symlink', 'hardlink', 'parent'):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
+                outer = Path(directory)
+                root = outer / 'source'
+                shutil.copytree(FIXTURES / 'original', root)
+                target = root / P.plan()[0]['name']
+                if mutation == 'parent':
+                    parent = target.parent
+                    retained = outer / 'retained'
+                    parent.rename(retained)
+                    parent.symlink_to(retained, target_is_directory=True)
+                else:
+                    retained = outer / 'retained.rs'
+                    target.rename(retained)
+                    if mutation == 'symlink': target.symlink_to(retained)
+                    else: os.link(retained, target)
+                original = retained.read_bytes() if retained.is_file() else None
+                with self.assertRaises(ValueError): P.apply(root)
+                if original is not None: self.assertEqual(retained.read_bytes(), original)
+
+    def test_windows_zero_partial_counts_refuse_independently_of_last_error(self):
+        source = (FIXTURES / 'candidate/libs/enigo/src/win/win_impl.rs').read_text()
+        for variable in ('accepted', 'res'):
+            guards = re.findall(r'if ' + variable + r' != (\d+) \{ return Err\(', source)
+            self.assertTrue(guards, variable)
+            self.assertEqual(set(guards), {'1'})
+            # The actual guard's count is decisive, even with empty LastError.
+            required = int(guards[0])
+            self.assertEqual([count for count in (0, 1, 2) if count == required], [1])
+        down = next(change['after'] for row in P.plan() if row['name'].endswith('win/win_impl.rs')
+                    for change in row['changes'] if change['before'].startswith('    fn key_down'))
+        self.assertLess(down.index('if let Err(error) = self.key_down'), down.index('applied.push'))
+        self.assertIn('for modifier in applied.into_iter().rev()', down)
+        self.assertNotIn('if !err.is_empty()', down)
+
+    def test_windows_error_buffer_size_matches_initialized_storage(self):
+        original = fixture_bytes('original', 'libs/enigo/src/win/win_impl.rs').decode()
+        current = fixture_bytes('candidate', 'libs/enigo/src/win/win_impl.rs').decode()
+        old = original[original.index('fn get_error()'):original.index('impl MouseControllable')]
+        fixed = current[current.index('fn get_error()'):current.index('impl MouseControllable')]
+        self.assertIn('buff.resize(buff_size, 0);', old)
+        self.assertIn('(buff_size + 1) as u32,', old)
+        self.assertIn('buff.resize(buff_size, 0);', fixed)
+        call = re.search(r'FormatMessageW\((.*?)\n        \);', fixed, re.S)[1]
+        self.assertIn('buff.as_mut_ptr(),\n            buff.len() as u32,', call)
+        self.assertNotIn('buff_size + 1', fixed)
+        # The old call promised one extra writable u16 beyond initialized Vec
+        # storage. The corrected count is the exact length passed by the Vec.
+        size = int(re.search(r'let buff_size = (\d+);', fixed)[1])
+        self.assertEqual(size, 256)
+        self.assertGreater(size + 1, size)
+        self.assertEqual(len([0] * size), size)
+        row = next(row for row in P.plan() if row['name'] == 'libs/enigo/src/win/win_impl.rs')
+        self.assertEqual(P.transform(original.encode(), row), current.encode())
+
+    def test_macos_requires_source_and_event_before_four_dispatches(self):
+        rows = [row for row in P.plan() if row['name'].endswith('macos/macos_impl.rs')]
+        self.assertEqual(len(rows), 1)
+        for name in ('key_down', 'key_up_checked', 'mouse_down', 'mouse_up_checked'):
+            source = (FIXTURES / 'candidate' / rows[0]['name']).read_text()
+            match = re.search(r'^    fn ' + name + r'\([^\n]*\).*?^    }\n', source, re.M | re.S)
+            self.assertIsNotNone(match, name)
+            body = match[0]
+            self.assertIn('.ok_or("CGEvent source unavailable")?', body)
+            self.assertIn('.map_err(', body)
+            self.assertLess(body.index('.map_err('), body.index('self.post('))
+            self.assertNotIn('if let Some(src)', body)
+
+    def test_linux_preserves_backend_selection_but_checks_unavailable_and_native_status(self):
+        source = (FIXTURES / 'candidate/libs/enigo/src/linux/xdo.rs').read_text()
+        for name in ('key_down', 'key_up_checked', 'mouse_down', 'mouse_up_checked'):
+            body = re.search(r'^    fn ' + name + r'\([^\n]*\).*?^    }\n', source, re.M | re.S)[0]
+            self.assertIn('self.xdo.is_null() { return Err(', body)
+            self.assertIn('if status != 0 { return Err(', body)
+        source = (FIXTURES / 'candidate/libs/enigo/src/linux/nix_impl.rs').read_text()
+        self.assertIn('if self.is_x11', source)
+        self.assertIn('self.tfc_key_down_or_up(key, false, true)', source)
+        self.assertIn('self.custom_keyboard.as_mut().ok_or(', source)
+        self.assertIn('self.custom_mouse.as_mut().ok_or(', source)
+        self.assertNotIn('log::warn!("Enigo::key_down: no custom_keyboard', source)
+
+    def test_checked_defaults_fail_closed_and_wayland_send_failures_propagate(self):
+        interface = (FIXTURES / 'candidate/libs/enigo/src/lib.rs').read_text()
+        for name in ('key_up_checked', 'mouse_up_checked'):
+            body = re.search(r'^    fn ' + name + r'\([^\n]*\).*?^    }\n', interface, re.M | re.S)[0]
+            self.assertIn('Err(', body)
+            self.assertNotIn('Ok(', body)
+        source = (FIXTURES / 'candidate/src/server/uinput.rs').read_text()
+        for name in ('key_down', 'key_up_checked', 'mouse_down', 'mouse_up_checked'):
+            body = re.search(r'^        fn ' + name + r'\([^\n]*\).*?^        }\n', source, re.M | re.S)[0]
+            self.assertIn('.map_err(', body)
+            self.assertNotIn('allow_err!', body)
+        source = (FIXTURES / 'candidate/src/server/rdp_input.rs').read_text()
+        body = re.search(r'^        fn key_up_checked\([^\n]*\).*?^        }\n', source, re.M | re.S)[0]
+        self.assertLess(body.index('handle_key(false'), body.index('self.modifier_state.update'))
+        self.assertIn('state,\n        )?;\n        Ok(())', source)
+
+
+if __name__ == '__main__':
+    unittest.main(verbosity=2)

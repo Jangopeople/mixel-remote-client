@@ -1,0 +1,59 @@
+name: held-input-managed-observer-diagnostic
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  controller-source:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Exercise inert Linux-controller admission and evidence-join controls
+        run: python3 scripts/test-pc01-held-input.py
+  compile:
+    runs-on: windows-2022
+    timeout-minutes: 10
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@v5
+      - name: Parse and compile exact observer sources in Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
+          if($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1) {
+            throw 'Exact Windows PowerShell 5.1 required'
+          }
+          $script = Join-Path $PWD 'scripts/pc01-held-input-observer.ps1'
+          $tokens = $null
+          $errors = $null
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile($script, [ref]$tokens, [ref]$errors)
+          if($errors.Count -ne 0) { $errors | Format-List | Out-String | Write-Host; throw 'Observer parse failed' }
+          foreach($statement in $ast.EndBlock.Statements) {
+            if($statement -isnot [System.Management.Automation.Language.FunctionDefinitionAst]) {
+              throw 'Observer must contain function declarations only'
+            }
+          }
+          $identity = Get-Content -LiteralPath 'scripts/fixtures/pc01-held-input/ReadOnlyIdentity.cs' -Raw -Encoding UTF8
+          $keys = Get-Content -LiteralPath 'scripts/fixtures/pc01-held-input/KeyState.cs' -Raw -Encoding UTF8
+          # The parser above permits declarations only. Register them, then run
+          # the same exact-source compiler helper as Initialize. No compiled
+          # observation method, native call or admission action is invoked.
+          . $script
+          Compile-MixelHeldManagedSources $identity $keys
+          $tree = & git rev-parse 'HEAD^{tree}'
+          if($LASTEXITCODE -ne 0) { throw 'Source tree identity unavailable' }
+          [ordered]@{source=$env:GITHUB_SHA;tree=$tree;engine=$PSVersionTable.PSVersion.ToString();
+            managedCompilationPassed=$true;nativeMethodsInvoked=$false;applicationQualified=$false} |
+            ConvertTo-Json -Compress | Write-Host
+          Write-Host 'PASS: exact observer parses and compiles in Windows PowerShell 5.1; no native methods invoked'

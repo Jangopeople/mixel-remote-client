@@ -1,0 +1,35 @@
+{
+  "artifactBytes": 30894055,
+  "artifactId": 11862454209,
+  "artifactSha256": "40d28fac26ad928ccfc6723cb3dbdec7134507258901a769f3d9daac221e0d1b",
+  "artifactTimes": {
+    "created_at": "2026-10-14T01:22:52Z",
+    "expires_at": "2027-01-12T00:36:44Z",
+    "updated_at": "2026-10-14T01:22:52Z"
+  },
+  "failedJob": 115617863123,
+  "frozenHelpers": {
+    "scripts/test-support-launch-linux.py": "90e343f7cddffb3f830c54ee129e7ae192c0d4b269bc336faab93fb5d95abe18",
+    "scripts/test-support-launch-macos-tray-controls.py": "b06623ec893cdcf43b3b27670eadbe12f49d4491d012d8b88debe88fb4e6184d",
+    "scripts/test-support-launch-macos-tray.py": "80ebc3255a3898c9feb23c68e06fee28efb74109e5d30460b3ddb9e651ade9b4",
+    "scripts/test-support-launch-macos.py": "854bd6a7e34041d566c810cdd0fe3df238187198ea456381a725a18286968d65",
+    "scripts/verify-macos-bundle-minimum.py": "fbd7652bdfaf26c86de97111668bd9726623880811367b99fb59a8190886dcdf",
+    "scripts/verify-macos-native-minimum.py": "7ecd3c71f2afc000f0d5d90dc470be03fbdf4c69e02ee7f1bdaa835464710c92"
+  },
+  "producerAttempt": 1,
+  "producerRun": 38491157973,
+  "producerSource": "ca184ca219ceb1b087258e8f25d218eeba901abc",
+  "producerTree": "825974868c0ae0c632f8f739cf6dc729140c5400",
+  "reviewedSources": {
+    ".github/workflows/diagnose-macos-failed-app.yml": "398579cbf8d089b9e193a78d7d867f94f9786dc219d0c1616ba263868bd100a0",
+    "scripts/diagnose-macos-failed-app.py": "aad5c0590b8a9f8e16401c005419aebba0603676e735ce7cf45a9f77e5da6015",
+    "scripts/file_dialog_workflow_projection.py": "3aa22a9c14930219458f02cc1b33c3a6c7720289b7c92443341a62d87b04ce75",
+    "scripts/input_lifecycle_integration_projection.py": "5a29d39c88f119fc604c24a485ef38442e2ef236e2cd1069ae89c93b37c7167b",
+    "scripts/observe-macos-incoming-cleanup.py": "7b0397d0630d1b61d81dd922f27f84eed66213b406a4c22fa63406d80e9dddbf",
+    "scripts/test-observe-macos-incoming-cleanup.py": "3299ad55dcfd570f34b76cf35c9d463a1a652d4a8eb0e7df70d9dea76089e4ae",
+    "scripts/test-support-launch-macos-concurrency-controls.py": "599684dbbec5fb4e9a93967a964a3119b97df90a066b641664aa826221a1461b",
+    "scripts/test-support-launch-macos-concurrency.py": "9fb58a9c5333df460cc4a676dc1499ee08af4af78edca762d0e20c59f0d03fc0"
+  },
+  "schema": 1,
+  "scope": "fixed-failed-intel-rosetta-concurrency-diagnostic-only"
+}

@@ -1,0 +1,36 @@
+Run only in the existing Mixel-Test-VM non-elevated PowerShell, from a fresh
+ordinary current-user TEMP tools folder containing the two exact source files.
+No PATH tools, Git, Python, Rust, Flutter, NuGet, account/policy/ACL changes needed.
+The probe creates its own separate random TEMP namespace and Local mutex.
+
+$ErrorActionPreference = 'Stop'
+$Csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+$Probe = Join-Path $PWD.Path 'WindowsSdProbe.cs'
+$Epoch = Join-Path $PWD.Path 'support-receiver-custodian-epoch-windows.rs'
+$Exe = Join-Path $PWD.Path 'WindowsSdProbe.exe'
+$Result = Join-Path $PWD.Path 'WindowsSdProbe-result.json'
+if (!(Test-Path -LiteralPath $Csc -PathType Leaf)) { throw '.NET Framework 4 x64 C# compiler unavailable; do not install or elevate for this probe' }
+if (Test-Path -LiteralPath $Exe) { throw 'Existing probe output refused; use a fresh tools folder' }
+if (Test-Path -LiteralPath $Result) { throw 'Existing result refused; use a fresh tools folder' }
+if ((Get-FileHash -Algorithm SHA256 -LiteralPath $Epoch).Hash.ToLowerInvariant() -ne 'f362530835fd3a45cb98d8616dc7517cc077189d700a1790e7700a434085c9a2') { throw 'Rust epoch source SHA256 mismatch' }
+# Verify WindowsSdProbe.cs against source-manifest.json before compiling.
+$Manifest = Get-Content -Raw -LiteralPath (Join-Path $PWD.Path 'source-manifest.json') | ConvertFrom-Json
+if ((Get-FileHash -Algorithm SHA256 -LiteralPath $Probe).Hash.ToLowerInvariant() -ne $Manifest.files.'WindowsSdProbe.cs') { throw 'Probe source SHA256 mismatch' }
+& $Csc /nologo /target:exe /platform:x64 /langversion:5 /warn:4 /warnaserror+ /reference:System.Web.Extensions.dll ('/out:' + $Exe) $Probe
+if ($LASTEXITCODE -ne 0) { throw ('C# compiler failed with exit ' + $LASTEXITCODE) }
+$Output = & $Exe --epoch-source $Epoch
+$ProbeExit = $LASTEXITCODE
+$Output | Set-Content -LiteralPath $Result -Encoding UTF8
+$Output
+if ($ProbeExit -ne 0) { throw ('Native SD probe FAILED with exit ' + $ProbeExit + '; preserve JSON native errors and cleanup details; do not elevate or repair ACLs') }
+$Parsed = $Output | ConvertFrom-Json
+if (!$Parsed.pass -or !$Parsed.cleanupVerified -or $Parsed.checks.Count -ne 16) { throw 'Incomplete primitive proof' }
+'PASS: 16 exact descriptor controls and fresh fixture cleanup; primitive proof only'
+
+Keep sources/result/compiler diagnostics for review. The executable closes its
+fresh mutex, deletes only its retained fresh marker and empty directory handles,
+and fails on cleanup errors. It never repairs or recursively clears leftovers.
+If access/label/materialization differs, preserve the failure and remaining
+fixture path for review. Do not request elevation or substitute a permissive SD.
+This is NOT the hosted custody/cross-SID suite, process isolation, input/SAS,
+production namespace, app build, or customer Accept proof.

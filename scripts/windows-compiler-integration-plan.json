@@ -1,0 +1,206 @@
+{
+  "schema": "mixel-windows-compiler-integration-v1",
+  "scope": "Private Windows pipe transport generics and imports; preserve authorization, custody, wire format and key aliases",
+  "files": [
+    {
+      "path": "src/server/mixel_receiver_custodian_windows.rs",
+      "beforeSha256": "79d9bb803c9a9bee7cf403fd919689ac6c18ae8fced88987b80fde022ece8bae",
+      "afterSha256": "3bde45ea4c4c8fda973606702c59ab872b9eb8bacdb01db85df0d09ae47b5822",
+      "changes": [
+        {
+          "before": "use hbb_common::{bail, futures_util::StreamExt, timeout, ResultType};",
+          "after": "use hbb_common::{bail, log, timeout, tokio, ResultType};",
+          "offset": 229
+        },
+        {
+          "before": "async fn send<T:Serialize>(stream:&mut crate::ipc::Connection,value:&T)->ResultType<()> {",
+          "after": "async fn send<T:Serialize,S>(stream:&mut crate::ipc::ConnectionTmpl<S>,value:&T)->ResultType<()>\nwhere S:tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin {",
+          "offset": 6102
+        },
+        {
+          "before": "async fn flush_completions(stream:&mut crate::ipc::Connection,known:&mut HashMap<String,(u64,Owned)>,replies:&mut tokio::sync::mpsc::Receiver<Response>,bound:usize)->ResultType<usize>{",
+          "after": "async fn flush_completions<S>(stream:&mut crate::ipc::ConnectionTmpl<S>,known:&mut HashMap<String,(u64,Owned)>,replies:&mut tokio::sync::mpsc::Receiver<Response>,bound:usize)->ResultType<usize>\nwhere S:tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin {",
+          "offset": 35139
+        }
+      ]
+    },
+    {
+      "path": "src/server/mixel_receiver_input_windows.rs",
+      "beforeSha256": "447d5d4fae0c29f4d9da0822d61bc0ae6e0750653917851056bac406a4a65617",
+      "afterSha256": "8abf4f612669fcff85d704649b409f6b5dbea5990667fc469ea200647030aa54",
+      "changes": [
+        {
+          "before": "use super::*;",
+          "after": "use super::*;\nuse hbb_common::{log, tokio};",
+          "offset": 86
+        }
+      ]
+    },
+    {
+      "path": "src/platform/windows.rs",
+      "beforeSha256": "252422ebce52de957fa6e9c00084a703bb5834ab7be180c0825411002196e598",
+      "afterSha256": "4d51252a3ddf4b443f760cab0f9a93323b57b39c99045f554c57be0c15c675d8",
+      "changes": [
+        {
+          "before": "OpenProcessToken, ProcessIdToSessionId, PROCESS_INFORMATION, STARTUPINFOW,",
+          "after": "OpenProcessToken, ProcessIdToSessionId,",
+          "offset": 1389
+        },
+        {
+          "before": "    use hbb_common::sysinfo::System;\n",
+          "after": "",
+          "offset": 119175
+        }
+      ]
+    },
+    {
+      "path": "src/server/input_service.rs",
+      "beforeSha256": "7f0180f6a4d67c0d06b09464b4ef127752c2e3d4f4bb256323575a57f525a81c",
+      "afterSha256": "b1141936113a43f3c3ea6f5bc97100a74826ea17eed16591c714cd51b333deff",
+      "changes": [
+        {
+          "before": "pub(crate) use receiver_native::{with_receiver_owner, with_receiver_owner_checked,",
+          "after": "#[cfg(not(windows))]\npub(crate) use receiver_native::with_receiver_owner;\npub(crate) use receiver_native::{with_receiver_owner_checked,",
+          "offset": 186
+        },
+        {
+          "before": "    time::{self, Duration, Instant},",
+          "after": "    time::{self, Instant},",
+          "offset": 1238
+        },
+        {
+          "before": "\n\nconst INVALID_CURSOR_POS:",
+          "after": "\n#[cfg(not(windows))]\nuse std::time::Duration;\n\nconst INVALID_CURSOR_POS:",
+          "offset": 1268
+        }
+      ]
+    },
+    {
+      "path": "src/server/portable_service.rs",
+      "beforeSha256": "2ef27fc5922d5632a1b6b5fbeed90aa50a90aa2915cc047dc6dd96d2d292cfec",
+      "afterSha256": "8b9379c094ec2753856076131809bfee8961060da80dea28a234a1e4bdc64a67",
+      "changes": [
+        {
+          "before": "    use hbb_common::message_proto::PointerDeviceEvent;\n\n",
+          "after": "",
+          "offset": 6700
+        },
+        {
+          "before": "    protobuf::Message,\n",
+          "after": "",
+          "offset": 134
+        }
+      ]
+    },
+    {
+      "path": ".mixel-deps/rdev/src/keycodes/chrome.rs",
+      "beforeSha256": "76b8d874cc0eedf29d5538edef25718c297a84992626af8d33fa47148c132f6e",
+      "afterSha256": "46bfc80d9a4767fea99c56378c075e1457ff58aea52056c9065a908cfc9cd941",
+      "changes": [
+        {
+          "before": "                    $code => Key::$key,",
+          "after": "                    value if value == $code => Key::$key,",
+          "offset": 453
+        }
+      ]
+    },
+    {
+      "path": "src/ipc.rs",
+      "changes": [
+        {
+          "before": "    pub(crate) fn receiver_pipe_peer(&self, server_peer: bool) -> Option<crate::server::mixel_receiver_input::Peer> {\n        use std::os::windows::io::AsRawHandle;",
+          "after": "    pub(crate) fn receiver_pipe_peer(&self, server_peer: bool) -> Option<crate::server::mixel_receiver_input::Peer> {",
+          "offset": 38867
+        },
+        {
+          "before": "    pub(crate) fn receiver_pipe_publisher(&self, transferred: Option<u64>) -> Option<crate::server::mixel_receiver_input::Peer> {\n        use std::os::windows::io::AsRawHandle;",
+          "after": "    pub(crate) fn receiver_pipe_publisher(&self, transferred: Option<u64>) -> Option<crate::server::mixel_receiver_input::Peer> {",
+          "offset": 39104
+        }
+      ],
+      "beforeSha256": "0cee8dc29f39dcf30a76cfb8f52cce7fa602f29e17c0ae5810d96dae1a6387a6",
+      "afterSha256": "dcbb1b2c909fef177f879471a9db158b13f7fc4439a927081d785181f6be6132"
+    },
+    {
+      "path": "src/server/terminal_helper.rs",
+      "changes": [
+        {
+          "before": "let mut input_pipe = open_pipe(input_pipe_name, true)?;",
+          "after": "let input_pipe = open_pipe(input_pipe_name, true)?;",
+          "offset": 29336
+        },
+        {
+          "before": "let mut output_pipe = open_pipe(output_pipe_name, false)?;",
+          "after": "let output_pipe = open_pipe(output_pipe_name, false)?;",
+          "offset": 29392
+        }
+      ],
+      "beforeSha256": "7d377a356ee325ca0187c6fb878cb1d91eea10d11af133d9b4fe3d87f8699030",
+      "afterSha256": "4a59f50a4565af88c7e88c58c4bef6d0ba4a77ad4bc7672c2b004a3b8cd9ad87"
+    },
+    {
+      "path": "src/keyboard.rs",
+      "changes": [
+        {
+          "before": "pub fn event_to_key_events(",
+          "after": "#[cfg(any(not(windows), test))]\npub fn event_to_key_events(",
+          "offset": 30778
+        },
+        {
+          "before": "pub fn send_key_event(key_event: &KeyEvent) {",
+          "after": "#[cfg(any(not(windows), test))]\npub fn send_key_event(key_event: &KeyEvent) {",
+          "offset": 32843
+        },
+        {
+          "before": "pub fn legacy_keyboard_mode(event: &Event, key_event: KeyEvent) -> Vec<KeyEvent> {",
+          "after": "#[cfg(any(not(windows), test))]\npub fn legacy_keyboard_mode(event: &Event, key_event: KeyEvent) -> Vec<KeyEvent> {",
+          "offset": 36603
+        },
+        {
+          "before": "    pub fn lock_screen() {",
+          "after": "    #[cfg(any(not(windows), test))]\n    pub fn lock_screen() {",
+          "offset": 14051
+        },
+        {
+          "before": "    pub fn ctrl_alt_del() {",
+          "after": "    #[cfg(any(not(windows), test))]\n    pub fn ctrl_alt_del() {",
+          "offset": 14752
+        }
+      ],
+      "beforeSha256": "c6e06b93f98e5ca67931e04fdcbe32ede5f5817b93dfeac465471651935fdbf8",
+      "afterSha256": "66f810f7e151fa7bdfe8b0e29ed0153a3a24bbe6a95958a61941cdc78abb7356"
+    },
+    {
+      "path": "src/server/mixel_receiver_native.rs",
+      "changes": [
+        {
+          "before": "enum Route { Raw(RawKey), Enigo(Key),",
+          "after": "enum Route { Raw(RawKey), #[cfg(not(windows))] Enigo(Key),",
+          "offset": 1791
+        },
+        {
+          "before": "        Route::Enigo(_) =>",
+          "after": "        #[cfg(not(windows))]\n        Route::Enigo(_) =>",
+          "offset": 2588
+        },
+        {
+          "before": "        Route::Enigo(key) =>",
+          "after": "        #[cfg(not(windows))]\n        Route::Enigo(key) =>",
+          "offset": 3092
+        },
+        {
+          "before": "pub(super) fn captured(effect:",
+          "after": "#[cfg(any(not(windows), test))]\npub(super) fn captured(effect:",
+          "offset": 24270
+        },
+        {
+          "before": "pub(super) fn remote_scope()",
+          "after": "#[cfg(test)]\npub(super) fn remote_scope()",
+          "offset": 26921
+        }
+      ],
+      "beforeSha256": "717330631fa85a0ceb40af2cd20fed977644b63f1840ecfb61ba6287abb9dfd6",
+      "afterSha256": "20e6dab3552c480e04724979244c328af81fc8a502777307d0cdf67cc5b32751"
+    }
+  ]
+}

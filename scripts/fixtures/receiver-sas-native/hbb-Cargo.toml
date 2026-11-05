@@ -1,0 +1,10 @@
+[package]
+name = "hbb_common"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.75"
+publish = false
+
+[dependencies]
+anyhow = "=1.0.98"
+tokio = { version = "=1.44.2", features = ["time"] }

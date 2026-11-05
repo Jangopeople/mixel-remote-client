@@ -1,0 +1,1145 @@
+﻿param([switch]$RuntimeProbeOnly, [switch]$RequireStockWindowsPowerShell5)
+$ErrorActionPreference = 'Stop'
+if ($RequireStockWindowsPowerShell5 -and
+    ($PSVersionTable.PSEdition -cne 'Desktop' -or $PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1 -or -not [Environment]::Is64BitProcess)) {
+  throw 'Runtime health controls require actual stock x64 Windows PowerShell 5.1 Desktop.'
+}
+Write-Host ('Actual runtime-probe PowerShell: ' + $PSVersionTable.PSVersion.ToString() + '; ' + $PSVersionTable.PSEdition + '; x64=' + [Environment]::Is64BitProcess)
+
+function Assert-Fails([scriptblock]$Action, [string]$Scenario, [string[]]$ExpectedMessages = @()) {
+  $failed = $false
+  try { & $Action } catch {
+    if ($ExpectedMessages.Count -gt 0 -and $ExpectedMessages -cnotcontains $_.Exception.Message) {
+      throw "Unexpected failure for ${Scenario}: $($_.Exception.Message)"
+    }
+    $failed = $true
+  }
+  if (-not $failed) { throw "Expected failure was accepted: $Scenario" }
+}
+
+function Test-MixelWindowsPayloadMetadata([string]$ScriptsDirectory = $PSScriptRoot) {
+  $metadataPath = Join-Path $ScriptsDirectory 'verify-windows-payload-metadata.ps1'
+  $metadataTokens = $null; $metadataErrors = $null
+  $metadataAst = [System.Management.Automation.Language.Parser]::ParseFile($metadataPath, [ref]$metadataTokens, [ref]$metadataErrors)
+  if ($metadataErrors.Count -gt 0) { throw "Metadata verifier does not parse: $metadataErrors" }
+  $guards = @($metadataAst.FindAll({ param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Assert-MixelPayloadVersionMetadata'
+  }, $true))
+  if ($guards.Count -ne 1) { throw 'Expected exactly one production metadata guard.' }
+  . ([scriptblock]::Create($guards[0].Extent.Text))
+  $valid = [ordered]@{
+    CompanyName = 'Mixel IT and Corporate Services GmbH'; FileDescription = 'Mixel Remote'
+    FileVersion = '1.4.6'; InternalName = 'desktop_multi_window_plugin'
+    LegalCopyright = 'Copyright © 2026 Mixel IT and Corporate Services GmbH. All rights reserved.'
+    OriginalFilename = 'desktop_multi_window_plugin.dll'; ProductName = 'Mixel Remote'; ProductVersion = '1.4.6'
+  }
+  $plugin = [pscustomobject]@{ Name = 'desktop_multi_window_plugin.dll'; VersionInfo = [pscustomobject]$valid }
+  Assert-MixelPayloadVersionMetadata $plugin
+  # Third-party DLLs can have their own legitimate metadata or no version table.
+  Assert-MixelPayloadVersionMetadata ([pscustomobject]@{ Name = 'vendor.dll'; VersionInfo = [pscustomobject]@{ CompanyName = 'Microsoft Corporation'; ProductName = 'A separate runtime' } })
+  Assert-MixelPayloadVersionMetadata ([pscustomobject]@{ Name = 'runtime.dll'; VersionInfo = [pscustomobject]@{} })
+  $checks = 3
+  foreach ($field in $valid.Keys) {
+    $changed = @{}; foreach ($key in $valid.Keys) { $changed[$key] = $valid[$key] }
+    $changed[$field] = 'wrong'
+    $bad = [pscustomobject]@{ Name = 'desktop_multi_window_plugin.dll'; VersionInfo = [pscustomobject]$changed }
+    Assert-Fails { Assert-MixelPayloadVersionMetadata $bad } "owned plugin $field" @("Invalid owned plugin metadata: desktop_multi_window_plugin.dll: $field.")
+    $checks++
+  }
+  foreach ($field in @('Comments', 'CompanyName', 'FileDescription', 'FileVersion', 'InternalName',
+      'LegalCopyright', 'LegalTrademarks', 'OriginalFilename', 'PrivateBuild', 'ProductName', 'ProductVersion', 'SpecialBuild')) {
+    foreach ($retired in @('RustDesk', 'Purslane', 'COM.CARRIEZ', 'FLUTTER_HBB')) {
+      $bad = [pscustomobject]@{ Name = 'vendor.dll'; VersionInfo = [pscustomobject]@{ $field = $retired } }
+      Assert-Fails { Assert-MixelPayloadVersionMetadata $bad } "retired $field $retired" @("Retired Windows payload metadata: vendor.dll: $field.")
+      $checks++
+    }
+  }
+  $empty = Join-Path ([IO.Path]::GetTempPath()) ('mixel-resource-metadata-' + [Guid]::NewGuid().ToString('N'))
+  New-Item -ItemType Directory -Path $empty | Out-Null
+  try {
+    Assert-Fails { & $metadataPath -Payload $empty } 'missing owned plugin' @('Windows payload must contain exactly one desktop_multi_window_plugin.dll.')
+    $checks++
+    [IO.File]::WriteAllBytes((Join-Path $empty 'visible.dll'), [byte[]]@(0))
+    $hidden = Join-Path $empty '.hidden-system.exe'
+    [IO.File]::WriteAllBytes($hidden, [byte[]]@(0))
+    [IO.File]::SetAttributes($hidden, ([IO.FileAttributes]::Hidden -bor [IO.FileAttributes]::System))
+    foreach ($scriptName in @('verify-windows-payload-metadata.ps1', 'verify-windows-payload.ps1')) {
+      $tokens = $null; $errors = $null
+      $ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path $ScriptsDirectory $scriptName), [ref]$tokens, [ref]$errors)
+      if ($errors.Count -gt 0) { throw "Payload enumeration script does not parse: $scriptName" }
+      $assignments = @($ast.FindAll({ param($node)
+        $node -is [Management.Automation.Language.AssignmentStatementAst] -and
+        $node.Left -is [Management.Automation.Language.VariableExpressionAst] -and $node.Left.VariablePath.UserPath -ceq 'binaries'
+      }, $true))
+      if ($assignments.Count -ne 1) { throw "Ambiguous payload enumeration: $scriptName" }
+      $Payload = $empty
+      . ([scriptblock]::Create($assignments[0].Extent.Text))
+      if (@($binaries).Count -ne 2 -or @($binaries.Name) -cnotcontains '.hidden-system.exe') {
+        throw "Hidden/system PE omitted from payload enumeration: $scriptName"
+      }
+      $checks++
+    }
+  } finally { Remove-Item -LiteralPath $empty -Recurse -Force }
+  Write-Host "PASS: $checks Windows payload metadata controls cover exact owned identity, all descriptive fields, preserved third-party metadata and missing plugin refusal."
+}
+
+# Both modes use the exact launch-source AST for the baseline controls.
+$launchSource = Get-Content (Join-Path $PSScriptRoot 'test-support-launch-windows.ps1') -Raw
+$captureTokens=$null; $captureErrors=$null
+$captureAst=[System.Management.Automation.Language.Parser]::ParseInput($launchSource,[ref]$captureTokens,[ref]$captureErrors)
+if ($captureErrors.Count -gt 0) { throw "PowerShell parse failed: test-support-launch-windows.ps1: $captureErrors" }
+
+# The ordinary invocation still executes every existing pipeline control.
+# The additional stock-PS5 job exercises only the exact named-pipe health suite.
+if (-not $RuntimeProbeOnly) {
+& python (Join-Path $PSScriptRoot 'test-windows-desktop-identity-diagnostic.py')
+if ($LASTEXITCODE -ne 0) { throw 'Owned desktop identity diagnostic source controls failed.' }
+& (Join-Path $PSScriptRoot 'test-windows-customer-cleanup.ps1')
+Test-MixelWindowsPayloadMetadata
+$repository = Split-Path $PSScriptRoot -Parent
+foreach ($file in (Get-ChildItem $PSScriptRoot -Filter '*.ps1' -File)) {
+  $tokens = $null
+  $errors = $null
+  [void][System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$tokens, [ref]$errors)
+  if ($errors.Count -gt 0) { throw "PowerShell parse failed: $($file.Name): $errors" }
+}
+Write-Host 'PASS: every Windows pipeline script parses cleanly.'
+
+function Read-OwnedDesktopControlSnapshot([string]$Path) {
+  $stream=$null; $reader=$null
+  try {
+    $stream=[IO.FileStream]::new($Path,[IO.FileMode]::Open,[IO.FileAccess]::Read,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+    $reader=[IO.StreamReader]::new($stream,[Text.Encoding]::UTF8,$true)
+    $text=$reader.ReadToEnd()
+  } catch [IO.IOException] {
+    $failure=$_.Exception
+    while ($failure.InnerException) { $failure=$failure.InnerException }
+    if (($failure.HResult -band 0xffff) -in @(32,33)) { return [pscustomobject]@{pending=$true; values=$null} }
+    throw
+  } finally {
+    if ($reader) { $reader.Dispose() }
+    if ($stream) { $stream.Dispose() }
+  }
+  $values=@{}
+  foreach ($line in ($text -split '\r?\n')) {
+    if ($line -ceq '') { continue }
+    $separator=$line.IndexOf('=')
+    if ($separator -lt 1) { throw 'Malformed owned native desktop control snapshot.' }
+    $name=$line.Substring(0,$separator)
+    if ($values.ContainsKey($name)) { throw 'Duplicate owned native desktop control snapshot key.' }
+    $values[$name]=$line.Substring($separator+1)
+  }
+  return [pscustomobject]@{pending=$false; values=$values}
+}
+
+$snapshotControl=Join-Path ([IO.Path]::GetTempPath()) ('mixel-owned-desktop-read-lock-' + [Guid]::NewGuid().ToString('N'))
+$snapshotLock=$null
+try {
+  [IO.File]::WriteAllText($snapshotControl,"phase=Win32-calls-complete`npid=4321`n")
+  $snapshotLock=[IO.FileStream]::new($snapshotControl,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
+  $pending=Read-OwnedDesktopControlSnapshot $snapshotControl
+  if (-not $pending.pending -or $null -ne $pending.values) { throw 'Locked owned result snapshot did not report pending.' }
+  $snapshotLock.Dispose(); $snapshotLock=$null
+  $released=Read-OwnedDesktopControlSnapshot $snapshotControl
+  if ($released.pending -or $released.values.phase -cne 'Win32-calls-complete' -or $released.values.pid -cne '4321') { throw 'Released owned result snapshot did not decode completely.' }
+  [IO.File]::WriteAllText($snapshotControl,'invalid-result')
+  $malformedRejected=$false
+  try { [void](Read-OwnedDesktopControlSnapshot $snapshotControl) } catch { $malformedRejected=$true }
+  if (-not $malformedRejected) { throw 'Malformed owned result snapshot accepted.' }
+} finally {
+  if ($snapshotLock) { $snapshotLock.Dispose() }
+  if (Test-Path $snapshotControl) { Remove-Item $snapshotControl }
+}
+Write-Host 'PASS: exact native desktop snapshot reader reports pending only for an actual exclusive file lock, reads a complete snapshot after release and rejects malformed data.'
+
+function Write-OwnedDesktopIdentityDiagnostic([int]$OwnedPid, [string]$ExpectedSid, [string]$Mode,
+    [bool]$PredicateElevated, $PredicateChildSession, $PredicateCallerSession) {
+  $record=[ordered]@{schema=1; mode=$Mode; ownedPid=$OwnedPid; predicateElevated=$PredicateElevated;
+    predicateChildSession=$PredicateChildSession; predicateCallerSession=$PredicateCallerSession;
+    sessionPredicateEvaluated=($null -ne $PredicateChildSession); nativeStatus=$null; primaryToken=$null;
+    statusObservationFailureType=$null; tokenObservationFailureType=$null}
+  try { $record.nativeStatus=[MixelOrdinaryTokenFixture]::StartedStatus($OwnedPid) }
+  catch { $record.statusObservationFailureType=$_.Exception.GetType().FullName }
+  try { $record.primaryToken=[MixelOrdinaryTokenFixture]::ObserveOwnedDesktopPrimary($OwnedPid,$ExpectedSid) }
+  catch { $record.tokenObservationFailureType=$_.Exception.GetType().FullName }
+  Write-Host ('FIXTURE: fatal owned desktop identity observation; ' + ($record | ConvertTo-Json -Depth 4 -Compress))
+}
+
+function Complete-OwnedNoncanonicalExitedDesktopControl([int]$OwnedPid, [string]$ExpectedSid,
+    [string]$Mode, [System.Collections.Generic.List[object]]$Controls) {
+  # A failed minimal-rights trial is diagnostic only; the canonical trial still
+  # has to create a visible window/menu through the original mandatory gate.
+  if ($Mode -cnotin @('minimal-before', 'minimal-after')) { return $false }
+  $nativeStatus=[MixelOrdinaryTokenFixture]::StartedStatus($OwnedPid)
+  if ($nativeStatus -ceq 'still-running') { return $false }
+  if ($nativeStatus -cnotmatch '^exited:0x[0-9a-f]{8}$') { throw 'Owned native desktop control exit status is unverified.' }
+  $primary=[MixelOrdinaryTokenFixture]::ObserveOwnedDesktopPrimary($OwnedPid,$ExpectedSid)
+  $callerSession=(Get-Process -Id $PID).SessionId
+  $confirmedStatus=[MixelOrdinaryTokenFixture]::StartedStatus($OwnedPid)
+  $verified=($confirmedStatus -ceq $nativeStatus -and $primary.pid -eq $OwnedPid -and
+    $primary.retainedPidMatched -eq $true -and $primary.status -ceq 'available' -and
+    $primary.operation -ceq 'complete' -and $null -eq $primary.failureType -and
+    $null -eq $primary.nativeError -and $null -eq $primary.tokenCloseError -and
+    $primary.ownedSidMatched -eq $true -and $primary.elevated -eq $false -and
+    $null -ne $callerSession -and $primary.tokenSessionId -eq $callerSession -and
+    $primary.tokenOpened -eq $true -and $primary.tokenCloseAttempted -eq $true -and
+    $primary.tokenClosed -eq $true)
+  Write-Host ('FIXTURE: noncanonical owned desktop exit observation; ' + ([ordered]@{
+    schema=1; mode=$Mode; ownedPid=$OwnedPid; nativeStatus=$nativeStatus;
+    confirmedNativeStatus=$confirmedStatus; callerSession=$callerSession;
+    primaryToken=$primary; identityVerified=$verified; failedDiagnostic=$true;
+    canonicalQualified=$false
+  } | ConvertTo-Json -Depth 4 -Compress))
+  if (-not $verified) { throw 'Owned desktop control is not a genuine non-elevated process in the runner session.' }
+  $Controls.Add([pscustomobject]@{mode=$Mode; passed=$false; pid=$OwnedPid;
+    nativeStatus=$nativeStatus; result=@{}})
+  Write-Host "DIAGNOSTIC: $Mode control exited before its identity/window snapshot; nativeStatus=$nativeStatus."
+  return $true
+}
+
+function Complete-OwnedDesktopCleanup($Access, [string]$ExpectedHashes, [bool]$DesktopMayBeChanged) {
+  $failures=[System.Collections.Generic.List[string]]::new()
+  $processesExited=$false; $observationsClosed=$false; $disposeComplete=$null -eq $Access
+  $desktopRestored=-not $DesktopMayBeChanged
+  try { [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses(); $processesExited=$true }
+  catch { $failures.Add('Owned retained desktop process cleanup failed.') }
+  try { [MixelOrdinaryTokenFixture]::CloseStartedObservations(); $observationsClosed=$true }
+  catch { $failures.Add('Owned retained desktop observation cleanup failed.') }
+  if ($Access) {
+    try { $Access.Dispose(); $disposeComplete=$true }
+    catch { $failures.Add('Owned desktop ACL restoration failed.') }
+  }
+  if ($DesktopMayBeChanged) {
+    try {
+      if (-not $ExpectedHashes -or [MixelOrdinaryTokenFixture]::DesktopAclHashes() -cne $ExpectedHashes) {
+        throw 'Exact original station/desktop ACL hashes were not restored.'
+      }
+      $desktopRestored=$disposeComplete
+    } catch { $failures.Add('Owned desktop original ACL hash verification failed.') }
+  }
+  return [pscustomobject]@{processesExited=$processesExited; observationsClosed=$observationsClosed;
+    desktopRestored=$desktopRestored; cleanupOkay=($processesExited -and $observationsClosed -and $desktopRestored);
+    failures=$failures}
+}
+
+# Compile the exact native OS fixture used by the real ordinary-to-QS runtime
+# test; its policy checks are testable without launching or changing an app.
+$fixtureClass = $launchSource.IndexOf('public static class MixelOrdinaryTokenFixture {')
+$fixtureStart = $launchSource.LastIndexOf('using System;', $fixtureClass)
+$fixtureEnd = $launchSource.IndexOf("`n'@ }", $fixtureClass)
+if ($fixtureClass -lt 0 -or $fixtureStart -lt 0 -or $fixtureEnd -le $fixtureStart) {
+  throw 'Actual ordinary-token runtime fixture is missing.'
+}
+if (-not ('MixelOrdinaryTokenFixture' -as [type])) {
+  $fixtureSource=$launchSource.Substring($fixtureStart, $fixtureEnd - $fixtureStart)
+  $identityMarker='  public static int StartStandardUser(string executable, string username, string password) {'
+  $identityPosition=$fixtureSource.IndexOf($identityMarker)
+  if ($identityPosition -lt 0 -or $identityPosition -ne $fixtureSource.LastIndexOf($identityMarker)) { throw 'Exact owned desktop diagnostic insertion point drifted.' }
+  $identitySource=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'support-windows-desktop-identity-diagnostic.cs'))
+  Add-Type -TypeDefinition $fixtureSource.Insert($identityPosition,$identitySource+"`n")
+}
+$dumpControl = Join-Path ([IO.Path]::GetTempPath()) ('mixel-owned-dump-attribution-' + [Guid]::NewGuid().ToString('N'))
+try {
+  $validDump = [byte[]]::new(56)
+  foreach ($field in @(@(0,0x504d444d),@(8,1),@(12,32),@(32,15),@(36,12),@(40,44),@(44,12),@(48,1),@(52,4321))) {
+    [BitConverter]::GetBytes([uint32]$field[1]).CopyTo($validDump,$field[0])
+  }
+  [IO.File]::WriteAllBytes($dumpControl,$validDump)
+  if ([MixelOrdinaryTokenFixture]::DumpProcessId($dumpControl) -ne 4321) { throw 'Actual minidump process stream was not decoded.' }
+  foreach ($mutation in @(@(0,0),@(8,0),@(12,1000),@(36,4),@(40,1000),@(48,0))) {
+    $invalidDump=$validDump.Clone()
+    [BitConverter]::GetBytes([uint32]$mutation[1]).CopyTo($invalidDump,$mutation[0])
+    [IO.File]::WriteAllBytes($dumpControl,$invalidDump)
+    $rejected=$false
+    try { [void][MixelOrdinaryTokenFixture]::DumpProcessId($dumpControl) } catch { $rejected=$true }
+    if (-not $rejected) { throw 'Malformed or unattributed native dump accepted.' }
+  }
+} finally { if (Test-Path $dumpControl) { Remove-Item $dumpControl } }
+Write-Host 'PASS: exact native dump attribution decodes the actual process stream and rejects six malformed or unattributed dump controls.'
+$captureFunction=@($captureAst.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Read-OwnedHeapCapture'},$true))
+if ($captureFunction.Count -ne 1) { throw 'Exact bounded native heap-capture parser missing.' }
+. ([scriptblock]::Create($captureFunction[0].Extent.Text))
+$ownedHeap='Last event: 18cc.1234: Exception - code c0000374 (first chance)'
+$wrongHeap='Last event: 20cc.9999: Exception - code c0000374 (first chance)'
+$ownedBreak='Last event: 18cc.1234: Break instruction exception - code 80000003 (first chance)'
+$ownedFrame='00 000000ab`12340000 00007ffa`abcd1000 libmixel_remote+0x4a730'
+$unrelatedFrame='01 000000ab`12340020 00007ffa`abcd2000 ntdll!UnrelatedInitialBreak+0x4'
+$capture=Read-OwnedHeapCapture @($unrelatedFrame,'MIXEL_NATIVE_HEAP',$ownedHeap,$ownedFrame,'MIXEL_NATIVE_CAPTURE_END',$unrelatedFrame) 6348
+if (-not $capture.verified -or $capture.frames.Count -ne 1 -or $capture.frames[0].symbol -cne 'libmixel_remote+0x4a730') {
+  throw 'Exact bounded heap capture omitted the owned frame or accepted unmarked rows.'
+}
+foreach ($invalidLines in @(
+    @('MIXEL_NATIVE_HEAP',$wrongHeap,$ownedFrame,$ownedBreak,$unrelatedFrame,'MIXEL_NATIVE_CAPTURE_END'),
+    @('MIXEL_NATIVE_HEAP',$ownedHeap,$ownedFrame,$ownedHeap,$unrelatedFrame,'MIXEL_NATIVE_CAPTURE_END'),
+    @('MIXEL_NATIVE_HEAP',$ownedBreak,$ownedFrame,'MIXEL_NATIVE_CAPTURE_END'),
+    @($ownedHeap,$ownedFrame,'MIXEL_NATIVE_CAPTURE_END'),
+    @('MIXEL_NATIVE_HEAP',$ownedHeap,$ownedFrame),
+    @('MIXEL_NATIVE_HEAP',$ownedHeap,$ownedFrame,'MIXEL_NATIVE_CAPTURE_END','MIXEL_NATIVE_HEAP',$ownedHeap,$ownedFrame,'MIXEL_NATIVE_CAPTURE_END'))) {
+  $rejected=Read-OwnedHeapCapture $invalidLines 6348
+  if ($rejected.verified -or $rejected.frames.Count -ne 0 -or $rejected.modules.Count -ne 0) { throw 'Mixed, duplicated or incomplete native exception attribution accepted.' }
+}
+Write-Host 'PASS: exact bounded live heap capture accepts only the owned PID/code block, excludes unmarked rows and rejects six mixed-event, duplicate-event, DebugBreak, unmarked, incomplete and duplicate-capture controls.'
+foreach ($name in @('Read-OwnedLiveDebuggerSnapshot','Read-OwnedExecutionMetadata')) {
+  $function=@($captureAst.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq $name},$true))
+  if ($function.Count -ne 1) { throw 'Exact live debugger snapshot/event helper missing.' }
+  . ([scriptblock]::Create($function[0].Extent.Text))
+}
+$liveSnapshotControl=Join-Path ([IO.Path]::GetTempPath()) ('mixel-owned-live-debugger-read-' + [Guid]::NewGuid().ToString('N'))
+$liveWriter=$null; $liveLock=$null
+try {
+  $liveWriter=[IO.FileStream]::new($liveSnapshotControl,[IO.FileMode]::Create,[IO.FileAccess]::ReadWrite,[IO.FileShare]::ReadWrite)
+  $partial=[Text.Encoding]::UTF8.GetBytes("MIXEL_NATIVE_TIMEOUT_EVENT`nLast event: 18cc.1234: Exception - code c0000005`n")
+  $liveWriter.Write($partial,0,$partial.Length); $liveWriter.Flush()
+  $snapshot=Read-OwnedLiveDebuggerSnapshot $liveSnapshotControl
+  if ($snapshot.pending -or (Read-OwnedExecutionMetadata $snapshot.lines 6348 -TimeoutEvent).startupEventPidVerified) { throw 'Open-writer incomplete event snapshot was attributed.' }
+  $completed=[Text.Encoding]::UTF8.GetBytes("MIXEL_NATIVE_TIMEOUT_EVENT_END`n")
+  $liveWriter.Write($completed,0,$completed.Length); $liveWriter.Flush()
+  $snapshot=Read-OwnedLiveDebuggerSnapshot $liveSnapshotControl
+  $event=Read-OwnedExecutionMetadata $snapshot.lines 6348 -TimeoutEvent
+  if ($snapshot.pending -or -not $event.startupEventPidVerified -or $event.startupEventCode -cne 'c0000005') { throw 'Retained concurrent writer prevented exact live shared snapshot attribution.' }
+  $liveWriter.Dispose(); $liveWriter=$null
+  if ($IsWindows) {
+    $liveLock=[IO.FileStream]::new($liveSnapshotControl,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
+    $locked=Read-OwnedLiveDebuggerSnapshot $liveSnapshotControl
+    if (-not $locked.pending -or $null -ne $locked.lines) { throw 'Actual exclusive live debugger snapshot lock was accepted.' }
+    $liveLock.Dispose(); $liveLock=$null
+    $released=Read-OwnedLiveDebuggerSnapshot $liveSnapshotControl
+    if ($released.pending -or -not (Read-OwnedExecutionMetadata $released.lines 6348 -TimeoutEvent).startupEventPidVerified) { throw 'Released live debugger lock did not decode completely.' }
+    Write-Host 'PASS: actual Windows live debugger snapshot reader retries only a transient exclusive lock and attributes the completed exact event after release.'
+  }
+} finally {
+  if ($liveWriter) { $liveWriter.Dispose() }
+  if ($liveLock) { $liveLock.Dispose() }
+  if (Test-Path $liveSnapshotControl) { Remove-Item $liveSnapshotControl }
+}
+Write-Host 'PASS: exact live debugger snapshot reader reads while the actual writer handle remains open, rejects its incomplete event and attributes only the completed marked PID/code snapshot.'
+$actualDesktop = [MixelOrdinaryTokenFixture]::CurrentDesktopPath()
+if ($actualDesktop -notmatch '^[^\\]+\\[^\\]+$' -or $launchSource.Contains('desktop = "winsta0\\default"')) {
+  throw 'Actual native launch desktop is missing or reverted to a different hard-coded desktop.'
+}
+Write-Host "PASS: exact native fixture discovers the actual runner window station and thread desktop used for both permission grants and ordinary GUI launch: $actualDesktop."
+foreach ($name in @('\BaseNamedObjects\Mixel-Remote-Attended-Runtime-v2', '\Sessions\0\BaseNamedObjects\Mixel-Remote-Attended-Runtime-v2')) {
+  if (-not [MixelOrdinaryTokenFixture]::IsLeaseName($name)) { throw 'Exact runtime lease name rejected.' }
+}
+foreach ($name in @('', '\BaseNamedObjects\Mixel-Remote-Attended-Runtime-v1', '\BaseNamedObjects\Mixel-Remote-Attended-Runtime-v2-other', '\Sessions\1\BaseNamedObjects\Mixel-Remote-Attended-Runtime-v2')) {
+  if ([MixelOrdinaryTokenFixture]::IsLeaseName($name)) { throw 'Unrelated process event accepted as the global v2 lease.' }
+}
+if (-not ('MixelOwnedLeaseFixture' -as [type])) { Add-Type @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+public static class MixelOwnedLeaseFixture {
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern IntPtr CreateEventExW(IntPtr attributes, string name, uint flags, uint access);
+  [DllImport("kernel32.dll")] public static extern bool CloseHandle(IntPtr handle);
+  public static IntPtr Create() {
+    IntPtr handle = CreateEventExW(IntPtr.Zero, "Global\\Mixel-Remote-Attended-Runtime-v2", 0, 0x100000);
+    if (handle == IntPtr.Zero) throw new Win32Exception();
+    return handle;
+  }
+}
+'@ }
+if ([MixelOrdinaryTokenFixture]::OwnsLease($PID) -or [MixelOrdinaryTokenFixture]::LeasePresent()) { throw 'Fixture already has a product event owner.' }
+if ([MixelOrdinaryTokenFixture]::LeaseProbeError() -ne 2) { throw 'Read-only global lease observation did not prove the missing-event negative control.' }
+if ([MixelOrdinaryTokenFixture]::LeaseProbeErrorAsProcess($PID) -ne 2) { throw 'Actual-token read-only global lease observation did not prove the missing-event negative control.' }
+if ([MixelOrdinaryTokenFixture]::LeaseProbeErrorAsProcess(0) -ne -87) { throw 'Unavailable actual-token observation was not kept distinct from an absent event.' }
+$fixtureHandle = [MixelOwnedLeaseFixture]::Create()
+try {
+  if ([MixelOrdinaryTokenFixture]::LeaseProbeError() -ne 0) { throw 'Read-only global lease observation did not prove the actual live-event positive control.' }
+  if ([MixelOrdinaryTokenFixture]::LeaseProbeErrorAsProcess($PID) -ne 0) { throw 'Actual-token read-only global lease observation did not prove the actual live-event positive control.' }
+  if (-not [MixelOrdinaryTokenFixture]::OwnsLease($PID)) { throw 'Actual SYNCHRONIZE event handle was not attributed to its process.' }
+  if (-not [MixelOrdinaryTokenFixture]::LeasePresent()) { throw 'Live global consent event was not observed.' }
+} finally {
+  [void][MixelOwnedLeaseFixture]::CloseHandle($fixtureHandle)
+}
+if ([MixelOrdinaryTokenFixture]::OwnsLease($PID) -or [MixelOrdinaryTokenFixture]::LeasePresent()) { throw 'Closed event remains owned or globally present.' }
+if ([MixelOrdinaryTokenFixture]::LeaseProbeError() -ne 2) { throw 'Read-only global lease observation retained a handle after the owned event was closed.' }
+Write-Host 'PASS: exact native runtime fixture observes the current PID owning the real SYNCHRONIZE-only global v2 event, then observes its handle release; unrelated event names fail closed.'
+$unownedIdentityRejected = $false
+try { [void][MixelOrdinaryTokenFixture]::SuspendedOwnedIdentity($PID) } catch {
+  if (-not $_.Exception.ToString().Contains('retained owned suspended process and primary thread')) { throw }
+  $unownedIdentityRejected = $true
+}
+if (-not $unownedIdentityRejected) { throw 'A PID without retained owned process/thread handles satisfied suspended identity qualification.' }
+Write-Host 'PASS: exact native identity qualification rejects an unowned current PID without retained process and suspended primary-thread handles.'
+
+# Exercise the exact disposable-account bootstrap before spending time on a
+# full signed build. The original runtime failure occurred before its GUI wait
+# and was hidden by deleting a name whose account creation had failed.
+if ($env:GITHUB_ACTIONS -ceq 'true' -and [MixelOrdinaryTokenFixture]::Elevated($PID)) {
+  $accountStart = $launchSource.IndexOf('$random = [byte[]]::new(24)')
+  $accountEnd = $launchSource.IndexOf("`$fixtureStage = 'grant owned standard desktop access'", $accountStart)
+  if ($accountStart -lt 0 -or $accountEnd -le $accountStart) { throw 'Actual owned account bootstrap is missing.' }
+  $ownedUser = 'mixelqs' + [Guid]::NewGuid().ToString('N').Substring(0, 10)
+  $ownedSid = $null
+  $descriptionRejected = $false
+  $negativeSid = $null
+  try {
+    $negativeAccount = New-LocalUser -Name $ownedUser -NoPassword -Description 'Owned disposable Mixel QuickSupport runtime fixture'
+    $negativeSid = $negativeAccount.SID.Value
+  } catch [System.Management.Automation.ParameterBindingException] {
+    if (-not $_.Exception.Message.Contains('Description') -or -not $_.Exception.Message.Contains('48')) { throw }
+    $descriptionRejected = $true
+  } finally {
+    if ($negativeSid) { Remove-LocalUser -SID ([Security.Principal.SecurityIdentifier]::new($negativeSid)) }
+  }
+  if (-not $descriptionRejected) { throw 'Native New-LocalUser did not reject the original invalid 51-character fixture description.' }
+  if (Get-LocalUser -Name $ownedUser -ErrorAction SilentlyContinue) { throw 'Invalid-description negative control unexpectedly created an account.' }
+  Write-Host 'PASS: actual New-LocalUser rejects the original invalid 51-character description before creating any account.'
+  $accountFailure=$null; $guiCleanupKnown=$true
+  try {
+    . ([scriptblock]::Create($launchSource.Substring($accountStart, $accountEnd - $accountStart)))
+    if (-not $ownedSid -or (Get-LocalUser -SID ([Security.Principal.SecurityIdentifier]::new($ownedSid))).Name -cne $ownedUser) {
+      throw 'Actual owned standard account was not created with its recorded SID.'
+    }
+    Write-Host 'PASS: actual ordinary runtime bootstrap creates its isolated standard account and adds it to Users using memory-only random credentials.'
+    # Qualify the exact cross-account desktop/launch fixture with an actual
+    # Win32 GUI before waiting for the customer app. This control cannot satisfy
+    # any customer HWND, incoming IPC, consent lease or 95-second runtime gate.
+    $guiRoot = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) ('mixel-ordinary-fixture-' + [Guid]::NewGuid().ToString('N'))
+    $guiProcess = $null; $guiPid = $null; $guiAccess = $null; $guiProfile = $false; $guiFailure = $null
+    $guiDesktopMayBeChanged=$false; $baselineAcls=$null
+    try {
+      New-Item -ItemType Directory $guiRoot | Out-Null
+      $acl = Get-Acl $guiRoot
+      $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+        [Security.Principal.SecurityIdentifier]::new($ownedSid), 'Modify', 'ContainerInherit,ObjectInherit', 'None', 'Allow'))
+      Set-Acl -Path $guiRoot -AclObject $acl
+      $guiSource = Join-Path $guiRoot 'desktop-control.cs'
+      $guiExecutable = Join-Path $guiRoot 'desktop-control.exe'
+      $guiResult = Join-Path $guiRoot 'desktop-control-result.txt'
+      Set-Content $guiSource -Encoding utf8 -Value @'
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Runtime.CompilerServices;
+using System.Text;
+public static class MixelOwnedDesktopControl {
+  [DllImport("user32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern IntPtr CreateWindowExW(uint extended, string cls, string title, uint style, int x, int y, int width, int height, IntPtr parent, IntPtr menu, IntPtr instance, IntPtr parameter);
+  [DllImport("user32.dll", SetLastError=true)] static extern IntPtr CreateMenu();
+  [DllImport("user32.dll")] static extern bool DestroyMenu(IntPtr menu);
+  [DllImport("user32.dll")] static extern bool DestroyWindow(IntPtr window);
+  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr window);
+  [DllImport("user32.dll")] static extern IntPtr GetProcessWindowStation();
+  [DllImport("user32.dll", SetLastError=true)] static extern IntPtr GetThreadDesktop(uint thread);
+  [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+  [DllImport("user32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool GetUserObjectInformationW(IntPtr obj, int kind, StringBuilder text, uint size, out uint required);
+  static string Name(IntPtr obj) { var text=new StringBuilder(512); uint required; return GetUserObjectInformationW(obj,2,text,1024,out required) ? text.ToString() : "unavailable(win32="+Marshal.GetLastWin32Error()+")"; }
+  static void WriteResult(string result, string[] values) {
+    string temporary=result+".new";
+    File.WriteAllLines(temporary,values);
+    if(File.Exists(result)) File.Replace(temporary,result,null);
+    else File.Move(temporary,result);
+  }
+  public static void Main() {
+    string result=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"desktop-control-result.txt");
+    WriteResult(result,new[] { "phase=entered-main", "pid="+Process.GetCurrentProcess().Id, "session="+Process.GetCurrentProcess().SessionId });
+    try { Gui(result); }
+    catch(Exception error) {
+      WriteResult(result,new[] { "phase=managed-GUI-exception", "pid="+Process.GetCurrentProcess().Id, "exceptionType="+error.GetType().FullName, "exceptionHResult=0x"+error.HResult.ToString("x8") });
+    }
+  }
+  [MethodImpl(MethodImplOptions.NoInlining)] static void Gui(string result) {
+    IntPtr menu=CreateMenu(); int menuError=menu==IntPtr.Zero ? Marshal.GetLastWin32Error() : 0;
+    IntPtr window=CreateWindowExW(0,"STATIC","Mixel owned ordinary desktop fixture",0x10cf0000,30,30,500,200,IntPtr.Zero,menu,IntPtr.Zero,IntPtr.Zero);
+    int windowError=window==IntPtr.Zero ? Marshal.GetLastWin32Error() : 0;
+    WriteResult(result,new[] {
+      "phase=Win32-calls-complete",
+      "pid="+Process.GetCurrentProcess().Id, "session="+Process.GetCurrentProcess().SessionId,
+      "desktop="+Name(GetProcessWindowStation())+"\\"+Name(GetThreadDesktop(GetCurrentThreadId())),
+      "window="+window.ToInt64(), "visible="+IsWindowVisible(window), "windowError="+windowError,
+      "menu="+menu.ToInt64(), "menuError="+menuError, "profile="+Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
+    });
+    System.Threading.Thread.Sleep(10000);
+    if(window!=IntPtr.Zero) DestroyWindow(window);
+    if(menu!=IntPtr.Zero) DestroyMenu(menu);
+  }
+}
+'@
+      $compiler = Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
+      & $compiler /nologo /target:winexe "/out:$guiExecutable" $guiSource
+      if ($LASTEXITCODE -ne 0 -or -not (Test-Path $guiExecutable)) { throw 'Owned Win32 desktop fixture compilation failed.' }
+      $windowClass = $launchSource.IndexOf('public static class MixelSupportWindowTest {')
+      $windowFirst = $launchSource.LastIndexOf('using System;', $windowClass)
+      $windowLast = $launchSource.IndexOf("`n'@", $windowClass)
+      if ($windowClass -lt 0 -or $windowFirst -lt 0 -or $windowLast -le $windowFirst) { throw 'Exact runtime window fixture class missing.' }
+      if (-not ('MixelSupportWindowTest' -as [type])) { Add-Type -TypeDefinition $launchSource.Substring($windowFirst,$windowLast-$windowFirst) }
+      $launchAst = [System.Management.Automation.Language.Parser]::ParseInput($launchSource,[ref]$null,[ref]$null)
+      $diagnostic = @($launchAst.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Write-OwnedWindowDiagnostic'},$true))
+      if ($diagnostic.Count -ne 1) { throw 'Exact owned runtime diagnostic function is ambiguous.' }
+      . ([scriptblock]::Create($diagnostic[0].Extent.Text))
+      $baselineAcls = [MixelOrdinaryTokenFixture]::DesktopAclHashes()
+      $desktopControls = [System.Collections.Generic.List[object]]::new()
+      foreach ($mode in @('minimal-before', 'canonical', 'minimal-after')) {
+      $canonical = $mode -ceq 'canonical'
+      if (Test-Path $guiResult) { Remove-Item $guiResult }
+      $guiProcess = $null; $guiPid = $null; $trialFailure = $null
+      try {
+      $guiCleanupKnown=$false; $guiDesktopMayBeChanged=$true
+      $guiAccess = [MixelOrdinaryTokenFixture+DesktopAccess]::new($ownedSid, $canonical)
+      $effectiveDesktopAccess = [MixelOrdinaryTokenFixture]::ActualStandardDesktopAccess($ownedUser, $ownedPassword, $ownedSid)
+      Write-Host ("FIXTURE: $mode actual owned standard SID Win32 desktop access errors (0=granted): " + ($effectiveDesktopAccess | ConvertTo-Json -Compress))
+      if ($effectiveDesktopAccess['station:0x327'] -ne 0 -or $effectiveDesktopAccess['desktop:0xc7'] -ne 0) { throw 'Owned standard SID lacks its exact temporarily granted Win32 desktop rights.' }
+      $guiProfile = $true
+      $guiStartedAt = [DateTime]::UtcNow
+      # Qualify the exact retained process before it can enter Main or exit.
+      # The narrow desktop negative can fail during native DLL initialization;
+      # inspecting a running/exited PID afterward races the token/session check.
+      $guiPid = [MixelOrdinaryTokenFixture]::StartStandardUser($guiExecutable, $ownedUser, $ownedPassword, $true)
+      $guiProcess = Get-Process -Id $guiPid
+      $guiIdentity = [MixelOrdinaryTokenFixture]::SuspendedOwnedIdentity($guiPid)
+      Write-Host ("FIXTURE: $mode retained suspended owned process token identity: " + ($guiIdentity | ConvertTo-Json -Compress))
+      if ($guiIdentity['kernelPid'] -cne [string]$guiPid -or $guiIdentity['sid'] -cne $ownedSid -or
+          $guiIdentity['elevated'] -cne 'False' -or $guiIdentity['integritySid'] -cne 'S-1-16-8192' -or
+          $guiIdentity['sessionId'] -cne [string](Get-Process -Id $PID).SessionId -or
+          [MixelOrdinaryTokenFixture]::StartedStatus($guiPid) -cne 'still-running' -or (Test-Path $guiResult)) {
+        try { Write-OwnedDesktopIdentityDiagnostic $guiPid $ownedSid $mode ($guiIdentity['elevated'] -ceq 'True') $guiIdentity['sessionId'] ([string](Get-Process -Id $PID).SessionId) }
+        catch { try { Write-Host 'FIXTURE: secondary owned desktop identity diagnosis unavailable; original failure preserved.' } catch {} }
+        throw 'Owned suspended desktop control does not have its created standard SID, medium-integrity non-elevated token and actual runner session.'
+      }
+      if ([MixelOrdinaryTokenFixture]::ResumeOwnedPrimaryThread($guiPid) -ne 1) { throw 'Owned desktop control primary thread did not resume its one retained suspension.' }
+      if (Complete-OwnedNoncanonicalExitedDesktopControl $guiPid $ownedSid $mode $desktopControls) { continue }
+      $deadline = [DateTime]::UtcNow.AddSeconds(8)
+      $actualGui = @{}
+      while ([DateTime]::UtcNow -lt $deadline) {
+        if (Test-Path $guiResult) {
+          $snapshot=Read-OwnedDesktopControlSnapshot $guiResult
+          if (-not $snapshot.pending) {
+            $actualGui=$snapshot.values
+            if ($actualGui.phase -ceq 'Win32-calls-complete') { break }
+          }
+        }
+        if ([MixelOrdinaryTokenFixture]::StartedStatus($guiPid).StartsWith('exited:')) { break }
+        Start-Sleep -Milliseconds 100
+      }
+      Write-Host ("FIXTURE: $mode actual native owned ordinary Win32 desktop control: " + ($actualGui | ConvertTo-Json -Compress))
+      Write-OwnedWindowDiagnostic $guiPid "native Win32 desktop fixture qualification ($mode)"
+      if ($actualGui.phase -cne 'Win32-calls-complete') {
+        $nativeStatus = [MixelOrdinaryTokenFixture]::StartedStatus($guiPid)
+        # Only emit selected fields from events attributable to this exact
+        # owned executable and PID, never arbitrary event text or raw argv.
+        $events = @(Get-WinEvent -FilterHashtable @{LogName='Application'; Id=1000; StartTime=$guiStartedAt.AddSeconds(-1)} -ErrorAction SilentlyContinue)
+        foreach ($event in $events) {
+          $data = @{}
+          foreach ($entry in ([xml]$event.ToXml()).Event.EventData.Data) { $data[[string]$entry.Name] = [string]$entry.'#text' }
+          if ($data.AppPath -cne $guiExecutable -or $data.ProcessId -notmatch '^(?:0x)?[0-9a-fA-F]+$') { continue }
+          $eventPid = if ($data.ProcessId.StartsWith('0x')) { [Convert]::ToInt64($data.ProcessId.Substring(2),16) } else { [Convert]::ToInt64($data.ProcessId) }
+          if ($eventPid -ne $guiPid) { continue }
+          $selected = [pscustomobject]@{ eventId=$event.Id; pid=$eventPid; appName=$data.AppName; module=$data.ModuleName; exception=$data.ExceptionCode; offset=$data.FaultingOffset }
+          Write-Host ('FIXTURE: actual owned native Application Error event: ' + ($selected | ConvertTo-Json -Compress))
+        }
+        if ($canonical) { throw "Canonical owned ordinary desktop fixture did not complete its Win32 control; phase=$($actualGui.phase), nativeStatus=$nativeStatus." }
+        $desktopControls.Add([pscustomobject]@{ mode=$mode; passed=$false; pid=$guiPid; nativeStatus=$nativeStatus; result=$actualGui })
+        Write-Host "DIAGNOSTIC: $mode control did not complete Win32 calls; phase=$($actualGui.phase), nativeStatus=$nativeStatus."
+        continue
+      }
+      if ($actualGui.pid -ne [string]$guiPid -or $actualGui.desktop -cne $actualDesktop -or
+          $actualGui.window -eq '0' -or $actualGui.visible -cne 'True' -or $actualGui.menu -eq '0') {
+        if ($canonical) { throw "Canonical owned ordinary Win32 GUI fixture failed; windowError=$($actualGui.windowError), menuError=$($actualGui.menuError), desktop=$($actualGui.desktop)." }
+        $desktopControls.Add([pscustomobject]@{ mode=$mode; passed=$false; pid=$guiPid; nativeStatus=[MixelOrdinaryTokenFixture]::StartedStatus($guiPid); result=$actualGui })
+        Write-Host "DIAGNOSTIC: $mode control failed GUI checks; windowError=$($actualGui.windowError), menuError=$($actualGui.menuError), desktop=$($actualGui.desktop)."
+        continue
+      }
+      $desktopControls.Add([pscustomobject]@{ mode=$mode; passed=$true; pid=$guiPid; nativeStatus=[MixelOrdinaryTokenFixture]::StartedStatus($guiPid); result=$actualGui })
+      Write-Host "PASS: $mode exact owned standard-account launch and temporary SID-scoped desktop grant create an actual visible Win32 window and menu on the runner desktop."
+      } catch {
+        $trialFailure = $_
+        throw
+      } finally {
+        $trialCleanup = [System.Collections.Generic.List[string]]::new()
+        $trialFacts=Complete-OwnedDesktopCleanup $guiAccess $baselineAcls $guiDesktopMayBeChanged
+        foreach ($failure in $trialFacts.failures) { $trialCleanup.Add($failure) }
+        $guiCleanupKnown=$trialFacts.cleanupOkay
+        if ($trialFacts.desktopRestored) { $guiAccess=$null; $guiDesktopMayBeChanged=$false }
+        if ($trialCleanup.Count -gt 0) {
+          if ($trialFailure) { try { Write-Host ('FAIL: owned desktop trial cleanup additionally failed: ' + ($trialCleanup -join ' ')) } catch {} }
+          else { throw ($trialCleanup -join ' ') }
+        } else {
+          if ($trialFailure) { try { Write-Host "PASS: $mode owned desktop control restores the exact original station/desktop ACL hashes." } catch {} }
+          else { Write-Host "PASS: $mode owned desktop control restores the exact original station/desktop ACL hashes." }
+        }
+      }
+      }
+      Write-Host ('FIXTURE: native same-account/profile/executable desktop A/B/A results: ' + ($desktopControls | ConvertTo-Json -Depth 5 -Compress))
+      if ($desktopControls.Count -ne 3 -or -not $desktopControls[1].passed) { throw 'Canonical owned interactive desktop qualification did not pass.' }
+      if (-not $desktopControls[0].passed -and -not $desktopControls[2].passed) {
+        Write-Host 'PASS: same account/profile/executable A/B/A reproduces minimal-rights failure before and after canonical visible-window/menu success, with exact original ACL restoration between all trials.'
+      } else {
+        Write-Host 'DIAGNOSTIC: canonical visible-window/menu qualification passes, but minimal rights also passed in at least one trial; no ACL-causality claim is made.'
+      }
+      # A diagnostic attach failure can leave the original primary thread
+      # suspended before Process.Path is available. Qualify exact retained
+      # native-handle cleanup on that real standard-user state as well.
+      if (Test-Path $guiResult) { Remove-Item $guiResult }
+      $guiCleanupKnown=$false; $guiDesktopMayBeChanged=$true
+      $guiAccess = [MixelOrdinaryTokenFixture+DesktopAccess]::new($ownedSid)
+      $guiPid = [MixelOrdinaryTokenFixture]::StartStandardUser($guiExecutable, $ownedUser, $ownedPassword, $true)
+      $guiProcess = Get-Process -Id $guiPid
+      $cleanupIdentity = [MixelOrdinaryTokenFixture]::SuspendedOwnedIdentity($guiPid)
+      if ($cleanupIdentity['kernelPid'] -cne [string]$guiPid -or $cleanupIdentity['sid'] -cne $ownedSid -or
+          $cleanupIdentity['elevated'] -cne 'False' -or $cleanupIdentity['integritySid'] -cne 'S-1-16-8192' -or
+          $cleanupIdentity['sessionId'] -cne [string](Get-Process -Id $PID).SessionId -or
+          [MixelOrdinaryTokenFixture]::StartedStatus($guiPid) -cne 'still-running' -or (Test-Path $guiResult)) {
+        throw 'Owned retained-handle cleanup control did not start as a genuine suspended ordinary process before Main.'
+      }
+      [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses()
+      if ([MixelOrdinaryTokenFixture]::StartedStatus($guiPid) -cne 'exited:0x00000001' -or (Test-Path $guiResult)) {
+        throw 'Exact retained native process handle did not prove termination of its suspended owned target.'
+      }
+      $exitedIdentityRejected = $false
+      try { [void][MixelOrdinaryTokenFixture]::SuspendedOwnedIdentity($guiPid) } catch {
+        if (-not $_.Exception.ToString().Contains('no longer live or does not match its kernel PID')) { throw }
+        $exitedIdentityRejected = $true
+      }
+      if (-not $exitedIdentityRejected) { throw 'An exited owned process satisfied live suspended identity qualification.' }
+      Write-Host 'PASS: retained native identity qualification rejects the actual exited owned process before reading its token.'
+      # Already-exited handles are intentionally safe to revisit without PID
+      # lookup or reliance on a loaded executable path.
+      [MixelOrdinaryTokenFixture]::StopOwnedStartedProcesses()
+      [MixelOrdinaryTokenFixture]::CloseStartedObservations()
+      $guiAccess.Dispose(); $guiAccess=$null
+      if ([MixelOrdinaryTokenFixture]::DesktopAclHashes() -cne $baselineAcls) { throw 'Suspended process cleanup control did not restore its original desktop ACLs.' }
+      $guiDesktopMayBeChanged=$false
+      Write-Host "PASS: exact retained native process handle terminates the actual owned suspended non-elevated target before Main, observes native exit 0x00000001 and safely revisits its exited handle; pid=$guiPid; original desktop ACL hashes restored."
+    } catch {
+      $guiFailure = $_
+      throw
+    } finally {
+      $guiCleanup = [System.Collections.Generic.List[string]]::new()
+      $guiFacts=Complete-OwnedDesktopCleanup $guiAccess $baselineAcls $guiDesktopMayBeChanged
+      foreach ($failure in $guiFacts.failures) { $guiCleanup.Add($failure) }
+      $guiCleanupKnown=$guiFacts.cleanupOkay
+      if ($guiFacts.desktopRestored) { $guiAccess=$null; $guiDesktopMayBeChanged=$false }
+      if ($guiProfile -and $guiCleanupKnown) {
+        $profileRemoved = $false
+        for ($attempt=0; $attempt -lt 5; $attempt++) {
+          try { [MixelOrdinaryTokenFixture]::RemoveProfile($ownedSid); $profileRemoved=$true; break }
+          catch { if ($attempt -lt 4) { Start-Sleep -Seconds 2 } }
+        }
+        if (-not $profileRemoved) { $guiCleanup.Add('Owned native desktop-control profile cleanup failed.') }
+      }
+      if ($guiCleanupKnown) {
+        if (Test-Path $guiRoot) { try { Remove-Item $guiRoot -Recurse -Force } catch { $guiCleanup.Add('Owned native desktop-control files cleanup failed.') } }
+      } else { $guiCleanup.Add('Unknown owned desktop cleanup retains account, profile and fixture files for recovery.') }
+      if ($guiCleanup.Count -gt 0) {
+        if ($guiFailure) { try { Write-Host ('FAIL: owned native desktop-control cleanup additionally failed: ' + ($guiCleanup -join ' ')) } catch {} }
+        else { throw ($guiCleanup -join ' ') }
+      }
+    }
+  } catch {
+    $accountFailure=$_
+    throw
+  } finally {
+    $ownedPassword = $null
+    $random = $null
+    if ($ownedSid) {
+      if (-not $guiCleanupKnown) {
+        if ($accountFailure) { try { Write-Host 'FAIL: owned desktop cleanup is unverified; account, profile and files retained.' } catch {} }
+        else { throw 'Owned desktop cleanup is unverified; account, profile and files retained.' }
+      } else {
+        try { Remove-LocalUser -SID ([Security.Principal.SecurityIdentifier]::new($ownedSid)) }
+        catch { if ($accountFailure) { try { Write-Host 'FAIL: owned account cleanup additionally failed; original error retained.' } catch {} } else { throw } }
+      }
+    }
+  }
+  if (Get-LocalUser -Name $ownedUser -ErrorAction SilentlyContinue) { throw 'Owned account remained after its actual SID was removed.' }
+  Write-Host 'PASS: actual standard account cleanup removes only the created SID and leaves no test account.'
+}
+
+foreach ($required in @(
+    "`$initialHealth.attendedProof -cne ''",
+    '$initialOwnsLease',
+    "'verify absent prior foreground consent lease'",
+    'globalLeasePresent=$initialLeasePresent',
+    'Stop-OwnedCustomerProcesses',
+    '$process.WaitForExit(10000)',
+    '[MixelOrdinaryTokenFixture]::Elevated($main.Id)',
+    '[MixelOrdinaryTokenFixture]::OwnsLease($main.Id)',
+    '$warmLaunch.WaitForExit(60000)',
+    '$started.Elapsed.TotalSeconds -lt 95',
+    '$window -ne $originalWindow',
+    '$initialHealth.incomingPid -ne $main.Id',
+    'Assert-OwnedIncomingHealth $warmHealth',
+    'Assert-OwnedIncomingHealth $currentHealth',
+    'Assert-OwnedIncomingHealth $finalHealth',
+    "-ArgumentList '--quick_support'",
+    'actual customer QS portable launcher',
+    'exact signed compiled QS argument (diagnostic)',
+    '(-not $Portable -and -not $CompiledQuickSupportDiagnostic)',
+    'Compiled diagnostic executable differs from the retained signed payload entry.',
+    'desktop = CurrentDesktopPath()',
+    '$main.SessionId -ne (Get-Process -Id $PID).SessionId',
+    '$ordinaryProfileRoot = [MixelOrdinaryTokenFixture]::ProfilePath($main.Id)',
+    "Join-Path `$ordinaryProfileRoot 'AppData/Roaming/Mixel-Remote'",
+    "('mixel-ordinary-client-' +",
+    "Write-OwnedWindowDiagnostic `$main.Id 'initial ordinary startup'",
+    'ThreadDesktopName([uint32]$_.Id)',
+    '$process.Modules | Select-Object -ExpandProperty ModuleName',
+    'StartedStatus($ProcessId)',
+    'canonical ? 0xf01ff : 0xc7',
+    'if ($ownedSid) { try { Remove-LocalUser -SID',
+    '$primaryFailure = $_',
+    'if ($primaryFailure) { Write-Host',
+    '-OrdinaryThenQuickSupport')) {
+  if (-not $launchSource.Contains($required)) { throw "Ordinary-to-QS runtime proof lost a required native assertion: $required" }
+}
+
+
+function Test-MixelWindowsStorePayload([string]$ScriptsDirectory = $PSScriptRoot) {
+$temporary = Join-Path ([IO.Path]::GetTempPath()) ('mixel-windows-pipeline-' + [Guid]::NewGuid())
+try {
+  $build = Join-Path $temporary 'build'
+  $release = Join-Path $build 'x64/runner/Release'
+  $payload = Join-Path $temporary 'payload'
+  New-Item -ItemType Directory -Force (Join-Path $release 'data/flutter_assets') | Out-Null
+  foreach ($file in @('mixel-remote.exe', 'libmixel-remote.dll', 'flutter_windows.dll', 'data/icudtl.dat', 'data/flutter_assets/AssetManifest.json')) {
+    Set-Content (Join-Path $release $file) -Value 'compiled-test-fixture' -Encoding utf8
+  }
+  $plugin = Join-Path $release 'desktop_multi_window_plugin.dll'
+  $fixtureWriter = Join-Path $ScriptsDirectory 'create-windows-payload-metadata-fixture.py'
+  & python $fixtureWriter --output $plugin
+  if ($LASTEXITCODE -ne 0) { throw 'Inert native plugin metadata fixture generation failed.' }
+  $pluginBytes = [IO.File]::ReadAllBytes($plugin)
+  New-Item -ItemType Directory -Force $payload | Out-Null
+  Set-Content (Join-Path $payload 'stale.dll') -Value 'must-be-removed'
+  & (Join-Path $ScriptsDirectory 'prepare-windows-store-payload.ps1') -BuildRoot $build -Destination $payload
+  if (-not (Test-Path (Join-Path $payload 'Mixel-Remote.exe')) -or (Test-Path (Join-Path $payload 'stale.dll'))) {
+    throw 'Payload preparation failed to normalize the main name or remove stale bytes.'
+  }
+  if ((Get-FileHash (Join-Path $payload 'desktop_multi_window_plugin.dll') -Algorithm SHA256).Hash -cne (Get-FileHash $plugin -Algorithm SHA256).Hash) {
+    throw 'Store staging changed the actual plugin resource fixture bytes.'
+  }
+  Write-Host 'PASS: payload preparation starts clean and preserves the compiled application and assets.'
+  Remove-Item -LiteralPath $plugin
+  Assert-Fails { & (Join-Path $ScriptsDirectory 'prepare-windows-store-payload.ps1') -BuildRoot $build -Destination $payload } 'Store payload missing plugin' @('Windows payload must contain exactly one desktop_multi_window_plugin.dll.')
+  foreach ($profile in @('corrupt', 'retired')) {
+    $changed = Join-Path $temporary ($profile + '.dll')
+    & python $fixtureWriter --output $changed --profile $profile
+    if ($LASTEXITCODE -ne 0) { throw "Inert $profile resource fixture generation failed." }
+    Copy-Item -LiteralPath $changed -Destination $plugin
+    $expected = if ($profile -ceq 'retired') { 'Retired Windows payload metadata: desktop_multi_window_plugin.dll: CompanyName.' } else { 'Invalid owned plugin metadata: desktop_multi_window_plugin.dll: CompanyName.' }
+    Assert-Fails { & (Join-Path $ScriptsDirectory 'prepare-windows-store-payload.ps1') -BuildRoot $build -Destination $payload } "Store payload $profile resource" @($expected)
+  }
+  [IO.File]::WriteAllBytes($plugin, $pluginBytes)
+  Write-Host 'PASS: actual Store staging copies a real VERSIONINFO-only plugin unchanged and rejects missing, corrupt and retired resources; no PE executes.'
+  Remove-Item (Join-Path $release 'data/flutter_assets/AssetManifest.json')
+  Assert-Fails { & (Join-Path $ScriptsDirectory 'prepare-windows-store-payload.ps1') -BuildRoot $build -Destination $payload } 'empty Flutter assets'
+  Set-Content (Join-Path $release 'data/flutter_assets/AssetManifest.json') -Value '{}'
+  Remove-Item (Join-Path $release 'libmixel-remote.dll')
+  Assert-Fails { & (Join-Path $ScriptsDirectory 'prepare-windows-store-payload.ps1') -BuildRoot $build -Destination $payload } 'missing core DLL'
+  Set-Content (Join-Path $release 'libmixel-remote.dll') -Value 'compiled-test-fixture'
+  $duplicate = Join-Path $build 'other/Release'
+  New-Item -ItemType Directory -Force $duplicate | Out-Null
+  Set-Content (Join-Path $duplicate 'mixel-remote.exe') -Value 'ambiguous-build'
+  Assert-Fails { & (Join-Path $ScriptsDirectory 'prepare-windows-store-payload.ps1') -BuildRoot $build -Destination $payload } 'ambiguous compiled application'
+  Write-Host 'PASS: incomplete and ambiguous Windows builds fail closed.'
+} finally {
+  if (Test-Path $temporary) { Remove-Item $temporary -Recurse -Force }
+}
+}
+Test-MixelWindowsStorePayload
+
+
+}
+
+. (Join-Path $PSScriptRoot 'support-runtime-probe-windows.ps1')
+if ([MixelSupportIpcProbe]::ConsistentServerPid([uint32[]]@(42, 42, 42, 42, 42)) -ne 42) {
+  throw 'Consistent incoming server PID was rejected.'
+}
+foreach ($pids in @(@(0, 0, 0, 0, 0), @(42, 42, 43, 42, 42), @(42, 42, 42, 42))) {
+  Assert-Fails { [MixelSupportIpcProbe]::ConsistentServerPid([uint32[]]$pids) } 'missing or inconsistent incoming server PID'
+}
+if (-not ('MixelSupportProbeFixture' -as [type])) { Add-Type @'
+using System;
+using System.Collections.Concurrent;
+using System.IO;
+using System.IO.Pipes;
+using System.Text;
+using System.Threading.Tasks;
+public static class MixelSupportProbeFixture {
+  static readonly ConcurrentQueue<string> Requests = new ConcurrentQueue<string>();
+  public static string[] Requested() { return Requests.ToArray(); }
+  public static Task Serve(string[] responses) {
+    string previous;
+    while (Requests.TryDequeue(out previous)) { }
+    return Task.Run(() => {
+      // Reuse this owned listener across the health response group. Destroying
+      // and recreating its name can discard the next client's queued connect.
+      using (var pipe = new NamedPipeServerStream("Mixel-Remote\\query", PipeDirection.InOut, 1, PipeTransmissionMode.Byte)) {
+        foreach (string response in responses) {
+          pipe.WaitForConnection();
+          int first = pipe.ReadByte();
+          int headerLength = (first & 3) + 1;
+          int header = first;
+          for (int i = 1; i < headerLength; i++) header |= pipe.ReadByte() << (8 * i);
+          var request = new byte[header >> 2];
+          int offset = 0;
+          while (offset < request.Length) {
+            int count = pipe.Read(request, offset, request.Length - offset);
+            if (count == 0) throw new IOException("Fixture request was truncated");
+            offset += count;
+          }
+          Requests.Enqueue(Encoding.UTF8.GetString(request));
+          if (response == "oversized") {
+            int largeHeader = (65537 << 2) | 2;
+            for (int i = 0; i < 3; i++) pipe.WriteByte((byte)(largeHeader >> (8 * i)));
+          } else if (response == "truncated") {
+            pipe.WriteByte(5); // Two-byte response header, second byte missing.
+          } else {
+            var body = Encoding.UTF8.GetBytes(response);
+            int length = body.Length <= 63 ? 1 : 2;
+            int replyHeader = (body.Length << 2) | (length - 1);
+            for (int i = 0; i < length; i++) pipe.WriteByte((byte)(replyHeader >> (8 * i)));
+            // Exercise actual ReadExact framing with fragmented response bytes.
+            foreach (byte value in body) pipe.WriteByte(value);
+          }
+          pipe.Flush();
+          if (response != "truncated") {
+            // Keep this owned server alive until RequestWithServerPid has read
+            // the complete response and disposed its client. Flush alone does
+            // not attest consumption of fragmented bytes or safe name reuse.
+            // This is server-side EOF observation, with no extra wire packet.
+            var closed = pipe.ReadAsync(new byte[1], 0, 1);
+            if (!closed.Wait(2000)) throw new TimeoutException("Owned IPC fixture client did not close after its response.");
+            if (closed.Result != 0) throw new InvalidDataException("Owned IPC fixture received an extra client packet.");
+          }
+          pipe.Disconnect();
+        }
+      }
+    });
+  }
+}
+'@ }
+
+$guard = '{"t":"Config","c":["mixel-support-invite-attended","attended-runtime-v2"]}'
+$online = '{"t":"OnlineStatus","c":[1,true]}'
+$options = '{"t":"Options","c":{"custom-rendezvous-server":"rs.mixel.ch","relay-server":"rs.mixel.ch","key":"OogSlDx9l+fgs0t6ihF3uTg9emyCv01m8cr4ullarRo="}}'
+$rendezvous = '{"t":"Config","c":["rendezvous_server","rs.mixel.ch:21116,rs.mixel.ch:21116"]}'
+$device = '{"t":"Config","c":["id","123456789"]}'
+$fixture = [MixelSupportProbeFixture]::Serve(@($guard, $online, $options, $rendezvous, $device))
+$health = Get-MixelSupportRuntimeHealth
+$fixture.GetAwaiter().GetResult()
+$expectedRequests = @(
+  '{"t":"Config","c":["mixel-support-invite-attended",null]}',
+  '{"t":"OnlineStatus","c":null}',
+  '{"t":"Options","c":null}',
+  '{"t":"Config","c":["rendezvous_server",null]}',
+  '{"t":"Config","c":["id",null]}')
+$actualRequests = [MixelSupportProbeFixture]::Requested()
+if ($actualRequests.Count -ne $expectedRequests.Count) { throw 'IPC health probe issued an unexpected number of requests.' }
+for ($index = 0; $index -lt $expectedRequests.Count; $index++) {
+  if ($actualRequests[$index] -cne $expectedRequests[$index]) {
+    throw 'IPC health probe must send only the exact framed read-only runtime queries.'
+  }
+}
+if ($health.incomingPid -ne $PID -or -not $health.attendedReady -or -not $health.keyConfirmed -or $health.rendezvousState -ne 1 -or
+    -not $health.brandedRelay -or $health.registeredId -ne '123456789' -or $health.rendezvousServer -ne 'rs.mixel.ch:21116') {
+  throw 'Runtime IPC probe failed to parse a valid framed response.'
+}
+Write-Host 'PASS: actual named-pipe IPC decodes fragmented attended, online, branded relay/key, rendezvous and registered-ID responses.'
+Write-Host 'PASS: actual framed health requests are read-only and never arm consent or change options.'
+Write-Host 'PASS: all five actual named-pipe responses belong to the fixture server PID; missing or inconsistent PID attribution fails closed.'
+
+$probePath = Join-Path $PSScriptRoot 'support-runtime-probe-windows.ps1'
+$probeTokens = $null; $probeErrors = $null
+$probeAst = [Management.Automation.Language.Parser]::ParseFile($probePath, [ref]$probeTokens, [ref]$probeErrors)
+if ($probeErrors.Count -ne 0) { throw 'Actual runtime health helper failed to parse.' }
+$healthFunction = @($probeAst.FindAll({ param($node)
+  $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Get-MixelSupportRuntimeHealth'
+}, $true))
+if ($healthFunction.Count -ne 1) { throw 'Actual runtime health function is missing or duplicated.' }
+$integerCondition = '($online.c[0] -isnot [int] -and $online.c[0] -isnot [long])'
+if (($healthFunction[0].Extent.Text.Split(@($integerCondition), [StringSplitOptions]::None).Count - 1) -ne 1) {
+  throw 'Exact uncoerced signed integer condition is missing or duplicated.'
+}
+if ($PSVersionTable.PSEdition -ceq 'Desktop') {
+  $smallOnline = $online | ConvertFrom-Json
+  if ($smallOnline.c[0] -isnot [int]) { throw 'Actual Windows PowerShell must reproduce its small JSON Int32 conversion.' }
+  # Execute the actual old function with only its original integer condition restored.
+  $priorHealth = $healthFunction[0].Extent.Text.Replace(
+    'function Get-MixelSupportRuntimeHealth', 'function Get-MixelSupportRuntimeHealthPriorInt64').Replace(
+    $integerCondition, '$online.c[0] -isnot [long]')
+  . ([scriptblock]::Create($priorHealth))
+  $fixture = [MixelSupportProbeFixture]::Serve(@($guard, $online))
+  Assert-Fails { Get-MixelSupportRuntimeHealthPriorInt64 } 'original Int64-only parser rejects real Windows PowerShell Int32' @(
+    'Incoming support IPC returned an unexpected online response.')
+  $fixture.GetAwaiter().GetResult()
+  $actualRequests = [MixelSupportProbeFixture]::Requested()
+  if ($actualRequests.Count -ne 2 -or $actualRequests[0] -cne $expectedRequests[0] -or $actualRequests[1] -cne $expectedRequests[1]) {
+    throw 'Original integer failure did not stop after the exact read-only online query.'
+  }
+  Write-Host 'PASS: actual stock Windows PowerShell5.1 reproduces original Int64-only health parser failure on JSON integer1 (Int32); no further requests follow rejection.'
+} else {
+  Write-Host 'OBSERVED: original stock Windows PowerShell5.1 Int32 conversion is not executed in this Core process.'
+}
+
+$integerLiterals = @('0', '1', '-1', '2147483647', '-2147483648', '2147483648', '-2147483649', '9223372036854775807', '-9223372036854775808')
+foreach ($integerLiteral in $integerLiterals) {
+  $integerOnline = '{"t":"OnlineStatus","c":[' + $integerLiteral + ',true]}'
+  $fixture = [MixelSupportProbeFixture]::Serve(@($guard, $integerOnline, $options, $rendezvous, $device))
+  $integerHealth = Get-MixelSupportRuntimeHealth
+  $fixture.GetAwaiter().GetResult()
+  $expectedInteger = [long]::Parse($integerLiteral, [Globalization.CultureInfo]::InvariantCulture)
+  if (($integerHealth.rendezvousState -isnot [int] -and $integerHealth.rendezvousState -isnot [long]) -or
+      $integerHealth.rendezvousState -ne $expectedInteger -or -not $integerHealth.keyConfirmed -or
+      $integerHealth.incomingPid -ne $PID -or -not $integerHealth.attendedReady) {
+    throw 'Actual framed health parser changed or coerced a signed integer response.'
+  }
+  $actualRequests = [MixelSupportProbeFixture]::Requested()
+  if ($actualRequests.Count -ne $expectedRequests.Count) { throw 'Integer health issued an unexpected number of requests.' }
+  for ($index = 0; $index -lt $expectedRequests.Count; $index++) {
+    if ($actualRequests[$index] -cne $expectedRequests[$index]) { throw 'Integer health changed the exact read-only queries.' }
+  }
+}
+$onlineCondition = @($healthFunction[0].FindAll({ param($node)
+  $node -is [Management.Automation.Language.IfStatementAst] -and
+  $node.Extent.Text.Contains("throw 'Incoming support IPC returned an unexpected online response.'")
+}, $true))
+if ($onlineCondition.Count -ne 1) { throw 'Actual online type validator is missing or duplicated.' }
+foreach ($typedValue in @([int]1, [long]1, [bool]$true, [double]1, [decimal]1, [single]1, [uint32]1, [uint64]1, [string]'1', ([object[]]@(1)), $null, [uint64]::MaxValue)) {
+  $online = [pscustomobject]@{ t = 'OnlineStatus'; c = [object[]]@($typedValue, $true) }
+  $acceptedType = $typedValue -is [int] -or $typedValue -is [long]
+  $refusedType = $false
+  try { & ([scriptblock]::Create($onlineCondition[0].Extent.Text)) } catch {
+    if ($_.Exception.Message -cne 'Incoming support IPC returned an unexpected online response.') { throw }
+    $refusedType = $true
+  }
+  if ($refusedType -eq $acceptedType) { throw 'Actual online validator accepted a coerced or non-signed-integer scalar.' }
+}
+$online = '{"t":"OnlineStatus","c":[1,true]}'
+Write-Host ('OBSERVED: actual JSON small-integer runtime type: ' + ($online | ConvertFrom-Json).c[0].GetType().FullName)
+Write-Host 'PASS: actual fragmented named-pipe health accepts nine small/large signed integer states without coercion; exact actual validator accepts only Int32/Int64 scalar types and rejects ten noninteger/unsigned/nested/oversized values.'
+
+foreach ($rawProof in @('', 'attended-runtime-v2', 'guard-unavailable', 'attended-runtime-v1', 'Y', 'ATTENDED-RUNTIME-V2')) {
+  $rawGuard = [pscustomobject]@{ t = 'Config'; c = @('mixel-support-invite-attended', $rawProof) } | ConvertTo-Json -Compress
+  $fixture = [MixelSupportProbeFixture]::Serve(@($rawGuard, $online, $options, $rendezvous, $device))
+  $rawHealth = Get-MixelSupportRuntimeHealth
+  $fixture.GetAwaiter().GetResult()
+  if ($rawHealth.attendedProof -isnot [string] -or $rawHealth.attendedProof -cne $rawProof -or
+      $rawHealth.attendedReady -isnot [bool] -or $rawHealth.attendedReady -ne ($rawProof -ceq 'attended-runtime-v2') -or
+      $rawHealth.incomingPid -ne $PID -or -not $rawHealth.brandedRelay -or
+      -not $rawHealth.keyConfirmed -or $rawHealth.rendezvousState -ne 1 -or
+      $rawHealth.registeredId -cne '123456789' -or $rawHealth.rendezvousServer -cne 'rs.mixel.ch:21116') {
+    throw 'Actual IPC health must preserve the raw guard proof and confirm only exact attended-runtime-v2.'
+  }
+  $actualRequests = [MixelSupportProbeFixture]::Requested()
+  if ($actualRequests.Count -ne $expectedRequests.Count) { throw 'Raw guard health issued an unexpected number of requests.' }
+  for ($index = 0; $index -lt $expectedRequests.Count; $index++) {
+    if ($actualRequests[$index] -cne $expectedRequests[$index]) {
+      throw 'Raw guard health must use only the exact read-only queries, with no consent setter or preference writes.'
+    }
+  }
+}
+Write-Host 'PASS: actual named-pipe health preserves ordinary empty, v2, unavailable and legacy proofs verbatim; only exact v2 confirms readiness, including case-variant rejection; all queries remain read-only.'
+
+foreach ($invalid in @(
+    '{"t":"Config","c":["mixel-support-invite-attended",null]}',
+    '{"t":"Config","c":["mixel-support-invite-attended",true]}',
+    '{"t":"Config","c":["mixel-support-invite-attended",1]}',
+    '{"t":"Config","c":["mixel-support-invite-attended",{}]}',
+    '{"t":"Config","c":["mixel-support-invite-attended",[]]}',
+    '{"t":["Config"],"c":["mixel-support-invite-attended","attended-runtime-v2"]}',
+    '{"t":"Config","c":[["mixel-support-invite-attended"],"attended-runtime-v2"]}',
+    '{"t":"config","c":["mixel-support-invite-attended","attended-runtime-v2"]}',
+    '{"t":"Config","c":["MIXEL-SUPPORT-INVITE-ATTENDED","attended-runtime-v2"]}',
+    '{"t":"Config","c":["other-option",""]}')) {
+  $fixture = [MixelSupportProbeFixture]::Serve(@($invalid))
+  Assert-Fails { Get-MixelSupportRuntimeHealth } 'malformed raw guard proof' @('Incoming support IPC returned an unexpected guard response.')
+  $fixture.GetAwaiter().GetResult()
+  $actualRequests = [MixelSupportProbeFixture]::Requested()
+  if ($actualRequests.Count -ne 1 -or $actualRequests[0] -cne $expectedRequests[0]) {
+    throw 'Malformed raw guard must fail after its sole read-only query, without sending consent setters or further requests.'
+  }
+}
+Write-Host 'PASS: actual named-pipe health rejects null, non-string, nested-array and wrong-case/tag/key guard replies at the guard parser before further requests; no consent setters or preference writes.'
+
+$leaseStatusRequest = '{"t":"Config","c":["mixel-support-invite-lease-status",null]}'
+$leaseStatusAbsent = 'ownerFailed=false;ownerError=none;kernel=absent;probeError=none;memoryActive=false'
+foreach ($leaseStatus in @(
+    $leaseStatusAbsent,
+    'ownerFailed=false;ownerError=none;kernel=active;probeError=none;memoryActive=false',
+    'ownerFailed=false;ownerError=none;kernel=absent;probeError=none;memoryActive=true',
+    'ownerFailed=true;ownerError=5;kernel=unavailable;probeError=6;memoryActive=false',
+    'ownerFailed=true;ownerError=0;kernel=unavailable;probeError=0;memoryActive=false',
+    'ownerFailed=true;ownerError=2147483647;kernel=unavailable;probeError=2147483647;memoryActive=false',
+    'ownerFailed=true;ownerError=-2147483648;kernel=unavailable;probeError=-2147483648;memoryActive=false')) {
+  $leaseReply = [pscustomobject]@{ t = 'Config'; c = @('mixel-support-invite-lease-status', $leaseStatus) } | ConvertTo-Json -Compress
+  $fixture = [MixelSupportProbeFixture]::Serve(@($leaseReply))
+  $observed = Get-MixelSupportLeaseDiagnostic -ExpectedIncomingPid $PID
+  $fixture.GetAwaiter().GetResult()
+  $actualRequests = [MixelSupportProbeFixture]::Requested()
+  if ($observed -isnot [string] -or $observed -cne $leaseStatus -or
+      $actualRequests.Count -ne 1 -or $actualRequests[0] -cne $leaseStatusRequest) {
+    throw 'Lease diagnostics must preserve attributed safe status and issue only the one read-only query.'
+  }
+}
+$validLeaseReply = [pscustomobject]@{ t = 'Config'; c = @('mixel-support-invite-lease-status', $leaseStatusAbsent) } | ConvertTo-Json -Compress
+$validLeaseErrorReply = [pscustomobject]@{ t = 'Config'; c = @('mixel-support-invite-lease-status', 'ownerFailed=true;ownerError=5;kernel=unavailable;probeError=6;memoryActive=false') } | ConvertTo-Json -Compress
+foreach ($unexpectedPid in @([uint32]0, [uint32]($PID + 1))) {
+  $fixture = [MixelSupportProbeFixture]::Serve(@($validLeaseReply))
+  Assert-Fails { Get-MixelSupportLeaseDiagnostic -ExpectedIncomingPid $unexpectedPid } 'missing/misattributed lease diagnostic PID'
+  $fixture.GetAwaiter().GetResult()
+  $actualRequests = [MixelSupportProbeFixture]::Requested()
+  if ($actualRequests.Count -ne 1 -or $actualRequests[0] -cne $leaseStatusRequest) {
+    throw 'Misattributed lease diagnostics must not send consent setters or further requests.'
+  }
+}
+foreach ($invalid in @(
+    '{"t":"Config","c":["mixel-support-invite-lease-status",null]}',
+    '{"t":"Config","c":["mixel-support-invite-lease-status",1]}',
+    $validLeaseReply.Replace('"t":"Config"', '"t":["Config"]'),
+    $validLeaseReply.Replace('"mixel-support-invite-lease-status",', '["mixel-support-invite-lease-status"],'),
+    $validLeaseReply.Replace('"t":"Config"', '"t":"config"'),
+    $validLeaseReply.Replace('mixel-support-invite-lease-status', 'MIXEL-SUPPORT-INVITE-LEASE-STATUS'),
+    $validLeaseReply.Replace('"t":"Config"', '"t":"Options"'),
+    $validLeaseReply.Replace('mixel-support-invite-lease-status', 'other-option'),
+    $validLeaseReply.Replace('ownerFailed=false', 'ownerFailed=False'),
+    $validLeaseReply.Replace('ownerError=none', 'ownerError=unknown'),
+    $validLeaseReply.Replace('kernel=absent', 'kernel=unknown'),
+    $validLeaseReply.Replace(';memoryActive=false', ''),
+    $validLeaseReply.Replace('memoryActive=false', 'memoryActive=false\n'),
+    $validLeaseReply.Replace('memoryActive=false', 'memoryActive=false;extra=value'),
+    $validLeaseErrorReply.Replace('ownerError=5', 'ownerError=01'),
+    $validLeaseErrorReply.Replace('ownerError=5', 'ownerError=-01'),
+    $validLeaseErrorReply.Replace('ownerError=5', 'ownerError=-0'),
+    $validLeaseErrorReply.Replace('ownerError=5', 'ownerError=2147483648'),
+    $validLeaseErrorReply.Replace('ownerError=5', 'ownerError=-2147483649'),
+    $validLeaseErrorReply.Replace('probeError=6', 'probeError=01'),
+    $validLeaseErrorReply.Replace('probeError=6', 'probeError=-01'),
+    $validLeaseErrorReply.Replace('probeError=6', 'probeError=-0'),
+    $validLeaseErrorReply.Replace('probeError=6', 'probeError=2147483648'),
+    $validLeaseErrorReply.Replace('probeError=6', 'probeError=-2147483649'),
+    $validLeaseErrorReply.Replace('ownerFailed=true', 'ownerFailed=false'),
+    $validLeaseErrorReply.Replace('ownerError=5', 'ownerError=none'),
+    $validLeaseErrorReply.Replace('kernel=unavailable', 'kernel=absent'),
+    $validLeaseErrorReply.Replace('probeError=6', 'probeError=none'))) {
+  $fixture = [MixelSupportProbeFixture]::Serve(@($invalid))
+  Assert-Fails { Get-MixelSupportLeaseDiagnostic -ExpectedIncomingPid $PID } 'malformed read-only lease diagnostic' @(
+    'Actual incoming support endpoint returned an unattributed or invalid read-only lease observation.',
+    'Actual incoming support endpoint returned an inconsistent read-only lease observation.',
+    'Actual incoming support endpoint returned an out-of-range native lease error.')
+  $fixture.GetAwaiter().GetResult()
+  $actualRequests = [MixelSupportProbeFixture]::Requested()
+  if ($actualRequests.Count -ne 1 -or $actualRequests[0] -cne $leaseStatusRequest) {
+    throw 'Malformed lease diagnostics must not send consent setters or further requests.'
+  }
+}
+Write-Host 'PASS: actual named-pipe lease diagnostics preserve safe absent/active/error/memory statuses, require the actual incoming PID and reject malformed/nested-array/wrong-case envelopes, noncanonical/out-of-range codes and inconsistent error pairs at the actual parser; every observation is one read-only query.'
+
+$failedBaseline = @($captureAst.FindAll({
+  param($node)
+  $node -is [System.Management.Automation.Language.IfStatementAst] -and
+    $node.Extent.Text -match '^if \(\$initialHealth\.attendedProof -cne .* -or \$initialOwnsLease\) \{'
+}, $true))
+if ($failedBaseline.Count -ne 1) { throw 'Exact failed ordinary-to-QS baseline gate missing.' }
+$failedBaselineBlock = [scriptblock]::Create($failedBaseline[0].Extent.Text)
+foreach ($baseline in @(
+    @{ proof = 'attended-runtime-v2'; failure = 'Ordinary-to-QS positive control is already guarded; refusing a manufactured transition proof.' },
+    @{ proof = 'guard-unavailable'; failure = 'Ordinary-to-QS positive control cannot safely inspect the native consent lease; refusing an unavailable baseline.' })) {
+  foreach ($unavailable in @($false, $true)) {
+    $failureMessage = & {
+      param([scriptblock]$ActualBlock, [bool]$Unavailable, [string]$BaselineProof)
+      $initialHealth = [pscustomobject]@{ attendedProof = $BaselineProof; incomingPid = 4321 }
+      $initialOwnsLease = $false
+      $diagnosticSeen = @{ count = 0; incomingPid = $null }
+      function Get-MixelSupportLeaseDiagnostic([uint32]$ExpectedIncomingPid) {
+        $diagnosticSeen.count++
+        $diagnosticSeen.incomingPid = $ExpectedIncomingPid
+        if ($ExpectedIncomingPid -ne 4321) { throw 'Secondary observation lost the actual incoming PID.' }
+        if ($Unavailable) { throw 'Retained older signed payload has no lease diagnostic getter.' }
+        return 'ownerFailed=false;ownerError=none;kernel=unavailable;probeError=5;memoryActive=false'
+      }
+      try { & $ActualBlock; 'UNEXPECTED: guarded baseline accepted' }
+      catch { $_.Exception.Message }
+      if ($diagnosticSeen.count -ne 1 -or $diagnosticSeen.incomingPid -ne 4321) {
+        throw 'Secondary baseline observation must issue exactly one read-only query for the actual incoming PID.'
+      }
+    } $failedBaselineBlock $unavailable $baseline.proof
+    if ($failureMessage -isnot [string] -or $failureMessage -cne $baseline.failure) {
+      throw 'Secondary valid/unavailable lease diagnostics changed or masked the actual guarded-baseline failure.'
+    }
+  }
+}
+Write-Host 'PASS: exact ordinary-to-QS guarded and unavailable baseline failures remain separately fatal with either valid secondary lease evidence or an older signed payload lacking the diagnostic getter; each observes only the actual incoming PID once and no readiness is manufactured.'
+
+
+foreach ($invalid in @(
+    '{"t":"OnlineStatus","c":[1,"false"]}',
+    '{"t":"OnlineStatus","c":["1",true]}',
+    '{"t":"OnlineStatus","c":[true,true]}',
+    '{"t":"OnlineStatus","c":[false,true]}',
+    '{"t":"OnlineStatus","c":[null,true]}',
+    '{"t":"OnlineStatus","c":[[1],true]}',
+    '{"t":"OnlineStatus","c":[{},true]}',
+    '{"t":"OnlineStatus","c":[1.0,true]}',
+    '{"t":"OnlineStatus","c":[1.5,true]}',
+    '{"t":"OnlineStatus","c":[1e0,true]}',
+    '{"t":"OnlineStatus","c":[1e100,true]}',
+    '{"t":"OnlineStatus","c":[9223372036854775808,true]}',
+    '{"t":"OnlineStatus","c":[-9223372036854775809,true]}',
+    '{"t":"OnlineStatus","c":[1]}',
+    $online.Replace('"t":"OnlineStatus"', '"t":["OnlineStatus"]'),
+    $online.Replace('"t":"OnlineStatus"', '"t":"onlinestatus"'))) {
+  $fixture = [MixelSupportProbeFixture]::Serve(@($guard, $invalid))
+  Assert-Fails { Get-MixelSupportRuntimeHealth } 'malformed online proof' @('Incoming support IPC returned an unexpected online response.')
+  $fixture.GetAwaiter().GetResult()
+  $actualRequests = [MixelSupportProbeFixture]::Requested()
+  if ($actualRequests.Count -ne 2 -or $actualRequests[0] -cne $expectedRequests[0] -or $actualRequests[1] -cne $expectedRequests[1]) {
+    throw 'Malformed online responses must stop after the exact read-only online query.'
+  }
+}
+Write-Host 'PASS: actual framed health refuses sixteen malformed online replies including bool/null/nested arrays, decimal and exponent forms and both values outside signed Int64; every rejection stops after two read-only requests.'
+foreach ($invalid in @(
+    '{"t":"Options","c":[]}',
+    $options.Replace('"t":"Options"', '"t":["Options"]'),
+    $options.Replace('"t":"Options"', '"t":"options"'),
+    $options.Replace('rs.mixel.ch', 'other.example'),
+    $options.Replace('OogSlDx9l+fgs0t6ihF3uTg9emyCv01m8cr4ullarRo=', 'wrong-public-key'),
+    $options.Replace('"key":', '"mixel-support-invite-attended":"Y","key":'))) {
+  $fixture = [MixelSupportProbeFixture]::Serve(@($guard, $online, $invalid))
+  Assert-Fails { Get-MixelSupportRuntimeHealth } 'wrong/malformed relay defaults or persisted attended guard' @(
+    'Incoming support IPC returned unexpected relay options.',
+    'Actual incoming support server is not using the branded relay defaults.',
+    'Attended support guard leaked into saved preferences.')
+  $fixture.GetAwaiter().GetResult()
+}
+foreach ($invalid in @(
+    '{"t":"Config","c":["rendezvous_server","other.example:21116"]}',
+    '{"t":"Config","c":["id","rs.mixel.ch:21116"]}',
+    $rendezvous.Replace('"t":"Config"', '"t":["Config"]'),
+    $rendezvous.Replace('"rendezvous_server",', '["rendezvous_server"],'),
+    $rendezvous.Replace('"t":"Config"', '"t":"config"'),
+    $rendezvous.Replace('rendezvous_server', 'RENDEZVOUS_SERVER'))) {
+  $fixture = [MixelSupportProbeFixture]::Serve(@($guard, $online, $options, $invalid))
+  Assert-Fails { Get-MixelSupportRuntimeHealth } 'wrong/malformed rendezvous proof' @('Actual incoming rendezvous server does not match rs.mixel.ch.')
+  $fixture.GetAwaiter().GetResult()
+}
+foreach ($invalid in @(
+    '{"t":"Config","c":["id",""]}',
+    '{"t":"Config","c":["id",123456789]}',
+    '{"t":"Config","c":["id","invalid id!"]}',
+    '{"t":"Config","c":["id","123456789\n"]}',
+    '{"t":"Config","c":["temporary-password","123456789"]}',
+    $device.Replace('"t":"Config"', '"t":["Config"]'),
+    $device.Replace('"id",', '["id"],'),
+    $device.Replace('"t":"Config"', '"t":"config"'),
+    $device.Replace('"id",', '"ID",'))) {
+  $fixture = [MixelSupportProbeFixture]::Serve(@($guard, $online, $options, $rendezvous, $invalid))
+  Assert-Fails { Get-MixelSupportRuntimeHealth } 'wrong/malformed registered ID' @('Actual incoming support server has no usable support device ID.')
+  $fixture.GetAwaiter().GetResult()
+}
+foreach ($invalid in @('oversized', 'truncated')) {
+  $fixture = [MixelSupportProbeFixture]::Serve(@($invalid))
+  $expectedFrameError = if ($invalid -ceq 'oversized') { 'Incoming support IPC response exceeds its bound.' } else { 'Incoming support IPC closed before its response.' }
+  Assert-Fails {
+    try { [MixelSupportIpcProbe]::Request('{"t":"OnlineStatus","c":null}') } catch { throw $_.Exception.GetBaseException().Message }
+  } 'invalid IPC frame' @($expectedFrameError)
+  $fixture.GetAwaiter().GetResult()
+}
+Write-Host 'PASS: malformed online/relay/key/rendezvous/ID proofs, persisted consent, oversized frames and truncated frames fail closed.'
+
+# Pure managed ACL regression uses exact helper bodies; actual native session
+# access/cleanup and original consent gates run in standard-account controls.
+if (-not $RuntimeProbeOnly) {
+  & (Join-Path $PSScriptRoot 'test-windows-standard-namespace-access.ps1')
+}

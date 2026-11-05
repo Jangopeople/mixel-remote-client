@@ -1,0 +1,10 @@
+{
+  "scope": "Prepared C#5/.NET4 source only; no C# compiler, Windows API, provider or UI invoked",
+  "epochSourceSHA256": "f362530835fd3a45cb98d8616dc7517cc077189d700a1790e7700a434085c9a2",
+  "files": {
+    "WindowsSdProbe.cs": "1c75194ec4c5663810fda404d4662577e5303de19acd5e4eabb49d18fddd934a",
+    "support-receiver-custodian-epoch-windows.rs": "f362530835fd3a45cb98d8616dc7517cc077189d700a1790e7700a434085c9a2",
+    "COMMANDS.txt": "9c90d30adaab33174566c0e79000b8b1b14f629a2572be349abf4cba7e27af1c",
+    "test_source_controls.py": "697a38970516329a40e7f963fd4fb2e2952dfe92cdeaffe10e6c33423a49fc7a"
+  }
+}
