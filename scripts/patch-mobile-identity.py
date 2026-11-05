@@ -114,14 +114,43 @@ def project(root):
     replace("flutter/ios/Podfile", b"config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0'",
             b"config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0'\n"
             b"      config.build_settings['ARCHS[sdk=iphonesimulator*]'] = 'arm64'", 1)
+    remote_path, remote_data = read("flutter/lib/mobile/pages/remote_page.dart")
+    toolbar_import = b"import '../widgets/mixel_session_toolbar.dart';\n"
+    import_anchor = b"import '../widgets/custom_scale_widget.dart';\n"
+    if toolbar_import not in remote_data:
+        if remote_data.count(import_anchor) != 1:
+            raise ValueError("Unexpected mobile toolbar import anchor")
+        remote_data = remote_data.replace(import_anchor, import_anchor + toolbar_import)
+    start = remote_data.index(b"  Widget getBottomAppBar() {")
+    end = remote_data.index(b"  bool get showCursorPaint", start)
+    block = remote_data[start:end]
+    if block.count(b"child: MixelSessionToolbar(") != 1:
+        old_prefix = (b"child: Row(\n        mainAxisSize: MainAxisSize.max,\n"
+            b"        mainAxisAlignment: MainAxisAlignment.spaceBetween,\n"
+            b"        children: <Widget>[\n          Row(\n              children: <Widget>[")
+        old_middle = b"]),\n          Obx(() => IconButton("
+        old_end = b"        ],\n      ),\n    );\n  }"
+        if any(block.count(anchor) != 1 for anchor in [old_prefix, old_middle, old_end]):
+            raise ValueError("Unexpected mobile session toolbar layout")
+        block = block.replace(old_prefix, b"child: MixelSessionToolbar(\n        controls: <Widget>[")
+        block = block.replace(old_middle, b"],\n        trailing: Obx(() => IconButton(")
+        block = block.replace(old_end, b"      ),\n    );\n  }")
+    changes[remote_path] = remote_data[:start] + block + remote_data[end:]
+    helper = root / "flutter/lib/mobile/widgets/mixel_session_toolbar.dart"
+    template = pathlib.Path(__file__).parent / "fixtures/mobile/mixel_session_toolbar.dart"
+    helper_data = template.read_bytes()
+    if helper.is_symlink() or (helper.exists() and helper.read_bytes() != helper_data):
+        raise ValueError("Unexpected existing Mixel toolbar helper")
+    changes[helper] = helper_data
     return changes
 
 
 def apply(root, check=False):
     changes = project(root)
-    dirty = [p for p, data in changes.items() if p.read_bytes() != data]
+    dirty = [p for p, data in changes.items() if not p.exists() or p.read_bytes() != data]
     if not check:
         for path in dirty:
+            path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(changes[path])
     return len(dirty)
 

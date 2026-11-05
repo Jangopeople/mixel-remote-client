@@ -29,6 +29,8 @@ def main():
     parser.add_argument("--android-sdk", type=Path)
     parser.add_argument("--jdk-home", type=Path)
     parser.add_argument("--cargo-home", type=Path)
+    parser.add_argument("--gradle-home", type=Path,
+                        help="Optional dedicated warm dependency cache; defaults inside output")
     args = parser.parse_args()
     root, output = args.root.resolve(strict=True), args.output.resolve()
     sdk, vcpkg = args.flutter_sdk.resolve(strict=True), args.vcpkg_root.resolve(strict=True)
@@ -93,7 +95,8 @@ def main():
                 "jdk-dir": str(jdk), "android-sdk": str(android), "analytics": False}))
             env.update({"XDG_CONFIG_HOME": str(private_config), "JAVA_HOME": str(jdk),
                         "ANDROID_HOME": str(android), "ANDROID_SDK_ROOT": str(android),
-                        "GRADLE_USER_HOME": str(output / "gradle-home")})
+                        "GRADLE_USER_HOME": str(args.gradle_home.resolve(strict=True)
+                                                if args.gradle_home else output / "gradle-home")})
             ndk = android / "ndk/28.2.13676358"
             toolchain = ndk / "toolchains/llvm/prebuilt/darwin-x86_64"
             clang = toolchain / "bin/aarch64-linux-android28-clang"

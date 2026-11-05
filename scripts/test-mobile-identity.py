@@ -4,6 +4,7 @@ import argparse
 import importlib.util
 from pathlib import Path
 import plistlib
+import re
 import shutil
 import tempfile
 import unittest
@@ -24,6 +25,9 @@ class MobileIdentity(unittest.TestCase):
         target = self.root / "flutter/lib/models/native_model.dart"
         target.parent.mkdir(parents=True)
         shutil.copyfile(SOURCE / "flutter/lib/models/native_model.dart", target)
+        remote = self.root / "flutter/lib/mobile/pages/remote_page.dart"
+        remote.parent.mkdir(parents=True)
+        shutil.copyfile(SOURCE / "flutter/lib/mobile/pages/remote_page.dart", remote)
 
     def tearDown(self):
         self.temp.cleanup()
@@ -66,7 +70,9 @@ class MobileIdentity(unittest.TestCase):
 
     def test_late_unexpected_source_refuses_all_writes(self):
         path = self.root / "flutter/ios/Runner.xcodeproj/project.pbxproj"
-        path.write_bytes(path.read_bytes().replace(b"HZF9JMC8YN", b"UNKNOWN123"))
+        data, count = re.subn(rb'DEVELOPMENT_TEAM = (?:HZF9JMC8YN|"\");', b"DEVELOPMENT_TEAM = UNKNOWN123;", path.read_bytes())
+        self.assertEqual(count, 3)
+        path.write_bytes(data)
         before = self.snapshot()
         with self.assertRaises(ValueError):
             module.apply(self.root)
@@ -75,6 +81,28 @@ class MobileIdentity(unittest.TestCase):
     def test_wrong_android_loader_refuses_all_writes(self):
         path = self.root / "flutter/lib/models/native_model.dart"
         path.write_bytes(path.read_bytes().replace(b"libmixel-remote.so", b"unexpected.so"))
+        before = self.snapshot()
+        with self.assertRaises(ValueError):
+            module.apply(self.root)
+        self.assertEqual(before, self.snapshot())
+
+    def test_toolbar_projection_preserves_every_session_action(self):
+        path = self.root / "flutter/lib/mobile/pages/remote_page.dart"
+        original = path.read_text()
+        module.apply(self.root)
+        projected = path.read_text()
+        for action in ["clientClose", "showOptions", "openKeyboard", "toggleMobileActionsOverlay",
+                       "_showGestureHelp", "showChatOptions", "onPressedTextChat", "showActions"]:
+            self.assertEqual(original.count(action), projected.count(action), action)
+        self.assertIn("child: MixelSessionToolbar(", projected)
+        self.assertTrue((self.root / "flutter/lib/mobile/widgets/mixel_session_toolbar.dart").is_file())
+
+    def test_unexpected_toolbar_refuses_all_writes(self):
+        path = self.root / "flutter/lib/mobile/pages/remote_page.dart"
+        text = path.read_text()
+        anchor = "child: MixelSessionToolbar(" if "child: MixelSessionToolbar(" in text else "MainAxisAlignment.spaceBetween"
+        self.assertIn(anchor, text)
+        path.write_text(text.replace(anchor, "unexpectedToolbarShape", 1))
         before = self.snapshot()
         with self.assertRaises(ValueError):
             module.apply(self.root)
