@@ -115,7 +115,13 @@ async fn connection(mut socket: WebSocket, state: AppState) {
     let Ok(Ok(principal)) = result else {
         return;
     };
-    let expires_at = principal.expires_at;
+    let mut expires_at = principal.expires_at;
+    let unix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(u64::MAX, |d| d.as_secs());
+    if expires_at <= unix {
+        return;
+    }
     let (tx, mut rx) = mpsc::channel(64);
     let (stop, mut stopped) = watch::channel(false);
     let registered = match state.registry.lock() {
@@ -126,6 +132,8 @@ async fn connection(mut socket: WebSocket, state: AppState) {
         return;
     };
     let start = Instant::now();
+    let mut authorized_at = start;
+    let mut last_renewal = None;
     let mut last_activity = start;
     let mut last_ping = start;
     let mut rate_start = start;
@@ -137,7 +145,7 @@ async fn connection(mut socket: WebSocket, state: AppState) {
             _ = tick.tick() => {
                 let now = Instant::now();
                 let unix = SystemTime::now().duration_since(UNIX_EPOCH).map_or(u64::MAX, |d| d.as_secs());
-                if unix >= expires_at || now.duration_since(start) >= Duration::from_secs(900) || now.duration_since(last_activity) >= Duration::from_secs(75) { break; }
+                if unix >= expires_at || now.duration_since(authorized_at) >= Duration::from_secs(900) || now.duration_since(last_activity) >= Duration::from_secs(75) { break; }
                 match state.registry.lock() { Ok(mut r) => r.expire(now), Err(_) => break }
                 if now.duration_since(last_ping) >= Duration::from_secs(20) {
                     if !matches!(tokio::time::timeout(Duration::from_secs(2), socket.send(Message::Ping(Vec::new().into()))).await, Ok(Ok(()))) { break; }
@@ -159,7 +167,39 @@ async fn connection(mut socket: WebSocket, state: AppState) {
                     Message::Close(_) => break,
                     Message::Ping(_) | Message::Pong(_) => {},
                     Message::Text(text) => {
-                        let result = match serde_json::from_str(&text) {
+                        let parsed = serde_json::from_str(&text);
+                        drop(text);
+                        if let Ok(ClientMessage::Renew { token }) = parsed {
+                            // Authenticate outside the registry lock. A failed renewal
+                            // closes the original connection and its sessions as well.
+                            if last_renewal.is_some_and(|last: Instant| now.duration_since(last) < Duration::from_secs(30)) {
+                                if !send(&mut socket, &ServerMessage::Error { code: ErrorCode::Busy }).await { break; }
+                                continue;
+                            }
+                            last_renewal = Some(now);
+                            let unix = SystemTime::now().duration_since(UNIX_EPOCH).map_or(u64::MAX, |d| d.as_secs());
+                            let remaining = Duration::from_secs(expires_at.saturating_sub(unix))
+                                .min(Duration::from_secs(900).saturating_sub(now.duration_since(authorized_at)));
+                            if remaining.is_zero() { break; }
+                            let Ok(slot) = state.auth_slots.clone().try_acquire_owned() else { break; };
+                            let result = tokio::time::timeout(remaining.min(Duration::from_secs(13)), state.auth.authenticate(&token)).await;
+                            drop(token);
+                            drop(slot);
+                            let Ok(Ok(principal)) = result else { break; };
+                            let unix = SystemTime::now().duration_since(UNIX_EPOCH).map_or(u64::MAX, |d| d.as_secs());
+                            if principal.expires_at <= unix { break; }
+                            let next_expiry = principal.expires_at;
+                            let renewed = match state.registry.lock() {
+                                Ok(mut r) => r.renew(id, generation, principal).is_ok(),
+                                Err(_) => false,
+                            };
+                            if !renewed { break; }
+                            expires_at = next_expiry;
+                            authorized_at = Instant::now();
+                            if !send(&mut socket, &ServerMessage::Renewed { expires_at }).await { break; }
+                            continue;
+                        }
+                        let result = match parsed {
                             Ok(message) => match state.registry.lock() { Ok(mut r) => r.handle(id, generation, message, now), Err(_) => break },
                             Err(_) => Err(ErrorCode::Invalid),
                         };

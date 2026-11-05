@@ -80,6 +80,25 @@ impl Registry {
         );
         Ok((host, generation))
     }
+    /// Renewal cannot move a live connection to a different account, tenant or
+    /// privilege level. Existing consent remains scoped to the original peers.
+    pub fn renew(
+        &mut self,
+        id: u32,
+        generation: Uuid,
+        principal: Principal,
+    ) -> Result<(), ErrorCode> {
+        let peer = self.peers.get_mut(&id).ok_or(ErrorCode::Forbidden)?;
+        if peer.generation != generation
+            || peer.principal.user != principal.user
+            || peer.principal.tenant != principal.tenant
+            || peer.principal.staff != principal.staff
+        {
+            return Err(ErrorCode::Forbidden);
+        }
+        peer.principal = principal;
+        Ok(())
+    }
     fn send(&self, id: u32, message: ServerMessage) {
         if let Some(peer) = self.peers.get(&id)
             && peer.tx.try_send(message).is_err()
@@ -140,7 +159,9 @@ impl Registry {
         }
         self.expire(now);
         match message {
-            ClientMessage::Authenticate { .. } => Err(ErrorCode::Invalid),
+            ClientMessage::Authenticate { .. } | ClientMessage::Renew { .. } => {
+                Err(ErrorCode::Invalid)
+            }
             ClientMessage::Request { host } => {
                 let requester = &self.peers[&from].principal;
                 let target = self.peers.get(&host).ok_or(ErrorCode::Unavailable)?;

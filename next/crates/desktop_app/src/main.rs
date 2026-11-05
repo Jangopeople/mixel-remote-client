@@ -202,6 +202,12 @@ async fn next_frame(
 }
 #[cfg(target_os = "macos")]
 #[tauri::command]
+fn request_input_access(window: tauri::WebviewWindow) -> Result<bool, String> {
+    main_window(&window)?;
+    Ok(native_os_capture::macos_input::MacInjector::request_post_access())
+}
+#[cfg(target_os = "macos")]
+#[tauri::command]
 fn open_local_viewer(window: tauri::WebviewWindow) -> Result<(), String> {
     main_window(&window)?;
     ensure_fixture(&window)?;
@@ -241,13 +247,14 @@ fn local_session_status(
 async fn request_local_session(
     window: tauri::WebviewWindow,
     state: tauri::State<'_, local_session::LocalSession>,
+    control: bool,
 ) -> Result<local_session::Status, String> {
     if window.label() != "viewer" {
         return Err("Only the local viewer can request this QA session".into());
     }
     ensure_fixture(&window)?;
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || state.request())
+    tauri::async_runtime::spawn_blocking(move || state.request(control))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -261,6 +268,30 @@ fn decide_local_session(
 ) -> Result<(), String> {
     main_window(&window)?;
     state.decide(request, accept)
+}
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn send_local_input(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, local_session::LocalSession>,
+    request: u64,
+    event: local_session::ControlInput,
+) -> Result<(), String> {
+    if window.label() != "viewer" {
+        return Err("Only the local viewer can send QA input".into());
+    }
+    state.can_send_input(request)?;
+    let fixture = window
+        .app_handle()
+        .get_webview_window("fixture")
+        .ok_or("QA fixture is closed")?;
+    fixture.set_focus().map_err(|e| e.to_string())?;
+    let state = state.inner().clone();
+    let result = tauri::async_runtime::spawn_blocking(move || state.send_input(request, event))
+        .await
+        .map_err(|e| e.to_string())?;
+    let focused = window.set_focus().map_err(|e| e.to_string());
+    result.and(focused)
 }
 #[cfg(target_os = "macos")]
 #[tauri::command]
@@ -300,11 +331,13 @@ fn main() {
             stop_capture,
             next_frame,
             open_local_viewer,
+            request_input_access,
             local_session_status,
             request_local_session,
             decide_local_session,
             close_local_session,
-            next_local_video
+            next_local_video,
+            send_local_input
         ]);
     #[cfg(not(target_os = "macos"))]
     let builder = builder.invoke_handler(tauri::generate_handler![

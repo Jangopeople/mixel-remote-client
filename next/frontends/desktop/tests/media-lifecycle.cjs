@@ -7,7 +7,7 @@ const script=fs.readFileSync(path.join(__dirname,'../dist/viewer.js'),'utf8');
 const settle=async()=>{for(let i=0;i<16;i++)await Promise.resolve();};
 async function harness(){
   let phase='ready',draws=0,closes=0;const pending=[],timers=[],decoders=[];
-  const elements=Object.fromEntries(['connect','disconnect','viewer-status','viewer-metrics','remote-video'].map(id=>[id,{disabled:false,textContent:'',width:640,height:420,listeners:{},addEventListener(name,handler){this.listeners[name]=handler;},getContext(){return {drawImage(){draws++;},clearRect(){}};}}]));
+  const elements=Object.fromEntries(['connect','connect-keyboard','send-text','test-keys','remote-text','input-status','disconnect','viewer-status','viewer-metrics','remote-video'].map(id=>[id,{disabled:false,textContent:'',width:640,height:420,listeners:{},addEventListener(name,handler){this.listeners[name]=handler;},getContext(){return {drawImage(){draws++;},clearRect(){}};}}]));
   class Decoder{
     static async isConfigSupported(){return {supported:true};}
     constructor(callbacks){this.callbacks=callbacks;this.state='unconfigured';this.decodeQueueSize=0;decoders.push(this);}

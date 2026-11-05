@@ -10,8 +10,8 @@ use webrtc::{
     peer_connection::{
         MediaEngine, PeerConnection, PeerConnectionBuilder, PeerConnectionEventHandler,
         RTCConfigurationBuilder, RTCIceCandidateInit, RTCIceGatheringState, RTCIceServer,
-        RTCPeerConnectionIceEvent, RTCPeerConnectionState, RTCSessionDescription, Registry,
-        register_default_interceptors,
+        RTCIceTransportPolicy, RTCPeerConnectionIceEvent, RTCPeerConnectionState,
+        RTCSessionDescription, Registry, register_default_interceptors,
     },
 };
 
@@ -23,6 +23,14 @@ pub enum TransportError {
     Timeout,
     #[error("missing or invalid DTLS certificate fingerprint")]
     Fingerprint,
+    #[error("invalid or unavailable relay configuration")]
+    Configuration,
+    #[error("configured relay transport is unsupported")]
+    UnsupportedRelay,
+    #[error("TURN stream: {0}")]
+    Stream(#[from] std::io::Error),
+    #[error("no usable relay candidate was gathered")]
+    RelayUnavailable,
 }
 struct Handler {
     gathered: watch::Sender<bool>,
@@ -65,11 +73,65 @@ pub struct NativeTransport {
     pub state: watch::Receiver<RTCPeerConnectionState>,
     gathered: watch::Receiver<bool>,
     gather_reset: watch::Sender<bool>,
+    relay_only: bool,
+    streams: Option<Arc<crate::stream_turn::StreamRuntime>>,
 }
 impl NativeTransport {
     /// ICE servers include dedicated staging STUN/TURN URLs and short-lived
     /// TURN credentials. With no servers, host candidates permit LAN tests.
     pub async fn new(bind: String, servers: Vec<RTCIceServer>) -> Result<Self, TransportError> {
+        Self::configured(bind, servers, false).await
+    }
+    /// Privacy/restrictive-network verification: never publish a host candidate
+    /// or quietly fall back to a direct socket when relay gathering fails.
+    pub async fn relay_only(
+        bind: String,
+        servers: Vec<RTCIceServer>,
+    ) -> Result<Self, TransportError> {
+        Self::configured(bind, servers, true).await
+    }
+    async fn configured(
+        bind: String,
+        servers: Vec<RTCIceServer>,
+        relay_only: bool,
+    ) -> Result<Self, TransportError> {
+        Self::configured_tls(bind, servers, relay_only, None).await
+    }
+    pub(crate) async fn configured_tls(
+        bind: String,
+        servers: Vec<RTCIceServer>,
+        relay_only: bool,
+        tls: Option<Arc<tokio_rustls::rustls::ClientConfig>>,
+    ) -> Result<Self, TransportError> {
+        if servers.len() > 8 {
+            return Err(TransportError::Configuration);
+        }
+        let mut has_relay = false;
+        for server in &servers {
+            if server.urls.is_empty()
+                || server.urls.len() > 8
+                || server.urls.iter().any(|url| url.len() > 1024)
+                || server.username.len() > 256
+                || server.credential.len() > 1024
+            {
+                return Err(TransportError::Configuration);
+            }
+            for url in server.urls()? {
+                let scheme = url.scheme.to_string();
+                if scheme == "turns" && url.proto.to_string() != "tcp" {
+                    return Err(TransportError::UnsupportedRelay);
+                }
+                has_relay |= matches!(scheme.as_str(), "turn" | "turns");
+            }
+        }
+        if relay_only && !has_relay {
+            return Err(TransportError::Configuration);
+        }
+        let (streams, servers) =
+            match crate::stream_turn::StreamRuntime::prepare(&bind, servers.clone(), tls)? {
+                Some((runtime, rewritten)) => (Some(runtime), rewritten),
+                None => (None, servers),
+            };
         let (gathered_tx, gathered) = watch::channel(false);
         let (channels, incoming_channels) = mpsc::channel(4);
         let (ice, ice_candidates) = mpsc::channel(128);
@@ -85,18 +147,35 @@ impl NativeTransport {
         let mut media_engine = MediaEngine::default();
         media_engine.register_default_codecs()?;
         let registry = register_default_interceptors(Registry::new(), &mut media_engine)?;
-        let peer = PeerConnectionBuilder::new()
+        let builder = PeerConnectionBuilder::new()
             .with_media_engine(media_engine)
             .with_interceptor_registry(registry)
             .with_configuration(
                 RTCConfigurationBuilder::new()
                     .with_ice_servers(servers)
+                    .with_ice_transport_policy(if relay_only {
+                        RTCIceTransportPolicy::Relay
+                    } else {
+                        RTCIceTransportPolicy::All
+                    })
                     .build(),
             )
             .with_handler(handler)
-            .with_udp_addrs(vec![bind])
-            .build()
-            .await?;
+            .with_udp_addrs(vec![bind]);
+        let builder = if let Some(runtime) = &streams {
+            builder.with_runtime(runtime.clone())
+        } else {
+            builder
+        };
+        let peer = match builder.build().await {
+            Ok(peer) => peer,
+            Err(error) => {
+                if let Some(runtime) = &streams {
+                    let _ = runtime.shutdown().await;
+                }
+                return Err(error.into());
+            }
+        };
         Ok(Self {
             peer: Arc::new(peer),
             incoming_channels,
@@ -105,10 +184,13 @@ impl NativeTransport {
             state,
             gathered,
             gather_reset: gathered_tx,
+            relay_only,
+            streams,
         })
     }
-    /// Complete non-trickle SDP avoids races between early candidates and a
-    /// remote description. Time bounded even when a STUN/TURN server fails.
+    /// Prefer complete non-trickle SDP; a failed ICE server must not hide an
+    /// already usable candidate. After the bounded deadline, return available
+    /// candidates and continue exposing late candidates through ice_candidates.
     pub async fn local_sdp(
         &mut self,
         description: RTCSessionDescription,
@@ -116,17 +198,57 @@ impl NativeTransport {
         self.gather_reset.send_replace(false);
         self.gathered.borrow_and_update();
         self.peer.set_local_description(description).await?;
-        tokio::time::timeout(
-            Duration::from_secs(10),
-            self.gathered.wait_for(|done| *done),
-        )
-        .await
-        .map_err(|_| TransportError::Timeout)?
-        .map_err(|_| TransportError::Timeout)?;
-        self.peer
+        let gathering =
+            tokio::time::timeout(Duration::from_secs(3), self.gathered.wait_for(|done| *done))
+                .await;
+        if matches!(gathering, Ok(Err(_))) {
+            return Err(TransportError::Timeout);
+        }
+        drop(gathering);
+        let description = self
+            .peer
             .local_description()
             .await
-            .ok_or(TransportError::Timeout)
+            .ok_or(TransportError::Timeout)?;
+        let has_candidates = description
+            .sdp
+            .lines()
+            .any(|line| line.starts_with("a=candidate:"));
+        if !has_candidates {
+            return Err(if self.relay_only {
+                TransportError::RelayUnavailable
+            } else {
+                TransportError::Timeout
+            });
+        }
+        if self.relay_only {
+            let candidates: Vec<_> = description
+                .sdp
+                .lines()
+                .filter(|line| line.starts_with("a=candidate:"))
+                .collect();
+            if candidates.is_empty()
+                || candidates.iter().any(|line| {
+                    !line
+                        .split_ascii_whitespace()
+                        .collect::<Vec<_>>()
+                        .windows(2)
+                        .any(|pair| pair == ["typ", "relay"])
+                })
+            {
+                return Err(TransportError::RelayUnavailable);
+            }
+        }
+        Ok(description)
+    }
+    pub fn ice_gathering_complete(&self) -> bool {
+        *self.gathered.borrow()
+    }
+    #[cfg(test)]
+    pub(crate) fn stream_udp_writes(&self) -> Option<u64> {
+        self.streams
+            .as_ref()
+            .map(|runtime| runtime.physical_udp_writes())
     }
     /// Hash the actual peer certificate returned by the completed DTLS stack,
     /// independently of the signaling or signed application Hello.
@@ -140,7 +262,14 @@ impl NativeTransport {
         Ok(Sha256::digest(leaf).into())
     }
     pub async fn close(&self) -> Result<(), TransportError> {
-        self.peer.close().await?;
+        let peer = self.peer.close().await;
+        let streams = if let Some(runtime) = &self.streams {
+            runtime.shutdown().await
+        } else {
+            Ok(())
+        };
+        peer?;
+        streams?;
         Ok(())
     }
 }

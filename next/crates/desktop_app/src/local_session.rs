@@ -1,14 +1,19 @@
 //! Isolated attended-media QA: two actual UDP/DTLS peers, process-local pinned
 //! identities and the app's own fixture. This is never customer enrollment.
+use core_protocol::input::{self, Input};
 use core_protocol::{
-    crypto::{Context, Handshake, Role},
+    crypto::{Context, ControlChannel, Handshake, Role},
     media::{H264Assembler, H264VideoSender, TrackRemoteEvent},
     session::Session,
     transport::{NativeDataChannel, NativeDataChannelEvent, NativeTransport, local_fingerprint},
 };
 use ed25519_dalek::SigningKey;
+use native_os_capture::{
+    input::{InputRouter, InputToken},
+    macos_input::MacInjector,
+};
 use rand_core::{OsRng, RngCore};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     sync::{
         Arc, Mutex,
@@ -18,6 +23,7 @@ use std::{
     thread::JoinHandle,
     time::{Duration, Instant},
 };
+use zeroize::Zeroize;
 use zeroize::Zeroizing;
 
 #[derive(Clone, Serialize)]
@@ -26,6 +32,9 @@ pub struct Status {
     pub phase: String,
     pub message: String,
     pub received: u64,
+    pub control: bool,
+    pub injected: u64,
+    pub input_access: bool,
 }
 type VideoReceiver = Arc<Mutex<mpsc::Receiver<Zeroizing<Vec<u8>>>>>;
 struct Inner {
@@ -33,6 +42,7 @@ struct Inner {
     cancel: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
     deadline: Option<Instant>,
+    input: Option<mpsc::SyncSender<InputCommand>>,
     video: Option<VideoReceiver>,
 }
 #[derive(Clone)]
@@ -45,10 +55,14 @@ impl Default for LocalSession {
                 phase: "ready".into(),
                 message: "Local attended-media test is ready".into(),
                 received: 0,
+                control: false,
+                injected: 0,
+                input_access: false,
             },
             cancel: Arc::new(AtomicBool::new(false)),
             worker: None,
             deadline: None,
+            input: None,
             video: None,
         })))
     }
@@ -56,6 +70,7 @@ impl Default for LocalSession {
 impl LocalSession {
     pub fn status(&self) -> Result<Status, String> {
         let mut inner = self.0.lock().map_err(|_| "Session state failed")?;
+        inner.status.input_access = MacInjector::post_access();
         if inner.status.phase == "pending" && inner.deadline.is_some_and(|d| Instant::now() >= d) {
             inner.status.phase = "expired".into();
             inner.status.message =
@@ -64,7 +79,7 @@ impl LocalSession {
         }
         Ok(inner.status.clone())
     }
-    pub fn request(&self) -> Result<Status, String> {
+    pub fn request(&self, control: bool) -> Result<Status, String> {
         let (worker, status) = {
             let mut inner = self.0.lock().map_err(|_| "Session state failed")?;
             if matches!(
@@ -75,6 +90,7 @@ impl LocalSession {
             }
             inner.cancel.store(true, Ordering::Release);
             inner.video = None;
+            inner.input = None;
             inner.status.request = inner
                 .status
                 .request
@@ -85,6 +101,11 @@ impl LocalSession {
                 "Waiting for the host's explicit Accept; no screen capture or media has started"
                     .into();
             inner.status.received = 0;
+            inner.status.control = control;
+            inner.status.injected = 0;
+            if control {
+                inner.status.message = "Waiting for host Accept: view fixture and send keyboard/text to this QA process only".into();
+            }
             inner.cancel = Arc::new(AtomicBool::new(false));
             inner.deadline = Some(Instant::now() + core_protocol::session::CONSENT_LIFETIME);
             (inner.worker.take(), inner.status.clone())
@@ -102,6 +123,10 @@ impl LocalSession {
         {
             return Err("Invitation is no longer pending".into());
         }
+        if accept && inner.status.control && !MacInjector::post_access() {
+            inner.status.message = "Keyboard control requires macOS Accessibility event-post permission; no input or capture has started".into();
+            return Err("macOS input permission is required".into());
+        }
         inner.deadline = None;
         if !accept {
             inner.status.phase = "rejected".into();
@@ -112,6 +137,8 @@ impl LocalSession {
         inner.status.message =
             "Accepted; verifying both identities and actual DTLS certificates".into();
         let (tx, rx) = mpsc::sync_channel(4);
+        let (input_tx, input_rx) = mpsc::sync_channel(32);
+        inner.input = Some(input_tx);
         inner.video = Some(Arc::new(Mutex::new(rx)));
         let cancel = inner.cancel.clone();
         let state = self.clone();
@@ -123,7 +150,9 @@ impl LocalSession {
                     .enable_all()
                     .build()
                     .map_err(|e| e.to_string())
-                    .and_then(|runtime| runtime.block_on(run(state.clone(), request, cancel, tx)));
+                    .and_then(|runtime| {
+                        runtime.block_on(run(state.clone(), request, cancel, tx, input_rx))
+                    });
                 if let Err(error) = result {
                     state.update(request, "error", &error);
                 } else {
@@ -137,6 +166,7 @@ impl LocalSession {
             .map_err(|e| {
                 inner.status.phase = "error".into();
                 inner.video = None;
+                inner.input = None;
                 e.to_string()
             })?;
         inner.worker = Some(worker);
@@ -156,6 +186,7 @@ impl LocalSession {
             let mut inner = self.0.lock().map_err(|_| "Session state failed")?;
             inner.cancel.store(true, Ordering::Release);
             inner.video = None;
+            inner.input = None;
             inner.status.phase = "closed".into();
             inner.status.message = "Session stopped; retained media cleared".into();
             inner.worker.take()
@@ -164,6 +195,40 @@ impl LocalSession {
             worker.join().map_err(|_| "Media worker failed")?;
         }
         Ok(())
+    }
+    pub fn can_send_input(&self, request: u64) -> Result<(), String> {
+        let inner = self.0.lock().map_err(|_| "Session state failed")?;
+        if inner.status.request != request
+            || inner.status.phase != "active"
+            || !inner.status.control
+        {
+            return Err("Active attended keyboard permission is required".into());
+        }
+        Ok(())
+    }
+    pub fn send_input(&self, request: u64, event: ControlInput) -> Result<(), String> {
+        input::validate(&event.borrowed()).map_err(|e| e.to_string())?;
+        let sender = {
+            let inner = self.0.lock().map_err(|_| "Session state failed")?;
+            if inner.status.request != request
+                || inner.status.phase != "active"
+                || !inner.status.control
+            {
+                return Err("Active attended keyboard permission is required".into());
+            }
+            inner.input.clone().ok_or("Control transport is closed")?
+        };
+        let (reply, response) = mpsc::sync_channel(1);
+        sender
+            .try_send(InputCommand {
+                event,
+                reply,
+                deadline: Instant::now() + Duration::from_secs(5),
+            })
+            .map_err(|_| "Control queue is full or closed")?;
+        response
+            .recv_timeout(Duration::from_secs(6))
+            .map_err(|_| "Input acknowledgement timed out or session closed")?
     }
     pub fn next_video(&self, request: u64) -> Result<Vec<u8>, String> {
         let video = {
@@ -189,6 +254,96 @@ impl LocalSession {
         Ok(packet.to_vec())
     }
 }
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ControlInput {
+    Text { text: String },
+    Key { usage: u16, down: bool },
+    ReleaseAll,
+}
+impl ControlInput {
+    fn borrowed(&self) -> Input<'_> {
+        match self {
+            Self::Text { text } => Input::Text(text),
+            Self::Key { usage, down } => Input::Key {
+                usage: *usage,
+                down: *down,
+            },
+            Self::ReleaseAll => Input::ReleaseAll,
+        }
+    }
+}
+impl Drop for ControlInput {
+    fn drop(&mut self) {
+        if let Self::Text { text } = self {
+            text.zeroize();
+        }
+    }
+}
+struct InputCommand {
+    event: ControlInput,
+    reply: mpsc::SyncSender<Result<(), String>>,
+    deadline: Instant,
+}
+struct ControlPipe {
+    commands: mpsc::Receiver<InputCommand>,
+    outgoing: Arc<dyn NativeDataChannel>,
+    incoming: Arc<dyn NativeDataChannel>,
+    controller: ControlChannel,
+    host: ControlChannel,
+    router: Option<(InputRouter<MacInjector>, InputToken)>,
+}
+impl ControlPipe {
+    async fn apply(&mut self, command: &ControlInput, cancel: &AtomicBool) -> Result<(), String> {
+        let (router, token) = self
+            .router
+            .as_mut()
+            .ok_or("View-only session cannot inject input")?;
+        let plain = Zeroizing::new(input::encode(&command.borrowed()).map_err(|e| e.to_string())?);
+        let record = self.controller.seal(&plain).map_err(|e| e.to_string())?;
+        self.outgoing
+            .send(record.as_slice().into())
+            .await
+            .map_err(|e| e.to_string())?;
+        let received = received_control(&self.incoming).await?;
+        if cancel.load(Ordering::Acquire) {
+            return Err("Input session stopped before injection".into());
+        }
+        router
+            .dispatch_encrypted(token, &mut self.host, &received)
+            .map_err(|e| e.to_string())?;
+        let ack = self
+            .host
+            .seal(b"mixel-input-posted-v1")
+            .map_err(|e| e.to_string())?;
+        self.incoming
+            .send(ack.as_slice().into())
+            .await
+            .map_err(|e| e.to_string())?;
+        let reply = received_control(&self.outgoing).await?;
+        let plain = Zeroizing::new(self.controller.open(&reply).map_err(|e| e.to_string())?);
+        if plain.as_slice() != b"mixel-input-posted-v1" {
+            return Err("Invalid authenticated input acknowledgement".into());
+        }
+        Ok(())
+    }
+}
+async fn received_control(channel: &Arc<dyn NativeDataChannel>) -> Result<Vec<u8>, String> {
+    loop {
+        match channel.poll().await {
+            Some(NativeDataChannelEvent::OnMessage(message)) if !message.is_string => {
+                return Ok(message.data.to_vec());
+            }
+            Some(NativeDataChannelEvent::OnMessage(_)) => {
+                return Err("Text control records are forbidden".into());
+            }
+            None | Some(NativeDataChannelEvent::OnClose | NativeDataChannelEvent::OnError) => {
+                return Err("Control channel closed".into());
+            }
+            _ => {}
+        }
+    }
+}
 async fn opened(channel: &Arc<dyn NativeDataChannel>) -> Result<(), String> {
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
@@ -207,6 +362,7 @@ async fn run(
     request: u64,
     cancel: Arc<AtomicBool>,
     tx: mpsc::SyncSender<Zeroizing<Vec<u8>>>,
+    input_rx: mpsc::Receiver<InputCommand>,
 ) -> Result<(), String> {
     let mut host = NativeTransport::new("127.0.0.1:0".into(), vec![])
         .await
@@ -218,7 +374,16 @@ async fn run(
             return Err(error.to_string());
         }
     };
-    let result = connected(&state, request, &cancel, tx, &mut host, &mut viewer).await;
+    let result = connected(
+        &state,
+        request,
+        &cancel,
+        tx,
+        &mut host,
+        &mut viewer,
+        input_rx,
+    )
+    .await;
     let host_closed = host.close().await.map_err(|e| e.to_string());
     let viewer_closed = viewer.close().await.map_err(|e| e.to_string());
     result.and(host_closed).and(viewer_closed)
@@ -230,6 +395,7 @@ async fn connected(
     tx: mpsc::SyncSender<Zeroizing<Vec<u8>>>,
     host: &mut NativeTransport,
     viewer: &mut NativeTransport,
+    input_rx: mpsc::Receiver<InputCommand>,
 ) -> Result<(), String> {
     let sender = H264VideoSender::new(host, 640, 420, 30)
         .await
@@ -249,7 +415,8 @@ async fn connected(
         host: host_key.verifying_key(),
     };
     let now = Instant::now();
-    let mut consent = Session::for_peer(now, context.clone(), Role::Host, false);
+    let control_allowed = state.status()?.control;
+    let mut consent = Session::for_peer(now, context.clone(), Role::Host, control_allowed);
     consent.decide(true, now).map_err(|e| e.to_string())?;
     let offer = host
         .local_sdp(
@@ -290,7 +457,7 @@ async fn connected(
     b?;
     let hh =
         Handshake::new(context.clone(), Role::Host, &host_key, hf).map_err(|e| e.to_string())?;
-    let ch = Handshake::new(context, Role::Controller, &controller_key, vf)
+    let ch = Handshake::new(context.clone(), Role::Controller, &controller_key, vf)
         .map_err(|e| e.to_string())?;
     let hello_h = hh.hello();
     let hello_c = ch.hello();
@@ -302,7 +469,7 @@ async fn connected(
                 .map_err(|e| e.to_string())?,
         )
         .map_err(|e| e.to_string())?;
-    let _controller = ch
+    let controller = ch
         .finish(
             &hello_h,
             viewer
@@ -314,6 +481,27 @@ async fn connected(
     consent
         .authenticated_transport_ready(&host_control.verified_session(), Instant::now())
         .map_err(|e| e.to_string())?;
+    let router = if control_allowed {
+        let now = Instant::now();
+        let mut input_consent = Session::for_peer(now, context, Role::Host, true);
+        input_consent.decide(true, now).map_err(|e| e.to_string())?;
+        input_consent
+            .authenticated_transport_ready(&host_control.verified_session(), now)
+            .map_err(|e| e.to_string())?;
+        let mut router = InputRouter::new(MacInjector::own_process().map_err(|e| e.to_string())?);
+        let token = router.register(input_consent).map_err(|e| e.to_string())?;
+        Some((router, token))
+    } else {
+        None
+    };
+    let mut control = ControlPipe {
+        commands: input_rx,
+        outgoing: remote,
+        incoming: channel,
+        controller,
+        host: host_control,
+        router,
+    };
     if cancel.load(Ordering::Acquire) {
         return Ok(());
     }
@@ -344,6 +532,7 @@ async fn connected(
             frames: &frames,
             encoder: &mut encoder,
             viewer,
+            control: &mut control,
         },
     )
     .await;
@@ -358,6 +547,7 @@ struct MediaPipeline<'a> {
     frames: &'a Arc<native_os_capture::stream::FrameMailbox>,
     encoder: &'a mut native_os_capture::macos_encoder::HardwareH264Encoder,
     viewer: &'a mut NativeTransport,
+    control: &'a mut ControlPipe,
 }
 async fn media_loop(
     state: &LocalSession,
@@ -372,6 +562,7 @@ async fn media_loop(
         frames,
         encoder,
         viewer,
+        control,
     } = pipeline;
     let mut sequence = 0;
     let mut assembler = H264Assembler::default();
@@ -379,6 +570,28 @@ async fn media_loop(
     let mut received = 0u64;
     let started = Instant::now();
     while !cancel.load(Ordering::Acquire) {
+        if let Ok(command) = control.commands.try_recv() {
+            if Instant::now() >= command.deadline {
+                let _ = command
+                    .reply
+                    .send(Err("Input command expired before injection".into()));
+            } else {
+                let result = tokio::time::timeout(
+                    Duration::from_secs(3),
+                    control.apply(&command.event, cancel),
+                )
+                .await
+                .map_err(|_| "Input transport timed out".to_string())
+                .and_then(|value| value);
+                let _ = command.reply.send(result.clone());
+                result?;
+                if let Ok(mut inner) = state.0.lock()
+                    && inner.status.request == request
+                {
+                    inner.status.injected += 1;
+                }
+            }
+        }
         let next = frames.next(sequence, Duration::from_millis(100));
         match next {
             Ok((next_sequence, frame)) => {
@@ -479,14 +692,14 @@ mod tests {
     #[test]
     fn rejected_stale_and_expired_requests_never_start_capture() {
         let state = LocalSession::default();
-        let first = state.request().unwrap();
+        let first = state.request(false).unwrap();
         assert_eq!(first.phase, "pending");
-        assert!(state.request().is_err());
+        assert!(state.request(false).is_err());
         assert!(state.decide(first.request + 1, true).is_err());
         state.decide(first.request, false).unwrap();
         assert_eq!(state.status().unwrap().phase, "rejected");
         assert!(state.0.lock().unwrap().worker.is_none());
-        let second = state.request().unwrap();
+        let second = state.request(false).unwrap();
         assert!(state.decide(first.request, true).is_err());
         state.0.lock().unwrap().deadline = Some(Instant::now() - Duration::from_secs(1));
         assert!(state.decide(second.request, true).is_err());
@@ -504,7 +717,7 @@ mod tests {
                 let barrier = barrier.clone();
                 std::thread::spawn(move || {
                     barrier.wait();
-                    state.request().is_ok()
+                    state.request(false).is_ok()
                 })
             })
             .collect();
@@ -541,5 +754,32 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(rx.try_recv().is_err());
+    }
+    #[test]
+    fn pending_view_only_stale_and_closed_requests_cannot_queue_input() {
+        let state = LocalSession::default();
+        let status = state.request(false).unwrap();
+        assert!(
+            state
+                .send_input(
+                    status.request,
+                    ControlInput::Text {
+                        text: "denied".into()
+                    }
+                )
+                .is_err()
+        );
+        {
+            let mut inner = state.0.lock().unwrap();
+            inner.status.phase = "active".into();
+        }
+        assert!(state.can_send_input(status.request).is_err());
+        {
+            let mut inner = state.0.lock().unwrap();
+            inner.status.control = true;
+        }
+        assert!(state.can_send_input(status.request + 1).is_err());
+        state.stop().unwrap();
+        assert!(state.can_send_input(status.request).is_err());
     }
 }

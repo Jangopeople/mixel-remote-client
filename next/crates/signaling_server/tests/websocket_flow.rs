@@ -28,19 +28,34 @@ impl Authenticator for Fixture {
     ) -> Pin<Box<dyn Future<Output = Result<Principal, AuthError>> + Send + 'a>> {
         Box::pin(async move {
             let tenant = match token {
-                "host" | "viewer" => 1,
+                "host" | "host-short" | "host-renew" | "host-expired" | "host-slow" | "viewer" => 1,
                 "outsider" => 2,
                 _ => return Err(AuthError),
             };
+            if token == "host-slow" {
+                tokio::time::sleep(Duration::from_secs(10)).await;
+            }
             Ok(Principal {
-                user: Uuid::new_v4(),
+                user: Uuid::from_u128(if token.starts_with("host") {
+                    10
+                } else if token == "viewer" {
+                    11
+                } else {
+                    12
+                }),
                 tenant: Some(Uuid::from_u128(tenant)),
                 staff: false,
                 expires_at: SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap()
                     .as_secs()
-                    + 600,
+                    + if token == "host-short" {
+                        2
+                    } else if token == "host-expired" {
+                        0
+                    } else {
+                        600
+                    },
             })
         })
     }
@@ -528,4 +543,141 @@ mod webrtc_event_helpers {
         .await
         .unwrap()
     }
+}
+
+#[tokio::test]
+async fn renewal_keeps_real_socket_id_and_consent_but_rejects_account_switch() {
+    let state = AppState::new(Arc::new(Fixture), HashSet::new());
+    let registry = state.registry.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/v1/ws", listener.local_addr().unwrap());
+    let task = tokio::spawn(async move {
+        axum::serve(listener, router(state)).await.unwrap();
+    });
+    let (mut host, id) = peer(&url, "host-short").await;
+    let (mut viewer, _) = peer(&url, "viewer").await;
+    let session = request(&mut viewer, &mut host, id).await;
+    send(
+        &mut host,
+        ClientMessage::Renew {
+            token: "host-renew".into(),
+        },
+    )
+    .await;
+    assert!(matches!(
+        event(&mut host).await,
+        ServerMessage::Renewed { .. }
+    ));
+    // The initial bearer has definitely expired; renewal retains this exact
+    // socket, public host ID and the pending ordinary consent invitation.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    send(
+        &mut host,
+        ClientMessage::Decide {
+            session,
+            accept: true,
+        },
+    )
+    .await;
+    assert!(
+        matches!(event(&mut host).await, ServerMessage::Accepted { session: s, .. } if s == session)
+    );
+    assert!(
+        matches!(event(&mut viewer).await, ServerMessage::Accepted { session: s, .. } if s == session)
+    );
+    send(
+        &mut host,
+        ClientMessage::Renew {
+            token: "host-renew".into(),
+        },
+    )
+    .await;
+    assert!(matches!(
+        event(&mut host).await,
+        ServerMessage::Error {
+            code: ErrorCode::Busy
+        }
+    ));
+    host.close(None).await.unwrap();
+    assert!(matches!(
+        event(&mut viewer).await,
+        ServerMessage::Closed {
+            reason: CloseReason::Disconnected,
+            ..
+        }
+    ));
+    for token in ["viewer", "outsider", "invalid", "host-expired"] {
+        let (mut host, id) = peer(&url, "host").await;
+        let session = request(&mut viewer, &mut host, id).await;
+        send(
+            &mut host,
+            ClientMessage::Renew {
+                token: token.into(),
+            },
+        )
+        .await;
+        assert!(
+            matches!(event(&mut viewer).await, ServerMessage::Closed { session: s, reason: CloseReason::Disconnected } if s == session)
+        );
+        for _ in 0..50 {
+            if registry.lock().unwrap().counts() == (1, 0) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(registry.lock().unwrap().counts(), (1, 0));
+    }
+    viewer.close(None).await.unwrap();
+    task.abort();
+    let _ = task.await;
+}
+
+#[tokio::test]
+async fn renewal_cannot_hold_an_expired_session_open_during_identity_lookup() {
+    let state = AppState::new(Arc::new(Fixture), HashSet::new());
+    let registry = state.registry.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/v1/ws", listener.local_addr().unwrap());
+    let task = tokio::spawn(async move {
+        axum::serve(listener, router(state)).await.unwrap();
+    });
+    let (mut host, id) = peer(&url, "host-short").await;
+    let (mut viewer, _) = peer(&url, "viewer").await;
+    let session = request(&mut viewer, &mut host, id).await;
+    let start = std::time::Instant::now();
+    send(
+        &mut host,
+        ClientMessage::Renew {
+            token: "host-slow".into(),
+        },
+    )
+    .await;
+    assert!(
+        matches!(event(&mut viewer).await, ServerMessage::Closed { session: s, reason: CloseReason::Disconnected } if s == session)
+    );
+    assert!(start.elapsed() < Duration::from_secs(3));
+    assert_eq!(registry.lock().unwrap().counts(), (1, 0));
+    let (mut expired, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+    send(
+        &mut expired,
+        ClientMessage::Authenticate {
+            token: "host-expired".into(),
+        },
+    )
+    .await;
+    // An expired principal is never assigned a Ready ID, even if a pluggable
+    // identity adapter mistakenly returns one rather than rejecting it.
+    loop {
+        match timeout(Duration::from_secs(3), expired.next())
+            .await
+            .unwrap()
+        {
+            Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => {}
+            Some(Ok(Message::Text(_))) => panic!("expired principal registered"),
+            _ => break,
+        }
+    }
+    viewer.close(None).await.unwrap();
+    task.abort();
+    let _ = task.await;
 }

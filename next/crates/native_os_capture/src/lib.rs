@@ -16,3 +16,7 @@ pub mod macos_encoder;
 
 #[cfg(any(target_os = "macos", test))]
 mod h264_low_delay;
+
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code)] // Bounded CoreGraphics output buffers and Unicode event data.
+pub mod macos_input;

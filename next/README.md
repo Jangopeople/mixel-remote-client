@@ -9,14 +9,25 @@ Existing RustDesk branding/build scripts and rs.mixel.ch remain independent.
 - `core_protocol`: bounded canonical bincode input with borrowed UTF-8 text;
   signed ephemeral X25519, HKDF-SHA256 and directional AES-256-GCM records;
   session/identity/DTLS binding, replay/order checks and a bounded key lifetime;
-  attended consent state; native pure-Rust WebRTC transport via webrtc 0.21.1.
+  attended consent state; native pure-Rust WebRTC transport via pinned webrtc0.21.1.
+  Actual authenticated TURN/UDP, TURN/TCP and TURN/TLS relay-only transports are
+  exercised, including byte-identical H264 SRTP, encrypted controls, a256-message
+  burst, IPv6 local sockets, certificate rejection, a non-responsive UDP relay,
+  bounded queues and actual allocation release. TCP/TLS aliases never fall back
+  to physical UDP. Platform TLS trust verifies chain, name and expiry. The pinned
+  vendor patch preserves the first relayed RTP packet's SPS/PPS; see
+  `vendor/webrtc/MIXEL-PATCHES.md`. Late ICE candidates remain available after a
+  bounded gather deadline so a failed server cannot hide a usable candidate.
 - `signaling_server`: Tokio/Axum WebSocket server; ISM GoTrue/profile/org adapter;
   same-tenant requests or MFA-authenticated internal staff; ordinary host-only
   Accept/Reject; bounded peers/queues/sessions; consent/negotiation deadlines;
   participant/SDP sequencing; disconnect and shutdown cleanup; exact web origins.
   Bearers travel in the first WebSocket frame, never URLs or logs. Connections
-  expire with the bearer or after 15 minutes; renewable authorization is not yet
-  implemented. The executable accepts loopback binds only for isolated staging.
+  expire with the bearer or after 15 minutes unless explicitly renewed through
+  verified ISM authentication. Renewal preserves the same user, tenant, staff
+  privilege, host ID and existing consent; account/tenant/privilege changes,
+  invalid or expired credentials disconnect and clean up sessions. Renewals are
+  rate-limited and cannot block past the current authorization deadline. The executable accepts loopback binds only for isolated staging.
 - `web_client`: compiled WASM sharing the native authenticated control protocol;
   browser RTCPeerConnection/DataChannel creation; canvas video rendering and
   validated aspect-fit pointer scaling. Keys remain in Rust WASM memory.
@@ -44,8 +55,14 @@ Existing RustDesk branding/build scripts and rs.mixel.ch remain independent.
   encoding. Independent FFmpeg decoding checks every frame and colour samples.
 - Input ownership router: active input capabilities, view-only denial, per-session
   held key/button claims, independent-session cleanup, retained failed releases
-  and retry. Native OS input-injection adapters and their runtime tests remain
-  pending; router tests use a deterministic injector fixture.
+  and retry. A native CoreGraphics input adapter is implemented for macOS with
+  explicit event-post permission checks, USB physical key mapping, Unicode,
+  modifiers, dragging/buttons and scrolling. Its live input delivery remains
+  **unqualified**: the signed QA app currently lacks OS Accessibility permission.
+  The initial attempted delivery failed independently observed readback and is
+  preserved as rejected evidence. The corrected app refuses keyboard control
+  while permission is absent; it offers an explicit local OS permission action.
+  Windows/Linux input adapters and runtime held-key cleanup remain pending.
 
 The browser harness uses a generated video pattern sent through actual WebRTC;
 it is explicitly **not** a native screen-capture or customer-session test.
@@ -102,8 +119,11 @@ sharing grants, decodes all twelve received frames, validates twenty-four colour
 samples, and verifies zero-reorder SPS metadata. It does not replace GUI or
 customer-session acceptance or claim an end-to-end latency target.
 
-The package has a local ad-hoc development signature and a separate QA bundle ID;
-it is not notarized, store-signed or a replacement for the installed customer app.
+The package defaults to a local ad-hoc development signature and a separate QA
+bundle ID. `--signing-identity` can use an existing local Developer ID identity
+with hardened runtime and timestamping. Its evidence records actual authority,
+source conservation and executable hashes. Neither mode is notarized, store-signed
+or a replacement for the installed customer app.
 The capture fixture stays within the app's own process. Full-display capture and
 input permissions are not silently requested or bypassed.
 
@@ -115,8 +135,8 @@ It uses no camera, microphone, desktop access or third-party ICE server.
 ## Remaining approved implementation and acceptance
 
 Native DXGI/PipeWire/X11 capture and cross-platform capture qualification;
-full-display macOS permission-path qualification; audio; OS input adapters and
-runtime held-key cleanup; Windows/Linux hardware H.264 and negotiated VP8 fallback; authenticated device
+full-display macOS permission-path qualification; audio; native macOS input delivery
+qualification and Windows/Linux input adapters/runtime held-key cleanup; Windows/Linux hardware H.264 and negotiated VP8 fallback; authenticated device
 registration and renewable grants against existing ISM devices; persistent
 nine-digit IDs and dynamic access password; unattended services and encrypted
 credential storage; tray/session UX; the complete Tauri v2 remote-support dashboard/session flow;

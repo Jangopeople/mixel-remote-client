@@ -1,5 +1,6 @@
 [workspace]
 resolver = "2"
+exclude = ["vendor/webrtc"]
 members = ["crates/core_protocol", "crates/signaling_server", "crates/web_client", "crates/native_os_capture", "crates/desktop_app"]
 
 [workspace.package]
@@ -19,3 +20,6 @@ unsafe_code = "deny"
 
 [workspace.lints.clippy]
 all = "warn"
+
+[patch.crates-io]
+webrtc = { path = "vendor/webrtc" }

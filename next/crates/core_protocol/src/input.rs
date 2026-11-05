@@ -47,10 +47,16 @@ impl Input<'_> {
     }
 }
 
-pub fn encode(input: &Input<'_>) -> Result<Vec<u8>, InputError> {
-    if !input.valid() {
-        return Err(InputError::Invalid);
+pub fn validate(input: &Input<'_>) -> Result<(), InputError> {
+    if input.valid() {
+        Ok(())
+    } else {
+        Err(InputError::Invalid)
     }
+}
+
+pub fn encode(input: &Input<'_>) -> Result<Vec<u8>, InputError> {
+    validate(input)?;
     let bytes = bincode::serde::encode_to_vec(
         input,
         bincode::config::standard().with_limit::<MAX_INPUT_BYTES>(),

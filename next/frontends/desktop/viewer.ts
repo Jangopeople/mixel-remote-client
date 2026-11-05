@@ -1,6 +1,12 @@
 (() => {
   const invoke = window.__TAURI__.core.invoke;
   const connect = document.querySelector<HTMLButtonElement>('#connect')!;
+  const keyboard = document.querySelector<HTMLButtonElement>('#connect-keyboard')!;
+  const sendText = document.querySelector<HTMLButtonElement>('#send-text')!;
+  const testKeys = document.querySelector<HTMLButtonElement>('#test-keys')!;
+  const remoteText = document.querySelector<HTMLInputElement>('#remote-text')!;
+  const inputStatus = document.querySelector<HTMLParagraphElement>('#input-status')!;
+  let activeRequest = 0, sending = false;
   const disconnect = document.querySelector<HTMLButtonElement>('#disconnect')!;
   const status = document.querySelector<HTMLParagraphElement>('#viewer-status')!;
   const metrics = document.querySelector<HTMLParagraphElement>('#viewer-metrics')!;
@@ -57,21 +63,45 @@
       }
     } catch (error) { if (current === generation) await fail(error); }
   }
-  connect.addEventListener('click', async () => {
+  async function requestConnection(control: boolean): Promise<void> {
     connect.disabled = true; localFailure = ''; status.className = ''; clear(); runningRequest = 0;
-    try { await invoke('request_local_session'); }
+    try { await invoke('request_local_session', { control }); }
     catch (error) { await fail(error); }
-  });
+  }
+  connect.addEventListener('click', () => { void requestConnection(false); });
+  keyboard.addEventListener('click', () => { void requestConnection(true); });
   disconnect.addEventListener('click', async () => {
     clear(); runningRequest = 0;
     try { await invoke('close_local_session'); }
     catch (error) { status.textContent = String(error); }
   });
+  type Event = {kind: 'text'; text: string} | {kind: 'key'; usage: number; down: boolean};
+  async function sendEvents(events: Event[]): Promise<void> {
+    if (sending) return;
+    sending = true;
+    const request = activeRequest;
+    sendText.disabled = testKeys.disabled = true;
+    try {
+      for (const event of events) await invoke('send_local_input', { request, event });
+      inputStatus.textContent = `Host authenticated and submitted ${events.length} native input event(s)`;
+    } catch (error) {
+      inputStatus.textContent = `Input failed: ${error}`;
+      await invoke('close_local_session').catch(() => {});
+    } finally { sending = false; }
+  }
+  sendText.addEventListener('click', () => { void sendEvents([{kind:'text', text:remoteText.value}]); });
+  testKeys.addEventListener('click', () => {
+    const key = (usage: number, down: boolean): Event => ({kind:'key',usage,down});
+    void sendEvents([key(0xe1,true),key(4,true),key(4,false),key(0xe1,false),key(5,true),key(5,false),key(0x2a,true),key(0x2a,false),key(6,true),key(6,false)]);
+  });
   async function refresh(): Promise<void> {
     try {
-      const state = await invoke<{request: number; phase: string; message: string; received: number}>('local_session_status');
+      const state = await invoke<{request: number; phase: string; message: string; received: number; control: boolean; injected: number; input_access: boolean}>('local_session_status');
       status.textContent = localFailure ? `Viewer error · ${localFailure} · ${state.phase}` : `${state.phase} · ${state.message}`;
-      connect.disabled = !supported || ['pending', 'negotiating', 'active'].includes(state.phase);
+      activeRequest = state.request;
+      if (!state.input_access) inputStatus.textContent = 'macOS Accessibility event-post permission is required for keyboard control; view-only remains available.';
+      sendText.disabled = testKeys.disabled = sending || state.phase !== 'active' || !state.control || !state.input_access;
+      keyboard.disabled = connect.disabled = !supported || ['pending', 'negotiating', 'active'].includes(state.phase);
       disconnect.disabled = !['pending', 'negotiating', 'active'].includes(state.phase);
       if (state.phase === 'active' && runningRequest !== state.request) void receive(state.request).catch(error => fail(error));
       else if (!['active', 'negotiating'].includes(state.phase) && decoder) clear();

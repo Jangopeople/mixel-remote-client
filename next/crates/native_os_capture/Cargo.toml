@@ -20,7 +20,7 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = ["s
 objc2-screen-capture-kit = { version = "0.3.2", default-features = false, features = ["std", "SCStream", "SCShareableContent", "libc", "objc2-core-foundation", "block2", "dispatch2", "objc2-core-graphics", "objc2-core-media"] }
 objc2-core-media = { version = "0.3.2", default-features = false, features = ["std", "CMSampleBuffer", "CMTime", "CMBlockBuffer", "CMFormatDescription", "objc2-core-video"] }
 objc2-core-video = { version = "0.3.2", default-features = false, features = ["std", "CVBase", "CVBuffer", "CVImageBuffer", "CVPixelBuffer", "CVReturn"] }
-objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGWindow", "CGDirectDisplay", "CGColorSpace"] }
+objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGWindow", "CGDirectDisplay", "CGColorSpace", "CGEvent", "CGEventTypes", "CGEventSource", "CGRemoteOperation", "CGDisplayConfiguration", "CGGeometry", "CGError", "libc"] }
 block2 = "0.6"
 dispatch2 = "0.3"
 

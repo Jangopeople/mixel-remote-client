@@ -87,7 +87,7 @@ impl<T: Injector> InputRouter<T> {
         {
             return Err(InputError::Forbidden);
         }
-        input::encode(event).map_err(|_| InputError::Invalid)?;
+        input::validate(event).map_err(|_| InputError::Invalid)?;
         match *event {
             Input::ReleaseAll => self.release_owned(token.id),
             Input::Key { usage, down } => self.change(token.id, Held::Key(usage), down),

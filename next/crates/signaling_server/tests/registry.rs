@@ -122,3 +122,44 @@ fn shutdown_stops_all_peers_and_removes_sessions() {
     assert!(*astop.borrow() && *bstop.borrow());
     assert_eq!(r.counts(), (0, 0));
 }
+
+#[test]
+fn renewal_preserves_identity_tenant_privilege_and_generation() {
+    let mut registry = Registry::default();
+    let original = Principal {
+        user: Uuid::new_v4(),
+        tenant: Some(Uuid::new_v4()),
+        staff: false,
+        expires_at: 100,
+    };
+    let (tx, _rx) = mpsc::channel(64);
+    let (stop, _stopped) = watch::channel(false);
+    let (id, generation) = registry.register(original.clone(), tx, stop).unwrap();
+    let mut renewed = original.clone();
+    renewed.expires_at = 200;
+    registry.renew(id, generation, renewed.clone()).unwrap();
+    assert_eq!(
+        registry.renew(id, Uuid::new_v4(), renewed),
+        Err(ErrorCode::Forbidden)
+    );
+    for changed in [
+        Principal {
+            user: Uuid::new_v4(),
+            ..original.clone()
+        },
+        Principal {
+            tenant: Some(Uuid::new_v4()),
+            ..original.clone()
+        },
+        Principal {
+            staff: true,
+            ..original.clone()
+        },
+    ] {
+        assert_eq!(
+            registry.renew(id, generation, changed),
+            Err(ErrorCode::Forbidden)
+        );
+    }
+    assert_eq!(registry.counts(), (1, 0));
+}

@@ -6,6 +6,7 @@ pub const MAX_MESSAGE: usize = 65536;
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ClientMessage {
     Authenticate { token: String },
+    Renew { token: String },
     Request { host: u32 },
     Decide { session: Uuid, accept: bool },
     Signal { session: Uuid, payload: Signal },
@@ -39,6 +40,9 @@ pub enum ServerMessage {
     Ready {
         host: u32,
         protocol: u16,
+    },
+    Renewed {
+        expires_at: u64,
     },
     Requested {
         session: Uuid,
