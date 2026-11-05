@@ -20,3 +20,6 @@ __pycache__/
 .codex/worktrees/
 .antigravity/worktrees/
 .worktrees/
+
+# New Rust workspace local output
+/next/target/

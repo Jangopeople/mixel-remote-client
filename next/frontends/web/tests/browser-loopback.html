@@ -1,0 +1,9 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mixel Remote — browser transport QA</title>
+<style>body{font:16px system-ui;background:#101827;color:#e7edf8;margin:32px auto;max-width:950px;padding:0 20px}h1{font-size:26px}p{color:#b8c7da}button{padding:12px 20px;background:#2070e8;border:0;border-radius:6px;color:white;font:inherit}canvas{max-width:100%;border:1px solid #53657e}#source{width:240px}#status{font-weight:700;color:#f3c967}li{margin:5px 0}#status.pass,.pass{color:#7be3a1}#status.fail,.fail{color:#ff9292}video{position:absolute;opacity:.01;width:1px;height:1px}small{display:block;color:#b8c7da}</style>
+<h1>Mixel Remote · browser transport QA</h1>
+<p>Real local WebRTC peers + compiled Rust WASM. Video uses a generated test pattern; this does not test native screen capture or a customer session.</p>
+<button id="run" disabled>Run browser transport test</button> <span id="status" role="status">Loading WASM…</span>
+<ul id="checks"></ul><canvas id="received" width="640" height="360" aria-label="Video received over WebRTC"></canvas>
+<details><summary>Generated source fixture</summary><canvas id="source" width="640" height="360"></canvas></details>
+<video id="video" autoplay muted playsinline></video><small>No camera, microphone, desktop or third-party ICE service is used.</small>
+<script type="module" src="browser-loopback.js"></script></html>

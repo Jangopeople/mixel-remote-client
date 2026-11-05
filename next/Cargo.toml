@@ -1,0 +1,21 @@
+[workspace]
+resolver = "2"
+members = ["crates/core_protocol", "crates/signaling_server", "crates/web_client", "crates/native_os_capture"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+publish = false
+
+[workspace.dependencies]
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "2"
+rand_core = { version = "0.6", features = ["getrandom"] }
+zeroize = "1.8"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "warn"

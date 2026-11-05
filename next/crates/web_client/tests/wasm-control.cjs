@@ -1,0 +1,28 @@
+// Execute the compiled WASM crypto in Node; this is not a browser/media test.
+const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
+const wasm = require(process.argv[2]);
+const a = new wasm.ControlIdentity();
+const b = new wasm.ControlIdentity();
+const nonce = crypto.randomBytes(32);
+const af = crypto.randomBytes(32), bf = crypto.randomBytes(32);
+const ah = a.begin(nonce, true, b.public_key(), af);
+const bh = b.begin(nonce, false, a.public_key(), bf);
+const helloA = ah.hello(), helloB = bh.hello();
+assert.equal(JSON.parse(helloA).signature.length, 64);
+const ac = ah.finish(helloB, bf), bc = bh.finish(helloA, af);
+assert.throws(() => ah.finish(helloB, bf), /consumed/);
+const record = ac.text('WASM Grüezi 中文 😀');
+const tampered = record.slice(); tampered[tampered.length - 1] ^= 1;
+assert.throws(() => bc.decrypt_input(tampered));
+assert.deepEqual(JSON.parse(bc.decrypt_input(record)), {Text: 'WASM Grüezi 中文 😀'});
+assert.throws(() => bc.decrypt_input(record));
+const reply = bc.release_all();
+assert.equal(JSON.parse(ac.decrypt_input(reply)), 'ReleaseAll');
+assert.throws(() => ac.text('x'.repeat(2049)));
+const pointer = ac.pointer(0, 400, 300, 800, 600);
+assert.deepEqual(JSON.parse(bc.decrypt_input(pointer)), {Pointer: {display: 0, x: 32768, y: 32768}});
+const ch = a.begin(crypto.randomBytes(32), true, b.public_key(), af);
+assert.throws(() => ch.finish(helloB, bf));
+for (const value of [ac, bc, ah, bh, ch, a, b]) value.free();
+console.log('PASS: compiled WASM signed X25519/AES256GCM Unicode input, tamper/replay denial, pointer scaling, size limits and one-use handshake');
