@@ -8,7 +8,27 @@ Read `HANDOFF.md` and `AGENTS.md` before working on releases. Product identity i
 `Mixel Remote` / `Mixel-Remote`, bundle ID `ch.mixel.remote`, and the configured
 rendezvous/relay is `rs.mixel.ch`. `branding/branding.env` is authoritative.
 
-## Current proof status — 2026-10-17
+## Local mobile development
+
+Private Android and Apple Silicon iOS simulator builds are available through
+[`scripts/local/build-mobile.py`](scripts/local/build-mobile.py). See
+[`scripts/local/BUILD_MOBILE.md`](scripts/local/BUILD_MOBILE.md) for native
+dependencies, identity checks and runtime acceptance. No physical phone is
+required to build or run emulator/simulator tests. These are development
+packages, not marketplace releases.
+
+The November 5 iOS simulator build passed a real connection to Windows PC01,
+ordinary blue Accept, video, native keyboard input verified independently on
+Windows, normal disconnect, fresh consent on reconnect and rejection. Android's
+native-core tests are recorded separately from UI acceptance. Current exact
+build/evidence paths and remaining work are at the top of `HANDOFF.md`.
+
+The user-selected entire portfolio scope is recorded in
+[`docs/PRODUCT_PARITY_ACCEPTANCE.md`](docs/PRODUCT_PARITY_ACCEPTANCE.md).
+That programme remains incomplete; the mobile builds and existing desktop
+proof do not establish enterprise, endpoint-management or AI parity.
+
+## Historical proof status — 2026-10-17
 
 Receiver revocation diagnostic39046065139 now passes Windows, macOS and Linux:
 26 source controls and14 compiled receipt-core tests per host, plus platform
