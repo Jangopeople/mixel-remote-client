@@ -21,6 +21,7 @@ pub enum SessionError {
 pub struct Session {
     state: State,
     deadline: Instant,
+    control_allowed: bool,
 }
 
 impl Session {
@@ -28,7 +29,18 @@ impl Session {
         Self {
             state: State::AwaitingConsent,
             deadline: now + CONSENT_LIFETIME,
+            control_allowed: true,
         }
+    }
+    /// View-only consent cannot be escalated by transport readiness or by
+    /// obtaining a signaling connection. Control requires a new consent grant.
+    pub fn attended_view_only(now: Instant) -> Self {
+        let mut session = Self::attended(now);
+        session.control_allowed = false;
+        session
+    }
+    pub fn can_view(&self) -> bool {
+        self.state == State::Active
     }
     pub fn state(&self) -> State {
         self.state
@@ -57,7 +69,7 @@ impl Session {
         Ok(())
     }
     pub fn can_control(&self) -> bool {
-        self.state == State::Active
+        self.state == State::Active && self.control_allowed
     }
     pub fn close(&mut self) {
         self.state = State::Closed;

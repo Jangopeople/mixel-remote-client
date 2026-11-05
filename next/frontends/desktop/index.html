@@ -1,0 +1,8 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mixel Remote</title><link rel="stylesheet" href="style.css"><body>
+<h1>Mixel Remote</h1><p class="subtitle">Native screen capture · private development build</p>
+<p>This test captures only this app’s “Capture Fixture” window through Apple ScreenCaptureKit. It does not capture other apps or connect to a customer.</p>
+<div><button id="start">Start native capture</button><button id="stop" disabled>Stop capture</button></div>
+<p id="status" role="status">Stopped</p><p id="metrics">No frames received</p>
+<canvas id="preview" width="640" height="420" aria-label="Native ScreenCaptureKit preview"></canvas>
+<p id="checks">Start capture to verify real native frames.</p>
+<script src="main.js"></script></body></html>

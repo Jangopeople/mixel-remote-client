@@ -1,0 +1,20 @@
+[package]
+name = "desktop_app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[dependencies]
+native_os_capture = { path = "../native_os_capture" }
+tauri = { version = "=2.12.5", default-features = false, features = ["wry", "compression"] }
+
+[build-dependencies]
+tauri-build = "=2.7.4"
+
+[lints]
+workspace = true

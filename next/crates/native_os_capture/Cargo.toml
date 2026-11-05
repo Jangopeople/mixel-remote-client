@@ -6,8 +6,20 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+core_protocol = { path = "../core_protocol" }
+uuid = { version = "1", features = ["v4"] }
 thiserror.workspace = true
 zeroize.workspace = true
 
 [lints]
 workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.5"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSObject", "NSArray", "NSEnumerator", "NSError", "NSString"] }
+objc2-screen-capture-kit = { version = "0.3.2", default-features = false, features = ["std", "SCStream", "SCShareableContent", "libc", "objc2-core-foundation", "block2", "dispatch2", "objc2-core-graphics", "objc2-core-media"] }
+objc2-core-media = { version = "0.3.2", default-features = false, features = ["std", "CMSampleBuffer", "CMTime", "objc2-core-video"] }
+objc2-core-video = { version = "0.3.2", default-features = false, features = ["std", "CVBase", "CVBuffer", "CVImageBuffer", "CVPixelBuffer", "CVReturn"] }
+objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGWindow", "CGDirectDisplay"] }
+block2 = "0.6"
+dispatch2 = "0.3"

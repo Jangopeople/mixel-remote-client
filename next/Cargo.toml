@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/core_protocol", "crates/signaling_server", "crates/web_client", "crates/native_os_capture"]
+members = ["crates/core_protocol", "crates/signaling_server", "crates/web_client", "crates/native_os_capture", "crates/desktop_app"]
 
 [workspace.package]
 version = "0.1.0"
@@ -15,7 +15,7 @@ rand_core = { version = "0.6", features = ["getrandom"] }
 zeroize = "1.8"
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+unsafe_code = "deny"
 
 [workspace.lints.clippy]
 all = "warn"

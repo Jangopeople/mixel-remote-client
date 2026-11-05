@@ -23,9 +23,9 @@ WORKSPACE = ROOT / "next"
 
 
 def inventory():
-    files = [Path(__file__).resolve()]
+    files = [Path(__file__).resolve(), ROOT / "scripts/local/package-next-macos-qa.py"]
     for directory, children, names in os.walk(WORKSPACE):
-        children[:] = sorted(name for name in children if name != "target")
+        children[:] = sorted(name for name in children if name not in {"target", "node_modules", "dist", "gen"})
         files.extend(Path(directory) / name for name in sorted(names))
     return {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in files}
 
@@ -77,6 +77,9 @@ def main():
     output.mkdir(parents=True, exist_ok=False)
     before = inventory()
     commands = [
+        ["pnpm", "--dir", str(WORKSPACE / "frontends/desktop"), "install", "--frozen-lockfile", "--ignore-scripts"],
+        ["pnpm", "--dir", str(WORKSPACE / "frontends/desktop"), "run", "build"],
+        ["pnpm", "--dir", str(WORKSPACE / "frontends/desktop"), "run", "test"],
         ["cargo", "fmt", "--all", "--check"],
         ["cargo", "clippy", "--workspace", "--all-features", "--all-targets", "--locked", "--", "-D", "warnings"],
         ["cargo", "clippy", "-p", "web_client", "--target", "wasm32-unknown-unknown", "--locked", "--", "-D", "warnings"],
@@ -109,7 +112,7 @@ def main():
         result["sourceUnchanged"] = before == after
         result["sourceSha256"] = after
         result["artifacts"] = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in [
-            WORKSPACE / "target/release/signaling_server", WORKSPACE / "target/wasm32-unknown-unknown/release/web_client.wasm",
+            WORKSPACE / "target/release/signaling_server", WORKSPACE / "target/release/desktop_app", WORKSPACE / "target/wasm32-unknown-unknown/release/web_client.wasm",
             output / "web/pkg/web_client_bg.wasm",
         ]}
         result["qualified"] = result["sourceUnchanged"]

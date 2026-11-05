@@ -23,3 +23,8 @@ __pycache__/
 
 # New Rust workspace local output
 /next/target/
+
+# Tauri generated schemas
+/next/crates/desktop_app/gen/
+
+/next/frontends/desktop/node_modules/
