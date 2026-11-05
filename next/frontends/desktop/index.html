@@ -3,6 +3,8 @@
 <p>This test captures only this app’s “Capture Fixture” window through Apple ScreenCaptureKit. It does not capture other apps or connect to a customer.</p>
 <div><button id="start">Start native capture</button><button id="stop" disabled>Stop capture</button></div>
 <p id="status" role="status">Stopped</p><p id="metrics">No frames received</p>
+<section><h2>Attended WebRTC media</h2><p>Local QA viewer, view only. Explicit host consent is required before capture starts.</p><button id="open-viewer">Open local viewer</button><button id="accept-session" disabled>Accept viewer</button><button id="reject-session" disabled>Reject viewer</button><button id="close-session" disabled>Stop session</button><p id="session-status" role="status">Ready</p></section>
 <canvas id="preview" width="640" height="420" aria-label="Native ScreenCaptureKit preview"></canvas>
 <p id="checks">Start capture to verify real native frames.</p>
+<script src="session.js"></script>
 <script src="main.js"></script></body></html>

@@ -263,6 +263,7 @@ impl MacStream {
             config.setHeight(height);
             config.setPixelFormat(kCVPixelFormatType_32BGRA);
             config.setCapturesAudio(false);
+            config.setColorSpaceName(objc2_core_graphics::kCGColorSpaceSRGB);
             config.setMinimumFrameInterval(CMTime::new(1, fps as i32));
             config.setQueueDepth(3);
             let frames = Arc::new(FrameMailbox::default());

@@ -6,10 +6,12 @@ use std::{sync::Arc, time::Duration};
 use tokio::sync::{mpsc, watch};
 use webrtc::{
     data_channel::DataChannel,
+    media_stream::track_remote::TrackRemote,
     peer_connection::{
-        PeerConnection, PeerConnectionBuilder, PeerConnectionEventHandler, RTCConfigurationBuilder,
-        RTCIceCandidateInit, RTCIceGatheringState, RTCIceServer, RTCPeerConnectionIceEvent,
-        RTCPeerConnectionState, RTCSessionDescription,
+        MediaEngine, PeerConnection, PeerConnectionBuilder, PeerConnectionEventHandler,
+        RTCConfigurationBuilder, RTCIceCandidateInit, RTCIceGatheringState, RTCIceServer,
+        RTCPeerConnectionIceEvent, RTCPeerConnectionState, RTCSessionDescription, Registry,
+        register_default_interceptors,
     },
 };
 
@@ -27,6 +29,7 @@ struct Handler {
     channels: mpsc::Sender<Arc<dyn DataChannel>>,
     ice: mpsc::Sender<RTCIceCandidateInit>,
     state: watch::Sender<RTCPeerConnectionState>,
+    tracks: mpsc::Sender<Arc<dyn TrackRemote>>,
 }
 #[async_trait::async_trait]
 impl PeerConnectionEventHandler for Handler {
@@ -45,6 +48,9 @@ impl PeerConnectionEventHandler for Handler {
     async fn on_connection_state_change(&self, state: RTCPeerConnectionState) {
         self.state.send_replace(state);
     }
+    async fn on_track(&self, track: Arc<dyn TrackRemote>) {
+        let _ = self.tracks.try_send(track);
+    }
     async fn on_data_channel(&self, channel: Arc<dyn DataChannel>) {
         if self.channels.try_send(channel.clone()).is_err() {
             let _ = channel.close().await;
@@ -54,6 +60,7 @@ impl PeerConnectionEventHandler for Handler {
 pub struct NativeTransport {
     pub peer: Arc<dyn PeerConnection>,
     pub incoming_channels: mpsc::Receiver<Arc<dyn DataChannel>>,
+    pub incoming_tracks: mpsc::Receiver<Arc<dyn TrackRemote>>,
     pub ice_candidates: mpsc::Receiver<RTCIceCandidateInit>,
     pub state: watch::Receiver<RTCPeerConnectionState>,
     gathered: watch::Receiver<bool>,
@@ -66,14 +73,21 @@ impl NativeTransport {
         let (gathered_tx, gathered) = watch::channel(false);
         let (channels, incoming_channels) = mpsc::channel(4);
         let (ice, ice_candidates) = mpsc::channel(128);
+        let (tracks, incoming_tracks) = mpsc::channel(4);
         let (state_tx, state) = watch::channel(RTCPeerConnectionState::New);
         let handler = Arc::new(Handler {
             gathered: gathered_tx.clone(),
             channels,
             ice,
             state: state_tx,
+            tracks,
         });
+        let mut media_engine = MediaEngine::default();
+        media_engine.register_default_codecs()?;
+        let registry = register_default_interceptors(Registry::new(), &mut media_engine)?;
         let peer = PeerConnectionBuilder::new()
+            .with_media_engine(media_engine)
+            .with_interceptor_registry(registry)
             .with_configuration(
                 RTCConfigurationBuilder::new()
                     .with_ice_servers(servers)
@@ -86,6 +100,7 @@ impl NativeTransport {
         Ok(Self {
             peer: Arc::new(peer),
             incoming_channels,
+            incoming_tracks,
             ice_candidates,
             state,
             gathered,

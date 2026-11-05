@@ -705,6 +705,7 @@ dependencies = [
  "getrandom 0.2.17",
  "hkdf",
  "rand_core 0.6.4",
+ "rtc",
  "serde",
  "sha2",
  "thiserror 2.0.21",
@@ -1000,9 +1001,15 @@ dependencies = [
 name = "desktop_app"
 version = "0.1.0"
 dependencies = [
+ "core_protocol",
+ "ed25519-dalek",
  "native_os_capture",
+ "rand_core 0.6.4",
+ "serde",
  "tauri",
  "tauri-build",
+ "tokio",
+ "zeroize",
 ]
 
 [[package]]
@@ -2394,13 +2401,18 @@ dependencies = [
  "block2",
  "core_protocol",
  "dispatch2",
+ "ed25519-dalek",
  "objc2",
+ "objc2-core-foundation",
  "objc2-core-graphics",
  "objc2-core-media",
  "objc2-core-video",
  "objc2-foundation",
  "objc2-screen-capture-kit",
+ "objc2-video-toolbox",
+ "rand_core 0.6.4",
  "thiserror 2.0.21",
+ "tokio",
  "uuid",
  "zeroize",
 ]
@@ -2766,6 +2778,21 @@ checksum = "9df9128cbbfef73cda168416ccf7f837b62737d748333bfe9ab71c245d76613e"
 dependencies = [
  "objc2",
  "objc2-foundation",
+]
+
+[[package]]
+name = "objc2-video-toolbox"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "05bf9a3c14831a7d9641b0d81d87dd913ee238a012b2fde27db5a84b56f5df3e"
+dependencies = [
+ "bitflags 2.13.2",
+ "block2",
+ "objc2",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-core-media",
+ "objc2-core-video",
 ]
 
 [[package]]

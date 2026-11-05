@@ -1,1 +1,20 @@
-{"compilerOptions":{"target":"ES2022","lib":["ES2022","DOM"],"strict":true,"noEmitOnError":true,"outDir":"dist","rootDir":".","skipLibCheck":true},"include":["main.ts","fixture.ts"]}
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": [
+      "ES2022",
+      "DOM"
+    ],
+    "strict": true,
+    "noEmitOnError": true,
+    "outDir": "dist",
+    "rootDir": ".",
+    "skipLibCheck": true
+  },
+  "include": [
+    "main.ts",
+    "fixture.ts",
+    "session.ts",
+    "viewer.ts"
+  ]
+}

@@ -11,6 +11,12 @@ custom-protocol = ["tauri/custom-protocol"]
 
 [dependencies]
 native_os_capture = { path = "../native_os_capture" }
+core_protocol = { path = "../core_protocol", features = ["native-webrtc"] }
+tokio = { version = "1", features = ["rt-multi-thread", "time", "macros"] }
+ed25519-dalek = { version = "2.2", features = ["rand_core"] }
+rand_core.workspace = true
+serde = { workspace = true }
+zeroize.workspace = true
 tauri = { version = "=2.12.5", default-features = false, features = ["wry", "compression"] }
 
 [build-dependencies]

@@ -30,6 +30,8 @@ pub enum InputError {
     Invalid,
     #[error(transparent)]
     Injection(#[from] InjectionError),
+    #[error(transparent)]
+    Crypto(#[from] core_protocol::crypto::CryptoError),
     #[error("{0} input releases remain pending")]
     Pending(usize),
 }
@@ -67,7 +69,7 @@ impl<T: Injector> InputRouter<T> {
     /// The caller moves an already authenticated, consented session into the
     /// router. View-only/pending/rejected sessions cannot obtain an input token.
     pub fn register(&mut self, session: Session) -> Result<InputToken, InputError> {
-        if !session.can_control() {
+        if !session.can_inject_local() {
             return Err(InputError::Forbidden);
         }
         if self.sessions.len() >= 32 {
@@ -81,7 +83,7 @@ impl<T: Injector> InputRouter<T> {
         if !self
             .sessions
             .get(&token.id)
-            .is_some_and(Session::can_control)
+            .is_some_and(Session::can_inject_local)
         {
             return Err(InputError::Forbidden);
         }
@@ -92,6 +94,24 @@ impl<T: Injector> InputRouter<T> {
             Input::Button { button, down } => self.change(token.id, Held::Button(button), down),
             _ => self.injector.inject(event).map_err(InputError::Injection),
         }
+    }
+    pub fn dispatch_encrypted(
+        &mut self,
+        token: &InputToken,
+        channel: &mut core_protocol::crypto::ControlChannel,
+        record: &[u8],
+    ) -> Result<(), InputError> {
+        let proof = channel.verified_session();
+        if !self
+            .sessions
+            .get(&token.id)
+            .is_some_and(|session| session.can_inject_local() && session.matches_verified(&proof))
+        {
+            return Err(InputError::Forbidden);
+        }
+        let bytes = zeroize::Zeroizing::new(channel.open(record)?);
+        let event = input::decode(&bytes).map_err(|_| InputError::Invalid)?;
+        self.dispatch(token, &event)
     }
     fn change(&mut self, id: Uuid, held: Held, down: bool) -> Result<(), InputError> {
         let owners = self.owners.entry(held).or_default();

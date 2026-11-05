@@ -23,7 +23,7 @@ WORKSPACE = ROOT / "next"
 
 
 def inventory():
-    files = [Path(__file__).resolve(), ROOT / "scripts/local/package-next-macos-qa.py"]
+    files = [Path(__file__).resolve(), ROOT / "scripts/local/package-next-macos-qa.py", ROOT / "scripts/local/test-next-native-media.py"]
     for directory, children, names in os.walk(WORKSPACE):
         children[:] = sorted(name for name in children if name not in {"target", "node_modules", "dist", "gen"})
         files.extend(Path(directory) / name for name in sorted(names))

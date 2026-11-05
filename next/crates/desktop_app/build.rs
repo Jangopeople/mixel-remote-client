@@ -2,6 +2,9 @@ fn main() {
     let frontend = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../frontends/desktop");
     for name in [
         "main.ts",
+        "session.ts",
+        "viewer.ts",
+        "viewer.html",
         "fixture.ts",
         "index.html",
         "fixture.html",

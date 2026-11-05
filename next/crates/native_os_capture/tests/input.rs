@@ -26,11 +26,33 @@ impl Injector for Fake {
         Ok(())
     }
 }
+fn proof() -> (
+    core_protocol::crypto::Context,
+    core_protocol::crypto::VerifiedSession,
+) {
+    use core_protocol::crypto::{Context, Handshake, Role};
+    use ed25519_dalek::SigningKey;
+    use rand_core::{OsRng, RngCore};
+    let controller = SigningKey::generate(&mut OsRng);
+    let host = SigningKey::generate(&mut OsRng);
+    let mut session_id = [0; 32];
+    OsRng.fill_bytes(&mut session_id);
+    let context = Context {
+        session_id,
+        controller: controller.verifying_key(),
+        host: host.verifying_key(),
+    };
+    let hh = Handshake::new(context.clone(), Role::Host, &host, [2; 32]).unwrap();
+    let ch = Handshake::new(context.clone(), Role::Controller, &controller, [1; 32]).unwrap();
+    let proof = hh.finish(&ch.hello(), [1; 32]).unwrap().verified_session();
+    (context, proof)
+}
 fn active() -> Session {
     let now = Instant::now();
-    let mut session = Session::attended(now);
+    let (context, proof) = proof();
+    let mut session = Session::for_peer(now, context, core_protocol::crypto::Role::Host, true);
     session.decide(true, now).unwrap();
-    session.authenticated_transport_ready().unwrap();
+    session.authenticated_transport_ready(&proof, now).unwrap();
     session
 }
 #[test]
@@ -186,9 +208,10 @@ fn new_owner_during_failed_cleanup_is_not_released_by_old_cleanup() {
 #[test]
 fn active_view_only_session_cannot_get_an_input_capability() {
     let now = Instant::now();
-    let mut view = Session::attended_view_only(now);
+    let (context, proof) = proof();
+    let mut view = Session::for_peer(now, context, core_protocol::crypto::Role::Host, false);
     view.decide(true, now).unwrap();
-    view.authenticated_transport_ready().unwrap();
+    view.authenticated_transport_ready(&proof, now).unwrap();
     assert!(view.can_view());
     assert!(!view.can_control());
     let mut router = InputRouter::new(Fake::default());
@@ -216,4 +239,54 @@ fn input_capacity_is_bounded_and_unknown_up_does_not_touch_os_state() {
         router.register(active()),
         Err(InputError::Capacity)
     ));
+}
+
+#[test]
+fn encrypted_input_rejects_cross_session_grants_without_consuming_the_record() {
+    use core_protocol::{
+        crypto::{Context, Handshake, Role},
+        input::encode,
+    };
+    use ed25519_dalek::SigningKey;
+    use rand_core::OsRng;
+    let controller = SigningKey::generate(&mut OsRng);
+    let host = SigningKey::generate(&mut OsRng);
+    let context = Context {
+        session_id: [73; 32],
+        controller: controller.verifying_key(),
+        host: host.verifying_key(),
+    };
+    let hh = Handshake::new(context.clone(), Role::Host, &host, [2; 32]).unwrap();
+    let ch = Handshake::new(context.clone(), Role::Controller, &controller, [1; 32]).unwrap();
+    let controller_hello = ch.hello();
+    let mut sender = ch.finish(&hh.hello(), [2; 32]).unwrap();
+    let mut receiver = hh.finish(&controller_hello, [1; 32]).unwrap();
+    let now = Instant::now();
+    let mut session = Session::for_peer(now, context, Role::Host, true);
+    session.decide(true, now).unwrap();
+    session
+        .authenticated_transport_ready(&receiver.verified_session(), now)
+        .unwrap();
+    let fake = Fake::default();
+    let mut router = InputRouter::new(fake.clone());
+    let wrong = router.register(active()).unwrap();
+    let correct = router.register(session).unwrap();
+    let packet = sender
+        .seal(&encode(&Input::Text("bound input")).unwrap())
+        .unwrap();
+    assert_eq!(
+        router.dispatch_encrypted(&wrong, &mut receiver, &packet),
+        Err(InputError::Forbidden)
+    );
+    assert!(fake.0.lock().unwrap().events.is_empty());
+    router
+        .dispatch_encrypted(&correct, &mut receiver, &packet)
+        .unwrap();
+    assert_eq!(fake.0.lock().unwrap().events.len(), 1);
+    assert!(
+        router
+            .dispatch_encrypted(&correct, &mut receiver, &packet)
+            .is_err()
+    );
+    assert_eq!(fake.0.lock().unwrap().events.len(), 1);
 }

@@ -56,7 +56,7 @@ pub enum CryptoError {
 }
 
 /// Binds both enrolled device identities to one random 256-bit session identifier.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Context {
     pub session_id: [u8; 32],
     pub controller: VerifyingKey,
@@ -76,6 +76,28 @@ impl Context {
         out.extend(hello.ephemeral);
         out.extend(hello.dtls_fingerprint);
         out
+    }
+}
+
+/// Non-serializable proof created only by a successful signed handshake.
+/// It binds the context, endpoint role, ephemeral exchange and both certificates.
+#[derive(Clone, PartialEq, Eq)]
+pub struct VerifiedSession {
+    context: Context,
+    role: Role,
+    local_fingerprint: [u8; 32],
+    peer_fingerprint: [u8; 32],
+    binding: [u8; 32],
+}
+impl VerifiedSession {
+    pub(crate) fn matches(&self, context: &Context, role: Role) -> bool {
+        self.context == *context && self.role == role
+    }
+    pub fn local_role(&self) -> Role {
+        self.role
+    }
+    pub fn fingerprints(&self) -> ([u8; 32], [u8; 32]) {
+        (self.local_fingerprint, self.peer_fingerprint)
     }
 }
 
@@ -173,6 +195,13 @@ impl Handshake {
             tx_sequence: 0,
             rx_sequence: 0,
             binding,
+            verified: VerifiedSession {
+                context: self.context,
+                role: self.local.role,
+                local_fingerprint: self.local.dtls_fingerprint,
+                peer_fingerprint: peer.dtls_fingerprint,
+                binding,
+            },
         })
     }
 }
@@ -185,6 +214,7 @@ pub struct ControlChannel {
     tx_sequence: u64,
     rx_sequence: u64,
     binding: [u8; 32],
+    verified: VerifiedSession,
 }
 fn nonce(sequence: u64) -> [u8; 12] {
     let mut bytes = [0; 12];
@@ -192,6 +222,9 @@ fn nonce(sequence: u64) -> [u8; 12] {
     bytes
 }
 impl ControlChannel {
+    pub fn verified_session(&self) -> VerifiedSession {
+        self.verified.clone()
+    }
     pub fn seal(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, CryptoError> {
         if plaintext.len() > MAX_PLAINTEXT {
             return Err(CryptoError::Record);

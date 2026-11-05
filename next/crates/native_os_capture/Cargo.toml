@@ -18,8 +18,24 @@ workspace = true
 objc2 = "0.6.5"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSObject", "NSArray", "NSEnumerator", "NSError", "NSString"] }
 objc2-screen-capture-kit = { version = "0.3.2", default-features = false, features = ["std", "SCStream", "SCShareableContent", "libc", "objc2-core-foundation", "block2", "dispatch2", "objc2-core-graphics", "objc2-core-media"] }
-objc2-core-media = { version = "0.3.2", default-features = false, features = ["std", "CMSampleBuffer", "CMTime", "objc2-core-video"] }
+objc2-core-media = { version = "0.3.2", default-features = false, features = ["std", "CMSampleBuffer", "CMTime", "CMBlockBuffer", "CMFormatDescription", "objc2-core-video"] }
 objc2-core-video = { version = "0.3.2", default-features = false, features = ["std", "CVBase", "CVBuffer", "CVImageBuffer", "CVPixelBuffer", "CVReturn"] }
-objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGWindow", "CGDirectDisplay"] }
+objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGWindow", "CGDirectDisplay", "CGColorSpace"] }
 block2 = "0.6"
 dispatch2 = "0.3"
+
+[target.'cfg(target_os = "macos")'.dependencies.objc2-video-toolbox]
+version = "0.3.2"
+default-features = false
+features = ["std", "VTErrors", "VTCompressionSession", "VTCompressionProperties", "VTSession", "objc2", "block2", "objc2-core-media", "objc2-core-video"]
+
+[target.'cfg(target_os = "macos")'.dependencies.objc2-core-foundation]
+version = "0.3.2"
+default-features = false
+features = ["std", "CFDictionary", "CFNumber", "CFString"]
+
+[dev-dependencies]
+core_protocol = { path = "../core_protocol", features = ["native-webrtc"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+ed25519-dalek = { version = "2.2", features = ["rand_core"] }
+rand_core.workspace = true

@@ -119,26 +119,45 @@ fn binary_packet_bounds_and_canonical_encoding() {
         }
     }
 }
+fn proof() -> (Context, VerifiedSession) {
+    use rand_core::RngCore;
+    let a = SigningKey::generate(&mut OsRng);
+    let b = SigningKey::generate(&mut OsRng);
+    let mut session_id = [0; 32];
+    OsRng.fill_bytes(&mut session_id);
+    let context = Context {
+        session_id,
+        controller: a.verifying_key(),
+        host: b.verifying_key(),
+    };
+    let ah = Handshake::new(context.clone(), Role::Controller, &a, [1; 32]).unwrap();
+    let bh = Handshake::new(context.clone(), Role::Host, &b, [2; 32]).unwrap();
+    (
+        context,
+        bh.finish(&ah.hello(), [1; 32]).unwrap().verified_session(),
+    )
+}
 #[test]
 fn explicit_consent_rejection_timeout_and_disconnect() {
     let now = Instant::now();
-    let mut s = Session::attended(now);
+    let (context, proof) = proof();
+    let mut s = Session::for_peer(now, context.clone(), Role::Host, true);
     assert!(!s.can_control());
     assert_eq!(
-        s.authenticated_transport_ready(),
+        s.authenticated_transport_ready(&proof, now),
         Err(SessionError::Forbidden)
     );
     s.decide(true, now).unwrap();
     assert!(!s.can_control());
-    s.authenticated_transport_ready().unwrap();
+    s.authenticated_transport_ready(&proof, now).unwrap();
     assert!(s.can_control());
     s.close();
     assert!(!s.can_control());
     assert_eq!(s.decide(true, now), Err(SessionError::Forbidden));
-    let mut rejected = Session::attended(now);
+    let mut rejected = Session::for_peer(now, context, Role::Host, true);
     rejected.decide(false, now).unwrap();
     assert_eq!(
-        rejected.authenticated_transport_ready(),
+        rejected.authenticated_transport_ready(&proof, now),
         Err(SessionError::Forbidden)
     );
     let mut expired = Session::attended(now);
@@ -149,4 +168,36 @@ fn explicit_consent_rejection_timeout_and_disconnect() {
     let mut pending = Session::attended(now);
     assert!(pending.expire(now + Duration::from_secs(91)));
     assert!(!Session::attended(now).can_control());
+}
+
+#[test]
+fn consent_cannot_be_reused_for_another_context_or_without_binding() {
+    let now = Instant::now();
+    let (context, grant) = proof();
+    let (_, wrong) = proof();
+    let mut bound = Session::for_peer(now, context.clone(), Role::Host, true);
+    bound.decide(true, now).unwrap();
+    assert_eq!(
+        bound.authenticated_transport_ready(&wrong, now),
+        Err(SessionError::Forbidden)
+    );
+    assert_eq!(bound.state(), State::Closed);
+    let mut unbound = Session::attended(now);
+    unbound.decide(true, now).unwrap();
+    assert_eq!(
+        unbound.authenticated_transport_ready(&grant, now),
+        Err(SessionError::Forbidden)
+    );
+    let mut expired = Session::for_peer(now, context.clone(), Role::Host, true);
+    expired.decide(true, now).unwrap();
+    assert_eq!(
+        expired.authenticated_transport_ready(&grant, now + NEGOTIATION_LIFETIME),
+        Err(SessionError::Forbidden)
+    );
+    let mut active = Session::for_peer(now, context, Role::Host, true);
+    active.decide(true, now).unwrap();
+    active.authenticated_transport_ready(&grant, now).unwrap();
+    assert!(!active.can_view_at(now + ACTIVE_LIFETIME));
+    assert!(active.expire(now + ACTIVE_LIFETIME));
+    assert!(active.fingerprints().is_none());
 }

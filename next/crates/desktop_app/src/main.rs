@@ -1,3 +1,5 @@
+#[cfg(target_os = "macos")]
+mod local_session;
 use native_os_capture::stream::FrameMailbox;
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
@@ -88,12 +90,7 @@ fn main_window(window: &tauri::WebviewWindow) -> Result<(), String> {
     }
     Ok(())
 }
-#[tauri::command]
-async fn start_capture(
-    window: tauri::WebviewWindow,
-    state: tauri::State<'_, CaptureState>,
-) -> Result<String, String> {
-    main_window(&window)?;
+fn ensure_fixture(window: &tauri::WebviewWindow) -> Result<(), String> {
     if window.app_handle().get_webview_window("fixture").is_none() {
         tauri::WebviewWindowBuilder::new(
             window.app_handle(),
@@ -107,6 +104,15 @@ async fn start_capture(
         .build()
         .map_err(|e| e.to_string())?;
     }
+    Ok(())
+}
+#[tauri::command]
+async fn start_capture(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, CaptureState>,
+) -> Result<String, String> {
+    main_window(&window)?;
+    ensure_fixture(&window)?;
     #[cfg(target_os = "macos")]
     {
         let state = state.inner().clone();
@@ -194,15 +200,126 @@ async fn next_frame(
         Err("Native capture is unavailable on this target".into())
     }
 }
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn open_local_viewer(window: tauri::WebviewWindow) -> Result<(), String> {
+    main_window(&window)?;
+    ensure_fixture(&window)?;
+    if let Some(viewer) = window.app_handle().get_webview_window("viewer") {
+        viewer.set_focus().map_err(|e| e.to_string())?;
+    } else {
+        tauri::WebviewWindowBuilder::new(
+            window.app_handle(),
+            "viewer",
+            tauri::WebviewUrl::App("viewer.html".into()),
+        )
+        .title("Mixel-Remote — Local WebRTC Viewer")
+        .inner_size(820.0, 650.0)
+        .build()
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+#[cfg(target_os = "macos")]
+fn session_window(window: &tauri::WebviewWindow) -> Result<(), String> {
+    if !matches!(window.label(), "main" | "viewer") {
+        return Err("Session commands are restricted to the local dashboard and viewer".into());
+    }
+    Ok(())
+}
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn local_session_status(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, local_session::LocalSession>,
+) -> Result<local_session::Status, String> {
+    session_window(&window)?;
+    state.status()
+}
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn request_local_session(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, local_session::LocalSession>,
+) -> Result<local_session::Status, String> {
+    if window.label() != "viewer" {
+        return Err("Only the local viewer can request this QA session".into());
+    }
+    ensure_fixture(&window)?;
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || state.request())
+        .await
+        .map_err(|e| e.to_string())?
+}
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn decide_local_session(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, local_session::LocalSession>,
+    request: u64,
+    accept: bool,
+) -> Result<(), String> {
+    main_window(&window)?;
+    state.decide(request, accept)
+}
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn close_local_session(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, local_session::LocalSession>,
+) -> Result<(), String> {
+    session_window(&window)?;
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || state.stop())
+        .await
+        .map_err(|e| e.to_string())?
+}
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn next_local_video(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, local_session::LocalSession>,
+    request: u64,
+) -> Result<tauri::ipc::Response, String> {
+    if window.label() != "viewer" {
+        return Err("Video is restricted to the local viewer".into());
+    }
+    let state = state.inner().clone();
+    let packet = tauri::async_runtime::spawn_blocking(move || state.next_video(request))
+        .await
+        .map_err(|e| e.to_string())??;
+    Ok(tauri::ipc::Response::new(packet))
+}
 fn main() {
-    tauri::Builder::default()
-        .manage(CaptureState::default())
+    let builder = tauri::Builder::default().manage(CaptureState::default());
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .manage(local_session::LocalSession::default())
         .invoke_handler(tauri::generate_handler![
             start_capture,
             stop_capture,
-            next_frame
-        ])
+            next_frame,
+            open_local_viewer,
+            local_session_status,
+            request_local_session,
+            decide_local_session,
+            close_local_session,
+            next_local_video
+        ]);
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        start_capture,
+        stop_capture,
+        next_frame
+    ]);
+    builder
         .on_window_event(|window, event| {
+            #[cfg(target_os = "macos")]
+            if matches!(window.label(), "main" | "viewer" | "fixture")
+                && matches!(event, tauri::WindowEvent::Destroyed)
+            {
+                let _ = window.state::<local_session::LocalSession>().stop();
+            }
             if window.label() == "fixture" && matches!(event, tauri::WindowEvent::Destroyed) {
                 #[cfg(target_os = "macos")]
                 if let Ok(mut worker) = window.state::<CaptureState>().worker.lock()

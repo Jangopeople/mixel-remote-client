@@ -8,3 +8,11 @@ pub mod macos;
 pub mod stream;
 
 pub mod input;
+
+pub mod h264;
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code)] // VideoToolbox FFI and pixel-buffer lifetimes are isolated here.
+pub mod macos_encoder;
+
+#[cfg(any(target_os = "macos", test))]
+mod h264_low_delay;

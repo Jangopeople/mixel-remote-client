@@ -31,6 +31,17 @@ Existing RustDesk branding/build scripts and rs.mixel.ch remain independent.
   thread, binary frame IPC and live preview. Start/Stop/Restart and a changed
   source-window text have been observed in the actual native app. This is a
   local capture QA interface, not the finished remote-support dashboard.
+  A separate attended viewer now runs ScreenCaptureKit → independently verified
+  VideoToolbox hardware H264 → actual UDP ICE/DTLS-SRTP → WebCodecs canvas.
+  Explicit Accept/Reject, fresh consent, source recreation, disconnect and viewer
+  closure are exercised in the actual native release app. The isolated identities
+  are process-local, pinned QA fixtures; this does not enroll a customer device.
+- Hardware media: bounded AVCC/Annex-B conversion, explicit sRGB/BT709 metadata,
+  a zero-reorder baseline SPS, bounded loss-aware RTP assembly and cancellable
+  backpressure. Media grants are bound to the signed handshake and both actual
+  transport certificates. A grant for another peer or role cannot share a screen.
+  Predictive encoded frames are preserved; stale raw captures can skip before
+  encoding. Independent FFmpeg decoding checks every frame and colour samples.
 - Input ownership router: active input capabilities, view-only denial, per-session
   held key/button claims, independent-session cleanup, retained failed releases
   and retry. Native OS input-injection adapters and their runtime tests remain
@@ -80,6 +91,17 @@ stay separate. Package a private native release QA app with:
 python3 scripts/local/package-next-macos-qa.py --output _scratch/native-qa-new
 ```
 
+Independently qualify hardware media on a Mac with ffmpeg and ffprobe installed:
+
+```sh
+python3 scripts/local/test-next-native-media.py --output _scratch/native-media-new
+```
+
+This runs actual native peers, rejects pre-consent/foreign-certificate/controller
+sharing grants, decodes all twelve received frames, validates twenty-four colour
+samples, and verifies zero-reorder SPS metadata. It does not replace GUI or
+customer-session acceptance or claim an end-to-end latency target.
+
 The package has a local ad-hoc development signature and a separate QA bundle ID;
 it is not notarized, store-signed or a replacement for the installed customer app.
 The capture fixture stays within the app's own process. Full-display capture and
@@ -94,7 +116,7 @@ It uses no camera, microphone, desktop access or third-party ICE server.
 
 Native DXGI/PipeWire/X11 capture and cross-platform capture qualification;
 full-display macOS permission-path qualification; audio; OS input adapters and
-runtime held-key cleanup; hardware H.264 with negotiated VP8 fallback; authenticated device
+runtime held-key cleanup; Windows/Linux hardware H.264 and negotiated VP8 fallback; authenticated device
 registration and renewable grants against existing ISM devices; persistent
 nine-digit IDs and dynamic access password; unattended services and encrypted
 credential storage; tray/session UX; the complete Tauri v2 remote-support dashboard/session flow;

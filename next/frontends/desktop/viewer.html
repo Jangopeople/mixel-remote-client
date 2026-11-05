@@ -1,0 +1,7 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mixel Remote viewer</title><link rel="stylesheet" href="style.css"><body>
+<h1>Mixel Remote · local viewer</h1>
+<p>Private attended-media QA. The host captures only this app’s fixture window. Two native peers exchange hardware H264 through real UDP/DTLS-SRTP. This viewer decodes the received stream.</p>
+<button id="connect">Request connection</button><button id="disconnect" disabled>Disconnect</button>
+<p id="viewer-status" role="status">Checking H264 decoder…</p><p id="viewer-metrics">No received video</p>
+<canvas id="remote-video" width="640" height="420" aria-label="WebRTC received native screen"></canvas>
+<script src="viewer.js"></script></body></html>
