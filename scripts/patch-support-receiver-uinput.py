@@ -18,7 +18,7 @@ import tempfile
 
 HERE = Path(__file__).resolve().parent
 PLAN = HERE / 'support-receiver-uinput-plan.json'
-PLAN_SHA = 'f43e19dff27d33912f1dbc560576679909920cc2c6b0738db9dfbdb66c59e18f'
+PLAN_SHA = '22f4e5f59dcc1f41ac4e3b0fe240d8c2a469972898592dc63d3900b2f594128d'
 
 
 def sha(raw):
