@@ -286,12 +286,20 @@ async fn send_local_input(
         .get_webview_window("fixture")
         .ok_or("QA fixture is closed")?;
     fixture.set_focus().map_err(|e| e.to_string())?;
+    // Native focus requests and CGEvent posts cross different event queues.
+    // Wait for the target window, then leave it focused while posted events
+    // drain. Returning focus to the viewer on submission races actual delivery.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    while !fixture.is_focused().map_err(|e| e.to_string())? {
+        if std::time::Instant::now() >= deadline {
+            return Err("QA fixture did not receive native focus".into());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
     let state = state.inner().clone();
-    let result = tauri::async_runtime::spawn_blocking(move || state.send_input(request, event))
+    tauri::async_runtime::spawn_blocking(move || state.send_input(request, event))
         .await
-        .map_err(|e| e.to_string())?;
-    let focused = window.set_focus().map_err(|e| e.to_string());
-    result.and(focused)
+        .map_err(|e| e.to_string())?
 }
 #[cfg(target_os = "macos")]
 #[tauri::command]

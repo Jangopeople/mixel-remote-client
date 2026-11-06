@@ -149,3 +149,5 @@ claim the final layout or these features are delivered.
 Marketplace creation/upload/submission must preserve existing live/reviewed
 releases and follow the repository's exact-action confirmation rule. No store,
 production infrastructure, customer alias or download has changed here.
+
+The engineering feature inventory is tracked in `parity-baseline.json`. It is an initial, source-linked implementation baseline, not an exhaustive audit or a parity completion claim. The user prioritizes completing the feature build before the final acceptance campaign; build and lint checks continue during implementation.

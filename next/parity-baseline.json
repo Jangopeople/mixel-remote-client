@@ -1,0 +1,598 @@
+{
+  "schemaVersion": 1,
+  "referenceDate": "2026-11-06",
+  "inventoryStatus": "initial engineering baseline; detailed subfeature and platform reconciliation remains in progress",
+  "scope": "Entire approved portfolio, including add-ons; no claim of completed parity",
+  "buildPolicy": "Implement feature inventory before final acceptance campaign; compile/lint and regression checks continue during construction.",
+  "identity": "Mixel implementation; third-party framework dependencies do not confer feature parity. Existing RustDesk customer app remains separate.",
+  "qualificationRule": "An inventory entry is complete only after its code is built and its concrete acceptance path has independent passing evidence on every applicable supported platform. Empty evidence never means complete.",
+  "platforms": [
+    "Windows host/controller",
+    "macOS full host/controller",
+    "Linux Wayland/X11 host/controller",
+    "Browser controller",
+    "Android",
+    "iOS/iPadOS permitted capabilities",
+    "Embedded/agentless endpoints"
+  ],
+  "sources": [
+    "https://www.teamviewer.com/en-us/legal/product-descriptions/",
+    "https://www.teamviewer.com/en/products/tensor/",
+    "https://docs.1e.com/en/Content/home/release-notes/dex/2026/26-11-release-notes.htm"
+  ],
+  "features": [
+    {
+      "id": "desktop.attended",
+      "area": "desktop",
+      "capability": "Consent before capture or input",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-tensor/",
+      "acceptance": "A fresh request is invisible to capture/input until the host accepts; Reject and expiry create no session.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "desktop.unattended",
+      "area": "desktop",
+      "capability": "Enrolled unattended service",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-tensor/",
+      "acceptance": "Reboot a registered endpoint and reconnect using a revocable grant without a foreground login; credential rotation denies the old grant.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "desktop.multimonitor",
+      "area": "desktop",
+      "capability": "Display selection and scaling",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-tensor/",
+      "acceptance": "Switch monitors with different DPI and negative origins; pointer locations remain correct during resize and hot unplug.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "desktop.printing",
+      "area": "desktop",
+      "capability": "Remote document printing",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-tensor/",
+      "acceptance": "Print a remote document to a controller-side printer and verify page count and content with cancellation and permissions enforced.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "desktop.audio",
+      "area": "desktop",
+      "capability": "Remote sound",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-tensor/",
+      "acceptance": "Stream remote application audio in sync with video; mute and disconnect stop capture and playback.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "desktop.wol",
+      "area": "desktop",
+      "capability": "Remote wake",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-tensor/",
+      "acceptance": "Wake an enrolled sleeping endpoint through an authorized online LAN agent; reject cross-tenant requests.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "desktop.privacy",
+      "area": "desktop",
+      "capability": "Privacy screen and local input blocking",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-tensor/",
+      "acceptance": "Enable host-supported privacy mode with explicit permission and recover local display/input after disconnect and crashes.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "desktop.proxy",
+      "area": "desktop",
+      "capability": "Authenticated proxy traversal",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-tensor/",
+      "acceptance": "Connect through an authenticated enterprise proxy without exposing credentials in logs or falling back to an unauthorized route.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "desktop.vpn",
+      "area": "desktop",
+      "capability": "Private network tunnel",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-tensor/",
+      "acceptance": "Route only authorized private subnets and revoke the tunnel on disconnect without leaking unrelated traffic.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "desktop.terminal",
+      "area": "desktop",
+      "capability": "Remote terminal",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-tensor/",
+      "acceptance": "Run an authorized interactive command with streaming output, cancellation and audited identity; deny unauthorized elevation.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "desktop.files",
+      "area": "desktop",
+      "capability": "Resumable queued file transfer",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-tensor/",
+      "acceptance": "Transfer multiple Unicode paths in both directions; interrupt/resume and compare full byte hashes; deny traversal and symlink escape.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "desktop.clipboard",
+      "area": "desktop",
+      "capability": "Permission-controlled clipboard",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-tensor/",
+      "acceptance": "Transfer Unicode text and supported files both ways only when granted; disable and reconnect without retained secrets.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "desktop.uac",
+      "area": "desktop",
+      "capability": "Elevation and secure desktop",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-tensor/",
+      "acceptance": "Use the normal host security prompt; accept and deny produce correct elevated or standard-session behavior without bypass.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "desktop.rdp_sessions",
+      "area": "desktop",
+      "capability": "Terminal-server user sessions",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-tensor/",
+      "acceptance": "Enumerate only permitted Windows user sessions and connect to the chosen session without mixing screen or input ownership.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "desktop.recording",
+      "area": "desktop",
+      "capability": "Session recording and playback",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-tensor/",
+      "acceptance": "Record consented screen/audio with timestamps, integrity checks and seekable playback; enforce retention and access.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "desktop.collaboration",
+      "area": "desktop",
+      "capability": "Chat voice video and handover",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-tensor/",
+      "acceptance": "Exchange chat and audio/video, invite another authorized technician, switch roles and revoke the original controller cleanly.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "desktop.concurrency",
+      "area": "desktop",
+      "capability": "Multiple simultaneous support sessions",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-tensor/",
+      "acceptance": "Keep independently authorized sessions in distinct tabs; closing one cannot release another session's held keys or access.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "desktop.deployment",
+      "area": "desktop",
+      "capability": "Remote host installation and mass deployment",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-tensor/",
+      "acceptance": "Install signed host updates with rollback, service restart and enrollment retained across MSI/PKG/DEB deployment.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "desktop.quickactions",
+      "area": "desktop",
+      "capability": "Support action automation",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-tensor/",
+      "acceptance": "Execute a named allow-listed maintenance action and versioned script with approval, bounded resources and a complete audit record.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "operations.queue",
+      "area": "operations",
+      "capability": "Support queue and case assignment",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-tensor/",
+      "acceptance": "Create, assign, notify, chat and report a case; handover preserves case history and permissions.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "operations.sos",
+      "area": "operations",
+      "capability": "Customer help request",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-tensor/",
+      "acceptance": "A local help button creates a support request with the correct tenant/device and visible cancellation.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "operations.satisfaction",
+      "area": "operations",
+      "capability": "Customer feedback",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-tensor/",
+      "acceptance": "Collect session-linked feedback without allowing another tenant to read or change it.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "operations.billing",
+      "area": "operations",
+      "capability": "Usage reporting and billing export",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-tensor/",
+      "acceptance": "Export per-user/device/session durations and rates; reconcile interrupted and overlapping sessions without double counting.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "operations.directory",
+      "area": "operations",
+      "capability": "Organization address book and groups",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-tensor/",
+      "acceptance": "Search, share and nest device/contact groups; apply role-scoped custom fields without cross-tenant visibility.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "enterprise.sso",
+      "area": "enterprise",
+      "capability": "Federated identity",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-tensor/",
+      "acceptance": "Authenticate through SAML/OIDC corporate identity with MFA, logout and deprovisioning enforced in existing sessions.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "enterprise.scim",
+      "area": "enterprise",
+      "capability": "User and group lifecycle",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-tensor/",
+      "acceptance": "Provision, update and deactivate users/groups through SCIM with replay safety and tenant isolation.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "enterprise.conditional",
+      "area": "enterprise",
+      "capability": "Central conditional access",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-tensor/",
+      "acceptance": "Evaluate user/group/device/time/direction rules for connection, files and scripts; default deny and audit every decision.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "enterprise.audit",
+      "area": "enterprise",
+      "capability": "Tamper-evident audit export",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-tensor/",
+      "acceptance": "Record actor, tenant, endpoint, policy and outcome; export through a scoped API and detect modified or missing audit records.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "enterprise.policies",
+      "area": "enterprise",
+      "capability": "Versioned fleet policies",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-tensor/",
+      "acceptance": "Apply settings to groups with inheritance, preview, rollout and rollback; endpoint acknowledgements report actual applied versions.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "enterprise.agentless",
+      "area": "enterprise",
+      "capability": "Agentless access gateway",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-tensor/",
+      "acceptance": "Reach an authorized isolated endpoint through a registered gateway without installing a desktop agent on that endpoint.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "enterprise.integrations",
+      "area": "enterprise",
+      "capability": "ITSM identity and management connectors",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-tensor/",
+      "acceptance": "Use least-privilege versioned connectors for the documented integration catalogue; retry idempotently and revoke credentials cleanly.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "enterprise.sdk",
+      "area": "enterprise",
+      "capability": "Public integration SDK and API",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-tensor/",
+      "acceptance": "A separately built sample enrolls a device and requests a consented session using documented, scoped, rate-limited APIs.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "endpoint.inventory",
+      "area": "endpoint",
+      "capability": "Hardware and software inventory",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-remote-management/",
+      "acceptance": "Reconcile observed hardware/software and change history across Windows/macOS/Linux with last-seen state and tenant-scoped search.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "endpoint.monitoring",
+      "area": "endpoint",
+      "capability": "Endpoint and network monitoring",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-remote-management/",
+      "acceptance": "Evaluate endpoint and network checks with offline detection, threshold policies, deduplicated alerts and recovery notifications.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "endpoint.patching",
+      "area": "endpoint",
+      "capability": "Patch discovery and deployment",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-remote-management/",
+      "acceptance": "Discover missing OS/application updates, stage a signed update, schedule deployment, report actual installation and recover a failed rollout.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "endpoint.taskmanager",
+      "area": "endpoint",
+      "capability": "Remote process management",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-remote-management/",
+      "acceptance": "Inspect actual processes and resource use; stop only an authorized selected process and audit the result.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "endpoint.protection",
+      "area": "endpoint",
+      "capability": "Endpoint protection and response",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-remote-management/",
+      "acceptance": "Detect and quarantine controlled benign test artifacts, investigate an alert and restore a false positive with appropriate authority.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "endpoint.backup",
+      "area": "endpoint",
+      "capability": "Encrypted backup and restore",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-remote-management/",
+      "acceptance": "Back up an approved directory, restore to a clean target, verify byte hashes and enforce key access and retention.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "mobile.android",
+      "area": "mobile",
+      "capability": "Android viewing and permitted control",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-remote-management/",
+      "acceptance": "Use an emulator for consented capture/input, reconnect and deny tests; expose actual platform capabilities rather than claiming unsupported control.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "mobile.ios",
+      "area": "mobile",
+      "capability": "iOS/iPadOS support and controller",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-remote-management/",
+      "acceptance": "Build a controller and consented broadcast flow using permitted Apple APIs; represent viewing/control limitations accurately.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "mobile.mdm_enroll",
+      "area": "mobile",
+      "capability": "Managed device enrollment",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-remote-management/",
+      "acceptance": "Enroll an authorized test device through the platform management protocol; revoke enrollment and verify profile removal.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "mobile.mdm_config",
+      "area": "mobile",
+      "capability": "Configuration and application policies",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-remote-management/",
+      "acceptance": "Deploy and report managed configuration/apps and compliance rules; rollback a failed policy without losing enrollment.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "mobile.zero_touch",
+      "area": "mobile",
+      "capability": "Automated fleet onboarding",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-remote-management/",
+      "acceptance": "Use supported enterprise enrollment services with tenant ownership verified; reject enrollment of an unassigned device.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "mobile.content",
+      "area": "mobile",
+      "capability": "Managed content and secure connectivity",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-remote-management/",
+      "acceptance": "Distribute versioned managed content and connectivity policy; revoke work content without deleting personal data.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "experience.telemetry",
+      "area": "experience",
+      "capability": "Historical device experience telemetry",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-dex/",
+      "acceptance": "Collect bounded resource/network/application health metrics with retention, consent and least-privilege tenant queries.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "experience.investigation",
+      "area": "experience",
+      "capability": "Interactive endpoint investigation",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-dex/",
+      "acceptance": "Query authorized endpoint diagnostics, compare historical observations and return partial/offline states accurately.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "experience.remediation",
+      "area": "experience",
+      "capability": "Policy automation and remediation",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-dex/",
+      "acceptance": "Evaluate a versioned condition against endpoint observations, approve an action, execute once and verify recovery with rollback.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "experience.insights",
+      "area": "experience",
+      "capability": "Experience analytics",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-dex/",
+      "acceptance": "Aggregate time-bounded fleet experience with documented metrics, drill-down and access-filtered exports.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "ai.summary",
+      "area": "ai",
+      "capability": "Session summaries and analytics",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-tensor/",
+      "acceptance": "With consent, generate a session summary linked to actual events; redact secrets and permit human correction before publication.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "ai.assistant",
+      "area": "ai",
+      "capability": "Diagnostic and remediation assistant",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-tensor/",
+      "acceptance": "Explain a diagnosis using authorized endpoint evidence; propose actions with explicit human approval and verify each executed outcome.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "visual_assistance.ar",
+      "area": "visual_assistance",
+      "capability": "Live visual annotations",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-assist-ar/",
+      "acceptance": "Share an authorized camera stream and maintain arrows, drawings and text markers while the viewpoint changes.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "visual_assistance.ocr",
+      "area": "visual_assistance",
+      "capability": "On-device visual text recognition",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-assist-ar/",
+      "acceptance": "Recognize text in an approved frame with language metadata and correction; do not upload unrelated frames.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "visual_assistance.visual_records",
+      "area": "visual_assistance",
+      "capability": "Visual session artifacts",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-assist-ar/",
+      "acceptance": "Save approved screenshots, shared files and recordings with tenant permissions, retention and integrity metadata.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "visual_assistance.invites",
+      "area": "visual_assistance",
+      "capability": "Visual session invitations",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-assist-ar/",
+      "acceptance": "Create an expiring invitation and verify the recipient joins only the intended consented session; sending remains separately authorized.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "frontline.workflow",
+      "area": "frontline",
+      "capability": "Workflow editor and runtime",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-frontline/",
+      "acceptance": "Author, version and assign a branching workflow; execute it offline-capably on an eligible endpoint and reconcile signed results.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "frontline.tasks",
+      "area": "frontline",
+      "capability": "Operational task management",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-frontline/",
+      "acceptance": "Assign individual/recurring tasks to users/groups, observe progress and generate a result report without losing offline changes.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "frontline.connectors",
+      "area": "frontline",
+      "capability": "Operational backend connectors",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-frontline/",
+      "acceptance": "Exchange authorized task data with a staged warehouse/ERP backend over authenticated APIs with idempotent retries.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "iot.assets",
+      "area": "iot",
+      "capability": "Embedded asset connectivity",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-iot/",
+      "acceptance": "Register an embedded asset, observe telemetry and perform an authorized remote operation with offline recovery and audit.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "meetings.conference",
+      "area": "meetings",
+      "capability": "Multiparty conferencing",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-meeting/",
+      "acceptance": "Join an invited audio/video/screensharing conference, exchange files/chat and remove a participant with media keys revoked.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "engagement.consultation",
+      "area": "engagement",
+      "capability": "Customer consultation channel",
+      "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-engage/",
+      "acceptance": "Initiate an authorized browser consultation with scoped chat/video/support history and explicit sharing permissions.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    }
+  ],
+  "integrationDiscovery": [
+    "Apptec360",
+    "Cherwell",
+    "EloView",
+    "Freshworks",
+    "IBM Maximo",
+    "Jamf",
+    "Jira Cloud/Data Center",
+    "ManageEngine",
+    "Matrix42",
+    "Azure VM",
+    "Dynamics",
+    "Intune",
+    "Teams",
+    "REACH",
+    "Salesforce",
+    "ServiceNow",
+    "Slack",
+    "Sophos",
+    "Zendesk",
+    "Zoho",
+    "Entra ID",
+    "Okta",
+    "AD sync"
+  ],
+  "releaseGates": [
+    "Dedicated staging only; preserve production connectivity",
+    "Dedicated reviewer accounts only",
+    "Explicit exact-action confirmation before marketplace state changes",
+    "Sandboxed macOS controller and separate signed native host",
+    "Signed installers, migration/rollback, independent acceptance evidence",
+    "OS permission and platform restrictions remain enforced"
+  ]
+}

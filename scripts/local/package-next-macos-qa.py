@@ -24,6 +24,9 @@ def main():
     before=qa.inventory()
     def run(argv,name):
         with (output/name).open('w') as log:subprocess.run(argv,cwd=ROOT/'next',stdout=log,stderr=subprocess.STDOUT,check=True)
+    # Tauri embeds frontendDist. Rebuild it from checked sources instead of
+    # accidentally signing an older generated UI left by a previous run.
+    run(['pnpm','--dir',str(ROOT/'next/frontends/desktop'),'run','build'],'frontend-build.log')
     run(['cargo','build','-p','desktop_app','--release','--locked'],'build.log')
     app=output/'Mixel-Remote.app';mac=app/'Contents/MacOS';mac.mkdir(parents=True)
     source=ROOT/'next/target/release/desktop_app';binary=mac/'Mixel-Remote';shutil.copy2(source,binary)
