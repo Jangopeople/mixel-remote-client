@@ -95,6 +95,14 @@ async fn send(socket: &mut WebSocket, event: &ServerMessage) -> bool {
         Ok(Ok(()))
     )
 }
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(u64::MAX, |d| d.as_secs())
+}
+fn authorization_live(expires_at: u64, authorized_at: Instant, now: Instant, unix: u64) -> bool {
+    unix < expires_at && now.duration_since(authorized_at) < Duration::from_secs(900)
+}
 async fn connection(mut socket: WebSocket, state: AppState) {
     let initial = tokio::time::timeout(Duration::from_secs(5), socket.next()).await;
     let Ok(Some(Ok(Message::Text(raw)))) = initial else {
@@ -116,9 +124,7 @@ async fn connection(mut socket: WebSocket, state: AppState) {
         return;
     };
     let mut expires_at = principal.expires_at;
-    let unix = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(u64::MAX, |d| d.as_secs());
+    let unix = unix_now();
     if expires_at <= unix {
         return;
     }
@@ -144,8 +150,8 @@ async fn connection(mut socket: WebSocket, state: AppState) {
             _ = stopped.changed() => break,
             _ = tick.tick() => {
                 let now = Instant::now();
-                let unix = SystemTime::now().duration_since(UNIX_EPOCH).map_or(u64::MAX, |d| d.as_secs());
-                if unix >= expires_at || now.duration_since(authorized_at) >= Duration::from_secs(900) || now.duration_since(last_activity) >= Duration::from_secs(75) { break; }
+                let unix = unix_now();
+                if !authorization_live(expires_at, authorized_at, now, unix) || now.duration_since(last_activity) >= Duration::from_secs(75) { break; }
                 match state.registry.lock() { Ok(mut r) => r.expire(now), Err(_) => break }
                 if now.duration_since(last_ping) >= Duration::from_secs(20) {
                     if !matches!(tokio::time::timeout(Duration::from_secs(2), socket.send(Message::Ping(Vec::new().into()))).await, Ok(Ok(()))) { break; }
@@ -159,6 +165,9 @@ async fn connection(mut socket: WebSocket, state: AppState) {
             message = socket.next() => {
                 let Some(Ok(message)) = message else { break; };
                 let now = Instant::now();
+                // Do not wait for the next housekeeping tick: an inbound
+                // request arriving at expiry must never create new consent.
+                if !authorization_live(expires_at, authorized_at, now, unix_now()) { break; }
                 last_activity = now;
                 if now.duration_since(rate_start) >= Duration::from_secs(1) { rate_start = now; rate_count = 0; }
                 rate_count += 1;
@@ -177,7 +186,7 @@ async fn connection(mut socket: WebSocket, state: AppState) {
                                 continue;
                             }
                             last_renewal = Some(now);
-                            let unix = SystemTime::now().duration_since(UNIX_EPOCH).map_or(u64::MAX, |d| d.as_secs());
+                            let unix = unix_now();
                             let remaining = Duration::from_secs(expires_at.saturating_sub(unix))
                                 .min(Duration::from_secs(900).saturating_sub(now.duration_since(authorized_at)));
                             if remaining.is_zero() { break; }
@@ -186,8 +195,8 @@ async fn connection(mut socket: WebSocket, state: AppState) {
                             drop(token);
                             drop(slot);
                             let Ok(Ok(principal)) = result else { break; };
-                            let unix = SystemTime::now().duration_since(UNIX_EPOCH).map_or(u64::MAX, |d| d.as_secs());
-                            if principal.expires_at <= unix { break; }
+                            let unix = unix_now();
+                            if principal.expires_at <= unix || !authorization_live(expires_at, authorized_at, Instant::now(), unix) { break; }
                             let next_expiry = principal.expires_at;
                             let renewed = match state.registry.lock() {
                                 Ok(mut r) => r.renew(id, generation, principal).is_ok(),
@@ -215,4 +224,34 @@ async fn connection(mut socket: WebSocket, state: AppState) {
         registry.disconnect(id, generation);
     }
     let _ = tokio::time::timeout(Duration::from_secs(1), socket.close()).await;
+}
+
+#[cfg(test)]
+mod lease_tests {
+    use super::*;
+    #[test]
+    fn authorization_rejects_exact_bearer_and_monotonic_boundaries() {
+        let start = Instant::now();
+        assert!(authorization_live(
+            2000,
+            start,
+            start + Duration::from_secs(899),
+            1999
+        ));
+        assert!(!authorization_live(2000, start, start, 2000));
+        assert!(!authorization_live(2000, start, start, 2001));
+        // Moving the wall clock backwards cannot reset the monotonic limit.
+        assert!(!authorization_live(
+            2000,
+            start,
+            start + Duration::from_secs(900),
+            1000
+        ));
+        assert!(!authorization_live(
+            2000,
+            start,
+            start + Duration::from_secs(901),
+            1000
+        ));
+    }
 }

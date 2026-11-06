@@ -1,5 +1,10 @@
 # Mixel-Remote — Agent Handoff / Current State
 
+## Current live Accessibility handoff — 2026-11-06
+
+User explicitly APPROVED Accessibility for exact DeveloperID R3 QA app. CUA SystemSettings->Privacy&Security->Accessibility->Add opened Mac admin password dialog. User repliedUnlocked, but fresh AX+screenshot still showedEMPTYPassword andsame dialog. One followuphandoffasks enterpasswordinOS+ModifySettings thenconfirmdialogclosed; no passwordreceived/enteredbyagent. Approvalremainsvalid, doNOTaskagainforgrant. Must useexactR3pathinAddpicker, doNOTtoggleambiguoussame-namecustomerapp. Current CUAinputSettingshandle is authdialog; avoidstealingfocuswhileuserenteringpassword. CUAsegmentongoingpendinghandoffoutcome, no completion_summaryyet. ActualnativeinputstillUNQUALIFIED. Customerappuntouched. NativeR3strictsignatureanddesignatedrequirementrecheckedPASS. IndependentWIP hardenssignalingexpiry ateveryincomingmessage andagainafterrenewalauth, ratherthanonly1s tick; `_scratch/next-auth-expiry-r4.log` allsignalingtestsPASS incl exactboundary+realrenewaltimeouts; `_scratch/next-auth-expiry-clippy-r4.log` warningsdeniedPASS; `_scratch/next-auth-expiry-build-r4.log` releasebuildPASS. Existingfullr15 remainspreviouscheckpoint, focusedchecksqualifythisserveronlychange.
+
+
 ## Authorization renewal continuation — 2026-11-05 (latest WIP)
 
 User repeated only stop when fully finished. Programme remains unfinished; continue execution and do not label checkpoints as delivery. New independent work while Mac Accessibility decision waits: explicit signaling Renew token / Renewed response. Authenticator verifies against existing ISM profile and active org outside registry lock, bounded by13s AND remaining original bearer/15min authorization deadline. Same connection generation/user/tenant/staff privilege required; no new consent inferred. Existing publicID and pending consent survive valid refresh. Invalid/expired token or identity/tenant/privilege change closes original connection and sessions. At mostone renewal per30s; repeated immediate attempt getsBusy. No backend/prod/store changes.
