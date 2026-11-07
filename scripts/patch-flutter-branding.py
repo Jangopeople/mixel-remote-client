@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install the authoritative Mixel icon used by Flutter's actual UI loader."""
+"""Prepare the branded Flutter UI and its Windows consent startup."""
 import argparse
 import hashlib
 from pathlib import Path
@@ -91,12 +91,54 @@ def apply(repo: Path, branding: Path) -> None:
         previous.unlink()
 
 
+INCLUDE_BEFORE = '#include "flutter_window.h"\n'
+INCLUDE_AFTER = INCLUDE_BEFORE + '#include "mixel_consent_display.h"\n'
+START_BEFORE = '  command_line_arguments.insert(command_line_arguments.end(), rust_args.begin(), rust_args.end());\n'
+START_AFTER = (
+    '  if (is_cm_page && !command_line_arguments.empty() &&\n'
+    '      command_line_arguments.front() == "--cm") {\n'
+    '    mixel::consent_display::Prepare();\n'
+    '  }\n'
+    + START_BEFORE
+)
+
+
+def patched_runner(source: str) -> str:
+    if source.count(INCLUDE_AFTER) == source.count(START_AFTER) == 1:
+        return source
+    if (INCLUDE_AFTER in source or START_AFTER in source
+            or source.count(INCLUDE_BEFORE) != 1 or source.count(START_BEFORE) != 1):
+        raise ValueError("Windows consent runner anchors changed")
+    return source.replace(INCLUDE_BEFORE, INCLUDE_AFTER).replace(START_BEFORE, START_AFTER)
+
+
+def prepare_windows_runner(repo: Path, branding: Path) -> tuple[Path, bytes, bytes]:
+    runner = repo / "flutter/windows/runner"
+    main = runner / "main.cpp"
+    header = runner / "mixel_consent_display.h"
+    if main.is_symlink() or header.is_symlink() or not main.is_file():
+        raise ValueError("Windows consent runner must be an owned regular file")
+    original = main.read_bytes()
+    newline = b"\r\n" if b"\r\n" in original else b"\n"
+    normalized = original.replace(b"\r\n", b"\n")
+    if b"\r" in normalized or normalized.replace(b"\n", newline) != original:
+        raise ValueError("Windows consent runner has mixed line endings")
+    body = patched_runner(normalized.decode("utf-8")).encode("utf-8").replace(b"\n", newline)
+    helper = (branding / "windows/consent_display.h").read_bytes()
+    if header.exists() and header.read_bytes() != helper:
+        raise ValueError("The generated Windows display helper has unexpected changes")
+    return main, body, helper
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", required=True, type=Path)
     parser.add_argument("--branding", required=True, type=Path)
     args = parser.parse_args()
+    runner, runner_bytes, helper_bytes = prepare_windows_runner(args.repo, args.branding)
     apply(args.repo, args.branding)
+    runner.write_bytes(runner_bytes)
+    runner.with_name("mixel_consent_display.h").write_bytes(helper_bytes)
     print("PASS: Flutter toolbar and connection manager use the Mixel PNG; upstream icon fallback removed; branded footer opens Mixel")
 
 
