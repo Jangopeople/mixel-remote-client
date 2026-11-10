@@ -1,0 +1,13 @@
+{
+  "schema": 2,
+  "identity_url": "https://ism-api.mixel.ch",
+  "public_key": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzE0MTU4MDAwLCJleHAiOjE4NzI5MTA4MDB9.yqgm8Szodb6LBnZ2eU1y9aoqXI7xIqLxTNow-Wwc7iA",
+  "signaling_url": "wss://rs.mixel.ch:9444/v1/ws",
+  "authority_url": "https://ism-api.mixel.ch",
+  "authority_keys": [
+    "2da4e754d0ab4a620e90b7d6a0afadc563a1177293be4abe0e66e639574ad907"
+  ],
+  "oauth_provider": "keycloak",
+  "relay_only": true,
+  "customer_signup": true
+}

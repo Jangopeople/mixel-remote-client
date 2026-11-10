@@ -48,7 +48,7 @@
       if (version!==request || !authenticated) return;
       if (!Array.isArray(page.devices) || page.devices.length>50 || page.devices.some(device=>typeof device.name!=='string' || typeof device.os!=='string' || !Number.isInteger(device.connection_id) || device.connection_id<100000000 || device.connection_id>999999999) || (page.next!==null && (!Number.isInteger(page.next) || page.next<100000000 || page.next>999999999))) throw Error('Invalid device directory response');
       entries=page.devices;nextCursor=page.next;index=wantedIndex;cursors[index]=cursor;
-      status.textContent=entries.length?`Page ${index+1} · ${entries.length} enrolled devices. Make this Mac available before connecting.`:'No enrolled devices match this search.';
+      status.textContent=entries.length?`Page ${index+1} · ${entries.length} enrolled devices. Make this computer available before connecting.`:'No enrolled devices match this search.';
     }catch(error){if(version===request)status.textContent=String(error);}
     finally{if(version===request){busy=false;render();}}
   }

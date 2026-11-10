@@ -9,6 +9,7 @@ publish.workspace = true
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
 testflight-controller = []
+qa-session = []
 
 [dependencies]
 signaling_server = { path = "../signaling_server" }

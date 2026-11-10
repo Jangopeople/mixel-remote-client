@@ -741,6 +741,11 @@ async fn account_sign_in(
     show_link: Option<bool>,
 ) -> Result<Option<String>, String> {
     main_window(&window)?;
+    #[cfg(feature = "qa-session")]
+    if let Some(path) = std::env::var_os("MIXEL_QA_SESSION_FILE") {
+        state.begin_qa(path).await?;
+        return Ok(None);
+    }
     let url = state.begin().await?;
     if show_link == Some(true) {
         return Ok(Some(url));

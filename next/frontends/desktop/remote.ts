@@ -240,7 +240,7 @@
       ? 'Choose a display to allow keyboard and mouse control.'
       : !current.input_access
         ? mac ? 'Enable Accessibility in macOS to allow keyboard and mouse control.' : 'Keyboard and mouse control are unavailable in this desktop session.'
-        : 'Select Keyboard & mouse to allow control for this session.';
+        : allowControl.checked ? 'Keyboard and mouse control will be allowed for this session.' : 'Select Keyboard & mouse to allow control for this session.';
     allowChat.disabled = busy || current.phase !== 'incoming';
     if (current.phase !== 'incoming') allowChat.checked = false;
     allowRecording.disabled = busy || current.phase !== 'incoming';

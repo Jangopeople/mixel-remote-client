@@ -1336,7 +1336,7 @@ fn request_failure_message(code: ErrorCode) -> &'static str {
             "Connection request denied. Check the device’s company access and one-time password, then try again."
         }
         ErrorCode::Unavailable => {
-            "The remote device or connection service is unavailable. Ask the other person to make their computer available, then try again."
+            "The remote device is not available to you. Ask the other person to make their computer available. If it is online, your account may not be assigned to that device’s company: check Manage devices and company."
         }
         ErrorCode::Busy => {
             "The remote device is busy. Wait for its current request or session to finish, then try again."

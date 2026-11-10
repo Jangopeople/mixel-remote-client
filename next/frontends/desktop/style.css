@@ -96,3 +96,7 @@ body[data-remote-fullscreen=true] #remote #remote-canvas {
 /* The TestFlight app is a controller; sharing stays in the native host. */
 body[data-controller-only="true"] [data-native-host-only] { display: none !important; }
 body[data-controller-only="true"] .support-grid { grid-template-columns: minmax(0, 1fr); }
+
+body:not([data-remote-platform="macos"]) .mac-only{display:none}
+.account-actions{flex-wrap:wrap}.account-actions a.button-primary{display:inline-flex;align-items:center;justify-content:center;text-decoration:none;border:1px solid var(--brand);border-radius:6px;padding:9px 13px;min-height:36px;font-size:12px;font-weight:550;line-height:1.3}
+.account-actions[data-phase=authenticated] :is(#account-sign-in,#account-register-mixel,#account-sign-in-link){display:none}

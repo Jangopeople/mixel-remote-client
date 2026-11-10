@@ -237,12 +237,21 @@ impl AuthClient {
         let principal = match self.ism.authenticate(&tokens.access_token.0).await {
             Ok(principal) => Some(principal),
             Err(_) => {
-                setup = self
-                    .ism
-                    .personal_account(&tokens.access_token.0)
-                    .await
-                    .map_err(|_| "Remote account service could not be reached")?
-                    .is_some_and(|account| account.profile_id.is_none());
+                // A verified authenticator means the account can still raise
+                // its assurance level (for example a staff member reaching
+                // aal2), so offer the verification code step rather than
+                // personal setup. Personal setup is only for an account that
+                // cannot verify any further and has no Remote profile yet.
+                let has_verified_totp = user.factors.iter().any(|factor| {
+                    factor.status == "verified" && factor.factor_type == "totp"
+                });
+                setup = !has_verified_totp
+                    && self
+                        .ism
+                        .personal_account(&tokens.access_token.0)
+                        .await
+                        .map_err(|_| "Remote account service could not be reached")?
+                        .is_some_and(|account| account.profile_id.is_none());
                 // GoTrue has verified this bearer above. Its AAL may only
                 // select the next verification step; it never grants access.
                 let claims = tokens
@@ -373,6 +382,39 @@ impl AccountAuth {
             inner.status.message = "Account authorization expired; sign in again".into();
         }
         inner.status.clone()
+    }
+    #[cfg(feature = "qa-session")]
+    pub async fn begin_qa(&self, path: std::ffi::OsString) -> Result<(), String> {
+        let (client, _, _) = AuthClient::configured()?;
+        let tokens: Tokens = serde_json::from_slice(
+            &std::fs::read(path).map_err(|_| "QA session file unreadable")?,
+        )
+        .map_err(|_| "QA session file invalid")?;
+        if !tokens.valid() {
+            return Err("QA session file invalid".into());
+        }
+        let generation = {
+            let mut inner = self.inner.lock().await;
+            inner.generation += 1;
+            inner.status = Status {
+                phase: "verifying".into(),
+                message: "Loading lab session".into(),
+                account: None,
+                factors: Vec::new(),
+            };
+            inner.client = Some(client.clone());
+            inner.generation
+        };
+        let this = self.clone();
+        let task = tokio::spawn(async move {
+            if let Err(error) = this.apply(generation, client, tokens, None).await {
+                this.fail(generation, &error).await;
+                return;
+            }
+            this.maintain(generation).await;
+        });
+        self.inner.lock().await.task = Some(task);
+        Ok(())
     }
     pub async fn begin(&self) -> Result<String, String> {
         let (client, provider, domain) = AuthClient::configured()?;
