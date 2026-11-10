@@ -5,7 +5,7 @@
     if (!value) throw Error(`Missing remote-support control ${id}`);
     return value as T;
   }
-  type Status = {controller_only?:boolean; platform?: 'macos'|'windows'|'linux'; phase: string; message: string; host: number | null; session: string | null; consent: string | null; peer: number | null; requester: string | null; received: number; sharing: boolean; control: boolean; clipboard: boolean; files: boolean; input_access: boolean; code_required: boolean; support_code: string | null; pairing: {request_id:string; provider_name:string; customer_name:string} | null; pairing_message: string | null; unattended_enabled: boolean; unattended_pending: 'enabling' | 'disabling_after_enable' | 'disabling' | null; unattended_session: boolean};
+  type Status = {controller_only?:boolean; platform?: 'macos'|'windows'|'linux'; phase: string; message: string; host: number | null; session: string | null; consent: string | null; peer: number | null; requester: string | null; received: number; sharing: boolean; control: boolean; clipboard: boolean; files: boolean; input_access: boolean; code_required: boolean; support_code: string | null; online?: number[]; pairing: {request_id:string; provider_name:string; customer_name:string} | null; pairing_message: string | null; unattended_enabled: boolean; unattended_pending: 'enabling' | 'disabling_after_enable' | 'disabling' | null; unattended_session: boolean};
   type RecordingView = {phase: 'ready' | 'waiting_for_video' | 'recording' | 'saving' | 'saved' | 'saved_partial'} | {phase:'error'; message:string};
   type RemoteStatus = Status & {recording_permitted?:boolean; recording?:RecordingView; previous_recording?:RecordingView};
   type Source = {id: string; name: string; full_display: boolean};
@@ -182,7 +182,7 @@
     document.body.dataset.remotePlatform = current.platform ?? 'macos';
     const closing = stopping || (locallyStopped() && ['incoming','outgoing','deciding','negotiating','active','closing'].includes(current.phase));
     const displayPhase = closing ? 'closing' : current.phase;
-    document.dispatchEvent(new CustomEvent('mixel-remote-state',{detail:{phase:displayPhase,controllerOnly:!!current.controller_only,host:current.controller_only?null:current.host,session:!closing&&authenticated?current.session:null,consent:current.consent,files:!closing&&authenticated&&current.files,clipboard:!closing&&authenticated&&current.clipboard,sharing:current.sharing,control:current.control,stopping}}));
+    document.dispatchEvent(new CustomEvent('mixel-remote-state',{detail:{phase:displayPhase,controllerOnly:!!current.controller_only,host:current.controller_only?null:current.host,session:!closing&&authenticated?current.session:null,consent:current.consent,files:!closing&&authenticated&&current.files,clipboard:!closing&&authenticated&&current.clipboard,sharing:current.sharing,control:current.control,stopping,online:current.online??[]}}));
     status.textContent = connectionMessage(closing);
     status.dataset.phase=displayPhase;
     ownId.textContent = formatId(authenticated ? current.host : null);

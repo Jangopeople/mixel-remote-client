@@ -79,6 +79,8 @@ pub enum ClientMessage {
     Close { session: Uuid },
     Ice { session: Uuid },
     Restart { session: Uuid },
+    /// Which of these Remote IDs are online and reachable for the caller.
+    Presence { hosts: Vec<u32> },
 }
 #[derive(Clone, Deserialize, Serialize, Debug)]
 #[serde(
@@ -139,6 +141,9 @@ pub enum ServerMessage {
     },
     UnattendedStatus {
         enabled: bool,
+    },
+    Presence {
+        online: Vec<u32>,
     },
     Requested {
         session: Uuid,

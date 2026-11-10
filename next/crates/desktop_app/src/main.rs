@@ -807,6 +807,59 @@ async fn account_create_personal(
     }
     state.create_personal_space(name).await
 }
+fn version_parts(version: &str) -> Option<Vec<u64>> {
+    let core = version.split(['-', '+']).next()?;
+    let parts: Option<Vec<u64>> = core.split('.').map(|part| part.parse().ok()).collect();
+    parts.filter(|parts| (1..=4).contains(&parts.len()))
+}
+/// Newer published version of this app on store.mixel.ch, if any.
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[tauri::command]
+async fn update_check(window: tauri::WebviewWindow) -> Result<Option<String>, String> {
+    main_window(&window)?;
+    #[derive(serde::Deserialize)]
+    struct Row {
+        version: String,
+    }
+    let running = window.app_handle().package_info().version.to_string();
+    let (platform, variant) = if cfg!(target_os = "macos") {
+        ("macos", "")
+    } else if cfg!(target_os = "windows") {
+        ("windows", "managed")
+    } else {
+        ("linux", "managed")
+    };
+    let url = format!("https://store-api.mixel.ch/rest/v1/store_app_releases?select=version&app_slug=eq.mixel-remote&is_current=eq.true&platform=eq.{platform}&variant=eq.{variant}&limit=5");
+    let rows: Vec<Row> = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| "Update check unavailable")?
+        .get(url)
+        .send()
+        .await
+        .and_then(reqwest::Response::error_for_status)
+        .map_err(|_| "Update check unavailable")?
+        .json()
+        .await
+        .map_err(|_| "Update check unavailable")?;
+    let Some(current) = version_parts(&running) else {
+        return Ok(None);
+    };
+    Ok(rows
+        .into_iter()
+        .filter(|row| row.version.len() <= 40)
+        .filter_map(|row| version_parts(&row.version).map(|parts| (parts, row.version)))
+        .filter(|(parts, _)| *parts > current)
+        .max_by(|a, b| a.0.cmp(&b.0))
+        .map(|(_, version)| version))
+}
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[tauri::command]
+async fn open_update_page(window: tauri::WebviewWindow) -> Result<(), String> {
+    main_window(&window)?;
+    system_browser::open("https://store.mixel.ch/app/mixel-remote").await
+}
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 #[tauri::command]
 async fn open_remote_management(window: tauri::WebviewWindow) -> Result<(), String> {
@@ -1165,6 +1218,16 @@ async fn remote_unattended(
         ensure_fixture(&window)?;
     }
     state.configure_unattended(source, control).await
+}
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[tauri::command]
+async fn remote_presence(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, remote_session::RemoteSession>,
+    hosts: Vec<u32>,
+) -> Result<(), String> {
+    main_window(&window)?;
+    state.presence(hosts).await
 }
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 #[tauri::command]
@@ -1656,6 +1719,9 @@ fn main() {
             connect_support_id,
             remote_support_code,
             remote_pairing,
+            remote_presence,
+            update_check,
+            open_update_page,
             remote_unattended,
             remote_decide,
             remote_input,
@@ -1721,6 +1787,9 @@ fn main() {
             remote_request,
             remote_support_code,
             remote_pairing,
+            remote_presence,
+            update_check,
+            open_update_page,
             remote_unattended,
             remote_decide,
             remote_input,
@@ -1813,4 +1882,14 @@ fn main() {
         #[cfg(not(target_os = "macos"))]
         let _ = (app, event);
     });
+}
+
+#[cfg(test)]
+mod update_version_tests {
+    #[test]
+    fn compares_release_versions_numerically() {
+        assert!(super::version_parts("0.1.10") > super::version_parts("0.1.9"));
+        assert_eq!(super::version_parts("1.4.6-support.elevate.1"), Some(vec![1, 4, 6]));
+        assert_eq!(super::version_parts("abc"), None);
+    }
 }

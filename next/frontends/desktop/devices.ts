@@ -6,7 +6,7 @@
   type Device={device:string; connection_id:number; name:string; os:string};
   type Page={devices:Device[]; next:number|null};
   type Account={phase:string; account:{profile:string;organization:string|null;staff:boolean}|null};
-  type Remote={phase:string;host:number|null};
+  type Remote={phase:string;host:number|null;online?:number[]};
   const form=element<HTMLFormElement>('devices-search-form'), search=element<HTMLInputElement>('devices-search');
   const refresh=element<HTMLButtonElement>('devices-refresh'), previous=element<HTMLButtonElement>('devices-previous'), next=element<HTMLButtonElement>('devices-next');
   const submit=element<HTMLButtonElement>('devices-submit');
@@ -26,7 +26,11 @@
     list.replaceChildren();
     for (const device of entries) {
       const row=document.createElement('li'), identity=document.createElement('div'), name=document.createElement('strong'), detail=document.createElement('span'), id=document.createElement('code'), connect=document.createElement('button');
-      name.textContent=device.name;detail.textContent=device.os;identity.append(name,detail);
+      const live=(remote.online??[]).includes(device.connection_id);
+      const checked=['ready','active','incoming','outgoing'].includes(remote.phase);
+      const presence=document.createElement('span');presence.className='presence';presence.dataset.online=String(live);
+      presence.textContent=!checked?'':live?'Online':'Offline';
+      name.textContent=device.name;detail.textContent=device.os;identity.append(name,detail,presence);
       id.textContent=formatId(device.connection_id);connect.type='button';connect.textContent='Connect';
       connect.disabled=busy || !authenticated || remote.phase!=='ready' || remote.host===device.connection_id;
       connect.addEventListener('click',async()=>{
@@ -49,9 +53,15 @@
       if (!Array.isArray(page.devices) || page.devices.length>50 || page.devices.some(device=>typeof device.name!=='string' || typeof device.os!=='string' || !Number.isInteger(device.connection_id) || device.connection_id<100000000 || device.connection_id>999999999) || (page.next!==null && (!Number.isInteger(page.next) || page.next<100000000 || page.next>999999999))) throw Error('Invalid device directory response');
       entries=page.devices;nextCursor=page.next;index=wantedIndex;cursors[index]=cursor;
       status.textContent=entries.length?`Page ${index+1} · ${entries.length} enrolled devices. Make this computer available before connecting.`:'No enrolled devices match this search.';
+      checkPresence();
     }catch(error){if(version===request)status.textContent=String(error);}
     finally{if(version===request){busy=false;render();}}
   }
+  function checkPresence():void{
+    if(!authenticated || !entries.length || !['ready','active','incoming','outgoing'].includes(remote.phase))return;
+    void invoke('remote_presence',{hosts:entries.map(device=>device.connection_id)}).catch(()=>{});
+  }
+  window.setInterval(()=>{if(!document.hidden)checkPresence();},15000);
   function accountChanged(value:Account):void{
     const key=value.phase==='authenticated' && value.account?JSON.stringify(value.account):'';
     if (key===accountKey) return;
@@ -59,7 +69,7 @@
     if(authenticated)void load(null,0,true);else status.textContent='Sign in to view the devices available to your account.';
   }
   document.addEventListener('mixel-account-state',event=>{++accountVersion;accountChanged((event as CustomEvent<Account>).detail);});
-  document.addEventListener('mixel-remote-state',event=>{const state=(event as CustomEvent<Remote>).detail;++remoteVersion;if(state.phase!==remote.phase || state.host!==remote.host){remote=state;render();}});
+  document.addEventListener('mixel-remote-state',event=>{const state=(event as CustomEvent<Remote>).detail;++remoteVersion;const becameReady=state.phase==='ready'&&remote.phase!=='ready';if(state.phase!==remote.phase || state.host!==remote.host || JSON.stringify(state.online??[])!==JSON.stringify(remote.online??[])){remote=state;render();}if(becameReady)checkPresence();});
   form.addEventListener('submit',event=>{event.preventDefault();void load(null,0,true);});
   document.addEventListener('mixel-device-enrolled',()=>{if(!busy)void load(null,0,true);});
   refresh.addEventListener('click',()=>{void load(null,0,true);});

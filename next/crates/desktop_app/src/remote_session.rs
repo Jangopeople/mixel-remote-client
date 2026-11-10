@@ -61,6 +61,8 @@ pub struct Status {
     pub pairing_message: Option<String>,
     pub code_required: bool,
     pub support_code: Option<SupportCode>,
+    /// Remote IDs from the last presence check that are online for this account.
+    pub online: Vec<u32>,
     #[serde(skip)]
     code_expires_at: Option<std::time::Instant>,
 }
@@ -98,6 +100,7 @@ impl Default for Status {
             pairing_message: None,
             code_required: false,
             support_code: None,
+            online: Vec::new(),
             code_expires_at: None,
         }
     }
@@ -235,6 +238,7 @@ pub(crate) enum Command {
         enabled: bool,
     },
     Pairing(Option<Uuid>),
+    Presence(Vec<u32>),
     SupportCode {
         required: bool,
     },
@@ -824,6 +828,23 @@ impl RemoteSession {
         Ok(())
     }
 
+    /// Asks the connection service which of these Remote IDs are online for
+    /// this account. The answer arrives in `Status::online`.
+    pub async fn presence(&self, hosts: Vec<u32>) -> Result<(), String> {
+        if hosts.len() > 64 || hosts.iter().any(|id| !(100_000_000..=999_999_999).contains(id)) {
+            return Err("Invalid device list".into());
+        }
+        let inner = self.0.lock().await;
+        if !matches!(inner.status.phase.as_str(), "ready" | "active" | "incoming" | "outgoing") {
+            return Ok(());
+        }
+        inner
+            .commands
+            .as_ref()
+            .ok_or("Connect this device first")?
+            .try_send(Command::Presence(hosts))
+            .map_err(|_| "The connection service is busy".into())
+    }
     pub async fn pairing(&self, confirmation: Option<Uuid>) -> Result<(), String> {
         crate::service_config::require_host()?;
         let mut inner = self.0.lock().await;
@@ -1734,6 +1755,9 @@ async fn run(
                     Command::ConfigureUnattended{enabled}=>{
                         send(&mut socket,ClientMessage::ConfigureUnattended{enabled}).await?;
                     },
+                    Command::Presence(hosts)=>{
+                        send(&mut socket,ClientMessage::Presence{hosts}).await?;
+                    },
                     Command::Pairing(confirmation)=>{
                         let message=match confirmation {
                             Some(request)=>ClientMessage::ConfirmPairing{request},
@@ -1802,6 +1826,9 @@ async fn run(
                             if own_ticket.unattended_host_only() && !enabled {
                                 return Err("The broker refused unattended startup sharing".into());
                             }
+                        },
+                        ServerMessage::Presence{online}=>{
+                            state.change(generation,|status|{status.online=online;}).await;
                         },
                         ServerMessage::PairingStatus{pending,confirmed,failed}=>{
                             state.change(generation,|status|{

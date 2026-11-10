@@ -18,6 +18,7 @@ use uuid::Uuid;
 const MAX_PEERS: usize = 1000;
 const MAX_SESSIONS: usize = 1000;
 const MAX_PER_PEER: usize = 4;
+const MAX_PRESENCE: usize = 64;
 struct Peer {
     generation: Uuid,
     principal: Principal,
@@ -562,6 +563,31 @@ impl Registry {
                 );
                 Ok(())
             }
+            ClientMessage::Presence { hosts } => {
+                if hosts.len() > MAX_PRESENCE {
+                    return Err(ErrorCode::Invalid);
+                }
+                let requester = &self.peers[&from];
+                if requester.identity.is_none() {
+                    return Err(ErrorCode::Forbidden);
+                }
+                // Only peers this caller may request are reported, so presence
+                // never reveals devices outside the caller's own scope.
+                let mut online: Vec<u32> = hosts
+                    .into_iter()
+                    .filter(|host| {
+                        *host != from
+                            && self.peers.get(host).is_some_and(|target| {
+                                requester.can_request(target, false)
+                                    || (target.unattended_enabled && requester.can_request(target, true))
+                            })
+                    })
+                    .collect();
+                online.sort_unstable();
+                online.dedup();
+                self.send(from, ServerMessage::Presence { online });
+                Ok(())
+            }
             ClientMessage::Request { host }
             | ClientMessage::RequestWithCode { host, .. }
             | ClientMessage::RequestUnattended { host } => {
@@ -796,6 +822,54 @@ mod rotation_tests {
         .unwrap();
         registry.bind_identity(id, generation, ticket).unwrap();
         (generation, rx)
+    }
+    #[test]
+    fn presence_reports_only_online_peers_in_the_callers_scope() {
+        let mut registry = Registry::default();
+        let now = Instant::now();
+        let (controller, mut events) = peer(&mut registry, 123_456_789, 10);
+        let (_host, _) = peer(&mut registry, 234_567_890, 11);
+        let (tx, _other_rx) = mpsc::channel(64);
+        let (stop, _) = watch::channel(false);
+        registry
+            .register_with_id(
+                345_678_901,
+                Principal {
+                    user: Uuid::from_u128(20),
+                    tenant: Some(Uuid::from_u128(2)),
+                    staff: false,
+                    expires_at: 900,
+                },
+                tx,
+                stop,
+            )
+            .unwrap();
+        while events.try_recv().is_ok() {}
+        registry
+            .handle(
+                123_456_789,
+                controller,
+                ClientMessage::Presence {
+                    hosts: vec![234_567_890, 345_678_901, 456_789_012, 123_456_789],
+                },
+                now,
+            )
+            .unwrap();
+        let ServerMessage::Presence { online } = events.try_recv().unwrap() else {
+            panic!("missing presence");
+        };
+        assert_eq!(online, vec![234_567_890]);
+        assert_eq!(
+            registry.handle(
+                123_456_789,
+                controller,
+                ClientMessage::Presence {
+                    hosts: (100_000_000..100_000_065).collect(),
+                },
+                now,
+            ),
+            Err(ErrorCode::Invalid)
+        );
     }
     #[test]
     fn one_time_password_is_bound_to_one_host_and_expires_at_its_deadline() {

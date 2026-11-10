@@ -165,6 +165,17 @@ interface Window {
     const entered = code.value; code.value = '';
     void accountAction('account_verify', {factor: factor.value, code: entered});
   });
+  const updateNotice = element<HTMLButtonElement>('update-notice');
+  async function checkUpdate(): Promise<void> {
+    try {
+      const version = await invoke<string | null>('update_check');
+      updateNotice.hidden = !version;
+      if (version) updateNotice.textContent = `Mixel Remote ${version} is available · Download`;
+    } catch { /* offline: keep the current notice */ }
+  }
+  updateNotice.addEventListener('click', () => { void invoke('open_update_page').catch(() => {}); });
+  void checkUpdate();
+  window.setInterval(() => { void checkUpdate(); }, 6 * 3600 * 1000);
   void readAccount();
   window.setInterval(() => { void readAccount(); }, 1000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) void readAccount(); });
