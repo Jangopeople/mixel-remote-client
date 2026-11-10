@@ -3,13 +3,95 @@
 switch, the helper that exists after Windows consent is accepted, and the time a
 person needs to answer the consent prompt no longer counts against the helper.
 
-Applies to the fully patched 1.4.6 support tree (after patch-support-input-lifecycle.py).
-Usage: patch-support-elevation.py <rustdesk-root>
+Applies to the fully patched 1.4.6 support tree, after every other support layer.
+Usage: patch-support-elevation.py [--restore [--guarded]] [--check] <rustdesk-root>
+  --restore  take the layer out again (exact inverse; a tree without it is left alone),
+             so the earlier layers see their own output on a repeated branding pass
+  --guarded  with --restore: first prove on a private copy that the earlier owners'
+             refusal gates accept the tree without this layer; a refusal there is
+             passed on unchanged and nothing is written
+  --check    validate only, write nothing
+The layer is all or nothing: a tree that carries only part of it is refused.
 """
 from __future__ import annotations
 
+import contextlib
+import shutil
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+# The same read-only gates apply-branding runs before its first write.
+GATES = (("patch-support-file-dialog-lifecycle.py", "--check"),
+         ("receiver_input_integration_projection.py", "--check-priors"))
+
+
+def _ignored(root: Path):
+    def ignored(directory: str, names: list[str]) -> set[str]:
+        relative = Path(directory).relative_to(root).as_posix()
+        result = {name for name in names if name.casefold() == "worktrees"}
+        if relative == ".":
+            result.update(set(names) & {"build", "target", ".dart_tool", "__pycache__"})
+        elif relative == "flutter":
+            result.update(set(names) & {"build", ".dart_tool"})
+        elif relative in ("flutter/macos/Flutter", "flutter/windows/flutter", "flutter/linux/flutter"):
+            result.update(set(names) & {"ephemeral"})
+        return result
+    return ignored
+
+
+def _invoke(*arguments: str) -> subprocess.CompletedProcess:
+    return subprocess.run([sys.executable, str(Path(__file__).resolve()), *arguments],
+                          capture_output=True, text=True, encoding="utf-8")
+
+
+def is_current(root) -> bool:
+    """True when the complete layer is on this tree; a partial layer is an error."""
+    root = Path(root)
+    names = list(dict.fromkeys(name for name, _, _ in CHANGES))
+    if not all((root / name).is_file() for name in names):
+        return False
+    texts = {name: (root / name).read_bytes().decode("utf-8").replace("\r\n", "\n") for name in names}
+    present = [new in texts[name] for name, _, new in CHANGES]
+    if any(present) and not all(present):
+        raise ValueError("Changed, mixed or partial elevation layer")
+    return all(present)
+
+
+def restore_in_place(root, guarded: bool = False) -> None:
+    result = _invoke("--restore", *(("--guarded",) if guarded else ()), str(root))
+    if result.returncode:
+        raise ValueError("Elevation layer inverse refused: " + (result.stdout + result.stderr)[-2000:])
+
+
+@contextlib.contextmanager
+def previous(root):
+    """A private copy of the tree without this layer; the caller's tree is untouched."""
+    root = Path(root).resolve()
+    with tempfile.TemporaryDirectory(prefix="mixel-elevation-prior-") as temporary:
+        stage = Path(temporary).resolve() / "source"
+        shutil.copytree(root, stage, symlinks=True, ignore=_ignored(root))
+        restore_in_place(stage)
+        yield stage
+
+
+def gates_refuse(root: Path) -> int:
+    """Run the prior owners' gates against a private copy without this layer."""
+    try:
+        with previous(root) as stage:
+            for script, flag in GATES:
+                gate = subprocess.run([sys.executable, str(HERE / script), "--root", str(stage), flag],
+                                      capture_output=True, text=True, encoding="utf-8")
+                if gate.returncode:
+                    sys.stdout.write(gate.stdout); sys.stderr.write(gate.stderr)
+                    return gate.returncode
+    except ValueError as error:
+        print(error)
+        return 1
+    return 0
+
 
 INPUT = "src/server/mixel_receiver_input.rs"
 WINDOWS = "src/server/mixel_receiver_input_windows.rs"
@@ -295,32 +377,63 @@ CHANGES: list[tuple[str, str, str]] = [
 
 
 def main() -> int:
-    if len(sys.argv) != 2:
+    arguments = sys.argv[1:]
+    restore = "--restore" in arguments
+    check = "--check" in arguments
+    guarded = "--guarded" in arguments
+    roots = [value for value in arguments if not value.startswith("--")]
+    if (len(roots) != 1 or (guarded and not restore)
+            or any(value not in ("--restore", "--check", "--guarded") for value in arguments if value.startswith("--"))):
         print(__doc__)
         return 2
-    root = Path(sys.argv[1])
+    root = Path(roots[0])
     texts: dict[str, str] = {}
     crlf: dict[str, bool] = {}
+    names = list(dict.fromkeys(name for name, _, _ in CHANGES))
+    if restore and not all((root / name).is_file() for name in names):
+        print("elevation layer not present")  # a fresh upstream checkout has no receiver files yet
+        return 0
+    for name in names:
+        raw = (root / name).read_bytes().decode("utf-8")
+        crlf[name] = "\r\n" in raw
+        texts[name] = raw.replace("\r\n", "\n")
+    present = [new in texts[name] for name, _, new in CHANGES]
+    if any(present) and not all(present):
+        missing = [(name, new[:60]) for (name, _, new), found in zip(CHANGES, present) if not found]
+        print(f"REFUSED: partial elevation layer, missing {missing[0]!r}")
+        return 1
+    applied = all(present)
     changed: set[str] = set()
-    for name, old, new in CHANGES:
-        if name not in texts:
-            raw = (root / name).read_bytes().decode("utf-8")
-            crlf[name] = "\r\n" in raw
-            texts[name] = raw.replace("\r\n", "\n")
-        text = texts[name]
-        if new in text:
-            continue  # already applied
-        if text.count(old) != 1:
-            print(f"REFUSED {name}: expected exactly one match, found {text.count(old)}: {old[:70]!r}")
-            return 1
-        texts[name] = text.replace(old, new)
-        changed.add(name)
+    if restore:
+        if not applied:
+            print("elevation layer not present")
+            return 0
+        for name, old, new in reversed(CHANGES):
+            if texts[name].count(new) != 1:
+                print(f"REFUSED {name}: expected exactly one applied block: {new[:70]!r}")
+                return 1
+            texts[name] = texts[name].replace(new, old)
+            changed.add(name)
+        if guarded and not check:
+            refused = gates_refuse(root)
+            if refused:
+                return refused
+    elif not applied:
+        for name, old, new in CHANGES:
+            if texts[name].count(old) != 1:
+                print(f"REFUSED {name}: expected exactly one match, found {texts[name].count(old)}: {old[:70]!r}")
+                return 1
+            texts[name] = texts[name].replace(old, new)
+            changed.add(name)
+    if check:
+        print(f"check ok: {'restore' if restore else 'apply'} would write {len(changed)} files")
+        return 0
     for name in sorted(changed):
         text = texts[name].replace("\n", "\r\n") if crlf[name] else texts[name]
         (root / name).write_bytes(text.encode("utf-8"))
-        print(f"patched {name}")
+        print(f"{'restored' if restore else 'patched'} {name}")
     if not changed:
-        print("already applied")
+        print("already applied" if not restore else "nothing to restore")
     return 0
 
 

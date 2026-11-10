@@ -1,8 +1,8 @@
 # Quick Support elevation ("Accept and elevate", "Request elevation")
 
-Status 2026-11-10: fixed in the Windows core by `scripts/patch-support-elevation.py`; signed test
-release `1.4.6-support.elevate.1` (see `mixel-craft/releases/mixel-remote-qs-windows-1.4.6-elevate.1/`).
-`1.4.6-support.noelevate.1` on store.mixel.ch still hides the buttons until the new build is published.
+Status 2026-11-10: fixed in the Windows core by `scripts/patch-support-elevation.py`; signed release
+`1.4.6-support.elevate.1` is the current Windows Support file on store.mixel.ch
+(see `mixel-craft/releases/mixel-remote-qs-windows-1.4.6-elevate.1/`).
 
 ## Why it never worked
 1. After Windows consent the helper is a successor process running as SYSTEM (launched process, then
@@ -29,11 +29,19 @@ release `1.4.6-support.elevate.1` (see `mixel-craft/releases/mixel-remote-qs-win
   during a switch is refused before it can reset the shared memory.
 - `connection.rs`: calls `rebind_tick`. `core_main.rs`: exit code 1 when consent fails.
 
-## Not wired into the pipeline yet
-`apply-branding.sh` and the Windows build driver do not call `patch-support-elevation.py`; their
-source inventories and receipts would have to be regenerated. Until then apply it by hand to the
-prepared tree (`python3 scripts/patch-support-elevation.py <rustdesk-root>`, idempotent, refuses on any
-mismatch). `scripts/patch-support-no-elevate.py` is only needed for builds without this patch.
+## In the pipeline
+`apply-branding.sh` takes the layer out first (`--restore --check`, then `--restore --guarded`) and
+applies it last, after every receiver layer. `--guarded` proves on a private copy that the earlier
+owners' refusal gates accept the tree before anything is written, so a later refusal still leaves
+the source untouched. `receiver_input_integration_projection.py` sees through the two invocation
+blocks (`elevation_view`) and its private-copy helpers step under the layer first.
+Checked on 2026-11-10: pipeline from a clean 1.4.6 checkout and on a repeated pass (identical
+output), `test-support-elevation.py`, `test-branding.py` (33 checks, with `RDREPO` set),
+`test-input-lifecycle-integration-projection.py`, `test-receiver-input-integration.py`,
+`test-workflow-logical-views.py`, `test-support-receiver-input.py`, `test-release-pipeline.py`.
+Not run here: the native Windows build driver (`scripts/local/build-windows.py`, needs win-build);
+its next run will include the layer through `apply-branding.sh` and record new source receipts.
+`scripts/patch-support-no-elevate.py` is no longer needed and is not called.
 
 ## Known limits
 - Privacy mode and "block user input" are switched off by a helper switch and must be turned on again.
