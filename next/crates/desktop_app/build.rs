@@ -31,6 +31,8 @@ fn main() {
     );
     for name in [
         "main.ts",
+        "i18n.ts",
+        "i18n-strings.ts",
         "capture.ts",
         "capture.html",
         "capture-panel.html",

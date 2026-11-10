@@ -83,7 +83,8 @@ interface Window {
     browserLink.hidden = !browserUrl.value;
     signOut.disabled = accountBusy || !account || ['signed_out', 'error'].includes(phase!);
     signOut.textContent = phase === 'authenticated' ? 'Sign out' : 'Cancel sign-in';
-    (signIn.parentElement as HTMLElement).dataset.phase = phase ?? '';
+    const actionRow = signIn.parentElement as HTMLElement | null;
+    if (actionRow?.dataset) actionRow.dataset.phase = phase ?? '';
     mfa.hidden = phase !== 'mfa_required';
     profileSetup.hidden = phase !== 'profile_setup';
     deviceSettings.hidden = phase !== 'authenticated' || !(account?.account?.personal || account?.account?.staff);
@@ -176,6 +177,12 @@ interface Window {
   updateNotice.addEventListener('click', () => { void invoke('open_update_page').catch(() => {}); });
   void checkUpdate();
   window.setInterval(() => { void checkUpdate(); }, 6 * 3600 * 1000);
+  const languageChoice = document.getElementById('language-choice') as HTMLSelectElement | null;
+  if (languageChoice) {
+    const language = window as unknown as {mixelLanguageChoice?: string; mixelSetLanguage?: (value: string) => void};
+    languageChoice.value = language.mixelLanguageChoice ?? 'auto';
+    languageChoice.addEventListener('change', () => language.mixelSetLanguage?.(languageChoice.value));
+  }
   void readAccount();
   window.setInterval(() => { void readAccount(); }, 1000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) void readAccount(); });
