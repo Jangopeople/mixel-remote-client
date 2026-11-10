@@ -164,6 +164,22 @@ use native_os_capture::windows_capture::{
 };
 #[cfg(target_os = "linux")]
 use native_os_capture::x11_capture::{Display as PlatformDisplay, X11Capture as PlatformCapture};
+/// Lab builds only (feature `qa-session`): append a capture event to
+/// %TEMP%\mixel-capture.log. Release builds compile this to nothing.
+#[allow(unused_variables)]
+fn lab_capture_log(message: &str) {
+    #[cfg(feature = "qa-session")]
+    {
+        use std::io::Write;
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(std::env::temp_dir().join("mixel-capture.log"))
+        {
+            let _ = writeln!(file, "{:?} {message}", std::time::SystemTime::now());
+        }
+    }
+}
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 struct Worker {
     stop: Arc<std::sync::atomic::AtomicBool>,
@@ -182,7 +198,7 @@ impl Worker {
         let thread = std::thread::Builder::new()
             .name("mixel-display-capture".into())
             .spawn(move || {
-                let mut capture = match PlatformCapture::open(&display) {
+                let capture = match PlatformCapture::open(&display) {
                     Ok(capture) => {
                         let _ = ready.send(Ok(()));
                         capture
@@ -194,10 +210,32 @@ impl Worker {
                         return Err(text);
                     }
                 };
+                let mut capture = Some(capture);
                 while !cancelled.load(Ordering::Acquire) {
-                    match capture.next_frame(std::time::Duration::from_millis(100)) {
+                    let Some(active) = capture.as_mut() else {
+                        // Windows replaced the user's desktop (lock screen or a
+                        // secure prompt). The previous duplication is released;
+                        // reattach to the same display once it is back.
+                        std::thread::sleep(std::time::Duration::from_millis(500));
+                        #[cfg(target_os = "windows")]
+                        native_os_capture::windows_capture::attach_input_desktop();
+                        match PlatformCapture::open(&display) {
+                            Ok(next) => {
+                                lab_capture_log("desktop reattached");
+                                capture = Some(next);
+                            }
+                            Err(error) => lab_capture_log(&format!("reopen failed: {error}")),
+                        }
+                        continue;
+                    };
+                    match active.next_frame(std::time::Duration::from_millis(100)) {
                         Ok(Some(frame)) => delivery.publish(frame),
                         Ok(None) => {}
+                        #[cfg(target_os = "windows")]
+                        Err(native_os_capture::stream::CaptureError::Target) => {
+                            lab_capture_log("desktop lost; waiting for it to return");
+                            capture = None;
+                        }
                         Err(error) => {
                             let text = error.to_string();
                             delivery.close(error);

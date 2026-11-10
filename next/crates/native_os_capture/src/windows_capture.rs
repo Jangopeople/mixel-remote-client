@@ -17,7 +17,29 @@ use windows::{
     core::Interface,
 };
 use zeroize::Zeroizing;
+/// Attach the calling thread to the desktop that currently receives input,
+/// so a new duplication follows the user's desktop after a lock or a secure
+/// prompt. Returns false when that desktop is not accessible (still secure).
+pub fn attach_input_desktop() -> bool {
+    use windows::Win32::System::StationsAndDesktops::{
+        DESKTOP_ACCESS_FLAGS, DESKTOP_CONTROL_FLAGS, OpenInputDesktop, SetThreadDesktop,
+    };
+    // SAFETY: the handle is only passed to SetThreadDesktop; it is kept open
+    // for the thread's lifetime as SetThreadDesktop requires.
+    unsafe {
+        match OpenInputDesktop(DESKTOP_CONTROL_FLAGS(0), false, DESKTOP_ACCESS_FLAGS(0x0001 | 0x0100)) {
+            Ok(desktop) => SetThreadDesktop(desktop).is_ok(),
+            Err(_) => false,
+        }
+    }
+}
 fn native(error: windows::core::Error) -> CaptureError {
+    // Desktop switches (lock screen, secure prompts) can surface from any
+    // duplication call, not only AcquireNextFrame. Report them as a target
+    // change so the owner can wait for the same display to come back.
+    if error.code() == DXGI_ERROR_ACCESS_LOST {
+        return CaptureError::Target;
+    }
     CaptureError::Native(format!("Windows desktop capture failed ({})", error.code()))
 }
 #[derive(Clone, Debug)]

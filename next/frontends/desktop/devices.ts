@@ -29,7 +29,8 @@
       const live=(remote.online??[]).includes(device.connection_id);
       const checked=['ready','active','incoming','outgoing'].includes(remote.phase);
       const presence=document.createElement('span');presence.className='presence';presence.dataset.online=String(live);
-      presence.textContent=!checked?'':live?'Online':'Offline';
+      const self=remote.host===device.connection_id;presence.dataset.online=String(live||self);
+      presence.textContent=self?'This computer':!checked?'':live?'Online':'Offline';
       name.textContent=device.name;detail.textContent=device.os;identity.append(name,detail,presence);
       id.textContent=formatId(device.connection_id);connect.type='button';connect.textContent='Connect';
       connect.disabled=busy || !authenticated || remote.phase!=='ready' || remote.host===device.connection_id;
