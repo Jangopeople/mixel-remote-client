@@ -124,7 +124,7 @@ impl UnattendedSource {
 #[derive(Clone)]
 enum RegistrationAuth {
     Interactive(AccountAuth),
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     Startup {
         enrolled: Arc<EnrolledPrincipal>,
         source: UnattendedSource,
@@ -138,7 +138,7 @@ impl RegistrationAuth {
     ) -> Result<Option<Credential>, String> {
         match self {
             Self::Interactive(auth) => auth.credential(cancel).await.map(Some),
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             Self::Startup { .. } => Ok(None),
         }
     }
@@ -152,7 +152,7 @@ impl RegistrationAuth {
                 .as_ref()
                 .map(|credential| &credential.principal)
                 .ok_or_else(|| "Interactive account authorization is unavailable".into()),
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             Self::Startup { enrolled, .. } => Ok(&enrolled.principal),
         }
     }
@@ -162,7 +162,7 @@ impl RegistrationAuth {
         credential: &Option<Credential>,
         identity: &IdentityState,
     ) -> Result<EnrolledPrincipal, String> {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         if let Self::Startup { enrolled, .. } = self {
             return Ok(enrolled.as_ref().clone());
         }
@@ -197,9 +197,9 @@ async fn registration_ticket(
         Some(credential) => crate::device_tickets::issue(credential, enrolled, identity)
             .await
             .map_err(Into::into),
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         None => crate::device_tickets::issue_startup(enrolled, identity).await,
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         None => Err("Interactive account authorization is unavailable".into()),
     }
 }
@@ -576,7 +576,7 @@ impl RemoteSession {
             .await
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     pub async fn connect_startup(
         &self,
         enrolled: EnrolledPrincipal,
@@ -585,8 +585,14 @@ impl RemoteSession {
         identity: Arc<IdentityState>,
     ) -> Result<(), String> {
         crate::service_config::require_host()?;
+        #[cfg(target_os = "macos")]
         let source = UnattendedSource {
             source: format!("display:{display}"),
+            control,
+        };
+        #[cfg(target_os = "windows")]
+        let source = UnattendedSource {
+            source: crate::windows_signin_host::primary_display_source(display)?,
             control,
         };
         self.connect_registration(
@@ -1664,10 +1670,10 @@ async fn run(
         if !matches!(ready,Some(ServerMessage::Ready{host,protocol:core_protocol::PROTOCOL_VERSION}) if host==enrolled.connection_id) {return Err("The connection service did not verify this device ID".into());}
         ready_at=Some(std::time::Instant::now());
         match &auth {
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             RegistrationAuth::Startup { source, .. } => {
                 if !source.capture_allowed() {
-                    return Err("Startup host requires the configured macOS sharing permissions".into());
+                    return Err("The sign-in screen host is missing the required system permissions".into());
                 }
                 state.change(generation, |status| {
                     status.phase = "ready".into();

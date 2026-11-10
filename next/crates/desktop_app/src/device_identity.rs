@@ -164,6 +164,30 @@ fn load_or_create(create: bool) -> Result<SigningKey, String> {
 }
 #[cfg(target_os = "windows")]
 pub(crate) use windows_store::{location as windows_store_location, protect as windows_protect, unprotect as windows_unprotect};
+#[cfg(target_os = "windows")]
+pub(crate) use windows_store::{machine_protect as windows_machine_protect, machine_unprotect as windows_machine_unprotect};
+#[cfg(target_os = "windows")]
+impl IdentityState {
+    /// The computer-wide identity of the Windows sign-in screen host.
+    pub fn machine(create: bool) -> Result<Self, String> {
+        let path = crate::windows_signin_host::machine_identity_path();
+        let key = match std::fs::read(&path) {
+            Ok(sealed) => decode(&windows_machine_unprotect(&sealed)?)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound && create => {
+                let key = SigningKey::generate(&mut rand_core::OsRng);
+                let seed = Zeroizing::new(key.to_bytes());
+                let mut record = Zeroizing::new(Vec::with_capacity(MAGIC.len() + seed.len()));
+                record.extend_from_slice(MAGIC);
+                record.extend_from_slice(seed.as_ref());
+                let sealed = windows_machine_protect(&record)?;
+                crate::windows_signin_host::write_private(&path, &sealed)?;
+                key
+            }
+            Err(_) => return Err("The sign-in screen identity is not installed".into()),
+        };
+        Ok(Self(Mutex::new(Some(key))))
+    }
+}
 #[cfg(target_os = "linux")]
 #[allow(unsafe_code)]
 #[path = "linux_identity_store.rs"]
@@ -257,7 +281,7 @@ impl IdentityState {
         )
         .map_err(|error| error.to_string())
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     pub fn delegate_startup(
         &self,
         challenge: core_protocol::device_login::DeviceLoginChallenge,

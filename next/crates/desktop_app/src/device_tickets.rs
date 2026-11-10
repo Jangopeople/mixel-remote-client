@@ -21,7 +21,7 @@ pub async fn issue(
         .map_err(|error| error.message)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub async fn issue_startup(
     enrolled: &EnrolledPrincipal,
     identity: &IdentityState,
@@ -82,11 +82,11 @@ async fn issue_scoped(
             .bearer_auth(credential.token.as_str())
             .json(&proof)
     } else {
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         return Err("Interactive account authorization is unavailable".into());
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         let proof = identity.delegate_startup(challenge.clone(), now)?;
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         http.post(endpoint("/v1/startup-host-ticket")?)
             .json(&serde_json::json!({"proof":proof,"public_key":key.to_bytes()}))
     };

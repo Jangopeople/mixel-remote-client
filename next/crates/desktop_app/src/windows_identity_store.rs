@@ -14,7 +14,8 @@ use windows::{
     Win32::{
         Foundation::{HLOCAL, LocalFree},
         Security::Cryptography::{
-            CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptProtectData, CryptUnprotectData,
+            CRYPT_INTEGER_BLOB, CRYPTPROTECT_LOCAL_MACHINE, CRYPTPROTECT_UI_FORBIDDEN,
+            CryptProtectData, CryptUnprotectData,
         },
         System::Com::CoTaskMemFree,
         UI::Shell::{FOLDERID_LocalAppData, KF_FLAG_DEFAULT, SHGetKnownFolderPath},
@@ -37,6 +38,13 @@ impl Drop for Blob {
     }
 }
 fn crypt(bytes: &[u8], protect: bool) -> Result<Zeroizing<Vec<u8>>, String> {
+    crypt_with(bytes, protect, CRYPTPROTECT_UI_FORBIDDEN)
+}
+fn crypt_with(
+    bytes: &[u8],
+    protect: bool,
+    flags: u32,
+) -> Result<Zeroizing<Vec<u8>>, String> {
     if bytes.is_empty() || bytes.len() > MAX_RECORD {
         return Err("Invalid encrypted identity size".into());
     }
@@ -55,7 +63,7 @@ fn crypt(bytes: &[u8], protect: bool) -> Result<Zeroizing<Vec<u8>>, String> {
                 None,
                 None,
                 None,
-                CRYPTPROTECT_UI_FORBIDDEN,
+                flags,
                 &mut output,
             )
         } else {
@@ -65,7 +73,7 @@ fn crypt(bytes: &[u8], protect: bool) -> Result<Zeroizing<Vec<u8>>, String> {
                 None,
                 None,
                 None,
-                CRYPTPROTECT_UI_FORBIDDEN,
+                flags,
                 &mut output,
             )
         }
@@ -183,4 +191,13 @@ pub(crate) fn protect(bytes: &[u8]) -> Result<Zeroizing<Vec<u8>>, String> {
 /// Reverse of [`protect`] for the same Windows user.
 pub(crate) fn unprotect(bytes: &[u8]) -> Result<Zeroizing<Vec<u8>>, String> {
     crypt(bytes, false)
+}
+
+/// Machine-scope DPAPI for the sign-in screen host (readable by SYSTEM; the
+/// file itself is restricted to SYSTEM and Administrators).
+pub(crate) fn machine_protect(bytes: &[u8]) -> Result<Zeroizing<Vec<u8>>, String> {
+    crypt_with(bytes, true, CRYPTPROTECT_UI_FORBIDDEN | CRYPTPROTECT_LOCAL_MACHINE)
+}
+pub(crate) fn machine_unprotect(bytes: &[u8]) -> Result<Zeroizing<Vec<u8>>, String> {
+    crypt_with(bytes, false, CRYPTPROTECT_UI_FORBIDDEN | CRYPTPROTECT_LOCAL_MACHINE)
 }

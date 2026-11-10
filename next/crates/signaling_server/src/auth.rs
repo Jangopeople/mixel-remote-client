@@ -270,6 +270,30 @@ impl IsmAuth {
         }
         Ok(device)
     }
+    /// The ISM organization (tenant) of a device a team member may enrol.
+    pub async fn device_tenant(&self, token: &str, device: Uuid) -> Result<Uuid, AuthError> {
+        if device.is_nil() || !self.authenticate_scope(token, false).await?.staff {
+            return Err(AuthError);
+        }
+        let response = self
+            .client
+            .post(
+                self.base
+                    .join("/rest/v1/rpc/remote_device_tenant")
+                    .map_err(|_| AuthError)?,
+            )
+            .header("apikey", &self.api_key)
+            .bearer_auth(token)
+            .json(&serde_json::json!({ "target": device }))
+            .send()
+            .await
+            .map_err(|_| AuthError)?;
+        let tenant: Uuid = Self::decode_response(response).await?;
+        if tenant.is_nil() {
+            return Err(AuthError);
+        }
+        Ok(tenant)
+    }
     /// The active enrollment that holds this computer's key, if any.
     pub async fn enrollment_of_key(
         &self,

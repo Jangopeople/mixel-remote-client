@@ -154,6 +154,52 @@
     }catch(error){autostartBox.checked=!enabled;startupStatus.textContent=String(error);}
   });
   document.addEventListener('mixel-account-state',event=>{const phase=(event as CustomEvent<Account>).detail.phase;const next=phase==='authenticated';if(next!==signedIn){signedIn=next;void refreshStartup();}});
+  const signinPanel=element<HTMLDivElement>('signin-panel'), signinCurrent=element<HTMLParagraphElement>('signin-current'), signinSetup=element<HTMLDivElement>('signin-setup'), signinCompany=element<HTMLSelectElement>('signin-company'), signinName=element<HTMLInputElement>('signin-name'), signinEnable=element<HTMLButtonElement>('signin-enable'), signinDisable=element<HTMLButtonElement>('signin-disable'), signinStatus=element<HTMLParagraphElement>('signin-status');
+  type SignIn={supported:boolean;connection_id:number|null;name:string|null};
+  let signinBusy=false, signinLoaded=false, signinInstalled=false;
+  function renderSignin():void{
+    signinSetup.hidden=signinInstalled;signinDisable.hidden=!signinInstalled;
+    signinCompany.disabled=signinName.disabled=signinBusy;
+    signinEnable.disabled=signinBusy || !signinCompany.value || !signinName.value.trim();
+    signinDisable.disabled=signinBusy;
+  }
+  async function refreshSignin():Promise<void>{
+    if(!staff){signinPanel.hidden=true;return;}
+    try{
+      const value=await invoke<SignIn>('signin_screen_status');
+      signinPanel.hidden=!value.supported || !staff;
+      if(signinPanel.hidden)return;
+      signinInstalled=value.connection_id!==null;
+      signinCurrent.hidden=!signinInstalled;
+      if(signinInstalled)signinCurrent.textContent=`Sign-in screen access is on for ${value.name ?? 'this computer'} · Remote ID ${formatId(value.connection_id ?? 0)}. A technician with unattended access can pair and connect to this ID.`;
+      if(!signinLoaded && !signinInstalled){
+        const list=await invoke<Company[]>('enrollment_companies');
+        signinCompany.replaceChildren();
+        for(const item of list){const option=document.createElement('option');option.value=item.client_id;option.textContent=item.client_name;signinCompany.appendChild(option);}
+        signinLoaded=true;
+        if(!list.length)signinStatus.textContent='No company is linked for Remote devices yet. Link the company in Mixel admin first.';
+      }
+    }catch{signinPanel.hidden=true;}
+    finally{renderSignin();}
+  }
+  signinName.addEventListener('input',renderSignin);signinCompany.addEventListener('change',renderSignin);
+  signinEnable.addEventListener('click',async()=>{
+    if(signinBusy)return;signinBusy=true;renderSignin();
+    signinStatus.textContent='Waiting for administrator approval on this computer…';
+    try{
+      const id=await invoke<number>('signin_screen_enable',{company:signinCompany.value,name:signinName.value.trim()});
+      signinStatus.textContent=`Sign-in screen access is on. Remote ID ${formatId(id)}.`;
+    }catch(error){signinStatus.textContent=String(error);}
+    finally{signinBusy=false;await refreshSignin();}
+  });
+  signinDisable.addEventListener('click',async()=>{
+    if(signinBusy)return;signinBusy=true;renderSignin();
+    signinStatus.textContent='Waiting for administrator approval on this computer…';
+    try{await invoke('signin_screen_disable');signinStatus.textContent='Sign-in screen access is off.';}
+    catch(error){signinStatus.textContent=String(error);}
+    finally{signinBusy=false;signinLoaded=false;await refreshSignin();}
+  });
+  document.addEventListener('mixel-account-state',()=>{queueMicrotask(()=>{void refreshSignin();});});
   render();const av=accountVersion,rv=remoteVersion;
   void invoke<Account>('account_status').then(value=>{if(accountVersion===av)account(value);}).catch(()=>{});
   void invoke<{phase:string}>('remote_status').then(value=>{if(remoteVersion===rv){offline=['offline','error'].includes(value.phase);render();}}).catch(()=>{});

@@ -36,6 +36,8 @@ mod remote_recovery;
 mod remote_session;
 #[cfg(target_os = "macos")]
 mod macos_startup_host;
+#[cfg(target_os = "windows")]
+mod windows_signin_host;
 #[cfg(target_os = "macos")]
 mod macos_support;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
@@ -805,6 +807,109 @@ async fn startup_settings(
         launched_at_startup: autostart::launched_at_startup(),
         restored: state.restored().await,
     })
+}
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[derive(serde::Serialize)]
+struct SignInScreen {
+    supported: bool,
+    connection_id: Option<u32>,
+    name: Option<String>,
+}
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[tauri::command]
+async fn signin_screen_status(window: tauri::WebviewWindow) -> Result<SignInScreen, String> {
+    main_window(&window)?;
+    #[cfg(target_os = "windows")]
+    {
+        let status = windows_signin_host::public_status();
+        Ok(SignInScreen {
+            supported: true,
+            connection_id: status.as_ref().map(|status| status.connection_id),
+            name: status.map(|status| status.name),
+        })
+    }
+    #[cfg(not(target_os = "windows"))]
+    Ok(SignInScreen { supported: false, connection_id: None, name: None })
+}
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[tauri::command]
+async fn signin_screen_enable(
+    window: tauri::WebviewWindow,
+    auth: tauri::State<'_, account_auth::AccountAuth>,
+    company: uuid::Uuid,
+    name: String,
+) -> Result<u32, String> {
+    main_window(&window)?;
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (auth, company, name);
+        Err("Sign-in screen access is available on Windows".into())
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let credential = auth.credential(Some(&cancelled)).await?;
+        if !credential.principal.staff {
+            return Err("Sign-in screen access requires an MFA-verified Mixel team account".into());
+        }
+        let name = name.trim().to_owned();
+        if name.is_empty() || name.chars().count() > 60 || name.chars().any(char::is_control) {
+            return Err("Enter a computer name of up to 60 characters".into());
+        }
+        // Step 1 (administrator): create the computer-wide key.
+        tauri::async_runtime::spawn_blocking(|| windows_signin_host::run_elevated("--signin-provision"))
+            .await
+            .map_err(|_| "Administrator step failed")??;
+        let key = windows_signin_host::provisioned_public_key()?;
+        let ism = &credential.ism;
+        let token = &credential.token;
+        let device = match ism.enrollment_of_key(token, &key).await.map_err(|_| "The enrolment status is unavailable")? {
+            Some(current) => current.device,
+            None => {
+                let device = ism
+                    .add_device(token, company, &format!("{name} (sign-in screen)"), "windows")
+                    .await
+                    .map_err(|_| "The sign-in screen record could not be added for this company")?;
+                ism.enroll(token, device, key, &cancelled)
+                    .await
+                    .map_err(|_| "The sign-in screen could not be enrolled")?;
+                device
+            }
+        };
+        let enrolled = ism.authenticate_device(token, device).await.map_err(|_| "The sign-in screen enrolment could not be confirmed")?;
+        if enrolled.public_key != key {
+            return Err("The sign-in screen enrolment does not match this computer".into());
+        }
+        let tenant = ism.device_tenant(token, device).await.map_err(|_| "The company of this computer is unavailable")?;
+        let settings = windows_signin_host::Settings {
+            version: 1,
+            device,
+            profile: enrolled.principal.user,
+            tenant,
+            connection_id: enrolled.connection_id,
+            generation: enrolled.generation,
+            control: true,
+        };
+        let payload = serde_json::to_vec(&serde_json::json!({ "settings": settings, "name": name }))
+            .map_err(|_| "Cannot prepare the sign-in screen settings")?;
+        let hex: String = payload.iter().map(|byte| format!("{byte:02x}")).collect();
+        // Step 2 (administrator): save the settings and start the Windows service.
+        tauri::async_runtime::spawn_blocking(move || windows_signin_host::run_elevated(&format!("--signin-install {hex}")))
+            .await
+            .map_err(|_| "Administrator step failed")??;
+        Ok(enrolled.connection_id)
+    }
+}
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[tauri::command]
+async fn signin_screen_disable(window: tauri::WebviewWindow) -> Result<(), String> {
+    main_window(&window)?;
+    #[cfg(target_os = "windows")]
+    return tauri::async_runtime::spawn_blocking(|| windows_signin_host::run_elevated("--signin-remove"))
+        .await
+        .map_err(|_| "Administrator step failed")?;
+    #[cfg(not(target_os = "windows"))]
+    Err("Sign-in screen access is available on Windows".into())
 }
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 #[tauri::command]
@@ -1685,6 +1790,22 @@ fn request_quit(app: tauri::AppHandle) {
     });
 }
 fn main() {
+    #[cfg(target_os = "windows")]
+    {
+        let mut args = std::env::args().skip(1);
+        if let Some(command) = args.next().filter(|arg| arg.starts_with("--signin-")) {
+            let result = match command.as_str() {
+                "--signin-service" => windows_signin_host::run_service(),
+                "--signin-host" => service_config::require_host().and_then(|()| windows_signin_host::run_host()),
+                _ => windows_signin_host::admin(&command, args.next().as_deref()),
+            };
+            if let Err(error) = result {
+                eprintln!("{error}");
+                std::process::exit(2);
+            }
+            return;
+        }
+    }
     #[cfg(target_os = "macos")]
     if std::env::args_os()
         .nth(1)
@@ -1884,6 +2005,9 @@ fn main() {
             remote_presence,
             update_check,
             startup_settings,
+            signin_screen_status,
+            signin_screen_enable,
+            signin_screen_disable,
             set_stay_signed_in,
             set_autostart,
             open_update_page,
