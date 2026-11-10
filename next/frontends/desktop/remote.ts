@@ -391,7 +391,7 @@
   unattendedDisplay.addEventListener('change', () => { unattendedConfirm.checked = false; render(); });
   enableUnattended.addEventListener('click', () => {
     const source = unattendedDisplay.value;
-    if (!(/^display:[0-9]+$/.test(source) || source === 'qa-relay-fixture') || !unattendedConfirm.checked) return;
+    if (!(/^(display:[0-9]+|dxgi:[0-9]+:[0-9]+:.{1,128}|x11:[0-9]+:[0-9]+)$/.test(source) || source === 'qa-relay-fixture') || !unattendedConfirm.checked) { error.textContent = 'Choose a display and confirm it before enabling unattended sharing.'; return; }
     const control = unattendedControl.checked && !unattendedControl.disabled;
     unattendedConfirm.checked = false;
     void action('remote_unattended', {source, control});
