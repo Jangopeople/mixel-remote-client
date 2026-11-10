@@ -154,14 +154,15 @@
     }catch(error){autostartBox.checked=!enabled;startupStatus.textContent=String(error);}
   });
   document.addEventListener('mixel-account-state',event=>{const phase=(event as CustomEvent<Account>).detail.phase;const next=phase==='authenticated';if(next!==signedIn){signedIn=next;void refreshStartup();}});
-  const signinPanel=element<HTMLDivElement>('signin-panel'), signinCurrent=element<HTMLParagraphElement>('signin-current'), signinSetup=element<HTMLDivElement>('signin-setup'), signinCompany=element<HTMLSelectElement>('signin-company'), signinName=element<HTMLInputElement>('signin-name'), signinEnable=element<HTMLButtonElement>('signin-enable'), signinDisable=element<HTMLButtonElement>('signin-disable'), signinStatus=element<HTMLParagraphElement>('signin-status');
-  type SignIn={supported:boolean;connection_id:number|null;name:string|null};
-  let signinBusy=false, signinLoaded=false, signinInstalled=false;
+  const signinPanel=element<HTMLDivElement>('signin-panel'), signinCurrent=element<HTMLParagraphElement>('signin-current'), signinSetup=element<HTMLDivElement>('signin-setup'), signinCompany=element<HTMLSelectElement>('signin-company'), signinName=element<HTMLInputElement>('signin-name'), signinEnable=element<HTMLButtonElement>('signin-enable'), signinDisable=element<HTMLButtonElement>('signin-disable'), signinStatus=element<HTMLParagraphElement>('signin-status'), signinUpdate=element<HTMLButtonElement>('signin-update'), signinOutdatedText=element<HTMLParagraphElement>('signin-outdated');
+  type SignIn={supported:boolean;outdated:boolean;connection_id:number|null;name:string|null};
+  let signinBusy=false, signinLoaded=false, signinInstalled=false, signinOutdated=false;
   function renderSignin():void{
     signinSetup.hidden=signinInstalled;signinDisable.hidden=!signinInstalled;
     signinCompany.disabled=signinName.disabled=signinBusy;
     signinEnable.disabled=signinBusy || !signinCompany.value || !signinName.value.trim();
-    signinDisable.disabled=signinBusy;
+    signinDisable.disabled=signinUpdate.disabled=signinBusy;
+    signinUpdate.hidden=signinOutdatedText.hidden=!(signinInstalled && signinOutdated);
   }
   async function refreshSignin():Promise<void>{
     if(!staff){signinPanel.hidden=true;return;}
@@ -169,7 +170,7 @@
       const value=await invoke<SignIn>('signin_screen_status');
       signinPanel.hidden=!value.supported || !staff;
       if(signinPanel.hidden)return;
-      signinInstalled=value.connection_id!==null;
+      signinInstalled=value.connection_id!==null;signinOutdated=value.outdated;
       signinCurrent.hidden=!signinInstalled;
       if(signinInstalled)signinCurrent.textContent=`Sign-in screen access is on for ${value.name ?? 'this computer'} · Remote ID ${formatId(value.connection_id ?? 0)}. A technician with unattended access can pair and connect to this ID.`;
       if(!signinLoaded && !signinInstalled){
@@ -192,6 +193,13 @@
     }catch(error){signinStatus.textContent=String(error);}
     finally{signinBusy=false;await refreshSignin();}
   });
+  signinUpdate.addEventListener('click',async()=>{
+    if(signinBusy)return;signinBusy=true;renderSignin();
+    signinStatus.textContent='Waiting for administrator approval on this computer…';
+    try{await invoke('signin_screen_update');signinStatus.textContent='The sign-in screen program is up to date.';}
+    catch(error){signinStatus.textContent=String(error);}
+    finally{signinBusy=false;await refreshSignin();}
+  });
   signinDisable.addEventListener('click',async()=>{
     if(signinBusy)return;signinBusy=true;renderSignin();
     signinStatus.textContent='Waiting for administrator approval on this computer…';
@@ -199,7 +207,7 @@
     catch(error){signinStatus.textContent=String(error);}
     finally{signinBusy=false;signinLoaded=false;await refreshSignin();}
   });
-  document.addEventListener('mixel-account-state',()=>{queueMicrotask(()=>{void refreshSignin();});});
+  document.addEventListener('mixel-account-state',()=>{void Promise.resolve().then(refreshSignin);});
   render();const av=accountVersion,rv=remoteVersion;
   void invoke<Account>('account_status').then(value=>{if(accountVersion===av)account(value);}).catch(()=>{});
   void invoke<{phase:string}>('remote_status').then(value=>{if(remoteVersion===rv){offline=['offline','error'].includes(value.phase);render();}}).catch(()=>{});

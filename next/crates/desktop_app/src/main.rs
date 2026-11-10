@@ -812,6 +812,7 @@ async fn startup_settings(
 #[derive(serde::Serialize)]
 struct SignInScreen {
     supported: bool,
+    outdated: bool,
     connection_id: Option<u32>,
     name: Option<String>,
 }
@@ -822,14 +823,19 @@ async fn signin_screen_status(window: tauri::WebviewWindow) -> Result<SignInScre
     #[cfg(target_os = "windows")]
     {
         let status = windows_signin_host::public_status();
+        let outdated = status.is_some()
+            && tauri::async_runtime::spawn_blocking(windows_signin_host::program_outdated)
+                .await
+                .unwrap_or(false);
         Ok(SignInScreen {
             supported: true,
+            outdated,
             connection_id: status.as_ref().map(|status| status.connection_id),
             name: status.map(|status| status.name),
         })
     }
     #[cfg(not(target_os = "windows"))]
-    Ok(SignInScreen { supported: false, connection_id: None, name: None })
+    Ok(SignInScreen { supported: false, outdated: false, connection_id: None, name: None })
 }
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 #[tauri::command]
@@ -899,6 +905,17 @@ async fn signin_screen_enable(
             .map_err(|_| "Administrator step failed")??;
         Ok(enrolled.connection_id)
     }
+}
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[tauri::command]
+async fn signin_screen_update(window: tauri::WebviewWindow) -> Result<(), String> {
+    main_window(&window)?;
+    #[cfg(target_os = "windows")]
+    return tauri::async_runtime::spawn_blocking(|| windows_signin_host::run_elevated("--signin-update"))
+        .await
+        .map_err(|_| "Administrator step failed")?;
+    #[cfg(not(target_os = "windows"))]
+    Err("Sign-in screen access is available on Windows".into())
 }
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 #[tauri::command]
@@ -2008,6 +2025,7 @@ fn main() {
             signin_screen_status,
             signin_screen_enable,
             signin_screen_disable,
+            signin_screen_update,
             set_stay_signed_in,
             set_autostart,
             open_update_page,

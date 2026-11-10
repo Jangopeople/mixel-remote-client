@@ -224,6 +224,20 @@ pub fn public_status() -> Option<PublicStatus> {
     let bytes = std::fs::read(public_status_path()).ok()?;
     serde_json::from_slice(&bytes).ok()
 }
+/// True when the installed sign-in screen program differs from this app version.
+pub fn program_outdated() -> bool {
+    let Ok(current) = std::env::current_exe() else {
+        return false;
+    };
+    if current == program_path() {
+        return false;
+    }
+    match (std::fs::read(&current), std::fs::read(program_path())) {
+        (Ok(mine), Ok(installed)) => mine != installed,
+        _ => false,
+    }
+}
+
 /// Public key of the computer-wide identity, after provisioning.
 pub fn provisioned_public_key() -> Result<ed25519_dalek::VerifyingKey, String> {
     let text = std::fs::read_to_string(public_key_path())
@@ -383,6 +397,21 @@ pub fn admin(command: &str, argument: Option<&str>) -> Result<(), String> {
                 "actions=",
                 "restart/5000/restart/5000/restart/60000",
             ]);
+            if sc(&["start", SERVICE_NAME]) {
+                Ok(())
+            } else {
+                Err("Cannot start the sign-in screen service".into())
+            }
+        }
+        "--signin-update" => {
+            if !settings_path().is_file() {
+                return Err("Sign-in screen access is not turned on".into());
+            }
+            let _ = sc(&["stop", SERVICE_NAME]);
+            std::thread::sleep(Duration::from_secs(3));
+            let exe = std::env::current_exe().map_err(|_| "Cannot locate Mixel Remote")?;
+            std::fs::copy(&exe, program_path())
+                .map_err(|_| "Cannot update the sign-in screen program")?;
             if sc(&["start", SERVICE_NAME]) {
                 Ok(())
             } else {
