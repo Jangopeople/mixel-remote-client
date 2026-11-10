@@ -31,3 +31,16 @@ verified authenticator.
   12/12 assertions — /user returns the authenticator, staff access is blocked at aal1, the fixed
   decision is the code step, the real TOTP challenge+verify reaches aal2, and the staff account is
   then authenticated. Test account removed afterwards.
+
+## macOS build note (critical — a 0.1.2 Mac build shipped broken without this)
+`build.rs` embeds the service config only for `windows`/`linux`. **macOS loads it from a bundled
+resource** (`read_packaged` reads `Contents/Resources/service-config.json`). So the macOS build MUST
+pass the config as a tauri bundle resource, or the app shows
+"This development build has no bundled Mixel service configuration" and sign-in can't start:
+
+    // in the macOS tauri bundle config
+    "bundle": { "resources": { "service-config.json": "service-config.json" } }
+
+with `service-config.json` (the public config) placed next to `tauri.conf.json`. Windows/Linux instead
+set `MIXEL_DESKTOP_SERVICE_CONFIG` at build time (build.rs embeds it). Shipped fix: macOS 0.1.3
+(0.1.2 was missing the resource); Windows/Linux 0.1.2 are fine.
