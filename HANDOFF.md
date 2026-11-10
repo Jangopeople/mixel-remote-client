@@ -1,5 +1,978 @@
 # Mixel-Remote — Agent Handoff / Current State
 
+## 2026-11-09 — Managed Ubuntu desktop verified on GNOME Wayland
+
+The Ubuntu desktop app now supports attended monitor sharing and keyboard and
+pointer control on Wayland. Local Accept opens the compositor picker and only
+sends approval to the broker after the requested portal grant succeeds. Capture
+uses the granted PipeWire node, and revocation stops input and clears retained
+viewer frames. Wayland grants are scoped to a single session. The native X11
+path remains available in an X11 desktop session.
+
+VM130 ran the installed Debian package in its normal GNOME Wayland session.
+The embedded configuration and installed executable hash were verified. The
+app opened the public Mixel ID sign-in in Firefox. It still uses the shared
+OAuth client, whose sign-in page displays MIXEL ISM. An independent GTK
+fixture on the same Wayland desktop observed actual pointer and key events
+after the approved monitor streamed through native encrypted WebRTC. The
+X11 fixture also passed its file, recording and held-key cleanup checks.
+Proof and the final `0.1.0+wayland2` Debian package are under
+`_scratch/managed-wayland-r1`. Linux release Clippy passed with warnings
+treated as errors. The Ubuntu guest's QA installation was removed after use.
+
+VM110 also bundled the Authenticode-signed Windows desktop executable and
+the resulting NSIS installer was signed separately. VM133 verified both
+signatures as Valid, verified the installed executable against the exact
+signed build hash, and opened the managed workspace as its lab user. The
+signed QA installer and proof are under `_scratch/managed-session-port-r2`
+in `signing-outer-output` and `windows-signed-install.log` respectively.
+
+The native session tests use fixture identities. The public broker has yet
+to be exercised with the Windows and Linux builds and a dedicated customer
+QA account. Desktop startup-host access and marketplace publication remain
+separate from the verified attended sessions.
+
+## 2026-11-09 — Managed Windows and Linux desktop sessions and lab installers
+
+Windows and Linux now boot the same managed workspace as macOS. The authenticated
+broker and WebRTC session engine shares native consent, device-bound identity
+proof, encrypted input, file/clipboard transfer, chat, recording and stop
+handling. Native browser sign-in remains in the account layer. Windows uses
+SendInput and DXGI with a selected-display fallback on the ordinary signed-in
+desktop. Linux X11 resolves physical USB key locations from XKB names and uses
+XTEST for pointer/key input. Unsupported text is acknowledged without closing a
+session when the viewer advertises support for that response.
+
+The signed-in Windows VM133 and isolated Ubuntu VM130 X11 session verified real
+display frames, pointer position and held key state, byte-exact accepted file
+transfer, a readable MP4, and key release and video clearing on consent
+revocation. The Windows test also verified DPAPI persistence under its local
+signed-in user. First Windows tests caught two platform issues: the Win32
+file publication rejected a relative target with error 87, and the VM's DXGI
+driver delivered black frames. The reruns passed with absolute publication
+resolved from the retained directory handle and the guarded capture fallback.
+The portable and VideoToolbox codecs decoded each other's H.264 streams locally.
+
+Evidence and private build products are in `_scratch/managed-session-port-r2`.
+The Windows NSIS setup installed for the local lab user, verified its installed
+binary hash, and opened the managed workspace with the Windows GUI subsystem.
+The Ubuntu Debian package installed with dpkg and matched the verified native
+binary. Both workspace screenshots and the respective install/session logs
+are retained. The installed Windows app launched the public Mixel ID provider
+in Edge and reached the login form. The provider currently displays its
+shared MIXEL ISM application name.
+
+The executable session tests used locally pinned fixture identities and real
+native encrypted WebRTC peers. They did not use a live customer account or
+the public Mixel broker. Linux Wayland host capture/input and Windows/Linux
+startup-host services still require qualification. Do not expose the lab
+installers as public downloads or as complete cross-platform parity.
+
+## 2026-11-09 — Windows and Linux managed-client account port
+
+The native Windows and Linux builds now compile the shared Mixel ID
+browser/PKCE, account setup, company settings and device directory commands.
+Personal enrollment uses separate OS-protected keys per Remote profile and
+checks the persisted ID, platform and public key before returning success.
+The build embeds only bounded public configuration on these platforms.
+
+Windows VM110 and Ubuntu VM130 compiled optimized native executables and
+both executables passed embedded configuration validation. Both rejected
+mismatched or duplicated browser callback parameters. Ubuntu additionally
+verified key persistence and profile isolation through a disposable Secret
+Service session. Windows user DPAPI compiled; the SSH session could not
+access a user master key (0x80070005) and the disposable task was denied
+batch logon (0xc000015b). The Windows persistence test is available for a
+password-backed desktop user. The Windows test account, profile and task
+were removed. A disposable PostgreSQL fixture verified distinct, permanent
+IDs on all three platforms, account isolation and broker revocation. The
+existing macOS/signaling suites and 42 desktop UI tests passed.
+
+Evidence is in `_scratch/managed-platform-port-r1`. These are internal
+capture-launcher builds with account plumbing. Windows and Linux still
+require the managed broker/session and host/controller media runtime,
+desktop control, unattended service and real attended and unattended
+cross-platform qualification before signing and publishing full installers.
+No customer Store listing or downloads changed.
+
+## 2026-11-09 — TestFlight signed-in Mac control passed with rebuilt lab host
+
+The installed Apple TestFlight build 3 used real browser Mixel ID sign-in
+and connected to the signed Sequoia 15.7.7 lab host over the public relay.
+After the lab host chose its full display and clicked Accept with control,
+the controller opened TextEdit, typed “Remote control passed” with physical
+keystrokes, dragged the guest window, entered and exited full screen, and
+ended the session. Both ends signed out and the exact disposable QA
+identity and three device bindings were disabled.
+
+The original host ended sessions on a VideoToolbox timeout. The corrected
+host keeps the VideoToolbox owner separate from control and ICE processing.
+It requests immediate output when the driver supports that property and
+explicitly completes the submitted frame on drivers that buffer it.
+Timeout recovery recreates the encoder and forces a fresh keyframe within
+the existing retry budget. The viewer discards stale input when native
+authorization ends, preserving the original close reason.
+
+Proof is in `_scratch/testflight-controller/build-4-qa/live-control-proof.log`.
+The signed host is in `host-encoder-recovery-r3` under that directory.
+Screenshots 07–12 cover consent, TextEdit, an independent guest readback,
+the remote drag, full screen and a clean end. This was a signed-in
+attended session. The separate login-window entitlement remains separate.
+
+The browser fallback reuses the existing OAuth/PKCE transaction. It was
+verified in the signed local app with the public Mixel ID callback. Apple
+accepted the universal controller build 4 upload, recorded under
+`_scratch/testflight-controller/build-4-final/xcode-internal-upload.log`.
+The existing App Store Connect tab was still on Apple sign-in, so build 4
+was not assigned to the internal group during this run.
+
+The live Mixel Store catalog includes both signed Mac Quick Support DMGs,
+and descriptions for the macOS, Windows and Linux downloads in four
+languages. Store PR Jangopeople/mixel-store#21 adds prominent Mac Quick
+Support buttons and format-specific Windows instructions. The browser
+preview was checked against a snapshot of the live public catalog.
+
+## 2026-11-08 — Customer onboarding live and build 3 in internal TestFlight
+
+Build 2 uses the legacy ISM role path, which can show the existing staff
+authenticator label and requires staff to enroll an ISM device. Build 3
+adds a personal Remote account after verified Mixel ID sign-in, takes a
+display name, registers the current Mac with a permanent connection ID, and
+opens the existing Remote company console in Admin Cockpit. Existing ISM
+enrollment and company authorization stay separate. The personal policy
+permits attended sessions between two active devices owned by one account.
+
+The additive SQL migration and the matching Cockpit policy, identity
+authority and enrollment blueprint are tested locally. The isolated
+Authentik browser run captured the signup email, confirmed the link and
+authenticated the new user. 119 Rust and 40 desktop UI tests passed, along
+with isolated SQL, Cockpit role and policy tests, and six Linux image
+checks. macOS build 3 is signed in
+`_scratch/testflight-controller/customer-onboarding-build-3-final/`.
+The approved rollout applied the production migration, updated the Remote
+identity authority and Cockpit broker policy, and opened the Mixel ID
+enrollment flow. The Remote-specific Authentik worker mount removes
+confirmation links from email audit events. A repeat signup delivered the
+link to the QA mailbox while the audit event contained metadata only.
+
+Apple build 0.1.0 (3) is Testing in Mixel Remote Internal. The Mac updated
+from TestFlight, and the installed app has the Apple receipt and TestFlight
+Beta Distribution signature. A fresh external user completed mailbox proof
+and Mixel ID MFA in the browser, then saved a personal display name in build
+3. The beta registered its own permanent ID under the same QA account as
+the signed host, waited for Accept, and displayed the encrypted 640 × 420
+QA stream. The live policy rejected cross-account and unattended requests.
+The disposable accounts, devices, and mail addresses were deactivated.
+See `_scratch/testflight-controller/customer-onboarding-live-proof/` for
+the test log and screenshots. The rollout and recovery procedure is in
+`next/deployment/REMOTE-CUSTOMER-ONBOARDING.md`.
+
+## 2026-11-08 — TestFlight install and Apple entitlement case
+
+The Apple invitation for the internal tester arrived in Exchange. Redeeming
+its Start Testing link exposed Mixel Remote in the macOS TestFlight app.
+Build 0.1.0 (2) installed as `/Applications/Mixel-Remote 2.app`, with a
+TestFlight Beta Distribution signature and Apple receipt.
+
+On this development Mac only, an earlier ad-hoc smoke run had created the
+same app container. macOS then stalled in libsecinit, before main, while
+prompting to authorize the TestFlight signer for the old container. The
+ad-hoc container was moved to a private backup. A fresh GUI login is needed
+to clear the pending OS prompt. The packager now tests a distinct
+`ch.mixel.remote.controller.local-smoke` container and verifies that it
+cannot use the beta's Keychain identity. Universal packaging, the profile,
+the installer signature and the native host guards passed again. No new
+TestFlight build was uploaded.
+
+The prepared Persistent Content Capture request, including the question
+about Apple's supported Virtual HID Device entitlement for login-window
+keyboard input, was filed under Apple Developer Support → Entitlements.
+Apple confirmed case `30000009122030`. The dedicated capture form required
+an App Store URL and numeric ID; the host is Developer ID software, so no
+controller App Store ID was substituted. Apple has not granted either
+capability yet. Install and support evidence is under
+`_scratch/testflight-controller/build-2-final/`.
+
+## 2026-11-08 — macOS internal TestFlight controller
+
+The sandboxed macOS controller uses bundle ID `ch.mixel.remote.controller`
+and its own Data Protection Keychain access group. The App Store Connect
+record is `6832257418`. The internal-only universal 0.1.0 (2) upload
+completed. The manual Mixel Remote Internal group shows build 2 as Testing
+and its sole tester as Invited. The signed package, archive, upload log, smoke screenshot
+and verification log are under `_scratch/testflight-controller/build-2-final/`.
+The packager is `scripts/local/package-next-macos-testflight.py`.
+
+The controller keeps Mixel ID, enrolled-device connections, remote input and
+permitted session tools. It cannot host, accept incoming connections, run
+the pre-login service, or launch the legacy support client. Receiving files
+and saving recordings choose a folder in the sandbox so staging and atomic
+renames work with only the user-selected filesystem grant. Local verification
+covered 118 Rust tests, 38 frontend tests, warnings-denied Clippy, a native
+sandbox launch and the live Mixel ID browser handoff. No public Store or
+external beta submission was made. The separately signed host and the
+Sequoia login-window entitlement limitation below are unaffected.
+
+## 2026-11-08 — Dedicated macOS login-window host
+
+The separate Developer ID host runs in the system LoginWindow launchd session
+with a root-owned configuration and a machine key in System Keychain. With
+local Accessibility and Screen Recording grants, Sequoia 15.7.7 supplied
+real encrypted H.264 login-window frames, and a remote mouse click focused the
+password field. CoreGraphics key and text acknowledgments did not indicate
+that the secure field received those events. The guest rejected legacy HID
+posting with 0xe00002c1 and refused virtual keyboard creation.
+
+The current candidate uses the public IOHIDUserDevice API for keyboard reports
+at LoginWindow and refuses to advertise full control without the Virtual HID
+Device entitlement. The Developer ID claim build requires an Apple-issued
+profile. The capture request also covers the OS confirmation seen on the
+first full-screen capture. Evidence, signed candidate and finished request
+are in the app-managed worktree's
+`_scratch/macos-live-parity-20261108/prelogin/`.
+
+## 2026-11-08 — Public Mac QA and startup credential restrictions
+
+Public-relay QA passed attended recording and signed-in unattended access for
+two enrolled app instances on one Mac. The view-only QA window was the only
+capture source. The controller saved a 16-second H.264 recording containing 157
+decodable frames. The broker denied unattended access before the temporary
+grant, allowed it after the grant, closed the active session after revocation,
+and denied the next request. The temporary Cockpit scope and ISM link were
+removed. Evidence lives in the app-managed worktree's
+`_scratch/macos-live-parity-20261108/live-internet-session-receipt.json`.
+
+The protocol now supports a signed, tenant-bound startup host ticket with a
+120-second maximum lifetime. The broker requires configured policy, blocks
+outbound and attended sessions, pairing, one-time passwords and scope changes
+during renewal. The Mac controller independently enforces the session role.
+The headless host uses the enrolled device key from macOS Keychain, a
+private settings file and the signed bundle's service configuration. An Aqua
+LaunchAgent starts it in the approved graphical user's session. It stops when
+the approved settings, display, permissions or console owner change. This
+entry point requires a user session.
+
+The local issuer, Cockpit and broker passed an integrated PostgreSQL-backed
+test. The broker accepted a policy-approved unattended connection with a
+startup ticket, and issuance was denied after the grant was revoked. The signed
+host's launchd test also confirmed refusal without explicit capture approval.
+The Developer ID signed app registered after a Sequoia 15.7.7 guest reboot
+with auto-login disabled and a manual user sign-in. The native host accepted
+an unattended request and refused an attended request through the isolated
+broker. A deliberate 24-second TLS outage at launch recovered within the
+same process. At the actual macOS login
+window, a signed capability probe saw the display and was denied both
+ScreenCaptureKit capture and event posting. The Aqua agent was absent before
+sign-in.
+
+Evidence in the same folder: `startup-cockpit-live-fixture.log`,
+`startup-host-final-tests.log`, `startup-isolated-guest-accept.log`,
+`startup-isolated-guest-final-reboot.log`,
+`startup-isolated-guest-network-recovery.log` and
+`startup-isolated-guest-prelogin-proof.log`. The startup services have not been
+deployed to the public QA environment. Pre-login access remains a separate
+macOS privilege and signing path. Apple's Persistent Content Capture
+entitlement requires approval and an Apple-issued app profile.
+
+## 2026-11-08 — Native capture preview startup
+
+The Windows and Linux Preview binaries use a dedicated capture entry point
+because their managed connection commands are still under development. The
+entry point shares the capture panel and controller with macOS Diagnostics.
+Every full-display start consumes its confirmation, and Stop clears the
+preview. The managed Mac entry point stays on its existing dashboard.
+
+All 35 desktop UI tests and strict desktop Clippy passed. The exact Debian
+ARM64 release opened directly to Screen capture preview, captured 1280×900
+after confirmation, and remained stopped on another Start click without
+fresh confirmation. Screenshots and Linux build log:
+`_scratch/x11-capture-qa/startup-r3/`.
+The Windows x64 release also built successfully on VM110, and a separate
+readback confirmed SHA-256
+`d84563b5ff21df7ade206d96a2d4c8412a7d4dab9256a75f537523656480d393`.
+The Windows verification covered the build and artifact checksum.
+
+## 2026-11-07 — Managed recording and Linux X11 capture
+
+The Mac Preview controller can save a local video-only MP4 after the host
+explicitly grants recording in the attended invitation. The grant uses the
+existing encrypted control channel and older viewers receive the legacy
+permission packet. The writer waits for an independent H.264 frame, keeps
+disk I/O off the peer owner, stops on revocation, and publishes without
+overwriting existing files. The recording ends at a transport replacement.
+Native hardware tests verified exact MP4 samples, a revoked frame excluded,
+and no replacement of an existing file. FFmpeg decoded the test clip. A browser
+fixture verified that the Record control requires a grant and resets on a new
+session. These checks used a fixture instead of a customer session.
+
+Linux now discovers and captures explicitly selected X11 root screens over a
+local Unix socket. Wayland sessions are rejected by this adapter. The native
+Debian ARM64 build captured both 24-bit and 16-bit Xvfb screens with exact
+colors. The actual app Diagnostics screen captured 1280×900 after the checkbox
+was selected, and Stop cleared its retained preview. This build is an X11
+capture QA artifact. Linux managed sign-in and customer sessions require
+separate implementation.
+
+All 12 workspace stages and the release broker smoke test passed, with the
+real coturn fixture active for the native suite. The coturn fixture was removed
+and its credentials cleared. Evidence: `_scratch/managed-session-recording/workspace-check-r4/`,
+`_scratch/managed-session-recording/native-recording.mp4`,
+`_scratch/managed-session-recording/recording-ui.png`, and
+`_scratch/x11-capture-qa/diagnostics-live.png`.
+
+The signed universal Mac Preview QA DMG is staged locally at
+`_scratch/managed-session-recording/store-prep/Mixel-Remote-Preview-QA-macos-universal.dmg`.
+The app and DMG passed notarization, stapling, and Gatekeeper. A read-only mount
+verified the exact signed executable, and the staged app opened successfully.
+The receipt `store-prep/verified-artifact.json` records its SHA-256. This is a
+local QA candidate. The full release and live recording remain unqualified.
+
+The Cockpit/ISM test was rerun using the current broker and verified tenant
+isolation, permanent pairing ID across key rotation, assignment and unattended
+revocation, and single-entry audit behavior. See
+`_scratch/managed-session-recording/cockpit-policy.log`.
+
+## 2026-11-07 — Managed Mac viewer full-screen candidate
+
+The managed Preview controller now offers Full screen after the first frame of
+an active viewer session. Native macOS presentation keeps End session visible,
+restores the previous sizing, and exits after local stop, revocation, sign-out,
+or leaving the viewer. Pointer coordinates map to the rendered image; black
+margins do not issue clicks or scrolling, and active drags can release at the
+edge. The embedded frontend build now tracks the workspace and chat sources
+and the actual icon input.
+
+The exact Developer ID signed R2 candidate built and opened to the idle screen
+without offering Full screen. TypeScript, 33 frontend tests, strict desktop
+Clippy, and 20 native tests passed. A Chromium render fixture exercised the
+actual frontend with test frames at two sizes, real pointer events, and End
+session. It is not a live customer session or a Store release. Signed bundle
+and package receipt: `_scratch/macos-remote-fullscreen-r2/`. Render evidence:
+`_scratch/macos-remote-fullscreen-final/full-screen-render.png`.
+
+## 2026-11-07 — Windows consent after display sleep fixed and released
+
+The newest Windows Support build on Mixel Store is `1.4.6-support.wake.1`
+(release `0c920221-546d-4278-bc40-f9aba0931850`, signed EXE SHA256
+`8575db4d5832e5d352f47ffbf9dd6eeabc66db5ad96aeff6e2545f5f98ecf8d5`).
+The earlier Store installer remains available under Previous Support, and its
+download still matches its original bytes. Mac, Linux and direct aliases were
+not changed. An invited tester downloaded and checksum-verified both Windows files.
+
+PC01 original build reproduced a white, unusable consent window: same native
+display-off fixture, real Mac request, Mac waited for consent, and the panel
+stayed blank after moving the local pointer. The new package on PC01 verified
+Authenticode Valid and loaded the exact new signed runner. With the identical
+display-off trigger, two fresh requests woke Windows and displayed consent
+before any local keyboard or mouse input. Ordinary blue Accept produced live
+VP9 over the public Mixel relay and working pointer input. Declining the second
+request delivered no video. PC01 was left Ready on the new build, test console
+closed and display-off fixture removed.
+
+The existing Flutter branding owner now installs `branding/windows/consent_display.h`
+in the pinned upstream Windows runner. Only exact graphical `--cm` startup sends
+a display-only power pulse and waits briefly for the session display state; it
+does not unlock Windows, persist a power setting, or approve an invitation.
+MSVC compiled the exact runner with /W4 /WX and linked it with the preserved
+release objects. The portable bundle preserved the previously signed core and
+all payload files other than the runner. Proof and receipts:
+`_scratch/windows-consent-display/wake-regression-receipt.json`.
+
+## 2026-11-07 — Mixel Store now has Mac Preview and Windows/Linux Support
+
+Invited tester downloads at https://store.mixel.ch/app/mixel-remote#downloads:
+- Mac Apple Silicon `0.1.0-preview.4`, ID
+  `4176aece-7b9c-4c87-9f48-8e005448aa3c`. Signed and notarized DMG; its
+  `Mixel Remote Preview.app` name does not collide with installed
+  `/Applications/Mixel-Remote.app` Support. Old previews .2 and .3 remain
+  downloadable in separate archive variants, with their original bytes.
+- Windows x64 signed QuickSupport `1.4.6-support.4de24f0`, ID
+  `c8687b1c-504c-4a2b-8c74-09de2805cc53`. Exact PC01-tested Windows bytes.
+- Linux Debian/Ubuntu amd64 Support `1.4.6-support.73e7c3d`, ID
+  `5f20163c-8d54-4bf3-8742-2c60a2ae41d1`. Exact GitHub Actions build
+  39031592092, native and public HTTPS relay Accept/video/input/clipboard/files
+  and reconnect passed.
+
+An invited synthetic tester used all three real Store buttons; hashes matched.
+Anonymous and uninvited download requests were denied. The exact Store Mac
+download passed Gatekeeper, opened, and reached Windows PC01 after ordinary
+Accept; encrypted relay/VP9 and clean disconnect observed. The first request
+while PC01's display was asleep left a blank consent panel; after waking the
+display, cancelling and retrying produced the normal Accept prompt. Do not
+claim sleep/wake is fixed. No Microsoft Partner Center or existing public
+download alias changed. The Windows/Linux releases are Support, not native
+managed Preview ports. QA fixtures and deployment staging were removed.
+Evidence: `_scratch/store-mac-pc01-update/`.
+
+## 2026-11-07 — Signed Mac Preview reached Windows PC01 through Support mode
+
+An explicit Support connection form now accepts the existing Support ID. The
+native command validates the ID, checks the installed Mac Support bundle against
+the Mixel Developer ID and bundle ID, and launches only its fixed connect action.
+Managed Mixel ID requests still follow the existing broker and company policy.
+The Support form remains hidden when the Mac commands are unavailable.
+
+Final signed local candidate: `_scratch/preview-pc01-live/mac-candidate-r2/Mixel-Remote.app`.
+Started the real session from its Preview UI to Windows PC01 304619778. The Mac
+viewer was black pending consent, and the independent PC01 console displayed the
+ordinary blue Accept. After that click, the public Mixel relay delivered VP9
+video. A remote mouse click opened blank Notepad; physical key events entered
+`previewpc01r2846` and the same marker appeared in the independent PC01 console.
+The fixture was discarded and the session was closed; PC01 showed Ready. A
+separate earlier request in the same turn was declined on PC01 and delivered no
+video. No password or elevation was used. Proof, native relay log, binary hash,
+and screenshots are in `_scratch/preview-pc01-live/pc01-live-receipt.json`.
+
+This local candidate uses the existing signed Mac Support viewer. No Store
+update or server deployment. A unified managed Mac/Windows/Linux build and a
+live Linux test from this Preview mode are outside the verified result.
+
+## 2026-11-07 — Preview connection triage and direct Windows/Linux downloads
+
+The signed Store Mac preview is on the Mixel ID device-ticket broker. The
+existing support clients (Windows, Linux, both Mac architectures) are on the
+separate rs.mixel.ch support protocol; IDs are not interchangeable. Both service
+health checks responded. Read-only production verification found zero active ISM
+clients linked to the Mixel IT company and zero broker resolver matches for the
+two enrolled, unlinked Mac QA devices. The target computer for the user's failed
+attempt was not specified. No company/device assignments or live release changes
+were made.
+
+Fixed the Mac preview hiding a failed device lookup behind the Ready message.
+Its connection card now explains edition compatibility and keeps the rejection
+reason visible while allowing a retry. TypeScript build, 28 UI tests (including
+the new regression), Rust formatting, 19 native tests, release package build,
+Developer ID verification and local UI launch passed. The signed candidate and
+logs are under `_scratch/connection-live-proof`; it is not a Store update or
+a qualified customer session.
+
+The public Windows QuickSupport download matched the exact signed SHA256 used
+in PC01's earlier live Accept, input, file and reconnect tests. The public Linux
+`Mixel-Remote-Support.deb` matched its versioned download (SHA256
+`70cd2f8bdfa038899cd5c43d3e71977cfc9074d7871e63854008362021764200`)
+and opened on the native Debian 12 QA VM in an isolated X11 session. The
+full Linux public-relay run 38477595023 passed on a different installer hash;
+do not use that evidence to claim the public alias passed a live Accept test.
+The public support downloads are linked from https://ism.mixel.ch/remote/support/.
+
+## 2026-11-07 — Customer console and device policy deployed
+
+Admin Cockpit release `5c5c76c` serves `/remote`. The exact verified Mixel ID for
+`michael@mixel.ch` has the Remote owner role for Mixel IT and Corporate Services
+and its own company workspace. No additional customer or technician was seeded.
+The public QA WebSocket vhost on 9444 forwards to the customer-device-access
+broker on loopback 8094. The previous QA broker exited cleanly and is stopped.
+The new broker checks a device-bound request against live ISM identity/key
+bindings and the Cockpit customer assignment before Request, Accept and restart.
+It rechecks pending and active controller sessions. Access service failures deny.
+
+ISM migrations 003–005 and Cockpit migrations 0009–0011 are applied. The policy
+connection uses a dedicated ISM login with access to the resolver functions.
+Rollback copies are `/opt/.mixel-admin-before-device-access-5c5c76c` and
+`/opt/mixel-remote-next-qa/backup/nginx-before-customer-device-access.conf`.
+Before a rollback start the original QA broker and validate its loopback health.
+The authority and TURN still use the original Compose project. Run the broker
+and app with the dedicated policy configuration; the new broker requires it.
+
+Browser fixtures with real Cockpit, ISM PostgreSQL and WebSocket broker verified
+assignment denial, on-device pairing by nine-digit ID, and stable ID after key
+rotation. Broker tests verified a one-time password plus attended consent,
+replay denial, and unattended request, local disable and stop. Cockpit tests
+verified the paired-device grant, revocation and one authorization audit per
+session. The full ISM schema and real local PBX ingress verified one ticket on
+replay and no Remote privileges or session created by a call event.
+
+Developer ID signed Mac QA app:
+`_scratch/next-macos-customer-device-access/Mixel-Remote.app`.
+Evidence: Admin worktree `test-results/remote-customers/full-policy-e2e.log`,
+`production-device-access-rollout.log`, `production-postcheck.log`; Remote worktree
+`_scratch/msp-access-qa/final-device-access-tests.log` and
+`pbx-ism-device-access.log`. Public smoke verified TLS, WebSocket upgrade, and
+unauthenticated device rejection. No authenticated customer screen session was
+qualified with this build. Unattended sharing requires a signed-in Mac running
+Mixel Remote, approved OS permissions and explicit local sharing consent.
+Pre-login and reboot survival, the separate native ISM directory scope, and
+launching a live Remote session from a PBX-origin ISM ticket remain open.
+
+
+## 2026-11-07 — macOS session chat and Stop reliability
+
+Host can enable Session chat in the Accept panel. Chat uses a dedicated reliable WebRTC channel with independent authenticated encryption keys. The host grant and viewer reply must authenticate before either app exposes the chat composer. History is bounded and cleared when the connection ends. The chat worker cannot block video or control records.
+
+R23 Developer ID QA host/controller passed real public TURN bidirectional text, unread badge, continued QA-window video, host opt-out, and a fresh empty transcript. That run found a Forbidden race from sending duplicate Close during native media cleanup. The R24 Mac apps send one Close and passed two more public sessions. Controller Stop and host Stop each returned both peers to Ready, and another invitation worked without re-registering. Both devices were then taken offline. These were two isolated QA identities on the same physical Mac using the same QA account.
+
+The broker source also accepts short-lived late cleanup from original participants without forwarding it or granting access. Local actual WebSocket tests covered same-party duplicates, crossed Close, outsider denial, and a fresh invitation. The Linux amd64 candidate image `mixel-remote-next-backend:close-r24` built and passed all six isolated smoke checks. Existing public broker image is still running. The Mac release verification is QA only. No full-display, remote input, voice/video calling, handover, cross-platform or TestFlight qualification was made.
+
+Evidence: `_scratch/session-chat-qa/receipt.json`, `controller-both-messages.jpg`, and four R24 Ready screenshots in that directory. Signed universal QA apps: `_scratch/next-macos-chat-host-r24/Mixel-Remote.app` and `_scratch/next-macos-chat-controller-r24/Mixel-Remote.app`. 108 Rust and 27 frontend tests passed.
+
+## 2026-11-07 — Logo released, Remote company role and Entra pilot configured
+
+Michael approved the production logo deployment, Remote company admin mapping, and Entra sign-in without directory sync. Admin Cockpit Linux standalone built on the VPS, migration `0008_company_logos.sql` committed, preflight passed, and `mixel-admin-api` was switched with a rollback copy at `/opt/.mixel-admin-before-logo.20261107T141228Z`. Live health returns 200 and anonymous logo access redirects to sign-in. An authenticated Chrome session showed the deployed editor on the exact company profile. Sample upload, replacement and reload were exercised in the isolated fixture. The live company has no saved logo. Admin source commit `9be38a6` is on the local `feat/remote-company-settings` branch.
+
+ISM migration `002_company_administrators.sql` and the exact company grant are live. The grant binds Michael's existing ISM profile to the verified Mixel ID subject and linked company. Database role simulation returned the company only at AAL2, with public anonymous RPC denied (401 / 42501). R22 signed universal Mac app adds the Account → Company administration section and uses the existing Admin Cockpit authorization for Manage company. 105 Rust, 27 frontend and six company SQL checks passed.
+
+Microsoft Entra is configured as a single-tenant Mixel ID source. The enterprise app requires assignment and has one user assignment (Michael) and a per-user grant for `openid User.Read`. Authentik binds the Entra object ID to the existing user by identifier, disallows source enrollment, and requires WebAuthn or TOTP. The public redirect, S256 PKCE, Mixel ID button, and real Microsoft credential page were verified. The personal interactive Entra callback and native MFA are pending. First Mac attempt expired while Microsoft was still at an empty email field. Chrome Incognito was left on the live Admin Cockpit Mixel ID login, with Continue with Microsoft Entra visible. To finish, use the approved pilot account's real Microsoft and Mixel ID verification, then use the resulting browser session in a fresh R22 app sign-in and complete the ISM factor when asked. Do not substitute a synthetic success or bypass MFA.
+
+Evidence is in `_scratch/company-entra-20261107/deployment-proof.json` and `live-company-logo.jpg` beside it. Signed app is `_scratch/next-macos-company-admin-r22/Mixel-Remote.app`. Latest full-display and native-input permission block remains separate.
+
+## 2026-11-07 — Company identity verified and logo editor tested locally
+
+`michael@mixel.ch` is already an active Owner of Mixel IT and Corporate Services in the central company directory (client `bbbfb7af-7cb5-400f-b715-10fe24c80120`). The same identity has a separate internal ISM admin profile. Preserve both roles. Remote currently consumes the ISM profile and displays the account as Mixel team. It has no company entitlement or native company branding display yet.
+
+The logo editor is in the Admin Cockpit worktree `/Volumes/MAC_Mini_Ext/Project_Mixel/mixel-admin/.worktrees/remote-company-settings`. The standalone build, lint and six fixture checks passed. Chrome saved a new sample logo, rendered it at 300×180 and showed it again after reload. Receipt: `test-results/company-logo-qa/receipt.json` in that worktree. The database and web server fixtures were loopback-only and have been stopped. No production migration, deployment, or company profile write was made.
+
+No Microsoft sign-in source exists in Mixel ID. The user has been asked to choose Entra sign-in alone or sign-in plus user/group synchronization. No Entra application, tenant permissions, or identity provider settings were changed.
+
+The Mac QA account is available. The Screen Recording permission list contained the installed app and an older controller, each verified by bundle path. Neither entry grants the signed R20 QA host display access. The user was asked for the exact host permission, and the System Settings picker was left pending. Full-display, keyboard and mouse remain unverified. Keep other platforms paused.
+
+## 2026-11-07 — Real macOS Internet Accept passed for the view-only QA window
+
+A dedicated, non-staff Authentik QA account and ISM organization own only the two approved QA devices. Separate host and controller keys were created in the Mac Keychain and bound administratively with enrollment audit rows. QA credentials are in the local Keychain. The QA shared inbox was created and scoped to the operator, but Outlook returned Access Denied. Ownership was confirmed administratively for the exact test address. The QA account completed password and authenticator verification. Email receipt and staff self-enrollment were not tested in this run.
+
+Signed host R20 (opt-in relay fixture) and controller R19 signed in through real OAuth and registered independently. The first public Accept found coturn's broad IPv6 deny range matching its own public IPv4 relay peer. Fixed only the isolated TURN configuration with the exact allowed relay peer. Original denies remain. Post-fix public TURN UDP/TCP/TLS probes accepted the exact relay and denied other peers. Deployment receipt is `/opt/mixel-remote-next-qa/relay-peer-policy-fix.json`.
+
+Actual UI run: no frames before Accept, Decline with no video, fresh Accept with encrypted 640×420 live ScreenCaptureKit QA window, host Stop clearing video, fresh request and Accept showing live video again, controller Stop, both devices offline. Twelve packet metadata records show traffic between the public TURN allocation ports. Both app instances ran on the same physical Mac. Full-display and remote-input permissions remain outside this test.
+
+Proof and run receipt: `_scratch/live-mac-qa-20261107/proof/` and `_scratch/live-mac-qa-20261107/live-accept-receipt.json`. 51 native and 26 UI tests passed. Other client platforms remain paused.
+
+
+## MAC R18 CURRENT + STAFF SIGN-IN ACCESS PENDING — 2026-11-06 (NEWEST)
+
+Approved deployment from section below completed and PUBLIC HTTPS/WSS/TURN verified. AdditionalactualpublicWSS `_scratch/next-public-wss-r1.log/.json` trusted101, invalidAuthenticatecloses(nopeer), untrustedOrigin403. Deploymentreceipt/publicprobe files referenced in `_scratch/next-macos-r18-verification.json`. That receipt explicitly customerInternetAcceptVerifiedFALSE. No customeridentityenrolled, no publicmedia/UIAccept yet. Two approvedQAdeviceIDs in serverstate/localsafereceipt. No new infrastructure confirmationneeded for alreadyapproved exactscope.
+
+R17 actualviewerGUI detectedSECONDlayoutbug: controlsvisiblebutvideoBOTTOMCROPPED becausegridintrinsiccanvasmincontent. STOPPEDsessionthenFIXED viewer+customerfit CSS: positionrelativeviewport, absolutecenteredcanvas intrinsicratio boundedbybothavailabledimensions. Canvasactualboundsstayimagebounds so nativepointermappingremainscorrect; Actualsize modeuntouched. R18 BOTH universalDeveloperIDpackagesBUILT, exactsourceconserved/configured/runtimeKeychainnamespaceverified. Paths `_scratch/next-macos-redesign-package-r18/Mixel-Remote.app` +`_scratch/next-macos-redesign-controller-r18/Mixel-Remote.app`. R17/R18inventorycomparison actualchangedONLY next/frontends/desktop/style.css. NativeRustunchanged so50passed0failed0ignored earlierR16suite remainscurrent. NewR18frontendactual25passed0failed0skipped `_scratch/macos-ui-redesign-r14/r18-frontend-tests.log`, strictTScompiledaspartbothbuilds, pycompilehelperPASS,diff--checkPASS. Unifiedreceipt `_scratch/next-macos-r18-verification.json` (notruntimequalified/notnotarized/noupload).
+
+ACTUAL R18GUI controllerviewonlylocal: Requestpending0(noCapture) ->hostAccept ->SCKownfixture/hardwareH264/nativeUDPDTLSSRTP/WebCodecs150frames/decoderpending0 -> screenshot showsFULL640x420framefittedANDbuttonsvisible ->EndSessionclosedclearsvideo ->newRequestpending0freshConsent ->hostRejectrejected0/noCapture. Screenshot `_scratch/next-macos-redesign-controller-r18/proof/fitted-local-viewer.png`. ControllermainDiagnosticscurrentlyRejected/noactivecapture. PrimaryR18 latesthomeproof `_scratch/next-macos-redesign-package-r18/proof/remote-control.png` shownuser inline; properRemotehome. R17primary+controllerQUIT, R18bothRUNNING; nolegacyappterminated.
+
+**ACCESS BLOCK** pending async user question earlier asks finish live Mixel staff signin+MFA, noresponseyet. PrimaryR18AccountSignIn started fresh at18:10:12UTC, callbackport62475, Chrome freshMIXELID tab2089507915, CUAhandle staffSignInR18, markedHandoff. Oldexpiredtab2089507914closed. CUAhandle macHostR18 primaryAccountstatus CompleteSignInInBrowser/Cancelenabled atlastread; ChromeusernameEMPTY. R17oldsigninexpiredwhilebuildingandwasreplacedwiththisfreshR18request; noautomaticSSOcredentialsentered. Usermustprovideactualstafflogin browser/MFA. Nativeauth5minexpiry remains; ifexpiredonresume FIRSTstartfreshfromlatestapp thenopenONLYfreshChrome, donotkeeprepeatingexpiredrequests. Don'taskproductionapprovalagain. RootAGENTS dedicatedtest@mixel accountreferencedcredentials exist BUT readonlyprofilecheckshowsTENANTBOUND/noverifiedMFA, NOT authorizedinternalstaffforapprovedQAenrollment. DoNOTrepurposeorchangeitsorg/MFA/role or bypassMFA bySQL. ReadonlyaggregateinternalactiveStaff7,2verifiedMFAexists. No privatecredentialsprinted. Preferuserexistingstaffsignin.
+
+CUA segmentONGOINGHANDOFF notcompletion-summarizedbecauseuserloginpending. Aftercompaction callcua.rewriteDocumentation(), thengetcurrentapp/tabstate. NoGUIactionsoutsideCUA. PrimaryfullScreenRecordingstillnotgranted; controllerAXnotgranted; primaryexistingAXpreviouslygranted. Needexplicitaction-timeScreenRecordinggrantwhenactualcustomerAcceptsourceflowrequires, userOSsecurityhandoffifprompt. NoOSpermissionnewgrantthisturn. No realpublicMaccustomerAccept proofyet. Continuewhenuseraccessprovided; otherplatforms/CI/agentspaused. NoTestFlight/marketplacewrites. No completedtaskclaim.
+
+
+## APPROVED INTERNET DEPLOYMENT APPLIED — 2026-11-06 (NEWEST)
+
+Exact user approval call_d0b14801e96c456da8af8d8b74f6f04b APPLIED. Server /opt/mixel-remote-next-qa/state.json is authoritative private journal; safe local receipt `_scratch/next-approved-deployment-receipt-r1.json`. All3 isolated immutable services running; signer10002/0600, broker1278092, authority1278093. Correct DBism enrollment/audit migration committed transactionally, PostgREST reload notified. Only two dedicated Mac QA device rows under internal Mixel IT client created (names Host/Controller, osmacos, typedesktop); **enrollment table stillEMPTY** awaiting genuine native app enrollment/MFA, no auth bypass. New exact /v1/device-ticket on existing trustedISM origin + separate rs:9444 vhost installed, full production nginx-t PASS/graceful reload. Existing rs.mixel.ch site remains byte-identical f5016b753b2f7ded7c69614c47ffac1264af2116ddb8c5009d9ee3bd8e76363f. Five approved destination-specific178.104.17.23 UFWrules added/tagged and savedexactly in journal. Only GoTrue recreated with existing6+strict2native redirects. Actual immutableimage/allotherenv equal before/after; allother running container IDs preserved. Production auth healthy. No existing customerrelay/downloads/DNS/marketplacechanges.
+
+FIXED actual deployedTLSbug: helper restrictiveumask077 caused pairmkdir750 tobe700 so relaycouldnotreadcert. Addedexplicit pair.chmod750 afterchownroot:10003; privatefiles640 unchanged; restartedONLYownedQAturn. Addedactual trusted TLS listener verification tohelper afterrunningrelayrestart. rs-only renewalhook installed; helperhashjournaled. Source scripts/local/remote-next-refresh-tls.py changed, pycompilePASS. No weakeningcertificatevalidation/originalprivatekeypermissions.
+
+ACTUAL MAC PUBLICNETWORK checks: `_scratch/next-public-internet-preflight-r2.json` trustedHTTPS ISMhealth200/authhealth200/rs9444health200, authorityproper401andOrigin403+n ostore/nosniff, publicTURN5350TLS1.3. `_scratch/next-public-turn-r1.log/.json` all3realpublicUDP/TCP/TLS: anon401, fresh120sRESTallocation inapproved60000range, all4private/metadata/loopbackpeerpermissions403, eachallocationexplicitlyreleased. This is PUBLICRELAY protocolproof, NOTactualcustomerUIAccept/media. CheckpublicWS/authenticatedenrollment next.
+
+Mac R17both universalDeveloperID packages complete; frontend25passed0failed, native50passed0failed currentRustunchanged. SourceR17main/TS unchanged. Primary R16QUITviaCUA; R17primaryRUNNING account sign-in started liveChrome MIXELIDauth.mixel.ch tab2089507914 claimed/markedhandoff. Async question pending for usertofinishstafflogin+MFA; noexistingcredentialsautoimported. Primaryprocess4838 atlastcheck. ControllerR17RUNNING separatebundleID/process7799 (sampleproved idle AppKitnohang); title Testcontroller. LocalviewonlyQArequest pending0->explicitlocalAccept->negotiating latest; actualviewerlayoutcheckinprogress; controllerAXnotgranted(leaveviewonly). CUAhandle macControlMenuCheck pointscontroller, main Diagnostics latest; macHostR17 pointsprimary. GetcurrentAXbeforeactions; priorWindowmenu cancel via exposedCancelworked whereEscapehadnoeffect. FirstOpenLocalViewer click appearednotactivated, secondactualfreshclickcreatedfixture/viewer; noapphangfound. Need finishlocalviewonly/renderlayout+Stop, primarykeyboardtestafterauthasappropriate, actualtwoindependentenrolledpeerinternetflowwhenuserSSOaccessprovided. No full-displayScreenRecordinggrant yet; primaryAXpreviouslygranted/controllernot. NoCUAcompletionyet inthissegment.
+
+Otherclientplatforms/CI/agentspaused. FullTeamViewerportfolioNOTcomplete. NoTestFlightwrites. Do not endatlocalmilestone or callpublichealthactualcustomerproof. Scripts `_scratch/continue-next-{deployment,nginx,firewall,auth}.py` preservejournal/refusecollisions; alreadyAPPLIED doNOTrerun blindly. Nginxscriptfinalimmediatepublic9444curl initiallyfailedreloadrace; laterMacandserverstrictTLS200PASS withnormalDNS. PublicTURNinitialTCP5350refused causedTLSbugabove;FIXEDtestedall3.
+
+
+## APPROVED INTERNET DEPLOYMENT + NEW MAC UI — 2026-11-06 (NEWEST, IN PROGRESS)
+
+USER APPROVED exact isolated production deployment via async question call_d0b14801e96c456da8af8d8b74f6f04b: separate authority/broker/TURN under /opt/mixel-remote-next-qa, enrollment/audit schema +two dedicated Mac QA records, exact ISM /v1/device-ticket route, IPv4dest178.104.17.23 TCP9444/TCP+UDP3479/TCP5350/UDP60000:60099 UFW, add TWO strict loopback redirect patterns preserving6 and brief GoTrue-only recreation. Preserve all legacy/customer services/downloads/DNS. NO new confirmation needed for this exact plan. Approval answered Recommended. No production mutations performed YET at this checkpoint; root stillabsent atlastpreflight. Need execute carefully with backups/rollback. ReadonlySSHsudo -n works (mixel user). No marketplace approval, no TestFlight writes.
+
+CRITICAL READONLY DISCOVERY: correct existing ISM DB is **ism**, NOT postgres. Derived from running GoTrue GOTRUE_DB_DATABASE_URL path; required public.users/devices/clients/organizations ALL present in ism. Database postgres has none; doNOT apply there. remote_private/public.remote_device_enrollments ABSENT in ism too. PostgreSQL15.0014. Neededdevice fields client_id NOTNULL,name NOTNULL,type text NOTNULL,os ism_device_os NOTNULL; default uuid/statusunknown/vpnunknown/timestamps. Need read internalMixelclient/enums/checkconstraints then seed ONLY approvedtwoQA Macdevice records, no existingcustomer rows changed. CurrentSSHmetadata query has result pending latestexec.
+
+PREPARED PRIVATE servicebundle `_scratch/next-macos-internet-service-r13` 0700, private/identity.key raw32CSPRNG600; actualauthorityCLI validated signer. PUBLIC ROOT 2da4e754d0ab4a620e90b7d6a0afadc563a1177293be4abe0e66e639574ad907. Public config uses identity+authorityhttps://ism-api.mixel.ch, wss://rs.mixel.ch:9444/v1/ws, keycloak, relay_onlyTRUE for honestrelayproof. Publicanonkey read ONLY NEXT_PUBLIC_SUPABASE_ANON_KEY from existingISM .env.local; never service-role. Private TURNsecret onlybroker.env+turnserver.conf, identityseedONLYauthoritymount. DoNOT print privatefiles/bytes. Bundlecontains composeJSON hostnetwork3services uid10001broker10002authority10003TURN, readonly/capdropALL/noNewPriv/limits/no-pulls immutableimageids. Authority/broker bind1278093/8092. TURN public178 IP3479+5350+60000range, private/metadata/loopback/multicast/allIPv6peersdenied, noTCPpeerrelay. ExistingPBX3478/49152rangeuntouched. BrokernewNginxvhost9444 onlyws/healthz; rs443originalmustremainbyteidentical. ISMnginxadditiveexactlocation preserves HSTS/nosniff/frame/referrer headers explicitly +no-store/nativeOrigin403. Minornewheaderhardeningadded AFTER localNginxfixturepass; revalidateprospectiveproductionfullNginx before reload. Bundle sha256.json recomputed; public config/seed unchanged. GoTrueoverride services.gotrue.env URI_ALLOW_LIST=6exactold+4/5digitdecimal127callbackpatterns. ROOTfiles0600/mountowners setcorrectlyduringapply; privatelycopyONLYrsTLS toTURN, nooriginalpermschanged, add ownedrs-onlyrenewalhook/restartONLYnewTURN.
+
+ImagesBUILT LOCALLY MacDocker (backendservices ONLY notLinuxdesktop): backend mixel-remote-next-backend:mac-internet-r13 immutable sha256:b659f892d444e6af2cec5d90d043fd2aacb5d319157fad3697b8a61d076e5bf9; derivedcoturn4.18.0 sha256:ca1039747b19ccb35059890f358f620ffc612285280c5d1adb310298c65bf2da. Export `_scratch/next-internet-service-images-r13.tar`, receipt .json hash/bytes; exportDONE, NOuploadyet. Newbackend6 actualprocesschecksPASS `_scratch/next-internet-backend-runtime-r13.log`. Planchecks `_scratch/next-service-plan-validation-r1/checks.json` qualifiedtrue: manifest/boundaries/Composeconfig/additivepatch/concurrentrefusal/actualNginxfixtureUID101nocapsloopback. InitialnginxfixtureR1chownfailedrootnocaps, R2UID101 publicIPunavailable, R3changedONLYfixturelistener127 (productionIPactualeth0verified) PASS, fixturekeyremoved. No weakeningprod. Actualpolicycoturn `_scratch/next-internet-turn-policy-r2.log`4PASS: strictTLSstartup, anon401/freshRESTauthallocation, true403 for127/10/169.254metadata/192.168peerpermission, refresh0allocationreleased, owncontainer+keys/secretremoved. R1fixturebound127DockerDNATfailedEOF; R2listen0.0.0.0ONLYprivatefixture fixed; productionlistenpublichostIPremains. ExistingR4realcoturn3media modes proofvalid. EarlierSQL7+namespace-refusal+GoTrue17realglobnegativecasesvalid, no prod tests/data seeded yet.
+
+ProductionpreflightGOOD: correcthostname mixel-vps-01, 24.7GB rootfree, uids10001/2/3UNUSED, desiredportsallFREE, noQAproject/root, UFWactive, originalnginx-t PASS, baseGoTrueimage/env exactlyLIVE(no drift), 6redirectsno127. ISMsite /etc/nginx/sites-enabled/ism-api.mixel.lu.conf resolves sites-available; SHA4219cb5fb98035b9646ffd1de60a40e8da7a5cc0a847e6fd66886be63f19aa30. rsSite f5016b753b2f7ded7c69614c47ffac1264af2116ddb8c5009d9ee3bd8e76363f. BaseGoTruecompose /opt/supabase-ism/docker-compose.yml +docker-compose.pin-otp.yml, project supabase-ism, onlygotrue --no-deps --pullnever recreation. Do not dump secrets/env values. Verify publicanonJWT signature againstGoTrueJWTsecret IN MEMORY onserver withbooleanonly oncebundleinstalled. NewDBmigrations targetism, transactionlocktimeout5s/stmt30s +NOTIFYpgrstschemaReload. ExistingHBBS/HTTPbridge/downloads untouched throughout.
+
+USER rejected olddeveloperUI; I acknowledged and REPLACED with real light Mixelred desktopworkspace: persistent sidebar Remotecontrol/Devices/Account/Settings, prominent ID/connect cards, sessiontools area, guidedaccount/setup notices, emptydevice views, diagnostics separatepage, inlineoriginalSVGicons, actualnativecallbacks IDsallretained; nofakeReady/devices. ActualR14runningUI screenshotshownuser `_scratch/next-macos-redesign-package-r14/proof/remote-control-live.png`; misleading file remote-control.png actuallyAccount becauseusernavigatedduringcapture, don'tlabelasRemote. MainuserUIworkcontinues. Current R16 full redesigned primary+independentcontroller universal DeveloperID builds DONE, public serviceconfigbundled/validated, sourceconserved, runtimeunqualified/notnotarized/noStore. Primary mainSHA7685c69ab74bb37467f9048f94e9bc0cdbd652e2454b8afe414f7111b10570e5; controller bc17d0026cc47b58a869042ce2af6d838d5a86bb803d81c623e5137488d9fbeb. Actual bundle IDs .qa vs.qa.controller. New nativeNSBundle identifier strict3-scopeKeychain selector keepsQAprimary/controller/futureprodseparate, unknown/unbundledrejects. Packager --qa-controller; actual signed-binary --validate-identity-scope CLI metadata-only PASS bothdistinctnamespaces, noKeychainreads/writes. Controller notlaunched/noidentitiescreated/enrollmentsyet. Native.windowtitle Testcontroller whencontrollerflavor. Mac sourceonly.
+
+R16 checksPASS: `_scratch/macos-ui-redesign-r14/r16-native-tests.log`50passed0failed0ignored (desktop16+nativecapture/hardware/media; includes strictnamespace isolation); r16-frontend-tests.log19passed0failed; priorall4clippy/controller-isolation-clippy-r2 PASS5.06s. R14 first frontendfailed4 newworkspaceharnesscases becauseDOMregexonlyletters missedh3; harnessfixedalphanumeric inR15, notruntimeUIbug. R15/R16realGUI allmain/navSettings/Devicesempty/Account tested, noOSprompts. R16actuallocalQAkeyboardrequestpending0 ->Accept ->liveSCKhardwareH264nativeUDPDTLS/WebCodecs546frames/pending0 ->EndSessionclosedcleared. Screenshot local-accepted-viewer.png confirmed realUXBUG: imagepushedinputcontrolsbelow650pxwindow. Stoppedsessionbeforeediting. CurrentCUA macHostR16 pointsprimaryR16 at LocalWebRTCViewer CLOSED, noactivecapture/input. LastCUAsegment completion Foundsessionlayoutissue DONE. redesignMac oldR14QUIT. No activeCUAworkflow. NativeUI50 evidence remains; rootcurrentfrontendhasneweditsbelowsoR16notlatest. Otherclientplatforms/CI/agentsPAUSED.
+
+**R17 SOURCE BUILT/QUALIFICATION IN PROGRESS**: newcustomeractive-session focuslayout hideshomecards and sizesremoteimage toviewport; real Screen/Files/Clipboard tabs basedonactualgrants, keyboardrovingARIA, incomingfilebadgevalidconsent/noautoSave, globalEndSessionfooteronotherscreens. LocalQAviewerflexlayout keepscontrolsvisible. Friendlycustomerstatus+resolution/fps nointernalcodec/phase jargon. FIXED seriousUIStopbusyclipboardbug: dedicated scopedStopignoresordinarybusy, operationversion invalidatesoldpromises, immediateclear and latchesstoppedconsent evenifIPCfailed; noautoReaderrestart; retryEndavailable; closingmessagesnotfalseNoSharing. Oldinputfailurecannotclearreplacement/queue, release_all permittedbehindpendingkeydown afternavigation/busy whiledenyingnewkeysoutsideScreen. RemoteDisplayIDclearedonsignout. Filesattention scopeguards. Newtests written/compiled notRUNyet: Stoppreemptsclipboard/nooldmedia, failedStoplatch/freshconsent, retiredinputerror, queuedreleasebehindkeydown, grantedtabs/oldfilebadge/keyboardtabs. Total expected25frontend, inspectACTUAL outputafterbuild.
+
+R17 strictTSbuild `_scratch/macos-ui-redesign-r14/r17-frontend-build-final.log`PASS. CurrentSOURCEFREEZE while **both** `_scratch/next-macos-redesign-package-r17` primary +`_scratch/next-macos-redesign-controller-r17` packaging runs (latest exec session32574). Primarypackage.log alreadyPASS23.45sarm18.38sIntel; controller likelyfinishingcachedbuild. Checkcompletion+package.json+identity-scope logs, DONOT edit next/ or included scripts untilbothsourceconservationDONE. Serverops/scriptsunder_scratch/HANDOFFokayoutsideinventory. Need runfrontendtestsAFTERfullbuild, fixanyfailure thenrebuild asneeded, actualR17GUIlocaltest including nowvisibleUnicode/keyrelease/end, open2ndcontrollerverifydistinctprocess/title, thenactualInternetafterapproveddeployment. No actualinternet/customerAccept proofyet; localQA isNOTthat. No fullTeamViewerportfolio claim. TestFlightstillrequiresfuturequalification+exactstoreapproval. Fullprogrammeaudio/unattended/guestQS/enterpriseetc stillunfinished, don'tclaimcomplete.
+
+## MAC R12 BUILT + LIVE LOCAL ACCEPT/INPUT VERIFIED — 2026-11-06 (NEWEST)
+
+User latest MACOS FIRST, other client platforms remain paused. CURRENT signed universal app `_scratch/next-macos-network-package-r12/Mixel-Remote.app`, sourceUnchanged/buildQualified/developerIDSigned/universal TRUE, mainSHA c8dab648728491f84df0ef66deaf0dbfba2b38ec42409914a5523c993e59aaec. Source verified STILL matches package after tests. serviceConfigured/runtimeQualified/notarized/storeSigned FALSE. Local GUI qualification is SEPARATE `_scratch/next-macos-network-package-r12/local-acceptance.json`; do not mark customer runtimeQualified. App currently OPEN local viewer CLOSED/no retained video/no active keyboard session after host Stop. Legacy installed R6/customer services untouched. No new OS grants, production changes, agents, or other client platform builds.
+
+NEW FIX actual VideoToolbox async FrameDropped no longer poisons compression session. Null sample WITHOUT dropped flag remains malformed/fatal. `macos_screen_encoder.rs` shares damage suppression + recovery across customer and local QA paths: dropped changed image retries retained latest image even if screen becomes static, requests independently decodable IDR, suppresses missing-IDR predictive output, fails persistent recovery after 3s. Every retry returns through owner input/auth/cancel polling; real native timeout still invalidates. Hardware regression deterministically injects callback drop through production completion method then verifies SAME real hardware session encodes fresh keyframe; not an actual OS overload reproduction. Actual hardware encode/decode/static suppression + forced refresh integration passed. R11 full suite `_scratch/next-macos-r11-native-suite.log` 100passed0failed0ignored; includes five new encoder tests; R11 was BUILT BEFORE tests.
+
+ACTUAL R11 GUI via CUA: pending no capture/video; Reject received0; fresh keyboard request required local Accept; then ScreenCaptureKit own-window -> hardware H264 -> real native UDP/DTLS/SRTP -> WebCodecs rendered125/172/888 frames, decoderpending0. Encrypted Unicode exact `Mixel input Grüezi 中文 😀` observed in native fixture field. Ten key events Shift+A/up, b/up, Backspace/up, c/up yielded suffix `Ac` (Shift released, b deleted). Disconnect cleared video; fresh reconnect pending/Accept; view-only disabled keyboard. Found stale UI prior keyboard acknowledgement in new view-only session; FIXED BEFORE R12.
+
+R12 FIXES: viewer status resets on close/new request and reflects actual view-only/control scope; late old input reply cannot overwrite new status, submit remaining old batch, or close replacement. Native viewer close now REQUIRES explicit request id; atomic matching stop ignores retired request while main/tray retains stop-current. New native regression + three compiled-viewer async lifecycle tests. R12 universal rebuild complete BEFORE retest. `_scratch/next-macos-r12-clippy.log` strict all4crates/alltargets PASS4.68s; frontend strict build PASS. `_scratch/next-macos-r12-desktop-tests.log` 15passed0failed0ignored; `_scratch/next-macos-r12-frontend-tests.log`14passed0failed0skipped. No broad rerun needed other source unchanged from100-pass R11.
+
+ACTUAL R12 GUI retest: pending0 -> local Accept -> real capture/rendered243+frames/640x420/pending0 -> encrypted Unicode exact field -> scoped viewer disconnect clearsvideo+Noactivekeyboard -> fresh VIEWONLY request pending0 -> local Accept -> rendered278+frames, keyboard controlsdisabled, correct View-only session status with no old ack -> HOST Stop -> viewer closed/no retainedvideo/noactivekeyboard. CUA completed summary Verified rebuilt Mac flow; no active CUA workflow/question. Saved four R12 screenshots in package/proof, old R11 reject/keyrelease screenshots remain earlier package. Commentary already embedded R11 live image; final prefer CURRENT R12 accepted image.
+
+Additional earlier probes completed: `_scratch/next-macos-r12-enrollment-test.log` PASS isolated SQL assertions + existing remote_private namespace refusal; own PG stopped/socketremoved. `_scratch/next-native-redirect-patterns-r1/run.log`17PASS real pinned GoTrue gobwas glob dependency, decimal-only loopback4/5digit patterns deny external/userinfo/path. No production schema/GoTrue config changed. Prior backend6+realcoturn3 evidence valid. Full programme still VERY incomplete (audio, guest QS/unattended, enterprise/mobile/AI etc). Current app public service config ABSENT; internet/customer connection/real customer Accept NOT verified. Additive enrollment SQL/new authority+broker+TURN/GoTrue loopback prerequisites require concrete prepared production bundle + Phase4(a) exact approval BEFORE actual infrastructure/DB/auth config changes. No production deployment bundle prepared beyond Dockerfiles/SQL/helpers. Do not claim full TeamViewer parity or stop as if overall programme complete. Continue Mac work; other client platforms paused until Mac acceptance.
+
+## REAL COTURN UDP/TCP/TLS PASS — 2026-11-06 (NEWEST)
+
+ACTUAL _scratch/next-macos-coturn-r4.log EXIT0, inner/native.log3passed0failed0ignored in11.71s(compile6.88s). Realofficialcoturn4.18.0container +nativeMACRustpeers, ALL UDP/TCP/TLS: relayONLYSDP(nohost/srflx), pinnedactualDTLScerts/signedECDH; consentpendingdeniesvideo thenaccept+opaqueproof byteexactH264SRTP; encryptedUnicode/ACK/replaydenial; separateactualfileDataChannelwithindependentbulkkeys. Thisisprotocol+syntheticmediafixture, NOTactualSCKdesktop/customer/UIAccept. Runtime/result.jsonqualifiedtrue, noProduction/systemtrustchanges, privatekeys/RESTsecretconfigremoved, owncontainerremoved. MacappR10stillopenoffline/unconfigured, sourceMacUIunchanged, actualcustomerflowNOTqualified. Earlier95Rust+11frontend+SQL7+backend6+realIsmTLSproofremainasprevioussections; 3externalcoturncasesAREadditionalfeaturetestsnotincluded95.
+
+FixedinteropfixturefailuresCOMPLETED: vendorcoturnbinaryfailedOperationnotpermittedunderallcapsdropped/noNewPriv. NEW next/deployment/coturn.Dockerfile installsBYTEIDENTICALvendorbinaryto/usr/local/bin/mixel-turnserverwithmode0755 (noinheritedsetid/fscaps), cmpassert, user10003,noaddedcapabilities. Derivedmixel-remote-next-coturn:qa localonly, _scratch/next-macos-coturn-image-r1.log buildPASS; productionhelpermustuseDERIVEDimage notbasecap-requiringentrypoint. R2thenstartedbut4.18rejectslegacy no-dtls/no-tlsv1/no-tlsv1_1/no-log-file; no-cli deprecated. Removedobsoleteflagsafteractual--helpread;4.18DTLS+CLIdefaultOFF/TLSminimum1.2, noTLSweakened. R3strictPython3.15TLSCA rejectedmissingAuthorityKeyIdentifier infixtureleaf; generatedproperleafAKI/SKI+rootSKI/AKI, NEVERdisabledcertificatevalidation. R4thenall3protocolmodesPASS. OneEXPECTEDloopbackwarninginQAonlybecausebothrelaypeers127insideprivatecontainer, otherIPv4peersdeniedandonlyMac127ports published; mustNOTcopyfixtureloopbackruletoproduction. Productionconfigmustdenyprivate/loopback+multicast.No defaulttestskip: cfg(test)+featureexternal-turn-qa only; missingstrictscratchfixturefails.
+
+CurrentNativeCorecheckexternalQA _scratch/next-macos-coturn-check-r1.log PASS7.38s (notclippy). NeedstrictclippyfornewQAfeature +formatter. CoreproductionsourceFUNCTIONSUNCHANGED, addedDEVserde_jsonCargolockedge,test-onlymodulefeature. scripts/local/test-next-workspace.py inventorynowcoversALL test-next-*.py. BackendrunnernowexplicitLinuxamd64platformremoveswarning, r2runtime6passedbeforethisminorhelperonlychange. TLSactualCAreceiptverified200noBearer hadharmlessARMhost/x86imagewarning; nextprobeexplicitplatform.NolocalDockerQAcontainers/volumes/PGserversleftfromfinishedrunners.
+
+NEW importantdeploymentprerequisiteconfirmedREADONLY: liveGoTrueism-gotrueversion2.158.1 KeycloakEnabledtrue, existingallowlist6entries onlyloopbacklocalhost3000+5173 found; no127Nativecallbackpattern. Actualnativecallbackhttp://127.0.0.1:<randomport>/auth/callback?state=<nonce>. OfficialPINNEDv2.158.1 request.go verified (notmaster! masterautoacceptsloopbackbutprodolddoesnot): onlysameSiteHostnameOR URIAllowListglob; needsread-onlySiteURL/genericpatterncheckbeforeassertingblocked. NativePKCEHTTPSproviderenabled,noMFAtriggered. GoTruecompose metadata /opt/supabase-ism/docker-compose.yml +docker-compose.pin-otp.yml, projectsupabase-ism servicegotrue. Changingloopbackallowlist/recreatinggotrueisPRODsecurity/configactionneedexactPhase4approvalBEFOREchange. DoNOTcopypersonalOIDCsecretorDBJWTsecret.
+
+Securityplanning: avoidunrestrictedportglob127:* (userinfoauthorityinjectioncouldmatchsingle-labelhosts). PreferredtwoDECIMAL-ONLY4/5digitportpatternswithliteralqueryquestion class[?]: http://127.0.0.1:[0-9][0-9][0-9][0-9]/auth/callback[?]state=* and5digitvariant. Needtestactualgobwas/globmatching/negativeuserinfo/externalhosts beforeproposingapproval. PortsdefaultMac/Linux/Windows≥4digits. NativevalidatesexactHost/path/state+PKCEverifier; noOSsecuritybypass. Officialprimarysourcesweb: raw.githubusercontent.com/supabase/auth/v2.158.1/internal/utilities/request.go; config configuration.go usesgobwasglob; supabase.com/docs/guides/auth/redirect-urls. NoProdSSOchanges/apploginattempts yet.
+
+Preferredprepareddeployment stillscope: additiveenrollmentSQL(7localpass) +separateauthority8093servedEXACT/v1/device-ticketonEXISTINGTRUSTEDISMHTTPSorigin(noBeareratscopeduntrustedbroker); broker8092newrsTLS9444/v1/ws leavesexisting443/RustDesk211xxroutes; dedicatedTURN3479UDP/TCP5350TLS60000..60099 (PBX3478/49152..49251untouched). NeedCOMPLETEreviewableconfiguration/setup/rollbackbundle+testsBEFOREaskingonebatchedPhase4productionapproval. Noactualseedcreatedforprod/noTLSprivatekeyread/noportsopened/noDBschemachanged. ExistingSSHread-onlyconfirmedremoteenrollmenttableABSENT, newbackendsNOTrunning. ContinueMacprogrammeandconcretestagingprep; no finalparityclaim/partialmilestonefinal. NoactiveCUAsegment/question/agent; ifresumingcomputerusecallrewriteDocumentationfirst.
+
+
+## BACKEND6 + TLS PASS; REAL COTURN MAC FIXTURE RUNNING — 2026-11-06 (NEWEST)
+
+Macfirst clientR10GUIopenoffline, full95Rust+11frontendpassedearlier. Needfullprogrammenotcomplete, doNOTcallFinished/100%/realAcceptproof. NoWindows/Linuxdesktop/mobilebuild/CI/agents, NOprodchanges. BackendLinuxcontainerbuiltLOCALLYMacDockeronlyasMacconnectionprerequisite.
+
+BackendDockerimageR1 built2releasebinaries66s; R2 Dockerfile noninteractiveaptfixcachedRustbuild/runtime22s. pinnedrust1.99bookworm+Debianbasesasprevioussection. Currentlocaltagmixel-remote-next-backend:mac-r10-preflight runtimeconfigId7cd2c282f9884c635a0dca687d96d0673fdd1d90f445cc85b314d60bb7faed5b. logs _scratch/next-macos-backend-image-r1/r2.log. Noimagepush/noVPSdeploy. DEBIAN_FRONTENDscopecommandfixremovesdebconffrontendwarnings; optionalapt-utilsdeferral/multiCArehashareDebianbuildinformational, actualcertificateTrustverifiedbelow.
+
+NEW scripts/local/test-next-backend-image.py: actualauthority/brokerprocesses networkNONE,nopublishedports,boundedCPU/memory/caps/privatekey knownpublictestvectornoProdSecrets; runtimeSignerCLIfilemode/owner/symlink/zero enforcement, fullwellformedunauthrequest401andOrigin403(notjustbadJSON), healthstartup, onlypublicRootbroker, missingtruststartupdenial, actualSIGINTcleanexit0, ownedcontainer+volume cleanup. InitialruntimeR1 failedUIDtestbecauseDockerDesktopmacOSBINDmountremapsmetadataUIDtoreader; thiswasFIXTUREARTIFACTnotRustownerbypass. FixedusingACTUALLinux-ownedprivateDockervolumefiles, all6checksACTUALPASS _scratch/next-macos-backend-runtime-r2.log and/result.json qualified=true, noports/productionfalse/testVectorRemovedtrue/cleanupErrors[]. Noownedcontainers/volumesremain. AfterR2 addedexplicit--platformlinux/amd64tofutureDockerruntoavoidarchitecturewarning; nextcallusefreshoutputR3ifrerunjustified.
+
+ActualruntimeCAstoreverifiedHTTPSism-api.mixel.ch defaultCA hostname, noBearer, GET/auth/v1/health200, _scratch/next-macos-backend-tls-check.json verifiedTLS=true. OneDockerplatformemulationwarninginthatreceiptbecauseprobeomitted--platform; rootcauseARMlocalhost vsintendedx86backend, notTLSfailure. Newrunnerexplicitplatformfix; futureprobeincludeplatformtoo,nocertbypass.
+
+READONLYproddiscovery: existingPBXcoturn3478 usesrelay49152..49251; donotchangeit. ProposednewTURN3479UDP/TCP+5350TLS+60000..60099relaynotlisteningfocusedss. ExistingrsNginxcert/privatekeyPATHSknown (neverreadprivatebytes). ExistingISMsitefilename /etc/nginx/sites-enabled/ism-api.mixel.lu.conf (namesism-api.mixel.ch/mu). ToavoidnewDNS/certandtrustbleedfromrelayTLSkey, preferredauthorityoriginhttps://ism-api.mixel.ch EXISTINGtrustedfullBearerrecipient; addEXACT/v1/device-ticketupstream8093. BrokerpublicWSSrs.mixel.ch:9444/v1/ws newisolatedNginxlisten9444, existing443/211xxroutesunchanged. DedicatedTURNusesrsTLScredentialprivatelyseparatefromISM/authorityTLSkey; authoritysigner10002privatefileONLYauthority, broker10001publicRootonly. NeedprepareREVIEWABLEbundle/install/rollback+validatedconfigs BEFORErequiredPhase4approval(prodDBadditivemigration7PASS+infralisten/routes/firewall). Noapprovalasked/deploydoneyet. Isolatedstaging/noexistingrsroutingchangesfromapproved1Astillbinding; donotreusePBXsecret/certglobalperms orcancelcustomerapps.
+
+OfficialcoturnvendorDockerlinkverifiedprimary github.com/coturn/coturn. Inspectedlatestamd64manifestPINsha25659af4221a2c45c1195a1a4a865542b3ea744be1dd8e228d11bde87c6631081cf, actual--version4.18.0 _scratch/next-staging-coturn-version.log. OnlyLOCALimagepulled/run--version networknone.
+
+NEW actualcoturninteroperabilityfixtureINPROGRESS: core_protocolfeatureexternal-turn-qa enablesONLYcfg(test) coturn_fixture_tests.rs; no productiontrustoverrideAPI. StrictrequiredfixtureJSONunderrepo_scratch, URLsFORCED127.0.0.1ports, explicitlocalDERCA, freshactualNativeTransportrelay-onlytwoMacRustpeers. Tests plannedUDP/TCP/TLSactualcoturn, realpinnedDTLScerts+signedECDH, pendingconsentdeniesH264thenAccept+opaqueproofbyteexactH264SRTP, encryptedUnicode+ACK+replaydenial, separateactualfileDataChannel/domainkeys, nohiddenhost/srflxcandidates/streamUDPdowngrade. ThisisREALprotocolinteropNOTSCKdisplay/customer/UIAccept. CoreCargoaddedserde_jsonDEVedge/Cargo.lockupdatedoffline, cfgtestfeaturemodule, productionfunctionsUNCHANGED. _scratch/next-macos-coturn-check-r1.log cargo check --features external-turn-qa --tests --offline EXIT0, NOTclippy/testpassyet. SharedtestinventorynowincludesALL scripts/local/test-next-*.py forfutureconservedpackages.
+
+scripts/local/test-next-coturn.py completeownedrunner: generate1dayfixtureCA+leaf(SAN127,CAfalse), privatecertkeys/RESTsecretundernew_repo_scratch folder0700, officialpinnedDockerimage10003readonly/capsnone; onlyrandomMac127portsUDP/TCP/TLS, loopbackrelaypeersonly+denyotherIPv4, noCLI/TCPpeerrelay/DTLS, dedicatedquota/range, rootCAONLYpertestnotOS. ReadyverifiesTLSwithfixtureCA, thencargo testcore--lib--featureexternal-turn-qa--locked--offline coturn_fixture_tests:: --test-threads1 --nocapture, bounded240s. Finallylogs, stops/removesONLYownUUIDcontainer, deletesfixtureprivatekeys/secretconfigswhencontainercleanupsuccess, leavespublicCA/logreceipt. Nootherappcontrol/DB/prod/systemtrustchanges. CURRENT executing --output_scratch/next-macos-coturn-r1, outer _scratch/next-macos-coturn-r1.log /inner native.log/coturn.log/result.json; execsessionfromlasttool. InspectACTUALresultandFIXfailuresbeforeclaiminginterop. IfloopbackDockerturnrelaydoesnotwork, diagnosisnativeprobe actualconfig, donotweakenproductionTLS/consent. NoSourcefreezeactive,R10alreadyconservedbeforetheseQA-onlyadditions. MaccodeunchangedafterR10UIgate. Continuebuild/test/servicestagingprep, no partialfinal.
+
+
+## R10 MAC GUI + SQL7 PASS; BACKEND PREPARATION RUNNING — 2026-11-06 (NEWEST)
+
+LATEST MACAPPBUILT R10 (_scratch/next-macos-network-package-r10/package.json), sourceUnchanged/universal/developerID/buildQualified TRUE, mainSHA4d1d0eb90ed81c1a27bab679929a675cafdc4fef8583750897802b1eaa4e1b71. Runtime/serviceConfigured/notarized/storeSignedFALSE. NewsourceeditsAFTERpackage onlySQLtesthelper/backendDockerfiles, Maccodeunchanged. _scratch/next-macos-network-r10-clippy.log PASS5.63s. 95RustMacsuite+11frontendtestsPASSactualearliersection. No needrepeatbroadcheckswithoutsourceconcern.
+
+R9closednormallyviaCUA CmdQ (Appquit observed). R10openedviaexactpath, AXverifiesMakeMacAvailableDISABLEDwhilesignedout (realUIfix), Connectdisabled/offline, nofalseReady. CUA screenshotSAVED _scratch/next-macos-network-package-r10/proof/mac-r10-open.png, embeddedincommentary. R10currentlyopenidle/signedout, CUAhandle macR10. BOTHCUAsegmentsCOMPLETED withcompletion_summary, latest VerifiedMacstartup. NoactiveCUAworkflow/question/permissionhandoff. NoScreenRecording/AXpermissionschanged/noactualscreenorinputflow. MacinstalledcustomerR6untouched.
+
+NEW scripts/local/test-next-enrollment.py completeowned-fixturerunner (newoutputONLY_repo_scratch, noDSN/remotehostaccepted, stripsinheritedPGenv, freshPG17cluster, TCPDISABLED, private0700random/tmpUnixsocket, stopsownedserverfinallyevenfailure, keepsserver/socketifcleanupuncertain). Executed --output_scratch/enrollment-db-build-r10 EXIT0, _scratch/next-macos-r10-enrollment-test.log PASS. validation.log7actualNOTICEPASSgroups: stable9ID/idempotency/dupekey/noimplicitrotation, MFAstaff, realroleRLS/writeaudit, organizationdeactivation, profiledeactivation, revocation/gen/rotationretainID, fullaudit. OwnedPGserverSTOPPED, socketremoved, result.json fixtureQualified=true/productionTouched=false. OldPGclusteralsoSTOPPED. NoexistingDBchanged.
+
+READONLY VPSdiscovery authorizedexistingSSH mixel-vps(alias2222)works. ExistingRustDeskhbbs/hbbrand HTTPSregistrationbridgehealthycontainersuntouched. CurrentPRODUCTIONISM to_regclass(public.remote_device_enrollments) EXISTS=false (singleboolSELECTonly; NOrowsdump/noDBmutation). NewnativebackendNOTDEPLOYED. rs.mixel.ch Nginxsiteexisting /etc/nginx/sites-enabled/rs.mixel.ch.conf listens80+443; cert /etc/letsencrypt/live/rs.mixel.ch/fullchain.pem andprivkey.pem (PATHSONLY,noPEMread). Ports8092/8093/9444/3479/5350werenotlisteningonfocusedsscheck; PBXcoturnalreadyuses3478, neverchange/reuseitssecrets. Newstaginginfradeployment+anyprodDBmigrationrequiresconcretePhase4approvalBEFOREwrite. Needpreparecomplete/reviewablebundle+offlinevalidationfirst, notvaguepermissionquestion. Proposal isolatednewTLSport9444 onrs(existingcert/noDNSchange), separatelypermissionedauthority8093/broker8092, optionaldedicatednewTURN3479/5350+nonoverlappingrelayrange (NOTYETverifiedPBXrange, doNOTassume). Ornewdedicatedstaginghostnameifneeded, nochosenprodactionyet. Earlierapproval1Acalledisolatedstaging/noexistingrschanges, preserveexistingroutes/sessions.
+
+Runbookread /Volumes/MAC_Mini_Ext/Project_Mixel/VPS-Mixel/MIXEL_DEPLOY_RUNBOOK_2026-05-28.md; userstale /Users/...filemissingbutrootdirlinkexists. ActualsharedrootAGENTSread; GitHubsourcebackuponly/noCI, useMacbuild, no merged/deploycleanuptriggerbecauseunmergedactive. No newsecretsprinted/copied. DoNOTrepeatrootAGENTSplaintexttestcredentialinchat/logs.
+
+LocalDockerdaemonAVAILABLE29.9.2. PrimaryofficialRust1.99.0bookwormmanifestinspectedlinux/amd64digestb36c246742b4d323472588f789601be34eb4af053255e2af53969078ee8dcec7, officialDebianbookwormSlimamd64digestc67e92c8099ba22853ab4cfda7cfb494d253d6012ca82dee98ba8976772af018. NEW next/.dockerignore whitelistCargocratesvendor/deploy; next/deployment/backend.Dockerfile buildsONLY signaling_server+identity_authority, NOTLinuxdesktopclient. Two-binaryruntimeunprivileged10001, SIGINTgraceful,2TokioWorkers,CAsinstalled,pinnedbases. LOCALMacDockerpreflightbuildSTARTED --platformlinux/amd64 --tagmixel-remote-next-backend:mac-r10-preflight next, _scratch/next-macos-backend-image-r1.log sessionfromexec. NOTdeploy/registryupload/publicport/imageonVPS. ThisisMacconnectionbackendprerequisite, allotherdesktop/mobilebuildsremainpaused. Inspectbuildandfixissues; thenactualisolatedDockerhealth/keyfilepermission/failclosedtests, productioninstall/rollbackbundlebeforeapproval. No secretkeygeneratedyet. FullMacaudio/VP8/quality/unattended/etcstillunfinished, nofinalcompletion/fullparityclaim. ContinueMacstage.
+
+
+## R10 UNIVERSAL SIGNED BUILD RUNNING — 2026-11-06 (NEWEST)
+
+R9builtthen95Rustnative+11frontendPASSasprevioussection. R10latestclippy _scratch/next-macos-network-r10-clippy.log PASS5.63s strictTS+4Maccrates/alltargets -Dwarnings. Current _scratch/next-macos-network-package-r10.log --universal DeveloperIDpackage RUNNING; inspectexecsession/latestreceipt. NO includedsourceeditsuntilsourceconservationcomplete. ContainsR10authUIgate+lateaccountresponseguardandnew11testfrontend, latestnativefiles/input/recovery/consent.
+
+NOotherplatformwork/CI/prod/marketplace/permissions. R9privateGUIcurrentlyopenofflineandUNCONFIGURED, CUAsegmentalreadycompleted, macApp handleboundR9; quitviaCUAbeforeopeningR10sameQAidentifier. Noactivesession/account. ActualcustomerAccept remainsUNTESTED/needsconfigurednewservice+enrollment, fullTVprogrammeNOTcomplete. UserwantsMacfirstbuildTHENtest, continueMacstage. SourcefreezereleaseONLYafterpackage.json sourceUnchangedtrue.
+
+
+## R9 MAC TESTS PASS; R10 UI FIX READY — 2026-11-06 (NEWEST)
+
+Current user latest: MacONLY buildFIRSTthenTEST. R9universalDeveloperIDpackageCOMPLETEDbeforeanytests. NowPOSTBUILDverificationallowedandrunning; olderblanketnotestsentriesareHISTORICALsuperseded, notcurrentrestriction. NOotherplatformbuild/tests, noagents. DoNOTclaimfullTVparity/entireprogrammecomplete. NextcontinueMacfix→rebuild→test, notanotherpartialfinal.
+
+ACTUAL POSTBUILD OUTPUT: _scratch/next-macos-r9-native-suite.log cargo test -pdesktop_app -pcore_protocol -pnative_os_capture -psignaling_server --all-targets --locked --offline EXIT0, TOTAL95Rustpassed,0failed,0ignored (sumbystandardtestresultblocks). Includes14desktop,21corelib,5media,7security,2TURNrelay,1WebRTCloopback; nativeFD/h264/input/mediafixtures andISM/authority/registry/WSfixturespassed. NOTactualcustomerGoTrue/service/ScreenCaptureKitdisplay/control. Focused _scratch/next-macos-r9-file-tests.log 3passed0failed: actualFDsavedbytes + lostACKprefixresume + retiredtransportignore + completedreceiptidempotency; partialcancel/preserveexisting; foreignpeer+forgedresumehashdenial. These3includedin95NOTadditionalcount. FullRustpassedBEFOREfrontend-onlyR10fix; Rustunchangedafter.
+
+R9frontendfirstactualrunfound5existingpreviewHARNESSfailures (microtaskreadyextraasyncstartlayer andoldPASStextassumption). Fixedharnessbyexplicitreadyawait, actualcurrentadvancingframephrase preserved5meaningfullifecyclecases. All8oldfrontendcasesthenPASS. ActualnativeR9GUI openedviaCUA signedapp(path_r9), screenshotshowedbrandedMixelRemote1000x780, PRIVATEDEVELOPMENTBUILD,offline/signin/devices/setup. DoesNOTshowworkingcustomersession. Signedout MakeMacAvailablebuttonenabled bugobservedandfixedinR10source: remote.ts gatesregistration/connect/view/input/clipboard/files byverifiedaccount, clearsretainedvideo+inputqueue immediatelyonaccountscopeclear, versionguardpreventsolderinitialaccountfailureoverridingnewersignin. Nativebackendconsentguardsunchanged.
+
+NEW remote-lifecycle.cjs meaningfultests runactualcompiledremote.js: auth-gating/staleinitialerror, signoutrejectslatevideo/noinput, actualdoubleclickcountthroughnativecommandqueue/uprelease. Newharnessinitialmissingwindowlistener/RAF andwrongReadyregistrationexpectationsfixed, productnotweakened. CURRENT _scratch/next-macos-r10-frontend-tests-r4.log ACTUAL11passed0failed0skipped0todo,EXIT0. Allold8casespreserved,3new. _scratch/next-macos-r10-frontend-build.log strictTSbuildPASS. R10source needsfreshclippy/universalpackage; R9CURRENTOPEN apppredatesUIgatingfix, donotclaimitincludesR10fix.
+
+CUAsegmentCOMPLETED withcompletion_summaryOpenedMacbuild. Runtimehandle macApp refersR9path. No currentCUAtask/permissionhand-off. IfneedrestartGUI: quitR9viaCUAappmenu/CmdQ (noactiveauth/capture), thengetnewR10path toavoidbundleIDreuse. AllUIautomationCUAONLY. NoMacTCCpermission granted/changed; noactualscreen/audio/keyboardtest/noexternalcustomerdata. AppnotinstalledovercustomerR6. ReceiptR9sourceUnchanged=true,universal/developerID/buildQualified=true,mainSHA8fb1aa09d2b8662645ddde6392d095424b7fb0283fca0877d7cbbef3f22272d8; runtime/serviceConfigured/notarized/storeSignedfalse. Needrealtrustedidentityauthority/signaling/TURNconfigandauthorizedenrollmentbackendforactualconnection. DonotfakeReadyorloopbackascustomerproof. NoServerdeploy/DBmigration/marketplaceupload.
+
+Next: finalizeR10clippy/universalbuild afterUIfix; GUIpreviewproofifuseful, thencontinueMacprogramme/realstagingconnection. Fullfeaturesstillaudio/qualityVP8/multimonitor/unattended/multisession/enterprise etc incomplete. Publicconfignone, needprepareconcretestagingdeploymentbundle/offlineSQLverificationbeforeaskingPhase4productionapproval(accessonlyifactuallymissing). DoNOTrepeatoldMFApromptswhilecodeworkpossible. A shortOpusresearchwasdonewhileR9packaging; noaudiofiles/dependenciesedited. Primarydocs: opus-codec.org/downloads libopus1.6.1 SHA6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1; libopus_sys0.3.3 docs.rs bundled+static builds vendored1.5throughCMake, notinstalled. Nofeatureclaimfromresearch.
+
+
+## R9 BUILT; MAC-ONLY POST-BUILD TESTS STARTED — 2026-11-06 (NEWEST)
+
+IMPORTANT CURRENT DIRECTION: latestuseraskedbuildoneplatformfirstTHENwetest, Macfirst. R9 fullMacappbinary now BUILT (notfullTVfeaturecomplete). Therefore proceedingMac-onlyPOST-BUILDverification, superseding earlierassistantself-imposed blanketnotestsatall. No otherplatformbuild/tests. No 100%fullparityclaim. R9sourceUnchanged=true, developerIDSigned/buildQualified/universal=true, mainSHA8fb1aa09d2b8662645ddde6392d095424b7fb0283fca0877d7cbbef3f22272d8; runtimeQualified/serviceConfigured/notarized/storeSigned=false. Sourcefreezenowreleasedafterconservation. _scratch/next-macos-network-package-r9/package.json exactreceipt. No install/launch/permissions/store/prodservicechanges.
+
+STARTED cargo test -pdesktop_app --bindesktop_app macos_files::tests --locked --offline -- --nocapture, _scratch/next-macos-r9-file-tests.log, sessionfromexec. These testrealnativeFDsavedbytes/resumeprefix/lostACK/cancellation withnativeownerthreads andauthenticatedproofs, notactualcustomerWebRTCsession. CheckACTUALoutputandfixfailures. DoNOTcall3testsproofentireappworks. ContinueMac-onlytest→fix→rebuild currentapp thenactualUI/integrationflow asavailable. UserwantsMacfirstbuiltTHENtest; thisnowhonorsthatsequence. Earlieralltestsdeferredentrieshistoricalonly. No currentquestion/agent/CUAsegment.
+
+
+## MAC R9 UNIVERSAL PACKAGE RUNNING — 2026-11-06 (NEWEST)
+
+Latest fullMacstrictclippy _scratch/next-macos-network-r9-clippy.log PASS4.65s, all4Maccrates/alltargets+strictTS -Dwarnings, gitdiff--check clean. Thisincludes latestpickerborrowfix andfilegrantrotationregression. NO tests executed. Sourceincludesnativefiles/coreButtonClick and typedregistrationrecovery, allruntimeUNQUALIFIED. _scratch/next-macos-network-package-r9.log universalDeveloperID packaging nowRUNNING, identity832784665DFBC9516AB4E7414285F5B8C54AA01A. Inspectsession/log/package.json. DO NOT edit next/ orpackager/inventoryscripts untilsourceconservationdone. Expectedruntime/serviceConfigured/notarized/storeSigned false,no configpassed. NO appinstall/launch/OSgrants/customersession/TestFlight. CurrentR8oldmainSHA57fbc... priorsection. No otherplatformwork/agents. ContinueMacimplementationafterpackage; fullTVprogrammeunfinished, no completionclaim.
+
+
+## MAC RECONNECT / FINAL FILE OWNERSHIP — 2026-11-06 (NEWEST)
+
+Current user latest Mac-only/build-before-acceptance remains. No tests/runtime/GUI/OSgrant/prod/CI/otherplatformbuild/agents. r8 universal signedpackage is OLD (pre-files).
+
+New typed macos_recovery.rs Failure classification: onlyactualIO/socketreset/abnormalEOF/maintenanceclose/HTTP502..504 retry. TLS/protocol/policy/normalClose/account/enrollment failures remainfatal. Backoff1/2/4/8/16/30sec +0..500msCSPRNGjitter,6retrybudget resetsONLYafter60sactualauthenticatedReady (nottimeinDNS/HTTPauthentication). MacRemote supervise ownsouterregistrationcancel plusper-attempt directlyAuth-protectedcancel guard. Eachattempt freshcurrentaccountscope + enrollment + scopedticket; unchangedprofile/tenant/staffmandatory; no expiredticket/bearerreuse. AttemptGuard Drop revokesmediaevenifasyncfutureaborted. Stop/offline retainsimmediaterootrevoke; futuregetsboundedcancel, cleanuptracked. Ontransientfailure revokesoldpeer/root, clearsnativevideo+input+clipboard+filestate, waitsactualmedia/fileownerscleanup, drainsoldnativecommands BEFOREnewregistration. NO automaticoldrequest/Acceptreplay. FreshsessionneedsfreshAccept. SecurityfailuresdoNOTretry. FailedcleanupstopsretryandQuitremainsblockedratherthanclaimingreleased. Runtime stillUNQUALIFIED. reconnect-clippy-r2 actualPASS14.38s all4Maccrates/alltargets+strictTS, newclassification/backoffcasesCOMPILED NOTRUN. r1 onlymanual_rangeclippyfixed.
+
+FileattachmentDrop now revokesONLYown atomicnetworkepoch viaCASBEFOREbest-effortDetach queue, oldDropcannotrevoke replacement. Workerindependentlychecksclosedreceiver+epoch, sofullcommandqueuecannotleavestaleConnectedstatus. FileworkerRustunwindcaughtwhileFDsremainowned; explicitcleanupretriesretainpartials. Newdestinationblockedifcleanupoutstanding; remoteOfferwithsameIDasownoutgoingdeclined. Rootconsentcancelnowchecksdirectlyby media/input Config tostopallcapabilities iffileownerfails/rootticketexpires. Nativepicker clonesmatchingpanelAFTERreleasingthreadlocalRefCellborrowbefore AppKitcancel, avoidingreentrantborrowpanic. Filegrantpinnedacrossrotation andstalewrongscopeStopcannotclearit; latestnewregressioncompiledinfinalcheckbelow (notrun).
+
+Lastactualchecks: click-count-r2 PASS4.51s; files-lease-r1 PASS6.13s; files-lease-r2 PASS46.57s. Newtestcases+pickerfixafterreconnect-r2 requirefreshfinalcheck thenconserveduniversalpackageR9. No includedsourceeditswhilepackaging. The fullMacprogramme stillnotcomplete; audio/quality+VP8/multimonitor/unattended/enterprise etc remain. DoNOTcallR9fullTeamViewerorpassedrealAccept. Continueimplementationafterpackage, no partialfinal.
+
+
+## MAC FILE INTEGRATION + CLICK COUNT — 2026-11-06 (NEWEST)
+
+User latest: MACOS ONLY, build complete Mac before acceptance tests, other platforms parked. NO new runtime/tests/GUI/permissions/server changes executed. No agents. Do NOT final with another partial milestone. Current r8 universal DeveloperID package COMPLETE but PREDATES this file integration. mainSHA57fbc84fb42cf0d223895606cff77eee91acdb444390df6c205955c3c3e3229d, sourceUnchanged/buildQualified/universal true, runtime/serviceConfigured/notarized/storeSigned false. No installation/customer replacement.
+
+NEW wired feature: desktop macos_files.rs FileHub tracks native consent-lifetime disk owners, one outgoing+incoming, bounded32command/16networkqueues/eightchunk3000byte ACK window. Same stable local consent and authenticated enrollment publickeys/role required across rotations. Worker owns real source/destinationFDs offUI/media; no native path ever IPC/wire. Source changed aborts; strict actual receiver offset/hash checkpoint resume; old epoch Wire/Detach ignored; completed16receipt cache handleslostComplete withoutrewrite. Explicit host filesgrantOFF perinvitation; encrypted permissionsv3 nowcontrol+clipboard+files, grant cannot changeacrossrotation (requiresfreshAccept andrevokesroot). ActorPeer rootconsentcancel separatefrompertransportcancel, original8hr/liveticket+broker+accountchecks; userStop/Rejectimmediately rootrevoke beforequeueack. Native macos_file_transport.rs separate encrypted orderedreliableDC withfreshbulkkey, independentinput ACKtask, boundednetworkwrite, trackedclosedbeforeWebRTCcleanup. Filefailurepausesfiletransfer whileremotevideo/inputcontinue; Renewconnection resumes SAMEroot, not newpeer.
+
+Native file operations gained authorizationcallbacks checkedperchunk andbeforepublication, notonlyrawcancel. OneSavechoice perincomingOffer; cancel beforeIO andduringreadback. IncomingFile.create returnsalreadycreatedcapability evenwhenCancelraces soownerexplicitabortcanretaincleanupfailures. Nooverwrites/noautoopen. WorkerretainsfailedpartialcleanupcapabilityandblocksQuit untilcleanupsuccess. Refusesnewdest whilecleanuppending toboundretainedFDs. OwnerRustpaniccaught beforecleanup whileFDsretainowned; allbroker/userexit revokes.
+
+macos_picker.rs oneAppKitmodalonMAINTHREAD viaTauri; permitownedUIclosure; threadlocal(UUID,panelclone); 100ms scope/offerwatchdog cancelsmatchinggeneration, oldlatecancelcannotcloseareusednewpanel. AwaitDropcancel; recheckscopeafterpanelbeforeFDopen/create. Noactualpanelopened. Tauri commands mainwindowonly remote_file_status/send/accept/cancel acceptconsent+opaqueidONLY, notpaths. files.ts functionalnativecards/send/acceptSave/cancel/progress; escapedtextContentfilenames, staleaccount/consentresponsesignored, cancelavailablewhilepickerpending, noJSpath/contents. Mainbuild/HTML/tsconfigwired.
+
+Meaningful regression cases WRITTEN/COMPILED NOTRUN: actualdiskbytes across lostACK/retiredWire/Detach/transportresume andlostfinalreceipt; declinedpartialremoval preservesexistingdocuments; wrongauthenticatedpeer/forgedprefixrefused. ExistingnativeFDcasesnotrun. clippy all4Maccrates/alltargets -Dwarnings+strictTS: files-integration-r3 PASS4.81s, r5 PASS38.88s (r4 had testfixture compile errors now fixed). Catchcleanup/sourceboundsaddedbefore r5. NO test execution.
+
+Additional sourcefix Macdoubleclick: newInput::ButtonClick appended preservingoldenumdiscriminants; validatesclicks1..3; InputRouterchange_event keepsbuttonownership/cleanupwhileforwardingclickcount. NativeMac remembersperbuttonclickcount forproperUp/release andsetsCGEvent MouseEventClickState. Realcontroller usesMouseEvent mousedown/up.detail (PointerEventdetailisnotreliable) pluspointercapture; fractionaltrackpadwheelaccumulates. Windowsmatchupdatedonlymechanicallyfornewsharedvariant, NOotherplatformbuild. click-count-clippy-r1 PASS10.14s BEFOREnewclickregressions/wheel/docs. Latest needsfreshclippy+universalpackageafterfinishsource. Clickencryptedroundtrip/legacydiscriminant/routingownershipcaseswrittenNOTRUN. Need scrutinize filesworker edge cases and frontend lifecycle before claiming runtime; strictclippy doesnotproveendtoend.
+
+Still unfinished programme: Macaudio, codecsoftwarefallback+quality/multi-monitor, unattended, actualnetworklossrecovery (scheduledreplacementonlycurrently), multisession, guestQuickSupport, enterprise/mobile/AI; isolatedidentityauthority/TURN/config notprovisioned; noactualnativeMacconnection/newGUIqualification; TestFlightcontrollerseparatefromfullDeveloperIDhostnotbuilt/storeuploaded. CurrentR8hasno publicserviceconfig, cannotmakeactualcustomersessionswithoutauthorizedstaging setup. Do notsilentlyprodmigrate/replaceliveapp/marketplacesubmission. Noaskingwhilecodeworkpossible. Next finishcurrentbuildchecks thencontinueMacfeatures; DO NOT stopatpartialreport.
+
+
+## CURRENT UNIVERSAL R8 PACKAGE — 2026-11-06 (NEWEST)
+
+R8 COMPLETE: sourceUnchanged=true, universal=true, DeveloperID/buildQualified=true; mainSHA57fbc84fb42cf0d223895606cff77eee91acdb444390df6c205955c3c3e3229d. File integration began AFTER source conservation; R8 now predates it. _scratch/next-macos-network-package-r8.log packaging completed, --universal, DeveloperID identity832784665DFBC9516AB4E7414285F5B8C54AA01A. Inspect latest exec session/package.json/sublogs; NO next/ or included scripts edits until source conservation completes. Includes directory/enrollment/refined GUI/copyID, native file helpers/bulk primitives (NOT wired), actual-display-only customer source, input lease/panic/status cleanup, CRITICAL independent local-consent veto + native deadlines, stable local-consent Stop across room rotation, queue-pressure local cancellation and boundedPong. No public service config supplied, runtimeQualified/serviceConfigured/notarized/storeSigned remain false. No launch/OS permissions. No new tests. No agents, no otherplatform build.
+
+Last actual clippy _scratch/next-macos-consent-gate-clippy-r4.log PASS4.52s, all4Maccrates/alltargets warnings denied+strictTS, consent regressions COMPILED NOT RUN. r3 PASS4.36s. This is newer than file-picker/etc. Last fmt/check clean before package. R7 artifact remains OLD and lacks important current consent fixes; do NOT show it as the current app. R5/R6 packaging failed architecture-check syntax; R7 successful, current R8 uses fixed architecture-list + all-arch signature checks.
+
+Important completed consent mechanics details in section below. No task completion or full parity claim. Continue file-transfer integration (currently helpers ONLY) and rest of Mac programme after package finishes; do not final at milestone.
+
+
+## CRITICAL LOCAL CONSENT / STOP / INPUT LEASE FIXES — 2026-11-06 (NEWEST)
+
+Latest source remains Mac-only, build-before-acceptance, no tests/GUI/runtime/OSgrant/prod changes/agents. DO NOT final partial. R7 signed artifact is OLD and MUST NOT be presented as current/fixed: it predates directory/enrollment/new file foundations AND these consent fixes. Current source needs fresh universal package after final compile/source freeze.
+
+CRITICAL bug found/fixed in NEW unreleased Mac path: previously Actor Command::Decide copied selected source/control/clipboard even when accept=false; a dishonest broker could then send Accepted and the host had no recorded LOCAL acceptance flag. Native now keeps local_consent Option<bool> + accepted_at independent of server. Only actual local Accept sets source/grants and timestamp; Reject sets cancellation immediately, clears source/grants, and locally removes invitation/returns Ready after notification. Accepted on host requires Some(true) + actual acceptance timestamp within30s AND uncancelled. Selection/confirmation alone never authorizes. CoreSession unconditionally decide(true) downstream is reachable only after this native gate. Do not remove this check when wiring file/unattended modes.
+
+Local90s invitation +30s acceptance/relay setup deadline independent of broker. Incoming/Requested Peer timestamps set locally; controller's90s invitation timer stops once Accepted gets its own local30s setup timestamp. Rotation resets only new negotiation timestamp, retains original local approval and8hr hard scope. UserReject/Stop before media startup cancelled flag gets locally cleared/closed even if broker withholds Closed. Late Accepted for rejected/unknown room never starts media. Native Pong write now bounded5s.
+
+STOP reliability: native close/reject sets cancellation + clears video/input/clipboard BEFORE trying notification queue. A full32msg queue or disconnected broker can return a notification error, but sharing/injection are already locally revoked. Previously try_send error could leave sharing active. Native actor tick clears cancelled no-media invitations without waiting forever for broker.
+STOP during rotation race: added per-peer locally generated consent_id UUID (NOT broker's room ID), Status.consent. It stays unchanged across transport replacements. New remote_stop_session(consent) locks native state and cancels current room of SAME local consent scope, even when webview still has old room ID; unrelated/stale consent rejected. UI Stop and tray use this scope. Automatic video-failure remote_close(session) remains room-specific so a late old decoder failure CANNOT stop the replacement. Source track methods preserve scope; Session None clears consent/sharing. This stable scope is also the right foundation for pending file state across rotations.
+
+Native media owner catches Rust unwind, closes/reports connection instead of silently leaving Ready/active state. No signal-handler locks or attempted resurrection of corrupt media state. Native status/input/clipboard/next_video check actual cancel flags (including account cancellation), clear retained video and show closing immediately during cleanup instead of stale active status. Release Inner lock before native OS Accessibility preflight.
+
+Input expiry during long Unicode commands: Config.input_authorization captures only account/session flags + current peer ticket expiry + current broker wall/monotonic lease. Same authorization_live helper drives media and injection; failure latches session cancellation. MacInjector optional authorization callback checked per event/scalar and again AFTER OS permission preflight immediately before posting. Key/button/Unicode UP releases remain allowed after expiry, preventing stuck ownership; no new downs/text/movement. ControlPipe supplies this direct live lease checker, not only a periodic poll. One preflight per event (duplicate removed). Local QA retains its own cancellation behavior. Clipboard send_text now checks Config.stopped BEFORE begin/hash/header after potentially slow pasteboard read, as well as per chunk.
+
+Meaningful regression cases WRITTEN + COMPILED, NOT RUN: selected display does not authorize, Reject/expired/no acceptance timestamp cannot negotiate; old-room close/stale scope cannot cancel replacement, same local scope stops replacement even with full notification queue; Reject latches cancellation before busy queue ack. See macos_remote.rs consent_tests. No actual consent flow or injection proof claimed.
+
+ACTUAL logs: owner-cleanup-clippy-r1 PASS1m (drive delay); input-lease-clippy-r2 PASS6.99s; consent-gate-clippy-r1 PASS7.61s, r2 PASS5.24s, r3 PASS4.36s. CURRENT _scratch/next-macos-consent-gate-clippy-r4.log session from latest exec (after last timestamp/Pong fixes), all4Maccrates/alltargets -Dwarnings+strictTS; wait/read actual completion. No test execution. Last all-target check compiles tests; it is NOT passing test output.
+
+Next: finish current check, fresh conserved universal Mac package when appropriate (no source edits during packaging). Continue FILE TRANSFER INTEGRATION from native foundations below, not more helper-only milestones. Bulk channel, file worker/store/picker coordinator, host files grant/UI remain NOT wired. Stable consent_id now available for file scope across rotations; add a separate consent-lifetime cancel from per-transport cancel so scheduled rotation pauses/resumes file jobs instead of deleting them. Keep source/destination paths native-only, explicit OS picker/host grant, no overwrite, verify bytes, retain cleanup failures. Audio/quality/unattended/recovery/staging and full parity remain incomplete. No new approval question while repo work possible.
+
+
+## NATIVE FILE PICKER COMPILED — 2026-11-06 (NEWEST)
+
+No feature acceptance/runtime tests, no actual File Picker opened, no new Mac permissions. No agents/otherplatform build. Continue file session/UI integration, not partial final. Latest _scratch/next-macos-file-picker-clippy-r1.log PASS16.13s all4Maccrates/alltargets warnings denied + TS. Native file-IO r2 PASS2.94s. No compiler jobs active. Last git diff --check read had drive latency and exec session8382; poll completion if still needed (no source mutation), not a build.
+
+NEW native_os_capture/macos_file_picker.rs FilePicker::open/save/run/cancel, public native library helper NOT yet called by desktop. MainThreadMarker required, retained AppKit panels keep main-thread-only type (cannot Send/Sync into worker). Local single regular-file Open panel, aliases not resolved, packages treated as directories; Save suggests only core validated name and tells user choose NEW file (existing preserved). Run distinguishes actual Cancel from OS abort/error, copies exact retained NSURL filesystem representation into PathBuf (no lossy Unicode replacement), fileURL/absolute/pathbound required. Paths never go through JS/wire. cancel(None) audited native action on UI thread. Native capture AppKit deps include NSOpenPanel/NSSavePanel/NSApplication/NSPanel/NSResponder/NSWindow and FoundationNSURL. All local inspected generated objc2 APIs, no guessed UI API. No real dialogs invoked.
+
+Needed DESKTOP PICKER COORDINATOR when wiring:
+- Tauri run_on_main_thread creates FilePicker and runs modal; retained panel stays UI thread. Native Picker may be Clone only on UI thread. Do NOT move panel/ObjC pointers into async Send closures or webview.
+- One picker at a time. Move busy permit INTO UI closure so dropping/aborting waiting future cannot release permit while OS dialog still open. Store (unique picker generation/ID, cloned FilePicker) in a MAIN THREAD thread_local RefCell option. Async watchdog only captures AppHandle/ID/cancel Arc; if grant/session/account expires, dispatch UI closure to cancel matching ID. A late old cancel MUST NOT close a new picker (AppKit may reuse panel objects).
+- Waiting future Drop should abort watchdog and dispatch matching UI cancellation; Native completion clears threadlocal slot and releases busy permit. Check current grant/scope again AFTER dialog before SourceFile::open or IncomingFile::create, and again at actual IO. Incoming pending-offer expiry also cancels its picker, even if whole session stays active.
+- Async return is Option<PathBuf> INSIDE RUST only, immediately consumed to FD/native state; Tauri commands return metadata/opaque transfer ID/status, never raw paths. Source/destination are local user choices, never accepted as IPC/path arguments.
+
+Native storage explicit IncomingFile.abort now reports cleanup errors; owner must retain failed partial capability and block/track cleanup until retry, not drop and claim success. Drop only best effort fallback; never deletes published documents. Independent fsynced file readback/hash before exclusive rename is in current code. Source FD mutation detection exists but no APFS immutable clone snapshot. Core file/resume/bulk crypto helpers compiled but file DataChannel, grants, transfer-state coordinator and UI NOT yet wired; do not claim file transfer works.
+
+Newest signed binary remains universal r7, before directory/enrollment/refined UI/new file helpers. Current source still many uncommitted changes, all ours. Mac-only stage remains in effect, no current question/CUA segment/production change/marketplace upload.
+
+
+## FILE FOUNDATION / REAL DISPLAY GUARD — 2026-11-06 (NEWEST)
+
+Still Mac-first, build-complete features before acceptance. No new tests/GUI/runtime/server/prod/OS permissions, no agents. Continue, do NOT final at partial milestone. R7 remains newest SIGNED universal app, predates directory/enrollment/current file foundation; all newer source WIP. Source branch/worktree unchanged; no current compile/package process once file-io-r2 completion confirmed.
+
+CRITICAL real-path FIX: actual macos_remote Accept can now select ONLY a confirmed real display. Remote TS filters own-fixture out of capture_targets; native MacRemote.decide enforces display+confirm; main remote_decide no longer creates fixture; macos_peer source_size/host_media removed fixture branches. The separate local_session/development diagnostics fixture remains available, labelled Development fixture (this app only). This prevents primary customer flow presenting a QA fixture as a working remote desktop when Screen Recording permission is missing. Full-display Screen Recording has NOT been granted yet; do not silently grant it. Native decide now takes Decision struct rather than long bool arguments.
+Additional negotiation guard: host inspects first incoming DataChannel label mixel-control-v1, ordered=true, no retransmit/time limits, empty subprotocol, in-band negotiation. Bounded1s metadata check, closes/rejects unexpected channel instead of misrouting future bulk channel. Uses actual core_protocol::transport::TransportError, not invented type alias. _scratch/next-macos-real-source-clippy-r2.log PASS (inspect log for seconds); r1 PASS12.86s. No acceptance runs.
+
+NEW FILE FOUNDATION (COMPILED, NOT WIRED INTO MAC SESSION/UI YET, NOT a complete file-transfer feature):
+- core_protocol/crypto.rs Handshake.finish additionally derives a dedicated bulk ControlChannel with HKDF domain-separated directional AES256GCM keys + distinct AAD binding + independent sequence counters. No exportable shared secret retained. take_bulk_channel can be taken ONCE from authenticated parent; child cannot fork, repeated call cannot reset nonce state. Same verified peer/session/cert proof retained, but file access still requires explicit native host grant. Parent control keys/wire unchanged. Cross-channel decrypt/key/counter separation/replay unit case written+compiled, NOT RUN. Initial undefined helper in test was removed BEFORE compile; current test uses one properly matched transcript. _scratch/next-macos-bulk-crypto-clippy-r1.log PASS3.83s.
+- NEW core_protocol/files.rs MFB1 borrowed zero-copy Offer/Accept(prefix resume hash)/Data/Finish/Ack/Reject/Cancel/Complete records.16GiB cap,3000-byte chunks fit4096 control plaintext max, nonzero16byte IDs, strict canonical lengths/bounds/UTF8, no remote paths. Portable filenames reject traversal/separators/control/bidi spoof chars/trailing dot/space/reservedWindows device names including superscript suffixes. Progress streaming SHA256/strict contiguous offsets,30s idle and8hr absolute cap, cloneable native-only prefix checkpoint, authorized resumed resets idle only (NEVER hash/offset/absolute lifetime). Cases for malformed names/lengths/reorder/incomplete/corrupt/idle/resume written+COMPILED, NOT RUN. _scratch/next-macos-file-protocol-clippy-r1.log PASS11.37s.
+- NEW native_os_capture/macos_files.rs audited Unix FD capability layer (libc Mac dependency added). SourceFile opens only locally selected regular file <=16GiB with O_NOFOLLOW/CLOEXEC/NONBLOCK, immutable size/name accessors, dev/inode/size/mtime/nanoseconds/mode stamp, bounded zeroizing reads, pre/post read cancellation + mutation denial. It currently retains source FD and detects mutation, NOT an immutable COW snapshot.
+- IncomingFile holds destination parent directory FD and exclusive random .mixel-incoming-UUID.part mode0600, no existing entry/links, bounded sequential/hash-checked writes. Publish checks exact hash/length, fsync, INDEPENDENT readback of actual file bytes through heldFD + hash, verifies partial inode, then atomic renameatx_np(RENAME_EXCL) refusing overwrite even if destination appeared after selection. After rename published flag prevents deletion; optional directory-fsync failure never mislabels committed document as aborted. Explicit abort returns cleanup errors so future owner can retain capability/retry; Drop best effort only removes still-owned private temp, never published doc or replaced entry. Operations take live cancellation; cleanup remains allowed after revocation. Native IO regression cases written+compiled for actual disk bytes, no-overwrite/race, corrupted temp, cancellation cleanup, changed source, symlink denial. Fixtures are under repo _scratch and self-cleanup; NOT RUN.
+- _scratch/next-macos-file-io-clippy-r1.log PASS4.68s; latest r2 log all4 Mac crates/alltargets -Dwarnings+strictTS (read final output; session38817 was polled complete). No tests run, no real files transferred.
+
+NEXT FILE INTEGRATION DESIGN (not implemented yet):
+1. Add explicit per-invitation host files grant OFF by default to Decision/Peer/Config and encrypted host permission record (versioned); enforce both native and UI. No file picker or path reads without local action + active grant. Native file paths/FDs NEVER travel through JS; only IDs/name/size/progress/status.
+2. A separate ordered reliable WebRTC DataChannel mixel-files-v1 uses take_bulk_channel once AFTER actual authenticated DTLS/control grant. Controller opens it after control setup; host accepts only exact expected metadata. Keep file traffic/counters independent of input so bulk cannot hold input ACK. File task tracked/closed before media runtime cleanup. All OS operations must recheck account/broker/peer expiry + cancellation, not only raw user flag.
+3. Native Open/Save panels on Mac MAIN THREAD, explicit local Send file, incoming Offer only displays a bounded pending card; local Accept opens Save panel. Reject floods/overlap/bounds. SourceFile from local Open panel FD; destination IncomingFile from local Save path. Never accept a source/destination path from wire or webview. Preserve no-overwrite behavior and never auto-open received files.
+4. File state must survive scheduled transport rotations. Add stable consent-scope ID + cancellation distinct from per-transport cancel, original immutable peer/profile/grants pinned; keep outgoing/IncomingFile and hash checkpoints in bounded native store across SAME accepted peer replacement. Stop/signout/changed peer/revoke destroys transfer permission and explicitly aborts partials, reporting cleanup failures/retaining capability until retry. Already published files preserved. Do not simply cancel large transfers at current8/12min rotation.
+5. Protocol supports resume Accept(offset,prefixDigest). Sender keeps last-ack plus bounded in-flight progress checkpoints, verifies resumed offset/digest (<=actually sent), seeks same stable source, resends remaining chunks. Receiver reports actual retained prefix, never adopts a wire offset. Absolute lifetime not reset. Completed-transfer cache bounded within same accepted consent scope lets lost final ACK complete idempotently without rewriting a saved document. Use ACK window/backpressure and fair pacing, no unbounded queue/file buffers. Current SourceFile detects mutations; optional immutable APFS source snapshot can improve long transfer consistency but is not implemented.
+6. Native IO blocking and cancellation/cleanup need tracked owners; do not drop a Tokio runtime with untracked blocking IO, do not claim cancellation successful if abort returns filesystem error. Disk commit readback loops check cancellation; files new metadata NativeError only local, send enum Rejection to peer.
+7. Then build/typecheck/lint current Mac, complete other Mac feature gaps before final acceptance per user. Current core functions are complete helpers, but file feature is NOT connected and must not be reported working.
+
+Remaining programme: files integration, audio, codecs/quality/multi-monitor ergonomics, unattended, network/broker-loss recovery, connected isolated authority/TURN/enrollment staging, independent real Mac tests, Store/TestFlight controller vs separate full signed host. All runtime/release qualifiers remain FALSE. No production service/config/authority signer key or marketplace action performed.
+
+
+## MAC ENROLLMENT / DASHBOARD CONTINUATION — 2026-11-06 (NEWEST)
+
+No change to Mac-first/build-before-acceptance, no new tests/runtime/GUI/OS grants/prod writes. No agents. No pending CUA segment or question. Universal r7 remains newest SIGNED APP (before latest directory/enrollment/UI source); current source remains uncommitted and not yet signed/built universal after these additions. Continue implementation, not partial final.
+
+NEW after directory:
+- IsmAuth.enrollment_devices(): MFA staff ONLY verified against live GoTrue/ISM; existing devices RLS, bounded50+1 UUID cursor pages/name search, metadata shape/id/order validation. No new devices created, no server-role secret.
+- IsmAuth.enroll(): explicit MFA staff, existing target UUID + current protected public key, POST existing remote_enroll_device RPC with explicit Accept application/vnd.pgrst.object+json (confirmed against official PostgREST resource representation docs; https://docs.postgrest.org/en/latest/references/api/resource_representation.html). Verifies returned row/key then independently authenticates/reads persisted enrollment; CID/generation/key must match. Database RPC remains add-only/same-key idempotent, no rotation/reactivation. Shared bounded decode_response64KiB extracted from GET. Linked AtomicBool cancellation checked before auth and again after auth before POST.
+- main enrollment_devices/enroll_this_mac commands main-window-only, native bearer only, staff role required, recheck account after HTTP. Enroll requires explicit confirm, offline/error only; explicitly loads/creates stable OS-protected key with add-only original Keychain implementation, never replaces key. Native MacAuth linked cancellation revokes pending write after signout/expiry (including a long keychain prompt). No command executed against live ISM, no key created through this feature yet.
+- NEW enrollment.ts native UI: staff account-state gating, find existing device by name with50-page Load more capped200 (narrow search), explicit record picker + confirmation, enroll button, actual verified connection ID only after readback. Account/initial/remote-event epochs reject stale data; clears all state on signout/scope changes. Connect/registered state disables enrollment. Advanced manual key controls folded into details; key creation alone not enrollment. New typed fields/HTML/build.rs/tsconfig wired, no inert placeholder.
+- New meaningful enrollment HTTP fixture cases written+compiled, NOT RUN: nonstaff/cancelled never POST, exact public key/body/singular Accept, denied/wrong key/stale readback cannot claim success. Existing fixture profile staff-modes now starts_with staff; previous cases preserved.
+- Mac UI shell refined with existing Mixel icon, product navigation anchors, account/support/device/setup panels, readable permission/incoming/error states and responsive CSS/reduced-motion. NOT visually qualified yet, no launch/screenshot. build.mjs embeds existing branding/icon-64.png, build.rs invalidates on its changes. No new image asset generated.
+- Copy ID button calls native main-only copy_connection_id; writes only actual registered public ID through AppKit, never JS clipboard content. Offline/missing ID denied. No auto clipboard access.
+- Frontend old tests/lifecycle.cjs HARNESS UPDATED (not run): parse actual page IDs, source selection + signed-out account fixtures, minimal DOM/CustomEvent hooks and deferred start after initial source load. All prior capture late-frame/restart/stop-ack cases preserved. node --check only PASS. This removes known missing-control initialization bug, but actual tests still pending after complete build. Do not claim tests pass.
+- README updated native directory/enrollment/rotation scope and qualification accurately.
+
+ACTUAL latest compile: _scratch/next-macos-enrollment-ui-clippy-r4.log PASS3.89s all4Maccrates/alltargets -Dwarnings+strictTS; r3 PASS5.44s, r2 PASS3.30s. Directory r3 PASS5.67s. No tests executed. Last source edit only test harness after r4, syntax node --check PASS. git diff --check previously clean; rerun before packaging. No active build sessions.
+
+NEXT: complete remaining Mac features incl file transfer/audio/quality/unattended/network-loss recovery and isolated service config/authority/TURN/enrollment staging; final Mac acceptance deferred per user. R7 app build/signature actual evidence as prior, but latest source not yet in it. Need fresh universal package after meaningful feature batch, preserve source conservation; no Windows/Linux app build or runtime. No TestFlight until qualification and exact marketplace confirmation. Full TeamViewer portfolio remains incomplete, all runtime/release qualification false. No partial-complete claim.
+
+
+## MAC DEVICE DIRECTORY CONTINUATION — 2026-11-06 (NEWEST)
+
+After universal r7 completion (mainSHA3002e5e3d8e0b27f23a43ac466e9fbda1f7074080ad0d9b29264d875c45eed7f), more Mac source added. R7 DOES NOT contain this new directory. No new runtime/tests/app launch, no agents, other platforms remain parked. Continue full Mac work; do not send partial completion final.
+- signaling_server/auth.rs IsmAuth.directory(): current verified GoTrue/profile/org/MFA bearer, existing enrollment+devices RLS inner join, revoked filter, native pagination50+1 by stable nine-digit ID, name search escaped/bounded, response65KiB, validates strict ordering/uniqueIDs/generation/device-binding/name/OS bounds. Returns only public authorized name/OS/deviceUUID/connectionID, no key/token or claim of broker availability. Existing ISM schema 0001_devices uses name/os, relationship added by enrollmentSQL. No DB policy changes or migration deployment.
+- main.rs remote_devices command main-window-only; native bearer never JS; rechecks current native account/profile/org/staff AFTER HTTP so stale account replies cannot publish under a different login.
+- NEW frontends/desktop/devices.ts Your devices list, search, cursor Previous/Next, explicit Connect using existing independently pinned remote_request path. Native main/remote public state events keep controls scoped to current account/Ready status. Clears rows/query/cursors immediately on signout/scope change, ignores stale request and initial-account/initial-remote promises. Avoids250ms table rerender stealing click/focus when remote state unchanged. Committed search used consistently during pagination. Enrollment explicitly not displayed as online; no invented presence. No localStorage.
+- main.ts account-status failure now clears stale account presentation; Signout clears JS account BEFORE busy render so directory does not immediately reappear. Generic Cancel path still revokes linked native leases.
+- index/style/tsconfig/build.rs include devices UI and devices.ts build invalidation (prevents signing stale embedded directory when only that file changes).
+- New HTTP-fixture directory cases written and compiled (same verified bearer, exact query/pagination, denied/oversized/duplicate/wrongdevice/null child/controlname rejection), NOT RUN.
+- Actual clippy _scratch/next-macos-directory-clippy-r2.log PASS3.95s; r1 PASS2.16s. CURRENT r3 session57576 is stale: actual new session from latest exec for _scratch/next-macos-directory-clippy-r3.log (read completion/log), includes last stale-initial-account event-epoch fix + early malformed-query validation. It compiles all4 Mac native crates/alltargets with -Dwarnings + strictTS. No acceptance execution.
+
+Potential next useful Mac feature: actual staff enrollment setup UI against existing ISM devices and remote_enroll_device RPC (same MFA staff authority, immutable existing key/no implicit rotation). Currently key creation/loading UI exists but no native enrollment picker; Make available still requires pre-enrolled device. Need actual files/audio/quality/unattended/network-loss recovery etc as prior. Full TeamViewer scope remains very incomplete, no claims otherwise. Staging config/authority key/TURN are unprovisioned. No new question while repo coding possible.
+IMPORTANT future frontend regression campaign: old tests/lifecycle.cjs harness mocks only original capture IDs, yet main.ts now includes account/identity/source selection. Its stub DOM/invoke must be updated to actual new main page, preserving existing capture lifecycle scenarios; do not delete/skip tests. No tests have been run since deferral, so do not claim this older harness passes current UI. media-lifecycle.cjs targets separate viewer.ts; inspect before changing. Fresh Mac acceptance still deferred until complete Mac feature build per steering. No active CUA segment or approval request.
+
+
+## UNIVERSAL MAC PACKAGE R7 COMPLETED — 2026-11-06 (NEWEST)
+
+_scratch/next-macos-network-package-r7/package.json now COMPLETE: buildQualified=true, DeveloperID signed, sourceUnchanged=true, universal=true. Both ARM64 and Intel release builds PASS; lipo -archs exactly x86_64 arm64, codesign --verify --all-architectures --deep --strict PASS. Read receipt for mainSHA. Includes all delegated identity/clipboard/damage/transport rotation above + native --validate-public-config mode and PROTOCOL_VERSION2. Initial r5/r6 both architectures compiled (45.02s/49.42s first cross builds), but lipo -verify_arch invocation failed; replaced with exact validated architecture-list check. R7 fresh conserved source/signature PASS; r5/r6 remain FAILED package evidence, do not claim they are signed. Final clippy _scratch/next-macos-rotation-clippy-r4.log PASS2.57s all4Maccrates/alltargets warnings denied. No tests run. Installed app untouched, r7 NOT launched/installed, no public service config: runtimeQualified=false/serviceConfigured=false/notarized=false/storeSigned=false. No current build session active. DO NOT stop at this checkpoint; continue complete Mac feature work, keep Windows/Linux parked. Mac filenames/protocol have no promised compatibility with previous private QA builds; broker Ready2 now causes old version1 clients to fail before new permissions protocol.
+
+## MAC-FIRST DELEGATION / CLIPBOARD / TRANSPORT ROTATION — 2026-11-06 (NEWEST)
+
+Latest user remains: build only macOS first, then test Mac, then other platforms. No new runtime/GUI/protocol tests executed, no OS permission or production/store action, no agents. Compile/typecheck/lint/package only. Do NOT end with another partial final; keep implementing. Same W=/Volumes/MAC_Mini_Ext/Project_Mixel/mixel-remote-client/.worktrees/remote-reliability, fix/native-local-reliability HEAD9a1980a. ALL current uncommitted files ours. Desktop anchor and installed customer app untouched. No pending question, CUA segment or active hosted CI.
+
+CRITICAL identity gaps from prior section NOW IMPLEMENTED/COMPILED (runtime UNQUALIFIED):
+- core_protocol/delegation.rs domain-separated fresh device DelegationProof, strict Ed25519-signed DeviceTicket (profile/tenant/staff/device/key/gen/ID/times, max900s), opaque verification and authorization, session binding hashes exact controller+host ticket fingerprints + room UUID + server nonce. New meaningful tamper/domain/tenant/transcript cases written and COMPILED, NOT RUN.
+- signaling_server delegated_auth.rs TicketAuth production broker REJECTS full ISM bearers and token-only login. Server receives only public authority roots + device-bound ticket and independently challenges private-key possession. EnrolledPrincipal carries optional signed ticket; fixture auth stays isolated. Consent carries requester ticket, Accepted both tickets; PeerRenewed forwards signed claims after renewal, cannot switch principal/key/gen.
+- Separate identity_authority.rs module and bin inside same5-crate workspace. Native HTTPS authority receives native GoTrue bearer, revalidates actual ISM/RLS current profile/org/MFA/enrollment plus fresh domain-separated device signature, replay bounded4096/40s,32 concurrent,8192body,17s auth deadline, rejects Origin/cookie flow. Signer private file mode0600/owned current UID/no-follow/max128bytes, Zeroizing seed, --public-key exposes only public part. Unix loopback8093; broker8092. No signer key generated/read, endpoint chosen or service deployed. No global RLS directory expansion.
+- macos_tickets.rs obtains verified authority tickets natively. macos_remote.rs now sends ONLY encoded signed ticket to WSS AuthenticateDevice/Renew, never GoTrue bearer. Incoming cross-tenant staff key comes from independently verified authority ticket, not impossible customer RLS technician-row lookup. Native checks own account/device claims and remote ID/profile/tenant/staff/key before capture. ECDH/DTLS context uses exact identity-bound room binding. Peer expiry atomic checked directly per media/input iteration. Root renewal keeps immutable identity, authenticated expiry watch; native account scope stays same. Delegation renewals rate-limited31s and skip non-extending tickets capped by old GoTrue expiry (avoids Busy/disconnect loop near JWT expiry).
+- Public ServiceConfig SCHEMA2 now requires authority_url HTTPS origin + authority_keys1..4 strong hex64 Ed25519 roots, along with identity/public anon key/WSS. Environment config requires all5 identity/broker/authority vars; rejects URL controls/space/port0. Default provider keycloak unchanged. Package helper schema2 checks no secret fields and calls native --validate-public-config on EXACT resource bytes via stdin after build: no GUI/keychain/login/network/permission in this mode. Strongpoint checks same as runtime. No config supplied to any package yet.
+
+NEW Mac clipboard (built, runtime UNQUALIFIED): core_protocol/clipboard.rs MCB1 bounded ordered Get/Begin/Chunk/Commit/Ack/Unavailable inside existing directional AES-GCM channel. Up to1MiB plain UTF8, 3072-byte chunks, contiguous offset/exact size/SHA256 validation,15s deadline, request IDs reject overlapping/replayed requests, zeroizing native buffers. Invalid/incomplete never updates OS clipboard. Unicode/reorder/truncation/hash/expiry tests written+compiled, NOT RUN.
+- Native AppKit macos_clipboard.rs plain text only, changeCount guards read races, no automatic watcher, no HTML/file imports. Access only explicit Send/Get action under per-session host checkbox (OFF every invitation). Contents stay native; webview gets completion/error only. MAC remote state/IPC/permissions-v2 enforces clipboard separately from input, queue bounded1, Stop/expiry clears capability. Operation unavailable/unsupported reports error without closing valid session; malformed/timeout ends failed transport. Release held input BEFORE transfer; UI disables new input during action. ControlPipe input priority and1ms capture wait while receiving avoids100ms view-only stalls. Request main command now Decision struct to avoid long boolean arg warning.
+- DamageTracker now integrated in real Mac sender: skips identical raw images but preserves complete predictive H264 access units and explicit IDR recovery.
+
+NEW scheduled transport rotation (compiled, runtime UNQUALIFIED):
+- ClientMessage Restart and ServerMessage Restarted. Only existing controller of Connected signed-identity room can request. Server replaces room UUID+nonce using same enrolled peers/latest signed tickets, keeps ORIGINAL eight-hour hard limit,30s cooldown,60s negotiation bound. Bounded retired-room tombstones discard ONLY late participant Signal/Close/Restart for60s so old worker completion cannot close fresh room; foreign traffic denied. Original consent/incoming/unproven peers cannot rotate. Unit case written+compiled (retired owner cleanup, auth, deadline preservation), NOT RUN.
+- Mac controller requests rotation before TURN expiry (90s lead) OR at12min, before15min media grant expiry. Explicit Renew connection button also uses same path and31s local cooldown. Native accepts replacement ONLY for still-active uncancelled prior peer; retains original source/confirmation/control/clipboard choices, verifies same immutable peer claims/key and fresh root proofs, creates fresh ECDH+DTLS, clears old video/input/clip grants, cancels then JOINS old media owners before new startup. No new sharing upgrade. Track resets capabilities at room switch, stale old Finished/Signal filtered by old UUID. New relay lease is ticket-bounded. Outer account/peer/broker lease watchdog continues. Eight-hour native monotonic bound retained across room changes.
+- This is scheduled credentials/key replacement, NOT yet full recovery after network/broker loss. Network-error path still ends failed session safely, fresh manual connection/Accept remains needed. No seamless recovery claim.
+
+ACTUAL BUILD EVIDENCE:
+- _scratch/next-macos-delegation-clippy-r2.log PASS5.89s desktop+signaling alltargets -Dwarnings.
+- _scratch/next-macos-clipboard-clippy-r4.log PASS1.70s; r3 includes core/native/alltargets PASS5.98s. Initial r1 only too_many_arguments command lint FIXED via Decision struct.
+- _scratch/next-macos-rotation-clippy-r3.log PASS3.83s (latest source before packaging-script-only universal change), all4 Mac native crates/alltargets warnings denied, strictTS build. No tests executed.
+- package-r3 COMPLETE old decoder build (before delegated identity).
+- package-r4 COMPLETE DeveloperID strict signature/source conservation TRUE, release17.06s, mainSHA740a66169825fb2e30ddf955b6e2bfeaf1c1b7b8c25deab710b97a7bf64cc95a. Includes delegated identity + clipboard + damage skipping, BEFORE transport rotation. runtimeQualified=false/serviceConfigured=false/notarized=false/storeSigned=false. Not launched/installed.
+- CURRENT package-r5 UNIVERSAL (Mac ARM64 + Intel x86_64, no otherplatform builds) running exec session79880, _scratch/next-macos-network-package-r5.log, sublogs build-aarch64-apple-darwin.log/build-x86_64-apple-darwin.log. Helper --universal builds both sequentially with MACOSX_DEPLOYMENT_TARGET13.0, lipo creates/verify_arch before DeveloperID sign/strictverify. Both Rust targets already installed. Wait for package.json/source-conservation result BEFORE editing next/ or included scripts. Universal build may take minutes if cross-target dependencies need compile. No service config supplied. All qualification flags remain false except successful build/signature when done.
+
+NEXT: finish universal r5, fix any Mac build defects, continue complete Mac features (files/audio/codec/quality/unattended/network-loss recovery/usable staging+enrollment and remaining full portfolio). Isolated service config/authority/TURN still unprovisioned. No tests/GUI campaign until the complete Mac build per user steering; build checks continue. Keep Windows/Linux and phones parked. TestFlight sandbox controller + separate full DeveloperID host still pending, exact marketplace action-time confirmation mandatory later. Do not claim complete parity or proof of a real customer session from compile/signature. No external staging infra/DB/DNS changes have been approved by this continuation. No pending access question while repo code work remains possible.
+
+
+## MAC-FIRST NATIVE DECODER / IDENTITY AUDIT — 2026-11-06 (newest)
+
+No change to Mac-only build-first instructions. No new runtime/GUI/protocol tests. Keep implementing, not another partial final. Native decoder source now compiled/linted; package-r3 currently building. Same W branch, all uncommitted, no prod writes or agents.
+
+NEW macos_decoder.rs: serial owner-thread Apple VideoToolbox H264 decoder. Parses bounded AnnexB -> AVCC in h264.rs, retains SPS/PPS, requires baseline/keyframe for reconfiguration, checks format dimensions before decoder/surface allocation, requests BGRA, prefers hardware and queries actual hardware status, bounded2s completion, failure invalidates session. Read-locked copied output via shared macos::copy_pixel_buffer, zeroizing owned buffers. CMSampleBuffer/CMBlockBuffer owns compressed bytes; completion block never exports borrowed image. Software Apple decoder is permitted if hardware decode unavailable. No dependency on WebKit VideoDecoder for the real native customer view; local QA viewer remains older separate WebCodecs harness.
+
+NEW macos_video.rs: one latest independently decoded raw BGRA frame, tagged exact session, clear/close/activate; overwrites only decoded frames (all predictive compressed units still decoded). Native remote viewer now decodes H264 on owner thread and publishes bounded MRF1 binary frame (32byte header: magic4, w/h/stride u32LE, seq/timestamp u64LE, BGRA); TS canvas validates layout/monotonic sequence/time, swizzles to RGBA, scrubs both buffers. Can skip stale raw frames, so hidden/slow webview no longer stalls native predictive media queue or disconnects after3s. RTP timestamp deltas drive decoder PTS. Renderer keyboard stays disabled until first actually rendered frame. Native state frame count advances after native decode, hardware claim only when queried true.
+
+Actual checks: native_os_capture clippy decoder-r2 PASS; desktop_app + signaling_server --all-targets clippy **_scratch/next-macos-decoder-clippy-r5.log PASS4.16s** includes strict TS build and native decoder integration. Earlier r1 CFDictionary number inference, r3 doc-comment/import order, r4 TS5.9 typed-array ImageData generic errors all fixed. No test execution.
+
+Package-r2 COMPLETE: _scratch/next-macos-network-package-r2/package.json DeveloperID strict signature/source conservation true, release30.49s, mainSHA cebf102e9cd5f42b2ee4650c0ba1a494dffaa73e2ca767cfde8017543d15e082. Includes tray/static/keyframe recovery, BEFORE new native decoder. runtimeQualified=false/serviceConfigured=false/notarized=false/storeSigned=false. Not installed/launched.
+CURRENT package-r3 session from latest exec: log _scratch/next-macos-network-package-r3.log, directory same stem. Includes new decoder/raw mailbox; wait for source-conservation completion before editing next/ or packaging scripts. No service config supplied. Do not confuse signed build evidence with customer acceptance.
+
+CRITICAL IDENTITY AUDIT GAP FOUND (NOT YET FIXED): Customer Host cannot resolve cross-organization Mixel Staff controller public key using current IsmAuth.peer_key() / enrollment RLS. next/sql/001 can_read_device permits same tenant or current MFAstaff; a customer bearer cannot read the internal technician's row. Thus Staff->customer Accept path is broken despite staff-only fixtures compiling. DO NOT broaden all enrollment RLS/public key directory to fix this.
+Additional privilege/trust gap: current production signaling receives full ISM staff bearer, which also permits enrollment/rotation RPCs. A compromised broker could mutate the same directory used as independent pinning. Need scoped, device-bound delegated broker identities/tickets issued by a SEPARATE trusted identity authority; keep full GoTrue bearer native and at authority only. Root verifies live ISM profile/org/MFA + current enrollment + fresh domain-separated private-key proof, issues signed short-lived public claims (device/key/gen/profile/tenant/staff/expiry). Broker verifies with public authority key, cannot use ticket at ISM or mint/change device identities. Forward signed identity claims in Consent/peer identity; native customer validates authority signature and tenant/staff authorization and expected private-key/actual-DTLS Hello before capture. This resolves cross-tenant lookup without exposing enrollment rows. Same5 crates: add binary/module under signaling_server rather than a sixth crate. No production authority hostname/key chosen or service deployed; implement code and signed public config support first. Trusted signer must be separate from broker process/private secret. Existing fake Authenticator fixtures can remain isolated tests; release server must reject broad ISM bearer fallback. Core short-lived ticket tests still deferred until complete Mac build by user instruction.
+This is the next security/core-path implementation task; choose secure default autonomously, no permission question while writing repo code. User repeatedly delegated implementation choices; no external infra change until concrete approval needed. No root private key generated or read yet. Do not copy any MixelISM confidential OAuth secret; existing Suite GoTrue keycloak bridge is correctly reflected in native default.
+
+Remaining full Mac work still files/clipboard/audio/quality/VP8/unattended/long sessions/reconnect/staging etc as below; full TeamViewer portfolio very incomplete. Keep all release/runtime qualification false until actual final acceptance. No TestFlight upload yet.
+
+## MAC-FIRST TRAY / RECOVERY CONTINUATION — 2026-11-06 (newest)
+
+User still says Mac ONLY first; finish Mac features/build before acceptance testing, then other platforms. No test/GUI/OS permission or production action performed in this continuation. No agents. Continue coding, DO NOT stop at this milestone or claim full parity. Same worktree/branch and uncommitted source as below. Windows/Linux parked.
+
+Latest NEW source after package-r1:
+- macos_tray.rs native Tauri tray, exact local Mixel icon, Open/Hide/Stop Session/Go Offline/Quit. Native300ms state polling remains independent of hidden webview; persistent Sharing title and incoming Request title. Incoming request shows main window. Red window close now HIDES to tray; explicit Quit/CmdQ still performs full media/key cleanup first. UI clearly explains close vs quit. Unexpected main window destruction requests full shutdown. Tauri Mac-only features tray-icon/image-png added (8 cached dependencies including tray-icon0.25.1/image0.25.10); no other platform build triggered.
+- SCK frame metadata now downcasts actual sample-attachment CFDictionary/CFNumber with checked CF type IDs and restores erased generic CF types only under documented CMSampleBuffer contract. Only SCFrameStatus::Complete is copied; Idle/Started skipped; Blank/Suspended/Stopped fail closed. This avoids re-encoding unchanged surfaces or retaining old pictures as if a suspended source is live. Compiled but runtime UNQUALIFIED.
+- macos_control authenticated video-idle messages keep legitimate static desktops alive. Input ACK wait also handles interleaved encrypted idle records. Receiver still times out when neither real video nor a valid idle notification arrives.
+- Authenticated keyframe request/recovery: receiver requests missing initial/repair IDR at most1/s, including before the first track arrives. Host rate-limits requests independently, retains one zeroizing Arc raw frame while active and can encode a fresh IDR from it when source is idle. Checks source mailbox closure first, so revoked/closed sources cannot replay retained frames. Checks cancellation again AFTER encoder completion before SRTP send. Input router new dispatch_verified keeps opaque same-session/role/cert proof guard for multiplexed authenticated control. No OS injection from view-only keyframe requests.
+- Selected-display input now starts pointer INSIDE chosen display rather than inheriting global mouse location on a different monitor; prevents click/wheel-before-first-pointer crossing display scope. Host frame wait8ms in control-enabled sessions (100ms view-only) avoids idle typing queue bottleneck.
+- Native request/decide atomically leave Ready/Incoming at queue time, preventing duplicate UI acceptance/request races. Unknown/unavailable enrolled destinations return Ready instead of disconnecting whole app. Missing relay lease returns Ready with no sharing. Stale frontend account/session polls are versioned and ignored after newer actions. Keyboard/text UI requires first actually decoded video frame before enabling control. Stop/accepted races skip peer start; cancelled peer signaling ignored. Late ICE is pumped while waiting for SCTP OnOpen, and that wait is now promptly cancellable.
+- Native broker lease is passed directly into media Config; stopped() rechecks both JWT wall-clock and monotonic server deadline per iteration, independently of100ms watchdog. Source authorization never silently extends through broker HTTP waits.
+- IMPORTANT REAL COMPATIBILITY FIX: existing MixelISM apps/web/src/lib/mixel-suite-sso.ts uses GoTrue provider **keycloak** pointing at Authentik auth.mixel.ch, scopes openid profile email. New macOS config default changed from guessed azure to keycloak, native OAuth includes those scopes. No confidential OIDC client secret copied. Explicit config can still choose another valid provider. The parallel mixel-auth/session.ts is a separate server-cookie OIDC bridge; do not confuse it with current authoritative GoTrue/RLS client.
+- Turn URL validator rejects port0. Packaging public-config validator now rejects URL control/space characters, invalid/zero port and defaults provider keycloak.
+
+Actual checks: _scratch/next-macos-tray-build-r2.log cargo check PASS (5.12s); _scratch/next-macos-tray-clippy-r1.log -Dwarnings PASS3.52s; r2 PASS; **r3 --all-targets -p desktop_app -p signaling_server -Dwarnings PASS3.56s** includes new recovery, source metadata, tray and keycloak changes. Compiles test targets but DOES NOT execute tests. Earlier network-clippy-r8/r9/r10 failed on CF generic type casts; all fixed, do not treat failure as pending. Cast correct API is CFRetained::cast_unchecked (associated), concrete downcast CFDictionary first then restore CFDictionary<CFType,CFType>.
+
+CURRENT in-flight package: python3 scripts/local/package-next-macos-qa.py --output _scratch/next-macos-network-package-r2 --signing-identity 832784665DFBC9516AB4E7414285F5B8C54AA01A; exec session24033, log _scratch/next-macos-network-package-r2.log. New Mac tray/image release deps may take longer. Inspect log/package.json/build.log; do not change next/ or included scripts until this source-conservation package finishes. No public service config supplied; expected runtimeQualified=false/serviceConfigured=false/notarized=false/storeSigned=false. Package-r1 before tray/recovery remains valid OLD checkpoint only (do not claim new source is inside it).
+
+Pending full Mac work: proper distributable isolated service config + enrollment/staging (no new WSS hostname selected/deployed); files/clipboard/audio; VP8 fallback and higher quality modes; multi-monitor controls; persistent/unattended service; long-session media/relay lease renewal and network restart; remaining full portfolio. Current media capability limit15min remains, relay TTL default600s capped by broker authorization: need correct live renewal/restart before claiming long sessions. Full desktop and actual input still unqualified. No fresh SCK/AX permission request made; R3 grant exact path notes below. TestFlight sandbox controller + separate DeveloperID full host not yet prepared. Do not report complete or customer connection proof from compile/package.
+
+## MAC-FIRST NATIVE CUSTOMER FLOW BUILD — 2026-11-06 (newest, read FIRST)
+
+Latest user: build ONE platform first, macOS, then test, then other platforms. Root accepted. NO Windows/Linux builds/tests, no agents, no hosted CI. Continue implementation autonomously; do NOT return another partial-build final or ask to fix defects. Acceptance tests remain deferred until the complete Mac build per explicit user steering. Compile/lint/package/signature checks are running, no new app launch/GUI/network acceptance tests in this continuation. No CUA segment pending. No current user question, credential or permission handoff.
+
+Working checkout remains /Volumes/MAC_Mini_Ext/Project_Mixel/mixel-remote-client/.worktrees/remote-reliability, fix/native-local-reliability. HEAD9a1980a. Many uncommitted changes, ALL ours, preserve. Desktop anchor old checkout untouched. Installed /Applications/Mixel-Remote.app untouched; all new packages isolated under repo _scratch. No production server/DB/DNS, customer alias, CI or marketplace actions. No TestFlight upload yet; marketplace exact action-time confirmation still mandatory later.
+
+NEW completed-source Mac modules (all runtime UNQUALIFIED):
+- macos_auth.rs: native browser OAuth/enterprise SSO PKCE, random127.0.0.1:0 callback with exact Host/state/path/code, bounded headers/timeouts; GoTrue token exchange/user check + existing ISM active profile/org/MFA staff authorization. Tokens native-only, no JS bearer/private key/localStorage. Verified TOTP challenge/verify with5-attempt bound. Maintains refresh token rotation, same subject/profile/org/staff invariants, expiration fail-closed. Refresh timing adaptive. Local sign-out immediately revokes linked broker and media flags, aborts callback/refresh, drops credentials, then bounded POST /auth/v1/logout?scope=local; reports if remote revocation not confirmed. Does not sign out other browser/app sessions. Fast callback state overwrite race fixed. Initial .inspect principal denial only offers MFA for verified GoTrue AAL1; AAL2 inactive/unauthorized fails.
+- macos_config.rs: schema1 public JSON from signed bundle Contents/Resources/service-config.json, max32KiB, regular file only, strict field names, HTTPS identity root/WSS signaling without credentials/query/fragment, only JWT anon or sb_publishable API key. Public provider/SSO domain/relay-only policy. Explicit development env override requires MIXEL_ISM_URL, MIXEL_ISM_PUBLIC_KEY and MIXEL_SIGNALING_URL all present. No invented staging hostname, no secret/service-role key. Default OAuth provider azure; actual provider enablement/redirect allow-list not verified yet.
+- macos_remote.rs: real native authenticated WSS broker actor, no token/SDP/ICE/key IPC. Auto-resolves current saved public key's enrolled device UUID via ISM/RLS; verifies exact local enrollment public key, signs fresh challenge bound device/profile/tenant/stable9ID/generation, only shows Ready after server proof acknowledgment. Native main-window commands remote_register/request/decide/close/disconnect/status/next_video/input. Own account token renews when changed OR every12min to respect server15min monotonic authorization cap. Independent100ms broker lease watchdog revokes media/input even while actor is waiting on HTTP; same account/org/staff enforced. Host incoming Accept/Reject chooses exact source and separately opts into keyboard control with Accessibility preflight. One attended session per app; busy incoming requests rejected. Session/generation guards block stale worker updates; video packets tagged session UUID and old queues cleared. Stop immediately revokes session flag, video/input, then bounded broker cancellation and tracked native owner joins; refuses new connection while stopping. Completed worker notification retries bounded3s; overflow revokes broker. std worker registry prevents cleanup/spawn race.
+- macos_peer.rs: actual ONE REMOTE Rust WebRTC peer on owner std thread, separate from local_session QA. Controller creates receive-video transceiver and control DataChannel, sends signed identity/offer after broker Accept. Host receives offer and answers with H264 sender. Peer identity key independently resolved via ISM/RLS, actual DTLS certificate hashed before handshake finish. Context binds both enrolled keys and server fresh nonce. Full selected display scaled aspect-preserving to <=1280x720 / constrained baseline level3.1; SCK -> VideoToolbox hardware H264 -> authenticated SRTP. Periodic IDR, RTP assembler, bounded/cancellable video backpressure; native IPC carries received H264 only, WebCodecs renderer. Own-fixture option stays development-only. Native capture/input never starts before Accept and verified transport. Input permission grant travels encrypted over verified channel. Current Session ACTIVE_LIFETIME remains15min (NOT full long-running session parity yet).
+- macos_control.rs: signed-handshake directional AES256GCM permission grant, view-only denial, USB HID keys, Unicode text, selected-display normalized pointer/buttons/wheels and ReleaseAll, bounded command queue/deadlines, authenticated native-post acknowledgments. InputRouter binds opaque verified proof and owns held keys; release before slow SCK cleanup and again on session closure. Direct auth linkage of per-session cancellation flag. Main remote canvas focus/blur/IME/keyboard/pointer/wheel/Text UI wired; queue coalesces pointer only and closes on overload; raw physical keys, not untested browser-shortcut guarantees. Runtime delivery still UNQUALIFIED. MacInjector::display restricts pointer mapping to selected display only. Existing R3 actual Accessibility grant and old focus bug notes below remain relevant, no new permission granted.
+- main.rs: real macOS full-display capture source discovery when permission already granted; explicit whole-display confirmation. Bounded capture worker stop/start, revokes frame mailbox on timeout. Native Screen Recording request only from explicit local product button, no agent has invoked it. Default fixture window removed; created only for explicit diagnostics/source. Production-facing account/support dashboard now in front; old QA controls folded under Development diagnostics. Setup key actions visible, Make available loads existing Keychain identity itself. Main title Mixel-Remote. Graceful CloseRequested/CmdQ ExitRequested path blocks quit, stops broker/media, local QA and capture, signs out, then exits only after cleanup; cleanup failure leaves app open with error for retry.
+
+NEW server/core additions:
+- IsmAuth.device_for_key and peer_key resolve enrollment rows via same verified bearer/RLS, reject missing/duplicate/revoked/malformed/weak identities. Consent includes requester_connection so host can resolve exact pinned controller key independently of broker Hello. IdentityState exposes native-only public_key/handshake factory (not private key IPC).
+- Core NativeTransport.receive_video creates recv-only video transceiver; public native SDP/ICE type aliases for app adapter.
+- signaling_server/turn.rs implements coturn REST HMAC-SHA1/base64 short-lived credentials, opaque session/device username, server-only zeroizing shared secret, bounded validated TURN UDP/TCP/TLS URLs, ttl60..3600 (default600), capped by verified JWT AND current broker lease. IceServer Debug REDACTS credentials. Source verified official coturn README.turnserver and RFC8252; no third-party research relied on.
+- New ClientMessage::Ice{session}, ServerMessage::Ice{session,lease}. Server issues only over enrolled/proven existing WebSocket, after host Accept, correct participant/generation, unexpired authorization/session, per-peer5s issuance interval. No public credential endpoint, bearer in URL or permanent client secret. Mac requests lease after Accepted before starting peer; carries actual servers into NativeTransport automatic direct/relay selection, optional relay_only policy from signed config. Empty servers permitted ONLY server admin explicit isolated MIXEL_ALLOW_LAN_ONLY=1. No configured relay -> explicit Unavailable, no silently hardcoded direct-only customer mode.
+- Server config MIXEL_TURN_URLS comma list, MIXEL_TURN_SHARED_SECRET>=32 chars, optional MIXEL_TURN_CREDENTIAL_TTL. No values loaded or server launched by agent. Default AppState fixtures remain no-relay; existing health startup still works. All new tests still need writing/running AFTER complete Mac build per user instruction; do not claim earlier full suite covers new code.
+
+Actual build evidence:
+- _scratch/next-macos-network-build-r6.log: Mac desktop_app AND signaling_server release build PASS (18.66s), after TURN native/server wiring, before later signed config loader.
+- _scratch/next-macos-network-clippy-r6.log: desktop_app + signaling_server lint -D warnings PASS (9.20s), includes config loader, lifecycle, TURN and account/UI. Earlier clippy r1/r2 failures fixed; r3/r4/r5 also pass checkpoints.
+- _scratch/next-macos-network-package-r1/package.json: current native Mac release package BUILT, DeveloperID signed, strict codesign PASS, source conservation true, proper full-res Mixel icon container from existing branding PNGs. Main SHA61961a7d41f595a31fed50d7a9271ff273a9b05cc1abe5ee9c63061b2106faa2. App at _scratch/next-macos-network-package-r1/Mixel-Remote.app. Package build log PASS17.88s. runtimeQualified=false, serviceConfigured=false, notarized=false, storeSigned=false. NOT launched, NOT installed, NOT TestFlight, NOT complete product. Do not claim this package connects to customer service.
+- package-next-macos-qa.py now supports --service-config: strict public-only configuration validator, copies captured bytes before signing, verifies config+branding hashes unchanged, iconutil full-res brand icon from16..1024 existing PNGs, CFBundleIconFile and receipt source/config/icon fingerprints. Normal unconfigured development builds stay explicitly serviceConfigured=false. No actual service-config file generated yet.
+
+Read-only existing MixelISM discovery (NO secret exposed/copied): /Volumes/MAC_Mini_Ext/Project_Mixel/mixel-ism/.env.local and apps/web/.env.local contain public NEXT_PUBLIC_SUPABASE_URL=https://ism-api.mixel.ch and anon-role NEXT_PUBLIC_SUPABASE_ANON_KEY. Printed only URL, key presence and JWT role, NOT key value or other secrets. This is production public identity, NOT a chosen new staging broker. Current apps/web/src/lib/supabase.ts confirms authoritative GoTrue/RLS data plane; parallel mixel-auth OIDC session bridge uses Authentik with server client secret (do NOT copy that confidential secret into desktop). Need inspect source signIn provider support/allow-list before final actual login test; do not assume azure enabled. No WSS staging endpoint selected or deployed. Avoid invented public DNS or production writes.
+
+NEXT autonomous work:
+1. Continue full Mac implementation/build, no other platform builds/tests, no milestone final. Need full application features (files, clipboard, audio, multi-monitor quality/options, tray, persistent/unattended host service, reconnect/crash policy and remaining portfolio controls) and proper distributable configuration before deferred acceptance tests. Native host remains separate from sandbox TestFlight controller as approved; no TestFlight signing/upload prepared for new app yet.
+2. Audit and fix real issues on current native path before testing: initial Readys/auth waits still need cancellable heartbeat-safe handling; post-negotiation ICE opening wait can starve late ICE until OnOpen (complete SDP already gathered3s but improve). Worker view-only/crypto/runtime UNQUALIFIED. Backend/native15min media capability needs correct authenticated long-session renewal, not silently dropping limit. Enrolled peer revocation rechecks only at connect/own token renewal; no realtime revocation push yet. Potential JS read/action race still to audit. Server relay URL validator should reject port0; compiled config resources are public only.
+3. Native actor invalid peer-key lookup currently disconnects whole registration instead of returning Ready; ICE Unavailable also currently generic fatal broker error. Improve recoverable UX. Decide/request commands can queue duplicates before actor state updates; transition frontend/backend state atomically at enqueue. Do not rely only disabled buttons.
+4. Signed package is previous checkpoint only; update HANDOFF/README after source changes, rerun Mac fmt/clippy/build/package as needed. Do NOT run new acceptance/GUI/protocol tests while Mac feature build unfinished. No synthetic proof as customer proof. Preserve earlier fullr15/r3 actual failures, all release qualification false.
+
+
+## USER OVERRIDE — macOS ONLY FIRST (2026-11-06)
+
+Latest user says build only one platform first, test it, then build others: macOS first. Root accepted. Do NOT start more Windows/Linux builds or acceptance tests while completing Mac. Other platform code is preserved, not discarded. All old Windows/Linux jobs have FINISHED (VM130 r2 PID21691 exited0; Windows r7 exited0). No non-Mac build is pending. Windows r7 had ensure_fixture-unused warning; latest source adds cfg(macos), unbuilt on Windows. Linux r2 current source compiled (same snapshot as Windows r4 archive; before latest Mac helper cfg fix). Mac current release build _scratch/next-enrollment-renewal-budget-build-r1.log passed. Signaling enrolled renewal budget now17s (four HTTP checks), token-only13s, both capped by remaining authorization lifetime.
+
+Immediate Mac priority is real customer account + network session UI/engine, NOT more internal-media QA or other platform infrastructure. Existing local_session.rs remains isolated two-peer QA only. Need native browser OAuth/SSO PKCE sign-in (reuse ISM, tokens native-only), MFA and refresh, connect-by-ID and actual incoming Accept with pinned enrolled device identity, then complete Mac sharing/input/files/audio/tray/etc before acceptance per user's steering. Config identity URL/public anon key and signaling WSS URL must come from admin configuration, not invented public staging DNS or production writes. No credentials/access currently requested. Root began researching official GoTrue OpenAPI (_scratch/gotrue-openapi-reference.yaml, official MIT source) for OAuth PKCE and MFA; no native auth client written yet. /authorize supports code_challenge_method=s256; /sso POST supports domain/provider_id, redirect_to, skip_http_redirect=true and PKCE; /token?grant_type=pkce exchanges auth_code/code_verifier; /factors/{factorId}/challenge and /verify support TOTP. Never expose tokens to JS/localStorage or logs; no service-role key in app.
+
+Current new capture additions: WindowsInput and DXGI native adapter compiled on Windows; Windows raw preview now requires source selection + explicit whole-display confirmation. Mac still own-fixture capture. Idle/no-change frames now return empty IPC instead of failing static desktops. Frontend locks source/confirmation while capture active and scrubs consumed pixel buffers. Mac input cancellation flag wired from local_session to NativeInjector; key/button releases remain permitted after Stop. All these runtime paths remain unqualified until after complete Mac build. CurrentMac helper cfg fix only removes unused nonMac code. New capture_targets command exposes current allowed sources; Mac returned target own-fixture. Do not accidentally call start_capture without new {target,confirmFullDisplay} arguments in later UI automation.
+
+Linux additions complete-source but parked: user DPAPI Windows alreadycompiled; Linux Secret Service helper under std-owned permission-checked private lock, bounded child pipes/timeouts, no plaintext fallback, no real credential creation performed. Linux system libs and Node24.22.2 were installed only on dedicated QA VM130; no account/security/display changes. Isolated PG fixture remains stopped. QA VM130 root /home/qa/mixel-remote-client/_scratch/next-native-build-r1 remains for later, no more builds now. PublicNode archive source checksums and artifacts captured in earlier section. CUA all previous segments completed, appR3 closed, Accessibility granted successfully; no pending native permission handoff.
+
+
+## ACTIVE BUILD CONTINUATION — 2026-11-06 (read this before older notes)
+
+User reiterated: finish entire implementation/build before full app acceptance tests. Do not stop at milestones, ask for reapproval, or return another partial-build final. No user access is currently pending. Since that clarification, only build/compile work and build resource preparation are running; no new GUI or acceptance tests. Existing focused protocol/SQL checks below ran BEFORE that clarification. Full portfolio parity remains very incomplete; do not claim otherwise. No hosted CI, marketplace, customer alias, production server, or customer database writes. No subagents.
+
+Current W remains /Volumes/MAC_Mini_Ext/Project_Mixel/mixel-remote-client/.worktrees/remote-reliability, branch fix/native-local-reliability. Last committed HEAD9a1980a; all following changes UNCOMMITTED and ours. Preserve them. Working directory supplied by desktop is an older anchor; do not switch to it.
+
+Implemented/building since checkpoint:
+- New core_protocol/device_login.rs domain-separated Ed25519 proof over fresh nonce, device/profile/tenant, stable nine-digit ID and enrollment generation. Signatures are single-use per socket, five-second proof timeout, trusted public key from verified ISM/RLS lookup. Signaling supports AuthenticateDevice/ProveDevice/DeviceChallenge; token-only fixture adapters default-deny enrolled identities. Stable-ID registration denies duplicate active sockets; fresh reconnect preserves ID; renewal re-resolves enrollment and rejects revoked/changed key/generation/account/tenant. Existing token-only attended path remains for staging fixtures. Customer Tauri network login UX still NOT implemented.
+- IsmAuth.authenticate_device verifies same bearer via GoTrue/profile/organization then exact RLS enrollment row; rejects absent/duplicate/revoked/malformed/weak keys, wrong device, invalid ID/generation. No service-role secret.
+- next/sql/001_device_enrollment.sql staging migration against EXISTING ISM users/devices/clients/organizations. Active MFA staff-only enroll/revoke/explicit rotation; uniform random persistent nine-digit IDs; never silently overwrite identities; RLS tenant reads, deactivation/revocation denial, version conflict checks and private audit. Does NOT modify old RustDesk/customer IDs. No production application. Lock order device->enrollment consistent. Latest RNG uses PostgreSQL core UUID first4bytes so no dependence on pgcrypto extension schema. This last RNG expression has not yet been run after the user's test deferral.
+- Isolated PG17 fixture was actually created and original migration/rules passed7 notice groups (_scratch/enrollment-db-build-r1/validation.log), including real authenticated-role RLS, stable IDs, MFA, immutable identity, revocation/rotation/audit. Initial libpq18 initdb lacked server; installed PG17.11_1 was used instead. Owned cluster STOPPED and /tmp socket REMOVED. Data/logs remain under repo scratch. No existing DB touched.
+- Native identity storage: device_identity.rs exposes explicit local main-window Load/Create and domain-limited Prove commands, never private-key IPC or automatic startup creation. macOS login/default Keychain with add-only atomic creation/readback; Windows user-only DPAPI + bounded/zeroized buffers + atomic no-clobber ciphertext publication; Linux Secret Service through /usr/bin/secret-tool with bounded pipes/timeouts, strict private ownership/mode/symlink lock checks and cross-process creation serialization. No plaintext fallback or implicit rotation. Windows DPAPI COM/FFI in windows_identity_store.rs; Linux libc/lock/helper in linux_identity_store.rs. Only explicit UI action accesses real keychain; none has been clicked. All OS runtime persistence remains unqualified.
+- Windows native_os_capture/windows_capture.rs actual DXGI Desktop Duplication + D3D11 staging/map/unmap, bounded pixel copy excluding padding, rotation, desktop-loss refusal, RAII release, opaque alpha. SDK module COM lifetime isolated. DXGI adapter COMPILED Windows r6. Cursor composition still pending, not a finished Windows host.
+- Windows windows_input.rs SendInput physical USB key map, paired UTF16 text, pointer virtual-desktop mapping, buttons/wheels, held releases, UIPI fail-closed/no elevation fallback. Built Windows r7. Its caller must provide session cancellation; release events remain allowed after cancellation. MacInjector now has matching cancellation attached in local_session.rs, stopping future text scalars while retaining key/button release cleanup. New behavior has not been GUI-tested (user defers acceptance).
+- Tauri Windows capture owner now wired into local raw preview, explicit display selection + full-display checkbox, bounded startup/stop and frame revocation. macOS private fixture remains separate. Frontend source/confirmation locked during sharing, disclosures truthful per target, idle frames return empty IPC rather than terminating static-screen capture, consumed pixel buffers scrubbed. Current source includes latest helper cfg fix below, not all built on Windows yet.
+- Build fixes: build.rs chooses pnpm.cmd on Windows; ICO resource packages the existing256px PNG unchanged inside ICO, config references both formats. Mac-only imports/helper now cfg guarded. package-next-macos-qa.py rebuilds frontend explicitly before signing (build.rs also handles frontend changes).
+
+VERIFIED BUILD RECEIPTS (not full feature acceptance):
+- Mac native current development releases compile, latest _scratch/next-native-capture-selection-macos-build-r3.log and _scratch/next-native-cancellation-macos-build-r1.log. _scratch/next-enrollment-macos-qa-r2/package.json DeveloperID signed/source-conserved, runtimeQualified=false, NOT notarized/store, NOT launched. It predates latest capture/cancellation/UI additions. Current compile _scratch/next-windows-input-macos-build-r1.log passed; see ongoing logs for later changes.
+- Windows VM110 win-build (builder@10.124.1.50) reachable existing SSH key/strict host key. Cargo1.99 Node24.22.1, W:~76GiB free before builds. Build root W:\MixelRemoteBuild\mixel-remote-client\_scratch\next-native-build-r1. This is a scratch build under existing repo, not customer installation. Used already-approved PROCESS-ONLY RemoteSigned via powershell -ExecutionPolicy RemoteSigned; fresh post-build check all5 scopes Undefined; no lasting policy/ACL/token/account changes.
+- Windows r1 warning wrapper failed; r2 found pnpm.cmd problem; r3 found missingICO; fixed actual source. r4 initial release pass with unused imports; r5 DPAPI release pass ZERO WARNINGS (_scratch/next-windows-native-build-r5-result.json + compiler.log). r6 DXGI release pass. r7 includes input + captureUI/cancellation; PASS but ensure_fixture Mac-only helper warning; JUST FIXED #[cfg(macos)] in current source, NOT yet re-built Windows. _scratch/next-windows-native-build-r7.log saysPASS; remote native-build-r7.log retains warning. Do not say warnings clean for r7.
+- Windows source tar archives + frozen PS drivers under Mac _scratch/next-windows-source-r1..r4.tar.gz and Build-Next-Native-r1..r7.ps1. r4 source SHA788AE71EA90EFB2A102D23BA0AECEAA7C6917646ECB0456ABDD9592FE25D5DEF includes nearly latest source before helper cfg fix. PS r2 base can be adapted to overlay a new verified archive in owned source and rebuild incrementally; never overwrite other workspaces. Use npm exec --yes --package=pnpm@10.30.1 -- ... to match Mac toolchain; Windows installed pnpm10.0.0 warned on Node24. Wrapper invokes cmd redirection before checking LASTEXITCODE to avoid PowerShell5 treating harmless native stderr as fatal. All EXEs unsigned/development/runtimeQualified=false, not customer-ready.
+- Focused checks BEFORE stop-testing clarification: _scratch/next-enrolled-login-regression-r2.log real WS signed nonce, replay/wrong-key/duplicate denial, stable reconnect and renewal PASS. _scratch/next-enrollment-ism-adapter-r2.log verified bearer/RLS row rejection cases PASS. _scratch/next-device-login-crypto-r2.log binds nonce/device/profile/tenant/ID/generation PASS. _scratch/next-enrolled-login-clippy-r2.log clean. No repeat tests until complete build/user steering changes; compile checks continue.
+
+LINUX ACTIVE JOB / ACCESS:
+- Proxmox alias mixel-proxmox/root@10.124.1.20 works with existing key. QA VMs130 Ubuntu24.04,131 Fedora44KDE,132 Debian12X11,133 Win10 are running. Do not touch production guests. VM130 eth0=10.124.1.27, ciuserqa. Direct qa SSH denied; DO NOT provision keys/accounts or request credentials yet. Existing authorized QEMU guest agent works and runs build as qa: qm guest exec130 --pass-stdin1 -- /usr/sbin/runuser -l qa -c 'python3 -'. All UI remains CUA-only; this is headless compilation.
+- VM130 Rust1.99.1, ~39.9GB free initially, noNode/pnpm or GTK/WebKit dev packages. Installed official Ubuntu build-essential/pkg-config/libgtk3-dev/libwebkit2gtk4.1-dev/libayatana-appindicator3-dev/librsvg2-dev/libxdo-dev using guest-agent root only for packages; apt PID12737 exited0. Additional libsecret-tools install PID20446 (check status). No display/Wayland/security/account changes.
+- QA build root /home/qa/mixel-remote-client/_scratch/next-native-build-r1. Node24.22.2 Linuxx64 official HTTPS archive SHA48cc0e21e048790e54c0cf5749c2725005313d652651c40b7a21feb9697aaf75 validated, extracted only under tools/node-v24.22.2-linux-x64. NODE version chosen from official nodejs dist index. Node install PID13423 exited0. No global Node replacement.
+- Source gzip archives <1MiB can be passed to qm guest exec --pass-stdin1. QA helper receives bytes, checks pinnedSHA, then Python tarfile filter=data extraction only into owned source. No secrets in archives. Build driver build-native.py uses npm exec pinnedpnpm10.30.1, Cargo --workspace --release --locked, CARGO_BUILD_JOBS=2. No app launched/tests. Initial Linux source SHA33bcfedeaefd5db17d0190b063a39b1ae4ff175ad14fa5a2e6f52e84ae90312e built successfully (PID13488 exited0); this old snapshot did not yet include Linux Secret Service module.
+- CURRENT Linux r2 build updated from same Windows source r4 SHA788a... above. Mac exec cell94291 sends helpers, archive, then starts build-native-r2.py. Read _scratch/next-linux-build-r2-qga-pid.json after completion of this cell for PID. Remote logs frontend-install-r2.log/native-build-r2.log/build-result-r2.json. Initial remote logs/results remain unmodified. No source edits while build runs. Need inspect Linux module compile errors/warnings and rebuild helper cfg fix after current job finishes.
+- Mac helper _scratch/next-linux-build-status.py prints bounded JSON tail/status via guest-agent. It currently reads initial build-result.json/native-build.log; adapt to r2 filenames for current status. To retrieve guest files, return only needed contents as JSON/base64 through qa Python; QGA output then write original local evidence. Do not use UI automation outside CUA.
+
+NEXT: continue full implementation/build, not another milestone final. First inspect current Mac build cell54657/40695 outcomes and Linux r2 PID/results, then rebuild Windows with cfg helper fix (and current modules), fix every build defect. Keep no acceptance tests per user's latest explicit steering. Full Windows remote video encoder/session wiring, Linux PipeWire/X11 capture/input, audio/VP8, customer auth/enrollment UI, persistent IDs integration beyond signaling, services/tray/file/enterprise/mobile/AI/TestFlight all STILL remain. No phones required. Mac original granted R3 is closed, real input delivery unqualified; new focus fix remains pending eventual acceptance. No pending OS permission/MFA request. Do not ask again for R3 Accessibility.
+
+
 ## Latest steering, actual grant and input failure — 2026-11-06
 
 User says fullportfolio parity inventoryFIRST, buildcompletefeaturesFIRST, finalacceptancetestsAFTERbuild. No cheapQAinterfaceasfinishedproduct. Current `next/parity-baseline.json` contains60initialengineeringcapabilitieswithspecificacceptancecriteriaandprimaryreferenceURLs; explicitlyNOTexhaustivesubfeaturecoverage/NOT100%parity. Allreleasequalificationsfalseuntilindependentproof. Currentofficialproductindex includesRemote/Tensor/ONE/DEX/Frontline/AssistAR/RemoteManagement/Engage/IoT/Meeting. Needfinishdetailedplatform/subfeatureinventoryandimplementremainingapprovedsystem; doNOTreportprogrammecomplete.

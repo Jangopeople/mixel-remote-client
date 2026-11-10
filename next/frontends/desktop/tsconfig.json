@@ -13,8 +13,15 @@
   },
   "include": [
     "main.ts",
+    "capture.ts",
+    "remote.ts",
+    "devices.ts",
+    "enrollment.ts",
+    "files.ts",
+    "chat.ts",
     "fixture.ts",
     "session.ts",
-    "viewer.ts"
+    "viewer.ts",
+    "workspace.ts"
   ]
 }

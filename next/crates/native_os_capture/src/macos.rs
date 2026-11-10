@@ -10,13 +10,14 @@ use objc2::{
     AnyThread, ClassType, DefinedClass, define_class, msg_send, rc::Retained,
     runtime::ProtocolObject, sel,
 };
+use objc2_core_foundation::{CFArray, CFDictionary, CFNumber, CFRetained, CFType};
 use objc2_core_graphics::CGPreflightScreenCaptureAccess;
 use objc2_core_media::{CMSampleBuffer, CMTime};
 use objc2_core_video::*;
 use objc2_foundation::{NSArray, NSError, NSObject, NSObjectProtocol};
 use objc2_screen_capture_kit::{
-    SCContentFilter, SCShareableContent, SCStream, SCStreamConfiguration, SCStreamDelegate,
-    SCStreamOutput, SCStreamOutputType,
+    SCContentFilter, SCFrameStatus, SCShareableContent, SCStream, SCStreamConfiguration,
+    SCStreamDelegate, SCStreamFrameInfoStatus, SCStreamOutput, SCStreamOutputType,
 };
 use std::{
     sync::{Arc, mpsc},
@@ -28,17 +29,81 @@ use std::{
 // transfer to the capture owner; no mutable Objective-C object is shared.
 struct Content(Retained<SCShareableContent>);
 unsafe impl Send for Content {}
+/// Read permission state only. Listing sources never opens a system prompt.
+pub fn screen_access() -> bool {
+    CGPreflightScreenCaptureAccess()
+}
+/// Keep the WindowServer client initialized on the main thread while the
+/// headless LoginWindow agent runs its networking and media workers.
+pub fn run_login_window<T: Send>(worker: impl FnOnce() -> T + Send) -> Result<T, &'static str> {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::NSApplication;
+    use objc2_foundation::{NSDate, NSDefaultRunLoopMode, NSRunLoop};
+
+    let main = MainThreadMarker::new().ok_or("Login host must initialize on its main thread")?;
+    let app = NSApplication::sharedApplication(main);
+    app.finishLaunching();
+    let run_loop = NSRunLoop::currentRunLoop();
+    std::thread::scope(|scope| {
+        let task = scope.spawn(worker);
+        while !task.is_finished() {
+            objc2::rc::autoreleasepool(|_| {
+                let deadline = NSDate::dateWithTimeIntervalSinceNow(0.05);
+                // SAFETY: Foundation exports an immutable default-mode name.
+                if !run_loop.runMode_beforeDate(unsafe { NSDefaultRunLoopMode }, &deadline) {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            });
+        }
+        task.join()
+            .map_err(|_| "Login host worker stopped unexpectedly")
+    })
+}
+
+pub fn is_login_window_console() -> bool {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata("/dev/console").is_ok_and(|console| console.uid() == 0)
+}
+pub fn main_display() -> u32 {
+    objc2_core_graphics::CGMainDisplayID()
+}
+/// Call only from the local user's explicit screen-sharing permission action.
+pub fn request_screen_access() -> bool {
+    objc2_core_graphics::CGRequestScreenCaptureAccess()
+}
 fn content(own_only: bool) -> Result<Retained<SCShareableContent>, CaptureError> {
     if !own_only && !CGPreflightScreenCaptureAccess() {
         return Err(CaptureError::Permission);
     }
+    query_content(own_only)
+}
+
+/// Run the public ScreenCaptureKit authorization check in the approved
+/// login-window host. This queries display metadata and never starts a stream.
+pub fn probe_login_display(display: u32) -> Result<(), CaptureError> {
+    let snapshot = query_content(false)?;
+    // SAFETY: the retained snapshot has an immutable display array.
+    unsafe { snapshot.displays() }
+        .iter()
+        .any(|item| unsafe { item.displayID() } == display)
+        .then_some(())
+        .ok_or(CaptureError::Target)
+}
+
+fn query_content(own_only: bool) -> Result<Retained<SCShareableContent>, CaptureError> {
     let (tx, rx) = mpsc::sync_channel(1);
     let block = RcBlock::new(
         move |content: *mut SCShareableContent, error: *mut NSError| {
             let result = if !error.is_null() {
                 // SAFETY: Apple supplies a valid NSError for this callback's lifetime.
                 Err(CaptureError::Native(unsafe {
-                    (&*error).localizedDescription().to_string()
+                    let error = &*error;
+                    format!(
+                        "{} {}: {}",
+                        error.domain(),
+                        error.code(),
+                        error.localizedDescription()
+                    )
                 }))
             } else {
                 // SAFETY: callback argument is live; retain before the callback ends.
@@ -158,39 +223,84 @@ impl Drop for PixelLock<'_> {
     }
 }
 unsafe fn copy_sample(sample: &CMSampleBuffer) -> Result<Option<CapturedFrame>, CaptureError> {
+    // ScreenCaptureKit marks unchanged frames Idle; do not copy or encode the
+    // previous surface again. Blank/suspended/stopped is a revoked source,
+    // not evidence that its previous sensitive image is still shareable.
+    let status = unsafe { sample.sample_attachments_array(false) }
+        .and_then(|attachments| {
+            // SAFETY: CMSampleBuffer documents an array of Core Foundation
+            // dictionary objects. This only restores its erased element type;
+            // each element's dictionary type is checked before accessing it.
+            let typed = unsafe { CFRetained::cast_unchecked::<CFArray<CFType>>(attachments) };
+            typed.get(0)
+        })
+        .and_then(|value| value.downcast::<CFDictionary>().ok())
+        .map(|dictionary| {
+            // SAFETY: the concrete dictionary type was checked above. Apple
+            // specifies CFString keys and Core Foundation values for these
+            // metadata dictionaries, restoring the erased generic types.
+            unsafe { CFRetained::cast_unchecked::<CFDictionary<CFType, CFType>>(dictionary) }
+        })
+        .and_then(|dictionary| {
+            // SAFETY: Apple declares this metadata key as NSString, which is
+            // toll-free bridged to CFString/CFType. No ownership is transferred.
+            let key = unsafe { &*(SCStreamFrameInfoStatus as *const _ as *const CFType) };
+            dictionary.get(key)
+        })
+        .and_then(|value| value.downcast::<CFNumber>().ok())
+        .and_then(|number| number.as_isize())
+        .map(SCFrameStatus)
+        .ok_or_else(|| CaptureError::Native("ScreenCaptureKit frame status is invalid".into()))?;
+    match status {
+        SCFrameStatus::Complete => {}
+        SCFrameStatus::Idle | SCFrameStatus::Started => return Ok(None),
+        SCFrameStatus::Blank | SCFrameStatus::Suspended | SCFrameStatus::Stopped => {
+            return Err(CaptureError::Target);
+        }
+        _ => {
+            return Err(CaptureError::Native(
+                "ScreenCaptureKit frame status is unsupported".into(),
+            ));
+        }
+    }
     // SAFETY: caller holds the live callback sample.
     let Some(buffer) = (unsafe { sample.image_buffer() }) else {
         return Ok(None);
     };
-    if CVPixelBufferGetPixelFormatType(&buffer) != kCVPixelFormatType_32BGRA {
+    // SAFETY: this live screen sample owns the returned CVPixelBuffer.
+    unsafe { copy_pixel_buffer(&buffer) }.map(Some)
+}
+/// Caller owns a live CVPixelBuffer for the duration of this read-locked copy.
+pub(crate) unsafe fn copy_pixel_buffer(
+    buffer: &CVPixelBuffer,
+) -> Result<CapturedFrame, CaptureError> {
+    if CVPixelBufferGetPixelFormatType(buffer) != kCVPixelFormatType_32BGRA {
         return Err(CaptureError::Native("unexpected pixel format".into()));
     }
     // SAFETY: valid retained CVPixelBuffer, matched read-only unlock via guard.
-    if unsafe { CVPixelBufferLockBaseAddress(&buffer, CVPixelBufferLockFlags::ReadOnly) } != 0 {
+    if unsafe { CVPixelBufferLockBaseAddress(buffer, CVPixelBufferLockFlags::ReadOnly) } != 0 {
         return Err(CaptureError::Native("pixel buffer lock failed".into()));
     }
-    let _lock = PixelLock(&buffer);
+    let _lock = PixelLock(buffer);
     let (w, h, stride) = (
-        CVPixelBufferGetWidth(&buffer),
-        CVPixelBufferGetHeight(&buffer),
-        CVPixelBufferGetBytesPerRow(&buffer),
+        CVPixelBufferGetWidth(buffer),
+        CVPixelBufferGetHeight(buffer),
+        CVPixelBufferGetBytesPerRow(buffer),
     );
     let size = stride
         .checked_mul(h)
         .filter(|n| *n <= 256 * 1024 * 1024)
         .ok_or_else(|| CaptureError::Native("invalid pixel buffer size".into()))?;
-    let base = CVPixelBufferGetBaseAddress(&buffer);
-    if base.is_null() || CVPixelBufferGetDataSize(&buffer) < size {
+    let base = CVPixelBufferGetBaseAddress(buffer);
+    if base.is_null() || CVPixelBufferGetDataSize(buffer) < size {
         return Err(CaptureError::Native("missing pixel storage".into()));
     }
     // SAFETY: successful lock, non-null storage, bounds checked against CoreVideo
     // data size. Read-only bytes are copied before the lock/sample is released.
     let bytes = unsafe { std::slice::from_raw_parts(base.cast::<u8>(), size) };
     Frame::bgra(w, h, stride, bytes).map_err(|e| CaptureError::Native(e.to_string()))?;
-    Ok(Some(
-        CapturedFrame::bgra(w, h, stride, bytes.to_vec())
-            .map_err(|e| CaptureError::Native(e.to_string()))?,
-    ))
+    CapturedFrame::bgra(w, h, stride, bytes.to_vec())
+        .map_err(|error| CaptureError::Native(error.to_string()))
 }
 pub struct MacStream {
     stream: Retained<SCStream>,

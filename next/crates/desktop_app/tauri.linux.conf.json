@@ -1,0 +1,15 @@
+{
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Mixel-Remote",
+        "url": "index.html",
+        "width": 1160,
+        "height": 820,
+        "minWidth": 760,
+        "minHeight": 560
+      }
+    ]
+  }
+}

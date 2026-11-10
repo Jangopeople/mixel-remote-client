@@ -31,6 +31,24 @@
       "evidence": []
     },
     {
+      "id": "desktop.attended_code",
+      "area": "desktop",
+      "capability": "Attended support by Remote ID and one-time password",
+      "reference": "https://www.teamviewer.com/en/global/support/knowledge-base/teamviewer-remote/get-started/teamviewer-remote-faq/",
+      "acceptance": "The customer shares their Remote ID and a short-lived one-time password. Verify rate limiting, expiry, single successful use, device binding, and continued attended-session scope.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "desktop.permanent_id",
+      "area": "desktop",
+      "capability": "Stable Remote ID for each computer",
+      "reference": "https://www.teamviewer.com/en/global/support/knowledge-base/teamviewer-remote/get-started/teamviewer-remote-faq/",
+      "acceptance": "Verify the same device keeps its ID across reboot, app update, one-time password renewal, and authorized key rotation. Verify a different device cannot take over the ID.",
+      "implementation": "not_qualified_for_release",
+      "evidence": ["Existing enrollment SQL fixture checks nine-digit ID stability across repeated enrollment and explicit key rotation."]
+    },
+    {
       "id": "desktop.unattended",
       "area": "desktop",
       "capability": "Enrolled unattended service",
@@ -38,6 +56,15 @@
       "acceptance": "Reboot a registered endpoint and reconnect using a revocable grant without a foreground login; credential rotation denies the old grant.",
       "implementation": "not_qualified_for_release",
       "evidence": []
+    },
+    {
+      "id": "desktop.fullscreen",
+      "area": "desktop",
+      "capability": "Full-screen remote viewer",
+      "reference": "https://www.teamviewer.com/en/products/remote/features/",
+      "acceptance": "With an accepted remote session and received video, enter and exit full screen; verify correct mouse mapping and key release, retain End session, and restore the local window after the host stops.",
+      "implementation": "not_qualified_for_release",
+      "evidence": ["Mac Preview frontend tests exercise session-scoped entry, exit after revocation, and pointer mapping. A Chromium render fixture checks layout and real browser pointer events at two viewport sizes; it does not exercise a customer session."]
     },
     {
       "id": "desktop.multimonitor",
@@ -163,7 +190,9 @@
       "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-tensor/",
       "acceptance": "Exchange chat and audio/video, invite another authorized technician, switch roles and revoke the original controller cleanly.",
       "implementation": "not_qualified_for_release",
-      "evidence": []
+      "evidence": [
+        "macOS attended text chat passed bidirectional public TURN QA, host opt-out and transcript reset. Evidence: _scratch/session-chat-qa/receipt.json (R23 and R24). Voice/video and handover still need implementation and acceptance."
+      ]
     },
     {
       "id": "desktop.concurrency",
@@ -233,7 +262,16 @@
       "area": "operations",
       "capability": "Organization address book and groups",
       "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-tensor/",
-      "acceptance": "Search, share and nest device/contact groups; apply role-scoped custom fields without cross-tenant visibility.",
+      "acceptance": "In Admin Cockpit, find the correct customer company, add a computer by Remote ID after device confirmation, and search, share, and nest device/contact groups without cross-company visibility.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "operations.customer_support_grants",
+      "area": "operations",
+      "capability": "Support provider access across customer companies",
+      "reference": "https://www.teamviewer.com/en-us/products/remote/managed-devices/",
+      "acceptance": "Sign in once with Mixel ID and connect as the assigned technician for each approved customer. Deny unassigned company and direct-ID access. Revoke unattended permission and verify active access ends. Audit each connection against its customer, computer, technician and access mode.",
       "implementation": "not_qualified_for_release",
       "evidence": []
     },
@@ -297,6 +335,38 @@
       "capability": "ITSM identity and management connectors",
       "reference": "https://www.teamviewer.com/en-us/legal/product-descriptions/teamviewer-tensor/",
       "acceptance": "Use least-privilege versioned connectors for the documented integration catalogue; retry idempotently and revoke credentials cleanly.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "enterprise.provider_onboarding",
+      "area": "enterprise",
+      "capability": "Independent IT support company onboarding and isolation",
+      "acceptance": "Onboard two independent support companies through Mixel ID and Admin Cockpit. Each supports multiple customers with separate inventory, assignments, sessions, audit and exports. Deny cross-provider direct Remote ID connections and verify offboarding revokes access.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "operations.commercial_entitlements",
+      "area": "operations",
+      "capability": "Trials, subscriptions and server-enforced entitlements",
+      "acceptance": "Exercise purchase or trial, seats, feature limits, plan changes and cancellation. Verify retries and concurrent requests cannot exceed the entitlement, and expired entitlements deny protected features.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "enterprise.mixel_ism_integration",
+      "area": "enterprise",
+      "capability": "Mixel ISM ticket and device support workflow",
+      "acceptance": "Open Mixel Remote from an authorized ISM ticket or device, complete a session, and verify the result appears on the correct ticket. Reject cross-company access and deduplicate retried events.",
+      "implementation": "not_qualified_for_release",
+      "evidence": []
+    },
+    {
+      "id": "enterprise.mixel_pbx_integration",
+      "area": "enterprise",
+      "capability": "Mixel PBX support call through ISM to Mixel Remote",
+      "acceptance": "Link a test PBX support call to its ISM ticket, open a Remote session from the ticket, and verify correlation across all three records. Reject device access based on caller identification alone.",
       "implementation": "not_qualified_for_release",
       "evidence": []
     },
@@ -593,6 +663,7 @@
     "Explicit exact-action confirmation before marketplace state changes",
     "Sandboxed macOS controller and separate signed native host",
     "Signed installers, migration/rollback, independent acceptance evidence",
-    "OS permission and platform restrictions remain enforced"
+    "OS permission and platform restrictions remain enforced",
+    "Independent provider isolation, subscription enforcement, integration acceptance, and release security review have passing staging evidence"
   ]
 }

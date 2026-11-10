@@ -14,19 +14,12 @@
     "windows": [
       {
         "label": "main",
-        "title": "Mixel-Remote \u2014 Native Capture QA",
+        "title": "Mixel-Remote",
         "url": "index.html",
-        "width": 1000,
-        "height": 780
-      },
-      {
-        "label": "fixture",
-        "title": "Mixel-Remote Capture Fixture",
-        "url": "fixture.html",
-        "width": 640,
-        "height": 420,
-        "x": 50,
-        "y": 60
+        "width": 1160,
+        "height": 820,
+        "minWidth": 760,
+        "minHeight": 560
       }
     ]
   },
@@ -36,7 +29,8 @@
       "minimumSystemVersion": "13.0"
     },
     "icon": [
-      "icons/icon.png"
+      "icons/icon.png",
+      "icons/icon.ico"
     ]
   }
 }

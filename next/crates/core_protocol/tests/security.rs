@@ -39,10 +39,24 @@ fn encrypted_borrowed_unicode_input_both_directions() {
             down: true,
         },
         Input::ReleaseAll,
+        Input::ButtonClick {
+            button: 1,
+            down: true,
+            clicks: 2,
+        },
+        Input::ButtonClick {
+            button: 1,
+            down: false,
+            clicks: 2,
+        },
     ] {
         let encoded = input::encode(&value).unwrap();
         let record = a.seal(&encoded).unwrap();
-        assert!(!record.windows(encoded.len()).any(|w| w == encoded));
+        // Short encodings such as ReleaseAll can occur by chance in the
+        // ciphertext or record header. Check plaintext exposure on the text.
+        if matches!(value, Input::Text(_)) {
+            assert!(!record.windows(encoded.len()).any(|w| w == encoded));
+        }
         let plain = b.open(&record).unwrap();
         let decoded = input::decode(&plain).unwrap();
         assert_eq!(decoded, value);
@@ -200,4 +214,35 @@ fn consent_cannot_be_reused_for_another_context_or_without_binding() {
     assert!(!active.can_view_at(now + ACTIVE_LIFETIME));
     assert!(active.expire(now + ACTIVE_LIFETIME));
     assert!(active.fingerprints().is_none());
+}
+
+#[test]
+fn click_counts_are_bounded_and_legacy_button_encoding_stays_stable() {
+    for clicks in [0, 4, 255] {
+        assert!(
+            input::encode(&Input::ButtonClick {
+                button: 1,
+                down: true,
+                clicks
+            })
+            .is_err()
+        );
+    }
+    assert!(
+        input::encode(&Input::ButtonClick {
+            button: 0,
+            down: true,
+            clicks: 2
+        })
+        .is_err()
+    );
+    assert_eq!(
+        input::encode(&Input::Button {
+            button: 1,
+            down: true
+        })
+        .unwrap(),
+        vec![1, 1, 1]
+    );
+    assert_eq!(input::encode(&Input::ReleaseAll).unwrap(), vec![5]);
 }

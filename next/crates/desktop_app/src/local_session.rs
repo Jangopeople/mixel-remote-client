@@ -182,8 +182,17 @@ impl LocalSession {
         }
     }
     pub fn stop(&self) -> Result<(), String> {
+        self.stop_inner(None)
+    }
+    pub fn stop_request(&self, request: u64) -> Result<(), String> {
+        self.stop_inner(Some(request))
+    }
+    fn stop_inner(&self, expected_request: Option<u64>) -> Result<(), String> {
         let worker = {
             let mut inner = self.0.lock().map_err(|_| "Session state failed")?;
+            if expected_request.is_some_and(|request| request != inner.status.request) {
+                return Ok(());
+            }
             inner.cancel.store(true, Ordering::Release);
             inner.video = None;
             inner.input = None;
@@ -488,7 +497,11 @@ async fn connected(
         input_consent
             .authenticated_transport_ready(&host_control.verified_session(), now)
             .map_err(|e| e.to_string())?;
-        let mut router = InputRouter::new(MacInjector::own_process().map_err(|e| e.to_string())?);
+        let mut router = InputRouter::new(
+            MacInjector::own_process()
+                .map_err(|e| e.to_string())?
+                .with_cancellation(cancel.clone()),
+        );
         let token = router.register(input_consent).map_err(|e| e.to_string())?;
         Some((router, token))
     } else {
@@ -514,11 +527,8 @@ async fn connected(
         native_os_capture::macos::MacStream::start_own_window(target.id, 640, 420, 30)
             .map_err(|e| e.to_string())?;
     let mut encoder =
-        native_os_capture::macos_encoder::HardwareH264Encoder::new(640, 420, 30, 2_000_000)
+        native_os_capture::macos_screen_encoder::ScreenH264Encoder::new(640, 420, 30, 2_000_000)
             .map_err(|e| e.to_string())?;
-    if !encoder.hardware_active().map_err(|e| e.to_string())? {
-        return Err("Hardware H264 is unavailable".into());
-    }
     state.update(request, "active", "Accepted · identities and certificates verified · ScreenCaptureKit → hardware H264 → UDP DTLS-SRTP");
     let frames = capture.frames.clone();
     let result = media_loop(
@@ -545,7 +555,7 @@ struct MediaPipeline<'a> {
     sender: &'a H264VideoSender,
     consent: &'a mut Session,
     frames: &'a Arc<native_os_capture::stream::FrameMailbox>,
-    encoder: &'a mut native_os_capture::macos_encoder::HardwareH264Encoder,
+    encoder: &'a mut native_os_capture::macos_screen_encoder::ScreenH264Encoder,
     viewer: &'a mut NativeTransport,
     control: &'a mut ControlPipe,
 }
@@ -568,6 +578,7 @@ async fn media_loop(
     let mut assembler = H264Assembler::default();
     let mut track = None;
     let mut received = 0u64;
+    let mut recent: Option<Arc<native_os_capture::stream::CapturedFrame>> = None;
     let started = Instant::now();
     while !cancel.load(Ordering::Acquire) {
         if let Ok(command) = control.commands.try_recv() {
@@ -592,20 +603,30 @@ async fn media_loop(
                 }
             }
         }
-        let next = frames.next(sequence, Duration::from_millis(100));
-        match next {
+        let frame = match frames.next(sequence, Duration::from_millis(100)) {
             Ok((next_sequence, frame)) => {
                 sequence = next_sequence;
-                let encoded = encoder
-                    .encode(&frame, started.elapsed().as_micros() as u64, received == 0)
-                    .map_err(|e| e.to_string())?;
-                sender
-                    .send(consent, &encoded.annex_b, Duration::from_micros(33333))
-                    .await
-                    .map_err(|e| e.to_string())?;
+                recent = Some(frame.clone());
+                Some(frame)
             }
-            Err(native_os_capture::stream::CaptureError::Timeout) => {}
+            Err(native_os_capture::stream::CaptureError::Timeout) if encoder.needs_retry() => {
+                recent.clone()
+            }
+            Err(native_os_capture::stream::CaptureError::Timeout) => None,
             Err(error) => return Err(error.to_string()),
+        };
+        if cancel.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        if let Some(frame) = frame
+            && let Some(encoded) = encoder
+                .encode(&frame, started.elapsed().as_micros() as u64, received == 0)
+                .map_err(|e| e.to_string())?
+        {
+            sender
+                .send(consent, &encoded.annex_b, Duration::from_micros(33333))
+                .await
+                .map_err(|e| e.to_string())?;
         }
         if track.is_none() {
             track = match tokio::time::timeout(
@@ -781,5 +802,21 @@ mod tests {
         assert!(state.can_send_input(status.request + 1).is_err());
         state.stop().unwrap();
         assert!(state.can_send_input(status.request).is_err());
+    }
+
+    #[test]
+    fn delayed_viewer_close_cannot_revoke_a_new_invitation() {
+        let state = LocalSession::default();
+        let previous = state.request(false).unwrap().request;
+        state.stop_request(previous).unwrap();
+        let current = state.request(false).unwrap().request;
+        assert_ne!(previous, current);
+        let cancel = state.0.lock().unwrap().cancel.clone();
+        state.stop_request(previous).unwrap();
+        assert!(!cancel.load(Ordering::Acquire));
+        assert_eq!(state.0.lock().unwrap().status.phase, "pending");
+        state.stop_request(current).unwrap();
+        assert!(cancel.load(Ordering::Acquire));
+        assert_eq!(state.0.lock().unwrap().status.phase, "closed");
     }
 }

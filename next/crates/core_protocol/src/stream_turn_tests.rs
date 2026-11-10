@@ -527,6 +527,41 @@ async fn actual_tcp_turn_forwards_encrypted_session_without_udp_downgrade() {
     exchange(false, false, 1).await;
 }
 #[tokio::test]
+async fn loopback_stream_only_transport_never_sends_to_an_advertised_udp_relay() {
+    let fixture = Fixture::new(false, "localhost", true, false).await;
+    let udp_relay = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let mut mixed = fixture.config.clone();
+    mixed.urls.insert(
+        0,
+        format!("turn:{}?transport=udp", udp_relay.local_addr().unwrap()),
+    );
+    let mut peer = NativeTransport::relay_stream_only(vec![mixed])
+        .await
+        .unwrap();
+    peer.peer
+        .create_data_channel("stream-only", None)
+        .await
+        .unwrap();
+    let offer = peer.peer.create_offer(None).await.unwrap();
+    assert!(
+        peer.local_sdp(offer)
+            .await
+            .unwrap()
+            .sdp
+            .contains(" typ relay ")
+    );
+    assert!(fixture.listener.accepted.load(Ordering::Relaxed) > 0);
+    assert_eq!(peer.stream_udp_writes(), Some(0));
+    let mut packet = [0; 2048];
+    assert_eq!(
+        udp_relay.try_recv_from(&mut packet).unwrap_err().kind(),
+        io::ErrorKind::WouldBlock
+    );
+    peer.close().await.unwrap();
+    fixture.close().await;
+}
+
+#[tokio::test]
 async fn actual_tls_turn_verifies_certificate_and_forwards_encrypted_session() {
     exchange(true, false, 1).await;
 }

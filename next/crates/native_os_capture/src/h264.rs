@@ -20,12 +20,98 @@ pub enum EncodeError {
     Failed,
     #[error("encoder dropped the frame")]
     Dropped,
+    #[error("encoder could not recover a keyframe within three seconds")]
+    Stalled,
     #[error("malformed or oversized H264 access unit")]
     Bitstream,
 }
 pub struct EncodedH264 {
     pub annex_b: Zeroizing<Vec<u8>>,
     pub keyframe: bool,
+}
+pub struct AvccAccessUnit<'a> {
+    pub bytes: Zeroizing<Vec<u8>>,
+    pub sps: Option<&'a [u8]>,
+    pub pps: Option<&'a [u8]>,
+    pub keyframe: bool,
+}
+/// Restore length-prefixed samples for native decoding, retaining parameter
+/// sets separately. Bounds and NAL headers are validated before any native API.
+pub fn annex_b_to_avcc(data: &[u8]) -> Result<AvccAccessUnit<'_>, EncodeError> {
+    if data.is_empty() || data.len() > MAX_ACCESS_UNIT {
+        return Err(EncodeError::Bitstream);
+    }
+    let mut starts = Vec::new();
+    let mut cursor = 0;
+    while cursor + 3 <= data.len() {
+        let length = if data.get(cursor..cursor + 4) == Some(&[0, 0, 0, 1]) {
+            4
+        } else if data.get(cursor..cursor + 3) == Some(&[0, 0, 1]) {
+            3
+        } else {
+            cursor += 1;
+            continue;
+        };
+        if starts.len() >= 1024 {
+            return Err(EncodeError::Bitstream);
+        }
+        starts.push((cursor, length));
+        cursor += length;
+    }
+    if starts.first().is_none_or(|(position, _)| *position != 0) {
+        return Err(EncodeError::Bitstream);
+    }
+    let mut output = AvccAccessUnit {
+        bytes: Zeroizing::new(Vec::with_capacity(data.len())),
+        sps: None,
+        pps: None,
+        keyframe: false,
+    };
+    let mut picture = false;
+    for (index, (position, prefix)) in starts.iter().enumerate() {
+        let end = starts
+            .get(index + 1)
+            .map_or(data.len(), |(position, _)| *position);
+        let nal = data
+            .get(position + prefix..end)
+            .filter(|nal| !nal.is_empty())
+            .ok_or(EncodeError::Bitstream)?;
+        let kind = nal[0] & 0x1f;
+        if nal[0] & 0x80 != 0 || !(1..=23).contains(&kind) {
+            return Err(EncodeError::Bitstream);
+        }
+        if matches!(kind, 7 | 8) {
+            if nal.len() > 65535 {
+                return Err(EncodeError::Bitstream);
+            }
+            let parameter = if kind == 7 {
+                &mut output.sps
+            } else {
+                &mut output.pps
+            };
+            if parameter.is_some_and(|previous| previous != nal) {
+                return Err(EncodeError::Bitstream);
+            }
+            *parameter = Some(nal);
+            continue;
+        }
+        if output
+            .bytes
+            .len()
+            .checked_add(nal.len() + 4)
+            .is_none_or(|length| length > MAX_ACCESS_UNIT)
+        {
+            return Err(EncodeError::Bitstream);
+        }
+        output.bytes.extend((nal.len() as u32).to_be_bytes());
+        output.bytes.extend_from_slice(nal);
+        picture |= (1..=5).contains(&kind);
+        output.keyframe |= kind == 5;
+    }
+    if !picture {
+        return Err(EncodeError::Bitstream);
+    }
+    Ok(output)
 }
 pub fn avcc_to_annex_b(
     avcc: &[u8],

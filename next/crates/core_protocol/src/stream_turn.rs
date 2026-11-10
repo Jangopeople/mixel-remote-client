@@ -134,6 +134,11 @@ impl AsyncUdpSocket for StreamSocket {
     fn local_addr(&self) -> io::Result<SocketAddr> {
         self.udp.local_addr()
     }
+    fn max_gro_segments(&self) -> usize {
+        // Direct UDP still uses the wrapped socket when TURN streams coexist.
+        // Preserve its receive capacity so the driver can split GRO batches.
+        self.udp.max_gro_segments()
+    }
     fn poll_send(&self, cx: &mut Context<'_>, transmit: &Transmit<'_>) -> Poll<io::Result<usize>> {
         if let Some(pipe) = self.pipes.get(&transmit.destination) {
             if transmit
@@ -520,3 +525,27 @@ async fn read_packets(
 #[cfg(test)]
 #[path = "stream_turn_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod receive_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn mixed_turn_socket_preserves_udp_receive_batch_capacity() {
+        let runtime = webrtc::runtime::default_runtime().expect("native runtime");
+        let udp = runtime
+            .wrap_udp_socket(std::net::UdpSocket::bind("127.0.0.1:0").unwrap())
+            .unwrap();
+        let expected = udp.max_gro_segments();
+        let (_, incoming) = mpsc::channel(1);
+        let socket = StreamSocket {
+            udp,
+            pipes: HashMap::new(),
+            incoming: Mutex::new(incoming),
+            udp_writes: Arc::new(AtomicU64::new(0)),
+        };
+
+        assert_eq!(socket.max_gro_segments(), expected);
+        println!("UDP receive batch capacity: {expected} datagrams");
+    }
+}

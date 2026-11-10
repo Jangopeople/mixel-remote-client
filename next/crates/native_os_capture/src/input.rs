@@ -92,6 +92,9 @@ impl<T: Injector> InputRouter<T> {
             Input::ReleaseAll => self.release_owned(token.id),
             Input::Key { usage, down } => self.change(token.id, Held::Key(usage), down),
             Input::Button { button, down } => self.change(token.id, Held::Button(button), down),
+            Input::ButtonClick { button, down, .. } => {
+                self.change_event(token.id, Held::Button(button), down, event)
+            }
             _ => self.injector.inject(event).map_err(InputError::Injection),
         }
     }
@@ -113,19 +116,45 @@ impl<T: Injector> InputRouter<T> {
         let event = input::decode(&bytes).map_err(|_| InputError::Invalid)?;
         self.dispatch(token, &event)
     }
+    /// A multiplexed, already-decrypted control message must retain the same
+    /// opaque peer/session/certificate proof as its registered input grant.
+    pub fn dispatch_verified(
+        &mut self,
+        token: &InputToken,
+        proof: &core_protocol::crypto::VerifiedSession,
+        event: &Input<'_>,
+    ) -> Result<(), InputError> {
+        if !self
+            .sessions
+            .get(&token.id)
+            .is_some_and(|session| session.can_inject_local() && session.matches_verified(proof))
+        {
+            return Err(InputError::Forbidden);
+        }
+        self.dispatch(token, event)
+    }
     fn change(&mut self, id: Uuid, held: Held, down: bool) -> Result<(), InputError> {
+        self.change_event(id, held, down, &held.event(down))
+    }
+    fn change_event(
+        &mut self,
+        id: Uuid,
+        held: Held,
+        down: bool,
+        event: &Input<'_>,
+    ) -> Result<(), InputError> {
         let owners = self.owners.entry(held).or_default();
         if down {
             // Repeated keydown by the same owner preserves typematic delivery.
             // A second owner adopts the already-held OS state without a second
             // synthetic down event that could confuse native modifier state.
             if owners.is_empty() || owners.contains(&id) {
-                self.injector.inject(&held.event(true))?;
+                self.injector.inject(event)?;
             }
             owners.insert(id);
         } else if owners.contains(&id) {
             if owners.len() == 1 {
-                self.injector.inject(&held.event(false))?;
+                self.injector.inject(event)?;
             }
             owners.remove(&id);
         }

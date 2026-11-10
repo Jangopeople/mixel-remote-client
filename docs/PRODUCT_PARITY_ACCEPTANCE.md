@@ -14,9 +14,9 @@ new mobile build work are parts of this larger scope.
 ## Shared product rules
 
 - Ship Mixel identity, relay defaults and verified update paths.
-- Reuse ISM's existing identities, organization/device records, tickets and
-  session history. This repository remains the native-client/build pipeline;
-  related ISM changes belong in its backend/frontend, following that repo's rules.
+- Sign technicians in with Mixel ID. Use the Admin Cockpit company directory
+  for ownership and support assignments. Reuse linked ISM inventory, tickets,
+  and session history where those records exist.
 - Authentication, enrollment, policy enforcement and native session consent
   must agree. A management-console restriction alone is insufficient if direct
   client connections bypass it. Revocation must reach already active sessions.
@@ -41,6 +41,9 @@ Acceptance covers Windows, macOS and Linux initiator/receiver combinations:
   errors, with exact content verification and correct destination identity.
 - Multiple monitors, scaling/high DPI, changing resolution, supported codecs,
   constrained networks, HTTPS relay fallback and recovery after network changes.
+- Full-screen viewing after the first accepted video frame. Keep End session
+  available, ignore clicks outside the image, map drags to the image edges,
+  release held input on transition and exit when the session stops.
 - Session recording with a playable retained file; chat, supported audio/video,
   multiple supporters and handover with explicit authority transitions.
 - Reboot/reconnect, remote terminal and authorized scripts, privacy/input block,
@@ -48,6 +51,22 @@ Acceptance covers Windows, macOS and Linux initiator/receiver combinations:
 
 ## Enterprise management and Tensor-style controls
 
+- Mixel IT technicians sign in with their own Mixel ID and choose a customer
+  company in Admin Cockpit. The company owner or an authorized company admin
+  can assign and revoke access for individual technicians or support teams.
+  Verify that an unassigned technician cannot list or connect to the company's
+  computers, including by typing a known Remote ID directly in the app.
+- Add a computer by its Remote ID and confirm the pairing on that computer
+  before it appears in the company inventory. The same ID remains through
+  app updates, restart, password renewal, and authorized device key rotation.
+- A customer can give a technician the computer ID and a one-time password
+  for attended support. Verify that the password expires, is consumed on
+  successful use, and cannot be used for a different computer or connection.
+- A company admin can enable unattended access on a managed computer or
+  server and assign who may connect. Verify a connection after reboot without
+  an on-site user on supported platforms. Revoking the grant must deny the
+  next connection and end active access. Audit entries identify the company,
+  device, technician, and access mode.
 - Organization isolation; users, roles, groups and device ownership; managed
   enrollment, approval, device retirement and credential rotation.
 - SSO/MFA, provisioning/deprovisioning, narrowly scoped service credentials and
@@ -60,6 +79,36 @@ Acceptance covers Windows, macOS and Linux initiator/receiver combinations:
   Duplicate/replayed/forged events and cross-organization access must be rejected.
 - Central device/connection health, deployment/update inventory, service-desk
   integration, APIs and documented third-party integration boundaries.
+
+## Commercial launch and Mixel integrations
+
+- Onboard an independent IT support company with its own Mixel ID organization,
+  administrators, technicians, customer companies, and devices. Verify that
+  two independent providers can each manage multiple customers and that direct
+  Remote ID lookups, sessions, audit records, and exports respect those
+  boundaries. Verify technician removal and company offboarding.
+- Verify the agreed sales and subscription workflow from purchase or trial
+  activation through plan changes and cancellation. Enforce seat and feature
+  entitlements on the server. Retest the limits with retries, concurrent
+  requests, and an expired entitlement.
+- Verify Mixel Remote as a standalone product for a provider using Mixel ID
+  and Admin Cockpit. Verify that a provider can connect and disconnect each
+  optional Mixel integration and that losing a connector does not grant
+  access or stop ordinary remote support.
+- **Mixel ISM.** Open a support session from the authorized customer's ticket
+  or device record. Confirm the resulting session status and audit reference
+  appear on the correct ticket. Retry the same event and verify that it does
+  not create a duplicate session or attach it to another company.
+- **Mixel PBX.** Start with a support call linked to the correct ISM ticket.
+  From that ticket, open Mixel Remote and verify the call, ticket, and remote
+  session stay linked. A caller number does not grant device access.
+- Define the workflow and permissions for each additional Mixel app before
+  offering it as an integration. Verify authorized use, rejected cross-company
+  requests, duplicate delivery, outage recovery, and connector revocation.
+- Before a commercial release, exercise these flows with independent test
+  companies using the release builds and staging services. Require passing
+  evidence for tenant isolation, account and device revocation, supported
+  platforms, upgrades and rollback, and a security review of the release.
 
 ## Mobile support
 

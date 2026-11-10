@@ -290,3 +290,27 @@ fn encrypted_input_rejects_cross_session_grants_without_consuming_the_record() {
     );
     assert_eq!(fake.0.lock().unwrap().events.len(), 1);
 }
+
+#[test]
+fn explicit_double_click_keeps_button_ownership_and_disconnect_releases_it() {
+    let fake = Fake::default();
+    let mut router = InputRouter::new(fake.clone());
+    let token = router.register(active()).unwrap();
+    router
+        .dispatch(
+            &token,
+            &Input::ButtonClick {
+                button: 1,
+                down: true,
+                clicks: 2,
+            },
+        )
+        .unwrap();
+    assert_eq!(router.held_count(), 1);
+    assert!(fake.0.lock().unwrap().events[0].contains("clicks: 2"));
+    router.close(&token).unwrap();
+    assert_eq!(router.held_count(), 0);
+    let state = fake.0.lock().unwrap();
+    assert_eq!(state.events.len(), 2);
+    assert!(state.events[1].contains("down: false"));
+}

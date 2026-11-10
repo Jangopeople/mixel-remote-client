@@ -8,11 +8,22 @@ publish.workspace = true
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+testflight-controller = []
 
 [dependencies]
+signaling_server = { path = "../signaling_server" }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+serde_json = "1"
+base64 = "0.22"
+sha2 = "0.10"
+futures-util = "0.3"
+uuid = { version = "1", features = ["serde"] }
+mp4 = "=0.14.0"
+tempfile = "3"
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-native-roots"] }
 native_os_capture = { path = "../native_os_capture" }
 core_protocol = { path = "../core_protocol", features = ["native-webrtc"] }
-tokio = { version = "1", features = ["rt-multi-thread", "time", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "time", "macros", "sync", "net", "io-util", "signal"] }
 ed25519-dalek = { version = "2.2", features = ["rand_core"] }
 rand_core.workspace = true
 serde = { workspace = true }
@@ -20,7 +31,32 @@ zeroize.workspace = true
 tauri = { version = "=2.12.5", default-features = false, features = ["wry", "compression"] }
 
 [build-dependencies]
+base64 = "0.22"
+serde_json = "1"
 tauri-build = "=2.7.4"
 
 [lints]
 workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+tauri = { version = "=2.12.5", default-features = false, features = ["tray-icon", "image-png"] }
+security-framework = "=3.7.0"
+libc = "0.2"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "=0.62.2", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_UI_Shell", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging", "Win32_System_Com"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+gio = "=0.18.4"
+ashpd = { version = "=0.14.0", features = ["remote_desktop", "screencast"] }
+gstreamer = "=0.24.4"
+gstreamer-app = "=0.24.4"
+gstreamer-video = "=0.24.4"
+
+[target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
+arboard = { version = "=3.7.0", default-features = false }
+rfd = { version = "=0.18.0", default-features = false, features = ["xdg-portal"] }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+x11rb = "=0.13.2"

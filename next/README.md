@@ -4,7 +4,119 @@ The approved replacement is developed alongside the existing customer app.
 Nothing in this directory is a published installer or a production replacement.
 Existing RustDesk branding/build scripts and rs.mixel.ch remain independent.
 
-## Implemented and runnable
+## Current Mac-first build (2026-11-06)
+
+The new Mac dashboard now contains native browser/PKCE Mixel sign-in, enrolled
+nine-digit IDs, attended requests and source-specific Accept, signed device
+identity tickets, actual WebRTC H264 media, native VideoToolbox decoding, selected
+display keyboard/mouse control, tray Stop/Offline/Quit, and explicit text clipboard
+transfers. These additions compile; the current customer path is **not runtime
+qualified**. They are not a claim of complete TeamViewer portfolio parity.
+Windows and Linux launch the managed workspace. They share the native Mixel ID,
+permanent device registration, consent, and authenticated session engine with
+macOS. Windows uses DXGI with a selected-display fallback on the ordinary
+signed-in desktop. Linux hosting supports X11 and attended Wayland sharing.
+On Wayland, accepting a request opens the compositor's display chooser.
+Interactive sessions also require the compositor to grant keyboard and pointer
+access. This grant is scoped to one session. The host uses the PipeWire
+GStreamer plugin and the desktop's ScreenCast and RemoteDesktop portals.
+The lab verified display pixels, keyboard and mouse input, and session cleanup
+on Windows, X11 and GNOME Wayland with pinned test identities. Windows and X11
+also verified file transfer and MP4 recording. Public Mixel ID and broker
+qualification and native startup-host services are separate release gates.
+Older verification below applies to its recorded checkpoint.
+
+The Mac device directory now lists only enrolled records available to the
+current ISM bearer through existing RLS, with name search, stable cursor pages
+and an explicit Connect action. It does not equate enrollment with online
+presence. Directory data and pending replies are cleared on sign-out/account
+changes; native commands recheck account scope after requests.
+
+Mac setup now lets an MFA-verified Mixel team member find an existing ISM device
+record and explicitly enroll this Mac with its OS-protected key. The add-only
+`remote_enroll_device` RPC never replaces a conflicting key; native code verifies
+the returned row and independently reads back the persisted enrollment before
+reporting a connection ID. Enrollment is disabled while registered/connected,
+and a sign-out/expiry cancellation guard prevents a pending setup from starting
+its write after protected account access is revoked. No production record has
+been enrolled as part of implementation. This flow still needs isolated runtime
+qualification and the staging migration/service configuration.
+
+Clipboard access is an independent host checkbox, off by default for every
+invitation. Send/Get actions operate on native plain-text clipboards, up to 1 MiB;
+there is no background watcher, HTML/file clipboard import or clipboard-content
+webview IPC. The encrypted protocol requires a bounded ordered transaction,
+length and SHA256 verification before replacement. A denied/unsupported clipboard
+format reports an operation error without treating it as permission to inject
+keystrokes. Stop and account/peer expiry revoke future clipboard operations.
+
+The connection broker accepts only device-bound tickets signed by an independent
+identity authority. Full ISM bearer tokens go only to native ISM calls and the
+trusted authority, never to the broker. The authority verifies the current ISM
+profile/organization/MFA/enrollment and a fresh device private-key proof. Signed
+public peer claims let customers verify internal technicians without exposing a
+global enrollment directory. Accepted media handshakes bind both exact tickets,
+room ID, server nonce, enrolled keys and actual DTLS certificates. Renewal cannot
+switch the live account, enrollment key/generation or privileges.
+
+Bundled `service-config.json` uses schema 2 with `identity_url`, public anonymous
+`public_key`, `signaling_url`, HTTPS-origin `authority_url`, and `authority_keys`
+(one to four strong Ed25519 public keys, 64 hexadecimal characters each). Optional
+fields are `oauth_provider` (default `keycloak`), `sso_domain` and `relay_only`.
+Identity/signing private keys and ISM service-role keys must never be bundled.
+The authority runs as the separate `identity_authority` binary with a service-user
+owned mode-0600 secret file selected by `MIXEL_PEER_AUTHORITY_KEY_FILE`; the broker
+receives only `MIXEL_PEER_AUTHORITY_PUBLIC_KEYS`. Keep signer and broker processes,
+secret mounts and TLS routes isolated. The authority binds loopback8093 by default;
+the broker binds loopback8092. No authority key, staging configuration or production
+routes have been provisioned by this source change.
+
+The Mac file-transfer path is now wired through a separate ordered reliable
+`mixel-files-v1` channel with independently derived directional encryption keys.
+The host file checkbox defaults off on every invitation. Both peers explicitly
+choose outgoing files through the native Open panel; every incoming file waits
+for a local Save choice. Paths never enter the webview or network. One bounded
+transfer in each direction uses an eight-chunk ACK window. A transport renewal
+resumes only the same local consent and enrolled peer, and only from a receiver's
+actual retained prefix whose offset and SHA256 match a transmitted checkpoint.
+Private partial files publish through an exclusive no-overwrite rename after
+hashing the actual synced file bytes. Completed receipts are bounded and allow a
+lost final ACK to be recovered without rewriting a saved document. Stop/account
+expiry cancel open pickers and disk operations; failed private-file cleanup
+retains its native capability and postpones Quit. This implementation and its
+new disk/rotation regression cases passed in the native Mac suite. Those
+checks use real disk bytes and native owner threads with synthetic peers; actual
+customer file transfer and a real screen session remain unqualified.
+
+Mac multi-click packets preserve the controller's browser/OS click count through
+input ownership and CoreGraphics `MouseEventClickState`; host receipt latency is
+not used to infer a double click. Fractional trackpad scrolling accumulates before
+sending wheel steps. The controller command-queue and ownership regressions passed. Actual
+remote desktop double-click/scroll behavior remains unqualified.
+
+Temporary signaling I/O loss, abnormal TCP reset, maintenance close and
+502–504 responses use bounded exponential reconnect delays with jitter. TLS,
+protocol, policy, account and enrollment failures stop. Each attempt revalidates
+the current account, enrollment and scoped identity ticket; old native owners
+must finish cleanup, old frames and queued commands are discarded, and no old
+session/Accept grant is replayed. A new connection requires fresh Accept. The
+retry budget resets only after at least 60 seconds of actual authenticated
+registration. This recovery implementation and its failure-classification/backoff
+cases passed in the native Mac suite; a real service outage/reconnect flow
+remains unqualified.
+
+Remaining Mac delivery work includes audio, quality/codec options,
+unattended access, network-loss recovery, connected service configuration, and
+final independent customer acceptance. Scheduled transport replacement now
+refreshes TURN credentials and ECDH/DTLS keys before relay or native media grant
+expiry, retaining the same accepted devices, accounts, source and grants. It
+uses fresh signed identity claims and a new room binding, stops and joins the
+old media owners, discards late retired-room ICE/Close traffic, and preserves
+the original eight-hour hard limit. The controller also has an explicit Renew
+connection action. This path compiles but is not yet runtime qualified. Signed QA packages are isolated and do not replace the
+installed customer app; TestFlight/store qualification remains separate.
+
+## Earlier implemented and verified checkpoints
 
 - `core_protocol`: bounded canonical bincode input with borrowed UTF-8 text;
   signed ephemeral X25519, HKDF-SHA256 and directional AES-256-GCM records;
@@ -79,7 +191,9 @@ from authenticated device enrollment or independently verified pairing. A key
 received only through signaling is not a trust root. Actual remote DTLS leaf
 certificates are hashed independently before `Handshake.finish`. An open
 DataChannel alone grants no OS control. No unattended permission is inferred.
-The missing enrollment/grant adapter prevents this workspace being release-ready.
+The new native enrollment and delegated-grant adapters are built but still need
+connected staging configuration and independent customer acceptance; this
+workspace is not release-ready.
 
 ## Local verification
 

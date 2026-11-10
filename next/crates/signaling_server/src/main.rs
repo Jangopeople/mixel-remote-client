@@ -1,6 +1,7 @@
 use signaling_server::{
-    auth::IsmAuth,
+    delegated_auth::{TicketAuth, public_keys},
     server::{AppState, router},
+    support_policy::SupportPolicy,
 };
 use std::{collections::HashSet, net::SocketAddr, sync::Arc};
 
@@ -14,10 +15,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !address.ip().is_loopback() {
         return Err("signaling must bind loopback behind a TLS proxy".into());
     }
-    let auth = IsmAuth::new(
-        std::env::var("MIXEL_ISM_URL")?.parse()?,
-        std::env::var("MIXEL_ISM_PUBLIC_KEY")?,
-    )?;
+    let auth = TicketAuth::new(public_keys(&std::env::var(
+        "MIXEL_PEER_AUTHORITY_PUBLIC_KEYS",
+    )?)?)?;
     let origins: HashSet<_> = std::env::var("MIXEL_WEB_ORIGINS")?
         .split(',')
         .map(str::trim)
@@ -33,12 +33,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         return Err("exact HTTPS web origins are required".into());
     }
+    let policy = SupportPolicy::new(
+        std::env::var("MIXEL_SUPPORT_POLICY_URL")?.parse()?,
+        std::env::var("MIXEL_SUPPORT_POLICY_TOKEN")?,
+    )?;
+    let state = AppState::new(Arc::new(auth), origins)
+        .with_support_policy(policy)
+        .with_turn(signaling_server::turn::TurnConfig::from_env()?);
     let listener = tokio::net::TcpListener::bind(address).await?;
     eprintln!(
         "Mixel Remote staging signaling listening on {}",
         listener.local_addr()?
     );
-    let state = AppState::new(Arc::new(auth), origins);
     let registry = state.registry.clone();
     axum::serve(listener, router(state))
         .with_graceful_shutdown(async move {

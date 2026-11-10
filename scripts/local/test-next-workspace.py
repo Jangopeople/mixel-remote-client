@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import shutil
 import re
+import secrets
 import selectors
 import signal
 import urllib.request
@@ -23,7 +24,7 @@ WORKSPACE = ROOT / "next"
 
 
 def inventory():
-    files = [Path(__file__).resolve(), ROOT / "scripts/local/package-next-macos-qa.py", ROOT / "scripts/local/test-next-native-media.py"]
+    files = sorted((ROOT / "scripts/local").glob("test-next-*.py")) + [ROOT / "scripts/local/package-next-macos-qa.py"]
     for directory, children, names in os.walk(WORKSPACE):
         children[:] = sorted(name for name in children if name not in {"target", "node_modules", "dist", "gen"})
         files.extend(Path(directory) / name for name in sorted(names))
@@ -31,9 +32,14 @@ def inventory():
 
 
 def smoke_binary(output):
-    environment = dict(os.environ)
-    environment.update(MIXEL_SIGNAL_BIND="127.0.0.1:0", MIXEL_ISM_URL="https://identity-fixture.invalid",
-                       MIXEL_ISM_PUBLIC_KEY="public-fixture-not-a-credential", MIXEL_WEB_ORIGINS="https://staging.example")
+    environment = {name: value for name, value in os.environ.items() if not name.startswith("MIXEL_")}
+    # RFC8032 public test vector only; the smoke process receives no signer or
+    # account credential and cannot mint a valid identity ticket.
+    environment.update(MIXEL_SIGNAL_BIND="127.0.0.1:0",
+                       MIXEL_PEER_AUTHORITY_PUBLIC_KEYS="d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+                       MIXEL_ALLOW_LAN_ONLY="1", MIXEL_WEB_ORIGINS="https://staging.example",
+                       MIXEL_SUPPORT_POLICY_URL="http://127.0.0.1:1/api/internal/remote/authorize",
+                       MIXEL_SUPPORT_POLICY_TOKEN=secrets.token_hex(32))
     # Only health is called: this test cannot authenticate against a live ISM.
     process = subprocess.Popen([str(WORKSPACE / "target/release/signaling_server")], env=environment,
                                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
@@ -46,7 +52,8 @@ def smoke_binary(output):
         match = re.search(r"listening on (127\.0\.0\.1:\d+)", line)
         if not match:
             raise RuntimeError("release signaling did not bind loopback: " + line)
-        with urllib.request.urlopen("http://" + match[1] + "/healthz", timeout=3) as response:
+        local = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with local.open("http://" + match[1] + "/healthz", timeout=3) as response:
             if response.read(32) != b"ok\n":
                 raise RuntimeError("unexpected release health response")
         process.send_signal(signal.SIGINT)
@@ -83,7 +90,7 @@ def main():
         ["cargo", "fmt", "--all", "--check"],
         ["cargo", "clippy", "--workspace", "--all-features", "--all-targets", "--locked", "--", "-D", "warnings"],
         ["cargo", "clippy", "-p", "web_client", "--target", "wasm32-unknown-unknown", "--locked", "--", "-D", "warnings"],
-        ["cargo", "test", "--workspace", "--all-features", "--locked", "--", "--nocapture"],
+        [sys.executable, str(ROOT / "scripts/local/test-next-coturn.py"), "--workspace", "--output", str(output / "coturn")],
         ["cargo", "build", "--workspace", "--all-features", "--release", "--locked"],
         ["cargo", "build", "-p", "web_client", "--target", "wasm32-unknown-unknown", "--release", "--locked"],
         [str(args.wasm_bindgen.resolve()), str(WORKSPACE / "target/wasm32-unknown-unknown/release/web_client.wasm"), "--target", "nodejs", "--out-dir", str(output / "node")],

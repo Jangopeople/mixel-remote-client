@@ -2,7 +2,7 @@
 //! not claim a live ISM login or a media/desktop session.
 use futures_util::{SinkExt, StreamExt};
 use signaling_server::{
-    auth::{AuthError, Principal},
+    auth::{AuthError, EnrolledPrincipal, Principal},
     protocol::*,
     server::{AppState, Authenticator, router},
 };
@@ -22,6 +22,26 @@ use uuid::Uuid;
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 struct Fixture;
 impl Authenticator for Fixture {
+    fn authenticate_device<'a>(
+        &'a self,
+        token: &'a str,
+        device: Uuid,
+    ) -> Pin<Box<dyn Future<Output = Result<EnrolledPrincipal, AuthError>> + Send + 'a>> {
+        Box::pin(async move {
+            if device != Uuid::from_u128(21) || !token.starts_with("host") {
+                return Err(AuthError);
+            }
+            let principal = self.authenticate(token).await?;
+            Ok(EnrolledPrincipal {
+                principal,
+                device,
+                connection_id: 123456789,
+                generation: 1,
+                public_key: ed25519_dalek::SigningKey::from_bytes(&[7; 32]).verifying_key(),
+                identity_ticket: None,
+            })
+        })
+    }
     fn authenticate<'a>(
         &'a self,
         token: &'a str,
@@ -87,7 +107,11 @@ async fn peer(url: &str, token: &str) -> (Socket, u32) {
         },
     )
     .await;
-    let ServerMessage::Ready { host, protocol: 1 } = event(&mut socket).await else {
+    let ServerMessage::Ready {
+        host,
+        protocol: core_protocol::PROTOCOL_VERSION,
+    } = event(&mut socket).await
+    else {
         panic!("ready expected")
     };
     assert!((100_000_000..=999_999_999).contains(&host));
@@ -223,6 +247,8 @@ async fn actual_websocket_accept_reject_reconnect_isolation_and_cleanup() {
         }
     ));
     send(&mut viewer, ClientMessage::Close { session }).await;
+    send(&mut viewer, ClientMessage::Close { session }).await;
+    send(&mut host, ClientMessage::Close { session }).await;
     for peer in [&mut viewer, &mut host] {
         assert!(matches!(
             event(peer).await,
@@ -232,6 +258,13 @@ async fn actual_websocket_accept_reject_reconnect_isolation_and_cleanup() {
             }
         ));
     }
+    send(&mut outsider, ClientMessage::Close { session }).await;
+    assert!(matches!(
+        event(&mut outsider).await,
+        ServerMessage::Error {
+            code: ErrorCode::Forbidden
+        }
+    ));
     let fresh = request(&mut viewer, &mut host, host_id).await;
     assert_ne!(fresh, session);
     send(
@@ -680,4 +713,1344 @@ async fn renewal_cannot_hold_an_expired_session_open_during_identity_lookup() {
     viewer.close(None).await.unwrap();
     task.abort();
     let _ = task.await;
+}
+
+async fn device_challenge(
+    url: &str,
+) -> (Socket, core_protocol::device_login::DeviceLoginChallenge) {
+    let (mut socket, _) = tokio_tungstenite::connect_async(url).await.unwrap();
+    send(
+        &mut socket,
+        ClientMessage::AuthenticateDevice {
+            token: "host".into(),
+            device: Uuid::from_u128(21),
+        },
+    )
+    .await;
+    let ServerMessage::DeviceChallenge { challenge } = event(&mut socket).await else {
+        panic!("device challenge expected");
+    };
+    (socket, challenge)
+}
+async fn closed_without_ready(socket: &mut Socket) {
+    loop {
+        match timeout(Duration::from_secs(3), socket.next())
+            .await
+            .unwrap()
+        {
+            Some(Ok(Message::Text(_))) => panic!("unverified device received registration"),
+            Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => {}
+            _ => return,
+        }
+    }
+}
+#[tokio::test]
+async fn enrolled_socket_requires_fresh_key_proof_and_retains_id_on_reconnect() {
+    let state = AppState::new(Arc::new(Fixture), HashSet::new());
+    let registry = state.registry.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/v1/ws", listener.local_addr().unwrap());
+    let task = tokio::spawn(async move {
+        axum::serve(listener, router(state)).await.unwrap();
+    });
+    let key = ed25519_dalek::SigningKey::from_bytes(&[7; 32]);
+    let (mut host, challenge) = device_challenge(&url).await;
+    assert_eq!(registry.lock().unwrap().counts(), (0, 0));
+    let signature = challenge.sign(&key).unwrap();
+    send(
+        &mut host,
+        ClientMessage::ProveDevice {
+            signature: signature.clone(),
+        },
+    )
+    .await;
+    assert!(matches!(
+        event(&mut host).await,
+        ServerMessage::Ready {
+            host: 123456789,
+            ..
+        }
+    ));
+    let (mut replay, next) = device_challenge(&url).await;
+    assert_ne!(next.nonce, challenge.nonce);
+    send(&mut replay, ClientMessage::ProveDevice { signature }).await;
+    closed_without_ready(&mut replay).await;
+    let (mut impostor, next) = device_challenge(&url).await;
+    send(
+        &mut impostor,
+        ClientMessage::ProveDevice {
+            signature: next
+                .sign(&ed25519_dalek::SigningKey::from_bytes(&[8; 32]))
+                .unwrap(),
+        },
+    )
+    .await;
+    closed_without_ready(&mut impostor).await;
+    let (mut duplicate, next) = device_challenge(&url).await;
+    send(
+        &mut duplicate,
+        ClientMessage::ProveDevice {
+            signature: next.sign(&key).unwrap(),
+        },
+    )
+    .await;
+    closed_without_ready(&mut duplicate).await;
+    assert_eq!(registry.lock().unwrap().counts(), (1, 0));
+    host.close(None).await.unwrap();
+    for _ in 0..50 {
+        if registry.lock().unwrap().counts() == (0, 0) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let (mut reconnect, next) = device_challenge(&url).await;
+    send(
+        &mut reconnect,
+        ClientMessage::ProveDevice {
+            signature: next.sign(&key).unwrap(),
+        },
+    )
+    .await;
+    assert!(matches!(
+        event(&mut reconnect).await,
+        ServerMessage::Ready {
+            host: 123456789,
+            ..
+        }
+    ));
+    send(
+        &mut reconnect,
+        ClientMessage::Renew {
+            token: "host-renew".into(),
+        },
+    )
+    .await;
+    assert!(matches!(
+        event(&mut reconnect).await,
+        ServerMessage::Renewed { .. }
+    ));
+    reconnect.close(None).await.unwrap();
+    task.abort();
+    let _ = task.await;
+}
+
+#[derive(Clone, Copy)]
+struct SignedPeer {
+    profile: Uuid,
+    device: Uuid,
+    tenant: Option<Uuid>,
+    connection_id: u32,
+    generation: u64,
+    key_byte: u8,
+}
+
+impl SignedPeer {
+    fn ticket(
+        self,
+        signer: &ed25519_dalek::SigningKey,
+        unattended_host: bool,
+    ) -> core_protocol::delegation::DeviceTicket {
+        use core_protocol::{delegation::DeviceTicket, device_login::DeviceLoginChallenge};
+        let key = ed25519_dalek::SigningKey::from_bytes(&[self.key_byte; 32]).verifying_key();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let identity = DeviceLoginChallenge {
+            nonce: [1; 32],
+            device: *self.device.as_bytes(),
+            profile: *self.profile.as_bytes(),
+            tenant: self.tenant.map(|id| *id.as_bytes()),
+            connection_id: self.connection_id,
+            generation: self.generation,
+        };
+        if unattended_host {
+            DeviceTicket::issue_unattended_host(identity, key, now, now + 60, signer)
+        } else {
+            DeviceTicket::issue(identity, key, self.tenant.is_none(), now, now + 60, signer)
+        }
+        .unwrap()
+    }
+}
+
+async fn signed_peer(url: &str, signer: &ed25519_dalek::SigningKey, peer: SignedPeer) -> Socket {
+    signed_peer_with_scope(url, signer, peer, false).await
+}
+
+async fn signed_peer_with_scope(
+    url: &str,
+    signer: &ed25519_dalek::SigningKey,
+    peer: SignedPeer,
+    unattended_host: bool,
+) -> Socket {
+    let ticket = peer.ticket(signer, unattended_host);
+    let key = ed25519_dalek::SigningKey::from_bytes(&[peer.key_byte; 32]);
+    connect_signed_ticket(url, &ticket, &key).await
+}
+
+async fn connect_signed_ticket(
+    url: &str,
+    ticket: &core_protocol::delegation::DeviceTicket,
+    key: &ed25519_dalek::SigningKey,
+) -> Socket {
+    use signaling_server::delegated_auth::encode;
+    let (mut socket, _) = tokio_tungstenite::connect_async(url).await.unwrap();
+    send(
+        &mut socket,
+        ClientMessage::AuthenticateDevice {
+            token: encode(ticket).unwrap(),
+            device: Uuid::from_bytes(ticket.identity.device),
+        },
+    )
+    .await;
+    let ServerMessage::DeviceChallenge { challenge } = event(&mut socket).await else {
+        panic!("challenge expected")
+    };
+    send(
+        &mut socket,
+        ClientMessage::ProveDevice {
+            signature: challenge.sign(key).unwrap(),
+        },
+    )
+    .await;
+    assert!(
+        matches!(event(&mut socket).await, ServerMessage::Ready { host, .. } if host == ticket.identity.connection_id)
+    );
+    socket
+}
+
+#[tokio::test]
+async fn support_policy_blocks_direct_id_and_revokes_pending_or_active_sessions() {
+    use axum::{
+        Json, Router,
+        extract::State,
+        http::{HeaderMap, StatusCode},
+        routing::post,
+    };
+    use ed25519_dalek::SigningKey;
+    use signaling_server::{delegated_auth::TicketAuth, support_policy::SupportPolicy};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    const TOKEN: &str = "4111441144114411441144114411441144114411441144114411441144114411";
+    const VIEWER: u32 = 234_567_890;
+    const HOST: u32 = 123_456_789;
+    let gate = Arc::new(AtomicBool::new(false));
+    let unattended = Arc::new(AtomicBool::new(false));
+    let audited = Arc::new(AtomicUsize::new(0));
+    let policy = Router::new()
+        .route(
+            "/api/internal/remote/authorize",
+            post(
+                |State((gate, unattended, audited)): State<(Arc<AtomicBool>, Arc<AtomicBool>, Arc<AtomicUsize>)>,
+                 headers: HeaderMap,
+                 Json(pair): Json<serde_json::Value>| async move {
+                    assert_eq!(headers["authorization"], format!("Bearer {TOKEN}"));
+                    assert_eq!(
+                        pair["controller"]["profile"],
+                        Uuid::from_u128(11).to_string()
+                    );
+                    assert_eq!(pair["host"]["device"], Uuid::from_u128(21).to_string());
+                    assert_eq!(pair["host"]["generation"], "1");
+                    let is_unattended = pair["unattended"] == true;
+                    if gate.load(Ordering::SeqCst)
+                        && (!is_unattended || unattended.load(Ordering::SeqCst))
+                    {
+                        if is_unattended && pair["accept_session"].is_string() {
+                            audited.fetch_add(1, Ordering::SeqCst);
+                        }
+                        StatusCode::NO_CONTENT
+                    } else {
+                        StatusCode::FORBIDDEN
+                    }
+                },
+            ),
+        )
+        .route("/api/internal/remote/pairing", post(
+            |headers: HeaderMap, Json(request): Json<serde_json::Value>| async move {
+                assert_eq!(headers["authorization"], format!("Bearer {TOKEN}"));
+                assert_eq!(request["binding"]["device"], Uuid::from_u128(21).to_string());
+                let id = Uuid::from_u128(993).to_string();
+                if request["confirmation"] == id {
+                    return (StatusCode::NO_CONTENT, Json(serde_json::Value::Null));
+                }
+                (StatusCode::OK, Json(serde_json::json!({
+                    "request_id": id, "provider_name": "Fixture provider", "customer_name": "Fixture customer",
+                })))
+            }
+        ))
+        .with_state((gate.clone(), unattended.clone(), audited.clone()));
+    let policy_socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let policy_url = format!(
+        "http://{}/api/internal/remote/authorize",
+        policy_socket.local_addr().unwrap()
+    );
+    let policy_task =
+        tokio::spawn(async move { axum::serve(policy_socket, policy).await.unwrap() });
+
+    let signer = SigningKey::from_bytes(&[41; 32]);
+    let state = AppState::new(
+        Arc::new(TicketAuth::new(vec![signer.verifying_key()]).unwrap()),
+        HashSet::new(),
+    )
+    .with_support_policy(SupportPolicy::new(policy_url.parse().unwrap(), TOKEN.into()).unwrap());
+    let socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/v1/ws", socket.local_addr().unwrap());
+    let broker = tokio::spawn(async move { axum::serve(socket, router(state)).await.unwrap() });
+
+    let mut host = signed_peer(
+        &url,
+        &signer,
+        SignedPeer {
+            profile: Uuid::from_u128(10),
+            device: Uuid::from_u128(21),
+            tenant: Some(Uuid::from_u128(1)),
+            connection_id: HOST,
+            generation: 1,
+            key_byte: 7,
+        },
+    )
+    .await;
+    let mut viewer = signed_peer(
+        &url,
+        &signer,
+        SignedPeer {
+            profile: Uuid::from_u128(11),
+            device: Uuid::from_u128(22),
+            tenant: None,
+            connection_id: VIEWER,
+            generation: 1,
+            key_byte: 8,
+        },
+    )
+    .await;
+    send(&mut host, ClientMessage::CheckPairing).await;
+    let ServerMessage::PairingStatus {
+        pending: Some(prompt),
+        confirmed: false,
+        failed: false,
+    } = event(&mut host).await
+    else {
+        panic!("pairing prompt did not reach the enrolled host");
+    };
+    assert_eq!(prompt.provider_name, "Fixture provider");
+    send(
+        &mut host,
+        ClientMessage::ConfirmPairing {
+            request: prompt.request_id,
+        },
+    )
+    .await;
+    assert!(matches!(
+        event(&mut host).await,
+        ServerMessage::PairingStatus {
+            pending: None,
+            confirmed: true,
+            failed: false
+        }
+    ));
+    send(&mut viewer, ClientMessage::Request { host: HOST }).await;
+    assert!(matches!(
+        event(&mut viewer).await,
+        ServerMessage::Error {
+            code: ErrorCode::Unavailable
+        }
+    ));
+    assert!(
+        timeout(Duration::from_millis(120), host.next())
+            .await
+            .is_err()
+    );
+
+    gate.store(true, Ordering::SeqCst);
+    let first = request(&mut viewer, &mut host, HOST).await;
+    gate.store(false, Ordering::SeqCst);
+    send(
+        &mut host,
+        ClientMessage::Decide {
+            session: first,
+            accept: true,
+        },
+    )
+    .await;
+    assert!(
+        matches!(event(&mut viewer).await, ServerMessage::Closed { session, .. } if session == first)
+    );
+    assert!(matches!(event(&mut host).await,
+        ServerMessage::Closed { session, .. } if session == first));
+
+    gate.store(true, Ordering::SeqCst);
+    let second = request(&mut viewer, &mut host, HOST).await;
+    send(
+        &mut host,
+        ClientMessage::Decide {
+            session: second,
+            accept: true,
+        },
+    )
+    .await;
+    assert!(
+        matches!(event(&mut viewer).await, ServerMessage::Accepted { session, .. } if session == second)
+    );
+    assert!(
+        matches!(event(&mut host).await, ServerMessage::Accepted { session, .. } if session == second)
+    );
+    gate.store(false, Ordering::SeqCst);
+    let until = tokio::time::Instant::now() + Duration::from_secs(13);
+    loop {
+        let Some(Ok(message)) = tokio::time::timeout_at(until, viewer.next()).await.unwrap() else {
+            panic!("active socket closed")
+        };
+        if let Message::Text(raw) = message {
+            assert!(
+                matches!(serde_json::from_str::<ServerMessage>(&raw).unwrap(),
+                ServerMessage::Closed { session, .. } if session == second)
+            );
+            break;
+        }
+    }
+    assert!(
+        matches!(event(&mut host).await, ServerMessage::Closed { session, .. } if session == second)
+    );
+    gate.store(true, Ordering::SeqCst);
+    send(&mut host, ClientMessage::GenerateSupportCode).await;
+    let ServerMessage::SupportCode {
+        required: true,
+        code: Some(code),
+        lifetime_seconds: 300,
+    } = event(&mut host).await
+    else {
+        panic!("one-time password was not generated");
+    };
+    let wrong = if code.reveal() == "111111111111" {
+        "222222222222"
+    } else {
+        "111111111111"
+    };
+    for message in [
+        ClientMessage::Request { host: HOST },
+        ClientMessage::RequestWithCode {
+            host: HOST,
+            code: SupportCode::parse(wrong.into()).unwrap(),
+        },
+    ] {
+        send(&mut viewer, message).await;
+        assert!(matches!(
+            event(&mut viewer).await,
+            ServerMessage::Error {
+                code: ErrorCode::Unavailable
+            }
+        ));
+        assert!(
+            timeout(Duration::from_millis(120), host.next())
+                .await
+                .is_err()
+        );
+    }
+    let with_code = || ClientMessage::RequestWithCode {
+        host: HOST,
+        code: code.clone(),
+    };
+    send(&mut viewer, with_code()).await;
+    let ServerMessage::Requested { session } = event(&mut viewer).await else {
+        panic!("valid password did not create an attended request");
+    };
+    assert!(matches!(
+        event(&mut host).await,
+        ServerMessage::SupportCode {
+            required: true,
+            code: None,
+            ..
+        }
+    ));
+    assert!(
+        matches!(event(&mut host).await, ServerMessage::Consent { session: invited, .. } if invited == session)
+    );
+    send(
+        &mut viewer,
+        ClientMessage::Signal {
+            session,
+            payload: Signal::Offer("premature".into()),
+        },
+    )
+    .await;
+    assert!(matches!(
+        event(&mut viewer).await,
+        ServerMessage::Error {
+            code: ErrorCode::Forbidden
+        }
+    ));
+    send(&mut viewer, with_code()).await;
+    assert!(matches!(
+        event(&mut viewer).await,
+        ServerMessage::Error {
+            code: ErrorCode::Unavailable
+        }
+    ));
+    send(
+        &mut host,
+        ClientMessage::Decide {
+            session,
+            accept: false,
+        },
+    )
+    .await;
+    assert!(matches!(
+        event(&mut viewer).await,
+        ServerMessage::Closed {
+            reason: CloseReason::Rejected,
+            ..
+        }
+    ));
+    assert!(matches!(
+        event(&mut host).await,
+        ServerMessage::Closed {
+            reason: CloseReason::Rejected,
+            ..
+        }
+    ));
+    send(&mut host, ClientMessage::ClearSupportCode).await;
+    assert!(matches!(
+        event(&mut host).await,
+        ServerMessage::SupportCode {
+            required: false,
+            code: None,
+            ..
+        }
+    ));
+    let ordinary = request(&mut viewer, &mut host, HOST).await;
+    send(&mut viewer, ClientMessage::Close { session: ordinary }).await;
+    assert!(
+        matches!(event(&mut viewer).await, ServerMessage::Closed { session, .. } if session == ordinary)
+    );
+    assert!(
+        matches!(event(&mut host).await, ServerMessage::Closed { session, .. } if session == ordinary)
+    );
+
+    // Neither a server grant alone nor local permission alone admits an unattended request.
+    unattended.store(true, Ordering::SeqCst);
+    let unattended_request = || ClientMessage::RequestUnattended { host: HOST };
+    send(&mut viewer, unattended_request()).await;
+    assert!(matches!(
+        event(&mut viewer).await,
+        ServerMessage::Error {
+            code: ErrorCode::Unavailable
+        }
+    ));
+    unattended.store(false, Ordering::SeqCst);
+    send(
+        &mut host,
+        ClientMessage::ConfigureUnattended { enabled: true },
+    )
+    .await;
+    assert!(matches!(
+        event(&mut host).await,
+        ServerMessage::UnattendedStatus { enabled: true }
+    ));
+    send(&mut viewer, unattended_request()).await;
+    assert!(matches!(
+        event(&mut viewer).await,
+        ServerMessage::Error {
+            code: ErrorCode::Unavailable
+        }
+    ));
+    unattended.store(true, Ordering::SeqCst);
+    send(&mut viewer, unattended_request()).await;
+    let ServerMessage::Requested { session } = event(&mut viewer).await else {
+        panic!("unattended request expected")
+    };
+    assert!(
+        matches!(event(&mut host).await, ServerMessage::Consent { session: invited, unattended: true, .. } if invited == session)
+    );
+    send(
+        &mut host,
+        ClientMessage::Decide {
+            session,
+            accept: true,
+        },
+    )
+    .await;
+    assert!(
+        matches!(event(&mut viewer).await, ServerMessage::Accepted { session: accepted, .. } if accepted == session)
+    );
+    assert!(
+        matches!(event(&mut host).await, ServerMessage::Accepted { session: accepted, .. } if accepted == session)
+    );
+    assert_eq!(audited.load(Ordering::SeqCst), 1);
+    send(
+        &mut host,
+        ClientMessage::ConfigureUnattended { enabled: false },
+    )
+    .await;
+    assert!(
+        matches!(event(&mut viewer).await, ServerMessage::Closed { session: closed, .. } if closed == session)
+    );
+    assert!(
+        matches!(event(&mut host).await, ServerMessage::Closed { session: closed, .. } if closed == session)
+    );
+    assert!(matches!(
+        event(&mut host).await,
+        ServerMessage::UnattendedStatus { enabled: false }
+    ));
+    policy_task.abort();
+    broker.abort();
+}
+
+#[tokio::test]
+async fn startup_identity_can_only_receive_policy_approved_unattended_sessions() {
+    use axum::{Json, Router, http::StatusCode, routing::post};
+    use signaling_server::{
+        delegated_auth::{TicketAuth, encode},
+        support_policy::SupportPolicy,
+    };
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let signer = ed25519_dalek::SigningKey::from_bytes(&[42; 32]);
+    let broker_state = || {
+        AppState::new(
+            Arc::new(TicketAuth::new(vec![signer.verifying_key()]).unwrap()),
+            HashSet::new(),
+        )
+    };
+    let host_identity = SignedPeer {
+        profile: Uuid::from_u128(10),
+        device: Uuid::from_u128(21),
+        tenant: Some(Uuid::from_u128(1)),
+        connection_id: 123_456_789,
+        generation: 1,
+        key_byte: 7,
+    };
+    let viewer_identity = SignedPeer {
+        profile: Uuid::from_u128(11),
+        device: Uuid::from_u128(22),
+        connection_id: 234_567_890,
+        key_byte: 8,
+        ..host_identity
+    };
+    let socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/v1/ws", socket.local_addr().unwrap());
+    let unconfigured = tokio::spawn(axum::serve(socket, router(broker_state())).into_future());
+    let (mut rejected, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+    send(
+        &mut rejected,
+        ClientMessage::AuthenticateDevice {
+            token: encode(&host_identity.ticket(&signer, true)).unwrap(),
+            device: host_identity.device,
+        },
+    )
+    .await;
+    closed_without_ready(&mut rejected).await;
+    unconfigured.abort();
+
+    let grant = Arc::new(AtomicBool::new(false));
+    let policy_grant = grant.clone();
+    let policy = Router::new().route(
+        "/api/internal/remote/authorize",
+        post(move |Json(pair): Json<serde_json::Value>| {
+            let grant = policy_grant.clone();
+            async move {
+                assert_eq!(
+                    pair["controller"]["profile"],
+                    viewer_identity.profile.to_string()
+                );
+                assert_eq!(pair["host"]["device"], host_identity.device.to_string());
+                assert_eq!(pair["unattended"], true);
+                if grant.load(Ordering::SeqCst) {
+                    StatusCode::NO_CONTENT
+                } else {
+                    StatusCode::FORBIDDEN
+                }
+            }
+        }),
+    );
+    let socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let policy_url = format!(
+        "http://{}/api/internal/remote/authorize",
+        socket.local_addr().unwrap()
+    );
+    let policy_task = tokio::spawn(axum::serve(socket, policy).into_future());
+    let state = broker_state().with_support_policy(
+        SupportPolicy::new(policy_url.parse().unwrap(), "e".repeat(64)).unwrap(),
+    );
+    let socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/v1/ws", socket.local_addr().unwrap());
+    let broker = tokio::spawn(axum::serve(socket, router(state)).into_future());
+    let mut host = signed_peer_with_scope(&url, &signer, host_identity, true).await;
+    let mut viewer = signed_peer(&url, &signer, viewer_identity).await;
+    send(&mut host, ClientMessage::CheckPairing).await;
+    assert!(matches!(
+        event(&mut host).await,
+        ServerMessage::PairingStatus { failed: true, .. }
+    ));
+    send(&mut host, ClientMessage::GenerateSupportCode).await;
+    assert!(matches!(
+        event(&mut host).await,
+        ServerMessage::Error {
+            code: ErrorCode::Forbidden
+        }
+    ));
+    send(
+        &mut host,
+        ClientMessage::RequestUnattended {
+            host: viewer_identity.connection_id,
+        },
+    )
+    .await;
+    assert!(matches!(
+        event(&mut host).await,
+        ServerMessage::Error {
+            code: ErrorCode::Unavailable
+        }
+    ));
+    send(
+        &mut host,
+        ClientMessage::ConfigureUnattended { enabled: true },
+    )
+    .await;
+    assert!(matches!(
+        event(&mut host).await,
+        ServerMessage::UnattendedStatus { enabled: true }
+    ));
+    send(
+        &mut viewer,
+        ClientMessage::Request {
+            host: host_identity.connection_id,
+        },
+    )
+    .await;
+    assert!(matches!(
+        event(&mut viewer).await,
+        ServerMessage::Error {
+            code: ErrorCode::Unavailable
+        }
+    ));
+
+    let request = || ClientMessage::RequestUnattended {
+        host: host_identity.connection_id,
+    };
+    send(&mut viewer, request()).await;
+    assert!(matches!(
+        event(&mut viewer).await,
+        ServerMessage::Error {
+            code: ErrorCode::Unavailable
+        }
+    ));
+    grant.store(true, Ordering::SeqCst);
+    send(&mut viewer, request()).await;
+    let ServerMessage::Requested { session } = event(&mut viewer).await else {
+        panic!("approved unattended request expected");
+    };
+    assert!(matches!(
+        event(&mut host).await,
+        ServerMessage::Consent {
+            unattended: true,
+            ..
+        }
+    ));
+    send(
+        &mut host,
+        ClientMessage::Decide {
+            session,
+            accept: true,
+        },
+    )
+    .await;
+    assert!(
+        matches!(event(&mut viewer).await, ServerMessage::Accepted { host_identity: Some(ticket), .. } if ticket.unattended_host_only())
+    );
+    assert!(matches!(
+        event(&mut host).await,
+        ServerMessage::Accepted { .. }
+    ));
+    send(
+        &mut host,
+        ClientMessage::Renew {
+            token: encode(&host_identity.ticket(&signer, false)).unwrap(),
+        },
+    )
+    .await;
+    closed_without_ready(&mut host).await;
+    assert!(
+        matches!(event(&mut viewer).await, ServerMessage::Closed { session: ended, .. } if ended == session)
+    );
+    broker.abort();
+    policy_task.abort();
+}
+
+#[tokio::test]
+#[ignore = "run by the Cockpit two-database browser fixture"]
+async fn cockpit_ism_policy_service_on_real_broker() {
+    use ed25519_dalek::SigningKey;
+    use signaling_server::{delegated_auth::TicketAuth, support_policy::SupportPolicy};
+    let env = |name| std::env::var(name).unwrap();
+    let uuid = |name| env(name).parse::<Uuid>().unwrap();
+    let signer = SigningKey::from_bytes(&[41; 32]);
+    let state = AppState::new(
+        Arc::new(TicketAuth::new(vec![signer.verifying_key()]).unwrap()),
+        HashSet::new(),
+    )
+    .with_support_policy(
+        SupportPolicy::new(
+            env("QA_POLICY_URL").parse().unwrap(),
+            env("QA_POLICY_TOKEN"),
+        )
+        .unwrap(),
+    );
+    let socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/v1/ws", socket.local_addr().unwrap());
+    let broker = tokio::spawn(async move { axum::serve(socket, router(state)).await.unwrap() });
+    let mut host = signed_peer(
+        &url,
+        &signer,
+        SignedPeer {
+            profile: uuid("QA_HOST_PROFILE"),
+            device: uuid("QA_HOST_DEVICE"),
+            tenant: Some(uuid("QA_ISM_ORG")),
+            connection_id: 222_222_222,
+            generation: 1,
+            key_byte: 7,
+        },
+    )
+    .await;
+    let mut controller = signed_peer(
+        &url,
+        &signer,
+        SignedPeer {
+            profile: uuid("QA_ACTOR_PROFILE"),
+            device: uuid("QA_ACTOR_DEVICE"),
+            tenant: None,
+            connection_id: 111_111_111,
+            generation: 1,
+            key_byte: 8,
+        },
+    )
+    .await;
+    match env("QA_POLICY_SCENARIO").as_str() {
+        "pair" => {
+            send(&mut host, ClientMessage::CheckPairing).await;
+            let ServerMessage::PairingStatus {
+                pending: Some(prompt),
+                failed: false,
+                ..
+            } = event(&mut host).await
+            else {
+                panic!("pending pairing did not reach the enrolled device");
+            };
+            assert_eq!(prompt.customer_name, "Customer Apple");
+            send(
+                &mut host,
+                ClientMessage::ConfirmPairing {
+                    request: prompt.request_id,
+                },
+            )
+            .await;
+            assert!(matches!(
+                event(&mut host).await,
+                ServerMessage::PairingStatus {
+                    confirmed: true,
+                    failed: false,
+                    ..
+                }
+            ));
+        }
+        "allow" => {
+            let session = request(&mut controller, &mut host, 222_222_222).await;
+            send(
+                &mut host,
+                ClientMessage::Decide {
+                    session,
+                    accept: true,
+                },
+            )
+            .await;
+            assert!(
+                matches!(event(&mut controller).await, ServerMessage::Accepted { session: actual, .. } if actual == session)
+            );
+            assert!(
+                matches!(event(&mut host).await, ServerMessage::Accepted { session: actual, .. } if actual == session)
+            );
+        }
+        "deny" => {
+            send(
+                &mut controller,
+                ClientMessage::Request { host: 222_222_222 },
+            )
+            .await;
+            assert!(matches!(
+                event(&mut controller).await,
+                ServerMessage::Error {
+                    code: ErrorCode::Unavailable
+                }
+            ));
+            assert!(
+                timeout(Duration::from_millis(150), host.next())
+                    .await
+                    .is_err()
+            );
+        }
+        _ => panic!("unknown policy scenario"),
+    }
+    broker.abort();
+}
+
+#[tokio::test]
+#[ignore = "run by the Cockpit two-database browser fixture"]
+async fn cockpit_startup_issuer_and_broker_use_the_current_enrollment_and_grant() {
+    use core_protocol::{
+        delegation::{DelegationProof, DeviceTicket},
+        device_login::DeviceLoginChallenge,
+    };
+    use ed25519_dalek::SigningKey;
+    use signaling_server::{
+        auth::IsmAuth,
+        delegated_auth::TicketAuth,
+        identity_authority::{Authority, router as identity_router},
+        support_policy::SupportPolicy,
+    };
+
+    let env = |name| std::env::var(name).unwrap();
+    let uuid = |name| env(name).parse::<Uuid>().unwrap();
+    let signer = SigningKey::from_bytes(&[41; 32]);
+    let roots = [signer.verifying_key()];
+    let device = SigningKey::from_bytes(&[9; 32]);
+    let tenant = uuid("QA_ISM_ORG");
+    let identity = DeviceLoginChallenge {
+        nonce: [23; 32],
+        device: *uuid("QA_HOST_DEVICE").as_bytes(),
+        profile: *uuid("QA_HOST_PROFILE").as_bytes(),
+        tenant: Some(*tenant.as_bytes()),
+        connection_id: 222_222_222,
+        generation: 2,
+    };
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let proof = DelegationProof::new_unattended_host(identity, now, &device).unwrap();
+    let authority = Authority::new(
+        IsmAuth::new(
+            "https://identity.example.test".parse().unwrap(),
+            "public".into(),
+        )
+        .unwrap(),
+        signer.clone(),
+    )
+    .with_startup_policy(
+        SupportPolicy::for_startup_host(
+            env("QA_STARTUP_URL").parse().unwrap(),
+            env("QA_STARTUP_TOKEN"),
+        )
+        .unwrap(),
+    );
+    let socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!(
+        "http://{}/v1/startup-host-ticket",
+        socket.local_addr().unwrap()
+    );
+    let issuer = tokio::spawn(axum::serve(socket, identity_router(authority)).into_future());
+    let response = reqwest::Client::new()
+        .post(url)
+        .json(&serde_json::json!({
+            "proof":proof, "public_key":device.verifying_key().to_bytes(),
+        }))
+        .send()
+        .await
+        .unwrap();
+    if env("QA_POLICY_SCENARIO") == "startup-deny" {
+        assert_eq!(response.status(), reqwest::StatusCode::FORBIDDEN);
+        issuer.abort();
+        return;
+    }
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let ticket: DeviceTicket = response.json().await.unwrap();
+    assert!(
+        ticket
+            .verify(&roots, now)
+            .unwrap()
+            .claims()
+            .unattended_host_only()
+    );
+
+    let state = AppState::new(
+        Arc::new(TicketAuth::new(roots.to_vec()).unwrap()),
+        HashSet::new(),
+    )
+    .with_support_policy(
+        SupportPolicy::new(
+            env("QA_POLICY_URL").parse().unwrap(),
+            env("QA_POLICY_TOKEN"),
+        )
+        .unwrap(),
+    );
+    let socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/v1/ws", socket.local_addr().unwrap());
+    let broker = tokio::spawn(axum::serve(socket, router(state)).into_future());
+    let mut host = connect_signed_ticket(&url, &ticket, &device).await;
+    let mut viewer = signed_peer(
+        &url,
+        &signer,
+        SignedPeer {
+            profile: uuid("QA_ACTOR_PROFILE"),
+            device: uuid("QA_ACTOR_DEVICE"),
+            tenant: None,
+            connection_id: 111_111_111,
+            generation: 1,
+            key_byte: 8,
+        },
+    )
+    .await;
+    send(
+        &mut host,
+        ClientMessage::ConfigureUnattended { enabled: true },
+    )
+    .await;
+    assert!(matches!(
+        event(&mut host).await,
+        ServerMessage::UnattendedStatus { enabled: true }
+    ));
+    send(
+        &mut viewer,
+        ClientMessage::RequestUnattended {
+            host: ticket.identity.connection_id,
+        },
+    )
+    .await;
+    let ServerMessage::Requested { session } = event(&mut viewer).await else {
+        panic!("expected a policy-approved unattended session");
+    };
+    assert!(matches!(
+        event(&mut host).await,
+        ServerMessage::Consent {
+            unattended: true,
+            ..
+        }
+    ));
+    send(
+        &mut host,
+        ClientMessage::Decide {
+            session,
+            accept: true,
+        },
+    )
+    .await;
+    assert!(
+        matches!(event(&mut viewer).await, ServerMessage::Accepted { session: id, .. } if id == session)
+    );
+    assert!(
+        matches!(event(&mut host).await, ServerMessage::Accepted { session: id, .. } if id == session)
+    );
+    issuer.abort();
+    broker.abort();
+}
+
+#[tokio::test]
+#[ignore = "requires the isolated macOS guest and its loopback broker"]
+async fn signed_macos_startup_agent_accepts_after_reboot() {
+    use ed25519_dalek::SigningKey;
+
+    let address: std::net::SocketAddr = std::env::var("MIXEL_STARTUP_TEST_BROKER")
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(address.ip().is_loopback());
+    let path = std::env::var_os("MIXEL_STARTUP_TEST_SIGNER").unwrap();
+    let raw = zeroize::Zeroizing::new(std::fs::read_to_string(path).unwrap());
+    let raw = raw.trim();
+    assert_eq!(raw.len(), 64);
+    assert!(raw.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    let mut seed = zeroize::Zeroizing::new([0u8; 32]);
+    for (index, byte) in seed.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&raw[index * 2..index * 2 + 2], 16).unwrap();
+    }
+    let signer = SigningKey::from_bytes(&seed);
+    let mut viewer = signed_peer(
+        &format!("ws://{address}/v1/ws"),
+        &signer,
+        SignedPeer {
+            profile: Uuid::from_u128(31),
+            device: Uuid::from_u128(32),
+            tenant: None,
+            connection_id: 365_800_092,
+            generation: 1,
+            key_byte: 17,
+        },
+    )
+    .await;
+    let host = 365_800_091;
+    send(&mut viewer, ClientMessage::Request { host }).await;
+    assert!(matches!(
+        event(&mut viewer).await,
+        ServerMessage::Error {
+            code: ErrorCode::Unavailable
+        }
+    ));
+    send(&mut viewer, ClientMessage::RequestUnattended { host }).await;
+    let ServerMessage::Requested { session } = event(&mut viewer).await else {
+        panic!("startup host must receive the approved unattended request");
+    };
+    let ServerMessage::Accepted {
+        session: accepted,
+        nonce,
+        controller_identity: Some(controller),
+        host_identity: Some(ticket),
+        ..
+    } = event(&mut viewer).await
+    else {
+        panic!("signed headless Mac must accept the unattended request");
+    };
+    assert_eq!(accepted, session);
+    assert_eq!(ticket.identity.connection_id, host);
+    assert!(ticket.unattended_host_only());
+    println!("Signed macOS startup host accepted unattended session {session}");
+    if let Some(directory) = std::env::var_os("MIXEL_STARTUP_TEST_MEDIA_DIR") {
+        let binding = core_protocol::delegation::session_binding(
+            *session.as_bytes(),
+            nonce,
+            &controller,
+            &ticket,
+        );
+        let host_key = ticket
+            .verify(
+                &[signer.verifying_key()],
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+            )
+            .unwrap()
+            .key();
+        verify_loginwindow_media(&mut viewer, session, binding, host_key, directory.into()).await;
+    }
+    send(&mut viewer, ClientMessage::Close { session }).await;
+    loop {
+        if matches!(event(&mut viewer).await, ServerMessage::Closed { session: closed, .. } if closed == session)
+        {
+            break;
+        }
+    }
+    viewer.close(None).await.unwrap();
+}
+
+async fn verify_loginwindow_media(
+    viewer: &mut Socket,
+    session: Uuid,
+    binding: [u8; 32],
+    host: ed25519_dalek::VerifyingKey,
+    directory: std::path::PathBuf,
+) {
+    use core_protocol::{
+        crypto::{Context, Handshake, Role},
+        input::{self, Input},
+        media::{H264Assembler, TrackRemoteEvent},
+        transport::{
+            NativeIceCandidate, NativeSessionDescription, NativeTransport, local_fingerprint,
+        },
+    };
+    use webrtc_event_helpers::{opened, received};
+
+    let address: std::net::IpAddr = std::env::var("MIXEL_STARTUP_TEST_MEDIA_BIND")
+        .unwrap()
+        .parse()
+        .unwrap();
+    let mut transport = NativeTransport::new(format!("{address}:0"), vec![])
+        .await
+        .unwrap();
+    transport.receive_video().await.unwrap();
+    let channel = transport
+        .peer
+        .create_data_channel("mixel-control-v1", None)
+        .await
+        .unwrap();
+    let offer = transport
+        .local_sdp(transport.peer.create_offer(None).await.unwrap())
+        .await
+        .unwrap();
+    let key = ed25519_dalek::SigningKey::from_bytes(&[17; 32]);
+    let proof = Handshake::new(
+        Context {
+            session_id: binding,
+            controller: key.verifying_key(),
+            host,
+        },
+        Role::Controller,
+        &key,
+        local_fingerprint(&offer.sdp).unwrap(),
+    )
+    .unwrap();
+    for payload in [Signal::Identity(proof.hello()), Signal::Offer(offer.sdp)] {
+        send(viewer, ClientMessage::Signal { session, payload }).await;
+    }
+    let mut host_hello = None;
+    let mut candidates = Vec::new();
+    loop {
+        match event(viewer).await {
+            ServerMessage::Signal {
+                session: active,
+                payload,
+            } if active == session => match payload {
+                Signal::Identity(hello) => host_hello = Some(hello),
+                Signal::Answer(sdp) => {
+                    transport
+                        .peer
+                        .set_remote_description(NativeSessionDescription::answer(sdp).unwrap())
+                        .await
+                        .unwrap();
+                    break;
+                }
+                Signal::Ice(candidate) => {
+                    candidates.push(serde_json::from_str::<NativeIceCandidate>(&candidate).unwrap())
+                }
+                Signal::Offer(_) => panic!("unexpected host offer"),
+            },
+            ServerMessage::Closed { reason, .. } => {
+                panic!("native host closed before video: {reason:?}")
+            }
+            other => panic!("unexpected negotiation message: {other:?}"),
+        }
+    }
+    for candidate in candidates {
+        transport.peer.add_ice_candidate(candidate).await.unwrap();
+    }
+    opened(&channel).await;
+    let mut crypto = proof
+        .finish(
+            &host_hello.unwrap(),
+            transport.observed_fingerprint().await.unwrap(),
+        )
+        .unwrap();
+    println!("Data channel opened on the controller");
+    let permissions = timeout(Duration::from_secs(12), async {
+        loop {
+            tokio::select! {
+                frame = channel.poll() => match frame {
+                    Some(core_protocol::transport::NativeDataChannelEvent::OnMessage(message)) => break message.data,
+                    _ => panic!("host control stream ended before its grant"),
+                },
+                message = viewer.next() => if let Message::Text(text) = message.unwrap().unwrap() {
+                    match serde_json::from_str::<ServerMessage>(&text).unwrap() {
+                        ServerMessage::Signal { payload: Signal::Ice(candidate), .. } => {
+                            transport.peer.add_ice_candidate(serde_json::from_str(&candidate).unwrap()).await.unwrap();
+                        }
+                        ServerMessage::PeerRenewed { .. } => {}
+                        other => panic!("host before control grant: {other:?}"),
+                    }
+                }
+            }
+        }
+    }).await.expect("no host control grant");
+    assert_eq!(
+        crypto.open(&permissions).unwrap(),
+        b"mixel-permissions-v3\x01\x00\x00"
+    );
+    println!("Verified DTLS certificate, device identity and encrypted keyboard/mouse grant");
+
+    let track = timeout(Duration::from_secs(10), transport.incoming_tracks.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    std::fs::create_dir_all(&directory).unwrap();
+    let mut assembler = H264Assembler::default();
+    macro_rules! snapshot {
+        ($name:literal) => {{
+            let frame = timeout(Duration::from_secs(8), async {
+                loop {
+                    let TrackRemoteEvent::OnRtpPacket(packet) =
+                        track.poll().await.expect("video track closed")
+                    else {
+                        continue;
+                    };
+                    if let Some(unit) = assembler
+                        .push(
+                            packet.header.sequence_number,
+                            packet.header.timestamp,
+                            packet.header.marker,
+                            &packet.payload,
+                        )
+                        .unwrap()
+                        && unit
+                            .windows(5)
+                            .any(|nal| nal[..4] == [0, 0, 0, 1] && nal[4] & 31 == 5)
+                    {
+                        break unit;
+                    }
+                }
+            })
+            .await
+            .expect("no login-window keyframe");
+            println!(
+                "Received H.264 login-window frame {} ({} bytes)",
+                $name,
+                frame.len()
+            );
+            std::fs::write(directory.join(concat!($name, ".h264")), &*frame).unwrap();
+        }};
+    }
+    macro_rules! send_record {
+        ($record:expr) => {{
+            let sealed = crypto.seal($record).unwrap();
+            channel.send(sealed.as_slice().into()).await.unwrap();
+        }};
+    }
+    macro_rules! send_input {
+        ($input:expr) => {{
+            send_record!(&input::encode(&$input).unwrap());
+            loop {
+                let record = received(&channel).await;
+                match crypto.open(&record).unwrap().as_slice() {
+                    b"mixel-input-posted-v1" => break,
+                    b"mixel-video-idle-v1" => continue,
+                    other => panic!("unexpected control record: {other:?}"),
+                }
+            }
+            println!("Native host acknowledged {:?}", $input);
+        }};
+    }
+    snapshot!("01-before");
+    send_input!(Input::Pointer {
+        display: 0,
+        x: 32_768,
+        y: 58_700
+    });
+    send_input!(Input::Button {
+        button: 1,
+        down: true
+    });
+    send_input!(Input::Button {
+        button: 1,
+        down: false
+    });
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    send_record!(b"mixel-video-keyframe-v1");
+    snapshot!("02-mouse");
+    // The synthetic key must not submit the login form.
+    if std::env::var_os("MIXEL_STARTUP_TEST_UNICODE").is_some() {
+        send_input!(Input::Text("a"));
+    } else {
+        send_input!(Input::Key {
+            usage: 4,
+            down: true
+        });
+        send_input!(Input::Key {
+            usage: 4,
+            down: false
+        });
+    }
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    send_record!(b"mixel-video-keyframe-v1");
+    snapshot!("03-key");
+    if std::env::var_os("MIXEL_STARTUP_TEST_OBSERVE_KEY").is_some() {
+        println!("Observing the synthetic key at the guest login window before clearing it");
+        tokio::time::sleep(Duration::from_secs(15)).await;
+    }
+    send_input!(Input::Key {
+        usage: 42,
+        down: true
+    });
+    send_input!(Input::Key {
+        usage: 42,
+        down: false
+    });
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    send_record!(b"mixel-video-keyframe-v1");
+    snapshot!("04-cleared");
+    transport.close().await.unwrap();
 }

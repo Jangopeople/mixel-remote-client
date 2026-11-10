@@ -63,3 +63,27 @@ fn actual_hardware_encoder_produces_h264_and_enforces_timestamps() {
     ));
     encoder.encode(&frame, 33333, false).unwrap();
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn screen_encoder_suppresses_static_frames_and_native_decoder_accepts_forced_refresh() {
+    use native_os_capture::{
+        macos_decoder::H264Decoder, macos_screen_encoder::ScreenH264Encoder, stream::CapturedFrame,
+    };
+    let mut encoder = ScreenH264Encoder::new(320, 240, 30, 1_000_000).unwrap();
+    let mut decoder = H264Decoder::new(320, 240).unwrap();
+    let frame = CapturedFrame::bgra(320, 240, 1280, vec![80; 320 * 240 * 4]).unwrap();
+    let first = encoder.encode(&frame, 0, false).unwrap().unwrap();
+    assert!(first.keyframe);
+    let decoded = decoder.decode(&first.annex_b, 0).unwrap().unwrap();
+    assert_eq!((decoded.width(), decoded.height()), (320, 240));
+    assert!(encoder.encode(&frame, 33_333, false).unwrap().is_none());
+    let refreshed = encoder.encode(&frame, 66_666, true).unwrap().unwrap();
+    assert!(refreshed.keyframe);
+    let decoded = decoder.decode(&refreshed.annex_b, 66_666).unwrap().unwrap();
+    assert_eq!((decoded.width(), decoded.height()), (320, 240));
+    assert!(!encoder.needs_retry());
+    println!(
+        "PASS: real Mac hardware encode/decode, static-frame suppression, and independently decodable forced refresh"
+    );
+}

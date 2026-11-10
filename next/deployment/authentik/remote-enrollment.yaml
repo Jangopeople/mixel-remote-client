@@ -1,0 +1,81 @@
+version: 1
+metadata:
+  name: Mixel Remote email-verified enrollment
+  labels:
+    blueprints.goauthentik.io/instantiate: "false"
+entries:
+  - model: authentik_flows.flow
+    id: flow
+    identifiers: {slug: mixel-remote-enrollment}
+    attrs:
+      name: Mixel Remote enrollment
+      title: Create your Mixel ID
+      designation: enrollment
+      authentication: require_unauthenticated
+  - model: authentik_stages_prompt.prompt
+    id: name
+    identifiers: {name: mixel-remote-enrollment-name}
+    attrs: {field_key: name, label: Your name, type: text, required: true, order: 10}
+  - model: authentik_stages_prompt.prompt
+    id: email
+    identifiers: {name: mixel-remote-enrollment-email}
+    attrs: {field_key: email, label: Email, type: email, required: true, order: 20}
+  - model: authentik_stages_prompt.prompt
+    id: password
+    identifiers: {name: mixel-remote-enrollment-password}
+    attrs: {field_key: password, label: Password, type: password, required: true, order: 30}
+  - model: authentik_stages_prompt.prompt
+    id: repeat
+    identifiers: {name: mixel-remote-enrollment-password-repeat}
+    attrs: {field_key: password_repeat, label: Repeat password, type: password, required: true, order: 40}
+  - model: authentik_policies_expression.expressionpolicy
+    id: account-validation
+    identifiers: {name: mixel-remote-enrollment-validate}
+    attrs:
+      expression: |
+        from authentik.core.models import User
+
+        data = request.context.get("prompt_data", {})
+        email = str(data.get("email", "")).strip().casefold()
+        name = str(data.get("name", "")).strip()
+        if not email or len(email) > 150 or not 1 <= len(name) <= 80:
+            return False
+        if User.objects.filter(email__iexact=email).exists():
+            ak_message("Use Mixel ID sign-in or account recovery for this address.")
+            return False
+        data["username"] = email
+        data["email"] = email
+        data["name"] = name
+        return True
+  - model: authentik_stages_prompt.promptstage
+    id: prompt
+    identifiers: {name: mixel-remote-enrollment-details}
+    attrs:
+      fields: [!KeyOf name, !KeyOf email, !KeyOf password, !KeyOf repeat]
+      validation_policies: [!KeyOf account-validation]
+  - model: authentik_stages_user_write.userwritestage
+    id: create
+    identifiers: {name: mixel-remote-enrollment-create}
+    attrs:
+      create_users_as_inactive: true
+      user_creation_mode: always_create
+      user_path_template: users/remote
+      user_type: external
+  - model: authentik_stages_email.emailstage
+    id: verify
+    identifiers: {name: mixel-remote-enrollment-verify}
+    attrs:
+      use_global_settings: true
+      template: email/account_confirmation.html
+      activate_user_on_success: true
+  - model: authentik_stages_user_login.userloginstage
+    id: login
+    identifiers: {name: mixel-remote-enrollment-login}
+  - model: authentik_flows.flowstagebinding
+    identifiers: {target: !KeyOf flow, stage: !KeyOf prompt, order: 10}
+  - model: authentik_flows.flowstagebinding
+    identifiers: {target: !KeyOf flow, stage: !KeyOf create, order: 20}
+  - model: authentik_flows.flowstagebinding
+    identifiers: {target: !KeyOf flow, stage: !KeyOf verify, order: 30}
+  - model: authentik_flows.flowstagebinding
+    identifiers: {target: !KeyOf flow, stage: !KeyOf login, order: 40}

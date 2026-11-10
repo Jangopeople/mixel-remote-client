@@ -4,7 +4,13 @@ use crate::input::{InjectionError, Injector};
 use core_protocol::input::{self, Input};
 use objc2_core_foundation::{CFRetained, CGPoint};
 use objc2_core_graphics::*;
-use std::collections::BTreeSet;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 enum Target {
     Desktop(Vec<u32>),
@@ -13,12 +19,20 @@ enum Target {
 pub struct MacInjector {
     source: CFRetained<CGEventSource>,
     target: Target,
+    login_keyboard: Option<crate::macos_login_keyboard::LoginKeyboard>,
     keys: BTreeSet<u16>,
     buttons: BTreeSet<u8>,
+    clicks: BTreeMap<u8, u8>,
     caps: bool,
     point: CGPoint,
+    cancellation: Arc<AtomicBool>,
+    authorization: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
 }
 impl MacInjector {
+    pub fn login_keyboard_entitled() -> bool {
+        crate::macos_login_keyboard::entitled()
+    }
+
     pub fn post_access() -> bool {
         CGPreflightPostEventAccess()
     }
@@ -45,6 +59,51 @@ impl MacInjector {
         let point = CGEvent::location(CGEvent::new(None).as_deref());
         Self::new(Target::Desktop(displays[..count as usize].to_vec()), point)
     }
+    /// Limit normalized pointer coordinates to the display the host selected.
+    pub fn display(id: u32) -> Result<Self, InjectionError> {
+        Self::display_in_session(id, false)
+    }
+
+    /// The login window may reject allocating a private per-user event source.
+    /// Initialize an explicit source after the LoginWindow AppKit startup.
+    pub fn login_display(id: u32) -> Result<Self, InjectionError> {
+        Self::display_in_session(id, true)
+    }
+
+    fn display_in_session(id: u32, login_window: bool) -> Result<Self, InjectionError> {
+        if !CGPreflightPostEventAccess() {
+            return Err(InjectionError::Permission);
+        }
+        if !CGDisplayIsActive(id) {
+            return Err(InjectionError::Unsupported);
+        }
+        let bounds = CGDisplayBounds(id);
+        if !bounds.origin.x.is_finite()
+            || !bounds.origin.y.is_finite()
+            || !bounds.size.width.is_finite()
+            || !bounds.size.height.is_finite()
+            || bounds.size.width < 1.0
+            || bounds.size.height < 1.0
+        {
+            return Err(InjectionError::Unsupported);
+        }
+        // A button/wheel can arrive before the first pointer move. Its initial
+        // location must already belong to the host-selected display.
+        let point = CGPoint::new(
+            bounds.origin.x + bounds.size.width / 2.0,
+            bounds.origin.y + bounds.size.height / 2.0,
+        );
+        let target = Target::Desktop(vec![id]);
+        if login_window {
+            let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState)
+                .ok_or_else(|| {
+                    InjectionError::Native("Cannot create login window input source".into())
+                })?;
+            let keyboard = crate::macos_login_keyboard::LoginKeyboard::open()?;
+            return Ok(Self::with_source(target, point, source, Some(keyboard)));
+        }
+        Self::new(target, point)
+    }
     /// Deliberately limited to this process: useful for the isolated QA fixture.
     /// Pointer/button injection is desktop-only; keyboard/text cannot escape PID.
     pub fn own_process() -> Result<Self, InjectionError> {
@@ -53,26 +112,59 @@ impl MacInjector {
     fn new(target: Target, point: CGPoint) -> Result<Self, InjectionError> {
         let source = CGEventSource::new(CGEventSourceStateID::Private)
             .ok_or_else(|| InjectionError::Native("Cannot create private input source".into()))?;
-        Ok(Self {
+        Ok(Self::with_source(target, point, source, None))
+    }
+    fn with_source(
+        target: Target,
+        point: CGPoint,
+        source: CFRetained<CGEventSource>,
+        login_keyboard: Option<crate::macos_login_keyboard::LoginKeyboard>,
+    ) -> Self {
+        Self {
             source,
             target,
+            login_keyboard,
             keys: BTreeSet::new(),
             buttons: BTreeSet::new(),
+            clicks: BTreeMap::new(),
             caps: false,
             point,
-        })
+            cancellation: Arc::new(AtomicBool::new(false)),
+            authorization: None,
+        }
     }
-    fn post(&self, event: &CGEvent) -> Result<(), InjectionError> {
+    pub fn with_cancellation(mut self, cancellation: Arc<AtomicBool>) -> Self {
+        self.cancellation = cancellation;
+        self
+    }
+    pub fn with_authorization(
+        mut self,
+        authorization: Arc<dyn Fn() -> bool + Send + Sync>,
+    ) -> Self {
+        self.authorization = Some(authorization);
+        self
+    }
+    fn live(&self) -> bool {
+        !self.cancellation.load(Ordering::Acquire)
+            && self.authorization.as_ref().is_none_or(|check| check())
+    }
+    fn post(&self, event: &CGEvent, release: bool) -> Result<(), InjectionError> {
+        if self.login_keyboard.is_some() && !crate::macos::is_login_window_console() {
+            return Err(InjectionError::Permission);
+        }
+        if !release && !self.live() {
+            return Err(InjectionError::Native("Input authorization expired".into()));
+        }
         // CGEventPostToPid also requires event-post permission on macOS. It is
         // not an exemption for a private source or the application's own PID.
         if !Self::post_access() {
             return Err(InjectionError::Permission);
         }
+        if !release && !self.live() {
+            return Err(InjectionError::Native("Input authorization expired".into()));
+        }
         match self.target {
             Target::Desktop(_) => {
-                if !CGPreflightPostEventAccess() {
-                    return Err(InjectionError::Permission);
-                }
                 CGEvent::post(CGEventTapLocation::HIDEventTap, Some(event));
             }
             Target::OwnProcess => CGEvent::post_to_pid(std::process::id() as i32, Some(event)),
@@ -96,6 +188,24 @@ impl MacInjector {
         flags
     }
     fn key(&mut self, usage: u16, down: bool) -> Result<(), InjectionError> {
+        if let Some(keyboard) = &self.login_keyboard {
+            if !crate::macos::is_login_window_console()
+                || !Self::post_access()
+                || (down && !self.live())
+            {
+                return Err(InjectionError::Permission);
+            }
+            let mut next = self.keys.clone();
+            if down {
+                next.insert(usage);
+            } else {
+                next.remove(&usage);
+            }
+            keyboard.send(&next)?;
+            self.keys = next;
+            return Ok(());
+        }
+
         let code = virtual_key(usage).ok_or(InjectionError::Unsupported)?;
         let event = CGEvent::new_keyboard_event(Some(&self.source), code, down)
             .ok_or_else(|| InjectionError::Native("Cannot create keyboard event".into()))?;
@@ -122,7 +232,7 @@ impl MacInjector {
             CGEventField::KeyboardEventAutorepeat,
             i64::from(down && was_held),
         );
-        if let Err(error) = self.post(&event) {
+        if let Err(error) = self.post(&event, !down) {
             if was_held {
                 self.keys.insert(usage);
             } else {
@@ -134,12 +244,21 @@ impl MacInjector {
         Ok(())
     }
     fn text(&self, text: &str) -> Result<(), InjectionError> {
+        if self.login_keyboard.is_some() {
+            return Err(InjectionError::Unsupported);
+        }
         // One scalar per paired event keeps surrogate pairs intact, avoids any
         // undocumented maximum event-string length and never uses the clipboard.
         for character in text.chars() {
+            if !self.live() {
+                return Err(InjectionError::Native("Input session stopped".into()));
+            }
             let mut storage = zeroize::Zeroizing::new([0u16; 2]);
             let utf16 = character.encode_utf16(&mut *storage);
             for down in [true, false] {
+                if down && !self.live() {
+                    return Err(InjectionError::Native("Input authorization expired".into()));
+                }
                 let event = CGEvent::new_keyboard_event(Some(&self.source), 0, down)
                     .ok_or_else(|| InjectionError::Native("Cannot create Unicode event".into()))?;
                 // SAFETY: utf16 remains live, initialized and exactly length units.
@@ -151,12 +270,18 @@ impl MacInjector {
                     );
                 }
                 CGEvent::set_flags(Some(&event), CGEventFlags::empty());
-                self.post(&event)?;
+                self.post(&event, !down)?;
             }
         }
         Ok(())
     }
-    fn mouse(&self, kind: CGEventType, button: u8, point: CGPoint) -> Result<(), InjectionError> {
+    fn mouse(
+        &self,
+        kind: CGEventType,
+        button: u8,
+        point: CGPoint,
+        clicks: u8,
+    ) -> Result<(), InjectionError> {
         if !matches!(self.target, Target::Desktop(_)) {
             return Err(InjectionError::Unsupported);
         }
@@ -168,7 +293,42 @@ impl MacInjector {
         )
         .ok_or_else(|| InjectionError::Native("Cannot create mouse event".into()))?;
         CGEvent::set_flags(Some(&event), self.flags());
-        self.post(&event)
+        CGEvent::set_integer_value_field(
+            Some(&event),
+            CGEventField::MouseEventClickState,
+            i64::from(clicks),
+        );
+        self.post(
+            &event,
+            matches!(
+                kind,
+                CGEventType::LeftMouseUp | CGEventType::RightMouseUp | CGEventType::OtherMouseUp
+            ),
+        )
+    }
+    fn button(&mut self, button: u8, down: bool, clicks: u8) -> Result<(), InjectionError> {
+        let kind = match (button, down) {
+            (1, true) => CGEventType::LeftMouseDown,
+            (1, false) => CGEventType::LeftMouseUp,
+            (2, true) => CGEventType::RightMouseDown,
+            (2, false) => CGEventType::RightMouseUp,
+            (_, true) => CGEventType::OtherMouseDown,
+            (_, false) => CGEventType::OtherMouseUp,
+        };
+        let count = if down {
+            clicks
+        } else {
+            self.clicks.get(&button).copied().unwrap_or(clicks)
+        };
+        self.mouse(kind, button, self.point, count)?;
+        if down {
+            self.buttons.insert(button);
+            self.clicks.insert(button, clicks);
+        } else {
+            self.buttons.remove(&button);
+            self.clicks.remove(&button);
+        }
+        Ok(())
     }
     fn release(&mut self) -> Result<(), InjectionError> {
         let keys: Vec<_> = self.keys.iter().copied().collect();
@@ -193,6 +353,17 @@ impl MacInjector {
 impl Injector for MacInjector {
     fn inject(&mut self, event: &Input<'_>) -> Result<(), InjectionError> {
         input::validate(event).map_err(|_| InjectionError::Unsupported)?;
+        if !self.live()
+            && !matches!(
+                event,
+                Input::Key { down: false, .. }
+                    | Input::Button { down: false, .. }
+                    | Input::ButtonClick { down: false, .. }
+                    | Input::ReleaseAll
+            )
+        {
+            return Err(InjectionError::Native("Input session stopped".into()));
+        }
         match *event {
             Input::Key { usage, down } => self.key(usage, down),
             Input::Text(text) => self.text(text),
@@ -230,27 +401,29 @@ impl Injector for MacInjector {
                 } else {
                     (CGEventType::MouseMoved, 1)
                 };
-                self.mouse(kind, button, point)?;
+                self.mouse(
+                    kind,
+                    button,
+                    point,
+                    self.clicks.get(&button).copied().unwrap_or(0),
+                )?;
                 self.point = point;
                 Ok(())
             }
-            Input::Button { button, down } => {
-                let kind = match (button, down) {
-                    (1, true) => CGEventType::LeftMouseDown,
-                    (1, false) => CGEventType::LeftMouseUp,
-                    (2, true) => CGEventType::RightMouseDown,
-                    (2, false) => CGEventType::RightMouseUp,
-                    (_, true) => CGEventType::OtherMouseDown,
-                    (_, false) => CGEventType::OtherMouseUp,
-                };
-                self.mouse(kind, button, self.point)?;
+            Input::Button { button, down } => self.button(
+                button,
+                down,
                 if down {
-                    self.buttons.insert(button);
+                    1
                 } else {
-                    self.buttons.remove(&button);
-                }
-                Ok(())
-            }
+                    self.clicks.get(&button).copied().unwrap_or(1)
+                },
+            ),
+            Input::ButtonClick {
+                button,
+                down,
+                clicks,
+            } => self.button(button, down, clicks),
             Input::Wheel {
                 horizontal,
                 vertical,
@@ -268,7 +441,7 @@ impl Injector for MacInjector {
                 )
                 .ok_or_else(|| InjectionError::Native("Cannot create wheel event".into()))?;
                 CGEvent::set_flags(Some(&event), self.flags());
-                self.post(&event)
+                self.post(&event, false)
             }
         }
     }

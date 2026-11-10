@@ -6,7 +6,7 @@
   const testKeys = document.querySelector<HTMLButtonElement>('#test-keys')!;
   const remoteText = document.querySelector<HTMLInputElement>('#remote-text')!;
   const inputStatus = document.querySelector<HTMLParagraphElement>('#input-status')!;
-  let activeRequest = 0, sending = false;
+  let activeRequest = 0, sending = false, inputMessageRequest = 0;
   const disconnect = document.querySelector<HTMLButtonElement>('#disconnect')!;
   const status = document.querySelector<HTMLParagraphElement>('#viewer-status')!;
   const metrics = document.querySelector<HTMLParagraphElement>('#viewer-metrics')!;
@@ -23,8 +23,10 @@
     metrics.textContent = 'No retained remote video';
   }
   async function fail(error: unknown): Promise<void> {
+    const request = activeRequest;
     localFailure = String(error); clear(); status.className = 'error'; status.textContent = String(error);
-    await invoke('close_local_session').catch(() => {});
+    inputStatus.textContent = 'No active keyboard session';
+    if (request) await invoke('close_local_session', { request }).catch(() => {});
   }
   async function receive(request: number): Promise<void> {
     runningRequest = request;
@@ -65,14 +67,22 @@
   }
   async function requestConnection(control: boolean): Promise<void> {
     connect.disabled = true; localFailure = ''; status.className = ''; clear(); runningRequest = 0;
-    try { await invoke('request_local_session', { control }); }
-    catch (error) { await fail(error); }
+    sending = false; activeRequest = 0;
+    inputStatus.textContent = control ? 'Waiting for host keyboard consent' : 'View-only request; keyboard control is disabled';
+    const current = generation;
+    try {
+      const state = await invoke<{request: number}>('request_local_session', { control });
+      if (current === generation) activeRequest = state.request;
+    }
+    catch (error) { if (current === generation) await fail(error); }
   }
   connect.addEventListener('click', () => { void requestConnection(false); });
   keyboard.addEventListener('click', () => { void requestConnection(true); });
   disconnect.addEventListener('click', async () => {
+    const request = activeRequest;
     clear(); runningRequest = 0;
-    try { await invoke('close_local_session'); }
+    inputStatus.textContent = 'No active keyboard session';
+    try { if (request) await invoke('close_local_session', { request }); }
     catch (error) { status.textContent = String(error); }
   });
   type Event = {kind: 'text'; text: string} | {kind: 'key'; usage: number; down: boolean};
@@ -80,14 +90,24 @@
     if (sending) return;
     sending = true;
     const request = activeRequest;
+    const current = generation;
     sendText.disabled = testKeys.disabled = true;
     try {
-      for (const event of events) await invoke('send_local_input', { request, event });
-      inputStatus.textContent = `Host authenticated and submitted ${events.length} native input event(s)`;
+      for (const event of events) {
+        if (current !== generation || request !== activeRequest) return;
+        await invoke('send_local_input', { request, event });
+      }
+      if (current === generation && request === activeRequest) {
+        inputMessageRequest = request;
+        inputStatus.textContent = `Host authenticated and submitted ${events.length} native input event(s)`;
+      }
     } catch (error) {
-      inputStatus.textContent = `Input failed: ${error}`;
-      await invoke('close_local_session').catch(() => {});
-    } finally { sending = false; }
+      if (current === generation && request === activeRequest) {
+        inputMessageRequest = request;
+        inputStatus.textContent = `Input failed: ${error}`;
+        await invoke('close_local_session', { request }).catch(() => {});
+      }
+    } finally { if (current === generation) sending = false; }
   }
   sendText.addEventListener('click', () => { void sendEvents([{kind:'text', text:remoteText.value}]); });
   testKeys.addEventListener('click', () => {
@@ -95,17 +115,22 @@
     void sendEvents([key(0xe1,true),key(4,true),key(4,false),key(0xe1,false),key(5,true),key(5,false),key(0x2a,true),key(0x2a,false),key(6,true),key(6,false)]);
   });
   async function refresh(): Promise<void> {
+    const current = generation;
     try {
       const state = await invoke<{request: number; phase: string; message: string; received: number; control: boolean; injected: number; input_access: boolean}>('local_session_status');
+      if (current !== generation) { setTimeout(() => { void refresh(); }, 200); return; }
       status.textContent = localFailure ? `Viewer error · ${localFailure} · ${state.phase}` : `${state.phase} · ${state.message}`;
       activeRequest = state.request;
-      if (!state.input_access) inputStatus.textContent = 'macOS Accessibility event-post permission is required for keyboard control; view-only remains available.';
+      if (state.phase !== 'active') inputStatus.textContent = 'No active keyboard session';
+      else if (!state.control) inputStatus.textContent = 'View-only session; keyboard control is disabled';
+      else if (!state.input_access) inputStatus.textContent = 'macOS Accessibility event-post permission is required for keyboard control; view-only remains available.';
+      else if (inputMessageRequest !== state.request) inputStatus.textContent = 'Keyboard control is active for this fixture session';
       sendText.disabled = testKeys.disabled = sending || state.phase !== 'active' || !state.control || !state.input_access;
       keyboard.disabled = connect.disabled = !supported || ['pending', 'negotiating', 'active'].includes(state.phase);
       disconnect.disabled = !['pending', 'negotiating', 'active'].includes(state.phase);
       if (state.phase === 'active' && runningRequest !== state.request) void receive(state.request).catch(error => fail(error));
       else if (!['active', 'negotiating'].includes(state.phase) && decoder) clear();
-    } catch (error) { await fail(error); }
+    } catch (error) { if (current === generation) await fail(error); }
     setTimeout(() => { void refresh(); }, 200);
   }
   void (async () => {

@@ -28,6 +28,13 @@ pub enum Input<'a> {
     Text(#[serde(borrow)] &'a str),
     /// Required on focus loss and disconnect to release held keys/buttons.
     ReleaseAll,
+    /// Local multi-click intent is preserved across network/ACK latency. Append
+    /// to keep the canonical encodings of existing packet variants unchanged.
+    ButtonClick {
+        button: u8,
+        down: bool,
+        clicks: u8,
+    },
 }
 
 #[derive(Debug, Error, PartialEq)]
@@ -40,6 +47,9 @@ impl Input<'_> {
     fn valid(&self) -> bool {
         match self {
             Self::Button { button, .. } => (1..=5).contains(button),
+            Self::ButtonClick { button, clicks, .. } => {
+                (1..=5).contains(button) && (1..=3).contains(clicks)
+            }
             Self::Key { usage, .. } => (4..=0xe7).contains(usage),
             Self::Text(text) => text.len() <= MAX_TEXT_BYTES && !text.contains('\0'),
             _ => true,

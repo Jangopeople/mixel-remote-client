@@ -3,7 +3,7 @@
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use futures_util::StreamExt;
 use reqwest::{Client, Url};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
@@ -15,9 +15,98 @@ pub struct Principal {
     pub expires_at: u64,
 }
 impl Principal {
+    pub fn is_personal(&self) -> bool {
+        !self.staff && self.tenant == Some(self.user)
+    }
+
     pub fn can_request(&self, target: &Self) -> bool {
         self.staff || (self.tenant.is_some() && self.tenant == target.tenant)
     }
+}
+#[derive(Clone)]
+pub struct EnrolledPrincipal {
+    pub principal: Principal,
+    pub device: Uuid,
+    pub connection_id: u32,
+    pub generation: u64,
+    pub public_key: ed25519_dalek::VerifyingKey,
+    pub identity_ticket: Option<core_protocol::delegation::DeviceTicket>,
+}
+#[derive(Deserialize)]
+pub struct PersonalAccount {
+    pub profile_id: Option<Uuid>,
+    pub display_name: Option<String>,
+}
+
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PersonalDeviceOs {
+    Macos,
+    Windows,
+    Linux,
+}
+
+impl PersonalDeviceOs {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Macos => "macos",
+            Self::Windows => "windows",
+            Self::Linux => "linux",
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct PersonalDevice {
+    #[serde(flatten)]
+    enrollment: EnrollmentRow,
+    name: String,
+    os: String,
+}
+
+#[derive(Deserialize)]
+struct EnrollmentRow {
+    device_id: Uuid,
+    connection_id: u32,
+    generation: u64,
+    public_key: String,
+    revoked_at: Option<String>,
+}
+#[derive(Deserialize)]
+struct DirectoryRow {
+    device_id: Uuid,
+    connection_id: u32,
+    generation: u64,
+    devices: DirectoryDevice,
+}
+#[derive(Deserialize)]
+struct DirectoryDevice {
+    id: Uuid,
+    name: String,
+    os: String,
+}
+#[derive(Serialize)]
+pub struct InventoryPage {
+    pub devices: Vec<InventoryDevice>,
+    pub next: Option<Uuid>,
+}
+#[derive(Serialize, Deserialize)]
+pub struct InventoryDevice {
+    pub id: Uuid,
+    pub name: String,
+    pub os: String,
+}
+#[derive(Serialize)]
+pub struct RegisteredDevice {
+    pub device: Uuid,
+    pub connection_id: u32,
+    pub name: String,
+    pub os: String,
+}
+#[derive(Serialize)]
+pub struct DevicePage {
+    pub devices: Vec<RegisteredDevice>,
+    pub next: Option<u32>,
 }
 #[derive(Clone)]
 pub struct IsmAuth {
@@ -53,6 +142,402 @@ struct Organization {
     is_active: bool,
 }
 impl IsmAuth {
+    /// Enrollment is an explicit MFA-staff operation on an existing ISM device.
+    /// The database RPC is add-only/idempotent for the same key; this API never
+    /// reactivates or rotates a conflicting enrollment.
+    pub async fn enroll(
+        &self,
+        token: &str,
+        device: Uuid,
+        key: ed25519_dalek::VerifyingKey,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> Result<EnrolledPrincipal, AuthError> {
+        if device.is_nil() || key.is_weak() || cancelled.load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Err(AuthError);
+        }
+        if !self.authenticate(token).await?.staff {
+            return Err(AuthError);
+        }
+        let hex: String = key
+            .as_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(AuthError);
+        }
+        let response = self
+            .client
+            .post(
+                self.base
+                    .join("/rest/v1/rpc/remote_enroll_device")
+                    .map_err(|_| AuthError)?,
+            )
+            .header("apikey", &self.api_key)
+            .header("accept", "application/vnd.pgrst.object+json")
+            .bearer_auth(token)
+            .json(&serde_json::json!({"target":device,"key_material":format!("\\x{hex}")}))
+            .send()
+            .await
+            .map_err(|_| AuthError)?;
+        let written: EnrollmentRow = Self::decode_response(response).await?;
+        if written.device_id != device
+            || written.revoked_at.is_some()
+            || written.public_key != format!("\\x{hex}")
+        {
+            return Err(AuthError);
+        }
+        let checked = self.authenticate_device(token, device).await?;
+        if checked.public_key != key
+            || checked.connection_id != written.connection_id
+            || checked.generation != written.generation
+        {
+            return Err(AuthError);
+        }
+        Ok(checked)
+    }
+    pub async fn enrollment_devices(
+        &self,
+        token: &str,
+        after: Option<Uuid>,
+        search: &str,
+    ) -> Result<InventoryPage, AuthError> {
+        if after.is_some_and(|id| id.is_nil())
+            || search.len() > 160
+            || search.chars().any(char::is_control)
+        {
+            return Err(AuthError);
+        }
+        if !self.authenticate(token).await?.staff {
+            return Err(AuthError);
+        }
+        let mut path = self.base.join("/rest/v1/devices").map_err(|_| AuthError)?;
+        {
+            let mut query = path.query_pairs_mut();
+            query
+                .append_pair("select", "id,name,os")
+                .append_pair("order", "id.asc")
+                .append_pair("limit", "51");
+            if let Some(after) = after {
+                query.append_pair("id", &format!("gt.{after}"));
+            }
+            if !search.is_empty() {
+                let literal = search
+                    .replace('\\', "\\\\")
+                    .replace('%', "\\%")
+                    .replace('_', "\\_")
+                    .replace('*', "\\*");
+                query.append_pair("name", &format!("ilike.*{literal}*"));
+            }
+        }
+        let mut devices: Vec<InventoryDevice> = self.get(path.as_str(), token).await?;
+        if devices.len() > 51 {
+            return Err(AuthError);
+        }
+        let mut previous = after.unwrap_or(Uuid::nil());
+        for device in &devices {
+            if device.id <= previous
+                || device.name.is_empty()
+                || device.name.len() > 1024
+                || device.name.chars().any(char::is_control)
+                || device.os.is_empty()
+                || device.os.len() > 80
+                || device.os.chars().any(char::is_control)
+            {
+                return Err(AuthError);
+            }
+            previous = device.id;
+        }
+        let next = if devices.len() == 51 {
+            devices.truncate(50);
+            devices.last().map(|device| device.id)
+        } else {
+            None
+        };
+        Ok(InventoryPage { devices, next })
+    }
+    pub async fn personal_account(
+        &self,
+        token: &str,
+    ) -> Result<Option<PersonalAccount>, AuthError> {
+        let response = self
+            .client
+            .get(
+                self.base
+                    .join("/rest/v1/rpc/remote_personal_account")
+                    .map_err(|_| AuthError)?,
+            )
+            .header("apikey", &self.api_key)
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(|_| AuthError)?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            // The account migration can roll out after existing clients.
+            return Ok(None);
+        }
+        let mut rows: Vec<PersonalAccount> = Self::decode_response(response).await?;
+        if rows.len() > 1
+            || rows
+                .iter()
+                .any(|row| match (&row.profile_id, &row.display_name) {
+                    (None, None) => false,
+                    (Some(id), Some(name)) => id.is_nil() || !valid_personal_name(name),
+                    _ => true,
+                })
+        {
+            return Err(AuthError);
+        }
+        Ok(rows.pop())
+    }
+
+    async fn personal_devices(&self, token: &str) -> Result<Vec<PersonalDevice>, AuthError> {
+        let rows: Vec<PersonalDevice> = self
+            .get("/rest/v1/rpc/remote_personal_devices", token)
+            .await?;
+        let mut previous = 0;
+        for row in &rows {
+            if row.enrollment.connection_id <= previous
+                || !valid_personal_name(&row.name)
+                || !matches!(row.os.as_str(), "macos" | "linux" | "windows")
+            {
+                return Err(AuthError);
+            }
+            row.enrollment.key()?;
+            previous = row.enrollment.connection_id;
+        }
+        if rows.len() > 32 {
+            return Err(AuthError);
+        }
+        Ok(rows)
+    }
+
+    pub async fn register_personal_device(
+        &self,
+        token: &str,
+        name: &str,
+        os: PersonalDeviceOs,
+        key: &ed25519_dalek::VerifyingKey,
+    ) -> Result<u32, AuthError> {
+        let name = name.trim();
+        if !valid_personal_name(name)
+            || key.is_weak()
+            || !self.authenticate(token).await?.is_personal()
+        {
+            return Err(AuthError);
+        }
+        let hex: String = key
+            .as_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        let response = self.client.post(self.base.join("/rest/v1/rpc/remote_register_personal_device").map_err(|_| AuthError)?)
+            .header("apikey", &self.api_key).bearer_auth(token)
+            .json(&serde_json::json!({"device_name": name, "device_os": os, "key_material": format!("\\x{hex}")}))
+            .send().await.map_err(|_| AuthError)?;
+        let id: u32 = Self::decode_response(response).await?;
+        let devices = self.personal_devices(token).await?;
+        if !devices.iter().any(|row| {
+            row.enrollment.connection_id == id
+                && row.os == os.as_str()
+                && row
+                    .enrollment
+                    .key()
+                    .as_ref()
+                    .is_ok_and(|saved| saved == key)
+        }) {
+            return Err(AuthError);
+        }
+        Ok(id)
+    }
+
+    /// Current authenticated RLS directory. Inventory is not a claim of broker
+    /// presence and never replaces independent key pinning at connection time.
+    pub async fn directory(
+        &self,
+        token: &str,
+        after: Option<u32>,
+        search: &str,
+    ) -> Result<DevicePage, AuthError> {
+        if after.is_some_and(|value| !(100_000_000..=999_999_999).contains(&value))
+            || search.len() > 160
+            || search.chars().any(char::is_control)
+        {
+            return Err(AuthError);
+        }
+        if self.authenticate(token).await?.is_personal() {
+            let query = search.to_lowercase();
+            let devices = self
+                .personal_devices(token)
+                .await?
+                .into_iter()
+                .filter(|row| {
+                    row.enrollment.connection_id > after.unwrap_or(0)
+                        && row.name.to_lowercase().contains(&query)
+                })
+                .map(|row| RegisteredDevice {
+                    device: row.enrollment.device_id,
+                    connection_id: row.enrollment.connection_id,
+                    name: row.name,
+                    os: row.os,
+                })
+                .collect();
+            return Ok(DevicePage {
+                devices,
+                next: None,
+            });
+        }
+        let mut path = self
+            .base
+            .join("/rest/v1/remote_device_enrollments")
+            .map_err(|_| AuthError)?;
+        {
+            let mut query = path.query_pairs_mut();
+            query
+                .append_pair(
+                    "select",
+                    "device_id,connection_id,generation,devices!inner(id,name,os)",
+                )
+                .append_pair("revoked_at", "is.null")
+                .append_pair("order", "connection_id.asc")
+                .append_pair("limit", "51");
+            if let Some(after) = after {
+                query.append_pair("connection_id", &format!("gt.{after}"));
+            }
+            if !search.is_empty() {
+                let literal = search
+                    .replace('\\', "\\\\")
+                    .replace('%', "\\%")
+                    .replace('_', "\\_")
+                    .replace('*', "\\*");
+                query.append_pair("devices.name", &format!("ilike.*{literal}*"));
+            }
+        }
+        let mut rows: Vec<DirectoryRow> = self.get(path.as_str(), token).await?;
+        if rows.len() > 51 {
+            return Err(AuthError);
+        }
+        let mut previous = after.unwrap_or(0);
+        for row in &rows {
+            if row.device_id.is_nil()
+                || row.device_id != row.devices.id
+                || row.generation == 0
+                || !(100_000_000..=999_999_999).contains(&row.connection_id)
+                || row.connection_id <= previous
+                || row.devices.name.is_empty()
+                || row.devices.name.len() > 1024
+                || row.devices.name.chars().any(char::is_control)
+                || row.devices.os.is_empty()
+                || row.devices.os.len() > 80
+                || row.devices.os.chars().any(char::is_control)
+            {
+                return Err(AuthError);
+            }
+            previous = row.connection_id;
+        }
+        let next = if rows.len() == 51 {
+            rows.truncate(50);
+            rows.last().map(|row| row.connection_id)
+        } else {
+            None
+        };
+        Ok(DevicePage {
+            devices: rows
+                .into_iter()
+                .map(|row| RegisteredDevice {
+                    device: row.device_id,
+                    connection_id: row.connection_id,
+                    name: row.devices.name,
+                    os: row.devices.os,
+                })
+                .collect(),
+            next,
+        })
+    }
+    pub async fn device_for_key(
+        &self,
+        token: &str,
+        key: &ed25519_dalek::VerifyingKey,
+    ) -> Result<Uuid, AuthError> {
+        if self.authenticate(token).await?.is_personal() {
+            return self
+                .personal_devices(token)
+                .await?
+                .into_iter()
+                .find(|row| {
+                    row.enrollment
+                        .key()
+                        .as_ref()
+                        .is_ok_and(|saved| saved == key)
+                })
+                .map(|row| row.enrollment.device_id)
+                .ok_or(AuthError);
+        }
+        let hex: String = key
+            .as_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        let rows:Vec<EnrollmentRow>=self.get(&format!("/rest/v1/remote_device_enrollments?public_key=eq.%5Cx{hex}&select=device_id,connection_id,generation,public_key,revoked_at&limit=2"),token).await?;
+        let [row] = rows.as_slice() else {
+            return Err(AuthError);
+        };
+        if row.device_id.is_nil()
+            || row.revoked_at.is_some()
+            || row.generation == 0
+            || row.public_key != format!("\\x{hex}")
+        {
+            return Err(AuthError);
+        }
+        Ok(row.device_id)
+    }
+    /// Resolve the peer's enrolled identity independently of signaling-supplied
+    /// Hello messages. The verified caller's bearer remains subject to RLS.
+    pub async fn peer_key(
+        &self,
+        token: &str,
+        connection: u32,
+    ) -> Result<ed25519_dalek::VerifyingKey, AuthError> {
+        if !(100_000_000..=999_999_999).contains(&connection) {
+            return Err(AuthError);
+        }
+        if self.authenticate(token).await?.is_personal() {
+            return self
+                .personal_devices(token)
+                .await?
+                .into_iter()
+                .find(|row| row.enrollment.connection_id == connection)
+                .ok_or(AuthError)?
+                .enrollment
+                .key();
+        }
+        let rows: Vec<EnrollmentRow> = self.get(&format!("/rest/v1/remote_device_enrollments?connection_id=eq.{connection}&select=device_id,connection_id,generation,public_key,revoked_at&limit=2"), token).await?;
+        let [row] = rows.as_slice() else {
+            return Err(AuthError);
+        };
+        if row.connection_id != connection
+            || row.revoked_at.is_some()
+            || row.generation == 0
+            || row.device_id.is_nil()
+        {
+            return Err(AuthError);
+        }
+        let hex = row.public_key.strip_prefix("\\x").ok_or(AuthError)?;
+        if hex.len() != 64 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(AuthError);
+        }
+        let mut bytes = [0; 32];
+        for (index, byte) in bytes.iter_mut().enumerate() {
+            *byte =
+                u8::from_str_radix(&hex[index * 2..index * 2 + 2], 16).map_err(|_| AuthError)?;
+        }
+        let key = ed25519_dalek::VerifyingKey::from_bytes(&bytes).map_err(|_| AuthError)?;
+        if key.is_weak() {
+            return Err(AuthError);
+        }
+        Ok(key)
+    }
     pub fn new(base: Url, api_key: String) -> Result<Self, AuthError> {
         if base.scheme() != "https"
             || base.host_str().is_none()
@@ -62,6 +547,21 @@ impl IsmAuth {
             || base.fragment().is_some()
             || !matches!(base.path(), "" | "/")
             || api_key.is_empty()
+            || api_key.len() > 16384
+            || api_key.starts_with("sb_secret_")
+            || api_key.bytes().any(|byte| byte.is_ascii_control())
+        {
+            return Err(AuthError);
+        }
+        // The app-facing API key must be public. Never distribute an elevated
+        // legacy service-role JWT or a new-style secret key as configuration.
+        if let Some(payload) = api_key.split('.').nth(1)
+            && let Ok(decoded) = URL_SAFE_NO_PAD.decode(payload)
+            && let Ok(claims) = serde_json::from_slice::<serde_json::Value>(&decoded)
+            && claims
+                .get("role")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|role| role != "anon")
         {
             return Err(AuthError);
         }
@@ -89,6 +589,11 @@ impl IsmAuth {
             .send()
             .await
             .map_err(|_| AuthError)?;
+        Self::decode_response(response).await
+    }
+    async fn decode_response<T: serde::de::DeserializeOwned>(
+        response: reqwest::Response,
+    ) -> Result<T, AuthError> {
         if !response.status().is_success() {
             return Err(AuthError);
         }
@@ -103,7 +608,77 @@ impl IsmAuth {
         }
         serde_json::from_slice(&body).map_err(|_| AuthError)
     }
+    pub async fn authenticate_device(
+        &self,
+        token: &str,
+        device: Uuid,
+    ) -> Result<EnrolledPrincipal, AuthError> {
+        let mut principal = self.authenticate(token).await?;
+        if principal.is_personal() {
+            if let Some(row) = self
+                .personal_devices(token)
+                .await?
+                .into_iter()
+                .find(|row| row.enrollment.device_id == device)
+                .map(|row| row.enrollment)
+            {
+                return Ok(EnrolledPrincipal {
+                    principal,
+                    device,
+                    connection_id: row.connection_id,
+                    generation: row.generation,
+                    public_key: row.key()?,
+                    identity_ticket: None,
+                });
+            }
+            // Existing callers may still use their separately enrolled ISM
+            // device. Its original role, MFA and RLS checks still apply.
+            principal = self.authenticate_scope(token, false).await?;
+        }
+        // The same verified bearer is subject to enrollment RLS and the live
+        // ISM profile/device/client/organization binding, not a service-role key.
+        let rows: Vec<EnrollmentRow> = self.get(&format!("/rest/v1/remote_device_enrollments?device_id=eq.{device}&select=device_id,connection_id,generation,public_key,revoked_at&limit=2"), token).await?;
+        let [row] = rows.as_slice() else {
+            return Err(AuthError);
+        };
+        if row.device_id != device
+            || row.revoked_at.is_some()
+            || row.generation == 0
+            || !(100_000_000..=999_999_999).contains(&row.connection_id)
+        {
+            return Err(AuthError);
+        }
+        let hex = row.public_key.strip_prefix("\\x").ok_or(AuthError)?;
+        if hex.len() != 64 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(AuthError);
+        }
+        let mut bytes = [0; 32];
+        for (index, byte) in bytes.iter_mut().enumerate() {
+            *byte =
+                u8::from_str_radix(&hex[index * 2..index * 2 + 2], 16).map_err(|_| AuthError)?;
+        }
+        let public_key = ed25519_dalek::VerifyingKey::from_bytes(&bytes).map_err(|_| AuthError)?;
+        if public_key.is_weak() {
+            return Err(AuthError);
+        }
+        Ok(EnrolledPrincipal {
+            principal,
+            device,
+            connection_id: row.connection_id,
+            generation: row.generation,
+            public_key,
+            identity_ticket: None,
+        })
+    }
     pub async fn authenticate(&self, token: &str) -> Result<Principal, AuthError> {
+        self.authenticate_scope(token, true).await
+    }
+
+    async fn authenticate_scope(
+        &self,
+        token: &str,
+        prefer_personal: bool,
+    ) -> Result<Principal, AuthError> {
         if token.len() > 16000
             || token.is_empty()
             || !token
@@ -131,6 +706,19 @@ impl IsmAuth {
         let user: User = self.get("/auth/v1/user", token).await?;
         if user.id != claims.sub {
             return Err(AuthError);
+        }
+        if prefer_personal
+            && let Some(id) = self
+                .personal_account(token)
+                .await?
+                .and_then(|account| account.profile_id)
+        {
+            return Ok(Principal {
+                user: id,
+                tenant: Some(id),
+                staff: false,
+                expires_at: claims.exp,
+            });
         }
         let profiles: Vec<Profile> = self.get(&format!("/rest/v1/users?auth_user_id=eq.{}&is_active=eq.true&select=id,auth_user_id,organization_id,is_active,role&limit=2", user.id), token).await?;
         let [profile] = profiles.as_slice() else {
@@ -167,6 +755,37 @@ impl IsmAuth {
             staff,
             expires_at: claims.exp,
         })
+    }
+}
+
+fn valid_personal_name(name: &str) -> bool {
+    let length = name.chars().count();
+    (1..=80).contains(&length) && !name.chars().any(char::is_control) && !name.trim().is_empty()
+}
+
+impl EnrollmentRow {
+    fn key(&self) -> Result<ed25519_dalek::VerifyingKey, AuthError> {
+        if self.device_id.is_nil()
+            || self.revoked_at.is_some()
+            || self.generation == 0
+            || !(100_000_000..=999_999_999).contains(&self.connection_id)
+        {
+            return Err(AuthError);
+        }
+        let hex = self.public_key.strip_prefix("\\x").ok_or(AuthError)?;
+        if hex.len() != 64 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(AuthError);
+        }
+        let mut bytes = [0; 32];
+        for (index, byte) in bytes.iter_mut().enumerate() {
+            *byte =
+                u8::from_str_radix(&hex[index * 2..index * 2 + 2], 16).map_err(|_| AuthError)?;
+        }
+        let key = ed25519_dalek::VerifyingKey::from_bytes(&bytes).map_err(|_| AuthError)?;
+        if key.is_weak() {
+            return Err(AuthError);
+        }
+        Ok(key)
     }
 }
 
@@ -211,15 +830,78 @@ mod tests {
         }
         let body: Value = match uri.path() {
             "/auth/v1/user" => json!({"id": if f.mode == "wrong_subject" { USER } else { AUTH }}),
+            "/rest/v1/rpc/remote_personal_account" => {
+                if f.mode == "personal" {
+                    json!([{"profile_id": USER, "display_name": "Remote Customer"}])
+                } else {
+                    return axum::http::StatusCode::NOT_FOUND.into_response();
+                }
+            }
             "/rest/v1/users" => {
                 assert!(
                     uri.query()
                         .unwrap()
                         .contains(&format!("auth_user_id=eq.{AUTH}"))
                 );
-                json!([{"id": USER, "auth_user_id": AUTH, "organization_id": if f.mode == "staff" { Value::Null } else { json!(ORG) }, "is_active": f.mode != "inactive_user", "role": "admin"}])
+                json!([{"id": USER, "auth_user_id": AUTH, "organization_id": if f.mode.starts_with("staff") { Value::Null } else { json!(ORG) }, "is_active": f.mode != "inactive_user", "role": "admin"}])
             }
             "/rest/v1/organizations" => json!([{"id": ORG, "is_active": f.mode != "inactive_org"}]),
+            "/rest/v1/remote_device_enrollments" => {
+                if f.mode.starts_with("directory_") {
+                    let url: Url = format!("http://fixture{uri}").parse().unwrap();
+                    let query: std::collections::HashMap<_, _> = url.query_pairs().collect();
+                    assert_eq!(query.get("revoked_at").unwrap(), "is.null");
+                    assert_eq!(query.get("limit").unwrap(), "51");
+                    assert_eq!(query.get("order").unwrap(), "connection_id.asc");
+                    assert_eq!(query.get("connection_id").unwrap(), "gt.123456789");
+                    assert_eq!(query.get("devices.name").unwrap(), "ilike.*Mixel\\_\\%*");
+                    assert!(!query.get("select").unwrap().contains("public_key"));
+                    if f.mode == "directory_denied" {
+                        return axum::http::StatusCode::FORBIDDEN.into_response();
+                    }
+                    let mut rows:Vec<Value>=(0..if f.mode=="directory_oversized"{52}else{51}).map(|index|json!({"device_id":Uuid::from_u128(1000+index),"connection_id":123456790+index,"generation":1,"devices":{"id":Uuid::from_u128(1000+index),"name":format!("Mixel device{index}"),"os":"macos"}})).collect();
+                    match f.mode {
+                        "directory_duplicate" => {
+                            rows[1]["connection_id"] = rows[0]["connection_id"].clone()
+                        }
+                        "directory_wrong_binding" => rows[0]["devices"]["id"] = json!(Uuid::nil()),
+                        "directory_control_name" => {
+                            rows[0]["devices"]["name"] = json!("bad\u{0}name")
+                        }
+                        "directory_unreadable_device" => rows[0]["devices"] = Value::Null,
+                        _ => {}
+                    }
+                    return axum::Json(rows).into_response();
+                }
+                assert!(
+                    uri.query()
+                        .unwrap()
+                        .contains(&format!("device_id=eq.{}", Uuid::from_u128(21)))
+                );
+                if f.mode == "enrollment_denied" {
+                    return axum::http::StatusCode::FORBIDDEN.into_response();
+                }
+                if f.mode == "enrollment_missing" {
+                    return axum::Json(json!([])).into_response();
+                }
+                let key = ed25519_dalek::SigningKey::from_bytes(&[7; 32])
+                    .verifying_key()
+                    .to_bytes();
+                let encoded: String = key.iter().map(|b| format!("{b:02x}")).collect();
+                let row = json!({
+                    "device_id":Uuid::from_u128(if f.mode=="enrollment_wrong_device" {22} else {21}),
+                    "connection_id":if f.mode=="enrollment_bad_id" {999} else {123456789},
+                    "generation":if f.mode=="enrollment_bad_generation" {0} else {1},
+                    "revoked_at":if f.mode=="enrollment_revoked" {json!("2026-11-06T00:00:00Z")} else {Value::Null},
+                    "public_key":if f.mode=="enrollment_weak_key" {format!("\\x{}","00".repeat(32))}
+                        else if f.mode=="enrollment_bad_key" {"\\xZZ".to_owned()} else {format!("\\x{encoded}")},
+                });
+                if f.mode == "enrollment_duplicate" {
+                    json!([row.clone(), row])
+                } else {
+                    json!([row])
+                }
+            }
             _ => panic!("unexpected identity endpoint"),
         };
         axum::Json(body).into_response()
@@ -283,7 +965,12 @@ mod tests {
         assert!(!principal.staff);
         assert_eq!(
             paths,
-            ["/auth/v1/user", "/rest/v1/users", "/rest/v1/organizations"]
+            [
+                "/auth/v1/user",
+                "/rest/v1/rpc/remote_personal_account",
+                "/rest/v1/users",
+                "/rest/v1/organizations"
+            ]
         );
         for mode in [
             "wrong_subject",
@@ -297,6 +984,87 @@ mod tests {
         assert!(fixture("staff", "aal1").await.0.is_err());
         assert!(fixture("staff", "aal2").await.0.unwrap().staff);
     }
+    #[tokio::test]
+    async fn verified_personal_account_signs_in_without_an_ism_staff_profile_or_aal2() {
+        let (result, paths) = fixture("personal", "aal1").await;
+        let principal = result.unwrap();
+        assert!(principal.is_personal());
+        assert!(!principal.staff);
+        assert_eq!(
+            paths,
+            ["/auth/v1/user", "/rest/v1/rpc/remote_personal_account"]
+        );
+    }
+
+    #[tokio::test]
+    async fn enrolled_identity_is_resolved_through_same_verified_bearer_and_fails_closed() {
+        for mode in [
+            "enrollment_valid",
+            "enrollment_denied",
+            "enrollment_missing",
+            "enrollment_wrong_device",
+            "enrollment_bad_id",
+            "enrollment_bad_generation",
+            "enrollment_revoked",
+            "enrollment_weak_key",
+            "enrollment_bad_key",
+            "enrollment_duplicate",
+        ] {
+            let paths = Arc::new(Mutex::new(Vec::new()));
+            let state = Fixture {
+                mode,
+                paths: paths.clone(),
+            };
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base = format!("http://{}/", listener.local_addr().unwrap())
+                .parse()
+                .unwrap();
+            let task = tokio::spawn(async move {
+                axum::serve(
+                    listener,
+                    Router::new().fallback(get(reply)).with_state(state),
+                )
+                .await
+                .unwrap();
+            });
+            let auth = IsmAuth {
+                client: Client::new(),
+                base,
+                api_key: "public-key".into(),
+            };
+            let token = bearer(
+                "aal1",
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs()
+                    + 600,
+            );
+            let result = auth.authenticate_device(&token, Uuid::from_u128(21)).await;
+            if mode == "enrollment_valid" {
+                let enrolled = result.unwrap();
+                assert_eq!(enrolled.connection_id, 123456789);
+                assert_eq!(
+                    enrolled.public_key,
+                    ed25519_dalek::SigningKey::from_bytes(&[7; 32]).verifying_key()
+                );
+            } else {
+                assert!(result.is_err(), "{mode}");
+            }
+            assert_eq!(
+                paths.lock().unwrap().as_slice(),
+                [
+                    "/auth/v1/user",
+                    "/rest/v1/rpc/remote_personal_account",
+                    "/rest/v1/users",
+                    "/rest/v1/organizations",
+                    "/rest/v1/remote_device_enrollments"
+                ]
+            );
+            task.abort();
+            let _ = task.await;
+        }
+    }
     #[test]
     fn production_identity_url_rejects_insecure_or_ambiguous_endpoints() {
         for url in [
@@ -308,5 +1076,173 @@ mod tests {
             assert!(IsmAuth::new(url.parse().unwrap(), "public".into()).is_err());
         }
         assert!(IsmAuth::new("https://ism.example/".parse().unwrap(), "public".into()).is_ok());
+    }
+    #[tokio::test]
+    async fn device_directory_is_bearer_scoped_bounded_and_rejects_malformed_bindings() {
+        for mode in [
+            "directory_valid",
+            "directory_denied",
+            "directory_oversized",
+            "directory_duplicate",
+            "directory_wrong_binding",
+            "directory_control_name",
+            "directory_unreadable_device",
+        ] {
+            let paths = Arc::new(Mutex::new(Vec::new()));
+            let state = Fixture {
+                mode,
+                paths: paths.clone(),
+            };
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base = format!("http://{}/", listener.local_addr().unwrap())
+                .parse()
+                .unwrap();
+            let task = tokio::spawn(async move {
+                axum::serve(
+                    listener,
+                    Router::new().fallback(get(reply)).with_state(state),
+                )
+                .await
+                .unwrap();
+            });
+            let auth = IsmAuth {
+                client: Client::new(),
+                base,
+                api_key: "public-key".into(),
+            };
+            let token = bearer(
+                "aal1",
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs()
+                    + 600,
+            );
+            let result = auth.directory(&token, Some(123456789), "Mixel_%").await;
+            if mode == "directory_valid" {
+                let page = result.unwrap();
+                assert_eq!(page.devices.len(), 50);
+                assert_eq!(page.next, Some(123456839));
+                assert_eq!(page.devices[0].device, Uuid::from_u128(1000));
+            } else {
+                assert!(result.is_err(), "{mode}");
+            }
+            assert_eq!(
+                paths.lock().unwrap().as_slice(),
+                [
+                    "/auth/v1/user",
+                    "/rest/v1/rpc/remote_personal_account",
+                    "/rest/v1/users",
+                    "/rest/v1/organizations",
+                    "/rest/v1/remote_device_enrollments"
+                ]
+            );
+            task.abort();
+            let _ = task.await;
+        }
+    }
+    async fn enrollment_write_reply(
+        State(f): State<Fixture>,
+        headers: HeaderMap,
+        axum::Json(body): axum::Json<Value>,
+    ) -> axum::response::Response {
+        assert_eq!(headers["apikey"], "public-key");
+        assert_eq!(headers["accept"], "application/vnd.pgrst.object+json");
+        assert!(
+            headers["authorization"]
+                .to_str()
+                .unwrap()
+                .starts_with("Bearer ")
+        );
+        f.paths.lock().unwrap().push("POST enrollment".into());
+        assert_eq!(body["target"], json!(Uuid::from_u128(21)));
+        let key = ed25519_dalek::SigningKey::from_bytes(&[7; 32]).verifying_key();
+        let hex: String = key
+            .as_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        assert_eq!(body["key_material"], json!(format!("\\x{hex}")));
+        if f.mode == "staff_write_denied" {
+            return axum::http::StatusCode::CONFLICT.into_response();
+        }
+        axum::Json(json!({"device_id":Uuid::from_u128(21),"connection_id":123456789,"generation":if f.mode=="staff_write_stale"{2}else{1},"revoked_at":Value::Null,"public_key":if f.mode=="staff_write_wrong_key"{"\\x00".to_owned()}else{format!("\\x{hex}")}})).into_response()
+    }
+    #[tokio::test]
+    async fn enrollment_requires_staff_and_cancellation_guard_and_reads_back_exact_persisted_key() {
+        for mode in [
+            "valid",
+            "staff",
+            "staff_write_denied",
+            "staff_write_wrong_key",
+            "staff_write_stale",
+            "staff_cancelled",
+        ] {
+            let paths = Arc::new(Mutex::new(Vec::new()));
+            let state = Fixture {
+                mode,
+                paths: paths.clone(),
+            };
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base = format!("http://{}/", listener.local_addr().unwrap())
+                .parse()
+                .unwrap();
+            let task = tokio::spawn(async move {
+                axum::serve(
+                    listener,
+                    Router::new()
+                        .route(
+                            "/rest/v1/rpc/remote_enroll_device",
+                            axum::routing::post(enrollment_write_reply),
+                        )
+                        .fallback(get(reply))
+                        .with_state(state),
+                )
+                .await
+                .unwrap();
+            });
+            let auth = IsmAuth {
+                client: Client::new(),
+                base,
+                api_key: "public-key".into(),
+            };
+            let token = bearer(
+                "aal2",
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs()
+                    + 600,
+            );
+            let cancelled = std::sync::atomic::AtomicBool::new(mode == "staff_cancelled");
+            let result = auth
+                .enroll(
+                    &token,
+                    Uuid::from_u128(21),
+                    ed25519_dalek::SigningKey::from_bytes(&[7; 32]).verifying_key(),
+                    &cancelled,
+                )
+                .await;
+            if mode == "staff" {
+                assert_eq!(result.unwrap().connection_id, 123456789);
+            } else {
+                assert!(result.is_err(), "{mode}");
+            }
+            let paths = paths.lock().unwrap().clone();
+            if matches!(mode, "valid" | "staff_cancelled") {
+                assert!(!paths.iter().any(|path| path == "POST enrollment"));
+            } else {
+                assert!(paths.iter().any(|path| path == "POST enrollment"));
+            }
+            if mode == "staff" {
+                assert!(
+                    paths
+                        .iter()
+                        .any(|path| path == "/rest/v1/remote_device_enrollments")
+                );
+            }
+            task.abort();
+            let _ = task.await;
+        }
     }
 }

@@ -77,6 +77,18 @@ pub struct NativeTransport {
     streams: Option<Arc<crate::stream_turn::StreamRuntime>>,
 }
 impl NativeTransport {
+    pub async fn receive_video(&self) -> Result<(), TransportError> {
+        self.peer
+            .add_transceiver_from_kind(
+                rtc::rtp_transceiver::rtp_sender::RtpCodecKind::Video,
+                Some(webrtc::rtp_transceiver::RTCRtpTransceiverInit {
+                    direction: webrtc::rtp_transceiver::RTCRtpTransceiverDirection::Recvonly,
+                    ..Default::default()
+                }),
+            )
+            .await?;
+        Ok(())
+    }
     /// ICE servers include dedicated staging STUN/TURN URLs and short-lived
     /// TURN credentials. With no servers, host candidates permit LAN tests.
     pub async fn new(bind: String, servers: Vec<RTCIceServer>) -> Result<Self, TransportError> {
@@ -89,6 +101,27 @@ impl NativeTransport {
         servers: Vec<RTCIceServer>,
     ) -> Result<Self, TransportError> {
         Self::configured(bind, servers, true).await
+    }
+    /// Use outbound TURN streams and a loopback-only WebRTC socket.
+    pub async fn relay_stream_only(servers: Vec<RTCIceServer>) -> Result<Self, TransportError> {
+        let mut streams = Vec::new();
+        for mut server in servers {
+            let parsed = server.urls()?;
+            server.urls = server
+                .urls
+                .into_iter()
+                .zip(parsed)
+                .filter(|(_, url)| {
+                    matches!(url.scheme.to_string().as_str(), "turn" | "turns")
+                        && url.proto.to_string() == "tcp"
+                })
+                .map(|(original, _)| original)
+                .collect();
+            if !server.urls.is_empty() {
+                streams.push(server);
+            }
+        }
+        Self::relay_only("127.0.0.1:0".into(), streams).await
     }
     async fn configured(
         bind: String,
@@ -162,6 +195,15 @@ impl NativeTransport {
             )
             .with_handler(handler)
             .with_udp_addrs(vec![bind]);
+        let builder = if relay_only {
+            builder.with_setting_engine(
+                webrtc::peer_connection::SettingEngineBuilder::new()
+                    .with_multicast_dns_mode(rtc::ice::mdns::MulticastDnsMode::Disabled)
+                    .build(),
+            )
+        } else {
+            builder
+        };
         let builder = if let Some(runtime) = &streams {
             builder.with_runtime(runtime.clone())
         } else {
@@ -300,4 +342,8 @@ pub fn local_fingerprint(sdp: &str) -> Result<[u8; 32], TransportError> {
 
 pub use webrtc::data_channel::{
     DataChannel as NativeDataChannel, DataChannelEvent as NativeDataChannelEvent,
+};
+pub use webrtc::peer_connection::RTCIceServer as NativeIceServer;
+pub use webrtc::peer_connection::{
+    RTCIceCandidateInit as NativeIceCandidate, RTCSessionDescription as NativeSessionDescription,
 };

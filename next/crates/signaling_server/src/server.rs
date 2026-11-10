@@ -1,7 +1,8 @@
 use crate::{
-    auth::{AuthError, IsmAuth, Principal},
+    auth::{AuthError, EnrolledPrincipal, IsmAuth, Principal},
     protocol::*,
     registry::Registry,
+    support_policy::{SupportPair, SupportPolicy},
 };
 use axum::{
     Router,
@@ -23,13 +24,29 @@ use std::{
 };
 use tokio::sync::{Semaphore, mpsc, watch};
 
+type AuthFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, AuthError>> + Send + 'a>>;
 pub trait Authenticator: Send + Sync {
+    /// Token-only adapters cannot claim enrolled device identities.
+    fn authenticate_device<'a>(
+        &'a self,
+        _token: &'a str,
+        _device: uuid::Uuid,
+    ) -> AuthFuture<'a, EnrolledPrincipal> {
+        Box::pin(async { Err(AuthError) })
+    }
     fn authenticate<'a>(
         &'a self,
         token: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<Principal, AuthError>> + Send + 'a>>;
 }
 impl Authenticator for IsmAuth {
+    fn authenticate_device<'a>(
+        &'a self,
+        token: &'a str,
+        device: uuid::Uuid,
+    ) -> AuthFuture<'a, EnrolledPrincipal> {
+        Box::pin(self.authenticate_device(token, device))
+    }
     fn authenticate<'a>(
         &'a self,
         token: &'a str,
@@ -44,8 +61,35 @@ pub struct AppState {
     origins: Arc<HashSet<String>>,
     connections: Arc<Semaphore>,
     auth_slots: Arc<Semaphore>,
+    turn: Option<Arc<crate::turn::TurnConfig>>,
+    policy: Option<Arc<SupportPolicy>>,
+    policy_slots: Arc<Semaphore>,
 }
 impl AppState {
+    pub fn with_turn(mut self, config: Option<crate::turn::TurnConfig>) -> Self {
+        self.turn = config.map(Arc::new);
+        self
+    }
+    pub fn with_support_policy(mut self, policy: SupportPolicy) -> Self {
+        self.policy = Some(Arc::new(policy));
+        self
+    }
+
+    async fn support_allowed(
+        &self,
+        pair: &SupportPair,
+        unattended: bool,
+        accept_session: Option<uuid::Uuid>,
+    ) -> bool {
+        let Some(policy) = &self.policy else {
+            return false;
+        };
+        let Ok(_slot) = self.policy_slots.try_acquire() else {
+            return false;
+        };
+        policy.allows(pair, unattended, accept_session).await
+    }
+
     pub fn new(auth: Arc<dyn Authenticator>, origins: HashSet<String>) -> Self {
         Self {
             registry: Arc::new(Mutex::new(Registry::default())),
@@ -53,6 +97,9 @@ impl AppState {
             origins: Arc::new(origins),
             connections: Arc::new(Semaphore::new(1000)),
             auth_slots: Arc::new(Semaphore::new(32)),
+            turn: None,
+            policy: None,
+            policy_slots: Arc::new(Semaphore::new(64)),
         }
     }
 }
@@ -108,21 +155,71 @@ async fn connection(mut socket: WebSocket, state: AppState) {
     let Ok(Some(Ok(Message::Text(raw)))) = initial else {
         return;
     };
-    let Ok(ClientMessage::Authenticate { token }) = serde_json::from_str(&raw) else {
-        return;
+    let (token, device) = match serde_json::from_str(&raw) {
+        Ok(ClientMessage::Authenticate { token }) => (token, None),
+        Ok(ClientMessage::AuthenticateDevice { token, device }) => (token, Some(device)),
+        _ => return,
     };
     drop(raw);
     let Ok(auth_slot) = state.auth_slots.clone().try_acquire_owned() else {
         return;
     };
-    let result =
-        tokio::time::timeout(Duration::from_secs(13), state.auth.authenticate(&token)).await;
+    let result = tokio::time::timeout(Duration::from_secs(17), async {
+        if let Some(device) = device {
+            let enrolled = state.auth.authenticate_device(&token, device).await?;
+            Ok::<_, AuthError>((enrolled.principal.clone(), Some(enrolled)))
+        } else {
+            Ok((state.auth.authenticate(&token).await?, None))
+        }
+    })
+    .await;
     drop(auth_slot);
     // Never log a bearer or retain it after identity resolution.
     drop(token);
-    let Ok(Ok(principal)) = result else {
+    let Ok(Ok((principal, enrolled))) = result else {
         return;
     };
+    if state.policy.is_none()
+        && enrolled
+            .as_ref()
+            .and_then(|device| device.identity_ticket.as_ref())
+            .is_some_and(|ticket| ticket.unattended_host_only())
+    {
+        return;
+    }
+    if let Some(enrolled) = &enrolled {
+        use rand_core::RngCore;
+        let mut nonce = [0; 32];
+        rand_core::OsRng.fill_bytes(&mut nonce);
+        let challenge = core_protocol::device_login::DeviceLoginChallenge {
+            nonce,
+            device: *enrolled.device.as_bytes(),
+            profile: *principal.user.as_bytes(),
+            tenant: principal.tenant.map(|id| *id.as_bytes()),
+            connection_id: enrolled.connection_id,
+            generation: enrolled.generation,
+        };
+        if !send(
+            &mut socket,
+            &ServerMessage::DeviceChallenge {
+                challenge: challenge.clone(),
+            },
+        )
+        .await
+        {
+            return;
+        }
+        let proof = tokio::time::timeout(Duration::from_secs(5), socket.next()).await;
+        let Ok(Some(Ok(Message::Text(raw)))) = proof else {
+            return;
+        };
+        let Ok(ClientMessage::ProveDevice { signature }) = serde_json::from_str(&raw) else {
+            return;
+        };
+        if challenge.verify(&enrolled.public_key, &signature).is_err() {
+            return;
+        }
+    }
     let mut expires_at = principal.expires_at;
     let unix = unix_now();
     if expires_at <= unix {
@@ -131,7 +228,20 @@ async fn connection(mut socket: WebSocket, state: AppState) {
     let (tx, mut rx) = mpsc::channel(64);
     let (stop, mut stopped) = watch::channel(false);
     let registered = match state.registry.lock() {
-        Ok(mut r) => r.register(principal, tx, stop),
+        Ok(mut r) => match &enrolled {
+            Some(device) => r
+                .register_with_id(device.connection_id, principal, tx, stop)
+                .and_then(|(id, generation)| {
+                    if let Some(ticket) = device.identity_ticket.clone()
+                        && let Err(error) = r.bind_identity(id, generation, ticket)
+                    {
+                        r.disconnect(id, generation);
+                        return Err(error);
+                    }
+                    Ok((id, generation))
+                }),
+            None => r.register(principal, tx, stop),
+        },
         Err(_) => return,
     };
     let Ok((id, generation)) = registered else {
@@ -145,6 +255,8 @@ async fn connection(mut socket: WebSocket, state: AppState) {
     let mut rate_start = start;
     let mut rate_count = 0u32;
     let mut tick = tokio::time::interval(Duration::from_secs(1));
+    let mut policy_tick = tokio::time::interval(Duration::from_secs(10));
+    policy_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tokio::select! {
             _ = stopped.changed() => break,
@@ -157,6 +269,27 @@ async fn connection(mut socket: WebSocket, state: AppState) {
                     if !matches!(tokio::time::timeout(Duration::from_secs(2), socket.send(Message::Ping(Vec::new().into()))).await, Ok(Ok(()))) { break; }
                     last_ping = now;
                 }
+            }
+            _ = policy_tick.tick(), if state.policy.is_some() => {
+                let checks = match state.registry.lock() {
+                    Ok(registry) => registry.controlled_policy_checks(id, generation, unix_now()),
+                    Err(_) => break,
+                };
+                let denied = futures_util::future::join_all(checks.into_iter().map(|(session, check)| {
+                    let state = &state;
+                    async move {
+                        let allowed = match check {
+                            Some(check) => state.support_allowed(&check.pair, check.unattended, None).await,
+                            None => false,
+                        };
+                        (!allowed).then_some(session)
+                    }
+                })).await;
+                if let Ok(mut registry) = state.registry.lock() {
+                    for session in denied.into_iter().flatten() {
+                        registry.policy_revoked(session, (id, generation), Instant::now());
+                    }
+                } else { break; }
             }
             event = rx.recv() => {
                 let Some(event) = event else { break; };
@@ -191,15 +324,27 @@ async fn connection(mut socket: WebSocket, state: AppState) {
                                 .min(Duration::from_secs(900).saturating_sub(now.duration_since(authorized_at)));
                             if remaining.is_zero() { break; }
                             let Ok(slot) = state.auth_slots.clone().try_acquire_owned() else { break; };
-                            let result = tokio::time::timeout(remaining.min(Duration::from_secs(13)), state.auth.authenticate(&token)).await;
+                            let authentication_budget = Duration::from_secs(if enrolled.is_some() {17} else {13});
+                            let result = tokio::time::timeout(remaining.min(authentication_budget), async {
+                                if let Some(previous) = &enrolled {
+                                    let current = state.auth.authenticate_device(&token, previous.device).await?;
+                                    if current.device != previous.device || current.connection_id != previous.connection_id
+                                        || current.generation != previous.generation || current.public_key != previous.public_key
+                                        || current.identity_ticket.as_ref().map(|ticket| ticket.version)
+                                            != previous.identity_ticket.as_ref().map(|ticket| ticket.version) {
+                                        return Err(AuthError);
+                                    }
+                                    Ok((current.principal,current.identity_ticket))
+                                } else { state.auth.authenticate(&token).await.map(|principal|(principal,None)) }
+                            }).await;
                             drop(token);
                             drop(slot);
-                            let Ok(Ok(principal)) = result else { break; };
+                            let Ok(Ok((principal,identity))) = result else { break; };
                             let unix = unix_now();
                             if principal.expires_at <= unix || !authorization_live(expires_at, authorized_at, Instant::now(), unix) { break; }
                             let next_expiry = principal.expires_at;
                             let renewed = match state.registry.lock() {
-                                Ok(mut r) => r.renew(id, generation, principal).is_ok(),
+                                Ok(mut r) => r.renew(id, generation, principal).and_then(|()|match identity{Some(identity)=>r.bind_identity(id,generation,identity),None=>Ok(())}).is_ok(),
                                 Err(_) => false,
                             };
                             if !renewed { break; }
@@ -208,7 +353,84 @@ async fn connection(mut socket: WebSocket, state: AppState) {
                             if !send(&mut socket, &ServerMessage::Renewed { expires_at }).await { break; }
                             continue;
                         }
+                        if let Ok(message @ (ClientMessage::CheckPairing | ClientMessage::ConfirmPairing { .. })) = parsed {
+                            let binding = match state.registry.lock() {
+                                Ok(registry) => registry.device_binding(id, generation, unix_now()),
+                                Err(_) => break,
+                            };
+                            let confirmation = match message {
+                                ClientMessage::ConfirmPairing { request } => Some(request),
+                                _ => None,
+                            };
+                            let outcome = match (state.policy.as_ref(), binding.as_ref(), state.policy_slots.try_acquire()) {
+                                (Some(policy), Some(binding), Ok(_slot)) => policy.pairing(binding, confirmation).await,
+                                _ => Err(AuthError),
+                            };
+                            let event = match outcome {
+                                Ok(pending) => ServerMessage::PairingStatus { pending, confirmed: confirmation.is_some(), failed: false },
+                                Err(_) => ServerMessage::PairingStatus { pending: None, confirmed: false, failed: true },
+                            };
+                            if !send(&mut socket, &event).await { break; }
+                            continue;
+                        }
+                        if state.policy.is_none()
+                            && matches!(parsed, Ok(ClientMessage::RequestUnattended { .. }
+                                | ClientMessage::ConfigureUnattended { .. }))
+                        {
+                            if !send(&mut socket, &ServerMessage::Error { code: ErrorCode::Unavailable }).await { break; }
+                            continue;
+                        }
+                        if state.policy.is_some()
+                            && let Ok(message @ (ClientMessage::Request { .. }
+                                | ClientMessage::RequestUnattended { .. }
+                                | ClientMessage::RequestWithCode { .. }
+                                | ClientMessage::Decide { accept: true, .. }
+                                | ClientMessage::Restart { .. })) = parsed
+                        {
+                            let check = match state.registry.lock() {
+                                Ok(registry) => registry.policy_for_message(id, generation, &message, unix_now()),
+                                Err(_) => break,
+                            };
+                            let allowed = match &check {
+                                Some(check) => {
+                                    let audit = match &message {
+                                        ClientMessage::Decide { session, accept: true } if check.unattended => Some(*session),
+                                        _ => None,
+                                    };
+                                    state.support_allowed(&check.pair, check.unattended, audit).await
+                                },
+                                None => false,
+                            };
+                            let now = Instant::now();
+                            let unix = unix_now();
+                            if !authorization_live(expires_at, authorized_at, now, unix) { break; }
+                            let result = match state.registry.lock() {
+                                Ok(mut registry) => {
+                                    if allowed && registry.policy_for_message(id, generation, &message, unix) == check {
+                                        registry.handle(id, generation, message, now)
+                                    } else {
+                                        if let Some(check) = check
+                                            && let ClientMessage::Decide { session, .. } | ClientMessage::Restart { session } = message
+                                        {
+                                            registry.policy_revoked(session, check.controller, now);
+                                            Ok(())
+                                        } else {
+                                            Err(ErrorCode::Unavailable)
+                                        }
+                                    }
+                                }
+                                Err(_) => break,
+                            };
+                            if let Err(code) = result
+                                && !send(&mut socket, &ServerMessage::Error { code }).await { break; }
+                            continue;
+                        }
                         let result = match parsed {
+                            Ok(ClientMessage::Ice{session})=>{
+                                let permission=if enrolled.is_some(){match state.registry.lock(){Ok(mut registry)=>registry.ice_permission(id,generation,session,now,unix_now()),Err(_)=>break}}else{Err(ErrorCode::Forbidden)};
+                                let response=permission.and_then(|expiry|state.turn.as_ref().ok_or(ErrorCode::Unavailable)?.issue(session,id,expiry.min(unix_now().saturating_add(Duration::from_secs(900).saturating_sub(now.duration_since(authorized_at)).as_secs())),unix_now()).map_err(|_|ErrorCode::Forbidden));
+                                match response{Ok(lease)=>{if !send(&mut socket,&ServerMessage::Ice{session,lease}).await{break;}Ok(())},Err(code)=>Err(code)}
+                            },
                             Ok(message) => match state.registry.lock() { Ok(mut r) => r.handle(id, generation, message, now), Err(_) => break },
                             Err(_) => Err(ErrorCode::Invalid),
                         };

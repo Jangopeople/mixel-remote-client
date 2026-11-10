@@ -34,6 +34,8 @@ pub struct HardwareH264Encoder {
     width: usize,
     height: usize,
     fps: u32,
+    bitrate: u32,
+    may_buffer: bool,
     last_timestamp: Option<u64>,
     failed: bool,
 }
@@ -78,6 +80,8 @@ impl HardwareH264Encoder {
                 width,
                 height,
                 fps,
+                bitrate,
+                may_buffer: false,
                 last_timestamp: None,
                 failed: false,
             };
@@ -89,6 +93,19 @@ impl HardwareH264Encoder {
                 kVTCompressionPropertyKey_AllowFrameReordering,
                 CFBoolean::new(false).as_ref(),
             )?;
+            // The caller waits for each frame before submitting another.
+            encoder.may_buffer = match encoder.property(
+                kVTCompressionPropertyKey_MaxFrameDelayCount,
+                CFNumber::new_i32(0).as_ref(),
+            ) {
+                Ok(()) => false,
+                Err(EncodeError::Property { status, .. })
+                    if status == kVTPropertyNotSupportedErr =>
+                {
+                    true
+                }
+                Err(error) => return Err(error),
+            };
             encoder.property(
                 kVTCompressionPropertyKey_ProfileLevel,
                 kVTProfileLevel_H264_ConstrainedBaseline_AutoLevel.as_ref(),
@@ -183,8 +200,10 @@ impl HardwareH264Encoder {
                         operation: "output",
                         status: code,
                     })
-                } else if flags.contains(VTEncodeInfoFlags::FrameDropped) || sample.is_null() {
+                } else if flags.contains(VTEncodeInfoFlags::FrameDropped) {
                     Err(EncodeError::Dropped)
+                } else if sample.is_null() {
+                    Err(EncodeError::Bitstream)
                 }
                 // SAFETY: sample is live for the duration of this completion block.
                 else {
@@ -220,21 +239,48 @@ impl HardwareH264Encoder {
                 return Err(EncodeError::Dropped);
             }
         }
-        match rx.recv_timeout(Duration::from_secs(2)) {
-            Ok(Ok(frame)) => Ok(frame),
-            Ok(Err(error)) => {
+        let result = if self.may_buffer {
+            match rx.recv_timeout(Duration::from_millis(33)) {
+                Ok(result) => result,
+                Err(mpsc::RecvTimeoutError::Disconnected) => Err(EncodeError::Timeout),
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    // SAFETY: the owned session is still active. Only the
+                    // current frame can be pending on this serial owner.
+                    let code = unsafe {
+                        self.session
+                            .complete_frames(CMTime::new(timestamp_us as i64, 1_000_000))
+                    };
+                    status("complete frame", code)
+                        .and_then(|()| rx.try_recv().unwrap_or(Err(EncodeError::Timeout)))
+                }
+            }
+        } else {
+            rx.recv_timeout(Duration::from_millis(500))
+                .unwrap_or(Err(EncodeError::Timeout))
+        };
+        self.finish_output(result)
+    }
+
+    pub(crate) fn recreate(&self) -> Result<Self, EncodeError> {
+        Self::new(self.width, self.height, self.fps, self.bitrate)
+    }
+
+    fn finish_output(
+        &mut self,
+        result: Result<EncodedH264, EncodeError>,
+    ) -> Result<EncodedH264, EncodeError> {
+        match result {
+            Ok(frame) => Ok(frame),
+            // A reported dropped frame is a completed encode operation, not a
+            // dead compression session. Keep the same timestamp sequence and
+            // let the stream owner retry with an independently decodable IDR.
+            Err(EncodeError::Dropped) => Err(EncodeError::Dropped),
+            Err(error) => {
                 self.failed = true;
                 unsafe {
                     self.session.invalidate();
                 }
                 Err(error)
-            }
-            Err(_) => {
-                self.failed = true;
-                unsafe {
-                    self.session.invalidate();
-                }
-                Err(EncodeError::Timeout)
             }
         }
     }
@@ -246,6 +292,7 @@ impl Drop for HardwareH264Encoder {
         }
     }
 }
+
 struct WriteLock<'a>(&'a CVPixelBuffer);
 impl Drop for WriteLock<'_> {
     fn drop(&mut self) {
@@ -387,5 +434,41 @@ unsafe fn copy_encoded(sample: &CMSampleBuffer) -> Result<EncodedH264, EncodeErr
             length_size as usize,
             &parameters.iter().map(Vec::as_slice).collect::<Vec<_>>(),
         )
+    }
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+
+    #[test]
+    fn callback_drop_preserves_real_hardware_session_and_timestamp_ordering() {
+        let mut encoder = HardwareH264Encoder::new(320, 240, 30, 1_000_000)
+            .expect("Mac QA requires a real hardware H264 encoder");
+        let frame = CapturedFrame::bgra(320, 240, 1280, vec![80; 320 * 240 * 4]).unwrap();
+        assert!(encoder.encode(&frame, 0, true).unwrap().keyframe);
+        // Deterministically inject the asynchronous callback outcome through
+        // the production completion path; do not claim an OS overload occurred.
+        assert!(matches!(
+            encoder.finish_output(Err(EncodeError::Dropped)),
+            Err(EncodeError::Dropped)
+        ));
+        assert!(matches!(
+            encoder.encode(&frame, 0, true),
+            Err(EncodeError::Configuration)
+        ));
+        assert!(encoder.encode(&frame, 33_333, true).unwrap().keyframe);
+        assert!(encoder.hardware_active().unwrap());
+        assert!(matches!(
+            encoder.finish_output(Err(EncodeError::Timeout)),
+            Err(EncodeError::Timeout)
+        ));
+        assert!(matches!(
+            encoder.encode(&frame, 66_666, true),
+            Err(EncodeError::Failed)
+        ));
+        println!(
+            "PASS: injected callback drop recovered on the same real VideoToolbox hardware session; duplicate timestamps and fatal timeout still refused"
+        );
     }
 }

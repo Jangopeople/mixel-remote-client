@@ -93,6 +93,13 @@ impl VerifiedSession {
     pub(crate) fn matches(&self, context: &Context, role: Role) -> bool {
         self.context == *context && self.role == role
     }
+    /// Public, handshake-authenticated enrollment identities; no secret key material.
+    pub fn identities(&self) -> ([u8; 32], [u8; 32]) {
+        (
+            self.context.controller.to_bytes(),
+            self.context.host.to_bytes(),
+        )
+    }
     pub fn local_role(&self) -> Role {
         self.role
     }
@@ -177,32 +184,38 @@ impl Handshake {
         transcript.extend(self.context.signing_bytes(host));
         let binding: [u8; 32] = Sha256::digest(&transcript).into();
         let hkdf = Hkdf::<Sha256>::new(Some(&binding), shared.as_bytes());
-        let mut material = Zeroizing::new([0u8; 64]);
-        hkdf.expand(b"Mixel Remote directional AES256GCM v1", material.as_mut())
-            .map_err(|_| CryptoError::Authentication)?;
-        let first =
-            Aes256Gcm::new_from_slice(&material[..32]).map_err(|_| CryptoError::Authentication)?;
-        let second =
-            Aes256Gcm::new_from_slice(&material[32..]).map_err(|_| CryptoError::Authentication)?;
-        let (tx, rx) = if self.local.role == Role::Controller {
-            (first, second)
-        } else {
-            (second, first)
-        };
-        Ok(ControlChannel {
-            tx,
-            rx,
-            tx_sequence: 0,
-            rx_sequence: 0,
+        let verified = VerifiedSession {
+            context: self.context,
+            role: self.local.role,
+            local_fingerprint: self.local.dtls_fingerprint,
+            peer_fingerprint: peer.dtls_fingerprint,
             binding,
-            verified: VerifiedSession {
-                context: self.context,
-                role: self.local.role,
-                local_fingerprint: self.local.dtls_fingerprint,
-                peer_fingerprint: peer.dtls_fingerprint,
-                binding,
-            },
-        })
+        };
+        let mut control = ControlChannel::derived(
+            &hkdf,
+            b"Mixel Remote directional AES256GCM v1",
+            binding,
+            verified.clone(),
+        )?;
+        // Separate directional keys, AAD and counters isolate bulk data from
+        // keyboard/permission traffic. Retain no exportable shared secret.
+        let bulk_binding =
+            Sha256::digest([binding.as_slice(), b"Mixel Remote bulk records v1"].concat()).into();
+        control.bulk = Some(Box::new(ControlChannel::derived(
+            &hkdf,
+            b"Mixel Remote bulk directional AES256GCM v1",
+            bulk_binding,
+            verified.clone(),
+        )?));
+        let chat_binding =
+            Sha256::digest([binding.as_slice(), b"Mixel Remote chat records v1"].concat()).into();
+        control.chat = Some(Box::new(ControlChannel::derived(
+            &hkdf,
+            b"Mixel Remote chat directional AES256GCM v1",
+            chat_binding,
+            verified,
+        )?));
+        Ok(control)
     }
 }
 
@@ -215,6 +228,8 @@ pub struct ControlChannel {
     rx_sequence: u64,
     binding: [u8; 32],
     verified: VerifiedSession,
+    bulk: Option<Box<ControlChannel>>,
+    chat: Option<Box<ControlChannel>>,
 }
 fn nonce(sequence: u64) -> [u8; 12] {
     let mut bytes = [0; 12];
@@ -222,6 +237,52 @@ fn nonce(sequence: u64) -> [u8; 12] {
     bytes
 }
 impl ControlChannel {
+    fn derived(
+        hkdf: &Hkdf<Sha256>,
+        label: &[u8],
+        binding: [u8; 32],
+        verified: VerifiedSession,
+    ) -> Result<Self, CryptoError> {
+        let mut material = Zeroizing::new([0u8; 64]);
+        hkdf.expand(label, material.as_mut())
+            .map_err(|_| CryptoError::Authentication)?;
+        let first =
+            Aes256Gcm::new_from_slice(&material[..32]).map_err(|_| CryptoError::Authentication)?;
+        let second =
+            Aes256Gcm::new_from_slice(&material[32..]).map_err(|_| CryptoError::Authentication)?;
+        let (tx, rx) = if verified.role == Role::Controller {
+            (first, second)
+        } else {
+            (second, first)
+        };
+        Ok(Self {
+            tx,
+            rx,
+            tx_sequence: 0,
+            rx_sequence: 0,
+            binding,
+            verified,
+            bulk: None,
+            chat: None,
+        })
+    }
+    /// May be taken exactly once from the authenticated parent. Repeated calls
+    /// cannot reset a key's nonce sequence or create a second bulk sender.
+    /// Possession does not grant file access; the native host grant still gates
+    /// the bulk protocol and every OS operation.
+    pub fn take_bulk_channel(&mut self) -> Result<Self, CryptoError> {
+        self.bulk
+            .take()
+            .map(|channel| *channel)
+            .ok_or(CryptoError::Exhausted)
+    }
+    /// Independent keys and counters for the optional in-session chat stream.
+    pub fn take_chat_channel(&mut self) -> Result<Self, CryptoError> {
+        self.chat
+            .take()
+            .map(|channel| *channel)
+            .ok_or(CryptoError::Exhausted)
+    }
     pub fn verified_session(&self) -> VerifiedSession {
         self.verified.clone()
     }
@@ -357,5 +418,32 @@ mod tests {
         let mut record = MAX_RECORDS.to_be_bytes().to_vec();
         record.extend([0; 16]);
         assert_eq!(channel.open(&record), Err(CryptoError::Exhausted));
+    }
+    #[test]
+    fn bulk_keys_and_counters_are_isolated_and_cannot_be_forked_twice() {
+        let (a, b, context) = keys();
+        let ah = Handshake::new(context.clone(), Role::Controller, &a, [1; 32]).unwrap();
+        let bh = Handshake::new(context, Role::Host, &b, [2; 32]).unwrap();
+        let hello = ah.hello();
+        let mut controller = ah.finish(&bh.hello(), [2; 32]).unwrap();
+        let mut host = bh.finish(&hello, [1; 32]).unwrap();
+        let mut cf = controller.take_bulk_channel().unwrap();
+        let mut hf = host.take_bulk_channel().unwrap();
+        assert!(controller.take_bulk_channel().is_err());
+        assert!(cf.take_bulk_channel().is_err());
+        let input = controller.seal(b"same bytes").unwrap();
+        let file = cf.seal(b"same bytes").unwrap();
+        assert_ne!(input, file);
+        assert!(host.open(&file).is_err());
+        assert!(hf.open(&input).is_err());
+        assert_eq!(host.open(&input).unwrap(), b"same bytes");
+        assert_eq!(hf.open(&file).unwrap(), b"same bytes");
+        assert!(hf.open(&file).is_err());
+        let reply = hf.seal(b"file acknowledgment").unwrap();
+        assert_eq!(cf.open(&reply).unwrap(), b"file acknowledgment");
+        assert_eq!(
+            cf.verified_session().fingerprints(),
+            controller.verified_session().fingerprints()
+        );
     }
 }

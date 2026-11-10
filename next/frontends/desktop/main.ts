@@ -8,105 +8,157 @@ interface Window {
     return node as T;
   }
   const invoke = window.__TAURI__.core.invoke;
-  const start = element<HTMLButtonElement>('start');
-  const stop = element<HTMLButtonElement>('stop');
-  const status = element<HTMLParagraphElement>('status');
-  const metrics = element<HTMLParagraphElement>('metrics');
-  const checks = element<HTMLParagraphElement>('checks');
-  const canvas = element<HTMLCanvasElement>('preview');
-  const context = canvas.getContext('2d');
-  if (!context) throw Error('Canvas unavailable');
-  let generation = 0;
-
-  function clearPreview(message: string): void {
-    context!.clearRect(0, 0, canvas.width, canvas.height);
-    metrics.textContent = 'No retained preview';
-    checks.textContent = message;
+  type CompanyAdministration = {company_id: string; company_name: string};
+  type AccountStatus = {phase: string; message: string; account: {profile: string; organization: string | null; staff: boolean; display_name?: string | null; personal?: boolean; companies?: CompanyAdministration[]} | null; factors: {id: string; friendly_name: string | null}[]};
+  const accountStatus = element<HTMLParagraphElement>('account-status');
+  const accountError = element<HTMLParagraphElement>('account-error');
+  const signIn = element<HTMLButtonElement>('account-sign-in');
+  const alternateBrowser = element<HTMLButtonElement>('account-sign-in-link');
+  const browserLink = element<HTMLDivElement>('account-browser-link');
+  const browserUrl = element<HTMLInputElement>('account-browser-url');
+  const registerMixel = element<HTMLButtonElement>('account-register-mixel');
+  const deviceSettings = element<HTMLAnchorElement>('account-device-settings');
+  const manageRemote = element<HTMLButtonElement>('account-remote-management');
+  const profileSetup = element<HTMLFormElement>('account-profile-setup');
+  const displayName = element<HTMLInputElement>('account-display-name');
+  const saveProfile = element<HTMLButtonElement>('account-save-profile');
+  const signOut = element<HTMLButtonElement>('account-cancel');
+  const mfa = element<HTMLFormElement>('account-mfa');
+  const factor = element<HTMLSelectElement>('account-factor');
+  const code = element<HTMLInputElement>('account-code');
+  const verify = element<HTMLButtonElement>('account-verify');
+  const companyPanel = element<HTMLElement>('account-companies');
+  const companyList = element<HTMLDivElement>('account-company-list');
+  const companyError = element<HTMLParagraphElement>('account-company-error');
+  let displayedCompanies = '';
+  let account: AccountStatus | undefined, accountBusy = false, pollingAccount = false, accountReadVersion = 0;
+  let pendingBrowserUrl = '', showBrowserUrl = false;
+  function renderCompanies(companies: CompanyAdministration[]): void {
+    const signature = JSON.stringify(companies);
+    if (signature === displayedCompanies) return;
+    displayedCompanies = signature;
+    companyPanel.hidden = companies.length === 0;
+    companyError.textContent = '';
+    companyList.replaceChildren();
+    for (const company of companies) {
+      const row = document.createElement('div');
+      row.className = 'setting-row';
+      const name = document.createElement('strong');
+      name.textContent = company.company_name;
+      const settings = document.createElement('button');
+      settings.className = 'button-secondary';
+      settings.type = 'button';
+      settings.textContent = 'Manage company';
+      settings.setAttribute('aria-label', `Manage ${company.company_name}`);
+      settings.addEventListener('click', async () => {
+        settings.disabled = true;
+        companyError.textContent = '';
+        try { await invoke<void>('open_company_settings', {companyId: company.company_id}); }
+        catch (error) { if (settings.isConnected) companyError.textContent = String(error); }
+        finally { settings.disabled = false; }
+      });
+      row.append(name, settings);
+      companyList.append(row);
+    }
   }
-
-  start.addEventListener('click', async () => {
-    start.disabled = true;
-    const current = ++generation;
-    clearPreview('Waiting for native frames');
+  function renderAccount(): void {
+    const phase = account?.phase;
+    renderCompanies(phase === 'authenticated' ? account?.account?.companies ?? [] : []);
+    document.dispatchEvent(new CustomEvent('mixel-account-state',{detail:account ?? {phase:'signed_out',account:null}}));
+    signIn.disabled = accountBusy || !account || !['signed_out', 'error'].includes(phase!);
+    alternateBrowser.disabled = signIn.disabled &&
+      (accountBusy || phase !== 'waiting_browser' || !pendingBrowserUrl || showBrowserUrl);
+    if (phase !== 'waiting_browser' && !accountBusy) {
+      pendingBrowserUrl = '';
+      showBrowserUrl = false;
+    }
+    browserUrl.value = phase === 'waiting_browser' && showBrowserUrl ? pendingBrowserUrl : '';
+    browserLink.hidden = !browserUrl.value;
+    signOut.disabled = accountBusy || !account || ['signed_out', 'error'].includes(phase!);
+    signOut.textContent = phase === 'authenticated' ? 'Sign out' : 'Cancel sign-in';
+    mfa.hidden = phase !== 'mfa_required';
+    profileSetup.hidden = phase !== 'profile_setup';
+    deviceSettings.hidden = phase !== 'authenticated' || !account?.account?.personal;
+    saveProfile.disabled = displayName.disabled = accountBusy;
+    registerMixel.disabled = signIn.disabled;
+    if (phase !== 'profile_setup') displayName.value = '';
+    verify.disabled = accountBusy;
+    factor.disabled = accountBusy;
+    code.disabled = accountBusy;
+    if (account) accountStatus.textContent = account.message + (account.account?.display_name ? ` · ${account.account.display_name}` : '');
+    if (phase !== 'mfa_required') code.value = '';
+    const previous = factor.value;
+    factor.replaceChildren();
+    for (const item of account?.factors ?? []) {
+      const option = document.createElement('option');
+      option.value = item.id; option.textContent = item.friendly_name || 'Authenticator app';
+      factor.appendChild(option);
+    }
+    if (Array.from(factor.options).some(option => option.value === previous)) factor.value = previous;
+  }
+  async function readAccount(force = false): Promise<void> {
+    if ((pollingAccount || accountBusy || document.hidden) && !force) return;
+    pollingAccount = true; const version = ++accountReadVersion;
+    try { const status = await invoke<AccountStatus>('account_status'); if (version === accountReadVersion) { account = status; renderAccount(); } }
+    catch (error) { if (version === accountReadVersion) { account=undefined; renderAccount(); accountError.textContent = String(error); signIn.disabled = signOut.disabled = true; } }
+    finally { if (version === accountReadVersion) pollingAccount = false; }
+  }
+  async function accountAction(command: string, args?: Record<string, unknown>): Promise<void> {
+    if (accountBusy) return;
+    ++accountReadVersion; accountBusy = true; accountError.textContent = ''; renderAccount();
     try {
-      status.className = '';
-      status.textContent = 'Starting ScreenCaptureKit…';
-      const message = await invoke<string>('start_capture');
-      if (generation !== current) return;
-      status.textContent = message;
-      stop.disabled = false;
-      let after = 0, frames = 0, lastSequence = 0;
-      const first = performance.now();
-      while (generation === current) {
-        const packet = await invoke<ArrayBuffer | number[] | Uint8Array>('next_frame', { after });
-        if (generation !== current) break;
-        const buffer = packet instanceof ArrayBuffer ? packet : new Uint8Array(packet).buffer;
-        if (buffer.byteLength < 20) throw Error('Truncated native frame');
-        const view = new DataView(buffer);
-        const width = view.getUint32(0, true), height = view.getUint32(4, true);
-        const stride = view.getUint32(8, true), sequence = Number(view.getBigUint64(12, true));
-        if (width < 1 || height < 1 || width > 8192 || height > 8192 || stride < width * 4 ||
-            buffer.byteLength !== 20 + stride * height || !Number.isSafeInteger(sequence) || sequence <= after) {
-          throw Error('Invalid native frame layout or sequence');
-        }
-        const bgra = new Uint8Array(buffer, 20), rgba = new Uint8ClampedArray(width * height * 4);
-        for (let y = 0; y < height; y++) {
-          for (let x = 0; x < width; x++) {
-            const source = y * stride + x * 4, destination = (y * width + x) * 4;
-            rgba[destination] = bgra[source + 2];
-            rgba[destination + 1] = bgra[source + 1];
-            rgba[destination + 2] = bgra[source];
-            rgba[destination + 3] = 255;
-          }
-        }
-        canvas.width = width;
-        canvas.height = height;
-        context.putImageData(new ImageData(rgba, width, height), 0, 0);
-        after = sequence;
-        frames++;
-        metrics.textContent = `Native frames: ${frames} · sequence ${sequence} · ${width} × ${height} · ${(frames * 1000 / (performance.now() - first)).toFixed(1)} frames/s preview`;
-        if (frames >= 3 && sequence > lastSequence) {
-          checks.textContent = 'PASS · live ScreenCaptureKit frames received and rendered; single-slot delivery is advancing';
-        }
-        lastSequence = sequence;
-        await new Promise(resolve => setTimeout(resolve, 100));
-      }
-    } catch (error) {
-      if (generation === current) {
-        clearPreview('Capture ended · preview and success status cleared');
-        status.className = 'error';
-        status.textContent = `Capture error: ${error}`;
-        await invoke<string>('stop_capture').catch(() => {});
-      }
-    } finally {
-      if (generation === current) {
-        start.disabled = false;
-        stop.disabled = true;
+      const result = await invoke<string | null>(command, args);
+      if (command === 'account_sign_in' && result) {
+        pendingBrowserUrl = result;
+        showBrowserUrl = args?.showLink === true;
       }
     }
+    catch (error) { accountError.textContent = String(error); }
+    finally { accountBusy = false; await readAccount(true); renderAccount(); }
+  }
+  registerMixel.addEventListener('click', () => { void accountAction('open_mixel_registration'); });
+  manageRemote.addEventListener('click', () => { void accountAction('open_remote_management'); });
+  profileSetup.addEventListener('submit', event => {
+    event.preventDefault();
+    if (accountBusy || account?.phase !== 'profile_setup' || !profileSetup.reportValidity()) return;
+    const name = displayName.value.trim();
+    if (name) void accountAction('account_setup', {name});
   });
-
-  stop.addEventListener('click', async () => {
-    const current = ++generation;
-    start.disabled = true;
-    stop.disabled = true;
-    clearPreview('Stopping capture · preview hidden');
-    status.className = '';
-    status.textContent = 'Stopping capture…';
-    try {
-      const message = await invoke<string>('stop_capture');
-      if (generation === current) {
-        status.textContent = message;
-        checks.textContent = 'Stopped · native stream closed, preview and frame slot cleared';
-      }
-    } catch (error) {
-      if (generation === current) {
-        status.className = 'error';
-        status.textContent = `Stop failed: ${error}`;
-        checks.textContent = 'Cleanup failed · preview remains hidden';
-      }
-    } finally {
-      if (generation === current) start.disabled = false;
+  void invoke<boolean>('remote_signup_available').then(available => { registerMixel.hidden = !available; }).catch(() => {});
+  signIn.addEventListener('click', () => { void accountAction('account_sign_in'); });
+  alternateBrowser.addEventListener('click', () => {
+    if (account?.phase === 'waiting_browser' && pendingBrowserUrl) {
+      showBrowserUrl = true;
+      renderAccount();
+      browserUrl.select();
+      return;
     }
+    void accountAction('account_sign_in', {showLink: true});
   });
+  signOut.addEventListener('click', () => { code.value = ''; account=undefined; void accountAction('account_cancel'); });
+  mfa.addEventListener('submit', event => {
+    event.preventDefault();
+    if (accountBusy || account?.phase !== 'mfa_required' || !mfa.reportValidity()) return;
+    const entered = code.value; code.value = '';
+    void accountAction('account_verify', {factor: factor.value, code: entered});
+  });
+  void readAccount();
+  window.setInterval(() => { void readAccount(); }, 1000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) void readAccount(); });
+  const identityStatus = element<HTMLParagraphElement>('identity-status');
+  const identityButtons = [element<HTMLButtonElement>('load-identity'), element<HTMLButtonElement>('create-identity')];
+  let identityBusy = false;
+  async function openIdentity(create: boolean): Promise<void> {
+    if (identityBusy) return;
+    identityBusy = true;
+    identityButtons.forEach(button => { button.disabled = true; });
+    try {
+      const identity = await invoke<{public_key: string; storage: string; enrolled: boolean}>('open_device_identity', {create});
+      if (!/^[0-9a-f]{64}$/.test(identity.public_key) || identity.enrolled) throw Error('Invalid local identity response');
+      identityStatus.textContent = `Saved public device key: ${identity.public_key} · ${identity.storage} · Not enrolled`;
+    } catch (error) { identityStatus.textContent = String(error); }
+    finally { identityBusy = false; identityButtons.forEach(button => { button.disabled = false; }); }
+  }
+  identityButtons[0].addEventListener('click', () => { void openIdentity(false); });
+  identityButtons[1].addEventListener('click', () => { void openIdentity(true); });
 })();
