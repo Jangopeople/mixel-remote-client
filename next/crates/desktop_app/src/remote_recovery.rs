@@ -97,8 +97,13 @@ impl Backoff {
         if stable >= Duration::from_secs(60) {
             self.failures = 0;
         }
-        let seconds = *[1, 2, 4, 8, 16, 30].get(usize::from(self.failures))?;
-        self.failures += 1;
+        // Quick retries first, then every minute for as long as the network or
+        // service is down: an unattended computer must come back on its own.
+        let seconds = [1, 2, 4, 8, 16, 30]
+            .get(usize::from(self.failures))
+            .copied()
+            .unwrap_or(60);
+        self.failures = self.failures.saturating_add(1);
         Some(
             Duration::from_secs(seconds) + Duration::from_millis(u64::from(OsRng.next_u32() % 501)),
         )
@@ -127,8 +132,7 @@ mod tests {
         assert!(!Failure::from("Enrollment or local consent changed").retryable);
     }
     #[test]
-    fn continuous_failure_retries_are_bounded_and_jittered_without_resetting_on_short_lived_connections()
-     {
+    fn continuous_failure_retries_back_off_to_one_minute_and_never_give_up() {
         let mut state = Backoff::default();
         for minimum in [1, 2, 4, 8, 16, 30] {
             let delay = state.next(Duration::from_secs(2)).unwrap();
@@ -137,7 +141,10 @@ mod tests {
                     && delay <= Duration::from_secs(minimum) + Duration::from_millis(500)
             );
         }
-        assert!(state.next(Duration::ZERO).is_none());
+        for _ in 0..300 {
+            let delay = state.next(Duration::ZERO).unwrap();
+            assert!(delay >= Duration::from_secs(60) && delay <= Duration::from_millis(60_500));
+        }
         assert!(state.next(Duration::from_secs(61)).is_some());
         assert_eq!(state.attempt(), 1);
     }
