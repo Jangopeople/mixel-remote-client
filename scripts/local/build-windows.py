@@ -494,6 +494,11 @@ def build(args,repo=REPO):
         # corrections. Admit its complete original input closure first, then
         # apply one exact ten-file profile; generated API/wire types are unchanged.
         call('windows-compiler-integration',[sys.executable,repo/'scripts/patch-windows-compiler-integration.py','--root',app,'--apply'])
+        # Quick Support elevation is the last source layer, on top of the exact
+        # compiler profile. apply-branding, the shared bridge and the native
+        # fixtures keep seeing the pinned source without it.
+        call('elevation-layer',[sys.executable,repo/'scripts/patch-support-elevation.py','--check',app])
+        call('elevation-layer',[sys.executable,repo/'scripts/patch-support-elevation.py',app])
         lock=B.digest(file(app/'Cargo.lock'))
         def hold(phase):
             current=B.digest(file(app/'Cargo.lock'));result.update(cargoLockBeforeSha256=lock,cargoLockAfterSha256=current,cargoLockUnchanged=current==lock)

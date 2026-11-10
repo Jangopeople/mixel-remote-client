@@ -92,31 +92,20 @@ class ElevationLayer(unittest.TestCase):
             self.assertEqual(run("--restore", "--check", directory).returncode, 0)
             self.assertEqual(run("--restore", directory).returncode, 0)
 
-    def test_branding_takes_the_layer_out_first_and_applies_it_last(self):
-        lines = [line for line in (HERE / "apply-branding.sh").read_text().splitlines() if line.startswith("python3 ")]
-        self.assertIn("patch-support-elevation.py\" --restore --check", lines[0])
-        self.assertIn("patch-support-elevation.py\" --restore --guarded \"$RDREPO\"", lines[1])
-        self.assertIn("patch-support-elevation.py\" --check", lines[-2])
-        self.assertTrue(lines[-1].endswith("patch-support-elevation.py\" \"$RDREPO\""))
+    def test_windows_driver_applies_the_layer_last_and_branding_stays_pinned(self):
+        driver = (HERE / "local/build-windows.py").read_text()
+        order = [driver.index(token) for token in (
+            "call('apply-branding'", "admit_bridge(args.bridge", "call('windows-compiler-integration'",
+            "call('elevation-layer',[sys.executable,repo/'scripts/patch-support-elevation.py','--check',app])",
+            "call('elevation-layer',[sys.executable,repo/'scripts/patch-support-elevation.py',app])",
+            "call('fetch-locked'")]
+        self.assertEqual(order, sorted(order))
+        # The shared pipeline, its projections and the CI workflow pin the source without this layer.
+        self.assertNotIn("patch-support-elevation", (HERE / "apply-branding.sh").read_text())
+        self.assertNotIn("patch-support-elevation", (HERE / "receiver_input_integration_projection.py").read_text())
 
-    def test_projection_sees_through_the_layer_and_refuses_any_other_spelling(self):
-        spec = importlib.util.spec_from_file_location("receiver_projection", HERE / "receiver_input_integration_projection.py")
-        projection = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(projection)
-        name = "scripts/apply-branding.sh"
-        text = (HERE / "apply-branding.sh").read_text()
-        bare = projection.elevation_view(text, name, restore=True)
-        self.assertNotIn("patch-support-elevation.py", bare)
-        self.assertEqual(projection.elevation_view(bare, name, restore=True), bare)
-        self.assertEqual(projection.elevation_view(bare, name, restore=False), text)
-        self.assertEqual(projection.compose(projection.inverse(text.encode(), name), name), text.encode())
-        first, last = projection.ELEVATION_FIRST, projection.ELEVATION_LAST
-        for mutated in (text.replace(first, "", 1), text[:-len(last)], text.replace(last, last.replace("--check", "--chek"), 1),
-                        text.replace("--restore --check", "--check --restore", 1), text.replace(first, first * 2, 1)):
-            with self.assertRaises(ValueError):
-                projection.elevation_view(mutated, name, restore=True)
-        with self.assertRaises(ValueError):
-            projection.elevation_view(text, name, restore=False)
+    def test_guarded_restore_needs_restore(self):
+        self.assertEqual(run("--guarded", ".").returncode, 2)
 
 if __name__ == "__main__":
     unittest.main()

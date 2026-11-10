@@ -100,45 +100,6 @@ def mac_raw_modifier_workflow(raw, name, restore=True):
     return text.replace(selected, wanted, 1).replace('\n', newline).encode()
 
 
-# The Windows elevation layer wraps the whole receiver chain in apply-branding:
-# it is taken out before the first owner and applied after the last one. Its
-# two exact invocation blocks are an outer view of this file, like the workflow
-# policy view: removed before the reviewed hunks are inverted, added back after
-# they are composed. Any other spelling or a single block stays fatal.
-ELEVATION_FILE = 'scripts/apply-branding.sh'
-ELEVATION_FIRST = (
-    '# The Windows elevation layer is the outermost one. Take it out first so every\n'
-    '# earlier owner sees its own output on a repeated branding pass.\n'
-    'python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-elevation.py" --restore --check "$RDREPO"\n'
-    'python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-elevation.py" --restore --guarded "$RDREPO"\n'
-    '\n')
-ELEVATION_FIRST_ANCHOR = '# Validate the disjoint lifecycle pair without changing any source before the\n'
-ELEVATION_LAST_ANCHOR = 'echo "✓ Branding applied — product identity is $APP_NAME only."\n'
-ELEVATION_LAST = (
-    '\n'
-    '# Quick Support elevation: the session outlives the helper switch and the\n'
-    '# consented SYSTEM helper is accepted. Applied after every receiver layer.\n'
-    'python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-elevation.py" --check "$RDREPO"\n'
-    'python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-elevation.py" "$RDREPO"\n'
-    'echo "✓ Windows elevation layer applied."\n')
-
-
-def elevation_view(text, name, restore):
-    if name != ELEVATION_FILE:
-        return text
-    first = ELEVATION_FIRST + ELEVATION_FIRST_ANCHOR
-    last = ELEVATION_LAST_ANCHOR + ELEVATION_LAST
-    mentions = text.count('patch-support-elevation.py')
-    if restore:
-        if mentions == 0:
-            return text
-        if text.count(first) != 1 or text.count(last) != 1 or mentions != 4:
-            raise ValueError('Changed/missing/moved elevation invocation: ' + name)
-        return text.replace(last, ELEVATION_LAST_ANCHOR, 1).replace(first, ELEVATION_FIRST_ANCHOR, 1)
-    if mentions or text.count(ELEVATION_FIRST_ANCHOR) != 1 or text.count(ELEVATION_LAST_ANCHOR) != 1:
-        raise ValueError('Duplicated or unanchored elevation invocation: ' + name)
-    return text.replace(ELEVATION_FIRST_ANCHOR, first, 1).replace(ELEVATION_LAST_ANCHOR, last, 1)
-
 def project(raw, name, restore):
     """Inverse only exact ordered hunks, preserving other layers for their guards."""
     reviewed = plan()
@@ -149,8 +110,6 @@ def project(raw, name, restore):
         raw = workflow_policy().project_to_historical(raw, name)
         raw = mac_raw_modifier_workflow(raw, name, restore=True)
     text, newline = canonical(raw)
-    if restore:
-        text = elevation_view(text, name, restore=True)
     changes = reviewed['files'][name]['changes']
     positions = []
     for change in changes:
@@ -172,8 +131,6 @@ def project(raw, name, restore):
     if restore and any(token in text for token in
             (*OWNERS, 'receiver_native_only', '  receiver-native:')):
         raise ValueError('Additional unreviewed receiver integration invocation: ' + name)
-    if not restore:
-        text = elevation_view(text, name, restore=False)
     result = text.replace('\n', newline).encode()
     if workflow and not restore:
         result = workflow_policy().compose_manual(result, name)
@@ -245,9 +202,7 @@ def _outer_previous(root, names, private=False):
 def before_receiver(root):
     """Strictly invert only later sink owners for the receiver's own controls."""
     root = Path(root).absolute()
-    with contextlib.ExitStack() as stack:
-        base, copied = stack.enter_context(_without_elevation(root))
-        stage, private = stack.enter_context(_outer_previous(base, tuple(reversed(LATER_OWNERS)), copied))
+    with _outer_previous(root, tuple(reversed(LATER_OWNERS))) as (stage, private):
         uinput = owner(OWNERS[2])
         if uinput.inspect(stage)[3] != 'after':
             yield stage
@@ -298,33 +253,13 @@ def _device_previous(root, private=False):
             yield prior
 
 
-def elevation_owner():
-    spec = importlib.util.spec_from_file_location(
-        'mixel_receiver_elevation_layer', HERE / 'patch-support-elevation.py')
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-@contextlib.contextmanager
-def _without_elevation(root):
-    """The elevation layer sits above every receiver owner: step under it first."""
-    layer = elevation_owner()
-    if layer.is_current(root):
-        with layer.previous(root) as stage:
-            yield stage, True
-    else:
-        yield root, False
-
-
 @contextlib.contextmanager
 def previous(root):
     """Remove exact terminal layers, latest owner first, in one private copy."""
     root = Path(root).absolute()
-    with _without_elevation(root) as (base, copied):
-        with _outer_previous(base, tuple(reversed(LATER_OWNERS)), copied) as (stage, private):
-            with _device_previous(stage, private) as prior:
-                yield prior
+    with _outer_previous(root, tuple(reversed(LATER_OWNERS))) as (stage, private):
+        with _device_previous(stage, private) as prior:
+            yield prior
 
 
 def prior_owner():
@@ -347,8 +282,6 @@ def restore_private(root):
     # can change. A later malformed inner owner cannot leave an outer inverse.
     with previous(root):
         pass
-    if elevation_owner().is_current(root):
-        elevation_owner().restore_in_place(root)
     for name in reversed(OWNERS[2:]):
         layer = owner(name)
         layer.apply(root, restore=True, check=True)

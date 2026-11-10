@@ -33,11 +33,6 @@ fi
 # shellcheck source=/dev/null
 source "$BRANDING/branding.env"
 
-# The Windows elevation layer is the outermost one. Take it out first so every
-# earlier owner sees its own output on a repeated branding pass.
-python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-elevation.py" --restore --check "$RDREPO"
-python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-elevation.py" --restore --guarded "$RDREPO"
-
 # Validate the disjoint lifecycle pair without changing any source before the
 # complete prior-owner refusal gates. Reapplication at the end is idempotent.
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-file-dialog-lifecycle.py" --root "$RDREPO" --check
@@ -1182,9 +1177,3 @@ python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-receiver-sas.py" --root "$
 python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-receiver-custodian.py" --root "$RDREPO"
 
 echo "✓ Branding applied — product identity is $APP_NAME only."
-
-# Quick Support elevation: the session outlives the helper switch and the
-# consented SYSTEM helper is accepted. Applied after every receiver layer.
-python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-elevation.py" --check "$RDREPO"
-python3 "$(dirname "${BASH_SOURCE[0]}")/patch-support-elevation.py" "$RDREPO"
-echo "✓ Windows elevation layer applied."

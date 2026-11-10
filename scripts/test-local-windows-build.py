@@ -188,7 +188,7 @@ class Controls(unittest.TestCase):
         self.assertIn('build/retained-input.dat',{row['path'] for row in clang['inputs']})
         self.native_clang.assert_called_once_with(self.libclang)
         for flag in ('nativeRuntimeQualified','signingQualified','publish'):self.assertIs(result[flag],False)
-        sequence=['apply-branding','shared-bridge-rdev-profile','windows-compiler-integration','fetch-locked','shipping-pub-get','check-entire-app','build-entire-app','analyze-entire-flutter','compiled-support-guard','compiled-branding','prepare-unsigned-payload','package-unsigned-outer','verify-outer-manifest']
+        sequence=['apply-branding','shared-bridge-rdev-profile','windows-compiler-integration','elevation-layer','fetch-locked','shipping-pub-get','check-entire-app','build-entire-app','analyze-entire-flutter','compiled-support-guard','compiled-branding','prepare-unsigned-payload','package-unsigned-outer','verify-outer-manifest']
         self.assertEqual([self.labels.index(x) for x in sequence],sorted(self.labels.index(x) for x in sequence))
         build=next(argv for label,argv,_ in self.calls if label=='build-entire-app')
         self.assertEqual(build[1:],['build.py','--flutter','--skip-portable-pack'])

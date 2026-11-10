@@ -29,18 +29,36 @@ Status 2026-11-10: fixed in the Windows core by `scripts/patch-support-elevation
   during a switch is refused before it can reset the shared memory.
 - `connection.rs`: calls `rebind_tick`. `core_main.rs`: exit code 1 when consent fails.
 
-## In the pipeline
-`apply-branding.sh` takes the layer out first (`--restore --check`, then `--restore --guarded`) and
-applies it last, after every receiver layer. `--guarded` proves on a private copy that the earlier
-owners' refusal gates accept the tree before anything is written, so a later refusal still leaves
-the source untouched. `receiver_input_integration_projection.py` sees through the two invocation
-blocks (`elevation_view`) and its private-copy helpers step under the layer first.
-Checked on 2026-11-10: pipeline from a clean 1.4.6 checkout and on a repeated pass (identical
-output), `test-support-elevation.py`, `test-branding.py` (33 checks, with `RDREPO` set),
-`test-input-lifecycle-integration-projection.py`, `test-receiver-input-integration.py`,
-`test-workflow-logical-views.py`, `test-support-receiver-input.py`, `test-release-pipeline.py`.
-Not run here: the native Windows build driver (`scripts/local/build-windows.py`, needs win-build);
-its next run will include the layer through `apply-branding.sh` and record new source receipts.
+## In the build
+`scripts/local/build-windows.py` applies the layer as its last source step (`elevation-layer`:
+`--check`, then apply), directly after `windows-compiler-integration` and before `fetch-locked`.
+This is the order the published build was made in.
+
+It is deliberately NOT in `apply-branding.sh` (tried in bbb9a0d, taken out again):
+- `patch-windows-compiler-integration.py` pins the complete branded files (`beforeSha256`) of three
+  files the layer changes and would refuse;
+- the shared Mac bridge capsule binds the whole Rust source closure, and the native fixtures in the
+  CI workflow check the final branded files (`--source-root "$RDREPO"`);
+- the receiver projections pin `apply-branding.sh` itself.
+So the shared pipeline, the projections, the bridge and the fixtures keep their pinned source; only
+the Windows build adds the layer on top. Mac and Linux builds do not carry it and do not need it
+(the change is local to the Windows host; controllers are unaffected).
+The break-glass GitHub workflow's Windows job does not apply the layer: a build made there has no
+working elevation. The script keeps `--restore` (exact inverse) and `--restore --guarded`.
+
+Checked on 2026-11-10:
+- win-build's Python, final script, on the shipped core's source (`_scratch\diag-r2\b\rustdesk`):
+  `--check` ok, apply gives six files with the same SHA-256 as the source compiled for
+  `1.4.6-support.elevate.1`; `--restore` gives the original six files back.
+- Mac: `apply-branding.sh` at this branch on a clean 1.4.6 checkout, then the compiler profile for the
+  three shared files, then the layer: same six files (line endings aside).
+- `test-support-elevation.py`, `test-local-windows-build.py` (Python 3.11, step order pinned),
+  `test-windows-compiler-integration.py`, the three receiver/workflow projection tests,
+  `test-release-pipeline.py`; with bbb9a0d's wiring also `test-branding.py` (33 checks).
+Not run: the driver itself on win-build. It needs 80 GiB free (68 available on 2026-11-10), the
+repository checkout there at this commit, and a bridge capsule from a Mac build of this commit; its
+last full attempt there (w10, 2026-11-04) stopped at `check-entire-app`, later builds were
+continuations of the compiled core.
 `scripts/patch-support-no-elevate.py` is no longer needed and is not called.
 
 ## Known limits
