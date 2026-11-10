@@ -9,7 +9,7 @@ interface Window {
   }
   const invoke = window.__TAURI__.core.invoke;
   type CompanyAdministration = {company_id: string; company_name: string};
-  type AccountStatus = {phase: string; message: string; account: {profile: string; organization: string | null; staff: boolean; display_name?: string | null; personal?: boolean; companies?: CompanyAdministration[]} | null; factors: {id: string; friendly_name: string | null}[]};
+  type AccountStatus = {phase: string; message: string; account: {has_company?: boolean; has_personal?: boolean; profile: string; organization: string | null; staff: boolean; display_name?: string | null; personal?: boolean; companies?: CompanyAdministration[]} | null; factors: {id: string; friendly_name: string | null}[]};
   const accountStatus = element<HTMLParagraphElement>('account-status');
   const accountError = element<HTMLParagraphElement>('account-error');
   const signIn = element<HTMLButtonElement>('account-sign-in');
@@ -18,6 +18,13 @@ interface Window {
   const browserUrl = element<HTMLInputElement>('account-browser-url');
   const registerMixel = element<HTMLButtonElement>('account-register-mixel');
   const deviceSettings = element<HTMLAnchorElement>('account-device-settings');
+  const workspace = element<HTMLDivElement>('account-workspace');
+  const workspaceLabel = element<HTMLElement>('account-workspace-label');
+  const workspaceDetail = element<HTMLParagraphElement>('account-workspace-detail');
+  const workspaceToggle = element<HTMLButtonElement>('account-workspace-toggle');
+  const personalForm = element<HTMLFormElement>('account-personal-form');
+  const personalName = element<HTMLInputElement>('account-personal-name');
+  const personalCreate = element<HTMLButtonElement>('account-personal-create');
   const manageRemote = element<HTMLButtonElement>('account-remote-management');
   const profileSetup = element<HTMLFormElement>('account-profile-setup');
   const displayName = element<HTMLInputElement>('account-display-name');
@@ -82,6 +89,13 @@ interface Window {
     deviceSettings.hidden = phase !== 'authenticated' || !(account?.account?.personal || account?.account?.staff);
     deviceSettings.textContent = account?.account?.staff ? 'Set up this computer' : 'Register a device';
     saveProfile.disabled = displayName.disabled = accountBusy;
+    const info = phase === 'authenticated' ? account?.account : undefined;
+    workspace.hidden = !(info?.has_company && info?.has_personal);
+    personalForm.hidden = !(info?.has_company && !info?.has_personal);
+    workspaceLabel.textContent = info?.personal ? 'Using your personal devices' : 'Using your company devices';
+    workspaceDetail.textContent = info?.personal ? 'Connection IDs and devices of your personal space.' : 'Devices your company manages. Your personal devices are one switch away.';
+    workspaceToggle.textContent = info?.personal ? 'Switch to company devices' : 'Switch to personal devices';
+    workspaceToggle.disabled = personalCreate.disabled = personalName.disabled = accountBusy;
     registerMixel.disabled = signIn.disabled;
     if (phase !== 'profile_setup') displayName.value = '';
     verify.disabled = accountBusy;
@@ -136,6 +150,13 @@ interface Window {
       return;
     }
     void accountAction('account_sign_in', {showLink: true});
+  });
+  workspaceToggle.addEventListener('click', () => { void accountAction('account_workspace', {personal: !account?.account?.personal}); });
+  personalForm.addEventListener('submit', event => {
+    event.preventDefault();
+    const name = personalName.value.trim();
+    if (!name || accountBusy) return;
+    void accountAction('account_create_personal', {name}).then(() => { personalName.value = ''; });
   });
   signOut.addEventListener('click', () => { code.value = ''; account=undefined; void accountAction('account_cancel'); });
   mfa.addEventListener('submit', event => {

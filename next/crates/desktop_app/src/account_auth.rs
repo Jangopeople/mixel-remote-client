@@ -62,6 +62,8 @@ struct User {
 }
 #[derive(Clone, Serialize)]
 pub struct Account {
+    pub has_company: bool,
+    pub has_personal: bool,
     pub profile: Uuid,
     pub organization: Option<Uuid>,
     pub staff: bool,
@@ -93,6 +95,7 @@ struct Inner {
     task: Option<JoinHandle<()>>,
     protected: Vec<Weak<AtomicBool>>,
     verification_attempts: u8,
+    personal_mode: bool,
 }
 #[derive(Clone)]
 pub struct AccountAuth {
@@ -125,6 +128,7 @@ impl Default for AccountAuth {
                 task: None,
                 protected: Vec::new(),
                 verification_attempts: 0,
+                personal_mode: false,
             })),
             operation: Arc::new(Mutex::new(())),
         }
@@ -520,6 +524,46 @@ impl AccountAuth {
         expected: Option<Uuid>,
     ) -> Result<(), String> {
         let (user, principal, setup) = client.inspect(&tokens).await?;
+        // One Mixel ID can have a company scope (team member or organization
+        // member) and a personal Remote account. The chosen workspace decides
+        // which one this app uses; the other stays available to switch to.
+        let personal_mode = self.inner.lock().await.personal_mode;
+        let (principal, has_company, has_personal) = match principal {
+            Some(found) if found.is_personal() => {
+                let company = client
+                    .ism
+                    .authenticate_organization(&tokens.access_token.0)
+                    .await
+                    .ok()
+                    .filter(|scope| !scope.is_personal());
+                let has_company = company.is_some();
+                let needs_code = company.is_none()
+                    && !personal_mode
+                    && user
+                        .factors
+                        .iter()
+                        .any(|factor| factor.status == "verified" && factor.factor_type == "totp")
+                    && tokens
+                        .access_token
+                        .0
+                        .split('.')
+                        .nth(1)
+                        .and_then(|part| URL_SAFE_NO_PAD.decode(part).ok())
+                        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+                        .and_then(|claims| claims.get("aal").and_then(|v| v.as_str()).map(str::to_owned))
+                        .as_deref()
+                        == Some("aal1");
+                if needs_code {
+                    (None, false, true)
+                } else if personal_mode || company.is_none() {
+                    (Some(found), has_company, true)
+                } else {
+                    (company, true, true)
+                }
+            }
+            Some(found) => (Some(found), true, false),
+            None => (None, false, false),
+        };
         let display_name = if principal.as_ref().is_some_and(Principal::is_personal) {
             client
                 .ism
@@ -580,6 +624,8 @@ impl AccountAuth {
                 phase: "authenticated".into(),
                 message: "Mixel account verified".into(),
                 account: Some(Account {
+                    has_company,
+                    has_personal,
                     profile: principal.user,
                     organization: principal.tenant,
                     staff: principal.staff,
@@ -716,6 +762,78 @@ impl AccountAuth {
             return Err("Remote account could not be verified; sign in again".into());
         }
         Ok(())
+    }
+
+    /// Switches between the company and the personal workspace of the same
+    /// Mixel ID. Everything bound to the previous scope is cancelled.
+    pub async fn set_workspace(&self, personal: bool) -> Result<(), String> {
+        let _operation = self.operation.lock().await;
+        let (client, tokens, generation, subject) = {
+            let mut inner = self.inner.lock().await;
+            let account = inner
+                .status
+                .account
+                .as_ref()
+                .filter(|_| inner.status.phase == "authenticated")
+                .ok_or("Sign in before switching workspace")?;
+            if (personal && !account.has_personal) || (!personal && !account.has_company) {
+                return Err("This workspace is not available for your Mixel ID".into());
+            }
+            if account.personal == personal {
+                return Ok(());
+            }
+            inner.personal_mode = personal;
+            for weak in inner.protected.drain(..) {
+                if let Some(flag) = weak.upgrade() {
+                    flag.store(true, Ordering::Release);
+                }
+            }
+            inner.principal = None;
+            (
+                inner.client.clone().ok_or("Identity service unavailable")?,
+                inner.tokens.clone().ok_or("Sign-in expired")?,
+                inner.generation,
+                inner.subject.ok_or("Sign-in identity unavailable")?,
+            )
+        };
+        self.apply(generation, client, tokens, Some(subject)).await
+    }
+    /// Adds a personal Remote account to a Mixel ID that already has a
+    /// company scope, and switches to it.
+    pub async fn create_personal_space(&self, display_name: String) -> Result<(), String> {
+        let display_name = display_name.trim().to_owned();
+        if !(1..=80).contains(&display_name.chars().count())
+            || display_name.chars().any(char::is_control)
+        {
+            return Err("Enter a display name between 1 and 80 characters".into());
+        }
+        {
+            let _operation = self.operation.lock().await;
+            let (client, tokens) = {
+                let inner = self.inner.lock().await;
+                if inner.status.phase != "authenticated"
+                    || inner.status.account.as_ref().is_none_or(|account| account.has_personal)
+                {
+                    return Err("A personal space is already available for this Mixel ID".into());
+                }
+                (
+                    inner.client.clone().ok_or("Identity service unavailable")?,
+                    inner.tokens.clone().ok_or("Sign-in expired")?,
+                )
+            };
+            let _: Uuid = client
+                .request(
+                    "/rest/v1/rpc/remote_create_personal_account",
+                    Some(serde_json::json!({"requested_name": display_name})),
+                    Some(&tokens.access_token.0),
+                )
+                .await?;
+            let mut inner = self.inner.lock().await;
+            if let Some(account) = inner.status.account.as_mut() {
+                account.has_personal = true;
+            }
+        }
+        self.set_workspace(true).await
     }
 
     pub async fn verify_totp(&self, factor: Uuid, code: Zeroizing<String>) -> Result<(), String> {

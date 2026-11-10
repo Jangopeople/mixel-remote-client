@@ -781,6 +781,34 @@ async fn account_setup(
 
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 #[tauri::command]
+async fn account_workspace(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, account_auth::AccountAuth>,
+    remote: tauri::State<'_, remote_session::RemoteSession>,
+    personal: bool,
+) -> Result<(), String> {
+    main_window(&window)?;
+    if !matches!(remote.status().await.phase.as_str(), "offline" | "error") {
+        return Err("Go offline before switching between company and personal devices".into());
+    }
+    state.set_workspace(personal).await
+}
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[tauri::command]
+async fn account_create_personal(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, account_auth::AccountAuth>,
+    remote: tauri::State<'_, remote_session::RemoteSession>,
+    name: String,
+) -> Result<(), String> {
+    main_window(&window)?;
+    if !matches!(remote.status().await.phase.as_str(), "offline" | "error") {
+        return Err("Go offline before adding a personal space".into());
+    }
+    state.create_personal_space(name).await
+}
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[tauri::command]
 async fn open_remote_management(window: tauri::WebviewWindow) -> Result<(), String> {
     main_window(&window)?;
     system_browser::open("https://admin.mixel.ch/remote").await
@@ -863,7 +891,7 @@ async fn remote_devices(
     let credential = auth.credential(None).await?;
     let page = credential
         .ism
-        .directory(&credential.token, after, &search)
+        .directory_scoped(&credential.token, credential.principal.is_personal(), after, &search)
         .await
         .map_err(|_| "The enrolled device directory is unavailable for this account")?;
     let fresh = auth.credential(None).await?;
@@ -1607,6 +1635,8 @@ fn main() {
             open_company_settings,
             account_verify,
             account_setup,
+            account_workspace,
+            account_create_personal,
             open_remote_management,
             open_mixel_registration,
             remote_signup_available,
@@ -1670,6 +1700,8 @@ fn main() {
             account_sign_in,
             open_company_settings,
             account_setup,
+            account_workspace,
+            account_create_personal,
             open_remote_management,
             open_mixel_registration,
             remote_signup_available,

@@ -167,7 +167,7 @@ impl IsmAuth {
         {
             return Err(AuthError);
         }
-        if !self.authenticate(token).await?.staff {
+        if !self.authenticate_scope(token, false).await?.staff {
             return Err(AuthError);
         }
         let hex: String = key
@@ -214,7 +214,7 @@ impl IsmAuth {
         &self,
         token: &str,
     ) -> Result<Vec<EnrollmentCompany>, AuthError> {
-        if !self.authenticate(token).await?.staff {
+        if !self.authenticate_scope(token, false).await?.staff {
             return Err(AuthError);
         }
         let companies: Vec<EnrollmentCompany> = self
@@ -247,7 +247,7 @@ impl IsmAuth {
             || name.chars().count() > 80
             || name.chars().any(char::is_control)
             || !matches!(os, "macos" | "windows" | "linux")
-            || !self.authenticate(token).await?.staff
+            || !self.authenticate_scope(token, false).await?.staff
         {
             return Err(AuthError);
         }
@@ -286,7 +286,7 @@ impl IsmAuth {
             connection_id: u32,
             devices: Named,
         }
-        if !self.authenticate(token).await?.staff {
+        if !self.authenticate_scope(token, false).await?.staff {
             return Err(AuthError);
         }
         let hex: String = key
@@ -328,7 +328,7 @@ impl IsmAuth {
         {
             return Err(AuthError);
         }
-        if !self.authenticate(token).await?.staff {
+        if !self.authenticate_scope(token, false).await?.staff {
             return Err(AuthError);
         }
         let mut path = self.base.join("/rest/v1/devices").map_err(|_| AuthError)?;
@@ -479,13 +479,25 @@ impl IsmAuth {
         after: Option<u32>,
         search: &str,
     ) -> Result<DevicePage, AuthError> {
+        let personal = self.authenticate(token).await?.is_personal();
+        self.directory_scoped(token, personal, after, search).await
+    }
+    /// Device directory of one workspace: the personal space, or the
+    /// company scope of the same Mixel ID.
+    pub async fn directory_scoped(
+        &self,
+        token: &str,
+        personal: bool,
+        after: Option<u32>,
+        search: &str,
+    ) -> Result<DevicePage, AuthError> {
         if after.is_some_and(|value| !(100_000_000..=999_999_999).contains(&value))
             || search.len() > 160
             || search.chars().any(char::is_control)
         {
             return Err(AuthError);
         }
-        if self.authenticate(token).await?.is_personal() {
+        if personal {
             let query = search.to_lowercase();
             let devices = self
                 .personal_devices(token)
@@ -579,8 +591,11 @@ impl IsmAuth {
         token: &str,
         key: &ed25519_dalek::VerifyingKey,
     ) -> Result<Uuid, AuthError> {
-        if self.authenticate(token).await?.is_personal() {
-            return self
+        // A Mixel ID with both a personal space and a company scope keeps a
+        // separate key per scope; look in the personal devices first and fall
+        // back to the company enrollment of this key.
+        if self.authenticate(token).await?.is_personal()
+            && let Some(device) = self
                 .personal_devices(token)
                 .await?
                 .into_iter()
@@ -591,7 +606,8 @@ impl IsmAuth {
                         .is_ok_and(|saved| saved == key)
                 })
                 .map(|row| row.enrollment.device_id)
-                .ok_or(AuthError);
+        {
+            return Ok(device);
         }
         let hex: String = key
             .as_bytes()
@@ -621,15 +637,14 @@ impl IsmAuth {
         if !(100_000_000..=999_999_999).contains(&connection) {
             return Err(AuthError);
         }
-        if self.authenticate(token).await?.is_personal() {
-            return self
+        if self.authenticate(token).await?.is_personal()
+            && let Some(row) = self
                 .personal_devices(token)
                 .await?
                 .into_iter()
                 .find(|row| row.enrollment.connection_id == connection)
-                .ok_or(AuthError)?
-                .enrollment
-                .key();
+        {
+            return row.enrollment.key();
         }
         let rows: Vec<EnrollmentRow> = self.get(&format!("/rest/v1/remote_device_enrollments?connection_id=eq.{connection}&select=device_id,connection_id,generation,public_key,revoked_at&limit=2"), token).await?;
         let [row] = rows.as_slice() else {
@@ -791,6 +806,11 @@ impl IsmAuth {
     }
     pub async fn authenticate(&self, token: &str) -> Result<Principal, AuthError> {
         self.authenticate_scope(token, true).await
+    }
+    /// The company (team or organization) scope of this bearer, ignoring any
+    /// personal Remote account. Used when one Mixel ID has both.
+    pub async fn authenticate_organization(&self, token: &str) -> Result<Principal, AuthError> {
+        self.authenticate_scope(token, false).await
     }
 
     async fn authenticate_scope(
