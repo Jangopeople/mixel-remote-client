@@ -1025,7 +1025,7 @@ async fn enroll_this_device(
     let enrolled=credential.ism.enroll(&credential.token,device,identity.public_key()?,&cancelled).await.map_err(|_|"Enrollment could not be confirmed. Existing keys are never replaced; check the selected device record and refresh its enrollment status.")?;
     let fresh = auth.credential(None).await?;
     if fresh.principal.user != credential.principal.user || !fresh.principal.staff {
-        return Err("The account changed; refresh this Mac's enrollment status".into());
+        return Err("The account changed; refresh this computer's enrollment status".into());
     }
     Ok(enrolled.connection_id)
 }

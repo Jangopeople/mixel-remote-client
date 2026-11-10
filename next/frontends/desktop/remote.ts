@@ -457,7 +457,7 @@
   for (const [button,push] of [[pushClipboard,true],[pullClipboard,false]] as const) button.addEventListener('click', async () => {
     if (!current?.session || busy || stopping || locallyStopped()) return;
     const operation=++operationVersion,session=current.session; ++readVersion; busy=true; clipboardResult.textContent='Transferring plain text…'; error.textContent=''; render();
-    try { await invoke('remote_clipboard',{session,push}); if (operation===operationVersion&&current?.session===session) clipboardResult.textContent=push?'Remote clipboard updated.':'Your Mac clipboard updated.'; }
+    try { await invoke('remote_clipboard',{session,push}); if (operation===operationVersion&&current?.session===session) clipboardResult.textContent=push?'Remote clipboard updated.':'Your clipboard was updated.'; }
     catch (value) { if(operation===operationVersion)clipboardResult.textContent=String(value); }
     finally { if(operation===operationVersion){busy=false; await read(true); render();} }
   });
