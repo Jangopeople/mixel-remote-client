@@ -10,6 +10,32 @@
   const personalName = element<HTMLInputElement>('personal-device-name');
   const personalRegister = element<HTMLButtonElement>('personal-device-register');
   const personalStatus = element<HTMLParagraphElement>('personal-device-status');
+  const current=element<HTMLParagraphElement>('enrollment-current'), addBox=element<HTMLDetailsElement>('enrollment-add'), company=element<HTMLSelectElement>('enrollment-company'), newName=element<HTMLInputElement>('enrollment-new-name'), addSubmit=element<HTMLButtonElement>('enrollment-add-submit'), addStatus=element<HTMLParagraphElement>('enrollment-add-status');
+  type Company={client_id:string;client_name:string};type Current={device:string;connection_id:number;name:string}|null;
+  let companiesLoaded=false;
+  const formatId=(id:number)=>String(id).replace(/(\d{3})(\d{3})(\d{3})/,'$1 $2 $3');
+  async function refreshCurrent():Promise<void>{
+    if(!staff){current.hidden=true;return;}
+    const request=version;
+    try{
+      const value=await invoke<Current>('enrollment_current');
+      if(version!==request || !staff)return;
+      current.hidden=!value;
+      if(value)current.textContent=`This computer is enrolled as ${value.name} · Connection ID ${formatId(value.connection_id)}. Open Remote control and choose “Make this computer available”.`;
+    }catch{current.hidden=true;}
+  }
+  async function loadCompanies():Promise<void>{
+    if(!staff || companiesLoaded)return;
+    const request=version;
+    try{
+      const list=await invoke<Company[]>('enrollment_companies');
+      if(version!==request || !staff)return;
+      company.replaceChildren();
+      for(const item of list){const option=document.createElement('option');option.value=item.client_id;option.textContent=item.client_name;company.appendChild(option);}
+      companiesLoaded=true;addStatus.textContent=list.length?'':'No company is linked for Remote devices yet. Link the company in Mixel admin first.';
+    }catch(error){if(version===request)addStatus.textContent=String(error);}
+    finally{render();}
+  }
   let personal = false;
   let key='', staff=false, busy=false, version=0, accountVersion=0, remoteVersion=0, offline=true, cursor:string|null=null, currentSearch='', devices:Device[]=[];
   function render():void{
@@ -19,13 +45,15 @@
     find.disabled=search.disabled=choice.disabled=confirm.disabled=!staff || busy || !offline;
     more.hidden=cursor===null || devices.length>=200;more.disabled=find.disabled;
     enroll.disabled=find.disabled || !confirm.checked || !devices.some(device=>device.id===choice.value);
-    help.textContent=personal ? (offline ? 'Register this computer under your Remote account to get a permanent connection ID.' : 'Go offline before changing this computer’s registration.') : !offline?'Go offline before changing this computer’s enrollment.':staff?'Choose the existing Mixel ISM record for this computer. Its protected identity will be created or reused; existing enrollment keys are never replaced.':'Sign in with your Mixel ID to register a device, or ask your company administrator for access to managed devices.';
+    company.disabled=newName.disabled=find.disabled;
+    addSubmit.disabled=find.disabled || !company.value || !newName.value.trim();
+    help.textContent=personal ? (offline ? 'Register this computer under your Remote account to get a permanent connection ID.' : 'Go offline before changing this computer’s registration.') : !offline?'Go offline before changing this computer’s enrollment.':staff?'Find this computer by name and enroll it, or add it below if it is not listed yet. Its protected identity is created or reused; an existing enrollment key is never replaced.':'Sign in with your Mixel ID to register a device, or ask your company administrator for access to managed devices.';
   }
   function clear():void{devices=[];cursor=null;choice.replaceChildren();confirm.checked=false;status.textContent='';}
   function account(value:Account):void{
     const next=value.phase==='authenticated' && (value.account?.staff || value.account?.personal) ? JSON.stringify(value.account) : '';
     if(key===next)return;
-    ++version;key=next;staff=!!next && !!value.account?.staff;personal=!!next && !!value.account?.personal;busy=false;clear();search.value='';personalName.value='';personalStatus.textContent='';render();
+    ++version;key=next;staff=!!next && !!value.account?.staff;personal=!!next && !!value.account?.personal;busy=false;clear();search.value='';personalName.value='';personalStatus.textContent='';companiesLoaded=false;company.replaceChildren();newName.value='';addStatus.textContent='';current.hidden=true;render();void refreshCurrent();if(staff&&addBox.open)void loadCompanies();
   }
   async function load(reset:boolean):Promise<void>{
     if(!staff || busy || !offline || (!reset && (cursor===null || devices.length>=200)))return;
@@ -51,8 +79,25 @@
       if(version!==request || !staff)return;
       if(!Number.isInteger(id) || id<100000000 || id>999999999)throw Error('Invalid enrolled connection ID');
       status.textContent=`This computer is enrolled as ${device.name}. Connection ID ${String(id).replace(/(\d{3})(\d{3})(\d{3})/,'$1 $2 $3')}. Return to Remote control to connect.`;
-      confirm.checked=false;document.dispatchEvent(new CustomEvent('mixel-device-enrolled'));
+      confirm.checked=false;document.dispatchEvent(new CustomEvent('mixel-device-enrolled'));void refreshCurrent();
     }catch(error){if(version===request)status.textContent=String(error);}
+    finally{if(version===request){busy=false;render();}}
+  });
+  addBox.addEventListener('toggle',()=>{if(addBox.open)void loadCompanies();});
+  newName.addEventListener('input',render);company.addEventListener('change',render);
+  addSubmit.addEventListener('click',async()=>{
+    const name=newName.value.trim();
+    if(!staff || busy || !offline || !company.value || !name)return;
+    const request=++version;busy=true;render();addStatus.textContent='Adding this computer and saving its protected identity…';
+    try{
+      const device=await invoke<string>('add_this_device',{company:company.value,name});
+      if(version!==request || !staff)return;
+      const id=await invoke<number>('enroll_this_device',{device,confirmed:true});
+      if(version!==request || !staff)return;
+      if(!Number.isInteger(id) || id<100000000 || id>999999999)throw Error('Invalid enrolled connection ID');
+      addStatus.textContent=`This computer is enrolled as ${name}. Connection ID ${formatId(id)}. Open Remote control to connect.`;
+      newName.value='';document.dispatchEvent(new CustomEvent('mixel-device-enrolled'));void refreshCurrent();
+    }catch(error){if(version===request)addStatus.textContent=String(error);}
     finally{if(version===request){busy=false;render();}}
   });
   personalForm.addEventListener('submit', async event => {

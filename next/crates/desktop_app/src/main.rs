@@ -901,6 +901,75 @@ async fn enrollment_devices(
 }
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 #[tauri::command]
+async fn enrollment_companies(
+    window: tauri::WebviewWindow,
+    auth: tauri::State<'_, account_auth::AccountAuth>,
+) -> Result<Vec<signaling_server::auth::EnrollmentCompany>, String> {
+    main_window(&window)?;
+    let credential = auth.credential(None).await?;
+    if !credential.principal.staff {
+        return Err("Adding a computer requires an MFA-verified Mixel team account".into());
+    }
+    credential
+        .ism
+        .enrollment_companies(&credential.token)
+        .await
+        .map_err(|_| "Companies are unavailable for this account".into())
+}
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[tauri::command]
+async fn add_this_device(
+    window: tauri::WebviewWindow,
+    auth: tauri::State<'_, account_auth::AccountAuth>,
+    company: uuid::Uuid,
+    name: String,
+) -> Result<uuid::Uuid, String> {
+    main_window(&window)?;
+    let credential = auth.credential(None).await?;
+    if !credential.principal.staff {
+        return Err("Adding a computer requires an MFA-verified Mixel team account".into());
+    }
+    let os = if cfg!(target_os = "macos") {
+        "macos"
+    } else if cfg!(target_os = "windows") {
+        "windows"
+    } else {
+        "linux"
+    };
+    credential
+        .ism
+        .add_device(&credential.token, company, &name, os)
+        .await
+        .map_err(|_| "This computer could not be added. A computer with this name may already be enrolled for the company; choose another name or pick it from the list.".into())
+}
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[tauri::command]
+async fn enrollment_current(
+    window: tauri::WebviewWindow,
+    auth: tauri::State<'_, account_auth::AccountAuth>,
+    identity: tauri::State<'_, Arc<device_identity::IdentityState>>,
+) -> Result<Option<signaling_server::auth::CurrentEnrollment>, String> {
+    main_window(&window)?;
+    let credential = auth.credential(None).await?;
+    if !credential.principal.staff {
+        return Ok(None);
+    }
+    let saved = identity.inner().clone();
+    if tauri::async_runtime::spawn_blocking(move || saved.open(false))
+        .await
+        .map_err(|_| "Device identity storage is unavailable")?
+        .is_err()
+    {
+        return Ok(None);
+    }
+    credential
+        .ism
+        .enrollment_of_key(&credential.token, &identity.public_key()?)
+        .await
+        .map_err(|_| "This computer’s enrollment status is unavailable".into())
+}
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[tauri::command]
 async fn enroll_this_device(
     window: tauri::WebviewWindow,
     auth: tauri::State<'_, account_auth::AccountAuth>,
@@ -1547,6 +1616,9 @@ fn main() {
             copy_connection_id,
             remote_devices,
             enrollment_devices,
+            enrollment_companies,
+            add_this_device,
+            enrollment_current,
             enroll_this_device,
             remote_register,
             remote_disconnect,
@@ -1605,6 +1677,9 @@ fn main() {
             account_cancel,
             remote_devices,
             enrollment_devices,
+            enrollment_companies,
+            add_this_device,
+            enrollment_current,
             register_personal_device,
             enroll_this_device,
             remote_status,

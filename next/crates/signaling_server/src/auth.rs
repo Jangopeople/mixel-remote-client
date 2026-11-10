@@ -96,6 +96,17 @@ pub struct InventoryDevice {
     pub name: String,
     pub os: String,
 }
+#[derive(Serialize, Deserialize)]
+pub struct EnrollmentCompany {
+    pub client_id: Uuid,
+    pub client_name: String,
+}
+#[derive(Serialize)]
+pub struct CurrentEnrollment {
+    pub device: Uuid,
+    pub connection_id: u32,
+    pub name: String,
+}
 #[derive(Serialize)]
 pub struct RegisteredDevice {
     pub device: Uuid,
@@ -196,6 +207,114 @@ impl IsmAuth {
             return Err(AuthError);
         }
         Ok(checked)
+    }
+    /// Companies an MFA-verified team member may add a computer to. Only
+    /// companies linked to a Mixel admin company are returned by the RPC.
+    pub async fn enrollment_companies(
+        &self,
+        token: &str,
+    ) -> Result<Vec<EnrollmentCompany>, AuthError> {
+        if !self.authenticate(token).await?.staff {
+            return Err(AuthError);
+        }
+        let companies: Vec<EnrollmentCompany> = self
+            .get("/rest/v1/rpc/remote_enrollment_companies", token)
+            .await?;
+        if companies.len() > 200
+            || companies.iter().any(|company| {
+                company.client_id.is_nil()
+                    || company.client_name.is_empty()
+                    || company.client_name.len() > 1024
+                    || company.client_name.chars().any(char::is_control)
+            })
+        {
+            return Err(AuthError);
+        }
+        Ok(companies)
+    }
+    /// Adds (or reuses a not yet enrolled) device record for the computer
+    /// being set up. Enrollment itself stays a separate, key-bound step.
+    pub async fn add_device(
+        &self,
+        token: &str,
+        client: Uuid,
+        name: &str,
+        os: &str,
+    ) -> Result<Uuid, AuthError> {
+        let name = name.trim();
+        if client.is_nil()
+            || name.is_empty()
+            || name.chars().count() > 80
+            || name.chars().any(char::is_control)
+            || !matches!(os, "macos" | "windows" | "linux")
+            || !self.authenticate(token).await?.staff
+        {
+            return Err(AuthError);
+        }
+        let response = self
+            .client
+            .post(
+                self.base
+                    .join("/rest/v1/rpc/remote_add_device")
+                    .map_err(|_| AuthError)?,
+            )
+            .header("apikey", &self.api_key)
+            .bearer_auth(token)
+            .json(&serde_json::json!({"target_client":client,"device_name":name,"device_os":os}))
+            .send()
+            .await
+            .map_err(|_| AuthError)?;
+        let device: Uuid = Self::decode_response(response).await?;
+        if device.is_nil() {
+            return Err(AuthError);
+        }
+        Ok(device)
+    }
+    /// The active enrollment that holds this computer's key, if any.
+    pub async fn enrollment_of_key(
+        &self,
+        token: &str,
+        key: &ed25519_dalek::VerifyingKey,
+    ) -> Result<Option<CurrentEnrollment>, AuthError> {
+        #[derive(Deserialize)]
+        struct Named {
+            name: String,
+        }
+        #[derive(Deserialize)]
+        struct Row {
+            device_id: Uuid,
+            connection_id: u32,
+            devices: Named,
+        }
+        if !self.authenticate(token).await?.staff {
+            return Err(AuthError);
+        }
+        let hex: String = key
+            .as_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        let rows: Vec<Row> = self
+            .get(
+                &format!("/rest/v1/remote_device_enrollments?public_key=eq.%5Cx{hex}&revoked_at=is.null&select=device_id,connection_id,devices(name)&limit=2"),
+                token,
+            )
+            .await?;
+        let [row] = rows.as_slice() else {
+            return if rows.is_empty() { Ok(None) } else { Err(AuthError) };
+        };
+        if !(100_000_000..=999_999_999).contains(&row.connection_id)
+            || row.devices.name.is_empty()
+            || row.devices.name.len() > 1024
+            || row.devices.name.chars().any(char::is_control)
+        {
+            return Err(AuthError);
+        }
+        Ok(Some(CurrentEnrollment {
+            device: row.device_id,
+            connection_id: row.connection_id,
+            name: row.devices.name.clone(),
+        }))
     }
     pub async fn enrollment_devices(
         &self,
