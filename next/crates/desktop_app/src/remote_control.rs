@@ -19,6 +19,8 @@ use zeroize::Zeroizing;
 
 const PERMISSIONS_V3: &[u8] = b"mixel-permissions-v3";
 const PERMISSIONS_V4: &[u8] = b"mixel-permissions-v4";
+/// Controller to host: show display N (one byte). Sent only to hosts that offered switching.
+const DISPLAY_SELECT: &[u8] = b"mixel-display-select-v1";
 
 fn read_permissions(record: &[u8]) -> Result<[bool; 4], String> {
     let (flags, count) = if let Some(flags) = record.strip_prefix(PERMISSIONS_V3) {
@@ -38,6 +40,15 @@ fn read_permissions(record: &[u8]) -> Result<[bool; 4], String> {
     Ok(permissions)
 }
 
+/// Display switching agreed during connection setup. Host: the capture sources a controlling
+/// technician may switch between. Controller: how many the host offered and which is shown.
+#[derive(Default)]
+pub struct DisplayOffer {
+    pub sources: Vec<String>,
+    pub count: u16,
+    pub current: u16,
+}
+
 pub struct ControlPipe {
     crypto: ControlChannel,
     pub bulk: Option<ControlChannel>,
@@ -53,6 +64,12 @@ pub struct ControlPipe {
     last_keyframe_request: Option<Instant>,
     force_keyframe: bool,
     clipboard: crate::remote_clipboard::ClipboardPipe,
+    /// Host: capture sources a controlling technician may switch between.
+    displays: Vec<String>,
+    pending_display: Option<usize>,
+    /// Controller: number of host displays offered, and the one shown.
+    display_count: u16,
+    current_display: u16,
 }
 impl ControlPipe {
     pub async fn create(
@@ -62,7 +79,10 @@ impl ControlPipe {
         channel: &Arc<dyn NativeDataChannel>,
         peer_supports_recording: bool,
         peer_supports_input_result: bool,
+        displays: DisplayOffer,
     ) -> Result<Self, String> {
+        let DisplayOffer { sources: displays, count, current } = displays;
+        let display_offer = (count, current);
         let (input_tx, input_rx) = mpsc::channel(32);
         let (clipboard_tx, clipboard_rx) = mpsc::channel(1);
         let (allowed, clipboard, files, recording, router) = if config.host {
@@ -73,6 +93,7 @@ impl ControlPipe {
                 let injector = SessionInjector::open(
                     &config.source,
                     config.login_window,
+                    !displays.is_empty(),
                     config.session_cancel.clone(),
                     config.input_authorization(),
                     #[cfg(target_os = "linux")] config.portal.clone(),
@@ -196,8 +217,18 @@ impl ControlPipe {
             last_keyframe_request: None,
             force_keyframe: false,
             clipboard: crate::remote_clipboard::ClipboardPipe::new(clipboard_rx, clipboard),
+            pending_display: None,
+            current_display: if config.host { 0 } else { display_offer.1 },
+            display_count: if config.host { 0 } else { display_offer.0 },
+            displays: if config.host && allowed { displays } else { Vec::new() },
         })
     }
+    /// Host: the next display to capture, after the controller selected one.
+    pub fn take_display_switch(&mut self) -> Option<String> {
+        let index = self.pending_display.take()?;
+        self.displays.get(index).cloned()
+    }
+
     pub fn proof(&self) -> core_protocol::crypto::VerifiedSession {
         self.crypto.verified_session()
     }
@@ -226,6 +257,24 @@ impl ControlPipe {
         .map_err(|_| "Video idle notification timed out")?
         .map_err(|_| "Video idle notification failed")?;
         self.last_idle_sent = Instant::now();
+        Ok(())
+    }
+    async fn select_display(
+        &mut self,
+        index: u16,
+        channel: &Arc<dyn NativeDataChannel>,
+    ) -> Result<(), String> {
+        if self.host || !self.allowed || index >= self.display_count || index > u16::from(u8::MAX) {
+            return Err("This display is not available".into());
+        }
+        let mut plain = DISPLAY_SELECT.to_vec();
+        plain.push(index as u8);
+        let record = self.crypto.seal(&plain).map_err(|error| error.to_string())?;
+        tokio::time::timeout(Duration::from_secs(2), channel.send(record.as_slice().into()))
+            .await
+            .map_err(|_| "Display selection timed out")?
+            .map_err(|_| "Display selection failed")?;
+        self.current_display = index;
         Ok(())
     }
     pub fn take_keyframe_request(&mut self) -> bool {
@@ -272,13 +321,21 @@ impl ControlPipe {
                 let _ = command.reply.send(Err("The input command expired".into()));
                 return Ok(());
             }
+            if let crate::remote_session::InputEvent::SelectDisplay { index } = command.event {
+                let result = self.select_display(index, channel).await;
+                let _ = command.reply.send(result.clone().map(|()| true));
+                return result;
+            }
             let result = tokio::time::timeout(Duration::from_secs(2), async {
                 if !self.allowed {
                     return Err("Keyboard control is not permitted".to_owned());
                 }
+                let mut input = command.event.borrowed();
+                if let core_protocol::input::Input::Pointer { display, .. } = &mut input {
+                    *display = self.current_display;
+                }
                 let plain = Zeroizing::new(
-                    core_protocol::input::encode(&command.event.borrowed())
-                        .map_err(|error| error.to_string())?,
+                    core_protocol::input::encode(&input).map_err(|error| error.to_string())?,
                 );
                 let record = self
                     .crypto
@@ -379,6 +436,16 @@ impl ControlPipe {
                 .clipboard
                 .host(config, &mut self.crypto, channel, &plain)
                 .await;
+        }
+        if let Some(rest) = plain.strip_prefix(DISPLAY_SELECT) {
+            return match rest {
+                [index] if self.allowed && usize::from(*index) < self.displays.len() => {
+                    self.pending_display = Some(usize::from(*index));
+                    self.force_keyframe = true;
+                    Ok(())
+                }
+                _ => Err("Invalid display selection".into()),
+            };
         }
         if plain.as_slice() == b"mixel-video-keyframe-v1" {
             if self

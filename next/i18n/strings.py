@@ -300,4 +300,5 @@ P = [
 (r"^Pair this computer with (.+) for (.+)\?$", r"Diesen Computer mit \1 für \2 koppeln?", r"Appairer cet ordinateur avec \1 pour \2 ?", r"Abbinare questo computer a \1 per \2?"),
 (r"^Sign-in screen access is on for (.+) · Remote ID ([\d ]+)\. A technician with unattended access can pair and connect to this ID\.$", r"Zugriff am Anmeldebildschirm ist eingeschaltet für \1 · Remote-ID \2. Ein Techniker mit unbeaufsichtigtem Zugriff kann diese ID koppeln und sich verbinden.", r"L’accès à l’écran de connexion est activé pour \1 · ID Remote \2. Un technicien avec accès sans surveillance peut appairer cet ID et s’y connecter.", r"L’accesso alla schermata di accesso è attivo per \1 · ID Remote \2. Un tecnico con accesso non presidiato può abbinare questo ID e connettersi."),
 (r"^Sign-in screen access is on\. Remote ID ([\d ]+)\.$", r"Zugriff am Anmeldebildschirm ist eingeschaltet. Remote-ID \1.", r"L’accès à l’écran de connexion est activé. ID Remote \1.", r"L’accesso alla schermata di accesso è attivo. ID Remote \1."),
+(r"^Display (\d+)$", r"Bildschirm \1", r"Écran \1", r"Schermo \1"),
 ]

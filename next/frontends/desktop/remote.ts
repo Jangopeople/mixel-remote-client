@@ -5,7 +5,7 @@
     if (!value) throw Error(`Missing remote-support control ${id}`);
     return value as T;
   }
-  type Status = {controller_only?:boolean; platform?: 'macos'|'windows'|'linux'; phase: string; message: string; host: number | null; session: string | null; consent: string | null; peer: number | null; requester: string | null; received: number; sharing: boolean; control: boolean; clipboard: boolean; files: boolean; input_access: boolean; code_required: boolean; support_code: string | null; online?: number[]; pairing: {request_id:string; provider_name:string; customer_name:string} | null; pairing_message: string | null; unattended_enabled: boolean; unattended_pending: 'enabling' | 'disabling_after_enable' | 'disabling' | null; unattended_session: boolean};
+  type Status = {controller_only?:boolean; platform?: 'macos'|'windows'|'linux'; phase: string; message: string; host: number | null; session: string | null; consent: string | null; peer: number | null; requester: string | null; received: number; sharing: boolean; control: boolean; clipboard: boolean; files: boolean; input_access: boolean; code_required: boolean; support_code: string | null; online?: number[]; pairing: {request_id:string; provider_name:string; customer_name:string} | null; pairing_message: string | null; unattended_enabled: boolean; unattended_pending: 'enabling' | 'disabling_after_enable' | 'disabling' | null; unattended_session: boolean; displays?: number; display?: number};
   type RecordingView = {phase: 'ready' | 'waiting_for_video' | 'recording' | 'saving' | 'saved' | 'saved_partial'} | {phase:'error'; message:string};
   type RemoteStatus = Status & {recording_permitted?:boolean; recording?:RecordingView; previous_recording?:RecordingView};
   type Source = {id: string; name: string; full_display: boolean};
@@ -67,6 +67,29 @@
   const reject = element<HTMLButtonElement>('remote-reject');
   const close = element<HTMLButtonElement>('remote-close');
   const restart = element<HTMLButtonElement>('remote-restart');
+  const displaySwitch = element<HTMLSpanElement>('remote-displays');
+  let displayKey = '';
+  function renderDisplays(): void {
+    const count = current && current.phase === 'active' && !current.sharing && current.control ? (current.displays ?? 0) : 0;
+    const shown = current?.display ?? 0;
+    displaySwitch.hidden = count < 2;
+    const key = `${count}:${shown}:${busy}`;
+    if (key === displayKey) return;
+    displayKey = key;
+    displaySwitch.replaceChildren();
+    for (let index = 0; index < count; index++) {
+      const button = document.createElement('button');
+      button.className = 'button-quiet';
+      button.type = 'button';
+      button.textContent = `Display ${index + 1}`;
+      button.setAttribute('aria-pressed', String(index === shown));
+      button.disabled = busy || index === shown;
+      button.addEventListener('click', () => {
+        if (current?.session) void action('remote_input', {session: current.session, event: {kind: 'select_display', index}});
+      });
+      displaySwitch.appendChild(button);
+    }
+  }
   const metrics = element<HTMLParagraphElement>('remote-video-metrics');
   const canvas = element<HTMLCanvasElement>('remote-canvas');
   const context = canvas.getContext('2d');
@@ -261,6 +284,7 @@
     close.disabled = stopping || !current.consent || !['incoming', 'outgoing', 'deciding', 'negotiating', 'active', 'closing'].includes(current.phase);
     restart.hidden = current.phase !== 'active' || current.sharing;
     restart.disabled = closing || busy || restart.hidden;
+    renderDisplays();
     if (!closing && authenticated && current.phase === 'active' && !current.sharing && current.session) {
       if (viewing !== current.session) void receive(current.session);
     } else if (viewing) clearVideo();

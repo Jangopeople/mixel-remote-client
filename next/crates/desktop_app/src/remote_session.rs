@@ -63,6 +63,10 @@ pub struct Status {
     pub support_code: Option<SupportCode>,
     /// Remote IDs from the last presence check that are online for this account.
     pub online: Vec<u32>,
+    /// Controller: number of host displays it may switch between (0 or 1 = no switching).
+    pub displays: u16,
+    /// Controller: the host display currently shown.
+    pub display: u16,
     #[serde(skip)]
     code_expires_at: Option<std::time::Instant>,
 }
@@ -101,6 +105,8 @@ impl Default for Status {
             code_required: false,
             support_code: None,
             online: Vec::new(),
+            displays: 0,
+            display: 0,
             code_expires_at: None,
         }
     }
@@ -276,6 +282,8 @@ pub enum InputEvent {
     ButtonClick { button: u8, down: bool, clicks: u8 },
     Wheel { horizontal: i16, vertical: i16 },
     ReleaseAll,
+    /// Controller only: show another of the host's displays (never sent as input).
+    SelectDisplay { index: u16 },
 }
 impl InputEvent {
     pub(crate) fn borrowed(&self) -> core_protocol::input::Input<'_> {
@@ -311,7 +319,7 @@ impl InputEvent {
                 horizontal: *horizontal,
                 vertical: *vertical,
             },
-            Self::ReleaseAll => Input::ReleaseAll,
+            Self::ReleaseAll | Self::SelectDisplay { .. } => Input::ReleaseAll,
         }
     }
 }
@@ -1117,6 +1125,10 @@ impl RemoteSession {
     }
     pub async fn input(&self, session: Uuid, event: InputEvent) -> Result<bool, String> {
         core_protocol::input::validate(&event.borrowed()).map_err(|error| error.to_string())?;
+        let selected = match event {
+            InputEvent::SelectDisplay { index } => Some(index),
+            _ => None,
+        };
         let (tx, rx) = tokio::sync::oneshot::channel();
         {
             let inner = self.0.lock().await;
@@ -1143,10 +1155,17 @@ impl RemoteSession {
                 })
                 .map_err(|_| "The input transport is busy")?;
         }
-        tokio::time::timeout(Duration::from_secs(3), rx)
+        let result = tokio::time::timeout(Duration::from_secs(3), rx)
             .await
             .map_err(|_| "Input acknowledgment timed out")?
-            .map_err(|_| "Input transport closed")?
+            .map_err(|_| "Input transport closed")?;
+        if let (Some(index), Ok(true)) = (selected, &result) {
+            let mut inner = self.0.lock().await;
+            if inner.status.session == Some(session) {
+                inner.status.display = index;
+            }
+        }
+        result
     }
     pub(crate) async fn grant(
         &self,
@@ -1167,6 +1186,16 @@ impl RemoteSession {
             inner.input = input;
             inner.status.clipboard = clipboard;
             inner.clipboard = clipboard_tx;
+        }
+    }
+    pub(crate) async fn set_displays(&self, generation: u64, session: Uuid, count: u16, current: u16) {
+        let mut inner = self.0.lock().await;
+        if inner.generation == generation
+            && inner.status.session == Some(session)
+            && !inner.cancel.load(Ordering::Acquire)
+        {
+            inner.status.displays = count;
+            inner.status.display = current;
         }
     }
     pub(crate) async fn set_recording_permission(

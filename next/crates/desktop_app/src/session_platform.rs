@@ -135,6 +135,36 @@ pub fn is_display(source: &str) -> bool {
     }
 }
 
+/// Full displays a technician with keyboard and mouse control may switch between during a
+/// session, in the order the input layer numbers them. Windows only; empty when it does not apply.
+pub fn switchable_displays(source: &str) -> Vec<String> {
+    #[cfg(target_os = "windows")]
+    {
+        if !is_display(source) {
+            return Vec::new();
+        }
+        let Ok(list) = native_os_capture::windows_capture::displays() else {
+            return Vec::new();
+        };
+        #[allow(unused_mut)]
+        let mut ids: Vec<String> = list
+            .iter()
+            .map(|display| format!("dxgi:{}:{}:{}", display.adapter, display.output, display.name))
+            .collect();
+        // Lab builds only: offer the one VM display twice, to exercise switching end to end.
+        #[cfg(feature = "qa-session")]
+        if ids.len() == 1 && std::env::var_os("MIXEL_QA_SECOND_DISPLAY").is_some() {
+            ids.push(ids[0].clone());
+        }
+        if ids.len() > 1 && ids.iter().any(|id| id == source) { ids } else { Vec::new() }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = source;
+        Vec::new()
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn selected(source: &str) -> Result<native_os_capture::macos::Display, String> {
     let id: u32 = source
@@ -248,6 +278,7 @@ impl SessionInjector {
     pub fn open(
         source: &str,
         _login_window: bool,
+        _all_displays: bool,
         cancel: Arc<AtomicBool>,
         authorized: Arc<dyn Fn() -> bool + Send + Sync>,
         #[cfg(target_os = "linux")] portal: Option<Arc<crate::wayland_portal::Grant>>,
@@ -266,7 +297,11 @@ impl SessionInjector {
                 .with_authorization(authorized.clone())
         });
         #[cfg(target_os = "windows")]
-        let platform = PlatformInjector::display(display, cancel);
+        let platform = if _all_displays {
+            PlatformInjector::desktop(cancel)
+        } else {
+            PlatformInjector::display(display, cancel)
+        };
         #[cfg(target_os = "linux")]
         let platform = if source == crate::wayland_portal::SOURCE {
             let grant = portal.ok_or("A compositor control grant is required")?;

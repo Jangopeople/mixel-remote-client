@@ -342,6 +342,10 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 [
 "^Sign-in screen access is on\\. Remote ID ([\\d ]+)\\.$",
 "Zugriff am Anmeldebildschirm ist eingeschaltet. Remote-ID $1."
+],
+[
+"^Display (\\d+)$",
+"Bildschirm $1"
 ]
 ]
 },
@@ -686,6 +690,10 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 [
 "^Sign-in screen access is on\\. Remote ID ([\\d ]+)\\.$",
 "L’accès à l’écran de connexion est activé. ID Remote $1."
+],
+[
+"^Display (\\d+)$",
+"Écran $1"
 ]
 ]
 },
@@ -1030,6 +1038,10 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 [
 "^Sign-in screen access is on\\. Remote ID ([\\d ]+)\\.$",
 "L’accesso alla schermata di accesso è attivo. ID Remote $1."
+],
+[
+"^Display (\\d+)$",
+"Schermo $1"
 ]
 ]
 }

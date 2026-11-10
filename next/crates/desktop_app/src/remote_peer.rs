@@ -296,6 +296,9 @@ async fn negotiate(
 ) -> Result<Negotiated, String> {
     const RECORDING_ATTRIBUTE: &str = "a=x-mixel-recording:1";
     const INPUT_RESULT_ATTRIBUTE: &str = "a=x-mixel-input-result:1";
+    // Controller offer: it can switch between host displays. Host answer: how many, and which is shown.
+    const DISPLAYS_ATTRIBUTE: &str = "a=x-mixel-displays:1";
+    const DISPLAY_COUNT_PREFIX: &str = "a=x-mixel-display-count:";
     let deadline = Instant::now() + Duration::from_secs(30);
     let local = config.identity.public_key()?;
     let role = if config.host {
@@ -359,6 +362,8 @@ async fn negotiate(
     let mut remote_description = false;
     let mut peer_supports_recording = false;
     let mut peer_supports_input_result = false;
+    let mut displays: Vec<String> = Vec::new();
+    let mut display_offer = (0u16, 0u16);
     if !config.host {
         let offer = transport
             .local_sdp(
@@ -377,7 +382,7 @@ async fn negotiate(
         )?;
         config.signal(Signal::Identity(proof.hello())).await?;
         let offer = format!(
-            "{}\r\n{RECORDING_ATTRIBUTE}\r\n{INPUT_RESULT_ATTRIBUTE}\r\n",
+            "{}\r\n{RECORDING_ATTRIBUTE}\r\n{INPUT_RESULT_ATTRIBUTE}\r\n{DISPLAYS_ATTRIBUTE}\r\n",
             offer.sdp.trim_end()
         );
         config.signal(Signal::Offer(offer)).await?;
@@ -440,6 +445,15 @@ async fn negotiate(
             Signal::Offer(sdp) if config.host && !remote_description => {
                 peer_supports_recording = sdp.lines().any(|line| line == RECORDING_ATTRIBUTE);
                 peer_supports_input_result = sdp.lines().any(|line| line == INPUT_RESULT_ATTRIBUTE);
+                if config.control && sdp.lines().any(|line| line == DISPLAYS_ATTRIBUTE) {
+                    let source = config.source.clone();
+                    displays = tokio::task::spawn_blocking(move || {
+                        session_platform::switchable_displays(&source)
+                    })
+                    .await
+                    .unwrap_or_default();
+                    displays.truncate(16);
+                }
                 transport
                     .peer
                     .set_remote_description(
@@ -464,10 +478,29 @@ async fn negotiate(
                     local_fingerprint(&answer.sdp).map_err(|error| error.to_string())?,
                 )?;
                 config.signal(Signal::Identity(proof.hello())).await?;
-                config.signal(Signal::Answer(answer.sdp)).await?;
+                let current = displays.iter().position(|display| *display == config.source);
+                let answer_sdp = match current {
+                    Some(current) if displays.len() > 1 => format!(
+                        "{}\r\n{DISPLAY_COUNT_PREFIX}{}:{current}\r\n",
+                        answer.sdp.trim_end(),
+                        displays.len()
+                    ),
+                    _ => {
+                        displays.clear();
+                        answer.sdp
+                    }
+                };
+                config.signal(Signal::Answer(answer_sdp)).await?;
                 handshake = Some(proof);
             }
             Signal::Answer(sdp) if !config.host && !remote_description => {
+                display_offer = sdp
+                    .lines()
+                    .find_map(|line| line.strip_prefix(DISPLAY_COUNT_PREFIX))
+                    .and_then(|value| value.split_once(':'))
+                    .and_then(|(count, current)| Some((count.parse::<u16>().ok()?, current.parse::<u16>().ok()?)))
+                    .filter(|(count, current)| (2..=16).contains(count) && current < count)
+                    .unwrap_or((0, 0));
                 transport
                     .peer
                     .set_remote_description(
@@ -535,8 +568,24 @@ async fn negotiate(
         &channel,
         peer_supports_recording,
         peer_supports_input_result,
+        crate::remote_control::DisplayOffer {
+            sources: displays,
+            count: display_offer.0,
+            current: display_offer.1,
+        },
     )
     .await?;
+    if !config.host {
+        config
+            .state
+            .set_displays(
+                config.generation,
+                config.session,
+                if control.allowed { display_offer.0 } else { 0 },
+                display_offer.1,
+            )
+            .await;
+    }
     if !config.host && control.allowed {
         let mut granted = Session::for_peer(Instant::now(), context, Role::Controller, true);
         granted
@@ -628,6 +677,33 @@ fn start_encoder(size: (usize, usize)) -> Result<mpsc::Sender<EncodeRequest>, St
     Ok(requests)
 }
 
+/// Scales a captured BGRA frame to the stream size (nearest pixel; used after a display switch).
+fn fit_frame(
+    frame: &native_os_capture::stream::CapturedFrame,
+    (width, height): (usize, usize),
+) -> Result<native_os_capture::stream::CapturedFrame, String> {
+    let (source_width, source_height, stride) = (frame.width(), frame.height(), frame.stride());
+    if width == 0 || height == 0 || source_width == 0 || source_height == 0 {
+        return Err("The display image is empty".into());
+    }
+    let pixels = frame.pixels();
+    let columns: Vec<usize> = (0..width)
+        .map(|x| (x * source_width / width).min(source_width - 1) * 4)
+        .collect();
+    let mut out = vec![0u8; width * height * 4];
+    for (y, row_out) in out.chunks_exact_mut(width * 4).enumerate() {
+        let start = (y * source_height / height).min(source_height - 1) * stride;
+        let row = pixels
+            .get(start..start + source_width * 4)
+            .ok_or("The display image layout is invalid")?;
+        for (pixel, &column) in row_out.as_chunks_mut::<4>().0.iter_mut().zip(&columns) {
+            pixel.copy_from_slice(&row[column..column + 4]);
+        }
+    }
+    native_os_capture::stream::CapturedFrame::bgra(width, height, width * 4, out)
+        .map_err(|_| "Cannot scale the display image".into())
+}
+
 async fn host_media(
     config: &mut Config,
     consent: &mut Session,
@@ -646,6 +722,7 @@ async fn host_media(
         #[cfg(target_os = "linux")]
         config.portal.clone(),
     )?;
+    let mut shown = config.source.clone();
     let result = async {
         let encoder = start_encoder(size)?;
         let mut retry_encode = false;
@@ -660,6 +737,33 @@ async fn host_media(
             }
             pump_ice(config, transport).await?;
             control.poll(config, channel).await?;
+            if let Some(source) = control.take_display_switch() {
+                // Same encoder and stream; another display of different size is fitted
+                // into the negotiated size (pointer positions are relative, so they stay right).
+                // A display can be captured only once per process: close the current capture first.
+                let _ = capture.stop();
+                capture = match session_platform::capture(
+                    &source,
+                    size,
+                    #[cfg(target_os = "linux")]
+                    config.portal.clone(),
+                ) {
+                    Ok(next) => {
+                        shown.clone_from(&source);
+                        next
+                    }
+                    // Keep the session: go back to the display shown before.
+                    Err(_) => session_platform::capture(
+                        &shown,
+                        size,
+                        #[cfg(target_os = "linux")]
+                        config.portal.clone(),
+                    )?,
+                };
+                sequence = 0;
+                recent = None;
+                retry_encode = true;
+            }
             let force_keyframe = control.take_keyframe_request() || retry_encode;
             let frame = match session_platform::frames(&capture).next(
                 sequence,
@@ -673,6 +777,11 @@ async fn host_media(
             ) {
                 Ok((next, frame)) => {
                     sequence = next;
+                    let frame = if frame.width() == size.0 && frame.height() == size.1 {
+                        frame
+                    } else {
+                        Arc::new(fit_frame(&frame, size)?)
+                    };
                     recent = Some(frame.clone());
                     frame
                 }
@@ -883,4 +992,28 @@ async fn viewer_media(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod display_fit_tests {
+    use super::fit_frame;
+    use native_os_capture::stream::CapturedFrame;
+    #[test]
+    fn a_switched_display_is_fitted_into_the_stream_size() {
+        // 4x2 source with padded rows; left half blue, right half red.
+        let mut pixels = vec![0u8; 2 * 20];
+        for y in 0..2 {
+            for x in 0..4 {
+                let at = y * 20 + x * 4;
+                pixels[at..at + 4].copy_from_slice(if x < 2 { &[255, 0, 0, 255] } else { &[0, 0, 255, 255] });
+            }
+        }
+        let source = CapturedFrame::bgra(4, 2, 20, pixels).unwrap();
+        let fitted = fit_frame(&source, (8, 4)).unwrap();
+        assert_eq!((fitted.width(), fitted.height(), fitted.stride()), (8, 4, 32));
+        let out = fitted.pixels();
+        assert_eq!(&out[0..4], &[255, 0, 0, 255]);
+        assert_eq!(&out[3 * 32 + 7 * 4..3 * 32 + 8 * 4], &[0, 0, 255, 255]);
+        assert!(fit_frame(&source, (0, 4)).is_err());
+    }
 }
