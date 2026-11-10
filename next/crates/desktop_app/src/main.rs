@@ -8,6 +8,10 @@ mod wayland_portal;
 mod account_auth;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 mod device_identity;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+mod session_store;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+mod autostart;
 #[cfg(target_os = "macos")]
 mod local_session;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
@@ -166,6 +170,7 @@ use native_os_capture::windows_capture::{
 use native_os_capture::x11_capture::{Display as PlatformDisplay, X11Capture as PlatformCapture};
 /// Lab builds only (feature `qa-session`): append a capture event to
 /// %TEMP%\mixel-capture.log. Release builds compile this to nothing.
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 #[allow(unused_variables)]
 fn lab_capture_log(message: &str) {
     #[cfg(feature = "qa-session")]
@@ -769,7 +774,55 @@ async fn account_status(
     state: tauri::State<'_, account_auth::AccountAuth>,
 ) -> Result<account_auth::Status, String> {
     main_window(&window)?;
+    let restore = state.inner().clone();
+    tauri::async_runtime::spawn(async move { restore.restore().await });
     Ok(state.status().await)
+}
+#[derive(serde::Serialize)]
+struct StartupSettings {
+    remembered: bool,
+    autostart: bool,
+    launched_at_startup: bool,
+    restored: bool,
+}
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[tauri::command]
+async fn startup_settings(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, account_auth::AccountAuth>,
+) -> Result<StartupSettings, String> {
+    main_window(&window)?;
+    let autostart = tauri::async_runtime::spawn_blocking(autostart::enabled)
+        .await
+        .unwrap_or(false);
+    Ok(StartupSettings {
+        remembered: state
+            .status()
+            .await
+            .account
+            .is_some_and(|account| account.remembered),
+        autostart,
+        launched_at_startup: autostart::launched_at_startup(),
+        restored: state.restored().await,
+    })
+}
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[tauri::command]
+async fn set_stay_signed_in(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, account_auth::AccountAuth>,
+    enabled: bool,
+) -> Result<(), String> {
+    main_window(&window)?;
+    state.set_remember(enabled).await
+}
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[tauri::command]
+async fn set_autostart(window: tauri::WebviewWindow, enabled: bool) -> Result<(), String> {
+    main_window(&window)?;
+    tauri::async_runtime::spawn_blocking(move || autostart::set(enabled))
+        .await
+        .map_err(|_| "Cannot change the startup setting")?
 }
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 #[tauri::command]
@@ -1759,6 +1812,9 @@ fn main() {
             remote_pairing,
             remote_presence,
             update_check,
+            startup_settings,
+            set_stay_signed_in,
+            set_autostart,
             open_update_page,
             remote_unattended,
             remote_decide,
@@ -1827,6 +1883,9 @@ fn main() {
             remote_pairing,
             remote_presence,
             update_check,
+            startup_settings,
+            set_stay_signed_in,
+            set_autostart,
             open_update_page,
             remote_unattended,
             remote_decide,

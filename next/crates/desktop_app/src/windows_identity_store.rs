@@ -85,7 +85,7 @@ fn crypt(bytes: &[u8], protect: bool) -> Result<Zeroizing<Vec<u8>>, String> {
         unsafe { std::slice::from_raw_parts(output.0.pbData, output.0.cbData as usize) }.to_vec(),
     ))
 }
-pub(super) fn location(profile: Option<uuid::Uuid>) -> Result<PathBuf, String> {
+pub(crate) fn location(profile: Option<uuid::Uuid>) -> Result<PathBuf, String> {
     // SAFETY: known-folder API allocates a null-terminated UTF16 path; its memory
     // is copied losslessly before release with the matching COM allocator.
     let folder = unsafe { SHGetKnownFolderPath(&FOLDERID_LocalAppData, KF_FLAG_DEFAULT, None) }
@@ -174,4 +174,13 @@ pub(super) fn load_or_create(
         }
     }
     read(&path)?.ok_or_else(|| "Saved identity unavailable after persistence".into())
+}
+
+/// DPAPI-protect a small secret for the current Windows user (session store).
+pub(crate) fn protect(bytes: &[u8]) -> Result<Zeroizing<Vec<u8>>, String> {
+    crypt(bytes, true)
+}
+/// Reverse of [`protect`] for the same Windows user.
+pub(crate) fn unprotect(bytes: &[u8]) -> Result<Zeroizing<Vec<u8>>, String> {
+    crypt(bytes, false)
 }

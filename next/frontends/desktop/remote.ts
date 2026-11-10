@@ -273,9 +273,11 @@
       if (version === readVersion) {
         if (current?.session !== status.session) recordingError = '';
         const freshInvitation = status.phase === 'incoming' && current?.phase !== 'incoming';
+        const becameReady = status.phase === 'ready' && current?.phase !== 'ready';
         current = status;
         render();
         if (freshInvitation && !status.controller_only) void loadSources();
+        if (becameReady) void restoreUnattended();
       }
     }
     catch (value) { if (version === readVersion) { error.textContent = String(value); clearVideo(); } }
@@ -389,14 +391,40 @@
   });
   unattendedConfirm.addEventListener('change', render);
   unattendedDisplay.addEventListener('change', () => { unattendedConfirm.checked = false; render(); });
+  // Remember the owner's unattended choice on this computer, so a restored
+  // start-up (stay signed in / start with computer) turns it back on.
+  const unattendedKey = 'mixel.remote.unattended.v1';
+  function savedUnattended(): {source: string; control: boolean} | null {
+    try {
+      const value = JSON.parse(localStorage.getItem(unattendedKey) ?? 'null');
+      return value && typeof value.source === 'string' && typeof value.control === 'boolean' ? value : null;
+    } catch { return null; }
+  }
+  let unattendedRestored = false;
+  async function restoreUnattended(): Promise<void> {
+    const saved = savedUnattended();
+    if (unattendedRestored || !saved || !current || current.unattended_enabled || current.unattended_pending) return;
+    try {
+      const startup = await invoke<{restored: boolean; launched_at_startup: boolean}>('startup_settings');
+      if (!startup.restored && !startup.launched_at_startup) return;
+      const displays = await invoke<Source[]>('capture_targets');
+      if (!displays.some(item => item.id === saved.source && item.full_display)) return;
+      unattendedRestored = true;
+      await action('remote_unattended', {source: saved.source, control: saved.control});
+    } catch { /* stays attended-only until the owner enables it again */ }
+  }
   enableUnattended.addEventListener('click', () => {
     const source = unattendedDisplay.value;
     if (!(/^(display:[0-9]+|dxgi:[0-9]+:[0-9]+:.{1,128}|x11:[0-9]+:[0-9]+)$/.test(source) || source === 'qa-relay-fixture') || !unattendedConfirm.checked) { error.textContent = 'Choose a display and confirm it before enabling unattended sharing.'; return; }
     const control = unattendedControl.checked && !unattendedControl.disabled;
     unattendedConfirm.checked = false;
+    try { localStorage.setItem(unattendedKey, JSON.stringify({source, control})); } catch { /* not remembered */ }
     void action('remote_unattended', {source, control});
   });
-  disableUnattended.addEventListener('click', () => { void action('remote_unattended', {source:null, control:false}); });
+  disableUnattended.addEventListener('click', () => {
+    try { localStorage.removeItem(unattendedKey); } catch { /* nothing remembered */ }
+    void action('remote_unattended', {source:null, control:false});
+  });
   requestUnattended.addEventListener('change', () => {
     if (requestUnattended.checked) password.value = '';
     render();

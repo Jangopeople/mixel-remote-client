@@ -62,6 +62,7 @@ struct User {
 }
 #[derive(Clone, Serialize)]
 pub struct Account {
+    pub remembered: bool,
     pub has_company: bool,
     pub has_personal: bool,
     pub profile: Uuid,
@@ -96,6 +97,9 @@ struct Inner {
     protected: Vec<Weak<AtomicBool>>,
     verification_attempts: u8,
     personal_mode: bool,
+    remember: bool,
+    restore_started: bool,
+    restored: bool,
 }
 #[derive(Clone)]
 pub struct AccountAuth {
@@ -129,6 +133,9 @@ impl Default for AccountAuth {
                 protected: Vec::new(),
                 verification_attempts: 0,
                 personal_mode: false,
+                remember: false,
+                restore_started: false,
+                restored: false,
             })),
             operation: Arc::new(Mutex::new(())),
         }
@@ -624,6 +631,7 @@ impl AccountAuth {
                 phase: "authenticated".into(),
                 message: "Mixel account verified".into(),
                 account: Some(Account {
+                    remembered: inner.remember,
                     has_company,
                     has_personal,
                     profile: principal.user,
@@ -651,7 +659,101 @@ impl AccountAuth {
             }
         };
         inner.principal = principal;
+        let keep = (inner.remember && inner.status.phase == "authenticated")
+            .then(|| Zeroizing::new(inner.tokens.as_ref().map(|t| t.refresh_token.0.clone()).unwrap_or_default()));
+        drop(inner);
+        if let Some(token) = keep {
+            let _ = tokio::task::spawn_blocking(move || crate::session_store::save(&token)).await;
+        }
         Ok(())
+    }
+    /// Turns "stay signed in on this computer" on or off.
+    pub async fn set_remember(&self, enabled: bool) -> Result<(), String> {
+        let token = {
+            let mut inner = self.inner.lock().await;
+            inner.remember = enabled;
+            if let Some(account) = inner.status.account.as_mut() {
+                account.remembered = enabled;
+            }
+            (enabled && inner.status.phase == "authenticated")
+                .then(|| inner.tokens.as_ref().map(|t| Zeroizing::new(t.refresh_token.0.clone())))
+                .flatten()
+        };
+        tokio::task::spawn_blocking(move || match token {
+            Some(token) => crate::session_store::save(&token),
+            None => {
+                if !enabled {
+                    crate::session_store::clear();
+                }
+                Ok(())
+            }
+        })
+        .await
+        .map_err(|_| "Session storage unavailable")?
+    }
+    /// Whether this launch restored a saved session (used for auto-available).
+    pub async fn restored(&self) -> bool {
+        self.inner.lock().await.restored
+    }
+    /// Once per app start: sign in again from a saved session, if any.
+    pub async fn restore(&self) {
+        {
+            let mut inner = self.inner.lock().await;
+            if inner.restore_started || inner.status.phase != "signed_out" {
+                return;
+            }
+            inner.restore_started = true;
+        }
+        let Ok(Ok(Some(saved))) = tokio::task::spawn_blocking(crate::session_store::load).await else {
+            return;
+        };
+        let Ok((client, _, _)) = AuthClient::configured() else {
+            return;
+        };
+        let generation = {
+            let mut inner = self.inner.lock().await;
+            if inner.status.phase != "signed_out" {
+                return;
+            }
+            inner.generation += 1;
+            inner.remember = true;
+            inner.status = Status {
+                phase: "verifying".into(),
+                message: "Signing in with your saved session".into(),
+                account: None,
+                factors: Vec::new(),
+            };
+            inner.client = Some(client.clone());
+            inner.generation
+        };
+        let this = self.clone();
+        let task = tokio::spawn(async move {
+            let result: Result<(), String> = async {
+                let tokens: Tokens = client
+                    .request(
+                        "/auth/v1/token?grant_type=refresh_token",
+                        Some(serde_json::json!({"refresh_token": saved.as_str()})),
+                        None,
+                    )
+                    .await?;
+                this.apply(generation, client, tokens, None).await
+            }
+            .await;
+            if result.is_err() {
+                let _ = tokio::task::spawn_blocking(crate::session_store::clear).await;
+                let mut inner = this.inner.lock().await;
+                if inner.generation == generation {
+                    revoke(&mut inner);
+                    inner.remember = false;
+                    inner.status.phase = "signed_out".into();
+                    inner.status.message = "Your saved sign-in expired. Sign in again.".into();
+                }
+                return;
+            }
+            this.inner.lock().await.restored = true;
+            this.maintain(generation).await;
+        });
+        self.inner.lock().await.task = Some(task);
     }
     async fn maintain(&self, generation: u64) {
         loop {
@@ -910,10 +1012,13 @@ impl AccountAuth {
         );
         let generation = inner.generation;
         revoke(&mut inner);
+        inner.remember = false;
+        inner.restored = false;
         inner.client = None;
         inner.status.phase = "signed_out".into();
         inner.status.message = "Signed out locally; no session credentials are retained".into();
         drop(inner);
+        let _ = tokio::task::spawn_blocking(crate::session_store::clear).await;
         if let Some((client, access)) = revoke_remote {
             let revoked = client.logout(&access).await;
             let mut inner = self.inner.lock().await;

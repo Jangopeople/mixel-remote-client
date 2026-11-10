@@ -122,6 +122,38 @@
   });
   document.addEventListener('mixel-account-state',event=>{++accountVersion;account((event as CustomEvent<Account>).detail);});
   document.addEventListener('mixel-remote-state',event=>{++remoteVersion;const phase=(event as CustomEvent<{phase:string}>).detail.phase;const next=phase==='offline'||phase==='error';if(next!==offline){offline=next;confirm.checked=false;render();}});
+  const startupPanel=element<HTMLDivElement>('startup-panel'), rememberBox=element<HTMLInputElement>('startup-remember'), autostartBox=element<HTMLInputElement>('startup-autostart'), startupStatus=element<HTMLParagraphElement>('startup-status');
+  type Startup={remembered:boolean;autostart:boolean;launched_at_startup:boolean;restored:boolean};
+  let signedIn=false, autoTried=false;
+  async function refreshStartup():Promise<void>{
+    startupPanel.hidden=!signedIn;
+    if(!signedIn)return;
+    try{
+      const value=await invoke<Startup>('startup_settings');
+      rememberBox.checked=value.remembered;autostartBox.checked=value.autostart;
+      if(!autoTried && offline && (value.restored || value.launched_at_startup)){
+        autoTried=true;
+        try{await invoke('remote_register');}catch{/* not enrolled yet: stay offline */}
+      }
+    }catch{/* settings unavailable */}
+  }
+  rememberBox.addEventListener('change',async()=>{
+    const enabled=rememberBox.checked;startupStatus.textContent='';
+    try{
+      await invoke('set_stay_signed_in',{enabled});
+      if(!enabled && autostartBox.checked){await invoke('set_autostart',{enabled:false});autostartBox.checked=false;}
+      startupStatus.textContent=enabled?'You stay signed in on this computer until you sign out.':'This computer no longer keeps your sign-in.';
+    }catch(error){rememberBox.checked=!enabled;startupStatus.textContent=String(error);}
+  });
+  autostartBox.addEventListener('change',async()=>{
+    const enabled=autostartBox.checked;startupStatus.textContent='';
+    try{
+      if(enabled && !rememberBox.checked){await invoke('set_stay_signed_in',{enabled:true});rememberBox.checked=true;}
+      await invoke('set_autostart',{enabled});
+      startupStatus.textContent=enabled?'Mixel Remote starts with this computer and makes it available.':'Mixel Remote no longer starts with this computer.';
+    }catch(error){autostartBox.checked=!enabled;startupStatus.textContent=String(error);}
+  });
+  document.addEventListener('mixel-account-state',event=>{const phase=(event as CustomEvent<Account>).detail.phase;const next=phase==='authenticated';if(next!==signedIn){signedIn=next;void refreshStartup();}});
   render();const av=accountVersion,rv=remoteVersion;
   void invoke<Account>('account_status').then(value=>{if(accountVersion===av)account(value);}).catch(()=>{});
   void invoke<{phase:string}>('remote_status').then(value=>{if(remoteVersion===rv){offline=['offline','error'].includes(value.phase);render();}}).catch(()=>{});

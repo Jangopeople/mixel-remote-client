@@ -33,6 +33,8 @@ pub fn validated_bundle_scope() -> Result<&'static str, String> {
 }
 #[cfg(target_os = "macos")]
 const ACCOUNT: &str = "ed25519-device";
+#[cfg(target_os = "macos")]
+pub(crate) const KEYCHAIN_NOT_FOUND: i32 = NOT_FOUND;
 const MAGIC: &[u8] = b"MIXEL-IDENTITY\x01";
 #[cfg(target_os = "macos")]
 const NOT_FOUND: i32 = -25300;
@@ -160,6 +162,8 @@ mod windows_store;
 fn load_or_create(create: bool) -> Result<SigningKey, String> {
     windows_store::load_or_create(None, create)
 }
+#[cfg(target_os = "windows")]
+pub(crate) use windows_store::{location as windows_store_location, protect as windows_protect, unprotect as windows_unprotect};
 #[cfg(target_os = "linux")]
 #[allow(unsafe_code)]
 #[path = "linux_identity_store.rs"]
