@@ -122,7 +122,7 @@ fn linux_capture() -> Option<Capture> {
             };
             let Some(buffer) = sample.buffer() else { continue };
             let Ok(map) = buffer.map_readable() else { continue };
-            let input: Vec<f32> = map.as_slice().chunks_exact(4).map(|bytes| f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])).collect();
+            let input: Vec<f32> = map.as_slice().as_chunks::<4>().0.iter().map(|bytes| f32::from_le_bytes(*bytes)).collect();
             resampler.push(&input, &mut pending);
             while pending.len() >= FRAME_SAMPLES {
                 let samples: Vec<i16> = pending.drain(..FRAME_SAMPLES).collect();
