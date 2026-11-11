@@ -428,7 +428,7 @@
   async function receive(session: string): Promise<void> {
     clearVideo(); viewing = session; const generation = videoGeneration;
     let sequence = 0, rendered = 0, lastTimestamp = -1;
-    const started = performance.now();
+    const recent: number[] = [];
     try {
       if (!context) throw Error('The remote screen renderer is unavailable');
       while (generation === videoGeneration) {
@@ -452,7 +452,10 @@
           context.putImageData(new ImageData(rgba, width, height), 0, 0);
           canvas.hidden = false; videoReady = session; sequence = next; lastTimestamp = timestamp; ++rendered;
           if (rendered === 1) document.dispatchEvent(new CustomEvent('mixel-video-visibility',{detail:{visible:true}}));
-          metrics.textContent = `${width} × ${height} · ${(rendered * 1000 / Math.max(1, performance.now() - started)).toFixed(0)} fps`;
+          // Pictures shown in the last second (not an average over the whole session).
+          const shownAt = performance.now(); recent.push(shownAt);
+          while (recent.length && shownAt - recent[0] > 1000) recent.shift();
+          metrics.textContent = `${width} × ${height} · ${recent.length} fps`;
         } finally { bytes.fill(0); rgba?.fill(0); }
         await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
       }
