@@ -71,6 +71,8 @@ pub struct Status {
     pub host_actions: Vec<String>,
     /// Controller: Remote ID of the host's sign-in screen access, to reconnect after a restart.
     pub signin_id: Option<u32>,
+    /// Controller: the host's network adapter addresses, remembered to wake it later.
+    pub host_macs: Vec<String>,
     #[serde(skip)]
     code_expires_at: Option<std::time::Instant>,
 }
@@ -113,6 +115,7 @@ impl Default for Status {
             display: 0,
             host_actions: Vec::new(),
             signin_id: None,
+            host_macs: Vec::new(),
             code_expires_at: None,
         }
     }
@@ -1206,7 +1209,7 @@ impl RemoteSession {
             inner.status.display = current;
         }
     }
-    pub(crate) async fn set_host_actions(&self, generation: u64, session: Uuid, actions: Vec<String>, signin_id: Option<u32>) {
+    pub(crate) async fn set_host_actions(&self, generation: u64, session: Uuid, actions: Vec<String>, signin_id: Option<u32>, macs: Vec<String>) {
         let mut inner = self.0.lock().await;
         if inner.generation == generation
             && inner.status.session == Some(session)
@@ -1214,6 +1217,7 @@ impl RemoteSession {
         {
             inner.status.host_actions = actions;
             inner.status.signin_id = signin_id;
+            inner.status.host_macs = macs;
         }
     }
     pub(crate) async fn set_recording_permission(

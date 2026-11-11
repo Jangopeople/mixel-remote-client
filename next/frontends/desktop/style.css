@@ -109,3 +109,4 @@ body:not([data-remote-platform="macos"]) .mac-only{display:none}
 .display-switch{display:flex;gap:3px;margin-right:4px}.display-switch[hidden]{display:none}
 .technician-notice{margin:0 0 8px;padding:8px 10px;border-radius:8px;background:#fdecef;color:#a3152d;font-size:11px;font-weight:550}.technician-notice[hidden]{display:none}
 .inline-fields{display:flex;gap:12px}.inline-fields .stacked-label{flex:1}.rollout-list{list-style:none;padding:0;margin:10px 0 0;font-size:11px}.rollout-list li{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 0;border-top:1px solid var(--line)}#rollout-command{width:100%;font-family:ui-monospace,monospace;font-size:10px}
+#devices-list .device-wake{align-self:flex-start;min-height:22px;padding:3px 8px;font-size:10px;margin-top:2px}

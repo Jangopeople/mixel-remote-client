@@ -5,7 +5,7 @@
     if (!value) throw Error(`Missing remote-support control ${id}`);
     return value as T;
   }
-  type Status = {controller_only?:boolean; platform?: 'macos'|'windows'|'linux'; phase: string; message: string; host: number | null; session: string | null; consent: string | null; peer: number | null; requester: string | null; received: number; sharing: boolean; control: boolean; clipboard: boolean; files: boolean; input_access: boolean; code_required: boolean; support_code: string | null; online?: number[]; pairing: {request_id:string; provider_name:string; customer_name:string} | null; pairing_message: string | null; unattended_enabled: boolean; unattended_pending: 'enabling' | 'disabling_after_enable' | 'disabling' | null; unattended_session: boolean; displays?: number; display?: number; host_actions?: string[]; signin_id?: number | null};
+  type Status = {controller_only?:boolean; platform?: 'macos'|'windows'|'linux'; phase: string; message: string; host: number | null; session: string | null; consent: string | null; peer: number | null; requester: string | null; received: number; sharing: boolean; control: boolean; clipboard: boolean; files: boolean; input_access: boolean; code_required: boolean; support_code: string | null; online?: number[]; pairing: {request_id:string; provider_name:string; customer_name:string} | null; pairing_message: string | null; unattended_enabled: boolean; unattended_pending: 'enabling' | 'disabling_after_enable' | 'disabling' | null; unattended_session: boolean; displays?: number; display?: number; host_actions?: string[]; signin_id?: number | null; host_macs?: string[]};
   type RecordingView = {phase: 'ready' | 'waiting_for_video' | 'recording' | 'saving' | 'saved' | 'saved_partial'} | {phase:'error'; message:string};
   type RemoteStatus = Status & {recording_permitted?:boolean; recording?:RecordingView; previous_recording?:RecordingView};
   type Source = {id: string; name: string; full_display: boolean};
@@ -77,7 +77,26 @@
   function hasAction(name: string): boolean {
     return !!current && current.phase === 'active' && !current.sharing && current.control && (current.host_actions ?? []).includes(name);
   }
+  // Remember each computer's network addresses (seen in a session) to wake it later.
+  const macKey = 'mixel.remote.macs.v1';
+  function rememberMacs(): void {
+    if (!current || current.phase !== 'active' || current.sharing || !current.peer || !(current.host_macs ?? []).length) return;
+    try {
+      const known = JSON.parse(localStorage.getItem(macKey) ?? '{}') as Record<string, string[]>;
+      const next = JSON.stringify(current.host_macs);
+      if (JSON.stringify(known[String(current.peer)]) === next) return;
+      known[String(current.peer)] = current.host_macs ?? [];
+      localStorage.setItem(macKey, JSON.stringify(known));
+    } catch { /* not remembered */ }
+  }
+  // Devices asks to wake a computer: also send the signal through the connected computer's network.
+  document.addEventListener('mixel-wake', event => {
+    const macs = (event as CustomEvent<string[]>).detail;
+    if (!hasAction('wol') || !current?.session) return;
+    for (const mac of macs.slice(0, 4)) void invoke('remote_input', {session: current.session, event: {kind: 'action', name: `wol:${mac}`}}).catch(() => {});
+  });
   function renderActions(): void {
+    rememberMacs();
     sas.hidden = !hasAction('sas');
     reboot.hidden = !hasAction('restart');
     sas.disabled = reboot.disabled = busy;

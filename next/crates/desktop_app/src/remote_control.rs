@@ -267,7 +267,8 @@ impl ControlPipe {
         Ok(())
     }
     async fn send_action(&mut self, name: &str, channel: &Arc<dyn NativeDataChannel>) -> Result<(), String> {
-        if self.host || !self.allowed || !self.actions.iter().any(|action| action == name) {
+        let offered = name.split(':').next().unwrap_or(name);
+        if self.host || !self.allowed || name.len() > 40 || !self.actions.iter().any(|action| action == offered) {
             return Err("This action is not available on the remote computer".into());
         }
         let mut plain = HOST_ACTION.to_vec();
@@ -463,7 +464,8 @@ impl ControlPipe {
         }
         if let Some(rest) = plain.strip_prefix(HOST_ACTION) {
             let name = std::str::from_utf8(rest).map_err(|_| "Invalid host action")?.to_owned();
-            if !self.allowed || !self.actions.contains(&name) {
+            let offered = name.split(':').next().unwrap_or(&name).to_owned();
+            if !self.allowed || name.len() > 40 || !self.actions.contains(&offered) || (name.contains(':') && offered != crate::host_actions::WOL) {
                 return Err("Invalid host action".into());
             }
             // Run off the media loop; a restart takes the session down on its own.

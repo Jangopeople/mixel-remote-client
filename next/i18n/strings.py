@@ -315,6 +315,7 @@ S = [
 ("Rollout command created.","Verteilbefehl erstellt.","Commande de déploiement créée.","Comando di distribuzione creato."),
 ("Command copied.","Befehl kopiert.","Commande copiée.","Comando copiato."),
 ("Creating…","Wird erstellt…","Création…","Creazione…"),
+("Wake","Aufwecken","Réveiller","Riattiva"),
 ]
 P = [
 # (regex, de, fr, it)
@@ -341,4 +342,6 @@ P = [
 (r"^(.+) · (\d+)/(\d+) computers · revoked$", r"\1 · \2/\3 Computer · widerrufen", r"\1 · \2/\3 ordinateurs · révoqué", r"\1 · \2/\3 computer · revocato"),
 (r"^(.+) · (\d+)/(\d+) computers · expired$", r"\1 · \2/\3 Computer · abgelaufen", r"\1 · \2/\3 ordinateurs · expiré", r"\1 · \2/\3 computer · scaduto"),
 (r"^(.+) · (\d+)/(\d+) computers · valid until (.+)$", r"\1 · \2/\3 Computer · gültig bis \4", r"\1 · \2/\3 ordinateurs · valable jusqu’au \4", r"\1 · \2/\3 computer · valido fino al \4"),
+(r"^Waking (.+)…$", r"\1 wird aufgeweckt…", r"Réveil de \1…", r"Riattivazione di \1…"),
+(r"^Wake signal sent to (.+)\. It appears as Online when it has started\.$", r"Wecksignal an \1 gesendet. Der Computer erscheint als Online, sobald er gestartet ist.", r"Signal de réveil envoyé à \1. Il apparaît En ligne une fois démarré.", r"Segnale di riattivazione inviato a \1. Risulta Online appena avviato."),
 ]

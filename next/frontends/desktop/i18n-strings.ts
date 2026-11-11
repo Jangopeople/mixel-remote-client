@@ -296,6 +296,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Waiting for confirmation that the connection has closed.": "Warten auf die Bestätigung, dass die Verbindung beendet ist.",
 "Waiting for the other person to accept your request.": "Warten, bis die andere Person Ihre Anfrage annimmt.",
 "Waiting for the remote host to Accept": "Warten, bis die Gegenseite annimmt",
+"Wake": "Aufwecken",
 "When nothing is in use, Mixel Remote installs signed updates and restarts. Otherwise the sidebar offers Install.": "Wenn nichts in Gebrauch ist, installiert Mixel Remote signierte Updates und startet neu. Sonst bietet die Seitenleiste «Installieren» an.",
 "When this computer starts": "Wenn dieser Computer startet",
 "Write a message": "Nachricht schreiben",
@@ -410,6 +411,14 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 [
 "^(.+) · (\\d+)/(\\d+) computers · valid until (.+)$",
 "$1 · $2/$3 Computer · gültig bis $4"
+],
+[
+"^Waking (.+)…$",
+"$1 wird aufgeweckt…"
+],
+[
+"^Wake signal sent to (.+)\\. It appears as Online when it has started\\.$",
+"Wecksignal an $1 gesendet. Der Computer erscheint als Online, sobald er gestartet ist."
 ]
 ]
 },
@@ -708,6 +717,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Waiting for confirmation that the connection has closed.": "En attente de la confirmation de fermeture de la connexion.",
 "Waiting for the other person to accept your request.": "En attente de l’acceptation de votre demande.",
 "Waiting for the remote host to Accept": "En attente de l’acceptation de l’hôte",
+"Wake": "Réveiller",
 "When nothing is in use, Mixel Remote installs signed updates and restarts. Otherwise the sidebar offers Install.": "Quand rien n’est en cours, Mixel Remote installe les mises à jour signées et redémarre. Sinon, la barre latérale propose « Installer ».",
 "When this computer starts": "Au démarrage de cet ordinateur",
 "Write a message": "Écrire un message",
@@ -822,6 +832,14 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 [
 "^(.+) · (\\d+)/(\\d+) computers · valid until (.+)$",
 "$1 · $2/$3 ordinateurs · valable jusqu’au $4"
+],
+[
+"^Waking (.+)…$",
+"Réveil de $1…"
+],
+[
+"^Wake signal sent to (.+)\\. It appears as Online when it has started\\.$",
+"Signal de réveil envoyé à $1. Il apparaît En ligne une fois démarré."
 ]
 ]
 },
@@ -1120,6 +1138,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Waiting for confirmation that the connection has closed.": "In attesa della conferma di chiusura della connessione.",
 "Waiting for the other person to accept your request.": "In attesa che l’altra persona accetti la richiesta.",
 "Waiting for the remote host to Accept": "In attesa che l’host accetti",
+"Wake": "Riattiva",
 "When nothing is in use, Mixel Remote installs signed updates and restarts. Otherwise the sidebar offers Install.": "Quando nulla è in uso, Mixel Remote installa gli aggiornamenti firmati e si riavvia. Altrimenti la barra laterale propone «Installa».",
 "When this computer starts": "All’avvio di questo computer",
 "Write a message": "Scrivi un messaggio",
@@ -1234,6 +1253,14 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 [
 "^(.+) · (\\d+)/(\\d+) computers · valid until (.+)$",
 "$1 · $2/$3 computer · valido fino al $4"
+],
+[
+"^Waking (.+)…$",
+"Riattivazione di $1…"
+],
+[
+"^Wake signal sent to (.+)\\. It appears as Online when it has started\\.$",
+"Segnale di riattivazione inviato a $1. Risulta Online appena avviato."
 ]
 ]
 }

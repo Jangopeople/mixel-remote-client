@@ -40,7 +40,20 @@
         catch (error) { if (version===request) status.textContent=String(error); }
         finally { if (version===request) {busy=false;render();} }
       });
-      row.append(identity,id,connect);list.append(row);
+      let macs:string[]=[];
+      try{macs=(JSON.parse(localStorage.getItem('mixel.remote.macs.v1')??'{}') as Record<string,string[]>)[String(device.connection_id)]??[];}catch{/* none */}
+      row.append(identity,id);
+      if(macs.length && checked && !live && !self){
+        const wake=document.createElement('button');wake.type='button';wake.className='button-quiet';wake.textContent='Wake';
+        wake.addEventListener('click',async()=>{
+          status.textContent=`Waking ${device.name}…`;
+          document.dispatchEvent(new CustomEvent('mixel-wake',{detail:macs}));
+          try{await invoke('wake_on_lan',{macs});status.textContent=`Wake signal sent to ${device.name}. It appears as Online when it has started.`;}
+          catch(error){status.textContent=String(error);}
+        });
+        wake.classList.add('device-wake');identity.append(wake);
+      }
+      row.append(connect);list.append(row);
     }
   }
   async function load(cursor:number|null, wantedIndex:number, reset=false):Promise<void>{

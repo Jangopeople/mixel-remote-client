@@ -304,6 +304,7 @@ async fn negotiate(
     const ACTIONS_ATTRIBUTE: &str = "a=x-mixel-actions:1";
     const HOST_ACTIONS_PREFIX: &str = "a=x-mixel-host-actions:";
     const SIGNIN_ID_PREFIX: &str = "a=x-mixel-signin-id:";
+    const MACS_PREFIX: &str = "a=x-mixel-macs:";
     let deadline = Instant::now() + Duration::from_secs(30);
     let local = config.identity.public_key()?;
     let role = if config.host {
@@ -371,6 +372,7 @@ async fn negotiate(
     let mut display_offer = (0u16, 0u16);
     let mut actions: Vec<String> = Vec::new();
     let mut signin_id: Option<u32> = None;
+    let mut host_macs: Vec<String> = Vec::new();
     if !config.host {
         let offer = transport
             .local_sdp(
@@ -505,6 +507,10 @@ async fn negotiate(
                 let mut answer_sdp = answer_sdp;
                 if !actions.is_empty() {
                     answer_sdp = format!("{}\r\n{HOST_ACTIONS_PREFIX}{}\r\n", answer_sdp.trim_end(), actions.join(","));
+                    let macs = tokio::task::spawn_blocking(crate::host_actions::mac_addresses).await.unwrap_or_default();
+                    if !macs.is_empty() {
+                        answer_sdp = format!("{}\r\n{MACS_PREFIX}{}\r\n", answer_sdp.trim_end(), macs.join(","));
+                    }
                     #[cfg(target_os = "windows")]
                     if let Some(status) = crate::windows_signin_host::public_status()
                         .filter(|_| !crate::windows_signin_host::is_signin_host())
@@ -527,6 +533,17 @@ async fn negotiate(
                     .lines()
                     .find_map(|line| line.strip_prefix(HOST_ACTIONS_PREFIX))
                     .map(crate::host_actions::parse)
+                    .unwrap_or_default();
+                host_macs = sdp
+                    .lines()
+                    .find_map(|line| line.strip_prefix(MACS_PREFIX))
+                    .map(|list| {
+                        list.split(',')
+                            .filter(|mac| mac.len() == 12 && mac.bytes().all(|byte| byte.is_ascii_hexdigit()))
+                            .take(4)
+                            .map(str::to_owned)
+                            .collect()
+                    })
                     .unwrap_or_default();
                 signin_id = sdp
                     .lines()
@@ -625,6 +642,7 @@ async fn negotiate(
                 config.session,
                 if control.allowed { actions } else { Vec::new() },
                 signin_id,
+                host_macs,
             )
             .await;
     }

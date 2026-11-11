@@ -931,6 +931,18 @@ async fn signin_screen_enable(
         Ok(enrolled.connection_id)
     }
 }
+/// Sends a Wake-on-LAN signal from this computer for each address.
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[tauri::command]
+async fn wake_on_lan(window: tauri::WebviewWindow, macs: Vec<String>) -> Result<(), String> {
+    main_window(&window)?;
+    if macs.is_empty() || macs.len() > 4 {
+        return Err("No network address is known for this computer yet".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || macs.iter().try_for_each(|mac| host_actions::wake(mac)))
+        .await
+        .map_err(|_| "The wake signal could not be sent")?
+}
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 #[derive(serde::Serialize)]
 struct RolloutCreated {
@@ -2096,6 +2108,7 @@ fn main() {
             remote_presence,
             update_check,
             update_install,
+            wake_on_lan,
             rollout_create,
             rollout_list,
             rollout_revoke,
@@ -2171,6 +2184,7 @@ fn main() {
             remote_presence,
             update_check,
             update_install,
+            wake_on_lan,
             rollout_create,
             rollout_list,
             rollout_revoke,
