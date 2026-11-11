@@ -30,3 +30,4 @@ body.in-session{background:#10141c;overflow:hidden}
 #typing{flex:none;border-radius:0;border:0;border-top:1px solid #3a445c;background:#1b2130;color:#fff;padding-bottom:max(11px,env(safe-area-inset-bottom))}
 #view-only{margin:0;padding:6px 12px;background:#3a2f12;color:#ffe9a8;font-size:12px}
 #session-status{color:#ffb4c0;margin:0;padding:0 12px;min-height:0}
+#meet-result{display:grid;gap:10px;margin-top:12px}#meet-result[hidden]{display:none}

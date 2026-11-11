@@ -46,6 +46,16 @@
     <p id="no-devices" class="hint" hidden data-t>No computers found.</p>
     <p class="hint"><span data-t>This browser:</span> <span id="own-id"></span></p>
   </section>
+  <section id="meet" class="card" hidden>
+    <h2 data-t>Meeting</h2>
+    <p class="hint" data-t>Share your screen and talk with up to 8 people. Guests need only the link, no account and no installation.</p>
+    <button id="meet-button" type="button" data-t>Start a meeting</button>
+    <div id="meet-result" hidden>
+      <a id="meet-open" class="primary" target="_blank" rel="noopener" data-t>Open the meeting</a>
+      <label><span data-t>Invitation link for your guests</span><input id="meet-invite" readonly></label>
+      <button id="meet-copy" type="button" data-t>Copy invitation</button>
+    </div>
+  </section>
   <p id="status" role="status"></p>
 </main>
 <div id="session" hidden>

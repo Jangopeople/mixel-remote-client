@@ -12,6 +12,7 @@ const CONFIG = Object.assign({
   authorityKeys: '2da4e754d0ab4a620e90b7d6a0afadc563a1177293be4abe0e66e639574ad907',
   storageKey: 'sb-ism-auth-token',
   signIn: '/',
+  meetings: 'https://rs.mixel.ch/meet/api/rooms',
 }, window.MIXEL_REMOTE_CONFIG || {});
 
 const $ = id => document.getElementById(id);
@@ -540,6 +541,18 @@ async function run(task) {
   }
 }
 
+// Meetings: any signed-in account can start one; guests join with the invitation link alone.
+async function startMeeting() {
+  const button = $('meet-button');
+  button.disabled = true;
+  try {
+    const response = await fetch(CONFIG.meetings, { method: 'POST', headers: { authorization: `Bearer ${await accessToken()}`, 'content-type': 'application/json' }, body: JSON.stringify({ title: who ? who.name : '' }) }).catch(() => null);
+    if (!response || !response.ok) throw new Problem(response && response.status === 429 ? t('You have started many meetings. Please try again later.') : t('The meeting could not be started. Please try again.'));
+    const room = await response.json();
+    $('meet-open').href = room.host; $('meet-invite').value = room.invite; $('meet-result').hidden = false;
+    status('');
+  } finally { button.disabled = false; }
+}
 let started = false;
 async function start() {
   if (!started) { applyTexts(); await init(); started = true; }
@@ -550,6 +563,7 @@ async function start() {
     $('signin').hidden = false; $('signin-text').textContent = problem instanceof Problem ? problem.message : t('Please sign in to Mixel ISM first.'); return;
   }
   $('account').textContent = who.name;
+  $('meet').hidden = false;
   await loadDevice();
   if (!enrollment) {
     $('register-name').value = browserName().name;
@@ -591,6 +605,12 @@ $('connect-form').onsubmit = event => {
   $('connect-button').disabled = true; unlockSound();
   run(() => request(id, code, $('remote-unattended').checked)).finally(() => { $('connect-button').disabled = false; });
 };
+$('meet-button').onclick = () => run(startMeeting);
+$('meet-copy').onclick = () => run(async () => {
+  const link = $('meet-invite').value;
+  try { await navigator.clipboard.writeText(link); } catch { $('meet-invite').select(); document.execCommand('copy'); }
+  status(t('Invitation copied.'));
+});
 $('search').oninput = () => { clearTimeout(start.search); start.search = setTimeout(renderHome, 350); };
 $('tool-end').onclick = () => endSession(t('The session was ended.'));
 $('tool-sas').onclick = () => active && record(active, ascii('mixel-action-v1:sas'));
@@ -630,4 +650,8 @@ window.addEventListener('keydown', event => keyEvent(event, true));
 window.addEventListener('keyup', event => keyEvent(event, false));
 window.addEventListener('blur', () => active && sendInputRelease(active));
 window.addEventListener('pagehide', () => { if (active) endSession(''); });
+// After signing in to ISM in another tab or window, coming back here continues without a reload.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && !who && !$('signin').hidden && storedSession()) { $('signin').hidden = true; start().catch(() => { $('signin').hidden = false; }); }
+});
 start().catch(problem => { console.error(problem); status(problem instanceof Problem ? problem.message : t('That did not work. Please try again.')); });

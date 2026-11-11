@@ -1,0 +1,9 @@
+{
+  "name": "mixel-meet",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Mixel Meet: rooms, lobby and signaling for small meetings",
+  "scripts": { "start": "node server.mjs", "test": "node --test test/*.test.mjs" },
+  "dependencies": { "ws": "8.21.0" }
+}
