@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-exclude = ["vendor/webrtc"]
+exclude = ["vendor/webrtc", "vendor/nix"]
 members = ["crates/core_protocol", "crates/signaling_server", "crates/web_client", "crates/native_os_capture", "crates/desktop_app", "crates/mobile_app", "crates/quick_host"]
 
 [workspace.package]
@@ -23,3 +23,5 @@ all = "warn"
 
 [patch.crates-io]
 webrtc = { path = "vendor/webrtc" }
+# nix 0.31.3 with two Mac-only constants no longer assumed on iPhone (needed by the phone host core).
+nix = { path = "vendor/nix" }

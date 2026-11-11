@@ -1,0 +1,4 @@
+QuickHost.xcframework
+build
+*.xcodeproj
+DerivedData

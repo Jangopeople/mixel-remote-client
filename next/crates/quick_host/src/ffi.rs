@@ -75,6 +75,14 @@ pub extern "C" fn mqs_start(host: *const Host, enrollment: *const c_char, width:
         Err(error) => give(&error),
     }
 }
+/// See `Host::accept_issuer`: accept the technician who issued the support code without asking.
+#[unsafe(no_mangle)]
+pub extern "C" fn mqs_accept_issuer(host: *const Host, on: bool) {
+    // Safety: `host` comes from `mqs_create`.
+    if let Some(host) = unsafe { host.as_ref() } {
+        host.accept_issuer(on);
+    }
+}
 #[unsafe(no_mangle)]
 pub extern "C" fn mqs_decide(host: *const Host, accept: bool) {
     // Safety: `host` comes from `mqs_create`.

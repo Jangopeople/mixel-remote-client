@@ -141,6 +141,8 @@ struct Inner {
     frames_out: Arc<tokio::sync::Mutex<mpsc::Receiver<Vec<u8>>>>,
     streaming: AtomicBool,
     online: AtomicBool,
+    /// Accept the request of the technician who issued the support code without asking again.
+    accept_issuer: AtomicBool,
     http: reqwest::Client,
 }
 
@@ -193,6 +195,7 @@ impl Host {
                 frames_out: Arc::new(tokio::sync::Mutex::new(frames_out)),
                 streaming: AtomicBool::new(false),
                 online: AtomicBool::new(false),
+                accept_issuer: AtomicBool::new(false),
                 http,
             }),
             runtime,
@@ -224,6 +227,12 @@ impl Host {
             (inner.events)(Event::Status(Phase::Offline, String::new()));
         });
         Ok(())
+    }
+    /// For devices that cannot ask during a session (the iPhone's screen broadcast has no screen of
+    /// its own): the person consented by starting the broadcast, so the request of the very technician
+    /// who issued the support code is accepted at once. Everyone else is still declined.
+    pub fn accept_issuer(&self, on: bool) {
+        self.inner.accept_issuer.store(on, Ordering::Release);
     }
     /// The answer of the person at the device to [`Event::Request`].
     pub fn decide(&self, accept: bool) {
@@ -457,9 +466,18 @@ impl Inner {
                                 .and_then(|identity| self.technician(identity, requester_connection, enrollment).map(|key| (key, identity.expires_at, identity.staff)));
                             match checked {
                                 Ok((controller, expires_at, staff)) if asked.is_none() && running.is_none() => {
-                                    asked = Some(Asked { session, controller, expires_at });
-                                    self.status(Phase::Asking, "");
-                                    (self.events)(Event::Request { connection_id: requester_connection, staff });
+                                    if self.accept_issuer.load(Ordering::Acquire) {
+                                        if requester == enrollment.profile {
+                                            asked = Some(Asked { session, controller, expires_at });
+                                            say!(wire::Out::Decide { session, accept: true });
+                                        } else {
+                                            say!(wire::Out::Decide { session, accept: false });
+                                        }
+                                    } else {
+                                        asked = Some(Asked { session, controller, expires_at });
+                                        self.status(Phase::Asking, "");
+                                        (self.events)(Event::Request { connection_id: requester_connection, staff });
+                                    }
                                 }
                                 _ => say!(wire::Out::Decide { session, accept: false }),
                             }

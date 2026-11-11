@@ -1,0 +1,4 @@
+module QuickHost {
+    header "quick_host.h"
+    export *
+}
