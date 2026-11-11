@@ -40,7 +40,9 @@
     <button id="tool-keys" type="button" data-t>Keys</button>
     <button id="tool-right" type="button" aria-pressed="false" data-t>Right click</button>
     <button id="tool-sas" type="button" hidden>Ctrl+Alt+Del</button>
+    <button id="tool-sound" type="button" hidden>Sound: on</button>
     <span id="tool-displays" hidden></span>
+    <button id="tool-zoom" type="button">1×</button>
     <button id="tool-full" type="button" data-t>Full screen</button>
     <button id="tool-end" type="button" class="danger" data-t>End</button>
   </div>
@@ -55,7 +57,7 @@
     <button type="button" data-keys="226,61">Alt+F4</button><button type="button" data-keys="76">Del</button>
   </div>
   <p id="view-only" hidden data-t>View only: the other person did not allow keyboard and mouse.</p>
-  <video id="screen" autoplay playsinline muted></video>
+  <div id="stage"><video id="screen" autoplay playsinline muted></video></div>
   <input id="typing" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Type here" data-t-placeholder>
   <p id="session-status" role="status"></p>
 </div>

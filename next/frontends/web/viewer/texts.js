@@ -42,6 +42,7 @@ const TEXTS = {
     'No computers found.': 'Keine Computer gefunden.', 'This browser:': 'Dieser Browser:',
     'Keyboard': 'Tastatur', 'Keys': 'Tasten', 'Right click': 'Rechtsklick', 'Full screen': 'Vollbild', 'End': 'Beenden',
     'View only: the other person did not allow keyboard and mouse.': 'Nur ansehen: Die andere Person hat Tastatur und Maus nicht erlaubt.',
+    'Sound: on': 'Ton: ein', 'Sound: off': 'Ton: aus',
     'Type here': 'Hier tippen',
   },
   fr: {
@@ -85,6 +86,7 @@ const TEXTS = {
     'No computers found.': 'Aucun ordinateur trouvé.', 'This browser:': 'Ce navigateur :',
     'Keyboard': 'Clavier', 'Keys': 'Touches', 'Right click': 'Clic droit', 'Full screen': 'Plein écran', 'End': 'Terminer',
     'View only: the other person did not allow keyboard and mouse.': 'Affichage seul : l’autre personne n’a pas autorisé le clavier et la souris.',
+    'Sound: on': 'Son : activé', 'Sound: off': 'Son : coupé',
     'Type here': 'Saisir ici',
   },
   it: {
@@ -128,6 +130,7 @@ const TEXTS = {
     'No computers found.': 'Nessun computer trovato.', 'This browser:': 'Questo browser:',
     'Keyboard': 'Tastiera', 'Keys': 'Tasti', 'Right click': 'Clic destro', 'Full screen': 'Schermo intero', 'End': 'Termina',
     'View only: the other person did not allow keyboard and mouse.': 'Solo visualizzazione: l’altra persona non ha consentito tastiera e mouse.',
+    'Sound: on': 'Audio: attivo', 'Sound: off': 'Audio: disattivato',
     'Type here': 'Scrivi qui',
   },
 };

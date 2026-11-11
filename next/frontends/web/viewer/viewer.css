@@ -23,9 +23,10 @@ body.in-session{background:#10141c;overflow:hidden}
 #toolbar{padding-top:max(6px,env(safe-area-inset-top))}
 #toolbar button,#keys button,#tool-displays button{font-size:13px;padding:8px 11px;background:#2a3245;border-color:#3a445c;color:#fff;white-space:nowrap;flex:none}
 #toolbar button[aria-pressed=true],#tool-displays button[aria-pressed=true]{background:#fff;color:#172033}
-#toolbar .danger{background:var(--brand);border-color:var(--brand);margin-left:auto}
+#toolbar .danger{background:var(--brand);border-color:var(--brand);margin-left:auto;position:sticky;right:0;box-shadow:-8px 0 8px #1b2130}
 #tool-displays{display:flex;gap:4px;flex:none}#tool-displays[hidden],#keys[hidden]{display:none}
-#screen{flex:1;min-height:0;width:100%;object-fit:contain;background:#000;touch-action:none;user-select:none;-webkit-user-select:none}
+#stage{flex:1;min-height:0;position:relative;overflow:hidden;background:#000}
+#screen{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;touch-action:none;user-select:none;-webkit-user-select:none;transform-origin:center center}
 #typing{flex:none;border-radius:0;border:0;border-top:1px solid #3a445c;background:#1b2130;color:#fff;padding-bottom:max(11px,env(safe-area-inset-bottom))}
 #view-only{margin:0;padding:6px 12px;background:#3a2f12;color:#ffe9a8;font-size:12px}
 #session-status{color:#ffb4c0;margin:0;padding:0 12px;min-height:0}

@@ -524,7 +524,7 @@ bytes; 3 `Commit`; 4 `Ack`; 5 `Unavailable`; 6 `GetRich`. Ids strictly increase 
   UTF-8 text, or `00 01` + PNG, or `00 02 count` + per file `name_len u16 BE, name, size u32 BE, data`
   (`223-305`). A print job is a rich payload with exactly one file (`DA/remote_clipboard.rs:147-153`).
 
-Sound frame (`CP/sound.rs:1-12`, `91-102`): mono 24 kHz IMA ADPCM, 963 bytes = predictor i16 BE,
+Sound frame (`CP/sound.rs:1-12`, `91-102`): mono 24 kHz IMA ADPCM, 483 bytes = predictor i16 BE,
 step index u8 (<= 88), 480 bytes of two 4-bit samples (low nibble first) = 960 samples (40 ms).
 Silence is not sent. `RECORD_SWITCH` (`CP/sound.rs:8`) is defined but unused; switching is done
 with the `sound:on` / `sound:off` action (`DA/remote_control.rs:610-613`).

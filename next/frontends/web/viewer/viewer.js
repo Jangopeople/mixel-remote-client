@@ -172,8 +172,17 @@ setInterval(async () => {
       send({ type: 'renew', token: await ticket() });
     }
     if (active && active.connectedAt && now() - active.connectedAt >= 700 && !active.restarting) active.restart();
+    if (!active && ++homeTicks % 2 === 0) renderHome();
   } catch (problem) { console.warn(problem); }
 }, 15000);
+let homeTicks = 0, wakeLock = null;
+async function keepAwake(on) {
+  // A phone must not go to sleep in the middle of a session.
+  try {
+    if (on && navigator.wakeLock && !wakeLock) wakeLock = await navigator.wakeLock.request('screen');
+    if (!on && wakeLock) { await wakeLock.release(); wakeLock = null; }
+  } catch { wakeLock = null; }
+}
 
 // ---------- devices and requests ----------
 async function directory(query) {
@@ -224,6 +233,8 @@ async function negotiate(session, accepted) {
   const codecs = (RTCRtpReceiver.getCapabilities('video') || { codecs: [] }).codecs.filter(codec => codec.mimeType.toLowerCase() === 'video/h264' && /packetization-mode=1/.test(codec.sdpFmtpLine || ''));
   if (!codecs.length) throw new Problem(t('This browser cannot show the remote screen (H.264 video is missing).'));
   if (transceiver.setCodecPreferences) transceiver.setCodecPreferences(codecs);
+  // A remote desktop wants every picture at once, not smooth playback: no extra buffering.
+  try { transceiver.receiver.jitterBufferTarget = 0; transceiver.receiver.playoutDelayHint = 0; } catch { /* not supported everywhere */ }
   const channel = pc.createDataChannel('mixel-control-v1', { ordered: true });
   channel.binaryType = 'arraybuffer';
   pc.ontrack = event => { $('screen').srcObject = event.streams[0] || new MediaStream([event.track]); $('screen').play().catch(() => {}); };
@@ -236,7 +247,7 @@ async function negotiate(session, accepted) {
   if (!/typ relay/.test(local)) throw new Problem(t('No relay connection is possible from this network.'));
   const pending = device.begin(context, fingerprint(local));
   send({ type: 'signal', session: accepted.session, payload: { kind: 'identity', value: JSON.parse(pending.hello()) } });
-  send({ type: 'signal', session: accepted.session, payload: { kind: 'offer', value: `${local.trimEnd()}\r\na=x-mixel-recording:1\r\na=x-mixel-input-result:1\r\na=x-mixel-displays:1\r\na=x-mixel-actions:1\r\na=x-mixel-features:hd\r\n` } });
+  send({ type: 'signal', session: accepted.session, payload: { kind: 'offer', value: `${local.trimEnd()}\r\na=x-mixel-recording:1\r\na=x-mixel-input-result:1\r\na=x-mixel-displays:1\r\na=x-mixel-actions:1\r\na=x-mixel-features:hd,sound\r\n` } });
   offerSent = true;
   session.session = accepted.session;
   session.pending = { pending, channel, opened: new Promise(resolve => { channel.onopen = resolve; }) };
@@ -304,10 +315,45 @@ async function restart(session) {
     old.close();
   } catch (problem) { endSession(problem instanceof Problem ? problem.message : t('The connection was lost.')); }
 }
+const SOUND = ascii('mixel-sound-v1:');
 function onRecord(session, plain) {
-  // input acknowledgments, "screen unchanged" notes: nothing to do in the browser
-  void session; void plain;
+  const kind = new TextDecoder().decode(plain.subarray(0, 14)).replace(/[^a-z-]/g, '.'); recordKinds[kind] = (recordKinds[kind] || 0) + 1;
+  // Sound frames are played; input acknowledgments and "screen unchanged" notes need nothing here.
+  if (plain.length === SOUND.length + 483 && SOUND.every((byte, index) => plain[index] === byte)) { soundReceived++; playSound(plain.subarray(SOUND.length)); }
+  void session;
 }
+// Remote sound: mono, 24 kHz, IMA ADPCM, 40 ms per frame = 3 header bytes + 480 bytes
+// with two samples each (same format as the desktop app).
+const STEP = [7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45, 50, 55, 60, 66, 73, 80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209, 230, 253, 279, 307, 337, 371, 408, 449, 494, 544, 598, 658, 724, 796, 876, 963, 1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066, 2272, 2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871, 5358, 5894, 6484, 7132, 7845, 8630, 9493, 10442, 11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767];
+const STEP_INDEX = [-1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8];
+let audio = null, audioNext = 0, soundOn = true;
+function unlockSound() {
+  // Browsers only allow sound after a tap or click: prepare it when the user connects.
+  try { const Context = window.AudioContext || window.webkitAudioContext; if (!audio && Context) audio = new Context(); if (audio && audio.state === 'suspended') audio.resume(); } catch { audio = null; }
+}
+function playSound(frame) {
+  if (!audio || !soundOn || frame[2] > 88) return;
+  let predictor = (frame[0] << 8) | frame[1]; if (predictor & 0x8000) predictor -= 0x10000;
+  let index = frame[2], position = 0;
+  const buffer = audio.createBuffer(1, 960, 24000), samples = buffer.getChannelData(0);
+  for (let offset = 3; offset < 483; offset++) for (const code of [frame[offset] & 15, frame[offset] >> 4]) {
+    const size = STEP[index];
+    let difference = size >> 3;
+    if (code & 4) difference += size; if (code & 2) difference += size >> 1; if (code & 1) difference += size >> 2;
+    predictor = Math.max(-32768, Math.min(32767, code & 8 ? predictor - difference : predictor + difference));
+    index = Math.max(0, Math.min(88, index + STEP_INDEX[code]));
+    samples[position++] = predictor / 32768;
+  }
+  const time = audio.currentTime;
+  if (audioNext < time + 0.05 || audioNext > time + 0.6) audioNext = time + 0.08;
+  const source = audio.createBufferSource(); source.buffer = buffer; source.connect(audio.destination); source.start(audioNext);
+  audioNext += 0.04;
+  soundFrames++;
+}
+let soundFrames = 0, soundReceived = 0;
+const recordKinds = {};
+// For support and tests: how many sound frames arrived and were handed to the speakers.
+window.__mixelSound = () => ({ received: soundReceived, played: soundFrames, output: audio ? audio.state : 'none', records: recordKinds });
 async function keyframeLoop(session, pc) {
   let decoded = -1, losses = 0;
   while (active === session && session.pc === pc) {
@@ -336,6 +382,7 @@ function endSession(message) {
   send({ type: 'close', session: session.session });
   try { session.pc && session.pc.close(); } catch { /* closed */ }
   $('screen').srcObject = null;
+  setZoom(1);
   showSession(false);
   status(message || '');
   renderHome();
@@ -379,6 +426,11 @@ function pointerMove(event) {
   if (!touch) return;
   event.preventDefault();
   const dx = event.clientX - touch.x, dy = event.clientY - touch.y;
+  if (touchMode === 'scroll' && zoom > 1) {
+    // Zoomed in: two fingers move the picture, they do not scroll the remote computer.
+    pan(dx, dy); touch.x = event.clientX; touch.y = event.clientY;
+    return;
+  }
   if (touchMode === 'scroll') {
     // The content follows the fingers; the host counts in mouse-wheel units (120 = one notch).
     if (Math.abs(dx) + Math.abs(dy) >= 4) { sendInput(control => control.wheel(clampWheel(-dx * 2), clampWheel(dy * 2))); touch.x = event.clientX; touch.y = event.clientY; }
@@ -403,6 +455,13 @@ function pointerUp(event) {
   } else if (touchMode === 'drag') { moveNow(event); sendInput(control => control.button(1, false)); }
   if (touches.size === 0) touchMode = null;
 }
+let zoom = 1, panX = 0, panY = 0;
+function pan(dx, dy) {
+  const stage = $('stage').getBoundingClientRect(), limitX = stage.width * (zoom - 1) / 2, limitY = stage.height * (zoom - 1) / 2;
+  panX = Math.max(-limitX, Math.min(limitX, panX + dx)); panY = Math.max(-limitY, Math.min(limitY, panY + dy));
+  screen().style.transform = zoom === 1 ? '' : `translate(${panX}px, ${panY}px) scale(${zoom})`;
+}
+function setZoom(value) { zoom = value; if (zoom === 1) { panX = 0; panY = 0; } pan(0, 0); $('tool-zoom').textContent = `${zoom}×`; }
 const USAGE = { Enter: 0x28, Escape: 0x29, Backspace: 0x2a, Tab: 0x2b, Space: 0x2c, Minus: 0x2d, Equal: 0x2e, BracketLeft: 0x2f, BracketRight: 0x30, Backslash: 0x31, Semicolon: 0x33, Quote: 0x34, Backquote: 0x35, Comma: 0x36, Period: 0x37, Slash: 0x38, CapsLock: 0x39, PrintScreen: 0x46, ScrollLock: 0x47, Pause: 0x48, Insert: 0x49, Home: 0x4a, PageUp: 0x4b, Delete: 0x4c, End: 0x4d, PageDown: 0x4e, ArrowRight: 0x4f, ArrowLeft: 0x50, ArrowDown: 0x51, ArrowUp: 0x52, NumLock: 0x53, IntlBackslash: 0x64, ContextMenu: 0x65, ControlLeft: 0xe0, ShiftLeft: 0xe1, AltLeft: 0xe2, MetaLeft: 0xe3, ControlRight: 0xe4, ShiftRight: 0xe5, AltRight: 0xe6, MetaRight: 0xe7 };
 function usage(code) {
   if (/^Key[A-Z]$/.test(code)) return 4 + code.charCodeAt(3) - 65;
@@ -425,10 +484,13 @@ function status(text) { $('status').textContent = text; $('session-status').text
 function showSession(visible) {
   document.body.classList.toggle('in-session', visible);
   $('home').hidden = visible; $('session').hidden = !visible;
+  keepAwake(visible);
   if (!visible && document.fullscreenElement) document.exitFullscreen().catch(() => {});
 }
 function renderToolbar(session) {
   $('tool-sas').hidden = !session.actions.includes('sas');
+  $('tool-sound').hidden = !session.actions.includes('sound');
+  $('tool-sound').textContent = soundOn ? t('Sound: on') : t('Sound: off');
   const displays = $('tool-displays'); displays.replaceChildren(); displays.hidden = session.displays < 2;
   for (let index = 0; index < session.displays; index++) {
     const button = document.createElement('button');
@@ -456,7 +518,8 @@ async function renderHome() {
       const detail = document.createElement('span'); detail.textContent = `${String(entry.id).replace(/(\d{3})(?=\d)/g, '$1 ')} · ${reachable.includes(entry.id) ? t('online') : t('offline')}`;
       if (reachable.includes(entry.id)) item.classList.add('online');
       item.append(name, detail);
-      item.onclick = () => { $('remote-id').value = String(entry.id); $('remote-id').focus(); };
+      // One tap connects; the one-time password and unattended choice above still apply.
+      item.onclick = () => { $('remote-id').value = String(entry.id); $('connect-form').requestSubmit(); };
       list.appendChild(item);
     }
     $('no-devices').hidden = devices.length > 0;
@@ -499,14 +562,16 @@ $('connect-form').onsubmit = event => {
   const id = +$('remote-id').value.replace(/\D/g, ''), code = $('remote-code').value.replace(/\s/g, '').toUpperCase();
   if (!(id >= 100000000 && id <= 999999999)) { status(t('Enter the 9-digit Remote ID.')); return; }
   if (code && !/^[0-9A-F]{12}$/.test(code)) { status(t('The one-time password has 12 characters.')); return; }
-  $('connect-button').disabled = true;
+  $('connect-button').disabled = true; unlockSound();
   run(() => request(id, code, $('remote-unattended').checked)).finally(() => { $('connect-button').disabled = false; });
 };
 $('search').oninput = () => { clearTimeout(start.search); start.search = setTimeout(renderHome, 350); };
 $('tool-end').onclick = () => endSession(t('The session was ended.'));
 $('tool-sas').onclick = () => active && record(active, ascii('mixel-action-v1:sas'));
+$('tool-sound').onclick = () => { if (!active) return; soundOn = !soundOn; unlockSound(); record(active, ascii(`mixel-action-v1:sound:${soundOn ? 'on' : 'off'}`)); renderToolbar(active); };
 $('tool-right').onclick = () => { rightClickNext = !rightClickNext; $('tool-right').setAttribute('aria-pressed', String(rightClickNext)); };
 $('tool-full').onclick = () => { const target = $('session'); (document.fullscreenElement ? document.exitFullscreen() : target.requestFullscreen ? target.requestFullscreen() : Promise.resolve()).catch(() => {}); };
+$('tool-zoom').onclick = () => setZoom(zoom >= 3 ? 1 : zoom + 1);
 $('tool-keyboard').onclick = () => { const field = $('typing'); field.value = ''; field.focus(); };
 $('tool-keys').onclick = () => { $('keys').hidden = !$('keys').hidden; };
 for (const button of document.querySelectorAll('#keys button')) button.onclick = () => tapKey(...button.dataset.keys.split(',').map(Number));
