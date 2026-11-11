@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Mixel Quick Support</string>
+    <string name="intro">Un technicien Mixel peut voir votre écran et vous aider. Demandez-lui un code d’assistance et saisissez-le ici.</string>
+    <string name="code_hint">Code d’assistance</string>
+    <string name="connect">Se connecter</string>
+    <string name="disconnect">Se déconnecter</string>
+    <string name="end_session">Terminer la session</string>
+    <string name="status_connecting">Connexion…</string>
+    <string name="status_ready">Prêt. Indiquez ce numéro au technicien :</string>
+    <string name="status_asking">Un technicien souhaite se connecter.</string>
+    <string name="status_negotiating">Démarrage de la session…</string>
+    <string name="status_active">Le technicien voit votre écran.</string>
+    <string name="status_offline">Non connecté.</string>
+    <string name="ask_title">Autoriser le technicien ?</string>
+    <string name="ask_staff">Un membre de l’équipe Mixel (ID Remote %1$s) souhaite voir votre écran.</string>
+    <string name="ask_other">Une personne de votre entreprise (ID Remote %1$s) souhaite voir votre écran.</string>
+    <string name="ask_control_on">Cette personne pourra aussi toucher l’écran et saisir du texte sur ce téléphone.</string>
+    <string name="ask_control_off">Cette personne peut seulement regarder ; elle ne peut pas utiliser ce téléphone.</string>
+    <string name="allow">Autoriser</string>
+    <string name="decline">Refuser</string>
+    <string name="code_invalid">Ce code d’assistance est invalide ou a expiré.</string>
+    <string name="failed">Cela n’a pas fonctionné. Veuillez réessayer.</string>
+    <string name="session_ended">La session est terminée.</string>
+    <string name="control_title">Permettre au technicien d’utiliser ce téléphone</string>
+    <string name="control_off">Désactivé. Le technicien peut seulement regarder. Pour autoriser le toucher et la saisie, activez « Mixel Quick Support » dans Accessibilité.</string>
+    <string name="control_on">Activé. Pendant une session, le technicien peut toucher l’écran et saisir du texte. Vous pouvez le désactiver à tout moment dans Accessibilité.</string>
+    <string name="control_open">Ouvrir les réglages d’accessibilité</string>
+    <string name="control_label">Mixel Quick Support</string>
+    <string name="control_description">Permet à un technicien Mixel de toucher, balayer et saisir du texte sur ce téléphone pendant une session d’assistance que vous avez autorisée. Utilisé uniquement pendant une telle session ; ne lit aucun contenu de l’écran.</string>
+    <string name="notification_channel">Session d’assistance</string>
+    <string name="notification_text">Votre écran est partagé avec un technicien Mixel.</string>
+    <string name="privacy">La session est chiffrée. Elle se termine lorsque vous ou le technicien y mettez fin ; l’enregistrement de ce téléphone est ensuite supprimé automatiquement.</string>
+</resources>

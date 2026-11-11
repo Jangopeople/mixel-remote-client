@@ -26,5 +26,8 @@ zeroize.workspace = true
 [lints]
 workspace = true
 
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+
 [dev-dependencies]
 openh264 = "=0.9.9"

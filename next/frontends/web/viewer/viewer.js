@@ -241,6 +241,7 @@ async function startSession(accepted, key, hostId, unattended) {
   const session = { session: accepted.session, hostId, key, unattended, hello: null, candidates: [], pc: null, control: null, permissions: null, displays: 0, display: 0, displayAll: false, actions: [], connectedAt: 0, restarting: false, pending: null };
   session.onSignal = payload => onSignal(session, payload);
   session.restart = () => restart(session);
+  window.__mixelRenew = () => session.restart(); // lab: renew the link now instead of after 12 minutes
   active = session;
   showSession(true);
   await negotiate(session, accepted);

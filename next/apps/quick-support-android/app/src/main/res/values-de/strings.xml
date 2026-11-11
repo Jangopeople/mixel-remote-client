@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Mixel Quick Support</string>
+    <string name="intro">Ein Mixel-Techniker kann Ihren Bildschirm sehen und Ihnen helfen. Lassen Sie sich vom Techniker einen Support-Code geben und geben Sie ihn hier ein.</string>
+    <string name="code_hint">Support-Code</string>
+    <string name="connect">Verbinden</string>
+    <string name="disconnect">Trennen</string>
+    <string name="end_session">Sitzung beenden</string>
+    <string name="status_connecting">Verbindung wird hergestellt…</string>
+    <string name="status_ready">Bereit. Nennen Sie dem Techniker diese Nummer:</string>
+    <string name="status_asking">Ein Techniker möchte sich verbinden.</string>
+    <string name="status_negotiating">Sitzung wird gestartet…</string>
+    <string name="status_active">Der Techniker sieht Ihren Bildschirm.</string>
+    <string name="status_offline">Nicht verbunden.</string>
+    <string name="ask_title">Techniker zulassen?</string>
+    <string name="ask_staff">Ein Mixel-Mitarbeiter (Remote-ID %1$s) möchte Ihren Bildschirm sehen.</string>
+    <string name="ask_other">Jemand aus Ihrem Unternehmen (Remote-ID %1$s) möchte Ihren Bildschirm sehen.</string>
+    <string name="ask_control_on">Die Person kann auf diesem Smartphone auch tippen und schreiben.</string>
+    <string name="ask_control_off">Die Person kann nur zusehen und das Smartphone nicht bedienen.</string>
+    <string name="allow">Zulassen</string>
+    <string name="decline">Ablehnen</string>
+    <string name="code_invalid">Dieser Support-Code ist ungültig oder abgelaufen.</string>
+    <string name="failed">Das hat nicht funktioniert. Bitte versuchen Sie es erneut.</string>
+    <string name="session_ended">Die Sitzung wurde beendet.</string>
+    <string name="control_title">Techniker darf dieses Smartphone bedienen</string>
+    <string name="control_off">Aus. Der Techniker kann nur zusehen. Um Tippen und Schreiben zu erlauben, schalten Sie «Mixel Quick Support» unter Bedienungshilfen ein.</string>
+    <string name="control_on">Ein. Während einer Sitzung kann der Techniker tippen und schreiben. Sie können dies jederzeit unter Bedienungshilfen ausschalten.</string>
+    <string name="control_open">Bedienungshilfen öffnen</string>
+    <string name="control_label">Mixel Quick Support</string>
+    <string name="control_description">Ermöglicht einem Mixel-Techniker, während einer von Ihnen erlaubten Support-Sitzung auf diesem Smartphone zu tippen, zu wischen und zu schreiben. Wird nur während einer solchen Sitzung verwendet und liest keine Bildschirminhalte.</string>
+    <string name="notification_channel">Support-Sitzung</string>
+    <string name="notification_text">Ihr Bildschirm wird mit einem Mixel-Techniker geteilt.</string>
+    <string name="privacy">Die Sitzung ist verschlüsselt. Sie endet, wenn Sie oder der Techniker sie beenden; die Registrierung dieses Smartphones wird danach automatisch entfernt.</string>
+</resources>

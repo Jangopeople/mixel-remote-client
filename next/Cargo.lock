@@ -4156,6 +4156,7 @@ dependencies = [
  "core_protocol",
  "ed25519-dalek",
  "futures-util",
+ "jni",
  "openh264",
  "rand_core 0.6.4",
  "reqwest 0.12.28",

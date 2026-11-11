@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Mixel Quick Support</string>
+    <string name="intro">A Mixel technician can see your screen and help you. Ask the technician for a support code and type it here.</string>
+    <string name="code_hint">Support code</string>
+    <string name="connect">Connect</string>
+    <string name="disconnect">Disconnect</string>
+    <string name="end_session">End session</string>
+    <string name="status_connecting">Connecting…</string>
+    <string name="status_ready">Ready. Tell the technician this number:</string>
+    <string name="status_asking">A technician wants to connect.</string>
+    <string name="status_negotiating">Starting the session…</string>
+    <string name="status_active">The technician sees your screen.</string>
+    <string name="status_offline">Not connected.</string>
+    <string name="ask_title">Allow the technician?</string>
+    <string name="ask_staff">A Mixel team member (Remote ID %1$s) wants to see your screen.</string>
+    <string name="ask_other">Someone from your company (Remote ID %1$s) wants to see your screen.</string>
+    <string name="ask_control_on">They will also be able to tap and type on this phone.</string>
+    <string name="ask_control_off">They can only look; they cannot operate this phone.</string>
+    <string name="allow">Allow</string>
+    <string name="decline">Decline</string>
+    <string name="code_invalid">This support code is not valid or has expired.</string>
+    <string name="failed">That did not work. Please try again.</string>
+    <string name="session_ended">The session has ended.</string>
+    <string name="control_title">Let the technician operate this phone</string>
+    <string name="control_off">Off. The technician can only look. To allow tapping and typing, switch on “Mixel Quick Support” under Accessibility.</string>
+    <string name="control_on">On. During a session the technician can tap and type. You can switch this off at any time under Accessibility.</string>
+    <string name="control_open">Open Accessibility settings</string>
+    <string name="control_label">Mixel Quick Support</string>
+    <string name="control_description">Lets a Mixel technician tap, swipe and type on this phone during a support session that you allowed. It is used only while such a session runs and reads no screen content.</string>
+    <string name="notification_channel">Support session</string>
+    <string name="notification_text">Your screen is being shared with a Mixel technician.</string>
+    <string name="privacy">The session is encrypted. It ends when you or the technician end it; the registration of this phone is removed automatically afterwards.</string>
+</resources>

@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Mixel Quick Support</string>
+    <string name="intro">Un tecnico Mixel può vedere il tuo schermo e aiutarti. Chiedi al tecnico un codice di assistenza e inseriscilo qui.</string>
+    <string name="code_hint">Codice di assistenza</string>
+    <string name="connect">Connetti</string>
+    <string name="disconnect">Disconnetti</string>
+    <string name="end_session">Termina sessione</string>
+    <string name="status_connecting">Connessione…</string>
+    <string name="status_ready">Pronto. Comunica questo numero al tecnico:</string>
+    <string name="status_asking">Un tecnico vuole connettersi.</string>
+    <string name="status_negotiating">Avvio della sessione…</string>
+    <string name="status_active">Il tecnico vede il tuo schermo.</string>
+    <string name="status_offline">Non connesso.</string>
+    <string name="ask_title">Autorizzare il tecnico?</string>
+    <string name="ask_staff">Un membro del team Mixel (ID Remote %1$s) vuole vedere il tuo schermo.</string>
+    <string name="ask_other">Qualcuno della tua azienda (ID Remote %1$s) vuole vedere il tuo schermo.</string>
+    <string name="ask_control_on">Potrà anche toccare lo schermo e scrivere su questo telefono.</string>
+    <string name="ask_control_off">Può solo guardare; non può usare questo telefono.</string>
+    <string name="allow">Consenti</string>
+    <string name="decline">Rifiuta</string>
+    <string name="code_invalid">Questo codice di assistenza non è valido o è scaduto.</string>
+    <string name="failed">Non ha funzionato. Riprova.</string>
+    <string name="session_ended">La sessione è terminata.</string>
+    <string name="control_title">Consenti al tecnico di usare questo telefono</string>
+    <string name="control_off">Disattivato. Il tecnico può solo guardare. Per consentire tocchi e scrittura, attiva «Mixel Quick Support» in Accessibilità.</string>
+    <string name="control_on">Attivo. Durante una sessione il tecnico può toccare e scrivere. Puoi disattivarlo in qualsiasi momento in Accessibilità.</string>
+    <string name="control_open">Apri impostazioni di accessibilità</string>
+    <string name="control_label">Mixel Quick Support</string>
+    <string name="control_description">Consente a un tecnico Mixel di toccare, scorrere e scrivere su questo telefono durante una sessione di assistenza che hai autorizzato. Usato solo durante tale sessione; non legge i contenuti dello schermo.</string>
+    <string name="notification_channel">Sessione di assistenza</string>
+    <string name="notification_text">Il tuo schermo è condiviso con un tecnico Mixel.</string>
+    <string name="privacy">La sessione è cifrata. Termina quando tu o il tecnico la chiudete; la registrazione di questo telefono viene poi rimossa automaticamente.</string>
+</resources>

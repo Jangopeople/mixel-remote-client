@@ -5,6 +5,9 @@
 //! one attended session. The app around this core supplies the encoded screen picture
 //! ([`Host::push_frame`]) and, where the system allows it, carries out the technician's input
 //! ([`Event::Input`]). Nothing here needs a signed-in user and nothing here grants unattended access.
+#[cfg(target_os = "android")]
+mod android;
+pub mod ffi;
 mod session;
 mod wire;
 
@@ -104,6 +107,26 @@ pub enum Event {
     KeyframeWanted,
 }
 
+impl Event {
+    /// The event as a small JSON text, the form in which the phone apps receive it.
+    pub fn json(&self) -> String {
+        match self {
+            Self::Status(phase, message) => serde_json::json!({ "type": "status", "phase": format!("{phase:?}").to_lowercase(), "message": message }),
+            Self::Request { connection_id, staff } => serde_json::json!({ "type": "request", "connection_id": connection_id, "staff": staff }),
+            Self::SessionStarted { control } => serde_json::json!({ "type": "started", "control": control }),
+            Self::SessionEnded(message) => serde_json::json!({ "type": "ended", "message": message }),
+            Self::KeyframeWanted => serde_json::json!({ "type": "keyframe" }),
+            Self::Input(InputEvent::Pointer { x, y }) => serde_json::json!({ "type": "pointer", "x": x, "y": y }),
+            Self::Input(InputEvent::Button { button, down }) => serde_json::json!({ "type": "button", "button": button, "down": down }),
+            Self::Input(InputEvent::Wheel { horizontal, vertical }) => serde_json::json!({ "type": "wheel", "horizontal": horizontal, "vertical": vertical }),
+            Self::Input(InputEvent::Key { usage, down }) => serde_json::json!({ "type": "key", "usage": usage, "down": down }),
+            Self::Input(InputEvent::Text(text)) => serde_json::json!({ "type": "text", "text": text }),
+            Self::Input(InputEvent::ReleaseAll) => serde_json::json!({ "type": "release" }),
+        }
+        .to_string()
+    }
+}
+
 enum Command {
     Decide(bool),
     End,
@@ -126,6 +149,13 @@ pub struct Host {
     runtime: tokio::runtime::Runtime,
 }
 
+/// Lab tracing: with MQS_LOG set, the steps of a connection go to the error output.
+fn trace(text: &str) {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *ON.get_or_init(|| std::env::var_os("MQS_LOG").is_some()) {
+        eprintln!("[{}] {text}", unix() % 100_000);
+    }
+}
 fn unix() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|value| value.as_secs()).unwrap_or(0)
 }
@@ -405,6 +435,7 @@ impl Inner {
                     Some(task) => task.await.unwrap_or_else(|_| Err("The session stopped unexpectedly".into())),
                     None => Ok(()),
                 };
+                trace(&format!("session task finished: {outcome:?}"));
                 say!(wire::Out::Close { session: run.session });
                 running = None;
                 self.streaming.store(false, Ordering::Release);
@@ -415,7 +446,8 @@ impl Inner {
                 message = read.next() => {
                     let message = message.ok_or("The connection service link closed")?.map_err(|_| "The connection service link failed")?;
                     let Message::Text(text) = message else { continue };
-                    let Ok(message) = serde_json::from_str::<wire::In>(text.as_str()) else { continue };
+                    let Ok(message) = serde_json::from_str::<wire::In>(text.as_str()) else { trace(&format!("unreadable message: {}", text.chars().take(160).collect::<String>())); continue };
+                    if !matches!(message, wire::In::Signal { .. } | wire::In::Renewed { .. } | wire::In::Other) { trace(&format!("message: {}", text.chars().take(90).collect::<String>())); }
                     match message {
                         wire::In::Consent { session, requester_connection, requester, unattended, requester_identity } => {
                             let checked = requester_identity
@@ -509,7 +541,8 @@ impl Inner {
                             let Some(mut run) = running.take().filter(|run| run.session == previous) else { continue };
                             run.stop.store(true, Ordering::Release);
                             if let Some(task) = run.task.take() {
-                                let _ = tokio::time::timeout(Duration::from_secs(8), task).await;
+                                let ended = tokio::time::timeout(Duration::from_secs(8), task).await;
+                                trace(&format!("old link closed for renewal: {ended:?}"));
                             }
                             match self.binding(session, nonce, Some(&controller_identity), Some(&host_identity), &ticket, run.controller, enrollment) {
                                 Ok(binding) => {
