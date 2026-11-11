@@ -1,0 +1,3 @@
+#!/bin/bash
+# clip.sh <host> <mode>: run clip.ps1 in the VM's interactive session and print the result
+ssh $1 "Remove-Item qa-lab\\clip.txt -EA 0; \$a = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -STA -WindowStyle Hidden -ExecutionPolicy Bypass -File C:\\Users\\qa\\qa-lab\\clip.ps1 $2'; \$p = New-ScheduledTaskPrincipal -UserId 'qa' -LogonType Interactive -RunLevel Limited; Register-ScheduledTask -TaskName 'lab-clip' -Action \$a -Principal \$p -Force | Out-Null; Start-ScheduledTask -TaskName 'lab-clip'; Start-Sleep 5; Unregister-ScheduledTask -TaskName 'lab-clip' -Confirm:\$false; Get-Content qa-lab\\clip.txt"

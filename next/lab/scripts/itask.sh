@@ -1,0 +1,3 @@
+#!/bin/bash
+# itask.sh <host> <seconds> <script.ps1 and args>: run a qa-lab script in the VM's interactive session, print clip.txt
+ssh $1 "Remove-Item qa-lab\\clip.txt -EA 0; \$a = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -STA -WindowStyle Hidden -ExecutionPolicy Bypass -File C:\\Users\\qa\\qa-lab\\$3'; \$p = New-ScheduledTaskPrincipal -UserId 'qa' -LogonType Interactive -RunLevel Limited; Register-ScheduledTask -TaskName 'lab-it' -Action \$a -Principal \$p -Force | Out-Null; Start-ScheduledTask -TaskName 'lab-it'; Start-Sleep $2; Unregister-ScheduledTask -TaskName 'lab-it' -Confirm:\$false; Get-Content qa-lab\\clip.txt -EA 0"
