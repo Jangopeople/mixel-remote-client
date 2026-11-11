@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="robots" content="noindex">
+<title>Mixel Remote</title>
+<link rel="stylesheet" href="viewer.css">
+</head>
+<body>
+<main id="home">
+  <header><h1>Mixel Remote</h1><p data-t>Remote control in your browser</p><p id="account" class="account"></p></header>
+  <section id="signin" class="card" hidden><p id="signin-text"></p><a id="signin-link" class="primary" href="/" data-t>Open Mixel ISM</a></section>
+  <section id="register" class="card" hidden>
+    <h2 data-t>Register this browser</h2>
+    <p class="hint" data-t>To connect from here, this browser is registered once as one of your devices. It gets its own Remote ID.</p>
+    <label id="register-company-row" hidden><span data-t>Company</span><select id="register-company"></select></label>
+    <label><span data-t>Name</span><input id="register-name" maxlength="60" autocomplete="off"></label>
+    <button id="register-button" class="primary" type="button" data-t>Register</button>
+  </section>
+  <section id="connect" class="card" hidden>
+    <h2 data-t>Connect to a computer</h2>
+    <form id="connect-form">
+      <label><span data-t>Remote ID</span><input id="remote-id" inputmode="numeric" autocomplete="off" maxlength="11" placeholder="123 456 789"></label>
+      <label><span data-t>One-time password, if provided</span><input id="remote-code" autocomplete="off" autocapitalize="characters" maxlength="14"></label>
+      <label class="check"><input id="remote-unattended" type="checkbox"><span data-t>Use unattended access if granted</span></label>
+      <button id="connect-button" class="primary" type="submit" data-t>Connect</button>
+    </form>
+    <h2 data-t>Your computers</h2>
+    <input id="search" type="search" autocomplete="off" placeholder="Search" data-t-placeholder>
+    <div id="devices"></div>
+    <p id="no-devices" class="hint" hidden data-t>No computers found.</p>
+    <p class="hint"><span data-t>This browser:</span> <span id="own-id"></span></p>
+  </section>
+  <p id="status" role="status"></p>
+</main>
+<div id="session" hidden>
+  <div id="toolbar">
+    <button id="tool-keyboard" type="button" data-t>Keyboard</button>
+    <button id="tool-keys" type="button" data-t>Keys</button>
+    <button id="tool-right" type="button" aria-pressed="false" data-t>Right click</button>
+    <button id="tool-sas" type="button" hidden>Ctrl+Alt+Del</button>
+    <span id="tool-displays" hidden></span>
+    <button id="tool-full" type="button" data-t>Full screen</button>
+    <button id="tool-end" type="button" class="danger" data-t>End</button>
+  </div>
+  <div id="keys" hidden>
+    <button type="button" data-keys="41">Esc</button><button type="button" data-keys="43">Tab</button>
+    <button type="button" data-keys="40">Enter</button><button type="button" data-keys="42">⌫</button>
+    <button type="button" data-keys="80">←</button><button type="button" data-keys="82">↑</button>
+    <button type="button" data-keys="81">↓</button><button type="button" data-keys="79">→</button>
+    <button type="button" data-keys="227">Win</button><button type="button" data-keys="224,6">Ctrl+C</button>
+    <button type="button" data-keys="224,25">Ctrl+V</button><button type="button" data-keys="224,4">Ctrl+A</button>
+    <button type="button" data-keys="224,29">Ctrl+Z</button><button type="button" data-keys="226,43">Alt+Tab</button>
+    <button type="button" data-keys="226,61">Alt+F4</button><button type="button" data-keys="76">Del</button>
+  </div>
+  <p id="view-only" hidden data-t>View only: the other person did not allow keyboard and mouse.</p>
+  <video id="screen" autoplay playsinline muted></video>
+  <input id="typing" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Type here" data-t-placeholder>
+  <p id="session-status" role="status"></p>
+</div>
+<script type="module" src="viewer.js"></script>
+</body>
+</html>
