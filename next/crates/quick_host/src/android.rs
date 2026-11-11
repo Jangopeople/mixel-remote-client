@@ -62,6 +62,21 @@ pub extern "system" fn Java_ch_mixel_quicksupport_Native_enroll<'local>(mut env:
         }
     }
 }
+/// Blocks; call off the main thread. Returns this device's ID and, once claimed, its registration (JSON), or throws.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_ch_mixel_quicksupport_Native_register<'local>(mut env: JNIEnv<'local>, _class: JClass<'local>, handle: jlong, name: JString<'local>) -> jstring {
+    let (Some(host), Ok(name)) = (host(handle), env.get_string(&name).map(String::from)) else {
+        fail(&mut env, "Invalid request");
+        return std::ptr::null_mut();
+    };
+    match host.register(&name) {
+        Ok(registration) => env.new_string(registration.json()).map(JString::into_raw).unwrap_or(std::ptr::null_mut()),
+        Err(error) => {
+            fail(&mut env, &error);
+            std::ptr::null_mut()
+        }
+    }
+}
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_ch_mixel_quicksupport_Native_start<'local>(mut env: JNIEnv<'local>, _class: JClass<'local>, handle: jlong, enrollment: JString<'local>, width: jint, height: jint, control: jboolean) {
     let result = host(handle).ok_or_else(|| "No host".to_owned()).and_then(|host| {

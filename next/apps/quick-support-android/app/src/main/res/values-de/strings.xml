@@ -7,7 +7,7 @@
     <string name="disconnect">Trennen</string>
     <string name="end_session">Sitzung beenden</string>
     <string name="status_connecting">Verbindung wird hergestellt…</string>
-    <string name="status_ready">Bereit. Lassen Sie diese App geöffnet: Der Techniker fragt jetzt an, Ihren Bildschirm zu sehen.\n\nGerätenummer, falls der Techniker danach fragt:</string>
+    <string name="status_ready">Bereit. Die Anfrage des Technikers erscheint gleich hier.</string>
     <string name="status_asking">Ein Techniker möchte sich verbinden.</string>
     <string name="status_negotiating">Sitzung wird gestartet…</string>
     <string name="status_active">Der Techniker sieht Ihren Bildschirm.</string>
@@ -21,6 +21,8 @@
     <string name="decline">Ablehnen</string>
     <string name="code_invalid">Dieser Support-Code ist ungültig oder abgelaufen.</string>
     <string name="unreachable">Mixel ist nicht erreichbar. Prüfen Sie die Internetverbindung und versuchen Sie es erneut.</string>
+    <string name="your_id">Ihre ID</string>
+    <string name="status_waiting">Nennen Sie diese Nummer Ihrem Mixel-Techniker. Er verbindet sich, und Sie erlauben es hier.\n\nWarten auf den Techniker… Lassen Sie diese App geöffnet.</string>
     <string name="failed">Das hat nicht funktioniert. Bitte versuchen Sie es erneut.</string>
     <string name="session_ended">Die Sitzung wurde beendet.</string>
     <string name="control_title">Techniker darf dieses Smartphone bedienen</string>
@@ -31,5 +33,5 @@
     <string name="control_description">Ermöglicht einem Mixel-Techniker, während einer von Ihnen erlaubten Support-Sitzung auf diesem Smartphone zu tippen, zu wischen und zu schreiben. Wird nur während einer solchen Sitzung verwendet und liest keine Bildschirminhalte.</string>
     <string name="notification_channel">Support-Sitzung</string>
     <string name="notification_text">Ihr Bildschirm wird mit einem Mixel-Techniker geteilt.</string>
-    <string name="privacy">Die Sitzung ist verschlüsselt. Sie endet, wenn Sie oder der Techniker sie beenden; die Registrierung dieses Smartphones wird danach automatisch entfernt.</string>
+    <string name="privacy">Die Sitzung ist verschlüsselt. Nur ein Mixel-Techniker, dem Sie diese ID nennen, kann sich verbinden – und erst, wenn Sie es erlauben.</string>
 </resources>

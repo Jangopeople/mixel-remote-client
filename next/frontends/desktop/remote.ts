@@ -75,6 +75,15 @@
   let reconnect: {host: number; signin: number | null; unattended: boolean; until: number; since: number; wentOffline: boolean; lastTry: number; session: string} | null = null;
   let rebootArmed = false, lastPresence = 0, lastRequestUnattended = false;
   const soundToggle = element<HTMLButtonElement>('remote-sound');
+  // Protections for the computer being helped; the host switches them off when the session ends.
+  const toggles = {privacy: element<HTMLButtonElement>('remote-privacy'), block: element<HTMLButtonElement>('remote-block'), lockend: element<HTMLButtonElement>('remote-lockend')};
+  const toggleText: Record<keyof typeof toggles, string> = {privacy: 'Privacy screen', block: 'Block input', lockend: 'Lock when done'};
+  const lockButton = element<HTMLButtonElement>('remote-lock');
+  // Show pointer: the person at the computer sees where the technician points; nothing is clicked.
+  const pointerButton = element<HTMLButtonElement>('remote-pointer');
+  let pointing = false, pointerSession: string | null = null, lastPoint = 0;
+  const showingPointer = (): boolean => pointing && hasAction('pointer');
+  let toggled: Record<keyof typeof toggles, boolean> = {privacy: false, block: false, lockend: false}, toggleSession: string | null = null;
   let soundOn = true, soundSession: string | null = null;
   function hasAction(name: string): boolean {
     return !!current && current.phase === 'active' && !current.sharing && current.control && (current.host_actions ?? []).includes(name);
@@ -100,6 +109,20 @@
   function renderActions(): void {
     rememberMacs();
     sas.hidden = !hasAction('sas');
+    if (current?.session !== toggleSession) { toggleSession = current?.session ?? null; toggled = {privacy: false, block: false, lockend: false}; }
+    for (const name of Object.keys(toggles) as (keyof typeof toggles)[]) {
+      toggles[name].hidden = !hasAction(name);
+      toggles[name].textContent = `${toggleText[name]}: ${toggled[name] ? 'on' : 'off'}`;
+      toggles[name].ariaPressed = String(toggled[name]);
+      toggles[name].disabled = busy;
+    }
+    lockButton.hidden = !hasAction('lock');
+    if (current?.session !== pointerSession) { pointerSession = current?.session ?? null; pointing = false; }
+    pointerButton.hidden = !hasAction('pointer');
+    pointerButton.textContent = `Show pointer: ${pointing ? 'on' : 'off'}`;
+    pointerButton.ariaPressed = String(pointing);
+    if (canvas.style) canvas.style.cursor = pointing ? 'crosshair' : '';
+    lockButton.disabled = busy;
     reboot.hidden = !hasAction('restart');
     soundToggle.hidden = !hasAction('sound');
     if (current?.session !== soundSession) { soundSession = current?.session ?? null; soundOn = true; }
@@ -137,6 +160,23 @@
     soundOn = !soundOn;
     void invoke('remote_input', {session: current.session, event: {kind: 'action', name: soundOn ? 'sound:on' : 'sound:off'}}).catch(() => {});
     renderActions();
+  });
+  for (const name of Object.keys(toggles) as (keyof typeof toggles)[]) {
+    toggles[name].addEventListener('click', () => {
+      if (!current?.session) return;
+      toggled[name] = !toggled[name];
+      void action('remote_input', {session: current.session, event: {kind: 'action', name: `${name}:${toggled[name] ? 'on' : 'off'}`}});
+      renderActions();
+    });
+  }
+  pointerButton.addEventListener('click', () => {
+    if (!current?.session) return;
+    pointing = !pointing;
+    if (!pointing) void invoke('remote_input', {session: current.session, event: {kind: 'action', name: 'pointer:off'}}).catch(() => {});
+    renderActions();
+  });
+  lockButton.addEventListener('click', () => {
+    if (current?.session) void action('remote_input', {session: current.session, event: {kind: 'action', name: 'lock'}});
   });
   sas.addEventListener('click', () => {
     if (current?.session) void action('remote_input', {session: current.session, event: {kind: 'action', name: 'sas'}});
@@ -176,6 +216,7 @@
   const context = canvas.getContext('2d');
   let current: RemoteStatus | undefined, sources: Source[] = [], busy = false, polling = false, readVersion = 0;
   let operationVersion = 0, stopping = false, stoppedConsent = '';
+  let wentOffline = false, autoOnline = false;
   let workspaceFocused = true;
   let authenticated=false,accountKey='',accountVersion=0;
   let viewing = '', videoReady = '', videoGeneration = 0;
@@ -294,8 +335,10 @@
     const disconnected = ['offline', 'error'].includes(current.phase);
     register.disabled = busy || !authenticated || !disconnected;
     offline.disabled = busy || disconnected;
-    connect.disabled = busy || !authenticated || current.phase !== 'ready';
-    host.disabled = requestUnattended.disabled = busy || !authenticated || current.phase !== 'ready';
+    // Connect gets this computer online by itself, so it is usable whenever someone is signed in.
+    const canStart = ['ready', 'offline', 'error'].includes(current.phase);
+    connect.disabled = busy || !authenticated || !canStart;
+    host.disabled = requestUnattended.disabled = busy || !authenticated || !canStart;
     password.disabled = host.disabled || requestUnattended.checked;
     const unattendedEnabling = current.unattended_pending === 'enabling';
     const unattendedChanging = Boolean(current.unattended_pending);
@@ -339,7 +382,7 @@
     const controlAvailable = current.phase === 'incoming' && !!selected?.full_display && current.input_access;
     allowControl.disabled = busy || !controlAvailable;
     if (!controlAvailable) allowControl.checked = false;
-    accept.textContent = allowControl.checked ? 'Accept with control' : 'Accept view only';
+    accept.textContent = allowControl.checked ? 'Allow with control' : 'Allow view only';
     inputPermission.textContent = !selected?.full_display
       ? 'Choose a display to allow keyboard and mouse control.'
       : !current.input_access
@@ -382,6 +425,13 @@
         const becameReady = status.phase === 'ready' && current?.phase !== 'ready';
         current = status;
         render();
+        // A set-up computer goes online by itself once someone is signed in, so the person who needs
+        // help does not have to find a button first. Not again after "Go offline" in this run.
+        if (authenticated && !wentOffline && !autoOnline && ['offline', 'error'].includes(status.phase) && !busy && !stopping) {
+          autoOnline = true;
+          // Not set up yet (or offline): try again in a minute.
+          void invoke('remote_register').then(() => read(true)).catch(() => { window.setTimeout(() => { autoOnline = false; }, 60000); });
+        }
         if (freshInvitation && !status.controller_only) void loadSources();
         if (becameReady) void restoreUnattended();
       }
@@ -390,7 +440,8 @@
     finally { if (version === readVersion) polling = false; }
   }
   async function action(command: string, args?: Record<string, unknown>): Promise<void> {
-    if (busy || stopping || (locallyStopped() && command !== 'remote_disconnect')) return;
+    // A session ended here must not block what comes next: a new connection, going online or offline.
+    if (busy || stopping || (locallyStopped() && !['remote_disconnect', 'remote_request', 'remote_register'].includes(command))) return;
     const operation = ++operationVersion;
     ++readVersion; busy = true; error.textContent = ''; render();
     try { await invoke(command, args); }
@@ -416,7 +467,12 @@
       sources.sort((a, b) => Number(b.full_display) - Number(a.full_display));
       for (const item of sources) { const option = document.createElement('option'); option.value = item.id; option.textContent = item.name; source.appendChild(option); }
       screenSettings.hidden = current?.platform === 'windows' || current?.platform === 'linux' || sources.some(item => item.full_display);
-      confirm.checked = false; render();
+      // One screen: it is the one to share. Keyboard and mouse are pre-selected when they can be
+      // allowed; the person still decides with Allow (and can untick it first).
+      const displays = sources.filter(item => item.full_display);
+      confirm.checked = displays.length === 1;
+      allowControl.checked = confirm.checked && !!current?.input_access;
+      render();
     } catch (value) { error.textContent = String(value); }
     finally { refreshSources.disabled = false; }
   }
@@ -535,7 +591,7 @@
     catch(value){error.textContent=String(value);}
     finally{window.setTimeout(()=>{copyId.textContent='Copy ID';copyId.disabled=!authenticated||!current?.host;},1500);}
   });
-  offline.addEventListener('click', () => { clearVideo(); void action('remote_disconnect'); });
+  offline.addEventListener('click', () => { wentOffline = true; clearVideo(); void action('remote_disconnect'); });
   generateCode.addEventListener('click', () => { void action('remote_support_code', {required:true}); });
   clearCode.addEventListener('click', () => { void action('remote_support_code', {required:false}); });
   checkPairing.addEventListener('click', () => { void action('remote_pairing', {confirmation:null}); });
@@ -612,8 +668,44 @@
     const supplied = password.value;
     password.value = '';
     lastRequestUnattended = requestUnattended.checked;
-    void action('remote_request', {host: Number(digits), password: supplied || null, unattended: requestUnattended.checked});
+    void connectTo(Number(digits), supplied || null, requestUnattended.checked);
   });
+  // Connect to an ID. Gets this computer online first if needed, and for a phone (Mixel Quick Support)
+  // claims it and waits until it is online, so one click is enough.
+  async function connectTo(id: number, supplied: string | null, unattended: boolean): Promise<void> {
+    if (busy) { document.dispatchEvent(new CustomEvent('mixel-connect-progress', {detail: 'Please wait a moment, the previous step is still running.'})); return; }
+    const say = (text: string): void => { error.textContent = ''; status.textContent = text; document.dispatchEvent(new CustomEvent('mixel-connect-progress', {detail: text})); };
+    const fail = (text: string): void => { error.textContent = text; document.dispatchEvent(new CustomEvent('mixel-connect-progress', {detail: text})); };
+    const phase = async (): Promise<RemoteStatus | null> => { try { return await invoke<RemoteStatus>('remote_status'); } catch { return null; } };
+    const wait = async (until: (state: RemoteStatus) => boolean, seconds: number, ask?: () => void): Promise<boolean> => {
+      for (let round = 0; round < seconds; round++) {
+        const state = await phase();
+        if (state && until(state)) return true;
+        if (ask && round % 2 === 0) ask();
+        await new Promise(resolve => window.setTimeout(resolve, 1000));
+      }
+      return false;
+    };
+    let state = await phase();
+    if (state && ['offline', 'error'].includes(state.phase)) {
+      say('Getting this computer ready…');
+      try { await invoke('remote_register'); } catch (value) { fail(String(value)); return; }
+      if (!await wait(next => next.phase === 'ready', 20)) { fail('This computer could not go online. Check the internet connection and try again.'); return; }
+    }
+    let phone = false;
+    try { phone = await invoke<boolean>('quick_phone_claim', {host: id}); } catch { /* the ordinary request decides */ }
+    if (phone) {
+      say('Phone found. Waiting for it to come online… On an iPhone the person taps “Start sharing my screen”.');
+      const online = await wait(next => (next.online ?? []).includes(id), 120, () => { void invoke('remote_presence', {hosts: [id]}).catch(() => {}); });
+      if (!online) { fail('The phone did not come online. Ask the person to keep Mixel Quick Support open, then choose Connect again.'); return; }
+      say('Connecting… The person allows the session on their phone.');
+    }
+    state = await phase();
+    if (state && state.phase !== 'ready') { fail(['active', 'incoming', 'outgoing'].includes(state.phase) ? 'End the current session first, then connect again.' : 'This computer is not ready to connect yet. Please try again in a moment.'); return; }
+    await action('remote_request', {host: id, password: supplied, unattended: phone ? false : unattended});
+    if (error.textContent) document.dispatchEvent(new CustomEvent('mixel-connect-progress', {detail: error.textContent}));
+  }
+  document.addEventListener('mixel-connect-to', event => { const id = (event as CustomEvent<{id: number}>).detail.id; host.value = String(id); void connectTo(id, null, false); });
   const supportForm = element<HTMLFormElement>('support-connect-form');
   const supportHost = element<HTMLInputElement>('support-host');
   const supportConnect = element<HTMLButtonElement>('support-connect');
@@ -705,12 +797,19 @@
     enqueueInput({kind: 'pointer', ...point});
     return true;
   }
-  canvas.addEventListener('pointermove', event => { if (controllable()) { event.preventDefault(); pointer(event, clickCounts.size > 0); } });
+  canvas.addEventListener('pointermove', event => {
+    if (showingPointer()) {
+      const now = Date.now(), point = imagePoint(event);
+      if (point && current?.session && now - lastPoint >= 50) { lastPoint = now; void invoke('remote_input', {session: current.session, event: {kind: 'action', name: `pointer:${point.x},${point.y}`}}).catch(() => {}); }
+      return;
+    }
+    if (controllable()) { event.preventDefault(); pointer(event, clickCounts.size > 0); }
+  });
   // MouseEvent.detail contains the user's OS/browser click count; using
   // receipt timing on the host would turn a double click into two single clicks
   // when reliable input acknowledgments cross a high-latency connection.
   for(const name of ['pointerdown','pointerup'] as const)canvas.addEventListener(name,event=>{
-    if(!controllable())return;
+    if(!controllable()||showingPointer())return;
     if(name==='pointerdown'){if(imagePoint(event)){canvas.focus();canvas.setPointerCapture(event.pointerId);}}
     else{
       const button=[1,3,2,4,5][event.button],clicks=clickCounts.get(button);
@@ -719,7 +818,7 @@
     }
   });
   canvas.addEventListener('mousedown',event=>{
-    if(!controllable())return;
+    if(!controllable()||showingPointer())return;
     const button=[1,3,2,4,5][event.button];if(!button)return;
     event.preventDefault();canvas.focus();
     if (!pointer(event)) return;

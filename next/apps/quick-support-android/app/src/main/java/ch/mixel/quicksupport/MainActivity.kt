@@ -13,29 +13,23 @@ import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
-import android.text.InputType
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.view.inputmethod.EditorInfo
 import android.widget.Button
-import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 
-/** The whole app is one screen: type the code, see the status, allow or end the session. */
+/** The whole app is one screen: this phone's ID to tell the technician, the status, allow or end the session. */
 class MainActivity : Activity(), Support.Screen {
-    private lateinit var code: EditText
-    private lateinit var connect: Button
     private lateinit var status: TextView
     private lateinit var number: TextView
     private lateinit var end: Button
     private lateinit var disconnect: Button
     private lateinit var controlState: TextView
     private var asking: AlertDialog? = null
-    private var busy = false
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
@@ -60,25 +54,15 @@ class MainActivity : Activity(), Support.Screen {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        code = EditText(this).apply {
-            setHint(R.string.code_hint); textSize = 22f; isSingleLine = true; letterSpacing = 0.08f
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-            imeOptions = EditorInfo.IME_ACTION_GO
-            setOnEditorActionListener { _, action, _ -> if (action == EditorInfo.IME_ACTION_GO) { start(); true } else false }
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) }
-        }
-        connect = button(R.string.connect, true).apply { setOnClickListener { start() } }
         status = text(0, 16f)
-        number = text(0, 34f, bold = true).apply { letterSpacing = 0.05f; setPadding(0, dp(6), 0, dp(2)) }
+        number = text(0, 44f, bold = true).apply { letterSpacing = 0.06f; setPadding(0, dp(4), 0, dp(4)); setTextIsSelectable(true) }
         end = button(R.string.end_session, true).apply { setOnClickListener { Support.endSession() } }
-        disconnect = button(R.string.disconnect, false).apply { setOnClickListener { Support.disconnect() } }
         controlState = text(0, 14f, "#5D6678")
         val column = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), dp(20), dp(16), dp(32))
             addView(text(R.string.app_name, 24f, bold = true))
-            addView(card(text(R.string.intro, 15f, "#5D6678"), code, connect))
-            addView(card(status, number, end, disconnect))
+            addView(card(text(R.string.your_id, 15f, "#5D6678"), number, status, end))
             addView(card(text(R.string.control_title, 16f, bold = true), controlState, button(R.string.control_open, false).apply { setOnClickListener { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) } }))
             addView(text(R.string.privacy, 13f, "#5D6678").apply { setPadding(dp(2), dp(18), dp(2), 0) })
         }
@@ -104,46 +88,26 @@ class MainActivity : Activity(), Support.Screen {
         super.onResume()
         Support.screen = this
         changed()
+        Support.watch(this)
     }
     override fun onPause() {
         if (Support.screen === this) Support.screen = null
         super.onPause()
     }
 
-    private fun start() {
-        val typed = code.text.toString().trim()
-        if (typed.replace(Regex("[^A-Za-z0-9]"), "").length != 12) { notice(getString(R.string.code_invalid)); return }
-        if (busy || Support.online) return
-        busy = true; changed()
-        val context: Context = applicationContext
-        Thread {
-            val problem = Support.connect(context, typed)
-            runOnUiThread {
-                busy = false
-                if (problem != null) notice(problem) else code.setText("")
-                changed()
-            }
-        }.start()
-    }
-
     override fun changed() {
         val phase = Support.phase
-        val online = Support.online
-        code.isEnabled = !online && !busy; connect.isEnabled = !online && !busy
-        (code.parent as View).visibility = if (online) View.GONE else View.VISIBLE
-        status.setText(when {
-            busy -> R.string.status_connecting
-            phase == Support.Phase.CONNECTING -> R.string.status_connecting
-            phase == Support.Phase.READY -> R.string.status_ready
-            phase == Support.Phase.ASKING -> R.string.status_asking
-            phase == Support.Phase.NEGOTIATING -> R.string.status_negotiating
-            phase == Support.Phase.ACTIVE -> R.string.status_active
-            else -> R.string.status_offline
+        number.text = Support.remoteId.ifEmpty { "— — —" }
+        status.setText(when (phase) {
+            Support.Phase.READY -> R.string.status_ready
+            Support.Phase.ASKING -> R.string.status_asking
+            Support.Phase.NEGOTIATING -> R.string.status_negotiating
+            Support.Phase.ACTIVE -> R.string.status_active
+            Support.Phase.CONNECTING -> R.string.status_connecting
+            else -> if (Support.remoteId.isEmpty()) R.string.status_connecting else R.string.status_waiting
         })
-        number.text = if (online) Support.remoteId else ""
-        number.visibility = if (online && phase != Support.Phase.ACTIVE) View.VISIBLE else View.GONE
+        if (phase == Support.Phase.OFFLINE && Support.message.isNotEmpty() && Support.remoteId.isEmpty()) status.text = Support.message
         end.visibility = if (phase == Support.Phase.ACTIVE || phase == Support.Phase.NEGOTIATING) View.VISIBLE else View.GONE
-        disconnect.visibility = if (online) View.VISIBLE else View.GONE
         controlState.setText(if (ControlService.enabled(this)) R.string.control_on else R.string.control_off)
         if (phase != Support.Phase.ASKING) { asking?.dismiss(); asking = null }
     }

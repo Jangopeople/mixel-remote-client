@@ -88,11 +88,15 @@ pub struct ControlPipe {
     /// Host: capture sources a controlling technician may switch between.
     displays: Vec<String>,
     pending_display: Option<usize>,
+    /// Host: index of the display being shared (for the technician's pointer).
+    shown_display: usize,
     /// The other app understands print jobs.
     print_peer: bool,
     /// The other app understands sound frames; host: the technician wants to hear them.
     sound_peer: bool,
     sound_on: bool,
+    /// Host: privacy screen, input block and lock-at-end are undone when the session ends.
+    _guard: Option<crate::session_guard::Guard>,
     /// Controller: received sound frames not yet handed to the player.
     sound_in: std::collections::VecDeque<Vec<u8>>,
     /// Host: a print job being sent (transfer id, payload, bytes sent, header sent).
@@ -255,9 +259,11 @@ impl ControlPipe {
                 pipe
             },
             pending_display: None,
+            shown_display: 0,
             print_peer: features.iter().any(|name| name == crate::host_print::FEATURE),
             sound_peer: features.iter().any(|name| name == core_protocol::sound::FEATURE),
             sound_on: true,
+            _guard: config.host.then(crate::session_guard::Guard::new),
             sound_in: std::collections::VecDeque::new(),
             print_out: None,
             print_sequence: 0,
@@ -604,8 +610,15 @@ impl ControlPipe {
         if let Some(rest) = plain.strip_prefix(HOST_ACTION) {
             let name = std::str::from_utf8(rest).map_err(|_| "Invalid host action")?.to_owned();
             let offered = name.split(':').next().unwrap_or(&name).to_owned();
-            if !self.allowed || name.len() > 40 || !self.actions.contains(&offered) || (name.contains(':') && offered != crate::host_actions::WOL && offered != crate::host_actions::SOUND) {
+            let switch = [crate::host_actions::WOL, crate::host_actions::SOUND, crate::session_guard::POINTER, crate::session_guard::PRIVACY, crate::session_guard::BLOCK, crate::session_guard::LOCK_AT_END];
+            if !self.allowed || name.len() > 40 || !self.actions.contains(&offered) || (name.contains(':') && !switch.contains(&offered.as_str())) {
                 return Err("Invalid host action".into());
+            }
+            if offered == crate::session_guard::POINTER {
+                // `pointer:x,y` (0..65535 on the shared picture) or `pointer:off`.
+                let point = name.strip_prefix("pointer:").and_then(|rest| rest.split_once(',')).and_then(|(x, y)| Some((x.parse::<u16>().ok()?, y.parse::<u16>().ok()?)));
+                crate::session_guard::pointer(point, self.shown_display, self.displays.len());
+                return Ok(());
             }
             if offered == crate::host_actions::SOUND {
                 self.sound_on = name != "sound:off";
@@ -623,6 +636,7 @@ impl ControlPipe {
             return match rest {
                 [index] if self.allowed && usize::from(*index) < self.displays.len() => {
                     self.pending_display = Some(usize::from(*index));
+                    self.shown_display = usize::from(*index);
                     self.force_keyframe = true;
                     Ok(())
                 }

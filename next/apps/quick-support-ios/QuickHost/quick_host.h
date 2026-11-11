@@ -13,6 +13,8 @@ typedef void (*MqsListener)(const char *event, void *context);
 MqsHost *mqs_create(const uint8_t *seed, MqsListener listener, void *context);
 void mqs_seed(const MqsHost *host, uint8_t *out32);
 char *mqs_enroll(const MqsHost *host, const char *code, const char *name);
+/* This device's fixed Remote ID; the registration once a technician typed it (JSON, see ffi.rs). Blocks. */
+char *mqs_register(const MqsHost *host, const char *name);
 char *mqs_start(const MqsHost *host, const char *enrollment, uint32_t width, uint32_t height, bool control);
 void mqs_accept_issuer(const MqsHost *host, bool on);
 void mqs_decide(const MqsHost *host, bool accept);

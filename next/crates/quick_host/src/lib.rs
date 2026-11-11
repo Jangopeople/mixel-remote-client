@@ -59,6 +59,29 @@ impl Config {
     }
 }
 
+/// This device's fixed Remote ID and, once a technician typed it, the registration to go online with.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct Registration {
+    pub connection_id: u32,
+    pub device_id: Option<Uuid>,
+    pub generation: Option<u64>,
+    pub profile: Option<Uuid>,
+    pub tenant: Option<Uuid>,
+}
+impl Registration {
+    /// The registration to go online with, once a technician has typed this ID.
+    pub fn enrollment(&self) -> Option<Enrollment> {
+        Some(Enrollment { device_id: self.device_id?, connection_id: self.connection_id, generation: self.generation?, profile: self.profile?, tenant: self.tenant? })
+    }
+    /// JSON for the apps: the full registration, or `{"connection_id": …, "pending": true}`.
+    pub fn json(&self) -> String {
+        match self.enrollment() {
+            Some(enrollment) => serde_json::to_string(&enrollment).unwrap_or_default(),
+            None => serde_json::json!({ "connection_id": self.connection_id, "pending": true }).to_string(),
+        }
+    }
+}
+
 /// The temporary registration a support code gave this device.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Enrollment {
@@ -208,6 +231,12 @@ impl Host {
     pub fn enroll(&self, code: &str, device_name: &str) -> Result<Enrollment, String> {
         self.runtime.block_on(self.inner.enroll(code, device_name))
     }
+    /// Gets this device's fixed Remote ID (no code, no account). Returns the registration once a
+    /// Mixel technician has typed that ID (`Registration::enrollment`), until then only the ID.
+    /// Blocks; call off the main thread, and again every few seconds while it is pending.
+    pub fn register(&self, device_name: &str) -> Result<Registration, String> {
+        self.runtime.block_on(self.inner.register(device_name))
+    }
     /// Goes online with a registration. `width` x `height` is the size of the pictures that
     /// [`Host::push_frame`] will deliver; `control` says whether the technician may operate the device.
     pub fn start(&self, enrollment: Enrollment, width: u32, height: u32, control: bool) -> Result<(), String> {
@@ -267,6 +296,15 @@ impl Host {
     }
 }
 
+/// Lets a session task end on its own for a few seconds, then stops it. A task left running would
+/// keep the picture queue, and the next session would never get a picture.
+async fn finish(mut task: tokio::task::JoinHandle<Result<(), String>>) {
+    if tokio::time::timeout(Duration::from_secs(5), &mut task).await.is_err() {
+        task.abort();
+        let _ = task.await;
+    }
+}
+
 struct Asked {
     session: Uuid,
     controller: VerifyingKey,
@@ -286,6 +324,27 @@ struct Running {
 impl Inner {
     fn status(&self, phase: Phase, message: &str) {
         (self.events)(Event::Status(phase, message.to_owned()));
+    }
+
+    async fn register(&self, device_name: &str) -> Result<Registration, String> {
+        let response = self
+            .http
+            .post(format!("{}/rest/v1/rpc/remote_quick_phone_register", self.config.identity_url))
+            .header("apikey", &self.config.public_key)
+            .bearer_auth(&self.config.public_key)
+            .header("accept", "application/vnd.pgrst.object+json")
+            .json(&serde_json::json!({ "device_name": device_name, "key_material": format!("\\x{}", hex(self.key.verifying_key().as_bytes())) }))
+            .send()
+            .await
+            .map_err(|_| "The Mixel service cannot be reached")?;
+        if !response.status().is_success() {
+            return Err(if response.status().as_u16() == 429 { "Too many requests. Please try again in a minute.".into() } else { "The Mixel service answered unexpectedly".to_owned() });
+        }
+        let registration: Registration = response.json().await.map_err(|_| "The Mixel service answered unexpectedly")?;
+        if !(100_000_000..=999_999_999).contains(&registration.connection_id) {
+            return Err("The Mixel service answered unexpectedly".into());
+        }
+        Ok(registration)
     }
 
     async fn enroll(&self, code: &str, device_name: &str) -> Result<Enrollment, String> {
@@ -559,8 +618,8 @@ impl Inner {
                             let Some(mut run) = running.take().filter(|run| run.session == previous) else { continue };
                             run.stop.store(true, Ordering::Release);
                             if let Some(task) = run.task.take() {
-                                let ended = tokio::time::timeout(Duration::from_secs(8), task).await;
-                                trace(&format!("old link closed for renewal: {ended:?}"));
+                                finish(task).await;
+                                trace("old link closed for renewal");
                             }
                             match self.binding(session, nonce, Some(&controller_identity), Some(&host_identity), &ticket, run.controller, enrollment) {
                                 Ok(binding) => {
@@ -582,7 +641,7 @@ impl Inner {
                             if let Some(mut run) = running.take_if(|run| run.session == session) {
                                 run.stop.store(true, Ordering::Release);
                                 if let Some(task) = run.task.take() {
-                                    let _ = tokio::time::timeout(Duration::from_secs(8), task).await;
+                                    finish(task).await;
                                 }
                                 self.streaming.store(false, Ordering::Release);
                                 (self.events)(Event::SessionEnded(String::new()));
@@ -624,7 +683,7 @@ impl Inner {
                             run.stop.store(true, Ordering::Release);
                             say!(wire::Out::Close { session: run.session });
                             if let Some(task) = run.task.take() {
-                                let _ = tokio::time::timeout(Duration::from_secs(8), task).await;
+                                finish(task).await;
                             }
                             self.streaming.store(false, Ordering::Release);
                             (self.events)(Event::SessionEnded(String::new()));
@@ -637,7 +696,7 @@ impl Inner {
                             run.stop.store(true, Ordering::Release);
                             let _ = write.send(Message::Text(serde_json::to_string(&wire::Out::Close { session: run.session }).unwrap_or_default().into())).await;
                             if let Some(task) = run.task.take() {
-                                let _ = tokio::time::timeout(Duration::from_secs(8), task).await;
+                                finish(task).await;
                             }
                         }
                         let _ = write.close().await;

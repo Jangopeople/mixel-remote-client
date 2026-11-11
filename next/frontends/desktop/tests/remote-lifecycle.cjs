@@ -38,7 +38,7 @@ function harness({deferAccount=false,authenticated=false,deferInput=false,stopFa
 function frame(){const bytes=new Uint8Array(48);bytes.set([77,82,70,49]);const view=new DataView(bytes.buffer);view.setUint32(4,2,true);view.setUint32(8,2,true);view.setUint32(12,8,true);view.setBigUint64(16,1n,true);view.setBigUint64(24,33333n,true);return bytes.buffer;}
 test('registration and connect require authenticated account and stale initial failures cannot undo newer sign-in',async()=>{
   const h=harness({deferAccount:true});await settle();await h.tick();assert.equal(h.elements['remote-register'].disabled,true);assert.equal(h.elements['remote-connect'].disabled,true);
-  h.account(signedIn);await h.tick();assert.equal(h.elements['remote-register'].disabled,false);assert.equal(h.elements['remote-connect'].disabled,true);h.ready();await h.tick();assert.equal(h.elements['remote-connect'].disabled,false);
+  h.account(signedIn);await h.tick();assert.equal(h.elements['remote-register'].disabled,false);assert.equal(h.elements['remote-connect'].disabled,false,'Connect brings this computer online itself');h.ready();await h.tick();assert.equal(h.elements['remote-connect'].disabled,false);
   h.accountReply.reject(Error('old account read failed'));await settle();assert.equal(h.elements['remote-connect'].disabled,false);
   h.account({phase:'mfa_required',account:null});assert.equal(h.elements['remote-register'].disabled,true);assert.equal(h.elements['remote-connect'].disabled,true);
 });

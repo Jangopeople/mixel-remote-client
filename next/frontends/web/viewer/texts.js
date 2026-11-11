@@ -1,6 +1,10 @@
 // Viewer texts: English is the key; German, French and Italian follow the browser language.
 const TEXTS = {
   de: {
+    "They read you the 9-digit ID the app shows.": "Sie liest Ihnen die 9-stellige ID vor, die die App anzeigt.",
+    "Type it under Remote ID above and choose Connect. They allow it on their phone, and you see their screen.": "Geben Sie sie oben unter «Remote-ID» ein und wählen Sie «Verbinden». Die Person erlaubt es auf ihrem Smartphone, und Sie sehen ihren Bildschirm.",
+    "Phone found. Waiting for it to come online… On an iPhone the person taps “Start sharing my screen”.": "Smartphone gefunden. Warten, bis es online ist… Auf dem iPhone tippt die Person auf «Bildschirm teilen».",
+    "The phone did not come online. Ask the person to keep Mixel Quick Support open, then choose Connect again.": "Das Smartphone ist nicht online gekommen. Bitten Sie die Person, Mixel Quick Support geöffnet zu lassen, und wählen Sie erneut «Verbinden».",
     "The person installs the app “Mixel Quick Support” from the App Store or Google Play and opens it. They need no account.": "Die Person installiert die App «Mixel Quick Support» aus dem App Store oder von Google Play und öffnet sie. Sie braucht kein Konto.",
     "Create a support code here and tell it to them. They type it into the app.": "Erstellen Sie hier einen Support-Code und nennen Sie ihn der Person. Sie gibt ihn in der App ein.",
     "Their phone appears here. Choose Connect. They confirm on their phone, and you see their screen.": "Das Smartphone erscheint hier. Wählen Sie «Verbinden». Die Person bestätigt auf ihrem Smartphone, und Sie sehen ihren Bildschirm.",
@@ -87,6 +91,10 @@ const TEXTS = {
     'Type here': 'Hier tippen',
   },
   fr: {
+    "They read you the 9-digit ID the app shows.": "Elle vous lit l’ID à 9 chiffres affiché par l’application.",
+    "Type it under Remote ID above and choose Connect. They allow it on their phone, and you see their screen.": "Saisissez-le ci-dessus sous « ID Remote » et choisissez « Se connecter ». La personne l’autorise sur son téléphone et vous voyez son écran.",
+    "Phone found. Waiting for it to come online… On an iPhone the person taps “Start sharing my screen”.": "Téléphone trouvé. En attente de sa connexion… Sur iPhone, la personne touche « Partager mon écran ».",
+    "The phone did not come online. Ask the person to keep Mixel Quick Support open, then choose Connect again.": "Le téléphone ne s’est pas connecté. Demandez à la personne de garder Mixel Quick Support ouvert, puis choisissez à nouveau « Se connecter ».",
     "The person installs the app “Mixel Quick Support” from the App Store or Google Play and opens it. They need no account.": "La personne installe l’application « Mixel Quick Support » depuis l’App Store ou Google Play et l’ouvre. Aucun compte n’est nécessaire.",
     "Create a support code here and tell it to them. They type it into the app.": "Créez ici un code d’assistance et communiquez-le-lui. La personne le saisit dans l’application.",
     "Their phone appears here. Choose Connect. They confirm on their phone, and you see their screen.": "Son téléphone apparaît ici. Choisissez « Se connecter ». La personne confirme sur son téléphone et vous voyez son écran.",
@@ -172,6 +180,10 @@ const TEXTS = {
     'Type here': 'Saisir ici',
   },
   it: {
+    "They read you the 9-digit ID the app shows.": "Ti legge l’ID di 9 cifre mostrato dall’app.",
+    "Type it under Remote ID above and choose Connect. They allow it on their phone, and you see their screen.": "Inseriscilo sopra in «ID Remote» e scegli «Connetti». La persona lo autorizza sul telefono e tu vedi il suo schermo.",
+    "Phone found. Waiting for it to come online… On an iPhone the person taps “Start sharing my screen”.": "Telefono trovato. In attesa che sia online… Su iPhone la persona tocca «Condividi il mio schermo».",
+    "The phone did not come online. Ask the person to keep Mixel Quick Support open, then choose Connect again.": "Il telefono non è andato online. Chiedi alla persona di tenere aperto Mixel Quick Support, poi scegli di nuovo «Connetti».",
     "The person installs the app “Mixel Quick Support” from the App Store or Google Play and opens it. They need no account.": "La persona installa l’app «Mixel Quick Support» dall’App Store o da Google Play e la apre. Non serve un account.",
     "Create a support code here and tell it to them. They type it into the app.": "Crea qui un codice di assistenza e comunicalo alla persona, che lo inserisce nell’app.",
     "Their phone appears here. Choose Connect. They confirm on their phone, and you see their screen.": "Il telefono compare qui. Scegli «Connetti». La persona conferma sul telefono e tu vedi il suo schermo.",

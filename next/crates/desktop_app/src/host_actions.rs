@@ -91,6 +91,7 @@ pub fn available() -> Vec<String> {
     #[cfg(target_os = "linux")]
     actions.push(RESTART.to_owned());
     actions.push(WOL.to_owned());
+    actions.extend(crate::session_guard::available().into_iter().map(str::to_owned));
     actions
 }
 
@@ -98,6 +99,10 @@ pub fn available() -> Vec<String> {
 pub fn run(name: &str) -> Result<(), String> {
     if let Some(mac) = name.strip_prefix("wol:") {
         return wake(mac);
+    }
+    let action = name.split(':').next().unwrap_or(name);
+    if [crate::session_guard::PRIVACY, crate::session_guard::BLOCK, crate::session_guard::LOCK, crate::session_guard::LOCK_AT_END].contains(&action) {
+        return crate::session_guard::run(name);
     }
     match name {
         #[cfg(target_os = "windows")]
@@ -127,9 +132,9 @@ pub fn run(name: &str) -> Result<(), String> {
 pub fn parse(list: &str) -> Vec<String> {
     list.split(',')
         .map(str::trim)
-        .filter(|name| matches!(*name, SAS | RESTART | WOL | SOUND))
+        .filter(|name| matches!(*name, SAS | RESTART | WOL | SOUND) || [crate::session_guard::POINTER, crate::session_guard::PRIVACY, crate::session_guard::BLOCK, crate::session_guard::LOCK, crate::session_guard::LOCK_AT_END].contains(name))
         .map(str::to_owned)
-        .take(8)
+        .take(12)
         .collect()
 }
 

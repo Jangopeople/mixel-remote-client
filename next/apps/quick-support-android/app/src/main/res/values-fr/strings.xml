@@ -7,7 +7,7 @@
     <string name="disconnect">Se déconnecter</string>
     <string name="end_session">Terminer la session</string>
     <string name="status_connecting">Connexion…</string>
-    <string name="status_ready">Prêt. Gardez cette application ouverte : le technicien va maintenant demander à voir votre écran.\n\nNuméro de l’appareil, si le technicien le demande :</string>
+    <string name="status_ready">Prêt. La demande du technicien apparaît ici dans un instant.</string>
     <string name="status_asking">Un technicien souhaite se connecter.</string>
     <string name="status_negotiating">Démarrage de la session…</string>
     <string name="status_active">Le technicien voit votre écran.</string>
@@ -21,6 +21,8 @@
     <string name="decline">Refuser</string>
     <string name="code_invalid">Ce code d’assistance est invalide ou a expiré.</string>
     <string name="unreachable">Mixel est injoignable. Vérifiez la connexion Internet et réessayez.</string>
+    <string name="your_id">Votre ID</string>
+    <string name="status_waiting">Communiquez ce numéro à votre technicien Mixel. Il se connecte et vous l’autorisez ici.\n\nEn attente du technicien… Gardez cette application ouverte.</string>
     <string name="failed">Cela n’a pas fonctionné. Veuillez réessayer.</string>
     <string name="session_ended">La session est terminée.</string>
     <string name="control_title">Permettre au technicien d’utiliser ce téléphone</string>
@@ -31,5 +33,5 @@
     <string name="control_description">Permet à un technicien Mixel de toucher, balayer et saisir du texte sur ce téléphone pendant une session d’assistance que vous avez autorisée. Utilisé uniquement pendant une telle session ; ne lit aucun contenu de l’écran.</string>
     <string name="notification_channel">Session d’assistance</string>
     <string name="notification_text">Votre écran est partagé avec un technicien Mixel.</string>
-    <string name="privacy">La session est chiffrée. Elle se termine lorsque vous ou le technicien y mettez fin ; l’enregistrement de ce téléphone est ensuite supprimé automatiquement.</string>
+    <string name="privacy">La session est chiffrée. Seul un technicien Mixel à qui vous donnez cet ID peut se connecter, et seulement après votre accord.</string>
 </resources>

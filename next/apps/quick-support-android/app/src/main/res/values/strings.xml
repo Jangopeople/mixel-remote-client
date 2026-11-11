@@ -7,7 +7,7 @@
     <string name="disconnect">Disconnect</string>
     <string name="end_session">End session</string>
     <string name="status_connecting">Connecting…</string>
-    <string name="status_ready">Ready. Keep this app open: the technician will now ask to see your screen.\n\nDevice number, if the technician asks for it:</string>
+    <string name="status_ready">Ready. The technician\'s request appears here in a moment.</string>
     <string name="status_asking">A technician wants to connect.</string>
     <string name="status_negotiating">Starting the session…</string>
     <string name="status_active">The technician sees your screen.</string>
@@ -21,6 +21,8 @@
     <string name="decline">Decline</string>
     <string name="code_invalid">This support code is not valid or has expired.</string>
     <string name="unreachable">Mixel cannot be reached. Check the internet connection and try again.</string>
+    <string name="your_id">Your ID</string>
+    <string name="status_waiting">Tell this number to your Mixel technician. They connect, and you allow it here.\n\nWaiting for the technician… Keep this app open.</string>
     <string name="failed">That did not work. Please try again.</string>
     <string name="session_ended">The session has ended.</string>
     <string name="control_title">Let the technician operate this phone</string>
@@ -31,5 +33,5 @@
     <string name="control_description">Lets a Mixel technician tap, swipe and type on this phone during a support session that you allowed. It is used only while such a session runs and reads no screen content.</string>
     <string name="notification_channel">Support session</string>
     <string name="notification_text">Your screen is being shared with a Mixel technician.</string>
-    <string name="privacy">The session is encrypted. It ends when you or the technician end it; the registration of this phone is removed automatically afterwards.</string>
+    <string name="privacy">The session is encrypted. Only a Mixel technician you give this ID to can connect, and only after you allow it.</string>
 </resources>

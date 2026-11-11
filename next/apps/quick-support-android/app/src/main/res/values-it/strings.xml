@@ -7,7 +7,7 @@
     <string name="disconnect">Disconnetti</string>
     <string name="end_session">Termina sessione</string>
     <string name="status_connecting">Connessione…</string>
-    <string name="status_ready">Pronto. Tieni aperta questa app: il tecnico chiederà ora di vedere il tuo schermo.\n\nNumero del dispositivo, se il tecnico lo chiede:</string>
+    <string name="status_ready">Pronto. La richiesta del tecnico compare qui tra un attimo.</string>
     <string name="status_asking">Un tecnico vuole connettersi.</string>
     <string name="status_negotiating">Avvio della sessione…</string>
     <string name="status_active">Il tecnico vede il tuo schermo.</string>
@@ -21,6 +21,8 @@
     <string name="decline">Rifiuta</string>
     <string name="code_invalid">Questo codice di assistenza non è valido o è scaduto.</string>
     <string name="unreachable">Mixel non è raggiungibile. Controlla la connessione a Internet e riprova.</string>
+    <string name="your_id">Il tuo ID</string>
+    <string name="status_waiting">Comunica questo numero al tuo tecnico Mixel. Si collega e tu lo autorizzi qui.\n\nIn attesa del tecnico… Tieni aperta questa app.</string>
     <string name="failed">Non ha funzionato. Riprova.</string>
     <string name="session_ended">La sessione è terminata.</string>
     <string name="control_title">Consenti al tecnico di usare questo telefono</string>
@@ -31,5 +33,5 @@
     <string name="control_description">Consente a un tecnico Mixel di toccare, scorrere e scrivere su questo telefono durante una sessione di assistenza che hai autorizzato. Usato solo durante tale sessione; non legge i contenuti dello schermo.</string>
     <string name="notification_channel">Sessione di assistenza</string>
     <string name="notification_text">Il tuo schermo è condiviso con un tecnico Mixel.</string>
-    <string name="privacy">La sessione è cifrata. Termina quando tu o il tecnico la chiudete; la registrazione di questo telefono viene poi rimossa automaticamente.</string>
+    <string name="privacy">La sessione è cifrata. Solo un tecnico Mixel a cui comunichi questo ID può collegarsi, e solo dopo la tua autorizzazione.</string>
 </resources>

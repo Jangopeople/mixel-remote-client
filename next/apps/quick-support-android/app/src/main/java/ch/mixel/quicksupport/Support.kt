@@ -63,6 +63,49 @@ object Support : Native.Listener {
         height = maxOf(16, (h * scale).toInt() / 16 * 16)
     }
 
+    @Volatile private var watching = false
+    @Volatile private var problemShown = false
+    private fun deviceName() = "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}".trim().take(50).ifEmpty { "Android phone" }
+
+    /**
+     * Shows this phone's fixed ID at once and goes online as soon as a Mixel technician has typed it.
+     * Runs while the app is in front and not online; asks every few seconds.
+     */
+    fun watch(context: Context) {
+        if (watching) return
+        watching = true
+        val app = context.applicationContext
+        Thread {
+            try {
+                while (watching && !online) {
+                    try {
+                        val core = core(app)
+                        val answer = JSONObject(Native.register(core, deviceName()))
+                        val id = answer.getLong("connection_id").toString().chunked(3).joinToString(" ")
+                        problemShown = false
+                        main.post { if (remoteId != id) { remoteId = id; screen?.changed() } }
+                        if (!answer.optBoolean("pending", false)) {
+                            measure(app)
+                            Native.start(core, answer.toString(), width, height, ControlService.enabled(app))
+                            break
+                        }
+                    } catch (error: RuntimeException) {
+                        val reason = error.message.orEmpty()
+                        if (!problemShown) {
+                            problemShown = true
+                            main.post { message = app.getString(if (reason.contains("reached")) R.string.unreachable else R.string.failed); screen?.changed() }
+                        }
+                    }
+                    Thread.sleep(3000)
+                }
+            } catch (_: InterruptedException) {
+            } finally {
+                watching = false
+            }
+        }.start()
+    }
+    fun stopWatching() { watching = false }
+
     /** Registers with the technician's code and goes online. Call from a background thread. */
     fun connect(context: Context, code: String): String? {
         return try {
@@ -106,6 +149,8 @@ object Support : Native.Listener {
                     else -> Phase.OFFLINE
                 }
                 message = event.optString("message")
+                // Offline again (connection lost, or the technician's 8 hours are over): wait for the next technician.
+                if (phase == Phase.OFFLINE) screen?.let { (it as? Context)?.let { context -> main.postDelayed({ watch(context) }, 2000) } }
                 // Back to waiting (or offline) means no session runs: the screen capture must not either.
                 if (phase == Phase.OFFLINE || phase == Phase.READY) sessionEnded?.invoke()
             }

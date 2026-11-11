@@ -1,115 +1,103 @@
-// Help someone on their phone: the technician creates a one-time support code, the person types it
-// into the Mixel Quick Support app, and the phone then shows up here, ready to connect.
+// Help someone on their phone, the way people expect: the person opens Mixel Quick Support and reads
+// out the 9-digit ID it shows; the technician types it here and connects. The person allows it on the phone.
 (() => {
   function element<T extends HTMLElement>(id: string): T {
     const value = document.getElementById(id); if (!value) throw Error(`Missing phone support control ${id}`); return value as T;
   }
   const invoke = window.__TAURI__.core.invoke;
-  type Account = {phase: string; account: {profile: string; staff: boolean} | null};
-  type Remote = {phase: string; host: number | null; online?: number[]};
+  type Account = {phase: string; account: {profile: string; staff: boolean; personal?: boolean} | null};
   type Company = {client_id: string; client_name: string};
-  type Phone = {connection_id: number; name: string};
-  const card = element<HTMLElement>('phone-support'), company = element<HTMLSelectElement>('phone-support-company');
-  const create = element<HTMLButtonElement>('phone-support-create'), result = element<HTMLDivElement>('phone-support-result');
-  const codeText = element<HTMLParagraphElement>('phone-support-code'), copy = element<HTMLButtonElement>('phone-support-copy');
-  const dot = element<HTMLSpanElement>('phone-support-dot'), stateText = element<HTMLParagraphElement>('phone-support-state');
+  const locked = element<HTMLDivElement>('phone-support-locked'), lockedText = element<HTMLParagraphElement>('phone-support-locked-text');
+  const signIn = element<HTMLAnchorElement>('phone-support-signin'), body = element<HTMLDivElement>('phone-support-body');
+  const setup = element<HTMLDivElement>('phone-support-setup'), company = element<HTMLSelectElement>('phone-support-company');
+  const setupName = element<HTMLInputElement>('phone-support-setup-name'), setupButton = element<HTMLButtonElement>('phone-support-setup-button');
+  const form = element<HTMLFormElement>('phone-support-form'), idField = element<HTMLInputElement>('phone-support-id');
   const connect = element<HTMLButtonElement>('phone-support-connect'), status = element<HTMLParagraphElement>('phone-support-status');
-  const CODE_LIFETIME = 30 * 60 * 1000;
+  let account: Account = {phase: 'signed_out', account: null};
   let accountKey = '', staff = false, busy = false, version = 0, companiesLoaded = false;
-  let remote: Remote = {phase: 'offline', host: null};
-  let code = '', createdAt = 0, phone: Phone | null = null, requested = false;
+  let setUp: boolean | null = null, phase = 'offline';
   const formatId = (value: number): string => String(value).replace(/(\d{3})(\d{3})(\d{3})/, '$1 $2 $3');
-  const ready = (): boolean => ['ready', 'active', 'incoming', 'outgoing'].includes(remote.phase);
-  const online = (): boolean => !!phone && (remote.online ?? []).includes(phone.connection_id);
-  function describe(text: string, name?: string): void {
-    // The phone's name is data, never translated: it sits in its own element.
-    stateText.replaceChildren();
-    if (name) { const label = document.createElement('strong'); label.dataset.noTranslate = ''; label.textContent = name; stateText.append(label, ' '); }
-    stateText.append(document.createTextNode(text));
-  }
+  const digits = (): string => idField.value.replace(/\D/g, '');
   function render(): void {
-    card.hidden = !staff;
-    company.disabled = create.disabled = !staff || busy || !companiesLoaded || !company.value;
-    result.hidden = !code;
-    if (!code) return;
-    const expired = !phone && Date.now() - createdAt > CODE_LIFETIME;
-    connect.hidden = !phone;
-    if (expired) { dot.dataset.state = 'idle'; describe('This support code has expired. Create a new one.'); return; }
-    if (!phone) { dot.dataset.state = 'waiting'; describe('Waiting for the person to type the code into Mixel Quick Support…'); return; }
-    const session = ['active', 'incoming', 'outgoing'].includes(remote.phase);
-    connect.disabled = busy || remote.phase !== 'ready' || !online();
-    if (!ready()) { dot.dataset.state = 'idle'; describe(`· ${formatId(phone.connection_id)} has registered. To connect, choose “Make this computer available” above first.`, phone.name); }
-    else if (session && requested) { dot.dataset.state = 'online'; describe(`· ${formatId(phone.connection_id)} · connection requested. The person confirms on their phone.`, phone.name); }
-    else if (online()) { dot.dataset.state = 'online'; describe(`· ${formatId(phone.connection_id)} is ready. Choose Connect.`, phone.name); }
-    else { dot.dataset.state = 'waiting'; describe(`· ${formatId(phone.connection_id)} has registered. Waiting for the person to start sharing on their phone…`, phone.name); }
+    const signedIn = account.phase === 'authenticated' && !!account.account;
+    locked.hidden = staff; body.hidden = !staff; signIn.hidden = signedIn;
+    if (!signedIn) lockedText.textContent = 'Sign in with your Mixel team account to help someone on their phone.';
+    else if (!staff) lockedText.textContent = 'Only Mixel team accounts can connect to phones. Sign in with your team account (with the second confirmation step) under Account.';
+    setup.hidden = setUp !== false;
+    form.hidden = setUp === false;
+    setupButton.disabled = setupName.disabled = company.disabled = busy || !companiesLoaded || !company.value || !setupName.value.trim();
+    company.disabled = busy || !companiesLoaded;
+    const inSession = ['active', 'incoming', 'outgoing'].includes(phase);
+    connect.disabled = busy || inSession || !/^[1-9][0-9]{8}$/.test(digits());
   }
   async function loadCompanies(): Promise<void> {
-    if (!staff || companiesLoaded) return;
-    const request = version;
+    if (companiesLoaded) return;
+    const ask = version;
     try {
       const list = await invoke<Company[]>('enrollment_companies');
-      if (version !== request || !staff) return;
+      if (version !== ask) return;
       company.replaceChildren();
-      for (const item of list) { const option = document.createElement('option'); option.value = item.client_id; option.textContent = item.client_name; company.appendChild(option); }
+      // The technician's own computer usually belongs to Mixel itself: offer that first.
+      const sorted = [...list].sort((a, b) => Number(b.client_name.startsWith('Mixel')) - Number(a.client_name.startsWith('Mixel')));
+      for (const item of sorted) { const option = document.createElement('option'); option.value = item.client_id; option.textContent = item.client_name; company.appendChild(option); }
       companiesLoaded = true;
-      status.textContent = list.length ? '' : 'No company is linked for Remote devices yet. Link the company in Mixel admin first.';
-    } catch (error) { if (version === request) status.textContent = String(error); }
+      if (!list.length) status.textContent = 'No company is linked for Remote devices yet. Link the company in Mixel admin first.';
+    } catch (error) { if (version === ask) status.textContent = String(error); }
     finally { render(); }
   }
-  function reset(): void { code = ''; createdAt = 0; phone = null; requested = false; codeText.textContent = ''; status.textContent = ''; }
-  function accountChanged(value: Account): void {
-    const key = value.phase === 'authenticated' && value.account?.staff ? JSON.stringify(value.account) : '';
-    if (key === accountKey) return;
-    ++version; accountKey = key; staff = !!key; busy = false; companiesLoaded = false; company.replaceChildren(); reset(); render();
-    if (staff) void loadCompanies();
-  }
-  create.addEventListener('click', async () => {
-    if (busy || !company.value) return;
-    const request = ++version; busy = true; reset(); render(); status.textContent = 'Creating a support code…';
+  async function checkSetUp(): Promise<void> {
+    if (!staff) return;
+    const ask = version;
     try {
-      const value = await invoke<string>('support_code_create', {company: company.value});
-      if (version !== request) return;
-      if (!/^[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(value)) throw Error('The support code could not be created. Please try again.');
-      code = value; createdAt = Date.now(); codeText.textContent = value; status.textContent = '';
-    } catch (error) { if (version === request) status.textContent = String(error); }
-    finally { if (version === request) { busy = false; render(); } }
+      const current = await invoke<{connection_id: number} | null>('enrollment_current');
+      if (version !== ask) return;
+      setUp = !!current;
+      if (!setUp) { void loadCompanies(); if (!setupName.value) setupName.value = await invoke<string>('this_computer_name').catch(() => ''); }
+    } catch { setUp = null; }
+    render();
+  }
+  setupName.addEventListener('input', render);
+  company.addEventListener('change', render);
+  setupButton.addEventListener('click', async () => {
+    const name = setupName.value.trim();
+    if (busy || !name || !company.value) return;
+    const ask = ++version; busy = true; render(); status.textContent = 'Setting up this computer…';
+    try {
+      if (!['offline', 'error'].includes(phase)) await invoke('remote_disconnect').catch(() => {});
+      const device = await invoke<string>('add_this_device', {company: company.value, name});
+      const id = await invoke<number>('enroll_this_device', {device, confirmed: true});
+      if (version !== ask) return;
+      if (!Number.isInteger(id) || id < 100000000 || id > 999999999) throw Error('Invalid enrolled connection ID');
+      setUp = true; status.textContent = `This computer is set up. Connection ID ${formatId(id)}. Now type the ID from the phone.`;
+      document.dispatchEvent(new CustomEvent('mixel-device-enrolled'));
+      idField.focus();
+    } catch (error) { if (version === ask) status.textContent = String(error); }
+    finally { if (version === ask) { busy = false; render(); } }
   });
-  copy.addEventListener('click', async () => {
-    if (!code) return;
-    try { await navigator.clipboard.writeText(code); copy.textContent = 'Copied'; window.setTimeout(() => { copy.textContent = 'Copy code'; }, 2000); }
-    catch { status.textContent = 'The code could not be copied. Select it and copy it yourself.'; }
+  idField.addEventListener('input', () => {
+    const value = digits().slice(0, 9);
+    idField.value = value.replace(/(\d{3})(?=\d)/g, '$1 ');
+    render();
   });
-  connect.addEventListener('click', async () => {
-    if (!phone || busy || remote.phase !== 'ready') return;
-    const request = ++version; busy = true; requested = true; render(); status.textContent = '';
-    try { await invoke('remote_request', {host: phone.connection_id}); }
-    catch (error) { if (version === request) { requested = false; status.textContent = String(error); } }
-    finally { if (version === request) { busy = false; render(); } }
+  form.addEventListener('submit', event => {
+    event.preventDefault();
+    if (connect.disabled) return;
+    status.textContent = '';
+    document.dispatchEvent(new CustomEvent('mixel-connect-to', {detail: {id: Number(digits())}}));
   });
-  // Look for the phone while a code is waiting, then keep asking whether it is online.
-  let looking = false;
-  window.setInterval(async () => {
-    if (!staff || !code || document.hidden) return;
-    if (!phone) {
-      if (looking || Date.now() - createdAt > CODE_LIFETIME) { render(); return; }
-      looking = true; const request = version, asked = code;
-      try {
-        const found = await invoke<Phone | null>('support_code_device', {code: asked});
-        if (version === request && code === asked && found && Number.isInteger(found.connection_id) && typeof found.name === 'string') {
-          phone = found; render(); document.dispatchEvent(new CustomEvent('mixel-device-enrolled'));
-        }
-      } catch { /* asked again on the next round */ }
-      finally { looking = false; }
-    }
-    if (phone && ready() && !['active', 'incoming', 'outgoing'].includes(remote.phase)) void invoke('remote_presence', {hosts: [phone.connection_id]}).catch(() => {});
-  }, 4000);
+  // Progress of the connection, shown here where the technician is looking.
+  document.addEventListener('mixel-connect-progress', event => { status.textContent = (event as CustomEvent<string>).detail; });
+  function accountChanged(value: Account): void {
+    account = value;
+    const key = value.phase === 'authenticated' && value.account?.staff ? JSON.stringify(value.account) : '';
+    if (key === accountKey) { render(); return; }
+    ++version; accountKey = key; staff = !!key; busy = false; companiesLoaded = false; company.replaceChildren(); setUp = null; status.textContent = '';
+    render();
+    if (staff) void checkSetUp();
+  }
+  document.addEventListener('mixel-device-enrolled', () => { if (setUp !== true) void checkSetUp(); });
   document.addEventListener('mixel-account-state', event => accountChanged((event as CustomEvent<Account>).detail));
-  document.addEventListener('mixel-remote-state', event => {
-    const next = (event as CustomEvent<Remote>).detail;
-    if (requested && next.phase === 'ready' && remote.phase !== 'ready') requested = false;
-    remote = next; render();
-  });
+  document.addEventListener('mixel-remote-state', event => { phase = (event as CustomEvent<{phase: string}>).detail.phase; render(); });
   render();
   void invoke<Account>('account_status').then(accountChanged).catch(() => {});
-  void invoke<Remote>('remote_status').then(value => { remote = value; render(); }).catch(() => {});
 })();

@@ -17,6 +17,8 @@ object Native {
     @JvmStatic external fun seed(handle: Long): ByteArray?
     /** Blocks. Returns the registration as JSON; throws RuntimeException with a readable reason. */
     @JvmStatic external fun enroll(handle: Long, code: String, name: String): String
+    /** This phone's fixed ID and, once a technician typed it, the registration (JSON). Blocks. */
+    @JvmStatic external fun register(handle: Long, name: String): String
     @JvmStatic external fun start(handle: Long, enrollment: String, width: Int, height: Int, control: Boolean)
     @JvmStatic external fun decide(handle: Long, accept: Boolean)
     @JvmStatic external fun endSession(handle: Long)

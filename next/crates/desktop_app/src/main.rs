@@ -12,6 +12,7 @@ mod device_identity;
 mod session_store;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 mod host_actions;
+mod session_guard;
 mod host_print;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 mod agent;
@@ -1464,6 +1465,41 @@ async fn enrollment_companies(
         .await
         .map_err(|_| "Companies are unavailable for this account".into())
 }
+/// Quick Support for phones: before connecting to an ID, claim it if it is a phone. `false` for computers
+/// and for accounts that are not Mixel team accounts (the ordinary request then decides).
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[tauri::command]
+async fn quick_phone_claim(
+    window: tauri::WebviewWindow,
+    auth: tauri::State<'_, account_auth::AccountAuth>,
+    host: u32,
+) -> Result<bool, String> {
+    main_window(&window)?;
+    let credential = auth.credential(None).await?;
+    if !credential.principal.staff {
+        return Ok(false);
+    }
+    credential
+        .ism
+        .quick_phone_claim(&credential.token, host)
+        .await
+        .map_err(|_| "The phone could not be reached through Mixel. Please try again.".into())
+}
+/// This computer's name as the system shows it, to suggest a name for its one-time setup.
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[tauri::command]
+async fn this_computer_name(window: tauri::WebviewWindow) -> Result<String, String> {
+    main_window(&window)?;
+    #[cfg(target_os = "macos")]
+    let name = std::process::Command::new("/usr/sbin/scutil").arg("--get").arg("ComputerName").output().ok()
+        .filter(|output| output.status.success()).map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned());
+    #[cfg(target_os = "windows")]
+    let name = std::env::var("COMPUTERNAME").ok();
+    #[cfg(target_os = "linux")]
+    let name = std::fs::read_to_string("/etc/hostname").ok().map(|text| text.trim().to_owned());
+    let name: String = name.unwrap_or_default().chars().filter(|c| !c.is_control()).take(80).collect();
+    Ok(if name.trim().is_empty() { "This computer".into() } else { name.trim().to_owned() })
+}
 /// Quick Support for phones: the technician creates a one-time code for the person to type
 /// into the Mixel Quick Support app on their phone.
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
@@ -2246,6 +2282,8 @@ fn main() {
             enrollment_devices,
             enrollment_companies,
             support_code_create,
+            this_computer_name,
+            quick_phone_claim,
             support_code_device,
             add_this_device,
             enrollment_current,
@@ -2328,6 +2366,8 @@ fn main() {
             enrollment_devices,
             enrollment_companies,
             support_code_create,
+            this_computer_name,
+            quick_phone_claim,
             support_code_device,
             add_this_device,
             enrollment_current,

@@ -101,7 +101,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
     }
 
     override func broadcastStarted(withSetupInfo setupInfo: [String: NSObject]?) {
-        guard let seed = Shared.data("seed"), seed.count == 32, let enrollment = Shared.text("enrollment") else {
+        guard let seed = Shared.data("seed"), seed.count == 32 else {
             fail(Texts.of("no_code"))
             return
         }
@@ -115,17 +115,31 @@ final class SampleHandler: RPBroadcastSampleHandler {
         guard let host else { fail(Texts.of("failed")); return }
         let screen = UIScreen.main.nativeBounds
         size = Shared.pictureSize(width: Int(screen.width), height: Int(screen.height))
-        // Starting the broadcast is the customer's consent; only the technician who issued the code gets in.
+        // Starting the broadcast is the person's consent; only the technician who typed this phone's ID gets in.
         mqs_accept_issuer(host, true)
-        if let problem = mqs_start(host, enrollment, UInt32(size.0), UInt32(size.1), false) {
-            let text = String(cString: problem)
-            mqs_free(problem)
-            fail(text)
-            return
-        }
         encoder.output = { [weak self] data in
             guard let host = self?.host else { return }
             data.withUnsafeBytes { mqs_push_frame(host, $0.bindMemory(to: UInt8.self).baseAddress, data.count) }
+        }
+        // Wait (up to 10 minutes) until the technician has typed this phone's ID, then go online.
+        let name = Shared.deviceName
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            for _ in 0..<300 {
+                guard let self, !self.finished, let host = self.host else { return }
+                guard let answer = mqs_register(host, name) else { Thread.sleep(forTimeInterval: 2); continue }
+                let json = String(cString: answer)
+                mqs_free(answer)
+                if let object = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any], object["error"] == nil, object["pending"] == nil, object["device_id"] != nil {
+                    if let problem = mqs_start(host, json, UInt32(self.size.0), UInt32(self.size.1), false) {
+                        let text = String(cString: problem)
+                        mqs_free(problem)
+                        self.fail(text)
+                    }
+                    return
+                }
+                Thread.sleep(forTimeInterval: 2)
+            }
+            self?.fail(Texts.of("not_claimed"))
         }
     }
 

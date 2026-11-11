@@ -236,6 +236,19 @@ async function hostKey(id) {
 async function request(id, code, unattended) {
   if (!enrollment) throw new Problem(t('Register first, then connect.'));
   await connectService();
+  // A phone with Mixel Quick Support: claim its ID for this team member, then wait until it is online.
+  if (who && who.staff && !unattended) {
+    const phone = await api('/rest/v1/rpc/remote_quick_phone_claim', { body: { connection: id } }).catch(() => false);
+    if (phone === true) {
+      status(t('Phone found. Waiting for it to come online… On an iPhone the person taps “Start sharing my screen”.'));
+      let reachable = false;
+      for (let round = 0; round < 60 && !reachable; round++) {
+        reachable = (await presence([id])).includes(id);
+        if (!reachable) await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+      if (!reachable) throw new Problem(t('The phone did not come online. Ask the person to keep Mixel Quick Support open, then choose Connect again.'));
+    }
+  }
   const key = await hostKey(id);
   status(unattended ? t('Connecting…') : t('Waiting for the other person to accept…'));
   send(unattended ? { type: 'request_unattended', host: id } : code ? { type: 'request_with_code', host: id, code } : { type: 'request', host: id });
@@ -540,12 +553,7 @@ function renderToolbar(session) {
 }
 async function renderHome() {
   $('register').hidden = !!enrollment || !who; $('connect').hidden = !enrollment;
-  if (who && who.staff && enrollment && !$('support-company').options.length) {
-    // Team members can hand out support codes for phones, for the companies they look after.
-    const companies = await api('/rest/v1/rpc/remote_enrollment_companies').catch(() => []);
-    if (!$('support-company').options.length) for (const company of companies) { const option = document.createElement('option'); option.value = company.client_id; option.textContent = company.client_name; $('support-company').appendChild(option); }
-    $('support').hidden = companies.length === 0;
-  }
+  $('support').hidden = !(who && who.staff && enrollment);
   if (!enrollment || active) return;
   $('own-id').textContent = String(enrollment.connection_id).replace(/(\d{3})(?=\d)/g, '$1 ');
   try {
@@ -576,49 +584,6 @@ async function run(task) {
   }
 }
 
-// Quick Support for phones: a team member creates a one-time code; the phone registers with it.
-async function createSupportCode() {
-  const button = $('support-button');
-  button.disabled = true;
-  try {
-    const code = await api('/rest/v1/rpc/remote_create_support_code', { body: { target_client: $('support-company').value }, failure: t('The support code could not be created. Please try again.') });
-    if (typeof code !== 'string' || !/^[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(code)) throw new Problem(t('The support code could not be created. Please try again.'));
-    $('support-code').textContent = code; $('support-result').hidden = false;
-    status('');
-    watchSupportPhone(code);
-  } finally { button.disabled = false; }
-}
-// After a code was created: show the phone as soon as it has registered, and offer Connect once it is online.
-let supportWatch = 0;
-function watchSupportPhone(code) {
-  const watch = ++supportWatch, created = Date.now();
-  let phone = null, busy = false;
-  const state = $('support-phone-state'), button = $('support-connect');
-  const id = () => String(phone.connection_id).replace(/(\d{3})(?=\d)/g, '$1 ');
-  button.hidden = true; button.disabled = true;
-  state.textContent = t('Waiting for the person to type the code into Mixel Quick Support…');
-  button.onclick = () => { if (phone) { button.disabled = true; unlockSound(); run(() => request(phone.connection_id, '', false)); } };
-  const round = async () => {
-    if (watch !== supportWatch) return;
-    if (!busy && !active && !document.hidden) {
-      busy = true;
-      try {
-        if (!phone) {
-          if (Date.now() - created > 30 * 60 * 1000) { state.textContent = t('This support code has expired. Create a new one.'); return; }
-          const found = await api('/rest/v1/rpc/remote_support_code_device', { body: { code } }).catch(() => []);
-          if (watch === supportWatch && Array.isArray(found) && found[0] && Number.isInteger(found[0].connection_id)) { phone = found[0]; button.hidden = false; renderHome(); }
-        }
-        if (phone && watch === supportWatch) {
-          const reachable = (await presence([phone.connection_id])).includes(phone.connection_id);
-          button.disabled = !reachable;
-          state.textContent = `${phone.name} · ${id()} ${reachable ? t('is ready. Choose Connect.') : t('has registered. Waiting for the person to start sharing on their phone…')}`;
-        }
-      } finally { busy = false; }
-    }
-    setTimeout(round, 4000);
-  };
-  round();
-}
 // Meetings: any signed-in account can start one; guests join with the invitation link alone.
 async function startMeeting() {
   const button = $('meet-button');
@@ -703,12 +668,6 @@ $('connect-form').onsubmit = event => {
   run(() => request(id, code, $('remote-unattended').checked)).finally(() => { $('connect-button').disabled = false; });
 };
 $('status').onclick = () => { $('status').textContent = ''; }; // tap the notice to put it away
-$('support-button').onclick = () => run(createSupportCode);
-$('support-copy').onclick = () => run(async () => {
-  const code = $('support-code').textContent;
-  try { await navigator.clipboard.writeText(code); } catch { /* the code stays readable on screen */ }
-  status(t('Code copied.'));
-});
 $('meet-button').onclick = () => run(startMeeting);
 $('meet-open').onclick = event => { if (CONFIG.openExternal) { event.preventDefault(); run(() => CONFIG.openExternal($('meet-open').href)); } };
 // The phone app has its own sign-in, so it also needs its own sign-out.

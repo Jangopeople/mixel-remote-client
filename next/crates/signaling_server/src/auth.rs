@@ -286,6 +286,23 @@ impl IsmAuth {
         }
         Ok(code)
     }
+    /// Quick Support for phones: claims the phone with this Remote ID for this team member (it then
+    /// goes online and asks the person). `false` when the ID is not a phone (an ordinary computer).
+    pub async fn quick_phone_claim(&self, token: &str, connection_id: u32) -> Result<bool, AuthError> {
+        if !(100_000_000..=999_999_999).contains(&connection_id) || !self.authenticate_scope(token, false).await?.staff {
+            return Err(AuthError);
+        }
+        let response = self
+            .client
+            .post(self.base.join("/rest/v1/rpc/remote_quick_phone_claim").map_err(|_| AuthError)?)
+            .header("apikey", &self.api_key)
+            .bearer_auth(token)
+            .json(&serde_json::json!({"connection":connection_id}))
+            .send()
+            .await
+            .map_err(|_| AuthError)?;
+        Self::decode_response(response).await
+    }
     /// The phone that registered with a support code this team member created, if any yet.
     pub async fn support_code_device(&self, token: &str, code: &str) -> Result<Option<SupportDevice>, AuthError> {
         if code.len() != 14 || !self.authenticate_scope(token, false).await?.staff {

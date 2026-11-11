@@ -61,6 +61,17 @@ pub extern "C" fn mqs_enroll(host: *const Host, code: *const c_char, name: *cons
         Err(error) => serde_json::json!({ "error": error }).to_string(),
     })
 }
+/// Gets this device's fixed Remote ID. Returns JSON: the registration once a technician typed the ID,
+/// `{"connection_id": N, "pending": true}` before that, or `{"error": "..."}`. Blocks.
+#[unsafe(no_mangle)]
+pub extern "C" fn mqs_register(host: *const Host, name: *const c_char) -> *mut c_char {
+    // Safety: `host` comes from `mqs_create`.
+    let Some(host) = (unsafe { host.as_ref() }) else { return std::ptr::null_mut() };
+    give(&match text(name).ok_or_else(|| "Invalid text".to_owned()).and_then(|name| host.register(&name)) {
+        Ok(registration) => registration.json(),
+        Err(error) => serde_json::json!({ "error": error }).to_string(),
+    })
+}
 /// Goes online with a registration (JSON from `mqs_enroll`). Returns null, or an error text.
 #[unsafe(no_mangle)]
 pub extern "C" fn mqs_start(host: *const Host, enrollment: *const c_char, width: u32, height: u32, control: bool) -> *mut c_char {
