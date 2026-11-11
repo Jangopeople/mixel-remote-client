@@ -53,6 +53,7 @@ fn main() {
         "capture-panel.html",
         "remote.ts",
         "devices.ts",
+        "assistant.ts",
         "enrollment.ts",
         "files.ts",
         "chat.ts",

@@ -316,6 +316,22 @@ S = [
 ("Command copied.","Befehl kopiert.","Commande copiée.","Comando copiato."),
 ("Creating…","Wird erstellt…","Création…","Creazione…"),
 ("Wake","Aufwecken","Réveiller","Riattiva"),
+("AI help","KI-Hilfe","Aide IA","Aiuto IA"),
+("AI assistant","KI-Assistent","Assistant IA","Assistente IA"),
+("Ask","Fragen","Demander","Chiedi"),
+("Write session note","Sitzungsnotiz schreiben","Rédiger la note de session","Scrivi la nota di sessione"),
+("Copy answer","Antwort kopieren","Copier la réponse","Copia la risposta"),
+("Ask about what is on the screen, or leave empty for an explanation and next steps","Fragen Sie zum Bildschirminhalt, oder leer lassen für eine Erklärung und nächste Schritte","Posez une question sur l’écran, ou laissez vide pour une explication et les prochaines étapes","Chiedi qualcosa sullo schermo, o lascia vuoto per una spiegazione e i prossimi passi"),
+("Uses your company’s own AI server. The screenshot and your question stay in your network.","Nutzt den eigenen KI-Server Ihrer Firma. Bildschirmfoto und Frage bleiben in Ihrem Netzwerk.","Utilise le serveur IA de votre entreprise. La capture et votre question restent dans votre réseau.","Usa il server IA della tua azienda. Lo screenshot e la domanda restano nella tua rete."),
+("Mixel Remote can use your company’s own AI server (Ollama) to explain what is on the remote screen, suggest next steps and write the session note. Nothing is sent outside your network.","Mixel Remote kann den eigenen KI-Server Ihrer Firma (Ollama) nutzen, um den entfernten Bildschirm zu erklären, nächste Schritte vorzuschlagen und die Sitzungsnotiz zu schreiben. Nichts verlässt Ihr Netzwerk.","Mixel Remote peut utiliser le serveur IA de votre entreprise (Ollama) pour expliquer l’écran distant, proposer les prochaines étapes et rédiger la note de session. Rien ne sort de votre réseau.","Mixel Remote può usare il server IA della tua azienda (Ollama) per spiegare lo schermo remoto, suggerire i prossimi passi e scrivere la nota di sessione. Nulla esce dalla tua rete."),
+("AI server address","Adresse des KI-Servers","Adresse du serveur IA","Indirizzo del server IA"),
+("Model","Modell","Modèle","Modello"),
+("Connect","Verbinden","Connecter","Connetti"),
+("Connecting…","Verbindung wird hergestellt…","Connexion…","Connessione…"),
+("Connected to your AI server.","Mit Ihrem KI-Server verbunden.","Connecté à votre serveur IA.","Connesso al tuo server IA."),
+("Found automatically, or e.g. http://10.0.0.5:11434","Wird automatisch gefunden, oder z. B. http://10.0.0.5:11434","Trouvé automatiquement, ou p. ex. http://10.0.0.5:11434","Trovato automaticamente, o ad es. http://10.0.0.5:11434"),
+("Looking at the screen…","Bildschirm wird angesehen…","Analyse de l’écran…","Analisi dello schermo…"),
+("Writing the note…","Notiz wird geschrieben…","Rédaction de la note…","Scrittura della nota…"),
 ]
 P = [
 # (regex, de, fr, it)

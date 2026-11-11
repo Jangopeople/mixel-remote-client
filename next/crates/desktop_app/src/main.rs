@@ -15,6 +15,8 @@ mod host_actions;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 mod agent;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+mod ai_assistant;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 mod self_update;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 mod autostart;
@@ -932,6 +934,27 @@ async fn signin_screen_enable(
             .map_err(|_| "Administrator step failed")??;
         Ok(enrolled.connection_id)
     }
+}
+/// Finds or checks the company's AI server (empty address: try this computer and the usual server).
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[tauri::command]
+async fn ai_connect(window: tauri::WebviewWindow, address: String, model: String) -> Result<ai_assistant::Server, String> {
+    main_window(&window)?;
+    ai_assistant::connect(&address, &model).await
+}
+/// Asks the AI server; `image` is an optional base64 screenshot of the session the technician sees.
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[tauri::command]
+async fn ai_ask(
+    window: tauri::WebviewWindow,
+    address: String,
+    model: String,
+    system: String,
+    prompt: String,
+    image: Option<String>,
+) -> Result<String, String> {
+    main_window(&window)?;
+    ai_assistant::ask(&address, &model, &system, &prompt, image.as_deref()).await
 }
 /// Sends a Wake-on-LAN signal from this computer for each address.
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
@@ -2112,6 +2135,8 @@ fn main() {
             update_check,
             update_install,
             wake_on_lan,
+            ai_connect,
+            ai_ask,
             rollout_create,
             rollout_list,
             rollout_revoke,
@@ -2188,6 +2213,8 @@ fn main() {
             update_check,
             update_install,
             wake_on_lan,
+            ai_connect,
+            ai_ask,
             rollout_create,
             rollout_list,
             rollout_revoke,
