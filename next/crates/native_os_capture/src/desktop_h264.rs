@@ -45,10 +45,13 @@ impl ScreenH264Encoder {
         let threads = std::thread::available_parallelism()
             .map(|count| count.get().saturating_sub(1).clamp(1, 4) as u16)
             .unwrap_or(1);
-        let config = EncoderConfig::new()
+        // Measured at 1920x1080 with motion: the screen-content mode needs about three
+        // times as long per picture and ignores extra cores; the real-time mode with
+        // slices spreads the work over the cores (pictures are about a quarter larger).
+        let mut config = EncoderConfig::new()
             .num_threads(threads)
             .complexity(openh264::encoder::Complexity::Low)
-            .usage_type(UsageType::ScreenContentRealTime)
+            .usage_type(UsageType::CameraVideoRealTime)
             .bitrate(BitRate::from_bps(bitrate))
             .max_frame_rate(FrameRate::from_hz(fps as f32))
             .profile(Profile::Baseline)
@@ -57,6 +60,9 @@ impl ScreenH264Encoder {
             .adaptive_quantization(false)
             .background_detection(false)
             .skip_frames(true);
+        if threads > 1 {
+            config = config.max_slice_len(60_000);
+        }
         let encoder = Encoder::with_api_config(OpenH264API::from_source(), config)
             .map_err(|_| EncodeError::Failed)?;
         Ok(Self {
@@ -293,5 +299,96 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!((decoded.width(), decoded.height()), (320, 240));
+        // Full HD in several slices (one per encoder thread) decodes on both sides, too.
+        let mut pixels = vec![255u8; 1920 * 1080 * 4];
+        for (index, pixel) in pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            if (index / 1920 + index % 1920) % 7 < 3 {
+                *pixel = [20, 90, (index % 251) as u8, 255];
+            }
+        }
+        let frame = CapturedFrame::bgra(1920, 1080, 1920 * 4, pixels).unwrap();
+        let mut desktop_encoder = ScreenH264Encoder::new(1920, 1080, 30, 6_000_000).unwrap();
+        let encoded = desktop_encoder.encode(&frame, 0, true).unwrap().unwrap();
+        let slices = encoded.annex_b.windows(4).filter(|window| *window == [0, 0, 0, 1]).count();
+        assert!(slices >= 3, "expected SPS, PPS and at least one slice, got {slices}");
+        let decoded = MacDecoder::new(1920, 1088).unwrap().decode(&encoded.annex_b, 0).unwrap().unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (1920, 1080));
+        let decoded = H264Decoder::new(1920, 1088).unwrap().decode(&encoded.annex_b, 0).unwrap().unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (1920, 1080));
+        // The decoded picture matches the source (centre pixel of a white area and a coloured one).
+        let at = |x: usize, y: usize| { let o = y * decoded.stride() + x * 4; decoded.pixels()[o..o + 3].to_vec() };
+        let source = |x: usize, y: usize| { let o = (y * 1920 + x) * 4; frame.pixels()[o..o + 3].to_vec() };
+        for (x, y) in [(960, 540), (10, 10), (1900, 1070)] {
+            for (a, b) in at(x, y).iter().zip(source(x, y)) {
+                assert!((i16::from(*a) - i16::from(b)).abs() < 90, "pixel {x},{y}: {a} vs {b}");
+            }
+        }
+    }
+
+    /// Manual speed comparison: `cargo test -p native_os_capture --release bench_1080p -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn bench_1080p_encoder_variants() {
+        use openh264::encoder::Complexity;
+        let (width, height) = (1920usize, 1080usize);
+        let frames: Vec<Vec<u8>> = (0..12)
+            .map(|n| {
+                let mut pixels = vec![255u8; width * height * 4];
+                // A moving block and a band of "text" noise that moves down, like scrolling.
+                for y in 200..420 {
+                    for x in (n * 120)..(n * 120 + 220) {
+                        pixels[(y * width + x) * 4..(y * width + x) * 4 + 3].copy_from_slice(&[60, 20, 220]);
+                    }
+                }
+                for y in (n * 40)..(n * 40 + 300) {
+                    for x in 60..1500 {
+                        let value = (((x * 7 + y * 13) ^ (x / 3)) % 3 == 0) as u8 * 200;
+                        pixels[(y * width + x) * 4..(y * width + x) * 4 + 3].copy_from_slice(&[value; 3]);
+                    }
+                }
+                pixels
+            })
+            .collect();
+        for (name, usage, threads, slice) in [
+            ("screen, 1 thread", UsageType::ScreenContentRealTime, 1u16, None),
+            ("screen, 4 threads + slices", UsageType::ScreenContentRealTime, 4, Some(60_000u32)),
+            ("camera, 1 thread", UsageType::CameraVideoRealTime, 1, None),
+            ("camera, 4 threads + slices", UsageType::CameraVideoRealTime, 4, Some(60_000)),
+        ] {
+            let mut config = EncoderConfig::new()
+                .num_threads(threads)
+                .complexity(Complexity::Low)
+                .usage_type(usage)
+                .bitrate(BitRate::from_bps(6_000_000))
+                .max_frame_rate(FrameRate::from_hz(30.0))
+                .profile(Profile::Baseline)
+                .level(Level::Level_4_0)
+                .rate_control_mode(RateControlMode::Bitrate)
+                .adaptive_quantization(false)
+                .background_detection(false)
+                .skip_frames(true);
+            if let Some(slice) = slice {
+                config = config.max_slice_len(slice);
+            }
+            let mut encoder = Encoder::with_api_config(OpenH264API::from_source(), config).unwrap();
+            let mut yuv = YUVBuffer::new(width, height);
+            let mut convert = std::time::Duration::ZERO;
+            let mut encode = std::time::Duration::ZERO;
+            let mut bytes = 0usize;
+            for pixels in &frames {
+                let started = std::time::Instant::now();
+                yuv.read_bgra8(BgraSliceU8::new(pixels, (width, height)));
+                convert += started.elapsed();
+                let started = std::time::Instant::now();
+                bytes += encoder.encode(&yuv).unwrap().to_vec().len();
+                encode += started.elapsed();
+            }
+            println!(
+                "{name}: convert {:.1} ms, encode {:.1} ms per frame, {} kB per frame",
+                convert.as_secs_f64() * 1000.0 / frames.len() as f64,
+                encode.as_secs_f64() * 1000.0 / frames.len() as f64,
+                bytes / frames.len() / 1000
+            );
+        }
     }
 }
