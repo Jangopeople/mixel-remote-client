@@ -11,6 +11,13 @@
 <main id="home">
   <header><h1>Mixel Remote</h1><p data-t>Remote control in your browser</p><p id="account" class="account"></p></header>
   <section id="signin" class="card" hidden><p id="signin-text"></p><a id="signin-link" class="primary" href="/" data-t>Open Mixel ISM</a></section>
+  <section id="mfa" class="card" hidden>
+    <h2 data-t>Confirm it is you</h2>
+    <form id="mfa-form">
+      <label><span data-t>Enter the code from your authenticator app.</span><input id="mfa-code" inputmode="numeric" autocomplete="one-time-code" maxlength="8"></label>
+      <button id="mfa-button" class="primary" type="submit" data-t>Confirm</button>
+    </form>
+  </section>
   <section id="register" class="card" hidden>
     <h2 data-t>Register this browser</h2>
     <p class="hint" data-t>To connect from here, this browser is registered once as one of your devices. It gets its own Remote ID.</p>

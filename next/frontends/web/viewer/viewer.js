@@ -80,7 +80,12 @@ async function principal() {
   if (rows.length !== 1) throw new Problem(t('This account cannot use Mixel Remote.'));
   const row = rows[0];
   const staff = row.organization_id === null && (row.role === 'admin' || row.role === 'agent');
-  if (staff && tokenClaims.aal !== 'aal2') throw new Problem(t('Confirm your sign-in with your authenticator code in Mixel ISM, then open this page again.'));
+  if (staff && tokenClaims.aal !== 'aal2') {
+    // Team accounts need the second step. Offer it here, like the desktop app does.
+    const factor = (user.factors || []).find(entry => entry.status === 'verified' && entry.factor_type === 'totp');
+    if (!factor) throw new Problem(t('Set up an authenticator app for your account in Mixel ISM, then open this page again.'));
+    const problem = new Problem(t('Enter the code from your authenticator app.')); problem.factor = factor.id; throw problem;
+  }
   if (!staff) throw new Problem(t('Remote control in the browser is for Mixel team members and personal accounts.'));
   return { profile: row.id, tenant: null, staff: true, personal: false, name: row.name || user.email };
 }
@@ -534,12 +539,15 @@ async function run(task) {
   }
 }
 
+let started = false;
 async function start() {
-  applyTexts();
-  await init();
+  if (!started) { applyTexts(); await init(); started = true; }
   $('signin-link').href = CONFIG.signIn;
   try { who = await principal(); }
-  catch (problem) { $('signin').hidden = false; $('signin-text').textContent = problem instanceof Problem ? problem.message : t('Please sign in to Mixel ISM first.'); return; }
+  catch (problem) {
+    if (problem.factor) { mfaFactor = problem.factor; $('mfa').hidden = false; $('mfa-code').focus(); return; }
+    $('signin').hidden = false; $('signin-text').textContent = problem instanceof Problem ? problem.message : t('Please sign in to Mixel ISM first.'); return;
+  }
   $('account').textContent = who.name;
   await loadDevice();
   if (!enrollment) {
@@ -552,6 +560,23 @@ async function start() {
   } else { await run(connectService); }
   renderHome();
 }
+let mfaFactor = null;
+$('mfa-form').onsubmit = event => {
+  event.preventDefault();
+  const code = $('mfa-code').value.replace(/\D/g, '');
+  if (!/^(\d{6}|\d{8})$/.test(code)) { status(t('Enter the code from your authenticator app.')); return; }
+  $('mfa-button').disabled = true;
+  run(async () => {
+    const challenge = await api(`/auth/v1/factors/${mfaFactor}/challenge`, { body: {}, failure: t('The code was not accepted. Please try again.') });
+    const fresh = await api(`/auth/v1/factors/${mfaFactor}/verify`, { body: { challenge_id: challenge.id, code }, failure: t('The code was not accepted. Please try again.') });
+    if (!fresh.access_token || !fresh.refresh_token) throw new Problem(t('The code was not accepted. Please try again.'));
+    if (!fresh.expires_at) fresh.expires_at = now() + (fresh.expires_in || 3600);
+    const save = () => localStorage.setItem(CONFIG.storageKey, JSON.stringify(Object.assign({}, storedSession() || {}, fresh)));
+    if (navigator.locks) await navigator.locks.request(`lock:${CONFIG.storageKey}`, save); else save();
+    $('mfa').hidden = true; $('mfa-code').value = ''; status('');
+    await start();
+  }).finally(() => { $('mfa-button').disabled = false; });
+};
 $('register-button').onclick = () => run(async () => {
   $('register-button').disabled = true;
   try { await register($('register-company').value, $('register-name').value.trim() || browserName().name); await connectService(); renderHome(); }
