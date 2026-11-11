@@ -13,6 +13,14 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub const PRIVACY: &str = "privacy";
+/// `meet:<room>`: the technician offers to show their own screen in a Mixel Meet room.
+pub const MEET: &str = "meet";
+
+/// A Mixel Meet room id: four groups of letters and digits, as the meeting service makes them.
+pub fn meeting_room(text: &str) -> bool {
+    let parts: Vec<&str> = text.split('-').collect();
+    parts.len() == 3 && parts.iter().all(|part| part.len() == 4 && part.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()))
+}
 /// `pointer:x,y` / `pointer:off`: a ring the person at the computer sees where the technician points.
 pub const POINTER: &str = "pointer";
 pub const BLOCK: &str = "block";
@@ -28,7 +36,7 @@ pub fn available() -> Vec<&'static str> {
     if cfg!(target_os = "windows") {
         list.extend([PRIVACY, BLOCK, POINTER]);
     }
-    list.extend([LOCK, LOCK_AT_END]);
+    list.extend([LOCK, LOCK_AT_END, MEET]);
     list
 }
 
@@ -397,5 +405,10 @@ mod tests {
         assert!(super::run("lockend:on").is_ok());
         assert!(super::run("lockend:off").is_ok());
         assert!(super::available().contains(&super::LOCK));
+        // Only room ids the meeting service makes are accepted from the technician.
+        assert!(super::meeting_room("pu5f-9qwq-m767"));
+        for bad in ["", "pu5f-9qwq", "PU5F-9QWQ-M767", "pu5f-9qwq-m767.key", "../x-yyyy-zzzz", "pu5f-9qwq-m76"] {
+            assert!(!super::meeting_room(bad), "{bad}");
+        }
     }
 }

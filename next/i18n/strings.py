@@ -410,6 +410,14 @@ S = [
 ("Lock computer","Computer sperren","Verrouiller l’ordinateur","Blocca il computer"),
 ("Allow with control","Mit Steuerung erlauben","Autoriser avec contrôle","Consenti con controllo"),
 ("Allow view only","Nur Ansicht erlauben","Autoriser la vue seule","Consenti solo visualizzazione"),
+("Show my screen","Meinen Bildschirm zeigen","Montrer mon écran","Mostra il mio schermo"),
+("Invite a colleague","Kollegen einladen","Inviter un collègue","Invita un collega"),
+("The technician wants to show you their screen. It opens in your browser.","Der Techniker möchte Ihnen seinen Bildschirm zeigen. Er öffnet sich in Ihrem Browser.","Le technicien souhaite vous montrer son écran. Il s’ouvre dans votre navigateur.","Il tecnico vuole mostrarti il suo schermo. Si apre nel tuo browser."),
+("Show it","Anzeigen","Afficher","Mostra"),
+("Not now","Nicht jetzt","Pas maintenant","Non ora"),
+("Your meeting opens in the browser. Choose “Share screen” there; the other person is asked to watch.","Ihr Meeting öffnet sich im Browser. Wählen Sie dort «Bildschirm teilen»; die andere Person wird gefragt, ob sie zusehen möchte.","Votre réunion s’ouvre dans le navigateur. Choisissez « Partager l’écran » ; l’autre personne est invitée à regarder.","La riunione si apre nel browser. Scegli «Condividi schermo»; all’altra persona viene chiesto di guardare."),
+("The meeting could not be started","Das Meeting konnte nicht gestartet werden","La réunion n’a pas pu être lancée","Impossibile avviare la riunione"),
+("Mixel Meet cannot be reached","Mixel Meet ist nicht erreichbar","Mixel Meet est injoignable","Mixel Meet non è raggiungibile"),
 ]
 P = [
 # (regex, de, fr, it)
@@ -456,4 +464,5 @@ P = [
 (r"^Block input: (on|off)$", r"Eingaben sperren: \1", r"Bloquer la saisie : \1", r"Blocca input: \1"),
 (r"^Lock when done: (on|off)$", r"Am Ende sperren: \1", r"Verrouiller à la fin : \1", r"Blocca alla fine: \1"),
 (r"^Show pointer: (on|off)$", r"Zeiger zeigen: \1", r"Afficher le pointeur : \1", r"Mostra puntatore: \1"),
+(r"^Meeting link copied: (\S+) · Send it to your colleague, then share this window in the meeting\.$", r"Meeting-Link kopiert: \1 · Senden Sie ihn Ihrem Kollegen und teilen Sie dann dieses Fenster im Meeting.", r"Lien de réunion copié : \1 · Envoyez-le à votre collègue, puis partagez cette fenêtre dans la réunion.", r"Link della riunione copiato: \1 · Invialo al tuo collega, poi condividi questa finestra nella riunione."),
 ]

@@ -151,6 +151,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Incoming request: choose a source and Accept or Reject": "Eingehende Anfrage: Bildschirm wählen und annehmen oder ablehnen",
 "Install updates automatically": "Updates automatisch installieren",
 "Invitation rejected locally; ready for a new connection": "Anfrage abgelehnt; bereit für eine neue Verbindung",
+"Invite a colleague": "Kollegen einladen",
 "It opens and makes this computer available, so unattended access works after a restart.": "Es öffnet sich und macht diesen Computer verfügbar, damit unbeaufsichtigter Zugriff nach einem Neustart funktioniert.",
 "Keyboard & mouse": "Tastatur & Maus",
 "Keyboard and mouse control are unavailable in this desktop session.": "Tastatur- und Maussteuerung sind in dieser Desktopsitzung nicht verfügbar.",
@@ -174,6 +175,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Manage this computer’s identity and sharing permissions.": "Identität und Freigaberechte dieses Computers verwalten.",
 "Manage your company profile and logo with Mixel ID.": "Firmenprofil und Logo mit Mixel ID verwalten.",
 "Mixel ID verified. Enter your name to set up Remote.": "Mixel ID bestätigt. Geben Sie Ihren Namen ein, um Remote einzurichten.",
+"Mixel Meet cannot be reached": "Mixel Meet ist nicht erreichbar",
 "Mixel Remote can use your company’s own AI server (Ollama) to explain what is on the remote screen, suggest next steps and write the session note. Nothing is sent outside your network.": "Mixel Remote kann den eigenen KI-Server Ihrer Firma (Ollama) nutzen, um den entfernten Bildschirm zu erklären, nächste Schritte vorzuschlagen und die Sitzungsnotiz zu schreiben. Nichts verlässt Ihr Netzwerk.",
 "Mixel Remote no longer starts with this computer.": "Mixel Remote startet nicht mehr mit diesem Computer.",
 "Mixel Remote starts with this computer and makes it available.": "Mixel Remote startet mit diesem Computer und macht ihn verfügbar.",
@@ -196,6 +198,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "No retained remote video": "Kein gespeichertes Video",
 "No screen is being shared": "Kein Bildschirm wird geteilt",
 "Not connected": "Nicht verbunden",
+"Not now": "Nicht jetzt",
 "ONE-TIME PASSWORD, IF PROVIDED": "EINMALPASSWORT, FALLS VORHANDEN",
 "Off. Choose a display and confirm before enabling.": "Aus. Wählen und bestätigen Sie einen Bildschirm vor dem Aktivieren.",
 "Offline": "Offline",
@@ -273,6 +276,8 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Share your selected display during an accepted session.": "Ihren gewählten Bildschirm während einer angenommenen Sitzung teilen.",
 "Sharing this computer": "Dieser Computer wird geteilt",
 "Sharing your selected screen. You can end the session at any time.": "Ihr gewählter Bildschirm wird geteilt. Sie können die Sitzung jederzeit beenden.",
+"Show it": "Anzeigen",
+"Show my screen": "Meinen Bildschirm zeigen",
 "Sign in": "Anmelden",
 "Sign in and register this enrolled device to receive connections": "Melden Sie sich an und registrieren Sie dieses Gerät, um Verbindungen zu empfangen",
 "Sign in to Mixel →": "Bei Mixel anmelden →",
@@ -313,6 +318,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "The code could not be copied. Select it and copy it yourself.": "Der Code konnte nicht kopiert werden. Markieren und kopieren Sie ihn selbst.",
 "The command contains the secret token: share it only with the people who deploy the computers. It is shown once.": "Der Befehl enthält das geheime Token: geben Sie ihn nur den Personen, die die Computer verteilen. Er wird nur einmal angezeigt.",
 "The copied files are too large; use the Files tab for folders, many files or more than 32 MB": "Die kopierten Dateien sind zu gross; für Ordner, viele Dateien oder mehr als 32 MB den Reiter Dateien verwenden",
+"The meeting could not be started": "Das Meeting konnte nicht gestartet werden",
 "The note was not saved: check the ticket number": "Die Notiz wurde nicht gespeichert: Ticketnummer prüfen",
 "The other person can see the display you approved. End the session at any time.": "Die andere Person sieht den Bildschirm, den Sie freigegeben haben. Beenden Sie die Sitzung jederzeit.",
 "The person installs": "Die Person installiert",
@@ -329,6 +335,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "The sign-in screen program is up to date.": "Das Programm für den Anmeldebildschirm ist aktuell.",
 "The support code could not be checked. Please try again.": "Der Support-Code konnte nicht geprüft werden. Bitte versuchen Sie es erneut.",
 "The support code could not be created. Please try again.": "Der Support-Code konnte nicht erstellt werden. Bitte versuchen Sie es erneut.",
+"The technician wants to show you their screen. It opens in your browser.": "Der Techniker möchte Ihnen seinen Bildschirm zeigen. Er öffnet sich in Ihrem Browser.",
 "Their phone appears here. Choose Connect. They confirm on their phone, and you see their screen.": "Das Smartphone erscheint hier. Wählen Sie «Verbinden». Die Person bestätigt auf ihrem Smartphone, und Sie sehen ihren Bildschirm.",
 "They read you the 9-digit ID the app shows.": "Sie liest Ihnen die 9-stellige ID vor, die die App anzeigt.",
 "This account could not verify that device ID. Check that it is enrolled in Mixel Remote and that your company has access.": "Dieses Konto konnte die Geräte-ID nicht bestätigen. Prüfen Sie, ob das Gerät registriert ist und Ihre Firma Zugriff hat.",
@@ -401,6 +408,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Your company devices stay separate. You switch between them here.": "Ihre Firmengeräte bleiben getrennt. Hier wechseln Sie zwischen beiden.",
 "Your devices belong here": "Hier erscheinen Ihre Geräte",
 "Your enrolled computers, one connection away.": "Ihre registrierten Computer, nur eine Verbindung entfernt.",
+"Your meeting opens in the browser. Choose “Share screen” there; the other person is asked to watch.": "Ihr Meeting öffnet sich im Browser. Wählen Sie dort «Bildschirm teilen»; die andere Person wird gefragt, ob sie zusehen möchte.",
 "Your name": "Ihr Name",
 "Your next connection starts here": "Ihre nächste Verbindung beginnt hier",
 "Your saved sign-in expired. Sign in again.": "Ihre gespeicherte Anmeldung ist abgelaufen. Bitte erneut anmelden.",
@@ -581,6 +589,10 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 [
 "^Show pointer: (on|off)$",
 "Zeiger zeigen: $1"
+],
+[
+"^Meeting link copied: (\\S+) · Send it to your colleague, then share this window in the meeting\\.$",
+"Meeting-Link kopiert: $1 · Senden Sie ihn Ihrem Kollegen und teilen Sie dann dieses Fenster im Meeting."
 ]
 ]
 },
@@ -734,6 +746,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Incoming request: choose a source and Accept or Reject": "Demande entrante : choisissez un écran puis acceptez ou refusez",
 "Install updates automatically": "Installer les mises à jour automatiquement",
 "Invitation rejected locally; ready for a new connection": "Demande refusée ; prêt pour une nouvelle connexion",
+"Invite a colleague": "Inviter un collègue",
 "It opens and makes this computer available, so unattended access works after a restart.": "Il s’ouvre et rend cet ordinateur disponible, pour que l’accès sans surveillance fonctionne après un redémarrage.",
 "Keyboard & mouse": "Clavier et souris",
 "Keyboard and mouse control are unavailable in this desktop session.": "Le contrôle du clavier et de la souris n’est pas disponible dans cette session.",
@@ -757,6 +770,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Manage this computer’s identity and sharing permissions.": "Gérer l’identité et les autorisations de partage de cet ordinateur.",
 "Manage your company profile and logo with Mixel ID.": "Gérer le profil et le logo de votre entreprise avec Mixel ID.",
 "Mixel ID verified. Enter your name to set up Remote.": "Mixel ID vérifié. Saisissez votre nom pour configurer Remote.",
+"Mixel Meet cannot be reached": "Mixel Meet est injoignable",
 "Mixel Remote can use your company’s own AI server (Ollama) to explain what is on the remote screen, suggest next steps and write the session note. Nothing is sent outside your network.": "Mixel Remote peut utiliser le serveur IA de votre entreprise (Ollama) pour expliquer l’écran distant, proposer les prochaines étapes et rédiger la note de session. Rien ne sort de votre réseau.",
 "Mixel Remote no longer starts with this computer.": "Mixel Remote ne démarre plus avec cet ordinateur.",
 "Mixel Remote starts with this computer and makes it available.": "Mixel Remote démarre avec cet ordinateur et le rend disponible.",
@@ -779,6 +793,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "No retained remote video": "Aucune vidéo conservée",
 "No screen is being shared": "Aucun écran n’est partagé",
 "Not connected": "Non connecté",
+"Not now": "Pas maintenant",
 "ONE-TIME PASSWORD, IF PROVIDED": "MOT DE PASSE À USAGE UNIQUE, S’IL Y EN A UN",
 "Off. Choose a display and confirm before enabling.": "Désactivé. Choisissez et confirmez un écran avant d’activer.",
 "Offline": "Hors ligne",
@@ -856,6 +871,8 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Share your selected display during an accepted session.": "Partager l’écran choisi pendant une session acceptée.",
 "Sharing this computer": "Cet ordinateur est partagé",
 "Sharing your selected screen. You can end the session at any time.": "Votre écran choisi est partagé. Vous pouvez terminer la session à tout moment.",
+"Show it": "Afficher",
+"Show my screen": "Montrer mon écran",
 "Sign in": "Se connecter",
 "Sign in and register this enrolled device to receive connections": "Connectez-vous et enregistrez cet appareil pour recevoir des connexions",
 "Sign in to Mixel →": "Se connecter à Mixel →",
@@ -896,6 +913,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "The code could not be copied. Select it and copy it yourself.": "Le code n’a pas pu être copié. Sélectionnez-le et copiez-le vous-même.",
 "The command contains the secret token: share it only with the people who deploy the computers. It is shown once.": "La commande contient le jeton secret : ne la partagez qu’avec les personnes qui déploient les ordinateurs. Elle n’est affichée qu’une fois.",
 "The copied files are too large; use the Files tab for folders, many files or more than 32 MB": "Les fichiers copiés sont trop volumineux ; utilisez l’onglet Fichiers pour les dossiers, de nombreux fichiers ou plus de 32 Mo",
+"The meeting could not be started": "La réunion n’a pas pu être lancée",
 "The note was not saved: check the ticket number": "La note n’a pas été enregistrée : vérifiez le numéro du ticket",
 "The other person can see the display you approved. End the session at any time.": "L’autre personne voit l’écran que vous avez approuvé. Terminez la session à tout moment.",
 "The person installs": "La personne installe",
@@ -912,6 +930,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "The sign-in screen program is up to date.": "Le programme de l’écran de connexion est à jour.",
 "The support code could not be checked. Please try again.": "Le code d’assistance n’a pas pu être vérifié. Veuillez réessayer.",
 "The support code could not be created. Please try again.": "Le code d’assistance n’a pas pu être créé. Veuillez réessayer.",
+"The technician wants to show you their screen. It opens in your browser.": "Le technicien souhaite vous montrer son écran. Il s’ouvre dans votre navigateur.",
 "Their phone appears here. Choose Connect. They confirm on their phone, and you see their screen.": "Son téléphone apparaît ici. Choisissez « Se connecter ». La personne confirme sur son téléphone et vous voyez son écran.",
 "They read you the 9-digit ID the app shows.": "Elle vous lit l’ID à 9 chiffres affiché par l’application.",
 "This account could not verify that device ID. Check that it is enrolled in Mixel Remote and that your company has access.": "Ce compte n’a pas pu vérifier cet ID d’appareil. Vérifiez qu’il est enregistré et que votre entreprise y a accès.",
@@ -984,6 +1003,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Your company devices stay separate. You switch between them here.": "Vos appareils d’entreprise restent séparés. Vous passez de l’un à l’autre ici.",
 "Your devices belong here": "Vos appareils apparaissent ici",
 "Your enrolled computers, one connection away.": "Vos ordinateurs enregistrés, à une connexion près.",
+"Your meeting opens in the browser. Choose “Share screen” there; the other person is asked to watch.": "Votre réunion s’ouvre dans le navigateur. Choisissez « Partager l’écran » ; l’autre personne est invitée à regarder.",
 "Your name": "Votre nom",
 "Your next connection starts here": "Votre prochaine connexion commence ici",
 "Your saved sign-in expired. Sign in again.": "Votre connexion enregistrée a expiré. Reconnectez-vous.",
@@ -1164,6 +1184,10 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 [
 "^Show pointer: (on|off)$",
 "Afficher le pointeur : $1"
+],
+[
+"^Meeting link copied: (\\S+) · Send it to your colleague, then share this window in the meeting\\.$",
+"Lien de réunion copié : $1 · Envoyez-le à votre collègue, puis partagez cette fenêtre dans la réunion."
 ]
 ]
 },
@@ -1317,6 +1341,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Incoming request: choose a source and Accept or Reject": "Richiesta in arrivo: scegli uno schermo e accetta o rifiuta",
 "Install updates automatically": "Installa gli aggiornamenti automaticamente",
 "Invitation rejected locally; ready for a new connection": "Richiesta rifiutata; pronto per una nuova connessione",
+"Invite a colleague": "Invita un collega",
 "It opens and makes this computer available, so unattended access works after a restart.": "Si apre e rende disponibile questo computer, così l’accesso non presidiato funziona dopo un riavvio.",
 "Keyboard & mouse": "Tastiera e mouse",
 "Keyboard and mouse control are unavailable in this desktop session.": "Il controllo di tastiera e mouse non è disponibile in questa sessione.",
@@ -1340,6 +1365,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Manage this computer’s identity and sharing permissions.": "Gestisci l’identità e i permessi di condivisione di questo computer.",
 "Manage your company profile and logo with Mixel ID.": "Gestisci profilo e logo aziendale con Mixel ID.",
 "Mixel ID verified. Enter your name to set up Remote.": "Mixel ID verificato. Inserisci il tuo nome per configurare Remote.",
+"Mixel Meet cannot be reached": "Mixel Meet non è raggiungibile",
 "Mixel Remote can use your company’s own AI server (Ollama) to explain what is on the remote screen, suggest next steps and write the session note. Nothing is sent outside your network.": "Mixel Remote può usare il server IA della tua azienda (Ollama) per spiegare lo schermo remoto, suggerire i prossimi passi e scrivere la nota di sessione. Nulla esce dalla tua rete.",
 "Mixel Remote no longer starts with this computer.": "Mixel Remote non si avvia più con questo computer.",
 "Mixel Remote starts with this computer and makes it available.": "Mixel Remote si avvia con questo computer e lo rende disponibile.",
@@ -1362,6 +1388,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "No retained remote video": "Nessun video conservato",
 "No screen is being shared": "Nessuno schermo condiviso",
 "Not connected": "Non connesso",
+"Not now": "Non ora",
 "ONE-TIME PASSWORD, IF PROVIDED": "PASSWORD MONOUSO, SE FORNITA",
 "Off. Choose a display and confirm before enabling.": "Disattivato. Scegli e conferma uno schermo prima di attivare.",
 "Offline": "Offline",
@@ -1439,6 +1466,8 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Share your selected display during an accepted session.": "Condividi lo schermo scelto durante una sessione accettata.",
 "Sharing this computer": "Questo computer è condiviso",
 "Sharing your selected screen. You can end the session at any time.": "Lo schermo scelto è condiviso. Puoi terminare la sessione in qualsiasi momento.",
+"Show it": "Mostra",
+"Show my screen": "Mostra il mio schermo",
 "Sign in": "Accedi",
 "Sign in and register this enrolled device to receive connections": "Accedi e registra questo dispositivo per ricevere connessioni",
 "Sign in to Mixel →": "Accedi a Mixel →",
@@ -1479,6 +1508,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "The code could not be copied. Select it and copy it yourself.": "Impossibile copiare il codice. Selezionalo e copialo manualmente.",
 "The command contains the secret token: share it only with the people who deploy the computers. It is shown once.": "Il comando contiene il token segreto: condividilo solo con chi distribuisce i computer. Viene mostrato una sola volta.",
 "The copied files are too large; use the Files tab for folders, many files or more than 32 MB": "I file copiati sono troppo grandi; usa la scheda File per cartelle, molti file o più di 32 MB",
+"The meeting could not be started": "Impossibile avviare la riunione",
 "The note was not saved: check the ticket number": "La nota non è stata salvata: controlla il numero del ticket",
 "The other person can see the display you approved. End the session at any time.": "L’altra persona vede lo schermo che hai approvato. Termina la sessione in qualsiasi momento.",
 "The person installs": "La persona installa",
@@ -1495,6 +1525,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "The sign-in screen program is up to date.": "Il programma della schermata di accesso è aggiornato.",
 "The support code could not be checked. Please try again.": "Impossibile verificare il codice di assistenza. Riprova.",
 "The support code could not be created. Please try again.": "Impossibile creare il codice di assistenza. Riprova.",
+"The technician wants to show you their screen. It opens in your browser.": "Il tecnico vuole mostrarti il suo schermo. Si apre nel tuo browser.",
 "Their phone appears here. Choose Connect. They confirm on their phone, and you see their screen.": "Il telefono compare qui. Scegli «Connetti». La persona conferma sul telefono e tu vedi il suo schermo.",
 "They read you the 9-digit ID the app shows.": "Ti legge l’ID di 9 cifre mostrato dall’app.",
 "This account could not verify that device ID. Check that it is enrolled in Mixel Remote and that your company has access.": "Questo account non ha potuto verificare l’ID del dispositivo. Controlla che sia registrato e che la tua azienda abbia accesso.",
@@ -1567,6 +1598,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Your company devices stay separate. You switch between them here.": "I dispositivi aziendali restano separati. Qui passi dagli uni agli altri.",
 "Your devices belong here": "Qui compaiono i tuoi dispositivi",
 "Your enrolled computers, one connection away.": "I tuoi computer registrati, a una connessione di distanza.",
+"Your meeting opens in the browser. Choose “Share screen” there; the other person is asked to watch.": "La riunione si apre nel browser. Scegli «Condividi schermo»; all’altra persona viene chiesto di guardare.",
 "Your name": "Il tuo nome",
 "Your next connection starts here": "La tua prossima connessione inizia qui",
 "Your saved sign-in expired. Sign in again.": "Il tuo accesso salvato è scaduto. Accedi di nuovo.",
@@ -1747,6 +1779,10 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 [
 "^Show pointer: (on|off)$",
 "Mostra puntatore: $1"
+],
+[
+"^Meeting link copied: (\\S+) · Send it to your colleague, then share this window in the meeting\\.$",
+"Link della riunione copiato: $1 · Invialo al tuo collega, poi condividi questa finestra nella riunione."
 ]
 ]
 }

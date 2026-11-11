@@ -8,7 +8,7 @@ const settle=async()=>{for(let i=0;i<16;i++)await Promise.resolve();};
 const signedIn={phase:'authenticated',account:{profile:'fixture-profile',organization:'fixture-org',staff:false}};
 function harness({deferAccount=false,authenticated=false,deferInput=false,stopFails=false,supportAvailable=true,controllerOnly=false}={}){
   const captureRequests=[];
-  const documentListeners={},intervals=[],pendingVideo=[],input=[],pendingInput=[],pendingClipboard=[],stops=[],closed=[],support=[],recordingCommands=[];let draws=0,accountReply;
+  const meetings=[];const documentListeners={},intervals=[],pendingVideo=[],input=[],pendingInput=[],pendingClipboard=[],stops=[],closed=[],support=[],recordingCommands=[];let draws=0,accountReply;
   let state={controller_only:controllerOnly,phase:'offline',message:'Ready',host:123456789,session:null,consent:null,peer:null,requester:null,received:0,sharing:false,control:false,clipboard:false,files:false,input_access:false};
   const context={clearRect(){},putImageData(){draws++;}};
   function node(tag){return {tagName:tag.toUpperCase(),value:'',checked:false,hidden:false,disabled:false,dataset:{},children:[],listeners:{},textContent:'',width:640,height:420,
@@ -29,11 +29,12 @@ function harness({deferAccount=false,authenticated=false,deferInput=false,stopFa
     if(command==='remote_clipboard')return new Promise((resolve,reject)=>pendingClipboard.push({resolve,reject}));
     if(command==='remote_stop_session'){stops.push(args);if(stopFails)return Promise.reject(Error('IPC unavailable'));state={...state,phase:'closed',session:null,consent:null};return Promise.resolve();}
     if(command==='remote_close'){closed.push(args);return Promise.resolve();}
+    if(command==='meeting_open'){meetings.push(args);return Promise.resolve();}
     if(command==='remote_record_start'||command==='remote_record_stop'){recordingCommands.push({command,args});return Promise.resolve();}
     throw Error(`Unexpected native command ${command}`);
   }
   vm.runInNewContext(script,{window:{addEventListener(){},__TAURI__:{core:{invoke}},setInterval(callback){intervals.push(callback);},setTimeout(){}},document:{body,getElementById:id=>elements[id],createElement:node,addEventListener(name,callback){(documentListeners[name]??=[]).push(callback);},dispatchEvent(event){dispatch(event.type,event.detail);}},CustomEvent:class{constructor(type,options){this.type=type;this.detail=options.detail;}},ArrayBuffer,Uint8Array,Uint8ClampedArray,DataView,ImageData:class{},performance:{now:()=>100},requestAnimationFrame(){},setTimeout(){}});
-  return {body,elements,captureRequests,pendingVideo,input,pendingInput,pendingClipboard,stops,closed,support,recordingCommands,emit:dispatch,get draws(){return draws;},get accountReply(){return accountReply;},account(value){dispatch('mixel-account-state',value);},async tick(){intervals[0]();await settle();},ready(message='Ready'){state={...state,phase:'ready',message};},active(extra={}){state={...state,phase:'active',session:'fixture-room',consent:'fixture-consent',control:true,...extra};}};
+  return {meetings,body,elements,captureRequests,pendingVideo,input,pendingInput,pendingClipboard,stops,closed,support,recordingCommands,emit:dispatch,get draws(){return draws;},get accountReply(){return accountReply;},account(value){dispatch('mixel-account-state',value);},async tick(){intervals[0]();await settle();},ready(message='Ready'){state={...state,phase:'ready',message};},active(extra={}){state={...state,phase:'active',session:'fixture-room',consent:'fixture-consent',control:true,...extra};}};
 }
 function frame(){const bytes=new Uint8Array(48);bytes.set([77,82,70,49]);const view=new DataView(bytes.buffer);view.setUint32(4,2,true);view.setUint32(8,2,true);view.setUint32(12,8,true);view.setBigUint64(16,1n,true);view.setBigUint64(24,33333n,true);return bytes.buffer;}
 test('registration and connect require authenticated account and stale initial failures cannot undo newer sign-in',async()=>{
@@ -224,4 +225,20 @@ test('the compatibility option stays hidden when the Mac session commands are un
   h.elements['support-host'].value='304619778';
   await h.elements['support-connect-form'].listeners.submit({preventDefault(){}});
   assert.equal(h.support.length,0);
+});
+
+test('the person is asked before the technician\'s screen opens, and only that room for this session opens',async()=>{
+  const h=harness({authenticated:true});await settle();await h.tick();
+  h.active({sharing:true,meeting_offer:['other-session','pu5f-9qwq-m767']});await h.tick();
+  assert.equal(h.elements['meeting-offer'].hidden,true,'an offer from another session is never shown');
+  h.active({sharing:true,meeting_offer:['fixture-room','pu5f-9qwq-m767']});await h.tick();
+  assert.equal(h.elements['meeting-offer'].hidden,false,'the person sees the question');
+  assert.equal(h.meetings.length,0,'nothing opens without the person');
+  h.elements['meeting-offer-open'].listeners.click();await settle();
+  assert.equal(JSON.stringify(h.meetings),JSON.stringify([{link:'https://rs.mixel.ch/meet/#pu5f-9qwq-m767'}]));
+  assert.equal(h.elements['meeting-offer'].hidden,true);
+  h.active({sharing:true,meeting_offer:['fixture-room','abcd-efgh-jkmn']});await h.tick();
+  h.elements['meeting-offer-dismiss'].listeners.click();await settle();
+  assert.equal(h.elements['meeting-offer'].hidden,true,'"Not now" puts it away');
+  assert.equal(h.meetings.length,1);
 });

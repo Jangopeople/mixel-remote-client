@@ -89,7 +89,10 @@ pub fn available() -> Vec<String> {
         actions.push(SOUND.to_owned());
     }
     #[cfg(target_os = "linux")]
-    actions.push(RESTART.to_owned());
+    {
+        actions.push(RESTART.to_owned());
+        actions.push(SOUND.to_owned());
+    }
     actions.push(WOL.to_owned());
     actions.extend(crate::session_guard::available().into_iter().map(str::to_owned));
     actions
@@ -132,7 +135,7 @@ pub fn run(name: &str) -> Result<(), String> {
 pub fn parse(list: &str) -> Vec<String> {
     list.split(',')
         .map(str::trim)
-        .filter(|name| matches!(*name, SAS | RESTART | WOL | SOUND) || [crate::session_guard::POINTER, crate::session_guard::PRIVACY, crate::session_guard::BLOCK, crate::session_guard::LOCK, crate::session_guard::LOCK_AT_END].contains(name))
+        .filter(|name| matches!(*name, SAS | RESTART | WOL | SOUND) || [crate::session_guard::MEET, crate::session_guard::POINTER, crate::session_guard::PRIVACY, crate::session_guard::BLOCK, crate::session_guard::LOCK, crate::session_guard::LOCK_AT_END].contains(name))
         .map(str::to_owned)
         .take(12)
         .collect()

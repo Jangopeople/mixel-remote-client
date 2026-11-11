@@ -1,4 +1,4 @@
-//! Remote sound. A Windows host records what its speakers play and sends it as
+//! Remote sound. A Windows or Linux host records what its speakers play and sends it as
 //! small frames in the control channel; the technician's app plays them.
 use core_protocol::sound::{self, FRAME_SAMPLES, RATE, Resampler, State};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -18,11 +18,20 @@ pub struct Capture {
     stop: Arc<AtomicBool>,
 }
 impl Capture {
-    /// Starts recording what this computer plays (Windows). `None` when it has no speakers.
+    /// Starts recording what this computer plays (Windows, Linux). `None` when it has no speakers.
     pub fn start() -> Option<Self> {
-        if !cfg!(target_os = "windows") {
-            return None;
+        #[cfg(target_os = "linux")]
+        {
+            linux_capture()
         }
+        #[cfg(not(target_os = "linux"))]
+        {
+            if cfg!(target_os = "windows") { Self::loopback() } else { None }
+        }
+    }
+    /// Windows: recording from an output device records what it plays.
+    #[cfg(not(target_os = "linux"))]
+    fn loopback() -> Option<Self> {
         let (sender, frames) = mpsc::sync_channel::<Vec<u8>>(50);
         let (ready_tx, ready_rx) = mpsc::channel::<bool>();
         let stop = Arc::new(AtomicBool::new(false));
@@ -84,6 +93,49 @@ impl Capture {
     pub fn next(&self) -> Option<Vec<u8>> {
         self.frames.try_recv().ok()
     }
+}
+/// Linux: the sound server's "monitor" of the default speakers (PipeWire and PulseAudio both offer it).
+#[cfg(target_os = "linux")]
+fn linux_capture() -> Option<Capture> {
+    use gstreamer as gst;
+    use gstreamer::prelude::*;
+    gst::init().ok()?;
+    let pipeline = gst::parse::launch(
+        "pulsesrc device=@DEFAULT_MONITOR@ client-name=\"Mixel Remote\" ! audioconvert ! audioresample ! audio/x-raw,format=F32LE,rate=48000,channels=2 ! appsink name=sound max-buffers=8 drop=true sync=false",
+    )
+    .ok()?
+    .downcast::<gst::Pipeline>()
+    .ok()?;
+    let sink = pipeline.by_name("sound")?.downcast::<gstreamer_app::AppSink>().ok()?;
+    pipeline.set_state(gst::State::Playing).ok()?;
+    let (sender, frames) = mpsc::sync_channel::<Vec<u8>>(50);
+    let stop = Arc::new(AtomicBool::new(false));
+    let stopped = stop.clone();
+    std::thread::spawn(move || {
+        let Some(mut resampler) = Resampler::new(2, 48_000) else { return };
+        let mut pending: Vec<i16> = Vec::with_capacity(FRAME_SAMPLES * 4);
+        let mut state = State::default();
+        while !stopped.load(Ordering::Acquire) {
+            let Some(sample) = sink.try_pull_sample(gst::ClockTime::from_mseconds(200)) else {
+                if sink.is_eos() { break; }
+                continue;
+            };
+            let Some(buffer) = sample.buffer() else { continue };
+            let Ok(map) = buffer.map_readable() else { continue };
+            let input: Vec<f32> = map.as_slice().chunks_exact(4).map(|bytes| f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])).collect();
+            resampler.push(&input, &mut pending);
+            while pending.len() >= FRAME_SAMPLES {
+                let samples: Vec<i16> = pending.drain(..FRAME_SAMPLES).collect();
+                if !sound::silent(&samples)
+                    && let Some(frame) = sound::encode(&mut state, &samples)
+                {
+                    let _ = sender.try_send(frame);
+                }
+            }
+        }
+        let _ = pipeline.set_state(gst::State::Null);
+    });
+    Some(Capture { frames, stop })
 }
 impl Drop for Capture {
     fn drop(&mut self) {

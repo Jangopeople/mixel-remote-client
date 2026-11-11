@@ -610,9 +610,17 @@ impl ControlPipe {
         if let Some(rest) = plain.strip_prefix(HOST_ACTION) {
             let name = std::str::from_utf8(rest).map_err(|_| "Invalid host action")?.to_owned();
             let offered = name.split(':').next().unwrap_or(&name).to_owned();
-            let switch = [crate::host_actions::WOL, crate::host_actions::SOUND, crate::session_guard::POINTER, crate::session_guard::PRIVACY, crate::session_guard::BLOCK, crate::session_guard::LOCK_AT_END];
+            let switch = [crate::host_actions::WOL, crate::host_actions::SOUND, crate::session_guard::MEET, crate::session_guard::POINTER, crate::session_guard::PRIVACY, crate::session_guard::BLOCK, crate::session_guard::LOCK_AT_END];
             if !self.allowed || name.len() > 40 || !self.actions.contains(&offered) || (name.contains(':') && !switch.contains(&offered.as_str())) {
                 return Err("Invalid host action".into());
+            }
+            if offered == crate::session_guard::MEET {
+                let room = name.strip_prefix("meet:").unwrap_or_default();
+                if !crate::session_guard::meeting_room(room) {
+                    return Err("Invalid host action".into());
+                }
+                config.state.set_meeting_offer(config.generation, config.session, room.to_owned()).await;
+                return Ok(());
             }
             if offered == crate::session_guard::POINTER {
                 // `pointer:x,y` (0..65535 on the shared picture) or `pointer:off`.

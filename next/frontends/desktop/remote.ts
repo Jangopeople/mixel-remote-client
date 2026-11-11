@@ -5,7 +5,7 @@
     if (!value) throw Error(`Missing remote-support control ${id}`);
     return value as T;
   }
-  type Status = {controller_only?:boolean; platform?: 'macos'|'windows'|'linux'; phase: string; message: string; host: number | null; session: string | null; consent: string | null; peer: number | null; requester: string | null; received: number; sharing: boolean; control: boolean; clipboard: boolean; files: boolean; input_access: boolean; code_required: boolean; support_code: string | null; online?: number[]; pairing: {request_id:string; provider_name:string; customer_name:string} | null; pairing_message: string | null; unattended_enabled: boolean; unattended_pending: 'enabling' | 'disabling_after_enable' | 'disabling' | null; unattended_session: boolean; displays?: number; display?: number; display_all?: boolean; print_jobs?: string[]; host_actions?: string[]; signin_id?: number | null; host_macs?: string[]};
+  type Status = {meeting_offer?: [string, string] | null; controller_only?:boolean; platform?: 'macos'|'windows'|'linux'; phase: string; message: string; host: number | null; session: string | null; consent: string | null; peer: number | null; requester: string | null; received: number; sharing: boolean; control: boolean; clipboard: boolean; files: boolean; input_access: boolean; code_required: boolean; support_code: string | null; online?: number[]; pairing: {request_id:string; provider_name:string; customer_name:string} | null; pairing_message: string | null; unattended_enabled: boolean; unattended_pending: 'enabling' | 'disabling_after_enable' | 'disabling' | null; unattended_session: boolean; displays?: number; display?: number; display_all?: boolean; print_jobs?: string[]; host_actions?: string[]; signin_id?: number | null; host_macs?: string[]};
   type RecordingView = {phase: 'ready' | 'waiting_for_video' | 'recording' | 'saving' | 'saved' | 'saved_partial'} | {phase:'error'; message:string};
   type RemoteStatus = Status & {recording_permitted?:boolean; recording?:RecordingView; previous_recording?:RecordingView};
   type Source = {id: string; name: string; full_display: boolean};
@@ -81,6 +81,10 @@
   const lockButton = element<HTMLButtonElement>('remote-lock');
   // Show pointer: the person at the computer sees where the technician points; nothing is clicked.
   const pointerButton = element<HTMLButtonElement>('remote-pointer');
+  // Mixel Meet in a session: show this screen to the other side, or bring in a colleague.
+  const showScreen = element<HTMLButtonElement>('remote-show-screen'), inviteColleague = element<HTMLButtonElement>('remote-invite');
+  const meetingOffer = element<HTMLDivElement>('meeting-offer');
+  let dismissedRoom = '';
   let pointing = false, pointerSession: string | null = null, lastPoint = 0;
   const showingPointer = (): boolean => pointing && hasAction('pointer');
   let toggled: Record<keyof typeof toggles, boolean> = {privacy: false, block: false, lockend: false}, toggleSession: string | null = null;
@@ -119,6 +123,11 @@
     lockButton.hidden = !hasAction('lock');
     if (current?.session !== pointerSession) { pointerSession = current?.session ?? null; pointing = false; }
     pointerButton.hidden = !hasAction('pointer');
+    showScreen.hidden = !hasAction('meet');
+    inviteColleague.hidden = !(current?.phase === 'active' && !current.sharing);
+    showScreen.disabled = inviteColleague.disabled = busy;
+    const offer = current?.meeting_offer;
+    meetingOffer.hidden = !(offer && current?.phase === 'active' && current.sharing && offer[0] === current.session && offer[1] !== dismissedRoom);
     pointerButton.textContent = `Show pointer: ${pointing ? 'on' : 'off'}`;
     pointerButton.ariaPressed = String(pointing);
     if (canvas.style) canvas.style.cursor = pointing ? 'crosshair' : '';
@@ -169,6 +178,32 @@
       renderActions();
     });
   }
+  type Room = {room: string; invite: string; host: string};
+  showScreen.addEventListener('click', async () => {
+    if (!current?.session) return;
+    const session = current.session;
+    try {
+      const room = await invoke<Room>('meeting_create');
+      await invoke('meeting_open', {link: room.host});
+      await invoke('remote_input', {session, event: {kind: 'action', name: `meet:${room.room}`}});
+      status.textContent = 'Your meeting opens in the browser. Choose “Share screen” there; the other person is asked to watch.';
+    } catch (value) { error.textContent = String(value); }
+  });
+  inviteColleague.addEventListener('click', async () => {
+    try {
+      const room = await invoke<Room>('meeting_create');
+      await invoke('meeting_open', {link: room.host});
+      try { await navigator.clipboard.writeText(room.invite); } catch { /* shown below */ }
+      status.textContent = `Meeting link copied: ${room.invite} · Send it to your colleague, then share this window in the meeting.`;
+    } catch (value) { error.textContent = String(value); }
+  });
+  element<HTMLButtonElement>('meeting-offer-open').addEventListener('click', () => {
+    const offer = current?.meeting_offer;
+    if (!offer) return;
+    dismissedRoom = offer[1]; renderActions();
+    void invoke('meeting_open', {link: `https://rs.mixel.ch/meet/#${offer[1]}`}).catch(value => { error.textContent = String(value); });
+  });
+  element<HTMLButtonElement>('meeting-offer-dismiss').addEventListener('click', () => { dismissedRoom = current?.meeting_offer?.[1] ?? ''; renderActions(); });
   pointerButton.addEventListener('click', () => {
     if (!current?.session) return;
     pointing = !pointing;

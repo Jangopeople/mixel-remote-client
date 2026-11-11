@@ -1485,6 +1485,50 @@ async fn quick_phone_claim(
         .await
         .map_err(|_| "The phone could not be reached through Mixel. Please try again.".into())
 }
+/// Mixel Meet for a session: a room (to show this screen to the other side, or to invite a colleague).
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[tauri::command]
+async fn meeting_create(
+    window: tauri::WebviewWindow,
+    auth: tauri::State<'_, account_auth::AccountAuth>,
+) -> Result<serde_json::Value, String> {
+    main_window(&window)?;
+    let credential = auth.credential(None).await?;
+    let response = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| "Mixel Meet is unavailable")?
+        .post("https://rs.mixel.ch/meet/api/rooms")
+        .bearer_auth(credential.token.as_str())
+        .json(&serde_json::json!({ "title": "Mixel Remote session" }))
+        .send()
+        .await
+        .map_err(|_| "Mixel Meet cannot be reached")?;
+    if response.status().as_u16() == 429 {
+        return Err("You have started many meetings. Please try again later.".into());
+    }
+    let room: serde_json::Value = response.error_for_status().map_err(|_| "The meeting could not be started")?.json().await.map_err(|_| "The meeting could not be started")?;
+    let id = room["room"].as_str().unwrap_or_default();
+    let host = room["host"].as_str().unwrap_or_default();
+    if !session_guard::meeting_room(id) || !host.starts_with("https://rs.mixel.ch/meet/#") {
+        return Err("The meeting could not be started".into());
+    }
+    Ok(serde_json::json!({ "room": id, "invite": format!("https://rs.mixel.ch/meet/#{id}"), "host": host }))
+}
+/// Opens a Mixel Meet room (only rs.mixel.ch/meet) in the browser.
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[tauri::command]
+async fn meeting_open(window: tauri::WebviewWindow, link: String) -> Result<(), String> {
+    main_window(&window)?;
+    let room = link.strip_prefix("https://rs.mixel.ch/meet/#").unwrap_or_default();
+    let id = room.split('.').next().unwrap_or_default();
+    let key_ok = room.split('.').nth(1).is_none_or(|key| key.len() == 32 && key.chars().all(|c| c.is_ascii_hexdigit()));
+    if !session_guard::meeting_room(id) || room.split('.').count() > 2 || !key_ok {
+        return Err("This is not a Mixel Meet link".into());
+    }
+    system_browser::open(&link).await
+}
 /// This computer's name as the system shows it, to suggest a name for its one-time setup.
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 #[tauri::command]
@@ -2283,6 +2327,8 @@ fn main() {
             enrollment_companies,
             support_code_create,
             this_computer_name,
+            meeting_create,
+            meeting_open,
             quick_phone_claim,
             support_code_device,
             add_this_device,
@@ -2367,6 +2413,8 @@ fn main() {
             enrollment_companies,
             support_code_create,
             this_computer_name,
+            meeting_create,
+            meeting_open,
             quick_phone_claim,
             support_code_device,
             add_this_device,

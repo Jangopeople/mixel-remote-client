@@ -77,6 +77,8 @@ pub struct Status {
     pub signin_id: Option<u32>,
     /// Controller: the host's network adapter addresses, remembered to wake it later.
     pub host_macs: Vec<String>,
+    /// Host: the technician offers to show their screen in this Mixel Meet room (session, room id).
+    pub meeting_offer: Option<(Uuid, String)>,
     #[serde(skip)]
     code_expires_at: Option<std::time::Instant>,
 }
@@ -120,6 +122,7 @@ impl Default for Status {
             display_all: false,
             print_jobs: Vec::new(),
             host_actions: Vec::new(),
+            meeting_offer: None,
             signin_id: None,
             host_macs: Vec::new(),
             code_expires_at: None,
@@ -1239,6 +1242,12 @@ impl RemoteSession {
             inner.status.host_actions = actions;
             inner.status.signin_id = signin_id;
             inner.status.host_macs = macs;
+        }
+    }
+    pub(crate) async fn set_meeting_offer(&self, generation: u64, session: Uuid, room: String) {
+        let mut inner = self.0.lock().await;
+        if inner.generation == generation && inner.status.session == Some(session) && !inner.cancel.load(Ordering::Acquire) {
+            inner.status.meeting_offer = Some((session, room));
         }
     }
     pub(crate) async fn set_recording_permission(

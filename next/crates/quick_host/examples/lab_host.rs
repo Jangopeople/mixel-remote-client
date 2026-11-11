@@ -1,6 +1,6 @@
 //! Lab stand-in for a phone: registers with a support code, goes online and shares a generated
 //! upright picture. Used to prove the host core against the live service without a phone.
-//!   cargo run -p quick_host --example lab_host -- --state /tmp/qs.json [--code XXXX-XXXX-XXXX] [--auto-accept] [--view-only]
+//!   cargo run -p quick_host --example lab_host -- --state /tmp/qs.json [--iphone | --code XXXX-XXXX-XXXX] [--auto-accept] [--view-only]
 use openh264::{
     OpenH264API,
     encoder::{BitRate, Encoder, EncoderConfig, FrameRate, Level, Profile, RateControlMode, UsageType},
@@ -60,6 +60,21 @@ fn main() -> Result<(), String> {
         state = Some(State { seed: host.seed(), enrollment: None });
     }
     let state = state.as_mut().ok_or("no state")?;
+    // --iphone: behave like the iPhone's broadcast extension: fixed ID, wait for a technician to type
+    // it, accept only that technician by itself, view only.
+    if flag("--iphone") {
+        host.accept_issuer(true);
+        let enrollment = loop {
+            let registration = host.register("iPhone (lab stand-in)")?;
+            match registration.enrollment() {
+                Some(enrollment) => break enrollment,
+                None => { println!("YOUR ID {} (waiting for a technician)", registration.connection_id); std::thread::sleep(std::time::Duration::from_secs(2)); }
+            }
+        };
+        std::fs::write(&path, serde_json::to_vec(state).map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
+        println!("CLAIMED, going online as {}", enrollment.connection_id);
+        state.enrollment = Some(enrollment);
+    }
     if state.enrollment.is_none() {
         let code = value("--code").ok_or("--code is required for the first start")?;
         state.enrollment = Some(host.enroll(&code, "Lab phone (Quick Support test)")?);
@@ -67,7 +82,7 @@ fn main() -> Result<(), String> {
     }
     let enrollment = state.enrollment.clone().ok_or("no registration")?;
     println!("REMOTE ID {}", enrollment.connection_id);
-    host.start(enrollment, WIDTH as u32, HEIGHT as u32, !flag("--view-only"))?;
+    host.start(enrollment, WIDTH as u32, HEIGHT as u32, !flag("--view-only") && !flag("--iphone"))?;
 
     let config = EncoderConfig::new()
         .usage_type(UsageType::CameraVideoRealTime)
