@@ -119,18 +119,18 @@ struct MainView: View {
                         Button(Texts.of("forget")) { code = ""; registration.forget() }.font(.footnote).padding(.top, 4)
                     }
                 }
-                if !registration.problem.isEmpty { Text(registration.problem).foregroundColor(brand) }
+                if !registration.problem.isEmpty { Text(registration.problem).foregroundColor(Color(UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 1.0, green: 0.42, blue: 0.47, alpha: 1) : UIColor(red: 0.70, green: 0.086, blue: 0.184, alpha: 1) })) }
                 Text(Texts.of("privacy")).font(.footnote).foregroundColor(.secondary)
             }
             .padding(16)
         }
-        .background(Color(red: 0.96, green: 0.965, blue: 0.976).ignoresSafeArea())
+        .background(Color(UIColor.systemGroupedBackground).ignoresSafeArea())
     }
 
     private func card<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 12, content: content)
             .padding(16).frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.white).cornerRadius(14)
-            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color(red: 0.89, green: 0.90, blue: 0.925)))
+            .background(Color(UIColor.secondarySystemGroupedBackground)).cornerRadius(14)
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color(UIColor.separator)))
     }
 }
