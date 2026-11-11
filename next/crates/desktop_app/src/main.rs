@@ -972,8 +972,9 @@ async fn rollout_create(
         .create_rollout_token(&credential.token, company, &label, days, computers)
         .await
         .map_err(|_| "The rollout token could not be created")?;
+    // Single quotes only, so the line also survives being wrapped in "…" by deployment tools.
     let windows_command = format!(
-        "$t='{token}'; $f=\"$env:TEMP\\Mixel-Remote-Setup.exe\"; Invoke-WebRequest -UseBasicParsing '{}' -OutFile $f; Start-Process $f '/S' -Wait; $p=Start-Process \"$env:LOCALAPPDATA\\Mixel Remote\\mixel-remote.exe\" -ArgumentList '--signin-enroll',$t -Wait -PassThru; exit $p.ExitCode",
+        "$t='{token}'; $f=Join-Path $env:TEMP 'Mixel-Remote-Setup.exe'; Invoke-WebRequest -UseBasicParsing '{}' -OutFile $f; Start-Process $f '/S' -Wait; $p=Start-Process (Join-Path $env:LOCALAPPDATA 'Mixel Remote\\mixel-remote.exe') -ArgumentList '--signin-enroll',$t -Wait -PassThru; exit $p.ExitCode",
         self_update::file_url(&installer)
     );
     Ok(RolloutCreated { token, windows_command })
