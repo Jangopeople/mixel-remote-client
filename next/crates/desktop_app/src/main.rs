@@ -1976,9 +1976,15 @@ async fn remote_next_video(
     window: tauri::WebviewWindow,
     state: tauri::State<'_, remote_session::RemoteSession>,
     session: uuid::Uuid,
+    compressed: Option<bool>,
 ) -> Result<tauri::ipc::Response, String> {
     main_window(&window)?;
-    Ok(tauri::ipc::Response::new(state.next_video(session).await?))
+    let packet = state.next_video(session, compressed.unwrap_or(false)).await?;
+    #[cfg(feature = "qa-session")]
+    if !packet.is_empty() {
+        remote_video::QA_FETCHED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    Ok(tauri::ipc::Response::new(packet))
 }
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 #[tauri::command]

@@ -51,6 +51,12 @@ impl ScreenH264Encoder {
         let mut config = EncoderConfig::new()
             .num_threads(threads)
             .complexity(openh264::encoder::Complexity::Low)
+            // The colour conversion below is BT.601, limited range: say so in the stream,
+            // or decoders assume BT.709 for large pictures and colours shift slightly.
+            .vui(
+                openh264::encoder::VuiConfig::bt709()
+                    .matrix_coefficients(openh264::encoder::MatrixCoefficients::Smpte170M),
+            )
             .usage_type(UsageType::CameraVideoRealTime)
             .bitrate(BitRate::from_bps(bitrate))
             .max_frame_rate(FrameRate::from_hz(fps as f32))

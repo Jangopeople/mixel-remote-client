@@ -425,41 +425,108 @@
     clearVideo(); error.textContent = String(value);
     await invoke('remote_close', {session}).catch(() => {});
   }
+  // The window's own video decoder (hardware accelerated where available) draws compressed
+  // pictures directly; without it, or after a decoder error, native code sends decoded pictures.
+  type WindowDecoder = {state: string; decodeQueueSize: number; configure(config: object): void; decode(chunk: object): void; close(): void};
+  const decoderApi = window as unknown as {VideoDecoder?: {new(init: {output: (frame: VideoFrameLike) => void; error: (error: unknown) => void}): WindowDecoder; isConfigSupported?(config: object): Promise<{supported?: boolean}>}; EncodedVideoChunk?: new(init: object) => object};
+  type VideoFrameLike = {displayWidth: number; displayHeight: number; close(): void};
+  const decoderConfig = {codec: 'avc1.42E028', optimizeForLatency: true};
+  let windowDecoding: boolean | null = null;
+  async function canDecodeInWindow(): Promise<boolean> {
+    if (windowDecoding !== null) return windowDecoding;
+    try {
+      windowDecoding = !!decoderApi.VideoDecoder && !!decoderApi.EncodedVideoChunk && !!decoderApi.VideoDecoder.isConfigSupported
+        && (await decoderApi.VideoDecoder.isConfigSupported(decoderConfig)).supported === true;
+    } catch { windowDecoding = false; }
+    return windowDecoding;
+  }
   async function receive(session: string): Promise<void> {
     clearVideo(); viewing = session; const generation = videoGeneration;
     let sequence = 0, rendered = 0, lastTimestamp = -1;
     const recent: number[] = [];
+    let decoder: WindowDecoder | null = null;
+    const closeDecoder = (): void => { try { decoder?.close(); } catch { /* already closed */ } decoder = null; };
+    const shown = (width: number, height: number): void => {
+      canvas.hidden = false; videoReady = session; ++rendered;
+      if (rendered === 1) document.dispatchEvent(new CustomEvent('mixel-video-visibility',{detail:{visible:true}}));
+      // Pictures shown in the last second (not an average over the whole session).
+      const shownAt = performance.now(); recent.push(shownAt);
+      while (recent.length && shownAt - recent[0] > 1000) recent.shift();
+      metrics.textContent = `${width} × ${height} · ${recent.length} fps`;
+    };
     try {
       if (!context) throw Error('The remote screen renderer is unavailable');
+      const drawing = context;
       while (generation === videoGeneration) {
-        const value = await invoke<ArrayBuffer | number[] | Uint8Array>('remote_next_video', {session});
+        const compressed = await canDecodeInWindow();
+        const value = await invoke<ArrayBuffer | number[] | Uint8Array>('remote_next_video', compressed ? {session, compressed: true} : {session});
         const bytes = value instanceof ArrayBuffer ? new Uint8Array(value) : new Uint8Array(value);
         if (generation !== videoGeneration) { bytes.fill(0); break; }
-        if (!bytes.length) { await new Promise(resolve => setTimeout(resolve, 20)); continue; }
-        let rgba: Uint8ClampedArray<ArrayBuffer> | undefined;
+        if (!bytes.length) { await new Promise(resolve => setTimeout(resolve, compressed ? 8 : 20)); continue; }
+        if (bytes.length > 32 && bytes[0] === 77 && bytes[1] === 82 && bytes[2] === 72 && bytes[3] === 49) {
+          // Compressed picture ("MRH1"): flags, sequence, timestamp, H.264 access unit.
+          try {
+            const header = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+            const key = (header.getUint32(4, true) & 1) === 1;
+            const next = Number(header.getBigUint64(16, true)), timestamp = Number(header.getBigUint64(24, true));
+            if (!Number.isSafeInteger(next) || next <= sequence || !Number.isSafeInteger(timestamp) || timestamp < lastTimestamp) throw Error('Invalid native video dimensions or sequence');
+            sequence = next; lastTimestamp = timestamp;
+            if (!compressed || !decoderApi.VideoDecoder || !decoderApi.EncodedVideoChunk) continue;
+            if (!decoder) {
+              if (!key) continue;
+              decoder = new decoderApi.VideoDecoder({
+                output: frame => {
+                  try {
+                    if (generation !== videoGeneration) return;
+                    const width = frame.displayWidth, height = frame.displayHeight;
+                    if (width < 2 || height < 2 || width > 1920 || height > 1088) return;
+                    if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
+                    drawing.drawImage(frame as unknown as CanvasImageSource, 0, 0);
+                    shown(width, height);
+                  } finally { frame.close(); }
+                },
+                // Fall back to pictures decoded by native code for the rest of this app run.
+                error: () => { windowDecoding = false; closeDecoder(); },
+              });
+              decoder.configure(decoderConfig);
+            }
+            decoder.decode(new decoderApi.EncodedVideoChunk({type: key ? 'key' : 'delta', timestamp, data: bytes.subarray(32)}));
+            if (decoder.decodeQueueSize > 2) await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+          } catch (problem) {
+            if (String(problem).includes('Invalid native video')) throw problem;
+            windowDecoding = false; closeDecoder();
+          } finally { bytes.fill(0); }
+          continue;
+        }
+        closeDecoder();
+        let rgba: Uint8ClampedArray<ArrayBuffer> | undefined, packed = false;
         try {
-          if (bytes.length <= 32 || bytes[0] !== 77 || bytes[1] !== 82 || bytes[2] !== 70 || bytes[3] !== 49) throw Error('Invalid native video frame');
+          if (bytes.length <= 32 || bytes[0] !== 77 || bytes[1] !== 82 || bytes[2] !== 70 || (bytes[3] !== 49 && bytes[3] !== 50)) throw Error('Invalid native video frame');
+          packed = bytes[3] === 50;
           const header = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
           const width = header.getUint32(4, true), height = header.getUint32(8, true), stride = header.getUint32(12, true);
           const next = Number(header.getBigUint64(16, true)), timestamp = Number(header.getBigUint64(24, true));
           if (width < 2 || height < 2 || width > 1920 || height > 1088 || stride < width * 4 || bytes.length !== 32 + stride * height || bytes.length > 16_777_248 || !Number.isSafeInteger(next) || next <= sequence || !Number.isSafeInteger(timestamp) || timestamp <= lastTimestamp) throw Error('Invalid native video dimensions or sequence');
-          rgba = new Uint8ClampedArray(width * height * 4);
-          for (let y = 0; y < height; ++y) for (let x = 0; x < width; ++x) {
-            const source = 32 + y * stride + x * 4, destination = (y * width + x) * 4;
-            rgba[destination] = bytes[source + 2]; rgba[destination + 1] = bytes[source + 1]; rgba[destination + 2] = bytes[source]; rgba[destination + 3] = 255;
+          if (packed) {
+            // Already RGBA rows: draw straight from the received bytes.
+            if (stride !== width * 4) throw Error('Invalid native video dimensions or sequence');
+            rgba = new Uint8ClampedArray(bytes.buffer as ArrayBuffer, bytes.byteOffset + 32, width * height * 4);
+          } else {
+            rgba = new Uint8ClampedArray(width * height * 4);
+            for (let y = 0; y < height; ++y) for (let x = 0; x < width; ++x) {
+              const source = 32 + y * stride + x * 4, destination = (y * width + x) * 4;
+              rgba[destination] = bytes[source + 2]; rgba[destination + 1] = bytes[source + 1]; rgba[destination + 2] = bytes[source]; rgba[destination + 3] = 255;
+            }
           }
           if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
           context.putImageData(new ImageData(rgba, width, height), 0, 0);
-          canvas.hidden = false; videoReady = session; sequence = next; lastTimestamp = timestamp; ++rendered;
-          if (rendered === 1) document.dispatchEvent(new CustomEvent('mixel-video-visibility',{detail:{visible:true}}));
-          // Pictures shown in the last second (not an average over the whole session).
-          const shownAt = performance.now(); recent.push(shownAt);
-          while (recent.length && shownAt - recent[0] > 1000) recent.shift();
-          metrics.textContent = `${width} × ${height} · ${recent.length} fps`;
-        } finally { bytes.fill(0); rgba?.fill(0); }
+          sequence = next; lastTimestamp = timestamp;
+          shown(width, height);
+        } finally { bytes.fill(0); if (!packed) rgba?.fill(0); }
         await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
       }
     } catch (value) { if (generation === videoGeneration) await videoFailure(value, session); }
+    finally { closeDecoder(); }
   }
   register.addEventListener('click', () => { void action('remote_register'); });
   copyId.addEventListener('click', async () => {

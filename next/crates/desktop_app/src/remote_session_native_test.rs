@@ -193,7 +193,7 @@ async fn native_accept_shares_real_pixels_and_injects_physical_input() {
     let id = Uuid::new_v4();
     let (host, mut host_commands) = FixturePeer::new(id, true).await;
     let (viewer, viewer_commands) = FixturePeer::new(id, false).await;
-    assert!(viewer.session.next_video(id).await.unwrap().is_empty());
+    assert!(viewer.session.next_video(id, false).await.unwrap().is_empty());
     assert!(
         !viewer
             .session
@@ -256,7 +256,7 @@ async fn native_accept_shares_real_pixels_and_injects_physical_input() {
 
     let pixels = tokio::time::timeout(Duration::from_secs(20), async {
         loop {
-            let video = viewer.session.next_video(id).await.unwrap();
+            let video = viewer.session.next_video(id, false).await.unwrap();
             if !video.is_empty() {
                 break video;
             }
@@ -273,7 +273,7 @@ async fn native_accept_shares_real_pixels_and_injects_physical_input() {
     })
     .await
     .expect("No desktop video arrived");
-    assert_eq!(&pixels[..4], b"MRF1");
+    assert_eq!(&pixels[..4], b"MRF2");
     let width = u32::from_le_bytes(pixels[4..8].try_into().unwrap()) as usize;
     let height = u32::from_le_bytes(pixels[8..12].try_into().unwrap()) as usize;
     assert!(width >= 320 && height >= 240 && width <= 1280 && height <= 720);
@@ -437,7 +437,7 @@ async fn native_accept_shares_real_pixels_and_injects_physical_input() {
     );
     #[cfg(target_os = "windows")]
     assert_eq!(windows_a_pressed(), before);
-    assert!(viewer.session.next_video(id).await.unwrap().is_empty());
+    assert!(viewer.session.next_video(id, false).await.unwrap().is_empty());
     println!("PASS: revoke released held keys and cleared retained frames");
 }
 
@@ -492,7 +492,7 @@ Gtk.main()
     let id = Uuid::new_v4();
     let (host, mut host_commands) = FixturePeer::new(id, true).await;
     let (viewer, viewer_commands) = FixturePeer::new(id, false).await;
-    assert!(viewer.session.next_video(id).await.unwrap().is_empty());
+    assert!(viewer.session.next_video(id, false).await.unwrap().is_empty());
     assert!(host_commands.try_recv().is_err());
     println!("Waiting for local Wayland compositor approval");
     host.session
@@ -563,7 +563,7 @@ Gtk.main()
     viewer.start(id, &host, String::new(), false, viewer_signals, None);
     let frame = tokio::time::timeout(Duration::from_secs(20), async {
         loop {
-            let frame = viewer.session.next_video(id).await.unwrap();
+            let frame = viewer.session.next_video(id, false).await.unwrap();
             if !frame.is_empty() {
                 break frame;
             }
@@ -576,7 +576,7 @@ Gtk.main()
     })
     .await
     .unwrap();
-    assert_eq!(&frame[..4], b"MRF1");
+    assert_eq!(&frame[..4], b"MRF2");
     assert!(
         frame[32..]
             .as_chunks::<4>()
@@ -634,6 +634,6 @@ Gtk.main()
         .unwrap()
         .unwrap();
     assert!(!grant.live());
-    assert!(viewer.session.next_video(id).await.unwrap().is_empty());
+    assert!(viewer.session.next_video(id, false).await.unwrap().is_empty());
     println!("PASS: revocation stopped Wayland input and cleared retained frames");
 }

@@ -1295,7 +1295,7 @@ impl RemoteSession {
             .map_err(|_| "Clipboard transfer acknowledgment timed out")?
             .map_err(|_| "The clipboard transport closed")?
     }
-    pub async fn next_video(&self, session: Uuid) -> Result<Vec<u8>, String> {
+    pub async fn next_video(&self, session: Uuid, window_decodes: bool) -> Result<Vec<u8>, String> {
         let inner = self.0.lock().await;
         if inner.cancel.load(Ordering::Acquire)
             || inner
@@ -1311,7 +1311,9 @@ impl RemoteSession {
         if inner.status.session != Some(session) || inner.status.phase != "active" {
             return Ok(Vec::new());
         }
-        inner.video.as_ref().ok_or("Video is closed")?.take(session)
+        let video = inner.video.as_ref().ok_or("Video is closed")?;
+        video.window_decodes(session, window_decodes);
+        video.take(session)
     }
 
     async fn change(&self, generation: u64, update: impl FnOnce(&mut Status)) {

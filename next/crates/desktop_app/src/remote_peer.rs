@@ -842,6 +842,8 @@ async fn host_media(
             None
         };
         let mut print_checked = Instant::now();
+        #[cfg(feature = "qa-session")]
+        let mut qa_video = (0u32, Duration::ZERO, Duration::ZERO, Duration::ZERO, 0usize, Instant::now());
         // Remote sound: what this computer plays, while the technician wants to hear it.
         let mut sound: Option<crate::remote_sound::Capture> = None;
         let mut sound_failed = false;
@@ -908,6 +910,8 @@ async fn host_media(
                 retry_encode = true;
             }
             let force_keyframe = control.take_keyframe_request() || retry_encode;
+            #[cfg(feature = "qa-session")]
+            let lap = Instant::now();
             let frame = match session_platform::frames(&capture).next(
                 sequence,
                 Duration::from_millis(if control.receiving_clipboard() {
@@ -943,6 +947,8 @@ async fn host_media(
             if config.stopped() {
                 break;
             }
+            #[cfg(feature = "qa-session")]
+            let (capture_time, lap) = (lap.elapsed(), Instant::now());
             let (reply, mut output) = tokio::sync::oneshot::channel();
             encoder
                 .try_send(EncodeRequest {
@@ -976,6 +982,8 @@ async fn host_media(
             if config.stopped() {
                 break;
             }
+            #[cfg(feature = "qa-session")]
+            let (encode_time, lap, bytes) = (lap.elapsed(), Instant::now(), encoded.annex_b.len());
             let duration = last
                 .elapsed()
                 .clamp(Duration::from_micros(1), Duration::from_secs(2));
@@ -985,6 +993,23 @@ async fn host_media(
                 .await
                 .map_err(|error| error.to_string())?;
             sent += 1;
+            // Lab builds only: where the time of each picture goes (capture, encode, send).
+            #[cfg(feature = "qa-session")]
+            if let Some(path) = std::env::var_os("MIXEL_QA_VIDEO_LOG") {
+                qa_video.0 += 1;
+                qa_video.1 += capture_time;
+                qa_video.2 += encode_time;
+                qa_video.3 += lap.elapsed();
+                qa_video.4 += bytes;
+                if qa_video.5.elapsed() >= Duration::from_secs(1) {
+                    let n = qa_video.0.max(1) as f64;
+                    let _ = std::fs::write(path, format!(
+                        "sent/s={} capture={:.1}ms encode={:.1}ms send={:.1}ms kB={:.0} size={}x{}",
+                        qa_video.0, qa_video.1.as_secs_f64() * 1000.0 / n, qa_video.2.as_secs_f64() * 1000.0 / n,
+                        qa_video.3.as_secs_f64() * 1000.0 / n, qa_video.4 as f64 / n / 1000.0, size.0, size.1));
+                    qa_video = (0, Duration::ZERO, Duration::ZERO, Duration::ZERO, 0, Instant::now());
+                }
+            }
             if sent.is_multiple_of(30) {
                 config
                     .state
@@ -1050,6 +1075,9 @@ async fn viewer_media(
     let mut timestamp_ticks = 0u64;
     let mut received = 0u64;
     let mut last = Instant::now();
+    #[cfg(feature = "qa-session")]
+    let mut qa_video = (0u32, Duration::ZERO, Duration::ZERO, Instant::now());
+    let (mut window_decodes, mut waiting_for_key) = (false, false);
     let mut player: Option<crate::remote_sound::Player> = None;
     let mut player_failed = false;
     while !config.stopped() {
@@ -1106,6 +1134,55 @@ async fn viewer_media(
                         .checked_mul(1_000_000)
                         .ok_or("Video timestamp exhausted")?
                         / 90_000;
+                    // The window decodes itself when it can (much faster for large pictures);
+                    // a recording needs the picture size, so it keeps the native decoder.
+                    let compressed = config.video.wants_compressed() && recording.is_none();
+                    if compressed != window_decodes {
+                        window_decodes = compressed;
+                        waiting_for_key = true;
+                        if !compressed {
+                            decoder = session_platform::H264Decoder::new(1920, 1088)
+                                .map_err(|error| error.to_string())?;
+                        }
+                        control.request_keyframe(channel).await?;
+                    }
+                    if waiting_for_key || compressed {
+                        let key = native_os_capture::h264::annex_b_to_avcc(&frame)
+                            .map_err(|_| "Invalid remote video")?
+                            .keyframe;
+                        if waiting_for_key && !key {
+                            control.request_keyframe(channel).await?;
+                            continue;
+                        }
+                        waiting_for_key = false;
+                        if compressed {
+                            received += 1;
+                            last = Instant::now();
+                            let packet = crate::remote_video::compressed_packet(config.session, received, timestamp, &frame, key)?;
+                            if !config.video.publish_compressed(packet)? {
+                                waiting_for_key = true;
+                                control.request_keyframe(channel).await?;
+                            }
+                            #[cfg(feature = "qa-session")]
+                            if let Some(path) = std::env::var_os("MIXEL_QA_VIDEO_LOG") {
+                                qa_video.0 += 1;
+                                if qa_video.3.elapsed() >= Duration::from_secs(1) {
+                                    let fetched = crate::remote_video::QA_FETCHED.swap(0, std::sync::atomic::Ordering::Relaxed);
+                                    let _ = std::fs::write(path, format!("window decodes: received/s={} fetched/s={fetched}", qa_video.0));
+                                    qa_video = (0, Duration::ZERO, Duration::ZERO, Instant::now());
+                                }
+                            }
+                            if received.is_multiple_of(30) {
+                                config
+                                    .state
+                                    .update_peer(config.generation, config.session, "Remote video decoded with hardware acceleration", received)
+                                    .await;
+                            }
+                            continue;
+                        }
+                    }
+                    #[cfg(feature = "qa-session")]
+                    let lap = Instant::now();
                     let Some(decoded) = decoder
                         .decode(&frame, timestamp)
                         .map_err(|error| error.to_string())?
@@ -1125,12 +1202,30 @@ async fn viewer_media(
                     }
                     received += 1;
                     last = Instant::now();
+                    #[cfg(feature = "qa-session")]
+                    let (decode_time, lap) = (lap.elapsed(), Instant::now());
                     config.video.publish(decoded_packet(
                         config.session,
                         received,
                         timestamp,
                         &decoded,
                     )?)?;
+                    // Lab builds only: decode and hand-over time, and how many pictures the window fetched.
+                    #[cfg(feature = "qa-session")]
+                    if let Some(path) = std::env::var_os("MIXEL_QA_VIDEO_LOG") {
+                        qa_video.0 += 1;
+                        qa_video.1 += decode_time;
+                        qa_video.2 += lap.elapsed();
+                        if qa_video.3.elapsed() >= Duration::from_secs(1) {
+                            let n = f64::from(qa_video.0.max(1));
+                            let fetched = crate::remote_video::QA_FETCHED.swap(0, std::sync::atomic::Ordering::Relaxed);
+                            let _ = std::fs::write(path, format!(
+                                "decoded/s={} decode={:.1}ms pack={:.1}ms fetched/s={} size={}x{}",
+                                qa_video.0, qa_video.1.as_secs_f64() * 1000.0 / n, qa_video.2.as_secs_f64() * 1000.0 / n,
+                                fetched, decoded.width(), decoded.height()));
+                            qa_video = (0, Duration::ZERO, Duration::ZERO, Instant::now());
+                        }
+                    }
                     config
                         .state
                         .update_peer(
