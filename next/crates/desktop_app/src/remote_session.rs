@@ -1405,7 +1405,6 @@ struct Peer {
     id: Uuid,
     remote: u32,
     host: bool,
-    unattended: bool,
     key: ed25519_dalek::VerifyingKey,
     source: String,
     #[cfg(target_os = "linux")]
@@ -1775,6 +1774,8 @@ async fn run(
         let mut last_delegation_attempt=std::time::Instant::now();
         let mut peer:Option<Peer>=None;
         let mut outgoing:Option<(u32,ed25519_dalek::VerifyingKey,bool)>=None;
+    // Presence questions still waiting for their answer, oldest first: an answer speaks only for the IDs asked.
+    let mut presence_asked: std::collections::VecDeque<Vec<u32>> = std::collections::VecDeque::new();
         let mut tick=tokio::time::interval(Duration::from_millis(250));
         let mut last_activity=std::time::Instant::now();
         let mut heartbeat=std::time::Instant::now();
@@ -1838,6 +1839,8 @@ async fn run(
                         send(&mut socket,ClientMessage::ConfigureUnattended{enabled}).await?;
                     },
                     Command::Presence(hosts)=>{
+                        if presence_asked.len()>=16{presence_asked.pop_front();}
+                        presence_asked.push_back(hosts.clone());
                         send(&mut socket,ClientMessage::Presence{hosts}).await?;
                     },
                     Command::Agent{inventory,result}=>{
@@ -1913,7 +1916,14 @@ async fn run(
                             }
                         },
                         ServerMessage::Presence{online}=>{
-                            state.change(generation,|status|{status.online=online;}).await;
+                            // Several parts of the window ask about different devices: keep what the others learned.
+                            let asked=presence_asked.pop_front().unwrap_or_default();
+                            state.change(generation,|status|{
+                                status.online.retain(|id|!asked.contains(id) && !online.contains(id));
+                                status.online.extend(online);
+                                status.online.sort_unstable();
+                                if status.online.len()>256{status.online.clear();}
+                            }).await;
                         },
                         ServerMessage::Agent{command}=>{
                             if let Some(command)=command {
@@ -1936,7 +1946,7 @@ async fn run(
                                 status.support_code=code;
                             }).await;
                         },
-                        ServerMessage::Requested{session}=>{let (remote,key,unattended)=outgoing.take().ok_or("Unexpected outgoing invitation")?;peer=Some(Peer{id:session,remote,host:false,unattended,key,source:String::new(),#[cfg(target_os = "linux")] portal:None,confirm:false,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:None,expires:Arc::new(AtomicU64::new(0)),relay_expires:0,restart_pending:None,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4()});peer.as_ref().ok_or("Invitation state unavailable")?.track(state,generation).await?;},
+                        ServerMessage::Requested{session}=>{let (remote,key,_)=outgoing.take().ok_or("Unexpected outgoing invitation")?;peer=Some(Peer{id:session,remote,host:false,key,source:String::new(),#[cfg(target_os = "linux")] portal:None,confirm:false,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:None,expires:Arc::new(AtomicU64::new(0)),relay_expires:0,restart_pending:None,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4()});peer.as_ref().ok_or("Invitation state unavailable")?.track(state,generation).await?;},
                         ServerMessage::Consent{session,requester_connection,requester,requester_identity,unattended,..}=>{
                             if crate::service_config::controller_only() || peer.is_some() || outgoing.is_some(){send(&mut socket,ClientMessage::Decide{session,accept:false}).await?;continue;}
                             let ticket=requester_identity.ok_or("The invitation has no signed requester identity")?;
@@ -1955,7 +1965,7 @@ async fn run(
                                 Some(config)
                             }else{None};
                             let expires=Arc::new(AtomicU64::new(ticket.expires_at));
-                            peer=Some(Peer{id:session,remote:requester_connection,host:true,unattended,key,source:String::new(),#[cfg(target_os = "linux")] portal:None,confirm:false,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:Some(ticket),expires,relay_expires:0,restart_pending:None,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4()});
+                            peer=Some(Peer{id:session,remote:requester_connection,host:true,key,source:String::new(),#[cfg(target_os = "linux")] portal:None,confirm:false,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:Some(ticket),expires,relay_expires:0,restart_pending:None,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4()});
                             peer.as_ref().ok_or("Invitation state unavailable")?.track(state,generation).await?;
                             state.change(generation,|status|{status.phase="incoming".into();status.message="Incoming request: choose a source and Accept or Reject".into();status.peer=Some(requester_connection);status.requester=Some(requester);status.sharing=true;status.unattended_session=unattended;}).await;
                             if let Some(config)=auto {
@@ -1974,9 +1984,9 @@ async fn run(
                             if nonce==[0;32] || (active.host && active.source.is_empty()){return Err("Missing local sharing consent".into());}
                             let controller=controller_identity.ok_or("The accepted session has no signed controller identity")?;
                             let host=host_identity.ok_or("The accepted session has no signed host identity")?;
-                            if host.unattended_host_only() && !active.unattended {
-                                return Err("The verified host accepts only unattended connections".into());
-                            }
+                            // A device-only host (a phone in Quick Support) may accept an attended request:
+                            // the connection service lets it through only after the device opted in, and the
+                            // person at the device decides about every session.
                             let (local,remote)=if active.host{(&host,&controller)}else{(&controller,&host)};
                             let now=SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_|"System clock is unavailable")?.as_secs();
                             local.verify(&roots,now).map_err(|_|"The local session identity is invalid or expired")?;
@@ -2167,7 +2177,6 @@ mod consent_tests {
             id: Uuid::from_u128(1),
             remote: 123456789,
             host: true,
-            unattended: false,
             key: ed25519_dalek::SigningKey::from_bytes(&[7; 32]).verifying_key(),
             source: "display:1".into(),
             #[cfg(target_os = "linux")]

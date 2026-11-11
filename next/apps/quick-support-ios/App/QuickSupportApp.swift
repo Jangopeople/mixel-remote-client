@@ -50,7 +50,8 @@ final class Registration: ObservableObject {
                     let json = String(cString: answer)
                     mqs_free(answer)
                     if let object = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any] {
-                        if let reason = object["error"] as? String { outcome = reason } else if object["connection_id"] != nil { Shared.set("enrollment", json); outcome = "" }
+                        // The host core reports in English; show the reason in the phone's language.
+                        if let reason = object["error"] as? String { outcome = Texts.of(reason.contains("expired") ? "invalid" : reason.contains("reached") ? "unreachable" : "failed") } else if object["connection_id"] != nil { Shared.set("enrollment", json); outcome = "" }
                     }
                 }
                 mqs_destroy(host)
@@ -112,10 +113,14 @@ struct MainView: View {
                     }
                 } else {
                     card {
-                        Text(Texts.of("ready"))
-                        Text(registration.remoteId).font(.system(size: 34, weight: .bold)).kerning(1.5)
+                        // The technician's app shows this phone by itself once the code is accepted,
+                        // so the next step is sharing; the number is only a fallback.
+                        Text(Texts.of("ready")).font(.headline)
                         BroadcastButton().frame(height: 52)
                         Text(Texts.of("share_hint")).font(.footnote).foregroundColor(.secondary)
+                        Divider()
+                        Text(Texts.of("number")).font(.footnote).foregroundColor(.secondary)
+                        Text(registration.remoteId).font(.system(size: 22, weight: .semibold).monospacedDigit()).kerning(1)
                         Button(Texts.of("forget")) { code = ""; registration.forget() }.font(.footnote).padding(.top, 4)
                     }
                 }

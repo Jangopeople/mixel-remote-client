@@ -162,7 +162,8 @@ pub struct H264Decoder {
 
 impl H264Decoder {
     pub fn new(width: usize, height: usize) -> Result<Self, DecodeError> {
-        if !(16..=1920).contains(&width) || !(16..=1088).contains(&height) {
+        // Landscape up to 1920x1088, or the same picture upright (a phone screen).
+        if !(16..=1920).contains(&width) || !(16..=1920).contains(&height) {
             return Err(DecodeError::Dimensions);
         }
         Ok(Self {
@@ -194,6 +195,7 @@ impl H264Decoder {
                 .map_err(|_| DecodeError::Dimensions)?;
             if width < 2
                 || height < 2
+                || width.min(height) > 1088
                 || width as usize > self.limits.0
                 || height as usize > self.limits.1
                 || !matches!(sps.frame_mbs_flags, FrameMbsFlags::Frames)
@@ -217,7 +219,7 @@ impl H264Decoder {
             return Ok(None);
         };
         let (width, height) = decoded.dimensions();
-        if width < 2 || height < 2 || width > self.limits.0 || height > self.limits.1 {
+        if width < 2 || height < 2 || width.min(height) > 1088 || width > self.limits.0 || height > self.limits.1 {
             return Err(DecodeError::Dimensions);
         }
         let mut pixels = Zeroizing::new(vec![0; width * height * 4]);
@@ -274,6 +276,36 @@ mod tests {
         assert!(encoder.encode(&frame, 2, false).unwrap().is_none());
     }
 
+    /// A phone shares an upright picture (Quick Support for phones): both decoders show it,
+    /// and still refuse anything larger than Full HD turned on its side.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn upright_phone_pictures_decode_on_both_decoders() {
+        use crate::{
+            macos_decoder::H264Decoder as MacDecoder,
+            macos_screen_encoder::ScreenH264Encoder as MacEncoder,
+        };
+        let (width, height) = (886usize, 1920usize);
+        let mut pixels = vec![255u8; width * height * 4];
+        for (index, pixel) in pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            if (index / width) < height / 2 {
+                *pixel = [30, 60, 200, 255];
+            }
+        }
+        let frame = CapturedFrame::bgra(width, height, width * 4, pixels).unwrap();
+        let mut encoder = MacEncoder::new(width, height, 20, 2_000_000).unwrap();
+        let encoded = (1..10)
+            .find_map(|number| encoder.encode(&frame, number * 50_000, true).unwrap())
+            .expect("VideoToolbox did not produce an independent frame");
+        let decoded = MacDecoder::new(1920, 1920).unwrap().decode(&encoded.annex_b, 0).unwrap().unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (width, height));
+        let decoded = H264Decoder::new(1920, 1920).unwrap().decode(&encoded.annex_b, 0).unwrap().unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (width, height));
+        // Top half blue-ish, bottom half white (BGRA).
+        let at = |x: usize, y: usize| { let o = y * decoded.stride() + x * 4; decoded.pixels()[o..o + 3].to_vec() };
+        assert!(at(400, 300)[2] > 150 && at(400, 300)[0] < 90, "top: {:?}", at(400, 300));
+        assert!(at(400, 1700).iter().all(|value| *value > 200), "bottom: {:?}", at(400, 1700));
+    }
     #[cfg(target_os = "macos")]
     #[test]
     fn desktop_software_and_macos_hardware_codecs_interoperate() {

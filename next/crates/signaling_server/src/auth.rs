@@ -101,6 +101,12 @@ pub struct EnrollmentCompany {
     pub client_id: Uuid,
     pub client_name: String,
 }
+/// A phone that registered with a support code.
+#[derive(Serialize, Deserialize)]
+pub struct SupportDevice {
+    pub connection_id: u32,
+    pub name: String,
+}
 #[derive(Serialize, Deserialize)]
 pub struct RolloutToken {
     pub id: Uuid,
@@ -249,6 +255,67 @@ impl IsmAuth {
             return Err(AuthError);
         }
         Ok(companies)
+    }
+    /// Quick Support for phones: a one-time support code (30 minutes, one phone) for a
+    /// company this MFA-verified team member looks after. The phone registers with it.
+    pub async fn create_support_code(&self, token: &str, client: Uuid) -> Result<String, AuthError> {
+        if client.is_nil() || !self.authenticate_scope(token, false).await?.staff {
+            return Err(AuthError);
+        }
+        let response = self
+            .client
+            .post(
+                self.base
+                    .join("/rest/v1/rpc/remote_create_support_code")
+                    .map_err(|_| AuthError)?,
+            )
+            .header("apikey", &self.api_key)
+            .bearer_auth(token)
+            .json(&serde_json::json!({"target_client":client}))
+            .send()
+            .await
+            .map_err(|_| AuthError)?;
+        let code: String = Self::decode_response(response).await?;
+        let bytes = code.as_bytes();
+        if bytes.len() != 14
+            || !bytes.iter().enumerate().all(|(index, byte)| {
+                if index == 4 || index == 9 { *byte == b'-' } else { matches!(byte, b'A'..=b'Z' | b'2'..=b'9') }
+            })
+        {
+            return Err(AuthError);
+        }
+        Ok(code)
+    }
+    /// The phone that registered with a support code this team member created, if any yet.
+    pub async fn support_code_device(&self, token: &str, code: &str) -> Result<Option<SupportDevice>, AuthError> {
+        if code.len() != 14 || !self.authenticate_scope(token, false).await?.staff {
+            return Err(AuthError);
+        }
+        let response = self
+            .client
+            .post(
+                self.base
+                    .join("/rest/v1/rpc/remote_support_code_device")
+                    .map_err(|_| AuthError)?,
+            )
+            .header("apikey", &self.api_key)
+            .bearer_auth(token)
+            .json(&serde_json::json!({"code":code}))
+            .send()
+            .await
+            .map_err(|_| AuthError)?;
+        let mut devices: Vec<SupportDevice> = Self::decode_response(response).await?;
+        if devices.len() > 1
+            || devices.iter().any(|device| {
+                !(100_000_000..=999_999_999).contains(&device.connection_id)
+                    || device.name.is_empty()
+                    || device.name.chars().count() > 80
+                    || device.name.chars().any(char::is_control)
+            })
+        {
+            return Err(AuthError);
+        }
+        Ok(devices.pop())
     }
     /// Adds (or reuses a not yet enrolled) device record for the computer
     /// being set up. Enrollment itself stays a separate, key-bound step.

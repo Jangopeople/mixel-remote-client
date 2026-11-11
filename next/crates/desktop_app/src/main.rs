@@ -1464,6 +1464,45 @@ async fn enrollment_companies(
         .await
         .map_err(|_| "Companies are unavailable for this account".into())
 }
+/// Quick Support for phones: the technician creates a one-time code for the person to type
+/// into the Mixel Quick Support app on their phone.
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[tauri::command]
+async fn support_code_create(
+    window: tauri::WebviewWindow,
+    auth: tauri::State<'_, account_auth::AccountAuth>,
+    company: uuid::Uuid,
+) -> Result<String, String> {
+    main_window(&window)?;
+    let credential = auth.credential(None).await?;
+    if !credential.principal.staff {
+        return Err("Support codes require an MFA-verified Mixel team account".into());
+    }
+    credential
+        .ism
+        .create_support_code(&credential.token, company)
+        .await
+        .map_err(|_| "The support code could not be created. Please try again.".into())
+}
+/// The phone that registered with a support code created here, once it has.
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[tauri::command]
+async fn support_code_device(
+    window: tauri::WebviewWindow,
+    auth: tauri::State<'_, account_auth::AccountAuth>,
+    code: String,
+) -> Result<Option<signaling_server::auth::SupportDevice>, String> {
+    main_window(&window)?;
+    let credential = auth.credential(None).await?;
+    if !credential.principal.staff {
+        return Err("Support codes require an MFA-verified Mixel team account".into());
+    }
+    credential
+        .ism
+        .support_code_device(&credential.token, &code)
+        .await
+        .map_err(|_| "The support code could not be checked. Please try again.".into())
+}
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 #[tauri::command]
 async fn add_this_device(
@@ -2206,6 +2245,8 @@ fn main() {
             remote_devices,
             enrollment_devices,
             enrollment_companies,
+            support_code_create,
+            support_code_device,
             add_this_device,
             enrollment_current,
             enroll_this_device,
@@ -2286,6 +2327,8 @@ fn main() {
             remote_devices,
             enrollment_devices,
             enrollment_companies,
+            support_code_create,
+            support_code_device,
             add_this_device,
             enrollment_current,
             register_personal_device,

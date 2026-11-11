@@ -7,7 +7,7 @@
     <string name="disconnect">Disconnect</string>
     <string name="end_session">End session</string>
     <string name="status_connecting">Connecting…</string>
-    <string name="status_ready">Ready. Tell the technician this number:</string>
+    <string name="status_ready">Ready. Keep this app open: the technician will now ask to see your screen.\n\nDevice number, if the technician asks for it:</string>
     <string name="status_asking">A technician wants to connect.</string>
     <string name="status_negotiating">Starting the session…</string>
     <string name="status_active">The technician sees your screen.</string>
@@ -20,6 +20,7 @@
     <string name="allow">Allow</string>
     <string name="decline">Decline</string>
     <string name="code_invalid">This support code is not valid or has expired.</string>
+    <string name="unreachable">Mixel cannot be reached. Check the internet connection and try again.</string>
     <string name="failed">That did not work. Please try again.</string>
     <string name="session_ended">The session has ended.</string>
     <string name="control_title">Let the technician operate this phone</string>

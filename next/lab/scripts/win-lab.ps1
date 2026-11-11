@@ -6,7 +6,7 @@ if(-not (Test-Path "$fix\next\frontends\desktop\node_modules")){
 }
 New-Item -ItemType Directory "$fix\overlay" -Force | Out-Null
 tar -xzf "$HOME\qa-next.tgz" -C "$fix\overlay"; if($LASTEXITCODE -ne 0){ throw 'untar' }
-robocopy "$fix\overlay\next" "$fix\next" /E /NFL /NDL /NJH /NJS /NP | Out-Null; if($LASTEXITCODE -ge 8){ throw "overlay" }
+robocopy "$fix\overlay\next" "$fix\next" /E /R:1 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null; if($LASTEXITCODE -ge 8){ throw "overlay" }
 Remove-Item "$fix\overlay" -Recurse -Force
 cmd /c "call `"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\VsDevCmd.bat`" -no_logo -arch=x64 -host_arch=x64 >nul 2>&1 && set" | ForEach-Object { if($_ -match '^([^=]+)=(.*)$'){ Set-Item -Path "env:$($matches[1])" -Value $matches[2] } }
 $env:MIXEL_DESKTOP_SERVICE_CONFIG="$fix\next\deployment\public-service-config.json"; $env:CARGO_TARGET_DIR="$fix\target"

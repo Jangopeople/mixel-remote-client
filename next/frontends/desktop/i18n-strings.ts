@@ -39,6 +39,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Authenticator": "Authenticator",
 "Authenticator app": "Authenticator-App",
 "Automatic (this computer’s language)": "Automatisch (Sprache dieses Computers)",
+"COMPANY": "FIRMA",
 "CONNECTION ID": "VERBINDUNGS-ID",
 "Cancel sign-in": "Anmeldung abbrechen",
 "Cancel transfer": "Übertragung abbrechen",
@@ -80,14 +81,19 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Connection request denied. Check the device’s company access and one-time password, then try again.": "Verbindungsanfrage abgelehnt. Prüfen Sie den Firmenzugriff des Geräts und das Einmalpasswort und versuchen Sie es erneut.",
 "Connection requested. The host must Accept before sharing starts.": "Verbindung angefragt. Die Gegenseite muss annehmen, bevor die Freigabe startet.",
 "Control a remote device": "Ein entferntes Gerät steuern",
+"Copied": "Kopiert",
 "Copy ID": "ID kopieren",
 "Copy answer": "Antwort kopieren",
+"Copy code": "Code kopieren",
 "Copy command": "Befehl kopieren",
 "Create Mixel ID": "Mixel ID erstellen",
 "Create a company link, then run the command on each Windows computer, as administrator or with your deployment tool. Each computer enrols itself with always-on access and appears in Devices. No one needs to sign in on it.": "Erstellen Sie einen Firmen-Link und führen Sie den Befehl auf jedem Windows-Computer aus, als Administrator oder mit Ihrem Verteilwerkzeug. Jeder Computer registriert sich mit ständigem Zugriff und erscheint unter Geräte. Niemand muss sich darauf anmelden.",
+"Create a support code here and tell it to them. They type it into the app.": "Erstellen Sie hier einen Support-Code und nennen Sie ihn der Person. Sie gibt ihn in der App ein.",
 "Create device identity": "Geräteidentität erstellen",
 "Create personal space": "Persönlichen Bereich erstellen",
 "Create rollout command": "Verteilbefehl erstellen",
+"Create support code": "Support-Code erstellen",
+"Creating a support code…": "Support-Code wird erstellt…",
 "Creating…": "Wird erstellt…",
 "Ctrl+Alt+Del needs Sign-in screen access to be turned on": "Ctrl+Alt+Del braucht den eingeschalteten Zugriff am Anmeldebildschirm",
 "Ctrl+Alt+Del needs unattended access for this computer": "Ctrl+Alt+Del braucht den ständigen Zugriff für diesen Computer",
@@ -132,6 +138,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Go offline before changing this computer’s enrollment.": "Gehen Sie offline, bevor Sie die Registrierung dieses Computers ändern.",
 "Go offline before changing this computer’s registration.": "Gehen Sie offline, bevor Sie die Registrierung dieses Computers ändern.",
 "Go offline before switching between company and personal devices": "Gehen Sie offline, bevor Sie zwischen Firmen- und persönlichen Geräten wechseln",
+"Help someone on their phone": "Jemandem am Smartphone helfen",
 "Incoming request": "Eingehende Anfrage",
 "Incoming request: choose a source and Accept or Reject": "Eingehende Anfrage: Bildschirm wählen und annehmen oder ablehnen",
 "Install updates automatically": "Updates automatisch installieren",
@@ -221,6 +228,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Revoke": "Widerrufen",
 "Roll out to many computers": "Auf viele Computer verteilen",
 "Rollout command created.": "Verteilbefehl erstellt.",
+"SUPPORT CODE": "SUPPORT-CODE",
 "Save note in ticket": "Notiz im Ticket speichern",
 "Saving in a ticket requires an MFA-verified Mixel team account": "Speichern im Ticket erfordert ein MFA-geprüftes Mixel-Teamkonto",
 "Saving…": "Wird gespeichert…",
@@ -276,6 +284,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Stay signed in on this computer": "Auf diesem Computer angemeldet bleiben",
 "Stop recording": "Aufnahme stoppen",
 "Stop requiring a password": "Kein Passwort mehr verlangen",
+"Support codes require an MFA-verified Mixel team account": "Support-Codes erfordern ein Mixel-Teamkonto mit Zwei-Faktor-Bestätigung",
 "Switch to company devices": "Zu Firmengeräten wechseln",
 "Switch to personal devices": "Zu persönlichen Geräten wechseln",
 "THIS COMPUTER": "DIESER COMPUTER",
@@ -284,10 +293,12 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "The always-on access program is older than this app.": "Das Programm für den ständigen Zugriff ist älter als diese App.",
 "The clipboard holds a folder; use the Files tab for folders, many files or more than 32 MB": "Die Zwischenablage enthält einen Ordner; für Ordner, viele Dateien oder mehr als 32 MB den Reiter Dateien verwenden",
 "The clipboard holds no text, picture or files": "Die Zwischenablage enthält weder Text noch Bild noch Dateien",
+"The code could not be copied. Select it and copy it yourself.": "Der Code konnte nicht kopiert werden. Markieren und kopieren Sie ihn selbst.",
 "The command contains the secret token: share it only with the people who deploy the computers. It is shown once.": "Der Befehl enthält das geheime Token: geben Sie ihn nur den Personen, die die Computer verteilen. Er wird nur einmal angezeigt.",
 "The copied files are too large; use the Files tab for folders, many files or more than 32 MB": "Die kopierten Dateien sind zu gross; für Ordner, viele Dateien oder mehr als 32 MB den Reiter Dateien verwenden",
 "The note was not saved: check the ticket number": "Die Notiz wurde nicht gespeichert: Ticketnummer prüfen",
 "The other person can see the display you approved. End the session at any time.": "Die andere Person sieht den Bildschirm, den Sie freigegeben haben. Beenden Sie die Sitzung jederzeit.",
+"The person installs the app": "Die Person installiert die App",
 "The remote clipboard is empty, or holds folders or more than 32 MB": "Die entfernte Zwischenablage ist leer oder enthält Ordner oder mehr als 32 MB",
 "The remote computer did not come back within 10 minutes.": "Der entfernte Computer ist innert 10 Minuten nicht zurückgekommen.",
 "The remote computer is restarting. Mixel Remote reconnects when it is back…": "Der entfernte Computer startet neu. Mixel Remote verbindet sich wieder, sobald er zurück ist…",
@@ -296,6 +307,9 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "The selected device record belongs to this computer": "Der gewählte Geräteeintrag gehört zu diesem Computer",
 "The sign-in screen program is older than this app.": "Das Programm für den Anmeldebildschirm ist älter als diese App.",
 "The sign-in screen program is up to date.": "Das Programm für den Anmeldebildschirm ist aktuell.",
+"The support code could not be checked. Please try again.": "Der Support-Code konnte nicht geprüft werden. Bitte versuchen Sie es erneut.",
+"The support code could not be created. Please try again.": "Der Support-Code konnte nicht erstellt werden. Bitte versuchen Sie es erneut.",
+"Their phone appears here. Choose Connect. They confirm on their phone, and you see their screen.": "Das Smartphone erscheint hier. Wählen Sie «Verbinden». Die Person bestätigt auf ihrem Smartphone, und Sie sehen ihren Bildschirm.",
 "This account could not verify that device ID. Check that it is enrolled in Mixel Remote and that your company has access.": "Dieses Konto konnte die Geräte-ID nicht bestätigen. Prüfen Sie, ob das Gerät registriert ist und Ihre Firma Zugriff hat.",
 "This computer": "Dieser Computer",
 "This computer is available": "Dieser Computer ist verfügbar",
@@ -303,6 +317,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "This computer is not registered for the current account": "Dieser Computer ist für das aktuelle Konto nicht registriert",
 "This computer is paired. Its connection ID stays the same.": "Dieser Computer ist gekoppelt. Seine Verbindungs-ID bleibt gleich.",
 "This computer no longer keeps your sign-in.": "Dieser Computer speichert Ihre Anmeldung nicht mehr.",
+"This support code has expired. Create a new one.": "Dieser Support-Code ist abgelaufen. Erstellen Sie einen neuen.",
 "Ticket number": "Ticketnummer",
 "Transferring…": "Wird übertragen…",
 "Try another device name or clear the search.": "Versuchen Sie einen anderen Gerätenamen oder leeren Sie die Suche.",
@@ -324,6 +339,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Uses your company’s own AI server. The screenshot and your question stay in your network.": "Nutzt den eigenen KI-Server Ihrer Firma. Bildschirmfoto und Frage bleiben in Ihrem Netzwerk.",
 "Using your company devices": "Firmengeräte aktiv",
 "Using your personal devices": "Persönliche Geräte aktiv",
+"Valid for 30 minutes, for one phone.": "30 Minuten gültig, für ein Smartphone.",
 "Valid for days": "Gültig für Tage",
 "Verification code": "Bestätigungscode",
 "Verify": "Bestätigen",
@@ -336,6 +352,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Waiting for administrator approval…": "Warten auf die Zustimmung des Administrators…",
 "Waiting for confirmation that the connection has closed.": "Warten auf die Bestätigung, dass die Verbindung beendet ist.",
 "Waiting for the other person to accept your request.": "Warten, bis die andere Person Ihre Anfrage annimmt.",
+"Waiting for the person to type the code into Mixel Quick Support…": "Warten, bis die Person den Code in Mixel Quick Support eingibt…",
 "Waiting for the remote host to Accept": "Warten, bis die Gegenseite annimmt",
 "Wake": "Aufwecken",
 "When nothing is in use, Mixel Remote installs signed updates and restarts. Otherwise the sidebar offers Install.": "Wenn nichts in Gebrauch ist, installiert Mixel Remote signierte Updates und startet neu. Sonst bietet die Seitenleiste «Installieren» an.",
@@ -361,7 +378,9 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Your next connection starts here": "Ihre nächste Verbindung beginnt hier",
 "Your saved sign-in expired. Sign in again.": "Ihre gespeicherte Anmeldung ist abgelaufen. Bitte erneut anmelden.",
 "Your sign-in is kept in this computer’s protected storage until you sign out.": "Ihre Anmeldung bleibt bis zum Abmelden im geschützten Speicher dieses Computers.",
-"e.g. Office PC": "z. B. Büro-PC"
+"e.g. Office PC": "z. B. Büro-PC",
+"from the App Store or Google Play and opens it.": "aus dem App Store oder von Google Play und öffnet sie.",
+"iPhone, iPad or Android. The other person needs no account.": "iPhone, iPad oder Android. Die andere Person braucht kein Konto."
 },
 "patterns": [
 [
@@ -467,6 +486,22 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 [
 "^Wake signal sent to (.+)\\. It appears as Online when it has started\\.$",
 "Wecksignal an $1 gesendet. Der Computer erscheint als Online, sobald er gestartet ist."
+],
+[
+"^· ([\\d ]+) has registered\\. To connect, choose “Make this computer available” above first\\.$",
+"· $1 hat sich registriert. Wählen Sie zum Verbinden zuerst oben «Diesen Computer verfügbar machen»."
+],
+[
+"^· ([\\d ]+) · connection requested\\. The person confirms on their phone\\.$",
+"· $1 · Verbindung angefragt. Die Person bestätigt auf ihrem Smartphone."
+],
+[
+"^· ([\\d ]+) is ready\\. Choose Connect\\.$",
+"· $1 ist bereit. Wählen Sie «Verbinden»."
+],
+[
+"^· ([\\d ]+) has registered\\. Waiting for the person to start sharing on their phone…$",
+"· $1 hat sich registriert. Warten, bis die Person die Freigabe auf ihrem Smartphone startet…"
 ]
 ]
 },
@@ -508,6 +543,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Authenticator": "Authentificateur",
 "Authenticator app": "Application d’authentification",
 "Automatic (this computer’s language)": "Automatique (langue de cet ordinateur)",
+"COMPANY": "ENTREPRISE",
 "CONNECTION ID": "ID DE CONNEXION",
 "Cancel sign-in": "Annuler la connexion",
 "Cancel transfer": "Annuler le transfert",
@@ -549,14 +585,19 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Connection request denied. Check the device’s company access and one-time password, then try again.": "Demande de connexion refusée. Vérifiez l’accès de l’entreprise et le mot de passe à usage unique, puis réessayez.",
 "Connection requested. The host must Accept before sharing starts.": "Connexion demandée. L’hôte doit accepter avant le début du partage.",
 "Control a remote device": "Contrôler un appareil distant",
+"Copied": "Copié",
 "Copy ID": "Copier l’ID",
 "Copy answer": "Copier la réponse",
+"Copy code": "Copier le code",
 "Copy command": "Copier la commande",
 "Create Mixel ID": "Créer un Mixel ID",
 "Create a company link, then run the command on each Windows computer, as administrator or with your deployment tool. Each computer enrols itself with always-on access and appears in Devices. No one needs to sign in on it.": "Créez un lien d’entreprise, puis exécutez la commande sur chaque ordinateur Windows, en administrateur ou avec votre outil de déploiement. Chaque ordinateur s’enregistre avec l’accès permanent et apparaît dans Appareils. Personne n’a besoin de s’y connecter.",
+"Create a support code here and tell it to them. They type it into the app.": "Créez ici un code d’assistance et communiquez-le-lui. La personne le saisit dans l’application.",
 "Create device identity": "Créer l’identité de l’appareil",
 "Create personal space": "Créer un espace personnel",
 "Create rollout command": "Créer la commande de déploiement",
+"Create support code": "Créer un code d’assistance",
+"Creating a support code…": "Création du code d’assistance…",
 "Creating…": "Création…",
 "Ctrl+Alt+Del needs Sign-in screen access to be turned on": "Ctrl+Alt+Del nécessite l’accès à l’écran de connexion",
 "Ctrl+Alt+Del needs unattended access for this computer": "Ctrl+Alt+Suppr nécessite l’accès permanent pour cet ordinateur",
@@ -601,6 +642,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Go offline before changing this computer’s enrollment.": "Passez hors ligne avant de modifier l’enregistrement de cet ordinateur.",
 "Go offline before changing this computer’s registration.": "Passez hors ligne avant de modifier l’enregistrement de cet ordinateur.",
 "Go offline before switching between company and personal devices": "Passez hors ligne avant de changer entre appareils d’entreprise et personnels",
+"Help someone on their phone": "Aider quelqu’un sur son téléphone",
 "Incoming request": "Demande entrante",
 "Incoming request: choose a source and Accept or Reject": "Demande entrante : choisissez un écran puis acceptez ou refusez",
 "Install updates automatically": "Installer les mises à jour automatiquement",
@@ -690,6 +732,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Revoke": "Révoquer",
 "Roll out to many computers": "Déployer sur de nombreux ordinateurs",
 "Rollout command created.": "Commande de déploiement créée.",
+"SUPPORT CODE": "CODE D’ASSISTANCE",
 "Save note in ticket": "Enregistrer la note dans le ticket",
 "Saving in a ticket requires an MFA-verified Mixel team account": "L’enregistrement dans un ticket nécessite un compte d’équipe Mixel vérifié par MFA",
 "Saving…": "Enregistrement…",
@@ -745,6 +788,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Stay signed in on this computer": "Rester connecté sur cet ordinateur",
 "Stop recording": "Arrêter l’enregistrement",
 "Stop requiring a password": "Ne plus exiger de mot de passe",
+"Support codes require an MFA-verified Mixel team account": "Les codes d’assistance nécessitent un compte d’équipe Mixel vérifié par double authentification",
 "Switch to company devices": "Passer aux appareils de l’entreprise",
 "Switch to personal devices": "Passer aux appareils personnels",
 "THIS COMPUTER": "CET ORDINATEUR",
@@ -753,10 +797,12 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "The always-on access program is older than this app.": "Le programme d’accès permanent est plus ancien que cette app.",
 "The clipboard holds a folder; use the Files tab for folders, many files or more than 32 MB": "Le presse-papiers contient un dossier ; utilisez l’onglet Fichiers pour les dossiers, de nombreux fichiers ou plus de 32 Mo",
 "The clipboard holds no text, picture or files": "Le presse-papiers ne contient ni texte, ni image, ni fichier",
+"The code could not be copied. Select it and copy it yourself.": "Le code n’a pas pu être copié. Sélectionnez-le et copiez-le vous-même.",
 "The command contains the secret token: share it only with the people who deploy the computers. It is shown once.": "La commande contient le jeton secret : ne la partagez qu’avec les personnes qui déploient les ordinateurs. Elle n’est affichée qu’une fois.",
 "The copied files are too large; use the Files tab for folders, many files or more than 32 MB": "Les fichiers copiés sont trop volumineux ; utilisez l’onglet Fichiers pour les dossiers, de nombreux fichiers ou plus de 32 Mo",
 "The note was not saved: check the ticket number": "La note n’a pas été enregistrée : vérifiez le numéro du ticket",
 "The other person can see the display you approved. End the session at any time.": "L’autre personne voit l’écran que vous avez approuvé. Terminez la session à tout moment.",
+"The person installs the app": "La personne installe l’application",
 "The remote clipboard is empty, or holds folders or more than 32 MB": "Le presse-papiers distant est vide ou contient des dossiers ou plus de 32 Mo",
 "The remote computer did not come back within 10 minutes.": "L’ordinateur distant n’est pas revenu dans les 10 minutes.",
 "The remote computer is restarting. Mixel Remote reconnects when it is back…": "L’ordinateur distant redémarre. Mixel Remote se reconnecte dès son retour…",
@@ -765,6 +811,9 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "The selected device record belongs to this computer": "L’appareil choisi correspond à cet ordinateur",
 "The sign-in screen program is older than this app.": "Le programme de l’écran de connexion est plus ancien que cette app.",
 "The sign-in screen program is up to date.": "Le programme de l’écran de connexion est à jour.",
+"The support code could not be checked. Please try again.": "Le code d’assistance n’a pas pu être vérifié. Veuillez réessayer.",
+"The support code could not be created. Please try again.": "Le code d’assistance n’a pas pu être créé. Veuillez réessayer.",
+"Their phone appears here. Choose Connect. They confirm on their phone, and you see their screen.": "Son téléphone apparaît ici. Choisissez « Se connecter ». La personne confirme sur son téléphone et vous voyez son écran.",
 "This account could not verify that device ID. Check that it is enrolled in Mixel Remote and that your company has access.": "Ce compte n’a pas pu vérifier cet ID d’appareil. Vérifiez qu’il est enregistré et que votre entreprise y a accès.",
 "This computer": "Cet ordinateur",
 "This computer is available": "Cet ordinateur est disponible",
@@ -772,6 +821,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "This computer is not registered for the current account": "Cet ordinateur n’est pas enregistré pour le compte actuel",
 "This computer is paired. Its connection ID stays the same.": "Cet ordinateur est appairé. Son ID de connexion reste le même.",
 "This computer no longer keeps your sign-in.": "Cet ordinateur ne garde plus votre connexion.",
+"This support code has expired. Create a new one.": "Ce code d’assistance a expiré. Créez-en un nouveau.",
 "Ticket number": "Numéro du ticket",
 "Transferring…": "Transfert en cours…",
 "Try another device name or clear the search.": "Essayez un autre nom ou effacez la recherche.",
@@ -793,6 +843,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Uses your company’s own AI server. The screenshot and your question stay in your network.": "Utilise le serveur IA de votre entreprise. La capture et votre question restent dans votre réseau.",
 "Using your company devices": "Appareils de l’entreprise actifs",
 "Using your personal devices": "Appareils personnels actifs",
+"Valid for 30 minutes, for one phone.": "Valable 30 minutes, pour un seul téléphone.",
 "Valid for days": "Valable (jours)",
 "Verification code": "Code de vérification",
 "Verify": "Vérifier",
@@ -805,6 +856,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Waiting for administrator approval…": "En attente de l’accord de l’administrateur…",
 "Waiting for confirmation that the connection has closed.": "En attente de la confirmation de fermeture de la connexion.",
 "Waiting for the other person to accept your request.": "En attente de l’acceptation de votre demande.",
+"Waiting for the person to type the code into Mixel Quick Support…": "En attente de la saisie du code dans Mixel Quick Support…",
 "Waiting for the remote host to Accept": "En attente de l’acceptation de l’hôte",
 "Wake": "Réveiller",
 "When nothing is in use, Mixel Remote installs signed updates and restarts. Otherwise the sidebar offers Install.": "Quand rien n’est en cours, Mixel Remote installe les mises à jour signées et redémarre. Sinon, la barre latérale propose « Installer ».",
@@ -830,7 +882,9 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Your next connection starts here": "Votre prochaine connexion commence ici",
 "Your saved sign-in expired. Sign in again.": "Votre connexion enregistrée a expiré. Reconnectez-vous.",
 "Your sign-in is kept in this computer’s protected storage until you sign out.": "Votre connexion est conservée dans le stockage protégé de cet ordinateur jusqu’à votre déconnexion.",
-"e.g. Office PC": "p. ex. PC du bureau"
+"e.g. Office PC": "p. ex. PC du bureau",
+"from the App Store or Google Play and opens it.": "depuis l’App Store ou Google Play et l’ouvre.",
+"iPhone, iPad or Android. The other person needs no account.": "iPhone, iPad ou Android. L’autre personne n’a pas besoin de compte."
 },
 "patterns": [
 [
@@ -936,6 +990,22 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 [
 "^Wake signal sent to (.+)\\. It appears as Online when it has started\\.$",
 "Signal de réveil envoyé à $1. Il apparaît En ligne une fois démarré."
+],
+[
+"^· ([\\d ]+) has registered\\. To connect, choose “Make this computer available” above first\\.$",
+"· $1 s’est enregistré. Pour vous connecter, choisissez d’abord « Rendre cet ordinateur disponible » ci-dessus."
+],
+[
+"^· ([\\d ]+) · connection requested\\. The person confirms on their phone\\.$",
+"· $1 · connexion demandée. La personne confirme sur son téléphone."
+],
+[
+"^· ([\\d ]+) is ready\\. Choose Connect\\.$",
+"· $1 est prêt. Choisissez « Se connecter »."
+],
+[
+"^· ([\\d ]+) has registered\\. Waiting for the person to start sharing on their phone…$",
+"· $1 s’est enregistré. En attente du démarrage du partage sur le téléphone…"
 ]
 ]
 },
@@ -977,6 +1047,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Authenticator": "Autenticatore",
 "Authenticator app": "App di autenticazione",
 "Automatic (this computer’s language)": "Automatica (lingua di questo computer)",
+"COMPANY": "AZIENDA",
 "CONNECTION ID": "ID DI CONNESSIONE",
 "Cancel sign-in": "Annulla l’accesso",
 "Cancel transfer": "Annulla il trasferimento",
@@ -1018,14 +1089,19 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Connection request denied. Check the device’s company access and one-time password, then try again.": "Richiesta di connessione rifiutata. Controlla l’accesso aziendale del dispositivo e la password monouso, poi riprova.",
 "Connection requested. The host must Accept before sharing starts.": "Connessione richiesta. L’host deve accettare prima che inizi la condivisione.",
 "Control a remote device": "Controlla un dispositivo remoto",
+"Copied": "Copiato",
 "Copy ID": "Copia ID",
 "Copy answer": "Copia la risposta",
+"Copy code": "Copia codice",
 "Copy command": "Copia il comando",
 "Create Mixel ID": "Crea Mixel ID",
 "Create a company link, then run the command on each Windows computer, as administrator or with your deployment tool. Each computer enrols itself with always-on access and appears in Devices. No one needs to sign in on it.": "Crea un link aziendale, poi esegui il comando su ogni computer Windows, come amministratore o con il tuo strumento di distribuzione. Ogni computer si registra con l’accesso permanente e compare in Dispositivi. Nessuno deve accedervi.",
+"Create a support code here and tell it to them. They type it into the app.": "Crea qui un codice di assistenza e comunicalo alla persona, che lo inserisce nell’app.",
 "Create device identity": "Crea l’identità del dispositivo",
 "Create personal space": "Crea spazio personale",
 "Create rollout command": "Crea il comando di distribuzione",
+"Create support code": "Crea codice di assistenza",
+"Creating a support code…": "Creazione del codice di assistenza…",
 "Creating…": "Creazione…",
 "Ctrl+Alt+Del needs Sign-in screen access to be turned on": "Ctrl+Alt+Canc richiede l’accesso alla schermata di accesso",
 "Ctrl+Alt+Del needs unattended access for this computer": "Ctrl+Alt+Canc richiede l’accesso permanente per questo computer",
@@ -1070,6 +1146,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Go offline before changing this computer’s enrollment.": "Vai offline prima di modificare la registrazione di questo computer.",
 "Go offline before changing this computer’s registration.": "Vai offline prima di modificare la registrazione di questo computer.",
 "Go offline before switching between company and personal devices": "Vai offline prima di passare tra dispositivi aziendali e personali",
+"Help someone on their phone": "Aiutare qualcuno sul telefono",
 "Incoming request": "Richiesta in arrivo",
 "Incoming request: choose a source and Accept or Reject": "Richiesta in arrivo: scegli uno schermo e accetta o rifiuta",
 "Install updates automatically": "Installa gli aggiornamenti automaticamente",
@@ -1159,6 +1236,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Revoke": "Revoca",
 "Roll out to many computers": "Distribuisci su molti computer",
 "Rollout command created.": "Comando di distribuzione creato.",
+"SUPPORT CODE": "CODICE DI ASSISTENZA",
 "Save note in ticket": "Salva la nota nel ticket",
 "Saving in a ticket requires an MFA-verified Mixel team account": "Il salvataggio nel ticket richiede un account del team Mixel verificato con MFA",
 "Saving…": "Salvataggio…",
@@ -1214,6 +1292,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Stay signed in on this computer": "Resta connesso su questo computer",
 "Stop recording": "Interrompi la registrazione",
 "Stop requiring a password": "Non richiedere più la password",
+"Support codes require an MFA-verified Mixel team account": "I codici di assistenza richiedono un account del team Mixel verificato con autenticazione a due fattori",
 "Switch to company devices": "Passa ai dispositivi aziendali",
 "Switch to personal devices": "Passa ai dispositivi personali",
 "THIS COMPUTER": "QUESTO COMPUTER",
@@ -1222,10 +1301,12 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "The always-on access program is older than this app.": "Il programma di accesso permanente è più vecchio di questa app.",
 "The clipboard holds a folder; use the Files tab for folders, many files or more than 32 MB": "Gli appunti contengono una cartella; usa la scheda File per cartelle, molti file o più di 32 MB",
 "The clipboard holds no text, picture or files": "Gli appunti non contengono testo, immagini o file",
+"The code could not be copied. Select it and copy it yourself.": "Impossibile copiare il codice. Selezionalo e copialo manualmente.",
 "The command contains the secret token: share it only with the people who deploy the computers. It is shown once.": "Il comando contiene il token segreto: condividilo solo con chi distribuisce i computer. Viene mostrato una sola volta.",
 "The copied files are too large; use the Files tab for folders, many files or more than 32 MB": "I file copiati sono troppo grandi; usa la scheda File per cartelle, molti file o più di 32 MB",
 "The note was not saved: check the ticket number": "La nota non è stata salvata: controlla il numero del ticket",
 "The other person can see the display you approved. End the session at any time.": "L’altra persona vede lo schermo che hai approvato. Termina la sessione in qualsiasi momento.",
+"The person installs the app": "La persona installa l’app",
 "The remote clipboard is empty, or holds folders or more than 32 MB": "Gli appunti remoti sono vuoti oppure contengono cartelle o più di 32 MB",
 "The remote computer did not come back within 10 minutes.": "Il computer remoto non è tornato entro 10 minuti.",
 "The remote computer is restarting. Mixel Remote reconnects when it is back…": "Il computer remoto si sta riavviando. Mixel Remote si ricollega appena torna disponibile…",
@@ -1234,6 +1315,9 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "The selected device record belongs to this computer": "Il dispositivo scelto corrisponde a questo computer",
 "The sign-in screen program is older than this app.": "Il programma della schermata di accesso è più vecchio di questa app.",
 "The sign-in screen program is up to date.": "Il programma della schermata di accesso è aggiornato.",
+"The support code could not be checked. Please try again.": "Impossibile verificare il codice di assistenza. Riprova.",
+"The support code could not be created. Please try again.": "Impossibile creare il codice di assistenza. Riprova.",
+"Their phone appears here. Choose Connect. They confirm on their phone, and you see their screen.": "Il telefono compare qui. Scegli «Connetti». La persona conferma sul telefono e tu vedi il suo schermo.",
 "This account could not verify that device ID. Check that it is enrolled in Mixel Remote and that your company has access.": "Questo account non ha potuto verificare l’ID del dispositivo. Controlla che sia registrato e che la tua azienda abbia accesso.",
 "This computer": "Questo computer",
 "This computer is available": "Questo computer è disponibile",
@@ -1241,6 +1325,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "This computer is not registered for the current account": "Questo computer non è registrato per l’account attuale",
 "This computer is paired. Its connection ID stays the same.": "Questo computer è abbinato. Il suo ID di connessione resta lo stesso.",
 "This computer no longer keeps your sign-in.": "Questo computer non conserva più il tuo accesso.",
+"This support code has expired. Create a new one.": "Questo codice di assistenza è scaduto. Creane uno nuovo.",
 "Ticket number": "Numero del ticket",
 "Transferring…": "Trasferimento in corso…",
 "Try another device name or clear the search.": "Prova un altro nome o cancella la ricerca.",
@@ -1262,6 +1347,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Uses your company’s own AI server. The screenshot and your question stay in your network.": "Usa il server IA della tua azienda. Lo screenshot e la domanda restano nella tua rete.",
 "Using your company devices": "Dispositivi aziendali attivi",
 "Using your personal devices": "Dispositivi personali attivi",
+"Valid for 30 minutes, for one phone.": "Valido 30 minuti, per un solo telefono.",
 "Valid for days": "Valido per giorni",
 "Verification code": "Codice di verifica",
 "Verify": "Verifica",
@@ -1274,6 +1360,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Waiting for administrator approval…": "In attesa dell’approvazione dell’amministratore…",
 "Waiting for confirmation that the connection has closed.": "In attesa della conferma di chiusura della connessione.",
 "Waiting for the other person to accept your request.": "In attesa che l’altra persona accetti la richiesta.",
+"Waiting for the person to type the code into Mixel Quick Support…": "In attesa che la persona inserisca il codice in Mixel Quick Support…",
 "Waiting for the remote host to Accept": "In attesa che l’host accetti",
 "Wake": "Riattiva",
 "When nothing is in use, Mixel Remote installs signed updates and restarts. Otherwise the sidebar offers Install.": "Quando nulla è in uso, Mixel Remote installa gli aggiornamenti firmati e si riavvia. Altrimenti la barra laterale propone «Installa».",
@@ -1299,7 +1386,9 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Your next connection starts here": "La tua prossima connessione inizia qui",
 "Your saved sign-in expired. Sign in again.": "Il tuo accesso salvato è scaduto. Accedi di nuovo.",
 "Your sign-in is kept in this computer’s protected storage until you sign out.": "Il tuo accesso resta nella memoria protetta di questo computer finché non esci.",
-"e.g. Office PC": "es. PC dell’ufficio"
+"e.g. Office PC": "es. PC dell’ufficio",
+"from the App Store or Google Play and opens it.": "dall’App Store o da Google Play e la apre.",
+"iPhone, iPad or Android. The other person needs no account.": "iPhone, iPad o Android. L’altra persona non ha bisogno di un account."
 },
 "patterns": [
 [
@@ -1405,6 +1494,22 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 [
 "^Wake signal sent to (.+)\\. It appears as Online when it has started\\.$",
 "Segnale di riattivazione inviato a $1. Risulta Online appena avviato."
+],
+[
+"^· ([\\d ]+) has registered\\. To connect, choose “Make this computer available” above first\\.$",
+"· $1 si è registrato. Per connetterti, scegli prima «Rendi disponibile questo computer» qui sopra."
+],
+[
+"^· ([\\d ]+) · connection requested\\. The person confirms on their phone\\.$",
+"· $1 · connessione richiesta. La persona conferma sul telefono."
+],
+[
+"^· ([\\d ]+) is ready\\. Choose Connect\\.$",
+"· $1 è pronto. Scegli «Connetti»."
+],
+[
+"^· ([\\d ]+) has registered\\. Waiting for the person to start sharing on their phone…$",
+"· $1 si è registrato. In attesa che la persona avvii la condivisione sul telefono…"
 ]
 ]
 }

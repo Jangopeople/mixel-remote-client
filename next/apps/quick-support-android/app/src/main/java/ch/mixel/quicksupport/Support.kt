@@ -74,7 +74,9 @@ object Support : Native.Listener {
             Native.start(core, enrollment, width, height, ControlService.enabled(context))
             null
         } catch (error: RuntimeException) {
-            error.message ?: context.getString(R.string.failed)
+            // The host core reports in English; show the reason in the phone's language.
+            val reason = error.message.orEmpty()
+            context.getString(when { reason.contains("expired") -> R.string.code_invalid; reason.contains("reached") -> R.string.unreachable; else -> R.string.failed })
         }
     }
 

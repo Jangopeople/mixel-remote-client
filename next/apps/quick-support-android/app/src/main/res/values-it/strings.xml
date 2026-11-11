@@ -7,7 +7,7 @@
     <string name="disconnect">Disconnetti</string>
     <string name="end_session">Termina sessione</string>
     <string name="status_connecting">Connessione…</string>
-    <string name="status_ready">Pronto. Comunica questo numero al tecnico:</string>
+    <string name="status_ready">Pronto. Tieni aperta questa app: il tecnico chiederà ora di vedere il tuo schermo.\n\nNumero del dispositivo, se il tecnico lo chiede:</string>
     <string name="status_asking">Un tecnico vuole connettersi.</string>
     <string name="status_negotiating">Avvio della sessione…</string>
     <string name="status_active">Il tecnico vede il tuo schermo.</string>
@@ -20,6 +20,7 @@
     <string name="allow">Consenti</string>
     <string name="decline">Rifiuta</string>
     <string name="code_invalid">Questo codice di assistenza non è valido o è scaduto.</string>
+    <string name="unreachable">Mixel non è raggiungibile. Controlla la connessione a Internet e riprova.</string>
     <string name="failed">Non ha funzionato. Riprova.</string>
     <string name="session_ended">La sessione è terminata.</string>
     <string name="control_title">Consenti al tecnico di usare questo telefono</string>

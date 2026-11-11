@@ -1,6 +1,13 @@
 // Viewer texts: English is the key; German, French and Italian follow the browser language.
 const TEXTS = {
   de: {
+    "The person installs the app “Mixel Quick Support” from the App Store or Google Play and opens it. They need no account.": "Die Person installiert die App «Mixel Quick Support» aus dem App Store oder von Google Play und öffnet sie. Sie braucht kein Konto.",
+    "Create a support code here and tell it to them. They type it into the app.": "Erstellen Sie hier einen Support-Code und nennen Sie ihn der Person. Sie gibt ihn in der App ein.",
+    "Their phone appears here. Choose Connect. They confirm on their phone, and you see their screen.": "Das Smartphone erscheint hier. Wählen Sie «Verbinden». Die Person bestätigt auf ihrem Smartphone, und Sie sehen ihren Bildschirm.",
+    "Waiting for the person to type the code into Mixel Quick Support…": "Warten, bis die Person den Code in Mixel Quick Support eingibt…",
+    "This support code has expired. Create a new one.": "Dieser Support-Code ist abgelaufen. Erstellen Sie einen neuen.",
+    "is ready. Choose Connect.": "ist bereit. Wählen Sie «Verbinden».",
+    "has registered. Waiting for the person to start sharing on their phone…": "hat sich registriert. Warten, bis die Person die Freigabe auf ihrem Smartphone startet…",
     'Help someone on their phone': 'Jemandem am Smartphone helfen',
     'The person opens the Mixel Quick Support app and types a support code. No account is needed. Their phone then appears in your list and asks them to allow you.': 'Die Person öffnet die App Mixel Quick Support und gibt einen Support-Code ein. Ein Konto ist nicht nötig. Das Smartphone erscheint dann in Ihrer Liste und fragt die Person um Erlaubnis.',
     'Create support code': 'Support-Code erstellen',
@@ -80,6 +87,13 @@ const TEXTS = {
     'Type here': 'Hier tippen',
   },
   fr: {
+    "The person installs the app “Mixel Quick Support” from the App Store or Google Play and opens it. They need no account.": "La personne installe l’application « Mixel Quick Support » depuis l’App Store ou Google Play et l’ouvre. Aucun compte n’est nécessaire.",
+    "Create a support code here and tell it to them. They type it into the app.": "Créez ici un code d’assistance et communiquez-le-lui. La personne le saisit dans l’application.",
+    "Their phone appears here. Choose Connect. They confirm on their phone, and you see their screen.": "Son téléphone apparaît ici. Choisissez « Se connecter ». La personne confirme sur son téléphone et vous voyez son écran.",
+    "Waiting for the person to type the code into Mixel Quick Support…": "En attente de la saisie du code dans Mixel Quick Support…",
+    "This support code has expired. Create a new one.": "Ce code d’assistance a expiré. Créez-en un nouveau.",
+    "is ready. Choose Connect.": "est prêt. Choisissez « Se connecter ».",
+    "has registered. Waiting for the person to start sharing on their phone…": "s’est enregistré. En attente du démarrage du partage sur le téléphone…",
     'Help someone on their phone': 'Aider quelqu’un sur son téléphone',
     'The person opens the Mixel Quick Support app and types a support code. No account is needed. Their phone then appears in your list and asks them to allow you.': 'La personne ouvre l’application Mixel Quick Support et saisit un code d’assistance. Aucun compte n’est nécessaire. Son téléphone apparaît alors dans votre liste et lui demande de vous autoriser.',
     'Create support code': 'Créer un code d’assistance',
@@ -158,6 +172,13 @@ const TEXTS = {
     'Type here': 'Saisir ici',
   },
   it: {
+    "The person installs the app “Mixel Quick Support” from the App Store or Google Play and opens it. They need no account.": "La persona installa l’app «Mixel Quick Support» dall’App Store o da Google Play e la apre. Non serve un account.",
+    "Create a support code here and tell it to them. They type it into the app.": "Crea qui un codice di assistenza e comunicalo alla persona, che lo inserisce nell’app.",
+    "Their phone appears here. Choose Connect. They confirm on their phone, and you see their screen.": "Il telefono compare qui. Scegli «Connetti». La persona conferma sul telefono e tu vedi il suo schermo.",
+    "Waiting for the person to type the code into Mixel Quick Support…": "In attesa che la persona inserisca il codice in Mixel Quick Support…",
+    "This support code has expired. Create a new one.": "Questo codice di assistenza è scaduto. Creane uno nuovo.",
+    "is ready. Choose Connect.": "è pronto. Scegli «Connetti».",
+    "has registered. Waiting for the person to start sharing on their phone…": "si è registrato. In attesa che la persona avvii la condivisione sul telefono…",
     'Help someone on their phone': 'Aiuta qualcuno sul suo telefono',
     'The person opens the Mixel Quick Support app and types a support code. No account is needed. Their phone then appears in your list and asks them to allow you.': 'La persona apre l’app Mixel Quick Support e inserisce un codice di assistenza. Non serve un account. Il telefono compare poi nel tuo elenco e chiede alla persona di autorizzarti.',
     'Create support code': 'Crea codice di assistenza',

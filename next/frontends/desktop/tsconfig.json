@@ -18,6 +18,7 @@
     "capture.ts",
     "remote.ts",
     "devices.ts",
+    "phone-support.ts",
     "assistant.ts",
     "printing.ts",
     "enrollment.ts",

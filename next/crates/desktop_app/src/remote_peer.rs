@@ -1070,7 +1070,7 @@ async fn viewer_media(
     };
     let mut assembler = H264Assembler::default();
     let mut decoder =
-        session_platform::H264Decoder::new(1920, 1088).map_err(|error| error.to_string())?;
+        session_platform::H264Decoder::new(1920, 1920).map_err(|error| error.to_string())?;
     let mut previous_rtp: Option<u32> = None;
     let mut timestamp_ticks = 0u64;
     let mut received = 0u64;
@@ -1141,7 +1141,7 @@ async fn viewer_media(
                         window_decodes = compressed;
                         waiting_for_key = true;
                         if !compressed {
-                            decoder = session_platform::H264Decoder::new(1920, 1088)
+                            decoder = session_platform::H264Decoder::new(1920, 1920)
                                 .map_err(|error| error.to_string())?;
                         }
                         control.request_keyframe(channel).await?;

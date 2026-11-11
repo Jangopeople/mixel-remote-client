@@ -361,6 +361,26 @@ S = [
 ("Found automatically, or e.g. http://10.0.0.5:11434","Wird automatisch gefunden, oder z. B. http://10.0.0.5:11434","Trouvé automatiquement, ou p. ex. http://10.0.0.5:11434","Trovato automaticamente, o ad es. http://10.0.0.5:11434"),
 ("Looking at the screen…","Bildschirm wird angesehen…","Analyse de l’écran…","Analisi dello schermo…"),
 ("Writing the note…","Notiz wird geschrieben…","Rédaction de la note…","Scrittura della nota…"),
+# Help someone on their phone (Quick Support for phones)
+("Help someone on their phone","Jemandem am Smartphone helfen","Aider quelqu’un sur son téléphone","Aiutare qualcuno sul telefono"),
+("iPhone, iPad or Android. The other person needs no account.","iPhone, iPad oder Android. Die andere Person braucht kein Konto.","iPhone, iPad ou Android. L’autre personne n’a pas besoin de compte.","iPhone, iPad o Android. L’altra persona non ha bisogno di un account."),
+("The person installs the app","Die Person installiert die App","La personne installe l’application","La persona installa l’app"),
+("from the App Store or Google Play and opens it.","aus dem App Store oder von Google Play und öffnet sie.","depuis l’App Store ou Google Play et l’ouvre.","dall’App Store o da Google Play e la apre."),
+("Create a support code here and tell it to them. They type it into the app.","Erstellen Sie hier einen Support-Code und nennen Sie ihn der Person. Sie gibt ihn in der App ein.","Créez ici un code d’assistance et communiquez-le-lui. La personne le saisit dans l’application.","Crea qui un codice di assistenza e comunicalo alla persona, che lo inserisce nell’app."),
+("Their phone appears here. Choose Connect. They confirm on their phone, and you see their screen.","Das Smartphone erscheint hier. Wählen Sie «Verbinden». Die Person bestätigt auf ihrem Smartphone, und Sie sehen ihren Bildschirm.","Son téléphone apparaît ici. Choisissez « Se connecter ». La personne confirme sur son téléphone et vous voyez son écran.","Il telefono compare qui. Scegli «Connetti». La persona conferma sul telefono e tu vedi il suo schermo."),
+("COMPANY","FIRMA","ENTREPRISE","AZIENDA"),
+("Create support code","Support-Code erstellen","Créer un code d’assistance","Crea codice di assistenza"),
+("SUPPORT CODE","SUPPORT-CODE","CODE D’ASSISTANCE","CODICE DI ASSISTENZA"),
+("Copy code","Code kopieren","Copier le code","Copia codice"),
+("Copied","Kopiert","Copié","Copiato"),
+("Valid for 30 minutes, for one phone.","30 Minuten gültig, für ein Smartphone.","Valable 30 minutes, pour un seul téléphone.","Valido 30 minuti, per un solo telefono."),
+("Creating a support code…","Support-Code wird erstellt…","Création du code d’assistance…","Creazione del codice di assistenza…"),
+("This support code has expired. Create a new one.","Dieser Support-Code ist abgelaufen. Erstellen Sie einen neuen.","Ce code d’assistance a expiré. Créez-en un nouveau.","Questo codice di assistenza è scaduto. Creane uno nuovo."),
+("Waiting for the person to type the code into Mixel Quick Support…","Warten, bis die Person den Code in Mixel Quick Support eingibt…","En attente de la saisie du code dans Mixel Quick Support…","In attesa che la persona inserisca il codice in Mixel Quick Support…"),
+("The code could not be copied. Select it and copy it yourself.","Der Code konnte nicht kopiert werden. Markieren und kopieren Sie ihn selbst.","Le code n’a pas pu être copié. Sélectionnez-le et copiez-le vous-même.","Impossibile copiare il codice. Selezionalo e copialo manualmente."),
+("Support codes require an MFA-verified Mixel team account","Support-Codes erfordern ein Mixel-Teamkonto mit Zwei-Faktor-Bestätigung","Les codes d’assistance nécessitent un compte d’équipe Mixel vérifié par double authentification","I codici di assistenza richiedono un account del team Mixel verificato con autenticazione a due fattori"),
+("The support code could not be created. Please try again.","Der Support-Code konnte nicht erstellt werden. Bitte versuchen Sie es erneut.","Le code d’assistance n’a pas pu être créé. Veuillez réessayer.","Impossibile creare il codice di assistenza. Riprova."),
+("The support code could not be checked. Please try again.","Der Support-Code konnte nicht geprüft werden. Bitte versuchen Sie es erneut.","Le code d’assistance n’a pas pu être vérifié. Veuillez réessayer.","Impossibile verificare il codice di assistenza. Riprova."),
 ]
 P = [
 # (regex, de, fr, it)
@@ -390,4 +410,8 @@ P = [
 (r"^(.+) · (\d+)/(\d+) computers · valid until (.+)$", r"\1 · \2/\3 Computer · gültig bis \4", r"\1 · \2/\3 ordinateurs · valable jusqu’au \4", r"\1 · \2/\3 computer · valido fino al \4"),
 (r"^Waking (.+)…$", r"\1 wird aufgeweckt…", r"Réveil de \1…", r"Riattivazione di \1…"),
 (r"^Wake signal sent to (.+)\. It appears as Online when it has started\.$", r"Wecksignal an \1 gesendet. Der Computer erscheint als Online, sobald er gestartet ist.", r"Signal de réveil envoyé à \1. Il apparaît En ligne une fois démarré.", r"Segnale di riattivazione inviato a \1. Risulta Online appena avviato."),
+(r"^· ([\d ]+) has registered\. To connect, choose “Make this computer available” above first\.$", r"· \1 hat sich registriert. Wählen Sie zum Verbinden zuerst oben «Diesen Computer verfügbar machen».", r"· \1 s’est enregistré. Pour vous connecter, choisissez d’abord « Rendre cet ordinateur disponible » ci-dessus.", r"· \1 si è registrato. Per connetterti, scegli prima «Rendi disponibile questo computer» qui sopra."),
+(r"^· ([\d ]+) · connection requested\. The person confirms on their phone\.$", r"· \1 · Verbindung angefragt. Die Person bestätigt auf ihrem Smartphone.", r"· \1 · connexion demandée. La personne confirme sur son téléphone.", r"· \1 · connessione richiesta. La persona conferma sul telefono."),
+(r"^· ([\d ]+) is ready\. Choose Connect\.$", r"· \1 ist bereit. Wählen Sie «Verbinden».", r"· \1 est prêt. Choisissez « Se connecter ».", r"· \1 è pronto. Scegli «Connetti»."),
+(r"^· ([\d ]+) has registered\. Waiting for the person to start sharing on their phone…$", r"· \1 hat sich registriert. Warten, bis die Person die Freigabe auf ihrem Smartphone startet…", r"· \1 s’est enregistré. En attente du démarrage du partage sur le téléphone…", r"· \1 si è registrato. In attesa che la persona avvii la condivisione sul telefono…"),
 ]

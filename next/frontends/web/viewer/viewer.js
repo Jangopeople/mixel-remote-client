@@ -154,6 +154,17 @@ async function ticket() {
 let socket = null, online = false, lastRenew = 0, pendingRequest = null, active = null, wanted = false;
 const waiters = [];
 function send(message) { if (socket && socket.readyState === 1) socket.send(JSON.stringify(message)); }
+// One presence question at a time, so every asker gets the answer to its own question.
+let presenceQueue = Promise.resolve();
+function presence(hosts) {
+  const answer = presenceQueue.then(async () => {
+    if (!online || !hosts.length) return [];
+    send({ type: 'presence', hosts });
+    return (await nextMessage(['presence'], 10).catch(() => ({ online: [] }))).online;
+  });
+  presenceQueue = answer.catch(() => {});
+  return answer;
+}
 function nextMessage(types, seconds) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => { waiters.splice(waiters.indexOf(entry), 1); reject(new Problem(t('The connection service did not answer.'))); }, seconds * 1000);
@@ -540,7 +551,7 @@ async function renderHome() {
   try {
     const devices = (await directory($('search').value.trim())).filter(entry => entry.id !== enrollment.connection_id);
     let reachable = [];
-    if (online && devices.length) { send({ type: 'presence', hosts: devices.slice(0, 64).map(entry => entry.id) }); reachable = (await nextMessage(['presence'], 10).catch(() => ({ online: [] }))).online; }
+    if (online && devices.length) reachable = await presence(devices.slice(0, 64).map(entry => entry.id));
     const list = $('devices'); list.replaceChildren();
     for (const entry of devices.slice(0, 50)) {
       const item = document.createElement('button');
@@ -574,9 +585,39 @@ async function createSupportCode() {
     if (typeof code !== 'string' || !/^[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(code)) throw new Problem(t('The support code could not be created. Please try again.'));
     $('support-code').textContent = code; $('support-result').hidden = false;
     status('');
-    // The phone appears in the list as soon as it has registered: look again for a while.
-    for (let round = 0; round < 12; round++) setTimeout(() => { if (!active) renderHome(); }, (round + 1) * 10000);
+    watchSupportPhone(code);
   } finally { button.disabled = false; }
+}
+// After a code was created: show the phone as soon as it has registered, and offer Connect once it is online.
+let supportWatch = 0;
+function watchSupportPhone(code) {
+  const watch = ++supportWatch, created = Date.now();
+  let phone = null, busy = false;
+  const state = $('support-phone-state'), button = $('support-connect');
+  const id = () => String(phone.connection_id).replace(/(\d{3})(?=\d)/g, '$1 ');
+  button.hidden = true; button.disabled = true;
+  state.textContent = t('Waiting for the person to type the code into Mixel Quick Support…');
+  button.onclick = () => { if (phone) { button.disabled = true; unlockSound(); run(() => request(phone.connection_id, '', false)); } };
+  const round = async () => {
+    if (watch !== supportWatch) return;
+    if (!busy && !active && !document.hidden) {
+      busy = true;
+      try {
+        if (!phone) {
+          if (Date.now() - created > 30 * 60 * 1000) { state.textContent = t('This support code has expired. Create a new one.'); return; }
+          const found = await api('/rest/v1/rpc/remote_support_code_device', { body: { code } }).catch(() => []);
+          if (watch === supportWatch && Array.isArray(found) && found[0] && Number.isInteger(found[0].connection_id)) { phone = found[0]; button.hidden = false; renderHome(); }
+        }
+        if (phone && watch === supportWatch) {
+          const reachable = (await presence([phone.connection_id])).includes(phone.connection_id);
+          button.disabled = !reachable;
+          state.textContent = `${phone.name} · ${id()} ${reachable ? t('is ready. Choose Connect.') : t('has registered. Waiting for the person to start sharing on their phone…')}`;
+        }
+      } finally { busy = false; }
+    }
+    setTimeout(round, 4000);
+  };
+  round();
 }
 // Meetings: any signed-in account can start one; guests join with the invitation link alone.
 async function startMeeting() {

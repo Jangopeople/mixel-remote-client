@@ -479,7 +479,7 @@
                   try {
                     if (generation !== videoGeneration) return;
                     const width = frame.displayWidth, height = frame.displayHeight;
-                    if (width < 2 || height < 2 || width > 1920 || height > 1088) return;
+                    if (width < 2 || height < 2 || Math.max(width, height) > 1920 || Math.min(width, height) > 1088) return;
                     if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
                     drawing.drawImage(frame as unknown as CanvasImageSource, 0, 0);
                     shown(width, height);
@@ -506,7 +506,7 @@
           const header = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
           const width = header.getUint32(4, true), height = header.getUint32(8, true), stride = header.getUint32(12, true);
           const next = Number(header.getBigUint64(16, true)), timestamp = Number(header.getBigUint64(24, true));
-          if (width < 2 || height < 2 || width > 1920 || height > 1088 || stride < width * 4 || bytes.length !== 32 + stride * height || bytes.length > 16_777_248 || !Number.isSafeInteger(next) || next <= sequence || !Number.isSafeInteger(timestamp) || timestamp <= lastTimestamp) throw Error('Invalid native video dimensions or sequence');
+          if (width < 2 || height < 2 || Math.max(width, height) > 1920 || Math.min(width, height) > 1088 || stride < width * 4 || bytes.length !== 32 + stride * height || bytes.length > 16_777_248 || !Number.isSafeInteger(next) || next <= sequence || !Number.isSafeInteger(timestamp) || timestamp <= lastTimestamp) throw Error('Invalid native video dimensions or sequence');
           if (packed) {
             // Already RGBA rows: draw straight from the received bytes.
             if (stride !== width * 4) throw Error('Invalid native video dimensions or sequence');

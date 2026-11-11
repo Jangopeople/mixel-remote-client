@@ -7,7 +7,7 @@
     <string name="disconnect">Trennen</string>
     <string name="end_session">Sitzung beenden</string>
     <string name="status_connecting">Verbindung wird hergestellt…</string>
-    <string name="status_ready">Bereit. Nennen Sie dem Techniker diese Nummer:</string>
+    <string name="status_ready">Bereit. Lassen Sie diese App geöffnet: Der Techniker fragt jetzt an, Ihren Bildschirm zu sehen.\n\nGerätenummer, falls der Techniker danach fragt:</string>
     <string name="status_asking">Ein Techniker möchte sich verbinden.</string>
     <string name="status_negotiating">Sitzung wird gestartet…</string>
     <string name="status_active">Der Techniker sieht Ihren Bildschirm.</string>
@@ -20,6 +20,7 @@
     <string name="allow">Zulassen</string>
     <string name="decline">Ablehnen</string>
     <string name="code_invalid">Dieser Support-Code ist ungültig oder abgelaufen.</string>
+    <string name="unreachable">Mixel ist nicht erreichbar. Prüfen Sie die Internetverbindung und versuchen Sie es erneut.</string>
     <string name="failed">Das hat nicht funktioniert. Bitte versuchen Sie es erneut.</string>
     <string name="session_ended">Die Sitzung wurde beendet.</string>
     <string name="control_title">Techniker darf dieses Smartphone bedienen</string>
