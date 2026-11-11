@@ -6,7 +6,8 @@ const path=require('node:path');
 const script=fs.readFileSync(path.join(__dirname,'../dist/remote.js'),'utf8');
 const settle=async()=>{for(let i=0;i<16;i++)await Promise.resolve();};
 const signedIn={phase:'authenticated',account:{profile:'fixture-profile',organization:'fixture-org',staff:false}};
-function harness({deferAccount=false,authenticated=false,deferInput=false,stopFails=false,supportAvailable=true,controllerOnly=false}={}){
+function harness({deferAccount=false,authenticated=false,deferInput=false,stopFails=false,supportAvailable=true,controllerOnly=false,claim=null}={}){
+  const requests=[];
   const captureRequests=[];
   const meetings=[];const documentListeners={},intervals=[],pendingVideo=[],input=[],pendingInput=[],pendingClipboard=[],stops=[],closed=[],support=[],recordingCommands=[];let draws=0,accountReply;
   let state={controller_only:controllerOnly,phase:'offline',message:'Ready',host:123456789,session:null,consent:null,peer:null,requester:null,received:0,sharing:false,control:false,clipboard:false,files:false,input_access:false};
@@ -21,6 +22,8 @@ function harness({deferAccount=false,authenticated=false,deferInput=false,stopFa
   function dispatch(type,detail){for(const callback of documentListeners[type]??[])callback({type,detail});}
   function invoke(command,args){
     if(command==='account_status')return deferAccount?new Promise((resolve,reject)=>{accountReply={resolve,reject};}):Promise.resolve(authenticated?signedIn:{phase:'signed_out',account:null});
+    if(command==='quick_phone_claim')return claim instanceof Error?Promise.reject(claim):Promise.resolve(!!claim);
+    if(command==='remote_request'){requests.push(args);return Promise.resolve();}
     if(command==='connect_support_id'){support.push(args);return Promise.resolve();}
     if(command==='remote_status')return supportAvailable?Promise.resolve({...state}):Promise.reject(Error('Command unavailable'));
     if(command==='capture_targets'){captureRequests.push(command);return Promise.resolve([]);}
@@ -34,7 +37,7 @@ function harness({deferAccount=false,authenticated=false,deferInput=false,stopFa
     throw Error(`Unexpected native command ${command}`);
   }
   vm.runInNewContext(script,{window:{addEventListener(){},__TAURI__:{core:{invoke}},setInterval(callback){intervals.push(callback);},setTimeout(){}},document:{body,getElementById:id=>elements[id],createElement:node,addEventListener(name,callback){(documentListeners[name]??=[]).push(callback);},dispatchEvent(event){dispatch(event.type,event.detail);}},CustomEvent:class{constructor(type,options){this.type=type;this.detail=options.detail;}},ArrayBuffer,Uint8Array,Uint8ClampedArray,DataView,ImageData:class{},performance:{now:()=>100},requestAnimationFrame(){},setTimeout(){}});
-  return {meetings,body,elements,captureRequests,pendingVideo,input,pendingInput,pendingClipboard,stops,closed,support,recordingCommands,emit:dispatch,get draws(){return draws;},get accountReply(){return accountReply;},account(value){dispatch('mixel-account-state',value);},async tick(){intervals[0]();await settle();},ready(message='Ready'){state={...state,phase:'ready',message};},active(extra={}){state={...state,phase:'active',session:'fixture-room',consent:'fixture-consent',control:true,...extra};}};
+  return {requests,meetings,body,elements,captureRequests,pendingVideo,input,pendingInput,pendingClipboard,stops,closed,support,recordingCommands,emit:dispatch,get draws(){return draws;},get accountReply(){return accountReply;},account(value){dispatch('mixel-account-state',value);},async tick(){intervals[0]();await settle();},ready(message='Ready'){state={...state,phase:'ready',message};},active(extra={}){state={...state,phase:'active',session:'fixture-room',consent:'fixture-consent',control:true,...extra};}};
 }
 function frame(){const bytes=new Uint8Array(48);bytes.set([77,82,70,49]);const view=new DataView(bytes.buffer);view.setUint32(4,2,true);view.setUint32(8,2,true);view.setUint32(12,8,true);view.setBigUint64(16,1n,true);view.setBigUint64(24,33333n,true);return bytes.buffer;}
 test('registration and connect require authenticated account and stale initial failures cannot undo newer sign-in',async()=>{
@@ -241,4 +244,25 @@ test('the person is asked before the technician\'s screen opens, and only that r
   h.elements['meeting-offer-dismiss'].listeners.click();await settle();
   assert.equal(h.elements['meeting-offer'].hidden,true,'"Not now" puts it away');
   assert.equal(h.meetings.length,1);
+});
+test('a phone ID that cannot be prepared shows why and sends no request',async()=>{
+  const h=harness({authenticated:true,claim:Error('duplicate key value violates unique constraint')});await settle();
+  h.ready();await h.tick();
+  h.emit('mixel-connect-to',{id:648493658});await settle();await settle();
+  assert.match(h.elements['remote-error'].textContent,/could not be prepared for the session: .*duplicate key/);
+  assert.equal(h.requests.length,0);
+});
+test('a phone lookup refused for missing second confirmation step asks to sign in again',async()=>{
+  const h=harness({authenticated:true,claim:Error('MFA-authenticated staff required')});await settle();
+  h.ready();await h.tick();
+  h.emit('mixel-connect-to',{id:648493658});await settle();await settle();
+  assert.match(h.elements['remote-error'].textContent,/second confirmation step/);
+  assert.equal(h.requests.length,0);
+});
+test('an ID that is not a phone goes on to the ordinary request',async()=>{
+  const h=harness({authenticated:true,claim:false});await settle();
+  h.ready();await h.tick();
+  h.emit('mixel-connect-to',{id:440207203});await settle();await settle();
+  assert.equal(h.requests.length,1);
+  assert.equal(h.requests[0].host,440207203);
 });

@@ -730,7 +730,14 @@
       if (!await wait(next => next.phase === 'ready', 20)) { fail('This computer could not go online. Check the internet connection and try again.'); return; }
     }
     let phone = false;
-    try { phone = await invoke<boolean>('quick_phone_claim', {host: id}); } catch { /* the ordinary request decides */ }
+    say('Looking up this ID…');
+    try { phone = await invoke<boolean>('quick_phone_claim', {host: id}); }
+    catch (value) {
+      // A failed phone lookup must not end in a silent failed request: say what went wrong.
+      const text = String(value);
+      fail(/MFA|staff|42501/i.test(text) ? 'Connecting to phones needs your Mixel team account with the second confirmation step. Sign in again under Account, then choose Connect.' : `This phone could not be prepared for the session: ${text}`);
+      return;
+    }
     if (phone) {
       say('Phone found. Waiting for it to come online… On an iPhone the person taps “Start sharing my screen”.');
       const online = await wait(next => (next.online ?? []).includes(id), 120, () => { void invoke('remote_presence', {hosts: [id]}).catch(() => {}); });

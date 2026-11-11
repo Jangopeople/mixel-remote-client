@@ -238,7 +238,7 @@ async function request(id, code, unattended) {
   await connectService();
   // A phone with Mixel Quick Support: claim its ID for this team member, then wait until it is online.
   if (who && who.staff && !unattended) {
-    const phone = await api('/rest/v1/rpc/remote_quick_phone_claim', { body: { connection: id } }).catch(() => false);
+    const phone = await api('/rest/v1/rpc/remote_quick_phone_claim', { body: { connection: id } }).catch(error => { throw new Problem(t('This phone could not be prepared for the session. Sign in again and try once more.') + (error && error.message ? ` (${error.message})` : '')); });
     if (phone === true) {
       status(t('Phone found. Waiting for it to come online… On an iPhone the person taps “Start sharing my screen”.'));
       let reachable = false;
