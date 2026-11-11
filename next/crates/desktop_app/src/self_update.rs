@@ -199,21 +199,24 @@ fn install(installer: &Path, _version: &str) -> Result<(), String> {
         return Err("The update is not signed by Mixel".into());
     }
     let exe = std::env::current_exe().map_err(|_| "Cannot locate Mixel Remote")?;
-    // Detached: wait until this app has closed, install silently, start the new version.
-    std::process::Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-WindowStyle",
-            "Hidden",
-            "-Command",
-            "Start-Sleep 2; $p=Start-Process -FilePath $env:MIXEL_UPDATE_FILE -ArgumentList '/S' -Wait -PassThru; if($p.ExitCode -eq 0){ Start-Process -FilePath $env:MIXEL_UPDATE_APP }",
-        ])
-        .env("MIXEL_UPDATE_FILE", installer)
-        .env("MIXEL_UPDATE_APP", exe)
-        .env_remove("MIXEL_UPDATE_CHANNEL")
-        .creation_flags(0x0800_0000 | 0x0000_0008)
-        .spawn()
+    // Hidden helper: wait until this app has closed, install silently, start the new version.
+    let script = "Start-Sleep 2; Add-Content -LiteralPath $env:MIXEL_UPDATE_LOG \"installer started\"; \
+        $p=Start-Process -FilePath $env:MIXEL_UPDATE_FILE -ArgumentList '/S' -Wait -PassThru; \
+        Add-Content -LiteralPath $env:MIXEL_UPDATE_LOG \"installer exit $($p.ExitCode)\"; \
+        if($p.ExitCode -eq 0){ Start-Process -FilePath $env:MIXEL_UPDATE_APP }";
+    let spawn = |flags: u32| {
+        std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script])
+            .env("MIXEL_UPDATE_FILE", installer)
+            .env("MIXEL_UPDATE_APP", &exe)
+            .env("MIXEL_UPDATE_LOG", log_path())
+            .env_remove("MIXEL_UPDATE_CHANNEL")
+            .creation_flags(flags)
+            .spawn()
+    };
+    // CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP, and leave a job (e.g. a scheduled task) if allowed.
+    spawn(0x0800_0000 | 0x0000_0200 | 0x0100_0000)
+        .or_else(|_| spawn(0x0800_0000 | 0x0000_0200))
         .map_err(|_| "Cannot start the update installer")?;
     Ok(())
 }
@@ -327,8 +330,11 @@ pub async fn download_and_install(manifest: Manifest) -> Result<(), String> {
 }
 
 /// Short update history for support: <temp>/mixel-remote-updates/update.log.
+fn log_path() -> PathBuf {
+    std::env::temp_dir().join("mixel-remote-updates").join("update.log")
+}
 fn log(message: &str) {
-    let path = std::env::temp_dir().join("mixel-remote-updates").join("update.log");
+    let path = log_path();
     let _ = std::fs::create_dir_all(path.parent().unwrap_or(Path::new(".")));
     if std::fs::metadata(&path).is_ok_and(|meta| meta.len() > 64 * 1024) {
         let _ = std::fs::remove_file(&path);
