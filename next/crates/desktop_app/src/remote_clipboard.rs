@@ -2,11 +2,12 @@
 //! status; clipboard bytes remain in native memory and encrypted data records.
 use crate::{remote_peer::Config, remote_session::ClipboardCommand};
 use core_protocol::{
-    clipboard::{self, Message, Receiver},
+    clipboard::{self, Content, Message, Receiver},
     crypto::ControlChannel,
     transport::NativeDataChannel,
 };
-use crate::session_platform::{read_text, write_text};
+use crate::session_platform::{read_content, read_text, write_content};
+use sha2::Digest;
 use std::{
     sync::Arc,
     time::{Duration, Instant},
@@ -20,6 +21,11 @@ pub struct ClipboardPipe {
     next: u64,
     last_remote: u64,
     receiver: Option<Receiver>,
+    /// Both apps announced `clip2`: pictures and small files may be transferred too.
+    pub rich: bool,
+    /// Controller: a print job the host is sending, and the complete ones not yet shown.
+    print_in: Option<Receiver>,
+    pub printed: Vec<Vec<u8>>,
 }
 impl ClipboardPipe {
     pub fn new(commands: mpsc::Receiver<ClipboardCommand>, allowed: bool) -> Self {
@@ -29,6 +35,9 @@ impl ClipboardPipe {
             next: 1,
             last_remote: 0,
             receiver: None,
+            rich: false,
+            print_in: None,
+            printed: Vec::new(),
         }
     }
     pub fn check_deadline(&mut self) -> Result<(), String> {
@@ -65,10 +74,24 @@ impl ClipboardPipe {
                     Err(_) => send(crypto, channel, Message::Unavailable(id)).await,
                 }
             }
+            Message::GetRich(id) if self.rich => {
+                self.start_request(id)?;
+                match read_content(true).and_then(|content| {
+                    content.encode().map_err(|error| error.to_string())
+                }) {
+                    Ok(payload) => send_payload(config, crypto, channel, id, &payload).await,
+                    Err(_) => send(crypto, channel, Message::Unavailable(id)).await,
+                }
+            }
             Message::Begin { id, .. } => {
                 self.start_request(id)?;
                 self.receiver = Some(
-                    Receiver::begin(&message, Instant::now()).map_err(|error| error.to_string())?,
+                    if self.rich {
+                        Receiver::begin_rich(&message, Instant::now())
+                    } else {
+                        Receiver::begin(&message, Instant::now())
+                    }
+                    .map_err(|error| error.to_string())?,
                 );
                 Ok(())
             }
@@ -79,16 +102,17 @@ impl ClipboardPipe {
                 .push(&message, Instant::now())
                 .map_err(|error| error.to_string()),
             Message::Commit(id) => {
-                let text = self
-                    .receiver
-                    .take()
-                    .ok_or("No clipboard transfer is pending")?
-                    .commit(id, Instant::now())
-                    .map_err(|error| error.to_string())?;
+                let receiver = self.receiver.take().ok_or("No clipboard transfer is pending")?;
+                let content = if self.rich {
+                    receiver.commit_content(id, Instant::now())
+                } else {
+                    receiver.commit(id, Instant::now()).map(Content::Text)
+                }
+                .map_err(|error| error.to_string())?;
                 if config.stopped() {
                     return Err("The session stopped before clipboard replacement".into());
                 }
-                let reply = if write_text(&text).is_ok() {
+                let reply = if write_content(content).is_ok() {
                     Message::Ack(id)
                 } else {
                     Message::Unavailable(id)
@@ -97,6 +121,40 @@ impl ClipboardPipe {
             }
             _ => Err("Unexpected remote clipboard message".into()),
         }
+    }
+    /// Controller: one record of a print job the host sends on its own.
+    pub fn accept_print(&mut self, bytes: &[u8]) -> Result<(), String> {
+        let message = Message::decode(bytes).map_err(|error| error.to_string())?;
+        match message {
+            Message::Begin { .. } => {
+                self.print_in = Some(
+                    Receiver::begin_rich(&message, Instant::now()).map_err(|error| error.to_string())?,
+                );
+            }
+            Message::Chunk { .. } => self
+                .print_in
+                .as_mut()
+                .ok_or("Unexpected print job data")?
+                .push(&message, Instant::now())
+                .map_err(|error| error.to_string())?,
+            Message::Commit(id) => {
+                let content = self
+                    .print_in
+                    .take()
+                    .ok_or("No print job is pending")?
+                    .commit_content(id, Instant::now())
+                    .map_err(|error| error.to_string())?;
+                let Content::Files(mut files) = content else {
+                    return Err("Invalid print job".into());
+                };
+                if files.len() != 1 || self.printed.len() >= 8 {
+                    return Err("Invalid print job".into());
+                }
+                self.printed.push(files.remove(0).1);
+            }
+            _ => return Err("Invalid print job message".into()),
+        }
+        Ok(())
     }
     fn start_request(&mut self, id: u64) -> Result<(), String> {
         if self.receiver.is_some() || id <= self.last_remote {
@@ -124,14 +182,19 @@ impl ClipboardPipe {
         if push {
             // Read only in direct response to the local Send clipboard action.
             // A local format/permission error must not tear down the session.
-            let text = match read_text() {
-                Ok(text) => text,
+            let payload = match read_content(self.rich)
+                .and_then(|content| content.encode().map_err(|_| "The clipboard content cannot be transferred".to_owned()))
+            {
+                Ok(payload) => payload,
                 Err(error) => return Ok(Err(error)),
             };
-            send_text(config, crypto, channel, id, &text).await?;
+            send_payload(config, crypto, channel, id, &payload).await?;
+        } else if self.rich {
+            send(crypto, channel, Message::GetRich(id)).await?;
         } else {
             send(crypto, channel, Message::Get(id)).await?;
         }
+        let rich = self.rich;
         let mut receiver: Option<Receiver> = None;
         loop {
             if config.stopped() {
@@ -143,19 +206,29 @@ impl ClipboardPipe {
                 *last_video_idle = Instant::now();
                 continue;
             }
+            if let Some(rest) = plain.strip_prefix(crate::host_print::RECORD) {
+                self.accept_print(rest)?;
+                continue;
+            }
             let message = Message::decode(&plain).map_err(|error| error.to_string())?;
             match message {
                 Message::Ack(reply) if push && reply == id => return Ok(Ok(())),
                 Message::Unavailable(reply) if reply == id => {
-                    return Ok(Err(
+                    return Ok(Err(if rich {
+                        "The remote clipboard is empty, or holds folders or more than 32 MB"
+                    } else {
                         "The remote clipboard is unavailable or exceeds the plain-text limit"
-                            .into(),
-                    ));
+                    }
+                    .into()));
                 }
                 Message::Begin { id: reply, .. } if !push && reply == id && receiver.is_none() => {
                     receiver = Some(
-                        Receiver::begin(&message, Instant::now())
-                            .map_err(|error| error.to_string())?,
+                        if rich {
+                            Receiver::begin_rich(&message, Instant::now())
+                        } else {
+                            Receiver::begin(&message, Instant::now())
+                        }
+                        .map_err(|error| error.to_string())?,
                     )
                 }
                 Message::Chunk { .. } if !push => receiver
@@ -164,15 +237,17 @@ impl ClipboardPipe {
                     .push(&message, Instant::now())
                     .map_err(|error| error.to_string())?,
                 Message::Commit(reply) if !push && reply == id => {
-                    let text = receiver
-                        .take()
-                        .ok_or("Clipboard response has no transaction")?
-                        .commit(id, Instant::now())
-                        .map_err(|error| error.to_string())?;
+                    let receiver = receiver.take().ok_or("Clipboard response has no transaction")?;
+                    let content = if rich {
+                        receiver.commit_content(id, Instant::now())
+                    } else {
+                        receiver.commit(id, Instant::now()).map(Content::Text)
+                    }
+                    .map_err(|error| error.to_string())?;
                     if config.stopped() {
                         return Err("The session stopped before clipboard replacement".into());
                     }
-                    return Ok(write_text(&text));
+                    return Ok(write_content(content));
                 }
                 _ => return Err("Invalid clipboard response".into()),
             }
@@ -201,22 +276,36 @@ async fn send_text(
     id: u64,
     text: &str,
 ) -> Result<(), String> {
+    clipboard::validate(text).map_err(|error| error.to_string())?;
+    send_payload(config, crypto, channel, id, text.as_bytes()).await
+}
+async fn send_payload(
+    config: &Config,
+    crypto: &mut ControlChannel,
+    channel: &Arc<dyn NativeDataChannel>,
+    id: u64,
+    payload: &[u8],
+) -> Result<(), String> {
     if config.stopped() {
         return Err("Clipboard authorization expired before transmission".into());
     }
-    clipboard::validate(text).map_err(|error| error.to_string())?;
-    let deadline = Instant::now() + clipboard::LIFETIME;
+    let lifetime = if payload.len() > clipboard::MAX_TEXT || payload.first() == Some(&0) {
+        clipboard::RICH_LIFETIME
+    } else {
+        clipboard::LIFETIME
+    };
+    let deadline = Instant::now() + lifetime;
     send(
         crypto,
         channel,
         Message::Begin {
             id,
-            length: text.len() as u32,
-            digest: clipboard::digest(text),
+            length: payload.len() as u32,
+            digest: sha2::Sha256::digest(payload).into(),
         },
     )
     .await?;
-    for (index, bytes) in text.as_bytes().chunks(clipboard::CHUNK).enumerate() {
+    for (index, bytes) in payload.chunks(clipboard::CHUNK).enumerate() {
         if config.stopped() || Instant::now() >= deadline {
             return Err("The clipboard transfer stopped or expired".into());
         }

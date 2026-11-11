@@ -67,6 +67,10 @@ pub struct Status {
     pub displays: u16,
     /// Controller: the host display currently shown.
     pub display: u16,
+    /// Controller: the last display is "all monitors as one picture".
+    pub display_all: bool,
+    /// Controller: print jobs received from the host in this session (PDF file paths).
+    pub print_jobs: Vec<String>,
     /// Controller: one-click actions the host offered ("sas", "restart").
     pub host_actions: Vec<String>,
     /// Controller: Remote ID of the host's sign-in screen access, to reconnect after a restart.
@@ -113,6 +117,8 @@ impl Default for Status {
             online: Vec::new(),
             displays: 0,
             display: 0,
+            display_all: false,
+            print_jobs: Vec::new(),
             host_actions: Vec::new(),
             signin_id: None,
             host_macs: Vec::new(),
@@ -1204,7 +1210,16 @@ impl RemoteSession {
             inner.clipboard = clipboard_tx;
         }
     }
-    pub(crate) async fn set_displays(&self, generation: u64, session: Uuid, count: u16, current: u16) {
+    pub(crate) async fn add_print_job(&self, generation: u64, session: Uuid, path: String) {
+        let mut inner = self.0.lock().await;
+        if inner.generation == generation
+            && inner.status.session == Some(session)
+            && !inner.cancel.load(Ordering::Acquire)
+        {
+            inner.status.print_jobs.push(path);
+        }
+    }
+    pub(crate) async fn set_displays(&self, generation: u64, session: Uuid, count: u16, current: u16, all: bool) {
         let mut inner = self.0.lock().await;
         if inner.generation == generation
             && inner.status.session == Some(session)
@@ -1212,6 +1227,7 @@ impl RemoteSession {
         {
             inner.status.displays = count;
             inner.status.display = current;
+            inner.status.display_all = all;
         }
     }
     pub(crate) async fn set_host_actions(&self, generation: u64, session: Uuid, actions: Vec<String>, signin_id: Option<u32>, macs: Vec<String>) {
@@ -1269,12 +1285,12 @@ impl RemoteSession {
                 .ok_or("Clipboard transport is closed")?
                 .try_send(ClipboardCommand {
                     push,
-                    deadline: std::time::Instant::now() + Duration::from_secs(20),
+                    deadline: std::time::Instant::now() + Duration::from_secs(125),
                     reply,
                 })
                 .map_err(|_| "A clipboard transfer is already pending")?;
         }
-        tokio::time::timeout(Duration::from_secs(22), wait)
+        tokio::time::timeout(Duration::from_secs(127), wait)
             .await
             .map_err(|_| "Clipboard transfer acknowledgment timed out")?
             .map_err(|_| "The clipboard transport closed")?

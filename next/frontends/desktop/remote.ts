@@ -5,7 +5,7 @@
     if (!value) throw Error(`Missing remote-support control ${id}`);
     return value as T;
   }
-  type Status = {controller_only?:boolean; platform?: 'macos'|'windows'|'linux'; phase: string; message: string; host: number | null; session: string | null; consent: string | null; peer: number | null; requester: string | null; received: number; sharing: boolean; control: boolean; clipboard: boolean; files: boolean; input_access: boolean; code_required: boolean; support_code: string | null; online?: number[]; pairing: {request_id:string; provider_name:string; customer_name:string} | null; pairing_message: string | null; unattended_enabled: boolean; unattended_pending: 'enabling' | 'disabling_after_enable' | 'disabling' | null; unattended_session: boolean; displays?: number; display?: number; host_actions?: string[]; signin_id?: number | null; host_macs?: string[]};
+  type Status = {controller_only?:boolean; platform?: 'macos'|'windows'|'linux'; phase: string; message: string; host: number | null; session: string | null; consent: string | null; peer: number | null; requester: string | null; received: number; sharing: boolean; control: boolean; clipboard: boolean; files: boolean; input_access: boolean; code_required: boolean; support_code: string | null; online?: number[]; pairing: {request_id:string; provider_name:string; customer_name:string} | null; pairing_message: string | null; unattended_enabled: boolean; unattended_pending: 'enabling' | 'disabling_after_enable' | 'disabling' | null; unattended_session: boolean; displays?: number; display?: number; display_all?: boolean; print_jobs?: string[]; host_actions?: string[]; signin_id?: number | null; host_macs?: string[]};
   type RecordingView = {phase: 'ready' | 'waiting_for_video' | 'recording' | 'saving' | 'saved' | 'saved_partial'} | {phase:'error'; message:string};
   type RemoteStatus = Status & {recording_permitted?:boolean; recording?:RecordingView; previous_recording?:RecordingView};
   type Source = {id: string; name: string; full_display: boolean};
@@ -74,6 +74,8 @@
   // After "Restart computer": wait for the computer (or its sign-in screen) and reconnect.
   let reconnect: {host: number; signin: number | null; unattended: boolean; until: number; since: number; wentOffline: boolean; lastTry: number; session: string} | null = null;
   let rebootArmed = false, lastPresence = 0, lastRequestUnattended = false;
+  const soundToggle = element<HTMLButtonElement>('remote-sound');
+  let soundOn = true, soundSession: string | null = null;
   function hasAction(name: string): boolean {
     return !!current && current.phase === 'active' && !current.sharing && current.control && (current.host_actions ?? []).includes(name);
   }
@@ -99,6 +101,10 @@
     rememberMacs();
     sas.hidden = !hasAction('sas');
     reboot.hidden = !hasAction('restart');
+    soundToggle.hidden = !hasAction('sound');
+    if (current?.session !== soundSession) { soundSession = current?.session ?? null; soundOn = true; }
+    soundToggle.textContent = soundOn ? 'Sound: on' : 'Sound: off';
+    soundToggle.setAttribute('aria-pressed', String(soundOn));
     sas.disabled = reboot.disabled = busy;
     reboot.textContent = rebootArmed ? 'Click again to restart' : 'Restart computer';
     // Done once a new session (not the one that asked for the restart) is active.
@@ -126,6 +132,12 @@
       }
     }
   }
+  soundToggle.addEventListener('click', () => {
+    if (!current?.session) return;
+    soundOn = !soundOn;
+    void invoke('remote_input', {session: current.session, event: {kind: 'action', name: soundOn ? 'sound:on' : 'sound:off'}}).catch(() => {});
+    renderActions();
+  });
   sas.addEventListener('click', () => {
     if (current?.session) void action('remote_input', {session: current.session, event: {kind: 'action', name: 'sas'}});
   });
@@ -141,7 +153,8 @@
     const count = current && current.phase === 'active' && !current.sharing && current.control ? (current.displays ?? 0) : 0;
     const shown = current?.display ?? 0;
     displaySwitch.hidden = count < 2;
-    const key = `${count}:${shown}:${busy}`;
+    const all = !!current?.display_all;
+    const key = `${count}:${shown}:${busy}:${all}`;
     if (key === displayKey) return;
     displayKey = key;
     displaySwitch.replaceChildren();
@@ -149,7 +162,7 @@
       const button = document.createElement('button');
       button.className = 'button-quiet';
       button.type = 'button';
-      button.textContent = `Display ${index + 1}`;
+      button.textContent = all && index === count - 1 ? 'All screens' : `Display ${index + 1}`;
       button.setAttribute('aria-pressed', String(index === shown));
       button.disabled = busy || index === shown;
       button.addEventListener('click', () => {
@@ -273,7 +286,7 @@
     document.body.dataset.remotePlatform = current.platform ?? 'macos';
     const closing = stopping || (locallyStopped() && ['incoming','outgoing','deciding','negotiating','active','closing'].includes(current.phase));
     const displayPhase = closing ? 'closing' : current.phase;
-    document.dispatchEvent(new CustomEvent('mixel-remote-state',{detail:{phase:displayPhase,controllerOnly:!!current.controller_only,host:current.controller_only?null:current.host,session:!closing&&authenticated?current.session:null,consent:current.consent,files:!closing&&authenticated&&current.files,clipboard:!closing&&authenticated&&current.clipboard,sharing:current.sharing,control:current.control,stopping,online:current.online??[],peer:current.peer}}));
+    document.dispatchEvent(new CustomEvent('mixel-remote-state',{detail:{phase:displayPhase,controllerOnly:!!current.controller_only,host:current.controller_only?null:current.host,session:!closing&&authenticated?current.session:null,consent:current.consent,files:!closing&&authenticated&&current.files,clipboard:!closing&&authenticated&&current.clipboard,sharing:current.sharing,control:current.control,stopping,online:current.online??[],peer:current.peer,prints:current.print_jobs??[]}}));
     status.textContent = connectionMessage(closing);
     status.dataset.phase=displayPhase;
     ownId.textContent = formatId(authenticated ? current.host : null);
@@ -578,7 +591,7 @@
   });
   for (const [button,push] of [[pushClipboard,true],[pullClipboard,false]] as const) button.addEventListener('click', async () => {
     if (!current?.session || busy || stopping || locallyStopped()) return;
-    const operation=++operationVersion,session=current.session; ++readVersion; busy=true; clipboardResult.textContent='Transferring plain text…'; error.textContent=''; render();
+    const operation=++operationVersion,session=current.session; ++readVersion; busy=true; clipboardResult.textContent='Transferring…'; error.textContent=''; render();
     try { await invoke('remote_clipboard',{session,push}); if (operation===operationVersion&&current?.session===session) clipboardResult.textContent=push?'Remote clipboard updated.':'Your clipboard was updated.'; }
     catch (value) { if(operation===operationVersion)clipboardResult.textContent=String(value); }
     finally { if(operation===operationVersion){busy=false; await read(true); render();} }

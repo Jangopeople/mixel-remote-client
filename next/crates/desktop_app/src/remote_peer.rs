@@ -299,12 +299,31 @@ async fn negotiate(
     // Controller offer: it can switch between host displays. Host answer: how many, and which is shown.
     const DISPLAYS_ATTRIBUTE: &str = "a=x-mixel-displays:1";
     const DISPLAY_COUNT_PREFIX: &str = "a=x-mixel-display-count:";
+    // Host answer: the last display in the count is "all monitors as one picture".
+    const DISPLAY_ALL_ATTRIBUTE: &str = "a=x-mixel-display-all:1";
+    let mut display_all = false;
     // Controller offer: it understands host actions. Host answer: the actions it offers
     // (comma list) and, if set up, the Remote ID of its sign-in screen access.
     const ACTIONS_ATTRIBUTE: &str = "a=x-mixel-actions:1";
     const HOST_ACTIONS_PREFIX: &str = "a=x-mixel-host-actions:";
     const SIGNIN_ID_PREFIX: &str = "a=x-mixel-signin-id:";
     const MACS_PREFIX: &str = "a=x-mixel-macs:";
+    // Both directions: optional features this app understands (comma list).
+    const FEATURES_PREFIX: &str = "a=x-mixel-features:";
+    let own_features = crate::remote_control::own_features().join(",");
+    let parse_features = |sdp: &str| -> Vec<String> {
+        sdp.lines()
+            .find_map(|line| line.strip_prefix(FEATURES_PREFIX))
+            .map(|list| {
+                list.split(',')
+                    .filter(|name| !name.is_empty() && name.len() <= 16 && name.bytes().all(|byte| byte.is_ascii_alphanumeric()))
+                    .take(16)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let mut peer_features: Vec<String> = Vec::new();
     let deadline = Instant::now() + Duration::from_secs(30);
     let local = config.identity.public_key()?;
     let role = if config.host {
@@ -391,7 +410,7 @@ async fn negotiate(
         )?;
         config.signal(Signal::Identity(proof.hello())).await?;
         let offer = format!(
-            "{}\r\n{RECORDING_ATTRIBUTE}\r\n{INPUT_RESULT_ATTRIBUTE}\r\n{DISPLAYS_ATTRIBUTE}\r\n{ACTIONS_ATTRIBUTE}\r\n",
+            "{}\r\n{RECORDING_ATTRIBUTE}\r\n{INPUT_RESULT_ATTRIBUTE}\r\n{DISPLAYS_ATTRIBUTE}\r\n{ACTIONS_ATTRIBUTE}\r\n{FEATURES_PREFIX}{own_features}\r\n",
             offer.sdp.trim_end()
         );
         config.signal(Signal::Offer(offer)).await?;
@@ -454,6 +473,7 @@ async fn negotiate(
             Signal::Offer(sdp) if config.host && !remote_description => {
                 peer_supports_recording = sdp.lines().any(|line| line == RECORDING_ATTRIBUTE);
                 peer_supports_input_result = sdp.lines().any(|line| line == INPUT_RESULT_ATTRIBUTE);
+                peer_features = parse_features(&sdp);
                 if config.control && sdp.lines().any(|line| line == ACTIONS_ATTRIBUTE) {
                     actions = tokio::task::spawn_blocking(crate::host_actions::available)
                         .await
@@ -461,8 +481,9 @@ async fn negotiate(
                 }
                 if config.control && sdp.lines().any(|line| line == DISPLAYS_ATTRIBUTE) {
                     let source = config.source.clone();
+                    let all = peer_features.iter().any(|name| name == crate::remote_control::ALL_MONITORS);
                     displays = tokio::task::spawn_blocking(move || {
-                        session_platform::switchable_displays(&source)
+                        session_platform::switchable_displays(&source, all)
                     })
                     .await
                     .unwrap_or_default();
@@ -505,6 +526,9 @@ async fn negotiate(
                     }
                 };
                 let mut answer_sdp = answer_sdp;
+                if displays.last().is_some_and(|last| last == session_platform::ALL_DISPLAYS) {
+                    answer_sdp = format!("{}\r\n{DISPLAY_ALL_ATTRIBUTE}\r\n", answer_sdp.trim_end());
+                }
                 if !actions.is_empty() {
                     answer_sdp = format!("{}\r\n{HOST_ACTIONS_PREFIX}{}\r\n", answer_sdp.trim_end(), actions.join(","));
                     let macs = tokio::task::spawn_blocking(crate::host_actions::mac_addresses).await.unwrap_or_default();
@@ -518,6 +542,9 @@ async fn negotiate(
                         answer_sdp = format!("{}\r\n{SIGNIN_ID_PREFIX}{}\r\n", answer_sdp.trim_end(), status.connection_id);
                     }
                 }
+                if !peer_features.is_empty() {
+                    answer_sdp = format!("{}\r\n{FEATURES_PREFIX}{own_features}\r\n", answer_sdp.trim_end());
+                }
                 config.signal(Signal::Answer(answer_sdp)).await?;
                 handshake = Some(proof);
             }
@@ -529,6 +556,8 @@ async fn negotiate(
                     .and_then(|(count, current)| Some((count.parse::<u16>().ok()?, current.parse::<u16>().ok()?)))
                     .filter(|(count, current)| (2..=16).contains(count) && current < count)
                     .unwrap_or((0, 0));
+                peer_features = parse_features(&sdp);
+                display_all = display_offer.0 >= 3 && sdp.lines().any(|line| line == DISPLAY_ALL_ATTRIBUTE);
                 actions = sdp
                     .lines()
                     .find_map(|line| line.strip_prefix(HOST_ACTIONS_PREFIX))
@@ -622,6 +651,7 @@ async fn negotiate(
             count: display_offer.0,
             current: display_offer.1,
             actions: actions.clone(),
+            features: peer_features.clone(),
         },
     )
     .await?;
@@ -633,6 +663,7 @@ async fn negotiate(
                 config.session,
                 if control.allowed { display_offer.0 } else { 0 },
                 display_offer.1,
+                display_all,
             )
             .await;
         config
@@ -791,12 +822,53 @@ async fn host_media(
         let started = Instant::now();
         let mut last = Instant::now();
         let mut recent: Option<Arc<native_os_capture::stream::CapturedFrame>> = None;
+        // Remote printing: forward jobs printed on "Mixel Remote Printer" during this session.
+        let mut print_watch = if control.forwards_print_jobs()
+            && tokio::task::spawn_blocking(crate::host_print::installed).await.unwrap_or(false)
+        {
+            Some(crate::host_print::Watcher::start())
+        } else {
+            None
+        };
+        let mut print_checked = Instant::now();
+        // Remote sound: what this computer plays, while the technician wants to hear it.
+        let mut sound: Option<crate::remote_sound::Capture> = None;
+        let mut sound_failed = false;
         while !config.stopped() {
+            if control.sound_wanted() {
+                if sound.is_none() && !sound_failed {
+                    sound = tokio::task::spawn_blocking(crate::remote_sound::Capture::start).await.ok().flatten();
+                    sound_failed = sound.is_none();
+                }
+                if let Some(capture) = &sound {
+                    for _ in 0..8 {
+                        let Some(frame) = capture.next() else { break };
+                        control.send_sound(channel, &frame).await?;
+                    }
+                }
+            } else if sound.is_some() {
+                sound = None;
+            }
             if !consent.can_share_local_screen() {
                 return Err("Screen-sharing authorization expired".into());
             }
+            if let Some(watch) = &mut print_watch
+                && print_checked.elapsed() >= Duration::from_millis(700)
+            {
+                print_checked = Instant::now();
+                if let Some(pdf) = watch.poll() {
+                    control.queue_print(pdf);
+                }
+            }
             pump_ice(config, transport).await?;
             control.poll(config, channel).await?;
+            // A picture or files arrive in thousands of small records: take them in
+            // batches instead of one per captured frame.
+            let mut batch = 0;
+            while control.receiving_clipboard() && batch < 256 && !config.stopped() {
+                control.poll(config, channel).await?;
+                batch += 1;
+            }
             if let Some(source) = control.take_display_switch() {
                 // Same encoder and stream; another display of different size is fitted
                 // into the negotiated size (pointer positions are relative, so they stay right).
@@ -967,12 +1039,33 @@ async fn viewer_media(
     let mut timestamp_ticks = 0u64;
     let mut received = 0u64;
     let mut last = Instant::now();
+    let mut player: Option<crate::remote_sound::Player> = None;
+    let mut player_failed = false;
     while !config.stopped() {
         if !consent.can_view() {
             return Err("Remote-viewing authorization expired".into());
         }
         pump_ice(config, transport).await?;
         control.poll(config, channel).await?;
+        while let Some(frame) = control.take_sound() {
+            if player.is_none() && !player_failed {
+                player = tokio::task::spawn_blocking(crate::remote_sound::Player::start).await.ok().flatten();
+                player_failed = player.is_none();
+            }
+            if let Some(player) = &player {
+                player.push(&frame);
+                #[cfg(feature = "qa-session")]
+                if let Some(path) = std::env::var_os("MIXEL_QA_SOUND_LOG") {
+                    let _ = std::fs::write(path, format!("frames={}", player.frames.load(std::sync::atomic::Ordering::Relaxed)));
+                }
+            }
+        }
+        if let Some(pdf) = control.take_print_job() {
+            match tokio::task::spawn_blocking(move || crate::host_print::store(&pdf)).await {
+                Ok(Ok(path)) => config.state.add_print_job(config.generation, config.session, path).await,
+                _ => eprintln!("print job could not be stored"),
+            }
+        }
         if assembler.needs_keyframe()
             || recording
                 .as_ref()

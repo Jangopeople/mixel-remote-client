@@ -12,6 +12,7 @@ mod device_identity;
 mod session_store;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 mod host_actions;
+mod host_print;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 mod agent;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
@@ -42,6 +43,7 @@ mod remote_recording;
 mod remote_recovery;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 mod remote_session;
+mod remote_sound;
 #[cfg(target_os = "macos")]
 mod macos_startup_host;
 #[cfg(target_os = "windows")]
@@ -955,6 +957,53 @@ async fn ai_ask(
 ) -> Result<String, String> {
     main_window(&window)?;
     ai_assistant::ask(&address, &model, &system, &prompt, image.as_deref()).await
+}
+#[derive(serde::Serialize)]
+struct RemotePrinting {
+    supported: bool,
+    installed: bool,
+}
+/// Remote printing on this computer: whether the "Mixel Remote Printer" exists (Windows).
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[tauri::command]
+async fn remote_printing_status(window: tauri::WebviewWindow) -> Result<RemotePrinting, String> {
+    main_window(&window)?;
+    let installed = tauri::async_runtime::spawn_blocking(host_print::installed)
+        .await
+        .unwrap_or(false);
+    Ok(RemotePrinting { supported: cfg!(target_os = "windows"), installed })
+}
+/// Adds or removes the "Mixel Remote Printer" (one administrator prompt).
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[tauri::command]
+async fn remote_printing_set(window: tauri::WebviewWindow, enabled: bool) -> Result<(), String> {
+    main_window(&window)?;
+    #[cfg(target_os = "windows")]
+    return tauri::async_runtime::spawn_blocking(move || {
+        windows_signin_host::run_elevated(if enabled { "--printer-install" } else { "--printer-remove" })
+    })
+    .await
+    .map_err(|_| "The printer could not be changed".to_owned())?;
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = enabled;
+        Err("Remote printing is set up on Windows computers".into())
+    }
+}
+/// A print job received in a session: print it on the default printer, or open it.
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[tauri::command]
+async fn print_job(window: tauri::WebviewWindow, path: String, open: bool) -> Result<String, String> {
+    main_window(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        if open {
+            host_print::open(&path).map(|()| "opened".to_owned())
+        } else {
+            host_print::print(&path).map(str::to_owned)
+        }
+    })
+    .await
+    .map_err(|_| "The print job could not be handled".to_owned())?
 }
 /// Sends a Wake-on-LAN signal from this computer for each address.
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
@@ -1992,6 +2041,13 @@ fn request_quit(app: tauri::AppHandle) {
 fn main() {
     #[cfg(target_os = "windows")]
     {
+        if let Some(result) = std::env::args().nth(1).and_then(|command| host_print::admin(&command)) {
+            if let Err(error) = result {
+                eprintln!("{error}");
+                std::process::exit(2);
+            }
+            return;
+        }
         let mut args = std::env::args().skip(1);
         if let Some(command) = args.next().filter(|arg| arg.starts_with("--signin-")) {
             let result = match command.as_str() {
@@ -2137,6 +2193,9 @@ fn main() {
             wake_on_lan,
             ai_connect,
             ai_ask,
+            remote_printing_status,
+            remote_printing_set,
+            print_job,
             rollout_create,
             rollout_list,
             rollout_revoke,
@@ -2215,6 +2274,9 @@ fn main() {
             wake_on_lan,
             ai_connect,
             ai_ask,
+            remote_printing_status,
+            remote_printing_set,
+            print_job,
             rollout_create,
             rollout_list,
             rollout_revoke,
@@ -2296,6 +2358,8 @@ fn main() {
                     tauri::async_runtime::spawn(async move {
                         let _ = remote.stop().await;
                         session_platform::close_clipboard();
+                        session_platform::clear_clipboard_files();
+                        host_print::clear_received();
                         app.exit(0);
                     });
                 }

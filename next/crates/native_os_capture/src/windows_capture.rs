@@ -141,6 +141,28 @@ pub fn displays() -> Result<Vec<Display>, CaptureError> {
     }
     Ok(displays)
 }
+/// Marks the display record that stands for the whole desktop across all monitors.
+pub const ALL_DISPLAYS: u32 = u32::MAX;
+/// The rectangle around all `displays`, as one capture and input target.
+pub fn all_of(displays: &[Display]) -> Option<Display> {
+    let left = displays.iter().map(|display| i64::from(display.left)).min()?;
+    let top = displays.iter().map(|display| i64::from(display.top)).min()?;
+    let right = displays.iter().map(|display| i64::from(display.left) + i64::from(display.width)).max()?;
+    let bottom = displays.iter().map(|display| i64::from(display.top) + i64::from(display.height)).max()?;
+    let (width, height) = (right - left, bottom - top);
+    if !(2..=32768).contains(&width) || !(2..=16384).contains(&height) || width * height > 8192 * 8192 {
+        return None;
+    }
+    Some(Display {
+        adapter: ALL_DISPLAYS,
+        output: 0,
+        name: "all".into(),
+        left: left as i32,
+        top: top as i32,
+        width: width as u32,
+        height: height as u32,
+    })
+}
 struct Acquired(Option<IDXGIOutputDuplication>);
 impl Acquired {
     fn release(mut self) -> Result<(), CaptureError> {
@@ -180,6 +202,22 @@ pub struct WindowsCapture {
 }
 impl WindowsCapture {
     pub fn open(display: &Display) -> Result<Self, CaptureError> {
+        if display.adapter == ALL_DISPLAYS {
+            // All monitors as one picture: copied from the desktop itself. The
+            // first monitor's duplication only keeps this type uniform; it is not read.
+            let list = displays()?;
+            let all = all_of(&list).ok_or(CaptureError::Target)?;
+            if (all.left, all.top, all.width, all.height)
+                != (display.left, display.top, display.width, display.height)
+            {
+                return Err(CaptureError::Target);
+            }
+            let mut capture = Self::open(list.first().ok_or(CaptureError::Target)?)?;
+            capture.fallback = Some(gdi::GdiCapture::open(&all)?);
+            capture.display = all;
+            capture.received_visible_frame = true;
+            return Ok(capture);
+        }
         let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1() }.map_err(native)?;
         let adapter = unsafe { factory.EnumAdapters1(display.adapter) }.map_err(native)?;
         let output = unsafe { adapter.EnumOutputs(display.output) }.map_err(native)?;
@@ -236,6 +274,21 @@ impl WindowsCapture {
     /// A timeout is a normal unchanged-screen result. Desktop switches, lock
     /// screens and display removal fail closed; the caller must reselect/reopen.
     pub fn next_frame(&mut self, timeout: Duration) -> Result<Option<CapturedFrame>, CaptureError> {
+        if self.display.adapter == ALL_DISPLAYS {
+            std::thread::sleep(timeout.clamp(Duration::from_millis(1), Duration::from_millis(50)));
+            let all = all_of(&displays()?).ok_or(CaptureError::Target)?;
+            if (all.left, all.top, all.width, all.height)
+                != (self.display.left, self.display.top, self.display.width, self.display.height)
+            {
+                return Err(CaptureError::Target);
+            }
+            return self
+                .fallback
+                .as_mut()
+                .ok_or(CaptureError::Stopped)?
+                .frame(&self.display)
+                .map(Some);
+        }
         let mut info = DXGI_OUTDUPL_FRAME_INFO::default();
         let mut resource = None;
         let milliseconds = timeout

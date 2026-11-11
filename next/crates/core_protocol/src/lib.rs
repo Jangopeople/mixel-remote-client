@@ -6,6 +6,7 @@ pub mod device_login;
 pub mod files;
 pub mod input;
 pub mod session;
+pub mod sound;
 
 // Version 2 requires scoped identity tickets and independent encrypted host
 // grants. A version-1 peer must fail before attempting the new consent flow.

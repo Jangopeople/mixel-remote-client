@@ -54,6 +54,7 @@ fn main() {
         "remote.ts",
         "devices.ts",
         "assistant.ts",
+        "printing.ts",
         "enrollment.ts",
         "files.ts",
         "chat.ts",

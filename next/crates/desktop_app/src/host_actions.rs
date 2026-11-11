@@ -8,6 +8,8 @@ pub const SAS: &str = "sas";
 pub const RESTART: &str = "restart";
 /// Wake another computer on this host's network: sent as "wol:<12 hex digits>".
 pub const WOL: &str = "wol";
+/// Not run here: `sound:on` / `sound:off` switch the sound of the running session.
+pub const SOUND: &str = "sound";
 
 fn mac_bytes(text: &str) -> Option<[u8; 6]> {
     let hex: String = text.chars().filter(char::is_ascii_hexdigit).collect();
@@ -83,6 +85,8 @@ pub fn available() -> Vec<String> {
             actions.push(SAS.to_owned());
         }
         actions.push(RESTART.to_owned());
+        // The technician can hear this computer's sound and switch it on or off.
+        actions.push(SOUND.to_owned());
     }
     #[cfg(target_os = "linux")]
     actions.push(RESTART.to_owned());

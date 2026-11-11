@@ -83,6 +83,21 @@ impl WindowsInjector {
             buttons: BTreeSet::new(),
         })
     }
+    /// Pointer targets in the order the controller numbers them; an entry made by
+    /// `windows_capture::all_of` stands for the whole desktop.
+    pub fn with_displays(displays: Vec<Display>, cancellation: Arc<AtomicBool>) -> Result<Self, InjectionError> {
+        if displays.is_empty() {
+            return Err(InjectionError::Native(
+                "No active display is available for input".into(),
+            ));
+        }
+        Ok(Self {
+            displays,
+            cancellation,
+            keys: BTreeSet::new(),
+            buttons: BTreeSet::new(),
+        })
+    }
     pub fn display(display: Display, cancellation: Arc<AtomicBool>) -> Result<Self, InjectionError> {
         if display.width < 2 || display.height < 2 {
             return Err(InjectionError::Unsupported);
@@ -212,12 +227,19 @@ impl Injector for WindowsInjector {
                     .ok_or(InjectionError::Unsupported)?;
                 let current = windows_capture::displays()
                     .map_err(|error| InjectionError::Native(error.to_string()))?;
-                let active = current
-                    .iter()
-                    .find(|screen| {
-                        screen.name == selected.name
-                            && screen.adapter == selected.adapter
-                            && screen.output == selected.output
+                let whole = if selected.adapter == windows_capture::ALL_DISPLAYS {
+                    windows_capture::all_of(&current)
+                } else {
+                    None
+                };
+                let active = whole
+                    .as_ref()
+                    .or_else(|| {
+                        current.iter().find(|screen| {
+                            screen.name == selected.name
+                                && screen.adapter == selected.adapter
+                                && screen.output == selected.output
+                        })
                     })
                     .ok_or_else(|| {
                         InjectionError::Native(
