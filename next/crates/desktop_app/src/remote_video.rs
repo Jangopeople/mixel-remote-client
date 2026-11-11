@@ -164,7 +164,7 @@ pub fn decoded_packet(
     for line in frame.pixels().chunks(frame.stride()).take(frame.height()) {
         let start = bytes.len();
         bytes.extend_from_slice(line.get(..row).ok_or("Decoded video row is incomplete")?);
-        for pixel in bytes[start..].chunks_exact_mut(4) {
+        for pixel in bytes[start..].as_chunks_mut::<4>().0 {
             pixel.swap(0, 2);
             pixel[3] = 255;
         }
