@@ -252,6 +252,8 @@
   let current: RemoteStatus | undefined, sources: Source[] = [], busy = false, polling = false, readVersion = 0;
   let operationVersion = 0, stopping = false, stoppedConsent = '';
   let wentOffline = false, autoOnline = false;
+  // Just set up: go online now instead of waiting for the next retry.
+  document.addEventListener('mixel-device-enrolled', () => { if (!wentOffline) autoOnline = false; });
   let workspaceFocused = true;
   let authenticated=false,accountKey='',accountVersion=0;
   let viewing = '', videoReady = '', videoGeneration = 0;

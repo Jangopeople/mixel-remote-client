@@ -97,7 +97,14 @@
   }
   document.addEventListener('mixel-device-enrolled', () => { if (setUp !== true) void checkSetUp(); });
   document.addEventListener('mixel-account-state', event => accountChanged((event as CustomEvent<Account>).detail));
-  document.addEventListener('mixel-remote-state', event => { phase = (event as CustomEvent<{phase: string}>).detail.phase; render(); });
+  document.addEventListener('mixel-remote-state', event => {
+    const next = (event as CustomEvent<{phase: string}>).detail.phase;
+    const inSession = (value: string): boolean => ['outgoing', 'incoming', 'deciding', 'negotiating', 'active', 'closing'].includes(value);
+    // A session that ended leaves no stale "Connecting…" behind.
+    if (inSession(phase) && !inSession(next)) status.textContent = '';
+    if (next === 'active' && phase !== 'active') status.textContent = '';
+    phase = next; render();
+  });
   render();
   void invoke<Account>('account_status').then(accountChanged).catch(() => {});
 })();
