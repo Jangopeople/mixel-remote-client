@@ -283,6 +283,13 @@ S = [
 ("Opened instead: choose Print in the program that shows it.","Stattdessen geöffnet: im angezeigten Programm «Drucken» wählen.","Ouvert à la place : choisissez Imprimer dans le programme qui l’affiche.","Aperto invece: scegli Stampa nel programma che lo mostra."),
 ("Sound: on","Ton: ein","Son : activé","Audio: attivo"),
 ("Sound: off","Ton: aus","Son : coupé","Audio: disattivato"),
+("Ticket number","Ticketnummer","Numéro du ticket","Numero del ticket"),
+("Save note in ticket","Notiz im Ticket speichern","Enregistrer la note dans le ticket","Salva la nota nel ticket"),
+("Enter the ticket number.","Ticketnummer eingeben.","Saisissez le numéro du ticket.","Inserisci il numero del ticket."),
+("Write the note first, or let the AI write it.","Zuerst die Notiz schreiben oder von der KI schreiben lassen.","Rédigez d’abord la note ou laissez l’IA l’écrire.","Scrivi prima la nota o lasciala scrivere all’IA."),
+("Saving…","Wird gespeichert…","Enregistrement…","Salvataggio…"),
+("The note was not saved: check the ticket number","Die Notiz wurde nicht gespeichert: Ticketnummer prüfen","La note n’a pas été enregistrée : vérifiez le numéro du ticket","La nota non è stata salvata: controlla il numero del ticket"),
+("Saving in a ticket requires an MFA-verified Mixel team account","Speichern im Ticket erfordert ein MFA-geprüftes Mixel-Teamkonto","L’enregistrement dans un ticket nécessite un compte d’équipe Mixel vérifié par MFA","Il salvataggio nel ticket richiede un account del team Mixel verificato con MFA"),
 ("Your clipboard was updated.","Ihre Zwischenablage wurde aktualisiert.","Votre presse-papiers a été mis à jour.","I tuoi appunti sono stati aggiornati."),
 ("Encrypted file channel connected","Verschlüsselter Dateikanal verbunden","Canal de fichiers chiffré connecté","Canale file cifrato connesso"),
 ("Session closed: Requested","Sitzung beendet","Session terminée","Sessione chiusa"),
@@ -357,6 +364,7 @@ S = [
 ]
 P = [
 # (regex, de, fr, it)
+(r"^Saved as internal note in (.+)$", r"Als interne Notiz gespeichert in \1", r"Enregistré comme note interne dans \1", r"Salvata come nota interna in \1"),
 (r"^Page (\d+) · (\d+) enrolled devices\. Make this computer available before connecting\.$", r"Seite \1 · \2 registrierte Geräte. Machen Sie diesen Computer verfügbar, bevor Sie verbinden.", r"Page \1 · \2 appareils enregistrés. Rendez cet ordinateur disponible avant de vous connecter.", r"Pagina \1 · \2 dispositivi registrati. Rendi disponibile questo computer prima di connetterti."),
 (r"^Device ([\d ]+) requests to connect\. Its enrolled identity has been verified with Mixel\.$", r"Gerät \1 möchte sich verbinden. Seine registrierte Identität wurde von Mixel bestätigt.", r"L’appareil \1 demande à se connecter. Son identité enregistrée a été vérifiée par Mixel.", r"Il dispositivo \1 chiede di connettersi. La sua identità registrata è stata verificata da Mixel."),
 (r"^This computer is enrolled as (.+) · Connection ID ([\d ]+)\. Open Remote control and choose “Make this computer available”\.$", r"Dieser Computer ist registriert als \1 · Verbindungs-ID \2. Öffnen Sie «Fernsteuerung» und wählen Sie «Diesen Computer verfügbar machen».", r"Cet ordinateur est enregistré sous \1 · ID de connexion \2. Ouvrez « Contrôle à distance » et choisissez « Rendre cet ordinateur disponible ».", r"Questo computer è registrato come \1 · ID di connessione \2. Apri «Controllo remoto» e scegli «Rendi disponibile questo computer»."),

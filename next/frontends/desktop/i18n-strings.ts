@@ -113,6 +113,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Enter a 9-digit ID": "9-stellige ID eingeben",
 "Enter a partner ID above. Their screen appears here once they accept.": "Geben Sie oben eine Partner-ID ein. Der Bildschirm erscheint hier, sobald die Gegenseite annimmt.",
 "Enter the 9-digit connection ID shown under Allow remote access on the other computer.": "Geben Sie die 9-stellige Verbindungs-ID ein, die auf dem anderen Computer unter «Fernzugriff erlauben» steht.",
+"Enter the ticket number.": "Ticketnummer eingeben.",
 "Exchange messages during this session": "Während dieser Sitzung Nachrichten austauschen",
 "Existing device": "Bestehendes Gerät",
 "Exit full screen": "Vollbild beenden",
@@ -220,6 +221,9 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Revoke": "Widerrufen",
 "Roll out to many computers": "Auf viele Computer verteilen",
 "Rollout command created.": "Verteilbefehl erstellt.",
+"Save note in ticket": "Notiz im Ticket speichern",
+"Saving in a ticket requires an MFA-verified Mixel team account": "Speichern im Ticket erfordert ein MFA-geprüftes Mixel-Teamkonto",
+"Saving…": "Wird gespeichert…",
 "Screen": "Bildschirm",
 "Screen recording": "Bildschirmaufnahme",
 "Screen sharing starts only after the host accepts the request.": "Die Bildschirmfreigabe startet erst, wenn die Gegenseite die Anfrage annimmt.",
@@ -282,6 +286,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "The clipboard holds no text, picture or files": "Die Zwischenablage enthält weder Text noch Bild noch Dateien",
 "The command contains the secret token: share it only with the people who deploy the computers. It is shown once.": "Der Befehl enthält das geheime Token: geben Sie ihn nur den Personen, die die Computer verteilen. Er wird nur einmal angezeigt.",
 "The copied files are too large; use the Files tab for folders, many files or more than 32 MB": "Die kopierten Dateien sind zu gross; für Ordner, viele Dateien oder mehr als 32 MB den Reiter Dateien verwenden",
+"The note was not saved: check the ticket number": "Die Notiz wurde nicht gespeichert: Ticketnummer prüfen",
 "The other person can see the display you approved. End the session at any time.": "Die andere Person sieht den Bildschirm, den Sie freigegeben haben. Beenden Sie die Sitzung jederzeit.",
 "The remote clipboard is empty, or holds folders or more than 32 MB": "Die entfernte Zwischenablage ist leer oder enthält Ordner oder mehr als 32 MB",
 "The remote computer did not come back within 10 minutes.": "Der entfernte Computer ist innert 10 Minuten nicht zurückgekommen.",
@@ -298,6 +303,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "This computer is not registered for the current account": "Dieser Computer ist für das aktuelle Konto nicht registriert",
 "This computer is paired. Its connection ID stays the same.": "Dieser Computer ist gekoppelt. Seine Verbindungs-ID bleibt gleich.",
 "This computer no longer keeps your sign-in.": "Dieser Computer speichert Ihre Anmeldung nicht mehr.",
+"Ticket number": "Ticketnummer",
 "Transferring…": "Wird übertragen…",
 "Try another device name or clear the search.": "Versuchen Sie einen anderen Gerätenamen oder leeren Sie die Suche.",
 "Turn off always-on access": "Ständigen Zugriff ausschalten",
@@ -336,6 +342,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "When this computer starts": "Wenn dieser Computer startet",
 "Write a message": "Nachricht schreiben",
 "Write session note": "Sitzungsnotiz schreiben",
+"Write the note first, or let the AI write it.": "Zuerst die Notiz schreiben oder von der KI schreiben lassen.",
 "Writing the note…": "Notiz wird geschrieben…",
 "YOUR CONNECTION ID": "IHRE VERBINDUNGS-ID",
 "YOUR MIXEL ACCOUNT": "IHR MIXEL-KONTO",
@@ -357,6 +364,10 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "e.g. Office PC": "z. B. Büro-PC"
 },
 "patterns": [
+[
+"^Saved as internal note in (.+)$",
+"Als interne Notiz gespeichert in $1"
+],
 [
 "^Page (\\d+) · (\\d+) enrolled devices\\. Make this computer available before connecting\\.$",
 "Seite $1 · $2 registrierte Geräte. Machen Sie diesen Computer verfügbar, bevor Sie verbinden."
@@ -571,6 +582,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Enter a 9-digit ID": "Saisir un ID à 9 chiffres",
 "Enter a partner ID above. Their screen appears here once they accept.": "Saisissez l’ID d’un partenaire ci-dessus. Son écran apparaît ici dès qu’il accepte.",
 "Enter the 9-digit connection ID shown under Allow remote access on the other computer.": "Saisissez l’ID de connexion à 9 chiffres affiché sous « Autoriser l’accès à distance » sur l’autre ordinateur.",
+"Enter the ticket number.": "Saisissez le numéro du ticket.",
 "Exchange messages during this session": "Échanger des messages pendant cette session",
 "Existing device": "Appareil existant",
 "Exit full screen": "Quitter le plein écran",
@@ -678,6 +690,9 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Revoke": "Révoquer",
 "Roll out to many computers": "Déployer sur de nombreux ordinateurs",
 "Rollout command created.": "Commande de déploiement créée.",
+"Save note in ticket": "Enregistrer la note dans le ticket",
+"Saving in a ticket requires an MFA-verified Mixel team account": "L’enregistrement dans un ticket nécessite un compte d’équipe Mixel vérifié par MFA",
+"Saving…": "Enregistrement…",
 "Screen": "Écran",
 "Screen recording": "Enregistrement de l’écran",
 "Screen sharing starts only after the host accepts the request.": "Le partage d’écran ne commence qu’après l’acceptation de l’hôte.",
@@ -740,6 +755,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "The clipboard holds no text, picture or files": "Le presse-papiers ne contient ni texte, ni image, ni fichier",
 "The command contains the secret token: share it only with the people who deploy the computers. It is shown once.": "La commande contient le jeton secret : ne la partagez qu’avec les personnes qui déploient les ordinateurs. Elle n’est affichée qu’une fois.",
 "The copied files are too large; use the Files tab for folders, many files or more than 32 MB": "Les fichiers copiés sont trop volumineux ; utilisez l’onglet Fichiers pour les dossiers, de nombreux fichiers ou plus de 32 Mo",
+"The note was not saved: check the ticket number": "La note n’a pas été enregistrée : vérifiez le numéro du ticket",
 "The other person can see the display you approved. End the session at any time.": "L’autre personne voit l’écran que vous avez approuvé. Terminez la session à tout moment.",
 "The remote clipboard is empty, or holds folders or more than 32 MB": "Le presse-papiers distant est vide ou contient des dossiers ou plus de 32 Mo",
 "The remote computer did not come back within 10 minutes.": "L’ordinateur distant n’est pas revenu dans les 10 minutes.",
@@ -756,6 +772,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "This computer is not registered for the current account": "Cet ordinateur n’est pas enregistré pour le compte actuel",
 "This computer is paired. Its connection ID stays the same.": "Cet ordinateur est appairé. Son ID de connexion reste le même.",
 "This computer no longer keeps your sign-in.": "Cet ordinateur ne garde plus votre connexion.",
+"Ticket number": "Numéro du ticket",
 "Transferring…": "Transfert en cours…",
 "Try another device name or clear the search.": "Essayez un autre nom ou effacez la recherche.",
 "Turn off always-on access": "Désactiver l’accès permanent",
@@ -794,6 +811,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "When this computer starts": "Au démarrage de cet ordinateur",
 "Write a message": "Écrire un message",
 "Write session note": "Rédiger la note de session",
+"Write the note first, or let the AI write it.": "Rédigez d’abord la note ou laissez l’IA l’écrire.",
 "Writing the note…": "Rédaction de la note…",
 "YOUR CONNECTION ID": "VOTRE ID DE CONNEXION",
 "YOUR MIXEL ACCOUNT": "VOTRE COMPTE MIXEL",
@@ -815,6 +833,10 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "e.g. Office PC": "p. ex. PC du bureau"
 },
 "patterns": [
+[
+"^Saved as internal note in (.+)$",
+"Enregistré comme note interne dans $1"
+],
 [
 "^Page (\\d+) · (\\d+) enrolled devices\\. Make this computer available before connecting\\.$",
 "Page $1 · $2 appareils enregistrés. Rendez cet ordinateur disponible avant de vous connecter."
@@ -1029,6 +1051,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Enter a 9-digit ID": "Inserisci un ID di 9 cifre",
 "Enter a partner ID above. Their screen appears here once they accept.": "Inserisci sopra l’ID di un partner. Il suo schermo compare qui appena accetta.",
 "Enter the 9-digit connection ID shown under Allow remote access on the other computer.": "Inserisci l’ID di connessione di 9 cifre mostrato sotto «Consenti l’accesso remoto» sull’altro computer.",
+"Enter the ticket number.": "Inserisci il numero del ticket.",
 "Exchange messages during this session": "Scambia messaggi durante questa sessione",
 "Existing device": "Dispositivo esistente",
 "Exit full screen": "Esci dallo schermo intero",
@@ -1136,6 +1159,9 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Revoke": "Revoca",
 "Roll out to many computers": "Distribuisci su molti computer",
 "Rollout command created.": "Comando di distribuzione creato.",
+"Save note in ticket": "Salva la nota nel ticket",
+"Saving in a ticket requires an MFA-verified Mixel team account": "Il salvataggio nel ticket richiede un account del team Mixel verificato con MFA",
+"Saving…": "Salvataggio…",
 "Screen": "Schermo",
 "Screen recording": "Registrazione dello schermo",
 "Screen sharing starts only after the host accepts the request.": "La condivisione dello schermo inizia solo dopo che l’host accetta la richiesta.",
@@ -1198,6 +1224,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "The clipboard holds no text, picture or files": "Gli appunti non contengono testo, immagini o file",
 "The command contains the secret token: share it only with the people who deploy the computers. It is shown once.": "Il comando contiene il token segreto: condividilo solo con chi distribuisce i computer. Viene mostrato una sola volta.",
 "The copied files are too large; use the Files tab for folders, many files or more than 32 MB": "I file copiati sono troppo grandi; usa la scheda File per cartelle, molti file o più di 32 MB",
+"The note was not saved: check the ticket number": "La nota non è stata salvata: controlla il numero del ticket",
 "The other person can see the display you approved. End the session at any time.": "L’altra persona vede lo schermo che hai approvato. Termina la sessione in qualsiasi momento.",
 "The remote clipboard is empty, or holds folders or more than 32 MB": "Gli appunti remoti sono vuoti oppure contengono cartelle o più di 32 MB",
 "The remote computer did not come back within 10 minutes.": "Il computer remoto non è tornato entro 10 minuti.",
@@ -1214,6 +1241,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "This computer is not registered for the current account": "Questo computer non è registrato per l’account attuale",
 "This computer is paired. Its connection ID stays the same.": "Questo computer è abbinato. Il suo ID di connessione resta lo stesso.",
 "This computer no longer keeps your sign-in.": "Questo computer non conserva più il tuo accesso.",
+"Ticket number": "Numero del ticket",
 "Transferring…": "Trasferimento in corso…",
 "Try another device name or clear the search.": "Prova un altro nome o cancella la ricerca.",
 "Turn off always-on access": "Disattiva l’accesso permanente",
@@ -1252,6 +1280,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "When this computer starts": "All’avvio di questo computer",
 "Write a message": "Scrivi un messaggio",
 "Write session note": "Scrivi la nota di sessione",
+"Write the note first, or let the AI write it.": "Scrivi prima la nota o lasciala scrivere all’IA.",
 "Writing the note…": "Scrittura della nota…",
 "YOUR CONNECTION ID": "IL TUO ID DI CONNESSIONE",
 "YOUR MIXEL ACCOUNT": "IL TUO ACCOUNT MIXEL",
@@ -1273,6 +1302,10 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "e.g. Office PC": "es. PC dell’ufficio"
 },
 "patterns": [
+[
+"^Saved as internal note in (.+)$",
+"Salvata come nota interna in $1"
+],
 [
 "^Page (\\d+) · (\\d+) enrolled devices\\. Make this computer available before connecting\\.$",
 "Pagina $1 · $2 dispositivi registrati. Rendi disponibile questo computer prima di connetterti."

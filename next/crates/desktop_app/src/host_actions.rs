@@ -127,7 +127,7 @@ pub fn run(name: &str) -> Result<(), String> {
 pub fn parse(list: &str) -> Vec<String> {
     list.split(',')
         .map(str::trim)
-        .filter(|name| matches!(*name, SAS | RESTART | WOL))
+        .filter(|name| matches!(*name, SAS | RESTART | WOL | SOUND))
         .map(str::to_owned)
         .take(8)
         .collect()

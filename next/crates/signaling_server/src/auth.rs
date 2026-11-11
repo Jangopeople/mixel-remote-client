@@ -323,6 +323,33 @@ impl IsmAuth {
         }
         Ok(secret)
     }
+    /// Staff: saves a session note as an internal note on an ISM ticket; returns number and title.
+    pub async fn ticket_note(&self, token: &str, ticket: &str, note: &str, remote_id: Option<u32>) -> Result<(String, String), AuthError> {
+        if ticket.trim().len() < 3 || ticket.len() > 40 || note.trim().is_empty() || note.chars().count() > 8000
+            || !self.authenticate_scope(token, false).await?.staff
+        {
+            return Err(AuthError);
+        }
+        let response = self
+            .client
+            .post(self.base.join("/rest/v1/rpc/remote_ticket_note").map_err(|_| AuthError)?)
+            .header("apikey", &self.api_key)
+            .bearer_auth(token)
+            .json(&serde_json::json!({"ticket": ticket, "note": note, "remote_id": remote_id}))
+            .send()
+            .await
+            .map_err(|_| AuthError)?;
+        #[derive(serde::Deserialize)]
+        struct Saved {
+            ticket_number: String,
+            title: String,
+        }
+        let saved: Saved = Self::decode_response(response).await?;
+        if saved.ticket_number.len() > 60 || saved.title.len() > 800 {
+            return Err(AuthError);
+        }
+        Ok((saved.ticket_number, saved.title))
+    }
     /// A company's rollout tokens (no secrets).
     pub async fn rollout_tokens(&self, token: &str, client: Uuid) -> Result<Vec<RolloutToken>, AuthError> {
         if client.is_nil() || !self.authenticate_scope(token, false).await?.staff {

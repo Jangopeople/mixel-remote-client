@@ -67,6 +67,19 @@
     } catch (value) { aiAnswer.textContent = String(value); }
     finally { aiBusy = false; aiAsk.disabled = aiNote.disabled = false; }
   }
+  // ISM ticket link: the note (written by the AI or typed here) becomes an internal ticket note.
+  const ticketNumber = element<HTMLInputElement>('ai-ticket'), ticketSave = element<HTMLButtonElement>('ai-ticket-save'), ticketStatus = element<HTMLParagraphElement>('ai-ticket-status');
+  aiAnswer.setAttribute('contenteditable', 'plaintext-only');
+  ticketSave.addEventListener('click', () => {
+    const ticket = ticketNumber.value.trim(), note = (aiAnswer.innerText ?? aiAnswer.textContent ?? '').trim();
+    if (ticket.length < 3) { ticketStatus.textContent = 'Enter the ticket number.'; return; }
+    if (!note) { ticketStatus.textContent = 'Write the note first, or let the AI write it.'; return; }
+    ticketSave.disabled = true; ticketStatus.textContent = 'Saving…';
+    void invoke<string>('ticket_note', {ticket, note: note.slice(0, 7800), remoteId: aiPeer})
+      .then(saved => { ticketStatus.textContent = `Saved as internal note in ${saved}`; })
+      .catch(value => { ticketStatus.textContent = String(value); })
+      .finally(() => { ticketSave.disabled = false; });
+  });
   aiButton.addEventListener('click', () => { aiOpen = !aiOpen; renderAi(); if (aiOpen) aiQuestion.focus(); });
   aiAsk.addEventListener('click', () => { void aiRun('ask'); });
   aiNote.addEventListener('click', () => { void aiRun('note'); });
@@ -74,10 +87,12 @@
   aiCopy.addEventListener('click', () => { void navigator.clipboard?.writeText(aiAnswer.textContent ?? '').catch(() => {}); });
   function renderAi(): void {
     const viewing = !!state && state.phase === 'active' && !state.sharing && !!state.session;
-    if (viewing && state && state.session !== aiSession) { aiSession = state.session; aiStarted = Date.now(); aiPeer = state.peer ?? null; aiLog = []; aiAnswer.textContent = ''; aiCopy.hidden = true; }
-    aiButton.hidden = !viewing || !ai;
+    if (viewing && state && state.session !== aiSession) { aiSession = state.session; aiStarted = Date.now(); aiPeer = state.peer ?? null; aiLog = []; aiAnswer.textContent = ''; aiCopy.hidden = true; ticketStatus.textContent = ''; }
+    aiButton.hidden = !viewing;
+    aiAsk.disabled = aiNote.disabled = aiBusy || !ai;
+    aiQuestion.disabled = !ai;
     aiButton.setAttribute('aria-expanded', String(aiOpen && !aiButton.hidden));
-    aiPanel.hidden = !(aiOpen && viewing && ai);
+    aiPanel.hidden = !(aiOpen && viewing);
   }
   document.addEventListener('mixel-remote-state', event => { state = (event as CustomEvent<State>).detail; renderAi(); });
   renderAi();

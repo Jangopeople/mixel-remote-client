@@ -958,6 +958,28 @@ async fn ai_ask(
     main_window(&window)?;
     ai_assistant::ask(&address, &model, &system, &prompt, image.as_deref()).await
 }
+/// Team members: save a session note as an internal note on an ISM ticket.
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[tauri::command]
+async fn ticket_note(
+    window: tauri::WebviewWindow,
+    auth: tauri::State<'_, account_auth::AccountAuth>,
+    ticket: String,
+    note: String,
+    remote_id: Option<u32>,
+) -> Result<String, String> {
+    main_window(&window)?;
+    let credential = auth.credential(None).await?;
+    if !credential.principal.staff {
+        return Err("Saving in a ticket requires an MFA-verified Mixel team account".into());
+    }
+    let (number, title) = credential
+        .ism
+        .ticket_note(&credential.token, ticket.trim(), &note, remote_id)
+        .await
+        .map_err(|_| "The note was not saved: check the ticket number")?;
+    Ok(format!("{number} · {title}"))
+}
 #[derive(serde::Serialize)]
 struct RemotePrinting {
     supported: bool,
@@ -2193,6 +2215,7 @@ fn main() {
             wake_on_lan,
             ai_connect,
             ai_ask,
+            ticket_note,
             remote_printing_status,
             remote_printing_set,
             print_job,
@@ -2274,6 +2297,7 @@ fn main() {
             wake_on_lan,
             ai_connect,
             ai_ask,
+            ticket_note,
             remote_printing_status,
             remote_printing_set,
             print_job,
