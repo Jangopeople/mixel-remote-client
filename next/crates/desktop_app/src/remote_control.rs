@@ -62,10 +62,13 @@ pub fn own_features() -> Vec<&'static str> {
         ALL_MONITORS,
         crate::host_print::FEATURE,
         core_protocol::sound::FEATURE,
+        FULL_HD,
     ]
 }
 /// Feature: the controller can show "all monitors as one picture" as a display choice.
 pub const ALL_MONITORS: &str = "allmon";
+/// Feature: the app shows (and a host may send) pictures up to 1920x1080.
+pub const FULL_HD: &str = "hd";
 
 pub struct ControlPipe {
     crypto: ControlChannel,

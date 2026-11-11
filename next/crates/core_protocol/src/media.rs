@@ -37,8 +37,8 @@ pub struct H264VideoSender {
     peer: Arc<dyn webrtc::peer_connection::PeerConnection>,
 }
 impl H264VideoSender {
-    /// Constrained baseline level3.1. Higher display resolutions must be scaled
-    /// or negotiate a higher level instead of violating the decoder's SDP limit.
+    /// Constrained baseline. The SDP announces level 3.1 (1280x720) for older apps;
+    /// apps that both announce the `hd` session feature send up to 1920x1080.
     pub async fn new(
         transport: &NativeTransport,
         width: usize,
@@ -47,10 +47,10 @@ impl H264VideoSender {
     ) -> Result<Self, MediaError> {
         if width == 0
             || height == 0
-            || width > 1280
-            || height > 720
+            || width > 1920
+            || height > 1088
             || !(1..=30).contains(&fps)
-            || width.div_ceil(16) * height.div_ceil(16) * fps as usize > 108000
+            || width.div_ceil(16) * height.div_ceil(16) * fps as usize > 245760
         {
             return Err(MediaError::Invalid);
         }

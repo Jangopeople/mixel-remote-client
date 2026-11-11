@@ -68,8 +68,8 @@ pub fn decoded_packet(
 ) -> Result<VideoPacket, String> {
     if frame.width() < 2
         || frame.height() < 2
-        || frame.width() > 1280
-        || frame.height() > 720
+        || frame.width() > 1920
+        || frame.height() > 1088
         || sequence == 0
         || frame.pixels().len() > 16_777_216
     {

@@ -255,6 +255,10 @@ async fn run(config: &mut Config) -> Result<(), String> {
     result.and(closed)
 }
 fn source_size(config: &Config) -> Result<(usize, usize), String> {
+    source_size_within(config, (1280.0, 720.0))
+}
+/// The stream size for the shared display, scaled down to fit `limit` (never up).
+fn source_size_within(config: &Config, limit: (f64, f64)) -> Result<(usize, usize), String> {
     if config.source == "qa-relay-fixture" && session_platform::relay_fixture_enabled() {
         return Ok((640, 420));
     }
@@ -277,7 +281,7 @@ fn source_size(config: &Config) -> Result<(usize, usize), String> {
     if width == 0 || height == 0 {
         return Err("The display dimensions are invalid".into());
     }
-    let scale = (1280.0 / width as f64).min(720.0 / height as f64).min(1.0);
+    let scale = (limit.0 / width as f64).min(limit.1 / height as f64).min(1.0);
     let minimum = if cfg!(target_os = "macos") { 2 } else { 16 };
     let width = ((width as f64 * scale) as usize / 2 * 2).max(minimum);
     let height = ((height as f64 * scale) as usize / 2 * 2).max(minimum);
@@ -701,6 +705,12 @@ async fn negotiate(
             0,
         )
         .await;
+    // Full HD when the technician's app can show it; otherwise the classic 1280x720.
+    let size = if config.host && peer_features.iter().any(|name| name == crate::remote_control::FULL_HD) {
+        source_size_within(config, (1920.0, 1080.0))?
+    } else {
+        size
+    };
     Ok((consent, channel, sender, size, control))
 }
 async fn pump_ice(config: &mut Config, transport: &mut NativeTransport) -> Result<(), String> {
@@ -748,7 +758,8 @@ fn start_encoder(size: (usize, usize)) -> Result<mpsc::Sender<EncodeRequest>, St
         .name("mixel-screen-encoder".into())
         .spawn(move || {
             let _permit = permit;
-            let mut encoder = ScreenH264Encoder::new(size.0, size.1, 30, 3_000_000);
+            let bitrate = if size.0 > 1280 || size.1 > 720 { 6_000_000 } else { 3_000_000 };
+            let mut encoder = ScreenH264Encoder::new(size.0, size.1, 30, bitrate);
             while let Some(request) = worker.blocking_recv() {
                 let result = match &mut encoder {
                     Ok(encoder) => encoder
@@ -1034,7 +1045,7 @@ async fn viewer_media(
     };
     let mut assembler = H264Assembler::default();
     let mut decoder =
-        session_platform::H264Decoder::new(1280, 720).map_err(|error| error.to_string())?;
+        session_platform::H264Decoder::new(1920, 1088).map_err(|error| error.to_string())?;
     let mut previous_rtp: Option<u32> = None;
     let mut timestamp_ticks = 0u64;
     let mut received = 0u64;

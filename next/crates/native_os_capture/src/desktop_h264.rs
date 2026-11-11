@@ -31,12 +31,12 @@ pub struct ScreenH264Encoder {
 
 impl ScreenH264Encoder {
     pub fn new(width: usize, height: usize, fps: u32, bitrate: u32) -> Result<Self, EncodeError> {
-        if !(16..=1280).contains(&width)
-            || !(16..=720).contains(&height)
+        if !(16..=1920).contains(&width)
+            || !(16..=1088).contains(&height)
             || !width.is_multiple_of(2)
             || !height.is_multiple_of(2)
             || !(1..=30).contains(&fps)
-            || !(1..=5_000_000).contains(&bitrate)
+            || !(1..=8_000_000).contains(&bitrate)
         {
             return Err(EncodeError::Configuration);
         }
@@ -45,7 +45,7 @@ impl ScreenH264Encoder {
             .bitrate(BitRate::from_bps(bitrate))
             .max_frame_rate(FrameRate::from_hz(fps as f32))
             .profile(Profile::Baseline)
-            .level(Level::Level_3_1)
+            .level(if width > 1280 || height > 720 { Level::Level_4_0 } else { Level::Level_3_1 })
             .rate_control_mode(RateControlMode::Bitrate)
             .adaptive_quantization(false)
             .background_detection(false)
@@ -133,7 +133,7 @@ pub struct H264Decoder {
 
 impl H264Decoder {
     pub fn new(width: usize, height: usize) -> Result<Self, DecodeError> {
-        if !(16..=1280).contains(&width) || !(16..=720).contains(&height) {
+        if !(16..=1920).contains(&width) || !(16..=1088).contains(&height) {
             return Err(DecodeError::Dimensions);
         }
         Ok(Self {
