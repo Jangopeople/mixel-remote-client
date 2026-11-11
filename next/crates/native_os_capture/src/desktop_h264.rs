@@ -40,7 +40,14 @@ impl ScreenH264Encoder {
         {
             return Err(EncodeError::Configuration);
         }
+        // Software encoding is the slowest step of a session: use the processor's
+        // cores (one stays free for capture and the session itself).
+        let threads = std::thread::available_parallelism()
+            .map(|count| count.get().saturating_sub(1).clamp(1, 4) as u16)
+            .unwrap_or(1);
         let config = EncoderConfig::new()
+            .num_threads(threads)
+            .complexity(openh264::encoder::Complexity::Low)
             .usage_type(UsageType::ScreenContentRealTime)
             .bitrate(BitRate::from_bps(bitrate))
             .max_frame_rate(FrameRate::from_hz(fps as f32))
@@ -78,13 +85,23 @@ impl ScreenH264Encoder {
         if self.damage.update(&frame.frame()).is_empty() && !force {
             return Ok(None);
         }
-        for y in 0..self.height {
+        if frame.width() == self.width && frame.height() == self.height {
+            // The usual case (the caller already fitted the frame): copy whole rows.
+            let row = self.width * 4;
+            for y in 0..self.height {
+                let source = y * frame.stride();
+                self.pixels[y * row..(y + 1) * row]
+                    .copy_from_slice(&frame.pixels()[source..source + row]);
+            }
+        } else {
+            for y in 0..self.height {
             let source_row = y * frame.height() / self.height * frame.stride();
             for x in 0..self.width {
                 let source = source_row + x * frame.width() / self.width * 4;
                 let target = (y * self.width + x) * 4;
                 self.pixels[target..target + 4]
                     .copy_from_slice(&frame.pixels()[source..source + 4]);
+            }
             }
         }
         self.yuv
