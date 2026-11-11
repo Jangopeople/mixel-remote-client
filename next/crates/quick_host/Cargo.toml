@@ -1,0 +1,30 @@
+[package]
+name = "quick_host"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Mixel Quick Support host core: a phone shares its screen in one attended session, registered by a one-time support code"
+
+[lib]
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dependencies]
+core_protocol = { path = "../core_protocol", features = ["native-webrtc"] }
+tokio = { version = "1", features = ["rt-multi-thread", "time", "macros", "sync", "net"] }
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+futures-util = "0.3"
+serde = { workspace = true }
+serde_json = "1"
+base64 = "0.22"
+uuid = { version = "1", features = ["serde"] }
+ed25519-dalek = { version = "2.2", features = ["rand_core"] }
+rand_core.workspace = true
+zeroize.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+openh264 = "=0.9.9"

@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 exclude = ["vendor/webrtc"]
-members = ["crates/core_protocol", "crates/signaling_server", "crates/web_client", "crates/native_os_capture", "crates/desktop_app", "crates/mobile_app"]
+members = ["crates/core_protocol", "crates/signaling_server", "crates/web_client", "crates/native_os_capture", "crates/desktop_app", "crates/mobile_app", "crates/quick_host"]
 
 [workspace.package]
 version = "0.1.0"

@@ -47,6 +47,17 @@
     <p id="no-devices" class="hint" hidden data-t>No computers found.</p>
     <p class="hint"><span id="own-label" data-t>This browser:</span> <span id="own-id"></span></p>
   </section>
+  <section id="support" class="card" hidden>
+    <h2 data-t>Help someone on their phone</h2>
+    <p class="hint" data-t>The person opens the Mixel Quick Support app and types a support code. No account is needed. Their phone then appears in your list and asks them to allow you.</p>
+    <label><span data-t>Company</span><select id="support-company"></select></label>
+    <button id="support-button" type="button" data-t>Create support code</button>
+    <div id="support-result" hidden>
+      <p id="support-code" class="code"></p>
+      <p class="hint" data-t>Valid for 30 minutes, for one phone. Read it out or send it.</p>
+      <button id="support-copy" type="button" data-t>Copy code</button>
+    </div>
+  </section>
   <section id="meet" class="card" hidden>
     <h2 data-t>Meeting</h2>
     <p class="hint" data-t>Share your screen and talk with up to 8 people. Guests need only the link, no account and no installation.</p>

@@ -396,7 +396,6 @@ impl Device {
         let verified = host.verify(&roots, now).map_err(error)?;
         let same_tenant = own.identity.tenant.is_some() && own.identity.tenant == host.identity.tenant;
         if host.identity.connection_id != host_id
-            || (host.unattended_host_only() && !unattended)
             || (!own.staff && !same_tenant)
             || verified.key().to_bytes() != array32(host_key)?
         {

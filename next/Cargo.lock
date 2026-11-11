@@ -4149,6 +4149,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "quick_host"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "core_protocol",
+ "ed25519-dalek",
+ "futures-util",
+ "openh264",
+ "rand_core 0.6.4",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite 0.28.0",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "quinn"
 version = "0.11.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"

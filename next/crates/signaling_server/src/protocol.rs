@@ -70,6 +70,9 @@ pub enum ClientMessage {
     RequestWithCode { host: u32, code: SupportCode },
     RequestUnattended { host: u32 },
     ConfigureUnattended { enabled: bool },
+    /// A device-only host (no signed-in user) asks to receive attended requests instead of
+    /// unattended ones: the person at the device accepts every session (phone Quick Support).
+    ConfigureSupportHost { enabled: bool },
     GenerateSupportCode,
     ClearSupportCode,
     CheckPairing,
@@ -165,6 +168,9 @@ pub enum ServerMessage {
         failed: bool,
     },
     UnattendedStatus {
+        enabled: bool,
+    },
+    SupportHostStatus {
         enabled: bool,
     },
     Presence {

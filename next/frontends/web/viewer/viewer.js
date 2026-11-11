@@ -528,6 +528,12 @@ function renderToolbar(session) {
 }
 async function renderHome() {
   $('register').hidden = !!enrollment || !who; $('connect').hidden = !enrollment;
+  if (who && who.staff && enrollment && !$('support-company').options.length) {
+    // Team members can hand out support codes for phones, for the companies they look after.
+    const companies = await api('/rest/v1/rpc/remote_enrollment_companies').catch(() => []);
+    if (!$('support-company').options.length) for (const company of companies) { const option = document.createElement('option'); option.value = company.client_id; option.textContent = company.client_name; $('support-company').appendChild(option); }
+    $('support').hidden = companies.length === 0;
+  }
   if (!enrollment || active) return;
   $('own-id').textContent = String(enrollment.connection_id).replace(/(\d{3})(?=\d)/g, '$1 ');
   try {
@@ -558,6 +564,19 @@ async function run(task) {
   }
 }
 
+// Quick Support for phones: a team member creates a one-time code; the phone registers with it.
+async function createSupportCode() {
+  const button = $('support-button');
+  button.disabled = true;
+  try {
+    const code = await api('/rest/v1/rpc/remote_create_support_code', { body: { target_client: $('support-company').value }, failure: t('The support code could not be created. Please try again.') });
+    if (typeof code !== 'string' || !/^[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(code)) throw new Problem(t('The support code could not be created. Please try again.'));
+    $('support-code').textContent = code; $('support-result').hidden = false;
+    status('');
+    // The phone appears in the list as soon as it has registered: look again for a while.
+    for (let round = 0; round < 12; round++) setTimeout(() => { if (!active) renderHome(); }, (round + 1) * 10000);
+  } finally { button.disabled = false; }
+}
 // Meetings: any signed-in account can start one; guests join with the invitation link alone.
 async function startMeeting() {
   const button = $('meet-button');
@@ -642,6 +661,12 @@ $('connect-form').onsubmit = event => {
   run(() => request(id, code, $('remote-unattended').checked)).finally(() => { $('connect-button').disabled = false; });
 };
 $('status').onclick = () => { $('status').textContent = ''; }; // tap the notice to put it away
+$('support-button').onclick = () => run(createSupportCode);
+$('support-copy').onclick = () => run(async () => {
+  const code = $('support-code').textContent;
+  try { await navigator.clipboard.writeText(code); } catch { /* the code stays readable on screen */ }
+  status(t('Code copied.'));
+});
 $('meet-button').onclick = () => run(startMeeting);
 $('meet-open').onclick = event => { if (CONFIG.openExternal) { event.preventDefault(); run(() => CONFIG.openExternal($('meet-open').href)); } };
 // The phone app has its own sign-in, so it also needs its own sign-out.

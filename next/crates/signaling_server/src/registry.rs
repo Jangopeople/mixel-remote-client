@@ -28,6 +28,8 @@ struct Peer {
     identity: Option<core_protocol::delegation::DeviceTicket>,
     code_gate: Option<CodeGate>,
     unattended_enabled: bool,
+    /// A device-only host that opted into attended requests (and out of unattended ones).
+    attended_support: bool,
 }
 impl Peer {
     fn unattended_host_only(&self) -> bool {
@@ -38,7 +40,7 @@ impl Peer {
 
     fn can_request(&self, target: &Self, unattended: bool) -> bool {
         !self.unattended_host_only()
-            && (unattended || !target.unattended_host_only())
+            && (unattended || !target.unattended_host_only() || target.attended_support)
             && self.principal.can_request(&target.principal)
     }
 }
@@ -334,6 +336,7 @@ impl Registry {
                 identity: None,
                 code_gate: None,
                 unattended_enabled: false,
+                attended_support: false,
             },
         );
         self.send(
@@ -528,7 +531,7 @@ impl Registry {
                 else {
                     return Err(ErrorCode::Forbidden);
                 };
-                peer.unattended_enabled = enabled && peer.code_gate.is_none();
+                peer.unattended_enabled = enabled && peer.code_gate.is_none() && !peer.attended_support;
                 let enabled = peer.unattended_enabled;
                 if !enabled {
                     let rooms: Vec<_> = self
@@ -543,6 +546,30 @@ impl Registry {
                     }
                 }
                 self.send(from, ServerMessage::UnattendedStatus { enabled });
+                Ok(())
+            }
+            ClientMessage::ConfigureSupportHost { enabled } => {
+                // Only for device-only hosts, and never together with unattended access: such a
+                // host is reachable by attended requests alone, so someone at the device decides.
+                let Some(peer) = self
+                    .peers
+                    .get_mut(&from)
+                    .filter(|peer| peer.unattended_host_only() && !peer.unattended_enabled)
+                else {
+                    return Err(ErrorCode::Forbidden);
+                };
+                peer.attended_support = enabled;
+                if !enabled {
+                    let rooms: Vec<_> = self
+                        .sessions
+                        .iter()
+                        .filter_map(|(id, room)| (room.host == from && !room.unattended).then_some(*id))
+                        .collect();
+                    for room in rooms {
+                        self.close(room, CloseReason::Requested, now);
+                    }
+                }
+                self.send(from, ServerMessage::SupportHostStatus { enabled });
                 Ok(())
             }
             ClientMessage::GenerateSupportCode | ClientMessage::ClearSupportCode => {
@@ -832,6 +859,82 @@ mod rotation_tests {
         .unwrap();
         registry.bind_identity(id, generation, ticket).unwrap();
         (generation, rx)
+    }
+    /// A device-only host as the phone Quick Support registers: no user, device ticket only.
+    fn device_only_host(registry: &mut Registry, id: u32, profile: u128) -> (Uuid, mpsc::Receiver<ServerMessage>) {
+        let (tx, rx) = mpsc::channel(64);
+        let (stop, _) = watch::channel(false);
+        let principal = Principal { user: Uuid::from_u128(profile), tenant: Some(Uuid::from_u128(1)), staff: false, expires_at: 220 };
+        let (_, generation) = registry.register_with_id(id, principal, tx, stop).unwrap();
+        let ticket = core_protocol::delegation::DeviceTicket::issue_unattended_host(
+            core_protocol::device_login::DeviceLoginChallenge {
+                nonce: [2; 32],
+                device: *Uuid::from_u128(profile + 100).as_bytes(),
+                profile: *Uuid::from_u128(profile).as_bytes(),
+                tenant: Some(*Uuid::from_u128(1).as_bytes()),
+                connection_id: id,
+                generation: 1,
+            },
+            ed25519_dalek::SigningKey::from_bytes(&[8; 32]).verifying_key(),
+            100,
+            220,
+            &ed25519_dalek::SigningKey::from_bytes(&[9; 32]),
+        )
+        .unwrap();
+        registry.bind_identity(id, generation, ticket).unwrap();
+        (generation, rx)
+    }
+    #[test]
+    fn a_device_only_host_gets_attended_requests_only_after_it_opts_in() {
+        let mut registry = Registry::default();
+        let now = Instant::now();
+        let (controller, mut controller_events) = peer(&mut registry, 123_456_789, 10);
+        let (phone, mut phone_events) = device_only_host(&mut registry, 234_567_890, 11);
+        while phone_events.try_recv().is_ok() {}
+        // Before opting in, nobody reaches it with an attended request and it is not shown as online.
+        assert_eq!(
+            registry.handle(123_456_789, controller, ClientMessage::Request { host: 234_567_890 }, now),
+            Err(ErrorCode::Unavailable)
+        );
+        registry.handle(123_456_789, controller, ClientMessage::Presence { hosts: vec![234_567_890] }, now).unwrap();
+        while let Ok(event) = controller_events.try_recv() {
+            if let ServerMessage::Presence { online } = event { assert!(online.is_empty()); }
+        }
+        // An ordinary host (with a signed-in user) cannot use the switch.
+        assert_eq!(
+            registry.handle(123_456_789, controller, ClientMessage::ConfigureSupportHost { enabled: true }, now),
+            Err(ErrorCode::Forbidden)
+        );
+        registry.handle(234_567_890, phone, ClientMessage::ConfigureSupportHost { enabled: true }, now).unwrap();
+        assert!(matches!(phone_events.try_recv().unwrap(), ServerMessage::SupportHostStatus { enabled: true }));
+        // Opted in: unattended access stays off, whatever the host asks for.
+        registry.handle(234_567_890, phone, ClientMessage::ConfigureUnattended { enabled: true }, now).unwrap();
+        assert!(matches!(phone_events.try_recv().unwrap(), ServerMessage::UnattendedStatus { enabled: false }));
+        assert_eq!(
+            registry.handle(123_456_789, controller, ClientMessage::RequestUnattended { host: 234_567_890 }, now),
+            Err(ErrorCode::Unavailable)
+        );
+        registry.handle(123_456_789, controller, ClientMessage::Presence { hosts: vec![234_567_890] }, now).unwrap();
+        let mut seen = false;
+        while let Ok(event) = controller_events.try_recv() {
+            if let ServerMessage::Presence { online } = event { assert_eq!(online, vec![234_567_890]); seen = true; }
+        }
+        assert!(seen);
+        // The attended request arrives as a question to the person at the device.
+        registry.handle(123_456_789, controller, ClientMessage::Request { host: 234_567_890 }, now).unwrap();
+        let ServerMessage::Consent { unattended, requester_connection, .. } = phone_events.try_recv().unwrap() else {
+            panic!("missing consent");
+        };
+        assert!(!unattended);
+        assert_eq!(requester_connection, 123_456_789);
+        // The phone itself can never ask to control anything.
+        assert_eq!(
+            registry.handle(234_567_890, phone, ClientMessage::Request { host: 123_456_789 }, now),
+            Err(ErrorCode::Unavailable)
+        );
+        // Opting out ends what was started this way.
+        registry.handle(234_567_890, phone, ClientMessage::ConfigureSupportHost { enabled: false }, now).unwrap();
+        assert_eq!(registry.counts().1, 0);
     }
     #[test]
     fn presence_reports_only_online_peers_in_the_callers_scope() {

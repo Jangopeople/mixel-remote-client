@@ -1,6 +1,13 @@
 // Viewer texts: English is the key; German, French and Italian follow the browser language.
 const TEXTS = {
   de: {
+    'Help someone on their phone': 'Jemandem am Smartphone helfen',
+    'The person opens the Mixel Quick Support app and types a support code. No account is needed. Their phone then appears in your list and asks them to allow you.': 'Die Person öffnet die App Mixel Quick Support und gibt einen Support-Code ein. Ein Konto ist nicht nötig. Das Smartphone erscheint dann in Ihrer Liste und fragt die Person um Erlaubnis.',
+    'Create support code': 'Support-Code erstellen',
+    'Valid for 30 minutes, for one phone. Read it out or send it.': '30 Minuten gültig, für ein Smartphone. Lesen Sie ihn vor oder senden Sie ihn.',
+    'Copy code': 'Code kopieren',
+    'Code copied.': 'Code kopiert.',
+    'The support code could not be created. Please try again.': 'Der Support-Code konnte nicht erstellt werden. Bitte versuchen Sie es erneut.',
     'Team accounts confirm with a second step. This is the code of your Mixel ISM account, not a Mixel ID code.': 'Team-Konten bestätigen mit einem zweiten Schritt. Gemeint ist der Code Ihres Mixel-ISM-Kontos, kein Code der Mixel ID.',
     'Open your authenticator app and enter the 6-digit code shown for:': 'Öffnen Sie Ihre Authenticator-App und geben Sie den 6-stelligen Code ein für:',
     'Your sign-in has ended. Please sign in again.': 'Ihre Anmeldung wurde beendet. Bitte melden Sie sich erneut an.',
@@ -73,6 +80,13 @@ const TEXTS = {
     'Type here': 'Hier tippen',
   },
   fr: {
+    'Help someone on their phone': 'Aider quelqu’un sur son téléphone',
+    'The person opens the Mixel Quick Support app and types a support code. No account is needed. Their phone then appears in your list and asks them to allow you.': 'La personne ouvre l’application Mixel Quick Support et saisit un code d’assistance. Aucun compte n’est nécessaire. Son téléphone apparaît alors dans votre liste et lui demande de vous autoriser.',
+    'Create support code': 'Créer un code d’assistance',
+    'Valid for 30 minutes, for one phone. Read it out or send it.': 'Valable 30 minutes, pour un téléphone. Dictez-le ou envoyez-le.',
+    'Copy code': 'Copier le code',
+    'Code copied.': 'Code copié.',
+    'The support code could not be created. Please try again.': 'Le code d’assistance n’a pas pu être créé. Veuillez réessayer.',
     'Team accounts confirm with a second step. This is the code of your Mixel ISM account, not a Mixel ID code.': 'Les comptes d’équipe confirment par une seconde étape. Il s’agit du code de votre compte Mixel ISM, pas d’un code Mixel ID.',
     'Open your authenticator app and enter the 6-digit code shown for:': 'Ouvrez votre application d’authentification et saisissez le code à 6 chiffres affiché pour :',
     'Your sign-in has ended. Please sign in again.': 'Votre connexion a pris fin. Veuillez vous reconnecter.',
@@ -144,6 +158,13 @@ const TEXTS = {
     'Type here': 'Saisir ici',
   },
   it: {
+    'Help someone on their phone': 'Aiuta qualcuno sul suo telefono',
+    'The person opens the Mixel Quick Support app and types a support code. No account is needed. Their phone then appears in your list and asks them to allow you.': 'La persona apre l’app Mixel Quick Support e inserisce un codice di assistenza. Non serve un account. Il telefono compare poi nel tuo elenco e chiede alla persona di autorizzarti.',
+    'Create support code': 'Crea codice di assistenza',
+    'Valid for 30 minutes, for one phone. Read it out or send it.': 'Valido 30 minuti, per un telefono. Dettalo o invialo.',
+    'Copy code': 'Copia codice',
+    'Code copied.': 'Codice copiato.',
+    'The support code could not be created. Please try again.': 'Impossibile creare il codice di assistenza. Riprova.',
     'Team accounts confirm with a second step. This is the code of your Mixel ISM account, not a Mixel ID code.': 'Gli account del team confermano con un secondo passaggio. È il codice del tuo account Mixel ISM, non un codice Mixel ID.',
     'Open your authenticator app and enter the 6-digit code shown for:': 'Apri la tua app di autenticazione e inserisci il codice a 6 cifre mostrato per:',
     'Your sign-in has ended. Please sign in again.': 'L’accesso è terminato. Accedi di nuovo.',

@@ -47,8 +47,9 @@ impl H264VideoSender {
     ) -> Result<Self, MediaError> {
         if width == 0
             || height == 0
-            || width > 1920
-            || height > 1088
+            // Landscape up to 1920x1088, or the same picture upright (a phone screen).
+            || width.max(height) > 1920
+            || width.min(height) > 1088
             || !(1..=30).contains(&fps)
             || width.div_ceil(16) * height.div_ceil(16) * fps as usize > 245760
         {
