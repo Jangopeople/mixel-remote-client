@@ -167,16 +167,43 @@ interface Window {
     void accountAction('account_verify', {factor: factor.value, code: entered});
   });
   const updateNotice = element<HTMLButtonElement>('update-notice');
+  const autoUpdate = document.getElementById('auto-update') as HTMLInputElement | null;
+  type UpdateInfo = {version: string; installable: boolean; silent: boolean; needs_password: boolean};
+  const autoKey = 'mixel.remote.autoupdate.v1';
+  function autoUpdates(): boolean { try { return localStorage.getItem(autoKey) !== 'off'; } catch { return true; } }
+  if (autoUpdate) {
+    autoUpdate.checked = autoUpdates();
+    autoUpdate.addEventListener('change', () => { try { localStorage.setItem(autoKey, autoUpdate.checked ? 'on' : 'off'); } catch { /* not kept */ } });
+  }
+  let update: UpdateInfo | null = null, installing = false, installFailed = false;
+  async function installUpdate(): Promise<void> {
+    if (!update || installing) return;
+    installing = true; updateNotice.disabled = true;
+    updateNotice.textContent = `Installing Mixel Remote ${update.version}…`;
+    try { await invoke('update_install'); updateNotice.textContent = 'Restarting Mixel Remote…'; }
+    catch (error) {
+      installing = false; installFailed = true; updateNotice.disabled = false;
+      updateNotice.textContent = `Update failed: ${String(error)} · Download`;
+    }
+  }
   async function checkUpdate(): Promise<void> {
+    if (installing) return;
     try {
-      const version = await invoke<string | null>('update_check');
-      updateNotice.hidden = !version;
-      if (version) updateNotice.textContent = `Mixel Remote ${version} is available · Download`;
+      update = await invoke<UpdateInfo | null>('update_check');
+      updateNotice.hidden = !update;
+      if (!update) return;
+      if (update.installable && !installFailed) {
+        updateNotice.textContent = `Mixel Remote ${update.version} is available · Install`;
+        if (update.silent && autoUpdates()) await installUpdate();
+      } else if (!installFailed) updateNotice.textContent = `Mixel Remote ${update.version} is available · Download`;
     } catch { /* offline: keep the current notice */ }
   }
-  updateNotice.addEventListener('click', () => { void invoke('open_update_page').catch(() => {}); });
+  updateNotice.addEventListener('click', () => {
+    if (update?.installable && !installFailed) void installUpdate();
+    else void invoke('open_update_page').catch(() => {});
+  });
   void checkUpdate();
-  window.setInterval(() => { void checkUpdate(); }, 6 * 3600 * 1000);
+  window.setInterval(() => { void checkUpdate(); }, 3600 * 1000);
   const languageChoice = document.getElementById('language-choice') as HTMLSelectElement | null;
   if (languageChoice) {
     const language = window as unknown as {mixelLanguageChoice?: string; mixelSetLanguage?: (value: string) => void};

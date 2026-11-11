@@ -11,6 +11,8 @@ mod device_identity;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 mod session_store;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+mod self_update;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 mod autostart;
 #[cfg(target_os = "macos")]
 mod local_session;
@@ -1025,16 +1027,51 @@ fn version_parts(version: &str) -> Option<Vec<u64>> {
     let parts: Option<Vec<u64>> = core.split('.').map(|part| part.parse().ok()).collect();
     parts.filter(|parts| (1..=4).contains(&parts.len()))
 }
-/// Newer published version of this app on store.mixel.ch, if any.
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[derive(serde::Serialize)]
+struct UpdateInfo {
+    version: String,
+    /// A signed installer is available for an in-app install.
+    installable: bool,
+    /// It may be installed now without asking: nothing is in use and the sign-in survives a restart.
+    silent: bool,
+    /// Installing asks for the administrator password (Linux).
+    needs_password: bool,
+}
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+fn newer_than_running(window: &tauri::WebviewWindow, version: &str) -> bool {
+    let running = window.app_handle().package_info().version.to_string();
+    matches!((version_parts(&running), version_parts(version)), (Some(current), Some(next)) if next > current)
+}
+/// Newer published version of this app, if any, and whether it can be installed in the app.
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 #[tauri::command]
-async fn update_check(window: tauri::WebviewWindow) -> Result<Option<String>, String> {
+async fn update_check(
+    window: tauri::WebviewWindow,
+    remote: tauri::State<'_, remote_session::RemoteSession>,
+    auth: tauri::State<'_, account_auth::AccountAuth>,
+) -> Result<Option<UpdateInfo>, String> {
     main_window(&window)?;
+    if let Ok(manifest) = self_update::latest().await {
+        if !newer_than_running(&window, &manifest.version) {
+            return Ok(None);
+        }
+        let idle = matches!(remote.status().await.phase.as_str(), "offline" | "error" | "ready");
+        let account = auth.status().await;
+        let restart_keeps_sign_in = account.phase != "authenticated"
+            || account.account.as_ref().is_some_and(|account| account.remembered);
+        return Ok(Some(UpdateInfo {
+            version: manifest.version,
+            installable: true,
+            silent: idle && restart_keeps_sign_in && !self_update::NEEDS_PASSWORD,
+            needs_password: self_update::NEEDS_PASSWORD,
+        }));
+    }
+    // Fallback: the store listing (download only).
     #[derive(serde::Deserialize)]
     struct Row {
         version: String,
     }
-    let running = window.app_handle().package_info().version.to_string();
     let (platform, variant) = if cfg!(target_os = "macos") {
         ("macos", "")
     } else if cfg!(target_os = "windows") {
@@ -1056,16 +1093,29 @@ async fn update_check(window: tauri::WebviewWindow) -> Result<Option<String>, St
         .json()
         .await
         .map_err(|_| "Update check unavailable")?;
-    let Some(current) = version_parts(&running) else {
-        return Ok(None);
-    };
     Ok(rows
         .into_iter()
-        .filter(|row| row.version.len() <= 40)
+        .filter(|row| row.version.len() <= 40 && newer_than_running(&window, &row.version))
         .filter_map(|row| version_parts(&row.version).map(|parts| (parts, row.version)))
-        .filter(|(parts, _)| *parts > current)
         .max_by(|a, b| a.0.cmp(&b.0))
-        .map(|(_, version)| version))
+        .map(|(_, version)| UpdateInfo { version, installable: false, silent: false, needs_password: false }))
+}
+/// Downloads, verifies and installs the newest signed version, then restarts the app.
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[tauri::command]
+async fn update_install(window: tauri::WebviewWindow) -> Result<(), String> {
+    main_window(&window)?;
+    let manifest = self_update::latest().await?;
+    if !newer_than_running(&window, &manifest.version) {
+        return Err("This is already the newest version".into());
+    }
+    self_update::download_and_install(manifest).await?;
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        app.exit(0);
+    });
+    Ok(())
 }
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 #[tauri::command]
@@ -1950,6 +2000,7 @@ fn main() {
             remote_pairing,
             remote_presence,
             update_check,
+            update_install,
             startup_settings,
             set_stay_signed_in,
             set_autostart,
@@ -2021,6 +2072,7 @@ fn main() {
             remote_pairing,
             remote_presence,
             update_check,
+            update_install,
             startup_settings,
             signin_screen_status,
             signin_screen_enable,

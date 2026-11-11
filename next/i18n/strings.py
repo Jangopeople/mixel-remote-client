@@ -283,6 +283,10 @@ S = [
 ("The sign-in screen program is older than this app.","Das Programm für den Anmeldebildschirm ist älter als diese App.","Le programme de l’écran de connexion est plus ancien que cette app.","Il programma della schermata di accesso è più vecchio di questa app."),
 ("Update sign-in screen program","Programm für den Anmeldebildschirm aktualisieren","Mettre à jour le programme de l’écran de connexion","Aggiorna il programma della schermata di accesso"),
 ("The sign-in screen program is up to date.","Das Programm für den Anmeldebildschirm ist aktuell.","Le programme de l’écran de connexion est à jour.","Il programma della schermata di accesso è aggiornato."),
+("Updates","Updates","Mises à jour","Aggiornamenti"),
+("Install updates automatically","Updates automatisch installieren","Installer les mises à jour automatiquement","Installa gli aggiornamenti automaticamente"),
+("When nothing is in use, Mixel Remote installs signed updates and restarts. Otherwise the sidebar offers Install.","Wenn nichts in Gebrauch ist, installiert Mixel Remote signierte Updates und startet neu. Sonst bietet die Seitenleiste «Installieren» an.","Quand rien n’est en cours, Mixel Remote installe les mises à jour signées et redémarre. Sinon, la barre latérale propose « Installer ».","Quando nulla è in uso, Mixel Remote installa gli aggiornamenti firmati e si riavvia. Altrimenti la barra laterale propone «Installa»."),
+("Restarting Mixel Remote…","Mixel Remote wird neu gestartet…","Redémarrage de Mixel Remote…","Riavvio di Mixel Remote…"),
 ]
 P = [
 # (regex, de, fr, it)
@@ -301,4 +305,7 @@ P = [
 (r"^Sign-in screen access is on for (.+) · Remote ID ([\d ]+)\. A technician with unattended access can pair and connect to this ID\.$", r"Zugriff am Anmeldebildschirm ist eingeschaltet für \1 · Remote-ID \2. Ein Techniker mit unbeaufsichtigtem Zugriff kann diese ID koppeln und sich verbinden.", r"L’accès à l’écran de connexion est activé pour \1 · ID Remote \2. Un technicien avec accès sans surveillance peut appairer cet ID et s’y connecter.", r"L’accesso alla schermata di accesso è attivo per \1 · ID Remote \2. Un tecnico con accesso non presidiato può abbinare questo ID e connettersi."),
 (r"^Sign-in screen access is on\. Remote ID ([\d ]+)\.$", r"Zugriff am Anmeldebildschirm ist eingeschaltet. Remote-ID \1.", r"L’accès à l’écran de connexion est activé. ID Remote \1.", r"L’accesso alla schermata di accesso è attivo. ID Remote \1."),
 (r"^Display (\d+)$", r"Bildschirm \1", r"Écran \1", r"Schermo \1"),
+(r"^Mixel Remote ([\w.+-]+) is available · Install$", r"Mixel Remote \1 ist verfügbar · Installieren", r"Mixel Remote \1 est disponible · Installer", r"Mixel Remote \1 è disponibile · Installa"),
+(r"^Installing Mixel Remote ([\w.+-]+)…$", r"Mixel Remote \1 wird installiert…", r"Installation de Mixel Remote \1…", r"Installazione di Mixel Remote \1…"),
+(r"^Update failed: (.+) · Download$", r"Update fehlgeschlagen: \1 · Herunterladen", r"Échec de la mise à jour : \1 · Télécharger", r"Aggiornamento non riuscito: \1 · Scarica"),
 ]

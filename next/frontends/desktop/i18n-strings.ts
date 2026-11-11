@@ -107,6 +107,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Go offline before switching between company and personal devices": "Gehen Sie offline, bevor Sie zwischen Firmen- und persönlichen Geräten wechseln",
 "Incoming request": "Eingehende Anfrage",
 "Incoming request: choose a source and Accept or Reject": "Eingehende Anfrage: Bildschirm wählen und annehmen oder ablehnen",
+"Install updates automatically": "Updates automatisch installieren",
 "Invitation rejected locally; ready for a new connection": "Anfrage abgelehnt; bereit für eine neue Verbindung",
 "It opens and makes this computer available, so unattended access works after a restart.": "Es öffnet sich und macht diesen Computer verfügbar, damit unbeaufsichtigter Zugriff nach einem Neustart funktioniert.",
 "Keyboard & mouse": "Tastatur & Maus",
@@ -175,6 +176,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Remote desktop": "Entfernter Desktop",
 "Remote device screen": "Bildschirm des entfernten Geräts",
 "Renew connection": "Verbindung erneuern",
+"Restarting Mixel Remote…": "Mixel Remote wird neu gestartet…",
 "Screen": "Bildschirm",
 "Screen recording": "Bildschirmaufnahme",
 "Screen sharing starts only after the host accepts the request.": "Die Bildschirmfreigabe startet erst, wenn die Gegenseite die Anfrage annimmt.",
@@ -249,6 +251,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Turning on. Waiting for the connection service.": "Wird eingeschaltet. Warten auf den Verbindungsdienst.",
 "Unattended sharing": "Unbeaufsichtigte Freigabe",
 "Update sign-in screen program": "Programm für den Anmeldebildschirm aktualisieren",
+"Updates": "Updates",
 "Use another browser": "Anderen Browser verwenden",
 "Use the same Mixel ID you use for other Mixel apps. You’ll sign in securely in your browser.": "Verwenden Sie dieselbe Mixel ID wie für andere Mixel-Apps. Sie melden sich sicher im Browser an.",
 "Use unattended access if granted": "Unbeaufsichtigten Zugriff nutzen, falls erlaubt",
@@ -265,6 +268,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Waiting for confirmation that the connection has closed.": "Warten auf die Bestätigung, dass die Verbindung beendet ist.",
 "Waiting for the other person to accept your request.": "Warten, bis die andere Person Ihre Anfrage annimmt.",
 "Waiting for the remote host to Accept": "Warten, bis die Gegenseite annimmt",
+"When nothing is in use, Mixel Remote installs signed updates and restarts. Otherwise the sidebar offers Install.": "Wenn nichts in Gebrauch ist, installiert Mixel Remote signierte Updates und startet neu. Sonst bietet die Seitenleiste «Installieren» an.",
 "When this computer starts": "Wenn dieser Computer startet",
 "Write a message": "Nachricht schreiben",
 "YOUR CONNECTION ID": "IHRE VERBINDUNGS-ID",
@@ -346,6 +350,18 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 [
 "^Display (\\d+)$",
 "Bildschirm $1"
+],
+[
+"^Mixel Remote ([\\w.+-]+) is available · Install$",
+"Mixel Remote $1 ist verfügbar · Installieren"
+],
+[
+"^Installing Mixel Remote ([\\w.+-]+)…$",
+"Mixel Remote $1 wird installiert…"
+],
+[
+"^Update failed: (.+) · Download$",
+"Update fehlgeschlagen: $1 · Herunterladen"
 ]
 ]
 },
@@ -455,6 +471,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Go offline before switching between company and personal devices": "Passez hors ligne avant de changer entre appareils d’entreprise et personnels",
 "Incoming request": "Demande entrante",
 "Incoming request: choose a source and Accept or Reject": "Demande entrante : choisissez un écran puis acceptez ou refusez",
+"Install updates automatically": "Installer les mises à jour automatiquement",
 "Invitation rejected locally; ready for a new connection": "Demande refusée ; prêt pour une nouvelle connexion",
 "It opens and makes this computer available, so unattended access works after a restart.": "Il s’ouvre et rend cet ordinateur disponible, pour que l’accès sans surveillance fonctionne après un redémarrage.",
 "Keyboard & mouse": "Clavier et souris",
@@ -523,6 +540,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Remote desktop": "Bureau distant",
 "Remote device screen": "Écran de l’appareil distant",
 "Renew connection": "Renouveler la connexion",
+"Restarting Mixel Remote…": "Redémarrage de Mixel Remote…",
 "Screen": "Écran",
 "Screen recording": "Enregistrement de l’écran",
 "Screen sharing starts only after the host accepts the request.": "Le partage d’écran ne commence qu’après l’acceptation de l’hôte.",
@@ -597,6 +615,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Turning on. Waiting for the connection service.": "Activation. En attente du service de connexion.",
 "Unattended sharing": "Partage sans surveillance",
 "Update sign-in screen program": "Mettre à jour le programme de l’écran de connexion",
+"Updates": "Mises à jour",
 "Use another browser": "Utiliser un autre navigateur",
 "Use the same Mixel ID you use for other Mixel apps. You’ll sign in securely in your browser.": "Utilisez le même Mixel ID que pour les autres apps Mixel. La connexion se fait en toute sécurité dans votre navigateur.",
 "Use unattended access if granted": "Utiliser l’accès sans surveillance s’il est autorisé",
@@ -613,6 +632,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Waiting for confirmation that the connection has closed.": "En attente de la confirmation de fermeture de la connexion.",
 "Waiting for the other person to accept your request.": "En attente de l’acceptation de votre demande.",
 "Waiting for the remote host to Accept": "En attente de l’acceptation de l’hôte",
+"When nothing is in use, Mixel Remote installs signed updates and restarts. Otherwise the sidebar offers Install.": "Quand rien n’est en cours, Mixel Remote installe les mises à jour signées et redémarre. Sinon, la barre latérale propose « Installer ».",
 "When this computer starts": "Au démarrage de cet ordinateur",
 "Write a message": "Écrire un message",
 "YOUR CONNECTION ID": "VOTRE ID DE CONNEXION",
@@ -694,6 +714,18 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 [
 "^Display (\\d+)$",
 "Écran $1"
+],
+[
+"^Mixel Remote ([\\w.+-]+) is available · Install$",
+"Mixel Remote $1 est disponible · Installer"
+],
+[
+"^Installing Mixel Remote ([\\w.+-]+)…$",
+"Installation de Mixel Remote $1…"
+],
+[
+"^Update failed: (.+) · Download$",
+"Échec de la mise à jour : $1 · Télécharger"
 ]
 ]
 },
@@ -803,6 +835,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Go offline before switching between company and personal devices": "Vai offline prima di passare tra dispositivi aziendali e personali",
 "Incoming request": "Richiesta in arrivo",
 "Incoming request: choose a source and Accept or Reject": "Richiesta in arrivo: scegli uno schermo e accetta o rifiuta",
+"Install updates automatically": "Installa gli aggiornamenti automaticamente",
 "Invitation rejected locally; ready for a new connection": "Richiesta rifiutata; pronto per una nuova connessione",
 "It opens and makes this computer available, so unattended access works after a restart.": "Si apre e rende disponibile questo computer, così l’accesso non presidiato funziona dopo un riavvio.",
 "Keyboard & mouse": "Tastiera e mouse",
@@ -871,6 +904,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Remote desktop": "Desktop remoto",
 "Remote device screen": "Schermo del dispositivo remoto",
 "Renew connection": "Rinnova la connessione",
+"Restarting Mixel Remote…": "Riavvio di Mixel Remote…",
 "Screen": "Schermo",
 "Screen recording": "Registrazione dello schermo",
 "Screen sharing starts only after the host accepts the request.": "La condivisione dello schermo inizia solo dopo che l’host accetta la richiesta.",
@@ -945,6 +979,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Turning on. Waiting for the connection service.": "Attivazione. In attesa del servizio di connessione.",
 "Unattended sharing": "Condivisione non presidiata",
 "Update sign-in screen program": "Aggiorna il programma della schermata di accesso",
+"Updates": "Aggiornamenti",
 "Use another browser": "Usa un altro browser",
 "Use the same Mixel ID you use for other Mixel apps. You’ll sign in securely in your browser.": "Usa lo stesso Mixel ID delle altre app Mixel. Accederai in modo sicuro nel browser.",
 "Use unattended access if granted": "Usa l’accesso non presidiato se consentito",
@@ -961,6 +996,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Waiting for confirmation that the connection has closed.": "In attesa della conferma di chiusura della connessione.",
 "Waiting for the other person to accept your request.": "In attesa che l’altra persona accetti la richiesta.",
 "Waiting for the remote host to Accept": "In attesa che l’host accetti",
+"When nothing is in use, Mixel Remote installs signed updates and restarts. Otherwise the sidebar offers Install.": "Quando nulla è in uso, Mixel Remote installa gli aggiornamenti firmati e si riavvia. Altrimenti la barra laterale propone «Installa».",
 "When this computer starts": "All’avvio di questo computer",
 "Write a message": "Scrivi un messaggio",
 "YOUR CONNECTION ID": "IL TUO ID DI CONNESSIONE",
@@ -1042,6 +1078,18 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 [
 "^Display (\\d+)$",
 "Schermo $1"
+],
+[
+"^Mixel Remote ([\\w.+-]+) is available · Install$",
+"Mixel Remote $1 è disponibile · Installa"
+],
+[
+"^Installing Mixel Remote ([\\w.+-]+)…$",
+"Installazione di Mixel Remote $1…"
+],
+[
+"^Update failed: (.+) · Download$",
+"Aggiornamento non riuscito: $1 · Scarica"
 ]
 ]
 }
