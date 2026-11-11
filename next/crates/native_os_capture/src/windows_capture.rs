@@ -21,23 +21,67 @@ use zeroize::Zeroizing;
 /// so a new duplication follows the user's desktop after a lock or a secure
 /// prompt. Returns false when that desktop is not accessible (still secure).
 pub fn attach_input_desktop() -> bool {
+    use std::cell::RefCell;
     use windows::Win32::System::StationsAndDesktops::{
-        DESKTOP_ACCESS_FLAGS, DESKTOP_CONTROL_FLAGS, OpenInputDesktop, SetThreadDesktop,
+        CloseDesktop, DESKTOP_ACCESS_FLAGS, DESKTOP_CONTROL_FLAGS, GetUserObjectInformationW, HDESK,
+        OpenInputDesktop, SetThreadDesktop, UOI_NAME,
     };
-    // SAFETY: the handle is only passed to SetThreadDesktop; it is kept open
-    // for the thread's lifetime as SetThreadDesktop requires.
-    unsafe {
-        match OpenInputDesktop(DESKTOP_CONTROL_FLAGS(0), false, DESKTOP_ACCESS_FLAGS(0x0001 | 0x0100)) {
-            Ok(desktop) => SetThreadDesktop(desktop).is_ok(),
-            Err(_) => false,
+    thread_local! {
+        // The desktop this thread is attached to, by name; switched only when it changes.
+        static CURRENT: RefCell<Option<(String, HDESK)>> = const { RefCell::new(None) };
+    }
+    fn name(desktop: HDESK) -> Option<String> {
+        let mut buffer = [0u16; 128];
+        let mut needed = 0u32;
+        // SAFETY: the buffer and length describe valid writable memory.
+        unsafe {
+            GetUserObjectInformationW(
+                windows::Win32::Foundation::HANDLE(desktop.0),
+                UOI_NAME,
+                Some(buffer.as_mut_ptr().cast()),
+                (buffer.len() * 2) as u32,
+                Some(&mut needed),
+            )
+            .ok()?;
         }
+        let length = buffer.iter().position(|&unit| unit == 0).unwrap_or(buffer.len());
+        Some(String::from_utf16_lossy(&buffer[..length]))
+    }
+    // SAFETY: handles are closed exactly once; the attached one stays open while in use,
+    // as SetThreadDesktop requires. MAXIMUM_ALLOWED includes the input (journal) right
+    // that SendInput needs on secure desktops for the SYSTEM host.
+    unsafe {
+        let Ok(desktop) = OpenInputDesktop(DESKTOP_CONTROL_FLAGS(0), false, DESKTOP_ACCESS_FLAGS(0x0200_0000)) else {
+            return false;
+        };
+        let Some(shown) = name(desktop) else {
+            let _ = CloseDesktop(desktop);
+            return false;
+        };
+        CURRENT.with(|current| {
+            let mut current = current.borrow_mut();
+            if current.as_ref().is_some_and(|(attached, _)| *attached == shown) {
+                let _ = CloseDesktop(desktop);
+                return true;
+            }
+            if SetThreadDesktop(desktop).is_err() {
+                let _ = CloseDesktop(desktop);
+                return false;
+            }
+            if let Some((_, previous)) = current.replace((shown, desktop)) {
+                let _ = CloseDesktop(previous);
+            }
+            true
+        })
     }
 }
 fn native(error: windows::core::Error) -> CaptureError {
     // Desktop switches (lock screen, secure prompts) can surface from any
     // duplication call, not only AcquireNextFrame. Report them as a target
     // change so the owner can wait for the same display to come back.
-    if error.code() == DXGI_ERROR_ACCESS_LOST {
+    // E_ACCESSDENIED: the thread is not on the desktop that is shown (for example a secure
+    // desktop that this process may not read); the owner reattaches and tries again.
+    if error.code() == DXGI_ERROR_ACCESS_LOST || error.code().0 as u32 == 0x8007_0005 {
         return CaptureError::Target;
     }
     CaptureError::Native(format!("Windows desktop capture failed ({})", error.code()))

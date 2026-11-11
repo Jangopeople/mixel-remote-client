@@ -299,6 +299,11 @@ async fn negotiate(
     // Controller offer: it can switch between host displays. Host answer: how many, and which is shown.
     const DISPLAYS_ATTRIBUTE: &str = "a=x-mixel-displays:1";
     const DISPLAY_COUNT_PREFIX: &str = "a=x-mixel-display-count:";
+    // Controller offer: it understands host actions. Host answer: the actions it offers
+    // (comma list) and, if set up, the Remote ID of its sign-in screen access.
+    const ACTIONS_ATTRIBUTE: &str = "a=x-mixel-actions:1";
+    const HOST_ACTIONS_PREFIX: &str = "a=x-mixel-host-actions:";
+    const SIGNIN_ID_PREFIX: &str = "a=x-mixel-signin-id:";
     let deadline = Instant::now() + Duration::from_secs(30);
     let local = config.identity.public_key()?;
     let role = if config.host {
@@ -364,6 +369,8 @@ async fn negotiate(
     let mut peer_supports_input_result = false;
     let mut displays: Vec<String> = Vec::new();
     let mut display_offer = (0u16, 0u16);
+    let mut actions: Vec<String> = Vec::new();
+    let mut signin_id: Option<u32> = None;
     if !config.host {
         let offer = transport
             .local_sdp(
@@ -382,7 +389,7 @@ async fn negotiate(
         )?;
         config.signal(Signal::Identity(proof.hello())).await?;
         let offer = format!(
-            "{}\r\n{RECORDING_ATTRIBUTE}\r\n{INPUT_RESULT_ATTRIBUTE}\r\n{DISPLAYS_ATTRIBUTE}\r\n",
+            "{}\r\n{RECORDING_ATTRIBUTE}\r\n{INPUT_RESULT_ATTRIBUTE}\r\n{DISPLAYS_ATTRIBUTE}\r\n{ACTIONS_ATTRIBUTE}\r\n",
             offer.sdp.trim_end()
         );
         config.signal(Signal::Offer(offer)).await?;
@@ -445,6 +452,11 @@ async fn negotiate(
             Signal::Offer(sdp) if config.host && !remote_description => {
                 peer_supports_recording = sdp.lines().any(|line| line == RECORDING_ATTRIBUTE);
                 peer_supports_input_result = sdp.lines().any(|line| line == INPUT_RESULT_ATTRIBUTE);
+                if config.control && sdp.lines().any(|line| line == ACTIONS_ATTRIBUTE) {
+                    actions = tokio::task::spawn_blocking(crate::host_actions::available)
+                        .await
+                        .unwrap_or_default();
+                }
                 if config.control && sdp.lines().any(|line| line == DISPLAYS_ATTRIBUTE) {
                     let source = config.source.clone();
                     displays = tokio::task::spawn_blocking(move || {
@@ -490,6 +502,16 @@ async fn negotiate(
                         answer.sdp
                     }
                 };
+                let mut answer_sdp = answer_sdp;
+                if !actions.is_empty() {
+                    answer_sdp = format!("{}\r\n{HOST_ACTIONS_PREFIX}{}\r\n", answer_sdp.trim_end(), actions.join(","));
+                    #[cfg(target_os = "windows")]
+                    if let Some(status) = crate::windows_signin_host::public_status()
+                        .filter(|_| !crate::windows_signin_host::is_signin_host())
+                    {
+                        answer_sdp = format!("{}\r\n{SIGNIN_ID_PREFIX}{}\r\n", answer_sdp.trim_end(), status.connection_id);
+                    }
+                }
                 config.signal(Signal::Answer(answer_sdp)).await?;
                 handshake = Some(proof);
             }
@@ -501,6 +523,16 @@ async fn negotiate(
                     .and_then(|(count, current)| Some((count.parse::<u16>().ok()?, current.parse::<u16>().ok()?)))
                     .filter(|(count, current)| (2..=16).contains(count) && current < count)
                     .unwrap_or((0, 0));
+                actions = sdp
+                    .lines()
+                    .find_map(|line| line.strip_prefix(HOST_ACTIONS_PREFIX))
+                    .map(crate::host_actions::parse)
+                    .unwrap_or_default();
+                signin_id = sdp
+                    .lines()
+                    .find_map(|line| line.strip_prefix(SIGNIN_ID_PREFIX))
+                    .and_then(|value| value.trim().parse::<u32>().ok())
+                    .filter(|id| (100_000_000..=999_999_999).contains(id));
                 transport
                     .peer
                     .set_remote_description(
@@ -572,6 +604,7 @@ async fn negotiate(
             sources: displays,
             count: display_offer.0,
             current: display_offer.1,
+            actions: actions.clone(),
         },
     )
     .await?;
@@ -583,6 +616,15 @@ async fn negotiate(
                 config.session,
                 if control.allowed { display_offer.0 } else { 0 },
                 display_offer.1,
+            )
+            .await;
+        config
+            .state
+            .set_host_actions(
+                config.generation,
+                config.session,
+                if control.allowed { actions } else { Vec::new() },
+                signin_id,
             )
             .await;
     }

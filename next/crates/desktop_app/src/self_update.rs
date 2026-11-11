@@ -62,7 +62,12 @@ pub fn target() -> (&'static str, &'static str) {
 }
 
 /// Checks the signature and content of a channel file for this platform.
+#[cfg(test)]
 pub fn verify_envelope(bytes: &[u8], channel: &str, key: &VerifyingKey) -> Result<Manifest, String> {
+    let (platform, arch) = target();
+    verify_envelope_for(bytes, channel, key, platform, arch)
+}
+fn verify_envelope_for(bytes: &[u8], channel: &str, key: &VerifyingKey, platform: &str, arch: &str) -> Result<Manifest, String> {
     let envelope: Envelope = serde_json::from_slice(bytes).map_err(|_| "The update information is invalid")?;
     let engine = base64::engine::general_purpose::STANDARD;
     let manifest_bytes = engine.decode(envelope.manifest).map_err(|_| "The update information is invalid")?;
@@ -74,7 +79,6 @@ pub fn verify_envelope(bytes: &[u8], channel: &str, key: &VerifyingKey) -> Resul
     key.verify_strict(&manifest_bytes, &Signature::from_bytes(&signature))
         .map_err(|_| "The update is not signed by Mixel")?;
     let manifest: Manifest = serde_json::from_slice(&manifest_bytes).map_err(|_| "The update information is invalid")?;
-    let (platform, arch) = target();
     let safe_file = manifest.file.len() <= 200
         && manifest.file.starts_with("files/")
         && !manifest.file.contains("..")
@@ -106,8 +110,13 @@ fn client() -> Result<reqwest::Client, String> {
 
 /// The newest signed version for this platform and channel.
 pub async fn latest() -> Result<Manifest, String> {
-    let channel = channel();
     let (platform, arch) = target();
+    latest_for(platform, arch).await
+}
+/// The newest signed version for a given platform (e.g. the Windows installer for a rollout
+/// command created on a Mac).
+pub async fn latest_for(platform: &str, arch: &str) -> Result<Manifest, String> {
+    let channel = channel();
     let response = client()?
         .get(format!("{BASE}/{channel}/{platform}-{arch}/latest.json"))
         .timeout(Duration::from_secs(15))
@@ -123,7 +132,11 @@ pub async fn latest() -> Result<Manifest, String> {
         return Err("The update information is invalid".into());
     }
     let key = VerifyingKey::from_bytes(&UPDATE_KEY).map_err(|_| "The update key is invalid")?;
-    verify_envelope(&bytes, &channel, &key)
+    verify_envelope_for(&bytes, &channel, &key, platform, arch)
+}
+/// Public download address of a manifest's file.
+pub fn file_url(manifest: &Manifest) -> String {
+    format!("{BASE}/{}", manifest.file)
 }
 
 fn work_dir(version: &str) -> PathBuf {

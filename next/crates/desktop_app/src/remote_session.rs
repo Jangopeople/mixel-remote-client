@@ -67,6 +67,10 @@ pub struct Status {
     pub displays: u16,
     /// Controller: the host display currently shown.
     pub display: u16,
+    /// Controller: one-click actions the host offered ("sas", "restart").
+    pub host_actions: Vec<String>,
+    /// Controller: Remote ID of the host's sign-in screen access, to reconnect after a restart.
+    pub signin_id: Option<u32>,
     #[serde(skip)]
     code_expires_at: Option<std::time::Instant>,
 }
@@ -107,6 +111,8 @@ impl Default for Status {
             online: Vec::new(),
             displays: 0,
             display: 0,
+            host_actions: Vec::new(),
+            signin_id: None,
             code_expires_at: None,
         }
     }
@@ -284,6 +290,8 @@ pub enum InputEvent {
     ReleaseAll,
     /// Controller only: show another of the host's displays (never sent as input).
     SelectDisplay { index: u16 },
+    /// Controller only: run a host action the host offered ("sas", "restart").
+    Action { name: String },
 }
 impl InputEvent {
     pub(crate) fn borrowed(&self) -> core_protocol::input::Input<'_> {
@@ -319,7 +327,7 @@ impl InputEvent {
                 horizontal: *horizontal,
                 vertical: *vertical,
             },
-            Self::ReleaseAll | Self::SelectDisplay { .. } => Input::ReleaseAll,
+            Self::ReleaseAll | Self::SelectDisplay { .. } | Self::Action { .. } => Input::ReleaseAll,
         }
     }
 }
@@ -1196,6 +1204,16 @@ impl RemoteSession {
         {
             inner.status.displays = count;
             inner.status.display = current;
+        }
+    }
+    pub(crate) async fn set_host_actions(&self, generation: u64, session: Uuid, actions: Vec<String>, signin_id: Option<u32>) {
+        let mut inner = self.0.lock().await;
+        if inner.generation == generation
+            && inner.status.session == Some(session)
+            && !inner.cancel.load(Ordering::Acquire)
+        {
+            inner.status.host_actions = actions;
+            inner.status.signin_id = signin_id;
         }
     }
     pub(crate) async fn set_recording_permission(

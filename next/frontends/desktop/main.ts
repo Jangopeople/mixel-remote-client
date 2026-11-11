@@ -167,6 +167,16 @@ interface Window {
     void accountAction('account_verify', {factor: factor.value, code: entered});
   });
   const updateNotice = element<HTMLButtonElement>('update-notice');
+  // While a technician is connected through always-on access (Windows), say so.
+  const technicianNotice = document.getElementById('technician-notice');
+  async function checkTechnician(): Promise<void> {
+    try {
+      const value = await invoke<{supported: boolean; technician: boolean}>('signin_screen_status');
+      if (technicianNotice) technicianNotice.hidden = !(value.supported && value.technician);
+    } catch { if (technicianNotice) technicianNotice.hidden = true; }
+  }
+  void checkTechnician();
+  window.setInterval(() => { void checkTechnician(); }, 5000);
   const autoUpdate = document.getElementById('auto-update') as HTMLInputElement | null;
   type UpdateInfo = {version: string; installable: boolean; silent: boolean; needs_password: boolean};
   const autoKey = 'mixel.remote.autoupdate.v1';

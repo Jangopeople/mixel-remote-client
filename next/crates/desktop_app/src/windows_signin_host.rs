@@ -314,6 +314,48 @@ pub fn admin(command: &str, argument: Option<&str>) -> Result<(), String> {
             std::fs::write(public_key_path(), hex)
                 .map_err(|_| "Cannot publish the sign-in screen key".into())
         }
+        "--signin-enroll" => {
+            // Rollout: enrol this computer with a company token and turn on always-on access.
+            let secret = argument.ok_or("Missing rollout token")?.trim().to_owned();
+            let name = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "Windows computer".into());
+            let name: String = name.chars().filter(|c| !c.is_control()).take(60).collect();
+            let identity = IdentityState::machine(true)?;
+            let key = identity.public_key()?;
+            let hex: String = key.as_bytes().iter().map(|byte| format!("{byte:02x}")).collect();
+            let _ = std::fs::write(public_key_path(), hex);
+            let config = crate::service_config::ServiceConfig::load()?;
+            let base = config.identity_url.parse().map_err(|_| "Invalid identity service configuration")?;
+            let ism = signaling_server::auth::IsmAuth::new(base, config.public_key)
+                .map_err(|_| "Invalid identity service configuration")?;
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|_| "Cannot start the rollout")?;
+            let enrolled = runtime
+                .block_on(ism.enroll_with_rollout_token(&secret, &name, "windows", &key))
+                .map_err(|_| "The rollout token was refused (invalid, expired or used up)")?;
+            let install = serde_json::json!({
+                "settings": Settings {
+                    version: 1,
+                    device: enrolled.device_id,
+                    profile: enrolled.profile,
+                    tenant: enrolled.tenant,
+                    connection_id: enrolled.connection_id,
+                    generation: enrolled.generation,
+                    control: true,
+                },
+                "name": name,
+            });
+            let payload: String = serde_json::to_vec(&install)
+                .map_err(|_| "Cannot prepare the settings")?
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
+            admin("--signin-install", Some(&payload))?;
+            let _ = std::fs::write(folder().join("rollout-result.txt"), format!("Remote ID {}\n", enrolled.connection_id));
+            log(&format!("rolled out as Remote ID {}", enrolled.connection_id));
+            Ok(())
+        }
         "--signin-install" => {
             let hex = argument.ok_or("Missing settings")?;
             if hex.len() > 8192 || hex.len() % 2 != 0 {
@@ -384,10 +426,11 @@ pub fn admin(command: &str, argument: Option<&str>) -> Result<(), String> {
             ]) {
                 return Err("Cannot install the sign-in screen service".into());
             }
+            allow_service_sas();
             let _ = sc(&[
                 "description",
                 SERVICE_NAME,
-                "Lets approved Mixel Remote technicians reach this computer at the Windows sign-in screen.",
+                "Lets approved Mixel Remote technicians reach this computer at the Windows sign-in screen and send Ctrl+Alt+Del.",
             ]);
             let _ = sc(&[
                 "failure",
@@ -423,6 +466,7 @@ pub fn admin(command: &str, argument: Option<&str>) -> Result<(), String> {
             std::thread::sleep(Duration::from_secs(2));
             let _ = sc(&["delete", SERVICE_NAME]);
             let _ = std::fs::remove_dir_all(program_folder());
+            restore_service_sas();
             // The computer-wide key stays, so turning access on again reuses its enrolment.
             for path in [settings_path(), public_status_path()] {
                 let _ = std::fs::remove_file(path);
@@ -430,6 +474,145 @@ pub fn admin(command: &str, argument: Option<&str>) -> Result<(), String> {
             Ok(())
         }
         _ => Err("Unknown sign-in screen command".into()),
+    }
+}
+
+// ---------------- Ctrl+Alt+Del ----------------
+static SIGNIN_HOST: AtomicBool = AtomicBool::new(false);
+
+fn call_sas() -> Result<(), String> {
+    use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
+    // SAFETY: sas.dll exports `VOID SendSAS(BOOL AsUser)`; the pointer is called with that ABI.
+    unsafe {
+        let library = LoadLibraryW(windows::core::w!("sas.dll")).map_err(|_| "Ctrl+Alt+Del is not available on this computer")?;
+        let function = GetProcAddress(library, windows::core::s!("SendSAS")).ok_or("Ctrl+Alt+Del is not available on this computer")?;
+        let send: unsafe extern "system" fn(i32) = std::mem::transmute(function);
+        send(0);
+    }
+    Ok(())
+}
+/// True in the headless sign-in screen host process.
+pub fn is_signin_host() -> bool {
+    SIGNIN_HOST.load(Ordering::Acquire)
+}
+/// Whether Ctrl+Alt+Del can be sent: in the sign-in screen host, or through the helper service.
+pub fn can_send_sas() -> bool {
+    // Only the SYSTEM host can also operate the security screen that Ctrl+Alt+Del opens.
+    SIGNIN_HOST.load(Ordering::Acquire)
+}
+const HELPER_PIPE: &str = r"\\.\pipe\MixelRemoteHelper";
+
+/// Sends Ctrl+Alt+Del (the secure attention sequence) on this computer. Windows accepts it
+/// only from the service process, so the SYSTEM host asks the service over a pipe that only
+/// SYSTEM may open.
+pub fn send_sas() -> Result<(), String> {
+    use std::io::Write;
+    if !SIGNIN_HOST.load(Ordering::Acquire) {
+        return Err("Ctrl+Alt+Del needs always-on access for this computer".into());
+    }
+    let mut last = None;
+    for _ in 0..20 {
+        match std::fs::OpenOptions::new().write(true).open(HELPER_PIPE) {
+            Ok(mut pipe) => return pipe.write_all(b"sas\n").map_err(|_| "Ctrl+Alt+Del could not be sent".into()),
+            Err(error) => last = Some(error),
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    log(&format!("Ctrl+Alt+Del: helper unavailable ({last:?})"));
+    Err("Ctrl+Alt+Del could not be sent".into())
+}
+
+/// Service thread: sends Ctrl+Alt+Del when the SYSTEM host asks (pipe open to SYSTEM only).
+fn helper_pipe() {
+    use tokio::io::AsyncReadExt;
+    use windows::Win32::Security::{
+        Authorization::{ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1},
+        PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES,
+    };
+    let Ok(runtime) = tokio::runtime::Builder::new_current_thread().enable_all().build() else {
+        log("helper pipe: no runtime");
+        return;
+    };
+    let mut descriptor = PSECURITY_DESCRIPTOR::default();
+    let sddl = wide("D:P(A;;GA;;;SY)");
+    // SAFETY: sddl is a live null-terminated buffer; the descriptor lives for the thread.
+    if unsafe { ConvertStringSecurityDescriptorToSecurityDescriptorW(PCWSTR(sddl.as_ptr()), SDDL_REVISION_1, &mut descriptor, None) }.is_err() {
+        log("helper pipe: no security descriptor");
+        return;
+    }
+    let mut attributes = SECURITY_ATTRIBUTES {
+        nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: descriptor.0,
+        bInheritHandle: false.into(),
+    };
+    runtime.block_on(async move {
+        let mut first = true;
+        while !STOP.load(Ordering::Acquire) {
+            let mut options = tokio::net::windows::named_pipe::ServerOptions::new();
+            options.first_pipe_instance(first).access_outbound(false);
+            // SAFETY: attributes points at a valid SECURITY_ATTRIBUTES for the whole loop.
+            let server = unsafe { options.create_with_security_attributes_raw(HELPER_PIPE, (&raw mut attributes).cast()) };
+            let Ok(mut server) = server else {
+                log("helper pipe: cannot create");
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                continue;
+            };
+            first = false;
+            // Wait as long as needed: the pipe stays available between requests.
+            if server.connect().await.is_err() {
+                continue;
+            }
+            let mut buffer = [0u8; 16];
+            let read = tokio::time::timeout(Duration::from_secs(2), server.read(&mut buffer)).await;
+            if let Ok(Ok(count)) = read
+                && &buffer[..count] == b"sas\n"
+            {
+                match call_sas() {
+                    Ok(()) => log("Ctrl+Alt+Del sent"),
+                    Err(error) => log(&error),
+                }
+            }
+        }
+    });
+}
+
+/// Notice for the signed-in user while a technician is connected through this host
+/// (read by the Mixel Remote app, which shows a banner).
+fn set_session_notice(active: bool) {
+    let path = folder().join("session-active.json");
+    if active {
+        let seconds = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |time| time.as_secs());
+        let _ = std::fs::write(path, format!("{{\"since\":{seconds}}}"));
+    } else {
+        let _ = std::fs::remove_file(path);
+    }
+}
+/// For the app: whether a technician is connected through the unattended host now.
+pub fn technician_connected() -> bool {
+    folder().join("session-active.json").is_file()
+}
+
+/// Elevated: allow services to send Ctrl+Alt+Del (policy SoftwareSASGeneration = 1) if unset.
+fn allow_service_sas() {
+    let key = r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System";
+    let present = std::process::Command::new("reg")
+        .args(["query", key, "/v", "SoftwareSASGeneration"])
+        .output()
+        .is_ok_and(|output| output.status.success());
+    if !present
+        && std::process::Command::new("reg")
+            .args(["add", key, "/v", "SoftwareSASGeneration", "/t", "REG_DWORD", "/d", "1", "/f"])
+            .output()
+            .is_ok_and(|output| output.status.success())
+    {
+        let _ = std::fs::write(folder().join("sas-policy-set"), b"1");
+    }
+}
+fn restore_service_sas() {
+    if std::fs::remove_file(folder().join("sas-policy-set")).is_ok() {
+        let _ = std::process::Command::new("reg")
+            .args(["delete", r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System", "/v", "SoftwareSASGeneration", "/f"])
+            .output();
     }
 }
 
@@ -481,6 +664,7 @@ unsafe extern "system" fn service_main(_argc: u32, _argv: *mut PWSTR) {
     STATUS.store(handle.0 as isize, Ordering::Release);
     report(SERVICE_RUNNING);
     log("service started");
+    std::thread::spawn(helper_pipe);
     supervise();
     log("service stopped");
     report(SERVICE_STOPPED);
@@ -610,8 +794,9 @@ fn supervise() {
         } else {
             signed_in_user(session)
         };
-        let wanted =
-            session != u32::MAX && user.as_deref() == Some("") && settings_path().is_file();
+        // Always reachable: the host follows the active console session (sign-in screen,
+        // desktop, lock screen and security prompts alike).
+        let wanted = session != u32::MAX && settings_path().is_file();
         let state = format!(
             "session {session} user {} wanted {wanted}",
             if user.as_deref().is_some_and(|name| !name.is_empty()) {
@@ -649,6 +834,7 @@ fn supervise() {
 
 // ---------------- host ----------------
 pub fn run_host() -> Result<(), String> {
+    SIGNIN_HOST.store(true, Ordering::Release);
     let bytes = std::fs::read(settings_path())
         .map_err(|_| "The sign-in screen settings are not readable")?;
     let settings: Settings =
@@ -691,9 +877,11 @@ pub fn run_host() -> Result<(), String> {
                         let status = remote.status().await;
                         if status.phase != phase {
                             log(&format!("host {}: {}", status.phase, status.message));
+                            set_session_notice(status.phase == "active");
                             phase.clone_from(&status.phase);
                         }
                         if matches!(status.phase.as_str(), "offline" | "error") {
+                            set_session_notice(false);
                             break;
                         }
                     }

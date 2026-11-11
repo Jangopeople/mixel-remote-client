@@ -172,7 +172,7 @@
       if(signinPanel.hidden)return;
       signinInstalled=value.connection_id!==null;signinOutdated=value.outdated;
       signinCurrent.hidden=!signinInstalled;
-      if(signinInstalled)signinCurrent.textContent=`Sign-in screen access is on for ${value.name ?? 'this computer'} · Remote ID ${formatId(value.connection_id ?? 0)}. A technician with unattended access can pair and connect to this ID.`;
+      if(signinInstalled)signinCurrent.textContent=`Always-on access is on for ${value.name ?? 'this computer'} · Remote ID ${formatId(value.connection_id ?? 0)}. A technician with unattended access can pair and connect to this ID.`;
       if(!signinLoaded && !signinInstalled){
         const list=await invoke<Company[]>('enrollment_companies');
         signinCompany.replaceChildren();
@@ -189,25 +189,77 @@
     signinStatus.textContent='Waiting for administrator approval on this computer…';
     try{
       const id=await invoke<number>('signin_screen_enable',{company:signinCompany.value,name:signinName.value.trim()});
-      signinStatus.textContent=`Sign-in screen access is on. Remote ID ${formatId(id)}.`;
+      signinStatus.textContent=`Always-on access is on. Remote ID ${formatId(id)}.`;
     }catch(error){signinStatus.textContent=String(error);}
     finally{signinBusy=false;await refreshSignin();}
   });
   signinUpdate.addEventListener('click',async()=>{
     if(signinBusy)return;signinBusy=true;renderSignin();
     signinStatus.textContent='Waiting for administrator approval on this computer…';
-    try{await invoke('signin_screen_update');signinStatus.textContent='The sign-in screen program is up to date.';}
+    try{await invoke('signin_screen_update');signinStatus.textContent='Always-on access is up to date.';}
     catch(error){signinStatus.textContent=String(error);}
     finally{signinBusy=false;await refreshSignin();}
   });
   signinDisable.addEventListener('click',async()=>{
     if(signinBusy)return;signinBusy=true;renderSignin();
     signinStatus.textContent='Waiting for administrator approval on this computer…';
-    try{await invoke('signin_screen_disable');signinStatus.textContent='Sign-in screen access is off.';}
+    try{await invoke('signin_screen_disable');signinStatus.textContent='Always-on access is off.';}
     catch(error){signinStatus.textContent=String(error);}
     finally{signinBusy=false;signinLoaded=false;await refreshSignin();}
   });
   document.addEventListener('mixel-account-state',()=>{void Promise.resolve().then(refreshSignin);});
+  // Rollout: company token + command for many computers (team members).
+  const rolloutPanel=element<HTMLDivElement>('rollout-panel'), rolloutCompany=element<HTMLSelectElement>('rollout-company'), rolloutLabel=element<HTMLInputElement>('rollout-label'), rolloutCount=element<HTMLInputElement>('rollout-count'), rolloutDays=element<HTMLInputElement>('rollout-days'), rolloutCreate=element<HTMLButtonElement>('rollout-create'), rolloutResult=element<HTMLDivElement>('rollout-result'), rolloutCommand=element<HTMLTextAreaElement>('rollout-command'), rolloutCopy=element<HTMLButtonElement>('rollout-copy'), rolloutList=element<HTMLUListElement>('rollout-list'), rolloutStatus=element<HTMLParagraphElement>('rollout-status');
+  type Rollout={id:string;label:string;expires_at:string;max_uses:number;uses:number;revoked_at:string|null};
+  let rolloutBusy=false, rolloutLoaded=false;
+  function renderRollout():void{
+    rolloutCreate.disabled=rolloutBusy || !rolloutCompany.value || !rolloutLabel.value.trim();
+  }
+  async function refreshRolloutList():Promise<void>{
+    if(!rolloutCompany.value)return;
+    try{
+      const list=await invoke<Rollout[]>('rollout_list',{company:rolloutCompany.value});
+      rolloutList.replaceChildren();
+      for(const item of list){
+        const row=document.createElement('li');
+        const text=document.createElement('span');
+        const state=item.revoked_at?'revoked':new Date(item.expires_at).getTime()<Date.now()?'expired':`valid until ${new Date(item.expires_at).toLocaleDateString()}`;
+        text.textContent=`${item.label} · ${item.uses}/${item.max_uses} computers · ${state}`;
+        row.appendChild(text);
+        if(!item.revoked_at){
+          const revoke=document.createElement('button');revoke.type='button';revoke.className='button-quiet';revoke.textContent='Revoke';
+          revoke.addEventListener('click',async()=>{try{await invoke('rollout_revoke',{id:item.id});await refreshRolloutList();}catch(error){rolloutStatus.textContent=String(error);}});
+          row.appendChild(revoke);
+        }
+        rolloutList.appendChild(row);
+      }
+    }catch(error){rolloutStatus.textContent=String(error);}
+  }
+  async function refreshRollout():Promise<void>{
+    rolloutPanel.hidden=!staff;
+    if(!staff || rolloutLoaded)return;
+    try{
+      const list=await invoke<Company[]>('enrollment_companies');
+      rolloutCompany.replaceChildren();
+      for(const item of list){const option=document.createElement('option');option.value=item.client_id;option.textContent=item.client_name;rolloutCompany.appendChild(option);}
+      rolloutLoaded=true;
+      await refreshRolloutList();
+    }catch{rolloutPanel.hidden=true;}
+    finally{renderRollout();}
+  }
+  rolloutLabel.addEventListener('input',renderRollout);
+  rolloutCompany.addEventListener('change',()=>{renderRollout();void refreshRolloutList();});
+  rolloutCreate.addEventListener('click',async()=>{
+    if(rolloutBusy)return;rolloutBusy=true;renderRollout();rolloutStatus.textContent='Creating…';
+    try{
+      const created=await invoke<{token:string;windows_command:string}>('rollout_create',{company:rolloutCompany.value,label:rolloutLabel.value.trim(),days:Number(rolloutDays.value)||30,computers:Number(rolloutCount.value)||50});
+      rolloutCommand.value=created.windows_command;rolloutResult.hidden=false;rolloutStatus.textContent='Rollout command created.';
+      await refreshRolloutList();
+    }catch(error){rolloutStatus.textContent=String(error);}
+    finally{rolloutBusy=false;renderRollout();}
+  });
+  rolloutCopy.addEventListener('click',()=>{rolloutCommand.select();void navigator.clipboard?.writeText(rolloutCommand.value).then(()=>{rolloutStatus.textContent='Command copied.';},()=>{});});
+  document.addEventListener('mixel-account-state',()=>{rolloutLoaded=false;void Promise.resolve().then(refreshRollout);});
   render();const av=accountVersion,rv=remoteVersion;
   void invoke<Account>('account_status').then(value=>{if(accountVersion===av)account(value);}).catch(()=>{});
   void invoke<{phase:string}>('remote_status').then(value=>{if(remoteVersion===rv){offline=['offline','error'].includes(value.phase);render();}}).catch(()=>{});

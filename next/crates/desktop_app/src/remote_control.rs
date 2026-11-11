@@ -21,6 +21,8 @@ const PERMISSIONS_V3: &[u8] = b"mixel-permissions-v3";
 const PERMISSIONS_V4: &[u8] = b"mixel-permissions-v4";
 /// Controller to host: show display N (one byte). Sent only to hosts that offered switching.
 const DISPLAY_SELECT: &[u8] = b"mixel-display-select-v1";
+/// Controller to host: run a one-click action the host offered (name as text).
+const HOST_ACTION: &[u8] = b"mixel-action-v1:";
 
 fn read_permissions(record: &[u8]) -> Result<[bool; 4], String> {
     let (flags, count) = if let Some(flags) = record.strip_prefix(PERMISSIONS_V3) {
@@ -47,6 +49,8 @@ pub struct DisplayOffer {
     pub sources: Vec<String>,
     pub count: u16,
     pub current: u16,
+    /// Host: actions offered to this controller. Controller: actions the host offered.
+    pub actions: Vec<String>,
 }
 
 pub struct ControlPipe {
@@ -70,6 +74,8 @@ pub struct ControlPipe {
     /// Controller: number of host displays offered, and the one shown.
     display_count: u16,
     current_display: u16,
+    /// Host: actions it offered. Controller: actions the host offered.
+    actions: Vec<String>,
 }
 impl ControlPipe {
     pub async fn create(
@@ -81,7 +87,7 @@ impl ControlPipe {
         peer_supports_input_result: bool,
         displays: DisplayOffer,
     ) -> Result<Self, String> {
-        let DisplayOffer { sources: displays, count, current } = displays;
+        let DisplayOffer { sources: displays, count, current, actions } = displays;
         let display_offer = (count, current);
         let (input_tx, input_rx) = mpsc::channel(32);
         let (clipboard_tx, clipboard_rx) = mpsc::channel(1);
@@ -221,6 +227,7 @@ impl ControlPipe {
             current_display: if config.host { 0 } else { display_offer.1 },
             display_count: if config.host { 0 } else { display_offer.0 },
             displays: if config.host && allowed { displays } else { Vec::new() },
+            actions: if allowed { actions } else { Vec::new() },
         })
     }
     /// Host: the next display to capture, after the controller selected one.
@@ -258,6 +265,18 @@ impl ControlPipe {
         .map_err(|_| "Video idle notification failed")?;
         self.last_idle_sent = Instant::now();
         Ok(())
+    }
+    async fn send_action(&mut self, name: &str, channel: &Arc<dyn NativeDataChannel>) -> Result<(), String> {
+        if self.host || !self.allowed || !self.actions.iter().any(|action| action == name) {
+            return Err("This action is not available on the remote computer".into());
+        }
+        let mut plain = HOST_ACTION.to_vec();
+        plain.extend_from_slice(name.as_bytes());
+        let record = self.crypto.seal(&plain).map_err(|error| error.to_string())?;
+        tokio::time::timeout(Duration::from_secs(2), channel.send(record.as_slice().into()))
+            .await
+            .map_err(|_| "The action request timed out")?
+            .map_err(|_| "The action request failed".into())
     }
     async fn select_display(
         &mut self,
@@ -320,6 +339,11 @@ impl ControlPipe {
             if Instant::now() >= command.deadline {
                 let _ = command.reply.send(Err("The input command expired".into()));
                 return Ok(());
+            }
+            if let crate::remote_session::InputEvent::Action { name } = &command.event {
+                let result = self.send_action(name, channel).await;
+                let _ = command.reply.send(result.clone().map(|()| true));
+                return result;
             }
             if let crate::remote_session::InputEvent::SelectDisplay { index } = command.event {
                 let result = self.select_display(index, channel).await;
@@ -437,6 +461,19 @@ impl ControlPipe {
                 .host(config, &mut self.crypto, channel, &plain)
                 .await;
         }
+        if let Some(rest) = plain.strip_prefix(HOST_ACTION) {
+            let name = std::str::from_utf8(rest).map_err(|_| "Invalid host action")?.to_owned();
+            if !self.allowed || !self.actions.contains(&name) {
+                return Err("Invalid host action".into());
+            }
+            // Run off the media loop; a restart takes the session down on its own.
+            tokio::task::spawn_blocking(move || {
+                if let Err(error) = crate::host_actions::run(&name) {
+                    eprintln!("host action {name}: {error}");
+                }
+            });
+            return Ok(());
+        }
         if let Some(rest) = plain.strip_prefix(DISPLAY_SELECT) {
             return match rest {
                 [index] if self.allowed && usize::from(*index) < self.displays.len() => {
@@ -474,6 +511,15 @@ impl ControlPipe {
             Ok(()) => b"mixel-input-posted-v1".as_slice(),
             Err(InputError::Injection(InjectionError::Unsupported)) if self.report_unsupported_input => {
                 b"mixel-input-unsupported-v1".as_slice()
+            }
+            // A screen this host cannot drive (for example a Windows security prompt for a
+            // normal app) drops the event but keeps the session.
+            Err(InputError::Injection(InjectionError::Native(_))) => {
+                if self.report_unsupported_input {
+                    b"mixel-input-unsupported-v1".as_slice()
+                } else {
+                    b"mixel-input-posted-v1".as_slice()
+                }
             }
             Err(error) => return Err(error.to_string()),
         };

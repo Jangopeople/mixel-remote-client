@@ -101,6 +101,24 @@ pub struct EnrollmentCompany {
     pub client_id: Uuid,
     pub client_name: String,
 }
+#[derive(Serialize, Deserialize)]
+pub struct RolloutToken {
+    pub id: Uuid,
+    pub label: String,
+    pub created_at: String,
+    pub expires_at: String,
+    pub max_uses: i32,
+    pub uses: i32,
+    pub revoked_at: Option<String>,
+}
+#[derive(Deserialize)]
+pub struct RolloutEnrollment {
+    pub device_id: Uuid,
+    pub connection_id: u32,
+    pub generation: u64,
+    pub profile: Uuid,
+    pub tenant: Uuid,
+}
 #[derive(Serialize)]
 pub struct CurrentEnrollment {
     pub device: Uuid,
@@ -269,6 +287,116 @@ impl IsmAuth {
             return Err(AuthError);
         }
         Ok(device)
+    }
+    /// Creates a company rollout token (team members only); returns the secret once.
+    pub async fn create_rollout_token(
+        &self,
+        token: &str,
+        client: Uuid,
+        label: &str,
+        valid_days: u16,
+        computers: u16,
+    ) -> Result<String, AuthError> {
+        let label = label.trim();
+        if client.is_nil()
+            || label.is_empty()
+            || label.chars().count() > 80
+            || label.chars().any(char::is_control)
+            || !(1..=365).contains(&valid_days)
+            || !(1..=10000).contains(&computers)
+            || !self.authenticate_scope(token, false).await?.staff
+        {
+            return Err(AuthError);
+        }
+        let response = self
+            .client
+            .post(self.base.join("/rest/v1/rpc/remote_create_rollout_token").map_err(|_| AuthError)?)
+            .header("apikey", &self.api_key)
+            .bearer_auth(token)
+            .json(&serde_json::json!({"target_client": client, "token_label": label, "valid_days": valid_days, "computers": computers}))
+            .send()
+            .await
+            .map_err(|_| AuthError)?;
+        let secret: String = Self::decode_response(response).await?;
+        if !secret.starts_with("mrt_") || secret.len() > 100 {
+            return Err(AuthError);
+        }
+        Ok(secret)
+    }
+    /// A company's rollout tokens (no secrets).
+    pub async fn rollout_tokens(&self, token: &str, client: Uuid) -> Result<Vec<RolloutToken>, AuthError> {
+        if client.is_nil() || !self.authenticate_scope(token, false).await?.staff {
+            return Err(AuthError);
+        }
+        let response = self
+            .client
+            .post(self.base.join("/rest/v1/rpc/remote_rollout_tokens").map_err(|_| AuthError)?)
+            .header("apikey", &self.api_key)
+            .bearer_auth(token)
+            .json(&serde_json::json!({"target_client": client}))
+            .send()
+            .await
+            .map_err(|_| AuthError)?;
+        let tokens: Vec<RolloutToken> = Self::decode_response(response).await?;
+        if tokens.len() > 100 {
+            return Err(AuthError);
+        }
+        Ok(tokens)
+    }
+    pub async fn revoke_rollout_token(&self, token: &str, id: Uuid) -> Result<bool, AuthError> {
+        if id.is_nil() || !self.authenticate_scope(token, false).await?.staff {
+            return Err(AuthError);
+        }
+        let response = self
+            .client
+            .post(self.base.join("/rest/v1/rpc/remote_revoke_rollout_token").map_err(|_| AuthError)?)
+            .header("apikey", &self.api_key)
+            .bearer_auth(token)
+            .json(&serde_json::json!({"token_id": id}))
+            .send()
+            .await
+            .map_err(|_| AuthError)?;
+        Self::decode_response(response).await
+    }
+    /// A computer enrols itself with a rollout token (no user sign-in).
+    pub async fn enroll_with_rollout_token(
+        &self,
+        secret: &str,
+        name: &str,
+        os: &str,
+        key: &ed25519_dalek::VerifyingKey,
+    ) -> Result<RolloutEnrollment, AuthError> {
+        let name = name.trim();
+        if !secret.starts_with("mrt_")
+            || secret.len() > 100
+            || name.is_empty()
+            || name.chars().count() > 60
+            || name.chars().any(char::is_control)
+            || !matches!(os, "macos" | "windows" | "linux")
+        {
+            return Err(AuthError);
+        }
+        let hex: String = key.as_bytes().iter().map(|byte| format!("{byte:02x}")).collect();
+        let response = self
+            .client
+            .post(self.base.join("/rest/v1/rpc/remote_enroll_with_token").map_err(|_| AuthError)?)
+            .header("apikey", &self.api_key)
+            .header("accept", "application/vnd.pgrst.object+json")
+            .bearer_auth(&self.api_key)
+            .json(&serde_json::json!({"token": secret, "device_name": name, "device_os": os, "key_material": format!("\\x{hex}")}))
+            .send()
+            .await
+            .map_err(|_| AuthError)?;
+        let enrolled: RolloutEnrollment = Self::decode_response(response).await?;
+        if enrolled.device_id.is_nil()
+            || enrolled.profile.is_nil()
+            || enrolled.tenant.is_nil()
+            || !(100_000_000..=999_999_999).contains(&enrolled.connection_id)
+            || enrolled.generation < 1
+        {
+            return Err(AuthError);
+        }
+        Ok(enrolled)
     }
     /// The ISM organization (tenant) of a device a team member may enrol.
     pub async fn device_tenant(&self, token: &str, device: Uuid) -> Result<Uuid, AuthError> {

@@ -11,6 +11,8 @@ mod device_identity;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 mod session_store;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+mod host_actions;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 mod self_update;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 mod autostart;
@@ -207,19 +209,37 @@ impl Worker {
         let thread = std::thread::Builder::new()
             .name("mixel-display-capture".into())
             .spawn(move || {
-                let capture = match PlatformCapture::open(&display) {
-                    Ok(capture) => {
+                // Capture the desktop that is on screen (the SYSTEM host starts on the
+                // sign-in desktop while a user may be signed in).
+                #[cfg(target_os = "windows")]
+                native_os_capture::windows_capture::attach_input_desktop();
+                let first = PlatformCapture::open(&display);
+                #[cfg(target_os = "windows")]
+                let first = match first {
+                    // Shown desktop not readable yet (secure prompt): wait for it below.
+                    Err(native_os_capture::stream::CaptureError::Target) => {
                         let _ = ready.send(Ok(()));
-                        capture
+                        lab_capture_log("desktop not readable yet; waiting");
+                        None
                     }
-                    Err(error) => {
+                    other => Some(other),
+                };
+                #[cfg(not(target_os = "windows"))]
+                let first = Some(first);
+                let capture = match first {
+                    None => None,
+                    Some(Ok(capture)) => {
+                        let _ = ready.send(Ok(()));
+                        Some(capture)
+                    }
+                    Some(Err(error)) => {
                         let text = error.to_string();
                         let _ = ready.send(Err(text.clone()));
                         delivery.close(error);
                         return Err(text);
                     }
                 };
-                let mut capture = Some(capture);
+                let mut capture = capture;
                 while !cancelled.load(Ordering::Acquire) {
                     let Some(active) = capture.as_mut() else {
                         // Windows replaced the user's desktop (lock screen or a
@@ -815,6 +835,8 @@ async fn startup_settings(
 struct SignInScreen {
     supported: bool,
     outdated: bool,
+    /// A technician is connected through the always-on host right now.
+    technician: bool,
     connection_id: Option<u32>,
     name: Option<String>,
 }
@@ -832,12 +854,13 @@ async fn signin_screen_status(window: tauri::WebviewWindow) -> Result<SignInScre
         Ok(SignInScreen {
             supported: true,
             outdated,
+            technician: windows_signin_host::technician_connected(),
             connection_id: status.as_ref().map(|status| status.connection_id),
             name: status.map(|status| status.name),
         })
     }
     #[cfg(not(target_os = "windows"))]
-    Ok(SignInScreen { supported: false, outdated: false, connection_id: None, name: None })
+    Ok(SignInScreen { supported: false, outdated: false, technician: false, connection_id: None, name: None })
 }
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 #[tauri::command]
@@ -907,6 +930,71 @@ async fn signin_screen_enable(
             .map_err(|_| "Administrator step failed")??;
         Ok(enrolled.connection_id)
     }
+}
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[derive(serde::Serialize)]
+struct RolloutCreated {
+    token: String,
+    /// PowerShell line for deployment tools or an administrator prompt on each Windows computer.
+    windows_command: String,
+}
+/// Team members: create a company rollout token and the command to run on each computer.
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[tauri::command]
+async fn rollout_create(
+    window: tauri::WebviewWindow,
+    auth: tauri::State<'_, account_auth::AccountAuth>,
+    company: uuid::Uuid,
+    label: String,
+    days: u16,
+    computers: u16,
+) -> Result<RolloutCreated, String> {
+    main_window(&window)?;
+    let credential = auth.credential(None).await?;
+    if !credential.principal.staff {
+        return Err("Rollout requires an MFA-verified Mixel team account".into());
+    }
+    let installer = self_update::latest_for("windows", "x64").await?;
+    let token = credential
+        .ism
+        .create_rollout_token(&credential.token, company, &label, days, computers)
+        .await
+        .map_err(|_| "The rollout token could not be created")?;
+    let windows_command = format!(
+        "$t='{token}'; $f=\"$env:TEMP\\Mixel-Remote-Setup.exe\"; Invoke-WebRequest -UseBasicParsing '{}' -OutFile $f; Start-Process $f '/S' -Wait; $p=Start-Process \"$env:LOCALAPPDATA\\Mixel Remote\\mixel-remote.exe\" -ArgumentList '--signin-enroll',$t -Wait -PassThru; exit $p.ExitCode",
+        self_update::file_url(&installer)
+    );
+    Ok(RolloutCreated { token, windows_command })
+}
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[tauri::command]
+async fn rollout_list(
+    window: tauri::WebviewWindow,
+    auth: tauri::State<'_, account_auth::AccountAuth>,
+    company: uuid::Uuid,
+) -> Result<Vec<signaling_server::auth::RolloutToken>, String> {
+    main_window(&window)?;
+    let credential = auth.credential(None).await?;
+    credential
+        .ism
+        .rollout_tokens(&credential.token, company)
+        .await
+        .map_err(|_| "Rollout tokens are unavailable".into())
+}
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[tauri::command]
+async fn rollout_revoke(
+    window: tauri::WebviewWindow,
+    auth: tauri::State<'_, account_auth::AccountAuth>,
+    id: uuid::Uuid,
+) -> Result<bool, String> {
+    main_window(&window)?;
+    let credential = auth.credential(None).await?;
+    credential
+        .ism
+        .revoke_rollout_token(&credential.token, id)
+        .await
+        .map_err(|_| "The rollout token could not be revoked".into())
 }
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 #[tauri::command]
@@ -1052,6 +1140,10 @@ async fn update_check(
     auth: tauri::State<'_, account_auth::AccountAuth>,
 ) -> Result<Option<UpdateInfo>, String> {
     main_window(&window)?;
+    // Lab builds never update themselves unless a test channel is set on purpose.
+    if cfg!(feature = "qa-session") && std::env::var_os("MIXEL_UPDATE_CHANNEL").is_none() {
+        return Ok(None);
+    }
     if let Ok(manifest) = self_update::latest().await {
         if !newer_than_running(&window, &manifest.version) {
             return Ok(None);
@@ -1105,6 +1197,9 @@ async fn update_check(
 #[tauri::command]
 async fn update_install(window: tauri::WebviewWindow) -> Result<(), String> {
     main_window(&window)?;
+    if cfg!(feature = "qa-session") && std::env::var_os("MIXEL_UPDATE_CHANNEL").is_none() {
+        return Err("Lab builds do not update themselves".into());
+    }
     let manifest = self_update::latest().await?;
     if !newer_than_running(&window, &manifest.version) {
         return Err("This is already the newest version".into());
@@ -2001,6 +2096,9 @@ fn main() {
             remote_presence,
             update_check,
             update_install,
+            rollout_create,
+            rollout_list,
+            rollout_revoke,
             startup_settings,
             set_stay_signed_in,
             set_autostart,
@@ -2073,6 +2171,9 @@ fn main() {
             remote_presence,
             update_check,
             update_install,
+            rollout_create,
+            rollout_list,
+            rollout_revoke,
             startup_settings,
             signin_screen_status,
             signin_screen_enable,

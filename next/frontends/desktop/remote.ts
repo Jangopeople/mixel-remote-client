@@ -5,7 +5,7 @@
     if (!value) throw Error(`Missing remote-support control ${id}`);
     return value as T;
   }
-  type Status = {controller_only?:boolean; platform?: 'macos'|'windows'|'linux'; phase: string; message: string; host: number | null; session: string | null; consent: string | null; peer: number | null; requester: string | null; received: number; sharing: boolean; control: boolean; clipboard: boolean; files: boolean; input_access: boolean; code_required: boolean; support_code: string | null; online?: number[]; pairing: {request_id:string; provider_name:string; customer_name:string} | null; pairing_message: string | null; unattended_enabled: boolean; unattended_pending: 'enabling' | 'disabling_after_enable' | 'disabling' | null; unattended_session: boolean; displays?: number; display?: number};
+  type Status = {controller_only?:boolean; platform?: 'macos'|'windows'|'linux'; phase: string; message: string; host: number | null; session: string | null; consent: string | null; peer: number | null; requester: string | null; received: number; sharing: boolean; control: boolean; clipboard: boolean; files: boolean; input_access: boolean; code_required: boolean; support_code: string | null; online?: number[]; pairing: {request_id:string; provider_name:string; customer_name:string} | null; pairing_message: string | null; unattended_enabled: boolean; unattended_pending: 'enabling' | 'disabling_after_enable' | 'disabling' | null; unattended_session: boolean; displays?: number; display?: number; host_actions?: string[]; signin_id?: number | null};
   type RecordingView = {phase: 'ready' | 'waiting_for_video' | 'recording' | 'saving' | 'saved' | 'saved_partial'} | {phase:'error'; message:string};
   type RemoteStatus = Status & {recording_permitted?:boolean; recording?:RecordingView; previous_recording?:RecordingView};
   type Source = {id: string; name: string; full_display: boolean};
@@ -69,6 +69,53 @@
   const restart = element<HTMLButtonElement>('remote-restart');
   const displaySwitch = element<HTMLSpanElement>('remote-displays');
   let displayKey = '';
+  const sas = element<HTMLButtonElement>('remote-sas');
+  const reboot = element<HTMLButtonElement>('remote-reboot');
+  // After "Restart computer": wait for the computer (or its sign-in screen) and reconnect.
+  let reconnect: {host: number; signin: number | null; unattended: boolean; until: number; since: number; wentOffline: boolean; lastTry: number; session: string} | null = null;
+  let rebootArmed = false, lastPresence = 0;
+  function hasAction(name: string): boolean {
+    return !!current && current.phase === 'active' && !current.sharing && current.control && (current.host_actions ?? []).includes(name);
+  }
+  function renderActions(): void {
+    sas.hidden = !hasAction('sas');
+    reboot.hidden = !hasAction('restart');
+    sas.disabled = reboot.disabled = busy;
+    reboot.textContent = rebootArmed ? 'Click again to restart' : 'Restart computer';
+    // Done once a new session (not the one that asked for the restart) is active.
+    if (reconnect && current && current.phase === 'active') { if (current.session !== reconnect.session) reconnect = null; return; }
+    if (reconnect && current && !['negotiating', 'outgoing', 'deciding'].includes(current.phase)) {
+      const now = Date.now();
+      if (now > reconnect.until) { reconnect = null; error.textContent = 'The remote computer did not come back within 10 minutes.'; return; }
+      if (now - lastPresence > 5000) {
+        lastPresence = now;
+        void invoke('remote_presence', {hosts: [reconnect.host, ...(reconnect.signin ? [reconnect.signin] : [])]}).catch(() => {});
+      }
+      const online = current.online ?? [];
+      // Reconnect only after the computer was seen going offline (the list may still show it
+      // from before the restart), then retry every 10 s until it answers.
+      if (!online.includes(reconnect.host)) reconnect.wentOffline = true;
+      const ready = reconnect.wentOffline || now - reconnect.since > 120000;
+      const target = !ready ? null : online.includes(reconnect.host) ? reconnect.host
+        : (reconnect.signin && online.includes(reconnect.signin) && now - reconnect.since > 45000 ? reconnect.signin : null);
+      status.textContent = 'The remote computer is restarting. Mixel Remote reconnects when it is back…';
+      if (target && current.phase === 'ready' && !busy && now - reconnect.lastTry > 10000) {
+        reconnect.lastTry = now;
+        void action('remote_request', {host: target, password: null, unattended: reconnect.unattended || target === reconnect.signin});
+      }
+    }
+  }
+  sas.addEventListener('click', () => {
+    if (current?.session) void action('remote_input', {session: current.session, event: {kind: 'action', name: 'sas'}});
+  });
+  reboot.addEventListener('click', () => {
+    if (!current?.session || !current.peer) return;
+    if (!rebootArmed) { rebootArmed = true; renderActions(); setTimeout(() => { rebootArmed = false; renderActions(); }, 5000); return; }
+    rebootArmed = false;
+    const now = Date.now();
+    reconnect = {host: current.peer, signin: current.signin_id ?? null, unattended: current.unattended_session, until: now + 600000, since: now, wentOffline: false, lastTry: 0, session: current.session};
+    void action('remote_input', {session: current.session, event: {kind: 'action', name: 'restart'}});
+  });
   function renderDisplays(): void {
     const count = current && current.phase === 'active' && !current.sharing && current.control ? (current.displays ?? 0) : 0;
     const shown = current?.display ?? 0;
@@ -285,6 +332,7 @@
     restart.hidden = current.phase !== 'active' || current.sharing;
     restart.disabled = closing || busy || restart.hidden;
     renderDisplays();
+    renderActions();
     if (!closing && authenticated && current.phase === 'active' && !current.sharing && current.session) {
       if (viewing !== current.session) void receive(current.session);
     } else if (viewing) clearVideo();

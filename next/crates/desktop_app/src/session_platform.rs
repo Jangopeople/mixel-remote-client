@@ -323,6 +323,11 @@ impl SessionInjector {
 impl Injector for SessionInjector {
     fn inject(&mut self, event: &core_protocol::input::Input<'_>) -> Result<(), InjectionError> {
         use core_protocol::input::Input;
+        // The SYSTEM host follows the desktop on screen (sign-in, lock screen, security prompts).
+        #[cfg(target_os = "windows")]
+        if crate::windows_signin_host::is_signin_host() {
+            native_os_capture::windows_capture::attach_input_desktop();
+        }
         if !matches!(
             event,
             Input::Key { down: false, .. }
