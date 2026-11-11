@@ -104,7 +104,7 @@
     soundToggle.hidden = !hasAction('sound');
     if (current?.session !== soundSession) { soundSession = current?.session ?? null; soundOn = true; }
     soundToggle.textContent = soundOn ? 'Sound: on' : 'Sound: off';
-    soundToggle.setAttribute('aria-pressed', String(soundOn));
+    soundToggle.ariaPressed = String(soundOn);
     sas.disabled = reboot.disabled = busy;
     reboot.textContent = rebootArmed ? 'Click again to restart' : 'Restart computer';
     // Done once a new session (not the one that asked for the restart) is active.
