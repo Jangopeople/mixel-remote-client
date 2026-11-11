@@ -13,6 +13,7 @@ Live at `https://ism.mixel.ch/remote-next/` (served by the ISM web app as a stat
   drag, two-finger scroll), zoom 1-3x with two-finger panning, special keys bar, typing field for on-screen
   keyboards, display switching including "All", Ctrl+Alt+Del, remote sound, full screen.
 - Sessions stay up beyond 15 minutes (ticket renewal and transport restart like the desktop app).
+- Can be put on the home screen ("Add to Home Screen" / "Install app"): opens full screen like an app.
 Not in the viewer: files, clipboard, chat, recording, printing, restart/Wake-on-LAN buttons.
 
 ## Parts
@@ -26,7 +27,7 @@ Not in the viewer: files, clipboard, chat, recording, printing, restart/Wake-on-
 cd next && cargo build -p web_client --target wasm32-unknown-unknown --release
 wasm-bindgen --target web --out-dir frontends/web/viewer/pkg target/wasm32-unknown-unknown/release/web_client.wasm   # wasm-bindgen-cli 0.2.130
 ```
-Copy `index.html viewer.js viewer.css texts.js pkg/web_client.js pkg/web_client_bg.wasm` into
+Copy `index.html viewer.js viewer.css texts.js manifest.webmanifest icon-192.png icon-512.png apple-touch-icon.png pkg/web_client.js pkg/web_client_bg.wasm` into
 `mixel-ism/apps/web/public/remote-next/`, open a pull request there, merge, then build and deploy ISM
 (`pnpm build && pnpm deploy:cloudflare` in `apps/web`). ISM's `_headers` holds the viewer's own strict
 Content-Security-Policy.

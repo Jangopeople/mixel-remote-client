@@ -415,6 +415,7 @@ const touches = new Map();
 let touchMode = null, longPress = 0, lastTap = 0, rightClickNext = false;
 function pointerDown(event) {
   event.preventDefault();
+  if (typed) resetTyping();
   if (event.pointerType === 'mouse') { moveNow(event); sendInput(control => control.button(event.button === 2 ? 2 : event.button === 1 ? 3 : 1, true)); return; }
   touches.set(event.pointerId, { x: event.clientX, y: event.clientY, startX: event.clientX, startY: event.clientY, time: Date.now() });
   if (touches.size === 1) {
@@ -597,18 +598,29 @@ $('tool-sound').onclick = () => { if (!active) return; soundOn = !soundOn; unloc
 $('tool-right').onclick = () => { rightClickNext = !rightClickNext; $('tool-right').setAttribute('aria-pressed', String(rightClickNext)); };
 $('tool-full').onclick = () => { const target = $('session'); (document.fullscreenElement ? document.exitFullscreen() : target.requestFullscreen ? target.requestFullscreen() : Promise.resolve()).catch(() => {}); };
 $('tool-zoom').onclick = () => setZoom(zoom >= 3 ? 1 : zoom + 1);
-$('tool-keyboard').onclick = () => { const field = $('typing'); field.value = ''; field.focus(); };
+$('tool-keyboard').onclick = () => { resetTyping(); $('typing').focus(); };
 $('tool-keys').onclick = () => { $('keys').hidden = !$('keys').hidden; };
 for (const button of document.querySelectorAll('#keys button')) button.onclick = () => tapKey(...button.dataset.keys.split(',').map(Number));
+// Typing field (on-screen keyboards): send exactly what changed since the last event, so
+// autocorrect, word suggestions and dictation arrive correctly on the remote computer.
+let typed = '';
+function resetTyping() { $('typing').value = ''; typed = ''; }
 $('typing').addEventListener('beforeinput', event => {
-  if (event.inputType === 'deleteContentBackward') { event.preventDefault(); tapKey(0x2a); }
-  else if (event.inputType === 'insertLineBreak' || event.inputType === 'insertParagraph') { event.preventDefault(); tapKey(0x28); }
+  if (event.inputType === 'insertLineBreak' || event.inputType === 'insertParagraph') { event.preventDefault(); tapKey(0x28); resetTyping(); }
+  else if (event.inputType === 'deleteContentBackward' && event.target.value === '') { event.preventDefault(); tapKey(0x2a); }
 });
 $('typing').addEventListener('input', event => {
-  const field = event.target;
-  if (event.isComposing) return;
-  if (field.value) { const text = field.value; field.value = ''; sendInput(control => control.text(text)); }
+  const before = Array.from(typed), now = Array.from(event.target.value);
+  let same = 0;
+  while (same < before.length && same < now.length && before[same] === now[same]) same++;
+  for (let index = same; index < before.length; index++) tapKey(0x2a);
+  const added = now.slice(same).join('');
+  if (added) sendInput(control => control.text(added));
+  typed = event.target.value;
+  if (!event.isComposing && typed.length > 200) resetTyping();
 });
+$('typing').addEventListener('keydown', event => { if (event.key === 'Enter' && !event.isComposing) { event.preventDefault(); tapKey(0x28); resetTyping(); } });
+$('typing').addEventListener('blur', resetTyping);
 const video = screen();
 video.addEventListener('pointerdown', pointerDown); video.addEventListener('pointermove', pointerMove);
 video.addEventListener('pointerup', pointerUp); video.addEventListener('pointercancel', pointerUp);
