@@ -160,8 +160,10 @@ class MainActivity : Activity(), Support.Screen {
             // Allowing continues with Android's own question about sharing the screen.
             .setPositiveButton(R.string.allow) { _, _ ->
                 val manager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+                // Support needs the whole screen, not one app: ask for exactly that where Android lets us choose.
+                val question = if (Build.VERSION.SDK_INT >= 34) manager.createScreenCaptureIntent(android.media.projection.MediaProjectionConfig.createConfigForDefaultDisplay()) else manager.createScreenCaptureIntent()
                 @Suppress("DEPRECATION")
-                startActivityForResult(manager.createScreenCaptureIntent(), 1)
+                startActivityForResult(question, 1)
             }
             .show()
     }

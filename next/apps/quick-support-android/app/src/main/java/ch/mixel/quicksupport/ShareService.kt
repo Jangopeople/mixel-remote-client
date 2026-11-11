@@ -40,7 +40,8 @@ class ShareService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val permission: Intent? = if (Build.VERSION.SDK_INT >= 33) intent?.getParcelableExtra(EXTRA_PERMISSION, Intent::class.java) else @Suppress("DEPRECATION") intent?.getParcelableExtra(EXTRA_PERMISSION)
-        if (permission == null) {
+        // The technician's request may have run out while Android asked its question.
+        if (permission == null || Support.phase != Support.Phase.ASKING) {
             stopSelf()
             return START_NOT_STICKY
         }

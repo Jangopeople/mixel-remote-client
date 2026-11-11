@@ -104,7 +104,8 @@ object Support : Native.Listener {
                     else -> Phase.OFFLINE
                 }
                 message = event.optString("message")
-                if (phase == Phase.OFFLINE) sessionEnded?.invoke()
+                // Back to waiting (or offline) means no session runs: the screen capture must not either.
+                if (phase == Phase.OFFLINE || phase == Phase.READY) sessionEnded?.invoke()
             }
             "request" -> screen?.ask(event.optLong("connection_id").toString().chunked(3).joinToString(" "), event.optBoolean("staff"))
             "started" -> phase = Phase.ACTIVE
