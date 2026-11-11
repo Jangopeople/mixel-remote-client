@@ -1,6 +1,8 @@
 // Viewer texts: English is the key; German, French and Italian follow the browser language.
 const TEXTS = {
   de: {
+    'Team accounts confirm with a second step. This is the code of your Mixel ISM account, not a Mixel ID code.': 'Team-Konten bestätigen mit einem zweiten Schritt. Gemeint ist der Code Ihres Mixel-ISM-Kontos, kein Code der Mixel ID.',
+    'Open your authenticator app and enter the 6-digit code shown for:': 'Öffnen Sie Ihre Authenticator-App und geben Sie den 6-stelligen Code ein für:',
     'Your sign-in has ended. Please sign in again.': 'Ihre Anmeldung wurde beendet. Bitte melden Sie sich erneut an.',
     'Register first, then connect.': 'Bitte zuerst registrieren, dann verbinden.',
     'Register this device': 'Dieses Gerät registrieren',
@@ -71,6 +73,8 @@ const TEXTS = {
     'Type here': 'Hier tippen',
   },
   fr: {
+    'Team accounts confirm with a second step. This is the code of your Mixel ISM account, not a Mixel ID code.': 'Les comptes d’équipe confirment par une seconde étape. Il s’agit du code de votre compte Mixel ISM, pas d’un code Mixel ID.',
+    'Open your authenticator app and enter the 6-digit code shown for:': 'Ouvrez votre application d’authentification et saisissez le code à 6 chiffres affiché pour :',
     'Your sign-in has ended. Please sign in again.': 'Votre connexion a pris fin. Veuillez vous reconnecter.',
     'Register first, then connect.': 'Enregistrez-vous d’abord, puis connectez-vous.',
     'Register this device': 'Enregistrer cet appareil',
@@ -140,6 +144,8 @@ const TEXTS = {
     'Type here': 'Saisir ici',
   },
   it: {
+    'Team accounts confirm with a second step. This is the code of your Mixel ISM account, not a Mixel ID code.': 'Gli account del team confermano con un secondo passaggio. È il codice del tuo account Mixel ISM, non un codice Mixel ID.',
+    'Open your authenticator app and enter the 6-digit code shown for:': 'Apri la tua app di autenticazione e inserisci il codice a 6 cifre mostrato per:',
     'Your sign-in has ended. Please sign in again.': 'L’accesso è terminato. Accedi di nuovo.',
     'Register first, then connect.': 'Prima registra, poi connetti.',
     'Register this device': 'Registra questo dispositivo',

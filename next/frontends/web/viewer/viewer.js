@@ -88,7 +88,7 @@ async function principal() {
     // Team accounts need the second step. Offer it here, like the desktop app does.
     const factor = (user.factors || []).find(entry => entry.status === 'verified' && entry.factor_type === 'totp');
     if (!factor) throw new Problem(t('Set up an authenticator app for your account in Mixel ISM, then open this page again.'));
-    const problem = new Problem(t('Enter the code from your authenticator app.')); problem.factor = factor.id; throw problem;
+    const problem = new Problem(t('Enter the code from your authenticator app.')); problem.factor = factor.id; problem.factorName = typeof factor.friendly_name === 'string' ? factor.friendly_name.slice(0, 60) : ''; throw problem;
   }
   if (!staff) throw new Problem(t('Remote control in the browser is for Mixel team members and personal accounts.'));
   return { profile: row.id, tenant: null, staff: true, personal: false, name: row.name || user.email };
@@ -584,7 +584,13 @@ async function start() {
   $('signout').hidden = true;
   try { who = await principal(); }
   catch (problem) {
-    if (problem.factor) { mfaFactor = problem.factor; $('mfa').hidden = false; $('mfa-code').focus(); return; }
+    if (problem.factor) {
+      mfaFactor = problem.factor;
+      // Say which entry of the authenticator app is meant; people have several.
+      $('mfa-label').textContent = problem.factorName ? `${t('Open your authenticator app and enter the 6-digit code shown for:')} ${problem.factorName}` : t('Enter the code from your authenticator app.');
+      $('signout').hidden = !CONFIG.signInAction;
+      $('mfa').hidden = false; $('mfa-code').focus(); return;
+    }
     $('signin').hidden = false;
     const text = problem instanceof Problem ? problem.message : t('Please sign in to Mixel ISM first.');
     $('signin-text').textContent = CONFIG.signInAction && !storedSession() ? (CONFIG.signInFailed && CONFIG.signInFailed() ? t('The sign-in was not completed. Please try again.') : t('Sign in with your Mixel ID to control your computers from here.')) : text;

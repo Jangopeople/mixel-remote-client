@@ -21,7 +21,8 @@
   <section id="mfa" class="card" hidden>
     <h2 data-t>Confirm it is you</h2>
     <form id="mfa-form">
-      <label><span data-t>Enter the code from your authenticator app.</span><input id="mfa-code" inputmode="numeric" autocomplete="one-time-code" maxlength="8"></label>
+      <p id="mfa-why" class="hint" data-t>Team accounts confirm with a second step. This is the code of your Mixel ISM account, not a Mixel ID code.</p>
+      <label><span id="mfa-label" data-t>Enter the code from your authenticator app.</span><input id="mfa-code" inputmode="numeric" autocomplete="one-time-code" maxlength="8"></label>
       <button id="mfa-button" class="primary" type="submit" data-t>Confirm</button>
     </form>
   </section>
