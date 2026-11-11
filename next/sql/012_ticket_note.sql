@@ -36,3 +36,6 @@ revoke all on function public.remote_ticket_note(text, text, bigint) from public
 grant execute on function public.remote_ticket_note(text, text, bigint) to authenticated;
 
 commit;
+
+-- Let the API layer see the new function at once.
+notify pgrst, 'reload schema';

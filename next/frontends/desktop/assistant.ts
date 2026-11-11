@@ -70,6 +70,7 @@
   // ISM ticket link: the note (written by the AI or typed here) becomes an internal ticket note.
   const ticketNumber = element<HTMLInputElement>('ai-ticket'), ticketSave = element<HTMLButtonElement>('ai-ticket-save'), ticketStatus = element<HTMLParagraphElement>('ai-ticket-status');
   aiAnswer.setAttribute('contenteditable', 'plaintext-only');
+  aiAnswer.setAttribute('spellcheck', 'false');
   ticketSave.addEventListener('click', () => {
     const ticket = ticketNumber.value.trim(), note = (aiAnswer.innerText ?? aiAnswer.textContent ?? '').trim();
     if (ticket.length < 3) { ticketStatus.textContent = 'Enter the ticket number.'; return; }
