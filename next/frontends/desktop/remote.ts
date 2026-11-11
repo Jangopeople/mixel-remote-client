@@ -73,7 +73,7 @@
   const reboot = element<HTMLButtonElement>('remote-reboot');
   // After "Restart computer": wait for the computer (or its sign-in screen) and reconnect.
   let reconnect: {host: number; signin: number | null; unattended: boolean; until: number; since: number; wentOffline: boolean; lastTry: number; session: string} | null = null;
-  let rebootArmed = false, lastPresence = 0;
+  let rebootArmed = false, lastPresence = 0, lastRequestUnattended = false;
   function hasAction(name: string): boolean {
     return !!current && current.phase === 'active' && !current.sharing && current.control && (current.host_actions ?? []).includes(name);
   }
@@ -96,10 +96,12 @@
       // from before the restart), then retry every 10 s until it answers.
       if (!online.includes(reconnect.host)) reconnect.wentOffline = true;
       const ready = reconnect.wentOffline || now - reconnect.since > 120000;
+      // Unattended hosts may not appear in the online list: after a minute, just try.
       const target = !ready ? null : online.includes(reconnect.host) ? reconnect.host
-        : (reconnect.signin && online.includes(reconnect.signin) && now - reconnect.since > 45000 ? reconnect.signin : null);
+        : (reconnect.signin && online.includes(reconnect.signin) && now - reconnect.since > 45000 ? reconnect.signin
+          : (reconnect.unattended && now - reconnect.since > 60000 ? reconnect.host : null));
       status.textContent = 'The remote computer is restarting. Mixel Remote reconnects when it is back…';
-      if (target && current.phase === 'ready' && !busy && now - reconnect.lastTry > 10000) {
+      if (target && current.phase === 'ready' && !busy && now - reconnect.lastTry > 15000) {
         reconnect.lastTry = now;
         void action('remote_request', {host: target, password: null, unattended: reconnect.unattended || target === reconnect.signin});
       }
@@ -113,7 +115,7 @@
     if (!rebootArmed) { rebootArmed = true; renderActions(); setTimeout(() => { rebootArmed = false; renderActions(); }, 5000); return; }
     rebootArmed = false;
     const now = Date.now();
-    reconnect = {host: current.peer, signin: current.signin_id ?? null, unattended: current.unattended_session, until: now + 600000, since: now, wentOffline: false, lastTry: 0, session: current.session};
+    reconnect = {host: current.peer, signin: current.signin_id ?? null, unattended: lastRequestUnattended || current.unattended_session, until: now + 600000, since: now, wentOffline: false, lastTry: 0, session: current.session};
     void action('remote_input', {session: current.session, event: {kind: 'action', name: 'restart'}});
   });
   function renderDisplays(): void {
@@ -507,6 +509,7 @@
     if (!/^[1-9][0-9]{8}$/.test(digits)) { error.textContent = 'Enter a nine-digit connection ID'; return; }
     const supplied = password.value;
     password.value = '';
+    lastRequestUnattended = requestUnattended.checked;
     void action('remote_request', {host: Number(digits), password: supplied || null, unattended: requestUnattended.checked});
   });
   const supportForm = element<HTMLFormElement>('support-connect-form');
