@@ -1,6 +1,6 @@
 name: mobile_app
 options:
-  bundleIdPrefix: ch.mixel.remote
+  bundleIdPrefix: ch.mixel.remote.controller
   deploymentTarget:
     iOS: 15.0
 fileGroups: [../../src]
@@ -11,7 +11,7 @@ settingGroups:
   app:
     base:
       PRODUCT_NAME: Mixel Remote
-      PRODUCT_BUNDLE_IDENTIFIER: ch.mixel.remote
+      PRODUCT_BUNDLE_IDENTIFIER: ch.mixel.remote.controller
       DEVELOPMENT_TEAM: 5277F8NDH4
 targetTemplates:
   app:
@@ -57,6 +57,7 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
+        ITSAppUsesNonExemptEncryption: false
         CFBundleShortVersionString: 1.0.0
         CFBundleVersion: "1.0.0"
     entitlements:

@@ -1,6 +1,6 @@
 # Mixel Remote for iPhone, iPad and Android
 
-One app for both platforms (`ch.mixel.remote`). You sign in with your Mixel ID, register the phone
+One app for both platforms. Android package `ch.mixel.remote`; iPhone/iPad bundle ID `ch.mixel.remote.controller` (set in `tauri.ios.conf.json`), because it shares the App Store entry "Mixel Remote" with the Mac app. You sign in with your Mixel ID, register the phone
 once, and control your computers from it: see the screen, tap, type, special keys, right click,
 Ctrl+Alt+Del, switch monitors, hear the remote sound, start a meeting.
 
@@ -32,7 +32,7 @@ cargo test -p mobile_app                                    # address rules
 cargo tauri ios build --debug --target aarch64-sim          # iPhone simulator app
 cargo tauri android build --debug --apk --target aarch64    # Android test app
 cargo tauri android build --aab                             # Android store package (signed)
-cargo tauri ios build --export-method app-store-connect     # iPhone store package (needs the App ID and profile)
+cargo tauri ios build --export-method app-store-connect     # iPhone store package; set APPLE_API_KEY, APPLE_API_ISSUER, APPLE_API_KEY_PATH so Xcode signs with the team's store profile
 ```
 
 Android store signing: copy `~/.mixel-secrets/mixel-remote-upload.properties` to
@@ -41,6 +41,16 @@ Android store signing: copy `~/.mixel-secrets/mixel-remote-upload.properties` to
 Lab builds: add `--features lab-session`. The app then takes a test sign-in from
 `http://127.0.0.1:5173/dev-session.json` (Android emulator: `10.0.2.2`), served by
 `lab/scripts/webdev/server.mjs`. Store builds do not contain this.
+
+## Upload
+
+```bash
+# Apple (TestFlight): key id and issuer from ~/.mixel-secrets/asc-api.env
+xcrun altool --upload-app -f "gen/apple/build/arm64/Mixel Remote.ipa" -t ios --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
+```
+Google (internal testing): the Play Developer API with `~/.mixel-secrets/play-service-account.json`
+(edit → upload bundle → set track `internal` → commit). The service account has per-app rights; Mixel Remote was added on 2026-11-11.
+Raise the version in `tauri.conf.json` before every new upload (Apple and Google refuse a repeated number).
 
 ## Not in this version
 - The phone cannot be controlled itself; it is a controller only.
