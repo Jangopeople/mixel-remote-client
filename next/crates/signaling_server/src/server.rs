@@ -249,6 +249,7 @@ async fn connection(mut socket: WebSocket, state: AppState) {
     };
     let start = Instant::now();
     let mut authorized_at = start;
+    let mut last_agent: Option<Instant> = None;
     let mut last_renewal = None;
     let mut last_activity = start;
     let mut last_ping = start;
@@ -351,6 +352,27 @@ async fn connection(mut socket: WebSocket, state: AppState) {
                             expires_at = next_expiry;
                             authorized_at = Instant::now();
                             if !send(&mut socket, &ServerMessage::Renewed { expires_at }).await { break; }
+                            continue;
+                        }
+                        if let Ok(ClientMessage::Agent { inventory, result }) = &parsed {
+                            // At most one check-in every 15 s per connection; oversized reports are refused.
+                            let allowed = last_agent.is_none_or(|at: Instant| at.elapsed() >= Duration::from_secs(15))
+                                && inventory.as_ref().is_none_or(|text| text.len() <= crate::protocol::MAX_AGENT_INVENTORY)
+                                && result.as_ref().is_none_or(|result| result.output.len() <= crate::protocol::MAX_AGENT_OUTPUT);
+                            if !allowed {
+                                if !send(&mut socket, &ServerMessage::Agent { command: None }).await { break; }
+                                continue;
+                            }
+                            last_agent = Some(Instant::now());
+                            let binding = match state.registry.lock() {
+                                Ok(registry) => registry.agent_binding(id, generation, unix_now()),
+                                Err(_) => break,
+                            };
+                            let command = match (state.policy.as_ref(), binding.as_ref(), state.policy_slots.try_acquire()) {
+                                (Some(policy), Some(binding), Ok(_slot)) => policy.agent(binding, inventory.as_deref(), result.as_ref()).await.unwrap_or(None),
+                                _ => None,
+                            };
+                            if !send(&mut socket, &ServerMessage::Agent { command }).await { break; }
                             continue;
                         }
                         if let Ok(message @ (ClientMessage::CheckPairing | ClientMessage::ConfirmPairing { .. })) = parsed {

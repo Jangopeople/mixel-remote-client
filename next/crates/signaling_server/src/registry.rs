@@ -105,6 +105,15 @@ impl Registry {
         Some(peer.identity.as_ref()?.into())
     }
 
+    /// The verified device behind a connection, including unattended-only hosts (for the agent).
+    pub(crate) fn agent_binding(&self, id: u32, generation: Uuid, unix: u64) -> Option<DeviceBinding> {
+        let peer = self.peers.get(&id)?;
+        if peer.generation != generation || peer.principal.expires_at <= unix {
+            return None;
+        }
+        Some(peer.identity.as_ref()?.into())
+    }
+
     fn policy_check(
         &self,
         controller: u32,
@@ -444,6 +453,7 @@ impl Registry {
             | ClientMessage::ProveDevice { .. }
             | ClientMessage::Renew { .. } => Err(ErrorCode::Invalid),
             ClientMessage::Ice { .. }
+            | ClientMessage::Agent { .. }
             | ClientMessage::CheckPairing
             | ClientMessage::ConfirmPairing { .. } => Err(ErrorCode::Invalid),
             ClientMessage::Restart { session } => {

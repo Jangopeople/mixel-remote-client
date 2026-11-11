@@ -191,8 +191,18 @@ fn run(program: &str, args: &[&std::ffi::OsStr]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
+/// Downloads an update and checks size, SHA-256 and Mixel's code signature (Windows).
 #[cfg(target_os = "windows")]
-fn install(installer: &Path, _version: &str) -> Result<(), String> {
+pub async fn fetch_verified(manifest: &Manifest) -> Result<PathBuf, String> {
+    let path = download(manifest).await?;
+    let check = path.clone();
+    tokio::task::spawn_blocking(move || verify_signature(&check))
+        .await
+        .map_err(|_| "Cannot check the update signature")??;
+    Ok(path)
+}
+#[cfg(target_os = "windows")]
+fn verify_signature(installer: &Path) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
     // Paths travel in environment variables: PowerShell -Command does not pass extra arguments.
     let output = std::process::Command::new("powershell")
@@ -211,6 +221,12 @@ fn install(installer: &Path, _version: &str) -> Result<(), String> {
     if !output.status.success() || status != "Valid" || !subject.contains("O=Mixel International Services SARLS") {
         return Err("The update is not signed by Mixel".into());
     }
+    Ok(())
+}
+#[cfg(target_os = "windows")]
+fn install(installer: &Path, _version: &str) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    verify_signature(installer)?;
     let exe = std::env::current_exe().map_err(|_| "Cannot locate Mixel Remote")?;
     // Hidden helper: wait until this app has closed, install silently, start the new version.
     let script = "Start-Sleep 2; Add-Content -LiteralPath $env:MIXEL_UPDATE_LOG \"installer started\"; \
@@ -345,7 +361,7 @@ pub async fn download_and_install(manifest: Manifest) -> Result<(), String> {
 }
 
 /// Short update history for support: <temp>/mixel-remote-updates/update.log.
-fn log_path() -> PathBuf {
+pub(crate) fn log_path() -> PathBuf {
     std::env::temp_dir().join("mixel-remote-updates").join("update.log")
 }
 fn log(message: &str) {

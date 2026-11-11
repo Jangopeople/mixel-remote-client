@@ -13,6 +13,8 @@ mod session_store;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 mod host_actions;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+mod agent;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 mod self_update;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 mod autostart;

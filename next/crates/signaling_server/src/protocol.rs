@@ -81,6 +81,31 @@ pub enum ClientMessage {
     Restart { session: Uuid },
     /// Which of these Remote IDs are online and reachable for the caller.
     Presence { hosts: Vec<u32> },
+    /// Device agent check-in: optional inventory (JSON text) and the result of the last
+    /// command. The answer may carry the next command approved in the console.
+    Agent {
+        inventory: Option<String>,
+        result: Option<AgentResult>,
+    },
+}
+pub const MAX_AGENT_INVENTORY: usize = 8192;
+pub const MAX_AGENT_OUTPUT: usize = 16384;
+pub const MAX_AGENT_SCRIPT: usize = 16384;
+#[derive(Clone, Deserialize, Serialize, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct AgentResult {
+    pub id: Uuid,
+    pub exit_code: i32,
+    pub output: String,
+}
+#[derive(Clone, Deserialize, Serialize, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct AgentCommand {
+    pub id: Uuid,
+    /// "powershell" or "sh".
+    pub shell: String,
+    pub script: String,
+    pub timeout_seconds: u16,
 }
 #[derive(Clone, Deserialize, Serialize, Debug)]
 #[serde(
@@ -144,6 +169,9 @@ pub enum ServerMessage {
     },
     Presence {
         online: Vec<u32>,
+    },
+    Agent {
+        command: Option<AgentCommand>,
     },
     Requested {
         session: Uuid,

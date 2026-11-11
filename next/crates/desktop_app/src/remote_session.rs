@@ -254,6 +254,10 @@ pub(crate) enum Command {
     },
     Pairing(Option<Uuid>),
     Presence(Vec<u32>),
+    Agent {
+        inventory: Option<String>,
+        result: Option<signaling_server::protocol::AgentResult>,
+    },
     SupportCode {
         required: bool,
     },
@@ -650,6 +654,7 @@ impl RemoteSession {
         let video = Arc::new(VideoMailbox::default());
         inner.cancel = cancel.clone();
         inner.commands = Some(tx.clone());
+        crate::agent::start(self.clone(), tx.clone());
         inner.video = Some(video.clone());
         inner.status = Status {
             phase: "connecting".into(),
@@ -1815,6 +1820,9 @@ async fn run(
                     Command::Presence(hosts)=>{
                         send(&mut socket,ClientMessage::Presence{hosts}).await?;
                     },
+                    Command::Agent{inventory,result}=>{
+                        send(&mut socket,ClientMessage::Agent{inventory,result}).await?;
+                    },
                     Command::Pairing(confirmation)=>{
                         let message=match confirmation {
                             Some(request)=>ClientMessage::ConfirmPairing{request},
@@ -1886,6 +1894,12 @@ async fn run(
                         },
                         ServerMessage::Presence{online}=>{
                             state.change(generation,|status|{status.online=online;}).await;
+                        },
+                        ServerMessage::Agent{command}=>{
+                            if let Some(command)=command {
+                                let unattended=state.status().await.unattended_enabled;
+                                crate::agent::accept(command,unattended);
+                            }
                         },
                         ServerMessage::PairingStatus{pending,confirmed,failed}=>{
                             state.change(generation,|status|{

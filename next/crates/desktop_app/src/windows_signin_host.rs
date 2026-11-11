@@ -832,6 +832,46 @@ fn supervise() {
     }
 }
 
+/// The always-on host keeps itself current: when no session is open and a newer signed
+/// version is published, it installs it and replaces the service program.
+async fn update_self() {
+    if cfg!(feature = "qa-session") && std::env::var_os("MIXEL_UPDATE_CHANNEL").is_none() {
+        return;
+    }
+    // The signed program file itself (not the installer) is published as windows/x64-program.
+    let Ok(manifest) = crate::self_update::latest_for("windows", "x64-program").await else { return };
+    let newer = matches!(
+        (crate::version_parts(crate::agent::APP_VERSION), crate::version_parts(&manifest.version)),
+        (Some(current), Some(next)) if next > current
+    );
+    if !newer {
+        return;
+    }
+    log(&format!("updating always-on access {} -> {}", crate::agent::APP_VERSION, manifest.version));
+    let installer = match crate::self_update::fetch_verified(&manifest).await {
+        Ok(path) => path,
+        Err(error) => {
+            log(&format!("update not installed: {error}"));
+            return;
+        }
+    };
+    use std::os::windows::process::CommandExt;
+    // Detached helper (survives the service stop): swap the service program, start it again.
+    let script = "sc.exe stop MixelRemoteSignIn | Out-Null; Start-Sleep 5; \
+        Copy-Item -LiteralPath $env:MIXEL_UPDATE_FILE -Destination $env:MIXEL_UPDATE_DEST -Force; \
+        if($?){ Add-Content -LiteralPath $env:MIXEL_UPDATE_LOG 'always-on program replaced' }; sc.exe start MixelRemoteSignIn | Out-Null";
+    let spawned = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script])
+        .env("MIXEL_UPDATE_FILE", &installer)
+        .env("MIXEL_UPDATE_DEST", program_path())
+        .env("MIXEL_UPDATE_LOG", folder().join("signin-host.log"))
+        .creation_flags(0x0800_0000 | 0x0000_0200)
+        .spawn();
+    if spawned.is_err() {
+        log("update helper could not start");
+    }
+}
+
 // ---------------- host ----------------
 pub fn run_host() -> Result<(), String> {
     SIGNIN_HOST.store(true, Ordering::Release);
@@ -872,6 +912,7 @@ pub fn run_host() -> Result<(), String> {
                 Ok(()) => {
                     log("sign-in screen host connecting");
                     let mut phase = String::new();
+                    let mut next_update: Option<std::time::Instant> = None;
                     loop {
                         tokio::time::sleep(Duration::from_secs(5)).await;
                         let status = remote.status().await;
@@ -883,6 +924,14 @@ pub fn run_host() -> Result<(), String> {
                         if matches!(status.phase.as_str(), "offline" | "error") {
                             set_session_notice(false);
                             break;
+                        }
+                        // Idle: look for a newer version two minutes after start, then every six hours.
+                        if status.phase == "ready" && next_update.is_none_or(|at: std::time::Instant| std::time::Instant::now() >= at) {
+                            let first = next_update.is_none();
+                            next_update = Some(std::time::Instant::now() + Duration::from_secs(if first { 120 } else { 6 * 3600 }));
+                            if !first {
+                                update_self().await;
+                            }
                         }
                     }
                 }

@@ -1,4 +1,19 @@
 fn main() {
+    // App version for code that runs without a window (the agent, the always-on host): the
+    // tauri CLI passes config overrides in TAURI_CONFIG; otherwise tauri.conf.json applies.
+    println!("cargo:rerun-if-env-changed=TAURI_CONFIG");
+    println!("cargo:rerun-if-changed=tauri.conf.json");
+    let version = |text: String| {
+        serde_json::from_str::<serde_json::Value>(&text)
+            .ok()
+            .and_then(|value| value.get("version").and_then(|v| v.as_str()).map(str::to_owned))
+    };
+    let app_version = std::env::var("TAURI_CONFIG")
+        .ok()
+        .and_then(version)
+        .or_else(|| std::fs::read_to_string("tauri.conf.json").ok().and_then(version))
+        .unwrap_or_else(|| "0.0.0".into());
+    println!("cargo:rustc-env=MIXEL_APP_VERSION={app_version}");
     if matches!(
         std::env::var("CARGO_CFG_TARGET_OS").as_deref(),
         Ok("windows" | "linux")

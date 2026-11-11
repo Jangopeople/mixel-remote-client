@@ -121,6 +121,48 @@ impl SupportPolicy {
             .await
             .is_ok_and(|response| response.status() == StatusCode::NO_CONTENT)
     }
+    /// Device agent check-in: stores inventory and the last result, returns the next command.
+    pub(crate) async fn agent(
+        &self,
+        binding: &DeviceBinding,
+        inventory: Option<&str>,
+        result: Option<&crate::protocol::AgentResult>,
+    ) -> Result<Option<crate::protocol::AgentCommand>, AuthError> {
+        let mut endpoint = self.endpoint.clone();
+        endpoint.set_path("/api/internal/remote/agent");
+        let response = self
+            .client
+            .post(endpoint)
+            .bearer_auth(self.token.as_str())
+            .json(&serde_json::json!({ "binding": binding, "inventory": inventory, "result": result }))
+            .send()
+            .await
+            .map_err(|_| AuthError)?;
+        match response.status() {
+            StatusCode::NO_CONTENT => Ok(None),
+            StatusCode::OK => {
+                let mut stream = response.bytes_stream();
+                let mut body = Vec::new();
+                while let Some(chunk) = stream.next().await {
+                    let chunk = chunk.map_err(|_| AuthError)?;
+                    if body.len() + chunk.len() > crate::protocol::MAX_AGENT_SCRIPT + 1024 {
+                        return Err(AuthError);
+                    }
+                    body.extend_from_slice(&chunk);
+                }
+                let command: crate::protocol::AgentCommand = serde_json::from_slice(&body).map_err(|_| AuthError)?;
+                if !matches!(command.shell.as_str(), "powershell" | "sh")
+                    || command.script.is_empty()
+                    || command.script.len() > crate::protocol::MAX_AGENT_SCRIPT
+                    || !(1..=3600).contains(&command.timeout_seconds)
+                {
+                    return Err(AuthError);
+                }
+                Ok(Some(command))
+            }
+            _ => Err(AuthError),
+        }
+    }
     pub(crate) async fn pairing(
         &self,
         binding: &DeviceBinding,
