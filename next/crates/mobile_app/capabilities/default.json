@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The app's own pages may listen for events; nothing is granted to web pages shown during sign-in.",
+  "windows": ["main"],
+  "permissions": ["core:event:default"]
+}

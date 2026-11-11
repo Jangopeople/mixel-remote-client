@@ -1,0 +1,24 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Mixel Remote",
+  "version": "1.0.0",
+  "identifier": "ch.mixel.remote",
+  "build": {
+    "frontendDist": "../../frontends/mobile/dist",
+    "beforeBuildCommand": "node ../frontends/mobile/build.mjs",
+    "beforeDevCommand": "node ../frontends/mobile/build.mjs"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+    },
+    "windows": []
+  },
+  "bundle": {
+    "active": true,
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
+    "iOS": { "minimumSystemVersion": "15.0", "developmentTeam": "5277F8NDH4" },
+    "android": { "minSdkVersion": 26 }
+  }
+}

@@ -1,0 +1,34 @@
+[package]
+name = "mobile_app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Mixel Remote for iPhone, iPad and Android: control your computers from the phone"
+
+[lib]
+name = "mobile_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+# Lab builds only: take a test sign-in from the local test server instead of the sign-in page.
+lab-session = []
+
+[dependencies]
+tauri = { version = "=2.12.5", default-features = false, features = ["wry", "compression"] }
+tauri-plugin-opener = "2"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
+tokio = { version = "1", features = ["rt-multi-thread", "time", "macros", "sync"] }
+futures-util = "0.3"
+serde = { workspace = true }
+serde_json = "1"
+base64 = "0.22"
+sha2 = "0.10"
+rand_core.workspace = true
+
+[build-dependencies]
+tauri-build = { version = "=2.7.4", features = [] }
+
+[lints]
+workspace = true

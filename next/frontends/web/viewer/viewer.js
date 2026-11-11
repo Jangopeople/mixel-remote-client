@@ -14,6 +14,8 @@ const CONFIG = Object.assign({
   signIn: '/',
   meetings: 'https://rs.mixel.ch/meet/api/rooms',
 }, window.MIXEL_REMOTE_CONFIG || {});
+// The phone app supplies its own network calls and sign-in; in a browser these are the standard ones.
+const http = (url, options) => (CONFIG.fetch || fetch)(url, options);
 
 const $ = id => document.getElementById(id);
 const now = () => Math.floor(Date.now() / 1000);
@@ -44,7 +46,7 @@ async function accessToken(minimumSeconds = 120) {
     session = storedSession();
     if (!session) throw new Problem(t('Please sign in to Mixel ISM first.'));
     if ((claims(session.access_token).exp || 0) - now() >= minimumSeconds) return session.access_token;
-    const response = await fetch(`${CONFIG.identity}/auth/v1/token?grant_type=refresh_token`, {
+    const response = await http(`${CONFIG.identity}/auth/v1/token?grant_type=refresh_token`, {
       method: 'POST', headers: { apikey: CONFIG.apiKey, 'content-type': 'application/json' },
       body: JSON.stringify({ refresh_token: session.refresh_token }),
     });
@@ -58,7 +60,7 @@ async function accessToken(minimumSeconds = 120) {
 }
 async function api(path, options = {}) {
   const token = await accessToken();
-  const response = await fetch(CONFIG.identity + path, {
+  const response = await http(CONFIG.identity + path, {
     method: options.body === undefined ? 'GET' : 'POST',
     headers: Object.assign({ apikey: CONFIG.apiKey, authorization: `Bearer ${token}`, 'content-type': 'application/json' }, options.headers || {}),
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
@@ -71,7 +73,8 @@ async function api(path, options = {}) {
 async function principal() {
   const token = await accessToken();
   const tokenClaims = claims(token);
-  const user = await api('/auth/v1/user');
+  // A sign-in that was ended elsewhere (sign-out, removed account) shows up here first.
+  const user = await api('/auth/v1/user', { failure: CONFIG.signInAction ? t('Your sign-in has ended. Please sign in again.') : t('Your sign-in has expired. Please sign in to Mixel ISM again.') });
   if (!user.id || user.id !== tokenClaims.sub) throw new Problem(t('Please sign in to Mixel ISM first.'));
   const personal = await api('/rest/v1/rpc/remote_personal_account').catch(() => []);
   if (Array.isArray(personal) && personal[0] && personal[0].profile_id) {
@@ -97,7 +100,7 @@ let device = null, enrollment = null, who = null;
 function browserName() {
   const agent = navigator.userAgent;
   const system = /iPad|iPhone/.test(agent) ? (/iPad/.test(agent) ? 'iPad' : 'iPhone') : /Android/.test(agent) ? 'Android' : /Mac/.test(agent) ? 'Mac' : /Windows/.test(agent) ? 'Windows' : 'Linux';
-  return { name: `${t('Browser')} (${system})`, os: /iPad|iPhone|Mac/.test(agent) ? 'macos' : /Windows/.test(agent) ? 'windows' : 'linux' };
+  return { name: CONFIG.deviceName ? `${t(CONFIG.deviceName)} (${system})` : `${t('Browser')} (${system})`, os: /iPad|iPhone|Mac/.test(agent) ? 'macos' : /Windows/.test(agent) ? 'windows' : 'linux' };
 }
 async function loadDevice() {
   let saved = null;
@@ -107,29 +110,42 @@ async function loadDevice() {
   const key = hex(device.public_key());
   let rows;
   if (who.personal) {
-    rows = (await api('/rest/v1/rpc/remote_personal_devices')).filter(row => row.public_key === `\\x${key}` && !row.revoked_at);
+    rows = (await api('/rest/v1/rpc/remote_personal_devices')).filter(row => row.public_key === `\\x${key}`);
   } else {
     rows = await api(`/rest/v1/remote_device_enrollments?public_key=eq.%5Cx${key}&select=device_id,connection_id,generation,public_key,revoked_at&limit=2`);
-    rows = rows.filter(row => !row.revoked_at);
   }
+  const removed = rows.some(row => row.revoked_at);
+  rows = rows.filter(row => !row.revoked_at);
   enrollment = rows.length === 1 ? rows[0] : null;
+  if (!enrollment && removed) {
+    // This registration was removed. A removed key is never accepted again, so start over with a new one.
+    device = new Device();
+    localStorage.setItem(deviceKey(who.profile), JSON.stringify({ seed: hex(device.seed()) }));
+  }
   return enrollment;
 }
 async function register(company, name) {
   const { os } = browserName();
-  const key = `\\x${hex(device.public_key())}`;
-  if (who.personal) {
-    await api('/rest/v1/rpc/remote_register_personal_device', { body: { device_name: name, device_os: os, key_material: key }, failure: t('This browser could not be registered.') });
-  } else {
-    const target = await api('/rest/v1/rpc/remote_add_device', { body: { target_client: company, device_name: name, device_os: os }, failure: t('This browser could not be registered.') });
-    await api('/rest/v1/rpc/remote_enroll_device', { body: { target, key_material: key }, headers: { accept: 'application/vnd.pgrst.object+json' }, failure: t('This browser could not be registered.') });
+  const failure = t('This browser could not be registered.');
+  const enrol = async () => {
+    const key = `\\x${hex(device.public_key())}`;
+    if (who.personal) return api('/rest/v1/rpc/remote_register_personal_device', { body: { device_name: name, device_os: os, key_material: key }, failure });
+    const target = await api('/rest/v1/rpc/remote_add_device', { body: { target_client: company, device_name: name, device_os: os }, failure });
+    return api('/rest/v1/rpc/remote_enroll_device', { body: { target, key_material: key }, headers: { accept: 'application/vnd.pgrst.object+json' }, failure });
+  };
+  try { await enrol(); }
+  catch {
+    // A key whose registration was removed earlier is never accepted again: try once more with a new key.
+    device = new Device();
+    localStorage.setItem(deviceKey(who.profile), JSON.stringify({ seed: hex(device.seed()) }));
+    await enrol();
   }
-  if (!(await loadDevice())) throw new Problem(t('This browser could not be registered.'));
+  if (!(await loadDevice())) throw new Problem(failure);
 }
 async function ticket() {
   const token = await accessToken(300);
   const proof = device.delegation_proof(enrollment.device_id, who.profile, who.tenant, enrollment.connection_id, enrollment.generation, now());
-  const response = await fetch(CONFIG.ticketUrl, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: proof });
+  const response = await http(CONFIG.ticketUrl, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: proof });
   if (!response.ok) throw new Problem(t('Mixel did not confirm this browser. Please try again.'));
   return device.accept_ticket(await response.text(), proof, CONFIG.authorityKeys, who.staff, claims(token).exp, now());
 }
@@ -150,7 +166,7 @@ async function connectService() {
   status(t('Connecting…'));
   const encoded = await ticket();
   lastRenew = now();
-  socket = new WebSocket(CONFIG.signaling);
+  socket = CONFIG.socket ? CONFIG.socket(CONFIG.signaling) : new WebSocket(CONFIG.signaling);
   await new Promise((resolve, reject) => { socket.onopen = resolve; socket.onerror = () => reject(new Problem(t('The connection service cannot be reached.'))); });
   socket.onmessage = event => { if (typeof event.data === 'string') dispatch(JSON.parse(event.data)); };
   socket.onclose = () => { online = false; waiters.splice(0).forEach(entry => entry.reject(new Problem(t('The connection was lost.')))); if (active) endSession(t('The connection was lost.')); else if (wanted) status(t('Not connected. Reload the page to connect again.')); renderHome(); };
@@ -207,6 +223,7 @@ async function hostKey(id) {
   return unhex(rows[0].public_key.slice(2));
 }
 async function request(id, code, unattended) {
+  if (!enrollment) throw new Problem(t('Register first, then connect.'));
   await connectService();
   const key = await hostKey(id);
   status(unattended ? t('Connecting…') : t('Waiting for the other person to accept…'));
@@ -546,7 +563,7 @@ async function startMeeting() {
   const button = $('meet-button');
   button.disabled = true;
   try {
-    const response = await fetch(CONFIG.meetings, { method: 'POST', headers: { authorization: `Bearer ${await accessToken()}`, 'content-type': 'application/json' }, body: JSON.stringify({ title: who ? who.name : '' }) }).catch(() => null);
+    const response = await http(CONFIG.meetings, { method: 'POST', headers: { authorization: `Bearer ${await accessToken()}`, 'content-type': 'application/json' }, body: JSON.stringify({ title: who ? who.name : '' }) }).catch(() => null);
     if (!response || !response.ok) throw new Problem(response && response.status === 429 ? t('You have started many meetings. Please try again later.') : t('The meeting could not be started. Please try again.'));
     const room = await response.json();
     $('meet-open').href = room.host; $('meet-invite').value = room.invite; $('meet-result').hidden = false;
@@ -555,14 +572,27 @@ async function startMeeting() {
 }
 let started = false;
 async function start() {
-  if (!started) { applyTexts(); await init(); started = true; }
+  if (!started) { applyTexts(); if (CONFIG.ready) await CONFIG.ready; await init(); started = true; }
+  if (CONFIG.deviceName) {
+    // Inside the phone app it is the phone that is registered, not a browser.
+    $('register-title').textContent = t('Register this device');
+    $('register-hint').textContent = t('To connect from here, this device is registered once as one of your devices. It gets its own Remote ID.');
+    $('own-label').textContent = t('This device:');
+  }
   $('signin-link').href = CONFIG.signIn;
+  if (CONFIG.signInAction) { $('signin-link').textContent = t('Sign in with Mixel ID'); $('signin-link').onclick = event => { event.preventDefault(); run(CONFIG.signInAction); }; }
+  $('signout').hidden = true;
   try { who = await principal(); }
   catch (problem) {
     if (problem.factor) { mfaFactor = problem.factor; $('mfa').hidden = false; $('mfa-code').focus(); return; }
-    $('signin').hidden = false; $('signin-text').textContent = problem instanceof Problem ? problem.message : t('Please sign in to Mixel ISM first.'); return;
+    $('signin').hidden = false;
+    const text = problem instanceof Problem ? problem.message : t('Please sign in to Mixel ISM first.');
+    $('signin-text').textContent = CONFIG.signInAction && !storedSession() ? (CONFIG.signInFailed && CONFIG.signInFailed() ? t('The sign-in was not completed. Please try again.') : t('Sign in with your Mixel ID to control your computers from here.')) : text;
+    $('signout').hidden = !(CONFIG.signInAction && storedSession());
+    return;
   }
   $('account').textContent = who.name;
+  $('signout').hidden = !CONFIG.signInAction;
   $('meet').hidden = false;
   await loadDevice();
   if (!enrollment) {
@@ -605,7 +635,18 @@ $('connect-form').onsubmit = event => {
   $('connect-button').disabled = true; unlockSound();
   run(() => request(id, code, $('remote-unattended').checked)).finally(() => { $('connect-button').disabled = false; });
 };
+$('status').onclick = () => { $('status').textContent = ''; }; // tap the notice to put it away
 $('meet-button').onclick = () => run(startMeeting);
+$('meet-open').onclick = event => { if (CONFIG.openExternal) { event.preventDefault(); run(() => CONFIG.openExternal($('meet-open').href)); } };
+// The phone app has its own sign-in, so it also needs its own sign-out.
+$('signout').onclick = () => run(async () => {
+  const session = storedSession();
+  if (active) endSession('');
+  if (session) await http(`${CONFIG.identity}/auth/v1/logout?scope=local`, { method: 'POST', headers: { apikey: CONFIG.apiKey, authorization: `Bearer ${session.access_token}` } }).catch(() => null);
+  localStorage.removeItem(CONFIG.storageKey);
+  if (socket) { wanted = false; socket.close(); }
+  location.reload();
+});
 $('meet-copy').onclick = () => run(async () => {
   const link = $('meet-invite').value;
   try { await navigator.clipboard.writeText(link); } catch { $('meet-invite').select(); document.execCommand('copy'); }

@@ -16,7 +16,7 @@
 </head>
 <body>
 <main id="home">
-  <header><h1>Mixel Remote</h1><p data-t>Remote control in your browser</p><p id="account" class="account"></p></header>
+  <header><h1>Mixel Remote</h1><p data-t>Remote control in your browser</p><p id="account" class="account"></p><button id="signout" type="button" class="link" hidden data-t>Sign out</button></header>
   <section id="signin" class="card" hidden><p id="signin-text"></p><a id="signin-link" class="primary" href="/" data-t>Open Mixel ISM</a></section>
   <section id="mfa" class="card" hidden>
     <h2 data-t>Confirm it is you</h2>
@@ -26,8 +26,8 @@
     </form>
   </section>
   <section id="register" class="card" hidden>
-    <h2 data-t>Register this browser</h2>
-    <p class="hint" data-t>To connect from here, this browser is registered once as one of your devices. It gets its own Remote ID.</p>
+    <h2 id="register-title" data-t>Register this browser</h2>
+    <p id="register-hint" class="hint" data-t>To connect from here, this browser is registered once as one of your devices. It gets its own Remote ID.</p>
     <label id="register-company-row" hidden><span data-t>Company</span><select id="register-company"></select></label>
     <label><span data-t>Name</span><input id="register-name" maxlength="60" autocomplete="off"></label>
     <button id="register-button" class="primary" type="button" data-t>Register</button>
@@ -44,7 +44,7 @@
     <input id="search" type="search" autocomplete="off" placeholder="Search" data-t-placeholder>
     <div id="devices"></div>
     <p id="no-devices" class="hint" hidden data-t>No computers found.</p>
-    <p class="hint"><span data-t>This browser:</span> <span id="own-id"></span></p>
+    <p class="hint"><span id="own-label" data-t>This browser:</span> <span id="own-id"></span></p>
   </section>
   <section id="meet" class="card" hidden>
     <h2 data-t>Meeting</h2>
