@@ -290,10 +290,12 @@ fn install(image: &Path, version: &str) -> Result<(), String> {
 
 #[cfg(target_os = "linux")]
 fn install(package: &Path, _version: &str) -> Result<(), String> {
+    // Read the program path first: once dpkg replaces the file, it reads as "… (deleted)".
+    let exe = std::env::current_exe().map_err(|_| "Cannot locate Mixel Remote")?;
+    let exe = PathBuf::from(exe.to_string_lossy().trim_end_matches(" (deleted)"));
     // Installing a system package needs the administrator password once (polkit prompt).
     run("pkexec", &["/usr/bin/dpkg".as_ref(), "-i".as_ref(), package.as_os_str()])
         .map_err(|_| "The update was not installed (administrator approval is needed)")?;
-    let exe = std::env::current_exe().map_err(|_| "Cannot locate Mixel Remote")?;
     std::process::Command::new("/bin/sh")
         .args(["-c", "sleep 1; exec \"$0\""])
         .arg(exe)
