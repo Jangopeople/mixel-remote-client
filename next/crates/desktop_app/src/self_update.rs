@@ -165,39 +165,40 @@ async fn download(manifest: &Manifest) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+#[cfg(not(target_os = "windows"))]
 fn run(program: &str, args: &[&std::ffi::OsStr]) -> Result<String, String> {
     let mut command = std::process::Command::new(program);
     command.args(args);
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x0800_0000);
-    }
     let output = command.output().map_err(|_| format!("Cannot run {program}"))?;
     if !output.status.success() {
-        return Err(format!("{program} failed"));
+        let detail = String::from_utf8_lossy(&output.stderr);
+        let detail: String = detail.trim().chars().take(160).collect();
+        return Err(format!("{program} failed: {detail}"));
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 #[cfg(target_os = "windows")]
 fn install(installer: &Path, _version: &str) -> Result<(), String> {
-    let checked = run(
-        "powershell",
-        &[
-            "-NoProfile".as_ref(),
-            "-NonInteractive".as_ref(),
-            "-Command".as_ref(),
-            "$s=Get-AuthenticodeSignature -LiteralPath $args[0]; '{0}|{1}' -f $s.Status,$s.SignerCertificate.Subject".as_ref(),
-            installer.as_os_str(),
-        ],
-    )?;
+    use std::os::windows::process::CommandExt;
+    // Paths travel in environment variables: PowerShell -Command does not pass extra arguments.
+    let output = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "$s=Get-AuthenticodeSignature -LiteralPath $env:MIXEL_UPDATE_FILE; '{0}|{1}' -f $s.Status,$s.SignerCertificate.Subject",
+        ])
+        .env("MIXEL_UPDATE_FILE", installer)
+        .creation_flags(0x0800_0000)
+        .output()
+        .map_err(|_| "Cannot check the update signature")?;
+    let checked = String::from_utf8_lossy(&output.stdout);
     let (status, subject) = checked.trim().split_once('|').ok_or("Cannot check the update signature")?;
-    if status != "Valid" || !subject.contains("O=Mixel International Services SARLS") {
+    if !output.status.success() || status != "Valid" || !subject.contains("O=Mixel International Services SARLS") {
         return Err("The update is not signed by Mixel".into());
     }
     let exe = std::env::current_exe().map_err(|_| "Cannot locate Mixel Remote")?;
-    use std::os::windows::process::CommandExt;
     // Detached: wait until this app has closed, install silently, start the new version.
     std::process::Command::new("powershell")
         .args([
@@ -206,10 +207,11 @@ fn install(installer: &Path, _version: &str) -> Result<(), String> {
             "-WindowStyle",
             "Hidden",
             "-Command",
-            "Start-Sleep 2; $p=Start-Process -FilePath $args[0] -ArgumentList '/S' -Wait -PassThru; if($p.ExitCode -eq 0){ Start-Process -FilePath $args[1] }",
+            "Start-Sleep 2; $p=Start-Process -FilePath $env:MIXEL_UPDATE_FILE -ArgumentList '/S' -Wait -PassThru; if($p.ExitCode -eq 0){ Start-Process -FilePath $env:MIXEL_UPDATE_APP }",
         ])
-        .arg(installer)
-        .arg(exe)
+        .env("MIXEL_UPDATE_FILE", installer)
+        .env("MIXEL_UPDATE_APP", exe)
+        .env_remove("MIXEL_UPDATE_CHANNEL")
         .creation_flags(0x0800_0000 | 0x0000_0008)
         .spawn()
         .map_err(|_| "Cannot start the update installer")?;
@@ -305,6 +307,7 @@ pub async fn download_and_install(manifest: Manifest) -> Result<(), String> {
     if INSTALLING.swap(true, Ordering::AcqRel) {
         return Err("An update is already being installed".into());
     }
+    log(&format!("installing {} from channel {}", manifest.version, manifest.channel));
     let result = async {
         let path = download(&manifest).await?;
         let version = manifest.version.clone();
@@ -313,10 +316,27 @@ pub async fn download_and_install(manifest: Manifest) -> Result<(), String> {
             .map_err(|_| "The update installer failed")?
     }
     .await;
+    log(&match &result {
+        Ok(()) => format!("installed {}", manifest.version),
+        Err(error) => format!("update to {} failed: {error}", manifest.version),
+    });
     if result.is_err() {
         INSTALLING.store(false, Ordering::Release);
     }
     result
+}
+
+/// Short update history for support: <temp>/mixel-remote-updates/update.log.
+fn log(message: &str) {
+    let path = std::env::temp_dir().join("mixel-remote-updates").join("update.log");
+    let _ = std::fs::create_dir_all(path.parent().unwrap_or(Path::new(".")));
+    if std::fs::metadata(&path).is_ok_and(|meta| meta.len() > 64 * 1024) {
+        let _ = std::fs::remove_file(&path);
+    }
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let seconds = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |time| time.as_secs());
+        let _ = writeln!(file, "{seconds} {message}");
+    }
 }
 
 #[cfg(test)]
