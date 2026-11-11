@@ -1418,6 +1418,8 @@ struct Peer {
     consent_cancel: Arc<AtomicBool>,
     cancel: Arc<AtomicBool>,
     signals: Option<mpsc::Sender<Signal>>,
+    /// Signals from a faster peer that arrived while this side still waits for its relay configuration.
+    early: Vec<Signal>,
     nonce: Option<[u8; 32]>,
     identity: Option<core_protocol::delegation::DeviceTicket>,
     expires: Arc<AtomicU64>,
@@ -1932,7 +1934,7 @@ async fn run(
                                 status.support_code=code;
                             }).await;
                         },
-                        ServerMessage::Requested{session}=>{let (remote,key,unattended)=outgoing.take().ok_or("Unexpected outgoing invitation")?;peer=Some(Peer{id:session,remote,host:false,unattended,key,source:String::new(),#[cfg(target_os = "linux")] portal:None,confirm:false,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,nonce:None,identity:None,expires:Arc::new(AtomicU64::new(0)),relay_expires:0,restart_pending:None,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4()});peer.as_ref().ok_or("Invitation state unavailable")?.track(state,generation).await?;},
+                        ServerMessage::Requested{session}=>{let (remote,key,unattended)=outgoing.take().ok_or("Unexpected outgoing invitation")?;peer=Some(Peer{id:session,remote,host:false,unattended,key,source:String::new(),#[cfg(target_os = "linux")] portal:None,confirm:false,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:None,expires:Arc::new(AtomicU64::new(0)),relay_expires:0,restart_pending:None,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4()});peer.as_ref().ok_or("Invitation state unavailable")?.track(state,generation).await?;},
                         ServerMessage::Consent{session,requester_connection,requester,requester_identity,unattended,..}=>{
                             if crate::service_config::controller_only() || peer.is_some() || outgoing.is_some(){send(&mut socket,ClientMessage::Decide{session,accept:false}).await?;continue;}
                             let ticket=requester_identity.ok_or("The invitation has no signed requester identity")?;
@@ -1951,7 +1953,7 @@ async fn run(
                                 Some(config)
                             }else{None};
                             let expires=Arc::new(AtomicU64::new(ticket.expires_at));
-                            peer=Some(Peer{id:session,remote:requester_connection,host:true,unattended,key,source:String::new(),#[cfg(target_os = "linux")] portal:None,confirm:false,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,nonce:None,identity:Some(ticket),expires,relay_expires:0,restart_pending:None,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4()});
+                            peer=Some(Peer{id:session,remote:requester_connection,host:true,unattended,key,source:String::new(),#[cfg(target_os = "linux")] portal:None,confirm:false,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:Some(ticket),expires,relay_expires:0,restart_pending:None,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4()});
                             peer.as_ref().ok_or("Invitation state unavailable")?.track(state,generation).await?;
                             state.change(generation,|status|{status.phase="incoming".into();status.message="Incoming request: choose a source and Accept or Reject".into();status.peer=Some(requester_connection);status.requester=Some(requester);status.sharing=true;status.unattended_session=unattended;}).await;
                             if let Some(config)=auto {
@@ -1999,7 +2001,7 @@ async fn run(
                                 if server.urls.is_empty() || server.urls.len()>8 || server.urls.iter().any(|url|url.len()>1024) || server.username.len()>256 || server.credential.len()>1024{return Err("Invalid relay configuration bounds".into());}
                                 ice_servers.push(core_protocol::transport::NativeIceServer{urls:server.urls,username:server.username,credential:server.credential});
                             }
-                            let (signals_tx,signals_rx)=mpsc::channel(32);active.signals=Some(signals_tx);
+                            let (signals_tx,signals_rx)=mpsc::channel(32);for early in active.early.drain(..){signals_tx.try_send(early).map_err(|_|"Peer signaling queue overflowed")?;}active.signals=Some(signals_tx);
                             state.finish_previous_media().await?;
                             if active.cancel.load(Ordering::Acquire) || cancel.load(Ordering::Acquire){if active.take_close(){send(&mut socket,ClientMessage::Close{session}).await?;}continue;}
                             remote_peer::start(remote_peer::Config{state:state.clone(),generation,session,nonce,host:active.host,login_window:session_platform::login_window_mode(),remote_key:active.key,identity:identity.clone(),source:active.source.clone(),#[cfg(target_os = "linux")] portal:active.portal.clone(),confirm:active.confirm,control:active.control,clipboard:active.clipboard,files:active.files,chat:active.chat,recording:active.recording,consent_id:active.consent_id,consent_cancel:active.consent_cancel.clone(),consent_started:active.started_at,session_cancel:active.cancel.clone(),account_cancel:cancel.clone(),signals:signals_rx,commands:tx.clone(),video:video.clone(),ice_servers,relay_only:service.relay_only,authorization:broker_lease.clone(),peer_expires:active.expires.clone()})?;
@@ -2011,7 +2013,7 @@ async fn run(
                             if key!=active.key || !same_identity(previous,&renewed){return Err("Peer account, enrollment or authorization changed".into());}
                             if renewed.issued_at>=previous.issued_at && renewed.expires_at>=previous.expires_at{active.expires.store(renewed.expires_at,Ordering::Release);active.identity=Some(renewed);}
                         },
-                        ServerMessage::Signal{session,payload}=>{let active=peer.as_ref().filter(|peer|peer.id==session).ok_or("Unexpected peer signaling")?;if active.cancel.load(Ordering::Acquire){continue;}active.signals.as_ref().ok_or("Media negotiation is unavailable")?.try_send(payload).map_err(|_|"Peer signaling queue overflowed")?;},
+                        ServerMessage::Signal{session,payload}=>{let active=peer.as_ref().filter(|peer|peer.id==session).ok_or("Unexpected peer signaling")?;if active.cancel.load(Ordering::Acquire){continue;}match active.signals.as_ref(){Some(signals)=>signals.try_send(payload).map_err(|_|"Peer signaling queue overflowed")?,None if active.nonce.is_some() && active.early.len()<32=>{/* accepted, relay configuration still on its way: keep for the media task */let active=peer.as_mut().ok_or("Unexpected peer signaling")?;active.early.push(payload);},None=>return Err("Media negotiation is unavailable".into())}},
                         ServerMessage::Closed{session,reason}=>{if peer.as_ref().is_some_and(|peer|peer.id==session){peer=None;state.change(generation,|status|{status.phase="ready".into();status.message=format!("Session closed: {reason:?}");status.session=None;status.peer=None;status.requester=None;}).await;}},
                         ServerMessage::Error{code}=>{
                             if outgoing.take().is_some(){state.change(generation,|status|{status.phase="ready".into();status.peer=None;status.message=request_failure_message(code).into();}).await;}
@@ -2178,6 +2180,7 @@ mod consent_tests {
             consent_cancel: Arc::new(AtomicBool::new(false)),
             cancel: Arc::new(AtomicBool::new(false)),
             signals: None,
+            early: Vec::new(),
             nonce: None,
             identity: None,
             expires: Arc::new(AtomicU64::new(900)),
