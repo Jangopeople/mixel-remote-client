@@ -329,6 +329,9 @@ jobs:
           RDREPO: ./rustdesk
           BRANDING: ./branding
 
+      - name: Apply the security lock update (2026-11-12)
+        run: python3 scripts/patch-security-lock.py --check rustdesk && python3 scripts/patch-security-lock.py rustdesk
+
       - name: Restore bridge files
         uses: actions/download-artifact@v7
         with:
