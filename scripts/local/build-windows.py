@@ -499,6 +499,11 @@ def build(args,repo=REPO):
         # fixtures keep seeing the pinned source without it.
         call('elevation-layer',[sys.executable,repo/'scripts/patch-support-elevation.py','--check',app])
         call('elevation-layer',[sys.executable,repo/'scripts/patch-support-elevation.py',app])
+        # Security update of the dependency lock (2026-11-12): same-major crate fixes that
+        # still build with Rust 1.75. Applied after every source layer, before fetch-locked,
+        # so the lock digest held for the build below already includes it.
+        call('security-lock',[sys.executable,repo/'scripts/patch-security-lock.py','--check',app])
+        call('security-lock',[sys.executable,repo/'scripts/patch-security-lock.py',app])
         lock=B.digest(file(app/'Cargo.lock'))
         def hold(phase):
             current=B.digest(file(app/'Cargo.lock'));result.update(cargoLockBeforeSha256=lock,cargoLockAfterSha256=current,cargoLockUnchanged=current==lock)
