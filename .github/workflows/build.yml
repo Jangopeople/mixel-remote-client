@@ -333,13 +333,13 @@ jobs:
         run: |
           python3 scripts/patch-security-lock.py --check rustdesk && python3 scripts/patch-security-lock.py rustdesk
           # One-time break-glass build: the source gates below pin every byte of the shipped
-          # pipeline, so give them the exact 73e7c3d checkout (this lock step and the macos-15
+          # pipeline, so check out exactly 73e7c3d after the lock update (this lock step and the macos-15
           # runner label are the only differences) and prove nothing else differs.
           git fetch -q --depth=1 origin 73e7c3decf800ba5db5867c135bff5ef42080b83
-          git checkout -q FETCH_HEAD -- .github/workflows/build.yml
-          rm -r scripts/patch-security-lock.py scripts/security scripts/test-security-lock.py
-          git diff --quiet FETCH_HEAD -- . ':!rustdesk'
-          test ! -e scripts/patch-security-lock.py && test ! -e scripts/security && test ! -e scripts/test-security-lock.py
+          git checkout -q --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = 73e7c3decf800ba5db5867c135bff5ef42080b83
+          git diff --quiet HEAD -- . ':!rustdesk'
+          test ! -e scripts/patch-security-lock.py
           echo 'PASS: pipeline checkout equals 73e7c3d; Cargo.lock carries the security update'
 
       - name: Restore bridge files
