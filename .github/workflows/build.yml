@@ -223,7 +223,7 @@ jobs:
         job:
           - { arch: aarch64, target: aarch64-apple-darwin }
           - { arch: x86_64,  target: x86_64-apple-darwin }
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 180
     env:
       UPSTREAM_VERSION: ${{ needs.config.outputs.upstream_version }}
