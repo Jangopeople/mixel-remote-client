@@ -288,6 +288,9 @@ jobs:
           RDREPO: ./rustdesk
           BRANDING: ./branding
 
+      - name: Apply the security lock update (2026-11-12)
+        run: python3 scripts/patch-security-lock.py --check rustdesk && python3 scripts/patch-security-lock.py rustdesk
+
       - name: Restore bridge files
         uses: actions/download-artifact@v4
         with:
@@ -606,7 +609,8 @@ jobs:
   # ===========================================================================
   upload:
     needs: [linux, macos, windows]
-    if: always()
+    # Off on this branch: the store.mixel.ch rebuild must not replace the live R2 customer aliases.
+    if: false
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     steps:

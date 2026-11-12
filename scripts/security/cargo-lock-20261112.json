@@ -1,0 +1,1495 @@
+{
+ "apply": {
+  "added": {
+   "anyhow 1.0.103": {
+    "after": "anstyle-wincon 3.0.3",
+    "block": "name = \"anyhow\"\nversion = \"1.0.103\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3\"\n\n"
+   },
+   "bytes 1.11.1": {
+    "after": "byteorder 1.5.0",
+    "block": "name = \"bytes\"\nversion = \"1.11.1\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33\"\ndependencies = [\n \"serde 1.0.228\",\n]\n\n"
+   },
+   "crossbeam-channel 0.5.15": {
+    "after": "crc32fast 1.4.2",
+    "block": "name = \"crossbeam-channel\"\nversion = \"0.5.15\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"82b8f8f868b36967f9606790d1903570de9ceaf870a7bf9fbbd3016d636a2cb2\"\ndependencies = [\n \"crossbeam-utils\",\n]\n\n"
+   },
+   "crossbeam-epoch 0.9.20": {
+    "after": "crossbeam-deque 0.8.5",
+    "block": "name = \"crossbeam-epoch\"\nversion = \"0.9.20\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"2d6914041f254d6e9176c01941b21115dcfb7089e55135a35411081bd106ef3f\"\ndependencies = [\n \"crossbeam-utils\",\n]\n\n"
+   },
+   "libc 0.2.191": {
+    "after": "libappindicator-sys 0.9.0",
+    "block": "name = \"libc\"\nversion = \"0.2.191\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a\"\n\n"
+   },
+   "memmap2 0.9.11": {
+    "after": "memchr 2.7.4",
+    "block": "name = \"memmap2\"\nversion = \"0.9.11\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"d1219ed1b7f229ee7104d281dd01d6802fe28bb6e95d292942c4daacdeb798c0\"\ndependencies = [\n \"libc\",\n]\n\n"
+   },
+   "mio 1.2.4": {
+    "after": "mio 0.8.11",
+    "block": "name = \"mio\"\nversion = \"1.2.4\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"1788edb87fdc09c7e26304471e2f5be8cdefb1b6930d6e3985fc02ff53bf86ee\"\ndependencies = [\n \"libc\",\n \"wasi 0.11.0+wasi-snapshot-preview1\",\n \"windows-sys 0.61.2\",\n]\n\n"
+   },
+   "nu-ansi-term 0.50.3": {
+    "after": "nu-ansi-term 0.49.0",
+    "block": "name = \"nu-ansi-term\"\nversion = \"0.50.3\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5\"\ndependencies = [\n \"windows-sys 0.61.2\",\n]\n\n"
+   },
+   "openssl 0.10.78": {
+    "after": "opaque-debug 0.3.1",
+    "block": "name = \"openssl\"\nversion = \"0.10.78\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"f38c4372413cdaaf3cc79dd92d29d7d9f5ab09b51b10dded508fb90bb70b9222\"\ndependencies = [\n \"bitflags 2.9.1\",\n \"cfg-if 1.0.0\",\n \"foreign-types 0.3.2\",\n \"libc\",\n \"once_cell\",\n \"openssl-macros\",\n \"openssl-sys\",\n]\n\n"
+   },
+   "openssl-sys 0.9.114": {
+    "after": "openssl-src 300.5.3+3.5.4",
+    "block": "name = \"openssl-sys\"\nversion = \"0.9.114\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"13ce1245cd07fcc4cfdb438f7507b0c7e4f3849a69fd84d52374c66d83741bb6\"\ndependencies = [\n \"cc\",\n \"libc\",\n \"openssl-src\",\n \"pkg-config\",\n \"vcpkg\",\n]\n\n"
+   },
+   "rand 0.8.6": {
+    "after": "rand 0.6.5",
+    "block": "name = \"rand\"\nversion = \"0.8.6\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"5ca0ecfa931c29007047d1bc58e623ab12e5590e8c7cc53200d5202b69266d8a\"\ndependencies = [\n \"libc\",\n \"rand_chacha 0.3.1\",\n \"rand_core 0.6.4\",\n]\n\n"
+   },
+   "rand 0.9.3": {
+    "after": "rand 0.8.6",
+    "block": "name = \"rand\"\nversion = \"0.9.3\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"7ec095654a25171c2124e9e3393a930bddbffdc939556c914957a4c3e0a87166\"\ndependencies = [\n \"rand_chacha 0.9.0\",\n \"rand_core 0.9.3\",\n]\n\n"
+   },
+   "rustls 0.23.46": {
+    "after": "rustix 1.1.2",
+    "block": "name = \"rustls\"\nversion = \"0.23.46\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf\"\ndependencies = [\n \"log\",\n \"once_cell\",\n \"ring\",\n \"rustls-pki-types\",\n \"rustls-webpki\",\n \"subtle\",\n \"zeroize\",\n]\n\n"
+   },
+   "rustls-pki-types 1.16.0": {
+    "after": "rustls-native-certs 0.8.1",
+    "block": "name = \"rustls-pki-types\"\nversion = \"1.16.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"102f35f7de7b06d8c61f1cff6592f5253e0dea431c74867aad5dfd70f44663fb\"\ndependencies = [\n \"web-time\",\n \"zeroize\",\n]\n\n"
+   },
+   "rustls-webpki 0.103.16": {
+    "after": "rustls-platform-verifier-android 0.1.1",
+    "block": "name = \"rustls-webpki\"\nversion = \"0.103.16\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"4443b1b6d39d7c663139942cc4558262562d2c84123bb6282ef177009ca8b281\"\ndependencies = [\n \"ring\",\n \"rustls-pki-types\",\n \"untrusted\",\n]\n\n"
+   },
+   "socket2 0.6.5": {
+    "after": "socket2 0.5.10",
+    "block": "name = \"socket2\"\nversion = \"0.6.5\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4\"\ndependencies = [\n \"libc\",\n \"windows-sys 0.61.2\",\n]\n\n"
+   },
+   "syn 3.0.10": {
+    "after": "syn 2.0.98",
+    "block": "name = \"syn\"\nversion = \"3.0.10\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"4ae9ccbea3a7b0b09443036490c8f34a8b1b760fd345e5c0dae0aac718faea79\"\ndependencies = [\n \"proc-macro2 1.0.93\",\n \"quote 1.0.36\",\n \"unicode-ident\",\n]\n\n"
+   },
+   "tokio 1.51.6": {
+    "after": "tinyvec_macros 0.1.1",
+    "block": "name = \"tokio\"\nversion = \"1.51.6\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"a13e32eacd0222f9658be2ccbd83b718bfd9bfb0d54b5921913c184cb86124a5\"\ndependencies = [\n \"bytes\",\n \"libc\",\n \"mio 1.2.4\",\n \"parking_lot\",\n \"pin-project-lite\",\n \"signal-hook-registry\",\n \"socket2 0.6.5\",\n \"tokio-macros\",\n \"windows-sys 0.61.2\",\n]\n\n"
+   },
+   "tokio-macros 2.7.2": {
+    "after": "tokio 1.51.6",
+    "block": "name = \"tokio-macros\"\nversion = \"2.7.2\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"78773a2a397f451582ce068015985c33193cf6dea8b74d2a639fe457b2f07b0e\"\ndependencies = [\n \"proc-macro2 1.0.93\",\n \"quote 1.0.36\",\n \"syn 3.0.10\",\n]\n\n"
+   },
+   "tracing-subscriber 0.3.20": {
+    "after": "tracing-log 0.2.0",
+    "block": "name = \"tracing-subscriber\"\nversion = \"0.3.20\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"2054a14f5307d601f88daf0553e1cbf472acc4f2c51afab632431cdcd72124d5\"\ndependencies = [\n \"nu-ansi-term 0.50.3\",\n \"sharded-slab\",\n \"smallvec\",\n \"thread_local\",\n \"tracing-core\",\n \"tracing-log\",\n]\n\n"
+   },
+   "webpki-roots 0.26.11": {
+    "after": "webpki-root-certs 1.0.3",
+    "block": "name = \"webpki-roots\"\nversion = \"0.26.11\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9\"\ndependencies = [\n \"webpki-roots 1.0.10\",\n]\n\n"
+   },
+   "webpki-roots 1.0.10": {
+    "after": "webpki-roots 0.26.11",
+    "block": "name = \"webpki-roots\"\nversion = \"1.0.10\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"1c1c8e20c8a38fc7d65abfe74eb7280e4aa667e8eec8bc84996d2874810748d9\"\ndependencies = [\n \"rustls-pki-types\",\n]\n\n"
+   },
+   "windows-link 0.2.1": {
+    "after": "windows-link 0.1.1",
+    "block": "name = \"windows-link\"\nversion = \"0.2.1\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5\"\n\n"
+   },
+   "windows-sys 0.61.2": {
+    "after": "windows-sys 0.52.0",
+    "block": "name = \"windows-sys\"\nversion = \"0.61.2\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc\"\ndependencies = [\n \"windows-link 0.2.1\",\n]\n\n"
+   },
+   "zstd-sys 2.1.2+zstd.1.5.7": {
+    "after": "zstd-safe 7.1.0",
+    "block": "name = \"zstd-sys\"\nversion = \"2.1.2+zstd.1.5.7\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"481ada9c543b2323cbb7bbdbb5249177fbf0188ed959ed2c15e4b22421c84ed3\"\ndependencies = [\n \"cc\",\n \"pkg-config\",\n]\n\n"
+   }
+  },
+  "changed": {
+   "chrono 0.4.41": {
+    "checksum": "c469d952047f47f91b68d1cba3f10d63c11d73e4636f24f08daf0278abf01c4d",
+    "dependencies": [
+     "android-tzdata",
+     "iana-time-zone",
+     "js-sys",
+     "num-traits 0.2.19",
+     "wasm-bindgen",
+     "windows-link 0.1.1"
+    ],
+    "version": "0.4.41"
+   },
+   "clipboard 0.1.0": {
+    "dependencies": [
+     "cacao",
+     "cc",
+     "dashmap 5.5.3",
+     "dirs 5.0.1",
+     "fsevent",
+     "fuser",
+     "hbb_common",
+     "lazy_static",
+     "libc",
+     "objc2 0.5.2",
+     "objc2-app-kit",
+     "objc2-foundation",
+     "once_cell",
+     "parking_lot",
+     "percent-encoding",
+     "rand 0.8.6",
+     "serde 1.0.228",
+     "serde_derive",
+     "thiserror 1.0.61",
+     "utf16string",
+     "uuid",
+     "x11-clipboard 0.8.1",
+     "x11rb 0.12.0",
+     "xattr"
+    ],
+    "version": "0.1.0"
+   },
+   "dtls 0.13.0": {
+    "checksum": "f531dd7c181beaf3cebab3716afa4d0d41ab888be85232583f56bbaf07ca208a",
+    "dependencies": [
+     "aes",
+     "aes-gcm",
+     "async-trait",
+     "bincode",
+     "byteorder",
+     "cbc",
+     "ccm",
+     "chacha20poly1305",
+     "der-parser",
+     "hmac",
+     "log",
+     "p256",
+     "p384",
+     "portable-atomic",
+     "rand 0.9.3",
+     "rand_core 0.6.4",
+     "rcgen",
+     "ring",
+     "rustls",
+     "sec1",
+     "serde 1.0.228",
+     "sha1",
+     "sha2",
+     "thiserror 1.0.61",
+     "tokio",
+     "webrtc-util",
+     "x25519-dalek",
+     "x509-parser"
+    ],
+    "version": "0.13.0"
+   },
+   "hbb_common 0.1.0": {
+    "dependencies": [
+     "anyhow",
+     "async-recursion",
+     "backtrace",
+     "base64 0.22.1",
+     "bytes",
+     "chrono",
+     "clap 4.5.53",
+     "confy",
+     "default_net",
+     "directories-next",
+     "dirs-next",
+     "dlopen",
+     "env_logger 0.11.6",
+     "filetime",
+     "flexi_logger",
+     "futures",
+     "futures-util",
+     "httparse",
+     "lazy_static",
+     "libc",
+     "libloading 0.8.4",
+     "log",
+     "mac_address",
+     "machine-uid",
+     "osascript",
+     "protobuf",
+     "protobuf-codegen",
+     "rand 0.8.6",
+     "regex",
+     "rustls-native-certs",
+     "rustls-pki-types",
+     "rustls-platform-verifier",
+     "serde 1.0.228",
+     "serde_derive",
+     "serde_json 1.0.118",
+     "sha2",
+     "smithay-client-toolkit 0.20.0",
+     "socket2 0.3.19",
+     "sodiumoxide",
+     "sysinfo",
+     "thiserror 1.0.61",
+     "tokio",
+     "tokio-native-tls",
+     "tokio-rustls",
+     "tokio-socks",
+     "tokio-tungstenite",
+     "tokio-util",
+     "toml 0.7.8",
+     "tungstenite",
+     "url",
+     "users 0.11.0",
+     "uuid",
+     "webpki-roots 1.0.10",
+     "webrtc",
+     "whoami",
+     "winapi 0.3.9",
+     "x11 2.21.0",
+     "zstd 0.13.1"
+    ],
+    "version": "0.1.0"
+   },
+   "hyper-rustls 0.27.7": {
+    "checksum": "e3c93eb611681b207e1fe55d5a71ecf91572ec8a6705cdb6857f7d8d5242cf58",
+    "dependencies": [
+     "http",
+     "hyper",
+     "hyper-util",
+     "rustls",
+     "rustls-native-certs",
+     "rustls-pki-types",
+     "tokio",
+     "tokio-rustls",
+     "tower-service",
+     "webpki-roots 1.0.10"
+    ],
+    "version": "0.27.7"
+   },
+   "interceptor 0.15.0": {
+    "checksum": "ea51375727680dc15f06e8ad90fa31df75d79dd030100e8ad60eef1c27fe2c98",
+    "dependencies": [
+     "async-trait",
+     "bytes",
+     "futures",
+     "log",
+     "portable-atomic",
+     "rand 0.9.3",
+     "rtcp",
+     "rtp",
+     "thiserror 1.0.61",
+     "tokio",
+     "waitgroup",
+     "webrtc-srtp",
+     "webrtc-util"
+    ],
+    "version": "0.15.0"
+   },
+   "kcp-sys 0.1.0": {
+    "dependencies": [
+     "anyhow",
+     "auto_impl",
+     "bindgen 0.71.1",
+     "bitflags 2.9.1",
+     "bytes",
+     "cc",
+     "dashmap 6.1.0",
+     "log",
+     "parking_lot",
+     "rand 0.8.6",
+     "thiserror 2.0.17",
+     "tokio",
+     "tokio-util",
+     "tracing",
+     "tracing-subscriber",
+     "zerocopy 0.7.34"
+    ],
+    "version": "0.1.0"
+   },
+   "libloading 0.8.4": {
+    "checksum": "e310b3a6b5907f99202fcdb4960ff45b93735d7c7d96b760fcff8db2dc0e103d",
+    "dependencies": [
+     "cfg-if 1.0.0",
+     "windows-targets 0.48.5"
+    ],
+    "version": "0.8.4"
+   },
+   "parity-tokio-ipc 0.7.3-5": {
+    "dependencies": [
+     "futures",
+     "libc",
+     "log",
+     "rand 0.8.6",
+     "tokio",
+     "winapi 0.3.9"
+    ],
+    "version": "0.7.3-5"
+   },
+   "phf_generator 0.11.3": {
+    "checksum": "3c80231409c20246a13fddb31776fb942c38553c51e871f8cbd687a4cfb5843d",
+    "dependencies": [
+     "phf_shared 0.11.3",
+     "rand 0.8.6"
+    ],
+    "version": "0.11.3"
+   },
+   "quinn-proto 0.11.13": {
+    "checksum": "f1906b49b0c3bc04b5fe5d86a77925ae6524a19b816ae38ce1e426255f1d8a31",
+    "dependencies": [
+     "bytes",
+     "getrandom 0.3.2",
+     "lru-slab",
+     "rand 0.9.3",
+     "ring",
+     "rustc-hash 2.1.1",
+     "rustls",
+     "rustls-pki-types",
+     "slab",
+     "thiserror 2.0.17",
+     "tinyvec",
+     "tracing",
+     "web-time"
+    ],
+    "version": "0.11.13"
+   },
+   "reqwest 0.12.24": {
+    "checksum": "9d0946410b9f7b082a427e4ef5c8ff541a88b357bc6c637c40db3a68ac70a36f",
+    "dependencies": [
+     "async-compression",
+     "base64 0.22.1",
+     "bytes",
+     "futures-channel",
+     "futures-core",
+     "futures-util",
+     "http",
+     "http-body",
+     "http-body-util",
+     "hyper",
+     "hyper-rustls",
+     "hyper-tls",
+     "hyper-util",
+     "js-sys",
+     "log",
+     "native-tls",
+     "percent-encoding",
+     "pin-project-lite",
+     "quinn",
+     "rustls",
+     "rustls-native-certs",
+     "rustls-pki-types",
+     "serde 1.0.228",
+     "serde_json 1.0.118",
+     "serde_urlencoded",
+     "sync_wrapper",
+     "tokio",
+     "tokio-native-tls",
+     "tokio-rustls",
+     "tokio-util",
+     "tower",
+     "tower-http",
+     "tower-service",
+     "url",
+     "wasm-bindgen",
+     "wasm-bindgen-futures",
+     "web-sys",
+     "webpki-roots 1.0.10"
+    ],
+    "version": "0.12.24"
+   },
+   "rtp 0.14.0": {
+    "checksum": "2f126f38ea84c02480e32e547c1459a939052f74fb92117ac3eef23fdac6b023",
+    "dependencies": [
+     "bytes",
+     "memchr",
+     "portable-atomic",
+     "rand 0.9.3",
+     "serde 1.0.228",
+     "thiserror 1.0.61",
+     "webrtc-util"
+    ],
+    "version": "0.14.0"
+   },
+   "sdp 0.10.0": {
+    "checksum": "32c374dceda16965d541c8800ce9cc4e1c14acfd661ddf7952feeedc3411e5c6",
+    "dependencies": [
+     "rand 0.9.3",
+     "substring",
+     "thiserror 1.0.61",
+     "url"
+    ],
+    "version": "0.10.0"
+   },
+   "shared_memory 0.12.4": {
+    "checksum": "ba8593196da75d9dc4f69349682bd4c2099f8cde114257d1ef7ef1b33d1aba54",
+    "dependencies": [
+     "cfg-if 1.0.0",
+     "libc",
+     "nix 0.23.2",
+     "rand 0.8.6",
+     "win-sys"
+    ],
+    "version": "0.12.4"
+   },
+   "stun 0.9.0": {
+    "checksum": "1a512c5d501e3e3b5a4bb3e8e31462d56d54a66b95a28b8596e14422bf21c32b",
+    "dependencies": [
+     "base64 0.22.1",
+     "crc",
+     "lazy_static",
+     "md-5",
+     "rand 0.9.3",
+     "ring",
+     "subtle",
+     "thiserror 1.0.61",
+     "tokio",
+     "url",
+     "webrtc-util"
+    ],
+    "version": "0.9.0"
+   },
+   "stunclient 0.4.1": {
+    "checksum": "c969a14b4a4c09c320416ebf880b3d5a81ad1612065741eb10521951c06c8991",
+    "dependencies": [
+     "bytecodec",
+     "rand 0.8.6",
+     "stun_codec",
+     "tokio"
+    ],
+    "version": "0.4.1"
+   },
+   "tokio-tungstenite 0.26.2": {
+    "checksum": "7a9daff607c6d2bf6c16fd681ccb7eecc83e4e2cdc1ca067ffaadfca5de7f084",
+    "dependencies": [
+     "futures-util",
+     "log",
+     "native-tls",
+     "rustls",
+     "rustls-native-certs",
+     "rustls-pki-types",
+     "tokio",
+     "tokio-native-tls",
+     "tokio-rustls",
+     "tungstenite",
+     "webpki-roots 0.26.11"
+    ],
+    "version": "0.26.2"
+   },
+   "totp-rs 5.5.1": {
+    "checksum": "6c4ae9724c5888c0417d2396037ed3b60665925624766416e3e342b6ba5dbd3f",
+    "dependencies": [
+     "base32",
+     "constant_time_eq 0.2.6",
+     "hmac",
+     "rand 0.8.6",
+     "sha1",
+     "sha2",
+     "url",
+     "urlencoding"
+    ],
+    "version": "5.5.1"
+   },
+   "tungstenite 0.26.2": {
+    "checksum": "4793cb5e56680ecbb1d843515b23b6de9a75eb04b66643e256a396d43be33c13",
+    "dependencies": [
+     "bytes",
+     "data-encoding",
+     "http",
+     "httparse",
+     "log",
+     "native-tls",
+     "rand 0.9.3",
+     "rustls",
+     "rustls-native-certs",
+     "rustls-pki-types",
+     "sha1",
+     "thiserror 2.0.17",
+     "utf-8",
+     "webpki-roots 0.26.11"
+    ],
+    "version": "0.26.2"
+   },
+   "turn 0.11.0": {
+    "checksum": "5ed995882f66ab94238de77c62e5e778389698ab700afa4696f4754da8f457cb",
+    "dependencies": [
+     "async-trait",
+     "base64 0.22.1",
+     "futures",
+     "log",
+     "md-5",
+     "portable-atomic",
+     "rand 0.9.3",
+     "ring",
+     "stun",
+     "thiserror 1.0.61",
+     "tokio",
+     "tokio-util",
+     "webrtc-util"
+    ],
+    "version": "0.11.0"
+   },
+   "webrtc 0.14.0": {
+    "checksum": "08fd686c0920ac08f3a57eacc48e31f0e4ca1ffefba4478784606f78c14e83ad",
+    "dependencies": [
+     "arc-swap",
+     "async-trait",
+     "bytes",
+     "dtls",
+     "hex",
+     "interceptor",
+     "lazy_static",
+     "log",
+     "portable-atomic",
+     "rand 0.9.3",
+     "rcgen",
+     "regex",
+     "ring",
+     "rtcp",
+     "rtp",
+     "sdp",
+     "serde 1.0.228",
+     "serde_json 1.0.118",
+     "sha2",
+     "smol_str",
+     "stun",
+     "thiserror 1.0.61",
+     "tokio",
+     "turn",
+     "unicase",
+     "url",
+     "waitgroup",
+     "webrtc-data",
+     "webrtc-ice",
+     "webrtc-mdns",
+     "webrtc-media",
+     "webrtc-sctp",
+     "webrtc-srtp",
+     "webrtc-util"
+    ],
+    "version": "0.14.0"
+   },
+   "webrtc-ice 0.14.0": {
+    "checksum": "69cb13fd1a373e68addc4bba0c8ca058627518e54342583d024bdcbb8ae5d97d",
+    "dependencies": [
+     "arc-swap",
+     "async-trait",
+     "crc",
+     "log",
+     "portable-atomic",
+     "rand 0.9.3",
+     "serde 1.0.228",
+     "serde_json 1.0.118",
+     "stun",
+     "thiserror 1.0.61",
+     "tokio",
+     "turn",
+     "url",
+     "uuid",
+     "waitgroup",
+     "webrtc-mdns",
+     "webrtc-util"
+    ],
+    "version": "0.14.0"
+   },
+   "webrtc-media 0.11.0": {
+    "checksum": "94a84c910fec0848fd5a0d8a5651e0ddbdedaf25a7d3ae3f0b15f71ac73a1773",
+    "dependencies": [
+     "byteorder",
+     "bytes",
+     "rand 0.9.3",
+     "rtp",
+     "thiserror 1.0.61"
+    ],
+    "version": "0.11.0"
+   },
+   "webrtc-sctp 0.13.0": {
+    "checksum": "f985465467d8910c1f8ac4382cd64f83b1f6a1a75021a82b221546f6fb3b856f",
+    "dependencies": [
+     "arc-swap",
+     "async-trait",
+     "bytes",
+     "crc",
+     "log",
+     "portable-atomic",
+     "rand 0.9.3",
+     "thiserror 1.0.61",
+     "tokio",
+     "webrtc-util"
+    ],
+    "version": "0.13.0"
+   },
+   "webrtc-util 0.12.0": {
+    "checksum": "d1c0c7e0c8f280f2bbfae442701465777ac07adaf46ce0c5863cd58e13fe472a",
+    "dependencies": [
+     "async-trait",
+     "bitflags 1.3.2",
+     "bytes",
+     "ipnet",
+     "lazy_static",
+     "log",
+     "nix 0.26.4",
+     "portable-atomic",
+     "rand 0.9.3",
+     "thiserror 1.0.61",
+     "tokio",
+     "winapi 0.3.9"
+    ],
+    "version": "0.12.0"
+   },
+   "windows 0.61.1": {
+    "checksum": "c5ee8f3d025738cb02bad7868bbb5f8a6327501e870bf51f1b455b0a2454a419",
+    "dependencies": [
+     "windows-collections",
+     "windows-core 0.61.0",
+     "windows-future",
+     "windows-link 0.1.1",
+     "windows-numerics"
+    ],
+    "version": "0.61.1"
+   },
+   "windows-core 0.61.0": {
+    "checksum": "4763c1de310c86d75a878046489e2e5ba02c649d185f21c67d4cf8a56d098980",
+    "dependencies": [
+     "windows-implement 0.60.0",
+     "windows-interface 0.59.1",
+     "windows-link 0.1.1",
+     "windows-result 0.3.2",
+     "windows-strings 0.4.0"
+    ],
+    "version": "0.61.0"
+   },
+   "windows-future 0.2.0": {
+    "checksum": "7a1d6bbefcb7b60acd19828e1bc965da6fcf18a7e39490c5f8be71e54a19ba32",
+    "dependencies": [
+     "windows-core 0.61.0",
+     "windows-link 0.1.1"
+    ],
+    "version": "0.2.0"
+   },
+   "windows-numerics 0.2.0": {
+    "checksum": "9150af68066c4c5c07ddc0ce30421554771e528bde427614c61038bc2c92c2b1",
+    "dependencies": [
+     "windows-core 0.61.0",
+     "windows-link 0.1.1"
+    ],
+    "version": "0.2.0"
+   },
+   "windows-result 0.3.2": {
+    "checksum": "c64fd11a4fd95df68efcfee5f44a294fe71b8bc6a91993e2791938abcc712252",
+    "dependencies": [
+     "windows-link 0.1.1"
+    ],
+    "version": "0.3.2"
+   },
+   "windows-strings 0.3.1": {
+    "checksum": "87fa48cc5d406560701792be122a10132491cff9d0aeb23583cc2dcafc847319",
+    "dependencies": [
+     "windows-link 0.1.1"
+    ],
+    "version": "0.3.1"
+   },
+   "windows-strings 0.4.0": {
+    "checksum": "7a2ba9642430ee452d5a7aa78d72907ebe8cfda358e8cb7918a2050581322f97",
+    "dependencies": [
+     "windows-link 0.1.1"
+    ],
+    "version": "0.4.0"
+   },
+   "zbus 3.15.2": {
+    "checksum": "675d170b632a6ad49804c8cf2105d7c31eddd3312555cffd4b740e08e97c25e6",
+    "dependencies": [
+     "async-broadcast",
+     "async-executor",
+     "async-fs",
+     "async-io 1.13.0",
+     "async-lock 2.8.0",
+     "async-process",
+     "async-recursion",
+     "async-task",
+     "async-trait",
+     "blocking",
+     "byteorder",
+     "derivative",
+     "enumflags2",
+     "event-listener 2.5.3",
+     "futures-core",
+     "futures-sink",
+     "futures-util",
+     "hex",
+     "nix 0.26.4",
+     "once_cell",
+     "ordered-stream",
+     "rand 0.8.6",
+     "serde 1.0.228",
+     "serde_repr",
+     "sha1",
+     "static_assertions",
+     "tracing",
+     "uds_windows",
+     "winapi 0.3.9",
+     "xdg-home",
+     "zbus_macros",
+     "zbus_names",
+     "zvariant"
+    ],
+    "version": "3.15.2"
+   }
+  },
+  "removed": [
+   "anyhow 1.0.98",
+   "bytes 1.10.1",
+   "crossbeam-channel 0.5.13",
+   "crossbeam-epoch 0.9.18",
+   "libc 0.2.171",
+   "memmap2 0.9.8",
+   "mio 1.0.3",
+   "nu-ansi-term 0.46.0",
+   "openssl 0.10.68",
+   "openssl-sys 0.9.104",
+   "overload 0.1.1",
+   "rand 0.8.5",
+   "rand 0.9.2",
+   "rustls 0.23.28",
+   "rustls-pki-types 1.11.0",
+   "rustls-webpki 0.103.3",
+   "tokio 1.44.2",
+   "tokio-macros 2.5.0",
+   "tracing-subscriber 0.3.19",
+   "webpki-roots 0.26.9",
+   "webpki-roots 1.0.4",
+   "zstd-sys 2.0.11+zstd.1.5.6"
+  ]
+ },
+ "restore": {
+  "added": {
+   "anyhow 1.0.98": {
+    "after": "anstyle-wincon 3.0.3",
+    "block": "name = \"anyhow\"\nversion = \"1.0.98\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"e16d2d3311acee920a9eb8d33b8cbc1787ce4a264e85f964c2404b969bdcd487\"\n\n"
+   },
+   "bytes 1.10.1": {
+    "after": "byteorder 1.5.0",
+    "block": "name = \"bytes\"\nversion = \"1.10.1\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"d71b6127be86fdcfddb610f7182ac57211d4b18a3e9c82eb2d17662f2227ad6a\"\ndependencies = [\n \"serde 1.0.228\",\n]\n\n"
+   },
+   "crossbeam-channel 0.5.13": {
+    "after": "crc32fast 1.4.2",
+    "block": "name = \"crossbeam-channel\"\nversion = \"0.5.13\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"33480d6946193aa8033910124896ca395333cae7e2d1113d1fef6c3272217df2\"\ndependencies = [\n \"crossbeam-utils\",\n]\n\n"
+   },
+   "crossbeam-epoch 0.9.18": {
+    "after": "crossbeam-deque 0.8.5",
+    "block": "name = \"crossbeam-epoch\"\nversion = \"0.9.18\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"5b82ac4a3c2ca9c3460964f020e1402edd5753411d7737aa39c3714ad1b5420e\"\ndependencies = [\n \"crossbeam-utils\",\n]\n\n"
+   },
+   "libc 0.2.171": {
+    "after": "libappindicator-sys 0.9.0",
+    "block": "name = \"libc\"\nversion = \"0.2.171\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"c19937216e9d3aa9956d9bb8dfc0b0c8beb6058fc4f7a4dc4d850edf86a237d6\"\n\n"
+   },
+   "memmap2 0.9.8": {
+    "after": "memchr 2.7.4",
+    "block": "name = \"memmap2\"\nversion = \"0.9.8\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"843a98750cd611cc2965a8213b53b43e715f13c37a9e096c6408e69990961db7\"\ndependencies = [\n \"libc\",\n]\n\n"
+   },
+   "mio 1.0.3": {
+    "after": "mio 0.8.11",
+    "block": "name = \"mio\"\nversion = \"1.0.3\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"2886843bf800fba2e3377cff24abf6379b4c4d5c6681eaf9ea5b0d15090450bd\"\ndependencies = [\n \"libc\",\n \"wasi 0.11.0+wasi-snapshot-preview1\",\n \"windows-sys 0.52.0\",\n]\n\n"
+   },
+   "nu-ansi-term 0.46.0": {
+    "after": "ntapi 0.4.1",
+    "block": "name = \"nu-ansi-term\"\nversion = \"0.46.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"77a8165726e8236064dbb45459242600304b42a5ea24ee2948e18e023bf7ba84\"\ndependencies = [\n \"overload\",\n \"winapi 0.3.9\",\n]\n\n"
+   },
+   "openssl 0.10.68": {
+    "after": "opaque-debug 0.3.1",
+    "block": "name = \"openssl\"\nversion = \"0.10.68\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"6174bc48f102d208783c2c84bf931bb75927a617866870de8a4ea85597f871f5\"\ndependencies = [\n \"bitflags 2.9.1\",\n \"cfg-if 1.0.0\",\n \"foreign-types 0.3.2\",\n \"libc\",\n \"once_cell\",\n \"openssl-macros\",\n \"openssl-sys\",\n]\n\n"
+   },
+   "openssl-sys 0.9.104": {
+    "after": "openssl-src 300.5.3+3.5.4",
+    "block": "name = \"openssl-sys\"\nversion = \"0.9.104\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"45abf306cbf99debc8195b66b7346498d7b10c210de50418b5ccd7ceba08c741\"\ndependencies = [\n \"cc\",\n \"libc\",\n \"openssl-src\",\n \"pkg-config\",\n \"vcpkg\",\n]\n\n"
+   },
+   "overload 0.1.1": {
+    "after": "osascript 0.3.0",
+    "block": "name = \"overload\"\nversion = \"0.1.1\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"b15813163c1d831bf4a13c3610c05c0d03b39feb07f7e09fa234dac9b15aaf39\"\n\n"
+   },
+   "rand 0.8.5": {
+    "after": "rand 0.6.5",
+    "block": "name = \"rand\"\nversion = \"0.8.5\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"34af8d1a0e25924bc5b7c43c079c942339d8f0a8b57c39049bef581b46327404\"\ndependencies = [\n \"libc\",\n \"rand_chacha 0.3.1\",\n \"rand_core 0.6.4\",\n]\n\n"
+   },
+   "rand 0.9.2": {
+    "after": "rand 0.8.5",
+    "block": "name = \"rand\"\nversion = \"0.9.2\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"6db2770f06117d490610c7488547d543617b21bfa07796d7a12f6f1bd53850d1\"\ndependencies = [\n \"rand_chacha 0.9.0\",\n \"rand_core 0.9.3\",\n]\n\n"
+   },
+   "rustls 0.23.28": {
+    "after": "rustix 1.1.2",
+    "block": "name = \"rustls\"\nversion = \"0.23.28\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"7160e3e10bf4535308537f3c4e1641468cd0e485175d6163087c0393c7d46643\"\ndependencies = [\n \"log\",\n \"once_cell\",\n \"ring\",\n \"rustls-pki-types\",\n \"rustls-webpki\",\n \"subtle\",\n \"zeroize\",\n]\n\n"
+   },
+   "rustls-pki-types 1.11.0": {
+    "after": "rustls-native-certs 0.8.1",
+    "block": "name = \"rustls-pki-types\"\nversion = \"1.11.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"917ce264624a4b4db1c364dcc35bfca9ded014d0a958cd47ad3e960e988ea51c\"\ndependencies = [\n \"web-time\",\n]\n\n"
+   },
+   "rustls-webpki 0.103.3": {
+    "after": "rustls-platform-verifier-android 0.1.1",
+    "block": "name = \"rustls-webpki\"\nversion = \"0.103.3\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"e4a72fe2bcf7a6ac6fd7d0b9e5cb68aeb7d4c0a0271730218b3e92d43b4eb435\"\ndependencies = [\n \"ring\",\n \"rustls-pki-types\",\n \"untrusted\",\n]\n\n"
+   },
+   "tokio 1.44.2": {
+    "after": "tinyvec_macros 0.1.1",
+    "block": "name = \"tokio\"\nversion = \"1.44.2\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"e6b88822cbe49de4185e3a4cbf8321dd487cf5fe0c5c65695fef6346371e9c48\"\ndependencies = [\n \"backtrace\",\n \"bytes\",\n \"libc\",\n \"mio 1.0.3\",\n \"parking_lot\",\n \"pin-project-lite\",\n \"signal-hook-registry\",\n \"socket2 0.5.10\",\n \"tokio-macros\",\n \"windows-sys 0.52.0\",\n]\n\n"
+   },
+   "tokio-macros 2.5.0": {
+    "after": "tokio 1.44.2",
+    "block": "name = \"tokio-macros\"\nversion = \"2.5.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"6e06d43f1345a3bcd39f6a56dbb7dcab2ba47e68e8ac134855e7e2bdbaf8cab8\"\ndependencies = [\n \"proc-macro2 1.0.93\",\n \"quote 1.0.36\",\n \"syn 2.0.98\",\n]\n\n"
+   },
+   "tracing-subscriber 0.3.19": {
+    "after": "tracing-log 0.2.0",
+    "block": "name = \"tracing-subscriber\"\nversion = \"0.3.19\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"e8189decb5ac0fa7bc8b96b7cb9b2701d60d48805aca84a238004d665fcc4008\"\ndependencies = [\n \"nu-ansi-term 0.46.0\",\n \"sharded-slab\",\n \"smallvec\",\n \"thread_local\",\n \"tracing-core\",\n \"tracing-log\",\n]\n\n"
+   },
+   "webpki-roots 0.26.9": {
+    "after": "webpki-root-certs 1.0.3",
+    "block": "name = \"webpki-roots\"\nversion = \"0.26.9\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"29aad86cec885cafd03e8305fd727c418e970a521322c91688414d5b8efba16b\"\ndependencies = [\n \"rustls-pki-types\",\n]\n\n"
+   },
+   "webpki-roots 1.0.4": {
+    "after": "webpki-roots 0.26.9",
+    "block": "name = \"webpki-roots\"\nversion = \"1.0.4\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"b2878ef029c47c6e8cf779119f20fcf52bde7ad42a731b2a304bc221df17571e\"\ndependencies = [\n \"rustls-pki-types\",\n]\n\n"
+   },
+   "zstd-sys 2.0.11+zstd.1.5.6": {
+    "after": "zstd-safe 7.1.0",
+    "block": "name = \"zstd-sys\"\nversion = \"2.0.11+zstd.1.5.6\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"75652c55c0b6f3e6f12eb786fe1bc960396bf05a1eb3bf1f3691c3610ac2e6d4\"\ndependencies = [\n \"cc\",\n \"pkg-config\",\n]\n\n"
+   }
+  },
+  "changed": {
+   "chrono 0.4.41": {
+    "checksum": "c469d952047f47f91b68d1cba3f10d63c11d73e4636f24f08daf0278abf01c4d",
+    "dependencies": [
+     "android-tzdata",
+     "iana-time-zone",
+     "js-sys",
+     "num-traits 0.2.19",
+     "wasm-bindgen",
+     "windows-link"
+    ],
+    "version": "0.4.41"
+   },
+   "clipboard 0.1.0": {
+    "dependencies": [
+     "cacao",
+     "cc",
+     "dashmap 5.5.3",
+     "dirs 5.0.1",
+     "fsevent",
+     "fuser",
+     "hbb_common",
+     "lazy_static",
+     "libc",
+     "objc2 0.5.2",
+     "objc2-app-kit",
+     "objc2-foundation",
+     "once_cell",
+     "parking_lot",
+     "percent-encoding",
+     "rand 0.8.5",
+     "serde 1.0.228",
+     "serde_derive",
+     "thiserror 1.0.61",
+     "utf16string",
+     "uuid",
+     "x11-clipboard 0.8.1",
+     "x11rb 0.12.0",
+     "xattr"
+    ],
+    "version": "0.1.0"
+   },
+   "dtls 0.13.0": {
+    "checksum": "f531dd7c181beaf3cebab3716afa4d0d41ab888be85232583f56bbaf07ca208a",
+    "dependencies": [
+     "aes",
+     "aes-gcm",
+     "async-trait",
+     "bincode",
+     "byteorder",
+     "cbc",
+     "ccm",
+     "chacha20poly1305",
+     "der-parser",
+     "hmac",
+     "log",
+     "p256",
+     "p384",
+     "portable-atomic",
+     "rand 0.9.2",
+     "rand_core 0.6.4",
+     "rcgen",
+     "ring",
+     "rustls",
+     "sec1",
+     "serde 1.0.228",
+     "sha1",
+     "sha2",
+     "thiserror 1.0.61",
+     "tokio",
+     "webrtc-util",
+     "x25519-dalek",
+     "x509-parser"
+    ],
+    "version": "0.13.0"
+   },
+   "hbb_common 0.1.0": {
+    "dependencies": [
+     "anyhow",
+     "async-recursion",
+     "backtrace",
+     "base64 0.22.1",
+     "bytes",
+     "chrono",
+     "clap 4.5.53",
+     "confy",
+     "default_net",
+     "directories-next",
+     "dirs-next",
+     "dlopen",
+     "env_logger 0.11.6",
+     "filetime",
+     "flexi_logger",
+     "futures",
+     "futures-util",
+     "httparse",
+     "lazy_static",
+     "libc",
+     "libloading 0.8.4",
+     "log",
+     "mac_address",
+     "machine-uid",
+     "osascript",
+     "protobuf",
+     "protobuf-codegen",
+     "rand 0.8.5",
+     "regex",
+     "rustls-native-certs",
+     "rustls-pki-types",
+     "rustls-platform-verifier",
+     "serde 1.0.228",
+     "serde_derive",
+     "serde_json 1.0.118",
+     "sha2",
+     "smithay-client-toolkit 0.20.0",
+     "socket2 0.3.19",
+     "sodiumoxide",
+     "sysinfo",
+     "thiserror 1.0.61",
+     "tokio",
+     "tokio-native-tls",
+     "tokio-rustls",
+     "tokio-socks",
+     "tokio-tungstenite",
+     "tokio-util",
+     "toml 0.7.8",
+     "tungstenite",
+     "url",
+     "users 0.11.0",
+     "uuid",
+     "webpki-roots 1.0.4",
+     "webrtc",
+     "whoami",
+     "winapi 0.3.9",
+     "x11 2.21.0",
+     "zstd 0.13.1"
+    ],
+    "version": "0.1.0"
+   },
+   "hyper-rustls 0.27.7": {
+    "checksum": "e3c93eb611681b207e1fe55d5a71ecf91572ec8a6705cdb6857f7d8d5242cf58",
+    "dependencies": [
+     "http",
+     "hyper",
+     "hyper-util",
+     "rustls",
+     "rustls-native-certs",
+     "rustls-pki-types",
+     "tokio",
+     "tokio-rustls",
+     "tower-service",
+     "webpki-roots 1.0.4"
+    ],
+    "version": "0.27.7"
+   },
+   "interceptor 0.15.0": {
+    "checksum": "ea51375727680dc15f06e8ad90fa31df75d79dd030100e8ad60eef1c27fe2c98",
+    "dependencies": [
+     "async-trait",
+     "bytes",
+     "futures",
+     "log",
+     "portable-atomic",
+     "rand 0.9.2",
+     "rtcp",
+     "rtp",
+     "thiserror 1.0.61",
+     "tokio",
+     "waitgroup",
+     "webrtc-srtp",
+     "webrtc-util"
+    ],
+    "version": "0.15.0"
+   },
+   "kcp-sys 0.1.0": {
+    "dependencies": [
+     "anyhow",
+     "auto_impl",
+     "bindgen 0.71.1",
+     "bitflags 2.9.1",
+     "bytes",
+     "cc",
+     "dashmap 6.1.0",
+     "log",
+     "parking_lot",
+     "rand 0.8.5",
+     "thiserror 2.0.17",
+     "tokio",
+     "tokio-util",
+     "tracing",
+     "tracing-subscriber",
+     "zerocopy 0.7.34"
+    ],
+    "version": "0.1.0"
+   },
+   "libloading 0.8.4": {
+    "checksum": "e310b3a6b5907f99202fcdb4960ff45b93735d7c7d96b760fcff8db2dc0e103d",
+    "dependencies": [
+     "cfg-if 1.0.0",
+     "windows-targets 0.52.6"
+    ],
+    "version": "0.8.4"
+   },
+   "parity-tokio-ipc 0.7.3-5": {
+    "dependencies": [
+     "futures",
+     "libc",
+     "log",
+     "rand 0.8.5",
+     "tokio",
+     "winapi 0.3.9"
+    ],
+    "version": "0.7.3-5"
+   },
+   "phf_generator 0.11.3": {
+    "checksum": "3c80231409c20246a13fddb31776fb942c38553c51e871f8cbd687a4cfb5843d",
+    "dependencies": [
+     "phf_shared 0.11.3",
+     "rand 0.8.5"
+    ],
+    "version": "0.11.3"
+   },
+   "quinn-proto 0.11.13": {
+    "checksum": "f1906b49b0c3bc04b5fe5d86a77925ae6524a19b816ae38ce1e426255f1d8a31",
+    "dependencies": [
+     "bytes",
+     "getrandom 0.3.2",
+     "lru-slab",
+     "rand 0.9.2",
+     "ring",
+     "rustc-hash 2.1.1",
+     "rustls",
+     "rustls-pki-types",
+     "slab",
+     "thiserror 2.0.17",
+     "tinyvec",
+     "tracing",
+     "web-time"
+    ],
+    "version": "0.11.13"
+   },
+   "reqwest 0.12.24": {
+    "checksum": "9d0946410b9f7b082a427e4ef5c8ff541a88b357bc6c637c40db3a68ac70a36f",
+    "dependencies": [
+     "async-compression",
+     "base64 0.22.1",
+     "bytes",
+     "futures-channel",
+     "futures-core",
+     "futures-util",
+     "http",
+     "http-body",
+     "http-body-util",
+     "hyper",
+     "hyper-rustls",
+     "hyper-tls",
+     "hyper-util",
+     "js-sys",
+     "log",
+     "native-tls",
+     "percent-encoding",
+     "pin-project-lite",
+     "quinn",
+     "rustls",
+     "rustls-native-certs",
+     "rustls-pki-types",
+     "serde 1.0.228",
+     "serde_json 1.0.118",
+     "serde_urlencoded",
+     "sync_wrapper",
+     "tokio",
+     "tokio-native-tls",
+     "tokio-rustls",
+     "tokio-util",
+     "tower",
+     "tower-http",
+     "tower-service",
+     "url",
+     "wasm-bindgen",
+     "wasm-bindgen-futures",
+     "web-sys",
+     "webpki-roots 1.0.4"
+    ],
+    "version": "0.12.24"
+   },
+   "rtp 0.14.0": {
+    "checksum": "2f126f38ea84c02480e32e547c1459a939052f74fb92117ac3eef23fdac6b023",
+    "dependencies": [
+     "bytes",
+     "memchr",
+     "portable-atomic",
+     "rand 0.9.2",
+     "serde 1.0.228",
+     "thiserror 1.0.61",
+     "webrtc-util"
+    ],
+    "version": "0.14.0"
+   },
+   "sdp 0.10.0": {
+    "checksum": "32c374dceda16965d541c8800ce9cc4e1c14acfd661ddf7952feeedc3411e5c6",
+    "dependencies": [
+     "rand 0.9.2",
+     "substring",
+     "thiserror 1.0.61",
+     "url"
+    ],
+    "version": "0.10.0"
+   },
+   "shared_memory 0.12.4": {
+    "checksum": "ba8593196da75d9dc4f69349682bd4c2099f8cde114257d1ef7ef1b33d1aba54",
+    "dependencies": [
+     "cfg-if 1.0.0",
+     "libc",
+     "nix 0.23.2",
+     "rand 0.8.5",
+     "win-sys"
+    ],
+    "version": "0.12.4"
+   },
+   "stun 0.9.0": {
+    "checksum": "1a512c5d501e3e3b5a4bb3e8e31462d56d54a66b95a28b8596e14422bf21c32b",
+    "dependencies": [
+     "base64 0.22.1",
+     "crc",
+     "lazy_static",
+     "md-5",
+     "rand 0.9.2",
+     "ring",
+     "subtle",
+     "thiserror 1.0.61",
+     "tokio",
+     "url",
+     "webrtc-util"
+    ],
+    "version": "0.9.0"
+   },
+   "stunclient 0.4.1": {
+    "checksum": "c969a14b4a4c09c320416ebf880b3d5a81ad1612065741eb10521951c06c8991",
+    "dependencies": [
+     "bytecodec",
+     "rand 0.8.5",
+     "stun_codec",
+     "tokio"
+    ],
+    "version": "0.4.1"
+   },
+   "tokio-tungstenite 0.26.2": {
+    "checksum": "7a9daff607c6d2bf6c16fd681ccb7eecc83e4e2cdc1ca067ffaadfca5de7f084",
+    "dependencies": [
+     "futures-util",
+     "log",
+     "native-tls",
+     "rustls",
+     "rustls-native-certs",
+     "rustls-pki-types",
+     "tokio",
+     "tokio-native-tls",
+     "tokio-rustls",
+     "tungstenite",
+     "webpki-roots 0.26.9"
+    ],
+    "version": "0.26.2"
+   },
+   "totp-rs 5.5.1": {
+    "checksum": "6c4ae9724c5888c0417d2396037ed3b60665925624766416e3e342b6ba5dbd3f",
+    "dependencies": [
+     "base32",
+     "constant_time_eq 0.2.6",
+     "hmac",
+     "rand 0.8.5",
+     "sha1",
+     "sha2",
+     "url",
+     "urlencoding"
+    ],
+    "version": "5.5.1"
+   },
+   "tungstenite 0.26.2": {
+    "checksum": "4793cb5e56680ecbb1d843515b23b6de9a75eb04b66643e256a396d43be33c13",
+    "dependencies": [
+     "bytes",
+     "data-encoding",
+     "http",
+     "httparse",
+     "log",
+     "native-tls",
+     "rand 0.9.2",
+     "rustls",
+     "rustls-native-certs",
+     "rustls-pki-types",
+     "sha1",
+     "thiserror 2.0.17",
+     "utf-8",
+     "webpki-roots 0.26.9"
+    ],
+    "version": "0.26.2"
+   },
+   "turn 0.11.0": {
+    "checksum": "5ed995882f66ab94238de77c62e5e778389698ab700afa4696f4754da8f457cb",
+    "dependencies": [
+     "async-trait",
+     "base64 0.22.1",
+     "futures",
+     "log",
+     "md-5",
+     "portable-atomic",
+     "rand 0.9.2",
+     "ring",
+     "stun",
+     "thiserror 1.0.61",
+     "tokio",
+     "tokio-util",
+     "webrtc-util"
+    ],
+    "version": "0.11.0"
+   },
+   "webrtc 0.14.0": {
+    "checksum": "08fd686c0920ac08f3a57eacc48e31f0e4ca1ffefba4478784606f78c14e83ad",
+    "dependencies": [
+     "arc-swap",
+     "async-trait",
+     "bytes",
+     "dtls",
+     "hex",
+     "interceptor",
+     "lazy_static",
+     "log",
+     "portable-atomic",
+     "rand 0.9.2",
+     "rcgen",
+     "regex",
+     "ring",
+     "rtcp",
+     "rtp",
+     "sdp",
+     "serde 1.0.228",
+     "serde_json 1.0.118",
+     "sha2",
+     "smol_str",
+     "stun",
+     "thiserror 1.0.61",
+     "tokio",
+     "turn",
+     "unicase",
+     "url",
+     "waitgroup",
+     "webrtc-data",
+     "webrtc-ice",
+     "webrtc-mdns",
+     "webrtc-media",
+     "webrtc-sctp",
+     "webrtc-srtp",
+     "webrtc-util"
+    ],
+    "version": "0.14.0"
+   },
+   "webrtc-ice 0.14.0": {
+    "checksum": "69cb13fd1a373e68addc4bba0c8ca058627518e54342583d024bdcbb8ae5d97d",
+    "dependencies": [
+     "arc-swap",
+     "async-trait",
+     "crc",
+     "log",
+     "portable-atomic",
+     "rand 0.9.2",
+     "serde 1.0.228",
+     "serde_json 1.0.118",
+     "stun",
+     "thiserror 1.0.61",
+     "tokio",
+     "turn",
+     "url",
+     "uuid",
+     "waitgroup",
+     "webrtc-mdns",
+     "webrtc-util"
+    ],
+    "version": "0.14.0"
+   },
+   "webrtc-media 0.11.0": {
+    "checksum": "94a84c910fec0848fd5a0d8a5651e0ddbdedaf25a7d3ae3f0b15f71ac73a1773",
+    "dependencies": [
+     "byteorder",
+     "bytes",
+     "rand 0.9.2",
+     "rtp",
+     "thiserror 1.0.61"
+    ],
+    "version": "0.11.0"
+   },
+   "webrtc-sctp 0.13.0": {
+    "checksum": "f985465467d8910c1f8ac4382cd64f83b1f6a1a75021a82b221546f6fb3b856f",
+    "dependencies": [
+     "arc-swap",
+     "async-trait",
+     "bytes",
+     "crc",
+     "log",
+     "portable-atomic",
+     "rand 0.9.2",
+     "thiserror 1.0.61",
+     "tokio",
+     "webrtc-util"
+    ],
+    "version": "0.13.0"
+   },
+   "webrtc-util 0.12.0": {
+    "checksum": "d1c0c7e0c8f280f2bbfae442701465777ac07adaf46ce0c5863cd58e13fe472a",
+    "dependencies": [
+     "async-trait",
+     "bitflags 1.3.2",
+     "bytes",
+     "ipnet",
+     "lazy_static",
+     "log",
+     "nix 0.26.4",
+     "portable-atomic",
+     "rand 0.9.2",
+     "thiserror 1.0.61",
+     "tokio",
+     "winapi 0.3.9"
+    ],
+    "version": "0.12.0"
+   },
+   "windows 0.61.1": {
+    "checksum": "c5ee8f3d025738cb02bad7868bbb5f8a6327501e870bf51f1b455b0a2454a419",
+    "dependencies": [
+     "windows-collections",
+     "windows-core 0.61.0",
+     "windows-future",
+     "windows-link",
+     "windows-numerics"
+    ],
+    "version": "0.61.1"
+   },
+   "windows-core 0.61.0": {
+    "checksum": "4763c1de310c86d75a878046489e2e5ba02c649d185f21c67d4cf8a56d098980",
+    "dependencies": [
+     "windows-implement 0.60.0",
+     "windows-interface 0.59.1",
+     "windows-link",
+     "windows-result 0.3.2",
+     "windows-strings 0.4.0"
+    ],
+    "version": "0.61.0"
+   },
+   "windows-future 0.2.0": {
+    "checksum": "7a1d6bbefcb7b60acd19828e1bc965da6fcf18a7e39490c5f8be71e54a19ba32",
+    "dependencies": [
+     "windows-core 0.61.0",
+     "windows-link"
+    ],
+    "version": "0.2.0"
+   },
+   "windows-numerics 0.2.0": {
+    "checksum": "9150af68066c4c5c07ddc0ce30421554771e528bde427614c61038bc2c92c2b1",
+    "dependencies": [
+     "windows-core 0.61.0",
+     "windows-link"
+    ],
+    "version": "0.2.0"
+   },
+   "windows-result 0.3.2": {
+    "checksum": "c64fd11a4fd95df68efcfee5f44a294fe71b8bc6a91993e2791938abcc712252",
+    "dependencies": [
+     "windows-link"
+    ],
+    "version": "0.3.2"
+   },
+   "windows-strings 0.3.1": {
+    "checksum": "87fa48cc5d406560701792be122a10132491cff9d0aeb23583cc2dcafc847319",
+    "dependencies": [
+     "windows-link"
+    ],
+    "version": "0.3.1"
+   },
+   "windows-strings 0.4.0": {
+    "checksum": "7a2ba9642430ee452d5a7aa78d72907ebe8cfda358e8cb7918a2050581322f97",
+    "dependencies": [
+     "windows-link"
+    ],
+    "version": "0.4.0"
+   },
+   "zbus 3.15.2": {
+    "checksum": "675d170b632a6ad49804c8cf2105d7c31eddd3312555cffd4b740e08e97c25e6",
+    "dependencies": [
+     "async-broadcast",
+     "async-executor",
+     "async-fs",
+     "async-io 1.13.0",
+     "async-lock 2.8.0",
+     "async-process",
+     "async-recursion",
+     "async-task",
+     "async-trait",
+     "blocking",
+     "byteorder",
+     "derivative",
+     "enumflags2",
+     "event-listener 2.5.3",
+     "futures-core",
+     "futures-sink",
+     "futures-util",
+     "hex",
+     "nix 0.26.4",
+     "once_cell",
+     "ordered-stream",
+     "rand 0.8.5",
+     "serde 1.0.228",
+     "serde_repr",
+     "sha1",
+     "static_assertions",
+     "tracing",
+     "uds_windows",
+     "winapi 0.3.9",
+     "xdg-home",
+     "zbus_macros",
+     "zbus_names",
+     "zvariant"
+    ],
+    "version": "3.15.2"
+   }
+  },
+  "removed": [
+   "anyhow 1.0.103",
+   "bytes 1.11.1",
+   "crossbeam-channel 0.5.15",
+   "crossbeam-epoch 0.9.20",
+   "libc 0.2.191",
+   "memmap2 0.9.11",
+   "mio 1.2.4",
+   "nu-ansi-term 0.50.3",
+   "openssl 0.10.78",
+   "openssl-sys 0.9.114",
+   "rand 0.8.6",
+   "rand 0.9.3",
+   "rustls 0.23.46",
+   "rustls-pki-types 1.16.0",
+   "rustls-webpki 0.103.16",
+   "socket2 0.6.5",
+   "syn 3.0.10",
+   "tokio 1.51.6",
+   "tokio-macros 2.7.2",
+   "tracing-subscriber 0.3.20",
+   "webpki-roots 0.26.11",
+   "webpki-roots 1.0.10",
+   "windows-link 0.2.1",
+   "windows-sys 0.61.2",
+   "zstd-sys 2.1.2+zstd.1.5.7"
+  ]
+ }
+}
