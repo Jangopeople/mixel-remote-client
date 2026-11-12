@@ -128,7 +128,7 @@ jobs:
         job:
           - { os: ubuntu-22.04, rust: '1.75', name: linux }
           - { os: windows-2022, rust: '1.75', name: windows }
-          - { os: macos-14, rust: '1.81', name: macos }
+          - { os: macos-15, rust: '1.81', name: macos }
     runs-on: ${{ matrix.job.os }}
     timeout-minutes: 25
     defaults:
@@ -505,7 +505,7 @@ jobs:
         job:
           - { arch: aarch64, target: aarch64-apple-darwin }
           - { arch: x86_64,  target: x86_64-apple-darwin }
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 180
     env:
       UPSTREAM_VERSION: ${{ needs.config.outputs.upstream_version }}
