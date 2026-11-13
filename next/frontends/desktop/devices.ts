@@ -3,34 +3,112 @@
     const value=document.getElementById(id); if (!value) throw Error(`Missing device directory control ${id}`); return value as T;
   }
   const invoke=window.__TAURI__.core.invoke;
-  type Device={device:string; connection_id:number; name:string; os:string};
+  type Device={device:string; connection_id:number; name:string; os:string; group_id?:string|null; group_name?:string|null; generation?:number|null};
   type Page={devices:Device[]; next:number|null};
-  type Account={phase:string; account:{profile:string;organization:string|null;staff:boolean}|null};
+  type Account={phase:string; account:{profile:string;organization:string|null;staff:boolean;personal?:boolean}|null};
   type Remote={phase:string;host:number|null;online?:number[];message?:string};
+  // Mixel Remote companies (SaaS tenants): see company.ts. Staff, ISM companies and personal spaces have none.
+  type Tenant={tenant_id:string;name:string;role:string;plan:string;status:string};
+  type Overview=Tenant&{features:Record<string,boolean>;limits:{devices:number|null;technicians:number|null};usage:{devices:number;technicians:number}};
+  type Company={tenant:Tenant|null;overview:Overview|null};
+  type SaasDevice={device_id:string;name:string;os:string;group_id:string|null;group_name:string|null;connection_id:number|null;generation:number|null;revoked:boolean|null};
+  type Group={group_id:string;name:string;devices:number};
+  type Field={id:string;kind:'text'|'number'|'select';label:string;value?:string;options?:{value:string;label:string}[];min?:number;max?:number;maxLength?:number;required?:boolean;hint?:string};
+  type Dialog={open(options:{title:string;text?:string;fields?:Field[];confirm:string;danger?:boolean;run:(values:Record<string,string>)=>Promise<HTMLElement|void>}):void};
+  const dialog=():Dialog=>(window as unknown as {mixelDialog:Dialog}).mixelDialog;
+  const tr=(text:string):string=>(window as unknown as {mixelText?:(value:string)=>string}).mixelText?.(text)??text;
+  const THIS_COMPUTER='mixel.remote.this-computer.v1';
   const form=element<HTMLFormElement>('devices-search-form'), search=element<HTMLInputElement>('devices-search');
   const refresh=element<HTMLButtonElement>('devices-refresh'), previous=element<HTMLButtonElement>('devices-previous'), next=element<HTMLButtonElement>('devices-next');
   const submit=element<HTMLButtonElement>('devices-submit');
   const list=element<HTMLUListElement>('devices-list'), status=element<HTMLParagraphElement>('devices-status');
   const banner=element<HTMLDivElement>('devices-connection'), bannerTitle=element<HTMLElement>('devices-connection-title'), bannerDetail=element<HTMLElement>('devices-connection-detail');
+  const addThis=element<HTMLButtonElement>('devices-add-this'), addOthers=element<HTMLButtonElement>('devices-add-others'), groupFilter=element<HTMLSelectElement>('devices-group'), plan=element<HTMLParagraphElement>('devices-plan');
   element<HTMLButtonElement>('devices-reconnect').addEventListener('click',()=>{status.textContent='Reconnecting this computer…';document.dispatchEvent(new CustomEvent('mixel-reconnect-now'));});
   // Devices whose presence has been asked at least once while connected: only those can be called Offline.
   const checkedOnce=new Set<number>();
   let accountKey='', authenticated=false, busy=false, version=0, accountVersion=0, remoteVersion=0, currentSearch='', remote:Remote={phase:'offline',host:null};
   let entries:Device[]=[], nextCursor:number|null=null, cursors:(number|null)[]=[null], index=0;
+  // Company mode: the whole (filtered) list is loaded at once and shown 50 per page.
+  let company:Company={tenant:null,overview:null}, companyKey='', waitingForCompany=false, saasAll:Device[]|null=null, groups:Group[]=[], openMenu:HTMLElement|null=null;
   const formatId=(value:number):string=>String(value).replace(/(\d{3})(\d{3})(\d{3})/,'$1 $2 $3');
+  const role=():string=>company.overview?.role??company.tenant?.role??'';
+  const tenantStatus=():string=>company.overview?.status??company.tenant?.status??'';
+  const writable=():boolean=>['active','trial','past_due'].includes(tenantStatus());
+  const manages=():boolean=>!!company.tenant && ['owner','admin','technician'].includes(role());
+  const deploys=():boolean=>!!company.tenant && ['owner','admin'].includes(role());
+  const groupsOn=():boolean=>!!company.overview?.features?.groups;
+  function room():number{
+    const limit=company.overview?.limits.devices;
+    if(!company.overview || limit===null || limit===undefined)return Infinity;
+    return limit-company.overview.usage.devices;
+  }
+  function thisComputer():{device:string;connection_id:number;generation:number;name:string;tenant?:string}|null{
+    try{const saved=JSON.parse(localStorage.getItem(THIS_COMPUTER)??'null');return saved && typeof saved.device==='string' && Number.isInteger(saved.connection_id)?saved:null;}catch{return null;}
+  }
+  function remember(device:Device):void{
+    if(!company.tenant || !Number.isInteger(device.generation))return;
+    const value={device:device.device,connection_id:device.connection_id,generation:device.generation,name:device.name,tenant:company.tenant.tenant_id};
+    const before=thisComputer();
+    if(JSON.stringify(before)===JSON.stringify(value))return;
+    try{localStorage.setItem(THIS_COMPUTER,JSON.stringify(value));}catch{/* not kept */}
+    document.dispatchEvent(new CustomEvent('mixel-this-computer'));
+  }
+  function forget():void{try{localStorage.removeItem(THIS_COMPUTER);}catch{/* none */}document.dispatchEvent(new CustomEvent('mixel-this-computer'));}
+  // Is this computer already one of the company's devices? Then "Add this computer" is not offered.
+  function registeredHere():boolean{
+    if(remote.host!==null && remote.host!==undefined)return true;
+    const saved=thisComputer();
+    return !!saved && saved.tenant===company.tenant?.tenant_id && !!saasAll?.some(device=>device.connection_id===saved.connection_id);
+  }
+  function renderTools():void{
+    const saas=!!company.tenant && authenticated;
+    addThis.hidden=!saas || !manages() || registeredHere();
+    addOthers.hidden=!saas || !deploys();
+    const blocked=!writable()?'This company is read-only':room()<=0?'Device limit of your plan reached':'';
+    addThis.disabled=addOthers.disabled=busy || !!blocked;
+    addThis.title=addOthers.title=blocked;
+    groupFilter.hidden=!saas || !manages() || !groupsOn() || !groups.length;
+    groupFilter.disabled=busy;
+    plan.hidden=!saas || !manages() || !blocked;
+    if(!writable())plan.textContent='This company is read-only. You can still remove devices; adding devices and other changes need an active plan.';
+    else if(room()<=0)plan.textContent=`Device limit of your plan reached (${company.overview!.usage.devices} of ${company.overview!.limits.devices}). Remove a device or upgrade the plan to add more.`;
+  }
+  function closeMenu():void{if(openMenu){openMenu.hidden=true;(openMenu.previousElementSibling as HTMLElement|null)?.setAttribute?.('aria-expanded','false');openMenu=null;}}
+  function menuFor(device:Device):HTMLElement{
+    const box=document.createElement('div'), toggle=document.createElement('button'), menu=document.createElement('div');
+    box.className='device-menu';toggle.type='button';toggle.className='button-quiet device-manage';toggle.textContent='Manage';
+    toggle.setAttribute('aria-haspopup','menu');toggle.setAttribute('aria-label',`Manage ${device.name}`);toggle.disabled=busy;
+    menu.className='device-menu-list';menu.setAttribute('role','menu');menu.hidden=true;
+    const item=(label:string, blocked:string, action:()=>void, danger=false):void=>{
+      const button=document.createElement('button');button.type='button';button.setAttribute('role','menuitem');button.textContent=label;
+      button.className=danger?'menu-danger':'';button.disabled=!!blocked;button.title=blocked;
+      button.addEventListener('click',()=>{closeMenu();action();});menu.append(button);
+    };
+    const readOnly=writable()?'':'This company is read-only';
+    item('Rename…',readOnly,()=>rename(device));
+    if(groupsOn())item('Move to group…',readOnly || (!groups.length && !deploys()?'No groups yet. An owner or administrator creates groups.':''),()=>move(device));
+    item('Remove…','',()=>remove(device),true);
+    toggle.setAttribute('aria-expanded','false');
+    toggle.addEventListener('click',()=>{const wasOpen=!menu.hidden;closeMenu();if(!wasOpen){menu.hidden=false;openMenu=menu;toggle.setAttribute('aria-expanded','true');}});
+    box.append(toggle,menu);
+    return box;
+  }
   function render():void {
     refresh.disabled=search.disabled=!authenticated || busy;
     submit.disabled=refresh.disabled;
     previous.disabled=!authenticated || busy || index===0;
     next.disabled=!authenticated || busy || nextCursor===null;
+    const saas=!!company.tenant;
     element<HTMLElement>('devices-empty').hidden=entries.length>0;
-    element<HTMLElement>('devices-empty-title').textContent=busy?'Loading your devices…':!authenticated?'Your devices belong here':currentSearch?'No matching devices':'No devices to display';
-    element<HTMLElement>('devices-empty-detail').textContent=!authenticated?'Sign in to see the devices available to your account.':currentSearch?'Try another device name or clear the search.':'Devices appear here after a Mixel team member enrolls them.';
+    element<HTMLElement>('devices-empty-title').textContent=busy?'Loading your devices…':!authenticated?'Your devices belong here':currentSearch?'No matching devices':saas&&groupFilter.value?'No devices in this group':'No devices to display';
+    element<HTMLElement>('devices-empty-detail').textContent=!authenticated?'Sign in to see the devices available to your account.':currentSearch?'Try another device name or clear the search.':saas?(manages()?'Add this computer, or add other computers with a deploy link.':'Devices you add appear here. Ask an administrator of your company for access to other devices.'):'Devices appear here after a Mixel team member enrolls them.';
     element<HTMLElement>('devices-empty-action').hidden=authenticated;
-    list.replaceChildren();
+    renderTools();
+    list.replaceChildren();openMenu=null;
     const connected=['ready','active','incoming','outgoing','deciding','negotiating'].includes(remote.phase);
     const inSession=['active','incoming','outgoing','deciding','negotiating','closing'].includes(remote.phase);
-    const reconnecting=authenticated && !connected && remote.phase!=='closing';
+    const reconnecting=authenticated && !connected && remote.phase!=='closing' && !(saas && !registeredHere());
     // This computer's own connection: say what is wrong and offer to try again, instead of greying everything out.
     banner.hidden=!reconnecting;
     if(reconnecting){
@@ -56,6 +134,7 @@
       reason.textContent=why;
       state.append(presence,reason);
       name.textContent=device.name;detail.textContent=device.os==='other'?'phone or tablet':device.os;identity.append(name,detail);
+      if(saas && device.group_name){const group=document.createElement('small');group.className='device-group';group.dataset.noTranslate='';group.textContent=device.group_name;identity.append(group);}
       id.textContent=formatId(device.connection_id);connect.type='button';connect.textContent='Connect';
       const blocked=self?'This is the computer you are using.':inSession?'End the current session first.':kind==='offline'?'This device is offline.':busy?'Please wait…':!authenticated?'Sign in first.':'';
       connect.disabled=!!blocked;
@@ -78,11 +157,40 @@
         });
         state.append(wake);
       }
+      // Connect stays the last control of a row.
+      if(saas && manages())row.append(menuFor(device));
       row.append(connect);list.append(row);
     }
   }
+  function showPage(wantedIndex:number):void{
+    const all=saasAll??[];
+    index=Math.max(0,Math.min(wantedIndex,Math.max(0,Math.ceil(all.length/50)-1)));
+    entries=all.slice(index*50,index*50+50);
+    nextCursor=(index+1)*50<all.length?index+1:null;cursors[index]=index;
+    status.textContent=entries.length?`Page ${index+1} · ${entries.length} devices.`:'No devices match this search.';
+  }
+  async function loadCompanyDevices(wantedIndex:number, reset:boolean):Promise<void>{
+    if(!reset && saasAll){showPage(wantedIndex);render();checkPresence();return;}
+    const request=++version;busy=true;
+    if(reset){entries=[];cursors=[null];index=0;nextCursor=null;currentSearch=search.value.trim();saasAll=null;}
+    render();status.textContent='Loading your company’s devices…';
+    const tenant=company.tenant!.tenant_id, filter=groupFilter.value;
+    try{
+      const rows=await invoke<SaasDevice[]>('saas_devices',{tenant,group:filter && filter!=='none'?filter:null,search:currentSearch||null});
+      if(version!==request || !authenticated || company.tenant?.tenant_id!==tenant)return;
+      if(!Array.isArray(rows) || rows.length>2000 || rows.some(row=>typeof row.device_id!=='string' || typeof row.name!=='string' || typeof row.os!=='string'))throw Error('Invalid device directory response');
+      saasAll=rows.filter(row=>!row.revoked && Number.isInteger(row.connection_id) && row.connection_id!>=100000000 && row.connection_id!<=999999999 && (filter!=='none' || !row.group_id))
+        .map(row=>({device:row.device_id,connection_id:row.connection_id!,name:row.name,os:row.os,group_id:row.group_id,group_name:row.group_name,generation:row.generation}));
+      const mine=remote.host?saasAll.find(device=>device.connection_id===remote.host):undefined;
+      if(mine)remember(mine);
+      showPage(0);
+      checkPresence();
+    }catch(error){if(version===request)status.textContent=String(error);}
+    finally{if(version===request){busy=false;render();}}
+  }
   async function load(cursor:number|null, wantedIndex:number, reset=false):Promise<void>{
-    if (!authenticated || busy) return;
+    if (!authenticated || busy || waitingForCompany) return;
+    if (company.tenant) return loadCompanyDevices(wantedIndex,reset);
     const request=++version;busy=true;
     if (reset){entries=[];cursors=[null];index=0;nextCursor=null;currentSearch=search.value.trim();}
     render();status.textContent='Loading enrolled devices…';
@@ -96,6 +204,106 @@
     }catch(error){if(version===request)status.textContent=String(error);}
     finally{if(version===request){busy=false;render();}}
   }
+  async function loadGroups():Promise<void>{
+    groups=[];
+    if(!company.tenant || !manages() || !groupsOn()){renderGroups();return;}
+    const tenant=company.tenant.tenant_id;
+    try{const value=await invoke<Group[]>('saas_groups',{tenant});if(company.tenant?.tenant_id===tenant && Array.isArray(value))groups=value.filter(group=>typeof group.group_id==='string' && typeof group.name==='string');}
+    catch{/* the filter stays hidden */}
+    renderGroups();render();
+  }
+  function renderGroups():void{
+    const chosen=groupFilter.value;
+    groupFilter.replaceChildren();
+    for(const [value,label] of [['',tr('All groups')],['none',tr('No group')],...groups.map(group=>[group.group_id,group.name])]){
+      const option=document.createElement('option');option.value=value;option.textContent=label;groupFilter.appendChild(option);
+    }
+    groupFilter.value=[...groups.map(group=>group.group_id),'none',''].includes(chosen)?chosen:'';
+  }
+  function afterChange():void{document.dispatchEvent(new CustomEvent('mixel-company-refresh'));busy=false;void load(null,0,true);}
+  function rename(device:Device):void{
+    const tenant=company.tenant!;
+    dialog().open({title:'Rename device',fields:[{id:'name',kind:'text',label:'Device name',value:device.name,maxLength:60}],confirm:'Save name',
+      run:async values=>{
+        if(values.name===device.name)return;
+        const final=await invoke<string>('saas_rename_device',{tenant:tenant.tenant_id,device:device.device,name:values.name});
+        status.textContent=`Renamed to ${typeof final==='string'?final:values.name}.`;afterChange();
+      }});
+  }
+  function move(device:Device):void{
+    const tenant=company.tenant!;
+    const fields:Field[]=[{id:'group',kind:'select',label:'Group',value:device.group_id??'',options:[{value:'',label:tr('No group')},...groups.map(group=>({value:group.group_id,label:group.name}))]}];
+    if(deploys())fields.push({id:'create',kind:'text',label:'Or a new group',maxLength:60,required:false,hint:'Leave empty to use the group chosen above.'});
+    dialog().open({title:'Move to a group',text:`Choose the group of ${device.name}. Technicians reach the devices of the groups they are granted, and devices in no group.`,fields,confirm:'Move device',
+      run:async values=>{
+        let target:string|null=values.group||null;
+        if(values.create){target=await invoke<string>('saas_create_group',{tenant:tenant.tenant_id,name:values.create});await loadGroups();}
+        if(target===(device.group_id??null))return;
+        await invoke('saas_move_device',{tenant:tenant.tenant_id,device:device.device,group:target});
+        const group=groups.find(item=>item.group_id===target);
+        status.textContent=group?`${device.name} moved to ${group.name}.`:`${device.name} is in no group now.`;afterChange();
+      }});
+  }
+  function remove(device:Device):void{
+    const tenant=company.tenant!, self=remote.host===device.connection_id || thisComputer()?.connection_id===device.connection_id;
+    dialog().open({title:`Remove ${device.name}?`,
+      text:`${device.name} is removed from ${tenant.name} at once: its registration is revoked, running sessions with it end, and nobody can connect to it any more. To use it again, it must be added again.${self?' This is the computer you are using.':''}`,
+      confirm:'Remove device',danger:true,
+      run:async()=>{
+        await invoke('saas_remove_device',{tenant:tenant.tenant_id,device:device.device});
+        if(self){forget();document.dispatchEvent(new CustomEvent('mixel-device-removed'));}
+        status.textContent=`${device.name} was removed.`;afterChange();
+      }});
+  }
+  addThis.addEventListener('click',async()=>{
+    if(!company.tenant || busy)return;
+    const tenant=company.tenant, suggested=await invoke<string>('this_computer_name').catch(()=>'');
+    const fields:Field[]=[{id:'name',kind:'text',label:'Computer name',value:typeof suggested==='string'?suggested:'',maxLength:60}];
+    if(groupsOn() && groups.length)fields.push({id:'group',kind:'select',label:'Group',value:'',options:[{value:'',label:tr('No group')},...groups.map(group=>({value:group.group_id,label:group.name}))]});
+    dialog().open({title:'Add this computer',text:`This computer gets its own connection ID in ${tenant.name}, protected by a device key that stays on it.`,fields,confirm:'Add this computer',
+      run:async values=>{
+        const added=await invoke<{device_id:string;connection_id:number;generation:number}>('saas_add_this_device',{tenant:tenant.tenant_id,name:values.name,group:values.group||null});
+        if(!added || typeof added.device_id!=='string' || !Number.isInteger(added.connection_id) || added.connection_id<100000000 || added.connection_id>999999999)throw Error('Invalid registration response');
+        remember({device:added.device_id,connection_id:added.connection_id,generation:added.generation,name:values.name,os:''});
+        status.textContent=`This computer was added as ${values.name}. Connection ID ${formatId(added.connection_id)}.`;
+        document.dispatchEvent(new CustomEvent('mixel-device-enrolled'));afterChange();
+      }});
+  });
+  addOthers.addEventListener('click',()=>{
+    if(!company.tenant || busy)return;
+    const tenant=company.tenant, space=room(), most=Math.max(1,Math.min(10000,Number.isFinite(space)?space:10000));
+    const fields:Field[]=[
+      {id:'label',kind:'text',label:'Name of the link',value:`Computers ${new Date().toLocaleDateString()}`,maxLength:80},
+      {id:'computers',kind:'number',label:'Computers',value:String(Math.min(50,most)),min:1,max:most},
+      {id:'days',kind:'number',label:'Valid for days',value:'30',min:1,max:365}];
+    if(groupsOn() && groups.length)fields.push({id:'group',kind:'select',label:'Group',value:'',options:[{value:'',label:tr('No group')},...groups.map(group=>({value:group.group_id,label:group.name}))]});
+    dialog().open({title:'Add other computers',text:'Create a deploy link: one command adds many Windows computers to your company, without anyone signing in on them.',fields,confirm:'Create deploy link',
+      run:async values=>{
+        const computers=Number(values.computers), days=Number(values.days);
+        if(!Number.isInteger(computers) || computers<1 || computers>most)throw Error(`Enter 1 to ${most} computers.`);
+        if(!Number.isInteger(days) || days<1 || days>365)throw Error('Enter 1 to 365 days.');
+        const created=await invoke<{token:string;windows_command:string}>('saas_create_deploy_link',{tenant:tenant.tenant_id,label:values.label,days,computers,group:values.group||null});
+        if(!created || typeof created.windows_command!=='string' || !created.windows_command.includes(created.token))throw Error('Invalid deploy link response');
+        const result=document.createElement('div'), steps=document.createElement('ol'), command=document.createElement('textarea'), copy=document.createElement('button'), copied=document.createElement('p'), other=document.createElement('p'), secret=document.createElement('p');
+        for(const text of ['On each Windows computer, open PowerShell as administrator, or use your deployment tool.','Paste and run the command below. Mixel Remote is installed and the computer appears in Devices, with always-on access.']){const step=document.createElement('li');step.textContent=text;steps.append(step);}
+        command.readOnly=true;command.rows=4;command.value=created.windows_command;command.dataset.noTranslate='';command.dataset.field='command';
+        copy.type='button';copy.className='button-secondary';copy.textContent='Copy command';
+        copied.className='field-hint';copied.setAttribute('role','status');
+        copy.addEventListener('click',()=>{
+          command.select?.();
+          const clip=(globalThis as {navigator?:{clipboard?:{writeText(text:string):Promise<void>}}}).navigator?.clipboard;
+          if(!clip){copied.textContent='Select the command and copy it.';return;}
+          void clip.writeText(created.windows_command).then(()=>{copied.textContent='Command copied.';},()=>{copied.textContent='Select the command and copy it.';});
+        });
+        secret.className='field-hint';secret.textContent=`It works for ${computers} computers within ${days} days. The command contains a secret: share it only with the people who deploy the computers. It is shown only now.`;
+        other.className='field-hint';other.textContent='Mac and Linux computers: install Mixel Remote, sign in as a technician and choose Add this computer.';
+        result.append(steps,command,copy,copied,secret,other);
+        document.dispatchEvent(new CustomEvent('mixel-company-refresh'));
+        return result;
+      }});
+  });
+  groupFilter.addEventListener('change',()=>{void load(null,0,true);});
+  if(typeof document.addEventListener==='function')document.addEventListener('click',event=>{const target=(event as Event).target as HTMLElement|null;if(openMenu && !(target && typeof target.closest==='function' && target.closest('.device-menu')))closeMenu();});
   function checkPresence():void{
     if(!authenticated || !entries.length || !['ready','active','incoming','outgoing','deciding','negotiating'].includes(remote.phase))return;
     const hosts=entries.map(device=>device.connection_id);
@@ -108,15 +316,30 @@
   function accountChanged(value:Account):void{
     const key=value.phase==='authenticated' && value.account?JSON.stringify(value.account):'';
     if (key===accountKey) return;
-    ++version;accountKey=key;authenticated=!!key;busy=false;entries=[];nextCursor=null;cursors=[null];index=0;search.value='';render();
+    ++version;accountKey=key;authenticated=!!key;busy=false;entries=[];nextCursor=null;cursors=[null];index=0;search.value='';
+    // Company members (not Mixel staff, not a personal space) wait for company.ts to say which company.
+    company={tenant:null,overview:null};companyKey='';saasAll=null;groups=[];
+    waitingForCompany=authenticated && !value.account?.staff && !value.account?.personal && (window as unknown as {mixelCompany?:unknown}).mixelCompany!==undefined;
+    render();
     if(authenticated)void load(null,0,true);else status.textContent='Sign in to view the devices available to your account.';
+  }
+  function companyChanged(value:Company):void{
+    const key=value.tenant?`${value.tenant.tenant_id}|${value.overview?.role??value.tenant.role}|${value.overview?.status??value.tenant.status}|${!!value.overview?.features?.groups}`:'';
+    company={tenant:value.tenant??null,overview:value.overview??null};
+    const wasWaiting=waitingForCompany;waitingForCompany=false;
+    if(key===companyKey && !wasWaiting){render();return;}
+    companyKey=key;++version;busy=false;saasAll=null;entries=[];
+    render();
+    if(authenticated){void loadGroups();void load(null,0,true);}
   }
   document.addEventListener('mixel-connect-progress',event=>{if(!element<HTMLElement>('devices').hidden)status.textContent=(event as CustomEvent<string>).detail;});
   document.addEventListener('mixel-account-state',event=>{++accountVersion;accountChanged((event as CustomEvent<Account>).detail);});
-  document.addEventListener('mixel-remote-state',event=>{const state=(event as CustomEvent<Remote>).detail;++remoteVersion;const becameReady=state.phase==='ready'&&remote.phase!=='ready';if(state.phase!==remote.phase || state.host!==remote.host || JSON.stringify(state.online??[])!==JSON.stringify(remote.online??[])){remote=state;render();}if(becameReady)checkPresence();if(!['ready','active','incoming','outgoing','deciding','negotiating'].includes(state.phase))checkedOnce.clear();});
+  document.addEventListener('mixel-company-state',event=>companyChanged((event as CustomEvent<Company>).detail));
+  document.addEventListener('mixel-remote-state',event=>{const state=(event as CustomEvent<Remote>).detail;++remoteVersion;const becameReady=state.phase==='ready'&&remote.phase!=='ready';if(state.phase!==remote.phase || state.host!==remote.host || JSON.stringify(state.online??[])!==JSON.stringify(remote.online??[])){remote=state;if(saasAll && remote.host){const mine=saasAll.find(device=>device.connection_id===remote.host);if(mine)remember(mine);}render();}if(becameReady)checkPresence();if(!['ready','active','incoming','outgoing','deciding','negotiating'].includes(state.phase))checkedOnce.clear();});
   form.addEventListener('submit',event=>{event.preventDefault();void load(null,0,true);});
   document.addEventListener('mixel-device-enrolled',()=>{if(!busy)void load(null,0,true);});
-  refresh.addEventListener('click',()=>{void load(null,0,true);});
+  document.addEventListener('mixel-device-removed',()=>{if(!busy)void load(null,0,true);});
+  refresh.addEventListener('click',()=>{if(company.tenant)void loadGroups();void load(null,0,true);});
   next.addEventListener('click',()=>{if(nextCursor!==null)void load(nextCursor,index+1);});
   previous.addEventListener('click',()=>{if(index>0)void load(cursors[index-1],index-1);});
   render();

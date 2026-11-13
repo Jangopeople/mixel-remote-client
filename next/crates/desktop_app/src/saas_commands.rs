@@ -1,9 +1,10 @@
-//! Remote SaaS commands for the desktop UI (stage 1: commands only, the UI follows): the signed-in
-//! person's company (tenant), its devices, groups and deploy links, "add this computer", and the
-//! offline-first self-removal of this computer signed with its own device key.
+//! Remote SaaS commands for the desktop UI: creating a company, the signed-in person's company
+//! (tenant), its members and invitations, devices, groups and deploy links, "add this computer",
+//! and the offline-first self-removal of this computer signed with its own device key.
 use crate::{account_auth, device_identity, main_window, remote_session};
 use signaling_server::auth::saas::{
-    SaasDeployLink, SaasDevice, SaasEnrollment, SaasError, SaasGroup, SaasTenant, SelfRemoval,
+    SaasDeployLink, SaasDevice, SaasEnrollment, SaasError, SaasGroup, SaasInvite, SaasMember,
+    SaasSignup, SaasTenant, SelfRemoval,
 };
 use std::{path::PathBuf, sync::Arc};
 use tauri::Manager;
@@ -37,6 +38,75 @@ pub async fn saas_tenant_overview(window: tauri::WebviewWindow, auth: Auth<'_>, 
     main_window(&window)?;
     let credential = auth.credential(None).await?;
     credential.ism.saas_tenant_overview(&credential.token, tenant).await.map_err(message)
+}
+
+/// Self-service sign-up from the app (a Mixel ID without a company): creates the company with a
+/// 14-day Business trial, this account its owner, and switches the app to it.
+#[tauri::command]
+pub async fn saas_signup(window: tauri::WebviewWindow, auth: Auth<'_>, company: String) -> Result<SaasSignup, String> {
+    main_window(&window)?;
+    auth.create_company(company).await
+}
+
+#[tauri::command]
+pub async fn saas_members(window: tauri::WebviewWindow, auth: Auth<'_>, tenant: Uuid) -> Result<Vec<SaasMember>, String> {
+    main_window(&window)?;
+    let credential = auth.credential(None).await?;
+    credential.ism.saas_members(&credential.token, tenant).await.map_err(message)
+}
+
+/// Where an invited person accepts (signs in with the invited email address). The secret is in
+/// the fragment, so it never reaches a server log.
+pub const INVITE_URL: &str = "https://remote.mixel.ch/invite#";
+
+/// Owners/admins: invites a person and returns the invitation link (shown once, valid 7 days).
+#[tauri::command]
+pub async fn saas_invite_member(
+    window: tauri::WebviewWindow,
+    auth: Auth<'_>,
+    tenant: Uuid,
+    email: String,
+    role: String,
+) -> Result<String, String> {
+    main_window(&window)?;
+    let credential = auth.credential(None).await?;
+    let secret = credential.ism.saas_invite_member(&credential.token, tenant, &email, &role).await.map_err(message)?;
+    Ok(format!("{INVITE_URL}{secret}"))
+}
+
+#[tauri::command]
+pub async fn saas_invites(window: tauri::WebviewWindow, auth: Auth<'_>, tenant: Uuid) -> Result<Vec<SaasInvite>, String> {
+    main_window(&window)?;
+    let credential = auth.credential(None).await?;
+    credential.ism.saas_invites(&credential.token, tenant).await.map_err(message)
+}
+
+#[tauri::command]
+pub async fn saas_revoke_invite(window: tauri::WebviewWindow, auth: Auth<'_>, tenant: Uuid, invite: Uuid) -> Result<bool, String> {
+    main_window(&window)?;
+    let credential = auth.credential(None).await?;
+    credential.ism.saas_revoke_invite(&credential.token, tenant, invite).await.map_err(message)
+}
+
+#[tauri::command]
+pub async fn saas_set_member_role(
+    window: tauri::WebviewWindow,
+    auth: Auth<'_>,
+    tenant: Uuid,
+    member: Uuid,
+    role: String,
+) -> Result<bool, String> {
+    main_window(&window)?;
+    let credential = auth.credential(None).await?;
+    credential.ism.saas_set_member_role(&credential.token, tenant, member, &role).await.map_err(message)
+}
+
+/// Removes a member; for the caller's own profile: leaves the company.
+#[tauri::command]
+pub async fn saas_remove_member(window: tauri::WebviewWindow, auth: Auth<'_>, tenant: Uuid, member: Uuid) -> Result<bool, String> {
+    main_window(&window)?;
+    let credential = auth.credential(None).await?;
+    credential.ism.saas_remove_member(&credential.token, tenant, member).await.map_err(message)
 }
 
 #[tauri::command]
@@ -146,6 +216,14 @@ pub async fn saas_set_group_access(
     credential.ism.saas_set_group_access(&credential.token, tenant, group, &technicians).await.map_err(message)
 }
 
+/// A deploy link: the secret (shown once) and the command that installs Mixel Remote on a Windows
+/// computer and enrols it with always-on access (run as administrator or by a deployment tool).
+#[derive(serde::Serialize)]
+pub struct DeployLink {
+    token: String,
+    windows_command: String,
+}
+
 /// Owners/admins: a deploy link (rollout token) for mass rollout; the secret is shown once.
 #[tauri::command]
 pub async fn saas_create_deploy_link(
@@ -156,14 +234,16 @@ pub async fn saas_create_deploy_link(
     days: u16,
     computers: u16,
     group: Option<Uuid>,
-) -> Result<String, String> {
+) -> Result<DeployLink, String> {
     main_window(&window)?;
     let credential = auth.credential(None).await?;
-    credential
+    let token = credential
         .ism
         .saas_create_deploy_link(&credential.token, tenant, &label, days, computers, group)
         .await
-        .map_err(message)
+        .map_err(message)?;
+    let windows_command = crate::windows_rollout_command(&token).await?;
+    Ok(DeployLink { token, windows_command })
 }
 
 #[tauri::command]
@@ -206,6 +286,12 @@ fn pending_path(window: &tauri::WebviewWindow) -> Result<PathBuf, String> {
         .map_err(|_| "The app data folder is unavailable")?;
     std::fs::create_dir_all(&directory).map_err(|_| "The app data folder is unavailable")?;
     Ok(directory.join("pending-self-removal.json"))
+}
+
+/// Whether a self-removal of this computer is saved and not yet delivered: this computer must
+/// not go online again until it is (`remote_register` refuses meanwhile).
+pub fn removal_pending(window: &tauri::WebviewWindow) -> bool {
+    pending_path(window).is_ok_and(|path| path.exists())
 }
 
 /// Sends a saved request. Network trouble keeps it for later; a definite answer clears it.

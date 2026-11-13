@@ -258,6 +258,10 @@
   document.addEventListener('mixel-reconnect-now', () => { wentOffline = false; autoOnline = false; autoTries = 0; nextAutoTry = 0; void read(true); });
   // Just set up: go online now instead of waiting for the next retry.
   document.addEventListener('mixel-device-enrolled', () => { if (!wentOffline) autoOnline = false; });
+  // Removing this computer (Settings): stay offline while the removal is sent; afterwards it is no
+  // longer set up, and adding it again brings it online by itself.
+  document.addEventListener('mixel-self-remove-start', () => { wentOffline = true; });
+  document.addEventListener('mixel-self-remove-done', () => { wentOffline = false; autoTries = 0; nextAutoTry = 0; });
   let workspaceFocused = true;
   let authenticated=false,accountKey='',accountVersion=0;
   let viewing = '', videoReady = '', videoGeneration = 0;

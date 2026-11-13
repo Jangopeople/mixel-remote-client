@@ -1065,18 +1065,28 @@ async fn rollout_create(
     if !credential.principal.staff {
         return Err("Rollout requires an MFA-verified Mixel team account".into());
     }
-    let installer = self_update::latest_for("windows", "x64").await?;
     let token = credential
         .ism
         .create_rollout_token(&credential.token, company, &label, days, computers)
         .await
         .map_err(|_| "The rollout token could not be created")?;
-    // Single quotes only, so the line also survives being wrapped in "…" by deployment tools.
-    let windows_command = format!(
-        "$t='{token}'; $f=Join-Path $env:TEMP 'Mixel-Remote-Setup.exe'; Invoke-WebRequest -UseBasicParsing '{}' -OutFile $f; Start-Process $f '/S' -Wait; $p=Start-Process (Join-Path $env:LOCALAPPDATA 'Mixel Remote\\mixel-remote.exe') -ArgumentList '--signin-enroll',$t -Wait -PassThru; exit $p.ExitCode",
-        self_update::file_url(&installer)
-    );
+    let windows_command = windows_rollout_command(&token).await?;
     Ok(RolloutCreated { token, windows_command })
+}
+/// The PowerShell line (run as administrator) that installs the latest Windows build and enrols the
+/// computer with a rollout token or SaaS deploy link, with always-on access.
+async fn windows_rollout_command(token: &str) -> Result<String, String> {
+    if !token.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte)) {
+        return Err("The rollout token could not be created".into());
+    }
+    let installer = self_update::latest_for("windows", "x64").await?;
+    Ok(rollout_command_for(token, &self_update::file_url(&installer)))
+}
+fn rollout_command_for(token: &str, installer: &str) -> String {
+    // Single quotes only, so the line also survives being wrapped in "…" by deployment tools.
+    format!(
+        "$t='{token}'; $f=Join-Path $env:TEMP 'Mixel-Remote-Setup.exe'; Invoke-WebRequest -UseBasicParsing '{installer}' -OutFile $f; Start-Process $f '/S' -Wait; $p=Start-Process (Join-Path $env:LOCALAPPDATA 'Mixel Remote\\mixel-remote.exe') -ArgumentList '--signin-enroll',$t -Wait -PassThru; exit $p.ExitCode"
+    )
 }
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 #[tauri::command]
@@ -1728,6 +1738,9 @@ async fn remote_register(
     identity: tauri::State<'_, Arc<device_identity::IdentityState>>,
 ) -> Result<(), String> {
     main_window(&window)?;
+    if saas_commands::removal_pending(&window) {
+        return Err("This computer is being removed from Mixel Remote. It is removed as soon as it is online.".into());
+    }
     let principal = auth.credential(None).await?.principal;
     let saved = identity.inner().clone();
     let identity = tauri::async_runtime::spawn_blocking(move || {
@@ -2328,6 +2341,13 @@ fn main() {
             enrollment_devices,
             enrollment_companies,
             saas_commands::saas_my_tenants,
+            saas_commands::saas_signup,
+            saas_commands::saas_members,
+            saas_commands::saas_invite_member,
+            saas_commands::saas_invites,
+            saas_commands::saas_revoke_invite,
+            saas_commands::saas_set_member_role,
+            saas_commands::saas_remove_member,
             saas_commands::saas_tenant_overview,
             saas_commands::saas_devices,
             saas_commands::saas_rename_device,
@@ -2431,6 +2451,13 @@ fn main() {
             enrollment_devices,
             enrollment_companies,
             saas_commands::saas_my_tenants,
+            saas_commands::saas_signup,
+            saas_commands::saas_members,
+            saas_commands::saas_invite_member,
+            saas_commands::saas_invites,
+            saas_commands::saas_revoke_invite,
+            saas_commands::saas_set_member_role,
+            saas_commands::saas_remove_member,
             saas_commands::saas_tenant_overview,
             saas_commands::saas_devices,
             saas_commands::saas_rename_device,
@@ -2588,5 +2615,17 @@ mod update_version_tests {
         assert!(super::version_parts("0.1.10") > super::version_parts("0.1.9"));
         assert_eq!(super::version_parts("1.4.6-support.elevate.1"), Some(vec![1, 4, 6]));
         assert_eq!(super::version_parts("abc"), None);
+    }
+}
+
+#[cfg(test)]
+mod rollout_command_tests {
+    #[test]
+    fn deploy_command_carries_the_token_in_single_quotes_only() {
+        let line = super::rollout_command_for("mrt_ab-c_D1", "https://download.mixel.ch/x.exe");
+        assert!(line.starts_with("$t='mrt_ab-c_D1'; "));
+        assert!(line.contains("'https://download.mixel.ch/x.exe'"));
+        assert!(line.contains("'--signin-enroll',$t"));
+        assert!(!line.contains('"'));
     }
 }
