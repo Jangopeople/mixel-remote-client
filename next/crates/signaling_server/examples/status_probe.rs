@@ -358,7 +358,7 @@ async fn setup() -> Result<(), String> {
     let tenants = ism.saas_my_tenants(&token).await.map_err(|e| format!("tenants: {:?}", e.message))?;
     let tenant = match tenants.iter().find(|t| t.name == TENANT_NAME) {
         Some(t) => t.tenant_id,
-        None if tenants.is_empty() => ism.saas_signup(&token, TENANT_NAME).await.map_err(|e| format!("signup: {:?}", e.message))?.tenant_id,
+        None if tenants.is_empty() => ism.saas_signup(&token, TENANT_NAME, true).await.map_err(|e| format!("signup: {:?}", e.message))?.tenant_id,
         None => return Err("the probe account already belongs to another company".into()),
     };
     println!("# tenant {tenant}");

@@ -37,7 +37,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::env::var("MIXEL_SUPPORT_POLICY_URL")?.parse()?,
         std::env::var("MIXEL_SUPPORT_POLICY_TOKEN")?,
     )?;
+    // Open connections: MIXEL_MAX_CONNECTIONS or the default, within the open-file limit.
+    let open_files = signaling_server::limits::raise_open_files();
+    let max_connections = signaling_server::limits::max_connections(
+        std::env::var("MIXEL_MAX_CONNECTIONS").ok().as_deref(),
+        open_files,
+    )?;
+    eprintln!(
+        "at most {max_connections} open connections (open-file limit {})",
+        open_files.map_or("unknown".into(), |n| n.to_string())
+    );
     let state = AppState::new(Arc::new(auth), origins)
+        .with_max_connections(max_connections)
         .with_support_policy(policy)
         .with_turn(signaling_server::turn::TurnConfig::from_env()?);
     let listener = tokio::net::TcpListener::bind(address).await?;

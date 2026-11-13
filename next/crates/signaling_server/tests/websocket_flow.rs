@@ -2212,3 +2212,34 @@ async fn colleague_joins_and_sides_switch_with_the_support_policy_on_a_real_brok
     broker.abort();
     policy_task.abort();
 }
+
+/// The broker-wide connection limit (`MIXEL_MAX_CONNECTIONS`) is a setting: beyond it a new
+/// WebSocket gets 503, and a closed connection frees its place again.
+#[tokio::test]
+async fn the_connection_limit_is_configurable_and_frees_closed_places() {
+    let state = AppState::new(Arc::new(Fixture), HashSet::new()).with_max_connections(2);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/v1/ws", listener.local_addr().unwrap());
+    let task = tokio::spawn(async move {
+        axum::serve(listener, router(state)).await.unwrap();
+    });
+    let (first, _) = peer(&url, "host").await;
+    let (_second, _) = peer(&url, "viewer").await;
+    let refused = tokio_tungstenite::connect_async(&url).await.unwrap_err();
+    assert!(
+        matches!(&refused, tokio_tungstenite::tungstenite::Error::Http(response) if response.status() == 503),
+        "{refused:?}"
+    );
+    drop(first);
+    // The place is free once the broker has seen the close.
+    let mut again = None;
+    for _ in 0..50 {
+        if let Ok((socket, _)) = tokio_tungstenite::connect_async(&url).await {
+            again = Some(socket);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(again.is_some(), "a closed connection frees its place");
+    task.abort();
+}

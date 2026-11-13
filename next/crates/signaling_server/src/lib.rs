@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod delegated_auth;
 pub mod identity_authority;
+pub mod limits;
 pub mod protocol;
 pub mod registry;
 pub mod server;

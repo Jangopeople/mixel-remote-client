@@ -126,7 +126,14 @@ Token refresh, PostgREST reads and the presence report are not limited. Large bu
 (a company rolls out hundreds of computers behind one address). Per company (in SQL): sign-ups 50/h
 in total, invitations 100/day, deploy links 50/day plus uses per link and the plan's device limit,
 support codes 30/h per user; billing service: per company and account per minute. The broker caps
-1000 open connections in total and 60 messages/s per connection.
+open connections in total at `MIXEL_MAX_CONNECTIONS` (broker env; default 10000, at most 20000, and
+never more than the open-file limit minus 256 — it refuses to start with a setting the limit cannot
+carry; the start line logs `at most N open connections (open-file limit M)`) and 60 messages/s per
+connection; it raises its own soft open-file limit to the hard limit (at most 65536), and the run
+command below sets `--ulimit nofile=65536:65536`. Concurrent sessions per company stay limited by the
+plan (support policy). nginx must carry the same number of WebSockets (two connections each):
+`worker_rlimit_nofile 65536;` and `events { worker_connections 16384; }` in `/etc/nginx/nginx.conf`
+(the VPS default of 768 per worker × 4 workers allows only about 1500 broker WebSockets).
 Change a limit: edit the conf in `ops/nginx/`, run `install.sh` (or copy + `nginx -t` + reload).
 Block an address quickly: `deny <ip>;` in the ism-api server block or `ufw insert 1 deny from <ip>`
 (note it in the incident log; remove later).
@@ -143,8 +150,9 @@ VPS → `docker build -f deployment/backend.Dockerfile -t mixel-remote-next-back
 → save the current container config (`docker inspect ... > private/broker-container-before-<x>.json`) →
 `docker stop` + `docker rename` the old one to `...-prev-<date>` (`docker update --restart no`) → `docker run -d --name
 mixel-remote-next-qa-broker-device-access --network host --restart unless-stopped --user 10001:10001
---env-file private/broker-<feature>-<date>.env (copy of the current one, today `broker-secreview-20261113.env`) --log-opt max-size=50m --log-opt max-file=5 <image>` with the other
-flags exactly as in the saved inspect JSON.
+--ulimit nofile=65536:65536 --env-file private/broker-<feature>-<date>.env (copy of the current one, today `broker-secreview-20261113.env`) --log-opt max-size=50m --log-opt max-file=5 <image>`
+with the other flags exactly as in the saved inspect JSON. Check the start line in `docker logs`:
+`at most 10000 open connections (open-file limit 65536)` (or the `MIXEL_MAX_CONNECTIONS` set in the env).
 Running sessions drop and reconnect (apps retry). Rollback: stop + remove the new container, rename
 `...-prev-<date>` back, `docker start` it. Remove the `-prev` container once the new one is good.
 

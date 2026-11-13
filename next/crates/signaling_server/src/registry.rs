@@ -15,8 +15,9 @@ use std::{
 use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
-const MAX_PEERS: usize = 1000;
-const MAX_SESSIONS: usize = 1000;
+/// Connections and sessions a registry holds without `with_capacity` (tests; the broker sets
+/// `MIXEL_MAX_CONNECTIONS`, see `limits.rs`).
+const DEFAULT_CAPACITY: usize = 1000;
 const MAX_PER_PEER: usize = 4;
 const MAX_PRESENCE: usize = 64;
 /// Second (and third) technicians in one running session.
@@ -111,12 +112,19 @@ struct Retired {
     host: u32,
     deadline: Instant,
 }
-#[derive(Default)]
 pub struct Registry {
     peers: HashMap<u32, Peer>,
     sessions: HashMap<Uuid, Session>,
     retired: HashMap<Uuid, Retired>,
     invitations: HashMap<Uuid, Invitation>,
+    /// Most connections (peers) and most sessions at once, broker-wide.
+    max_peers: usize,
+    max_sessions: usize,
+}
+impl Default for Registry {
+    fn default() -> Self {
+        Self::with_capacity(DEFAULT_CAPACITY)
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PolicyCheck {
@@ -347,13 +355,29 @@ impl Registry {
         peer.ice_next = now + Duration::from_secs(5);
         Ok(peer.principal.expires_at)
     }
+    /// A registry for at most `connections` peers and as many sessions at once (`limits.rs`).
+    pub fn with_capacity(connections: usize) -> Self {
+        Self {
+            peers: HashMap::new(),
+            sessions: HashMap::new(),
+            retired: HashMap::new(),
+            invitations: HashMap::new(),
+            max_peers: connections,
+            max_sessions: connections,
+        }
+    }
+    /// Changes the limits; connections and sessions already open stay.
+    pub fn set_capacity(&mut self, connections: usize) {
+        self.max_peers = connections;
+        self.max_sessions = connections;
+    }
     pub fn register(
         &mut self,
         principal: Principal,
         tx: mpsc::Sender<ServerMessage>,
         stop: watch::Sender<bool>,
     ) -> Result<(u32, Uuid), ErrorCode> {
-        if self.peers.len() >= MAX_PEERS {
+        if self.peers.len() >= self.max_peers {
             return Err(ErrorCode::Busy);
         }
         let host = (0..128)
@@ -378,7 +402,7 @@ impl Registry {
     ) -> Result<(u32, Uuid), ErrorCode> {
         if !(100_000_000..=999_999_999).contains(&host)
             || self.peers.contains_key(&host)
-            || self.peers.len() >= MAX_PEERS
+            || self.peers.len() >= self.max_peers
         {
             return Err(ErrorCode::Busy);
         }
@@ -435,7 +459,7 @@ impl Registry {
     }
     fn close(&mut self, session: Uuid, reason: CloseReason, now: Instant) {
         if let Some(s) = self.sessions.remove(&session) {
-            if self.retired.len() < MAX_SESSIONS * 2 {
+            if self.retired.len() < self.max_sessions * 2 {
                 self.retired.insert(
                     session,
                     Retired {
@@ -563,7 +587,7 @@ impl Registry {
                 if from != current.controller
                     || !matches!(current.phase, Phase::Connected)
                     || now < current.restart_after
-                    || self.retired.len() >= MAX_SESSIONS * 2
+                    || self.retired.len() >= self.max_sessions * 2
                 {
                     return Err(ErrorCode::Forbidden);
                 }
@@ -746,7 +770,7 @@ impl Registry {
                 {
                     return Err(ErrorCode::Unavailable);
                 }
-                if self.sessions.len() >= MAX_SESSIONS
+                if self.sessions.len() >= self.max_sessions
                     || [from, host].iter().any(|peer| {
                         self.sessions
                             .values()
@@ -934,7 +958,7 @@ impl Registry {
                 if self.sessions.values().any(|room| room.group == group && room.controller == from) {
                     return Err(ErrorCode::Busy);
                 }
-                if self.sessions.len() >= MAX_SESSIONS
+                if self.sessions.len() >= self.max_sessions
                     || self.sessions.values().filter(|room| room.group == group && room.joined.is_some()).count() >= MAX_JOINED
                     || [from, host].iter().any(|peer| {
                         self.sessions.values().filter(|s| s.host == *peer || s.controller == *peer).count() >= MAX_PER_PEER
@@ -1207,6 +1231,24 @@ mod rotation_tests {
         .unwrap();
         registry.bind_identity(id, generation, ticket).unwrap();
         (generation, rx)
+    }
+    #[test]
+    fn the_connection_capacity_is_a_setting() {
+        let principal = || Principal { user: Uuid::from_u128(12), tenant: None, staff: false, expires_at: 900 };
+        let mut registry = Registry::with_capacity(2);
+        let mut keep = Vec::new();
+        let mut add = |registry: &mut Registry, id: u32| {
+            let (tx, rx) = mpsc::channel(4);
+            let (stop, stop_rx) = watch::channel(false);
+            keep.push((rx, stop_rx));
+            registry.register_with_id(id, principal(), tx, stop)
+        };
+        assert!(add(&mut registry, 100_000_001).is_ok());
+        assert!(add(&mut registry, 100_000_002).is_ok());
+        assert_eq!(add(&mut registry, 100_000_003).unwrap_err(), ErrorCode::Busy);
+        registry.set_capacity(3);
+        assert!(add(&mut registry, 100_000_003).is_ok(), "raising the limit keeps the open ones and admits more");
+        assert_eq!(Registry::default().max_peers, DEFAULT_CAPACITY);
     }
     #[test]
     fn online_devices_lists_only_verified_unexpired_devices() {

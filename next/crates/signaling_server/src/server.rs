@@ -73,6 +73,15 @@ impl AppState {
         self.turn = config.map(Arc::new);
         self
     }
+    /// At most `connections` open WebSockets (and as many peers and sessions) at once; see
+    /// `limits::max_connections`. Further upgrades get 503 until a connection closes.
+    pub fn with_max_connections(mut self, connections: usize) -> Self {
+        self.connections = Arc::new(Semaphore::new(connections));
+        if let Ok(mut registry) = self.registry.lock() {
+            registry.set_capacity(connections);
+        }
+        self
+    }
     pub fn with_support_policy(mut self, policy: SupportPolicy) -> Self {
         self.policy = Some(Arc::new(policy));
         self
@@ -107,7 +116,7 @@ impl AppState {
             registry: Arc::new(Mutex::new(Registry::default())),
             auth,
             origins: Arc::new(origins),
-            connections: Arc::new(Semaphore::new(1000)),
+            connections: Arc::new(Semaphore::new(1000)), // with_max_connections sets the broker's limit
             auth_slots: Arc::new(Semaphore::new(32)),
             turn: None,
             policy: None,

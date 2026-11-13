@@ -13,7 +13,7 @@ use std::{
 use zeroize::Zeroizing;
 
 pub const INTERVAL: Duration = Duration::from_secs(30);
-/// More IDs than any broker holds (`MAX_PEERS`); the database refuses larger reports.
+/// More IDs than any broker holds (`limits::MAX_CONNECTIONS`); the database refuses larger reports.
 const MAX_REPORT: usize = 20_000;
 
 #[derive(Debug, PartialEq, Eq)]
