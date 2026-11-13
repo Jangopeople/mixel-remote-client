@@ -74,36 +74,10 @@ pub async fn saas_delete_my_account(window: tauri::WebviewWindow, auth: Auth<'_>
     credential.ism.saas_delete_my_account(&credential.token, &email).await.map_err(message)
 }
 
-/// The legal pages and the company data page on remote.mixel.ch, in the system browser.
-pub fn legal_url(page: &str, lang: Option<&str>) -> Result<String, String> {
-    let path = match page {
-        "terms" | "privacy" | "dpa" | "subprocessors" => format!("/legal/{page}"),
-        "legal" => "/legal".to_owned(),
-        "company-data" => "/app/settings".to_owned(),
-        _ => return Err("Unknown page".into()),
-    };
-    let lang = lang.filter(|value| ["en", "de", "fr", "it"].contains(value)).unwrap_or("en");
-    Ok(format!("https://remote.mixel.ch{path}?lang={lang}"))
-}
-
 #[tauri::command]
 pub async fn open_legal_page(window: tauri::WebviewWindow, page: String, lang: Option<String>) -> Result<(), String> {
     main_window(&window)?;
-    crate::system_browser::open(&legal_url(&page, lang.as_deref())?).await
-}
-
-#[cfg(test)]
-mod legal_tests {
-    use super::legal_url;
-
-    #[test]
-    fn legal_pages_are_fixed_urls_on_the_portal() {
-        assert_eq!(legal_url("terms", Some("de")).unwrap(), "https://remote.mixel.ch/legal/terms?lang=de");
-        assert_eq!(legal_url("subprocessors", None).unwrap(), "https://remote.mixel.ch/legal/subprocessors?lang=en");
-        assert_eq!(legal_url("company-data", Some("xx")).unwrap(), "https://remote.mixel.ch/app/settings?lang=en");
-        assert!(legal_url("../../evil", None).is_err());
-        assert!(legal_url("https://evil.example", None).is_err());
-    }
+    crate::system_browser::open(&mixel_engine::legal::legal_url(&page, lang.as_deref())?).await
 }
 
 #[tauri::command]
@@ -329,8 +303,8 @@ pub async fn saas_create_deploy_link(
         .saas_create_deploy_link(&credential.token, tenant, &label, days, computers, group)
         .await
         .map_err(message)?;
-    let windows_command = crate::windows_rollout_command(&token).await?;
-    let (macos_command, linux_command) = crate::unix_rollout_commands(&token)?;
+    let windows_command = mixel_engine::rollout::windows_rollout_command(&token).await?;
+    let (macos_command, linux_command) = mixel_engine::rollout::unix_rollout_commands(&token)?;
     Ok(DeployLink { token, windows_command, macos_command, linux_command })
 }
 
@@ -356,15 +330,7 @@ pub struct RegistrationRef {
     generation: u64,
 }
 
-/// "removed": done (or already removed); "queued": saved and sent when Mixel Remote is reachable;
-/// "stale": the registration changed since (nothing was removed).
-#[derive(serde::Serialize, Debug, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum SelfRemovalStatus {
-    Removed,
-    Queued,
-    Stale,
-}
+use mixel_engine::self_removal::{SelfRemovalStatus, deliver, save_pending};
 
 fn pending_path(window: &tauri::WebviewWindow) -> Result<PathBuf, String> {
     let directory = window
@@ -380,63 +346,6 @@ fn pending_path(window: &tauri::WebviewWindow) -> Result<PathBuf, String> {
 /// not go online again until it is (`remote_register` refuses meanwhile).
 pub fn removal_pending(window: &tauri::WebviewWindow) -> bool {
     pending_path(window).is_ok_and(|path| path.exists())
-}
-
-/// What to do with a saved request after one delivery attempt.
-#[derive(Debug, PartialEq, Eq)]
-enum Delivery {
-    /// A definite answer: the saved request is deleted.
-    Done(Result<SelfRemovalStatus, String>),
-    /// No definite answer (offline, server trouble, rate limit): kept and sent again later.
-    Keep,
-}
-
-fn delivery(outcome: Result<bool, SaasError>) -> Delivery {
-    match outcome {
-        Ok(true) => Delivery::Done(Ok(SelfRemovalStatus::Removed)),
-        Ok(false) => Delivery::Done(Ok(SelfRemovalStatus::Stale)),
-        // 408 timeout, 425 too early, 429 rate limited: the request was not judged; try again.
-        Err(error) if matches!(error.status, 0 | 408 | 425 | 429) || error.status >= 500 => Delivery::Keep,
-        Err(error) => Delivery::Done(Err(error.message)),
-    }
-}
-
-/// Saves the request so that a crash never leaves a half-written file behind (which would be
-/// discarded as unreadable) and, on Unix, readable by this account only.
-fn save_pending(path: &std::path::Path, json: &[u8]) -> std::io::Result<()> {
-    use std::io::Write;
-    let temporary = path.with_extension("json.tmp");
-    let _ = std::fs::remove_file(&temporary);
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    let written = options.open(&temporary).and_then(|mut file| {
-        file.write_all(json)?;
-        file.sync_all()
-    });
-    match written.and_then(|()| std::fs::rename(&temporary, path)) {
-        Ok(()) => Ok(()),
-        Err(error) => {
-            let _ = std::fs::remove_file(&temporary);
-            Err(error)
-        }
-    }
-}
-
-/// Sends a saved request. Network trouble keeps it for later; a definite answer clears it.
-async fn deliver(path: &std::path::Path, request: &SelfRemoval) -> Result<SelfRemovalStatus, String> {
-    let config = crate::service_config::ServiceConfig::load()?;
-    let base = config.identity_url.parse().map_err(|_| "Invalid identity service configuration")?;
-    let ism = signaling_server::auth::IsmAuth::new(base, config.public_key)
-        .map_err(|_| "Invalid identity service configuration")?;
-    match delivery(ism.device_self_remove(request).await) {
-        Delivery::Keep => Ok(SelfRemovalStatus::Queued),
-        Delivery::Done(result) => {
-            let _ = std::fs::remove_file(path);
-            result
-        }
-    }
 }
 
 /// Removes this computer from its company (or personal account): signs a removal request with this
@@ -513,44 +422,4 @@ pub async fn device_self_remove_flush(window: tauri::WebviewWindow) -> Result<Op
         return Ok(None);
     };
     deliver(&path, &request).await.map(Some)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn refused(status: u16) -> Result<bool, SaasError> {
-        Err(SaasError { status, code: None, message: format!("HTTP {status}") })
-    }
-
-    #[test]
-    fn only_definite_answers_clear_a_saved_self_removal() {
-        assert_eq!(delivery(Ok(true)), Delivery::Done(Ok(SelfRemovalStatus::Removed)));
-        assert_eq!(delivery(Ok(false)), Delivery::Done(Ok(SelfRemovalStatus::Stale)));
-        // Offline, server trouble, timeouts and rate limits: kept and sent again later.
-        for status in [0, 408, 425, 429, 500, 502, 503] {
-            assert_eq!(delivery(refused(status)), Delivery::Keep, "{status}");
-        }
-        // The database refused it (bad signature, too old): deleted, the person sees why.
-        assert_eq!(delivery(refused(400)), Delivery::Done(Err("HTTP 400".into())));
-        assert_eq!(delivery(refused(403)), Delivery::Done(Err("HTTP 403".into())));
-    }
-
-    #[test]
-    fn a_saved_self_removal_replaces_atomically_and_is_private() {
-        let directory = std::env::temp_dir().join(format!("mixel-self-removal-{}", Uuid::new_v4()));
-        std::fs::create_dir_all(&directory).unwrap();
-        let path = directory.join("pending-self-removal.json");
-        save_pending(&path, b"{\"first\":1}").unwrap();
-        save_pending(&path, b"{\"second\":2}").unwrap();
-        assert_eq!(std::fs::read(&path).unwrap(), b"{\"second\":2}");
-        // No temporary file is left next to it.
-        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
-        }
-        std::fs::remove_dir_all(&directory).unwrap();
-    }
 }

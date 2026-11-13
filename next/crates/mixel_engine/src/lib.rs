@@ -76,6 +76,12 @@ pub mod system_browser;
 /// Screen-capture worker shared by the windowed apps and the session host.
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod capture_worker;
+/// Mass rollout commands (Windows PowerShell, Mac and Linux install scripts).
+pub mod rollout;
+/// Fixed addresses of the legal pages.
+pub mod legal;
+/// Offline-first removal of this computer, signed with its own device key.
+pub mod self_removal;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub use capture_worker::Worker;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
@@ -90,3 +96,14 @@ pub fn version_parts(version: &str) -> Option<Vec<u64>> {
 
 /// What a refused rollout enrolment says (the service does not tell the device why).
 pub const ROLLOUT_REFUSED: &str = "The deploy link was refused or the service could not be reached. Check that the link is not expired, revoked or used up and that the company is within its device limit, then run the command again.";
+
+#[cfg(test)]
+mod update_version_tests {
+    #[test]
+    fn compares_release_versions_numerically() {
+        assert!(crate::version_parts("0.1.10") > crate::version_parts("0.1.9"));
+        assert_eq!(crate::version_parts("1.4.6-support.elevate.1"), Some(vec![1, 4, 6]));
+        assert_eq!(crate::version_parts("abc"), None);
+    }
+}
+
