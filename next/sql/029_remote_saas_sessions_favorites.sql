@@ -128,6 +128,7 @@ end $$;
 ---------------------------------------------------------------------------------------------------
 -- Broker: session events (role mixel_remote_presence)
 
+-- PostgREST body: {"report": <report>}. <report>:
 -- {"events": [{"type": "start", "id", "tenant", "technician", "controller_device",
 --              "controller_connection", "device", "connection", "unattended", "colleague", "at"},
 --             {"type": "end", "id", "at"}],

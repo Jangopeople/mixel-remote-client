@@ -120,12 +120,13 @@ impl SessionReporter {
         }
     }
 
+    /// The request body: PostgREST passes `report` as the function's one named argument.
     pub fn body(events: &[SessionEvent], open: Option<&[Uuid]>) -> serde_json::Value {
-        let mut body = serde_json::json!({ "events": &events[..events.len().min(MAX_BATCH)] });
+        let mut report = serde_json::json!({ "events": &events[..events.len().min(MAX_BATCH)] });
         if let Some(open) = open {
-            body["open"] = serde_json::json!(&open[..open.len().min(MAX_OPEN)]);
+            report["open"] = serde_json::json!(&open[..open.len().min(MAX_OPEN)]);
         }
-        body
+        serde_json::json!({ "report": report })
     }
 
     async fn post(&self, body: &serde_json::Value) -> Outcome {
@@ -266,7 +267,7 @@ mod tests {
         let end = SessionEvent::End { id: Uuid::from_u128(1), at: 1_800_000_100 };
         assert_eq!(
             SessionReporter::body(&[start, end], Some(&[Uuid::from_u128(9)])),
-            serde_json::json!({
+            serde_json::json!({ "report": {
                 "events": [
                     {"type": "start", "id": Uuid::from_u128(1), "tenant": Uuid::from_u128(2),
                      "technician": Uuid::from_u128(3), "controller_device": Uuid::from_u128(4),
@@ -275,9 +276,9 @@ mod tests {
                     {"type": "end", "id": Uuid::from_u128(1), "at": 1_800_000_100u64}
                 ],
                 "open": [Uuid::from_u128(9)]
-            })
+            }})
         );
-        assert_eq!(SessionReporter::body(&[], None), serde_json::json!({ "events": [] }));
+        assert_eq!(SessionReporter::body(&[], None), serde_json::json!({ "report": { "events": [] } }));
     }
 
     /// Answers each request with the next status and hands back the bodies.
@@ -334,24 +335,24 @@ mod tests {
         let (head, body) = bodies.recv().await.unwrap();
         assert!(head.starts_with("POST /rpc/remote_session_report"));
         assert!(head.to_ascii_lowercase().contains(&format!("authorization: bearer {TOKEN}").to_ascii_lowercase()));
-        assert_eq!(body, serde_json::json!({ "events": [end(1)], "open": [] }));
+        assert_eq!(body, serde_json::json!({ "report": { "events": [end(1)], "open": [] } }));
         // Back: the kept event first, then the new one, with the running list (not sent yet).
         registry.lock().unwrap().journal_for_test(end(2));
         assert!(reporter.run_once(&registry, now).await);
-        assert_eq!(bodies.recv().await.unwrap().1, serde_json::json!({ "events": [end(1), end(2)], "open": [] }));
+        assert_eq!(bodies.recv().await.unwrap().1, serde_json::json!({ "report": { "events": [end(1), end(2)], "open": [] } }));
         // Within the minute: events only.
         registry.lock().unwrap().journal_for_test(end(3));
         assert!(reporter.run_once(&registry, now + Duration::from_secs(5)).await);
-        assert_eq!(bodies.recv().await.unwrap().1, serde_json::json!({ "events": [end(3)] }));
+        assert_eq!(bodies.recv().await.unwrap().1, serde_json::json!({ "report": { "events": [end(3)] } }));
         // Nothing new within the minute: no request at all.
         assert!(reporter.run_once(&registry, now + Duration::from_secs(10)).await);
         // A body the database refuses is dropped, not retried forever.
         registry.lock().unwrap().journal_for_test(end(4));
         assert!(reporter.run_once(&registry, now + Duration::from_secs(15)).await);
-        assert_eq!(bodies.recv().await.unwrap().1, serde_json::json!({ "events": [end(4)] }));
+        assert_eq!(bodies.recv().await.unwrap().1, serde_json::json!({ "report": { "events": [end(4)] } }));
         // A minute after the last running list: the list again, even without events.
         assert!(reporter.run_once(&registry, now + Duration::from_secs(61)).await);
-        assert_eq!(bodies.recv().await.unwrap().1, serde_json::json!({ "events": [], "open": [] }));
+        assert_eq!(bodies.recv().await.unwrap().1, serde_json::json!({ "report": { "events": [], "open": [] } }));
         assert!(bodies.try_recv().is_err());
     }
 
@@ -365,11 +366,11 @@ mod tests {
             registry.lock().unwrap().journal_for_test(end(n));
         }
         assert!(reporter.run_once(&registry, Instant::now()).await);
-        let first = bodies.recv().await.unwrap().1;
+        let first = bodies.recv().await.unwrap().1["report"].clone();
         assert_eq!(first["events"].as_array().unwrap().len(), 1000);
         assert_eq!(first["events"][0], serde_json::json!(end(0)));
         assert!(first.get("open").is_none());
-        let second = bodies.recv().await.unwrap().1;
+        let second = bodies.recv().await.unwrap().1["report"].clone();
         assert_eq!(second["events"].as_array().unwrap().len(), 500);
         assert_eq!(second["events"][0], serde_json::json!(end(1000)));
         assert_eq!(second["open"], serde_json::json!([]));
