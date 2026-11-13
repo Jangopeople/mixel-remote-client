@@ -49,6 +49,8 @@ public final class AppModel: ObservableObject {
 
     /// The app opens web pages (sign-in, legal texts) through this.
     public var openURL: (URL) -> Void = { _ in }
+    /// Opens the Mixel ID sign-in page (the phone shows it inside the app); defaults to `openURL`.
+    public var openSignIn: ((URL) -> Void)?
     /// The app's Open panel: a file to send (absolute path), or nil.
     public var chooseFile: () async -> String? = { nil }
     /// The app's Save panel for a suggested name: where to save (absolute path), or nil.
@@ -170,7 +172,7 @@ public final class AppModel: ObservableObject {
         act {
             let url: String = try await self.engine.run("account_sign_in", ["open_browser": false])
             if showLink { self.signInLink = url }
-            else if let link = URL(string: url) { self.openURL(link) }
+            else if let link = URL(string: url) { (self.openSignIn ?? self.openURL)(link) }
             await self.refreshAccount()
         }
     }

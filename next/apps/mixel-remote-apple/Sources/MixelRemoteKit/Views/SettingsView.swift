@@ -87,6 +87,7 @@ public struct SettingsView: View {
             MessageLine(settings.error)
         }
         .formStyle(.grouped)
+        .background(Theme.background)
         .confirmationDialog(L("Remove this computer from Mixel Remote?"), isPresented: $confirmRemove) {
             Button(L("Remove this computer"), role: .destructive) {
                 Task {

@@ -37,6 +37,8 @@ public struct RemoteControlView: View {
             .padding(24)
             .frame(maxWidth: 980, alignment: .leading)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Theme.background)
     }
 
     private var signInNotice: some View {

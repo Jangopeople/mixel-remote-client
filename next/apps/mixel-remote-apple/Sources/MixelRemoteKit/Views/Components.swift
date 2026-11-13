@@ -1,16 +1,34 @@
 import SwiftUI
 
-/// The Mixel mark: red rounded square with the arrows (drawn, so it is sharp at every size).
+/// The Mixel mark (the brand ring) on its white tile.
 public struct MixelMark: View {
     var size: CGFloat
     public init(size: CGFloat = 28) { self.size = size }
     public var body: some View {
-        RoundedRectangle(cornerRadius: size * 0.26, style: .continuous)
-            .fill(Theme.brand)
-            .frame(width: size, height: size)
-            .overlay(Image(systemName: "arrow.left.arrow.right").font(.system(size: size * 0.48, weight: .bold)).foregroundStyle(.white))
-            .accessibilityHidden(true)
+        Group {
+            if let image = MixelMark.image {
+                #if os(macOS)
+                Image(nsImage: image).resizable()
+                #else
+                Image(uiImage: image).resizable()
+                #endif
+            } else {
+                Color.white
+            }
+        }
+        .aspectRatio(1, contentMode: .fit)
+        .frame(width: size, height: size)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous).stroke(Color.black.opacity(0.08), lineWidth: 0.5))
+        .accessibilityHidden(true)
     }
+
+    #if os(macOS)
+    static let image: NSImage? = Bundle.module.url(forResource: "mixel-mark", withExtension: "png").flatMap { NSImage(contentsOf: $0) }
+    #else
+    static let image: UIImage? = Bundle.module.url(forResource: "mixel-mark", withExtension: "png").flatMap { UIImage(contentsOfFile: $0.path) }
+    #endif
 }
 
 /// "Mixel Remote" with the mark.
@@ -163,6 +181,7 @@ public struct FormSheet: View {
             }
         }
         .padding(22)
+        .background(Theme.background)
         .frame(minWidth: 380)
     }
 }

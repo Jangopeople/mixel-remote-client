@@ -109,11 +109,11 @@ fn out<T: serde::Serialize>(value: T) -> Result<String, String> {
     serde_json::to_string(&value).map_err(|_| "The result could not be prepared".into())
 }
 
+/// The device's system as the Mixel service records it (macos, windows or linux). iPhone and iPad
+/// register as Apple devices ("macos"), as the current phone app does; their name says which.
 fn os_name() -> &'static str {
-    if cfg!(target_os = "macos") {
+    if cfg!(any(target_os = "macos", target_os = "ios")) {
         "macos"
-    } else if cfg!(target_os = "ios") {
-        "ios"
     } else if cfg!(target_os = "windows") {
         "windows"
     } else {

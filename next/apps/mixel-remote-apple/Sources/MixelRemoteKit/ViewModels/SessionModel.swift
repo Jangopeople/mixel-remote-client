@@ -6,7 +6,8 @@ import Foundation
 /// clipboard, files, chat, recording, invite a colleague, switch sides, end).
 @MainActor
 public final class SessionModel: ObservableObject {
-    unowned let app: AppModel
+    // The app model lives as long as the app; its parts keep it (no reference cycle matters there).
+    let app: AppModel
     @Published public private(set) var frame: CGImage?
     @Published public private(set) var size = CGSize.zero
     @Published public private(set) var fps = 0

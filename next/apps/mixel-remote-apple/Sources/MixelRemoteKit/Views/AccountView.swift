@@ -30,6 +30,8 @@ public struct AccountView: View {
             .padding(24)
             .frame(maxWidth: 820, alignment: .leading)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Theme.background)
     }
 
     @ViewBuilder private var signInCard: some View {
@@ -291,6 +293,7 @@ struct InviteSheet: View {
             }
         }
         .padding(22)
+        .background(Theme.background)
         .frame(minWidth: 420)
     }
 }

@@ -4,7 +4,8 @@ import Foundation
 /// their roles, invitations, renaming, creating a company, and deleting the company or one's account.
 @MainActor
 public final class CompanyModel: ObservableObject {
-    unowned let app: AppModel
+    // The app model lives as long as the app; its parts keep it (no reference cycle matters there).
+    let app: AppModel
     @Published public private(set) var tenants: [Tenant] = []
     @Published public private(set) var overview: TenantOverview?
     @Published public private(set) var members: [Member] = []

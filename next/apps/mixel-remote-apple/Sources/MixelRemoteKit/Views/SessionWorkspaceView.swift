@@ -46,6 +46,7 @@ public struct SessionWorkspaceView: View {
                 }
             }
         }
+        .background(Theme.background)
         .sheet(isPresented: $inviting) { InviteColleagueSheet(app: app, session: session) }
     }
 
@@ -379,6 +380,7 @@ struct InviteColleagueSheet: View {
             }
         }
         .padding(22)
+        .background(Theme.background)
         .frame(minWidth: 440)
     }
 }

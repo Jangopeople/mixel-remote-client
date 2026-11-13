@@ -1,10 +1,14 @@
 import Foundation
+#if os(iOS)
+import UIKit
+#endif
 
 /// Setting up this computer (or phone) once, so it can connect and be reached: add it to the company,
 /// enrol it against an existing record (Mixel team), or register it as a personal device.
 @MainActor
 public final class EnrollmentModel: ObservableObject {
-    unowned let app: AppModel
+    // The app model lives as long as the app; its parts keep it (no reference cycle matters there).
+    let app: AppModel
     /// The engine found no device identity, or the service does not know this device yet.
     @Published public private(set) var needsSetup = false
     @Published public private(set) var current: Registration?
@@ -75,7 +79,7 @@ public final class EnrollmentModel: ObservableObject {
 
     func deviceName() -> String {
         #if os(iOS)
-        return ProcessInfo.processInfo.hostName.replacingOccurrences(of: ".local", with: "")
+        return "Mixel Remote (\(UIDevice.current.model))"
         #else
         return Host.current().localizedName ?? ""
         #endif

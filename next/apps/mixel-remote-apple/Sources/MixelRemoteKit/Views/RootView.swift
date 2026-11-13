@@ -13,10 +13,10 @@ public struct RootView: View {
             if app.remote.viewing || app.remote.phase == "outgoing" || (app.remote.phase == "negotiating" && !app.remote.sharing && app.remote.session != nil) {
                 SessionWorkspaceView(app: app)
             } else {
-                NavigationSplitView {
-                    Sidebar(app: app)
-                        .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 280)
-                } detail: {
+                // Mixel's own layout: a calm sidebar panel and the page beside it.
+                HStack(spacing: 0) {
+                    Sidebar(app: app).frame(width: 224)
+                    Divider()
                     detail.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 }
             }
@@ -43,15 +43,17 @@ struct Sidebar: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Brand().padding(.horizontal, 16).padding(.top, 6).padding(.bottom, 18)
-            List(selection: Binding(get: { app.section }, set: { if let value = $0 { app.section = value } })) {
+            VStack(spacing: 4) {
                 ForEach(AppSection.allCases) { section in
-                    Label(section.title, systemImage: section.symbol).tag(section)
+                    SidebarItem(section: section, selected: app.section == section) { app.section = section }
                 }
             }
-            .listStyle(.sidebar)
+            .padding(.horizontal, 10)
+            Spacer()
             Divider()
             connection.padding(14)
         }
+        .background(Theme.surface)
     }
 
     private var connection: some View {
@@ -67,6 +69,36 @@ struct Sidebar: View {
             }
             Text(verbatim: L("Preview for testing")).font(.caption2.weight(.semibold)).foregroundStyle(Theme.brand)
         }
+    }
+}
+
+struct SidebarItem: View {
+    let section: AppSection
+    let selected: Bool
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: section.symbol).frame(width: 20)
+                Text(verbatim: section.title)
+                Spacer()
+            }
+            .font(.body.weight(selected ? .semibold : .regular))
+            .foregroundStyle(selected ? Theme.brand : Color.primary.opacity(0.8))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(selected ? Theme.brandSoft : hovering ? Color.primary.opacity(0.05) : .clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(alignment: .leading) {
+                if selected { RoundedRectangle(cornerRadius: 2).fill(Theme.brand).frame(width: 3, height: 18).offset(x: -10) }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .accessibilityLabel(Text(verbatim: section.title))
+        .accessibilityAddTraits(selected ? [.isSelected, .isButton] : .isButton)
     }
 }
 

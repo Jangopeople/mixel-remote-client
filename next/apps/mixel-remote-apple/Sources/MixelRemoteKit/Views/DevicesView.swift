@@ -60,6 +60,8 @@ public struct DevicesView: View {
             .padding(.bottom, 12)
             list
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Theme.background)
         .sheet(item: $renaming) { device in
             FormSheet(title: L("Rename device"), fields: [.init(id: "name", label: L("Device name"), value: device.name)], confirm: L("Rename")) { values in
                 await model.rename(device, to: values["name"] ?? "") ? nil : model.error
@@ -285,6 +287,7 @@ struct DeployLinkSheet: View {
             }
         }
         .padding(22)
+        .background(Theme.background)
         .frame(minWidth: 520)
     }
 
