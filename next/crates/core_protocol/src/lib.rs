@@ -1,4 +1,5 @@
 //! Shared native/browser wire primitives. No network or OS permissions are granted here.
+pub mod annotation;
 pub mod clipboard;
 pub mod crypto;
 pub mod delegation;
