@@ -90,16 +90,29 @@ fn section_for(scene: &str) -> Section {
 pub fn save(widget: &impl IsA<gtk::Widget>, path: &std::path::Path) -> bool {
     let (width, height) = (widget.width(), widget.height());
     if width <= 0 || height <= 0 {
+        eprintln!("screenshot: the window has no size yet");
         return false;
     }
     let paintable = gtk::WidgetPaintable::new(Some(widget));
     let snapshot = gtk::Snapshot::new();
     paintable.snapshot(snapshot.upcast_ref::<gtk::gdk::Snapshot>(), f64::from(width), f64::from(height));
-    let Some(node) = snapshot.to_node() else { return false };
+    let Some(node) = snapshot.to_node() else {
+        eprintln!("screenshot: nothing was drawn");
+        return false;
+    };
     let Some(native) = widget.native() else { return false };
-    let Some(renderer) = native.renderer() else { return false };
+    let Some(renderer) = native.renderer() else {
+        eprintln!("screenshot: no renderer");
+        return false;
+    };
     let texture = renderer.render_texture(&node, Some(&graphene::Rect::new(0.0, 0.0, width as f32, height as f32)));
-    texture.save_to_png(path).is_ok()
+    match texture.save_to_png(path) {
+        Ok(()) => true,
+        Err(error) => {
+            eprintln!("screenshot: {error}");
+            false
+        }
+    }
 }
 
 async fn settle(milliseconds: u64) {

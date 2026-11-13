@@ -59,6 +59,13 @@ impl Engine for MockEngine {
     fn next_video(&self, _session: &str) -> Reply<Vec<u8>> {
         let sequence = self.sequence.get() + 1;
         self.sequence.set(sequence);
+        // A still remote screen sends no new pictures: after a few, none (the window settles).
+        if sequence > 12 {
+            return Box::pin(async {
+                gtk::glib::timeout_future(std::time::Duration::from_millis(100)).await;
+                Ok(Vec::new())
+            });
+        }
         let frame = crate::video::sample(self.frame.0, self.frame.1, sequence);
         // About 10 pictures a second, as a calm remote screen.
         Box::pin(async move {
