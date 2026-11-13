@@ -971,6 +971,10 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 [
 "^(.+) invites you to join their session on computer ([\\d ]+)\\.$",
 "$1 lädt Sie in die Sitzung auf Computer $2 ein."
+],
+[
+"^Always-on access is installed \\(Remote ID ([\\d ]+)\\), but this computer’s sign-in screen uses Wayland, which cannot be shared\\. Switch the sign-in screen to Xorg \\(GDM: WaylandEnable=false\\) to use it\\.$",
+"Der Zugriff ist installiert (Remote-ID $1), aber der Anmeldebildschirm dieses Computers verwendet Wayland und kann nicht geteilt werden. Stellen Sie den Anmeldebildschirm auf Xorg um (GDM: WaylandEnable=false), um ihn zu nutzen."
 ]
 ]
 },
@@ -1944,6 +1948,10 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 [
 "^(.+) invites you to join their session on computer ([\\d ]+)\\.$",
 "$1 vous invite à rejoindre la session sur l’ordinateur $2."
+],
+[
+"^Always-on access is installed \\(Remote ID ([\\d ]+)\\), but this computer’s sign-in screen uses Wayland, which cannot be shared\\. Switch the sign-in screen to Xorg \\(GDM: WaylandEnable=false\\) to use it\\.$",
+"L’accès permanent est installé (ID Remote $1), mais l’écran de connexion de cet ordinateur utilise Wayland et ne peut pas être partagé. Passez l’écran de connexion à Xorg (GDM : WaylandEnable=false) pour l’utiliser."
 ]
 ]
 },
@@ -2917,6 +2925,10 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 [
 "^(.+) invites you to join their session on computer ([\\d ]+)\\.$",
 "$1 ti invita a unirti alla sessione sul computer $2."
+],
+[
+"^Always-on access is installed \\(Remote ID ([\\d ]+)\\), but this computer’s sign-in screen uses Wayland, which cannot be shared\\. Switch the sign-in screen to Xorg \\(GDM: WaylandEnable=false\\) to use it\\.$",
+"L’accesso permanente è installato (ID Remote $1), ma la schermata di accesso di questo computer usa Wayland e non può essere condivisa. Passa la schermata di accesso a Xorg (GDM: WaylandEnable=false) per usarla."
 ]
 ]
 }

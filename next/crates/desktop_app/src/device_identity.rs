@@ -199,6 +199,44 @@ mod linux_store;
 fn load_or_create(create: bool) -> Result<SigningKey, String> {
     linux_store::load_or_create(None, create)
 }
+#[cfg(target_os = "linux")]
+impl IdentityState {
+    /// The computer-wide identity of the Linux sign-in screen host: a file only root can read.
+    pub fn machine(create: bool) -> Result<Self, String> {
+        use std::io::{Read, Write};
+        use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+        let path = crate::linux_signin_host::machine_identity_path();
+        let key = match std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(&path) {
+            Ok(mut file) => {
+                let metadata = file.metadata().map_err(|_| "Cannot inspect the sign-in screen identity")?;
+                if metadata.uid() != 0 || metadata.mode() & 0o077 != 0 || metadata.len() > 256 {
+                    return Err("The sign-in screen identity must be a private file owned by root".into());
+                }
+                let mut record = Zeroizing::new(Vec::new());
+                file.read_to_end(&mut record).map_err(|_| "Cannot read the sign-in screen identity")?;
+                decode(&record)?
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound && create => {
+                let key = SigningKey::generate(&mut rand_core::OsRng);
+                let seed = Zeroizing::new(key.to_bytes());
+                let mut record = Zeroizing::new(Vec::with_capacity(MAGIC.len() + seed.len()));
+                record.extend_from_slice(MAGIC);
+                record.extend_from_slice(seed.as_ref());
+                let mut file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .mode(0o600)
+                    .custom_flags(libc::O_NOFOLLOW)
+                    .open(&path)
+                    .map_err(|_| "Cannot create the sign-in screen identity")?;
+                file.write_all(&record).and_then(|()| file.sync_all()).map_err(|_| "Cannot create the sign-in screen identity")?;
+                key
+            }
+            Err(_) => return Err("The sign-in screen identity is not installed".into()),
+        };
+        Ok(Self(Mutex::new(Some(key))))
+    }
+}
 impl IdentityState {
     #[cfg(all(test, any(target_os = "linux", target_os = "windows")))]
     pub(crate) fn test_identity(key: SigningKey) -> Self {
@@ -284,7 +322,7 @@ impl IdentityState {
         )
         .map_err(|error| error.to_string())
     }
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     pub fn delegate_startup(
         &self,
         challenge: core_protocol::device_login::DeviceLoginChallenge,

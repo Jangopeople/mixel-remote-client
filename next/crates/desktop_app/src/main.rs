@@ -54,8 +54,17 @@ mod remote_session;
 mod remote_sound;
 #[cfg(target_os = "macos")]
 mod macos_startup_host;
+#[cfg(target_os = "macos")]
+mod macos_prelogin_install;
 #[cfg(target_os = "windows")]
 mod windows_signin_host;
+#[cfg(target_os = "linux")]
+mod linux_signin_host;
+/// The platform's sign-in screen host (Windows service, Linux systemd service on an X11 greeter).
+#[cfg(target_os = "windows")]
+use windows_signin_host as signin_platform;
+#[cfg(target_os = "linux")]
+use linux_signin_host as signin_platform;
 #[cfg(target_os = "macos")]
 mod macos_support;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
@@ -844,7 +853,7 @@ async fn startup_settings(
         restored: state.restored().await,
     })
 }
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 #[derive(serde::Serialize)]
 struct SignInScreen {
     supported: bool,
@@ -853,30 +862,66 @@ struct SignInScreen {
     technician: bool,
     connection_id: Option<u32>,
     name: Option<String>,
+    /// Linux: the sign-in screen runs on Wayland and cannot be shared.
+    wayland_greeter: bool,
 }
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 #[tauri::command]
 async fn signin_screen_status(window: tauri::WebviewWindow) -> Result<SignInScreen, String> {
     main_window(&window)?;
-    #[cfg(target_os = "windows")]
-    {
-        let status = windows_signin_host::public_status();
-        let outdated = status.is_some()
-            && tauri::async_runtime::spawn_blocking(windows_signin_host::program_outdated)
-                .await
-                .unwrap_or(false);
-        Ok(SignInScreen {
-            supported: true,
-            outdated,
-            technician: windows_signin_host::technician_connected(),
-            connection_id: status.as_ref().map(|status| status.connection_id),
-            name: status.map(|status| status.name),
-        })
-    }
-    #[cfg(not(target_os = "windows"))]
-    Ok(SignInScreen { supported: false, outdated: false, technician: false, connection_id: None, name: None })
+    let status = signin_platform::public_status();
+    let outdated = status.is_some()
+        && tauri::async_runtime::spawn_blocking(signin_platform::program_outdated)
+            .await
+            .unwrap_or(false);
+    // Linux: only an X11 sign-in screen can be shared; a Wayland one is reported, not offered.
+    #[cfg(target_os = "linux")]
+    let wayland_greeter = linux_signin_host::service_state().as_deref() == Some("wayland");
+    #[cfg(not(target_os = "linux"))]
+    let wayland_greeter = false;
+    Ok(SignInScreen {
+        supported: true,
+        outdated,
+        technician: signin_platform::technician_connected(),
+        connection_id: status.as_ref().map(|status| status.connection_id),
+        name: status.map(|status| status.name),
+        wayland_greeter,
+    })
 }
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+/// macOS: offered when this app carries the separately signed login host.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn signin_screen_status(window: tauri::WebviewWindow) -> Result<SignInScreen, String> {
+    main_window(&window)?;
+    let status = macos_prelogin_install::public_status();
+    Ok(SignInScreen {
+        supported: macos_prelogin_install::shipped_bundle().is_some(),
+        outdated: false,
+        technician: false,
+        connection_id: status.as_ref().map(|status| status.connection_id),
+        name: status.map(|status| status.name),
+        wayland_greeter: false,
+    })
+}
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn signin_screen_disable(window: tauri::WebviewWindow) -> Result<(), String> {
+    main_window(&window)?;
+    tauri::async_runtime::spawn_blocking(|| macos_prelogin_install::run_as_administrator(&macos_prelogin_install::remove_script()).map(|_| ()))
+        .await
+        .map_err(|_| "Administrator step failed")?
+}
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn signin_screen_update(window: tauri::WebviewWindow) -> Result<(), String> {
+    main_window(&window)?;
+    let bundle = macos_prelogin_install::shipped_bundle().ok_or("This app does not include the sign-in screen host")?;
+    // Reinstalling the bundle keeps the System Keychain key (provisioning reuses it).
+    tauri::async_runtime::spawn_blocking(move || macos_prelogin_install::run_as_administrator(&macos_prelogin_install::install_script(&bundle)).map(|_| ()))
+        .await
+        .map_err(|_| "Administrator step failed")?
+}
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 #[tauri::command]
 async fn signin_screen_enable(
     window: tauri::WebviewWindow,
@@ -885,12 +930,6 @@ async fn signin_screen_enable(
     name: String,
 ) -> Result<u32, String> {
     main_window(&window)?;
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = (auth, company, name);
-        Err("Sign-in screen access is available on Windows".into())
-    }
-    #[cfg(target_os = "windows")]
     {
         let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let credential = auth.credential(Some(&cancelled)).await?;
@@ -902,17 +941,29 @@ async fn signin_screen_enable(
             return Err("Enter a computer name of up to 60 characters".into());
         }
         // Step 1 (administrator): create the computer-wide key.
-        tauri::async_runtime::spawn_blocking(|| windows_signin_host::run_elevated("--signin-provision"))
-            .await
-            .map_err(|_| "Administrator step failed")??;
-        let key = windows_signin_host::provisioned_public_key()?;
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
+        let key = {
+            tauri::async_runtime::spawn_blocking(|| signin_platform::run_elevated("--signin-provision"))
+                .await
+                .map_err(|_| "Administrator step failed")??;
+            signin_platform::provisioned_public_key()?
+        };
+        // macOS: install the login host bundle root-owned and create its System Keychain key.
+        #[cfg(target_os = "macos")]
+        let key = {
+            let bundle = macos_prelogin_install::shipped_bundle().ok_or("This app does not include the sign-in screen host")?;
+            let output = tauri::async_runtime::spawn_blocking(move || macos_prelogin_install::run_as_administrator(&macos_prelogin_install::install_script(&bundle)))
+                .await
+                .map_err(|_| "Administrator step failed")??;
+            macos_prelogin_install::parse_key(&output)?
+        };
         let ism = &credential.ism;
         let token = &credential.token;
         let device = match ism.enrollment_of_key(token, &key).await.map_err(|_| "The enrolment status is unavailable")? {
             Some(current) => current.device,
             None => {
                 let device = ism
-                    .add_device(token, company, &format!("{name} (sign-in screen)"), "windows")
+                    .add_device(token, company, &format!("{name} (sign-in screen)"), std::env::consts::OS)
                     .await
                     .map_err(|_| "The sign-in screen record could not be added for this company")?;
                 ism.enroll(token, device, key, &cancelled)
@@ -926,7 +977,24 @@ async fn signin_screen_enable(
             return Err("The sign-in screen enrolment does not match this computer".into());
         }
         let tenant = ism.device_tenant(token, device).await.map_err(|_| "The company of this computer is unavailable")?;
-        let settings = windows_signin_host::Settings {
+        #[cfg(target_os = "macos")]
+        {
+            // Step 2 (administrator): private settings (checked by the host) and the login window agent.
+            let settings = serde_json::json!({
+                "version": 1, "device": device, "profile": enrolled.principal.user, "tenant": tenant,
+                "connection_id": enrolled.connection_id, "generation": enrolled.generation,
+                "share_main_display": true, "control": true,
+            })
+            .to_string();
+            let status = serde_json::to_string(&macos_prelogin_install::PublicStatus { connection_id: enrolled.connection_id, name })
+                .map_err(|_| "Cannot prepare the sign-in screen settings")?;
+            tauri::async_runtime::spawn_blocking(move || macos_prelogin_install::run_as_administrator(&macos_prelogin_install::settings_script(&settings, &status)))
+                .await
+                .map_err(|_| "Administrator step failed")??;
+            Ok(enrolled.connection_id)
+        }
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
+        let settings = signin_platform::Settings {
             version: 1,
             device,
             profile: enrolled.principal.user,
@@ -935,14 +1003,18 @@ async fn signin_screen_enable(
             generation: enrolled.generation,
             control: true,
         };
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
         let payload = serde_json::to_vec(&serde_json::json!({ "settings": settings, "name": name }))
             .map_err(|_| "Cannot prepare the sign-in screen settings")?;
-        let hex: String = payload.iter().map(|byte| format!("{byte:02x}")).collect();
-        // Step 2 (administrator): save the settings and start the Windows service.
-        tauri::async_runtime::spawn_blocking(move || windows_signin_host::run_elevated(&format!("--signin-install {hex}")))
-            .await
-            .map_err(|_| "Administrator step failed")??;
-        Ok(enrolled.connection_id)
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
+        {
+            let hex: String = payload.iter().map(|byte| format!("{byte:02x}")).collect();
+            // Step 2 (administrator): save the settings and start the system service.
+            tauri::async_runtime::spawn_blocking(move || signin_platform::run_elevated(&format!("--signin-install {hex}")))
+                .await
+                .map_err(|_| "Administrator step failed")??;
+            Ok(enrolled.connection_id)
+        }
     }
 }
 /// Finds or checks the company's AI server (empty address: try this computer and the usual server).
@@ -1128,23 +1200,17 @@ async fn rollout_revoke(
 #[tauri::command]
 async fn signin_screen_update(window: tauri::WebviewWindow) -> Result<(), String> {
     main_window(&window)?;
-    #[cfg(target_os = "windows")]
-    return tauri::async_runtime::spawn_blocking(|| windows_signin_host::run_elevated("--signin-update"))
+    tauri::async_runtime::spawn_blocking(|| signin_platform::run_elevated("--signin-update"))
         .await
-        .map_err(|_| "Administrator step failed")?;
-    #[cfg(not(target_os = "windows"))]
-    Err("Sign-in screen access is available on Windows".into())
+        .map_err(|_| "Administrator step failed")?
 }
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 #[tauri::command]
 async fn signin_screen_disable(window: tauri::WebviewWindow) -> Result<(), String> {
     main_window(&window)?;
-    #[cfg(target_os = "windows")]
-    return tauri::async_runtime::spawn_blocking(|| windows_signin_host::run_elevated("--signin-remove"))
+    tauri::async_runtime::spawn_blocking(|| signin_platform::run_elevated("--signin-remove"))
         .await
-        .map_err(|_| "Administrator step failed")?;
-    #[cfg(not(target_os = "windows"))]
-    Err("Sign-in screen access is available on Windows".into())
+        .map_err(|_| "Administrator step failed")?
 }
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 #[tauri::command]
@@ -2296,6 +2362,23 @@ fn main() {
             return;
         }
     }
+    // Linux sign-in screen access: the root service, its host and the administrator steps.
+    #[cfg(target_os = "linux")]
+    {
+        let mut args = std::env::args().skip(1);
+        if let Some(command) = args.next().filter(|arg| arg.starts_with("--signin-")) {
+            let result = match command.as_str() {
+                "--signin-service" => linux_signin_host::run_service(),
+                "--signin-host" => service_config::require_host().and_then(|()| linux_signin_host::run_host()),
+                _ => linux_signin_host::admin(&command, args.next().as_deref()),
+            };
+            if let Err(error) = result {
+                eprintln!("{error}");
+                std::process::exit(2);
+            }
+            return;
+        }
+    }
     #[cfg(target_os = "macos")]
     if std::env::args_os()
         .nth(1)
@@ -2400,6 +2483,10 @@ fn main() {
             device_identity::IdentityState::default(),
         ))
         .invoke_handler(tauri::generate_handler![
+            signin_screen_status,
+            signin_screen_enable,
+            signin_screen_disable,
+            signin_screen_update,
             capture_targets,
             start_capture,
             stop_capture,

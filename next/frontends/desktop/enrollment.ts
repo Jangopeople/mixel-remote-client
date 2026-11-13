@@ -155,7 +155,7 @@
   });
   document.addEventListener('mixel-account-state',event=>{const phase=(event as CustomEvent<Account>).detail.phase;const next=phase==='authenticated';if(next!==signedIn){signedIn=next;void refreshStartup();}});
   const signinPanel=element<HTMLDivElement>('signin-panel'), signinCurrent=element<HTMLParagraphElement>('signin-current'), signinSetup=element<HTMLDivElement>('signin-setup'), signinCompany=element<HTMLSelectElement>('signin-company'), signinName=element<HTMLInputElement>('signin-name'), signinEnable=element<HTMLButtonElement>('signin-enable'), signinDisable=element<HTMLButtonElement>('signin-disable'), signinStatus=element<HTMLParagraphElement>('signin-status'), signinUpdate=element<HTMLButtonElement>('signin-update'), signinOutdatedText=element<HTMLParagraphElement>('signin-outdated');
-  type SignIn={supported:boolean;outdated:boolean;connection_id:number|null;name:string|null};
+  type SignIn={wayland_greeter?:boolean;supported:boolean;outdated:boolean;connection_id:number|null;name:string|null};
   let signinBusy=false, signinLoaded=false, signinInstalled=false, signinOutdated=false;
   function renderSignin():void{
     signinSetup.hidden=signinInstalled;signinDisable.hidden=!signinInstalled;
@@ -173,6 +173,8 @@
       signinInstalled=value.connection_id!==null;signinOutdated=value.outdated;
       signinCurrent.hidden=!signinInstalled;
       if(signinInstalled)signinCurrent.textContent=`Always-on access is on for ${value.name ?? 'this computer'} · Remote ID ${formatId(value.connection_id ?? 0)}. A technician with unattended access can pair and connect to this ID.`;
+      // Linux: a Wayland sign-in screen lets no program see or control it.
+      if(signinInstalled && value.wayland_greeter)signinCurrent.textContent=`Always-on access is installed (Remote ID ${formatId(value.connection_id ?? 0)}), but this computer’s sign-in screen uses Wayland, which cannot be shared. Switch the sign-in screen to Xorg (GDM: WaylandEnable=false) to use it.`;
       if(!signinLoaded && !signinInstalled){
         const list=await invoke<Company[]>('enrollment_companies');
         signinCompany.replaceChildren();

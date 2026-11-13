@@ -2103,3 +2103,111 @@ async fn saas_policy_limit_caps_concurrent_sessions_of_a_tenant() {
     broker.abort();
     policy_task.abort();
 }
+
+/// Second technician and switching sides over real WebSockets, signed device tickets and the
+/// support policy: the colleague is checked like a direct request, and the switched session is
+/// checked as the technician helping the computer (never the computer controlling staff).
+#[tokio::test]
+async fn colleague_joins_and_sides_switch_with_the_support_policy_on_a_real_broker() {
+    use axum::{Json, Router, extract::State, http::StatusCode, routing::post};
+    use ed25519_dalek::SigningKey;
+    use signaling_server::{delegated_auth::TicketAuth, support_policy::SupportPolicy};
+    use std::sync::Mutex;
+
+    const TOKEN: &str = "4111441144114411441144114411441144114411441144114411441144114411";
+    const HOST: u32 = 123_456_789;
+    const TECHNICIAN: u32 = 234_567_890;
+    const COLLEAGUE: u32 = 345_678_901;
+    let asked: Arc<Mutex<Vec<(String, String)>>> = Arc::default();
+    let policy = Router::new()
+        .route(
+            "/api/internal/remote/authorize",
+            post(|State(asked): State<Arc<Mutex<Vec<(String, String)>>>>, Json(pair): Json<serde_json::Value>| async move {
+                let controller = pair["controller"]["profile"].as_str().unwrap_or_default().to_owned();
+                let host = pair["host"]["device"].as_str().unwrap_or_default().to_owned();
+                asked.lock().unwrap().push((controller.clone(), host.clone()));
+                // Technicians 11 and 12 may help device 21; nobody may "help" a technician's device.
+                let allowed = [Uuid::from_u128(11).to_string(), Uuid::from_u128(12).to_string()].contains(&controller)
+                    && host == Uuid::from_u128(21).to_string();
+                if allowed { StatusCode::NO_CONTENT } else { StatusCode::FORBIDDEN }
+            }),
+        )
+        .with_state(asked.clone());
+    let policy_socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let policy_url = format!("http://{}/api/internal/remote/authorize", policy_socket.local_addr().unwrap());
+    let policy_task = tokio::spawn(async move { axum::serve(policy_socket, policy).await.unwrap() });
+    let signer = SigningKey::from_bytes(&[41; 32]);
+    let state = AppState::new(Arc::new(TicketAuth::new(vec![signer.verifying_key()]).unwrap()), HashSet::new())
+        .with_support_policy(SupportPolicy::new(policy_url.parse().unwrap(), TOKEN.into()).unwrap());
+    let socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/v1/ws", socket.local_addr().unwrap());
+    let broker = tokio::spawn(async move { axum::serve(socket, router(state)).await.unwrap() });
+    let peer = |profile: u128, device: u128, tenant: Option<Uuid>, connection_id: u32, key_byte: u8| SignedPeer {
+        profile: Uuid::from_u128(profile),
+        device: Uuid::from_u128(device),
+        tenant,
+        connection_id,
+        generation: 1,
+        key_byte,
+    };
+    let mut host = signed_peer(&url, &signer, peer(10, 21, Some(Uuid::from_u128(1)), HOST, 7)).await;
+    let mut technician = signed_peer(&url, &signer, peer(11, 22, None, TECHNICIAN, 8)).await;
+    let mut colleague = signed_peer(&url, &signer, peer(12, 23, None, COLLEAGUE, 9)).await;
+    for socket in [&mut host, &mut technician, &mut colleague] {
+        send(socket, ClientMessage::Capabilities { features: vec![FEATURE_JOIN.into(), FEATURE_SWITCH.into()] }).await;
+    }
+    // Takes a requested session to the running phase.
+    async fn run(controller: &mut Socket, host: &mut Socket, session: Uuid) {
+        send(host, ClientMessage::Decide { session, accept: true }).await;
+        assert!(matches!(event(controller).await, ServerMessage::Accepted { session: s, .. } if s == session));
+        assert!(matches!(event(host).await, ServerMessage::Accepted { session: s, .. } if s == session));
+        send(controller, ClientMessage::Signal { session, payload: Signal::Offer("v=0".into()) }).await;
+        assert!(matches!(event(host).await, ServerMessage::Signal { .. }));
+        send(host, ClientMessage::Signal { session, payload: Signal::Answer("v=0".into()) }).await;
+        assert!(matches!(event(controller).await, ServerMessage::Signal { .. }));
+    }
+    send(&mut technician, ClientMessage::Request { host: HOST }).await;
+    let ServerMessage::Requested { session } = event(&mut technician).await else { panic!("requested") };
+    assert!(matches!(event(&mut host).await, ServerMessage::Consent { joining: None, switched: None, .. }));
+    run(&mut technician, &mut host, session).await;
+
+    // Invite the colleague by account; the colleague joins after the person at the computer agrees.
+    send(&mut technician, ClientMessage::Invite { session, user: Some(Uuid::from_u128(12)), device: None, control: true }).await;
+    assert!(matches!(event(&mut technician).await, ServerMessage::InviteStatus { delivered: 1, .. }));
+    let ServerMessage::Invited { invitation, host: HOST, control: true, .. } = event(&mut colleague).await else { panic!("invited") };
+    send(&mut colleague, ClientMessage::JoinSession { invitation }).await;
+    let ServerMessage::Requested { session: joined } = event(&mut colleague).await else { panic!("joined request") };
+    let ServerMessage::Consent { session: asked_session, requester_connection: COLLEAGUE, joining: Some(joining), requester_identity: Some(_), .. } = event(&mut host).await else { panic!("colleague consent") };
+    assert_eq!((asked_session, joining.session, joining.inviter_connection), (joined, session, TECHNICIAN));
+    run(&mut colleague, &mut host, joined).await;
+    // While the colleague watches, the sides stay; the person at the computer removes the colleague.
+    send(&mut technician, ClientMessage::SwitchSides { session }).await;
+    assert!(matches!(event(&mut technician).await, ServerMessage::Error { code: ErrorCode::Busy }));
+    send(&mut host, ClientMessage::Close { session: joined }).await;
+    assert!(matches!(event(&mut colleague).await, ServerMessage::Closed { reason: CloseReason::Requested, .. }));
+    assert!(matches!(event(&mut host).await, ServerMessage::Closed { session: s, .. } if s == joined));
+
+    // Switch sides: the computer that was helped now sees the technician's screen.
+    send(&mut technician, ClientMessage::SwitchSides { session }).await;
+    assert!(matches!(event(&mut technician).await, ServerMessage::Closed { reason: CloseReason::Switched, .. }));
+    let ServerMessage::Consent { session: reversed, requester_connection: HOST, switched: Some(from), .. } = event(&mut technician).await else { panic!("switched consent") };
+    assert_eq!((from.previous, from.by), (session, TECHNICIAN));
+    assert!(matches!(event(&mut host).await, ServerMessage::Closed { reason: CloseReason::Switched, .. }));
+    assert!(matches!(event(&mut host).await, ServerMessage::Switched { previous, session: s, host: TECHNICIAN } if previous == session && s == reversed));
+    asked.lock().unwrap().clear();
+    run(&mut host, &mut technician, reversed).await;
+    // The policy was asked about the technician helping device 21, not the reverse.
+    assert_eq!(asked.lock().unwrap().as_slice(), [(Uuid::from_u128(11).to_string(), Uuid::from_u128(21).to_string())]);
+    // And back again.
+    send(&mut host, ClientMessage::SwitchSides { session: reversed }).await;
+    assert!(matches!(event(&mut host).await, ServerMessage::Closed { reason: CloseReason::Switched, .. }));
+    let ServerMessage::Consent { session: back, switched: Some(from), .. } = event(&mut host).await else { panic!("switch back consent") };
+    assert_eq!(from.by, HOST);
+    assert!(matches!(event(&mut technician).await, ServerMessage::Closed { reason: CloseReason::Switched, .. }));
+    assert!(matches!(event(&mut technician).await, ServerMessage::Switched { host: HOST, .. }));
+    run(&mut technician, &mut host, back).await;
+    send(&mut technician, ClientMessage::Close { session: back }).await;
+    assert!(matches!(event(&mut host).await, ServerMessage::Closed { reason: CloseReason::Requested, .. }));
+    broker.abort();
+    policy_task.abort();
+}
