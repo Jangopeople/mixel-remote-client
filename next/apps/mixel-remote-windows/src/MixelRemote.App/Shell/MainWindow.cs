@@ -80,6 +80,7 @@ internal sealed class MainWindow : Window
         Grid.SetColumn(pageHost, 1);
         root.Children.Add(pageHost);
         Content = root;
+        Ui.FollowTheme(this);
 
         // Keyboard: Ctrl+1…4 open the sections.
         var keys = new[] { VirtualKey.Number1, VirtualKey.Number2, VirtualKey.Number3, VirtualKey.Number4 };
@@ -95,13 +96,23 @@ internal sealed class MainWindow : Window
             root.KeyboardAccelerators.Add(accelerator);
         }
         root.ActualThemeChanged += (_, _) => Refresh();
-        Translator.Shared.Changed += (_, _) => Refresh();
+        Translator.Shared.Changed += OnLanguage;
         app.PropertyChanged += OnChanged;
+        Closed += (_, _) =>
+        {
+            closed = true;
+            Translator.Shared.Changed -= OnLanguage;
+            app.PropertyChanged -= OnChanged;
+        };
         Refresh();
     }
 
     public nint Handle { get; }
     public FrameworkElement Root => root;
+
+    private bool closed;
+
+    private void OnLanguage(object? sender, EventArgs change) => Refresh();
 
     private void OnChanged(object? sender, PropertyChangedEventArgs change)
     {
@@ -125,6 +136,13 @@ internal sealed class MainWindow : Window
     };
 
     private void Refresh()
+    {
+        if (closed) return;
+        try { RefreshNow(); }
+        catch (Exception failure) { MixelRemote.App.App.Log($"main window: {failure}"); }
+    }
+
+    private void RefreshNow()
     {
         Ui.Theme = root.ActualTheme == ElementTheme.Default ? ElementTheme.Light : root.ActualTheme;
         if (SystemBackdrop is null) root.Background = Ui.Brush("MixelPage");

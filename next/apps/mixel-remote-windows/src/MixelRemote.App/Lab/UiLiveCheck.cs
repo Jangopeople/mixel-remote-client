@@ -26,6 +26,12 @@ internal static class UiLiveCheck
         log?.Flush();
     }
 
+    private static async Task Shot(nint window, string path)
+    {
+        try { Print($"picture {Path.GetFileName(path)} {await Screenshots.Capture(window, path)}"); }
+        catch (Exception failure) { Print($"picture {Path.GetFileName(path)} not taken: {failure.Message}"); }
+    }
+
     private static async Task<bool> Until(Func<bool> done, int seconds)
     {
         var clock = Stopwatch.StartNew();
@@ -63,7 +69,12 @@ internal static class UiLiveCheck
     private static async Task<(bool Ready, string? Created)> Prepare(AppModel app, string suffix, string role)
     {
         await app.SignIn();
-        LiveCheck.Check("sign-in through the app (QA session)", await Until(() => app.SignedIn, 40), app.Account.Phase);
+        LiveCheck.Check("sign-in through the app (QA session)", await Until(() => app.SignedIn || app.Account.Phase == "profile_setup", 40), app.Account.Phase);
+        if (app.Account.Phase == "profile_setup")
+        {
+            await app.SetUpProfile("QA Windows");
+            LiveCheck.Check("first sign-in: Remote account name set up", await Until(() => app.SignedIn, 30), app.Account.Phase);
+        }
         await Until(() => app.Company.Loaded, 20);
         string? created = null;
         if (app.Company.Tenant is { } existing)
@@ -115,7 +126,7 @@ internal static class UiLiveCheck
             }, 900);
             LiveCheck.Check("lab computer enrolled with the deploy link shows Online in Devices", host is not null);
             if (host is null) return 1;
-            await Screenshots.Capture(main.Handle, Path.Combine(folder, "devices-with-lab-host.png"));
+            await Shot(main.Handle, Path.Combine(folder, "devices-with-lab-host.png"));
             await app.Connect(host.ConnectionId, unattended: true);
             LiveCheck.Check("Connect (unattended): session active, view and control", await Until(() => app.Remote is { Phase: "active", Control: true }, 60), app.Error + " " + app.Remote.Phase);
             LiveCheck.Check("session window shows the remote picture", await Until(() => app.Session.Frame is not null && window.Visible, 30));
@@ -130,11 +141,11 @@ internal static class UiLiveCheck
             app.Session.Press(41);
             await Task.Delay(1500);
             LiveCheck.Check("keyboard, mouse and wheel input delivered", app.Session.Error.Length == 0, app.Session.Error);
-            await Screenshots.Capture(window.Handle, Path.Combine(folder, "session-window.png"));
+            await Shot(window.Handle, Path.Combine(folder, "session-window.png"));
             foreach (var action in new[] { "privacy", "block", "sound" })
             {
                 if (!app.Remote.Offers(action)) continue;
-                if (action == "privacy") { app.Session.TogglePrivacy(); await Task.Delay(1500); await Screenshots.Capture(window.Handle, Path.Combine(folder, "session-privacy-on.png")); app.Session.TogglePrivacy(); }
+                if (action == "privacy") { app.Session.TogglePrivacy(); await Task.Delay(1500); await Shot(window.Handle, Path.Combine(folder, "session-privacy-on.png")); app.Session.TogglePrivacy(); }
                 if (action == "block") { app.Session.ToggleBlockInput(); await Task.Delay(800); app.Session.ToggleBlockInput(); }
                 if (action == "sound") { app.Session.ToggleSound(); await Task.Delay(800); app.Session.ToggleSound(); }
                 await Task.Delay(800);
@@ -145,7 +156,11 @@ internal static class UiLiveCheck
                 app.Session.ChatDraft = $"QA chat {suffix}";
                 await app.Session.SendChat();
                 await app.Session.ReadTools();
-                LiveCheck.Check("chat message sent", app.Session.Chat.Any(message => message.Mine && message.Text.Contains(suffix, StringComparison.Ordinal)), app.Session.Error);
+                // Unattended access (nobody at the computer) has no chat; the app says so.
+                LiveCheck.Check("chat: sent, or refused with a clear message for unattended access",
+                    app.Session.Chat.Any(message => message.Mine && message.Text.Contains(suffix, StringComparison.Ordinal))
+                    || (app.Remote.UnattendedSession && app.Session.Error.Length > 0), app.Session.Error);
+                app.Session.Error = "";
             }
             if (app.Remote.Clipboard)
             {
@@ -176,16 +191,36 @@ internal static class UiLiveCheck
             LiveCheck.Check("a technician asks: the consent window appears", await Until(() => app.Host.Asking && app.Host.Sources.Count > 0, 900), app.Remote.Phase);
             await Task.Delay(1500);
             var consent = Native.GetForegroundWindow();
-            await Screenshots.Capture(consent, Path.Combine(folder, "consent-window.png"));
+            await Shot(consent, Path.Combine(folder, "consent-window.png"));
             app.Host.AllowChat = true;
             app.Host.AllowClipboard = true;
+            app.Host.AllowFiles = true;
+            app.Host.AllowRecording = true;
             await app.Host.Decide(accept: true);
             LiveCheck.Check("Allow with control: this computer is shared", await Until(() => app.Remote is { Phase: "active", Sharing: true }, 60), app.Error + " " + app.Remote.Phase);
             await Task.Delay(2000);
             main.Show();
             await Task.Delay(800);
-            await Screenshots.Capture(main.Handle, Path.Combine(folder, "hosted-session.png"));
-            LiveCheck.Check("the technician ends the session", await Until(() => !app.Remote.InSession, 300), app.Remote.Phase);
+            await Shot(main.Handle, Path.Combine(folder, "hosted-session.png"));
+            // The person here: answers the chat and saves the file the technician sends.
+            app.Session.ChatDraft = "QA hello from the person here";
+            await app.Session.SendChat();
+            var saved = false;
+            var received = false;
+            await Until(() =>
+            {
+                _ = app.Session.ReadTools();
+                received |= app.Session.Chat.Any(message => !message.Mine && message.Text.Contains("technician", StringComparison.Ordinal));
+                if (!saved && app.Session.Files?.Incoming is { Phase: "offered" } offer)
+                {
+                    saved = true;
+                    _ = app.Session.AcceptFile(offer.Id, Path.Combine(folder, "received-" + offer.Name));
+                }
+                return !app.Remote.InSession;
+            }, 300);
+            LiveCheck.Check("chat message from the technician shown", received);
+            LiveCheck.Check("file from the technician saved", saved && File.Exists(Path.Combine(folder, "received-qa-transfer.bin")) && new FileInfo(Path.Combine(folder, "received-qa-transfer.bin")).Length == 300_000);
+            LiveCheck.Check("the technician ends the session", !app.Remote.InSession, app.Remote.Phase);
             return 0;
         }
         finally

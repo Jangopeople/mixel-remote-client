@@ -34,6 +34,8 @@ public partial class App : Application
         this.options = options;
         showRequests = show;
         InitializeComponent();
+        // Mixel Remote keeps running in the notification area without a window; it ends only through Quit.
+        DispatcherShutdownMode = DispatcherShutdownMode.OnExplicitShutdown;
         UnhandledException += (sender, error) =>
         {
             Log($"unhandled: {error.Exception}");
@@ -42,7 +44,7 @@ public partial class App : Application
     }
 
     public AppModel Model { get; private set; } = null!;
-    public static string DataFolder => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ch.mixel.remote.desktop");
+    public static string DataFolder => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ch.mixel.remote.next.qa");
 
     public static void Log(string message)
     {
@@ -61,7 +63,7 @@ public partial class App : Application
         {
             if (options.Screenshots is { } folder)
             {
-                ExitCode = await Lab.Screenshots.Run(folder);
+                ExitCode = await Lab.Screenshots.Run(folder, options.ScreenshotTheme);
                 Exit();
                 return;
             }

@@ -19,19 +19,22 @@ namespace MixelRemote.App.Lab;
 /// </summary>
 internal static class Screenshots
 {
-    public static async Task<int> Run(string folder)
+    /// <param name="system">light or dark: Windows is set to this theme; the screens follow it (Mica and title
+    /// bar included) and only that theme is taken. null: both themes, forced on the content.</param>
+    public static async Task<int> Run(string folder, string? system = null)
     {
         Directory.CreateDirectory(folder);
         var failures = 0;
         var report = new List<string>();
-        foreach (var theme in new[] { ElementTheme.Light, ElementTheme.Dark })
+        var themes = system switch { "light" => new[] { ElementTheme.Light }, "dark" => [ElementTheme.Dark], _ => [ElementTheme.Light, ElementTheme.Dark] };
+        foreach (var theme in themes)
         {
             foreach (var screen in DemoFixtures.Screens)
             {
                 var name = $"{screen}-{theme.ToString().ToLowerInvariant()}.png";
                 try
                 {
-                    var size = await Shoot(screen, theme, "en", Path.Combine(folder, name));
+                    var size = await Shoot(screen, system is null ? theme : ElementTheme.Default, "en", Path.Combine(folder, name));
                     report.Add($"PASS {name} {size}");
                 }
                 catch (Exception failure)
@@ -41,14 +44,14 @@ internal static class Screenshots
                 }
             }
         }
-        foreach (var language in new[] { "de", "fr", "it" })
+        foreach (var language in system is "dark" ? [] : new[] { "de", "fr", "it" })
         {
             foreach (var screen in new[] { "remote", "devices", "account", "settings", "session", "consent" })
             {
                 var name = $"{screen}-light-{language}.png";
                 try
                 {
-                    var size = await Shoot(screen, ElementTheme.Light, language, Path.Combine(folder, name));
+                    var size = await Shoot(screen, system is null ? ElementTheme.Light : ElementTheme.Default, language, Path.Combine(folder, name));
                     report.Add($"PASS {name} {size}");
                 }
                 catch (Exception failure)
@@ -95,6 +98,7 @@ internal static class Screenshots
                 close = main.CloseForQuit;
                 break;
         }
+        Ui.FollowTheme(window);
         window.Activate();
         await Task.Delay(900);
         if (window is MainWindow shown)

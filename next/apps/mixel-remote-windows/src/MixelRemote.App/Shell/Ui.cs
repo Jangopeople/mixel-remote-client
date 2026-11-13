@@ -43,6 +43,22 @@ internal static class Ui
         }
     }
 
+    /// <summary>The window's title bar follows the content's theme (light or dark like Windows).</summary>
+    public static void FollowTheme(Window window)
+    {
+        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(window);
+        void Apply()
+        {
+            if (window.Content is FrameworkElement root) Native.DarkTitleBar(hwnd, root.ActualTheme == ElementTheme.Dark);
+        }
+        if (window.Content is FrameworkElement content)
+        {
+            content.ActualThemeChanged += (sender, args) => Apply();
+            content.Loaded += (sender, args) => Apply();
+        }
+        Apply();
+    }
+
     public static Style? Style(string key) => Application.Current.Resources.TryGetValue(key, out var value) ? value as Style : null;
 
     public static Brush Secondary => Brush("TextFillColorSecondaryBrush");

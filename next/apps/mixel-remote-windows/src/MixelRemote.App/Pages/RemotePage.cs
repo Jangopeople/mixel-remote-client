@@ -50,8 +50,8 @@ internal sealed class RemotePage : PageView
 
     private Border ControlCard()
     {
-        var partner = Keep("partner", () => new TextBox { PlaceholderText = "123 456 789", MaxWidth = 260, HorizontalAlignment = HorizontalAlignment.Left, FontSize = 18 });
-        var password = Keep("password", () => new PasswordBox { MaxWidth = 260, HorizontalAlignment = HorizontalAlignment.Left });
+        var partner = Keep("partner", () => new TextBox { PlaceholderText = "123 456 789", Width = 260, HorizontalAlignment = HorizontalAlignment.Left, FontSize = 18 });
+        var password = Keep("password", () => new PasswordBox { Width = 260, HorizontalAlignment = HorizontalAlignment.Left });
         password.IsEnabled = !unattended;
         var ready = !App.Busy && App.SignedIn && Remote.Phase is "ready" or "offline" or "error";
         void Go()
@@ -131,7 +131,7 @@ internal sealed class RemotePage : PageView
 
     private Border PhoneCard()
     {
-        var phone = Keep("phone", () => new TextBox { PlaceholderText = "123 456 789", MaxWidth = 260, HorizontalAlignment = HorizontalAlignment.Left, FontSize = 18 });
+        var phone = Keep("phone", () => new TextBox { PlaceholderText = "123 456 789", Width = 260, HorizontalAlignment = HorizontalAlignment.Left, FontSize = 18 });
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(phone, "phone-id");
         return Ui.Card(
             Ui.CardTitle(L("Help someone on their phone"), "\uE8EA"),

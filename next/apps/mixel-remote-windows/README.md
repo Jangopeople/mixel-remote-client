@@ -26,7 +26,7 @@ panic cross the boundary. The Swift apps keep using UniFFI over the same `MixelE
   (`installer/mixel-remote.nsi`). The 0.1 app's own updater runs the installer with `/S` and starts `mixel-remote.exe`.
 - Device key and remembered sign-in: `%LOCALAPPDATA%\Mixel-Remote-Next-QA\` (user DPAPI), read by the same engine code.
 - Start with Windows: `HKCU\…\Run\Mixel Remote` → `"%LOCALAPPDATA%\Mixel Remote\mixel-remote.exe" --autostart`.
-- App data: `%LOCALAPPDATA%\ch.mixel.remote.desktop` (pending self-removal, `windows-app.json` preferences, log).
+- App data: `%LOCALAPPDATA%\ch.mixel.remote.next.qa` — the 0.1 app’s own data folder (its runtime identifier): pending self-removal, `windows-app.json` preferences, log; the 0.1 web view data stays there.
 - Settings 0.1 kept in its web view (language, unattended sharing, this computer's registration, Wake-on-LAN
   addresses, automatic updates, AI server) are imported once from its local storage (`LegacySettings`).
 - Always-on / sign-in screen service `MixelRemoteSignIn` (program `C:\Program Files\Mixel Remote Sign-in Screen\mixel-remote-signin.exe`):
@@ -37,6 +37,7 @@ panic cross the boundary. The Swift apps keep using UniFFI over the same `MixelE
 ```powershell
 # engine (release; LAB: --features qa-session into another target dir)
 $env:MIXEL_DESKTOP_SERVICE_CONFIG = "next\deployment\public-service-config.json"; $env:MIXEL_ENGINE_APP_VERSION = '2.0.0'
+$env:RUSTFLAGS = '-C target-feature=+crt-static'           # no Visual C++ runtime needed on the computers
 cargo build --locked --release -p mixel_core_capi          # mixel_core.dll + mixel-remote-helper.exe
 cargo test --locked --release -p mixel_core_capi -p mixel_core_ffi -p mixel_engine
 cargo clippy --locked --release -p mixel_core_capi -p mixel_core_ffi -p mixel_engine --all-targets -- -D warnings

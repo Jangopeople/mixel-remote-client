@@ -71,6 +71,8 @@ public sealed class StartOptions
     public bool Hidden { get; private init; }
     /// <summary>--screenshots &lt;folder&gt;: renders every screen with the demo engine in light and dark, then quits.</summary>
     public string? Screenshots { get; private init; }
+    /// <summary>--screenshots &lt;folder&gt; light|dark: only that theme, drawn as Windows is set (Mica, title bar).</summary>
+    public string? ScreenshotTheme { get; private init; }
     /// <summary>--demo &lt;screen&gt;: opens the app with the demo engine on one screen.</summary>
     public string? Demo { get; private init; }
     /// <summary>LAB builds: --live-session / --live-host &lt;qa-session.json&gt; &lt;suffix&gt; &lt;folder&gt; against the live service with a QA account.</summary>
@@ -89,6 +91,7 @@ public sealed class StartOptions
         {
             Hidden = args.Contains("--autostart"),
             Screenshots = Value("--screenshots"),
+            ScreenshotTheme = args.SkipWhile(arg => arg != "--screenshots").Skip(2).FirstOrDefault(arg => arg is "light" or "dark"),
             Demo = Value("--demo"),
             Lab = lab,
         };

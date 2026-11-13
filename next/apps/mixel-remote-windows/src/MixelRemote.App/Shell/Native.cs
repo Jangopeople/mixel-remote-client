@@ -168,6 +168,16 @@ internal static partial class Native
         public uint biClrImportant;
     }
 
+    [DllImport("dwmapi.dll")]
+    public static extern int DwmSetWindowAttribute(nint hwnd, int attribute, ref int value, int size);
+
+    /// <summary>A dark or light title bar for the window (DWMWA_USE_IMMERSIVE_DARK_MODE; 19 before Windows 10 20H1).</summary>
+    public static void DarkTitleBar(nint hwnd, bool dark)
+    {
+        var value = dark ? 1 : 0;
+        if (DwmSetWindowAttribute(hwnd, 20, ref value, sizeof(int)) != 0) DwmSetWindowAttribute(hwnd, 19, ref value, sizeof(int));
+    }
+
     [DllImport("gdi32.dll")]
     public static extern int GetDIBits(nint hdc, nint bitmap, uint start, uint lines, [Out] byte[] bits, ref BITMAPINFOHEADER info, uint usage);
 }

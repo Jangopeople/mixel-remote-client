@@ -35,6 +35,7 @@ internal sealed class SessionWindow
             if (Microsoft.UI.Composition.SystemBackdrops.MicaController.IsSupported()) window.SystemBackdrop = new MicaBackdrop();
             view = new SessionView(app, window);
             window.Content = view;
+            Ui.FollowTheme(window);
             window.Activated += (sender, args) =>
             {
                 if (args.WindowActivationState == WindowActivationState.Deactivated) view.Screen.ReleaseKeyboard();
@@ -130,7 +131,12 @@ internal sealed class SessionView : Grid
             if (change.PropertyName == nameof(SessionModel.Fps)) { if (detailLine is not null) detailLine.Text = Detail(); }
             else Rebuild();
         };
-        Translator.Shared.Changed += (_, _) => Rebuild();
+        Loaded += (_, _) =>
+        {
+            Translator.Shared.Changed -= OnLanguage;
+            Translator.Shared.Changed += OnLanguage;
+        };
+        Unloaded += (_, _) => Translator.Shared.Changed -= OnLanguage;
         // A print job of the other computer: the print jobs (Clipboard tool) open by themselves.
         app.Session.PrintJobArrived += (_, _) =>
         {
@@ -144,6 +150,8 @@ internal sealed class SessionView : Grid
 
     public RemoteScreen Screen { get; }
 
+    private void OnLanguage(object? sender, EventArgs change) => Rebuild();
+
     private void Rebuild()
     {
         if (pending) return;
@@ -156,6 +164,12 @@ internal sealed class SessionView : Grid
     }
 
     public void Render()
+    {
+        try { RenderNow(); }
+        catch (Exception failure) { MixelRemote.App.App.Log($"session window: {failure}"); }
+    }
+
+    private void RenderNow()
     {
         Ui.Theme = ActualTheme == ElementTheme.Default ? ElementTheme.Light : ActualTheme;
         toolbar.Background = Ui.Brush("LayerFillColorDefaultBrush");
@@ -220,7 +234,7 @@ internal sealed class SessionView : Grid
         }
         void Tool(string glyph, string name, Action run, bool enabled = true) => actions.Children.Add(Ui.IconButton(glyph, name, run, enabled && !busy));
         Toggle("privacy", "\uE7B3", L("Privacy screen"), session.Privacy, session.TogglePrivacy);
-        Toggle("block", "\uE765", L("Block input"), session.BlockInput, session.ToggleBlockInput);
+        Toggle("block", "\uE8F8", L("Block input"), session.BlockInput, session.ToggleBlockInput);
         Toggle("pointer", "\uE7C9", L("Show pointer"), session.PointerMode, session.TogglePointer);
         if (remote.Offers("lock")) Tool("\uE72E", L("Lock computer"), session.LockNow);
         Toggle("lockend", "\uE823", L("Lock when done"), session.LockWhenDone, session.ToggleLockWhenDone);

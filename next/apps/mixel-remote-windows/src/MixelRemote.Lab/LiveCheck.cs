@@ -53,7 +53,8 @@ public static class LiveCheck
                 case "check": await Checks(engine, args[2]); break;
                 case "providers": await Providers(engine); break;
                 case "technician":
-                    await Technician(engine, args[2], folder, args.Length > 5 && uint.TryParse(args[4], out var host) ? host : null, args.Length > 5 ? args[5] : null);
+                    await Technician(engine, args[2], folder, args.Length > 5 && uint.TryParse(args[4], out var host) ? host : null, args.Length > 5 ? args[5] : null,
+                        args.Length > 6 && args[6] == "unattended");
                     break;
                 default: print($"unknown mode {args[0]}"); return 2;
             }
@@ -223,7 +224,7 @@ public static class LiveCheck
     /// A real session from this computer (technician) to a lab computer: either one enrolled with the deploy
     /// link written to folder/deploy-command.txt, or the given Remote ID (a host that allows unattended access).
     /// </summary>
-    private static async Task Technician(NativeEngine engine, string suffix, string folder, uint? given, string? givenTenant)
+    private static async Task Technician(NativeEngine engine, string suffix, string folder, uint? given, string? givenTenant, bool givenUnattended = false)
     {
         Check("sign-in with the QA session", await SignIn(engine));
         string tenant = givenTenant ?? "", company = $"QA Windows {suffix}", device = "";
@@ -273,7 +274,7 @@ public static class LiveCheck
                 Check("lab computer enrolled with the deploy link and online", host > 0);
             }
             // A host given by ID asks its person (attended); a computer from the deploy link allows unattended access.
-            if (host > 0) await Session(engine, host, folder, unattended: given is null);
+            if (host > 0) await Session(engine, host, folder, unattended: given is null || givenUnattended);
             if (given is null && File.Exists(Path.Combine(folder, "keep-company"))) print("keep-company present: the QA company stays for the next step");
         }
         finally
@@ -334,12 +335,51 @@ public static class LiveCheck
         Check($"input applied on the lab computer ({posted}/12)", posted == 12);
         var chat = await Try(engine, "remote_chat_messages", ("session", session));
         print($"chat available: {chat.Error.Length == 0}");
+        if (!unattended) await Tools(engine, session, active["consent"]?.GetValue<string>() ?? "", folder);
         if (active["consent"]?.GetValue<string>() is { } consent)
         {
             var (_, stopError) = await Try(engine, "remote_stop_session", ("consent", consent));
             Check("end session", stopError.Length == 0, stopError);
         }
         Check("back to ready after the session", await Wait(engine, 20, status => Phase(status) == "ready") is not null);
+    }
+
+    /// <summary>Attended session tools the person allowed: chat, clipboard, a file, a recording.</summary>
+    private static async Task Tools(IEngine engine, string session, string consent, string folder)
+    {
+        var (_, chatError) = await Try(engine, "remote_chat_send", ("session", session), ("text", "QA hello from the technician"));
+        Check("chat message sent", chatError.Length == 0, chatError);
+        var (_, clipboardError) = await Try(engine, "remote_clipboard", ("session", session), ("push", false));
+        Check("remote clipboard read", clipboardError.Length == 0, clipboardError);
+        var file = Path.Combine(folder, "qa-transfer.bin");
+        await File.WriteAllBytesAsync(file, [.. Enumerable.Range(0, 300_000).Select(index => (byte)(index * 7))]);
+        var (_, sendError) = await Try(engine, "remote_file_send", ("consent", consent), ("path", file));
+        Check("file offered to the other computer", sendError.Length == 0, sendError);
+        var phase = "";
+        for (var round = 0; round < 60 && sendError.Length == 0; round++)
+        {
+            phase = (await Try(engine, "remote_file_status", ("consent", consent))).Value?["outgoing"]?["phase"]?.GetValue<string>() ?? "";
+            if (phase is "complete" or "failed" or "declined" or "cancelled") break;
+            await Task.Delay(1000);
+        }
+        Check($"file accepted and transferred ({phase})", phase == "complete");
+        var may = (await Try(engine, "remote_record_may_start", ("session", session))).Value?.GetValue<bool>() == true;
+        Check("recording allowed by the person", may);
+        if (may)
+        {
+            var video = Path.Combine(folder, "qa-recording.mp4");
+            var (_, startError) = await Try(engine, "remote_record_start", ("session", session), ("path", video));
+            for (var step = 0; step < 40; step++)
+            {
+                await engine.InputAsync(session, $$"""{"kind":"pointer","x":{{10000 + step * 1200}},"y":{{20000 + step * 600}}}""");
+                await engine.NextVideoAsync(session, false);
+                await Task.Delay(100);
+            }
+            var (_, stopError) = await Try(engine, "remote_record_stop", ("session", session));
+            await Task.Delay(3000);
+            var size = File.Exists(video) ? new FileInfo(video).Length : 0;
+            Check($"session recorded ({size} bytes)", startError.Length == 0 && stopError.Length == 0 && size > 1000, startError + stopError);
+        }
     }
 
     /// <summary>A 32-bit BMP of a picture (readable everywhere, no image library needed).</summary>

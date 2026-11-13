@@ -26,9 +26,9 @@ public static class LegacySettings
         "mixel.remote.macs.v1", "mixel.remote.autoupdate.v1", "mixel.remote.ai.v1",
     ];
 
-    /// <summary>The 0.1 app's local storage folder.</summary>
+    /// <summary>The 0.1 app's local storage (its data folder is named after its runtime identifier ch.mixel.remote.next.qa).</summary>
     public static string DefaultFolder(string localAppData) =>
-        Path.Combine(localAppData, "ch.mixel.remote.desktop", "EBWebView", "Default", "Local Storage", "leveldb");
+        Path.Combine(localAppData, "ch.mixel.remote.next.qa", "EBWebView", "Default", "Local Storage", "leveldb");
 
     /// <summary>Imports once; returns the keys taken over.</summary>
     public static IReadOnlyList<string> Import(string folder, IPreferences preferences)

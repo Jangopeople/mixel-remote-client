@@ -96,7 +96,7 @@ public static class DemoFixtures
             Phase = "active", Host = ThisComputer, Session = SessionId, Consent = ConsentId, Peer = 731_204_118, Received = 12,
             Control = true, Clipboard = true, Files = true, Recording = new RecordingView { Phase = "ready" }, Displays = 2,
             HostActions = actions ?? ["privacy", "block", "pointer", "lock", "lockend", "sas", "restart", "sound", "meet"],
-            PeerFeatures = ["join", "switch"], PrintJobs = [@"C:\Users\anna\AppData\Local\ch.mixel.remote.desktop\print\Remote print.pdf"],
+            PeerFeatures = ["join", "switch"], PrintJobs = [@"C:\Users\anna\AppData\Local\ch.mixel.remote.next.qa\print\Remote print.pdf"],
         });
         engine.ReplyValue("remote_chat_messages", new List<ChatMessage>
         {

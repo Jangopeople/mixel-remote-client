@@ -23,12 +23,20 @@ internal abstract class PageView : Grid
         App = app;
         Watch(app);
         Watch(app.Session);
-        Translator.Shared.Changed += (_, _) => Rebuild();
         ActualThemeChanged += (_, _) => Rebuild();
-        Loaded += (_, _) => Rebuild();
+        // Language changes reach only pages on screen (a closed window's pages must not be touched).
+        Loaded += (_, _) =>
+        {
+            Translator.Shared.Changed -= OnLanguage;
+            Translator.Shared.Changed += OnLanguage;
+            Rebuild();
+        };
+        Unloaded += (_, _) => Translator.Shared.Changed -= OnLanguage;
     }
 
     protected AppModel App { get; }
+
+    private void OnLanguage(object? sender, EventArgs change) => Rebuild();
 
     protected void Watch(INotifyPropertyChanged model)
     {
@@ -61,11 +69,22 @@ internal abstract class PageView : Grid
     /// <summary>Builds now (screenshots, first show).</summary>
     public void Render()
     {
-        Ui.Theme = ActualTheme == ElementTheme.Default ? ElementTheme.Light : ActualTheme;
-        var focused = XamlRoot is null ? null : FocusManager.GetFocusedElement(XamlRoot) as Control;
-        Children.Clear();
-        Children.Add(Build());
-        if (focused is not null && kept.ContainsValue(focused)) focused.Focus(FocusState.Programmatic);
+        try
+        {
+            Ui.Theme = ActualTheme == ElementTheme.Default ? ElementTheme.Light : ActualTheme;
+            var focused = XamlRoot is null ? null : FocusManager.GetFocusedElement(XamlRoot) as Control;
+            // Kept inputs leave the old screen first (while it is still in the tree), so they can join the new one.
+            foreach (UIElement child in Children) Release(child);
+            foreach (var element in kept.Values) Detach(element);
+            Children.Clear();
+            Children.Add(Build());
+            if (focused is not null && kept.ContainsValue(focused)) focused.Focus(FocusState.Programmatic);
+        }
+        catch (Exception failure)
+        {
+            // A screen that cannot be drawn must not end the app (and with it this computer's reachability).
+            MixelRemote.App.App.Log($"{GetType().Name}: {failure}");
+        }
     }
 
     protected abstract UIElement Build();
@@ -80,10 +99,43 @@ internal abstract class PageView : Grid
             box = create();
             kept[name] = box;
         }
-        if (box.Parent is Panel panel) panel.Children.Remove(box);
-        else if (box.Parent is Border border) border.Child = null;
-        else if (box.Parent is ContentControl control) control.Content = null;
+        Detach(box);
         return box;
+    }
+
+    /// <summary>Takes the kept inputs out of the old screen wherever they are (panels, borders, scroll and content controls).</summary>
+    private void Release(UIElement node)
+    {
+        switch (node)
+        {
+            case Panel panel:
+                for (var index = panel.Children.Count - 1; index >= 0; index--)
+                {
+                    if (panel.Children[index] is FrameworkElement child && kept.ContainsValue(child)) panel.Children.RemoveAt(index);
+                    else Release(panel.Children[index]);
+                }
+                break;
+            case Border { Child: { } inner } border:
+                if (inner is FrameworkElement element && kept.ContainsValue(element)) border.Child = null;
+                else Release(inner);
+                break;
+            case ContentControl { Content: UIElement content } control:
+                if (content is FrameworkElement element2 && kept.ContainsValue(element2)) control.Content = null;
+                else Release(content);
+                break;
+        }
+    }
+
+    private static void Detach(FrameworkElement element)
+    {
+        var parent = element.Parent ?? Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(element);
+        switch (parent)
+        {
+            case Panel panel: panel.Children.Remove(element); break;
+            case Border border: border.Child = null; break;
+            case ContentControl control: control.Content = null; break;
+            case ContentPresenter presenter: presenter.Content = null; break;
+        }
     }
 
     /// <summary>A scrolling page with a title, content cards and the page's width limit.</summary>

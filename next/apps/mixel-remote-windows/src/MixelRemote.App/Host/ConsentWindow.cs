@@ -36,6 +36,7 @@ internal sealed class ConsentWindow
             if (Microsoft.UI.Composition.SystemBackdrops.MicaController.IsSupported()) window.SystemBackdrop = new MicaBackdrop();
             view = new ConsentView(app);
             window.Content = view;
+            Ui.FollowTheme(window);
             window.AppWindow.Resize(new Windows.Graphics.SizeInt32(560, 660));
             var area = DisplayArea.GetFromWindowId(window.AppWindow.Id, DisplayAreaFallback.Primary).WorkArea;
             window.AppWindow.Move(new Windows.Graphics.PointInt32(area.X + (area.Width - 560) / 2, area.Y + (area.Height - 660) / 2));
