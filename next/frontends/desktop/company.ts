@@ -17,6 +17,7 @@
   const panel = element<HTMLElement>('company-panel'), nameLine = element<HTMLElement>('company-name'), roleLine = element<HTMLElement>('company-role');
   const planLine = element<HTMLElement>('company-plan'), statusLine = element<HTMLElement>('company-status'), usage = element<HTMLElement>('company-usage');
   const membersBox = element<HTMLElement>('company-members-section'), members = element<HTMLUListElement>('company-members'), invites = element<HTMLUListElement>('company-invites');
+  const rename = element<HTMLButtonElement>('company-rename');
   const invitesTitle = element<HTMLElement>('company-invites-title'), invite = element<HTMLButtonElement>('company-invite'), membersStatus = element<HTMLElement>('company-members-status'), problem = element<HTMLElement>('company-error');
   const signup = element<HTMLFormElement>('company-signup'), signupName = element<HTMLInputElement>('company-signup-name'), signupSubmit = element<HTMLButtonElement>('company-signup-submit'), signupStatus = element<HTMLElement>('company-signup-status');
   const PLAN: Record<string, string> = {personal: 'Personal', solo: 'Solo', team: 'Team', business: 'Business', enterprise: 'Enterprise'};
@@ -90,6 +91,9 @@
     const listing = ['owner', 'admin', 'technician'].includes(view.role);
     membersBox.hidden = false;
     invite.hidden = !['owner', 'admin'].includes(view.role);
+    rename.hidden = !['owner', 'admin'].includes(view.role);
+    rename.disabled = busy || !writable(view.status);
+    rename.title = !writable(view.status) ? 'This company is read-only' : '';
     invite.disabled = busy || !writable(view.status);
     invite.title = !writable(view.status) ? 'This company is read-only' : '';
     members.replaceChildren();
@@ -199,6 +203,22 @@
       },
     });
   }
+  rename.addEventListener('click', () => {
+    if (!tenant || !overview) return;
+    const target = tenant;
+    dialog().open({
+      title: 'Rename the company', text: 'The new name is shown to everyone in the company and on the Mixel Remote portal.',
+      fields: [{id: 'name', kind: 'text', label: 'Company name', value: overview.name, maxLength: 80, required: true}],
+      confirm: 'Rename',
+      run: async values => {
+        const name = (values.name ?? '').trim();
+        if (name.length < 2 || name.length > 80) throw new Error(tr('Enter a company name of 2 to 80 characters.'));
+        const saved = await invoke<string>('saas_rename_tenant', {tenant: target.tenant_id, name});
+        membersStatus.textContent = `Company renamed to ${saved}.`;
+        await load();
+      },
+    });
+  });
   invite.addEventListener('click', () => {
     if (!tenant || !overview) return;
     const target = tenant, room = technicianRoom();

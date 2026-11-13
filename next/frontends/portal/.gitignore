@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.wrangler/
+test-results/
+playwright-report/
+qa-output/
+.env.e2e
+.env*.local

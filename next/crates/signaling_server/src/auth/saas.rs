@@ -57,6 +57,17 @@ pub struct SaasDevice {
     pub revoked: Option<bool>,
     pub added_via: Option<String>,
 }
+/// Online status of a tenant device as the connection broker last reported it (SQL 025):
+/// `online`, `offline` (with `last_seen`), `never`, `unknown` (broker silent) or `not_enrolled`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaasDevicePresence {
+    pub device_id: Uuid,
+    pub connection_id: Option<u32>,
+    pub status: String,
+    pub last_seen: Option<String>,
+    pub online_since: Option<String>,
+    pub checked_at: Option<String>,
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SaasGroup {
     pub group_id: Uuid,
@@ -266,6 +277,17 @@ impl IsmAuth {
         }
         self.saas_call(Some(token), "remote_saas_devices", json!({"tenant": tenant, "in_group": group, "search": search}))
             .await
+    }
+    pub async fn saas_device_presence(&self, token: &str, tenant: Uuid) -> Result<Vec<SaasDevicePresence>, SaasError> {
+        self.saas_call(Some(token), "remote_saas_device_presence", json!({"tenant": tenant})).await
+    }
+    /// Owners and admins: rename the company (the slug stays).
+    pub async fn saas_rename_tenant(&self, token: &str, tenant: Uuid, name: &str) -> Result<String, SaasError> {
+        let name = name.trim();
+        if !(2..=80).contains(&name.chars().count()) || name.chars().any(char::is_control) {
+            return Err(SaasError::invalid("Enter a company name of 2 to 80 characters"));
+        }
+        self.saas_call(Some(token), "remote_saas_rename_tenant", json!({"tenant": tenant, "company_name": name})).await
     }
     pub async fn saas_rename_device(&self, token: &str, tenant: Uuid, device: Uuid, name: &str) -> Result<String, SaasError> {
         let name = clean_text(name, 60)?;

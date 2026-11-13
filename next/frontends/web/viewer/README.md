@@ -5,7 +5,9 @@ Live at `https://ism.mixel.ch/remote-next/` (served by the ISM web app as a stat
 
 ## What it does
 - Uses the ISM sign-in already in the browser (team accounts need the second step; the viewer asks for
-  the authenticator code if it is missing). Personal accounts work, too.
+  the authenticator code if it is missing). Personal accounts work, too, and so do Mixel Remote company accounts
+  (remote.mixel.ch): owners, admins and technicians register the browser in their company and reach the devices the
+  database allows; members see their devices but cannot start sessions; a company's required 2-step login is asked.
 - Registers the browser once as a device with its own Remote ID (key kept in the browser's storage).
 - Lists the account's computers with online state; one tap connects. Remote ID, one-time password and
   unattended access as in the desktop app.

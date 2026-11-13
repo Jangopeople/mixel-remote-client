@@ -2118,11 +2118,12 @@ async fn colleague_joins_and_sides_switch_with_the_support_policy_on_a_real_brok
     const HOST: u32 = 123_456_789;
     const TECHNICIAN: u32 = 234_567_890;
     const COLLEAGUE: u32 = 345_678_901;
-    let asked: Arc<Mutex<Vec<(String, String)>>> = Arc::default();
+    type Asked = Arc<Mutex<Vec<(String, String)>>>;
+    let asked: Asked = Arc::default();
     let policy = Router::new()
         .route(
             "/api/internal/remote/authorize",
-            post(|State(asked): State<Arc<Mutex<Vec<(String, String)>>>>, Json(pair): Json<serde_json::Value>| async move {
+            post(|State(asked): State<Asked>, Json(pair): Json<serde_json::Value>| async move {
                 let controller = pair["controller"]["profile"].as_str().unwrap_or_default().to_owned();
                 let host = pair["host"]["device"].as_str().unwrap_or_default().to_owned();
                 asked.lock().unwrap().push((controller.clone(), host.clone()));

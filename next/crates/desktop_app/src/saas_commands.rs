@@ -3,7 +3,7 @@
 //! and the offline-first self-removal of this computer signed with its own device key.
 use crate::{account_auth, device_identity, main_window, remote_session};
 use signaling_server::auth::saas::{
-    SaasDeployLink, SaasDevice, SaasEnrollment, SaasError, SaasGroup, SaasInvite, SaasMember,
+    SaasDeployLink, SaasDevice, SaasDevicePresence, SaasEnrollment, SaasError, SaasGroup, SaasInvite, SaasMember,
     SaasSignup, SaasTenant, SelfRemoval,
 };
 use std::{path::PathBuf, sync::Arc};
@@ -187,6 +187,20 @@ pub async fn saas_create_group(window: tauri::WebviewWindow, auth: Auth<'_>, ten
     main_window(&window)?;
     let credential = auth.credential(None).await?;
     credential.ism.saas_create_group(&credential.token, tenant, &name).await.map_err(message)
+}
+
+#[tauri::command]
+pub async fn saas_device_presence(window: tauri::WebviewWindow, auth: Auth<'_>, tenant: Uuid) -> Result<Vec<SaasDevicePresence>, String> {
+    main_window(&window)?;
+    let credential = auth.credential(None).await?;
+    credential.ism.saas_device_presence(&credential.token, tenant).await.map_err(message)
+}
+
+#[tauri::command]
+pub async fn saas_rename_tenant(window: tauri::WebviewWindow, auth: Auth<'_>, tenant: Uuid, name: String) -> Result<String, String> {
+    main_window(&window)?;
+    let credential = auth.credential(None).await?;
+    credential.ism.saas_rename_tenant(&credential.token, tenant, &name).await.map_err(message)
 }
 
 #[tauri::command]

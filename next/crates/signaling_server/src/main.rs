@@ -46,6 +46,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         listener.local_addr()?
     );
     let registry = state.registry.clone();
+    // Online / last-seen record for the Remote portal (optional; SQL 025).
+    if let Some(reporter) = signaling_server::presence::PresenceReporter::from_env()? {
+        reporter.spawn(registry.clone());
+        eprintln!("presence reporting every {} s", signaling_server::presence::INTERVAL.as_secs());
+    }
     axum::serve(listener, router(state))
         .with_graceful_shutdown(async move {
             let _ = tokio::signal::ctrl_c().await;

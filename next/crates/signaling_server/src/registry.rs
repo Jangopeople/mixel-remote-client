@@ -127,6 +127,19 @@ pub(crate) struct PolicyCheck {
 }
 
 impl Registry {
+    /// Connection IDs of the enrolled devices connected right now (a verified device ticket whose
+    /// account sign-in has not expired). Used for the "online / last seen" record; never sent to peers.
+    pub fn online_devices(&self, unix: u64) -> Vec<u32> {
+        let mut online: Vec<u32> = self
+            .peers
+            .iter()
+            .filter(|(_, peer)| peer.identity.is_some() && peer.principal.expires_at > unix)
+            .map(|(id, _)| *id)
+            .collect();
+        online.sort_unstable();
+        online
+    }
+
     pub(crate) fn device_binding(
         &self,
         id: u32,
@@ -1191,6 +1204,20 @@ mod rotation_tests {
         .unwrap();
         registry.bind_identity(id, generation, ticket).unwrap();
         (generation, rx)
+    }
+    #[test]
+    fn online_devices_lists_only_verified_unexpired_devices() {
+        let mut registry = Registry::default();
+        peer(&mut registry, 234_567_890, 11);
+        peer(&mut registry, 123_456_789, 10);
+        // A connection without a device ticket (not yet proven) is not counted.
+        let (tx, _rx) = mpsc::channel(4);
+        let (stop, _) = watch::channel(false);
+        let principal = Principal { user: Uuid::from_u128(12), tenant: None, staff: false, expires_at: 900 };
+        registry.register_with_id(345_678_901, principal, tx, stop).unwrap();
+        assert_eq!(registry.online_devices(100), vec![123_456_789, 234_567_890]);
+        // Expired sign-ins are not online.
+        assert!(registry.online_devices(900).is_empty());
     }
     #[test]
     fn a_device_only_host_gets_attended_requests_only_after_it_opts_in() {

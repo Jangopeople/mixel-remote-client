@@ -27,6 +27,30 @@
   element<HTMLButtonElement>('devices-reconnect').addEventListener('click',()=>{status.textContent='Reconnecting this computer…';document.dispatchEvent(new CustomEvent('mixel-reconnect-now'));});
   // Devices whose presence has been asked at least once while connected: only those can be called Offline.
   const checkedOnce=new Set<number>();
+  // Companies: what the connection service last recorded per device (online, or offline since when).
+  type ServerPresence={device_id:string;status:string;last_seen:string|null};
+  let serverPresence=new Map<number,ServerPresence&{connection_id:number}>();
+  function seenAgo(iso:string|null):string{
+    const at=iso?Date.parse(iso):NaN;
+    if(!Number.isFinite(at))return '';
+    const minutes=Math.max(0,Math.round((Date.now()-at)/60000));
+    if(minutes<2)return 'Last seen just now';
+    if(minutes<60)return `Last seen ${minutes} minutes ago`;
+    const hours=Math.round(minutes/60);
+    if(hours<24)return hours===1?'Last seen 1 hour ago':`Last seen ${hours} hours ago`;
+    const days=Math.round(hours/24);
+    return days===1?'Last seen yesterday':`Last seen ${days} days ago`;
+  }
+  async function loadServerPresence():Promise<void>{
+    const tenant=company.tenant?.tenant_id;
+    if(!tenant || !authenticated)return;
+    try{
+      const rows=await invoke<(ServerPresence&{connection_id:number|null})[]>('saas_device_presence',{tenant});
+      if(company.tenant?.tenant_id!==tenant || !Array.isArray(rows))return;
+      serverPresence=new Map(rows.filter(row=>Number.isInteger(row.connection_id)).map(row=>[row.connection_id!,{...row,connection_id:row.connection_id!}]));
+      render();
+    }catch{/* the live state from the connection still shows */}
+  }
   let accountKey='', authenticated=false, busy=false, version=0, accountVersion=0, remoteVersion=0, currentSearch='', remote:Remote={phase:'offline',host:null};
   let entries:Device[]=[], nextCursor:number|null=null, cursors:(number|null)[]=[null], index=0;
   // Company mode: the whole (filtered) list is loaded at once and shown 50 per page.
@@ -123,12 +147,16 @@
       const live=self?connected:(remote.online??[]).includes(device.connection_id);
       // online | offline | unknown (this computer is not connected, so nobody can tell yet) | self
       const known=connected && checkedOnce.has(device.connection_id);
-      const kind=self?'self':!connected?'unknown':live?'online':known?'offline':'checking';
+      // Live presence from this computer's connection first; for companies, the connection service's record when this computer cannot ask.
+      const recorded=saas?serverPresence.get(device.connection_id):undefined;
+      const fallback=!connected && recorded && ['online','offline','never'].includes(recorded.status);
+      const kind=self?'self':!connected?(fallback?(recorded!.status==='online'?'online':'offline'):'unknown'):live?'online':known?'offline':'checking';
       presence.dataset.state=kind==='self'&&!connected?'unknown':kind;
       presence.textContent=kind==='self'?(connected?'This computer':'This computer · not connected'):kind==='online'?'Online':kind==='offline'?'Offline':kind==='checking'?'Checking…':'Status unknown';
       let why='';
+      const seen=kind==='offline'&&recorded&&recorded.status!=='online'?seenAgo(recorded.last_seen):'';
       if(kind==='self')why=connected?'You are using this device.':'Reconnecting automatically.';
-      else if(kind==='offline')why='Turned off, asleep or without internet. It must be online to connect.';
+      else if(kind==='offline')why=(seen?`${seen}. `:'')+'Turned off, asleep or without internet. It must be online to connect.';
       else if(kind==='unknown')why='Shown once this computer is connected.';
       else if(kind==='online')why='Ready. The person there accepts your request, unless unattended access is set up.';
       reason.textContent=why;
@@ -185,6 +213,7 @@
       if(mine)remember(mine);
       showPage(0);
       checkPresence();
+      void loadServerPresence();
     }catch(error){if(version===request)status.textContent=String(error);}
     finally{if(version===request){busy=false;render();}}
   }
@@ -313,6 +342,7 @@
     }).catch(()=>{});
   }
   window.setInterval(()=>{if(!document.hidden)checkPresence();},15000);
+  window.setInterval(()=>{if(!document.hidden && company.tenant)void loadServerPresence();},60000);
   function accountChanged(value:Account):void{
     const key=value.phase==='authenticated' && value.account?JSON.stringify(value.account):'';
     if (key===accountKey) return;

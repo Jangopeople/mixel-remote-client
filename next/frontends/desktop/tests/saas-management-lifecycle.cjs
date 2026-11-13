@@ -149,6 +149,43 @@ test('Rename and Move to group send the device, the new name and the chosen or n
   assert.deepEqual(h.called('saas_move_device').at(-1).args,{tenant:TENANT,device:'d-office',group:'g-new'});
 });
 
+test('owners and admins rename the company; technicians and members cannot',async()=>{
+  const h=harness({answers:{saas_rename_tenant:'Acme Holding AG'}});await h.signedIn();
+  const button=h.elements['company-rename'];
+  assert.equal(button.hidden,false);
+  button.listeners.click();
+  assert.equal(h.field('name').value,'Acme AG');
+  h.field('name').value='  Acme Holding AG ';await h.confirmDialog();
+  assert.deepEqual(h.called('saas_rename_tenant').map(c=>c.args),[{tenant:TENANT,name:'Acme Holding AG'}]);
+  assert.equal(h.elements['company-members-status'].textContent,'Company renamed to Acme Holding AG.');
+  assert.ok(h.called('saas_tenant_overview').length>=2,'the company reloads');
+  for(const role of ['technician','member']){
+    const other=harness({role,me:role==='technician'?TECH:MEMBER});await other.signedIn();
+    assert.equal(other.elements['company-rename'].hidden,true,role);
+  }
+  const readOnly=harness({info:overview({status:'read_only'})});await readOnly.signedIn();
+  assert.equal(readOnly.elements['company-rename'].disabled,true);
+});
+
+test('company devices show the connection service record (online, or offline with last seen) while this computer is not connected',async()=>{
+  const seen=new Date(Date.now()-3*3600*1000).toISOString();
+  const h=harness({answers:{saas_device_presence:[
+    {device_id:'d-office',connection_id:196516669,status:'online',last_seen:new Date().toISOString(),online_since:null,checked_at:null},
+    {device_id:'d-mac',connection_id:440207203,status:'offline',last_seen:seen,online_since:null,checked_at:null}]}});
+  await h.signedIn();await settle();
+  assert.deepEqual(h.called('saas_device_presence').at(-1).args,{tenant:TENANT});
+  const rows=h.rows();
+  const reason=name=>h.elements['devices-list'].children.find(li=>li.children[0].children[0].textContent===name).children[1].children[1].textContent;
+  assert.equal(rows.find(r=>r.name==='Office PC').status,'Online');
+  assert.equal(rows.find(r=>r.name==='MacBook').status,'Offline');
+  assert.equal(reason('MacBook'),'Last seen 3 hours ago. Turned off, asleep or without internet. It must be online to connect.');
+  assert.equal(rows.find(r=>r.name==='MacBook').connect.disabled,true,'an offline device cannot be connected');
+  // Without a record (or "unknown": the service did not report), the app says so instead of guessing.
+  const quiet=harness({answers:{saas_device_presence:[{device_id:'d-office',connection_id:196516669,status:'unknown',last_seen:null,online_since:null,checked_at:null}]}});
+  await quiet.signedIn();await settle();
+  assert.equal(quiet.rows().find(r=>r.name==='Office PC').status,'Status unknown');
+});
+
 test('roles: a member sees devices but no management; a technician manages devices but cannot deploy or invite',async()=>{
   const m=harness({me:MEMBER,role:'member'});await m.signedIn();
   assert.equal(m.rows().length,2);
@@ -356,7 +393,9 @@ test('every new text has German, French and Italian translations',()=>{
     'Registered as Front desk · Connection ID 555 666 777','No connection to Mixel Remote right now. This computer will be removed as soon as it is online.','This computer was removed from Mixel Remote. It is no longer set up; add it again in Devices to use it.',
     'Remove this computer from Mixel Remote?','This computer is removed from Acme AG at once: its registration is revoked, running sessions end and nobody can connect to it any more. Without internet, the removal is saved and sent as soon as this computer is online. Afterwards this computer is no longer set up; you can add it again.',
     'Technician · valid until 20.11.2026','Role of Tom Tech changed to Administrator.','Invitation created for new@acme.test.','Your company is ready. Your free 14-day Business trial has started: add this computer in Devices.',
-    'Device limit of your plan reached','Technician limit of your plan reached','This Mixel Remote account is read-only','Not allowed for this company','This computer is being removed from Mixel Remote. It is removed as soon as it is online.'])texts.add(text);
+    'Device limit of your plan reached','Technician limit of your plan reached','Rename the company','Company renamed to Acme Holding AG.',
+    'Last seen 3 hours ago. Turned off, asleep or without internet. It must be online to connect.','Last seen 25 minutes ago. Turned off, asleep or without internet. It must be online to connect.','Last seen 4 days ago. Turned off, asleep or without internet. It must be online to connect.','Last seen yesterday. Turned off, asleep or without internet. It must be online to connect.','Last seen just now. Turned off, asleep or without internet. It must be online to connect.',
+    'The new name is shown to everyone in the company and on the Mixel Remote portal.','Enter a company name of 2 to 80 characters.','This Mixel Remote account is read-only','Not allowed for this company','This computer is being removed from Mixel Remote. It is removed as soon as it is online.'])texts.add(text);
   const missing=[...texts].filter(text=>!['de','fr','it'].every(language=>translated(language,text)));
   assert.deepEqual(missing,[]);
 });

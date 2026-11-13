@@ -34,8 +34,9 @@
     <button id="register-button" class="primary" type="button" data-t>Register</button>
   </section>
   <section id="connect" class="card" hidden>
-    <h2 data-t>Connect to a computer</h2>
+    <p id="member-note" class="hint" hidden data-t>You are a member of your company: you see your devices here, but only owners, admins and technicians can start sessions. Ask an admin of your company to make you a technician.</p>
     <form id="connect-form">
+    <h2 data-t>Connect to a computer</h2>
       <label><span data-t>Remote ID</span><input id="remote-id" inputmode="numeric" autocomplete="off" maxlength="11" placeholder="123 456 789"></label>
       <label><span data-t>One-time password, if provided</span><input id="remote-code" autocomplete="off" autocapitalize="characters" maxlength="14"></label>
       <label class="check"><input id="remote-unattended" type="checkbox"><span data-t>Use unattended access if granted</span></label>
@@ -45,7 +46,7 @@
     <input id="search" type="search" autocomplete="off" placeholder="Search" data-t-placeholder>
     <div id="devices"></div>
     <p id="no-devices" class="hint" hidden data-t>No computers found.</p>
-    <p class="hint"><span id="own-label" data-t>This browser:</span> <span id="own-id"></span></p>
+    <p id="own-line" class="hint"><span id="own-label" data-t>This browser:</span> <span id="own-id"></span></p>
   </section>
   <section id="support" class="card" hidden>
     <h2 data-t>Help someone on their phone</h2>

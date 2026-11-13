@@ -226,6 +226,9 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Keyboard and mouse control are unavailable in this desktop session.": "Tastatur- und Maussteuerung sind in dieser Desktopsitzung nicht verfügbar.",
 "Keyboard and mouse control will be allowed for this session.": "Tastatur- und Maussteuerung werden für diese Sitzung erlaubt.",
 "Language": "Sprache",
+"Last seen 1 hour ago": "Zuletzt gesehen vor 1 Stunde",
+"Last seen just now": "Zuletzt gesehen: gerade eben",
+"Last seen yesterday": "Zuletzt gesehen gestern",
 "Leave company": "Firma verlassen",
 "Leave empty to use the group chosen above.": "Leer lassen, um die oben gewählte Gruppe zu verwenden.",
 "Leave this company?": "Diese Firma verlassen?",
@@ -358,7 +361,10 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Remove this computer from Mixel Remote": "Diesen Computer aus Mixel Remote entfernen",
 "Remove this computer from Mixel Remote?": "Diesen Computer aus Mixel Remote entfernen?",
 "Remove…": "Entfernen…",
+"Rename": "Umbenennen",
+"Rename company": "Firma umbenennen",
 "Rename device": "Gerät umbenennen",
+"Rename the company": "Firma umbenennen",
 "Rename…": "Umbenennen…",
 "Renew connection": "Verbindung erneuern",
 "Restart computer": "Computer neu starten",
@@ -472,6 +478,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "The copied files are too large; use the Files tab for folders, many files or more than 32 MB": "Die kopierten Dateien sind zu gross; für Ordner, viele Dateien oder mehr als 32 MB den Reiter Dateien verwenden",
 "The invitation could not be sent": "Die Einladung konnte nicht gesendet werden",
 "The meeting could not be started": "Das Meeting konnte nicht gestartet werden",
+"The new name is shown to everyone in the company and on the Mixel Remote portal.": "Der neue Name wird allen in der Firma und im Mixel-Remote-Portal angezeigt.",
 "The note was not saved: check the ticket number": "Die Notiz wurde nicht gespeichert: Ticketnummer prüfen",
 "The other person can see the display you approved. End the session at any time.": "Die andere Person sieht den Bildschirm, den Sie freigegeben haben. Beenden Sie die Sitzung jederzeit.",
 "The other side asks to switch sides: they would see this screen. Accept or Reject": "Die andere Seite möchte die Seiten wechseln und würde diesen Bildschirm sehen. Annehmen oder ablehnen",
@@ -975,6 +982,34 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 [
 "^Always-on access is installed \\(Remote ID ([\\d ]+)\\), but this computer’s sign-in screen uses Wayland, which cannot be shared\\. Switch the sign-in screen to Xorg \\(GDM: WaylandEnable=false\\) to use it\\.$",
 "Der Zugriff ist installiert (Remote-ID $1), aber der Anmeldebildschirm dieses Computers verwendet Wayland und kann nicht geteilt werden. Stellen Sie den Anmeldebildschirm auf Xorg um (GDM: WaylandEnable=false), um ihn zu nutzen."
+],
+[
+"^Company renamed to (.+)\\.$",
+"Firma umbenannt in $1."
+],
+[
+"^Last seen (\\d+) minutes ago\\. Turned off, asleep or without internet\\. It must be online to connect\\.$",
+"Zuletzt gesehen vor $1 Minuten. Ausgeschaltet, im Ruhezustand oder ohne Internet. Es muss online sein, um sich zu verbinden."
+],
+[
+"^Last seen (\\d+) hours ago\\. Turned off, asleep or without internet\\. It must be online to connect\\.$",
+"Zuletzt gesehen vor $1 Stunden. Ausgeschaltet, im Ruhezustand oder ohne Internet. Es muss online sein, um sich zu verbinden."
+],
+[
+"^Last seen (\\d+) days ago\\. Turned off, asleep or without internet\\. It must be online to connect\\.$",
+"Zuletzt gesehen vor $1 Tagen. Ausgeschaltet, im Ruhezustand oder ohne Internet. Es muss online sein, um sich zu verbinden."
+],
+[
+"^Last seen just now\\. Turned off, asleep or without internet\\. It must be online to connect\\.$",
+"Zuletzt gesehen: gerade eben. Ausgeschaltet, im Ruhezustand oder ohne Internet. Es muss online sein, um sich zu verbinden."
+],
+[
+"^Last seen 1 hour ago\\. Turned off, asleep or without internet\\. It must be online to connect\\.$",
+"Zuletzt gesehen vor 1 Stunde. Ausgeschaltet, im Ruhezustand oder ohne Internet. Es muss online sein, um sich zu verbinden."
+],
+[
+"^Last seen yesterday\\. Turned off, asleep or without internet\\. It must be online to connect\\.$",
+"Zuletzt gesehen gestern. Ausgeschaltet, im Ruhezustand oder ohne Internet. Es muss online sein, um sich zu verbinden."
 ]
 ]
 },
@@ -1203,6 +1238,9 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Keyboard and mouse control are unavailable in this desktop session.": "Le contrôle du clavier et de la souris n’est pas disponible dans cette session.",
 "Keyboard and mouse control will be allowed for this session.": "Le contrôle du clavier et de la souris sera autorisé pour cette session.",
 "Language": "Langue",
+"Last seen 1 hour ago": "Vu pour la dernière fois il y a 1 heure",
+"Last seen just now": "Vu pour la dernière fois : à l’instant",
+"Last seen yesterday": "Vu pour la dernière fois hier",
 "Leave company": "Quitter l’entreprise",
 "Leave empty to use the group chosen above.": "Laissez vide pour utiliser le groupe choisi ci-dessus.",
 "Leave this company?": "Quitter cette entreprise ?",
@@ -1335,7 +1373,10 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Remove this computer from Mixel Remote": "Retirer cet ordinateur de Mixel Remote",
 "Remove this computer from Mixel Remote?": "Retirer cet ordinateur de Mixel Remote ?",
 "Remove…": "Retirer…",
+"Rename": "Renommer",
+"Rename company": "Renommer l’entreprise",
 "Rename device": "Renommer l’appareil",
+"Rename the company": "Renommer l’entreprise",
 "Rename…": "Renommer…",
 "Renew connection": "Renouveler la connexion",
 "Restart computer": "Redémarrer l’ordinateur",
@@ -1449,6 +1490,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "The copied files are too large; use the Files tab for folders, many files or more than 32 MB": "Les fichiers copiés sont trop volumineux ; utilisez l’onglet Fichiers pour les dossiers, de nombreux fichiers ou plus de 32 Mo",
 "The invitation could not be sent": "L’invitation n’a pas pu être envoyée",
 "The meeting could not be started": "La réunion n’a pas pu être lancée",
+"The new name is shown to everyone in the company and on the Mixel Remote portal.": "Le nouveau nom est affiché à toute l’entreprise et sur le portail Mixel Remote.",
 "The note was not saved: check the ticket number": "La note n’a pas été enregistrée : vérifiez le numéro du ticket",
 "The other person can see the display you approved. End the session at any time.": "L’autre personne voit l’écran que vous avez approuvé. Terminez la session à tout moment.",
 "The other side asks to switch sides: they would see this screen. Accept or Reject": "L’autre côté demande d’inverser les rôles : il verrait cet écran. Accepter ou refuser",
@@ -1952,6 +1994,34 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 [
 "^Always-on access is installed \\(Remote ID ([\\d ]+)\\), but this computer’s sign-in screen uses Wayland, which cannot be shared\\. Switch the sign-in screen to Xorg \\(GDM: WaylandEnable=false\\) to use it\\.$",
 "L’accès permanent est installé (ID Remote $1), mais l’écran de connexion de cet ordinateur utilise Wayland et ne peut pas être partagé. Passez l’écran de connexion à Xorg (GDM : WaylandEnable=false) pour l’utiliser."
+],
+[
+"^Company renamed to (.+)\\.$",
+"Entreprise renommée en $1."
+],
+[
+"^Last seen (\\d+) minutes ago\\. Turned off, asleep or without internet\\. It must be online to connect\\.$",
+"Vu pour la dernière fois il y a $1 minutes. Éteint, en veille ou sans internet. Il doit être en ligne pour se connecter."
+],
+[
+"^Last seen (\\d+) hours ago\\. Turned off, asleep or without internet\\. It must be online to connect\\.$",
+"Vu pour la dernière fois il y a $1 heures. Éteint, en veille ou sans internet. Il doit être en ligne pour se connecter."
+],
+[
+"^Last seen (\\d+) days ago\\. Turned off, asleep or without internet\\. It must be online to connect\\.$",
+"Vu pour la dernière fois il y a $1 jours. Éteint, en veille ou sans internet. Il doit être en ligne pour se connecter."
+],
+[
+"^Last seen just now\\. Turned off, asleep or without internet\\. It must be online to connect\\.$",
+"Vu pour la dernière fois : à l’instant. Éteint, en veille ou sans internet. Il doit être en ligne pour se connecter."
+],
+[
+"^Last seen 1 hour ago\\. Turned off, asleep or without internet\\. It must be online to connect\\.$",
+"Vu pour la dernière fois il y a 1 heure. Éteint, en veille ou sans internet. Il doit être en ligne pour se connecter."
+],
+[
+"^Last seen yesterday\\. Turned off, asleep or without internet\\. It must be online to connect\\.$",
+"Vu pour la dernière fois hier. Éteint, en veille ou sans internet. Il doit être en ligne pour se connecter."
 ]
 ]
 },
@@ -2180,6 +2250,9 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Keyboard and mouse control are unavailable in this desktop session.": "Il controllo di tastiera e mouse non è disponibile in questa sessione.",
 "Keyboard and mouse control will be allowed for this session.": "Il controllo di tastiera e mouse sarà consentito per questa sessione.",
 "Language": "Lingua",
+"Last seen 1 hour ago": "Visto l’ultima volta 1 ora fa",
+"Last seen just now": "Visto l’ultima volta: proprio ora",
+"Last seen yesterday": "Visto l’ultima volta ieri",
 "Leave company": "Lascia l’azienda",
 "Leave empty to use the group chosen above.": "Lascia vuoto per usare il gruppo scelto sopra.",
 "Leave this company?": "Lasciare questa azienda?",
@@ -2312,7 +2385,10 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Remove this computer from Mixel Remote": "Rimuovi questo computer da Mixel Remote",
 "Remove this computer from Mixel Remote?": "Rimuovere questo computer da Mixel Remote?",
 "Remove…": "Rimuovi…",
+"Rename": "Rinomina",
+"Rename company": "Rinomina azienda",
 "Rename device": "Rinomina dispositivo",
+"Rename the company": "Rinomina l’azienda",
 "Rename…": "Rinomina…",
 "Renew connection": "Rinnova la connessione",
 "Restart computer": "Riavvia il computer",
@@ -2426,6 +2502,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "The copied files are too large; use the Files tab for folders, many files or more than 32 MB": "I file copiati sono troppo grandi; usa la scheda File per cartelle, molti file o più di 32 MB",
 "The invitation could not be sent": "Non è stato possibile inviare l’invito",
 "The meeting could not be started": "Impossibile avviare la riunione",
+"The new name is shown to everyone in the company and on the Mixel Remote portal.": "Il nuovo nome viene mostrato a tutta l’azienda e sul portale Mixel Remote.",
 "The note was not saved: check the ticket number": "La nota non è stata salvata: controlla il numero del ticket",
 "The other person can see the display you approved. End the session at any time.": "L’altra persona vede lo schermo che hai approvato. Termina la sessione in qualsiasi momento.",
 "The other side asks to switch sides: they would see this screen. Accept or Reject": "L’altra parte chiede di invertire i ruoli: vedrebbe questo schermo. Accetta o rifiuta",
@@ -2929,6 +3006,34 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 [
 "^Always-on access is installed \\(Remote ID ([\\d ]+)\\), but this computer’s sign-in screen uses Wayland, which cannot be shared\\. Switch the sign-in screen to Xorg \\(GDM: WaylandEnable=false\\) to use it\\.$",
 "L’accesso permanente è installato (ID Remote $1), ma la schermata di accesso di questo computer usa Wayland e non può essere condivisa. Passa la schermata di accesso a Xorg (GDM: WaylandEnable=false) per usarla."
+],
+[
+"^Company renamed to (.+)\\.$",
+"Azienda rinominata in $1."
+],
+[
+"^Last seen (\\d+) minutes ago\\. Turned off, asleep or without internet\\. It must be online to connect\\.$",
+"Visto l’ultima volta $1 minuti fa. Spento, in stop o senza internet. Deve essere online per connettersi."
+],
+[
+"^Last seen (\\d+) hours ago\\. Turned off, asleep or without internet\\. It must be online to connect\\.$",
+"Visto l’ultima volta $1 ore fa. Spento, in stop o senza internet. Deve essere online per connettersi."
+],
+[
+"^Last seen (\\d+) days ago\\. Turned off, asleep or without internet\\. It must be online to connect\\.$",
+"Visto l’ultima volta $1 giorni fa. Spento, in stop o senza internet. Deve essere online per connettersi."
+],
+[
+"^Last seen just now\\. Turned off, asleep or without internet\\. It must be online to connect\\.$",
+"Visto l’ultima volta: proprio ora. Spento, in stop o senza internet. Deve essere online per connettersi."
+],
+[
+"^Last seen 1 hour ago\\. Turned off, asleep or without internet\\. It must be online to connect\\.$",
+"Visto l’ultima volta 1 ora fa. Spento, in stop o senza internet. Deve essere online per connettersi."
+],
+[
+"^Last seen yesterday\\. Turned off, asleep or without internet\\. It must be online to connect\\.$",
+"Visto l’ultima volta ieri. Spento, in stop o senza internet. Deve essere online per connettersi."
 ]
 ]
 }
