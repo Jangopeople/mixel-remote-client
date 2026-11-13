@@ -42,6 +42,8 @@ impl FixturePeer {
                 cancellation.clone(),
                 consent_id,
                 consent_cancel.clone(),
+                false,
+                false,
             )
             .await
             .unwrap();
@@ -107,6 +109,7 @@ impl FixturePeer {
                 std::time::Instant::now() + Duration::from_secs(60),
             ))),
             peer_expires: Arc::new(AtomicU64::new(expires)),
+            mirror: false,
         })
         .unwrap();
     }

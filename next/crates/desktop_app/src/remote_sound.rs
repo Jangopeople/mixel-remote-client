@@ -118,9 +118,7 @@ fn linux_capture() -> Option<Capture> {
     let stop = Arc::new(AtomicBool::new(false));
     let stopped = stop.clone();
     std::thread::spawn(move || {
-        let Some(mut resampler) = Resampler::new(2, 48_000) else { return };
-        let mut pending: Vec<i16> = Vec::with_capacity(FRAME_SAMPLES * 4);
-        let mut state = State::default();
+        let Some(mut coder) = Coder::new() else { return };
         while !stopped.load(Ordering::Acquire) {
             let Some(sample) = sink.try_pull_sample(gst::ClockTime::from_mseconds(200)) else {
                 if sink.is_eos() { break; }
@@ -129,28 +127,22 @@ fn linux_capture() -> Option<Capture> {
             let Some(buffer) = sample.buffer() else { continue };
             let Ok(map) = buffer.map_readable() else { continue };
             let input: Vec<f32> = map.as_slice().as_chunks::<4>().0.iter().map(|bytes| f32::from_le_bytes(*bytes)).collect();
-            resampler.push(&input, &mut pending);
-            while pending.len() >= FRAME_SAMPLES {
-                let samples: Vec<i16> = pending.drain(..FRAME_SAMPLES).collect();
-                if !sound::silent(&samples)
-                    && let Some(frame) = sound::encode(&mut state, &samples)
-                {
-                    let _ = sender.try_send(frame);
-                }
-            }
+            coder.push(&input, |frame| {
+                let _ = sender.try_send(frame);
+            });
         }
         let _ = pipeline.set_state(gst::State::Null);
     });
     Some(Capture { frames, stop })
 }
 /// Frames from interleaved stereo 48 kHz samples, as the Linux and Mac captures deliver them.
-#[cfg_attr(not(any(target_os = "linux", target_os = "macos", test)), allow(dead_code))]
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 struct Coder {
     resampler: Resampler,
     pending: Vec<i16>,
     state: State,
 }
-#[cfg_attr(not(any(target_os = "linux", target_os = "macos", test)), allow(dead_code))]
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 impl Coder {
     fn new() -> Option<Self> {
         Some(Self { resampler: Resampler::new(2, 48_000)?, pending: Vec::with_capacity(FRAME_SAMPLES * 4), state: State::default() })
