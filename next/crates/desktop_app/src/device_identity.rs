@@ -331,6 +331,22 @@ impl IdentityState {
             .map(SigningKey::verifying_key)
             .ok_or_else(|| "Load the saved device identity first".into())
     }
+    /// Signs a device self-removal request (signaling_server::auth::saas::SelfRemoval) with this
+    /// device's enrolled key. The text is domain-separated, so it cannot stand for another proof.
+    pub fn sign_self_removal(&self, message: &[u8]) -> Result<[u8; 64], String> {
+        use ed25519_dalek::Signer;
+        if !message.starts_with(b"mixel-remote/device-self-remove/v1\n") {
+            return Err("Only a self-removal request can be signed here".into());
+        }
+        let state = self
+            .0
+            .lock()
+            .map_err(|_| "Device identity state unavailable")?;
+        let key = state
+            .as_ref()
+            .ok_or("Load the saved device identity first")?;
+        Ok(key.sign(message).to_bytes())
+    }
     pub fn prove(
         &self,
         challenge: core_protocol::device_login::DeviceLoginChallenge,

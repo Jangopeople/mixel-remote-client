@@ -40,6 +40,40 @@ pub(crate) struct SupportPair {
     pub host: DeviceBinding,
 }
 
+/// Concurrent-session limit of a Remote SaaS tenant (its plan, or 0 while it may hold none).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SessionLimit {
+    pub tenant: Uuid,
+    pub max_sessions: u32,
+}
+
+/// A policy decision that allowed the session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Grant {
+    pub limit: Option<SessionLimit>,
+}
+
+impl Grant {
+    fn from_tenant_limit(body: &[u8]) -> Option<Self> {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct TenantLimit {
+            tenant: Uuid,
+            max_sessions: u32,
+        }
+        let parsed: TenantLimit = serde_json::from_slice(body).ok()?;
+        if parsed.tenant.is_nil() || parsed.max_sessions > 100_000 {
+            return None;
+        }
+        Some(Self {
+            limit: Some(SessionLimit {
+                tenant: parsed.tenant,
+                max_sessions: parsed.max_sessions,
+            }),
+        })
+    }
+}
+
 #[derive(Clone)]
 pub struct SupportPolicy {
     client: Client,
@@ -85,13 +119,17 @@ impl SupportPolicy {
         })
     }
 
+    /// `None`: refused. 204: allowed without a broker-side limit (linked companies, personal
+    /// accounts). 200 with `{"tenant": uuid, "max_sessions": n}`: allowed for a Remote SaaS tenant,
+    /// which may hold at most `n` sessions at once on this broker.
     pub(crate) async fn allows(
         &self,
         pair: &SupportPair,
         unattended: bool,
         accept_session: Option<Uuid>,
-    ) -> bool {
-        self.client
+    ) -> Option<Grant> {
+        let response = self
+            .client
             .post(self.endpoint.clone())
             .bearer_auth(self.token.as_str())
             .json(&serde_json::json!({
@@ -100,7 +138,23 @@ impl SupportPolicy {
             }))
             .send()
             .await
-            .is_ok_and(|response| response.status() == StatusCode::NO_CONTENT)
+            .ok()?;
+        match response.status() {
+            StatusCode::NO_CONTENT => Some(Grant { limit: None }),
+            StatusCode::OK => {
+                let mut stream = response.bytes_stream();
+                let mut body = Vec::new();
+                while let Some(chunk) = stream.next().await {
+                    let chunk = chunk.ok()?;
+                    if body.len() + chunk.len() > 512 {
+                        return None;
+                    }
+                    body.extend_from_slice(&chunk);
+                }
+                Grant::from_tenant_limit(&body)
+            }
+            _ => None,
+        }
     }
     pub(crate) async fn allows_startup_host(
         &self,
@@ -195,6 +249,31 @@ impl SupportPolicy {
                     .map_err(|_| AuthError)
             }
             _ => Err(AuthError),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tenant_limit_body_is_strict_and_bounded() {
+        let tenant = Uuid::from_u128(7);
+        assert_eq!(
+            Grant::from_tenant_limit(format!(r#"{{"tenant":"{tenant}","max_sessions":3}}"#).as_bytes()),
+            Some(Grant { limit: Some(SessionLimit { tenant, max_sessions: 3 }) })
+        );
+        for body in [
+            "".to_owned(),
+            "{}".to_owned(),
+            format!(r#"{{"tenant":"{tenant}"}}"#),
+            format!(r#"{{"tenant":"{tenant}","max_sessions":-1}}"#),
+            format!(r#"{{"tenant":"{tenant}","max_sessions":100001}}"#),
+            format!(r#"{{"tenant":"{}","max_sessions":3}}"#, Uuid::nil()),
+            format!(r#"{{"tenant":"{tenant}","max_sessions":3,"unlimited":true}}"#),
+        ] {
+            assert_eq!(Grant::from_tenant_limit(body.as_bytes()), None, "{body}");
         }
     }
 }

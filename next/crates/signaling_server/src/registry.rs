@@ -4,7 +4,7 @@
 use crate::{
     auth::Principal,
     protocol::*,
-    support_policy::{DeviceBinding, SupportPair},
+    support_policy::{DeviceBinding, SessionLimit, SupportPair},
 };
 use core_protocol::PROTOCOL_VERSION;
 use rand_core::{OsRng, RngCore};
@@ -70,6 +70,8 @@ struct Session {
     identity_from_host: bool,
     active_until: Option<Instant>,
     restart_after: Instant,
+    /// The Remote SaaS tenant whose concurrent-session limit this session counts against.
+    limit_tenant: Option<Uuid>,
 }
 struct Retired {
     controller: u32,
@@ -429,6 +431,25 @@ impl Registry {
         message: ClientMessage,
         now: Instant,
     ) -> Result<(), ErrorCode> {
+        self.handle_limited(from, generation, message, now, None)
+    }
+    /// Sessions of one Remote SaaS tenant on this broker, in any phase (pending consent included).
+    pub fn tenant_sessions(&self, tenant: Uuid) -> usize {
+        self.sessions
+            .values()
+            .filter(|session| session.limit_tenant == Some(tenant))
+            .count()
+    }
+    /// Like `handle`; a new session request under `limit` is refused with `Busy` once the tenant
+    /// holds `max_sessions` sessions, and the new session counts against that tenant.
+    pub fn handle_limited(
+        &mut self,
+        from: u32,
+        generation: Uuid,
+        message: ClientMessage,
+        now: Instant,
+        limit: Option<SessionLimit>,
+    ) -> Result<(), ErrorCode> {
         if !self
             .peers
             .get(&from)
@@ -479,6 +500,7 @@ impl Registry {
                 let controller_identity = authority(controller)?;
                 let host_identity = authority(host)?;
                 let unattended = current.unattended;
+                let limit_tenant = current.limit_tenant;
                 let until = current.active_until.ok_or(ErrorCode::Forbidden)?;
                 if now >= until {
                     return Err(ErrorCode::Forbidden);
@@ -499,6 +521,7 @@ impl Registry {
                         identity_from_host: false,
                         active_until: Some(until),
                         restart_after: now + Duration::from_secs(30),
+                        limit_tenant,
                     },
                 );
                 self.retired.insert(
@@ -652,6 +675,11 @@ impl Registry {
                 {
                     return Err(ErrorCode::Busy);
                 }
+                if let Some(limit) = limit
+                    && self.tenant_sessions(limit.tenant) >= limit.max_sessions as usize
+                {
+                    return Err(ErrorCode::Busy);
+                }
                 let requester = requester.principal.clone();
                 let target = self.peers.get_mut(&host).ok_or(ErrorCode::Unavailable)?;
                 match (target.code_gate.as_mut(), offered) {
@@ -697,6 +725,7 @@ impl Registry {
                         identity_from_host: false,
                         active_until: None,
                         restart_after: now,
+                        limit_tenant: limit.map(|limit| limit.tenant),
                     },
                 );
                 self.send(from, ServerMessage::Requested { session });
@@ -935,6 +964,59 @@ mod rotation_tests {
         // Opting out ends what was started this way.
         registry.handle(234_567_890, phone, ClientMessage::ConfigureSupportHost { enabled: false }, now).unwrap();
         assert_eq!(registry.counts().1, 0);
+    }
+    #[test]
+    fn a_saas_tenant_holds_at_most_its_plan_sessions_at_once() {
+        let mut registry = Registry::default();
+        let now = Instant::now();
+        let tenant = Uuid::from_u128(77);
+        let limit = Some(SessionLimit { tenant, max_sessions: 2 });
+        let (controller, _c) = peer(&mut registry, 123_456_789, 10);
+        let (other, _o) = peer(&mut registry, 123_456_790, 12);
+        let (_h1, _e1) = peer(&mut registry, 234_567_890, 11);
+        let (h2, _e2) = peer(&mut registry, 234_567_891, 13);
+        let (_h3, _e3) = peer(&mut registry, 234_567_892, 14);
+        registry
+            .handle_limited(123_456_789, controller, ClientMessage::Request { host: 234_567_890 }, now, limit)
+            .unwrap();
+        registry
+            .handle_limited(123_456_790, other, ClientMessage::Request { host: 234_567_891 }, now, limit)
+            .unwrap();
+        assert_eq!(registry.tenant_sessions(tenant), 2);
+        // A third session of the same tenant waits until one ends, whoever asks.
+        assert_eq!(
+            registry.handle_limited(123_456_789, controller, ClientMessage::Request { host: 234_567_892 }, now, limit),
+            Err(ErrorCode::Busy)
+        );
+        // Another tenant's limit and unlimited (linked company) requests are not affected.
+        registry
+            .handle_limited(
+                123_456_789,
+                controller,
+                ClientMessage::Request { host: 234_567_892 },
+                now,
+                Some(SessionLimit { tenant: Uuid::from_u128(78), max_sessions: 1 }),
+            )
+            .unwrap();
+        assert_eq!(registry.tenant_sessions(tenant), 2);
+        // A plan with no sessions (read-only) refuses at once.
+        assert_eq!(
+            registry.handle_limited(
+                123_456_790,
+                other,
+                ClientMessage::Request { host: 234_567_890 },
+                now,
+                Some(SessionLimit { tenant: Uuid::from_u128(79), max_sessions: 0 }),
+            ),
+            Err(ErrorCode::Busy)
+        );
+        // Ending a session frees its place.
+        registry.disconnect(234_567_891, h2);
+        assert_eq!(registry.tenant_sessions(tenant), 1);
+        registry
+            .handle_limited(123_456_789, controller, ClientMessage::Request { host: 234_567_890 }, now, limit)
+            .unwrap();
+        assert_eq!(registry.tenant_sessions(tenant), 2);
     }
     #[test]
     fn presence_reports_only_online_peers_in_the_callers_scope() {

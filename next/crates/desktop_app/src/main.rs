@@ -7,6 +7,8 @@ mod wayland_portal;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 mod account_auth;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+mod saas_commands;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 mod device_identity;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 mod session_store;
@@ -2325,6 +2327,23 @@ fn main() {
             remote_devices,
             enrollment_devices,
             enrollment_companies,
+            saas_commands::saas_my_tenants,
+            saas_commands::saas_tenant_overview,
+            saas_commands::saas_devices,
+            saas_commands::saas_rename_device,
+            saas_commands::saas_move_device,
+            saas_commands::saas_remove_device,
+            saas_commands::saas_add_this_device,
+            saas_commands::saas_groups,
+            saas_commands::saas_create_group,
+            saas_commands::saas_rename_group,
+            saas_commands::saas_delete_group,
+            saas_commands::saas_set_group_access,
+            saas_commands::saas_create_deploy_link,
+            saas_commands::saas_deploy_links,
+            saas_commands::saas_revoke_deploy_link,
+            saas_commands::device_self_remove,
+            saas_commands::device_self_remove_flush,
             support_code_create,
             this_computer_name,
             meeting_create,
@@ -2411,6 +2430,23 @@ fn main() {
             remote_devices,
             enrollment_devices,
             enrollment_companies,
+            saas_commands::saas_my_tenants,
+            saas_commands::saas_tenant_overview,
+            saas_commands::saas_devices,
+            saas_commands::saas_rename_device,
+            saas_commands::saas_move_device,
+            saas_commands::saas_remove_device,
+            saas_commands::saas_add_this_device,
+            saas_commands::saas_groups,
+            saas_commands::saas_create_group,
+            saas_commands::saas_rename_group,
+            saas_commands::saas_delete_group,
+            saas_commands::saas_set_group_access,
+            saas_commands::saas_create_deploy_link,
+            saas_commands::saas_deploy_links,
+            saas_commands::saas_revoke_deploy_link,
+            saas_commands::device_self_remove,
+            saas_commands::device_self_remove_flush,
             support_code_create,
             this_computer_name,
             meeting_create,

@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
+pub mod saas;
+
 #[derive(Clone, Debug)]
 pub struct Principal {
     pub user: Uuid,

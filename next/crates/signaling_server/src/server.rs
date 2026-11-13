@@ -2,7 +2,7 @@ use crate::{
     auth::{AuthError, EnrolledPrincipal, IsmAuth, Principal},
     protocol::*,
     registry::Registry,
-    support_policy::{SupportPair, SupportPolicy},
+    support_policy::{Grant, SupportPair, SupportPolicy},
 };
 use axum::{
     Router,
@@ -80,13 +80,9 @@ impl AppState {
         pair: &SupportPair,
         unattended: bool,
         accept_session: Option<uuid::Uuid>,
-    ) -> bool {
-        let Some(policy) = &self.policy else {
-            return false;
-        };
-        let Ok(_slot) = self.policy_slots.try_acquire() else {
-            return false;
-        };
+    ) -> Option<Grant> {
+        let policy = self.policy.as_ref()?;
+        let _slot = self.policy_slots.try_acquire().ok()?;
         policy.allows(pair, unattended, accept_session).await
     }
 
@@ -280,7 +276,7 @@ async fn connection(mut socket: WebSocket, state: AppState) {
                     let state = &state;
                     async move {
                         let allowed = match check {
-                            Some(check) => state.support_allowed(&check.pair, check.unattended, None).await,
+                            Some(check) => state.support_allowed(&check.pair, check.unattended, None).await.is_some(),
                             None => false,
                         };
                         (!allowed).then_some(session)
@@ -413,7 +409,7 @@ async fn connection(mut socket: WebSocket, state: AppState) {
                                 Ok(registry) => registry.policy_for_message(id, generation, &message, unix_now()),
                                 Err(_) => break,
                             };
-                            let allowed = match &check {
+                            let grant = match &check {
                                 Some(check) => {
                                     let audit = match &message {
                                         ClientMessage::Decide { session, accept: true } if check.unattended => Some(*session),
@@ -421,15 +417,16 @@ async fn connection(mut socket: WebSocket, state: AppState) {
                                     };
                                     state.support_allowed(&check.pair, check.unattended, audit).await
                                 },
-                                None => false,
+                                None => None,
                             };
                             let now = Instant::now();
                             let unix = unix_now();
                             if !authorization_live(expires_at, authorized_at, now, unix) { break; }
                             let result = match state.registry.lock() {
                                 Ok(mut registry) => {
-                                    if allowed && registry.policy_for_message(id, generation, &message, unix) == check {
-                                        registry.handle(id, generation, message, now)
+                                    if let Some(grant) = grant.filter(|_| registry.policy_for_message(id, generation, &message, unix) == check) {
+                                        // A SaaS tenant's plan limits its sessions at once.
+                                        registry.handle_limited(id, generation, message, now, grant.limit)
                                     } else {
                                         if let Some(check) = check
                                             && let ClientMessage::Decide { session, .. } | ClientMessage::Restart { session } = message

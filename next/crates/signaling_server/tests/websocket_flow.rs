@@ -2054,3 +2054,52 @@ async fn verify_loginwindow_media(
     snapshot!("04-cleared");
     transport.close().await.unwrap();
 }
+
+/// Remote SaaS tenants: the policy answers 200 with the tenant's concurrent-session limit, and
+/// the broker refuses further session requests of that tenant until one ends.
+#[tokio::test]
+async fn saas_policy_limit_caps_concurrent_sessions_of_a_tenant() {
+    use axum::{Json, Router, http::StatusCode, routing::post};
+    use ed25519_dalek::SigningKey;
+    use signaling_server::{delegated_auth::TicketAuth, support_policy::SupportPolicy};
+
+    const TOKEN: &str = "5111441144114411441144114411441144114411441144114411441144114411";
+    let tenant = Uuid::from_u128(500);
+    let policy = Router::new().route(
+        "/api/internal/remote/authorize",
+        post(move |Json(_pair): Json<serde_json::Value>| async move {
+            (StatusCode::OK, Json(serde_json::json!({"tenant": tenant, "max_sessions": 1})))
+        }),
+    );
+    let policy_socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let policy_url = format!("http://{}/api/internal/remote/authorize", policy_socket.local_addr().unwrap());
+    let policy_task = tokio::spawn(async move { axum::serve(policy_socket, policy).await.unwrap() });
+    let signer = SigningKey::from_bytes(&[51; 32]);
+    let state = AppState::new(Arc::new(TicketAuth::new(vec![signer.verifying_key()]).unwrap()), HashSet::new())
+        .with_support_policy(SupportPolicy::new(policy_url.parse().unwrap(), TOKEN.into()).unwrap());
+    let socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/v1/ws", socket.local_addr().unwrap());
+    let broker = tokio::spawn(async move { axum::serve(socket, router(state)).await.unwrap() });
+    let org = Some(Uuid::from_u128(600));
+    let peer = |profile: u128, device: u128, connection_id: u32, key_byte: u8| SignedPeer {
+        profile: Uuid::from_u128(profile),
+        device: Uuid::from_u128(device),
+        tenant: org,
+        connection_id,
+        generation: 1,
+        key_byte,
+    };
+    let mut first_host = signed_peer(&url, &signer, peer(10, 21, 123_456_701, 1)).await;
+    let mut second_host = signed_peer(&url, &signer, peer(10, 22, 123_456_702, 2)).await;
+    let mut viewer = signed_peer(&url, &signer, peer(11, 23, 123_456_703, 3)).await;
+    let first = request(&mut viewer, &mut first_host, 123_456_701).await;
+    send(&mut viewer, ClientMessage::Request { host: 123_456_702 }).await;
+    assert!(matches!(event(&mut viewer).await, ServerMessage::Error { code: ErrorCode::Busy }));
+    assert!(timeout(Duration::from_millis(150), second_host.next()).await.is_err());
+    send(&mut viewer, ClientMessage::Close { session: first }).await;
+    assert!(matches!(event(&mut viewer).await, ServerMessage::Closed { session, .. } if session == first));
+    let second = request(&mut viewer, &mut second_host, 123_456_702).await;
+    assert_ne!(first, second);
+    broker.abort();
+    policy_task.abort();
+}
