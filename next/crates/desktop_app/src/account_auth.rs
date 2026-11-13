@@ -938,6 +938,70 @@ impl AccountAuth {
         self.set_workspace(true).await
     }
 
+    /// Self-service sign-up from the app: a Mixel ID without a company (not set up yet, or only a
+    /// personal space) creates one (a 14-day Business trial, this account its owner) and switches
+    /// to it. The database checks the confirmed email address and that no company exists yet.
+    pub async fn create_company(
+        &self,
+        name: String,
+    ) -> Result<signaling_server::auth::saas::SaasSignup, String> {
+        let created = {
+            let _operation = self.operation.lock().await;
+            let (client, tokens, generation) = {
+                let inner = self.inner.lock().await;
+                let allowed = match inner.status.phase.as_str() {
+                    "profile_setup" => true,
+                    "authenticated" => inner
+                        .status
+                        .account
+                        .as_ref()
+                        .is_some_and(|account| !account.has_company && !account.staff),
+                    _ => false,
+                };
+                if !allowed {
+                    return Err("This Mixel ID already belongs to a company".into());
+                }
+                if now()? >= inner.expires_at {
+                    return Err("Verify your Mixel ID again before creating a company".into());
+                }
+                (
+                    inner.client.clone().ok_or("Identity service unavailable")?,
+                    inner.tokens.clone().ok_or("Sign-in expired")?,
+                    inner.generation,
+                )
+            };
+            let created = client
+                .ism
+                .saas_signup(&tokens.access_token.0, &name)
+                .await
+                .map_err(|error| error.message)?;
+            let mut inner = self.inner.lock().await;
+            if inner.generation != generation {
+                return Err("Sign-in was cancelled".into());
+            }
+            if let Some(account) = inner.status.account.as_mut() {
+                account.has_company = true;
+            }
+            created
+        };
+        if self.inner.lock().await.status.phase == "authenticated" {
+            // A personal space stays; the app now uses the new company.
+            self.set_workspace(false).await?;
+        } else {
+            let (client, tokens, generation, subject) = {
+                let inner = self.inner.lock().await;
+                (
+                    inner.client.clone().ok_or("Identity service unavailable")?,
+                    inner.tokens.clone().ok_or("Sign-in expired")?,
+                    inner.generation,
+                    inner.subject.ok_or("Sign-in identity unavailable")?,
+                )
+            };
+            self.apply(generation, client, tokens, Some(subject)).await?;
+        }
+        Ok(created)
+    }
+
     pub async fn verify_totp(&self, factor: Uuid, code: Zeroizing<String>) -> Result<(), String> {
         let _operation = self
             .operation

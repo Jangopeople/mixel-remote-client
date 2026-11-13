@@ -1,6 +1,7 @@
-//! Remote SaaS tenant RPCs (next/sql 018-021) for the apps: tenants, devices, groups, deploy links
-//! and device self-removal. Every call uses the caller's own bearer (or the public key for the
-//! anonymous self-removal); the database checks membership, role, plan limits and status.
+//! Remote SaaS tenant RPCs (next/sql 018-021) for the apps: sign-up, tenants, members and
+//! invitations, devices, groups, deploy links and device self-removal. Every call uses the
+//! caller's own bearer (or the public key for the anonymous self-removal); the database checks
+//! membership, role, plan limits and status.
 use super::{AuthError, IsmAuth};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -73,6 +74,32 @@ pub struct SaasDeployLink {
     pub max_uses: i32,
     pub uses: i32,
     pub revoked_at: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaasMember {
+    pub user_id: Uuid,
+    pub name: String,
+    pub email: String,
+    pub role: String,
+    pub created_at: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaasInvite {
+    pub id: Uuid,
+    pub email: String,
+    pub role: String,
+    pub created_at: String,
+    pub expires_at: String,
+}
+/// The result of a self-service sign-up: the new company (a 14-day Business trial).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaasSignup {
+    pub tenant_id: Uuid,
+    pub organization_id: Uuid,
+    pub slug: String,
+    pub plan: String,
+    pub status: String,
+    pub trial_ends_at: Option<String>,
 }
 /// The registration of "add this computer" (same meaning as a rollout enrollment).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -152,6 +179,15 @@ fn clean_text(value: &str, max: usize) -> Result<&str, SaasError> {
         return Err(SaasError::invalid("Enter a valid name"));
     }
     Ok(value)
+}
+fn member_role(role: &str, owner: bool) -> Result<&'static str, SaasError> {
+    match role {
+        "owner" if owner => Ok("owner"),
+        "admin" => Ok("admin"),
+        "technician" => Ok("technician"),
+        "member" => Ok("member"),
+        _ => Err(SaasError::invalid("Invalid role")),
+    }
 }
 fn os_name(os: &str) -> Result<&'static str, SaasError> {
     match os {
@@ -328,6 +364,54 @@ impl IsmAuth {
     pub async fn saas_revoke_deploy_link(&self, token: &str, tenant: Uuid, link: Uuid) -> Result<bool, SaasError> {
         self.saas_call(Some(token), "remote_saas_revoke_deploy_link", json!({"tenant": tenant, "link": link})).await
     }
+    /// Self-service sign-up: the signed-in account becomes the owner of a new company.
+    pub async fn saas_signup(&self, token: &str, company: &str) -> Result<SaasSignup, SaasError> {
+        let company = company.trim();
+        if !(2..=80).contains(&company.chars().count()) || company.chars().any(char::is_control) {
+            return Err(SaasError::invalid("Enter a company name of 2 to 80 characters"));
+        }
+        let created: SaasSignup = self.saas_call(Some(token), "remote_saas_signup", json!({"company_name": company})).await?;
+        if created.tenant_id.is_nil() || created.organization_id.is_nil() {
+            return Err(SaasError::unavailable());
+        }
+        Ok(created)
+    }
+    pub async fn saas_members(&self, token: &str, tenant: Uuid) -> Result<Vec<SaasMember>, SaasError> {
+        self.saas_call(Some(token), "remote_saas_members", json!({"tenant": tenant})).await
+    }
+    /// Owners/admins: invites a person; returns the invitation secret once (only its hash is stored).
+    pub async fn saas_invite_member(&self, token: &str, tenant: Uuid, email: &str, role: &str) -> Result<String, SaasError> {
+        let email = email.trim();
+        if !(3..=254).contains(&email.chars().count())
+            || email.chars().any(|c| c.is_control() || c.is_whitespace())
+            || email.matches('@').count() != 1
+        {
+            return Err(SaasError::invalid("Invalid email address"));
+        }
+        let role = member_role(role, false)?;
+        let secret: String = self
+            .saas_call(Some(token), "remote_saas_invite_member", json!({"tenant": tenant, "invitee_email": email, "member_role": role}))
+            .await?;
+        if !secret.starts_with("mri_") || secret.len() > 100 || !secret.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
+            return Err(SaasError::unavailable());
+        }
+        Ok(secret)
+    }
+    pub async fn saas_invites(&self, token: &str, tenant: Uuid) -> Result<Vec<SaasInvite>, SaasError> {
+        self.saas_call(Some(token), "remote_saas_invites", json!({"tenant": tenant})).await
+    }
+    pub async fn saas_revoke_invite(&self, token: &str, tenant: Uuid, invite: Uuid) -> Result<bool, SaasError> {
+        self.saas_call(Some(token), "remote_saas_revoke_invite", json!({"tenant": tenant, "invite": invite})).await
+    }
+    pub async fn saas_set_member_role(&self, token: &str, tenant: Uuid, member: Uuid, role: &str) -> Result<bool, SaasError> {
+        let role = member_role(role, true)?;
+        self.saas_call(Some(token), "remote_saas_set_member_role", json!({"tenant": tenant, "member": member, "member_role": role}))
+            .await
+    }
+    /// Removes a member (or leaves, for the caller's own profile).
+    pub async fn saas_remove_member(&self, token: &str, tenant: Uuid, member: Uuid) -> Result<bool, SaasError> {
+        self.saas_call(Some(token), "remote_saas_remove_member", json!({"tenant": tenant, "member": member})).await
+    }
     /// Sends a device's signed self-removal (no account needed). `Ok(true)`: removed (or already
     /// removed); `Ok(false)`: the request names an older or newer registration and changed nothing.
     pub async fn device_self_remove(&self, request: &SelfRemoval) -> Result<bool, SaasError> {
@@ -386,6 +470,24 @@ mod tests {
                 axum::Json(json!([{"device_id": Uuid::from_u128(1), "connection_id": 123456789, "generation": 1,
                                    "profile": Uuid::from_u128(2), "tenant_org": Uuid::from_u128(3)}])).into_response()
             }
+            "remote_saas_invite_member" => {
+                assert_eq!(body["member_role"], "technician");
+                if body["invitee_email"] == "full@example.com" {
+                    return (StatusCode::BAD_REQUEST, axum::Json(json!({"code":"54000","message":"Technician limit of your plan reached"}))).into_response();
+                }
+                axum::Json(json!("mri_abcdefghijklmnopqrstuvwxyz0123456789-_")).into_response()
+            }
+            "remote_saas_signup" => {
+                assert_eq!(body["company_name"], "Acme AG");
+                axum::Json(json!({"tenant_id": Uuid::from_u128(4), "organization_id": Uuid::from_u128(5), "client_id": Uuid::from_u128(6),
+                                  "slug": "acme-ag", "plan": "business", "status": "trial", "trial_ends_at": "2026-11-27T10:00:00Z"})).into_response()
+            }
+            "remote_saas_set_member_role" => {
+                if body["member_role"] == "owner" {
+                    return (StatusCode::FORBIDDEN, axum::Json(json!({"code":"42501","message":"Only an owner can change owners"}))).into_response();
+                }
+                axum::Json(json!(true)).into_response()
+            }
             "remote_device_self_remove" => {
                 assert_eq!(bearer, "Bearer public");
                 assert_eq!(body["signature"].as_str().unwrap().len(), 130);
@@ -423,6 +525,21 @@ mod tests {
         assert_eq!((refused.status, refused.code.as_deref(), refused.message.as_str()), (400, Some("54000"), "Device limit of your plan reached"));
         assert!(ism.saas_add_this_device("user-token", Uuid::from_u128(9), " ", "linux", &key.verifying_key(), None).await.is_err());
         assert!(ism.saas_add_this_device("user-token", Uuid::from_u128(9), "PC", "beos", &key.verifying_key(), None).await.is_err());
+        let tenant = Uuid::from_u128(9);
+        let secret = ism.saas_invite_member("user-token", tenant, " tech@example.com ", "technician").await.unwrap();
+        assert!(secret.starts_with("mri_"));
+        let full = ism.saas_invite_member("user-token", tenant, "full@example.com", "technician").await.unwrap_err();
+        assert_eq!((full.code.as_deref(), full.message.as_str()), (Some("54000"), "Technician limit of your plan reached"));
+        assert!(ism.saas_invite_member("user-token", tenant, "no-at-sign", "technician").await.is_err());
+        assert!(ism.saas_invite_member("user-token", tenant, "a@b.ch", "owner").await.is_err(), "owners are not invited");
+        assert!(ism.saas_invite_member("user-token", tenant, "a@b.ch", "boss").await.is_err());
+        let created = ism.saas_signup("user-token", " Acme AG ").await.unwrap();
+        assert_eq!((created.tenant_id, created.status.as_str()), (Uuid::from_u128(4), "trial"));
+        assert!(ism.saas_signup("user-token", "A").await.is_err());
+        assert!(ism.saas_set_member_role("user-token", tenant, Uuid::from_u128(7), "admin").await.unwrap());
+        let refused = ism.saas_set_member_role("user-token", tenant, Uuid::from_u128(7), "owner").await.unwrap_err();
+        assert_eq!((refused.status, refused.code.as_deref()), (403, Some("42501")));
+        assert!(ism.saas_set_member_role("user-token", tenant, Uuid::from_u128(7), "root").await.is_err());
         let request = SelfRemoval::new(Uuid::from_u128(1), 123_456_789, 1, 1, |message| Ok(key.sign(message).to_bytes())).unwrap();
         assert!(ism.device_self_remove(&request).await.unwrap());
         server.abort();
