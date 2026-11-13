@@ -323,6 +323,11 @@ pub fn features() -> Vec<&'static str> {
 
 struct Shared {
     board: Board,
+    /// The drawing thread runs (only where there is an overlay).
+    #[cfg_attr(
+        not(any(target_os = "windows", target_os = "macos", target_os = "linux")),
+        allow(dead_code)
+    )]
     renderer: bool,
 }
 static SHARED: std::sync::Mutex<Shared> = std::sync::Mutex::new(Shared {
@@ -776,7 +781,7 @@ mod tests {
     /// Lab check in a real X11 session (Xvfb works): records from a technician show on the
     /// screen through the drawing thread, Undo takes the last stroke away at once, and the rest
     /// fades and is gone a few seconds later.
-    /// `DISPLAY=:99 cargo test -p mixel_engine -- --ignored x11_drawings_appear_and_fade`
+    /// `DISPLAY=:99 cargo test -p mixel_engine -- --ignored --test-threads=1 x11_`
     #[cfg(target_os = "linux")]
     #[test]
     #[ignore = "needs an X11 display"]
@@ -804,11 +809,12 @@ mod tests {
                 .unwrap();
             u32::from_le_bytes([image.data[0], image.data[1], image.data[2], 0])
         };
-        let before = (picture(0.5, 0.1), picture(0.5, 0.5));
+        let before = (picture(0.5, 0.1), picture(0.5, 0.3));
         crate::session_guard::set_shared_source(&format!("x11:0:{}", screen.root));
         let technician = Owner::new();
         let send = |message: Message| technician.receive(&message.encode().unwrap());
-        let (left, right, top, middle) = (6553, 58981, 6553, 32767);
+        // Rows 0.1 and 0.3 of the screen (the view-only session lab test draws across the middle).
+        let (left, right, top, middle) = (6553, 58981, 6553, 19660);
         send(Message::Stroke {
             id: 1,
             tool: Tool::Pen,
@@ -840,14 +846,14 @@ mod tests {
             "the red stroke is on the screen"
         );
         assert_eq!(
-            picture(0.5, 0.5),
+            picture(0.5, 0.3),
             0x001E_7BFF,
             "the blue stroke is on the screen"
         );
         send(Message::Undo);
         std::thread::sleep(Duration::from_millis(400));
         assert_eq!(
-            picture(0.5, 0.5),
+            picture(0.5, 0.3),
             before.1,
             "Undo took the blue stroke away"
         );
@@ -856,7 +862,13 @@ mod tests {
             wire::FADE_AFTER_MS + wire::FADE_MS + 800,
         ));
         assert_eq!(picture(0.5, 0.1), before.0, "faded and gone");
-        assert!(shared().board.is_empty());
+        assert!(
+            shared()
+                .board
+                .strokes
+                .iter()
+                .all(|stroke| stroke.owner != technician.0)
+        );
         // A colleague's strokes go when their session ends.
         let colleague = Owner::new();
         colleague.receive(
@@ -873,14 +885,14 @@ mod tests {
         );
         std::thread::sleep(Duration::from_millis(400));
         assert_ne!(
-            picture(0.5, 0.5),
+            picture(0.5, 0.3),
             before.1,
             "the colleague's highlight is shown"
         );
         drop(colleague);
         std::thread::sleep(Duration::from_millis(400));
         assert_eq!(
-            picture(0.5, 0.5),
+            picture(0.5, 0.3),
             before.1,
             "gone with the colleague's session"
         );
