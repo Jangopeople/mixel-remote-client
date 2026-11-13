@@ -173,7 +173,8 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
                 auth.begin_qa(path).await?;
                 return out(Value::Null);
             }
-            let url = auth.begin().await?;
+            let provider: Option<String> = args.get("provider")?;
+            let url = auth.begin_with(provider.as_deref()).await?;
             // The app opens the page itself (`show_link`: it shows the link to copy instead).
             if args.get::<Option<bool>>("open_browser")?.unwrap_or(false)
                 && let Err(error) = browser(&url).await
@@ -182,6 +183,14 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
                 return Err(error);
             }
             out(url)
+        }
+        // Which outside sign-ins the sign-in service offers: always Mixel ID, plus Google, Microsoft and
+        // Apple when its public settings report them.
+        "sign_in_providers" => out(sign_in_providers().await),
+        // The company's allowed methods and second-step rule for an e-mail address (null: none known).
+        "sign_in_options" => {
+            let email: String = args.get("email")?;
+            out(sign_in_options(email.trim()).await?)
         }
         "account_verify" => {
             let factor: Uuid = args.get("factor")?;
@@ -761,6 +770,62 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
         }
         _ => platform(context, command, &args).await,
     }
+}
+
+fn public_client() -> Result<(reqwest::Client, reqwest::Url, String), String> {
+    let config = mixel_engine::service_config::ServiceConfig::load()?;
+    let base: reqwest::Url = config.identity_url.parse().map_err(|_| "Invalid identity service configuration")?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| "The sign-in service cannot be reached")?;
+    Ok((client, base, config.public_key))
+}
+
+async fn sign_in_providers() -> Vec<&'static str> {
+    let mut found = vec!["keycloak"];
+    let Ok((client, base, key)) = public_client() else { return found };
+    let Ok(url) = base.join("/auth/v1/settings") else { return found };
+    let settings: Option<Value> = match client.get(url).header("apikey", key).send().await {
+        Ok(response) if response.status().is_success() => response.json().await.ok(),
+        _ => None,
+    };
+    if let Some(external) = settings.as_ref().and_then(|value| value.get("external")) {
+        for name in ["google", "azure", "apple"] {
+            if external.get(name).and_then(Value::as_bool) == Some(true) {
+                found.push(name);
+            }
+        }
+    }
+    found
+}
+
+async fn sign_in_options(email: &str) -> Result<Value, String> {
+    if email.len() > 254 || !email.contains('@') || email.chars().any(char::is_control) {
+        return Err("Enter an e-mail address".into());
+    }
+    let (client, base, key) = public_client()?;
+    let url = base.join("/rest/v1/rpc/remote_saas_sign_in_options").map_err(|_| "Invalid identity service configuration")?;
+    let rows: Vec<Value> = client
+        .post(url)
+        .header("apikey", &key)
+        .bearer_auth(&key)
+        .json(&json!({ "identifier": email }))
+        .send()
+        .await
+        .and_then(reqwest::Response::error_for_status)
+        .map_err(|_| "The sign-in options could not be read")?
+        .json()
+        .await
+        .map_err(|_| "The sign-in options could not be read")?;
+    Ok(rows.into_iter().next().map_or(Value::Null, |row| {
+        json!({
+            "company": row.get("company").cloned().unwrap_or(Value::Null),
+            "methods": row.get("methods").cloned().unwrap_or(Value::Null),
+            "require_mfa": row.get("require_mfa").cloned().unwrap_or(Value::Bool(false)),
+        })
+    }))
 }
 
 /// Deploy link or rollout token with the one-line command per operating system.

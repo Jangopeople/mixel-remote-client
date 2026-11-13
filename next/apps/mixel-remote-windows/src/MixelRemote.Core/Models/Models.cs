@@ -375,6 +375,14 @@ public sealed record SignInScreen
     public string? Name { get; init; }
 }
 
+/// <summary>A company's sign-in rules for an e-mail address (sign_in_options); methods use the portal's codes.</summary>
+public sealed record SignInOptions
+{
+    public string? Company { get; init; }
+    public List<string>? Methods { get; init; }
+    public bool RequireMfa { get; init; }
+}
+
 public sealed record UpdateInfo
 {
     public string Version { get; init; } = "";

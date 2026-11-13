@@ -41,7 +41,8 @@ public static class LiveCheck
             print("usage: check <qa-session.json> <suffix> | technician <qa-session.json> <suffix> <folder> [<host-id> <tenant>]");
             return 2;
         }
-        Environment.SetEnvironmentVariable("MIXEL_QA_SESSION_FILE", args[1]);
+        // "providers" checks the real browser sign-in (no QA session file).
+        if (args[0] != "providers") Environment.SetEnvironmentVariable("MIXEL_QA_SESSION_FILE", args[1]);
         var folder = args.Length > 3 ? args[3] : Path.Combine(Path.GetTempPath(), "mixel-live-" + args[2]);
         Directory.CreateDirectory(folder);
         using var engine = new NativeEngine(Path.Combine(folder, "engine"));
@@ -50,6 +51,7 @@ public static class LiveCheck
             switch (args[0])
             {
                 case "check": await Checks(engine, args[2]); break;
+                case "providers": await Providers(engine); break;
                 case "technician":
                     await Technician(engine, args[2], folder, args.Length > 5 && uint.TryParse(args[4], out var host) ? host : null, args.Length > 5 ? args[5] : null);
                     break;
@@ -103,6 +105,37 @@ public static class LiveCheck
             await Task.Delay(500);
         }
         return false;
+    }
+
+    /// <summary>
+    /// Each sign-in button starts the browser sign-in at its provider: the sign-in service answers the
+    /// authorization address with a redirect to the provider's own login page. Nobody signs in.
+    /// </summary>
+    private static async Task Providers(NativeEngine engine)
+    {
+        var offered = (await Try(engine, "sign_in_providers")).Value as JsonArray ?? [];
+        var names = offered.Select(item => item?.GetValue<string>() ?? "").ToList();
+        Check($"sign-in service offers {string.Join(", ", names)}", names.Contains("keycloak"));
+        var hosts = new Dictionary<string, string> { ["keycloak"] = "auth.mixel.ch", ["google"] = "accounts.google.com", ["azure"] = "login.microsoftonline.com", ["apple"] = "appleid.apple.com" };
+        using var http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(15) };
+        foreach (var name in names)
+        {
+            var (url, error) = await Try(engine, "account_sign_in", ("open_browser", false), ("provider", name));
+            var address = url?.GetValue<string>() ?? "";
+            var location = "";
+            if (address.Length > 0)
+            {
+                using var response = await http.GetAsync(new Uri(address));
+                location = response.Headers.Location?.Host ?? "";
+                print($"{name}: {(int)response.StatusCode} → {location}");
+            }
+            Check($"Continue with {name}: browser goes to {hosts.GetValueOrDefault(name, "?")}", location == hosts.GetValueOrDefault(name), error + " " + location);
+            await Try(engine, "account_cancel");
+        }
+        var (_, refused) = await Try(engine, "account_sign_in", ("open_browser", false), ("provider", "github"));
+        Check("an unknown provider is refused", refused.Length > 0);
+        var (options, optionsError) = await Try(engine, "sign_in_options", ("email", "nobody@example.com"));
+        Check("company sign-in rules answer (none for an unknown address)", optionsError.Length == 0 && options is null, optionsError);
     }
 
     /// <summary>The account checks: company, this computer, devices, groups, members, invitations, deploy links, self-removal, deletion.</summary>

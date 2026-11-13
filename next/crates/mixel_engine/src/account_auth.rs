@@ -101,6 +101,9 @@ struct Inner {
     restore_started: bool,
     restored: bool,
 }
+/// Sign-in providers the apps may choose (GoTrue names, as the portal uses them).
+pub const SIGN_IN_PROVIDERS: [&str; 4] = ["keycloak", "google", "azure", "apple"];
+
 #[derive(Clone)]
 pub struct AccountAuth {
     inner: Arc<Mutex<Inner>>,
@@ -428,7 +431,22 @@ impl AccountAuth {
         Ok(())
     }
     pub async fn begin(&self) -> Result<String, String> {
-        let (client, provider, domain) = AuthClient::configured()?;
+        self.begin_with(None).await
+    }
+    /// Browser sign-in with a chosen provider of the sign-in service (`keycloak` = Mixel ID, `google`,
+    /// `azure` = Microsoft, `apple`); `None`: the configured one (or the company's SSO domain). The same
+    /// PKCE flow and loopback callback serve every provider.
+    pub async fn begin_with(&self, chosen: Option<&str>) -> Result<String, String> {
+        let (client, configured, domain) = AuthClient::configured()?;
+        if let Some(name) = chosen
+            && !SIGN_IN_PROVIDERS.contains(&name)
+        {
+            return Err("This sign-in method is not available".into());
+        }
+        let provider = chosen.map_or(configured, str::to_owned);
+        let domain = if chosen.is_some() { None } else { domain };
+        // Apple only grants these scopes; the others use OpenID Connect.
+        let scopes = if provider == "apple" { "name email" } else { "openid profile email" };
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .map_err(|_| "Cannot open the private sign-in callback")?;
@@ -478,7 +496,7 @@ impl AccountAuth {
                 .map_err(|_| "Invalid sign-in endpoint")?;
             url.query_pairs_mut()
                 .append_pair("provider", &provider)
-                .append_pair("scopes", "openid profile email")
+                .append_pair("scopes", scopes)
                 .append_pair("redirect_to", &redirect)
                 .append_pair("code_challenge", &challenge)
                 .append_pair("code_challenge_method", "s256");

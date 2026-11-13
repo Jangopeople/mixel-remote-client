@@ -15,6 +15,7 @@ internal sealed class AccountPage : PageView
 {
     private bool terms;
     private bool? signup;
+    private bool providersLoaded;
 
     public AccountPage(AppModel app) : base(app) => Watch(app.Company);
 
@@ -76,11 +77,37 @@ internal sealed class AccountPage : PageView
                     Ui.Plain(L("Cancel sign-in"), () => _ = App.CancelSignIn())));
                 break;
             default:
-                items.Add(Ui.Text(L("Sign in with your Mixel ID. Your browser opens; come back here when it says you are signed in."), secondary: true));
+                if (!providersLoaded)
+                {
+                    providersLoaded = true;
+                    _ = App.LoadProviders();
+                }
+                items.Add(Ui.Text(L("Sign in with your account. Your browser opens; come back here when it says you are signed in."), secondary: true));
                 if (account.Phase == "error") items.Add(Ui.Message(Translator.Shared.Translate(account.Message)));
-                items.Add(Ui.Row(8,
-                    Ui.Primary(L("Sign in with Mixel ID"), () => _ = App.SignIn(), !App.Busy),
-                    Ui.Plain(L("Use another browser"), () => _ = App.SignIn(showLink: true), !App.Busy)));
+                var email = Keep("signin-email", () =>
+                {
+                    var box = new TextBox { PlaceholderText = "name@company.ch", MinWidth = 260 };
+                    box.KeyDown += (sender, key) => { if (key.Key == Windows.System.VirtualKey.Enter) _ = App.LookUpSignIn(box.Text); };
+                    return box;
+                });
+                items.Add(Ui.Field(L("Work e-mail (optional: shows your company's sign-in methods)"), Ui.Row(8, email, Ui.Plain(L("Continue"), () => _ = App.LookUpSignIn(email.Text), !App.Busy))));
+                if (App.SignInOptions is { Company: { } company } options)
+                {
+                    items.Add(Ui.Message(options.RequireMfa ? L("%@ asks for a second step at sign-in.", company) : L("Sign in the way %@ allows.", company), error: false));
+                }
+                var buttons = new StackPanel { Spacing = 8, MaxWidth = 360, HorizontalAlignment = HorizontalAlignment.Left };
+                var first = true;
+                foreach (var (provider, label) in App.SignInButtons)
+                {
+                    var button = first ? Ui.Primary(L("Continue with %@", label), () => _ = App.SignIn(provider: provider), !App.Busy)
+                        : Ui.Plain(L("Continue with %@", label), () => _ = App.SignIn(provider: provider), !App.Busy);
+                    button.HorizontalAlignment = HorizontalAlignment.Stretch;
+                    Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(button, "signin-" + provider);
+                    buttons.Children.Add(button);
+                    first = false;
+                }
+                items.Add(buttons);
+                items.Add(Ui.Plain(L("Use another browser"), () => _ = App.SignIn(showLink: true, provider: App.SignInButtons.Select(item => item.Provider).FirstOrDefault()), !App.Busy));
                 if (signup is null) _ = CheckSignup();
                 if (signup == true) items.Add(Ui.Link(L("Create Mixel ID"), () => App.OpenUrl("https://auth.mixel.ch/if/flow/mixel-remote-enrollment/")));
                 break;

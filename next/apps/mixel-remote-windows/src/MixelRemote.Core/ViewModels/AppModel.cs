@@ -213,9 +213,40 @@ public sealed class AppModel : Observable
 
     // ---- Sign-in ----
 
-    public Task SignIn(bool showLink = false) => Act(async () =>
+    /// <summary>The outside sign-ins, in the portal's order: (GoTrue provider, portal method code, label).</summary>
+    public static readonly (string Provider, string Method, string Label)[] AllProviders =
+        [("keycloak", "mixel_id", "Mixel ID"), ("google", "google", "Google"), ("azure", "azure", "Microsoft"), ("apple", "apple", "Apple")];
+
+    private List<string> providers = ["keycloak"];
+    private SignInOptions? signInOptions;
+
+    /// <summary>Providers the sign-in service offers now (sign_in_providers).</summary>
+    public List<string> Providers { get => providers; private set => SetList(ref providers, value); }
+    /// <summary>The company of the e-mail address typed at sign-in, with its allowed methods (null: none known).</summary>
+    public SignInOptions? SignInOptions { get => signInOptions; private set => SetList(ref signInOptions, value); }
+
+    /// <summary>The sign-in buttons to show: offered by the service and allowed by the company, if known.</summary>
+    public IEnumerable<(string Provider, string Label)> SignInButtons =>
+        AllProviders.Where(item => Providers.Contains(item.Provider) && (SignInOptions?.Methods is not { } allowed || allowed.Contains(item.Method)))
+            .Select(item => (item.Provider, item.Label));
+
+    public async Task LoadProviders()
     {
-        var url = await Engine.RunAsync<string>("account_sign_in", ("open_browser", false));
+        try { Providers = await Engine.RunAsync<List<string>>("sign_in_providers"); }
+        catch (EngineFailure) { Providers = ["keycloak"]; }
+        if (Providers.Count == 0) Providers = ["keycloak"];
+    }
+
+    /// <summary>Looks up the sign-in rules of the company an e-mail address belongs to.</summary>
+    public Task LookUpSignIn(string email) => Act(async () =>
+    {
+        SignInOptions = email.Trim().Length == 0 ? null : await Engine.RunAsync<SignInOptions?>("sign_in_options", ("email", email.Trim()));
+        if (SignInOptions is { Company: { } company } && !SignInButtons.Any()) throw new EngineFailure(L("%@ allows no sign-in method this app offers. Sign in on the portal.", company));
+    });
+
+    public Task SignIn(bool showLink = false, string? provider = null) => Act(async () =>
+    {
+        var url = await Engine.RunAsync<string>("account_sign_in", ("open_browser", false), ("provider", provider));
         if (showLink) SignInLink = url;
         else if (!string.IsNullOrEmpty(url)) OpenUrl(url);
         await RefreshAccount();

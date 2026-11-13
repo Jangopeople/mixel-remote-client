@@ -582,6 +582,31 @@ public sealed class ViewModelTests
     }
 
     [TestMethod]
+    public async Task Sign_in_buttons_follow_the_service_and_the_company()
+    {
+        var engine = new MockEngine();
+        DemoFixtures.SignedOut(engine);
+        engine.Reply("sign_in_providers", """["keycloak","google","azure","apple"]""");
+        engine.Reply("account_sign_in", "\"https://ism-api.mixel.ch/auth/v1/authorize?provider=google\"");
+        var app = await DemoFixtures.App(engine);
+        await app.LoadProviders();
+        CollectionAssert.AreEqual(new[] { "Mixel ID", "Google", "Microsoft", "Apple" }, app.SignInButtons.Select(item => item.Label).ToArray());
+        engine.Reply("sign_in_options", """{"company":"Muster AG","methods":["password","azure","mixel_id"],"require_mfa":true}""");
+        await app.LookUpSignIn("anna@muster.ch");
+        CollectionAssert.AreEqual(new[] { "keycloak", "azure" }, app.SignInButtons.Select(item => item.Provider).ToArray());
+        string? opened = null;
+        app.OpenUrl = url => opened = url;
+        await app.SignIn(provider: "azure");
+        Assert.AreEqual("azure", engine.CallsOf("account_sign_in").Single().Object["provider"]!.GetValue<string>());
+        Assert.IsNotNull(opened);
+        engine.Reply("sign_in_providers", """["keycloak"]""");
+        engine.Reply("sign_in_options", """{"company":"Only Google AG","methods":["google"],"require_mfa":false}""");
+        await app.LoadProviders();
+        await app.LookUpSignIn("x@only.ch");
+        StringAssert.StartsWith(app.Error, "Only Google AG allows no sign-in method");
+    }
+
+    [TestMethod]
     public async Task Every_demo_screen_builds_its_model()
     {
         foreach (var screen in DemoFixtures.Screens)
