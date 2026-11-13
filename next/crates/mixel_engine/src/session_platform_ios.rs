@@ -1,11 +1,16 @@
-//! iPhone and iPad: the controller side only. The phone shows and controls other computers; it is
-//! never captured or controlled itself (Mixel Quick Support shares a phone screen), so the host
+//! iPhone, iPad and Android: the controller side only. The phone shows and controls other computers;
+//! it is never captured or controlled itself (Mixel Quick Support shares a phone screen), so the host
 //! parts of the desktop platform boundary have no implementation here and refuse.
 use native_os_capture::input::{InjectionError, Injector};
+/// iPhone and iPad decode with VideoToolbox, as the Mac does.
+#[cfg(target_os = "ios")]
 pub use native_os_capture::macos_decoder::H264Decoder;
+/// Android: openh264 (the app normally decodes with the phone's own hardware decoder instead).
+#[cfg(target_os = "android")]
+pub use native_os_capture::desktop_h264::H264Decoder;
 use std::sync::{Arc, atomic::AtomicBool};
 
-const CONTROLLER_ONLY: &str = "This iPhone or iPad controls other computers; it cannot be shared or controlled itself.";
+const CONTROLLER_ONLY: &str = "This phone or tablet controls other computers; it cannot be shared or controlled itself.";
 
 /// No capture exists on the phone.
 pub enum Capture {}
@@ -90,19 +95,44 @@ impl Injector for SessionInjector {
     }
 }
 
-// The phone app does not exchange clipboards (a desktop feature).
+// iPhone and iPad do not exchange clipboards (a desktop feature there).
+#[cfg(target_os = "ios")]
 const NO_CLIPBOARD: &str = "The clipboard is available between computers only.";
+#[cfg(target_os = "ios")]
 pub fn read_text() -> Result<zeroize::Zeroizing<String>, String> {
     Err(NO_CLIPBOARD.into())
 }
+#[cfg(target_os = "ios")]
 pub fn write_text(_text: &str) -> Result<(), String> {
     Err(NO_CLIPBOARD.into())
 }
-pub fn close_clipboard() {}
+#[cfg(target_os = "ios")]
 pub fn read_content(_rich: bool) -> Result<core_protocol::clipboard::Content, String> {
     Err(NO_CLIPBOARD.into())
 }
+#[cfg(target_os = "ios")]
 pub fn write_content(_content: core_protocol::clipboard::Content) -> Result<(), String> {
     Err(NO_CLIPBOARD.into())
 }
+// Android: text through the phone's clipboard (the app provides it).
+#[cfg(target_os = "android")]
+pub fn read_text() -> Result<zeroize::Zeroizing<String>, String> {
+    crate::android_secrets::clipboard_text()
+}
+#[cfg(target_os = "android")]
+pub fn write_text(text: &str) -> Result<(), String> {
+    crate::android_secrets::set_clipboard_text(text)
+}
+#[cfg(target_os = "android")]
+pub fn read_content(_rich: bool) -> Result<core_protocol::clipboard::Content, String> {
+    read_text().map(core_protocol::clipboard::Content::Text)
+}
+#[cfg(target_os = "android")]
+pub fn write_content(content: core_protocol::clipboard::Content) -> Result<(), String> {
+    match content {
+        core_protocol::clipboard::Content::Text(text) => write_text(&text),
+        _ => Err("This phone receives text from the remote clipboard only.".into()),
+    }
+}
+pub fn close_clipboard() {}
 pub fn clear_clipboard_files() {}

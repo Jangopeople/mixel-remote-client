@@ -14,7 +14,9 @@ use uuid::Uuid;
 pub const PLATFORM: &str = "macos";
 #[cfg(target_os = "ios")]
 pub const PLATFORM: &str = "ios";
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(target_os = "android")]
+pub const PLATFORM: &str = "android";
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
 pub const PLATFORM: &str = "other";
 
 /// What the commands share: the account, the connection to Mixel and this computer's identity.
@@ -110,7 +112,8 @@ fn out<T: serde::Serialize>(value: T) -> Result<String, String> {
 }
 
 /// The device's system as the Mixel service records it (macos, windows or linux). iPhone and iPad
-/// register as Apple devices ("macos"), as the current phone app does; their name says which.
+/// register as Apple devices ("macos"), as the current phone app does; Android phones and tablets as
+/// "linux" (the system they are built on); their name says which.
 fn os_name() -> &'static str {
     if cfg!(any(target_os = "macos", target_os = "ios")) {
         "macos"
@@ -171,7 +174,10 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
                 auth.begin_qa(path).await?;
                 return out(Value::Null);
             }
-            let url = auth.begin().await?;
+            // The phone apps: a chosen provider and the app's own callback address (Custom Tab).
+            let provider: Option<String> = args.get("provider")?;
+            let app_callback: Option<String> = args.get("app_callback")?;
+            let url = auth.begin_with(provider.as_deref(), app_callback.as_deref()).await?;
             // The app opens the page itself (`show_link`: it shows the link to copy instead).
             if args.get::<Option<bool>>("open_browser")?.unwrap_or(false)
                 && let Err(error) = browser(&url).await
@@ -181,6 +187,8 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
             }
             out(url)
         }
+        "account_callback" => out(auth.complete_app(&args.get::<String>("url")?).await?),
+        "account_providers" => out(AccountAuth::providers().await?),
         "account_verify" => {
             let factor: Uuid = args.get("factor")?;
             let code: String = args.get("code")?;
@@ -965,6 +973,17 @@ async fn platform(_context: &Context, command: &str, _args: &Args) -> Result<Str
     match command {
         "capture_targets" => out(Vec::<Value>::new()),
         "screen_access" | "request_screen_access" | "request_input_access" => out(false),
+        // Android: the wake signal goes out on the phone's own network (Wi-Fi next to the computer).
+        #[cfg(target_os = "android")]
+        "wake_on_lan" => {
+            let macs: Vec<String> = _args.get("macs")?;
+            if macs.is_empty() || macs.len() > 4 {
+                return Err("No network address is known for this computer yet".into());
+            }
+            out(tokio::task::spawn_blocking(move || macs.iter().try_for_each(|mac| mixel_engine::host_actions::wake(mac)))
+                .await
+                .map_err(|_| "The wake signal could not be sent")??)
+        }
         _ => Err(format!("Unknown command: {command}")),
     }
 }

@@ -278,7 +278,7 @@ async fn registration_ticket(
             .map_err(Into::into),
         #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
         None => crate::device_tickets::issue_startup(enrolled, identity).await,
-        #[cfg(target_os = "ios")]
+        #[cfg(any(target_os = "ios", target_os = "android"))]
         None => {
             let _ = (enrolled, identity);
             Err("Sign in again to connect".into())
@@ -2764,6 +2764,7 @@ mod consent_tests {
 
     #[cfg(not(feature = "testflight-controller"))]
     #[tokio::test]
+    #[cfg_attr(any(target_os = "ios", target_os = "android"), ignore = "host side only: phones are controllers")]
     async fn disabling_unattended_during_enable_ignores_both_possible_enable_replies() {
         for enable_reply in [true, false] {
             let remote = RemoteSession::default();
@@ -2805,6 +2806,7 @@ mod consent_tests {
 
     #[cfg(not(feature = "testflight-controller"))]
     #[tokio::test]
+    #[cfg_attr(any(target_os = "ios", target_os = "android"), ignore = "host side only: phones are controllers")]
     async fn disabling_unattended_with_full_queue_stops_media_and_registration() {
         let remote = RemoteSession::default();
         let (commands, _receiver) = mpsc::channel(1);
@@ -3091,6 +3093,7 @@ mod consent_tests {
     }
     #[cfg(not(feature = "testflight-controller"))]
     #[tokio::test]
+    #[cfg_attr(any(target_os = "ios", target_os = "android"), ignore = "host side only: phones are controllers")]
     async fn reject_revokes_locally_before_busy_broker_can_acknowledge() {
         let remote = RemoteSession::default();
         let cancelled = Arc::new(AtomicBool::new(false));

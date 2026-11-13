@@ -92,10 +92,11 @@ public final class RemoteScreenView: NSView {
 
     /// Buttons as the engine numbers them: 1 left, 2 middle, 3 right, 4 back, 5 forward.
     private func button(_ event: NSEvent) -> UInt8? {
+        // Session protocol (as the desktop app): 1 left, 2 right, 3 middle.
         switch event.buttonNumber {
         case 0: 1
-        case 1: 3
-        case 2: 2
+        case 1: 2
+        case 2: 3
         case 3: 4
         case 4: 5
         default: nil

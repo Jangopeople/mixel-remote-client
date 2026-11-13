@@ -233,6 +233,41 @@ impl IdentityState {
         Ok(Self(Mutex::new(Some(key))))
     }
 }
+/// Android: the controller's key in the app's Keystore-sealed storage (this device only).
+#[cfg(target_os = "android")]
+mod android_store {
+    use super::{MAGIC, SigningKey, Zeroizing, decode};
+    pub fn load_or_create(account: &str, create: bool) -> Result<SigningKey, String> {
+        match crate::android_secrets::get(account)? {
+            Some(bytes) => return decode(&bytes),
+            None if create => {}
+            None => {
+                return Err("No saved device identity. Choose Create device identity to generate one locally.".into());
+            }
+        }
+        let key = SigningKey::generate(&mut rand_core::OsRng);
+        let seed = Zeroizing::new(key.to_bytes());
+        let mut record = Zeroizing::new(Vec::with_capacity(MAGIC.len() + seed.len()));
+        record.extend_from_slice(MAGIC);
+        record.extend_from_slice(seed.as_ref());
+        crate::android_secrets::set(account, &record)
+            .map_err(|_| "The secure storage could not save the identity".to_owned())?;
+        let stored = crate::android_secrets::get(account)?
+            .ok_or("The secure storage could not read back the identity")?;
+        decode(&stored)
+    }
+}
+#[cfg(target_os = "android")]
+fn load_or_create(create: bool) -> Result<SigningKey, String> {
+    android_store::load_or_create("ed25519-device", create)
+}
+#[cfg(target_os = "android")]
+impl IdentityState {
+    pub fn personal(profile: uuid::Uuid, create: bool) -> Result<Self, String> {
+        let key = android_store::load_or_create(&format!("remote-personal-{profile}"), create)?;
+        Ok(Self(Mutex::new(Some(key))))
+    }
+}
 #[cfg(target_os = "linux")]
 #[allow(unsafe_code)]
 #[path = "linux_identity_store.rs"]
@@ -463,6 +498,10 @@ impl IdentityState {
                 "macOS Keychain"
             } else if cfg!(target_os = "windows") {
                 "Windows user DPAPI"
+            } else if cfg!(target_os = "ios") {
+                "iOS Keychain"
+            } else if cfg!(target_os = "android") {
+                "Android Keystore"
             } else {
                 "Linux Secret Service"
             },

@@ -1,0 +1,4 @@
+# UniFFI binding options (Kotlin: the Android app; Swift: the Apple apps keep the defaults).
+[bindings.kotlin]
+# Android API 26+: JNA cleaner and Android-friendly code instead of java.lang.ref.Cleaner (API 33).
+android = true
