@@ -41,6 +41,16 @@ final class ScreenshotTests: XCTestCase {
         await viewApp.session.readTools()
         let hostedEngine = MockEngine(); Fixtures.hostedSession(hostedEngine)
         let hostedApp = await Fixtures.app(hostedEngine)
+        // Mixel team: rollout, sign-in screen waiting for Apple, an update ready to install.
+        let teamEngine = MockEngine(); Fixtures.company(teamEngine)
+        teamEngine.reply("account_status", AccountStatus(phase: "authenticated", message: "Signed in",
+                                                         account: Account(remembered: true, profile: DemoFixtures.profile, staff: true, displayName: "Mixel Team")))
+        teamEngine.reply("signin_screen_status", json: #"{"supported":false,"availability":"waiting_for_apple","connection_id":null,"name":null}"#)
+        teamEngine.reply("enrollment_companies", json: #"[{"client_id":"c-1","client_name":"Muster Treuhand AG"}]"#)
+        teamEngine.reply("update_check", json: #"{"version":"2.0.1","installable":true,"silent":false,"needs_password":false}"#)
+        let teamApp = await Fixtures.app(teamEngine)
+        teamApp.settings.checkForUpdate()
+        try? await Task.sleep(nanoseconds: 300_000_000)
 
         #if os(macOS)
         list.append(("mac-remote-signed-out", wide, AnyView(RootView(app: outApp))))
@@ -51,6 +61,7 @@ final class ScreenshotTests: XCTestCase {
         list.append(("mac-devices", wide, AnyView(DevicesView(app: app))))
         list.append(("mac-account-company", CGSize(width: 1080, height: 1100), AnyView(AccountView(app: app))))
         list.append(("mac-settings", CGSize(width: 760, height: 1100), AnyView(SettingsView(app: app))))
+        list.append(("mac-settings-team", CGSize(width: 760, height: 1700), AnyView(SettingsView(app: teamApp))))
         list.append(("mac-setup-this-computer", wide, AnyView(RemoteControlView(app: setupApp))))
         list.append(("mac-consent-sheet", CGSize(width: 480, height: 560), AnyView(ConsentSheet(app: incomingApp))))
         list.append(("mac-session-workspace", wide, AnyView(SessionWorkspaceView(app: viewApp))))
