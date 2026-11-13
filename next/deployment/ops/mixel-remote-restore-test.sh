@@ -44,8 +44,12 @@ docker exec "$NAME" pg_isready -U postgres -h 127.0.0.1 >/dev/null
 t2=$(date +%s)
 echo "[restore-test] throwaway Postgres ($IMAGE) ready in $((t2 - t1)) s"
 
-# pg_dumpall --clean output: role and "already exists" errors of the image's own roles are expected.
-age -d -i "$KEY" "$WORK/$ARCHIVE" | gunzip | nice -n 10 docker exec -i "$NAME" psql -X -q -U postgres -d postgres \
+# Restore as the image's real superuser (supabase_admin): as "postgres" the reserved Supabase roles
+# and the objects they own (auth, storage) raise ~100 permission errors (data still loads).
+RESTORE_USER=supabase_admin
+docker exec "$NAME" psql -X -tA -U "$RESTORE_USER" -d postgres -c 'select 1' >/dev/null 2>&1 || RESTORE_USER=postgres
+echo "[restore-test] restoring as $RESTORE_USER"
+age -d -i "$KEY" "$WORK/$ARCHIVE" | gunzip | nice -n 10 docker exec -i "$NAME" psql -X -q -U "$RESTORE_USER" -d postgres \
   >"$WORK/restore.log" 2>&1 || true
 t3=$(date +%s)
 errors=$(grep -c "ERROR" "$WORK/restore.log" || true)
@@ -57,16 +61,22 @@ TABLES=$(docker exec ism-postgres psql -X -tA -U postgres -d ism -c "select stri
   where c.relkind = 'r' and (n.nspname in ('remote_saas', 'remote_private')
      or (n.nspname = 'public' and c.relname in ('devices', 'remote_device_enrollments', 'users', 'organizations', 'clients'))
      or (n.nspname = 'auth' and c.relname = 'users'))")
-count_sql=""
-for t in $TABLES; do count_sql+="select '$t', count(*) from $t union all "; done
-count_sql="${count_sql% union all }"
-docker exec ism-postgres psql -X -tA -F' ' -U postgres -d ism -c "$count_sql" | sort >"$WORK/live.txt"
-docker exec "$NAME" psql -X -tA -F' ' -U postgres -d ism -c "$count_sql" 2>&1 | sort >"$WORK/restored.txt"
+# Count table by table: a table created after the archive was taken (a later migration) is
+# reported as "not in archive" instead of breaking the comparison.
+: >"$WORK/live.txt"; : >"$WORK/restored.txt"
+for t in $TABLES; do
+  echo "$t $(docker exec ism-postgres psql -X -tA -U postgres -d ism -c "select count(*) from $t")" >>"$WORK/live.txt"
+  echo "$t $(docker exec "$NAME" psql -X -tA -U "$RESTORE_USER" -d ism -c "select count(*) from $t" 2>/dev/null || echo missing)" >>"$WORK/restored.txt"
+done
 printf '%-45s %10s %10s\n' table live restored
-join -a1 -e missing -o 0,1.2,2.2 "$WORK/live.txt" "$WORK/restored.txt" | while read -r t live restored; do
+join <(sort "$WORK/live.txt") <(sort "$WORK/restored.txt") | while read -r t live restored; do
   printf '%-45s %10s %10s\n' "$t" "$live" "$restored"
 done
-missing=$(join -v1 "$WORK/live.txt" "$WORK/restored.txt" | wc -l)
+missing=$(awk '$2 == "missing" {print $1}' "$WORK/restored.txt" | tr '\n' ' ')
+# These must be in every archive; anything else missing is newer than the archive.
+CORE="remote_saas.tenants remote_saas.members remote_saas.billing remote_saas.invites remote_private.enrollment_audit public.devices public.remote_device_enrollments public.users auth.users"
+core_missing=""
+for t in $CORE; do grep -qx "$t missing" "$WORK/restored.txt" && core_missing+="$t "; done
 dumped_at=$(echo "$ARCHIVE" | sed -E 's/ism-postgres-([0-9]{8})-([0-9]{4}).*/\1 \2 UTC/')
-echo "[restore-test] archive taken $dumped_at; tables missing in the restore: $missing; total $((t3 - t0)) s"
-[[ "$missing" -eq 0 ]]
+echo "[restore-test] archive taken $dumped_at; not in the archive (newer tables): ${missing:-none}; core tables missing: ${core_missing:-none}; total $((t3 - t0)) s"
+[[ -z "$core_missing" ]]

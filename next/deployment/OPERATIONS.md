@@ -15,7 +15,7 @@ Hard rules that apply to everything below
 
 | Part | Where | Public | Source |
 |---|---|---|---|
-| Connection broker | container `mixel-remote-next-qa-broker-device-access` (host network, 127.0.0.1:8094, image `mixel-remote-next-backend:<tag>`, env `/opt/mixel-remote-next-qa/private/broker-*.env`) | `wss://rs.mixel.ch:9444/v1/ws`, `/healthz` (nginx site `mixel-remote-next-qa.conf`) | `next/crates/signaling_server`, `deployment/backend.Dockerfile` |
+| Connection broker | container `mixel-remote-next-qa-broker-device-access` (host network, 127.0.0.1:8094, image `mixel-remote-next-backend:<tag>`, env file in use since 2026-11-13: `/opt/mixel-remote-next-qa/private/broker-secreview-20261113.env`; `broker-current.env` and the other `broker-*.env` are outdated history (no presence variables) — before changing anything compare the variable names in `docker inspect --format "{{range .Config.Env}}{{println .}}{{end}}" mixel-remote-next-qa-broker-device-access | cut -d= -f1` with the file, and name each new one `broker-<feature>-<date>.env`) | `wss://rs.mixel.ch:9444/v1/ws`, `/healthz` (nginx site `mixel-remote-next-qa.conf`) | `next/crates/signaling_server`, `deployment/backend.Dockerfile` |
 | Identity authority | compose project `mixel-remote-next-qa` service `authority` (127.0.0.1:8093, signer `private/identity.key`) | `https://ism-api.mixel.ch/v1/device-ticket`, `/v1/startup-host-ticket` | same crate, bin `identity_authority` |
 | TURN relay | compose service `turn` (coturn, 178.104.17.23 UDP/TCP 3479, TLS 5350, relay UDP 60000–60099) | `turn:rs.mixel.ch:3479`, `turns:rs.mixel.ch:5350` | `deployment/coturn.Dockerfile`, `private/turnserver.conf` |
 | Database | `ism-postgres` (schemas `remote_saas`, `remote_private`, public device tables) | via PostgREST `ism-postgrest` | `next/sql/0NN_*.sql` |
@@ -40,9 +40,9 @@ Hard rules that apply to everything below
 | `synthetic_connect` | **real session**: probe account signs in (GoTrue), two probe computers get device tickets, log in to `wss://rs.mixel.ch:9444/v1/ws`, request + accept a session, get TURN credentials, open a relay-only WebRTC data channel through the TURN server, exchange a ping/pong, close | 5 min |
 | `presence_fresh` | broker presence report in `remote_private.presence_reports` < 180 s old | 2 min |
 | `containers` | broker, authority, TURN, billing, GoTrue, PostgREST, Postgres running | 2 min |
-| `turn_ports` | TURN TCP 3479 and TLS 5350 accept connections | 2 min |
+| `turn_ports` | STUN binding answer on UDP 3479, clean TLS handshake on 5350 | 2 min |
 | `gotrue`, `ism_api` | `/auth/v1/health`; PostgREST RPC `mixel_remote_prices` | 2 min |
-| `portal`, `viewer`, `meetings` | 6 portal pages + app bundle; web viewer; meet page | 2 min |
+| `portal`, `viewer`, `meetings` | 6 portal pages + app bundle, `/install/{linux,macos}.sh`, `/api/windows-installer`; web viewer; meet page | 2 min |
 | `billing`, `invite_mail` | billing `/health`; invitation sender ran < 10 min ago without error, no invitation overdue > 15 min | 2 min |
 | `stripe_webhook` | Stripe webhook endpoint `we_1UbE0hFRPXnJX22hlR5RA24a` enabled and pointing to remote.mixel.ch | 15 min |
 | `update_manifests` | 4 stable channel files: Ed25519 signature with the app's update key, target fields, installer downloadable with the announced size | 10 min |
@@ -143,7 +143,7 @@ VPS → `docker build -f deployment/backend.Dockerfile -t mixel-remote-next-back
 → save the current container config (`docker inspect ... > private/broker-container-before-<x>.json`) →
 `docker stop` + `docker rename` the old one to `...-prev-<date>` (`docker update --restart no`) → `docker run -d --name
 mixel-remote-next-qa-broker-device-access --network host --restart unless-stopped --user 10001:10001
---env-file private/broker-<x>.env --log-opt max-size=50m --log-opt max-file=5 <image>` with the other
+--env-file private/broker-<feature>-<date>.env (copy of the current one, today `broker-secreview-20261113.env`) --log-opt max-size=50m --log-opt max-file=5 <image>` with the other
 flags exactly as in the saved inspect JSON.
 Running sessions drop and reconnect (apps retry). Rollback: stop + remove the new container, rename
 `...-prev-<date>` back, `docker start` it. Remove the `-prev` container once the new one is good.
@@ -190,7 +190,7 @@ run `sudo systemctl start mixel-remote-health` and confirm `synthetic_connect` p
 
 | Secret | Where | Rotate |
 |---|---|---|
-| Presence token (`MIXEL_PRESENCE_TOKEN`) | `private/broker-*.env` (the env the broker container runs with) | mint a new JWT (role `mixel_remote_presence`, HS256 with the ISM JWT secret, new `iat`/`exp`), replace the line, recreate the broker (section 4). Revoke all at once: `revoke execute on function public.remote_presence_report(integer[]) from mixel_remote_presence`. Details: `QA-DEPLOYMENT.md` "Presence reporting". |
+| Presence token (`MIXEL_PRESENCE_TOKEN`) | the broker's current env file (`private/broker-secreview-20261113.env` as of 2026-11-13; not `broker-current.env`) | mint a new JWT (role `mixel_remote_presence`, HS256 with the ISM JWT secret, new `iat`/`exp`), replace the line, recreate the broker (section 4). Revoke all at once: `revoke execute on function public.remote_presence_report(integer[]) from mixel_remote_presence`. Details: `QA-DEPLOYMENT.md` "Presence reporting". |
 | TURN shared secret | `MIXEL_TURN_SHARED_SECRET` in the broker env and `static-auth-secret` in `private/turnserver.conf` | generate 48 random bytes (`openssl rand -hex 48`), put it into both files, restart `turn` (`docker compose -p mixel-remote-next-qa -f compose.json restart turn`) and recreate the broker right after each other, in a quiet hour. Relay credentials live 10 min; relayed sessions running at that moment may drop and reconnect. |
 | Support policy token / startup host token | `MIXEL_SUPPORT_POLICY_TOKEN` (broker), `MIXEL_STARTUP_HOST_POLICY_TOKEN` (authority) | set the new value in the admin console env first (`/opt/mixel-admin-api`, accepts it), then broker/authority, recreate, remove the old one in the console. |
 | Identity key (device ticket signer) | `private/identity.key` (32 bytes, owner 10002, 0600), public half in `MIXEL_PEER_AUTHORITY_PUBLIC_KEYS` (broker, comma-separated list) | create a new 32-byte key (`head -c 32 /dev/urandom`), add its public key to `MIXEL_PEER_AUTHORITY_PUBLIC_KEYS` **next to** the old one, recreate the broker, swap `identity.key`, recreate the authority; after the ticket lifetime (900 s) remove the old public key and recreate the broker. Enrolments are not affected; apps fetch a new ticket on renewal. |
@@ -236,9 +236,11 @@ archive and the Remote config archive.
 archiving). Subscriptions, invoices and payments stay in Stripe, so for paying customers the loss is
 tenant, member and device changes since the last dump; compare `remote_saas.billing` with the Stripe
 subscriptions after a restore. Lowering the RPO needs WAL archiving or more frequent dumps (not set up).
-**RTO** (measured 2026-11-13, restore test below): fetch from the Storage Box ≈ 5 s, decrypt + restore
-of the full ISM dump into a fresh Postgres ≈ RESTORE_MINUTES min, plus repointing the stack ≈ 15 min:
-about RTO_TOTAL in total for a full database loss. Config/identity key restore ≈ 10 min.
+**RTO** (measured 2026-11-13 with the restore test, VPS load ≈ 8, container limited to 1.5 CPUs):
+fetch the 457 MB archive from the Storage Box 4 s, fresh Postgres 10–12 s, decrypt + gunzip + restore
+of the full ISM dump (≈ 2.6 GB database) 710–832 s. With repointing the stack and starting the
+services (≈ 15 min) a full database loss is back in **about 30 minutes**; restoring the config and
+identity key takes about 10 minutes.
 
 Restore test (do it monthly; it changes nothing live):
 ```bash
@@ -247,13 +249,15 @@ ssh mixel-vps 'sudo /usr/local/sbin/mixel-remote-restore-test /dev/shm/mixel-res
 ```
 It takes the newest Storage Box archive, restores it into the throwaway container
 `mixel-remote-restore-test` (no network, data on `/mnt/HC_Volume_106234333/mixel-remote-restore-test`),
-compares row counts of every `remote_saas`/`remote_private` table and the related public/auth tables
-with live, prints timings, and removes the container, the data and the key.
+restores as `supabase_admin`, compares row counts of every `remote_saas`/`remote_private` table and
+the related public/auth tables with live (tables added by a migration after the archive are listed as
+"not in the archive"; it fails only when a core table is missing), prints timings, and removes the
+container, the data and the key. Counts differ by whatever changed since the dump (QA runs, presence).
 
 Real restore (database lost or corrupted): stop writers (billing container, broker, authority), keep
 the broken data directory (rename, do not delete), create a fresh `ism-postgres` from the ISM compose
 stack, `age -d -i <key> ism-postgres-<stamp>.dump.gz.age | gunzip | docker exec -i ism-postgres psql
--U postgres -d postgres`, `NOTIFY pgrst, 'reload schema'`, start GoTrue/PostgREST, then billing,
+-U supabase_admin -d postgres` (as `postgres` the reserved Supabase roles raise ~100 permission errors), `NOTIFY pgrst, 'reload schema'`, start GoTrue/PostgREST, then billing,
 authority, broker; run the health check; re-sync billing from Stripe (`/api/billing` events are
 resend the gap's events from the Stripe dashboard if needed). Only one table: restore into the throwaway container (the
 test script without the cleanup) and copy rows over with `\copy`.

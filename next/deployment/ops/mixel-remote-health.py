@@ -240,7 +240,14 @@ def check_portal() -> str:
     if not script:
         raise CheckError("portal page without script")
     expect_status(f"{base}/assets/{script}", 200, timeout=15, max_bytes=10_000_000)
-    return f"{len(pages)} pages and the app bundle load"
+    # Mass-rollout endpoints the deploy dialogs hand out.
+    for script_path in ("/install/linux.sh", "/install/macos.sh"):
+        if not expect_status(base + script_path, 200, timeout=15).startswith(b"#!/bin/sh"):
+            raise CheckError(f"{script_path}: not the install script")
+    installer = json.loads(expect_status(f"{base}/api/windows-installer", 200, timeout=15))
+    if not str(installer.get("url", "")).startswith("https://store-api.mixel.ch/"):
+        raise CheckError("/api/windows-installer: no installer address")
+    return f"{len(pages)} pages, app bundle, rollout scripts and Windows installer link load"
 
 
 def check_viewer() -> str:
@@ -378,6 +385,10 @@ def cert_days(host: str, port: int, *, server_name: str | None = None) -> int:
     with socket.create_connection((host, port), timeout=10) as raw:
         with context.wrap_socket(raw, server_hostname=server_name or host) as tls:
             not_after = tls.getpeercert()["notAfter"]
+            try:
+                tls.unwrap()  # clean close, no "connection reset" noise in the server logs
+            except (OSError, ssl.SSLError):
+                pass
     return int((ssl.cert_time_to_seconds(not_after) - time.time()) // 86400)
 
 
@@ -420,15 +431,34 @@ def check_tls() -> str:
 
 
 def check_turn_ports() -> str:
+    """STUN binding over UDP 3479 (what clients use first) and a clean TLS handshake on 5350.
+    (A bare TCP connect makes coturn log "Connection reset by peer" on every run.)"""
     host = cfg("MRH_TURN_HOST", "178.104.17.23")
-    for port in (3479, 5350):
-        target = int(cfg(f"MRH_TURN_PORT_{port}", str(port)))
-        try:
-            with socket.create_connection((host, target), timeout=5):
-                pass
-        except OSError as error:
-            raise CheckError(f"TURN {host}:{target}: {error}") from None
-    return "TURN TCP 3479 and TLS 5350 accept connections"
+    udp_port = int(cfg("MRH_TURN_PORT_3479", "3479"))
+    tls_port = int(cfg("MRH_TURN_PORT_5350", "5350"))
+    transaction = os.urandom(12)
+    request = b"\x00\x01\x00\x00\x21\x12\xa4\x42" + transaction
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
+        udp.settimeout(3)
+        answer = b""
+        for _ in range(3):
+            try:
+                udp.sendto(request, (host, udp_port))
+                answer, _ = udp.recvfrom(2048)
+                break
+            except OSError:
+                continue
+    if len(answer) < 20 or answer[:2] != b"\x01\x01" or answer[8:20] != transaction:
+        raise CheckError(f"TURN {host}:{udp_port}/udp: no STUN binding answer")
+    try:
+        context = ssl.create_default_context()
+        with socket.create_connection((host, tls_port), timeout=5) as raw:
+            with context.wrap_socket(raw, server_hostname="rs.mixel.ch") as tls:
+                tls.unwrap()
+    except (OSError, ssl.SSLError) as error:
+        if not isinstance(error, ssl.SSLZeroReturnError):
+            raise CheckError(f"TURN {host}:{tls_port}/tls: {error}") from None
+    return "TURN answers STUN on UDP 3479 and TLS on 5350"
 
 
 def check_backups() -> str:
