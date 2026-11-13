@@ -10,7 +10,7 @@ pub mod stream;
 pub mod input;
 
 pub mod h264;
-#[cfg(any(target_os = "windows", target_os = "linux", test))]
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "android", test))]
 pub mod desktop_h264;
 #[cfg(target_os = "macos")]
 pub mod macos_bundle;
@@ -44,7 +44,7 @@ pub mod macos_clipboard;
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)] // Main-thread panel cancellation and retained NSURL filesystem bytes.
 pub mod macos_file_picker;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios", target_os = "android"))]
 #[allow(unsafe_code)] // Retained directory capabilities and exclusive native publication.
 pub mod desktop_files;
 

@@ -114,7 +114,7 @@ public static class LiveCheck
     /// </summary>
     private static async Task Providers(NativeEngine engine)
     {
-        var offered = (await Try(engine, "sign_in_providers")).Value as JsonArray ?? [];
+        var offered = (await Try(engine, "account_providers")).Value as JsonArray ?? [];
         var names = offered.Select(item => item?.GetValue<string>() ?? "").ToList();
         Check($"sign-in service offers {string.Join(", ", names)}", names.Contains("keycloak"));
         var hosts = new Dictionary<string, string> { ["keycloak"] = "auth.mixel.ch", ["google"] = "accounts.google.com", ["azure"] = "login.microsoftonline.com", ["apple"] = "appleid.apple.com" };

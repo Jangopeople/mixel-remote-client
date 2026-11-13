@@ -1,56 +1,65 @@
 //! Mixel Remote engine: everything the desktop app does without a window toolkit
 //! (accounts, devices, sessions, files, chat, recording, the host side). The Tauri app and
 //! the native apps (through `mixel_core_ffi`) both drive it.
+/// The commands of the native apps (same names and arguments as the desktop app's window commands).
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios", target_os = "android"))]
+pub mod native_commands;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod session_platform;
-/// iPhone and iPad: controller only.
-#[cfg(target_os = "ios")]
+/// iPhone, iPad and Android phones and tablets: controller only.
+#[cfg(any(target_os = "ios", target_os = "android"))]
 #[path = "session_platform_ios.rs"]
 pub mod session_platform;
 #[cfg(target_os = "linux")]
 pub mod wayland_portal;
 #[cfg(target_os = "linux")]
 pub mod linux_guard;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios", target_os = "android"))]
 pub mod account_auth;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios", target_os = "android"))]
 pub mod device_identity;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios", target_os = "android"))]
 pub mod session_store;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios", target_os = "android"))]
 pub mod host_actions;
 pub mod session_guard;
+pub mod annotation;
+#[cfg(target_os = "windows")]
+#[allow(unsafe_code)] // Layered overlay windows and GDI drawing, each commented.
+mod annotation_windows;
+#[cfg(target_os = "linux")]
+mod annotation_x11;
 pub mod session_mirror;
 pub mod host_print;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub mod ipp_printer;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios", target_os = "android"))]
 pub mod agent;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios", target_os = "android"))]
 pub mod ai_assistant;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios", target_os = "android"))]
 pub mod self_update;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod autostart;
 #[cfg(target_os = "macos")]
 pub mod local_session;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios", target_os = "android"))]
 pub mod remote_chat;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios", target_os = "android"))]
 pub mod remote_clipboard;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios", target_os = "android"))]
 pub mod remote_control;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios", target_os = "android"))]
 pub mod remote_file_transport;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios", target_os = "android"))]
 pub mod remote_files;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios", target_os = "android"))]
 pub mod remote_peer;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios", target_os = "android"))]
 pub mod remote_recording;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios", target_os = "android"))]
 pub mod remote_recovery;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios", target_os = "android"))]
 pub mod remote_session;
 pub mod remote_sound;
 #[cfg(target_os = "macos")]
@@ -66,18 +75,21 @@ pub mod windows_signin_host;
 #[cfg(target_os = "linux")]
 pub mod linux_signin_host;
 /// `--signin-enroll` reads the deploy token from MIXEL_DEPLOY_TOKEN or standard input.
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios", target_os = "android"))]
 pub mod deploy_token;
 #[cfg(target_os = "macos")]
 pub mod macos_support;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios", target_os = "android"))]
 pub mod device_tickets;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios", target_os = "android"))]
 pub mod remote_video;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios", target_os = "android"))]
 pub mod service_config;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod system_browser;
+/// Android: secrets (device key, remembered sign-in) in the app's Keystore-sealed storage.
+#[cfg(target_os = "android")]
+pub mod android_secrets;
 
 /// Screen-capture worker shared by the windowed apps and the session host.
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]

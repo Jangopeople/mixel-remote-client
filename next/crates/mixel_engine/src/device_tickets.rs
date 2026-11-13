@@ -29,7 +29,7 @@ pub async fn issue_startup(
     issue_scoped(None, enrolled, identity).await
 }
 
-#[cfg_attr(target_os = "ios", allow(unreachable_code))]
+#[cfg_attr(any(target_os = "ios", target_os = "android"), allow(unreachable_code))]
 async fn issue_scoped(
     credential: Option<&Credential>,
     enrolled: &EnrolledPrincipal,
@@ -84,7 +84,7 @@ async fn issue_scoped(
             .json(&proof)
     } else {
         // iPhone and iPad never run the always-on host.
-        #[cfg(target_os = "ios")]
+        #[cfg(any(target_os = "ios", target_os = "android"))]
         let startup: reqwest::RequestBuilder = {
             let _ = &key;
             return Err("Sign in again to connect".into());

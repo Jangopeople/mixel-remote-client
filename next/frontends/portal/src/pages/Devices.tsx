@@ -6,7 +6,7 @@ import { ConfirmDialog, Dialog, ErrorNotice, Notice, Spinner, Toast, formatDate 
 import { Icon } from '../components/Icon';
 import { STORE_URL, WEB_VIEWER_URL } from '../components/PublicLayout';
 import { api, type Device, type DevicePresence, type Group } from '../lib/api';
-import { canManageDevices, formatConnectionId, isManager, isName, isWritable, osLabel, relativeTime, sinceTime } from '../lib/logic';
+import { canManageDevices, deviceSections, formatConnectionId, isManager, isName, isWritable, osLabel, relativeTime, sinceTime } from '../lib/logic';
 import { useLoad } from '../lib/useLoad';
 
 function AddDevicesDialog({ onClose }: { onClose: () => void }) {
@@ -108,6 +108,16 @@ function MoveDialog({ device, groups, onClose, onDone }: { device: Device; group
 
 type Action = { kind: 'rename' | 'move' | 'remove'; device: Device } | { kind: 'add' } | null;
 
+function StarToggle({ device, on, onToggle }: { device: Device; on: boolean; onToggle: () => void }) {
+  const { t } = useI18n();
+  const label = t(on ? 'devices.favorite.remove' : 'devices.favorite.add', { name: device.name });
+  return (
+    <button type="button" className="button-quiet star-toggle" aria-pressed={on} aria-label={label} title={label} data-testid="favorite-toggle" onClick={onToggle}>
+      <Icon name="star" />
+    </button>
+  );
+}
+
 function PresenceCell({ device, presence }: { device: Device; presence: DevicePresence | undefined }) {
   const { t, locale } = useI18n();
   if (device.connection_id === null || device.revoked) {
@@ -171,7 +181,67 @@ export function Devices() {
     await Promise.all([devices.reload(), groups.reload(), presence.reload(), reloadTenant()]);
   };
 
+  // Favorites and recent connections (SQL 029). Until those functions exist on the server (or when
+  // they fail), the stars and the two sections are simply not shown.
+  const favorites = useLoad(() => api.favorites(tenant.tenant_id), tenant.tenant_id);
+  const recent = useLoad(() => api.recentDevices(tenant.tenant_id, 10), tenant.tenant_id);
+  const [favoriteIds, setFavoriteIds] = useState<Set<string> | null>(null);
+  useEffect(() => {
+    if (favorites.data) setFavoriteIds(new Set(favorites.data.map((row) => row.device_id)));
+  }, [favorites.data]);
+  const starsOn = favoriteIds !== null && !favorites.error;
+  async function toggleFavorite(device: Device) {
+    if (!favoriteIds) return;
+    const id = device.device_id;
+    const was = favoriteIds.has(id);
+    const change = (set: Set<string>, on: boolean) => {
+      const next = new Set(set);
+      if (on) next.add(id); else next.delete(id);
+      return next;
+    };
+    setFavoriteIds((current) => change(current ?? new Set(), !was));
+    try {
+      await api.setFavorite(tenant.tenant_id, id, !was);
+    } catch {
+      setFavoriteIds((current) => change(current ?? new Set(), was));
+      setToast(t('devices.favoriteFailed'));
+    }
+  }
+
   const list = devices.data ?? [];
+  const sections = deviceSections(list, starsOn ? favoriteIds! : new Set<string>(), recent.error ? [] : recent.data ?? []);
+  const grouped = sections.favorites.length > 0 || sections.recent.length > 0;
+  const columns = 4 + (starsOn ? 1 : 0) + (groupsOn ? 1 : 0) + (canManage ? 1 : 0);
+  const row = (device: Device) => (
+    <tr key={device.device_id} data-device={device.name}>
+      {starsOn && <td className="cell-star"><StarToggle device={device} on={favoriteIds!.has(device.device_id)} onToggle={() => void toggleFavorite(device)} /></td>}
+      <td className="cell-main">
+        <strong>{device.name}</strong>
+        <span>{osLabel(device.os)}{device.added_via ? ` · ${t(`devices.via.${device.added_via}` as MessageKey)}` : ''}</span>
+      </td>
+      <td className="conn-id">{formatConnectionId(device.connection_id)}</td>
+      {groupsOn && <td className="hide-sm">{device.group_name ?? <span className="field-hint">{t('devices.noGroup')}</span>}</td>}
+      <td data-testid="device-status"><PresenceCell device={device} presence={presenceOf.get(device.device_id)} /></td>
+      <td className="hide-sm">{formatDate(device.enrolled_at, locale)}</td>
+      {canManage && (
+        <td className="cell-actions">
+          <button type="button" className="button-quiet button-small" disabled={!writable} onClick={() => setAction({ kind: 'rename', device })}>{t('common.rename')}</button>
+          {groupsOn && <button type="button" className="button-quiet button-small" disabled={!writable} onClick={() => setAction({ kind: 'move', device })}>{t('devices.move')}</button>}
+          <button type="button" className="button-danger button-small" onClick={() => setAction({ kind: 'remove', device })}>{t('common.remove')}</button>
+        </td>
+      )}
+    </tr>
+  );
+  const section = (key: 'favorites' | 'recent' | 'others', items: Device[], icon: 'star' | 'clock' | 'monitor') => items.length > 0 && (
+    <tbody key={key} data-testid={`devices-section-${key}`}>
+      {grouped && (
+        <tr className="table-section">
+          <th scope="colgroup" colSpan={columns}><Icon name={icon} />{t(`devices.section.${key}`)}</th>
+        </tr>
+      )}
+      {items.map(row)}
+    </tbody>
+  );
   return (
     <section>
       <div className="page-heading">
@@ -211,6 +281,7 @@ export function Devices() {
             <table className="table" data-testid="devices-table">
               <thead>
                 <tr>
+                  {starsOn && <th className="cell-star"><span className="sr-only">{t('devices.col.favorite')}</span></th>}
                   <th>{t('devices.col.name')}</th>
                   <th>{t('devices.col.id')}</th>
                   {groupsOn && <th className="hide-sm">{t('devices.col.group')}</th>}
@@ -219,27 +290,9 @@ export function Devices() {
                   {canManage && <th><span className="sr-only">{t('common.actions')}</span></th>}
                 </tr>
               </thead>
-              <tbody>
-                {list.map((device) => (
-                  <tr key={device.device_id} data-device={device.name}>
-                    <td className="cell-main">
-                      <strong>{device.name}</strong>
-                      <span>{osLabel(device.os)}{device.added_via ? ` · ${t(`devices.via.${device.added_via}` as MessageKey)}` : ''}</span>
-                    </td>
-                    <td className="conn-id">{formatConnectionId(device.connection_id)}</td>
-                    {groupsOn && <td className="hide-sm">{device.group_name ?? <span className="field-hint">{t('devices.noGroup')}</span>}</td>}
-                    <td data-testid="device-status"><PresenceCell device={device} presence={presenceOf.get(device.device_id)} /></td>
-                    <td className="hide-sm">{formatDate(device.enrolled_at, locale)}</td>
-                    {canManage && (
-                      <td className="cell-actions">
-                        <button type="button" className="button-quiet button-small" disabled={!writable} onClick={() => setAction({ kind: 'rename', device })}>{t('common.rename')}</button>
-                        {groupsOn && <button type="button" className="button-quiet button-small" disabled={!writable} onClick={() => setAction({ kind: 'move', device })}>{t('devices.move')}</button>}
-                        <button type="button" className="button-danger button-small" onClick={() => setAction({ kind: 'remove', device })}>{t('common.remove')}</button>
-                      </td>
-                    )}
-                  </tr>
-                ))}
-              </tbody>
+              {section('favorites', sections.favorites, 'star')}
+              {section('recent', sections.recent, 'clock')}
+              {section('others', sections.others, 'monitor')}
             </table>
           </div>
         )}

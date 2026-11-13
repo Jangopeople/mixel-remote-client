@@ -1,0 +1,39 @@
+[package]
+name = "mixel_remote_linux"
+version = "2.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Mixel Remote for Linux: native GTK 4 + libadwaita app on the shared engine"
+
+[[bin]]
+name = "mixel-remote"
+path = "src/main.rs"
+
+[features]
+# LAB only: sign in from a QA session file and run the live checks (--live-check, --live-session).
+qa-session = ["mixel_engine/qa-session", "dep:reqwest"]
+
+# GTK 4.6 / libadwaita 1.1 (GNOME 42, Ubuntu 22.04) is the oldest system this app must run on, so only
+# their APIs are enabled; Debian 12 (GTK 4.8, libadwaita 1.2) and Ubuntu 24.04 are newer.
+[target.'cfg(target_os = "linux")'.dependencies]
+mixel_engine = { path = "../../crates/mixel_engine" }
+gtk = { package = "gtk4", version = "0.10", features = ["gnome_42"] }
+adw = { package = "libadwaita", version = "0.8", features = ["v1_1"] }
+tokio = { version = "1", features = ["rt-multi-thread", "time", "sync", "macros"] }
+serde = { workspace = true }
+serde_json = "1"
+regex = "1"
+gettext = "0.4"
+ksni = "0.3"
+async-channel = "2"
+# Reads the 0.1.x app's settings (its web view's local storage, SQLite) once after the update.
+rusqlite = "0.32"
+# LAB only (qa-session): checks that each sign-in button reaches its provider.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
+
+[build-dependencies]
+# none: the translations are compiled by build.rs itself
+
+[lints]
+workspace = true

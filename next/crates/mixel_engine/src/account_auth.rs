@@ -100,10 +100,10 @@ struct Inner {
     remember: bool,
     restore_started: bool,
     restored: bool,
+    /// The browser sign-in of an app that receives the end itself (APP_CALLBACK): its state and
+    /// where the code goes.
+    app_pending: Option<(Zeroizing<String>, tokio::sync::oneshot::Sender<Zeroizing<String>>)>,
 }
-/// Sign-in providers the apps may choose (GoTrue names, as the portal uses them).
-pub const SIGN_IN_PROVIDERS: [&str; 4] = ["keycloak", "google", "azure", "apple"];
-
 #[derive(Clone)]
 pub struct AccountAuth {
     inner: Arc<Mutex<Inner>>,
@@ -139,6 +139,7 @@ impl Default for AccountAuth {
                 remember: false,
                 restore_started: false,
                 restored: false,
+                app_pending: None,
             })),
             operation: Arc::new(Mutex::new(())),
         }
@@ -431,32 +432,42 @@ impl AccountAuth {
         Ok(())
     }
     pub async fn begin(&self) -> Result<String, String> {
-        self.begin_with(None).await
+        self.begin_with(None, None).await
     }
-    /// Browser sign-in with a chosen provider of the sign-in service (`keycloak` = Mixel ID, `google`,
-    /// `azure` = Microsoft, `apple`); `None`: the configured one (or the company's SSO domain). The same
-    /// PKCE flow and loopback callback serve every provider.
-    pub async fn begin_with(&self, chosen: Option<&str>) -> Result<String, String> {
-        let (client, configured, domain) = AuthClient::configured()?;
-        if let Some(name) = chosen
-            && !SIGN_IN_PROVIDERS.contains(&name)
-        {
-            return Err("This sign-in method is not available".into());
+    /// As [`Self::begin`], optionally with a sign-in provider of [`PROVIDERS`] (instead of the
+    /// configured one) and, for the phone apps, [`APP_CALLBACK`]: the provider's last step returns
+    /// to the app (Custom Tab, PKCE), which hands the address to [`Self::complete_app`].
+    pub async fn begin_with(&self, chosen: Option<&str>, app_callback: Option<&str>) -> Result<String, String> {
+        let chosen = match chosen {
+            None => None,
+            Some(name) => Some(*PROVIDERS.iter().find(|known| known.0 == name).ok_or("This sign-in method is not available")?),
+        };
+        if app_callback.is_some_and(|target| target != APP_CALLBACK) {
+            return Err("This app address cannot receive the sign-in".into());
         }
-        let provider = chosen.map_or(configured, str::to_owned);
+        let (client, configured, domain) = AuthClient::configured()?;
+        // A chosen provider signs in directly (no company SSO domain lookup).
         let domain = if chosen.is_some() { None } else { domain };
-        // Apple only grants these scopes; the others use OpenID Connect.
-        let scopes = if provider == "apple" { "name email" } else { "openid profile email" };
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .map_err(|_| "Cannot open the private sign-in callback")?;
-        let address = listener
-            .local_addr()
-            .map_err(|_| "Sign-in callback unavailable")?;
+        let (provider, scopes) = chosen.map_or((configured, "openid profile email"), |(name, scopes)| (name.to_owned(), scopes));
         let verifier = random()?;
         let state = random()?;
         let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
-        let redirect = format!("http://{address}/auth/callback?state={}", state.as_str());
+        enum Back {
+            Loopback(TcpListener),
+            App(tokio::sync::oneshot::Receiver<Zeroizing<String>>, tokio::sync::oneshot::Sender<Zeroizing<String>>),
+        }
+        let (back, redirect) = if app_callback.is_some() {
+            let (sender, receiver) = tokio::sync::oneshot::channel();
+            (Back::App(receiver, sender), format!("{APP_CALLBACK}?state={}", state.as_str()))
+        } else {
+            let listener = TcpListener::bind("127.0.0.1:0")
+                .await
+                .map_err(|_| "Cannot open the private sign-in callback")?;
+            let address = listener
+                .local_addr()
+                .map_err(|_| "Sign-in callback unavailable")?;
+            (Back::Loopback(listener), format!("http://{address}/auth/callback?state={}", state.as_str()))
+        };
         let generation = {
             let mut inner = self.inner.lock().await;
             if matches!(
@@ -526,9 +537,22 @@ impl AccountAuth {
         inner.status.message = "Complete sign-in in your browser, then return here".into();
         // Set the waiting state before starting the callback task. A fast
         // callback must never have its verified state overwritten by begin.
+        let listener = match back {
+            Back::Loopback(listener) => Ok(listener),
+            Back::App(receiver, sender) => {
+                inner.app_pending = Some((state.clone(), sender));
+                Err(receiver)
+            }
+        };
         let task = tokio::spawn(async move {
             let result=async {
-                let code=receive_code(listener,&state).await?;
+                let code=match listener {
+                    Ok(listener)=>receive_code(listener,&state).await?,
+                    // The person may take a while at the provider (second factor, account choice).
+                    Err(receiver)=>tokio::time::timeout(Duration::from_secs(600),receiver).await
+                        .map_err(|_|"Browser sign-in expired; start a fresh sign-in".to_owned())?
+                        .map_err(|_|"Sign-in was cancelled".to_owned())?,
+                };
                 let tokens:Tokens=client.request("/auth/v1/token?grant_type=pkce",Some(serde_json::json!({"auth_code":code.as_str(),"code_verifier":verifier.as_str()})),None).await?;
                 this.apply(generation,client,tokens,None).await
             }.await;
@@ -540,6 +564,41 @@ impl AccountAuth {
         });
         inner.task = Some(task);
         Ok(url.to_string())
+    }
+    /// The end of an app's browser sign-in (`ch.mixel.remote://auth/callback?state=…&code=…`):
+    /// only the waiting attempt's state is accepted; the code is exchanged with its PKCE verifier.
+    pub async fn complete_app(&self, address: &str) -> Result<(), String> {
+        let (state, code, reason) = app_callback_parts(address)?;
+        let mut inner = self.inner.lock().await;
+        let Some((expected, _)) = inner.app_pending.as_ref() else {
+            return Err("No sign-in is waiting for this app".into());
+        };
+        if state.as_str() != expected.as_str() {
+            return Err("This sign-in answer belongs to another attempt".into());
+        }
+        let (_, sender) = inner.app_pending.take().ok_or("No sign-in is waiting for this app")?;
+        drop(inner);
+        match code {
+            Some(code) => sender.send(code).map_err(|_| "Sign-in was cancelled".into()),
+            // Dropping the sender ends the attempt; the status says so.
+            None => Err(if reason.is_empty() { "Sign-in was cancelled".into() } else { reason }),
+        }
+    }
+
+    /// The sign-in providers the Mixel sign-in service offers right now (of [`PROVIDERS`]).
+    pub async fn providers() -> Result<Vec<String>, String> {
+        #[derive(Deserialize)]
+        struct Settings {
+            #[serde(default)]
+            external: std::collections::HashMap<String, bool>,
+        }
+        let (client, _, _) = AuthClient::configured()?;
+        let settings: Settings = client.request("/auth/v1/settings", None, None).await?;
+        Ok(PROVIDERS
+            .iter()
+            .filter(|(name, _)| settings.external.get(*name).copied().unwrap_or(false))
+            .map(|(name, _)| (*name).to_owned())
+            .collect())
     }
     async fn apply(
         &self,
@@ -1095,6 +1154,7 @@ impl AccountAuth {
         );
         let generation = inner.generation;
         revoke(&mut inner);
+        inner.app_pending = None;
         inner.remember = false;
         inner.restored = false;
         inner.client = None;
@@ -1111,6 +1171,47 @@ impl AccountAuth {
         }
         Ok(())
     }
+}
+/// Where the phone apps receive the end of the browser sign-in (fixed; allowed on the sign-in service).
+pub const APP_CALLBACK: &str = "ch.mixel.remote://auth/callback";
+/// Sign-in providers an app may choose (as the portal offers them) and their scopes.
+pub const PROVIDERS: &[(&str, &str)] = &[
+    ("keycloak", "openid profile email"),
+    ("google", "openid email profile"),
+    ("azure", "openid email profile"),
+    ("apple", "name email"),
+];
+/// State, code (or none) and the provider's reason from an app callback address.
+type AppCallback = (Zeroizing<String>, Option<Zeroizing<String>>, String);
+fn app_callback_parts(address: &str) -> Result<AppCallback, String> {
+    let invalid = || "This is not a Mixel Remote sign-in answer".to_owned();
+    if address.len() > 8192 {
+        return Err(invalid());
+    }
+    let url: Url = address.parse().map_err(|_| invalid())?;
+    let expected: Url = APP_CALLBACK.parse().map_err(|_| invalid())?;
+    if url.scheme() != expected.scheme() || url.host_str() != expected.host_str() || url.path() != expected.path() || url.port().is_some() {
+        return Err(invalid());
+    }
+    // Errors may also come in the fragment.
+    let mut pairs: Vec<(String, String)> = url.query_pairs().map(|(k, v)| (k.into_owned(), v.into_owned())).collect();
+    if let Some(fragment) = url.fragment()
+        && let Ok(parsed) = Url::parse(&format!("mixel:/?{fragment}"))
+    {
+        pairs.extend(parsed.query_pairs().map(|(k, v)| (k.into_owned(), v.into_owned())));
+    }
+    let all = |name: &str| pairs.iter().filter(|(key, _)| key == name).map(|(_, value)| value.clone()).collect::<Vec<_>>();
+    let (states, codes) = (all("state"), all("code"));
+    if states.len() != 1 || codes.len() > 1 || states[0].is_empty() {
+        return Err(invalid());
+    }
+    let code = match codes.into_iter().next() {
+        Some(code) if code.is_empty() || code.len() > 2048 || code.chars().any(char::is_control) => return Err(invalid()),
+        other => other.map(Zeroizing::new),
+    };
+    let reason = all("error_description").into_iter().chain(all("error")).next().unwrap_or_default();
+    let reason: String = reason.chars().filter(|c| !c.is_control()).take(300).collect();
+    Ok((Zeroizing::new(states[0].clone()), code, reason))
 }
 async fn receive_code(listener: TcpListener, state: &str) -> Result<Zeroizing<String>, String> {
     let address = listener
@@ -1188,8 +1289,10 @@ fn callback_code(
     Some(Zeroizing::new(codes[0].1.to_string()))
 }
 
+
 #[cfg(test)]
 mod tests {
+
     use super::*;
 
     #[tokio::test]
@@ -1210,5 +1313,34 @@ mod tests {
             assert!(response.starts_with(&format!("HTTP/1.1 {expected_status}")));
         }
         assert_eq!(receiver.await.unwrap().unwrap().as_str(), "verified");
+    }
+
+    #[test]
+    fn app_callback_needs_the_exact_address_one_state_and_one_code() {
+        let good = app_callback_parts("ch.mixel.remote://auth/callback?state=abc&code=xyz").unwrap();
+        assert_eq!((good.0.as_str(), good.1.as_deref().map(|code| code.as_str())), ("abc", Some("xyz")));
+        for refused in [
+            "https://evil.example/auth/callback?state=abc&code=xyz",
+            "ch.mixel.remote://auth/other?state=abc&code=xyz",
+            "ch.mixel.remote://evil/callback?state=abc&code=xyz",
+            "ch.mixel.remote://auth/callback?state=abc&state=def&code=xyz",
+            "ch.mixel.remote://auth/callback?code=xyz",
+            "ch.mixel.remote://auth/callback?state=abc&code=one&code=two",
+        ] {
+            assert!(app_callback_parts(refused).is_err(), "{refused}");
+        }
+        // The provider refused or the person cancelled: no code, the provider's reason.
+        let denied = app_callback_parts("ch.mixel.remote://auth/callback?state=abc&error=access_denied&error_description=User+cancelled").unwrap();
+        assert!(denied.1.is_none());
+        assert_eq!(denied.2, "User cancelled");
+    }
+
+    #[tokio::test]
+    async fn unknown_providers_and_app_addresses_are_refused() {
+        let auth = AccountAuth::default();
+        assert_eq!(auth.begin_with(Some("github"), None).await.unwrap_err(), "This sign-in method is not available");
+        assert_eq!(auth.begin_with(None, Some("https://evil.example/steal")).await.unwrap_err(), "This app address cannot receive the sign-in");
+        assert_eq!(auth.complete_app("ch.mixel.remote://auth/callback?state=abc&code=xyz").await.unwrap_err(), "No sign-in is waiting for this app");
+        assert_eq!(PROVIDERS.iter().find(|p| p.0 == "apple").unwrap().1, "name email");
     }
 }

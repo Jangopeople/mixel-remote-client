@@ -232,7 +232,7 @@ public sealed class AppModel : Observable
 
     public async Task LoadProviders()
     {
-        try { Providers = await Engine.RunAsync<List<string>>("sign_in_providers"); }
+        try { Providers = await Engine.RunAsync<List<string>>("account_providers"); }
         catch (EngineFailure) { Providers = ["keycloak"]; }
         if (Providers.Count == 0) Providers = ["keycloak"];
     }

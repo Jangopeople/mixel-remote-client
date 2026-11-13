@@ -9,13 +9,14 @@ public struct SessionWorkspaceView: View {
     @State private var inviting = false
 
     enum Tool: String, CaseIterable, Identifiable {
-        case chat, files, clipboard
+        case chat, files, clipboard, assistant
         var id: String { rawValue }
         var title: String {
             switch self {
             case .chat: L("Chat")
             case .files: L("Files")
             case .clipboard: L("Clipboard")
+            case .assistant: L("AI assistant and ticket note")
             }
         }
         var symbol: String {
@@ -23,6 +24,7 @@ public struct SessionWorkspaceView: View {
             case .chat: "bubble.left.and.bubble.right"
             case .files: "folder"
             case .clipboard: "doc.on.clipboard"
+            case .assistant: "sparkles"
             }
         }
     }
@@ -60,6 +62,7 @@ public struct SessionWorkspaceView: View {
                 Image(decorative: frame, scale: 1).resizable().interpolation(.medium).aspectRatio(contentMode: .fit)
             }
             #endif
+            if session.frame != nil { DrawingOverlay(drawing: app.drawing, pictureSize: session.size) }
             if session.frame == nil {
                 VStack(spacing: 12) {
                     ProgressView().controlSize(.large).tint(.white)
@@ -109,13 +112,14 @@ struct SessionToolbar: View {
             }
             .accessibilityElement(children: .combine)
             Spacer(minLength: 8)
+            if app.drawing.available { DrawingControls(drawing: app.drawing) }
             displays
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) { actions }
             }
             .frame(maxWidth: 620)
             Menu {
-                ForEach(SessionWorkspaceView.Tool.allCases) { tool in
+                ForEach(SessionWorkspaceView.Tool.allCases.filter { $0 != .assistant || app.assistant.available }) { tool in
                     Button { tools = tools == tool ? nil : tool } label: { Label(tool.title, systemImage: tool.symbol) }
                         .disabled(tool == .files && !remote.files || tool == .clipboard && !remote.clipboard)
                 }
@@ -226,6 +230,7 @@ struct ToolPanel: View {
             case .chat: chat
             case .files: files
             case .clipboard: clipboard
+            case .assistant: AssistantPanel(assistant: app.assistant)
             }
         }
         .padding(14)
@@ -382,5 +387,46 @@ struct InviteColleagueSheet: View {
         .padding(22)
         .background(Theme.background)
         .frame(minWidth: 440)
+    }
+}
+
+/// Mixel team: the company's AI server looks at the remote screen and writes the ticket note.
+struct AssistantPanel: View {
+    @ObservedObject var assistant: AssistantModel
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                if !assistant.connected {
+                    TextField(text: $assistant.address, prompt: Text(verbatim: "http://ai-server:11434")) { Text(verbatim: L("AI server")) }
+                        .textFieldStyle(.roundedBorder)
+                    Button(L("Connect")) { assistant.connect() }
+                } else if assistant.models.count > 1 {
+                    Picker(selection: $assistant.model) { ForEach(assistant.models, id: \.self) { Text(verbatim: $0).tag($0) } } label: { Text(verbatim: L("Model")) }
+                        .onChange(of: assistant.model) { _ in assistant.connect(announce: false) }
+                }
+                MessageLine(assistant.status, error: false)
+                TextField(text: $assistant.question, prompt: Text(verbatim: L("Question or keywords (optional)"))) { Text(verbatim: L("Question")) }
+                    .textFieldStyle(.roundedBorder)
+                HStack {
+                    Button(L("Explain the screen")) { assistant.run(.ask) }
+                    Button(L("Write ticket note")) { assistant.run(.note) }
+                }
+                .disabled(!assistant.connected || assistant.busy)
+                if !assistant.answer.isEmpty {
+                    TextEditor(text: $assistant.answer).font(.callout).frame(minHeight: 140)
+                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(.quaternary))
+                    Button(L("Copy")) { Pasteboard.copy(assistant.answer) }.controlSize(.small)
+                }
+                Divider()
+                Text(verbatim: L("Save in ISM ticket")).font(.subheadline.weight(.semibold))
+                HStack {
+                    TextField(text: $assistant.ticket, prompt: Text(verbatim: "T-2026-0001")) { Text(verbatim: L("Ticket number")) }.textFieldStyle(.roundedBorder)
+                    Button(L("Save note")) { assistant.saveTicket() }
+                }
+                MessageLine(assistant.ticketStatus, error: false)
+            }
+        }
+        .onAppear { if !assistant.connected { assistant.connect(announce: false) } }
     }
 }

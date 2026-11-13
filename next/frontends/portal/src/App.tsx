@@ -20,6 +20,8 @@ import { Spinner } from './components/ui';
 // The legal texts (four documents in four languages) load only when a legal page is opened.
 const LegalIndex = lazy(() => import('./pages/Legal').then((module) => ({ default: module.LegalIndex })));
 const LegalDocument = lazy(() => import('./pages/Legal').then((module) => ({ default: module.LegalDocument })));
+// Session reports with the CSV/PDF export load when the page is opened.
+const Reports = lazy(() => import('./pages/Reports').then((module) => ({ default: module.Reports })));
 
 export function App() {
   return (
@@ -43,6 +45,7 @@ export function App() {
               <Route path="/app" element={<RequireAuth><TenantProvider /></RequireAuth>}>
                 <Route index element={<Dashboard />} />
                 <Route path="devices" element={<Devices />} />
+                <Route path="reports" element={<Suspense fallback={<Spinner />}><Reports /></Suspense>} />
                 <Route path="groups" element={<Groups />} />
                 <Route path="deploy" element={<Deploy />} />
                 <Route path="team" element={<Team />} />

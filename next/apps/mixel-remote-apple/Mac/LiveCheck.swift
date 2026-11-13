@@ -18,11 +18,13 @@ enum LiveCheck {
         fflush(stdout)
     }
 
-    static func run(sessionFile: String, suffix: String, sessionFolder: String? = nil) -> Never {
+    static func run(sessionFile: String, suffix: String, sessionFolder: String? = nil, expectedId: UInt32? = nil, prepare: Bool = false) -> Never {
         setenv("MIXEL_QA_SESSION_FILE", sessionFile, 1)
         let done = DispatchSemaphore(value: 0)
         Task.detached {
-            if let sessionFolder { await session(suffix: suffix, folder: URL(fileURLWithPath: sessionFolder)) }
+            if prepare, let sessionFolder { await prepareRollout(suffix: suffix, folder: URL(fileURLWithPath: sessionFolder)) }
+            else if let expectedId { await identity(expected: expectedId) }
+            else if let sessionFolder { await session(suffix: suffix, folder: URL(fileURLWithPath: sessionFolder)) }
             else { await checks(suffix: suffix) }
             done.signal()
         }
@@ -78,11 +80,13 @@ enum LiveCheck {
         let command = link?["windows_command"] as? String ?? ""
         check("deploy link for the lab computer", !command.isEmpty)
         try? command.write(to: folder.appendingPathComponent("deploy-command.txt"), atomically: true, encoding: .utf8)
+        // The token alone, for the Mac and Linux scripts (they read it from MIXEL_DEPLOY_TOKEN or a prompt).
+        try? (link?["token"] as? String ?? "").write(to: folder.appendingPathComponent("deploy-token.txt"), atomically: true, encoding: .utf8)
         print("WAITING for the lab computer (deploy-command.txt)"); fflush(stdout)
         var host = 0
         for _ in 0..<180 {
             if let rows = (try? await call(engine, "saas_devices", ["tenant": tenant]).get()) as? [[String: Any]],
-               let row = rows.first(where: { ($0["os"] as? String) == "windows" }), let id = row["connection_id"] as? Int {
+               let row = rows.first(where: { ($0["connection_id"] as? Int) != mine && ($0["connection_id"] as? Int ?? 0) > 0 }), let id = row["connection_id"] as? Int {
                 _ = await call(engine, "remote_presence", ["hosts": [id]])
                 if let status = (try? await call(engine, "remote_status").get()) as? [String: Any], (status["online"] as? [Int] ?? []).contains(id) { host = id; break }
             }
@@ -99,7 +103,7 @@ enum LiveCheck {
                 check("view and control granted", active["control"] as? Bool == true, "\(active)")
                 print("host actions: \(active["host_actions"] ?? "")  displays: \(active["displays"] ?? "")  features: \(active["peer_features"] ?? "")")
                 var frames = 0, sequence: UInt64 = 0, size = ""
-                let start = Date()
+                var start = Date()
                 var step = 0
                 while Date().timeIntervalSince(start) < 20, frames < 40 {
                     // Pointer moves on the remote screen change the picture (pictures follow changes only).
@@ -112,8 +116,36 @@ enum LiveCheck {
                         if frames == 1 || frames == 10 { save(frame.image, folder.appendingPathComponent("remote-screen.png")) }
                     }
                 }
-                let seconds = Date().timeIntervalSince(start)
-                check("pictures from the lab computer (\(frames) in \(Int(seconds)) s, \(size); a still screen sends pictures only on change)", frames >= 2)
+                var seconds = Date().timeIntervalSince(start)
+                check("pictures from the lab computer, decoded by the engine (\(frames) in \(Int(seconds)) s, \(size); a still screen sends pictures only on change)", frames >= 2)
+                // The same session with the pictures decoded on this Mac (VideoToolbox, as the app does).
+                let decoder = H264Decoder()
+                var decodedHere = 0, packets = 0, failure = ""
+                start = Date()
+                var strokeId = 100
+                while Date().timeIntervalSince(start) < 20, decodedHere < 40 {
+                    step += 1
+                    // The lab screen is still: short strokes change the picture (the host draws them into it).
+                    if step % 15 == 0 {
+                        strokeId += 1
+                        let y = 8000 + (strokeId * 3100) % 50000
+                        let message: [String: Any] = ["kind": "stroke", "id": strokeId, "tool": "pen", "color": strokeId % 4, "width": 2, "points": [[6000, y], [26000, y]], "done": true]
+                        _ = await call(engine, "remote_draw", ["session": id, "message": message])
+                    }
+                    guard let data = try? await engine.nextVideo(session: id, compressed: true) else { break }
+                    if data.isEmpty { try? await Task.sleep(nanoseconds: 20_000_000); continue }
+                    guard VideoFrame.isCompressed(data) else { continue }
+                    packets += 1
+                    do {
+                        let frame = try decoder.decode(data)
+                        decodedHere += 1; size = "\(frame.width)×\(frame.height)"
+                        if decodedHere == 5 { save(frame.image, folder.appendingPathComponent("remote-screen-h264.png")) }
+                    } catch H264Decoder.Problem.waitingForKeyframe { continue } catch { failure = "\(error)"; break }
+                }
+                seconds = Date().timeIntervalSince(start)
+                check("pictures decoded on this Mac with VideoToolbox (\(decodedHere) of \(packets) H.264 packets in \(Int(seconds)) s, \(size))", decodedHere >= 2 && failure.isEmpty, failure)
+                _ = try? await engine.nextVideo(session: id, compressed: false)
+                _ = await call(engine, "remote_draw", ["session": id, "message": ["kind": "clear"]])
                 var posted = 0
                 for step in 0..<10 {
                     let event = "{\"kind\":\"pointer\",\"x\":\(20000 + step * 2000),\"y\":30000}"
@@ -121,6 +153,25 @@ enum LiveCheck {
                 }
                 for down in [true, false] { if (try? await engine.input(session: id, json: "{\"kind\":\"key\",\"usage\":225,\"down\":\(down)}")) == true { posted += 1 } }
                 check("input applied on the lab computer (\(posted)/12)", posted == 12)
+                // Drawing: a thick red stroke; a drawpic host (Linux X11) puts it into the picture.
+                let features = active["peer_features"] as? [String] ?? []
+                check("the lab computer shows drawings (\(features.joined(separator: ",")))", features.contains("draw"))
+                let points = (0..<12).map { [18000 + $0 * 2500, 32000] }
+                let stroke: [String: Any] = ["kind": "stroke", "id": 1, "tool": "pen", "color": 0, "width": 4, "points": points, "done": true]
+                let drawn = await call(engine, "remote_draw", ["session": id, "message": stroke])
+                check("drawing sent to the lab computer", (try? drawn.get()) as? Bool == true, "\(drawn)")
+                if features.contains("drawpic") {
+                    var red = 0
+                    let until = Date().addingTimeInterval(6)
+                    while Date() < until, red < 300 {
+                        _ = try? await engine.input(session: id, json: "{\"kind\":\"pointer\",\"x\":\(Int.random(in: 2000...9000)),\"y\":\(Int.random(in: 50000...60000))}")
+                        guard let data = try? await engine.nextVideo(session: id, compressed: false) else { break }
+                        if data.isEmpty { try? await Task.sleep(nanoseconds: 30_000_000); continue }
+                        if let frame = try? VideoFrame.decode(data) { red = max(red, redPixels(frame.image)); if red >= 300 { save(frame.image, folder.appendingPathComponent("remote-screen-drawing.png")) } }
+                    }
+                    check("the drawing appears in the lab computer's picture (\(red) red pixels)", red >= 300)
+                }
+                _ = await call(engine, "remote_draw", ["session": id, "message": ["kind": "clear"]])
                 let chat = await call(engine, "remote_chat_messages", ["session": id])
                 print("chat available: \((try? chat.get()) != nil)")
                 if let consent = active["consent"] as? String {
@@ -128,6 +179,19 @@ enum LiveCheck {
                     check("end session", (try? stop.get()) != nil, "\(stop)")
                 }
                 check("back to ready after the session", await wait(engine, seconds: 20) { ($0["phase"] as? String) == "ready" } != nil)
+                // The note after the session, and the session in the company's report.
+                let text = "Lab session \(suffix): picture, input and drawing checked"
+                var noted: Result<Any?, Error> = .success(nil)
+                for _ in 0..<10 {
+                    noted = await call(engine, "saas_session_note", ["tenant": tenant, "note": text, "connection": host])
+                    if (try? noted.get()) != nil { break }
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                }
+                check("note after the session saved", (try? noted.get()) != nil, "\(noted)")
+                let today = String(ISO8601DateFormatter().string(from: Date().addingTimeInterval(-86400)).prefix(10))
+                let rows = (try? await call(engine, "saas_session_report", ["tenant": tenant, "from": today, "to": NSNull(), "technician": NSNull(), "device": NSNull()]).get()) as? [[String: Any]] ?? []
+                let row = rows.first { ($0["connection_id"] as? Int) == host }
+                check("the session is in the report (\(row?["kind"] ?? "–"), \(row?["duration_seconds"] ?? 0) s) with the note", row != nil && row?["note"] as? String == text, "\(rows)")
             }
         }
         _ = await call(engine, "remote_disconnect")
@@ -139,6 +203,85 @@ enum LiveCheck {
         let deleted = await call(engine, "saas_delete_company", ["tenant": tenant, "name": company])
         check("QA company deleted (the lab computer's enrolment with it)", (try? deleted.get()) != nil, "\(deleted)")
         try? await engine.shutdown()
+    }
+
+    /// Each sign-in button reaches its provider's login page: the engine builds the PKCE authorize link,
+    /// it is followed without cookies up to the provider, and the sign-in is cancelled (nobody signs in).
+    static func providers() -> Never {
+        let done = DispatchSemaphore(value: 0)
+        Task.detached {
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent("mixel-native-providers")
+            guard let engine = try? CoreEngine(dataDirectory: folder) else { check("engine starts", false); done.signal(); return }
+            let listed = (try? await call(engine, "account_providers").get()) as? [String] ?? []
+            check("the identity service offers \(listed.joined(separator: ", "))", Set(["keycloak", "google", "azure", "apple"]).isSubset(of: Set(listed)))
+            let expected = ["keycloak": "auth.mixel.ch", "google": "accounts.google.com", "azure": "login.microsoftonline.com", "apple": "appleid.apple.com"]
+            let web = URLSession(configuration: .ephemeral)
+            for provider in ["keycloak", "google", "azure", "apple"] {
+                let started = await call(engine, "account_sign_in", ["open_browser": false, "provider": provider])
+                let link = ((try? started.get()) as? String).flatMap(URL.init(string:))
+                var host = "", status = 0
+                if let link, let (_, response) = try? await web.data(from: link), let http = response as? HTTPURLResponse {
+                    host = http.url?.host ?? ""; status = http.statusCode
+                }
+                let pkce = link?.absoluteString.contains("code_challenge_method=s256") == true && link?.absoluteString.contains("redirect_to=http%3A%2F%2F127.0.0.1") == true
+                check("\(provider): PKCE link to the identity service, ends at \(host) (HTTP \(status))", pkce && host == expected[provider] && (200..<400).contains(status), "\(started)")
+                _ = await call(engine, "account_cancel")
+            }
+            try? await engine.shutdown()
+            try? FileManager.default.removeItem(at: folder)
+            done.signal()
+        }
+        done.wait()
+        print("RESULT \(checks - failures)/\(checks) passed")
+        exit(failures == 0 ? 0 : 1)
+    }
+
+    /// For the in-place update test: a QA company and a one-computer deploy link whose token is written
+    /// to `folder/deploy-token.txt` (0.1.22 enrols this Mac with it, as the rollout script does).
+    static func prepareRollout(suffix: String, folder: URL) async {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("mixel-native-prepare-\(suffix)")
+        guard let engine = try? CoreEngine(dataDirectory: directory) else { check("engine starts", false); return }
+        check("sign-in with the QA session", await signIn(engine))
+        let tenant = ((try? await call(engine, "saas_signup", ["company": "QA Native \(suffix)", "terms": true]).get()) as? [String: Any])?["tenant_id"] as? String ?? ""
+        check("QA company", !tenant.isEmpty)
+        let link = (try? await call(engine, "saas_create_deploy_link", ["tenant": tenant, "label": "QA update", "days": 1, "computers": 1, "group": NSNull()]).get()) as? [String: Any]
+        let token = link?["token"] as? String ?? ""
+        check("deploy link", token.hasPrefix("mrt_"))
+        try? token.write(to: folder.appendingPathComponent("deploy-token.txt"), atomically: true, encoding: .utf8)
+        try? await engine.shutdown()
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    /// The in-place update 0.1.22 → 2.0: run by the updated app on a Mac that 0.1.22 enrolled
+    /// (`--signin-enroll`). The device key from the Keychain, the data folder and the Remote ID carry
+    /// over; the Mac then removes itself with that key (which proves the server still knows it).
+    static func identity(expected: UInt32) async {
+        guard let engine = try? CoreEngine(dataDirectory: CoreEngine.defaultDirectory()) else { check("engine starts", false); return }
+        check("updated app runs as \(engine.info.version) from \(Bundle.main.bundlePath)", engine.info.version == "2.0.0")
+        let key = await call(engine, "open_device_identity", ["create": false])
+        let identity = (try? key.get()) as? [String: Any]
+        check("the device key created by 0.1.22 is read from the Keychain (no new key)", identity?["public_key"] as? String != nil, "\(key)")
+        check("sign-in with the QA session", await signIn(engine))
+        let registered = await call(engine, "remote_register")
+        let ready = await wait(engine, seconds: 30) { ($0["phase"] as? String) == "ready" }
+        check("online with the Remote ID enrolled by 0.1.22 (\(Format.remoteId(expected)))", (ready?["host"] as? Int) == Int(expected), "\(registered) \(String(describing: ready))")
+        _ = await call(engine, "remote_disconnect")
+        _ = await wait(engine, seconds: 15) { ["offline", "error"].contains($0["phase"] as? String ?? "") }
+        let removal = await call(engine, "device_self_remove", ["confirmed": true])
+        check("this Mac removes itself, signed with the carried-over key", (try? removal.get()) as? String == "removed", "\(removal)")
+        try? await engine.shutdown()
+    }
+
+    /// Pixels close to the drawing red (229, 50, 45).
+    static func redPixels(_ image: CGImage) -> Int {
+        let width = image.width, height = image.height
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        guard let context = CGContext(data: &pixels, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                                      space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return 0 }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        var count = 0
+        for index in stride(from: 0, to: pixels.count, by: 4) where pixels[index] > 190 && pixels[index + 1] < 90 && pixels[index + 2] < 90 { count += 1 }
+        return count
     }
 
     static func save(_ image: CGImage, _ url: URL) {
@@ -181,7 +324,7 @@ enum LiveCheck {
         let terms = await call(engine, "saas_terms_status", ["tenant": tenant])
         check("terms status recorded", (try? terms.get()) != nil, "\(terms)")
 
-        // This Mac joins the company with its own new identity (bundle ch.mixel.remote.native).
+        // This Mac joins the company with its own new identity (lab bundle ch.mixel.remote.labtest).
         let added = await call(engine, "saas_add_this_device", ["tenant": tenant, "name": "QA native Mac \(suffix)", "group": NSNull()])
         let enrollment = (try? added.get()) as? [String: Any]
         let connection = enrollment?["connection_id"] as? Int ?? 0
@@ -213,6 +356,16 @@ enum LiveCheck {
         let moved = await call(engine, "saas_move_device", ["tenant": tenant, "device": device, "group": group])
         check("move the device to the group", (try? moved.get()) as? Bool == true, "\(moved)")
 
+        // Favorites, recent connections and the session report (SQL 029).
+        let favorite = await call(engine, "saas_set_favorite", ["tenant": tenant, "device": device, "favorite": true])
+        check("mark the device as favorite", (try? favorite.get()) != nil, "\(favorite)")
+        let favorites = (try? await call(engine, "saas_favorites", ["tenant": tenant]).get()) as? [[String: Any]] ?? []
+        check("favorites list it", favorites.contains { $0["device_id"] as? String == device }, "\(favorites)")
+        let recent = await call(engine, "saas_recent_devices", ["tenant": tenant, "max_count": 10])
+        check("recent connections answer", (try? recent.get()) != nil, "\(recent)")
+        let report = await call(engine, "saas_session_report", ["tenant": tenant, "from": "2026-11-01", "to": NSNull(), "technician": NSNull(), "device": NSNull()])
+        check("session report answers (trial of Business includes reports)", (try? report.get()) is [Any], "\(report)")
+
         // Members and invitations (a test domain: never e-mailed).
         let invite = await call(engine, "saas_invite_member", ["tenant": tenant, "email": "qa-native-\(suffix)@example.com", "role": "technician", "locale": "de"])
         let inviteId = (try? invite.get()) as? String ?? ""
@@ -242,9 +395,13 @@ enum LiveCheck {
         let room = await call(engine, "meeting_create")
         check("Mixel Meet room for a session", ((try? room.get()) as? [String: Any])?["invite"] as? String != nil, "\(room)")
 
-        // Update check against the preview variant (reads store.mixel.ch).
-        let update = await call(engine, "update_check", ["variant": "native-preview"])
-        check("update check answers", (try? update.get()) != nil || true, "\(update)")
+        // Update check on the signed update channel (lab builds read it only with a test channel set).
+        let update = await call(engine, "update_check")
+        let offered = (try? update.get()).flatMap { $0 is NSNull ? nil : $0 }
+        check("update check answers (lab build without a test channel: no update offered)", (try? update.get()) != nil && offered == nil, "\(update)")
+        // Sign-in screen access: this build carries no entitled host, so it waits for Apple.
+        let signin = (try? await call(engine, "signin_screen_status").get()) as? [String: Any]
+        check("sign-in screen access waits for Apple's virtual keyboard entitlement", signin?["availability"] as? String == "waiting_for_apple", "\(String(describing: signin))")
 
         // This Mac removes itself with its own key (offline first), then the QA company is deleted.
         _ = await call(engine, "remote_disconnect")

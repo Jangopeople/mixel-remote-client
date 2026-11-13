@@ -33,7 +33,7 @@ model=$(cat /sys/devices/virtual/dmi/id/sys_vendor /sys/devices/virtual/dmi/id/p
 reboot=false; [ -f /var/run/reboot-required ] && reboot=true
 printf '{"name":"%s","os":"%s","model":"%s","cpu":"%s","ram_gb":%s,"disk_free_gb":%s,"disk_total_gb":%s,"user":"%s","last_boot":"%s","pending_reboot":%s}' "$(esc "$(hostname)")" "$(esc "$PRETTY_NAME")" "$(esc "$model")" "$(esc "$cpu")" "${ram:-0}" "${1:-0}" "${2:-0}" "$(esc "$(id -un)")" "$(uptime -s | cut -c1-16)" "$reboot""#;
 /// The phone app collects no inventory (it is a controller only).
-#[cfg(target_os = "ios")]
+#[cfg(any(target_os = "ios", target_os = "android"))]
 const INVENTORY_SCRIPT: &str = "exit 1";
 #[cfg(target_os = "macos")]
 const INVENTORY_SCRIPT: &str = r#"esc(){ printf '%s' "$1" | tr -d '"\\' | tr -s ' ' | cut -c1-120; }
@@ -189,6 +189,7 @@ mod tests {
         }
     }
     #[test]
+    #[cfg_attr(any(target_os = "ios", target_os = "android"), ignore = "host side only: phones are controllers")]
     fn inventory_is_bounded_json_with_the_app_version() {
         let text = inventory().expect("inventory");
         let value: serde_json::Value = serde_json::from_str(&text).unwrap();

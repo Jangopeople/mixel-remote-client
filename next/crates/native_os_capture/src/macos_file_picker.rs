@@ -48,6 +48,14 @@ impl FilePicker {
             "Choose a new MP4 filename for the recording.",
         )
     }
+    /// A session report (CSV or PDF) exported by the desktop app.
+    pub fn save_export(suggestion: &str) -> Result<Self, String> {
+        Self::save_named(
+            suggestion,
+            "Save the session report",
+            "Choose where to save the report.",
+        )
+    }
     pub fn receive_into_folder(filename: &str) -> Result<Self, String> {
         Self::destination_folder(filename, "Choose where to save the received file")
     }

@@ -1,0 +1,38 @@
+/* Mixel's colours on libadwaita: the Mixel red as accent, calm neutral surfaces, green for online.
+   Text keeps the theme's own colours on the theme's own backgrounds, so nothing is white on white. */
+@define-color accent_bg_color #ba2034;
+@define-color accent_fg_color #ffffff;
+@define-color accent_color #ba2034;
+@define-color destructive_bg_color #ba2034;
+@define-color mixel_success #258456;
+@define-color mixel_warning #a86400;
+@define-color mixel_soft #fceef0;
+
+.mixel-sidebar { background-color: @sidebar_bg_color; }
+.mixel-sidebar .navigation-sidebar row:selected { background-color: alpha(@accent_bg_color, 0.12); color: @accent_color; font-weight: bold; }
+.mixel-card { border-radius: 12px; }
+.mixel-accent { color: @accent_color; }
+.mixel-online { color: @mixel_success; }
+.mixel-offline { color: alpha(currentColor, 0.45); }
+.mixel-unknown { color: alpha(currentColor, 0.3); }
+.mixel-busy { color: @mixel_warning; }
+.mixel-attention { color: @accent_color; }
+.mixel-error { color: @accent_color; }
+.mixel-notice { color: alpha(currentColor, 0.75); }
+.mixel-id { font-size: 30px; font-weight: 600; font-feature-settings: "tnum"; letter-spacing: 1px; }
+.mixel-id-small { font-size: 17px; font-weight: 700; }
+.mixel-id-entry { font-size: 18px; font-feature-settings: "tnum"; }
+.mixel-link { color: @accent_color; padding-left: 0; padding-right: 0; }
+.mixel-mark { background-color: #ffffff; border-radius: 6px; }
+.mixel-banner { background-color: alpha(@accent_bg_color, 0.12); padding: 8px 16px; }
+.mixel-warning-box { background-color: alpha(@mixel_warning, 0.12); border-radius: 10px; padding: 12px; }
+.mixel-on { background-color: alpha(@accent_bg_color, 0.18); color: @accent_color; }
+.mixel-screen { background-color: #000000; }
+.mixel-overlay-note { background-color: rgba(0, 0, 0, 0.68); color: #ffffff; border-radius: 10px; padding: 10px 12px; }
+.mixel-overlay-note .mixel-error { color: #ffb4bd; }
+.mixel-wait { color: rgba(255, 255, 255, 0.86); }
+.mixel-bubble { border-radius: 10px; padding: 8px 10px; background-color: alpha(currentColor, 0.07); }
+.mixel-bubble.mine { background-color: @accent_bg_color; color: @accent_fg_color; }
+.mixel-transfer { border-radius: 10px; padding: 10px; background-color: alpha(currentColor, 0.05); }
+.mixel-device-row { padding: 6px 4px; }
+.mixel-tools { background-color: @window_bg_color; }

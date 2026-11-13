@@ -1,5 +1,6 @@
-//! Remote SaaS tenant RPCs (next/sql 018-021) for the apps: sign-up, tenants, members and
-//! invitations, devices, groups, deploy links and device self-removal. Every call uses the
+//! Remote SaaS tenant RPCs (next/sql 018-029) for the apps: sign-up, tenants, members and
+//! invitations, devices, groups, deploy links, device self-removal, favorite and recent devices,
+//! session reports and session notes. Every call uses the
 //! caller's own bearer (or the public key for the anonymous self-removal); the database checks
 //! membership, role, plan limits and status.
 use super::{AuthError, IsmAuth};
@@ -111,6 +112,66 @@ pub struct SaasInvite {
     #[serde(default)]
     pub mail_sends: Option<i32>,
 }
+/// A favorite device of the signed-in person (SQL 029; only devices they may still reach).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaasFavorite {
+    pub device_id: Uuid,
+    pub created_at: String,
+}
+/// A device of the signed-in person's own recent sessions, newest first (SQL 029).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaasRecentDevice {
+    pub device_id: Uuid,
+    pub last_connected_at: String,
+}
+/// One session of the session report (SQL 029). `technician_*` is empty when that person's
+/// account was deleted; `ended_at` is empty while the session runs (`duration_seconds` counts up
+/// to now). `device_name` is the current name, or the name at the start once the device is gone.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaasSessionRow {
+    pub session_id: Uuid,
+    pub technician_id: Option<Uuid>,
+    pub technician_name: Option<String>,
+    pub technician_email: Option<String>,
+    pub device_id: Uuid,
+    pub device_name: String,
+    /// The helped computer's Remote ID.
+    pub connection_id: u32,
+    pub started_at: String,
+    pub ended_at: Option<String>,
+    pub duration_seconds: i64,
+    /// `attended` or `unattended`.
+    pub kind: String,
+    /// A colleague who joined another technician's running session.
+    pub colleague: bool,
+    pub note: Option<String>,
+}
+/// Longest session note (characters), as in the database.
+pub const SESSION_NOTE_MAX: usize = 4000;
+/// A session note as the database stores it: trimmed, CR LF as LF, at most 4000 characters, no
+/// control characters other than newline and tab. Empty clears the note.
+fn session_note(note: &str) -> Result<String, SaasError> {
+    let note = note.replace("\r\n", "\n");
+    let note = note.trim_matches([' ', '\n', '\t']);
+    if note.chars().count() > SESSION_NOTE_MAX || note.chars().any(|c| c.is_control() && c != '\n' && c != '\t') {
+        return Err(SaasError::invalid("Enter a note of at most 4000 characters"));
+    }
+    Ok(note.to_owned())
+}
+/// A report period bound as the app sends it (ISO 8601 date or date and time).
+fn report_time(value: Option<String>) -> Result<Option<String>, SaasError> {
+    let Some(value) = value.map(|text| text.trim().to_owned()).filter(|text| !text.is_empty()) else {
+        return Ok(None);
+    };
+    if value.len() > 40
+        || !value.as_bytes().first().is_some_and(u8::is_ascii_digit)
+        || !value.bytes().all(|byte| byte.is_ascii_digit() || matches!(byte, b'-' | b':' | b'.' | b'+' | b'T' | b'Z' | b' '))
+    {
+        return Err(SaasError::invalid("Choose a valid period"));
+    }
+    Ok(Some(value))
+}
+
 /// Languages of the invitation e-mail (SQL 026).
 pub const INVITE_LOCALES: [&str; 4] = ["en", "de", "fr", "it"];
 fn invite_locale(locale: Option<&str>) -> Option<&'static str> {
@@ -233,6 +294,17 @@ impl IsmAuth {
         function: &'static str,
         body: Value,
     ) -> Result<T, SaasError> {
+        self.saas_call_limited(token, function, body, 1 << 20).await
+    }
+
+    /// Like `saas_call`, with an answer of at most `max_bytes`.
+    async fn saas_call_limited<T: DeserializeOwned>(
+        &self,
+        token: Option<&str>,
+        function: &'static str,
+        body: Value,
+        max_bytes: usize,
+    ) -> Result<T, SaasError> {
         debug_assert!(function.starts_with("remote_saas_") || function == "remote_device_self_remove");
         let url = self.base.join(&format!("/rest/v1/rpc/{function}")).map_err(|_| SaasError::unavailable())?;
         let response = self
@@ -249,7 +321,7 @@ impl IsmAuth {
         let mut stream = response.bytes_stream();
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|_| SaasError::unavailable())?;
-            if raw.len() + chunk.len() > 1 << 20 {
+            if raw.len() + chunk.len() > max_bytes {
                 return Err(SaasError::unavailable());
             }
             raw.extend_from_slice(&chunk);
@@ -488,6 +560,69 @@ impl IsmAuth {
         }
         self.saas_call(Some(token), "remote_saas_delete_my_account", json!({"confirm_email": confirm})).await
     }
+    /// Any member: marks a device of the company as a favorite (or not). Returns the new state.
+    pub async fn saas_set_favorite(&self, token: &str, tenant: Uuid, device: Uuid, favorite: bool) -> Result<bool, SaasError> {
+        self.saas_call(Some(token), "remote_saas_set_favorite", json!({"tenant": tenant, "device": device, "favorite": favorite}))
+            .await
+    }
+    /// The signed-in person's favorite devices (only those they may still reach), newest first.
+    pub async fn saas_favorites(&self, token: &str, tenant: Uuid) -> Result<Vec<SaasFavorite>, SaasError> {
+        self.saas_call(Some(token), "remote_saas_favorites", json!({"tenant": tenant})).await
+    }
+    /// The devices of the signed-in person's own recent sessions, newest first (`max_count` 1 to
+    /// 50, default 10).
+    pub async fn saas_recent_devices(&self, token: &str, tenant: Uuid, max_count: Option<u32>) -> Result<Vec<SaasRecentDevice>, SaasError> {
+        if max_count.is_some_and(|count| !(1..=50).contains(&count)) {
+            return Err(SaasError::invalid("Choose 1 to 50 devices"));
+        }
+        self.saas_call(Some(token), "remote_saas_recent_devices", json!({"tenant": tenant, "max_count": max_count.unwrap_or(10)}))
+            .await
+    }
+    /// Session report: sessions started in [`from`, `to`) (ISO 8601; default the last 30 days, at
+    /// most 366 days), newest first, at most 5000. Owners/admins see every session of the company
+    /// (optionally of one `technician`); technicians and members their own. Needs a paid plan.
+    pub async fn saas_session_report(
+        &self,
+        token: &str,
+        tenant: Uuid,
+        from: Option<String>,
+        to: Option<String>,
+        technician: Option<Uuid>,
+        device: Option<Uuid>,
+    ) -> Result<Vec<SaasSessionRow>, SaasError> {
+        let (from, to) = (report_time(from)?, report_time(to)?);
+        self.saas_call_limited(
+            Some(token),
+            "remote_saas_session_report",
+            json!({"tenant": tenant, "from_at": from, "to_at": to, "technician": technician, "device": device}),
+            32 << 20,
+        )
+        .await
+    }
+    /// Note on a session: by its id, or by the helped computer's Remote ID (`connection`: the
+    /// caller's newest session to it in the last 24 hours). Exactly one of the two. An empty note
+    /// clears it. Returns the session id.
+    pub async fn saas_session_note(
+        &self,
+        token: &str,
+        tenant: Uuid,
+        note: &str,
+        session: Option<Uuid>,
+        connection: Option<u32>,
+    ) -> Result<Uuid, SaasError> {
+        let note = session_note(note)?;
+        if session.is_some() == connection.is_some()
+            || connection.is_some_and(|id| !(100_000_000..=999_999_999).contains(&id))
+        {
+            return Err(SaasError::invalid("Choose one session"));
+        }
+        self.saas_call(
+            Some(token),
+            "remote_saas_session_note",
+            json!({"tenant": tenant, "note": note, "session": session, "connection": connection}),
+        )
+        .await
+    }
     /// Sends a device's signed self-removal (no account needed). `Ok(true)`: removed (or already
     /// removed); `Ok(false)`: the request names an older or newer registration and changed nothing.
     pub async fn device_self_remove(&self, request: &SelfRemoval) -> Result<bool, SaasError> {
@@ -585,6 +720,32 @@ mod tests {
                 }
                 axum::Json(json!(true)).into_response()
             }
+            "remote_saas_set_favorite" => {
+                assert_eq!(bearer, "Bearer user-token");
+                axum::Json(body["favorite"].clone()).into_response()
+            }
+            "remote_saas_favorites" => {
+                axum::Json(json!([{"device_id": Uuid::from_u128(5), "created_at": "2026-11-13T10:00:00+00:00"}])).into_response()
+            }
+            "remote_saas_recent_devices" => {
+                assert!(body["max_count"] == 10 || body["max_count"] == 3, "{body}");
+                axum::Json(json!([{"device_id": Uuid::from_u128(6), "last_connected_at": "2026-11-13T11:00:00+00:00"}])).into_response()
+            }
+            "remote_saas_session_report" => {
+                assert_eq!((body["from_at"].as_str(), body["to_at"].clone()), (Some("2026-11-01"), Value::Null));
+                assert_eq!(body["technician"], json!(Uuid::from_u128(7)));
+                if body["device"] == json!(Uuid::from_u128(8)) {
+                    return (StatusCode::FORBIDDEN, axum::Json(json!({"code":"42501","message":"Session reports need a paid plan"}))).into_response();
+                }
+                axum::Json(json!([{"session_id": Uuid::from_u128(1), "technician_id": null, "technician_name": null,
+                    "technician_email": null, "device_id": Uuid::from_u128(6), "device_name": "Office PC",
+                    "connection_id": 123456789, "started_at": "2026-11-13T09:00:00+00:00", "ended_at": null,
+                    "duration_seconds": 120, "kind": "unattended", "colleague": true, "note": "Printer"}])).into_response()
+            }
+            "remote_saas_session_note" => {
+                assert_eq!(body["note"], "Fixed\nprinter");
+                axum::Json(json!(body["session"].as_str().map_or(Uuid::from_u128(2), |id| id.parse().unwrap()))).into_response()
+            }
             "remote_device_self_remove" => {
                 assert_eq!(bearer, "Bearer public");
                 assert_eq!(body["signature"].as_str().unwrap().len(), 130);
@@ -650,6 +811,37 @@ mod tests {
         assert!(ism.saas_set_member_role("user-token", tenant, Uuid::from_u128(7), "root").await.is_err());
         let request = SelfRemoval::new(Uuid::from_u128(1), 123_456_789, 1, 1, |message| Ok(key.sign(message).to_bytes())).unwrap();
         assert!(ism.device_self_remove(&request).await.unwrap());
+        // Favorites, recent devices, session report and notes.
+        assert!(ism.saas_set_favorite("user-token", tenant, Uuid::from_u128(5), true).await.unwrap());
+        assert!(!ism.saas_set_favorite("user-token", tenant, Uuid::from_u128(5), false).await.unwrap());
+        assert_eq!(ism.saas_favorites("user-token", tenant).await.unwrap()[0].device_id, Uuid::from_u128(5));
+        assert_eq!(ism.saas_recent_devices("user-token", tenant, None).await.unwrap()[0].device_id, Uuid::from_u128(6));
+        assert_eq!(ism.saas_recent_devices("user-token", tenant, Some(3)).await.unwrap().len(), 1);
+        assert!(ism.saas_recent_devices("user-token", tenant, Some(0)).await.is_err());
+        assert!(ism.saas_recent_devices("user-token", tenant, Some(51)).await.is_err());
+        let rows = ism
+            .saas_session_report("user-token", tenant, Some(" 2026-11-01 ".into()), Some(" ".into()), Some(Uuid::from_u128(7)), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            (rows[0].connection_id, rows[0].ended_at.as_deref(), rows[0].duration_seconds, rows[0].colleague, rows[0].note.as_deref()),
+            (123_456_789, None, 120, true, Some("Printer"))
+        );
+        let gated = ism
+            .saas_session_report("user-token", tenant, Some("2026-11-01".into()), None, Some(Uuid::from_u128(7)), Some(Uuid::from_u128(8)))
+            .await
+            .unwrap_err();
+        assert_eq!((gated.status, gated.code.as_deref(), gated.message.as_str()), (403, Some("42501"), "Session reports need a paid plan"));
+        assert!(ism.saas_session_report("user-token", tenant, Some("now; drop".into()), None, None, None).await.is_err());
+        assert!(ism.saas_session_report("user-token", tenant, None, Some("x".repeat(41)), None, None).await.is_err());
+        let session = Uuid::from_u128(3);
+        assert_eq!(ism.saas_session_note("user-token", tenant, " Fixed\r\nprinter\n", Some(session), None).await.unwrap(), session);
+        assert_eq!(ism.saas_session_note("user-token", tenant, "Fixed\nprinter", None, Some(123_456_789)).await.unwrap(), Uuid::from_u128(2));
+        assert!(ism.saas_session_note("user-token", tenant, "x", None, None).await.is_err(), "one of session or connection");
+        assert!(ism.saas_session_note("user-token", tenant, "x", Some(session), Some(123_456_789)).await.is_err());
+        assert!(ism.saas_session_note("user-token", tenant, "x", None, Some(12)).await.is_err());
+        assert!(ism.saas_session_note("user-token", tenant, &"x".repeat(4001), Some(session), None).await.is_err());
+        assert!(ism.saas_session_note("user-token", tenant, "a\u{1}b", Some(session), None).await.is_err());
         server.abort();
     }
 }

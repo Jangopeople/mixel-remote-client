@@ -1,0 +1,21 @@
+#!/bin/sh
+# Mixel Remote: refuses to unpack when a library this version needs is missing, so an update with
+# plain "dpkg -i" (Mixel Remote 0.1.x updates itself that way) never leaves an app behind that cannot
+# start: the installed version stays as it is. Install with apt (it adds what is missing):
+#   sudo apt install ./mixel-remote_<version>_amd64.deb
+# Checked are the shared libraries the program loads (names differ between distributions' packages).
+set -e
+missing=""
+LDCONFIG=$(command -v ldconfig || echo /sbin/ldconfig)
+KNOWN=$("$LDCONFIG" -p 2>/dev/null || true)
+# Without the library cache nothing can be checked: let dpkg go on.
+[ -n "$KNOWN" ] || exit 0
+for library in @LIBRARIES@; do
+  printf '%s\n' "$KNOWN" | grep -q "^[[:space:]]*$library[[:space:]]" || missing="$missing $library"
+done
+if [ -n "$missing" ]; then
+  echo "Mixel Remote: this version needs libraries that are not installed:$missing. Install it with apt instead (apt adds them): sudo apt install ./<package>.deb" >&2
+  echo "Nothing was changed; the installed Mixel Remote keeps working." >&2
+  exit 1
+fi
+exit 0

@@ -3,6 +3,7 @@
 import { supabase, ISM_URL, anonKey } from './supabase';
 import type { Features, GoTrueSettings, Method, Role, TenantStatus } from './logic';
 import type { CompanyExport } from './exportData';
+import type { ReportRow } from './reportExport';
 
 export class ApiError extends Error {
   code?: string;
@@ -79,6 +80,10 @@ export interface DeleteCompanyResult {
   deleted: boolean; tenant_id: string; devices_removed: number; members_removed: number; accounts_deleted: number;
   invites_revoked: number; billing: 'none' | 'pending';
 }
+export interface Favorite { device_id: string; created_at: string }
+export interface RecentDevice { device_id: string; last_connected_at: string | null }
+export type SessionReportRow = ReportRow;
+export interface SessionReportFilter { from_at: string | null; to_at: string | null; technician: string | null; device: string | null }
 export interface DeleteAccountResult { deleted: boolean; tenant_id: string | null; invites_revoked: number }
 
 export const api = {
@@ -146,6 +151,18 @@ export const api = {
 
   auditLog: (tenant: string, beforeId: number | null = null) =>
     rpc<AuditEntry[]>('remote_saas_audit_log', { tenant, before_id: beforeId }),
+
+  // Favorites and recent connections (SQL 029): per person, company devices only.
+  setFavorite: (tenant: string, device: string, favorite: boolean) =>
+    rpc<boolean>('remote_saas_set_favorite', { tenant, device, favorite }),
+  favorites: (tenant: string) => rpc<Favorite[]>('remote_saas_favorites', { tenant }),
+  recentDevices: (tenant: string, maxCount = 10) => rpc<RecentDevice[]>('remote_saas_recent_devices', { tenant, max_count: maxCount }),
+  // Session reports (SQL 029, plan feature "reports"): owners/admins all sessions, others their own; newest first.
+  sessionReport: (tenant: string, filter: SessionReportFilter) =>
+    rpc<SessionReportRow[]>('remote_saas_session_report', { tenant, ...filter }),
+  // Sets (or with "" clears) the note of one session; returns the session id.
+  sessionNote: (tenant: string, session: string, note: string) =>
+    rpc<string>('remote_saas_session_note', { tenant, note, session }),
 };
 
 /** Public sign-in service settings: which external providers are configured. */

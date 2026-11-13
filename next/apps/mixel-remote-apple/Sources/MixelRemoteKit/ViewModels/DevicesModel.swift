@@ -19,6 +19,9 @@ public final class DevicesModel: ObservableObject {
     @Published public private(set) var serverPresence: [UInt32: SaasPresence] = [:]
     /// The deploy link just created (shown once).
     @Published public var deployLink: DeployLinkCreated?
+    /// Favorites (device ids) and the devices of the person's own recent sessions, newest first.
+    @Published public private(set) var favorites: Set<String> = []
+    @Published public private(set) var recent: [String] = []
     private var checked: Set<UInt32> = []
     private var cursors: [UInt32?] = [nil]
     private var nextCursor: UInt32?
@@ -53,6 +56,8 @@ public final class DevicesModel: ObservableObject {
     func reset() {
         devices = []
         companyAll = []
+        favorites = []
+        recent = []
         groups = []
         groupFilter = nil
         page = 0
@@ -77,6 +82,7 @@ public final class DevicesModel: ObservableObject {
                     struct Args: Encodable { var tenant: String; var group: String?; var search: String? }
                     let rows: [SaasDevice] = try await app.engine.run("saas_devices", Args(tenant: tenant.tenantId, group: groupFilter, search: search.isEmpty ? nil : search))
                     companyAll = rows.compactMap(\.device)
+                    await loadFavorites()
                     if manages, groupsOn { groups = (try? await app.engine.run("saas_groups", ["tenant": tenant.tenantId])) ?? [] }
                     await loadServerPresence()
                 }
@@ -101,6 +107,50 @@ public final class DevicesModel: ObservableObject {
         }
     }
 
+    // MARK: Favorites and recent connections (company devices)
+
+    struct FavoriteRow: Codable { var deviceId: String }
+    struct RecentRow: Codable { var deviceId: String; var lastConnectedAt: String }
+
+    func loadFavorites() async {
+        guard let tenant else { favorites = []; recent = []; return }
+        if let rows: [FavoriteRow] = try? await app.engine.run("saas_favorites", ["tenant": tenant.tenantId]) { favorites = Set(rows.map(\.deviceId)) }
+        if let rows: [RecentRow] = try? await app.engine.run("saas_recent_devices", ["tenant": tenant.tenantId, "max_count": 10]) { recent = rows.map(\.deviceId) }
+    }
+
+    /// Shown above all devices on the first page without a search: favorites, then recent ones.
+    public var favoriteDevices: [Device] {
+        guard tenant != nil, page == 0, search.isEmpty else { return [] }
+        return companyAll.filter { favorites.contains($0.device) }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+    public var recentDevices: [Device] {
+        guard tenant != nil, page == 0, search.isEmpty else { return [] }
+        return recent.filter { !favorites.contains($0) }.compactMap { id in companyAll.first { $0.device == id } }.prefix(5).map { $0 }
+    }
+
+    public func isFavorite(_ device: Device) -> Bool { favorites.contains(device.device) }
+
+    public func toggleFavorite(_ device: Device) {
+        guard let tenant else { return }
+        let next = !favorites.contains(device.device)
+        if next { favorites.insert(device.device) } else { favorites.remove(device.device) }
+        Task {
+            do { try await app.engine.perform("saas_set_favorite", ["tenant": tenant.tenantId, "device": device.device, "favorite": next]) }
+            catch {
+                if next { favorites.remove(device.device) } else { favorites.insert(device.device) }
+                self.error = AppModel.message(error)
+            }
+        }
+    }
+
+    /// The device's name, or its Remote ID.
+    public func name(of connection: UInt32) -> String {
+        (companyAll + devices).first { $0.connectionId == connection }?.name ?? Format.remoteId(connection)
+    }
+
+    /// One of the company's devices (any page).
+    func isCompanyHost(_ connection: UInt32) -> Bool { companyAll.contains { $0.connectionId == connection } }
+
     public func nextPage() { Task { await load(page: page + 1) } }
     public func previousPage() { Task { await load(page: max(0, page - 1)) } }
 
@@ -123,6 +173,9 @@ public final class DevicesModel: ObservableObject {
     }
 
     func statusChanged(from previous: RemoteStatus, to next: RemoteStatus) {
+        if next.phase == "active", !next.sharing, let peer = next.peer, !next.hostMacs.isEmpty, next.hostMacs != previous.hostMacs || previous.phase != "active" {
+            remember(macs: next.hostMacs, of: peer)
+        }
         if next.connected, !previous.connected { lastPresence = .distantPast }
         if next.connected { Task { await checkPresence() } }
     }
@@ -221,6 +274,32 @@ public final class DevicesModel: ObservableObject {
         return await change {
             self.deployLink = try await self.app.engine.run("saas_create_deploy_link", ["tenant": tenant.tenantId, "label": label, "days": days, "computers": computers, "group": group])
         }
+    }
+
+    // MARK: Wake-on-LAN
+
+    /// Network addresses learned from earlier sessions, per Remote ID (as the desktop app keeps them).
+    static let macsKey = "mixel.remote.macs.v1"
+
+    public func knownMacs(_ device: Device) -> [String] {
+        let known = UserDefaults.standard.dictionary(forKey: Self.macsKey) as? [String: [String]] ?? [:]
+        return Array((known[String(device.connectionId)] ?? []).prefix(4))
+    }
+
+    /// During a session as technician: remember the other computer's network addresses for Wake.
+    func remember(macs: [String], of host: UInt32) {
+        let valid = macs.filter { $0.range(of: "^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$", options: .regularExpression) != nil }
+        guard !valid.isEmpty else { return }
+        var known = UserDefaults.standard.dictionary(forKey: Self.macsKey) as? [String: [String]] ?? [:]
+        guard known[String(host)] != Array(valid.prefix(4)) else { return }
+        known[String(host)] = Array(valid.prefix(4))
+        UserDefaults.standard.set(known, forKey: Self.macsKey)
+    }
+
+    public func wake(_ device: Device) {
+        let macs = knownMacs(device)
+        guard !macs.isEmpty else { error = L("No network address is known for this computer yet"); return }
+        wake(device, macs: macs)
     }
 
     public func wake(_ device: Device, macs: [String]) {

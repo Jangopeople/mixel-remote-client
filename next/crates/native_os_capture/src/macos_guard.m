@@ -162,6 +162,114 @@ void mixel_pointer_hide(void) {
     });
 }
 
+// ---------------------------------------------------------------- drawings
+// The technician's strokes over the shared display. Shapes arrive as doubles: kind (0 line,
+// 1 filled polygon, 2 dot), red, green, blue, alpha (0..1), width, point count, then x, y pairs
+// in points from the top left of the display.
+@interface MixelDrawView : NSView
+@property(nonatomic, copy) NSData *shapes;
+@end
+@implementation MixelDrawView
+- (BOOL)isFlipped {
+    return YES;
+}
+- (void)drawRect:(NSRect)rect {
+    [[NSColor clearColor] set];
+    NSRectFill(rect);
+    const double *value = self.shapes.bytes;
+    size_t total = self.shapes.length / sizeof(double), at = 0;
+    while (value && at + 7 <= total) {
+        int kind = (int)value[at];
+        NSColor *colour = [NSColor colorWithSRGBRed:value[at + 1] green:value[at + 2] blue:value[at + 3] alpha:value[at + 4]];
+        double width = value[at + 5];
+        size_t count = (size_t)value[at + 6];
+        at += 7;
+        if (count == 0 || count > (total - at) / 2) break;
+        const double *points = value + at;
+        at += count * 2;
+        if (kind == 2) {
+            [colour setFill];
+            [[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(points[0] - width / 2, points[1] - width / 2, width, width)] fill];
+            continue;
+        }
+        NSBezierPath *path = [NSBezierPath bezierPath];
+        [path moveToPoint:NSMakePoint(points[0], points[1])];
+        for (size_t index = 1; index < count; index++) [path lineToPoint:NSMakePoint(points[index * 2], points[index * 2 + 1])];
+        if (kind == 1) {
+            [path closePath];
+            [colour setFill];
+            [path fill];
+        } else {
+            path.lineWidth = width;
+            path.lineCapStyle = NSLineCapStyleRound;
+            path.lineJoinStyle = NSLineJoinStyleRound;
+            [colour setStroke];
+            [path stroke];
+        }
+    }
+}
+@end
+
+static NSWindow *drawing;
+
+// Opens (or moves) the overlay over a display rectangle in global coordinates (origin top left
+// of the main display), still invisible; returns its window number (or -1).
+int32_t mixel_draw_open(double x, double y, double width, double height) {
+    __block int32_t number = -1;
+    on_main(^{
+        [NSApplication sharedApplication];
+        NSScreen *primary = [NSScreen screens].firstObject;
+        CGFloat top = primary ? primary.frame.size.height : 0;
+        NSRect frame = NSMakeRect(x, top - y - height, width, height);
+        if (!drawing) {
+            drawing = [[NSWindow alloc] initWithContentRect:frame
+                                                  styleMask:NSWindowStyleMaskBorderless
+                                                    backing:NSBackingStoreBuffered
+                                                      defer:NO];
+            drawing.releasedWhenClosed = NO;
+            drawing.opaque = NO;
+            drawing.backgroundColor = [NSColor clearColor];
+            drawing.hasShadow = NO;
+            drawing.ignoresMouseEvents = YES;
+            drawing.level = NSScreenSaverWindowLevel + 1;
+            drawing.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces |
+                                         NSWindowCollectionBehaviorStationary |
+                                         NSWindowCollectionBehaviorFullScreenAuxiliary |
+                                         NSWindowCollectionBehaviorIgnoresCycle;
+            drawing.sharingType = NSWindowSharingNone;
+            // Shown (still empty and so invisible): ScreenCaptureKit lists, and can leave out,
+            // only windows that are on screen.
+            drawing.alphaValue = 1.0;
+            drawing.contentView = [[MixelDrawView alloc] initWithFrame:NSMakeRect(0, 0, width, height)];
+        }
+        [drawing setFrame:frame display:NO];
+        [drawing orderFrontRegardless];
+        number = (int32_t)drawing.windowNumber;
+    });
+    return number;
+}
+
+// Shows these shapes at this opacity (kept above 0 so the window stays left out of the capture).
+void mixel_draw_show(const double *shapes, size_t count, double alpha) {
+    NSData *data = shapes && count ? [NSData dataWithBytes:shapes length:count * sizeof(double)] : [NSData data];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (!drawing) return;
+        MixelDrawView *view = (MixelDrawView *)drawing.contentView;
+        view.shapes = data;
+        view.needsDisplay = YES;
+        drawing.alphaValue = alpha < 0.01 ? 0.01 : alpha;
+        [drawing orderFrontRegardless];
+    });
+}
+
+void mixel_draw_close(void) {
+    on_main(^{
+        [drawing orderOut:nil];
+        [drawing close];
+        drawing = nil;
+    });
+}
+
 // ---------------------------------------------------------------- block input
 static CFMachPortRef tap;
 static CFRunLoopRef tap_loop;

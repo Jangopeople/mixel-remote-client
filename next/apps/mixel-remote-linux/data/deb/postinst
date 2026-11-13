@@ -1,0 +1,12 @@
+#!/bin/sh
+# Mixel Remote: after an update, the always-on / sign-in screen service (set up by the app or by a
+# deploy link) runs the new version too. It keeps its computer key, settings and Remote ID.
+set -e
+if [ "$1" = configure ]; then
+  if [ -f /etc/systemd/system/mixel-remote-signin.service ] && [ -f /usr/lib/mixel-remote-signin/mixel-remote ]; then
+    /usr/bin/mixel-remote --signin-update >/dev/null 2>&1 || echo "Mixel Remote: the sign-in screen service could not be updated now; it is updated at the next start of the app." >&2
+  fi
+  command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database -q /usr/share/applications || true
+  command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -q -t /usr/share/icons/hicolor || true
+fi
+exit 0

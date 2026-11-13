@@ -179,7 +179,7 @@ async fn download(manifest: &Manifest) -> Result<PathBuf, String> {
 }
 
 #[cfg(not(target_os = "windows"))]
-#[cfg_attr(target_os = "ios", allow(dead_code))]
+#[cfg_attr(any(target_os = "ios", target_os = "android"), allow(dead_code))]
 fn run(program: &str, args: &[&std::ffi::OsStr]) -> Result<String, String> {
     let mut command = std::process::Command::new(program);
     command.args(args);
@@ -256,6 +256,11 @@ fn install(installer: &Path, _version: &str) -> Result<(), String> {
 fn install(_package: &Path, _version: &str) -> Result<(), String> {
     Err("Mixel Remote for iPhone and iPad updates through the App Store or TestFlight".into())
 }
+/// Android phones and tablets update through Google Play (or the store.mixel.ch test download).
+#[cfg(target_os = "android")]
+fn install(_package: &Path, _version: &str) -> Result<(), String> {
+    Err("Mixel Remote for Android updates through Google Play or store.mixel.ch".into())
+}
 #[cfg(target_os = "macos")]
 fn install(image: &Path, version: &str) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|_| "Cannot locate Mixel Remote")?;
@@ -328,9 +333,14 @@ fn install(package: &Path, _version: &str) -> Result<(), String> {
     // Read the program path first: once dpkg replaces the file, it reads as "… (deleted)".
     let exe = std::env::current_exe().map_err(|_| "Cannot locate Mixel Remote")?;
     let exe = PathBuf::from(exe.to_string_lossy().trim_end_matches(" (deleted)"));
-    // Installing a system package needs the administrator password once (polkit prompt).
-    run("pkexec", &["/usr/bin/dpkg".as_ref(), "-i".as_ref(), package.as_os_str()])
-        .map_err(|_| "The update was not installed (administrator approval is needed)")?;
+    // Installing a system package needs the administrator password once (polkit prompt). apt
+    // also installs what a new version depends on (dpkg alone would leave it unconfigured).
+    let installed = if Path::new("/usr/bin/apt-get").exists() {
+        run("pkexec", &["/usr/bin/apt-get".as_ref(), "install".as_ref(), "-y".as_ref(), "-q".as_ref(), package.as_os_str()])
+    } else {
+        run("pkexec", &["/usr/bin/dpkg".as_ref(), "-i".as_ref(), package.as_os_str()])
+    };
+    installed.map_err(|_| "The update was not installed (administrator approval is needed)")?;
     std::process::Command::new("/bin/sh")
         .args(["-c", "sleep 1; exec \"$0\""])
         .arg(exe)

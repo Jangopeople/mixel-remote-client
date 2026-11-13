@@ -1,0 +1,18 @@
+[Desktop Entry]
+Type=Application
+Name=Mixel Remote
+GenericName=Remote support
+GenericName[de]=Fernwartung
+GenericName[fr]=Assistance à distance
+GenericName[it]=Assistenza remota
+Comment=Remote support and access for your devices
+Comment[de]=Fernsupport und Fernzugriff für Ihre Geräte
+Comment[fr]=Assistance et accès à distance pour vos appareils
+Comment[it]=Assistenza e accesso remoti per i Suoi dispositivi
+Exec=/usr/bin/mixel-remote
+Icon=ch.mixel.remote
+Terminal=false
+Categories=Network;RemoteAccess;
+Keywords=remote;support;desktop;screen;sharing;Mixel;
+StartupNotify=true
+StartupWMClass=ch.mixel.remote

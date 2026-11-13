@@ -586,7 +586,7 @@ public sealed class ViewModelTests
     {
         var engine = new MockEngine();
         DemoFixtures.SignedOut(engine);
-        engine.Reply("sign_in_providers", """["keycloak","google","azure","apple"]""");
+        engine.Reply("account_providers", """["keycloak","google","azure","apple"]""");
         engine.Reply("account_sign_in", "\"https://ism-api.mixel.ch/auth/v1/authorize?provider=google\"");
         var app = await DemoFixtures.App(engine);
         await app.LoadProviders();
@@ -599,7 +599,7 @@ public sealed class ViewModelTests
         await app.SignIn(provider: "azure");
         Assert.AreEqual("azure", engine.CallsOf("account_sign_in").Single().Object["provider"]!.GetValue<string>());
         Assert.IsNotNull(opened);
-        engine.Reply("sign_in_providers", """["keycloak"]""");
+        engine.Reply("account_providers", """["keycloak"]""");
         engine.Reply("sign_in_options", """{"company":"Only Google AG","methods":["google"],"require_mfa":false}""");
         await app.LoadProviders();
         await app.LookUpSignIn("x@only.ch");

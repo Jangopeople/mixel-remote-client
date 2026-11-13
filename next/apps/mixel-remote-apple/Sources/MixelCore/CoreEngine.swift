@@ -18,11 +18,18 @@ public final class CoreEngine: EngineAPI, @unchecked Sendable {
         info = EngineInfo(version: core.version, platform: core.platform, controllerOnly: core.controllerOnly)
     }
 
-    /// The default folder: Application Support/Mixel Remote Native (Mac) or the app's support folder.
+    /// The default folder: Application Support/<bundle identifier>, the folder the desktop app 0.1.x
+    /// used, so a queued removal of this computer survives the update to 2.0.
     public static func defaultDirectory() -> URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSTemporaryDirectory())
-        return base.appendingPathComponent("Mixel Remote Native", isDirectory: true)
+        return base.appendingPathComponent(Bundle.main.bundleIdentifier ?? "ch.mixel.remote", isDirectory: true)
+    }
+
+    /// The app's modes without a window (launch agents, the rollout script, the sign-in screen host):
+    /// `nil` to start the app normally, otherwise the exit code.
+    public static func runCommandLine(_ arguments: [String]) -> Int32? {
+        MixelCore.runCommandLine(arguments: arguments)
     }
 
     static func failure(_ error: Error) -> EngineFailure {
