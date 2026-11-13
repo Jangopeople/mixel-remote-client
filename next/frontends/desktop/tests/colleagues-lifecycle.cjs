@@ -78,6 +78,12 @@ test('the technician invites a colleague or falls back to a meeting link',async(
   assert.deepEqual(JSON.parse(JSON.stringify(h.calls.at(-1))),['remote_invite',{session:'s2',user:'u2',device:null,control:false}]);
   h.state({...technician,invite_message:'Your colleague is not online in Mixel Remote right now'});
   assert.match(h.elements['invite-status'].textContent,/not online/);
+  // A second invitation with the same answer shows that answer again, not a stuck "Sending".
+  h.elements['invite-send'].click();
+  assert.match(h.elements['invite-status'].textContent,/Sending/);
+  await settle();
+  h.state({...technician,invite_message:'Your colleague is not online in Mixel Remote right now'});
+  assert.match(h.elements['invite-status'].textContent,/not online/);
   h.state({...technician,phase:'ready',session:null});
   assert.equal(h.elements['invite-panel'].hidden,true,'the panel closes with the session');
 });
@@ -113,4 +119,39 @@ test('both sides can switch sides in a one-to-one session, and the Wayland limit
   h.state({...technician,host_actions:['lock','wayland']});
   assert.equal(h.elements['remote-host-limits'].hidden,false);
   assert.match(h.elements['remote-host-limits'].textContent,/Wayland/);
+});
+
+test('rows survive the four state reads a second, so a click between two reads is not lost',async()=>{
+  const h=harness();let scrolled=0;
+  h.elements['colleague-invitations'].scrollIntoView=()=>scrolled++;
+  const offer={invitation:'i1',host:555666777,inviter:'u1',inviter_connection:111111111,control:false,unattended:false,expires_at:Date.now()/1000+60};
+  h.state({phase:'ready',session:null,sharing:false,peer:null,invitations:[offer]});
+  assert.equal(scrolled,1,'a new invitation is brought into view');
+  const join=h.elements['colleague-invitations'].children[0].children[1];
+  h.state({phase:'ready',session:null,sharing:false,peer:null,invitations:[offer]});
+  assert.equal(h.elements['colleague-invitations'].children[0].children[1],join,'the same Join button after an unchanged read');
+  join.click();await settle();
+  assert.deepEqual(JSON.parse(JSON.stringify(h.calls.at(-1))),['remote_join',{invitation:'i1'}]);
+  h.state({phase:'ready',session:null,sharing:false,peer:null,invitations:[offer,{...offer,invitation:'i2'}]});
+  assert.equal(h.elements['colleague-invitations'].children.length,2,'a new invitation still appears');
+  assert.equal(scrolled,2,'only new invitations scroll, not every read');
+  const joined={...host,join_request:null,colleagues:[{session:'j1',connection:333444555,control:true,state:'active'}]};
+  h.state(joined);
+  const remove=h.elements['colleague-items'].children[0].children[1];
+  h.state(joined);
+  assert.equal(h.elements['colleague-items'].children[0].children[1],remove,'the same Remove button after an unchanged read');
+  h.state({...joined,colleagues:[{session:'j1',connection:333444555,control:true,state:'active'},{session:'j2',connection:444555666,control:false,state:'connecting'}]});
+  assert.equal(h.elements['colleague-items'].children.length,2);
+  assert.match(h.texts(h.elements['colleague-items']),/444 555 666 · connecting/);
+});
+
+test('switch labels are set only when they change, so a click between two reads is not lost',async()=>{
+  const h=harness();let writes=0,text='';
+  Object.defineProperty(h.elements['remote-switch'],'textContent',{get:()=>text,set:value=>{writes++;text=value;}});
+  // The script labelled the button once at start; identical reads leave it alone.
+  h.state(technician);h.state(technician);h.state(technician);
+  assert.equal(writes,0,'no write for identical reads');
+  h.state({...technician,switched:true});h.state({...technician,switched:true});
+  assert.equal(text,'Switch back');
+  assert.equal(writes,1,'one write when the label changes');
 });

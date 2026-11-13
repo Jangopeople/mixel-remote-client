@@ -555,6 +555,28 @@ impl RemoteSession {
         inner.status.files = allowed;
         Ok(())
     }
+    /// Host: records the permissions a peer's session was granted. A colleague's mirrored view (a
+    /// second technician) has its own session ID and no state of its own here; it only ever gets
+    /// pictures, and recording the grant would belong to the first technician's session (and fail).
+    pub(crate) async fn record_grants(
+        &self,
+        generation: u64,
+        session: Uuid,
+        mirror: bool,
+        files: bool,
+        recording: bool,
+    ) -> Result<(), String> {
+        if mirror {
+            return if files || recording {
+                Err("A colleague's view cannot transfer files or record".into())
+            } else {
+                Ok(())
+            };
+        }
+        self.file_grant(generation, session, files).await?;
+        self.set_recording_permission(generation, session, recording).await;
+        Ok(())
+    }
     pub async fn file_scope(&self, consent: Uuid) -> Result<crate::remote_files::FileScope, String> {
         let inner = self.0.lock().await;
         if inner.status.consent != Some(consent)
@@ -2918,6 +2940,25 @@ mod consent_tests {
         assert_eq!(remote.0.lock().await.file_permission, Some(true));
         assert!(remote.file_grant(0, new, false).await.is_err());
         assert!(root.load(Ordering::Acquire));
+    }
+    #[tokio::test]
+    async fn a_colleague_view_leaves_the_first_technicians_grants_alone() {
+        let remote = RemoteSession::default();
+        let primary = Uuid::new_v4();
+        remote
+            .track(0, primary, Arc::new(AtomicBool::new(false)), Uuid::new_v4(), Arc::new(AtomicBool::new(false)), false, false)
+            .await
+            .unwrap();
+        remote.record_grants(0, primary, false, true, false).await.unwrap();
+        // The colleague's session is not this app's session: it neither fails nor changes the grants.
+        let colleague = Uuid::new_v4();
+        remote.record_grants(0, colleague, true, false, false).await.unwrap();
+        assert_eq!(remote.0.lock().await.file_permission, Some(true));
+        assert!(remote.0.lock().await.status.files);
+        assert!(remote.record_grants(0, colleague, true, true, false).await.is_err(), "no files for a colleague's view");
+        assert!(remote.record_grants(0, colleague, true, false, true).await.is_err(), "no recording for a colleague's view");
+        // Without the mirror flag another session is still refused, as before.
+        assert!(remote.record_grants(0, colleague, false, false, false).await.is_err());
     }
     #[tokio::test]
     async fn queued_input_after_session_cancellation_is_discarded() {
