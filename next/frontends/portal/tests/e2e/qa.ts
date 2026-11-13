@@ -1,4 +1,5 @@
 // Helpers for the live QA run: GoTrue admin API (service role from QA_ADMIN_ENV), TOTP, device enrolment.
+import { execFileSync } from 'node:child_process';
 import { createHmac, randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
@@ -140,4 +141,20 @@ export async function rest(path: string, token: string, body: unknown): Promise<
   const text = await response.text();
   if (!response.ok) throw new Error(`rest ${path}: ${response.status} ${text.slice(0, 200)}`);
   return text ? JSON.parse(text) : null;
+}
+
+/**
+ * Invitation e-mails go out from the mail service (SQL 026); QA addresses (example.com) are never
+ * mailed. This stands in for the e-mail: it stores the hash of a fresh secret for the QA run's open
+ * invitation of `email` and returns the link the e-mail would contain. Needs QA_SQL, a command
+ * that runs SQL on the ISM database, e.g. "ssh mixel-vps docker exec -i ism-postgres psql -U postgres -d ism -At".
+ */
+export function invitationLink(email: string, run: string): string {
+  if (!/^qa-portal-[a-z0-9]+-[a-z-]+@example\.com$/.test(email) || !email.includes(`-${run}-`)) throw new Error('not a QA invitation');
+  const secret = `mri_${randomBytes(32).toString('base64url')}`;
+  const sql = `update remote_saas.invites set token_hash = sha256(convert_to('${secret}', 'UTF8')), mail_state = 'sent', mail_sent_at = now(),
+    mail_claim = null, mail_claimed_at = null where email = '${email}' and accepted_at is null and revoked_at is null returning id;`;
+  const out = execFileSync('sh', ['-c', env('QA_SQL')], { input: sql, encoding: 'utf8' });
+  if (!/[0-9a-f-]{36}/.test(out)) throw new Error(`no open invitation for ${email}`);
+  return `https://remote.mixel.ch/invite#${secret}`;
 }

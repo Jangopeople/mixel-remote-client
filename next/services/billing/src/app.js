@@ -3,7 +3,7 @@
 //   POST /api/billing/portal    {tenant_id, return_path?}                                     -> {url}
 //   POST /api/billing/change    {tenant_id, plan, interval, extra_technicians?}               -> {subscription, status}
 //   POST /api/billing/webhook   Stripe events (signature verified)                            -> {received, outcome}
-//   GET  /api/billing/health
+//   GET  /api/billing/health                                                                -> {ok, invite_mail}
 // checkout, portal and change need "Authorization: Bearer <GoTrue access token>" of an owner or
 // admin of the tenant.
 import { AuthError, bearerToken } from "./auth.js";
@@ -27,7 +27,8 @@ const LIVE_SUBSCRIPTION = new Set(["trialing", "active", "past_due", "unpaid", "
  * @typedef {{ webhookSecret: string, portalConfiguration: string | null, publicBaseUrl: string,
  *   corsOrigins: string[], invoiceFooter: string, rateLimitPerMinute: number }} AppConfig
  * @typedef {{ db: BillingDb, stripe: Stripe, authorize: Authorize, config: AppConfig,
- *   now?: () => number, log?: (entry: Record<string, unknown>) => void }} AppDeps
+ *   now?: () => number, log?: (entry: Record<string, unknown>) => void,
+ *   mail?: { sent: number, failed: number, lastRun: string | null, lastError: string | null } | null }} AppDeps
  */
 
 class HttpError extends Error {
@@ -112,7 +113,7 @@ function pricesFor(ctx, plan, interval) {
  * @param {AppDeps} deps
  * @returns {(req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse) => Promise<void>}
  */
-export function createApp({ db, stripe, authorize, config, now = () => Date.now(), log = (e) => console.log(JSON.stringify(e)) }) {
+export function createApp({ db, stripe, authorize, config, now = () => Date.now(), log = (e) => console.log(JSON.stringify(e)), mail = null }) {
   /** @type {Map<string, number[]>} */
   const hits = new Map();
 
@@ -328,7 +329,8 @@ export function createApp({ db, stripe, authorize, config, now = () => Date.now(
       /** @type {{ status: number, body: unknown }} */
       let result;
       if (req.method === "GET" && path === "/health") {
-        result = { status: 200, body: { ok: await db.ping(), service: "mixel-remote-billing" } };
+        result = { status: 200, body: { ok: await db.ping(), service: "mixel-remote-billing",
+          invite_mail: mail ? { on: true, sent: mail.sent, failed: mail.failed, last_run: mail.lastRun, healthy: !mail.lastError } : { on: false } } };
       } else if (req.method !== "POST") {
         result = { status: 405, body: { error: "method_not_allowed" } };
       } else if (path === "/checkout") result = await checkout(req);

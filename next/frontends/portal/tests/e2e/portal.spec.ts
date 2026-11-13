@@ -3,7 +3,7 @@
 // tests/e2e/cleanup.sql (database) and the admin API (accounts), see README.md.
 import { expect, test, type Page } from '@playwright/test';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { anonKey, createUser, enrolComputer, freshTotp, signupCode } from './qa';
+import { anonKey, createUser, enrolComputer, freshTotp, invitationLink, signupCode } from './qa';
 import { shot } from './shots';
 
 const RUN = process.env.QA_RUN ?? Date.now().toString(36);
@@ -102,9 +102,18 @@ test('owner manages groups, deploy links and devices', async ({ browser }) => {
   await page.getByRole('button', { name: 'Create' }).click();
   const token = (await page.getByTestId('deploy-token').textContent())!.trim();
   expect(token).toMatch(/^mrt_/);
+  // The command of the browser's own system is preselected; start with Windows.
+  await page.getByTestId('deploy-os').getByRole('button', { name: 'Windows', exact: true }).click();
   await expect(page.getByTestId('deploy-command')).toHaveValue(/--signin-enroll/);
   await expect(page.getByTestId('deploy-command')).toHaveValue(/store-api\.mixel\.ch.*\.exe/);
   await shot(page, '10-deploy-created');
+  // The same link on Macs and Linux computers: one line that pipes the install script to root.
+  for (const [os, script] of [['macOS', 'macos'], ['Linux', 'linux']]) {
+    await page.getByTestId('deploy-os').getByRole('button', { name: os, exact: true }).click();
+    await expect(page.getByTestId('deploy-command')).toHaveValue(`curl -fsSL https://remote.mixel.ch/install/${script}.sh | sudo sh -s -- '${token}'`);
+    await shot(page, `10-deploy-created-${script}`);
+  }
+  await page.getByTestId('deploy-os').getByRole('button', { name: 'Windows', exact: true }).click();
   await page.getByRole('button', { name: 'Close' }).click();
   // Two computers run the command.
   await enrolComputer(token, 'QA-PC-1');
@@ -143,27 +152,28 @@ test('owner invites a technician and a member; they accept', async ({ browser })
   const page = await owner.newPage();
   const links: Record<string, string> = {};
   await page.goto('/app/team');
-  // The member's invitation is created through the RPC directly, as the desktop app does
-  // (INVITE_URL https://remote.mixel.ch/invite#<secret>).
-  const secretFromRpc = await page.evaluate(async ({ email, anon }) => {
+  // The member's invitation is created through the RPC directly, as the desktop app does; it
+  // returns the invitation id only (the secret exists only in the e-mail).
+  const idFromRpc = await page.evaluate(async ({ email, anon }) => {
     const session = JSON.parse(localStorage.getItem('mixel-remote-portal-auth') ?? '{}');
     const headers = { apikey: anon, authorization: `Bearer ${session.access_token}`, 'content-type': 'application/json' };
     const tenants = await (await fetch('https://ism-api.mixel.ch/rest/v1/rpc/remote_saas_my_tenants', { method: 'POST', headers, body: '{}' })).json();
     const response = await fetch('https://ism-api.mixel.ch/rest/v1/rpc/remote_saas_invite_member', {
-      method: 'POST', headers, body: JSON.stringify({ tenant: tenants[0].tenant_id, invitee_email: email, member_role: 'member' }),
+      method: 'POST', headers, body: JSON.stringify({ tenant: tenants[0].tenant_id, invitee_email: email, member_role: 'member', locale: 'de' }),
     });
     return response.json();
   }, { email: MEMBER, anon: anonKey() });
-  expect(String(secretFromRpc)).toMatch(/^mri_/);
-  links[MEMBER] = `https://remote.mixel.ch/invite#${secretFromRpc}`;
+  expect(String(idFromRpc)).toMatch(/^[0-9a-f-]{36}$/);
   for (const [email, role] of [[TECH, 'Technician'], [`qa-portal-${RUN}-revoke@example.com`, 'Admin']]) {
     await page.getByLabel('Email address', { exact: true }).fill(email);
     await page.getByLabel('Role', { exact: true }).selectOption({ label: role });
-    await page.getByRole('button', { name: 'Create invitation' }).click();
-    await expect(page.getByTestId('invite-created')).toContainText(email);
-    links[email] = (await page.getByTestId('invite-link').textContent())!.trim();
-    expect(links[email]).toMatch(/\/invite#mri_/);
+    await page.getByRole('button', { name: 'Send invitation' }).click();
+    await expect(page.getByTestId('invite-created')).toContainText(`Invitation sent to ${email}`);
+    await expect(page.getByTestId('invite-link')).toHaveCount(0);
   }
+  // QA addresses are never mailed: the service marks them "Not delivered" (a real address shows "Sent").
+  await expect(page.locator(`[data-invite="${TECH}"]`).getByTestId('invite-mail-state')).toHaveText(/Not delivered|Sent/, { timeout: 30_000 });
+  for (const email of [TECH, MEMBER]) links[email] = invitationLink(email, RUN);
   await shot(page, '14-team-invites');
   // Revoke one invitation.
   await page.locator(`[data-invite="qa-portal-${RUN}-revoke@example.com"]`).getByRole('button', { name: 'Revoke' }).click();

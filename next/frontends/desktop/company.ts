@@ -10,7 +10,7 @@
   type Tenant = {tenant_id: string; organization_id: string; name: string; slug: string; role: string; plan: string; status: string; trial_ends_at: string | null};
   type Overview = {tenant_id: string; name: string; role: string; plan: string; status: string; trial_ends_at: string | null; features: Record<string, boolean>; limits: {technicians: number | null; devices: number | null; sessions: number | null}; usage: {technicians: number; devices: number; members: number}};
   type Member = {user_id: string; name: string; email: string; role: string; created_at: string};
-  type Invite = {id: string; email: string; role: string; created_at: string; expires_at: string};
+  type Invite = {id: string; email: string; role: string; created_at: string; expires_at: string; mail_state?: string | null; mail_sent_at?: string | null; mail_sends?: number | null};
   type Dialog = {open(options: {title: string; text?: string; fields?: unknown[]; confirm: string; danger?: boolean; run: (values: Record<string, string>) => Promise<HTMLElement | void>}): void};
   const dialog = (): Dialog => (window as unknown as {mixelDialog: Dialog}).mixelDialog;
   const tr = (text: string): string => (window as unknown as {mixelText?: (value: string) => string}).mixelText?.(text) ?? text;
@@ -23,6 +23,16 @@
   const PLAN: Record<string, string> = {personal: 'Personal', solo: 'Solo', team: 'Team', business: 'Business', enterprise: 'Enterprise'};
   const ROLE: Record<string, string> = {owner: 'Owner', admin: 'Administrator', technician: 'Technician', member: 'Member'};
   const writable = (status: string): boolean => ['active', 'trial', 'past_due'].includes(status);
+  // The language of invitation e-mails: the app's language (English, German, French or Italian).
+  const mailLocale = (): string => { const lang = document.documentElement?.lang ?? 'en'; return ['en', 'de', 'fr', 'it'].includes(lang) ? lang : 'en'; };
+  function mailText(item: Invite): string {
+    switch (item.mail_state) {
+      case 'pending': case 'sending': return 'e-mail being sent';
+      case 'failed': return 'e-mail not delivered';
+      case 'sent': return item.mail_sent_at ? `e-mail sent ${new Date(item.mail_sent_at).toLocaleDateString()}` : 'e-mail sent';
+      default: return '';
+    }
+  }
   // Present from the start, so the Devices page knows to wait for the company before loading.
   (window as unknown as {mixelCompany: unknown}).mixelCompany = {tenant: null, overview: null};
   let account: Account = {phase: 'signed_out', account: null}, accountKey = '', version = 0, busy = false;
@@ -130,13 +140,27 @@
     for (const item of inviteList) {
       const row = document.createElement('li'), label = document.createElement('span'), email = document.createElement('strong'), detail = document.createElement('span');
       email.textContent = item.email; email.dataset.noTranslate = '';
-      detail.textContent = `${ROLE[item.role] ?? item.role} · valid until ${new Date(item.expires_at).toLocaleDateString()}`;
+      const mail = mailText(item);
+      detail.textContent = `${ROLE[item.role] ?? item.role} · valid until ${new Date(item.expires_at).toLocaleDateString()}${mail ? ` · ${tr(mail)}` : ''}`;
       label.append(email, detail);
+      const actions = document.createElement('div'); actions.className = 'member-actions';
+      const resend = document.createElement('button'); resend.type = 'button'; resend.className = 'button-quiet'; resend.textContent = 'Send again';
+      resend.setAttribute('aria-label', `Send the invitation of ${item.email} again`); resend.disabled = busy || !writable(view.status) || item.mail_state === 'pending' || item.mail_state === 'sending';
+      resend.addEventListener('click', () => { void act(async () => { await invoke('saas_resend_invite', {tenant: tenant!.tenant_id, invite: item.id, locale: mailLocale()}); membersStatus.textContent = `A new invitation e-mail is on its way to ${item.email}. The previous link no longer works.`; }); });
       const revoke = document.createElement('button'); revoke.type = 'button'; revoke.className = 'button-quiet'; revoke.textContent = 'Revoke';
       revoke.setAttribute('aria-label', `Revoke the invitation of ${item.email}`); revoke.disabled = busy;
       revoke.addEventListener('click', () => { void act(async () => { await invoke('saas_revoke_invite', {tenant: tenant!.tenant_id, invite: item.id}); membersStatus.textContent = `Invitation of ${item.email} revoked.`; }); });
-      row.append(label, revoke); invites.append(row);
+      actions.append(resend, revoke);
+      row.append(label, actions); invites.append(row);
     }
+    // While an e-mail is on its way, look again shortly so the state turns to "sent".
+    if (inviteList.some(item => item.mail_state === 'pending' || item.mail_state === 'sending')) scheduleRefresh();
+  }
+  let refreshTimer = false;
+  function scheduleRefresh(): void {
+    if (refreshTimer) return;
+    refreshTimer = true;
+    window.setTimeout(() => { refreshTimer = false; if (!busy) void load(); }, 5000);
   }
   async function load(): Promise<void> {
     const request = ++version;
@@ -223,7 +247,7 @@
     if (!tenant || !overview) return;
     const target = tenant, room = technicianRoom();
     dialog().open({
-      title: 'Invite a person', text: `The person signs in with this email address and joins ${target.name}.`,
+      title: 'Invite a person', text: `Mixel Remote e-mails an invitation link to this address. The person signs in with it and joins ${target.name}.`,
       fields: [
         {id: 'email', kind: 'email', label: 'Email address', maxLength: 254},
         {id: 'role', kind: 'select', label: 'Role', value: room > 0 ? 'technician' : 'member', options: [
@@ -232,25 +256,12 @@
           {value: 'member', label: tr('Member')}],
         hint: room <= 0 ? 'Technician limit of your plan reached: you can still invite members.' : 'Administrators and technicians count against the technicians of your plan.'},
       ],
-      confirm: 'Create invitation',
+      confirm: 'Send invitation',
       run: async values => {
-        const link = await invoke<string>('saas_invite_member', {tenant: target.tenant_id, email: values.email, role: values.role});
-        if (typeof link !== 'string' || !link.startsWith('https://')) throw Error('Invalid invitation response');
-        const result = document.createElement('div'), note = document.createElement('p'), box = document.createElement('input'), copy = document.createElement('button'), copied = document.createElement('p');
-        note.textContent = 'Send this link to the person. It works once, for 7 days, and only with the invited email address. It is shown only now.';
-        box.readOnly = true; box.value = link; box.dataset.noTranslate = ''; box.dataset.field = 'link';
-        copy.type = 'button'; copy.className = 'button-secondary'; copy.textContent = 'Copy invitation link';
-        copied.className = 'field-hint'; copied.setAttribute('role', 'status');
-        copy.addEventListener('click', () => {
-          box.select?.();
-          const clip = (globalThis as {navigator?: {clipboard?: {writeText(text: string): Promise<void>}}}).navigator?.clipboard;
-          if (!clip) { copied.textContent = 'Select the link and copy it.'; return; }
-          void clip.writeText(link).then(() => { copied.textContent = 'Invitation link copied.'; }, () => { copied.textContent = 'Select the link and copy it.'; });
-        });
-        result.append(note, box, copy, copied);
-        membersStatus.textContent = `Invitation created for ${values.email}.`;
-        void load();
-        return result;
+        const id = await invoke<string>('saas_invite_member', {tenant: target.tenant_id, email: values.email, role: values.role, locale: mailLocale()});
+        if (typeof id !== 'string' || !/^[0-9a-f-]{36}$/.test(id)) throw Error('Invalid invitation response');
+        membersStatus.textContent = `Invitation e-mail on its way to ${values.email}. The link in it works for 7 days, only with this e-mail address.`;
+        await load();
       },
     });
   });

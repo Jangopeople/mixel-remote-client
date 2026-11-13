@@ -7,3 +7,6 @@
   Strict-Transport-Security: max-age=63072000; includeSubDomains
 /assets/*
   Cache-Control: public, max-age=31536000, immutable
+/install/*
+  Content-Type: text/x-shellscript; charset=utf-8
+  Cache-Control: public, max-age=300

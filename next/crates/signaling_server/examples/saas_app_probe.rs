@@ -69,6 +69,18 @@ fn lab_sql(command: &str, query: &str) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_owned()
 }
 
+/// Stands in for the mail service (SQL 026) for one QA invitation: stores the hash of a fresh secret
+/// and marks the e-mail as sent (QA addresses are never mailed). Returns the secret.
+fn mailed(sql: &str, suffix: &str, tenant: Uuid, invite: Uuid) -> String {
+    let secret = format!("mri_{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+    lab_sql(sql, &format!(
+        "update remote_saas.invites i set token_hash = sha256(convert_to('{secret}', 'UTF8')), mail_state = 'sent', mail_sent_at = now(), \
+         mail_claim = null, mail_claimed_at = null, mail_sends = mail_sends + 1 from remote_saas.tenants t \
+         where t.id = i.tenant_id and t.name = 'QA App Probe {suffix}' and i.tenant_id = '{tenant}' and i.id = '{invite}'"
+    ));
+    secret
+}
+
 async fn accept(plan: &Plan, token: &str, secret: &str) -> Result<Uuid, String> {
     let response = reqwest::Client::new()
         .post(format!("{}/rest/v1/rpc/remote_saas_accept_invite", plan.identity))
@@ -112,12 +124,15 @@ async fn main() {
     p.check("overview: limits, usage and groups feature", overview["limits"]["devices"] == 2000 && overview["usage"]["members"] == 1 && overview["features"]["groups"] == true, &overview["limits"]);
 
     // Members and invitations.
-    let invite_tech = ism.saas_invite_member(owner, tenant, &plan.users["tech"].email, "technician").await.unwrap();
-    let invite_member = ism.saas_invite_member(owner, tenant, &plan.users["member"].email, "member").await.unwrap();
-    p.check("invitations return a one-time secret", invite_tech.starts_with("mri_") && invite_member.starts_with("mri_"), ());
-    p.refused("owners are never invited", ism.saas_invite_member(owner, tenant, "x@example.com", "owner").await, "22023");
+    let invite_tech = ism.saas_invite_member(owner, tenant, &plan.users["tech"].email, "technician", Some("de")).await.unwrap();
+    let invite_member = ism.saas_invite_member(owner, tenant, &plan.users["member"].email, "member", None).await.unwrap();
+    p.check("invitations return an id, never the secret", invite_tech != invite_member, ());
+    p.refused("owners are never invited", ism.saas_invite_member(owner, tenant, "x@example.com", "owner", None).await, "22023");
     let pending = ism.saas_invites(owner, tenant).await.unwrap_or_default();
-    p.check("open invitations are listed", pending.len() == 2, pending.len());
+    p.check("open invitations are listed with their e-mail state and language", pending.len() == 2
+        && pending.iter().any(|i| i.id == invite_tech && i.mail_locale.as_deref() == Some("de") && i.mail_state.is_some()), pending.len());
+    let invite_tech = mailed(&sql, &plan.suffix, tenant, invite_tech);
+    let invite_member = mailed(&sql, &plan.suffix, tenant, invite_member);
     p.check("the technician joins", accept(&plan, tech, &invite_tech).await == Ok(tenant), ());
     p.check("the member joins", accept(&plan, member, &invite_member).await == Ok(tenant), ());
     let members = ism.saas_members(owner, tenant).await.unwrap_or_default();
@@ -126,7 +141,7 @@ async fn main() {
     let (owner_id, tech_id, member_id) = (id_of("owner"), id_of("technician"), id_of("member"));
     p.check("technicians see the members", ism.saas_members(tech, tenant).await.is_ok_and(|m| m.len() == 3), ());
     p.refused("members cannot list members", ism.saas_members(member, tenant).await, "42501");
-    p.refused("technicians cannot invite", ism.saas_invite_member(tech, tenant, "y@example.com", "member").await, "42501");
+    p.refused("technicians cannot invite", ism.saas_invite_member(tech, tenant, "y@example.com", "member", None).await, "42501");
     p.check("owner makes the technician an admin", ism.saas_set_member_role(owner, tenant, tech_id, "admin").await.is_ok_and(|x| x), ());
     p.refused("an admin cannot make owners", ism.saas_set_member_role(tech, tenant, member_id, "owner").await, "42501");
     p.refused("an admin cannot change the owner", ism.saas_set_member_role(tech, tenant, owner_id, "member").await, "42501");
@@ -172,9 +187,9 @@ async fn main() {
     p.refused("device limit: another computer is refused", ism.saas_add_this_device(owner, tenant, "QA Second", "linux", &key().verifying_key(), None).await, "54000");
     p.refused("device limit: no deploy link", ism.saas_create_deploy_link(owner, tenant, "QA full", 7, 1, None).await, "54000");
     lab_sql(&sql, &format!("update remote_saas.tenants set max_devices_override = null, extra_technicians = 0, max_technicians_override = 2 where name = 'QA App Probe {}' and id = '{tenant}'", plan.suffix));
-    p.refused("technician limit: no more technician invitations", ism.saas_invite_member(owner, tenant, "z@example.com", "technician").await, "54000");
+    p.refused("technician limit: no more technician invitations", ism.saas_invite_member(owner, tenant, "z@example.com", "technician", None).await, "54000");
     p.refused("technician limit: no promotion of the member", ism.saas_set_member_role(owner, tenant, member_id, "technician").await, "54000");
-    p.check("members can still be invited", ism.saas_invite_member(owner, tenant, "z@example.com", "member").await.is_ok(), ());
+    p.check("members can still be invited", ism.saas_invite_member(owner, tenant, "z@example.com", "member", None).await.is_ok(), ());
     lab_sql(&sql, &format!("update remote_saas.tenants set max_technicians_override = null where name = 'QA App Probe {}' and id = '{tenant}'", plan.suffix));
 
     // A second computer to remove as owner, then read-only.
@@ -184,7 +199,7 @@ async fn main() {
     let view = ism.saas_tenant_overview(owner, tenant).await.unwrap();
     p.check("after the trial the company is read-only", view["status"] == "read_only", &view["status"]);
     p.refused("read-only: no renaming", ism.saas_rename_device(owner, tenant, second.device_id, "QA Renamed").await, "25006");
-    p.refused("read-only: no invitations", ism.saas_invite_member(owner, tenant, "w@example.com", "member").await, "25006");
+    p.refused("read-only: no invitations", ism.saas_invite_member(owner, tenant, "w@example.com", "member", None).await, "25006");
     p.refused("read-only: no new computers", ism.saas_add_this_device(owner, tenant, "QA Third", "linux", &key().verifying_key(), None).await, "25006");
     p.check("read-only: removing a device still works", ism.saas_remove_device(owner, tenant, second.device_id).await.is_ok_and(|x| x), ());
     p.check("the removed device is gone", ism.saas_devices(owner, tenant, None, None).await.is_ok_and(|d| d.iter().all(|x| x.device_id != second.device_id)), ());

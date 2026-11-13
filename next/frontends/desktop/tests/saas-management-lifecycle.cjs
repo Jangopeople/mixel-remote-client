@@ -236,23 +236,41 @@ test('plan limits: at the device limit nothing can be added, and at the technici
   assert.match(choice.children[0].textContent,/plan limit reached/);
 });
 
-test('Add other computers creates a deploy link and shows the command to copy with short instructions',async()=>{
+test('Add other computers creates a deploy link and shows the command per operating system to copy with short instructions',async()=>{
   const command="$t='mrt_secret'; $f=Join-Path $env:TEMP 'Mixel-Remote-Setup.exe'";
-  const h=harness({answers:{saas_create_deploy_link:{token:'mrt_secret',windows_command:command}}});await h.signedIn();
+  const mac="curl -fsSL https://remote.mixel.ch/install/macos.sh | sudo sh -s -- 'mrt_secret'", linux="curl -fsSL https://remote.mixel.ch/install/linux.sh | sudo sh -s -- 'mrt_secret'";
+  const h=harness({answers:{saas_create_deploy_link:{token:'mrt_secret',windows_command:command,macos_command:mac,linux_command:linux}}});await h.signedIn();
   h.elements['devices-add-others'].listeners.click();
   assert.equal(h.elements['manage-dialog-title'].textContent,'Add other computers');
+  assert.match(h.elements['manage-dialog-text'].textContent,/Windows, Mac or Linux computers/);
   assert.equal(h.field('computers').value,'50');assert.equal(h.field('days').value,'30');
   h.field('label').value='Office rollout';h.field('computers').value='12';h.field('group').value='g-sales';
   await h.confirmDialog();
   assert.deepEqual(h.called('saas_create_deploy_link').map(c=>c.args),[{tenant:TENANT,label:'Office rollout',days:30,computers:12,group:'g-sales'}]);
   assert.equal(h.elements['manage-dialog'].hidden,false,'the result stays to be copied');
+  const os=h.field('os');assert.deepEqual(os.children.map(o=>o.textContent),['Windows','macOS','Linux']);assert.equal(os.value,'windows');
   const box=h.field('command');assert.equal(box.value,command);
-  assert.ok(h.all(h.elements['manage-dialog-fields']).some(n=>/PowerShell as administrator/.test(n.textContent)));
-  assert.ok(h.all(h.elements['manage-dialog-fields']).some(n=>/shown only now/.test(n.textContent)));
+  const texts=()=>h.all(h.elements['manage-dialog-fields']).map(n=>n.textContent).join('\n');
+  assert.match(texts(),/PowerShell as administrator/);
+  assert.match(texts(),/shown only now/);
   h.byText(h.elements['manage-dialog-fields'],'Copy command').listeners.click();await h.signedIn();
   assert.deepEqual(h.clipboard,[command]);
+  os.value='macos';os.listeners.change();
+  assert.equal(box.value,mac);assert.match(texts(),/open Terminal/);assert.match(texts(),/Screen Recording and Accessibility/);
+  h.byText(h.elements['manage-dialog-fields'],'Copy command').listeners.click();await settle();
+  os.value='linux';os.listeners.change();
+  assert.equal(box.value,linux);assert.match(texts(),/Ubuntu or Debian/);assert.doesNotMatch(texts(),/PowerShell/);
+  h.byText(h.elements['manage-dialog-fields'],'Copy command').listeners.click();await settle();
+  assert.deepEqual(h.clipboard,[command,mac,linux]);
   assert.equal(h.elements['manage-dialog-confirm'].textContent,'Done');
   await h.confirmDialog();assert.equal(h.elements['manage-dialog'].hidden,true);
+});
+
+test('a deploy link answer without a command for every system is refused',async()=>{
+  const h=harness({answers:{saas_create_deploy_link:{token:'mrt_secret',windows_command:"$t='mrt_secret'",macos_command:'curl x',linux_command:"curl -- 'mrt_secret'"}}});await h.signedIn();
+  h.elements['devices-add-others'].listeners.click();
+  h.field('label').value='x';await h.confirmDialog();
+  assert.equal(h.field('command'),undefined);
 });
 
 test('Add this computer registers it, remembers its registration and brings it online',async()=>{
@@ -315,8 +333,9 @@ test('a stale registration removes nothing and says so',async()=>{
   assert.equal(h.store.has('mixel.remote.this-computer.v1'),false);
 });
 
-test('members: owners change any role, admins not owners, the last owner stays, and invitations give a link to copy',async()=>{
-  const h=harness({answers:{saas_invite_member:'https://remote.mixel.ch/invite#mri_abc'}});await h.signedIn();
+test('members: owners change any role, admins not owners, the last owner stays, and invitations are e-mailed in the app language',async()=>{
+  const INVITE='bbbbbbbb-0000-4000-8000-000000000009';
+  const h=harness({answers:{saas_invite_member:INVITE}});await h.signedIn();
   const rows=h.elements['company-members'].children;
   assert.equal(h.all(rows[0]).some(n=>n.textContent==='Remove'||n.textContent==='Leave company'),false,'the only owner cannot leave');
   assert.ok(h.all(rows[0]).some(n=>n.textContent==='A company needs at least one owner.'));
@@ -329,12 +348,13 @@ test('members: owners change any role, admins not owners, the last owner stays, 
   await h.confirmDialog();
   assert.deepEqual(h.called('saas_remove_member').map(c=>c.args),[{tenant:TENANT,member:MEMBER}]);
   h.elements['company-invite'].listeners.click();
+  assert.match(h.elements['manage-dialog-text'].textContent,/e-mails an invitation link/);
+  assert.equal(h.elements['manage-dialog-confirm'].textContent,'Send invitation');
   h.field('email').value='new@acme.test';h.field('role').value='technician';await h.confirmDialog();
-  assert.deepEqual(h.called('saas_invite_member').map(c=>c.args),[{tenant:TENANT,email:'new@acme.test',role:'technician'}]);
-  assert.equal(h.field('link').value,'https://remote.mixel.ch/invite#mri_abc');
-  h.byText(h.elements['manage-dialog-fields'],'Copy invitation link').listeners.click();await settle();
-  assert.deepEqual(h.clipboard,['https://remote.mixel.ch/invite#mri_abc']);
-  const a=harness({me:TECH,role:'admin'});await a.signedIn();
+  assert.deepEqual(h.called('saas_invite_member').map(c=>c.args),[{tenant:TENANT,email:'new@acme.test',role:'technician',locale:'en'}]);
+  assert.equal(h.elements['manage-dialog'].hidden,true,'no link to copy: the secret is only in the e-mail');
+  assert.match(h.elements['company-members-status'].textContent,/Invitation e-mail on its way to new@acme.test/);
+const a=harness({me:TECH,role:'admin'});await a.signedIn();
   const owner=a.elements['company-members'].children[0];
   assert.equal(a.all(owner).some(n=>n.textContent==='Change role'||n.textContent==='Remove'),false,'admins cannot change or remove owners');
   a.byText(a.elements['company-members'].children[2],'Change role').listeners.click();
@@ -392,10 +412,35 @@ test('every new text has German, French and Italian translations',()=>{
     'This computer was added as Front desk. Connection ID 555 666 777.','It works for 12 computers within 30 days. The command contains a secret: share it only with the people who deploy the computers. It is shown only now.',
     'Registered as Front desk · Connection ID 555 666 777','No connection to Mixel Remote right now. This computer will be removed as soon as it is online.','This computer was removed from Mixel Remote. It is no longer set up; add it again in Devices to use it.',
     'Remove this computer from Mixel Remote?','This computer is removed from Acme AG at once: its registration is revoked, running sessions end and nobody can connect to it any more. Without internet, the removal is saved and sent as soon as this computer is online. Afterwards this computer is no longer set up; you can add it again.',
-    'Technician · valid until 20.11.2026','Role of Tom Tech changed to Administrator.','Invitation created for new@acme.test.','Your company is ready. Your free 14-day Business trial has started: add this computer in Devices.',
+    'Technician · valid until 20.11.2026','Role of Tom Tech changed to Administrator.','Invitation e-mail on its way to new@acme.test. The link in it works for 7 days, only with this e-mail address.',
+    'e-mail sent 13.11.2026','e-mail being sent','e-mail not delivered','Send again','Send the invitation of new@acme.test again','A new invitation e-mail is on its way to new@acme.test. The previous link no longer works.',
+    'Mixel Remote e-mails an invitation link to this address. The person signs in with it and joins Acme AG.','Operating system',
+    'On each Mac, open Terminal while the person who uses the Mac is signed in, or run it with your MDM.','Paste and run the command below and enter the administrator password. The Mac appears in Devices, with always-on access.',
+    'Once per Mac, allow Mixel Remote in System Settings > Privacy & Security > Screen Recording and Accessibility.','On each Ubuntu or Debian computer, open a terminal, or use your deployment tool.',
+    'Paste and run the command below and enter the administrator password. The computer appears in Devices, with access at the sign-in screen and in X11 sessions.','Your company is ready. Your free 14-day Business trial has started: add this computer in Devices.',
     'Device limit of your plan reached','Technician limit of your plan reached','Rename the company','Company renamed to Acme Holding AG.',
     'Last seen 3 hours ago. Turned off, asleep or without internet. It must be online to connect.','Last seen 25 minutes ago. Turned off, asleep or without internet. It must be online to connect.','Last seen 4 days ago. Turned off, asleep or without internet. It must be online to connect.','Last seen yesterday. Turned off, asleep or without internet. It must be online to connect.','Last seen just now. Turned off, asleep or without internet. It must be online to connect.',
     'The new name is shown to everyone in the company and on the Mixel Remote portal.','Enter a company name of 2 to 80 characters.','This Mixel Remote account is read-only','Not allowed for this company','This computer is being removed from Mixel Remote. It is removed as soon as it is online.'])texts.add(text);
   const missing=[...texts].filter(text=>!['de','fr','it'].every(language=>translated(language,text)));
   assert.deepEqual(missing,[]);
+});
+
+test('pending invitations show their e-mail state, can be sent again with a new link, and refresh while sending',async()=>{
+  const invites=[{id:'i-1',email:'sent@acme.test',role:'technician',created_at:'x',expires_at:'2026-11-20T10:00:00Z',mail_state:'sent',mail_sent_at:'2026-11-13T10:00:00Z',mail_sends:1},
+    {id:'i-2',email:'busy@acme.test',role:'member',created_at:'x',expires_at:'2026-11-20T10:00:00Z',mail_state:'pending',mail_sent_at:null,mail_sends:0},
+    {id:'i-3',email:'bounced@acme.test',role:'member',created_at:'x',expires_at:'2026-11-20T10:00:00Z',mail_state:'failed',mail_sent_at:null,mail_sends:0}];
+  const h=harness({answers:{saas_invites:invites,saas_resend_invite:true}});await h.signedIn();
+  const rows=h.elements['company-invites'].children;
+  assert.equal(rows.length,3);
+  const detail=i=>rows[i].children[0].children[1].textContent;
+  assert.match(detail(0),/^Technician · valid until .+ · e-mail sent /);
+  assert.match(detail(1),/e-mail being sent$/);
+  assert.match(detail(2),/e-mail not delivered$/);
+  assert.equal(h.byText(rows[1],'Send again').disabled,true,'not while the e-mail is on its way');
+  assert.ok(h.timers.length>0,'looks again while an e-mail is being sent');
+  h.byText(rows[2],'Send again').listeners.click();await settle();
+  assert.deepEqual(h.called('saas_resend_invite').map(c=>c.args),[{tenant:TENANT,invite:'i-3',locale:'en'}]);
+  assert.match(h.elements['company-members-status'].textContent,/A new invitation e-mail is on its way to bounced@acme.test/);
+  h.byText(h.elements['company-invites'].children[0],'Revoke').listeners.click();await settle();
+  assert.deepEqual(h.called('saas_revoke_invite').map(c=>c.args),[{tenant:TENANT,invite:'i-1'}]);
 });

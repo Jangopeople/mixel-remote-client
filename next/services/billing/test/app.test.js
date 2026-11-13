@@ -216,7 +216,7 @@ test("webhook: bad signature 400 without touching the database; foreign events a
 
 test("health, CORS for the portal origin only, unknown routes", async () => {
   const health = await fetch(`${base}/health`);
-  assert.deepEqual(await health.json(), { ok: true, service: "mixel-remote-billing" });
+  assert.deepEqual(await health.json(), { ok: true, service: "mixel-remote-billing", invite_mail: { on: false } });
   const pre = await fetch(`${base}/checkout`, { method: "OPTIONS", headers: { origin: "https://remote.mixel.ch" } });
   assert.equal(pre.status, 204);
   assert.equal(pre.headers.get("access-control-allow-origin"), "https://remote.mixel.ch");

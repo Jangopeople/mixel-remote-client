@@ -101,6 +101,22 @@ pub struct SaasInvite {
     pub role: String,
     pub created_at: String,
     pub expires_at: String,
+    /// `pending` / `sending` (the e-mail is on its way), `sent`, `failed` (not delivered to the mail service).
+    #[serde(default)]
+    pub mail_state: Option<String>,
+    #[serde(default)]
+    pub mail_sent_at: Option<String>,
+    #[serde(default)]
+    pub mail_locale: Option<String>,
+    #[serde(default)]
+    pub mail_sends: Option<i32>,
+}
+/// Languages of the invitation e-mail (SQL 026).
+pub const INVITE_LOCALES: [&str; 4] = ["en", "de", "fr", "it"];
+fn invite_locale(locale: Option<&str>) -> Option<&'static str> {
+    let wanted = locale?.trim().to_ascii_lowercase();
+    let wanted = wanted.split(['-', '_']).next().unwrap_or_default().to_owned();
+    INVITE_LOCALES.into_iter().find(|candidate| *candidate == wanted)
 }
 /// The result of a self-service sign-up: the new company (a 14-day Business trial).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -401,8 +417,9 @@ impl IsmAuth {
     pub async fn saas_members(&self, token: &str, tenant: Uuid) -> Result<Vec<SaasMember>, SaasError> {
         self.saas_call(Some(token), "remote_saas_members", json!({"tenant": tenant})).await
     }
-    /// Owners/admins: invites a person; returns the invitation secret once (only its hash is stored).
-    pub async fn saas_invite_member(&self, token: &str, tenant: Uuid, email: &str, role: &str) -> Result<String, SaasError> {
+    /// Owners/admins: invites a person. The mail service e-mails the invitation link (SQL 026); the
+    /// secret is never returned to the inviter. Returns the invitation id.
+    pub async fn saas_invite_member(&self, token: &str, tenant: Uuid, email: &str, role: &str, locale: Option<&str>) -> Result<Uuid, SaasError> {
         let email = email.trim();
         if !(3..=254).contains(&email.chars().count())
             || email.chars().any(|c| c.is_control() || c.is_whitespace())
@@ -411,13 +428,17 @@ impl IsmAuth {
             return Err(SaasError::invalid("Invalid email address"));
         }
         let role = member_role(role, false)?;
-        let secret: String = self
-            .saas_call(Some(token), "remote_saas_invite_member", json!({"tenant": tenant, "invitee_email": email, "member_role": role}))
-            .await?;
-        if !secret.starts_with("mri_") || secret.len() > 100 || !secret.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
-            return Err(SaasError::unavailable());
-        }
-        Ok(secret)
+        self.saas_call(
+            Some(token),
+            "remote_saas_invite_member",
+            json!({"tenant": tenant, "invitee_email": email, "member_role": role, "locale": invite_locale(locale)}),
+        )
+        .await
+    }
+    /// Owners/admins: sends the invitation e-mail again with a new link (the old one stops working).
+    pub async fn saas_resend_invite(&self, token: &str, tenant: Uuid, invite: Uuid, locale: Option<&str>) -> Result<bool, SaasError> {
+        self.saas_call(Some(token), "remote_saas_resend_invite", json!({"tenant": tenant, "invite": invite, "locale": invite_locale(locale)}))
+            .await
     }
     pub async fn saas_invites(&self, token: &str, tenant: Uuid) -> Result<Vec<SaasInvite>, SaasError> {
         self.saas_call(Some(token), "remote_saas_invites", json!({"tenant": tenant})).await
@@ -497,7 +518,14 @@ mod tests {
                 if body["invitee_email"] == "full@example.com" {
                     return (StatusCode::BAD_REQUEST, axum::Json(json!({"code":"54000","message":"Technician limit of your plan reached"}))).into_response();
                 }
-                axum::Json(json!("mri_abcdefghijklmnopqrstuvwxyz0123456789-_")).into_response()
+                // The language of the e-mail: a supported one, else none (the database then uses the inviter's).
+                let expected = if body["invitee_email"] == "tech@example.com" { json!("de") } else { Value::Null };
+                assert_eq!(body["locale"], expected);
+                axum::Json(json!(Uuid::from_u128(77))).into_response()
+            }
+            "remote_saas_resend_invite" => {
+                assert_eq!(body["locale"], "fr");
+                axum::Json(json!(true)).into_response()
             }
             "remote_saas_signup" => {
                 assert_eq!(body["company_name"], "Acme AG");
@@ -548,13 +576,14 @@ mod tests {
         assert!(ism.saas_add_this_device("user-token", Uuid::from_u128(9), " ", "linux", &key.verifying_key(), None).await.is_err());
         assert!(ism.saas_add_this_device("user-token", Uuid::from_u128(9), "PC", "beos", &key.verifying_key(), None).await.is_err());
         let tenant = Uuid::from_u128(9);
-        let secret = ism.saas_invite_member("user-token", tenant, " tech@example.com ", "technician").await.unwrap();
-        assert!(secret.starts_with("mri_"));
-        let full = ism.saas_invite_member("user-token", tenant, "full@example.com", "technician").await.unwrap_err();
+        let invite = ism.saas_invite_member("user-token", tenant, " tech@example.com ", "technician", Some("de-CH")).await.unwrap();
+        assert_eq!(invite, Uuid::from_u128(77));
+        let full = ism.saas_invite_member("user-token", tenant, "full@example.com", "technician", Some("es")).await.unwrap_err();
         assert_eq!((full.code.as_deref(), full.message.as_str()), (Some("54000"), "Technician limit of your plan reached"));
-        assert!(ism.saas_invite_member("user-token", tenant, "no-at-sign", "technician").await.is_err());
-        assert!(ism.saas_invite_member("user-token", tenant, "a@b.ch", "owner").await.is_err(), "owners are not invited");
-        assert!(ism.saas_invite_member("user-token", tenant, "a@b.ch", "boss").await.is_err());
+        assert!(ism.saas_invite_member("user-token", tenant, "no-at-sign", "technician", None).await.is_err());
+        assert!(ism.saas_invite_member("user-token", tenant, "a@b.ch", "owner", None).await.is_err(), "owners are not invited");
+        assert!(ism.saas_invite_member("user-token", tenant, "a@b.ch", "boss", None).await.is_err());
+        assert!(ism.saas_resend_invite("user-token", tenant, invite, Some("FR")).await.unwrap());
         let created = ism.saas_signup("user-token", " Acme AG ").await.unwrap();
         assert_eq!((created.tenant_id, created.status.as_str()), (Uuid::from_u128(4), "trial"));
         assert!(ism.saas_signup("user-token", "A").await.is_err());

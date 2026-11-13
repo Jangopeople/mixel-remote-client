@@ -9,12 +9,13 @@ Phase 8, stage 3). React + TypeScript + Vite, served by a Cloudflare Worker with
   trial. `/signup/finish` names the company for an account that is signed in without one (Mixel ID sign-up).
 - `/signin` email first; shows the methods the company allows (`remote_saas_sign_in_options` by verified domain, or
   `?company=<slug>`), then the authenticator code when the account has 2-step login.
-- `/invite#<secret>` accepts an invitation (same link format as the desktop app); sign in or create an account first.
+- `/invite#<secret>` accepts an invitation (the link in the invitation e-mail); sign in or create an account first.
 - `/auth/callback` OAuth (PKCE) return for Mixel ID.
 - `/app` overview (plan, trial days, usage), `/app/devices` (online status with "online since" / "last seen" and the
   reason, refreshed every 30 s; rename, move, remove, add help, link to the web viewer),
-  `/app/groups` (groups, technician access), `/app/deploy` (deploy links + Windows command), `/app/team`
-  (members, roles, invitation links), `/app/settings` (sign-in methods, required 2-step login, email domains, audit log),
+  `/app/groups` (groups, technician access), `/app/deploy` (deploy links + the one-line command per system:
+  Windows PowerShell, `curl … | sudo sh` for macOS and Linux), `/app/team` (members, roles, invitations with their
+  e-mail state, send again, revoke), `/app/settings` (sign-in methods, required 2-step login, email domains, audit log),
   `/app/billing` (plan, limits, Stripe Checkout / customer portal / plan change via the billing service, success and
   cancel pages at `?billing=success|cancelled`), `/app/account` (2-step login).
 
@@ -39,6 +40,7 @@ npm run typecheck && npm run lint && npm test && npm run build
 ```bash
 # Service-role key for the GoTrue admin API, in a file outside the repo (chmod 600), deleted afterwards:
 ssh mixel-vps 'sudo grep "^SERVICE_ROLE_KEY=" /opt/supabase-ism/.env | cut -d= -f2-' | sed 's/^/ISM_SERVICE_ROLE_KEY=/' > /path/qa-admin.env
+QA_SQL='ssh mixel-vps docker exec -i ism-postgres psql -U postgres -d ism -At' \
 QA_RUN=r$(date +%H%M%S) QA_ADMIN_ENV=/path/qa-admin.env QA_SHOTS=/path/shots PORTAL_URL=https://remote.mixel.ch npx playwright test
 # The web viewer with company accounts (after the portal run; uses its qa-run.json):
 VIEWER_URL=https://ism.mixel.ch/remote-next/ QA_SHOTS=/path/shots QA_ADMIN_ENV=/path/qa-admin.env npx playwright test tests/e2e/viewer.spec.ts
@@ -67,8 +69,31 @@ The previous remote.mixel.ch site (an archived Convex/RustDesk page, nginx → 1
 `_archive/mixel-remote`) had only crawler traffic; its nginx vhost is left in place but receives no traffic while the
 Worker route exists. Rollback: `npx wrangler delete` (or remove the route) and the old origin answers again.
 
+## Invitation e-mails (SQL 026)
+Inviting (portal, desktop app or the RPC) stores the invitation without a secret and signals the mail service
+(`next/services/billing`, `src/invite-mail.js`). The service creates the secret, stores only its SHA-256, and sends the
+e-mail through Resend (`Mixel Remote <remote@mixel.ch>`, reply-to the inviter) in the language the inviter's UI uses
+(else the inviter's profile language; English, German, French or Italian). The secret exists only in the e-mail link
+`https://remote.mixel.ch/invite#<secret>`. "Send again" creates a new link (the old one stops working), "Revoke" also
+stops an e-mail that was not sent yet. The list shows "Being sent", "Sent <date>" or "Not delivered". QA addresses on
+reserved test domains (`example.com`, `*.test`, …) are never mailed (they show "Not delivered"); the e2e run sets a
+link for them with `QA_SQL` (see `tests/e2e/qa.ts` `invitationLink`).
+
+## Mass rollout on Mac and Linux
+`public/install/macos.sh` and `public/install/linux.sh` are served at `https://remote.mixel.ch/install/…`. The deploy
+dialog shows `curl -fsSL https://remote.mixel.ch/install/<os>.sh | sudo sh -s -- '<token>'`:
+- Linux (Ubuntu/Debian x64): checks the update channel's Ed25519 signature (Mixel update key) and the package
+  SHA-256, `apt-get install`s the `.deb`, runs `desktop_app --signin-enroll <token>` as root → computer-wide key,
+  enrolment, root service `mixel-remote-signin.service` with always-on access (sign-in screen and X11 sessions).
+- macOS: downloads the release DMG (SHA-256 from the channel), requires Mixel's Developer ID signature (team
+  5277F8NDH4), installs `/Applications/Mixel Remote.app` and runs `--signin-enroll <token>` as the signed-in person
+  (`launchctl asuser`): key in the login Keychain, enrolment, per-user launch agent `<bundle id>.startup-host` running
+  the headless host. Once per Mac the person allows Screen Recording and Accessibility (macOS rule).
+Both refuse releases older than 0.1.22 (the first with `--signin-enroll` on Mac and Linux). Options for tests and
+offline mirrors: `--deb FILE` (Linux), `--app PATH [--in-place]` (Mac), `--channel NAME`.
+
 ## Not yet
-Invitation emails, Google / Microsoft / Apple / company SSO providers
+Google / Microsoft / Apple / company SSO providers
 (shown as "coming soon" until they are configured in GoTrue), automatic domain verification.
 
 The portal's "Open the web viewer" goes to `https://ism.mixel.ch/login?next=/remote-next/`: the viewer runs on the ISM

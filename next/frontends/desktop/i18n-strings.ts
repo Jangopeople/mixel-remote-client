@@ -123,6 +123,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Create a company": "Firma erstellen",
 "Create a company link, then run the command on each Windows computer, as administrator or with your deployment tool. Each computer enrols itself with always-on access and appears in Devices. No one needs to sign in on it.": "Erstellen Sie einen Firmen-Link und führen Sie den Befehl auf jedem Windows-Computer aus, als Administrator oder mit Ihrem Verteilwerkzeug. Jeder Computer registriert sich mit ständigem Zugriff und erscheint unter Geräte. Niemand muss sich darauf anmelden.",
 "Create a deploy link: one command adds many Windows computers to your company, without anyone signing in on them.": "Erstellen Sie einen Verteil-Link: Ein Befehl fügt viele Windows-Computer Ihrer Firma hinzu, ohne dass sich jemand darauf anmeldet.",
+"Create a deploy link: one command adds many Windows, Mac or Linux computers to your company, without anyone signing in on them.": "Erstellen Sie einen Verteil-Link: Ein Befehl fügt viele Windows-, Mac- oder Linux-Computer Ihrer Firma hinzu, ohne dass sich jemand darauf anmeldet.",
 "Create a support code here and tell it to them. They type it into the app.": "Erstellen Sie hier einen Support-Code und nennen Sie ihn der Person. Sie gibt ihn in der App ein.",
 "Create company": "Firma erstellen",
 "Create deploy link": "Verteil-Link erstellen",
@@ -300,8 +301,11 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "ONE-TIME PASSWORD, IF PROVIDED": "EINMALPASSWORT, FALLS VORHANDEN",
 "Off. Choose a display and confirm before enabling.": "Aus. Wählen und bestätigen Sie einen Bildschirm vor dem Aktivieren.",
 "Offline": "Offline",
+"On each Mac, open Terminal while the person who uses the Mac is signed in, or run it with your MDM.": "Öffnen Sie auf jedem Mac das Terminal, während die Person angemeldet ist, die den Mac benutzt, oder führen Sie den Befehl mit Ihrer MDM-Lösung aus.",
+"On each Ubuntu or Debian computer, open a terminal, or use your deployment tool.": "Öffnen Sie auf jedem Ubuntu- oder Debian-Computer ein Terminal oder verwenden Sie Ihr Verteilungswerkzeug.",
 "On each Windows computer, open PowerShell as administrator, or use your deployment tool.": "Öffnen Sie auf jedem Windows-Computer PowerShell als Administrator oder verwenden Sie Ihr Verteilungswerkzeug.",
 "On. Approved users can connect while this computer stays signed in.": "An. Freigegebene Benutzer können verbinden, solange dieser Computer angemeldet bleibt.",
+"Once per Mac, allow Mixel Remote in System Settings > Privacy & Security > Screen Recording and Accessibility.": "Einmal pro Mac: Erlauben Sie Mixel Remote unter Systemeinstellungen > Datenschutz & Sicherheit > Bildschirmaufnahme und Bedienungshilfen.",
 "One-time password": "Einmalpasswort",
 "Online": "Online",
 "Only Mixel team accounts can connect to phones. Sign in with your team account (with the second confirmation step) under Account.": "Nur Mixel-Teamkonten können sich mit Smartphones verbinden. Melden Sie sich unter «Konto» mit Ihrem Teamkonto an (mit dem zweiten Bestätigungsschritt).",
@@ -313,11 +317,14 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Opened instead: choose Print in the program that shows it.": "Stattdessen geöffnet: im angezeigten Programm «Drucken» wählen.",
 "Opening secure browser sign-in": "Sichere Anmeldung im Browser wird geöffnet",
 "Opening the encrypted file channel…": "Verschlüsselter Dateikanal wird geöffnet…",
+"Operating system": "Betriebssystem",
 "Or a new group": "Oder eine neue Gruppe",
 "Or the Remote ID of their computer": "Oder die Remote-ID seines Computers",
 "Owner": "Inhaber",
 "Owners and administrators manage the company. Technicians connect to and manage devices. Members use the devices they added.": "Inhaber und Administratoren verwalten die Firma. Techniker verbinden sich mit Geräten und verwalten sie. Mitglieder nutzen die Geräte, die sie hinzugefügt haben.",
 "PARTNER CONNECTION ID": "PARTNER-VERBINDUNGS-ID",
+"Paste and run the command below and enter the administrator password. The Mac appears in Devices, with always-on access.": "Fügen Sie den Befehl unten ein, führen Sie ihn aus und geben Sie das Administratorpasswort ein. Der Mac erscheint unter Geräte, mit ständigem Zugriff.",
+"Paste and run the command below and enter the administrator password. The computer appears in Devices, with access at the sign-in screen and in X11 sessions.": "Fügen Sie den Befehl unten ein, führen Sie ihn aus und geben Sie das Administratorpasswort ein. Der Computer erscheint unter Geräte, mit Zugriff am Anmeldebildschirm und in X11-Sitzungen.",
 "Paste and run the command below. Mixel Remote is installed and the computer appears in Devices, with always-on access.": "Fügen Sie den Befehl unten ein und führen Sie ihn aus. Mixel Remote wird installiert und der Computer erscheint unter «Geräte», mit Daueranschluss.",
 "Payment overdue. Please update the payment details in the Mixel Remote portal.": "Zahlung überfällig. Bitte aktualisieren Sie die Zahlungsangaben im Mixel-Remote-Portal.",
 "Personal plan": "Abo Personal",
@@ -390,6 +397,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Select the link and copy it.": "Markieren Sie den Link und kopieren Sie ihn.",
 "Send": "Senden",
 "Send a file…": "Datei senden…",
+"Send again": "Erneut senden",
 "Send invitation": "Einladung senden",
 "Send my clipboard": "Meine Zwischenablage senden",
 "Send text": "Text senden",
@@ -616,6 +624,9 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Your next connection starts here": "Ihre nächste Verbindung beginnt hier",
 "Your saved sign-in expired. Sign in again.": "Ihre gespeicherte Anmeldung ist abgelaufen. Bitte erneut anmelden.",
 "Your sign-in is kept in this computer’s protected storage until you sign out.": "Ihre Anmeldung bleibt bis zum Abmelden im geschützten Speicher dieses Computers.",
+"e-mail being sent": "E-Mail wird gesendet",
+"e-mail not delivered": "E-Mail nicht zugestellt",
+"e-mail sent": "E-Mail gesendet",
 "e.g. Office PC": "z. B. Büro-PC",
 "from the App Store or Google Play and opens it.": "aus dem App Store oder von Google Play und öffnet sie.",
 "iPhone, iPad or Android. The other person needs no account.": "iPhone, iPad oder Android. Die andere Person braucht kein Konto.",
@@ -1010,6 +1021,26 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 [
 "^Last seen yesterday\\. Turned off, asleep or without internet\\. It must be online to connect\\.$",
 "Zuletzt gesehen gestern. Ausgeschaltet, im Ruhezustand oder ohne Internet. Es muss online sein, um sich zu verbinden."
+],
+[
+"^e-mail sent (.+)$",
+"E-Mail gesendet $1"
+],
+[
+"^Send the invitation of (.+) again$",
+"Einladung an $1 erneut senden"
+],
+[
+"^A new invitation e-mail is on its way to (.+)\\. The previous link no longer works\\.$",
+"Eine neue Einladungs-E-Mail an $1 ist unterwegs. Der bisherige Link funktioniert nicht mehr."
+],
+[
+"^Invitation e-mail on its way to (.+)\\. The link in it works for 7 days, only with this e-mail address\\.$",
+"Einladungs-E-Mail an $1 ist unterwegs. Der Link darin funktioniert 7 Tage lang und nur mit dieser E-Mail-Adresse."
+],
+[
+"^Mixel Remote e-mails an invitation link to this address\\. The person signs in with it and joins (.+)\\.$",
+"Mixel Remote sendet einen Einladungslink an diese Adresse. Die Person meldet sich damit an und tritt $1 bei."
 ]
 ]
 },
@@ -1135,6 +1166,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Create a company": "Créer une entreprise",
 "Create a company link, then run the command on each Windows computer, as administrator or with your deployment tool. Each computer enrols itself with always-on access and appears in Devices. No one needs to sign in on it.": "Créez un lien d’entreprise, puis exécutez la commande sur chaque ordinateur Windows, en administrateur ou avec votre outil de déploiement. Chaque ordinateur s’enregistre avec l’accès permanent et apparaît dans Appareils. Personne n’a besoin de s’y connecter.",
 "Create a deploy link: one command adds many Windows computers to your company, without anyone signing in on them.": "Créez un lien de déploiement : une commande ajoute de nombreux ordinateurs Windows à votre entreprise, sans que personne ne s’y connecte.",
+"Create a deploy link: one command adds many Windows, Mac or Linux computers to your company, without anyone signing in on them.": "Créez un lien de déploiement : une commande ajoute de nombreux ordinateurs Windows, Mac ou Linux à votre entreprise, sans que personne ne s’y connecte.",
 "Create a support code here and tell it to them. They type it into the app.": "Créez ici un code d’assistance et communiquez-le-lui. La personne le saisit dans l’application.",
 "Create company": "Créer l’entreprise",
 "Create deploy link": "Créer le lien de déploiement",
@@ -1312,8 +1344,11 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "ONE-TIME PASSWORD, IF PROVIDED": "MOT DE PASSE À USAGE UNIQUE, S’IL Y EN A UN",
 "Off. Choose a display and confirm before enabling.": "Désactivé. Choisissez et confirmez un écran avant d’activer.",
 "Offline": "Hors ligne",
+"On each Mac, open Terminal while the person who uses the Mac is signed in, or run it with your MDM.": "Sur chaque Mac, ouvrez Terminal pendant que la personne qui utilise le Mac est connectée, ou exécutez la commande avec votre MDM.",
+"On each Ubuntu or Debian computer, open a terminal, or use your deployment tool.": "Sur chaque ordinateur Ubuntu ou Debian, ouvrez un terminal, ou utilisez votre outil de déploiement.",
 "On each Windows computer, open PowerShell as administrator, or use your deployment tool.": "Sur chaque ordinateur Windows, ouvrez PowerShell en tant qu’administrateur, ou utilisez votre outil de déploiement.",
 "On. Approved users can connect while this computer stays signed in.": "Activé. Les utilisateurs approuvés peuvent se connecter tant que cet ordinateur reste connecté.",
+"Once per Mac, allow Mixel Remote in System Settings > Privacy & Security > Screen Recording and Accessibility.": "Une fois par Mac : autorisez Mixel Remote dans Réglages Système > Confidentialité et sécurité > Enregistrement de l’écran et Accessibilité.",
 "One-time password": "Mot de passe à usage unique",
 "Online": "En ligne",
 "Only Mixel team accounts can connect to phones. Sign in with your team account (with the second confirmation step) under Account.": "Seuls les comptes d’équipe Mixel peuvent se connecter aux téléphones. Connectez-vous sous « Compte » avec votre compte d’équipe (avec la deuxième étape de confirmation).",
@@ -1325,11 +1360,14 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Opened instead: choose Print in the program that shows it.": "Ouvert à la place : choisissez Imprimer dans le programme qui l’affiche.",
 "Opening secure browser sign-in": "Ouverture de la connexion sécurisée dans le navigateur",
 "Opening the encrypted file channel…": "Ouverture du canal de fichiers chiffré…",
+"Operating system": "Système d’exploitation",
 "Or a new group": "Ou un nouveau groupe",
 "Or the Remote ID of their computer": "Ou l’ID Remote de son ordinateur",
 "Owner": "Propriétaire",
 "Owners and administrators manage the company. Technicians connect to and manage devices. Members use the devices they added.": "Les propriétaires et administrateurs gèrent l’entreprise. Les techniciens se connectent aux appareils et les gèrent. Les membres utilisent les appareils qu’ils ont ajoutés.",
 "PARTNER CONNECTION ID": "ID DE CONNEXION DU PARTENAIRE",
+"Paste and run the command below and enter the administrator password. The Mac appears in Devices, with always-on access.": "Collez et exécutez la commande ci-dessous, puis saisissez le mot de passe administrateur. Le Mac apparaît dans Appareils, avec un accès permanent.",
+"Paste and run the command below and enter the administrator password. The computer appears in Devices, with access at the sign-in screen and in X11 sessions.": "Collez et exécutez la commande ci-dessous, puis saisissez le mot de passe administrateur. L’ordinateur apparaît dans Appareils, avec un accès à l’écran de connexion et dans les sessions X11.",
 "Paste and run the command below. Mixel Remote is installed and the computer appears in Devices, with always-on access.": "Collez et exécutez la commande ci-dessous. Mixel Remote est installé et l’ordinateur apparaît dans « Appareils », avec l’accès permanent.",
 "Payment overdue. Please update the payment details in the Mixel Remote portal.": "Paiement en retard. Veuillez mettre à jour les données de paiement dans le portail Mixel Remote.",
 "Personal plan": "Formule Personal",
@@ -1402,6 +1440,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Select the link and copy it.": "Sélectionnez le lien et copiez-le.",
 "Send": "Envoyer",
 "Send a file…": "Envoyer un fichier…",
+"Send again": "Renvoyer",
 "Send invitation": "Envoyer l’invitation",
 "Send my clipboard": "Envoyer mon presse-papiers",
 "Send text": "Envoyer du texte",
@@ -1628,6 +1667,9 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Your next connection starts here": "Votre prochaine connexion commence ici",
 "Your saved sign-in expired. Sign in again.": "Votre connexion enregistrée a expiré. Reconnectez-vous.",
 "Your sign-in is kept in this computer’s protected storage until you sign out.": "Votre connexion est conservée dans le stockage protégé de cet ordinateur jusqu’à votre déconnexion.",
+"e-mail being sent": "e-mail en cours d’envoi",
+"e-mail not delivered": "e-mail non remis",
+"e-mail sent": "e-mail envoyé",
 "e.g. Office PC": "p. ex. PC du bureau",
 "from the App Store or Google Play and opens it.": "depuis l’App Store ou Google Play et l’ouvre.",
 "iPhone, iPad or Android. The other person needs no account.": "iPhone, iPad ou Android. L’autre personne n’a pas besoin de compte.",
@@ -2022,6 +2064,26 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 [
 "^Last seen yesterday\\. Turned off, asleep or without internet\\. It must be online to connect\\.$",
 "Vu pour la dernière fois hier. Éteint, en veille ou sans internet. Il doit être en ligne pour se connecter."
+],
+[
+"^e-mail sent (.+)$",
+"e-mail envoyé le $1"
+],
+[
+"^Send the invitation of (.+) again$",
+"Renvoyer l’invitation de $1"
+],
+[
+"^A new invitation e-mail is on its way to (.+)\\. The previous link no longer works\\.$",
+"Un nouvel e-mail d’invitation est en route vers $1. L’ancien lien ne fonctionne plus."
+],
+[
+"^Invitation e-mail on its way to (.+)\\. The link in it works for 7 days, only with this e-mail address\\.$",
+"E-mail d’invitation en route vers $1. Le lien qu’il contient fonctionne pendant 7 jours, uniquement avec cette adresse e-mail."
+],
+[
+"^Mixel Remote e-mails an invitation link to this address\\. The person signs in with it and joins (.+)\\.$",
+"Mixel Remote envoie un lien d’invitation à cette adresse. La personne se connecte avec elle et rejoint $1."
 ]
 ]
 },
@@ -2147,6 +2209,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Create a company": "Crea un’azienda",
 "Create a company link, then run the command on each Windows computer, as administrator or with your deployment tool. Each computer enrols itself with always-on access and appears in Devices. No one needs to sign in on it.": "Crea un link aziendale, poi esegui il comando su ogni computer Windows, come amministratore o con il tuo strumento di distribuzione. Ogni computer si registra con l’accesso permanente e compare in Dispositivi. Nessuno deve accedervi.",
 "Create a deploy link: one command adds many Windows computers to your company, without anyone signing in on them.": "Crea un link di distribuzione: un comando aggiunge molti computer Windows alla tua azienda, senza che nessuno vi acceda.",
+"Create a deploy link: one command adds many Windows, Mac or Linux computers to your company, without anyone signing in on them.": "Crea un link di distribuzione: un comando aggiunge molti computer Windows, Mac o Linux alla tua azienda, senza che nessuno vi acceda.",
 "Create a support code here and tell it to them. They type it into the app.": "Crea qui un codice di assistenza e comunicalo alla persona, che lo inserisce nell’app.",
 "Create company": "Crea l’azienda",
 "Create deploy link": "Crea link di distribuzione",
@@ -2324,8 +2387,11 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "ONE-TIME PASSWORD, IF PROVIDED": "PASSWORD MONOUSO, SE FORNITA",
 "Off. Choose a display and confirm before enabling.": "Disattivato. Scegli e conferma uno schermo prima di attivare.",
 "Offline": "Offline",
+"On each Mac, open Terminal while the person who uses the Mac is signed in, or run it with your MDM.": "Su ogni Mac apri Terminale mentre la persona che usa il Mac ha effettuato l’accesso, oppure esegui il comando con il tuo MDM.",
+"On each Ubuntu or Debian computer, open a terminal, or use your deployment tool.": "Su ogni computer Ubuntu o Debian apri un terminale, oppure usa il tuo strumento di distribuzione.",
 "On each Windows computer, open PowerShell as administrator, or use your deployment tool.": "Su ogni computer Windows apri PowerShell come amministratore, oppure usa il tuo strumento di distribuzione.",
 "On. Approved users can connect while this computer stays signed in.": "Attivato. Gli utenti approvati possono connettersi finché questo computer resta connesso.",
+"Once per Mac, allow Mixel Remote in System Settings > Privacy & Security > Screen Recording and Accessibility.": "Una volta per Mac: consenti Mixel Remote in Impostazioni di Sistema > Privacy e sicurezza > Registrazione schermo e Accessibilità.",
 "One-time password": "Password monouso",
 "Online": "Online",
 "Only Mixel team accounts can connect to phones. Sign in with your team account (with the second confirmation step) under Account.": "Solo gli account del team Mixel possono collegarsi ai telefoni. Accedi in «Account» con il tuo account del team (con il secondo passaggio di conferma).",
@@ -2337,11 +2403,14 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Opened instead: choose Print in the program that shows it.": "Aperto invece: scegli Stampa nel programma che lo mostra.",
 "Opening secure browser sign-in": "Apertura dell’accesso sicuro nel browser",
 "Opening the encrypted file channel…": "Apertura del canale file cifrato…",
+"Operating system": "Sistema operativo",
 "Or a new group": "Oppure un nuovo gruppo",
 "Or the Remote ID of their computer": "Oppure l’ID Remote del suo computer",
 "Owner": "Proprietario",
 "Owners and administrators manage the company. Technicians connect to and manage devices. Members use the devices they added.": "Proprietari e amministratori gestiscono l’azienda. I tecnici si connettono ai dispositivi e li gestiscono. I membri usano i dispositivi che hanno aggiunto.",
 "PARTNER CONNECTION ID": "ID DI CONNESSIONE DEL PARTNER",
+"Paste and run the command below and enter the administrator password. The Mac appears in Devices, with always-on access.": "Incolla ed esegui il comando qui sotto e inserisci la password di amministratore. Il Mac compare in Dispositivi, con accesso sempre attivo.",
+"Paste and run the command below and enter the administrator password. The computer appears in Devices, with access at the sign-in screen and in X11 sessions.": "Incolla ed esegui il comando qui sotto e inserisci la password di amministratore. Il computer compare in Dispositivi, con accesso alla schermata di accesso e nelle sessioni X11.",
 "Paste and run the command below. Mixel Remote is installed and the computer appears in Devices, with always-on access.": "Incolla ed esegui il comando qui sotto. Mixel Remote viene installato e il computer compare in «Dispositivi», con l’accesso permanente.",
 "Payment overdue. Please update the payment details in the Mixel Remote portal.": "Pagamento scaduto. Aggiorna i dati di pagamento nel portale Mixel Remote.",
 "Personal plan": "Piano Personal",
@@ -2414,6 +2483,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Select the link and copy it.": "Seleziona il link e copialo.",
 "Send": "Invia",
 "Send a file…": "Invia un file…",
+"Send again": "Invia di nuovo",
 "Send invitation": "Invia l’invito",
 "Send my clipboard": "Invia i miei appunti",
 "Send text": "Invia testo",
@@ -2640,6 +2710,9 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Your next connection starts here": "La tua prossima connessione inizia qui",
 "Your saved sign-in expired. Sign in again.": "Il tuo accesso salvato è scaduto. Accedi di nuovo.",
 "Your sign-in is kept in this computer’s protected storage until you sign out.": "Il tuo accesso resta nella memoria protetta di questo computer finché non esci.",
+"e-mail being sent": "e-mail in invio",
+"e-mail not delivered": "e-mail non recapitata",
+"e-mail sent": "e-mail inviata",
 "e.g. Office PC": "es. PC dell’ufficio",
 "from the App Store or Google Play and opens it.": "dall’App Store o da Google Play e la apre.",
 "iPhone, iPad or Android. The other person needs no account.": "iPhone, iPad o Android. L’altra persona non ha bisogno di un account.",
@@ -3034,6 +3107,26 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 [
 "^Last seen yesterday\\. Turned off, asleep or without internet\\. It must be online to connect\\.$",
 "Visto l’ultima volta ieri. Spento, in stop o senza internet. Deve essere online per connettersi."
+],
+[
+"^e-mail sent (.+)$",
+"e-mail inviata il $1"
+],
+[
+"^Send the invitation of (.+) again$",
+"Invia di nuovo l’invito di $1"
+],
+[
+"^A new invitation e-mail is on its way to (.+)\\. The previous link no longer works\\.$",
+"Una nuova e-mail di invito è in arrivo a $1. Il link precedente non funziona più."
+],
+[
+"^Invitation e-mail on its way to (.+)\\. The link in it works for 7 days, only with this e-mail address\\.$",
+"E-mail di invito in arrivo a $1. Il link contenuto funziona per 7 giorni, solo con questo indirizzo e-mail."
+],
+[
+"^Mixel Remote e-mails an invitation link to this address\\. The person signs in with it and joins (.+)\\.$",
+"Mixel Remote invia un link di invito a questo indirizzo. La persona accede con esso e si unisce a $1."
 ]
 ]
 }

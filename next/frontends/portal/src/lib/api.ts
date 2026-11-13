@@ -43,7 +43,11 @@ export interface Overview {
 }
 
 export interface Member { user_id: string; name: string; email: string; role: Role; created_at: string }
-export interface Invite { id: string; email: string; role: Role; created_at: string; expires_at: string }
+export type MailState = 'pending' | 'sending' | 'sent' | 'failed';
+export interface Invite {
+  id: string; email: string; role: Role; created_at: string; expires_at: string;
+  mail_state: MailState; mail_sent_at: string | null; mail_locale: string; mail_sends: number;
+}
 export interface AuthSettings { methods: Method[]; require_mfa: boolean; sso_provider_id: string | null; updated_at: string }
 export interface SignInOptions { company: string; slug: string; methods: Method[]; require_mfa: boolean; sso_provider_id: string | null }
 export interface Domain { domain: string; verification_token: string; verified_at: string | null }
@@ -73,8 +77,12 @@ export const api = {
   overview: (tenant: string) => rpc<Overview>('remote_saas_tenant_overview', { tenant }),
 
   members: (tenant: string) => rpc<Member[]>('remote_saas_members', { tenant }),
-  invite: (tenant: string, email: string, role: Role) =>
-    rpc<string>('remote_saas_invite_member', { tenant, invitee_email: email, member_role: role }),
+  // The invitation e-mail (in `locale`) is sent by the Mixel Remote mail service; the link's secret
+  // exists only in that e-mail (SQL 026). Returns the invitation id.
+  invite: (tenant: string, email: string, role: Role, locale: string) =>
+    rpc<string>('remote_saas_invite_member', { tenant, invitee_email: email, member_role: role, locale }),
+  resendInvite: (tenant: string, invite: string, locale: string) =>
+    rpc<boolean>('remote_saas_resend_invite', { tenant, invite, locale }),
   invites: (tenant: string) => rpc<Invite[]>('remote_saas_invites', { tenant }),
   revokeInvite: (tenant: string, invite: string) => rpc<boolean>('remote_saas_revoke_invite', { tenant, invite }),
   acceptInvite: (token: string) => rpc<string>('remote_saas_accept_invite', { invite_token: token }),

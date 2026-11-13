@@ -162,6 +162,7 @@ input[type='checkbox'], input[type='radio'] { width: 17px; min-height: 17px; hei
 .badge { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 580; padding: 2px 8px; border-radius: 999px; background: var(--panel-muted); color: var(--muted); border: 1px solid var(--line); white-space: nowrap; }
 .badge-brand { background: var(--brand-soft); color: var(--brand-text); border-color: var(--brand-line); }
 .badge-success { background: var(--success-soft); color: var(--success); border-color: transparent; }
+.badge-danger { background: var(--danger-soft); color: var(--danger); border-color: transparent; }
 .badge-warning { background: var(--warning-soft); color: var(--warning); border-color: transparent; }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; display: inline-block; }
 

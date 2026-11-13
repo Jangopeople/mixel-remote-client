@@ -56,8 +56,12 @@ fn settings(path: &Path, uid: u32) -> Result<Settings, String> {
     if bytes.len() > MAX_SETTINGS_BYTES {
         return Err("Startup host settings are too large".into());
     }
+    parse(&bytes)
+}
+
+fn parse(bytes: &[u8]) -> Result<Settings, String> {
     let config: Settings =
-        serde_json::from_slice(&bytes).map_err(|_| "Startup host settings are invalid")?;
+        serde_json::from_slice(bytes).map_err(|_| "Startup host settings are invalid")?;
     if config.version != 1
         || config.device.is_nil()
         || config.profile.is_nil()
@@ -72,6 +76,12 @@ fn settings(path: &Path, uid: u32) -> Result<Settings, String> {
         );
     }
     Ok(config)
+}
+
+/// Settings written by the Mac rollout (`macos_rollout.rs`) must pass this host's own checks.
+#[cfg(test)]
+pub fn settings_accepted(bytes: &[u8]) -> bool {
+    parse(bytes).is_ok()
 }
 
 fn prelogin_settings(path: &Path) -> Result<Settings, String> {
@@ -254,9 +264,25 @@ pub fn run() -> Result<(), String> {
         identity.open_prelogin(false)?;
         println!("Machine identity loaded from System Keychain");
     } else {
-        if native_os_capture::macos::main_display() == 0 || !permissions(config.control) {
-            return Err("Startup host requires an active graphical session and approved macOS sharing permissions".into());
+        // Rolled out without anyone at the Mac: wait (without asking) until the person approved
+        // Screen Recording (and Accessibility for control) once in System Settings.
+        let mut announced = false;
+        while native_os_capture::macos::main_display() == 0 || !permissions(config.control) {
+            if !announced {
+                eprintln!(
+                    "Waiting for macOS approval: allow Mixel Remote in System Settings > Privacy & Security > Screen Recording{}",
+                    if config.control { " and Accessibility" } else { "" }
+                );
+                announced = true;
+            }
+            std::thread::sleep(Duration::from_secs(5));
+            if !owns_console(uid) || !settings(path, uid).is_ok_and(|current| current == config) {
+                return Ok(());
+            }
         }
+        // Never a Keychain prompt from a background host: fail instead (launchd retries).
+        let _no_ui = security_framework::os::macos::keychain::SecKeychain::disable_user_interaction()
+            .map_err(|_| "Cannot disable Keychain prompts")?;
         identity.open(false)?;
     }
     let enrolled = EnrolledPrincipal {

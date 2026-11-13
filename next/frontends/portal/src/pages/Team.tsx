@@ -1,13 +1,13 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useI18n, type MessageKey } from '../i18n';
 import { useTenant } from '../components/AppShell';
-import { ConfirmDialog, CopyButton, ErrorNotice, Notice, Spinner, formatDate } from '../components/ui';
+import { ConfirmDialog, ErrorNotice, Notice, Spinner, formatDate } from '../components/ui';
 import { Icon } from '../components/Icon';
 import { useAuth } from '../lib/auth';
 import { api, type Invite, type Member } from '../lib/api';
 import {
-  ROLE_ORDER, assignableRoles, canRemoveMember, inviteLink, isEmail, isManager, isWritable, normalizeEmail, type Role,
+  ROLE_ORDER, assignableRoles, canRemoveMember, isEmail, isManager, isWritable, normalizeEmail, type Role,
 } from '../lib/logic';
 import { useLoad } from '../lib/useLoad';
 
@@ -25,7 +25,9 @@ export function Team() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [invalid, setInvalid] = useState(false);
-  const [created, setCreated] = useState<{ email: string; link: string } | null>(null);
+  const [created, setCreated] = useState<string | null>(null);
+  const [resent, setResent] = useState<string | null>(null);
+  const [inviteError, setInviteError] = useState<unknown>(null);
   const [removing, setRemoving] = useState<Member | null>(null);
   const [revoking, setRevoking] = useState<Invite | null>(null);
   const [rowError, setRowError] = useState<unknown>(null);
@@ -45,14 +47,36 @@ export function Team() {
     setError(null);
     try {
       const clean = normalizeEmail(email);
-      const token = await api.invite(tenant.tenant_id, clean, role);
-      setCreated({ email: clean, link: inviteLink(window.location.origin, token) });
+      await api.invite(tenant.tenant_id, clean, role, locale);
+      setCreated(clean);
+      setResent(null);
       setEmail('');
       await invites.reload();
     } catch (failure) {
       setError(failure);
     } finally {
       setBusy(false);
+    }
+  }
+
+  // While an e-mail is on its way, look again shortly so the state turns to "sent".
+  const sending = (invites.data ?? []).some((item) => item.mail_state === 'pending' || item.mail_state === 'sending');
+  const reloadInvites = invites.reload;
+  useEffect(() => {
+    if (!sending) return;
+    const timer = window.setTimeout(() => void reloadInvites(), 4000);
+    return () => window.clearTimeout(timer);
+  }, [sending, invites.data, reloadInvites]);
+
+  async function resend(item: Invite) {
+    setInviteError(null);
+    try {
+      await api.resendInvite(tenant.tenant_id, item.id, locale);
+      setResent(item.email);
+      setCreated(null);
+      await invites.reload();
+    } catch (failure) {
+      setInviteError(failure);
     }
   }
 
@@ -96,11 +120,7 @@ export function Team() {
           <ErrorNotice error={error} />
           {created && (
             <div style={{ marginTop: 16 }} data-testid="invite-created">
-              <Notice kind="success"><p><strong>{t('team.inviteCreated', { email: created.email })}</strong></p><p>{t('team.inviteLinkText', { email: created.email })}</p></Notice>
-              <div className="secret-box">
-                <code data-testid="invite-link">{created.link}</code>
-                <CopyButton value={created.link} />
-              </div>
+              <Notice kind="success"><p><strong>{t('team.inviteCreated', { email: created })}</strong></p><p>{t('team.inviteLinkText', { email: created })}</p></Notice>
             </div>
           )}
         </div>
@@ -157,20 +177,34 @@ export function Team() {
       {manager && (
         <div className="panel">
           <div className="panel-heading"><h2>{t('team.pending')}</h2></div>
-          <ErrorNotice error={invites.error} />
+          <ErrorNotice error={invites.error ?? inviteError} />
+          {resent && <Notice kind="success"><p data-testid="invite-resent">{t('team.resent', { email: resent })}</p></Notice>}
           {(invites.data ?? []).length === 0 ? <p className="field-hint">{t('team.noPending')}</p> : (
             <div className="table-wrap">
               <table className="table" data-testid="invites-table">
-                <thead><tr><th>{t('common.email')}</th><th>{t('common.role')}</th><th className="hide-sm">{t('common.expires')}</th><th><span className="sr-only">{t('common.actions')}</span></th></tr></thead>
+                <thead><tr><th>{t('common.email')}</th><th>{t('common.role')}</th><th>{t('team.mail')}</th><th className="hide-sm">{t('common.expires')}</th><th><span className="sr-only">{t('common.actions')}</span></th></tr></thead>
                 <tbody>
-                  {invites.data?.map((item) => (
-                    <tr key={item.id} data-invite={item.email}>
-                      <td>{item.email}</td>
-                      <td><span className="badge">{t(`role.${item.role}` as MessageKey)}</span></td>
-                      <td className="hide-sm">{formatDate(item.expires_at, locale)}</td>
-                      <td className="cell-actions"><button type="button" className="button-quiet button-small" onClick={() => setRevoking(item)}>{t('common.revoke')}</button></td>
-                    </tr>
-                  ))}
+                  {invites.data?.map((item) => {
+                    const busyMail = item.mail_state === 'pending' || item.mail_state === 'sending';
+                    return (
+                      <tr key={item.id} data-invite={item.email} data-mail={item.mail_state}>
+                        <td>{item.email}</td>
+                        <td><span className="badge">{t(`role.${item.role}` as MessageKey)}</span></td>
+                        <td>
+                          <span className={item.mail_state === 'sent' ? 'badge badge-success' : item.mail_state === 'failed' ? 'badge badge-danger' : 'badge'} data-testid="invite-mail-state">
+                            {item.mail_state === 'sent'
+                              ? t('team.mail.sent', { date: item.mail_sent_at ? formatDate(item.mail_sent_at, locale) : '' })
+                              : t(`team.mail.${item.mail_state}` as MessageKey)}
+                          </span>
+                        </td>
+                        <td className="hide-sm">{formatDate(item.expires_at, locale)}</td>
+                        <td className="cell-actions">
+                          <button type="button" className="button-quiet button-small" disabled={busyMail || !writable} onClick={() => void resend(item)}>{t('team.resend')}</button>
+                          <button type="button" className="button-quiet button-small" onClick={() => setRevoking(item)}>{t('common.revoke')}</button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

@@ -55,11 +55,9 @@ pub async fn saas_members(window: tauri::WebviewWindow, auth: Auth<'_>, tenant: 
     credential.ism.saas_members(&credential.token, tenant).await.map_err(message)
 }
 
-/// Where an invited person accepts (signs in with the invited email address). The secret is in
-/// the fragment, so it never reaches a server log.
-pub const INVITE_URL: &str = "https://remote.mixel.ch/invite#";
-
-/// Owners/admins: invites a person and returns the invitation link (shown once, valid 7 days).
+/// Owners/admins: invites a person. Mixel Remote e-mails the invitation link in `locale` (the app's
+/// language; else the inviter's profile language). The link's secret exists only in that e-mail.
+/// Returns the invitation id.
 #[tauri::command]
 pub async fn saas_invite_member(
     window: tauri::WebviewWindow,
@@ -67,11 +65,25 @@ pub async fn saas_invite_member(
     tenant: Uuid,
     email: String,
     role: String,
-) -> Result<String, String> {
+    locale: Option<String>,
+) -> Result<Uuid, String> {
     main_window(&window)?;
     let credential = auth.credential(None).await?;
-    let secret = credential.ism.saas_invite_member(&credential.token, tenant, &email, &role).await.map_err(message)?;
-    Ok(format!("{INVITE_URL}{secret}"))
+    credential.ism.saas_invite_member(&credential.token, tenant, &email, &role, locale.as_deref()).await.map_err(message)
+}
+
+/// Owners/admins: sends the invitation e-mail again with a new link (the previous link stops working).
+#[tauri::command]
+pub async fn saas_resend_invite(
+    window: tauri::WebviewWindow,
+    auth: Auth<'_>,
+    tenant: Uuid,
+    invite: Uuid,
+    locale: Option<String>,
+) -> Result<bool, String> {
+    main_window(&window)?;
+    let credential = auth.credential(None).await?;
+    credential.ism.saas_resend_invite(&credential.token, tenant, invite, locale.as_deref()).await.map_err(message)
 }
 
 #[tauri::command]
@@ -230,12 +242,15 @@ pub async fn saas_set_group_access(
     credential.ism.saas_set_group_access(&credential.token, tenant, group, &technicians).await.map_err(message)
 }
 
-/// A deploy link: the secret (shown once) and the command that installs Mixel Remote on a Windows
-/// computer and enrols it with always-on access (run as administrator or by a deployment tool).
+/// A deploy link: the secret (shown once) and, per operating system, the one-line command that
+/// installs Mixel Remote and enrols the computer with always-on access (run as administrator or by
+/// a deployment tool).
 #[derive(serde::Serialize)]
 pub struct DeployLink {
     token: String,
     windows_command: String,
+    macos_command: String,
+    linux_command: String,
 }
 
 /// Owners/admins: a deploy link (rollout token) for mass rollout; the secret is shown once.
@@ -257,7 +272,8 @@ pub async fn saas_create_deploy_link(
         .await
         .map_err(message)?;
     let windows_command = crate::windows_rollout_command(&token).await?;
-    Ok(DeployLink { token, windows_command })
+    let (macos_command, linux_command) = crate::unix_rollout_commands(&token)?;
+    Ok(DeployLink { token, windows_command, macos_command, linux_command })
 }
 
 #[tauri::command]

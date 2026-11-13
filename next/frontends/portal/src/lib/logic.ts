@@ -235,6 +235,35 @@ export function windowsDeployCommand(token: string, installerUrl: string): strin
   return `$t='${quote(token)}'; $f=Join-Path $env:TEMP 'Mixel-Remote-Setup.exe'; Invoke-WebRequest -UseBasicParsing '${quote(installerUrl)}' -OutFile $f; Start-Process $f '/S' -Wait; $p=Start-Process (Join-Path $env:LOCALAPPDATA 'Mixel Remote\\mixel-remote.exe') -ArgumentList '--signin-enroll',$t -Wait -PassThru; exit $p.ExitCode`;
 }
 
+/** Where this site serves the install scripts for Macs and Linux computers (public/install/). */
+export const INSTALL_BASE = 'https://remote.mixel.ch/install';
+
+/** Deploy tokens are "mrt_" + base64url; anything else never reaches a shell line. */
+export function isDeployToken(token: string): boolean {
+  return /^mrt_[A-Za-z0-9_-]{16,96}$/.test(token);
+}
+
+/** Terminal line (Mac: run while the person is signed in, or by MDM) that installs and enrols. */
+export function macDeployCommand(token: string): string {
+  if (!isDeployToken(token)) throw new Error('invalid deploy token');
+  return `curl -fsSL ${INSTALL_BASE}/macos.sh | sudo sh -s -- '${token}'`;
+}
+
+/** Terminal line (Ubuntu / Debian) that installs the .deb and enrols with always-on access. */
+export function linuxDeployCommand(token: string): string {
+  if (!isDeployToken(token)) throw new Error('invalid deploy token');
+  return `curl -fsSL ${INSTALL_BASE}/linux.sh | sudo sh -s -- '${token}'`;
+}
+
+export type DeployOs = 'windows' | 'macos' | 'linux';
+
+/** The operating system of this browser, to preselect the right command. */
+export function browserOs(userAgent: string): DeployOs {
+  if (/Mac OS X|Macintosh/i.test(userAgent) && !/iPhone|iPad/i.test(userAgent)) return 'macos';
+  if (/Linux|X11/i.test(userAgent) && !/Android/i.test(userAgent)) return 'linux';
+  return 'windows';
+}
+
 export type LinkState = 'active' | 'revoked' | 'expired' | 'used_up';
 
 export function deployLinkState(link: { revoked_at: string | null; expires_at: string; uses: number; max_uses: number }, now: Date = new Date()): LinkState {
@@ -279,6 +308,8 @@ export type ErrorKey =
   | 'error.already_subscribed'
   | 'error.payment_failed'
   | 'error.billing_unavailable'
+  | 'error.resend_wait'
+  | 'error.resend_limit'
   | 'error.unknown';
 
 const MESSAGE_KEYS: [RegExp, ErrorKey][] = [
@@ -298,6 +329,8 @@ const MESSAGE_KEYS: [RegExp, ErrorKey][] = [
   [/invitation invalid or expired/i, 'error.invite_invalid'],
   [/confirm your email/i, 'error.confirm_email'],
   [/^sign in first/i, 'error.sign_in_first'],
+  [/wait a minute before sending/i, 'error.resend_wait'],
+  [/sent too often/i, 'error.resend_limit'],
   [/too many/i, 'error.too_many'],
   [/group with this name exists/i, 'error.group_exists'],
   [/need(s)? the team plan/i, 'error.needs_team'],

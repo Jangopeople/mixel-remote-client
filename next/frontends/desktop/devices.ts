@@ -306,27 +306,42 @@
       {id:'computers',kind:'number',label:'Computers',value:String(Math.min(50,most)),min:1,max:most},
       {id:'days',kind:'number',label:'Valid for days',value:'30',min:1,max:365}];
     if(groupsOn() && groups.length)fields.push({id:'group',kind:'select',label:'Group',value:'',options:[{value:'',label:tr('No group')},...groups.map(group=>({value:group.group_id,label:group.name}))]});
-    dialog().open({title:'Add other computers',text:'Create a deploy link: one command adds many Windows computers to your company, without anyone signing in on them.',fields,confirm:'Create deploy link',
+    dialog().open({title:'Add other computers',text:'Create a deploy link: one command adds many Windows, Mac or Linux computers to your company, without anyone signing in on them.',fields,confirm:'Create deploy link',
       run:async values=>{
         const computers=Number(values.computers), days=Number(values.days);
         if(!Number.isInteger(computers) || computers<1 || computers>most)throw Error(`Enter 1 to ${most} computers.`);
         if(!Number.isInteger(days) || days<1 || days>365)throw Error('Enter 1 to 365 days.');
-        const created=await invoke<{token:string;windows_command:string}>('saas_create_deploy_link',{tenant:tenant.tenant_id,label:values.label,days,computers,group:values.group||null});
-        if(!created || typeof created.windows_command!=='string' || !created.windows_command.includes(created.token))throw Error('Invalid deploy link response');
-        const result=document.createElement('div'), steps=document.createElement('ol'), command=document.createElement('textarea'), copy=document.createElement('button'), copied=document.createElement('p'), other=document.createElement('p'), secret=document.createElement('p');
-        for(const text of ['On each Windows computer, open PowerShell as administrator, or use your deployment tool.','Paste and run the command below. Mixel Remote is installed and the computer appears in Devices, with always-on access.']){const step=document.createElement('li');step.textContent=text;steps.append(step);}
-        command.readOnly=true;command.rows=4;command.value=created.windows_command;command.dataset.noTranslate='';command.dataset.field='command';
+        const created=await invoke<{token:string;windows_command:string;macos_command:string;linux_command:string}>('saas_create_deploy_link',{tenant:tenant.tenant_id,label:values.label,days,computers,group:values.group||null});
+        if(!created || ![created.windows_command,created.macos_command,created.linux_command].every(line=>typeof line==='string' && line.includes(created.token)))throw Error('Invalid deploy link response');
+        // One command per operating system; Windows first (most rollouts), the others one choice away.
+        const systems:{value:string;label:string;command:string;steps:string[]}[]=[
+          {value:'windows',label:'Windows',command:created.windows_command,steps:['On each Windows computer, open PowerShell as administrator, or use your deployment tool.','Paste and run the command below. Mixel Remote is installed and the computer appears in Devices, with always-on access.']},
+          {value:'macos',label:'macOS',command:created.macos_command,steps:['On each Mac, open Terminal while the person who uses the Mac is signed in, or run it with your MDM.','Paste and run the command below and enter the administrator password. The Mac appears in Devices, with always-on access.','Once per Mac, allow Mixel Remote in System Settings > Privacy & Security > Screen Recording and Accessibility.']},
+          {value:'linux',label:'Linux',command:created.linux_command,steps:['On each Ubuntu or Debian computer, open a terminal, or use your deployment tool.','Paste and run the command below and enter the administrator password. The computer appears in Devices, with access at the sign-in screen and in X11 sessions.']}];
+        const result=document.createElement('div'), osLabel=document.createElement('label'), os=document.createElement('select'), steps=document.createElement('ol'), command=document.createElement('textarea'), copy=document.createElement('button'), copied=document.createElement('p'), secret=document.createElement('p');
+        osLabel.textContent='Operating system';os.dataset.field='os';os.setAttribute('aria-label','Operating system');
+        for(const system of systems){const option=document.createElement('option');option.value=system.value;option.textContent=system.label;os.append(option);}
+        os.value='windows';
+        command.readOnly=true;command.rows=4;command.dataset.noTranslate='';command.dataset.field='command';
+        const current=()=>systems.find(system=>system.value===os.value)??systems[0];
+        const show=()=>{
+          const system=current();
+          steps.replaceChildren(...system.steps.map(text=>{const step=document.createElement('li');step.textContent=tr(text);return step;}));
+          command.value=system.command;copied.textContent='';
+        };
+        os.addEventListener('change',show);
         copy.type='button';copy.className='button-secondary';copy.textContent='Copy command';
         copied.className='field-hint';copied.setAttribute('role','status');
         copy.addEventListener('click',()=>{
           command.select?.();
+          const line=current().command;
           const clip=(globalThis as {navigator?:{clipboard?:{writeText(text:string):Promise<void>}}}).navigator?.clipboard;
-          if(!clip){copied.textContent='Select the command and copy it.';return;}
-          void clip.writeText(created.windows_command).then(()=>{copied.textContent='Command copied.';},()=>{copied.textContent='Select the command and copy it.';});
+          if(!clip){copied.textContent=tr('Select the command and copy it.');return;}
+          void clip.writeText(line).then(()=>{copied.textContent=tr('Command copied.');},()=>{copied.textContent=tr('Select the command and copy it.');});
         });
         secret.className='field-hint';secret.textContent=`It works for ${computers} computers within ${days} days. The command contains a secret: share it only with the people who deploy the computers. It is shown only now.`;
-        other.className='field-hint';other.textContent='Mac and Linux computers: install Mixel Remote, sign in as a technician and choose Add this computer.';
-        result.append(steps,command,copy,copied,secret,other);
+        show();
+        result.append(osLabel,os,steps,command,copy,copied,secret);
         document.dispatchEvent(new CustomEvent('mixel-company-refresh'));
         return result;
       }});

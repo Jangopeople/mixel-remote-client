@@ -55,6 +55,8 @@ mod remote_sound;
 #[cfg(target_os = "macos")]
 mod macos_startup_host;
 #[cfg(target_os = "macos")]
+mod macos_rollout;
+#[cfg(target_os = "macos")]
 mod macos_prelogin_install;
 #[cfg(target_os = "windows")]
 mod windows_signin_host;
@@ -1002,6 +1004,8 @@ async fn signin_screen_enable(
             connection_id: enrolled.connection_id,
             generation: enrolled.generation,
             control: true,
+            #[cfg(target_os = "linux")]
+            always_on: false,
         };
         #[cfg(any(target_os = "windows", target_os = "linux"))]
         let payload = serde_json::to_vec(&serde_json::json!({ "settings": settings, "name": name }))
@@ -1126,6 +1130,9 @@ struct RolloutCreated {
     token: String,
     /// PowerShell line for deployment tools or an administrator prompt on each Windows computer.
     windows_command: String,
+    /// Shell lines (run as root / with sudo, or by MDM) for Macs and Linux computers.
+    macos_command: String,
+    linux_command: String,
 }
 /// Team members: create a company rollout token and the command to run on each computer.
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
@@ -1149,7 +1156,8 @@ async fn rollout_create(
         .await
         .map_err(|_| "The rollout token could not be created")?;
     let windows_command = windows_rollout_command(&token).await?;
-    Ok(RolloutCreated { token, windows_command })
+    let (macos_command, linux_command) = unix_rollout_commands(&token)?;
+    Ok(RolloutCreated { token, windows_command, macos_command, linux_command })
 }
 /// The PowerShell line (run as administrator) that installs the latest Windows build and enrols the
 /// computer with a rollout token or SaaS deploy link, with always-on access.
@@ -1159,6 +1167,21 @@ async fn windows_rollout_command(token: &str) -> Result<String, String> {
     }
     let installer = self_update::latest_for("windows", "x64").await?;
     Ok(rollout_command_for(token, &self_update::file_url(&installer)))
+}
+/// What a refused rollout enrolment says (the service does not tell the device why).
+pub const ROLLOUT_REFUSED: &str = "The deploy link was refused or the service could not be reached. Check that the link is not expired, revoked or used up and that the company is within its device limit, then run the command again.";
+/// Where the portal serves the install scripts (`next/frontends/portal/public/install/`).
+pub const INSTALL_SCRIPTS: &str = "https://remote.mixel.ch/install";
+/// The one-line commands for Macs and Linux computers: download the install script, which installs
+/// the released, signed app from the update channel and enrols the computer with the token.
+fn unix_rollout_commands(token: &str) -> Result<(String, String), String> {
+    if !(20..=100).contains(&token.len()) || !token.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte)) {
+        return Err("The rollout token could not be created".into());
+    }
+    Ok((
+        format!("curl -fsSL {INSTALL_SCRIPTS}/macos.sh | sudo sh -s -- '{token}'"),
+        format!("curl -fsSL {INSTALL_SCRIPTS}/linux.sh | sudo sh -s -- '{token}'"),
+    ))
 }
 fn rollout_command_for(token: &str, installer: &str) -> String {
     // Single quotes only, so the line also survives being wrapped in "…" by deployment tools.
@@ -2379,6 +2402,16 @@ fn main() {
             return;
         }
     }
+    // Mac mass rollout: enrol with a deploy token and set up always-on access, without any window.
+    #[cfg(target_os = "macos")]
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--signin-enroll")) {
+        let token = std::env::args().nth(2);
+        if let Err(error) = service_config::require_host().and_then(|()| macos_rollout::enroll(token.as_deref())) {
+            eprintln!("{error}");
+            std::process::exit(2);
+        }
+        return;
+    }
     #[cfg(target_os = "macos")]
     if std::env::args_os()
         .nth(1)
@@ -2516,6 +2549,7 @@ fn main() {
             saas_commands::saas_invite_member,
             saas_commands::saas_invites,
             saas_commands::saas_revoke_invite,
+            saas_commands::saas_resend_invite,
             saas_commands::saas_set_member_role,
             saas_commands::saas_remove_member,
             saas_commands::saas_tenant_overview,
@@ -2634,6 +2668,7 @@ fn main() {
             saas_commands::saas_invite_member,
             saas_commands::saas_invites,
             saas_commands::saas_revoke_invite,
+            saas_commands::saas_resend_invite,
             saas_commands::saas_set_member_role,
             saas_commands::saas_remove_member,
             saas_commands::saas_tenant_overview,
@@ -2813,5 +2848,14 @@ mod rollout_command_tests {
         assert!(line.contains("'https://download.mixel.ch/x.exe'"));
         assert!(line.contains("'--signin-enroll',$t"));
         assert!(!line.contains('"'));
+    }
+    #[test]
+    fn mac_and_linux_commands_pipe_the_install_script_to_root_with_the_token() {
+        let token = "mrt_abcdefghijklmnopqrstuvwxyz-_0123";
+        let (mac, linux) = super::unix_rollout_commands(token).unwrap();
+        assert_eq!(mac, format!("curl -fsSL https://remote.mixel.ch/install/macos.sh | sudo sh -s -- '{token}'"));
+        assert_eq!(linux, format!("curl -fsSL https://remote.mixel.ch/install/linux.sh | sudo sh -s -- '{token}'"));
+        assert!(super::unix_rollout_commands("mrt_short").is_err());
+        assert!(super::unix_rollout_commands("mrt_abcdefghijklmnopqrstuvwxyz';rm -rf /").is_err());
     }
 }

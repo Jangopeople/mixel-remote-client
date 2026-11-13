@@ -1,4 +1,4 @@
--- Remote SaaS (migrations 018-021). Runs in one transaction that is rolled back, so it can run
+-- Remote SaaS (migrations 018-021, invitations as changed by 026). Runs in one transaction that is rolled back, so it can run
 -- against a scratch copy of the ISM schema or, after the migrations are applied, against the live
 -- database without leaving data behind. Synthetic accounts only (*.example.test).
 --   psql -v ON_ERROR_STOP=1 -f next/sql/tests/remote-saas.sql
@@ -21,6 +21,20 @@ create function pg_temp.key(n integer) returns bytea language sql as $$
     select (pgsodium.crypto_sign_seed_new_keypair(decode(lpad(to_hex(n), 64, '0'), 'hex'))).public $$;
 create function pg_temp.sign(n integer, message bytea) returns bytea language sql as $$
     select pgsodium.crypto_sign_detached(message, (pgsodium.crypto_sign_seed_new_keypair(decode(lpad(to_hex(n), 64, '0'), 'hex'))).secret) $$;
+-- Does what the mail service does for one invitation (migration 026): claim it, store the hash of a
+-- fresh secret, record the send. Returns the secret, which in production exists only in the e-mail.
+create function pg_temp.mailed(invite uuid) returns text language plpgsql security definer as $$
+declare claim_id uuid := gen_random_uuid(); secret text := 'mri_' || translate(encode(gen_random_bytes(32), 'base64'), '+/=', '-_');
+begin
+    update remote_saas.invites set mail_state = 'sending', mail_claim = claim_id, mail_claimed_at = now(),
+        mail_attempts = mail_attempts + 1 where id = invite and mail_state = 'pending';
+    if not found then raise exception 'FAILED: invitation % is not pending', invite; end if;
+    if not remote_saas.mail_invite_secret(invite, claim_id, sha256(convert_to(secret, 'UTF8'))) then
+        raise exception 'FAILED: secret not stored';
+    end if;
+    if remote_saas.mail_invite_result(invite, claim_id, 'qa-message', null) <> 'sent' then raise exception 'FAILED: not sent'; end if;
+    return secret;
+end $$;
 
 -- Accounts (auth.users) and an ISM-linked company with a Mixel staff member for regressions.
 do $$ declare n text; begin
@@ -117,15 +131,15 @@ end $$;
 \echo '-- invitations, roles and technician limit'
 do $$ begin
     perform pg_temp.remember('dummy', gen_random_uuid());
-    perform set_config('t.invite_admin', public.remote_saas_invite_member(pg_temp.id('tenant_a'), 'QA-SAAS-ADMIN-A@example.test ', 'admin'), true);
-    perform set_config('t.invite_tech', public.remote_saas_invite_member(pg_temp.id('tenant_a'), 'qa-saas-tech-a@example.test', 'technician'), true);
-    perform set_config('t.invite_member', public.remote_saas_invite_member(pg_temp.id('tenant_a'), 'qa-saas-member-a@example.test', 'member'), true);
+    perform set_config('t.invite_admin', pg_temp.mailed(public.remote_saas_invite_member(pg_temp.id('tenant_a'), 'QA-SAAS-ADMIN-A@example.test ', 'admin')), true);
+    perform set_config('t.invite_tech', pg_temp.mailed(public.remote_saas_invite_member(pg_temp.id('tenant_a'), 'qa-saas-tech-a@example.test', 'technician')), true);
+    perform set_config('t.invite_member', pg_temp.mailed(public.remote_saas_invite_member(pg_temp.id('tenant_a'), 'qa-saas-member-a@example.test', 'member')), true);
     begin perform public.remote_saas_invite_member(pg_temp.id('tenant_a'), 'not-an-email', 'member'); raise exception 'bad email';
     exception when invalid_parameter_value then null; end;
     begin perform public.remote_saas_invite_member(pg_temp.id('tenant_a'), 'x@example.test', 'owner'); raise exception 'owner invite';
     exception when invalid_parameter_value then null; end;
     if (select count(*) from public.remote_saas_invites(pg_temp.id('tenant_a'))) <> 3 then raise exception 'invite list'; end if;
-    raise notice 'PASS: invitations created (secret returned once), email and role validated';
+    raise notice 'PASS: invitations created (secret only in the e-mail), email and role validated';
 end $$;
 select pg_temp.act('owner_b') \gset
 do $$ begin
@@ -166,7 +180,7 @@ do $$ begin
     begin perform public.remote_saas_set_member_role(pg_temp.id('tenant_a'), pg_temp.id('member_a_profile'), 'technician');
         raise exception 'promotion over limit';
     exception when program_limit_exceeded then null; end;
-    perform set_config('t.invite_extra', public.remote_saas_invite_member(pg_temp.id('tenant_a'), 'qa-saas-extra-a@example.test', 'member'), true);
+    perform set_config('t.invite_extra', pg_temp.mailed(public.remote_saas_invite_member(pg_temp.id('tenant_a'), 'qa-saas-extra-a@example.test', 'member')), true);
     raise notice 'PASS: technician limit enforced on invitations and promotions; members do not count';
 end $$;
 reset role;

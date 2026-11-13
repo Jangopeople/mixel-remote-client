@@ -333,7 +333,7 @@ pub fn admin(command: &str, argument: Option<&str>) -> Result<(), String> {
                 .map_err(|_| "Cannot start the rollout")?;
             let enrolled = runtime
                 .block_on(ism.enroll_with_rollout_token(&secret, &name, "windows", &key))
-                .map_err(|_| "The rollout token was refused (invalid, expired or used up)")?;
+                .map_err(|_| crate::ROLLOUT_REFUSED)?;
             let install = serde_json::json!({
                 "settings": Settings {
                     version: 1,

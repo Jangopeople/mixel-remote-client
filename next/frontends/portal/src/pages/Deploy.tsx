@@ -5,16 +5,22 @@ import { useTenant } from '../components/AppShell';
 import { ConfirmDialog, CopyButton, Dialog, ErrorNotice, Notice, Spinner, formatDate } from '../components/ui';
 import { Icon } from '../components/Icon';
 import { api, windowsInstaller, type DeployLink, type Group, type Installer } from '../lib/api';
-import { deployLinkState, isManager, isName, isWritable, windowsDeployCommand } from '../lib/logic';
+import {
+  browserOs, deployLinkState, isManager, isName, isWritable, linuxDeployCommand, macDeployCommand, windowsDeployCommand, type DeployOs,
+} from '../lib/logic';
 import { useLoad } from '../lib/useLoad';
+
+const SYSTEMS: DeployOs[] = ['windows', 'macos', 'linux'];
 
 function CreatedDialog({ token, onClose }: { token: string; onClose: () => void }) {
   const { t } = useI18n();
   const [installer, setInstaller] = useState<Installer | null | undefined>(undefined);
+  const [os, setOs] = useState<DeployOs>(() => browserOs(typeof navigator === 'undefined' ? '' : navigator.userAgent));
   useEffect(() => {
     windowsInstaller().then(setInstaller);
   }, []);
-  const command = installer ? windowsDeployCommand(token, installer.url) : '';
+  const command = os === 'macos' ? macDeployCommand(token) : os === 'linux' ? linuxDeployCommand(token)
+    : installer ? windowsDeployCommand(token, installer.url) : '';
   return (
     <Dialog title={t('deploy.createdTitle')} onClose={onClose}>
       <Notice kind="warning"><p>{t('deploy.createdText')}</p></Notice>
@@ -23,14 +29,22 @@ function CreatedDialog({ token, onClose }: { token: string; onClose: () => void 
         <code data-testid="deploy-token">{token}</code>
         <CopyButton value={token} label={t('deploy.token')} />
       </div>
+      <label id="deploy-os-label">{t('deploy.os')}</label>
+      <div className="billing-toggle" role="group" aria-labelledby="deploy-os-label" data-testid="deploy-os">
+        {SYSTEMS.map((value) => (
+          <button key={value} type="button" aria-pressed={os === value} onClick={() => setOs(value)}>{t(`deploy.os.${value}` as MessageKey)}</button>
+        ))}
+      </div>
       <label>{t('deploy.command')}</label>
-      {installer === undefined ? <Spinner /> : installer ? (
+      {os === 'windows' && installer === undefined ? <Spinner /> : command ? (
         <>
           <div className="secret-box">
-            <textarea readOnly value={command} data-testid="deploy-command" aria-label={t('deploy.command')} />
+            <textarea readOnly value={command} data-testid="deploy-command" data-os={os} aria-label={t('deploy.command')} />
             <CopyButton value={command} label={t('deploy.command')} />
           </div>
-          <p className="field-hint">{t('deploy.steps')} (v{installer.version})</p>
+          {os === 'windows' && <p className="field-hint">{t('deploy.steps')} (v{installer?.version})</p>}
+          {os === 'macos' && <><p className="field-hint">{t('deploy.steps.macos')}</p><p className="field-hint">{t('deploy.macPermission')}</p></>}
+          {os === 'linux' && <p className="field-hint">{t('deploy.steps.linux')}</p>}
         </>
       ) : <Notice><p>{t('deploy.commandMissing')}</p></Notice>}
       <div className="dialog-actions"><button type="button" onClick={onClose}>{t('common.close')}</button></div>

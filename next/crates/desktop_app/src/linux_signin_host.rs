@@ -7,6 +7,11 @@
 //! Only an X11 greeter can be shared: GDM with `WaylandEnable=false`, LightDM, SDDM on X11. A
 //! Wayland greeter (the GDM default) lets no other program see or control it; the status then
 //! says so and nothing runs.
+//!
+//! Mass rollout (`--signin-enroll <deploy token>`, run as root by the install script
+//! `https://remote.mixel.ch/install/linux.sh`): the computer enrols its computer-wide key with the
+//! token and the same service runs **always on**: on the sign-in screen and also in the signed-in
+//! person's X11 session (Wayland sessions cannot be shared without a person approving it on screen).
 use crate::device_identity::IdentityState;
 use serde::{Deserialize, Serialize};
 use signaling_server::auth::{EnrolledPrincipal, Principal};
@@ -75,6 +80,9 @@ pub struct Settings {
     pub connection_id: u32,
     pub generation: u64,
     pub control: bool,
+    /// Rolled out with a deploy link: share the signed-in X11 session too, not only the sign-in screen.
+    #[serde(default)]
+    pub always_on: bool,
 }
 impl Settings {
     fn valid(&self) -> bool {
@@ -197,6 +205,49 @@ fn decode_hex(hex: &str) -> Result<Vec<u8>, String> {
     (0..hex.len()).step_by(2).map(|index| u8::from_str_radix(&hex[index..index + 2], 16)).collect::<Result<_, _>>().map_err(|_| "Invalid settings".into())
 }
 
+/// Installs the settings, a root-owned copy of the program and the service, and starts it.
+fn install_settings(install: &Install) -> Result<(), String> {
+    if !install.settings.valid() || install.name.len() > 200 {
+        return Err("Invalid settings".into());
+    }
+    IdentityState::machine(false)?;
+    write_private(&settings_path(), &serde_json::to_vec(&install.settings).map_err(|_| "Invalid settings")?)?;
+    write_mode(
+        &public_status_path(),
+        &serde_json::to_vec(&PublicStatus { connection_id: install.settings.connection_id, name: install.name.clone() }).map_err(|_| "Invalid settings")?,
+        0o644,
+    )?;
+    // The root service runs a copy only root can change, never a file a user could replace.
+    let _ = systemctl(&["stop", UNIT]);
+    let exe = std::env::current_exe().map_err(|_| "Cannot locate Mixel Remote")?;
+    let program = program_path();
+    let parent = program.parent().ok_or("Invalid program folder")?;
+    std::fs::create_dir_all(parent).map_err(|_| "Cannot create the sign-in screen program folder")?;
+    std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o755)).map_err(|_| "Cannot protect the sign-in screen program folder")?;
+    if exe != program {
+        let bytes = std::fs::read(&exe).map_err(|_| "Cannot read Mixel Remote")?;
+        write_mode(&program, &bytes, 0o755)?;
+    }
+    write_mode(&unit_path(), unit_text().as_bytes(), 0o644)?;
+    if !systemctl(&["daemon-reload"]) || !systemctl(&["enable", "--now", UNIT]) {
+        return Err("The sign-in screen service could not be started".into());
+    }
+    log(&format!("installed for Remote ID {}", install.settings.connection_id));
+    Ok(())
+}
+
+/// The computer's name for the device list: the host name, without control characters.
+fn computer_name() -> String {
+    let raw = std::fs::read_to_string("/proc/sys/kernel/hostname").unwrap_or_default();
+    let name: String = raw.trim().chars().filter(|c| !c.is_control()).take(60).collect();
+    if name.is_empty() { "Linux computer".into() } else { name }
+}
+
+fn format_id(id: u32) -> String {
+    let digits = id.to_string();
+    digits.as_bytes().chunks(3).map(|chunk| String::from_utf8_lossy(chunk).into_owned()).collect::<Vec<_>>().join(" ")
+}
+
 /// Administrator steps (run through `run_elevated`).
 pub fn admin(command: &str, argument: Option<&str>) -> Result<(), String> {
     if !root() {
@@ -211,32 +262,39 @@ pub fn admin(command: &str, argument: Option<&str>) -> Result<(), String> {
         }
         "--signin-install" => {
             let install: Install = serde_json::from_slice(&decode_hex(argument.ok_or("Missing settings")?)?).map_err(|_| "Invalid settings")?;
-            if !install.settings.valid() || install.name.len() > 200 {
-                return Err("Invalid settings".into());
+            install_settings(&install)
+        }
+        "--signin-enroll" => {
+            // Rollout: enrol this computer with a company deploy token and turn on always-on access.
+            let secret = argument.ok_or("Missing deploy token")?.trim().to_owned();
+            if !(20..=100).contains(&secret.len()) || !secret.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte)) {
+                return Err("The deploy token is invalid".into());
             }
-            IdentityState::machine(false)?;
-            write_private(&settings_path(), &serde_json::to_vec(&install.settings).map_err(|_| "Invalid settings")?)?;
-            write_mode(
-                &public_status_path(),
-                &serde_json::to_vec(&PublicStatus { connection_id: install.settings.connection_id, name: install.name }).map_err(|_| "Invalid settings")?,
-                0o644,
-            )?;
-            // The root service runs a copy only root can change, never a file a user could replace.
-            let _ = systemctl(&["stop", UNIT]);
-            let exe = std::env::current_exe().map_err(|_| "Cannot locate Mixel Remote")?;
-            let program = program_path();
-            let parent = program.parent().ok_or("Invalid program folder")?;
-            std::fs::create_dir_all(parent).map_err(|_| "Cannot create the sign-in screen program folder")?;
-            std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o755)).map_err(|_| "Cannot protect the sign-in screen program folder")?;
-            if exe != program {
-                let bytes = std::fs::read(&exe).map_err(|_| "Cannot read Mixel Remote")?;
-                write_mode(&program, &bytes, 0o755)?;
-            }
-            write_mode(&unit_path(), unit_text().as_bytes(), 0o644)?;
-            if !systemctl(&["daemon-reload"]) || !systemctl(&["enable", "--now", UNIT]) {
-                return Err("The sign-in screen service could not be started".into());
-            }
-            log(&format!("installed for Remote ID {}", install.settings.connection_id));
+            let name = computer_name();
+            let identity = IdentityState::machine(true)?;
+            let key = identity.public_key()?;
+            let hex: String = key.as_bytes().iter().map(|byte| format!("{byte:02x}")).collect();
+            write_mode(&public_key_path(), hex.as_bytes(), 0o644)?;
+            let config = crate::service_config::ServiceConfig::load()?;
+            let base = config.identity_url.parse().map_err(|_| "Invalid identity service configuration")?;
+            let ism = signaling_server::auth::IsmAuth::new(base, config.public_key).map_err(|_| "Invalid identity service configuration")?;
+            let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|_| "Cannot start the rollout")?;
+            let enrolled = runtime
+                .block_on(ism.enroll_with_rollout_token(&secret, &name, "linux", &key))
+                .map_err(|_| crate::ROLLOUT_REFUSED)?;
+            let settings = Settings {
+                version: 1,
+                device: enrolled.device_id,
+                profile: enrolled.profile,
+                tenant: enrolled.tenant,
+                connection_id: enrolled.connection_id,
+                generation: enrolled.generation,
+                control: true,
+                always_on: true,
+            };
+            install_settings(&Install { settings, name: name.clone() })?;
+            log(&format!("rolled out as Remote ID {}", enrolled.connection_id));
+            println!("Mixel Remote: {name} was added with Remote ID {}", format_id(enrolled.connection_id));
             Ok(())
         }
         "--signin-update" => {
@@ -316,11 +374,19 @@ pub enum Screen {
     Waiting,
 }
 
-/// What the service should do for these login sessions.
-pub fn decide(sessions: &[LoginSession]) -> Screen {
+/// What the service should do for these login sessions. `always_on` (rolled out with a deploy
+/// link): a signed-in local X11 session is shared too; a Wayland session cannot be.
+pub fn decide(sessions: &[LoginSession], always_on: bool) -> Screen {
     let local = |session: &&LoginSession| session.seat == "seat0" && !session.remote;
-    if sessions.iter().filter(local).any(|session| session.class == "user" && matches!(session.state.as_str(), "active" | "online")) {
-        return Screen::Waiting;
+    let signed_in = |session: &&LoginSession| session.class == "user" && matches!(session.state.as_str(), "active" | "online");
+    if let Some(user) = sessions.iter().filter(local).filter(signed_in).find(|session| session.state == "active")
+        .or_else(|| sessions.iter().filter(local).find(signed_in))
+    {
+        return match (always_on, user.kind.as_str()) {
+            (true, "x11") if user.display.is_empty() || user.display.starts_with(':') => Screen::Greeter(user.display.clone()),
+            (true, "wayland") => Screen::Wayland,
+            _ => Screen::Waiting,
+        };
     }
     match sessions.iter().filter(local).find(|session| session.class == "greeter") {
         // GDM leaves Display empty for its greeter: the service then finds it from the X server.
@@ -328,6 +394,14 @@ pub fn decide(sessions: &[LoginSession]) -> Screen {
         Some(greeter) if greeter.kind == "wayland" => Screen::Wayland,
         _ => Screen::Waiting,
     }
+}
+
+/// Always-on access (rollout) as recorded in the installed settings.
+fn always_on() -> bool {
+    std::fs::read(settings_path())
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Settings>(&bytes).ok())
+        .is_some_and(|settings| settings.always_on)
 }
 
 /// X authority files the running X servers were started with (`-auth <file>`).
@@ -397,8 +471,15 @@ pub fn run_service() -> Result<(), String> {
     let program = program_path();
     let mut child: Option<(std::process::Child, String)> = None;
     let mut last = String::new();
+    let mut tick = 0u32;
+    let mut everywhere = always_on();
     loop {
-        let screen = decide(&sessions());
+        // The settings change only through the administrator steps; re-read them now and then.
+        tick = tick.wrapping_add(1);
+        if tick % 15 == 0 {
+            everywhere = always_on();
+        }
+        let screen = decide(&sessions(), everywhere);
         let wanted = match &screen {
             Screen::Greeter(display) if display.is_empty() => display_of(&authority_files()),
             Screen::Greeter(display) => Some(display.clone()),
@@ -411,7 +492,7 @@ pub fn run_service() -> Result<(), String> {
                 let _ = running.wait();
                 child = None;
                 if !ended {
-                    log("someone signed in: sign-in screen host stopped");
+                    log("the screen changed (someone signed in or out): host stopped");
                 }
                 std::thread::sleep(Duration::from_secs(if ended { 5 } else { 1 }));
             }
@@ -446,7 +527,7 @@ pub fn run_service() -> Result<(), String> {
         if state != last && state != "active" {
             write_state(state);
             if state == "wayland" {
-                log("the sign-in screen uses Wayland: it cannot be shared (set WaylandEnable=false for GDM)");
+                log("the screen uses Wayland: it cannot be shared without approval on screen (set WaylandEnable=false for GDM, or use an X11 session)");
             }
             last = state.to_owned();
         }
@@ -531,20 +612,37 @@ mod tests {
 
     #[test]
     fn the_host_runs_only_on_an_x11_greeter_while_nobody_is_signed_in() {
-        assert_eq!(decide(&[session("greeter", "x11", ":0", "online")]), Screen::Greeter(":0".into()));
+        assert_eq!(decide(&[session("greeter", "x11", ":0", "online")], false), Screen::Greeter(":0".into()));
         // Someone signed in on the seat: the normal app takes over.
-        assert_eq!(decide(&[session("greeter", "x11", ":0", "online"), session("user", "x11", ":1", "active")]), Screen::Waiting);
+        assert_eq!(decide(&[session("greeter", "x11", ":0", "online"), session("user", "x11", ":1", "active")], false), Screen::Waiting);
         // A remote (ssh) login does not count, a Wayland greeter cannot be shared.
         let mut ssh = session("user", "tty", "", "active");
         ssh.remote = true;
-        assert_eq!(decide(&[session("greeter", "x11", ":0", "online"), ssh]), Screen::Greeter(":0".into()));
-        assert_eq!(decide(&[session("greeter", "wayland", "", "online")]), Screen::Wayland);
-        assert_eq!(decide(&[]), Screen::Waiting);
+        assert_eq!(decide(&[session("greeter", "x11", ":0", "online"), ssh], false), Screen::Greeter(":0".into()));
+        assert_eq!(decide(&[session("greeter", "wayland", "", "online")], false), Screen::Wayland);
+        assert_eq!(decide(&[], false), Screen::Waiting);
         // GDM: an X11 greeter without a Display entry is still shared (the display is looked up).
-        assert_eq!(decide(&[session("greeter", "x11", "", "active")]), Screen::Greeter(String::new()));
+        assert_eq!(decide(&[session("greeter", "x11", "", "active")], false), Screen::Greeter(String::new()));
         let mut other_seat = session("greeter", "x11", ":2", "online");
         other_seat.seat = "seat1".into();
-        assert_eq!(decide(&[other_seat]), Screen::Waiting);
+        assert_eq!(decide(&[other_seat], false), Screen::Waiting);
+    }
+
+    #[test]
+    fn a_rolled_out_computer_is_shared_always_in_x11_sessions_too() {
+        // Signed in on X11: the host follows the person's display.
+        assert_eq!(decide(&[session("greeter", "x11", ":0", "online"), session("user", "x11", ":1", "active")], true), Screen::Greeter(":1".into()));
+        assert_eq!(decide(&[session("user", "x11", "", "active")], true), Screen::Greeter(String::new()));
+        // The active session wins over a second, background one.
+        assert_eq!(decide(&[session("user", "wayland", "", "online"), session("user", "x11", ":2", "active")], true), Screen::Greeter(":2".into()));
+        // Wayland sessions cannot be shared without approval on screen.
+        assert_eq!(decide(&[session("user", "wayland", "", "active")], true), Screen::Wayland);
+        // Nobody signed in: the sign-in screen, as before.
+        assert_eq!(decide(&[session("greeter", "x11", ":0", "online")], true), Screen::Greeter(":0".into()));
+        // ssh logins never count.
+        let mut ssh = session("user", "tty", "", "active");
+        ssh.remote = true;
+        assert_eq!(decide(&[session("greeter", "x11", "", "online"), ssh], true), Screen::Greeter(String::new()));
     }
 
     #[test]
@@ -555,11 +653,15 @@ mod tests {
 
     #[test]
     fn settings_are_strict_and_the_service_runs_a_root_owned_copy() {
-        let good = Settings { version: 1, device: Uuid::from_u128(1), profile: Uuid::from_u128(2), tenant: Uuid::from_u128(3), connection_id: 485_617_081, generation: 1, control: true };
+        let good = Settings { version: 1, device: Uuid::from_u128(1), profile: Uuid::from_u128(2), tenant: Uuid::from_u128(3), connection_id: 485_617_081, generation: 1, control: true, always_on: false };
         assert!(good.valid());
         assert!(!Settings { connection_id: 99_999_999, ..good }.valid());
         assert!(!Settings { tenant: Uuid::nil(), ..good }.valid());
         assert!(serde_json::from_str::<Settings>(r#"{"version":1,"device":"00000000-0000-0000-0000-000000000001","profile":"00000000-0000-0000-0000-000000000002","tenant":"00000000-0000-0000-0000-000000000003","connection_id":485617081,"generation":1,"control":true,"extra":1}"#).is_err());
+        // Settings written before rollout existed stay valid (always_on defaults to off).
+        let old: Settings = serde_json::from_str(r#"{"version":1,"device":"00000000-0000-0000-0000-000000000001","profile":"00000000-0000-0000-0000-000000000002","tenant":"00000000-0000-0000-0000-000000000003","connection_id":485617081,"generation":1,"control":true}"#).unwrap();
+        assert!(!old.always_on);
+        assert_eq!(format_id(485_617_081), "485 617 081");
         let unit = unit_text();
         assert!(unit.contains("ExecStart=/usr/lib/mixel-remote-signin/mixel-remote --signin-service"));
         assert!(unit.contains("Restart=always"));

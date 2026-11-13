@@ -3,6 +3,7 @@ import {
   assignableRoles, availableMethods, canRemoveMember, checkPassword, deployLinkState, errorKey, formatConnectionId, gateFor,
   inviteLink, isCompanyName, isDomain, isEmail, isOtpCode, isWritable, methodsToSave, normalizeDomain, safeNext, signInMethods,
   relativeTime, sinceTime, tokenFromHash, trialDaysLeft, usage, windowsDeployCommand,
+  browserOs, isDeployToken, linuxDeployCommand, macDeployCommand,
 } from '../../src/lib/logic';
 
 describe('sign-in methods', () => {
@@ -160,5 +161,36 @@ describe('presence times', () => {
     expect(relativeTime('2026-11-13T09:00:00Z', 'it', now)).toBe('3 ore fa');
     expect(relativeTime(null, 'en', now)).toBe('');
     expect(relativeTime('nonsense', 'en', now)).toBe('');
+  });
+});
+
+describe('Mac and Linux rollout', () => {
+  const token = 'mrt_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_';
+  it('pipes the install script to root with the token as a single-quoted argument', () => {
+    expect(macDeployCommand(token)).toBe(`curl -fsSL https://remote.mixel.ch/install/macos.sh | sudo sh -s -- '${token}'`);
+    expect(linuxDeployCommand(token)).toBe(`curl -fsSL https://remote.mixel.ch/install/linux.sh | sudo sh -s -- '${token}'`);
+  });
+  it('never builds a shell line from anything but a deploy token', () => {
+    expect(isDeployToken(token)).toBe(true);
+    for (const bad of ["mrt_abcdefghijklmnop'; rm -rf ~", 'mri_abcdefghijklmnopqrstuvwxyz', 'mrt_short', `mrt_${'a'.repeat(120)}`]) {
+      expect(isDeployToken(bad)).toBe(false);
+      expect(() => macDeployCommand(bad)).toThrow();
+      expect(() => linuxDeployCommand(bad)).toThrow();
+    }
+  });
+  it('preselects the command of the browser\'s system', () => {
+    expect(browserOs('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15')).toBe('macos');
+    expect(browserOs('Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:132.0) Gecko/20100101 Firefox/132.0')).toBe('linux');
+    expect(browserOs('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')).toBe('windows');
+    expect(browserOs('Mozilla/5.0 (Linux; Android 14; Pixel 8)')).toBe('windows');
+    expect(browserOs('Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)')).toBe('windows');
+  });
+});
+
+describe('invitation e-mails', () => {
+  it('explains the resend limits', () => {
+    expect(errorKey({ message: 'Wait a minute before sending this invitation again', code: '54000' })).toBe('error.resend_wait');
+    expect(errorKey({ message: 'This invitation was sent too often; revoke it and invite again', code: '54000' })).toBe('error.resend_limit');
+    expect(errorKey({ message: 'Too many invitations today', code: '54000' })).toBe('error.too_many');
   });
 });

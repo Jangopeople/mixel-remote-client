@@ -4,7 +4,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { shot } from './shots';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { createUser, passwordSession, rest, secondStep, type GoTrueSession } from './qa';
+import { createUser, invitationLink, passwordSession, rest, secondStep, type GoTrueSession } from './qa';
 
 const VIEWER = process.env.VIEWER_URL;
 const SHOTS = process.env.QA_SHOTS ?? 'qa-output/screenshots';
@@ -75,7 +75,8 @@ test('member: sees their devices without Connect', async ({ page }) => {
   const owner = await aal2(qa.owner, password(qa.run));
   const tenants = await rest('/rpc/remote_saas_my_tenants', owner.access_token, {});
   const email = `qa-portal-${qa.run}-viewer-member@example.com`;
-  const secret = await rest('/rpc/remote_saas_invite_member', owner.access_token, { tenant: tenants[0].tenant_id, invitee_email: email, member_role: 'member' });
+  await rest('/rpc/remote_saas_invite_member', owner.access_token, { tenant: tenants[0].tenant_id, invitee_email: email, member_role: 'member' });
+  const secret = new URL(invitationLink(email, qa.run)).hash.slice(1);
   await createUser(email, password(qa.run), 'QA Viewer Member');
   const member = await passwordSession(email, password(qa.run));
   await rest('/rpc/remote_saas_accept_invite', member.access_token, { invite_token: secret });

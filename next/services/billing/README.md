@@ -1,4 +1,4 @@
-# Mixel Remote billing service
+# Mixel Remote billing service (and invitation e-mails)
 
 Stage 2 of "Mixel Remote as SaaS" (plan: `mixel-craft/docs/mixel-remote-plan.md`, Phase 8). Stripe
 Checkout, the Stripe customer portal and the Stripe webhook, mapped to the tenant plan state in
@@ -20,6 +20,29 @@ Checkout, the Stripe customer portal and the Stripe webhook, mapped to the tenan
 - Daily job: `mixel-remote-billing-daily.timer` (03:20 Europe/Zurich) runs
   `/usr/local/sbin/mixel-remote-billing-daily.sh` → `remote_saas.billing_daily(false)`.
   `mixel-remote-billing-daily.sh dry-run` shows what it would do. Log: `journalctl -u mixel-remote-billing-daily`.
+
+## Invitation e-mails (SQL 026)
+
+The same service sends the invitation e-mails of Mixel Remote companies (`src/invite-mail.js`,
+templates `src/invite-templates.js` in English, German, French and Italian, `src/resend.js`).
+
+- `remote_saas_invite_member` / `remote_saas_resend_invite` store a pending invitation **without a secret** and
+  `NOTIFY remote_saas_invite_mail`. The service LISTENs on a dedicated connection and also sweeps every 30 s.
+- Per invitation: `remote_saas.mail_claim_invites` (claim, `for update skip locked`) → a fresh secret
+  `mri_<32 random bytes base64url>` → `remote_saas.mail_invite_secret` (stores only the SHA-256) → Resend
+  `POST /emails` (idempotency key = claim id, reply-to the inviter, tags `app=mixel-remote`, `kind=invite`) →
+  `remote_saas.mail_invite_result`. The secret is only in memory and in the e-mail; it is never logged or stored.
+- Failures: 429/5xx/network are retried after 1, 5, 15, 60 minutes (5 attempts); a refused address gives up at
+  once. Reserved test domains (`*.test`, `*.example`, `*.invalid`, `example.com/net/org`, `localhost`) are never
+  mailed. A claim older than 5 minutes (crashed service) is taken over.
+- Role: the login `mixel_remote_billing_service` is also a member of `mixel_remote_mail`, which may execute only
+  the three `remote_saas.mail_*` functions.
+- Settings in `/opt/mixel-remote-billing/.env`: `RESEND_API_KEY` (the Mixel Store's Resend key, copied server to
+  server from `/opt/supabase-store/.env`; sender domain `mixel.ch` is verified in Resend), optional `MAIL_FROM`
+  (default `Mixel Remote <remote@mixel.ch>`) and `INVITE_BASE_URL` (default `https://remote.mixel.ch/invite#`).
+  Without a key the service runs and invitations stay queued.
+- `GET /api/billing/health` shows `invite_mail: {on, sent, failed, last_run, healthy}`; logs: `docker logs
+  mixel-remote-billing | grep "invite mail"` (invitation id, outcome, Resend message id, never the link).
 
 ## API (for the portal and the in-app management)
 
@@ -89,7 +112,8 @@ configuration `bpc_1UbE1UFRPXnJX22hySg5T0Tr`; webhook endpoint `we_1UbE0hFRPXnJX
 
 ```
 npm ci && npm run check && npm test
-psql … -f ../../sql/tests/remote-saas-billing.sql   # rolled back, synthetic accounts
+psql … -f ../../sql/tests/remote-saas-billing.sql       # rolled back, synthetic accounts
+psql … -f ../../sql/tests/remote-saas-invite-mail.sql   # rolled back, synthetic accounts
 ```
 
 ## Deploy (on mixel-vps, from this folder)
