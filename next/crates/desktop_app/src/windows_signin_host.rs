@@ -316,7 +316,12 @@ pub fn admin(command: &str, argument: Option<&str>) -> Result<(), String> {
         }
         "--signin-enroll" => {
             // Rollout: enrol this computer with a company token and turn on always-on access.
+            // `main` reads the token from MIXEL_DEPLOY_TOKEN or standard input (deploy_token.rs),
+            // never from the command line, where other users could read it.
             let secret = argument.ok_or("Missing rollout token")?.trim().to_owned();
+            if !crate::deploy_token::valid(&secret) {
+                return Err("The deploy token is invalid".into());
+            }
             let name = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "Windows computer".into());
             let name: String = name.chars().filter(|c| !c.is_control()).take(60).collect();
             let identity = IdentityState::machine(true)?;

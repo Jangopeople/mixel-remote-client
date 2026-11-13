@@ -45,6 +45,7 @@ function CreatedDialog({ token, onClose }: { token: string; onClose: () => void 
           {os === 'windows' && <p className="field-hint">{t('deploy.steps')} (v{installer?.version})</p>}
           {os === 'macos' && <><p className="field-hint">{t('deploy.steps.macos')}</p><p className="field-hint">{t('deploy.macPermission')}</p></>}
           {os === 'linux' && <p className="field-hint">{t('deploy.steps.linux')}</p>}
+          {os !== 'windows' && <p className="field-hint" data-testid="deploy-scripted">{t('deploy.scripted')}</p>}
         </>
       ) : <Notice><p>{t('deploy.commandMissing')}</p></Notice>}
       <div className="dialog-actions"><button type="button" onClick={onClose}>{t('common.close')}</button></div>

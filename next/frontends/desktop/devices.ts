@@ -312,36 +312,45 @@
         if(!Number.isInteger(computers) || computers<1 || computers>most)throw Error(`Enter 1 to ${most} computers.`);
         if(!Number.isInteger(days) || days<1 || days>365)throw Error('Enter 1 to 365 days.');
         const created=await invoke<{token:string;windows_command:string;macos_command:string;linux_command:string}>('saas_create_deploy_link',{tenant:tenant.tenant_id,label:values.label,days,computers,group:values.group||null});
-        if(!created || ![created.windows_command,created.macos_command,created.linux_command].every(line=>typeof line==='string' && line.includes(created.token)))throw Error('Invalid deploy link response');
+        // Windows: the PowerShell line carries the token (into MIXEL_DEPLOY_TOKEN for the enrol step).
+        // Mac and Linux: the line never does; the install script asks for the token without showing it.
+        const unix=(line:unknown,script:string)=>line===`curl -fsSL https://remote.mixel.ch/install/${script}.sh | sudo sh`;
+        if(!created || typeof created.token!=='string' || !created.token || typeof created.windows_command!=='string' || !created.windows_command.includes(created.token) || !unix(created.macos_command,'macos') || !unix(created.linux_command,'linux'))throw Error('Invalid deploy link response');
         // One command per operating system; Windows first (most rollouts), the others one choice away.
-        const systems:{value:string;label:string;command:string;steps:string[]}[]=[
-          {value:'windows',label:'Windows',command:created.windows_command,steps:['On each Windows computer, open PowerShell as administrator, or use your deployment tool.','Paste and run the command below. Mixel Remote is installed and the computer appears in Devices, with always-on access.']},
-          {value:'macos',label:'macOS',command:created.macos_command,steps:['On each Mac, open Terminal while the person who uses the Mac is signed in, or run it with your MDM.','Paste and run the command below and enter the administrator password. The Mac appears in Devices, with always-on access.','Once per Mac, allow Mixel Remote in System Settings > Privacy & Security > Screen Recording and Accessibility.']},
-          {value:'linux',label:'Linux',command:created.linux_command,steps:['On each Ubuntu or Debian computer, open a terminal, or use your deployment tool.','Paste and run the command below and enter the administrator password. The computer appears in Devices, with access at the sign-in screen and in X11 sessions.']}];
+        const scripted='Deployment tools and MDMs (running as root): set the environment variable MIXEL_DEPLOY_TOKEN to the deploy token and run the command without sudo.';
+        const systems:{value:string;label:string;command:string;token:boolean;steps:string[]}[]=[
+          {value:'windows',label:'Windows',command:created.windows_command,token:false,steps:['On each Windows computer, open PowerShell as administrator, or use your deployment tool.','Paste and run the command below. Mixel Remote is installed and the computer appears in Devices, with always-on access.']},
+          {value:'macos',label:'macOS',command:created.macos_command,token:true,steps:['On each Mac, open Terminal while the person who uses the Mac is signed in.','Paste and run the command below and enter the administrator password. When asked, paste the deploy token (it is not shown). The Mac appears in Devices, with always-on access.','Once per Mac, allow Mixel Remote in System Settings > Privacy & Security > Screen Recording and Accessibility.',scripted]},
+          {value:'linux',label:'Linux',command:created.linux_command,token:true,steps:['On each Ubuntu (22.04 or newer) or Debian (12 or newer) computer, open a terminal.','Paste and run the command below and enter the administrator password. When asked, paste the deploy token (it is not shown). The computer appears in Devices, with access at the sign-in screen and in X11 sessions.',scripted]}];
         const result=document.createElement('div'), osLabel=document.createElement('label'), os=document.createElement('select'), steps=document.createElement('ol'), command=document.createElement('textarea'), copy=document.createElement('button'), copied=document.createElement('p'), secret=document.createElement('p');
+        const tokenPart=document.createElement('div'), tokenLabel=document.createElement('label'), tokenBox=document.createElement('input'), copyToken=document.createElement('button');
         osLabel.textContent='Operating system';os.dataset.field='os';os.setAttribute('aria-label','Operating system');
         for(const system of systems){const option=document.createElement('option');option.value=system.value;option.textContent=system.label;os.append(option);}
         os.value='windows';
         command.readOnly=true;command.rows=4;command.dataset.noTranslate='';command.dataset.field='command';
+        tokenLabel.textContent='Deploy token';tokenBox.readOnly=true;tokenBox.value=created.token;tokenBox.dataset.noTranslate='';tokenBox.dataset.field='token';tokenBox.setAttribute('aria-label','Deploy token');
+        copyToken.type='button';copyToken.className='button-secondary';copyToken.textContent='Copy deploy token';
+        tokenPart.append(tokenLabel,tokenBox,copyToken);
         const current=()=>systems.find(system=>system.value===os.value)??systems[0];
         const show=()=>{
           const system=current();
           steps.replaceChildren(...system.steps.map(text=>{const step=document.createElement('li');step.textContent=tr(text);return step;}));
-          command.value=system.command;copied.textContent='';
+          command.value=system.command;copied.textContent='';tokenPart.hidden=!system.token;
         };
         os.addEventListener('change',show);
         copy.type='button';copy.className='button-secondary';copy.textContent='Copy command';
         copied.className='field-hint';copied.setAttribute('role','status');
-        copy.addEventListener('click',()=>{
-          command.select?.();
-          const line=current().command;
+        const clipboard=(text:string,done:string,manual:string,select:()=>void)=>{
+          select();
           const clip=(globalThis as {navigator?:{clipboard?:{writeText(text:string):Promise<void>}}}).navigator?.clipboard;
-          if(!clip){copied.textContent=tr('Select the command and copy it.');return;}
-          void clip.writeText(line).then(()=>{copied.textContent=tr('Command copied.');},()=>{copied.textContent=tr('Select the command and copy it.');});
-        });
-        secret.className='field-hint';secret.textContent=`It works for ${computers} computers within ${days} days. The command contains a secret: share it only with the people who deploy the computers. It is shown only now.`;
+          if(!clip){copied.textContent=tr(manual);return;}
+          void clip.writeText(text).then(()=>{copied.textContent=tr(done);},()=>{copied.textContent=tr(manual);});
+        };
+        copy.addEventListener('click',()=>clipboard(current().command,'Command copied.','Select the command and copy it.',()=>command.select?.()));
+        copyToken.addEventListener('click',()=>clipboard(created.token,'Deploy token copied.','Select the deploy token and copy it.',()=>tokenBox.select?.()));
+        secret.className='field-hint';secret.textContent=`It works for ${computers} computers within ${days} days. The deploy token is a secret (the Windows command contains it): share it only with the people who deploy the computers. It is shown only now.`;
         show();
-        result.append(osLabel,os,steps,command,copy,copied,secret);
+        result.append(osLabel,os,steps,command,copy,tokenPart,copied,secret);
         document.dispatchEvent(new CustomEvent('mixel-company-refresh'));
         return result;
       }});

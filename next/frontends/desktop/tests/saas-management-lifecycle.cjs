@@ -237,8 +237,8 @@ test('plan limits: at the device limit nothing can be added, and at the technici
 });
 
 test('Add other computers creates a deploy link and shows the command per operating system to copy with short instructions',async()=>{
-  const command="$t='mrt_secret'; $f=Join-Path $env:TEMP 'Mixel-Remote-Setup.exe'";
-  const mac="curl -fsSL https://remote.mixel.ch/install/macos.sh | sudo sh -s -- 'mrt_secret'", linux="curl -fsSL https://remote.mixel.ch/install/linux.sh | sudo sh -s -- 'mrt_secret'";
+  const command="$t='mrt_secret'; $f=Join-Path $env:TEMP 'Mixel-Remote-Setup.exe'; $env:MIXEL_DEPLOY_TOKEN=$t; $p=Start-Process x -ArgumentList '--signin-enroll'";
+  const mac='curl -fsSL https://remote.mixel.ch/install/macos.sh | sudo sh', linux='curl -fsSL https://remote.mixel.ch/install/linux.sh | sudo sh';
   const h=harness({answers:{saas_create_deploy_link:{token:'mrt_secret',windows_command:command,macos_command:mac,linux_command:linux}}});await h.signedIn();
   h.elements['devices-add-others'].listeners.click();
   assert.equal(h.elements['manage-dialog-title'].textContent,'Add other computers');
@@ -250,27 +250,40 @@ test('Add other computers creates a deploy link and shows the command per operat
   assert.equal(h.elements['manage-dialog'].hidden,false,'the result stays to be copied');
   const os=h.field('os');assert.deepEqual(os.children.map(o=>o.textContent),['Windows','macOS','Linux']);assert.equal(os.value,'windows');
   const box=h.field('command');assert.equal(box.value,command);
+  const token=h.field('token');assert.equal(token.value,'mrt_secret');
+  const tokenPart=h.all(h.elements['manage-dialog-fields']).find(n=>(n.children??[]).includes(token));
+  assert.equal(tokenPart.hidden,true,'Windows: the command carries the token');
   const texts=()=>h.all(h.elements['manage-dialog-fields']).map(n=>n.textContent).join('\n');
   assert.match(texts(),/PowerShell as administrator/);
   assert.match(texts(),/shown only now/);
+  assert.doesNotMatch(texts(),/MIXEL_DEPLOY_TOKEN/);
   h.byText(h.elements['manage-dialog-fields'],'Copy command').listeners.click();await h.signedIn();
   assert.deepEqual(h.clipboard,[command]);
   os.value='macos';os.listeners.change();
   assert.equal(box.value,mac);assert.match(texts(),/open Terminal/);assert.match(texts(),/Screen Recording and Accessibility/);
+  assert.match(texts(),/When asked, paste the deploy token \(it is not shown\)/);assert.match(texts(),/MIXEL_DEPLOY_TOKEN/);
+  assert.equal(tokenPart.hidden,false,'Mac: the token is copied on its own, the command does not hold it');
   h.byText(h.elements['manage-dialog-fields'],'Copy command').listeners.click();await settle();
+  h.byText(h.elements['manage-dialog-fields'],'Copy deploy token').listeners.click();await settle();
   os.value='linux';os.listeners.change();
-  assert.equal(box.value,linux);assert.match(texts(),/Ubuntu or Debian/);assert.doesNotMatch(texts(),/PowerShell/);
+  assert.equal(box.value,linux);assert.match(texts(),/Ubuntu \(22\.04 or newer\) or Debian \(12 or newer\)/);assert.doesNotMatch(texts(),/PowerShell/);
+  assert.equal(tokenPart.hidden,false);
   h.byText(h.elements['manage-dialog-fields'],'Copy command').listeners.click();await settle();
-  assert.deepEqual(h.clipboard,[command,mac,linux]);
+  assert.deepEqual(h.clipboard,[command,mac,'mrt_secret',linux]);
   assert.equal(h.elements['manage-dialog-confirm'].textContent,'Done');
   await h.confirmDialog();assert.equal(h.elements['manage-dialog'].hidden,true);
 });
 
-test('a deploy link answer without a command for every system is refused',async()=>{
-  const h=harness({answers:{saas_create_deploy_link:{token:'mrt_secret',windows_command:"$t='mrt_secret'",macos_command:'curl x',linux_command:"curl -- 'mrt_secret'"}}});await h.signedIn();
-  h.elements['devices-add-others'].listeners.click();
-  h.field('label').value='x';await h.confirmDialog();
-  assert.equal(h.field('command'),undefined);
+test('a deploy link answer with a missing command, or a Mac or Linux line that holds the token, is refused',async()=>{
+  for(const answer of [
+    {token:'mrt_secret',windows_command:"$t='mrt_secret'",macos_command:'curl x',linux_command:'curl -fsSL https://remote.mixel.ch/install/linux.sh | sudo sh'},
+    {token:'mrt_secret',windows_command:"$t='mrt_secret'",macos_command:"curl -fsSL https://remote.mixel.ch/install/macos.sh | sudo sh -s -- 'mrt_secret'",linux_command:'curl -fsSL https://remote.mixel.ch/install/linux.sh | sudo sh'},
+    {token:'mrt_secret',windows_command:'no token here',macos_command:'curl -fsSL https://remote.mixel.ch/install/macos.sh | sudo sh',linux_command:'curl -fsSL https://remote.mixel.ch/install/linux.sh | sudo sh'}]){
+    const h=harness({answers:{saas_create_deploy_link:answer}});await h.signedIn();
+    h.elements['devices-add-others'].listeners.click();
+    h.field('label').value='x';await h.confirmDialog();
+    assert.equal(h.field('command'),undefined);
+  }
 });
 
 test('Add this computer registers it, remembers its registration and brings it online',async()=>{
@@ -414,15 +427,16 @@ test('every new text has German, French and Italian translations',()=>{
   for(const text of ['Delete Acme AG?','Acme AG is deleted at once: the subscription ends without a refund, every device is signed out and removed, invitations are revoked, and all members and their Mixel Remote accounts are deleted. Billing records are kept as the law requires. This cannot be undone. Export the data in the portal first if you need it.','Type the company name to confirm','Delete company permanently','Delete my account?','Type your e-mail address to confirm','Delete my account permanently','Your account has been deleted.','The company was deleted: 2 devices removed, 3 members and their accounts deleted.','You are the only owner of Acme AG. Make another member owner first, or delete the company.','Accept the Terms of Service and the Data Processing Agreement to create a company.','Type the company name exactly as shown to confirm.','You are the only owner. Delete the company, or make another member owner first.','Business plan','Owner','Administrator','Technician','Member','Free trial · 9 days left','Free trial · ends today','Active','Change role','Leave company','Remove','Rename…','Move to group…','Remove…','All groups','No group','Manage',
     'Remove Office PC?','Choose the group of Office PC. Technicians reach the devices of the groups they are granted, and devices in no group.','Office PC moved to Sales.','Office PC was removed.','Renamed to Front desk.',
     'Device limit of your plan reached (2 of 2). Remove a device or upgrade the plan to add more.','This company is read-only. You can still remove devices; adding devices and other changes need an active plan.',
-    'This computer was added as Front desk. Connection ID 555 666 777.','It works for 12 computers within 30 days. The command contains a secret: share it only with the people who deploy the computers. It is shown only now.',
+    'This computer was added as Front desk. Connection ID 555 666 777.','It works for 12 computers within 30 days. The deploy token is a secret (the Windows command contains it): share it only with the people who deploy the computers. It is shown only now.',
     'Registered as Front desk · Connection ID 555 666 777','No connection to Mixel Remote right now. This computer will be removed as soon as it is online.','This computer was removed from Mixel Remote. It is no longer set up; add it again in Devices to use it.',
     'Remove this computer from Mixel Remote?','This computer is removed from Acme AG at once: its registration is revoked, running sessions end and nobody can connect to it any more. Without internet, the removal is saved and sent as soon as this computer is online. Afterwards this computer is no longer set up; you can add it again.',
     'Technician · valid until 20.11.2026','Role of Tom Tech changed to Administrator.','Invitation e-mail on its way to new@acme.test. The link in it works for 7 days, only with this e-mail address.',
     'e-mail sent 13.11.2026','e-mail being sent','e-mail not delivered','Send again','Send the invitation of new@acme.test again','A new invitation e-mail is on its way to new@acme.test. The previous link no longer works.',
     'Mixel Remote e-mails an invitation link to this address. The person signs in with it and joins Acme AG.','Operating system',
-    'On each Mac, open Terminal while the person who uses the Mac is signed in, or run it with your MDM.','Paste and run the command below and enter the administrator password. The Mac appears in Devices, with always-on access.',
-    'Once per Mac, allow Mixel Remote in System Settings > Privacy & Security > Screen Recording and Accessibility.','On each Ubuntu or Debian computer, open a terminal, or use your deployment tool.',
-    'Paste and run the command below and enter the administrator password. The computer appears in Devices, with access at the sign-in screen and in X11 sessions.','Your company is ready. Your free 14-day Business trial has started: add this computer in Devices.',
+    'On each Mac, open Terminal while the person who uses the Mac is signed in.','Paste and run the command below and enter the administrator password. When asked, paste the deploy token (it is not shown). The Mac appears in Devices, with always-on access.',
+    'Once per Mac, allow Mixel Remote in System Settings > Privacy & Security > Screen Recording and Accessibility.','On each Ubuntu (22.04 or newer) or Debian (12 or newer) computer, open a terminal.',
+    'Paste and run the command below and enter the administrator password. When asked, paste the deploy token (it is not shown). The computer appears in Devices, with access at the sign-in screen and in X11 sessions.',
+    'Deployment tools and MDMs (running as root): set the environment variable MIXEL_DEPLOY_TOKEN to the deploy token and run the command without sudo.','Deploy token','Copy deploy token','Deploy token copied.','Select the deploy token and copy it.','Your company is ready. Your free 14-day Business trial has started: add this computer in Devices.',
     'Device limit of your plan reached','Technician limit of your plan reached','Rename the company','Company renamed to Acme Holding AG.',
     'Last seen 3 hours ago. Turned off, asleep or without internet. It must be online to connect.','Last seen 25 minutes ago. Turned off, asleep or without internet. It must be online to connect.','Last seen 4 days ago. Turned off, asleep or without internet. It must be online to connect.','Last seen yesterday. Turned off, asleep or without internet. It must be online to connect.','Last seen just now. Turned off, asleep or without internet. It must be online to connect.',
     'The new name is shown to everyone in the company and on the Mixel Remote portal.','Enter a company name of 2 to 80 characters.','This Mixel Remote account is read-only','Not allowed for this company','This computer is being removed from Mixel Remote. It is removed as soon as it is online.'])texts.add(text);

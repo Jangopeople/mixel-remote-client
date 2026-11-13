@@ -123,6 +123,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Copy answer": "Antwort kopieren",
 "Copy code": "Code kopieren",
 "Copy command": "Befehl kopieren",
+"Copy deploy token": "Verteil-Token kopieren",
 "Copy invitation link": "Einladungslink kopieren",
 "Create Mixel ID": "Mixel ID erstellen",
 "Create a company": "Firma erstellen",
@@ -153,6 +154,9 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Delete my account?": "Mein Konto löschen?",
 "Delete my account…": "Mein Konto löschen…",
 "Deletes your Mixel Remote account and your personal data. Invitations you sent and not yet accepted are revoked; devices you added stay with your company. This cannot be undone.": "Löscht Ihr Mixel Remote Konto und Ihre Personendaten. Von Ihnen versandte, noch nicht angenommene Einladungen werden widerrufen; Geräte, die Sie hinzugefügt haben, bleiben bei Ihrer Firma. Dies kann nicht rückgängig gemacht werden.",
+"Deploy token": "Verteil-Token",
+"Deploy token copied.": "Verteil-Token kopiert.",
+"Deployment tools and MDMs (running as root): set the environment variable MIXEL_DEPLOY_TOKEN to the deploy token and run the command without sudo.": "Verteilungswerkzeuge und MDM (als root): Setzen Sie die Umgebungsvariable MIXEL_DEPLOY_TOKEN auf das Verteil-Token und führen Sie den Befehl ohne sudo aus.",
 "Device groups need the Team plan": "Gerätegruppen brauchen das Abo Team",
 "Device limit of your plan reached": "Gerätelimite Ihres Abos erreicht",
 "Device name": "Gerätename",
@@ -321,6 +325,8 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Off. Choose a display and confirm before enabling.": "Aus. Wählen und bestätigen Sie einen Bildschirm vor dem Aktivieren.",
 "Offline": "Offline",
 "On each Mac, open Terminal while the person who uses the Mac is signed in, or run it with your MDM.": "Öffnen Sie auf jedem Mac das Terminal, während die Person angemeldet ist, die den Mac benutzt, oder führen Sie den Befehl mit Ihrer MDM-Lösung aus.",
+"On each Mac, open Terminal while the person who uses the Mac is signed in.": "Öffnen Sie auf jedem Mac das Terminal, während die Person angemeldet ist, die den Mac benutzt.",
+"On each Ubuntu (22.04 or newer) or Debian (12 or newer) computer, open a terminal.": "Öffnen Sie auf jedem Computer mit Ubuntu (22.04 oder neuer) oder Debian (12 oder neuer) ein Terminal.",
 "On each Ubuntu or Debian computer, open a terminal, or use your deployment tool.": "Öffnen Sie auf jedem Ubuntu- oder Debian-Computer ein Terminal oder verwenden Sie Ihr Verteilungswerkzeug.",
 "On each Windows computer, open PowerShell as administrator, or use your deployment tool.": "Öffnen Sie auf jedem Windows-Computer PowerShell als Administrator oder verwenden Sie Ihr Verteilungswerkzeug.",
 "On. Approved users can connect while this computer stays signed in.": "An. Freigegebene Benutzer können verbinden, solange dieser Computer angemeldet bleibt.",
@@ -344,6 +350,8 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "PARTNER CONNECTION ID": "PARTNER-VERBINDUNGS-ID",
 "Paste and run the command below and enter the administrator password. The Mac appears in Devices, with always-on access.": "Fügen Sie den Befehl unten ein, führen Sie ihn aus und geben Sie das Administratorpasswort ein. Der Mac erscheint unter Geräte, mit ständigem Zugriff.",
 "Paste and run the command below and enter the administrator password. The computer appears in Devices, with access at the sign-in screen and in X11 sessions.": "Fügen Sie den Befehl unten ein, führen Sie ihn aus und geben Sie das Administratorpasswort ein. Der Computer erscheint unter Geräte, mit Zugriff am Anmeldebildschirm und in X11-Sitzungen.",
+"Paste and run the command below and enter the administrator password. When asked, paste the deploy token (it is not shown). The Mac appears in Devices, with always-on access.": "Fügen Sie den Befehl unten ein, führen Sie ihn aus und geben Sie das Administratorpasswort ein. Fügen Sie auf Nachfrage das Verteil-Token ein (es wird nicht angezeigt). Der Mac erscheint unter Geräte, mit ständigem Zugriff.",
+"Paste and run the command below and enter the administrator password. When asked, paste the deploy token (it is not shown). The computer appears in Devices, with access at the sign-in screen and in X11 sessions.": "Fügen Sie den Befehl unten ein, führen Sie ihn aus und geben Sie das Administratorpasswort ein. Fügen Sie auf Nachfrage das Verteil-Token ein (es wird nicht angezeigt). Der Computer erscheint unter Geräte, mit Zugriff am Anmeldebildschirm und in X11-Sitzungen.",
 "Paste and run the command below. Mixel Remote is installed and the computer appears in Devices, with always-on access.": "Fügen Sie den Befehl unten ein und führen Sie ihn aus. Mixel Remote wird installiert und der Computer erscheint unter «Geräte», mit Daueranschluss.",
 "Payment overdue. Please update the payment details in the Mixel Remote portal.": "Zahlung überfällig. Bitte aktualisieren Sie die Zahlungsangaben im Mixel-Remote-Portal.",
 "Personal plan": "Abo Personal",
@@ -415,6 +423,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Search": "Suchen",
 "Search devices by name…": "Geräte nach Namen suchen…",
 "Select the command and copy it.": "Markieren Sie den Befehl und kopieren Sie ihn.",
+"Select the deploy token and copy it.": "Markieren Sie das Verteil-Token und kopieren Sie es.",
 "Select the link and copy it.": "Markieren Sie den Link und kopieren Sie ihn.",
 "Send": "Senden",
 "Send a file…": "Datei senden…",
@@ -964,8 +973,8 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Geben Sie 1 bis $1 Computer ein."
 ],
 [
-"^It works for (\\d+) computers within (\\d+) days\\. The command contains a secret: share it only with the people who deploy the computers\\. It is shown only now\\.$",
-"Er gilt für $1 Computer während $2 Tagen. Der Befehl enthält ein Geheimnis: Geben Sie ihn nur den Personen, die die Computer einrichten. Er wird nur jetzt angezeigt."
+"^It works for (\\d+) computers within (\\d+) days\\. The deploy token is a secret \\(the Windows command contains it\\): share it only with the people who deploy the computers\\. It is shown only now\\.$",
+"Er gilt für $1 Computer während $2 Tagen. Das Verteil-Token ist ein Geheimnis (der Windows-Befehl enthält es): Geben Sie es nur den Personen, die die Computer einrichten. Es wird nur jetzt angezeigt."
 ],
 [
 "^Registered as (.+) · Connection ID ([\\d ]+)$",
@@ -1215,6 +1224,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Copy answer": "Copier la réponse",
 "Copy code": "Copier le code",
 "Copy command": "Copier la commande",
+"Copy deploy token": "Copier le jeton de déploiement",
 "Copy invitation link": "Copier le lien d’invitation",
 "Create Mixel ID": "Créer un Mixel ID",
 "Create a company": "Créer une entreprise",
@@ -1245,6 +1255,9 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Delete my account?": "Supprimer mon compte ?",
 "Delete my account…": "Supprimer mon compte…",
 "Deletes your Mixel Remote account and your personal data. Invitations you sent and not yet accepted are revoked; devices you added stay with your company. This cannot be undone.": "Supprime votre compte Mixel Remote et vos données personnelles. Les invitations que vous avez envoyées et qui ne sont pas encore acceptées sont révoquées ; les appareils que vous avez ajoutés restent à votre entreprise. Cette action est irréversible.",
+"Deploy token": "Jeton de déploiement",
+"Deploy token copied.": "Jeton de déploiement copié.",
+"Deployment tools and MDMs (running as root): set the environment variable MIXEL_DEPLOY_TOKEN to the deploy token and run the command without sudo.": "Outils de déploiement et MDM (exécutés en root) : définissez la variable d’environnement MIXEL_DEPLOY_TOKEN sur le jeton de déploiement et exécutez la commande sans sudo.",
 "Device groups need the Team plan": "Les groupes d’appareils nécessitent la formule Team",
 "Device limit of your plan reached": "Limite d’appareils de votre formule atteinte",
 "Device name": "Nom de l’appareil",
@@ -1413,6 +1426,8 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Off. Choose a display and confirm before enabling.": "Désactivé. Choisissez et confirmez un écran avant d’activer.",
 "Offline": "Hors ligne",
 "On each Mac, open Terminal while the person who uses the Mac is signed in, or run it with your MDM.": "Sur chaque Mac, ouvrez Terminal pendant que la personne qui utilise le Mac est connectée, ou exécutez la commande avec votre MDM.",
+"On each Mac, open Terminal while the person who uses the Mac is signed in.": "Sur chaque Mac, ouvrez Terminal pendant que la personne qui utilise le Mac est connectée.",
+"On each Ubuntu (22.04 or newer) or Debian (12 or newer) computer, open a terminal.": "Sur chaque ordinateur Ubuntu (22.04 ou plus récent) ou Debian (12 ou plus récent), ouvrez un terminal.",
 "On each Ubuntu or Debian computer, open a terminal, or use your deployment tool.": "Sur chaque ordinateur Ubuntu ou Debian, ouvrez un terminal, ou utilisez votre outil de déploiement.",
 "On each Windows computer, open PowerShell as administrator, or use your deployment tool.": "Sur chaque ordinateur Windows, ouvrez PowerShell en tant qu’administrateur, ou utilisez votre outil de déploiement.",
 "On. Approved users can connect while this computer stays signed in.": "Activé. Les utilisateurs approuvés peuvent se connecter tant que cet ordinateur reste connecté.",
@@ -1436,6 +1451,8 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "PARTNER CONNECTION ID": "ID DE CONNEXION DU PARTENAIRE",
 "Paste and run the command below and enter the administrator password. The Mac appears in Devices, with always-on access.": "Collez et exécutez la commande ci-dessous, puis saisissez le mot de passe administrateur. Le Mac apparaît dans Appareils, avec un accès permanent.",
 "Paste and run the command below and enter the administrator password. The computer appears in Devices, with access at the sign-in screen and in X11 sessions.": "Collez et exécutez la commande ci-dessous, puis saisissez le mot de passe administrateur. L’ordinateur apparaît dans Appareils, avec un accès à l’écran de connexion et dans les sessions X11.",
+"Paste and run the command below and enter the administrator password. When asked, paste the deploy token (it is not shown). The Mac appears in Devices, with always-on access.": "Collez et exécutez la commande ci-dessous, puis saisissez le mot de passe administrateur. À la demande, collez le jeton de déploiement (il n’est pas affiché). Le Mac apparaît dans Appareils, avec un accès permanent.",
+"Paste and run the command below and enter the administrator password. When asked, paste the deploy token (it is not shown). The computer appears in Devices, with access at the sign-in screen and in X11 sessions.": "Collez et exécutez la commande ci-dessous, puis saisissez le mot de passe administrateur. À la demande, collez le jeton de déploiement (il n’est pas affiché). L’ordinateur apparaît dans Appareils, avec un accès à l’écran de connexion et dans les sessions X11.",
 "Paste and run the command below. Mixel Remote is installed and the computer appears in Devices, with always-on access.": "Collez et exécutez la commande ci-dessous. Mixel Remote est installé et l’ordinateur apparaît dans « Appareils », avec l’accès permanent.",
 "Payment overdue. Please update the payment details in the Mixel Remote portal.": "Paiement en retard. Veuillez mettre à jour les données de paiement dans le portail Mixel Remote.",
 "Personal plan": "Formule Personal",
@@ -1507,6 +1524,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Search": "Rechercher",
 "Search devices by name…": "Rechercher des appareils par nom…",
 "Select the command and copy it.": "Sélectionnez la commande et copiez-la.",
+"Select the deploy token and copy it.": "Sélectionnez le jeton de déploiement et copiez-le.",
 "Select the link and copy it.": "Sélectionnez le lien et copiez-le.",
 "Send": "Envoyer",
 "Send a file…": "Envoyer un fichier…",
@@ -2056,8 +2074,8 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Saisissez 1 à $1 ordinateurs."
 ],
 [
-"^It works for (\\d+) computers within (\\d+) days\\. The command contains a secret: share it only with the people who deploy the computers\\. It is shown only now\\.$",
-"Il fonctionne pour $1 ordinateurs pendant $2 jours. La commande contient un secret : ne la partagez qu’avec les personnes qui déploient les ordinateurs. Elle n’est affichée que maintenant."
+"^It works for (\\d+) computers within (\\d+) days\\. The deploy token is a secret \\(the Windows command contains it\\): share it only with the people who deploy the computers\\. It is shown only now\\.$",
+"Il fonctionne pour $1 ordinateurs pendant $2 jours. Le jeton de déploiement est un secret (la commande Windows le contient) : ne le communiquez qu’aux personnes qui déploient les ordinateurs. Il n’est affiché que maintenant."
 ],
 [
 "^Registered as (.+) · Connection ID ([\\d ]+)$",
@@ -2307,6 +2325,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Copy answer": "Copia la risposta",
 "Copy code": "Copia codice",
 "Copy command": "Copia il comando",
+"Copy deploy token": "Copia il token di distribuzione",
 "Copy invitation link": "Copia link di invito",
 "Create Mixel ID": "Crea Mixel ID",
 "Create a company": "Crea un’azienda",
@@ -2337,6 +2356,9 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Delete my account?": "Cancellare il mio account?",
 "Delete my account…": "Cancella il mio account…",
 "Deletes your Mixel Remote account and your personal data. Invitations you sent and not yet accepted are revoked; devices you added stay with your company. This cannot be undone.": "Cancella il tuo account Mixel Remote e i tuoi dati personali. Gli inviti che hai inviato e non ancora accettati vengono revocati; i dispositivi che hai aggiunto restano alla tua azienda. L’operazione è irreversibile.",
+"Deploy token": "Token di distribuzione",
+"Deploy token copied.": "Token di distribuzione copiato.",
+"Deployment tools and MDMs (running as root): set the environment variable MIXEL_DEPLOY_TOKEN to the deploy token and run the command without sudo.": "Strumenti di distribuzione e MDM (eseguiti come root): imposta la variabile d’ambiente MIXEL_DEPLOY_TOKEN sul token di distribuzione ed esegui il comando senza sudo.",
 "Device groups need the Team plan": "I gruppi di dispositivi richiedono il piano Team",
 "Device limit of your plan reached": "Limite di dispositivi del tuo piano raggiunto",
 "Device name": "Nome del dispositivo",
@@ -2505,6 +2527,8 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Off. Choose a display and confirm before enabling.": "Disattivato. Scegli e conferma uno schermo prima di attivare.",
 "Offline": "Offline",
 "On each Mac, open Terminal while the person who uses the Mac is signed in, or run it with your MDM.": "Su ogni Mac apri Terminale mentre la persona che usa il Mac ha effettuato l’accesso, oppure esegui il comando con il tuo MDM.",
+"On each Mac, open Terminal while the person who uses the Mac is signed in.": "Su ogni Mac apri il Terminale mentre la persona che usa il Mac ha effettuato l’accesso.",
+"On each Ubuntu (22.04 or newer) or Debian (12 or newer) computer, open a terminal.": "Su ogni computer Ubuntu (22.04 o successivo) o Debian (12 o successivo) apri un terminale.",
 "On each Ubuntu or Debian computer, open a terminal, or use your deployment tool.": "Su ogni computer Ubuntu o Debian apri un terminale, oppure usa il tuo strumento di distribuzione.",
 "On each Windows computer, open PowerShell as administrator, or use your deployment tool.": "Su ogni computer Windows apri PowerShell come amministratore, oppure usa il tuo strumento di distribuzione.",
 "On. Approved users can connect while this computer stays signed in.": "Attivato. Gli utenti approvati possono connettersi finché questo computer resta connesso.",
@@ -2528,6 +2552,8 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "PARTNER CONNECTION ID": "ID DI CONNESSIONE DEL PARTNER",
 "Paste and run the command below and enter the administrator password. The Mac appears in Devices, with always-on access.": "Incolla ed esegui il comando qui sotto e inserisci la password di amministratore. Il Mac compare in Dispositivi, con accesso sempre attivo.",
 "Paste and run the command below and enter the administrator password. The computer appears in Devices, with access at the sign-in screen and in X11 sessions.": "Incolla ed esegui il comando qui sotto e inserisci la password di amministratore. Il computer compare in Dispositivi, con accesso alla schermata di accesso e nelle sessioni X11.",
+"Paste and run the command below and enter the administrator password. When asked, paste the deploy token (it is not shown). The Mac appears in Devices, with always-on access.": "Incolla ed esegui il comando qui sotto e inserisci la password di amministratore. Quando richiesto, incolla il token di distribuzione (non viene mostrato). Il Mac compare in Dispositivi, con accesso sempre attivo.",
+"Paste and run the command below and enter the administrator password. When asked, paste the deploy token (it is not shown). The computer appears in Devices, with access at the sign-in screen and in X11 sessions.": "Incolla ed esegui il comando qui sotto e inserisci la password di amministratore. Quando richiesto, incolla il token di distribuzione (non viene mostrato). Il computer compare in Dispositivi, con accesso alla schermata di accesso e nelle sessioni X11.",
 "Paste and run the command below. Mixel Remote is installed and the computer appears in Devices, with always-on access.": "Incolla ed esegui il comando qui sotto. Mixel Remote viene installato e il computer compare in «Dispositivi», con l’accesso permanente.",
 "Payment overdue. Please update the payment details in the Mixel Remote portal.": "Pagamento scaduto. Aggiorna i dati di pagamento nel portale Mixel Remote.",
 "Personal plan": "Piano Personal",
@@ -2599,6 +2625,7 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Search": "Cerca",
 "Search devices by name…": "Cerca dispositivi per nome…",
 "Select the command and copy it.": "Seleziona il comando e copialo.",
+"Select the deploy token and copy it.": "Seleziona il token di distribuzione e copialo.",
 "Select the link and copy it.": "Seleziona il link e copialo.",
 "Send": "Invia",
 "Send a file…": "Invia un file…",
@@ -3148,8 +3175,8 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Inserisci da 1 a $1 computer."
 ],
 [
-"^It works for (\\d+) computers within (\\d+) days\\. The command contains a secret: share it only with the people who deploy the computers\\. It is shown only now\\.$",
-"Vale per $1 computer entro $2 giorni. Il comando contiene un segreto: condividilo solo con chi distribuisce i computer. Viene mostrato solo ora."
+"^It works for (\\d+) computers within (\\d+) days\\. The deploy token is a secret \\(the Windows command contains it\\): share it only with the people who deploy the computers\\. It is shown only now\\.$",
+"Vale per $1 computer entro $2 giorni. Il token di distribuzione è un segreto (il comando Windows lo contiene): condividilo solo con le persone che installano i computer. Viene mostrato solo ora."
 ],
 [
 "^Registered as (.+) · Connection ID ([\\d ]+)$",

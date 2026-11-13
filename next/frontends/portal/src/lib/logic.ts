@@ -238,9 +238,10 @@ export function safeNext(next: string | null | undefined, fallback = '/app'): st
 /** PowerShell line that installs Mixel Remote and enrols the computer with a deploy token. */
 export function windowsDeployCommand(token: string, installerUrl: string): string {
   // Single quotes only, so the line survives being wrapped in "..." by deployment tools
-  // (same command as the desktop app's rollout_create).
+  // (same command as the desktop app's rollout_command_for). The enrol step gets the token in
+  // MIXEL_DEPLOY_TOKEN (set only for that step), never as an argument others see in the process list.
   const quote = (value: string) => value.replace(/'/g, "''");
-  return `$t='${quote(token)}'; $f=Join-Path $env:TEMP 'Mixel-Remote-Setup.exe'; Invoke-WebRequest -UseBasicParsing '${quote(installerUrl)}' -OutFile $f; Start-Process $f '/S' -Wait; $p=Start-Process (Join-Path $env:LOCALAPPDATA 'Mixel Remote\\mixel-remote.exe') -ArgumentList '--signin-enroll',$t -Wait -PassThru; exit $p.ExitCode`;
+  return `$t='${quote(token)}'; $f=Join-Path $env:TEMP 'Mixel-Remote-Setup.exe'; Invoke-WebRequest -UseBasicParsing '${quote(installerUrl)}' -OutFile $f; Start-Process $f '/S' -Wait; $env:MIXEL_DEPLOY_TOKEN=$t; $p=Start-Process (Join-Path $env:LOCALAPPDATA 'Mixel Remote\\mixel-remote.exe') -ArgumentList '--signin-enroll' -Wait -PassThru; Remove-Item Env:MIXEL_DEPLOY_TOKEN -ErrorAction SilentlyContinue; exit $p.ExitCode`;
 }
 
 /** Where this site serves the install scripts for Macs and Linux computers (public/install/). */
@@ -251,16 +252,20 @@ export function isDeployToken(token: string): boolean {
   return /^mrt_[A-Za-z0-9_-]{16,96}$/.test(token);
 }
 
+// The Mac and Linux lines never contain the token: the install script asks for it at a prompt that
+// does not show it (deployment tools set MIXEL_DEPLOY_TOKEN), so it stays out of the shell history
+// and the process list. The token is still checked, so a broken link never shows a command.
+
 /** Terminal line (Mac: run while the person is signed in, or by MDM) that installs and enrols. */
 export function macDeployCommand(token: string): string {
   if (!isDeployToken(token)) throw new Error('invalid deploy token');
-  return `curl -fsSL ${INSTALL_BASE}/macos.sh | sudo sh -s -- '${token}'`;
+  return `curl -fsSL ${INSTALL_BASE}/macos.sh | sudo sh`;
 }
 
 /** Terminal line (Ubuntu / Debian) that installs the .deb and enrols with always-on access. */
 export function linuxDeployCommand(token: string): string {
   if (!isDeployToken(token)) throw new Error('invalid deploy token');
-  return `curl -fsSL ${INSTALL_BASE}/linux.sh | sudo sh -s -- '${token}'`;
+  return `curl -fsSL ${INSTALL_BASE}/linux.sh | sudo sh`;
 }
 
 export type DeployOs = 'windows' | 'macos' | 'linux';

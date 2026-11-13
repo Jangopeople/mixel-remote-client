@@ -97,12 +97,18 @@ link for them with `QA_SQL` (see `tests/e2e/qa.ts` `invitationLink`).
 
 ## Mass rollout on Mac and Linux
 `public/install/macos.sh` and `public/install/linux.sh` are served at `https://remote.mixel.ch/install/…`. The deploy
-dialog shows `curl -fsSL https://remote.mixel.ch/install/<os>.sh | sudo sh -s -- '<token>'`:
-- Linux (Ubuntu/Debian x64): checks the update channel's Ed25519 signature (Mixel update key) and the package
-  SHA-256, `apt-get install`s the `.deb`, runs `desktop_app --signin-enroll <token>` as root → computer-wide key,
+dialog shows `curl -fsSL https://remote.mixel.ch/install/<os>.sh | sudo sh` and the token with its own copy button.
+The deploy token is never on a command line (it would be in the shell history and in the process list every user can
+read): the script asks for it at a prompt that does not show it (`stty -echo` on `/dev/tty`); deployment tools and
+MDMs running as root set `MIXEL_DEPLOY_TOKEN` instead (from a non-root script: `sudo --preserve-env=MIXEL_DEPLOY_TOKEN
+sh`, not `sudo MIXEL_DEPLOY_TOKEN=… sh`, which puts it in sudo's arguments). The script removes the variable at once
+and pipes the token to the app's `--signin-enroll` on standard input; the app also accepts `MIXEL_DEPLOY_TOKEN`
+(Windows: the PowerShell line sets it for the enrol step only) and refuses a token given as an argument.
+- Linux (Ubuntu 22.04+/Debian 12+ x64): checks the update channel's Ed25519 signature (Mixel update key) and the
+  package SHA-256, `apt-get install`s the `.deb`, runs `desktop_app --signin-enroll` as root → computer-wide key,
   enrolment, root service `mixel-remote-signin.service` with always-on access (sign-in screen and X11 sessions).
 - macOS: downloads the release DMG (SHA-256 from the channel), requires Mixel's Developer ID signature (team
-  5277F8NDH4), installs `/Applications/Mixel Remote.app` and runs `--signin-enroll <token>` as the signed-in person
+  5277F8NDH4), installs `/Applications/Mixel Remote.app` and runs `--signin-enroll` as the signed-in person
   (`launchctl asuser`): key in the login Keychain, enrolment, per-user launch agent `<bundle id>.startup-host` running
   the headless host. Once per Mac the person allows Screen Recording and Accessibility (macOS rule).
 Both refuse releases older than 0.1.22 (the first with `--signin-enroll` on Mac and Linux). Options for tests and

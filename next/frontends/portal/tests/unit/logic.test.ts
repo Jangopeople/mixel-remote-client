@@ -124,8 +124,13 @@ describe('links and formatting', () => {
     const command = windowsDeployCommand("mrt_abc'def", 'https://store-api.mixel.ch/x/Mixel-Remote.exe');
     expect(command).toContain("$t='mrt_abc''def'");
     expect(command).toContain("'https://store-api.mixel.ch/x/Mixel-Remote.exe'");
-    expect(command).toContain("--signin-enroll");
+    expect(command).toContain("-ArgumentList '--signin-enroll' -Wait");
     expect(command).not.toContain('"');
+    // The token reaches the enrol step in the environment, never as an argument (process list).
+    expect(command).not.toContain("'--signin-enroll',$t");
+    expect(command).toContain("Start-Process $f '/S' -Wait; $env:MIXEL_DEPLOY_TOKEN=$t; $p=Start-Process ");
+    expect(command).toContain('Remove-Item Env:MIXEL_DEPLOY_TOKEN');
+    expect(command.match(/\$t\b/g)).toHaveLength(2);
   });
   it('derives deploy link states', () => {
     const now = new Date('2026-11-13T12:00:00Z');
@@ -174,9 +179,10 @@ describe('presence times', () => {
 
 describe('Mac and Linux rollout', () => {
   const token = 'mrt_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_';
-  it('pipes the install script to root with the token as a single-quoted argument', () => {
-    expect(macDeployCommand(token)).toBe(`curl -fsSL https://remote.mixel.ch/install/macos.sh | sudo sh -s -- '${token}'`);
-    expect(linuxDeployCommand(token)).toBe(`curl -fsSL https://remote.mixel.ch/install/linux.sh | sudo sh -s -- '${token}'`);
+  it('pipes the install script to root without the token (the script asks for it, out of the history and ps)', () => {
+    expect(macDeployCommand(token)).toBe('curl -fsSL https://remote.mixel.ch/install/macos.sh | sudo sh');
+    expect(linuxDeployCommand(token)).toBe('curl -fsSL https://remote.mixel.ch/install/linux.sh | sudo sh');
+    for (const line of [macDeployCommand(token), linuxDeployCommand(token)]) expect(line).not.toContain('mrt_');
   });
   it('never builds a shell line from anything but a deploy token', () => {
     expect(isDeployToken(token)).toBe(true);

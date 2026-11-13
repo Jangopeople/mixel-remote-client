@@ -62,6 +62,9 @@ mod macos_prelogin_install;
 mod windows_signin_host;
 #[cfg(target_os = "linux")]
 mod linux_signin_host;
+/// `--signin-enroll` reads the deploy token from MIXEL_DEPLOY_TOKEN or standard input.
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+mod deploy_token;
 /// The platform's sign-in screen host (Windows service, Linux systemd service on an X11 greeter).
 #[cfg(target_os = "windows")]
 use windows_signin_host as signin_platform;
@@ -1173,20 +1176,21 @@ pub const ROLLOUT_REFUSED: &str = "The deploy link was refused or the service co
 /// Where the portal serves the install scripts (`next/frontends/portal/public/install/`).
 pub const INSTALL_SCRIPTS: &str = "https://remote.mixel.ch/install";
 /// The one-line commands for Macs and Linux computers: download the install script, which installs
-/// the released, signed app from the update channel and enrols the computer with the token.
+/// the released, signed app from the update channel and then asks for the deploy token without
+/// showing it (deployment tools set MIXEL_DEPLOY_TOKEN instead). The token is never part of the
+/// line, so it stays out of the shell history and the process list.
 fn unix_rollout_commands(token: &str) -> Result<(String, String), String> {
-    if !(20..=100).contains(&token.len()) || !token.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte)) {
+    if !deploy_token::valid(token) {
         return Err("The rollout token could not be created".into());
     }
-    Ok((
-        format!("curl -fsSL {INSTALL_SCRIPTS}/macos.sh | sudo sh -s -- '{token}'"),
-        format!("curl -fsSL {INSTALL_SCRIPTS}/linux.sh | sudo sh -s -- '{token}'"),
-    ))
+    Ok((format!("curl -fsSL {INSTALL_SCRIPTS}/macos.sh | sudo sh"), format!("curl -fsSL {INSTALL_SCRIPTS}/linux.sh | sudo sh")))
 }
 fn rollout_command_for(token: &str, installer: &str) -> String {
-    // Single quotes only, so the line also survives being wrapped in "…" by deployment tools.
+    // Single quotes only, so the line also survives being wrapped in "…" by deployment tools. The
+    // token reaches the enrol step in MIXEL_DEPLOY_TOKEN (inherited by Start-Process, set only for
+    // that step), not as an argument other users could read in the process list.
     format!(
-        "$t='{token}'; $f=Join-Path $env:TEMP 'Mixel-Remote-Setup.exe'; Invoke-WebRequest -UseBasicParsing '{installer}' -OutFile $f; Start-Process $f '/S' -Wait; $p=Start-Process (Join-Path $env:LOCALAPPDATA 'Mixel Remote\\mixel-remote.exe') -ArgumentList '--signin-enroll',$t -Wait -PassThru; exit $p.ExitCode"
+        "$t='{token}'; $f=Join-Path $env:TEMP 'Mixel-Remote-Setup.exe'; Invoke-WebRequest -UseBasicParsing '{installer}' -OutFile $f; Start-Process $f '/S' -Wait; $env:MIXEL_DEPLOY_TOKEN=$t; $p=Start-Process (Join-Path $env:LOCALAPPDATA 'Mixel Remote\\mixel-remote.exe') -ArgumentList '--signin-enroll' -Wait -PassThru; Remove-Item Env:MIXEL_DEPLOY_TOKEN -ErrorAction SilentlyContinue; exit $p.ExitCode"
     )
 }
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
@@ -2362,6 +2366,11 @@ fn request_quit(app: tauri::AppHandle) {
     });
 }
 fn main() {
+    // `--version`: the release version for install checks and support; no window, no service.
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--version")) {
+        println!("Mixel Remote {}", env!("MIXEL_APP_VERSION"));
+        return;
+    }
     #[cfg(target_os = "windows")]
     {
         if let Some(result) = std::env::args().nth(1).and_then(|command| host_print::admin(&command)) {
@@ -2376,6 +2385,8 @@ fn main() {
             let result = match command.as_str() {
                 "--signin-service" => windows_signin_host::run_service(),
                 "--signin-host" => service_config::require_host().and_then(|()| windows_signin_host::run_host()),
+                "--signin-enroll" => deploy_token::read(args.next().as_deref())
+                    .and_then(|token| windows_signin_host::admin(&command, Some(&token))),
                 _ => windows_signin_host::admin(&command, args.next().as_deref()),
             };
             if let Err(error) = result {
@@ -2393,6 +2404,8 @@ fn main() {
             let result = match command.as_str() {
                 "--signin-service" => linux_signin_host::run_service(),
                 "--signin-host" => service_config::require_host().and_then(|()| linux_signin_host::run_host()),
+                "--signin-enroll" => deploy_token::read(args.next().as_deref())
+                    .and_then(|token| linux_signin_host::admin(&command, Some(&token))),
                 _ => linux_signin_host::admin(&command, args.next().as_deref()),
             };
             if let Err(error) = result {
@@ -2405,8 +2418,8 @@ fn main() {
     // Mac mass rollout: enrol with a deploy token and set up always-on access, without any window.
     #[cfg(target_os = "macos")]
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--signin-enroll")) {
-        let token = std::env::args().nth(2);
-        if let Err(error) = service_config::require_host().and_then(|()| macos_rollout::enroll(token.as_deref())) {
+        let token = deploy_token::read(std::env::args().nth(2).as_deref());
+        if let Err(error) = token.and_then(|token| service_config::require_host().and_then(|()| macos_rollout::enroll(&token))) {
             eprintln!("{error}");
             std::process::exit(2);
         }
@@ -2854,15 +2867,22 @@ mod rollout_command_tests {
         let line = super::rollout_command_for("mrt_ab-c_D1", "https://download.mixel.ch/x.exe");
         assert!(line.starts_with("$t='mrt_ab-c_D1'; "));
         assert!(line.contains("'https://download.mixel.ch/x.exe'"));
-        assert!(line.contains("'--signin-enroll',$t"));
         assert!(!line.contains('"'));
+        // The token goes to the enrol step in the environment, never as an argument.
+        assert!(line.contains("$env:MIXEL_DEPLOY_TOKEN=$t; $p=Start-Process "));
+        assert!(line.contains("-ArgumentList '--signin-enroll' -Wait"));
+        assert!(!line.contains("'--signin-enroll',$t"));
+        assert_eq!(line.matches("$t").count(), 2, "{line}");
+        assert!(line.find("Start-Process $f '/S' -Wait").unwrap() < line.find("$env:MIXEL_DEPLOY_TOKEN=$t").unwrap(), "the installer does not inherit it");
+        assert!(line.contains("Remove-Item Env:MIXEL_DEPLOY_TOKEN"));
     }
     #[test]
-    fn mac_and_linux_commands_pipe_the_install_script_to_root_with_the_token() {
+    fn mac_and_linux_commands_pipe_the_install_script_to_root_without_the_token() {
         let token = "mrt_abcdefghijklmnopqrstuvwxyz-_0123";
         let (mac, linux) = super::unix_rollout_commands(token).unwrap();
-        assert_eq!(mac, format!("curl -fsSL https://remote.mixel.ch/install/macos.sh | sudo sh -s -- '{token}'"));
-        assert_eq!(linux, format!("curl -fsSL https://remote.mixel.ch/install/linux.sh | sudo sh -s -- '{token}'"));
+        assert_eq!(mac, "curl -fsSL https://remote.mixel.ch/install/macos.sh | sudo sh");
+        assert_eq!(linux, "curl -fsSL https://remote.mixel.ch/install/linux.sh | sudo sh");
+        assert!(!mac.contains("mrt_") && !linux.contains("mrt_"));
         assert!(super::unix_rollout_commands("mrt_short").is_err());
         assert!(super::unix_rollout_commands("mrt_abcdefghijklmnopqrstuvwxyz';rm -rf /").is_err());
     }

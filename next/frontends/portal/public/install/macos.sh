@@ -1,7 +1,15 @@
 #!/bin/sh
 # Mixel Remote for Mac: install and add this Mac to your company with a deploy link.
 #
-#   curl -fsSL https://remote.mixel.ch/install/macos.sh | sudo sh -s -- '<deploy token>'
+#   curl -fsSL https://remote.mixel.ch/install/macos.sh | sudo sh
+#
+# It asks for the deploy token (paste it from the portal; it is not shown). The token is never on a
+# command line, so it is neither in the shell history nor in the process list other users can read.
+# An MDM (running as root) sets it in the environment instead, from its secret store:
+#   export MIXEL_DEPLOY_TOKEN='<deploy token>'
+#   curl -fsSL https://remote.mixel.ch/install/macos.sh | sh
+# (from a non-root script: ... | sudo --preserve-env=MIXEL_DEPLOY_TOKEN sh; not sudo VAR=... sh, which
+# puts the token in sudo's arguments).
 #
 # Run it in Terminal while the person who uses the Mac is signed in (or as root from an MDM while
 # that person is signed in). What it does:
@@ -9,7 +17,8 @@
 #      size and SHA-256, that the app carries Mixel's Developer ID signature (team 5277F8NDH4) and
 #      that the signed app is at least the minimum version below;
 #   2. installs "Mixel Remote.app" in /Applications;
-#   3. runs the app's `--signin-enroll <token>` as the signed-in person, without any window: it
+#   3. runs the app's `--signin-enroll` as the signed-in person with the token on its standard input,
+#      without any window: it
 #      creates the Mac's key in that person's login Keychain, enrols it for the company of the
 #      deploy link and starts the always-on host for that account (a launch agent).
 # Once per Mac, macOS asks the person to allow Mixel Remote under System Settings › Privacy &
@@ -38,11 +47,33 @@ matches() {
 "*) return 1 ;; esac
   printf '%s\n' "$1" | grep -Eq "$2"
 }
+# The deploy token: MIXEL_DEPLOY_TOKEN (deployment tools) or pasted at a prompt that does not show it.
+# Never an argument: arguments are in the process list every user can read (ps) and stay in the
+# shell history. The variable is removed right away, so nothing started from here inherits it.
+read_token() {
+  TOKEN=${MIXEL_DEPLOY_TOKEN:-}
+  unset MIXEL_DEPLOY_TOKEN
+  if [ -z "$TOKEN" ]; then
+    ( : </dev/tty ) 2>/dev/null || die "no deploy token: run the command in a terminal (it asks for the token), or set MIXEL_DEPLOY_TOKEN"
+    printf 'Mixel Remote: paste the deploy token and press Enter (it is not shown): ' >/dev/tty
+    SAVED_TTY=$(stty -g </dev/tty 2>/dev/null || true)
+    trap 'restore_tty; exit 130' INT TERM HUP
+    stty -echo </dev/tty 2>/dev/null || true
+    IFS= read -r TOKEN </dev/tty || TOKEN=""
+    restore_tty
+    trap - INT TERM HUP
+    printf '\n' >/dev/tty
+  fi
+  # Pasting may add spaces or a carriage return; a second line stays and is refused.
+  TOKEN=$(printf '%s' "$TOKEN" | tr -d ' \t\r')
+  matches "$TOKEN" '^mrt_[A-Za-z0-9_-]{16,96}$' || die "the deploy token is missing or invalid (copy it from the deploy link in the portal)"
+}
+restore_tty() { [ -z "${SAVED_TTY:-}" ] || stty "$SAVED_TTY" </dev/tty 2>/dev/null || true; }
+ARGUMENT_REFUSED="the deploy token is not passed on the command line (other users could read it in the process list): run the command without it and paste the token when asked, or set MIXEL_DEPLOY_TOKEN"
 TEAM="5277F8NDH4"
 REQUIREMENT="anchor apple generic and certificate leaf[subject.OU] = \"$TEAM\""
 
 main() {
-  TOKEN=""
   APP=""
   IN_PLACE=0
   CHANNEL="stable"
@@ -52,16 +83,15 @@ main() {
       --in-place) IN_PLACE=1; shift ;;
       --channel) [ $# -ge 2 ] || die "--channel needs a name"; CHANNEL="$2"; shift 2 ;;
       -*) die "unknown option $1" ;;
-      *) [ -z "$TOKEN" ] || die "only one deploy token"; TOKEN="$1"; shift ;;
+      *) die "$ARGUMENT_REFUSED" ;;
     esac
   done
 
-  matches "$TOKEN" '^mrt_[A-Za-z0-9_-]{16,96}$' || die "the deploy token is missing or invalid (copy the whole command from the portal)"
   matches "$CHANNEL" '^[a-z0-9-]{1,20}$' || die "invalid channel"
   [ "$(uname -s)" = Darwin ] || die "this script is for macOS; use the Linux or Windows command for other computers"
   [ "$IN_PLACE" = 0 ] || [ -n "$APP" ] || die "--in-place needs --app"
   ROOT=0; [ "$(id -u)" = 0 ] && ROOT=1
-  [ "$ROOT" = 1 ] || [ "$IN_PLACE" = 1 ] || die "run this as administrator: put sudo in front of sh (... | sudo sh -s -- '<token>')"
+  [ "$ROOT" = 1 ] || [ "$IN_PLACE" = 1 ] || die "run this as administrator: put sudo in front of sh (... | sudo sh)"
 
   # The person the Mac is set up for: the one signed in at the screen.
   CONSOLE_USER=$(/usr/bin/stat -f %Su /dev/console 2>/dev/null || true)
@@ -71,6 +101,7 @@ main() {
   else
     CONSOLE_UID=$(/usr/bin/id -u)
   fi
+  read_token
 
   WORK=$(/usr/bin/mktemp -d /tmp/mixel-remote-install.XXXXXX)
   MOUNT=""
@@ -132,10 +163,11 @@ main() {
   say "adding this Mac to your company..."
   if [ "$ROOT" = 1 ]; then
     # In the person's own session, so the key goes into their login Keychain and the host starts there.
-    /bin/launchctl asuser "$CONSOLE_UID" /usr/bin/sudo -u "$CONSOLE_USER" "$PROGRAM" --signin-enroll "$TOKEN" \
+    # The token on standard input: printf is built into sh, so it is in no process's arguments.
+    printf '%s\n' "$TOKEN" | /bin/launchctl asuser "$CONSOLE_UID" /usr/bin/sudo -u "$CONSOLE_USER" "$PROGRAM" --signin-enroll \
       || die "this Mac could not be added (see the message above)"
   else
-    "$PROGRAM" --signin-enroll "$TOKEN" || die "this Mac could not be added (see the message above)"
+    printf '%s\n' "$TOKEN" | "$PROGRAM" --signin-enroll || die "this Mac could not be added (see the message above)"
   fi
   say "done. The Mac is in Devices on https://remote.mixel.ch."
 }

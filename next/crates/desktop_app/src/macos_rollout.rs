@@ -1,4 +1,5 @@
-//! Mac mass rollout: `Mixel-Remote --signin-enroll <deploy token>`.
+//! Mac mass rollout: `Mixel-Remote --signin-enroll`, with the deploy token in `MIXEL_DEPLOY_TOKEN`
+//! or on standard input (`deploy_token.rs`; never on the command line).
 //!
 //! Run as the person signed in on the Mac (the install script `https://remote.mixel.ch/install/macos.sh`
 //! runs it for the console user when started as root by `sudo` or an MDM). Without any window or
@@ -115,13 +116,11 @@ fn format_id(id: u32) -> String {
     digits.as_bytes().chunks(3).map(|chunk| String::from_utf8_lossy(chunk).into_owned()).collect::<Vec<_>>().join(" ")
 }
 
-pub fn valid_token(token: &str) -> bool {
-    token.starts_with("mrt_") && (20..=100).contains(&token.len()) && token.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte))
-}
-
-/// `--signin-enroll <token>`: enrol this Mac and start the always-on host for this account.
-pub fn enroll(token: Option<&str>) -> Result<(), String> {
-    let token = token.map(str::trim).filter(|token| valid_token(token)).ok_or("The deploy token is missing or invalid")?;
+/// `--signin-enroll`: enrol this Mac with the deploy token and start the always-on host for this account.
+pub fn enroll(token: &str) -> Result<(), String> {
+    if !crate::deploy_token::valid(token) {
+        return Err("The deploy token is missing or invalid".into());
+    }
     // SAFETY: geteuid only reads the effective user ID of this process.
     #[allow(unsafe_code)]
     let uid = unsafe { libc::geteuid() };
@@ -204,10 +203,11 @@ mod tests {
 
     #[test]
     fn only_deploy_tokens_are_accepted() {
-        assert!(valid_token("mrt_abcdefghijklmnopqrstuvwxyz0123456789-_"));
-        assert!(!valid_token("mri_abcdefghijklmnopqrstuvwxyz0123456789"));
-        assert!(!valid_token("mrt_short"));
-        assert!(!valid_token("mrt_abcdefghijklmnopqrstuvwxyz';touch /tmp/x"));
+        use crate::deploy_token::valid;
+        assert!(valid("mrt_abcdefghijklmnopqrstuvwxyz0123456789-_"));
+        assert!(!valid("mri_abcdefghijklmnopqrstuvwxyz0123456789"));
+        assert!(!valid("mrt_short"));
+        assert!(!valid("mrt_abcdefghijklmnopqrstuvwxyz';touch /tmp/x"));
         assert_eq!(format_id(123_456_789), "123 456 789");
     }
 

@@ -8,8 +8,9 @@
 //! Wayland greeter (the GDM default) lets no other program see or control it; the status then
 //! says so and nothing runs.
 //!
-//! Mass rollout (`--signin-enroll <deploy token>`, run as root by the install script
-//! `https://remote.mixel.ch/install/linux.sh`): the computer enrols its computer-wide key with the
+//! Mass rollout (`--signin-enroll`, run as root by the install script
+//! `https://remote.mixel.ch/install/linux.sh`, which pipes the deploy token in on standard input;
+//! `deploy_token.rs`, never on the command line): the computer enrols its computer-wide key with the
 //! token and the same service runs **always on**: on the sign-in screen and also in the signed-in
 //! person's X11 session (Wayland sessions cannot be shared without a person approving it on screen).
 use crate::device_identity::IdentityState;
@@ -266,8 +267,9 @@ pub fn admin(command: &str, argument: Option<&str>) -> Result<(), String> {
         }
         "--signin-enroll" => {
             // Rollout: enrol this computer with a company deploy token and turn on always-on access.
+            // `main` reads the token from MIXEL_DEPLOY_TOKEN or standard input (deploy_token.rs).
             let secret = argument.ok_or("Missing deploy token")?.trim().to_owned();
-            if !(20..=100).contains(&secret.len()) || !secret.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte)) {
+            if !crate::deploy_token::valid(&secret) {
                 return Err("The deploy token is invalid".into());
             }
             let name = computer_name();

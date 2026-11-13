@@ -108,10 +108,14 @@ test('owner manages groups, deploy links and devices', async ({ browser }) => {
   await expect(page.getByTestId('deploy-command')).toHaveValue(/--signin-enroll/);
   await expect(page.getByTestId('deploy-command')).toHaveValue(/store-api\.mixel\.ch.*\.exe/);
   await shot(page, '10-deploy-created');
-  // The same link on Macs and Linux computers: one line that pipes the install script to root.
+  await expect(page.getByTestId('deploy-command')).toHaveValue(/\$env:MIXEL_DEPLOY_TOKEN=\$t; /);
+  await expect(page.getByTestId('deploy-scripted')).toHaveCount(0);
+  // The same link on Macs and Linux computers: one line that pipes the install script to root; the
+  // script asks for the token (shown above with its own copy button), so the line never holds it.
   for (const [os, script] of [['macOS', 'macos'], ['Linux', 'linux']]) {
     await page.getByTestId('deploy-os').getByRole('button', { name: os, exact: true }).click();
-    await expect(page.getByTestId('deploy-command')).toHaveValue(`curl -fsSL https://remote.mixel.ch/install/${script}.sh | sudo sh -s -- '${token}'`);
+    await expect(page.getByTestId('deploy-command')).toHaveValue(`curl -fsSL https://remote.mixel.ch/install/${script}.sh | sudo sh`);
+    await expect(page.getByTestId('deploy-scripted')).toContainText('MIXEL_DEPLOY_TOKEN');
     await shot(page, `10-deploy-created-${script}`);
   }
   await page.getByTestId('deploy-os').getByRole('button', { name: 'Windows', exact: true }).click();
