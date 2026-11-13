@@ -97,4 +97,10 @@ done
 
 say "adding this computer to your company..."
 "$APP" --signin-enroll "$TOKEN" || die "this computer could not be added (see the message above)"
-say "done. The computer is in Devices on https://remote.mixel.ch and reachable with always-on access."
+sleep 6
+if [ "$(cat /var/lib/mixel-remote/signin-host-state 2>/dev/null)" = wayland ]; then
+  say "done. The computer is in Devices on https://remote.mixel.ch. Note: its screen uses Wayland, which cannot be shared"
+  say "without someone approving it on screen. For always-on access use an X11 session (GDM: WaylandEnable=false in /etc/gdm3/custom.conf)."
+else
+  say "done. The computer is in Devices on https://remote.mixel.ch and reachable with always-on access."
+fi
