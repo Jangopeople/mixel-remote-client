@@ -80,6 +80,13 @@ public static class DemoFixtures
         engine.Reply("this_computer_name", "\"ANNA-PC\"");
         engine.ReplyValue("capture_targets", new List<CaptureTarget> { new() { Id = "dxgi:0:0:\\\\.\\DISPLAY1", Name = "\\\\.\\DISPLAY1 · 2560 × 1440", FullDisplay = true } });
         engine.Reply("quick_phone_claim", "false");
+        engine.Reply("saas_favorites", """[{"device_id":"d1000000-0000-4000-8000-000000000002","created_at":"2026-11-10T08:00:00Z"}]""");
+        engine.Reply("saas_recent_devices", """[{"device_id":"d1000000-0000-4000-8000-000000000001","last_connected_at":"2026-11-13T09:12:00Z"},{"device_id":"d1000000-0000-4000-8000-000000000002","last_connected_at":"2026-11-12T15:40:00Z"}]""");
+        engine.Reply("saas_session_report", """
+            [{"session_id":"e1000000-0000-4000-8000-000000000001","technician_id":"22222222-2222-4222-8222-222222222222","technician_name":"Marco Rossi","technician_email":"marco@muster.test","device_id":"d1000000-0000-4000-8000-000000000001","device_name":"Reception PC","connection_id":731204118,"started_at":"2026-11-13T09:12:00Z","ended_at":"2026-11-13T09:31:00Z","duration_seconds":1140,"kind":"attended","colleague":false,"note":"Printer driver reinstalled, test page OK."},
+             {"session_id":"e1000000-0000-4000-8000-000000000002","technician_id":"11111111-2222-4333-8444-555555555555","technician_name":"Anna Muster","technician_email":"anna@muster.test","device_id":"d1000000-0000-4000-8000-000000000002","device_name":"Accounting Mac","connection_id":268455901,"started_at":"2026-11-12T15:40:00Z","ended_at":"2026-11-12T15:52:00Z","duration_seconds":720,"kind":"unattended","colleague":false,"note":null}]
+            """);
+        engine.Reply("remote_draw", "true");
     }
 
     public static void Incoming(MockEngine engine)
@@ -96,7 +103,7 @@ public static class DemoFixtures
             Phase = "active", Host = ThisComputer, Session = SessionId, Consent = ConsentId, Peer = 731_204_118, Received = 12,
             Control = true, Clipboard = true, Files = true, Recording = new RecordingView { Phase = "ready" }, Displays = 2,
             HostActions = actions ?? ["privacy", "block", "pointer", "lock", "lockend", "sas", "restart", "sound", "meet"],
-            PeerFeatures = ["join", "switch"], PrintJobs = [@"C:\Users\anna\AppData\Local\ch.mixel.remote.next.qa\print\Remote print.pdf"],
+            PeerFeatures = ["join", "switch", "draw"], PrintJobs = [@"C:\Users\anna\AppData\Local\ch.mixel.remote.next.qa\print\Remote print.pdf"],
         });
         engine.ReplyValue("remote_chat_messages", new List<ChatMessage>
         {
@@ -170,6 +177,20 @@ public static class DemoFixtures
             await app.Session.ReadTools();
         }
         if (name == "consent") await app.Host.LoadSources();
+        if (name == "account") await app.Company.LoadReport();
+        if (name == "session")
+        {
+            app.Session.Drawing = true;
+            app.Session.DrawColor = 0;
+            app.Session.BeginStroke(0.55, 0.30);
+            foreach (var step in Enumerable.Range(1, 12)) app.Session.ContinueStroke(0.55 + step * 0.012, 0.30 + Math.Sin(step / 2.0) * 0.03);
+            app.Session.EndStroke();
+            app.Session.DrawTool = "arrow";
+            app.Session.BeginStroke(0.30, 0.75);
+            app.Session.ContinueStroke(0.45, 0.62);
+            app.Session.EndStroke();
+            app.Session.DrawTool = "pen";
+        }
         return app;
     }
 }

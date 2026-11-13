@@ -29,6 +29,7 @@ internal sealed class AccountPage : PageView
             return Page(L("Account"), "", 860,
                 ProfileCard(profile),
                 Company.Tenant is not null ? CompanyCard() : Company.Loaded && !profile.Staff ? CreateCompanyCard(profile) : null,
+                Company.Tenant is not null ? ReportCard() : null,
                 DangerCard(),
                 Ui.Message(App.Error));
         }
@@ -224,6 +225,46 @@ internal sealed class AccountPage : PageView
         }
         return Ui.Card([.. items]);
     }
+
+    /// <summary>Sessions of the last 30 days, with notes; exported as CSV.</summary>
+    private Border ReportCard()
+    {
+        var company = Company;
+        var items = new List<UIElement?>
+        {
+            Ui.Split(Ui.CardTitle(L("Session report"), "\uE9F9"), Ui.Row(8,
+                Ui.Plain(company.ReportLoaded ? L("Refresh") : L("Show the last 30 days"), () => _ = company.LoadReport(), !company.Working),
+                company.Report.Count > 0 ? Ui.Plain(L("Export CSV…"), () => _ = Export(), true, "\uE896") : null)),
+            Ui.Text(company.Administers ? L("Every session of your company's technicians.") : L("Your own sessions."), secondary: true),
+        };
+        if (company.ReportLoaded && company.Report.Count == 0) items.Add(Ui.Text(L("No sessions in the last 30 days."), secondary: true));
+        foreach (var row in company.Report.Take(50))
+        {
+            var when = Format.ParseDate(row.StartedAt)?.ToLocalTime().ToString("g", Translator.Shared.Culture) ?? row.StartedAt;
+            var minutes = Math.Max(1, (int)Math.Round(row.DurationSeconds / 60.0));
+            var who = row.TechnicianName ?? row.TechnicianEmail ?? L("Deleted account");
+            var line = $"{when} · {who} → {row.DeviceName} ({Format.RemoteId(row.ConnectionId)}) · {L("%d min", minutes)} · {(row.Kind == "unattended" ? L("Unattended") : L("Attended"))}";
+            items.Add(Ui.Split(Ui.Column(1, Ui.Text(line), row.Note is { Length: > 0 } note ? Ui.Caption(note) : null),
+                Ui.Plain(L("Note…"), () => _ = Note(row))));
+        }
+        if (company.Report.Count > 50) items.Add(Ui.Caption(L("%d more in the export.", company.Report.Count - 50)));
+        return Ui.Card([.. items]);
+    }
+
+    private async Task Export()
+    {
+        if (await App.ChooseSaveLocation($"Mixel Remote sessions {DateTime.Now:yyyy-MM-dd}.csv") is not { } path) return;
+        await File.WriteAllTextAsync(path, CompanyModel.ReportCsv(Company.Report), new System.Text.UTF8Encoding(true));
+        Company.Notice = L("Saved %@", Path.GetFileName(path));
+    }
+
+    private Task Note(Models.SessionRow row) => Dialogs.Form(Root, L("Session note"), $"{row.DeviceName} · {Format.RemoteId(row.ConnectionId)}", [(L("Note"), row.Note ?? "")], L("Save"),
+        async values =>
+        {
+            if (!await Company.AddSessionNote(values[0], row.SessionId, null)) return Company.Error.Length > 0 ? Company.Error : L("Enter a note");
+            await Company.LoadReport();
+            return null;
+        });
 
     private Task Rename() => Dialogs.Form(Root, L("Rename company"), null, [(L("Company name"), Company.Tenant?.Name ?? "")], L("Rename"),
         async values => await Company.Rename(values[0].Trim()) ? null : Company.Error);

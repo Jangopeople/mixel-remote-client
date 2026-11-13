@@ -96,7 +96,9 @@ public sealed class DevicesModel : Observable
                 if (wanted == 0 || companyAll.Count == 0)
                 {
                     var rows = await app.Engine.RunAsync<List<SaasDevice>?>("saas_devices", ("tenant", tenant.TenantId), ("group", GroupFilter), ("search", Search.Length == 0 ? null : Search));
-                    companyAll = [.. (rows ?? []).Select(row => row.AsDevice()).OfType<Device>()];
+                    await LoadPersonal();
+                    // Favorites first, otherwise in the company's order.
+                    companyAll = [.. (rows ?? []).Select(row => row.AsDevice()).OfType<Device>().OrderByDescending(device => Favorites.Contains(device.DeviceId))];
                     if (Manages && GroupsOn)
                     {
                         try { Groups = await app.Engine.RunAsync<List<SaasGroup>>("saas_groups", ("tenant", tenant.TenantId)); }
@@ -300,6 +302,47 @@ public sealed class DevicesModel : Observable
                 ("tenant", tenant.TenantId), ("label", label), ("days", days), ("computers", computers), ("group", group));
         })
         : Task.FromResult(false);
+
+    // ---- Favorites and recent connections (company devices) ----
+
+    private HashSet<string> favorites = [];
+    private List<SaasRecentDevice> recent = [];
+    /// <summary>Device ids the person marked as favorites (shown first).</summary>
+    public HashSet<string> Favorites { get => favorites; private set => SetList(ref favorites, value); }
+    /// <summary>The person's own recent sessions, newest first.</summary>
+    public List<SaasRecentDevice> Recent { get => recent; private set => SetList(ref recent, value); }
+
+    public bool IsFavorite(Device device) => Favorites.Contains(device.DeviceId);
+
+    /// <summary>The recent devices that are in the list (newest first, at most five).</summary>
+    public IEnumerable<Device> RecentDevices =>
+        Recent.Select(row => companyAll.FirstOrDefault(device => device.DeviceId == row.DeviceId)).OfType<Device>().Take(5);
+
+    internal async Task LoadPersonal()
+    {
+        if (Tenant is not { } tenant) return;
+        try { Favorites = [.. (await app.Engine.RunAsync<List<SaasFavorite>>("saas_favorites", ("tenant", tenant.TenantId))).Select(row => row.DeviceId)]; }
+        catch (EngineFailure) { }
+        try { Recent = await app.Engine.RunAsync<List<SaasRecentDevice>>("saas_recent_devices", ("tenant", tenant.TenantId), ("max_count", 10)); }
+        catch (EngineFailure) { }
+    }
+
+    public async Task ToggleFavorite(Device device)
+    {
+        if (Tenant is not { } tenant) return;
+        var wanted = !IsFavorite(device);
+        try
+        {
+            await app.Engine.PerformAsync("saas_set_favorite", ("tenant", tenant.TenantId), ("device", device.DeviceId), ("favorite", wanted));
+            var next = new HashSet<string>(Favorites);
+            if (wanted) next.Add(device.DeviceId);
+            else next.Remove(device.DeviceId);
+            Favorites = next;
+            companyAll = [.. companyAll.OrderByDescending(item => Favorites.Contains(item.DeviceId))];
+            Devices = [.. companyAll.Skip(Page * PageSize).Take(PageSize)];
+        }
+        catch (EngineFailure failure) { Error = failure.Translated; }
+    }
 
     // ---- Mixel team: mass rollout for an ISM company ----
 

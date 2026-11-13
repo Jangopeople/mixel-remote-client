@@ -207,6 +207,37 @@ public sealed record SaasDevice
         : null;
 }
 
+public sealed record SaasFavorite
+{
+    public string DeviceId { get; init; } = "";
+    public string CreatedAt { get; init; } = "";
+}
+
+public sealed record SaasRecentDevice
+{
+    public string DeviceId { get; init; } = "";
+    public string LastConnectedAt { get; init; } = "";
+}
+
+/// One session of the company's session report (saas_session_report).
+public sealed record SessionRow
+{
+    public string SessionId { get; init; } = "";
+    public string? TechnicianId { get; init; }
+    public string? TechnicianName { get; init; }
+    public string? TechnicianEmail { get; init; }
+    public string DeviceId { get; init; } = "";
+    public string DeviceName { get; init; } = "";
+    public uint ConnectionId { get; init; }
+    public string StartedAt { get; init; } = "";
+    public string? EndedAt { get; init; }
+    public long DurationSeconds { get; init; }
+    /// <summary>attended or unattended.</summary>
+    public string Kind { get; init; } = "";
+    public bool Colleague { get; init; }
+    public string? Note { get; init; }
+}
+
 public sealed record SaasPresence
 {
     public string DeviceId { get; init; } = "";

@@ -250,6 +250,46 @@ internal sealed class SessionView : Grid
         if (session.CanSwitchSides) Tool("\uE8AB", L("Switch sides"), () => _ = session.SwitchSides());
         else if (remote.Offers("meet")) Tool("\uE7F4", L("Show my screen"), () => _ = session.ShowMyScreen());
         Tool("\uE895", L("Renew connection"), () => _ = session.Renew());
+        if (session.CanDraw)
+        {
+            actions.Children.Add(new AppBarSeparator());
+            var pen = Ui.IconButton("\uE70F", L("Draw on the screen") + ": " + (session.Drawing ? L("on") : L("off")), () => { session.Drawing = !session.Drawing; Rebuild(); }, true, session.Drawing);
+            actions.Children.Add(pen);
+            if (session.Drawing)
+            {
+                var flyout = new MenuFlyout();
+                foreach (var (key, label) in new[] { ("pen", L("Pen")), ("highlighter", L("Highlighter")), ("arrow", L("Arrow")) })
+                {
+                    var item = new ToggleMenuFlyoutItem { Text = label, IsChecked = session.DrawTool == key };
+                    item.Click += (sender, args) => { session.DrawTool = key; Rebuild(); };
+                    flyout.Items.Add(item);
+                }
+                flyout.Items.Add(new MenuFlyoutSeparator());
+                string[] colours = [L("Red"), L("Yellow"), L("Green"), L("Blue"), L("White")];
+                for (byte index = 0; index < colours.Length; index++)
+                {
+                    var chosen = index;
+                    var (r, g, b) = SessionModel.Palette[index];
+                    var item = new ToggleMenuFlyoutItem { Text = colours[index], IsChecked = session.DrawColor == index, Icon = new FontIcon { Glyph = "\uE91F", Foreground = new SolidColorBrush(Windows.UI.Color.FromArgb(255, r, g, b)) } };
+                    item.Click += (sender, args) => { session.DrawColor = chosen; Rebuild(); };
+                    flyout.Items.Add(item);
+                }
+                flyout.Items.Add(new MenuFlyoutSeparator());
+                for (byte width = 1; width <= 4; width++)
+                {
+                    var chosen = width;
+                    var item = new ToggleMenuFlyoutItem { Text = L("Size %d", width), IsChecked = session.DrawWidth == width };
+                    item.Click += (sender, args) => { session.DrawWidth = chosen; Rebuild(); };
+                    flyout.Items.Add(item);
+                }
+                var options = new DropDownButton { Content = Ui.Icon("\uE790", 16), Flyout = flyout, Padding = new Thickness(9, 7, 9, 7) };
+                AutomationProperties.SetName(options, L("Drawing tool, colour and size"));
+                ToolTipService.SetToolTip(options, L("Drawing tool, colour and size"));
+                actions.Children.Add(options);
+                Tool("\uE7A7", L("Undo drawing"), session.UndoDrawing, session.Strokes.Count > 0);
+                Tool("\uE74D", L("Clear drawing"), session.ClearDrawing, session.Strokes.Count > 0);
+            }
+        }
         actions.Children.Add(new AppBarSeparator());
         void Panel(string key, string glyph, string name)
         {

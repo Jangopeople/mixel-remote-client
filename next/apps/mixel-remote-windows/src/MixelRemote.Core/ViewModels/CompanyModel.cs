@@ -235,6 +235,57 @@ public sealed class CompanyModel : Observable
         return done;
     }
 
+    // ---- Session report ----
+
+    private List<SessionRow> report = [];
+    private bool reportLoaded;
+    public List<SessionRow> Report { get => report; private set => SetList(ref report, value); }
+    public bool ReportLoaded { get => reportLoaded; private set => Set(ref reportLoaded, value); }
+
+    /// <summary>Sessions of the last <paramref name="days"/> days (owners and administrators see every technician's).</summary>
+    public async Task LoadReport(int days = 30)
+    {
+        if (Tenant is not { } tenant) return;
+        Error = "";
+        try
+        {
+            var from = DateTimeOffset.UtcNow.AddDays(-days).ToString("yyyy-MM-ddTHH:mm:ssZ", System.Globalization.CultureInfo.InvariantCulture);
+            Report = await app.Engine.RunAsync<List<SessionRow>>("saas_session_report", ("tenant", tenant.TenantId), ("from", from), ("to", null), ("technician", null), ("device", null));
+        }
+        catch (EngineFailure failure) { Error = failure.Translated; Report = []; }
+        ReportLoaded = true;
+    }
+
+    /// <summary>The report as CSV (UTF-8, semicolons for Swiss spreadsheets, a header row).</summary>
+    public static string ReportCsv(IEnumerable<SessionRow> rows)
+    {
+        static string Cell(string? value) => "\"" + (value ?? "").Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
+        var lines = new List<string> { "Started;Ended;Minutes;Technician;E-mail;Device;Remote ID;Kind;Colleague;Note" };
+        foreach (var row in rows)
+        {
+            lines.Add(string.Join(';', Cell(row.StartedAt), Cell(row.EndedAt), (row.DurationSeconds / 60.0).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture),
+                Cell(row.TechnicianName), Cell(row.TechnicianEmail), Cell(row.DeviceName), row.ConnectionId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                row.Kind, row.Colleague ? "yes" : "no", Cell(row.Note)));
+        }
+        return string.Join("\r\n", lines) + "\r\n";
+    }
+
+    /// <summary>A note on a session: by its id, or the newest session to this Remote ID.</summary>
+    public async Task<bool> AddSessionNote(string note, string? session, uint? connection)
+    {
+        if (Tenant is not { } tenant || note.Trim().Length == 0) return false;
+        try
+        {
+            await app.Engine.PerformAsync("saas_session_note", ("tenant", tenant.TenantId), ("note", note.Trim()), ("session", session), ("connection", connection));
+            return true;
+        }
+        catch (EngineFailure failure)
+        {
+            Error = failure.Translated;
+            return false;
+        }
+    }
+
     /// <summary>Opens the portal page of a company the account administers (ISM companies).</summary>
     public Task OpenCompanySettings(string company) => app.Act(async () =>
     {

@@ -607,6 +607,75 @@ public sealed class ViewModelTests
     }
 
     [TestMethod]
+    public async Task Favorites_come_first_and_recent_devices_are_offered()
+    {
+        var (engine, app) = await Company();
+        Assert.AreEqual("Accounting Mac", app.Devices.Devices[0].Name, "the favorite first");
+        Assert.IsTrue(app.Devices.IsFavorite(app.Devices.Devices[0]));
+        CollectionAssert.AreEqual(new[] { "Reception PC", "Accounting Mac" }, app.Devices.RecentDevices.Select(device => device.Name).ToArray());
+        var reception = app.Devices.Devices.First(device => device.Name == "Reception PC");
+        await app.Devices.ToggleFavorite(reception);
+        var call = engine.CallsOf("saas_set_favorite").Single().Object;
+        Assert.IsTrue(call["favorite"]!.GetValue<bool>());
+        Assert.AreEqual(reception.DeviceId, call["device"]!.GetValue<string>());
+        Assert.IsTrue(app.Devices.IsFavorite(reception));
+    }
+
+    [TestMethod]
+    public async Task Session_report_loads_exports_and_takes_notes()
+    {
+        var (engine, app) = await Company();
+        await app.Company.LoadReport();
+        Assert.AreEqual(2, app.Company.Report.Count);
+        StringAssert.StartsWith(engine.CallsOf("saas_session_report").Single().Object["from"]!.GetValue<string>(), "20");
+        var csv = CompanyModel.ReportCsv(app.Company.Report);
+        StringAssert.Contains(csv, "\"Printer driver reinstalled, test page OK.\"");
+        StringAssert.Contains(csv, ";19.0;");
+        Assert.AreEqual(3, csv.Split("\r\n", StringSplitOptions.RemoveEmptyEntries).Length);
+        Assert.IsTrue(await app.Company.AddSessionNote("  Done  ", null, 731_204_118));
+        var note = engine.CallsOf("saas_session_note").Single().Object;
+        Assert.AreEqual("Done", note["note"]!.GetValue<string>());
+        Assert.AreEqual(731_204_118u, note["connection"]!.GetValue<uint>());
+    }
+
+    [TestMethod]
+    public async Task Drawing_sends_strokes_in_parts_and_undo_and_clear()
+    {
+        var engine = new MockEngine();
+        DemoFixtures.Viewing(engine);
+        engine.Reply("remote_draw", "true");
+        var app = await DemoFixtures.App(engine);
+        Assert.IsTrue(app.Session.CanDraw);
+        app.Session.Drawing = true;
+        app.Session.DrawColor = 3;
+        app.Session.BeginStroke(0.1, 0.1);
+        for (var step = 1; step <= 100; step++) app.Session.ContinueStroke(0.1 + step * 0.005, 0.2);
+        app.Session.EndStroke();
+        await Task.Delay(20);
+        var messages = engine.CallsOf("remote_draw").Select(call => call.Object["message"]!.AsObject()).ToList();
+        Assert.IsTrue(messages.All(message => message["points"]!.AsArray().Count <= 64));
+        Assert.AreEqual(101, messages.Sum(message => message["points"]!.AsArray().Count), "every point once");
+        Assert.IsTrue(messages[^1]["done"]!.GetValue<bool>());
+        Assert.AreEqual(3, messages[0]["color"]!.GetValue<int>());
+        app.Session.DrawTool = "arrow";
+        app.Session.BeginStroke(0.5, 0.5);
+        app.Session.ContinueStroke(0.6, 0.6);
+        app.Session.ContinueStroke(0.7, 0.7);
+        app.Session.EndStroke();
+        await Task.Delay(20);
+        var arrow = engine.CallsOf("remote_draw").Select(call => call.Object["message"]!.AsObject()).Last();
+        Assert.AreEqual("arrow", arrow["tool"]!.GetValue<string>());
+        Assert.AreEqual(2, arrow["points"]!.AsArray().Count, "an arrow sends its two ends");
+        app.Session.UndoDrawing();
+        app.Session.ClearDrawing();
+        await Task.Delay(20);
+        var kinds = engine.CallsOf("remote_draw").Select(call => call.Object["message"]!["kind"]!.GetValue<string>()).TakeLast(2).ToArray();
+        CollectionAssert.AreEqual(new[] { "undo", "clear" }, kinds);
+        Assert.AreEqual(0, app.Session.Strokes.Count);
+        app.Session.Clear();
+    }
+
+    [TestMethod]
     public async Task Every_demo_screen_builds_its_model()
     {
         foreach (var screen in DemoFixtures.Screens)

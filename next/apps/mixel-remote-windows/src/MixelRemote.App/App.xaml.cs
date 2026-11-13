@@ -149,6 +149,18 @@ public partial class App : Application
         var viewing = remote.Viewing || remote.Phase == "outgoing" || (remote.Phase == "negotiating" && !remote.Sharing && remote.Session is not null);
         if (viewing) session?.Present();
         else session?.Dismiss();
+        // After a session to a company computer: offer a note for the session report.
+        if (!remote.InSession && Model.Session.NoteFor is { } helped && main is not null)
+        {
+            Model.Session.NoteTaken();
+            main.Show();
+            _ = Shell.Dialogs.Form(main.Root.XamlRoot, L("Session note"), L("What was done on computer %@? The note appears in the session report.", Format.RemoteId(helped)),
+                [(L("Note"), "")], L("Save"), async values =>
+                {
+                    if (values[0].Trim().Length == 0) return null;
+                    return await Model.Company.AddSessionNote(values[0], null, helped) ? null : Model.Company.Error;
+                });
+        }
         tray?.Update();
     }
 

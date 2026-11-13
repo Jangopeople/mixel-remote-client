@@ -57,6 +57,7 @@ internal sealed class RemoteScreen : Grid
         SizeChanged += (_, _) => Resize();
         panel.CompositionScaleChanged += (_, _) => Resize();
         session.FrameArrived += (sender, frame) => Draw(frame);
+        session.DrawingChanged += (sender, args) => { if (last is not null) Draw(last); };
         input.PointerMoved += (sender, e) => Moved(e);
         input.PointerPressed += (sender, e) => Pressed(e);
         input.PointerReleased += (sender, e) => Released(e);
@@ -155,6 +156,7 @@ internal sealed class RemoteScreen : Grid
             using (var drawing = chain.CreateDrawingSession(Colors.Black))
             {
                 drawing.DrawImage(bitmap, picture, new Rect(0, 0, frame.Width, frame.Height), 1, fit >= 1 ? CanvasImageInterpolation.NearestNeighbor : CanvasImageInterpolation.Linear);
+                DrawStrokes(drawing);
             }
             chain.Present();
         }
@@ -163,6 +165,37 @@ internal sealed class RemoteScreen : Grid
             App.Log("Direct3D device lost; the picture resumes with the next frame");
             chain = null;
             bitmap = null;
+        }
+    }
+
+    /// <summary>The technician's own drawing over the picture, as the other computer shows it.</summary>
+    private void DrawStrokes(Microsoft.Graphics.Canvas.CanvasDrawingSession drawing)
+    {
+        double[] pen = [3, 5, 8, 12], highlight = [14, 20, 28, 36];
+        foreach (var stroke in session.Strokes)
+        {
+            if (stroke.Points.Count == 0) continue;
+            var (r, g, b) = SessionModel.Palette[Math.Min(stroke.Color, SessionModel.Palette.Length - 1)];
+            var color = Windows.UI.Color.FromArgb(stroke.Tool == "highlighter" ? (byte)110 : (byte)255, r, g, b);
+            var step = Math.Clamp((int)stroke.Width, 1, 4) - 1;
+            var width = (float)Math.Max(1, (stroke.Tool == "highlighter" ? highlight[step] : pen[step]) * picture.Height / 1080);
+            System.Numerics.Vector2 At((ushort X, ushort Y) point) => new((float)(picture.X + point.X / 65535.0 * picture.Width), (float)(picture.Y + point.Y / 65535.0 * picture.Height));
+            var style = new Microsoft.Graphics.Canvas.Geometry.CanvasStrokeStyle { StartCap = Microsoft.Graphics.Canvas.Geometry.CanvasCapStyle.Round, EndCap = Microsoft.Graphics.Canvas.Geometry.CanvasCapStyle.Round, LineJoin = Microsoft.Graphics.Canvas.Geometry.CanvasLineJoin.Round };
+            if (stroke.Tool == "arrow" && stroke.Points.Count > 1)
+            {
+                var (from, to) = (At(stroke.Points[0]), At(stroke.Points[^1]));
+                drawing.DrawLine(from, to, color, width, style);
+                var angle = Math.Atan2(to.Y - from.Y, to.X - from.X);
+                var head = width * 4;
+                foreach (var side in new[] { -0.5, 0.5 })
+                {
+                    var end = new System.Numerics.Vector2((float)(to.X - head * Math.Cos(angle + side)), (float)(to.Y - head * Math.Sin(angle + side)));
+                    drawing.DrawLine(to, end, color, width, style);
+                }
+                continue;
+            }
+            for (var index = 1; index < stroke.Points.Count; index++) drawing.DrawLine(At(stroke.Points[index - 1]), At(stroke.Points[index]), color, width, style);
+            if (stroke.Points.Count == 1) drawing.FillCircle(At(stroke.Points[0]), width / 2, color);
         }
     }
 
@@ -196,6 +229,11 @@ internal sealed class RemoteScreen : Grid
 
     private void Moved(PointerRoutedEventArgs e)
     {
+        if (session.Drawing)
+        {
+            if (pressed.ContainsKey(0) && PicturePoint(e, clamp: true) is { } at) session.ContinueStroke(at.X, at.Y);
+            return;
+        }
         if (!FitToWindow && last is not null)
         {
             pointer = e.GetCurrentPoint(input).Position;
@@ -218,6 +256,17 @@ internal sealed class RemoteScreen : Grid
     private void Pressed(PointerRoutedEventArgs e)
     {
         input.Focus(FocusState.Pointer);
+        if (session.Drawing)
+        {
+            if (PicturePoint(e) is { } at && e.GetCurrentPoint(input).Properties.IsLeftButtonPressed)
+            {
+                pressed[0] = 1;
+                input.CapturePointer(e.Pointer);
+                session.BeginStroke(at.X, at.Y);
+            }
+            e.Handled = true;
+            return;
+        }
         if (!session.Controllable || session.PointerMode || PicturePoint(e) is not { } point) return;
         var properties = e.GetCurrentPoint(input).Properties;
         if (Button(properties) is not { } button) return;
@@ -235,6 +284,13 @@ internal sealed class RemoteScreen : Grid
 
     private void Released(PointerRoutedEventArgs e)
     {
+        if (session.Drawing || pressed.ContainsKey(0))
+        {
+            if (pressed.Remove(0)) session.EndStroke();
+            input.ReleasePointerCaptures();
+            e.Handled = true;
+            return;
+        }
         var properties = e.GetCurrentPoint(input).Properties;
         if (Button(properties) is not { } button || !pressed.Remove(e.Pointer.PointerId * 8 + button, out var clicks)) return;
         if (PicturePoint(e, clamp: true) is { } point) session.MoveTo(point.X, point.Y);

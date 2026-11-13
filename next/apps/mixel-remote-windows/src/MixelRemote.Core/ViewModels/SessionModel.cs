@@ -91,7 +91,12 @@ public sealed class SessionModel : Observable
     {
         if (next.Session != toggleSession)
         {
+            // A session this computer viewed ended: offer a note on it (companies only).
+            if (toggleSession is not null && previous.Viewing && previous.Peer is { } helped && app.Company.Tenant is not null) NoteFor = helped;
             toggleSession = next.Session;
+            strokes.Clear();
+            current = null;
+            Drawing = false;
             Privacy = false;
             BlockInput = false;
             LockWhenDone = false;
@@ -281,6 +286,129 @@ public sealed class SessionModel : Observable
         Send(new InputEvent.Key(usage, false));
         foreach (var modifier in modifiers.Reverse()) Send(new InputEvent.Key(modifier, false));
     }
+
+    // ---- Drawing on the remote screen ----
+
+    /// <summary>The drawing colours (same order as the engine's palette).</summary>
+    public static readonly (byte R, byte G, byte B)[] Palette = [(0xE5, 0x32, 0x2D), (0xFF, 0xD4, 0x00), (0x22, 0xB1, 0x4C), (0x1E, 0x7B, 0xFF), (0xFF, 0xFF, 0xFF)];
+    public static readonly string[] DrawTools = ["pen", "highlighter", "arrow"];
+
+    /// <summary>A stroke drawn here (points 0…65535), kept to show it locally and to undo it.</summary>
+    public sealed class Stroke
+    {
+        public ushort Id { get; init; }
+        public string Tool { get; init; } = "pen";
+        public byte Color { get; init; }
+        public byte Width { get; init; }
+        public List<(ushort X, ushort Y)> Points { get; } = [];
+        public int Sent { get; set; }
+    }
+
+    private bool drawing;
+    private string drawTool = "pen";
+    private byte drawColor;
+    private byte drawWidth = 2;
+    private ushort nextStroke = 1;
+    private Stroke? current;
+    private readonly List<Stroke> strokes = [];
+
+    /// <summary>The other computer shows drawings (feature "draw").</summary>
+    public bool CanDraw => Remote.Viewing && Remote.PeerFeatures.Contains("draw");
+    /// <summary>Pointer drags draw instead of moving the remote mouse.</summary>
+    public bool Drawing { get => drawing && CanDraw; set => Set(ref drawing, value); }
+    public string DrawTool { get => drawTool; set => Set(ref drawTool, DrawTools.Contains(value) ? value : "pen"); }
+    public byte DrawColor { get => drawColor; set => Set(ref drawColor, (byte)Math.Min(value, Palette.Length - 1)); }
+    public byte DrawWidth { get => drawWidth; set => Set(ref drawWidth, (byte)Math.Clamp((int)value, 1, 4)); }
+    public IReadOnlyList<Stroke> Strokes => strokes;
+    /// <summary>Raised when the local drawing changed (the screen redraws).</summary>
+    public event EventHandler? DrawingChanged;
+
+    public void BeginStroke(double x, double y)
+    {
+        if (!Drawing) return;
+        current = new Stroke { Id = nextStroke++, Tool = DrawTool, Color = DrawColor, Width = DrawWidth };
+        if (nextStroke == 0) nextStroke = 1;
+        strokes.Add(current);
+        current.Points.Add((Normalized(x), Normalized(y)));
+        SendStroke(done: false);
+    }
+
+    public void ContinueStroke(double x, double y)
+    {
+        if (current is null || current.Points.Count >= 4096) return;
+        var point = (Normalized(x), Normalized(y));
+        if (current.Points[^1] == point) return;
+        // An arrow is a straight line: its end follows the pointer.
+        if (current.Tool == "arrow" && current.Points.Count > 1) current.Points[^1] = point;
+        else current.Points.Add(point);
+        if (current.Points.Count - current.Sent >= 8 || current.Tool == "arrow") SendStroke(done: false);
+        DrawingChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void EndStroke()
+    {
+        if (current is null) return;
+        SendStroke(done: true);
+        current = null;
+        DrawingChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>The points not sent yet, in messages of at most 64 points (an arrow: always its two ends).</summary>
+    private void SendStroke(bool done)
+    {
+        if (current is not { } stroke || SessionId is not { } session) return;
+        var points = stroke.Tool == "arrow"
+            ? stroke.Points.Count > 1 ? [stroke.Points[0], stroke.Points[^1]] : [stroke.Points[0]]
+            : stroke.Points.Skip(stroke.Sent).ToList();
+        if (stroke.Tool == "arrow") stroke.Sent = 0;
+        do
+        {
+            var part = points.Take(64).ToList();
+            points = [.. points.Skip(64)];
+            var last = points.Count == 0;
+            if (stroke.Tool != "arrow") stroke.Sent += part.Count;
+            var message = new System.Text.Json.Nodes.JsonObject
+            {
+                ["kind"] = "stroke", ["id"] = stroke.Id, ["tool"] = stroke.Tool, ["color"] = stroke.Color, ["width"] = stroke.Width,
+                ["points"] = new System.Text.Json.Nodes.JsonArray([.. part.Select(item => (System.Text.Json.Nodes.JsonNode)new System.Text.Json.Nodes.JsonArray(item.Item1, item.Item2))]),
+                ["done"] = done && last,
+            };
+            _ = SendDraw(session, message);
+        }
+        while (points.Count > 0);
+    }
+
+    private async Task SendDraw(string session, System.Text.Json.Nodes.JsonNode message)
+    {
+        try
+        {
+            var reply = await app.Engine.CallAsync("remote_draw", new System.Text.Json.Nodes.JsonObject { ["session"] = session, ["message"] = message.DeepClone() }.ToJsonString());
+            if (reply == "false") Notice = L("The other computer cannot show drawings right now.");
+        }
+        catch (EngineFailure failure) { Error = failure.Translated; }
+    }
+
+    public void UndoDrawing()
+    {
+        if (SessionId is not { } session || strokes.Count == 0) return;
+        strokes.RemoveAt(strokes.Count - 1);
+        _ = SendDraw(session, new System.Text.Json.Nodes.JsonObject { ["kind"] = "undo" });
+        DrawingChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void ClearDrawing()
+    {
+        if (SessionId is not { } session) return;
+        strokes.Clear();
+        current = null;
+        _ = SendDraw(session, new System.Text.Json.Nodes.JsonObject { ["kind"] = "clear" });
+        DrawingChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>After a session: the session the technician may add a note to (Remote ID of the other computer).</summary>
+    public uint? NoteFor { get; private set; }
+
+    public void NoteTaken() => NoteFor = null;
 
     // ---- Toolbar ----
 

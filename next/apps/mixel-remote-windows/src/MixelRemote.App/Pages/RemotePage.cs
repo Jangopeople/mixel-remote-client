@@ -38,6 +38,7 @@ internal sealed class RemotePage : PageView
             Remote.Invitations.Count > 0 ? Invitations() : null,
             Remote is { Phase: "active", Sharing: true } ? Shared.HostedSessionCard(App) : null,
             cards,
+            App.Devices.RecentDevices.Any() ? RecentCard() : null,
             App.Account.Account?.Staff == true ? PhoneCard() : null,
             !Remote.ControllerOnly && App.SignedIn && (Remote.Phase == "ready" || Remote.UnattendedEnabled) ? UnattendedCard() : null,
             Ui.Message(App.Error));
@@ -127,6 +128,20 @@ internal sealed class RemotePage : PageView
                     Remote.PairingMessage is { } note ? Ui.Text(Translator.Shared.Translate(note), secondary: true) : null);
         }
         return Ui.Card(Ui.CardTitle(L("Allow remote access"), "\uE785"), Ui.Field(L("Your connection ID"), id), status, code, actions, pairing);
+    }
+
+    /// <summary>The devices of this person's last sessions, one click to connect again.</summary>
+    private Border RecentCard()
+    {
+        var items = new List<UIElement?> { Ui.CardTitle(L("Recent connections"), "\uE81C") };
+        foreach (var device in App.Devices.RecentDevices)
+        {
+            var blocked = App.Devices.ConnectBlocked(device);
+            var connect = Ui.Plain(L("Connect"), () => _ = App.Devices.Connect(device), blocked.Length == 0, "\uE72A");
+            if (blocked.Length > 0) ToolTipService.SetToolTip(connect, blocked);
+            items.Add(Ui.Split(Ui.Row(10, Ui.Icon(Format.OsGlyph(device.Os)), Ui.Column(1, Ui.Text(device.Name, bold: true), Ui.Caption(Format.RemoteId(device.ConnectionId) + " · " + App.Devices.Label(App.Devices.PresenceOf(device))))), connect));
+        }
+        return Ui.Card([.. items]);
     }
 
     private Border PhoneCard()

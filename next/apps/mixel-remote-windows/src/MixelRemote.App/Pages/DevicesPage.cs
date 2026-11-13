@@ -165,7 +165,11 @@ internal sealed class DevicesPage : PageView
         Grid.SetColumn(status, 2);
         grid.Children.Add(status);
         var macs = model.KnownMacs(device);
+        var favorite = model.Tenant is null ? null : Ui.IconButton(model.IsFavorite(device) ? "\uE735" : "\uE734",
+            model.IsFavorite(device) ? L("Remove %@ from favorites", device.Name) : L("Add %@ to favorites", device.Name), () => _ = model.ToggleFavorite(device), !App.Busy, false);
+        if (favorite is not null && model.IsFavorite(device)) favorite.Foreground = Ui.BrandBrush;
         var actions = Ui.Row(8,
+            favorite,
             presence == Presence.Offline && macs.Length > 0 ? Ui.Plain(L("Wake up"), () => _ = model.Wake(device, macs), !App.Busy, "\uE7E8") : null,
             model.Manages ? ManageButton(device) : null,
             Tip(Ui.Primary(L("Connect"), () => _ = model.Connect(device), blocked.Length == 0), blocked.Length == 0 ? L("Connect to %@", device.Name) : blocked));

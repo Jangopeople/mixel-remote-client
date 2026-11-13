@@ -52,6 +52,15 @@ public static class LiveCheck
             {
                 case "check": await Checks(engine, args[2]); break;
                 case "providers": await Providers(engine); break;
+                case "delete-company":
+                    Check("sign-in with the QA session", await SignIn(engine));
+                    var tenants = (await Try(engine, "saas_my_tenants")).Value as JsonArray ?? [];
+                    foreach (var row in tenants)
+                    {
+                        var (_, deleteError) = await Try(engine, "saas_delete_company", ("tenant", row?["tenant_id"]?.GetValue<string>()), ("name", row?["name"]?.GetValue<string>()));
+                        Check($"QA company {row?["name"]} deleted", deleteError.Length == 0, deleteError);
+                    }
+                    break;
                 case "technician":
                     await Technician(engine, args[2], folder, args.Length > 5 && uint.TryParse(args[4], out var host) ? host : null, args.Length > 5 ? args[5] : null,
                         args.Length > 6 && args[6] == "unattended");
@@ -198,6 +207,13 @@ public static class LiveCheck
             var links = (await Try(engine, "saas_deploy_links", ("tenant", tenant))).Value as JsonArray ?? [];
             var linkId = links.FirstOrDefault()?["id"]?.GetValue<string>() ?? "";
             Check("revoke the deploy link", (await Try(engine, "saas_revoke_deploy_link", ("tenant", tenant), ("link", linkId))).Value?.GetValue<bool>() == true);
+            // Favorites, recent connections, session report and notes (2.0).
+            var (_, favoriteError) = await Try(engine, "saas_set_favorite", ("tenant", tenant), ("device", device), ("favorite", true));
+            var favorites = (await Try(engine, "saas_favorites", ("tenant", tenant))).Value as JsonArray ?? [];
+            Check("mark a favorite device", favoriteError.Length == 0 && favorites.Any(row => row?["device_id"]?.GetValue<string>() == device), favoriteError);
+            Check("recent connections answer", (await Try(engine, "saas_recent_devices", ("tenant", tenant), ("max_count", 5))).Error.Length == 0);
+            var (report, reportError) = await Try(engine, "saas_session_report", ("tenant", tenant), ("from", null), ("to", null), ("technician", null), ("device", null));
+            Check("session report answers (trial: Business features)", reportError.Length == 0 && report is JsonArray, reportError);
             var room = (await Try(engine, "meeting_create")).Value;
             Check("Mixel Meet room for a session", room?["invite"]?.GetValue<string>().StartsWith("https://rs.mixel.ch/meet/#", StringComparison.Ordinal) == true);
             Check("legal page link", (await Try(engine, "legal_url", ("page", "privacy"), ("lang", "it"))).Value?.GetValue<string>() == "https://remote.mixel.ch/legal/privacy?lang=it");
