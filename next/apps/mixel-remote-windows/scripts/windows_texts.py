@@ -53,6 +53,7 @@ WINDOWS = {
     '%d more in the export.': ('%d weitere im Export.', '%d de plus dans l’export.', 'Altri %d nell’esportazione.'),
     'Add %@ to favorites': ('%@ zu den Favoriten hinzufügen', 'Ajouter %@ aux favoris', 'Aggiungi %@ ai preferiti'),
     'Clear drawing': ('Zeichnung löschen', 'Effacer le dessin', 'Cancella il disegno'),
+    'Stop drawing': ('Zeichnen beenden', 'Arrêter de dessiner', 'Smetti di disegnare'),
     'Draw on the screen': ('Auf dem Bildschirm zeichnen', 'Dessiner sur l’écran', 'Disegna sullo schermo'),
     'Drawing tool, colour and size': ('Zeichenwerkzeug, Farbe und Grösse', 'Outil, couleur et taille du dessin', 'Strumento, colore e dimensione del disegno'),
     'Enter a note': ('Geben Sie eine Notiz ein', 'Saisissez une note', 'Inserisca una nota'),

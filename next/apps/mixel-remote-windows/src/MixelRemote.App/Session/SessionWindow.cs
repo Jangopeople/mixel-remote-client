@@ -89,6 +89,7 @@ internal sealed class SessionView : Grid
     private readonly ToolPanel tools;
     private readonly Border notices = new() { HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Bottom, Margin = new Thickness(12), Padding = new Thickness(10), CornerRadius = new CornerRadius(8) };
     private readonly StackPanel waiting;
+    private readonly Border drawBar = new() { HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(12), Padding = new Thickness(6), CornerRadius = new CornerRadius(8), BorderThickness = new Thickness(1), Visibility = Visibility.Collapsed };
     private bool pending;
     private bool closed;
     private TextBlock? detailLine;
@@ -120,6 +121,7 @@ internal sealed class SessionView : Grid
         notices.Background = new SolidColorBrush(Windows.UI.Color.FromArgb(0xA6, 0, 0, 0));
         notices.IsHitTestVisible = false;
         stage.Children.Add(notices);
+        stage.Children.Add(drawBar);
         body.Children.Add(stage);
         Grid.SetColumn(tools, 1);
         body.Children.Add(tools);
@@ -195,6 +197,7 @@ internal sealed class SessionView : Grid
         Ui.Theme = ActualTheme == ElementTheme.Default ? ElementTheme.Light : ActualTheme;
         toolbar.Background = Ui.Brush("LayerFillColorDefaultBrush");
         BuildToolbar();
+        BuildDrawBar();
         var session = app.Session;
         waiting.Visibility = session.Frame is null ? Visibility.Visible : Visibility.Collapsed;
         ((TextBlock)waiting.Children[1]).Text = app.Remote.Phase == "outgoing" ? L("Waiting for the other person to accept your request.") : L("Connecting securely…");
@@ -202,6 +205,56 @@ internal sealed class SessionView : Grid
         notices.Visibility = lines.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         notices.Child = Ui.Column(4, [.. lines.Select(line => (UIElement)new TextBlock { Text = line, Foreground = new SolidColorBrush(line == session.Error ? Windows.UI.Color.FromArgb(255, 0xFF, 0xB4, 0xBD) : Microsoft.UI.Colors.White), TextWrapping = TextWrapping.Wrap, MaxWidth = 620 })]);
         tools.Rebuild();
+    }
+
+    /// <summary>The drawing tools float over the remote picture while drawing is on, so the toolbar keeps its width.</summary>
+    private void BuildDrawBar()
+    {
+        var session = app.Session;
+        drawBar.Visibility = session.Drawing ? Visibility.Visible : Visibility.Collapsed;
+        if (!session.Drawing)
+        {
+            drawBar.Child = null;
+            return;
+        }
+        var bar = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+        void Tool(string glyph, string name, Action run, bool enabled = true) => bar.Children.Add(Ui.IconButton(glyph, name, run, enabled));
+        var flyout = new MenuFlyout();
+        foreach (var (key, label) in new[] { ("pen", L("Pen")), ("highlighter", L("Highlighter")), ("arrow", L("Arrow")) })
+        {
+            var item = new ToggleMenuFlyoutItem { Text = label, IsChecked = session.DrawTool == key };
+            item.Click += (sender, args) => { session.DrawTool = key; Rebuild(); };
+            flyout.Items.Add(item);
+        }
+        flyout.Items.Add(new MenuFlyoutSeparator());
+        string[] colours = [L("Red"), L("Yellow"), L("Green"), L("Blue"), L("White")];
+        for (byte index = 0; index < colours.Length; index++)
+        {
+            var chosen = index;
+            var (r, g, b) = SessionModel.Palette[index];
+            var item = new ToggleMenuFlyoutItem { Text = colours[index], IsChecked = session.DrawColor == index, Icon = new FontIcon { Glyph = "\uE91F", Foreground = new SolidColorBrush(Windows.UI.Color.FromArgb(255, r, g, b)) } };
+            item.Click += (sender, args) => { session.DrawColor = chosen; Rebuild(); };
+            flyout.Items.Add(item);
+        }
+        flyout.Items.Add(new MenuFlyoutSeparator());
+        for (byte width = 1; width <= 4; width++)
+        {
+            var chosen = width;
+            var item = new ToggleMenuFlyoutItem { Text = L("Size %d", width), IsChecked = session.DrawWidth == width };
+            item.Click += (sender, args) => { session.DrawWidth = chosen; Rebuild(); };
+            flyout.Items.Add(item);
+        }
+        var options = new DropDownButton { Content = Ui.Icon("\uE790", 16), Flyout = flyout, Padding = new Thickness(9, 7, 9, 7) };
+        AutomationProperties.SetName(options, L("Drawing tool, colour and size"));
+        ToolTipService.SetToolTip(options, L("Drawing tool, colour and size"));
+        bar.Children.Add(options);
+        Tool("\uE7A7", L("Undo drawing"), session.UndoDrawing, session.Strokes.Count > 0);
+        Tool("\uE74D", L("Clear drawing"), session.ClearDrawing, session.Strokes.Count > 0);
+        Tool("\uE711", L("Stop drawing"), () => { session.Drawing = false; Rebuild(); });
+        AutomationProperties.SetName(bar, L("Draw on the screen"));
+        drawBar.Child = bar;
+        drawBar.Background = Ui.Brush("AcrylicInAppFillColorDefaultBrush");
+        drawBar.BorderBrush = Ui.Brush("SurfaceStrokeColorDefaultBrush");
     }
 
     private string Detail()
@@ -276,40 +329,6 @@ internal sealed class SessionView : Grid
             actions.Children.Add(new AppBarSeparator());
             var pen = Ui.IconButton("\uE70F", L("Draw on the screen") + ": " + (session.Drawing ? L("on") : L("off")), () => { session.Drawing = !session.Drawing; Rebuild(); }, true, session.Drawing);
             actions.Children.Add(pen);
-            if (session.Drawing)
-            {
-                var flyout = new MenuFlyout();
-                foreach (var (key, label) in new[] { ("pen", L("Pen")), ("highlighter", L("Highlighter")), ("arrow", L("Arrow")) })
-                {
-                    var item = new ToggleMenuFlyoutItem { Text = label, IsChecked = session.DrawTool == key };
-                    item.Click += (sender, args) => { session.DrawTool = key; Rebuild(); };
-                    flyout.Items.Add(item);
-                }
-                flyout.Items.Add(new MenuFlyoutSeparator());
-                string[] colours = [L("Red"), L("Yellow"), L("Green"), L("Blue"), L("White")];
-                for (byte index = 0; index < colours.Length; index++)
-                {
-                    var chosen = index;
-                    var (r, g, b) = SessionModel.Palette[index];
-                    var item = new ToggleMenuFlyoutItem { Text = colours[index], IsChecked = session.DrawColor == index, Icon = new FontIcon { Glyph = "\uE91F", Foreground = new SolidColorBrush(Windows.UI.Color.FromArgb(255, r, g, b)) } };
-                    item.Click += (sender, args) => { session.DrawColor = chosen; Rebuild(); };
-                    flyout.Items.Add(item);
-                }
-                flyout.Items.Add(new MenuFlyoutSeparator());
-                for (byte width = 1; width <= 4; width++)
-                {
-                    var chosen = width;
-                    var item = new ToggleMenuFlyoutItem { Text = L("Size %d", width), IsChecked = session.DrawWidth == width };
-                    item.Click += (sender, args) => { session.DrawWidth = chosen; Rebuild(); };
-                    flyout.Items.Add(item);
-                }
-                var options = new DropDownButton { Content = Ui.Icon("\uE790", 16), Flyout = flyout, Padding = new Thickness(9, 7, 9, 7) };
-                AutomationProperties.SetName(options, L("Drawing tool, colour and size"));
-                ToolTipService.SetToolTip(options, L("Drawing tool, colour and size"));
-                actions.Children.Add(options);
-                Tool("\uE7A7", L("Undo drawing"), session.UndoDrawing, session.Strokes.Count > 0);
-                Tool("\uE74D", L("Clear drawing"), session.ClearDrawing, session.Strokes.Count > 0);
-            }
         }
         actions.Children.Add(new AppBarSeparator());
         void Panel(string key, string glyph, string name)
@@ -329,6 +348,7 @@ internal sealed class SessionView : Grid
         actions.Children.Add(Ui.IconButton(Screen.FitToWindow ? "\uE9A6" : "\uE740", Screen.FitToWindow ? L("Actual size") : L("Fit to window"), () => { Screen.ToggleFit(); Rebuild(); }));
         var full = window.AppWindow.Presenter.Kind == AppWindowPresenterKind.FullScreen;
         actions.Children.Add(Ui.IconButton(full ? "\uE73F" : "\uE740", (full ? L("Exit full screen") : L("Full screen")) + " (Ctrl+Alt+Enter)", ToggleFullScreen));
+        foreach (var child in actions.Children.OfType<Button>()) child.Padding = new Thickness(7, 7, 7, 7);
         var scroller = new ScrollViewer { Content = actions, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Disabled, HorizontalScrollMode = ScrollMode.Enabled, VerticalScrollMode = ScrollMode.Disabled };
         Grid.SetColumn(scroller, 1);
         toolbar.Children.Add(scroller);
