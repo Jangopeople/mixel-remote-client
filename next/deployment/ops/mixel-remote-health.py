@@ -239,7 +239,10 @@ def check_portal() -> str:
             script = body.split('src="/assets/', 1)[1].split('"', 1)[0]
     if not script:
         raise CheckError("portal page without script")
-    expect_status(f"{base}/assets/{script}", 200, timeout=15, max_bytes=10_000_000)
+    bundle = expect_status(f"{base}/assets/{script}", 200, timeout=15, max_bytes=10_000_000)
+    # A bundle built without .env.local throws at start and shows a blank page (2026-11-13).
+    if b"eyJhbGciOi" not in bundle:
+        raise CheckError("app bundle built without the ISM sign-in key (blank page)")
     # Mass-rollout endpoints the deploy dialogs hand out.
     for script_path in ("/install/linux.sh", "/install/macos.sh"):
         if not expect_status(base + script_path, 200, timeout=15).startswith(b"#!/bin/sh"):
