@@ -237,7 +237,9 @@ int32_t mixel_draw_open(double x, double y, double width, double height) {
                                          NSWindowCollectionBehaviorFullScreenAuxiliary |
                                          NSWindowCollectionBehaviorIgnoresCycle;
             drawing.sharingType = NSWindowSharingNone;
-            drawing.alphaValue = 0.0;
+            // Shown (still empty and so invisible): ScreenCaptureKit lists, and can leave out,
+            // only windows that are on screen.
+            drawing.alphaValue = 1.0;
             drawing.contentView = [[MixelDrawView alloc] initWithFrame:NSMakeRect(0, 0, width, height)];
         }
         [drawing setFrame:frame display:NO];
@@ -247,7 +249,7 @@ int32_t mixel_draw_open(double x, double y, double width, double height) {
     return number;
 }
 
-// Shows these shapes at this opacity (0 hides them).
+// Shows these shapes at this opacity (kept above 0 so the window stays left out of the capture).
 void mixel_draw_show(const double *shapes, size_t count, double alpha) {
     NSData *data = shapes && count ? [NSData dataWithBytes:shapes length:count * sizeof(double)] : [NSData data];
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -255,7 +257,7 @@ void mixel_draw_show(const double *shapes, size_t count, double alpha) {
         MixelDrawView *view = (MixelDrawView *)drawing.contentView;
         view.shapes = data;
         view.needsDisplay = YES;
-        drawing.alphaValue = alpha;
+        drawing.alphaValue = alpha < 0.01 ? 0.01 : alpha;
         [drawing orderFrontRegardless];
     });
 }

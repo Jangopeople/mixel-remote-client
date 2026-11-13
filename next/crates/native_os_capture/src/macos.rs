@@ -20,7 +20,7 @@ use objc2_screen_capture_kit::{
 };
 use std::{
     sync::{Arc, mpsc},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 // SCShareableContent is an immutable snapshot, documented as available from an
@@ -227,9 +227,10 @@ fn excluded_now() -> (u64, Vec<u32>) {
     (excluded.0, excluded.1.iter().flat_map(|(_, ids)| ids.iter().copied()).collect())
 }
 
-/// A display filter that leaves out this app's excluded windows.
+/// A display filter that leaves out this app's excluded windows, and whether all of them were
+/// found (a window that has only just been shown can be missing from the listing for a moment).
 /// SAFETY: `content` is a retained immutable snapshot.
-unsafe fn display_filter(content: &SCShareableContent, id: u32, excluded: &[u32]) -> Result<Retained<SCContentFilter>, CaptureError> {
+unsafe fn display_filter(content: &SCShareableContent, id: u32, excluded: &[u32]) -> Result<(Retained<SCContentFilter>, bool), CaptureError> {
     unsafe {
         let displays = content.displays();
         let display = displays
@@ -245,8 +246,9 @@ unsafe fn display_filter(content: &SCShareableContent, id: u32, excluded: &[u32]
                     && window.owningApplication().is_some_and(|app| app.processID() as u32 == own)
             })
             .collect();
+        let complete = windows.len() >= excluded.len();
         let windows = NSArray::from_retained_slice(&windows);
-        Ok(SCContentFilter::initWithDisplay_excludingWindows(SCContentFilter::alloc(), &display, &windows))
+        Ok((SCContentFilter::initWithDisplay_excludingWindows(SCContentFilter::alloc(), &display, &windows), complete))
     }
 }
 struct OutputIvars {
@@ -340,6 +342,8 @@ pub struct MacStream {
     display: Option<u32>,
     stream_id: u64,
     applied: u64,
+    /// An exclusion whose windows were not all listed yet: its version and since when.
+    pending: Option<(u64, Instant)>,
 }
 impl MacStream {
     pub fn start(
@@ -372,8 +376,13 @@ impl MacStream {
         // and serial callback queue retained for the entire capture lifecycle.
         unsafe {
             let (version, excluded) = excluded_now();
+            let mut complete = true;
             let filter = match target {
-                Target::Display(id) => display_filter(&content, id, &excluded)?,
+                Target::Display(id) => {
+                    let (filter, found) = display_filter(&content, id, &excluded)?;
+                    complete = found;
+                    filter
+                }
                 Target::OwnWindow(id) => {
                     let windows = content.windows();
                     let window = windows
@@ -433,8 +442,10 @@ impl MacStream {
                 Target::OwnWindow(_) => None,
             };
             let stream_id = NEXT_STREAM.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            // Not all excluded windows listed yet: `sync_exclusions` tries again.
+            let applied = if complete { version } else { 0 };
             if display.is_some() {
-                APPLIED.lock().unwrap_or_else(|error| error.into_inner()).push((stream_id, version));
+                APPLIED.lock().unwrap_or_else(|error| error.into_inner()).push((stream_id, applied));
             }
             let mut capture = Self {
                 stream,
@@ -444,7 +455,8 @@ impl MacStream {
                 active: true,
                 display,
                 stream_id,
-                applied: version,
+                applied,
+                pending: (!complete).then(|| (version, Instant::now())),
             };
             capture
                 .stream
@@ -470,9 +482,18 @@ impl MacStream {
         if version == self.applied {
             return Ok(());
         }
+        match self.pending {
+            // A window that never appears (closed meanwhile) does not keep this retrying.
+            Some((pending, since)) if pending == version && since.elapsed() >= Duration::from_secs(2) => {
+                self.mark_applied(version);
+                return Ok(());
+            }
+            Some((pending, _)) if pending == version => {}
+            _ => self.pending = Some((version, Instant::now())),
+        }
         let content = content(false)?;
         // SAFETY: retained snapshot; the stream is retained and the completion block is copied.
-        let filter = unsafe { display_filter(&content, id, &excluded)? };
+        let (filter, complete) = unsafe { display_filter(&content, id, &excluded)? };
         let (tx, rx) = mpsc::sync_channel(1);
         let updated = RcBlock::new(move |error: *mut NSError| {
             let _ = tx.try_send(error.is_null());
@@ -483,11 +504,18 @@ impl MacStream {
         if !applied {
             return Err(CaptureError::Native("ScreenCaptureKit did not apply the window exclusion".into()));
         }
+        // Applied only once every excluded window was found; until then the next call retries.
+        if complete {
+            self.mark_applied(version);
+        }
+        Ok(())
+    }
+    fn mark_applied(&mut self, version: u64) {
         self.applied = version;
+        self.pending = None;
         if let Some(entry) = APPLIED.lock().unwrap_or_else(|error| error.into_inner()).iter_mut().find(|(stream, _)| *stream == self.stream_id) {
             entry.1 = version;
         }
-        Ok(())
     }
     pub fn stop(&mut self) -> Result<(), CaptureError> {
         if !self.active {
