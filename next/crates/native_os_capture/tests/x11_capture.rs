@@ -62,7 +62,7 @@ fn captures_separate_xvfb_screens_and_converts_native_pixel_formats() {
             (frame.width(), frame.height()),
             (usize::from(output.width), usize::from(output.height))
         );
-        assert!(frame.pixels().chunks_exact(4).all(|pixel| pixel == color));
+        assert!(frame.pixels().as_chunks::<4>().0.iter().all(|pixel| *pixel == color));
         println!(
             "PASS: X11 screen {} captured at {}×{} and converted the painted color exactly",
             output.screen,

@@ -6,7 +6,10 @@ use signaling_server::{
     identity_authority::{Authority, router},
     support_policy::SupportPolicy,
 };
-use std::{io::Read, net::SocketAddr, path::Path};
+use std::{net::SocketAddr, path::Path};
+#[cfg(unix)]
+use std::io::Read;
+#[cfg(unix)]
 use zeroize::Zeroizing;
 
 #[cfg(unix)]
