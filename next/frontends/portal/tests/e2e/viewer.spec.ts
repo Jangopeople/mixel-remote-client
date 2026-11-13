@@ -2,6 +2,7 @@
 // of the portal run (qa-run.json). VIEWER_URL: the viewer page, e.g. https://ism.mixel.ch/remote-next/ or
 // a local test server. Skipped unless VIEWER_URL is set.
 import { expect, test, type Page } from '@playwright/test';
+import { shot } from './shots';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createUser, passwordSession, rest, secondStep, type GoTrueSession } from './qa';
 
@@ -44,6 +45,29 @@ test('technician: registers the browser, reaches the connection service, lists t
   await expect(page.locator('#member-note')).toBeHidden();
   await expect(page.locator('#status')).toHaveText('');
   await page.screenshot({ path: `${SHOTS}/40-viewer-technician.png`, fullPage: true });
+
+  // Presence end to end: the browser is now an enrolled device connected to the broker. The broker
+  // reports it within 30 s and the owner's portal shows it Online; after the viewer closes it turns
+  // Offline with "last seen".
+  if (process.env.PORTAL_URL) {
+    const ownId = (await page.locator('#own-id').textContent())!.replace(/\s/g, '');
+    const portal = await page.context().browser()!.newContext({ storageState: `${SHOTS}/../owner-state.json` });
+    const owner = await portal.newPage();
+    const row = owner.locator('[data-testid="devices-table"] tbody tr', { hasText: ownId.replace(/(\d{3})(\d{3})(\d{3})/, '$1 $2 $3') });
+    await expect(async () => {
+      await owner.goto(`${process.env.PORTAL_URL}/app/devices`);
+      await expect(row.getByTestId('device-status')).toContainText('Online', { timeout: 3000 });
+    }).toPass({ timeout: 90_000, intervals: [10_000] });
+    await shot(owner, '44-portal-device-online');
+    await page.close();
+    await expect(async () => {
+      await owner.goto(`${process.env.PORTAL_URL}/app/devices`);
+      await expect(row.getByTestId('device-status')).toContainText('Last seen', { timeout: 3000 });
+    }).toPass({ timeout: 120_000, intervals: [10_000] });
+    await expect(row.getByTestId('device-status')).toContainText('Turned off, asleep or without internet');
+    await shot(owner, '45-portal-device-offline');
+    await portal.close();
+  }
 });
 
 test('member: sees their devices without Connect', async ({ page }) => {

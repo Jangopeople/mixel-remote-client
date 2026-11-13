@@ -338,3 +338,30 @@ export function gateFor(error: unknown): 'mfa' | 'method' | null {
   if (key === 'error.method_not_allowed') return 'method';
   return null;
 }
+
+// ---------------------------------------------------------------------------------------------
+// Presence
+
+/** "3 hours ago" in the given language (Intl), from an ISO time. */
+export function relativeTime(iso: string | null | undefined, locale: string, now: Date = new Date()): string {
+  if (!iso) return '';
+  const at = Date.parse(iso);
+  if (Number.isNaN(at)) return '';
+  const seconds = Math.round((at - now.getTime()) / 1000);
+  const format = new Intl.RelativeTimeFormat(locale, { numeric: 'auto' });
+  const abs = Math.abs(seconds);
+  // Under a minute still reads as "1 minute ago": the broker reports every 30 s.
+  if (abs < 3600) return format.format(Math.sign(seconds || -1) * Math.max(1, Math.round(abs / 60)), 'minute');
+  if (abs < 86400) return format.format(Math.round(seconds / 3600), 'hour');
+  if (abs < 30 * 86400) return format.format(Math.round(seconds / 86400), 'day');
+  return format.format(Math.round(seconds / (30 * 86400)), 'month');
+}
+
+/** Clock time today ("08:12"), else date and time, for "online since". */
+export function sinceTime(iso: string | null | undefined, locale: string, now: Date = new Date()): string {
+  if (!iso) return '';
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return '';
+  const sameDay = at.toDateString() === now.toDateString();
+  return new Intl.DateTimeFormat(locale, sameDay ? { timeStyle: 'short' } : { dateStyle: 'medium', timeStyle: 'short' }).format(at);
+}

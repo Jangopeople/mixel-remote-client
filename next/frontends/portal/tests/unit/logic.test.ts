@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   assignableRoles, availableMethods, canRemoveMember, checkPassword, deployLinkState, errorKey, formatConnectionId, gateFor,
   inviteLink, isCompanyName, isDomain, isEmail, isOtpCode, isWritable, methodsToSave, normalizeDomain, safeNext, signInMethods,
-  tokenFromHash, trialDaysLeft, usage, windowsDeployCommand,
+  relativeTime, sinceTime, tokenFromHash, trialDaysLeft, usage, windowsDeployCommand,
 } from '../../src/lib/logic';
 
 describe('sign-in methods', () => {
@@ -143,5 +143,22 @@ describe('errors', () => {
     expect(errorKey({ message: 'something new' })).toBe('error.unknown');
     expect(gateFor({ message: 'Two-step sign-in is required by this company' })).toBe('mfa');
     expect(gateFor({ message: 'Not allowed for this company' })).toBeNull();
+  });
+});
+
+describe('presence times', () => {
+  const now = new Date('2026-11-13T12:00:00Z');
+  it('says how long ago, in the chosen language', () => {
+    expect(relativeTime('2026-11-13T11:59:40Z', 'en', now)).toBe('1 minute ago');
+    expect(sinceTime('2026-11-13T10:05:00Z', 'en-CH', new Date('2026-11-13T12:00:00Z'))).toMatch(/\d{1,2}:05/);
+    expect(sinceTime('2026-11-10T10:05:00Z', 'de-CH', now)).toMatch(/2026/);
+    expect(relativeTime('2026-11-13T11:35:00Z', 'en', now)).toBe('25 minutes ago');
+    expect(relativeTime('2026-11-13T09:00:00Z', 'en', now)).toBe('3 hours ago');
+    expect(relativeTime('2026-11-12T10:00:00Z', 'en', now)).toBe('yesterday');
+    expect(relativeTime('2026-11-13T09:00:00Z', 'de', now)).toBe('vor 3 Stunden');
+    expect(relativeTime('2026-11-13T09:00:00Z', 'fr', now)).toBe('il y a 3 heures');
+    expect(relativeTime('2026-11-13T09:00:00Z', 'it', now)).toBe('3 ore fa');
+    expect(relativeTime(null, 'en', now)).toBe('');
+    expect(relativeTime('nonsense', 'en', now)).toBe('');
   });
 });

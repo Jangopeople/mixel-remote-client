@@ -392,3 +392,8 @@ table.table { width: 100%; border-collapse: collapse; font-size: 14px; }
   h1 { font-size: 25px; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation-duration: 0.01ms !important; } }
+
+/* Device status: badge plus reason / time underneath */
+.presence-cell { display: grid; gap: 4px; justify-items: start; min-width: 150px; }
+.presence-cell small { font-size: 12px; color: var(--muted); line-height: 1.4; max-width: 280px; }
+.presence-cell[data-status='offline'] .badge .dot, .presence-cell[data-status='never'] .badge .dot { color: var(--faint); }

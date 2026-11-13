@@ -6,7 +6,7 @@ import { ConfirmDialog, CopyButton, ErrorNotice, Notice, Spinner, formatDate } f
 import { methodLabelKey, useAvailableMethods } from '../components/auth';
 import { useAuth } from '../lib/auth';
 import { api, type AuditEntry, type Domain } from '../lib/api';
-import { ALL_METHODS, isDomain, isManager, isWritable, methodsToSave, normalizeDomain, type Method } from '../lib/logic';
+import { ALL_METHODS, isCompanyName, isDomain, isManager, isWritable, methodsToSave, normalizeDomain, type Method } from '../lib/logic';
 import { useLoad } from '../lib/useLoad';
 
 function SignInSettings() {
@@ -217,6 +217,49 @@ function AuditLog() {
   );
 }
 
+function CompanyName() {
+  const { t } = useI18n();
+  const { tenant, overview, reload } = useTenant();
+  const editable = isManager(overview.role) && isWritable(overview.status);
+  const [name, setName] = useState(overview.name);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const [saved, setSaved] = useState(false);
+  useEffect(() => setName(overview.name), [overview.name]);
+  if (!editable) return <dd data-testid="settings-company">{overview.name}</dd>;
+  return (
+    <dd>
+      <form className="inline-form" noValidate data-testid="company-rename" onSubmit={async (event) => {
+        event.preventDefault();
+        setSaved(false);
+        if (!isCompanyName(name)) {
+          setError({ message: 'Enter a company name of 2 to 80 characters' });
+          return;
+        }
+        setBusy(true);
+        setError(null);
+        try {
+          await api.renameTenant(tenant.tenant_id, name.trim());
+          await reload();
+          setSaved(true);
+        } catch (failure) {
+          setError(failure);
+        } finally {
+          setBusy(false);
+        }
+      }}>
+        <div className="field">
+          <label htmlFor="company-name-input" className="sr-only">{t('settings.companyName')}</label>
+          <input id="company-name-input" data-testid="settings-company" value={name} maxLength={80} onChange={(event) => { setName(event.target.value); setSaved(false); }} />
+        </div>
+        <button type="submit" className="secondary" disabled={busy || name.trim() === overview.name}>{t('common.rename')}</button>
+      </form>
+      {error ? <p className="field-error" role="alert">{t('signup.companyInvalid')}</p> : null}
+      {saved && <p className="field-hint" role="status">{t('settings.renamed')}</p>}
+    </dd>
+  );
+}
+
 export function Settings() {
   const { t } = useI18n();
   const { overview } = useTenant();
@@ -228,7 +271,7 @@ export function Settings() {
       <div className="panel">
         <div className="panel-heading"><h2>{t('settings.company')}</h2></div>
         <dl className="kv">
-          <dt>{t('settings.companyName')}</dt><dd data-testid="settings-company">{overview.name}</dd>
+          <dt>{t('settings.companyName')}</dt><CompanyName />
           <dt>{t('settings.companyId')}</dt><dd><code>{overview.slug}</code></dd>
         </dl>
         <p className="field-hint" style={{ marginTop: 10 }}>{t('settings.companyNameNote')}</p>

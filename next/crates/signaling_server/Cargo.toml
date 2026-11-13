@@ -26,6 +26,7 @@ zeroize.workspace = true
 core_protocol = { path = "../core_protocol", features = ["native-webrtc"] }
 ed25519-dalek = { version = "2.2", features = ["rand_core"] }
 tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
+tokio = { version = "1", features = ["io-util"] }
 
 [lints]
 workspace = true

@@ -52,6 +52,10 @@ export interface Device {
   connection_id: number | null; generation: number | null; enrolled_at: string | null; revoked: boolean | null;
   added_via: string | null;
 }
+export interface DevicePresence {
+  device_id: string; connection_id: number | null; status: 'online' | 'offline' | 'never' | 'unknown' | 'not_enrolled';
+  last_seen: string | null; online_since: string | null; checked_at: string | null;
+}
 export interface Group { group_id: string; name: string; devices: number; technicians: string[] }
 export interface DeployLink {
   id: string; label: string; group_id: string | null; created_at: string; expires_at: string;
@@ -94,6 +98,8 @@ export const api = {
     rpc<string>('remote_saas_rename_device', { tenant, device, device_name: name }),
   moveDevice: (tenant: string, device: string, group: string | null) =>
     rpc<boolean>('remote_saas_move_device', { tenant, device, to_group: group }),
+  devicePresence: (tenant: string) => rpc<DevicePresence[]>('remote_saas_device_presence', { tenant }),
+  renameTenant: (tenant: string, name: string) => rpc<string>('remote_saas_rename_tenant', { tenant, company_name: name }),
   removeDevice: (tenant: string, device: string) => rpc<boolean>('remote_saas_remove_device', { tenant, device }),
 
   groups: (tenant: string) => rpc<Group[]>('remote_saas_groups', { tenant }),

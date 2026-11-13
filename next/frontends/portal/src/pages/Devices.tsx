@@ -1,12 +1,12 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useI18n, type MessageKey } from '../i18n';
 import { useTenant } from '../components/AppShell';
 import { ConfirmDialog, Dialog, ErrorNotice, Notice, Spinner, Toast, formatDate } from '../components/ui';
 import { Icon } from '../components/Icon';
 import { STORE_URL, WEB_VIEWER_URL } from '../components/PublicLayout';
-import { api, type Device, type Group } from '../lib/api';
-import { canManageDevices, formatConnectionId, isManager, isName, isWritable, osLabel } from '../lib/logic';
+import { api, type Device, type DevicePresence, type Group } from '../lib/api';
+import { canManageDevices, formatConnectionId, isManager, isName, isWritable, osLabel, relativeTime, sinceTime } from '../lib/logic';
 import { useLoad } from '../lib/useLoad';
 
 function AddDevicesDialog({ onClose }: { onClose: () => void }) {
@@ -108,6 +108,38 @@ function MoveDialog({ device, groups, onClose, onDone }: { device: Device; group
 
 type Action = { kind: 'rename' | 'move' | 'remove'; device: Device } | { kind: 'add' } | null;
 
+function PresenceCell({ device, presence }: { device: Device; presence: DevicePresence | undefined }) {
+  const { t, locale } = useI18n();
+  if (device.connection_id === null || device.revoked) {
+    return <span className={device.revoked ? 'badge badge-warning' : 'badge'}>{device.revoked ? t('devices.revoked') : t('devices.notEnrolled')}</span>;
+  }
+  const status = presence?.status ?? 'unknown';
+  const lang = locale.slice(0, 2);
+  if (status === 'online') {
+    return (
+      <div className="presence-cell" data-status="online">
+        <span className="badge badge-success"><span className="dot" />{t('devices.online')}</span>
+        {presence?.online_since && <small>{t('devices.onlineSince', { time: sinceTime(presence.online_since, locale) })}</small>}
+      </div>
+    );
+  }
+  if (status === 'offline' || status === 'never') {
+    return (
+      <div className="presence-cell" data-status={status}>
+        <span className="badge"><span className="dot" />{status === 'offline' ? t('devices.offline') : t('devices.never')}</span>
+        <small>{status === 'offline' && presence?.last_seen ? `${t('devices.lastSeen', { time: relativeTime(presence.last_seen, lang) })} · ` : ''}
+          {status === 'offline' ? t('devices.offlineReason') : t('devices.neverReason')}</small>
+      </div>
+    );
+  }
+  return (
+    <div className="presence-cell" data-status="unknown">
+      <span className="badge badge-warning">{t('devices.unknown')}</span>
+      <small>{t('devices.unknownReason')}</small>
+    </div>
+  );
+}
+
 export function Devices() {
   const { t, locale } = useI18n();
   const { tenant, overview, reload: reloadTenant } = useTenant();
@@ -122,6 +154,13 @@ export function Devices() {
   const writable = isWritable(overview.status);
 
   const devices = useLoad(() => api.devices(tenant.tenant_id, groupFilter || null, query || null), `${tenant.tenant_id}|${groupFilter}|${query}`);
+  const presence = useLoad(() => api.devicePresence(tenant.tenant_id), tenant.tenant_id);
+  const reloadPresence = presence.reload;
+  useEffect(() => {
+    const timer = window.setInterval(() => { if (!document.hidden) void reloadPresence(); }, 30_000);
+    return () => window.clearInterval(timer);
+  }, [reloadPresence]);
+  const presenceOf = new Map((presence.data ?? []).map((row) => [row.device_id, row]));
   const groups = useLoad(() => (groupsOn && canManage ? api.groups(tenant.tenant_id) : Promise.resolve([] as Group[])), `${tenant.tenant_id}|${groupsOn}`);
 
   const close = () => {
@@ -129,7 +168,7 @@ export function Devices() {
     if (params.get('add')) setParams({}, { replace: true });
   };
   const refresh = async () => {
-    await Promise.all([devices.reload(), groups.reload(), reloadTenant()]);
+    await Promise.all([devices.reload(), groups.reload(), presence.reload(), reloadTenant()]);
   };
 
   const list = devices.data ?? [];
@@ -175,7 +214,7 @@ export function Devices() {
                   <th>{t('devices.col.name')}</th>
                   <th>{t('devices.col.id')}</th>
                   {groupsOn && <th className="hide-sm">{t('devices.col.group')}</th>}
-                  <th className="hide-sm">{t('common.status')}</th>
+                  <th>{t('common.status')}</th>
                   <th className="hide-sm">{t('devices.col.added')}</th>
                   {canManage && <th><span className="sr-only">{t('common.actions')}</span></th>}
                 </tr>
@@ -189,11 +228,7 @@ export function Devices() {
                     </td>
                     <td className="conn-id">{formatConnectionId(device.connection_id)}</td>
                     {groupsOn && <td className="hide-sm">{device.group_name ?? <span className="field-hint">{t('devices.noGroup')}</span>}</td>}
-                    <td className="hide-sm">
-                      {device.connection_id === null ? <span className="badge">{t('devices.notEnrolled')}</span>
-                        : device.revoked ? <span className="badge badge-warning">{t('devices.revoked')}</span>
-                          : <span className="badge badge-success"><span className="dot" />{t('devices.registered')}</span>}
-                    </td>
+                    <td data-testid="device-status"><PresenceCell device={device} presence={presenceOf.get(device.device_id)} /></td>
                     <td className="hide-sm">{formatDate(device.enrolled_at, locale)}</td>
                     {canManage && (
                       <td className="cell-actions">

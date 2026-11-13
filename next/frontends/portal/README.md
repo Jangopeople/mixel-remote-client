@@ -11,7 +11,8 @@ Phase 8, stage 3). React + TypeScript + Vite, served by a Cloudflare Worker with
   `?company=<slug>`), then the authenticator code when the account has 2-step login.
 - `/invite#<secret>` accepts an invitation (same link format as the desktop app); sign in or create an account first.
 - `/auth/callback` OAuth (PKCE) return for Mixel ID.
-- `/app` overview (plan, trial days, usage), `/app/devices` (rename, move, remove, add help, link to the web viewer),
+- `/app` overview (plan, trial days, usage), `/app/devices` (online status with "online since" / "last seen" and the
+  reason, refreshed every 30 s; rename, move, remove, add help, link to the web viewer),
   `/app/groups` (groups, technician access), `/app/deploy` (deploy links + Windows command), `/app/team`
   (members, roles, invitation links), `/app/settings` (sign-in methods, required 2-step login, email domains, audit log),
   `/app/billing` (plan, limits, Stripe Checkout / customer portal / plan change via the billing service, success and
@@ -19,8 +20,11 @@ Phase 8, stage 3). React + TypeScript + Vite, served by a Cloudflare Worker with
 
 Every action is an RPC from `next/sql/019`–`020` (billing state and prices: `023`/`024`, actions:
 `next/services/billing`, `POST /api/billing/checkout|portal|change`); the database checks membership, role, plan and sign-in policy.
-Online status of devices is not shown: presence needs an enrolled device identity on the connection service, which a
-plain browser session does not have (the apps and the web viewer show it).
+Online status comes from the connection broker: every 30 s it reports the connected enrolled devices to
+`remote_presence_report` (SQL 025, see `next/deployment/QA-DEPLOYMENT.md` "Presence reporting"); the portal reads
+`remote_saas_device_presence`, which applies the same access rules as the device list. "Status unknown" means the broker
+has not reported for 3 minutes. Settings → Company: owners and admins rename the company (`remote_saas_rename_tenant`,
+audited; the company ID/slug stays).
 
 ## Develop and check
 ```bash
@@ -64,7 +68,7 @@ The previous remote.mixel.ch site (an archived Convex/RustDesk page, nginx → 1
 Worker route exists. Rollback: `npx wrangler delete` (or remove the route) and the old origin answers again.
 
 ## Not yet
-Invitation emails, company rename, Google / Microsoft / Apple / company SSO providers
+Invitation emails, Google / Microsoft / Apple / company SSO providers
 (shown as "coming soon" until they are configured in GoTrue), automatic domain verification.
 
 The portal's "Open the web viewer" goes to `https://ism.mixel.ch/login?next=/remote-next/`: the viewer runs on the ISM

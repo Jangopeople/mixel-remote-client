@@ -98,3 +98,26 @@ migration rolls back its own transaction. If migration committed, **retain**
 enrollment/audit tables, rows and signer; rollback never drops customer data.
 Keep the private stopped deployment for recovery. Do not rotate existing
 enrollments, delete images used elsewhere, change DNS, or touch marketplace apps.
+
+
+## Presence reporting (online / last seen, SQL 025) — 2026-11-13
+
+The broker reports the connection IDs of the enrolled devices connected right now every 30 s
+(`crates/signaling_server/src/presence.rs`) to `public.remote_presence_report` through PostgREST. Optional; enabled
+with two variables in the broker environment (`/opt/mixel-remote-next-qa/private/broker-presence.env`, root 0600):
+
+- `MIXEL_PRESENCE_URL=https://ism-api.mixel.ch/rest/v1/rpc/remote_presence_report`
+- `MIXEL_PRESENCE_TOKEN=<JWT, role mixel_remote_presence, HS256 with the ISM JWT secret, 5 years>`
+
+Role `mixel_remote_presence` can execute only that function (and PostgREST's `enforce_staff_mfa_request`
+pre-request check). Rotate: mint a new JWT (same claims, new `iat`/`exp`), replace the line, recreate the broker; to
+revoke all tokens at once, `revoke execute on function public.remote_presence_report(integer[]) from
+mixel_remote_presence`. A report less than 10 s after the previous one is ignored. Tenant members read the state
+through `remote_saas_device_presence` (status `online`, `offline` + `last_seen`, `never`, `unknown` when the broker has
+been silent for 3 minutes, `not_enrolled`).
+
+Broker container `mixel-remote-next-qa-broker-device-access` (host network, `--restart unless-stopped`, json-file logs
+50m×5) runs image `mixel-remote-next-backend:presence-20261113` with `--env-file private/broker-presence-full.env`
+(the previous environment plus the two lines). The previous container config is in
+`private/broker-container-before-presence-20261113.json`. Rollback: recreate it with image
+`mixel-remote-next-backend:saas-20261113-f3aade2` and without the two variables; presence then shows "Status unknown".

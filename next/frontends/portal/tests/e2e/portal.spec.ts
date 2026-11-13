@@ -4,6 +4,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { anonKey, createUser, enrolComputer, freshTotp, signupCode } from './qa';
+import { shot } from './shots';
 
 const RUN = process.env.QA_RUN ?? Date.now().toString(36);
 const SHOTS = process.env.QA_SHOTS ?? 'qa-output/screenshots';
@@ -19,15 +20,6 @@ let slug = '';
 
 mkdirSync(SHOTS, { recursive: true });
 
-async function shot(page: Page, name: string) {
-  await page.waitForLoadState('networkidle').catch(() => undefined);
-  for (const theme of ['light', 'dark'] as const) {
-    await page.evaluate((value) => document.documentElement.setAttribute('data-theme', value), theme);
-    await page.waitForTimeout(150);
-    await page.screenshot({ path: `${SHOTS}/${name}-${theme}.png`, fullPage: true });
-  }
-  await page.evaluate(() => document.documentElement.removeAttribute('data-theme'));
-}
 
 async function signIn(page: Page, email: string, path = '/signin') {
   await page.goto(path);
@@ -124,6 +116,8 @@ test('owner manages groups, deploy links and devices', async ({ browser }) => {
   await page.goto('/app/devices');
   await expect(page.getByTestId('devices-table').locator('tbody tr')).toHaveCount(2);
   await expect(page.locator('[data-device="QA-PC-1"]')).toContainText('QA Office');
+  // Status from the connection service: these computers enrolled but never connected.
+  await expect(page.locator('[data-device="QA-PC-1"] [data-testid="device-status"]')).toContainText(/Not seen yet|Status unknown/);
   await shot(page, '12-devices');
   // Rename.
   await page.locator('[data-device="QA-PC-1"]').getByRole('button', { name: 'Rename' }).click();
@@ -233,7 +227,15 @@ test('settings: sign-in methods, domains, audit log; billing', async ({ browser 
   const context = await browser.newContext({ storageState: `${SHOTS}/../owner-state.json` });
   const page = await context.newPage();
   await page.goto('/app/settings');
-  await expect(page.getByTestId('settings-company')).toHaveText(COMPANY);
+  await expect(page.getByTestId('settings-company')).toHaveValue(COMPANY);
+  // Rename the company (and back): the company chip follows, the audit log records it.
+  await page.getByTestId('settings-company').fill(`${COMPANY} Renamed`);
+  await page.getByTestId('company-rename').getByRole('button', { name: 'Rename' }).click();
+  await expect(page.getByTestId('company-name')).toHaveText(`${COMPANY} Renamed`);
+  await expect(page.getByText('Company renamed.')).toBeVisible();
+  await page.getByTestId('settings-company').fill(COMPANY);
+  await page.getByTestId('company-rename').getByRole('button', { name: 'Rename' }).click();
+  await expect(page.getByTestId('company-name')).toHaveText(COMPANY);
   slug = (await page.locator('dd code').first().textContent())!.trim();
   // Google, Microsoft, Apple and SSO are not configured: shown as coming soon, not selectable.
   for (const method of ['google', 'azure', 'apple', 'sso']) {
@@ -251,6 +253,7 @@ test('settings: sign-in methods, domains, audit log; billing', async ({ browser 
   await page.reload();
   await expect(page.getByTestId('audit-log')).toContainText('settings.sign_in');
   await expect(page.getByTestId('audit-log')).toContainText('member.join');
+  await expect(page.getByTestId('audit-log')).toContainText('tenant.rename');
   await shot(page, '20-settings');
 
   // The company sign-in page shows only the allowed methods.
