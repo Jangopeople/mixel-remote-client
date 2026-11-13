@@ -546,6 +546,138 @@ class ViewModelTest {
         app.session.clear()
     }
 
+    // Drawing, favorites, session reports (2.0.1)
+
+    @Test
+    fun drawingSendsStrokesInChunksThenUndoAndClear() = runTest {
+        val engine = FakeEngine()
+        DemoFixtures.viewing(engine)
+        engine.queue(VideoPacket.sample())
+        val app = DemoFixtures.app(engine, backgroundScope)
+        settle()
+        val draw = app.draw
+        assertTrue("the host announced drawing", draw.available)
+        draw.start(100, 100)
+        assertTrue("draw mode must be on first", engine.calls("remote_draw").isEmpty() && draw.strokes.isEmpty())
+        draw.toggle()
+        assertTrue(draw.on)
+        draw.color = 3; draw.width = 4
+        draw.start(1000, 1000)
+        for (step in 1..100) draw.move(1000 + step * 300, 1000, 1280)
+        draw.finish()
+        settle()
+        val strokes = engine.calls("remote_draw").map { it.json["message"]!!.jsonObject }
+        assertTrue(strokes.all { it["kind"]!!.jsonPrimitive.content == "stroke" && it["color"]!!.jsonPrimitive.int == 3 && it["width"]!!.jsonPrimitive.int == 4 })
+        assertTrue("at most 64 points a message", strokes.all { it["points"]!!.jsonArray.size <= 64 })
+        assertEquals(101, strokes.sumOf { it["points"]!!.jsonArray.size })
+        assertEquals(listOf(true), strokes.filter { it["done"]!!.jsonPrimitive.boolean }.map { true })
+        assertTrue(strokes.last()["done"]!!.jsonPrimitive.boolean)
+        assertEquals(DemoFixtures.SESSION, engine.calls("remote_draw").first().str("session"))
+        // An arrow sends its start once, then only the end.
+        draw.tool = ch.mixel.remote.app.DrawModel.Tool.Arrow
+        draw.start(5000, 5000); draw.move(9000, 9000, 1280); draw.flush(); draw.move(12000, 12000, 1280); draw.finish()
+        draw.undo(); draw.clear()
+        settle()
+        val messages = engine.calls("remote_draw").map { it.json["message"]!!.jsonObject }
+        val arrow = messages.filter { it["tool"]?.jsonPrimitive?.content == "arrow" }
+        assertEquals(2, arrow.first()["points"]!!.jsonArray.size)
+        assertEquals(1, arrow.last()["points"]!!.jsonArray.size)
+        assertEquals(listOf("undo", "clear"), messages.takeLast(2).map { it["kind"]!!.jsonPrimitive.content })
+        assertTrue(draw.strokes.isEmpty())
+        app.session.clear()
+    }
+
+    @Test
+    fun drawingIsOffWithoutTheHostFeatureAndFades() = runTest {
+        val engine = FakeEngine()
+        DemoFixtures.viewing(engine)
+        engine.reply("remote_status", """{"phase":"active","host":482913557,"session":"${DemoFixtures.SESSION}","consent":"${DemoFixtures.CONSENT}","peer":731204118,"control":true,"peer_features":[]}""")
+        val app = DemoFixtures.app(engine, backgroundScope)
+        app.draw.toggle()
+        assertFalse(app.draw.on)
+        assertEquals(1f, app.draw.opacity(app.draw.lastChange + 4999))
+        assertEquals(0f, app.draw.opacity(app.draw.lastChange + 6000))
+        assertEquals(36f, ch.mixel.remote.app.DrawModel.lineWidth(ch.mixel.remote.app.DrawModel.Tool.Highlighter, 4, 1080f))
+        app.session.clear()
+    }
+
+    @Test
+    fun favoritesAndRecentDevicesComeFirstEachOnce() = runTest {
+        val engine = FakeEngine()
+        DemoFixtures.company(engine)
+        val app = DemoFixtures.app(engine, backgroundScope)
+        val sections = app.devices.sections()
+        assertEquals(listOf("Accounting Mac"), sections.favorites.map { it.name })
+        assertEquals("a favorite is not repeated under recent", listOf("Reception PC"), sections.recent.map { it.name })
+        assertEquals(listOf("Warehouse laptop", "Anna’s Pixel"), sections.others.map { it.name })
+        val warehouse = app.devices.devices.first { it.name == "Warehouse laptop" }
+        app.devices.toggleFavorite(warehouse)
+        settle()
+        val call = engine.calls("saas_set_favorite").last()
+        assertEquals(true, call.json["favorite"]!!.jsonPrimitive.boolean)
+        assertEquals(warehouse.device, call.str("device"))
+        assertTrue(app.devices.isFavorite(warehouse))
+        engine.fail("saas_set_favorite", "network")
+        app.devices.toggleFavorite(warehouse)
+        settle()
+        assertTrue("a failed change is undone", app.devices.isFavorite(warehouse))
+        assertEquals("The favorite could not be saved.", app.devices.error)
+    }
+
+    @Test
+    fun sessionReportFiltersTotalsCsvAndNotes() = runTest {
+        val engine = FakeEngine()
+        DemoFixtures.company(engine)
+        val app = DemoFixtures.app(engine, backgroundScope)
+        val reports = app.reports
+        reports.from = "2026-11-01"; reports.to = "2026-11-13"; reports.technician = "22222222-2222-4222-8222-222222222222"
+        reports.load()
+        assertEquals(ch.mixel.remote.app.ReportsModel.State.Ok, reports.state)
+        val call = engine.calls("saas_session_report").last()
+        assertTrue(call.str("from")!!.startsWith("2026-1"))
+        assertEquals("owners filter by technician", "22222222-2222-4222-8222-222222222222", call.str("technician"))
+        assertEquals("2 sessions · total 0:27:36", reports.summary)
+        val csv = reports.csv()
+        assertTrue(csv.startsWith("\uFEFFTechnician,Email,Device,Connection ID,Start,End,Duration"))
+        assertTrue(csv.contains("Reception PC,731204118"))
+        assertTrue(csv.contains(",0:22:31,1351,Unattended,No,\"Printer driver updated, test page OK.\","))
+        assertTrue(csv.contains("Attended,Yes,,"))
+        assertEquals("'=SUM(A1)", ch.mixel.remote.app.ReportsModel.cell("=SUM(A1)"))
+        assertEquals("mixel-remote-muster-sessions-2026-11-01-2026-11-13.csv", reports.fileName("csv"))
+        val row = reports.rows.last()
+        assertTrue(reports.saveNote(row, "  Called back  "))
+        assertEquals("Called back", engine.calls("saas_session_note").last().str("note"))
+        assertEquals(row.sessionId, engine.calls("saas_session_note").last().str("session"))
+        assertEquals("Called back", reports.rows.last().note)
+        reports.to = "2026-10-01"
+        reports.load()
+        assertEquals(ch.mixel.remote.app.ReportsModel.State.Error, reports.state)
+        assertEquals("Choose a start date on or before the end date.", reports.problem)
+        engine.fail("saas_session_report", "Session reports need a paid plan")
+        reports.to = "2026-11-13"
+        reports.load()
+        assertEquals(ch.mixel.remote.app.ReportsModel.State.Plan, reports.state)
+    }
+
+    @Test
+    fun aNoteIsOfferedAfterAControlledSessionWithACompanyDevice() = runTest {
+        val engine = FakeEngine()
+        DemoFixtures.viewing(engine)
+        engine.queue(VideoPacket.sample())
+        val app = DemoFixtures.app(engine, backgroundScope)
+        settle()
+        assertNull(app.reports.notePrompt)
+        engine.reply("remote_status", """{"phase":"ready","host":482913557}""")
+        app.refreshRemote()
+        val prompt = app.reports.notePrompt!!
+        assertEquals(731204118L, prompt.connection)
+        assertEquals("Reception PC", prompt.name)
+        assertTrue(app.reports.saveSessionNote("Printer fixed"))
+        val note = engine.calls("saas_session_note").last()
+        assertEquals(731204118L, note.json["connection"]!!.jsonPrimitive.long)
+        assertNull(app.reports.notePrompt)
+    }
+
     @Test
     fun remoteIdParsing() {
         assertEquals(731204118L, Format.parseRemoteId("731 204 118"))

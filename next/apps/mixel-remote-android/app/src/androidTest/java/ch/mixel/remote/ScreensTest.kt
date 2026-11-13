@@ -62,7 +62,7 @@ class ScreensTest {
                 if (current != null) {
                     androidx.compose.runtime.key(current) {
                         MixelTheme(dark = current.dark) {
-                            CompositionLocalProvider(LocalDemo provides current.screen) { RootScreen(current.app, startInSettings = current.screen == "settings") }
+                            CompositionLocalProvider(LocalDemo provides current.screen) { RootScreen(current.app, startInSettings = current.screen == "settings", startInReports = current.screen == "reports") }
                         }
                     }
                 }
@@ -121,6 +121,22 @@ class ScreensTest {
     @Test fun chat() = all("chat") { compose.onNodeWithText("Hello, the printer shows an error.").assertIsDisplayed() }
     @Test fun files() = all("files") { compose.onNodeWithText("Receive").assertIsDisplayed() }
 
+    @Test fun draw() = all("draw") {
+        for (label in listOf("Pen", "Highlighter", "Arrow", "Undo", "Clear")) compose.onAllNodes(hasText(label) or hasContentDescription(label)).fetchSemanticsNodes().let { assertTrue(label, it.isNotEmpty()) }
+        compose.onNode(hasContentDescription("Draw: on")).assertIsDisplayed()
+    }
+    @Test fun reports() = all("reports") {
+        compose.onNodeWithText("Reception PC").assertIsDisplayed()
+        compose.onNodeWithText("Export CSV").assertIsDisplayed()
+        compose.onNodeWithText("2 sessions", substring = true).assertIsDisplayed()
+    }
+    @Test fun note() = all("note") { compose.onNodeWithText("Save note").assertIsDisplayed() }
+    @Test fun favorites() = all("devices") {
+        compose.onNodeWithText("FAVORITES").assertIsDisplayed()
+        compose.onNodeWithText("RECENT CONNECTIONS").assertIsDisplayed()
+        compose.onAllNodes(hasContentDescription("Remove from favorites")).fetchSemanticsNodes().let { assertTrue(it.isNotEmpty()) }
+    }
+
     @Test
     fun translations() {
         for ((language, word) in listOf("de" to "Geräte", "fr" to "Appareils", "it" to "Dispositivi")) {
@@ -129,6 +145,10 @@ class ScreensTest {
             shoot("devices-$language")
             show("account", dark = true, language = language)
             shoot("account-$language-dark")
+            show("reports", dark = false, language = language)
+            shoot("reports-$language")
+            show("draw", dark = true, language = language)
+            shoot("draw-$language-dark")
         }
     }
 

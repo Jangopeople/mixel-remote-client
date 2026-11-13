@@ -19,10 +19,10 @@ android {
         applicationId = "ch.mixel.remote"
         minSdk = 26
         targetSdk = 36
-        // 2.0.0 = 2 000 000 (major × 1 000 000 + minor × 1 000 + patch): the native app replaces the
+        // 2.0.1 = 2 000 001 (major × 1 000 000 + minor × 1 000 + patch); 2.0.0 replaced the
         // Tauri phone app 1.0.x (same app id and upload key, so it installs as an update).
-        versionCode = 2000000
-        versionName = "2.0.0"
+        versionCode = 2000001
+        versionName = "2.0.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         resValue("string", "app_name", "Mixel Remote")
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }

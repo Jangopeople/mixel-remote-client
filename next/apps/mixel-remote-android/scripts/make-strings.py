@@ -17,12 +17,36 @@ shutil.copyfile(os.path.join(APPLE, 'engine-texts.json'), os.path.join(HERE, 'ap
 ENGINE = json.load(open(os.path.join(HERE, 'app/src/main/assets/engine-texts.json'), encoding='utf-8'))
 LANGS = ['de', 'fr', 'it']
 
+# The desktop app's own tables for drawing, favorites and session reports (keyed by the English text).
+def desktop_tables():
+    tables = {lang: {} for lang in LANGS}
+    entry = re.compile(r"^\s+(?:'((?:[^'\\]|\\.)*)'|([A-Za-z][A-Za-z0-9]*)):\s*'((?:[^'\\]|\\.)*)',?\s*$")
+    for name in ('i18n-annotate.ts', 'i18n-reports.ts'):
+        path = os.path.join(HERE, '..', '..', 'frontends', 'desktop', name)
+        lang = None
+        for line in open(path, encoding='utf-8'):
+            head = re.match(r'^\s{4}(de|fr|it): \{', line)
+            if head:
+                lang = head.group(1)
+                continue
+            match = entry.match(line)
+            if lang and match:
+                key = (match.group(1) or match.group(2)).replace("\\'", "'")
+                tables[lang][key] = match.group(3).replace("\\'", "'")
+    return tables
+DESKTOP = desktop_tables()
+
 # Keys used through variables (KeyMap.Special.spoken).
 EXTRA = ['Escape', 'Tab', 'Enter', 'Backspace', 'Delete', 'Arrow up', 'Arrow down', 'Arrow left', 'Arrow right',
-         'Home', 'End', 'Page up', 'Page down']
+         'Home', 'End', 'Page up', 'Page down', 'Red', 'Yellow', 'Green', 'Blue', 'White']
 
 # English key: (German (Swiss spelling), French, Italian)
 ANDROID = {
+    "%@ added to favorites.": ("%@ zu den Favoriten hinzugefügt.", "%@ ajouté aux favoris.", "%@ aggiunto ai preferiti."),
+    "%@ removed from favorites.": ("%@ aus den Favoriten entfernt.", "%@ retiré des favoris.", "%@ rimosso dai preferiti."),
+    "Saved as %@": ("Gespeichert als %@", "Enregistré sous %@", "Salvato come %@"),
+    "Session with %@. Add a note? It appears in the session report of your company.": ("Sitzung mit %@. Notiz hinzufügen? Sie erscheint im Sitzungsbericht Ihrer Firma.", "Session avec %@. Ajouter une note ? Elle apparaît dans le rapport de sessions de votre entreprise.", "Sessione con %@. Aggiungere una nota? Appare nel rapporto delle sessioni della Sua azienda."),
+    "Size: %d": ("Grösse: %d", "Taille : %d", "Dimensione: %d"),
     "Add and enroll this phone": ("Dieses Telefon hinzufügen und registrieren", "Ajouter et enregistrer ce téléphone", "Aggiungi e registra questo telefono"),
     "Add this phone": ("Dieses Telefon hinzufügen", "Ajouter ce téléphone", "Aggiungi questo telefono"),
     "Add this phone to %@ so you can connect from it.": ("Fügen Sie dieses Telefon zu %@ hinzu, um von ihm aus zu verbinden.", "Ajoutez ce téléphone à %@ pour vous connecter depuis celui-ci.", "Aggiunga questo telefono a %@ per connettersi da esso."),
@@ -111,6 +135,8 @@ def keys():
 def lookup(key, lang, index):
     if key in ANDROID:
         return ANDROID[key][index]
+    if key in DESKTOP.get(lang, {}):
+        return DESKTOP[lang][key]
     entry = CATALOG.get(key, {}).get('localizations', {}).get(lang, {}).get('stringUnit', {}).get('value')
     if entry:
         return entry

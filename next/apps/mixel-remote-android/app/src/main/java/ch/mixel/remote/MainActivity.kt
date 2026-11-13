@@ -101,6 +101,9 @@ class MainActivity : ComponentActivity(), Platform {
 
     private val openDocument = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> copyToSend(uri) }
     private val createDocument = registerForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri -> saveTo(uri) }
+    private var pendingReport: ByteArray? = null
+    private val createCsv = registerForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { uri -> writeReport(uri) }
+    private val createPdf = registerForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri -> writeReport(uri) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -127,7 +130,7 @@ class MainActivity : ComponentActivity(), Platform {
                         else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                     }
                     CompositionLocalProvider(LocalDemo provides demo) {
-                        RootScreen(app, this, startInSettings = demo == "settings")
+                        RootScreen(app, this, startInSettings = demo == "settings", startInReports = demo == "reports")
                     }
                 } else if (screen == null) {
                     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -208,6 +211,27 @@ class MainActivity : ComponentActivity(), Platform {
         val safe = name.replace(Regex("[/\\\\:]"), "_").take(120).ifEmpty { "file" }
         val folder = File(filesDir, "received/${System.currentTimeMillis()}").apply { mkdirs() }
         return File(folder, safe).absolutePath
+    }
+
+    override fun saveReport(name: String, mime: String, bytes: ByteArray) {
+        pendingReport = bytes
+        if (mime == "application/pdf") createPdf.launch(name) else createCsv.launch(name)
+    }
+
+    private fun writeReport(uri: Uri?) {
+        val bytes = pendingReport ?: return
+        pendingReport = null
+        if (uri == null) { model?.reports?.notice = ch.mixel.remote.support.L("Export cancelled."); return }
+        lifecycleScope.launch {
+            runCatching { contentResolver.openOutputStream(uri)!!.use { it.write(bytes) } }
+                .onSuccess {
+                    val name = contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                        if (cursor.moveToFirst()) cursor.getString(0) else null
+                    } ?: ""
+                    model?.reports?.notice = ch.mixel.remote.support.L("Saved as %@", name)
+                }
+                .onFailure { model?.reports?.notice = ch.mixel.remote.support.L("The file could not be saved") }
+        }
     }
 
     override fun saveReceived(path: String, name: String) {

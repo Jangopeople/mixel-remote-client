@@ -18,7 +18,7 @@ object DemoFixtures {
     const val SESSION = "0f0e0d0c-0b0a-4908-8706-050403020100"
     const val CONSENT = "c0c0c0c0-0000-4000-8000-000000000001"
 
-    val screens = listOf("signed-out", "second-step", "devices", "connect", "setup", "account", "settings", "session", "chat", "files", "help")
+    val screens = listOf("signed-out", "second-step", "devices", "connect", "setup", "account", "settings", "session", "chat", "files", "help", "draw", "reports", "note")
 
     fun signedOut(engine: FakeEngine) {
         engine.reply("account_status", """{"phase":"signed_out","message":"Sign in with your Mixel account","account":null,"factors":[]}""")
@@ -43,7 +43,7 @@ object DemoFixtures {
         engine.reply("saas_my_tenants", """[{"tenant_id":"$TENANT","organization_id":"$TENANT","name":"Muster Treuhand AG","slug":"muster","role":"$role","plan":"business","status":"trial","trial_ends_at":"2026-11-27T10:00:00Z"}]""")
         engine.reply(
             "saas_tenant_overview",
-            """{"role":"$role","status":"trial","plan":"business","trial_ends_at":"2026-11-27T10:00:00Z","features":{"groups":true},"limits":{"devices":2000,"technicians":15},"usage":{"devices":4,"technicians":2}}""",
+            """{"role":"$role","status":"trial","plan":"business","trial_ends_at":"2026-11-27T10:00:00Z","features":{"groups":true,"reports":true},"limits":{"devices":2000,"technicians":15},"usage":{"devices":4,"technicians":2}}""",
         )
         engine.reply(
             "saas_members",
@@ -65,6 +65,15 @@ object DemoFixtures {
         engine.reply("device_removal_pending", "false")
         engine.reply("this_computer_name", "\"Mixel Remote (Pixel 8)\"")
         engine.reply("quick_phone_claim", "false")
+        engine.reply("saas_favorites", """[{"device_id":"d1000000-0000-4000-8000-000000000002","created_at":"2026-11-10T08:00:00Z"}]""")
+        engine.reply("saas_recent_devices", """[{"device_id":"d1000000-0000-4000-8000-000000000001","last_connected_at":"2026-11-13T09:00:00Z"},{"device_id":"d1000000-0000-4000-8000-000000000002","last_connected_at":"2026-11-12T09:00:00Z"}]""")
+        engine.reply("saas_set_favorite", "true")
+        engine.reply("saas_session_note", "\"e1000000-0000-4000-8000-000000000001\"")
+        engine.reply(
+            "saas_session_report",
+            """[{"session_id":"e1000000-0000-4000-8000-000000000001","technician_id":"$PROFILE","technician_name":"Anna Muster","technician_email":"anna@muster.test","device_id":"d1000000-0000-4000-8000-000000000001","device_name":"Reception PC","connection_id":731204118,"started_at":"2026-11-13T08:02:00Z","ended_at":"2026-11-13T08:24:31Z","duration_seconds":1351,"kind":"unattended","colleague":false,"note":"Printer driver updated, test page OK."},
+                {"session_id":"e1000000-0000-4000-8000-000000000002","technician_id":"22222222-2222-4222-8222-222222222222","technician_name":"Marco Rossi","technician_email":"marco@muster.test","device_id":"d1000000-0000-4000-8000-000000000002","device_name":"Accounting Mac","connection_id":268455901,"started_at":"2026-11-12T14:10:00Z","ended_at":"2026-11-12T14:15:05Z","duration_seconds":305,"kind":"attended","colleague":true,"note":null}]""",
+        )
     }
 
     fun viewing(engine: FakeEngine) {
@@ -72,7 +81,7 @@ object DemoFixtures {
         engine.reply(
             "remote_status",
             """{"phase":"active","message":"","host":482913557,"session":"$SESSION","consent":"$CONSENT","peer":731204118,"received":12,"control":true,"clipboard":true,"files":true,
-                "displays":2,"host_actions":["privacy","block","pointer","lock","lockend","sas","restart","sound","meet"],"host_macs":["525400a1b2c3"],"peer_features":["join","switch"],"online":[731204118]}""",
+                "displays":2,"host_actions":["privacy","block","pointer","lock","lockend","sas","restart","sound","meet"],"host_macs":["525400a1b2c3"],"peer_features":["join","switch","draw"],"online":[731204118]}""",
         )
         engine.reply("remote_chat_messages", """[{"id":1,"mine":false,"text":"Hello, the printer shows an error."},{"id":2,"mine":true,"text":"I see it, one moment."}]""")
         engine.reply(
@@ -105,7 +114,7 @@ object DemoFixtures {
                 engine.fail("remote_register", "No saved device identity. Choose Create device identity to generate one locally.")
             }
             "help" -> company(engine, staff = true)
-            "session", "chat", "files" -> {
+            "session", "chat", "files", "draw", "note" -> {
                 viewing(engine)
                 for (sequence in 1L..3L) engine.queue(VideoPacket.sample(1280, 800, sequence))
             }
@@ -113,11 +122,26 @@ object DemoFixtures {
         }
         val app = app(engine, scope)
         app.section = when (name) {
-            "signed-out", "second-step", "account", "settings" -> Section.Account
+            "signed-out", "second-step", "account", "settings", "reports", "note" -> Section.Account
             "connect", "setup", "help" -> Section.Connect
             else -> Section.Devices
         }
         if (name in setOf("session", "chat", "files")) app.session.readTools()
+        if (name == "draw") {
+            app.draw.toggle()
+            app.draw.color = 0
+            app.draw.start(20000, 30000); for (step in 1..20) app.draw.move(20000 + step * 900, 30000 + step * 500, 1280); app.draw.finish()
+            app.draw.tool = ch.mixel.remote.app.DrawModel.Tool.Arrow; app.draw.color = 1
+            app.draw.start(52000, 16000); app.draw.move(44000, 26000, 1280); app.draw.finish()
+            app.draw.tool = ch.mixel.remote.app.DrawModel.Tool.Pen
+        }
+        if (name == "note") {
+            // The session ends: the note for the session report is offered.
+            app.session.clear()
+            engine.reply("remote_status", """{"phase":"ready","message":"","host":482913557,"online":[731204118]}""")
+            app.refreshRemote()
+        }
+        if (name == "reports") app.reports.load()
         return app
     }
 }

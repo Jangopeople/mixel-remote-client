@@ -36,6 +36,16 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Draw
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.BorderColor
+import androidx.compose.material.icons.filled.ArrowOutward
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.semantics.selected
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.KeyboardHide
 import androidx.compose.material.icons.filled.Monitor
@@ -119,7 +129,7 @@ fun SessionScreen(app: AppModel, platform: Platform) {
     Column(Modifier.fillMaxSize().background(Color.Black).statusBarsPadding().navigationBarsPadding().imePadding()) {
         TopBar(app, keyboard, onKeyboard = { keyboard = !keyboard }, onChat = { showChat = true }, onFiles = { showFiles = true }, onEnd = { confirmEnd = true })
         Box(Modifier.weight(1f).fillMaxWidth()) {
-            RemotePicture(session, held)
+            RemotePicture(session, held, app.draw)
             if (!session.hasPicture) {
                 Column(Modifier.align(Alignment.Center).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     CircularProgressIndicator(color = Color.White)
@@ -139,7 +149,8 @@ fun SessionScreen(app: AppModel, platform: Platform) {
             }
             if (keyboard && session.controllable) KeyCatcher(session, held)
         }
-        if (remote.control) KeyBar(session, held)
+        if (app.draw.on) DrawBar(app.draw)
+        else if (remote.control) KeyBar(session, held)
     }
     if (showChat) ChatSheet(session) { showChat = false }
     if (showFiles) FilesSheet(session, platform) { showFiles = false }
@@ -174,6 +185,11 @@ private fun TopBar(app: AppModel, keyboard: Boolean, onKeyboard: () -> Unit, onC
                     }
                 }
             }
+            if (app.draw.available) {
+                IconButton(onClick = { app.draw.toggle() }, modifier = Modifier.semantics { stateDescription = if (app.draw.on) L("on") else L("off") }) {
+                    Icon(Icons.Filled.Draw, contentDescription = if (app.draw.on) L("Draw: on") else L("Draw: off"), tint = if (app.draw.on) MaterialTheme.colorScheme.primary else LocalContentColor.current)
+                }
+            }
             if (remote.control) {
                 IconButton(onClick = onKeyboard) {
                     Icon(if (keyboard) Icons.Filled.KeyboardHide else Icons.Filled.Keyboard, contentDescription = if (keyboard) L("Hide keyboard") else L("Keyboard"))
@@ -206,7 +222,7 @@ private fun TopBar(app: AppModel, keyboard: Boolean, onKeyboard: () -> Unit, onC
 
 /** The remote picture: the phone's decoder on a texture, or the engine's pictures; zoom and touch. */
 @Composable
-private fun RemotePicture(session: SessionModel, held: MutableList<Int>) {
+private fun RemotePicture(session: SessionModel, held: MutableList<Int>, draw: ch.mixel.remote.app.DrawModel) {
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
     var box by remember { mutableStateOf(IntSize.Zero) }
@@ -246,7 +262,8 @@ private fun RemotePicture(session: SessionModel, held: MutableList<Int>) {
                 contentDescription = L("Remote screen")
                 stateDescription = if (session.controllable) L("Tap to click, touch and hold for a right click, two fingers to scroll, pinch to zoom.") else L("View only")
             }
-            .pointerInput(session.controllable) {
+            .pointerInput(session.controllable, draw.on) {
+                if (draw.on) return@pointerInput
                 detectTapGestures(
                     onTap = { point -> if (session.controllable) toPicture(point)?.let { (x, y) -> session.click(x, y) } },
                     onDoubleTap = { point -> if (session.controllable) toPicture(point)?.let { (x, y) -> session.doubleClick(x, y) } },
@@ -329,6 +346,38 @@ private fun RemotePicture(session: SessionModel, held: MutableList<Int>) {
                     filterQuality = androidx.compose.ui.graphics.FilterQuality.Medium,
                 )
             }
+        }
+        // The technician's drawing (shown here until the other computer has it in its picture or it fades).
+        val revision = draw.revision
+        if (draw.strokes.isNotEmpty()) {
+            Canvas(Modifier.fillMaxSize()) {
+                @Suppress("UNUSED_EXPRESSION") revision
+                val now = System.currentTimeMillis()
+                val alpha = draw.opacity(now)
+                if (alpha <= 0f) return@Canvas
+                for (stroke in draw.visible(now)) drawStroke(stroke, topLeft, size, alpha)
+            }
+        }
+        // Draw mode: one finger draws (two fingers still zoom).
+        if (draw.on) {
+            Box(
+                Modifier.fillMaxSize().semantics { contentDescription = L("Draw on the remote screen. The person at the computer sees it; nothing is clicked.") }
+                    .pointerInput(Unit) {
+                        awaitEachGesture {
+                            val down = awaitFirstDown()
+                            fun scaled(point: Offset): Pair<Int, Int>? = toPicture(point)?.let { (x, y) -> SessionModel.normalized(x) to SessionModel.normalized(y) }
+                            scaled(down.position)?.let { (x, y) -> draw.start(x, y); down.consume() } ?: return@awaitEachGesture
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                if (event.changes.count { it.pressed } > 1) { draw.finish(); break }
+                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                if (!change.pressed) { change.consume(); draw.finish(); break }
+                                scaled(change.position)?.let { (x, y) -> draw.move(x, y, maxOf(session.width, 1)) }
+                                change.consume()
+                            }
+                        }
+                    },
+            )
         }
     }
     // Held modifiers are released when the picture goes away.
@@ -521,6 +570,75 @@ fun FilesSheet(session: SessionModel, platform: Platform, onDismiss: () -> Unit)
             if (files?.message?.isNotEmpty() == true) MessageLine(ch.mixel.remote.support.Translator.translate(files.message), error = false)
             OutlinedButton(onClick = { platform.chooseFileToSend { path -> if (path != null) session.sendFile(path) } }) { Text(L("Send a file…")) }
             MessageLine(session.error)
+        }
+    }
+}
+
+/** One stroke on the picture rectangle (points 0…65535), as the other computer draws it. */
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawStroke(
+    stroke: ch.mixel.remote.app.DrawModel.Stroke, topLeft: Offset, size: androidx.compose.ui.geometry.Size, alpha: Float,
+) {
+    if (stroke.points.isEmpty() || size.width <= 0f) return
+    val color = Color(ch.mixel.remote.app.DrawModel.PALETTE[stroke.color.coerceIn(0, 4)])
+    val highlight = stroke.tool == ch.mixel.remote.app.DrawModel.Tool.Highlighter
+    val paint = color.copy(alpha = alpha * if (highlight) 0.35f else 1f)
+    val width = ch.mixel.remote.app.DrawModel.lineWidth(stroke.tool, stroke.width, size.height)
+    fun place(point: Pair<Int, Int>) = Offset(topLeft.x + point.first * (size.width - 1) / 65535f, topLeft.y + point.second * (size.height - 1) / 65535f)
+    val points = if (stroke.tool == ch.mixel.remote.app.DrawModel.Tool.Arrow) listOf(stroke.points.first(), stroke.points.last()) else stroke.points
+    val cap = androidx.compose.ui.graphics.drawscope.Stroke(width = width, cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round)
+    if (points.size == 1) {
+        drawCircle(paint, radius = width / 2, center = place(points[0]))
+        return
+    }
+    val path = androidx.compose.ui.graphics.Path().apply {
+        moveTo(place(points[0]).x, place(points[0]).y)
+        for (point in points.drop(1)) place(point).let { lineTo(it.x, it.y) }
+    }
+    drawPath(path, paint, style = cap)
+    if (stroke.tool == ch.mixel.remote.app.DrawModel.Tool.Arrow) {
+        val start = place(points[0]); val end = place(points[1])
+        val angle = kotlin.math.atan2(end.y - start.y, end.x - start.x)
+        val head = maxOf(width * 4, 12f)
+        for (side in listOf(-1, 1)) {
+            val a = angle + Math.PI.toFloat() - side * 0.45f
+            drawLine(paint, end, Offset(end.x + head * kotlin.math.cos(a), end.y + head * kotlin.math.sin(a)), strokeWidth = width, cap = androidx.compose.ui.graphics.StrokeCap.Round)
+        }
+    }
+}
+
+/** Drawing tools: pen, highlighter, arrow, five colours, size, undo, clear. */
+@Composable
+private fun DrawBar(draw: ch.mixel.remote.app.DrawModel) {
+    Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 10.dp, vertical = 6.dp).semantics { contentDescription = L("Drawing tools") },
+            horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically,
+        ) {
+            for ((tool, label, icon) in listOf(
+                Triple(ch.mixel.remote.app.DrawModel.Tool.Pen, L("Pen"), Icons.Filled.Edit),
+                Triple(ch.mixel.remote.app.DrawModel.Tool.Highlighter, L("Highlighter"), Icons.Filled.BorderColor),
+                Triple(ch.mixel.remote.app.DrawModel.Tool.Arrow, L("Arrow"), Icons.Filled.ArrowOutward),
+            )) {
+                FilterChip(
+                    selected = draw.tool == tool, onClick = { draw.tool = tool },
+                    label = { Text(label) }, leadingIcon = { Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                    colors = FilterChipDefaults.filterChipColors(selectedContainerColor = MaterialTheme.colorScheme.primaryContainer),
+                )
+            }
+            ch.mixel.remote.app.DrawModel.PALETTE.forEachIndexed { index, value ->
+                val chosen = draw.color == index
+                Box(
+                    Modifier.size(32.dp).background(Color(value), androidx.compose.foundation.shape.CircleShape)
+                        .border(if (chosen) 3.dp else 1.dp, if (chosen) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline, androidx.compose.foundation.shape.CircleShape)
+                        .clickable(role = androidx.compose.ui.semantics.Role.RadioButton) { draw.color = index }
+                        .semantics { contentDescription = L(ch.mixel.remote.app.DrawModel.COLOR_NAMES[index]); selected = chosen },
+                )
+            }
+            TextButton(onClick = { draw.cycleWidth() }, modifier = Modifier.semantics { contentDescription = L("Line width") + ": " + L("Size: %d", draw.width) }) {
+                Text(L("Size: %d", draw.width), color = MaterialTheme.colorScheme.onSurface)
+            }
+            IconButton(onClick = { draw.undo() }) { Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = L("Undo")) }
+            IconButton(onClick = { draw.clear() }) { Icon(Icons.Filled.Delete, contentDescription = L("Clear")) }
         }
     }
 }

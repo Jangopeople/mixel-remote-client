@@ -135,6 +135,31 @@ data class SaasPresence(val deviceId: String, val connectionId: Long? = null, va
 @Serializable
 data class SaasGroup(val groupId: String, val name: String, val devices: Int = 0, val technicians: List<String> = emptyList())
 
+@Serializable
+data class SaasFavorite(val deviceId: String, val createdAt: String = "")
+
+@Serializable
+data class SaasRecentDevice(val deviceId: String, val lastConnectedAt: String? = null)
+
+/** One session of the session report (SQL 029). `endedAt` is empty while it runs. */
+@Serializable
+data class SessionRow(
+    val sessionId: String,
+    val technicianId: String? = null,
+    val technicianName: String? = null,
+    val technicianEmail: String? = null,
+    val deviceId: String? = null,
+    val deviceName: String? = null,
+    val connectionId: Long? = null,
+    val startedAt: String,
+    val endedAt: String? = null,
+    val durationSeconds: Long? = null,
+    /** `attended` or `unattended`. */
+    val kind: String = "attended",
+    val colleague: Boolean? = null,
+    val note: String? = null,
+)
+
 // Company
 
 @Serializable
