@@ -428,7 +428,34 @@ impl AccountAuth {
         Ok(())
     }
     pub async fn begin(&self) -> Result<String, String> {
-        let (client, provider, domain) = AuthClient::configured()?;
+        self.begin_with(None).await
+    }
+
+    /// The sign-in methods the identity service offers now (`/auth/v1/settings`), in the order the
+    /// app shows them: `mixel_id`, `google`, `azure` (Microsoft), `apple`. Unknown or switched-off
+    /// providers are left out, so no button leads to a provider that is not set up.
+    pub async fn providers(&self) -> Result<Vec<&'static str>, String> {
+        #[derive(Deserialize)]
+        struct Settings {
+            #[serde(default)]
+            external: std::collections::HashMap<String, bool>,
+        }
+        let (client, _, _) = AuthClient::configured()?;
+        let settings: Settings = client.request("/auth/v1/settings", None, None).await?;
+        Ok(available_providers(&settings.external))
+    }
+
+    /// Starts the browser sign-in with a chosen provider (`google`, `azure`, `apple`, `keycloak`),
+    /// or the configured one (Mixel ID, or the company's single sign-on domain) for `None`.
+    pub async fn begin_with(&self, chosen: Option<&str>) -> Result<String, String> {
+        let (client, configured, configured_domain) = AuthClient::configured()?;
+        let (provider, scopes, domain) = match chosen {
+            None => (configured, "openid profile email", configured_domain),
+            Some(name) => {
+                let (provider, scopes) = provider_scopes(name).ok_or("This sign-in method is not available")?;
+                (provider.to_owned(), scopes, None)
+            }
+        };
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .map_err(|_| "Cannot open the private sign-in callback")?;
@@ -478,7 +505,7 @@ impl AccountAuth {
                 .map_err(|_| "Invalid sign-in endpoint")?;
             url.query_pairs_mut()
                 .append_pair("provider", &provider)
-                .append_pair("scopes", "openid profile email")
+                .append_pair("scopes", scopes)
                 .append_pair("redirect_to", &redirect)
                 .append_pair("code_challenge", &challenge)
                 .append_pair("code_challenge_method", "s256");
@@ -1170,8 +1197,42 @@ fn callback_code(
     Some(Zeroizing::new(codes[0].1.to_string()))
 }
 
+/// A provider the app may start a sign-in with, and its GoTrue scopes (as the portal asks for them).
+pub fn provider_scopes(name: &str) -> Option<(&'static str, &'static str)> {
+    match name {
+        "keycloak" | "mixel_id" => Some(("keycloak", "openid profile email")),
+        "google" => Some(("google", "openid email profile")),
+        "azure" | "microsoft" => Some(("azure", "openid email profile")),
+        "apple" => Some(("apple", "name email")),
+        _ => None,
+    }
+}
+
+/// The app's sign-in buttons for the identity service's `external` settings.
+pub fn available_providers(external: &std::collections::HashMap<String, bool>) -> Vec<&'static str> {
+    [("keycloak", "mixel_id"), ("google", "google"), ("azure", "azure"), ("apple", "apple")]
+        .into_iter()
+        .filter(|(key, _)| external.get(*key).copied().unwrap_or(false))
+        .map(|(_, button)| button)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_known_switched_on_providers_become_buttons() {
+        let mut external = std::collections::HashMap::new();
+        for (name, on) in [("email", true), ("keycloak", true), ("google", true), ("azure", true), ("apple", false), ("github", true)] {
+            external.insert(name.to_owned(), on);
+        }
+        assert_eq!(super::available_providers(&external), vec!["mixel_id", "google", "azure"]);
+        assert_eq!(super::provider_scopes("azure"), Some(("azure", "openid email profile")));
+        assert_eq!(super::provider_scopes("apple"), Some(("apple", "name email")));
+        assert_eq!(super::provider_scopes("mixel_id").map(|p| p.0), Some("keycloak"));
+        assert!(super::provider_scopes("github").is_none());
+        assert!(super::provider_scopes("").is_none());
+    }
+
     use super::*;
 
     #[tokio::test]

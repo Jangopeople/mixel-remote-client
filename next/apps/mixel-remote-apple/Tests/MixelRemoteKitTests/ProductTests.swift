@@ -199,3 +199,30 @@ final class ProductTests: XCTestCase {
         XCTAssertEqual(engine.calls("ticket_note").last?.object["remote_id"] as? Int, 731_204_118)
     }
 }
+
+@MainActor
+final class SignInProviderTests: XCTestCase {
+    func testProviderButtonsFollowTheServiceAndStartWithTheChosenProvider() async throws {
+        Translator.shared.choice = "en"
+        let engine = MockEngine()
+        Fixtures.signedOut(engine)
+        engine.reply("sign_in_providers", json: #"["mixel_id","google","azure","apple"]"#)
+        engine.reply("account_sign_in", json: #""https://ism-api.mixel.ch/auth/v1/authorize?provider=azure""#)
+        let app = await Fixtures.app(engine)
+        XCTAssertEqual(app.otherSignInProviders, ["google", "azure", "apple"])
+        XCTAssertEqual(AppModel.providerTitle("azure"), "Continue with Microsoft")
+        var opened: URL?
+        app.openSignIn = { opened = $0 }
+        app.signIn(provider: "azure")
+        let deadline = Date().addingTimeInterval(3)
+        while opened == nil, Date() < deadline { try await Task.sleep(nanoseconds: 20_000_000) }
+        XCTAssertEqual(engine.calls("account_sign_in").last?.object["provider"] as? String, "azure")
+        XCTAssertEqual(opened?.host, "ism-api.mixel.ch")
+
+        let off = MockEngine()
+        Fixtures.signedOut(off)
+        off.reply("sign_in_providers", json: #"["mixel_id"]"#)
+        let plain = await Fixtures.app(off)
+        XCTAssertTrue(plain.otherSignInProviders.isEmpty, "no button for a provider the service does not offer")
+    }
+}

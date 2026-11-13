@@ -1,4 +1,5 @@
 import AppKit
+import AuthenticationServices
 import MixelCore
 import MixelRemoteKit
 import SwiftUI
@@ -23,6 +24,8 @@ enum Entry {
         if arguments.count >= 5, arguments[1] == "--live-session" {
             LiveCheck.run(sessionFile: arguments[2], suffix: arguments[3], sessionFolder: arguments[4])
         }
+        // `--live-providers`: every sign-in button reaches its provider's login page (no sign-in).
+        if arguments.count >= 2, arguments[1] == "--live-providers" { LiveCheck.providers() }
         // `--live-prepare <qa-session.json> <suffix> <folder>`: QA company + deploy token for the update test.
         if arguments.count >= 5, arguments[1] == "--live-prepare" {
             LiveCheck.run(sessionFile: arguments[2], suffix: arguments[3], sessionFolder: arguments[4], prepare: true)
@@ -90,6 +93,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 NSApp.terminate(nil)
             }
             app.openURL = { NSWorkspace.shared.open($0) }
+            app.openSignIn = { [weak self] url in self?.presentSignIn(url) }
             app.chooseFile = { await Panels.open() }
             app.chooseSaveLocation = { await Panels.save(suggested: $0) }
             model = app
@@ -114,6 +118,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    // MARK: Sign-in (Mixel ID, Google, Microsoft, Apple)
+
+    private var signIn: ASWebAuthenticationSession?
+    private var signInWatch: Task<Void, Never>?
+
+    /// The provider's page opens in a secure sign-in sheet (PKCE; the engine keeps the verifier). Its
+    /// last step returns to this app's private address on 127.0.0.1, which only the engine answers;
+    /// the sheet closes once the engine has the code. "Use another browser" still shows the link.
+    func presentSignIn(_ url: URL) {
+        signIn?.cancel()
+        let session = ASWebAuthenticationSession(url: url, callbackURLScheme: "ch.mixel.remote") { [weak self] _, _ in
+            Task { @MainActor in
+                guard let self, let model = self.model else { return }
+                self.signIn = nil
+                await model.refreshAccount()
+                if ["starting", "waiting_browser"].contains(model.account.phase) { model.cancelSignIn() }
+            }
+        }
+        session.presentationContextProvider = self
+        session.prefersEphemeralWebBrowserSession = false
+        signIn = session
+        if !session.start() { signIn = nil; NSWorkspace.shared.open(url); return }
+        signInWatch?.cancel()
+        signInWatch = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                guard let self, let session = self.signIn, let model = self.model else { return }
+                if !["starting", "waiting_browser"].contains(model.account.phase) {
+                    self.signIn = nil
+                    session.cancel()
+                    return
+                }
+            }
+        }
+    }
+}
+
+extension AppDelegate: ASWebAuthenticationPresentationContextProviding {
+    nonisolated func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        MainActor.assumeIsolated { NSApp.keyWindow ?? NSApp.windows.first ?? ASPresentationAnchor() }
+    }
 }
 
 /// The Open and Save panels for files and recordings.

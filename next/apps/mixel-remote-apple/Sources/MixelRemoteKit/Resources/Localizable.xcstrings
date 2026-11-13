@@ -1805,6 +1805,72 @@
         }
       }
     },
+    "Continue with Apple": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Weiter mit Apple"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continuer avec Apple"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continua con Apple"
+          }
+        }
+      }
+    },
+    "Continue with Google": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Weiter mit Google"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continuer avec Google"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continua con Google"
+          }
+        }
+      }
+    },
+    "Continue with Microsoft": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Weiter mit Microsoft"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continuer avec Microsoft"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continua con Microsoft"
+          }
+        }
+      }
+    },
     "Control a remote device": {
       "localizations": {
         "de": {
@@ -9039,6 +9105,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Il Suo collega riceve l’invito in Mixel Remote e si unisce a questa sessione. Alla persona al computer viene chiesto prima, a meno che sia configurato l’accesso non presidiato."
+          }
+        }
+      }
+    },
+    "Your company decides which sign-in methods its members may use.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ihre Firma bestimmt, welche Anmeldemethoden ihre Mitglieder verwenden dürfen."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Votre entreprise décide des méthodes de connexion que ses membres peuvent utiliser."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La Sua azienda decide quali metodi di accesso possono usare i suoi membri."
           }
         }
       }

@@ -165,6 +165,37 @@ enum LiveCheck {
         try? await engine.shutdown()
     }
 
+    /// Each sign-in button reaches its provider's login page: the engine builds the PKCE authorize link,
+    /// it is followed without cookies up to the provider, and the sign-in is cancelled (nobody signs in).
+    static func providers() -> Never {
+        let done = DispatchSemaphore(value: 0)
+        Task.detached {
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent("mixel-native-providers")
+            guard let engine = try? CoreEngine(dataDirectory: folder) else { check("engine starts", false); done.signal(); return }
+            let listed = (try? await call(engine, "sign_in_providers").get()) as? [String] ?? []
+            check("the identity service offers \(listed.joined(separator: ", "))", Set(["mixel_id", "google", "azure", "apple"]).isSubset(of: Set(listed)))
+            let expected = ["mixel_id": "auth.mixel.ch", "google": "accounts.google.com", "azure": "login.microsoftonline.com", "apple": "appleid.apple.com"]
+            let web = URLSession(configuration: .ephemeral)
+            for provider in ["mixel_id", "google", "azure", "apple"] {
+                let started = await call(engine, "account_sign_in", ["open_browser": false, "provider": provider])
+                let link = ((try? started.get()) as? String).flatMap(URL.init(string:))
+                var host = "", status = 0
+                if let link, let (_, response) = try? await web.data(from: link), let http = response as? HTTPURLResponse {
+                    host = http.url?.host ?? ""; status = http.statusCode
+                }
+                let pkce = link?.absoluteString.contains("code_challenge_method=s256") == true && link?.absoluteString.contains("redirect_to=http%3A%2F%2F127.0.0.1") == true
+                check("\(provider): PKCE link to the identity service, ends at \(host) (HTTP \(status))", pkce && host == expected[provider] && (200..<400).contains(status), "\(started)")
+                _ = await call(engine, "account_cancel")
+            }
+            try? await engine.shutdown()
+            try? FileManager.default.removeItem(at: folder)
+            done.signal()
+        }
+        done.wait()
+        print("RESULT \(checks - failures)/\(checks) passed")
+        exit(failures == 0 ? 0 : 1)
+    }
+
     /// For the in-place update test: a QA company and a one-computer deploy link whose token is written
     /// to `folder/deploy-token.txt` (0.1.22 enrols this Mac with it, as the rollout script does).
     static func prepareRollout(suffix: String, folder: URL) async {

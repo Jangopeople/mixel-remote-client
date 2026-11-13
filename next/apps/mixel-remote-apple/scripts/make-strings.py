@@ -13,6 +13,10 @@ TABLES = json.load(open(os.path.join(HERE, 'Sources/MixelRemoteKit/Resources/eng
 
 # English key: (German (Swiss spelling), French, Italian)
 NATIVE = {
+    'Continue with Apple': ('Weiter mit Apple', 'Continuer avec Apple', 'Continua con Apple'),
+    'Continue with Google': ('Weiter mit Google', 'Continuer avec Google', 'Continua con Google'),
+    'Continue with Microsoft': ('Weiter mit Microsoft', 'Continuer avec Microsoft', 'Continua con Microsoft'),
+    'Your company decides which sign-in methods its members may use.': ('Ihre Firma bestimmt, welche Anmeldemethoden ihre Mitglieder verwenden dürfen.', 'Votre entreprise décide des méthodes de connexion que ses membres peuvent utiliser.', 'La Sua azienda decide quali metodi di accesso possono usare i suoi membri.'),
     '%d of %d computers': ('%d von %d Computern', '%d sur %d ordinateurs', '%d di %d computer'),
     'AI assistant and ticket note': ('KI-Assistent und Ticketnotiz', 'Assistant IA et note de ticket', 'Assistente IA e nota del ticket'),
     'AI server': ('KI-Server', 'Serveur IA', 'Server IA'),

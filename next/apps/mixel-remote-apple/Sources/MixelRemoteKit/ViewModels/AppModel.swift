@@ -106,6 +106,7 @@ public final class AppModel: ObservableObject {
         guard let next: AccountStatus = try? await engine.run("account_status") else { return }
         if next != account { account = next }
         let key = next.signedIn ? "\(next.account?.profile ?? "")|\(next.account?.organization ?? "")|\(next.account?.personal ?? false)" : ""
+        if !next.signedIn, signInProviders.isEmpty { await loadSignInProviders() }
         if key != accountKey {
             accountKey = key
             signInLink = nil
@@ -172,9 +173,29 @@ public final class AppModel: ObservableObject {
 
     // MARK: Sign-in
 
-    public func signIn(showLink: Bool = false) {
+    /// Sign-in methods the identity service offers (`mixel_id`, `google`, `azure`, `apple`).
+    @Published public private(set) var signInProviders: [String] = []
+
+    public func loadSignInProviders() async {
+        if let providers: [String] = try? await engine.run("sign_in_providers") { signInProviders = providers }
+    }
+
+    /// The other sign-in buttons beside Mixel ID, in the portal's order.
+    public var otherSignInProviders: [String] { signInProviders.filter { ["google", "azure", "apple"].contains($0) } }
+
+    public static func providerTitle(_ provider: String) -> String {
+        switch provider {
+        case "google": L("Continue with Google")
+        case "azure": L("Continue with Microsoft")
+        case "apple": L("Continue with Apple")
+        default: L("Sign in with Mixel ID")
+        }
+    }
+
+    /// `provider`: nil for Mixel ID (or the company's single sign-on), else google, azure or apple.
+    public func signIn(provider: String? = nil, showLink: Bool = false) {
         act {
-            let url: String = try await self.engine.run("account_sign_in", ["open_browser": false])
+            let url: String = try await self.engine.run("account_sign_in", ["open_browser": false, "provider": provider])
             if showLink { self.signInLink = url }
             else if let link = URL(string: url) { (self.openSignIn ?? self.openURL)(link) }
             await self.refreshAccount()
