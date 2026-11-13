@@ -451,6 +451,11 @@ begin
         or remote_private.saas_startup_host(h.connection_id, h.device_id, pg_temp.id('owner_a_profile'), pg_temp.id('org_a'), h.generation, b.public_key) then
         raise exception 'startup host policy';
     end if;
+    if not remote_private.saas_device_bound(h.connection_id, h.device_id, pg_temp.id('owner_a_profile'), h.generation, h.public_key)
+        or remote_private.saas_device_bound(h.connection_id, h.device_id, pg_temp.id('owner_b_profile'), h.generation, h.public_key)
+        or remote_private.saas_device_bound(h.connection_id, h.device_id, pg_temp.id('owner_a_profile'), h.generation + 1, h.public_key) then
+        raise exception 'device binding check';
+    end if;
     begin perform 1 from remote_saas.tenants; raise exception 'policy reader reads tenant tables';
     exception when insufficient_privilege then null; end;
     execute 'reset role';
