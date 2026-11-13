@@ -695,7 +695,7 @@ impl ControlPipe {
             .map_err(|_| "Input acknowledgment failed".to_owned())
     }
 }
-pub(crate) async fn received_record(
+pub async fn received_record(
     channel: &Arc<dyn NativeDataChannel>,
 ) -> Result<Vec<u8>, String> {
     loop {

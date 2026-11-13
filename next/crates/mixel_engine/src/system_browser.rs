@@ -8,7 +8,7 @@ pub async fn open(raw: &str) -> Result<(), String> {
     {
         return Err("The browser destination must use HTTPS without embedded credentials".into());
     }
-    let opened = tauri::async_runtime::spawn_blocking(move || launch(url.as_str())).await;
+    let opened = tokio::task::spawn_blocking(move || launch(url.as_str())).await;
     if !matches!(opened, Ok(true)) {
         return Err("The system browser could not be opened".into());
     }

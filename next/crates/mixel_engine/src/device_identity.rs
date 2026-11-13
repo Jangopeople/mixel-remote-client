@@ -37,7 +37,7 @@ pub fn validated_bundle_scope() -> Result<&'static str, String> {
 #[cfg(target_os = "macos")]
 const ACCOUNT: &str = "ed25519-device";
 #[cfg(target_os = "macos")]
-pub(crate) const KEYCHAIN_NOT_FOUND: i32 = NOT_FOUND;
+pub const KEYCHAIN_NOT_FOUND: i32 = NOT_FOUND;
 const MAGIC: &[u8] = b"MIXEL-IDENTITY\x01";
 #[cfg(target_os = "macos")]
 const NOT_FOUND: i32 = -25300;
@@ -166,9 +166,9 @@ fn load_or_create(create: bool) -> Result<SigningKey, String> {
     windows_store::load_or_create(None, create)
 }
 #[cfg(target_os = "windows")]
-pub(crate) use windows_store::{location as windows_store_location, protect as windows_protect, unprotect as windows_unprotect};
+pub use windows_store::{location as windows_store_location, protect as windows_protect, unprotect as windows_unprotect};
 #[cfg(target_os = "windows")]
-pub(crate) use windows_store::{machine_protect as windows_machine_protect, machine_unprotect as windows_machine_unprotect};
+pub use windows_store::{machine_protect as windows_machine_protect, machine_unprotect as windows_machine_unprotect};
 #[cfg(target_os = "windows")]
 impl IdentityState {
     /// The computer-wide identity of the Windows sign-in screen host.
@@ -239,7 +239,7 @@ impl IdentityState {
 }
 impl IdentityState {
     #[cfg(all(test, any(target_os = "linux", target_os = "windows")))]
-    pub(crate) fn test_identity(key: SigningKey) -> Self {
+    pub fn test_identity(key: SigningKey) -> Self {
         Self(Mutex::new(Some(key)))
     }
 

@@ -93,7 +93,7 @@ fn crypt_with(
         unsafe { std::slice::from_raw_parts(output.0.pbData, output.0.cbData as usize) }.to_vec(),
     ))
 }
-pub(crate) fn location(profile: Option<uuid::Uuid>) -> Result<PathBuf, String> {
+pub fn location(profile: Option<uuid::Uuid>) -> Result<PathBuf, String> {
     // SAFETY: known-folder API allocates a null-terminated UTF16 path; its memory
     // is copied losslessly before release with the matching COM allocator.
     let folder = unsafe { SHGetKnownFolderPath(&FOLDERID_LocalAppData, KF_FLAG_DEFAULT, None) }
@@ -185,19 +185,19 @@ pub(super) fn load_or_create(
 }
 
 /// DPAPI-protect a small secret for the current Windows user (session store).
-pub(crate) fn protect(bytes: &[u8]) -> Result<Zeroizing<Vec<u8>>, String> {
+pub fn protect(bytes: &[u8]) -> Result<Zeroizing<Vec<u8>>, String> {
     crypt(bytes, true)
 }
 /// Reverse of [`protect`] for the same Windows user.
-pub(crate) fn unprotect(bytes: &[u8]) -> Result<Zeroizing<Vec<u8>>, String> {
+pub fn unprotect(bytes: &[u8]) -> Result<Zeroizing<Vec<u8>>, String> {
     crypt(bytes, false)
 }
 
 /// Machine-scope DPAPI for the sign-in screen host (readable by SYSTEM; the
 /// file itself is restricted to SYSTEM and Administrators).
-pub(crate) fn machine_protect(bytes: &[u8]) -> Result<Zeroizing<Vec<u8>>, String> {
+pub fn machine_protect(bytes: &[u8]) -> Result<Zeroizing<Vec<u8>>, String> {
     crypt_with(bytes, true, CRYPTPROTECT_UI_FORBIDDEN | CRYPTPROTECT_LOCAL_MACHINE)
 }
-pub(crate) fn machine_unprotect(bytes: &[u8]) -> Result<Zeroizing<Vec<u8>>, String> {
+pub fn machine_unprotect(bytes: &[u8]) -> Result<Zeroizing<Vec<u8>>, String> {
     crypt_with(bytes, false, CRYPTPROTECT_UI_FORBIDDEN | CRYPTPROTECT_LOCAL_MACHINE)
 }

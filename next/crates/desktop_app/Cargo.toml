@@ -8,10 +8,11 @@ publish.workspace = true
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
-testflight-controller = []
-qa-session = []
+testflight-controller = ["mixel_engine/testflight-controller"]
+qa-session = ["mixel_engine/qa-session"]
 
 [dependencies]
+mixel_engine = { path = "../mixel_engine" }
 arboard = { version = "=3.7.0", default-features = false, features = ["image-data"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 cpal = "0.16"

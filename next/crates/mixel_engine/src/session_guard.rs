@@ -89,6 +89,11 @@ impl Guard {
         Guard
     }
 }
+impl Default for Guard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 impl Drop for Guard {
     fn drop(&mut self) {
         let mut holders = HOLDERS.lock().unwrap_or_else(|error| error.into_inner());

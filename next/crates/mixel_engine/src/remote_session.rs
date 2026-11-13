@@ -310,7 +310,7 @@ impl Status {
     }
 }
 
-pub(crate) enum Command {
+pub enum Command {
     Request(u32, Option<SupportCode>, bool),
     ConfigureUnattended {
         enabled: bool,
@@ -381,7 +381,7 @@ pub enum InputEvent {
     Action { name: String },
 }
 impl InputEvent {
-    pub(crate) fn borrowed(&self) -> core_protocol::input::Input<'_> {
+    pub fn borrowed(&self) -> core_protocol::input::Input<'_> {
         use core_protocol::input::Input;
         match self {
             Self::Text { text } => Input::Text(text),
@@ -425,12 +425,12 @@ impl Drop for InputEvent {
         }
     }
 }
-pub(crate) struct InputCommand {
+pub struct InputCommand {
     pub event: InputEvent,
     pub deadline: std::time::Instant,
     pub reply: tokio::sync::oneshot::Sender<Result<bool, String>>,
 }
-pub(crate) struct ClipboardCommand {
+pub struct ClipboardCommand {
     pub push: bool,
     pub deadline: std::time::Instant,
     pub reply: tokio::sync::oneshot::Sender<Result<(), String>>,
@@ -501,10 +501,10 @@ impl Default for RemoteSession {
     }
 }
 impl RemoteSession {
-    pub(crate) fn recording_hub(&self) -> crate::remote_recording::RecordingHub {
+    pub fn recording_hub(&self) -> crate::remote_recording::RecordingHub {
         self.3.clone()
     }
-    pub(crate) fn chat_hub(&self) -> crate::remote_chat::ChatHub {
+    pub fn chat_hub(&self) -> crate::remote_chat::ChatHub {
         self.2.clone()
     }
 
@@ -523,10 +523,10 @@ impl RemoteSession {
         Ok(())
     }
 
-    pub(crate) fn file_hub(&self) -> crate::remote_files::FileHub {
+    pub fn file_hub(&self) -> crate::remote_files::FileHub {
         self.4.clone()
     }
-    pub(crate) async fn file_grant(
+    pub async fn file_grant(
         &self,
         generation: u64,
         session: Uuid,
@@ -559,7 +559,7 @@ impl RemoteSession {
     /// Host: records the permissions a peer's session was granted. A colleague's mirrored view (a
     /// second technician) has its own session ID and no state of its own here; it only ever gets
     /// pictures, and recording the grant would belong to the first technician's session (and fail).
-    pub(crate) async fn record_grants(
+    pub async fn record_grants(
         &self,
         generation: u64,
         session: Uuid,
@@ -628,7 +628,7 @@ impl RemoteSession {
         .await
         .map_err(|_| "Media cleanup owner failed".to_owned())?
     }
-    pub(crate) fn spawn_media(
+    pub fn spawn_media(
         &self,
         cancel: &AtomicBool,
         colleague: bool,
@@ -1382,7 +1382,7 @@ impl RemoteSession {
             .try_send(Command::Close(session))
             .map_err(|_| "The connection service is busy".into())
     }
-    pub(crate) async fn set_peer_features(&self, generation: u64, session: Uuid, features: Vec<String>) {
+    pub async fn set_peer_features(&self, generation: u64, session: Uuid, features: Vec<String>) {
         let mut inner = self.0.lock().await;
         if inner.generation == generation && inner.status.session == Some(session) && !inner.cancel.load(Ordering::Acquire) {
             inner.status.peer_features = features;
@@ -1432,7 +1432,7 @@ impl RemoteSession {
         }
         result
     }
-    pub(crate) async fn grant(
+    pub async fn grant(
         &self,
         generation: u64,
         session: Uuid,
@@ -1453,7 +1453,7 @@ impl RemoteSession {
             inner.clipboard = clipboard_tx;
         }
     }
-    pub(crate) async fn add_print_job(&self, generation: u64, session: Uuid, path: String) {
+    pub async fn add_print_job(&self, generation: u64, session: Uuid, path: String) {
         let mut inner = self.0.lock().await;
         if inner.generation == generation
             && inner.status.session == Some(session)
@@ -1462,7 +1462,7 @@ impl RemoteSession {
             inner.status.print_jobs.push(path);
         }
     }
-    pub(crate) async fn set_displays(&self, generation: u64, session: Uuid, count: u16, current: u16, all: bool) {
+    pub async fn set_displays(&self, generation: u64, session: Uuid, count: u16, current: u16, all: bool) {
         let mut inner = self.0.lock().await;
         if inner.generation == generation
             && inner.status.session == Some(session)
@@ -1473,7 +1473,7 @@ impl RemoteSession {
             inner.status.display_all = all;
         }
     }
-    pub(crate) async fn set_host_actions(&self, generation: u64, session: Uuid, actions: Vec<String>, signin_id: Option<u32>, macs: Vec<String>) {
+    pub async fn set_host_actions(&self, generation: u64, session: Uuid, actions: Vec<String>, signin_id: Option<u32>, macs: Vec<String>) {
         let mut inner = self.0.lock().await;
         if inner.generation == generation
             && inner.status.session == Some(session)
@@ -1484,13 +1484,13 @@ impl RemoteSession {
             inner.status.host_macs = macs;
         }
     }
-    pub(crate) async fn set_meeting_offer(&self, generation: u64, session: Uuid, room: String) {
+    pub async fn set_meeting_offer(&self, generation: u64, session: Uuid, room: String) {
         let mut inner = self.0.lock().await;
         if inner.generation == generation && inner.status.session == Some(session) && !inner.cancel.load(Ordering::Acquire) {
             inner.status.meeting_offer = Some((session, room));
         }
     }
-    pub(crate) async fn set_recording_permission(
+    pub async fn set_recording_permission(
         &self,
         generation: u64,
         session: Uuid,
@@ -1642,7 +1642,7 @@ impl RemoteSession {
         }
         Ok(())
     }
-    pub(crate) async fn update_peer(
+    pub async fn update_peer(
         &self,
         generation: u64,
         session: Uuid,
@@ -1894,7 +1894,7 @@ impl Drop for LeaseTask {
         self.0.abort();
     }
 }
-pub(crate) type BrokerLease = Arc<std::sync::Mutex<(u64, std::time::Instant)>>;
+pub type BrokerLease = Arc<std::sync::Mutex<(u64, std::time::Instant)>>;
 fn watch_lease(
     state: RemoteSession,
     generation: u64,

@@ -1281,6 +1281,7 @@ dependencies = [
  "gstreamer-video",
  "image",
  "libc",
+ "mixel_engine",
  "mp4",
  "native_os_capture",
  "rand_core 0.6.4",
@@ -3061,6 +3062,42 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "mixel_engine"
+version = "0.1.0"
+dependencies = [
+ "arboard",
+ "ashpd",
+ "base64 0.22.1",
+ "core_protocol",
+ "cpal",
+ "ed25519-dalek",
+ "futures-util",
+ "gio",
+ "gstreamer",
+ "gstreamer-app",
+ "gstreamer-video",
+ "image",
+ "libc",
+ "mp4",
+ "native_os_capture",
+ "rand_core 0.6.4",
+ "reqwest 0.12.28",
+ "rfd",
+ "security-framework",
+ "serde",
+ "serde_json",
+ "sha2",
+ "signaling_server",
+ "tempfile",
+ "tokio",
+ "tokio-tungstenite 0.28.0",
+ "uuid",
+ "windows 0.62.2",
+ "x11rb",
+ "zeroize",
 ]
 
 [[package]]

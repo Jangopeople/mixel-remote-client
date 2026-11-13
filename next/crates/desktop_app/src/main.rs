@@ -1,353 +1,72 @@
 #![cfg_attr(all(target_os = "windows", not(debug_assertions), not(test)), windows_subsystem = "windows")]
 
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-mod session_platform;
+use mixel_engine::session_platform;
 #[cfg(target_os = "linux")]
-mod wayland_portal;
+use mixel_engine::wayland_portal;
 #[cfg(target_os = "linux")]
-mod linux_guard;
+use mixel_engine::linux_guard;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-mod account_auth;
+use mixel_engine::account_auth;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 mod saas_commands;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-mod device_identity;
+use mixel_engine::device_identity;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-mod session_store;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-mod host_actions;
-mod session_guard;
-mod session_mirror;
-mod host_print;
+use mixel_engine::host_actions;
+use mixel_engine::session_guard;
+use mixel_engine::host_print;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-mod ipp_printer;
+use mixel_engine::ipp_printer;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-mod agent;
+use mixel_engine::ai_assistant;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-mod ai_assistant;
+use mixel_engine::self_update;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-mod self_update;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-mod autostart;
+use mixel_engine::autostart;
 #[cfg(target_os = "macos")]
-mod local_session;
+use mixel_engine::local_session;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-mod remote_chat;
+use mixel_engine::remote_chat;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-mod remote_clipboard;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-mod remote_control;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-mod remote_file_transport;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-mod remote_files;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-mod remote_peer;
+use mixel_engine::remote_files;
 #[cfg(target_os = "macos")]
 mod macos_picker;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-mod remote_recording;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-mod remote_recovery;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-mod remote_session;
-mod remote_sound;
+use mixel_engine::remote_session;
 #[cfg(target_os = "macos")]
-mod macos_startup_host;
+use mixel_engine::macos_startup_host;
 #[cfg(target_os = "macos")]
-mod macos_rollout;
+use mixel_engine::macos_rollout;
 #[cfg(target_os = "macos")]
-mod macos_prelogin_install;
+use mixel_engine::macos_prelogin_install;
 #[cfg(target_os = "windows")]
-mod windows_signin_host;
+use mixel_engine::windows_signin_host;
 #[cfg(target_os = "linux")]
-mod linux_signin_host;
-/// `--signin-enroll` reads the deploy token from MIXEL_DEPLOY_TOKEN or standard input.
+use mixel_engine::linux_signin_host;
+// `--signin-enroll` reads the deploy token from MIXEL_DEPLOY_TOKEN or standard input.
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-mod deploy_token;
-/// The platform's sign-in screen host (Windows service, Linux systemd service on an X11 greeter).
+use mixel_engine::deploy_token;
+// The platform's sign-in screen host (Windows service, Linux systemd service on an X11 greeter).
 #[cfg(target_os = "windows")]
-use windows_signin_host as signin_platform;
+use mixel_engine::windows_signin_host as signin_platform;
 #[cfg(target_os = "linux")]
-use linux_signin_host as signin_platform;
+use mixel_engine::linux_signin_host as signin_platform;
 #[cfg(target_os = "macos")]
-mod macos_support;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-mod device_tickets;
+use mixel_engine::macos_support;
 #[cfg(target_os = "macos")]
 mod macos_tray;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-mod remote_video;
+use mixel_engine::service_config;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-mod service_config;
+use mixel_engine::system_browser;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-mod system_browser;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-use native_os_capture::stream::FrameMailbox;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+use mixel_engine::Worker;
 
-#[cfg(target_os = "macos")]
-struct Worker {
-    stop: std::sync::mpsc::SyncSender<()>,
-    thread: Option<std::thread::JoinHandle<Result<(), String>>>,
-    frames: Arc<FrameMailbox>,
-}
-#[cfg(target_os = "macos")]
-impl Worker {
-    fn start(source: String, confirm_full_display: bool) -> Result<Self, String> {
-        let (stop, rx) = std::sync::mpsc::sync_channel(1);
-        let (ready, wait) = std::sync::mpsc::sync_channel(1);
-        let thread = std::thread::Builder::new()
-            .name("mixel-capture-owner".into())
-            .spawn(move || {
-                let result = (|| {
-                    if let Some(id) = source.strip_prefix("display:") {
-                        if !confirm_full_display {
-                            return Err("Confirm sharing the selected display".into());
-                        }
-                        let id: u32 = id.parse().map_err(|_| "Invalid display source")?;
-                        let display = native_os_capture::macos::displays()
-                            .map_err(|e| e.to_string())?
-                            .into_iter()
-                            .find(|display| display.id == id)
-                            .ok_or("The selected display is unavailable")?;
-                        return native_os_capture::macos::MacStream::start(
-                            display.id,
-                            display.width,
-                            display.height,
-                            30,
-                        )
-                        .map_err(|e| e.to_string());
-                    }
-                    if source != "own-fixture" || confirm_full_display {
-                        return Err("Invalid capture source or confirmation".into());
-                    }
-                    let target = native_os_capture::macos::own_windows()
-                        .map_err(|e| e.to_string())?
-                        .into_iter()
-                        .find(|w| w.title == "Mixel-Remote Capture Fixture")
-                        .ok_or("The app's capture fixture window is unavailable")?;
-                    let stream = native_os_capture::macos::MacStream::start_own_window(
-                        target.id, 640, 420, 30,
-                    )
-                    .map_err(|e| e.to_string())?;
-                    Ok::<_, String>(stream)
-                })();
-                let mut stream = match result {
-                    Ok(stream) => {
-                        let _ = ready.send(Ok(stream.frames.clone()));
-                        stream
-                    }
-                    Err(error) => {
-                        let _ = ready.send(Err(error.clone()));
-                        return Err(error);
-                    }
-                };
-                let _ = rx.recv();
-                stream.stop().map_err(|e| e.to_string())
-            })
-            .map_err(|e| e.to_string())?;
-        match wait.recv_timeout(std::time::Duration::from_secs(35)) {
-            Ok(Ok(frames)) => Ok(Self {
-                stop,
-                thread: Some(thread),
-                frames,
-            }),
-            Ok(Err(error)) => {
-                let _ = thread.join();
-                Err(error)
-            }
-            Err(_) => {
-                let _ = stop.try_send(());
-                if thread.is_finished() {
-                    let _ = thread.join();
-                }
-                Err("Capture startup timed out".into())
-            }
-        }
-    }
-    fn stop(&mut self) -> Result<(), String> {
-        let _ = self.stop.try_send(());
-        self.frames
-            .close(native_os_capture::stream::CaptureError::Stopped);
-        if let Some(thread) = self.thread.take() {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-            while !thread.is_finished() {
-                if std::time::Instant::now() >= deadline {
-                    return Err(
-                        "The capture owner did not stop promptly; frame delivery has been revoked"
-                            .into(),
-                    );
-                }
-                std::thread::sleep(std::time::Duration::from_millis(5));
-            }
-            thread
-                .join()
-                .map_err(|_| "Capture owner thread failed".to_owned())??;
-        }
-        Ok(())
-    }
-}
-#[cfg(target_os = "macos")]
-impl Drop for Worker {
-    fn drop(&mut self) {
-        let _ = self.stop();
-    }
-}
-#[cfg(target_os = "windows")]
-use native_os_capture::windows_capture::{
-    Display as PlatformDisplay, WindowsCapture as PlatformCapture,
-};
-#[cfg(target_os = "linux")]
-use native_os_capture::x11_capture::{Display as PlatformDisplay, X11Capture as PlatformCapture};
-/// Lab builds only (feature `qa-session`): append a capture event to
-/// %TEMP%\mixel-capture.log. Release builds compile this to nothing.
-#[cfg(any(target_os = "windows", target_os = "linux"))]
-#[allow(unused_variables)]
-fn lab_capture_log(message: &str) {
-    #[cfg(feature = "qa-session")]
-    {
-        use std::io::Write;
-        if let Ok(mut file) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(std::env::temp_dir().join("mixel-capture.log"))
-        {
-            let _ = writeln!(file, "{:?} {message}", std::time::SystemTime::now());
-        }
-    }
-}
-#[cfg(any(target_os = "windows", target_os = "linux"))]
-struct Worker {
-    stop: Arc<std::sync::atomic::AtomicBool>,
-    thread: Option<std::thread::JoinHandle<Result<(), String>>>,
-    frames: Arc<FrameMailbox>,
-}
-#[cfg(any(target_os = "windows", target_os = "linux"))]
-impl Worker {
-    fn start(display: PlatformDisplay) -> Result<Self, String> {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        let stop = Arc::new(AtomicBool::new(false));
-        let frames = Arc::new(FrameMailbox::default());
-        let (ready, wait) = std::sync::mpsc::sync_channel(1);
-        let cancelled = stop.clone();
-        let delivery = frames.clone();
-        let thread = std::thread::Builder::new()
-            .name("mixel-display-capture".into())
-            .spawn(move || {
-                // Capture the desktop that is on screen (the SYSTEM host starts on the
-                // sign-in desktop while a user may be signed in).
-                #[cfg(target_os = "windows")]
-                native_os_capture::windows_capture::attach_input_desktop();
-                let first = PlatformCapture::open(&display);
-                #[cfg(target_os = "windows")]
-                let first = match first {
-                    // Shown desktop not readable yet (secure prompt): wait for it below.
-                    Err(native_os_capture::stream::CaptureError::Target) => {
-                        let _ = ready.send(Ok(()));
-                        lab_capture_log("desktop not readable yet; waiting");
-                        None
-                    }
-                    other => Some(other),
-                };
-                #[cfg(not(target_os = "windows"))]
-                let first = Some(first);
-                let capture = match first {
-                    None => None,
-                    Some(Ok(capture)) => {
-                        let _ = ready.send(Ok(()));
-                        Some(capture)
-                    }
-                    Some(Err(error)) => {
-                        let text = error.to_string();
-                        let _ = ready.send(Err(text.clone()));
-                        delivery.close(error);
-                        return Err(text);
-                    }
-                };
-                let mut capture = capture;
-                while !cancelled.load(Ordering::Acquire) {
-                    let Some(active) = capture.as_mut() else {
-                        // Windows replaced the user's desktop (lock screen or a
-                        // secure prompt). The previous duplication is released;
-                        // reattach to the same display once it is back.
-                        std::thread::sleep(std::time::Duration::from_millis(500));
-                        #[cfg(target_os = "windows")]
-                        native_os_capture::windows_capture::attach_input_desktop();
-                        match PlatformCapture::open(&display) {
-                            Ok(next) => {
-                                lab_capture_log("desktop reattached");
-                                capture = Some(next);
-                            }
-                            Err(error) => lab_capture_log(&format!("reopen failed: {error}")),
-                        }
-                        continue;
-                    };
-                    match active.next_frame(std::time::Duration::from_millis(100)) {
-                        Ok(Some(frame)) => delivery.publish(frame),
-                        Ok(None) => {}
-                        #[cfg(target_os = "windows")]
-                        Err(native_os_capture::stream::CaptureError::Target) => {
-                            lab_capture_log("desktop lost; waiting for it to return");
-                            capture = None;
-                        }
-                        Err(error) => {
-                            let text = error.to_string();
-                            delivery.close(error);
-                            return Err(text);
-                        }
-                    }
-                }
-                delivery.close(native_os_capture::stream::CaptureError::Stopped);
-                Ok(())
-            })
-            .map_err(|error| error.to_string())?;
-        match wait.recv_timeout(std::time::Duration::from_secs(10)) {
-            Ok(Ok(())) => Ok(Self {
-                stop,
-                thread: Some(thread),
-                frames,
-            }),
-            result => {
-                stop.store(true, Ordering::Release);
-                frames.close(native_os_capture::stream::CaptureError::Stopped);
-                if thread.is_finished() {
-                    let _ = thread.join();
-                }
-                Err(match result {
-                    Ok(Err(error)) => error,
-                    _ => "Display capture initialization timed out".into(),
-                })
-            }
-        }
-    }
-    fn stop(&mut self) -> Result<(), String> {
-        self.stop.store(true, std::sync::atomic::Ordering::Release);
-        self.frames
-            .close(native_os_capture::stream::CaptureError::Stopped);
-        if let Some(thread) = self.thread.take() {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-            while !thread.is_finished() {
-                if std::time::Instant::now() >= deadline {
-                    return Err("The display capture owner did not stop promptly; frame delivery has been revoked".into());
-                }
-                std::thread::sleep(std::time::Duration::from_millis(5));
-            }
-            thread
-                .join()
-                .map_err(|_| "Display capture owner failed".to_owned())??;
-        }
-        Ok(())
-    }
-}
-#[cfg(any(target_os = "windows", target_os = "linux"))]
-impl Drop for Worker {
-    fn drop(&mut self) {
-        let _ = self.stop();
-    }
-}
 #[derive(serde::Serialize)]
 struct CaptureTarget {
     id: String,
@@ -1171,8 +890,6 @@ async fn windows_rollout_command(token: &str) -> Result<String, String> {
     let installer = self_update::latest_for("windows", "x64").await?;
     Ok(rollout_command_for(token, &self_update::file_url(&installer)))
 }
-/// What a refused rollout enrolment says (the service does not tell the device why).
-pub const ROLLOUT_REFUSED: &str = "The deploy link was refused or the service could not be reached. Check that the link is not expired, revoked or used up and that the company is within its device limit, then run the command again.";
 /// Where the portal serves the install scripts (`next/frontends/portal/public/install/`).
 pub const INSTALL_SCRIPTS: &str = "https://remote.mixel.ch/install";
 /// The one-line commands for Macs and Linux computers: download the install script, which installs
@@ -1331,11 +1048,7 @@ async fn account_create_personal(
     }
     state.create_personal_space(name).await
 }
-fn version_parts(version: &str) -> Option<Vec<u64>> {
-    let core = version.split(['-', '+']).next()?;
-    let parts: Option<Vec<u64>> = core.split('.').map(|part| part.parse().ok()).collect();
-    parts.filter(|parts| (1..=4).contains(&parts.len()))
-}
+use mixel_engine::version_parts;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 #[derive(serde::Serialize)]
 struct UpdateInfo {
@@ -2281,7 +1994,7 @@ async fn remote_next_video(
     let packet = state.next_video(session, compressed.unwrap_or(false)).await?;
     #[cfg(feature = "qa-session")]
     if !packet.is_empty() {
-        remote_video::QA_FETCHED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        mixel_engine::remote_video::QA_FETCHED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
     Ok(tauri::ipc::Response::new(packet))
 }

@@ -361,7 +361,7 @@ pub async fn download_and_install(manifest: Manifest) -> Result<(), String> {
 }
 
 /// Short update history for support: <temp>/mixel-remote-updates/update.log.
-pub(crate) fn log_path() -> PathBuf {
+pub fn log_path() -> PathBuf {
     std::env::temp_dir().join("mixel-remote-updates").join("update.log")
 }
 fn log(message: &str) {

@@ -18,7 +18,7 @@ fn support_id(id: &str) -> Result<String, &'static str> {
     Ok(digits)
 }
 
-pub(crate) fn connect(id: &str) -> Result<(), String> {
+pub fn connect(id: &str) -> Result<(), String> {
     let id = support_id(id)?;
     let path = Path::new(SUPPORT_APP);
     if !path.is_dir() {

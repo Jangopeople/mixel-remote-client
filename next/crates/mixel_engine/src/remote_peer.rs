@@ -84,7 +84,7 @@ fn authorization_live(
     live
 }
 impl Config {
-    pub(crate) fn stopped(&self) -> bool {
+    pub fn stopped(&self) -> bool {
         #[cfg(target_os = "linux")]
         if self.portal.as_ref().is_some_and(|grant| !grant.live()) {
             self.session_cancel.store(true, Ordering::Release);
@@ -103,7 +103,7 @@ impl Config {
             &self.authorization,
         )
     }
-    pub(crate) fn input_authorization(&self) -> Arc<dyn Fn() -> bool + Send + Sync> {
+    pub fn input_authorization(&self) -> Arc<dyn Fn() -> bool + Send + Sync> {
         let account = self.account_cancel.clone();
         let session = self.session_cancel.clone();
         let peer = self.peer_expires.clone();
@@ -117,7 +117,7 @@ impl Config {
             authorization_live(&account, &session, &peer, &broker)
         })
     }
-    pub(crate) fn file_authorization(&self) -> Arc<dyn Fn() -> bool + Send + Sync> {
+    pub fn file_authorization(&self) -> Arc<dyn Fn() -> bool + Send + Sync> {
         let account = self.account_cancel.clone();
         let consent = self.consent_cancel.clone();
         let peer = self.peer_expires.clone();
