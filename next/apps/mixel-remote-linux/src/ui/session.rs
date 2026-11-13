@@ -646,7 +646,8 @@ impl SessionView {
             let models = assistant.models.clone();
             let selected = models.iter().position(|model| *model == assistant.model).unwrap_or(0);
             let (a, address) = (app.clone(), assistant.address.clone());
-            let pick = choice(&models, selected, move |index| {
+            let names = models.clone();
+            let pick = choice(&names, selected, move |index| {
                 if !a.rendering.get() {
                     a.ai_connect(address.clone(), models.get(index).cloned().unwrap_or_default(), false);
                 }

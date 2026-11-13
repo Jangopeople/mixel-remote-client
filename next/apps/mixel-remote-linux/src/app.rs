@@ -172,6 +172,8 @@ pub struct State {
     pub progress: String,
     pub busy: bool,
     pub sign_in_link: Option<String>,
+    /// Outside sign-ins the sign-in service offers (`keycloak` = Mixel ID, `google`, `azure`, `apple`).
+    pub providers: Vec<String>,
     pub linux: LinuxSession,
     pub devices: DevicesState,
     pub company: CompanyState,
@@ -371,6 +373,9 @@ impl App {
             if let Ok(linux) = app.run::<LinuxSession>("linux_session", json!({})).await {
                 app.edit(|state| state.linux = linux);
             }
+            if let Ok(providers) = app.run::<Vec<String>>("sign_in_providers", json!({})).await {
+                app.edit(|state| state.providers = providers);
+            }
             app.refresh_account().await;
             app.flush_pending_removal().await;
             let saved = app.store.borrow().settings.ai.clone().unwrap_or_default();
@@ -492,10 +497,11 @@ impl App {
 
     // ---- Sign-in ----
 
-    pub fn sign_in(self: &Rc<Self>, show_link: bool) {
+    /// Sign-in in the system browser; `provider`: Mixel ID (None), `google`, `azure` or `apple`.
+    pub fn sign_in(self: &Rc<Self>, show_link: bool, provider: Option<String>) {
         self.act(move |app| {
             Box::pin(async move {
-                let url: String = app.run("account_sign_in", json!({ "open_browser": !show_link })).await?;
+                let url: String = app.run("account_sign_in", json!({ "open_browser": !show_link, "provider": provider })).await?;
                 if show_link {
                     app.edit(|state| state.sign_in_link = Some(url));
                 }

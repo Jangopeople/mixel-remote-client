@@ -3637,6 +3637,7 @@ dependencies = [
  "libadwaita",
  "mixel_engine",
  "regex",
+ "reqwest 0.12.28",
  "rusqlite",
  "serde",
  "serde_json",

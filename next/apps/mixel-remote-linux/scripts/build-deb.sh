@@ -39,11 +39,14 @@ EOF
 
 # Libraries from the program itself (dpkg-shlibdeps), plus the tools the engine runs.
 mkdir -p "$ROOT/DEBIAN" "$ROOT/debian"
-printf 'Source: mixel-remote\n\nPackage: mixel-remote\n' > "$ROOT/debian/control"
-LIBS=$(cd "$ROOT" && dpkg-shlibdeps -O usr/bin/mixel-remote 2>/dev/null | sed -n 's/^shlibs:Depends=//p')
+printf 'Source: mixel-remote\n\nPackage: mixel-remote\nArchitecture: amd64\n' > "$ROOT/debian/control"
+LIBS=$(cd "$ROOT" && dpkg-shlibdeps -O usr/bin/mixel-remote | sed -n 's/^shlibs:Depends=//p')
 rm -rf "$ROOT/debian"
+# Only libraries are hard dependencies: the preinst can check those, so "dpkg -i" (how 0.1.x updates
+# itself) never leaves the package unconfigured. The tools the engine runs are recommended (apt and the
+# install script add them; the app explains when one is missing).
+DEPENDS="$LIBS"
 TOOLS="libsecret-tools, xdg-utils, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good"
-DEPENDS="$LIBS, $TOOLS"
 SIZE=$(du -sk --exclude=DEBIAN "$ROOT" | cut -f1)
 cat > "$ROOT/DEBIAN/control" <<EOF
 Package: mixel-remote
@@ -52,7 +55,8 @@ Architecture: amd64
 Maintainer: Mixel IT and Corporate Services <info@mixel.ch>
 Installed-Size: $SIZE
 Depends: $DEPENDS
-Recommends: gstreamer1.0-pipewire, xdg-desktop-portal, cups-client, pkexec | policykit-1, gnome-keyring
+Replaces: mixel-remote-desktop
+Recommends: $TOOLS, gstreamer1.0-pipewire, xdg-desktop-portal, cups-client, pkexec | policykit-1, gnome-keyring
 Section: net
 Priority: optional
 Homepage: https://remote.mixel.ch
@@ -60,9 +64,9 @@ Description: Mixel Remote — remote support and access
  Connect to your company's computers and phones, or let a technician help on
  this computer, with consent for every session. Native GTK 4 app.
 EOF
-# preinst: the same packages, without versions (checked before anything is unpacked).
-REQUIRED=$(printf '%s' "$DEPENDS" | tr ',' '\n' | sed 's/([^)]*)//g; s/ //g' | grep -v '^$' | tr '\n' ' ')
-sed "s#@REQUIRED@#$REQUIRED#" "$APP/data/deb/preinst" > "$ROOT/DEBIAN/preinst"
+# preinst: the shared libraries the program loads (checked before anything is unpacked).
+LIBRARIES=$(objdump -p "$ROOT/usr/bin/mixel-remote" | awk '/NEEDED/ {print $2}' | grep -v -e '^ld-linux' | tr '\n' ' ')
+sed "s#@LIBRARIES@#$LIBRARIES#" "$APP/data/deb/preinst" > "$ROOT/DEBIAN/preinst"
 install -m755 "$APP/data/deb/postinst" "$ROOT/DEBIAN/postinst"
 chmod 755 "$ROOT/DEBIAN/preinst"
 D="$OUT/mixel-remote_${V}_amd64.deb"

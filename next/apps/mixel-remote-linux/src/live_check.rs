@@ -11,6 +11,12 @@
 //! - `--live-host <session.json> <run> <dir>`: this computer as technician to the computer whose
 //!   Remote ID appears in `<dir>/host-id.txt` (the GUI app on the same account), attended: the person
 //!   there allows it; pictures, input, chat, end. Writes `<dir>/tenant.txt` first for the host.
+//! - `--live-watch <session.json> <run> <dir>`: a QA company with a deploy link (`<dir>/deploy-token.txt`)
+//!   for lab computers (update tests); every 5 s `<dir>/devices.txt` lists the company's computers with
+//!   their Remote ID and whether they are online. `<dir>/request.txt` with a Remote ID starts an
+//!   unattended session to it (pictures, input, end); `<dir>/stop` ends the watch and removes everything.
+//! - `--check-providers`: each sign-in button (Mixel ID, Google, Microsoft, Apple) leads the browser to
+//!   that provider's own sign-in page; nothing is signed in (the attempt is cancelled).
 use crate::engine::{Engine, RealEngine};
 use serde_json::{Value, json};
 use std::{path::PathBuf, time::Duration};
@@ -64,7 +70,7 @@ impl Check {
         false
     }
     /// Pictures, harmless input (pointer moves, Shift), chat, then end; `session` is active.
-    async fn session_tools(&mut self, active: &Value, folder: Option<&PathBuf>) {
+    async fn session_tools(&mut self, active: &Value, folder: Option<&PathBuf>, attended: bool) {
         let id = active["session"].as_str().unwrap_or_default().to_owned();
         let (mut frames, mut sequence, mut size) = (0, 0, String::new());
         let start = std::time::Instant::now();
@@ -91,7 +97,32 @@ impl Check {
                 }
             }
         }
-        self.check(&format!("pictures from the other computer ({frames} in {} s, {size}; a still screen sends pictures only on change)", start.elapsed().as_secs()), frames >= 2, "");
+        // A still screen sends a picture only when it changes: show something (the Super key opens the
+        // desktop's overview, the second press closes it again), then expect new pictures.
+        let mut changed = 0;
+        if frames < 2 {
+            for _ in 0..2 {
+                let _ = self.engine.input(&id, json!({ "kind": "key", "usage": 227, "down": true })).await;
+                let _ = self.engine.input(&id, json!({ "kind": "key", "usage": 227, "down": false })).await;
+                let until = std::time::Instant::now() + Duration::from_secs(4);
+                while std::time::Instant::now() < until {
+                    match self.engine.next_video(&id).await {
+                        Ok(data) if !data.is_empty() => {
+                            if let Ok(frame) = crate::video::decode(data, sequence) {
+                                sequence = frame.sequence;
+                                changed += 1;
+                            }
+                        }
+                        _ => tokio::time::sleep(Duration::from_millis(20)).await,
+                    }
+                }
+            }
+        }
+        self.check(
+            &format!("pictures from the other computer ({frames} in {} s, {size}; {changed} more after a visible change)", start.elapsed().as_secs()),
+            frames >= 2 || (frames >= 1 && changed >= 1),
+            "",
+        );
         let mut posted = 0;
         for step in 0..10 {
             if self.engine.input(&id, json!({ "kind": "pointer", "x": 20000 + step * 2000, "y": 30000 })).await == Ok(true) {
@@ -104,8 +135,13 @@ impl Check {
             }
         }
         self.check(&format!("input applied on the other computer ({posted}/12)"), posted == 12, "");
-        let sent = self.call("remote_chat_send", json!({ "session": id, "text": "Mixel Remote for Linux live check" })).await;
-        self.check("chat message sent", sent.is_ok() || active["control"] == false, format!("{sent:?}"));
+        // Chat is part of an attended session only (the person there allows it); unattended has none.
+        if !attended {
+            println!("chat: not part of an unattended session (by design)");
+        } else {
+            let sent = self.call("remote_chat_send", json!({ "session": id, "text": "Mixel Remote for Linux live check" })).await;
+            self.check("chat message sent", sent.is_ok(), format!("{sent:?}"));
+        }
         if let Some(consent) = active["consent"].as_str() {
             let stop = self.call("remote_stop_session", json!({ "consent": consent })).await;
             self.check("end session", stop.is_ok(), format!("{stop:?}"));
@@ -129,7 +165,42 @@ fn ppm(frame: &crate::video::Frame) -> Vec<u8> {
     out
 }
 
+async fn providers(check: &mut Check) {
+    let offered = check.call("sign_in_providers", json!({})).await.unwrap_or(Value::Null);
+    println!("sign-in service offers: {offered}");
+    let http = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).timeout(Duration::from_secs(15)).build().expect("http");
+    for (provider, host) in [("keycloak", "auth.mixel.ch"), ("google", "accounts.google.com"), ("azure", "login.microsoftonline.com"), ("apple", "appleid.apple.com")] {
+        let listed = offered.as_array().is_some_and(|list| list.iter().any(|item| item == provider));
+        let url = check.call("account_sign_in", json!({ "open_browser": false, "provider": provider })).await;
+        let mut location = String::new();
+        if let Ok(Value::String(url)) = &url
+            && let Ok(response) = http.get(url).send().await
+        {
+            location = response.headers().get("location").and_then(|value| value.to_str().ok()).unwrap_or_default().to_owned();
+        }
+        let reached = location.strip_prefix("https://").and_then(|rest| rest.split('/').next()).unwrap_or_default().to_owned();
+        check.check(&format!("{provider}: offered, the button leads to {reached}"), listed && reached == host, format!("{url:?} → {location}"));
+        let _ = check.call("account_cancel", json!({})).await;
+    }
+}
+
 pub fn run(args: &[String]) -> i32 {
+    if args.first().map(String::as_str) == Some("--check-providers") {
+        let folder = std::env::temp_dir().join("mixel-linux-providers");
+        let engine = match RealEngine::new(folder.join("engine")) {
+            Ok(engine) => engine,
+            Err(error) => {
+                eprintln!("{error}");
+                return 2;
+            }
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("runtime");
+        let mut check = Check { engine, checks: 0, failures: 0 };
+        runtime.block_on(providers(&mut check));
+        let _ = std::fs::remove_dir_all(&folder);
+        println!("RESULT {}/{} passed", check.checks - check.failures, check.checks);
+        return i32::from(check.failures > 0);
+    }
     let (Some(mode), Some(session), Some(suffix)) = (args.first(), args.get(1), args.get(2)) else {
         eprintln!("usage: --live-check|--live-session|--live-host <qa-session.json> <run> [dir]");
         return 2;
@@ -151,6 +222,7 @@ pub fn run(args: &[String]) -> i32 {
         match mode.as_str() {
             "--live-session" => technician(&mut check, suffix, &folder, false).await,
             "--live-host" => technician(&mut check, suffix, &folder, true).await,
+            "--live-watch" => watch(&mut check, suffix, &folder).await,
             _ => checks(&mut check, suffix).await,
         }
         let _ = check.engine.shutdown().await;
@@ -229,7 +301,7 @@ async fn technician(check: &mut Check, suffix: &str, folder: &std::path::Path, a
         if let Some(active) = active {
             check.check("view and control granted", active["control"] == true, &active);
             println!("host actions: {}  displays: {}  features: {}", active["host_actions"], active["displays"], active["peer_features"]);
-            check.session_tools(&active, Some(&folder.to_path_buf())).await;
+            check.session_tools(&active, Some(&folder.to_path_buf()), attended).await;
         }
     }
     let _ = check.call("remote_disconnect", json!({})).await;
@@ -287,6 +359,8 @@ async fn checks(check: &mut Check, suffix: &str) {
     check.check("invite a technician", !invite_id.is_empty(), format!("{invite:?}"));
     let invites = check.call("saas_invites", json!({ "tenant": tenant })).await.unwrap_or(Value::Null);
     check.check("open invitations list it", invites.as_array().is_some_and(|rows| rows.iter().any(|row| row["id"] == invite_id.as_str())), &invites);
+    // The service lets an invitation be sent again after a minute.
+    tokio::time::sleep(Duration::from_secs(62)).await;
     let resent = check.call("saas_resend_invite", json!({ "tenant": tenant, "invite": invite_id, "locale": "fr" })).await;
     check.check("send the invitation again", resent.is_ok(), format!("{resent:?}"));
     let invites = check.call("saas_invites", json!({ "tenant": tenant })).await.unwrap_or(Value::Null);
@@ -330,4 +404,64 @@ async fn checks(check: &mut Check, suffix: &str) {
     check.check("delete the QA company", deleted.is_ok(), format!("{deleted:?}"));
     let left = check.call("saas_my_tenants", json!({})).await.unwrap_or(Value::Null);
     check.check("no company left for the QA account", left.as_array().is_none_or(Vec::is_empty), &left);
+}
+
+async fn watch(check: &mut Check, suffix: &str, folder: &std::path::Path) {
+    if !check.sign_in().await {
+        return;
+    }
+    let company = format!("QA Linux {suffix}");
+    let tenant = check.call("saas_signup", json!({ "company": company, "terms": true })).await.ok().and_then(|value| value["tenant_id"].as_str().map(str::to_owned)).unwrap_or_default();
+    check.check("QA company", !tenant.is_empty(), "");
+    if tenant.is_empty() {
+        return;
+    }
+    let added = check.call("saas_add_this_device", json!({ "tenant": tenant, "name": format!("QA Linux watcher {suffix}"), "group": null })).await.unwrap_or(Value::Null);
+    let mine = added["connection_id"].as_u64().unwrap_or(0);
+    let _ = check.call("remote_register", json!({})).await;
+    check.check("watcher online", check.wait(30, |status| status["phase"] == "ready").await.is_some(), "");
+    let link = check.call("saas_create_deploy_link", json!({ "tenant": tenant, "label": "QA update test", "days": 1, "computers": 5, "group": null })).await.unwrap_or(Value::Null);
+    let token = link["token"].as_str().unwrap_or_default().to_owned();
+    check.check("deploy link for the lab computers", !token.is_empty(), "");
+    let _ = std::fs::write(folder.join("deploy-token.txt"), &token);
+    let _ = std::fs::write(folder.join("deploy-command.txt"), link["windows_command"].as_str().unwrap_or_default());
+    println!("WATCHING (deploy-token.txt, devices.txt, request.txt, stop)");
+    for _ in 0..1800 {
+        if folder.join("stop").exists() {
+            break;
+        }
+        let rows = check.call("saas_devices", json!({ "tenant": tenant })).await.unwrap_or(Value::Null);
+        let ids: Vec<u64> = rows.as_array().map(|rows| rows.iter().filter_map(|row| row["connection_id"].as_u64()).filter(|id| *id != mine).collect()).unwrap_or_default();
+        if !ids.is_empty() {
+            let _ = check.call("remote_presence", json!({ "hosts": ids })).await;
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let online: Vec<u64> = check.status().await["online"].as_array().map(|list| list.iter().filter_map(Value::as_u64).collect()).unwrap_or_default();
+        let lines: Vec<String> = rows
+            .as_array()
+            .map(|rows| rows.iter().filter(|row| row["connection_id"].as_u64() != Some(mine)).map(|row| format!("{} {} {} {}", row["connection_id"], row["os"].as_str().unwrap_or("?"), if row["connection_id"].as_u64().is_some_and(|id| online.contains(&id)) { "online" } else { "offline" }, row["name"].as_str().unwrap_or(""))).collect())
+            .unwrap_or_default();
+        let _ = std::fs::write(folder.join("devices.txt"), lines.join("\n") + "\n");
+        if let Some(id) = std::fs::read_to_string(folder.join("request.txt")).ok().and_then(|text| text.trim().parse::<u64>().ok()) {
+            let _ = std::fs::remove_file(folder.join("request.txt"));
+            let request = check.call("remote_request", json!({ "host": id, "password": null, "unattended": true })).await;
+            check.check(&format!("unattended request to {id}"), request.is_ok(), format!("{request:?}"));
+            if let Some(active) = check.wait(60, |status| status["phase"] == "active").await {
+                check.check("session active", true, "");
+                println!("host actions: {}  features: {}", active["host_actions"], active["peer_features"]);
+                check.session_tools(&active, Some(&folder.to_path_buf()), false).await;
+            } else {
+                check.check("session active", false, check.status().await);
+            }
+        }
+        tokio::time::sleep(Duration::from_secs(3)).await;
+    }
+    let _ = check.call("remote_disconnect", json!({})).await;
+    let _ = check.wait(15, |status| matches!(status["phase"].as_str(), Some("offline" | "error"))).await;
+    if let Some(device) = added["device_id"].as_str() {
+        let removal = check.call("device_self_remove", json!({ "confirmed": true, "registration": { "device": device, "connection_id": mine, "generation": added["generation"] } })).await;
+        check.check("watcher removes itself", removal.as_ref().is_ok_and(|value| value == "removed"), format!("{removal:?}"));
+    }
+    let deleted = check.call("saas_delete_company", json!({ "tenant": tenant, "name": company })).await;
+    check.check("QA company deleted (the lab computers' enrolments with it)", deleted.is_ok(), format!("{deleted:?}"));
 }

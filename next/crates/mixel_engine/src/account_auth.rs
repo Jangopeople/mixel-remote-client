@@ -428,7 +428,34 @@ impl AccountAuth {
         Ok(())
     }
     pub async fn begin(&self) -> Result<String, String> {
-        let (client, provider, domain) = AuthClient::configured()?;
+        self.begin_with(None).await
+    }
+
+    /// The outside sign-ins the sign-in service offers now (Mixel ID always): `keycloak`, `google`,
+    /// `azure` (Microsoft), `apple`, in this order.
+    pub async fn providers(&self) -> Result<Vec<String>, String> {
+        let (client, provider, _) = AuthClient::configured()?;
+        let settings: serde_json::Value = client.request("/auth/v1/settings", None, None).await?;
+        let mut found = vec![provider];
+        for name in ["google", "azure", "apple"] {
+            if settings["external"][name].as_bool() == Some(true) {
+                found.push(name.to_owned());
+            }
+        }
+        Ok(found)
+    }
+
+    /// Browser sign-in with one outside provider (`None`: the configured Mixel ID, or the company's
+    /// SSO domain). Same PKCE flow and loopback callback for each.
+    pub async fn begin_with(&self, chosen: Option<&str>) -> Result<String, String> {
+        let (client, configured, domain) = AuthClient::configured()?;
+        let (provider, scopes, domain) = match chosen {
+            None => (configured, "openid profile email", domain),
+            Some(name) if name == configured => (configured, "openid profile email", None),
+            Some(name @ ("google" | "azure")) => (name.to_owned(), "openid email profile", None),
+            Some("apple") => ("apple".to_owned(), "name email", None),
+            Some(_) => return Err("This sign-in method is not available".into()),
+        };
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .map_err(|_| "Cannot open the private sign-in callback")?;
@@ -478,7 +505,7 @@ impl AccountAuth {
                 .map_err(|_| "Invalid sign-in endpoint")?;
             url.query_pairs_mut()
                 .append_pair("provider", &provider)
-                .append_pair("scopes", "openid profile email")
+                .append_pair("scopes", scopes)
                 .append_pair("redirect_to", &redirect)
                 .append_pair("code_challenge", &challenge)
                 .append_pair("code_challenge_method", "s256");

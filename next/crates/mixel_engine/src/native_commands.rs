@@ -177,7 +177,8 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
                 auth.begin_qa(path).await?;
                 return out(Value::Null);
             }
-            let url = auth.begin().await?;
+            let provider: Option<String> = args.get("provider")?;
+            let url = auth.begin_with(provider.as_deref()).await?;
             // The app opens the page itself (`show_link`: it shows the link to copy instead).
             if args.get::<Option<bool>>("open_browser")?.unwrap_or(false)
                 && let Err(error) = browser(&url).await
@@ -187,6 +188,8 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
             }
             out(url)
         }
+        // Mixel ID and the outside sign-ins the sign-in service offers (Google, Microsoft, Apple).
+        "sign_in_providers" => out(auth.providers().await?),
         "account_verify" => {
             let factor: Uuid = args.get("factor")?;
             let code: String = args.get("code")?;

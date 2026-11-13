@@ -48,7 +48,7 @@ impl AccountPage {
     pub fn render(&self, app: &Rc<App>, state: &State) {
         let key = format!(
             "{:?}",
-            (&state.account, &state.sign_in_link, &state.error, state.busy, &state.company.data, &state.company.error, &state.company.notice, state.company.working)
+            (&state.account, (&state.sign_in_link, &state.providers), &state.error, state.busy, &state.company.data, &state.company.error, &state.company.notice, state.company.working)
         );
         if *self.key.borrow() == key {
             return;
@@ -134,14 +134,32 @@ impl AccountPage {
                 }
                 let row = hbox(8);
                 let a = app.clone();
-                let sign_in = primary(&t("Sign in with Mixel ID"), move || a.sign_in(false));
+                let sign_in = primary(&t("Sign in with Mixel ID"), move || a.sign_in(false, None));
                 sign_in.set_sensitive(!state.busy);
                 row.append(&sign_in);
                 let a = app.clone();
-                let other = button(&t("Use another browser"), move || a.sign_in(true));
+                let other = button(&t("Use another browser"), move || a.sign_in(true, None));
                 other.set_sensitive(!state.busy);
                 row.append(&other);
                 content.append(&row);
+                // Google, Microsoft and Apple, when the sign-in service offers them (same browser flow).
+                let outside: Vec<(&str, String)> = [("google", "Google"), ("azure", "Microsoft"), ("apple", "Apple")]
+                    .into_iter()
+                    .filter(|(id, _)| state.providers.iter().any(|offered| offered == id))
+                    .map(|(id, name)| (id, tf("Continue with %@", &[&name])))
+                    .collect();
+                if !outside.is_empty() {
+                    let row = gtk::FlowBox::new();
+                    row.set_selection_mode(gtk::SelectionMode::None);
+                    row.set_max_children_per_line(3);
+                    for (id, title) in outside {
+                        let (a, id) = (app.clone(), id.to_owned());
+                        let start = button(&title, move || a.sign_in(false, Some(id.clone())));
+                        start.set_sensitive(!state.busy);
+                        row.insert(&start, -1);
+                    }
+                    content.append(&row);
+                }
                 let a = app.clone();
                 content.append(&link(&t("Create Mixel ID"), move || a.open_uri("https://auth.mixel.ch/if/flow/mixel-remote-enrollment/")));
             }
