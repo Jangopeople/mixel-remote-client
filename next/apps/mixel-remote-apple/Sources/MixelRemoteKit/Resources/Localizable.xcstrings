@@ -67,6 +67,28 @@
         }
       }
     },
+    "%d of %d computers": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%d von %d Computern"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%d sur %d ordinateurs"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%d di %d computer"
+          }
+        }
+      }
+    },
     "%d of %d devices": {
       "localizations": {
         "de": {
@@ -239,6 +261,50 @@
           "stringUnit": {
             "state": "translated",
             "value": "Un tecnico è connesso a questo computer."
+          }
+        }
+      }
+    },
+    "AI assistant and ticket note": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "KI-Assistent und Ticketnotiz"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Assistant IA et note de ticket"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Assistente IA e nota del ticket"
+          }
+        }
+      }
+    },
+    "AI server": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "KI-Server"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Serveur IA"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Server IA"
           }
         }
       }
@@ -991,6 +1057,28 @@
         }
       }
     },
+    "Choose a company and enter a name": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wählen Sie eine Firma und geben Sie einen Namen ein"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choisissez une entreprise et saisissez un nom"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scelga un’azienda e inserisca un nome"
+          }
+        }
+      }
+    },
     "Choose a display": {
       "localizations": {
         "de": {
@@ -1519,6 +1607,28 @@
         }
       }
     },
+    "Connected to your AI server.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mit Ihrem KI-Server verbunden."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connecté à votre serveur IA."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connesso al tuo server IA."
+          }
+        }
+      }
+    },
     "Connected. Keyboard and mouse control is enabled.": {
       "localizations": {
         "de": {
@@ -1581,6 +1691,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Connessione a %@…"
+          }
+        }
+      }
+    },
+    "Connecting…": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verbindung wird hergestellt…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connexion…"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connessione…"
           }
         }
       }
@@ -1933,6 +2065,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Crea spazio personale"
+          }
+        }
+      }
+    },
+    "Create rollout command": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verteilbefehl erstellen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Créer la commande de déploiement"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Crea il comando di distribuzione"
           }
         }
       }
@@ -2949,6 +3103,28 @@
         }
       }
     },
+    "Enter the ticket number.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ticketnummer eingeben."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saisissez le numéro du ticket."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Inserisci il numero del ticket."
+          }
+        }
+      }
+    },
     "Expires %@": {
       "localizations": {
         "de": {
@@ -2967,6 +3143,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Scade il %@"
+          }
+        }
+      }
+    },
+    "Explain the screen": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bildschirm erklären"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expliquer l’écran"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Spiega lo schermo"
           }
         }
       }
@@ -3851,6 +4049,28 @@
         }
       }
     },
+    "Looking at the screen…": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bildschirm wird angesehen…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Analyse de l’écran…"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Analisi dello schermo…"
+          }
+        }
+      }
+    },
     "Looking up this ID…": {
       "localizations": {
         "de": {
@@ -4199,6 +4419,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Account del team Mixel"
+          }
+        }
+      }
+    },
+    "Model": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modell"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modèle"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modello"
           }
         }
       }
@@ -5193,6 +5435,50 @@
         }
       }
     },
+    "Question": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Frage"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Question"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Domanda"
+          }
+        }
+      }
+    },
+    "Question or keywords (optional)": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Frage oder Stichworte (optional)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Question ou mots-clés (facultatif)"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Domanda o parole chiave (facoltativo)"
+          }
+        }
+      }
+    },
     "Quit Mixel Remote": {
       "localizations": {
         "de": {
@@ -5897,6 +6183,28 @@
         }
       }
     },
+    "Revoked": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Widerrufen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Révoqué"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Revocato"
+          }
+        }
+      }
+    },
     "Role": {
       "localizations": {
         "de": {
@@ -5941,6 +6249,28 @@
         }
       }
     },
+    "Rollout for many computers": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verteilung auf viele Computer"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Déploiement sur de nombreux ordinateurs"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Distribuzione su molti computer"
+          }
+        }
+      }
+    },
     "Run the command on each computer (as administrator, or with your deployment tool). The link is shown only now.": {
       "localizations": {
         "de": {
@@ -5959,6 +6289,72 @@
           "stringUnit": {
             "state": "translated",
             "value": "Esegua il comando su ogni computer (come amministratore o con il Suo strumento di distribuzione). Il link viene mostrato solo ora."
+          }
+        }
+      }
+    },
+    "Save in ISM ticket": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Im ISM-Ticket speichern"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enregistrer dans le ticket ISM"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Salva nel ticket ISM"
+          }
+        }
+      }
+    },
+    "Save note": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notiz speichern"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enregistrer la note"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Salva nota"
+          }
+        }
+      }
+    },
+    "Saved as internal note in %@": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Als interne Notiz in %@ gespeichert"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enregistré comme note interne dans %@"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Salvato come nota interna in %@"
           }
         }
       }
@@ -6003,6 +6399,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Salvataggio della registrazione…"
+          }
+        }
+      }
+    },
+    "Saving…": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wird gespeichert…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enregistrement…"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Salvataggio…"
           }
         }
       }
@@ -7767,6 +8185,28 @@
         }
       }
     },
+    "Ticket number": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ticketnummer"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Numéro du ticket"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Numero del ticket"
+          }
+        }
+      }
+    },
     "Tools": {
       "localizations": {
         "de": {
@@ -8423,6 +8863,72 @@
           "stringUnit": {
             "state": "translated",
             "value": "Windows (PowerShell, come amministratore)"
+          }
+        }
+      }
+    },
+    "Write the note first, or let the AI write it.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zuerst die Notiz schreiben oder von der KI schreiben lassen."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rédigez d’abord la note ou laissez l’IA l’écrire."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scrivi prima la nota o lasciala scrivere all’IA."
+          }
+        }
+      }
+    },
+    "Write ticket note": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ticketnotiz schreiben"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rédiger la note de ticket"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scrivi la nota del ticket"
+          }
+        }
+      }
+    },
+    "Writing the note…": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notiz wird geschrieben…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rédaction de la note…"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scrittura della nota…"
           }
         }
       }

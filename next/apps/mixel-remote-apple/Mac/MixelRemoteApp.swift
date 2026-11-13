@@ -23,6 +23,10 @@ enum Entry {
         if arguments.count >= 5, arguments[1] == "--live-session" {
             LiveCheck.run(sessionFile: arguments[2], suffix: arguments[3], sessionFolder: arguments[4])
         }
+        // `--live-prepare <qa-session.json> <suffix> <folder>`: QA company + deploy token for the update test.
+        if arguments.count >= 5, arguments[1] == "--live-prepare" {
+            LiveCheck.run(sessionFile: arguments[2], suffix: arguments[3], sessionFolder: arguments[4], prepare: true)
+        }
         // `--live-identity <qa-session.json> <suffix> <remote-id>`: after the in-place update from 0.1.22.
         if arguments.count >= 5, arguments[1] == "--live-identity", let id = UInt32(arguments[4]) {
             LiveCheck.run(sessionFile: arguments[2], suffix: arguments[3], expectedId: id)

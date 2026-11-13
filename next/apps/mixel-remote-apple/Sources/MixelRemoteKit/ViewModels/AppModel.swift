@@ -46,6 +46,7 @@ public final class AppModel: ObservableObject {
     public lazy var company = CompanyModel(app: self)
     public lazy var settings = SettingsModel(app: self)
     public lazy var enrollment = EnrollmentModel(app: self)
+    public lazy var assistant = AssistantModel(app: self)
 
     /// The app opens web pages (sign-in, legal texts) through this.
     public var openURL: (URL) -> Void = { _ in }

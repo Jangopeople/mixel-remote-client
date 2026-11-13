@@ -146,4 +146,56 @@ final class ProductTests: XCTestCase {
         try await waitFor { !engine.calls("wake_on_lan").isEmpty }
         XCTAssertEqual(engine.calls("wake_on_lan").last?.object["macs"] as? [String], ["aa:bb:cc:dd:ee:01"])
     }
+
+    // MARK: Mixel team tools
+
+    private func staff(_ engine: MockEngine) {
+        engine.reply("account_status", AccountStatus(phase: "authenticated", message: "Signed in",
+                                                     account: Account(remembered: true, profile: DemoFixtures.profile, staff: true, displayName: "Team")))
+    }
+
+    func testRolloutCreatesListsAndRevokes() async throws {
+        let engine = MockEngine()
+        Fixtures.company(engine)
+        staff(engine)
+        engine.reply("rollout_create", json: #"{"token":"mrt_x","windows_command":"w","macos_command":"m","linux_command":"l"}"#)
+        engine.reply("rollout_list", json: #"[{"id":"r1","label":"Office","created_at":"2026-11-13T08:00:00Z","expires_at":"2026-12-13T08:00:00Z","max_uses":50,"uses":2,"revoked_at":null}]"#)
+        let app = await Fixtures.app(engine)
+        app.enrollment.createRollout(company: "c-1", label: "Office", days: 30, computers: 50)
+        try await waitFor { app.enrollment.rolloutCreated != nil && !app.enrollment.working }
+        XCTAssertEqual(app.enrollment.rolloutCreated?.macosCommand, "m")
+        XCTAssertEqual(app.enrollment.rollouts.first?.uses, 2)
+        let create = try XCTUnwrap(engine.calls("rollout_create").last).object
+        XCTAssertEqual(create["computers"] as? Int, 50)
+        XCTAssertEqual(create["days"] as? Int, 30)
+        app.enrollment.revokeRollout(app.enrollment.rollouts[0], company: "c-1")
+        try await waitFor { !engine.calls("rollout_revoke").isEmpty && !app.enrollment.working }
+        XCTAssertEqual(engine.calls("rollout_revoke").last?.object["id"] as? String, "r1")
+    }
+
+    func testAssistantSendsTheScreenAndSavesTheTicketNote() async throws {
+        let engine = MockEngine()
+        Fixtures.viewing(engine)
+        staff(engine)
+        engine.reply("ai_connect", json: #"{"address":"http://127.0.0.1:11434","models":["qwen","llava"],"model":"llava"}"#)
+        engine.reply("ai_ask", json: #""**Error** shown: printer offline""#)
+        engine.reply("ticket_note", json: #""T-2026-0042 · Printer""#)
+        engine.queue(frame: VideoFrame.sample(width: 640, height: 400, sequence: 1))
+        let app = await Fixtures.app(engine)
+        XCTAssertTrue(app.assistant.available)
+        try await waitFor { app.session.frame != nil }
+        app.assistant.connect()
+        try await waitFor { app.assistant.connected }
+        XCTAssertEqual(app.assistant.model, "llava")
+        app.assistant.run(.ask)
+        try await waitFor { !app.assistant.busy && app.assistant.answer.contains("printer") }
+        XCTAssertEqual(app.assistant.answer, "Error shown: printer offline")
+        let ask = try XCTUnwrap(engine.calls("ai_ask").last).object
+        XCTAssertNotNil(ask["image"] as? String, "the remote screen goes along as JPEG")
+        XCTAssertTrue((ask["system"] as? String ?? "").contains("English"))
+        app.assistant.ticket = "T-2026-0042"
+        app.assistant.saveTicket()
+        try await waitFor { app.assistant.ticketStatus.contains("T-2026-0042") }
+        XCTAssertEqual(engine.calls("ticket_note").last?.object["remote_id"] as? Int, 731_204_118)
+    }
 }

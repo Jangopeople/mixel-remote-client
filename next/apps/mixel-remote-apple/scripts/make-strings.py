@@ -13,6 +13,19 @@ TABLES = json.load(open(os.path.join(HERE, 'Sources/MixelRemoteKit/Resources/eng
 
 # English key: (German (Swiss spelling), French, Italian)
 NATIVE = {
+    '%d of %d computers': ('%d von %d Computern', '%d sur %d ordinateurs', '%d di %d computer'),
+    'AI assistant and ticket note': ('KI-Assistent und Ticketnotiz', 'Assistant IA et note de ticket', 'Assistente IA e nota del ticket'),
+    'AI server': ('KI-Server', 'Serveur IA', 'Server IA'),
+    'Choose a company and enter a name': ('Wählen Sie eine Firma und geben Sie einen Namen ein', 'Choisissez une entreprise et saisissez un nom', 'Scelga un’azienda e inserisca un nome'),
+    'Explain the screen': ('Bildschirm erklären', 'Expliquer l’écran', 'Spiega lo schermo'),
+    'Question': ('Frage', 'Question', 'Domanda'),
+    'Question or keywords (optional)': ('Frage oder Stichworte (optional)', 'Question ou mots-clés (facultatif)', 'Domanda o parole chiave (facoltativo)'),
+    'Revoked': ('Widerrufen', 'Révoqué', 'Revocato'),
+    'Rollout for many computers': ('Verteilung auf viele Computer', 'Déploiement sur de nombreux ordinateurs', 'Distribuzione su molti computer'),
+    'Save in ISM ticket': ('Im ISM-Ticket speichern', 'Enregistrer dans le ticket ISM', 'Salva nel ticket ISM'),
+    'Save note': ('Notiz speichern', 'Enregistrer la note', 'Salva nota'),
+    'Saved as internal note in %@': ('Als interne Notiz in %@ gespeichert', 'Enregistré comme note interne dans %@', 'Salvato come nota interna in %@'),
+    'Write ticket note': ('Ticketnotiz schreiben', 'Rédiger la note de ticket', 'Scrivi la nota del ticket'),
     'A technician can then reach this Mac at its sign-in screen, before anyone signs in. macOS asks for an administrator twice, and once at the sign-in screen for Screen Recording.': ('Eine Technikerin oder ein Techniker erreicht diesen Mac dann am Anmeldebildschirm, bevor sich jemand anmeldet. macOS fragt zweimal nach einem Administrator und einmal am Anmeldebildschirm nach der Bildschirmaufnahme.', 'Un technicien peut alors atteindre ce Mac à son écran de connexion, avant que quiconque ne se connecte. macOS demande deux fois un administrateur, et une fois à l’écran de connexion l’enregistrement de l’écran.', 'Un tecnico può quindi raggiungere questo Mac alla schermata di accesso, prima che qualcuno acceda. macOS chiede due volte un amministratore e una volta, alla schermata di accesso, la registrazione dello schermo.'),
     'Choose a company': ('Firma wählen', 'Choisir une entreprise', 'Scelga un’azienda'),
     'Installing Mixel Remote %@… The app restarts by itself.': ('Mixel Remote %@ wird installiert… Die App startet von selbst neu.', 'Installation de Mixel Remote %@… L’app redémarre d’elle-même.', 'Installazione di Mixel Remote %@… L’app si riavvia da sola.'),

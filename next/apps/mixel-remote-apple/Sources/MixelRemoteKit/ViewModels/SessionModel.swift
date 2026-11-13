@@ -73,6 +73,7 @@ public final class SessionModel: ObservableObject {
     func statusChanged(from previous: RemoteStatus, to next: RemoteStatus) {
         if next.session != toggleSession {
             toggleSession = next.session
+            app.assistant.sessionChanged(next.session)
             privacy = false; blockInput = false; lockWhenDone = false; pointerMode = false; sound = true
             chat = []; files = nil; clipboardResult = ""
         }

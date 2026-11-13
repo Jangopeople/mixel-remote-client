@@ -68,6 +68,10 @@ public struct SettingsView: View {
                 }
             }
 
+            if !app.isPhone, app.account.account?.staff == true {
+                RolloutSection(enrollment: enrollment)
+            }
+
             if !app.isPhone, let signIn = settings.signInScreen, app.account.account?.staff == true || signIn.connectionId != nil {
                 SignInScreenSection(app: app, settings: settings, enrollment: enrollment, status: signIn)
             }
@@ -218,5 +222,56 @@ struct SignInScreenSection: View {
             if status.availability == .ready, status.connectionId == nil, enrollment.companies.isEmpty { enrollment.loadTeamRecords() }
             if name.isEmpty { name = enrollment.name }
         }
+    }
+}
+
+/// Mixel team: a rollout token per company and the one-line command for many computers.
+struct RolloutSection: View {
+    @ObservedObject var enrollment: EnrollmentModel
+    @State private var company = ""
+    @State private var label = ""
+    @State private var days = 30
+    @State private var computers = 50
+
+    var body: some View {
+        Section {
+            Picker(selection: $company) {
+                Text(verbatim: L("Choose a company")).tag("")
+                ForEach(enrollment.companies) { Text(verbatim: $0.clientName).tag($0.clientId) }
+            } label: { Text(verbatim: L("Company")) }
+                .onChange(of: company) { value in enrollment.rolloutCreated = nil; enrollment.loadRollouts(company: value) }
+            TextField(text: $label) { Text(verbatim: L("Name")) }
+            Stepper(value: $computers, in: 1...2000) { Text(verbatim: L("Computers: %d", computers)) }
+            Stepper(value: $days, in: 1...365) { Text(verbatim: L("Valid for %d days", days)) }
+            Button(L("Create rollout command")) { enrollment.createRollout(company: company, label: label, days: days, computers: computers) }
+                .disabled(company.isEmpty || label.isEmpty || enrollment.working)
+            if let created = enrollment.rolloutCreated {
+                ForEach([("Windows", created.windowsCommand), ("macOS", created.macosCommand), ("Linux", created.linuxCommand)], id: \.0) { item in
+                    HStack(alignment: .top) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(verbatim: item.0).font(.caption.weight(.semibold))
+                            Text(verbatim: item.1).font(.caption.monospaced()).textSelection(.enabled)
+                        }
+                        Spacer()
+                        Button { Pasteboard.copy(item.1) } label: { Label(L("Copy command"), systemImage: "doc.on.doc") }.labelStyle(.iconOnly)
+                    }
+                }
+            }
+            ForEach(enrollment.rollouts) { token in
+                HStack {
+                    VStack(alignment: .leading) {
+                        Text(verbatim: token.label)
+                        Text(verbatim: L("%d of %d computers", token.uses, token.maxUses)).font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if token.revokedAt != nil {
+                        Text(verbatim: L("Revoked")).foregroundStyle(.secondary)
+                    } else {
+                        Button(L("Revoke"), role: .destructive) { enrollment.revokeRollout(token, company: company) }
+                    }
+                }
+            }
+        } header: { Text(verbatim: L("Rollout for many computers")) }
+        .task { if enrollment.companies.isEmpty { enrollment.loadTeamRecords() } }
     }
 }

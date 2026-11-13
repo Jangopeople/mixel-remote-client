@@ -18,11 +18,12 @@ enum LiveCheck {
         fflush(stdout)
     }
 
-    static func run(sessionFile: String, suffix: String, sessionFolder: String? = nil, expectedId: UInt32? = nil) -> Never {
+    static func run(sessionFile: String, suffix: String, sessionFolder: String? = nil, expectedId: UInt32? = nil, prepare: Bool = false) -> Never {
         setenv("MIXEL_QA_SESSION_FILE", sessionFile, 1)
         let done = DispatchSemaphore(value: 0)
         Task.detached {
-            if let expectedId { await identity(expected: expectedId) }
+            if prepare, let sessionFolder { await prepareRollout(suffix: suffix, folder: URL(fileURLWithPath: sessionFolder)) }
+            else if let expectedId { await identity(expected: expectedId) }
             else if let sessionFolder { await session(suffix: suffix, folder: URL(fileURLWithPath: sessionFolder)) }
             else { await checks(suffix: suffix) }
             done.signal()
@@ -79,11 +80,13 @@ enum LiveCheck {
         let command = link?["windows_command"] as? String ?? ""
         check("deploy link for the lab computer", !command.isEmpty)
         try? command.write(to: folder.appendingPathComponent("deploy-command.txt"), atomically: true, encoding: .utf8)
+        // The token alone, for the Mac and Linux scripts (they read it from MIXEL_DEPLOY_TOKEN or a prompt).
+        try? (link?["token"] as? String ?? "").write(to: folder.appendingPathComponent("deploy-token.txt"), atomically: true, encoding: .utf8)
         print("WAITING for the lab computer (deploy-command.txt)"); fflush(stdout)
         var host = 0
         for _ in 0..<180 {
             if let rows = (try? await call(engine, "saas_devices", ["tenant": tenant]).get()) as? [[String: Any]],
-               let row = rows.first(where: { ($0["os"] as? String) == "windows" }), let id = row["connection_id"] as? Int {
+               let row = rows.first(where: { ($0["connection_id"] as? Int) != mine && ($0["connection_id"] as? Int ?? 0) > 0 }), let id = row["connection_id"] as? Int {
                 _ = await call(engine, "remote_presence", ["hosts": [id]])
                 if let status = (try? await call(engine, "remote_status").get()) as? [String: Any], (status["online"] as? [Int] ?? []).contains(id) { host = id; break }
             }
@@ -160,6 +163,22 @@ enum LiveCheck {
         let deleted = await call(engine, "saas_delete_company", ["tenant": tenant, "name": company])
         check("QA company deleted (the lab computer's enrolment with it)", (try? deleted.get()) != nil, "\(deleted)")
         try? await engine.shutdown()
+    }
+
+    /// For the in-place update test: a QA company and a one-computer deploy link whose token is written
+    /// to `folder/deploy-token.txt` (0.1.22 enrols this Mac with it, as the rollout script does).
+    static func prepareRollout(suffix: String, folder: URL) async {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("mixel-native-prepare-\(suffix)")
+        guard let engine = try? CoreEngine(dataDirectory: directory) else { check("engine starts", false); return }
+        check("sign-in with the QA session", await signIn(engine))
+        let tenant = ((try? await call(engine, "saas_signup", ["company": "QA Native \(suffix)", "terms": true]).get()) as? [String: Any])?["tenant_id"] as? String ?? ""
+        check("QA company", !tenant.isEmpty)
+        let link = (try? await call(engine, "saas_create_deploy_link", ["tenant": tenant, "label": "QA update", "days": 1, "computers": 1, "group": NSNull()]).get()) as? [String: Any]
+        let token = link?["token"] as? String ?? ""
+        check("deploy link", token.hasPrefix("mrt_"))
+        try? token.write(to: folder.appendingPathComponent("deploy-token.txt"), atomically: true, encoding: .utf8)
+        try? await engine.shutdown()
+        try? FileManager.default.removeItem(at: directory)
     }
 
     /// The in-place update 0.1.22 → 2.0: run by the updated app on a Mac that 0.1.22 enrolled
@@ -285,7 +304,8 @@ enum LiveCheck {
 
         // Update check on the signed update channel (lab builds read it only with a test channel set).
         let update = await call(engine, "update_check")
-        check("update check answers (lab build without a test channel: no update offered)", ((try? update.get()) ?? nil) == nil, "\(update)")
+        let offered = (try? update.get()).flatMap { $0 is NSNull ? nil : $0 }
+        check("update check answers (lab build without a test channel: no update offered)", (try? update.get()) != nil && offered == nil, "\(update)")
         // Sign-in screen access: this build carries no entitled host, so it waits for Apple.
         let signin = (try? await call(engine, "signin_screen_status").get()) as? [String: Any]
         check("sign-in screen access waits for Apple's virtual keyboard entitlement", signin?["availability"] as? String == "waiting_for_apple", "\(String(describing: signin))")
