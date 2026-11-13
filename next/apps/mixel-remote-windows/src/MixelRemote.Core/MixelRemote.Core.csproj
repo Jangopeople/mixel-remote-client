@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Everything without a window: engine access, models, view models, texts. Runs on any .NET, so the
+       view-model tests run without Windows App SDK. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>MixelRemote</RootNamespace>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\texts.json" LogicalName="MixelRemote.texts.json" />
+    <InternalsVisibleTo Include="MixelRemote.Core.Tests" />
+  </ItemGroup>
+</Project>

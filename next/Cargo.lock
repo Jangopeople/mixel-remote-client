@@ -3574,6 +3574,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mixel_core_capi"
+version = "0.1.0"
+dependencies = [
+ "mixel_core_ffi",
+ "mixel_engine",
+ "serde_json",
+]
+
+[[package]]
 name = "mixel_core_ffi"
 version = "0.1.0"
 dependencies = [

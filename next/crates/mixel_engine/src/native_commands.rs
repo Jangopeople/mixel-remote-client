@@ -195,6 +195,11 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
         }
         "account_callback" => out(auth.complete_app(&args.get::<String>("url")?).await?),
         "account_providers" => out(AccountAuth::providers().await?),
+        // The company's allowed sign-in methods and second-step rule for an e-mail address (null: none known).
+        "sign_in_options" => {
+            let email: String = args.get("email")?;
+            out(sign_in_options(email.trim()).await?)
+        }
         "account_verify" => {
             let factor: Uuid = args.get("factor")?;
             let code: String = args.get("code")?;
@@ -834,12 +839,50 @@ fn newer_than_running(version: &str) -> bool {
     )
 }
 
+fn public_client() -> Result<(reqwest::Client, reqwest::Url, String), String> {
+    let config = crate::service_config::ServiceConfig::load()?;
+    let base: reqwest::Url = config.identity_url.parse().map_err(|_| "Invalid identity service configuration")?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| "The sign-in service cannot be reached")?;
+    Ok((client, base, config.public_key))
+}
+
+async fn sign_in_options(email: &str) -> Result<Value, String> {
+    if email.len() > 254 || !email.contains('@') || email.chars().any(char::is_control) {
+        return Err("Enter an e-mail address".into());
+    }
+    let (client, base, key) = public_client()?;
+    let url = base.join("/rest/v1/rpc/remote_saas_sign_in_options").map_err(|_| "Invalid identity service configuration")?;
+    let rows: Vec<Value> = client
+        .post(url)
+        .header("apikey", &key)
+        .bearer_auth(&key)
+        .json(&json!({ "identifier": email }))
+        .send()
+        .await
+        .and_then(reqwest::Response::error_for_status)
+        .map_err(|_| "The sign-in options could not be read")?
+        .json()
+        .await
+        .map_err(|_| "The sign-in options could not be read")?;
+    Ok(rows.into_iter().next().map_or(Value::Null, |row| {
+        json!({
+            "company": row.get("company").cloned().unwrap_or(Value::Null),
+            "methods": row.get("methods").cloned().unwrap_or(Value::Null),
+            "require_mfa": row.get("require_mfa").cloned().unwrap_or(Value::Bool(false)),
+        })
+    }))
+}
+
 /// The newest signed version on this app's update channel (the one the desktop app 0.1.x used:
 /// `remote-updates/<channel>/macos-arm64`), and whether it can be installed in the app. The phone
 /// app updates through TestFlight or the App Store: no answer here.
 #[cfg_attr(target_os = "linux", allow(dead_code))]
 async fn update_check(context: &Context) -> Result<String, String> {
-    if PLATFORM != "macos" || lab_without_channel() {
+    if !matches!(PLATFORM, "macos" | "windows") || lab_without_channel() {
         return out(Value::Null);
     }
     if let Ok(manifest) = crate::self_update::latest().await {
@@ -857,6 +900,9 @@ async fn update_check(context: &Context) -> Result<String, String> {
             "silent": idle && keeps_sign_in && !crate::self_update::NEEDS_PASSWORD,
             "needs_password": crate::self_update::NEEDS_PASSWORD,
         }));
+    }
+    if PLATFORM == "windows" {
+        return out(Value::Null);
     }
     // Fallback: the store listing of the Mac download (download only).
     #[derive(serde::Deserialize)]
@@ -889,7 +935,7 @@ async fn update_check(context: &Context) -> Result<String, String> {
 /// identifier) and installs the newest version in place. On success the app quits at once; the
 /// installer starts the new version.
 async fn update_install() -> Result<String, String> {
-    if !matches!(PLATFORM, "macos" | "linux") {
+    if !matches!(PLATFORM, "macos" | "linux" | "windows") {
         return Err("Mixel Remote for iPhone and iPad updates through the App Store or TestFlight".into());
     }
     if lab_without_channel() {
@@ -1158,7 +1204,166 @@ async fn platform(context: &Context, command: &str, args: &Args) -> Result<Strin
     linux::platform(context, command, args).await
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+/// Windows: this computer's screens, printer, sign-in screen and start-up. Administrator steps run
+/// the engine helper next to the app (`app_scope::program`), elevated with one prompt each.
+#[cfg(target_os = "windows")]
+async fn platform(context: &Context, command: &str, args: &Args) -> Result<String, String> {
+    use crate::{host_actions, host_print, service_config, windows_signin_host as signin};
+    match command {
+        "capture_targets" => {
+            service_config::require_host()?;
+            let displays = tokio::task::spawn_blocking(native_os_capture::windows_capture::displays)
+                .await
+                .map_err(|_| "Display discovery failed")?
+                .map_err(|error| error.to_string())?;
+            out(displays
+                .into_iter()
+                .map(|display| {
+                    json!({
+                        "id": format!("dxgi:{}:{}:{}", display.adapter, display.output, display.name),
+                        "name": format!("{} · {} × {}", display.name, display.width, display.height),
+                        "full_display": true,
+                    })
+                })
+                .collect::<Vec<_>>())
+        }
+        // Windows needs no screen-recording or accessibility permission.
+        "screen_access" | "request_screen_access" | "request_input_access" => out(true),
+        "copy_connection_id" => {
+            service_config::require_host()?;
+            let id = context
+                .remote
+                .status()
+                .await
+                .host
+                .ok_or("Make this computer available before copying its connection ID")?;
+            out(crate::session_platform::write_text(&id.to_string())?)
+        }
+        "wake_on_lan" => {
+            let macs: Vec<String> = args.get("macs")?;
+            if macs.is_empty() || macs.len() > 4 {
+                return Err("No network address is known for this computer yet".into());
+            }
+            out(tokio::task::spawn_blocking(move || macs.iter().try_for_each(|mac| host_actions::wake(mac)))
+                .await
+                .map_err(|_| "The wake signal could not be sent")??)
+        }
+        "remote_printing_status" => {
+            let installed = tokio::task::spawn_blocking(host_print::installed).await.unwrap_or(false);
+            out(json!({ "supported": true, "installed": installed }))
+        }
+        "remote_printing_set" => {
+            let enabled: bool = args.get("enabled")?;
+            out(tokio::task::spawn_blocking(move || {
+                signin::run_elevated(if enabled { "--printer-install" } else { "--printer-remove" })
+            })
+            .await
+            .map_err(|_| "The printer could not be changed")??)
+        }
+        "print_job" => {
+            let path: String = args.get("path")?;
+            let open: bool = args.get("open")?;
+            out(tokio::task::spawn_blocking(move || {
+                if open {
+                    host_print::open(&path).map(|()| "opened".to_owned())
+                } else {
+                    host_print::print(&path).map(str::to_owned)
+                }
+            })
+            .await
+            .map_err(|_| "The print job could not be handled")??)
+        }
+        "signin_screen_status" => {
+            let status = signin::public_status();
+            let outdated = status.is_some() && tokio::task::spawn_blocking(signin::program_outdated).await.unwrap_or(false);
+            out(json!({
+                "supported": crate::app_scope::program().is_ok(),
+                "outdated": outdated,
+                "technician": signin::technician_connected(),
+                "connection_id": status.as_ref().map(|status| status.connection_id),
+                "name": status.map(|status| status.name),
+                "wayland_greeter": false,
+            }))
+        }
+        "signin_screen_enable" => signin_screen_enable(context, args).await,
+        "signin_screen_disable" => out(tokio::task::spawn_blocking(|| signin::run_elevated("--signin-remove"))
+            .await
+            .map_err(|_| "Administrator step failed")??),
+        "signin_screen_update" => out(tokio::task::spawn_blocking(|| signin::run_elevated("--signin-update"))
+            .await
+            .map_err(|_| "Administrator step failed")??),
+        "open_browser" => {
+            let url: String = args.get("url")?;
+            out(browser(&url).await?)
+        }
+        _ => Err(format!("Unknown command: {command}")),
+    }
+}
+
+/// Sign-in screen and always-on access (Windows): a computer-wide key, a device record
+/// "<name> (sign-in screen)" of the company, and the service. Two administrator prompts.
+#[cfg(target_os = "windows")]
+async fn signin_screen_enable(context: &Context, args: &Args) -> Result<String, String> {
+    use crate::windows_signin_host as signin;
+    let company: Uuid = args.get("company")?;
+    let name: String = args.get("name")?;
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let credential = context.auth.credential(Some(&cancelled)).await?;
+    if !credential.principal.staff {
+        return Err("Sign-in screen access requires an MFA-verified Mixel team account".into());
+    }
+    let name = name.trim().to_owned();
+    if name.is_empty() || name.chars().count() > 60 || name.chars().any(char::is_control) {
+        return Err("Enter a computer name of up to 60 characters".into());
+    }
+    // Step 1 (administrator): the computer-wide key.
+    tokio::task::spawn_blocking(|| signin::run_elevated("--signin-provision"))
+        .await
+        .map_err(|_| "Administrator step failed")??;
+    let key = signin::provisioned_public_key()?;
+    let ism = &credential.ism;
+    let token = &credential.token;
+    let device = match ism.enrollment_of_key(token, &key).await.map_err(|_| "The enrolment status is unavailable")? {
+        Some(current) => current.device,
+        None => {
+            let device = ism
+                .add_device(token, company, &format!("{name} (sign-in screen)"), "windows")
+                .await
+                .map_err(|_| "The sign-in screen record could not be added for this company")?;
+            ism.enroll(token, device, key, &cancelled)
+                .await
+                .map_err(|_| "The sign-in screen could not be enrolled")?;
+            device
+        }
+    };
+    let enrolled = ism
+        .authenticate_device(token, device)
+        .await
+        .map_err(|_| "The sign-in screen enrolment could not be confirmed")?;
+    if enrolled.public_key != key {
+        return Err("The sign-in screen enrolment does not match this computer".into());
+    }
+    let tenant = ism.device_tenant(token, device).await.map_err(|_| "The company of this computer is unavailable")?;
+    let settings = signin::Settings {
+        version: 1,
+        device,
+        profile: enrolled.principal.user,
+        tenant,
+        connection_id: enrolled.connection_id,
+        generation: enrolled.generation,
+        control: true,
+    };
+    let payload = serde_json::to_vec(&json!({ "settings": settings, "name": name }))
+        .map_err(|_| "Cannot prepare the sign-in screen settings")?;
+    let hex: String = payload.iter().map(|byte| format!("{byte:02x}")).collect();
+    // Step 2 (administrator): save the settings and start the service.
+    tokio::task::spawn_blocking(move || signin::run_elevated(&format!("--signin-install {hex}")))
+        .await
+        .map_err(|_| "Administrator step failed")??;
+    out(enrolled.connection_id)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 async fn platform(_context: &Context, command: &str, _args: &Args) -> Result<String, String> {
     match command {
         "capture_targets" => out(Vec::<Value>::new()),
