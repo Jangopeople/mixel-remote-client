@@ -159,13 +159,13 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
             out(auth.status().await)
         }
         "startup_settings" => {
-            #[cfg(not(target_os = "ios"))]
+            #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
             let autostart = tokio::task::spawn_blocking(crate::autostart::enabled).await.unwrap_or(false);
-            #[cfg(target_os = "ios")]
+            #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
             let autostart = false;
-            #[cfg(not(target_os = "ios"))]
+            #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
             let launched = crate::autostart::launched_at_startup();
-            #[cfg(target_os = "ios")]
+            #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
             let launched = false;
             out(json!({
                 "remembered": auth.status().await.account.is_some_and(|account| account.remembered),
@@ -216,14 +216,14 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
         }
         "set_stay_signed_in" => out(auth.set_remember(args.get("enabled")?).await?),
         "set_autostart" => {
-            #[cfg(not(target_os = "ios"))]
+            #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
             {
                 let enabled: bool = args.get("enabled")?;
                 out(tokio::task::spawn_blocking(move || crate::autostart::set(enabled))
                     .await
                     .map_err(|_| "Cannot change the startup setting")??)
             }
-            #[cfg(target_os = "ios")]
+            #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
             Err("Starting with the computer is not available here".into())
         }
         "company_settings_url" => out(auth.company_settings_url(args.get("company_id")?).await?),
@@ -1007,7 +1007,7 @@ async fn platform(_context: &Context, command: &str, _args: &Args) -> Result<Str
             if macs.is_empty() || macs.len() > 4 {
                 return Err("No network address is known for this computer yet".into());
             }
-            out(tokio::task::spawn_blocking(move || macs.iter().try_for_each(|mac| mixel_engine::host_actions::wake(mac)))
+            out(tokio::task::spawn_blocking(move || macs.iter().try_for_each(|mac| crate::host_actions::wake(mac)))
                 .await
                 .map_err(|_| "The wake signal could not be sent")??)
         }

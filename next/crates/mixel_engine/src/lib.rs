@@ -2,7 +2,7 @@
 //! (accounts, devices, sessions, files, chat, recording, the host side). The Tauri app and
 //! the native apps (through `mixel_core_ffi`) both drive it.
 /// The commands of the native apps (same names and arguments as the desktop app's window commands).
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios", target_os = "android"))]
 pub mod native_commands;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod session_platform;
