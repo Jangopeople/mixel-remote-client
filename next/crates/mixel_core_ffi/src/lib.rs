@@ -9,7 +9,8 @@
 //! them away from the desktop app's web view.
 #![allow(unsafe_code)] // UniFFI's generated scaffolding (the C interface Swift calls) is unsafe by nature.
 
-mod commands;
+/// The command dispatcher lives in the engine, shared with the native Linux app (which calls it directly).
+use mixel_engine::native_commands as commands;
 
 use std::sync::Arc;
 
