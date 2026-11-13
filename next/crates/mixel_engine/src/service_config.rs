@@ -25,7 +25,7 @@ pub struct ServiceConfig {
 }
 /// This build only controls other computers (the TestFlight Mac controller, and every iPhone/iPad build).
 pub const fn controller_only() -> bool {
-    cfg!(feature = "testflight-controller") || cfg!(target_os = "ios")
+    cfg!(feature = "testflight-controller") || cfg!(any(target_os = "ios", target_os = "android"))
 }
 
 pub fn require_host() -> Result<(), String> {
@@ -143,7 +143,7 @@ impl ServiceConfig {
         serde_json::from_slice(&bytes).map_err(|_| "The bundled service configuration is invalid".into())
     }
 
-    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "android"))]
     fn read_packaged() -> Result<Self, String> {
         // Embed the same bounded public config in the executable. A mutable
         // file beside an installer cannot redirect the sign-in or peer trust.

@@ -14,10 +14,11 @@ pub const MAX_CONNECTIONS: usize = 20_000;
 /// File descriptors kept free for everything that is not a client connection.
 pub const FD_RESERVE: u64 = 256;
 /// The broker raises its soft open-file limit up to the hard limit, but not beyond this.
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "android")))]
 const OPEN_FILES_TARGET: u64 = 65_536;
-// `rlim_t` is u64 on Linux (glibc, musl) and macOS, the broker's platforms.
-#[cfg(unix)]
+// `rlim_t` is u64 on Linux (glibc, musl) and macOS, the broker's platforms. (Android phones only
+// build this crate for the shared types; 32-bit Android has a u32 `rlim_t` and never runs a broker.)
+#[cfg(all(unix, not(target_os = "android")))]
 const _: () = assert!(std::mem::size_of::<libc::rlim_t>() == 8);
 
 /// The connection limit from the `MIXEL_MAX_CONNECTIONS` setting (if any) and the open-file limit
@@ -62,7 +63,7 @@ pub fn max_connections(setting: Option<&str>, open_files: Option<u64>) -> Result
 
 /// Raises the soft open-file limit towards the hard limit (at most 65536) and returns the soft
 /// limit now in force; `None` where the platform does not say.
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "android")))]
 pub fn raise_open_files() -> Option<u64> {
     let mut limit = libc::rlimit {
         rlim_cur: 0,
@@ -87,7 +88,7 @@ pub fn raise_open_files() -> Option<u64> {
     }
     Some(limit.rlim_cur)
 }
-#[cfg(not(unix))]
+#[cfg(any(not(unix), target_os = "android"))]
 pub fn raise_open_files() -> Option<u64> {
     None
 }
@@ -128,7 +129,7 @@ mod tests {
         assert!(error.contains("--ulimit nofile=65536:65536"));
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, not(target_os = "android")))]
     #[test]
     fn the_soft_open_file_limit_is_raised_never_lowered() {
         let read = || {

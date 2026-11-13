@@ -265,7 +265,7 @@ struct TouchScreen: UIViewRepresentable {
         @objc func hold(_ gesture: UILongPressGestureRecognizer) {
             guard gesture.state == .began, session.controllable, let point = point(gesture) else { return }
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-            click(at: point, button: 3, clicks: 1)
+            click(at: point, button: 2, clicks: 1)
         }
 
         @objc func twoFingers(_ gesture: UIPanGestureRecognizer) {

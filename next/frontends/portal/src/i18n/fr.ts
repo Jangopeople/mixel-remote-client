@@ -128,6 +128,7 @@ export const fr: Record<MessageKey, string> = {
   'auth.method.azure': 'Microsoft',
   'auth.method.apple': 'Apple',
   'auth.method.sso': 'SSO d’entreprise (SAML)',
+  'auth.continueWith': 'Continuer avec {name}',
   'auth.withMixelId': 'Continuer avec Mixel ID',
   'auth.sendCode': 'Recevoir un code',
   'auth.codeSent': 'Nous avons envoyé un code à 6 chiffres à {email}. Saisissez-le ci-dessous. L’e-mail peut indiquer « Mixel ISM » : c’est le même service de comptes Mixel.',
@@ -171,7 +172,7 @@ export const fr: Record<MessageKey, string> = {
   'signup.finishLead': 'Vous êtes connecté en tant que {email}. Nommez votre entreprise pour démarrer l’essai Business de 14 jours.',
   'signup.finishCreate': 'Démarrer l’essai',
   'signup.orJoin': 'Un collègue vous a invité ? Ouvrez plutôt le lien d’invitation qu’il vous a envoyé.',
-  'signup.mixelIdNote': 'Vous serez redirigé vers auth.mixel.ch, puis ramené ici.',
+  'signup.oauthNote': 'Vous serez redirigé vers {host}, puis ramené ici.',
 
   'invite.title': 'Rejoindre votre équipe sur Mixel Remote',
   'invite.lead': 'Connectez-vous ou créez un compte avec l’adresse e-mail à laquelle l’invitation a été envoyée.',

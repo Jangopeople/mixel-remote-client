@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
-description = "Mixel Remote engine for the native Apple apps (Swift through UniFFI)"
+description = "Mixel Remote engine for the native apps (Swift and Kotlin through UniFFI)"
 
 [lib]
 name = "mixel_core_ffi"

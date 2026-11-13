@@ -208,3 +208,25 @@ describe('invitation e-mails', () => {
     expect(errorKey({ message: 'Too many invitations today', code: '54000' })).toBe('error.too_many');
   });
 });
+
+import { isOAuthMethod, OAUTH_PROVIDERS, signupMethods } from '../../src/lib/logic';
+
+describe('outside sign-in (Google, Microsoft, Apple, Mixel ID)', () => {
+  it('knows which methods leave the portal', () => {
+    expect(['mixel_id', 'google', 'azure', 'apple'].every((m) => isOAuthMethod(m as never))).toBe(true);
+    expect(isOAuthMethod('password')).toBe(false);
+    expect(isOAuthMethod('magic_link')).toBe(false);
+    expect(isOAuthMethod('sso')).toBe(false);
+  });
+  it('maps each method to its GoTrue provider', () => {
+    expect(OAUTH_PROVIDERS.mixel_id.provider).toBe('keycloak');
+    expect(OAUTH_PROVIDERS.azure.provider).toBe('azure');
+    expect(OAUTH_PROVIDERS.apple.scopes).toBe('name email');
+  });
+  it('offers the available providers at sign-up, e-mail methods first', () => {
+    expect(signupMethods(new Set(['password', 'magic_link', 'google', 'azure', 'apple', 'mixel_id'] as never)))
+      .toEqual(['password', 'magic_link', 'google', 'azure', 'apple', 'mixel_id']);
+    expect(signupMethods(new Set(['password', 'magic_link', 'mixel_id'] as never))).toEqual(['password', 'magic_link', 'mixel_id']);
+    expect(signupMethods(null)).toEqual(['password', 'magic_link']);
+  });
+});

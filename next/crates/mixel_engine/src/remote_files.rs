@@ -1062,9 +1062,12 @@ mod tests {
     struct Fixture(PathBuf);
     impl Fixture {
         fn new() -> Self {
-            let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../../_scratch")
-                .join(format!("file-owner-fixture-{}", Uuid::new_v4()));
+            // On a phone the test runs from a device folder (the source tree is not there).
+            #[cfg(target_os = "android")]
+            let base = std::env::temp_dir();
+            #[cfg(not(target_os = "android"))]
+            let base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../_scratch");
+            let path = base.join(format!("file-owner-fixture-{}", Uuid::new_v4()));
             std::fs::create_dir_all(&path).unwrap();
             Self(path)
         }
