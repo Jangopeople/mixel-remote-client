@@ -3,8 +3,8 @@
 //! and the offline-first self-removal of this computer signed with its own device key.
 use crate::{account_auth, device_identity, main_window, remote_session};
 use signaling_server::auth::saas::{
-    SaasDeployLink, SaasDevice, SaasDevicePresence, SaasEnrollment, SaasError, SaasGroup, SaasInvite, SaasMember,
-    SaasSignup, SaasTenant, SelfRemoval,
+    SaasDeployLink, SaasDevice, SaasDevicePresence, SaasEnrollment, SaasError, SaasFavorite, SaasGroup, SaasInvite,
+    SaasMember, SaasRecentDevice, SaasSessionRow, SaasSignup, SaasTenant, SelfRemoval,
 };
 use std::{path::PathBuf, sync::Arc};
 use tauri::Manager;
@@ -238,6 +238,68 @@ pub async fn saas_device_presence(window: tauri::WebviewWindow, auth: Auth<'_>, 
     main_window(&window)?;
     let credential = auth.credential(None).await?;
     credential.ism.saas_device_presence(&credential.token, tenant).await.map_err(message)
+}
+
+/// Any member: marks a company device as a favorite (or not). Returns the new state.
+#[tauri::command]
+pub async fn saas_set_favorite(window: tauri::WebviewWindow, auth: Auth<'_>, tenant: Uuid, device: Uuid, favorite: bool) -> Result<bool, String> {
+    main_window(&window)?;
+    let credential = auth.credential(None).await?;
+    credential.ism.saas_set_favorite(&credential.token, tenant, device, favorite).await.map_err(message)
+}
+
+/// The signed-in person's favorite devices (only those they may still reach).
+#[tauri::command]
+pub async fn saas_favorites(window: tauri::WebviewWindow, auth: Auth<'_>, tenant: Uuid) -> Result<Vec<SaasFavorite>, String> {
+    main_window(&window)?;
+    let credential = auth.credential(None).await?;
+    credential.ism.saas_favorites(&credential.token, tenant).await.map_err(message)
+}
+
+/// The devices of the signed-in person's own recent sessions, newest first. JS: `{tenant, maxCount?}`.
+#[tauri::command]
+pub async fn saas_recent_devices(
+    window: tauri::WebviewWindow,
+    auth: Auth<'_>,
+    tenant: Uuid,
+    max_count: Option<u32>,
+) -> Result<Vec<SaasRecentDevice>, String> {
+    main_window(&window)?;
+    let credential = auth.credential(None).await?;
+    credential.ism.saas_recent_devices(&credential.token, tenant, max_count).await.map_err(message)
+}
+
+/// Session report (paid plans): owners/admins every session of the company, others their own.
+/// `from`/`to`: ISO 8601 (default the last 30 days).
+#[tauri::command]
+pub async fn saas_session_report(
+    window: tauri::WebviewWindow,
+    auth: Auth<'_>,
+    tenant: Uuid,
+    from: Option<String>,
+    to: Option<String>,
+    technician: Option<Uuid>,
+    device: Option<Uuid>,
+) -> Result<Vec<SaasSessionRow>, String> {
+    main_window(&window)?;
+    let credential = auth.credential(None).await?;
+    credential.ism.saas_session_report(&credential.token, tenant, from, to, technician, device).await.map_err(message)
+}
+
+/// Note on a session: by `session` id, or by the helped computer's Remote ID (`connection`, the
+/// caller's newest session to it in the last 24 hours). An empty note clears it.
+#[tauri::command]
+pub async fn saas_session_note(
+    window: tauri::WebviewWindow,
+    auth: Auth<'_>,
+    tenant: Uuid,
+    note: String,
+    session: Option<Uuid>,
+    connection: Option<u32>,
+) -> Result<Uuid, String> {
+    main_window(&window)?;
+    let credential = auth.credential(None).await?;
+    credential.ism.saas_session_note(&credential.token, tenant, &note, session, connection).await.map_err(message)
 }
 
 #[tauri::command]

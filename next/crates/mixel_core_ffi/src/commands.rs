@@ -712,6 +712,35 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
             let c = auth.credential(None).await?;
             out(c.ism.saas_device_presence(&c.token, args.get("tenant")?).await.map_err(saas)?)
         }
+        "saas_set_favorite" => {
+            let c = auth.credential(None).await?;
+            out(c.ism.saas_set_favorite(&c.token, args.get("tenant")?, args.get("device")?, args.get("favorite")?).await.map_err(saas)?)
+        }
+        "saas_favorites" => {
+            let c = auth.credential(None).await?;
+            out(c.ism.saas_favorites(&c.token, args.get("tenant")?).await.map_err(saas)?)
+        }
+        "saas_recent_devices" => {
+            let c = auth.credential(None).await?;
+            out(c.ism.saas_recent_devices(&c.token, args.get("tenant")?, args.get("max_count")?).await.map_err(saas)?)
+        }
+        "saas_session_report" => {
+            let c = auth.credential(None).await?;
+            out(c
+                .ism
+                .saas_session_report(&c.token, args.get("tenant")?, args.get("from")?, args.get("to")?, args.get("technician")?, args.get("device")?)
+                .await
+                .map_err(saas)?)
+        }
+        "saas_session_note" => {
+            let c = auth.credential(None).await?;
+            let note: String = args.get("note")?;
+            out(c
+                .ism
+                .saas_session_note(&c.token, args.get("tenant")?, &note, args.get("session")?, args.get("connection")?)
+                .await
+                .map_err(saas)?)
+        }
         "saas_rename_tenant" => {
             let c = auth.credential(None).await?;
             let name: String = args.get("name")?;
@@ -1018,6 +1047,16 @@ mod tests {
         let account: Value = serde_json::from_str(&dispatch(&context, "account_status", "{}").await.unwrap()).unwrap();
         assert!(account["phase"].is_string());
         assert!(dispatch(&context, "saas_my_tenants", "{}").await.is_err());
+        let tenant = Uuid::new_v4();
+        for (command, args) in [
+            ("saas_set_favorite", format!(r#"{{"tenant":"{tenant}","device":"{tenant}","favorite":true}}"#)),
+            ("saas_favorites", format!(r#"{{"tenant":"{tenant}"}}"#)),
+            ("saas_recent_devices", format!(r#"{{"tenant":"{tenant}","max_count":5}}"#)),
+            ("saas_session_report", format!(r#"{{"tenant":"{tenant}","from":"2026-11-01"}}"#)),
+            ("saas_session_note", format!(r#"{{"tenant":"{tenant}","note":"x","connection":123456789}}"#)),
+        ] {
+            assert!(dispatch(&context, command, &args).await.is_err(), "{command} needs a signed-in account");
+        }
         assert!(dispatch(&context, "remote_devices", r#"{"search":""}"#).await.is_err());
         // Offline: no pending removal, and a removal needs confirmation first.
         assert_eq!(dispatch(&context, "device_removal_pending", "{}").await.unwrap(), "false");
