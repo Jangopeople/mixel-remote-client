@@ -1,5 +1,6 @@
 //! Remote printing. On a Windows host the printer "Mixel Remote Printer" writes each
-//! print job as a PDF into a folder; during a session the host sends that PDF to the
+//! print job as a PDF into a folder; on macOS and Linux the CUPS printer of the same name
+//! sends it to this app (`ipp_printer`). During a session the host sends that PDF to the
 //! technician, whose app offers to print it on a local printer or to open it.
 use std::path::{Path, PathBuf};
 
@@ -9,6 +10,16 @@ pub const FEATURE: &str = "print";
 pub const RECORD: &[u8] = b"mixel-print-v1:";
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub const PRINTER: &str = "Mixel Remote Printer";
+
+/// macOS and Linux: whether the print system (CUPS) is there to add the printer to.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub fn print_system_available() -> bool {
+    std::process::Command::new("lpstat").arg("-r").output().is_ok_and(|output| output.status.success())
+}
+#[cfg(target_os = "windows")]
+pub fn print_system_available() -> bool {
+    true
+}
 const JOB_NAME: &str = "Remote print.pdf";
 
 #[cfg(target_os = "windows")]
@@ -35,7 +46,11 @@ pub fn installed() -> bool {
             .output()
             .is_ok_and(|output| output.status.success())
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        crate::ipp_printer::installed()
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     {
         false
     }
@@ -88,6 +103,11 @@ impl Watcher {
     pub fn start() -> Self {
         #[cfg(target_os = "windows")]
         let _ = std::fs::remove_file(spool_folder().join("job.pdf"));
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        {
+            crate::ipp_printer::ensure_running();
+            crate::ipp_printer::clear();
+        }
         Self::default()
     }
     /// A complete job, once its file has stopped changing for a moment.
@@ -120,7 +140,11 @@ impl Watcher {
             let _ = std::fs::remove_file(&path);
             (data.starts_with(b"%PDF") && data.len() <= core_protocol::clipboard::MAX_RICH - 4096).then_some(data)
         }
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        {
+            crate::ipp_printer::take()
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
         {
             None
         }

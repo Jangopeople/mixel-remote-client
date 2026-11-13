@@ -465,11 +465,12 @@ struct Inner {
     renew_after: Option<std::time::Instant>,
     stopping: bool,
 }
+/// Media owner threads; `true` marks a colleague's (joined) media.
+type MediaWorkers = Arc<std::sync::Mutex<Vec<(bool, std::thread::JoinHandle<()>)>>>;
 #[derive(Clone)]
 pub struct RemoteSession(
     Arc<Mutex<Inner>>,
-    /// Media owner threads; `true` marks a colleague's (joined) media.
-    Arc<std::sync::Mutex<Vec<(bool, std::thread::JoinHandle<()>)>>>,
+    MediaWorkers,
     crate::remote_chat::ChatHub,
     crate::remote_recording::RecordingHub,
     crate::remote_files::FileHub,

@@ -67,6 +67,11 @@ pub fn is_login_window_console() -> bool {
 pub fn main_display() -> u32 {
     objc2_core_graphics::CGMainDisplayID()
 }
+/// Left, top, width and height of a display in global coordinates (points; main display at 0,0).
+pub fn display_bounds(id: u32) -> (f64, f64, f64, f64) {
+    let bounds = objc2_core_graphics::CGDisplayBounds(id);
+    (bounds.origin.x, bounds.origin.y, bounds.size.width, bounds.size.height)
+}
 /// Call only from the local user's explicit screen-sharing permission action.
 pub fn request_screen_access() -> bool {
     objc2_core_graphics::CGRequestScreenCaptureAccess()
@@ -180,6 +185,56 @@ pub fn own_windows() -> Result<Vec<OwnWindow>, CaptureError> {
 enum Target {
     Display(u32),
     OwnWindow(u32),
+}
+
+/// Windows of this app that the technician must not see (the privacy cover), with a version
+/// that grows on every change, and the version each running display capture has applied.
+static EXCLUDED: std::sync::Mutex<(u64, Vec<u32>)> = std::sync::Mutex::new((0, Vec::new()));
+static APPLIED: std::sync::Mutex<Vec<(u64, u64)>> = std::sync::Mutex::new(Vec::new());
+static NEXT_STREAM: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// Leaves these windows of this app out of every display capture from now on; returns the version.
+pub fn set_excluded_windows(ids: Vec<u32>) -> u64 {
+    let mut excluded = EXCLUDED.lock().unwrap_or_else(|error| error.into_inner());
+    excluded.0 += 1;
+    excluded.1 = ids;
+    excluded.0
+}
+
+/// Whether every running display capture has applied `version` (true when none runs).
+pub fn exclusions_applied(version: u64) -> bool {
+    APPLIED
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .iter()
+        .all(|(_, applied)| *applied >= version)
+}
+
+fn excluded_now() -> (u64, Vec<u32>) {
+    EXCLUDED.lock().unwrap_or_else(|error| error.into_inner()).clone()
+}
+
+/// A display filter that leaves out this app's excluded windows.
+/// SAFETY: `content` is a retained immutable snapshot.
+unsafe fn display_filter(content: &SCShareableContent, id: u32, excluded: &[u32]) -> Result<Retained<SCContentFilter>, CaptureError> {
+    unsafe {
+        let displays = content.displays();
+        let display = displays
+            .iter()
+            .find(|d| d.displayID() == id)
+            .ok_or(CaptureError::Target)?;
+        let own = std::process::id();
+        let windows: Vec<Retained<objc2_screen_capture_kit::SCWindow>> = content
+            .windows()
+            .iter()
+            .filter(|window| {
+                excluded.contains(&window.windowID())
+                    && window.owningApplication().is_some_and(|app| app.processID() as u32 == own)
+            })
+            .collect();
+        let windows = NSArray::from_retained_slice(&windows);
+        Ok(SCContentFilter::initWithDisplay_excludingWindows(SCContentFilter::alloc(), &display, &windows))
+    }
 }
 struct OutputIvars {
     mailbox: Arc<FrameMailbox>,
@@ -308,6 +363,10 @@ pub struct MacStream {
     queue: DispatchRetained<DispatchQueue>,
     pub frames: Arc<FrameMailbox>,
     active: bool,
+    /// Display captures: the display and the exclusion version applied (see `set_excluded_windows`).
+    display: Option<u32>,
+    stream_id: u64,
+    applied: u64,
 }
 impl MacStream {
     pub fn start(
@@ -339,19 +398,9 @@ impl MacStream {
         // SAFETY: retained immutable snapshot, validated settings, live delegate
         // and serial callback queue retained for the entire capture lifecycle.
         unsafe {
+            let (version, excluded) = excluded_now();
             let filter = match target {
-                Target::Display(id) => {
-                    let displays = content.displays();
-                    let display = displays
-                        .iter()
-                        .find(|d| d.displayID() == id)
-                        .ok_or(CaptureError::Target)?;
-                    SCContentFilter::initWithDisplay_excludingWindows(
-                        SCContentFilter::alloc(),
-                        &display,
-                        &NSArray::new(),
-                    )
-                }
+                Target::Display(id) => display_filter(&content, id, &excluded)?,
                 Target::OwnWindow(id) => {
                     let windows = content.windows();
                     let window = windows
@@ -406,12 +455,23 @@ impl MacStream {
                 };
                 let _ = tx.try_send(result);
             });
+            let display = match target {
+                Target::Display(id) => Some(id),
+                Target::OwnWindow(_) => None,
+            };
+            let stream_id = NEXT_STREAM.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if display.is_some() {
+                APPLIED.lock().unwrap_or_else(|error| error.into_inner()).push((stream_id, version));
+            }
             let mut capture = Self {
                 stream,
                 output,
                 queue,
                 frames,
                 active: true,
+                display,
+                stream_id,
+                applied: version,
             };
             capture
                 .stream
@@ -429,11 +489,39 @@ impl MacStream {
             }
         }
     }
+    /// Applies a changed window exclusion (privacy cover) to this running display capture.
+    /// Called from the capture owner between pictures; cheap when nothing changed.
+    pub fn sync_exclusions(&mut self) -> Result<(), CaptureError> {
+        let Some(id) = self.display.filter(|_| self.active) else { return Ok(()) };
+        let (version, excluded) = excluded_now();
+        if version == self.applied {
+            return Ok(());
+        }
+        let content = content(false)?;
+        // SAFETY: retained snapshot; the stream is retained and the completion block is copied.
+        let filter = unsafe { display_filter(&content, id, &excluded)? };
+        let (tx, rx) = mpsc::sync_channel(1);
+        let updated = RcBlock::new(move |error: *mut NSError| {
+            let _ = tx.try_send(error.is_null());
+        });
+        // SAFETY: as above.
+        unsafe { self.stream.updateContentFilter_completionHandler(&filter, Some(&updated)) };
+        let applied = rx.recv_timeout(Duration::from_secs(2)).map_err(|_| CaptureError::Timeout)?;
+        if !applied {
+            return Err(CaptureError::Native("ScreenCaptureKit did not apply the window exclusion".into()));
+        }
+        self.applied = version;
+        if let Some(entry) = APPLIED.lock().unwrap_or_else(|error| error.into_inner()).iter_mut().find(|(stream, _)| *stream == self.stream_id) {
+            entry.1 = version;
+        }
+        Ok(())
+    }
     pub fn stop(&mut self) -> Result<(), CaptureError> {
         if !self.active {
             return Ok(());
         }
         self.active = false;
+        APPLIED.lock().unwrap_or_else(|error| error.into_inner()).retain(|(stream, _)| *stream != self.stream_id);
         self.frames.close(CaptureError::Stopped);
         let (tx, rx) = mpsc::sync_channel(1);
         // Keep delegate and queue alive until the actual asynchronous completion,

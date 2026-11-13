@@ -4,6 +4,8 @@
 mod session_platform;
 #[cfg(target_os = "linux")]
 mod wayland_portal;
+#[cfg(target_os = "linux")]
+mod linux_guard;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 mod account_auth;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
@@ -17,6 +19,8 @@ mod host_actions;
 mod session_guard;
 mod session_mirror;
 mod host_print;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod ipp_printer;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 mod agent;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
@@ -997,7 +1001,9 @@ async fn remote_printing_status(window: tauri::WebviewWindow) -> Result<RemotePr
     let installed = tauri::async_runtime::spawn_blocking(host_print::installed)
         .await
         .unwrap_or(false);
-    Ok(RemotePrinting { supported: cfg!(target_os = "windows"), installed })
+    // Windows: a PDF printer port. macOS and Linux: a CUPS printer that sends its PDF to this app.
+    let supported = cfg!(target_os = "windows") || tauri::async_runtime::spawn_blocking(host_print::print_system_available).await.unwrap_or(false);
+    Ok(RemotePrinting { supported, installed })
 }
 /// Adds or removes the "Mixel Remote Printer" (one administrator prompt).
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
@@ -1011,10 +1017,9 @@ async fn remote_printing_set(window: tauri::WebviewWindow, enabled: bool) -> Res
     .await
     .map_err(|_| "The printer could not be changed".to_owned())?;
     #[cfg(not(target_os = "windows"))]
-    {
-        let _ = enabled;
-        Err("Remote printing is set up on Windows computers".into())
-    }
+    tauri::async_runtime::spawn_blocking(move || ipp_printer::set_installed(enabled))
+        .await
+        .map_err(|_| "The printer could not be changed".to_owned())?
 }
 /// A print job received in a session: print it on the default printer, or open it.
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
@@ -2326,6 +2331,17 @@ fn main() {
         }
         return;
     }
+    // Linux: the helper that gives screen and input back if this app ends while they are switched off.
+    #[cfg(target_os = "linux")]
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new(linux_guard::RESTORE_ARGUMENT)) {
+        let app = std::env::args().nth(2).and_then(|pid| pid.parse::<u32>().ok()).unwrap_or(0);
+        if app == 0 || linux_guard::watch_and_restore(app).is_err() {
+            std::process::exit(2);
+        }
+        return;
+    }
+    #[cfg(target_os = "linux")]
+    linux_guard::recover_stale();
     // Packaging validates the exact public resource bytes using the same
     // parser and Ed25519 point checks as runtime, before signing. This mode
     // creates no webview, account, keychain access, connection or OS prompt.

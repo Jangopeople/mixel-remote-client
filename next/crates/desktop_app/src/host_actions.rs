@@ -93,6 +93,9 @@ pub fn available() -> Vec<String> {
         actions.push(RESTART.to_owned());
         actions.push(SOUND.to_owned());
     }
+    // macOS 13+: ScreenCaptureKit records what the Mac plays.
+    #[cfg(target_os = "macos")]
+    actions.push(SOUND.to_owned());
     actions.push(WOL.to_owned());
     actions.extend(crate::session_guard::available().into_iter().map(str::to_owned));
     actions
@@ -135,7 +138,7 @@ pub fn run(name: &str) -> Result<(), String> {
 pub fn parse(list: &str) -> Vec<String> {
     list.split(',')
         .map(str::trim)
-        .filter(|name| matches!(*name, SAS | RESTART | WOL | SOUND) || [crate::session_guard::MEET, crate::session_guard::POINTER, crate::session_guard::PRIVACY, crate::session_guard::BLOCK, crate::session_guard::LOCK, crate::session_guard::LOCK_AT_END].contains(name))
+        .filter(|name| matches!(*name, SAS | RESTART | WOL | SOUND) || [crate::session_guard::MEET, crate::session_guard::POINTER, crate::session_guard::PRIVACY, crate::session_guard::BLOCK, crate::session_guard::LOCK, crate::session_guard::LOCK_AT_END, crate::session_guard::WAYLAND].contains(name))
         .map(str::to_owned)
         .take(12)
         .collect()
@@ -146,6 +149,7 @@ mod tests {
     #[test]
     fn only_known_actions_survive_parsing() {
         assert_eq!(super::parse("sas, restart,format-disk,"), vec!["sas", "restart"]);
+        assert_eq!(super::parse("lock,wayland,privacy"), vec!["lock", "wayland", "privacy"]);
         assert!(super::parse("").is_empty());
         assert!(super::wake("zz").is_err());
         assert!(super::wake("ff:ff:ff:ff:ff:ff").is_err());

@@ -1,5 +1,7 @@
-//! Remote sound. A Windows or Linux host records what its speakers play and sends it as
-//! small frames in the control channel; the technician's app plays them.
+//! Remote sound. A Windows, Mac or Linux host records what its speakers play and sends it as
+//! small frames in the control channel; the technician's app plays them. Windows: loopback of
+//! the default output; Linux: the sound server's monitor; macOS 13+: ScreenCaptureKit (it needs
+//! the screen-recording permission the host already has).
 use core_protocol::sound::{self, FRAME_SAMPLES, RATE, Resampler, State};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::{
@@ -24,13 +26,17 @@ impl Capture {
         {
             linux_capture()
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "macos")]
+        {
+            mac_capture()
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
             if cfg!(target_os = "windows") { Self::loopback() } else { None }
         }
     }
     /// Windows: recording from an output device records what it plays.
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     fn loopback() -> Option<Self> {
         let (sender, frames) = mpsc::sync_channel::<Vec<u8>>(50);
         let (ready_tx, ready_rx) = mpsc::channel::<bool>();
@@ -134,6 +140,52 @@ fn linux_capture() -> Option<Capture> {
             }
         }
         let _ = pipeline.set_state(gst::State::Null);
+    });
+    Some(Capture { frames, stop })
+}
+/// Frames from interleaved stereo 48 kHz samples, as the Linux and Mac captures deliver them.
+#[cfg_attr(not(any(target_os = "linux", target_os = "macos", test)), allow(dead_code))]
+struct Coder {
+    resampler: Resampler,
+    pending: Vec<i16>,
+    state: State,
+}
+#[cfg_attr(not(any(target_os = "linux", target_os = "macos", test)), allow(dead_code))]
+impl Coder {
+    fn new() -> Option<Self> {
+        Some(Self { resampler: Resampler::new(2, 48_000)?, pending: Vec::with_capacity(FRAME_SAMPLES * 4), state: State::default() })
+    }
+    fn push(&mut self, stereo: &[f32], mut emit: impl FnMut(Vec<u8>)) {
+        self.resampler.push(stereo, &mut self.pending);
+        while self.pending.len() >= FRAME_SAMPLES {
+            let samples: Vec<i16> = self.pending.drain(..FRAME_SAMPLES).collect();
+            if !sound::silent(&samples)
+                && let Some(frame) = sound::encode(&mut self.state, &samples)
+            {
+                emit(frame);
+            }
+        }
+    }
+}
+/// macOS: ScreenCaptureKit's recording of what the Mac plays (not this app's own sound).
+#[cfg(target_os = "macos")]
+fn mac_capture() -> Option<Capture> {
+    let source = native_os_capture::macos_guard::Sound::start().ok()?;
+    let (sender, frames) = mpsc::sync_channel::<Vec<u8>>(50);
+    let stop = Arc::new(AtomicBool::new(false));
+    let stopped = stop.clone();
+    std::thread::spawn(move || {
+        let Some(mut coder) = Coder::new() else { return };
+        while !stopped.load(Ordering::Acquire) {
+            match source.samples.recv_timeout(Duration::from_millis(200)) {
+                Ok(stereo) => coder.push(&stereo, |frame| {
+                    let _ = sender.try_send(frame);
+                }),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        drop(source);
     });
     Some(Capture { frames, stop })
 }
@@ -242,5 +294,24 @@ impl Player {
 impl Drop for Player {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn stereo_samples_become_sound_frames_and_silence_is_skipped() {
+        let mut coder = super::Coder::new().unwrap();
+        let mut frames = Vec::new();
+        let silence = vec![0.0f32; 48_000];
+        coder.push(&silence, |frame| frames.push(frame));
+        assert!(frames.is_empty(), "silence is not sent");
+        let tone: Vec<f32> = (0..48_000).flat_map(|index| {
+            let value = (index as f32 * 440.0 * std::f32::consts::TAU / 48_000.0).sin() * 0.5;
+            [value, value]
+        }).collect();
+        coder.push(&tone, |frame| frames.push(frame));
+        assert!(frames.len() > 10, "{} frames", frames.len());
+        assert!(frames.iter().all(|frame| core_protocol::sound::decode(frame).is_some()));
     }
 }

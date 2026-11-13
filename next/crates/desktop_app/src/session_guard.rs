@@ -5,7 +5,13 @@
 //! - lock: lock the computer now, or when the session ends.
 //!
 //! Everything is switched off when the session ends, however it ends (the `Guard` is dropped).
-//! Ctrl+Alt+Del on Windows always gives the person at the computer their input back.
+//! Ctrl+Alt+Del on Windows, and Control+Option+Command+Delete on a Mac, always give the person at
+//! the computer their input back.
+//!
+//! macOS: the cover is a set of dark windows left out of the technician's picture (the capture
+//! filter excludes them before they show); blocking uses an event tap (Accessibility permission).
+//! Linux with X11: see `linux_guard`. Wayland offers no way to do any of this for other programs:
+//! the host then announces `wayland` and the technician's app explains it.
 #![allow(unsafe_code)] // window, hook and lock calls of the operating system, each commented
 
 #[cfg(target_os = "windows")]
@@ -30,11 +36,22 @@ pub const LOCK_AT_END: &str = "lockend";
 
 static LOCK_WHEN_DONE: AtomicBool = AtomicBool::new(false);
 
+/// `wayland` in the host's action list: privacy, block and pointer are impossible there.
+pub const WAYLAND: &str = "wayland";
+
 /// What this host can offer.
 pub fn available() -> Vec<&'static str> {
     let mut list = Vec::new();
-    if cfg!(target_os = "windows") {
+    if cfg!(any(target_os = "windows", target_os = "macos")) {
         list.extend([PRIVACY, BLOCK, POINTER]);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if crate::linux_guard::x11_available() {
+            list.extend([PRIVACY, BLOCK, POINTER]);
+        } else {
+            list.push(WAYLAND);
+        }
     }
     list.extend([LOCK, LOCK_AT_END, MEET]);
     list
@@ -387,26 +404,87 @@ mod win {
     }
 }
 
+/// The text on the privacy screen.
+const COVER_TEXT: &str = "Mixel Remote · A technician is working on this computer";
+
+/// The display the technician sees, to place the pointer on it (macOS and X11: from the source).
+static SHARED_SOURCE: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+/// Remembers the shared capture source (`display:<id>` on a Mac, `x11:<screen>:<root>` on Linux).
+pub fn set_shared_source(source: &str) {
+    if let Ok(mut shared) = SHARED_SOURCE.lock() {
+        shared.clear();
+        shared.push_str(source);
+    }
+}
+
+/// Where a point of the shared picture (0..65535 both ways) lies on a display rectangle.
+pub fn place(point: (u16, u16), left: f64, top: f64, width: f64, height: f64) -> (f64, f64) {
+    (
+        left + f64::from(point.0) * (width - 1.0).max(0.0) / 65535.0,
+        top + f64::from(point.1) * (height - 1.0).max(0.0) / 65535.0,
+    )
+}
+
 /// Shows the technician's pointer at `point` (0..65535 on display `display` of `displays`), or hides it.
 pub fn pointer(point: Option<(u16, u16)>, display: usize, displays: usize) {
     #[cfg(target_os = "windows")]
     win::point(point, display, displays);
-    #[cfg(not(target_os = "windows"))]
-    let _ = (point, display, displays);
+    #[cfg(target_os = "macos")]
+    {
+        let _ = (display, displays);
+        match point {
+            None => native_os_capture::macos_guard::pointer_hide(),
+            Some(point) => {
+                let source = SHARED_SOURCE.lock().map(|value| value.clone()).unwrap_or_default();
+                let id = source.strip_prefix("display:").and_then(|id| id.parse::<u32>().ok()).unwrap_or_else(native_os_capture::macos::main_display);
+                let bounds = native_os_capture::macos::display_bounds(id);
+                let (x, y) = place(point, bounds.0, bounds.1, bounds.2, bounds.3);
+                native_os_capture::macos_guard::pointer_at(x, y);
+            }
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = (display, displays);
+        let source = SHARED_SOURCE.lock().map(|value| value.clone()).unwrap_or_default();
+        crate::linux_guard::pointer(point, &source);
+    }
 }
 
 fn privacy(on: bool) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     return win::toggle(&win::COVER, on, win::cover);
+    #[cfg(target_os = "macos")]
+    return if on {
+        native_os_capture::macos_guard::privacy_on(COVER_TEXT)
+    } else {
+        native_os_capture::macos_guard::privacy_off();
+        Ok(())
+    };
+    #[cfg(target_os = "linux")]
+    return crate::linux_guard::privacy(on, COVER_TEXT);
     #[allow(unreachable_code)]
-    if on { Err("The privacy screen is available for Windows computers".into()) } else { Ok(()) }
+    if on { Err("The privacy screen is not available on this computer".into()) } else { Ok(()) }
 }
 
 fn block(on: bool) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     return win::toggle(&win::BLOCKER, on, win::blocker);
+    #[cfg(target_os = "macos")]
+    return if on {
+        native_os_capture::macos_guard::block_on().map_err(|error| match error {
+            native_os_capture::macos_guard::BlockError::Accessibility => "Blocking the keyboard and mouse needs the Accessibility permission for Mixel Remote on this Mac (System Settings › Privacy & Security › Accessibility)".to_owned(),
+            native_os_capture::macos_guard::BlockError::Refused => "macOS did not allow blocking the keyboard and mouse".to_owned(),
+        })
+    } else {
+        native_os_capture::macos_guard::block_off();
+        Ok(())
+    };
+    #[cfg(target_os = "linux")]
+    return crate::linux_guard::block(on);
     #[allow(unreachable_code)]
-    if on { Err("Blocking the keyboard and mouse is available for Windows computers".into()) } else { Ok(()) }
+    if on { Err("Blocking the keyboard and mouse is not available on this computer".into()) } else { Ok(()) }
 }
 
 #[cfg(test)]
@@ -419,6 +497,10 @@ mod tests {
         assert!(super::run("lockend:on").is_ok());
         assert!(super::run("lockend:off").is_ok());
         assert!(super::available().contains(&super::LOCK));
+        // A point of the shared picture maps onto the display rectangle, corners included.
+        assert_eq!(super::place((0, 0), 100.0, 50.0, 1920.0, 1080.0), (100.0, 50.0));
+        assert_eq!(super::place((65535, 65535), 100.0, 50.0, 1920.0, 1080.0), (2019.0, 1129.0));
+        assert_eq!(super::place((32768, 0), -1440.0, 0.0, 1440.0, 900.0).0.round(), -720.0);
         // Only room ids the meeting service makes are accepted from the technician.
         assert!(super::meeting_room("pu5f-9qwq-m767"));
         for bad in ["", "pu5f-9qwq", "PU5F-9QWQ-M767", "pu5f-9qwq-m767.key", "../x-yyyy-zzzz", "pu5f-9qwq-m76"] {

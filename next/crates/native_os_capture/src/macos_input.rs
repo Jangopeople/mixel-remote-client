@@ -165,6 +165,8 @@ impl MacInjector {
         }
         match self.target {
             Target::Desktop(_) => {
+                // Marked, so that "block input" on this Mac lets the technician's events through.
+                CGEvent::set_integer_value_field(Some(event), CGEventField::EventSourceUserData, crate::macos_guard::input_mark());
                 CGEvent::post(CGEventTapLocation::HIDEventTap, Some(event));
             }
             Target::OwnProcess => CGEvent::post_to_pid(std::process::id() as i32, Some(event)),

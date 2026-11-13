@@ -26,6 +26,16 @@ impl Capture {
     }
 }
 
+/// Applies capture changes requested elsewhere (macOS: windows left out of the picture).
+pub fn refresh(capture: &mut Capture) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    return capture.sync_exclusions().map_err(|error| error.to_string());
+    #[allow(unreachable_code)]
+    {
+        let _ = capture;
+        Ok(())
+    }
+}
 pub fn frames(capture: &Capture) -> &native_os_capture::stream::FrameMailbox {
     #[cfg(target_os = "linux")]
     {

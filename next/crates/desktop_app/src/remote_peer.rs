@@ -832,6 +832,8 @@ async fn host_media(
         config.portal.clone(),
     )?;
     let mut shown = config.source.clone();
+    // The technician's pointer is placed on the shared display.
+    crate::session_guard::set_shared_source(&shown);
     let result = async {
         let encoder = start_encoder(size)?;
         let mut retry_encode = false;
@@ -884,6 +886,8 @@ async fn host_media(
             }
             pump_ice(config, transport).await?;
             control.poll(config, channel).await?;
+            // macOS: a privacy cover switched on is left out of this capture before it shows.
+            session_platform::refresh(&mut capture)?;
             // A picture or files arrive in thousands of small records: take them in
             // batches instead of one per captured frame.
             let mut batch = 0;
@@ -904,6 +908,7 @@ async fn host_media(
                 ) {
                     Ok(next) => {
                         shown.clone_from(&source);
+                        crate::session_guard::set_shared_source(&shown);
                         next
                     }
                     // Keep the session: go back to the display shown before.

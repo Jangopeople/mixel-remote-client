@@ -34,6 +34,9 @@ pub mod macos_input;
 mod macos_login_keyboard;
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)] // Objective-C shim: cover windows, event tap, pointer ring, sound capture.
+pub mod macos_guard;
+#[cfg(target_os = "macos")]
 pub mod macos_clipboard;
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)] // Main-thread panel cancellation and retained NSURL filesystem bytes.
