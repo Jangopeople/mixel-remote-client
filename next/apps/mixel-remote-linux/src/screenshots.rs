@@ -208,12 +208,69 @@ async fn scene(application: &adw::Application, folder: &std::path::Path, name: &
         ok &= save(&dialog, &folder.join(format!("{prefix}{name}-dialog-{suffix}.png")));
         dialog.destroy();
     }
+    // The Reports page's export buttons, through the real file dialog: the saved files must be the
+    // report as CSV and as PDF.
+    if name == "reports" && !dark && language == "en" {
+        for (button, file) in [("Export CSV…", "export-check.csv"), ("Export PDF…", "export-check.pdf")] {
+            ok &= export_check(application, &window, folder, button, file).await;
+        }
+    }
     if let Some(ui) = app.ui.borrow().as_ref() {
         ui.quit_now_window();
     }
     app.clear_video();
     let _ = engine.called("remote_status");
     ok
+}
+
+/// Clicks an export button, answers the save dialog with `<folder>/<file>` and checks the file.
+async fn export_check(application: &adw::Application, window: &adw::ApplicationWindow, folder: &std::path::Path, label: &str, file: &str) -> bool {
+    let path = folder.join(file);
+    let _ = std::fs::remove_file(&path);
+    let Some(button) = find_button(window, &i18n::t(label)) else {
+        eprintln!("export check: no button {label}");
+        return false;
+    };
+    button.emit_clicked();
+    let mut dialog = None;
+    for _ in 0..20 {
+        settle(200).await;
+        dialog = gtk::Window::list_toplevels()
+            .into_iter()
+            .filter_map(|widget| widget.downcast::<gtk::FileChooserDialog>().ok())
+            .find(|dialog| dialog.is_visible());
+        if dialog.is_some() {
+            break;
+        }
+    }
+    let _ = application;
+    let Some(dialog) = dialog else {
+        eprintln!("export check: no save dialog for {label}");
+        return false;
+    };
+    let suggested = dialog.current_name().map(|name| name.to_string()).unwrap_or_default();
+    let _ = dialog.set_current_folder(Some(&gio::File::for_path(folder)));
+    dialog.set_current_name(file);
+    settle(200).await;
+    dialog.response(gtk::ResponseType::Accept);
+    let mut content = Vec::new();
+    for _ in 0..20 {
+        settle(200).await;
+        if let Ok(bytes) = std::fs::read(&path)
+            && !bytes.is_empty()
+        {
+            content = bytes;
+            break;
+        }
+    }
+    let good = if file.ends_with(".pdf") {
+        let text = String::from_utf8_lossy(&content);
+        content.starts_with(b"%PDF-1.4\n") && content.ends_with(b"%%EOF\n") && content.is_ascii() && text.contains("/Count ")
+    } else {
+        content.starts_with("\u{feff}".as_bytes()) && String::from_utf8_lossy(&content).lines().count() >= 2
+    };
+    println!("export check {label}: suggested {suggested:?}, saved {} bytes, valid {good}", content.len());
+    good && suggested.starts_with("mixel-remote-")
 }
 
 fn find_button(root: &impl IsA<gtk::Widget>, label: &str) -> Option<gtk::Button> {
