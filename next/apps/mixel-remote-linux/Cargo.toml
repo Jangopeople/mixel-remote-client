@@ -1,6 +1,6 @@
 [package]
 name = "mixel_remote_linux"
-version = "2.0.0"
+version = "2.0.1"
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
@@ -29,6 +29,8 @@ ksni = "0.3"
 async-channel = "2"
 # Reads the 0.1.x app's settings (its web view's local storage, SQLite) once after the update.
 rusqlite = "0.32"
+# The session report PDF (WinAnsi text): accented letters outside Latin-1 become their base letter.
+unicode-normalization = "0.1"
 # LAB only (qa-session): checks that each sign-in button reaches its provider.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
 

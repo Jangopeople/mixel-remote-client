@@ -387,7 +387,8 @@ fn hosted_session(app: &Rc<App>, state: &State) -> gtk::Box {
     if remote.recording_permitted {
         content.append(&label(&t("You allowed the other person to save a video of this session.")));
     }
-    for colleague in &remote.colleagues {
+    // A colleague still asking to join is shown with the question below, not as connected.
+    for colleague in remote.colleagues.iter().filter(|colleague| colleague.state != "asking") {
         let row = hbox(10);
         let name = label(&tf("Colleague %@", &[&format::remote_id(Some(colleague.connection))]));
         row.append(&name);

@@ -1,0 +1,735 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [6 0 R 8 0 R 10 0 R 12 0 R 14 0 R] /Count 5 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>
+endobj
+5 0 obj
+<< /Producer (Mixel Remote) /Title <FEFF00530065007300730069006F006E0020007200650070006F0072007400202013002000410063006D006500200049006E0066006F0072006D006100740069006B002000410047> /CreationDate (D:20261113180454Z) >>
+endobj
+6 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 842 595] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents 7 0 R >>
+endobj
+7 0 obj
+<< /Length 6207 >>
+stream
+0 g
+BT /F2 15 Tf 36 544 Td (Acme Informatik AG) Tj ET
+0.3 g
+BT /F1 9 Tf 36 527 Td (Session report \267 1 Nov 2026 \226 30 Nov 2026) Tj ET
+0 g
+0.3 g
+BT /F1 9 Tf 36 515 Td (Generated 13 Nov 2026, 19:04) Tj ET
+0 g
+0.93 g 36 484 770 19 re f 0 g
+BT /F2 8.5 Tf 40 491.5 Td (Technician) Tj ET
+BT /F2 8.5 Tf 165 491.5 Td (Device) Tj ET
+BT /F2 8.5 Tf 285 491.5 Td (Start) Tj ET
+BT /F2 8.5 Tf 373 491.5 Td (End) Tj ET
+BT /F2 8.5 Tf 476.06 491.5 Td (Duration) Tj ET
+BT /F2 8.5 Tf 519 491.5 Td (Type) Tj ET
+BT /F2 8.5 Tf 611 491.5 Td (Note) Tj ET
+BT /F1 8.5 Tf 40 472.5 Td (Olivia Owner) Tj ET
+BT /F1 8.5 Tf 165 472.5 Td (PC-0 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 472.5 Td (2026-11-01 07:30) Tj ET
+BT /F1 8.5 Tf 373 472.5 Td (2026-11-01 07:30) Tj ET
+BT /F1 8.5 Tf 482.64 472.5 Td (0:00:15) Tj ET
+BT /F1 8.5 Tf 519 472.5 Td (Unattended) Tj ET
+0.8 G 0.4 w 36 465 m 806 465 l S 0 G
+BT /F1 8.5 Tf 40 453.5 Td (Lukas Brunner) Tj ET
+BT /F1 8.5 Tf 165 453.5 Td (PC-1 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 453.5 Td (2026-11-01 16:31) Tj ET
+BT /F1 8.5 Tf 373 453.5 Td (2026-11-01 16:38) Tj ET
+BT /F1 8.5 Tf 482.64 453.5 Td (0:07:32) Tj ET
+BT /F1 8.5 Tf 519 453.5 Td (Attended) Tj ET
+0.8 G 0.4 w 36 446 m 806 446 l S 0 G
+BT /F1 8.5 Tf 40 434.5 Td (Zo\353 M\374ller-L\374denscheidt) Tj ET
+BT /F1 8.5 Tf 165 434.5 Td (PC-2 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 434.5 Td (2026-11-02 01:32) Tj ET
+BT /F1 8.5 Tf 373 434.5 Td (2026-11-02 01:46) Tj ET
+BT /F1 8.5 Tf 482.64 434.5 Td (0:14:49) Tj ET
+BT /F1 8.5 Tf 519 434.5 Td (Attended \267 Joined as) Tj ET
+BT /F1 8.5 Tf 519 423.5 Td (colleague) Tj ET
+BT /F1 8.5 Tf 611 434.5 Td (Printer driver updated) Tj ET
+0.8 G 0.4 w 36 416 m 806 416 l S 0 G
+BT /F1 8.5 Tf 40 404.5 Td (Lukasz Z\363lc) Tj ET
+BT /F1 8.5 Tf 165 404.5 Td (PC-3 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 404.5 Td (2026-11-02 10:33) Tj ET
+BT /F1 8.5 Tf 373 404.5 Td (2026-11-02 10:55) Tj ET
+BT /F1 8.5 Tf 482.64 404.5 Td (0:22:06) Tj ET
+BT /F1 8.5 Tf 519 404.5 Td (Unattended) Tj ET
+BT /F1 8.5 Tf 611 404.5 Td (=SUM\(A1\)) Tj ET
+0.8 G 0.4 w 36 397 m 806 397 l S 0 G
+BT /F1 8.5 Tf 40 385.5 Td (Fran\347ois \(Support\) \\ Team) Tj ET
+BT /F1 8.5 Tf 165 385.5 Td (A very long device name th\205) Tj ET
+BT /F1 8.5 Tf 285 385.5 Td (2026-11-02 19:34) Tj ET
+BT /F1 8.5 Tf 373 385.5 Td (2026-11-02 20:03) Tj ET
+BT /F1 8.5 Tf 482.64 385.5 Td (0:29:23) Tj ET
+BT /F1 8.5 Tf 519 385.5 Td (Attended) Tj ET
+BT /F1 8.5 Tf 611 385.5 Td (Line one) Tj ET
+BT /F1 8.5 Tf 611 374.5 Td (Line two) Tj ET
+BT /F1 8.5 Tf 611 363.5 Td (Line three) Tj ET
+0.8 G 0.4 w 36 356 m 806 356 l S 0 G
+BT /F1 8.5 Tf 165 344.5 Td (PC-5 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 344.5 Td (2026-11-03 04:35) Tj ET
+BT /F1 8.5 Tf 373 344.5 Td (2026-11-03 05:11) Tj ET
+BT /F1 8.5 Tf 482.64 344.5 Td (0:36:40) Tj ET
+BT /F1 8.5 Tf 519 344.5 Td (Attended) Tj ET
+BT /F1 8.5 Tf 611 344.5 Td (A long note that keeps going and going so that it) Tj ET
+BT /F1 8.5 Tf 611 333.5 Td (has to be wrapped over several lines in the note) Tj ET
+BT /F1 8.5 Tf 611 322.5 Td (column of the report, and then some more words) Tj ET
+BT /F1 8.5 Tf 611 311.5 Td (until the six line limit cuts it off with an ellipsis at) Tj ET
+BT /F1 8.5 Tf 611 300.5 Td (the very end of the last line shown.) Tj ET
+0.8 G 0.4 w 36 293 m 806 293 l S 0 G
+BT /F1 8.5 Tf 40 281.5 Td (Olivia Owner) Tj ET
+BT /F1 8.5 Tf 165 281.5 Td (PC-6 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 281.5 Td (2026-11-03 13:36) Tj ET
+BT /F1 8.5 Tf 373 281.5 Td (2026-11-03 14:20) Tj ET
+BT /F1 8.5 Tf 482.64 281.5 Td (0:43:57) Tj ET
+BT /F1 8.5 Tf 519 281.5 Td (Unattended) Tj ET
+BT /F1 8.5 Tf 611 281.5 Td (Averyveryverylongwordwithoutanyspacesthatmust) Tj ET
+BT /F1 8.5 Tf 611 270.5 Td (bebrokeninsidethecolumnbecauseitdoesnotfit) Tj ET
+0.8 G 0.4 w 36 263 m 806 263 l S 0 G
+BT /F1 8.5 Tf 40 251.5 Td (Lukas Brunner) Tj ET
+BT /F1 8.5 Tf 165 251.5 Td (PC-7 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 251.5 Td (2026-11-03 22:37) Tj ET
+BT /F1 8.5 Tf 373 251.5 Td (2026-11-03 23:28) Tj ET
+BT /F1 8.5 Tf 482.64 251.5 Td (0:51:14) Tj ET
+BT /F1 8.5 Tf 519 251.5 Td (Attended \267 Joined as) Tj ET
+BT /F1 8.5 Tf 519 240.5 Td (colleague) Tj ET
+BT /F1 8.5 Tf 611 251.5 Td (\200 \223quotes\224 \226 dash \227 ?? ? e? ?) Tj ET
+0.8 G 0.4 w 36 233 m 806 233 l S 0 G
+BT /F1 8.5 Tf 40 221.5 Td (Zo\353 M\374ller-L\374denscheidt) Tj ET
+BT /F1 8.5 Tf 165 221.5 Td (PC-8 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 221.5 Td (2026-11-04 07:38) Tj ET
+BT /F1 8.5 Tf 373 221.5 Td (2026-11-04 08:36) Tj ET
+BT /F1 8.5 Tf 482.64 221.5 Td (0:58:31) Tj ET
+BT /F1 8.5 Tf 519 221.5 Td (Attended) Tj ET
+0.8 G 0.4 w 36 214 m 806 214 l S 0 G
+BT /F1 8.5 Tf 40 202.5 Td (Lukasz Z\363lc) Tj ET
+BT /F1 8.5 Tf 165 202.5 Td (PC-9 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 202.5 Td (2026-11-04 16:39) Tj ET
+BT /F1 8.5 Tf 373 202.5 Td (2026-11-04 17:44) Tj ET
+BT /F1 8.5 Tf 482.64 202.5 Td (1:05:48) Tj ET
+BT /F1 8.5 Tf 519 202.5 Td (Unattended) Tj ET
+0.8 G 0.4 w 36 195 m 806 195 l S 0 G
+BT /F1 8.5 Tf 40 183.5 Td (Fran\347ois \(Support\) \\ Team) Tj ET
+BT /F1 8.5 Tf 165 183.5 Td (PC-10 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 183.5 Td (2026-11-05 01:40) Tj ET
+BT /F1 8.5 Tf 373 183.5 Td (2026-11-05 02:53) Tj ET
+BT /F1 8.5 Tf 482.64 183.5 Td (1:13:05) Tj ET
+BT /F1 8.5 Tf 519 183.5 Td (Attended) Tj ET
+BT /F1 8.5 Tf 611 183.5 Td (Printer driver updated) Tj ET
+0.8 G 0.4 w 36 176 m 806 176 l S 0 G
+BT /F1 8.5 Tf 165 164.5 Td (PC-11 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 164.5 Td (2026-11-05 10:41) Tj ET
+BT /F1 8.5 Tf 373 164.5 Td (2026-11-05 12:01) Tj ET
+BT /F1 8.5 Tf 482.64 164.5 Td (1:20:22) Tj ET
+BT /F1 8.5 Tf 519 164.5 Td (Attended) Tj ET
+BT /F1 8.5 Tf 611 164.5 Td (=SUM\(A1\)) Tj ET
+0.8 G 0.4 w 36 157 m 806 157 l S 0 G
+BT /F1 8.5 Tf 40 145.5 Td (Olivia Owner) Tj ET
+BT /F1 8.5 Tf 165 145.5 Td (PC-12 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 145.5 Td (2026-11-05 19:42) Tj ET
+BT /F1 8.5 Tf 373 145.5 Td (2026-11-05 21:09) Tj ET
+BT /F1 8.5 Tf 482.64 145.5 Td (1:27:39) Tj ET
+BT /F1 8.5 Tf 519 145.5 Td (Unattended \267 Joined) Tj ET
+BT /F1 8.5 Tf 519 134.5 Td (as colleague) Tj ET
+BT /F1 8.5 Tf 611 145.5 Td (Line one) Tj ET
+BT /F1 8.5 Tf 611 134.5 Td (Line two) Tj ET
+BT /F1 8.5 Tf 611 123.5 Td (Line three) Tj ET
+0.8 G 0.4 w 36 116 m 806 116 l S 0 G
+0.4 g
+BT /F1 8 Tf 765.08 32 Td (Page 1 of 5) Tj ET
+0 g
+
+endstream
+endobj
+8 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 842 595] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents 9 0 R >>
+endobj
+9 0 obj
+<< /Length 6982 >>
+stream
+0 g
+BT /F2 15 Tf 36 544 Td (Acme Informatik AG) Tj ET
+0.3 g
+BT /F1 9 Tf 36 527 Td (Session report \267 1 Nov 2026 \226 30 Nov 2026) Tj ET
+0 g
+0.3 g
+BT /F1 9 Tf 36 515 Td (Generated 13 Nov 2026, 19:04) Tj ET
+0 g
+0.93 g 36 484 770 19 re f 0 g
+BT /F2 8.5 Tf 40 491.5 Td (Technician) Tj ET
+BT /F2 8.5 Tf 165 491.5 Td (Device) Tj ET
+BT /F2 8.5 Tf 285 491.5 Td (Start) Tj ET
+BT /F2 8.5 Tf 373 491.5 Td (End) Tj ET
+BT /F2 8.5 Tf 476.06 491.5 Td (Duration) Tj ET
+BT /F2 8.5 Tf 519 491.5 Td (Type) Tj ET
+BT /F2 8.5 Tf 611 491.5 Td (Note) Tj ET
+BT /F1 8.5 Tf 40 472.5 Td (Lukas Brunner) Tj ET
+BT /F1 8.5 Tf 165 472.5 Td (A very long device name th\205) Tj ET
+BT /F1 8.5 Tf 285 472.5 Td (2026-11-06 04:43) Tj ET
+BT /F1 8.5 Tf 373 472.5 Td (2026-11-06 06:18) Tj ET
+BT /F1 8.5 Tf 482.64 472.5 Td (1:34:56) Tj ET
+BT /F1 8.5 Tf 519 472.5 Td (Attended) Tj ET
+BT /F1 8.5 Tf 611 472.5 Td (A long note that keeps going and going so that it) Tj ET
+BT /F1 8.5 Tf 611 461.5 Td (has to be wrapped over several lines in the note) Tj ET
+BT /F1 8.5 Tf 611 450.5 Td (column of the report, and then some more words) Tj ET
+BT /F1 8.5 Tf 611 439.5 Td (until the six line limit cuts it off with an ellipsis at) Tj ET
+BT /F1 8.5 Tf 611 428.5 Td (the very end of the last line shown.) Tj ET
+0.8 G 0.4 w 36 421 m 806 421 l S 0 G
+BT /F1 8.5 Tf 40 409.5 Td (Zo\353 M\374ller-L\374denscheidt) Tj ET
+BT /F1 8.5 Tf 165 409.5 Td (PC-14 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 409.5 Td (2026-11-06 13:44) Tj ET
+BT /F1 8.5 Tf 373 409.5 Td (2026-11-06 15:26) Tj ET
+BT /F1 8.5 Tf 482.64 409.5 Td (1:42:13) Tj ET
+BT /F1 8.5 Tf 519 409.5 Td (Attended) Tj ET
+BT /F1 8.5 Tf 611 409.5 Td (Averyveryverylongwordwithoutanyspacesthatmust) Tj ET
+BT /F1 8.5 Tf 611 398.5 Td (bebrokeninsidethecolumnbecauseitdoesnotfit) Tj ET
+0.8 G 0.4 w 36 391 m 806 391 l S 0 G
+BT /F1 8.5 Tf 40 379.5 Td (Lukasz Z\363lc) Tj ET
+BT /F1 8.5 Tf 165 379.5 Td (PC-15 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 379.5 Td (2026-11-06 22:45) Tj ET
+BT /F1 8.5 Tf 373 379.5 Td (2026-11-07 00:34) Tj ET
+BT /F1 8.5 Tf 482.64 379.5 Td (1:49:30) Tj ET
+BT /F1 8.5 Tf 519 379.5 Td (Unattended) Tj ET
+BT /F1 8.5 Tf 611 379.5 Td (\200 \223quotes\224 \226 dash \227 ?? ? e? ?) Tj ET
+0.8 G 0.4 w 36 372 m 806 372 l S 0 G
+BT /F1 8.5 Tf 40 360.5 Td (Fran\347ois \(Support\) \\ Team) Tj ET
+BT /F1 8.5 Tf 165 360.5 Td (PC-16 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 360.5 Td (2026-11-07 07:46) Tj ET
+BT /F1 8.5 Tf 373 360.5 Td (2026-11-07 09:43) Tj ET
+BT /F1 8.5 Tf 482.64 360.5 Td (1:56:47) Tj ET
+BT /F1 8.5 Tf 519 360.5 Td (Attended) Tj ET
+0.8 G 0.4 w 36 353 m 806 353 l S 0 G
+BT /F1 8.5 Tf 165 341.5 Td (PC-17 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 341.5 Td (2026-11-07 16:47) Tj ET
+BT /F1 8.5 Tf 373 341.5 Td (2026-11-07 18:51) Tj ET
+BT /F1 8.5 Tf 482.64 341.5 Td (2:04:04) Tj ET
+BT /F1 8.5 Tf 519 341.5 Td (Attended \267 Joined as) Tj ET
+BT /F1 8.5 Tf 519 330.5 Td (colleague) Tj ET
+0.8 G 0.4 w 36 323 m 806 323 l S 0 G
+BT /F1 8.5 Tf 40 311.5 Td (Olivia Owner) Tj ET
+BT /F1 8.5 Tf 165 311.5 Td (PC-18 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 311.5 Td (2026-11-08 01:48) Tj ET
+BT /F1 8.5 Tf 373 311.5 Td (2026-11-08 03:59) Tj ET
+BT /F1 8.5 Tf 482.64 311.5 Td (2:11:21) Tj ET
+BT /F1 8.5 Tf 519 311.5 Td (Unattended) Tj ET
+BT /F1 8.5 Tf 611 311.5 Td (Printer driver updated) Tj ET
+0.8 G 0.4 w 36 304 m 806 304 l S 0 G
+BT /F1 8.5 Tf 40 292.5 Td (Lukas Brunner) Tj ET
+BT /F1 8.5 Tf 165 292.5 Td (PC-19 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 292.5 Td (2026-11-08 10:49) Tj ET
+BT /F1 8.5 Tf 373 292.5 Td (2026-11-08 13:07) Tj ET
+BT /F1 8.5 Tf 482.64 292.5 Td (2:18:38) Tj ET
+BT /F1 8.5 Tf 519 292.5 Td (Attended) Tj ET
+BT /F1 8.5 Tf 611 292.5 Td (=SUM\(A1\)) Tj ET
+0.8 G 0.4 w 36 285 m 806 285 l S 0 G
+BT /F1 8.5 Tf 40 273.5 Td (Zo\353 M\374ller-L\374denscheidt) Tj ET
+BT /F1 8.5 Tf 165 273.5 Td (PC-20 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 273.5 Td (2026-11-08 19:50) Tj ET
+BT /F1 8.5 Tf 373 273.5 Td (2026-11-08 22:16) Tj ET
+BT /F1 8.5 Tf 482.64 273.5 Td (2:25:55) Tj ET
+BT /F1 8.5 Tf 519 273.5 Td (Attended) Tj ET
+BT /F1 8.5 Tf 611 273.5 Td (Line one) Tj ET
+BT /F1 8.5 Tf 611 262.5 Td (Line two) Tj ET
+BT /F1 8.5 Tf 611 251.5 Td (Line three) Tj ET
+0.8 G 0.4 w 36 244 m 806 244 l S 0 G
+BT /F1 8.5 Tf 40 232.5 Td (Lukasz Z\363lc) Tj ET
+BT /F1 8.5 Tf 165 232.5 Td (PC-21 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 232.5 Td (2026-11-09 04:51) Tj ET
+BT /F1 8.5 Tf 373 232.5 Td (2026-11-09 04:54) Tj ET
+BT /F1 8.5 Tf 482.64 232.5 Td (0:03:12) Tj ET
+BT /F1 8.5 Tf 519 232.5 Td (Unattended) Tj ET
+BT /F1 8.5 Tf 611 232.5 Td (A long note that keeps going and going so that it) Tj ET
+BT /F1 8.5 Tf 611 221.5 Td (has to be wrapped over several lines in the note) Tj ET
+BT /F1 8.5 Tf 611 210.5 Td (column of the report, and then some more words) Tj ET
+BT /F1 8.5 Tf 611 199.5 Td (until the six line limit cuts it off with an ellipsis at) Tj ET
+BT /F1 8.5 Tf 611 188.5 Td (the very end of the last line shown.) Tj ET
+0.8 G 0.4 w 36 181 m 806 181 l S 0 G
+BT /F1 8.5 Tf 40 169.5 Td (Fran\347ois \(Support\) \\ Team) Tj ET
+BT /F1 8.5 Tf 165 169.5 Td (A very long device name th\205) Tj ET
+BT /F1 8.5 Tf 285 169.5 Td (2026-11-09 13:52) Tj ET
+BT /F1 8.5 Tf 373 169.5 Td (2026-11-09 14:02) Tj ET
+BT /F1 8.5 Tf 482.64 169.5 Td (0:10:29) Tj ET
+BT /F1 8.5 Tf 519 169.5 Td (Attended \267 Joined as) Tj ET
+BT /F1 8.5 Tf 519 158.5 Td (colleague) Tj ET
+BT /F1 8.5 Tf 611 169.5 Td (Averyveryverylongwordwithoutanyspacesthatmust) Tj ET
+BT /F1 8.5 Tf 611 158.5 Td (bebrokeninsidethecolumnbecauseitdoesnotfit) Tj ET
+0.8 G 0.4 w 36 151 m 806 151 l S 0 G
+BT /F1 8.5 Tf 165 139.5 Td (PC-23 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 139.5 Td (2026-11-09 22:53) Tj ET
+BT /F1 8.5 Tf 373 139.5 Td (2026-11-09 23:11) Tj ET
+BT /F1 8.5 Tf 482.64 139.5 Td (0:17:46) Tj ET
+BT /F1 8.5 Tf 519 139.5 Td (Attended) Tj ET
+BT /F1 8.5 Tf 611 139.5 Td (\200 \223quotes\224 \226 dash \227 ?? ? e? ?) Tj ET
+0.8 G 0.4 w 36 132 m 806 132 l S 0 G
+BT /F1 8.5 Tf 40 120.5 Td (Olivia Owner) Tj ET
+BT /F1 8.5 Tf 165 120.5 Td (PC-24 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 120.5 Td (2026-11-10 07:54) Tj ET
+BT /F1 8.5 Tf 373 120.5 Td (2026-11-10 08:19) Tj ET
+BT /F1 8.5 Tf 482.64 120.5 Td (0:25:03) Tj ET
+BT /F1 8.5 Tf 519 120.5 Td (Unattended) Tj ET
+0.8 G 0.4 w 36 113 m 806 113 l S 0 G
+BT /F1 8.5 Tf 40 101.5 Td (Lukas Brunner) Tj ET
+BT /F1 8.5 Tf 165 101.5 Td (PC-25 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 101.5 Td (2026-11-10 16:55) Tj ET
+BT /F1 8.5 Tf 373 101.5 Td (2026-11-10 17:27) Tj ET
+BT /F1 8.5 Tf 482.64 101.5 Td (0:32:20) Tj ET
+BT /F1 8.5 Tf 519 101.5 Td (Attended) Tj ET
+0.8 G 0.4 w 36 94 m 806 94 l S 0 G
+BT /F1 8.5 Tf 40 82.5 Td (Zo\353 M\374ller-L\374denscheidt) Tj ET
+BT /F1 8.5 Tf 165 82.5 Td (PC-26 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 82.5 Td (2026-11-11 01:56) Tj ET
+BT /F1 8.5 Tf 373 82.5 Td (2026-11-11 02:36) Tj ET
+BT /F1 8.5 Tf 482.64 82.5 Td (0:39:37) Tj ET
+BT /F1 8.5 Tf 519 82.5 Td (Attended) Tj ET
+BT /F1 8.5 Tf 611 82.5 Td (Printer driver updated) Tj ET
+0.8 G 0.4 w 36 75 m 806 75 l S 0 G
+0.4 g
+BT /F1 8 Tf 765.08 32 Td (Page 2 of 5) Tj ET
+0 g
+
+endstream
+endobj
+10 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 842 595] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents 11 0 R >>
+endobj
+11 0 obj
+<< /Length 6795 >>
+stream
+0 g
+BT /F2 15 Tf 36 544 Td (Acme Informatik AG) Tj ET
+0.3 g
+BT /F1 9 Tf 36 527 Td (Session report \267 1 Nov 2026 \226 30 Nov 2026) Tj ET
+0 g
+0.3 g
+BT /F1 9 Tf 36 515 Td (Generated 13 Nov 2026, 19:04) Tj ET
+0 g
+0.93 g 36 484 770 19 re f 0 g
+BT /F2 8.5 Tf 40 491.5 Td (Technician) Tj ET
+BT /F2 8.5 Tf 165 491.5 Td (Device) Tj ET
+BT /F2 8.5 Tf 285 491.5 Td (Start) Tj ET
+BT /F2 8.5 Tf 373 491.5 Td (End) Tj ET
+BT /F2 8.5 Tf 476.06 491.5 Td (Duration) Tj ET
+BT /F2 8.5 Tf 519 491.5 Td (Type) Tj ET
+BT /F2 8.5 Tf 611 491.5 Td (Note) Tj ET
+BT /F1 8.5 Tf 40 472.5 Td (Lukasz Z\363lc) Tj ET
+BT /F1 8.5 Tf 165 472.5 Td (PC-27 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 472.5 Td (2026-11-11 10:57) Tj ET
+BT /F1 8.5 Tf 373 472.5 Td (2026-11-11 11:44) Tj ET
+BT /F1 8.5 Tf 482.64 472.5 Td (0:46:54) Tj ET
+BT /F1 8.5 Tf 519 472.5 Td (Unattended \267 Joined) Tj ET
+BT /F1 8.5 Tf 519 461.5 Td (as colleague) Tj ET
+BT /F1 8.5 Tf 611 472.5 Td (=SUM\(A1\)) Tj ET
+0.8 G 0.4 w 36 454 m 806 454 l S 0 G
+BT /F1 8.5 Tf 40 442.5 Td (Fran\347ois \(Support\) \\ Team) Tj ET
+BT /F1 8.5 Tf 165 442.5 Td (PC-28 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 442.5 Td (2026-11-11 19:58) Tj ET
+BT /F1 8.5 Tf 373 442.5 Td (2026-11-11 20:52) Tj ET
+BT /F1 8.5 Tf 482.64 442.5 Td (0:54:11) Tj ET
+BT /F1 8.5 Tf 519 442.5 Td (Attended) Tj ET
+BT /F1 8.5 Tf 611 442.5 Td (Line one) Tj ET
+BT /F1 8.5 Tf 611 431.5 Td (Line two) Tj ET
+BT /F1 8.5 Tf 611 420.5 Td (Line three) Tj ET
+0.8 G 0.4 w 36 413 m 806 413 l S 0 G
+BT /F1 8.5 Tf 165 401.5 Td (PC-29 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 401.5 Td (2026-11-12 04:59) Tj ET
+BT /F1 8.5 Tf 373 401.5 Td (2026-11-12 06:00) Tj ET
+BT /F1 8.5 Tf 482.64 401.5 Td (1:01:28) Tj ET
+BT /F1 8.5 Tf 519 401.5 Td (Attended) Tj ET
+BT /F1 8.5 Tf 611 401.5 Td (A long note that keeps going and going so that it) Tj ET
+BT /F1 8.5 Tf 611 390.5 Td (has to be wrapped over several lines in the note) Tj ET
+BT /F1 8.5 Tf 611 379.5 Td (column of the report, and then some more words) Tj ET
+BT /F1 8.5 Tf 611 368.5 Td (until the six line limit cuts it off with an ellipsis at) Tj ET
+BT /F1 8.5 Tf 611 357.5 Td (the very end of the last line shown.) Tj ET
+0.8 G 0.4 w 36 350 m 806 350 l S 0 G
+BT /F1 8.5 Tf 40 338.5 Td (Olivia Owner) Tj ET
+BT /F1 8.5 Tf 165 338.5 Td (PC-30 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 338.5 Td (2026-11-12 14:00) Tj ET
+BT /F1 8.5 Tf 373 338.5 Td (2026-11-12 15:09) Tj ET
+BT /F1 8.5 Tf 482.64 338.5 Td (1:08:45) Tj ET
+BT /F1 8.5 Tf 519 338.5 Td (Unattended) Tj ET
+BT /F1 8.5 Tf 611 338.5 Td (Averyveryverylongwordwithoutanyspacesthatmust) Tj ET
+BT /F1 8.5 Tf 611 327.5 Td (bebrokeninsidethecolumnbecauseitdoesnotfit) Tj ET
+0.8 G 0.4 w 36 320 m 806 320 l S 0 G
+BT /F1 8.5 Tf 40 308.5 Td (Lukas Brunner) Tj ET
+BT /F1 8.5 Tf 165 308.5 Td (A very long device name th\205) Tj ET
+BT /F1 8.5 Tf 285 308.5 Td (2026-11-12 23:01) Tj ET
+BT /F1 8.5 Tf 373 308.5 Td (2026-11-13 00:17) Tj ET
+BT /F1 8.5 Tf 482.64 308.5 Td (1:16:02) Tj ET
+BT /F1 8.5 Tf 519 308.5 Td (Attended) Tj ET
+BT /F1 8.5 Tf 611 308.5 Td (\200 \223quotes\224 \226 dash \227 ?? ? e? ?) Tj ET
+0.8 G 0.4 w 36 301 m 806 301 l S 0 G
+BT /F1 8.5 Tf 40 289.5 Td (Zo\353 M\374ller-L\374denscheidt) Tj ET
+BT /F1 8.5 Tf 165 289.5 Td (PC-32 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 289.5 Td (2026-11-13 08:02) Tj ET
+BT /F1 8.5 Tf 373 289.5 Td (2026-11-13 09:25) Tj ET
+BT /F1 8.5 Tf 482.64 289.5 Td (1:23:19) Tj ET
+BT /F1 8.5 Tf 519 289.5 Td (Attended \267 Joined as) Tj ET
+BT /F1 8.5 Tf 519 278.5 Td (colleague) Tj ET
+0.8 G 0.4 w 36 271 m 806 271 l S 0 G
+BT /F1 8.5 Tf 40 259.5 Td (Lukasz Z\363lc) Tj ET
+BT /F1 8.5 Tf 165 259.5 Td (PC-33 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 259.5 Td (2026-11-13 17:03) Tj ET
+BT /F1 8.5 Tf 373 259.5 Td (2026-11-13 18:34) Tj ET
+BT /F1 8.5 Tf 482.64 259.5 Td (1:30:36) Tj ET
+BT /F1 8.5 Tf 519 259.5 Td (Unattended) Tj ET
+0.8 G 0.4 w 36 252 m 806 252 l S 0 G
+BT /F1 8.5 Tf 40 240.5 Td (Fran\347ois \(Support\) \\ Team) Tj ET
+BT /F1 8.5 Tf 165 240.5 Td (PC-34 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 240.5 Td (2026-11-14 02:04) Tj ET
+BT /F1 8.5 Tf 373 240.5 Td (2026-11-14 03:42) Tj ET
+BT /F1 8.5 Tf 482.64 240.5 Td (1:37:53) Tj ET
+BT /F1 8.5 Tf 519 240.5 Td (Attended) Tj ET
+BT /F1 8.5 Tf 611 240.5 Td (Printer driver updated) Tj ET
+0.8 G 0.4 w 36 233 m 806 233 l S 0 G
+BT /F1 8.5 Tf 165 221.5 Td (PC-35 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 221.5 Td (2026-11-14 11:05) Tj ET
+BT /F1 8.5 Tf 373 221.5 Td (2026-11-14 12:50) Tj ET
+BT /F1 8.5 Tf 482.64 221.5 Td (1:45:10) Tj ET
+BT /F1 8.5 Tf 519 221.5 Td (Attended) Tj ET
+BT /F1 8.5 Tf 611 221.5 Td (=SUM\(A1\)) Tj ET
+0.8 G 0.4 w 36 214 m 806 214 l S 0 G
+BT /F1 8.5 Tf 40 202.5 Td (Olivia Owner) Tj ET
+BT /F1 8.5 Tf 165 202.5 Td (PC-36 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 202.5 Td (2026-11-14 20:06) Tj ET
+BT /F1 8.5 Tf 373 202.5 Td (2026-11-14 21:59) Tj ET
+BT /F1 8.5 Tf 482.64 202.5 Td (1:52:27) Tj ET
+BT /F1 8.5 Tf 519 202.5 Td (Unattended) Tj ET
+BT /F1 8.5 Tf 611 202.5 Td (Line one) Tj ET
+BT /F1 8.5 Tf 611 191.5 Td (Line two) Tj ET
+BT /F1 8.5 Tf 611 180.5 Td (Line three) Tj ET
+0.8 G 0.4 w 36 173 m 806 173 l S 0 G
+BT /F1 8.5 Tf 40 161.5 Td (Lukas Brunner) Tj ET
+BT /F1 8.5 Tf 165 161.5 Td (PC-37 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 161.5 Td (2026-11-15 05:07) Tj ET
+BT /F1 8.5 Tf 373 161.5 Td (2026-11-15 07:07) Tj ET
+BT /F1 8.5 Tf 482.64 161.5 Td (1:59:44) Tj ET
+BT /F1 8.5 Tf 519 161.5 Td (Attended \267 Joined as) Tj ET
+BT /F1 8.5 Tf 519 150.5 Td (colleague) Tj ET
+BT /F1 8.5 Tf 611 161.5 Td (A long note that keeps going and going so that it) Tj ET
+BT /F1 8.5 Tf 611 150.5 Td (has to be wrapped over several lines in the note) Tj ET
+BT /F1 8.5 Tf 611 139.5 Td (column of the report, and then some more words) Tj ET
+BT /F1 8.5 Tf 611 128.5 Td (until the six line limit cuts it off with an ellipsis at) Tj ET
+BT /F1 8.5 Tf 611 117.5 Td (the very end of the last line shown.) Tj ET
+0.8 G 0.4 w 36 110 m 806 110 l S 0 G
+BT /F1 8.5 Tf 40 98.5 Td (Zo\353 M\374ller-L\374denscheidt) Tj ET
+BT /F1 8.5 Tf 165 98.5 Td (PC-38 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 98.5 Td (2026-11-15 14:08) Tj ET
+BT /F1 8.5 Tf 373 98.5 Td (2026-11-15 16:15) Tj ET
+BT /F1 8.5 Tf 482.64 98.5 Td (2:07:01) Tj ET
+BT /F1 8.5 Tf 519 98.5 Td (Attended) Tj ET
+BT /F1 8.5 Tf 611 98.5 Td (Averyveryverylongwordwithoutanyspacesthatmust) Tj ET
+BT /F1 8.5 Tf 611 87.5 Td (bebrokeninsidethecolumnbecauseitdoesnotfit) Tj ET
+0.8 G 0.4 w 36 80 m 806 80 l S 0 G
+BT /F1 8.5 Tf 40 68.5 Td (Lukasz Z\363lc) Tj ET
+BT /F1 8.5 Tf 165 68.5 Td (PC-39 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 68.5 Td (2026-11-15 23:09) Tj ET
+BT /F1 8.5 Tf 373 68.5 Td (2026-11-16 01:23) Tj ET
+BT /F1 8.5 Tf 482.64 68.5 Td (2:14:18) Tj ET
+BT /F1 8.5 Tf 519 68.5 Td (Unattended) Tj ET
+BT /F1 8.5 Tf 611 68.5 Td (\200 \223quotes\224 \226 dash \227 ?? ? e? ?) Tj ET
+0.8 G 0.4 w 36 61 m 806 61 l S 0 G
+0.4 g
+BT /F1 8 Tf 765.08 32 Td (Page 3 of 5) Tj ET
+0 g
+
+endstream
+endobj
+12 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 842 595] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents 13 0 R >>
+endobj
+13 0 obj
+<< /Length 6246 >>
+stream
+0 g
+BT /F2 15 Tf 36 544 Td (Acme Informatik AG) Tj ET
+0.3 g
+BT /F1 9 Tf 36 527 Td (Session report \267 1 Nov 2026 \226 30 Nov 2026) Tj ET
+0 g
+0.3 g
+BT /F1 9 Tf 36 515 Td (Generated 13 Nov 2026, 19:04) Tj ET
+0 g
+0.93 g 36 484 770 19 re f 0 g
+BT /F2 8.5 Tf 40 491.5 Td (Technician) Tj ET
+BT /F2 8.5 Tf 165 491.5 Td (Device) Tj ET
+BT /F2 8.5 Tf 285 491.5 Td (Start) Tj ET
+BT /F2 8.5 Tf 373 491.5 Td (End) Tj ET
+BT /F2 8.5 Tf 476.06 491.5 Td (Duration) Tj ET
+BT /F2 8.5 Tf 519 491.5 Td (Type) Tj ET
+BT /F2 8.5 Tf 611 491.5 Td (Note) Tj ET
+BT /F1 8.5 Tf 40 472.5 Td (Fran\347ois \(Support\) \\ Team) Tj ET
+BT /F1 8.5 Tf 165 472.5 Td (A very long device name th\205) Tj ET
+BT /F1 8.5 Tf 285 472.5 Td (2026-11-16 08:10) Tj ET
+BT /F1 8.5 Tf 373 472.5 Td (2026-11-16 10:32) Tj ET
+BT /F1 8.5 Tf 482.64 472.5 Td (2:21:35) Tj ET
+BT /F1 8.5 Tf 519 472.5 Td (Attended) Tj ET
+0.8 G 0.4 w 36 465 m 806 465 l S 0 G
+BT /F1 8.5 Tf 165 453.5 Td (PC-41 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 453.5 Td (2026-11-16 17:11) Tj ET
+BT /F1 8.5 Tf 373 453.5 Td (2026-11-16 19:40) Tj ET
+BT /F1 8.5 Tf 482.64 453.5 Td (2:28:52) Tj ET
+BT /F1 8.5 Tf 519 453.5 Td (Attended) Tj ET
+0.8 G 0.4 w 36 446 m 806 446 l S 0 G
+BT /F1 8.5 Tf 40 434.5 Td (Olivia Owner) Tj ET
+BT /F1 8.5 Tf 165 434.5 Td (PC-42 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 434.5 Td (2026-11-17 02:12) Tj ET
+BT /F1 8.5 Tf 373 434.5 Td (2026-11-17 02:18) Tj ET
+BT /F1 8.5 Tf 482.64 434.5 Td (0:06:09) Tj ET
+BT /F1 8.5 Tf 519 434.5 Td (Unattended \267 Joined) Tj ET
+BT /F1 8.5 Tf 519 423.5 Td (as colleague) Tj ET
+BT /F1 8.5 Tf 611 434.5 Td (Printer driver updated) Tj ET
+0.8 G 0.4 w 36 416 m 806 416 l S 0 G
+BT /F1 8.5 Tf 40 404.5 Td (Lukas Brunner) Tj ET
+BT /F1 8.5 Tf 165 404.5 Td (PC-43 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 404.5 Td (2026-11-17 11:13) Tj ET
+BT /F1 8.5 Tf 373 404.5 Td (2026-11-17 11:27) Tj ET
+BT /F1 8.5 Tf 482.64 404.5 Td (0:13:26) Tj ET
+BT /F1 8.5 Tf 519 404.5 Td (Attended) Tj ET
+BT /F1 8.5 Tf 611 404.5 Td (=SUM\(A1\)) Tj ET
+0.8 G 0.4 w 36 397 m 806 397 l S 0 G
+BT /F1 8.5 Tf 40 385.5 Td (Zo\353 M\374ller-L\374denscheidt) Tj ET
+BT /F1 8.5 Tf 165 385.5 Td (PC-44 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 385.5 Td (2026-11-17 20:14) Tj ET
+BT /F1 8.5 Tf 373 385.5 Td (2026-11-17 20:35) Tj ET
+BT /F1 8.5 Tf 482.64 385.5 Td (0:20:43) Tj ET
+BT /F1 8.5 Tf 519 385.5 Td (Attended) Tj ET
+BT /F1 8.5 Tf 611 385.5 Td (Line one) Tj ET
+BT /F1 8.5 Tf 611 374.5 Td (Line two) Tj ET
+BT /F1 8.5 Tf 611 363.5 Td (Line three) Tj ET
+0.8 G 0.4 w 36 356 m 806 356 l S 0 G
+BT /F1 8.5 Tf 40 344.5 Td (Lukasz Z\363lc) Tj ET
+BT /F1 8.5 Tf 165 344.5 Td (PC-45 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 344.5 Td (2026-11-18 05:15) Tj ET
+BT /F1 8.5 Tf 373 344.5 Td (2026-11-18 05:43) Tj ET
+BT /F1 8.5 Tf 482.64 344.5 Td (0:28:00) Tj ET
+BT /F1 8.5 Tf 519 344.5 Td (Unattended) Tj ET
+BT /F1 8.5 Tf 611 344.5 Td (A long note that keeps going and going so that it) Tj ET
+BT /F1 8.5 Tf 611 333.5 Td (has to be wrapped over several lines in the note) Tj ET
+BT /F1 8.5 Tf 611 322.5 Td (column of the report, and then some more words) Tj ET
+BT /F1 8.5 Tf 611 311.5 Td (until the six line limit cuts it off with an ellipsis at) Tj ET
+BT /F1 8.5 Tf 611 300.5 Td (the very end of the last line shown.) Tj ET
+0.8 G 0.4 w 36 293 m 806 293 l S 0 G
+BT /F1 8.5 Tf 40 281.5 Td (Fran\347ois \(Support\) \\ Team) Tj ET
+BT /F1 8.5 Tf 165 281.5 Td (PC-46 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 281.5 Td (2026-11-18 14:16) Tj ET
+BT /F1 8.5 Tf 373 281.5 Td (2026-11-18 14:52) Tj ET
+BT /F1 8.5 Tf 482.64 281.5 Td (0:35:17) Tj ET
+BT /F1 8.5 Tf 519 281.5 Td (Attended) Tj ET
+BT /F1 8.5 Tf 611 281.5 Td (Averyveryverylongwordwithoutanyspacesthatmust) Tj ET
+BT /F1 8.5 Tf 611 270.5 Td (bebrokeninsidethecolumnbecauseitdoesnotfit) Tj ET
+0.8 G 0.4 w 36 263 m 806 263 l S 0 G
+BT /F1 8.5 Tf 165 251.5 Td (PC-47 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 251.5 Td (2026-11-18 23:17) Tj ET
+BT /F1 8.5 Tf 373 251.5 Td (2026-11-19 00:00) Tj ET
+BT /F1 8.5 Tf 482.64 251.5 Td (0:42:34) Tj ET
+BT /F1 8.5 Tf 519 251.5 Td (Attended \267 Joined as) Tj ET
+BT /F1 8.5 Tf 519 240.5 Td (colleague) Tj ET
+BT /F1 8.5 Tf 611 251.5 Td (\200 \223quotes\224 \226 dash \227 ?? ? e? ?) Tj ET
+0.8 G 0.4 w 36 233 m 806 233 l S 0 G
+BT /F1 8.5 Tf 40 221.5 Td (Olivia Owner) Tj ET
+BT /F1 8.5 Tf 165 221.5 Td (PC-48 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 221.5 Td (2026-11-19 08:18) Tj ET
+BT /F1 8.5 Tf 373 221.5 Td (2026-11-19 09:08) Tj ET
+BT /F1 8.5 Tf 482.64 221.5 Td (0:49:51) Tj ET
+BT /F1 8.5 Tf 519 221.5 Td (Unattended) Tj ET
+0.8 G 0.4 w 36 214 m 806 214 l S 0 G
+BT /F1 8.5 Tf 40 202.5 Td (Lukas Brunner) Tj ET
+BT /F1 8.5 Tf 165 202.5 Td (A very long device name th\205) Tj ET
+BT /F1 8.5 Tf 285 202.5 Td (2026-11-19 17:19) Tj ET
+BT /F1 8.5 Tf 373 202.5 Td (2026-11-19 18:16) Tj ET
+BT /F1 8.5 Tf 482.64 202.5 Td (0:57:08) Tj ET
+BT /F1 8.5 Tf 519 202.5 Td (Attended) Tj ET
+0.8 G 0.4 w 36 195 m 806 195 l S 0 G
+BT /F1 8.5 Tf 40 183.5 Td (Zo\353 M\374ller-L\374denscheidt) Tj ET
+BT /F1 8.5 Tf 165 183.5 Td (PC-50 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 183.5 Td (2026-11-20 02:20) Tj ET
+BT /F1 8.5 Tf 373 183.5 Td (2026-11-20 03:25) Tj ET
+BT /F1 8.5 Tf 482.64 183.5 Td (1:04:25) Tj ET
+BT /F1 8.5 Tf 519 183.5 Td (Attended) Tj ET
+BT /F1 8.5 Tf 611 183.5 Td (Printer driver updated) Tj ET
+0.8 G 0.4 w 36 176 m 806 176 l S 0 G
+BT /F1 8.5 Tf 40 164.5 Td (Lukasz Z\363lc) Tj ET
+BT /F1 8.5 Tf 165 164.5 Td (PC-51 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 164.5 Td (2026-11-20 11:21) Tj ET
+BT /F1 8.5 Tf 373 164.5 Td (2026-11-20 12:33) Tj ET
+BT /F1 8.5 Tf 482.64 164.5 Td (1:11:42) Tj ET
+BT /F1 8.5 Tf 519 164.5 Td (Unattended) Tj ET
+BT /F1 8.5 Tf 611 164.5 Td (=SUM\(A1\)) Tj ET
+0.8 G 0.4 w 36 157 m 806 157 l S 0 G
+BT /F1 8.5 Tf 40 145.5 Td (Fran\347ois \(Support\) \\ Team) Tj ET
+BT /F1 8.5 Tf 165 145.5 Td (PC-52 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 145.5 Td (2026-11-20 20:22) Tj ET
+BT /F1 8.5 Tf 373 145.5 Td (2026-11-20 21:41) Tj ET
+BT /F1 8.5 Tf 482.64 145.5 Td (1:18:59) Tj ET
+BT /F1 8.5 Tf 519 145.5 Td (Attended \267 Joined as) Tj ET
+BT /F1 8.5 Tf 519 134.5 Td (colleague) Tj ET
+BT /F1 8.5 Tf 611 145.5 Td (Line one) Tj ET
+BT /F1 8.5 Tf 611 134.5 Td (Line two) Tj ET
+BT /F1 8.5 Tf 611 123.5 Td (Line three) Tj ET
+0.8 G 0.4 w 36 116 m 806 116 l S 0 G
+0.4 g
+BT /F1 8 Tf 765.08 32 Td (Page 4 of 5) Tj ET
+0 g
+
+endstream
+endobj
+14 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 842 595] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents 15 0 R >>
+endobj
+15 0 obj
+<< /Length 5947 >>
+stream
+0 g
+BT /F2 15 Tf 36 544 Td (Acme Informatik AG) Tj ET
+0.3 g
+BT /F1 9 Tf 36 527 Td (Session report \267 1 Nov 2026 \226 30 Nov 2026) Tj ET
+0 g
+0.3 g
+BT /F1 9 Tf 36 515 Td (Generated 13 Nov 2026, 19:04) Tj ET
+0 g
+0.93 g 36 484 770 19 re f 0 g
+BT /F2 8.5 Tf 40 491.5 Td (Technician) Tj ET
+BT /F2 8.5 Tf 165 491.5 Td (Device) Tj ET
+BT /F2 8.5 Tf 285 491.5 Td (Start) Tj ET
+BT /F2 8.5 Tf 373 491.5 Td (End) Tj ET
+BT /F2 8.5 Tf 476.06 491.5 Td (Duration) Tj ET
+BT /F2 8.5 Tf 519 491.5 Td (Type) Tj ET
+BT /F2 8.5 Tf 611 491.5 Td (Note) Tj ET
+BT /F1 8.5 Tf 165 472.5 Td (PC-53 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 472.5 Td (2026-11-21 05:23) Tj ET
+BT /F1 8.5 Tf 373 472.5 Td (2026-11-21 06:50) Tj ET
+BT /F1 8.5 Tf 482.64 472.5 Td (1:26:16) Tj ET
+BT /F1 8.5 Tf 519 472.5 Td (Attended) Tj ET
+BT /F1 8.5 Tf 611 472.5 Td (A long note that keeps going and going so that it) Tj ET
+BT /F1 8.5 Tf 611 461.5 Td (has to be wrapped over several lines in the note) Tj ET
+BT /F1 8.5 Tf 611 450.5 Td (column of the report, and then some more words) Tj ET
+BT /F1 8.5 Tf 611 439.5 Td (until the six line limit cuts it off with an ellipsis at) Tj ET
+BT /F1 8.5 Tf 611 428.5 Td (the very end of the last line shown.) Tj ET
+0.8 G 0.4 w 36 421 m 806 421 l S 0 G
+BT /F1 8.5 Tf 40 409.5 Td (Olivia Owner) Tj ET
+BT /F1 8.5 Tf 165 409.5 Td (PC-54 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 409.5 Td (2026-11-21 14:24) Tj ET
+BT /F1 8.5 Tf 373 409.5 Td (2026-11-21 15:58) Tj ET
+BT /F1 8.5 Tf 482.64 409.5 Td (1:33:33) Tj ET
+BT /F1 8.5 Tf 519 409.5 Td (Unattended) Tj ET
+BT /F1 8.5 Tf 611 409.5 Td (Averyveryverylongwordwithoutanyspacesthatmust) Tj ET
+BT /F1 8.5 Tf 611 398.5 Td (bebrokeninsidethecolumnbecauseitdoesnotfit) Tj ET
+0.8 G 0.4 w 36 391 m 806 391 l S 0 G
+BT /F1 8.5 Tf 40 379.5 Td (Lukas Brunner) Tj ET
+BT /F1 8.5 Tf 165 379.5 Td (PC-55 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 379.5 Td (2026-11-21 23:25) Tj ET
+BT /F1 8.5 Tf 373 379.5 Td (2026-11-22 01:06) Tj ET
+BT /F1 8.5 Tf 482.64 379.5 Td (1:40:50) Tj ET
+BT /F1 8.5 Tf 519 379.5 Td (Attended) Tj ET
+BT /F1 8.5 Tf 611 379.5 Td (\200 \223quotes\224 \226 dash \227 ?? ? e? ?) Tj ET
+0.8 G 0.4 w 36 372 m 806 372 l S 0 G
+BT /F1 8.5 Tf 40 360.5 Td (Zo\353 M\374ller-L\374denscheidt) Tj ET
+BT /F1 8.5 Tf 165 360.5 Td (PC-56 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 360.5 Td (2026-11-22 08:26) Tj ET
+BT /F1 8.5 Tf 373 360.5 Td (2026-11-22 10:15) Tj ET
+BT /F1 8.5 Tf 482.64 360.5 Td (1:48:07) Tj ET
+BT /F1 8.5 Tf 519 360.5 Td (Attended) Tj ET
+0.8 G 0.4 w 36 353 m 806 353 l S 0 G
+BT /F1 8.5 Tf 40 341.5 Td (Lukasz Z\363lc) Tj ET
+BT /F1 8.5 Tf 165 341.5 Td (PC-57 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 341.5 Td (2026-11-22 17:27) Tj ET
+BT /F1 8.5 Tf 373 341.5 Td (2026-11-22 19:23) Tj ET
+BT /F1 8.5 Tf 482.64 341.5 Td (1:55:24) Tj ET
+BT /F1 8.5 Tf 519 341.5 Td (Unattended \267 Joined) Tj ET
+BT /F1 8.5 Tf 519 330.5 Td (as colleague) Tj ET
+0.8 G 0.4 w 36 323 m 806 323 l S 0 G
+BT /F1 8.5 Tf 40 311.5 Td (Fran\347ois \(Support\) \\ Team) Tj ET
+BT /F1 8.5 Tf 165 311.5 Td (A very long device name th\205) Tj ET
+BT /F1 8.5 Tf 285 311.5 Td (2026-11-23 02:28) Tj ET
+BT /F1 8.5 Tf 373 311.5 Td (2026-11-23 04:31) Tj ET
+BT /F1 8.5 Tf 482.64 311.5 Td (2:02:41) Tj ET
+BT /F1 8.5 Tf 519 311.5 Td (Attended) Tj ET
+BT /F1 8.5 Tf 611 311.5 Td (Printer driver updated) Tj ET
+0.8 G 0.4 w 36 304 m 806 304 l S 0 G
+BT /F1 8.5 Tf 165 292.5 Td (PC-59 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 292.5 Td (2026-11-23 11:29) Tj ET
+BT /F1 8.5 Tf 373 292.5 Td (2026-11-23 13:39) Tj ET
+BT /F1 8.5 Tf 482.64 292.5 Td (2:09:58) Tj ET
+BT /F1 8.5 Tf 519 292.5 Td (Attended) Tj ET
+BT /F1 8.5 Tf 611 292.5 Td (=SUM\(A1\)) Tj ET
+0.8 G 0.4 w 36 285 m 806 285 l S 0 G
+BT /F1 8.5 Tf 40 273.5 Td (Olivia Owner) Tj ET
+BT /F1 8.5 Tf 165 273.5 Td (PC-60 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 273.5 Td (2026-11-23 20:31) Tj ET
+BT /F1 8.5 Tf 373 273.5 Td (2026-11-23 22:48) Tj ET
+BT /F1 8.5 Tf 482.64 273.5 Td (2:17:15) Tj ET
+BT /F1 8.5 Tf 519 273.5 Td (Unattended) Tj ET
+BT /F1 8.5 Tf 611 273.5 Td (Line one) Tj ET
+BT /F1 8.5 Tf 611 262.5 Td (Line two) Tj ET
+BT /F1 8.5 Tf 611 251.5 Td (Line three) Tj ET
+0.8 G 0.4 w 36 244 m 806 244 l S 0 G
+BT /F1 8.5 Tf 40 232.5 Td (Lukas Brunner) Tj ET
+BT /F1 8.5 Tf 165 232.5 Td (PC-61 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 232.5 Td (2026-11-24 05:32) Tj ET
+BT /F1 8.5 Tf 373 232.5 Td (2026-11-24 07:56) Tj ET
+BT /F1 8.5 Tf 482.64 232.5 Td (2:24:32) Tj ET
+BT /F1 8.5 Tf 519 232.5 Td (Attended) Tj ET
+BT /F1 8.5 Tf 611 232.5 Td (A long note that keeps going and going so that it) Tj ET
+BT /F1 8.5 Tf 611 221.5 Td (has to be wrapped over several lines in the note) Tj ET
+BT /F1 8.5 Tf 611 210.5 Td (column of the report, and then some more words) Tj ET
+BT /F1 8.5 Tf 611 199.5 Td (until the six line limit cuts it off with an ellipsis at) Tj ET
+BT /F1 8.5 Tf 611 188.5 Td (the very end of the last line shown.) Tj ET
+0.8 G 0.4 w 36 181 m 806 181 l S 0 G
+BT /F1 8.5 Tf 40 169.5 Td (Zo\353 M\374ller-L\374denscheidt) Tj ET
+BT /F1 8.5 Tf 165 169.5 Td (PC-62 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 169.5 Td (2026-11-24 14:33) Tj ET
+BT /F1 8.5 Tf 373 169.5 Td (2026-11-24 14:34) Tj ET
+BT /F1 8.5 Tf 482.64 169.5 Td (0:01:49) Tj ET
+BT /F1 8.5 Tf 519 169.5 Td (Attended \267 Joined as) Tj ET
+BT /F1 8.5 Tf 519 158.5 Td (colleague) Tj ET
+BT /F1 8.5 Tf 611 169.5 Td (Averyveryverylongwordwithoutanyspacesthatmust) Tj ET
+BT /F1 8.5 Tf 611 158.5 Td (bebrokeninsidethecolumnbecauseitdoesnotfit) Tj ET
+0.8 G 0.4 w 36 151 m 806 151 l S 0 G
+BT /F1 8.5 Tf 40 139.5 Td (Lukasz Z\363lc) Tj ET
+BT /F1 8.5 Tf 165 139.5 Td (PC-63 \(B\374ro\)) Tj ET
+BT /F1 8.5 Tf 285 139.5 Td (2026-11-24 23:34) Tj ET
+BT /F1 8.5 Tf 373 139.5 Td (Running) Tj ET
+BT /F1 8.5 Tf 482.64 139.5 Td (0:09:06) Tj ET
+BT /F1 8.5 Tf 519 139.5 Td (Unattended) Tj ET
+BT /F1 8.5 Tf 611 139.5 Td (\200 \223quotes\224 \226 dash \227 ?? ? e? ?) Tj ET
+0.8 G 0.4 w 36 132 m 806 132 l S 0 G
+BT /F2 9.5 Tf 36 114 Td (64 sessions \267 77:29:12 in total) Tj ET
+0.4 g
+BT /F1 8 Tf 765.08 32 Td (Page 5 of 5) Tj ET
+0 g
+
+endstream
+endobj
+xref
+0 16
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000142 00000 n 
+0000000239 00000 n 
+0000000341 00000 n 
+0000000575 00000 n 
+0000000711 00000 n 
+0000006970 00000 n 
+0000007106 00000 n 
+0000014140 00000 n 
+0000014278 00000 n 
+0000021126 00000 n 
+0000021264 00000 n 
+0000027563 00000 n 
+0000027701 00000 n 
+trailer
+<< /Size 16 /Root 1 0 R /Info 5 0 R >>
+startxref
+33701
+%%EOF

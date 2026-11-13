@@ -1,4 +1,4 @@
-# Mixel Remote for Linux (native, 2.0.0)
+# Mixel Remote for Linux (native, 2.0.x)
 
 GTK 4 + libadwaita app written in Rust with gtk4-rs, directly on the shared engine — no web view, no
 foreign-language binding. From 2.0.0 it is *the* Linux app: package `mixel-remote`, the same store.mixel.ch
@@ -11,6 +11,7 @@ updates in place.
 | Commands | `crates/mixel_engine/src/native_commands.rs` (+ `_linux.rs`) | The desktop app's command names and JSON, shared with the Apple/Android apps (through `mixel_core_ffi`); this app calls it directly |
 | State and actions | `src/app.rs`, pure logic `src/logic.rs` | Port of the native apps' view models (connection, devices, company, settings, set-up, host, session) |
 | Screens | `src/ui/` | Sidebar + pages (AdwLeaflet), session window (GtkPicture), consent dialog, dialogs, tray (StatusNotifierItem via ksni) |
+| Report export | `src/report_export.rs` | CSV and PDF of the session report: a port of `frontends/desktop/report-export.ts` (the portal's layout), byte-for-byte checked against it (`scripts/report-golden.mjs` writes `tests/fixtures/report-golden.*`) |
 | Translations | `po/{de,fr,it}.po` (gettext, built into .mo by `build.rs`), `data/engine-texts.json` | `scripts/make-po.py` regenerates them and fails on a missing text |
 | Package | `scripts/build-deb.sh`, `data/deb/{preinst,postinst}`, `data/*.desktop`, metainfo | Built on Debian 12 (glibc floor 2.35, GTK 4.6 / libadwaita 1.1 APIs only) |
 
@@ -41,7 +42,8 @@ scripts/build-deb.sh 2.0.0 <source-root> <out>     # the .deb and glibc.txt
 ```
 
 ## Live checks (LAB only, `--features qa-session`; release builds contain none of it)
-`--live-check`, `--live-session`, `--live-host`, `--live-watch` and `--check-providers` run the engine against
+`--live-check`, `--live-session`, `--live-host`, `--live-pair` / `--live-colleague` (clipboard both ways with real
+X clipboards, a second technician, switching sides), `--live-watch` and `--check-providers` run the engine against
 the live service with a throwaway QA account's session file (never a real person's), in an isolated HOME,
 D-Bus and keyring. See `src/live_check.rs`. Remove the QA account and its data afterwards.
 

@@ -15,6 +15,13 @@
 //!   for lab computers (update tests); every 5 s `<dir>/devices.txt` lists the company's computers with
 //!   their Remote ID and whether they are online. `<dir>/request.txt` with a Remote ID starts an
 //!   unattended session to it (pictures, input, end); `<dir>/stop` ends the watch and removes everything.
+//! - `--live-pair <session.json> <run> <dir>`: as `--live-host`, on a computer with an X display and
+//!   `xclip`, plus: text copied on each side arrives on the other (`<dir>/clip-*.txt` hand-shake with
+//!   the lab script, which reads and sets the host's clipboard), a second technician (`--live-colleague`
+//!   in `<dir>/colleague`) joins and leaves, and the sides are switched and switched back.
+//! - `--live-colleague <session.json> <run> <dir>`: the second technician: adds this computer to the
+//!   company in `<dir>/../tenant.txt`, writes its Remote ID to `<dir>/colleague-id.txt`, joins when
+//!   invited (`joined.txt`), watches a few seconds, leaves (`left.txt`) and removes itself.
 //! - `--check-providers`: each sign-in button (Mixel ID, Google, Microsoft, Apple) leads the browser to
 //!   that provider's own sign-in page; nothing is signed in (the attempt is cancelled).
 use crate::engine::{Engine, RealEngine};
@@ -244,6 +251,207 @@ impl Check {
     }
 }
 
+/// The X display's clipboard through `xclip` (another program, as when a person copies there).
+fn xclip_set(text: &str) -> bool {
+    use std::io::Write;
+    let Ok(mut child) = std::process::Command::new("xclip").env("LC_ALL", "C.UTF-8").args(["-selection", "clipboard", "-i"]).stdin(std::process::Stdio::piped()).spawn() else { return false };
+    let written = child.stdin.take().is_some_and(|mut input| input.write_all(text.as_bytes()).is_ok());
+    child.wait().is_ok_and(|status| status.success()) && written
+}
+
+fn xclip_get() -> String {
+    std::process::Command::new("xclip")
+        .env("LC_ALL", "C.UTF-8")
+        .args(["-selection", "clipboard", "-o"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+        .unwrap_or_default()
+}
+
+/// Waits up to `seconds` for a hand-shake file of the lab script and returns its text.
+async fn file(path: &std::path::Path, seconds: u64) -> Option<String> {
+    for _ in 0..seconds * 2 {
+        if let Ok(text) = std::fs::read_to_string(path) {
+            return Some(text.trim_end_matches('\n').to_owned());
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    None
+}
+
+impl Check {
+    /// Clipboard both ways with real clipboards, a second technician, switching sides. Returns the
+    /// session's status afterwards (switching back starts a new session).
+    async fn pair(&mut self, active: Value, suffix: &str, folder: &std::path::Path) -> Value {
+        let id = active["session"].as_str().unwrap_or_default().to_owned();
+        let features = active["peer_features"].to_string();
+        let offered = |name: &str| active["peer_features"].as_array().is_some_and(|list| list.iter().any(|item| item == name));
+        // As a person would: the picture is there first, then the clipboard buttons are used.
+        let (mut frames, started) = (0, std::time::Instant::now());
+        while frames < 3 && started.elapsed() < Duration::from_secs(20) {
+            match self.engine.next_video(&id).await {
+                Ok(data) if !data.is_empty() => frames += 1,
+                _ => tokio::time::sleep(Duration::from_millis(30)).await,
+            }
+        }
+        let timed = std::time::Instant::now();
+        let first = self.engine.input(&id, json!({ "kind": "pointer", "x": 30000, "y": 30000 })).await;
+        println!("first pictures after {} ms ({frames}); first input {:?} in {} ms", started.elapsed().as_millis() - timed.elapsed().as_millis(), first, timed.elapsed().as_millis());
+        // 1. Clipboard: copied here, arrives there; copied there, arrives here.
+        if active["clipboard"] == true {
+            let ours = format!("Mixel Linux technician to host {suffix} äöü €");
+            let set = xclip_set(&ours) && xclip_get() == ours;
+            self.check("technician's clipboard set by another program (xclip)", set, xclip_get());
+            let push = self.call("remote_clipboard", json!({ "session": id, "push": true })).await;
+            self.check("send the clipboard to the host", push.is_ok(), format!("{push:?}"));
+            let _ = std::fs::write(folder.join("clip-pushed.txt"), &ours);
+            println!("WAITING for the host's clipboard (clip-received.txt, clip-host.txt)");
+            let received = file(&folder.join("clip-received.txt"), 120).await.unwrap_or_default();
+            self.check("text copied on the technician arrives in the host's clipboard", received == ours, format!("host has {received:?}"));
+            if let Some(theirs) = file(&folder.join("clip-host.txt"), 120).await {
+                let pull = self.call("remote_clipboard", json!({ "session": id, "push": false })).await;
+                self.check("get the host's clipboard", pull.is_ok(), format!("{pull:?}"));
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                let here = xclip_get();
+                self.check("text copied on the host arrives in the technician's clipboard", here == theirs, format!("{here:?} / {theirs:?}"));
+            } else {
+                self.check("host copied a text", false, "no clip-host.txt");
+            }
+        } else {
+            self.check("clipboard granted by the host", false, &active);
+        }
+        // 2. A second technician joins (the person at the host lets them in) and leaves again.
+        if offered("join") {
+            let colleague = folder.join("colleague");
+            println!("WAITING for the second technician (colleague/colleague-id.txt)");
+            let device = file(&colleague.join("colleague-id.txt"), 300).await.and_then(|text| text.trim().parse::<u32>().ok());
+            if let Some(device) = device {
+                let invite = self.call("remote_invite", json!({ "session": id, "user": null, "device": device, "control": false })).await;
+                self.check("invite a second technician by Remote ID", invite.is_ok(), format!("{invite:?}"));
+                println!("WAITING for the person at the host to let the colleague join (colleague/joined.txt)");
+                let joined = file(&colleague.join("joined.txt"), 240).await;
+                self.check("second technician joined the running session", joined.is_some(), self.status().await["invite_message"].clone());
+                let left = file(&colleague.join("left.txt"), 90).await;
+                let still = self.status().await;
+                self.check("second technician left; the first stays connected", left.is_some() && still["phase"] == "active" && still["session"] == active["session"], &still);
+            } else {
+                self.check("second technician online", false, "no colleague-id.txt");
+            }
+        } else {
+            println!("second technician: not offered by the host ({features})");
+        }
+        // 3. Switch sides (the host views this computer's screen), then back.
+        if offered("switch") {
+            let switch = self.call("remote_switch_sides", json!({ "session": id })).await;
+            self.check("switch sides requested", switch.is_ok(), format!("{switch:?}"));
+            let switched = self.wait(60, |status| status["phase"] == "active" && status["switched"] == true).await;
+            self.check("sides switched: the host views this computer", switched.as_ref().is_some_and(|status| status["sharing"] == true), self.status().await);
+            let _ = std::fs::write(folder.join("switched.txt"), "1");
+            tokio::time::sleep(Duration::from_secs(12)).await;
+            if let Some(switched) = switched {
+                let back = self.call("remote_switch_sides", json!({ "session": switched["session"] })).await;
+                self.check("switch back requested", back.is_ok(), format!("{back:?}"));
+                let again = self.wait(60, |status| status["phase"] == "active" && status["switched"] == false && status["sharing"] == false && status["control"] == true).await;
+                self.check("switched back: this computer views and controls the host again", again.is_some(), self.status().await);
+                let _ = std::fs::write(folder.join("switched-back.txt"), "1");
+                if let Some(again) = again {
+                    return again;
+                }
+            }
+            return self.status().await;
+        }
+        println!("switch sides: not offered by the host ({features})");
+        active
+    }
+}
+
+/// The second technician of `--live-pair`.
+async fn colleague(check: &mut Check, suffix: &str, folder: &std::path::Path) {
+    if !check.sign_in().await {
+        return;
+    }
+    let Some(tenant) = file(&folder.join("../tenant.txt"), 600).await else {
+        check.check("company of the first technician", false, "no tenant.txt");
+        return;
+    };
+    // A new account is still being set up (profile) when this second app signs in at the same
+    // time; once the first technician created the company it is complete: read the sign-in again.
+    for _ in 0..20 {
+        if check.call("account_status", json!({})).await.is_ok_and(|status| status["phase"] == "authenticated") {
+            break;
+        }
+        let _ = check.call("account_sign_in", json!({})).await;
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+    let added = check.call("saas_add_this_device", json!({ "tenant": tenant, "name": format!("QA Linux colleague {suffix}"), "group": null })).await;
+    let added = match added {
+        Ok(value) => value,
+        Err(error) => {
+            check.check("second technician's computer added", false, error);
+            return;
+        }
+    };
+    let mine = added["connection_id"].as_u64().unwrap_or(0);
+    check.check("second technician's computer added", mine > 0, &added);
+    let _ = check.call("remote_register", json!({})).await;
+    check.check("second technician online", check.wait(30, |status| status["phase"] == "ready").await.is_some(), "");
+    let _ = std::fs::write(folder.join("colleague-id.txt"), mine.to_string());
+    println!("WAITING for the invitation");
+    let invited = check.wait(600, |status| status["invitations"].as_array().is_some_and(|list| !list.is_empty())).await;
+    let invitation = invited.as_ref().and_then(|status| status["invitations"][0]["invitation"].as_str().map(str::to_owned));
+    check.check("invitation from the first technician", invitation.is_some(), invited.unwrap_or(Value::Null));
+    if let Some(invitation) = invitation {
+        let join = check.call("remote_join", json!({ "invitation": invitation })).await;
+        check.check("join requested", join.is_ok(), format!("{join:?}"));
+        // Every change of the phase and message until the session is active (or gone), with the time.
+        let started = std::time::Instant::now();
+        let (mut last, mut active) = (String::new(), None);
+        while started.elapsed() < Duration::from_secs(240) {
+            let status = check.status().await;
+            let now = format!("{} | {}", status["phase"].as_str().unwrap_or("?"), status["message"].as_str().unwrap_or(""));
+            if now != last {
+                println!("join trace +{} ms: {now}", started.elapsed().as_millis());
+                last = now;
+            }
+            if status["phase"] == "active" {
+                active = Some(status);
+                break;
+            }
+            if status["phase"] == "ready" && started.elapsed() > Duration::from_secs(5) && status["message"].as_str().is_some_and(|text| text.starts_with("Session closed")) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        check.check("joined: viewing the host", active.as_ref().is_some_and(|status| status["joined_session"] == true), check.status().await);
+        if let Some(active) = active {
+            let id = active["session"].as_str().unwrap_or_default().to_owned();
+            let mut frames = 0;
+            let until = std::time::Instant::now() + Duration::from_secs(10);
+            while std::time::Instant::now() < until && frames < 3 {
+                match check.engine.next_video(&id).await {
+                    Ok(data) if !data.is_empty() => frames += 1,
+                    _ => tokio::time::sleep(Duration::from_millis(50)).await,
+                }
+            }
+            check.check(&format!("second technician gets pictures ({frames})"), frames > 0, "");
+            let _ = std::fs::write(folder.join("joined.txt"), &id);
+            tokio::time::sleep(Duration::from_secs(8)).await;
+            let close = check.call("remote_close", json!({ "session": id })).await;
+            check.check("second technician leaves", close.is_ok(), format!("{close:?}"));
+            check.check("second technician back to ready", check.wait(20, |status| status["phase"] == "ready").await.is_some(), "");
+            let _ = std::fs::write(folder.join("left.txt"), "1");
+        }
+    }
+    let _ = check.call("remote_disconnect", json!({})).await;
+    let _ = check.wait(15, |status| matches!(status["phase"].as_str(), Some("offline" | "error"))).await;
+    if let Some(device) = added["device_id"].as_str() {
+        let removal = check.call("device_self_remove", json!({ "confirmed": true, "registration": { "device": device, "connection_id": mine, "generation": added["generation"] } })).await;
+        check.check("second technician's computer removes itself", removal.as_ref().is_ok_and(|value| value == "removed"), format!("{removal:?}"));
+    }
+}
+
 /// The picture as a PPM file (no image library needed).
 fn ppm(frame: &crate::video::Frame) -> Vec<u8> {
     let mut out = format!("P6\n{} {}\n255\n", frame.width, frame.height).into_bytes();
@@ -313,8 +521,10 @@ pub fn run(args: &[String]) -> i32 {
     let mut check = Check { engine, checks: 0, failures: 0 };
     runtime.block_on(async {
         match mode.as_str() {
-            "--live-session" => technician(&mut check, suffix, &folder, false).await,
-            "--live-host" => technician(&mut check, suffix, &folder, true).await,
+            "--live-session" => technician(&mut check, suffix, &folder, false, false).await,
+            "--live-host" => technician(&mut check, suffix, &folder, true, false).await,
+            "--live-pair" => technician(&mut check, suffix, &folder, true, true).await,
+            "--live-colleague" => colleague(&mut check, suffix, &folder).await,
             "--live-watch" => watch(&mut check, suffix, &folder).await,
             _ => checks(&mut check, suffix).await,
         }
@@ -330,7 +540,7 @@ fn unsafe_env(session: &str) {
     unsafe { std::env::set_var("MIXEL_QA_SESSION_FILE", session) };
 }
 
-async fn technician(check: &mut Check, suffix: &str, folder: &std::path::Path, attended: bool) {
+async fn technician(check: &mut Check, suffix: &str, folder: &std::path::Path, attended: bool, pair: bool) {
     if !check.sign_in().await {
         return;
     }
@@ -394,6 +604,7 @@ async fn technician(check: &mut Check, suffix: &str, folder: &std::path::Path, a
         if let Some(active) = active {
             check.check("view and control granted", active["control"] == true, &active);
             println!("host actions: {}  displays: {}  features: {}", active["host_actions"], active["displays"], active["peer_features"]);
+            let active = if pair { check.pair(active, suffix, folder).await } else { active };
             check.session_tools(&active, Some(&folder.to_path_buf()), attended).await;
         }
     }

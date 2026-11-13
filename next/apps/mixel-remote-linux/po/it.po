@@ -418,6 +418,9 @@ msgstr "Disegna sullo schermo"
 msgid "Drawing tool"
 msgstr "Strumento di disegno"
 
+msgid "Duration"
+msgstr "Durata"
+
 msgid "Duration (seconds)"
 msgstr "Durata (secondi)"
 
@@ -493,6 +496,9 @@ msgstr "Scade il %@"
 msgid "Export CSV…"
 msgstr "Esporta CSV…"
 
+msgid "Export PDF…"
+msgstr "Esporta PDF…"
+
 msgid "Export data in the portal"
 msgstr "Esporta i dati nel portale"
 
@@ -519,6 +525,9 @@ msgstr "Generale"
 
 msgid "Generate one-time password"
 msgstr "Genera password monouso"
+
+msgid "Generated %@"
+msgstr "Generato il %@"
 
 msgid "Get remote clipboard"
 msgstr "Ottieni gli appunti remoti"
@@ -811,6 +820,9 @@ msgstr "Oppure l’ID Remote del suo computer"
 msgid "Owner"
 msgstr "Proprietario"
 
+msgid "Page %d of %d"
+msgstr "Pagina %d di %d"
+
 msgid "Page %d · %d devices."
 msgstr "Pagina %d · %d dispositivi."
 
@@ -976,6 +988,9 @@ msgstr "Distribuzione"
 msgid "Run the command on each computer (as administrator, or with your deployment tool). The link is shown only now."
 msgstr "Esegua il comando su ogni computer (come amministratore o con il Suo strumento di distribuzione). Il link viene mostrato solo ora."
 
+msgid "Running"
+msgstr "In corso"
+
 msgid "Save"
 msgstr "Salva"
 
@@ -1038,6 +1053,9 @@ msgstr "ID sessione"
 
 msgid "Session note"
 msgstr "Nota della sessione"
+
+msgid "Session report"
+msgstr "Report delle sessioni"
 
 msgid "Session report saved"
 msgstr "Rapporto delle sessioni salvato"

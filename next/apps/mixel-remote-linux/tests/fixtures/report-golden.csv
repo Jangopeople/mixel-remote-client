@@ -1,0 +1,81 @@
+﻿Technician,E-mail,Device,Remote ID,Start,End,Duration,Duration (seconds),Type,Joined as colleague,Note,Session ID
+Olivia Owner,tech0@acme.test,PC-0 (Büro),100000000,2026-11-01 07:30,2026-11-01 07:30,0:00:15,15,Unattended,No,,00000000-0000-4000-8000-000000000000
+Lukas Brunner,tech1@acme.test,PC-1 (Büro),100007919,2026-11-01 16:31,2026-11-01 16:38,0:07:32,452,Attended,No,,00000000-0000-4000-8000-000000000001
+Zoë Müller-Lüdenscheidt,tech2@acme.test,PC-2 (Büro),100015838,2026-11-02 01:32,2026-11-02 01:46,0:14:49,889,Attended,Yes,Printer driver updated,00000000-0000-4000-8000-000000000002
+Łukasz Żółć,tech3@acme.test,PC-3 (Büro),100023757,2026-11-02 10:33,2026-11-02 10:55,0:22:06,1326,Unattended,No,'=SUM(A1),00000000-0000-4000-8000-000000000003
+François (Support) \ Team,tech4@acme.test,A very long device name that will not fit in its column at all,100031676,2026-11-02 19:34,2026-11-02 20:03,0:29:23,1763,Attended,No,"Line one
+Line two
+Line three",00000000-0000-4000-8000-000000000004
+,,PC-5 (Büro),100039595,2026-11-03 04:35,2026-11-03 05:11,0:36:40,2200,Attended,No,"A long note that keeps going and going so that it has to be wrapped over several lines in the note column of the report, and then some more words until the six line limit cuts it off with an ellipsis at the very end of the last line shown.",00000000-0000-4000-8000-000000000005
+Olivia Owner,tech0@acme.test,PC-6 (Büro),100047514,2026-11-03 13:36,2026-11-03 14:20,0:43:57,2637,Unattended,No,Averyveryverylongwordwithoutanyspacesthatmustbebrokeninsidethecolumnbecauseitdoesnotfit,00000000-0000-4000-8000-000000000006
+Lukas Brunner,tech1@acme.test,PC-7 (Büro),100055433,2026-11-03 22:37,2026-11-03 23:28,0:51:14,3074,Attended,Yes,€ “quotes” – dash — 中文 😀 é ǅ,00000000-0000-4000-8000-000000000007
+Zoë Müller-Lüdenscheidt,tech2@acme.test,PC-8 (Büro),100063352,2026-11-04 07:38,2026-11-04 08:36,0:58:31,3511,Attended,No,,00000000-0000-4000-8000-000000000008
+Łukasz Żółć,tech3@acme.test,PC-9 (Büro),100071271,2026-11-04 16:39,2026-11-04 17:44,1:05:48,3948,Unattended,No,,00000000-0000-4000-8000-000000000009
+François (Support) \ Team,tech4@acme.test,PC-10 (Büro),100079190,2026-11-05 01:40,2026-11-05 02:53,1:13:05,4385,Attended,No,Printer driver updated,00000000-0000-4000-8000-000000000010
+,,PC-11 (Büro),100087109,2026-11-05 10:41,2026-11-05 12:01,1:20:22,4822,Attended,No,'=SUM(A1),00000000-0000-4000-8000-000000000011
+Olivia Owner,tech0@acme.test,PC-12 (Büro),100095028,2026-11-05 19:42,2026-11-05 21:09,1:27:39,5259,Unattended,Yes,"Line one
+Line two
+Line three",00000000-0000-4000-8000-000000000012
+Lukas Brunner,tech1@acme.test,A very long device name that will not fit in its column at all,100102947,2026-11-06 04:43,2026-11-06 06:18,1:34:56,5696,Attended,No,"A long note that keeps going and going so that it has to be wrapped over several lines in the note column of the report, and then some more words until the six line limit cuts it off with an ellipsis at the very end of the last line shown.",00000000-0000-4000-8000-000000000013
+Zoë Müller-Lüdenscheidt,tech2@acme.test,PC-14 (Büro),100110866,2026-11-06 13:44,2026-11-06 15:26,1:42:13,6133,Attended,No,Averyveryverylongwordwithoutanyspacesthatmustbebrokeninsidethecolumnbecauseitdoesnotfit,00000000-0000-4000-8000-000000000014
+Łukasz Żółć,tech3@acme.test,PC-15 (Büro),100118785,2026-11-06 22:45,2026-11-07 00:34,1:49:30,6570,Unattended,No,€ “quotes” – dash — 中文 😀 é ǅ,00000000-0000-4000-8000-000000000015
+François (Support) \ Team,tech4@acme.test,PC-16 (Büro),100126704,2026-11-07 07:46,2026-11-07 09:43,1:56:47,7007,Attended,No,,00000000-0000-4000-8000-000000000016
+,,PC-17 (Büro),100134623,2026-11-07 16:47,2026-11-07 18:51,2:04:04,7444,Attended,Yes,,00000000-0000-4000-8000-000000000017
+Olivia Owner,tech0@acme.test,PC-18 (Büro),100142542,2026-11-08 01:48,2026-11-08 03:59,2:11:21,7881,Unattended,No,Printer driver updated,00000000-0000-4000-8000-000000000018
+Lukas Brunner,tech1@acme.test,PC-19 (Büro),100150461,2026-11-08 10:49,2026-11-08 13:07,2:18:38,8318,Attended,No,'=SUM(A1),00000000-0000-4000-8000-000000000019
+Zoë Müller-Lüdenscheidt,tech2@acme.test,PC-20 (Büro),100158380,2026-11-08 19:50,2026-11-08 22:16,2:25:55,8755,Attended,No,"Line one
+Line two
+Line three",00000000-0000-4000-8000-000000000020
+Łukasz Żółć,tech3@acme.test,PC-21 (Büro),100166299,2026-11-09 04:51,2026-11-09 04:54,0:03:12,192,Unattended,No,"A long note that keeps going and going so that it has to be wrapped over several lines in the note column of the report, and then some more words until the six line limit cuts it off with an ellipsis at the very end of the last line shown.",00000000-0000-4000-8000-000000000021
+François (Support) \ Team,tech4@acme.test,A very long device name that will not fit in its column at all,100174218,2026-11-09 13:52,2026-11-09 14:02,0:10:29,629,Attended,Yes,Averyveryverylongwordwithoutanyspacesthatmustbebrokeninsidethecolumnbecauseitdoesnotfit,00000000-0000-4000-8000-000000000022
+,,PC-23 (Büro),100182137,2026-11-09 22:53,2026-11-09 23:11,0:17:46,1066,Attended,No,€ “quotes” – dash — 中文 😀 é ǅ,00000000-0000-4000-8000-000000000023
+Olivia Owner,tech0@acme.test,PC-24 (Büro),100190056,2026-11-10 07:54,2026-11-10 08:19,0:25:03,1503,Unattended,No,,00000000-0000-4000-8000-000000000024
+Lukas Brunner,tech1@acme.test,PC-25 (Büro),100197975,2026-11-10 16:55,2026-11-10 17:27,0:32:20,1940,Attended,No,,00000000-0000-4000-8000-000000000025
+Zoë Müller-Lüdenscheidt,tech2@acme.test,PC-26 (Büro),100205894,2026-11-11 01:56,2026-11-11 02:36,0:39:37,2377,Attended,No,Printer driver updated,00000000-0000-4000-8000-000000000026
+Łukasz Żółć,tech3@acme.test,PC-27 (Büro),100213813,2026-11-11 10:57,2026-11-11 11:44,0:46:54,2814,Unattended,Yes,'=SUM(A1),00000000-0000-4000-8000-000000000027
+François (Support) \ Team,tech4@acme.test,PC-28 (Büro),100221732,2026-11-11 19:58,2026-11-11 20:52,0:54:11,3251,Attended,No,"Line one
+Line two
+Line three",00000000-0000-4000-8000-000000000028
+,,PC-29 (Büro),100229651,2026-11-12 04:59,2026-11-12 06:00,1:01:28,3688,Attended,No,"A long note that keeps going and going so that it has to be wrapped over several lines in the note column of the report, and then some more words until the six line limit cuts it off with an ellipsis at the very end of the last line shown.",00000000-0000-4000-8000-000000000029
+Olivia Owner,tech0@acme.test,PC-30 (Büro),100237570,2026-11-12 14:00,2026-11-12 15:09,1:08:45,4125,Unattended,No,Averyveryverylongwordwithoutanyspacesthatmustbebrokeninsidethecolumnbecauseitdoesnotfit,00000000-0000-4000-8000-000000000030
+Lukas Brunner,tech1@acme.test,A very long device name that will not fit in its column at all,100245489,2026-11-12 23:01,2026-11-13 00:17,1:16:02,4562,Attended,No,€ “quotes” – dash — 中文 😀 é ǅ,00000000-0000-4000-8000-000000000031
+Zoë Müller-Lüdenscheidt,tech2@acme.test,PC-32 (Büro),100253408,2026-11-13 08:02,2026-11-13 09:25,1:23:19,4999,Attended,Yes,,00000000-0000-4000-8000-000000000032
+Łukasz Żółć,tech3@acme.test,PC-33 (Büro),100261327,2026-11-13 17:03,2026-11-13 18:34,1:30:36,5436,Unattended,No,,00000000-0000-4000-8000-000000000033
+François (Support) \ Team,tech4@acme.test,PC-34 (Büro),100269246,2026-11-14 02:04,2026-11-14 03:42,1:37:53,5873,Attended,No,Printer driver updated,00000000-0000-4000-8000-000000000034
+,,PC-35 (Büro),100277165,2026-11-14 11:05,2026-11-14 12:50,1:45:10,6310,Attended,No,'=SUM(A1),00000000-0000-4000-8000-000000000035
+Olivia Owner,tech0@acme.test,PC-36 (Büro),100285084,2026-11-14 20:06,2026-11-14 21:59,1:52:27,6747,Unattended,No,"Line one
+Line two
+Line three",00000000-0000-4000-8000-000000000036
+Lukas Brunner,tech1@acme.test,PC-37 (Büro),100293003,2026-11-15 05:07,2026-11-15 07:07,1:59:44,7184,Attended,Yes,"A long note that keeps going and going so that it has to be wrapped over several lines in the note column of the report, and then some more words until the six line limit cuts it off with an ellipsis at the very end of the last line shown.",00000000-0000-4000-8000-000000000037
+Zoë Müller-Lüdenscheidt,tech2@acme.test,PC-38 (Büro),100300922,2026-11-15 14:08,2026-11-15 16:15,2:07:01,7621,Attended,No,Averyveryverylongwordwithoutanyspacesthatmustbebrokeninsidethecolumnbecauseitdoesnotfit,00000000-0000-4000-8000-000000000038
+Łukasz Żółć,tech3@acme.test,PC-39 (Büro),100308841,2026-11-15 23:09,2026-11-16 01:23,2:14:18,8058,Unattended,No,€ “quotes” – dash — 中文 😀 é ǅ,00000000-0000-4000-8000-000000000039
+François (Support) \ Team,tech4@acme.test,A very long device name that will not fit in its column at all,100316760,2026-11-16 08:10,2026-11-16 10:32,2:21:35,8495,Attended,No,,00000000-0000-4000-8000-000000000040
+,,PC-41 (Büro),100324679,2026-11-16 17:11,2026-11-16 19:40,2:28:52,8932,Attended,No,,00000000-0000-4000-8000-000000000041
+Olivia Owner,tech0@acme.test,PC-42 (Büro),100332598,2026-11-17 02:12,2026-11-17 02:18,0:06:09,369,Unattended,Yes,Printer driver updated,00000000-0000-4000-8000-000000000042
+Lukas Brunner,tech1@acme.test,PC-43 (Büro),100340517,2026-11-17 11:13,2026-11-17 11:27,0:13:26,806,Attended,No,'=SUM(A1),00000000-0000-4000-8000-000000000043
+Zoë Müller-Lüdenscheidt,tech2@acme.test,PC-44 (Büro),100348436,2026-11-17 20:14,2026-11-17 20:35,0:20:43,1243,Attended,No,"Line one
+Line two
+Line three",00000000-0000-4000-8000-000000000044
+Łukasz Żółć,tech3@acme.test,PC-45 (Büro),100356355,2026-11-18 05:15,2026-11-18 05:43,0:28:00,1680,Unattended,No,"A long note that keeps going and going so that it has to be wrapped over several lines in the note column of the report, and then some more words until the six line limit cuts it off with an ellipsis at the very end of the last line shown.",00000000-0000-4000-8000-000000000045
+François (Support) \ Team,tech4@acme.test,PC-46 (Büro),100364274,2026-11-18 14:16,2026-11-18 14:52,0:35:17,2117,Attended,No,Averyveryverylongwordwithoutanyspacesthatmustbebrokeninsidethecolumnbecauseitdoesnotfit,00000000-0000-4000-8000-000000000046
+,,PC-47 (Büro),100372193,2026-11-18 23:17,2026-11-19 00:00,0:42:34,2554,Attended,Yes,€ “quotes” – dash — 中文 😀 é ǅ,00000000-0000-4000-8000-000000000047
+Olivia Owner,tech0@acme.test,PC-48 (Büro),100380112,2026-11-19 08:18,2026-11-19 09:08,0:49:51,2991,Unattended,No,,00000000-0000-4000-8000-000000000048
+Lukas Brunner,tech1@acme.test,A very long device name that will not fit in its column at all,100388031,2026-11-19 17:19,2026-11-19 18:16,0:57:08,3428,Attended,No,,00000000-0000-4000-8000-000000000049
+Zoë Müller-Lüdenscheidt,tech2@acme.test,PC-50 (Büro),100395950,2026-11-20 02:20,2026-11-20 03:25,1:04:25,3865,Attended,No,Printer driver updated,00000000-0000-4000-8000-000000000050
+Łukasz Żółć,tech3@acme.test,PC-51 (Büro),100403869,2026-11-20 11:21,2026-11-20 12:33,1:11:42,4302,Unattended,No,'=SUM(A1),00000000-0000-4000-8000-000000000051
+François (Support) \ Team,tech4@acme.test,PC-52 (Büro),100411788,2026-11-20 20:22,2026-11-20 21:41,1:18:59,4739,Attended,Yes,"Line one
+Line two
+Line three",00000000-0000-4000-8000-000000000052
+,,PC-53 (Büro),100419707,2026-11-21 05:23,2026-11-21 06:50,1:26:16,5176,Attended,No,"A long note that keeps going and going so that it has to be wrapped over several lines in the note column of the report, and then some more words until the six line limit cuts it off with an ellipsis at the very end of the last line shown.",00000000-0000-4000-8000-000000000053
+Olivia Owner,tech0@acme.test,PC-54 (Büro),100427626,2026-11-21 14:24,2026-11-21 15:58,1:33:33,5613,Unattended,No,Averyveryverylongwordwithoutanyspacesthatmustbebrokeninsidethecolumnbecauseitdoesnotfit,00000000-0000-4000-8000-000000000054
+Lukas Brunner,tech1@acme.test,PC-55 (Büro),100435545,2026-11-21 23:25,2026-11-22 01:06,1:40:50,6050,Attended,No,€ “quotes” – dash — 中文 😀 é ǅ,00000000-0000-4000-8000-000000000055
+Zoë Müller-Lüdenscheidt,tech2@acme.test,PC-56 (Büro),100443464,2026-11-22 08:26,2026-11-22 10:15,1:48:07,6487,Attended,No,,00000000-0000-4000-8000-000000000056
+Łukasz Żółć,tech3@acme.test,PC-57 (Büro),100451383,2026-11-22 17:27,2026-11-22 19:23,1:55:24,6924,Unattended,Yes,,00000000-0000-4000-8000-000000000057
+François (Support) \ Team,tech4@acme.test,A very long device name that will not fit in its column at all,100459302,2026-11-23 02:28,2026-11-23 04:31,2:02:41,7361,Attended,No,Printer driver updated,00000000-0000-4000-8000-000000000058
+,,PC-59 (Büro),100467221,2026-11-23 11:29,2026-11-23 13:39,2:09:58,7798,Attended,No,'=SUM(A1),00000000-0000-4000-8000-000000000059
+Olivia Owner,tech0@acme.test,PC-60 (Büro),100475140,2026-11-23 20:31,2026-11-23 22:48,2:17:15,8235,Unattended,No,"Line one
+Line two
+Line three",00000000-0000-4000-8000-000000000060
+Lukas Brunner,tech1@acme.test,PC-61 (Büro),100483059,2026-11-24 05:32,2026-11-24 07:56,2:24:32,8672,Attended,No,"A long note that keeps going and going so that it has to be wrapped over several lines in the note column of the report, and then some more words until the six line limit cuts it off with an ellipsis at the very end of the last line shown.",00000000-0000-4000-8000-000000000061
+Zoë Müller-Lüdenscheidt,tech2@acme.test,PC-62 (Büro),100490978,2026-11-24 14:33,2026-11-24 14:34,0:01:49,109,Attended,Yes,Averyveryverylongwordwithoutanyspacesthatmustbebrokeninsidethecolumnbecauseitdoesnotfit,00000000-0000-4000-8000-000000000062
+Łukasz Żółć,tech3@acme.test,PC-63 (Büro),100498897,2026-11-24 23:34,Running,0:09:06,546,Unattended,No,€ “quotes” – dash — 中文 😀 é ǅ,00000000-0000-4000-8000-000000000063

@@ -701,36 +701,6 @@ pub fn duration(seconds: i64) -> String {
     format!("{} h {:02} min", minutes / 60, minutes % 60)
 }
 
-/// The report as CSV (UTF-8 with BOM, comma separated, quoted as needed; Excel and LibreOffice read it).
-pub fn report_csv(rows: &[SessionRow]) -> String {
-    fn cell(text: &str) -> String {
-        // A leading = + - @ would be read as a formula by spreadsheets: quote it with a tab-free prefix.
-        let text = if text.starts_with(['=', '+', '-', '@']) { format!("'{text}") } else { text.to_owned() };
-        if text.contains([',', '"', '\n', '\r']) { format!("\"{}\"", text.replace('"', "\"\"")) } else { text }
-    }
-    let header = [t("Technician"), t("E-mail"), t("Device"), t("Remote ID"), t("Start"), t("End"), t("Duration (seconds)"), t("Type"), t("Joined as colleague"), t("Note"), t("Session ID")];
-    let mut out = String::from("\u{feff}");
-    out.push_str(&header.iter().map(|title| cell(title)).collect::<Vec<_>>().join(","));
-    out.push_str("\r\n");
-    for row in rows {
-        let line = [
-            row.technician_name.clone().unwrap_or_default(),
-            row.technician_email.clone().unwrap_or_default(),
-            row.device_name.clone(),
-            row.connection_id.to_string(),
-            row.started_at.clone(),
-            row.ended_at.clone().unwrap_or_default(),
-            row.duration_seconds.to_string(),
-            if row.kind == "unattended" { t("Unattended") } else { t("Attended") },
-            if row.colleague { t("Yes") } else { t("No") },
-            row.note.clone().unwrap_or_default(),
-            row.session_id.clone(),
-        ];
-        out.push_str(&line.iter().map(|value| cell(value)).collect::<Vec<_>>().join(","));
-        out.push_str("\r\n");
-    }
-    out
-}
 
 /// A typed report day (YYYY-MM-DD) as the start of that day, or None when empty/invalid.
 pub fn report_day(text: &str) -> Option<String> {
@@ -933,18 +903,11 @@ mod tests {
     }
 
     #[test]
-    fn report_csv_and_durations() {
+    fn durations_and_report_days() {
         crate::i18n::set_choice("en");
         assert_eq!(duration(45), "45 s");
         assert_eq!(duration(720), "12 min");
         assert_eq!(duration(3900), "1 h 05 min");
-        let row = SessionRow { technician_name: Some("Anna, K.".into()), device_name: "=cmd".into(), connection_id: 123_456_789, kind: "unattended".into(), note: Some("said \"hi\"".into()), ..Default::default() };
-        let csv = report_csv(&[row]);
-        assert!(csv.starts_with('\u{feff}'));
-        assert!(csv.contains("\"Anna, K.\""));
-        assert!(csv.contains("'=cmd"));
-        assert!(csv.contains("\"said \"\"hi\"\"\""));
-        assert!(csv.contains("Unattended"));
         assert_eq!(report_day("2026-11-01"), Some("2026-11-01".into()));
         assert_eq!(report_day("01.11.2026"), None);
     }
