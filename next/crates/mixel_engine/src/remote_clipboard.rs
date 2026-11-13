@@ -13,7 +13,6 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::mpsc;
-use zeroize::Zeroizing;
 
 pub struct ClipboardPipe {
     pub commands: mpsc::Receiver<ClipboardCommand>,
@@ -26,6 +25,26 @@ pub struct ClipboardPipe {
     /// Controller: a print job the host is sending, and the complete ones not yet shown.
     print_in: Option<Receiver>,
     pub printed: Vec<Vec<u8>>,
+    /// Host: the transfer being received (its number), and one that expired unfinished: its
+    /// remaining parts are dropped and its commit is answered "unavailable".
+    receiving_id: u64,
+    expired_id: Option<u64>,
+    /// Controller: requests up to this number were given up; their late answers are dropped.
+    abandoned: u64,
+}
+/// Controller: a clipboard request waiting for the host's answer.
+pub struct Request {
+    id: u64,
+    push: bool,
+    rich: bool,
+    receiver: Option<Receiver>,
+}
+/// The request number a clipboard message belongs to.
+fn message_id(message: &Message<'_>) -> u64 {
+    match message {
+        Message::Get(id) | Message::GetRich(id) | Message::Commit(id) | Message::Ack(id) | Message::Unavailable(id) => *id,
+        Message::Begin { id, .. } | Message::Chunk { id, .. } => *id,
+    }
 }
 impl ClipboardPipe {
     pub fn new(commands: mpsc::Receiver<ClipboardCommand>, allowed: bool) -> Self {
@@ -38,8 +57,13 @@ impl ClipboardPipe {
             rich: false,
             print_in: None,
             printed: Vec::new(),
+            receiving_id: 0,
+            expired_id: None,
+            abandoned: 0,
         }
     }
+    /// Host: a transfer from the technician that did not finish in time is dropped (the session
+    /// stays); the technician hears "unavailable" when its commit arrives.
     pub fn check_deadline(&mut self) -> Result<(), String> {
         if self
             .receiver
@@ -47,7 +71,7 @@ impl ClipboardPipe {
             .is_some_and(|value| value.expired(Instant::now()))
         {
             self.receiver = None;
-            return Err("The clipboard transaction expired".into());
+            self.expired_id = Some(self.receiving_id);
         }
         Ok(())
     }
@@ -85,6 +109,8 @@ impl ClipboardPipe {
             }
             Message::Begin { id, .. } => {
                 self.start_request(id)?;
+                self.receiving_id = id;
+                self.expired_id = None;
                 self.receiver = Some(
                     if self.rich {
                         Receiver::begin_rich(&message, Instant::now())
@@ -94,6 +120,11 @@ impl ClipboardPipe {
                     .map_err(|error| error.to_string())?,
                 );
                 Ok(())
+            }
+            Message::Chunk { id, .. } if self.receiver.is_none() && self.expired_id == Some(id) => Ok(()),
+            Message::Commit(id) if self.receiver.is_none() && self.expired_id == Some(id) => {
+                self.expired_id = None;
+                send(crypto, channel, Message::Unavailable(id)).await
             }
             Message::Chunk { .. } => self
                 .receiver
@@ -122,8 +153,16 @@ impl ClipboardPipe {
             _ => Err("Unexpected remote clipboard message".into()),
         }
     }
-    /// Controller: one record of a print job the host sends on its own.
-    pub fn accept_print(&mut self, bytes: &[u8]) -> Result<(), String> {
+    /// Controller: one record of a print job the host sends on its own. A job that cannot be
+    /// taken (damaged, too slow, too many waiting) is dropped with its remaining parts; the
+    /// session goes on.
+    pub fn accept_print(&mut self, bytes: &[u8]) {
+        if let Err(error) = self.take_print(bytes) {
+            eprintln!("print job dropped: {error}");
+            self.print_in = None;
+        }
+    }
+    fn take_print(&mut self, bytes: &[u8]) -> Result<(), String> {
         let message = Message::decode(bytes).map_err(|error| error.to_string())?;
         match message {
             Message::Begin { .. } => {
@@ -131,6 +170,8 @@ impl ClipboardPipe {
                     Receiver::begin_rich(&message, Instant::now()).map_err(|error| error.to_string())?,
                 );
             }
+            // The rest of a job that was dropped.
+            Message::Chunk { .. } | Message::Commit(_) if self.print_in.is_none() => {}
             Message::Chunk { .. } => self
                 .print_in
                 .as_mut()
@@ -163,14 +204,15 @@ impl ClipboardPipe {
         self.last_remote = id;
         Ok(())
     }
-    pub async fn request(
+    /// Controller: sends a clipboard request (the whole payload for a push). The outer error is
+    /// a broken transport; the inner one fails only this request (nothing was sent).
+    pub async fn begin(
         &mut self,
         config: &Config,
         crypto: &mut ControlChannel,
         channel: &Arc<dyn NativeDataChannel>,
         push: bool,
-        last_video_idle: &mut Instant,
-    ) -> Result<Result<(), String>, String> {
+    ) -> Result<Result<Request, String>, String> {
         if config.host || !self.allowed || config.stopped() {
             return Ok(Err("The host has not granted clipboard access".into()));
         }
@@ -194,63 +236,71 @@ impl ClipboardPipe {
         } else {
             send(crypto, channel, Message::Get(id)).await?;
         }
-        let rich = self.rich;
-        let mut receiver: Option<Receiver> = None;
-        loop {
-            if config.stopped() {
-                return Err("The clipboard transfer stopped".into());
+        Ok(Ok(Request { id, push, rich: self.rich, receiver: None }))
+    }
+    /// Tests: a request numbered `id` as if it had been sent.
+    #[cfg(test)]
+    pub fn test_request(&mut self, id: u64, push: bool) -> Request {
+        self.next = id + 1;
+        Request { id, push, rich: self.rich, receiver: None }
+    }
+    /// Controller: the host did not answer `request` in time; its answer may still come.
+    pub fn give_up(&mut self, request: &Request) {
+        self.abandoned = self.abandoned.max(request.id);
+    }
+    /// Controller: a clipboard message answering a request that was given up.
+    pub fn late_answer(&self, plain: &[u8]) -> bool {
+        Message::decode(plain).is_ok_and(|message| message_id(&message) <= self.abandoned)
+    }
+}
+impl Request {
+    /// Controller: one clipboard message from the host for this request. `Some` when the request
+    /// is complete (with its outcome), `None` while more parts are to come. An error is a host
+    /// breaking the protocol.
+    pub fn accept(&mut self, plain: &[u8], stopped: bool) -> Result<Option<Result<(), String>>, String> {
+        let (id, push, rich) = (self.id, self.push, self.rich);
+        let message = Message::decode(plain).map_err(|error| error.to_string())?;
+        match message {
+            Message::Ack(reply) if push && reply == id => Ok(Some(Ok(()))),
+            Message::Unavailable(reply) if reply == id => Ok(Some(Err(if rich {
+                "The remote clipboard is empty, or holds folders or more than 32 MB"
+            } else {
+                "The remote clipboard is unavailable or exceeds the plain-text limit"
             }
-            let record = super::remote_control::received_record(channel).await?;
-            let plain = Zeroizing::new(crypto.open(&record).map_err(|error| error.to_string())?);
-            if plain.as_slice() == b"mixel-video-idle-v1" {
-                *last_video_idle = Instant::now();
-                continue;
-            }
-            if let Some(rest) = plain.strip_prefix(crate::host_print::RECORD) {
-                self.accept_print(rest)?;
-                continue;
-            }
-            let message = Message::decode(&plain).map_err(|error| error.to_string())?;
-            match message {
-                Message::Ack(reply) if push && reply == id => return Ok(Ok(())),
-                Message::Unavailable(reply) if reply == id => {
-                    return Ok(Err(if rich {
-                        "The remote clipboard is empty, or holds folders or more than 32 MB"
+            .into()))),
+            Message::Begin { id: reply, .. } if !push && reply == id && self.receiver.is_none() => {
+                self.receiver = Some(
+                    if rich {
+                        Receiver::begin_rich(&message, Instant::now())
                     } else {
-                        "The remote clipboard is unavailable or exceeds the plain-text limit"
+                        Receiver::begin(&message, Instant::now())
                     }
-                    .into()));
-                }
-                Message::Begin { id: reply, .. } if !push && reply == id && receiver.is_none() => {
-                    receiver = Some(
-                        if rich {
-                            Receiver::begin_rich(&message, Instant::now())
-                        } else {
-                            Receiver::begin(&message, Instant::now())
-                        }
-                        .map_err(|error| error.to_string())?,
-                    )
-                }
-                Message::Chunk { .. } if !push => receiver
+                    .map_err(|error| error.to_string())?,
+                );
+                Ok(None)
+            }
+            Message::Chunk { id: reply, .. } if !push && reply == id => {
+                self.receiver
                     .as_mut()
                     .ok_or("Clipboard response has no header")?
                     .push(&message, Instant::now())
-                    .map_err(|error| error.to_string())?,
-                Message::Commit(reply) if !push && reply == id => {
-                    let receiver = receiver.take().ok_or("Clipboard response has no transaction")?;
-                    let content = if rich {
-                        receiver.commit_content(id, Instant::now())
-                    } else {
-                        receiver.commit(id, Instant::now()).map(Content::Text)
-                    }
                     .map_err(|error| error.to_string())?;
-                    if config.stopped() {
-                        return Err("The session stopped before clipboard replacement".into());
-                    }
-                    return Ok(write_content(content));
-                }
-                _ => return Err("Invalid clipboard response".into()),
+                Ok(None)
             }
+            Message::Commit(reply) if !push && reply == id => {
+                let receiver = self.receiver.take().ok_or("Clipboard response has no transaction")?;
+                let content = if rich {
+                    receiver.commit_content(id, Instant::now())
+                } else {
+                    receiver.commit(id, Instant::now()).map(Content::Text)
+                }
+                .map_err(|error| error.to_string())?;
+                if stopped {
+                    return Err("The session stopped before clipboard replacement".into());
+                }
+                Ok(Some(write_content(content)))
+            }
+            _ => Err("Invalid clipboard response".into()),
         }
     }
 }

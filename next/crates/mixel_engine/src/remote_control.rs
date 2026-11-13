@@ -23,6 +23,53 @@ const PERMISSIONS_V4: &[u8] = b"mixel-permissions-v4";
 const DISPLAY_SELECT: &[u8] = b"mixel-display-select-v1";
 /// Controller to host: run a one-click action the host offered (name as text).
 const HOST_ACTION: &[u8] = b"mixel-action-v1:";
+/// Host to controller: one input record was applied, or this host cannot apply that kind of input.
+/// 0.1.22 and 2.0 hosts send exactly one of these per input record, in order, without a number.
+const INPUT_POSTED: &[u8] = b"mixel-input-posted-v1";
+const INPUT_UNSUPPORTED: &[u8] = b"mixel-input-unsupported-v1";
+const VIDEO_IDLE: &[u8] = b"mixel-video-idle-v1";
+/// Controller: how long a caller waits for the host to acknowledge an input. After that it hears
+/// "not confirmed"; the record is still on its way (the channel is reliable and ordered) and its
+/// late acknowledgment is matched to it and dropped. A late answer never ends the session.
+pub const INPUT_ACK_WAIT: Duration = Duration::from_secs(2);
+/// Controller: inputs sent and not yet acknowledged, at most. Further inputs wait in the queue.
+const INPUTS_IN_FLIGHT: usize = 64;
+
+type InputReply = tokio::sync::oneshot::Sender<Result<bool, String>>;
+
+/// Controller: the acknowledgments the host still owes, oldest first. Because the host answers
+/// every input record exactly once and in order, the next acknowledgment always belongs to the
+/// oldest entry here, also when its caller has stopped waiting (the entry then has no reply).
+#[derive(Default)]
+struct PendingAcks(std::collections::VecDeque<(Instant, Option<InputReply>)>);
+impl PendingAcks {
+    fn sent(&mut self, deadline: Instant, reply: InputReply) {
+        self.0.push_back((deadline, Some(reply)));
+    }
+    fn full(&self) -> bool {
+        self.0.len() >= INPUTS_IN_FLIGHT
+    }
+    /// Callers whose input is overdue hear "not confirmed"; the input keeps its place.
+    fn expire(&mut self, now: Instant) {
+        for (deadline, reply) in &mut self.0 {
+            if now >= *deadline
+                && let Some(reply) = reply.take()
+            {
+                let _ = reply.send(Err(NOT_CONFIRMED.into()));
+            }
+        }
+    }
+    /// The host's next acknowledgment. One nobody is owed is a protocol violation.
+    fn acknowledged(&mut self, applied: bool) -> Result<(), String> {
+        let (_, reply) = self.0.pop_front().ok_or("Unexpected input acknowledgment")?;
+        if let Some(reply) = reply {
+            let _ = reply.send(Ok(applied));
+        }
+        Ok(())
+    }
+}
+/// What a caller hears when the host has not acknowledged its input in time.
+pub const NOT_CONFIRMED: &str = "The remote computer did not confirm this input in time";
 
 fn read_permissions(record: &[u8]) -> Result<[bool; 4], String> {
     let (flags, count) = if let Some(flags) = record.strip_prefix(PERMISSIONS_V3) {
@@ -116,6 +163,8 @@ pub struct ControlPipe {
     drawings_in: Option<crate::annotation::Owner>,
     /// Controller: drawing messages to send (only to hosts that announced drawing).
     drawings_out: Option<mpsc::Receiver<core_protocol::annotation::Message>>,
+    /// Controller: inputs sent whose acknowledgment has not arrived yet.
+    acks: PendingAcks,
 }
 impl ControlPipe {
     pub async fn create(
@@ -287,11 +336,48 @@ impl ControlPipe {
             actions: if allowed { actions } else { Vec::new() },
             drawings_in,
             drawings_out,
+            acks: PendingAcks::default(),
         })
     }
     /// Host: this session forwards print jobs (the technician's app understands them).
     pub fn forwards_print_jobs(&self) -> bool {
         self.host && self.print_peer
+    }
+    /// Tests: a controller's pipe with full control on `crypto`, inputs from `commands`.
+    #[cfg(test)]
+    fn test_controller(crypto: ControlChannel, commands: mpsc::Receiver<InputCommand>, clipboard: mpsc::Receiver<crate::remote_session::ClipboardCommand>) -> Self {
+        Self {
+            crypto,
+            bulk: None,
+            chat: None,
+            router: None,
+            commands,
+            host: false,
+            allowed: true,
+            recording_allowed: false,
+            report_unsupported_input: true,
+            last_idle_sent: Instant::now(),
+            last_video_idle: Instant::now(),
+            last_keyframe_request: None,
+            force_keyframe: false,
+            clipboard: crate::remote_clipboard::ClipboardPipe::new(clipboard, true),
+            displays: Vec::new(),
+            pending_display: None,
+            shown_display: 0,
+            print_peer: false,
+            sound_peer: true,
+            sound_on: true,
+            _guard: None,
+            sound_in: std::collections::VecDeque::new(),
+            print_out: None,
+            print_sequence: 0,
+            display_count: 1,
+            current_display: 0,
+            actions: Vec::new(),
+            drawings_in: None,
+            drawings_out: None,
+            acks: PendingAcks::default(),
+        }
     }
     /// Host: sends a finished print job to the technician, in small parts between frames.
     pub fn queue_print(&mut self, pdf: Vec<u8>) {
@@ -406,36 +492,171 @@ impl ControlPipe {
         self.last_idle_sent = Instant::now();
         Ok(())
     }
-    async fn send_action(&mut self, name: &str, channel: &Arc<dyn NativeDataChannel>) -> Result<(), String> {
+    /// Controller: asks the host to run an action it offered. The outer error is a broken
+    /// transport (ends the session); the inner one only fails this request.
+    async fn send_action(&mut self, name: &str, channel: &Arc<dyn NativeDataChannel>) -> Result<Result<(), String>, String> {
         let offered = name.split(':').next().unwrap_or(name);
         if self.host || !self.allowed || name.len() > 40 || !self.actions.iter().any(|action| action == offered) {
-            return Err("This action is not available on the remote computer".into());
+            return Ok(Err("This action is not available on the remote computer".into()));
         }
         let mut plain = HOST_ACTION.to_vec();
         plain.extend_from_slice(name.as_bytes());
-        let record = self.crypto.seal(&plain).map_err(|error| error.to_string())?;
-        tokio::time::timeout(Duration::from_secs(2), channel.send(record.as_slice().into()))
-            .await
-            .map_err(|_| "The action request timed out")?
-            .map_err(|_| "The action request failed".into())
+        self.send_sealed(&plain, channel, "The action request").await.map(Ok)
     }
+    /// Controller: shows another of the host's displays (errors as for `send_action`).
     async fn select_display(
         &mut self,
         index: u16,
         channel: &Arc<dyn NativeDataChannel>,
-    ) -> Result<(), String> {
+    ) -> Result<Result<(), String>, String> {
         if self.host || !self.allowed || index >= self.display_count || index > u16::from(u8::MAX) {
-            return Err("This display is not available".into());
+            return Ok(Err("This display is not available".into()));
         }
         let mut plain = DISPLAY_SELECT.to_vec();
         plain.push(index as u8);
-        let record = self.crypto.seal(&plain).map_err(|error| error.to_string())?;
-        tokio::time::timeout(Duration::from_secs(2), channel.send(record.as_slice().into()))
-            .await
-            .map_err(|_| "Display selection timed out")?
-            .map_err(|_| "Display selection failed")?;
+        self.send_sealed(&plain, channel, "Display selection").await?;
         self.current_display = index;
+        Ok(Ok(()))
+    }
+    /// Seals and sends one record. Sending never waits for the other side (the data channel has
+    /// no send limit), so a failure or a stuck send means the transport is gone; and a record that
+    /// was sealed but not sent cannot be skipped (records are numbered), so it ends the session.
+    async fn send_sealed(&mut self, plain: &[u8], channel: &Arc<dyn NativeDataChannel>, what: &str) -> Result<(), String> {
+        let record = self.crypto.seal(plain).map_err(|error| error.to_string())?;
+        match tokio::time::timeout(Duration::from_secs(2), channel.send(record.as_slice().into())).await {
+            Ok(Ok(_)) => Ok(()),
+            Ok(Err(_)) => Err(format!("{what} failed: the connection is closed")),
+            Err(_) => Err(format!("{what} timed out: the connection is stuck")),
+        }
+    }
+    /// Controller: sends queued inputs without waiting for their acknowledgments (they are
+    /// matched in order as they arrive). Only a broken transport is an error.
+    async fn send_inputs(&mut self, channel: &Arc<dyn NativeDataChannel>) -> Result<(), String> {
+        for _ in 0..16 {
+            if self.acks.full() {
+                return Ok(());
+            }
+            let Ok(command) = self.commands.try_recv() else {
+                return Ok(());
+            };
+            let now = Instant::now();
+            if now >= command.deadline {
+                let _ = command.reply.send(Err("The input command expired".into()));
+                continue;
+            }
+            match &command.event {
+                crate::remote_session::InputEvent::Action { name } => {
+                    let name = name.clone();
+                    let result = self.send_action(&name, channel).await?;
+                    let _ = command.reply.send(result.map(|()| true));
+                }
+                crate::remote_session::InputEvent::SelectDisplay { index } => {
+                    let result = self.select_display(*index, channel).await?;
+                    let _ = command.reply.send(result.map(|()| true));
+                }
+                _ if !self.allowed => {
+                    let _ = command.reply.send(Err("Keyboard control is not permitted".into()));
+                }
+                event => {
+                    let mut input = event.borrowed();
+                    if let core_protocol::input::Input::Pointer { display, .. } = &mut input {
+                        *display = self.current_display;
+                    }
+                    let plain = match core_protocol::input::encode(&input) {
+                        Ok(plain) => Zeroizing::new(plain),
+                        Err(error) => {
+                            let _ = command.reply.send(Err(error.to_string()));
+                            continue;
+                        }
+                    };
+                    self.send_sealed(&plain, channel, "Input transmission").await?;
+                    // The caller gives up 3 s after queueing; it hears the outcome before that.
+                    let deadline = (now + INPUT_ACK_WAIT).min(command.deadline + Duration::from_millis(500));
+                    self.acks.sent(deadline, command.reply);
+                }
+            }
+        }
         Ok(())
+    }
+    /// Controller: one authenticated record from the host. Returns `true` for a clipboard answer
+    /// the clipboard request in progress must handle; everything else is dealt with here: video
+    /// idle, sound, print jobs, input acknowledgments (early or late) and late clipboard answers.
+    fn take_host_record(&mut self, plain: &[u8]) -> Result<bool, String> {
+        if let Some(rest) = plain.strip_prefix(crate::host_print::RECORD) {
+            self.clipboard.accept_print(rest);
+        } else if let Some(frame) = plain.strip_prefix(core_protocol::sound::RECORD) {
+            if self.sound_in.len() < 100 {
+                self.sound_in.push_back(frame.to_vec());
+            }
+        } else if plain == VIDEO_IDLE {
+            self.last_video_idle = Instant::now();
+        } else if plain == INPUT_POSTED {
+            self.acks.acknowledged(true)?;
+        } else if plain == INPUT_UNSUPPORTED {
+            self.acks.acknowledged(false)?;
+        } else if plain.starts_with(core_protocol::clipboard::PREFIX) {
+            return Ok(!self.clipboard.late_answer(plain));
+        } else {
+            return Err("Unexpected authenticated host control message".into());
+        }
+        Ok(false)
+    }
+    /// Controller: takes the records the host sent (print jobs and sound arrive as many small
+    /// records: up to 64 at a time). Waits at most `wait` for the first one.
+    async fn receive_host_records(&mut self, channel: &Arc<dyn NativeDataChannel>, wait: Duration) -> Result<(), String> {
+        let mut record = match tokio::time::timeout(wait, received_record(channel)).await {
+            Ok(value) => value?,
+            Err(_) => return Ok(()),
+        };
+        for _ in 0..64 {
+            let plain = Zeroizing::new(self.crypto.open(&record).map_err(|error| error.to_string())?);
+            if self.take_host_record(&plain)? {
+                return Err("Unexpected clipboard answer from the host".into());
+            }
+            record = match tokio::time::timeout(Duration::from_micros(200), received_record(channel)).await {
+                Ok(value) => value?,
+                Err(_) => break,
+            };
+        }
+        self.acks.expire(Instant::now());
+        Ok(())
+    }
+    /// Controller: one clipboard request. The outer error is a broken transport or a host that
+    /// breaks the protocol; a host that answers too late fails only this request (its late
+    /// answer is recognised by number and dropped).
+    async fn clipboard_request(
+        &mut self,
+        config: &Config,
+        channel: &Arc<dyn NativeDataChannel>,
+        push: bool,
+        wait: Duration,
+    ) -> Result<Result<(), String>, String> {
+        let mut request = match self.clipboard.begin(config, &mut self.crypto, channel, push).await? {
+            Ok(request) => request,
+            Err(error) => return Ok(Err(error)),
+        };
+        let deadline = Instant::now() + wait;
+        loop {
+            if config.stopped() {
+                return Err("The clipboard transfer stopped".into());
+            }
+            self.acks.expire(Instant::now());
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                self.clipboard.give_up(&request);
+                return Ok(Err("The remote computer did not answer the clipboard request in time".into()));
+            }
+            let record = match tokio::time::timeout(left.min(Duration::from_millis(250)), received_record(channel)).await {
+                Ok(value) => value?,
+                Err(_) => continue,
+            };
+            let plain = Zeroizing::new(self.crypto.open(&record).map_err(|error| error.to_string())?);
+            if self.take_host_record(&plain)?
+                && let Some(result) = request.accept(&plain, config.stopped())?
+            {
+                return Ok(result);
+            }
+        }
     }
     /// Controller: sends the queued drawing messages (no acknowledgment).
     async fn send_drawings(&mut self, channel: &Arc<dyn NativeDataChannel>) -> Result<(), String> {
@@ -494,138 +715,36 @@ impl ControlPipe {
         } else {
             self.send_drawings(channel).await?;
         }
-        if !self.host
-            && let Ok(command) = self.commands.try_recv()
-        {
-            if Instant::now() >= command.deadline {
-                let _ = command.reply.send(Err("The input command expired".into()));
-                return Ok(());
-            }
-            if let crate::remote_session::InputEvent::Action { name } = &command.event {
-                let result = self.send_action(name, channel).await;
-                let _ = command.reply.send(result.clone().map(|()| true));
-                return result;
-            }
-            if let crate::remote_session::InputEvent::SelectDisplay { index } = command.event {
-                let result = self.select_display(index, channel).await;
-                let _ = command.reply.send(result.clone().map(|()| true));
-                return result;
-            }
-            let result = tokio::time::timeout(Duration::from_secs(2), async {
-                if !self.allowed {
-                    return Err("Keyboard control is not permitted".to_owned());
-                }
-                let mut input = command.event.borrowed();
-                if let core_protocol::input::Input::Pointer { display, .. } = &mut input {
-                    *display = self.current_display;
-                }
-                let plain = Zeroizing::new(
-                    core_protocol::input::encode(&input).map_err(|error| error.to_string())?,
-                );
-                let record = self
-                    .crypto
-                    .seal(&plain)
-                    .map_err(|error| error.to_string())?;
-                channel
-                    .send(record.as_slice().into())
-                    .await
-                    .map_err(|_| "Input transmission failed")?;
-                loop {
-                    let record = received_record(channel).await?;
-                    let reply = Zeroizing::new(
-                        self.crypto
-                            .open(&record)
-                            .map_err(|error| error.to_string())?,
-                    );
-                    if reply.as_slice() == b"mixel-video-idle-v1" {
-                        self.last_video_idle = Instant::now();
-                        continue;
-                    }
-                    return match reply.as_slice() {
-                        b"mixel-input-posted-v1" => Ok(true),
-                        b"mixel-input-unsupported-v1" => Ok(false),
-                        _ => Err("Invalid input acknowledgment".into()),
-                    };
-                }
-            })
-            .await
-            .map_err(|_| "Input transmission timed out".to_owned())
-            .and_then(|value| value);
-            let _ = command.reply.send(result.clone());
-            return result.map(|_| ());
-        }
-        if !self.host
-            && let Ok(command) = self.clipboard.commands.try_recv()
-        {
-            if Instant::now() >= command.deadline {
-                let _ = command
-                    .reply
-                    .send(Err("The clipboard request expired".into()));
-                return Ok(());
-            }
-            let remaining = command
-                .deadline
-                .saturating_duration_since(Instant::now())
-                .min(if self.clipboard.rich {
-                    core_protocol::clipboard::RICH_LIFETIME
-                } else {
-                    core_protocol::clipboard::LIFETIME
-                });
-            let result = tokio::time::timeout(
-                remaining,
-                self.clipboard.request(
-                    config,
-                    &mut self.crypto,
-                    channel,
-                    command.push,
-                    &mut self.last_video_idle,
-                ),
-            )
-            .await
-            .map_err(|_| "Clipboard transfer timed out".to_owned())
-            .and_then(|value| value);
-            match result {
-                Ok(result) => {
-                    let _ = command.reply.send(result);
+        if !self.host {
+            self.acks.expire(Instant::now());
+            self.send_inputs(channel).await?;
+            if let Ok(command) = self.clipboard.commands.try_recv() {
+                if Instant::now() >= command.deadline {
+                    let _ = command.reply.send(Err("The clipboard request expired".into()));
                     return Ok(());
                 }
-                Err(error) => {
-                    let _ = command.reply.send(Err(error.clone()));
-                    return Err(error);
-                }
+                let wait = command
+                    .deadline
+                    .saturating_duration_since(Instant::now())
+                    .min(if self.clipboard.rich {
+                        core_protocol::clipboard::RICH_LIFETIME
+                    } else {
+                        core_protocol::clipboard::LIFETIME
+                    });
+                let result = self.clipboard_request(config, channel, command.push, wait).await;
+                let _ = command.reply.send(match &result {
+                    Ok(result) => result.clone(),
+                    Err(error) => Err(error.clone()),
+                });
+                return result.map(|_| ());
             }
+            return self.receive_host_records(channel, Duration::from_millis(1)).await;
         }
         let mut record =
             match tokio::time::timeout(Duration::from_millis(1), received_record(channel)).await {
                 Ok(value) => value?,
                 Err(_) => return Ok(()),
             };
-        if !self.host {
-            // Print jobs and sound arrive as many small records: take what is there.
-            for _ in 0..64 {
-                let plain = Zeroizing::new(
-                    self.crypto
-                        .open(&record)
-                        .map_err(|error| error.to_string())?,
-                );
-                if let Some(rest) = plain.strip_prefix(crate::host_print::RECORD) {
-                    self.clipboard.accept_print(rest)?;
-                } else if let Some(frame) = plain.strip_prefix(core_protocol::sound::RECORD) {
-                    if self.sound_in.len() < 100 {
-                        self.sound_in.push_back(frame.to_vec());
-                    }
-                } else if plain.as_slice() == b"mixel-video-idle-v1" {
-                    self.last_video_idle = Instant::now();
-                } else {
-                    return Err("Unexpected authenticated host control message".into());
-                }
-                record = match tokio::time::timeout(Duration::from_micros(200), received_record(channel)).await {
-                    Ok(value) => value?,
-                    Err(_) => break,
-                };
-            }
-            return Ok(());
-        }
         if config.stopped() {
             return Err("The session stopped before control processing".into());
         }
@@ -790,5 +909,232 @@ mod permission_tests {
         ] {
             assert!(read_permissions(bad).is_err());
         }
+    }
+}
+
+#[cfg(test)]
+mod input_ack_tests {
+    //! A real WebRTC control channel on this computer: the controller's pipe on one end, a
+    //! scripted host (its own half of the encrypted channel) on the other.
+    use super::*;
+    use crate::remote_session::{ClipboardCommand, InputEvent};
+    use core_protocol::{
+        crypto::{Handshake, Role},
+        transport::{NativeTransport, local_fingerprint},
+    };
+    use ed25519_dalek::SigningKey;
+    use tokio::sync::oneshot;
+
+    struct Lab {
+        pipe: ControlPipe,
+        inputs: mpsc::Sender<InputCommand>,
+        _clipboard: mpsc::Sender<ClipboardCommand>,
+        controller: Arc<dyn NativeDataChannel>,
+        host: Arc<dyn NativeDataChannel>,
+        host_crypto: ControlChannel,
+        _transports: (NativeTransport, NativeTransport),
+    }
+
+    async fn lab() -> Lab {
+        let mut controller = NativeTransport::new("127.0.0.1:0".into(), vec![]).await.unwrap();
+        let mut host = NativeTransport::new("127.0.0.1:0".into(), vec![]).await.unwrap();
+        let controller_channel = controller.peer.create_data_channel("mixel-control-v1", None).await.unwrap();
+        let offer = controller.local_sdp(controller.peer.create_offer(None).await.unwrap()).await.unwrap();
+        let controller_fp = local_fingerprint(&offer.sdp).unwrap();
+        host.peer.set_remote_description(offer).await.unwrap();
+        let answer = host.local_sdp(host.peer.create_answer(None).await.unwrap()).await.unwrap();
+        let host_fp = local_fingerprint(&answer.sdp).unwrap();
+        controller.peer.set_remote_description(answer).await.unwrap();
+        let host_channel = tokio::time::timeout(Duration::from_secs(8), host.incoming_channels.recv()).await.unwrap().unwrap();
+        for channel in [&host_channel, &controller_channel] {
+            assert!(matches!(
+                tokio::time::timeout(Duration::from_secs(8), channel.poll()).await,
+                Ok(Some(NativeDataChannelEvent::OnOpen))
+            ));
+        }
+        let controller_key = SigningKey::from_bytes(&[11; 32]);
+        let host_key = SigningKey::from_bytes(&[12; 32]);
+        let context = Context { session_id: [13; 32], controller: controller_key.verifying_key(), host: host_key.verifying_key() };
+        let a = Handshake::new(context.clone(), Role::Controller, &controller_key, controller_fp).unwrap();
+        let b = Handshake::new(context, Role::Host, &host_key, host_fp).unwrap();
+        let (ah, bh) = (a.hello(), b.hello());
+        let controller_crypto = a.finish(&bh, controller.observed_fingerprint().await.unwrap()).unwrap();
+        let host_crypto = b.finish(&ah, host.observed_fingerprint().await.unwrap()).unwrap();
+        let (inputs, input_rx) = mpsc::channel(32);
+        let (clipboard, clipboard_rx) = mpsc::channel(1);
+        Lab {
+            pipe: ControlPipe::test_controller(controller_crypto, input_rx, clipboard_rx),
+            inputs,
+            _clipboard: clipboard,
+            controller: controller_channel,
+            host: host_channel,
+            host_crypto,
+            _transports: (controller, host),
+        }
+    }
+
+    impl Lab {
+        /// Queues an input as the app does (the caller gives up after 2 s in the queue).
+        fn input(&self, usage: u16) -> oneshot::Receiver<Result<bool, String>> {
+            let (reply, wait) = oneshot::channel();
+            self.inputs
+                .try_send(InputCommand { event: InputEvent::Key { usage, down: false }, deadline: Instant::now() + Duration::from_secs(2), reply })
+                .unwrap();
+            wait
+        }
+        /// What the controller's media loop does between pictures (no clipboard request).
+        async fn step(&mut self) -> Result<(), String> {
+            self.pipe.acks.expire(Instant::now());
+            self.pipe.send_inputs(&self.controller).await?;
+            self.pipe.receive_host_records(&self.controller, Duration::from_millis(5)).await
+        }
+        /// Steps until `reply` is answered; every step must keep the session.
+        async fn until(&mut self, reply: &mut oneshot::Receiver<Result<bool, String>>, limit: Duration) -> Result<bool, String> {
+            let end = Instant::now() + limit;
+            loop {
+                self.step().await.expect("a slow or late acknowledgment must not end the session");
+                if let Ok(result) = reply.try_recv() {
+                    return result;
+                }
+                assert!(Instant::now() < end, "no answer for the input");
+            }
+        }
+        /// The scripted host: the next input record (decrypted and decoded).
+        async fn host_reads_input(&mut self) -> u16 {
+            let record = tokio::time::timeout(Duration::from_secs(5), received_record(&self.host)).await.unwrap().unwrap();
+            let plain = self.host_crypto.open(&record).unwrap();
+            match core_protocol::input::decode(&plain).unwrap() {
+                core_protocol::input::Input::Key { usage, .. } => usage,
+                other => panic!("unexpected input {other:?}"),
+            }
+        }
+        async fn host_sends(&mut self, plain: &[u8]) {
+            let record = self.host_crypto.seal(plain).unwrap();
+            self.host.send(record.as_slice().into()).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn a_slow_acknowledgment_fails_only_that_input_and_the_session_goes_on() {
+        let mut lab = lab().await;
+        // The host is still starting (as right after connecting) and answers after 2.6 s.
+        let mut first = lab.input(4);
+        lab.step().await.unwrap();
+        assert_eq!(lab.host_reads_input().await, 4);
+        let started = Instant::now();
+        assert_eq!(lab.until(&mut first, Duration::from_secs(4)).await, Err(NOT_CONFIRMED.into()));
+        assert!(started.elapsed() >= Duration::from_millis(1900));
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        lab.host_sends(INPUT_POSTED).await;
+        // The late answer is taken quietly; the next input is answered normally.
+        for _ in 0..20 {
+            lab.step().await.unwrap();
+        }
+        assert!(lab.pipe.acks.0.is_empty());
+        let mut second = lab.input(5);
+        lab.step().await.unwrap();
+        assert_eq!(lab.host_reads_input().await, 5);
+        lab.host_sends(VIDEO_IDLE).await;
+        lab.host_sends(INPUT_POSTED).await;
+        assert_eq!(lab.until(&mut second, Duration::from_secs(2)).await, Ok(true));
+    }
+
+    #[tokio::test]
+    async fn a_late_acknowledgment_is_never_taken_for_the_next_input() {
+        let mut lab = lab().await;
+        let mut first = lab.input(4);
+        lab.step().await.unwrap();
+        assert_eq!(lab.host_reads_input().await, 4);
+        assert_eq!(lab.until(&mut first, Duration::from_secs(4)).await, Err(NOT_CONFIRMED.into()));
+        // The second input is sent while the first one's answer is still owed.
+        let mut second = lab.input(5);
+        lab.step().await.unwrap();
+        assert_eq!(lab.host_reads_input().await, 5);
+        assert!(second.try_recv().is_err(), "nothing answered yet");
+        // Host: the first was applied (late), the second is a kind it cannot apply. Sound in between.
+        lab.host_sends(INPUT_POSTED).await;
+        lab.host_sends(b"mixel-sound-v1:frame").await;
+        lab.host_sends(INPUT_UNSUPPORTED).await;
+        assert_eq!(lab.until(&mut second, Duration::from_secs(2)).await, Ok(false));
+        assert_eq!(lab.pipe.take_sound().as_deref(), Some(b"frame".as_slice()));
+        assert!(lab.pipe.acks.0.is_empty());
+    }
+
+    #[tokio::test]
+    async fn inputs_are_sent_without_waiting_and_answered_in_order() {
+        let mut lab = lab().await;
+        let mut replies: Vec<_> = (0..5).map(|usage| lab.input(10 + usage)).collect();
+        lab.step().await.unwrap();
+        for usage in 0..5 {
+            assert_eq!(lab.host_reads_input().await, 10 + usage);
+        }
+        for applied in [true, false, true, true, false] {
+            lab.host_sends(if applied { INPUT_POSTED } else { INPUT_UNSUPPORTED }).await;
+        }
+        let mut answers = Vec::new();
+        for reply in &mut replies {
+            answers.push(lab.until(reply, Duration::from_secs(2)).await);
+        }
+        assert_eq!(answers, [Ok(true), Ok(false), Ok(true), Ok(true), Ok(false)]);
+    }
+
+    #[tokio::test]
+    async fn a_dead_transport_still_ends_the_session() {
+        let mut lab = lab().await;
+        let _waiting = lab.input(4);
+        lab.step().await.unwrap();
+        assert_eq!(lab.host_reads_input().await, 4);
+        lab.host.close().await.unwrap();
+        let end = Instant::now() + Duration::from_secs(10);
+        let error = loop {
+            match lab.step().await {
+                Err(error) => break error,
+                Ok(()) => assert!(Instant::now() < end, "a closed transport must end the session"),
+            }
+        };
+        assert_eq!(error, "Remote control transport closed");
+    }
+
+    #[tokio::test]
+    async fn an_acknowledgment_nobody_is_owed_and_unknown_records_are_still_refused() {
+        let mut lab = lab().await;
+        lab.host_sends(INPUT_POSTED).await;
+        let end = Instant::now() + Duration::from_secs(5);
+        let error = loop {
+            match lab.step().await {
+                Err(error) => break error,
+                Ok(()) => assert!(Instant::now() < end),
+            }
+        };
+        assert_eq!(error, "Unexpected input acknowledgment");
+    }
+
+    #[test]
+    fn late_clipboard_answers_are_dropped_by_number_and_current_ones_handed_on() {
+        use core_protocol::clipboard::Message;
+        let (_inputs, input_rx) = mpsc::channel(1);
+        let (_clipboard, clipboard_rx) = mpsc::channel(1);
+        let key = SigningKey::from_bytes(&[21; 32]);
+        let peer = SigningKey::from_bytes(&[22; 32]);
+        let context = Context { session_id: [23; 32], controller: key.verifying_key(), host: peer.verifying_key() };
+        let a = Handshake::new(context.clone(), Role::Controller, &key, [1; 32]).unwrap();
+        let b = Handshake::new(context, Role::Host, &peer, [2; 32]).unwrap();
+        let crypto = a.finish(&b.hello(), [2; 32]).unwrap();
+        let mut pipe = ControlPipe::test_controller(crypto, input_rx, clipboard_rx);
+        let mut request = pipe.clipboard.test_request(3, true);
+        pipe.clipboard.give_up(&request);
+        for (name, late) in [("ack 2", Message::Ack(2)), ("ack 3", Message::Ack(3)), ("unavailable 3", Message::Unavailable(3)), ("commit 1", Message::Commit(1))] {
+            assert_eq!(pipe.take_host_record(&late.encode().unwrap()), Ok(false), "{name} is late");
+        }
+        let current = Message::Ack(4).encode().unwrap();
+        assert_eq!(pipe.take_host_record(&current), Ok(true));
+        request = pipe.clipboard.test_request(4, true);
+        assert_eq!(request.accept(&current, false), Ok(Some(Ok(()))));
+        assert!(pipe.take_host_record(b"something else").is_err());
+        // A damaged print job is dropped, with its remaining parts, and the session goes on.
+        let mut print = crate::host_print::RECORD.to_vec();
+        print.extend_from_slice(&Message::Chunk { id: 9, offset: 0, bytes: b"x" }.encode().unwrap());
+        assert_eq!(pipe.take_host_record(&print), Ok(false));
+        assert!(pipe.take_print_job().is_none());
     }
 }

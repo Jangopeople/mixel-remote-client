@@ -825,12 +825,19 @@ async fn host_media(
     if config.stopped() {
         return Ok(());
     }
+    // The technician may already be typing (permissions went out before the file and chat
+    // channels were set up): answer that before the capture starts.
+    #[cfg(feature = "qa-session")]
+    let setup = Instant::now();
+    control.poll(config, channel).await?;
     let mut capture = session_platform::capture(
         &config.source,
         size,
         #[cfg(target_os = "linux")]
         config.portal.clone(),
     )?;
+    #[cfg(feature = "qa-session")]
+    let capture_ready = setup.elapsed();
     let mut shown = config.source.clone();
     // The technician's pointer is placed on the shared display.
     crate::session_guard::set_shared_source(&shown);
@@ -843,13 +850,10 @@ async fn host_media(
         let mut last = Instant::now();
         let mut recent: Option<Arc<native_os_capture::stream::CapturedFrame>> = None;
         // Remote printing: forward jobs printed on "Mixel Remote Printer" during this session.
-        let mut print_watch = if control.forwards_print_jobs()
-            && tokio::task::spawn_blocking(crate::host_print::installed).await.unwrap_or(false)
-        {
-            Some(crate::host_print::Watcher::start())
-        } else {
-            None
-        };
+        // Whether that printer exists is asked in the background (lpstat or the registry can take
+        // a while), so input is answered from the start.
+        let mut print_installed = control.forwards_print_jobs().then(|| tokio::task::spawn_blocking(crate::host_print::installed));
+        let mut print_watch: Option<crate::host_print::Watcher> = None;
         let mut print_checked = Instant::now();
         #[cfg(feature = "qa-session")]
         let mut qa_video = (0u32, Duration::ZERO, Duration::ZERO, Duration::ZERO, 0usize, Instant::now());
@@ -875,6 +879,12 @@ async fn host_media(
             }
             if !consent.can_share_local_screen() {
                 return Err("Screen-sharing authorization expired".into());
+            }
+            if print_installed.as_ref().is_some_and(tokio::task::JoinHandle::is_finished)
+                && let Some(check) = print_installed.take()
+                && check.await.unwrap_or(false)
+            {
+                print_watch = Some(crate::host_print::Watcher::start());
             }
             if let Some(watch) = &mut print_watch
                 && print_checked.elapsed() >= Duration::from_millis(700)
@@ -1008,6 +1018,13 @@ async fn host_media(
                 .map_err(|error| error.to_string())?;
             mirror.send(&encoded.annex_b, duration);
             sent += 1;
+            // Lab builds only: how long the host took to start (capture, first picture).
+            #[cfg(feature = "qa-session")]
+            if sent == 1
+                && let Some(path) = std::env::var_os("MIXEL_QA_SETUP_LOG")
+            {
+                let _ = std::fs::write(path, format!("capture ready after {} ms, first picture sent after {} ms", capture_ready.as_millis(), setup.elapsed().as_millis()));
+            }
             // Lab builds only: where the time of each picture goes (capture, encode, send).
             #[cfg(feature = "qa-session")]
             if let Some(path) = std::env::var_os("MIXEL_QA_VIDEO_LOG") {

@@ -1555,7 +1555,14 @@ impl RemoteSession {
             inner.status.session == Some(session) && inner.status.control && !inner.status.sharing
         };
         if release {
-            self.input(session, InputEvent::ReleaseAll).await?;
+            // Held keys are let go first. If the host has not confirmed that yet, the release is
+            // still on its way and arrives before the clipboard (same ordered channel), so only a
+            // closed connection stops the clipboard here.
+            if let Err(error) = self.input(session, InputEvent::ReleaseAll).await
+                && error != crate::remote_control::NOT_CONFIRMED
+            {
+                return Err(error);
+            }
         }
         let (reply, wait) = tokio::sync::oneshot::channel();
         {

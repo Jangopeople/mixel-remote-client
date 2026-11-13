@@ -22,6 +22,10 @@
 //! - `--live-colleague <session.json> <run> <dir>`: the second technician: adds this computer to the
 //!   company in `<dir>/../tenant.txt`, writes its Remote ID to `<dir>/colleague-id.txt`, joins when
 //!   invited (`joined.txt`), watches a few seconds, leaves (`left.txt`) and removes itself.
+//! - `--live-early <session.json> <run> <dir> [rounds]`: as `--live-host` (with `xclip`), `rounds`
+//!   sessions (default 5) in which a key release and a clipboard push go out the moment the session
+//!   is active, before any picture (the host is still starting); each session must stay up, show
+//!   pictures and take input afterwards, and is then ended.
 //! - `--check-providers`: each sign-in button (Mixel ID, Google, Microsoft, Apple) leads the browser to
 //!   that provider's own sign-in page; nothing is signed in (the attempt is cancelled).
 use crate::engine::{Engine, RealEngine};
@@ -524,6 +528,10 @@ pub fn run(args: &[String]) -> i32 {
             "--live-session" => technician(&mut check, suffix, &folder, false, false).await,
             "--live-host" => technician(&mut check, suffix, &folder, true, false).await,
             "--live-pair" => technician(&mut check, suffix, &folder, true, true).await,
+            "--live-early" => {
+                let rounds = args.get(4).and_then(|text| text.parse().ok()).unwrap_or(5);
+                early(&mut check, suffix, &folder, rounds).await;
+            }
             "--live-colleague" => colleague(&mut check, suffix, &folder).await,
             "--live-watch" => watch(&mut check, suffix, &folder).await,
             _ => checks(&mut check, suffix).await,
@@ -538,6 +546,102 @@ pub fn run(args: &[String]) -> i32 {
 fn unsafe_env(session: &str) {
     // SAFETY: called first thing in a single-threaded process (no other thread reads the environment).
     unsafe { std::env::set_var("MIXEL_QA_SESSION_FILE", session) };
+}
+
+/// `--live-early`: input and clipboard in the first moment of a session, several sessions.
+async fn early(check: &mut Check, suffix: &str, folder: &std::path::Path, rounds: u32) {
+    if !check.sign_in().await {
+        return;
+    }
+    let company = format!("QA Linux {suffix}");
+    let tenant = check.call("saas_signup", json!({ "company": company, "terms": true })).await.ok().and_then(|value| value["tenant_id"].as_str().map(str::to_owned)).unwrap_or_default();
+    check.check("QA company", !tenant.is_empty(), "");
+    if tenant.is_empty() {
+        return;
+    }
+    let _ = std::fs::write(folder.join("tenant.txt"), &tenant);
+    let added = check.call("saas_add_this_device", json!({ "tenant": tenant, "name": format!("QA Linux technician {suffix}"), "group": null })).await.unwrap_or(Value::Null);
+    let mine = added["connection_id"].as_u64().unwrap_or(0);
+    check.check("this computer added", mine > 0, &added);
+    let _ = check.call("remote_register", json!({})).await;
+    check.check("this computer online", check.wait(30, |status| status["phase"] == "ready").await.is_some(), "");
+    println!("WAITING for the host's Remote ID in {}/host-id.txt", folder.display());
+    let mut host = 0u64;
+    for _ in 0..450 {
+        if let Some(id) = std::fs::read_to_string(folder.join("host-id.txt")).ok().and_then(|text| text.trim().parse::<u64>().ok()) {
+            let _ = check.call("remote_presence", json!({ "hosts": [id] })).await;
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            if check.status().await["online"].as_array().is_some_and(|online| online.iter().any(|item| item.as_u64() == Some(id))) {
+                host = id;
+                break;
+            }
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+    check.check("host computer online", host > 0, "");
+    for round in 1..=rounds.max(1) {
+        if host == 0 {
+            break;
+        }
+        let request = check.call("remote_request", json!({ "host": host, "password": null, "unattended": false })).await;
+        check.check(&format!("round {round}: attended request"), request.is_ok(), format!("{request:?}"));
+        println!("WAITING for the person at the host to allow the session (round {round})");
+        let Some(active) = check.wait(240, |status| status["phase"] == "active").await else {
+            check.check(&format!("round {round}: session active"), false, check.status().await);
+            break;
+        };
+        let id = active["session"].as_str().unwrap_or_default().to_owned();
+        // At once, before any picture: a key release, then the clipboard (which releases held keys first).
+        let started = std::time::Instant::now();
+        let release = check.engine.input(&id, json!({ "kind": "key", "usage": 225, "down": false })).await;
+        let release_ms = started.elapsed().as_millis();
+        let ours = format!("Mixel early clipboard {suffix} round {round} äöü");
+        let copied = xclip_set(&ours);
+        let push = check.call("remote_clipboard", json!({ "session": id, "push": true })).await;
+        let push_ms = started.elapsed().as_millis();
+        let pictures_before = check.engine.next_video(&id).await.is_ok_and(|data| !data.is_empty());
+        println!("round {round}: key release {release:?} after {release_ms} ms; clipboard push {push:?} after {push_ms} ms (copied {copied}, picture already there: {pictures_before})");
+        let setup = std::fs::read_to_string(folder.join("host-setup.txt")).unwrap_or_default();
+        if !setup.is_empty() {
+            println!("round {round}: host {setup}");
+        }
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let status = check.status().await;
+        check.check(&format!("round {round}: the session survives the early input and clipboard"), status["phase"] == "active" && status["session"] == active["session"], &status);
+        let (mut frames, waited) = (0, std::time::Instant::now());
+        while frames < 3 && waited.elapsed() < Duration::from_secs(20) {
+            match check.engine.next_video(&id).await {
+                Ok(data) if !data.is_empty() => frames += 1,
+                _ => tokio::time::sleep(Duration::from_millis(30)).await,
+            }
+        }
+        check.check(&format!("round {round}: pictures ({frames})"), frames > 0, "");
+        let mut posted = 0;
+        for step in 0..6u32 {
+            if check.engine.input(&id, json!({ "kind": "pointer", "x": 20000 + step * 3000, "y": 30000 })).await == Ok(true) {
+                posted += 1;
+            }
+        }
+        check.check(&format!("round {round}: input confirmed afterwards ({posted}/6)"), posted == 6, "");
+        let again = check.call("remote_clipboard", json!({ "session": id, "push": true })).await;
+        check.check(&format!("round {round}: clipboard push afterwards"), again.is_ok(), format!("{again:?}"));
+        if let Some(consent) = active["consent"].as_str() {
+            let stop = check.call("remote_stop_session", json!({ "consent": consent })).await;
+            check.check(&format!("round {round}: end session"), stop.is_ok(), format!("{stop:?}"));
+        }
+        check.check(&format!("round {round}: back to ready"), check.wait(20, |status| status["phase"] == "ready").await.is_some(), "");
+        let _ = std::fs::write(folder.join(format!("round-{round}.txt")), "1");
+        tokio::time::sleep(Duration::from_secs(4)).await;
+    }
+    let _ = std::fs::write(folder.join("early-done.txt"), "1");
+    let _ = check.call("remote_disconnect", json!({})).await;
+    let _ = check.wait(15, |status| matches!(status["phase"].as_str(), Some("offline" | "error"))).await;
+    if let Some(device) = added["device_id"].as_str() {
+        let removal = check.call("device_self_remove", json!({ "confirmed": true, "registration": { "device": device, "connection_id": mine, "generation": added["generation"] } })).await;
+        check.check("this computer removes itself", removal.as_ref().is_ok_and(|value| value == "removed"), format!("{removal:?}"));
+    }
+    let deleted = check.call("saas_delete_company", json!({ "tenant": tenant, "name": company })).await;
+    check.check("QA company deleted", deleted.is_ok(), format!("{deleted:?}"));
 }
 
 async fn technician(check: &mut Check, suffix: &str, folder: &std::path::Path, attended: bool, pair: bool) {
