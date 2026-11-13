@@ -1,7 +1,8 @@
-//! The engine commands of the native apps. Names, arguments and results match the desktop app's
-//! window commands (`desktop_app/src/main.rs`, `saas_commands.rs`), so both apps behave the same and
-//! the server sees the same calls. File and folder choices come from the native app as paths.
-use mixel_engine::{account_auth::AccountAuth, device_identity::IdentityState, remote_session::RemoteSession};
+//! The engine commands of the native apps (Swift through `mixel_core_ffi`, the GTK app directly).
+//! Names, arguments and results match the desktop app's window commands (`desktop_app/src/main.rs`,
+//! `saas_commands.rs`), so all apps behave the same and the server sees the same calls. File and
+//! folder choices come from the native app as paths.
+use crate::{account_auth::AccountAuth, device_identity::IdentityState, remote_session::RemoteSession};
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
 use std::{
@@ -14,7 +15,11 @@ use uuid::Uuid;
 pub const PLATFORM: &str = "macos";
 #[cfg(target_os = "ios")]
 pub const PLATFORM: &str = "ios";
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(target_os = "linux")]
+pub const PLATFORM: &str = "linux";
+#[cfg(target_os = "windows")]
+pub const PLATFORM: &str = "windows";
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux", target_os = "windows")))]
 pub const PLATFORM: &str = "other";
 
 /// What the commands share: the account, the connection to Mixel and this computer's identity.
@@ -44,6 +49,7 @@ impl Context {
         self.data_dir.join("pending-self-removal.json")
     }
 
+
     /// Ends the sessions and goes offline, then forgets the sign-in in memory (as the desktop app
     /// does when it quits).
     pub async fn shutdown(&self) -> Result<(), String> {
@@ -69,7 +75,7 @@ pub fn uuid(text: &str) -> Result<Uuid, String> {
 }
 
 /// The command's arguments. Keys may be written `snake_case` (preferred) or `camelCase`.
-struct Args(Map<String, Value>);
+pub(crate) struct Args(Map<String, Value>);
 impl Args {
     fn parse(raw: &str) -> Result<Self, String> {
         if raw.len() > 1 << 20 {
@@ -100,12 +106,12 @@ impl Args {
         self.0.get(&camel).cloned().unwrap_or(Value::Null)
     }
     /// A required (or `Option`) argument.
-    fn get<T: DeserializeOwned>(&self, name: &str) -> Result<T, String> {
+    pub(crate) fn get<T: DeserializeOwned>(&self, name: &str) -> Result<T, String> {
         serde_json::from_value(self.value(name)).map_err(|_| format!("Missing or invalid argument: {name}"))
     }
 }
 
-fn out<T: serde::Serialize>(value: T) -> Result<String, String> {
+pub(crate) fn out<T: serde::Serialize>(value: T) -> Result<String, String> {
     serde_json::to_string(&value).map_err(|_| "The result could not be prepared".into())
 }
 
@@ -126,12 +132,12 @@ fn saas(error: signaling_server::auth::saas::SaasError) -> String {
 }
 
 /// Open only validated HTTPS destinations in the system browser (the app may also open them itself).
-async fn browser(url: &str) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
+pub(crate) async fn browser(url: &str) -> Result<(), String> {
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     {
-        mixel_engine::system_browser::open(url).await
+        crate::system_browser::open(url).await
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
         let _ = url;
         Err("Open this page from the app".into())
@@ -150,13 +156,13 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
             out(auth.status().await)
         }
         "startup_settings" => {
-            #[cfg(target_os = "macos")]
-            let autostart = tokio::task::spawn_blocking(mixel_engine::autostart::enabled).await.unwrap_or(false);
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(not(target_os = "ios"))]
+            let autostart = tokio::task::spawn_blocking(crate::autostart::enabled).await.unwrap_or(false);
+            #[cfg(target_os = "ios")]
             let autostart = false;
-            #[cfg(target_os = "macos")]
-            let launched = mixel_engine::autostart::launched_at_startup();
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(not(target_os = "ios"))]
+            let launched = crate::autostart::launched_at_startup();
+            #[cfg(target_os = "ios")]
             let launched = false;
             out(json!({
                 "remembered": auth.status().await.account.is_some_and(|account| account.remembered),
@@ -202,22 +208,22 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
         }
         "set_stay_signed_in" => out(auth.set_remember(args.get("enabled")?).await?),
         "set_autostart" => {
-            #[cfg(target_os = "macos")]
+            #[cfg(not(target_os = "ios"))]
             {
                 let enabled: bool = args.get("enabled")?;
-                out(tokio::task::spawn_blocking(move || mixel_engine::autostart::set(enabled))
+                out(tokio::task::spawn_blocking(move || crate::autostart::set(enabled))
                     .await
                     .map_err(|_| "Cannot change the startup setting")??)
             }
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(target_os = "ios")]
             Err("Starting with the computer is not available here".into())
         }
         "company_settings_url" => out(auth.company_settings_url(args.get("company_id")?).await?),
-        "remote_signup_available" => out(mixel_engine::service_config::ServiceConfig::load()?.customer_signup),
+        "remote_signup_available" => out(crate::service_config::ServiceConfig::load()?.customer_signup),
         "legal_url" => {
             let page: String = args.get("page")?;
             let lang: Option<String> = args.get("lang")?;
-            out(mixel_engine::legal::legal_url(&page, lang.as_deref())?)
+            out(crate::legal::legal_url(&page, lang.as_deref())?)
         }
         // ---- Devices and enrolment ----
         "remote_devices" => {
@@ -328,9 +334,11 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
                 .await
                 .map_err(|_| "Device identity storage is unavailable")??;
             use signaling_server::auth::PersonalDeviceOs;
-            #[cfg(target_os = "macos")]
-            let os = PersonalDeviceOs::Macos;
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(target_os = "linux")]
+            let os = PersonalDeviceOs::Linux;
+            #[cfg(target_os = "windows")]
+            let os = PersonalDeviceOs::Windows;
+            #[cfg(not(any(target_os = "linux", target_os = "windows")))]
             let os = PersonalDeviceOs::Macos;
             let id = credential
                 .ism
@@ -351,7 +359,13 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
                 .ok()
                 .filter(|output| output.status.success())
                 .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned());
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(target_os = "linux")]
+            let name = std::fs::read_to_string("/etc/hostname")
+                .ok()
+                .map(|text| text.trim().to_owned())
+                .filter(|text| !text.is_empty())
+                .or(args.get::<Option<String>>("device_name")?);
+            #[cfg(not(any(target_os = "macos", target_os = "linux")))]
             let name: Option<String> = args.get("device_name")?;
             let name: String = name.unwrap_or_default().chars().filter(|c| !c.is_control()).take(80).collect();
             out(if name.trim().is_empty() { "This computer".to_owned() } else { name.trim().to_owned() })
@@ -395,20 +409,20 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
             out(remote.request(host, password, unattended.unwrap_or_default()).await?)
         }
         "remote_unattended" => {
-            mixel_engine::service_config::require_host()?;
+            crate::service_config::require_host()?;
             out(remote.configure_unattended(args.get("source")?, args.get("control")?).await?)
         }
         "remote_presence" => out(remote.presence(args.get("hosts")?).await?),
         "remote_pairing" => {
-            mixel_engine::service_config::require_host()?;
+            crate::service_config::require_host()?;
             out(remote.pairing(args.get("confirmation")?).await?)
         }
         "remote_support_code" => {
-            mixel_engine::service_config::require_host()?;
+            crate::service_config::require_host()?;
             out(remote.support_code(args.get("required")?).await?)
         }
         "remote_decide" => {
-            mixel_engine::service_config::require_host()?;
+            crate::service_config::require_host()?;
             out(remote.decide(args.get("decision")?).await?)
         }
         "remote_clipboard" => out(remote.clipboard(args.get("session")?, args.get("push")?).await?),
@@ -512,7 +526,7 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
                 .map_err(|_| "The meeting could not be started")?;
             let id = room["room"].as_str().unwrap_or_default();
             let host = room["host"].as_str().unwrap_or_default();
-            if !mixel_engine::session_guard::meeting_room(id) || !host.starts_with("https://rs.mixel.ch/meet/#") {
+            if !crate::session_guard::meeting_room(id) || !host.starts_with("https://rs.mixel.ch/meet/#") {
                 return Err("The meeting could not be started".into());
             }
             out(json!({ "room": id, "invite": format!("https://rs.mixel.ch/meet/#{id}"), "host": host }))
@@ -526,7 +540,7 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
                 .split('.')
                 .nth(1)
                 .is_none_or(|key| key.len() == 32 && key.chars().all(|c| c.is_ascii_hexdigit()));
-            if !mixel_engine::session_guard::meeting_room(id) || room.split('.').count() > 2 || !key_ok {
+            if !crate::session_guard::meeting_room(id) || room.split('.').count() > 2 || !key_ok {
                 return Err("This is not a Mixel Meet link".into());
             }
             out(link)
@@ -548,7 +562,7 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
         "ai_connect" => {
             let address: String = args.get("address")?;
             let model: String = args.get("model")?;
-            out(mixel_engine::ai_assistant::connect(&address, &model).await?)
+            out(crate::ai_assistant::connect(&address, &model).await?)
         }
         "ai_ask" => {
             let address: String = args.get("address")?;
@@ -556,7 +570,7 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
             let system: String = args.get("system")?;
             let prompt: String = args.get("prompt")?;
             let image: Option<String> = args.get("image")?;
-            out(mixel_engine::ai_assistant::ask(&address, &model, &system, &prompt, image.as_deref()).await?)
+            out(crate::ai_assistant::ask(&address, &model, &system, &prompt, image.as_deref()).await?)
         }
         "rollout_create" => {
             let credential = auth.credential(None).await?;
@@ -587,6 +601,10 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
                 .await
                 .map_err(|_| "The rollout token could not be revoked")?)
         }
+        // Linux: the signed update channel, installed in the app (as the desktop app).
+        #[cfg(target_os = "linux")]
+        "update_check" => linux::update_check(context).await,
+        #[cfg(not(target_os = "linux"))]
         "update_check" => update_check(&args).await,
         // ---- Company (SaaS) ----
         "saas_my_tenants" => {
@@ -743,7 +761,7 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
                 let _ = std::fs::remove_file(&path);
                 return out(Value::Null);
             };
-            out(Some(mixel_engine::self_removal::deliver(&path, &request).await?))
+            out(Some(crate::self_removal::deliver(&path, &request).await?))
         }
         "device_removal_pending" => out(context.pending_removal().exists()),
         "open_device_identity" => {
@@ -759,13 +777,14 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
 
 /// Deploy link or rollout token with the one-line command per operating system.
 async fn deploy_link(token: String) -> Result<String, String> {
-    let windows_command = mixel_engine::rollout::windows_rollout_command(&token).await?;
-    let (macos_command, linux_command) = mixel_engine::rollout::unix_rollout_commands(&token)?;
+    let windows_command = crate::rollout::windows_rollout_command(&token).await?;
+    let (macos_command, linux_command) = crate::rollout::unix_rollout_commands(&token)?;
     out(json!({ "token": token, "windows_command": windows_command, "macos_command": macos_command, "linux_command": linux_command }))
 }
 
 /// The native preview is published on store.mixel.ch as its own variant; it never installs the
 /// desktop app's update. `variant`: the store variant of this build (`native-preview`).
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 async fn update_check(args: &Args) -> Result<String, String> {
     #[derive(serde::Deserialize)]
     struct Row {
@@ -775,7 +794,7 @@ async fn update_check(args: &Args) -> Result<String, String> {
     if variant.len() > 40 || !variant.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-') {
         return Err("Invalid update variant".into());
     }
-    let running = mixel_engine::version_parts(mixel_engine::agent::APP_VERSION);
+    let running = crate::version_parts(crate::agent::APP_VERSION);
     let url = format!(
         "https://store-api.mixel.ch/rest/v1/store_app_releases?select=version&app_slug=eq.mixel-remote&is_current=eq.true&platform=eq.{PLATFORM}&variant=eq.{variant}&limit=5"
     );
@@ -795,7 +814,7 @@ async fn update_check(args: &Args) -> Result<String, String> {
     out(rows
         .into_iter()
         .filter(|row| row.version.len() <= 40)
-        .filter_map(|row| mixel_engine::version_parts(&row.version).map(|parts| (parts, row.version)))
+        .filter_map(|row| crate::version_parts(&row.version).map(|parts| (parts, row.version)))
         .filter(|(parts, _)| running.as_ref().is_some_and(|current| parts > current))
         .max_by(|a, b| a.0.cmp(&b.0))
         .map(|(_, version)| json!({ "version": version, "installable": false, "silent": false, "needs_password": false })))
@@ -803,7 +822,7 @@ async fn update_check(args: &Args) -> Result<String, String> {
 
 /// This computer removes itself: the request is signed with its device key, saved, then sent.
 async fn self_remove(context: &Context, args: &Args) -> Result<String, String> {
-    use mixel_engine::self_removal::{deliver, save_pending};
+    use crate::self_removal::{deliver, save_pending};
     use signaling_server::auth::saas::SelfRemoval;
     #[derive(serde::Deserialize)]
     struct RegistrationRef {
@@ -855,7 +874,7 @@ async fn self_remove(context: &Context, args: &Args) -> Result<String, String> {
 /// Commands that need this computer itself: its screens, keyboard permission, printer, sign-in screen.
 #[cfg(target_os = "macos")]
 async fn platform(context: &Context, command: &str, args: &Args) -> Result<String, String> {
-    use mixel_engine::{host_actions, host_print, ipp_printer, macos_prelogin_install, service_config};
+    use crate::{host_actions, host_print, ipp_printer, macos_prelogin_install, service_config};
     match command {
         "capture_targets" => {
             service_config::require_host()?;
@@ -894,12 +913,12 @@ async fn platform(context: &Context, command: &str, args: &Args) -> Result<Strin
                 .await
                 .host
                 .ok_or("Make this computer available before copying its connection ID")?;
-            out(mixel_engine::session_platform::write_text(&id.to_string())?)
+            out(crate::session_platform::write_text(&id.to_string())?)
         }
         "connect_support_id" => {
             service_config::require_host()?;
             let id: String = args.get("id")?;
-            out(tokio::task::spawn_blocking(move || mixel_engine::macos_support::connect(&id))
+            out(tokio::task::spawn_blocking(move || crate::macos_support::connect(&id))
                 .await
                 .map_err(|_| "The Support connection could not start")??)
         }
@@ -960,7 +979,15 @@ async fn platform(context: &Context, command: &str, args: &Args) -> Result<Strin
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
+#[path = "native_commands_linux.rs"]
+mod linux;
+#[cfg(target_os = "linux")]
+async fn platform(context: &Context, command: &str, args: &Args) -> Result<String, String> {
+    linux::platform(context, command, args).await
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 async fn platform(_context: &Context, command: &str, _args: &Args) -> Result<String, String> {
     match command {
         "capture_targets" => out(Vec::<Value>::new()),
@@ -1013,6 +1040,8 @@ mod tests {
         assert_eq!(status["phase"], "offline");
         #[cfg(target_os = "macos")]
         assert_eq!(status["platform"], "macos");
+        #[cfg(target_os = "linux")]
+        assert_eq!(status["platform"], "linux");
         let account: Value = serde_json::from_str(&dispatch(&context, "account_status", "{}").await.unwrap()).unwrap();
         assert!(account["phase"].is_string());
         assert!(dispatch(&context, "saas_my_tenants", "{}").await.is_err());

@@ -1,5 +1,8 @@
 //! The Mixel Remote engine for the native Apple apps.
 //!
+//! The command dispatcher itself lives in the engine (`mixel_engine::native_commands`), shared with
+//! the native Linux app, which uses it directly.
+//!
 //! Swift talks to one object, [`MixelEngine`]. Commands use the same names and arguments as the
 //! desktop app's window commands (`remote_status`, `saas_members`, …): arguments go in as JSON, the
 //! result comes back as JSON, an error as its message. The session picture and the input events have
@@ -9,7 +12,7 @@
 //! them away from the desktop app's web view.
 #![allow(unsafe_code)] // UniFFI's generated scaffolding (the C interface Swift calls) is unsafe by nature.
 
-mod commands;
+use mixel_engine::native_commands as commands;
 
 use std::sync::Arc;
 

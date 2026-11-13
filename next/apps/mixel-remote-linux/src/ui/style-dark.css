@@ -1,0 +1,7 @@
+/* Dark: the lighter Mixel red and green (WCAG contrast on dark surfaces). */
+@define-color accent_bg_color #c9364a;
+@define-color accent_color #ff7a8a;
+@define-color destructive_bg_color #c9364a;
+@define-color mixel_success #3dba7c;
+@define-color mixel_warning #f0a43a;
+@define-color mixel_soft #3a1a20;
