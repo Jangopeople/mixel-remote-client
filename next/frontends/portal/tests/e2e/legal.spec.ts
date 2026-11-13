@@ -85,6 +85,7 @@ test('sign-up needs the Terms accepted; version and time are stored', async ({ p
   await shot(page, 'legal-03-signup-terms-required');
   await page.getByTestId('terms-check').locator('input').check();
   await page.getByRole('button', { name: 'Create account' }).click();
+  await expect(page.getByLabel('6-digit code')).toBeVisible();
   await page.getByLabel('6-digit code').fill(await signupCode(OWNER, PASSWORD));
   await page.getByRole('button', { name: 'Verify' }).click();
   await expect(page).toHaveURL(/\/app\?welcome=1/);
@@ -119,7 +120,7 @@ test('the company gets members, two computers and a Stripe customer', async ({ r
   // Stripe Checkout creates the customer (nothing is paid; the session expires).
   const checkout = await request.post('/api/billing/checkout', {
     headers: { authorization: `Bearer ${owner.access_token}` },
-    data: { tenant_id: tenant, plan: 'solo', interval: 'month', return_path: '/app/billing' },
+    data: { tenant_id: tenant, plan: 'team', interval: 'month', return_path: '/app/billing' },
   });
   expect(checkout.status(), await checkout.text()).toBe(200);
   expect((await checkout.json()).url).toMatch(/^https:\/\/checkout\.stripe\.com\//);
