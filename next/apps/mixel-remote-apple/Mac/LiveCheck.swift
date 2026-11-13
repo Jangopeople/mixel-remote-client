@@ -18,11 +18,12 @@ enum LiveCheck {
         fflush(stdout)
     }
 
-    static func run(sessionFile: String, suffix: String, sessionFolder: String? = nil) -> Never {
+    static func run(sessionFile: String, suffix: String, sessionFolder: String? = nil, expectedId: UInt32? = nil) -> Never {
         setenv("MIXEL_QA_SESSION_FILE", sessionFile, 1)
         let done = DispatchSemaphore(value: 0)
         Task.detached {
-            if let sessionFolder { await session(suffix: suffix, folder: URL(fileURLWithPath: sessionFolder)) }
+            if let expectedId { await identity(expected: expectedId) }
+            else if let sessionFolder { await session(suffix: suffix, folder: URL(fileURLWithPath: sessionFolder)) }
             else { await checks(suffix: suffix) }
             done.signal()
         }
@@ -99,7 +100,7 @@ enum LiveCheck {
                 check("view and control granted", active["control"] as? Bool == true, "\(active)")
                 print("host actions: \(active["host_actions"] ?? "")  displays: \(active["displays"] ?? "")  features: \(active["peer_features"] ?? "")")
                 var frames = 0, sequence: UInt64 = 0, size = ""
-                let start = Date()
+                var start = Date()
                 var step = 0
                 while Date().timeIntervalSince(start) < 20, frames < 40 {
                     // Pointer moves on the remote screen change the picture (pictures follow changes only).
@@ -112,8 +113,28 @@ enum LiveCheck {
                         if frames == 1 || frames == 10 { save(frame.image, folder.appendingPathComponent("remote-screen.png")) }
                     }
                 }
-                let seconds = Date().timeIntervalSince(start)
-                check("pictures from the lab computer (\(frames) in \(Int(seconds)) s, \(size); a still screen sends pictures only on change)", frames >= 2)
+                var seconds = Date().timeIntervalSince(start)
+                check("pictures from the lab computer, decoded by the engine (\(frames) in \(Int(seconds)) s, \(size); a still screen sends pictures only on change)", frames >= 2)
+                // The same session with the pictures decoded on this Mac (VideoToolbox, as the app does).
+                let decoder = H264Decoder()
+                var decodedHere = 0, packets = 0, failure = ""
+                start = Date()
+                while Date().timeIntervalSince(start) < 20, decodedHere < 40 {
+                    step += 1
+                    if step % 10 == 0 { _ = try? await engine.input(session: id, json: "{\"kind\":\"pointer\",\"x\":\((step * 613) % 60000 + 2000),\"y\":\((step * 271) % 50000 + 5000)}") }
+                    guard let data = try? await engine.nextVideo(session: id, compressed: true) else { break }
+                    if data.isEmpty { try? await Task.sleep(nanoseconds: 20_000_000); continue }
+                    guard VideoFrame.isCompressed(data) else { continue }
+                    packets += 1
+                    do {
+                        let frame = try decoder.decode(data)
+                        decodedHere += 1; size = "\(frame.width)×\(frame.height)"
+                        if decodedHere == 5 { save(frame.image, folder.appendingPathComponent("remote-screen-h264.png")) }
+                    } catch H264Decoder.Problem.waitingForKeyframe { continue } catch { failure = "\(error)"; break }
+                }
+                seconds = Date().timeIntervalSince(start)
+                check("pictures decoded on this Mac with VideoToolbox (\(decodedHere) of \(packets) H.264 packets in \(Int(seconds)) s, \(size))", decodedHere >= 2 && failure.isEmpty, failure)
+                _ = try? await engine.nextVideo(session: id, compressed: false)
                 var posted = 0
                 for step in 0..<10 {
                     let event = "{\"kind\":\"pointer\",\"x\":\(20000 + step * 2000),\"y\":30000}"
@@ -138,6 +159,26 @@ enum LiveCheck {
         }
         let deleted = await call(engine, "saas_delete_company", ["tenant": tenant, "name": company])
         check("QA company deleted (the lab computer's enrolment with it)", (try? deleted.get()) != nil, "\(deleted)")
+        try? await engine.shutdown()
+    }
+
+    /// The in-place update 0.1.22 → 2.0: run by the updated app on a Mac that 0.1.22 enrolled
+    /// (`--signin-enroll`). The device key from the Keychain, the data folder and the Remote ID carry
+    /// over; the Mac then removes itself with that key (which proves the server still knows it).
+    static func identity(expected: UInt32) async {
+        guard let engine = try? CoreEngine(dataDirectory: CoreEngine.defaultDirectory()) else { check("engine starts", false); return }
+        check("updated app runs as \(engine.info.version) from \(Bundle.main.bundlePath)", engine.info.version == "2.0.0")
+        let key = await call(engine, "open_device_identity", ["create": false])
+        let identity = (try? key.get()) as? [String: Any]
+        check("the device key created by 0.1.22 is read from the Keychain (no new key)", identity?["public_key"] as? String != nil, "\(key)")
+        check("sign-in with the QA session", await signIn(engine))
+        let registered = await call(engine, "remote_register")
+        let ready = await wait(engine, seconds: 30) { ($0["phase"] as? String) == "ready" }
+        check("online with the Remote ID enrolled by 0.1.22 (\(Format.remoteId(expected)))", (ready?["host"] as? Int) == Int(expected), "\(registered) \(String(describing: ready))")
+        _ = await call(engine, "remote_disconnect")
+        _ = await wait(engine, seconds: 15) { ["offline", "error"].contains($0["phase"] as? String ?? "") }
+        let removal = await call(engine, "device_self_remove", ["confirmed": true])
+        check("this Mac removes itself, signed with the carried-over key", (try? removal.get()) as? String == "removed", "\(removal)")
         try? await engine.shutdown()
     }
 
@@ -181,7 +222,7 @@ enum LiveCheck {
         let terms = await call(engine, "saas_terms_status", ["tenant": tenant])
         check("terms status recorded", (try? terms.get()) != nil, "\(terms)")
 
-        // This Mac joins the company with its own new identity (bundle ch.mixel.remote.native).
+        // This Mac joins the company with its own new identity (lab bundle ch.mixel.remote.labtest).
         let added = await call(engine, "saas_add_this_device", ["tenant": tenant, "name": "QA native Mac \(suffix)", "group": NSNull()])
         let enrollment = (try? added.get()) as? [String: Any]
         let connection = enrollment?["connection_id"] as? Int ?? 0
@@ -242,9 +283,12 @@ enum LiveCheck {
         let room = await call(engine, "meeting_create")
         check("Mixel Meet room for a session", ((try? room.get()) as? [String: Any])?["invite"] as? String != nil, "\(room)")
 
-        // Update check against the preview variant (reads store.mixel.ch).
-        let update = await call(engine, "update_check", ["variant": "native-preview"])
-        check("update check answers", (try? update.get()) != nil || true, "\(update)")
+        // Update check on the signed update channel (lab builds read it only with a test channel set).
+        let update = await call(engine, "update_check")
+        check("update check answers (lab build without a test channel: no update offered)", ((try? update.get()) ?? nil) == nil, "\(update)")
+        // Sign-in screen access: this build carries no entitled host, so it waits for Apple.
+        let signin = (try? await call(engine, "signin_screen_status").get()) as? [String: Any]
+        check("sign-in screen access waits for Apple's virtual keyboard entitlement", signin?["availability"] as? String == "waiting_for_apple", "\(String(describing: signin))")
 
         // This Mac removes itself with its own key (offline first), then the QA company is deleted.
         _ = await call(engine, "remote_disconnect")

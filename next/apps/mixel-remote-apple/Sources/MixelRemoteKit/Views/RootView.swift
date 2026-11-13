@@ -67,7 +67,6 @@ struct Sidebar: View {
             } else if !app.signedIn {
                 Button(L("Sign in")) { app.section = .account }.linkButton()
             }
-            Text(verbatim: L("Preview for testing")).font(.caption2.weight(.semibold)).foregroundStyle(Theme.brand)
         }
     }
 }

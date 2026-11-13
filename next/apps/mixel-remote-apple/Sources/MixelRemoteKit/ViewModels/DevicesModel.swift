@@ -123,6 +123,9 @@ public final class DevicesModel: ObservableObject {
     }
 
     func statusChanged(from previous: RemoteStatus, to next: RemoteStatus) {
+        if next.phase == "active", !next.sharing, let peer = next.peer, !next.hostMacs.isEmpty, next.hostMacs != previous.hostMacs || previous.phase != "active" {
+            remember(macs: next.hostMacs, of: peer)
+        }
         if next.connected, !previous.connected { lastPresence = .distantPast }
         if next.connected { Task { await checkPresence() } }
     }
@@ -221,6 +224,32 @@ public final class DevicesModel: ObservableObject {
         return await change {
             self.deployLink = try await self.app.engine.run("saas_create_deploy_link", ["tenant": tenant.tenantId, "label": label, "days": days, "computers": computers, "group": group])
         }
+    }
+
+    // MARK: Wake-on-LAN
+
+    /// Network addresses learned from earlier sessions, per Remote ID (as the desktop app keeps them).
+    static let macsKey = "mixel.remote.macs.v1"
+
+    public func knownMacs(_ device: Device) -> [String] {
+        let known = UserDefaults.standard.dictionary(forKey: Self.macsKey) as? [String: [String]] ?? [:]
+        return Array((known[String(device.connectionId)] ?? []).prefix(4))
+    }
+
+    /// During a session as technician: remember the other computer's network addresses for Wake.
+    func remember(macs: [String], of host: UInt32) {
+        let valid = macs.filter { $0.range(of: "^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$", options: .regularExpression) != nil }
+        guard !valid.isEmpty else { return }
+        var known = UserDefaults.standard.dictionary(forKey: Self.macsKey) as? [String: [String]] ?? [:]
+        guard known[String(host)] != Array(valid.prefix(4)) else { return }
+        known[String(host)] = Array(valid.prefix(4))
+        UserDefaults.standard.set(known, forKey: Self.macsKey)
+    }
+
+    public func wake(_ device: Device) {
+        let macs = knownMacs(device)
+        guard !macs.isEmpty else { error = L("No network address is known for this computer yet"); return }
+        wake(device, macs: macs)
     }
 
     public func wake(_ device: Device, macs: [String]) {

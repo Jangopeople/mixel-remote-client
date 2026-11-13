@@ -68,16 +68,30 @@ public struct SettingsView: View {
                 }
             }
 
+            if !app.isPhone, let signIn = settings.signInScreen, app.account.account?.staff == true || signIn.connectionId != nil {
+                SignInScreenSection(app: app, settings: settings, enrollment: enrollment, status: signIn)
+            }
+
             Section {
-                LabeledContent { Text(verbatim: "\(app.info.version) · \(L("Preview for testing"))") } label: { Text(verbatim: L("Version")) }
-                HStack {
-                    Button(L("Check for updates")) { settings.checkForUpdate() }
-                    if let update = settings.update {
-                        Text(verbatim: L("Version %@ is available.", update.version)).foregroundStyle(.secondary)
-                        Button(L("Download")) { settings.openStorePage() }
-                    } else if settings.updateChecked {
-                        Text(verbatim: L("This is the newest version.")).foregroundStyle(.secondary)
+                LabeledContent { Text(verbatim: app.info.version) } label: { Text(verbatim: L("Version")) }
+                if app.isPhone {
+                    Text(verbatim: L("Mixel Remote for iPhone and iPad updates through the App Store or TestFlight.")).font(.callout).foregroundStyle(.secondary)
+                } else {
+                    Toggle(isOn: $settings.autoUpdate) { Text(verbatim: L("Install updates automatically")) }
+                    HStack {
+                        Button(L("Check for updates")) { settings.checkForUpdate() }.disabled(settings.installing)
+                        if let update = settings.update {
+                            Text(verbatim: L("Version %@ is available.", update.version)).foregroundStyle(.secondary)
+                            if update.installable {
+                                Button(L("Update now")) { settings.installUpdate() }.buttonStyle(PrimaryButtonStyle()).disabled(settings.installing)
+                            } else {
+                                Button(L("Download")) { settings.openStorePage() }
+                            }
+                        } else if settings.updateChecked {
+                            Text(verbatim: L("This is the newest version.")).foregroundStyle(.secondary)
+                        }
                     }
+                    MessageLine(settings.notice, error: false)
                 }
             } header: { Text(verbatim: L("Updates")) }
 
@@ -121,7 +135,7 @@ public struct SettingsView: View {
     }
 }
 
-/// Version, the legal texts and the preview note.
+/// Version and the legal texts.
 public struct AboutBlock: View {
     @ObservedObject var app: AppModel
     public init(app: AppModel) { self.app = app }
@@ -131,7 +145,7 @@ public struct AboutBlock: View {
                 MixelMark(size: 44)
                 VStack(alignment: .leading) {
                     Text(verbatim: "Mixel Remote").font(.title3.weight(.semibold))
-                    Text(verbatim: L("Native preview %@ · for testing only, not for customers yet.", app.info.version)).font(.callout).foregroundStyle(.secondary)
+                    Text(verbatim: L("Version %@", app.info.version)).font(.callout).foregroundStyle(.secondary)
                 }
             }
             Text(verbatim: "© Mixel IT and Corporate Services").font(.caption).foregroundStyle(.secondary)
@@ -147,5 +161,62 @@ public struct AboutBlock: View {
         Button(L("Privacy Policy")) { app.settings.openLegal("privacy") }.linkButton()
         Button(L("Data Processing Agreement")) { app.settings.openLegal("dpa") }.linkButton()
         Button(L("Sub-processors")) { app.settings.openLegal("subprocessors") }.linkButton()
+    }
+}
+
+/// Access at this Mac's sign-in screen, before anyone signs in (Mixel team). Typing there needs
+/// Apple's virtual keyboard entitlement: until Apple grants it, the app says so and offers nothing.
+struct SignInScreenSection: View {
+    @ObservedObject var app: AppModel
+    @ObservedObject var settings: SettingsModel
+    @ObservedObject var enrollment: EnrollmentModel
+    let status: SignInScreenStatus
+    @State private var company = ""
+    @State private var name = ""
+
+    var body: some View {
+        Section {
+            switch status.availability {
+            case .waitingForApple, .notHere:
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "hourglass").foregroundStyle(Theme.warning).accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(verbatim: L("Waiting for Apple")).font(.callout.weight(.semibold))
+                        Text(verbatim: L("Typing at the sign-in screen needs Apple’s approval of the virtual keyboard for Mixel Remote. Mixel has asked Apple for it; this option turns on by itself with the update that includes it."))
+                            .font(.callout).foregroundStyle(.secondary)
+                    }
+                }
+                if let id = status.connectionId {
+                    LabeledContent { Text(verbatim: Format.remoteId(id)).monospacedDigit() } label: { Text(verbatim: L("Sign-in screen Remote ID")) }
+                    Button(L("Turn off sign-in screen access"), role: .destructive) { settings.disableSignInScreen() }.disabled(settings.signInWorking)
+                }
+            case .ready:
+                if let id = status.connectionId {
+                    LabeledContent { Text(verbatim: Format.remoteId(id)).monospacedDigit().textSelection(.enabled) } label: { Text(verbatim: L("Sign-in screen Remote ID")) }
+                    if let name = status.name { LabeledContent { Text(verbatim: name) } label: { Text(verbatim: L("Name")) } }
+                    HStack {
+                        Button(L("Update")) { settings.updateSignInScreen() }
+                        Button(L("Turn off sign-in screen access"), role: .destructive) { settings.disableSignInScreen() }
+                    }
+                    .disabled(settings.signInWorking)
+                } else {
+                    Text(verbatim: L("A technician can then reach this Mac at its sign-in screen, before anyone signs in. macOS asks for an administrator twice, and once at the sign-in screen for Screen Recording."))
+                        .font(.callout).foregroundStyle(.secondary)
+                    Picker(selection: $company) {
+                        Text(verbatim: L("Choose a company")).tag("")
+                        ForEach(enrollment.companies) { Text(verbatim: $0.clientName).tag($0.clientId) }
+                    } label: { Text(verbatim: L("Company")) }
+                    TextField(text: $name) { Text(verbatim: L("Computer name")) }
+                    Button(L("Turn on sign-in screen access")) { settings.enableSignInScreen(company: company, name: name) }
+                        .disabled(company.isEmpty || name.trimmingCharacters(in: .whitespaces).isEmpty || settings.signInWorking)
+                }
+            }
+            if settings.signInWorking { ProgressView().controlSize(.small) }
+            MessageLine(settings.signInMessage, error: false)
+        } header: { Text(verbatim: L("Sign-in screen")) }
+        .task {
+            if status.availability == .ready, status.connectionId == nil, enrollment.companies.isEmpty { enrollment.loadTeamRecords() }
+            if name.isEmpty { name = enrollment.name }
+        }
     }
 }

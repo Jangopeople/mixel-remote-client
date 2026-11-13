@@ -3,11 +3,15 @@ import MixelCore
 import MixelRemoteKit
 import SwiftUI
 
-/// Mixel Remote for Mac (native preview, `ch.mixel.remote.native`): installed next to the current
-/// app, with its own device identity and sign-in.
+/// Mixel Remote for Mac 2.0. It replaces the desktop app 0.1.x in place: the same bundle identifier
+/// (`ch.mixel.remote.next.qa`), executable name, Keychain items, launch agents and data folder, so an
+/// enrolled Mac keeps its Remote ID, always-on access and settings after the update.
 @main
 enum Entry {
     static func main() {
+        // Headless modes first, while the process has one thread (the rollout reads its token then):
+        // the always-on host, the rollout enrolment, the sign-in screen host and the install checks.
+        if let code = CoreEngine.runCommandLine(CommandLine.arguments) { exit(code) }
         #if DEBUG
         // LAB builds only: `--live-check <qa-session.json> <suffix>` runs the engine checks against the
         // live service without any window, then exits (see LiveCheck.swift).
@@ -18,6 +22,10 @@ enum Entry {
         // `--live-session <qa-session.json> <suffix> <folder>`: a real session to a lab computer.
         if arguments.count >= 5, arguments[1] == "--live-session" {
             LiveCheck.run(sessionFile: arguments[2], suffix: arguments[3], sessionFolder: arguments[4])
+        }
+        // `--live-identity <qa-session.json> <suffix> <remote-id>`: after the in-place update from 0.1.22.
+        if arguments.count >= 5, arguments[1] == "--live-identity", let id = UInt32(arguments[4]) {
+            LiveCheck.run(sessionFile: arguments[2], suffix: arguments[3], expectedId: id)
         }
         #endif
         MixelRemoteMacApp.main()
@@ -68,9 +76,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     override init() {
         super.init()
+        LegacySettings.migrateOnce(bundle: Bundle.main.bundleIdentifier ?? "")
         do {
             let engine = try CoreEngine(dataDirectory: CoreEngine.defaultDirectory())
             let app = AppModel(engine: engine)
+            app.checksForUpdates = true
+            app.quit = { [weak self] in
+                self?.quitting = true
+                NSApp.terminate(nil)
+            }
             app.openURL = { NSWorkspace.shared.open($0) }
             app.chooseFile = { await Panels.open() }
             app.chooseSaveLocation = { await Panels.save(suggested: $0) }

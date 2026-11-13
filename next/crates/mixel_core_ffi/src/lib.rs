@@ -45,6 +45,53 @@ pub struct CoreInfo {
     pub controller_only: bool,
 }
 
+/// The app's modes without any window, exactly as the desktop app 0.1.x ran them (launch agents,
+/// install scripts and the sign-in screen host call the app's executable with these arguments):
+/// `--version`, `--signin-enroll` (mass rollout), `--startup-host` (always-on access),
+/// `--prelogin-host`, `--provision-prelogin-identity`, `--validate-prelogin-settings`,
+/// `--validate-identity-scope`, `--validate-public-config`.
+///
+/// `arguments` are the process arguments (including the program). `None`: not a headless mode,
+/// start the app. Otherwise the exit code; messages are printed to standard output/error.
+#[uniffi::export]
+pub fn run_command_line(arguments: Vec<String>) -> Option<i32> {
+    let mode = arguments.get(1)?.as_str();
+    let result = match mode {
+        "--version" => {
+            println!("Mixel Remote {}", mixel_engine::agent::APP_VERSION);
+            Ok(())
+        }
+        #[cfg(target_os = "macos")]
+        "--signin-enroll" => mixel_engine::deploy_token::read(arguments.get(2).map(String::as_str)).and_then(|token| {
+            mixel_engine::service_config::require_host().and_then(|()| mixel_engine::macos_rollout::enroll(&token))
+        }),
+        #[cfg(target_os = "macos")]
+        "--startup-host" | "--prelogin-host" | "--provision-prelogin-identity" | "--validate-prelogin-settings" => {
+            mixel_engine::service_config::require_host().and_then(|()| mixel_engine::macos_startup_host::run())
+        }
+        #[cfg(target_os = "macos")]
+        "--validate-identity-scope" => mixel_engine::device_identity::validated_bundle_scope().map(|scope| println!("PASS: {scope}")),
+        "--validate-public-config" => {
+            use std::io::Read;
+            let mut bytes = Vec::new();
+            std::io::stdin()
+                .take(32769)
+                .read_to_end(&mut bytes)
+                .map_err(|_| "Cannot read public service configuration".to_owned())
+                .and_then(|_| mixel_engine::service_config::ServiceConfig::validate_public_bytes(&bytes))
+                .map(|()| println!("PASS: public service configuration and authority keys validated"))
+        }
+        _ => return None,
+    };
+    Some(match result {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("{error}");
+            2
+        }
+    })
+}
+
 /// One engine per app. It owns the account, the connection to Mixel and the sessions.
 #[derive(uniffi::Object)]
 pub struct MixelEngine {
@@ -121,5 +168,22 @@ impl MixelEngine {
             .await
             .map_err(|_| EngineError::from("The engine could not stop cleanly".to_owned()))?
             .map_err(EngineError::from)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_headless_modes_run_without_a_window() {
+        let args = |list: &[&str]| list.iter().map(|item| (*item).to_owned()).collect::<Vec<_>>();
+        assert_eq!(run_command_line(args(&["app", "--version"])), Some(0));
+        assert_eq!(run_command_line(args(&["app"])), None);
+        assert_eq!(run_command_line(args(&["app", "--autostart"])), None);
+        assert_eq!(run_command_line(args(&["app", "-NSDocumentRevisionsDebugMode", "YES"])), None);
+        // A deploy token is never accepted as an argument.
+        #[cfg(target_os = "macos")]
+        assert_eq!(run_command_line(args(&["app", "--signin-enroll", "mrt_abcdefghijklmnopqrstuv"])), Some(2));
     }
 }

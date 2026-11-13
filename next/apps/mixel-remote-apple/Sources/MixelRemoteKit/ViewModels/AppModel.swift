@@ -55,6 +55,8 @@ public final class AppModel: ObservableObject {
     public var chooseFile: () async -> String? = { nil }
     /// The app's Save panel for a suggested name: where to save (absolute path), or nil.
     public var chooseSaveLocation: (_ suggested: String) async -> String? = { _ in nil }
+    /// Quits the app after an update was installed (the installer starts the new version).
+    public var quit: () -> Void = {}
     /// The person chose "Go offline": do not come back online by itself until they connect again.
     var wentOffline = false
     private var autoTries = 0
@@ -95,6 +97,7 @@ public final class AppModel: ObservableObject {
         let accountEvery: TimeInterval = account.signingIn || account.phase == "mfa_required" ? 1 : 10
         if Date().timeIntervalSince(lastAccountRead) >= accountEvery { await refreshAccount() }
         await refreshRemote()
+        if checksForUpdates { await settings.periodicUpdateCheck() }
     }
 
     public func refreshAccount() async {
@@ -304,6 +307,25 @@ public final class AppModel: ObservableObject {
             return remote.control ? L("Connected. Keyboard and mouse control is enabled.") : L("Connected in view-only mode.")
         default: return Translator.shared.translate(remote.message)
         }
+    }
+
+    /// The app looks for updates by itself (the Mac app; not tests, screenshots or the phone).
+    public var checksForUpdates = false
+
+    /// After an update was installed: end sessions, go offline and quit right away.
+    /// The installer starts the new version about a second later, so this waits at most 0.7 s.
+    func quitForUpdate() async {
+        stop()
+        session.clear()
+        let engine = self.engine
+        final class Done: @unchecked Sendable { var value = false }
+        let done = Done()
+        Task.detached { try? await engine.shutdown(); done.value = true }
+        for _ in 0..<7 {
+            if done.value { break }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        quit()
     }
 
     /// Before the app quits: end sessions, go offline.

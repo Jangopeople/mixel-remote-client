@@ -31,6 +31,12 @@ public final class SessionModel: ObservableObject {
     @Published public private(set) var meetingNotice = ""
     @Published public var dismissedMeetingRoom = ""
 
+    /// Where the session picture is decoded: on this device (VideoToolbox) or by the engine.
+    public enum Decoding: String, Sendable { case none, device, engine }
+    @Published public private(set) var decoding = Decoding.none
+    /// Decode H.264 on this device (tests and screenshots may turn it off).
+    public var useHardwareDecoding = true
+
     var lastRequestUnattended = false
     private var video: Task<Void, Never>?
     private var tools: Task<Void, Never>?
@@ -89,25 +95,46 @@ public final class SessionModel: ObservableObject {
         frame = nil
         size = .zero
         fps = 0
+        decoding = .none
         inputQueue.removeAll()
     }
 
     private func startVideo(_ session: String) {
         clear()
         viewingSession = session
+        let hardware = useHardwareDecoding
         video = Task { [weak self] in
             var sequence: UInt64 = 0
+            // H.264 is decoded here (VideoToolbox) when it works; otherwise the engine decodes.
+            var decoder: H264Decoder? = hardware ? H264Decoder() : nil
             while !Task.isCancelled {
                 guard let self else { return }
                 do {
-                    let data = try await self.app.engine.nextVideo(session: session, compressed: false)
+                    let data = try await self.app.engine.nextVideo(session: session, compressed: decoder != nil)
                     if Task.isCancelled || self.viewingSession != session { return }
                     if data.isEmpty {
                         try? await Task.sleep(nanoseconds: 16_000_000)
                         continue
                     }
+                    if VideoFrame.isCompressed(data) {
+                        guard let active = decoder else { continue }
+                        do {
+                            let decoded = try active.decode(data)
+                            sequence = 0
+                            self.decoding = .device
+                            self.show(decoded)
+                        } catch H264Decoder.Problem.waitingForKeyframe {
+                            continue
+                        } catch {
+                            // This device could not decode the stream: the engine decodes from now on.
+                            decoder = nil
+                            self.decoding = .engine
+                        }
+                        continue
+                    }
                     let decoded = try VideoFrame.decode(data, after: sequence)
                     sequence = decoded.sequence
+                    if decoder == nil { self.decoding = .engine }
                     self.show(decoded)
                 } catch is CancellationError {
                     return

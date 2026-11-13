@@ -199,6 +199,28 @@
         }
       }
     },
+    "A technician can then reach this Mac at its sign-in screen, before anyone signs in. macOS asks for an administrator twice, and once at the sign-in screen for Screen Recording.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eine Technikerin oder ein Techniker erreicht diesen Mac dann am Anmeldebildschirm, bevor sich jemand anmeldet. macOS fragt zweimal nach einem Administrator und einmal am Anmeldebildschirm nach der Bildschirmaufnahme."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Un technicien peut alors atteindre ce Mac à son écran de connexion, avant que quiconque ne se connecte. macOS demande deux fois un administrateur, et une fois à l’écran de connexion l’enregistrement de l’écran."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Un tecnico può quindi raggiungere questo Mac alla schermata di accesso, prima che qualcuno acceda. macOS chiede due volte un amministratore e una volta, alla schermata di accesso, la registrazione dello schermo."
+          }
+        }
+      }
+    },
     "A technician is connected to this computer.": {
       "localizations": {
         "de": {
@@ -943,6 +965,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Verifica…"
+          }
+        }
+      }
+    },
+    "Choose a company": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Firma wählen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choisir une entreprise"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scelga un’azienda"
           }
         }
       }
@@ -3301,6 +3345,50 @@
         }
       }
     },
+    "Install updates automatically": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Updates automatisch installieren"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Installer les mises à jour automatiquement"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Installa gli aggiornamenti automaticamente"
+          }
+        }
+      }
+    },
+    "Installing Mixel Remote %@… The app restarts by itself.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mixel Remote %@ wird installiert… Die App startet von selbst neu."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Installation de Mixel Remote %@… L’app redémarre d’elle-même."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Installazione di Mixel Remote %@… L’app si riavvia da sola."
+          }
+        }
+      }
+    },
     "Invalid native video frame": {
       "localizations": {
         "de": {
@@ -4027,6 +4115,28 @@
         }
       }
     },
+    "Mixel Remote for iPhone and iPad updates through the App Store or TestFlight.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mixel Remote für iPhone und iPad wird über den App Store oder TestFlight aktualisiert."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mixel Remote pour iPhone et iPad se met à jour via l’App Store ou TestFlight."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mixel Remote per iPhone e iPad si aggiorna tramite l’App Store o TestFlight."
+          }
+        }
+      }
+    },
     "Mixel Remote reconnects by itself. Device status appears once it is connected; you can still choose Connect.": {
       "localizations": {
         "de": {
@@ -4247,28 +4357,6 @@
         }
       }
     },
-    "Native preview %@ · for testing only, not for customers yet.": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Native Vorschau %@ · nur zum Testen, noch nicht für Kunden."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Aperçu natif %@ · pour les tests uniquement, pas encore pour les clients."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Anteprima nativa %@ · solo per test, non ancora per i clienti."
-          }
-        }
-      }
-    },
     "Needed so a technician can use keyboard and mouse here.": {
       "localizations": {
         "de": {
@@ -4441,6 +4529,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Nessun dispositivo corrispondente"
+          }
+        }
+      }
+    },
+    "No network address is known for this computer yet": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Für diesen Computer ist noch keine Netzwerkadresse bekannt"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aucune adresse réseau n’est encore connue pour cet ordinateur"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Per questo computer non è ancora noto alcun indirizzo di rete"
           }
         }
       }
@@ -4969,28 +5079,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Attendere…"
-          }
-        }
-      }
-    },
-    "Preview for testing": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Vorschau zum Testen"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Aperçu pour les tests"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Anteprima per i test"
           }
         }
       }
@@ -5765,6 +5853,28 @@
         }
       }
     },
+    "Restarting Mixel Remote…": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mixel Remote wird neu gestartet…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Redémarrage de Mixel Remote…"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Riavvio di Mixel Remote…"
+          }
+        }
+      }
+    },
     "Revoke": {
       "localizations": {
         "de": {
@@ -6091,6 +6201,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Invia testo"
+          }
+        }
+      }
+    },
+    "Sends a wake signal on this computer's network (Wake-on-LAN).": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sendet ein Wecksignal im Netzwerk dieses Computers (Wake-on-LAN)."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Envoie un signal de réveil sur le réseau de cet ordinateur (Wake-on-LAN)."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invia un segnale di risveglio nella rete di questo computer (Wake-on-LAN)."
           }
         }
       }
@@ -6531,6 +6663,94 @@
           "stringUnit": {
             "state": "translated",
             "value": "Esci"
+          }
+        }
+      }
+    },
+    "Sign-in screen": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anmeldebildschirm"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Écran de connexion"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Schermata di accesso"
+          }
+        }
+      }
+    },
+    "Sign-in screen Remote ID": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remote-ID des Anmeldebildschirms"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ID Remote de l’écran de connexion"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ID Remote della schermata di accesso"
+          }
+        }
+      }
+    },
+    "Sign-in screen access is off.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Zugriff am Anmeldebildschirm ist ausgeschaltet."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’accès à l’écran de connexion est désactivé."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’accesso alla schermata di accesso è disattivato."
+          }
+        }
+      }
+    },
+    "Sign-in screen access is up to date.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Zugriff am Anmeldebildschirm ist aktuell."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’accès à l’écran de connexion est à jour."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’accesso alla schermata di accesso è aggiornato."
           }
         }
       }
@@ -7063,6 +7283,28 @@
         }
       }
     },
+    "The sign-in screen of this Mac can be reached with Remote ID %@.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Anmeldebildschirm dieses Macs ist mit der Remote-ID %@ erreichbar."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’écran de connexion de ce Mac est joignable avec l’ID Remote %@."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La schermata di accesso di questo Mac è raggiungibile con l’ID Remote %@."
+          }
+        }
+      }
+    },
     "The technician wants to show you their screen.": {
       "localizations": {
         "de": {
@@ -7081,6 +7323,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Il tecnico desidera mostrarLe il suo schermo."
+          }
+        }
+      }
+    },
+    "The update could not be installed: %@": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das Update konnte nicht installiert werden: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La mise à jour n’a pas pu être installée : %@"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non è stato possibile installare l’aggiornamento: %@"
           }
         }
       }
@@ -7569,6 +7833,28 @@
         }
       }
     },
+    "Turn off sign-in screen access": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zugriff am Anmeldebildschirm ausschalten"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Désactiver l’accès à l’écran de connexion"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disattiva l’accesso alla schermata di accesso"
+          }
+        }
+      }
+    },
     "Turn off unattended sharing": {
       "localizations": {
         "de": {
@@ -7587,6 +7873,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Disattiva la condivisione non presidiata"
+          }
+        }
+      }
+    },
+    "Turn on sign-in screen access": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zugriff am Anmeldebildschirm einschalten"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Activer l’accès à l’écran de connexion"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Attiva l’accesso alla schermata di accesso"
           }
         }
       }
@@ -7657,6 +7965,28 @@
         }
       }
     },
+    "Typing at the sign-in screen needs Apple’s approval of the virtual keyboard for Mixel Remote. Mixel has asked Apple for it; this option turns on by itself with the update that includes it.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tippen am Anmeldebildschirm braucht Apples Freigabe der virtuellen Tastatur für Mixel Remote. Mixel hat sie bei Apple beantragt; diese Option schaltet sich mit dem Update, das sie enthält, von selbst ein."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saisir du texte à l’écran de connexion nécessite l’autorisation d’Apple pour le clavier virtuel de Mixel Remote. Mixel l’a demandée à Apple ; cette option s’active d’elle-même avec la mise à jour qui l’inclut."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Digitare alla schermata di accesso richiede l’approvazione di Apple per la tastiera virtuale di Mixel Remote. Mixel l’ha richiesta ad Apple; questa opzione si attiva da sola con l’aggiornamento che la include."
+          }
+        }
+      }
+    },
     "Unattended sharing": {
       "localizations": {
         "de": {
@@ -7675,6 +8005,50 @@
           "stringUnit": {
             "state": "translated",
             "value": "Condivisione non presidiata"
+          }
+        }
+      }
+    },
+    "Update": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aktualisieren"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mettre à jour"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aggiorna"
+          }
+        }
+      }
+    },
+    "Update now": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Jetzt aktualisieren"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mettre à jour"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aggiorna ora"
           }
         }
       }
@@ -7833,6 +8207,28 @@
         }
       }
     },
+    "Version %@": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Version %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Version %@"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Versione %@"
+          }
+        }
+      }
+    },
     "Version %@ is available.": {
       "localizations": {
         "de": {
@@ -7899,6 +8295,28 @@
         }
       }
     },
+    "Waiting for Apple": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Warten auf Apple"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En attente d’Apple"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In attesa di Apple"
+          }
+        }
+      }
+    },
     "Waiting for a complete video frame…": {
       "localizations": {
         "de": {
@@ -7939,6 +8357,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "In attesa che l’altra persona accetti la richiesta."
+          }
+        }
+      }
+    },
+    "Wake": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aufwecken"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Réveiller"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Riattiva"
           }
         }
       }

@@ -184,6 +184,11 @@ struct DeviceRow: View {
                     Text(verbatim: reason).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.trailing).frame(maxWidth: 280, alignment: .trailing)
                 }
             }
+            if presence == .offline, !model.knownMacs(device).isEmpty {
+                Button(L("Wake")) { model.wake(device) }
+                    .help(L("Sends a wake signal on this computer's network (Wake-on-LAN)."))
+                    .disabled(app.busy)
+            }
             if model.manages {
                 Menu {
                     Button(L("Rename…")) { rename(device) }.disabled(!model.writable)

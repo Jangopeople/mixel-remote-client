@@ -419,6 +419,22 @@ fileprivate final class UniffiHandleMap<T>: @unchecked Sendable {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterInt32: FfiConverterPrimitive {
+    typealias FfiType = Int32
+    typealias SwiftType = Int32
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Int32 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: Int32, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterBool : FfiConverter {
     typealias FfiType = Int8
     typealias SwiftType = Bool
@@ -894,6 +910,55 @@ public func FfiConverterTypeEngineError_lift(_ buf: RustBuffer) throws -> Engine
 public func FfiConverterTypeEngineError_lower(_ value: EngineError) -> RustBuffer {
     return FfiConverterTypeEngineError.lower(value)
 }
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionInt32: FfiConverterRustBuffer {
+    typealias SwiftType = Int32?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterInt32.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterInt32.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
+    typealias SwiftType = [String]
+
+    public static func write(_ value: [String], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterString.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [String] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [String]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterString.read(from: &buf))
+        }
+        return seq
+    }
+}
 private let UNIFFI_RUST_FUTURE_POLL_READY: Int8 = 0
 private let UNIFFI_RUST_FUTURE_POLL_WAKE: Int8 = 1
 
@@ -942,6 +1007,23 @@ fileprivate func uniffiFutureContinuationCallback(handle: UInt64, pollResult: In
         print("uniffiFutureContinuationCallback invalid handle")
     }
 }
+/**
+ * The app's modes without any window, exactly as the desktop app 0.1.x ran them (launch agents,
+ * install scripts and the sign-in screen host call the app's executable with these arguments):
+ * `--version`, `--signin-enroll` (mass rollout), `--startup-host` (always-on access),
+ * `--prelogin-host`, `--provision-prelogin-identity`, `--validate-prelogin-settings`,
+ * `--validate-identity-scope`, `--validate-public-config`.
+ *
+ * `arguments` are the process arguments (including the program). `None`: not a headless mode,
+ * start the app. Otherwise the exit code; messages are printed to standard output/error.
+ */
+public func runCommandLine(arguments: [String]) -> Int32?  {
+    return try!  FfiConverterOptionInt32.lift(try! rustCall() {
+    uniffi_mixel_core_ffi_fn_func_run_command_line(
+        FfiConverterSequenceString.lower(arguments),$0
+    )
+})
+}
 
 private enum InitializationResult {
     case ok
@@ -957,6 +1039,9 @@ private let initializationResult: InitializationResult = {
     let scaffolding_contract_version = ffi_mixel_core_ffi_uniffi_contract_version()
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
+    }
+    if (uniffi_mixel_core_ffi_checksum_func_run_command_line() != 51446) {
+        return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_mixel_core_ffi_checksum_method_mixelengine_call() != 45334) {
         return InitializationResult.apiChecksumMismatch

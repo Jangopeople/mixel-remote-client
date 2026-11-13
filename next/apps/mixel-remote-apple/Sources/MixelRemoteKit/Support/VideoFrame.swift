@@ -38,6 +38,11 @@ public struct VideoFrame: @unchecked Sendable {
         return VideoFrame(image: image, width: width, height: height, sequence: sequence)
     }
 
+    /// An "MRH1" packet: H.264 for this device's own decoder (`H264Decoder`).
+    public static func isCompressed(_ data: Data) -> Bool {
+        data.count > 4 && data.prefix(4).elementsEqual([77, 82, 72, 49])
+    }
+
     /// A test picture in the engine's format (for previews, screenshots and tests).
     public static func sample(width: Int = 640, height: Int = 400, sequence: UInt64 = 1, draw: ((CGContext) -> Void)? = nil) -> Data {
         var header = Data("MRF2".utf8)
