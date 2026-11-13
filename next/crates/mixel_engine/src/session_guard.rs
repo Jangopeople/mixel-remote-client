@@ -436,6 +436,8 @@ pub fn place(point: (u16, u16), left: f64, top: f64, width: f64, height: f64) ->
 
 /// Shows the technician's pointer at `point` (0..65535 on display `display` of `displays`), or hides it.
 pub fn pointer(point: Option<(u16, u16)>, display: usize, displays: usize) {
+    #[cfg(target_os = "ios")]
+    let _ = (point, display, displays);
     #[cfg(target_os = "windows")]
     win::point(point, display, displays);
     #[cfg(target_os = "macos")]

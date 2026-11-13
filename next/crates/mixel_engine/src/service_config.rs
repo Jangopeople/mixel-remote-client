@@ -23,8 +23,9 @@ pub struct ServiceConfig {
     #[serde(default)]
     pub customer_signup: bool,
 }
+/// This build only controls other computers (the TestFlight Mac controller, and every iPhone/iPad build).
 pub const fn controller_only() -> bool {
-    cfg!(feature = "testflight-controller")
+    cfg!(feature = "testflight-controller") || cfg!(target_os = "ios")
 }
 
 pub fn require_host() -> Result<(), String> {
@@ -122,6 +123,24 @@ impl ServiceConfig {
         }
         serde_json::from_slice(&bytes)
             .map_err(|_| "The bundled service configuration is invalid".into())
+    }
+
+    /// iPhone and iPad: `service-config.json` inside the signed app bundle (next to the program).
+    #[cfg(target_os = "ios")]
+    fn read_packaged() -> Result<Self, String> {
+        use std::io::Read;
+        let executable = std::env::current_exe().map_err(|_| "The app bundle is unavailable")?;
+        let path = executable.parent().ok_or("The app bundle is unavailable")?.join("service-config.json");
+        let mut bytes = Vec::new();
+        std::fs::File::open(path)
+            .map_err(|_| "This build has no bundled Mixel service configuration")?
+            .take(32769)
+            .read_to_end(&mut bytes)
+            .map_err(|_| "The service configuration could not be read")?;
+        if bytes.len() > 32768 {
+            return Err("The service configuration exceeds its size limit".into());
+        }
+        serde_json::from_slice(&bytes).map_err(|_| "The bundled service configuration is invalid".into())
     }
 
     #[cfg(any(target_os = "windows", target_os = "linux"))]

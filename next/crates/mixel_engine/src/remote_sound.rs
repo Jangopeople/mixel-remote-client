@@ -136,13 +136,13 @@ fn linux_capture() -> Option<Capture> {
     Some(Capture { frames, stop })
 }
 /// Frames from interleaved stereo 48 kHz samples, as the Linux and Mac captures deliver them.
-#[cfg_attr(target_os = "windows", allow(dead_code))]
+#[cfg_attr(any(target_os = "windows", target_os = "ios"), allow(dead_code))]
 struct Coder {
     resampler: Resampler,
     pending: Vec<i16>,
     state: State,
 }
-#[cfg_attr(target_os = "windows", allow(dead_code))]
+#[cfg_attr(any(target_os = "windows", target_os = "ios"), allow(dead_code))]
 impl Coder {
     fn new() -> Option<Self> {
         Some(Self { resampler: Resampler::new(2, 48_000)?, pending: Vec::with_capacity(FRAME_SAMPLES * 4), state: State::default() })

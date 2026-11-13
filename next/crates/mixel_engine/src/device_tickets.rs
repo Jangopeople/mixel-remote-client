@@ -29,6 +29,7 @@ pub async fn issue_startup(
     issue_scoped(None, enrolled, identity).await
 }
 
+#[cfg_attr(target_os = "ios", allow(unreachable_code))]
 async fn issue_scoped(
     credential: Option<&Credential>,
     enrolled: &EnrolledPrincipal,
@@ -82,11 +83,19 @@ async fn issue_scoped(
             .bearer_auth(credential.token.as_str())
             .json(&proof)
     } else {
+        // iPhone and iPad never run the always-on host.
+        #[cfg(target_os = "ios")]
+        let startup: reqwest::RequestBuilder = {
+            let _ = &key;
+            return Err("Sign in again to connect".into());
+        };
         #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-        let proof = identity.delegate_startup(challenge.clone(), now)?;
-        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-        http.post(endpoint("/v1/startup-host-ticket")?)
-            .json(&serde_json::json!({"proof":proof,"public_key":key.to_bytes()}))
+        let startup = {
+            let proof = identity.delegate_startup(challenge.clone(), now)?;
+            http.post(endpoint("/v1/startup-host-ticket")?)
+                .json(&serde_json::json!({"proof":proof,"public_key":key.to_bytes()}))
+        };
+        startup
     };
     let response = request.send().await.map_err(|error| {
         if credential.is_none() && crate::remote_recovery::retryable_request(&error) {

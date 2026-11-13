@@ -257,7 +257,7 @@ impl H264Decoder {
                         {
                             Err(DecodeError::Dimensions)
                         } else {
-                            crate::macos::copy_pixel_buffer(image)
+                            crate::apple_pixels::copy_pixel_buffer(image)
                                 .map(Some)
                                 .map_err(|_| DecodeError::Pixels)
                         }

@@ -166,3 +166,28 @@ pub fn clear() {
         item.delete();
     }
 }
+
+/// iPhone and iPad: the refresh token in the app's own Keychain (this device only).
+#[cfg(target_os = "ios")]
+const IOS_SERVICE: &str = "ch.mixel.remote.controller.session.v1";
+#[cfg(target_os = "ios")]
+pub fn save(token: &str) -> Result<(), String> {
+    if !valid(token.as_bytes()) {
+        return Err("Invalid session".into());
+    }
+    security_framework::passwords::set_generic_password(IOS_SERVICE, "refresh", token.as_bytes())
+        .map_err(|_| "Cannot save the session".into())
+}
+#[cfg(target_os = "ios")]
+pub fn load() -> Result<Option<Zeroizing<String>>, String> {
+    match security_framework::passwords::get_generic_password(IOS_SERVICE, "refresh") {
+        Ok(password) if valid(&password) => Ok(Some(Zeroizing::new(String::from_utf8_lossy(&password).into_owned()))),
+        Ok(_) => Err("Saved session is invalid".into()),
+        Err(error) if error.code() == crate::device_identity::KEYCHAIN_NOT_FOUND => Ok(None),
+        Err(_) => Err("Keychain access failed".into()),
+    }
+}
+#[cfg(target_os = "ios")]
+pub fn clear() {
+    let _ = security_framework::passwords::delete_generic_password(IOS_SERVICE, "refresh");
+}

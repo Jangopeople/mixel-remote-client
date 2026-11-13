@@ -26,6 +26,15 @@ objc2-core-graphics = { version = "0.3.2", default-features = false, features = 
 block2 = "0.6"
 dispatch2 = "0.3"
 
+# The H.264 decoder of the iPhone/iPad controller (VideoToolbox, as on the Mac).
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2-core-media = { version = "0.3.2", default-features = false, features = ["std", "CMSampleBuffer", "CMTime", "CMBlockBuffer", "CMFormatDescription", "objc2-core-video"] }
+objc2-core-video = { version = "0.3.2", default-features = false, features = ["std", "CVBase", "CVBuffer", "CVImageBuffer", "CVPixelBuffer", "CVReturn"] }
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFDictionary", "CFNumber", "CFString"] }
+objc2-video-toolbox = { version = "0.3.2", default-features = false, features = ["std", "VTErrors", "VTDecompressionSession", "VTDecompressionProperties", "VTSession", "objc2", "block2", "objc2-core-media", "objc2-core-video"] }
+block2 = "0.6"
+libc = "0.2"
+
 [target.'cfg(target_os = "macos")'.dependencies.objc2-video-toolbox]
 version = "0.3.2"
 default-features = false

@@ -41,7 +41,11 @@ pub fn wake(mac: &str) -> Result<(), String> {
 
 /// Hardware addresses of this computer's network adapters (12 hex digits each), for a later wake.
 pub fn mac_addresses() -> Vec<String> {
-    let mut command;
+    // The phone is never woken by another device.
+    #[cfg(target_os = "ios")]
+    return Vec::new();
+    #[allow(unreachable_code)]
+    let mut command: std::process::Command;
     #[cfg(target_os = "windows")]
     {
         command = std::process::Command::new("getmac");

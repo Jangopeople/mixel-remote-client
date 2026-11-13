@@ -39,10 +39,10 @@ pub fn validated_bundle_scope() -> Result<&'static str, String> {
 }
 #[cfg(target_os = "macos")]
 const ACCOUNT: &str = "ed25519-device";
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub const KEYCHAIN_NOT_FOUND: i32 = NOT_FOUND;
 const MAGIC: &[u8] = b"MIXEL-IDENTITY\x01";
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 const NOT_FOUND: i32 = -25300;
 #[cfg(target_os = "macos")]
 const DUPLICATE: i32 = -25299;
@@ -191,6 +191,45 @@ impl IdentityState {
             }
             Err(_) => return Err("The sign-in screen identity is not installed".into()),
         };
+        Ok(Self(Mutex::new(Some(key))))
+    }
+}
+/// iPhone and iPad: the controller's key in the app's own Keychain (this device only).
+#[cfg(target_os = "ios")]
+mod ios_store {
+    use super::{MAGIC, NOT_FOUND, SigningKey, Zeroizing, decode};
+    use security_framework::passwords::{get_generic_password, set_generic_password};
+    pub const SERVICE: &str = "ch.mixel.remote.controller.device-identity.v1";
+    pub fn load_or_create(account: &str, create: bool) -> Result<SigningKey, String> {
+        match get_generic_password(SERVICE, account) {
+            Ok(bytes) => return decode(&Zeroizing::new(bytes)),
+            Err(error) if error.code() == NOT_FOUND && create => {}
+            Err(error) if error.code() == NOT_FOUND => {
+                return Err("No saved device identity. Choose Create device identity to generate one locally.".into());
+            }
+            Err(error) => return Err(format!("Keychain access failed (OS status {}); identity was not changed", error.code())),
+        }
+        let key = SigningKey::generate(&mut rand_core::OsRng);
+        let seed = Zeroizing::new(key.to_bytes());
+        let mut record = Zeroizing::new(Vec::with_capacity(MAGIC.len() + seed.len()));
+        record.extend_from_slice(MAGIC);
+        record.extend_from_slice(seed.as_ref());
+        set_generic_password(SERVICE, account, &record)
+            .map_err(|error| format!("Keychain could not save the identity (OS status {})", error.code()))?;
+        let stored = Zeroizing::new(get_generic_password(SERVICE, account).map_err(|error| {
+            format!("Keychain could not read back identity (OS status {})", error.code())
+        })?);
+        decode(&stored)
+    }
+}
+#[cfg(target_os = "ios")]
+fn load_or_create(create: bool) -> Result<SigningKey, String> {
+    ios_store::load_or_create("ed25519-device", create)
+}
+#[cfg(target_os = "ios")]
+impl IdentityState {
+    pub fn personal(profile: uuid::Uuid, create: bool) -> Result<Self, String> {
+        let key = ios_store::load_or_create(&format!("remote-personal-{profile}"), create)?;
         Ok(Self(Mutex::new(Some(key))))
     }
 }

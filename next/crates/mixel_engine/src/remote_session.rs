@@ -278,7 +278,11 @@ async fn registration_ticket(
             .map_err(Into::into),
         #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
         None => crate::device_tickets::issue_startup(enrolled, identity).await,
-        
+        #[cfg(target_os = "ios")]
+        None => {
+            let _ = (enrolled, identity);
+            Err("Sign in again to connect".into())
+        }
     }
 }
 

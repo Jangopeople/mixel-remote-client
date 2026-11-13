@@ -117,7 +117,7 @@ impl Pending {
     pub(super) fn publish(&self) -> Result<(), FileError> {
         // SAFETY: both names are bounded single components in one retained
         // directory. RENAME_EXCL atomically refuses any existing destination.
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
         let result = unsafe {
             libc::renameatx_np(
                 self.parent.as_raw_fd(),
@@ -168,7 +168,7 @@ impl Pending {
         // SAFETY: fstatat succeeded and initialized this entire stat structure.
         let entry = unsafe { entry.assume_init() };
         let current = self.file.metadata()?;
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
         let device = entry.st_dev as u64;
         #[cfg(target_os = "linux")]
         let device = entry.st_dev;

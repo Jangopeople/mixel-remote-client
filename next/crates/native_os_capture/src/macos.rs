@@ -1,7 +1,6 @@
 //! ScreenCaptureKit FFI. SCStream stays on its owner thread; pixel buffers are
 //! copied while read-locked and only owned Rust frames cross threads.
 use crate::{
-    damage::Frame,
     stream::{CaptureError, CapturedFrame, FrameMailbox},
 };
 use block2::RcBlock;
@@ -268,15 +267,6 @@ define_class!(
         }
     }
 );
-struct PixelLock<'a>(&'a CVPixelBuffer);
-impl Drop for PixelLock<'_> {
-    fn drop(&mut self) {
-        // SAFETY: this guard exists only following a successful read-only lock.
-        unsafe {
-            CVPixelBufferUnlockBaseAddress(self.0, CVPixelBufferLockFlags::ReadOnly);
-        }
-    }
-}
 unsafe fn copy_sample(sample: &CMSampleBuffer) -> Result<Option<CapturedFrame>, CaptureError> {
     // ScreenCaptureKit marks unchanged frames Idle; do not copy or encode the
     // previous surface again. Blank/suspended/stopped is a revoked source,
@@ -325,38 +315,7 @@ unsafe fn copy_sample(sample: &CMSampleBuffer) -> Result<Option<CapturedFrame>, 
     // SAFETY: this live screen sample owns the returned CVPixelBuffer.
     unsafe { copy_pixel_buffer(&buffer) }.map(Some)
 }
-/// Caller owns a live CVPixelBuffer for the duration of this read-locked copy.
-pub(crate) unsafe fn copy_pixel_buffer(
-    buffer: &CVPixelBuffer,
-) -> Result<CapturedFrame, CaptureError> {
-    if CVPixelBufferGetPixelFormatType(buffer) != kCVPixelFormatType_32BGRA {
-        return Err(CaptureError::Native("unexpected pixel format".into()));
-    }
-    // SAFETY: valid retained CVPixelBuffer, matched read-only unlock via guard.
-    if unsafe { CVPixelBufferLockBaseAddress(buffer, CVPixelBufferLockFlags::ReadOnly) } != 0 {
-        return Err(CaptureError::Native("pixel buffer lock failed".into()));
-    }
-    let _lock = PixelLock(buffer);
-    let (w, h, stride) = (
-        CVPixelBufferGetWidth(buffer),
-        CVPixelBufferGetHeight(buffer),
-        CVPixelBufferGetBytesPerRow(buffer),
-    );
-    let size = stride
-        .checked_mul(h)
-        .filter(|n| *n <= 256 * 1024 * 1024)
-        .ok_or_else(|| CaptureError::Native("invalid pixel buffer size".into()))?;
-    let base = CVPixelBufferGetBaseAddress(buffer);
-    if base.is_null() || CVPixelBufferGetDataSize(buffer) < size {
-        return Err(CaptureError::Native("missing pixel storage".into()));
-    }
-    // SAFETY: successful lock, non-null storage, bounds checked against CoreVideo
-    // data size. Read-only bytes are copied before the lock/sample is released.
-    let bytes = unsafe { std::slice::from_raw_parts(base.cast::<u8>(), size) };
-    Frame::bgra(w, h, stride, bytes).map_err(|e| CaptureError::Native(e.to_string()))?;
-    CapturedFrame::bgra(w, h, stride, bytes.to_vec())
-        .map_err(|error| CaptureError::Native(error.to_string()))
-}
+pub(crate) use crate::apple_pixels::copy_pixel_buffer;
 pub struct MacStream {
     stream: Retained<SCStream>,
     output: Retained<MixelCaptureOutput>,

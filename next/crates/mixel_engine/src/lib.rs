@@ -3,50 +3,54 @@
 //! the native apps (through `mixel_core_ffi`) both drive it.
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod session_platform;
+/// iPhone and iPad: controller only.
+#[cfg(target_os = "ios")]
+#[path = "session_platform_ios.rs"]
+pub mod session_platform;
 #[cfg(target_os = "linux")]
 pub mod wayland_portal;
 #[cfg(target_os = "linux")]
 pub mod linux_guard;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
 pub mod account_auth;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
 pub mod device_identity;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
 pub mod session_store;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
 pub mod host_actions;
 pub mod session_guard;
 pub mod session_mirror;
 pub mod host_print;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub mod ipp_printer;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
 pub mod agent;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
 pub mod ai_assistant;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
 pub mod self_update;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod autostart;
 #[cfg(target_os = "macos")]
 pub mod local_session;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
 pub mod remote_chat;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
 pub mod remote_clipboard;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
 pub mod remote_control;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
 pub mod remote_file_transport;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
 pub mod remote_files;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
 pub mod remote_peer;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
 pub mod remote_recording;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
 pub mod remote_recovery;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
 pub mod remote_session;
 pub mod remote_sound;
 #[cfg(target_os = "macos")]
@@ -60,15 +64,15 @@ pub mod windows_signin_host;
 #[cfg(target_os = "linux")]
 pub mod linux_signin_host;
 /// `--signin-enroll` reads the deploy token from MIXEL_DEPLOY_TOKEN or standard input.
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
 pub mod deploy_token;
 #[cfg(target_os = "macos")]
 pub mod macos_support;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
 pub mod device_tickets;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
 pub mod remote_video;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
 pub mod service_config;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod system_browser;
