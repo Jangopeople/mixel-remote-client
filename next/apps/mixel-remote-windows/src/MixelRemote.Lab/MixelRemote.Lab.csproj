@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- LAB only: live checks against the real Mixel service with a throwaway QA account. Never part of a
+       release (the app references it only with -p:Lab=true, and only a qa-session engine honours the
+       QA sign-in file). -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>MixelRemote.Lab</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\MixelRemote.Core\MixelRemote.Core.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,26 @@
+[package]
+name = "mixel_core_capi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Mixel Remote engine for the Windows app: a plain C interface (mixel_core.dll) and the engine helper program (mixel-remote-helper.exe)"
+
+[lib]
+name = "mixel_core"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "mixel-remote-helper"
+path = "src/bin/helper.rs"
+
+[features]
+qa-session = ["mixel_core_ffi/qa-session", "mixel_engine/qa-session"]
+
+[dependencies]
+mixel_core_ffi = { path = "../mixel_core_ffi" }
+mixel_engine = { path = "../mixel_engine" }
+serde_json = "1"
+
+[lints]
+workspace = true

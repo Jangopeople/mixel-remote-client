@@ -59,6 +59,8 @@ pub mod macos_startup_host;
 pub mod macos_rollout;
 #[cfg(target_os = "macos")]
 pub mod macos_prelogin_install;
+/// Which program runs administrator steps and the sign-in screen service (Tauri app or WinUI helper).
+pub mod app_scope;
 #[cfg(target_os = "windows")]
 pub mod windows_signin_host;
 #[cfg(target_os = "linux")]

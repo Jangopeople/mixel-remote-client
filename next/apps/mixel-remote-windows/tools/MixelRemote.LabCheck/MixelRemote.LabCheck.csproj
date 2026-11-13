@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- LAB only: runs the live checks without a window (e.g. over ssh on the build machine). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <MixelCore Condition="'$(MixelCore)' == ''">..\..\core-lab</MixelCore>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\MixelRemote.Lab\MixelRemote.Lab.csproj" />
+    <None Include="$(MixelCore)\mixel_core.dll" Link="mixel_core.dll" CopyToOutputDirectory="PreserveNewest" Condition="Exists('$(MixelCore)\mixel_core.dll')" />
+  </ItemGroup>
+</Project>

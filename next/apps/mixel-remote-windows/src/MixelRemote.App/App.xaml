@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Fluent controls in Mixel's colours: the Mixel red as accent in light and dark. Screens are built in
+     code (Pages/, Session/, Host/); this file only brings the control styles. -->
+<Application
+    x:Class="MixelRemote.App.App"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
+            </ResourceDictionary.MergedDictionaries>
+            <Color x:Key="SystemAccentColor">#C8283C</Color>
+            <Color x:Key="SystemAccentColorLight1">#D93A4E</Color>
+            <Color x:Key="SystemAccentColorLight2">#E2485B</Color>
+            <Color x:Key="SystemAccentColorLight3">#EC7685</Color>
+            <Color x:Key="SystemAccentColorDark1">#BA2034</Color>
+            <Color x:Key="SystemAccentColorDark2">#9E1B2C</Color>
+            <Color x:Key="SystemAccentColorDark3">#801524</Color>
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Light">
+                    <SolidColorBrush x:Key="MixelBrand" Color="#BA2034" />
+                    <SolidColorBrush x:Key="MixelBrandSoft" Color="#FCEEF0" />
+                    <SolidColorBrush x:Key="MixelSuccess" Color="#258456" />
+                    <SolidColorBrush x:Key="MixelWarning" Color="#A86400" />
+                    <SolidColorBrush x:Key="MixelWarningSoft" Color="#FFF4E5" />
+                    <SolidColorBrush x:Key="MixelPage" Color="#F7F7F8" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="Dark">
+                    <SolidColorBrush x:Key="MixelBrand" Color="#E2485B" />
+                    <SolidColorBrush x:Key="MixelBrandSoft" Color="#3A1A20" />
+                    <SolidColorBrush x:Key="MixelSuccess" Color="#3DBA7C" />
+                    <SolidColorBrush x:Key="MixelWarning" Color="#F0A43A" />
+                    <SolidColorBrush x:Key="MixelWarningSoft" Color="#3A2A12" />
+                    <SolidColorBrush x:Key="MixelPage" Color="#202022" />
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>

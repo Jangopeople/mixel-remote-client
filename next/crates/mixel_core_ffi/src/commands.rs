@@ -14,7 +14,9 @@ use uuid::Uuid;
 pub const PLATFORM: &str = "macos";
 #[cfg(target_os = "ios")]
 pub const PLATFORM: &str = "ios";
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(target_os = "windows")]
+pub const PLATFORM: &str = "windows";
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
 pub const PLATFORM: &str = "other";
 
 /// What the commands share: the account, the connection to Mixel and this computer's identity.
@@ -127,11 +129,11 @@ fn saas(error: signaling_server::auth::saas::SaasError) -> String {
 
 /// Open only validated HTTPS destinations in the system browser (the app may also open them itself).
 async fn browser(url: &str) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
         mixel_engine::system_browser::open(url).await
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = url;
         Err("Open this page from the app".into())
@@ -150,13 +152,13 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
             out(auth.status().await)
         }
         "startup_settings" => {
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             let autostart = tokio::task::spawn_blocking(mixel_engine::autostart::enabled).await.unwrap_or(false);
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
             let autostart = false;
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             let launched = mixel_engine::autostart::launched_at_startup();
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
             let launched = false;
             out(json!({
                 "remembered": auth.status().await.account.is_some_and(|account| account.remembered),
@@ -202,14 +204,14 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
         }
         "set_stay_signed_in" => out(auth.set_remember(args.get("enabled")?).await?),
         "set_autostart" => {
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             {
                 let enabled: bool = args.get("enabled")?;
                 out(tokio::task::spawn_blocking(move || mixel_engine::autostart::set(enabled))
                     .await
                     .map_err(|_| "Cannot change the startup setting")??)
             }
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
             Err("Starting with the computer is not available here".into())
         }
         "company_settings_url" => out(auth.company_settings_url(args.get("company_id")?).await?),
@@ -328,9 +330,9 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
                 .await
                 .map_err(|_| "Device identity storage is unavailable")??;
             use signaling_server::auth::PersonalDeviceOs;
-            #[cfg(target_os = "macos")]
-            let os = PersonalDeviceOs::Macos;
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(target_os = "windows")]
+            let os = PersonalDeviceOs::Windows;
+            #[cfg(not(target_os = "windows"))]
             let os = PersonalDeviceOs::Macos;
             let id = credential
                 .ism
@@ -351,7 +353,9 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
                 .ok()
                 .filter(|output| output.status.success())
                 .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned());
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(target_os = "windows")]
+            let name = std::env::var("COMPUTERNAME").ok().or(args.get::<Option<String>>("device_name")?);
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
             let name: Option<String> = args.get("device_name")?;
             let name: String = name.unwrap_or_default().chars().filter(|c| !c.is_control()).take(80).collect();
             out(if name.trim().is_empty() { "This computer".to_owned() } else { name.trim().to_owned() })
@@ -587,6 +591,8 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
                 .await
                 .map_err(|_| "The rollout token could not be revoked")?)
         }
+        // Windows (2.0 and later) updates itself from the signed update channel, like the Tauri app did.
+        #[cfg(not(target_os = "windows"))]
         "update_check" => update_check(&args).await,
         // ---- Company (SaaS) ----
         "saas_my_tenants" => {
@@ -766,6 +772,7 @@ async fn deploy_link(token: String) -> Result<String, String> {
 
 /// The native preview is published on store.mixel.ch as its own variant; it never installs the
 /// desktop app's update. `variant`: the store variant of this build (`native-preview`).
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 async fn update_check(args: &Args) -> Result<String, String> {
     #[derive(serde::Deserialize)]
     struct Row {
@@ -960,7 +967,198 @@ async fn platform(context: &Context, command: &str, args: &Args) -> Result<Strin
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+/// Windows: this computer's screens, printer, sign-in screen and start-up. Administrator steps run
+/// the engine helper next to the app (`app_scope::program`), elevated with one prompt each.
+#[cfg(target_os = "windows")]
+async fn platform(context: &Context, command: &str, args: &Args) -> Result<String, String> {
+    use mixel_engine::{host_actions, host_print, self_update, service_config, windows_signin_host as signin};
+    let newer = |version: &str| {
+        matches!(
+            (mixel_engine::version_parts(mixel_engine::agent::APP_VERSION), mixel_engine::version_parts(version)),
+            (Some(running), Some(offered)) if offered > running
+        )
+    };
+    match command {
+        // The signed update channel (windows/x64): {version, installable, silent, needs_password} or null.
+        // `silent`: nothing would be interrupted (no session) and the sign-in survives the restart.
+        "update_check" => {
+            if cfg!(feature = "qa-session") && std::env::var_os("MIXEL_UPDATE_CHANNEL").is_none() {
+                return out(Value::Null);
+            }
+            let Ok(manifest) = self_update::latest().await else { return out(Value::Null) };
+            if !newer(&manifest.version) {
+                return out(Value::Null);
+            }
+            let idle = matches!(context.remote.status().await.phase.as_str(), "offline" | "error" | "ready");
+            let account = context.auth.status().await;
+            let keeps_sign_in = account.phase != "authenticated" || account.account.as_ref().is_some_and(|account| account.remembered);
+            out(json!({ "version": manifest.version, "installable": true, "silent": idle && keeps_sign_in, "needs_password": false }))
+        }
+        // Downloads, checks (size, SHA-256, Mixel's code signature) and installs it; the app quits then.
+        "update_install" => {
+            if cfg!(feature = "qa-session") && std::env::var_os("MIXEL_UPDATE_CHANNEL").is_none() {
+                return Err("Lab builds do not update themselves".into());
+            }
+            let manifest = self_update::latest().await?;
+            if !newer(&manifest.version) {
+                return Err("This is already the newest version".into());
+            }
+            out(self_update::download_and_install(manifest).await?)
+        }
+        "capture_targets" => {
+            service_config::require_host()?;
+            let displays = tokio::task::spawn_blocking(native_os_capture::windows_capture::displays)
+                .await
+                .map_err(|_| "Display discovery failed")?
+                .map_err(|error| error.to_string())?;
+            out(displays
+                .into_iter()
+                .map(|display| {
+                    json!({
+                        "id": format!("dxgi:{}:{}:{}", display.adapter, display.output, display.name),
+                        "name": format!("{} · {} × {}", display.name, display.width, display.height),
+                        "full_display": true,
+                    })
+                })
+                .collect::<Vec<_>>())
+        }
+        // Windows needs no screen-recording or accessibility permission.
+        "screen_access" | "request_screen_access" | "request_input_access" => out(true),
+        "copy_connection_id" => {
+            service_config::require_host()?;
+            let id = context
+                .remote
+                .status()
+                .await
+                .host
+                .ok_or("Make this computer available before copying its connection ID")?;
+            out(mixel_engine::session_platform::write_text(&id.to_string())?)
+        }
+        "wake_on_lan" => {
+            let macs: Vec<String> = args.get("macs")?;
+            if macs.is_empty() || macs.len() > 4 {
+                return Err("No network address is known for this computer yet".into());
+            }
+            out(tokio::task::spawn_blocking(move || macs.iter().try_for_each(|mac| host_actions::wake(mac)))
+                .await
+                .map_err(|_| "The wake signal could not be sent")??)
+        }
+        "remote_printing_status" => {
+            let installed = tokio::task::spawn_blocking(host_print::installed).await.unwrap_or(false);
+            out(json!({ "supported": true, "installed": installed }))
+        }
+        "remote_printing_set" => {
+            let enabled: bool = args.get("enabled")?;
+            out(tokio::task::spawn_blocking(move || {
+                signin::run_elevated(if enabled { "--printer-install" } else { "--printer-remove" })
+            })
+            .await
+            .map_err(|_| "The printer could not be changed")??)
+        }
+        "print_job" => {
+            let path: String = args.get("path")?;
+            let open: bool = args.get("open")?;
+            out(tokio::task::spawn_blocking(move || {
+                if open {
+                    host_print::open(&path).map(|()| "opened".to_owned())
+                } else {
+                    host_print::print(&path).map(str::to_owned)
+                }
+            })
+            .await
+            .map_err(|_| "The print job could not be handled")??)
+        }
+        "signin_screen_status" => {
+            let status = signin::public_status();
+            let outdated = status.is_some() && tokio::task::spawn_blocking(signin::program_outdated).await.unwrap_or(false);
+            out(json!({
+                "supported": mixel_engine::app_scope::program().is_ok(),
+                "outdated": outdated,
+                "technician": signin::technician_connected(),
+                "connection_id": status.as_ref().map(|status| status.connection_id),
+                "name": status.map(|status| status.name),
+                "wayland_greeter": false,
+            }))
+        }
+        "signin_screen_enable" => signin_screen_enable(context, args).await,
+        "signin_screen_disable" => out(tokio::task::spawn_blocking(|| signin::run_elevated("--signin-remove"))
+            .await
+            .map_err(|_| "Administrator step failed")??),
+        "signin_screen_update" => out(tokio::task::spawn_blocking(|| signin::run_elevated("--signin-update"))
+            .await
+            .map_err(|_| "Administrator step failed")??),
+        "open_browser" => {
+            let url: String = args.get("url")?;
+            out(browser(&url).await?)
+        }
+        _ => Err(format!("Unknown command: {command}")),
+    }
+}
+
+/// Sign-in screen and always-on access (Windows): a computer-wide key, a device record
+/// "<name> (sign-in screen)" of the company, and the service. Two administrator prompts.
+#[cfg(target_os = "windows")]
+async fn signin_screen_enable(context: &Context, args: &Args) -> Result<String, String> {
+    use mixel_engine::windows_signin_host as signin;
+    let company: Uuid = args.get("company")?;
+    let name: String = args.get("name")?;
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let credential = context.auth.credential(Some(&cancelled)).await?;
+    if !credential.principal.staff {
+        return Err("Sign-in screen access requires an MFA-verified Mixel team account".into());
+    }
+    let name = name.trim().to_owned();
+    if name.is_empty() || name.chars().count() > 60 || name.chars().any(char::is_control) {
+        return Err("Enter a computer name of up to 60 characters".into());
+    }
+    // Step 1 (administrator): the computer-wide key.
+    tokio::task::spawn_blocking(|| signin::run_elevated("--signin-provision"))
+        .await
+        .map_err(|_| "Administrator step failed")??;
+    let key = signin::provisioned_public_key()?;
+    let ism = &credential.ism;
+    let token = &credential.token;
+    let device = match ism.enrollment_of_key(token, &key).await.map_err(|_| "The enrolment status is unavailable")? {
+        Some(current) => current.device,
+        None => {
+            let device = ism
+                .add_device(token, company, &format!("{name} (sign-in screen)"), "windows")
+                .await
+                .map_err(|_| "The sign-in screen record could not be added for this company")?;
+            ism.enroll(token, device, key, &cancelled)
+                .await
+                .map_err(|_| "The sign-in screen could not be enrolled")?;
+            device
+        }
+    };
+    let enrolled = ism
+        .authenticate_device(token, device)
+        .await
+        .map_err(|_| "The sign-in screen enrolment could not be confirmed")?;
+    if enrolled.public_key != key {
+        return Err("The sign-in screen enrolment does not match this computer".into());
+    }
+    let tenant = ism.device_tenant(token, device).await.map_err(|_| "The company of this computer is unavailable")?;
+    let settings = signin::Settings {
+        version: 1,
+        device,
+        profile: enrolled.principal.user,
+        tenant,
+        connection_id: enrolled.connection_id,
+        generation: enrolled.generation,
+        control: true,
+    };
+    let payload = serde_json::to_vec(&json!({ "settings": settings, "name": name }))
+        .map_err(|_| "Cannot prepare the sign-in screen settings")?;
+    let hex: String = payload.iter().map(|byte| format!("{byte:02x}")).collect();
+    // Step 2 (administrator): save the settings and start the service.
+    tokio::task::spawn_blocking(move || signin::run_elevated(&format!("--signin-install {hex}")))
+        .await
+        .map_err(|_| "Administrator step failed")??;
+    out(enrolled.connection_id)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 async fn platform(_context: &Context, command: &str, _args: &Args) -> Result<String, String> {
     match command {
         "capture_targets" => out(Vec::<Value>::new()),

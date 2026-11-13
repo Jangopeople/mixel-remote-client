@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
-description = "Mixel Remote engine for the native Apple apps (Swift through UniFFI)"
+description = "Mixel Remote engine for the native apps (Swift through UniFFI; Windows through mixel_core_capi)"
 
 [lib]
 name = "mixel_core_ffi"
@@ -33,6 +33,9 @@ zeroize.workspace = true
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+native_os_capture = { path = "../native_os_capture" }
+
+[target.'cfg(target_os = "windows")'.dependencies]
 native_os_capture = { path = "../native_os_capture" }
 
 [lints]

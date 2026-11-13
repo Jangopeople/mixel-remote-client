@@ -1,0 +1,6 @@
+bin/
+obj/
+core/
+core-lab/
+out/
+*.user
