@@ -5,10 +5,10 @@ import { supabase } from '../lib/supabase';
 import { api, type SignInOptions } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import {
-  checkPassword, errorKey, isCompanyName, isEmail, isName, normalizeEmail, safeNext, signInMethods, tokenFromHash, type Method,
+  checkPassword, errorKey, isCompanyName, isEmail, isName, isOAuthMethod, normalizeEmail, OAUTH_METHODS, OAUTH_PROVIDERS, safeNext, signInMethods, signupMethods, tokenFromHash, type Method,
 } from '../lib/logic';
 import { Brand, ErrorNotice, Notice, PreferencesMenu, Spinner } from '../components/ui';
-import { EmailCodeForm, MfaChallenge, MixelIdButton, methodLabelKey, useAvailableMethods } from '../components/auth';
+import { EmailCodeForm, MfaChallenge, OAuthButton, methodLabelKey, useAvailableMethods } from '../components/auth';
 import { TermsCheckbox } from '../components/legal';
 import { LEGAL_VERSION } from '../legal/types';
 
@@ -148,7 +148,7 @@ export function SignInFlow({ next, initialOptions = null, onSignedIn, standardOn
           <button type="submit" className="button-block" disabled={busy || !password}>{t('signin.submit')}</button>
         </form>
       )}
-      {methods.includes('password') && (methods.includes('magic_link') || methods.includes('mixel_id')) && <div className="divider">{t('common.or')}</div>}
+      {methods.includes('password') && methods.some((item) => item === 'magic_link' || isOAuthMethod(item)) && <div className="divider">{t('common.or')}</div>}
       <div className="stack">
         {methods.includes('magic_link') && (
           <button type="button" className="secondary button-block" disabled={busy} data-testid="send-code"
@@ -167,7 +167,7 @@ export function SignInFlow({ next, initialOptions = null, onSignedIn, standardOn
             {t('auth.sendCode')}
           </button>
         )}
-        {methods.includes('mixel_id') && <MixelIdButton next={next} />}
+        {OAUTH_METHODS.filter((item) => methods.includes(item)).map((item) => <OAuthButton key={item} method={item} next={next} />)}
         {!methods.includes('password') && <ErrorNotice error={error} />}
       </div>
     </div>
@@ -253,12 +253,12 @@ export function SignUp() {
   if (loading) return <AuthLayout><Spinner /></AuthLayout>;
   if (current && step === 'form') return <Navigate to="/signup/finish" replace />;
 
-  const methods: Method[] = (['password', 'magic_link', 'mixel_id'] as Method[]).filter((item) => available?.has(item) ?? item !== 'mixel_id');
+  const methods: Method[] = signupMethods(available);
 
   function validate(): boolean {
     const next: typeof errors = {};
     if (!isCompanyName(company)) next.company = 'signup.companyInvalid';
-    if (method !== 'mixel_id') {
+    if (!isOAuthMethod(method)) {
       if (!isName(name, 80)) next.name = 'signup.nameInvalid';
       if (!isEmail(email)) next.email = 'auth.emailInvalid';
     }
@@ -351,7 +351,7 @@ export function SignUp() {
             </label>
           ))}
         </fieldset>
-        {method !== 'mixel_id' && (
+        {!isOAuthMethod(method) && (
           <>
             <div className="field">
               <label htmlFor="signup-name">{t('signup.yourName')}</label>
@@ -379,14 +379,14 @@ export function SignUp() {
           </Notice>
         )}
         <ErrorNotice error={error} />
-        {method === 'mixel_id' ? (
+        {isOAuthMethod(method) ? (
           <>
-            <MixelIdButton next="/signup/finish" onBefore={() => {
+            <OAuthButton method={method} next="/signup/finish" onBefore={() => {
               if (!validate()) return false;
               setSession(PENDING_SIGNUP, JSON.stringify({ company: company.trim(), accepted: true }));
               return true;
             }} />
-            <p className="field-hint" style={{ marginTop: 8 }}>{t('signup.mixelIdNote')}</p>
+            <p className="field-hint" style={{ marginTop: 8 }}>{t('signup.oauthNote', { host: OAUTH_PROVIDERS[method].host })}</p>
           </>
         ) : (
           <button type="submit" className="button-block" disabled={busy}>{t('signup.create')}</button>
