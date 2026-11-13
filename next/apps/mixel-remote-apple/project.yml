@@ -8,7 +8,7 @@ options:
   createIntermediateGroups: true
 settings:
   base:
-    MARKETING_VERSION: "1.1.0"
+    MARKETING_VERSION: "2.0.0"
     CURRENT_PROJECT_VERSION: "1"
     DEVELOPMENT_TEAM: 5277F8NDH4
     SWIFT_VERSION: "5.0"
@@ -33,8 +33,8 @@ targets:
     info:
       path: Mac/Info.plist
       properties:
-        CFBundleDisplayName: Mixel Remote Preview
-        CFBundleName: Mixel Remote Preview
+        CFBundleDisplayName: Mixel Remote
+        CFBundleName: Mixel Remote
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSApplicationCategoryType: public.app-category.utilities
@@ -45,14 +45,23 @@ targets:
         NSAppleEventsUsageDescription: Mixel Remote opens the Mixel Remote Support app for support connections.
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: ch.mixel.remote.native
-        PRODUCT_NAME: Mixel Remote Preview
+        # 2.0 replaces the desktop app 0.1.x in place: its bundle identifier and executable name, so
+        # the Keychain items, launch agents (always-on host, start with the Mac), the update channel's
+        # signature check and the rollout script keep working for an enrolled Mac.
+        PRODUCT_BUNDLE_IDENTIFIER: ch.mixel.remote.next.qa
+        PRODUCT_NAME: Mixel Remote
+        EXECUTABLE_NAME: desktop_app
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_STYLE: Manual
         CODE_SIGN_IDENTITY: "Developer ID Application"
         ARCHS: "arm64 x86_64"
         ONLY_ACTIVE_ARCH: NO
         OTHER_LDFLAGS: ["-ObjC"]
+      configs:
+        # LAB builds (Debug, with the qa-session engine) are a separately named copy, so live checks
+        # never touch this Mac's real Mixel Remote identity.
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: ch.mixel.remote.labtest
   MixelRemoteiOS:
     type: application
     platform: iOS

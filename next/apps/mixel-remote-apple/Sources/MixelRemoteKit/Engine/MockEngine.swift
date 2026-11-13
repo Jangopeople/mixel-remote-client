@@ -22,7 +22,7 @@ public final class MockEngine: EngineAPI, @unchecked Sendable {
     public var info: EngineInfo
 
     public init(platform: String = "macos", controllerOnly: Bool = false) {
-        info = EngineInfo(version: "1.1.0", platform: platform, controllerOnly: controllerOnly)
+        info = EngineInfo(version: "2.0.0", platform: platform, controllerOnly: controllerOnly)
     }
 
     /// Answer `command` with this JSON.
@@ -59,8 +59,14 @@ public final class MockEngine: EngineAPI, @unchecked Sendable {
     }
 
     public func nextVideo(session: String, compressed: Bool) async throws -> Data {
-        lock.withLock { frames.isEmpty ? Data() : frames.removeFirst() }
+        lock.withLock {
+            if !frames.isEmpty { compressedRequests.append(compressed) }
+            return frames.isEmpty ? Data() : frames.removeFirst()
+        }
     }
+    private var compressedRequests: [Bool] = []
+    /// For every picture handed out: whether the app asked for compressed (H.264) pictures.
+    public var videoRequestsCompressed: [Bool] { lock.withLock { compressedRequests } }
 
     public func input(session: String, json event: String) async throws -> Bool {
         lock.withLock { inputs.append(event) }

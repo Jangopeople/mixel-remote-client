@@ -85,10 +85,27 @@ public struct AccountView: View {
                         Button(L("Use another browser")) { app.signIn(showLink: true) }.disabled(app.busy)
                     }
                 }
+                if !app.otherSignInProviders.isEmpty {
+                    ViewThatFits(in: .horizontal) {
+                        HStack { providerButtons }
+                        VStack(alignment: .leading) { providerButtons }
+                    }
+                    Text(verbatim: L("Your company decides which sign-in methods its members may use.")).font(.caption).foregroundStyle(.secondary)
+                }
                 Button(L("Create Mixel ID")) {
                     if let url = URL(string: "https://auth.mixel.ch/if/flow/mixel-remote-enrollment/") { app.openURL(url) }
                 }.linkButton()
             }
+        }
+    }
+
+    @ViewBuilder private var providerButtons: some View {
+        ForEach(app.otherSignInProviders, id: \.self) { provider in
+            Button { app.signIn(provider: provider) } label: {
+                Label(AppModel.providerTitle(provider), systemImage: provider == "apple" ? "apple.logo" : provider == "azure" ? "square.grid.2x2.fill" : "g.circle.fill")
+            }
+            .disabled(app.busy)
+            .accessibilityIdentifier("signin-\(provider)")
         }
     }
 

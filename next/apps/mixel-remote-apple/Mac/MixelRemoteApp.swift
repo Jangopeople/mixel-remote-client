@@ -1,13 +1,18 @@
 import AppKit
+import AuthenticationServices
 import MixelCore
 import MixelRemoteKit
 import SwiftUI
 
-/// Mixel Remote for Mac (native preview, `ch.mixel.remote.native`): installed next to the current
-/// app, with its own device identity and sign-in.
+/// Mixel Remote for Mac 2.0. It replaces the desktop app 0.1.x in place: the same bundle identifier
+/// (`ch.mixel.remote.next.qa`), executable name, Keychain items, launch agents and data folder, so an
+/// enrolled Mac keeps its Remote ID, always-on access and settings after the update.
 @main
 enum Entry {
     static func main() {
+        // Headless modes first, while the process has one thread (the rollout reads its token then):
+        // the always-on host, the rollout enrolment, the sign-in screen host and the install checks.
+        if let code = CoreEngine.runCommandLine(CommandLine.arguments) { exit(code) }
         #if DEBUG
         // LAB builds only: `--live-check <qa-session.json> <suffix>` runs the engine checks against the
         // live service without any window, then exits (see LiveCheck.swift).
@@ -18,6 +23,16 @@ enum Entry {
         // `--live-session <qa-session.json> <suffix> <folder>`: a real session to a lab computer.
         if arguments.count >= 5, arguments[1] == "--live-session" {
             LiveCheck.run(sessionFile: arguments[2], suffix: arguments[3], sessionFolder: arguments[4])
+        }
+        // `--live-providers`: every sign-in button reaches its provider's login page (no sign-in).
+        if arguments.count >= 2, arguments[1] == "--live-providers" { LiveCheck.providers() }
+        // `--live-prepare <qa-session.json> <suffix> <folder>`: QA company + deploy token for the update test.
+        if arguments.count >= 5, arguments[1] == "--live-prepare" {
+            LiveCheck.run(sessionFile: arguments[2], suffix: arguments[3], sessionFolder: arguments[4], prepare: true)
+        }
+        // `--live-identity <qa-session.json> <suffix> <remote-id>`: after the in-place update from 0.1.22.
+        if arguments.count >= 5, arguments[1] == "--live-identity", let id = UInt32(arguments[4]) {
+            LiveCheck.run(sessionFile: arguments[2], suffix: arguments[3], expectedId: id)
         }
         #endif
         MixelRemoteMacApp.main()
@@ -68,10 +83,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     override init() {
         super.init()
+        LegacySettings.migrateOnce(bundle: Bundle.main.bundleIdentifier ?? "")
         do {
             let engine = try CoreEngine(dataDirectory: CoreEngine.defaultDirectory())
             let app = AppModel(engine: engine)
+            app.checksForUpdates = true
+            app.quit = { [weak self] in
+                self?.quitting = true
+                NSApp.terminate(nil)
+            }
             app.openURL = { NSWorkspace.shared.open($0) }
+            app.openSignIn = { [weak self] url in self?.presentSignIn(url) }
             app.chooseFile = { await Panels.open() }
             app.chooseSaveLocation = { await Panels.save(suggested: $0) }
             model = app
@@ -96,6 +118,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    // MARK: Sign-in (Mixel ID, Google, Microsoft, Apple)
+
+    private var signIn: ASWebAuthenticationSession?
+    private var signInWatch: Task<Void, Never>?
+
+    /// The provider's page opens in a secure sign-in sheet (PKCE; the engine keeps the verifier). Its
+    /// last step returns to this app's private address on 127.0.0.1, which only the engine answers;
+    /// the sheet closes once the engine has the code. "Use another browser" still shows the link.
+    func presentSignIn(_ url: URL) {
+        signIn?.cancel()
+        let session = ASWebAuthenticationSession(url: url, callbackURLScheme: "ch.mixel.remote") { [weak self] _, _ in
+            Task { @MainActor in
+                guard let self, let model = self.model else { return }
+                self.signIn = nil
+                await model.refreshAccount()
+                if ["starting", "waiting_browser"].contains(model.account.phase) { model.cancelSignIn() }
+            }
+        }
+        session.presentationContextProvider = self
+        session.prefersEphemeralWebBrowserSession = false
+        signIn = session
+        if !session.start() { signIn = nil; NSWorkspace.shared.open(url); return }
+        signInWatch?.cancel()
+        signInWatch = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                guard let self, let session = self.signIn, let model = self.model else { return }
+                if !["starting", "waiting_browser"].contains(model.account.phase) {
+                    self.signIn = nil
+                    session.cancel()
+                    return
+                }
+            }
+        }
+    }
+}
+
+extension AppDelegate: ASWebAuthenticationPresentationContextProviding {
+    nonisolated func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        MainActor.assumeIsolated { NSApp.keyWindow ?? NSApp.windows.first ?? ASPresentationAnchor() }
+    }
 }
 
 /// The Open and Save panels for files and recordings.

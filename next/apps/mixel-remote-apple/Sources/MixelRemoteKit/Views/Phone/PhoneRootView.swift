@@ -19,12 +19,20 @@ public struct PhoneRootView: View {
             NavigationStack { PhoneConnectView(app: app) }
                 .tabItem { Label(L("Connect"), systemImage: "arrow.left.arrow.right") }
                 .tag(AppSection.remote)
+            if app.company.tenant != nil {
+                NavigationStack { ReportsView(app: app) }
+                    .tabItem { Label(L("Reports"), systemImage: "list.bullet.rectangle") }
+                    .tag(AppSection.reports)
+            }
             NavigationStack { PhoneAccountView(app: app) }
                 .tabItem { Label(L("Account"), systemImage: "person.crop.circle") }
                 .tag(AppSection.account)
         }
         .tint(Theme.brand)
         .fullScreenCover(isPresented: sessionShown) { PhoneSessionView(app: app) }
+        .sheet(item: Binding(get: { sessionShown.wrappedValue ? nil : app.reports.noteFor.map(NoteTarget.init) }, set: { if $0 == nil { app.reports.noteFor = nil } })) { target in
+            SessionNoteSheet(reports: app.reports, host: target.id, name: app.devices.name(of: target.id))
+        }
     }
 }
 

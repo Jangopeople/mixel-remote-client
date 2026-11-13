@@ -67,6 +67,28 @@
         }
       }
     },
+    "%d of %d computers": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%d von %d Computern"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%d sur %d ordinateurs"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%d di %d computer"
+          }
+        }
+      }
+    },
     "%d of %d devices": {
       "localizations": {
         "de": {
@@ -107,6 +129,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "%d di %d tecnici"
+          }
+        }
+      }
+    },
+    "%d sessions": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%d Sitzungen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%d sessions"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%d sessioni"
           }
         }
       }
@@ -199,6 +243,28 @@
         }
       }
     },
+    "A technician can then reach this Mac at its sign-in screen, before anyone signs in. macOS asks for an administrator twice, and once at the sign-in screen for Screen Recording.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eine Technikerin oder ein Techniker erreicht diesen Mac dann am Anmeldebildschirm, bevor sich jemand anmeldet. macOS fragt zweimal nach einem Administrator und einmal am Anmeldebildschirm nach der Bildschirmaufnahme."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Un technicien peut alors atteindre ce Mac à son écran de connexion, avant que quiconque ne se connecte. macOS demande deux fois un administrateur, et une fois à l’écran de connexion l’enregistrement de l’écran."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Un tecnico può quindi raggiungere questo Mac alla schermata di accesso, prima che qualcuno acceda. macOS chiede due volte un amministratore e una volta, alla schermata di accesso, la registrazione dello schermo."
+          }
+        }
+      }
+    },
     "A technician is connected to this computer.": {
       "localizations": {
         "de": {
@@ -217,6 +283,50 @@
           "stringUnit": {
             "state": "translated",
             "value": "Un tecnico è connesso a questo computer."
+          }
+        }
+      }
+    },
+    "AI assistant and ticket note": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "KI-Assistent und Ticketnotiz"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Assistant IA et note de ticket"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Assistente IA e nota del ticket"
+          }
+        }
+      }
+    },
+    "AI server": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "KI-Server"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Serveur IA"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Server IA"
           }
         }
       }
@@ -331,6 +441,28 @@
         }
       }
     },
+    "Add a note? It appears in the session report of your company.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notiz hinzufügen? Sie erscheint im Sitzungsbericht Ihrer Firma."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ajouter une note ? Elle apparaît dans le rapport des sessions de votre entreprise."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aggiungere una nota? Compare nel rapporto delle sessioni della Sua azienda."
+          }
+        }
+      }
+    },
     "Add and enroll this computer": {
       "localizations": {
         "de": {
@@ -349,6 +481,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Aggiungi e registra questo computer"
+          }
+        }
+      }
+    },
+    "Add note": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notiz hinzufügen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ajouter une note"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aggiungi nota"
           }
         }
       }
@@ -441,6 +595,28 @@
         }
       }
     },
+    "Add to favorites": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zu Favoriten hinzufügen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ajouter aux favoris"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aggiungi ai preferiti"
+          }
+        }
+      }
+    },
     "Additional verification is required for this Mixel account": {
       "localizations": {
         "de": {
@@ -507,6 +683,28 @@
         }
       }
     },
+    "All devices": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Alle Geräte"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tous les appareils"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tutti i dispositivi"
+          }
+        }
+      }
+    },
     "All groups": {
       "localizations": {
         "de": {
@@ -547,6 +745,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Tutti gli schermi"
+          }
+        }
+      }
+    },
+    "All technicians": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Alle Techniker"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tous les techniciens"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tutti i tecnici"
           }
         }
       }
@@ -749,6 +969,50 @@
         }
       }
     },
+    "Arrow": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pfeil"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Flèche"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Freccia"
+          }
+        }
+      }
+    },
+    "Attended": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Beaufsichtigt"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Avec présence"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Presidiata"
+          }
+        }
+      }
+    },
     "Automatic (this computer’s language)": {
       "localizations": {
         "de": {
@@ -789,6 +1053,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Blocca l’input"
+          }
+        }
+      }
+    },
+    "Blue": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Blau"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bleu"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Blu"
           }
         }
       }
@@ -947,6 +1233,50 @@
         }
       }
     },
+    "Choose a company": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Firma wählen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choisir une entreprise"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scelga un’azienda"
+          }
+        }
+      }
+    },
+    "Choose a company and enter a name": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wählen Sie eine Firma und geben Sie einen Namen ein"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choisissez une entreprise et saisissez un nom"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scelga un’azienda e inserisca un nome"
+          }
+        }
+      }
+    },
     "Choose a display": {
       "localizations": {
         "de": {
@@ -1035,6 +1365,28 @@
         }
       }
     },
+    "Clear": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Löschen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Effacer"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancella"
+          }
+        }
+      }
+    },
     "Click again to restart": {
       "localizations": {
         "de": {
@@ -1101,6 +1453,28 @@
         }
       }
     },
+    "Colleague": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kollege"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Collègue"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Collega"
+          }
+        }
+      }
+    },
     "Colleague %@": {
       "localizations": {
         "de": {
@@ -1119,6 +1493,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Collega %@"
+          }
+        }
+      }
+    },
+    "Colour and size": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Farbe und Grösse"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couleur et taille"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Colore e dimensione"
           }
         }
       }
@@ -1475,6 +1871,28 @@
         }
       }
     },
+    "Connected to your AI server.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mit Ihrem KI-Server verbunden."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connecté à votre serveur IA."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connesso al tuo server IA."
+          }
+        }
+      }
+    },
     "Connected. Keyboard and mouse control is enabled.": {
       "localizations": {
         "de": {
@@ -1537,6 +1955,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Connessione a %@…"
+          }
+        }
+      }
+    },
+    "Connecting…": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verbindung wird hergestellt…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connexion…"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connessione…"
           }
         }
       }
@@ -1625,6 +2065,72 @@
           "stringUnit": {
             "state": "translated",
             "value": "Problema di connessione"
+          }
+        }
+      }
+    },
+    "Continue with Apple": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Weiter mit Apple"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continuer avec Apple"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continua con Apple"
+          }
+        }
+      }
+    },
+    "Continue with Google": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Weiter mit Google"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continuer avec Google"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continua con Google"
+          }
+        }
+      }
+    },
+    "Continue with Microsoft": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Weiter mit Microsoft"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continuer avec Microsoft"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continua con Microsoft"
           }
         }
       }
@@ -1893,6 +2399,28 @@
         }
       }
     },
+    "Create rollout command": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verteilbefehl erstellen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Créer la commande de déploiement"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Crea il comando di distribuzione"
+          }
+        }
+      }
+    },
     "Ctrl+Alt+Del": {
       "localizations": {
         "de": {
@@ -2069,6 +2597,28 @@
         }
       }
     },
+    "Deleted account": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gelöschtes Konto"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compte supprimé"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Account eliminato"
+          }
+        }
+      }
+    },
     "Deletes the company at once: devices, invitations, members and their accounts. The subscription ends. Type the company name to confirm.": {
       "localizations": {
         "de": {
@@ -2131,6 +2681,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Token di distribuzione"
+          }
+        }
+      }
+    },
+    "Device": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gerät"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Appareil"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dispositivo"
           }
         }
       }
@@ -2399,6 +2971,116 @@
         }
       }
     },
+    "Draw on the remote screen. The person there sees it; nothing is clicked.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Auf dem entfernten Bildschirm zeichnen. Die Person dort sieht es; nichts wird angeklickt."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dessiner sur l’écran distant. La personne le voit ; rien n’est cliqué."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disegnare sullo schermo remoto. La persona lo vede; nulla viene cliccato."
+          }
+        }
+      }
+    },
+    "Draw: off": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zeichnen: aus"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dessin : désactivé"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disegno: disattivato"
+          }
+        }
+      }
+    },
+    "Draw: on": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zeichnen: ein"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dessin : activé"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disegno: attivato"
+          }
+        }
+      }
+    },
+    "Drawing on the remote screen": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zeichnung auf dem entfernten Bildschirm"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dessin sur l’écran distant"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disegno sullo schermo remoto"
+          }
+        }
+      }
+    },
+    "Duration": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dauer"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Durée"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Durata"
+          }
+        }
+      }
+    },
     "E-mail": {
       "localizations": {
         "de": {
@@ -2487,6 +3169,28 @@
         }
       }
     },
+    "Edit note": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notiz bearbeiten"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modifier la note"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modifica nota"
+          }
+        }
+      }
+    },
     "Enable Accessibility in macOS to allow keyboard and mouse control.": {
       "localizations": {
         "de": {
@@ -2571,6 +3275,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Attiva la condivisione non presidiata"
+          }
+        }
+      }
+    },
+    "End": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ende"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fin"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fine"
           }
         }
       }
@@ -2905,6 +3631,28 @@
         }
       }
     },
+    "Enter the ticket number.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ticketnummer eingeben."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saisissez le numéro du ticket."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Inserisci il numero del ticket."
+          }
+        }
+      }
+    },
     "Expires %@": {
       "localizations": {
         "de": {
@@ -2927,6 +3675,72 @@
         }
       }
     },
+    "Explain the screen": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bildschirm erklären"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expliquer l’écran"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Spiega lo schermo"
+          }
+        }
+      }
+    },
+    "Export CSV": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CSV exportieren"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Exporter en CSV"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esporta CSV"
+          }
+        }
+      }
+    },
+    "Export PDF": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PDF exportieren"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Exporter en PDF"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esporta PDF"
+          }
+        }
+      }
+    },
     "Export data in the portal": {
       "localizations": {
         "de": {
@@ -2945,6 +3759,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Esporta i dati nel portale"
+          }
+        }
+      }
+    },
+    "Favorites": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Favoriten"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Favoris"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preferiti"
           }
         }
       }
@@ -3011,6 +3847,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Trova dispositivo"
+          }
+        }
+      }
+    },
+    "From": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Von"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Du"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dal"
           }
         }
       }
@@ -3125,6 +3983,28 @@
         }
       }
     },
+    "Green": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Grün"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vert"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verde"
+          }
+        }
+      }
+    },
     "Group": {
       "localizations": {
         "de": {
@@ -3165,6 +4045,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Aiutare qualcuno sul telefono"
+          }
+        }
+      }
+    },
+    "Highlighter": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Leuchtstift"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Surligneur"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Evidenziatore"
           }
         }
       }
@@ -3297,6 +4199,50 @@
           "stringUnit": {
             "state": "translated",
             "value": "Gli input non arrivavano più; la sessione è stata interrotta"
+          }
+        }
+      }
+    },
+    "Install updates automatically": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Updates automatisch installieren"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Installer les mises à jour automatiquement"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Installa gli aggiornamenti automaticamente"
+          }
+        }
+      }
+    },
+    "Installing Mixel Remote %@… The app restarts by itself.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mixel Remote %@ wird installiert… Die App startet von selbst neu."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Installation de Mixel Remote %@… L’app redémarre d’elle-même."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Installazione di Mixel Remote %@… L’app si riavvia da sola."
           }
         }
       }
@@ -3521,6 +4467,28 @@
         }
       }
     },
+    "Kind": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Art"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Type"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tipo"
+          }
+        }
+      }
+    },
     "Language": {
       "localizations": {
         "de": {
@@ -3719,6 +4687,28 @@
         }
       }
     },
+    "Loading…": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wird geladen…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chargement…"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Caricamento…"
+          }
+        }
+      }
+    },
     "Lock computer": {
       "localizations": {
         "de": {
@@ -3759,6 +4749,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Blocca alla fine"
+          }
+        }
+      }
+    },
+    "Looking at the screen…": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bildschirm wird angesehen…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Analyse de l’écran…"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Analisi dello schermo…"
           }
         }
       }
@@ -4027,6 +5039,28 @@
         }
       }
     },
+    "Mixel Remote for iPhone and iPad updates through the App Store or TestFlight.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mixel Remote für iPhone und iPad wird über den App Store oder TestFlight aktualisiert."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mixel Remote pour iPhone et iPad se met à jour via l’App Store ou TestFlight."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mixel Remote per iPhone e iPad si aggiorna tramite l’App Store o TestFlight."
+          }
+        }
+      }
+    },
     "Mixel Remote reconnects by itself. Device status appears once it is connected; you can still choose Connect.": {
       "localizations": {
         "de": {
@@ -4089,6 +5123,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Account del team Mixel"
+          }
+        }
+      }
+    },
+    "Model": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modell"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modèle"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modello"
           }
         }
       }
@@ -4243,28 +5299,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Nome mostrato sui tuoi dispositivi"
-          }
-        }
-      }
-    },
-    "Native preview %@ · for testing only, not for customers yet.": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Native Vorschau %@ · nur zum Testen, noch nicht für Kunden."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Aperçu natif %@ · pour les tests uniquement, pas encore pour les clients."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Anteprima nativa %@ · solo per test, non ancora per i clienti."
           }
         }
       }
@@ -4445,6 +5479,50 @@
         }
       }
     },
+    "No network address is known for this computer yet": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Für diesen Computer ist noch keine Netzwerkadresse bekannt"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aucune adresse réseau n’est encore connue pour cet ordinateur"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Per questo computer non è ancora noto alcun indirizzo di rete"
+          }
+        }
+      }
+    },
+    "No sessions in this period.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keine Sitzungen in diesem Zeitraum."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aucune session pendant cette période."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nessuna sessione in questo periodo."
+          }
+        }
+      }
+    },
     "Not now": {
       "localizations": {
         "de": {
@@ -4463,6 +5541,50 @@
           "stringUnit": {
             "state": "translated",
             "value": "Non ora"
+          }
+        }
+      }
+    },
+    "Note": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notiz"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Note"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nota"
+          }
+        }
+      }
+    },
+    "Note (optional)": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notiz (optional)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Note (facultatif)"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nota (facoltativa)"
           }
         }
       }
@@ -4863,6 +5985,28 @@
         }
       }
     },
+    "Pen": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stift"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stylo"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Penna"
+          }
+        }
+      }
+    },
     "Personal account": {
       "localizations": {
         "de": {
@@ -4969,28 +6113,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Attendere…"
-          }
-        }
-      }
-    },
-    "Preview for testing": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Vorschau zum Testen"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Aperçu pour les tests"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Anteprima per i test"
           }
         }
       }
@@ -5105,6 +6227,50 @@
         }
       }
     },
+    "Question": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Frage"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Question"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Domanda"
+          }
+        }
+      }
+    },
+    "Question or keywords (optional)": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Frage oder Stichworte (optional)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Question ou mots-clés (facultatif)"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Domanda o parole chiave (facoltativo)"
+          }
+        }
+      }
+    },
     "Quit Mixel Remote": {
       "localizations": {
         "de": {
@@ -5189,6 +6355,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Pronto. La persona lì accetta la richiesta, a meno che non sia configurato l’accesso automatico."
+          }
+        }
+      }
+    },
+    "Recent connections": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Letzte Verbindungen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connexions récentes"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connessioni recenti"
           }
         }
       }
@@ -5303,6 +6491,28 @@
         }
       }
     },
+    "Red": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rot"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rouge"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rosso"
+          }
+        }
+      }
+    },
     "Refresh devices": {
       "localizations": {
         "de": {
@@ -5365,6 +6575,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Registri questo computer con il Suo account personale."
+          }
+        }
+      }
+    },
+    "Remote ID": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remote-ID"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ID Remote"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ID Remote"
           }
         }
       }
@@ -5519,6 +6751,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Rimuovi dall’azienda"
+          }
+        }
+      }
+    },
+    "Remove from favorites": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aus Favoriten entfernen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Retirer des favoris"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rimuovi dai preferiti"
           }
         }
       }
@@ -5743,6 +6997,28 @@
         }
       }
     },
+    "Reports": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Berichte"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rapports"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rapporti"
+          }
+        }
+      }
+    },
     "Restart computer": {
       "localizations": {
         "de": {
@@ -5765,6 +7041,28 @@
         }
       }
     },
+    "Restarting Mixel Remote…": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mixel Remote wird neu gestartet…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Redémarrage de Mixel Remote…"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Riavvio di Mixel Remote…"
+          }
+        }
+      }
+    },
     "Revoke": {
       "localizations": {
         "de": {
@@ -5783,6 +7081,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Revoca"
+          }
+        }
+      }
+    },
+    "Revoked": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Widerrufen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Révoqué"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Revocato"
           }
         }
       }
@@ -5831,6 +7151,28 @@
         }
       }
     },
+    "Rollout for many computers": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verteilung auf viele Computer"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Déploiement sur de nombreux ordinateurs"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Distribuzione su molti computer"
+          }
+        }
+      }
+    },
     "Run the command on each computer (as administrator, or with your deployment tool). The link is shown only now.": {
       "localizations": {
         "de": {
@@ -5849,6 +7191,94 @@
           "stringUnit": {
             "state": "translated",
             "value": "Esegua il comando su ogni computer (come amministratore o con il Suo strumento di distribuzione). Il link viene mostrato solo ora."
+          }
+        }
+      }
+    },
+    "Running": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Läuft"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En cours"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In corso"
+          }
+        }
+      }
+    },
+    "Save in ISM ticket": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Im ISM-Ticket speichern"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enregistrer dans le ticket ISM"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Salva nel ticket ISM"
+          }
+        }
+      }
+    },
+    "Save note": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notiz speichern"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enregistrer la note"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Salva nota"
+          }
+        }
+      }
+    },
+    "Saved as internal note in %@": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Als interne Notiz in %@ gespeichert"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enregistré comme note interne dans %@"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Salvato come nota interna in %@"
           }
         }
       }
@@ -5893,6 +7323,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Salvataggio della registrazione…"
+          }
+        }
+      }
+    },
+    "Saving…": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wird gespeichert…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enregistrement…"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Salvataggio…"
           }
         }
       }
@@ -6095,6 +7547,138 @@
         }
       }
     },
+    "Sends a wake signal on this computer's network (Wake-on-LAN).": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sendet ein Wecksignal im Netzwerk dieses Computers (Wake-on-LAN)."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Envoie un signal de réveil sur le réseau de cet ordinateur (Wake-on-LAN)."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invia un segnale di risveglio nella rete di questo computer (Wake-on-LAN)."
+          }
+        }
+      }
+    },
+    "Session note": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sitzungsnotiz"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Note de session"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nota della sessione"
+          }
+        }
+      }
+    },
+    "Session reports": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sitzungsberichte"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rapports des sessions"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rapporti delle sessioni"
+          }
+        }
+      }
+    },
+    "Session reports are part of company plans. Create or join a company under Account.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sitzungsberichte gehören zu den Firmenplänen. Erstellen Sie unter Konto eine Firma oder treten Sie einer bei."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Les rapports des sessions font partie des forfaits entreprise. Créez ou rejoignez une entreprise sous Compte."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "I rapporti delle sessioni fanno parte dei piani aziendali. Crei o si unisca a un’azienda in Account."
+          }
+        }
+      }
+    },
+    "Session reports need a paid plan with reports. Upgrade the plan in the portal.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sitzungsberichte brauchen einen bezahlten Plan mit Berichten. Wechseln Sie den Plan im Portal."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Les rapports des sessions nécessitent un forfait payant avec rapports. Changez de forfait dans le portail."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "I rapporti delle sessioni richiedono un piano a pagamento con rapporti. Cambi piano nel portale."
+          }
+        }
+      }
+    },
+    "Session with": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sitzung mit"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Session avec"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sessione con"
+          }
+        }
+      }
+    },
     "Set up this computer": {
       "localizations": {
         "de": {
@@ -6223,6 +7807,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Lo schermo scelto è condiviso. Puoi terminare la sessione in qualsiasi momento."
+          }
+        }
+      }
+    },
+    "Show": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anzeigen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Afficher"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mostra"
           }
         }
       }
@@ -6535,6 +8141,94 @@
         }
       }
     },
+    "Sign-in screen": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anmeldebildschirm"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Écran de connexion"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Schermata di accesso"
+          }
+        }
+      }
+    },
+    "Sign-in screen Remote ID": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remote-ID des Anmeldebildschirms"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ID Remote de l’écran de connexion"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ID Remote della schermata di accesso"
+          }
+        }
+      }
+    },
+    "Sign-in screen access is off.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Zugriff am Anmeldebildschirm ist ausgeschaltet."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’accès à l’écran de connexion est désactivé."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’accesso alla schermata di accesso è disattivato."
+          }
+        }
+      }
+    },
+    "Sign-in screen access is up to date.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Zugriff am Anmeldebildschirm ist aktuell."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’accès à l’écran de connexion est à jour."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’accesso alla schermata di accesso è aggiornato."
+          }
+        }
+      }
+    },
     "Signed in": {
       "localizations": {
         "de": {
@@ -6553,6 +8247,50 @@
           "stringUnit": {
             "state": "translated",
             "value": "Accesso eseguito"
+          }
+        }
+      }
+    },
+    "Size %d": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Grösse %d"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Taille %d"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dimensione %d"
+          }
+        }
+      }
+    },
+    "Skip": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Überspringen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ignorer"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Salta"
           }
         }
       }
@@ -6597,6 +8335,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Audio"
+          }
+        }
+      }
+    },
+    "Start": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Beginn"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Début"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Inizio"
           }
         }
       }
@@ -7063,6 +8823,28 @@
         }
       }
     },
+    "The sign-in screen of this Mac can be reached with Remote ID %@.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Anmeldebildschirm dieses Macs ist mit der Remote-ID %@ erreichbar."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’écran de connexion de ce Mac est joignable avec l’ID Remote %@."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La schermata di accesso di questo Mac è raggiungibile con l’ID Remote %@."
+          }
+        }
+      }
+    },
     "The technician wants to show you their screen.": {
       "localizations": {
         "de": {
@@ -7081,6 +8863,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Il tecnico desidera mostrarLe il suo schermo."
+          }
+        }
+      }
+    },
+    "The update could not be installed: %@": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das Update konnte nicht installiert werden: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La mise à jour n’a pas pu être installée : %@"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non è stato possibile installare l’aggiornamento: %@"
           }
         }
       }
@@ -7503,6 +9307,72 @@
         }
       }
     },
+    "Ticket number": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ticketnummer"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Numéro du ticket"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Numero del ticket"
+          }
+        }
+      }
+    },
+    "To": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bis"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Au"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Al"
+          }
+        }
+      }
+    },
+    "Tool": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Werkzeug"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Outil"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Strumento"
+          }
+        }
+      }
+    },
     "Tools": {
       "localizations": {
         "de": {
@@ -7569,6 +9439,28 @@
         }
       }
     },
+    "Turn off sign-in screen access": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zugriff am Anmeldebildschirm ausschalten"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Désactiver l’accès à l’écran de connexion"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disattiva l’accesso alla schermata di accesso"
+          }
+        }
+      }
+    },
     "Turn off unattended sharing": {
       "localizations": {
         "de": {
@@ -7587,6 +9479,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Disattiva la condivisione non presidiata"
+          }
+        }
+      }
+    },
+    "Turn on sign-in screen access": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zugriff am Anmeldebildschirm einschalten"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Activer l’accès à l’écran de connexion"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Attiva l’accesso alla schermata di accesso"
           }
         }
       }
@@ -7657,6 +9571,50 @@
         }
       }
     },
+    "Typing at the sign-in screen needs Apple’s approval of the virtual keyboard for Mixel Remote. Mixel has asked Apple for it; this option turns on by itself with the update that includes it.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tippen am Anmeldebildschirm braucht Apples Freigabe der virtuellen Tastatur für Mixel Remote. Mixel hat sie bei Apple beantragt; diese Option schaltet sich mit dem Update, das sie enthält, von selbst ein."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saisir du texte à l’écran de connexion nécessite l’autorisation d’Apple pour le clavier virtuel de Mixel Remote. Mixel l’a demandée à Apple ; cette option s’active d’elle-même avec la mise à jour qui l’inclut."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Digitare alla schermata di accesso richiede l’approvazione di Apple per la tastiera virtuale di Mixel Remote. Mixel l’ha richiesta ad Apple; questa opzione si attiva da sola con l’aggiornamento che la include."
+          }
+        }
+      }
+    },
+    "Unattended": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unbeaufsichtigt"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sans surveillance"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non presidiata"
+          }
+        }
+      }
+    },
     "Unattended sharing": {
       "localizations": {
         "de": {
@@ -7675,6 +9633,72 @@
           "stringUnit": {
             "state": "translated",
             "value": "Condivisione non presidiata"
+          }
+        }
+      }
+    },
+    "Undo": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rückgängig"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Annuler"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Annulla"
+          }
+        }
+      }
+    },
+    "Update": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aktualisieren"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mettre à jour"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aggiorna"
+          }
+        }
+      }
+    },
+    "Update now": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Jetzt aktualisieren"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mettre à jour"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aggiorna ora"
           }
         }
       }
@@ -7833,6 +9857,28 @@
         }
       }
     },
+    "Version %@": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Version %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Version %@"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Versione %@"
+          }
+        }
+      }
+    },
     "Version %@ is available.": {
       "localizations": {
         "de": {
@@ -7899,6 +9945,28 @@
         }
       }
     },
+    "Waiting for Apple": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Warten auf Apple"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En attente d’Apple"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In attesa di Apple"
+          }
+        }
+      }
+    },
     "Waiting for a complete video frame…": {
       "localizations": {
         "de": {
@@ -7943,6 +10011,28 @@
         }
       }
     },
+    "Wake": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aufwecken"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Réveiller"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Riattiva"
+          }
+        }
+      }
+    },
     "Wake signal sent to %@. It shows Online when it has started.": {
       "localizations": {
         "de": {
@@ -7965,6 +10055,28 @@
         }
       }
     },
+    "White": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Weiss"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Blanc"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bianco"
+          }
+        }
+      }
+    },
     "Windows (PowerShell, as administrator)": {
       "localizations": {
         "de": {
@@ -7983,6 +10095,94 @@
           "stringUnit": {
             "state": "translated",
             "value": "Windows (PowerShell, come amministratore)"
+          }
+        }
+      }
+    },
+    "Write the note first, or let the AI write it.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zuerst die Notiz schreiben oder von der KI schreiben lassen."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rédigez d’abord la note ou laissez l’IA l’écrire."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scrivi prima la nota o lasciala scrivere all’IA."
+          }
+        }
+      }
+    },
+    "Write ticket note": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ticketnotiz schreiben"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rédiger la note de ticket"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scrivi la nota del ticket"
+          }
+        }
+      }
+    },
+    "Writing the note…": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notiz wird geschrieben…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rédaction de la note…"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scrittura della nota…"
+          }
+        }
+      }
+    },
+    "Yellow": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gelb"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Jaune"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Giallo"
           }
         }
       }
@@ -8093,6 +10293,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Il Suo collega riceve l’invito in Mixel Remote e si unisce a questa sessione. Alla persona al computer viene chiesto prima, a meno che sia configurato l’accesso non presidiato."
+          }
+        }
+      }
+    },
+    "Your company decides which sign-in methods its members may use.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ihre Firma bestimmt, welche Anmeldemethoden ihre Mitglieder verwenden dürfen."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Votre entreprise décide des méthodes de connexion que ses membres peuvent utiliser."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La Sua azienda decide quali metodi di accesso possono usare i suoi membri."
           }
         }
       }

@@ -430,6 +430,44 @@ public struct StartupSettings: Codable, Equatable, Sendable {
 
 public struct UpdateInfo: Codable, Equatable, Sendable {
     public var version: String
+    /// Can be installed in the app (signed update channel); otherwise download only.
+    public var installable: Bool
+    /// Nothing would be interrupted and the sign-in survives the restart: install without asking.
+    public var silent: Bool
+    public init(version: String, installable: Bool = false, silent: Bool = false) {
+        self.version = version
+        self.installable = installable
+        self.silent = silent
+    }
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        version = try container.decode(String.self, forKey: .version)
+        installable = try container.decodeIfPresent(Bool.self, forKey: .installable) ?? false
+        silent = try container.decodeIfPresent(Bool.self, forKey: .silent) ?? false
+    }
+}
+
+/// Access at this Mac's sign-in screen (before anyone signs in).
+public struct SignInScreenStatus: Codable, Equatable, Sendable {
+    public enum Availability: String, Codable, Sendable {
+        /// The login window host is in this app with Apple's virtual keyboard entitlement.
+        case ready
+        /// Apple has not granted the virtual keyboard entitlement yet: the host is not shipped.
+        case waitingForApple = "waiting_for_apple"
+        /// Not on this device (iPhone, iPad).
+        case notHere = "not_here"
+    }
+    public var supported: Bool
+    public var availability: Availability
+    /// Set up: the Remote ID of the sign-in screen.
+    public var connectionId: UInt32?
+    public var name: String?
+    public init(supported: Bool, availability: Availability, connectionId: UInt32? = nil, name: String? = nil) {
+        self.supported = supported
+        self.availability = availability
+        self.connectionId = connectionId
+        self.name = name
+    }
 }
 
 public enum SelfRemovalStatus: String, Codable, Sendable {
