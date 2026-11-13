@@ -39,7 +39,7 @@ done
 
 printf '%s' "$TOKEN" | grep -Eq '^mrt_[A-Za-z0-9_-]{16,96}$' || die "the deploy token is missing or invalid (copy the whole command from the portal)"
 printf '%s' "$CHANNEL" | grep -Eq '^[a-z0-9-]{1,20}$' || die "invalid channel"
-[ "$(id -u)" = 0 ] || die "run this as administrator: put sudo in front of sh (… | sudo sh -s -- '<token>')"
+[ "$(id -u)" = 0 ] || die "run this as administrator: put sudo in front of sh (... | sudo sh -s -- '<token>')"
 [ "$(uname -s)" = Linux ] || die "this script is for Linux; use the Mac or Windows command for other computers"
 case "$(uname -m)" in x86_64|amd64) ;; *) die "only 64-bit Intel/AMD computers are supported (this one is $(uname -m))" ;; esac
 command -v apt-get >/dev/null 2>&1 && command -v dpkg >/dev/null 2>&1 || die "this script needs Ubuntu or Debian (apt and dpkg)"
@@ -51,7 +51,7 @@ if [ -z "$DEB" ]; then
   command -v curl >/dev/null 2>&1 || die "curl is needed"
   command -v openssl >/dev/null 2>&1 || die "openssl is needed to check the download (apt-get install openssl)"
   BASE="https://store-api.mixel.ch/storage/v1/object/public/remote-updates"
-  say "checking the current release ($CHANNEL)…"
+  say "checking the current release ($CHANNEL)..."
   curl -fsSL --proto '=https' --max-filesize 8192 -o "$WORK/latest.json" "$BASE/$CHANNEL/linux-x64/latest.json" \
     || die "the release information could not be downloaded"
   envelope=$(tr -d '\n\r' < "$WORK/latest.json")
@@ -75,7 +75,7 @@ KEY
   printf '%s' "$FILE" | grep -Eq '^files/[A-Za-z0-9._/-]+\.deb$' && ! printf '%s' "$FILE" | grep -q '\.\.' || die "the release information is invalid"
   printf '%s' "$SHA" | grep -Eq '^[0-9a-f]{64}$' && printf '%s' "$SIZE" | grep -Eq '^[0-9]{1,10}$' || die "the release information is invalid"
   version_ok "$VERSION" || die "deploy links on Linux need Mixel Remote $MIN_VERSION or newer; the current release is $VERSION. Try again after the next update."
-  say "downloading Mixel Remote $VERSION…"
+  say "downloading Mixel Remote $VERSION..."
   DEB="$WORK/mixel-remote.deb"
   curl -fsSL --proto '=https' --max-filesize "$SIZE" -o "$DEB" "$BASE/$FILE" || die "the package could not be downloaded"
   [ "$(wc -c < "$DEB" | tr -d ' ')" = "$SIZE" ] || die "the download is incomplete"
@@ -85,7 +85,7 @@ else
   case "$DEB" in /*) ;; *) DEB="$(pwd)/$DEB" ;; esac
 fi
 
-say "installing…"
+say "installing..."
 DEBIAN_FRONTEND=noninteractive apt-get install -y -q "$DEB" >"$WORK/apt.log" 2>&1 || { tail -n 15 "$WORK/apt.log" >&2; die "the package could not be installed"; }
 APP=""
 for candidate in /usr/bin/mixel-remote /usr/bin/desktop_app; do
@@ -95,6 +95,6 @@ done
 "$APP" --validate-embedded-service >/dev/null 2>&1 \
   || die "Mixel Remote does not run on this system (it needs Ubuntu 24.04 or newer, or a comparable Debian); nothing was enrolled"
 
-say "adding this computer to your company…"
+say "adding this computer to your company..."
 "$APP" --signin-enroll "$TOKEN" || die "this computer could not be added (see the message above)"
 say "done. The computer is in Devices on https://remote.mixel.ch and reachable with always-on access."

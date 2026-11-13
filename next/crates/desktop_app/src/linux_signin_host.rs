@@ -476,7 +476,7 @@ pub fn run_service() -> Result<(), String> {
     loop {
         // The settings change only through the administrator steps; re-read them now and then.
         tick = tick.wrapping_add(1);
-        if tick % 15 == 0 {
+        if tick.is_multiple_of(15) {
             everywhere = always_on();
         }
         let screen = decide(&sessions(), everywhere);

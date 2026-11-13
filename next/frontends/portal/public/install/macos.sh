@@ -50,7 +50,7 @@ printf '%s' "$CHANNEL" | grep -Eq '^[a-z0-9-]{1,20}$' || die "invalid channel"
 [ "$(uname -s)" = Darwin ] || die "this script is for macOS; use the Linux or Windows command for other computers"
 [ "$IN_PLACE" = 0 ] || [ -n "$APP" ] || die "--in-place needs --app"
 ROOT=0; [ "$(id -u)" = 0 ] && ROOT=1
-[ "$ROOT" = 1 ] || [ "$IN_PLACE" = 1 ] || die "run this as administrator: put sudo in front of sh (… | sudo sh -s -- '<token>')"
+[ "$ROOT" = 1 ] || [ "$IN_PLACE" = 1 ] || die "run this as administrator: put sudo in front of sh (... | sudo sh -s -- '<token>')"
 
 # The person the Mac is set up for: the one signed in at the screen.
 CONSOLE_USER=$(/usr/bin/stat -f %Su /dev/console 2>/dev/null || true)
@@ -68,7 +68,7 @@ trap cleanup EXIT INT TERM
 
 if [ -z "$APP" ]; then
   BASE="https://store-api.mixel.ch/storage/v1/object/public/remote-updates"
-  say "checking the current release ($CHANNEL)…"
+  say "checking the current release ($CHANNEL)..."
   /usr/bin/curl -fsSL --proto '=https' --max-filesize 8192 -o "$WORK/latest.json" "$BASE/$CHANNEL/macos-arm64/latest.json" \
     || die "the release information could not be downloaded"
   manifest_b64=$(tr -d '\n\r' < "$WORK/latest.json" | sed -n 's/.*"manifest"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9+/=]*\)".*/\1/p')
@@ -81,7 +81,7 @@ if [ -z "$APP" ]; then
   printf '%s' "$FILE" | grep -Eq '^files/[A-Za-z0-9._/-]+\.dmg$' && ! printf '%s' "$FILE" | grep -q '\.\.' || die "the release information is invalid"
   printf '%s' "$SHA" | grep -Eq '^[0-9a-f]{64}$' && printf '%s' "$SIZE" | grep -Eq '^[0-9]{1,10}$' || die "the release information is invalid"
   version_ok "$VERSION" || die "deploy links on the Mac need Mixel Remote $MIN_VERSION or newer; the current release is $VERSION. Try again after the next update."
-  say "downloading Mixel Remote $VERSION…"
+  say "downloading Mixel Remote $VERSION..."
   /usr/bin/curl -fsSL --proto '=https' --max-filesize "$SIZE" -o "$WORK/mixel-remote.dmg" "$BASE/$FILE" || die "the app could not be downloaded"
   [ "$(wc -c < "$WORK/mixel-remote.dmg" | tr -d ' ')" = "$SIZE" ] || die "the download is incomplete"
   [ "$(/usr/bin/shasum -a 256 "$WORK/mixel-remote.dmg" | cut -d' ' -f1)" = "$SHA" ] || die "the download does not match the release"
@@ -95,7 +95,7 @@ fi
 
 if [ "$IN_PLACE" = 0 ]; then
   TARGET="/Applications/$(basename "$APP")"
-  say "installing $TARGET…"
+  say "installing $TARGET..."
   rm -rf "$TARGET.new"
   /usr/bin/ditto "$APP" "$TARGET.new" || die "the app could not be copied to /Applications"
   rm -rf "$TARGET"
@@ -111,7 +111,7 @@ EXE=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP/Contents/Info
 printf '%s' "$EXE" | grep -Eq '^[A-Za-z0-9._-]{1,64}$' || die "the app bundle is invalid"
 PROGRAM="$APP/Contents/MacOS/$EXE"
 
-say "adding this Mac to your company…"
+say "adding this Mac to your company..."
 if [ "$ROOT" = 1 ]; then
   # In the person's own session, so the key goes into their login Keychain and the host starts there.
   /bin/launchctl asuser "$CONSOLE_UID" /usr/bin/sudo -u "$CONSOLE_USER" "$PROGRAM" --signin-enroll "$TOKEN" \
