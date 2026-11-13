@@ -2,8 +2,9 @@
 
 Kotlin, Jetpack Compose and Material 3 in Mixel's own colours (dynamic colour off), Android 8+
 (API 26). The technician / controller app on the shared Rust engine — the same engine as the
-desktop app and the native Apple apps. App id `ch.mixel.remote` (version 2.0.0 replaces the Tauri
-phone app 1.0.x, same upload key).
+desktop app and the native Apple apps. App id `ch.mixel.remote` (2.0.0 replaced the Tauri phone app
+1.0.x, same upload key; 2.0.1 adds drawing on the remote screen, favorites and recent devices, session
+reports with notes and CSV/PDF export, and the optional note after a session).
 
 | Part | Where | What |
 |---|---|---|
@@ -41,7 +42,13 @@ Copy the file to the app's `no_backup/qa-session.json` (`adb shell run-as ch.mix
 then sign in with it instead of the browser. Remove the QA company in the app, the login with
 `qa-account.py remove`, and rebuild the core without `qa-session` before any release build.
 
+A host with the current engine for those checks (drawing needs a host that announces `draw`): build
+`cargo build --release -p mixel_engine --example lab_linux_host` on a Linux lab VM (Ubuntu 24.04 has the
+build libraries), then run it as root on an isolated X11 display — see the comment at the top of
+`crates/mixel_engine/examples/lab_linux_host.rs`.
+
 ## Translations
 Screen texts are English keys (`L("…")`). German, French and Italian come from the Apple apps' String
-Catalog, the desktop app's tables (`assets/engine-texts.json`) and `ANDROID` in `scripts/make-strings.py`.
+Catalog, the desktop app's tables (`assets/engine-texts.json`, `frontends/desktop/i18n-annotate.ts`,
+`i18n-reports.ts`) and `ANDROID` in `scripts/make-strings.py`.
 Engine messages are translated at run time with the desktop table.

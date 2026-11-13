@@ -31,6 +31,11 @@
     "fixture.ts",
     "session.ts",
     "viewer.ts",
-    "workspace.ts"
+    "workspace.ts",
+    "annotate.ts",
+    "i18n-annotate.ts",
+    "report-export.ts",
+    "reports.ts",
+    "i18n-reports.ts"
   ]
 }

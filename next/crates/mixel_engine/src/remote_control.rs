@@ -57,7 +57,7 @@ pub struct DisplayOffer {
 
 /// Optional features this app announces to the other side of a session.
 pub fn own_features() -> Vec<&'static str> {
-    vec![
+    let mut features = vec![
         core_protocol::clipboard::FEATURE,
         ALL_MONITORS,
         crate::host_print::FEATURE,
@@ -65,7 +65,10 @@ pub fn own_features() -> Vec<&'static str> {
         FULL_HD,
         crate::remote_session::JOIN,
         crate::remote_session::SWITCH,
-    ]
+    ];
+    // Hosts that show the technician's drawings (not Wayland or iOS).
+    features.extend(crate::annotation::features());
+    features
 }
 /// Feature: the controller can show "all monitors as one picture" as a display choice.
 pub const ALL_MONITORS: &str = "allmon";
@@ -109,6 +112,10 @@ pub struct ControlPipe {
     current_display: u16,
     /// Host: actions it offered. Controller: actions the host offered.
     actions: Vec<String>,
+    /// Host: this technician's drawings on the board (they go when the session ends).
+    drawings_in: Option<crate::annotation::Owner>,
+    /// Controller: drawing messages to send (only to hosts that announced drawing).
+    drawings_out: Option<mpsc::Receiver<core_protocol::annotation::Message>>,
 }
 impl ControlPipe {
     pub async fn create(
@@ -219,6 +226,15 @@ impl ControlPipe {
             .state
             .record_grants(config.generation, config.session, config.mirror, files, recording)
             .await?;
+        // Drawing needs only a view of the screen, not control.
+        let drawings_out = if !config.host && features.iter().any(|name| name == core_protocol::annotation::FEATURE) {
+            let (sender, receiver) = mpsc::channel(64);
+            config.state.set_drawing(config.generation, config.session, sender).await;
+            Some(receiver)
+        } else {
+            None
+        };
+        let drawings_in = (config.host && !crate::annotation::features().is_empty()).then(crate::annotation::Owner::new);
         let bulk = if files {
             Some(
                 crypto
@@ -269,6 +285,8 @@ impl ControlPipe {
             display_count: if config.host { 0 } else { display_offer.0 },
             displays: if config.host && allowed { displays } else { Vec::new() },
             actions: if allowed { actions } else { Vec::new() },
+            drawings_in,
+            drawings_out,
         })
     }
     /// Host: this session forwards print jobs (the technician's app understands them).
@@ -419,6 +437,21 @@ impl ControlPipe {
         self.current_display = index;
         Ok(())
     }
+    /// Controller: sends the queued drawing messages (no acknowledgment).
+    async fn send_drawings(&mut self, channel: &Arc<dyn NativeDataChannel>) -> Result<(), String> {
+        for _ in 0..16 {
+            let Some(message) = self.drawings_out.as_mut().and_then(|queue| queue.try_recv().ok()) else {
+                return Ok(());
+            };
+            let Ok(plain) = message.record() else { continue };
+            let record = self.crypto.seal(&plain).map_err(|error| error.to_string())?;
+            tokio::time::timeout(Duration::from_secs(2), channel.send(record.as_slice().into()))
+                .await
+                .map_err(|_| "Drawing transmission timed out")?
+                .map_err(|_| "Drawing transport closed".to_owned())?;
+        }
+        Ok(())
+    }
     pub fn take_keyframe_request(&mut self) -> bool {
         std::mem::take(&mut self.force_keyframe)
     }
@@ -458,6 +491,8 @@ impl ControlPipe {
         self.clipboard.check_deadline()?;
         if self.host {
             self.pump_print(channel).await?;
+        } else {
+            self.send_drawings(channel).await?;
         }
         if !self.host
             && let Ok(command) = self.commands.try_recv()
@@ -594,11 +629,28 @@ impl ControlPipe {
         if config.stopped() {
             return Err("The session stopped before control processing".into());
         }
-        let plain = Zeroizing::new(
+        let mut plain = Zeroizing::new(
             self.crypto
                 .open(&record)
                 .map_err(|error| error.to_string())?,
         );
+        // Drawings: in view-only sessions too, and many at a time (they arrive while the
+        // technician draws, and a view-only host polls only between pictures).
+        let mut drawn = 0;
+        while let Some(rest) = plain.strip_prefix(core_protocol::annotation::RECORD) {
+            if let Some(owner) = &self.drawings_in {
+                owner.receive(rest);
+            }
+            drawn += 1;
+            if drawn >= 64 {
+                return Ok(());
+            }
+            record = match tokio::time::timeout(Duration::from_micros(200), received_record(channel)).await {
+                Ok(value) => value?,
+                Err(_) => return Ok(()),
+            };
+            plain = Zeroizing::new(self.crypto.open(&record).map_err(|error| error.to_string())?);
+        }
         if plain.starts_with(core_protocol::clipboard::PREFIX) {
             return self
                 .clipboard

@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Settings
@@ -30,6 +31,7 @@ import androidx.compose.ui.Modifier
 import ch.mixel.remote.app.AppModel
 import ch.mixel.remote.app.Section
 import ch.mixel.remote.support.L
+import kotlinx.coroutines.launch
 
 /** What the app can do outside the engine (files, links), provided by the activity. */
 interface Platform {
@@ -37,6 +39,8 @@ interface Platform {
     fun chooseFileToSend(done: (String?) -> Unit) {}
     /** Saves a received file (path in the app's folder) where the person chooses. */
     fun saveReceived(path: String, name: String) {}
+    /** Saves a session report (CSV or PDF) where the person chooses. */
+    fun saveReport(name: String, mime: String, bytes: ByteArray) {}
     /** A private path for a file being received. */
     fun receivePath(name: String): String = name
     /** The store.mixel.ch download the app checks for updates (the main Android download). */
@@ -52,14 +56,26 @@ val LocalDemo = androidx.compose.runtime.staticCompositionLocalOf<String?> { nul
 /** Devices, Connect and Account as tabs; Settings from Account; a session covers the whole screen. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun RootScreen(app: AppModel, platform: Platform = Platform.None, startInSettings: Boolean = false) {
+fun RootScreen(app: AppModel, platform: Platform = Platform.None, startInSettings: Boolean = false, startInReports: Boolean = false) {
     var settingsOpen by rememberSaveable { mutableStateOf(startInSettings) }
+    var reportsOpen by rememberSaveable { mutableStateOf(startInReports) }
     if (app.session.shown) {
         SessionScreen(app, platform)
         return
     }
-    BackHandler(enabled = settingsOpen) { settingsOpen = false }
+    // After a session with a company device: an optional note for the session report.
+    app.reports.notePrompt?.let { prompt ->
+        val scope = androidx.compose.runtime.rememberCoroutineScope()
+        NoteDialog(
+            title = L("Session note"), subtitle = L("Session with %@. Add a note? It appears in the session report of your company.", prompt.name),
+            initial = "", hint = L("Up to 4000 characters. Leave it empty to remove the note."), label = L("Note (optional)"), skip = L("Skip"),
+            onDismiss = { app.reports.dismissNote() },
+        ) { text -> scope.launch { app.reports.saveSessionNote(text) } }
+    }
+    val subpage = settingsOpen || reportsOpen
+    BackHandler(enabled = subpage) { settingsOpen = false; reportsOpen = false }
     val title = when {
+        reportsOpen -> L("Session reports")
         settingsOpen -> L("Settings")
         app.section == Section.Devices -> L("Devices")
         app.section == Section.Connect -> L("Connect")
@@ -71,12 +87,15 @@ fun RootScreen(app: AppModel, platform: Platform = Platform.None, startInSetting
             TopAppBar(
                 title = { Text(title) },
                 navigationIcon = {
-                    if (settingsOpen) {
-                        IconButton(onClick = { settingsOpen = false }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = L("Back")) }
+                    if (subpage) {
+                        IconButton(onClick = { settingsOpen = false; reportsOpen = false }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = L("Back")) }
                     }
                 },
                 actions = {
-                    if (!settingsOpen && app.section == Section.Account) {
+                    if (!subpage && app.section == Section.Account) {
+                        if (app.company.tenant != null) {
+                            IconButton(onClick = { reportsOpen = true }) { Icon(Icons.Filled.Assessment, contentDescription = L("Session reports")) }
+                        }
                         IconButton(onClick = { settingsOpen = true }) { Icon(Icons.Filled.Settings, contentDescription = L("Settings")) }
                     }
                 },
@@ -84,7 +103,7 @@ fun RootScreen(app: AppModel, platform: Platform = Platform.None, startInSetting
             )
         },
         bottomBar = {
-            if (!settingsOpen) {
+            if (!subpage) {
                 NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainer) {
                     val colors = NavigationBarItemDefaults.colors(
                         selectedIconColor = MaterialTheme.colorScheme.primary,
@@ -100,6 +119,7 @@ fun RootScreen(app: AppModel, platform: Platform = Platform.None, startInSetting
     ) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {
             when {
+                reportsOpen -> ReportsScreen(app, platform)
                 settingsOpen -> SettingsScreen(app, platform)
                 app.section == Section.Devices -> DevicesScreen(app)
                 app.section == Section.Connect -> ConnectScreen(app)

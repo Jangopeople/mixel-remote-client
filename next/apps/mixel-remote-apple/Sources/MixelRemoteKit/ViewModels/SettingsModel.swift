@@ -12,13 +12,26 @@ public final class SettingsModel: ObservableObject {
     @Published public private(set) var updateChecked = false
     @Published public private(set) var removalPending = false
     @Published public private(set) var screenAccess = false
+    @Published public private(set) var installing = false
+    @Published public var autoUpdate: Bool = UserDefaults.standard.string(forKey: SettingsModel.autoUpdateKey) != "off" {
+        didSet { UserDefaults.standard.set(autoUpdate ? "on" : "off", forKey: Self.autoUpdateKey) }
+    }
+    @Published public private(set) var signInScreen: SignInScreenStatus?
+    @Published public private(set) var signInWorking = false
+    @Published public var signInMessage = ""
     @Published public var language: String = Translator.shared.choice
     @Published public var error = ""
     @Published public var notice = ""
 
+    /// The desktop app's setting ("on"/"off"), kept under the same name.
+    static let autoUpdateKey = "mixel.remote.autoupdate.v1"
+    private var lastUpdateCheck = Date.distantPast
+    private var installFailed = false
+
     init(app: AppModel) { self.app = app }
 
     public func load() async {
+        if !app.isPhone { signInScreen = try? await app.engine.run("signin_screen_status") }
         startup = try? await app.engine.run("startup_settings")
         removalPending = (try? await app.engine.run("device_removal_pending", as: Bool.self)) ?? false
         if !app.isPhone {
@@ -58,9 +71,71 @@ public final class SettingsModel: ObservableObject {
     }
 
     public func checkForUpdate() {
-        change {
-            self.update = try await self.app.engine.run("update_check", ["variant": self.app.isPhone ? "testflight" : "native-preview"])
-            self.updateChecked = true
+        change { try await self.check(automatic: false) }
+    }
+
+    /// At start and every 30 minutes (Mac): a newer signed version installs by itself when nothing
+    /// would be interrupted and automatic updates are on, as in the desktop app.
+    func periodicUpdateCheck() async {
+        guard !app.isPhone, !installing, Date().timeIntervalSince(lastUpdateCheck) >= 30 * 60 else { return }
+        try? await check(automatic: true)
+    }
+
+    private func check(automatic: Bool) async throws {
+        lastUpdateCheck = Date()
+        update = try await app.engine.run("update_check", as: UpdateInfo?.self)
+        updateChecked = true
+        if automatic, let update, update.installable, update.silent, autoUpdate, !installFailed { await install() }
+    }
+
+    /// Installs the newest signed version in place; the app quits and the new version starts.
+    public func installUpdate() {
+        guard !installing else { return }
+        Task { await install() }
+    }
+
+    private func install() async {
+        guard let update, update.installable, !installing else { return }
+        installing = true
+        error = ""
+        notice = L("Installing Mixel Remote %@… The app restarts by itself.", update.version)
+        do {
+            try await app.engine.perform("update_install")
+            notice = L("Restarting Mixel Remote…")
+            await app.quitForUpdate()
+        } catch {
+            installing = false
+            installFailed = true
+            notice = ""
+            self.error = L("The update could not be installed: %@", AppModel.message(error))
+        }
+    }
+
+    // MARK: Sign-in screen (Mac)
+
+    /// Mixel team: access at the sign-in screen of this Mac (two administrator prompts).
+    public func enableSignInScreen(company: String, name: String) {
+        signIn { let id: UInt32 = try await self.app.engine.run("signin_screen_enable", ["company": company, "name": name])
+            self.signInMessage = L("The sign-in screen of this Mac can be reached with Remote ID %@.", Format.remoteId(id)) }
+    }
+
+    public func updateSignInScreen() {
+        signIn { try await self.app.engine.perform("signin_screen_update"); self.signInMessage = L("Sign-in screen access is up to date.") }
+    }
+
+    public func disableSignInScreen() {
+        signIn { try await self.app.engine.perform("signin_screen_disable"); self.signInMessage = L("Sign-in screen access is off.") }
+    }
+
+    private func signIn(_ work: @escaping () async throws -> Void) {
+        guard !signInWorking else { return }
+        signInWorking = true
+        signInMessage = ""
+        error = ""
+        Task {
+            do { try await work() } catch { self.error = AppModel.message(error) }
+            self.signInWorking = false
+            self.signInScreen = try? await self.app.engine.run("signin_screen_status")
         }
     }
 

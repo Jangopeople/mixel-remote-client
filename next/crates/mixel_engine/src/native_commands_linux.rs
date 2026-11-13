@@ -104,17 +104,6 @@ pub(super) async fn platform(context: &Context, command: &str, args: &Args) -> R
                 .map_err(|_| "Administrator step failed")??;
             out(serde_json::Value::Null)
         }
-        "update_install" => {
-            if cfg!(feature = "qa-session") && std::env::var_os("MIXEL_UPDATE_CHANNEL").is_none() {
-                return Err("Lab builds do not update themselves".into());
-            }
-            let manifest = self_update::latest().await?;
-            if !newer(&manifest.version) {
-                return Err("This is already the newest version".into());
-            }
-            // The app quits right after this answer; the updater starts it again.
-            out(self_update::download_and_install(manifest).await?)
-        }
         "open_browser" => {
             let url: String = args.get("url")?;
             out(browser(&url).await?)

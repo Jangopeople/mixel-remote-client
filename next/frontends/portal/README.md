@@ -13,6 +13,7 @@ Phase 8, stage 3). React + TypeScript + Vite, served by a Cloudflare Worker with
 - `/auth/callback` OAuth (PKCE) return for Mixel ID.
 - `/app` overview (plan, trial days, usage), `/app/devices` (online status with "online since" / "last seen" and the
   reason, refreshed every 30 s; rename, move, remove, add help, link to the web viewer),
+  favorites (star per device) and recent connections at the top of the list, `/app/reports` (session reports, see below),
   `/app/groups` (groups, technician access), `/app/deploy` (deploy links + the one-line command per system:
   Windows PowerShell, `curl … | sudo sh` for macOS and Linux), `/app/team` (members, roles, invitations with their
   e-mail state, send again, revoke), `/app/settings` (sign-in methods, required 2-step login, email domains, audit log),
@@ -26,6 +27,24 @@ Online status comes from the connection broker: every 30 s it reports the connec
 `remote_saas_device_presence`, which applies the same access rules as the device list. "Status unknown" means the broker
 has not reported for 3 minutes. Settings → Company: owners and admins rename the company (`remote_saas_rename_tenant`,
 audited; the company ID/slug stays).
+
+## Favorites, recent connections and session reports (SQL 029)
+- Devices: a star per device (`remote_saas_set_favorite`, per person), then "Favorites" (by name), "Recent connections"
+  (`remote_saas_recent_devices`, the caller's 10 most recent devices, newest first, without favorites) and the other devices.
+- `/app/reports` (everyone; the plan feature `reports`: Solo, Team, Business, Enterprise and the trial): filters from/to
+  (last 30 days by default, at most 366 days), technician (owners/admins, from `remote_saas_members`) and device;
+  `remote_saas_session_report` returns all sessions to owners/admins and only their own to the others (newest first,
+  at most 5000). Notes are edited inline (`remote_saas_session_note` with the session id; owners/admins any note,
+  the others their own). Export of the shown rows: CSV (UTF-8 with BOM, translated headers) and PDF (hand-written
+  PDF 1.4 in `src/lib/reportExport.ts`, Helvetica with WinAnsi encoding, landscape A4, paginated, totals).
+  A plan without `reports` (or the RPC's "Session reports need a paid plan") shows an upgrade notice → Plan & billing.
+- Until 029 is applied the stars and the two sections are hidden and Reports says "not available yet".
+- Live check: `tests/e2e/reports.spec.ts` creates a QA company (`QA Reports <run>`, owner
+  `qa-reports-<run>-owner@example.com`, two enrolled computers), seeds two sessions with `tests/e2e/reports-seed.sql`
+  through `QA_SQL` (check its INSERT against 029 first; `QA_REPORTS_SEED` points to another file), then stars a device,
+  filters, edits a note and downloads CSV and PDF. It deletes the company, its closure row, the reserved IDs and the
+  account in `afterAll`:
+  `QA_RUN=p$(date +%H%M%S) QA_ADMIN_ENV=/path/qa-admin.env QA_SQL="ssh mixel-vps docker exec -i ism-postgres psql -U postgres -d ism -At" QA_SHOTS=/path/shots PORTAL_URL=https://remote.mixel.ch npx playwright test tests/e2e/reports.spec.ts`
 
 ## Legal and data protection (SQL 027) — texts are DRAFTS pending Michael's review
 - `/legal` (index), `/legal/terms`, `/legal/privacy`, `/legal/dpa`, `/legal/subprocessors` in EN/DE/FR/IT

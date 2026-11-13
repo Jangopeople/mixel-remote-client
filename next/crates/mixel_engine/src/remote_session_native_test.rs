@@ -71,6 +71,30 @@ impl FixturePeer {
         signals: mpsc::Receiver<Signal>,
         #[cfg(target_os = "linux")] portal: Option<Arc<crate::wayland_portal::Grant>>,
     ) {
+        self.start_with(
+            id,
+            remote,
+            source,
+            host,
+            host,
+            signals,
+            #[cfg(target_os = "linux")]
+            portal,
+        );
+    }
+
+    /// `control`: the host grants keyboard and mouse (false: a view-only session).
+    #[allow(clippy::too_many_arguments)]
+    fn start_with(
+        &self,
+        id: Uuid,
+        remote: &Self,
+        source: String,
+        host: bool,
+        control: bool,
+        signals: mpsc::Receiver<Signal>,
+        #[cfg(target_os = "linux")] portal: Option<Arc<crate::wayland_portal::Grant>>,
+    ) {
         let expires = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -89,7 +113,7 @@ impl FixturePeer {
             #[cfg(target_os = "linux")]
             portal,
             confirm: host,
-            control: host,
+            control: host && control,
             clipboard: false,
             files: host,
             chat: false,
@@ -442,6 +466,99 @@ async fn native_accept_shares_real_pixels_and_injects_physical_input() {
     assert_eq!(windows_a_pressed(), before);
     assert!(viewer.session.next_video(id, false).await.unwrap().is_empty());
     println!("PASS: revoke released held keys and cleared retained frames");
+}
+
+/// Drawing in a view-only session, end to end on an X11 desktop (Xvfb works): the controller's
+/// strokes travel through the encrypted control channel, the host shows them over its screen,
+/// and since X11 cannot leave the overlay out, they come back in the picture; Clear takes them
+/// away again. `DISPLAY=:99 cargo test -p mixel_engine -- --ignored view_only_drawings`
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "Run only on an isolated X11 test desktop"]
+async fn view_only_drawings_reach_the_host_screen_and_come_back_in_the_picture() {
+    use core_protocol::annotation::{Message, Tool};
+    let (desktop, screen) = x11rb::connect(None).unwrap();
+    let root = desktop.setup().roots[screen].root;
+    desktop
+        .change_window_attributes(root, &ChangeWindowAttributesAux::new().background_pixel(0x00b33721))
+        .unwrap()
+        .check()
+        .unwrap();
+    desktop.clear_area(false, root, 0, 0, 0, 0).unwrap().check().unwrap();
+    let source = format!("x11:{screen}:{root}");
+    let id = Uuid::new_v4();
+    let (host, mut host_commands) = FixturePeer::new(id, true).await;
+    let (viewer, viewer_commands) = FixturePeer::new(id, false).await;
+    let stroke = Message::Stroke { id: 1, tool: Tool::Pen, colour: 3, width: 4, points: vec![(3000, 32767), (62535, 32767)], done: true };
+    assert!(!viewer.session.draw(id, stroke.clone()).await.unwrap(), "no session yet");
+    host.session
+        .decide(Decision { session: id, accept: true, source: source.clone(), confirm: true, control: false, clipboard: false, files: false, chat: false, recording: false })
+        .await
+        .unwrap();
+    assert!(matches!(host_commands.recv().await, Some(Command::Decide { accept: true, control: false, .. })));
+    let (to_host, host_signals) = mpsc::channel(32);
+    let (to_viewer, viewer_signals) = mpsc::channel(32);
+    let host_finished = tokio::spawn(relay(host_commands, to_viewer));
+    let viewer_finished = tokio::spawn(relay(viewer_commands, to_host));
+    host.start_with(id, &viewer, source, true, false, host_signals, None);
+    viewer.start_with(id, &host, String::new(), false, false, viewer_signals, None);
+    // A blue line across the middle of the picture; the background is red-brown.
+    let blue_in_middle = |video: &[u8]| -> Option<bool> {
+        if video.len() <= 32 || &video[..4] != b"MRF2" {
+            return None;
+        }
+        let width = u32::from_le_bytes(video[4..8].try_into().unwrap()) as usize;
+        let height = u32::from_le_bytes(video[8..12].try_into().unwrap()) as usize;
+        let row = &video[32 + (height / 2) * width * 4..32 + (height / 2 + 1) * width * 4];
+        let blue = row.as_chunks::<4>().0.iter().filter(|pixel| {
+            let (low, high) = (pixel[0].min(pixel[2]), pixel[0].max(pixel[2]));
+            high > 0xd0 && low < 0x50 && pixel[1].abs_diff(0x7b) < 40
+        });
+        Some(blue.count() > width / 2)
+    };
+    let next_picture = || async {
+        loop {
+            let video = viewer.session.next_video(id, false).await.unwrap();
+            if let Some(blue) = blue_in_middle(&video) {
+                break blue;
+            }
+            assert!(!host_finished.is_finished(), "Host stopped");
+            assert!(!viewer_finished.is_finished(), "Controller stopped");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(20), async {
+        while next_picture().await {}
+    })
+    .await
+    .expect("No desktop video arrived");
+    let status = viewer.session.status().await;
+    assert!(!status.control, "a view-only session");
+    assert!(status.peer_features.iter().any(|name| name == core_protocol::annotation::FEATURE));
+    assert!(status.peer_features.iter().any(|name| name == core_protocol::annotation::FEATURE_IN_PICTURE));
+    assert!(viewer.session.draw(id, stroke).await.unwrap(), "drawing is queued without control");
+    assert!(viewer.session.draw(id, Message::Clear).await.is_ok());
+    assert!(viewer.session.draw(id, Message::Stroke { id: 2, tool: Tool::Pen, colour: 3, width: 4, points: vec![(3000, 32767), (62535, 32767)], done: true }).await.unwrap());
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !next_picture().await {}
+    })
+    .await
+    .expect("The stroke did not appear in the host's picture");
+    println!("PASS: a view-only controller's stroke is shown on the host and comes back in the picture");
+    assert!(viewer.session.draw(id, Message::Clear).await.unwrap());
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while next_picture().await {}
+    })
+    .await
+    .expect("Clear did not remove the stroke");
+    println!("PASS: Clear removed it from the host screen");
+    assert!(viewer.session.draw(id, Message::Stroke { id: 3, tool: Tool::Highlighter, colour: 9, width: 1, points: vec![(1, 1)], done: true }).await.is_err());
+    host.consent_cancel.store(true, Ordering::Release);
+    viewer.cancellation.store(true, Ordering::Release);
+    tokio::time::timeout(Duration::from_secs(12), host_finished).await.unwrap().unwrap().unwrap();
+    tokio::time::timeout(Duration::from_secs(12), viewer_finished).await.unwrap().unwrap().unwrap();
+    assert!(!viewer.session.draw(id, Message::Clear).await.unwrap(), "the session ended");
+    println!("PASS: drawing stops with the session");
 }
 
 #[cfg(target_os = "windows")]

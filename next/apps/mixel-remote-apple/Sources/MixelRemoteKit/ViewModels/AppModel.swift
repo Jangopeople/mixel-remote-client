@@ -3,12 +3,13 @@ import SwiftUI
 
 /// The sections of the app (sidebar on the Mac, tabs on the phone).
 public enum AppSection: String, CaseIterable, Identifiable, Sendable {
-    case remote, devices, account, settings
+    case remote, devices, reports, account, settings
     public var id: String { rawValue }
     public var title: String {
         switch self {
         case .remote: L("Remote control")
         case .devices: L("Devices")
+        case .reports: L("Session reports")
         case .account: L("Account")
         case .settings: L("Settings")
         }
@@ -17,6 +18,7 @@ public enum AppSection: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .remote: "arrow.left.arrow.right"
         case .devices: "laptopcomputer.and.iphone"
+        case .reports: "list.bullet.rectangle"
         case .account: "person.crop.circle"
         case .settings: "gearshape"
         }
@@ -46,6 +48,9 @@ public final class AppModel: ObservableObject {
     public lazy var company = CompanyModel(app: self)
     public lazy var settings = SettingsModel(app: self)
     public lazy var enrollment = EnrollmentModel(app: self)
+    public lazy var assistant = AssistantModel(app: self)
+    public lazy var drawing = DrawingModel(app: self)
+    public lazy var reports = ReportsModel(app: self)
 
     /// The app opens web pages (sign-in, legal texts) through this.
     public var openURL: (URL) -> Void = { _ in }
@@ -55,6 +60,8 @@ public final class AppModel: ObservableObject {
     public var chooseFile: () async -> String? = { nil }
     /// The app's Save panel for a suggested name: where to save (absolute path), or nil.
     public var chooseSaveLocation: (_ suggested: String) async -> String? = { _ in nil }
+    /// Quits the app after an update was installed (the installer starts the new version).
+    public var quit: () -> Void = {}
     /// The person chose "Go offline": do not come back online by itself until they connect again.
     var wentOffline = false
     private var autoTries = 0
@@ -95,6 +102,7 @@ public final class AppModel: ObservableObject {
         let accountEvery: TimeInterval = account.signingIn || account.phase == "mfa_required" ? 1 : 10
         if Date().timeIntervalSince(lastAccountRead) >= accountEvery { await refreshAccount() }
         await refreshRemote()
+        if checksForUpdates { await settings.periodicUpdateCheck() }
     }
 
     public func refreshAccount() async {
@@ -102,6 +110,7 @@ public final class AppModel: ObservableObject {
         guard let next: AccountStatus = try? await engine.run("account_status") else { return }
         if next != account { account = next }
         let key = next.signedIn ? "\(next.account?.profile ?? "")|\(next.account?.organization ?? "")|\(next.account?.personal ?? false)" : ""
+        if !next.signedIn, signInProviders.isEmpty { await loadSignInProviders() }
         if key != accountKey {
             accountKey = key
             signInLink = nil
@@ -115,6 +124,8 @@ public final class AppModel: ObservableObject {
         if next != previous { remote = next }
         if next.phase == "ready" { autoTries = 0; nextAutoTry = .distantPast }
         session.statusChanged(from: previous, to: next)
+        drawing.sessionChanged(next.phase == "active" && !next.sharing ? next.session : nil)
+        reports.statusChanged(from: previous, to: next)
         host.statusChanged(from: previous, to: next)
         devices.statusChanged(from: previous, to: next)
         await goOnlineIfNeeded()
@@ -168,9 +179,29 @@ public final class AppModel: ObservableObject {
 
     // MARK: Sign-in
 
-    public func signIn(showLink: Bool = false) {
+    /// Sign-in methods the identity service offers (`keycloak` = Mixel ID, `google`, `azure`, `apple`).
+    @Published public private(set) var signInProviders: [String] = []
+
+    public func loadSignInProviders() async {
+        if let providers: [String] = try? await engine.run("account_providers") { signInProviders = providers }
+    }
+
+    /// The other sign-in buttons beside Mixel ID, in the portal's order.
+    public var otherSignInProviders: [String] { signInProviders.filter { ["google", "azure", "apple"].contains($0) } }
+
+    public static func providerTitle(_ provider: String) -> String {
+        switch provider {
+        case "google": L("Continue with Google")
+        case "azure": L("Continue with Microsoft")
+        case "apple": L("Continue with Apple")
+        default: L("Sign in with Mixel ID")
+        }
+    }
+
+    /// `provider`: nil for Mixel ID (or the company's single sign-on), else google, azure or apple.
+    public func signIn(provider: String? = nil, showLink: Bool = false) {
         act {
-            let url: String = try await self.engine.run("account_sign_in", ["open_browser": false])
+            let url: String = try await self.engine.run("account_sign_in", ["open_browser": false, "provider": provider])
             if showLink { self.signInLink = url }
             else if let link = URL(string: url) { (self.openSignIn ?? self.openURL)(link) }
             await self.refreshAccount()
@@ -304,6 +335,25 @@ public final class AppModel: ObservableObject {
             return remote.control ? L("Connected. Keyboard and mouse control is enabled.") : L("Connected in view-only mode.")
         default: return Translator.shared.translate(remote.message)
         }
+    }
+
+    /// The app looks for updates by itself (the Mac app; not tests, screenshots or the phone).
+    public var checksForUpdates = false
+
+    /// After an update was installed: end sessions, go offline and quit right away.
+    /// The installer starts the new version about a second later, so this waits at most 0.7 s.
+    func quitForUpdate() async {
+        stop()
+        session.clear()
+        let engine = self.engine
+        final class Done: @unchecked Sendable { var value = false }
+        let done = Done()
+        Task.detached { try? await engine.shutdown(); done.value = true }
+        for _ in 0..<7 {
+            if done.value { break }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        quit()
     }
 
     /// Before the app quits: end sessions, go offline.

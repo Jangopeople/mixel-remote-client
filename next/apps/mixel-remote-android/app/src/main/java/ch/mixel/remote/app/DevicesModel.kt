@@ -13,6 +13,8 @@ import ch.mixel.remote.model.Device
 import ch.mixel.remote.model.DevicePage
 import ch.mixel.remote.model.RemoteStatus
 import ch.mixel.remote.model.SaasDevice
+import ch.mixel.remote.model.SaasFavorite
+import ch.mixel.remote.model.SaasRecentDevice
 import ch.mixel.remote.model.SaasGroup
 import ch.mixel.remote.model.SaasPresence
 import ch.mixel.remote.model.Tenant
@@ -42,6 +44,12 @@ class DevicesModel(private val app: AppModel) {
         private set
     var error by mutableStateOf("")
     var serverPresence by mutableStateOf<Map<Long, SaasPresence>>(emptyMap())
+        private set
+    /** The signed-in person's favorite devices (company devices; by device id). */
+    var favorites by mutableStateOf<Set<String>>(emptySet())
+        private set
+    /** Devices of the person's own recent sessions, newest first. */
+    var recent by mutableStateOf<List<SaasRecentDevice>>(emptyList())
         private set
     private var checked by mutableStateOf<Set<Long>>(emptySet())
     private var cursors = mutableListOf<Long?>(null)
@@ -75,6 +83,7 @@ class DevicesModel(private val app: AppModel) {
         devices = emptyList(); companyAll = emptyList(); groups = emptyList()
         page = 0; hasNext = false; cursors = mutableListOf(null); nextCursor = null
         checked = emptySet(); serverPresence = emptyMap(); message = ""; error = ""
+        favorites = emptySet(); recent = emptyList()
     }
 
     suspend fun load(wanted: Int = 0) {
@@ -92,6 +101,7 @@ class DevicesModel(private val app: AppModel) {
                     companyAll = rows.mapNotNull { it.device }
                     if (manages && groupsOn) groups = runCatching { app.engine.run<List<SaasGroup>>("saas_groups", args("tenant" to tenant.tenantId)) }.getOrDefault(emptyList())
                     loadServerPresence()
+                    loadFavorites()
                 }
                 page = wanted.coerceIn(0, maxOf(0, (companyAll.size - 1) / PAGE))
                 devices = companyAll.drop(page * PAGE).take(PAGE)
@@ -112,6 +122,54 @@ class DevicesModel(private val app: AppModel) {
             error = message(failure)
         } finally {
             loading = false
+        }
+    }
+
+    /** Favorites and recent devices (SQL 029); an older service without them shows the plain list. */
+    suspend fun loadFavorites() {
+        val tenant = tenant ?: return
+        favorites = runCatching { app.engine.run<List<SaasFavorite>>("saas_favorites", args("tenant" to tenant.tenantId)) }
+            .getOrNull()?.map { it.deviceId }?.toSet() ?: favorites
+        recent = runCatching { app.engine.run<List<SaasRecentDevice>>("saas_recent_devices", args("tenant" to tenant.tenantId, "max_count" to RECENT)) }
+            .getOrNull() ?: recent
+    }
+
+    data class Sections(val favorites: List<Device>, val recent: List<Device>, val others: List<Device>)
+
+    /** Favorites (by name), then recent devices that are not favorites (newest first, at most 10), then the rest; each once. */
+    fun sections(): Sections {
+        // Favorites and recent ones come from all company devices and show on the first page.
+        val all = if (tenant != null) companyAll else devices
+        if (page > 0 || (favorites.isEmpty() && recent.isEmpty())) return Sections(emptyList(), emptyList(), devices)
+        val favoriteList = all.filter { it.device in favorites }.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
+        val seen = favoriteList.map { it.device }.toMutableSet()
+        val byId = all.associateBy { it.device }
+        val recentList = mutableListOf<Device>()
+        for (entry in recent.sortedByDescending { Format.parseDate(it.lastConnectedAt)?.toEpochMilli() ?: 0L }) {
+            if (recentList.size >= RECENT) break
+            val device = byId[entry.deviceId] ?: continue
+            if (device.device in seen) continue
+            recentList.add(device)
+            seen.add(device.device)
+        }
+        return Sections(favoriteList, recentList, devices.filter { it.device !in seen })
+    }
+
+    fun isFavorite(device: Device) = device.device in favorites
+
+    /** Stars or unstars a company device for the signed-in person. */
+    fun toggleFavorite(device: Device) {
+        val tenant = tenant ?: return
+        val wanted = !isFavorite(device)
+        favorites = if (wanted) favorites + device.device else favorites - device.device
+        app.scope.launch {
+            try {
+                app.engine.run<Boolean>("saas_set_favorite", args("tenant" to tenant.tenantId, "device" to device.device, "favorite" to wanted))
+                message = if (wanted) L("%@ added to favorites.", device.name) else L("%@ removed from favorites.", device.name)
+            } catch (failure: Exception) {
+                favorites = if (wanted) favorites - device.device else favorites + device.device
+                error = L("The favorite could not be saved.")
+            }
         }
     }
 
@@ -259,5 +317,6 @@ class DevicesModel(private val app: AppModel) {
 
     companion object {
         const val PAGE = 50
+        const val RECENT = 10
     }
 }

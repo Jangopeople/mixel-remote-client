@@ -157,6 +157,40 @@ public final class EnrollmentModel: ObservableObject {
         }
     }
 
+    // MARK: Rollout (Mixel team): a company token and the command for many computers
+
+    public struct RolloutToken: Codable, Equatable, Sendable, Identifiable {
+        public var id: String
+        public var label: String
+        public var expiresAt: String
+        public var maxUses: Int
+        public var uses: Int
+        public var revokedAt: String?
+    }
+    @Published public private(set) var rollouts: [RolloutToken] = []
+    @Published public var rolloutCreated: DeployLinkCreated?
+
+    public func loadRollouts(company: String) {
+        guard !company.isEmpty else { rollouts = []; return }
+        run { self.rollouts = try await self.app.engine.run("rollout_list", ["company": company]) }
+    }
+
+    public func createRollout(company: String, label: String, days: Int, computers: Int) {
+        let label = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !company.isEmpty, !label.isEmpty else { error = L("Choose a company and enter a name"); return }
+        run {
+            self.rolloutCreated = try await self.app.engine.run("rollout_create", ["company": company, "label": label, "days": days, "computers": computers])
+            self.rollouts = try await self.app.engine.run("rollout_list", ["company": company])
+        }
+    }
+
+    public func revokeRollout(_ token: RolloutToken, company: String) {
+        run {
+            try await self.app.engine.perform("rollout_revoke", ["id": token.id])
+            self.rollouts = try await self.app.engine.run("rollout_list", ["company": company])
+        }
+    }
+
     /// Removes this computer from Mixel Remote (signed with its own key; queued while offline).
     public func removeThisComputer() async -> SelfRemovalStatus? {
         error = ""

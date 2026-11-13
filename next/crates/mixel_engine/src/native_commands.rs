@@ -434,6 +434,8 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
             out(remote.decide(args.get("decision")?).await?)
         }
         "remote_clipboard" => out(remote.clipboard(args.get("session")?, args.get("push")?).await?),
+        // Drawing on the remote screen (view-only sessions too): true when queued.
+        "remote_draw" => out(remote.draw(args.get("session")?, args.get("message")?).await?),
         "remote_chat_messages" => {
             let session: Uuid = args.get("session")?;
             remote.require_chat_session(session).await?;
@@ -609,11 +611,12 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
                 .await
                 .map_err(|_| "The rollout token could not be revoked")?)
         }
-        // Linux: the signed update channel, installed in the app (as the desktop app).
+        // Linux: the update channel's linux-x64 package (apt install, one administrator prompt).
         #[cfg(target_os = "linux")]
         "update_check" => linux::update_check(context).await,
         #[cfg(not(target_os = "linux"))]
-        "update_check" => update_check(&args).await,
+        "update_check" => update_check(context).await,
+        "update_install" => update_install().await,
         // ---- Company (SaaS) ----
         "saas_my_tenants" => {
             let c = auth.credential(None).await?;
@@ -736,6 +739,35 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
             let c = auth.credential(None).await?;
             out(c.ism.saas_device_presence(&c.token, args.get("tenant")?).await.map_err(saas)?)
         }
+        "saas_set_favorite" => {
+            let c = auth.credential(None).await?;
+            out(c.ism.saas_set_favorite(&c.token, args.get("tenant")?, args.get("device")?, args.get("favorite")?).await.map_err(saas)?)
+        }
+        "saas_favorites" => {
+            let c = auth.credential(None).await?;
+            out(c.ism.saas_favorites(&c.token, args.get("tenant")?).await.map_err(saas)?)
+        }
+        "saas_recent_devices" => {
+            let c = auth.credential(None).await?;
+            out(c.ism.saas_recent_devices(&c.token, args.get("tenant")?, args.get("max_count")?).await.map_err(saas)?)
+        }
+        "saas_session_report" => {
+            let c = auth.credential(None).await?;
+            out(c
+                .ism
+                .saas_session_report(&c.token, args.get("tenant")?, args.get("from")?, args.get("to")?, args.get("technician")?, args.get("device")?)
+                .await
+                .map_err(saas)?)
+        }
+        "saas_session_note" => {
+            let c = auth.credential(None).await?;
+            let note: String = args.get("note")?;
+            out(c
+                .ism
+                .saas_session_note(&c.token, args.get("tenant")?, &note, args.get("session")?, args.get("connection")?)
+                .await
+                .map_err(saas)?)
+        }
         "saas_rename_tenant" => {
             let c = auth.credential(None).await?;
             let name: String = args.get("name")?;
@@ -790,22 +822,48 @@ async fn deploy_link(token: String) -> Result<String, String> {
     out(json!({ "token": token, "windows_command": windows_command, "macos_command": macos_command, "linux_command": linux_command }))
 }
 
-/// The native preview is published on store.mixel.ch as its own variant; it never installs the
-/// desktop app's update. `variant`: the store variant of this build (`native-preview`).
+/// Lab builds never update themselves unless a test channel is set on purpose.
+fn lab_without_channel() -> bool {
+    cfg!(feature = "qa-session") && std::env::var_os("MIXEL_UPDATE_CHANNEL").is_none()
+}
+
+fn newer_than_running(version: &str) -> bool {
+    matches!(
+        (crate::version_parts(crate::agent::APP_VERSION), crate::version_parts(version)),
+        (Some(current), Some(next)) if next > current
+    )
+}
+
+/// The newest signed version on this app's update channel (the one the desktop app 0.1.x used:
+/// `remote-updates/<channel>/macos-arm64`), and whether it can be installed in the app. The phone
+/// app updates through TestFlight or the App Store: no answer here.
 #[cfg_attr(target_os = "linux", allow(dead_code))]
-async fn update_check(args: &Args) -> Result<String, String> {
+async fn update_check(context: &Context) -> Result<String, String> {
+    if PLATFORM != "macos" || lab_without_channel() {
+        return out(Value::Null);
+    }
+    if let Ok(manifest) = crate::self_update::latest().await {
+        if !newer_than_running(&manifest.version) {
+            return out(Value::Null);
+        }
+        // Silent only when nothing would be interrupted and the sign-in survives the restart.
+        let idle = matches!(context.remote.status().await.phase.as_str(), "offline" | "error" | "ready");
+        let account = context.auth.status().await;
+        let keeps_sign_in =
+            account.phase != "authenticated" || account.account.as_ref().is_some_and(|account| account.remembered);
+        return out(json!({
+            "version": manifest.version,
+            "installable": true,
+            "silent": idle && keeps_sign_in && !crate::self_update::NEEDS_PASSWORD,
+            "needs_password": crate::self_update::NEEDS_PASSWORD,
+        }));
+    }
+    // Fallback: the store listing of the Mac download (download only).
     #[derive(serde::Deserialize)]
     struct Row {
         version: String,
     }
-    let variant: String = args.get::<Option<String>>("variant")?.unwrap_or_else(|| "native-preview".into());
-    if variant.len() > 40 || !variant.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-') {
-        return Err("Invalid update variant".into());
-    }
-    let running = crate::version_parts(crate::agent::APP_VERSION);
-    let url = format!(
-        "https://store-api.mixel.ch/rest/v1/store_app_releases?select=version&app_slug=eq.mixel-remote&is_current=eq.true&platform=eq.{PLATFORM}&variant=eq.{variant}&limit=5"
-    );
+    let url = "https://store-api.mixel.ch/rest/v1/store_app_releases?select=version&app_slug=eq.mixel-remote&is_current=eq.true&platform=eq.macos&variant=eq.&limit=5";
     let rows: Vec<Row> = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .redirect(reqwest::redirect::Policy::none())
@@ -821,11 +879,28 @@ async fn update_check(args: &Args) -> Result<String, String> {
         .map_err(|_| "Update check unavailable")?;
     out(rows
         .into_iter()
-        .filter(|row| row.version.len() <= 40)
+        .filter(|row| row.version.len() <= 40 && newer_than_running(&row.version))
         .filter_map(|row| crate::version_parts(&row.version).map(|parts| (parts, row.version)))
-        .filter(|(parts, _)| running.as_ref().is_some_and(|current| parts > current))
         .max_by(|a, b| a.0.cmp(&b.0))
         .map(|(_, version)| json!({ "version": version, "installable": false, "silent": false, "needs_password": false })))
+}
+
+/// Downloads, checks (Mixel's update key, size, SHA-256, Developer ID signature of this app's
+/// identifier) and installs the newest version in place. On success the app quits at once; the
+/// installer starts the new version.
+async fn update_install() -> Result<String, String> {
+    if !matches!(PLATFORM, "macos" | "linux") {
+        return Err("Mixel Remote for iPhone and iPad updates through the App Store or TestFlight".into());
+    }
+    if lab_without_channel() {
+        return Err("Lab builds do not update themselves".into());
+    }
+    let manifest = crate::self_update::latest().await?;
+    if !newer_than_running(&manifest.version) {
+        return Err("This is already the newest version".into());
+    }
+    crate::self_update::download_and_install(manifest).await?;
+    out(Value::Null)
 }
 
 /// This computer removes itself: the request is signed with its device key, saved, then sent.
@@ -964,15 +1039,29 @@ async fn platform(context: &Context, command: &str, args: &Args) -> Result<Strin
             .map_err(|_| "The print job could not be handled")??)
         }
         "signin_screen_status" => {
+            let availability = tokio::task::spawn_blocking(macos_prelogin_install::availability)
+                .await
+                .unwrap_or(macos_prelogin_install::Availability::WaitingForApple);
             let status = macos_prelogin_install::public_status();
             out(json!({
-                "supported": macos_prelogin_install::shipped_bundle().is_some(),
+                "supported": availability == macos_prelogin_install::Availability::Ready,
+                "availability": availability,
                 "outdated": false,
                 "technician": false,
                 "connection_id": status.as_ref().map(|status| status.connection_id),
                 "name": status.map(|status| status.name),
                 "wayland_greeter": false,
             }))
+        }
+        "signin_screen_enable" => signin_screen_enable(context, args).await,
+        "signin_screen_update" => {
+            let bundle = signin_host_bundle()?;
+            // Reinstalling the bundle keeps the System Keychain key (provisioning reuses it).
+            out(tokio::task::spawn_blocking(move || {
+                macos_prelogin_install::run_as_administrator(&macos_prelogin_install::install_script(&bundle)).map(|_| ())
+            })
+            .await
+            .map_err(|_| "Administrator step failed")??)
         }
         "signin_screen_disable" => out(tokio::task::spawn_blocking(|| {
             macos_prelogin_install::run_as_administrator(&macos_prelogin_install::remove_script()).map(|_| ())
@@ -987,19 +1076,87 @@ async fn platform(context: &Context, command: &str, args: &Args) -> Result<Strin
     }
 }
 
-#[cfg(target_os = "linux")]
-#[path = "native_commands_linux.rs"]
-mod linux;
-#[cfg(target_os = "linux")]
-async fn platform(context: &Context, command: &str, args: &Args) -> Result<String, String> {
-    linux::platform(context, command, args).await
+/// The shipped sign-in screen host, only once Apple's virtual keyboard entitlement is in its profile.
+#[cfg(target_os = "macos")]
+fn signin_host_bundle() -> Result<PathBuf, String> {
+    use crate::macos_prelogin_install as install;
+    let bundle = install::shipped_bundle().ok_or(SIGNIN_WAITING)?;
+    if !install::bundle_entitled(&bundle) {
+        return Err(SIGNIN_WAITING.into());
+    }
+    Ok(bundle)
+}
+#[cfg(target_os = "macos")]
+const SIGNIN_WAITING: &str = "Sign-in screen access is waiting for Apple to approve the virtual keyboard for Mixel Remote";
+
+/// Sign-in screen access (as the desktop app does it): installs the login window host root-owned,
+/// creates its computer-wide key, enrols that key for the company, then saves its settings and agent.
+/// Two macOS administrator prompts; Mixel team accounts only.
+#[cfg(target_os = "macos")]
+async fn signin_screen_enable(context: &Context, args: &Args) -> Result<String, String> {
+    use crate::macos_prelogin_install as install;
+    let company: Uuid = args.get("company")?;
+    let name: String = args.get("name")?;
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let credential = context.auth.credential(Some(&cancelled)).await?;
+    if !credential.principal.staff {
+        return Err("Sign-in screen access requires an MFA-verified Mixel team account".into());
+    }
+    let name = name.trim().to_owned();
+    if name.is_empty() || name.chars().count() > 60 || name.chars().any(char::is_control) {
+        return Err("Enter a computer name of up to 60 characters".into());
+    }
+    let bundle = signin_host_bundle()?;
+    // Step 1 (administrator): the host bundle, root-owned, and its System Keychain key.
+    let output = tokio::task::spawn_blocking(move || install::run_as_administrator(&install::install_script(&bundle)))
+        .await
+        .map_err(|_| "Administrator step failed")??;
+    let key = install::parse_key(&output)?;
+    let ism = &credential.ism;
+    let token = &credential.token;
+    let device = match ism.enrollment_of_key(token, &key).await.map_err(|_| "The enrolment status is unavailable")? {
+        Some(current) => current.device,
+        None => {
+            let device = ism
+                .add_device(token, company, &format!("{name} (sign-in screen)"), "macos")
+                .await
+                .map_err(|_| "The sign-in screen record could not be added for this company")?;
+            ism.enroll(token, device, key, &cancelled)
+                .await
+                .map_err(|_| "The sign-in screen could not be enrolled")?;
+            device
+        }
+    };
+    let enrolled = ism
+        .authenticate_device(token, device)
+        .await
+        .map_err(|_| "The sign-in screen enrolment could not be confirmed")?;
+    if enrolled.public_key != key {
+        return Err("The sign-in screen enrolment does not match this computer".into());
+    }
+    let tenant = ism.device_tenant(token, device).await.map_err(|_| "The company of this computer is unavailable")?;
+    // Step 2 (administrator): private settings (checked by the host) and the login window agent.
+    let settings = json!({
+        "version": 1, "device": device, "profile": enrolled.principal.user, "tenant": tenant,
+        "connection_id": enrolled.connection_id, "generation": enrolled.generation,
+        "share_main_display": true, "control": true,
+    })
+    .to_string();
+    let status = serde_json::to_string(&install::PublicStatus { connection_id: enrolled.connection_id, name })
+        .map_err(|_| "Cannot prepare the sign-in screen settings")?;
+    tokio::task::spawn_blocking(move || install::run_as_administrator(&install::settings_script(&settings, &status)))
+        .await
+        .map_err(|_| "Administrator step failed")??;
+    out(enrolled.connection_id)
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(target_os = "macos"))]
 async fn platform(_context: &Context, command: &str, _args: &Args) -> Result<String, String> {
     match command {
         "capture_targets" => out(Vec::<Value>::new()),
         "screen_access" | "request_screen_access" | "request_input_access" => out(false),
+        "signin_screen_status" => out(json!({ "supported": false, "availability": "not_here" })),
+        "remote_printing_status" => out(json!({ "supported": false, "installed": false })),
         // Android: the wake signal goes out on the phone's own network (Wi-Fi next to the computer).
         #[cfg(target_os = "android")]
         "wake_on_lan" => {
@@ -1064,6 +1221,16 @@ mod tests {
         let account: Value = serde_json::from_str(&dispatch(&context, "account_status", "{}").await.unwrap()).unwrap();
         assert!(account["phase"].is_string());
         assert!(dispatch(&context, "saas_my_tenants", "{}").await.is_err());
+        let tenant = Uuid::new_v4();
+        for (command, args) in [
+            ("saas_set_favorite", format!(r#"{{"tenant":"{tenant}","device":"{tenant}","favorite":true}}"#)),
+            ("saas_favorites", format!(r#"{{"tenant":"{tenant}"}}"#)),
+            ("saas_recent_devices", format!(r#"{{"tenant":"{tenant}","max_count":5}}"#)),
+            ("saas_session_report", format!(r#"{{"tenant":"{tenant}","from":"2026-11-01"}}"#)),
+            ("saas_session_note", format!(r#"{{"tenant":"{tenant}","note":"x","connection":123456789}}"#)),
+        ] {
+            assert!(dispatch(&context, command, &args).await.is_err(), "{command} needs a signed-in account");
+        }
         assert!(dispatch(&context, "remote_devices", r#"{"search":""}"#).await.is_err());
         // Offline: no pending removal, and a removal needs confirmation first.
         assert_eq!(dispatch(&context, "device_removal_pending", "{}").await.unwrap(), "false");
@@ -1088,6 +1255,19 @@ mod tests {
             "Start a permitted recording after the remote screen appears"
         );
         assert!(dispatch(&context, "remote_file_send", &format!(r#"{{"consent":"{session}","path":"x"}}"#)).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn drawing_needs_an_active_session_and_a_valid_message() {
+        let context = context();
+        let session = Uuid::new_v4();
+        let stroke = r#"{"kind":"stroke","id":1,"tool":"arrow","color":2,"width":3,"points":[[1,2],[300,400]],"done":true}"#;
+        assert_eq!(dispatch(&context, "remote_draw", &format!(r#"{{"session":"{session}","message":{stroke}}}"#)).await.unwrap(), "false");
+        assert_eq!(dispatch(&context, "remote_draw", &format!(r#"{{"session":"{session}","message":{{"kind":"clear"}}}}"#)).await.unwrap(), "false");
+        let bad = stroke.replace(r#""color":2"#, r#""color":7"#);
+        assert!(dispatch(&context, "remote_draw", &format!(r#"{{"session":"{session}","message":{bad}}}"#)).await.is_err());
+        assert!(dispatch(&context, "remote_draw", &format!(r#"{{"session":"{session}","message":{{"kind":"erase"}}}}"#)).await.is_err());
+        assert!(dispatch(&context, "remote_draw", &format!(r#"{{"session":"{session}"}}"#)).await.is_err());
     }
 
     #[tokio::test]

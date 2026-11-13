@@ -22,6 +22,9 @@ import androidx.compose.material.icons.filled.DesktopWindows
 import androidx.compose.material.icons.filled.LaptopMac
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
+import androidx.compose.ui.semantics.heading
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -112,7 +115,13 @@ fun DevicesScreen(app: AppModel) {
                 }
             }
             if (app.signedIn && model.manages) item { ManageBar(model) }
-            items(model.devices, key = { it.device + it.connectionId }) { device -> DeviceRow(model, device) }
+            val sections = model.sections()
+            val grouped = sections.favorites.isNotEmpty() || sections.recent.isNotEmpty()
+            for ((title, list) in listOf(L("Favorites") to sections.favorites, L("Recent connections") to sections.recent, L("All other devices") to sections.others)) {
+                if (list.isEmpty()) continue
+                if (grouped) item(key = "header-$title") { SectionHeader(title) }
+                items(list, key = { title + it.device + it.connectionId }) { device -> DeviceRow(model, device) }
+            }
             if (app.signedIn && model.devices.isEmpty() && !model.loading) {
                 item {
                     Text(
@@ -138,6 +147,14 @@ fun DevicesScreen(app: AppModel) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
         }
     }
+}
+
+@Composable
+private fun SectionHeader(title: String) {
+    Text(
+        title.uppercase(ch.mixel.remote.support.Translator.locale), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(start = 4.dp, top = 6.dp).semantics { heading() },
+    )
 }
 
 /** Company devices: a new group, and deploy links for other computers (owners and administrators). */
@@ -212,7 +229,10 @@ private fun DeviceRow(model: DevicesModel, device: Device) {
         DevicesModel.Presence.This -> BadgeKind.Busy
         else -> BadgeKind.Unknown
     }
+    val favorite = model.isFavorite(device)
+    val favoriteLabel = if (favorite) L("Remove from favorites") else L("Add to favorites")
     val actions = buildList {
+        if (model.tenant != null) add(CustomAccessibilityAction(favoriteLabel) { model.toggleFavorite(device); true })
         if (canWake) add(CustomAccessibilityAction(L("Wake up")) { model.wake(device); true })
         if (model.manages) {
             add(CustomAccessibilityAction(L("Rename")) { renaming = true; true })
@@ -249,6 +269,12 @@ private fun DeviceRow(model: DevicesModel, device: Device) {
             Column(horizontalAlignment = Alignment.End) {
                 Text(Format.remoteId(device.connectionId), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Row {
+                    if (model.tenant != null) IconButton(onClick = { model.toggleFavorite(device) }) {
+                        Icon(
+                            if (favorite) Icons.Filled.Star else Icons.Filled.StarBorder, contentDescription = favoriteLabel,
+                            tint = if (favorite) Mixel.colors.warning else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     if (canWake) IconButton(onClick = { model.wake(device) }) { Icon(Icons.Filled.PowerSettingsNew, contentDescription = L("Wake up")) }
                     if (model.manages) Box {
                         IconButton(onClick = { menu = true }) { Icon(Icons.Filled.MoreVert, contentDescription = L("Manage")) }

@@ -71,6 +71,8 @@ class AppModel(
     val company = CompanyModel(this)
     val settings = SettingsModel(this)
     val enrollment = EnrollmentModel(this)
+    val draw = DrawModel(this)
+    val reports = ReportsModel(this)
 
     /** Opens a web page (legal texts, Mixel ID) in the browser. */
     var openUrl: (String) -> Unit = {}
@@ -131,6 +133,8 @@ class AppModel(
         if (next != previous) remote = next
         if (next.phase == "ready") { autoTries = 0; nextAutoTry = 0 }
         session.statusChanged(previous, next)
+        draw.statusChanged(next)
+        reports.statusChanged(next)
         devices.statusChanged(previous, next)
         goOnlineIfNeeded()
     }

@@ -42,6 +42,40 @@ pub fn shipped_bundle() -> Option<PathBuf> {
     bundle.join("Contents/MacOS/Mixel-Remote").is_file().then_some(bundle)
 }
 
+/// Apple's virtual HID keyboard entitlement, needed to type at the login window.
+pub const KEYBOARD_ENTITLEMENT: &str = "com.apple.developer.hid.virtual.device";
+
+/// Whether a signed host bundle carries the virtual keyboard entitlement (read from its signature).
+pub fn bundle_entitled(bundle: &Path) -> bool {
+    std::process::Command::new("/usr/bin/codesign")
+        .args(["-d", "--entitlements", "-", "--xml"])
+        .arg(bundle)
+        .output()
+        .is_ok_and(|output| output.status.success() && entitlements_grant(&String::from_utf8_lossy(&output.stdout)))
+}
+
+/// The entitlements plist grants the virtual keyboard (`<key>…</key><true/>`).
+pub fn entitlements_grant(plist: &str) -> bool {
+    let compact: String = plist.split_whitespace().collect();
+    compact.contains(&format!("<key>{KEYBOARD_ENTITLEMENT}</key><true/>"))
+}
+
+/// Sign-in screen access in this app: `Ready` when the shipped host bundle is entitled by Apple,
+/// `WaitingForApple` when it is missing or lacks the entitlement (Apple has not granted it yet).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Availability {
+    Ready,
+    WaitingForApple,
+}
+
+pub fn availability() -> Availability {
+    match shipped_bundle() {
+        Some(bundle) if bundle_entitled(&bundle) => Availability::Ready,
+        _ => Availability::WaitingForApple,
+    }
+}
+
 fn quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', "'\\''"))
 }
@@ -154,6 +188,17 @@ mod tests {
             let check = std::process::Command::new("/bin/sh").arg("-n").arg(file.path()).output().unwrap();
             assert!(check.status.success(), "{script}");
         }
+    }
+
+    #[test]
+    fn only_a_granted_keyboard_entitlement_counts() {
+        let granted = "<?xml version=\"1.0\"?><plist version=\"1.0\"><dict>\n\t<key>com.apple.developer.hid.virtual.device</key>\n\t<true/>\n</dict></plist>";
+        assert!(entitlements_grant(granted));
+        assert!(!entitlements_grant(&granted.replace("<true/>", "<false/>")));
+        assert!(!entitlements_grant("<plist><dict><key>com.apple.security.app-sandbox</key><true/></dict></plist>"));
+        assert!(!entitlements_grant(""));
+        // This test binary is not a host bundle: sign-in screen access waits for Apple.
+        assert_eq!(availability(), Availability::WaitingForApple);
     }
 
     #[test]

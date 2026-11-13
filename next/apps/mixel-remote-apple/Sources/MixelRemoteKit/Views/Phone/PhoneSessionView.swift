@@ -26,6 +26,7 @@ public struct PhoneSessionView: View {
             ZStack {
                 Color.black.ignoresSafeArea()
                 TouchScreen(session: session, keyboard: $keyboard, held: $held)
+                if session.frame != nil { DrawingOverlay(drawing: app.drawing, pictureSize: session.size) }
                 if session.frame == nil {
                     VStack(spacing: 12) {
                         ProgressView().tint(.white)
@@ -65,6 +66,19 @@ public struct PhoneSessionView: View {
                         Button(remote.displayAll && index == remote.displays - 1 ? L("All screens") : L("Display %d", Int(index) + 1)) { session.selectDisplay(index) }
                     }
                 } label: { Label(L("Display"), systemImage: "display.2") }
+            }
+            if app.drawing.available {
+                Button { app.drawing.on.toggle() } label: { Label(app.drawing.on ? L("Draw: on") : L("Draw: off"), systemImage: app.drawing.on ? "scribble.variable" : "scribble") }
+                if app.drawing.on {
+                    Menu {
+                        ForEach(DrawingModel.Tool.allCases, id: \.self) { tool in Button(DrawingControls.title(tool)) { app.drawing.tool = tool } }
+                        Divider()
+                        ForEach(0..<DrawingModel.palette.count, id: \.self) { index in Button(DrawingControls.colorName(index)) { app.drawing.color = index } }
+                        Divider()
+                        Button(L("Undo")) { app.drawing.undo() }
+                        Button(L("Clear")) { app.drawing.clear() }
+                    } label: { Label(L("Tool"), systemImage: "paintpalette") }
+                }
             }
             if remote.control {
                 Button { keyboard.toggle() } label: { Label(L("Keyboard"), systemImage: keyboard ? "keyboard.chevron.compact.down" : "keyboard") }
