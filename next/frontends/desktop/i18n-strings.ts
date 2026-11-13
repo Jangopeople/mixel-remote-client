@@ -3,6 +3,30 @@
 const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [string, string][]}> = {
 "de": {
 "texts": {
+"This computer · not connected": "Dieser Computer · nicht verbunden",
+"Reconnecting automatically.": "Verbindet sich automatisch neu.",
+"Reconnecting automatically…": "Verbindet sich automatisch neu…",
+"This computer lost its connection": "Dieser Computer hat die Verbindung verloren",
+"This computer is not connected yet": "Dieser Computer ist noch nicht verbunden",
+"Reconnect now": "Jetzt neu verbinden",
+"STATUS": "STATUS",
+"Status unknown": "Status unbekannt",
+"Checking…": "Wird geprüft…",
+"This computer": "Dieser Computer",
+"You are using this device.": "Sie verwenden dieses Gerät.",
+"Turned off, asleep or without internet. It must be online to connect.": "Ausgeschaltet, im Ruhezustand oder ohne Internet. Es muss online sein, um sich zu verbinden.",
+"Shown once this computer is connected.": "Wird angezeigt, sobald dieser Computer verbunden ist.",
+"Ready. The person there accepts your request, unless unattended access is set up.": "Bereit. Die Person dort nimmt Ihre Anfrage an, ausser unbeaufsichtigter Zugriff ist eingerichtet.",
+"This is the computer you are using.": "Dies ist der Computer, den Sie verwenden.",
+"End the current session first.": "Beenden Sie zuerst die laufende Sitzung.",
+"This device is offline.": "Dieses Gerät ist offline.",
+"Please wait…": "Bitte warten…",
+"Sign in first.": "Melden Sie sich zuerst an.",
+"phone or tablet": "Telefon oder Tablet",
+"Reconnecting this computer…": "Dieser Computer wird neu verbunden…",
+"No devices match this search.": "Keine Geräte entsprechen dieser Suche.",
+"Sign in to see your devices.": "Melden Sie sich an, um Ihre Geräte zu sehen.",
+"You see the devices your account may use. A device must be online; the person there accepts your request unless unattended access is set up.": "Sie sehen die Geräte, die Ihr Konto verwenden darf. Ein Gerät muss online sein; die Person dort nimmt Ihre Anfrage an, ausser unbeaufsichtigter Zugriff ist eingerichtet.",
 "A secure home for your devices and connections.": "Ein sicheres Zuhause für Ihre Geräte und Verbindungen.",
 "A technician is connected to this computer.": "Ein Techniker ist mit diesem Computer verbunden.",
 "AI assistant": "KI-Assistent",
@@ -339,7 +363,6 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Their phone appears here. Choose Connect. They confirm on their phone, and you see their screen.": "Das Smartphone erscheint hier. Wählen Sie «Verbinden». Die Person bestätigt auf ihrem Smartphone, und Sie sehen ihren Bildschirm.",
 "They read you the 9-digit ID the app shows.": "Sie liest Ihnen die 9-stellige ID vor, die die App anzeigt.",
 "This account could not verify that device ID. Check that it is enrolled in Mixel Remote and that your company has access.": "Dieses Konto konnte die Geräte-ID nicht bestätigen. Prüfen Sie, ob das Gerät registriert ist und Ihre Firma Zugriff hat.",
-"This computer": "Dieser Computer",
 "This computer could not go online. Check the internet connection and try again.": "Dieser Computer konnte nicht online gehen. Prüfen Sie die Internetverbindung und versuchen Sie es erneut.",
 "This computer is available": "Dieser Computer ist verfügbar",
 "This computer is not in the list? Add it": "Dieser Computer fehlt in der Liste? Hinzufügen",
@@ -418,6 +441,30 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "iPhone, iPad or Android. The other person needs no account.": "iPhone, iPad oder Android. Die andere Person braucht kein Konto."
 },
 "patterns": [
+[
+"^Page (\\d+) · (\\d+) devices\\.$",
+"Seite $1 · $2 Geräte."
+],
+[
+"^Connecting to (.+)…$",
+"Verbindung zu $1 wird aufgebaut…"
+],
+[
+"^Connect to (.+)$",
+"Mit $1 verbinden"
+],
+[
+"^(.+) Mixel Remote reconnects by itself\\. Device status appears once it is connected; you can still choose Connect\\.$",
+"$1 Mixel Remote verbindet sich selbst neu. Der Gerätestatus erscheint, sobald die Verbindung steht; Sie können trotzdem «Verbinden» wählen."
+],
+[
+"^Mixel Remote reconnects by itself\\. Device status appears once it is connected; you can still choose Connect\\.$",
+"Mixel Remote verbindet sich selbst neu. Der Gerätestatus erscheint, sobald die Verbindung steht; Sie können trotzdem «Verbinden» wählen."
+],
+[
+"^Wake signal sent to (.+)\\. It shows Online when it has started\\.$",
+"Wecksignal an $1 gesendet. Es erscheint als Online, sobald es gestartet ist."
+],
 [
 "^Saved as internal note in (.+)$",
 "Als interne Notiz gespeichert in $1"
@@ -598,6 +645,30 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 },
 "fr": {
 "texts": {
+"This computer · not connected": "Cet ordinateur · non connecté",
+"Reconnecting automatically.": "Reconnexion automatique.",
+"Reconnecting automatically…": "Reconnexion automatique…",
+"This computer lost its connection": "Cet ordinateur a perdu sa connexion",
+"This computer is not connected yet": "Cet ordinateur n’est pas encore connecté",
+"Reconnect now": "Se reconnecter maintenant",
+"STATUS": "ÉTAT",
+"Status unknown": "État inconnu",
+"Checking…": "Vérification…",
+"This computer": "Cet ordinateur",
+"You are using this device.": "Vous utilisez cet appareil.",
+"Turned off, asleep or without internet. It must be online to connect.": "Éteint, en veille ou sans internet. Il doit être en ligne pour se connecter.",
+"Shown once this computer is connected.": "Affiché dès que cet ordinateur est connecté.",
+"Ready. The person there accepts your request, unless unattended access is set up.": "Prêt. La personne sur place accepte votre demande, sauf si l’accès sans surveillance est configuré.",
+"This is the computer you are using.": "C’est l’ordinateur que vous utilisez.",
+"End the current session first.": "Terminez d’abord la session en cours.",
+"This device is offline.": "Cet appareil est hors ligne.",
+"Please wait…": "Veuillez patienter…",
+"Sign in first.": "Connectez-vous d’abord.",
+"phone or tablet": "téléphone ou tablette",
+"Reconnecting this computer…": "Reconnexion de cet ordinateur…",
+"No devices match this search.": "Aucun appareil ne correspond à cette recherche.",
+"Sign in to see your devices.": "Connectez-vous pour voir vos appareils.",
+"You see the devices your account may use. A device must be online; the person there accepts your request unless unattended access is set up.": "Vous voyez les appareils que votre compte peut utiliser. Un appareil doit être en ligne ; la personne sur place accepte votre demande, sauf si l’accès sans surveillance est configuré.",
 "A secure home for your devices and connections.": "Un espace sûr pour vos appareils et vos connexions.",
 "A technician is connected to this computer.": "Un technicien est connecté à cet ordinateur.",
 "AI assistant": "Assistant IA",
@@ -934,7 +1005,6 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Their phone appears here. Choose Connect. They confirm on their phone, and you see their screen.": "Son téléphone apparaît ici. Choisissez « Se connecter ». La personne confirme sur son téléphone et vous voyez son écran.",
 "They read you the 9-digit ID the app shows.": "Elle vous lit l’ID à 9 chiffres affiché par l’application.",
 "This account could not verify that device ID. Check that it is enrolled in Mixel Remote and that your company has access.": "Ce compte n’a pas pu vérifier cet ID d’appareil. Vérifiez qu’il est enregistré et que votre entreprise y a accès.",
-"This computer": "Cet ordinateur",
 "This computer could not go online. Check the internet connection and try again.": "Cet ordinateur n’a pas pu se connecter. Vérifiez la connexion Internet et réessayez.",
 "This computer is available": "Cet ordinateur est disponible",
 "This computer is not in the list? Add it": "Cet ordinateur n’est pas dans la liste ? Ajoutez-le",
@@ -1013,6 +1083,30 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "iPhone, iPad or Android. The other person needs no account.": "iPhone, iPad ou Android. L’autre personne n’a pas besoin de compte."
 },
 "patterns": [
+[
+"^Page (\\d+) · (\\d+) devices\\.$",
+"Page $1 · $2 appareils."
+],
+[
+"^Connecting to (.+)…$",
+"Connexion à $1…"
+],
+[
+"^Connect to (.+)$",
+"Se connecter à $1"
+],
+[
+"^(.+) Mixel Remote reconnects by itself\\. Device status appears once it is connected; you can still choose Connect\\.$",
+"$1 Mixel Remote se reconnecte tout seul. L’état des appareils apparaît dès la connexion ; vous pouvez quand même choisir « Se connecter »."
+],
+[
+"^Mixel Remote reconnects by itself\\. Device status appears once it is connected; you can still choose Connect\\.$",
+"Mixel Remote se reconnecte tout seul. L’état des appareils apparaît dès la connexion ; vous pouvez quand même choisir « Se connecter »."
+],
+[
+"^Wake signal sent to (.+)\\. It shows Online when it has started\\.$",
+"Signal de réveil envoyé à $1. Il apparaît En ligne dès qu’il a démarré."
+],
 [
 "^Saved as internal note in (.+)$",
 "Enregistré comme note interne dans $1"
@@ -1193,6 +1287,30 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 },
 "it": {
 "texts": {
+"This computer · not connected": "Questo computer · non connesso",
+"Reconnecting automatically.": "Riconnessione automatica.",
+"Reconnecting automatically…": "Riconnessione automatica…",
+"This computer lost its connection": "Questo computer ha perso la connessione",
+"This computer is not connected yet": "Questo computer non è ancora connesso",
+"Reconnect now": "Riconnetti ora",
+"STATUS": "STATO",
+"Status unknown": "Stato sconosciuto",
+"Checking…": "Verifica…",
+"This computer": "Questo computer",
+"You are using this device.": "Stai usando questo dispositivo.",
+"Turned off, asleep or without internet. It must be online to connect.": "Spento, in stop o senza internet. Deve essere online per connettersi.",
+"Shown once this computer is connected.": "Visibile appena questo computer è connesso.",
+"Ready. The person there accepts your request, unless unattended access is set up.": "Pronto. La persona lì accetta la richiesta, a meno che non sia configurato l’accesso automatico.",
+"This is the computer you are using.": "È il computer che stai usando.",
+"End the current session first.": "Termina prima la sessione in corso.",
+"This device is offline.": "Questo dispositivo è offline.",
+"Please wait…": "Attendere…",
+"Sign in first.": "Accedi prima.",
+"phone or tablet": "telefono o tablet",
+"Reconnecting this computer…": "Riconnessione di questo computer…",
+"No devices match this search.": "Nessun dispositivo corrisponde alla ricerca.",
+"Sign in to see your devices.": "Accedi per vedere i tuoi dispositivi.",
+"You see the devices your account may use. A device must be online; the person there accepts your request unless unattended access is set up.": "Vedi i dispositivi che il tuo account può usare. Un dispositivo deve essere online; la persona lì accetta la richiesta, a meno che non sia configurato l’accesso automatico.",
 "A secure home for your devices and connections.": "Uno spazio sicuro per i tuoi dispositivi e le tue connessioni.",
 "A technician is connected to this computer.": "Un tecnico è connesso a questo computer.",
 "AI assistant": "Assistente IA",
@@ -1529,7 +1647,6 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "Their phone appears here. Choose Connect. They confirm on their phone, and you see their screen.": "Il telefono compare qui. Scegli «Connetti». La persona conferma sul telefono e tu vedi il suo schermo.",
 "They read you the 9-digit ID the app shows.": "Ti legge l’ID di 9 cifre mostrato dall’app.",
 "This account could not verify that device ID. Check that it is enrolled in Mixel Remote and that your company has access.": "Questo account non ha potuto verificare l’ID del dispositivo. Controlla che sia registrato e che la tua azienda abbia accesso.",
-"This computer": "Questo computer",
 "This computer could not go online. Check the internet connection and try again.": "Questo computer non è riuscito ad andare online. Controlla la connessione a Internet e riprova.",
 "This computer is available": "Questo computer è disponibile",
 "This computer is not in the list? Add it": "Questo computer non è nell’elenco? Aggiungilo",
@@ -1608,6 +1725,30 @@ const MIXEL_I18N: Record<string, {texts: Record<string, string>; patterns: [stri
 "iPhone, iPad or Android. The other person needs no account.": "iPhone, iPad o Android. L’altra persona non ha bisogno di un account."
 },
 "patterns": [
+[
+"^Page (\\d+) · (\\d+) devices\\.$",
+"Pagina $1 · $2 dispositivi."
+],
+[
+"^Connecting to (.+)…$",
+"Connessione a $1…"
+],
+[
+"^Connect to (.+)$",
+"Connetti a $1"
+],
+[
+"^(.+) Mixel Remote reconnects by itself\\. Device status appears once it is connected; you can still choose Connect\\.$",
+"$1 Mixel Remote si riconnette da solo. Lo stato dei dispositivi appare appena è connesso; puoi comunque scegliere «Connetti»."
+],
+[
+"^Mixel Remote reconnects by itself\\. Device status appears once it is connected; you can still choose Connect\\.$",
+"Mixel Remote si riconnette da solo. Lo stato dei dispositivi appare appena è connesso; puoi comunque scegliere «Connetti»."
+],
+[
+"^Wake signal sent to (.+)\\. It shows Online when it has started\\.$",
+"Segnale di risveglio inviato a $1. Appare Online quando si è avviato."
+],
 [
 "^Saved as internal note in (.+)$",
 "Salvata come nota interna in $1"

@@ -100,7 +100,7 @@
     mode.textContent = live === 'closing' ? 'Ending…' : live === 'active' ? (sharing ? 'Sharing this computer' : control ? 'Remote control' : 'View only') : busy ? 'Connecting' : 'No active session';
     empty.hidden = video && live === 'active' && !sharing;
     connection.textContent = live === 'closing' ? 'Ending session…' : live === 'active' ? 'Session active' : live === 'ready' ? 'Ready to connect' : live === 'incoming' ? 'Incoming request' : live === 'error' ? 'Connection error' : busy ? 'Connecting…' : 'Not connected';
-    connectionDetail.textContent = !authenticated ? 'Sign in to get started' : live === 'ready' ? (controllerOnly ? 'Connected to the Mixel network' : 'This computer is available') : live === 'active' ? (sharing ? 'Sharing this computer' : 'Viewing a remote device') : 'Your account is signed in';
+    connectionDetail.textContent = !authenticated ? 'Sign in to get started' : live === 'ready' ? (controllerOnly ? 'Connected to the Mixel network' : 'This computer is available') : live === 'active' ? (sharing ? 'Sharing this computer' : 'Viewing a remote device') : live === 'error' ? 'Reconnecting automatically…' : 'Your account is signed in';
     document.getElementById('workspace-security-label')!.textContent = live === 'closing' ? 'Ending the session…' : live === 'active' ? 'End-to-end encrypted' : 'No screen is being shared';
     document.getElementById('workspace-session-actions')!.hidden = !busy && !presenting;
     document.getElementById('workspace-empty-title')!.textContent = live === 'closing' ? 'Ending the session' : live === 'active' && sharing ? 'You’re sharing your screen' : busy ? 'Waiting for a secure connection' : 'Your next connection starts here';
