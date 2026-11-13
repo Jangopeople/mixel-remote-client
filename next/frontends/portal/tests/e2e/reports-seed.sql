@@ -9,14 +9,22 @@
 -- owner, remote_saas_recent_devices(tenant) lists device_a before device_b, and
 -- remote_saas_session_note(tenant, note, connection => conn_a) finds the first one (it is under 24 h old).
 --
--- CHECK AGAINST SQL 029 before the first live run: the table and column names below follow the report
--- contract (session_id, technician_id, device_id, connection_id, started_at, ended_at, kind, colleague);
--- adjust the INSERT if 029 stores sessions differently. Set QA_REPORTS_SEED to use another file.
+-- Session A goes through the broker's own function (role mixel_remote_presence, as in production);
+-- session B is older than the broker function accepts (1 day), so it is inserted directly.
 \set ON_ERROR_STOP on
 begin;
-insert into remote_saas.sessions (tenant_id, technician_id, device_id, connection_id, started_at, ended_at, kind, colleague)
-values
-  (:'tenant', :'technician', :'device_a', :'conn_a'::integer, now() - interval '3 hours', now() - interval '3 hours' + interval '25 minutes', 'attended', false),
-  (:'tenant', :'technician', :'device_b', :'conn_b'::integer, now() - interval '50 hours', now() - interval '50 hours' + interval '70 minutes', 'unattended', false);
+set local role mixel_remote_presence;
+select public.remote_session_report(jsonb_build_object('events', jsonb_build_array(
+  jsonb_build_object('type', 'start', 'id', gen_random_uuid(), 'tenant', :'tenant', 'technician', :'technician',
+    'controller_device', :'device_b', 'controller_connection', :'conn_b'::integer, 'device', :'device_a',
+    'connection', :'conn_a'::integer, 'unattended', false, 'colleague', false,
+    'at', extract(epoch from now() - interval '3 hours')::bigint)))) as started;
+reset role;
+update remote_saas.sessions set ended_at = started_at + interval '25 minutes'
+ where tenant_id = :'tenant' and device_id = :'device_a';
+insert into remote_saas.sessions (id, tenant_id, technician_id, controller_device_id, controller_connection, device_id,
+  host_connection, device_name, kind, colleague, started_at, ended_at)
+select gen_random_uuid(), :'tenant', :'technician', :'device_a', :'conn_a'::integer, :'device_b', :'conn_b'::integer,
+  'QA device 2', 'unattended', false, now() - interval '50 hours', now() - interval '50 hours' + interval '70 minutes';
 select count(*) from remote_saas.sessions where tenant_id = :'tenant';
 commit;
