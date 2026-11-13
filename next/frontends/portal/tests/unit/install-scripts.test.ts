@@ -158,7 +158,7 @@ print(json.dumps([session((' ' + sys.argv[2] + ' \\r').encode()), session(b'\\x0
   });
 
   it('check the release with the Mixel update key the app uses, and Mixel\'s code signature on the Mac', () => {
-    const rust = readFileSync(join(__dirname, '../../../../crates/desktop_app/src/self_update.rs'), 'utf8');
+    const rust = readFileSync(join(__dirname, '../../../../crates/mixel_engine/src/self_update.rs'), 'utf8');
     const bytes = [...rust.match(/const UPDATE_KEY: \[u8; 32\] = \[([^\]]+)\]/)![1].matchAll(/0x([0-9a-f]{2})/g)].map((m) => parseInt(m[1], 16));
     expect(bytes).toHaveLength(32);
     const spki = Buffer.concat([Buffer.from('302a300506032b6570032100', 'hex'), Buffer.from(bytes)]).toString('base64');

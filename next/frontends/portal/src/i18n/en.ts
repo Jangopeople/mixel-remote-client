@@ -131,6 +131,7 @@ export const en = {
   'auth.method.azure': 'Microsoft',
   'auth.method.apple': 'Apple',
   'auth.method.sso': 'Company SSO (SAML)',
+  'auth.continueWith': 'Continue with {name}',
   'auth.withMixelId': 'Continue with Mixel ID',
   'auth.sendCode': 'Send me a code',
   'auth.codeSent': 'We sent a 6-digit code to {email}. Enter it below. The email may say “Mixel ISM”: it is the same Mixel account service.',
@@ -176,7 +177,7 @@ export const en = {
   'signup.finishLead': 'You are signed in as {email}. Name your company to start the 14-day Business trial.',
   'signup.finishCreate': 'Start trial',
   'signup.orJoin': 'Were you invited by a colleague? Open the invitation link they sent you instead.',
-  'signup.mixelIdNote': 'You will be sent to auth.mixel.ch and come back here.',
+  'signup.oauthNote': 'You will be sent to {host} and come back here.',
 
   // Invite
   'invite.title': 'Join your team on Mixel Remote',
