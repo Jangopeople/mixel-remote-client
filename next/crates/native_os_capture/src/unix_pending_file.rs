@@ -137,6 +137,40 @@ impl Pending {
                 libc::RENAME_NOREPLACE,
             )
         };
+        // Android: bionic has no renameat2 wrapper before API 30 and apps may not make hard links,
+        // so call the kernel's renameat2 (RENAME_NOREPLACE) directly. Only where the kernel or file
+        // system lacks it, check the private destination name first, then rename.
+        #[cfg(target_os = "android")]
+        let result = {
+            const RENAME_NOREPLACE: libc::c_uint = 1;
+            // SAFETY: both names are bounded single components in one retained directory.
+            let renamed = unsafe {
+                libc::syscall(
+                    libc::SYS_renameat2,
+                    self.parent.as_raw_fd(),
+                    self.temporary.as_ptr(),
+                    self.parent.as_raw_fd(),
+                    self.destination.as_ptr(),
+                    RENAME_NOREPLACE,
+                )
+            } as libc::c_int;
+            let unsupported = renamed != 0
+                && matches!(io::Error::last_os_error().raw_os_error(), Some(libc::ENOSYS | libc::EINVAL | libc::EPERM));
+            if unsupported {
+                let mut entry = std::mem::MaybeUninit::<libc::stat>::uninit();
+                // SAFETY: live directory FD and a bounded single-component name.
+                let exists = unsafe {
+                    libc::fstatat(self.parent.as_raw_fd(), self.destination.as_ptr(), entry.as_mut_ptr(), libc::AT_SYMLINK_NOFOLLOW)
+                } == 0;
+                if exists {
+                    return Err(FileError::Destination);
+                }
+                // SAFETY: as above; the destination name was just checked to be free.
+                unsafe { libc::renameat(self.parent.as_raw_fd(), self.temporary.as_ptr(), self.parent.as_raw_fd(), self.destination.as_ptr()) }
+            } else {
+                renamed
+            }
+        };
         if result != 0 {
             let error = io::Error::last_os_error();
             return Err(if error.kind() == io::ErrorKind::AlreadyExists {
@@ -172,8 +206,17 @@ impl Pending {
         let device = entry.st_dev as u64;
         #[cfg(target_os = "linux")]
         let device = entry.st_dev;
+        #[cfg(target_os = "android")]
+        #[allow(clippy::unnecessary_cast)]
+        let device = entry.st_dev as u64;
         Ok(device == current.dev()
             && entry.st_ino == current.ino()
-            && entry.st_mode & libc::S_IFMT == libc::S_IFREG)
+            && file_type(entry.st_mode) == file_type(libc::S_IFREG))
     }
+}
+
+/// The file-type bits of a mode (`st_mode` is u16 or u32 depending on the platform).
+#[allow(clippy::unnecessary_cast, clippy::useless_conversion)]
+fn file_type(mode: impl Into<u32>) -> u32 {
+    mode.into() & (libc::S_IFMT as u32)
 }

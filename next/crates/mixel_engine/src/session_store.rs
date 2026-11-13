@@ -191,3 +191,25 @@ pub fn load() -> Result<Option<Zeroizing<String>>, String> {
 pub fn clear() {
     let _ = security_framework::passwords::delete_generic_password(IOS_SERVICE, "refresh");
 }
+
+/// Android: the refresh token in the app's Keystore-sealed storage (this device only).
+#[cfg(target_os = "android")]
+pub fn save(token: &str) -> Result<(), String> {
+    if !valid(token.as_bytes()) {
+        return Err("Invalid session".into());
+    }
+    crate::android_secrets::set("session-refresh", token.as_bytes()).map_err(|_| "Cannot save the session".into())
+}
+#[cfg(target_os = "android")]
+pub fn load() -> Result<Option<Zeroizing<String>>, String> {
+    match crate::android_secrets::get("session-refresh") {
+        Ok(Some(token)) if valid(&token) => Ok(Some(Zeroizing::new(String::from_utf8_lossy(&token).into_owned()))),
+        Ok(Some(_)) => Err("Saved session is invalid".into()),
+        Ok(None) => Ok(None),
+        Err(_) => Err("The secure storage could not be read".into()),
+    }
+}
+#[cfg(target_os = "android")]
+pub fn clear() {
+    crate::android_secrets::delete("session-refresh");
+}

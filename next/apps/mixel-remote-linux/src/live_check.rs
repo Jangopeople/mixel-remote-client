@@ -166,7 +166,7 @@ fn ppm(frame: &crate::video::Frame) -> Vec<u8> {
 }
 
 async fn providers(check: &mut Check) {
-    let offered = check.call("sign_in_providers", json!({})).await.unwrap_or(Value::Null);
+    let offered = check.call("account_providers", json!({})).await.unwrap_or(Value::Null);
     println!("sign-in service offers: {offered}");
     let http = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).timeout(Duration::from_secs(15)).build().expect("http");
     for (provider, host) in [("keycloak", "auth.mixel.ch"), ("google", "accounts.google.com"), ("azure", "login.microsoftonline.com"), ("apple", "appleid.apple.com")] {

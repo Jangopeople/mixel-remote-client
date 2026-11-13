@@ -201,7 +201,7 @@ pub fn open(path: &str) -> Result<(), String> {
     let started = std::process::Command::new("/usr/bin/open").arg(&path).spawn();
     #[cfg(target_os = "linux")]
     let started = std::process::Command::new("xdg-open").arg(&path).spawn();
-    #[cfg(target_os = "ios")]
+    #[cfg(any(target_os = "ios", target_os = "android"))]
     let started: std::io::Result<std::process::Child> = { let _ = &path; Err(std::io::Error::other("unsupported")) };
     started.map(|_| ()).map_err(|_| "The print job could not be opened".into())
 }

@@ -11,7 +11,6 @@ testflight-controller = []
 qa-session = []
 
 [dependencies]
-arboard = { version = "=3.7.0", default-features = false, features = ["image-data"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 cpal = "0.16"
 signaling_server = { path = "../signaling_server" }
@@ -38,6 +37,10 @@ serde_json = "1"
 
 [lints]
 workspace = true
+
+# The phone apps exchange no clipboards (a desktop feature).
+[target.'cfg(not(target_os = "android"))'.dependencies]
+arboard = { version = "=3.7.0", default-features = false, features = ["image-data"] }
 
 [target.'cfg(target_os = "ios")'.dependencies]
 security-framework = "=3.7.0"

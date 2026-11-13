@@ -63,6 +63,10 @@ x11rb = { version = "=0.13.2", features = ["xkb", "xtest"] }
 [build-dependencies]
 cc = "1.11"
 
-[target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
+# Android phones decode with openh264 when the app's own hardware decoder is not used.
+[target.'cfg(target_os = "android")'.dependencies]
+libc = "0.2"
+
+[target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "android"))'.dependencies]
 openh264 = "=0.9.9"
 h264-reader = "=0.9.0"

@@ -373,7 +373,7 @@ impl App {
             if let Ok(linux) = app.run::<LinuxSession>("linux_session", json!({})).await {
                 app.edit(|state| state.linux = linux);
             }
-            if let Ok(providers) = app.run::<Vec<String>>("sign_in_providers", json!({})).await {
+            if let Ok(providers) = app.run::<Vec<String>>("account_providers", json!({})).await {
                 app.edit(|state| state.providers = providers);
             }
             app.refresh_account().await;

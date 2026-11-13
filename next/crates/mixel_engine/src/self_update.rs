@@ -179,7 +179,7 @@ async fn download(manifest: &Manifest) -> Result<PathBuf, String> {
 }
 
 #[cfg(not(target_os = "windows"))]
-#[cfg_attr(target_os = "ios", allow(dead_code))]
+#[cfg_attr(any(target_os = "ios", target_os = "android"), allow(dead_code))]
 fn run(program: &str, args: &[&std::ffi::OsStr]) -> Result<String, String> {
     let mut command = std::process::Command::new(program);
     command.args(args);
@@ -255,6 +255,11 @@ fn install(installer: &Path, _version: &str) -> Result<(), String> {
 #[cfg(target_os = "ios")]
 fn install(_package: &Path, _version: &str) -> Result<(), String> {
     Err("Mixel Remote for iPhone and iPad updates through the App Store or TestFlight".into())
+}
+/// Android phones and tablets update through Google Play (or the store.mixel.ch test download).
+#[cfg(target_os = "android")]
+fn install(_package: &Path, _version: &str) -> Result<(), String> {
+    Err("Mixel Remote for Android updates through Google Play or store.mixel.ch".into())
 }
 #[cfg(target_os = "macos")]
 fn install(image: &Path, version: &str) -> Result<(), String> {
