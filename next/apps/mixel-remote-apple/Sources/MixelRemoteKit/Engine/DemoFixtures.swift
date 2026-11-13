@@ -103,7 +103,9 @@ public enum DemoFixtures {
         case "setup":
             company(engine, phase: "offline")
             engine.fail("remote_register", "No saved device identity. Choose Create device identity to generate one locally.")
-        case "session", "chat": viewing(engine)
+        case "session", "chat":
+            viewing(engine)
+            for sequence in 1...3 { engine.queue(frame: VideoFrame.sample(width: 1280, height: 800, sequence: UInt64(sequence))) }
         default: company(engine)
         }
         let app = await self.app(engine)
@@ -113,7 +115,6 @@ public enum DemoFixtures {
         default: app.section = .devices
         }
         if name == "session" || name == "chat" {
-            app.session.showSample(VideoFrame.sample(width: 1280, height: 800))
             await app.session.readTools()
         }
         return app

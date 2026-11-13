@@ -154,6 +154,8 @@ struct PhoneDevicesView: View {
                         Text(verbatim: Format.remoteId(device.connectionId)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                     }
                 }
+                .buttonStyle(.plain)
+                .opacity(blocked.isEmpty ? 1 : 0.75)
                 .disabled(!blocked.isEmpty)
                 .accessibilityHint(Text(verbatim: blocked.isEmpty ? L("Connect to %@", device.name) : blocked))
             }

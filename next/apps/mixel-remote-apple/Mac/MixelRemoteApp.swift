@@ -6,6 +6,20 @@ import SwiftUI
 /// Mixel Remote for Mac (native preview, `ch.mixel.remote.native`): installed next to the current
 /// app, with its own device identity and sign-in.
 @main
+enum Entry {
+    static func main() {
+        #if DEBUG
+        // LAB builds only: `--live-check <qa-session.json> <suffix>` runs the engine checks against the
+        // live service without any window, then exits (see LiveCheck.swift).
+        let arguments = CommandLine.arguments
+        if arguments.count >= 4, arguments[1] == "--live-check" {
+            LiveCheck.run(sessionFile: arguments[2], suffix: arguments[3])
+        }
+        #endif
+        MixelRemoteMacApp.main()
+    }
+}
+
 struct MixelRemoteMacApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @Environment(\.openWindow) private var openWindow

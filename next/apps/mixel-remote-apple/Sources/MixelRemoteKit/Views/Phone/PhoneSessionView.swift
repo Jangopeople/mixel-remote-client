@@ -99,6 +99,7 @@ public struct PhoneSessionView: View {
                 ForEach(KeyMap.Special.allCases) { key in
                     Button(key.label) { session.press(key.usage, modifiers: Array(held)); held.removeAll() }
                         .buttonStyle(.bordered)
+                        .tint(.gray)
                         .accessibilityLabel(Text(verbatim: key.rawValue))
                 }
             }
@@ -112,7 +113,7 @@ public struct PhoneSessionView: View {
         let on = held.contains(usage)
         return Button(title) { if on { held.remove(usage) } else { held.insert(usage) } }
             .buttonStyle(.bordered)
-            .tint(on ? Theme.brand : nil)
+            .tint(on ? Theme.brand : .gray)
             .accessibilityValue(Text(verbatim: on ? L("on") : L("off")))
     }
 }
@@ -157,7 +158,7 @@ struct TouchScreen: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeUIView(context: Context) -> UIScrollView {
-        let scroll = UIScrollView()
+        let scroll = PictureScroll()
         scroll.backgroundColor = .black
         scroll.minimumZoomScale = 1
         scroll.maximumZoomScale = 5
@@ -317,6 +318,17 @@ struct TouchScreen: UIViewRepresentable {
             case " ": return 44
             default: return nil
             }
+        }
+    }
+}
+
+/// Keeps the picture filling the visible area while it is not zoomed (also after rotation).
+final class PictureScroll: UIScrollView {
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        if zoomScale == 1, let image = subviews.first(where: { $0 is UIImageView }), image.frame.size != bounds.size {
+            image.frame = CGRect(origin: .zero, size: bounds.size)
+            contentSize = bounds.size
         }
     }
 }
