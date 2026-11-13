@@ -62,13 +62,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         reporter.spawn(registry.clone());
         eprintln!("presence reporting every {} s", signaling_server::presence::INTERVAL.as_secs());
     }
+    // Session report of Remote SaaS companies (same API and token as presence; SQL 029).
+    let sessions = signaling_server::sessions::SessionReporter::from_env()?.map(Arc::new);
+    if let Some(reporter) = &sessions {
+        reporter.clone().spawn(registry.clone());
+        eprintln!("session reporting every {} s", signaling_server::sessions::INTERVAL.as_secs());
+    }
+    let shutdown_registry = registry.clone();
     axum::serve(listener, router(state))
         .with_graceful_shutdown(async move {
             let _ = tokio::signal::ctrl_c().await;
-            if let Ok(mut registry) = registry.lock() {
+            if let Ok(mut registry) = shutdown_registry.lock() {
                 registry.shutdown();
             }
         })
         .await?;
+    // The ends of the sessions the shutdown closed (a lost end is closed by the next broker's list).
+    if let Some(reporter) = sessions {
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            reporter.run_once(&registry, std::time::Instant::now()),
+        )
+        .await;
+    }
     Ok(())
 }
