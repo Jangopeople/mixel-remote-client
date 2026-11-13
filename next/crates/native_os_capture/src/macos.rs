@@ -20,7 +20,7 @@ use objc2_screen_capture_kit::{
 };
 use std::{
     sync::{Arc, mpsc},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 // SCShareableContent is an immutable snapshot, documented as available from an
@@ -186,17 +186,30 @@ enum Target {
     OwnWindow(u32),
 }
 
-/// Windows of this app that the technician must not see (the privacy cover), with a version
-/// that grows on every change, and the version each running display capture has applied.
-static EXCLUDED: std::sync::Mutex<(u64, Vec<u32>)> = std::sync::Mutex::new((0, Vec::new()));
+/// Windows of this app that the technician must not see (the privacy cover, the drawing
+/// overlay), per owner, with a version that grows on every change, and the version each running
+/// display capture has applied.
+type ExcludedWindows = (u64, Vec<(Excluded, Vec<u32>)>);
+static EXCLUDED: std::sync::Mutex<ExcludedWindows> = std::sync::Mutex::new((0, Vec::new()));
 static APPLIED: std::sync::Mutex<Vec<(u64, u64)>> = std::sync::Mutex::new(Vec::new());
 static NEXT_STREAM: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
-/// Leaves these windows of this app out of every display capture from now on; returns the version.
-pub fn set_excluded_windows(ids: Vec<u32>) -> u64 {
+/// Who left windows out of the capture; each owner replaces only its own list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Excluded {
+    PrivacyCover,
+    Drawings,
+}
+
+/// Leaves these windows of `owner` out of every display capture from now on (an empty list
+/// takes them back in); the windows of other owners stay excluded. Returns the version.
+pub fn set_excluded_windows(owner: Excluded, ids: Vec<u32>) -> u64 {
     let mut excluded = EXCLUDED.lock().unwrap_or_else(|error| error.into_inner());
     excluded.0 += 1;
-    excluded.1 = ids;
+    excluded.1.retain(|(who, _)| *who != owner);
+    if !ids.is_empty() {
+        excluded.1.push((owner, ids));
+    }
     excluded.0
 }
 
@@ -210,12 +223,14 @@ pub fn exclusions_applied(version: u64) -> bool {
 }
 
 fn excluded_now() -> (u64, Vec<u32>) {
-    EXCLUDED.lock().unwrap_or_else(|error| error.into_inner()).clone()
+    let excluded = EXCLUDED.lock().unwrap_or_else(|error| error.into_inner());
+    (excluded.0, excluded.1.iter().flat_map(|(_, ids)| ids.iter().copied()).collect())
 }
 
-/// A display filter that leaves out this app's excluded windows.
+/// A display filter that leaves out this app's excluded windows, and whether all of them were
+/// found (a window that has only just been shown can be missing from the listing for a moment).
 /// SAFETY: `content` is a retained immutable snapshot.
-unsafe fn display_filter(content: &SCShareableContent, id: u32, excluded: &[u32]) -> Result<Retained<SCContentFilter>, CaptureError> {
+unsafe fn display_filter(content: &SCShareableContent, id: u32, excluded: &[u32]) -> Result<(Retained<SCContentFilter>, bool), CaptureError> {
     unsafe {
         let displays = content.displays();
         let display = displays
@@ -231,8 +246,9 @@ unsafe fn display_filter(content: &SCShareableContent, id: u32, excluded: &[u32]
                     && window.owningApplication().is_some_and(|app| app.processID() as u32 == own)
             })
             .collect();
+        let complete = windows.len() >= excluded.len();
         let windows = NSArray::from_retained_slice(&windows);
-        Ok(SCContentFilter::initWithDisplay_excludingWindows(SCContentFilter::alloc(), &display, &windows))
+        Ok((SCContentFilter::initWithDisplay_excludingWindows(SCContentFilter::alloc(), &display, &windows), complete))
     }
 }
 struct OutputIvars {
@@ -326,6 +342,8 @@ pub struct MacStream {
     display: Option<u32>,
     stream_id: u64,
     applied: u64,
+    /// An exclusion whose windows were not all listed yet: its version and since when.
+    pending: Option<(u64, Instant)>,
 }
 impl MacStream {
     pub fn start(
@@ -358,8 +376,13 @@ impl MacStream {
         // and serial callback queue retained for the entire capture lifecycle.
         unsafe {
             let (version, excluded) = excluded_now();
+            let mut complete = true;
             let filter = match target {
-                Target::Display(id) => display_filter(&content, id, &excluded)?,
+                Target::Display(id) => {
+                    let (filter, found) = display_filter(&content, id, &excluded)?;
+                    complete = found;
+                    filter
+                }
                 Target::OwnWindow(id) => {
                     let windows = content.windows();
                     let window = windows
@@ -419,8 +442,10 @@ impl MacStream {
                 Target::OwnWindow(_) => None,
             };
             let stream_id = NEXT_STREAM.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            // Not all excluded windows listed yet: `sync_exclusions` tries again.
+            let applied = if complete { version } else { 0 };
             if display.is_some() {
-                APPLIED.lock().unwrap_or_else(|error| error.into_inner()).push((stream_id, version));
+                APPLIED.lock().unwrap_or_else(|error| error.into_inner()).push((stream_id, applied));
             }
             let mut capture = Self {
                 stream,
@@ -430,7 +455,8 @@ impl MacStream {
                 active: true,
                 display,
                 stream_id,
-                applied: version,
+                applied,
+                pending: (!complete).then(|| (version, Instant::now())),
             };
             capture
                 .stream
@@ -456,9 +482,18 @@ impl MacStream {
         if version == self.applied {
             return Ok(());
         }
+        match self.pending {
+            // A window that never appears (closed meanwhile) does not keep this retrying.
+            Some((pending, since)) if pending == version && since.elapsed() >= Duration::from_secs(2) => {
+                self.mark_applied(version);
+                return Ok(());
+            }
+            Some((pending, _)) if pending == version => {}
+            _ => self.pending = Some((version, Instant::now())),
+        }
         let content = content(false)?;
         // SAFETY: retained snapshot; the stream is retained and the completion block is copied.
-        let filter = unsafe { display_filter(&content, id, &excluded)? };
+        let (filter, complete) = unsafe { display_filter(&content, id, &excluded)? };
         let (tx, rx) = mpsc::sync_channel(1);
         let updated = RcBlock::new(move |error: *mut NSError| {
             let _ = tx.try_send(error.is_null());
@@ -469,11 +504,18 @@ impl MacStream {
         if !applied {
             return Err(CaptureError::Native("ScreenCaptureKit did not apply the window exclusion".into()));
         }
+        // Applied only once every excluded window was found; until then the next call retries.
+        if complete {
+            self.mark_applied(version);
+        }
+        Ok(())
+    }
+    fn mark_applied(&mut self, version: u64) {
         self.applied = version;
+        self.pending = None;
         if let Some(entry) = APPLIED.lock().unwrap_or_else(|error| error.into_inner()).iter_mut().find(|(stream, _)| *stream == self.stream_id) {
             entry.1 = version;
         }
-        Ok(())
     }
     pub fn stop(&mut self) -> Result<(), CaptureError> {
         if !self.active {
@@ -510,5 +552,29 @@ impl MacStream {
 impl Drop for MacStream {
     fn drop(&mut self) {
         let _ = self.stop();
+    }
+}
+
+#[cfg(test)]
+mod exclusion_tests {
+    use super::*;
+
+    #[test]
+    fn each_owner_replaces_only_its_own_excluded_windows() {
+        let start = set_excluded_windows(Excluded::PrivacyCover, vec![11, 12]);
+        let next = set_excluded_windows(Excluded::Drawings, vec![21]);
+        assert!(next > start);
+        let mut ids = excluded_now().1;
+        ids.sort_unstable();
+        assert_eq!(ids, vec![11, 12, 21]);
+        // The drawing overlay closing leaves the privacy cover out of the picture.
+        set_excluded_windows(Excluded::Drawings, Vec::new());
+        assert_eq!(excluded_now().1, vec![11, 12]);
+        set_excluded_windows(Excluded::Drawings, vec![22]);
+        set_excluded_windows(Excluded::PrivacyCover, Vec::new());
+        assert_eq!(excluded_now().1, vec![22]);
+        let last = set_excluded_windows(Excluded::Drawings, Vec::new());
+        assert!(excluded_now().1.is_empty());
+        assert_eq!(excluded_now().0, last);
     }
 }

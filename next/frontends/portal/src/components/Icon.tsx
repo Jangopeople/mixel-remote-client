@@ -29,6 +29,10 @@ const PATHS: Record<string, string> = {
   phone: 'M7 2h10a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1M11 18h2',
   arrow: 'M5 12h14M13 6l6 6-6 6',
   flag: 'M4 22V4M4 4h13l-2 4 2 4H4',
+  star: 'M12 3.2l2.7 5.6 6.1.8-4.5 4.2 1.1 6.1L12 17l-5.4 2.9 1.1-6.1-4.5-4.2 6.1-.8z',
+  chart: 'M4 20V11M10 20V5M16 20v-6M21 20H3',
+  edit: 'M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16zM13.5 6.5l4 4',
+  clock: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20M12 6v6l4 2',
 };
 
 export type IconName = keyof typeof PATHS;

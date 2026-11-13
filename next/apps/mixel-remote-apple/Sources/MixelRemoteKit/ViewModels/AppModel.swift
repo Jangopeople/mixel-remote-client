@@ -3,12 +3,13 @@ import SwiftUI
 
 /// The sections of the app (sidebar on the Mac, tabs on the phone).
 public enum AppSection: String, CaseIterable, Identifiable, Sendable {
-    case remote, devices, account, settings
+    case remote, devices, reports, account, settings
     public var id: String { rawValue }
     public var title: String {
         switch self {
         case .remote: L("Remote control")
         case .devices: L("Devices")
+        case .reports: L("Session reports")
         case .account: L("Account")
         case .settings: L("Settings")
         }
@@ -17,6 +18,7 @@ public enum AppSection: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .remote: "arrow.left.arrow.right"
         case .devices: "laptopcomputer.and.iphone"
+        case .reports: "list.bullet.rectangle"
         case .account: "person.crop.circle"
         case .settings: "gearshape"
         }
@@ -47,6 +49,8 @@ public final class AppModel: ObservableObject {
     public lazy var settings = SettingsModel(app: self)
     public lazy var enrollment = EnrollmentModel(app: self)
     public lazy var assistant = AssistantModel(app: self)
+    public lazy var drawing = DrawingModel(app: self)
+    public lazy var reports = ReportsModel(app: self)
 
     /// The app opens web pages (sign-in, legal texts) through this.
     public var openURL: (URL) -> Void = { _ in }
@@ -120,6 +124,8 @@ public final class AppModel: ObservableObject {
         if next != previous { remote = next }
         if next.phase == "ready" { autoTries = 0; nextAutoTry = .distantPast }
         session.statusChanged(from: previous, to: next)
+        drawing.sessionChanged(next.phase == "active" && !next.sharing ? next.session : nil)
+        reports.statusChanged(from: previous, to: next)
         host.statusChanged(from: previous, to: next)
         devices.statusChanged(from: previous, to: next)
         await goOnlineIfNeeded()
@@ -173,11 +179,11 @@ public final class AppModel: ObservableObject {
 
     // MARK: Sign-in
 
-    /// Sign-in methods the identity service offers (`mixel_id`, `google`, `azure`, `apple`).
+    /// Sign-in methods the identity service offers (`keycloak` = Mixel ID, `google`, `azure`, `apple`).
     @Published public private(set) var signInProviders: [String] = []
 
     public func loadSignInProviders() async {
-        if let providers: [String] = try? await engine.run("sign_in_providers") { signInProviders = providers }
+        if let providers: [String] = try? await engine.run("account_providers") { signInProviders = providers }
     }
 
     /// The other sign-in buttons beside Mixel ID, in the portal's order.

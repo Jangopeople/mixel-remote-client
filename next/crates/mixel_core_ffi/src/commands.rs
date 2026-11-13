@@ -14,7 +14,9 @@ use uuid::Uuid;
 pub const PLATFORM: &str = "macos";
 #[cfg(target_os = "ios")]
 pub const PLATFORM: &str = "ios";
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(target_os = "android")]
+pub const PLATFORM: &str = "android";
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
 pub const PLATFORM: &str = "other";
 
 /// What the commands share: the account, the connection to Mixel and this computer's identity.
@@ -110,7 +112,8 @@ fn out<T: serde::Serialize>(value: T) -> Result<String, String> {
 }
 
 /// The device's system as the Mixel service records it (macos, windows or linux). iPhone and iPad
-/// register as Apple devices ("macos"), as the current phone app does; their name says which.
+/// register as Apple devices ("macos"), as the current phone app does; Android phones and tablets as
+/// "linux" (the system they are built on); their name says which.
 fn os_name() -> &'static str {
     if cfg!(any(target_os = "macos", target_os = "ios")) {
         "macos"
@@ -171,8 +174,10 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
                 auth.begin_qa(path).await?;
                 return out(Value::Null);
             }
+            // The phone apps: a chosen provider and the app's own callback address (Custom Tab).
             let provider: Option<String> = args.get("provider")?;
-            let url = auth.begin_with(provider.as_deref()).await?;
+            let app_callback: Option<String> = args.get("app_callback")?;
+            let url = auth.begin_with(provider.as_deref(), app_callback.as_deref()).await?;
             // The app opens the page itself (`show_link`: it shows the link to copy instead).
             if args.get::<Option<bool>>("open_browser")?.unwrap_or(false)
                 && let Err(error) = browser(&url).await
@@ -182,7 +187,8 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
             }
             out(url)
         }
-        "sign_in_providers" => out(auth.providers().await?),
+        "account_callback" => out(auth.complete_app(&args.get::<String>("url")?).await?),
+        "account_providers" => out(AccountAuth::providers().await?),
         "account_verify" => {
             let factor: Uuid = args.get("factor")?;
             let code: String = args.get("code")?;
@@ -414,6 +420,8 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
             out(remote.decide(args.get("decision")?).await?)
         }
         "remote_clipboard" => out(remote.clipboard(args.get("session")?, args.get("push")?).await?),
+        // Drawing on the remote screen (view-only sessions too): true when queued.
+        "remote_draw" => out(remote.draw(args.get("session")?, args.get("message")?).await?),
         "remote_chat_messages" => {
             let session: Uuid = args.get("session")?;
             remote.require_chat_session(session).await?;
@@ -712,6 +720,35 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
         "saas_device_presence" => {
             let c = auth.credential(None).await?;
             out(c.ism.saas_device_presence(&c.token, args.get("tenant")?).await.map_err(saas)?)
+        }
+        "saas_set_favorite" => {
+            let c = auth.credential(None).await?;
+            out(c.ism.saas_set_favorite(&c.token, args.get("tenant")?, args.get("device")?, args.get("favorite")?).await.map_err(saas)?)
+        }
+        "saas_favorites" => {
+            let c = auth.credential(None).await?;
+            out(c.ism.saas_favorites(&c.token, args.get("tenant")?).await.map_err(saas)?)
+        }
+        "saas_recent_devices" => {
+            let c = auth.credential(None).await?;
+            out(c.ism.saas_recent_devices(&c.token, args.get("tenant")?, args.get("max_count")?).await.map_err(saas)?)
+        }
+        "saas_session_report" => {
+            let c = auth.credential(None).await?;
+            out(c
+                .ism
+                .saas_session_report(&c.token, args.get("tenant")?, args.get("from")?, args.get("to")?, args.get("technician")?, args.get("device")?)
+                .await
+                .map_err(saas)?)
+        }
+        "saas_session_note" => {
+            let c = auth.credential(None).await?;
+            let note: String = args.get("note")?;
+            out(c
+                .ism
+                .saas_session_note(&c.token, args.get("tenant")?, &note, args.get("session")?, args.get("connection")?)
+                .await
+                .map_err(saas)?)
         }
         "saas_rename_tenant" => {
             let c = auth.credential(None).await?;
@@ -1101,6 +1138,17 @@ async fn platform(_context: &Context, command: &str, _args: &Args) -> Result<Str
         "screen_access" | "request_screen_access" | "request_input_access" => out(false),
         "signin_screen_status" => out(json!({ "supported": false, "availability": "not_here" })),
         "remote_printing_status" => out(json!({ "supported": false, "installed": false })),
+        // Android: the wake signal goes out on the phone's own network (Wi-Fi next to the computer).
+        #[cfg(target_os = "android")]
+        "wake_on_lan" => {
+            let macs: Vec<String> = _args.get("macs")?;
+            if macs.is_empty() || macs.len() > 4 {
+                return Err("No network address is known for this computer yet".into());
+            }
+            out(tokio::task::spawn_blocking(move || macs.iter().try_for_each(|mac| mixel_engine::host_actions::wake(mac)))
+                .await
+                .map_err(|_| "The wake signal could not be sent")??)
+        }
         _ => Err(format!("Unknown command: {command}")),
     }
 }
@@ -1152,6 +1200,16 @@ mod tests {
         let account: Value = serde_json::from_str(&dispatch(&context, "account_status", "{}").await.unwrap()).unwrap();
         assert!(account["phase"].is_string());
         assert!(dispatch(&context, "saas_my_tenants", "{}").await.is_err());
+        let tenant = Uuid::new_v4();
+        for (command, args) in [
+            ("saas_set_favorite", format!(r#"{{"tenant":"{tenant}","device":"{tenant}","favorite":true}}"#)),
+            ("saas_favorites", format!(r#"{{"tenant":"{tenant}"}}"#)),
+            ("saas_recent_devices", format!(r#"{{"tenant":"{tenant}","max_count":5}}"#)),
+            ("saas_session_report", format!(r#"{{"tenant":"{tenant}","from":"2026-11-01"}}"#)),
+            ("saas_session_note", format!(r#"{{"tenant":"{tenant}","note":"x","connection":123456789}}"#)),
+        ] {
+            assert!(dispatch(&context, command, &args).await.is_err(), "{command} needs a signed-in account");
+        }
         assert!(dispatch(&context, "remote_devices", r#"{"search":""}"#).await.is_err());
         // Offline: no pending removal, and a removal needs confirmation first.
         assert_eq!(dispatch(&context, "device_removal_pending", "{}").await.unwrap(), "false");
@@ -1176,6 +1234,19 @@ mod tests {
             "Start a permitted recording after the remote screen appears"
         );
         assert!(dispatch(&context, "remote_file_send", &format!(r#"{{"consent":"{session}","path":"x"}}"#)).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn drawing_needs_an_active_session_and_a_valid_message() {
+        let context = context();
+        let session = Uuid::new_v4();
+        let stroke = r#"{"kind":"stroke","id":1,"tool":"arrow","color":2,"width":3,"points":[[1,2],[300,400]],"done":true}"#;
+        assert_eq!(dispatch(&context, "remote_draw", &format!(r#"{{"session":"{session}","message":{stroke}}}"#)).await.unwrap(), "false");
+        assert_eq!(dispatch(&context, "remote_draw", &format!(r#"{{"session":"{session}","message":{{"kind":"clear"}}}}"#)).await.unwrap(), "false");
+        let bad = stroke.replace(r#""color":2"#, r#""color":7"#);
+        assert!(dispatch(&context, "remote_draw", &format!(r#"{{"session":"{session}","message":{bad}}}"#)).await.is_err());
+        assert!(dispatch(&context, "remote_draw", &format!(r#"{{"session":"{session}","message":{{"kind":"erase"}}}}"#)).await.is_err());
+        assert!(dispatch(&context, "remote_draw", &format!(r#"{{"session":"{session}"}}"#)).await.is_err());
     }
 
     #[tokio::test]

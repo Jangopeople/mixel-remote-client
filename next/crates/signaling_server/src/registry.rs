@@ -9,8 +9,8 @@ use crate::{
 use core_protocol::PROTOCOL_VERSION;
 use rand_core::{OsRng, RngCore};
 use std::{
-    collections::HashMap,
-    time::{Duration, Instant},
+    collections::{HashMap, VecDeque},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
@@ -24,6 +24,65 @@ const MAX_PRESENCE: usize = 64;
 const MAX_JOINED: usize = 2;
 const MAX_INVITATIONS: usize = 256;
 const INVITATION_SECONDS: u16 = 120;
+/// Session events waiting for the reporter (`sessions.rs`); the oldest are dropped beyond this.
+pub const MAX_SESSION_EVENTS: usize = 10_000;
+
+/// A Remote SaaS session for the company's session report (SQL 029, `remote_session_report`).
+/// `start` once the session first connects, `end` when it ends for good (a transport restart is
+/// neither). `technician` is the profile authorized to help (also when the sides are switched),
+/// `device` the helped computer. Times are Unix seconds.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SessionEvent {
+    Start {
+        id: Uuid,
+        tenant: Uuid,
+        technician: Uuid,
+        controller_device: Uuid,
+        controller_connection: u32,
+        device: Uuid,
+        connection: u32,
+        unattended: bool,
+        colleague: bool,
+        at: u64,
+    },
+    End {
+        id: Uuid,
+        at: u64,
+    },
+}
+
+fn unix_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |time| time.as_secs())
+}
+
+/// Bounded queue of session events; nothing is kept while reporting is off.
+#[derive(Default)]
+struct SessionJournal {
+    enabled: bool,
+    events: VecDeque<SessionEvent>,
+    dropped: u64,
+}
+impl SessionJournal {
+    fn push(&mut self, event: SessionEvent) {
+        if !self.enabled {
+            return;
+        }
+        if self.events.len() >= MAX_SESSION_EVENTS {
+            self.events.pop_front();
+            self.dropped += 1;
+            if self.dropped == 1 || self.dropped.is_multiple_of(1000) {
+                eprintln!(
+                    "session report queue full: {} oldest session events dropped",
+                    self.dropped
+                );
+            }
+        }
+        self.events.push_back(event);
+    }
+}
 struct Peer {
     generation: Uuid,
     principal: Principal,
@@ -91,6 +150,10 @@ struct Session {
     /// The sides were switched: the technician who is authorized to help is `host` here and
     /// the computer they help is `controller`. Policy checks use the authorized direction.
     reversed: bool,
+    /// Session report record: stable across transport restarts, new for a switch of sides.
+    record: Uuid,
+    /// The record's start was journaled (so its end is journaled exactly once).
+    recorded: bool,
 }
 impl Session {
     /// (technician, helped computer) as authorized by the support policy.
@@ -120,6 +183,7 @@ pub struct Registry {
     /// Most connections (peers) and most sessions at once, broker-wide.
     max_peers: usize,
     max_sessions: usize,
+    journal: SessionJournal,
 }
 impl Default for Registry {
     fn default() -> Self {
@@ -135,6 +199,83 @@ pub(crate) struct PolicyCheck {
 }
 
 impl Registry {
+    /// Starts keeping session events for the session report (the reporter calls this).
+    pub fn enable_session_journal(&mut self) {
+        self.journal.enabled = true;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn journal_for_test(&mut self, event: SessionEvent) {
+        self.journal.push(event);
+    }
+
+    /// The session events since the last call, oldest first.
+    pub fn take_session_events(&mut self) -> Vec<SessionEvent> {
+        self.journal.events.drain(..).collect()
+    }
+
+    /// Record ids of the reported sessions running right now (each started, not yet ended).
+    pub fn running_records(&self) -> Vec<Uuid> {
+        let mut records: Vec<Uuid> = self
+            .sessions
+            .values()
+            .filter(|session| session.recorded)
+            .map(|session| session.record)
+            .collect();
+        records.sort_unstable();
+        records.dedup();
+        records
+    }
+
+    /// Journals the start of a SaaS session that has just connected for the first time.
+    fn record_start(&mut self, session: Uuid) {
+        if !self.journal.enabled {
+            return;
+        }
+        let Some(room) = self.sessions.get(&session) else {
+            return;
+        };
+        let Some(tenant) = room.limit_tenant else {
+            return;
+        };
+        if room.recorded {
+            return;
+        }
+        let (technician, helped) = room.authorized();
+        let identity = |id: u32| {
+            self.peers
+                .get(&id)
+                .and_then(|peer| peer.identity.as_ref())
+                .map(|ticket| {
+                    (
+                        Uuid::from_bytes(ticket.identity.profile),
+                        Uuid::from_bytes(ticket.identity.device),
+                    )
+                })
+        };
+        let (Some((profile, controller_device)), Some((_, device))) =
+            (identity(technician), identity(helped))
+        else {
+            return;
+        };
+        let event = SessionEvent::Start {
+            id: room.record,
+            tenant,
+            technician: profile,
+            controller_device,
+            controller_connection: technician,
+            device,
+            connection: helped,
+            unattended: room.unattended,
+            colleague: room.joined.is_some(),
+            at: unix_seconds(),
+        };
+        if let Some(room) = self.sessions.get_mut(&session) {
+            room.recorded = true;
+        }
+        self.journal.push(event);
+    }
+
     /// Connection IDs of the enrolled devices connected right now (a verified device ticket whose
     /// account sign-in has not expired). Used for the "online / last seen" record; never sent to peers.
     pub fn online_devices(&self, unix: u64) -> Vec<u32> {
@@ -364,6 +505,7 @@ impl Registry {
             invitations: HashMap::new(),
             max_peers: connections,
             max_sessions: connections,
+            journal: SessionJournal::default(),
         }
     }
     /// Changes the limits; connections and sessions already open stay.
@@ -459,6 +601,12 @@ impl Registry {
     }
     fn close(&mut self, session: Uuid, reason: CloseReason, now: Instant) {
         if let Some(s) = self.sessions.remove(&session) {
+            if s.recorded {
+                self.journal.push(SessionEvent::End {
+                    id: s.record,
+                    at: unix_seconds(),
+                });
+            }
             if self.retired.len() < self.max_sessions * 2 {
                 self.retired.insert(
                     session,
@@ -604,6 +752,8 @@ impl Registry {
                 let unattended = current.unattended;
                 let limit_tenant = current.limit_tenant;
                 let (group, joined, reversed) = (current.group, current.joined, current.reversed);
+                // A transport restart continues the same reported session.
+                let (record, recorded) = (current.record, current.recorded);
                 let until = current.active_until.ok_or(ErrorCode::Forbidden)?;
                 if now >= until {
                     return Err(ErrorCode::Forbidden);
@@ -628,6 +778,8 @@ impl Registry {
                         group,
                         joined,
                         reversed,
+                        record,
+                        recorded,
                     },
                 );
                 self.retired.insert(
@@ -835,6 +987,8 @@ impl Registry {
                         group: session,
                         joined: None,
                         reversed: false,
+                        record: Uuid::new_v4(),
+                        recorded: false,
                     },
                 );
                 self.send(from, ServerMessage::Requested { session });
@@ -991,6 +1145,8 @@ impl Registry {
                         group,
                         joined: Some(control),
                         reversed: false,
+                        record: Uuid::new_v4(),
+                        recorded: false,
                     },
                 );
                 self.send(from, ServerMessage::Requested { session });
@@ -1046,6 +1202,9 @@ impl Registry {
                         group: replacement,
                         joined: None,
                         reversed,
+                        // Switched sides: a new session in the report.
+                        record: Uuid::new_v4(),
+                        recorded: false,
                     },
                 );
                 self.send(host, ServerMessage::Switched { previous: session, session: replacement, host: controller });
@@ -1111,6 +1270,7 @@ impl Registry {
                 if from != s.controller && from != s.host {
                     return Err(ErrorCode::Forbidden);
                 }
+                let mut connected = false;
                 match (&payload, s.phase) {
                     (Signal::Identity(_), Phase::Offer | Phase::Answer | Phase::Connected) => {
                         let delivered = if from == s.controller {
@@ -1133,6 +1293,7 @@ impl Registry {
                             .active_until
                             .get_or_insert(now + Duration::from_secs(8 * 3600));
                         s.deadline = until;
+                        connected = true;
                     }
                     (Signal::Ice(_), Phase::Answer | Phase::Connected) => {}
                     _ => return Err(ErrorCode::Forbidden),
@@ -1143,6 +1304,9 @@ impl Registry {
                     s.controller
                 };
                 self.send(to, ServerMessage::Signal { session, payload });
+                if connected {
+                    self.record_start(session);
+                }
                 Ok(())
             }
             ClientMessage::Close { session } => {
@@ -1856,6 +2020,202 @@ mod rotation_tests {
         connect(&mut registry, now, (222_222_222, host), (111_111_111, technician), reversed);
         registry.handle(222_222_222, host, ClientMessage::ConfigureUnattended { enabled: false }, now).unwrap();
         assert_eq!(registry.counts().1, 0);
+    }
+
+    /// A registry that keeps session events, with a SaaS technician (profile 10, device 110) and
+    /// a helped computer (profile 11, device 111).
+    fn reporting() -> (Registry, Uuid, Uuid, Vec<mpsc::Receiver<ServerMessage>>) {
+        let mut registry = Registry::default();
+        registry.enable_session_journal();
+        let (technician, t) = peer(&mut registry, 111_111_111, 10);
+        let (host, h) = peer(&mut registry, 222_222_222, 11);
+        (registry, technician, host, vec![t, h])
+    }
+    const SAAS: Option<SessionLimit> = Some(SessionLimit { tenant: Uuid::from_u128(77), max_sessions: 10 });
+    fn requested(registry: &mut Registry, from: (u32, Uuid), host: u32, unattended: bool, limit: Option<SessionLimit>) -> Uuid {
+        let message = if unattended { ClientMessage::RequestUnattended { host } } else { ClientMessage::Request { host } };
+        registry.handle_limited(from.0, from.1, message, Instant::now(), limit).unwrap();
+        *registry
+            .sessions
+            .iter()
+            .find(|(_, room)| room.controller == from.0 && room.host == host && matches!(room.phase, Phase::Consent))
+            .unwrap()
+            .0
+    }
+    fn starts(events: &[SessionEvent]) -> Vec<&SessionEvent> {
+        events.iter().filter(|event| matches!(event, SessionEvent::Start { .. })).collect()
+    }
+    fn ends(events: &[SessionEvent]) -> Vec<Uuid> {
+        events.iter().filter_map(|event| match event { SessionEvent::End { id, .. } => Some(*id), _ => None }).collect()
+    }
+    fn record_of(event: &SessionEvent) -> Uuid {
+        match event { SessionEvent::Start { id, .. } | SessionEvent::End { id, .. } => *id }
+    }
+
+    #[test]
+    fn a_saas_session_is_recorded_once_connected_and_ended_once() {
+        let (mut registry, technician, host, _events) = reporting();
+        let now = Instant::now();
+        // A linked-company session (no tenant limit) is not recorded.
+        let session = requested(&mut registry, (111_111_111, technician), 222_222_222, false, None);
+        connect(&mut registry, now, (111_111_111, technician), (222_222_222, host), session);
+        assert!(registry.running_records().is_empty());
+        registry.handle(111_111_111, technician, ClientMessage::Close { session }, now).unwrap();
+        assert!(registry.take_session_events().is_empty());
+        // A SaaS session: nothing while asking, offering and answering...
+        let session = requested(&mut registry, (111_111_111, technician), 222_222_222, false, SAAS);
+        registry.handle(222_222_222, host, ClientMessage::Decide { session, accept: true }, now).unwrap();
+        registry.handle(111_111_111, technician, ClientMessage::Signal { session, payload: Signal::Offer("v=0".into()) }, now).unwrap();
+        assert!(registry.take_session_events().is_empty());
+        // ...the start when the host's answer connects it.
+        registry.handle(222_222_222, host, ClientMessage::Signal { session, payload: Signal::Answer("v=0".into()) }, now).unwrap();
+        let events = registry.take_session_events();
+        let [SessionEvent::Start { id, tenant, technician: profile, controller_device, controller_connection, device, connection, unattended, colleague, at }] = events.as_slice() else {
+            panic!("{events:?}")
+        };
+        assert_eq!(
+            (*tenant, *profile, *controller_device, *controller_connection, *device, *connection, *unattended, *colleague),
+            (Uuid::from_u128(77), Uuid::from_u128(10), Uuid::from_u128(110), 111_111_111, Uuid::from_u128(111), 222_222_222, false, false)
+        );
+        assert!(*at > 1_700_000_000);
+        assert_eq!(registry.running_records(), vec![*id]);
+        // Closing it from both sides ends it once.
+        registry.handle(222_222_222, host, ClientMessage::Close { session }, now).unwrap();
+        registry.handle(111_111_111, technician, ClientMessage::Close { session }, now).unwrap();
+        assert_eq!(ends(&registry.take_session_events()), vec![*id]);
+        assert!(registry.running_records().is_empty());
+        // A session refused at the computer was never connected: no record at all.
+        let session = requested(&mut registry, (111_111_111, technician), 222_222_222, false, SAAS);
+        registry.handle(222_222_222, host, ClientMessage::Decide { session, accept: false }, now).unwrap();
+        assert!(registry.take_session_events().is_empty());
+    }
+
+    #[test]
+    fn a_transport_restart_keeps_the_record() {
+        let (mut registry, technician, host, _events) = reporting();
+        let now = Instant::now();
+        let session = requested(&mut registry, (111_111_111, technician), 222_222_222, false, SAAS);
+        connect(&mut registry, now, (111_111_111, technician), (222_222_222, host), session);
+        let started = registry.take_session_events();
+        let record = record_of(&started[0]);
+        let later = now + Duration::from_secs(31);
+        registry.handle(111_111_111, technician, ClientMessage::Restart { session }, later).unwrap();
+        let replacement = *registry.sessions.keys().next().unwrap();
+        assert_ne!(replacement, session);
+        registry.handle(111_111_111, technician, ClientMessage::Signal { session: replacement, payload: Signal::Offer("v=0".into()) }, later).unwrap();
+        registry.handle(222_222_222, host, ClientMessage::Signal { session: replacement, payload: Signal::Answer("v=0".into()) }, later).unwrap();
+        assert!(registry.take_session_events().is_empty(), "no new start, no end");
+        assert_eq!(registry.running_records(), vec![record]);
+        registry.handle(222_222_222, host, ClientMessage::Close { session: replacement }, later).unwrap();
+        assert_eq!(ends(&registry.take_session_events()), vec![record]);
+    }
+
+    #[test]
+    fn switching_sides_records_a_new_session_for_the_same_technician() {
+        let (mut registry, technician, host, _events) = reporting();
+        let now = Instant::now();
+        features(&mut registry, 111_111_111, technician);
+        features(&mut registry, 222_222_222, host);
+        let session = requested(&mut registry, (111_111_111, technician), 222_222_222, false, SAAS);
+        connect(&mut registry, now, (111_111_111, technician), (222_222_222, host), session);
+        let first = record_of(&registry.take_session_events()[0]);
+        registry.handle(111_111_111, technician, ClientMessage::SwitchSides { session }, now).unwrap();
+        assert_eq!(ends(&registry.take_session_events()), vec![first]);
+        let reversed = *registry.sessions.keys().next().unwrap();
+        // The helped computer now views; the technician's computer answers.
+        connect(&mut registry, now, (222_222_222, host), (111_111_111, technician), reversed);
+        let events = registry.take_session_events();
+        let [SessionEvent::Start { id, technician: profile, controller_device, controller_connection, device, connection, .. }] = events.as_slice() else {
+            panic!("{events:?}")
+        };
+        assert_ne!(*id, first);
+        assert_eq!(
+            (*profile, *controller_device, *controller_connection, *device, *connection),
+            (Uuid::from_u128(10), Uuid::from_u128(110), 111_111_111, Uuid::from_u128(111), 222_222_222),
+            "the authorized technician and the helped computer, not the switched roles"
+        );
+        registry.handle(111_111_111, technician, ClientMessage::Close { session: reversed }, now).unwrap();
+        assert_eq!(ends(&registry.take_session_events()), vec![*id]);
+    }
+
+    #[test]
+    fn a_colleague_is_recorded_as_colleague_and_ends_with_the_first_session() {
+        let (mut registry, technician, host, mut events) = reporting();
+        let now = Instant::now();
+        let (colleague, colleague_events) = peer(&mut registry, 333_333_333, 12);
+        events.push(colleague_events);
+        for (id, generation) in [(111_111_111, technician), (222_222_222, host), (333_333_333, colleague)] {
+            features(&mut registry, id, generation);
+        }
+        let session = requested(&mut registry, (111_111_111, technician), 222_222_222, false, SAAS);
+        connect(&mut registry, now, (111_111_111, technician), (222_222_222, host), session);
+        registry.handle(111_111_111, technician, ClientMessage::Invite { session, user: None, device: Some(333_333_333), control: false }, now).unwrap();
+        let Some(ServerMessage::Invited { invitation, .. }) = drain(&mut events[2]).pop() else { panic!() };
+        registry.handle_limited(333_333_333, colleague, ClientMessage::JoinSession { invitation }, now, SAAS).unwrap();
+        let joined = *registry.sessions.iter().find(|(_, room)| room.joined.is_some()).unwrap().0;
+        connect(&mut registry, now, (333_333_333, colleague), (222_222_222, host), joined);
+        let recorded = registry.take_session_events();
+        let starts = starts(&recorded);
+        assert_eq!(starts.len(), 2);
+        let SessionEvent::Start { technician: profile, colleague: true, device, .. } = starts[1] else { panic!("{recorded:?}") };
+        assert_eq!((*profile, *device), (Uuid::from_u128(12), Uuid::from_u128(111)));
+        assert!(matches!(starts[0], SessionEvent::Start { colleague: false, .. }));
+        assert_eq!(registry.running_records().len(), 2);
+        registry.handle(111_111_111, technician, ClientMessage::Close { session }, now).unwrap();
+        let mut ended = ends(&registry.take_session_events());
+        ended.sort_unstable();
+        let mut wanted: Vec<Uuid> = recorded.iter().map(record_of).collect();
+        wanted.sort_unstable();
+        assert_eq!(ended, wanted);
+    }
+
+    #[test]
+    fn every_way_a_session_ends_journals_exactly_one_end() {
+        type Ender = fn(&mut Registry, Uuid, Uuid, Uuid, Instant);
+        let enders: [(&str, Ender); 6] = [
+            ("controller disconnects", |registry, technician, _, _, _| registry.disconnect(111_111_111, technician)),
+            ("host disconnects", |registry, _, host, _, _| registry.disconnect(222_222_222, host)),
+            ("deadline", |registry, _, _, _, now| registry.expire(now + Duration::from_secs(9 * 3600))),
+            ("policy revoked", |registry, technician, _, session, now| registry.policy_revoked(session, (111_111_111, technician), now)),
+            ("shutdown", |registry, _, _, _, _| registry.shutdown()),
+            ("unattended turned off", |registry, _, host, _, now| {
+                registry.handle(222_222_222, host, ClientMessage::ConfigureUnattended { enabled: false }, now).unwrap();
+            }),
+        ];
+        for (what, end) in enders {
+            let (mut registry, technician, host, _events) = reporting();
+            let now = Instant::now();
+            registry.handle(222_222_222, host, ClientMessage::ConfigureUnattended { enabled: true }, now).unwrap();
+            let session = requested(&mut registry, (111_111_111, technician), 222_222_222, true, SAAS);
+            connect(&mut registry, now, (111_111_111, technician), (222_222_222, host), session);
+            let started = registry.take_session_events();
+            assert!(matches!(started.as_slice(), [SessionEvent::Start { unattended: true, .. }]), "{what}");
+            end(&mut registry, technician, host, session, now);
+            assert_eq!(ends(&registry.take_session_events()), vec![record_of(&started[0])], "{what}");
+            // Nothing more afterwards (late close, expiry of retired rooms).
+            registry.expire(now + Duration::from_secs(10 * 3600));
+            assert!(registry.take_session_events().is_empty(), "{what}");
+            assert!(registry.running_records().is_empty(), "{what}");
+        }
+    }
+
+    #[test]
+    fn the_journal_is_off_until_enabled_and_bounded() {
+        let mut registry = Registry::default();
+        let now = Instant::now();
+        let (technician, _t) = peer(&mut registry, 111_111_111, 10);
+        let (host, _h) = peer(&mut registry, 222_222_222, 11);
+        let session = requested(&mut registry, (111_111_111, technician), 222_222_222, false, SAAS);
+        connect(&mut registry, now, (111_111_111, technician), (222_222_222, host), session);
+        assert!(registry.take_session_events().is_empty() && registry.running_records().is_empty());
+        registry.enable_session_journal();
+        for n in 0..(MAX_SESSION_EVENTS as u128 + 5) {
+            registry.journal.push(SessionEvent::End { id: Uuid::from_u128(n), at: 1 });
+        }
+        let events = registry.take_session_events();
+        assert_eq!(events.len(), MAX_SESSION_EVENTS);
+        assert_eq!(record_of(&events[0]), Uuid::from_u128(5), "the oldest are dropped");
+        assert_eq!(registry.journal.dropped, 5);
     }
 
     #[test]

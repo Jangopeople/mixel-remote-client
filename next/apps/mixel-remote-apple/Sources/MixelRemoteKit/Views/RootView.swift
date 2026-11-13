@@ -25,12 +25,16 @@ public struct RootView: View {
         .sheet(isPresented: Binding(get: { app.host.asking }, set: { _ in })) {
             ConsentSheet(app: app).interactiveDismissDisabled()
         }
+        .sheet(item: Binding(get: { app.host.asking ? nil : app.reports.noteFor.map(NoteTarget.init) }, set: { if $0 == nil { app.reports.noteFor = nil } })) { target in
+            SessionNoteSheet(reports: app.reports, host: target.id, name: app.devices.name(of: target.id))
+        }
     }
 
     @ViewBuilder private var detail: some View {
         switch app.section {
         case .remote: RemoteControlView(app: app)
         case .devices: DevicesView(app: app)
+        case .reports: ReportsView(app: app)
         case .account: AccountView(app: app)
         case .settings: SettingsView(app: app)
         }
@@ -44,7 +48,7 @@ struct Sidebar: View {
         VStack(alignment: .leading, spacing: 0) {
             Brand().padding(.horizontal, 16).padding(.top, 6).padding(.bottom, 18)
             VStack(spacing: 4) {
-                ForEach(AppSection.allCases) { section in
+                ForEach(AppSection.allCases.filter { $0 != .reports || app.company.tenant != nil }) { section in
                     SidebarItem(section: section, selected: app.section == section) { app.section = section }
                 }
             }
@@ -136,3 +140,6 @@ public struct MenuBarContent: View {
     }
 }
 #endif
+
+/// The Remote ID a session note is asked for.
+struct NoteTarget: Identifiable { let id: UInt32 }

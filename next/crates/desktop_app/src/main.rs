@@ -11,6 +11,8 @@ use mixel_engine::account_auth;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 mod saas_commands;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+mod report_files;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use mixel_engine::device_identity;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use mixel_engine::host_actions;
@@ -1667,6 +1669,18 @@ async fn remote_input(
     main_window(&window)?;
     state.input(session, event).await
 }
+/// Draws on the remote screen (a pen stroke, undo or clear); needs only a view of the screen.
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[tauri::command]
+async fn remote_draw(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, remote_session::RemoteSession>,
+    session: uuid::Uuid,
+    message: core_protocol::annotation::Message,
+) -> Result<bool, String> {
+    main_window(&window)?;
+    state.draw(session, message).await
+}
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 #[tauri::command]
 async fn remote_clipboard(
@@ -2259,6 +2273,11 @@ fn main() {
             saas_commands::saas_create_group,
             saas_commands::saas_rename_group,
             saas_commands::saas_device_presence,
+            saas_commands::saas_set_favorite,
+            saas_commands::saas_favorites,
+            saas_commands::saas_recent_devices,
+            saas_commands::saas_session_report,
+            saas_commands::saas_session_note,
             saas_commands::saas_rename_tenant,
             saas_commands::saas_terms_status,
             saas_commands::saas_delete_company,
@@ -2296,6 +2315,8 @@ fn main() {
             remote_printing_status,
             remote_printing_set,
             print_job,
+            report_files::save_report_file,
+            report_files::open_billing_page,
             rollout_create,
             rollout_list,
             rollout_revoke,
@@ -2306,6 +2327,7 @@ fn main() {
             remote_unattended,
             remote_decide,
             remote_input,
+            remote_draw,
             remote_clipboard,
             remote_chat_messages,
             remote_chat_send,
@@ -2382,6 +2404,11 @@ fn main() {
             saas_commands::saas_create_group,
             saas_commands::saas_rename_group,
             saas_commands::saas_device_presence,
+            saas_commands::saas_set_favorite,
+            saas_commands::saas_favorites,
+            saas_commands::saas_recent_devices,
+            saas_commands::saas_session_report,
+            saas_commands::saas_session_note,
             saas_commands::saas_rename_tenant,
             saas_commands::saas_terms_status,
             saas_commands::saas_delete_company,
@@ -2421,6 +2448,8 @@ fn main() {
             remote_printing_status,
             remote_printing_set,
             print_job,
+            report_files::save_report_file,
+            report_files::open_billing_page,
             rollout_create,
             rollout_list,
             rollout_revoke,
@@ -2435,6 +2464,7 @@ fn main() {
             remote_unattended,
             remote_decide,
             remote_input,
+            remote_draw,
             remote_clipboard,
             remote_chat_messages,
             remote_chat_send,

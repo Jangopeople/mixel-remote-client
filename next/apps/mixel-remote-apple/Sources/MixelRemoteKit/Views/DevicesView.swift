@@ -112,9 +112,15 @@ public struct DevicesView: View {
             .padding(24)
         } else {
             List {
-                ForEach(model.devices) { device in
-                    DeviceRow(app: app, model: model, device: device, rename: { renaming = $0 }, move: { moving = $0 }, remove: { removing = $0 })
+                if !model.favoriteDevices.isEmpty {
+                    Section { ForEach(model.favoriteDevices) { row($0) } } header: { Text(verbatim: L("Favorites")) }
                 }
+                if !model.recentDevices.isEmpty {
+                    Section { ForEach(model.recentDevices) { row($0) } } header: { Text(verbatim: L("Recent connections")) }
+                }
+                Section {
+                    ForEach(model.devices) { row($0) }
+                } header: { if !model.favoriteDevices.isEmpty || !model.recentDevices.isEmpty { Text(verbatim: L("All devices")) } }
                 if model.page > 0 || model.hasNext {
                     HStack {
                         Button(L("Previous")) { model.previousPage() }.disabled(model.page == 0 || model.loading)
@@ -129,6 +135,10 @@ public struct DevicesView: View {
             .listStyle(.inset(alternatesRowBackgrounds: false))
             #endif
         }
+    }
+
+    private func row(_ device: Device) -> some View {
+        DeviceRow(app: app, model: model, device: device, rename: { renaming = $0 }, move: { moving = $0 }, remove: { removing = $0 })
     }
 
     private var emptyTitle: String {
@@ -161,6 +171,14 @@ struct DeviceRow: View {
         let presence = model.presence(of: device)
         let blocked = model.connectBlocked(device)
         HStack(spacing: 14) {
+            if model.tenant != nil {
+                Button { model.toggleFavorite(device) } label: {
+                    Image(systemName: model.isFavorite(device) ? "star.fill" : "star").foregroundStyle(model.isFavorite(device) ? Theme.warning : .secondary)
+                }
+                .buttonStyle(.plain)
+                .help(model.isFavorite(device) ? L("Remove from favorites") : L("Add to favorites"))
+                .accessibilityLabel(Text(verbatim: model.isFavorite(device) ? L("Remove from favorites") : L("Add to favorites")))
+            }
             Image(systemName: Format.osSymbol(device.os))
                 .font(.title2)
                 .foregroundStyle(presence == .online || presence == .this ? Theme.brand : .secondary)

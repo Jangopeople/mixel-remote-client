@@ -62,6 +62,7 @@ public struct SessionWorkspaceView: View {
                 Image(decorative: frame, scale: 1).resizable().interpolation(.medium).aspectRatio(contentMode: .fit)
             }
             #endif
+            if session.frame != nil { DrawingOverlay(drawing: app.drawing, pictureSize: session.size) }
             if session.frame == nil {
                 VStack(spacing: 12) {
                     ProgressView().controlSize(.large).tint(.white)
@@ -111,6 +112,7 @@ struct SessionToolbar: View {
             }
             .accessibilityElement(children: .combine)
             Spacer(minLength: 8)
+            if app.drawing.available { DrawingControls(drawing: app.drawing) }
             displays
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) { actions }

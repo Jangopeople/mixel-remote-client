@@ -206,7 +206,7 @@ final class SignInProviderTests: XCTestCase {
         Translator.shared.choice = "en"
         let engine = MockEngine()
         Fixtures.signedOut(engine)
-        engine.reply("sign_in_providers", json: #"["mixel_id","google","azure","apple"]"#)
+        engine.reply("account_providers", json: #"["keycloak","google","azure","apple"]"#)
         engine.reply("account_sign_in", json: #""https://ism-api.mixel.ch/auth/v1/authorize?provider=azure""#)
         let app = await Fixtures.app(engine)
         XCTAssertEqual(app.otherSignInProviders, ["google", "azure", "apple"])
@@ -221,7 +221,7 @@ final class SignInProviderTests: XCTestCase {
 
         let off = MockEngine()
         Fixtures.signedOut(off)
-        off.reply("sign_in_providers", json: #"["mixel_id"]"#)
+        off.reply("account_providers", json: #"["keycloak"]"#)
         let plain = await Fixtures.app(off)
         XCTAssertTrue(plain.otherSignInProviders.isEmpty, "no button for a provider the service does not offer")
     }

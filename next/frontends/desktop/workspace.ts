@@ -1,7 +1,8 @@
 (() => {
-  const pages = Array.from(document.querySelectorAll<HTMLElement>('[data-workspace-page]'));
-  const links = Array.from(document.querySelectorAll<HTMLAnchorElement>('.app-navigation a'));
-  const titles: Record<string, string> = {remote:'Remote control',devices:'Devices',account:'Account',setup:'Device settings',diagnostics:'Diagnostics'};
+  // Looked up on every route: reports.js adds its page and navigation entry after this script ran.
+  let pages = Array.from(document.querySelectorAll<HTMLElement>('[data-workspace-page]'));
+  let links = Array.from(document.querySelectorAll<HTMLAnchorElement>('.app-navigation a'));
+  const titles: Record<string, string> = {remote:'Remote control',devices:'Devices',reports:'Session reports',account:'Account',setup:'Device settings',diagnostics:'Diagnostics'};
   const title = document.getElementById('workspace-title')!;
   const notice = document.getElementById('workspace-signin-notice')!;
   const accountLabel = document.getElementById('shell-account-label')!;
@@ -52,8 +53,10 @@
   }
   let controllerOnly = false;
   function route(): void {
+    pages = Array.from(document.querySelectorAll<HTMLElement>('[data-workspace-page]'));
+    links = Array.from(document.querySelectorAll<HTMLAnchorElement>('.app-navigation a'));
     const name = window.location.hash.slice(1);
-    const current = Object.hasOwn(titles, name) && !(controllerOnly && name === 'diagnostics') ? name : 'remote';
+    const current = Object.hasOwn(titles, name) && pages.some(page => page.id === name) && !(controllerOnly && name === 'diagnostics') ? name : 'remote';
     if (lastRoute === 'remote' && current !== 'remote') document.dispatchEvent(new CustomEvent('mixel-workspace-leaving'));
     lastRoute = current;
     for (const page of pages) page.hidden = page.id !== current;

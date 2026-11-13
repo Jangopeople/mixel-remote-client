@@ -172,11 +172,11 @@ enum LiveCheck {
         Task.detached {
             let folder = FileManager.default.temporaryDirectory.appendingPathComponent("mixel-native-providers")
             guard let engine = try? CoreEngine(dataDirectory: folder) else { check("engine starts", false); done.signal(); return }
-            let listed = (try? await call(engine, "sign_in_providers").get()) as? [String] ?? []
-            check("the identity service offers \(listed.joined(separator: ", "))", Set(["mixel_id", "google", "azure", "apple"]).isSubset(of: Set(listed)))
-            let expected = ["mixel_id": "auth.mixel.ch", "google": "accounts.google.com", "azure": "login.microsoftonline.com", "apple": "appleid.apple.com"]
+            let listed = (try? await call(engine, "account_providers").get()) as? [String] ?? []
+            check("the identity service offers \(listed.joined(separator: ", "))", Set(["keycloak", "google", "azure", "apple"]).isSubset(of: Set(listed)))
+            let expected = ["keycloak": "auth.mixel.ch", "google": "accounts.google.com", "azure": "login.microsoftonline.com", "apple": "appleid.apple.com"]
             let web = URLSession(configuration: .ephemeral)
-            for provider in ["mixel_id", "google", "azure", "apple"] {
+            for provider in ["keycloak", "google", "azure", "apple"] {
                 let started = await call(engine, "account_sign_in", ["open_browser": false, "provider": provider])
                 let link = ((try? started.get()) as? String).flatMap(URL.init(string:))
                 var host = "", status = 0
@@ -303,6 +303,16 @@ enum LiveCheck {
         check("rename the device", (try? renamed.get()) as? String == "QA native Mac renamed", "\(renamed)")
         let moved = await call(engine, "saas_move_device", ["tenant": tenant, "device": device, "group": group])
         check("move the device to the group", (try? moved.get()) as? Bool == true, "\(moved)")
+
+        // Favorites, recent connections and the session report (SQL 029).
+        let favorite = await call(engine, "saas_set_favorite", ["tenant": tenant, "device": device, "favorite": true])
+        check("mark the device as favorite", (try? favorite.get()) != nil, "\(favorite)")
+        let favorites = (try? await call(engine, "saas_favorites", ["tenant": tenant]).get()) as? [[String: Any]] ?? []
+        check("favorites list it", favorites.contains { $0["device_id"] as? String == device }, "\(favorites)")
+        let recent = await call(engine, "saas_recent_devices", ["tenant": tenant, "max_count": 10])
+        check("recent connections answer", (try? recent.get()) != nil, "\(recent)")
+        let report = await call(engine, "saas_session_report", ["tenant": tenant, "from": "2026-11-01", "to": NSNull(), "technician": NSNull(), "device": NSNull()])
+        check("session report answers (trial of Business includes reports)", (try? report.get()) is [Any], "\(report)")
 
         // Members and invitations (a test domain: never e-mailed).
         let invite = await call(engine, "saas_invite_member", ["tenant": tenant, "email": "qa-native-\(suffix)@example.com", "role": "technician", "locale": "de"])

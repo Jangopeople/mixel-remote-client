@@ -765,7 +765,7 @@ public struct CoreInfo: Equatable, Hashable {
      */
     public var version: String
     /**
-     * The platform the engine runs on: `macos` or `ios`.
+     * The platform the engine runs on: `macos`, `ios` or `android`.
      */
     public var platform: String
     /**
@@ -780,7 +780,7 @@ public struct CoreInfo: Equatable, Hashable {
          * The engine's release version (the app's version).
          */version: String, 
         /**
-         * The platform the engine runs on: `macos` or `ios`.
+         * The platform the engine runs on: `macos`, `ios` or `android`.
          */platform: String, 
         /**
          * This build can only control other computers (the phone app).
@@ -837,13 +837,14 @@ public func FfiConverterTypeCoreInfo_lower(_ value: CoreInfo) -> RustBuffer {
 
 /**
  * A failed command; `message` is shown to the person (English; the app translates known texts).
+ * Flat: Kotlin gets it as the exception's message (Swift keeps `Failed(message:)`).
  */
 public enum EngineError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
     
     
-    case Failed(message: String
-    )
+    case Failed(message: String)
+    
 
     
 
@@ -875,9 +876,10 @@ public struct FfiConverterTypeEngineError: FfiConverterRustBuffer {
         
         case 1: return .Failed(
             message: try FfiConverterString.read(from: &buf)
-            )
+        )
+        
 
-         default: throw UniffiInternalError.unexpectedEnumCase
+        default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
@@ -887,11 +889,10 @@ public struct FfiConverterTypeEngineError: FfiConverterRustBuffer {
         
 
         
-        
-        case let .Failed(message):
+        case .Failed(_ /* message is ignored*/):
             writeInt(&buf, Int32(1))
-            FfiConverterString.write(message, into: &buf)
-            
+
+        
         }
     }
 }

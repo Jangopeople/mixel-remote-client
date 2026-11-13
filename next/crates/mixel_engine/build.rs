@@ -20,7 +20,7 @@ fn main() {
     println!("cargo:rustc-env=MIXEL_APP_VERSION={app_version}");
     if matches!(
         std::env::var("CARGO_CFG_TARGET_OS").as_deref(),
-        Ok("windows" | "linux")
+        Ok("windows" | "linux" | "android")
     ) {
         println!("cargo:rerun-if-env-changed=MIXEL_DESKTOP_SERVICE_CONFIG");
         let mut bytes = Vec::new();
