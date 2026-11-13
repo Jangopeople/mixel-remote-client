@@ -226,7 +226,7 @@ pub fn public_status() -> Option<PublicStatus> {
 }
 /// True when the installed sign-in screen program differs from this app version.
 pub fn program_outdated() -> bool {
-    let Ok(current) = std::env::current_exe() else {
+    let Ok(current) = crate::app_scope::program() else {
         return false;
     };
     if current == program_path() {
@@ -257,7 +257,7 @@ pub fn provisioned_public_key() -> Result<ed25519_dalek::VerifyingKey, String> {
 
 /// Runs this executable elevated (UAC prompt) and waits for it.
 pub fn run_elevated(arguments: &str) -> Result<(), String> {
-    let exe = std::env::current_exe().map_err(|_| "Cannot locate Mixel Remote")?;
+    let exe = crate::app_scope::program()?;
     let file: Vec<u16> = exe.as_os_str().encode_wide().chain(Some(0)).collect();
     let verb = wide("runas");
     let parameters = wide(arguments);
