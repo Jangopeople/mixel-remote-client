@@ -186,17 +186,30 @@ enum Target {
     OwnWindow(u32),
 }
 
-/// Windows of this app that the technician must not see (the privacy cover), with a version
-/// that grows on every change, and the version each running display capture has applied.
-static EXCLUDED: std::sync::Mutex<(u64, Vec<u32>)> = std::sync::Mutex::new((0, Vec::new()));
+/// Windows of this app that the technician must not see (the privacy cover, the drawing
+/// overlay), per owner, with a version that grows on every change, and the version each running
+/// display capture has applied.
+type ExcludedWindows = (u64, Vec<(Excluded, Vec<u32>)>);
+static EXCLUDED: std::sync::Mutex<ExcludedWindows> = std::sync::Mutex::new((0, Vec::new()));
 static APPLIED: std::sync::Mutex<Vec<(u64, u64)>> = std::sync::Mutex::new(Vec::new());
 static NEXT_STREAM: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
-/// Leaves these windows of this app out of every display capture from now on; returns the version.
-pub fn set_excluded_windows(ids: Vec<u32>) -> u64 {
+/// Who left windows out of the capture; each owner replaces only its own list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Excluded {
+    PrivacyCover,
+    Drawings,
+}
+
+/// Leaves these windows of `owner` out of every display capture from now on (an empty list
+/// takes them back in); the windows of other owners stay excluded. Returns the version.
+pub fn set_excluded_windows(owner: Excluded, ids: Vec<u32>) -> u64 {
     let mut excluded = EXCLUDED.lock().unwrap_or_else(|error| error.into_inner());
     excluded.0 += 1;
-    excluded.1 = ids;
+    excluded.1.retain(|(who, _)| *who != owner);
+    if !ids.is_empty() {
+        excluded.1.push((owner, ids));
+    }
     excluded.0
 }
 
@@ -210,7 +223,8 @@ pub fn exclusions_applied(version: u64) -> bool {
 }
 
 fn excluded_now() -> (u64, Vec<u32>) {
-    EXCLUDED.lock().unwrap_or_else(|error| error.into_inner()).clone()
+    let excluded = EXCLUDED.lock().unwrap_or_else(|error| error.into_inner());
+    (excluded.0, excluded.1.iter().flat_map(|(_, ids)| ids.iter().copied()).collect())
 }
 
 /// A display filter that leaves out this app's excluded windows.
@@ -510,5 +524,29 @@ impl MacStream {
 impl Drop for MacStream {
     fn drop(&mut self) {
         let _ = self.stop();
+    }
+}
+
+#[cfg(test)]
+mod exclusion_tests {
+    use super::*;
+
+    #[test]
+    fn each_owner_replaces_only_its_own_excluded_windows() {
+        let start = set_excluded_windows(Excluded::PrivacyCover, vec![11, 12]);
+        let next = set_excluded_windows(Excluded::Drawings, vec![21]);
+        assert!(next > start);
+        let mut ids = excluded_now().1;
+        ids.sort_unstable();
+        assert_eq!(ids, vec![11, 12, 21]);
+        // The drawing overlay closing leaves the privacy cover out of the picture.
+        set_excluded_windows(Excluded::Drawings, Vec::new());
+        assert_eq!(excluded_now().1, vec![11, 12]);
+        set_excluded_windows(Excluded::Drawings, vec![22]);
+        set_excluded_windows(Excluded::PrivacyCover, Vec::new());
+        assert_eq!(excluded_now().1, vec![22]);
+        let last = set_excluded_windows(Excluded::Drawings, Vec::new());
+        assert!(excluded_now().1.is_empty());
+        assert_eq!(excluded_now().0, last);
     }
 }

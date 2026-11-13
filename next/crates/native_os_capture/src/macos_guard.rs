@@ -1,4 +1,4 @@
-//! Privacy screen, input block, pointer ring and sound for a Mac being helped (see
+//! Privacy screen, input block, pointer ring, drawings and sound for a Mac being helped (see
 //! `macos_guard.m`). The cover is left out of the technician's picture: its windows are
 //! excluded from every running capture before the cover becomes visible.
 use std::{
@@ -14,6 +14,9 @@ unsafe extern "C" {
     fn mixel_privacy_close();
     fn mixel_pointer_move(x: f64, y: f64);
     fn mixel_pointer_hide();
+    fn mixel_draw_open(x: f64, y: f64, width: f64, height: f64) -> i32;
+    fn mixel_draw_show(shapes: *const f64, count: usize, alpha: f64);
+    fn mixel_draw_close();
     fn mixel_accessibility_trusted() -> bool;
     fn mixel_block_start() -> i32;
     fn mixel_block_stop();
@@ -39,7 +42,7 @@ pub fn privacy_on(text: &str) -> Result<(), String> {
         return Err("macOS did not open the privacy screen".into());
     }
     let ids = ids[..(count as usize).min(ids.len())].to_vec();
-    let version = crate::macos::set_excluded_windows(ids);
+    let version = crate::macos::set_excluded_windows(crate::macos::Excluded::PrivacyCover, ids);
     // Wait until each running capture has left the cover out (normally a few milliseconds).
     let deadline = Instant::now() + Duration::from_millis(1500);
     while !crate::macos::exclusions_applied(version) && Instant::now() < deadline {
@@ -53,7 +56,7 @@ pub fn privacy_on(text: &str) -> Result<(), String> {
 pub fn privacy_off() {
     // SAFETY: no arguments; closes the cover windows if there are any.
     unsafe { mixel_privacy_close() };
-    crate::macos::set_excluded_windows(Vec::new());
+    crate::macos::set_excluded_windows(crate::macos::Excluded::PrivacyCover, Vec::new());
 }
 
 /// Shows the ring at a point in global display coordinates (top left of the main display = 0,0).
@@ -67,6 +70,37 @@ pub fn pointer_at(x: f64, y: f64) {
 pub fn pointer_hide() {
     // SAFETY: no arguments.
     unsafe { mixel_pointer_hide() };
+}
+
+/// Opens the drawing overlay over a display rectangle (global coordinates, points), invisible
+/// and left out of every display capture before it returns; moves it when it is open already.
+pub fn draw_open(left: f64, top: f64, width: f64, height: f64) -> Result<(), String> {
+    if ![left, top, width, height].iter().all(|value| value.is_finite()) || width < 1.0 || height < 1.0 {
+        return Err("Invalid display for drawings".into());
+    }
+    // SAFETY: plain values; the shim creates its own window on the main thread.
+    let number = unsafe { mixel_draw_open(left, top, width, height) };
+    if number <= 0 {
+        return Err("macOS did not open the drawing overlay".into());
+    }
+    let version = crate::macos::set_excluded_windows(crate::macos::Excluded::Drawings, vec![number as u32]);
+    let deadline = Instant::now() + Duration::from_millis(1500);
+    while !crate::macos::exclusions_applied(version) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    Ok(())
+}
+
+/// Shows shapes (see `macos_guard.m`) at an opacity; call after `draw_open`.
+pub fn draw_show(shapes: &[f64], alpha: f64) {
+    // SAFETY: the shim copies `shapes.len()` values before this returns.
+    unsafe { mixel_draw_show(shapes.as_ptr(), shapes.len(), alpha.clamp(0.0, 1.0)) };
+}
+
+pub fn draw_close() {
+    // SAFETY: no arguments; closes the overlay if it is open.
+    unsafe { mixel_draw_close() };
+    crate::macos::set_excluded_windows(crate::macos::Excluded::Drawings, Vec::new());
 }
 
 /// Whether macOS allows this app to filter keyboard and mouse events (Accessibility).
