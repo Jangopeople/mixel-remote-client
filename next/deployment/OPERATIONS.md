@@ -161,6 +161,33 @@ images pinned by ID): change the image ID in compose.json (keep a copy), `docker
 mixel-remote-next-qa -f compose.json up -d --no-deps <authority|turn>`. Rollback: restore compose.json,
 same command. TURN TLS is refreshed by the Let's Encrypt hook `refresh-turn-tls.py`.
 
+**Session reports (broker → database, SQL 029)**: for every Remote SaaS session (policy grant with a
+tenant) the broker journals a start once the session is connected and an end when it ends for good
+(a transport restart keeps the record, switching sides starts a new one) and posts them every 5 s
+to `rpc/remote_session_report` on the same PostgREST base as `MIXEL_PRESENCE_URL`, with the presence
+token (role `mixel_remote_presence`; no new variable — sessions are recorded exactly when presence
+reporting is configured; start line `session reporting every 5 s`). At least every 60 s the post
+also lists every running record, and the database closes open rows that are not listed and started
+more than 30 s ago at their last-seen time; so only **one** broker may report at a time (a second one
+would close the first one's sessions — stop the old container before starting the new one, as in
+the broker procedure above). Failed posts are retried in order (up to 20000 events kept); a 400 from
+the database drops that batch with a log line. Rows live in `remote_saas.sessions`; members read
+them with `remote_saas_session_report` (plan feature `reports`). Revoke at once:
+`revoke execute on function public.remote_session_report(jsonb) from mixel_remote_presence`.
+
+**029 apply / roll back**: apply before (or together with) the broker that reports sessions — an
+older database answers 404 for `remote_session_report`, the broker keeps retrying (bounded) and
+nothing else breaks; an older broker with 029 applied simply records nothing. Test first with the
+rolled-back suites (`tests/remote-saas-sessions.sql` plus the other `remote-saas*.sql`, each in one
+transaction with the migration). Roll back with a forward migration that drops the five
+`remote_saas_*` session/favorite functions and `public.remote_session_report`, restores the 027
+export (`alter function remote_saas.export_core(uuid) set schema public` + rename back to
+`remote_saas_export` after dropping the wrapper, then re-grant to authenticated), removes the
+`reports` key from `remote_saas.plans.features`, and drops `remote_saas.sessions` and
+`remote_saas.favorites`. Dropping the tables deletes companies' session history and favorites:
+that is acceptable only while no customer relies on them; afterwards keep the tables (revoke the
+functions instead) and export first if they must go.
+
 **Database migrations**: `next/sql/0NN_*.sql`, next free number at apply time (security/legal agents
 also add migrations). Apply with `docker exec -i ism-postgres psql -X -v ON_ERROR_STOP=1 -U postgres -d
 ism < file` (each file has its own transaction), then `NOTIFY pgrst, 'reload schema'`. Run the
