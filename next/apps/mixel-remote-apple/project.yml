@@ -1,0 +1,90 @@
+# xcodegen spec for the two native apps (generate with: xcodegen generate).
+name: MixelRemoteApple
+options:
+  bundleIdPrefix: ch.mixel.remote
+  deploymentTarget:
+    macOS: "13.0"
+    iOS: "16.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    MARKETING_VERSION: "1.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    DEVELOPMENT_TEAM: 5277F8NDH4
+    SWIFT_VERSION: "5.0"
+    ENABLE_HARDENED_RUNTIME: YES
+    LOCALIZATION_PREFERS_STRING_CATALOGS: YES
+packages:
+  MixelRemoteApple:
+    path: .
+targets:
+  MixelRemoteMac:
+    type: application
+    platform: macOS
+    sources:
+      - path: Mac
+      - path: Core/service-config.json
+        buildPhase: resources
+    dependencies:
+      - package: MixelRemoteApple
+        product: MixelRemoteKit
+      - package: MixelRemoteApple
+        product: MixelCore
+    info:
+      path: Mac/Info.plist
+      properties:
+        CFBundleDisplayName: Mixel Remote Preview
+        CFBundleName: Mixel Remote Preview
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSApplicationCategoryType: public.app-category.utilities
+        LSMinimumSystemVersion: "13.0"
+        NSHumanReadableCopyright: © Mixel IT and Corporate Services
+        CFBundleDevelopmentRegion: en
+        CFBundleLocalizations: [en, de, fr, it]
+        NSAppleEventsUsageDescription: Mixel Remote opens the Mixel Remote Support app for support connections.
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ch.mixel.remote.native
+        PRODUCT_NAME: Mixel Remote Preview
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "Developer ID Application"
+        ARCHS: "arm64 x86_64"
+        ONLY_ACTIVE_ARCH: NO
+        OTHER_LDFLAGS: ["-ObjC"]
+  MixelRemoteiOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: iOS
+      - path: Core/service-config.json
+        buildPhase: resources
+    dependencies:
+      - package: MixelRemoteApple
+        product: MixelRemoteKit
+      - package: MixelRemoteApple
+        product: MixelCore
+    info:
+      path: iOS/Info.plist
+      properties:
+        CFBundleDisplayName: Mixel Remote
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleDevelopmentRegion: en
+        CFBundleLocalizations: [en, de, fr, it]
+        UILaunchScreen:
+          UIColorName: LaunchBackground
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        UIRequiresFullScreen: false
+        ITSAppUsesNonExemptEncryption: false
+        NSLocalNetworkUsageDescription: Mixel Remote connects directly to your computers on this network when it can, for a faster picture.
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ch.mixel.remote.controller
+        PRODUCT_NAME: Mixel Remote
+        TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_STYLE: Automatic
+        OTHER_LDFLAGS: ["-ObjC"]

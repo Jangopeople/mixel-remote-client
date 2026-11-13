@@ -18,6 +18,9 @@ fn service_for_bundle(bundle: Option<&str>) -> Result<&'static str, String> {
         }
         Some("ch.mixel.remote.controller") => Ok("ch.mixel.remote.controller.device-identity.v1"),
         Some("ch.mixel.remote") => Ok("ch.mixel.remote.device-identity.v1"),
+        // The native Mac app's test build: its own identity, so it is installed next to the
+        // current app and never takes over an existing Mac's device identity.
+        Some("ch.mixel.remote.native") => Ok("ch.mixel.remote.native.device-identity.v1"),
         // Lab builds only: the separately named test copy used for on-screen tests on a Mac.
         #[cfg(feature = "qa-session")]
         Some("ch.mixel.remote.labtest") => Ok("ch.mixel.remote.labtest.device-identity.v1"),
@@ -492,6 +495,9 @@ mod tests {
         let primary = service_for_bundle(Some("ch.mixel.remote.next.qa")).unwrap();
         let controller = service_for_bundle(Some("ch.mixel.remote.next.qa.controller")).unwrap();
         let production = service_for_bundle(Some("ch.mixel.remote")).unwrap();
+        let native = service_for_bundle(Some("ch.mixel.remote.native")).unwrap();
+        assert_ne!(native, production);
+        assert_ne!(native, primary);
         assert_ne!(primary, controller);
         assert_ne!(primary, production);
         assert_ne!(controller, production);

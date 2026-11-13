@@ -75,10 +75,18 @@ pub fn set(enable: bool) -> Result<(), String> {
     std::fs::write(&path, text).map_err(|_| "Cannot change the startup setting".into())
 }
 
+/// The launch agent of this app: the native preview has its own, next to the current app's.
+#[cfg(target_os = "macos")]
+fn label() -> &'static str {
+    match native_os_capture::macos_bundle::identifier().as_deref() {
+        Some("ch.mixel.remote.native") => "ch.mixel.remote.native.autostart",
+        _ => "ch.mixel.remote.autostart",
+    }
+}
 #[cfg(target_os = "macos")]
 fn agent() -> Result<std::path::PathBuf, String> {
     let home = std::env::var_os("HOME").ok_or("Home folder unavailable")?;
-    Ok(std::path::PathBuf::from(home).join("Library/LaunchAgents/ch.mixel.remote.autostart.plist"))
+    Ok(std::path::PathBuf::from(home).join(format!("Library/LaunchAgents/{}.plist", label())))
 }
 #[cfg(target_os = "macos")]
 pub fn enabled() -> bool {
@@ -98,8 +106,9 @@ pub fn set(enable: bool) -> Result<(), String> {
     if exe.contains('<') || exe.contains('&') {
         return Err("Unsupported install path".into());
     }
+    let label = label();
     let text = format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict><key>Label</key><string>ch.mixel.remote.autostart</string><key>ProgramArguments</key><array><string>{exe}</string><string>{FLAG}</string></array><key>RunAtLoad</key><true/></dict></plist>\n"
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict><key>Label</key><string>{label}</string><key>ProgramArguments</key><array><string>{exe}</string><string>{FLAG}</string></array><key>RunAtLoad</key><true/></dict></plist>\n"
     );
     std::fs::write(&path, text).map_err(|_| "Cannot change the startup setting".into())
 }

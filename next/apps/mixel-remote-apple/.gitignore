@@ -1,0 +1,9 @@
+Core/MixelCoreFFI.xcframework/
+Core/build/
+.build/
+.swiftpm/
+build/
+*.xcodeproj/
+DerivedData/
+screenshots/
+Core/service-config.json
