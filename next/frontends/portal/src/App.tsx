@@ -8,6 +8,7 @@ import { AuthCallback, Invite, SignIn, SignUp, SignupFinish } from './pages/Auth
 import { RequireAuth, TenantProvider } from './components/AppShell';
 import { Dashboard } from './pages/Dashboard';
 import { Devices } from './pages/Devices';
+import { Reports } from './pages/Reports';
 import { Groups } from './pages/Groups';
 import { Deploy } from './pages/Deploy';
 import { Team } from './pages/Team';
@@ -43,6 +44,7 @@ export function App() {
               <Route path="/app" element={<RequireAuth><TenantProvider /></RequireAuth>}>
                 <Route index element={<Dashboard />} />
                 <Route path="devices" element={<Devices />} />
+                <Route path="reports" element={<Reports />} />
                 <Route path="groups" element={<Groups />} />
                 <Route path="deploy" element={<Deploy />} />
                 <Route path="team" element={<Team />} />

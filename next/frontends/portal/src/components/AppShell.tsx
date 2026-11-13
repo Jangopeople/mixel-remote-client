@@ -140,6 +140,8 @@ function Shell() {
   const items: NavItem[] = [
     { to: '/app', icon: 'home', label: 'shell.dashboard', show: true },
     { to: '/app/devices', icon: 'monitor', label: 'shell.devices', show: true },
+    // Everyone who can connect has sessions; the page itself explains a plan without reports.
+    { to: '/app/reports', icon: 'chart', label: 'shell.reports', show: true },
     { to: '/app/groups', icon: 'folder', label: 'shell.groups', show: groups && canSeeTeam(role) },
     { to: '/app/deploy', icon: 'rocket', label: 'shell.deploy', show: isManager(role) },
     { to: '/app/team', icon: 'users', label: 'shell.team', show: canSeeTeam(role) },
