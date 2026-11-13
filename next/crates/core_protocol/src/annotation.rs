@@ -192,11 +192,13 @@ impl Message {
                     colour: *colour,
                     width: *width,
                     points: rest
-                        .chunks_exact(4)
-                        .map(|point| {
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|[x_high, x_low, y_high, y_low]| {
                             (
-                                u16::from_be_bytes([point[0], point[1]]),
-                                u16::from_be_bytes([point[2], point[3]]),
+                                u16::from_be_bytes([*x_high, *x_low]),
+                                u16::from_be_bytes([*y_high, *y_low]),
                             )
                         })
                         .collect(),
