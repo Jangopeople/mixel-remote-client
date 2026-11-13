@@ -32,6 +32,9 @@ pub fn clock() -> f64 {
 #[derive(Clone, Debug, Default)]
 pub struct DevicesState {
     pub devices: Vec<Device>,
+    /// Company devices this person starred, and the ones they connected to last (newest first).
+    pub favorites: Vec<String>,
+    pub recent: Vec<String>,
     pub loading: bool,
     pub search: String,
     pub group_filter: Option<String>,
@@ -134,6 +137,11 @@ pub struct AssistantState {
 
 #[derive(Clone, Debug, Default)]
 pub struct SessionState {
+    /// Drawing on the remote screen: on, tool, colour (0..4), size (1..4) and the strokes shown here.
+    pub drawing: bool,
+    pub draw_tool: logic::DrawTool,
+    pub draw_color: u8,
+    pub draw_width: u8,
     pub size: (usize, usize),
     pub fps: usize,
     pub has_frame: bool,
@@ -156,6 +164,8 @@ pub struct SessionState {
     pub invite_link: Option<MeetingRoom>,
     pub last_request_unattended: bool,
     pub assistant: AssistantState,
+    /// After a controlled session with a company device: offer a session note for this Remote ID.
+    pub note_for: Option<u32>,
     viewing_session: Option<String>,
     toggle_session: Option<String>,
     stopped_consent: Option<String>,
@@ -272,6 +282,7 @@ impl App {
         let mut state = State { account: AccountStatus::signed_out(), remote: RemoteStatus::offline(), ..State::default() };
         state.enrollment.current = store.settings.this_computer.clone();
         state.session.sound = true;
+        state.session.draw_width = 2;
         Rc::new(Self {
             engine,
             info,
@@ -737,6 +748,12 @@ impl App {
                 let all: Vec<Device> = rows.iter().filter_map(SaasDevice::device).collect();
                 let groups: Vec<SaasGroup> = if manages && groups_on { self.run("saas_groups", json!({ "tenant": tenant })).await.unwrap_or_default() } else { Vec::new() };
                 let presence: Vec<SaasPresence> = self.run("saas_device_presence", json!({ "tenant": tenant })).await.unwrap_or_default();
+                let favorites: Vec<SaasFavorite> = self.run("saas_favorites", json!({ "tenant": tenant })).await.unwrap_or_default();
+                let recent: Vec<SaasRecentDevice> = self.run("saas_recent_devices", json!({ "tenant": tenant, "max_count": 5 })).await.unwrap_or_default();
+                self.edit(|state| {
+                    state.devices.favorites = favorites.into_iter().map(|row| row.device_id).collect();
+                    state.devices.recent = recent.into_iter().map(|row| row.device_id).collect();
+                });
                 self.edit(|state| {
                     state.devices.company_all = all;
                     state.devices.groups = groups;
@@ -1662,7 +1679,16 @@ impl App {
     // ---- The session (technician side) ----
 
     fn session_status_changed(self: &Rc<Self>, previous: &RemoteStatus, next: &RemoteStatus) {
-        let _ = previous;
+        if previous.viewing() && previous.control && !next.viewing() && !next.session_window()
+            && let Some(peer) = previous.peer
+        {
+            let state = self.state.borrow();
+            let company_device = state.company.data.tenant().is_some() && state.devices.devices.iter().any(|device| device.connection_id == peer);
+            drop(state);
+            if company_device {
+                self.edit(|state| state.session.note_for = Some(peer));
+            }
+        }
         {
             let mut state = self.state.borrow_mut();
             if next.session != state.session.toggle_session {
@@ -1677,6 +1703,7 @@ impl App {
                 session.files = None;
                 session.clipboard_result.clear();
                 session.invite_link = None;
+                session.drawing = false;
             }
             if next.viewing() && state.session.assistant.session != next.session {
                 let assistant = &mut state.session.assistant;
@@ -2348,6 +2375,58 @@ impl App {
 
     pub fn set_ai_answer(self: &Rc<Self>, text: String) {
         self.state.borrow_mut().session.assistant.answer = text;
+    }
+
+    // ---- Drawing on the remote screen ----
+
+    pub fn toggle_drawing(self: &Rc<Self>) {
+        self.edit(|state| state.session.drawing = !state.session.drawing);
+    }
+
+    pub fn set_draw(self: &Rc<Self>, change: impl FnOnce(&mut SessionState)) {
+        if !self.rendering.get() {
+            self.edit(|state| change(&mut state.session));
+        }
+    }
+
+    /// One drawing message to the other computer (a part of a stroke, undo or clear).
+    pub fn draw(self: &Rc<Self>, message: Value) {
+        let Some(session) = self.state.borrow().remote.session.clone() else { return };
+        let app = self.clone();
+        self.spawn(async move {
+            if let Err(error) = app.perform("remote_draw", json!({ "session": session, "message": message })).await {
+                app.edit(|state| state.session.error = i18n::engine(&error));
+            }
+        });
+    }
+
+    // ---- Favorites, session reports and notes (company) ----
+
+    pub fn set_favorite(self: &Rc<Self>, device: String, favorite: bool) {
+        let Some(tenant) = self.tenant_id() else { return };
+        let app = self.clone();
+        self.spawn(async move {
+            match app.perform("saas_set_favorite", json!({ "tenant": tenant, "device": device, "favorite": favorite })).await {
+                Ok(()) => app.edit(|state| {
+                    state.devices.favorites.retain(|id| *id != device);
+                    if favorite {
+                        state.devices.favorites.insert(0, device);
+                    }
+                }),
+                Err(error) => app.edit(|state| state.devices.error = i18n::engine(&error)),
+            }
+        });
+    }
+
+    pub async fn load_report(self: &Rc<Self>, from: Option<String>, to: Option<String>) -> Result<Vec<SessionRow>, String> {
+        let tenant = self.tenant_id().ok_or("No company")?;
+        self.run("saas_session_report", json!({ "tenant": tenant, "from": from, "to": to, "technician": null, "device": null })).await.map_err(|error| i18n::engine(&error))
+    }
+
+    /// A note on a session (by its id, or the newest session to a Remote ID in the last day).
+    pub async fn session_note(self: &Rc<Self>, session: Option<String>, connection: Option<u32>, note: String) -> Result<(), String> {
+        let tenant = self.tenant_id().ok_or("No company")?;
+        self.perform("saas_session_note", json!({ "tenant": tenant, "note": note, "session": session, "connection": connection })).await.map_err(|error| i18n::engine(&error))
     }
 
     pub fn set_tool(self: &Rc<Self>, tool: Option<Tool>) {

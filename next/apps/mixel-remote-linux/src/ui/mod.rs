@@ -6,6 +6,7 @@ mod consent;
 mod devices;
 pub mod dialogs;
 mod remote;
+mod reports;
 mod session;
 mod settings;
 pub mod widgets;
@@ -43,6 +44,7 @@ struct Parts {
     devices: devices::DevicesPage,
     account: account::AccountPage,
     settings: settings::SettingsPage,
+    reports: reports::ReportsPage,
     session: session::SessionView,
     section: Cell<Section>,
 }
@@ -195,6 +197,22 @@ impl Ui {
         self.consent.render(app, state, &self.window);
         if let Some(tray) = self.tray.borrow().as_ref() {
             tray.update(state);
+        }
+        if let Some(peer) = state.session.note_for {
+            app.state.borrow_mut().session.note_for = None;
+            let a = app.clone();
+            dialogs::form(
+                &self.window,
+                &t("Session note"),
+                &tf("Optional: what was done on %@. It appears in the session report.", &[&crate::format::remote_id(Some(peer))]),
+                &[(&t("Note"), "")],
+                &t("Save note"),
+                false,
+                Rc::new(move |values| {
+                    let a = a.clone();
+                    Box::pin(async move { if values[0].trim().is_empty() { Ok(()) } else { a.session_note(None, Some(peer), values[0].clone()).await } })
+                }),
+            );
         }
         let viewing = state.remote.session_window();
         if viewing != self.session_keys.get() {
@@ -382,9 +400,11 @@ impl Parts {
         let devices = devices::DevicesPage::new(app);
         let account = account::AccountPage::new(app);
         let settings = settings::SettingsPage::new(app);
+        let reports = reports::ReportsPage::new(app);
         pages.add_named(&remote.widget, Some("remote"));
         pages.add_named(&devices.widget, Some("devices"));
         pages.add_named(&account.widget, Some("account"));
+        pages.add_named(&reports.widget, Some("reports"));
         pages.add_named(&settings.widget, Some("settings"));
         content.append(&pages);
 
@@ -435,6 +455,7 @@ impl Parts {
             devices,
             account,
             settings,
+            reports,
             session,
             section: Cell::new(Section::Remote),
         }
@@ -462,6 +483,7 @@ impl Parts {
             Section::Remote => self.remote.render(app, state),
             Section::Devices => self.devices.render(app, state),
             Section::Account => self.account.render(app, state),
+            Section::Reports => self.reports.render(app, state),
             Section::Settings => self.settings.render(app, state),
         }
         if viewing {

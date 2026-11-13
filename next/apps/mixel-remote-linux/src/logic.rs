@@ -16,16 +16,18 @@ pub enum Section {
     Remote,
     Devices,
     Account,
+    Reports,
     Settings,
 }
 
 impl Section {
-    pub const ALL: [Section; 4] = [Section::Remote, Section::Devices, Section::Account, Section::Settings];
+    pub const ALL: [Section; 5] = [Section::Remote, Section::Devices, Section::Account, Section::Reports, Section::Settings];
     pub fn title(self) -> String {
         match self {
             Self::Remote => t("Remote control"),
             Self::Devices => t("Devices"),
             Self::Account => t("Account"),
+            Self::Reports => t("Session reports"),
             Self::Settings => t("Settings"),
         }
     }
@@ -34,6 +36,7 @@ impl Section {
             Self::Remote => "network-transmit-receive-symbolic",
             Self::Devices => "computer-symbolic",
             Self::Account => "avatar-default-symbolic",
+            Self::Reports => "x-office-spreadsheet-symbolic",
             Self::Settings => "emblem-system-symbolic",
         }
     }
@@ -42,6 +45,7 @@ impl Section {
             Self::Remote => "remote",
             Self::Devices => "devices",
             Self::Account => "account",
+            Self::Reports => "reports",
             Self::Settings => "settings",
         }
     }
@@ -585,6 +589,155 @@ pub fn request_args(host: u32, password: Option<&str>, unattended: bool) -> Valu
     json!({ "host": host, "password": password.filter(|value| !value.is_empty()), "unattended": unattended })
 }
 
+// ---- Drawing on the remote screen ----
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DrawTool {
+    #[default]
+    Pen,
+    Highlighter,
+    Arrow,
+}
+
+impl DrawTool {
+    pub const ALL: [DrawTool; 3] = [DrawTool::Pen, DrawTool::Highlighter, DrawTool::Arrow];
+    pub fn wire(self) -> &'static str {
+        match self {
+            Self::Pen => "pen",
+            Self::Highlighter => "highlighter",
+            Self::Arrow => "arrow",
+        }
+    }
+    pub fn title(self) -> String {
+        match self {
+            Self::Pen => t("Pen"),
+            Self::Highlighter => t("Highlighter"),
+            Self::Arrow => t("Arrow"),
+        }
+    }
+}
+
+/// Red, yellow, green, blue, white (the engine's palette).
+pub const DRAW_PALETTE: [[u8; 3]; 5] = [[0xE5, 0x32, 0x2D], [0xFF, 0xD4, 0x00], [0x22, 0xB1, 0x4C], [0x1E, 0x7B, 0xFF], [0xFF, 0xFF, 0xFF]];
+
+pub fn draw_color_name(index: u8) -> String {
+    match index {
+        0 => t("Red"),
+        1 => t("Yellow"),
+        2 => t("Green"),
+        3 => t("Blue"),
+        _ => t("White"),
+    }
+}
+
+/// Line width in pixels of a size step (1..=4) on a picture `height` pixels high (as the engine).
+pub fn draw_line_width(tool: DrawTool, width: u8, height: f64) -> f64 {
+    let pen = [3.0, 5.0, 8.0, 12.0];
+    let highlight = [14.0, 20.0, 28.0, 36.0];
+    let step = usize::from(width.clamp(1, 4) - 1);
+    let base = if tool == DrawTool::Highlighter { highlight[step] } else { pen[step] };
+    (base * height / 1080.0).max(1.0)
+}
+
+/// A stroke being drawn here: sent to the other computer in parts of at most 64 points.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Stroke {
+    pub id: u16,
+    pub tool: DrawTool,
+    pub color: u8,
+    pub width: u8,
+    pub points: Vec<(u16, u16)>,
+    pub sent: usize,
+    pub done: bool,
+}
+
+impl Stroke {
+    pub fn new(id: u16, tool: DrawTool, color: u8, width: u8, start: (u16, u16)) -> Self {
+        Self { id, tool, color: color.min(4), width: width.clamp(1, 4), points: vec![start], sent: 0, done: false }
+    }
+    /// Adds a point (an arrow keeps its start and the newest end only); at most 4096 points.
+    pub fn add(&mut self, point: (u16, u16)) {
+        if self.tool == DrawTool::Arrow {
+            self.points.truncate(1);
+            self.sent = 0;
+        }
+        if self.points.len() < 4096 && self.points.last() != Some(&point) {
+            self.points.push(point);
+        }
+    }
+    /// The next message for the other computer, if there is something new (`finish`: the last one).
+    pub fn message(&mut self, finish: bool) -> Option<Value> {
+        if finish {
+            self.done = true;
+        }
+        let pending = if self.tool == DrawTool::Arrow { self.points.clone() } else { self.points[self.sent..].to_vec() };
+        if pending.is_empty() && !finish {
+            return None;
+        }
+        if self.tool != DrawTool::Arrow && pending.len() < 16 && !finish {
+            return None;
+        }
+        let part: Vec<(u16, u16)> = pending.into_iter().take(64).collect();
+        if self.tool != DrawTool::Arrow {
+            self.sent += part.len();
+        }
+        let done = self.done && (self.tool == DrawTool::Arrow || self.sent >= self.points.len());
+        Some(json!({ "kind": "stroke", "id": self.id, "tool": self.tool.wire(), "color": self.color, "width": self.width, "points": part, "done": done }))
+    }
+}
+
+// ---- Session reports ----
+
+/// "1 h 05 min", "12 min", "45 s".
+pub fn duration(seconds: i64) -> String {
+    let seconds = seconds.max(0);
+    if seconds < 60 {
+        return format!("{seconds} s");
+    }
+    let minutes = seconds / 60;
+    if minutes < 60 {
+        return format!("{minutes} min");
+    }
+    format!("{} h {:02} min", minutes / 60, minutes % 60)
+}
+
+/// The report as CSV (UTF-8 with BOM, comma separated, quoted as needed; Excel and LibreOffice read it).
+pub fn report_csv(rows: &[SessionRow]) -> String {
+    fn cell(text: &str) -> String {
+        // A leading = + - @ would be read as a formula by spreadsheets: quote it with a tab-free prefix.
+        let text = if text.starts_with(['=', '+', '-', '@']) { format!("'{text}") } else { text.to_owned() };
+        if text.contains([',', '"', '\n', '\r']) { format!("\"{}\"", text.replace('"', "\"\"")) } else { text }
+    }
+    let header = [t("Technician"), t("E-mail"), t("Device"), t("Remote ID"), t("Start"), t("End"), t("Duration (seconds)"), t("Type"), t("Joined as colleague"), t("Note"), t("Session ID")];
+    let mut out = String::from("\u{feff}");
+    out.push_str(&header.iter().map(|title| cell(title)).collect::<Vec<_>>().join(","));
+    out.push_str("\r\n");
+    for row in rows {
+        let line = [
+            row.technician_name.clone().unwrap_or_default(),
+            row.technician_email.clone().unwrap_or_default(),
+            row.device_name.clone(),
+            row.connection_id.to_string(),
+            row.started_at.clone(),
+            row.ended_at.clone().unwrap_or_default(),
+            row.duration_seconds.to_string(),
+            if row.kind == "unattended" { t("Unattended") } else { t("Attended") },
+            if row.colleague { t("Yes") } else { t("No") },
+            row.note.clone().unwrap_or_default(),
+            row.session_id.clone(),
+        ];
+        out.push_str(&line.iter().map(|value| cell(value)).collect::<Vec<_>>().join(","));
+        out.push_str("\r\n");
+    }
+    out
+}
+
+/// A typed report day (YYYY-MM-DD) as the start of that day, or None when empty/invalid.
+pub fn report_day(text: &str) -> Option<String> {
+    let text = text.trim();
+    (text.len() == 10 && format::parse_time(&format!("{text}T00:00:00Z")).is_some()).then(|| text.to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -755,5 +908,44 @@ mod tests {
         assert_eq!(meeting_offer(&status, ""), None);
         assert_eq!(request_args(123_456_789, Some(""), true), json!({"host": 123_456_789, "password": null, "unattended": true}));
         assert_eq!(request_args(123_456_789, Some("abc"), false)["password"], "abc");
+    }
+
+    #[test]
+    fn strokes_are_sent_in_parts_and_arrows_whole() {
+        let mut stroke = Stroke::new(7, DrawTool::Pen, 9, 0, (10, 10));
+        assert_eq!((stroke.color, stroke.width), (4, 1), "clamped to the palette and sizes");
+        for x in 0..20 {
+            stroke.add((20 + x, 20));
+        }
+        let part = stroke.message(false).unwrap();
+        assert_eq!(part["points"].as_array().unwrap().len(), 21);
+        assert_eq!(part["done"], false);
+        assert!(stroke.message(false).is_none(), "nothing new");
+        stroke.add((99, 99));
+        let last = stroke.message(true).unwrap();
+        assert_eq!(last["points"].as_array().unwrap().len(), 1);
+        assert_eq!(last["done"], true);
+        let mut arrow = Stroke::new(1, DrawTool::Arrow, 0, 2, (0, 0));
+        arrow.add((5, 5));
+        arrow.add((9, 9));
+        assert_eq!(arrow.message(true).unwrap()["points"], json!([[0, 0], [9, 9]]));
+        assert!(draw_line_width(DrawTool::Highlighter, 4, 1080.0) > draw_line_width(DrawTool::Pen, 4, 1080.0));
+    }
+
+    #[test]
+    fn report_csv_and_durations() {
+        crate::i18n::set_choice("en");
+        assert_eq!(duration(45), "45 s");
+        assert_eq!(duration(720), "12 min");
+        assert_eq!(duration(3900), "1 h 05 min");
+        let row = SessionRow { technician_name: Some("Anna, K.".into()), device_name: "=cmd".into(), connection_id: 123_456_789, kind: "unattended".into(), note: Some("said \"hi\"".into()), ..Default::default() };
+        let csv = report_csv(&[row]);
+        assert!(csv.starts_with('\u{feff}'));
+        assert!(csv.contains("\"Anna, K.\""));
+        assert!(csv.contains("'=cmd"));
+        assert!(csv.contains("\"said \"\"hi\"\"\""));
+        assert!(csv.contains("Unattended"));
+        assert_eq!(report_day("2026-11-01"), Some("2026-11-01".into()));
+        assert_eq!(report_day("01.11.2026"), None);
     }
 }

@@ -529,3 +529,37 @@ mod tests {
         assert_eq!(json["recording"], false);
     }
 }
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct SaasFavorite {
+    pub device_id: String,
+    pub created_at: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct SaasRecentDevice {
+    pub device_id: String,
+    pub last_connected_at: String,
+}
+
+/// One session of the session report (`saas_session_report`).
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct SessionRow {
+    pub session_id: String,
+    pub technician_id: Option<String>,
+    pub technician_name: Option<String>,
+    pub technician_email: Option<String>,
+    pub device_id: String,
+    pub device_name: String,
+    pub connection_id: u32,
+    pub started_at: String,
+    pub ended_at: Option<String>,
+    pub duration_seconds: i64,
+    /// `attended` or `unattended`.
+    pub kind: String,
+    pub colleague: bool,
+    pub note: Option<String>,
+}

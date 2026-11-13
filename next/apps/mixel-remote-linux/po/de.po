@@ -25,6 +25,9 @@ msgstr "%d von %d Geräten"
 msgid "%d of %d technicians"
 msgstr "%d von %d Technikern"
 
+msgid "%d sessions · %@ in total"
+msgstr "%d Sitzungen · %@ insgesamt"
+
 msgid "%d technicians"
 msgstr "%d Techniker"
 
@@ -61,8 +64,14 @@ msgstr "Akzeptieren Sie die Nutzungsbedingungen und den Auftragsverarbeitungsver
 msgid "Account"
 msgstr "Konto"
 
+msgid "Add %@ to favorites"
+msgstr "%@ zu den Favoriten hinzufügen"
+
 msgid "Add and enroll this computer"
 msgstr "Diesen Computer hinzufügen und registrieren"
+
+msgid "Add note"
+msgstr "Notiz hinzufügen"
 
 msgid "Add other computers"
 msgstr "Weitere Computer hinzufügen"
@@ -87,6 +96,9 @@ msgstr "Fügt diesem Computer den Drucker «Mixel Remote Printer» hinzu. Was w�
 
 msgid "Administrator"
 msgstr "Administrator"
+
+msgid "All devices"
+msgstr "Alle Geräte"
 
 msgid "All groups"
 msgstr "Alle Gruppen"
@@ -121,8 +133,14 @@ msgstr "Erlaubt"
 msgid "Always-on access is installed (Remote ID %@), but this computer’s sign-in screen uses Wayland, which cannot be shared. Switch the sign-in screen to Xorg (GDM: WaylandEnable=false) to use it."
 msgstr "Der Zugriff ist installiert (Remote-ID %@), aber der Anmeldebildschirm dieses Computers verwendet Wayland und kann nicht geteilt werden. Stellen Sie den Anmeldebildschirm auf Xorg um (GDM: WaylandEnable=false), um ihn zu nutzen."
 
+msgid "An empty note removes it."
+msgstr "Eine leere Notiz entfernt sie."
+
 msgid "Answer"
 msgstr "Antwort"
+
+msgid "Arrow"
+msgstr "Pfeil"
 
 msgid "Ask"
 msgstr "Fragen"
@@ -130,11 +148,17 @@ msgstr "Fragen"
 msgid "Ask about this screen"
 msgstr "Frage zu diesem Bildschirm"
 
+msgid "Attended"
+msgstr "Beaufsichtigt"
+
 msgid "Automatic (this computer’s language)"
 msgstr "Automatisch (Sprache dieses Computers)"
 
 msgid "Block input"
 msgstr "Eingabe sperren"
+
+msgid "Blue"
+msgstr "Blau"
 
 msgid "Cancel"
 msgstr "Abbrechen"
@@ -169,6 +193,12 @@ msgstr "Wählen und bestätigen Sie einen Bildschirm, bevor Sie die unbeaufsicht
 msgid "Choose a file to send"
 msgstr "Datei zum Senden wählen"
 
+msgid "Choose a plan"
+msgstr "Plan wählen"
+
+msgid "Clear the drawings"
+msgstr "Zeichnungen löschen"
+
 msgid "Click again to restart"
 msgstr "Zum Neustart nochmals klicken"
 
@@ -180,6 +210,9 @@ msgstr "Schliessen"
 
 msgid "Colleague %@"
 msgstr "Kollege %@"
+
+msgid "Colour"
+msgstr "Farbe"
 
 msgid "Company"
 msgstr "Firma"
@@ -286,6 +319,9 @@ msgstr "Firma erstellen"
 msgid "Create a company to manage your devices and team, or a personal space for your own devices."
 msgstr "Erstellen Sie eine Firma, um Geräte und Team zu verwalten, oder einen persönlichen Bereich für Ihre eigenen Geräte."
 
+msgid "Create a company under Account to see who connected to which computer, when and for how long."
+msgstr "Erstellen Sie unter Konto eine Firma, um zu sehen, wer sich wann und wie lange mit welchem Computer verbunden hat."
+
 msgid "Create company"
 msgstr "Firma erstellen"
 
@@ -325,6 +361,9 @@ msgstr "Mein Konto löschen"
 msgid "Delete my account…"
 msgstr "Mein Konto löschen…"
 
+msgid "Deleted account"
+msgstr "Gelöschtes Konto"
+
 msgid "Deletes the company at once: devices, invitations, members and their accounts. The subscription ends. Type the company name to confirm."
 msgstr "Löscht die Firma sofort: Geräte, Einladungen, Mitglieder und ihre Konten. Das Abonnement endet. Geben Sie zur Bestätigung den Firmennamen ein."
 
@@ -333,6 +372,9 @@ msgstr "Löscht Ihr Mixel-Remote-Konto und meldet Sie auf allen Geräten ab. Fir
 
 msgid "Deploy token"
 msgstr "Verteil-Token"
+
+msgid "Device"
+msgstr "Gerät"
 
 msgid "Device %@ requests to connect. Its enrolled identity has been verified with Mixel."
 msgstr "Gerät %@ möchte sich verbinden. Seine registrierte Identität wurde bei Mixel geprüft."
@@ -370,6 +412,15 @@ msgstr "Fertig"
 msgid "Download"
 msgstr "Herunterladen"
 
+msgid "Draw on the screen"
+msgstr "Auf dem Bildschirm zeichnen"
+
+msgid "Drawing tool"
+msgstr "Zeichenwerkzeug"
+
+msgid "Duration (seconds)"
+msgstr "Dauer (Sekunden)"
+
 msgid "E-mail"
 msgstr "E-Mail"
 
@@ -382,8 +433,14 @@ msgstr "E-Mail unterwegs"
 msgid "E-mail sent"
 msgstr "E-Mail gesendet"
 
+msgid "Edit note"
+msgstr "Notiz bearbeiten"
+
 msgid "Enable unattended sharing"
 msgstr "Unbeaufsichtigte Freigabe aktivieren"
+
+msgid "End"
+msgstr "Ende"
 
 msgid "End session"
 msgstr "Sitzung beenden"
@@ -424,14 +481,23 @@ msgstr "Geben Sie die 9-stellige ID ein, die der andere Computer zeigt."
 msgid "Enter the code from the authenticator entry “%@”."
 msgstr "Geben Sie den Code aus dem Authenticator-Eintrag «%@» ein."
 
+msgid "Enter the period as YYYY-MM-DD, the start before the end."
+msgstr "Geben Sie den Zeitraum als JJJJ-MM-TT ein, den Anfang vor dem Ende."
+
 msgid "Enter the ticket number."
 msgstr "Ticketnummer eingeben."
 
 msgid "Expires %@"
 msgstr "Läuft ab am %@"
 
+msgid "Export CSV…"
+msgstr "Als CSV exportieren…"
+
 msgid "Export data in the portal"
 msgstr "Daten im Portal exportieren"
+
+msgid "Favorites"
+msgstr "Favoriten"
 
 msgid "File transfer was not allowed for this session."
 msgstr "Die Dateiübertragung wurde für diese Sitzung nicht erlaubt."
@@ -441,6 +507,9 @@ msgstr "Dateien"
 
 msgid "Find device"
 msgstr "Gerät suchen"
+
+msgid "From"
+msgstr "Von"
 
 msgid "Full screen"
 msgstr "Vollbild"
@@ -460,6 +529,9 @@ msgstr "Dieser Computer wird vorbereitet…"
 msgid "Go offline"
 msgstr "Offline gehen"
 
+msgid "Green"
+msgstr "Grün"
+
 msgid "Group"
 msgstr "Gruppe"
 
@@ -468,6 +540,9 @@ msgstr "Gruppe erstellt. Öffnen Sie «In Gruppe verschieben» erneut, um sie zu
 
 msgid "Help someone on their phone"
 msgstr "Jemandem am Smartphone helfen"
+
+msgid "Highlighter"
+msgstr "Leuchtstift"
 
 msgid "I accept the Terms of Service and the Data Processing Agreement"
 msgstr "Ich akzeptiere die Nutzungsbedingungen und den Auftragsverarbeitungsvertrag"
@@ -514,6 +589,9 @@ msgstr "Laufende Sitzungen enden sofort. Es kann später wieder hinzugefügt wer
 msgid "Join"
 msgstr "Beitreten"
 
+msgid "Joined as colleague"
+msgstr "Als Kollegin oder Kollege dazugekommen"
+
 msgid "Keyboard & mouse"
 msgstr "Tastatur & Maus"
 
@@ -555,6 +633,12 @@ msgstr "Zuletzt gesehen gestern"
 
 msgid "Leave"
 msgstr "Verlassen"
+
+msgid "Line width"
+msgstr "Linienbreite"
+
+msgid "Loading the session report…"
+msgstr "Sitzungsbericht wird geladen…"
 
 msgid "Loading your devices…"
 msgstr "Ihre Geräte werden geladen…"
@@ -646,6 +730,9 @@ msgstr "Neue Gruppe"
 msgid "Next"
 msgstr "Weiter"
 
+msgid "No"
+msgstr "Nein"
+
 msgid "No desktop session was found for sharing this screen."
 msgstr "Für das Teilen dieses Bildschirms wurde keine Desktop-Sitzung gefunden."
 
@@ -664,11 +751,17 @@ msgstr "Keine passenden Geräte"
 msgid "No screen of this computer can be shared right now. Sign in to a desktop session (X11, or Wayland with the system's sharing dialog) and try again."
 msgstr "Im Moment kann kein Bildschirm dieses Computers geteilt werden. Melden Sie sich bei einer Desktop-Sitzung an (X11 oder Wayland mit dem Freigabedialog des Systems) und versuchen Sie es erneut."
 
+msgid "No sessions in this period."
+msgstr "Keine Sitzungen in diesem Zeitraum."
+
 msgid "Not available"
 msgstr "Nicht verfügbar"
 
 msgid "Not now"
 msgstr "Nicht jetzt"
+
+msgid "Note"
+msgstr "Notiz"
 
 msgid "Off. Choose a display and confirm before enabling."
 msgstr "Aus. Wählen und bestätigen Sie einen Bildschirm vor dem Aktivieren."
@@ -706,6 +799,9 @@ msgstr "Offene Einladungen"
 msgid "Open this link in your other browser"
 msgstr "Öffnen Sie diesen Link in Ihrem anderen Browser"
 
+msgid "Optional: what was done on %@. It appears in the session report."
+msgstr "Optional: Was auf %@ gemacht wurde. Die Notiz erscheint im Sitzungsbericht."
+
 msgid "Or a personal space for your own devices"
 msgstr "Oder ein persönlicher Bereich für Ihre eigenen Geräte"
 
@@ -723,6 +819,9 @@ msgstr "Diesen Computer mit %@ für %@ koppeln?"
 
 msgid "Partner connection ID"
 msgstr "Verbindungs-ID des Partners"
+
+msgid "Pen"
+msgstr "Stift"
 
 msgid "Personal account"
 msgstr "Persönliches Konto"
@@ -769,6 +868,9 @@ msgstr "Bereit für eine Verbindung."
 msgid "Ready. The person there accepts your request, unless unattended access is set up."
 msgstr "Bereit. Die Person dort nimmt Ihre Anfrage an, ausser unbeaufsichtigter Zugriff ist eingerichtet."
 
+msgid "Recent connections"
+msgstr "Letzte Verbindungen"
+
 msgid "Reconnect now"
 msgstr "Jetzt neu verbinden"
 
@@ -784,6 +886,9 @@ msgstr "Aufzeichnung gespeichert"
 msgid "Recording video"
 msgstr "Video wird aufgezeichnet"
 
+msgid "Red"
+msgstr "Rot"
+
 msgid "Refresh devices"
 msgstr "Geräte aktualisieren"
 
@@ -792,6 +897,9 @@ msgstr "Diesen Computer registrieren"
 
 msgid "Register this computer with your personal account."
 msgstr "Registrieren Sie diesen Computer mit Ihrem persönlichen Konto."
+
+msgid "Remote ID"
+msgstr "Remote-ID"
 
 msgid "Remote clipboard updated."
 msgstr "Entfernte Zwischenablage aktualisiert."
@@ -813,6 +921,9 @@ msgstr "Entfernen"
 
 msgid "Remove %@"
 msgstr "%@ entfernen"
+
+msgid "Remove %@ from favorites"
+msgstr "%@ aus den Favoriten entfernen"
 
 msgid "Remove from company"
 msgstr "Aus der Firma entfernen"
@@ -871,8 +982,11 @@ msgstr "Speichern"
 msgid "Save in ticket"
 msgstr "Im Ticket speichern"
 
+msgid "Save note"
+msgstr "Notiz speichern"
+
 msgid "Saved as internal note in %@"
-msgstr "Als interne Notiz gespeichert in %@"
+msgstr "Als interne Notiz in %@ gespeichert"
 
 msgid "Saved. This computer is removed as soon as Mixel Remote can be reached."
 msgstr "Gespeichert. Dieser Computer wird entfernt, sobald Mixel Remote erreichbar ist."
@@ -919,6 +1033,24 @@ msgstr "Text senden"
 msgid "Session"
 msgstr "Sitzung"
 
+msgid "Session ID"
+msgstr "Sitzungs-ID"
+
+msgid "Session note"
+msgstr "Sitzungsnotiz"
+
+msgid "Session report saved"
+msgstr "Sitzungsbericht gespeichert"
+
+msgid "Session reports"
+msgstr "Sitzungsberichte"
+
+msgid "Session reports are part of company plans"
+msgstr "Sitzungsberichte gehören zu den Firmenplänen"
+
+msgid "Session reports need a paid plan. Choose a plan in the portal to see them."
+msgstr "Sitzungsberichte brauchen einen bezahlten Plan. Wählen Sie im Portal einen Plan, um sie zu sehen."
+
 msgid "Set up sign-in screen access…"
 msgstr "Zugriff auf den Anmeldebildschirm einrichten…"
 
@@ -939,6 +1071,9 @@ msgstr "Diesen Bildschirm teilen"
 
 msgid "Sharing your selected screen. You can end the session at any time."
 msgstr "Ihr gewählter Bildschirm wird geteilt. Sie können die Sitzung jederzeit beenden."
+
+msgid "Show"
+msgstr "Anzeigen"
 
 msgid "Show it"
 msgstr "Anzeigen"
@@ -991,11 +1126,17 @@ msgstr "Der Zugriff auf den Anmeldebildschirm ist eingeschaltet (Remote-ID %@)."
 msgid "Signed in"
 msgstr "Angemeldet"
 
+msgid "Size %d"
+msgstr "Grösse %d"
+
 msgid "Someone wants to connect"
 msgstr "Jemand möchte sich verbinden"
 
 msgid "Sound"
 msgstr "Ton"
+
+msgid "Start"
+msgstr "Beginn"
 
 msgid "Start Mixel Remote when this computer starts"
 msgstr "Mixel Remote beim Start dieses Computers öffnen"
@@ -1038,6 +1179,9 @@ msgstr "Text, der auf dem entfernten Computer getippt wird"
 
 msgid "The clipboard was not allowed for this session."
 msgstr "Die Zwischenablage wurde für diese Sitzung nicht erlaubt."
+
+msgid "The file could not be saved"
+msgstr "Die Datei konnte nicht gespeichert werden"
 
 msgid "The other computer cannot take a second technician directly. Use a meeting link instead."
 msgstr "Der andere Computer kann keinen zweiten Techniker direkt aufnehmen. Verwenden Sie stattdessen einen Meeting-Link."
@@ -1129,6 +1273,9 @@ msgstr "Dies ist die neueste Version."
 msgid "Ticket number"
 msgstr "Ticketnummer"
 
+msgid "To"
+msgstr "Bis"
+
 msgid "Transferring…"
 msgstr "Wird übertragen…"
 
@@ -1150,11 +1297,20 @@ msgstr "Ausgeschaltet, im Ruhezustand oder ohne Internet. Es muss online sein, u
 msgid "Turning on. Waiting for the connection service."
 msgstr "Wird eingeschaltet. Warten auf den Verbindungsdienst."
 
+msgid "Type"
+msgstr "Art"
+
 msgid "Type your e-mail address to confirm. This cannot be undone."
 msgstr "Geben Sie zur Bestätigung Ihre E-Mail-Adresse ein. Dies lässt sich nicht rückgängig machen."
 
+msgid "Unattended"
+msgstr "Unbeaufsichtigt"
+
 msgid "Unattended sharing"
 msgstr "Unbeaufsichtigte Freigabe"
+
+msgid "Undo the last drawing"
+msgstr "Letzte Zeichnung rückgängig machen"
 
 msgid "Update now"
 msgstr "Jetzt aktualisieren"
@@ -1216,6 +1372,9 @@ msgstr "Wayland verlangt für jede Freigabe eine Bestätigung an diesem Computer
 msgid "Wayland: after Allow, the system asks you once more which screen to share."
 msgstr "Wayland: Nach «Erlauben» fragt das System noch einmal, welcher Bildschirm geteilt wird."
 
+msgid "White"
+msgstr "Weiss"
+
 msgid "Windows (PowerShell, as administrator)"
 msgstr "Windows (PowerShell, als Administrator)"
 
@@ -1230,6 +1389,12 @@ msgstr "Ticketnotiz schreiben"
 
 msgid "Writing the note…"
 msgstr "Notiz wird geschrieben…"
+
+msgid "Yellow"
+msgstr "Gelb"
+
+msgid "Yes"
+msgstr "Ja"
 
 msgid "You allowed the other person to save a video of this session."
 msgstr "Sie haben der anderen Person erlaubt, ein Video dieser Sitzung zu speichern."
@@ -1266,3 +1431,6 @@ msgstr "ein"
 
 msgid "phone or tablet"
 msgstr "Telefon oder Tablet"
+
+msgid "running"
+msgstr "läuft"

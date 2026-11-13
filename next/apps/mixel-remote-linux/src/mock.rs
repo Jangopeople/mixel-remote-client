@@ -119,6 +119,16 @@ pub fn signed_in(engine: &MockEngine, staff: bool) {
             { "device_id": "d5", "name": "Warehouse terminal", "os": "linux", "group_id": "g2", "group_name": "Home office", "connection_id": 264_980_135u32, "generation": 1 }
         ]),
     );
+    engine.set("saas_favorites", json!([{ "device_id": "d2", "created_at": "2026-11-12T09:00:00Z" }]));
+    engine.set("saas_recent_devices", json!([{ "device_id": "d3", "last_connected_at": "2026-11-13T08:40:00Z" }, { "device_id": "d2", "last_connected_at": "2026-11-12T16:10:00Z" }]));
+    engine.set(
+        "saas_session_report",
+        json!([
+            { "session_id": "s1", "technician_name": "Marco Rossi", "technician_email": "marco.rossi@acme-treuhand.ch", "device_id": "d2", "device_name": "Reception PC", "connection_id": 731_204_558u32, "started_at": "2026-11-13T08:40:00Z", "ended_at": "2026-11-13T09:02:00Z", "duration_seconds": 1320, "kind": "attended", "colleague": false, "note": "Printer driver reinstalled, test page printed." },
+            { "session_id": "s2", "technician_name": "Anna Keller", "technician_email": "anna.keller@acme-treuhand.ch", "device_id": "d4", "device_name": "Accounting laptop", "connection_id": 905_377_412u32, "started_at": "2026-11-12T16:10:00Z", "ended_at": "2026-11-12T17:15:00Z", "duration_seconds": 3900, "kind": "unattended", "colleague": false, "note": null },
+            { "session_id": "s3", "technician_name": "Lea Meier", "technician_email": "lea.meier@acme-treuhand.ch", "device_id": "d2", "device_name": "Reception PC", "connection_id": 731_204_558u32, "started_at": "2026-11-11T10:05:00Z", "ended_at": "2026-11-11T10:17:00Z", "duration_seconds": 720, "kind": "attended", "colleague": true, "note": null }
+        ]),
+    );
     engine.set("saas_groups", json!([{ "group_id": "g1", "name": "Office Zürich", "devices": 2, "technicians": [] }, { "group_id": "g2", "name": "Home office", "devices": 2, "technicians": [] }]));
     engine.set(
         "saas_device_presence",
@@ -136,7 +146,7 @@ pub fn viewing(engine: &MockEngine) {
         json!({ "phase": "active", "message": "", "platform": "linux", "host": 482_615_903u32, "session": SESSION, "consent": CONSENT, "peer": 731_204_558u32, "received": 120,
             "control": true, "clipboard": true, "files": true, "recording_permitted": true, "recording": { "phase": "ready" }, "input_access": true,
             "displays": 3, "display": 0, "display_all": true, "host_actions": ["privacy", "block", "pointer", "lock", "lockend", "sas", "restart", "sound", "meet"],
-            "peer_features": ["join", "switch"], "host_macs": ["52:54:00:12:34:56"] }),
+            "peer_features": ["join", "switch", "draw"], "host_macs": ["52:54:00:12:34:56"] }),
     );
     engine.set("remote_chat_messages", json!([{ "id": 1, "mine": false, "text": "Hello, the printer in reception does not print." }, { "id": 2, "mine": true, "text": "I'll have a look at the driver now." }]));
     engine.set("remote_file_status", json!({ "connected": true, "message": "", "outgoing": { "id": "f1", "name": "printer-driver-x64.zip", "size": 48_000_000u64, "offset": 31_200_000u64, "phase": "transferring", "message": "" }, "incoming": { "id": "f2", "name": "error-log.txt", "size": 18_400u64, "offset": 0, "phase": "offered", "message": "" } }));

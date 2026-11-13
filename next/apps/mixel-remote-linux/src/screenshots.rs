@@ -32,6 +32,8 @@ const SCENES: &[&str] = &[
     "session-chat",
     "session-files",
     "session-clipboard",
+    "session-draw",
+    "reports",
     "invite-colleague",
     "wayland",
 ];
@@ -60,7 +62,7 @@ fn engine_for(scene: &str) -> MockEngine {
             mock::signed_in(&engine, false);
             mock::hosting(&engine);
         }
-        "session" | "session-chat" | "session-files" | "session-clipboard" | "invite-colleague" => {
+        "session" | "session-chat" | "session-files" | "session-clipboard" | "session-draw" | "invite-colleague" => {
             mock::signed_in(&engine, false);
             mock::viewing(&engine);
         }
@@ -79,6 +81,7 @@ fn section_for(scene: &str) -> Section {
         "sign-in-browser" | "second-step" | "account-company" | "create-company" => Section::Account,
         "devices" | "deploy-link" => Section::Devices,
         "settings" | "wayland" => Section::Settings,
+        "reports" => Section::Reports,
         _ => Section::Remote,
     }
 }
@@ -131,6 +134,10 @@ async fn scene(application: &adw::Application, folder: &std::path::Path, name: &
         }
         "remote-control" => app.edit(|state| state.remote.support_code = Some(crate::models::SupportCode::Text("482915".into()))),
         "session-chat" => app.set_tool(Some(Tool::Chat)),
+        "session-draw" => app.edit(|state| {
+            state.session.drawing = true;
+            state.session.draw_tool = crate::logic::DrawTool::Arrow;
+        }),
         "session-files" => app.set_tool(Some(Tool::Files)),
         "session-clipboard" => {
             app.set_tool(Some(Tool::Clipboard));

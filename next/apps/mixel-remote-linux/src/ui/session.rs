@@ -35,10 +35,31 @@ pub struct SessionView {
     tool_key: RefCell<String>,
     chat_entry: gtk::Entry,
     text_entry: gtk::Entry,
+    ink: gtk::DrawingArea,
+    board: Rc<RefCell<Board>>,
     ai_address: gtk::Entry,
     ai_question: gtk::Entry,
     ai_answer: gtk::TextView,
     ticket: gtk::Entry,
+}
+
+/// The technician's drawings shown here (the other computer shows them too).
+#[derive(Default)]
+struct Board {
+    strokes: Vec<(logic::Stroke, Option<std::time::Instant>)>,
+    current: Option<usize>,
+    next_id: u16,
+    changed: Option<std::time::Instant>,
+}
+
+impl Board {
+    fn touch(&mut self) {
+        self.changed = Some(std::time::Instant::now());
+    }
+}
+
+fn drawing_offered(state: &State) -> bool {
+    state.remote.control && state.remote.peer_features.iter().any(|feature| feature == "draw")
 }
 
 /// What the picture's input handlers keep between events.
@@ -93,6 +114,12 @@ impl SessionView {
         let wait_text = gtk::Label::new(None);
         wait_text.add_css_class("mixel-wait");
         wait.append(&wait_text);
+        // The technician's drawings over the picture (input still goes to the picture below).
+        let ink = gtk::DrawingArea::new();
+        ink.set_can_target(false);
+        ink.set_hexpand(true);
+        ink.set_vexpand(true);
+        overlay.add_overlay(&ink);
         overlay.add_overlay(&wait);
         let notes = vbox(4);
         notes.set_halign(gtk::Align::Start);
@@ -144,7 +171,79 @@ impl SessionView {
             }
         });
         let ticket = entry(&t("Ticket number"));
+        let board = Rc::new(RefCell::new(Board::default()));
+        {
+            let (a, shown) = (app.clone(), board.clone());
+            ink.set_draw_func(move |_, cr, width, height| {
+                let (w, h) = a.state.borrow().session.size;
+                if w == 0 || h == 0 {
+                    return;
+                }
+                let scale = (f64::from(width) / w as f64).min(f64::from(height) / h as f64);
+                let (shown_w, shown_h) = (w as f64 * scale, h as f64 * scale);
+                let (left, top) = ((f64::from(width) - shown_w) / 2.0, (f64::from(height) - shown_h) / 2.0);
+                let to = |point: &(u16, u16)| (left + f64::from(point.0) / 65535.0 * shown_w, top + f64::from(point.1) / 65535.0 * shown_h);
+                for (stroke, _) in &shown.borrow().strokes {
+                    let [r, g, b] = logic::DRAW_PALETTE[usize::from(stroke.color.min(4))];
+                    let alpha = if stroke.tool == logic::DrawTool::Highlighter { 0.35 } else { 1.0 };
+                    cr.set_source_rgba(f64::from(r) / 255.0, f64::from(g) / 255.0, f64::from(b) / 255.0, alpha);
+                    cr.set_line_width(logic::draw_line_width(stroke.tool, stroke.width, shown_h));
+                    cr.set_line_cap(gtk::cairo::LineCap::Round);
+                    cr.set_line_join(gtk::cairo::LineJoin::Round);
+                    let points: Vec<(f64, f64)> = stroke.points.iter().map(to).collect();
+                    let Some(first) = points.first() else { continue };
+                    cr.move_to(first.0, first.1);
+                    for point in &points[1..] {
+                        cr.line_to(point.0, point.1);
+                    }
+                    if points.len() == 1 {
+                        cr.line_to(first.0 + 0.1, first.1);
+                    }
+                    let _ = cr.stroke();
+                    if stroke.tool == logic::DrawTool::Arrow
+                        && let (Some(start), Some(end)) = (points.first(), points.last())
+                    {
+                        let angle = (end.1 - start.1).atan2(end.0 - start.0);
+                        let head = logic::draw_line_width(stroke.tool, stroke.width, shown_h) * 4.0;
+                        for side in [-0.5_f64, 0.5] {
+                            cr.move_to(end.0, end.1);
+                            cr.line_to(end.0 - head * (angle + side).cos(), end.1 - head * (angle + side).sin());
+                        }
+                        let _ = cr.stroke();
+                    }
+                }
+            });
+            // Drawings fade as on the other computer: a finished stroke goes once the picture shows
+            // it (hosts that draw into their picture), all of them a while after the last change.
+            let (a, board, ink) = (app.clone(), board.clone(), ink.clone());
+            glib::timeout_add_local(std::time::Duration::from_millis(200), move || {
+                let in_picture = a.state.borrow().remote.peer_features.iter().any(|feature| feature == "drawpic");
+                let mut board = board.borrow_mut();
+                let before = board.strokes.len();
+                let now = std::time::Instant::now();
+                let current = board.current;
+                let mut index = 0;
+                board.strokes.retain(|(_, finished)| {
+                    let keep = Some(index) == current || !(in_picture && finished.is_some_and(|at| now.duration_since(at).as_millis() > 1500));
+                    index += 1;
+                    keep
+                });
+                if board.current.is_none() && board.changed.is_some_and(|at| now.duration_since(at).as_millis() > 5600) {
+                    board.strokes.clear();
+                    board.changed = None;
+                }
+                if board.strokes.len() != before || board.current.is_some() {
+                    if board.current.is_some() && board.strokes.len() != before {
+                        board.current = board.strokes.len().checked_sub(1);
+                    }
+                    ink.queue_draw();
+                }
+                glib::ControlFlow::Continue
+            });
+        }
         let view = Self {
+            ink,
+            board,
             ai_address,
             ai_question,
             ai_answer,
@@ -187,8 +286,26 @@ impl SessionView {
         let point = Rc::new(point);
 
         let motion = gtk::EventControllerMotion::new();
-        let (a, p, held) = (app.clone(), point.clone(), pressed.clone());
+        let (a, p, held, board, ink) = (app.clone(), point.clone(), pressed.clone(), self.board.clone(), self.ink.clone());
         motion.connect_motion(move |_, x, y| {
+            if a.state.borrow().session.drawing {
+                let Some(index) = board.borrow().current else { return };
+                if let Some((px, py)) = p(&a, x, y, true) {
+                    let message = {
+                        let mut board = board.borrow_mut();
+                        let stroke = &mut board.strokes[index].0;
+                        stroke.add((logic::normalized(px), logic::normalized(py)));
+                        stroke.message(false)
+                    };
+                    board.borrow_mut().touch();
+                    if let Some(message) = message {
+                        a.draw(message);
+                    }
+                    ink.queue_draw();
+                }
+                return;
+            }
+            let _ = &held;
             let (controllable, pointer_mode) = {
                 let state = a.state.borrow();
                 (state.controllable(), state.session.pointer_mode && state.remote.viewing())
@@ -204,9 +321,30 @@ impl SessionView {
 
         let click = gtk::GestureClick::new();
         click.set_button(0);
-        let (a, p, held, focus) = (app.clone(), point.clone(), pressed.clone(), picture.clone());
+        let (a, p, held, focus, board) = (app.clone(), point.clone(), pressed.clone(), picture.clone(), self.board.clone());
         click.connect_pressed(move |gesture, presses, x, y| {
             focus.grab_focus();
+            let drawing = {
+                let state = a.state.borrow();
+                state.session.drawing.then(|| (state.session.draw_tool, state.session.draw_color, state.session.draw_width.max(1)))
+            };
+            if let Some((tool, color, width)) = drawing {
+                if gesture.current_button() != 1 {
+                    return;
+                }
+                let Some((px, py)) = p(&a, x, y, false) else { return };
+                let mut board = board.borrow_mut();
+                board.next_id = board.next_id.wrapping_add(1);
+                let stroke = logic::Stroke::new(board.next_id, tool, color, width, (logic::normalized(px), logic::normalized(py)));
+                board.strokes.push((stroke, None));
+                if board.strokes.len() > 100 {
+                    board.strokes.remove(0);
+                }
+                board.current = Some(board.strokes.len() - 1);
+                board.touch();
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+                return;
+            }
             let (controllable, pointer_mode) = {
                 let state = a.state.borrow();
                 (state.controllable(), state.session.pointer_mode)
@@ -221,8 +359,29 @@ impl SessionView {
             a.send_input(input::button(button, true, presses.clamp(1, 3) as u8));
             gesture.set_state(gtk::EventSequenceState::Claimed);
         });
-        let (a, p, held) = (app.clone(), point.clone(), pressed.clone());
+        let (a, p, held, board) = (app.clone(), point.clone(), pressed.clone(), self.board.clone());
         click.connect_released(move |gesture, presses, x, y| {
+            let current = board.borrow_mut().current.take();
+            if let Some(index) = current {
+                let mut messages = Vec::new();
+                {
+                    let mut board = board.borrow_mut();
+                    let entry = &mut board.strokes[index];
+                    while let Some(message) = entry.0.message(true) {
+                        let done = message["done"] == true;
+                        messages.push(message);
+                        if done {
+                            break;
+                        }
+                    }
+                    entry.1 = Some(std::time::Instant::now());
+                    board.touch();
+                }
+                for message in messages {
+                    a.draw(message);
+                }
+                return;
+            }
             let gtk_button = gesture.current_button();
             if !held.borrow_mut().buttons.remove(&gtk_button) {
                 return;
@@ -311,7 +470,7 @@ impl SessionView {
         let session = &state.session;
         let key = format!(
             "{:?}",
-            ((remote.control, remote.displays, remote.display, remote.display_all, &remote.host_actions, &remote.recording), (remote.phase.as_str(), remote.switched, &remote.peer_features, session.privacy, session.block_input, session.lock_when_done), (session.pointer_mode, session.sound, session.restart_armed, session.recording_pending, session.has_frame, state.busy))
+            ((remote.control, remote.displays, remote.display, remote.display_all, &remote.host_actions, &remote.recording), (remote.phase.as_str(), remote.switched, &remote.peer_features, session.privacy, session.block_input, session.lock_when_done), (session.pointer_mode, session.sound, session.restart_armed, session.recording_pending, session.has_frame, state.busy), (session.drawing, session.draw_tool, session.draw_color, session.draw_width))
         );
         if *self.toolbar_key.borrow() == key {
             return;
@@ -414,6 +573,49 @@ impl SessionView {
             keys.add_css_class("flat");
             keys.set_tooltip_text(Some(&t("Send a key combination")));
             self.toolbar.append(&keys);
+        }
+        if drawing_offered(state) {
+            let a = app.clone();
+            add(toggle_tool("document-edit-symbolic", &t("Draw on the screen"), session.drawing, move || a.toggle_drawing()));
+            if session.drawing {
+                let tools: Vec<String> = logic::DrawTool::ALL.iter().map(|tool| tool.title()).collect();
+                let a = app.clone();
+                let pick = choice(&tools, logic::DrawTool::ALL.iter().position(|tool| *tool == session.draw_tool).unwrap_or(0), move |index| {
+                    a.set_draw(|session| session.draw_tool = logic::DrawTool::ALL[index.min(2)]);
+                });
+                pick.update_property(&[gtk::accessible::Property::Label(&t("Drawing tool"))]);
+                self.toolbar.append(&pick);
+                let colors: Vec<String> = (0..5).map(logic::draw_color_name).collect();
+                let a = app.clone();
+                let pick = choice(&colors, usize::from(session.draw_color), move |index| a.set_draw(|session| session.draw_color = index.min(4) as u8));
+                pick.update_property(&[gtk::accessible::Property::Label(&t("Colour"))]);
+                self.toolbar.append(&pick);
+                let sizes: Vec<String> = (1..=4).map(|size| tf("Size %d", &[&size])).collect();
+                let a = app.clone();
+                let pick = choice(&sizes, usize::from(session.draw_width.clamp(1, 4) - 1), move |index| a.set_draw(|session| session.draw_width = index.min(3) as u8 + 1));
+                pick.update_property(&[gtk::accessible::Property::Label(&t("Line width"))]);
+                self.toolbar.append(&pick);
+                let (a, board, ink) = (app.clone(), self.board.clone(), self.ink.clone());
+                add(icon_button("edit-undo-symbolic", &t("Undo the last drawing"), move || {
+                    {
+                        let mut board = board.borrow_mut();
+                        board.strokes.pop();
+                        board.current = None;
+                    }
+                    ink.queue_draw();
+                    a.draw(serde_json::json!({ "kind": "undo" }));
+                }));
+                let (a, board, ink) = (app.clone(), self.board.clone(), self.ink.clone());
+                add(icon_button("edit-clear-all-symbolic", &t("Clear the drawings"), move || {
+                    {
+                        let mut board = board.borrow_mut();
+                        board.strokes.clear();
+                        board.current = None;
+                    }
+                    ink.queue_draw();
+                    a.draw(serde_json::json!({ "kind": "clear" }));
+                }));
+            }
         }
         let a = app.clone();
         add(icon_button("view-refresh-symbolic", &t("Renew connection"), move || a.renew()));

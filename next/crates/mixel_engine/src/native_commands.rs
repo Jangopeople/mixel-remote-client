@@ -1150,7 +1150,15 @@ async fn signin_screen_enable(context: &Context, args: &Args) -> Result<String, 
     out(enrolled.connection_id)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
+#[path = "native_commands_linux.rs"]
+mod linux;
+#[cfg(target_os = "linux")]
+async fn platform(context: &Context, command: &str, args: &Args) -> Result<String, String> {
+    linux::platform(context, command, args).await
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 async fn platform(_context: &Context, command: &str, _args: &Args) -> Result<String, String> {
     match command {
         "capture_targets" => out(Vec::<Value>::new()),

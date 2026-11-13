@@ -54,12 +54,12 @@ impl DevicesPage {
             .iter()
             .map(|device| {
                 let presence = state.presence(device);
-                (device.clone(), presence, logic::presence_reason(device, presence, &state.remote, &devices.server_presence, 0).len(), app.known_macs(device.connection_id).len())
+                (device.clone(), presence, devices.favorites.contains(&device.device), logic::presence_reason(device, presence, &state.remote, &devices.server_presence, 0).len(), app.known_macs(device.connection_id).len())
             })
             .collect();
         let key = format!(
             "{:?}",
-            ((state.signed_in(), &rows, devices.loading, &devices.message, &devices.error, &devices.groups), (&devices.group_filter, devices.page, devices.has_next, &devices.deploy_link.is_some(), company.tenant().map(|tenant| (&tenant.name, &tenant.tenant_id)), company.role()), (company.add_blocked(), company.groups_on(), state.registered_here(), (state.remote.phase.as_str(), state.remote.host, state.remote.connected(), state.busy, state.enrollment.needs_setup)))
+            ((state.signed_in(), &rows, devices.loading, &devices.message, &devices.error, &devices.groups), (&devices.group_filter, devices.page, devices.has_next, &devices.deploy_link.is_some(), company.tenant().map(|tenant| (&tenant.name, &tenant.tenant_id)), company.role()), (company.add_blocked(), company.groups_on(), state.registered_here(), (state.remote.phase.as_str(), state.remote.host, state.remote.connected(), state.busy, state.enrollment.needs_setup), &devices.recent))
         );
         if *self.key.borrow() == key {
             return;
@@ -201,16 +201,38 @@ impl DevicesPage {
             self.list.append(&status);
             return;
         }
-        let list = gtk::ListBox::new();
-        list.add_css_class("boxed-list");
-        list.set_selection_mode(gtk::SelectionMode::None);
-        list.set_margin_start(24);
-        list.set_margin_end(24);
-        list.set_margin_bottom(12);
-        for device in &devices.devices {
-            list.append(&device_row(app, state, device));
+        let section = |title: &str, rows: Vec<&Device>| {
+            if !title.is_empty() {
+                let heading = heading(title);
+                heading.set_margin_start(24);
+                heading.set_margin_bottom(6);
+                self.list.append(&heading);
+            }
+            let list = gtk::ListBox::new();
+            list.add_css_class("boxed-list");
+            list.set_selection_mode(gtk::SelectionMode::None);
+            list.set_margin_start(24);
+            list.set_margin_end(24);
+            list.set_margin_bottom(18);
+            for device in rows {
+                list.append(&device_row(app, state, device));
+            }
+            self.list.append(&list);
+        };
+        // Companies: the person's favorites and recent connections at the top of the first page.
+        let top = company.tenant().is_some() && devices.page == 0 && devices.search.is_empty();
+        let find = |id: &String| devices.devices.iter().find(|device| &device.device == id);
+        let favorites: Vec<&Device> = if top { devices.favorites.iter().filter_map(find).collect() } else { Vec::new() };
+        let recent: Vec<&Device> = if top { devices.recent.iter().filter_map(find).filter(|device| !devices.favorites.contains(&device.device)).collect() } else { Vec::new() };
+        let grouped = !favorites.is_empty() || !recent.is_empty();
+        if !favorites.is_empty() {
+            section(&t("Favorites"), favorites);
         }
-        self.list.append(&list);
+        if !recent.is_empty() {
+            section(&t("Recent connections"), recent);
+        }
+        let all = t("All devices");
+        section(if grouped { &all } else { "" }, devices.devices.iter().collect());
         if devices.page > 0 || devices.has_next {
             let pager = hbox(10);
             pager.set_margin_start(24);
@@ -278,6 +300,17 @@ fn device_row(app: &Rc<App>, state: &State, device: &Device) -> gtk::ListBoxRow 
         status.append(&reason);
     }
     row.append(&status);
+    if company.tenant().is_some() {
+        let favorite = state.devices.favorites.contains(&device.device);
+        let (a, id) = (app.clone(), device.device.clone());
+        let star = icon_button(if favorite { "starred-symbolic" } else { "non-starred-symbolic" }, &if favorite { tf("Remove %@ from favorites", &[&device.name]) } else { tf("Add %@ to favorites", &[&device.name]) }, move || a.set_favorite(id.clone(), !favorite));
+        star.add_css_class("flat");
+        if favorite {
+            star.add_css_class("mixel-accent");
+        }
+        star.set_valign(gtk::Align::Center);
+        row.prepend(&star);
+    }
     let macs = app.known_macs(device.connection_id);
     if presence == Presence::Offline && !macs.is_empty() {
         let (a, chosen) = (app.clone(), device.clone());

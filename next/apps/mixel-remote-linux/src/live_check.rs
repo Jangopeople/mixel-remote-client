@@ -172,6 +172,19 @@ impl Check {
             }
             self.check(name, ok, "");
         }
+        if active["peer_features"].as_array().is_some_and(|features| features.iter().any(|feature| feature == "draw")) {
+            let stroke = json!({ "kind": "stroke", "id": 1, "tool": "arrow", "color": 0, "width": 2, "points": [[12000, 12000], [30000, 26000]], "done": true });
+            let mut shown = 0;
+            for message in [stroke, json!({ "kind": "undo" }), json!({ "kind": "clear" })] {
+                if self.call("remote_draw", json!({ "session": id, "message": message })).await.is_ok_and(|value| value == true) {
+                    shown += 1;
+                }
+                tokio::time::sleep(Duration::from_millis(800)).await;
+            }
+            self.check(&format!("drawing on the other computer's screen: stroke, undo, clear ({shown}/3)"), shown == 3, "");
+        } else {
+            println!("drawing: not offered by this computer");
+        }
         if active["clipboard"] == true {
             // Something to send: this computer's clipboard (needs a display; the host test has one).
             let copied = self.call("copy_text", json!({ "text": "Mixel Remote for Linux clipboard check" })).await;
@@ -380,6 +393,23 @@ async fn technician(check: &mut Check, suffix: &str, folder: &std::path::Path, a
             check.check("view and control granted", active["control"] == true, &active);
             println!("host actions: {}  displays: {}  features: {}", active["host_actions"], active["displays"], active["peer_features"]);
             check.session_tools(&active, Some(&folder.to_path_buf()), attended).await;
+        }
+    }
+    if host > 0 {
+        // The session report lists the session; a note goes on it (by the Remote ID); favorites.
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let report = check.call("saas_session_report", json!({ "tenant": tenant, "from": null, "to": null, "technician": null, "device": null })).await.unwrap_or(Value::Null);
+        let listed = report.as_array().is_some_and(|rows| rows.iter().any(|row| row["connection_id"].as_u64() == Some(host)));
+        check.check("session report lists the session", listed, &report);
+        let note = check.call("saas_session_note", json!({ "tenant": tenant, "note": "Linux live check note", "session": null, "connection": host })).await;
+        let report = check.call("saas_session_report", json!({ "tenant": tenant, "from": null, "to": null, "technician": null, "device": null })).await.unwrap_or(Value::Null);
+        check.check("session note saved and reported", note.is_ok() && report.to_string().contains("Linux live check note"), format!("{note:?}"));
+        let device = check.call("saas_devices", json!({ "tenant": tenant })).await.ok().and_then(|rows| rows.as_array().and_then(|rows| rows.iter().find(|row| row["connection_id"].as_u64() == Some(host)).map(|row| row["device_id"].clone())));
+        if let Some(device) = device {
+            let starred = check.call("saas_set_favorite", json!({ "tenant": tenant, "device": device, "favorite": true })).await;
+            let favorites = check.call("saas_favorites", json!({ "tenant": tenant })).await.unwrap_or(Value::Null);
+            let recent = check.call("saas_recent_devices", json!({ "tenant": tenant, "max_count": 5 })).await.unwrap_or(Value::Null);
+            check.check("favorite and recent connections", starred.is_ok() && favorites.to_string().contains(device.as_str().unwrap_or("-")) && recent.to_string().contains(device.as_str().unwrap_or("-")), format!("{favorites} {recent}"));
         }
     }
     let _ = check.call("remote_disconnect", json!({})).await;

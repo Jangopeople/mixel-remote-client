@@ -150,7 +150,8 @@ const SHORTCUTS: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
             <child><object class="GtkShortcutsShortcut"><property name="accelerator">&lt;Control&gt;1</property><property name="title">@REMOTE@</property></object></child>
             <child><object class="GtkShortcutsShortcut"><property name="accelerator">&lt;Control&gt;2</property><property name="title">@DEVICES@</property></object></child>
             <child><object class="GtkShortcutsShortcut"><property name="accelerator">&lt;Control&gt;3</property><property name="title">@ACCOUNT@</property></object></child>
-            <child><object class="GtkShortcutsShortcut"><property name="accelerator">&lt;Control&gt;4 &lt;Control&gt;comma</property><property name="title">@SETTINGS@</property></object></child>
+            <child><object class="GtkShortcutsShortcut"><property name="accelerator">&lt;Control&gt;4</property><property name="title">@REPORTS@</property></object></child>
+            <child><object class="GtkShortcutsShortcut"><property name="accelerator">&lt;Control&gt;5 &lt;Control&gt;comma</property><property name="title">@SETTINGS@</property></object></child>
             <child><object class="GtkShortcutsShortcut"><property name="accelerator">&lt;Control&gt;r</property><property name="title">@REFRESH@</property></object></child>
             <child><object class="GtkShortcutsShortcut"><property name="accelerator">F1</property><property name="title">@HELP@</property></object></child>
             <child><object class="GtkShortcutsShortcut"><property name="accelerator">&lt;Control&gt;q</property><property name="title">@QUIT@</property></object></child>
@@ -190,6 +191,7 @@ pub fn shortcuts(parent: &adw::ApplicationWindow) {
         ("@DEVICES@", t("Devices")),
         ("@ACCOUNT@", t("Account")),
         ("@SETTINGS@", t("Settings")),
+        ("@REPORTS@", t("Session reports")),
         ("@REFRESH@", t("Refresh devices")),
         ("@HELP@", t("Mixel Remote Help")),
         ("@QUIT@", t("Quit Mixel Remote")),
