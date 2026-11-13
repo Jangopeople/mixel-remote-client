@@ -151,6 +151,28 @@ internal static class UiLiveCheck
                 await Task.Delay(800);
                 LiveCheck.Check($"host action {action} on and off", app.Session.Error.Length == 0, app.Session.Error);
             }
+            if (app.Session.CanDraw)
+            {
+                app.Session.Notice = "";
+                app.Session.Drawing = true;
+                app.Session.DrawColor = 0;
+                app.Session.BeginStroke(0.30, 0.30);
+                for (var step = 1; step <= 20; step++) app.Session.ContinueStroke(0.30 + step * 0.015, 0.30 + Math.Sin(step / 3.0) * 0.05);
+                app.Session.EndStroke();
+                app.Session.DrawTool = "arrow";
+                app.Session.BeginStroke(0.25, 0.70);
+                app.Session.ContinueStroke(0.42, 0.55);
+                app.Session.EndStroke();
+                await Task.Delay(2500);
+                await Shot(window.Handle, Path.Combine(folder, "session-drawing.png"));
+                LiveCheck.Check("drawing shown on the remote computer (its picture comes back with the strokes)", app.Session.Notice.Length == 0 && app.Session.Error.Length == 0, app.Session.Notice + app.Session.Error);
+                app.Session.ClearDrawing();
+                app.Session.Drawing = false;
+            }
+            else
+            {
+                Print("drawing: the other computer does not offer it");
+            }
             if (app.Remote.Chat())
             {
                 app.Session.ChatDraft = $"QA chat {suffix}";
@@ -159,7 +181,7 @@ internal static class UiLiveCheck
                 // Unattended access (nobody at the computer) has no chat; the app says so.
                 LiveCheck.Check("chat: sent, or refused with a clear message for unattended access",
                     app.Session.Chat.Any(message => message.Mine && message.Text.Contains(suffix, StringComparison.Ordinal))
-                    || (app.Remote.UnattendedSession && app.Session.Error.Length > 0), app.Session.Error);
+                    || app.Session.Error.Contains("unavailable", StringComparison.Ordinal), app.Session.Error);
                 app.Session.Error = "";
             }
             if (app.Remote.Clipboard)

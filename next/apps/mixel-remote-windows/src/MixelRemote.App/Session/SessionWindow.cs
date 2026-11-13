@@ -90,6 +90,7 @@ internal sealed class SessionView : Grid
     private readonly Border notices = new() { HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Bottom, Margin = new Thickness(12), Padding = new Thickness(10), CornerRadius = new CornerRadius(8) };
     private readonly StackPanel waiting;
     private bool pending;
+    private bool closed;
     private TextBlock? detailLine;
 
     public SessionView(AppModel app, Window window, string tool = "")
@@ -125,11 +126,17 @@ internal sealed class SessionView : Grid
         Grid.SetRow(body, 1);
         Children.Add(body);
         Screen.Attach(WinRT.Interop.WindowNative.GetWindowHandle(window), app.Session.CtrlAltDel, () => toolbar.Focus(FocusState.Keyboard), ToggleFullScreen, () => _ = app.Session.End());
-        app.PropertyChanged += (sender, change) => { if (change.PropertyName is nameof(AppModel.Remote) or nameof(AppModel.Busy)) Rebuild(); };
-        app.Session.PropertyChanged += (sender, change) =>
+        app.PropertyChanged += OnApp;
+        app.Session.PropertyChanged += OnSession;
+        // A closed window has no AppWindow any more: stop following the models (the screenshot and demo
+        // windows close while their session stays; the app's own session window only hides).
+        window.Closed += (_, _) =>
         {
-            if (change.PropertyName == nameof(SessionModel.Fps)) { if (detailLine is not null) detailLine.Text = Detail(); }
-            else Rebuild();
+            closed = true;
+            app.PropertyChanged -= OnApp;
+            app.Session.PropertyChanged -= OnSession;
+            app.Session.PrintJobArrived -= OnPrintJob;
+            Translator.Shared.Changed -= OnLanguage;
         };
         Loaded += (_, _) =>
         {
@@ -138,12 +145,7 @@ internal sealed class SessionView : Grid
         };
         Unloaded += (_, _) => Translator.Shared.Changed -= OnLanguage;
         // A print job of the other computer: the print jobs (Clipboard tool) open by themselves.
-        app.Session.PrintJobArrived += (_, _) =>
-        {
-            tools.Tool = "clipboard";
-            tools.Visibility = Visibility.Visible;
-            Rebuild();
-        };
+        app.Session.PrintJobArrived += OnPrintJob;
         ActualThemeChanged += (_, _) => Rebuild();
         Loaded += (_, _) => Render();
     }
@@ -152,9 +154,27 @@ internal sealed class SessionView : Grid
 
     private void OnLanguage(object? sender, EventArgs change) => Rebuild();
 
+    private void OnApp(object? sender, System.ComponentModel.PropertyChangedEventArgs change)
+    {
+        if (change.PropertyName is nameof(AppModel.Remote) or nameof(AppModel.Busy)) Rebuild();
+    }
+
+    private void OnSession(object? sender, System.ComponentModel.PropertyChangedEventArgs change)
+    {
+        if (change.PropertyName == nameof(SessionModel.Fps)) { if (detailLine is not null && !closed) detailLine.Text = Detail(); }
+        else Rebuild();
+    }
+
+    private void OnPrintJob(object? sender, EventArgs change)
+    {
+        tools.Tool = "clipboard";
+        tools.Visibility = Visibility.Visible;
+        Rebuild();
+    }
+
     private void Rebuild()
     {
-        if (pending) return;
+        if (pending || closed) return;
         pending = true;
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
         {
@@ -165,6 +185,7 @@ internal sealed class SessionView : Grid
 
     public void Render()
     {
+        if (closed) return;
         try { RenderNow(); }
         catch (Exception failure) { MixelRemote.App.App.Log($"session window: {failure}"); }
     }
