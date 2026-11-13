@@ -122,9 +122,16 @@ enum LiveCheck {
                 let decoder = H264Decoder()
                 var decodedHere = 0, packets = 0, failure = ""
                 start = Date()
+                var strokeId = 100
                 while Date().timeIntervalSince(start) < 20, decodedHere < 40 {
                     step += 1
-                    if step % 10 == 0 { _ = try? await engine.input(session: id, json: "{\"kind\":\"pointer\",\"x\":\((step * 613) % 60000 + 2000),\"y\":\((step * 271) % 50000 + 5000)}") }
+                    // The lab screen is still: short strokes change the picture (the host draws them into it).
+                    if step % 15 == 0 {
+                        strokeId += 1
+                        let y = 8000 + (strokeId * 3100) % 50000
+                        let message: [String: Any] = ["kind": "stroke", "id": strokeId, "tool": "pen", "color": strokeId % 4, "width": 2, "points": [[6000, y], [26000, y]], "done": true]
+                        _ = await call(engine, "remote_draw", ["session": id, "message": message])
+                    }
                     guard let data = try? await engine.nextVideo(session: id, compressed: true) else { break }
                     if data.isEmpty { try? await Task.sleep(nanoseconds: 20_000_000); continue }
                     guard VideoFrame.isCompressed(data) else { continue }
@@ -138,6 +145,7 @@ enum LiveCheck {
                 seconds = Date().timeIntervalSince(start)
                 check("pictures decoded on this Mac with VideoToolbox (\(decodedHere) of \(packets) H.264 packets in \(Int(seconds)) s, \(size))", decodedHere >= 2 && failure.isEmpty, failure)
                 _ = try? await engine.nextVideo(session: id, compressed: false)
+                _ = await call(engine, "remote_draw", ["session": id, "message": ["kind": "clear"]])
                 var posted = 0
                 for step in 0..<10 {
                     let event = "{\"kind\":\"pointer\",\"x\":\(20000 + step * 2000),\"y\":30000}"
@@ -145,6 +153,25 @@ enum LiveCheck {
                 }
                 for down in [true, false] { if (try? await engine.input(session: id, json: "{\"kind\":\"key\",\"usage\":225,\"down\":\(down)}")) == true { posted += 1 } }
                 check("input applied on the lab computer (\(posted)/12)", posted == 12)
+                // Drawing: a thick red stroke; a drawpic host (Linux X11) puts it into the picture.
+                let features = active["peer_features"] as? [String] ?? []
+                check("the lab computer shows drawings (\(features.joined(separator: ",")))", features.contains("draw"))
+                let points = (0..<12).map { [18000 + $0 * 2500, 32000] }
+                let stroke: [String: Any] = ["kind": "stroke", "id": 1, "tool": "pen", "color": 0, "width": 4, "points": points, "done": true]
+                let drawn = await call(engine, "remote_draw", ["session": id, "message": stroke])
+                check("drawing sent to the lab computer", (try? drawn.get()) as? Bool == true, "\(drawn)")
+                if features.contains("drawpic") {
+                    var red = 0
+                    let until = Date().addingTimeInterval(6)
+                    while Date() < until, red < 300 {
+                        _ = try? await engine.input(session: id, json: "{\"kind\":\"pointer\",\"x\":\(Int.random(in: 2000...9000)),\"y\":\(Int.random(in: 50000...60000))}")
+                        guard let data = try? await engine.nextVideo(session: id, compressed: false) else { break }
+                        if data.isEmpty { try? await Task.sleep(nanoseconds: 30_000_000); continue }
+                        if let frame = try? VideoFrame.decode(data) { red = max(red, redPixels(frame.image)); if red >= 300 { save(frame.image, folder.appendingPathComponent("remote-screen-drawing.png")) } }
+                    }
+                    check("the drawing appears in the lab computer's picture (\(red) red pixels)", red >= 300)
+                }
+                _ = await call(engine, "remote_draw", ["session": id, "message": ["kind": "clear"]])
                 let chat = await call(engine, "remote_chat_messages", ["session": id])
                 print("chat available: \((try? chat.get()) != nil)")
                 if let consent = active["consent"] as? String {
@@ -152,6 +179,19 @@ enum LiveCheck {
                     check("end session", (try? stop.get()) != nil, "\(stop)")
                 }
                 check("back to ready after the session", await wait(engine, seconds: 20) { ($0["phase"] as? String) == "ready" } != nil)
+                // The note after the session, and the session in the company's report.
+                let text = "Lab session \(suffix): picture, input and drawing checked"
+                var noted: Result<Any?, Error> = .success(nil)
+                for _ in 0..<10 {
+                    noted = await call(engine, "saas_session_note", ["tenant": tenant, "note": text, "connection": host])
+                    if (try? noted.get()) != nil { break }
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                }
+                check("note after the session saved", (try? noted.get()) != nil, "\(noted)")
+                let today = String(ISO8601DateFormatter().string(from: Date().addingTimeInterval(-86400)).prefix(10))
+                let rows = (try? await call(engine, "saas_session_report", ["tenant": tenant, "from": today, "to": NSNull(), "technician": NSNull(), "device": NSNull()]).get()) as? [[String: Any]] ?? []
+                let row = rows.first { ($0["connection_id"] as? Int) == host }
+                check("the session is in the report (\(row?["kind"] ?? "–"), \(row?["duration_seconds"] ?? 0) s) with the note", row != nil && row?["note"] as? String == text, "\(rows)")
             }
         }
         _ = await call(engine, "remote_disconnect")
@@ -230,6 +270,18 @@ enum LiveCheck {
         let removal = await call(engine, "device_self_remove", ["confirmed": true])
         check("this Mac removes itself, signed with the carried-over key", (try? removal.get()) as? String == "removed", "\(removal)")
         try? await engine.shutdown()
+    }
+
+    /// Pixels close to the drawing red (229, 50, 45).
+    static func redPixels(_ image: CGImage) -> Int {
+        let width = image.width, height = image.height
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        guard let context = CGContext(data: &pixels, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                                      space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return 0 }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        var count = 0
+        for index in stride(from: 0, to: pixels.count, by: 4) where pixels[index] > 190 && pixels[index + 1] < 90 && pixels[index + 2] < 90 { count += 1 }
+        return count
     }
 
     static func save(_ image: CGImage, _ url: URL) {
