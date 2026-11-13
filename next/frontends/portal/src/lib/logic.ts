@@ -7,6 +7,25 @@ export type TenantStatus = 'active' | 'trial' | 'past_due' | 'read_only' | 'clos
 export type Method = 'password' | 'magic_link' | 'google' | 'azure' | 'apple' | 'mixel_id' | 'sso';
 export const ALL_METHODS: readonly Method[] = ['password', 'magic_link', 'mixel_id', 'google', 'azure', 'apple', 'sso'];
 /** The methods a tenant gets by default (SQL 018). */
+/** Methods that send the person to an outside sign-in page and back (no e-mail or password here). */
+export type OAuthMethod = 'mixel_id' | 'google' | 'azure' | 'apple';
+export const OAUTH_METHODS: readonly OAuthMethod[] = ['mixel_id', 'google', 'azure', 'apple'];
+export function isOAuthMethod(method: Method): method is OAuthMethod {
+  return (OAUTH_METHODS as readonly Method[]).includes(method);
+}
+/** GoTrue provider name and scopes of each outside sign-in. */
+export const OAUTH_PROVIDERS: Record<OAuthMethod, { provider: 'keycloak' | 'google' | 'azure' | 'apple'; scopes: string; host: string }> = {
+  mixel_id: { provider: 'keycloak', scopes: 'openid email profile', host: 'auth.mixel.ch' },
+  google: { provider: 'google', scopes: 'openid email profile', host: 'accounts.google.com' },
+  azure: { provider: 'azure', scopes: 'openid email profile', host: 'login.microsoftonline.com' },
+  apple: { provider: 'apple', scopes: 'name email', host: 'appleid.apple.com' },
+};
+/** Sign-up offers these, in this order, when the sign-in service has them. */
+export function signupMethods(available: Set<Method> | null): Method[] {
+  const order: Method[] = ['password', 'magic_link', 'google', 'azure', 'apple', 'mixel_id'];
+  return order.filter((item) => (available ? available.has(item) : item === 'password' || item === 'magic_link'));
+}
+
 export const DEFAULT_METHODS: readonly Method[] = ['password', 'magic_link', 'google', 'azure', 'apple', 'mixel_id'];
 
 export interface Features {
