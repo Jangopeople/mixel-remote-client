@@ -15,6 +15,10 @@ enum Entry {
         if arguments.count >= 4, arguments[1] == "--live-check" {
             LiveCheck.run(sessionFile: arguments[2], suffix: arguments[3])
         }
+        // `--live-session <qa-session.json> <suffix> <folder>`: a real session to a lab computer.
+        if arguments.count >= 5, arguments[1] == "--live-session" {
+            LiveCheck.run(sessionFile: arguments[2], suffix: arguments[3], sessionFolder: arguments[4])
+        }
         #endif
         MixelRemoteMacApp.main()
     }

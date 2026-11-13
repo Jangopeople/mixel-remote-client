@@ -1,4 +1,5 @@
 #if DEBUG
+import AppKit
 import Foundation
 import MixelCore
 import MixelRemoteKit
@@ -17,11 +18,12 @@ enum LiveCheck {
         fflush(stdout)
     }
 
-    static func run(sessionFile: String, suffix: String) -> Never {
+    static func run(sessionFile: String, suffix: String, sessionFolder: String? = nil) -> Never {
         setenv("MIXEL_QA_SESSION_FILE", sessionFile, 1)
         let done = DispatchSemaphore(value: 0)
         Task.detached {
-            await checks(suffix: suffix)
+            if let sessionFolder { await session(suffix: suffix, folder: URL(fileURLWithPath: sessionFolder)) }
+            else { await checks(suffix: suffix) }
             done.signal()
         }
         done.wait()
@@ -43,6 +45,105 @@ enum LiveCheck {
             try? await Task.sleep(nanoseconds: 250_000_000)
         }
         return nil
+    }
+
+    static func signIn(_ engine: CoreEngine) async -> Bool {
+        _ = await call(engine, "account_sign_in")
+        for _ in 0..<60 {
+            if case .success(let value) = await call(engine, "account_status"), let status = value as? [String: Any],
+               ["authenticated", "profile_setup", "error"].contains(status["phase"] as? String ?? "") {
+                return status["phase"] as? String != "error"
+            }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+        }
+        return false
+    }
+
+    /// A real session: this Mac (technician) to a lab computer enrolled with the deploy link written to
+    /// `folder/deploy-command.txt`. Waits for the computer, connects unattended, receives pictures, sends
+    /// harmless input (pointer moves, Shift), then ends and removes everything it created.
+    static func session(suffix: String, folder: URL) async {
+        guard let engine = try? CoreEngine(dataDirectory: folder.appendingPathComponent("engine")) else { check("engine starts", false); return }
+        check("sign-in with the QA session", await signIn(engine))
+        let company = "QA Native \(suffix)"
+        let tenant = ((try? await call(engine, "saas_signup", ["company": company, "terms": true]).get()) as? [String: Any])?["tenant_id"] as? String ?? ""
+        check("QA company", !tenant.isEmpty)
+        guard !tenant.isEmpty else { return }
+        let added = (try? await call(engine, "saas_add_this_device", ["tenant": tenant, "name": "QA native Mac \(suffix)", "group": NSNull()]).get()) as? [String: Any]
+        let mine = added?["connection_id"] as? Int ?? 0
+        check("this Mac added", mine > 0)
+        _ = await call(engine, "remote_register")
+        check("this Mac online", await wait(engine, seconds: 30) { ($0["phase"] as? String) == "ready" } != nil)
+        let link = (try? await call(engine, "saas_create_deploy_link", ["tenant": tenant, "label": "QA lab", "days": 1, "computers": 1, "group": NSNull()]).get()) as? [String: Any]
+        let command = link?["windows_command"] as? String ?? ""
+        check("deploy link for the lab computer", !command.isEmpty)
+        try? command.write(to: folder.appendingPathComponent("deploy-command.txt"), atomically: true, encoding: .utf8)
+        print("WAITING for the lab computer (deploy-command.txt)"); fflush(stdout)
+        var host = 0
+        for _ in 0..<180 {
+            if let rows = (try? await call(engine, "saas_devices", ["tenant": tenant]).get()) as? [[String: Any]],
+               let row = rows.first(where: { ($0["os"] as? String) == "windows" }), let id = row["connection_id"] as? Int {
+                _ = await call(engine, "remote_presence", ["hosts": [id]])
+                if let status = (try? await call(engine, "remote_status").get()) as? [String: Any], (status["online"] as? [Int] ?? []).contains(id) { host = id; break }
+            }
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+        }
+        check("lab computer enrolled with the deploy link and online", host > 0)
+        if host > 0 {
+            let request = await call(engine, "remote_request", ["host": host, "password": NSNull(), "unattended": true])
+            check("unattended request", (try? request.get()) != nil, "\(request)")
+            let active = await wait(engine, seconds: 60) { ($0["phase"] as? String) == "active" }
+            let after = try? await call(engine, "remote_status").get()
+            check("session active", active != nil, "\(String(describing: after))")
+            if let active, let id = active["session"] as? String {
+                check("view and control granted", active["control"] as? Bool == true, "\(active)")
+                print("host actions: \(active["host_actions"] ?? "")  displays: \(active["displays"] ?? "")  features: \(active["peer_features"] ?? "")")
+                var frames = 0, sequence: UInt64 = 0, size = ""
+                let start = Date()
+                var step = 0
+                while Date().timeIntervalSince(start) < 20, frames < 40 {
+                    // Pointer moves on the remote screen change the picture (pictures follow changes only).
+                    step += 1
+                    if step % 10 == 0 { _ = try? await engine.input(session: id, json: "{\"kind\":\"pointer\",\"x\":\((step * 997) % 60000 + 2000),\"y\":\((step * 431) % 50000 + 5000)}") }
+                    guard let data = try? await engine.nextVideo(session: id, compressed: false) else { break }
+                    if data.isEmpty { try? await Task.sleep(nanoseconds: 20_000_000); continue }
+                    if let frame = try? VideoFrame.decode(data, after: sequence) {
+                        sequence = frame.sequence; frames += 1; size = "\(frame.width)×\(frame.height)"
+                        if frames == 1 || frames == 10 { save(frame.image, folder.appendingPathComponent("remote-screen.png")) }
+                    }
+                }
+                let seconds = Date().timeIntervalSince(start)
+                check("pictures from the lab computer (\(frames) in \(Int(seconds)) s, \(size); a still screen sends pictures only on change)", frames >= 2)
+                var posted = 0
+                for step in 0..<10 {
+                    let event = "{\"kind\":\"pointer\",\"x\":\(20000 + step * 2000),\"y\":30000}"
+                    if (try? await engine.input(session: id, json: event)) == true { posted += 1 }
+                }
+                for down in [true, false] { if (try? await engine.input(session: id, json: "{\"kind\":\"key\",\"usage\":225,\"down\":\(down)}")) == true { posted += 1 } }
+                check("input applied on the lab computer (\(posted)/12)", posted == 12)
+                let chat = await call(engine, "remote_chat_messages", ["session": id])
+                print("chat available: \((try? chat.get()) != nil)")
+                if let consent = active["consent"] as? String {
+                    let stop = await call(engine, "remote_stop_session", ["consent": consent])
+                    check("end session", (try? stop.get()) != nil, "\(stop)")
+                }
+                check("back to ready after the session", await wait(engine, seconds: 20) { ($0["phase"] as? String) == "ready" } != nil)
+            }
+        }
+        _ = await call(engine, "remote_disconnect")
+        _ = await wait(engine, seconds: 15) { ["offline", "error"].contains($0["phase"] as? String ?? "") }
+        if let device = added?["device_id"] as? String {
+            let removal = await call(engine, "device_self_remove", ["confirmed": true, "registration": ["device": device, "connection_id": mine, "generation": added?["generation"] as? Int ?? 0]])
+            check("this Mac removes itself", (try? removal.get()) as? String == "removed", "\(removal)")
+        }
+        let deleted = await call(engine, "saas_delete_company", ["tenant": tenant, "name": company])
+        check("QA company deleted (the lab computer's enrolment with it)", (try? deleted.get()) != nil, "\(deleted)")
+        try? await engine.shutdown()
+    }
+
+    static func save(_ image: CGImage, _ url: URL) {
+        let rep = NSBitmapImageRep(cgImage: image)
+        try? rep.representation(using: .png, properties: [:])?.write(to: url)
     }
 
     static func checks(suffix: String) async {
