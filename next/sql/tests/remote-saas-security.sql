@@ -58,14 +58,14 @@ end $$;
 set local role authenticated;
 select pg_temp.act('owner_a');
 do $$ declare r jsonb; begin
-    r := public.remote_saas_signup('QA Sec Alpha');
+    r := public.remote_saas_signup('QA Sec Alpha', true);
     perform pg_temp.remember('tenant_a', (r->>'tenant_id')::uuid);
     perform pg_temp.remember('org_a', (r->>'organization_id')::uuid);
     perform pg_temp.remember('client_a', (r->>'client_id')::uuid);
 end $$;
 select pg_temp.act('owner_b');
 do $$ declare r jsonb; begin
-    r := public.remote_saas_signup('QA Sec Beta');
+    r := public.remote_saas_signup('QA Sec Beta', true);
     perform pg_temp.remember('tenant_b', (r->>'tenant_id')::uuid);
 end $$;
 reset role;
@@ -163,7 +163,7 @@ end $$;
 -- Sign-up of an account without a profile keeps working (the RPC creates the profile).
 select pg_temp.act('outsider2');
 do $$ declare r jsonb; begin
-    r := public.remote_saas_signup('QA Sec Gamma');
+    r := public.remote_saas_signup('QA Sec Gamma', true);
     perform pg_temp.result('sign-up still creates the owner profile', r->>'tenant_id' is not null);
 exception when others then perform pg_temp.result('sign-up still creates the owner profile', false, sqlerrm); end $$;
 -- An account without a profile cannot join an ordinary ISM customer either (ISM-wide).

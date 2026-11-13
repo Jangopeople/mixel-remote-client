@@ -277,7 +277,7 @@ do $$ begin
     perform pg_temp.expect((select count(*) from remote_private.connection_reservations where device_id in (pg_temp.id('dev1'), pg_temp.id('dev2'), pg_temp.id('dev3'))) = 3, 'keys stay reserved');
     perform pg_temp.expect(not exists (select 1 from remote_private.device_presence where connection_id = current_setting('t.conn1')::integer), 'presence gone');
     perform pg_temp.expect(not exists (select 1 from remote_private.enrollment_audit where device_id in (pg_temp.id('dev1'), pg_temp.id('dev2'), pg_temp.id('dev3'))), 'device audit gone');
-    perform pg_temp.expect(not exists (select 1 from remote_saas.invites i where i.email like 'qa-legal-%'), 'invitations gone');
+    perform pg_temp.expect(not exists (select 1 from remote_saas.invites i where i.tenant_id = pg_temp.id('tenant')), 'invitations gone');
     perform pg_temp.expect(not exists (select 1 from remote_saas.audit_log where tenant_id = pg_temp.id('tenant')), 'audit log gone');
     perform pg_temp.expect(not exists (select 1 from remote_saas.billing where tenant_id = pg_temp.id('tenant')), 'billing state gone');
     perform pg_temp.expect(not exists (select 1 from remote_saas.terms_acceptances where tenant_id = pg_temp.id('tenant')), 'acceptances gone');
