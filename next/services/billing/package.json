@@ -1,0 +1,21 @@
+{
+  "name": "mixel-remote-billing",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Mixel Remote SaaS billing: Stripe Checkout, customer portal and webhook -> remote_saas plan state",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/*.test.js",
+    "check": "tsc -p ."
+  },
+  "dependencies": {
+    "pg": "8.13.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.10.2",
+    "@types/pg": "8.11.10",
+    "typescript": "5.7.2"
+  }
+}

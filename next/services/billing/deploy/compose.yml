@@ -1,0 +1,30 @@
+# /opt/mixel-remote-billing/compose.yml on mixel-vps. Secrets live in .env next to it (root, 0600).
+name: mixel-remote-billing
+services:
+  billing:
+    image: mixel-remote-billing:current
+    container_name: mixel-remote-billing
+    env_file: .env
+    environment:
+      PORT: "8080"
+      HOST: "0.0.0.0"
+      POSTGREST_URL: http://ism-postgrest:3000
+      PUBLIC_BASE_URL: https://remote.mixel.ch
+    ports:
+      - "127.0.0.1:8096:8080"
+    networks: [ism]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 192m
+    cpus: 0.5
+    pids_limit: 64
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: { max-size: 10m, max-file: "3" }
+networks:
+  ism:
+    external: true
+    name: supabase-ism_default

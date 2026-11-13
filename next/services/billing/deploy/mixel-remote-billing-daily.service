@@ -1,0 +1,12 @@
+[Unit]
+Description=Mixel Remote billing: expire trials, remove devices of tenants read-only for 30 days
+After=docker.service network-online.target
+Wants=network-online.target
+OnFailure=notify-failure@%n.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/default/mixel-remote-billing-daily
+ExecStart=/usr/local/sbin/mixel-remote-billing-daily.sh
+User=root
+Group=root
