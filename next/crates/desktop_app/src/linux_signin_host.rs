@@ -191,7 +191,7 @@ struct Install {
 }
 
 fn decode_hex(hex: &str) -> Result<Vec<u8>, String> {
-    if hex.len() > 8192 || hex.len() % 2 != 0 {
+    if hex.len() > 8192 || !hex.len().is_multiple_of(2) {
         return Err("Invalid settings".into());
     }
     (0..hex.len()).step_by(2).map(|index| u8::from_str_radix(&hex[index..index + 2], 16)).collect::<Result<_, _>>().map_err(|_| "Invalid settings".into())
@@ -323,7 +323,8 @@ pub fn decide(sessions: &[LoginSession]) -> Screen {
         return Screen::Waiting;
     }
     match sessions.iter().filter(local).find(|session| session.class == "greeter") {
-        Some(greeter) if greeter.kind == "x11" && greeter.display.starts_with(':') => Screen::Greeter(greeter.display.clone()),
+        // GDM leaves Display empty for its greeter: the service then finds it from the X server.
+        Some(greeter) if greeter.kind == "x11" && (greeter.display.is_empty() || greeter.display.starts_with(':')) => Screen::Greeter(greeter.display.clone()),
         Some(greeter) if greeter.kind == "wayland" => Screen::Wayland,
         _ => Screen::Waiting,
     }
@@ -354,6 +355,36 @@ fn authority_files() -> Vec<PathBuf> {
     found
 }
 
+/// The display of a running X server whose `-auth` file is `authority`, read from the
+/// environment of a program on it (GDM starts its X server with `-displayfd`, so no
+/// command line names the display).
+fn display_of(authorities: &[PathBuf]) -> Option<String> {
+    let entries = std::fs::read_dir("/proc").ok()?;
+    for entry in entries.flatten() {
+        if !entry.file_name().to_string_lossy().chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        let Ok(environment) = std::fs::read(entry.path().join("environ")) else { continue };
+        let (mut display, mut authority) = (None, None);
+        for variable in environment.split(|byte| *byte == 0) {
+            let variable = String::from_utf8_lossy(variable);
+            if let Some(value) = variable.strip_prefix("DISPLAY=") {
+                display = Some(value.to_owned());
+            } else if let Some(value) = variable.strip_prefix("XAUTHORITY=") {
+                authority = Some(PathBuf::from(value));
+            }
+        }
+        if let (Some(display), Some(authority)) = (display, authority)
+            && display.starts_with(':')
+            && display.len() <= 8
+            && authorities.contains(&authority)
+        {
+            return Some(display);
+        }
+    }
+    None
+}
+
 fn write_state(state: &str) {
     let _ = write_mode(&state_path(), state.as_bytes(), 0o644);
 }
@@ -369,6 +400,7 @@ pub fn run_service() -> Result<(), String> {
     loop {
         let screen = decide(&sessions());
         let wanted = match &screen {
+            Screen::Greeter(display) if display.is_empty() => display_of(&authority_files()),
             Screen::Greeter(display) => Some(display.clone()),
             _ => None,
         };
@@ -508,6 +540,8 @@ mod tests {
         assert_eq!(decide(&[session("greeter", "x11", ":0", "online"), ssh]), Screen::Greeter(":0".into()));
         assert_eq!(decide(&[session("greeter", "wayland", "", "online")]), Screen::Wayland);
         assert_eq!(decide(&[]), Screen::Waiting);
+        // GDM: an X11 greeter without a Display entry is still shared (the display is looked up).
+        assert_eq!(decide(&[session("greeter", "x11", "", "active")]), Screen::Greeter(String::new()));
         let mut other_seat = session("greeter", "x11", ":2", "online");
         other_seat.seat = "seat1".into();
         assert_eq!(decide(&[other_seat]), Screen::Waiting);

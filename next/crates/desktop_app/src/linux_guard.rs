@@ -29,10 +29,12 @@ pub fn x11_available() -> bool {
     !crate::wayland_portal::available() && std::env::var_os("DISPLAY").is_some_and(|value| !value.is_empty())
 }
 
+/// One display output's colour table: CRTC, red, green, blue.
+type ColourTable = (u32, Vec<u16>, Vec<u16>, Vec<u16>);
 #[derive(Default)]
 struct State {
     /// Colour tables before the screen went dark, per display output.
-    gamma: Option<Vec<(u32, Vec<u16>, Vec<u16>, Vec<u16>)>>,
+    gamma: Option<Vec<ColourTable>>,
     /// Input devices switched off.
     blocked: Vec<u16>,
     watchdog: Option<std::process::Child>,

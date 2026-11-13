@@ -405,9 +405,11 @@ mod win {
 }
 
 /// The text on the privacy screen.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 const COVER_TEXT: &str = "Mixel Remote · A technician is working on this computer";
 
 /// The display the technician sees, to place the pointer on it (macOS and X11: from the source).
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 static SHARED_SOURCE: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
 
 /// Remembers the shared capture source (`display:<id>` on a Mac, `x11:<screen>:<root>` on Linux).
@@ -419,6 +421,7 @@ pub fn set_shared_source(source: &str) {
 }
 
 /// Where a point of the shared picture (0..65535 both ways) lies on a display rectangle.
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 pub fn place(point: (u16, u16), left: f64, top: f64, width: f64, height: f64) -> (f64, f64) {
     (
         left + f64::from(point.0) * (width - 1.0).max(0.0) / 65535.0,
