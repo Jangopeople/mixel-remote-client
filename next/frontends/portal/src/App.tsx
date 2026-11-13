@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react';
 import { BrowserRouter, Route, Routes } from 'react-router-dom';
 import { I18nProvider } from './i18n';
 import { ThemeProvider } from './lib/theme';
@@ -13,8 +14,12 @@ import { Team } from './pages/Team';
 import { Settings } from './pages/Settings';
 import { Account, Billing } from './pages/Account';
 import { Status } from './pages/Status';
-import { LegalDocument, LegalIndex } from './pages/Legal';
 import { Deleted } from './pages/DataDeletion';
+import { Spinner } from './components/ui';
+
+// The legal texts (four documents in four languages) load only when a legal page is opened.
+const LegalIndex = lazy(() => import('./pages/Legal').then((module) => ({ default: module.LegalIndex })));
+const LegalDocument = lazy(() => import('./pages/Legal').then((module) => ({ default: module.LegalDocument })));
 
 export function App() {
   return (
@@ -32,8 +37,8 @@ export function App() {
               <Route path="/signup/finish" element={<SignupFinish />} />
               <Route path="/auth/callback" element={<AuthCallback />} />
               <Route path="/invite" element={<Invite />} />
-              <Route path="/legal" element={<LegalIndex />} />
-              <Route path="/legal/:doc" element={<LegalDocument />} />
+              <Route path="/legal" element={<Suspense fallback={<Spinner />}><LegalIndex /></Suspense>} />
+              <Route path="/legal/:doc" element={<Suspense fallback={<Spinner />}><LegalDocument /></Suspense>} />
               <Route path="/deleted" element={<Deleted />} />
               <Route path="/app" element={<RequireAuth><TenantProvider /></RequireAuth>}>
                 <Route index element={<Dashboard />} />
