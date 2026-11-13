@@ -165,7 +165,11 @@ enum Snapshot {
         let root = view.frame(width: size.width, height: size.height).tint(Theme.brand)
         let controller = UIHostingController(rootView: root)
         controller.overrideUserInterfaceStyle = dark ? .dark : .light
-        let window = UIWindow(frame: CGRect(origin: .zero, size: size))
+        // A window on the test host's scene draws like on a device (a window without a scene draws nothing).
+        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        let window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow(frame: CGRect(origin: .zero, size: size))
+        window.frame = CGRect(origin: .zero, size: size)
+        FileHandle.standardError.write(Data("scene: \(scene != nil)\n".utf8))
         window.overrideUserInterfaceStyle = dark ? .dark : .light
         window.rootViewController = controller
         window.isHidden = false

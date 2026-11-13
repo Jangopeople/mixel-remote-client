@@ -43,6 +43,15 @@ final class PhoneShell: NSObject, ObservableObject, ASWebAuthenticationPresentat
 
     override init() {
         super.init()
+        #if DEBUG
+        // Screenshots: `-MixelDemo devices` shows a scripted state instead of the real engine.
+        let arguments = ProcessInfo.processInfo.arguments
+        if let index = arguments.firstIndex(of: "-MixelDemo"), index + 1 < arguments.count {
+            let screen = arguments[index + 1]
+            Task { @MainActor in self.model = await DemoFixtures.screen(screen) }
+            return
+        }
+        #endif
         do {
             let engine = try CoreEngine(dataDirectory: CoreEngine.defaultDirectory())
             let app = AppModel(engine: engine)
