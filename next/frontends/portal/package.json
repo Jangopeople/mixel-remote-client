@@ -1,0 +1,39 @@
+{
+  "name": "mixel-remote-portal",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Mixel Remote web portal and sign-up (remote.mixel.ch)",
+  "scripts": {
+    "dev": "vite",
+    "build": "npm run typecheck && vite build",
+    "typecheck": "tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.worker.json --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "e2e": "playwright test",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.49.4",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-router-dom": "6.30.1"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "4.20250620.0",
+    "@eslint/js": "9.29.0",
+    "@playwright/test": "1.63.0",
+    "@types/node": "22.15.32",
+    "@types/react": "18.3.23",
+    "@types/react-dom": "18.3.7",
+    "@vitejs/plugin-react": "4.5.2",
+    "eslint": "9.29.0",
+    "eslint-plugin-react-hooks": "5.2.0",
+    "globals": "16.2.0",
+    "jsdom": "26.1.0",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.46.0",
+    "vite": "6.3.5",
+    "vitest": "3.2.4"
+  }
+}

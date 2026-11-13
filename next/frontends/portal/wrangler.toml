@@ -1,0 +1,18 @@
+# Mixel Remote portal on remote.mixel.ch (Cloudflare Worker with static assets).
+# Deploy from the Mac: npm run build && npx wrangler deploy (see README.md).
+name = "mixel-remote-portal"
+main = "worker/index.ts"
+compatibility_date = "2026-10-01"
+workers_dev = false
+routes = [
+  { pattern = "remote.mixel.ch/*", zone_name = "mixel.ch" },
+]
+
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*"]
+
+[observability]
+enabled = true

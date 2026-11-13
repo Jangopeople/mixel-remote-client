@@ -90,8 +90,37 @@ async function principal() {
     if (!factor) throw new Problem(t('Set up an authenticator app for your account in Mixel ISM, then open this page again.'));
     const problem = new Problem(t('Enter the code from your authenticator app.')); problem.factor = factor.id; problem.factorName = typeof factor.friendly_name === 'string' ? factor.friendly_name.slice(0, 60) : ''; throw problem;
   }
-  if (!staff) throw new Problem(t('Remote control in the browser is for Mixel team members and personal accounts.'));
+  if (!staff) return companyPrincipal(row, user, tokenClaims);
   return { profile: row.id, tenant: null, staff: true, personal: false, name: row.name || user.email };
+}
+// A member of a Mixel Remote company (remote.mixel.ch). The database decides what they reach: owners
+// and admins every device of the company, technicians the devices of their groups and those in no
+// group, members only devices they added. Members cannot start sessions (the connection policy
+// admits owners, admins and technicians only), so they see their devices without Connect.
+async function companyPrincipal(row, user, tokenClaims) {
+  const companies = await api('/rest/v1/rpc/remote_saas_my_tenants', { body: {} }).catch(() => []);
+  const company = Array.isArray(companies) ? companies[0] : null;
+  if (!company || company.organization_id !== row.organization_id) throw new Problem(t('Remote control in the browser is for Mixel team members, Mixel Remote company accounts and personal accounts.'));
+  // The company's sign-in rules (required second step, allowed methods) are checked by the database.
+  const token = await accessToken();
+  const response = await http(`${CONFIG.identity}/rest/v1/rpc/remote_saas_tenant_overview`, {
+    method: 'POST', headers: { apikey: CONFIG.apiKey, authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ tenant: company.tenant_id }),
+  });
+  if (!response.ok) {
+    const failure = await response.json().catch(() => ({}));
+    const message = String(failure && failure.message || '');
+    if (/two-step sign-in is required/i.test(message)) {
+      const factor = (user.factors || []).find(entry => entry.status === 'verified' && entry.factor_type === 'totp');
+      if (!factor || tokenClaims.aal === 'aal2') throw new Problem(t('Your company requires 2-step login. Set it up at remote.mixel.ch, then open this page again.'));
+      const problem = new Problem(t('Enter the code from your authenticator app.')); problem.factor = factor.id; problem.company = true; problem.factorName = typeof factor.friendly_name === 'string' ? factor.friendly_name.slice(0, 60) : ''; throw problem;
+    }
+    if (/sign-in method is not allowed/i.test(message)) throw new Problem(t('Your company does not allow the sign-in method you used. Sign out and sign in another way.'));
+    if (/read-only/i.test(message)) throw new Problem(t('Your company’s Mixel Remote account is read-only.'));
+    throw new Problem(t('The Mixel account service refused the request.'));
+  }
+  const overview = await response.json();
+  return { profile: row.id, tenant: row.organization_id, staff: false, personal: false, company: { id: company.tenant_id, name: company.name, role: overview.role }, name: `${row.name || user.email} · ${company.name}` };
 }
 
 // ---------- this browser as a registered device ----------
@@ -130,6 +159,7 @@ async function register(company, name) {
   const enrol = async () => {
     const key = `\\x${hex(device.public_key())}`;
     if (who.personal) return api('/rest/v1/rpc/remote_register_personal_device', { body: { device_name: name, device_os: os, key_material: key }, failure });
+    if (who.company) return api('/rest/v1/rpc/remote_saas_add_this_device', { body: { tenant: who.company.id, device_name: name, device_os: os, key_material: key }, failure });
     const target = await api('/rest/v1/rpc/remote_add_device', { body: { target_client: company, device_name: name, device_os: os }, failure });
     return api('/rest/v1/rpc/remote_enroll_device', { body: { target, key_material: key }, headers: { accept: 'application/vnd.pgrst.object+json' }, failure });
   };
@@ -220,6 +250,10 @@ async function keepAwake(on) {
 // ---------- devices and requests ----------
 async function directory(query) {
   if (who.personal) return (await api('/rest/v1/rpc/remote_personal_devices')).filter(row => !row.revoked_at).map(row => ({ id: row.connection_id, name: row.name, os: row.os }));
+  if (who.company) {
+    const rows = await api('/rest/v1/rpc/remote_saas_devices', { body: { tenant: who.company.id, in_group: null, search: query ? query.slice(0, 80) : null } });
+    return rows.filter(row => row.connection_id && !row.revoked).slice(0, 51).map(row => ({ id: row.connection_id, name: row.name, os: row.os }));
+  }
   const filter = query ? `&devices.name=ilike.*${encodeURIComponent(query.replace(/[*,()]/g, ''))}*` : '';
   const rows = await api(`/rest/v1/remote_device_enrollments?select=device_id,connection_id,generation,devices!inner(id,name,os)&revoked_at=is.null&order=connection_id.asc&limit=51${filter}`);
   return rows.map(row => ({ id: row.connection_id, name: row.devices.name, os: row.devices.os }));
@@ -551,13 +585,16 @@ function renderToolbar(session) {
   $('view-only').hidden = session.permissions.control;
   for (const id of ['tool-keyboard', 'tool-right', 'tool-keys']) $(id).hidden = !session.permissions.control;
 }
+const viewOnlyMember = () => !!(who && who.company && who.company.role === 'member');
 async function renderHome() {
-  $('register').hidden = !!enrollment || !who; $('connect').hidden = !enrollment;
+  const member = viewOnlyMember();
+  $('register').hidden = !!enrollment || !who || member; $('connect').hidden = !enrollment && !member;
   $('support').hidden = !(who && who.staff && enrollment);
-  if (!enrollment || active) return;
-  $('own-id').textContent = String(enrollment.connection_id).replace(/(\d{3})(?=\d)/g, '$1 ');
+  $('member-note').hidden = !member; $('connect-form').hidden = member; $('own-line').hidden = member;
+  if ((!enrollment && !member) || active) return;
+  if (enrollment) $('own-id').textContent = String(enrollment.connection_id).replace(/(\d{3})(?=\d)/g, '$1 ');
   try {
-    const devices = (await directory($('search').value.trim())).filter(entry => entry.id !== enrollment.connection_id);
+    const devices = (await directory($('search').value.trim())).filter(entry => !enrollment || entry.id !== enrollment.connection_id);
     let reachable = [];
     if (online && devices.length) reachable = await presence(devices.slice(0, 64).map(entry => entry.id));
     const list = $('devices'); list.replaceChildren();
@@ -569,7 +606,8 @@ async function renderHome() {
       if (reachable.includes(entry.id)) item.classList.add('online');
       item.append(name, detail);
       // One tap connects; the one-time password and unattended choice above still apply.
-      item.onclick = () => { $('remote-id').value = String(entry.id); $('connect-form').requestSubmit(); };
+      if (member) item.disabled = true;
+      else item.onclick = () => { $('remote-id').value = String(entry.id); $('connect-form').requestSubmit(); };
       list.appendChild(item);
     }
     $('no-devices').hidden = devices.length > 0;
@@ -615,6 +653,7 @@ async function start() {
       // Say which entry of the authenticator app is meant; people have several.
       $('mfa-label').textContent = problem.factorName ? `${t('Open your authenticator app and enter the 6-digit code shown for:')} ${problem.factorName}` : t('Enter the code from your authenticator app.');
       $('signout').hidden = !CONFIG.signInAction;
+      if (problem.company) $('mfa-why').textContent = t('Your company requires a second step. Enter the code of your Mixel Remote account.');
       $('mfa').hidden = false; $('mfa-code').focus(); return;
     }
     $('signin').hidden = false;
@@ -627,6 +666,7 @@ async function start() {
   $('signout').hidden = !CONFIG.signInAction;
   $('meet').hidden = false;
   await loadDevice();
+  if (viewOnlyMember()) { renderHome(); return; }
   if (!enrollment) {
     $('register-name').value = browserName().name;
     if (who.staff) {
