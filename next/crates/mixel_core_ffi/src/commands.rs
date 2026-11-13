@@ -412,6 +412,8 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
             out(remote.decide(args.get("decision")?).await?)
         }
         "remote_clipboard" => out(remote.clipboard(args.get("session")?, args.get("push")?).await?),
+        // Drawing on the remote screen (view-only sessions too): true when queued.
+        "remote_draw" => out(remote.draw(args.get("session")?, args.get("message")?).await?),
         "remote_chat_messages" => {
             let session: Uuid = args.get("session")?;
             remote.require_chat_session(session).await?;
@@ -1040,6 +1042,19 @@ mod tests {
             "Start a permitted recording after the remote screen appears"
         );
         assert!(dispatch(&context, "remote_file_send", &format!(r#"{{"consent":"{session}","path":"x"}}"#)).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn drawing_needs_an_active_session_and_a_valid_message() {
+        let context = context();
+        let session = Uuid::new_v4();
+        let stroke = r#"{"kind":"stroke","id":1,"tool":"arrow","color":2,"width":3,"points":[[1,2],[300,400]],"done":true}"#;
+        assert_eq!(dispatch(&context, "remote_draw", &format!(r#"{{"session":"{session}","message":{stroke}}}"#)).await.unwrap(), "false");
+        assert_eq!(dispatch(&context, "remote_draw", &format!(r#"{{"session":"{session}","message":{{"kind":"clear"}}}}"#)).await.unwrap(), "false");
+        let bad = stroke.replace(r#""color":2"#, r#""color":7"#);
+        assert!(dispatch(&context, "remote_draw", &format!(r#"{{"session":"{session}","message":{bad}}}"#)).await.is_err());
+        assert!(dispatch(&context, "remote_draw", &format!(r#"{{"session":"{session}","message":{{"kind":"erase"}}}}"#)).await.is_err());
+        assert!(dispatch(&context, "remote_draw", &format!(r#"{{"session":"{session}"}}"#)).await.is_err());
     }
 
     #[tokio::test]

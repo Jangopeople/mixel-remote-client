@@ -1667,6 +1667,18 @@ async fn remote_input(
     main_window(&window)?;
     state.input(session, event).await
 }
+/// Draws on the remote screen (a pen stroke, undo or clear); needs only a view of the screen.
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[tauri::command]
+async fn remote_draw(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, remote_session::RemoteSession>,
+    session: uuid::Uuid,
+    message: core_protocol::annotation::Message,
+) -> Result<bool, String> {
+    main_window(&window)?;
+    state.draw(session, message).await
+}
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 #[tauri::command]
 async fn remote_clipboard(
@@ -2306,6 +2318,7 @@ fn main() {
             remote_unattended,
             remote_decide,
             remote_input,
+            remote_draw,
             remote_clipboard,
             remote_chat_messages,
             remote_chat_send,
@@ -2435,6 +2448,7 @@ fn main() {
             remote_unattended,
             remote_decide,
             remote_input,
+            remote_draw,
             remote_clipboard,
             remote_chat_messages,
             remote_chat_send,
