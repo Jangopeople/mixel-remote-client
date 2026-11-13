@@ -40,6 +40,20 @@ pub(crate) struct SupportPair {
     pub host: DeviceBinding,
 }
 
+#[cfg(test)]
+impl SupportPair {
+    pub(crate) fn sample() -> Self {
+        let binding = |n: u128| DeviceBinding {
+            profile: Uuid::from_u128(n),
+            device: Uuid::from_u128(n + 1),
+            generation: "1".into(),
+            connection_id: 123_456_789,
+            public_key: "00".repeat(32),
+        };
+        Self { controller: binding(1), host: binding(10) }
+    }
+}
+
 /// Concurrent-session limit of a Remote SaaS tenant (its plan, or 0 while it may hold none).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SessionLimit {

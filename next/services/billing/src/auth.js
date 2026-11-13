@@ -18,6 +18,11 @@ export class AuthError extends Error {
  * @typedef {(bearer: string, tenant: string) => Promise<BillingView>} Authorize
  */
 
+// SQL error codes whose message is written for people (remote_saas.actor and the billing RPC):
+// insufficient_privilege, read_only_sql_transaction, raise_exception. Any other refusal (PostgREST
+// PGRST*, SQL syntax or type errors) would show schema internals, so the caller gets a generic text.
+const PUBLIC_CODES = new Set(["42501", "25006", "P0001"]);
+
 /**
  * @param {{ postgrestUrl: string, anonKey?: string, fetchImpl?: typeof fetch }} options
  * @returns {Authorize}
@@ -36,7 +41,8 @@ export function createAuthorize({ postgrestUrl, anonKey, fetchImpl = fetch }) {
     const body = await response.json().catch(() => null);
     if (response.ok && body && (body.role === "owner" || body.role === "admin")) return body;
     if (response.status === 401) throw new AuthError(401, "Sign in again");
-    const message = typeof body?.message === "string" ? body.message : "Not allowed for this company";
+    const message = typeof body?.message === "string" && PUBLIC_CODES.has(String(body?.code)) ? body.message.slice(0, 200)
+      : "Not allowed for this company";
     if (response.status >= 500) throw new AuthError(503, "Sign-in check unavailable, please try again");
     throw new AuthError(403, message);
   };

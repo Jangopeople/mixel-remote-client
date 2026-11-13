@@ -112,6 +112,14 @@ describe('links and formatting', () => {
     expect(safeNext('https://evil.example')).toBe('/app');
     expect(safeNext(null)).toBe('/app');
   });
+  it('does not follow paths the URL parser turns into another site (tab, newline, other whitespace)', () => {
+    // new URL('/\t/evil.example', origin) is https://evil.example/: browsers drop tabs and newlines.
+    for (const next of ['/\t/evil.example', '/\n/evil.example', '/\r/evil.example', '/\t\\evil.example', '/ /evil.example', '/\u0000/x']) {
+      expect(safeNext(next), JSON.stringify(next)).toBe('/app');
+    }
+    expect(safeNext('/app/devices?filter=online#top')).toBe('/app/devices?filter=online#top');
+    expect(safeNext('/invite')).toBe('/invite');
+  });
   it('builds a single-quoted deploy command', () => {
     const command = windowsDeployCommand("mrt_abc'def", 'https://store-api.mixel.ch/x/Mixel-Remote.exe');
     expect(command).toContain("$t='mrt_abc''def'");

@@ -643,7 +643,7 @@ impl Registry {
                         .sessions
                         .iter()
                         .filter_map(|(id, room)| {
-                            (room.host == from && room.unattended).then_some(*id)
+                            (room.authorized().1 == from && room.unattended).then_some(*id)
                         })
                         .collect();
                     for room in rooms {
@@ -668,7 +668,7 @@ impl Registry {
                     let rooms: Vec<_> = self
                         .sessions
                         .iter()
-                        .filter_map(|(id, room)| (room.host == from && !room.unattended).then_some(*id))
+                        .filter_map(|(id, room)| (room.authorized().1 == from && !room.unattended).then_some(*id))
                         .collect();
                     for room in rooms {
                         self.close(room, CloseReason::Requested, now);
@@ -998,7 +998,10 @@ impl Registry {
                 if self.sessions.values().any(|room| room.group == group && room.joined.is_some()) {
                     return Err(ErrorCode::Busy);
                 }
-                let (reversed, limit_tenant) = (!s.reversed, s.limit_tenant);
+                // An unattended session stays unattended on both sides of the switch: the policy
+                // keeps checking the unattended rules and the helped computer can still end it by
+                // turning unattended access off.
+                let (reversed, limit_tenant, unattended) = (!s.reversed, s.limit_tenant, s.unattended);
                 let requester = self.peers[&host].principal.clone();
                 let replacement = Uuid::new_v4();
                 // The old session ends first (its pictures stop), then the switched one asks.
@@ -1008,7 +1011,7 @@ impl Registry {
                     Session {
                         controller: host,
                         host: controller,
-                        unattended: false,
+                        unattended,
                         phase: Phase::Consent,
                         deadline: now + Duration::from_secs(90),
                         identity_from_controller: false,
@@ -1759,6 +1762,57 @@ mod rotation_tests {
         assert!(registry.controlled_policy_checks(222_222_222, host, 100).is_empty());
         // A policy revocation for the technician ends the switched session too.
         registry.policy_revoked(reversed, (111_111_111, technician), now);
+        assert_eq!(registry.counts().1, 0);
+    }
+
+    /// Switching sides in an unattended session (nobody at the helped computer) must not turn it
+    /// into an "attended" one: the switched sessions keep the unattended rules (policy checks and
+    /// the helped computer turning unattended access off ends them).
+    #[test]
+    fn switching_sides_keeps_an_unattended_session_unattended() {
+        let mut registry = Registry::default();
+        let now = Instant::now();
+        let (technician, mut technician_events) = peer(&mut registry, 111_111_111, 10);
+        let (host, mut host_events) = peer(&mut registry, 222_222_222, 11);
+        features(&mut registry, 111_111_111, technician);
+        features(&mut registry, 222_222_222, host);
+        registry.handle(222_222_222, host, ClientMessage::ConfigureUnattended { enabled: true }, now).unwrap();
+        registry.handle(111_111_111, technician, ClientMessage::RequestUnattended { host: 222_222_222 }, now).unwrap();
+        let Some(ServerMessage::Requested { session }) = drain(&mut technician_events).pop() else { panic!() };
+        connect(&mut registry, now, (111_111_111, technician), (222_222_222, host), session);
+        drain(&mut host_events);
+        // Switch: the helped computer views the technician's screen.
+        registry.handle(111_111_111, technician, ClientMessage::SwitchSides { session }, now).unwrap();
+        let Some(ServerMessage::Switched { session: reversed, .. }) = drain(&mut host_events).pop() else { panic!() };
+        let check = registry
+            .policy_for_message(111_111_111, technician, &ClientMessage::Decide { session: reversed, accept: true }, 100)
+            .unwrap();
+        assert!(check.unattended, "the switched session is still checked under the unattended rules");
+        connect(&mut registry, now, (222_222_222, host), (111_111_111, technician), reversed);
+        drain(&mut technician_events);
+        // Switch back: the helped computer is shown again (its app restores the earlier grants).
+        registry.handle(222_222_222, host, ClientMessage::SwitchSides { session: reversed }, now).unwrap();
+        let Some(ServerMessage::Switched { session: back, .. }) = drain(&mut technician_events).pop() else { panic!() };
+        let check = registry
+            .policy_for_message(222_222_222, host, &ClientMessage::Decide { session: back, accept: true }, 100)
+            .unwrap();
+        assert!(check.unattended, "switching back restores an unattended session, not an attended one");
+        connect(&mut registry, now, (111_111_111, technician), (222_222_222, host), back);
+        assert!(registry.controlled_policy_checks(111_111_111, technician, 100).iter().all(|(_, check)| check.as_ref().is_some_and(|check| check.unattended)));
+        // Turning unattended access off at the helped computer ends it.
+        registry.handle(222_222_222, host, ClientMessage::ConfigureUnattended { enabled: false }, now).unwrap();
+        assert_eq!(registry.counts().1, 0);
+
+        // Also while the sides are switched.
+        registry.handle(222_222_222, host, ClientMessage::ConfigureUnattended { enabled: true }, now).unwrap();
+        registry.handle(111_111_111, technician, ClientMessage::RequestUnattended { host: 222_222_222 }, now).unwrap();
+        let Some(ServerMessage::Requested { session }) = drain(&mut technician_events).pop() else { panic!() };
+        connect(&mut registry, now, (111_111_111, technician), (222_222_222, host), session);
+        drain(&mut host_events);
+        registry.handle(111_111_111, technician, ClientMessage::SwitchSides { session }, now).unwrap();
+        let Some(ServerMessage::Switched { session: reversed, .. }) = drain(&mut host_events).pop() else { panic!() };
+        connect(&mut registry, now, (222_222_222, host), (111_111_111, technician), reversed);
+        registry.handle(222_222_222, host, ClientMessage::ConfigureUnattended { enabled: false }, now).unwrap();
         assert_eq!(registry.counts().1, 0);
     }
 

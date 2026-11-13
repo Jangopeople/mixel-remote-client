@@ -64,6 +64,9 @@ pub struct AppState {
     turn: Option<Arc<crate::turn::TurnConfig>>,
     policy: Option<Arc<SupportPolicy>>,
     policy_slots: Arc<Semaphore>,
+    /// Separate slots for re-checking running sessions, so a flood of new requests cannot make
+    /// the re-checks fail and end other companies' sessions.
+    recheck_slots: Arc<Semaphore>,
 }
 impl AppState {
     pub fn with_turn(mut self, config: Option<crate::turn::TurnConfig>) -> Self {
@@ -86,6 +89,19 @@ impl AppState {
         policy.allows(pair, unattended, accept_session).await
     }
 
+    /// Periodic re-check of a running session. A refusal, an error or a timeout of the policy
+    /// service ends the session (fail closed).
+    async fn still_allowed(&self, pair: &SupportPair, unattended: bool) -> bool {
+        let Some(policy) = self.policy.as_ref() else {
+            return false;
+        };
+        // Waiting briefly for a slot is fine: re-checks run every 10 s. No slot in time: fail closed.
+        let Ok(Ok(_slot)) = tokio::time::timeout(Duration::from_secs(5), self.recheck_slots.acquire()).await else {
+            return false;
+        };
+        policy.allows(pair, unattended, None).await.is_some()
+    }
+
     pub fn new(auth: Arc<dyn Authenticator>, origins: HashSet<String>) -> Self {
         Self {
             registry: Arc::new(Mutex::new(Registry::default())),
@@ -96,6 +112,7 @@ impl AppState {
             turn: None,
             policy: None,
             policy_slots: Arc::new(Semaphore::new(64)),
+            recheck_slots: Arc::new(Semaphore::new(64)),
         }
     }
 }
@@ -276,7 +293,7 @@ async fn connection(mut socket: WebSocket, state: AppState) {
                     let state = &state;
                     async move {
                         let allowed = match check {
-                            Some(check) => state.support_allowed(&check.pair, check.unattended, None).await.is_some(),
+                            Some(check) => state.still_allowed(&check.pair, check.unattended).await,
                             None => false,
                         };
                         (!allowed).then_some(session)
@@ -466,6 +483,52 @@ async fn connection(mut socket: WebSocket, state: AppState) {
         registry.disconnect(id, generation);
     }
     let _ = tokio::time::timeout(Duration::from_secs(1), socket.close()).await;
+}
+
+#[cfg(test)]
+mod recheck_tests {
+    use super::*;
+
+    async fn policy_service(answer: StatusCode) -> (reqwest::Url, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = Router::new().route(
+            "/api/internal/remote/authorize",
+            axum::routing::post(move || async move { answer }),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (format!("http://{address}/api/internal/remote/authorize").parse().unwrap(), server)
+    }
+    struct NoAuth;
+    impl Authenticator for NoAuth {
+        fn authenticate<'a>(&'a self, _token: &'a str) -> AuthFuture<'a, Principal> {
+            Box::pin(async { Err(AuthError) })
+        }
+    }
+
+    /// New requests (which any signed-in peer can send many of) must not starve the re-checks of
+    /// running sessions: a re-check that cannot get a policy slot would end other companies'
+    /// sessions although the policy still allows them.
+    #[tokio::test]
+    async fn busy_request_checks_do_not_end_running_sessions() {
+        let (url, server) = policy_service(StatusCode::NO_CONTENT).await;
+        let state = AppState::new(Arc::new(NoAuth), HashSet::new())
+            .with_support_policy(SupportPolicy::new(url, "a".repeat(64)).unwrap());
+        let pair = crate::support_policy::SupportPair::sample();
+        // Every request slot is taken by in-flight checks of new requests.
+        let _taken = state.policy_slots.clone().try_acquire_many_owned(64).unwrap();
+        assert!(state.support_allowed(&pair, false, None).await.is_none(), "new requests fail closed");
+        assert!(state.still_allowed(&pair, false).await, "a running session the policy allows stays");
+        server.abort();
+        // The policy service refusing or being unreachable still ends the session.
+        let (url, server) = policy_service(StatusCode::FORBIDDEN).await;
+        let refused = AppState::new(Arc::new(NoAuth), HashSet::new())
+            .with_support_policy(SupportPolicy::new(url.clone(), "a".repeat(64)).unwrap());
+        assert!(!refused.still_allowed(&pair, false).await);
+        server.abort();
+        let _ = server.await;
+        assert!(!refused.still_allowed(&pair, false).await, "unreachable policy service fails closed");
+    }
 }
 
 #[cfg(test)]

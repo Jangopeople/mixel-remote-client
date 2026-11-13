@@ -2469,6 +2469,9 @@ async fn run(
                             let Some((key,ticket,source,confirm,primary_control))=checked else {send(&mut socket,ClientMessage::Decide{session,accept:false}).await?;continue;};
                             let expires=Arc::new(AtomicU64::new(ticket.expires_at));
                             let mut colleague=Peer{id:session,remote:requester_connection,host:true,key,source,#[cfg(target_os = "linux")] portal,confirm,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:Some(ticket),expires,relay_expires:0,restart_pending:None,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4(),joined:true,switched:false};
+                            if unattended && !unattended_join_allowed(&state.status().await) {
+                                send(&mut socket,ClientMessage::Decide{session,accept:false}).await?;continue;
+                            }
                             if unattended {
                                 // Nobody at the computer: the company's rules for unattended access decide
                                 // (checked by the connection service); keyboard and mouse as for the first technician.
@@ -2656,6 +2659,35 @@ async fn run(
     cancel.store(true, Ordering::Release);
     let _ = tokio::time::timeout(Duration::from_secs(2), socket.close(None)).await;
     result
+}
+
+/// A colleague's join of an unattended session is accepted without asking only while this computer
+/// itself allows unattended access and the running session is an unattended one. The broker's
+/// `unattended` flag alone is not enough: it must never turn an attended session (someone at the
+/// computer decides) into one a colleague enters silently.
+fn unattended_join_allowed(status: &Status) -> bool {
+    status.unattended_enabled && status.unattended_session && !status.code_required
+}
+
+#[cfg(test)]
+mod join_tests {
+    use super::*;
+    #[test]
+    fn an_unattended_join_needs_local_unattended_access_and_an_unattended_session() {
+        let mut status = RemoteSession::default().0.try_lock().unwrap().status.clone();
+        status.unattended_enabled = true;
+        status.unattended_session = true;
+        assert!(unattended_join_allowed(&status));
+        for change in [
+            (|s: &mut Status| s.unattended_session = false) as fn(&mut Status),
+            |s: &mut Status| s.unattended_enabled = false,
+            |s: &mut Status| s.code_required = true,
+        ] {
+            let mut refused = status.clone();
+            change(&mut refused);
+            assert!(!unattended_join_allowed(&refused));
+        }
+    }
 }
 
 #[cfg(test)]

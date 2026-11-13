@@ -78,7 +78,7 @@ function parseJson(raw) {
 /** @param {unknown} path @param {string} fallback */
 function returnPath(path, fallback) {
   if (path === undefined || path === null || path === "") return fallback;
-  if (typeof path !== "string" || path.length > 300 || !/^\/(?![/\\])[A-Za-z0-9\-._~/?&=%#]*$/.test(path)) {
+  if (typeof path !== "string" || path.length > 300 || !/^\/(?![/\\])[A-Za-z0-9\-._~/?&=%]*$/.test(path)) {
     throw new HttpError(400, "bad_return_path", "return_path must be a path on this site");
   }
   return path;
@@ -114,30 +114,43 @@ function pricesFor(ctx, plan, interval) {
  * @returns {(req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse) => Promise<void>}
  */
 export function createApp({ db, stripe, authorize, config, now = () => Date.now(), log = (e) => console.log(JSON.stringify(e)), mail = null }) {
+  // Two windows: one before the sign-in check, keyed by the presented token (it only bounds the
+  // PostgREST calls one token can cause), and one after it, keyed by the tenant, which limits the
+  // Stripe calls per company however many tokens its admins mint. Unauthenticated traffic only
+  // ever fills the first map, so it cannot reset the per-company limit.
   /** @type {Map<string, number[]>} */
-  const hits = new Map();
+  const tokenHits = new Map();
+  /** @type {Map<string, number[]>} */
+  const tenantHits = new Map();
 
-  /** @param {string} key */
-  function rateLimit(key) {
+  /** @param {Map<string, number[]>} hits @param {string} key */
+  function rateLimit(hits, key) {
     const t = now();
     const recent = (hits.get(key) ?? []).filter((x) => t - x < 60000);
     if (recent.length >= config.rateLimitPerMinute) throw new HttpError(429, "rate_limited", "Too many requests, try again in a minute");
     recent.push(t);
     hits.set(key, recent);
-    if (hits.size > 10000) hits.clear();
+    if (hits.size > 10000) {
+      for (const [k, times] of hits) if (!times.some((x) => t - x < 60000)) hits.delete(k);
+      if (hits === tokenHits && hits.size > 10000) hits.clear();
+    }
   }
 
   /** @param {import("node:http").IncomingMessage} req @param {string} tenant */
   async function caller(req, tenant) {
     const token = bearerToken(req.headers.authorization);
     if (!token) throw new HttpError(401, "sign_in", "Sign in first");
-    rateLimit(`${tenant}:${token.slice(-24)}`);
+    rateLimit(tokenHits, `${tenant}:${token.slice(-24)}`);
+    /** @type {import("./auth.js").BillingView} */
+    let view;
     try {
-      return await authorize(token, tenant);
+      view = await authorize(token, tenant);
     } catch (err) {
       if (err instanceof AuthError) throw new HttpError(err.status, err.status === 401 ? "sign_in" : "forbidden", err.message);
       throw err;
     }
+    rateLimit(tenantHits, tenant);
+    return view;
   }
 
   /** @param {string} tenant */

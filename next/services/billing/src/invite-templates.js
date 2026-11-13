@@ -96,6 +96,23 @@ function clean(value, max) {
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }
 
+/**
+ * Company and inviter names are chosen by whoever signs up, and the e-mail goes out from Mixel's own
+ * address. Mail clients turn anything that looks like a URL, domain or address into a link, so a
+ * name like "verify at https://evil.example" would put a working phishing link into a genuine
+ * Mixel e-mail. Schemes are dropped and dots and @ inside words become look-alikes that no client
+ * links ("Mixel.ch AG" reads "Mixel․ch AG"); ordinary names ("Müller & Co. AG") stay as they are.
+ * @param {string} value
+ */
+export function unlink(value) {
+  return value
+    .replace(/[a-z][a-z0-9+.-]*:\/\/+/gi, "")
+    .replace(/\b(www)\./gi, "$1․")
+    .replace(/(\S)[.．。](?=[\p{L}\p{N}])/gu, "$1․")
+    .replace(/(\S)[@＠](?=\S)/gu, "$1 (at) ")
+    .replace(/\s+/g, " ").trim();
+}
+
 /** @param {string} template @param {Record<string, string>} values */
 function fill(template, values) {
   return template.replace(/\{(\w+)\}/g, (_, key) => values[key] ?? "");
@@ -112,8 +129,8 @@ export function renderInvite(input) {
   const role = /** @type {Role} */ (["admin", "technician", "member"].includes(input.role) ? input.role : "member");
   if (!/^https:\/\/[^\s"'<>]+#mri_[A-Za-z0-9_-]{20,96}$/.test(input.link)) throw new Error("invalid invitation link");
   const plain = {
-    company: clean(input.company, 80),
-    inviter: clean(input.inviterName, 80),
+    company: unlink(clean(input.company, 80)),
+    inviter: unlink(clean(input.inviterName, 80)),
     inviterEmail: clean(input.inviterEmail, 254),
     email: clean(input.email, 254),
     role: s.roles[role],

@@ -223,7 +223,15 @@ export function tokenFromHash(hash: string): string | null {
 
 /** Only same-site relative paths are followed after sign-in. */
 export function safeNext(next: string | null | undefined, fallback = '/app'): string {
-  if (!next || !next.startsWith('/') || next.startsWith('//') || next.includes('\\')) return fallback;
+  // No whitespace or control characters: the URL parser drops tabs and newlines, so "/\t/x.example"
+  // would become "//x.example", another site (react-router falls back to location.assign on errors).
+  if (!next || !next.startsWith('/') || next.startsWith('//') || /[\\\s\p{Cc}]/u.test(next)) return fallback;
+  try {
+    const base = 'https://remote.mixel.ch';
+    if (new URL(next, base).origin !== base) return fallback;
+  } catch {
+    return fallback;
+  }
   return next;
 }
 

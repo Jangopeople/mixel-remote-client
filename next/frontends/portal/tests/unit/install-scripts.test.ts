@@ -24,6 +24,29 @@ describe('install scripts', () => {
     }
   });
 
+  it('refuse a token or channel with a second line (grep checks each line on its own)', () => {
+    for (const file of Object.values(scripts)) {
+      const token = run(file, `${TOKEN}\nanything else`);
+      expect(token.status, file).not.toBe(0);
+      expect(token.stderr, file).toMatch(/deploy token is missing or invalid/);
+      const channel = run(file, '--channel', 'stable\n../../elsewhere', TOKEN);
+      expect(channel.status, file).not.toBe(0);
+      expect(channel.stderr, file).toMatch(/invalid channel/);
+    }
+  });
+
+  it('do nothing when the download is cut off (curl | sh runs whatever arrived)', () => {
+    for (const file of Object.values(scripts)) {
+      const body = readFileSync(file, 'utf8');
+      expect(body.trimEnd().split('\n').at(-1), file).toBe('main "$@"');
+      for (const fraction of [0.3, 0.5, 0.7, 0.9, 0.99]) {
+        const cut = body.slice(0, Math.floor(body.length * fraction));
+        const result = spawnSync('sh', ['-s', '--', TOKEN], { input: cut, encoding: 'utf8', timeout: 10000 });
+        expect(`${result.stdout}${result.stderr}`, `${file} cut at ${fraction}`).not.toMatch(/Mixel Remote: /);
+      }
+    }
+  });
+
   it('need administrator rights to install (and say how)', () => {
     if (process.getuid?.() === 0) return;
     const linux = run(scripts.linux, TOKEN);
@@ -52,6 +75,10 @@ describe('install scripts', () => {
     expect(mac).toContain('shasum -a 256');
     expect(mac).toContain('launchctl asuser "$CONSOLE_UID"');
     for (const text of [linux, mac]) expect(text).toContain('MIN_VERSION="0.1.22"');
+    // The Mac manifest is not signed (no Ed25519 in the macOS openssl), so the minimum version is
+    // also checked on the code-signed bundle itself: a replayed old release is refused.
+    expect(mac).toMatch(/CFBundleShortVersionString[\s\S]*version_ok "\$BUNDLE_VERSION"/);
+    expect(mac.indexOf('BUNDLE_VERSION=')).toBeGreaterThan(mac.indexOf('codesign --verify'));
   });
 
   it('compare versions numerically (0.1.22 and later accepted)', () => {
