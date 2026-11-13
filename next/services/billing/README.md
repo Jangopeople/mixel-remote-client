@@ -111,16 +111,44 @@ curl https://remote.mixel.ch/api/billing/health
   uses them). SQL: the tables are additive; `drop table remote_saas.billing_events, remote_saas.billing,
   remote_saas.billing_prices cascade` plus the `billing*` functions removes stage 2 entirely.
 
-## A real end-to-end payment test (not done – needs Michael's OK)
+## A real end-to-end payment test (not done yet – needs Michael's OK at the time)
 
-There is no Stripe test-mode key for this account, so a real purchase means a real charge:
-1. Michael's OK for one real card charge he owns and an immediate full refund. The smallest real
-   charge is Solo monthly, CHF 14.40 (a CHF 12 charge would need an extra temporary price). Stripe
-   keeps its processing fee on a refunded charge.
-2. A QA tenant (`qa-billing-…@example.test`), trial moved into the past, `/checkout` Solo monthly,
-   pay in the browser; confirm `checkout.session.completed`, `customer.subscription.created`,
-   `invoice.paid` arrive from Stripe and the tenant is `solo/active`.
-3. `/change` to Team monthly (prorated invoice, real charge of the difference), confirm the tenant.
-4. Portal → cancel; then cancel immediately via the API so `customer.subscription.deleted` arrives;
-   confirm `read_only` and the 30-day countdown.
-5. Refund all charges (`POST /v1/refunds`), delete the customer and the QA tenant.
+There is no Stripe test-mode key for this account, so a real purchase is a real charge. A run was
+prepared on 2026-11-13 (session created, then expired unpaid and cleaned up when Michael postponed).
+
+Preconditions
+- Michael's written OK for the exact run: one CHF 14.40 charge (Solo monthly, the smallest real
+  price; a CHF 12 charge would need an extra temporary price) on his own card, refunded right away.
+  Optional step 4 adds a second, prorated charge (Team monthly minus the unused Solo part).
+- Michael enters the card himself in his browser. Agents never enter card data and never refund by
+  script: the refund is done by a person in the Stripe dashboard (Payments → the charge → Refund).
+  Stripe keeps its processing fee on a refunded charge.
+- Never use mixel@mixel.ch or Michael's account as the QA owner.
+
+Steps
+1. QA owner and tenant: create a GoTrue user `qa-billing-pay-<random>@example.test` (admin API on
+   127.0.0.1:6120 with the ISM service-role key, `email_confirm: true`), sign in (password grant),
+   call `rpc/remote_saas_signup`. Move the trial into the past so the checkout charges now:
+   `update remote_saas.tenants set trial_ends_at = now() - interval '1 minute' where id = '<tenant>'`.
+2. `POST https://remote.mixel.ch/api/billing/checkout {"tenant_id": …, "plan": "solo", "interval": "month"}`
+   with the QA owner's token. Check the session (`GET /v1/checkout/sessions/<id>?expand[]=line_items`):
+   mode subscription, CHF, `amount_total` 1440, one line "Mixel Remote Solo". Give Michael the `url`
+   (valid 1 hour).
+3. After he paid, wait (up to 30 min) until these three are `applied` for the tenant and the tenant is
+   `solo/active`:
+   `select event_type, outcome from remote_saas.billing_events where tenant_id = '<tenant>'` –
+   `checkout.session.completed`, `customer.subscription.created`, `invoice.paid`; also
+   `remote_saas.billing` shows the subscription, `active`, `month` and the period end. The success
+   page is `https://remote.mixel.ch/billing?billing=success&session_id=…`.
+4. Optional upgrade: `POST /api/billing/change {"plan": "team", "interval": "month"}` → prorated
+   invoice charged at once; `customer.subscription.updated` + `invoice.paid` → tenant `team/active`.
+5. Portal: `POST /api/billing/portal`, open the URL, check the invoice(s) and the payment method.
+6. Refund every charge in the Stripe dashboard (person, not script); confirm in Stripe the charges
+   show "Refunded".
+7. Cancel immediately without proration or final invoice:
+   `DELETE /v1/subscriptions/<sub>?prorate=false&invoice_now=false` (after checking its metadata
+   `app=mixel-remote` and `tenant_id`). Confirm `customer.subscription.deleted` is applied, the tenant
+   is `read_only` and `remote_saas.billing.devices_delete_after` is 30 days ahead.
+8. Clean up: `DELETE /v1/customers/<cus>`; delete the tenant's `remote_saas.billing_events`, the tenant,
+   its `public.users` row, client and organization; delete the GoTrue user. Confirm 0 rows left and
+   `GET /v1/customers/<cus>` says `deleted: true`.
