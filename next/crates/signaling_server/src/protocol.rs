@@ -84,6 +84,26 @@ pub enum ClientMessage {
     Restart { session: Uuid },
     /// Which of these Remote IDs are online and reachable for the caller.
     Presence { hosts: Vec<u32> },
+    /// Optional broker features this app understands (`join`, `switch`). Sent once after `ready`;
+    /// the broker sends invitations and side switches only to apps that announced them.
+    Capabilities { features: Vec<String> },
+    /// The technician of a running session invites a colleague: a user of the same company (or
+    /// Mixel staff) by account, or one of their computers by Remote ID. `control`: the colleague
+    /// may use keyboard and mouse (the person at the computer still decides).
+    Invite {
+        session: Uuid,
+        #[serde(default)]
+        user: Option<Uuid>,
+        #[serde(default)]
+        device: Option<u32>,
+        #[serde(default)]
+        control: bool,
+    },
+    /// An invited colleague joins the running session as a second technician.
+    JoinSession { invitation: Uuid },
+    /// Either side of a running session asks to switch sides: the computer that was shown
+    /// becomes the viewer, the technician's computer is shown (its user decides locally).
+    SwitchSides { session: Uuid },
     /// Device agent check-in: optional inventory (JSON text) and the result of the last
     /// command. The answer may carry the next command approved in the console.
     Agent {
@@ -182,6 +202,28 @@ pub enum ServerMessage {
     Requested {
         session: Uuid,
     },
+    /// To a colleague: the technician of a running session invites you to join it.
+    Invited {
+        invitation: Uuid,
+        host: u32,
+        inviter: Uuid,
+        inviter_connection: u32,
+        control: bool,
+        unattended: bool,
+        expires_in: u16,
+    },
+    /// To the inviting technician: how many of the colleague's apps received the invitation.
+    InviteStatus {
+        invitation: Uuid,
+        delivered: u16,
+    },
+    /// The sides of `previous` were switched: this app now views `session` on `host`
+    /// (the other app's user decides there). Like `requested` for a new request.
+    Switched {
+        previous: Uuid,
+        session: Uuid,
+        host: u32,
+    },
     Consent {
         session: Uuid,
         requester_connection: u32,
@@ -191,6 +233,12 @@ pub enum ServerMessage {
         unattended: bool,
         #[serde(default)]
         requester_identity: Option<core_protocol::delegation::DeviceTicket>,
+        /// A second technician joins the running session `joining.session`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        joining: Option<Joining>,
+        /// The sides of the running session `switched.previous` were switched.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        switched: Option<SwitchedFrom>,
     },
     Accepted {
         session: Uuid,
@@ -230,6 +278,30 @@ pub enum CloseReason {
     Disconnected,
     Expired,
     Requested,
+    /// Replaced by the session with the sides switched (sent only to apps that announced `switch`).
+    Switched,
+}
+/// Broker feature: second technicians (invite and join).
+pub const FEATURE_JOIN: &str = "join";
+/// Broker feature: switching sides in a running session.
+pub const FEATURE_SWITCH: &str = "switch";
+#[derive(Clone, Copy, Deserialize, Serialize, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Joining {
+    /// The running session the colleague joins.
+    pub session: Uuid,
+    /// The technician who invited them.
+    pub inviter: Uuid,
+    pub inviter_connection: u32,
+    /// Asked for keyboard and mouse.
+    pub control: bool,
+}
+#[derive(Clone, Copy, Deserialize, Serialize, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SwitchedFrom {
+    pub previous: Uuid,
+    /// Remote ID of the app that pressed "Switch sides".
+    pub by: u32,
 }
 #[derive(Clone, Copy, Deserialize, Serialize, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

@@ -15,6 +15,7 @@ mod session_store;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 mod host_actions;
 mod session_guard;
+mod session_mirror;
 mod host_print;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 mod agent;
@@ -2106,6 +2107,72 @@ async fn remote_restart(
 }
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 #[tauri::command]
+async fn remote_invite(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, remote_session::RemoteSession>,
+    session: uuid::Uuid,
+    user: Option<uuid::Uuid>,
+    device: Option<u32>,
+    control: bool,
+) -> Result<(), String> {
+    main_window(&window)?;
+    state.invite(session, user, device, control).await
+}
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[tauri::command]
+async fn remote_join(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, remote_session::RemoteSession>,
+    invitation: uuid::Uuid,
+) -> Result<(), String> {
+    main_window(&window)?;
+    state.join(invitation).await
+}
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[tauri::command]
+async fn remote_dismiss_invitation(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, remote_session::RemoteSession>,
+    invitation: uuid::Uuid,
+) -> Result<(), String> {
+    main_window(&window)?;
+    state.dismiss_invitation(invitation).await;
+    Ok(())
+}
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[tauri::command]
+async fn remote_switch_sides(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, remote_session::RemoteSession>,
+    session: uuid::Uuid,
+) -> Result<(), String> {
+    main_window(&window)?;
+    state.switch_sides(session).await
+}
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[tauri::command]
+async fn remote_decide_join(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, remote_session::RemoteSession>,
+    session: uuid::Uuid,
+    accept: bool,
+    control: bool,
+) -> Result<(), String> {
+    main_window(&window)?;
+    state.decide_join(session, accept, control).await
+}
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[tauri::command]
+async fn remote_remove_colleague(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, remote_session::RemoteSession>,
+    session: uuid::Uuid,
+) -> Result<(), String> {
+    main_window(&window)?;
+    state.remove_colleague(session).await
+}
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[tauri::command]
 async fn remote_next_video(
     window: tauri::WebviewWindow,
     state: tauri::State<'_, remote_session::RemoteSession>,
@@ -2412,6 +2479,12 @@ fn main() {
             remote_close,
             remote_stop_session,
             remote_restart,
+            remote_invite,
+            remote_join,
+            remote_dismiss_invitation,
+            remote_switch_sides,
+            remote_decide_join,
+            remote_remove_colleague,
             remote_next_video,
             remote_view_fullscreen,
             local_session_status,
@@ -2529,6 +2602,12 @@ fn main() {
             remote_close,
             remote_stop_session,
             remote_restart,
+            remote_invite,
+            remote_join,
+            remote_dismiss_invitation,
+            remote_switch_sides,
+            remote_decide_join,
+            remote_remove_colleague,
             remote_next_video,
             remote_view_fullscreen
         ]);

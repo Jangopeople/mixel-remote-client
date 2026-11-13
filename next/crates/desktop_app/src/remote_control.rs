@@ -63,6 +63,8 @@ pub fn own_features() -> Vec<&'static str> {
         crate::host_print::FEATURE,
         core_protocol::sound::FEATURE,
         FULL_HD,
+        crate::remote_session::JOIN,
+        crate::remote_session::SWITCH,
     ]
 }
 /// Feature: the controller can show "all monitors as one picture" as a display choice.

@@ -29,6 +29,8 @@
   function announce(): void {
     (window as unknown as {mixelCompany: unknown}).mixelCompany = {tenant, overview};
     document.dispatchEvent(new CustomEvent('mixel-company-state', {detail: {tenant, overview}}));
+    // Colleagues a technician can invite into a running session.
+    document.dispatchEvent(new CustomEvent('mixel-company-members', {detail: {members: memberList.map(item => ({user_id: item.user_id, name: item.name, role: item.role})), me: account.phase === 'authenticated' ? account.account?.profile ?? '' : ''}}));
   }
   function daysLeft(until: string | null): number {
     if (!until) return 0;

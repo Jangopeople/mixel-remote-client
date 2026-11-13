@@ -56,16 +56,30 @@ pub fn run(name: &str) -> Result<(), String> {
     }
 }
 
-/// Held for the length of a hosted session; ending it switches every protection off.
+/// Technicians connected to this computer right now (the first one and colleagues who joined).
+static HOLDERS: std::sync::Mutex<usize> = std::sync::Mutex::new(0);
+
+/// Held for the length of a hosted session; when the last technician's session ends, every
+/// protection is switched off (a colleague leaving keeps the first technician's settings).
 pub struct Guard;
 impl Guard {
     pub fn new() -> Self {
-        LOCK_WHEN_DONE.store(false, Ordering::Release);
+        let mut holders = HOLDERS.lock().unwrap_or_else(|error| error.into_inner());
+        if *holders == 0 {
+            LOCK_WHEN_DONE.store(false, Ordering::Release);
+        }
+        *holders += 1;
         Guard
     }
 }
 impl Drop for Guard {
     fn drop(&mut self) {
+        let mut holders = HOLDERS.lock().unwrap_or_else(|error| error.into_inner());
+        *holders = holders.saturating_sub(1);
+        if *holders > 0 {
+            return;
+        }
+        drop(holders);
         pointer(None, 0, 0);
         let _ = privacy(false);
         let _ = block(false);

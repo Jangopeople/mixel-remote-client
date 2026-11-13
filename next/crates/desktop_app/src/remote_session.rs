@@ -32,6 +32,10 @@ use tokio_tungstenite::{
 use uuid::Uuid;
 use zeroize::Zeroize;
 
+/// Session features of this app: colleagues can join, sides can be switched.
+pub const JOIN: &str = signaling_server::protocol::FEATURE_JOIN;
+pub const SWITCH: &str = signaling_server::protocol::FEATURE_SWITCH;
+
 #[derive(Clone, Serialize)]
 pub struct Status {
     pub controller_only: bool,
@@ -79,8 +83,51 @@ pub struct Status {
     pub host_macs: Vec<String>,
     /// Host: the technician offers to show their screen in this Mixel Meet room (session, room id).
     pub meeting_offer: Option<(Uuid, String)>,
+    /// Host: colleagues of the technician who joined the running session.
+    pub colleagues: Vec<Colleague>,
+    /// Host: a colleague of the technician asks to join the running session.
+    pub join_request: Option<JoinRequest>,
+    /// Technician: colleagues invite this app into their running session.
+    pub invitations: Vec<InvitationView>,
+    /// Technician: what became of the last invitation this app sent.
+    pub invite_message: Option<String>,
+    /// Technician: this session was joined on a colleague's invitation.
+    pub joined_session: bool,
+    /// The sides of this session were switched at least once.
+    pub switched: bool,
+    /// Optional features the app on the other side announced (`join`, `switch`, …).
+    pub peer_features: Vec<String>,
     #[serde(skip)]
     code_expires_at: Option<std::time::Instant>,
+}
+/// A colleague connected to (or asking for) this computer next to the first technician.
+#[derive(Clone, Serialize)]
+pub struct Colleague {
+    pub session: Uuid,
+    pub connection: u32,
+    pub control: bool,
+    /// `asking`, `connecting` or `active`.
+    pub state: &'static str,
+}
+#[derive(Clone, Serialize)]
+pub struct JoinRequest {
+    pub session: Uuid,
+    pub connection: u32,
+    pub inviter_connection: u32,
+    pub control: bool,
+    pub unattended: bool,
+}
+#[derive(Clone, Serialize)]
+pub struct InvitationView {
+    pub invitation: Uuid,
+    pub host: u32,
+    /// The inviting technician's account.
+    pub inviter: Uuid,
+    pub inviter_connection: u32,
+    pub control: bool,
+    pub unattended: bool,
+    /// Seconds since the Unix epoch.
+    pub expires_at: u64,
 }
 impl Default for Status {
     fn default() -> Self {
@@ -125,6 +172,13 @@ impl Default for Status {
             meeting_offer: None,
             signin_id: None,
             host_macs: Vec::new(),
+            colleagues: Vec::new(),
+            join_request: None,
+            invitations: Vec::new(),
+            invite_message: None,
+            joined_session: false,
+            switched: false,
+            peer_features: Vec::new(),
             code_expires_at: None,
         }
     }
@@ -293,6 +347,23 @@ pub(crate) enum Command {
         session: Uuid,
         result: Result<(), String>,
     },
+    /// Technician: invite a colleague (by account or by the Remote ID of their computer).
+    Invite {
+        session: Uuid,
+        user: Option<Uuid>,
+        device: Option<u32>,
+        control: bool,
+    },
+    /// Technician: join a colleague's running session.
+    Join(Uuid),
+    /// Either side: switch sides in the running session.
+    SwitchSides(Uuid),
+    /// Host: the person at the computer lets a colleague join (or not).
+    DecideJoin {
+        session: Uuid,
+        accept: bool,
+        control: bool,
+    },
 }
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -397,7 +468,8 @@ struct Inner {
 #[derive(Clone)]
 pub struct RemoteSession(
     Arc<Mutex<Inner>>,
-    Arc<std::sync::Mutex<Vec<std::thread::JoinHandle<()>>>>,
+    /// Media owner threads; `true` marks a colleague's (joined) media.
+    Arc<std::sync::Mutex<Vec<(bool, std::thread::JoinHandle<()>)>>>,
     crate::remote_chat::ChatHub,
     crate::remote_recording::RecordingHub,
     crate::remote_files::FileHub,
@@ -505,16 +577,28 @@ impl RemoteSession {
                 .lock()
                 .map_err(|_| "Media owner registry is unavailable".to_owned())?;
             let deadline = std::time::Instant::now() + Duration::from_secs(25);
-            while workers.iter().any(|worker| !worker.is_finished()) {
+            // Colleagues' media keeps running: only the first technician's transport is replaced.
+            while workers.iter().any(|(colleague, worker)| !colleague && !worker.is_finished()) {
                 if std::time::Instant::now() >= deadline {
                     return Err("The previous transport has not finished cleanup".into());
                 }
+                drop(workers);
                 std::thread::sleep(Duration::from_millis(10));
+                workers = registry
+                    .lock()
+                    .map_err(|_| "Media owner registry is unavailable".to_owned())?;
             }
-            for worker in workers.drain(..) {
-                worker
-                    .join()
-                    .map_err(|_| "A previous media owner failed".to_owned())?;
+            let mut index = 0;
+            while index < workers.len() {
+                if !workers[index].0 {
+                    workers
+                        .swap_remove(index)
+                        .1
+                        .join()
+                        .map_err(|_| "A previous media owner failed".to_owned())?;
+                } else {
+                    index += 1;
+                }
             }
             Ok(())
         })
@@ -524,6 +608,7 @@ impl RemoteSession {
     pub(crate) fn spawn_media(
         &self,
         cancel: &AtomicBool,
+        colleague: bool,
         run: impl FnOnce() + Send + 'static,
     ) -> Result<(), String> {
         let mut workers = self
@@ -535,24 +620,27 @@ impl RemoteSession {
         }
         let mut index = 0;
         while index < workers.len() {
-            if workers[index].is_finished() {
+            if workers[index].1.is_finished() {
                 workers
                     .swap_remove(index)
+                    .1
                     .join()
                     .map_err(|_| "A prior media owner failed")?;
             } else {
                 index += 1;
             }
         }
-        if workers.len() >= 2 {
+        let running = workers.iter().filter(|(kind, _)| *kind == colleague).count();
+        if running >= if colleague { 4 } else { 2 } {
             return Err("A prior media owner is still stopping".into());
         }
-        workers.push(
+        workers.push((
+            colleague,
             std::thread::Builder::new()
-                .name("mixel-remote-peer".into())
+                .name(if colleague { "mixel-remote-colleague" } else { "mixel-remote-peer" }.into())
                 .spawn(run)
                 .map_err(|_| "Cannot start the remote media owner")?,
-        );
+        ));
         Ok(())
     }
     #[cfg(target_os = "macos")]
@@ -750,7 +838,7 @@ impl RemoteSession {
                 .lock()
                 .map_err(|_| "Media owner registry unavailable".to_owned())?;
             let deadline = std::time::Instant::now() + Duration::from_secs(25);
-            while workers.iter().any(|worker| !worker.is_finished()) {
+            while workers.iter().any(|(_, worker)| !worker.is_finished()) {
                 if std::time::Instant::now() >= deadline {
                     return Err(
                         "A media owner has not finished cleanup; quitting was postponed".into(),
@@ -758,7 +846,7 @@ impl RemoteSession {
                 }
                 std::thread::sleep(Duration::from_millis(10));
             }
-            for worker in workers.drain(..) {
+            for (_, worker) in workers.drain(..) {
                 worker
                     .join()
                     .map_err(|_| "A media owner failed during cleanup".to_owned())?;
@@ -1148,6 +1236,122 @@ impl RemoteSession {
         inner.status.message = "Renewing this accepted connection".into();
         Ok(())
     }
+    /// Technician: invites a colleague into the running session (account or Remote ID).
+    pub async fn invite(&self, session: Uuid, user: Option<Uuid>, device: Option<u32>, control: bool) -> Result<(), String> {
+        if user.is_some() == device.is_some() {
+            return Err("Choose a colleague or enter the Remote ID of their computer".into());
+        }
+        if device.is_some_and(|id| !(100_000_000..=999_999_999).contains(&id)) {
+            return Err("Enter a nine-digit Remote ID".into());
+        }
+        let mut inner = self.0.lock().await;
+        if inner.status.session != Some(session)
+            || inner.status.phase != "active"
+            || inner.status.sharing
+            || inner.status.joined_session
+            || !inner.status.peer_features.iter().any(|name| name == JOIN)
+        {
+            return Err("Colleagues can be invited into a running session you started".into());
+        }
+        if inner.status.peer == device {
+            return Err("This is the computer you are helping".into());
+        }
+        inner
+            .commands
+            .as_ref()
+            .ok_or("The device is disconnected")?
+            .try_send(Command::Invite { session, user, device, control })
+            .map_err(|_| "The connection service is busy")?;
+        inner.status.invite_message = Some("Sending the invitation".into());
+        Ok(())
+    }
+    /// Technician: joins a colleague's running session from an invitation.
+    pub async fn join(&self, invitation: Uuid) -> Result<(), String> {
+        let mut inner = self.0.lock().await;
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_| "System clock is unavailable")?.as_secs();
+        let Some(offer) = inner.status.invitations.iter().find(|offer| offer.invitation == invitation && offer.expires_at > now).cloned() else {
+            return Err("This invitation has expired".into());
+        };
+        if inner.status.phase != "ready" {
+            return Err("Finish the current session before joining a colleague".into());
+        }
+        inner
+            .commands
+            .as_ref()
+            .ok_or("Connect this device first")?
+            .try_send(Command::Join(invitation))
+            .map_err(|_| "The connection service is busy")?;
+        inner.status.invitations.retain(|other| other.invitation != invitation);
+        inner.status.phase = "outgoing".into();
+        inner.status.peer = Some(offer.host);
+        inner.status.message = "Joining your colleague's session".into();
+        Ok(())
+    }
+    /// Removes an invitation without joining.
+    pub async fn dismiss_invitation(&self, invitation: Uuid) {
+        self.0.lock().await.status.invitations.retain(|offer| offer.invitation != invitation);
+    }
+    /// Either side: switches sides in the running session.
+    pub async fn switch_sides(&self, session: Uuid) -> Result<(), String> {
+        let mut inner = self.0.lock().await;
+        if inner.status.session != Some(session)
+            || inner.status.phase != "active"
+            || inner.status.joined_session
+            || !inner.status.colleagues.is_empty()
+            || !inner.status.peer_features.iter().any(|name| name == SWITCH)
+        {
+            return Err("Sides can be switched in a running session between two people".into());
+        }
+        if inner.status.sharing && crate::service_config::controller_only() {
+            return Err("This app cannot show its screen".into());
+        }
+        inner
+            .commands
+            .as_ref()
+            .ok_or("The device is disconnected")?
+            .try_send(Command::SwitchSides(session))
+            .map_err(|_| "The connection service is busy")?;
+        inner.status.message = "Switching sides".into();
+        Ok(())
+    }
+    /// Host: the person at the computer answers a colleague's request to join.
+    pub async fn decide_join(&self, session: Uuid, accept: bool, control: bool) -> Result<(), String> {
+        crate::service_config::require_host()?;
+        let mut inner = self.0.lock().await;
+        if inner.status.join_request.as_ref().is_none_or(|request| request.session != session) {
+            return Err("This request is no longer pending".into());
+        }
+        if accept && control && !session_platform::input_access() {
+            return Err("Keyboard and mouse control need local input access".into());
+        }
+        inner
+            .commands
+            .as_ref()
+            .ok_or("The device is disconnected")?
+            .try_send(Command::DecideJoin { session, accept, control })
+            .map_err(|_| "The connection service is busy")?;
+        inner.status.join_request = None;
+        Ok(())
+    }
+    /// Host: ends one colleague's view (the first technician stays).
+    pub async fn remove_colleague(&self, session: Uuid) -> Result<(), String> {
+        let inner = self.0.lock().await;
+        if !inner.status.colleagues.iter().any(|colleague| colleague.session == session) {
+            return Err("This colleague has already left".into());
+        }
+        inner
+            .commands
+            .as_ref()
+            .ok_or("The device is disconnected")?
+            .try_send(Command::Close(session))
+            .map_err(|_| "The connection service is busy".into())
+    }
+    pub(crate) async fn set_peer_features(&self, generation: u64, session: Uuid, features: Vec<String>) {
+        let mut inner = self.0.lock().await;
+        if inner.generation == generation && inner.status.session == Some(session) && !inner.cancel.load(Ordering::Acquire) {
+            inner.status.peer_features = features;
+        }
+    }
     pub async fn input(&self, session: Uuid, event: InputEvent) -> Result<bool, String> {
         core_protocol::input::validate(&event.borrowed()).map_err(|error| error.to_string())?;
         let selected = match event {
@@ -1344,7 +1548,12 @@ impl RemoteSession {
             if let Some(video) = &inner.video {
                 video.clear();
             }
+            inner.status.peer_features.clear();
             if inner.status.session.is_none() {
+                inner.status.colleagues.clear();
+                inner.status.join_request = None;
+                inner.status.joined_session = false;
+                inner.status.switched = false;
                 inner.status.unattended_session = false;
                 if let Some(cancel) = inner.consent_cancel.take() {
                     cancel.store(true, Ordering::Release);
@@ -1355,6 +1564,7 @@ impl RemoteSession {
             }
         }
     }
+    #[allow(clippy::too_many_arguments)]
     async fn track(
         &self,
         generation: u64,
@@ -1362,6 +1572,8 @@ impl RemoteSession {
         cancel: Arc<AtomicBool>,
         consent: Uuid,
         consent_cancel: Arc<AtomicBool>,
+        joined: bool,
+        switched: bool,
     ) -> Result<(), String> {
         let mut inner = self.0.lock().await;
         if inner.generation != generation || inner.cancel.load(Ordering::Acquire) {
@@ -1379,6 +1591,9 @@ impl RemoteSession {
         }
         inner.status.session = Some(session);
         inner.status.consent = Some(consent);
+        inner.status.joined_session = joined;
+        inner.status.switched = switched;
+        inner.status.peer_features.clear();
         inner.renew_after = Some(std::time::Instant::now() + Duration::from_secs(31));
         inner.input = None;
         inner.clipboard = None;
@@ -1440,6 +1655,31 @@ struct Peer {
     local_consent: Option<bool>,
     accepted_at: Option<std::time::Instant>,
     consent_id: Uuid,
+    /// Host: a colleague who joined the first technician's session (mirrors its pictures).
+    /// Technician: this session was joined on an invitation.
+    joined: bool,
+    /// The sides were switched: the other side was already verified in the previous session.
+    switched: bool,
+}
+/// What this app remembers about a session whose sides are being switched.
+struct SwitchMemory {
+    previous: Uuid,
+    remote: u32,
+    key: ed25519_dalek::VerifyingKey,
+    identity: core_protocol::delegation::DeviceTicket,
+    /// The grants of the person at this computer from when it was helped (restored on switching back).
+    grants: Option<HostGrants>,
+    at: std::time::Instant,
+}
+#[derive(Clone)]
+struct HostGrants {
+    source: String,
+    confirm: bool,
+    control: bool,
+    clipboard: bool,
+    files: bool,
+    chat: bool,
+    recording: bool,
 }
 fn request_failure_message(code: ErrorCode) -> &'static str {
     match code {
@@ -1497,6 +1737,81 @@ fn peer_identity(
     }
     Ok(verified.key())
 }
+/// The other side of a switched session: the same device and account as in the session before.
+fn switched_identity(
+    ticket: &core_protocol::delegation::DeviceTicket,
+    connection: u32,
+    known: &core_protocol::delegation::DeviceTicket,
+    roots: &[ed25519_dalek::VerifyingKey],
+) -> Result<ed25519_dalek::VerifyingKey, String> {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| "System clock is unavailable")?
+        .as_secs();
+    let verified = ticket
+        .verify(roots, now)
+        .map_err(|_| "The remote identity authority proof is invalid or expired")?;
+    if ticket.identity.connection_id != connection
+        || ticket.unattended_host_only()
+        || !same_identity(ticket, known)
+    {
+        return Err("The other side changed while switching sides".into());
+    }
+    Ok(verified.key())
+}
+/// Host: checks a colleague's accepted session like the first technician's, and binds it.
+#[allow(clippy::too_many_arguments)]
+fn colleague_accepted(
+    colleague: &mut Peer,
+    session: Uuid,
+    nonce: [u8; 32],
+    controller: &core_protocol::delegation::DeviceTicket,
+    host: &core_protocol::delegation::DeviceTicket,
+    own: &core_protocol::delegation::DeviceTicket,
+    principal: &Principal,
+    roots: &[ed25519_dalek::VerifyingKey],
+) -> Result<[u8; 32], String> {
+    if colleague.cancel.load(Ordering::Acquire)
+        || !colleague.can_negotiate(std::time::Instant::now())
+        || nonce == [0; 32]
+        || colleague.source.is_empty()
+        || colleague.nonce.is_some()
+    {
+        return Err("The colleague has no current local consent".into());
+    }
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| "System clock is unavailable")?
+        .as_secs();
+    host.verify(roots, now).map_err(|_| "The local session identity is invalid or expired")?;
+    if !same_identity(host, own) {
+        return Err("The colleague's session does not belong to this device".into());
+    }
+    let key = peer_identity(controller, colleague.remote, principal, true, roots)?;
+    if key != colleague.key || colleague.identity.as_ref().is_some_and(|known| !same_identity(known, controller)) {
+        return Err("The colleague's identity changed".into());
+    }
+    colleague.expires.store(controller.expires_at, Ordering::Release);
+    colleague.identity = Some(controller.clone());
+    Ok(core_protocol::delegation::session_binding(*session.as_bytes(), nonce, controller, host))
+}
+fn colleague_views(joined: &[Peer]) -> Vec<Colleague> {
+    joined
+        .iter()
+        .map(|peer| Colleague {
+            session: peer.id,
+            connection: peer.remote,
+            control: peer.control,
+            state: if peer.local_consent.is_none() {
+                "asking"
+            } else if peer.signals.is_some() {
+                "active"
+            } else {
+                "connecting"
+            },
+        })
+        .collect()
+}
 impl Drop for Peer {
     fn drop(&mut self) {
         self.cancel.store(true, Ordering::Release);
@@ -1525,6 +1840,8 @@ impl Peer {
                 self.cancel.clone(),
                 self.consent_id,
                 self.consent_cancel.clone(),
+                self.joined && !self.host,
+                self.switched,
             )
             .await
     }
@@ -1781,8 +2098,22 @@ async fn run(
         let mut pending_renewal:Option<std::time::Instant>=None;
         let mut last_renewed=std::time::Instant::now();
         let mut last_delegation_attempt=std::time::Instant::now();
+        // Second technicians and switching sides: announced to the connection service, which
+        // forwards invitations and switches only to apps that understand them.
+        let features:Vec<String>=if own_ticket.unattended_host_only() || crate::service_config::controller_only() {vec![JOIN.into()]} else {vec![JOIN.into(),SWITCH.into()]};
+        send(&mut socket,ClientMessage::Capabilities{features}).await?;
+        // An older connection service answers "invalid": then these features are simply not offered.
+        let capabilities_sent=std::time::Instant::now();
         let mut peer:Option<Peer>=None;
-        let mut outgoing:Option<(u32,ed25519_dalek::VerifyingKey,bool)>=None;
+        // Host: colleagues of the technician who joined (or ask to join) the running session.
+        let mut joined:Vec<Peer>=Vec::new();
+        // (host, pinned key, unattended, joined on an invitation)
+        let mut outgoing:Option<(u32,ed25519_dalek::VerifyingKey,bool,bool)>=None;
+        // Invitations received: id, host, unattended, expiry (Unix seconds).
+        let mut invitations:Vec<(Uuid,u32,bool,u64)>=Vec::new();
+        let mut invite_pending=false;
+        let mut switch_pressed:Option<(Uuid,std::time::Instant)>=None;
+        let mut switch_memory:Option<SwitchMemory>=None;
     // Presence questions still waiting for their answer, oldest first: an answer speaks only for the IDs asked.
     let mut presence_asked: std::collections::VecDeque<Vec<u32>> = std::collections::VecDeque::new();
         let mut tick=tokio::time::interval(Duration::from_millis(250));
@@ -1813,6 +2144,30 @@ async fn run(
                             state.change(generation,|status|status.message="Renewing relay credentials and transport keys for the accepted peer".into()).await;
                         }
                     }
+                    if !joined.is_empty() {
+                        // A colleague's request or connection that ran out of time, or whose first
+                        // technician is gone, ends here (the connection service ends it as well).
+                        let primary_hosting=peer.as_ref().is_some_and(|active|active.host && !active.cancel.load(Ordering::Acquire));
+                        let ended:Vec<Uuid>=joined.iter().filter(|colleague|{
+                            let expired=colleague.signals.is_none() && ((colleague.local_consent.is_none() && colleague.started_at.elapsed()>=core_protocol::session::CONSENT_LIFETIME) || colleague.accepted_at.is_some_and(|accepted|accepted.elapsed()>=core_protocol::session::NEGOTIATION_LIFETIME));
+                            expired || !primary_hosting || (colleague.cancel.load(Ordering::Acquire) && colleague.signals.is_none())
+                        }).map(|colleague|colleague.id).collect();
+                        for session in ended {
+                            if let Some(index)=joined.iter().position(|colleague|colleague.id==session){
+                                let mut gone=joined.remove(index);
+                                let undecided=gone.local_consent.is_none();
+                                if gone.take_close(){send(&mut socket,if undecided{ClientMessage::Decide{session,accept:false}}else{ClientMessage::Close{session}}).await?;}
+                            }
+                            let views=colleague_views(&joined);
+                            state.change(generation,|status|{status.colleagues=views;if status.join_request.as_ref().is_some_and(|request|request.session==session){status.join_request=None;}}).await;
+                        }
+                    }
+                    if invitations.iter().any(|(_,_,_,expires)|*expires<=now){
+                        invitations.retain(|(_,_,_,expires)|*expires>now);
+                        state.change(generation,|status|status.invitations.retain(|offer|offer.expires_at>now)).await;
+                    }
+                    if switch_pressed.is_some_and(|(_,at)|at.elapsed()>=Duration::from_secs(30)){switch_pressed=None;}
+                    if peer.is_none() && switch_memory.as_ref().is_some_and(|memory|memory.at.elapsed()>=Duration::from_secs(120)){switch_memory=None;}
                     if heartbeat.elapsed()>Duration::from_secs(20){tokio::time::timeout(Duration::from_secs(5),socket.send(Message::Ping(Vec::new().into()))).await.map_err(|_|Failure::network("Heartbeat write timed out"))?.map_err(crate::remote_recovery::socket)?;heartbeat=std::time::Instant::now();}
                     let fresh=auth.credential(None).await?;
                     let fresh_principal = auth.principal(&fresh)?;
@@ -1841,7 +2196,7 @@ async fn run(
                             None if unattended=>ClientMessage::RequestUnattended{host},
                             None=>ClientMessage::Request{host},
                         };
-                        send(&mut socket,request).await?;outgoing=Some((host,key,unattended));
+                        send(&mut socket,request).await?;outgoing=Some((host,key,unattended,false));
                         state.change(generation,|status|{status.phase="outgoing".into();status.message="Waiting for the remote host to Accept".into();status.peer=Some(host);status.sharing=false;}).await;
                     },
                     Command::ConfigureUnattended{enabled}=>{
@@ -1886,18 +2241,152 @@ async fn run(
                         if let Some(active)=peer.as_mut().filter(|peer|peer.id==session) && active.take_close(){
                             send(&mut socket,ClientMessage::Close{session}).await?;
                         }
+                        if let Some(index)=joined.iter().position(|colleague|colleague.id==session){
+                            let mut gone=joined.remove(index);
+                            let undecided=gone.local_consent.is_none();
+                            if gone.take_close(){send(&mut socket,if undecided{ClientMessage::Decide{session,accept:false}}else{ClientMessage::Close{session}}).await?;}
+                            let views=colleague_views(&joined);
+                            state.change(generation,|status|status.colleagues=views).await;
+                        }
+                    },
+                    Command::Invite{session,user,device,control}=>{
+                        if peer.as_ref().is_some_and(|active|active.id==session && !active.host && !active.joined && active.signals.is_some()){
+                            invite_pending=true;
+                            send(&mut socket,ClientMessage::Invite{session,user,device,control}).await?;
+                        }
+                    },
+                    Command::Join(invitation)=>{
+                        if peer.is_some() || outgoing.is_some(){continue;}
+                        let Some((_,host,unattended,_))=invitations.iter().find(|offer|offer.0==invitation).copied() else {continue};
+                        invitations.retain(|offer|offer.0!=invitation);
+                        let Some(credential) = credential.as_ref() else { return Err("A startup host cannot join sessions".into()); };
+                        let key=match credential.ism.peer_key(&credential.token,host).await{Ok(key)=>key,Err(_)=>{state.change(generation,|status|{status.phase="ready".into();status.peer=None;status.message="This account could not verify the computer your colleague is helping.".into();}).await;continue;}};
+                        if cancel.load(Ordering::Acquire){break;}
+                        send(&mut socket,ClientMessage::JoinSession{invitation}).await?;outgoing=Some((host,key,unattended,true));
+                        state.change(generation,|status|{status.phase="outgoing".into();status.message="Waiting for the person at the computer to let you join".into();status.peer=Some(host);status.sharing=false;}).await;
+                    },
+                    Command::SwitchSides(session)=>{
+                        if joined.is_empty() && peer.as_ref().is_some_and(|active|active.id==session && !active.joined && active.signals.is_some() && !active.cancel.load(Ordering::Acquire)){
+                            switch_pressed=Some((session,std::time::Instant::now()));
+                            send(&mut socket,ClientMessage::SwitchSides{session}).await?;
+                        }
+                    },
+                    Command::DecideJoin{session,accept,control}=>{
+                        let Some(index)=joined.iter().position(|colleague|colleague.id==session && colleague.local_consent.is_none()) else {continue};
+                        let primary=peer.as_ref().filter(|active|active.host && active.signals.is_some()).map(|active|(active.source.clone(),active.confirm));
+                        if accept && let Some((source,confirm))=primary {
+                            let colleague=&mut joined[index];
+                            colleague.local_consent=Some(true);colleague.accepted_at=Some(std::time::Instant::now());
+                            colleague.source=source;colleague.confirm=confirm;colleague.control=control && confirm;
+                            send(&mut socket,ClientMessage::Decide{session,accept:true}).await?;
+                        } else {
+                            let mut gone=joined.remove(index);gone.take_close();
+                            send(&mut socket,ClientMessage::Decide{session,accept:false}).await?;
+                        }
+                        let views=colleague_views(&joined);
+                        state.change(generation,|status|status.colleagues=views).await;
                     },
                     Command::Restart(session)=>{
                         if let Some(active)=peer.as_mut().filter(|peer|peer.id==session && !peer.host && peer.signals.is_some() && !peer.cancel.load(Ordering::Acquire) && peer.restart_pending.is_none() && peer.rotated_at.elapsed()>=Duration::from_secs(31)){
                             send(&mut socket,ClientMessage::Restart{session}).await?;active.restart_pending=Some(std::time::Instant::now());
                         }
                     },
-                    Command::Signal{session,signal}=>{if peer.as_ref().is_some_and(|peer|peer.id==session && !peer.cancel.load(Ordering::Acquire)){send(&mut socket,ClientMessage::Signal{session,payload:signal}).await?;}},
-                    Command::Finished{session,result}=>{if peer.as_ref().is_some_and(|peer|peer.id==session && !peer.close_sent){peer=None;send(&mut socket,ClientMessage::Close{session}).await?;state.change(generation,|status|{status.phase="ready".into();status.session=None;status.peer=None;status.requester=None;status.message=result.err().unwrap_or_else(||"Session closed; ready for a new connection".into());}).await;}},
+                    Command::Signal{session,signal}=>{if peer.as_ref().is_some_and(|peer|peer.id==session && !peer.cancel.load(Ordering::Acquire)) || joined.iter().any(|colleague|colleague.id==session && !colleague.cancel.load(Ordering::Acquire)){send(&mut socket,ClientMessage::Signal{session,payload:signal}).await?;}},
+                    Command::Finished{session,result}=>{if let Some(index)=joined.iter().position(|colleague|colleague.id==session){
+                        let mut gone=joined.remove(index);
+                        if gone.take_close(){send(&mut socket,ClientMessage::Close{session}).await?;}
+                        if let Err(error)=&result{eprintln!("colleague session ended: {error}");}
+                        let views=colleague_views(&joined);
+                        state.change(generation,|status|status.colleagues=views).await;
+                        continue;
+                    }
+                    if peer.as_ref().is_some_and(|peer|peer.id==session && !peer.close_sent){peer=None;send(&mut socket,ClientMessage::Close{session}).await?;state.change(generation,|status|{status.phase="ready".into();status.session=None;status.peer=None;status.requester=None;status.message=result.err().unwrap_or_else(||"Session closed; ready for a new connection".into());}).await;}},
                 },
                 incoming=event(&mut socket)=>{
                     let message=incoming?;last_activity=std::time::Instant::now();
                     let Some(message)=message else{continue;};
+                    // A colleague's session (second technician) is handled on its own: a failure
+                    // there ends that colleague's view, never the first technician's session.
+                    let colleague_session=match &message {
+                        ServerMessage::Accepted{session,..}|ServerMessage::Ice{session,..}|ServerMessage::Signal{session,..}|ServerMessage::PeerRenewed{session,..}|ServerMessage::Closed{session,..}=>Some(*session),
+                        ServerMessage::Restarted{previous,..}=>Some(*previous),
+                        _=>None,
+                    };
+                    if let Some(index)=colleague_session.and_then(|session|joined.iter().position(|colleague|colleague.id==session)){
+                        // Ok(Some(session)): ask the connection service for the colleague's relay.
+                        let outcome:Result<Option<Uuid>,String>=match message {
+                            ServerMessage::Closed{..}=>{joined.remove(index);Ok(None)},
+                            ServerMessage::Restarted{session,nonce,controller_identity,host_identity,..}|ServerMessage::Accepted{session,nonce,controller_identity:Some(controller_identity),host_identity:Some(host_identity)}=>{
+                                let colleague=&mut joined[index];
+                                let replaced=colleague.id!=session;
+                                if replaced && (colleague.signals.is_none() || colleague.cancel.load(Ordering::Acquire)) {
+                                    Err("Unexpected colleague transport replacement".to_owned())
+                                } else {
+                                    if replaced {
+                                        // Transport replacement for the same accepted colleague.
+                                        colleague.cancel.store(true,Ordering::Release);
+                                        colleague.id=session;colleague.close_sent=false;colleague.cancel=Arc::new(AtomicBool::new(false));colleague.signals=None;colleague.nonce=None;colleague.relay_expires=0;colleague.rotated_at=std::time::Instant::now();colleague.accepted_at=Some(std::time::Instant::now());
+                                    }
+                                    let accepted=colleague_accepted(colleague,session,nonce,&controller_identity,&host_identity,&own_ticket,&principal,&roots);
+                                    accepted.map(|binding|{colleague.nonce=Some(binding);Some(session)})
+                                }
+                            },
+                            ServerMessage::Accepted{..}=>Err("The colleague's session has no signed identities".to_owned()),
+                            ServerMessage::Ice{session,lease}=>{
+                                let colleague=&mut joined[index];
+                                let now=SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_|"System clock is unavailable")?.as_secs();
+                                match (colleague.nonce.take(),colleague.signals.is_none()) {
+                                    (Some(binding),true) if lease.expires_at>now && lease.expires_at<=now.saturating_add(3600) && lease.expires_at<=authorized_until && lease.servers.len()<=8 && lease.servers.iter().all(|server|!server.urls.is_empty() && server.urls.len()<=8 && server.urls.iter().all(|url|url.len()<=1024) && server.username.len()<=256 && server.credential.len()<=1024) => {
+                                        colleague.relay_expires=lease.expires_at;
+                                        let ice_servers=lease.servers.into_iter().map(|server|core_protocol::transport::NativeIceServer{urls:server.urls,username:server.username,credential:server.credential}).collect();
+                                        let (signals_tx,signals_rx)=mpsc::channel(32);
+                                        let mut overflow=false;
+                                        for early in colleague.early.drain(..){overflow|=signals_tx.try_send(early).is_err();}
+                                        colleague.signals=Some(signals_tx);
+                                        if overflow {Err("Colleague signaling queue overflowed".to_owned())}
+                                        else {remote_peer::start(remote_peer::Config{state:state.clone(),generation,session,nonce:binding,host:true,login_window:session_platform::login_window_mode(),remote_key:colleague.key,identity:identity.clone(),source:colleague.source.clone(),#[cfg(target_os = "linux")] portal:colleague.portal.clone(),confirm:colleague.confirm,control:colleague.control,clipboard:false,files:false,chat:false,recording:false,consent_id:colleague.consent_id,consent_cancel:colleague.consent_cancel.clone(),consent_started:colleague.started_at,session_cancel:colleague.cancel.clone(),account_cancel:cancel.clone(),signals:signals_rx,commands:tx.clone(),video:video.clone(),ice_servers,relay_only:service.relay_only,authorization:broker_lease.clone(),peer_expires:colleague.expires.clone(),mirror:true}).map(|()|None)}
+                                    },
+                                    _=>Err("Invalid relay configuration for the colleague".to_owned()),
+                                }
+                            },
+                            ServerMessage::Signal{payload,..}=>{
+                                let colleague=&mut joined[index];
+                                if colleague.cancel.load(Ordering::Acquire){Ok(None)}
+                                else{match colleague.signals.as_ref(){
+                                    Some(signals)=>signals.try_send(payload).map(|()|None).map_err(|_|"Colleague signaling queue overflowed".to_owned()),
+                                    None if colleague.nonce.is_some() && colleague.early.len()<32=>{colleague.early.push(payload);Ok(None)},
+                                    None=>Err("Colleague media negotiation is unavailable".to_owned()),
+                                }}
+                            },
+                            ServerMessage::PeerRenewed{identity:renewed,..}=>{
+                                let colleague=&mut joined[index];
+                                match (peer_identity(&renewed,colleague.remote,&principal,true,&roots),colleague.identity.as_ref()) {
+                                    (Ok(key),Some(previous)) if key==colleague.key && same_identity(previous,&renewed) => {
+                                        if renewed.issued_at>=previous.issued_at && renewed.expires_at>=previous.expires_at{colleague.expires.store(renewed.expires_at,Ordering::Release);colleague.identity=Some(renewed);}
+                                        Ok(None)
+                                    },
+                                    _=>Err("The colleague's account or device changed".to_owned()),
+                                }
+                            },
+                            _=>Ok(None),
+                        };
+                        let outcome=match outcome {
+                            Ok(Some(session))=>{send(&mut socket,ClientMessage::Ice{session}).await?;Ok(())},
+                            Ok(None)=>Ok(()),
+                            Err(error)=>Err(error),
+                        };
+                        if let Err(error)=outcome{
+                            if index<joined.len(){
+                                let mut gone=joined.remove(index);
+                                let session=gone.id;
+                                if gone.take_close(){send(&mut socket,ClientMessage::Close{session}).await?;}
+                            }
+                            eprintln!("colleague session stopped: {error}");
+                        }
+                        let views=colleague_views(&joined);
+                        state.change(generation,|status|status.colleagues=views).await;
+                        continue;
+                    }
                     let message=if let ServerMessage::Restarted{previous,session,nonce,controller_identity,host_identity}=message{
                         let Some(active)=peer.as_mut().filter(|peer|peer.id==previous && peer.signals.is_some() && !peer.cancel.load(Ordering::Acquire)) else{send(&mut socket,ClientMessage::Close{session}).await?;continue;};
                         let status=state.status().await;
@@ -1955,7 +2444,84 @@ async fn run(
                                 status.support_code=code;
                             }).await;
                         },
-                        ServerMessage::Requested{session}=>{let (remote,key,_)=outgoing.take().ok_or("Unexpected outgoing invitation")?;peer=Some(Peer{id:session,remote,host:false,key,source:String::new(),#[cfg(target_os = "linux")] portal:None,confirm:false,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:None,expires:Arc::new(AtomicU64::new(0)),relay_expires:0,restart_pending:None,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4()});peer.as_ref().ok_or("Invitation state unavailable")?.track(state,generation).await?;},
+                        ServerMessage::Requested{session}=>{let (remote,key,_,joined_request)=outgoing.take().ok_or("Unexpected outgoing invitation")?;peer=Some(Peer{id:session,remote,host:false,key,source:String::new(),#[cfg(target_os = "linux")] portal:None,confirm:false,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:None,expires:Arc::new(AtomicU64::new(0)),relay_expires:0,restart_pending:None,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4(),joined:joined_request,switched:false});peer.as_ref().ok_or("Invitation state unavailable")?.track(state,generation).await?;},
+                        ServerMessage::Consent{session,requester_connection,requester,requester_identity,unattended,joining:Some(join),..}=>{
+                            // A colleague of the technician asks to join the running session.
+                            let primary=peer.as_ref().filter(|active|active.host && active.id==join.session && active.remote==join.inviter_connection && active.signals.is_some() && !active.cancel.load(Ordering::Acquire));
+                            let eligible=!crate::service_config::controller_only() && joined.len()<2 && requester_connection!=join.inviter_connection && !joined.iter().any(|colleague|colleague.remote==requester_connection) && (unattended || !own_ticket.unattended_host_only());
+                            let checked=match (primary,requester_identity,eligible) {
+                                (Some(active),Some(ticket),true) if ticket.identity.profile==*requester.as_bytes() => peer_identity(&ticket,requester_connection,&principal,true,&roots).ok().map(|key|(key,ticket,active.source.clone(),active.confirm,active.control,#[cfg(target_os = "linux")] active.portal.clone())),
+                                _=>None,
+                            };
+                            #[cfg(target_os = "linux")]
+                            let Some((key,ticket,source,confirm,primary_control,portal))=checked else {send(&mut socket,ClientMessage::Decide{session,accept:false}).await?;continue;};
+                            #[cfg(not(target_os = "linux"))]
+                            let Some((key,ticket,source,confirm,primary_control))=checked else {send(&mut socket,ClientMessage::Decide{session,accept:false}).await?;continue;};
+                            let expires=Arc::new(AtomicU64::new(ticket.expires_at));
+                            let mut colleague=Peer{id:session,remote:requester_connection,host:true,key,source,#[cfg(target_os = "linux")] portal,confirm,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:Some(ticket),expires,relay_expires:0,restart_pending:None,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4(),joined:true,switched:false};
+                            if unattended {
+                                // Nobody at the computer: the company's rules for unattended access decide
+                                // (checked by the connection service); keyboard and mouse as for the first technician.
+                                colleague.local_consent=Some(true);colleague.accepted_at=Some(std::time::Instant::now());colleague.control=join.control && primary_control;
+                                send(&mut socket,ClientMessage::Decide{session,accept:true}).await?;
+                                joined.push(colleague);
+                                let views=colleague_views(&joined);
+                                state.change(generation,|status|status.colleagues=views).await;
+                            } else {
+                                joined.push(colleague);
+                                let views=colleague_views(&joined);
+                                state.change(generation,|status|{status.colleagues=views;status.join_request=Some(JoinRequest{session,connection:requester_connection,inviter_connection:join.inviter_connection,control:join.control,unattended});}).await;
+                            }
+                        },
+                        ServerMessage::Consent{session,requester_connection,requester_identity,switched:Some(from),..}=>{
+                            // The sides of a running session were switched: this computer is to be shown.
+                            let memory=switch_memory.take().filter(|memory|memory.previous==from.previous && memory.remote==requester_connection && memory.at.elapsed()<Duration::from_secs(30));
+                            let verified=match (&memory,requester_identity) {
+                                (Some(memory),Some(ticket)) if !crate::service_config::controller_only() && peer.is_none() && outgoing.is_none() => switched_identity(&ticket,requester_connection,&memory.identity,&roots).ok().filter(|key|*key==memory.key).map(|key|(key,ticket)),
+                                _=>None,
+                            };
+                            let Some((key,ticket))=verified else {send(&mut socket,ClientMessage::Decide{session,accept:false}).await?;continue;};
+                            let memory=memory.ok_or("Switch state unavailable")?;
+                            let pressed=from.by==enrolled.connection_id && switch_pressed.take().is_some_and(|(previous,_)|previous==from.previous);
+                            let expires=Arc::new(AtomicU64::new(ticket.expires_at));
+                            peer=Some(Peer{id:session,remote:requester_connection,host:true,key,source:String::new(),#[cfg(target_os = "linux")] portal:None,confirm:false,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:Some(ticket),expires,relay_expires:0,restart_pending:None,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4(),joined:false,switched:true});
+                            peer.as_ref().ok_or("Invitation state unavailable")?.track(state,generation).await?;
+                            state.change(generation,|status|{status.phase="incoming".into();status.message="The other side asks to switch sides: they would see this screen. Accept or Reject".into();status.peer=Some(requester_connection);status.requester=None;status.sharing=true;status.unattended_session=false;}).await;
+                            // Switching back to the computer that was helped restores what its user allowed;
+                            // pressing "Switch sides" here is the consent to show this screen (view only).
+                            let automatic=match (memory.grants,pressed) {
+                                (Some(grants),_)=>Some(Decision{session,accept:true,source:grants.source,confirm:grants.confirm,control:grants.control,clipboard:grants.clipboard,files:grants.files,chat:grants.chat,recording:grants.recording}),
+                                (None,true)=>session_platform::main_display_source().map(|source|Decision{session,accept:true,source,confirm:true,control:false,clipboard:false,files:false,chat:false,recording:false}),
+                                (None,false)=>None,
+                            };
+                            if let Some(decision)=automatic && state.decide(decision).await.is_err() {
+                                state.change(generation,|status|status.message="Choose what to show, then Accept to switch sides".into()).await;
+                            }
+                        },
+                        ServerMessage::Switched{previous,session,host}=>{
+                            // The sides were switched: this app now sees the other computer.
+                            let memory=switch_memory.as_ref().filter(|memory|memory.previous==previous && memory.remote==host && memory.at.elapsed()<Duration::from_secs(30));
+                            let Some(memory)=memory.filter(|_|peer.is_none() && outgoing.is_none()) else {send(&mut socket,ClientMessage::Close{session}).await?;continue;};
+                            switch_pressed=None;
+                            let expires=Arc::new(AtomicU64::new(memory.identity.expires_at));
+                            peer=Some(Peer{id:session,remote:host,host:false,key:memory.key,source:String::new(),#[cfg(target_os = "linux")] portal:None,confirm:false,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:Some(memory.identity.clone()),expires,relay_expires:0,restart_pending:None,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4(),joined:false,switched:true});
+                            peer.as_ref().ok_or("Invitation state unavailable")?.track(state,generation).await?;
+                            state.change(generation,|status|{status.phase="outgoing".into();status.message="Switching sides: waiting for the other computer's picture".into();status.peer=Some(host);status.sharing=false;}).await;
+                        },
+                        ServerMessage::Invited{invitation,host,inviter,inviter_connection,control,unattended,expires_in}=>{
+                            let now=SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_|"System clock is unavailable")?.as_secs();
+                            let expires_at=now+u64::from(expires_in.min(300));
+                            if invitations.len()>=4{invitations.remove(0);}
+                            invitations.push((invitation,host,unattended,expires_at));
+                            state.change(generation,|status|{
+                                if status.invitations.len()>=4{status.invitations.remove(0);}
+                                status.invitations.push(InvitationView{invitation,host,inviter,inviter_connection,control,unattended,expires_at});
+                            }).await;
+                        },
+                        ServerMessage::InviteStatus{delivered,..}=>{
+                            invite_pending=false;
+                            state.change(generation,|status|status.invite_message=Some(if delivered==0{"Your colleague is not online in Mixel Remote right now".into()}else{"Invitation sent: your colleague joins when they accept and the person at the computer allows it".into()})).await;
+                        },
                         ServerMessage::Consent{session,requester_connection,requester,requester_identity,unattended,..}=>{
                             if crate::service_config::controller_only() || peer.is_some() || outgoing.is_some(){send(&mut socket,ClientMessage::Decide{session,accept:false}).await?;continue;}
                             let ticket=requester_identity.ok_or("The invitation has no signed requester identity")?;
@@ -1974,7 +2540,7 @@ async fn run(
                                 Some(config)
                             }else{None};
                             let expires=Arc::new(AtomicU64::new(ticket.expires_at));
-                            peer=Some(Peer{id:session,remote:requester_connection,host:true,key,source:String::new(),#[cfg(target_os = "linux")] portal:None,confirm:false,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:Some(ticket),expires,relay_expires:0,restart_pending:None,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4()});
+                            peer=Some(Peer{id:session,remote:requester_connection,host:true,key,source:String::new(),#[cfg(target_os = "linux")] portal:None,confirm:false,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:Some(ticket),expires,relay_expires:0,restart_pending:None,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4(),joined:false,switched:false});
                             peer.as_ref().ok_or("Invitation state unavailable")?.track(state,generation).await?;
                             state.change(generation,|status|{status.phase="incoming".into();status.message="Incoming request: choose a source and Accept or Reject".into();status.peer=Some(requester_connection);status.requester=Some(requester);status.sharing=true;status.unattended_session=unattended;}).await;
                             if let Some(config)=auto {
@@ -2000,7 +2566,7 @@ async fn run(
                             let now=SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_|"System clock is unavailable")?.as_secs();
                             local.verify(&roots,now).map_err(|_|"The local session identity is invalid or expired")?;
                             if !same_identity(local,&own_ticket){return Err("The accepted session does not belong to this account and device".into());}
-                            let checked=peer_identity(remote,active.remote,&principal,active.host,&roots)?;
+                            let checked=if active.switched{switched_identity(remote,active.remote,active.identity.as_ref().ok_or("The other side was not verified")?,&roots)?}else{peer_identity(remote,active.remote,&principal,active.host,&roots)?};
                             if checked!=active.key || active.identity.as_ref().is_some_and(|known|!same_identity(known,remote)){return Err("Peer identity changed; request a fresh connection".into());}
                             active.expires.store(remote.expires_at,Ordering::Release);
                             active.identity=Some(remote.clone());
@@ -2025,19 +2591,39 @@ async fn run(
                             let (signals_tx,signals_rx)=mpsc::channel(32);for early in active.early.drain(..){signals_tx.try_send(early).map_err(|_|"Peer signaling queue overflowed")?;}active.signals=Some(signals_tx);
                             state.finish_previous_media().await?;
                             if active.cancel.load(Ordering::Acquire) || cancel.load(Ordering::Acquire){if active.take_close(){send(&mut socket,ClientMessage::Close{session}).await?;}continue;}
-                            remote_peer::start(remote_peer::Config{state:state.clone(),generation,session,nonce,host:active.host,login_window:session_platform::login_window_mode(),remote_key:active.key,identity:identity.clone(),source:active.source.clone(),#[cfg(target_os = "linux")] portal:active.portal.clone(),confirm:active.confirm,control:active.control,clipboard:active.clipboard,files:active.files,chat:active.chat,recording:active.recording,consent_id:active.consent_id,consent_cancel:active.consent_cancel.clone(),consent_started:active.started_at,session_cancel:active.cancel.clone(),account_cancel:cancel.clone(),signals:signals_rx,commands:tx.clone(),video:video.clone(),ice_servers,relay_only:service.relay_only,authorization:broker_lease.clone(),peer_expires:active.expires.clone()})?;
+                            remote_peer::start(remote_peer::Config{state:state.clone(),generation,session,nonce,host:active.host,login_window:session_platform::login_window_mode(),remote_key:active.key,identity:identity.clone(),source:active.source.clone(),#[cfg(target_os = "linux")] portal:active.portal.clone(),confirm:active.confirm,control:active.control,clipboard:active.clipboard,files:active.files,chat:active.chat,recording:active.recording,consent_id:active.consent_id,consent_cancel:active.consent_cancel.clone(),consent_started:active.started_at,session_cancel:active.cancel.clone(),account_cancel:cancel.clone(),signals:signals_rx,commands:tx.clone(),video:video.clone(),ice_servers,relay_only:service.relay_only,authorization:broker_lease.clone(),peer_expires:active.expires.clone(),mirror:false})?;
                         },
                         ServerMessage::PeerRenewed{session,identity:renewed}=>{
                             let active=peer.as_mut().filter(|peer|peer.id==session).ok_or("Unexpected peer authorization renewal")?;
-                            let key=peer_identity(&renewed,active.remote,&principal,active.host,&roots)?;
                             let previous=active.identity.as_ref().ok_or("Peer identity has not been authenticated")?;
+                            let key=if active.switched{switched_identity(&renewed,active.remote,previous,&roots)?}else{peer_identity(&renewed,active.remote,&principal,active.host,&roots)?};
                             if key!=active.key || !same_identity(previous,&renewed){return Err("Peer account, enrollment or authorization changed".into());}
                             if renewed.issued_at>=previous.issued_at && renewed.expires_at>=previous.expires_at{active.expires.store(renewed.expires_at,Ordering::Release);active.identity=Some(renewed);}
                         },
                         ServerMessage::Signal{session,payload}=>{let active=peer.as_ref().filter(|peer|peer.id==session).ok_or("Unexpected peer signaling")?;if active.cancel.load(Ordering::Acquire){continue;}match active.signals.as_ref(){Some(signals)=>signals.try_send(payload).map_err(|_|"Peer signaling queue overflowed")?,None if active.nonce.is_some() && active.early.len()<32=>{/* accepted, relay configuration still on its way: keep for the media task */let active=peer.as_mut().ok_or("Unexpected peer signaling")?;active.early.push(payload);},None=>return Err("Media negotiation is unavailable".into())}},
+                        ServerMessage::Closed{session,reason:signaling_server::protocol::CloseReason::Switched} if peer.as_ref().is_some_and(|active|active.id==session && active.identity.is_some())=>{
+                            let ended=peer.take().ok_or("Session state unavailable")?;
+                            // Grants of the person at this computer survive a switch and its switch back.
+                            let grants=if ended.host && !ended.switched {
+                                Some(HostGrants{source:ended.source.clone(),confirm:ended.confirm,control:ended.control,clipboard:ended.clipboard,files:ended.files,chat:ended.chat,recording:ended.recording})
+                            } else {
+                                switch_memory.take().filter(|memory|memory.key==ended.key).and_then(|memory|memory.grants)
+                            };
+                            switch_memory=Some(SwitchMemory{previous:session,remote:ended.remote,key:ended.key,identity:ended.identity.clone().ok_or("Peer identity unavailable")?,grants,at:std::time::Instant::now()});
+                            state.change(generation,|status|{status.phase="ready".into();status.message="Switching sides".into();status.session=None;status.peer=Some(ended.remote);status.requester=None;}).await;
+                        },
                         ServerMessage::Closed{session,reason}=>{if peer.as_ref().is_some_and(|peer|peer.id==session){peer=None;state.change(generation,|status|{status.phase="ready".into();status.message=format!("Session closed: {reason:?}");status.session=None;status.peer=None;status.requester=None;}).await;}},
                         ServerMessage::Error{code}=>{
                             if outgoing.take().is_some(){state.change(generation,|status|{status.phase="ready".into();status.peer=None;status.message=request_failure_message(code).into();}).await;}
+                            else if std::mem::take(&mut invite_pending){
+                                state.change(generation,|status|status.invite_message=Some(match code {ErrorCode::Busy=>"No more colleagues can join this session right now",ErrorCode::Unavailable=>"The computer you are helping cannot receive colleagues (it needs a newer Mixel Remote)",_=>"The invitation could not be sent"}.into())).await;
+                            }
+                            else if switch_pressed.take().is_some(){
+                                state.change(generation,|status|status.message=match code {ErrorCode::Busy=>"Sides cannot be switched while a colleague is connected",ErrorCode::Unavailable=>"The other side needs a newer Mixel Remote to switch sides",_=>"Sides could not be switched"}.into()).await;
+                            }
+                            else if code==ErrorCode::Invalid && capabilities_sent.elapsed()<Duration::from_secs(15) && peer.is_none(){
+                                // An older connection service: no colleagues, no switching sides.
+                            }
                             else if peer.as_ref().is_some_and(|peer|peer.nonce.is_some()) && pending_renewal.is_none(){
                                 let session=peer.take().ok_or("Session state unavailable")?.id;
                                 send(&mut socket,ClientMessage::Close{session}).await?;
@@ -2211,6 +2797,8 @@ mod consent_tests {
             local_consent: None,
             accepted_at: None,
             consent_id: Uuid::from_u128(2),
+            joined: false,
+            switched: false,
         }
     }
     #[test]
@@ -2244,6 +2832,8 @@ mod consent_tests {
                 old.clone(),
                 scope,
                 Arc::new(AtomicBool::new(false)),
+                false,
+                false,
             )
             .await
             .unwrap();
@@ -2254,6 +2844,8 @@ mod consent_tests {
                 fresh.clone(),
                 scope,
                 Arc::new(AtomicBool::new(false)),
+                false,
+                false,
             )
             .await
             .unwrap();
@@ -2294,6 +2886,8 @@ mod consent_tests {
                 Arc::new(AtomicBool::new(false)),
                 scope,
                 root.clone(),
+                false,
+                false,
             )
             .await
             .unwrap();
@@ -2305,6 +2899,8 @@ mod consent_tests {
                 Arc::new(AtomicBool::new(false)),
                 scope,
                 root.clone(),
+                false,
+                false,
             )
             .await
             .unwrap();
@@ -2379,6 +2975,8 @@ mod consent_tests {
                 cancelled.clone(),
                 Uuid::from_u128(23),
                 Arc::new(AtomicBool::new(false)),
+                false,
+                false,
             )
             .await
             .unwrap();
@@ -2408,6 +3006,75 @@ mod consent_tests {
         assert!(cancelled.load(Ordering::Acquire));
         assert_eq!(remote.0.lock().await.status.phase, "closing");
     }
+
+    fn ticket(device: u128, profile: u128, tenant: Option<u128>, connection: u32, key: u8, authority: &ed25519_dalek::SigningKey) -> core_protocol::delegation::DeviceTicket {
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        core_protocol::delegation::DeviceTicket::issue(
+            core_protocol::device_login::DeviceLoginChallenge {
+                nonce: [1; 32],
+                device: *Uuid::from_u128(device).as_bytes(),
+                profile: *Uuid::from_u128(profile).as_bytes(),
+                tenant: tenant.map(|id| *Uuid::from_u128(id).as_bytes()),
+                connection_id: connection,
+                generation: 1,
+            },
+            ed25519_dalek::SigningKey::from_bytes(&[key; 32]).verifying_key(),
+            tenant.is_none(),
+            now - 5,
+            now + 600,
+            authority,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_switched_session_accepts_only_the_peer_verified_before() {
+        let authority = ed25519_dalek::SigningKey::from_bytes(&[9; 32]);
+        let roots = [authority.verifying_key()];
+        // A Mixel staff technician and a customer of another company: not allowed to reach each other
+        // directly, but the same two devices after a switch.
+        let technician = ticket(1, 2, None, 111_111_111, 7, &authority);
+        let customer = Principal { user: Uuid::from_u128(5), tenant: Some(Uuid::from_u128(6)), staff: false, expires_at: u64::MAX };
+        assert!(peer_identity(&technician, 111_111_111, &customer, true, &roots).is_ok(), "a customer may be helped by staff");
+        assert!(peer_identity(&technician, 111_111_111, &customer, false, &roots).is_err(), "but may not open a session to staff on its own");
+        let stranger = ticket(3, 4, Some(8), 333_333_333, 8, &authority);
+        assert!(peer_identity(&stranger, 333_333_333, &customer, true, &roots).is_err(), "nobody from another company may ask");
+        assert_eq!(switched_identity(&technician, 111_111_111, &technician, &roots).unwrap(), ed25519_dalek::SigningKey::from_bytes(&[7; 32]).verifying_key());
+        // A different device, another connection ID or a forged authority are refused.
+        let other_device = ticket(9, 2, None, 111_111_111, 7, &authority);
+        assert!(switched_identity(&other_device, 111_111_111, &technician, &roots).is_err());
+        assert!(switched_identity(&technician, 222_222_222, &technician, &roots).is_err());
+        let forged = ticket(1, 2, None, 111_111_111, 7, &ed25519_dalek::SigningKey::from_bytes(&[4; 32]));
+        assert!(switched_identity(&forged, 111_111_111, &technician, &roots).is_err());
+    }
+
+    #[test]
+    fn a_colleague_needs_local_consent_and_the_hosts_own_identity() {
+        let authority = ed25519_dalek::SigningKey::from_bytes(&[9; 32]);
+        let roots = [authority.verifying_key()];
+        let own = ticket(10, 11, Some(1), 222_222_222, 3, &authority);
+        let principal = Principal { user: Uuid::from_u128(11), tenant: Some(Uuid::from_u128(1)), staff: false, expires_at: u64::MAX };
+        let colleague_ticket = ticket(20, 21, Some(1), 123_456_789, 7, &authority);
+        let mut colleague = invitation();
+        colleague.joined = true;
+        colleague.identity = Some(colleague_ticket.clone());
+        let session = Uuid::from_u128(1);
+        // Not yet allowed by the person at the computer.
+        assert!(colleague_accepted(&mut colleague, session, [5; 32], &colleague_ticket, &own, &own, &principal, &roots).is_err());
+        colleague.local_consent = Some(true);
+        colleague.accepted_at = Some(std::time::Instant::now());
+        // The session must name this device as host.
+        let someone_else = ticket(30, 31, Some(1), 222_222_222, 4, &authority);
+        assert!(colleague_accepted(&mut colleague, session, [5; 32], &colleague_ticket, &someone_else, &own, &principal, &roots).is_err());
+        // The colleague's ticket must be the one that asked.
+        let impostor = ticket(40, 41, Some(1), 123_456_789, 8, &authority);
+        assert!(colleague_accepted(&mut colleague, session, [5; 32], &impostor, &own, &own, &principal, &roots).is_err());
+        let binding = colleague_accepted(&mut colleague, session, [5; 32], &colleague_ticket, &own, &own, &principal, &roots).unwrap();
+        assert_ne!(binding, [0; 32]);
+        assert_eq!(colleague.expires.load(Ordering::Acquire), colleague_ticket.expires_at);
+        assert_eq!(colleague_views(&[colleague]).first().map(|view| view.state), Some("connecting"));
+    }
+
 }
 
 #[cfg(all(test, any(target_os = "linux", target_os = "windows")))]

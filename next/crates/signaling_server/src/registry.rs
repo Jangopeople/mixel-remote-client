@@ -19,6 +19,10 @@ const MAX_PEERS: usize = 1000;
 const MAX_SESSIONS: usize = 1000;
 const MAX_PER_PEER: usize = 4;
 const MAX_PRESENCE: usize = 64;
+/// Second (and third) technicians in one running session.
+const MAX_JOINED: usize = 2;
+const MAX_INVITATIONS: usize = 256;
+const INVITATION_SECONDS: u16 = 120;
 struct Peer {
     generation: Uuid,
     principal: Principal,
@@ -30,12 +34,18 @@ struct Peer {
     unattended_enabled: bool,
     /// A device-only host that opted into attended requests (and out of unattended ones).
     attended_support: bool,
+    /// Broker features the app announced (`join`, `switch`).
+    features: Vec<String>,
 }
 impl Peer {
     fn unattended_host_only(&self) -> bool {
         self.identity
             .as_ref()
             .is_some_and(|ticket| ticket.unattended_host_only())
+    }
+
+    fn supports(&self, feature: &str) -> bool {
+        self.features.iter().any(|name| name == feature)
     }
 
     fn can_request(&self, target: &Self, unattended: bool) -> bool {
@@ -72,6 +82,29 @@ struct Session {
     restart_after: Instant,
     /// The Remote SaaS tenant whose concurrent-session limit this session counts against.
     limit_tenant: Option<Uuid>,
+    /// Sessions of one support case share a group: the first technician's session and the
+    /// sessions of colleagues who joined it. Stable across transport restarts.
+    group: Uuid,
+    /// A colleague who joined the group's running session (`Some(control asked)`).
+    joined: Option<bool>,
+    /// The sides were switched: the technician who is authorized to help is `host` here and
+    /// the computer they help is `controller`. Policy checks use the authorized direction.
+    reversed: bool,
+}
+impl Session {
+    /// (technician, helped computer) as authorized by the support policy.
+    fn authorized(&self) -> (u32, u32) {
+        if self.reversed { (self.host, self.controller) } else { (self.controller, self.host) }
+    }
+}
+struct Invitation {
+    group: Uuid,
+    host: u32,
+    inviter: u32,
+    recipients: Vec<u32>,
+    control: bool,
+    unattended: bool,
+    expires_at: Instant,
 }
 struct Retired {
     controller: u32,
@@ -83,6 +116,7 @@ pub struct Registry {
     peers: HashMap<u32, Peer>,
     sessions: HashMap<Uuid, Session>,
     retired: HashMap<Uuid, Retired>,
+    invitations: HashMap<Uuid, Invitation>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PolicyCheck {
@@ -157,6 +191,13 @@ impl Registry {
                 (from, *host, false)
             }
             ClientMessage::RequestUnattended { host } => (from, *host, true),
+            ClientMessage::JoinSession { invitation } => {
+                let invitation = self.invitations.get(invitation)?;
+                if !invitation.recipients.contains(&from) {
+                    return None;
+                }
+                (from, invitation.host, invitation.unattended)
+            }
             ClientMessage::Decide {
                 session,
                 accept: true,
@@ -165,14 +206,16 @@ impl Registry {
                 if current.host != from || !matches!(current.phase, Phase::Consent) {
                     return None;
                 }
-                (current.controller, current.host, current.unattended)
+                let (technician, helped) = current.authorized();
+                (technician, helped, current.unattended)
             }
             ClientMessage::Restart { session } => {
                 let current = self.sessions.get(session)?;
                 if current.controller != from || !matches!(current.phase, Phase::Connected) {
                     return None;
                 }
-                (current.controller, current.host, current.unattended)
+                let (technician, helped) = current.authorized();
+                (technician, helped, current.unattended)
             }
             _ => return None,
         };
@@ -195,11 +238,11 @@ impl Registry {
         }
         self.sessions
             .iter()
-            .filter(|(_, session)| session.controller == controller)
+            .filter(|(_, session)| session.authorized().0 == controller)
             .map(|(id, session)| {
                 (
                     *id,
-                    self.policy_check(controller, session.host, session.unattended, unix),
+                    self.policy_check(controller, session.authorized().1, session.unattended, unix),
                 )
             })
             .collect()
@@ -208,7 +251,7 @@ impl Registry {
         if self
             .sessions
             .get(&session)
-            .is_some_and(|room| room.controller == controller.0)
+            .is_some_and(|room| room.authorized().0 == controller.0)
             && self
                 .peers
                 .get(&controller.0)
@@ -339,6 +382,7 @@ impl Registry {
                 code_gate: None,
                 unattended_enabled: false,
                 attended_support: false,
+                features: Vec::new(),
             },
         );
         self.send(
@@ -391,7 +435,27 @@ impl Registry {
             for id in [s.controller, s.host] {
                 self.send(id, ServerMessage::Closed { session, reason });
             }
+            // When the first technician's session ends, the colleagues who joined it end too.
+            if s.joined.is_none() {
+                let joined: Vec<Uuid> = self
+                    .sessions
+                    .iter()
+                    .filter(|(_, room)| room.group == s.group && room.joined.is_some())
+                    .map(|(id, _)| *id)
+                    .collect();
+                for room in joined {
+                    self.close(room, CloseReason::Requested, now);
+                }
+                self.invitations.retain(|_, invitation| invitation.group != s.group);
+            }
         }
+    }
+    /// The running first-technician session of a group, if any.
+    fn primary(&self, group: Uuid) -> Option<(Uuid, &Session)> {
+        self.sessions
+            .iter()
+            .find(|(_, room)| room.group == group && room.joined.is_none())
+            .map(|(id, room)| (*id, room))
     }
     pub fn disconnect(&mut self, id: u32, generation: Uuid) {
         if !self
@@ -414,6 +478,7 @@ impl Registry {
     }
     pub fn expire(&mut self, now: Instant) {
         self.retired.retain(|_, session| now < session.deadline);
+        self.invitations.retain(|_, invitation| now < invitation.expires_at);
         let expired: Vec<_> = self
             .sessions
             .iter()
@@ -501,6 +566,7 @@ impl Registry {
                 let host_identity = authority(host)?;
                 let unattended = current.unattended;
                 let limit_tenant = current.limit_tenant;
+                let (group, joined, reversed) = (current.group, current.joined, current.reversed);
                 let until = current.active_until.ok_or(ErrorCode::Forbidden)?;
                 if now >= until {
                     return Err(ErrorCode::Forbidden);
@@ -522,6 +588,9 @@ impl Registry {
                         active_until: Some(until),
                         restart_after: now + Duration::from_secs(30),
                         limit_tenant,
+                        group,
+                        joined,
+                        reversed,
                     },
                 );
                 self.retired.insert(
@@ -726,6 +795,9 @@ impl Registry {
                         active_until: None,
                         restart_after: now,
                         limit_tenant: limit.map(|limit| limit.tenant),
+                        group: session,
+                        joined: None,
+                        reversed: false,
                     },
                 );
                 self.send(from, ServerMessage::Requested { session });
@@ -741,6 +813,213 @@ impl Registry {
                             .peers
                             .get(&from)
                             .and_then(|peer| peer.identity.clone()),
+                        joining: None,
+                        switched: None,
+                    },
+                );
+                Ok(())
+            }
+            ClientMessage::Capabilities { features } => {
+                if features.len() > 16 || features.iter().any(|name| name.is_empty() || name.len() > 16 || !name.bytes().all(|byte| byte.is_ascii_lowercase())) {
+                    return Err(ErrorCode::Invalid);
+                }
+                let peer = self.peers.get_mut(&from).ok_or(ErrorCode::Forbidden)?;
+                peer.features = features;
+                Ok(())
+            }
+            ClientMessage::Invite { session, user, device, control } => {
+                let s = self.sessions.get(&session).ok_or(ErrorCode::Forbidden)?;
+                if from != s.controller || s.joined.is_some() || s.reversed || !matches!(s.phase, Phase::Connected) {
+                    return Err(ErrorCode::Forbidden);
+                }
+                if user.is_some() == device.is_some() {
+                    return Err(ErrorCode::Invalid);
+                }
+                let (group, host, unattended) = (s.group, s.host, s.unattended);
+                let target = self.peers.get(&host).ok_or(ErrorCode::Unavailable)?;
+                if !target.supports(FEATURE_JOIN) {
+                    return Err(ErrorCode::Unavailable);
+                }
+                let joined = self.sessions.values().filter(|room| room.group == group && room.joined.is_some()).count();
+                if joined >= MAX_JOINED
+                    || self.invitations.len() >= MAX_INVITATIONS
+                    || self.invitations.values().filter(|invitation| invitation.group == group).count() >= 4
+                {
+                    return Err(ErrorCode::Busy);
+                }
+                let inviter = self.peers[&from].principal.user;
+                // Only colleagues who may reach this computer themselves (same company, or staff).
+                let mut recipients: Vec<u32> = self
+                    .peers
+                    .iter()
+                    .filter(|(id, peer)| {
+                        **id != from
+                            && **id != host
+                            && user.is_none_or(|user| peer.principal.user == user)
+                            && device.is_none_or(|device| **id == device)
+                            && peer.identity.is_some()
+                            && peer.supports(FEATURE_JOIN)
+                            && peer.can_request(target, unattended)
+                            && (!unattended || target.unattended_enabled)
+                    })
+                    .map(|(id, _)| *id)
+                    .take(8)
+                    .collect();
+                recipients.sort_unstable();
+                let invitation = Uuid::new_v4();
+                if !recipients.is_empty() {
+                    for recipient in &recipients {
+                        self.send(
+                            *recipient,
+                            ServerMessage::Invited {
+                                invitation,
+                                host,
+                                inviter,
+                                inviter_connection: from,
+                                control,
+                                unattended,
+                                expires_in: INVITATION_SECONDS,
+                            },
+                        );
+                    }
+                    self.invitations.insert(
+                        invitation,
+                        Invitation {
+                            group,
+                            host,
+                            inviter: from,
+                            recipients: recipients.clone(),
+                            control,
+                            unattended,
+                            expires_at: now + Duration::from_secs(u64::from(INVITATION_SECONDS)),
+                        },
+                    );
+                }
+                self.send(from, ServerMessage::InviteStatus { invitation, delivered: recipients.len() as u16 });
+                Ok(())
+            }
+            ClientMessage::JoinSession { invitation: id } => {
+                let invitation = self.invitations.get(&id).ok_or(ErrorCode::Unavailable)?;
+                if !invitation.recipients.contains(&from) {
+                    return Err(ErrorCode::Forbidden);
+                }
+                let (group, host, inviter_connection, control, unattended) =
+                    (invitation.group, invitation.host, invitation.inviter, invitation.control, invitation.unattended);
+                let Some((primary, room)) = self.primary(group) else {
+                    self.invitations.remove(&id);
+                    return Err(ErrorCode::Unavailable);
+                };
+                if !matches!(room.phase, Phase::Connected) || room.controller != inviter_connection || room.host != host {
+                    self.invitations.remove(&id);
+                    return Err(ErrorCode::Unavailable);
+                }
+                let requester = &self.peers[&from];
+                let target = self.peers.get(&host).ok_or(ErrorCode::Unavailable)?;
+                if !requester.can_request(target, unattended) || (unattended && !target.unattended_enabled) {
+                    return Err(ErrorCode::Unavailable);
+                }
+                if self.sessions.values().any(|room| room.group == group && room.controller == from) {
+                    return Err(ErrorCode::Busy);
+                }
+                if self.sessions.len() >= MAX_SESSIONS
+                    || self.sessions.values().filter(|room| room.group == group && room.joined.is_some()).count() >= MAX_JOINED
+                    || [from, host].iter().any(|peer| {
+                        self.sessions.values().filter(|s| s.host == *peer || s.controller == *peer).count() >= MAX_PER_PEER
+                    })
+                {
+                    return Err(ErrorCode::Busy);
+                }
+                if let Some(limit) = limit
+                    && self.tenant_sessions(limit.tenant) >= limit.max_sessions as usize
+                {
+                    return Err(ErrorCode::Busy);
+                }
+                let inviter = self.peers.get(&inviter_connection).map(|peer| peer.principal.user).ok_or(ErrorCode::Unavailable)?;
+                self.invitations.remove(&id);
+                let requester = self.peers[&from].principal.clone();
+                let session = Uuid::new_v4();
+                self.sessions.insert(
+                    session,
+                    Session {
+                        controller: from,
+                        host,
+                        unattended,
+                        phase: Phase::Consent,
+                        deadline: now + Duration::from_secs(90),
+                        identity_from_controller: false,
+                        identity_from_host: false,
+                        active_until: None,
+                        restart_after: now,
+                        limit_tenant: limit.map(|limit| limit.tenant),
+                        group,
+                        joined: Some(control),
+                        reversed: false,
+                    },
+                );
+                self.send(from, ServerMessage::Requested { session });
+                self.send(
+                    host,
+                    ServerMessage::Consent {
+                        session,
+                        requester_connection: from,
+                        requester: requester.user,
+                        requester_tenant: requester.tenant,
+                        unattended,
+                        requester_identity: self.peers.get(&from).and_then(|peer| peer.identity.clone()),
+                        joining: Some(Joining { session: primary, inviter, inviter_connection, control }),
+                        switched: None,
+                    },
+                );
+                Ok(())
+            }
+            ClientMessage::SwitchSides { session } => {
+                let s = self.sessions.get(&session).ok_or(ErrorCode::Forbidden)?;
+                if (from != s.controller && from != s.host) || s.joined.is_some() || !matches!(s.phase, Phase::Connected) {
+                    return Err(ErrorCode::Forbidden);
+                }
+                let (controller, host, group) = (s.controller, s.host, s.group);
+                if ![controller, host].iter().all(|id| self.peers.get(id).is_some_and(|peer| peer.supports(FEATURE_SWITCH) && peer.identity.is_some())) {
+                    return Err(ErrorCode::Unavailable);
+                }
+                // Colleagues watching would lose their picture: switch only in a one-to-one session.
+                if self.sessions.values().any(|room| room.group == group && room.joined.is_some()) {
+                    return Err(ErrorCode::Busy);
+                }
+                let (reversed, limit_tenant) = (!s.reversed, s.limit_tenant);
+                let requester = self.peers[&host].principal.clone();
+                let replacement = Uuid::new_v4();
+                // The old session ends first (its pictures stop), then the switched one asks.
+                self.close(session, CloseReason::Switched, now);
+                self.sessions.insert(
+                    replacement,
+                    Session {
+                        controller: host,
+                        host: controller,
+                        unattended: false,
+                        phase: Phase::Consent,
+                        deadline: now + Duration::from_secs(90),
+                        identity_from_controller: false,
+                        identity_from_host: false,
+                        active_until: None,
+                        restart_after: now,
+                        limit_tenant,
+                        group: replacement,
+                        joined: None,
+                        reversed,
+                    },
+                );
+                self.send(host, ServerMessage::Switched { previous: session, session: replacement, host: controller });
+                self.send(
+                    controller,
+                    ServerMessage::Consent {
+                        session: replacement,
+                        requester_connection: host,
+                        requester: requester.user,
+                        requester_tenant: requester.tenant,
+                        unattended: false,
+                        requester_identity: self.peers.get(&host).and_then(|peer| peer.identity.clone()),
+                        joining: None,
+                        switched: Some(SwitchedFrom { previous: session, by: from }),
                     },
                 );
                 Ok(())
@@ -1309,5 +1588,159 @@ mod rotation_tests {
         );
         registry.expire(deadline);
         assert_eq!(registry.counts(), (3, 0));
+    }
+
+    /// Drains every queued event of one peer.
+    fn drain(events: &mut mpsc::Receiver<ServerMessage>) -> Vec<ServerMessage> {
+        let mut all = Vec::new();
+        while let Ok(event) = events.try_recv() {
+            all.push(event);
+        }
+        all
+    }
+    /// Takes a requested session through consent, identity, offer and answer.
+    fn connect(registry: &mut Registry, now: Instant, controller: (u32, Uuid), host: (u32, Uuid), session: Uuid) {
+        registry.handle(host.0, host.1, ClientMessage::Decide { session, accept: true }, now).unwrap();
+        registry.handle(controller.0, controller.1, ClientMessage::Signal { session, payload: Signal::Offer("v=0".into()) }, now).unwrap();
+        registry.handle(host.0, host.1, ClientMessage::Signal { session, payload: Signal::Answer("v=0".into()) }, now).unwrap();
+    }
+    fn features(registry: &mut Registry, id: u32, generation: Uuid) {
+        registry
+            .handle(id, generation, ClientMessage::Capabilities { features: vec![FEATURE_JOIN.into(), FEATURE_SWITCH.into()] }, Instant::now())
+            .unwrap();
+    }
+
+    #[test]
+    fn a_colleague_joins_a_running_session_and_leaves_with_it() {
+        let mut registry = Registry::default();
+        let now = Instant::now();
+        let (technician, mut technician_events) = peer(&mut registry, 111_111_111, 10);
+        let (host, mut host_events) = peer(&mut registry, 222_222_222, 11);
+        let (colleague, mut colleague_events) = peer(&mut registry, 333_333_333, 12);
+        let (stranger, mut stranger_events) = peer(&mut registry, 444_444_444, 13);
+        for (id, generation) in [(111_111_111, technician), (222_222_222, host), (333_333_333, colleague)] {
+            features(&mut registry, id, generation);
+        }
+        drain(&mut stranger_events);
+        registry.handle(111_111_111, technician, ClientMessage::Request { host: 222_222_222 }, now).unwrap();
+        let Some(ServerMessage::Requested { session }) = drain(&mut technician_events).pop() else { panic!() };
+        // Inviting is only possible in a running session.
+        assert_eq!(
+            registry.handle(111_111_111, technician, ClientMessage::Invite { session, user: Some(Uuid::from_u128(12)), device: None, control: true }, now),
+            Err(ErrorCode::Forbidden)
+        );
+        connect(&mut registry, now, (111_111_111, technician), (222_222_222, host), session);
+        drain(&mut technician_events);
+        drain(&mut host_events);
+        // The person helped cannot invite; exactly one target kind is required.
+        assert_eq!(
+            registry.handle(222_222_222, host, ClientMessage::Invite { session, user: Some(Uuid::from_u128(12)), device: None, control: true }, now),
+            Err(ErrorCode::Forbidden)
+        );
+        assert_eq!(
+            registry.handle(111_111_111, technician, ClientMessage::Invite { session, user: Some(Uuid::from_u128(12)), device: Some(333_333_333), control: true }, now),
+            Err(ErrorCode::Invalid)
+        );
+        // A colleague whose app does not understand invitations is not reached.
+        registry.handle(111_111_111, technician, ClientMessage::Invite { session, user: Some(Uuid::from_u128(13)), device: None, control: false }, now).unwrap();
+        assert!(matches!(drain(&mut technician_events).as_slice(), [ServerMessage::InviteStatus { delivered: 0, .. }]));
+        assert!(drain(&mut stranger_events).is_empty());
+        registry.handle(111_111_111, technician, ClientMessage::Invite { session, user: Some(Uuid::from_u128(12)), device: None, control: true }, now).unwrap();
+        assert!(matches!(drain(&mut technician_events).as_slice(), [ServerMessage::InviteStatus { delivered: 1, .. }]));
+        let Some(ServerMessage::Invited { invitation, host: invited_host, control: true, inviter, .. }) = drain(&mut colleague_events).pop() else { panic!() };
+        assert_eq!((invited_host, inviter), (222_222_222, Uuid::from_u128(10)));
+        // Only the invited colleague can use the invitation.
+        assert_eq!(registry.handle(444_444_444, stranger, ClientMessage::JoinSession { invitation }, now), Err(ErrorCode::Forbidden));
+        registry.handle(333_333_333, colleague, ClientMessage::JoinSession { invitation }, now).unwrap();
+        let Some(ServerMessage::Requested { session: joined }) = drain(&mut colleague_events).pop() else { panic!() };
+        let Some(ServerMessage::Consent { session: asked, requester_connection: 333_333_333, joining: Some(joining), switched: None, .. }) = drain(&mut host_events).pop() else { panic!() };
+        assert_eq!((asked, joining.session, joining.inviter, joining.control), (joined, session, Uuid::from_u128(10), true));
+        // An invitation is used once.
+        assert_eq!(registry.handle(333_333_333, colleague, ClientMessage::JoinSession { invitation }, now), Err(ErrorCode::Unavailable));
+        connect(&mut registry, now, (333_333_333, colleague), (222_222_222, host), joined);
+        assert_eq!(registry.counts().1, 2);
+        // Sides cannot be switched while a colleague watches.
+        assert_eq!(registry.handle(111_111_111, technician, ClientMessage::SwitchSides { session }, now), Err(ErrorCode::Busy));
+        // The colleague leaving keeps the first session; the first session ending ends the joined one.
+        drain(&mut colleague_events);
+        registry.handle(111_111_111, technician, ClientMessage::Close { session }, now).unwrap();
+        assert!(drain(&mut colleague_events).iter().any(|event| matches!(event, ServerMessage::Closed { session: closed, .. } if *closed == joined)));
+        assert_eq!(registry.counts().1, 0);
+    }
+
+    #[test]
+    fn a_joined_session_survives_a_transport_restart_of_the_first_session() {
+        let mut registry = Registry::default();
+        let now = Instant::now();
+        let (technician, mut technician_events) = peer(&mut registry, 111_111_111, 10);
+        let (host, mut host_events) = peer(&mut registry, 222_222_222, 11);
+        let (colleague, mut colleague_events) = peer(&mut registry, 333_333_333, 12);
+        for (id, generation) in [(111_111_111, technician), (222_222_222, host), (333_333_333, colleague)] {
+            features(&mut registry, id, generation);
+        }
+        registry.handle(111_111_111, technician, ClientMessage::Request { host: 222_222_222 }, now).unwrap();
+        let Some(ServerMessage::Requested { session }) = drain(&mut technician_events).pop() else { panic!() };
+        connect(&mut registry, now, (111_111_111, technician), (222_222_222, host), session);
+        registry.handle(111_111_111, technician, ClientMessage::Invite { session, user: None, device: Some(333_333_333), control: false }, now).unwrap();
+        let Some(ServerMessage::Invited { invitation, control: false, .. }) = drain(&mut colleague_events).pop() else { panic!() };
+        registry.handle(333_333_333, colleague, ClientMessage::JoinSession { invitation }, now).unwrap();
+        let Some(ServerMessage::Requested { session: joined }) = drain(&mut colleague_events).pop() else { panic!() };
+        drain(&mut host_events);
+        connect(&mut registry, now, (333_333_333, colleague), (222_222_222, host), joined);
+        let later = now + Duration::from_secs(31);
+        registry.handle(111_111_111, technician, ClientMessage::Restart { session }, later).unwrap();
+        let Some(ServerMessage::Restarted { session: replacement, .. }) = drain(&mut technician_events).pop() else { panic!() };
+        assert_eq!(registry.counts().1, 2);
+        // The replacement is still the group's first session: ending it ends the colleague's too.
+        registry.handle(222_222_222, host, ClientMessage::Close { session: replacement }, later).unwrap();
+        assert_eq!(registry.counts().1, 0);
+        // Invitations for a finished session are gone.
+        assert_eq!(registry.invitations.len(), 0);
+    }
+
+    #[test]
+    fn switching_sides_reverses_the_session_and_keeps_the_authorized_direction() {
+        let mut registry = Registry::default();
+        let now = Instant::now();
+        let (technician, mut technician_events) = peer(&mut registry, 111_111_111, 10);
+        let (host, mut host_events) = peer(&mut registry, 222_222_222, 11);
+        registry.handle(111_111_111, technician, ClientMessage::Request { host: 222_222_222 }, now).unwrap();
+        let Some(ServerMessage::Requested { session }) = drain(&mut technician_events).pop() else { panic!() };
+        // Not before the session runs, and only between apps that understand it.
+        assert_eq!(registry.handle(111_111_111, technician, ClientMessage::SwitchSides { session }, now), Err(ErrorCode::Forbidden));
+        connect(&mut registry, now, (111_111_111, technician), (222_222_222, host), session);
+        assert_eq!(registry.handle(111_111_111, technician, ClientMessage::SwitchSides { session }, now), Err(ErrorCode::Unavailable));
+        features(&mut registry, 111_111_111, technician);
+        features(&mut registry, 222_222_222, host);
+        drain(&mut technician_events);
+        drain(&mut host_events);
+        registry.handle(111_111_111, technician, ClientMessage::SwitchSides { session }, now).unwrap();
+        // The helped computer now views; the technician's computer is asked (it pressed the button).
+        let host_side = drain(&mut host_events);
+        assert!(matches!(host_side.first(), Some(ServerMessage::Closed { reason: CloseReason::Switched, .. })));
+        let Some(ServerMessage::Switched { previous, session: reversed, host: 111_111_111 }) = host_side.last().cloned() else { panic!() };
+        assert_eq!(previous, session);
+        let technician_side = drain(&mut technician_events);
+        let Some(ServerMessage::Consent { session: asked, requester_connection: 222_222_222, switched: Some(from), joining: None, .. }) = technician_side.last().cloned() else { panic!() };
+        assert_eq!((asked, from.previous, from.by), (reversed, session, 111_111_111));
+        // The policy is asked about the technician helping the computer, never the other way round.
+        let check = registry
+            .policy_for_message(111_111_111, technician, &ClientMessage::Decide { session: reversed, accept: true }, 100)
+            .unwrap();
+        assert_eq!((check.controller.0, check.host.0), (111_111_111, 222_222_222));
+        assert!(registry.controlled_policy_checks(111_111_111, technician, 100).iter().any(|(id, check)| *id == reversed && check.is_some()));
+        assert!(registry.controlled_policy_checks(222_222_222, host, 100).is_empty());
+        // A policy revocation for the technician ends the switched session too.
+        registry.policy_revoked(reversed, (111_111_111, technician), now);
+        assert_eq!(registry.counts().1, 0);
+    }
+
+    #[test]
+    fn capabilities_are_bounded() {
+        let mut registry = Registry::default();
+        let (generation, _events) = peer(&mut registry, 111_111_111, 10);
+        for bad in [vec!["".to_owned()], vec!["Join".to_owned()], vec!["a".repeat(17)], vec!["x".to_owned(); 17]] {
+            assert_eq!(registry.handle(111_111_111, generation, ClientMessage::Capabilities { features: bad }, Instant::now()), Err(ErrorCode::Invalid));
+        }
     }
 }

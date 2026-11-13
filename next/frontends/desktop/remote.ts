@@ -5,7 +5,7 @@
     if (!value) throw Error(`Missing remote-support control ${id}`);
     return value as T;
   }
-  type Status = {meeting_offer?: [string, string] | null; controller_only?:boolean; platform?: 'macos'|'windows'|'linux'; phase: string; message: string; host: number | null; session: string | null; consent: string | null; peer: number | null; requester: string | null; received: number; sharing: boolean; control: boolean; clipboard: boolean; files: boolean; input_access: boolean; code_required: boolean; support_code: string | null; online?: number[]; pairing: {request_id:string; provider_name:string; customer_name:string} | null; pairing_message: string | null; unattended_enabled: boolean; unattended_pending: 'enabling' | 'disabling_after_enable' | 'disabling' | null; unattended_session: boolean; displays?: number; display?: number; display_all?: boolean; print_jobs?: string[]; host_actions?: string[]; signin_id?: number | null; host_macs?: string[]};
+  type Status = {meeting_offer?: [string, string] | null; controller_only?:boolean; platform?: 'macos'|'windows'|'linux'; phase: string; message: string; host: number | null; session: string | null; consent: string | null; peer: number | null; requester: string | null; received: number; sharing: boolean; control: boolean; clipboard: boolean; files: boolean; input_access: boolean; code_required: boolean; support_code: string | null; online?: number[]; pairing: {request_id:string; provider_name:string; customer_name:string} | null; pairing_message: string | null; unattended_enabled: boolean; unattended_pending: 'enabling' | 'disabling_after_enable' | 'disabling' | null; unattended_session: boolean; displays?: number; display?: number; display_all?: boolean; print_jobs?: string[]; host_actions?: string[]; signin_id?: number | null; host_macs?: string[]; colleagues?: unknown[]; join_request?: unknown; invitations?: unknown[]; invite_message?: string | null; joined_session?: boolean; switched?: boolean; peer_features?: string[]};
   type RecordingView = {phase: 'ready' | 'waiting_for_video' | 'recording' | 'saving' | 'saved' | 'saved_partial'} | {phase:'error'; message:string};
   type RemoteStatus = Status & {recording_permitted?:boolean; recording?:RecordingView; previous_recording?:RecordingView};
   type Source = {id: string; name: string; full_display: boolean};
@@ -123,7 +123,8 @@
     lockButton.hidden = !hasAction('lock');
     if (current?.session !== pointerSession) { pointerSession = current?.session ?? null; pointing = false; }
     pointerButton.hidden = !hasAction('pointer');
-    showScreen.hidden = !hasAction('meet');
+    // Switching sides replaces the meeting where both apps support it.
+    showScreen.hidden = !hasAction('meet') || (current?.peer_features ?? []).includes('switch');
     inviteColleague.hidden = !(current?.phase === 'active' && !current.sharing);
     showScreen.disabled = inviteColleague.disabled = busy;
     const offer = current?.meeting_offer;
@@ -189,7 +190,9 @@
       status.textContent = 'Your meeting opens in the browser. Choose “Share screen” there; the other person is asked to watch.';
     } catch (value) { error.textContent = String(value); }
   });
-  inviteColleague.addEventListener('click', async () => {
+  // The native invitation (colleagues.ts) when the computer supports it; otherwise a meeting link.
+  inviteColleague.addEventListener('click', () => { document.dispatchEvent(new CustomEvent('mixel-invite-colleague')); });
+  document.addEventListener('mixel-invite-meeting', async () => {
     try {
       const room = await invoke<Room>('meeting_create');
       await invoke('meeting_open', {link: room.host});
@@ -372,7 +375,7 @@
     document.body.dataset.remotePlatform = current.platform ?? 'macos';
     const closing = stopping || (locallyStopped() && ['incoming','outgoing','deciding','negotiating','active','closing'].includes(current.phase));
     const displayPhase = closing ? 'closing' : current.phase;
-    document.dispatchEvent(new CustomEvent('mixel-remote-state',{detail:{phase:displayPhase,controllerOnly:!!current.controller_only,host:current.controller_only?null:current.host,session:!closing&&authenticated?current.session:null,consent:current.consent,files:!closing&&authenticated&&current.files,clipboard:!closing&&authenticated&&current.clipboard,sharing:current.sharing,control:current.control,stopping,online:current.online??[],peer:current.peer,prints:current.print_jobs??[],message:connectionMessage(closing)}}));
+    document.dispatchEvent(new CustomEvent('mixel-remote-state',{detail:{phase:displayPhase,controllerOnly:!!current.controller_only,host:current.controller_only?null:current.host,session:!closing&&authenticated?current.session:null,consent:current.consent,files:!closing&&authenticated&&current.files,clipboard:!closing&&authenticated&&current.clipboard,sharing:current.sharing,control:current.control,stopping,online:current.online??[],peer:current.peer,prints:current.print_jobs??[],message:connectionMessage(closing),colleagues:current.colleagues??[],join_request:closing?null:current.join_request??null,invitations:current.invitations??[],invite_message:current.invite_message??null,joined_session:!!current.joined_session,switched:!!current.switched,peer_features:current.peer_features??[],host_actions:current.host_actions??[]}}));
     status.textContent = connectionMessage(closing);
     status.dataset.phase=displayPhase;
     ownId.textContent = formatId(authenticated ? current.host : null);

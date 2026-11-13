@@ -57,6 +57,8 @@ pub struct Config {
     pub ice_servers: Vec<core_protocol::transport::NativeIceServer>,
     pub authorization: crate::remote_session::BrokerLease,
     pub peer_expires: Arc<AtomicU64>,
+    /// Host: a colleague who joined; sends the first technician's pictures instead of capturing.
+    pub mirror: bool,
 }
 fn authorization_live(
     account: &AtomicBool,
@@ -148,7 +150,8 @@ impl Config {
 pub fn start(mut config: Config) -> Result<(), String> {
     let state = config.state.clone();
     let cancel = config.account_cancel.clone();
-    state.spawn_media(&cancel, move || {
+    let mirror = config.mirror;
+    state.spawn_media(&cancel, mirror, move || {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)
@@ -218,7 +221,9 @@ async fn run(config: &mut Config) -> Result<(), String> {
             .chat
             .take()
             .map(|crypto| crate::remote_chat::ChatTransport::start(config, &mut transport, crypto));
-        let result = if config.host {
+        let result = if config.host && config.mirror {
+            mirror_media(config, &mut consent, &channel, sender.ok_or("Host video sender unavailable")?, &mut control, &mut transport).await
+        } else if config.host {
             host_media(
                 config,
                 &mut consent,
@@ -659,6 +664,8 @@ async fn negotiate(
         },
     )
     .await?;
+    // Both sides: what the other app supports (colleagues joining, switching sides).
+    config.state.set_peer_features(config.generation, config.session, peer_features.clone()).await;
     if !config.host {
         config
             .state
@@ -844,6 +851,8 @@ async fn host_media(
         let mut print_checked = Instant::now();
         #[cfg(feature = "qa-session")]
         let mut qa_video = (0u32, Duration::ZERO, Duration::ZERO, Duration::ZERO, 0usize, Instant::now());
+        // Colleagues who join this session see these same pictures.
+        let mirror = crate::session_mirror::publish();
         // Remote sound: what this computer plays, while the technician wants to hear it.
         let mut sound: Option<crate::remote_sound::Capture> = None;
         let mut sound_failed = false;
@@ -909,7 +918,7 @@ async fn host_media(
                 recent = None;
                 retry_encode = true;
             }
-            let force_keyframe = control.take_keyframe_request() || retry_encode;
+            let force_keyframe = control.take_keyframe_request() || mirror.take_keyframe_request() || retry_encode;
             #[cfg(feature = "qa-session")]
             let lap = Instant::now();
             let frame = match session_platform::frames(&capture).next(
@@ -992,6 +1001,7 @@ async fn host_media(
                 .send(consent, &encoded.annex_b, duration)
                 .await
                 .map_err(|error| error.to_string())?;
+            mirror.send(&encoded.annex_b, duration);
             sent += 1;
             // Lab builds only: where the time of each picture goes (capture, encode, send).
             #[cfg(feature = "qa-session")]
@@ -1032,6 +1042,52 @@ async fn host_media(
     let released = control.release();
     let stopped = capture.stop().map_err(|error| error.to_string());
     result.and(released).and(stopped)
+}
+/// Host side of a colleague who joined: the first technician's pictures, sent on this connection.
+async fn mirror_media(
+    config: &mut Config,
+    consent: &mut Session,
+    channel: &Arc<dyn NativeDataChannel>,
+    sender: H264VideoSender,
+    control: &mut ControlPipe,
+    transport: &mut NativeTransport,
+) -> Result<(), String> {
+    let mut pictures = crate::session_mirror::watch().ok_or("The first technician's session has ended")?;
+    let mut sent = 0u64;
+    let mut last = Instant::now();
+    let result = async {
+        while !config.stopped() {
+            if !consent.can_share_local_screen() {
+                return Err("Screen-sharing authorization expired".into());
+            }
+            pump_ice(config, transport).await?;
+            control.poll(config, channel).await?;
+            if control.take_keyframe_request() {
+                pictures.request_keyframe();
+            }
+            match pictures.next(Duration::from_millis(25)).await {
+                crate::session_mirror::Next::Picture(picture) => {
+                    sender
+                        .send(consent, &picture.annex_b, picture.duration)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    sent += 1;
+                    last = Instant::now();
+                }
+                crate::session_mirror::Next::Idle => {
+                    if sent > 0 && last.elapsed() >= Duration::from_secs(2) {
+                        control.video_idle(channel).await?;
+                        last = Instant::now();
+                    }
+                }
+                crate::session_mirror::Next::Ended => return Err("The first technician's session has ended".into()),
+            }
+        }
+        Ok(())
+    }
+    .await;
+    let released = control.release();
+    result.and(released)
 }
 async fn viewer_media(
     config: &mut Config,

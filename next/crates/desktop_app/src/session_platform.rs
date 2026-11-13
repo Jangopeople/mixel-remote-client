@@ -153,6 +153,34 @@ pub fn switchable_displays(source: &str, all: bool) -> Vec<String> {
     }
 }
 
+/// The main display as a capture source, for showing this screen without a picker (switching
+/// sides after pressing "Switch sides" here). `None` where the system asks the user to choose.
+pub fn main_display_source() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        native_os_capture::macos::screen_access()
+            .then(|| format!("display:{}", native_os_capture::macos::main_display()))
+            .filter(|source| is_display(source))
+    }
+    #[cfg(target_os = "windows")]
+    {
+        native_os_capture::windows_capture::displays()
+            .ok()?
+            .first()
+            .map(|display| format!("dxgi:{}:{}:{}", display.adapter, display.output, display.name))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if crate::wayland_portal::available() {
+            return None;
+        }
+        native_os_capture::x11_capture::displays()
+            .ok()?
+            .first()
+            .map(|display| format!("x11:{}:{}", display.screen, display.root))
+    }
+}
+
 /// The source name of "all monitors as one picture".
 pub const ALL_DISPLAYS: &str = "dxgi-all";
 

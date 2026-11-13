@@ -402,6 +402,7 @@ async fn connection(mut socket: WebSocket, state: AppState) {
                             && let Ok(message @ (ClientMessage::Request { .. }
                                 | ClientMessage::RequestUnattended { .. }
                                 | ClientMessage::RequestWithCode { .. }
+                                | ClientMessage::JoinSession { .. }
                                 | ClientMessage::Decide { accept: true, .. }
                                 | ClientMessage::Restart { .. })) = parsed
                         {

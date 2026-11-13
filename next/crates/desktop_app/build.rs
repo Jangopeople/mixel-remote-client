@@ -55,6 +55,7 @@ fn main() {
         "devices.ts",
         "assistant.ts",
         "printing.ts",
+        "colleagues.ts",
         "enrollment.ts",
         "files.ts",
         "chat.ts",
