@@ -1,0 +1,14 @@
+[Unit]
+Description=Mixel Remote health checks and status page (alerts via notify-failure@)
+Documentation=https://github.com/Jangopeople/mixel-remote-client/blob/feat/managed-app/next/deployment/OPERATIONS.md
+After=network-online.target docker.service nginx.service
+Wants=network-online.target
+# The check exits 1 only when an alert is due (newly down, or the hourly reminder); see the script.
+OnFailure=notify-failure@%n.service
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/sbin/mixel-remote-health
+TimeoutStartSec=170
+Nice=5

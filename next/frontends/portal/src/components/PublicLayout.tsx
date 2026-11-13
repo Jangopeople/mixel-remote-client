@@ -57,6 +57,7 @@ export function SiteFooter() {
         <nav aria-label="Footer">
           <Link to="/pricing">{t('nav.pricing')}</Link>
           <Link to="/download">{t('nav.download')}</Link>
+          <Link to="/status">{t('footer.status')}</Link>
           <a href="https://mixel.ch/kontakt" rel="noopener">{t('footer.contact')}</a>
           <a href="https://mixel.ch/impressum" rel="noopener">{t('footer.imprint')}</a>
         </nav>

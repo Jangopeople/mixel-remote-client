@@ -12,6 +12,7 @@ import { Deploy } from './pages/Deploy';
 import { Team } from './pages/Team';
 import { Settings } from './pages/Settings';
 import { Account, Billing } from './pages/Account';
+import { Status } from './pages/Status';
 
 export function App() {
   return (
@@ -23,6 +24,7 @@ export function App() {
               <Route path="/" element={<Landing />} />
               <Route path="/pricing" element={<Pricing />} />
               <Route path="/download" element={<Download />} />
+              <Route path="/status" element={<Status />} />
               <Route path="/signin" element={<SignIn />} />
               <Route path="/signup" element={<SignUp />} />
               <Route path="/signup/finish" element={<SignupFinish />} />

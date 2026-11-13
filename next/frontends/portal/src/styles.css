@@ -398,3 +398,33 @@ table.table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .presence-cell { display: grid; gap: 4px; justify-items: start; min-width: 150px; }
 .presence-cell small { font-size: 12px; color: var(--muted); line-height: 1.4; max-width: 280px; }
 .presence-cell[data-status='offline'] .badge .dot, .presence-cell[data-status='never'] .badge .dot { color: var(--faint); }
+
+/* Service status (/status) */
+.status-page { max-width: 880px; }
+.status-banner { display: flex; gap: 14px; align-items: flex-start; padding: 18px 20px; border-radius: var(--radius); border: 1px solid var(--line); background: var(--panel); box-shadow: var(--shadow); margin: 0 0 20px; }
+.status-banner strong { font-size: 17px; color: var(--text); }
+.status-banner p { margin: 4px 0 0; color: var(--text-soft); font-size: 14px; }
+.status-banner .icon { flex: none; width: 24px; height: 24px; margin-top: 1px; }
+.status-banner-operational { border-color: transparent; background: var(--success-soft); }
+.status-banner-operational .icon, .status-banner-operational strong { color: var(--success); }
+.status-banner-degraded { border-color: transparent; background: var(--warning-soft); }
+.status-banner-degraded .icon, .status-banner-degraded strong { color: var(--warning); }
+.status-banner-outage { border-color: var(--brand-line); background: var(--danger-soft); }
+.status-banner-outage .icon, .status-banner-outage strong { color: var(--danger); }
+.status-banner-unknown .icon { color: var(--muted); }
+.status-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 12px; }
+.status-item { padding: 16px 18px; }
+.status-item-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.status-item-head h2 { font-size: 15.5px; margin: 0; }
+.status-item .field-hint { margin: 6px 0 0; }
+.status-bars { display: grid; grid-template-columns: repeat(90, 1fr); gap: 2px; height: 28px; margin-top: 12px; }
+.status-bar { border-radius: 2px; background: var(--line); min-width: 0; }
+.status-bar[data-level='operational'] { background: var(--success); }
+.status-bar[data-level='degraded'] { background: var(--warning); }
+.status-bar[data-level='outage'] { background: var(--danger); }
+.status-bars-legend { display: flex; justify-content: space-between; gap: 8px; margin-top: 6px; font-size: 12px; color: var(--muted); }
+.status-footnote { margin-top: 20px; }
+@media (max-width: 560px) {
+  .status-bars { grid-template-columns: repeat(45, 1fr); }
+  .status-bar:nth-child(-n+45) { display: none; }
+}
