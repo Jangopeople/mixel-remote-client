@@ -1,0 +1,11 @@
+[Unit]
+Description=Mixel Remote billing daily job
+
+[Timer]
+OnCalendar=*-*-* 03:20:00 Europe/Zurich
+RandomizedDelaySec=10min
+Persistent=true
+Unit=mixel-remote-billing-daily.service
+
+[Install]
+WantedBy=timers.target
