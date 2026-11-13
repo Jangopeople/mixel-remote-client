@@ -175,7 +175,7 @@ body:not([data-remote-platform="macos"]) .mac-only{display:none}
 .modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:6px}
 .modal-actions button{margin:0}
 @media(max-width:960px){.company-usage{grid-template-columns:1fr}.company-status{max-width:none;text-align:left}.member-role{flex-basis:auto}}
-.invite-panel{position:absolute;top:92px;left:10px;z-index:3;display:grid;gap:6px;width:min(340px,calc(100% - 20px));border:1px solid var(--line);border-radius:10px;padding:12px;background:#fff;box-shadow:0 10px 30px rgba(20,30,50,.16);font-size:12px}.invite-panel[hidden]{display:none}.invite-panel .invitation-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}.invite-panel p{margin:0}
+.invite-panel{position:absolute;top:92px;left:10px;z-index:3;display:grid;gap:6px;width:min(340px,calc(100% - 20px));max-height:calc(100% - 100px);overflow:auto;border:1px solid var(--line);border-radius:10px;padding:12px;background:#fff;box-shadow:0 10px 30px rgba(20,30,50,.16);font-size:12px}.invite-panel[hidden]{display:none}.invite-panel .invitation-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}.invite-panel p{margin:0}
 .colleague-list{display:flex;align-items:center;gap:10px;flex-wrap:wrap;border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin:0 0 14px;font-size:13px}.colleague-list[hidden]{display:none}.colleague-list ul{display:flex;gap:8px;flex-wrap:wrap;list-style:none;margin:0;padding:0}.colleague-list li{display:flex;align-items:center;gap:6px}
 .colleague-invitations{display:grid;gap:8px}.colleague-invitations[hidden]{display:none}.colleague-invitations div{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .host-limits{margin:0 10px}

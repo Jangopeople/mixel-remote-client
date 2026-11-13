@@ -22,6 +22,15 @@
   const askControl = element<HTMLInputElement>('invite-control'), send = element<HTMLButtonElement>('invite-send'), inviteStatus = element<HTMLParagraphElement>('invite-status');
   const limits = element<HTMLParagraphElement>('remote-host-limits');
   let state: State | null = null, members: Member[] = [], me = '', busy = false, shownMessage = '';
+  // The app reads its state four times a second: rebuild the colleague and invitation rows only when
+  // they change, or a click that falls between two reads lands on a removed button and is lost.
+  let shownColleagues = '', shownOffers = '';
+  const seenOffers = new Set<string>();
+  // The state is read four times a second: change a button's label only when its text changes. A
+  // replaced text node under the pointer makes WebKitGTK (Linux) drop the click, and a translated
+  // label would be reset to English on every read.
+  const labels = new WeakMap<HTMLElement, string>();
+  const label = (target: HTMLElement, text: string): void => { if (labels.get(target) !== text) { labels.set(target, text); target.textContent = text; } };
   const names = (): Map<string, string> => new Map(members.map(person => [person.user_id, person.name]));
   const supports = (name: string): boolean => (state?.peer_features ?? []).includes(name);
   const active = (): boolean => state?.phase === 'active' && !!state.session;
@@ -45,7 +54,8 @@
     // Person at the computer: who else is connected.
     const others = current?.sharing && active() ? (current.colleagues ?? []).filter(item => item.state !== 'asking') : [];
     list.hidden = !others.length;
-    items.replaceChildren(...others.map(item => {
+    const colleaguesKey = JSON.stringify([busy, others.map(item => [item.session, item.connection, item.control, item.state])]);
+    if (colleaguesKey !== shownColleagues) { shownColleagues = colleaguesKey; items.replaceChildren(...others.map(item => {
       const row = document.createElement('li'), label = document.createElement('span'), remove = document.createElement('button');
       label.textContent = `Technician ${formatId(item.connection)} · ${item.state === 'active' ? (item.control ? 'viewing and control' : 'viewing') : 'connecting'}`;
       remove.type = 'button'; remove.className = 'button-quiet'; remove.textContent = 'Remove'; remove.disabled = busy;
@@ -53,19 +63,20 @@
       remove.addEventListener('click', () => { void run('remote_remove_colleague', {session: item.session}); });
       row.append(label, remove);
       return row;
-    }));
+    })); }
     // Switching sides: the person at the computer and the technician both have the button.
     const canSwitch = active() && supports('switch') && !current?.joined_session && !(current?.colleagues ?? []).length;
     hostSwitch.hidden = !(canSwitch && current?.sharing);
-    hostSwitchButton.textContent = current?.switched ? 'Switch back' : 'Switch sides';
+    label(hostSwitchButton, current?.switched ? 'Switch back' : 'Switch sides');
     switchButton.hidden = !(canSwitch && !current?.sharing);
-    switchButton.textContent = current?.switched ? 'Switch back' : 'Switch sides';
+    label(switchButton, current?.switched ? 'Switch back' : 'Switch sides');
     switchButton.disabled = hostSwitchButton.disabled = busy;
     // Technician: invitations from colleagues.
     const now = Date.now() / 1000;
     const offers = (current?.invitations ?? []).filter(offer => offer.expires_at > now);
     invitations.hidden = !offers.length;
-    invitations.replaceChildren(...offers.map(offer => {
+    const offersKey = JSON.stringify([busy, state?.phase === 'ready', offers.map(offer => [offer.invitation, offer.host, offer.inviter, offer.inviter_connection, offer.control, names().get(offer.inviter) ?? null])]);
+    if (offersKey !== shownOffers) { shownOffers = offersKey; invitations.replaceChildren(...offers.map(offer => {
       const row = document.createElement('div'), text = document.createElement('p'), join = document.createElement('button'), later = document.createElement('button');
       const who = names().get(offer.inviter) ?? `A colleague (Remote ID ${formatId(offer.inviter_connection)})`;
       text.textContent = `${who} invites you to join their session on computer ${formatId(offer.host)}${offer.control ? ' with keyboard and mouse' : ''}.`;
@@ -77,7 +88,11 @@
       later.addEventListener('click', () => { void run('remote_dismiss_invitation', {invitation: offer.invitation}); });
       row.append(text, join, later);
       return row;
-    }));
+    })); }
+    // A new invitation sits below the connection cards: bring it into view while this app is free.
+    const fresh = offers.filter(offer => !seenOffers.has(offer.invitation));
+    for (const offer of fresh) seenOffers.add(offer.invitation);
+    if (fresh.length && state?.phase === 'ready') invitations.scrollIntoView?.({block: 'nearest', behavior: 'smooth'});
     // Technician: the invitation panel closes when the session ends.
     if (!active() || current?.sharing) panel.hidden = true;
     send.disabled = busy;
@@ -119,7 +134,8 @@
     const user = member.value || null;
     if (!user && !/^\d{9}$/.test(digits)) { inviteStatus.textContent = 'Choose a colleague or enter the 9-digit Remote ID of their computer.'; return; }
     inviteStatus.textContent = 'Sending the invitation…';
-    void run('remote_invite', {session: state.session, user, device: user ? null : Number(digits), control: askControl.checked});
+    // The answer to a second invitation can be the same text as the first one: show it again.
+    void run('remote_invite', {session: state.session, user, device: user ? null : Number(digits), control: askControl.checked}).then(sent => { if (sent) { shownMessage = ''; render(); } });
   });
   const answer = (accept: boolean, control: boolean): void => {
     const asking = state?.join_request;

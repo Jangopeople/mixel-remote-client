@@ -78,6 +78,11 @@
   // Protections for the computer being helped; the host switches them off when the session ends.
   const toggles = {privacy: element<HTMLButtonElement>('remote-privacy'), block: element<HTMLButtonElement>('remote-block'), lockend: element<HTMLButtonElement>('remote-lockend')};
   const toggleText: Record<keyof typeof toggles, string> = {privacy: 'Privacy screen', block: 'Block input', lockend: 'Lock when done'};
+  // The state is read four times a second: change a button's label only when its text changes. A
+  // replaced text node under the pointer makes WebKitGTK (Linux) drop the click, and a translated
+  // label would be reset to English on every read.
+  const labels = new WeakMap<HTMLElement, string>();
+  const label = (target: HTMLElement, text: string): void => { if (labels.get(target) !== text) { labels.set(target, text); target.textContent = text; } };
   const lockButton = element<HTMLButtonElement>('remote-lock');
   // Show pointer: the person at the computer sees where the technician points; nothing is clicked.
   const pointerButton = element<HTMLButtonElement>('remote-pointer');
@@ -116,7 +121,7 @@
     if (current?.session !== toggleSession) { toggleSession = current?.session ?? null; toggled = {privacy: false, block: false, lockend: false}; }
     for (const name of Object.keys(toggles) as (keyof typeof toggles)[]) {
       toggles[name].hidden = !hasAction(name);
-      toggles[name].textContent = `${toggleText[name]}: ${toggled[name] ? 'on' : 'off'}`;
+      label(toggles[name], `${toggleText[name]}: ${toggled[name] ? 'on' : 'off'}`);
       toggles[name].ariaPressed = String(toggled[name]);
       toggles[name].disabled = busy;
     }
@@ -125,21 +130,22 @@
     pointerButton.hidden = !hasAction('pointer');
     // Switching sides replaces the meeting where both apps support it.
     showScreen.hidden = !hasAction('meet') || (current?.peer_features ?? []).includes('switch');
-    inviteColleague.hidden = !(current?.phase === 'active' && !current.sharing);
+    // While the sides are switched the person who was helped views the technician: no colleagues there.
+    inviteColleague.hidden = !(current?.phase === 'active' && !current.sharing && !current.switched);
     showScreen.disabled = inviteColleague.disabled = busy;
     const offer = current?.meeting_offer;
     meetingOffer.hidden = !(offer && current?.phase === 'active' && current.sharing && offer[0] === current.session && offer[1] !== dismissedRoom);
-    pointerButton.textContent = `Show pointer: ${pointing ? 'on' : 'off'}`;
+    label(pointerButton, `Show pointer: ${pointing ? 'on' : 'off'}`);
     pointerButton.ariaPressed = String(pointing);
     if (canvas.style) canvas.style.cursor = pointing ? 'crosshair' : '';
     lockButton.disabled = busy;
     reboot.hidden = !hasAction('restart');
     soundToggle.hidden = !hasAction('sound');
     if (current?.session !== soundSession) { soundSession = current?.session ?? null; soundOn = true; }
-    soundToggle.textContent = soundOn ? 'Sound: on' : 'Sound: off';
+    label(soundToggle, soundOn ? 'Sound: on' : 'Sound: off');
     soundToggle.ariaPressed = String(soundOn);
     sas.disabled = reboot.disabled = busy;
-    reboot.textContent = rebootArmed ? 'Click again to restart' : 'Restart computer';
+    label(reboot, rebootArmed ? 'Click again to restart' : 'Restart computer');
     // Done once a new session (not the one that asked for the restart) is active.
     if (reconnect && current && current.phase === 'active') { if (current.session !== reconnect.session) reconnect = null; return; }
     if (reconnect && current && !['negotiating', 'outgoing', 'deciding'].includes(current.phase)) {
@@ -343,7 +349,7 @@
     const running = view?.phase === 'recording' || view?.phase === 'waiting_for_video';
     recordingButton.hidden = !view;
     recordingButton.disabled = !view || recordingPending || view.phase === 'saving' || videoReady !== current?.session;
-    recordingButton.textContent = running ? 'Stop recording' : 'Record';
+    label(recordingButton, running ? 'Stop recording' : 'Record');
     const text = active && current?.sharing && current.recording_permitted
       ? 'You allowed the other person to save a video of this session.'
       : view ? recordingError || recordingText(view) : '';
@@ -430,7 +436,7 @@
     const controlAvailable = current.phase === 'incoming' && !!selected?.full_display && current.input_access;
     allowControl.disabled = busy || !controlAvailable;
     if (!controlAvailable) allowControl.checked = false;
-    accept.textContent = allowControl.checked ? 'Allow with control' : 'Allow view only';
+    label(accept, allowControl.checked ? 'Allow with control' : 'Allow view only');
     inputPermission.textContent = !selected?.full_display
       ? 'Choose a display to allow keyboard and mouse control.'
       : !current.input_access

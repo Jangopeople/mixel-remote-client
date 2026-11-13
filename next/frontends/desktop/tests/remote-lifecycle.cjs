@@ -281,3 +281,12 @@ test('after a lost connection the app keeps trying to come back online with a gr
   h.setPhase('error');clock.now+=10;await h.tick();await settle();
   assert.equal(h.registers.length,3,'a later drop is retried at once, not only once per run');
 });
+test('the computer that was helped does not invite colleagues while it views the technician',async()=>{
+  const h=harness({authenticated:true});await settle();await h.tick();
+  h.active({sharing:false,switched:false});await h.tick();
+  assert.equal(h.elements['remote-invite'].hidden,false,'the technician invites in a normal session');
+  h.active({sharing:false,switched:true});await h.tick();
+  assert.equal(h.elements['remote-invite'].hidden,true,'switched: this side views the technician');
+  h.active({sharing:false,switched:false});await h.tick();
+  assert.equal(h.elements['remote-invite'].hidden,false,'after switching back the technician can invite again');
+});

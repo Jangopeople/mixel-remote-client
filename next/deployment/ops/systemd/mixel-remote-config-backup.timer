@@ -1,0 +1,11 @@
+[Unit]
+Description=Mixel Remote configuration backup, daily
+
+[Timer]
+OnCalendar=*-*-* 04:40:00 Europe/Zurich
+RandomizedDelaySec=10min
+Persistent=true
+Unit=mixel-remote-config-backup.service
+
+[Install]
+WantedBy=timers.target

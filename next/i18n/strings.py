@@ -119,6 +119,8 @@ S = [
 ("End session","Sitzung beenden","Terminer la session","Termina la sessione"),
 ("Ending session…","Sitzung wird beendet…","Fin de la session…","Chiusura della sessione…"),
 ("Ending the session","Sitzung wird beendet","Fin de la session","Chiusura della sessione"),
+("Colleagues can be invited after switching back: right now you are viewing the technician's screen","Kollegen können nach dem Zurückwechseln eingeladen werden: Im Moment sehen Sie den Bildschirm des Technikers","Vous pourrez inviter des collègues après être revenu en arrière : vous voyez maintenant l'écran du technicien","Potrai invitare colleghi dopo essere tornato indietro: ora stai vedendo lo schermo del tecnico"),
+("You’re sharing your screen","Sie teilen Ihren Bildschirm","Vous partagez votre écran","Stai condividendo lo schermo"),
 ("Ending the session…","Sitzung wird beendet…","Fin de la session…","Chiusura della sessione…"),
 ("Enroll this computer","Diesen Computer registrieren","Enregistrer cet ordinateur","Registra questo computer"),
 ("Enrollment shows which devices you can access. A device must be online and accept your request before sharing starts.","Die Registrierung zeigt, auf welche Geräte Sie zugreifen können. Ein Gerät muss online sein und Ihre Anfrage annehmen, bevor die Freigabe startet.","L’enregistrement indique les appareils accessibles. Un appareil doit être en ligne et accepter votre demande avant le début du partage.","La registrazione mostra a quali dispositivi puoi accedere. Un dispositivo deve essere online e accettare la richiesta prima che inizi la condivisione."),

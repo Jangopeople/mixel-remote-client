@@ -217,12 +217,8 @@ impl ControlPipe {
             .await;
         config
             .state
-            .file_grant(config.generation, config.session, files)
+            .record_grants(config.generation, config.session, config.mirror, files, recording)
             .await?;
-        config
-            .state
-            .set_recording_permission(config.generation, config.session, recording)
-            .await;
         let bulk = if files {
             Some(
                 crypto
