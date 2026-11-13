@@ -15,7 +15,7 @@ Hard rules that apply to everything below
 
 | Part | Where | Public | Source |
 |---|---|---|---|
-| Connection broker | container `mixel-remote-next-qa-broker-device-access` (host network, 127.0.0.1:8094, image `mixel-remote-next-backend:<tag>`, env file in use since 2026-11-13: `/opt/mixel-remote-next-qa/private/broker-secreview-20261113.env`; `broker-current.env` and the other `broker-*.env` are outdated history (no presence variables) — before changing anything compare the variable names in `docker inspect --format "{{range .Config.Env}}{{println .}}{{end}}" mixel-remote-next-qa-broker-device-access | cut -d= -f1` with the file, and name each new one `broker-<feature>-<date>.env`) | `wss://rs.mixel.ch:9444/v1/ws`, `/healthz` (nginx site `mixel-remote-next-qa.conf`) | `next/crates/signaling_server`, `deployment/backend.Dockerfile` |
+| Connection broker | container `mixel-remote-next-qa-broker-device-access` (host network, 127.0.0.1:8094, image `mixel-remote-next-backend:<tag>`, env file in use since 2026-11-13 (image `rel-0.1.22-99c6a21`, session reports): `/opt/mixel-remote-next-qa/private/broker-saas-20261113.env` (same variables as `broker-secreview-20261113.env`; rollback container `...-prev-saas-20261113`); `broker-current.env` and the other `broker-*.env` are outdated history (no presence variables) — before changing anything compare the variable names in `docker inspect --format "{{range .Config.Env}}{{println .}}{{end}}" mixel-remote-next-qa-broker-device-access | cut -d= -f1` with the file, and name each new one `broker-<feature>-<date>.env`) | `wss://rs.mixel.ch:9444/v1/ws`, `/healthz` (nginx site `mixel-remote-next-qa.conf`) | `next/crates/signaling_server`, `deployment/backend.Dockerfile` |
 | Identity authority | compose project `mixel-remote-next-qa` service `authority` (127.0.0.1:8093, signer `private/identity.key`) | `https://ism-api.mixel.ch/v1/device-ticket`, `/v1/startup-host-ticket` | same crate, bin `identity_authority` |
 | TURN relay | compose service `turn` (coturn, 178.104.17.23 UDP/TCP 3479, TLS 5350, relay UDP 60000–60099) | `turn:rs.mixel.ch:3479`, `turns:rs.mixel.ch:5350` | `deployment/coturn.Dockerfile`, `private/turnserver.conf` |
 | Database | `ism-postgres` (schemas `remote_saas`, `remote_private`, public device tables) | via PostgREST `ism-postgrest` | `next/sql/0NN_*.sql` |
@@ -150,7 +150,7 @@ VPS → `docker build -f deployment/backend.Dockerfile -t mixel-remote-next-back
 → save the current container config (`docker inspect ... > private/broker-container-before-<x>.json`) →
 `docker stop` + `docker rename` the old one to `...-prev-<date>` (`docker update --restart no`) → `docker run -d --name
 mixel-remote-next-qa-broker-device-access --network host --restart unless-stopped --user 10001:10001
---ulimit nofile=65536:65536 --env-file private/broker-<feature>-<date>.env (copy of the current one, today `broker-secreview-20261113.env`) --log-opt max-size=50m --log-opt max-file=5 <image>`
+--ulimit nofile=65536:65536 --env-file private/broker-<feature>-<date>.env (copy of the current one, today `broker-saas-20261113.env`) --log-opt max-size=50m --log-opt max-file=5 <image>`
 with the other flags exactly as in the saved inspect JSON. Check the start line in `docker logs`:
 `at most 10000 open connections (open-file limit 65536)` (or the `MIXEL_MAX_CONNECTIONS` set in the env).
 Running sessions drop and reconnect (apps retry). Rollback: stop + remove the new container, rename
@@ -186,7 +186,10 @@ export (`alter function remote_saas.export_core(uuid) set schema public` + renam
 `reports` key from `remote_saas.plans.features`, and drops `remote_saas.sessions` and
 `remote_saas.favorites`. Dropping the tables deletes companies' session history and favorites:
 that is acceptable only while no customer relies on them; afterwards keep the tables (revoke the
-functions instead) and export first if they must go.
+functions instead) and export first if they must go. Applied live 2026-11-13 ~17:35 CET; backup taken
+right before: `/root/mixel-remote-migration-backups/before-029-20261113.dump` on mixel-vps (`pg_dump -Fc -n
+remote_saas -n remote_private`, root 0600). The status probe's synthetic sessions are recorded too (tenant
+"Mixel Status Probe", a few hundred short rows a day); there is no retention yet.
 
 **Database migrations**: `next/sql/0NN_*.sql`, next free number at apply time (security/legal agents
 also add migrations). Apply with `docker exec -i ism-postgres psql -X -v ON_ERROR_STOP=1 -U postgres -d
@@ -225,7 +228,7 @@ run `sudo systemctl start mixel-remote-health` and confirm `synthetic_connect` p
 
 | Secret | Where | Rotate |
 |---|---|---|
-| Presence token (`MIXEL_PRESENCE_TOKEN`) | the broker's current env file (`private/broker-secreview-20261113.env` as of 2026-11-13; not `broker-current.env`) | mint a new JWT (role `mixel_remote_presence`, HS256 with the ISM JWT secret, new `iat`/`exp`), replace the line, recreate the broker (section 4). Revoke all at once: `revoke execute on function public.remote_presence_report(integer[]) from mixel_remote_presence`. Details: `QA-DEPLOYMENT.md` "Presence reporting". |
+| Presence token (`MIXEL_PRESENCE_TOKEN`) | the broker's current env file (`private/broker-saas-20261113.env` as of 2026-11-13 evening; not `broker-current.env`) | mint a new JWT (role `mixel_remote_presence`, HS256 with the ISM JWT secret, new `iat`/`exp`), replace the line, recreate the broker (section 4). Revoke all at once: `revoke execute on function public.remote_presence_report(integer[]) from mixel_remote_presence`. Details: `QA-DEPLOYMENT.md` "Presence reporting". |
 | TURN shared secret | `MIXEL_TURN_SHARED_SECRET` in the broker env and `static-auth-secret` in `private/turnserver.conf` | generate 48 random bytes (`openssl rand -hex 48`), put it into both files, restart `turn` (`docker compose -p mixel-remote-next-qa -f compose.json restart turn`) and recreate the broker right after each other, in a quiet hour. Relay credentials live 10 min; relayed sessions running at that moment may drop and reconnect. |
 | Support policy token / startup host token | `MIXEL_SUPPORT_POLICY_TOKEN` (broker), `MIXEL_STARTUP_HOST_POLICY_TOKEN` (authority) | set the new value in the admin console env first (`/opt/mixel-admin-api`, accepts it), then broker/authority, recreate, remove the old one in the console. |
 | Identity key (device ticket signer) | `private/identity.key` (32 bytes, owner 10002, 0600), public half in `MIXEL_PEER_AUTHORITY_PUBLIC_KEYS` (broker, comma-separated list) | create a new 32-byte key (`head -c 32 /dev/urandom`), add its public key to `MIXEL_PEER_AUTHORITY_PUBLIC_KEYS` **next to** the old one, recreate the broker, swap `identity.key`, recreate the authority; after the ticket lifetime (900 s) remove the old public key and recreate the broker. Enrolments are not affected; apps fetch a new ticket on renewal. |
