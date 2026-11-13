@@ -17,6 +17,8 @@ export interface Features {
   policies?: boolean;
   require_mfa?: boolean;
   private_use_only?: boolean;
+  /** Session reports (SQL 029): solo, team, business, enterprise and the trial. */
+  reports?: boolean;
   [key: string]: boolean | undefined;
 }
 
@@ -329,9 +331,13 @@ export type ErrorKey =
   | 'error.confirm_email_mismatch'
   | 'error.only_owner'
   | 'error.account_managed'
+  | 'error.reports_plan'
+  | 'error.note_too_long'
   | 'error.unknown';
 
 const MESSAGE_KEYS: [RegExp, ErrorKey][] = [
+  [/session reports need a paid plan/i, 'error.reports_plan'],
+  [/note.*(too long|4000)/i, 'error.note_too_long'],
   [/^plan_too_small/i, 'error.plan_too_small'],
   [/accept the terms of service/i, 'error.terms_required'],
   [/terms of service have changed/i, 'error.terms_changed'],
@@ -444,4 +450,103 @@ export function linkParts(template: string): { text: string; link: boolean }[] {
 /** Same comparison as the database: trimmed, case-insensitive. */
 export function confirmMatches(typed: string, expected: string): boolean {
   return typed.trim().toLowerCase() === expected.trim().toLowerCase() && expected.trim() !== '';
+}
+
+// ---------------------------------------------------------------------------------------------
+// Favorites, recent connections and session reports (SQL 029)
+
+/** The RPC is not on the server yet (PostgREST "could not find the function", Postgres 42883). */
+export function isMissingRpc(error: unknown): boolean {
+  const value = error as ApiErrorLike | null;
+  if (!value) return false;
+  if (value.code === 'PGRST202' || value.code === '42883') return true;
+  return /could not find the function|function .* does not exist/i.test(value.message ?? '');
+}
+
+export interface DeviceSections<T> {
+  favorites: T[];
+  recent: T[];
+  others: T[];
+}
+
+/**
+ * Favorites first (by name), then the most recently connected devices that are not favorites
+ * (newest first, at most `max`), then every other device in its original order. Each device
+ * appears once.
+ */
+export function deviceSections<T extends { device_id: string; name: string }>(
+  devices: readonly T[],
+  favorites: ReadonlySet<string>,
+  recent: readonly { device_id: string; last_connected_at: string | null }[],
+  max = 10,
+): DeviceSections<T> {
+  const byId = new Map(devices.map((device) => [device.device_id, device]));
+  const favoriteList = devices.filter((device) => favorites.has(device.device_id))
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }));
+  const seen = new Set(favoriteList.map((device) => device.device_id));
+  const recentList: T[] = [];
+  const ordered = [...recent].sort((a, b) => (Date.parse(b.last_connected_at ?? '') || 0) - (Date.parse(a.last_connected_at ?? '') || 0));
+  for (const entry of ordered) {
+    if (recentList.length >= max) break;
+    const device = byId.get(entry.device_id);
+    if (!device || seen.has(device.device_id)) continue;
+    recentList.push(device);
+    seen.add(device.device_id);
+  }
+  return { favorites: favoriteList, recent: recentList, others: devices.filter((device) => !seen.has(device.device_id)) };
+}
+
+/** Owners and admins see everyone's sessions; everyone else only their own. */
+export function canPickTechnician(role: Role | null | undefined): boolean {
+  return isManager(role);
+}
+
+/** Owners and admins edit any note; the others the notes of their own sessions. */
+export function canEditNote(role: Role | null | undefined, row: { technician_email: string | null }, myEmail: string | null | undefined): boolean {
+  if (isManager(role)) return true;
+  if (!row.technician_email) return true; // the database returns only the caller's own sessions to non-managers
+  return !!myEmail && row.technician_email.trim().toLowerCase() === myEmail.trim().toLowerCase();
+}
+
+/** "YYYY-MM-DD" of a local date. */
+export function isoDay(date: Date): string {
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+/** The default report range: the last 30 days up to today (local days). */
+export function defaultReportDays(now: Date = new Date()): { from: string; to: string } {
+  const from = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 30);
+  return { from: isoDay(from), to: isoDay(now) };
+}
+
+function parseDay(value: string): Date | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return null;
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  return date.getMonth() === Number(match[2]) - 1 ? date : null;
+}
+
+export interface ReportFilter { from: string; to: string; technician: string; device: string }
+export interface ReportParams { from_at: string; to_at: string; technician: string | null; device: string | null }
+export type ReportFilterProblem = 'reports.rangeInvalid' | 'reports.rangeTooLong';
+
+/**
+ * The RPC arguments of a filter: from the start of the first day to the start of the day after the
+ * last one (local time), at most 366 days (the database limit).
+ */
+export function reportParams(filter: ReportFilter): { params: ReportParams } | { problem: ReportFilterProblem } {
+  const from = parseDay(filter.from);
+  const to = parseDay(filter.to);
+  if (!from || !to || from > to) return { problem: 'reports.rangeInvalid' };
+  const end = new Date(to.getFullYear(), to.getMonth(), to.getDate() + 1);
+  if (end.getTime() - from.getTime() > 366 * DAY + 2 * 3600 * 1000) return { problem: 'reports.rangeTooLong' };
+  return {
+    params: {
+      from_at: from.toISOString(),
+      to_at: end.toISOString(),
+      technician: filter.technician || null,
+      device: filter.device || null,
+    },
+  };
 }
