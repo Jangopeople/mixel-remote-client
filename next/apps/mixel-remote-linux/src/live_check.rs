@@ -176,10 +176,12 @@ impl Check {
             let stroke = json!({ "kind": "stroke", "id": 1, "tool": "arrow", "color": 0, "width": 2, "points": [[12000, 12000], [30000, 26000]], "done": true });
             let mut shown = 0;
             for message in [stroke, json!({ "kind": "undo" }), json!({ "kind": "clear" })] {
+                let pause = if message["kind"] == "stroke" { 5000 } else { 800 };
                 if self.call("remote_draw", json!({ "session": id, "message": message })).await.is_ok_and(|value| value == true) {
                     shown += 1;
                 }
-                tokio::time::sleep(Duration::from_millis(800)).await;
+                // The arrow stays a few seconds (it can be seen on the other computer's screen).
+                tokio::time::sleep(Duration::from_millis(pause)).await;
             }
             self.check(&format!("drawing on the other computer's screen: stroke, undo, clear ({shown}/3)"), shown == 3, "");
         } else {
