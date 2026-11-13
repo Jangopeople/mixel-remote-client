@@ -155,3 +155,15 @@ test('switch labels are set only when they change, so a click between two reads 
   assert.equal(text,'Switch back');
   assert.equal(writes,1,'one write when the label changes');
 });
+
+test('the switch label follows the current direction, not the history',async()=>{
+  const h=harness();
+  h.state({...technician,switched:true});
+  assert.equal(h.elements['remote-switch'].textContent,'Switch back');
+  h.state({...technician,switched:false});
+  assert.equal(h.elements['remote-switch'].textContent,'Switch sides','switched back: the next press switches sides again');
+  h.state({...host,switched:true});
+  assert.equal(h.elements['host-switch-button'].textContent,'Switch back');
+  h.state({...host,switched:false});
+  assert.equal(h.elements['host-switch-button'].textContent,'Switch sides');
+});

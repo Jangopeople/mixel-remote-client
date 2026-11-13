@@ -130,7 +130,8 @@
     pointerButton.hidden = !hasAction('pointer');
     // Switching sides replaces the meeting where both apps support it.
     showScreen.hidden = !hasAction('meet') || (current?.peer_features ?? []).includes('switch');
-    inviteColleague.hidden = !(current?.phase === 'active' && !current.sharing);
+    // While the sides are switched the person who was helped views the technician: no colleagues there.
+    inviteColleague.hidden = !(current?.phase === 'active' && !current.sharing && !current.switched);
     showScreen.disabled = inviteColleague.disabled = busy;
     const offer = current?.meeting_offer;
     meetingOffer.hidden = !(offer && current?.phase === 'active' && current.sharing && offer[0] === current.session && offer[1] !== dismissedRoom);

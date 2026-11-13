@@ -93,7 +93,8 @@ pub struct Status {
     pub invite_message: Option<String>,
     /// Technician: this session was joined on a colleague's invitation.
     pub joined_session: bool,
-    /// The sides of this session were switched at least once.
+    /// The sides are switched right now: the computer that was helped views the technician's
+    /// (false again after switching back). The viewing side then cannot invite colleagues.
     pub switched: bool,
     /// Optional features the app on the other side announced (`join`, `switch`, …).
     pub peer_features: Vec<String>,
@@ -1288,6 +1289,9 @@ impl RemoteSession {
         if inner.status.peer == device {
             return Err("This is the computer you are helping".into());
         }
+        if inner.status.switched {
+            return Err("Colleagues can be invited after switching back: right now you are viewing the technician's screen".into());
+        }
         inner
             .commands
             .as_ref()
@@ -1605,7 +1609,7 @@ impl RemoteSession {
         consent: Uuid,
         consent_cancel: Arc<AtomicBool>,
         joined: bool,
-        switched: bool,
+        reversed: bool,
     ) -> Result<(), String> {
         let mut inner = self.0.lock().await;
         if inner.generation != generation || inner.cancel.load(Ordering::Acquire) {
@@ -1624,7 +1628,7 @@ impl RemoteSession {
         inner.status.session = Some(session);
         inner.status.consent = Some(consent);
         inner.status.joined_session = joined;
-        inner.status.switched = switched;
+        inner.status.switched = reversed;
         inner.status.peer_features.clear();
         inner.renew_after = Some(std::time::Instant::now() + Duration::from_secs(31));
         inner.input = None;
@@ -1692,6 +1696,8 @@ struct Peer {
     joined: bool,
     /// The sides were switched: the other side was already verified in the previous session.
     switched: bool,
+    /// The sides are the reverse of the session as first requested (flips with every switch).
+    reversed: bool,
 }
 /// What this app remembers about a session whose sides are being switched.
 struct SwitchMemory {
@@ -1701,6 +1707,8 @@ struct SwitchMemory {
     identity: core_protocol::delegation::DeviceTicket,
     /// The grants of the person at this computer from when it was helped (restored on switching back).
     grants: Option<HostGrants>,
+    /// The ended session's sides were reversed: the next one has them the other way round.
+    reversed: bool,
     at: std::time::Instant,
 }
 #[derive(Clone)]
@@ -1873,7 +1881,7 @@ impl Peer {
                 self.consent_id,
                 self.consent_cancel.clone(),
                 self.joined && !self.host,
-                self.switched,
+                self.reversed,
             )
             .await
     }
@@ -2476,7 +2484,7 @@ async fn run(
                                 status.support_code=code;
                             }).await;
                         },
-                        ServerMessage::Requested{session}=>{let (remote,key,_,joined_request)=outgoing.take().ok_or("Unexpected outgoing invitation")?;peer=Some(Peer{id:session,remote,host:false,key,source:String::new(),#[cfg(target_os = "linux")] portal:None,confirm:false,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:None,expires:Arc::new(AtomicU64::new(0)),relay_expires:0,restart_pending:None,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4(),joined:joined_request,switched:false});peer.as_ref().ok_or("Invitation state unavailable")?.track(state,generation).await?;},
+                        ServerMessage::Requested{session}=>{let (remote,key,_,joined_request)=outgoing.take().ok_or("Unexpected outgoing invitation")?;peer=Some(Peer{id:session,remote,host:false,key,source:String::new(),#[cfg(target_os = "linux")] portal:None,confirm:false,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:None,expires:Arc::new(AtomicU64::new(0)),relay_expires:0,restart_pending:None,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4(),joined:joined_request,switched:false,reversed:false});peer.as_ref().ok_or("Invitation state unavailable")?.track(state,generation).await?;},
                         ServerMessage::Consent{session,requester_connection,requester,requester_identity,unattended,joining:Some(join),..}=>{
                             // A colleague of the technician asks to join the running session.
                             let primary=peer.as_ref().filter(|active|active.host && active.id==join.session && active.remote==join.inviter_connection && active.signals.is_some() && !active.cancel.load(Ordering::Acquire));
@@ -2490,7 +2498,7 @@ async fn run(
                             #[cfg(not(target_os = "linux"))]
                             let Some((key,ticket,source,confirm,primary_control))=checked else {send(&mut socket,ClientMessage::Decide{session,accept:false}).await?;continue;};
                             let expires=Arc::new(AtomicU64::new(ticket.expires_at));
-                            let mut colleague=Peer{id:session,remote:requester_connection,host:true,key,source,#[cfg(target_os = "linux")] portal,confirm,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:Some(ticket),expires,relay_expires:0,restart_pending:None,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4(),joined:true,switched:false};
+                            let mut colleague=Peer{id:session,remote:requester_connection,host:true,key,source,#[cfg(target_os = "linux")] portal,confirm,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:Some(ticket),expires,relay_expires:0,restart_pending:None,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4(),joined:true,switched:false,reversed:false};
                             if unattended {
                                 // Nobody at the computer: the company's rules for unattended access decide
                                 // (checked by the connection service); keyboard and mouse as for the first technician.
@@ -2516,7 +2524,7 @@ async fn run(
                             let memory=memory.ok_or("Switch state unavailable")?;
                             let pressed=from.by==enrolled.connection_id && switch_pressed.take().is_some_and(|(previous,_)|previous==from.previous);
                             let expires=Arc::new(AtomicU64::new(ticket.expires_at));
-                            peer=Some(Peer{id:session,remote:requester_connection,host:true,key,source:String::new(),#[cfg(target_os = "linux")] portal:None,confirm:false,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:Some(ticket),expires,relay_expires:0,restart_pending:None,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4(),joined:false,switched:true});
+                            peer=Some(Peer{id:session,remote:requester_connection,host:true,key,source:String::new(),#[cfg(target_os = "linux")] portal:None,confirm:false,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:Some(ticket),expires,relay_expires:0,restart_pending:None,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4(),joined:false,switched:true,reversed:!memory.reversed});
                             peer.as_ref().ok_or("Invitation state unavailable")?.track(state,generation).await?;
                             state.change(generation,|status|{status.phase="incoming".into();status.message="The other side asks to switch sides: they would see this screen. Accept or Reject".into();status.peer=Some(requester_connection);status.requester=None;status.sharing=true;status.unattended_session=false;}).await;
                             // Switching back to the computer that was helped restores what its user allowed;
@@ -2536,7 +2544,7 @@ async fn run(
                             let Some(memory)=memory.filter(|_|peer.is_none() && outgoing.is_none()) else {send(&mut socket,ClientMessage::Close{session}).await?;continue;};
                             switch_pressed=None;
                             let expires=Arc::new(AtomicU64::new(memory.identity.expires_at));
-                            peer=Some(Peer{id:session,remote:host,host:false,key:memory.key,source:String::new(),#[cfg(target_os = "linux")] portal:None,confirm:false,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:Some(memory.identity.clone()),expires,relay_expires:0,restart_pending:None,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4(),joined:false,switched:true});
+                            peer=Some(Peer{id:session,remote:host,host:false,key:memory.key,source:String::new(),#[cfg(target_os = "linux")] portal:None,confirm:false,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:Some(memory.identity.clone()),expires,relay_expires:0,restart_pending:None,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4(),joined:false,switched:true,reversed:!memory.reversed});
                             peer.as_ref().ok_or("Invitation state unavailable")?.track(state,generation).await?;
                             state.change(generation,|status|{status.phase="outgoing".into();status.message="Switching sides: waiting for the other computer's picture".into();status.peer=Some(host);status.sharing=false;}).await;
                         },
@@ -2572,7 +2580,7 @@ async fn run(
                                 Some(config)
                             }else{None};
                             let expires=Arc::new(AtomicU64::new(ticket.expires_at));
-                            peer=Some(Peer{id:session,remote:requester_connection,host:true,key,source:String::new(),#[cfg(target_os = "linux")] portal:None,confirm:false,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:Some(ticket),expires,relay_expires:0,restart_pending:None,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4(),joined:false,switched:false});
+                            peer=Some(Peer{id:session,remote:requester_connection,host:true,key,source:String::new(),#[cfg(target_os = "linux")] portal:None,confirm:false,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:Some(ticket),expires,relay_expires:0,restart_pending:None,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4(),joined:false,switched:false,reversed:false});
                             peer.as_ref().ok_or("Invitation state unavailable")?.track(state,generation).await?;
                             state.change(generation,|status|{status.phase="incoming".into();status.message="Incoming request: choose a source and Accept or Reject".into();status.peer=Some(requester_connection);status.requester=Some(requester);status.sharing=true;status.unattended_session=unattended;}).await;
                             if let Some(config)=auto {
@@ -2641,7 +2649,7 @@ async fn run(
                             } else {
                                 switch_memory.take().filter(|memory|memory.key==ended.key).and_then(|memory|memory.grants)
                             };
-                            switch_memory=Some(SwitchMemory{previous:session,remote:ended.remote,key:ended.key,identity:ended.identity.clone().ok_or("Peer identity unavailable")?,grants,at:std::time::Instant::now()});
+                            switch_memory=Some(SwitchMemory{previous:session,remote:ended.remote,key:ended.key,identity:ended.identity.clone().ok_or("Peer identity unavailable")?,grants,reversed:ended.reversed,at:std::time::Instant::now()});
                             state.change(generation,|status|{status.phase="ready".into();status.message="Switching sides".into();status.session=None;status.peer=Some(ended.remote);status.requester=None;}).await;
                         },
                         ServerMessage::Closed{session,reason}=>{if peer.as_ref().is_some_and(|peer|peer.id==session){peer=None;state.change(generation,|status|{status.phase="ready".into();status.message=format!("Session closed: {reason:?}");status.session=None;status.peer=None;status.requester=None;}).await;}},
@@ -2831,6 +2839,7 @@ mod consent_tests {
             consent_id: Uuid::from_u128(2),
             joined: false,
             switched: false,
+            reversed: false,
         }
     }
     #[test]
@@ -2940,6 +2949,37 @@ mod consent_tests {
         assert_eq!(remote.0.lock().await.file_permission, Some(true));
         assert!(remote.file_grant(0, new, false).await.is_err());
         assert!(root.load(Ordering::Acquire));
+    }
+    #[tokio::test]
+    async fn the_switched_direction_is_current_and_blocks_invitations_from_the_viewing_side() {
+        let remote = RemoteSession::default();
+        let (tx, _rx) = mpsc::channel(4);
+        let track = |session: Uuid, reversed: bool| {
+            let remote = remote.clone();
+            async move {
+                remote
+                    .track(0, session, Arc::new(AtomicBool::new(false)), Uuid::new_v4(), Arc::new(AtomicBool::new(false)), false, reversed)
+                    .await
+                    .unwrap();
+                let mut inner = remote.0.lock().await;
+                inner.status.phase = "active".into();
+                inner.status.sharing = false;
+                inner.status.peer = Some(111_111_111);
+                inner.status.peer_features = vec![JOIN.into()];
+            }
+        };
+        remote.0.lock().await.commands = Some(tx);
+        // Switched: the computer that was helped views the technician and may not invite.
+        let reversed = Uuid::new_v4();
+        track(reversed, true).await;
+        assert!(remote.status().await.switched);
+        let refused = remote.invite(reversed, None, Some(333_333_333), false).await.unwrap_err();
+        assert!(refused.contains("switching back"), "{refused}");
+        // Switched back: the direction is the original one again and the technician invites.
+        let back = Uuid::new_v4();
+        track(back, false).await;
+        assert!(!remote.status().await.switched, "the label and rules follow the current direction");
+        remote.invite(back, None, Some(333_333_333), false).await.unwrap();
     }
     #[tokio::test]
     async fn a_colleague_view_leaves_the_first_technicians_grants_alone() {

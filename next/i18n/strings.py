@@ -119,6 +119,7 @@ S = [
 ("End session","Sitzung beenden","Terminer la session","Termina la sessione"),
 ("Ending session…","Sitzung wird beendet…","Fin de la session…","Chiusura della sessione…"),
 ("Ending the session","Sitzung wird beendet","Fin de la session","Chiusura della sessione"),
+("Colleagues can be invited after switching back: right now you are viewing the technician's screen","Kollegen können nach dem Zurückwechseln eingeladen werden: Im Moment sehen Sie den Bildschirm des Technikers","Vous pourrez inviter des collègues après être revenu en arrière : vous voyez maintenant l'écran du technicien","Potrai invitare colleghi dopo essere tornato indietro: ora stai vedendo lo schermo del tecnico"),
 ("You’re sharing your screen","Sie teilen Ihren Bildschirm","Vous partagez votre écran","Stai condividendo lo schermo"),
 ("Ending the session…","Sitzung wird beendet…","Fin de la session…","Chiusura della sessione…"),
 ("Enroll this computer","Diesen Computer registrieren","Enregistrer cet ordinateur","Registra questo computer"),
