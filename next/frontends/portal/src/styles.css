@@ -424,7 +424,10 @@ table.table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .status-bar[data-level='outage'] { background: var(--danger); }
 .status-bars-legend { display: flex; justify-content: space-between; gap: 8px; margin-top: 6px; font-size: 12px; color: var(--muted); }
 .status-footnote { margin-top: 20px; }
+.status-days-short { display: none; }
 @media (max-width: 560px) {
   .status-bars { grid-template-columns: repeat(45, 1fr); }
   .status-bar:nth-child(-n+45) { display: none; }
+  .status-days-full { display: none; }
+  .status-days-short { display: inline; }
 }

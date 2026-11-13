@@ -16,8 +16,9 @@ Alerting (de-duplicated here, delivered by the existing ops alarm):
 
 Simulating a failure: put an override into /etc/mixel-remote-status/health.env, for example
   MRH_BROKER_LOCAL=http://127.0.0.1:8099/healthz
-run `systemctl start mixel-remote-health` twice, then remove the line (see OPERATIONS.md).
-Usage: mixel-remote-health [--dry-run] [--force-all] [--only name,name]
+plus MRH_FORCE_ALL=1 (so checks with a long interval run now), run `systemctl start
+mixel-remote-health` twice, then remove the file and run it once more (see OPERATIONS.md).
+Usage: mixel-remote-health [--dry-run] [--force-all] [--only name,name]   (--only runs those now)
 """
 from __future__ import annotations
 
@@ -50,7 +51,7 @@ UPDATE_KEY = bytes([
 ])
 UPDATE_BASE = "https://store-api.mixel.ch/storage/v1/object/public/remote-updates"
 UPDATE_TARGETS = [("windows", "x64"), ("windows", "x64-program"), ("macos", "arm64"), ("linux", "x64")]
-STRIPE_WEBHOOK = "we_1UbE0hFRPXnJX22hlR5RA24a"
+STRIPE_WEBHOOK_ID = "we_1UbE0hFRPXnJX22hlR5RA24a"
 STRIPE_WEBHOOK_URL = "https://remote.mixel.ch/api/billing/webhook"
 
 # Public components (what customers see on the status page) and their order.
@@ -164,7 +165,8 @@ def check_device_ticket_endpoint() -> str:
 
 def check_containers() -> str:
     names = ["mixel-remote-next-qa-broker-device-access", "mixel-remote-next-qa-authority-1",
-             "mixel-remote-next-qa-turn-1", "mixel-remote-billing", "ism-gotrue", "ism-postgrest", "ism-postgres"]
+             "mixel-remote-next-qa-turn-1", "mixel-remote-billing", "ism-gotrue", "ism-postgrest", "ism-postgres",
+             *[n for n in cfg("MRH_CONTAINERS_EXTRA", "").split(",") if n]]
     result = subprocess.run(["docker", "inspect", "--format", "{{.Name}} {{.State.Status}} {{.RestartCount}}", *names],
                             capture_output=True, text=True, timeout=20, check=False)
     seen = {}
@@ -182,7 +184,7 @@ def check_synthetic_connect() -> str:
     command = ["docker", "run", "--rm", "--network", "host", "--read-only", "--cap-drop", "ALL",
                "--security-opt", "no-new-privileges", "--memory", "256m", "--cpus", "1",
                "--name", f"mixel-remote-status-probe-run-{os.getpid()}", "--env-file", PROBE_ENV]
-    ws = OVERRIDES.get("MRH_PROBE_WS")
+    ws = cfg("MRH_PROBE_WS", "")
     if ws:
         command += ["-e", f"MIXEL_PROBE_WS={ws}"]
     result = subprocess.run([*command, image, "run"], capture_output=True, text=True, timeout=130, check=False)
@@ -286,7 +288,8 @@ def check_stripe_webhook() -> str:
     if not key:
         raise CheckError("Stripe key not readable")
     auth = base64.b64encode(f"{key}:".encode()).decode()
-    code, _, body = http(f"https://api.stripe.com/v1/webhook_endpoints/{STRIPE_WEBHOOK}",
+    webhook = cfg("MRH_STRIPE_WEBHOOK", STRIPE_WEBHOOK_ID)
+    code, _, body = http(f"https://api.stripe.com/v1/webhook_endpoints/{webhook}",
                          headers={"Authorization": f"Basic {auth}"}, timeout=15)
     if code != 200:
         raise CheckError(f"Stripe API HTTP {code}")
@@ -295,7 +298,7 @@ def check_stripe_webhook() -> str:
         raise CheckError(f"webhook endpoint is {endpoint.get('status')}")
     if endpoint.get("url") != STRIPE_WEBHOOK_URL:
         raise CheckError(f"webhook points to {endpoint.get('url')}")
-    return f"webhook {STRIPE_WEBHOOK} enabled, {len(endpoint.get('enabled_events', []))} events"
+    return f"webhook {webhook} enabled, {len(endpoint.get('enabled_events', []))} events"
 
 
 def check_update_manifests() -> str:
@@ -419,8 +422,12 @@ def check_tls() -> str:
 def check_turn_ports() -> str:
     host = cfg("MRH_TURN_HOST", "178.104.17.23")
     for port in (3479, 5350):
-        with socket.create_connection((host, int(cfg(f"MRH_TURN_PORT_{port}", str(port)))), timeout=5):
-            pass
+        target = int(cfg(f"MRH_TURN_PORT_{port}", str(port)))
+        try:
+            with socket.create_connection((host, target), timeout=5):
+                pass
+        except OSError as error:
+            raise CheckError(f"TURN {host}:{target}: {error}") from None
     return "TURN TCP 3479 and TLS 5350 accept connections"
 
 
@@ -428,10 +435,11 @@ def check_backups() -> str:
     """The nightly encrypted ISM database backup (mixel-backup.service) and the config backup ran."""
     import glob
     now = time.time()
+    max_hours = float(cfg("MRH_BACKUP_MAX_HOURS", "26"))
     problems, report = [], []
     for label, pattern, max_age, min_size in (
-            ("ism-postgres", "/opt/pg-backups-encrypted/ism-postgres-*.dump.gz.age", 26 * 3600, 50_000_000),
-            ("remote-config", "/opt/pg-backups-encrypted/remote-config/mixel-remote-config-*.age", 26 * 3600, 1000)):
+            ("ism-postgres", "/opt/pg-backups-encrypted/ism-postgres-*.dump.gz.age", max_hours * 3600, 50_000_000),
+            ("remote-config", "/opt/pg-backups-encrypted/remote-config/mixel-remote-config-*.age", max_hours * 3600, 1000)):
         files = sorted(glob.glob(pattern), key=os.path.getmtime)
         if not files:
             problems.append(f"{label}: no archive")
@@ -537,7 +545,7 @@ def send_recovery_mail(down_before: list[str], outage_seconds: int) -> None:
 def main() -> int:
     args = sys.argv[1:]
     dry = "--dry-run" in args
-    force = "--force-all" in args
+    force = "--force-all" in args or cfg("MRH_FORCE_ALL", "") == "1"
     only = None
     if "--only" in args:
         only = set(args[args.index("--only") + 1].split(","))
@@ -552,7 +560,7 @@ def main() -> int:
             continue
         previous = checks_state.get(name, {})
         # Failed checks are retried at the next run even if their interval is long.
-        if force or not interval or not previous or not previous.get("ok") or now - previous.get("at", 0) >= interval:
+        if force or only or not interval or not previous or not previous.get("ok") or now - previous.get("at", 0) >= interval:
             due.append(name)
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
         results = list(pool.map(run_check, due))
@@ -646,5 +654,25 @@ def main() -> int:
     return exit_code
 
 
+def guarded_main() -> int:
+    """A crash of the monitor itself alerts too, but at most once per REMIND_SECONDS."""
+    try:
+        return main()
+    except Exception as error:  # noqa: BLE001
+        print(f"[mixel-remote-health] monitor crashed: {type(error).__name__}: {error}", file=sys.stderr)
+        stamp = "/run/mixel-remote-health.crash"
+        try:
+            if time.time() - os.path.getmtime(stamp) < REMIND_SECONDS:
+                return 0
+        except OSError:
+            pass
+        try:
+            with open(stamp, "w", encoding="utf-8") as handle:
+                handle.write(now_iso())
+        except OSError:
+            pass
+        return 1
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(guarded_main())

@@ -83,7 +83,8 @@ export function Status() {
                       ))}
                     </div>
                     <div className="status-bars-legend">
-                      <span>{t('status.daysAgo', { days: DAYS })}</span>
+                      <span className="status-days-full">{t('status.daysAgo', { days: DAYS })}</span>
+                      <span className="status-days-short">{t('status.daysAgo', { days: DAYS / 2 })}</span>
                       <span>{average === null ? t('status.noData') : t('status.uptime', { value: percent.format(average) })}</span>
                       <span>{t('status.today')}</span>
                     </div>
