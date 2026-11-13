@@ -251,7 +251,11 @@
   const context = canvas.getContext('2d');
   let current: RemoteStatus | undefined, sources: Source[] = [], busy = false, polling = false, readVersion = 0;
   let operationVersion = 0, stopping = false, stoppedConsent = '';
-  let wentOffline = false, autoOnline = false;
+  let wentOffline = false, autoOnline = false, autoTries = 0, nextAutoTry = 0;
+  // Back online after a drop (sleep, network change, expired ticket): try again with a growing pause.
+  const autoPause = (tries: number): number => [0, 5000, 15000, 30000, 60000][Math.min(tries, 4)];
+  window.addEventListener?.('online', () => { autoTries = 0; nextAutoTry = 0; });
+  document.addEventListener('mixel-reconnect-now', () => { wentOffline = false; autoOnline = false; autoTries = 0; nextAutoTry = 0; void read(true); });
   // Just set up: go online now instead of waiting for the next retry.
   document.addEventListener('mixel-device-enrolled', () => { if (!wentOffline) autoOnline = false; });
   let workspaceFocused = true;
@@ -364,7 +368,7 @@
     document.body.dataset.remotePlatform = current.platform ?? 'macos';
     const closing = stopping || (locallyStopped() && ['incoming','outgoing','deciding','negotiating','active','closing'].includes(current.phase));
     const displayPhase = closing ? 'closing' : current.phase;
-    document.dispatchEvent(new CustomEvent('mixel-remote-state',{detail:{phase:displayPhase,controllerOnly:!!current.controller_only,host:current.controller_only?null:current.host,session:!closing&&authenticated?current.session:null,consent:current.consent,files:!closing&&authenticated&&current.files,clipboard:!closing&&authenticated&&current.clipboard,sharing:current.sharing,control:current.control,stopping,online:current.online??[],peer:current.peer,prints:current.print_jobs??[]}}));
+    document.dispatchEvent(new CustomEvent('mixel-remote-state',{detail:{phase:displayPhase,controllerOnly:!!current.controller_only,host:current.controller_only?null:current.host,session:!closing&&authenticated?current.session:null,consent:current.consent,files:!closing&&authenticated&&current.files,clipboard:!closing&&authenticated&&current.clipboard,sharing:current.sharing,control:current.control,stopping,online:current.online??[],peer:current.peer,prints:current.print_jobs??[],message:connectionMessage(closing)}}));
     status.textContent = connectionMessage(closing);
     status.dataset.phase=displayPhase;
     ownId.textContent = formatId(authenticated ? current.host : null);
@@ -464,10 +468,11 @@
         render();
         // A set-up computer goes online by itself once someone is signed in, so the person who needs
         // help does not have to find a button first. Not again after "Go offline" in this run.
-        if (authenticated && !wentOffline && !autoOnline && ['offline', 'error'].includes(status.phase) && !busy && !stopping) {
+        if (status.phase === 'ready') { autoTries = 0; nextAutoTry = 0; }
+        if (authenticated && !wentOffline && !autoOnline && ['offline', 'error'].includes(status.phase) && !busy && !stopping && Date.now() >= nextAutoTry) {
           autoOnline = true;
-          // Not set up yet (or offline): try again in a minute.
-          void invoke('remote_register').then(() => read(true)).catch(() => { window.setTimeout(() => { autoOnline = false; }, 60000); });
+          nextAutoTry = Date.now() + autoPause(++autoTries);
+          void invoke('remote_register').then(() => read(true)).catch(() => {}).finally(() => { autoOnline = false; });
         }
         if (freshInvitation && !status.controller_only) void loadSources();
         if (becameReady) void restoreUnattended();
