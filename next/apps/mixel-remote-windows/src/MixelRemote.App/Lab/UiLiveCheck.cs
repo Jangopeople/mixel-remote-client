@@ -59,17 +59,27 @@ internal static class UiLiveCheck
         return passed ? result : 1;
     }
 
-    private static async Task<string?> Prepare(AppModel app, string suffix, string role)
+    /// <summary>Signs in, uses the QA account's company or creates one, adds this computer. Returns the company to delete (null: keep it).</summary>
+    private static async Task<(bool Ready, string? Created)> Prepare(AppModel app, string suffix, string role)
     {
         await app.SignIn();
         LiveCheck.Check("sign-in through the app (QA session)", await Until(() => app.SignedIn, 40), app.Account.Phase);
-        var company = $"QA Windows UI {suffix}";
-        LiveCheck.Check("create a company in Account", await app.Company.Create(company, acceptedTerms: true) && app.Company.Tenant is not null, app.Company.Error);
-        if (app.Company.Tenant is null) return null;
+        await Until(() => app.Company.Loaded, 20);
+        string? created = null;
+        if (app.Company.Tenant is { } existing)
+        {
+            Print($"using the QA account's company {existing.Name}");
+        }
+        else
+        {
+            created = $"QA Windows UI {suffix}";
+            LiveCheck.Check("create a company in Account", await app.Company.Create(created, acceptedTerms: true) && app.Company.Tenant is not null, app.Company.Error);
+        }
+        if (app.Company.Tenant is null) return (false, created);
         await app.Devices.AddThisComputer($"QA Windows {role} {suffix}", null);
         LiveCheck.Check("Add this computer (Devices)", app.Enrollment.Current is not null, app.Devices.Error);
         LiveCheck.Check("this computer online with its ID", await Until(() => app.Remote.Phase == "ready" && app.Remote.Host == app.Enrollment.Current?.ConnectionId, 40), app.Remote.Phase);
-        return company;
+        return (true, created);
     }
 
     private static async Task Cleanup(AppModel app, string? company)
@@ -82,20 +92,25 @@ internal static class UiLiveCheck
 
     private static async Task<int> Technician(AppModel app, MainWindow main, SessionWindow window, string suffix, string folder)
     {
-        var company = await Prepare(app, suffix, "technician");
-        if (company is null) return 1;
+        var (ready, company) = await Prepare(app, suffix, "technician");
+        if (!ready) return 1;
         try
         {
-            LiveCheck.Check("Add other computers: deploy link", await app.Devices.CreateDeployLink("QA lab", 1, 2, null), app.Devices.Error);
-            await File.WriteAllTextAsync(Path.Combine(folder, "deploy-command.txt"), app.Devices.DeployLink?.WindowsCommand ?? "");
-            await File.WriteAllTextAsync(Path.Combine(folder, "deploy-token.txt"), app.Devices.DeployLink?.Token ?? "");
+            // The lab host: a Remote ID in host-id.txt, or a computer enrolled with a new deploy link.
+            uint? wanted = File.Exists(Path.Combine(folder, "host-id.txt")) && uint.TryParse(File.ReadAllText(Path.Combine(folder, "host-id.txt")).Trim(), out var given) ? given : null;
+            if (wanted is null)
+            {
+                LiveCheck.Check("Add other computers: deploy link", await app.Devices.CreateDeployLink("QA lab", 1, 2, null), app.Devices.Error);
+                await File.WriteAllTextAsync(Path.Combine(folder, "deploy-command.txt"), app.Devices.DeployLink?.WindowsCommand ?? "");
+                await File.WriteAllTextAsync(Path.Combine(folder, "deploy-token.txt"), app.Devices.DeployLink?.Token ?? "");
+            }
             app.Section = AppSection.Devices;
-            Print("WAITING for the lab computer (deploy-token.txt)");
+            Print("WAITING for the lab computer");
             Device? host = null;
             await Until(() =>
             {
                 _ = app.Devices.Load();
-                host = app.Devices.Devices.FirstOrDefault(device => device.ConnectionId != app.Remote.Host && app.Devices.PresenceOf(device) == Presence.Online);
+                host = app.Devices.Devices.FirstOrDefault(device => device.ConnectionId != app.Remote.Host && (wanted is null || device.ConnectionId == wanted) && app.Devices.PresenceOf(device) == Presence.Online);
                 return host is not null;
             }, 900);
             LiveCheck.Check("lab computer enrolled with the deploy link shows Online in Devices", host is not null);
@@ -150,8 +165,8 @@ internal static class UiLiveCheck
 
     private static async Task<int> Host(AppModel app, MainWindow main, string suffix, string folder)
     {
-        var company = await Prepare(app, suffix, "host");
-        if (company is null) return 1;
+        var (ready, company) = await Prepare(app, suffix, "host");
+        if (!ready) return 1;
         try
         {
             await File.WriteAllTextAsync(Path.Combine(folder, "host-id.txt"), app.Remote.Host?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "");

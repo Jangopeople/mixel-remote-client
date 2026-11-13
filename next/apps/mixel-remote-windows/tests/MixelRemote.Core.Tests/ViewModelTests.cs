@@ -525,6 +525,63 @@ public sealed class ViewModelTests
     }
 
     [TestMethod]
+    public async Task First_sign_in_sets_up_the_remote_account_name()
+    {
+        var engine = new MockEngine();
+        DemoFixtures.SignedOut(engine);
+        engine.ReplyValue("account_status", new AccountStatus { Phase = "profile_setup", Message = "Choose your name" });
+        var app = await DemoFixtures.App(engine);
+        await app.SetUpProfile("  ");
+        Assert.AreEqual("Enter a name", app.Error);
+        await app.SetUpProfile(" Anna Muster ");
+        Assert.AreEqual("Anna Muster", engine.CallsOf("account_setup").Single().Object["name"]!.GetValue<string>());
+    }
+
+    [TestMethod]
+    public async Task Mixel_team_rollout_creates_and_revokes_tokens_per_company()
+    {
+        var engine = new MockEngine();
+        DemoFixtures.Company(engine, staff: true);
+        engine.Reply("saas_my_tenants", "[]");
+        engine.Reply("enrollment_companies", """[{"client_id":"c1","client_name":"Muster AG"}]""");
+        engine.Reply("rollout_list", """[{"id":"r1","label":"Office","created_at":"2026-11-13T08:00:00Z","expires_at":"2026-12-13T08:00:00Z","max_uses":50,"uses":3,"revoked_at":null}]""");
+        engine.Reply("rollout_create", """{"token":"mrt_x","windows_command":"irm","macos_command":"curl mac","linux_command":"curl linux"}""");
+        var app = await DemoFixtures.App(engine);
+        Assert.IsTrue(app.Devices.RollsOut);
+        var companies = await app.Devices.RolloutCompanies();
+        Assert.AreEqual("Muster AG", companies.Single().ClientName);
+        Assert.IsTrue(await app.Devices.CreateRollout("c1", "Office", 30, 50));
+        Assert.AreEqual("irm", app.Devices.DeployLink?.WindowsCommand);
+        Assert.AreEqual(3, app.Devices.Rollouts.Single().Uses);
+        await app.Devices.RevokeRollout("c1", app.Devices.Rollouts[0]);
+        Assert.AreEqual("r1", engine.CallsOf("rollout_revoke").Single().Object["id"]!.GetValue<string>());
+    }
+
+    [TestMethod]
+    public async Task Wake_on_lan_uses_the_addresses_seen_in_a_session()
+    {
+        var preferences = new MemoryPreferences();
+        var engine = new MockEngine();
+        DemoFixtures.Company(engine);
+        var app = await DemoFixtures.App(engine, preferences);
+        var device = app.Devices.Devices.First(item => item.Name == "Warehouse laptop");
+        Assert.AreEqual(0, app.Devices.KnownMacs(device).Length);
+        engine.ReplyValue("remote_status", new RemoteStatus { Phase = "active", Host = DemoFixtures.ThisComputer, Session = DemoFixtures.SessionId, Peer = device.ConnectionId, HostMacs = ["00:11:22:33:44:55"] });
+        await app.RefreshRemote();
+        CollectionAssert.AreEqual(new[] { "00:11:22:33:44:55" }, app.Devices.KnownMacs(device));
+        await app.Devices.Wake(device, app.Devices.KnownMacs(device));
+        Assert.AreEqual("00:11:22:33:44:55", engine.CallsOf("wake_on_lan").Single().Object["macs"]![0]!.GetValue<string>());
+        app.Session.Clear();
+    }
+
+    [TestMethod]
+    public void Assistant_answers_are_shown_as_plain_text()
+    {
+        Assert.AreEqual("Title\n• one", AssistantModel.Plain("## Title\n* one"));
+        Assert.AreEqual("The disk is full", AssistantModel.Plain("The **disk** is full"));
+    }
+
+    [TestMethod]
     public async Task Every_demo_screen_builds_its_model()
     {
         foreach (var screen in DemoFixtures.Screens)

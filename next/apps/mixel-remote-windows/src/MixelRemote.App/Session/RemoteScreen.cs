@@ -32,6 +32,18 @@ internal sealed class RemoteScreen : Grid
     private double wheelX, wheelY;
     private (DateTimeOffset At, Point Where, byte Button, byte Count) lastClick;
     private KeyboardHook? hook;
+    private Point pointer;
+    private CanvasBitmap? bitmap;
+    private VideoFrame? bitmapFrame;
+
+    /// <summary>Fit the picture into the window (default), or show it pixel for pixel, panned with the mouse.</summary>
+    public bool FitToWindow { get; private set; } = true;
+
+    public void ToggleFit()
+    {
+        FitToWindow = !FitToWindow;
+        if (last is not null) Draw(last);
+    }
 
     public RemoteScreen(SessionModel session)
     {
@@ -103,8 +115,6 @@ internal sealed class RemoteScreen : Grid
     private void Resize()
     {
         var scale = panel.CompositionScaleX;
-        var width = Math.Max(1, (int)(ActualWidth * scale));
-        var height = Math.Max(1, (int)(ActualHeight * scale));
         if (ActualWidth < 1 || ActualHeight < 1) return;
         if (chain is null)
         {
@@ -115,20 +125,33 @@ internal sealed class RemoteScreen : Grid
         {
             chain.ResizeBuffers((float)ActualWidth, (float)ActualHeight, (float)(96 * scale));
         }
-        _ = width + height;
         if (last is not null) Draw(last);
     }
 
     private void Draw(VideoFrame frame)
     {
         last = frame;
-        if (chain is null) return;
+        if (chain is null)
+        {
+            // First picture, or the Direct3D device was lost: (re)create the swap chain, which draws it.
+            if (ActualWidth >= 1 && ActualHeight >= 1) Resize();
+            return;
+        }
         var (w, h) = ((double)ActualWidth, (double)ActualHeight);
-        var fit = Math.Min(w / frame.Width, h / frame.Height);
-        picture = new Rect((w - frame.Width * fit) / 2, (h - frame.Height * fit) / 2, frame.Width * fit, frame.Height * fit);
+        var fit = FitToWindow ? Math.Min(w / frame.Width, h / frame.Height) : 1 / Math.Max(0.5, panel.CompositionScaleX);
+        var (pw, ph) = (frame.Width * fit, frame.Height * fit);
+        // Larger than the window (actual size): the mouse position pans the picture.
+        var x = pw <= w ? (w - pw) / 2 : -(pw - w) * Math.Clamp(pointer.X / Math.Max(1, w), 0, 1);
+        var y = ph <= h ? (h - ph) / 2 : -(ph - h) * Math.Clamp(pointer.Y / Math.Max(1, h), 0, 1);
+        picture = new Rect(x, y, pw, ph);
         try
         {
-            using var bitmap = CanvasBitmap.CreateFromBytes(device, frame.ToRgba(), frame.Width, frame.Height, DirectXPixelFormat.R8G8B8A8UIntNormalized);
+            if (!ReferenceEquals(bitmapFrame, frame) || bitmap is null)
+            {
+                bitmap?.Dispose();
+                bitmap = CanvasBitmap.CreateFromBytes(device, frame.ToRgba(), frame.Width, frame.Height, DirectXPixelFormat.R8G8B8A8UIntNormalized);
+                bitmapFrame = frame;
+            }
             using (var drawing = chain.CreateDrawingSession(Colors.Black))
             {
                 drawing.DrawImage(bitmap, picture, new Rect(0, 0, frame.Width, frame.Height), 1, fit >= 1 ? CanvasImageInterpolation.NearestNeighbor : CanvasImageInterpolation.Linear);
@@ -139,6 +162,7 @@ internal sealed class RemoteScreen : Grid
         {
             App.Log("Direct3D device lost; the picture resumes with the next frame");
             chain = null;
+            bitmap = null;
         }
     }
 
@@ -172,6 +196,11 @@ internal sealed class RemoteScreen : Grid
 
     private void Moved(PointerRoutedEventArgs e)
     {
+        if (!FitToWindow && last is not null)
+        {
+            pointer = e.GetCurrentPoint(input).Position;
+            Draw(last);
+        }
         if (!session.Controllable && !session.PointerMode) return;
         if (PicturePoint(e, clamp: pressed.Count > 0) is { } point) session.MoveTo(point.X, point.Y);
     }

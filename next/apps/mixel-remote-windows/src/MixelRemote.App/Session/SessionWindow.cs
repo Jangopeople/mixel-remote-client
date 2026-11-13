@@ -251,6 +251,7 @@ internal sealed class SessionView : Grid
         Panel("files", "\uE8B7", L("Files"));
         Panel("clipboard", "\uE77F", L("Clipboard"));
         Panel("help", "\uE897", L("AI help"));
+        actions.Children.Add(Ui.IconButton(Screen.FitToWindow ? "\uE9A6" : "\uE740", Screen.FitToWindow ? L("Actual size") : L("Fit to window"), () => { Screen.ToggleFit(); Rebuild(); }));
         var full = window.AppWindow.Presenter.Kind == AppWindowPresenterKind.FullScreen;
         actions.Children.Add(Ui.IconButton(full ? "\uE73F" : "\uE740", (full ? L("Exit full screen") : L("Full screen")) + " (Ctrl+Alt+Enter)", ToggleFullScreen));
         var scroller = new ScrollViewer { Content = actions, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Disabled, HorizontalScrollMode = ScrollMode.Enabled, VerticalScrollMode = ScrollMode.Disabled };
