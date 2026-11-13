@@ -53,6 +53,14 @@
   }
   let accountKey='', authenticated=false, busy=false, version=0, accountVersion=0, remoteVersion=0, currentSearch='', remote:Remote={phase:'offline',host:null};
   let entries:Device[]=[], nextCursor:number|null=null, cursors:(number|null)[]=[null], index=0;
+  // Favorites and recent connections (company devices only, SQL 029; rules in report-export.ts). Until the
+  // commands answer, there are no stars and no sections: the list stays as it is.
+  type Recent={device_id:string;last_connected_at:string|null};
+  type Reports={COMMANDS:{setFavorite:string;favorites:string;recentDevices:string};ARGS:{setFavorite(tenant:string,device:string,favorite:boolean):Record<string,unknown>;favorites(tenant:string):Record<string,unknown>;recentDevices(tenant:string,maxCount?:number):Record<string,unknown>};
+    deviceSections<T extends {device:string;name:string}>(devices:readonly T[],favorites:ReadonlySet<string>,recent:readonly Recent[],max?:number):{favorites:T[];recent:T[];others:T[]}};
+  const reports=():Reports|undefined=>(window as unknown as {mixelReports?:Reports}).mixelReports;
+  const SECTION:Record<string,string>={favorites:'Favorites',recent:'Recent connections',others:'All other devices'};
+  let favoriteIds:Set<string>|null=null, recentRows:Recent[]=[], saasBase:Device[]|null=null, sectionOf=new Map<string,string>(), favoritesVersion=0;
   // Company mode: the whole (filtered) list is loaded at once and shown 50 per page.
   let company:Company={tenant:null,overview:null}, companyKey='', waitingForCompany=false, saasAll:Device[]|null=null, groups:Group[]=[], openMenu:HTMLElement|null=null;
   const formatId=(value:number):string=>String(value).replace(/(\d{3})(\d{3})(\d{3})/,'$1 $2 $3');
@@ -118,6 +126,45 @@
     box.append(toggle,menu);
     return box;
   }
+  // Company list order: favorites, recent connections, then the others (each device once).
+  function arrange():void{
+    sectionOf=new Map();
+    if(!saasBase){saasAll=null;return;}
+    const tools=reports();
+    const parts=tools && company.tenant?tools.deviceSections(saasBase,favoriteIds??new Set<string>(),recentRows):null;
+    if(!parts || (!parts.favorites.length && !parts.recent.length)){saasAll=saasBase;return;}
+    for(const [key,items] of [['favorites',parts.favorites],['recent',parts.recent],['others',parts.others]] as const)for(const device of items)sectionOf.set(device.device,key);
+    saasAll=[...parts.favorites,...parts.recent,...parts.others];
+  }
+  async function loadFavorites():Promise<void>{
+    const tools=reports(), tenant=company.tenant?.tenant_id;
+    if(!tools || !tenant || !authenticated)return;
+    const request=++favoritesVersion;
+    const [favorites,recent]=await Promise.all([
+      invoke<{device_id:string}[]>(tools.COMMANDS.favorites,tools.ARGS.favorites(tenant)).then(rows=>Array.isArray(rows)?new Set(rows.filter(row=>typeof row?.device_id==='string').map(row=>row.device_id)):null,()=>null),
+      invoke<Recent[]>(tools.COMMANDS.recentDevices,tools.ARGS.recentDevices(tenant,10)).then(rows=>Array.isArray(rows)?rows.filter(row=>typeof row?.device_id==='string'):[],()=>[] as Recent[]),
+    ]);
+    if(request!==favoritesVersion || company.tenant?.tenant_id!==tenant || !authenticated)return;
+    favoriteIds=favorites;recentRows=recent;
+    arrange();
+    if(saasAll && !busy){const message=status.textContent;showPage(index);status.textContent=message;render();}
+  }
+  async function toggleFavorite(device:Device):Promise<void>{
+    const tools=reports(), tenant=company.tenant?.tenant_id;
+    if(!tools || !tenant || !favoriteIds)return;
+    const was=favoriteIds.has(device.device);
+    const set=(on:boolean):void=>{
+      const next=new Set(favoriteIds??[]);if(on)next.add(device.device);else next.delete(device.device);
+      favoriteIds=next;arrange();showPage(index);render();
+    };
+    set(!was);
+    status.textContent=`${device.name}: ${tr(was?'removed from favorites':'added to favorites')}`;
+    try{await invoke(tools.COMMANDS.setFavorite,tools.ARGS.setFavorite(tenant,device.device,!was));}
+    catch(error){
+      if(company.tenant?.tenant_id!==tenant || !favoriteIds)return;
+      set(was);status.textContent=`${tr('The favorite could not be saved.')} ${String(error).replace(/^Error: /,'')}`;
+    }
+  }
   function render():void {
     refresh.disabled=search.disabled=!authenticated || busy;
     submit.disabled=refresh.disabled;
@@ -139,7 +186,13 @@
       bannerTitle.textContent=remote.phase==='error'?'This computer lost its connection':'This computer is not connected yet';
       bannerDetail.textContent=(remote.phase==='error' && remote.message ? `${remote.message.replace(/[.\s]*$/,'')}. ` : '')+'Mixel Remote reconnects by itself. Device status appears once it is connected; you can still choose Connect.';
     }
+    let section='';
     for (const device of entries) {
+      const part=saas?sectionOf.get(device.device)??'':'';
+      if(part && part!==section){
+        const heading=document.createElement('li');heading.className='device-section';heading.dataset.section=part;heading.textContent=SECTION[part];list.append(heading);
+      }
+      section=part;
       const row=document.createElement('li'), identity=document.createElement('div'), name=document.createElement('strong'), detail=document.createElement('span'), id=document.createElement('code'), connect=document.createElement('button');
       const state=document.createElement('div'), presence=document.createElement('span'), reason=document.createElement('small');
       state.className='device-state';presence.className='presence';reason.className='device-reason';
@@ -175,6 +228,15 @@
       let macs:string[]=[];
       try{macs=(JSON.parse(localStorage.getItem('mixel.remote.macs.v1')??'{}') as Record<string,string[]>)[String(device.connection_id)]??[];}catch{/* none */}
       row.append(identity,state,id);
+      // Star (company devices): shown first by the style sheet, after the ID for the existing order of controls.
+      if(saas && favoriteIds){
+        const on=favoriteIds.has(device.device), star=document.createElement('button');
+        star.type='button';star.className='button-quiet device-star';star.textContent=on?'★':'☆';
+        star.setAttribute('aria-pressed',String(on));star.setAttribute('aria-label',`${tr(on?'Remove from favorites':'Add to favorites')}: ${device.name}`);
+        star.title=on?'Remove from favorites':'Add to favorites';
+        star.addEventListener('click',()=>{void toggleFavorite(device);});
+        row.append(star);
+      }
       if(macs.length && kind==='offline'){
         const wake=document.createElement('button');wake.type='button';wake.className='button-quiet device-wake';wake.textContent='Wake';
         wake.addEventListener('click',async()=>{
@@ -200,20 +262,22 @@
   async function loadCompanyDevices(wantedIndex:number, reset:boolean):Promise<void>{
     if(!reset && saasAll){showPage(wantedIndex);render();checkPresence();return;}
     const request=++version;busy=true;
-    if(reset){entries=[];cursors=[null];index=0;nextCursor=null;currentSearch=search.value.trim();saasAll=null;}
+    if(reset){entries=[];cursors=[null];index=0;nextCursor=null;currentSearch=search.value.trim();saasAll=null;saasBase=null;}
     render();status.textContent='Loading your company’s devices…';
     const tenant=company.tenant!.tenant_id, filter=groupFilter.value;
     try{
       const rows=await invoke<SaasDevice[]>('saas_devices',{tenant,group:filter && filter!=='none'?filter:null,search:currentSearch||null});
       if(version!==request || !authenticated || company.tenant?.tenant_id!==tenant)return;
       if(!Array.isArray(rows) || rows.length>2000 || rows.some(row=>typeof row.device_id!=='string' || typeof row.name!=='string' || typeof row.os!=='string'))throw Error('Invalid device directory response');
-      saasAll=rows.filter(row=>!row.revoked && Number.isInteger(row.connection_id) && row.connection_id!>=100000000 && row.connection_id!<=999999999 && (filter!=='none' || !row.group_id))
+      saasBase=rows.filter(row=>!row.revoked && Number.isInteger(row.connection_id) && row.connection_id!>=100000000 && row.connection_id!<=999999999 && (filter!=='none' || !row.group_id))
         .map(row=>({device:row.device_id,connection_id:row.connection_id!,name:row.name,os:row.os,group_id:row.group_id,group_name:row.group_name,generation:row.generation}));
-      const mine=remote.host?saasAll.find(device=>device.connection_id===remote.host):undefined;
+      arrange();
+      const mine=remote.host?saasBase.find(device=>device.connection_id===remote.host):undefined;
       if(mine)remember(mine);
       showPage(0);
       checkPresence();
       void loadServerPresence();
+      void loadFavorites();
     }catch(error){if(version===request)status.textContent=String(error);}
     finally{if(version===request){busy=false;render();}}
   }
@@ -372,7 +436,7 @@
     if (key===accountKey) return;
     ++version;accountKey=key;authenticated=!!key;busy=false;entries=[];nextCursor=null;cursors=[null];index=0;search.value='';
     // Company members (not Mixel staff, not a personal space) wait for company.ts to say which company.
-    company={tenant:null,overview:null};companyKey='';saasAll=null;groups=[];
+    company={tenant:null,overview:null};companyKey='';saasAll=null;saasBase=null;groups=[];favoriteIds=null;recentRows=[];sectionOf=new Map();++favoritesVersion;
     waitingForCompany=authenticated && !value.account?.staff && !value.account?.personal && (window as unknown as {mixelCompany?:unknown}).mixelCompany!==undefined;
     render();
     if(authenticated)void load(null,0,true);else status.textContent='Sign in to view the devices available to your account.';
@@ -382,7 +446,7 @@
     company={tenant:value.tenant??null,overview:value.overview??null};
     const wasWaiting=waitingForCompany;waitingForCompany=false;
     if(key===companyKey && !wasWaiting){render();return;}
-    companyKey=key;++version;busy=false;saasAll=null;entries=[];
+    companyKey=key;++version;busy=false;saasAll=null;saasBase=null;entries=[];favoriteIds=null;recentRows=[];sectionOf=new Map();++favoritesVersion;
     render();
     if(authenticated){void loadGroups();void load(null,0,true);}
   }

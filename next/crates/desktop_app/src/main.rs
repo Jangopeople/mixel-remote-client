@@ -11,6 +11,8 @@ use mixel_engine::account_auth;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 mod saas_commands;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+mod report_files;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use mixel_engine::device_identity;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use mixel_engine::host_actions;
@@ -2313,6 +2315,8 @@ fn main() {
             remote_printing_status,
             remote_printing_set,
             print_job,
+            report_files::save_report_file,
+            report_files::open_billing_page,
             rollout_create,
             rollout_list,
             rollout_revoke,
@@ -2444,6 +2448,8 @@ fn main() {
             remote_printing_status,
             remote_printing_set,
             print_job,
+            report_files::save_report_file,
+            report_files::open_billing_page,
             rollout_create,
             rollout_list,
             rollout_revoke,

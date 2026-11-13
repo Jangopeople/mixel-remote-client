@@ -33,6 +33,9 @@
     "viewer.ts",
     "workspace.ts",
     "annotate.ts",
-    "i18n-annotate.ts"
+    "i18n-annotate.ts",
+    "report-export.ts",
+    "reports.ts",
+    "i18n-reports.ts"
   ]
 }
