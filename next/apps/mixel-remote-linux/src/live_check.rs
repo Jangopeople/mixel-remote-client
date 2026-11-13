@@ -142,12 +142,90 @@ impl Check {
             let sent = self.call("remote_chat_send", json!({ "session": id, "text": "Mixel Remote for Linux live check" })).await;
             self.check("chat message sent", sent.is_ok(), format!("{sent:?}"));
         }
+        if attended {
+            self.session_extras(&id, active, folder).await;
+        }
         if let Some(consent) = active["consent"].as_str() {
             let stop = self.call("remote_stop_session", json!({ "consent": consent })).await;
             self.check("end session", stop.is_ok(), format!("{stop:?}"));
         }
         let back = self.wait(20, |status| status["phase"] == "ready").await;
         self.check("back to ready after the session", back.is_some(), "");
+    }
+}
+
+impl Check {
+    /// The toolbar and tools of an attended session the person allowed with everything: privacy
+    /// screen, input block, pointer, sound, clipboard both ways, a file offer and a recording.
+    async fn session_extras(&mut self, id: &str, active: &Value, folder: Option<&PathBuf>) {
+        let offered: Vec<String> = active["host_actions"].as_array().map(|list| list.iter().filter_map(|item| item.as_str().map(str::to_owned)).collect()).unwrap_or_default();
+        for (name, actions) in [("privacy screen on/off", vec!["privacy:on", "privacy:off"]), ("block input on/off", vec!["block:on", "block:off"]), ("pointer shown/hidden", vec!["pointer:32000,24000", "pointer:off"]), ("sound off/on", vec!["sound:off", "sound:on"])] {
+            let key = actions[0].split(':').next().unwrap_or_default().to_owned();
+            if !offered.contains(&key) {
+                println!("{name}: not offered by this computer");
+                continue;
+            }
+            let mut ok = true;
+            for action in actions {
+                ok &= self.engine.input(id, json!({ "kind": "action", "name": action })).await.is_ok();
+                tokio::time::sleep(Duration::from_millis(1500)).await;
+            }
+            self.check(name, ok, "");
+        }
+        if active["clipboard"] == true {
+            // Something to send: this computer's clipboard (needs a display; the host test has one).
+            let copied = self.call("copy_text", json!({ "text": "Mixel Remote for Linux clipboard check" })).await;
+            println!("local clipboard set: {}", copied.is_ok());
+            let push = self.call("remote_clipboard", json!({ "session": id, "push": true })).await;
+            self.check("clipboard to the other computer", push.is_ok(), format!("{push:?}"));
+            let pull = self.call("remote_clipboard", json!({ "session": id, "push": false })).await;
+            self.check("clipboard from the other computer", pull.is_ok(), format!("{pull:?}"));
+        }
+        if active["files"] == true
+            && let Some(consent) = active["consent"].as_str()
+            && let Some(folder) = folder
+        {
+            let file = folder.join("mixel-linux-file-check.txt");
+            let _ = std::fs::write(&file, "Mixel Remote for Linux file check\n");
+            let mut connected = false;
+            for _ in 0..20 {
+                if self.call("remote_file_status", json!({ "consent": consent })).await.is_ok_and(|view| view["connected"] == true) {
+                    connected = true;
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            let offer = self.call("remote_file_send", json!({ "consent": consent, "path": file.to_string_lossy() })).await;
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            let view = self.call("remote_file_status", json!({ "consent": consent })).await.unwrap_or(Value::Null);
+            self.check(&format!("file offered to the other computer ({})", view["outgoing"]["phase"]), connected && offer.is_ok(), format!("{offer:?} {view}"));
+        }
+        if active["recording_permitted"] == true || self.call("remote_record_may_start", json!({ "session": id })).await.is_ok_and(|value| value == true) {
+            if let Some(folder) = folder {
+                let path = folder.join("session.mp4");
+                let start = self.call("remote_record_start", json!({ "session": id, "path": path.to_string_lossy() })).await;
+                // Pictures to record: the overview opens and closes (Super key) while it records.
+                for _ in 0..2 {
+                    let _ = self.engine.input(id, json!({ "kind": "key", "usage": 227, "down": true })).await;
+                    let _ = self.engine.input(id, json!({ "kind": "key", "usage": 227, "down": false })).await;
+                    let until = std::time::Instant::now() + Duration::from_secs(3);
+                    while std::time::Instant::now() < until {
+                        if !matches!(self.engine.next_video(id).await, Ok(data) if !data.is_empty()) {
+                            tokio::time::sleep(Duration::from_millis(20)).await;
+                        }
+                    }
+                }
+                let before = self.status().await["recording"].clone();
+                let stop = self.call("remote_record_stop", json!({ "session": id })).await;
+                // The file is written after the stop (phase saving → saved).
+                let saved = self.wait(20, |status| matches!(status["recording"]["phase"].as_str(), Some("saved" | "saved_partial" | "error")) || matches!(status["previous_recording"]["phase"].as_str(), Some("saved" | "saved_partial" | "error"))).await;
+                println!("recording before stop: {before}; after: {}", saved.map(|status| format!("{} {}", status["recording"], status["previous_recording"])).unwrap_or_default());
+                let size = std::fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
+                self.check(&format!("recording saved ({size} bytes)"), start.is_ok() && stop.is_ok() && size > 0, format!("{start:?} {stop:?}"));
+            }
+        } else {
+            println!("recording: not allowed in this session");
+        }
     }
 }
 
