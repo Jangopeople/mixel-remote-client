@@ -20,6 +20,12 @@ pub mod session_store;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
 pub mod host_actions;
 pub mod session_guard;
+pub mod annotation;
+#[cfg(target_os = "windows")]
+#[allow(unsafe_code)] // Layered overlay windows and GDI drawing, each commented.
+mod annotation_windows;
+#[cfg(target_os = "linux")]
+mod annotation_x11;
 pub mod session_mirror;
 pub mod host_print;
 #[cfg(any(target_os = "macos", target_os = "linux"))]

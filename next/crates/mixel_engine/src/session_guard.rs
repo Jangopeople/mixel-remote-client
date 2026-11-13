@@ -103,6 +103,7 @@ impl Drop for Guard {
         }
         drop(holders);
         pointer(None, 0, 0);
+        crate::annotation::clear_all();
         let _ = privacy(false);
         let _ = block(false);
         if LOCK_WHEN_DONE.swap(false, Ordering::AcqRel) {
@@ -413,8 +414,7 @@ mod win {
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 const COVER_TEXT: &str = "Mixel Remote · A technician is working on this computer";
 
-/// The display the technician sees, to place the pointer on it (macOS and X11: from the source).
-#[cfg_attr(target_os = "windows", allow(dead_code))]
+/// The display the technician sees, to place the pointer (macOS and X11) and the drawings on it.
 static SHARED_SOURCE: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
 
 /// Remembers the shared capture source (`display:<id>` on a Mac, `x11:<screen>:<root>` on Linux).
@@ -423,6 +423,12 @@ pub fn set_shared_source(source: &str) {
         shared.clear();
         shared.push_str(source);
     }
+}
+
+/// The shared capture source (empty before a session showed a display).
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+pub fn shared_source() -> String {
+    SHARED_SOURCE.lock().map(|value| value.clone()).unwrap_or_default()
 }
 
 /// Where a point of the shared picture (0..65535 both ways) lies on a display rectangle.
