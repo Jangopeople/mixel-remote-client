@@ -117,7 +117,7 @@ test('Reports: filter, edit a note, export CSV and PDF', async ({ browser }) => 
   const context = await browser.newContext({ acceptDownloads: true });
   const page = await context.newPage();
   await signIn(page);
-  await page.getByRole('navigation').getByRole('link', { name: 'Reports' }).click();
+  await page.locator('.sidebar .app-nav').getByRole('link', { name: 'Reports' }).click();
   await expect(page).toHaveURL(/\/app\/reports$/);
   await expect(page.getByTestId('report-row')).toHaveCount(2);
   await expect(page.getByTestId('report-totals')).toHaveText('2 sessions · total 1:35:00');
