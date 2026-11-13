@@ -39,7 +39,7 @@ delete from remote_private.presence_reports;
 set local role authenticated;
 select pg_temp.act('owner');
 do $$ declare r jsonb; g uuid; d record; begin
-    r := public.remote_saas_signup('QA Presence Alpha');
+    r := public.remote_saas_signup('QA Presence Alpha', true);
     perform pg_temp.remember('tenant', r->>'tenant_id');
     g := public.remote_saas_create_group(pg_temp.id('tenant'), 'QA Locked');
     perform pg_temp.remember('group', g::text);
@@ -54,7 +54,7 @@ do $$ declare r jsonb; g uuid; d record; begin
 end $$;
 select pg_temp.act('other');
 do $$ declare r jsonb; begin
-    r := public.remote_saas_signup('QA Presence Beta');
+    r := public.remote_saas_signup('QA Presence Beta', true);
     perform pg_temp.remember('tenant_b', r->>'tenant_id');
 end $$;
 reset role;

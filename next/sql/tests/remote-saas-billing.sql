@@ -54,12 +54,12 @@ insert into remote_saas.billing_prices(price_id, product_id, kind, plan, billing
 set local role authenticated;
 select pg_temp.act('owner_a');
 do $$ declare r jsonb; begin
-    r := public.remote_saas_signup('QA Billing Alpha');
+    r := public.remote_saas_signup('QA Billing Alpha', true);
     perform pg_temp.remember('tenant_a', (r->>'tenant_id')::uuid);
 end $$;
 select pg_temp.act('owner_b');
 do $$ declare r jsonb; begin
-    r := public.remote_saas_signup('QA Billing Beta');
+    r := public.remote_saas_signup('QA Billing Beta', true);
     perform pg_temp.remember('tenant_b', (r->>'tenant_id')::uuid);
 end $$;
 reset role;

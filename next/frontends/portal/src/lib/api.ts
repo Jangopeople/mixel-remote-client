@@ -1,7 +1,8 @@
-// Typed wrappers for the remote_saas RPCs (SQL 019/020). Every call goes through PostgREST with
+// Typed wrappers for the remote_saas RPCs (SQL 019/020, legal and deletion: 027). Every call goes through PostgREST with
 // the signed-in user's JWT; the database checks membership, role, plan and sign-in policy.
 import { supabase, ISM_URL, anonKey } from './supabase';
 import type { Features, GoTrueSettings, Method, Role, TenantStatus } from './logic';
+import type { CompanyExport } from './exportData';
 
 export class ApiError extends Error {
   code?: string;
@@ -69,10 +70,30 @@ export interface AuditEntry {
   id: number; actor_id: string | null; actor_name: string | null; action: string; target: string | null;
   detail: Record<string, unknown>; occurred_at: string;
 }
-export interface SignupResult { tenant_id: string; slug: string; plan: string; status: string; trial_ends_at: string }
+export interface SignupResult { tenant_id: string; slug: string; plan: string; status: string; trial_ends_at: string; terms_version: string }
+export interface TermsStatus {
+  current_version: string; privacy_version: string; dpa_version: string; accepted_version: string | null;
+  accepted_at: string | null; accepted_by: string | null; up_to_date: boolean;
+}
+export interface DeleteCompanyResult {
+  deleted: boolean; tenant_id: string; devices_removed: number; members_removed: number; accounts_deleted: number;
+  invites_revoked: number; billing: 'none' | 'pending';
+}
+export interface DeleteAccountResult { deleted: boolean; tenant_id: string | null; invites_revoked: number }
 
 export const api = {
-  signup: (companyName: string) => rpc<SignupResult>('remote_saas_signup', { company_name: companyName }),
+  // The owner accepts the Terms of Service and the DPA in the version shown (SQL 027).
+  signup: (companyName: string, termsVersion: string) =>
+    rpc<SignupResult>('remote_saas_signup', { company_name: companyName, accept_terms: true, terms_version: termsVersion, source: 'portal' }),
+  termsStatus: (tenant: string) => rpc<TermsStatus>('remote_saas_terms_status', { tenant }),
+  acceptTerms: (tenant: string, version: string) =>
+    rpc<TermsStatus>('remote_saas_accept_terms', { tenant, terms_version: version, source: 'portal' }),
+  // Owner: everything about the company as one JSON document (also while read-only).
+  exportCompany: (tenant: string) => rpc<CompanyExport>('remote_saas_export', { tenant }),
+  // Owner: deletes the company at once (devices, members, accounts, data); Stripe is cleaned up by the billing service.
+  deleteCompany: (tenant: string, confirmName: string) =>
+    rpc<DeleteCompanyResult>('remote_saas_delete_company', { tenant, confirm_name: confirmName }),
+  deleteMyAccount: (confirmEmail: string) => rpc<DeleteAccountResult>('remote_saas_delete_my_account', { confirm_email: confirmEmail }),
   myTenants: () => rpc<MyTenant[]>('remote_saas_my_tenants'),
   overview: (tenant: string) => rpc<Overview>('remote_saas_tenant_overview', { tenant }),
 

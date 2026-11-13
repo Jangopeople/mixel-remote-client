@@ -112,10 +112,10 @@ async fn main() {
 
     // Create a company (the app's "Create a company").
     p.check("a new account has no company", ism.saas_my_tenants(owner).await.is_ok_and(|list| list.is_empty()), ());
-    let created = ism.saas_signup(owner, &company).await;
+    let created = ism.saas_signup(owner, &company, true).await;
     p.check("sign-up creates a Business trial", created.as_ref().is_ok_and(|c| c.plan == "business" && c.status == "trial"), created.as_ref().map_err(|e| &e.message));
     let tenant = created.expect("tenant").tenant_id;
-    p.refused("a second sign-up of the same account is refused", ism.saas_signup(owner, "QA App Probe second").await, "42501");
+    p.refused("a second sign-up of the same account is refused", ism.saas_signup(owner, "QA App Probe second", true).await, "42501");
     let principal = ism.authenticate(owner).await;
     p.check("after sign-up the account is a company member (not staff, not personal)", principal.as_ref().is_ok_and(|x| !x.staff && x.tenant.is_some() && !x.is_personal()), principal.is_ok());
     let tenants = ism.saas_my_tenants(owner).await.unwrap_or_default();

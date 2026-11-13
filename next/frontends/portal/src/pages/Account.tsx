@@ -13,6 +13,8 @@ import { formatMoney, periodTotal, planByCode, type PriceRow } from '../lib/plan
 import { billingApi, type BillingState } from '../lib/api';
 import { isManager } from '../lib/logic';
 import { useLoad } from '../lib/useLoad';
+import { api } from '../lib/api';
+import { DeleteMyAccount } from './DataDeletion';
 
 type Interval = 'year' | 'month';
 type PaidPlan = 'solo' | 'team' | 'business';
@@ -217,6 +219,10 @@ export function Billing() {
 export function Account() {
   const { t } = useI18n();
   const { session, assurance, refreshAssurance } = useAuth();
+  const { tenant, overview } = useTenant();
+  // The last owner cannot delete their account (the company needs an owner): say so up front.
+  const owners = useLoad(async () => (overview.role === 'owner'
+    ? (await api.members(tenant.tenant_id)).filter((member) => member.role === 'owner').length : 0), `${tenant.tenant_id}|${overview.role}`);
   const factors = useLoad(async () => {
     const { data, error } = await supabase.auth.mfa.listFactors();
     if (error) throw error;
@@ -259,6 +265,7 @@ export function Account() {
         <h2>{t('account.session')}</h2>
         <p className="field-hint">{assurance.current === 'aal2' ? t('account.sessionLevel') : t('account.sessionLevelBasic')}</p>
       </div>
+      <DeleteMyAccount company={overview.name} soleOwner={overview.role === 'owner' && (owners.data ?? 1) <= 1} />
       {removing && (
         <ConfirmDialog title={t('account.mfaRemoveTitle')} text={t('account.mfaRemoveText')} confirmLabel={t('account.mfaRemove')}
           onClose={() => setRemoving(null)}

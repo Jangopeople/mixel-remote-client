@@ -70,6 +70,7 @@ test('sign up creates a company with a 14-day Business trial', async ({ page }) 
   await page.getByLabel('Your name').fill('QA Owner');
   await page.getByLabel('Work email').fill(OWNER);
   await page.getByLabel('Password', { exact: true }).fill(PASSWORD);
+  await page.getByTestId('terms-check').locator('input').check();
   await page.getByRole('button', { name: 'Create account' }).click();
   await expect(page.getByLabel('6-digit code')).toBeVisible();
   await shot(page, '08-signup-code');

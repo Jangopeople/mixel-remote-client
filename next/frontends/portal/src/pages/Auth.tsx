@@ -9,6 +9,8 @@ import {
 } from '../lib/logic';
 import { Brand, ErrorNotice, Notice, PreferencesMenu, Spinner } from '../components/ui';
 import { EmailCodeForm, MfaChallenge, MixelIdButton, methodLabelKey, useAvailableMethods } from '../components/auth';
+import { TermsCheckbox } from '../components/legal';
+import { LEGAL_VERSION } from '../legal/types';
 
 const PENDING_SIGNUP = 'mixel-remote-portal-pending-signup';
 const PENDING_INVITE = 'mixel-remote-portal-pending-invite';
@@ -222,6 +224,8 @@ export function SignUp() {
   const available = useAvailableMethods();
   const { session: current, loading } = useAuth();
   const [company, setCompany] = useState(() => JSON.parse(session(PENDING_SIGNUP) ?? '{}').company ?? '');
+  const [accepted, setAccepted] = useState(false);
+  const [termsError, setTermsError] = useState(false);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -237,7 +241,7 @@ export function SignUp() {
     setStep('creating');
     setError(null);
     try {
-      await api.signup(company.trim());
+      await api.signup(company.trim(), LEGAL_VERSION);
       setSession(PENDING_SIGNUP, null);
       navigate('/app?welcome=1', { replace: true });
     } catch (failure) {
@@ -264,7 +268,8 @@ export function SignUp() {
       else if (check.needsVariety) next.password = 'auth.passwordVariety';
     }
     setErrors(next);
-    return Object.keys(next).length === 0;
+    setTermsError(!accepted);
+    return Object.keys(next).length === 0 && accepted;
   }
 
   async function submit(event: FormEvent) {
@@ -367,6 +372,7 @@ export function SignUp() {
             {errors.password ? <p className="field-error">{t(errors.password)}</p> : <p className="field-hint">{t('auth.passwordHint')}</p>}
           </div>
         )}
+        <TermsCheckbox checked={accepted} onChange={(value) => { setAccepted(value); if (value) setTermsError(false); }} error={termsError} />
         {exists && (
           <Notice kind="warning">
             <p>{t('signup.exists')} <Link to="/signin?next=%2Fsignup%2Ffinish">{t('nav.signIn')}</Link></p>
@@ -377,7 +383,7 @@ export function SignUp() {
           <>
             <MixelIdButton next="/signup/finish" onBefore={() => {
               if (!validate()) return false;
-              setSession(PENDING_SIGNUP, JSON.stringify({ company: company.trim() }));
+              setSession(PENDING_SIGNUP, JSON.stringify({ company: company.trim(), accepted: true }));
               return true;
             }} />
             <p className="field-hint" style={{ marginTop: 8 }}>{t('signup.mixelIdNote')}</p>
@@ -397,6 +403,8 @@ export function SignupFinish() {
   const navigate = useNavigate();
   const { session: current, loading, needsSecondStep, signOut } = useAuth();
   const [company, setCompany] = useState(() => JSON.parse(session(PENDING_SIGNUP) ?? '{}').company ?? '');
+  const [accepted, setAccepted] = useState(() => JSON.parse(session(PENDING_SIGNUP) ?? '{}').accepted === true);
+  const [termsError, setTermsError] = useState(false);
   const [checking, setChecking] = useState(true);
   const [error, setError] = useState<unknown>(null);
   const [invalid, setInvalid] = useState(false);
@@ -420,15 +428,16 @@ export function SignupFinish() {
       <p className="lead">{t('signup.finishLead', { email: current.user.email ?? '' })}</p>
       <form noValidate onSubmit={async (event) => {
         event.preventDefault();
-        if (!isCompanyName(company)) {
-          setInvalid(true);
+        setTermsError(!accepted);
+        if (!isCompanyName(company) || !accepted) {
+          setInvalid(!isCompanyName(company));
           return;
         }
         setInvalid(false);
         setBusy(true);
         setError(null);
         try {
-          await api.signup(company.trim());
+          await api.signup(company.trim(), LEGAL_VERSION);
           setSession(PENDING_SIGNUP, null);
           navigate('/app?welcome=1', { replace: true });
         } catch (failure) {
@@ -441,6 +450,7 @@ export function SignupFinish() {
           <input id="finish-company" autoComplete="organization" value={company} maxLength={80} onChange={(event) => setCompany(event.target.value)} autoFocus />
           {invalid && <p className="field-error">{t('signup.companyInvalid')}</p>}
         </div>
+        <TermsCheckbox checked={accepted} onChange={(value) => { setAccepted(value); if (value) setTermsError(false); }} error={termsError} />
         <ErrorNotice error={error} />
         <button type="submit" className="button-block" disabled={busy}>{t('signup.finishCreate')}</button>
       </form>

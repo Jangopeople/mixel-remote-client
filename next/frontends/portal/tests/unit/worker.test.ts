@@ -40,3 +40,17 @@ describe('worker /api/status', () => {
     }
   });
 });
+
+describe('worker noindex for the legal drafts', () => {
+  it('marks /legal and /deleted, nothing else', async () => {
+    const { noIndex, withNoIndex } = await import('../../worker/index');
+    expect(noIndex('/legal')).toBe(true);
+    expect(noIndex('/legal/terms')).toBe(true);
+    expect(noIndex('/deleted')).toBe(true);
+    expect(noIndex('/')).toBe(false);
+    expect(noIndex('/legalese')).toBe(false);
+    const response = withNoIndex(new Response('x', { headers: { 'content-type': 'text/html' } }));
+    expect(response.headers.get('x-robots-tag')).toBe('noindex, nofollow');
+    expect(response.headers.get('content-type')).toBe('text/html');
+  });
+});

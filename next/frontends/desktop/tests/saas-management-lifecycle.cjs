@@ -369,7 +369,12 @@ test('Create a company: offered to a Mixel ID without one, not to staff or compa
   assert.equal(h.called('saas_my_tenants').length,0,'a personal space has no company');
   h.elements['company-signup-name'].value='  Acme AG ';
   await h.elements['company-signup'].listeners.submit({preventDefault(){}});await settle();
-  assert.deepEqual(h.called('saas_signup').map(c=>c.args),[{company:'Acme AG'}]);
+  assert.equal(h.called('saas_signup').length,0,'no company without the Terms accepted');
+  assert.match(h.elements['company-signup-status'].textContent,/Accept the Terms of Service and the Data Processing Agreement/);
+  h.elements['company-signup-terms'].checked=true;
+  await h.elements['company-signup'].listeners.submit({preventDefault(){}});await settle();
+  assert.deepEqual(h.called('saas_signup').map(c=>c.args),[{company:'Acme AG',terms:true}]);
+  assert.equal(h.elements['company-signup-terms'].checked,false,'the box is cleared after the sign-up');
   assert.match(h.elements['company-signup-status'].textContent,/14-day Business trial has started/);
   await h.signedIn({phase:'profile_setup',account:null});
   assert.equal(h.elements['company-signup'].hidden,false,'also before the Remote account is set up');
@@ -402,11 +407,11 @@ test('every new text has German, French and Italian translations',()=>{
   const tables=context.window.MIXEL_I18N;
   const translated=(language,text)=>text in tables[language].texts || tables[language].patterns.some(([source])=>new RegExp(source).test(text));
   // Static texts of the new markup.
-  const parts=[/<div class="panel company-panel"[\s\S]*?<div class="panel" id="account-companies"/,/<div class="panel" id="this-computer-panel"[\s\S]*?<div class="panel mac-only"/,/<div id="manage-dialog"[\s\S]*?<\/form><\/div>/,/<div class="heading-actions">[\s\S]*?<\/div>/];
+  const parts=[/<div class="panel company-panel"[\s\S]*?<div class="panel" id="account-companies"/,/<div class="panel" id="account-legal"[\s\S]*?<\/section>/,/<div class="panel" id="this-computer-panel"[\s\S]*?<div class="panel mac-only"/,/<div id="manage-dialog"[\s\S]*?<\/form><\/div>/,/<div class="heading-actions">[\s\S]*?<\/div>/];
   const texts=new Set();
   for(const part of parts){const block=html.match(part)[0];for(const m of block.matchAll(/>([^<>]+)</g)){const text=m[1].trim();if(text)texts.add(text);}for(const m of block.matchAll(/aria-label="([^"]+)"/g))texts.add(m[1]);}
   // Texts and messages set by the scripts (a sample of each kind, with values filled in).
-  for(const text of ['Business plan','Owner','Administrator','Technician','Member','Free trial · 9 days left','Free trial · ends today','Active','Change role','Leave company','Remove','Rename…','Move to group…','Remove…','All groups','No group','Manage',
+  for(const text of ['Delete Acme AG?','Acme AG is deleted at once: the subscription ends without a refund, every device is signed out and removed, invitations are revoked, and all members and their Mixel Remote accounts are deleted. Billing records are kept as the law requires. This cannot be undone. Export the data in the portal first if you need it.','Type the company name to confirm','Delete company permanently','Delete my account?','Type your e-mail address to confirm','Delete my account permanently','Your account has been deleted.','The company was deleted: 2 devices removed, 3 members and their accounts deleted.','You are the only owner of Acme AG. Make another member owner first, or delete the company.','Accept the Terms of Service and the Data Processing Agreement to create a company.','Type the company name exactly as shown to confirm.','You are the only owner. Delete the company, or make another member owner first.','Business plan','Owner','Administrator','Technician','Member','Free trial · 9 days left','Free trial · ends today','Active','Change role','Leave company','Remove','Rename…','Move to group…','Remove…','All groups','No group','Manage',
     'Remove Office PC?','Choose the group of Office PC. Technicians reach the devices of the groups they are granted, and devices in no group.','Office PC moved to Sales.','Office PC was removed.','Renamed to Front desk.',
     'Device limit of your plan reached (2 of 2). Remove a device or upgrade the plan to add more.','This company is read-only. You can still remove devices; adding devices and other changes need an active plan.',
     'This computer was added as Front desk. Connection ID 555 666 777.','It works for 12 computers within 30 days. The command contains a secret: share it only with the people who deploy the computers. It is shown only now.',
@@ -443,4 +448,60 @@ test('pending invitations show their e-mail state, can be sent again with a new 
   assert.match(h.elements['company-members-status'].textContent,/A new invitation e-mail is on its way to bounced@acme.test/);
   h.byText(h.elements['company-invites'].children[0],'Revoke').listeners.click();await settle();
   assert.deepEqual(h.called('saas_revoke_invite').map(c=>c.args),[{tenant:TENANT,invite:'i-1'}]);
+});
+
+test('About and legal: the four legal pages open on remote.mixel.ch in the app language',async()=>{
+  const h=harness();await h.signedIn();
+  for(const page of ['terms','privacy','dpa','subprocessors'])h.elements[`legal-${page}`].listeners.click();
+  h.elements['company-signup-legal'].listeners.click();
+  h.elements['company-export'].listeners.click();
+  await settle();
+  assert.deepEqual(h.called('open_legal_page').map(c=>c.args.page),['terms','privacy','dpa','subprocessors','legal','company-data']);
+  assert.ok(h.called('open_legal_page').every(c=>c.args.lang==='en'));
+});
+
+test('Delete the company: owners only, after typing the name; then signed out',async()=>{
+  const deleted={deleted:true,devices_removed:2,members_removed:3,accounts_deleted:3,invites_revoked:0,billing:'pending'};
+  const h=harness({answers:{saas_delete_company:deleted}});await h.signedIn();
+  const e=h.elements;
+  assert.equal(e['company-data'].hidden,false,'an owner sees Data and deletion');
+  e['company-delete'].listeners.click();
+  assert.equal(e['manage-dialog-title'].textContent,'Delete Acme AG?');
+  assert.match(e['manage-dialog-text'].textContent,/deleted at once: the subscription ends without a refund, every device is signed out and removed/);
+  assert.equal(e['manage-dialog-confirm'].className,'button-danger');
+  h.field('name').value='Acme';await h.confirmDialog();
+  assert.equal(h.called('saas_delete_company').length,0,'a wrong name deletes nothing');
+  assert.match(e['manage-dialog-error'].textContent,/Type the company name exactly/);
+  h.field('name').value=' acme ag ';await h.confirmDialog();
+  assert.deepEqual(h.called('saas_delete_company').map(c=>c.args),[{tenant:TENANT,name:'acme ag'}]);
+  assert.equal(h.called('account_cancel').length,1,'signed out afterwards');
+  assert.equal(e['company-panel'].hidden,true);
+  assert.equal(e['account-delete-status'].textContent,'The company was deleted: 2 devices removed, 3 members and their accounts deleted.');
+  for(const role of ['admin','technician','member']){
+    const other=harness({role});await other.signedIn();
+    assert.equal(other.elements['company-data'].hidden,true,`${role}: no company deletion`);
+  }
+});
+
+test('Delete my account: typed e-mail, the last owner is told why not, staff never',async()=>{
+  const tech=harness({me:TECH,role:'technician',answers:{saas_delete_my_account:{deleted:true,tenant_id:TENANT,invites_revoked:1}}});await tech.signedIn({phase:'authenticated',account:{profile:TECH,organization:'o',staff:false,personal:false,has_company:true}});
+  const e=tech.elements;
+  assert.equal(e['account-delete-box'].hidden,false);
+  e['account-delete'].listeners.click();
+  assert.equal(e['manage-dialog-title'].textContent,'Delete my account?');
+  tech.field('email').value='tom@acme.test';await tech.confirmDialog();
+  assert.deepEqual(tech.called('saas_delete_my_account').map(c=>c.args),[{email:'tom@acme.test'}]);
+  assert.equal(tech.called('account_cancel').length,1);
+  assert.equal(e['account-delete-status'].textContent,'Your account has been deleted.');
+  const owner=harness();await owner.signedIn();
+  owner.elements['account-delete'].listeners.click();
+  assert.match(owner.elements['manage-dialog-text'].textContent,/You are the only owner of Acme AG/);
+  await owner.confirmDialog();
+  assert.equal(owner.called('saas_delete_my_account').length,0,'the only owner cannot delete the account');
+  const refused=harness({me:TECH,role:'technician',answers:{saas_delete_my_account:new Error('Type your email address exactly to confirm')}});await refused.signedIn({phase:'authenticated',account:{profile:TECH,organization:'o',staff:false,personal:false,has_company:true}});
+  refused.elements['account-delete'].listeners.click();refused.field('email').value='x@y.z';await refused.confirmDialog();
+  assert.match(refused.elements['manage-dialog-error'].textContent,/Type your email address exactly/);
+  assert.equal(refused.called('account_cancel').length,0,'a refused deletion keeps the session');
+  const staff=harness({account:{phase:'authenticated',account:{profile:'s',organization:null,staff:true,personal:false,has_company:true}}});await staff.signedIn();
+  assert.equal(staff.elements['account-delete-box'].hidden,true,'Mixel staff accounts are not deleted in the app');
 });

@@ -431,3 +431,39 @@ table.table { width: 100%; border-collapse: collapse; font-size: 14px; }
   .status-days-full { display: none; }
   .status-days-short { display: inline; }
 }
+
+/* Legal pages (DRAFT): /legal/* */
+.legal-page { max-width: 880px; padding-top: 36px; padding-bottom: 64px; }
+.legal-page h1 { font-size: 34px; letter-spacing: -0.03em; margin: 6px 0 10px; }
+.legal-page .lead { color: var(--text-soft); font-size: 16.5px; margin: 0 0 12px; }
+.legal-page .eyebrow a { color: inherit; }
+.legal-section { margin-top: 30px; }
+.legal-section h2 { font-size: 19px; margin: 0 0 10px; }
+.legal-section p, .legal-section li { color: var(--text-soft); font-size: 15px; }
+.legal-section ul { padding-left: 22px; display: grid; gap: 6px; }
+.legal-toc { margin: 22px 0 8px; padding: 16px 20px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); font-size: 14px; }
+.legal-toc ol { margin: 8px 0 0; padding-left: 20px; columns: 2; column-gap: 28px; }
+.legal-toc li { break-inside: avoid; padding: 2px 0; }
+.legal-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 24px 0; }
+.legal-card { color: var(--text); text-decoration: none; }
+.legal-card:hover { border-color: var(--brand-line); text-decoration: none; }
+.legal-card p { margin-top: 6px; }
+.legal-table td { font-size: 13.5px; vertical-align: top; }
+.legal-provider { margin-top: 36px; font-style: normal; color: var(--muted); font-size: 13.5px; }
+.legal-draft { margin-bottom: 18px; }
+.link-button { background: none; border: 0; padding: 0; min-height: 0; color: var(--brand-text); font: inherit; cursor: pointer; text-decoration: underline; }
+.terms-check { display: flex; gap: 10px; align-items: flex-start; font-size: 13.5px; color: var(--text-soft); margin: 4px 0 16px; }
+.terms-check input { margin-top: 3px; flex: none; }
+.app-footer { display: flex; gap: 16px; flex-wrap: wrap; padding: 18px 28px; font-size: 12.5px; color: var(--muted); border-top: 1px solid var(--line); }
+.app-footer a { color: var(--muted); }
+.danger-zone { border-color: var(--brand-line); }
+@media (max-width: 720px) {
+  .legal-cards { grid-template-columns: 1fr; }
+  .legal-toc ol { columns: 1; }
+  .legal-page h1 { font-size: 27px; }
+  .app-footer { padding: 16px; }
+}
+@media print {
+  .site-header, .site-footer, .legal-toc, .skip-link { display: none !important; }
+  .legal-page { max-width: none; padding: 0; }
+}

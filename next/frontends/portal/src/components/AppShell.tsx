@@ -9,6 +9,9 @@ import { Brand, ErrorNotice, PreferencesMenu, Spinner } from './ui';
 import { MfaChallenge, methodLabelKey } from './auth';
 import { MfaSetup } from './MfaSetup';
 import { Icon, type IconName } from './Icon';
+import { LegalLinks } from './legal';
+import { DeleteMyAccount } from '../pages/DataDeletion';
+import { useLoad } from '../lib/useLoad';
 
 interface TenantContext {
   tenant: MyTenant;
@@ -85,6 +88,7 @@ export function TenantProvider() {
           <button type="button" className="button-block" onClick={() => navigate('/signup/finish')}>{t('signup.finishTitle')}</button>
           <button type="button" className="button-quiet" onClick={() => void signOut()}>{t('auth.signOut')}</button>
         </div>
+        <div style={{ marginTop: 24 }}><DeleteMyAccount company={null} soleOwner={false} /></div>
       </AuthLayout>
     );
   }
@@ -131,6 +135,7 @@ function Shell() {
   useEffect(() => setOpen(false), [location.pathname]);
 
   const role = overview.role;
+  const terms = useLoad(() => api.termsStatus(overview.tenant_id), `${overview.tenant_id}|${location.pathname === '/app/settings'}`);
   const groups = !!overview.features.groups;
   const items: NavItem[] = [
     { to: '/app', icon: 'home', label: 'shell.dashboard', show: true },
@@ -194,9 +199,19 @@ function Shell() {
         )}
         {overview.status === 'read_only' && <div className="banner banner-warning" role="alert"><Icon name="alert" /><span>{t('shell.readOnly')}</span></div>}
         {overview.status === 'past_due' && <div className="banner banner-warning" role="alert"><Icon name="alert" /><span>{t('shell.pastDue')}</span></div>}
+        {terms.data && !terms.data.up_to_date && isManager(role) && (
+          <div className="banner banner-warning" role="alert" data-testid="terms-banner">
+            <Icon name="info" /><span>{t('terms.banner', { company: overview.name, version: terms.data.current_version })}</span>
+            <Link to="/app/settings#terms" style={{ marginLeft: 'auto', fontWeight: 600 }}>{t('terms.review')}</Link>
+          </div>
+        )}
         <main id="app-main" className="app-content" lang={locale.slice(0, 2)}>
           <Outlet />
         </main>
+        <footer className="app-footer" aria-label={t('footer.legal')}>
+          <span>© {new Date().getFullYear()} Mixel IT and Corporate Services GmbH</span>
+          <LegalLinks />
+        </footer>
       </div>
     </div>
   );

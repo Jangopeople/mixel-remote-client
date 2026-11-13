@@ -1,6 +1,6 @@
 // Database access as role mixel_remote_billing_service (member of mixel_remote_billing and
-// mixel_remote_mail), which may only execute the remote_saas billing functions of migration 023 and
-// the invitation mail functions of migration 026.
+// mixel_remote_mail), which may only execute the remote_saas billing functions of migrations 023 and
+// 027 (Stripe clean-up of deleted companies) and the invitation mail functions of migration 026.
 import pg from "pg";
 
 /**
@@ -21,7 +21,7 @@ import pg from "pg";
 
 /**
  * @param {string} connectionString
- * @returns {BillingDb & import("./invite-mail.js").MailDb}
+ * @returns {BillingDb & import("./invite-mail.js").MailDb & import("./billing-close.js").CloseDb}
  */
 export function createDb(connectionString) {
   const pool = new pg.Pool({
@@ -51,20 +51,27 @@ export function createDb(connectionString) {
     inviteResult: (invite, claim, messageId, failure, giveUp) =>
       one("select remote_saas.mail_invite_result($1::uuid, $2::uuid, $3::text, $4::text, $5::boolean) as result",
         [invite, claim, messageId, failure, giveUp]),
+    claimClosures: async (max) =>
+      (await pool.query("select * from remote_saas.billing_claim_closures($1::integer)", [max])).rows,
+    closeResult: (closure, claim, failure, giveUp) =>
+      one("select remote_saas.billing_close_result($1::uuid, $2::uuid, $3::text, $4::boolean) as result",
+        [closure, claim, failure, giveUp]),
     ping: async () => (await pool.query("select 1 as ok")).rows[0]?.ok === 1,
     close: () => pool.end(),
   };
 }
 
 /**
- * A dedicated connection that LISTENs for queued invitation e-mails (NOTIFY remote_saas_invite_mail).
+ * A dedicated connection that LISTENs on one channel (NOTIFY without payload).
  * @param {string} connectionString
+ * @param {string} channel remote_saas_invite_mail (SQL 026) or remote_saas_billing_close (SQL 027)
  * @param {() => void} onNotify
  * @param {(error: Error) => void} onError called once when the connection is lost
  * @returns {Promise<() => Promise<void>>} close
  */
-export async function listenForInvites(connectionString, onNotify, onError) {
-  const client = new pg.Client({ connectionString, application_name: "mixel-remote-mail", connectionTimeoutMillis: 5000,
+export async function listenFor(connectionString, channel, onNotify, onError) {
+  if (!/^[a-z_]+$/.test(channel)) throw new Error("invalid channel");
+  const client = new pg.Client({ connectionString, application_name: `mixel-remote-${channel}`, connectionTimeoutMillis: 5000,
     keepAlive: true });
   let failed = false;
   const fail = (/** @type {Error} */ error) => {
@@ -73,14 +80,22 @@ export async function listenForInvites(connectionString, onNotify, onError) {
     onError(error);
   };
   client.on("notification", (message) => {
-    if (message.channel === "remote_saas_invite_mail") onNotify();
+    if (message.channel === channel) onNotify();
   });
   client.on("error", fail);
   client.on("end", () => fail(new Error("connection ended")));
   await client.connect();
-  await client.query("listen remote_saas_invite_mail");
+  await client.query(`listen ${channel}`);
   return async () => {
     failed = true;
     await client.end();
   };
+}
+
+/**
+ * LISTEN for queued invitation e-mails (NOTIFY remote_saas_invite_mail).
+ * @param {string} connectionString @param {() => void} onNotify @param {(error: Error) => void} onError
+ */
+export function listenForInvites(connectionString, onNotify, onError) {
+  return listenFor(connectionString, "remote_saas_invite_mail", onNotify, onError);
 }

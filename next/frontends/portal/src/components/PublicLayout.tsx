@@ -4,6 +4,7 @@ import { useI18n } from '../i18n';
 import { useAuth } from '../lib/auth';
 import { Brand, PreferencesMenu } from './ui';
 import { Icon } from './Icon';
+import { LegalLinks } from './legal';
 
 export const STORE_URL = 'https://store.mixel.ch/app/mixel-remote';
 
@@ -59,6 +60,7 @@ export function SiteFooter() {
           <Link to="/download">{t('nav.download')}</Link>
           <Link to="/status">{t('footer.status')}</Link>
           <a href="https://mixel.ch/kontakt" rel="noopener">{t('footer.contact')}</a>
+          <LegalLinks />
           <a href="https://mixel.ch/impressum" rel="noopener">{t('footer.imprint')}</a>
         </nav>
       </div>

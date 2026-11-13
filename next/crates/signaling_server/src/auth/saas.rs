@@ -402,13 +402,20 @@ impl IsmAuth {
     pub async fn saas_revoke_deploy_link(&self, token: &str, tenant: Uuid, link: Uuid) -> Result<bool, SaasError> {
         self.saas_call(Some(token), "remote_saas_revoke_deploy_link", json!({"tenant": tenant, "link": link})).await
     }
-    /// Self-service sign-up: the signed-in account becomes the owner of a new company.
-    pub async fn saas_signup(&self, token: &str, company: &str) -> Result<SaasSignup, SaasError> {
+    /// Self-service sign-up: the signed-in account becomes the owner of a new company. The person
+    /// must have accepted the Terms of Service and the Data Processing Agreement (SQL 027 stores the
+    /// current version and the time; the app links to the current texts on remote.mixel.ch/legal).
+    pub async fn saas_signup(&self, token: &str, company: &str, accepted_terms: bool) -> Result<SaasSignup, SaasError> {
         let company = company.trim();
         if !(2..=80).contains(&company.chars().count()) || company.chars().any(char::is_control) {
             return Err(SaasError::invalid("Enter a company name of 2 to 80 characters"));
         }
-        let created: SaasSignup = self.saas_call(Some(token), "remote_saas_signup", json!({"company_name": company})).await?;
+        if !accepted_terms {
+            return Err(SaasError::invalid("Accept the Terms of Service and the Data Processing Agreement to create a company"));
+        }
+        let created: SaasSignup = self
+            .saas_call(Some(token), "remote_saas_signup", json!({"company_name": company, "accept_terms": true, "source": "app"}))
+            .await?;
         if created.tenant_id.is_nil() || created.organization_id.is_nil() {
             return Err(SaasError::unavailable());
         }
@@ -454,6 +461,32 @@ impl IsmAuth {
     /// Removes a member (or leaves, for the caller's own profile).
     pub async fn saas_remove_member(&self, token: &str, tenant: Uuid, member: Uuid) -> Result<bool, SaasError> {
         self.saas_call(Some(token), "remote_saas_remove_member", json!({"tenant": tenant, "member": member})).await
+    }
+    /// Any member: the current versions of the legal documents and what the company accepted.
+    pub async fn saas_terms_status(&self, token: &str, tenant: Uuid) -> Result<Value, SaasError> {
+        self.saas_call(Some(token), "remote_saas_terms_status", json!({"tenant": tenant})).await
+    }
+    /// Owner: everything about the company (company, members, devices, groups, audit log) as JSON.
+    pub async fn saas_export(&self, token: &str, tenant: Uuid) -> Result<Value, SaasError> {
+        self.saas_call(Some(token), "remote_saas_export", json!({"tenant": tenant})).await
+    }
+    /// Owner: deletes the company at once: devices revoked and removed, invitations revoked,
+    /// members and their accounts deleted; the billing service ends the Stripe subscription.
+    /// `confirm_name` must be the company's name (as typed by the owner).
+    pub async fn saas_delete_company(&self, token: &str, tenant: Uuid, confirm_name: &str) -> Result<Value, SaasError> {
+        let confirm = confirm_name.trim();
+        if confirm.is_empty() || confirm.chars().count() > 80 {
+            return Err(SaasError::invalid("Type the company name exactly to confirm"));
+        }
+        self.saas_call(Some(token), "remote_saas_delete_company", json!({"tenant": tenant, "confirm_name": confirm})).await
+    }
+    /// The signed-in person deletes their own account (not the last owner of a company).
+    pub async fn saas_delete_my_account(&self, token: &str, confirm_email: &str) -> Result<Value, SaasError> {
+        let confirm = confirm_email.trim();
+        if confirm.is_empty() || confirm.chars().count() > 254 {
+            return Err(SaasError::invalid("Type your email address exactly to confirm"));
+        }
+        self.saas_call(Some(token), "remote_saas_delete_my_account", json!({"confirm_email": confirm})).await
     }
     /// Sends a device's signed self-removal (no account needed). `Ok(true)`: removed (or already
     /// removed); `Ok(false)`: the request names an older or newer registration and changed nothing.
@@ -529,8 +562,22 @@ mod tests {
             }
             "remote_saas_signup" => {
                 assert_eq!(body["company_name"], "Acme AG");
+                assert_eq!((body["accept_terms"].as_bool(), body["source"].as_str()), (Some(true), Some("app")));
                 axum::Json(json!({"tenant_id": Uuid::from_u128(4), "organization_id": Uuid::from_u128(5), "client_id": Uuid::from_u128(6),
                                   "slug": "acme-ag", "plan": "business", "status": "trial", "trial_ends_at": "2026-11-27T10:00:00Z"})).into_response()
+            }
+            "remote_saas_delete_company" => {
+                assert_eq!(bearer, "Bearer user-token");
+                if body["confirm_name"] != "Acme AG" {
+                    return (StatusCode::BAD_REQUEST, axum::Json(json!({"code":"22023","message":"Type the company name exactly to confirm"}))).into_response();
+                }
+                axum::Json(json!({"deleted": true, "devices_removed": 2, "members_removed": 3, "billing": "pending"})).into_response()
+            }
+            "remote_saas_delete_my_account" => {
+                if body["confirm_email"] == "owner@example.com" {
+                    return (StatusCode::BAD_REQUEST, axum::Json(json!({"code":"55000","message":"You are the only owner. Delete the company, or make another member owner first."}))).into_response();
+                }
+                axum::Json(json!({"deleted": true, "tenant_id": null, "invites_revoked": 0})).into_response()
             }
             "remote_saas_set_member_role" => {
                 if body["member_role"] == "owner" {
@@ -584,9 +631,19 @@ mod tests {
         assert!(ism.saas_invite_member("user-token", tenant, "a@b.ch", "owner", None).await.is_err(), "owners are not invited");
         assert!(ism.saas_invite_member("user-token", tenant, "a@b.ch", "boss", None).await.is_err());
         assert!(ism.saas_resend_invite("user-token", tenant, invite, Some("FR")).await.unwrap());
-        let created = ism.saas_signup("user-token", " Acme AG ").await.unwrap();
+        let created = ism.saas_signup("user-token", " Acme AG ", true).await.unwrap();
         assert_eq!((created.tenant_id, created.status.as_str()), (Uuid::from_u128(4), "trial"));
-        assert!(ism.saas_signup("user-token", "A").await.is_err());
+        assert!(ism.saas_signup("user-token", "A", true).await.is_err());
+        let unaccepted = ism.saas_signup("user-token", "Acme AG", false).await.unwrap_err();
+        assert!(unaccepted.message.contains("Terms of Service"), "no sign-up without the terms");
+        let deleted = ism.saas_delete_company("user-token", tenant, " Acme AG ").await.unwrap();
+        assert_eq!((deleted["deleted"].as_bool(), deleted["devices_removed"].as_i64()), (Some(true), Some(2)));
+        let wrong = ism.saas_delete_company("user-token", tenant, "Acme").await.unwrap_err();
+        assert_eq!(wrong.code.as_deref(), Some("22023"));
+        assert!(ism.saas_delete_company("user-token", tenant, "  ").await.is_err());
+        assert_eq!(ism.saas_delete_my_account("user-token", "tech@example.com").await.unwrap()["deleted"], true);
+        let owner = ism.saas_delete_my_account("user-token", "owner@example.com").await.unwrap_err();
+        assert_eq!((owner.code.as_deref(), owner.message.starts_with("You are the only owner")), (Some("55000"), true));
         assert!(ism.saas_set_member_role("user-token", tenant, Uuid::from_u128(7), "admin").await.unwrap());
         let refused = ism.saas_set_member_role("user-token", tenant, Uuid::from_u128(7), "owner").await.unwrap_err();
         assert_eq!((refused.status, refused.code.as_deref()), (403, Some("42501")));

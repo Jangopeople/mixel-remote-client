@@ -89,6 +89,17 @@ export async function statusProxy(request: Request, fetcher: typeof fetch = fetc
   }
 }
 
+/** The legal pages are DRAFTS pending review, and /deleted is a dead end: never in search results. */
+export function noIndex(pathname: string): boolean {
+  return pathname === '/legal' || pathname.startsWith('/legal/') || pathname === '/deleted';
+}
+
+export function withNoIndex(response: Response): Response {
+  const copy = new Response(response.body, response);
+  copy.headers.set('x-robots-tag', 'noindex, nofollow');
+  return copy;
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -104,6 +115,7 @@ export default {
       return statusProxy(request);
     }
     if (url.pathname.startsWith('/api/')) return json({ error: 'not_found' }, 404, 0);
-    return env.ASSETS.fetch(request);
+    const response = await env.ASSETS.fetch(request);
+    return noIndex(url.pathname) ? withNoIndex(response) : response;
   },
 } satisfies ExportedHandler<Env>;

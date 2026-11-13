@@ -13,6 +13,8 @@ import { Team } from './pages/Team';
 import { Settings } from './pages/Settings';
 import { Account, Billing } from './pages/Account';
 import { Status } from './pages/Status';
+import { LegalDocument, LegalIndex } from './pages/Legal';
+import { Deleted } from './pages/DataDeletion';
 
 export function App() {
   return (
@@ -30,6 +32,9 @@ export function App() {
               <Route path="/signup/finish" element={<SignupFinish />} />
               <Route path="/auth/callback" element={<AuthCallback />} />
               <Route path="/invite" element={<Invite />} />
+              <Route path="/legal" element={<LegalIndex />} />
+              <Route path="/legal/:doc" element={<LegalDocument />} />
+              <Route path="/deleted" element={<Deleted />} />
               <Route path="/app" element={<RequireAuth><TenantProvider /></RequireAuth>}>
                 <Route index element={<Dashboard />} />
                 <Route path="devices" element={<Devices />} />

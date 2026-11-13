@@ -61,28 +61,28 @@ end $$;
 set local role authenticated;
 select pg_temp.act('owner_a') \gset
 do $$ declare r jsonb; begin
-    r := public.remote_saas_signup('QA SaaS Alpha');
+    r := public.remote_saas_signup('QA SaaS Alpha', true);
     perform pg_temp.remember('tenant_a', (r->>'tenant_id')::uuid);
     perform pg_temp.remember('org_a', (r->>'organization_id')::uuid);
     if r->>'plan' <> 'business' or r->>'status' <> 'trial'
         or (r->>'trial_ends_at')::timestamptz not between now() + interval '13 days 23 hours' and now() + interval '14 days 1 minute' then
         raise exception 'signup result %', r;
     end if;
-    begin perform public.remote_saas_signup('Second Company'); raise exception 'second signup allowed';
+    begin perform public.remote_saas_signup('Second Company', true); raise exception 'second signup allowed';
     exception when insufficient_privilege then null; end;
-    begin perform public.remote_saas_signup(' '); raise exception 'empty name allowed';
+    begin perform public.remote_saas_signup(' ', true); raise exception 'empty name allowed';
     exception when invalid_parameter_value then null; end;
     raise notice 'PASS: sign-up creates a Business trial; one company per account; name validated';
 end $$;
 select pg_temp.act('unconfirmed') \gset
 do $$ begin
-    begin perform public.remote_saas_signup('No Email Co'); raise exception 'unconfirmed signup allowed';
+    begin perform public.remote_saas_signup('No Email Co', true); raise exception 'unconfirmed signup allowed';
     exception when insufficient_privilege then null; end;
     raise notice 'PASS: sign-up needs a confirmed email address';
 end $$;
 select pg_temp.act('owner_b') \gset
 do $$ declare r jsonb; begin
-    r := public.remote_saas_signup('QA SaaS Alpha');
+    r := public.remote_saas_signup('QA SaaS Alpha', true);
     perform pg_temp.remember('tenant_b', (r->>'tenant_id')::uuid);
     if r->>'slug' = (select slug from public.remote_saas_my_tenants() where tenant_id <> (r->>'tenant_id')::uuid limit 1) then
         raise exception 'slug reused';

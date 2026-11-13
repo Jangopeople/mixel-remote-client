@@ -944,6 +944,7 @@ impl AccountAuth {
     pub async fn create_company(
         &self,
         name: String,
+        accepted_terms: bool,
     ) -> Result<signaling_server::auth::saas::SaasSignup, String> {
         let created = {
             let _operation = self.operation.lock().await;
@@ -972,7 +973,7 @@ impl AccountAuth {
             };
             let created = client
                 .ism
-                .saas_signup(&tokens.access_token.0, &name)
+                .saas_signup(&tokens.access_token.0, &name, accepted_terms)
                 .await
                 .map_err(|error| error.message)?;
             let mut inner = self.inner.lock().await;

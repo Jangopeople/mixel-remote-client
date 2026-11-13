@@ -27,6 +27,19 @@ Online status comes from the connection broker: every 30 s it reports the connec
 has not reported for 3 minutes. Settings → Company: owners and admins rename the company (`remote_saas_rename_tenant`,
 audited; the company ID/slug stays).
 
+## Legal and data protection (SQL 027) — texts are DRAFTS pending Michael's review
+- `/legal` (index), `/legal/terms`, `/legal/privacy`, `/legal/dpa`, `/legal/subprocessors` in EN/DE/FR/IT
+  (`src/legal/*.ts`). Every page shows the draft banner, sets `<meta name="robots" content="noindex">`, and the
+  worker sends `X-Robots-Tag: noindex, nofollow` for `/legal*` and `/deleted` (`run_worker_first` in `wrangler.toml`).
+- Sign-up (`/signup`, `/signup/finish`) needs the checkbox "I accept the Terms … and the DPA"; the database stores
+  version (`LEGAL_VERSION` = the current row in `remote_saas.legal_documents`) and time per tenant and person.
+- Settings › Terms and data processing (accepted version; owners/admins accept a newer one), Settings › Data and
+  deletion (owner: JSON export, CSV per table, delete the company), Account › Delete my account (also on the
+  "no company" screen). Footer links on public pages and in the portal.
+- Publishing the final texts: replace the texts, set `LEGAL_VERSION`/`LEGAL_DATE`, insert the new versions into
+  `remote_saas.legal_documents` (current = true, old = false), remove the draft banner and the noindex rules.
+  Existing companies then see "accept the updated terms" (owners/admins).
+
 ## Develop and check
 ```bash
 npm ci
@@ -47,6 +60,9 @@ VIEWER_URL=https://ism.mixel.ch/remote-next/ QA_SHOTS=/path/shots QA_ADMIN_ENV=/
 # Clean-up of that run (database, then the accounts via the admin API):
 ssh mixel-vps 'docker exec -i ism-postgres psql -U postgres -d ism -v ON_ERROR_STOP=1 -v run=<QA_RUN>' < tests/e2e/cleanup.sql
 ```
+Legal features (sign-up with terms, member account deletion, export, company deletion incl. the Stripe customer):
+`QA_RUN=l$(date +%H%M%S) QA_ADMIN_ENV=… QA_SQL="ssh mixel-vps docker exec -i ism-postgres psql -U postgres -d ism -At" QA_STRIPE="ssh mixel-vps docker exec -i mixel-remote-billing node -" PORTAL_URL=https://remote.mixel.ch npx playwright test tests/e2e/legal.spec.ts`
+(it deletes its own QA company; afterwards remove its `remote_saas.closures` row and the QA keys in `remote_private.connection_reservations`).
 The billing test stops at the Stripe Checkout and customer-portal pages; nothing is paid. The owner signs up through the UI with Resend's test inbox (`delivered+…@resend.dev`, nothing is delivered); the
 code is read with the admin `generate_link` call. Other QA users are created with the admin API. Never use real
 accounts for QA.

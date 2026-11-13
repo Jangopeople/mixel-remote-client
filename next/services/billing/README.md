@@ -72,6 +72,17 @@ SQL for the UI (PostgREST, `rpc/…`):
 - `mixel_remote_prices()` – anon and signed in: the price list (`amount_chf`, `per_month_chf`).
 - Tenant limits keep coming from `remote_saas_tenant_overview` (plan + `extra_technicians`).
 
+## Deleted companies (SQL 027)
+
+`remote_saas_delete_company` (owner, portal or app) deletes the company's data at once and queues its Stripe ids in
+`remote_saas.closures` (NOTIFY `remote_saas_billing_close`). `src/billing-close.js` claims each entry, ends the
+subscription immediately (`DELETE /v1/subscriptions/<id>?prorate=false&invoice_now=false`) and deletes the
+customer (`DELETE /v1/customers/<id>`), only when the object's metadata is `app=mixel-remote` and this tenant;
+404 counts as done; retries 1/5/15/60 min, after 10 attempts (or a foreign object) `stripe_state = failed`
+(look at it: `select * from remote_saas.closures where stripe_state = 'failed'`). Invoices and payments stay in
+Stripe and Mixel ACC; the closure row (company name, Stripe ids, counts) is the billing record kept 10 years
+(`retain_until`, purged by the claim function). Webhooks that arrive afterwards are `ignored_unknown_tenant`.
+
 ## Decisions
 
 - **Prices and VAT.** CHF, Swiss VAT 8.1 % included, the same as Mixel Shop: the Shop puts the gross

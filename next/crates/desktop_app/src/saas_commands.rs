@@ -42,10 +42,68 @@ pub async fn saas_tenant_overview(window: tauri::WebviewWindow, auth: Auth<'_>, 
 
 /// Self-service sign-up from the app (a Mixel ID without a company): creates the company with a
 /// 14-day Business trial, this account its owner, and switches the app to it.
+/// `terms`: the person ticked "I accept the Terms of Service and the Data Processing Agreement"
+/// (the database refuses a sign-up without it and stores the accepted version and time).
 #[tauri::command]
-pub async fn saas_signup(window: tauri::WebviewWindow, auth: Auth<'_>, company: String) -> Result<SaasSignup, String> {
+pub async fn saas_signup(window: tauri::WebviewWindow, auth: Auth<'_>, company: String, terms: Option<bool>) -> Result<SaasSignup, String> {
     main_window(&window)?;
-    auth.create_company(company).await
+    auth.create_company(company, terms == Some(true)).await
+}
+
+#[tauri::command]
+pub async fn saas_terms_status(window: tauri::WebviewWindow, auth: Auth<'_>, tenant: Uuid) -> Result<serde_json::Value, String> {
+    main_window(&window)?;
+    let credential = auth.credential(None).await?;
+    credential.ism.saas_terms_status(&credential.token, tenant).await.map_err(message)
+}
+
+/// Owner: deletes the whole company at once (devices, invitations, members and their accounts,
+/// company data); the subscription ends. `name` is the company name typed to confirm.
+#[tauri::command]
+pub async fn saas_delete_company(window: tauri::WebviewWindow, auth: Auth<'_>, tenant: Uuid, name: String) -> Result<serde_json::Value, String> {
+    main_window(&window)?;
+    let credential = auth.credential(None).await?;
+    credential.ism.saas_delete_company(&credential.token, tenant, &name).await.map_err(message)
+}
+
+/// The signed-in person deletes their own account. `email` is their address typed to confirm.
+#[tauri::command]
+pub async fn saas_delete_my_account(window: tauri::WebviewWindow, auth: Auth<'_>, email: String) -> Result<serde_json::Value, String> {
+    main_window(&window)?;
+    let credential = auth.credential(None).await?;
+    credential.ism.saas_delete_my_account(&credential.token, &email).await.map_err(message)
+}
+
+/// The legal pages and the company data page on remote.mixel.ch, in the system browser.
+pub fn legal_url(page: &str, lang: Option<&str>) -> Result<String, String> {
+    let path = match page {
+        "terms" | "privacy" | "dpa" | "subprocessors" => format!("/legal/{page}"),
+        "legal" => "/legal".to_owned(),
+        "company-data" => "/app/settings".to_owned(),
+        _ => return Err("Unknown page".into()),
+    };
+    let lang = lang.filter(|value| ["en", "de", "fr", "it"].contains(value)).unwrap_or("en");
+    Ok(format!("https://remote.mixel.ch{path}?lang={lang}"))
+}
+
+#[tauri::command]
+pub async fn open_legal_page(window: tauri::WebviewWindow, page: String, lang: Option<String>) -> Result<(), String> {
+    main_window(&window)?;
+    crate::system_browser::open(&legal_url(&page, lang.as_deref())?).await
+}
+
+#[cfg(test)]
+mod legal_tests {
+    use super::legal_url;
+
+    #[test]
+    fn legal_pages_are_fixed_urls_on_the_portal() {
+        assert_eq!(legal_url("terms", Some("de")).unwrap(), "https://remote.mixel.ch/legal/terms?lang=de");
+        assert_eq!(legal_url("subprocessors", None).unwrap(), "https://remote.mixel.ch/legal/subprocessors?lang=en");
+        assert_eq!(legal_url("company-data", Some("xx")).unwrap(), "https://remote.mixel.ch/app/settings?lang=en");
+        assert!(legal_url("../../evil", None).is_err());
+        assert!(legal_url("https://evil.example", None).is_err());
+    }
 }
 
 #[tauri::command]

@@ -8,6 +8,7 @@ import { useAuth } from '../lib/auth';
 import { api, type AuditEntry, type Domain } from '../lib/api';
 import { ALL_METHODS, isCompanyName, isDomain, isManager, isWritable, methodsToSave, normalizeDomain, type Method } from '../lib/logic';
 import { useLoad } from '../lib/useLoad';
+import { DataAndDeletion, TermsPanel } from './DataDeletion';
 
 function SignInSettings() {
   const { t } = useI18n();
@@ -283,6 +284,8 @@ export function Settings() {
       {manager && (overview.features.audit_log ? <AuditLog /> : (
         <div className="panel"><h2>{t('settings.audit')}</h2><Notice kind="brand"><p>{t('settings.auditNeedsBusiness')}</p></Notice></div>
       ))}
+      <TermsPanel />
+      <DataAndDeletion />
     </section>
   );
 }

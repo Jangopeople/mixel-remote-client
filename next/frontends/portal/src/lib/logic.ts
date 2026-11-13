@@ -318,10 +318,22 @@ export type ErrorKey =
   | 'error.billing_unavailable'
   | 'error.resend_wait'
   | 'error.resend_limit'
+  | 'error.terms_required'
+  | 'error.terms_changed'
+  | 'error.confirm_company'
+  | 'error.confirm_email_mismatch'
+  | 'error.only_owner'
+  | 'error.account_managed'
   | 'error.unknown';
 
 const MESSAGE_KEYS: [RegExp, ErrorKey][] = [
   [/^plan_too_small/i, 'error.plan_too_small'],
+  [/accept the terms of service/i, 'error.terms_required'],
+  [/terms of service have changed/i, 'error.terms_changed'],
+  [/type the company name exactly/i, 'error.confirm_company'],
+  [/type your email address exactly/i, 'error.confirm_email_mismatch'],
+  [/you are the only owner/i, 'error.only_owner'],
+  [/managed by your company|mixel team accounts are not deleted/i, 'error.account_managed'],
   [/^already_subscribed/i, 'error.already_subscribed'],
   [/^payment_failed/i, 'error.payment_failed'],
   [/^(stripe_unavailable|billing_unavailable)/i, 'error.billing_unavailable'],
@@ -405,4 +417,26 @@ export function sinceTime(iso: string | null | undefined, locale: string, now: D
   if (Number.isNaN(at.getTime())) return '';
   const sameDay = at.toDateString() === now.toDateString();
   return new Intl.DateTimeFormat(locale, sameDay ? { timeStyle: 'short' } : { dateStyle: 'medium', timeStyle: 'short' }).format(at);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Legal
+
+/** "Accept the [Terms] and the [DPA] …" → text and link parts, in order. */
+export function linkParts(template: string): { text: string; link: boolean }[] {
+  const parts: { text: string; link: boolean }[] = [];
+  const pattern = /\[([^\]]+)\]/g;
+  let last = 0;
+  for (const match of template.matchAll(pattern)) {
+    if (match.index! > last) parts.push({ text: template.slice(last, match.index), link: false });
+    parts.push({ text: match[1], link: true });
+    last = match.index! + match[0].length;
+  }
+  if (last < template.length) parts.push({ text: template.slice(last), link: false });
+  return parts;
+}
+
+/** Same comparison as the database: trimmed, case-insensitive. */
+export function confirmMatches(typed: string, expected: string): boolean {
+  return typed.trim().toLowerCase() === expected.trim().toLowerCase() && expected.trim() !== '';
 }

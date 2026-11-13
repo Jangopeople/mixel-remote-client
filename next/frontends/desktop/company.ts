@@ -1,5 +1,7 @@
 // The signed-in person's Mixel Remote company (SaaS tenant): plan, trial, usage and limits, members
-// and invitations, and "Create a company" for a Mixel ID without one. Announces the company to the
+// and invitations, and "Create a company" for a Mixel ID without one (with the Terms accepted).
+// Also: the legal pages (About and legal), deleting the company (owner) and deleting one's own
+// account (SQL 027). Announces the company to the
 // other pages (Devices, This computer) with the event mixel-company-state. Staff (Mixel team),
 // ISM company members and personal spaces have no tenant: nothing here is shown for them.
 // The rules mirror the database (next/sql/019): it decides; the app only hides what would be refused.
@@ -20,6 +22,14 @@
   const rename = element<HTMLButtonElement>('company-rename');
   const invitesTitle = element<HTMLElement>('company-invites-title'), invite = element<HTMLButtonElement>('company-invite'), membersStatus = element<HTMLElement>('company-members-status'), problem = element<HTMLElement>('company-error');
   const signup = element<HTMLFormElement>('company-signup'), signupName = element<HTMLInputElement>('company-signup-name'), signupSubmit = element<HTMLButtonElement>('company-signup-submit'), signupStatus = element<HTMLElement>('company-signup-status');
+  const signupTerms = element<HTMLInputElement>('company-signup-terms'), signupLegal = element<HTMLButtonElement>('company-signup-legal');
+  const dataBox = element<HTMLElement>('company-data'), exportButton = element<HTMLButtonElement>('company-export'), deleteButton = element<HTMLButtonElement>('company-delete');
+  const deleteBox = element<HTMLElement>('account-delete-box'), deleteAccount = element<HTMLButtonElement>('account-delete'), deleteStatus = element<HTMLElement>('account-delete-status');
+  // The legal pages on remote.mixel.ch (in the app's language), opened in the system browser.
+  const legal = (page: string): void => { void invoke('open_legal_page', {page, lang: mailLocale()}).catch(error => { deleteStatus.textContent = String(error); }); };
+  for (const page of ['terms', 'privacy', 'dpa', 'subprocessors']) element<HTMLButtonElement>(`legal-${page}`).addEventListener('click', () => legal(page));
+  signupLegal.addEventListener('click', () => legal('legal'));
+  exportButton.addEventListener('click', () => legal('company-data'));
   const PLAN: Record<string, string> = {personal: 'Personal', solo: 'Solo', team: 'Team', business: 'Business', enterprise: 'Enterprise'};
   const ROLE: Record<string, string> = {owner: 'Owner', admin: 'Administrator', technician: 'Technician', member: 'Member'};
   const writable = (status: string): boolean => ['active', 'trial', 'past_due'].includes(status);
@@ -72,8 +82,12 @@
     const info = account.phase === 'authenticated' ? account.account : null;
     // "Create a company": a Mixel ID that is not yet set up, or has only a personal space.
     signup.hidden = !(account.phase === 'profile_setup' || (info && !info.staff && !info.has_company));
-    signupName.disabled = signupSubmit.disabled = busy;
+    signupName.disabled = signupSubmit.disabled = signupTerms.disabled = busy;
+    // Anyone signed in (not Mixel staff) can delete their own account; the last owner is told why not.
+    deleteBox.hidden = !(info && !info.staff);
+    deleteAccount.disabled = busy;
     panel.hidden = !tenant;
+    dataBox.hidden = true;
     if (!tenant) return;
     const view = overview ?? {...tenant, features: {}, limits: {technicians: null, devices: null, sessions: null}, usage: {technicians: 0, devices: 0, members: 0}} as Overview;
     nameLine.textContent = view.name;
@@ -102,6 +116,9 @@
     membersBox.hidden = false;
     invite.hidden = !['owner', 'admin'].includes(view.role);
     rename.hidden = !['owner', 'admin'].includes(view.role);
+    // Export and deletion of the company: owners only (the database refuses everyone else).
+    dataBox.hidden = view.role !== 'owner';
+    deleteButton.disabled = busy;
     rename.disabled = busy || !writable(view.status);
     rename.title = !writable(view.status) ? 'This company is read-only' : '';
     invite.disabled = busy || !writable(view.status);
@@ -270,19 +287,59 @@
     const name = signupName.value.trim();
     if (busy || !name) return;
     if (name.length < 2 || name.length > 80) { signupStatus.textContent = 'Enter a company name of 2 to 80 characters.'; return; }
+    if (!signupTerms.checked) { signupStatus.textContent = 'Accept the Terms of Service and the Data Processing Agreement to create a company.'; return; }
     busy = true; render(); signupStatus.textContent = 'Creating your company…';
     try {
-      await invoke('saas_signup', {company: name});
-      signupName.value = '';
+      await invoke('saas_signup', {company: name, terms: true});
+      signupName.value = ''; signupTerms.checked = false;
       signupStatus.textContent = 'Your company is ready. Your free 14-day Business trial has started: add this computer in Devices.';
     } catch (error) { signupStatus.textContent = String(error); }
     finally { busy = false; render(); }
+  });
+  deleteButton.addEventListener('click', () => {
+    if (!tenant || !overview || overview.role !== 'owner') return;
+    const target = tenant, name = overview.name;
+    dialog().open({
+      title: `Delete ${name}?`,
+      text: `${name} is deleted at once: the subscription ends without a refund, every device is signed out and removed, invitations are revoked, and all members and their Mixel Remote accounts are deleted. Billing records are kept as the law requires. This cannot be undone. Export the data in the portal first if you need it.`,
+      fields: [{id: 'name', kind: 'text', label: 'Type the company name to confirm', maxLength: 80, required: true}],
+      confirm: 'Delete company permanently', danger: true,
+      run: async values => {
+        if ((values.name ?? '').trim().toLowerCase() !== name.trim().toLowerCase()) throw new Error(tr('Type the company name exactly as shown to confirm.'));
+        const result = await invoke<{devices_removed?: number; members_removed?: number}>('saas_delete_company', {tenant: target.tenant_id, name: values.name});
+        await invoke('account_cancel').catch(() => {});
+        tenant = null; overview = null; memberList = []; inviteList = [];
+        deleteStatus.textContent = `The company was deleted: ${result?.devices_removed ?? 0} devices removed, ${result?.members_removed ?? 0} members and their accounts deleted.`;
+        render(); announce();
+      },
+    });
+  });
+  deleteAccount.addEventListener('click', () => {
+    const soleOwner = overview?.role === 'owner' && owners() <= 1;
+    if (soleOwner && tenant) {
+      dialog().open({title: 'Delete my account', text: `You are the only owner of ${tenant.name}. Make another member owner first, or delete the company.`, confirm: 'Close', run: async () => {}});
+      return;
+    }
+    dialog().open({
+      title: 'Delete my account?',
+      text: 'Your Mixel Remote account and your personal data are deleted at once and you are signed out. Invitations you sent and not yet accepted are revoked; devices you added stay with your company. This cannot be undone.',
+      fields: [{id: 'email', kind: 'email', label: 'Type your e-mail address to confirm', maxLength: 254, required: true}],
+      confirm: 'Delete my account permanently', danger: true,
+      run: async values => {
+        await invoke('saas_delete_my_account', {email: values.email});
+        await invoke('account_cancel').catch(() => {});
+        tenant = null; overview = null; memberList = []; inviteList = [];
+        deleteStatus.textContent = 'Your account has been deleted.';
+        render(); announce();
+      },
+    });
   });
   function accountChanged(value: Account): void {
     const key = value.phase + '|' + (value.phase === 'authenticated' && value.account ? JSON.stringify(value.account) : '');
     account = value;
     if (key === accountKey) return;
     accountKey = key; tenant = null; overview = null; memberList = []; inviteList = []; membersStatus.textContent = ''; problem.textContent = '';
+    if (value.phase === 'authenticated') deleteStatus.textContent = '';
     render(); void load();
   }
   document.addEventListener('mixel-account-state', event => accountChanged((event as CustomEvent<Account>).detail));

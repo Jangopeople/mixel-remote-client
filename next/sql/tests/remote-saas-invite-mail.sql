@@ -33,7 +33,7 @@ end $$;
 set local role authenticated;
 select pg_temp.act('owner');
 do $$ declare r jsonb; begin
-    r := public.remote_saas_signup('QA Mail Company');
+    r := public.remote_saas_signup('QA Mail Company', true);
     perform pg_temp.remember('tenant', (r->>'tenant_id')::uuid);
 end $$;
 reset role;
