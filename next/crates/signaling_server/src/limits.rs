@@ -14,6 +14,7 @@ pub const MAX_CONNECTIONS: usize = 20_000;
 /// File descriptors kept free for everything that is not a client connection.
 pub const FD_RESERVE: u64 = 256;
 /// The broker raises its soft open-file limit up to the hard limit, but not beyond this.
+#[cfg(unix)]
 const OPEN_FILES_TARGET: u64 = 65_536;
 // `rlim_t` is u64 on Linux (glibc, musl) and macOS, the broker's platforms.
 #[cfg(unix)]
