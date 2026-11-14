@@ -77,9 +77,7 @@ impl SettingsPage {
 
     fn build(&self, app: &Rc<App>, state: &State) {
         let body = &self.body;
-        while let Some(child) = body.first_child().and_then(|first| first.next_sibling()) {
-            body.remove(&child);
-        }
+        clear_below_title(body);
         let settings = &state.settings;
         let startup = settings.startup.clone().unwrap_or_default();
 

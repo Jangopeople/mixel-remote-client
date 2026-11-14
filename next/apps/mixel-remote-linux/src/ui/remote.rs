@@ -84,9 +84,7 @@ impl RemotePage {
     fn build(&self, app: &Rc<App>, state: &State) {
         let body = &self.body;
         // Keep the title; rebuild everything below it.
-        while let Some(child) = body.first_child().and_then(|first| first.next_sibling()) {
-            body.remove(&child);
-        }
+        clear_below_title(body);
         set_subtitle(body, &state.connection_message());
         let remote = &state.remote;
         if !state.signed_in() {

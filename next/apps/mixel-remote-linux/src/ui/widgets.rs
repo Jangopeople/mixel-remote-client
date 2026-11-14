@@ -13,26 +13,42 @@ pub fn hbox(spacing: i32) -> gtk::Box {
 }
 
 /// Empties a container that is built again.
-///
-/// A window knows its default button (the one Return presses) only by address, and GTK up to 4.8
-/// (Debian 12, Ubuntu 22.04) does not forget it when the button is taken out of the window. The
-/// button removed here is freed, and the window would use it after that: when the next default
-/// button is set, and whenever a widget in the window is hidden ("gtk_widget_queue_draw: assertion
-/// 'GTK_IS_WIDGET (widget)' failed", "g_object_notify: assertion 'G_IS_OBJECT (object)' failed").
-/// So the window is told first, while the button still exists.
 pub fn clear(container: &gtk::Box) {
-    forget_default_within(container);
+    release(container);
     while let Some(child) = container.first_child() {
         container.remove(&child);
     }
 }
 
-/// The window of `container` no longer has a default button if that button is inside `container`.
-pub fn forget_default_within(container: &impl IsA<gtk::Widget>) {
-    if let Some(window) = container.root().and_then(|root| root.downcast::<gtk::Window>().ok())
-        && window.default_widget().is_some_and(|button| button.is_ancestor(container))
-    {
+/// Empties a page below its title (the first item stays).
+pub fn clear_below_title(body: &gtk::Box) {
+    release(body);
+    while let Some(child) = body.first_child().and_then(|title| title.next_sibling()) {
+        body.remove(&child);
+    }
+}
+
+/// To be called before widgets inside `container` are taken out of their window: the window lets
+/// go of its default button and of the keyboard focus if they are in there.
+///
+/// GTK up to 4.8 (Debian 12, Ubuntu 22.04) does neither by itself in time:
+/// - It knows the default button (the one Return presses) only by address and does not forget it
+///   when the button is removed. The removed button is freed, and the window used it after that:
+///   when the next default button was set and whenever a widget in the window was hidden
+///   ("gtk_widget_queue_draw: assertion 'GTK_IS_WIDGET (widget)' failed", "g_object_notify:
+///   assertion 'G_IS_OBJECT (object)' failed").
+/// - A removed widget that had the focus (the button just clicked) is kept alive by the window
+///   alone until the next frame, when GTK moves the focus on. If the focus then lands on a
+///   selectable label, GTK's label code frees the old widget and looks at it once more
+///   ("gtk_widget_is_ancestor: assertion 'GTK_IS_WIDGET (widget)' failed").
+/// Entries the person types into keep their focus through `keep_focus`.
+pub fn release(container: &impl IsA<gtk::Widget>) {
+    let Some(window) = container.root().and_then(|root| root.downcast::<gtk::Window>().ok()) else { return };
+    if window.default_widget().is_some_and(|button| button.is_ancestor(container)) {
         window.set_default_widget(gtk::Widget::NONE);
+    }
+    if gtk::prelude::GtkWindowExt::focus(&window).is_some_and(|focused| focused.is_ancestor(container)) {
+        gtk::prelude::GtkWindowExt::set_focus(&window, gtk::Widget::NONE);
     }
 }
 
@@ -502,6 +518,28 @@ mod tests {
         window.set_default_widget(Some(&outside));
         clear(&body);
         assert!(window.default_widget().is_some_and(|button| button == outside));
+        // The keyboard focus: a focused button that is removed (the one just clicked) is let go
+        // of first, so that GTK does not move the focus on from a widget that is no longer there.
+        let clicked = button("Sign in", || {});
+        body.append(&clicked);
+        window.present();
+        assert!(clicked.grab_focus());
+        assert!(gtk::prelude::GtkWindowExt::focus(&window).is_some_and(|focused| focused == clicked));
+        let page = vbox(0);
+        frame.append(&page);
+        page.append(&label("title"));
+        let below = button("Below the title", || {});
+        page.append(&below);
+        clear(&body);
+        assert!(gtk::prelude::GtkWindowExt::focus(&window).is_none(), "the window still holds the removed widget as its focus");
+        assert!(below.grab_focus());
+        clear_below_title(&page);
+        assert!(gtk::prelude::GtkWindowExt::focus(&window).is_none());
+        assert!(page.first_child().is_some() && page.first_child().and_then(|title| title.next_sibling()).is_none(), "the title stays");
+        // Focus outside the emptied container is kept.
+        assert!(outside.grab_focus());
+        clear(&body);
+        assert!(gtk::prelude::GtkWindowExt::focus(&window).is_some_and(|focused| focused == outside));
         // And a container that is in no window is simply emptied.
         let loose = vbox(0);
         loose.append(&button("x", || {}));

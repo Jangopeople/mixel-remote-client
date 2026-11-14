@@ -67,9 +67,7 @@ impl ReportsPage {
 
     fn build(&self, app: &Rc<App>, state: &State) {
         let body = &self.body;
-        while let Some(child) = body.first_child().and_then(|first| first.next_sibling()) {
-            body.remove(&child);
-        }
+        clear_below_title(body);
         let company = &state.company.data;
         if company.tenant().is_none() {
             let status = adw::StatusPage::builder()

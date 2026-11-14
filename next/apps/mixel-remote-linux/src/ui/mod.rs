@@ -178,6 +178,8 @@ impl Ui {
         let parts = Parts::new(app);
         parts.section.set(section);
         parts.select(section);
+        // Every screen is replaced (a new language): the window lets go of what it held in the old ones.
+        widgets::release(&self.toasts);
         self.toasts.set_child(Some(&parts.root));
         self.parts.replace(Some(parts));
         self.consent.rebuild(app);

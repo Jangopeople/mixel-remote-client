@@ -37,7 +37,9 @@ impl Consent {
             }
             return;
         }
-        if self.window.borrow().is_none() {
+        // A new dialog is shown only after its content is built for this request: shown with what
+        // was left in it from the last request (a message line, say), it kept that height.
+        let created = if self.window.borrow().is_none() {
             let window = adw::Window::builder().modal(true).transient_for(parent).title(t("Someone wants to connect")).default_width(500).deletable(false).build();
             let outer = vbox(0);
             let header = adw::HeaderBar::new();
@@ -47,20 +49,25 @@ impl Consent {
             if let Some(parent) = self.body.parent().and_then(|old| old.downcast::<gtk::Box>().ok()) {
                 parent.remove(&self.body);
             }
+            clear(&self.body);
             outer.append(&self.body);
             window.set_content(Some(&outer));
-            parent.present();
-            window.present();
-            self.window.replace(Some(window));
+            self.window.replace(Some(window.clone()));
             self.key.replace(String::new());
-        }
+            Some(window)
+        } else {
+            None
+        };
         let host = &state.host;
         let key = format!("{:?}", (host, &state.remote.peer, state.remote.input_access, &state.error, state.busy, &state.linux, state.can_accept(), state.control_available()));
-        if *self.key.borrow() == key {
-            return;
+        if *self.key.borrow() != key {
+            self.key.replace(key);
+            self.build(app, state);
         }
-        self.key.replace(key);
-        self.build(app, state);
+        if let Some(window) = created {
+            parent.present();
+            window.present();
+        }
     }
 
     fn build(&self, app: &Rc<App>, state: &State) {

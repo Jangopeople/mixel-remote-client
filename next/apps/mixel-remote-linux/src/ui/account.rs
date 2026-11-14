@@ -60,9 +60,7 @@ impl AccountPage {
 
     fn build(&self, app: &Rc<App>, state: &State) {
         let body = &self.body;
-        while let Some(child) = body.first_child().and_then(|first| first.next_sibling()) {
-            body.remove(&child);
-        }
+        clear_below_title(body);
         if let (true, Some(profile)) = (state.signed_in(), state.account.account.as_ref()) {
             set_subtitle(body, "");
             body.append(&profile_card(app, state, profile));
