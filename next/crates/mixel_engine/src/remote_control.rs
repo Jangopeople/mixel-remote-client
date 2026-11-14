@@ -17,6 +17,19 @@ use std::{
 use tokio::sync::mpsc;
 use zeroize::Zeroizing;
 
+/// Lab builds only: milliseconds since this process first asked (to line up lab log lines).
+#[cfg(feature = "qa-session")]
+pub(crate) fn qa_clock() -> u128 {
+    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_millis()
+}
+
+/// Lab builds only: the time of day in milliseconds (to line up the two sides' lab log lines).
+#[cfg(feature = "qa-session")]
+pub(crate) fn qa_wall_clock() -> u128 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |since| since.as_millis() % 100_000_000)
+}
+
 /// Host: requests for a complete picture closer together than this are one request.
 const KEYFRAME_REQUEST_SPACING: Duration = Duration::from_millis(500);
 const PERMISSIONS_V3: &[u8] = b"mixel-permissions-v3";
@@ -859,6 +872,11 @@ impl ControlPipe {
             &self.crypto.verified_session(),
             &core_protocol::input::decode(&plain).map_err(|error| error.to_string())?,
         );
+        // Lab builds only: an input this computer did not apply, and why.
+        #[cfg(feature = "qa-session")]
+        if let Err(error) = &result {
+            eprintln!("QA input not applied: {error}");
+        }
         let response = match result {
             Ok(()) => b"mixel-input-posted-v1".as_slice(),
             Err(InputError::Injection(InjectionError::Unsupported)) if self.report_unsupported_input => {
@@ -876,10 +894,16 @@ impl ControlPipe {
             Err(error) => return Err(error.to_string()),
         };
         let ack = self.crypto.seal(response).map_err(|error| error.to_string())?;
-        tokio::time::timeout(Duration::from_secs(2), channel.send(ack.as_slice().into()))
+        #[cfg(feature = "qa-session")]
+        let handed_over = Instant::now();
+        let sent = tokio::time::timeout(Duration::from_secs(2), channel.send(ack.as_slice().into()))
             .await
             .map_err(|_| "Input acknowledgment timed out")?
-            .map_err(|_| "Input acknowledgment failed".to_owned())
+            .map_err(|_| "Input acknowledgment failed".to_owned());
+        // Lab builds only: when each input was answered, and an answer the channel took long to accept.
+        #[cfg(feature = "qa-session")]
+        eprintln!("QA input answered at {} ms (clock {}){}", crate::remote_control::qa_clock(), qa_wall_clock(), if handed_over.elapsed() > Duration::from_millis(200) { format!(" (the channel took {} ms to accept the answer)", handed_over.elapsed().as_millis()) } else { String::new() });
+        sent
     }
 }
 pub async fn received_record(

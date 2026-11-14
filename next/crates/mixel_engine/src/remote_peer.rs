@@ -1088,6 +1088,11 @@ async fn host_media(
             if !send_picture(&sender, &mut pacer, consent, &encoded.annex_b, duration, config, transport, control, channel).await? {
                 break;
             }
+            // Lab builds only: a picture whose capture, encoding or sending took long (input waits meanwhile).
+            #[cfg(feature = "qa-session")]
+            if capture_time + encode_time + lap.elapsed() > Duration::from_millis(400) {
+                eprintln!("QA slow picture at {} ms: capture {} ms, encode {} ms, send {} ms, {} bytes, pace {:.0} kB/s", setup.elapsed().as_millis(), capture_time.as_millis(), encode_time.as_millis(), lap.elapsed().as_millis(), bytes, pacer.rate() / 1000.0);
+            }
             mirror.send(&encoded.annex_b, duration);
             sent += 1;
             // Lab builds only: how long the host took to start (capture, first picture).

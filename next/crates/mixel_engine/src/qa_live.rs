@@ -281,15 +281,28 @@ async fn session(check: &mut Check<'_>, suffix: &str, tenant: &str, mine: u64) {
     if !control {
         check.print("input: the host allowed viewing only (it may not inject input); not sent");
     }
+    // Every input that is not confirmed is listed with what came back and after how long.
+    let mut unconfirmed = Vec::new();
     for step in 0..10u16 {
-        if control && check.input(id, InputEvent::Pointer { x: 20000 + step * 2000, y: 30000 }).await == Ok(true) {
+        let sent = Instant::now();
+        let result = if control { check.input(id, InputEvent::Pointer { x: 20000 + step * 2000, y: 30000 }).await } else { Ok(false) };
+        if result == Ok(true) {
             posted += 1;
+        } else if control {
+            unconfirmed.push(format!("pointer move {}: {result:?} after {} ms, sent at clock {}", step + 1, sent.elapsed().as_millis(), crate::remote_control::qa_wall_clock().saturating_sub(sent.elapsed().as_millis())));
         }
     }
     for down in [true, false] {
-        if control && check.input(id, InputEvent::Key { usage: 225, down }).await == Ok(true) {
+        let sent = Instant::now();
+        let result = if control { check.input(id, InputEvent::Key { usage: 225, down }).await } else { Ok(false) };
+        if result == Ok(true) {
             posted += 1;
+        } else if control {
+            unconfirmed.push(format!("Shift {}: {result:?} after {} ms", if down { "down" } else { "up" }, sent.elapsed().as_millis()));
         }
+    }
+    if !unconfirmed.is_empty() {
+        check.print(&format!("inputs not confirmed: {}", unconfirmed.join("; ")));
     }
     if control {
         check.check(&format!("input applied on the host ({posted}/12)"), posted == 12, "");
