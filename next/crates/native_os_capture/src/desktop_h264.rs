@@ -158,6 +158,8 @@ pub struct H264Decoder {
     decoder: Decoder,
     limits: (usize, usize),
     configured: bool,
+    /// The parameter sets of the last keyframe (SPS, PPS).
+    parameters: (Vec<u8>, Vec<u8>),
 }
 
 impl H264Decoder {
@@ -171,6 +173,7 @@ impl H264Decoder {
                 .map_err(|_| DecodeError::Codec)?,
             limits: (width, height),
             configured: false,
+            parameters: (Vec::new(), Vec::new()),
         })
     }
 
@@ -184,11 +187,24 @@ impl H264Decoder {
         _timestamp_us: u64,
     ) -> Result<Option<CapturedFrame>, DecodeError> {
         let sample = annex_b_to_avcc(annex_b).map_err(|_| DecodeError::Bitstream)?;
-        if let Some(sps) = sample.sps {
-            if sps.get(1) != Some(&66) || !sample.keyframe || sample.pps.is_none() {
+        // A Mac being helped (VideoToolbox) repeats its parameter sets with every picture, not only
+        // with keyframes. Repeated unchanged they say nothing new and the picture is decoded; before
+        // the first keyframe the picture is skipped (a keyframe is asked for), as without them.
+        // Parameter sets that differ may only come with a keyframe: anything else is refused.
+        let repeated = !sample.keyframe
+            && sample.sps.is_some_and(|sps| sps == self.parameters.0.as_slice())
+            && sample.pps.is_some_and(|pps| pps == self.parameters.1.as_slice());
+        if !sample.keyframe && !self.configured && sample.sps.is_some() && sample.pps.is_some() {
+            return Ok(None);
+        }
+        if repeated && self.configured {
+            // Checked when the keyframe brought them.
+        } else if let Some(raw) = sample.sps {
+            if raw.get(1) != Some(&66) || !sample.keyframe {
                 return Err(DecodeError::Bitstream);
             }
-            let sps = SeqParameterSet::from_bits(RefNal::new(sps, &[], true).rbsp_bits())
+            let Some(pps) = sample.pps else { return Err(DecodeError::Bitstream) };
+            let sps = SeqParameterSet::from_bits(RefNal::new(raw, &[], true).rbsp_bits())
                 .map_err(|_| DecodeError::Bitstream)?;
             let (width, height) = sps
                 .pixel_dimensions()
@@ -205,6 +221,7 @@ impl H264Decoder {
                 return Err(DecodeError::Dimensions);
             }
             self.configured = true;
+            self.parameters = (raw.to_vec(), pps.to_vec());
         } else if sample.pps.is_some() {
             return Err(DecodeError::Bitstream);
         }
@@ -360,6 +377,129 @@ mod tests {
             for (a, b) in at(x, y).iter().zip(source(x, y)) {
                 assert!((i16::from(*a) - i16::from(b)).abs() < 90, "pixel {x},{y}: {a} vs {b}");
             }
+        }
+    }
+
+    /// Pictures of a moving pattern from this encoder: a keyframe, then pictures that depend on it.
+    fn moving_pictures(count: u64) -> Vec<EncodedH264> {
+        let mut encoder = ScreenH264Encoder::new(640, 480, 20, 6_000_000).unwrap();
+        (0..count)
+            .filter_map(|number| {
+                let mut pixels = vec![255u8; 640 * 480 * 4];
+                for (index, pixel) in pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                    if (index / 640 + index % 640 + number as usize * 9) % 11 < 4 {
+                        *pixel = [20, 90, (index % 251) as u8, 255];
+                    }
+                }
+                let frame = CapturedFrame::bgra(640, 480, 640 * 4, pixels).unwrap();
+                encoder.encode(&frame, number * 50_000, number == 0).unwrap()
+            })
+            .collect()
+    }
+
+    fn with_parameter_sets(sps: &[u8], pps: &[u8], picture: &[u8]) -> Vec<u8> {
+        [&[0, 0, 0, 1][..], sps, &[0, 0, 0, 1], pps, picture].concat()
+    }
+
+    /// A Mac being helped (0.1.x to 2.0.1) sends its parameter sets with every picture. The
+    /// technician's decoder took that for a broken stream and the session ended at the second
+    /// picture ("invalid or unsupported H264 access unit"). Unchanged repeats are decoded.
+    #[test]
+    fn parameter_sets_repeated_with_every_picture_are_decoded() {
+        let pictures = moving_pictures(12);
+        let key = annex_b_to_avcc(&pictures[0].annex_b).unwrap();
+        assert!(pictures[0].keyframe && pictures.len() >= 4);
+        let (sps, pps) = (key.sps.unwrap().to_vec(), key.pps.unwrap().to_vec());
+        let mut decoder = H264Decoder::new(1920, 1920).unwrap();
+        assert!(decoder.decode(&pictures[0].annex_b, 0).unwrap().is_some());
+        let mut decoded = 1;
+        for picture in &pictures[1..] {
+            assert!(!picture.keyframe && annex_b_to_avcc(&picture.annex_b).unwrap().sps.is_none(), "this encoder sends them with keyframes only");
+            let repeated = with_parameter_sets(&sps, &pps, &picture.annex_b);
+            let frame = decoder.decode(&repeated, 0).expect("repeated unchanged parameter sets are not an error").expect("a picture");
+            assert_eq!((frame.width(), frame.height()), (640, 480));
+            decoded += 1;
+        }
+        assert_eq!(decoded, pictures.len());
+    }
+
+    /// Before the first keyframe such a picture is skipped (the caller asks for a keyframe), and
+    /// parameter sets that differ from the keyframe's are still refused without a keyframe.
+    #[test]
+    fn repeated_parameter_sets_need_a_keyframe_first_and_may_not_change_without_one() {
+        let pictures = moving_pictures(12);
+        let key = annex_b_to_avcc(&pictures[0].annex_b).unwrap();
+        let (sps, pps) = (key.sps.unwrap().to_vec(), key.pps.unwrap().to_vec());
+        let later = with_parameter_sets(&sps, &pps, &pictures[1].annex_b);
+        let mut decoder = H264Decoder::new(1920, 1920).unwrap();
+        assert!(decoder.decode(&later, 0).unwrap().is_none(), "no keyframe yet: skipped, not an error");
+        assert!(decoder.decode(&pictures[0].annex_b, 0).unwrap().is_some());
+        assert!(decoder.decode(&later, 0).unwrap().is_some());
+        // Another stream's parameter sets (a different size) in the middle of this one.
+        let mut other = ScreenH264Encoder::new(320, 240, 20, 500_000).unwrap();
+        let frame = CapturedFrame::bgra(320, 240, 1280, vec![90; 320 * 240 * 4]).unwrap();
+        let other = other.encode(&frame, 0, true).unwrap().unwrap();
+        let other = annex_b_to_avcc(&other.annex_b).unwrap();
+        let changed = with_parameter_sets(other.sps.unwrap(), other.pps.unwrap(), &pictures[2].annex_b);
+        assert!(matches!(decoder.decode(&changed, 0), Err(DecodeError::Bitstream)));
+        // Only one of the two repeated is not a repeat.
+        let half = [&[0, 0, 0, 1][..], &pps, &pictures[2].annex_b].concat();
+        assert!(matches!(decoder.decode(&half, 0), Err(DecodeError::Bitstream)));
+    }
+
+    /// The Mac's encoder sends its parameter sets with keyframes only, so the Windows and Linux
+    /// app up to 2.0.1 and the Linux app up to 2.0.2 (which refuse them elsewhere) can help a Mac.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_encoder_sends_parameter_sets_with_keyframes_only() {
+        use crate::macos_screen_encoder::ScreenH264Encoder as MacEncoder;
+        let mut encoder = MacEncoder::new(1280, 800, 30, 4_000_000).unwrap();
+        let (mut keys, mut others) = (0, 0);
+        for number in 0..12u64 {
+            let mut pixels = vec![255u8; 1280 * 800 * 4];
+            for (index, pixel) in pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                if (index / 1280 + index % 1280 + number as usize * 5) % 7 < 3 {
+                    *pixel = [20, 90, (index % 251) as u8, 255];
+                }
+            }
+            let frame = CapturedFrame::bgra(1280, 800, 1280 * 4, pixels).unwrap();
+            let Some(encoded) = encoder.encode(&frame, number * 33_000, number == 0 || number == 8).unwrap() else { continue };
+            let unit = annex_b_to_avcc(&encoded.annex_b).unwrap();
+            assert_eq!(unit.keyframe, encoded.keyframe);
+            assert_eq!(unit.sps.is_some() && unit.pps.is_some(), encoded.keyframe, "picture {number}");
+            assert_eq!(unit.sps.is_some() || unit.pps.is_some(), encoded.keyframe, "picture {number}");
+            if encoded.keyframe { keys += 1 } else { others += 1 }
+        }
+        assert!(keys >= 2 && others >= 6, "{keys} keyframes, {others} other pictures");
+    }
+
+    /// A Mac being helped (VideoToolbox) and a Windows, Linux or Android technician (this decoder):
+    /// full HD, a keyframe and the pictures after it, as in a session.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn full_hd_from_the_macos_encoder_decodes_on_the_desktop_decoder() {
+        use crate::macos_screen_encoder::ScreenH264Encoder as MacEncoder;
+        for (width, height) in [(1920usize, 1080usize), (1280, 800)] {
+            let mut encoder = MacEncoder::new(width, height, 30, 6_000_000).unwrap();
+            let mut decoder = H264Decoder::new(1920, 1920).unwrap();
+            let mut decoded_pictures = 0;
+            for number in 0..12u64 {
+                let mut pixels = vec![255u8; width * height * 4];
+                for (index, pixel) in pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                    if (index / width + index % width + number as usize * 5) % 7 < 3 {
+                        *pixel = [20, 90, (index % 251) as u8, 255];
+                    }
+                }
+                let frame = CapturedFrame::bgra(width, height, width * 4, pixels).unwrap();
+                let Some(encoded) = encoder.encode(&frame, number * 33_000, number == 0).unwrap() else { continue };
+                let kinds: Vec<u8> = encoded.annex_b.windows(5).filter(|window| window[..4] == [0, 0, 0, 1]).map(|window| window[4] & 0x1f).collect();
+                let decoded = decoder.decode(&encoded.annex_b, number * 33_000).unwrap_or_else(|error| panic!("{width}x{height} picture {number} (NAL kinds {kinds:?}, {} bytes): {error}", encoded.annex_b.len()));
+                if let Some(decoded) = decoded {
+                    assert_eq!((decoded.width(), decoded.height()), (width, height));
+                    decoded_pictures += 1;
+                }
+            }
+            assert!(decoded_pictures >= 8, "{width}x{height}: only {decoded_pictures} pictures decoded");
         }
     }
 

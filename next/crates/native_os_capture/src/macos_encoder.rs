@@ -429,6 +429,13 @@ unsafe fn copy_encoded(sample: &CMSampleBuffer) -> Result<EncodedH264, EncodeErr
                 parameter.to_vec()
             });
         }
+        // The parameter sets go out with keyframes only, as the Windows and Linux encoder sends
+        // them: a decoder that accepts them only there (Windows up to 2.0.1, Linux up to 2.0.2)
+        // otherwise ends the session at the first picture after the keyframe.
+        let picture = avcc_to_annex_b(&avcc, length_size as usize, &[])?;
+        if !picture.keyframe {
+            return Ok(picture);
+        }
         avcc_to_annex_b(
             &avcc,
             length_size as usize,
