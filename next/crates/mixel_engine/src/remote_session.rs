@@ -471,6 +471,14 @@ struct Inner {
     renew_after: Option<std::time::Instant>,
     stopping: bool,
 }
+impl Inner {
+    /// A person's request to go online while this device is online or connecting (and not being
+    /// disconnected). The headless hosts (always-on, sign-in screen) register once and keep the
+    /// refusal, so a second host process is still reported.
+    fn already_online(&self, interactive: bool) -> bool {
+        interactive && self.commands.is_some() && !self.stopping
+    }
+}
 /// Media owner threads; `true` marks a colleague's (joined) media.
 type MediaWorkers = Arc<std::sync::Mutex<Vec<(bool, std::thread::JoinHandle<()>)>>>;
 #[derive(Clone)]
@@ -770,16 +778,23 @@ impl RemoteSession {
         auth: RegistrationAuth,
         identity: Arc<IdentityState>,
     ) -> Result<(), String> {
+        let mut inner = self.0.lock().await;
+        // The apps ask to go online from two places: by themselves once a set-up computer is signed
+        // in, and again right after "Add this computer" or the Go online button. Whichever comes
+        // second finds the device online or on its way: that is what was asked for, not a failure
+        // (it used to be reported as "already registered or connecting" although all was well).
+        if inner.already_online(matches!(auth, RegistrationAuth::Interactive(_))) {
+            return Ok(());
+        }
+        if inner.commands.is_some() || inner.stopping {
+            return Err("This device is already registered or connecting".into());
+        }
         identity.public_key()?;
         let config = crate::service_config::ServiceConfig::load()?;
         let url: reqwest::Url = config
             .signaling_url
             .parse()
             .map_err(|_| "Invalid connection-service configuration")?;
-        let mut inner = self.0.lock().await;
-        if inner.commands.is_some() || inner.stopping {
-            return Err("This device is already registered or connecting".into());
-        }
         inner.generation = inner
             .generation
             .checked_add(1)
@@ -2781,6 +2796,63 @@ mod join_tests {
             change(&mut refused);
             assert!(!unattended_join_allowed(&refused));
         }
+    }
+}
+
+#[cfg(test)]
+mod registration_tests {
+    use super::*;
+
+    fn go_online(remote: &RemoteSession) -> impl Future<Output = Result<(), String>> + '_ {
+        remote.connect(AccountAuth::default(), Arc::new(IdentityState::default()))
+    }
+
+    /// "Add this computer" and the app's own going online both ask to register. The second request
+    /// must not be reported as an error ("This device is already registered or connecting") while
+    /// the computer is online: it changes nothing and succeeds.
+    #[tokio::test]
+    async fn going_online_again_while_online_or_connecting_succeeds_and_changes_nothing() {
+        let remote = RemoteSession::default();
+        let (commands, _kept) = mpsc::channel(1);
+        {
+            let mut inner = remote.0.lock().await;
+            inner.commands = Some(commands);
+            inner.generation = 7;
+            inner.status.phase = "ready".into();
+            inner.status.message = "Online".into();
+        }
+        assert_eq!(go_online(&remote).await, Ok(()));
+        assert_eq!(go_online(&remote).await, Ok(()));
+        let inner = remote.0.lock().await;
+        assert_eq!(inner.generation, 7, "no second registration was started");
+        assert!(inner.commands.is_some() && inner.task.is_none());
+        assert_eq!((inner.status.phase.as_str(), inner.status.message.as_str()), ("ready", "Online"));
+    }
+
+    /// A device that is offline still goes through the real checks (here: no device identity).
+    #[tokio::test]
+    async fn going_online_while_offline_still_registers() {
+        let remote = RemoteSession::default();
+        assert_eq!(go_online(&remote).await.unwrap_err(), "Load the saved device identity first");
+        assert!(remote.0.lock().await.commands.is_none());
+    }
+
+    /// While a disconnect is still cleaning up, and for the headless hosts, the refusal stays.
+    #[tokio::test]
+    async fn going_online_during_cleanup_and_a_second_headless_host_are_still_refused() {
+        let remote = RemoteSession::default();
+        let (commands, _kept) = mpsc::channel(1);
+        {
+            let mut inner = remote.0.lock().await;
+            inner.commands = Some(commands);
+            assert!(inner.already_online(true));
+            assert!(!inner.already_online(false), "a second always-on host is refused");
+            inner.stopping = true;
+            assert!(!inner.already_online(true));
+        }
+        assert_eq!(go_online(&remote).await.unwrap_err(), "This device is already registered or connecting");
+        remote.0.lock().await.commands = None;
+        assert_eq!(go_online(&remote).await.unwrap_err(), "This device is already registered or connecting");
     }
 }
 
