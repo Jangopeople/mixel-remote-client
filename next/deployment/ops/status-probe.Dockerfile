@@ -6,6 +6,9 @@ WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ ./crates/
 COPY vendor/ ./vendor/
+# The Linux app is a member of the workspace: cargo reads every member's manifest, also to build
+# another package (without it: "failed to load manifest for workspace member"). Its sources are not compiled here.
+COPY apps/mixel-remote-linux/ ./apps/mixel-remote-linux/
 RUN cargo build --release --locked -p signaling_server --example status_probe
 
 FROM debian:bookworm-slim@sha256:c67e92c8099ba22853ab4cfda7cfb494d253d6012ca82dee98ba8976772af018

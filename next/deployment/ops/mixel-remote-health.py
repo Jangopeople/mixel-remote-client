@@ -40,6 +40,7 @@ STATE_DIR = os.environ.get("MRH_STATE_DIR", "/var/lib/mixel-remote-health")
 PUBLIC_FILE = os.environ.get("MRH_PUBLIC_FILE", "/var/www/mixel-remote-status/status.json")
 OVERRIDES_FILE = "/etc/mixel-remote-status/health.env"
 PROBE_ENV = "/etc/mixel-remote-status/probe.env"
+PROBE_ARCHIVE = "/var/lib/mixel-remote-status/probe-image.tar"
 FAIL_AFTER = 2
 REMIND_SECONDS = 3600
 CERT_MIN_DAYS = 14
@@ -179,8 +180,24 @@ def check_containers() -> str:
     return f"{len(names)} containers running"
 
 
+def ensure_probe_image(image: str, archive: str, run=subprocess.run, exists=os.path.exists) -> str:
+    """The probe's image is used by no standing container, so `docker image prune -a` removes it
+    (14 Nov 2026: the check then failed for hours and the status page showed an outage that was
+    none). A copy of the image is kept next to the probe's settings; a missing image is loaded
+    from it. Returns a note for the check's result ("" when the image was there)."""
+    if run(["docker", "image", "inspect", image], capture_output=True, text=True, timeout=30, check=False).returncode == 0:
+        return ""
+    if not exists(archive):
+        raise CheckError(f"probe image {image} is missing and there is no copy at {archive} (rebuild it, see OPERATIONS.md)")
+    loaded = run(["docker", "load", "-i", archive], capture_output=True, text=True, timeout=120, check=False)
+    if loaded.returncode != 0 or run(["docker", "image", "inspect", image], capture_output=True, text=True, timeout=30, check=False).returncode != 0:
+        raise CheckError(f"probe image {image} is missing and its copy could not be loaded: " + (loaded.stderr.strip() or loaded.stdout.strip())[:160])
+    return "; the probe image had been removed and was loaded from its copy"
+
+
 def check_synthetic_connect() -> str:
     image = cfg("MRH_PROBE_IMAGE", "mixel-remote-status-probe:current")
+    restored = ensure_probe_image(image, cfg("MRH_PROBE_ARCHIVE", PROBE_ARCHIVE))
     command = ["docker", "run", "--rm", "--network", "host", "--read-only", "--cap-drop", "ALL",
                "--security-opt", "no-new-privileges", "--memory", "256m", "--cpus", "1",
                "--name", f"mixel-remote-status-probe-run-{os.getpid()}", "--env-file", PROBE_ENV]
@@ -196,7 +213,7 @@ def check_synthetic_connect() -> str:
     steps = ",".join(s["step"] for s in outcome.get("steps", []))
     if not outcome.get("ok"):
         raise CheckError(f"{outcome.get('error')} (after: {steps or 'nothing'})")
-    return f"sign-in, tickets, broker, consent, TURN relay data and close in {outcome.get('ms')} ms"
+    return f"sign-in, tickets, broker, consent, TURN relay data and close in {outcome.get('ms')} ms{restored}"
 
 
 def check_presence_fresh() -> str:

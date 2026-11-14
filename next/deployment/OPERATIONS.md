@@ -96,12 +96,17 @@ so for those use a transient unit with its own state:
 Install / update the ops pieces: `scp -r next/deployment/ops mixel-vps:~/mixel-remote-ops && ssh mixel-vps sudo bash ~/mixel-remote-ops/install.sh`
 (idempotent, backs up replaced files to `/root/mixel-remote-ops-backup/`). Probe image:
 ```bash
-tar -czf - Cargo.toml Cargo.lock crates vendor deployment/ops/status-probe.Dockerfile --exclude 'crates/mobile_app/gen' \
+tar -czf - --exclude 'crates/mobile_app/gen' Cargo.toml Cargo.lock crates vendor apps/mixel-remote-linux deployment/ops/status-probe.Dockerfile \
   | ssh mixel-vps 'rm -rf ~/mixel-status-probe-src && mkdir ~/mixel-status-probe-src && tar -xzf - -C ~/mixel-status-probe-src'
 ssh mixel-vps 'cd ~/mixel-status-probe-src && sudo docker build -f deployment/ops/status-probe.Dockerfile -t mixel-remote-status-probe:<commit> . \
   && sudo docker run --rm --network host --env-file /etc/mixel-remote-status/probe.env mixel-remote-status-probe:<commit> run \
-  && sudo docker tag mixel-remote-status-probe:<commit> mixel-remote-status-probe:current'
+  && sudo docker tag mixel-remote-status-probe:<commit> mixel-remote-status-probe:current \
+  && sudo install -d -m 700 /var/lib/mixel-remote-status \
+  && sudo docker save -o /var/lib/mixel-remote-status/probe-image.tar mixel-remote-status-probe:current'
 ```
+The last line keeps a copy of the image: no standing container uses it, so `docker image prune -a` removes it
+(it did on 14 Nov 2026; the status page showed an outage for hours). The health check loads a missing image from
+that copy by itself (`ensure_probe_image`); save a new copy whenever the image is rebuilt.
 Recreate the probe identity (only if it was deleted): create the GoTrue user with the admin API
 (password into `probe.env`), `docker run ... mixel-remote-status-probe:current setup >> probe.env`
 (adds the `MIXEL_PROBE_A_*`/`B_*` lines), then set the tenant to `plan='enterprise', status='active',
@@ -145,7 +150,7 @@ from a clean worktree on the current tip, run the part's checks, then watch `jou
 mixel-remote-health -f` for one or two runs (the synthetic connection covers broker, authority,
 TURN, GoTrue and PostgREST together).
 
-**Broker** (≈ 6 min build): tar `Cargo.toml Cargo.lock crates vendor deployment/backend.Dockerfile` →
+**Broker** (≈ 6 min build): tar `Cargo.toml Cargo.lock crates vendor apps/mixel-remote-linux deployment/backend.Dockerfile` →
 VPS → `docker build -f deployment/backend.Dockerfile -t mixel-remote-next-backend:<feature>-<date>-<commit> .`
 → save the current container config (`docker inspect ... > private/broker-container-before-<x>.json`) →
 `docker stop` + `docker rename` the old one to `...-prev-<date>` (`docker update --restart no`) → `docker run -d --name
