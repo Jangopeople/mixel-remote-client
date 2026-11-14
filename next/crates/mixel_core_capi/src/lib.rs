@@ -21,6 +21,13 @@
 //! yet freed, buffers and strings returned by this library released once with the matching free function.
 #![allow(unsafe_code)] // A C interface is unsafe by nature; every pointer is checked before use.
 
+// The Windows engine and its helper carry the C runtime inside them. Built without this they need
+// the Visual C++ runtime (VCRUNTIME140.dll), which a fresh Windows does not have: the app could not
+// load its engine and the always-on service's program did not start (2.0.0 and 2.0.1 were built so).
+#[cfg(all(target_os = "windows", target_env = "msvc", not(debug_assertions), not(target_feature = "crt-static")))]
+compile_error!("Build the Windows engine with RUSTFLAGS=\"-C target-feature=+crt-static\" (see apps/mixel-remote-windows/README.md)");
+
+
 use mixel_core_ffi::MixelEngine;
 use std::{
     ffi::{CStr, CString, c_char},

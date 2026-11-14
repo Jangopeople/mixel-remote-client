@@ -37,7 +37,7 @@ panic cross the boundary. The Swift apps keep using UniFFI over the same `MixelE
 ```powershell
 # engine (release; LAB: --features qa-session into another target dir)
 $env:MIXEL_DESKTOP_SERVICE_CONFIG = "next\deployment\public-service-config.json"; $env:MIXEL_ENGINE_APP_VERSION = '2.0.0'
-$env:RUSTFLAGS = '-C target-feature=+crt-static'           # no Visual C++ runtime needed on the computers
+$env:RUSTFLAGS = '-C target-feature=+crt-static'           # no Visual C++ runtime needed on the computers; a release build without it does not compile (2.0.0 and 2.0.1 were built without it and needed VCRUNTIME140.dll)
 cargo build --locked --release -p mixel_core_capi          # mixel_core.dll + mixel-remote-helper.exe
 cargo test --locked --release -p mixel_core_capi -p mixel_core_ffi -p mixel_engine
 cargo clippy --locked --release -p mixel_core_capi -p mixel_core_ffi -p mixel_engine --all-targets -- -D warnings
@@ -62,6 +62,9 @@ Build with `-p:Lab=true` and the qa-session engine. With a throwaway QA account'
   desktop session or as SYSTEM, not in an ssh logon).
 - `MixelRemote.LabCheck technician <session.json> <suffix> <folder> [<host-id> <tenant>]`: a real session.
 - `mixel-remote.exe --live-session|--live-host <session.json> <suffix> <folder>`: the real app as technician / as host.
+- `MixelRemote.LabCheck live|live-host <session.json> <suffix> <folder> [last]`: the live session shared by every app
+  (the engine's `qa_live_technician` / `qa_live_host`): early input and clipboard, pictures, input, clipboard both
+  ways, chat, drawing, end. Its lines are in `<folder>\live.txt`.
 
 ## Keyboard
 Ctrl+1…4 sections, F5 refresh devices. In a session every key goes to the other computer (low-level hook while the
