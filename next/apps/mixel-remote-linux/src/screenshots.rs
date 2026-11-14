@@ -190,7 +190,21 @@ async fn scene(application: &adw::Application, folder: &std::path::Path, name: &
             settle(300).await;
             top_dialog(application, &window)
         }
-        "consent" => top_dialog(application, &window),
+        "consent" => {
+            let dialog = top_dialog(application, &window);
+            // The person ticks and unticks an option: the dialog is built again each time, with a
+            // new Allow button (the old one, the dialog's default button, is freed).
+            if let Some(dialog) = &dialog {
+                for _ in 0..2 {
+                    match find_check(dialog, &i18n::t("Clipboard")) {
+                        Some(option) => option.set_active(!option.is_active()),
+                        None => ok = false,
+                    }
+                    settle(150).await;
+                }
+            }
+            dialog
+        }
         _ => None,
     };
     let file = folder.join(format!("{prefix}{name}-{suffix}.png"));
@@ -273,6 +287,28 @@ async fn export_check(application: &adw::Application, window: &adw::ApplicationW
     good && suggested.starts_with("mixel-remote-")
 }
 
+fn find_check(root: &impl IsA<gtk::Widget>, label: &str) -> Option<gtk::CheckButton> {
+    let mut stack = vec![root.clone().upcast::<gtk::Widget>()];
+    while let Some(widget) = stack.pop() {
+        if let Some(check) = widget.downcast_ref::<gtk::CheckButton>()
+            && check.label().as_deref() == Some(label)
+        {
+            return Some(check.clone());
+        }
+        let mut child = widget.first_child();
+        while let Some(item) = child {
+            child = item.next_sibling();
+            stack.push(item);
+        }
+    }
+    None
+}
+
+/// Messages of the toolkit that are about this computer's set-up, not about the app.
+fn environment_message(text: &str) -> bool {
+    text.contains("Locale not supported by C library")
+}
+
 fn find_button(root: &impl IsA<gtk::Widget>, label: &str) -> Option<gtk::Button> {
     let mut stack = vec![root.clone().upcast::<gtk::Widget>()];
     while let Some(widget) = stack.pop() {
@@ -301,6 +337,24 @@ fn top_dialog(application: &adw::Application, main: &adw::ApplicationWindow) -> 
 
 pub fn run(folder: PathBuf, languages: &str) -> i32 {
     let _ = std::fs::create_dir_all(&folder);
+    // Every warning or critical message of GTK, GLib or libadwaita while the screens are built and
+    // rebuilt fails the run: such a message means a widget is used wrongly (for example after it
+    // was removed), even when nothing visible goes wrong.
+    let messages = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let seen = messages.clone();
+    glib::log_set_writer_func(move |level, fields| {
+        if matches!(level, glib::LogLevel::Critical | glib::LogLevel::Warning | glib::LogLevel::Error) {
+            let field = |key: &str| fields.iter().find(|field| field.key() == key).and_then(|field| field.value_str()).unwrap_or("").to_owned();
+            let text = field("MESSAGE");
+            if !environment_message(&text) {
+                let widget = crate::ui::widgets::address_in(&text).and_then(crate::ui::widgets::widget_at).map(|widget| format!(" [{widget}]")).unwrap_or_default();
+                if let Ok(mut seen) = seen.lock() {
+                    seen.push(format!("{level:?} {}: {text}{widget}", field("GLIB_DOMAIN")));
+                }
+            }
+        }
+        glib::log_writer_default(level, fields)
+    });
     let application = adw::Application::builder().application_id(format!("{}.Screenshots", crate::APP_ID)).flags(gio::ApplicationFlags::NON_UNIQUE).build();
     let failures = Rc::new(Cell::new(0));
     let languages: Vec<String> = languages.split(',').map(|item| item.trim().to_owned()).filter(|item| !item.is_empty()).collect();
@@ -329,5 +383,13 @@ pub fn run(folder: PathBuf, languages: &str) -> i32 {
     });
     let empty: [&str; 0] = [];
     application.run_with_args(&empty);
-    i32::from(failures.get() > 0)
+    let messages = messages.lock().map(|messages| messages.clone()).unwrap_or_default();
+    println!("toolkit messages: {}", messages.len());
+    let mut distinct: Vec<&String> = messages.iter().collect();
+    distinct.sort();
+    distinct.dedup();
+    for message in distinct.iter().take(40) {
+        println!("FAIL toolkit message: {message}");
+    }
+    i32::from(failures.get() > 0 || !messages.is_empty())
 }

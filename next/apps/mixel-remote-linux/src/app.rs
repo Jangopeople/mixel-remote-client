@@ -2482,8 +2482,27 @@ async fn futures_timeout<T>(future: impl Future<Output = T>, limit: Duration) ->
 }
 
 /// Starts the GTK app. `autostart`: started with the computer (stays in the tray when it can).
+/// Lab builds only: with MIXEL_QA_GTK_TRACE set, every GLib/GTK warning or critical message is
+/// followed by where it came from (the call stack), to find the code behind such a message.
+#[cfg(feature = "qa-session")]
+fn trace_toolkit_messages() {
+    if std::env::var_os("MIXEL_QA_GTK_TRACE").is_none() {
+        return;
+    }
+    glib::log_set_writer_func(|level, fields| {
+        if matches!(level, glib::LogLevel::Critical | glib::LogLevel::Warning | glib::LogLevel::Error) {
+            let text = fields.iter().find(|field| field.key() == "MESSAGE").and_then(|field| field.value_str()).unwrap_or("");
+            let widget = crate::ui::widgets::address_in(text).and_then(crate::ui::widgets::widget_at).unwrap_or_default();
+            eprintln!("QA-GTK-TRACE {level:?} {text}\nQA-GTK-WIDGET {widget}\n{}\nQA-GTK-TRACE-END", std::backtrace::Backtrace::force_capture());
+        }
+        glib::log_writer_default(level, fields)
+    });
+}
+
 pub fn run(autostart: bool) -> i32 {
     use adw::prelude::*;
+    #[cfg(feature = "qa-session")]
+    trace_toolkit_messages();
     let application = adw::Application::builder().application_id(crate::APP_ID).build();
     let app: Rc<RefCell<Option<Rc<App>>>> = Rc::new(RefCell::new(None));
     let holder = app.clone();

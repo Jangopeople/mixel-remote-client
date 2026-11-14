@@ -64,6 +64,7 @@ impl AccountPage {
             body.remove(&child);
         }
         if let (true, Some(profile)) = (state.signed_in(), state.account.account.as_ref()) {
+            set_subtitle(body, "");
             body.append(&profile_card(app, state, profile));
             if state.company.data.tenant().is_some() {
                 body.append(&company_card(app, state));
@@ -72,9 +73,7 @@ impl AccountPage {
             }
             body.append(&danger_card(app));
         } else {
-            let line = dim(&t("A secure home for your devices and connections."));
-            line.set_margin_top(-12);
-            body.append(&line);
+            set_subtitle(body, &t("A secure home for your devices and connections."));
             body.append(&self.sign_in_card(app, state));
         }
         append_message(body, &state.error, true);

@@ -87,9 +87,7 @@ impl RemotePage {
         while let Some(child) = body.first_child().and_then(|first| first.next_sibling()) {
             body.remove(&child);
         }
-        let status = dim(&state.connection_message());
-        status.set_margin_top(-12);
-        body.append(&status);
+        set_subtitle(body, &state.connection_message());
         let remote = &state.remote;
         if !state.signed_in() {
             let (frame, content) = card(&t("Connect with your Mixel account"), Some("avatar-default-symbolic"));

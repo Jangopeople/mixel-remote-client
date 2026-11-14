@@ -65,6 +65,7 @@ impl Consent {
 
     fn build(&self, app: &Rc<App>, state: &State) {
         let body = &self.body;
+        // `clear` tells the dialog first that its default button (Allow) goes away with the old content.
         clear(body);
         let host = &state.host;
         let head = hbox(12);

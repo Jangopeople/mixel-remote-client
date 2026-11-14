@@ -12,10 +12,67 @@ pub fn hbox(spacing: i32) -> gtk::Box {
     gtk::Box::new(gtk::Orientation::Horizontal, spacing)
 }
 
+/// Empties a container that is built again.
+///
+/// A window knows its default button (the one Return presses) only by address, and GTK up to 4.8
+/// (Debian 12, Ubuntu 22.04) does not forget it when the button is taken out of the window. The
+/// button removed here is freed, and the window would use it after that: when the next default
+/// button is set, and whenever a widget in the window is hidden ("gtk_widget_queue_draw: assertion
+/// 'GTK_IS_WIDGET (widget)' failed", "g_object_notify: assertion 'G_IS_OBJECT (object)' failed").
+/// So the window is told first, while the button still exists.
 pub fn clear(container: &gtk::Box) {
+    forget_default_within(container);
     while let Some(child) = container.first_child() {
         container.remove(&child);
     }
+}
+
+/// The window of `container` no longer has a default button if that button is inside `container`.
+pub fn forget_default_within(container: &impl IsA<gtk::Widget>) {
+    if let Some(window) = container.root().and_then(|root| root.downcast::<gtk::Window>().ok())
+        && window.default_widget().is_some_and(|button| button.is_ancestor(container))
+    {
+        window.set_default_widget(gtk::Widget::NONE);
+    }
+}
+
+/// The widget GTK names by address in a message ("GtkLabel 0x55d0…"): its kind, text and place.
+pub fn widget_at(address: &str) -> Option<String> {
+    if !gtk::is_initialized_main_thread() {
+        return None;
+    }
+    let mut stack: Vec<gtk::Widget> = gtk::Window::list_toplevels();
+    while let Some(widget) = stack.pop() {
+        if format!("{:p}", widget.as_ptr()) == address {
+            let text = widget.downcast_ref::<gtk::Label>().map(|label| label.text().to_string()).unwrap_or_default();
+            let mut place = Vec::new();
+            let mut parent = widget.parent();
+            while let Some(item) = parent {
+                place.push(format!("{}{}", item.type_().name(), item.css_classes().iter().map(|class| format!(".{class}")).collect::<String>()));
+                parent = item.parent();
+            }
+            place.truncate(8);
+            return Some(format!(
+                "{}{} {text:?} (lines {:?}, visible {}) in {}",
+                widget.type_().name(),
+                widget.css_classes().iter().map(|class| format!(".{class}")).collect::<String>(),
+                widget.downcast_ref::<gtk::Label>().map(|label| (label.wraps(), label.ellipsize(), label.lines(), label.width_chars(), label.max_width_chars())),
+                widget.is_visible(),
+                place.join(" < ")
+            ));
+        }
+        let mut child = widget.first_child();
+        while let Some(item) = child {
+            child = item.next_sibling();
+            stack.push(item);
+        }
+    }
+    None
+}
+
+/// The address in a toolkit message ("… GtkLabel 0x55d0… adjusted size …"), if it names one.
+pub fn address_in(message: &str) -> Option<&str> {
+    message.split_whitespace().find(|word| word.starts_with("0x") && word.len() > 4 && word[2..].bytes().all(|byte| byte.is_ascii_hexdigit()))
 }
 
 /// Takes a long-lived widget (an entry the person types into) out of its old place.
@@ -144,12 +201,13 @@ pub fn page(title: &str, subtitle: &str) -> (gtk::ScrolledWindow, gtk::Box) {
     body.set_margin_end(24);
     let heading = gtk::Label::builder().label(title).xalign(0.0).wrap(true).accessible_role(gtk::AccessibleRole::Heading).build();
     heading.add_css_class("title-1");
-    body.append(&heading);
-    if !subtitle.is_empty() {
-        let line = dim(subtitle);
-        line.set_margin_top(-12);
-        body.append(&line);
-    }
+    // The title and the line under it are one item of the page (6 px apart; the page's items are
+    // 18 px apart). A negative margin on the line did the same, but GTK does not allow one and
+    // says so every time the page is measured ("GtkLabel … adjusted size … must not decrease").
+    let head = vbox(6);
+    head.append(&heading);
+    body.append(&head);
+    set_subtitle(&body, subtitle);
     let clamp = adw::Clamp::new();
     clamp.set_maximum_size(980);
     clamp.set_tightening_threshold(700);
@@ -159,6 +217,18 @@ pub fn page(title: &str, subtitle: &str) -> (gtk::ScrolledWindow, gtk::Box) {
     scroller.set_vexpand(true);
     scroller.set_child(Some(&clamp));
     (scroller, body)
+}
+
+/// The dim line under the title of a [`page`] (none when `text` is empty). The page's first item
+/// holds the title and this line.
+pub fn set_subtitle(body: &gtk::Box, text: &str) {
+    let Some(head) = body.first_child().and_then(|head| head.downcast::<gtk::Box>().ok()) else { return };
+    while let Some(line) = head.first_child().and_then(|title| title.next_sibling()) {
+        head.remove(&line);
+    }
+    if !text.is_empty() {
+        head.append(&dim(text));
+    }
 }
 
 /// A rounded panel (libadwaita's card) with a title and optional icon; returns frame and content.
@@ -381,4 +451,63 @@ pub fn tag(text: &str) -> gtk::Label {
     label.add_css_class("dim-label");
     label.set_valign(gtk::Align::Center);
     label
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Needs a display: `xvfb-run -a cargo test -p mixel_remote_linux -- --ignored toolkit`.
+    /// (The same is checked on every screen of the app by `mixel-remote --screenshots`.)
+    #[test]
+    #[ignore = "needs a display (xvfb-run)"]
+    fn toolkit_stays_silent_when_content_with_the_default_button_is_built_again() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static MESSAGES: AtomicUsize = AtomicUsize::new(0);
+        gtk::init().expect("a display");
+        glib::log_set_writer_func(|level, fields| {
+            if matches!(level, glib::LogLevel::Critical | glib::LogLevel::Warning) {
+                MESSAGES.fetch_add(1, Ordering::Relaxed);
+            }
+            glib::log_writer_default(level, fields)
+        });
+        let window = gtk::Window::new();
+        let body = vbox(0);
+        window.set_child(Some(&body));
+        let other = label("another widget of the window");
+        // The buttons of earlier rounds are kept alive here, so that this test never makes GTK
+        // touch freed memory: what is checked is that the window has forgotten the button.
+        let mut earlier: Vec<gtk::Button> = Vec::new();
+        for round in 0..3 {
+            clear(&body);
+            assert!(window.default_widget().is_none(), "round {round}: the window still names the removed button as its default");
+            let actions = hbox(0);
+            let allow = button("Allow", || {});
+            actions.append(&allow);
+            body.append(&other);
+            body.append(&actions);
+            window.set_default_widget(Some(&allow));
+            assert!(window.default_widget().is_some_and(|button| button == allow), "round {round}");
+            // Hiding any widget makes the window look at its default button too.
+            other.set_visible(false);
+            other.set_visible(true);
+            earlier.push(allow);
+        }
+        // A default button outside the emptied container stays the default.
+        let outside = button("Close", || {});
+        let frame = vbox(0);
+        window.set_child(Some(&frame));
+        frame.append(&body);
+        frame.append(&outside);
+        window.set_default_widget(Some(&outside));
+        clear(&body);
+        assert!(window.default_widget().is_some_and(|button| button == outside));
+        // And a container that is in no window is simply emptied.
+        let loose = vbox(0);
+        loose.append(&button("x", || {}));
+        clear(&loose);
+        assert!(loose.first_child().is_none());
+        window.destroy();
+        assert_eq!(MESSAGES.load(Ordering::Relaxed), 0, "GTK warnings or critical messages");
+    }
 }
