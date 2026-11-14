@@ -23,7 +23,7 @@
 //!   company in `<dir>/../tenant.txt`, writes its Remote ID to `<dir>/colleague-id.txt`, joins when
 //!   invited (`joined.txt`), watches a few seconds, leaves (`left.txt`) and removes itself.
 //! - `--live-early <session.json> <run> <dir> [rounds]`: as `--live-host` (with `xclip`), `rounds`
-//!   sessions (default 5) in which a key release and a clipboard push go out the moment the session
+//!   sessions (default 5; before each the lab script restarts the host app and writes `<dir>/go-<n>.txt`) in which a key release and a clipboard push go out the moment the session
 //!   is active, before any picture (the host is still starting); each session must stay up, show
 //!   pictures and take input afterwards, and is then ended.
 //! - `--check-providers`: each sign-in button (Mixel ID, Google, Microsoft, Apple) leads the browser to
@@ -583,6 +583,21 @@ async fn early(check: &mut Check, suffix: &str, folder: &std::path::Path, rounds
         if host == 0 {
             break;
         }
+        // The lab script restarts the app at the host (its first session is the slow one), then says go.
+        if file(&folder.join(format!("go-{round}.txt")), 300).await.is_none() {
+            check.check(&format!("round {round}: host restarted"), false, "no go file");
+            break;
+        }
+        let mut online = false;
+        for _ in 0..30 {
+            let _ = check.call("remote_presence", json!({ "hosts": [host] })).await;
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            if check.status().await["online"].as_array().is_some_and(|list| list.iter().any(|item| item.as_u64() == Some(host))) {
+                online = true;
+                break;
+            }
+        }
+        check.check(&format!("round {round}: host app restarted and online"), online, "");
         let request = check.call("remote_request", json!({ "host": host, "password": null, "unattended": false })).await;
         check.check(&format!("round {round}: attended request"), request.is_ok(), format!("{request:?}"));
         println!("WAITING for the person at the host to allow the session (round {round})");

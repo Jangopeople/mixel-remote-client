@@ -829,6 +829,12 @@ async fn host_media(
     // channels were set up): answer that before the capture starts.
     #[cfg(feature = "qa-session")]
     let setup = Instant::now();
+    // Lab builds only: a host that is slow to start (as a cold first session can be), to check
+    // that the technician's session survives inputs it answers late.
+    #[cfg(feature = "qa-session")]
+    if let Some(delay) = std::env::var("MIXEL_QA_SLOW_START_MS").ok().and_then(|value| value.parse::<u64>().ok()) {
+        tokio::time::sleep(Duration::from_millis(delay.min(10_000))).await;
+    }
     control.poll(config, channel).await?;
     let mut capture = session_platform::capture(
         &config.source,

@@ -3637,7 +3637,7 @@ dependencies = [
 
 [[package]]
 name = "mixel_remote_linux"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "async-channel",
  "gettext",
