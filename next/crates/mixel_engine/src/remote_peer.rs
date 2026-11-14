@@ -168,6 +168,14 @@ pub fn start(mut config: Config) -> Result<(), String> {
         {
             eprintln!("Login window media ended: {error}");
         }
+        // Lab builds only: why each session ended, with the time (both sides).
+        #[cfg(feature = "qa-session")]
+        eprintln!(
+            "QA session end {} host={} at {:?}: {result:?}",
+            config.session,
+            config.host,
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()
+        );
         config.session_cancel.store(true, Ordering::Release);
         let mut command = Command::Finished {
             session: config.session,
