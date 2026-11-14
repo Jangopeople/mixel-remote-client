@@ -5,6 +5,8 @@ Kotlin, Jetpack Compose and Material 3 in Mixel's own colours (dynamic colour of
 desktop app and the native Apple apps. App id `ch.mixel.remote` (2.0.0 replaced the Tauri phone app
 1.0.x, same upload key; 2.0.1 adds drawing on the remote screen, favorites and recent devices, session
 reports with notes and CSV/PDF export, and the optional note after a session).
+2.0.2 and 2.0.3 change the shared engine only (2.0.3: going online twice is not an error, sessions with a Mac, every
+waiting picture packet per turn).
 
 | Part | Where | What |
 |---|---|---|
