@@ -406,7 +406,8 @@ mod tests {
         // 60 kB at 500 kB a second, 10 kB of it at once: about 100 ms.
         let took = started.elapsed();
         assert!(took >= Duration::from_millis(80) && took < Duration::from_millis(600), "took {took:?}");
-        assert!(turns >= 10, "the session had {turns} turns");
+        // (A timed wait is a whole timer tick on Windows, about 15 ms: fewer, longer turns there.)
+        assert!(turns >= 4, "the session had {turns} turns");
         assert!(pacer.complete_sent.is_some());
     }
 
