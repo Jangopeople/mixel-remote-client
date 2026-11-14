@@ -26,6 +26,9 @@
 //!   sessions (default 5; before each the lab script restarts the host app and writes `<dir>/go-<n>.txt`) in which a key release and a clipboard push go out the moment the session
 //!   is active, before any picture (the host is still starting); each session must stay up, show
 //!   pictures and take input afterwards, and is then ended.
+//! - `--qa-live <session.json> <run> <dir> technician|host [last]`: the live session shared by every
+//!   app, run by the engine (`mixel_engine::qa_live`): early input and clipboard, pictures, input,
+//!   clipboard both ways, chat, drawing, end; `host` is the computer being helped. Lines in `<dir>/live.txt`.
 //! - `--check-providers`: each sign-in button (Mixel ID, Google, Microsoft, Apple) leads the browser to
 //!   that provider's own sign-in page; nothing is signed in (the attempt is cancelled).
 use crate::engine::{Engine, RealEngine};
@@ -531,6 +534,14 @@ pub fn run(args: &[String]) -> i32 {
             "--live-early" => {
                 let rounds = args.get(4).and_then(|text| text.parse().ok()).unwrap_or(5);
                 early(&mut check, suffix, &folder, rounds).await;
+            }
+            // The live session shared by every app, run by the engine itself (`mixel_engine::qa_live`).
+            "--qa-live" => {
+                let host = args.get(4).is_some_and(|role| role == "host");
+                let command = if host { "qa_live_host" } else { "qa_live_technician" };
+                let result = check.call(command, json!({ "suffix": suffix, "folder": folder.to_string_lossy(), "session_file": session, "delete_company": args.get(5).is_some_and(|word| word == "last") })).await;
+                let passed = result.as_ref().is_ok_and(|summary| summary["passed"] == summary["checks"]);
+                check.check(&format!("live session ({})", result.as_ref().map(|summary| summary["result"].as_str().unwrap_or_default().to_owned()).unwrap_or_default()), passed, format!("{result:?}"));
             }
             "--live-colleague" => colleague(&mut check, suffix, &folder).await,
             "--live-watch" => watch(&mut check, suffix, &folder).await,

@@ -397,6 +397,24 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
         }
         // ---- The connection and sessions ----
         "remote_status" => out(remote.status().await),
+        // LAB builds only: one live session as technician, the same on every system (`qa_live.rs`).
+        #[cfg(feature = "qa-session")]
+        "qa_live_technician" => out(Box::pin(crate::qa_live::technician(
+            context,
+            args.get("suffix")?,
+            args.get::<String>("folder")?.into(),
+            args.get::<Option<String>>("session_file")?.map(PathBuf::from),
+            args.get::<Option<bool>>("delete_company")?.unwrap_or(false),
+        ))
+        .await?),
+        #[cfg(all(feature = "qa-session", any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+        "qa_live_host" => out(Box::pin(crate::qa_live::host(
+            context,
+            args.get("suffix")?,
+            args.get::<String>("folder")?.into(),
+            args.get::<Option<String>>("session_file")?.map(PathBuf::from),
+        ))
+        .await?),
         "remote_register" => {
             if context.pending_removal().exists() {
                 return Err("This computer is being removed from Mixel Remote. It is removed as soon as it is online.".into());

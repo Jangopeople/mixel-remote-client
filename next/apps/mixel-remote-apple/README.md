@@ -29,7 +29,10 @@ Package tests on the iOS Simulator: move `MixelRemoteApple.xcodeproj` aside and 
 ## Live checks (LAB only)
 Debug Mac builds have `--live-check <qa-session.json> <run>` and `--live-session <qa-session.json> <run> <dir>`
 (needs `FEATURES=qa-session scripts/build-core.sh macos` and a throwaway QA account; never a real person).
-Also `--live-prepare` / `--live-identity` (the in-place update test 0.1.22 → 2.0, see the release README).
+`--live-technician <qa-session.json> <run> <dir> [last]` and `--live-be-host <qa-session.json> <run> <dir>` run the
+live session shared by every app (the engine's `qa_live_technician` / `qa_live_host`, `crates/mixel_engine/src/qa_live.rs`:
+early input and clipboard, pictures, input, clipboard both ways, chat, drawing, end); the host side only where screen
+recording is already allowed (it never asks). Also `--live-prepare` / `--live-identity` (the in-place update test 0.1.22 → 2.0, see the release README).
 Release builds contain none of them, and their core is built without `qa-session`. Remove the QA data and the
 `ch.mixel.remote.labtest.*` Keychain items afterwards.
 

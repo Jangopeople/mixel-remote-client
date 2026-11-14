@@ -109,6 +109,13 @@ class MainActivity : ComponentActivity(), Platform {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         val application = application as MixelRemoteApp
+        // LAB (debug builds only, core built with FEATURES=qa-session): `--es qa-live <run>` runs the
+        // live session shared by every app (the engine's `qa_live_technician`) instead of the screens.
+        val live = if (BuildConfig.DEBUG) intent.getStringExtra("qa-live") else null
+        if (live != null) {
+            qaLive(live, intent.getBooleanExtra("qa-live-last", false))
+            return
+        }
         demo = if (BuildConfig.DEBUG) intent.getStringExtra("demo") else null
         intent.getStringExtra("language")?.takeIf { BuildConfig.DEBUG }?.let { Translator.choice = it }
         val screen = demo
@@ -144,6 +151,27 @@ class MainActivity : ComponentActivity(), Platform {
             }
         }
         handle(intent)
+    }
+
+    /** LAB: the result lines are in `files/qa-live/live.txt`; the lab script writes the hand-shake files there. */
+    private fun qaLive(run: String, last: Boolean) {
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        val folder = File(filesDir, "qa-live").apply { mkdirs() }
+        var result by mutableStateOf("Mixel Remote live check $run")
+        setContent { MixelTheme { Surface(Modifier.fillMaxSize()) { Text(result, Modifier.padding(24.dp)) } } }
+        lifecycleScope.launch {
+            val args = org.json.JSONObject()
+                .put("suffix", run)
+                .put("folder", folder.absolutePath)
+                .put("session_file", File(noBackupFilesDir, "qa-session.json").absolutePath)
+                .put("delete_company", last)
+            result = try {
+                CoreEngine.create(applicationContext).call("qa_live_technician", args.toString())
+            } catch (error: Throwable) {
+                "FAIL ${message(error)}"
+            }
+            File(folder, "done.txt").writeText(result)
+        }
     }
 
     override fun onNewIntent(intent: Intent) {

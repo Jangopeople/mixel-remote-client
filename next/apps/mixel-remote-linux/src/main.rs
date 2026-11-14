@@ -97,7 +97,7 @@ fn main() {
             std::process::exit(screenshots::run(std::path::PathBuf::from(folder), &languages));
         }
         #[cfg(feature = "qa-session")]
-        Some("--live-check" | "--live-session" | "--live-host" | "--live-pair" | "--live-early" | "--live-colleague" | "--live-watch" | "--check-providers") => std::process::exit(live_check::run(&args[1..])),
+        Some("--live-check" | "--live-session" | "--live-host" | "--live-pair" | "--live-early" | "--live-colleague" | "--live-watch" | "--qa-live" | "--check-providers") => std::process::exit(live_check::run(&args[1..])),
         _ => {}
     }
     linux_guard::recover_stale();

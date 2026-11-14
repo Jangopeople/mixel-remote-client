@@ -42,7 +42,7 @@ scripts/build-deb.sh 2.0.0 <source-root> <out>     # the .deb and glibc.txt
 ```
 
 ## Live checks (LAB only, `--features qa-session`; release builds contain none of it)
-`--live-check`, `--live-session`, `--live-host`, `--live-pair` / `--live-colleague` (clipboard both ways with real
+`--qa-live … technician|host` (the live session shared by every app, run by the engine), `--live-check`, `--live-session`, `--live-host`, `--live-pair` / `--live-colleague` (clipboard both ways with real
 X clipboards, a second technician, switching sides), `--live-watch` and `--check-providers` run the engine against
 the live service with a throwaway QA account's session file (never a real person's), in an isolated HOME,
 D-Bus and keyring. See `src/live_check.rs`. Remove the QA account and its data afterwards.

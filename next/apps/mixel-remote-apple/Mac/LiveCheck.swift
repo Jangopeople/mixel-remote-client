@@ -33,6 +33,37 @@ enum LiveCheck {
         exit(failures == 0 ? 0 : 1)
     }
 
+    /// The engine's own live session (`qa_live.rs`), in this app's process: its result lines are in
+    /// `folder/live.txt` (the lab script follows that file and writes the hand-shake files).
+    static func technician(sessionFile: String, suffix: String, folder: String, last: Bool, command: String = "qa_live_technician") -> Never {
+        setenv("MIXEL_QA_SESSION_FILE", sessionFile, 1)
+        let done = DispatchSemaphore(value: 0)
+        nonisolated(unsafe) var passed = false
+        Task.detached {
+            if let engine = try? CoreEngine(dataDirectory: URL(fileURLWithPath: folder).appendingPathComponent("engine")) {
+                // Read only, never asks: whether this lab copy could also be the computer being helped.
+                print("screen recording permission for this lab copy: \(await call(engine, "screen_access"))")
+                let result = await call(engine, command, ["suffix": suffix, "folder": folder, "session_file": sessionFile, "delete_company": last])
+                if let summary = (try? result.get()) as? [String: Any] {
+                    passed = (summary["passed"] as? Int ?? 0) == (summary["checks"] as? Int ?? -1)
+                    print(summary["result"] as? String ?? "")
+                } else {
+                    print("FAIL \(result)")
+                }
+                try? await engine.shutdown()
+            } else {
+                print("FAIL engine starts")
+            }
+            done.signal()
+        }
+        // The main thread keeps serving AppKit meanwhile: a Mac being helped opens windows (the
+        // drawing overlay, the privacy screen) on it.
+        _ = NSApplication.shared
+        NSApp.setActivationPolicy(.accessory)
+        while done.wait(timeout: .now()) == .timedOut { RunLoop.main.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05)) }
+        exit(passed ? 0 : 1)
+    }
+
     static func json(_ text: String) -> Any? { try? JSONSerialization.jsonObject(with: Data(text.utf8), options: [.fragmentsAllowed]) }
 
     static func call(_ engine: CoreEngine, _ command: String, _ args: [String: Any] = [:]) async -> Result<Any?, Error> {

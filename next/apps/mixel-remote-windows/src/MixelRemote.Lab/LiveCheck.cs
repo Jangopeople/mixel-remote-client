@@ -38,7 +38,7 @@ public static class LiveCheck
         print = output;
         if (args.Length < 3)
         {
-            print("usage: check <qa-session.json> <suffix> | technician <qa-session.json> <suffix> <folder> [<host-id> <tenant>]");
+            print("usage: check <qa-session.json> <suffix> | technician <qa-session.json> <suffix> <folder> [<host-id> <tenant>] | live|live-host <qa-session.json> <suffix> <folder> [last]");
             return 2;
         }
         // "providers" checks the real browser sign-in (no QA session file).
@@ -60,6 +60,13 @@ public static class LiveCheck
                         var (_, deleteError) = await Try(engine, "saas_delete_company", ("tenant", row?["tenant_id"]?.GetValue<string>()), ("name", row?["name"]?.GetValue<string>()));
                         Check($"QA company {row?["name"]} deleted", deleteError.Length == 0, deleteError);
                     }
+                    break;
+                // The live session shared by every app (the engine's `qa_live_technician`): its lines are in
+                // <folder>\live.txt, the lab script writes the hand-shake files there. "last" deletes the QA company.
+                case "live" or "live-host":
+                    var (summary, liveError) = await Try(engine, args[0] == "live-host" ? "qa_live_host" : "qa_live_technician", ("suffix", args[2]), ("folder", folder), ("session_file", args[1]),
+                        ("delete_company", args.Length > 4 && args[4] == "last"));
+                    Check($"live session: {summary?["result"]}", liveError.Length == 0 && summary?["passed"]?.GetValue<int>() == summary?["checks"]?.GetValue<int>(), liveError);
                     break;
                 case "technician":
                     await Technician(engine, args[2], folder, args.Length > 5 && uint.TryParse(args[4], out var host) ? host : null, args.Length > 5 ? args[5] : null,

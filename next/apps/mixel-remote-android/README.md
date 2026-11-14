@@ -42,6 +42,10 @@ Copy the file to the app's `no_backup/qa-session.json` (`adb shell run-as ch.mix
 then sign in with it instead of the browser. Remove the QA company in the app, the login with
 `qa-account.py remove`, and rebuild the core without `qa-session` before any release build.
 
+`adb shell am start -n ch.mixel.remote/.MainActivity --es qa-live <run>` runs the live session shared by every app
+instead of the screens (the engine's `qa_live_technician`: early input and clipboard, pictures, input, clipboard both
+ways, chat, drawing, end); lines and hand-shake files in `files/qa-live` (`run-as ch.mixel.remote`).
+
 A host with the current engine for those checks (drawing needs a host that announces `draw`): build
 `cargo build --release -p mixel_engine --example lab_linux_host` on a Linux lab VM (Ubuntu 24.04 has the
 build libraries), then run it as root on an isolated X11 display — see the comment at the top of

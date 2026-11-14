@@ -24,6 +24,17 @@ enum Entry {
         if arguments.count >= 5, arguments[1] == "--live-session" {
             LiveCheck.run(sessionFile: arguments[2], suffix: arguments[3], sessionFolder: arguments[4])
         }
+        // `--live-technician <qa-session.json> <suffix> <folder> [last]`: the live session shared by every
+        // app (the engine's `qa_live_technician`): early input and clipboard, pictures, input, clipboard
+        // both ways, chat, drawing, end. `last` also deletes the QA company.
+        if arguments.count >= 5, arguments[1] == "--live-technician" {
+            LiveCheck.technician(sessionFile: arguments[2], suffix: arguments[3], folder: arguments[4], last: arguments.count > 5 && arguments[5] == "last")
+        }
+        // `--live-be-host <qa-session.json> <suffix> <folder>`: this Mac is the computer being helped (the
+        // engine's `qa_live_host`); only where screen recording is already allowed, it never asks.
+        if arguments.count >= 5, arguments[1] == "--live-be-host" {
+            LiveCheck.technician(sessionFile: arguments[2], suffix: arguments[3], folder: arguments[4], last: false, command: "qa_live_host")
+        }
         // `--live-providers`: every sign-in button reaches its provider's login page (no sign-in).
         if arguments.count >= 2, arguments[1] == "--live-providers" { LiveCheck.providers() }
         // `--live-prepare <qa-session.json> <suffix> <folder>`: QA company + deploy token for the update test.
