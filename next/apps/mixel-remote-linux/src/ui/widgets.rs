@@ -41,6 +41,7 @@ pub fn clear_below_title(body: &gtk::Box) {
 ///   alone until the next frame, when GTK moves the focus on. If the focus then lands on a
 ///   selectable label, GTK's label code frees the old widget and looks at it once more
 ///   ("gtk_widget_is_ancestor: assertion 'GTK_IS_WIDGET (widget)' failed").
+///
 /// Entries the person types into keep their focus through `keep_focus`.
 pub fn release(container: &impl IsA<gtk::Widget>) {
     let Some(window) = container.root().and_then(|root| root.downcast::<gtk::Window>().ok()) else { return };
