@@ -2207,6 +2207,10 @@ async fn run(
         let mut invitations:Vec<(Uuid,u32,bool,u64)>=Vec::new();
         let mut invite_pending=false;
         let mut switch_pressed:Option<(Uuid,std::time::Instant)>=None;
+        // When this computer last answered or gave up a request the connection service may have
+        // ended at the same moment (a colleague's request at its 90 s limit): the service then
+        // refuses that late answer, which must not end this connection and the running session.
+        let mut late_answer:Option<std::time::Instant>=None;
         let mut switch_memory:Option<SwitchMemory>=None;
     // Presence questions still waiting for their answer, oldest first: an answer speaks only for the IDs asked.
     let mut presence_asked: std::collections::VecDeque<Vec<u32>> = std::collections::VecDeque::new();
@@ -2224,6 +2228,7 @@ async fn run(
                         if !active.close_sent && active.cancel.load(Ordering::Acquire) && active.signals.is_none(){
                             let session=active.id;let reject=active.host && active.local_consent.is_none();peer=None;
                             state.change(generation,|status|{status.phase="ready".into();status.session=None;status.peer=None;status.requester=None;status.message="Invitation stopped locally; ready for a new connection".into();}).await;
+                            late_answer=Some(std::time::Instant::now());
                             send(&mut socket,if reject{ClientMessage::Decide{session,accept:false}}else{ClientMessage::Close{session}}).await?;continue;
                         }
                         let invitation_expired=!active.close_sent && active.signals.is_none() && ((active.local_consent.is_none() && active.accepted_at.is_none() && active.started_at.elapsed()>=core_protocol::session::CONSENT_LIFETIME) || active.accepted_at.is_some_and(|accepted|accepted.elapsed()>=core_protocol::session::NEGOTIATION_LIFETIME));
@@ -2250,7 +2255,7 @@ async fn run(
                             if let Some(index)=joined.iter().position(|colleague|colleague.id==session){
                                 let mut gone=joined.remove(index);
                                 let undecided=gone.local_consent.is_none();
-                                if gone.take_close(){send(&mut socket,if undecided{ClientMessage::Decide{session,accept:false}}else{ClientMessage::Close{session}}).await?;}
+                                if gone.take_close(){late_answer=Some(std::time::Instant::now());send(&mut socket,if undecided{ClientMessage::Decide{session,accept:false}}else{ClientMessage::Close{session}}).await?;}
                             }
                             let views=colleague_views(&joined);
                             state.change(generation,|status|{status.colleagues=views;if status.join_request.as_ref().is_some_and(|request|request.session==session){status.join_request=None;}}).await;
@@ -2338,7 +2343,7 @@ async fn run(
                         if let Some(index)=joined.iter().position(|colleague|colleague.id==session){
                             let mut gone=joined.remove(index);
                             let undecided=gone.local_consent.is_none();
-                            if gone.take_close(){send(&mut socket,if undecided{ClientMessage::Decide{session,accept:false}}else{ClientMessage::Close{session}}).await?;}
+                            if gone.take_close(){late_answer=Some(std::time::Instant::now());send(&mut socket,if undecided{ClientMessage::Decide{session,accept:false}}else{ClientMessage::Close{session}}).await?;}
                             let views=colleague_views(&joined);
                             state.change(generation,|status|status.colleagues=views).await;
                         }
@@ -2372,9 +2377,11 @@ async fn run(
                             let colleague=&mut joined[index];
                             colleague.local_consent=Some(true);colleague.accepted_at=Some(std::time::Instant::now());
                             colleague.source=source;colleague.confirm=confirm;colleague.control=control && confirm;
+                            late_answer=Some(std::time::Instant::now());
                             send(&mut socket,ClientMessage::Decide{session,accept:true}).await?;
                         } else {
                             let mut gone=joined.remove(index);gone.take_close();
+                            late_answer=Some(std::time::Instant::now());
                             send(&mut socket,ClientMessage::Decide{session,accept:false}).await?;
                         }
                         let views=colleague_views(&joined);
@@ -2717,6 +2724,9 @@ async fn run(
                             }
                             else if switch_pressed.take().is_some(){
                                 state.change(generation,|status|status.message=match code {ErrorCode::Busy=>"Sides cannot be switched while a colleague is connected",ErrorCode::Unavailable=>"The other side needs a newer Mixel Remote to switch sides",_=>"Sides could not be switched"}.into()).await;
+                            }
+                            else if code==ErrorCode::Forbidden && late_answer.take().is_some_and(|at|at.elapsed()<Duration::from_secs(15)){
+                                // The request had already ended at the connection service; nothing to undo.
                             }
                             else if code==ErrorCode::Invalid && capabilities_sent.elapsed()<Duration::from_secs(15) && peer.is_none(){
                                 // An older connection service: no colleagues, no switching sides.
