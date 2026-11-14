@@ -752,6 +752,58 @@ async fn pump_ice(config: &mut Config, transport: &mut NativeTransport) -> Resul
     Ok(())
 }
 
+/// Packets taken from the picture stream before the control channel is served again.
+const PACKETS_PER_TURN: u32 = 512;
+
+/// How long to wait for the next packet of a turn: the first may take a moment to come, the ones
+/// after it are only taken if they are already there (no timer, so no timer tick is lost).
+fn packet_wait(taken_this_turn: u32) -> Duration {
+    Duration::from_millis(if taken_this_turn <= 1 { 25 } else { 0 })
+}
+
+#[cfg(test)]
+mod packet_turn_tests {
+    use super::*;
+
+    /// A burst of packets that is already waiting is taken in one turn without any timed wait
+    /// (a timed wait costs about 15 ms on Windows): the turn's time does not grow with the burst.
+    #[tokio::test]
+    async fn waiting_packets_are_taken_in_one_turn_without_timed_waits() {
+        let (sender, mut waiting) = tokio::sync::mpsc::channel::<u32>(1024);
+        for number in 0..400 {
+            sender.send(number).await.unwrap();
+        }
+        let started = Instant::now();
+        let (mut taken, mut got) = (0u32, Vec::new());
+        while taken < PACKETS_PER_TURN {
+            taken += 1;
+            match tokio::time::timeout(packet_wait(taken), waiting.recv()).await {
+                Ok(Some(number)) => got.push(number),
+                Ok(None) => unreachable!("the sender is alive"),
+                Err(_) => break,
+            }
+        }
+        assert_eq!(got, (0..400).collect::<Vec<_>>(), "all of the burst, in order");
+        assert!(started.elapsed() < Duration::from_millis(200), "took {:?}", started.elapsed());
+        assert_eq!(packet_wait(1), Duration::from_millis(25));
+        assert!((2..=PACKETS_PER_TURN).all(|turn| packet_wait(turn).is_zero()));
+        // An endless stream cannot keep the control channel waiting: a turn is bounded.
+        for number in 0..2000 {
+            if sender.try_send(number).is_err() {
+                break;
+            }
+        }
+        let mut taken = 0u32;
+        while taken < PACKETS_PER_TURN {
+            taken += 1;
+            if tokio::time::timeout(packet_wait(taken), waiting.recv()).await.is_err() {
+                break;
+            }
+        }
+        assert_eq!(taken, PACKETS_PER_TURN);
+    }
+}
+
 struct EncodeRequest {
     frame: Arc<native_os_capture::stream::CapturedFrame>,
     timestamp: u64,
@@ -1169,6 +1221,13 @@ async fn viewer_media(
     let mut last = Instant::now();
     #[cfg(feature = "qa-session")]
     let mut qa_video = (0u32, Duration::ZERO, Duration::ZERO, Instant::now());
+    // Lab builds only: what arrived, for a session that ends without pictures.
+    #[cfg(feature = "qa-session")]
+    let mut qa_rtp = (0u64, 0u64, 0u64, 0u64, 0u64);
+    #[cfg(feature = "qa-session")]
+    let (mut qa_expected, mut qa_gaps, mut qa_late, mut qa_keys, mut qa_lost): (Option<u16>, u64, u64, u64, u64) = (None, 0, 0, 0, 0);
+    #[cfg(feature = "qa-session")]
+    let mut qa_jumps: Vec<String> = Vec::new();
     let (mut window_decodes, mut waiting_for_key) = (false, false);
     let mut player: Option<crate::remote_sound::Player> = None;
     let mut player_failed = false;
@@ -1202,143 +1261,190 @@ async fn viewer_media(
                 .as_ref()
                 .is_some_and(|scope| scope.needs_keyframe())
         {
+            #[cfg(feature = "qa-session")]
+            {
+                qa_rtp.3 += 1;
+            }
             control.request_keyframe(channel).await?;
         }
-        match tokio::time::timeout(Duration::from_millis(25), track.poll()).await {
-            Ok(Some(TrackRemoteEvent::OnRtpPacket(packet))) => {
-                if let Some(frame) = assembler
-                    .push(
-                        packet.header.sequence_number,
-                        packet.header.timestamp,
-                        packet.header.marker,
-                        &packet.payload,
-                    )
-                    .map_err(|error| error.to_string())?
-                {
-                    let rtp = packet.header.timestamp;
-                    if let Some(previous) = previous_rtp {
-                        timestamp_ticks = timestamp_ticks
-                            .checked_add(u64::from(rtp.wrapping_sub(previous)))
-                            .ok_or("Video timestamp exhausted")?;
-                    }
-                    previous_rtp = Some(rtp);
-                    let timestamp = timestamp_ticks
-                        .checked_mul(1_000_000)
-                        .ok_or("Video timestamp exhausted")?
-                        / 90_000;
-                    // The window decodes itself when it can (much faster for large pictures);
-                    // a recording needs the picture size, so it keeps the native decoder.
-                    let compressed = config.video.wants_compressed() && recording.is_none();
-                    if compressed != window_decodes {
-                        window_decodes = compressed;
-                        waiting_for_key = true;
-                        if !compressed {
-                            decoder = session_platform::H264Decoder::new(1920, 1920)
-                                .map_err(|error| error.to_string())?;
+        // Every packet that is already waiting is taken before the control channel gets its turn
+        // again. One packet a turn was too little: a turn costs the control channel's short wait,
+        // which is a whole timer tick on Windows (about 15 ms), so a Windows technician took about
+        // 64 packets a second. A computer that sends more (a Mac being helped, a moving full-HD
+        // picture) ran ahead, its keyframes came too late to be put together, and the session
+        // ended after 12 s ("Remote video delivery timed out").
+        let mut taken = 0u32;
+        while taken < PACKETS_PER_TURN {
+            taken += 1;
+            match tokio::time::timeout(packet_wait(taken), track.poll()).await {
+                Ok(Some(TrackRemoteEvent::OnRtpPacket(packet))) => {
+                    #[cfg(feature = "qa-session")]
+                    {
+                        qa_rtp.0 += 1;
+                        qa_rtp.1 += packet.payload.len() as u64;
+                        qa_rtp.4 += u64::from(packet.header.marker);
+                        if let Some(expected) = qa_expected {
+                            let delta = packet.header.sequence_number.wrapping_sub(expected);
+                            if delta >= 0x8000 {
+                                qa_late += 1;
+                            } else if delta != 0 {
+                                qa_gaps += 1;
+                                qa_lost += u64::from(delta);
+                            }
+                            if delta != 0 && qa_jumps.len() < 60 {
+                                qa_jumps.push(format!("{}ms #{} expected {expected} got {} ts {} {}b{}", last.elapsed().as_millis(), qa_rtp.0, packet.header.sequence_number, packet.header.timestamp, packet.payload.len(), if packet.header.marker { " end" } else { "" }));
+                            }
                         }
-                        control.request_keyframe(channel).await?;
+                        qa_expected = Some(packet.header.sequence_number.wrapping_add(1));
+                        let kind = packet.payload.first().map_or(0, |byte| byte & 0x1f);
+                        if kind == 5 || (kind == 28 && packet.payload.get(1).is_some_and(|byte| byte & 0x80 != 0 && byte & 0x1f == 5)) {
+                            qa_keys += 1;
+                        }
                     }
-                    if waiting_for_key || compressed {
-                        let key = native_os_capture::h264::annex_b_to_avcc(&frame)
-                            .map_err(|_| "Invalid remote video")?
-                            .keyframe;
-                        if waiting_for_key && !key {
+                    if let Some(frame) = assembler
+                        .push(
+                            packet.header.sequence_number,
+                            packet.header.timestamp,
+                            packet.header.marker,
+                            &packet.payload,
+                        )
+                        .map_err(|error| error.to_string())?
+                    {
+                        #[cfg(feature = "qa-session")]
+                        {
+                            qa_rtp.2 += 1;
+                        }
+                        let rtp = packet.header.timestamp;
+                        if let Some(previous) = previous_rtp {
+                            timestamp_ticks = timestamp_ticks
+                                .checked_add(u64::from(rtp.wrapping_sub(previous)))
+                                .ok_or("Video timestamp exhausted")?;
+                        }
+                        previous_rtp = Some(rtp);
+                        let timestamp = timestamp_ticks
+                            .checked_mul(1_000_000)
+                            .ok_or("Video timestamp exhausted")?
+                            / 90_000;
+                        // The window decodes itself when it can (much faster for large pictures);
+                        // a recording needs the picture size, so it keeps the native decoder.
+                        let compressed = config.video.wants_compressed() && recording.is_none();
+                        if compressed != window_decodes {
+                            window_decodes = compressed;
+                            waiting_for_key = true;
+                            if !compressed {
+                                decoder = session_platform::H264Decoder::new(1920, 1920)
+                                    .map_err(|error| error.to_string())?;
+                            }
+                            control.request_keyframe(channel).await?;
+                        }
+                        if waiting_for_key || compressed {
+                            let key = native_os_capture::h264::annex_b_to_avcc(&frame)
+                                .map_err(|_| "Invalid remote video")?
+                                .keyframe;
+                            if waiting_for_key && !key {
+                                control.request_keyframe(channel).await?;
+                                continue;
+                            }
+                            waiting_for_key = false;
+                            if compressed {
+                                received += 1;
+                                last = Instant::now();
+                                let packet = crate::remote_video::compressed_packet(config.session, received, timestamp, &frame, key)?;
+                                if !config.video.publish_compressed(packet)? {
+                                    waiting_for_key = true;
+                                    control.request_keyframe(channel).await?;
+                                }
+                                #[cfg(feature = "qa-session")]
+                                if let Some(path) = std::env::var_os("MIXEL_QA_VIDEO_LOG") {
+                                    qa_video.0 += 1;
+                                    if qa_video.3.elapsed() >= Duration::from_secs(1) {
+                                        let fetched = crate::remote_video::QA_FETCHED.swap(0, std::sync::atomic::Ordering::Relaxed);
+                                        let _ = std::fs::write(path, format!("window decodes: received/s={} fetched/s={fetched}", qa_video.0));
+                                        qa_video = (0, Duration::ZERO, Duration::ZERO, Instant::now());
+                                    }
+                                }
+                                if received.is_multiple_of(30) {
+                                    config
+                                        .state
+                                        .update_peer(config.generation, config.session, "Remote video decoded with hardware acceleration", received)
+                                        .await;
+                                }
+                                continue;
+                            }
+                        }
+                        #[cfg(feature = "qa-session")]
+                        let lap = Instant::now();
+                        let Some(decoded) = decoder
+                            .decode(&frame, timestamp)
+                            .map_err(|error| error.to_string())?
+                        else {
                             control.request_keyframe(channel).await?;
                             continue;
+                        };
+                        if config.stopped() {
+                            return Ok(());
                         }
-                        waiting_for_key = false;
-                        if compressed {
-                            received += 1;
-                            last = Instant::now();
-                            let packet = crate::remote_video::compressed_packet(config.session, received, timestamp, &frame, key)?;
-                            if !config.video.publish_compressed(packet)? {
-                                waiting_for_key = true;
-                                control.request_keyframe(channel).await?;
-                            }
-                            #[cfg(feature = "qa-session")]
-                            if let Some(path) = std::env::var_os("MIXEL_QA_VIDEO_LOG") {
-                                qa_video.0 += 1;
-                                if qa_video.3.elapsed() >= Duration::from_secs(1) {
-                                    let fetched = crate::remote_video::QA_FETCHED.swap(0, std::sync::atomic::Ordering::Relaxed);
-                                    let _ = std::fs::write(path, format!("window decodes: received/s={} fetched/s={fetched}", qa_video.0));
-                                    qa_video = (0, Duration::ZERO, Duration::ZERO, Instant::now());
-                                }
-                            }
-                            if received.is_multiple_of(30) {
-                                config
-                                    .state
-                                    .update_peer(config.generation, config.session, "Remote video decoded with hardware acceleration", received)
-                                    .await;
-                            }
-                            continue;
+                        if let Some(recording) = &recording {
+                            recording.submit(
+                                &frame,
+                                timestamp_ticks,
+                                (decoded.width() as u16, decoded.height() as u16),
+                            );
                         }
-                    }
-                    #[cfg(feature = "qa-session")]
-                    let lap = Instant::now();
-                    let Some(decoded) = decoder
-                        .decode(&frame, timestamp)
-                        .map_err(|error| error.to_string())?
-                    else {
-                        control.request_keyframe(channel).await?;
-                        continue;
-                    };
-                    if config.stopped() {
-                        return Ok(());
-                    }
-                    if let Some(recording) = &recording {
-                        recording.submit(
-                            &frame,
-                            timestamp_ticks,
-                            (decoded.width() as u16, decoded.height() as u16),
-                        );
-                    }
-                    received += 1;
-                    last = Instant::now();
-                    #[cfg(feature = "qa-session")]
-                    let (decode_time, lap) = (lap.elapsed(), Instant::now());
-                    config.video.publish(decoded_packet(
-                        config.session,
-                        received,
-                        timestamp,
-                        &decoded,
-                    )?)?;
-                    // Lab builds only: decode and hand-over time, and how many pictures the window fetched.
-                    #[cfg(feature = "qa-session")]
-                    if let Some(path) = std::env::var_os("MIXEL_QA_VIDEO_LOG") {
-                        qa_video.0 += 1;
-                        qa_video.1 += decode_time;
-                        qa_video.2 += lap.elapsed();
-                        if qa_video.3.elapsed() >= Duration::from_secs(1) {
-                            let n = f64::from(qa_video.0.max(1));
-                            let fetched = crate::remote_video::QA_FETCHED.swap(0, std::sync::atomic::Ordering::Relaxed);
-                            let _ = std::fs::write(path, format!(
-                                "decoded/s={} decode={:.1}ms pack={:.1}ms fetched/s={} size={}x{}",
-                                qa_video.0, qa_video.1.as_secs_f64() * 1000.0 / n, qa_video.2.as_secs_f64() * 1000.0 / n,
-                                fetched, decoded.width(), decoded.height()));
-                            qa_video = (0, Duration::ZERO, Duration::ZERO, Instant::now());
-                        }
-                    }
-                    config
-                        .state
-                        .update_peer(
-                            config.generation,
+                        received += 1;
+                        last = Instant::now();
+                        #[cfg(feature = "qa-session")]
+                        let (decode_time, lap) = (lap.elapsed(), Instant::now());
+                        config.video.publish(decoded_packet(
                             config.session,
-                            if decoder.hardware_active() {
-                                "Remote video decoded with hardware acceleration"
-                            } else {
-                                "Remote video decoded"
-                            },
                             received,
-                        )
-                        .await;
+                            timestamp,
+                            &decoded,
+                        )?)?;
+                        // Lab builds only: decode and hand-over time, and how many pictures the window fetched.
+                        #[cfg(feature = "qa-session")]
+                        if let Some(path) = std::env::var_os("MIXEL_QA_VIDEO_LOG") {
+                            qa_video.0 += 1;
+                            qa_video.1 += decode_time;
+                            qa_video.2 += lap.elapsed();
+                            if qa_video.3.elapsed() >= Duration::from_secs(1) {
+                                let n = f64::from(qa_video.0.max(1));
+                                let fetched = crate::remote_video::QA_FETCHED.swap(0, std::sync::atomic::Ordering::Relaxed);
+                                let _ = std::fs::write(path, format!(
+                                    "decoded/s={} decode={:.1}ms pack={:.1}ms fetched/s={} size={}x{}",
+                                    qa_video.0, qa_video.1.as_secs_f64() * 1000.0 / n, qa_video.2.as_secs_f64() * 1000.0 / n,
+                                    fetched, decoded.width(), decoded.height()));
+                                qa_video = (0, Duration::ZERO, Duration::ZERO, Instant::now());
+                            }
+                        }
+                        config
+                            .state
+                            .update_peer(
+                                config.generation,
+                                config.session,
+                                if decoder.hardware_active() {
+                                    "Remote video decoded with hardware acceleration"
+                                } else {
+                                    "Remote video decoded"
+                                },
+                                received,
+                            )
+                            .await;
+                    }
                 }
+                Ok(None) => return Err("Remote video transport closed".into()),
+                Ok(Some(_)) => {}
+                // Nothing more is waiting.
+                Err(_) => break,
             }
-            Ok(None) => return Err("Remote video transport closed".into()),
-            _ => {}
         }
         if last.elapsed() > Duration::from_secs(12)
             && control.last_video_idle.elapsed() > Duration::from_secs(12)
         {
+            #[cfg(feature = "qa-session")]
+            eprintln!("QA video timed out: {} RTP packets ({} bytes, {} with the end mark), {} pictures assembled, {} decoded, {} keyframe requests; {qa_keys} keyframe slices begun, {qa_gaps} gaps in the numbering ({qa_lost} numbers missing), {qa_late} packets late", qa_rtp.0, qa_rtp.1, qa_rtp.4, qa_rtp.2, received, qa_rtp.3);
+            #[cfg(feature = "qa-session")]
+            eprintln!("QA video jumps: {}", qa_jumps.join(" | "));
             return Err("Remote video delivery timed out".into());
         }
     }

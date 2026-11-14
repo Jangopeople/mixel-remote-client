@@ -347,3 +347,38 @@ pub use webrtc::peer_connection::RTCIceServer as NativeIceServer;
 pub use webrtc::peer_connection::{
     RTCIceCandidateInit as NativeIceCandidate, RTCSessionDescription as NativeSessionDescription,
 };
+
+/// The connection's UDP sockets get a large receive buffer (vendor/webrtc/MIXEL-PATCHES.md).
+#[cfg(test)]
+mod receive_buffer_tests {
+    use std::time::Duration;
+    use webrtc::peer_connection::{UDP_RECEIVE_BUFFER, enlarge_receive_buffer};
+
+    /// A burst that is complete before the reader gets to it (as a keyframe on a local network)
+    /// is kept: with the system's default buffer Windows kept 64 KiB of it.
+    #[test]
+    fn a_keyframe_sized_burst_waiting_in_the_socket_is_not_dropped() {
+        let receiver = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let granted = enlarge_receive_buffer(&receiver);
+        // Linux doubles the value it reports and caps the request at net.core.rmem_max.
+        let room = if cfg!(target_os = "linux") { granted / 2 } else { granted };
+        if cfg!(any(target_os = "windows", target_os = "macos")) {
+            assert!(room >= UDP_RECEIVE_BUFFER, "the system granted {room} bytes");
+        }
+        assert!(room >= 64 * 1024, "the system granted {room} bytes");
+        // 1200-byte packets worth half the room (the systems count some overhead per packet).
+        let count = (room / 2 / 1200).min(1500);
+        let sender = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let packet = [7u8; 1200];
+        for _ in 0..count {
+            sender.send_to(&packet, receiver.local_addr().unwrap()).unwrap();
+        }
+        std::thread::sleep(Duration::from_millis(200));
+        receiver.set_read_timeout(Some(Duration::from_millis(300))).unwrap();
+        let (mut received, mut buffer) = (0, [0u8; 1500]);
+        while receiver.recv_from(&mut buffer).is_ok() {
+            received += 1;
+        }
+        assert_eq!(received, count, "of a burst of {count} packets ({} bytes) into {room} bytes", count * 1200);
+    }
+}

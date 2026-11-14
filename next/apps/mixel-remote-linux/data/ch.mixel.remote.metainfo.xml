@@ -11,6 +11,6 @@
   <description>
     <p>Connect to your company's computers and phones, or let a technician help on this computer, with consent for every session.</p>
   </description>
-  <releases><release version="2.0.1" date="2026-11-13"><description><p>Session reports can be exported as PDF. Clipboard, a second technician and switching sides verified between two Linux computers.</p></description></release><release version="2.0.0" date="2026-11-13"><description><p>The native Linux app (GTK 4 and libadwaita).</p></description></release></releases>
+  <releases><release version="2.0.3" date="2026-11-14"><description><p>After "Add this computer" no wrong "already registered" message any more. A Mac can be helped from Linux (its picture no longer ends the session); pictures arrive faster.</p></description></release><release version="2.0.2" date="2026-11-14"><description><p>A slow or late answer to an input or the clipboard no longer ends the session.</p></description></release><release version="2.0.1" date="2026-11-13"><description><p>Session reports can be exported as PDF. Clipboard, a second technician and switching sides verified between two Linux computers.</p></description></release><release version="2.0.0" date="2026-11-13"><description><p>The native Linux app (GTK 4 and libadwaita).</p></description></release></releases>
   <content_rating type="oars-1.1"/>
 </component>

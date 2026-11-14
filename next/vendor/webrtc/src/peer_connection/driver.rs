@@ -660,6 +660,8 @@ where
                 }
             };
             socket.set_nonblocking(true)?;
+            // MIXEL (see MIXEL-PATCHES.md): room for a whole keyframe burst.
+            enlarge_receive_buffer(&socket);
             let local_addr = socket.local_addr()?;
             self.udp_sockets
                 .insert(local_addr, runtime.wrap_udp_socket(socket)?);
@@ -2191,6 +2193,21 @@ where
         core.handle_timeout(now)?;
         Ok(())
     }
+}
+
+/// MIXEL: the receive buffer asked for on every UDP socket of a connection.
+pub const UDP_RECEIVE_BUFFER: usize = 4 << 20;
+
+/// MIXEL: a keyframe of a full-HD screen arrives as one burst of several hundred packets (a Mac
+/// being helped: up to more than a megabyte). Windows keeps 64 KiB per UDP socket by default and
+/// drops the rest of the burst without counting it anywhere, so the keyframe never arrived whole,
+/// the next one was asked for every second, and the session ended ("Remote video delivery timed
+/// out"). Asks the system for [`UDP_RECEIVE_BUFFER`] (it may grant less: Linux caps it at
+/// `net.core.rmem_max`); returns what the socket has afterwards. Never fails the connection.
+pub fn enlarge_receive_buffer(socket: &std::net::UdpSocket) -> usize {
+    let socket = socket2::SockRef::from(socket);
+    let _ = socket.set_recv_buffer_size(UDP_RECEIVE_BUFFER);
+    socket.recv_buffer_size().unwrap_or(0)
 }
 
 #[cfg(test)]

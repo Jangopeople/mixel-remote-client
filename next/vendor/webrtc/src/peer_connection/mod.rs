@@ -50,6 +50,8 @@
 //! ```
 
 pub(crate) mod driver;
+// MIXEL (see MIXEL-PATCHES.md): the receive buffer of the connection's UDP sockets.
+pub use driver::{UDP_RECEIVE_BUFFER, enlarge_receive_buffer};
 pub mod transport;
 
 use crate::peer_connection::transport::{SctpTransport, SctpTransportImpl};

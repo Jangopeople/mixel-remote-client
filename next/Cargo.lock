@@ -3637,7 +3637,7 @@ dependencies = [
 
 [[package]]
 name = "mixel_remote_linux"
-version = "2.0.2"
+version = "2.0.3"
 dependencies = [
  "async-channel",
  "gettext",
@@ -7593,6 +7593,7 @@ dependencies = [
  "log",
  "quinn-udp 0.6.3",
  "rtc",
+ "socket2",
  "tokio",
 ]
 
