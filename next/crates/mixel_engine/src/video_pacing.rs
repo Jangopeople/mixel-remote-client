@@ -14,10 +14,13 @@
 //!
 //! The pace: a bucket that fills at `rate` bytes a second and holds [`BURST`] worth of it. Small
 //! pictures (nearly all of them) fit into what the bucket holds and go out at once, as before. The
-//! rate starts at [`START_RATE`], doubles with every complete picture that arrived (no request for
-//! another one followed it) up to [`MAX_RATE`], and is cut to a third when a complete picture did
-//! not arrive (a request came well after it was sent). The rate at which a picture was lost is
-//! remembered as a ceiling, approached again only slowly.
+//! rate starts low, at [`START_RATE`]: nothing is known about the connection yet, and a first
+//! picture that floods a slow link takes other packets of the session with it. With every
+//! complete picture that arrived (no request for another one followed it) the rate is multiplied
+//! by four, up to [`MAX_RATE`]; on a fast connection that is reached with the third. When a
+//! complete picture did not arrive (a request came well after it was sent) the rate is cut to a
+//! third; from then on it only doubles, and the rate at which a picture was lost is remembered as
+//! a ceiling that is approached again only slowly.
 //!
 //! What this does not do: it does not make the pictures smaller. A link slower than the pictures
 //! themselves (the encoder aims at 3 to 6 Mbit/s while the screen moves) stays too slow; the
@@ -25,8 +28,10 @@
 //! Measured in the lab on a 2 Mbit/s link to the relay: see the release notes of 2.0.4.
 use std::time::{Duration, Instant};
 
-/// Bytes a second on a connection nothing is known about yet (16 Mbit/s).
-pub const START_RATE: f64 = 2_000_000.0;
+/// Bytes a second on a connection nothing is known about yet (4 Mbit/s). The first complete
+/// picture of a session takes that long: 40 kB (a Windows or Linux desktop) 60 ms, 300 kB half a
+/// second.
+pub const START_RATE: f64 = 500_000.0;
 /// The fastest pace (96 Mbit/s): a megabyte takes 83 ms, 150 kB go out at once.
 pub const MAX_RATE: f64 = 12_000_000.0;
 /// The slowest pace (1 Mbit/s). A connection slower than this cannot carry the picture stream.
@@ -40,9 +45,9 @@ pub const PICTURE_LIMIT: Duration = Duration::from_millis(1200);
 /// A request for a complete picture this long after one was sent means that one did not arrive.
 /// Requests that come sooner were under way when it was sent.
 pub const GRACE: Duration = Duration::from_millis(500);
-/// A complete picture arrived when no request followed it for this long. The technician's side
-/// asks at most once a second while it has no picture, so two of its requests would have come.
-pub const CONFIRM: Duration = Duration::from_millis(2200);
+/// A complete picture arrived when no request followed it for this long: the technician's side
+/// asks once a second while it has no picture, and at once when a picture it had is damaged.
+pub const CONFIRM: Duration = Duration::from_millis(1500);
 /// How long after a loss the pace stays below the rate that lost a picture.
 pub const PROBE_AFTER: Duration = Duration::from_secs(20);
 
@@ -59,6 +64,8 @@ pub struct Pacer {
     complete_sent: Option<Instant>,
     latest_complete: Option<Instant>,
     last_loss: Option<Instant>,
+    /// No complete picture was lost yet: the rate grows fourfold instead of twofold.
+    untroubled: bool,
 }
 
 impl Pacer {
@@ -72,6 +79,7 @@ impl Pacer {
             complete_sent: None,
             latest_complete: None,
             last_loss: None,
+            untroubled: true,
         }
     }
     /// Bytes a second at the moment.
@@ -87,7 +95,7 @@ impl Pacer {
             // judged next.
             self.complete_sent = self.latest_complete.filter(|latest| *latest > sent);
             if self.rate < self.ceiling {
-                self.rate = (self.rate * 2.0).min(self.ceiling);
+                self.rate = (self.rate * if self.untroubled { 4.0 } else { 2.0 }).min(self.ceiling);
             } else if self.ceiling < MAX_RATE
                 && self.last_loss.is_none_or(|loss| now.saturating_duration_since(loss) >= PROBE_AFTER)
             {
@@ -126,6 +134,7 @@ impl Pacer {
         self.complete_sent = None;
         self.latest_complete = None;
         self.last_loss = Some(now);
+        self.untroubled = false;
         self.ceiling = (self.rate * 0.75).max(MIN_RATE);
         self.rate = (self.rate / 3.0).max(MIN_RATE);
     }
@@ -223,10 +232,10 @@ mod tests {
     fn a_complete_picture_is_spread_and_not_sent_in_one_burst() {
         let mut now = Instant::now();
         let mut pacer = Pacer::new(now);
-        // 300 kB at the starting pace of 2 MB a second: about 130 ms, not one burst.
+        // 300 kB at the starting pace of 500 kB a second: about 0.6 s, not one burst.
         let left = send(&mut pacer, &mut now, 300_000, true);
         let took = *left.last().unwrap();
-        assert!((0.12..0.16).contains(&took), "took {took}");
+        assert!((0.55..0.62).contains(&took), "took {took}");
         // In any 20 ms no more than the bucket holds plus what flows in meanwhile.
         let most = most_within(&left, BURST.as_secs_f64());
         assert!(most <= 2 * (START_RATE * BURST.as_secs_f64()) as usize + PACKET, "{most} bytes within 20 ms");
@@ -239,11 +248,13 @@ mod tests {
     fn a_fast_connection_is_not_slowed_noticeably() {
         let mut now = Instant::now();
         let mut pacer = Pacer::new(now);
-        // The first complete picture, before anything is known: 150 kB within 70 ms.
+        // The first complete picture, before anything is known: 40 kB (a Windows or Linux
+        // desktop) within 70 ms, 150 kB within 0.3 s. Once per session.
+        assert!(*send(&mut Pacer::new(now), &mut now.clone(), 40_000, true).last().unwrap() < 0.07);
         let first = *send(&mut pacer, &mut now, 150_000, true).last().unwrap();
-        assert!(first < 0.07, "first picture took {first}");
-        // Each complete picture that arrives doubles the pace: 2, 4, 8, 12 MB a second.
-        for expected in [4_000_000.0, 8_000_000.0, MAX_RATE, MAX_RATE] {
+        assert!(first < 0.3, "first picture took {first}");
+        // Each complete picture that arrives multiplies the pace by four: 2, 8, 12 MB a second.
+        for expected in [2_000_000.0, 8_000_000.0, MAX_RATE, MAX_RATE] {
             now += Duration::from_secs(3);
             send(&mut pacer, &mut now, 150_000, true);
             assert_eq!(pacer.rate(), expected);
@@ -268,7 +279,7 @@ mod tests {
             pacer.complete_picture_requested(now);
             rates.push(pacer.rate() as u64);
         }
-        assert_eq!(rates, [666_666, 222_222, 125_000, 125_000, 125_000]);
+        assert_eq!(rates, [166_666, 125_000, 125_000, 125_000, 125_000]);
         // At the floor the same picture takes about a second and never floods: 2.5 kB in 20 ms.
         let left = send(&mut pacer, &mut now, 120_000, true);
         let took = *left.last().unwrap();
@@ -293,7 +304,7 @@ mod tests {
         pacer.complete_picture_requested(now);
         now += Duration::from_secs(1);
         pacer.complete_picture_requested(now);
-        assert_eq!(pacer.rate() as u64, 666_666);
+        assert_eq!(pacer.rate() as u64, 166_666);
     }
 
     #[test]
@@ -302,7 +313,7 @@ mod tests {
         let mut pacer = Pacer::new(now);
         send(&mut pacer, &mut now, 120_000, true);
         now += Duration::from_secs(1);
-        pacer.complete_picture_requested(now); // lost at 2 MB/s: now 667 kB/s, ceiling 1.5 MB/s
+        pacer.complete_picture_requested(now); // lost at 500 kB/s: now 167 kB/s, ceiling 375 kB/s
         let lost_at = now;
         let mut rates = Vec::new();
         for _ in 0..4 {
@@ -311,23 +322,25 @@ mod tests {
             pacer.begin(now, 1_000);
             rates.push(pacer.rate() as u64);
         }
-        assert_eq!(rates, [1_333_333, 1_500_000, 1_500_000, 1_500_000]);
+        // After a loss the pace doubles (no longer fourfold) up to the ceiling.
+        assert_eq!(rates, [333_333, 375_000, 375_000, 375_000]);
         assert!(now.duration_since(lost_at) < PROBE_AFTER);
         // Twenty seconds after the loss the pace tries a quarter more.
         now = lost_at + PROBE_AFTER;
         send(&mut pacer, &mut now, 120_000, true);
         now += Duration::from_secs(3);
         pacer.begin(now, 1_000);
-        assert_eq!(pacer.rate() as u64, 1_875_000);
+        assert_eq!(pacer.rate() as u64, 468_750);
     }
 
     #[test]
     fn a_technician_that_asks_once_a_second_is_heard_every_time() {
-        // The technician's side asks for a complete picture at most once a second. The host
-        // takes requests half a second apart (a full second here missed every other one), and
-        // a complete picture counts as arrived only after two such requests would have come.
+        // The technician's side asks for a complete picture once a second while it has none. The
+        // host takes requests half a second apart (a full second here missed every other one),
+        // so a complete picture counts as arrived when the next request stays away, and before
+        // the next complete picture of a moving screen (two seconds later) is due.
         assert!(crate::remote_control::ControlPipe::keyframe_request_spacing() <= Duration::from_millis(900));
-        assert!(CONFIRM > Duration::from_secs(2));
+        assert!(CONFIRM > Duration::from_secs(1) + GRACE / 2 && CONFIRM < Duration::from_secs(2));
         assert!(GRACE < Duration::from_secs(1));
     }
 
@@ -346,7 +359,7 @@ mod tests {
             }
             rates.push(pacer.rate() as u64 / 1000);
         }
-        assert_eq!(rates, [2000, 2000, 4000, 4000, 8000, 8000, 12000, 12000, 12000, 12000, 12000, 12000]);
+        assert_eq!(rates, [500, 2000, 2000, 8000, 8000, 12000, 12000, 12000, 12000, 12000, 12000, 12000]);
         // And one that is lost among them is noticed: the request comes a second after it.
         send(&mut pacer, &mut now, 30_000, true);
         now += Duration::from_secs(1);
