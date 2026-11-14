@@ -6,7 +6,8 @@ desktop app and the native Apple apps. App id `ch.mixel.remote` (2.0.0 replaced 
 1.0.x, same upload key; 2.0.1 adds drawing on the remote screen, favorites and recent devices, session
 reports with notes and CSV/PDF export, and the optional note after a session).
 2.0.2 and 2.0.3 change the shared engine only (2.0.3: going online twice is not an error, sessions with a Mac, every
-waiting picture packet per turn).
+waiting picture packet per turn). 2.0.4, again the engine only: the control channel (input, clipboard, chat) gets its
+turn after every picture, so it no longer waits while the picture moves on a slow phone.
 
 | Part | Where | What |
 |---|---|---|
@@ -47,6 +48,9 @@ then sign in with it instead of the browser. Remove the QA company in the app, t
 `adb shell am start -n ch.mixel.remote/.MainActivity --es qa-live <run>` runs the live session shared by every app
 instead of the screens (the engine's `qa_live_technician`: early input and clipboard, pictures, input, clipboard both
 ways, chat, drawing, end); lines and hand-shake files in `files/qa-live` (`run-as ch.mixel.remote`).
+With `load-wanted.txt` in that folder the technician also times input, clipboard and chat while the host's picture
+keeps moving (the lab script moves it and writes `load-on.txt`). An unoptimized engine
+(`FEATURES=qa-session scripts/build-core.sh debug arm64-v8a`) stands in for a phone that is slow at showing pictures.
 
 A host with the current engine for those checks (drawing needs a host that announces `draw`): build
 `cargo build --release -p mixel_engine --example lab_linux_host` on a Linux lab VM (Ubuntu 24.04 has the
