@@ -65,6 +65,8 @@ pub mod remote_recovery;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios", target_os = "android"))]
 pub mod remote_session;
 pub mod remote_sound;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios", target_os = "android"))]
+pub mod video_pacing;
 #[cfg(target_os = "macos")]
 pub mod macos_startup_host;
 #[cfg(target_os = "macos")]

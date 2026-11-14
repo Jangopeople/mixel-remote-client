@@ -11,9 +11,37 @@ use webrtc::{
         MediaEngine, PeerConnection, PeerConnectionBuilder, PeerConnectionEventHandler,
         RTCConfigurationBuilder, RTCIceCandidateInit, RTCIceGatheringState, RTCIceServer,
         RTCIceTransportPolicy, RTCPeerConnectionIceEvent, RTCPeerConnectionState,
-        RTCSessionDescription, Registry, register_default_interceptors,
+        RTCSessionDescription, Registry,
     },
 };
+
+/// What the media stack does on its own for every stream: receiver and sender reports and the
+/// receiver's arrival feedback, as before. Left out on purpose: sending lost packets again on
+/// request (NACK), which the stack's default set includes.
+///
+/// The side that shows the pictures takes a gap in the packet numbering for a damaged picture at
+/// once and asks for a complete one; a packet that arrives later with an old number is dropped
+/// (`H264Assembler`). So a packet sent again was never used, by any version. It only cost: on a
+/// link that had just dropped part of a burst, every missing packet was asked for again and again
+/// and sent again each time, unpaced. Measured on a 2 Mbit/s link: about 460 kB of pictures in
+/// twelve seconds and 20 MB of repeats on top, which left no room for the next complete picture;
+/// the session ended with "Remote video delivery timed out".
+///
+/// Without it this side neither asks for repeats nor answers such a request, and its session
+/// description no longer offers them. Apps published earlier still ask; nothing answers.
+fn interceptors(media_engine: &mut MediaEngine) -> Result<Registry, webrtc::error::Error> {
+    use rtc::peer_connection::configuration::interceptor_registry::{
+        configure_rtcp_reports, configure_simulcast_extension_headers, configure_twcc_receiver_only,
+    };
+    // Lab builds only: the stack's default set (with repeats), to measure against.
+    #[cfg(feature = "qa-session")]
+    if std::env::var_os("MIXEL_QA_UNPACED").is_some() {
+        return webrtc::peer_connection::register_default_interceptors(Registry::new(), media_engine);
+    }
+    configure_simulcast_extension_headers(media_engine)?;
+    let registry = configure_twcc_receiver_only(Registry::new(), media_engine)?;
+    Ok(configure_rtcp_reports(registry))
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum TransportError {
@@ -179,7 +207,7 @@ impl NativeTransport {
         });
         let mut media_engine = MediaEngine::default();
         media_engine.register_default_codecs()?;
-        let registry = register_default_interceptors(Registry::new(), &mut media_engine)?;
+        let registry = interceptors(&mut media_engine)?;
         let builder = PeerConnectionBuilder::new()
             .with_media_engine(media_engine)
             .with_interceptor_registry(registry)
@@ -380,5 +408,40 @@ mod receive_buffer_tests {
             received += 1;
         }
         assert_eq!(received, count, "of a burst of {count} packets ({} bytes) into {room} bytes", count * 1200);
+    }
+}
+
+#[cfg(test)]
+mod repeat_tests {
+    use super::*;
+
+    /// The media stack is set up without the two parts that send lost packets again on request
+    /// (the one that asks, the one that answers): the receiving side never used a repeat, and on
+    /// a slow link the repeats multiplied the load. Reports and arrival feedback stay.
+    #[test]
+    fn lost_packets_are_neither_asked_for_nor_sent_again() {
+        let mut media_engine = MediaEngine::default();
+        let names: Vec<String> = interceptors(&mut media_engine).unwrap().slots().into_iter().map(|(_, name)| name).collect();
+        assert_eq!(names, ["TwccReceiverInterceptor", "ReceiverReportInterceptor", "SenderReportInterceptor"]);
+        // The stack's own default set, for comparison: it has both parts.
+        let mut media_engine = MediaEngine::default();
+        let default: Vec<String> = webrtc::peer_connection::register_default_interceptors(Registry::new(), &mut media_engine).unwrap().slots().into_iter().map(|(_, name)| name).collect();
+        assert!(default.iter().any(|name| name == "NackResponderInterceptor") && default.iter().any(|name| name == "NackGeneratorInterceptor"), "{default:?}");
+    }
+
+    /// An app published earlier still offers the picture stream as before (its list of formats
+    /// names NACK): the offer is accepted and answered with the same picture format.
+    #[tokio::test]
+    async fn an_earlier_apps_offer_is_still_answered() {
+        let host = NativeTransport::new("127.0.0.1:0".into(), vec![]).await.unwrap();
+        let _pictures = crate::media::H264VideoSender::new(&host, 640, 420, 30).await.unwrap();
+        let offer = host.peer.create_offer(None).await.unwrap();
+        assert!(offer.sdp.contains("H264/90000") && offer.sdp.contains(" nack"), "{}", offer.sdp);
+        let technician = NativeTransport::new("127.0.0.1:0".into(), vec![]).await.unwrap();
+        technician.receive_video().await.unwrap();
+        technician.peer.set_remote_description(offer).await.unwrap();
+        assert!(technician.peer.create_answer(None).await.unwrap().sdp.contains("H264/90000"));
+        host.close().await.unwrap();
+        technician.close().await.unwrap();
     }
 }

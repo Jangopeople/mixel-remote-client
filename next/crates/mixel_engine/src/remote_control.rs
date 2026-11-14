@@ -17,6 +17,8 @@ use std::{
 use tokio::sync::mpsc;
 use zeroize::Zeroizing;
 
+/// Host: requests for a complete picture closer together than this are one request.
+const KEYFRAME_REQUEST_SPACING: Duration = Duration::from_millis(500);
 const PERMISSIONS_V3: &[u8] = b"mixel-permissions-v3";
 const PERMISSIONS_V4: &[u8] = b"mixel-permissions-v4";
 /// Controller to host: show display N (one byte). Sent only to hosts that offered switching.
@@ -673,8 +675,18 @@ impl ControlPipe {
         }
         Ok(())
     }
+    /// Host: the next request for a complete picture is taken this long after the last one.
+    #[cfg(test)]
+    pub(crate) const fn keyframe_request_spacing() -> Duration {
+        KEYFRAME_REQUEST_SPACING
+    }
     pub fn take_keyframe_request(&mut self) -> bool {
         std::mem::take(&mut self.force_keyframe)
+    }
+    /// Host: a complete picture has just left. Requests for one that arrived before this moment
+    /// are answered by it. (A display switch asked for meanwhile restarts the stream by itself.)
+    pub fn complete_picture_sent(&mut self) {
+        self.force_keyframe = false;
     }
     pub async fn request_keyframe(
         &mut self,
@@ -821,9 +833,13 @@ impl ControlPipe {
             };
         }
         if plain.as_slice() == b"mixel-video-keyframe-v1" {
+            // The technician's side asks at most once a second. Waiting a full second here as
+            // well dropped every request that came a few milliseconds early, so a technician
+            // without a picture got one only every other second; half a second still bounds a
+            // flood of requests.
             if self
                 .last_keyframe_request
-                .is_none_or(|last| last.elapsed() >= Duration::from_secs(1))
+                .is_none_or(|last| last.elapsed() >= KEYFRAME_REQUEST_SPACING)
             {
                 self.force_keyframe = true;
                 self.last_keyframe_request = Some(Instant::now());

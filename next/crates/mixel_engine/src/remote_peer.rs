@@ -923,11 +923,14 @@ async fn host_media(
         let mut print_checked = Instant::now();
         #[cfg(feature = "qa-session")]
         let mut qa_video = (0u32, Duration::ZERO, Duration::ZERO, Duration::ZERO, 0usize, Instant::now());
+        #[cfg(feature = "qa-session")]
+        let mut qa_keys = (0u32, 0usize);
         // Colleagues who join this session see these same pictures.
         let mirror = crate::session_mirror::publish();
         // Remote sound: what this computer plays, while the technician wants to hear it.
         let mut sound: Option<crate::remote_sound::Capture> = None;
         let mut sound_failed = false;
+        let mut pacer = crate::video_pacing::Pacer::new(Instant::now());
         while !config.stopped() {
             if control.sound_wanted() {
                 if sound.is_none() && !sound_failed {
@@ -999,7 +1002,11 @@ async fn host_media(
                 recent = None;
                 retry_encode = true;
             }
-            let force_keyframe = control.take_keyframe_request() || mirror.take_keyframe_request() || retry_encode;
+            let requested = control.take_keyframe_request();
+            if requested {
+                pacer.complete_picture_requested(Instant::now());
+            }
+            let force_keyframe = requested || mirror.take_keyframe_request() || retry_encode;
             #[cfg(feature = "qa-session")]
             let lap = Instant::now();
             let frame = match session_platform::frames(&capture).next(
@@ -1078,10 +1085,9 @@ async fn host_media(
                 .elapsed()
                 .clamp(Duration::from_micros(1), Duration::from_secs(2));
             last = Instant::now();
-            sender
-                .send(consent, &encoded.annex_b, duration)
-                .await
-                .map_err(|error| error.to_string())?;
+            if !send_picture(&sender, &mut pacer, consent, &encoded.annex_b, duration, config, transport, control, channel).await? {
+                break;
+            }
             mirror.send(&encoded.annex_b, duration);
             sent += 1;
             // Lab builds only: how long the host took to start (capture, first picture).
@@ -1099,13 +1105,24 @@ async fn host_media(
                 qa_video.2 += encode_time;
                 qa_video.3 += lap.elapsed();
                 qa_video.4 += bytes;
+                qa_keys.0 += u32::from(crate::session_mirror::is_keyframe(&encoded.annex_b));
+                qa_keys.1 = qa_keys.1.max(bytes);
                 if qa_video.5.elapsed() >= Duration::from_secs(1) {
                     let n = qa_video.0.max(1) as f64;
-                    let _ = std::fs::write(path, format!(
-                        "sent/s={} capture={:.1}ms encode={:.1}ms send={:.1}ms kB={:.0} size={}x{}",
+                    let line = format!(
+                        "sent/s={} capture={:.1}ms encode={:.1}ms send={:.1}ms kB={:.0} size={}x{} pace={:.0}kB/s",
                         qa_video.0, qa_video.1.as_secs_f64() * 1000.0 / n, qa_video.2.as_secs_f64() * 1000.0 / n,
-                        qa_video.3.as_secs_f64() * 1000.0 / n, qa_video.4 as f64 / n / 1000.0, size.0, size.1));
+                        qa_video.3.as_secs_f64() * 1000.0 / n, qa_video.4 as f64 / n / 1000.0, size.0, size.1, pacer.rate() / 1000.0);
+                    // The same once a second as a history: when, how much, how many complete pictures.
+                    let mut history = std::path::PathBuf::from(&path).into_os_string();
+                    history.push(".history");
+                    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(history) {
+                        use std::io::Write;
+                        let _ = writeln!(file, "{:>6} ms: {line} total={:.0}kB complete={} largest={:.0}kB", setup.elapsed().as_millis(), qa_video.4 as f64 / 1000.0, qa_keys.0, qa_keys.1 as f64 / 1000.0);
+                    }
+                    let _ = std::fs::write(path, line);
                     qa_video = (0, Duration::ZERO, Duration::ZERO, Duration::ZERO, 0, Instant::now());
+                    qa_keys = (0, 0);
                 }
             }
             if sent.is_multiple_of(30) {
@@ -1131,6 +1148,53 @@ async fn host_media(
     let stopped = capture.stop().map_err(|error| error.to_string());
     result.and(released).and(stopped)
 }
+/// One picture to the technician at the pace the connection carries (`video_pacing`). While a
+/// large picture is held back the session keeps answering: input, the clipboard, chat and the
+/// connection itself get their turn between its packets. `false`: the session stopped meanwhile.
+#[allow(clippy::too_many_arguments)]
+async fn send_picture(
+    sender: &H264VideoSender,
+    pacer: &mut crate::video_pacing::Pacer,
+    consent: &Session,
+    annex_b: &[u8],
+    duration: Duration,
+    config: &mut Config,
+    transport: &mut NativeTransport,
+    control: &mut ControlPipe,
+    channel: &Arc<dyn NativeDataChannel>,
+) -> Result<bool, String> {
+    // Lab builds only: the old way (the whole picture in one burst), to measure against.
+    #[cfg(feature = "qa-session")]
+    if std::env::var_os("MIXEL_QA_UNPACED").is_some() {
+        sender.send(consent, annex_b, duration).await.map_err(|error| error.to_string())?;
+        return Ok(true);
+    }
+    let packets = sender.packets(consent, annex_b, duration).await.map_err(|error| error.to_string())?;
+    let complete = crate::session_mirror::is_keyframe(annex_b);
+    let sent = crate::video_pacing::spread(
+        pacer,
+        packets,
+        complete,
+        core_protocol::media::PicturePacket::size,
+        async |packet| sender.write(consent, packet).await.map_err(|error| error.to_string()),
+        async || {
+            if config.stopped() {
+                return Ok(false);
+            }
+            pump_ice(config, transport).await?;
+            control.poll(config, channel).await?;
+            Ok(!config.stopped())
+        },
+    )
+    .await?;
+    if sent && complete {
+        // Requests for a complete picture that came in while this one was leaving were sent
+        // before it could arrive: it answers them. Sending another would double the load on
+        // exactly the connections that are slow. (A technician who still needs one asks again.)
+        control.complete_picture_sent();
+    }
+    Ok(sent)
+}
 /// Host side of a colleague who joined: the first technician's pictures, sent on this connection.
 async fn mirror_media(
     config: &mut Config,
@@ -1143,6 +1207,7 @@ async fn mirror_media(
     let mut pictures = crate::session_mirror::watch().ok_or("The first technician's session has ended")?;
     let mut sent = 0u64;
     let mut last = Instant::now();
+    let mut pacer = crate::video_pacing::Pacer::new(Instant::now());
     let result = async {
         while !config.stopped() {
             if !consent.can_share_local_screen() {
@@ -1151,14 +1216,14 @@ async fn mirror_media(
             pump_ice(config, transport).await?;
             control.poll(config, channel).await?;
             if control.take_keyframe_request() {
+                pacer.complete_picture_requested(Instant::now());
                 pictures.request_keyframe();
             }
             match pictures.next(Duration::from_millis(25)).await {
                 crate::session_mirror::Next::Picture(picture) => {
-                    sender
-                        .send(consent, &picture.annex_b, picture.duration)
-                        .await
-                        .map_err(|error| error.to_string())?;
+                    if !send_picture(&sender, &mut pacer, consent, &picture.annex_b, picture.duration, config, transport, control, channel).await? {
+                        break;
+                    }
                     sent += 1;
                     last = Instant::now();
                 }
@@ -1193,6 +1258,9 @@ async fn viewer_media(
                 .attach(config.session, config.input_authorization())
         })
         .transpose()?;
+    // Lab builds only: when the first picture is there, counted from the start of the picture stream.
+    #[cfg(feature = "qa-session")]
+    let qa_started = Instant::now();
     let track_deadline = Instant::now() + Duration::from_secs(8);
     let track = loop {
         if config.stopped() {
@@ -1349,6 +1417,10 @@ async fn viewer_media(
                             if compressed {
                                 received += 1;
                                 last = Instant::now();
+                                #[cfg(feature = "qa-session")]
+                                if received == 1 {
+                                    eprintln!("QA first picture after {} ms: {} packets, {qa_gaps} gaps ({qa_lost} numbers missing), {} requests for a complete picture", qa_started.elapsed().as_millis(), qa_rtp.0, qa_rtp.3);
+                                }
                                 let packet = crate::remote_video::compressed_packet(config.session, received, timestamp, &frame, key)?;
                                 if !config.video.publish_compressed(packet)? {
                                     waiting_for_key = true;
@@ -1393,6 +1465,10 @@ async fn viewer_media(
                         }
                         received += 1;
                         last = Instant::now();
+                        #[cfg(feature = "qa-session")]
+                        if received == 1 {
+                            eprintln!("QA first picture after {} ms: {} packets, {qa_gaps} gaps ({qa_lost} numbers missing), {} requests for a complete picture", qa_started.elapsed().as_millis(), qa_rtp.0, qa_rtp.3);
+                        }
                         #[cfg(feature = "qa-session")]
                         let (decode_time, lap) = (lap.elapsed(), Instant::now());
                         config.video.publish(decoded_packet(
@@ -1448,6 +1524,8 @@ async fn viewer_media(
             return Err("Remote video delivery timed out".into());
         }
     }
+    #[cfg(feature = "qa-session")]
+    eprintln!("QA picture stream ended after {} ms: {received} pictures, {} packets, {qa_gaps} gaps ({qa_lost} numbers missing), {} requests for a complete picture", qa_started.elapsed().as_millis(), qa_rtp.0, qa_rtp.3);
     Ok(())
 }
 

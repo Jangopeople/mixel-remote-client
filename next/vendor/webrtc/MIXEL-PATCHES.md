@@ -11,3 +11,9 @@ Regression: `core_protocol::stream_turn::tests` sends a single independently dec
 `src/peer_connection/driver.rs` asks for a 4 MiB receive buffer on every UDP socket it binds (`enlarge_receive_buffer`, `socket2` is now a normal dependency). A keyframe arrives as one burst; a Mac being helped sends full-HD keyframes of several hundred kilobytes and more. Windows keeps 64 KiB per UDP socket by default and drops the rest silently (no counter moves), so a Windows technician on a fast network never received a whole keyframe from a Mac, asked for a new one every second and lost the session after 12 s ("Remote video delivery timed out"; measured: 29,456 of about 31,000 packets missing).
 
 Regression: `core_protocol::transport::receive_buffer_tests::a_keyframe_sized_burst_waiting_in_the_socket_is_not_dropped` (it matters most on Windows: `cargo test -p core_protocol receive_buffer`). Keep the call when upgrading the crate.
+
+## Packets handed back for pacing (14 Nov 2026)
+
+`src/media_stream/track_local/static_sample.rs`: `TrackLocalStaticSample::packetize_sample` does the first half of `write_sample` (same sequence numbers, timestamps and payload type) and returns the RTP packets; `write_sample` is now that plus the unchanged write loop. The host writes the packets itself with `TrackLocal::write_rtp`, spread over time (`mixel_engine::video_pacing`), instead of handing a whole keyframe to the socket in one burst. Nothing changes on the wire.
+
+Regression: `core_protocol::stream_turn::tests` (byte-identical picture through `send`, which now runs through `packetize_sample`) and `mixel_engine::video_pacing::tests`. Keep the method when upgrading the crate.

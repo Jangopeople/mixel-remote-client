@@ -8,6 +8,8 @@ publish.workspace = true
 [features]
 default = []
 external-turn-qa = ["native-webrtc"]
+# LAB builds only (through mixel_engine/qa-session): switches to measure against earlier behaviour.
+qa-session = []
 native-webrtc = ["dep:webrtc", "dep:tokio", "dep:async-trait", "dep:bytes", "dep:rtc", "dep:futures-util", "dep:tokio-rustls", "dep:rustls-native-certs"]
 
 [dependencies]

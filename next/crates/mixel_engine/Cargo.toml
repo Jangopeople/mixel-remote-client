@@ -8,7 +8,7 @@ description = "Mixel Remote engine shared by the Tauri desktop app and the nativ
 
 [features]
 testflight-controller = []
-qa-session = []
+qa-session = ["core_protocol/qa-session"]
 
 [dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }

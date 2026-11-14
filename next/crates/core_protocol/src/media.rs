@@ -98,12 +98,28 @@ impl H264VideoSender {
             peer: transport.peer.clone(),
         })
     }
+    /// The whole picture at once. A long-lived session sends through [`Self::packets`] and
+    /// [`Self::write`] instead, so that a large picture can be spread over time.
     pub async fn send(
         &self,
         consent: &Session,
         annex_b: &[u8],
         duration: Duration,
     ) -> Result<(), MediaError> {
+        for packet in self.packets(consent, annex_b, duration).await? {
+            self.write(consent, packet).await?;
+        }
+        Ok(())
+    }
+    /// The picture as numbered RTP packets, after every check [`Self::send`] makes. They have to
+    /// be written with [`Self::write`] in this order and all of them: the receiver takes a gap
+    /// in the numbering for a loss.
+    pub async fn packets(
+        &self,
+        consent: &Session,
+        annex_b: &[u8],
+        duration: Duration,
+    ) -> Result<Vec<PicturePacket>, MediaError> {
         if !consent.can_share_local_screen()
             || *self.state.borrow() != RTCPeerConnectionState::Connected
         {
@@ -149,15 +165,40 @@ impl H264VideoSender {
             })
             .ok_or(MediaError::Codec)?
             .payload_type;
-        self.track
-            .sample_writer(self.ssrc, payload)
-            .write_sample(&Sample {
-                data: bytes::Bytes::copy_from_slice(annex_b),
-                duration,
-                ..Sample::new(Instant::now())
-            })
-            .await?;
+        Ok(self
+            .track
+            .packetize_sample(
+                self.ssrc,
+                payload,
+                &Sample {
+                    data: bytes::Bytes::copy_from_slice(annex_b),
+                    duration,
+                    ..Sample::new(Instant::now())
+                },
+            )
+            .await?
+            .into_iter()
+            .map(PicturePacket)
+            .collect())
+    }
+    /// Sends one packet of [`Self::packets`]. Consent and the connection are asked again for
+    /// every packet: a picture that is spread over time stops the moment sharing does.
+    pub async fn write(&self, consent: &Session, packet: PicturePacket) -> Result<(), MediaError> {
+        if !consent.can_share_local_screen()
+            || *self.state.borrow() != RTCPeerConnectionState::Connected
+        {
+            return Err(MediaError::Forbidden);
+        }
+        self.track.write_rtp(packet.0).await?;
         Ok(())
+    }
+}
+/// One RTP packet of a picture, between [`H264VideoSender::packets`] and [`H264VideoSender::write`].
+pub struct PicturePacket(rtc::rtp::Packet);
+impl PicturePacket {
+    /// Bytes on the wire that count for pacing: the RTP header and the payload.
+    pub fn size(&self) -> usize {
+        12 + self.0.payload.len()
     }
 }
 pub use webrtc::media_stream::track_remote::TrackRemoteEvent;

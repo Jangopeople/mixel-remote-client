@@ -140,6 +140,31 @@ impl TrackLocalStaticSample {
         sample: &Sample,
         extensions: &[rtp::extension::HeaderExtension],
     ) -> Result<()> {
+        let packets = self.packetize_sample(ssrc, payload_type, sample).await?;
+        let mut write_errs = vec![];
+        for pkt in packets {
+            if let Err(err) = self
+                .rtp_track
+                .write_rtp_with_extensions(pkt, extensions)
+                .await
+            {
+                write_errs.push(err);
+            }
+        }
+
+        flatten_errs(write_errs)
+    }
+
+    /// MIXEL: packetizes a media [`Sample`] exactly as [`Self::write_sample`] does (sequence
+    /// numbers, timestamps, payload type) and hands the packets back instead of writing them, so
+    /// the application can send them with [`TrackLocal::write_rtp`] at its own pace. The packets
+    /// have to be written in order, and all of them (the receiver counts on the numbering).
+    pub async fn packetize_sample(
+        &self,
+        ssrc: SSRC,
+        payload_type: PayloadType,
+        sample: &Sample,
+    ) -> Result<Vec<rtp::Packet>> {
         // skip packets by the number of previously dropped packets
         if let Some(sequencer) = self.sequencers.get(&ssrc) {
             for _ in 0..sample.prev_dropped_packets {
@@ -153,7 +178,7 @@ impl TrackLocalStaticSample {
             return Err(Error::CodecNotFound);
         };
 
-        let packets = if let Some(packetizer) = self.packetizers.get(&ssrc) {
+        let mut packets = if let Some(packetizer) = self.packetizers.get(&ssrc) {
             let mut packetizer = packetizer.lock().await;
             let samples = (sample.duration.as_secs_f64() * clock_rate) as u32;
             if sample.prev_dropped_packets > 0 {
@@ -165,20 +190,10 @@ impl TrackLocalStaticSample {
         } else {
             vec![]
         };
-
-        let mut write_errs = vec![];
-        for mut pkt in packets {
+        for pkt in &mut packets {
             pkt.header.payload_type = payload_type;
-            if let Err(err) = self
-                .rtp_track
-                .write_rtp_with_extensions(pkt, extensions)
-                .await
-            {
-                write_errs.push(err);
-            }
         }
-
-        flatten_errs(write_errs)
+        Ok(packets)
     }
 }
 
