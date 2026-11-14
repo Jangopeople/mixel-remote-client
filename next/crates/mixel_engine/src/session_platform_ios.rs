@@ -67,6 +67,9 @@ impl ScreenH264Encoder {
     pub fn needs_retry(&self) -> bool {
         false
     }
+    pub fn left_out(&self) -> bool {
+        false
+    }
     pub fn encode(
         &mut self,
         _frame: &native_os_capture::stream::CapturedFrame,

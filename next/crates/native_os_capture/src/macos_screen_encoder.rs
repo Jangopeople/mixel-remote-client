@@ -28,6 +28,11 @@ impl ScreenH264Encoder {
         self.progress.recovery_since.is_some()
     }
 
+    /// The hardware encoder leaves no picture out by itself (the software one does).
+    pub fn left_out(&self) -> bool {
+        false
+    }
+
     pub fn encode(
         &mut self,
         frame: &CapturedFrame,

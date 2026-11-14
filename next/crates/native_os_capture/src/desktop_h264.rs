@@ -27,6 +27,8 @@ pub struct ScreenH264Encoder {
     damage: DamageTracker,
     needs_keyframe: bool,
     started: bool,
+    /// The encoder left the picture given last out of the stream; see [`Self::left_out`].
+    left_out: bool,
 }
 
 impl ScreenH264Encoder {
@@ -80,11 +82,20 @@ impl ScreenH264Encoder {
             damage: DamageTracker::new(32).expect("fixed valid damage tile size"),
             needs_keyframe: true,
             started: false,
+            left_out: false,
         })
     }
 
     pub fn needs_retry(&self) -> bool {
         self.needs_keyframe
+    }
+
+    /// The picture given last was left out by the encoder's rate control (it does that after
+    /// large pictures, to get back to its bit rate): what is on the screen has not been sent.
+    /// The caller gives the same picture again, changed or not, until one comes out; otherwise
+    /// the last change on a screen that then stays still would never be shown.
+    pub fn left_out(&self) -> bool {
+        self.left_out
     }
 
     pub fn encode(
@@ -94,7 +105,7 @@ impl ScreenH264Encoder {
         force: bool,
     ) -> Result<Option<EncodedH264>, EncodeError> {
         let force = force || self.needs_keyframe;
-        if self.damage.update(&frame.frame()).is_empty() && !force {
+        if self.damage.update(&frame.frame()).is_empty() && !force && !self.left_out {
             return Ok(None);
         }
         if frame.width() == self.width && frame.height() == self.height {
@@ -128,8 +139,10 @@ impl ScreenH264Encoder {
         let annex_b = Zeroizing::new(access_unit.to_vec());
         if annex_b.is_empty() {
             self.needs_keyframe = force;
+            self.left_out = true;
             return Ok(None);
         }
+        self.left_out = false;
         let sample = annex_b_to_avcc(&annex_b)?;
         self.started = true;
         self.needs_keyframe =
@@ -291,6 +304,76 @@ mod tests {
             ));
         }
         assert!(encoder.encode(&frame, 2, false).unwrap().is_none());
+    }
+
+    /// After large pictures the encoder's rate control leaves pictures out. The picture that is
+    /// on the screen when it does so must still reach the technician although the screen does
+    /// not change again: the encoder says so (`left_out`) and takes the same picture until one
+    /// comes out. (Before, that picture counted as sent: the technician kept an old one.)
+    #[test]
+    fn a_picture_the_rate_control_left_out_is_sent_when_given_again() {
+        let (width, height) = (320usize, 240usize);
+        // A moving picture: noise, a new one every time (far more than the bit rate carries).
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut noise = || {
+            let mut pixels = vec![255u8; width * height * 4];
+            for pixel in pixels.as_chunks_mut::<4>().0 {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                let grey = (seed >> 32) as u8;
+                pixel[..3].copy_from_slice(&[grey, grey, grey]);
+            }
+            CapturedFrame::bgra(width, height, width * 4, pixels).unwrap()
+        };
+        // Then the screen changes one last time (plain blue) and stays like that.
+        let still = |shade: u8| {
+            let mut pixels = vec![255u8; width * height * 4];
+            for pixel in pixels.as_chunks_mut::<4>().0 {
+                pixel[..3].copy_from_slice(&[shade, 60, 30]);
+            }
+            CapturedFrame::bgra(width, height, width * 4, pixels).unwrap()
+        };
+        let mut encoder = ScreenH264Encoder::new(width, height, 30, 300_000).unwrap();
+        let mut decoder = H264Decoder::new(width, height).unwrap();
+        // Encodes one picture; when one comes out, the blue of the picture the technician then sees.
+        let mut send = |encoder: &mut ScreenH264Encoder, frame: &CapturedFrame, time: u64| {
+            let encoded = encoder.encode(frame, time, false).unwrap()?;
+            let picture = decoder.decode(&encoded.annex_b, time).unwrap().expect("a picture that came out decodes");
+            Some(picture.pixels()[0])
+        };
+        // Up to 40 rounds of moving picture, each followed by a last change, until the encoder
+        // leaves such a last change out (it does in the first rounds).
+        let (mut time, mut left_out_once) = (0u64, false);
+        for round in 0..40u8 {
+            for _ in 0..6 {
+                send(&mut encoder, &noise(), time);
+                time += 1;
+            }
+            let last = still(200 + round);
+            let mut shown = send(&mut encoder, &last, time);
+            time += 1;
+            assert_eq!(encoder.left_out(), shown.is_none(), "left out exactly when nothing came out for a changed picture");
+            if shown.is_some() {
+                continue;
+            }
+            left_out_once = true;
+            // The screen stays still: the same picture is given again until it comes out.
+            let mut tries = 0;
+            while encoder.left_out() {
+                tries += 1;
+                assert!(tries <= 600, "the picture that was left out never came out");
+                shown = send(&mut encoder, &last, time);
+                time += 1;
+            }
+            let blue = shown.expect("the picture came out");
+            assert!(blue.abs_diff(200 + round) < 24, "the technician sees the last change ({blue} for {})", 200 + round);
+            // Sent now: an unchanged screen gives nothing more.
+            assert!(send(&mut encoder, &last, time).is_none());
+            assert!(!encoder.left_out());
+            break;
+        }
+        assert!(left_out_once, "the rate control never left a picture out: the test did not test anything");
     }
 
     /// A phone shares an upright picture (Quick Support for phones): both decoders show it,
