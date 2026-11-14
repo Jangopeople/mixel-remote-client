@@ -585,6 +585,8 @@ impl ControlPipe {
                         }
                     };
                     self.send_sealed(&plain, channel, "Input transmission").await?;
+                    #[cfg(feature = "qa-session")]
+                    eprintln!("QA input handed to the channel at clock {} ({} ms after it was asked for)", qa_wall_clock(), now.elapsed().as_millis());
                     // The caller gives up 3 s after queueing; it hears the outcome before that.
                     let deadline = (now + INPUT_ACK_WAIT).min(command.deadline + Duration::from_millis(500));
                     self.acks.sent(deadline, command.reply);
@@ -606,6 +608,8 @@ impl ControlPipe {
         } else if plain == VIDEO_IDLE {
             self.last_video_idle = Instant::now();
         } else if plain == INPUT_POSTED {
+            #[cfg(feature = "qa-session")]
+            eprintln!("QA input confirmation taken at clock {}", qa_wall_clock());
             self.acks.acknowledged(true)?;
         } else if plain == INPUT_UNSUPPORTED {
             self.acks.acknowledged(false)?;

@@ -755,6 +755,14 @@ async fn pump_ice(config: &mut Config, transport: &mut NativeTransport) -> Resul
 /// Packets taken from the picture stream before the control channel is served again.
 const PACKETS_PER_TURN: u32 = 512;
 
+/// Whether the turn takes another picture packet: up to [`PACKETS_PER_TURN`] of them, and none
+/// after the packet that completed a picture. A picture is put on the screen at once, which takes
+/// far longer than taking a packet; the control channel (input and its confirmations, clipboard,
+/// chat) gets its turn before the next picture's packets, however many are waiting by then.
+fn turn_goes_on(taken_this_turn: u32, picture_complete: bool) -> bool {
+    taken_this_turn < PACKETS_PER_TURN && !picture_complete
+}
+
 /// How long to wait for the next packet of a turn: the first may take a moment to come, the ones
 /// after it are only taken if they are already there (no timer, so no timer tick is lost).
 fn packet_wait(taken_this_turn: u32) -> Duration {
@@ -801,6 +809,43 @@ mod packet_turn_tests {
             }
         }
         assert_eq!(taken, PACKETS_PER_TURN);
+    }
+
+    /// Pictures that keep coming while each one is put on the screen: every picture's packets are
+    /// waiting by the time the one before is shown. The control channel still gets its turn
+    /// after each picture, not after all of them.
+    #[tokio::test]
+    async fn the_control_channel_gets_its_turn_after_every_picture() {
+        // Ten pictures of three packets each, all waiting already (`true`: completes a picture).
+        let (sender, mut waiting) = tokio::sync::mpsc::channel::<bool>(64);
+        for _ in 0..10 {
+            for last in [false, false, true] {
+                sender.send(last).await.unwrap();
+            }
+        }
+        let (mut turns, mut pictures, mut longest_turn) = (0u32, 0u32, 0u32);
+        while pictures < 10 {
+            turns += 1;
+            let (mut taken, mut picture_complete) = (0u32, false);
+            while turn_goes_on(taken, picture_complete) {
+                taken += 1;
+                match tokio::time::timeout(packet_wait(taken), waiting.recv()).await {
+                    Ok(Some(last)) => {
+                        if last {
+                            pictures += 1;
+                            picture_complete = true;
+                        }
+                    }
+                    Ok(None) => unreachable!("the sender is alive"),
+                    Err(_) => break,
+                }
+            }
+            longest_turn = longest_turn.max(taken);
+        }
+        assert_eq!((turns, longest_turn), (10, 3), "one picture a turn");
+        // A picture of more packets than a turn takes is spread over turns as before.
+        assert!(turn_goes_on(PACKETS_PER_TURN - 1, false) && !turn_goes_on(PACKETS_PER_TURN, false));
+        assert!(!turn_goes_on(1, true));
     }
 }
 
@@ -1308,8 +1353,19 @@ async fn viewer_media(
         if !consent.can_view() {
             return Err("Remote-viewing authorization expired".into());
         }
+        // Lab builds only: a part of this loop that took long (input and its confirmations wait meanwhile).
+        #[cfg(feature = "qa-session")]
+        let qa_turn = Instant::now();
         pump_ice(config, transport).await?;
+        #[cfg(feature = "qa-session")]
+        let qa_ice = qa_turn.elapsed();
         control.poll(config, channel).await?;
+        #[cfg(feature = "qa-session")]
+        if qa_turn.elapsed() > Duration::from_millis(300) {
+            eprintln!("QA technician loop at clock {}: signalling {} ms, control channel {} ms", crate::remote_control::qa_wall_clock(), qa_ice.as_millis(), (qa_turn.elapsed() - qa_ice).as_millis());
+        }
+        #[cfg(feature = "qa-session")]
+        let qa_turn = Instant::now();
         while let Some(frame) = control.take_sound() {
             if player.is_none() && !player_failed {
                 player = tokio::task::spawn_blocking(crate::remote_sound::Player::start).await.ok().flatten();
@@ -1340,14 +1396,26 @@ async fn viewer_media(
             }
             control.request_keyframe(channel).await?;
         }
+        #[cfg(feature = "qa-session")]
+        if qa_turn.elapsed() > Duration::from_millis(300) {
+            eprintln!("QA technician loop at clock {}: sound, print and the request for a complete picture took {} ms", crate::remote_control::qa_wall_clock(), qa_turn.elapsed().as_millis());
+        }
+        #[cfg(feature = "qa-session")]
+        let qa_turn = Instant::now();
         // Every packet that is already waiting is taken before the control channel gets its turn
         // again. One packet a turn was too little: a turn costs the control channel's short wait,
         // which is a whole timer tick on Windows (about 15 ms), so a Windows technician took about
         // 64 packets a second. A computer that sends more (a Mac being helped, a moving full-HD
         // picture) ran ahead, its keyframes came too late to be put together, and the session
         // ended after 12 s ("Remote video delivery timed out").
-        let mut taken = 0u32;
-        while taken < PACKETS_PER_TURN {
+        //
+        // The turn ends with the picture, though. Putting a picture on the screen (decoding it,
+        // handing it over) takes its time, and the packets of the next picture arrive meanwhile:
+        // "every packet that is waiting" then never ran out while pictures kept coming, and the
+        // control channel waited for seconds (measured in the lab, 14 Nov 2026: turns of 1.4 to
+        // 2.4 s over twenty packets; the confirmation of every second input came too late).
+        let (mut taken, mut picture_complete) = (0u32, false);
+        while turn_goes_on(taken, picture_complete) {
             taken += 1;
             match tokio::time::timeout(packet_wait(taken), track.poll()).await {
                 Ok(Some(TrackRemoteEvent::OnRtpPacket(packet))) => {
@@ -1383,6 +1451,7 @@ async fn viewer_media(
                         )
                         .map_err(|error| error.to_string())?
                     {
+                        picture_complete = true;
                         #[cfg(feature = "qa-session")]
                         {
                             qa_rtp.2 += 1;
@@ -1518,6 +1587,10 @@ async fn viewer_media(
                 // Nothing more is waiting.
                 Err(_) => break,
             }
+        }
+        #[cfg(feature = "qa-session")]
+        if qa_turn.elapsed() > Duration::from_millis(300) {
+            eprintln!("QA technician loop at clock {}: taking {taken} picture packets (decoding, handing over) took {} ms", crate::remote_control::qa_wall_clock(), qa_turn.elapsed().as_millis());
         }
         if last.elapsed() > Duration::from_secs(12)
             && control.last_video_idle.elapsed() > Duration::from_secs(12)

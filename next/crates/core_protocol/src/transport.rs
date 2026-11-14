@@ -15,8 +15,8 @@ use webrtc::{
     },
 };
 
-/// The media stack's default set of helpers for every stream, with one of them switched off: the
-/// one that sends a lost packet again when the other side asks for it (NACK responder).
+/// The media stack's default set of helpers for every stream, without one of them: the one that
+/// sends a lost packet again when the other side asks for it (NACK responder).
 ///
 /// The side that shows the pictures takes a gap in the packet numbering for a damaged picture at
 /// once and asks for a complete one; a packet that arrives later with an old number is dropped
@@ -26,20 +26,25 @@ use webrtc::{
 /// twelve seconds and 20 MB of repeats on top, which left no room for the next complete picture;
 /// the session ended with "Remote video delivery timed out".
 ///
-/// Everything else stays as the published apps have it, on purpose: the session description is
-/// the same, and so is the part that asks for repeats (nothing answers it any more). Taking that
-/// part out as well was tried and is wrong: it brings a 100 ms round into the stack's loop, and
-/// without that round the side that shows the pictures handed over messages of the control
-/// channel late on a slow link (every second confirmation of an input came more than two
-/// seconds late; lab, 14 Nov 2026). Why the stack needs that round is not found yet.
+/// Everything else is what the stack's `register_default_interceptors` sets up, in its order:
+/// the part that asks for repeats, the arrival feedback and the reports. The asking part stays so
+/// that nothing else about a session changes: the session description is the same, and a
+/// published host still answers it as before. (The stack's `NoopInterceptor` is no stand-in for
+/// the left-out part: despite its name it ends the inbound control traffic for everything behind
+/// it.)
 fn interceptors(media_engine: &mut MediaEngine) -> Result<Registry, webrtc::error::Error> {
-    let registry = webrtc::peer_connection::register_default_interceptors(Registry::new(), media_engine)?;
+    use rtc::interceptor::{NackGeneratorBuilder, Slot};
+    use rtc::peer_connection::configuration::interceptor_registry::{
+        configure_rtcp_reports, configure_simulcast_extension_headers, configure_twcc_receiver_only,
+    };
     // Lab builds only: the stack's default set (with repeats), to measure against.
     #[cfg(feature = "qa-session")]
     if std::env::var_os("MIXEL_QA_UNPACED").is_some() || std::env::var_os("MIXEL_QA_REPEATS").is_some() {
-        return Ok(registry);
+        return webrtc::peer_connection::register_default_interceptors(Registry::new(), media_engine);
     }
-    Ok(registry.with(rtc::interceptor::Slot::NackResponder, rtc::interceptor::NoopInterceptor::new()))
+    configure_simulcast_extension_headers(media_engine)?;
+    let registry = configure_twcc_receiver_only(Registry::new(), media_engine)?;
+    Ok(configure_rtcp_reports(registry).with(Slot::NackGenerator, NackGeneratorBuilder::new().build()))
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -414,9 +419,9 @@ mod receive_buffer_tests {
 mod repeat_tests {
     use super::*;
 
-    /// The media stack is set up as the published apps have it, except that nothing sends a lost
-    /// packet again: the place of that part is taken by one that does nothing. The part that asks
-    /// for repeats, the reports and the arrival feedback are there as before.
+    /// The media stack is set up as the published apps have it, without the part that sends a
+    /// lost packet again. The part that asks for repeats, the arrival feedback and the reports are
+    /// there as before, in the same order.
     #[test]
     fn lost_packets_are_not_sent_again_and_the_rest_is_as_before() {
         let names = |registry: Registry| -> Vec<String> { registry.slots().into_iter().map(|(_, name)| name).collect() };
@@ -425,7 +430,7 @@ mod repeat_tests {
         assert_eq!(default, ["NackResponderInterceptor", "NackGeneratorInterceptor", "TwccReceiverInterceptor", "ReceiverReportInterceptor", "SenderReportInterceptor"]);
         let mut media_engine = MediaEngine::default();
         let ours = names(interceptors(&mut media_engine).unwrap());
-        assert_eq!(ours, ["NoopInterceptor", "NackGeneratorInterceptor", "TwccReceiverInterceptor", "ReceiverReportInterceptor", "SenderReportInterceptor"]);
+        assert_eq!(ours, default[1..], "the default set without its first part, the one that resends");
     }
 
     /// The session description is the one the published apps offer and answer (the list of
