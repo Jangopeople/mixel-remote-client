@@ -227,13 +227,40 @@ public final class DevicesModel: ObservableObject {
         return ""
     }
 
-    public func connect(_ device: Device) {
+    public func connect(_ device: Device, unattended: Bool = false) {
+        guard connectBlocked(device).isEmpty else { return }
         message = L("Connecting to %@…", device.name)
         app.section = .remote
-        app.connect(to: device.connectionId)
+        app.connect(to: device.connectionId, unattended: unattended)
     }
 
     // MARK: Manage (company devices)
+
+    struct StaffSettings: Decodable {
+        let name: String
+        let updatedAt: String
+        let currentCompany: String
+        let companies: [EnrollmentModel.EnrollmentCompany]
+    }
+
+    var managesIsmDevices: Bool { app.signedIn && app.account.account?.staff == true && tenant == nil }
+
+    func staffSettings(for device: Device) async throws -> StaffSettings {
+        let account = app.account.account?.profile
+        guard managesIsmDevices else { throw EngineFailure("Sign in first.") }
+        let settings: StaffSettings = try await app.engine.run("staff_device_settings", ["device": device.device])
+        guard managesIsmDevices, app.account.account?.profile == account else { throw EngineFailure("The enrollment account changed") }
+        return settings
+    }
+
+    func saveStaffSettings(_ device: Device, settings: StaffSettings, name: String, company: String?) async -> Bool {
+        guard managesIsmDevices else { error = L("Sign in first."); return false }
+        return await change {
+            let _: StaffSettings = try await self.app.engine.run("staff_device_settings", [
+                "device": device.device, "expected_update": settings.updatedAt, "name": name, "company": company,
+            ])
+        }
+    }
 
     public func rename(_ device: Device, to name: String) async -> Bool {
         guard let tenant else { return false }

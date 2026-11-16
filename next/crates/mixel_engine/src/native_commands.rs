@@ -286,6 +286,21 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
                 .await
                 .map_err(|_| "Companies are unavailable for this account")?)
         }
+        "staff_device_settings" => {
+            let credential = auth.credential(None).await?;
+            if !credential.principal.staff {
+                return Err("Editing a company device requires an MFA-verified Mixel team account".into());
+            }
+            let settings = credential.ism.staff_device_settings(
+                &credential.token, args.get("device")?, args.get("expected_update")?,
+                args.get("name")?, args.get("company")?,
+            ).await?;
+            let fresh = auth.credential(None).await?;
+            if fresh.principal.user != credential.principal.user || !fresh.principal.staff {
+                return Err("The enrollment account changed".into());
+            }
+            out(settings)
+        }
         "enrollment_current" => {
             let credential = auth.credential(None).await?;
             if !credential.principal.staff || context.open_identity(false).await.is_err() {

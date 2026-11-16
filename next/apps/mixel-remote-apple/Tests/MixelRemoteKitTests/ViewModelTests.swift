@@ -40,6 +40,20 @@ final class ViewModelTests: XCTestCase {
         XCTAssertTrue(app.progress.contains("Waiting for the other person"))
     }
 
+    func testDeviceDirectorySendsUnattendedRequestWhenChosen() async throws {
+        let engine = MockEngine()
+        Fixtures.company(engine)
+        let app = await Fixtures.app(engine)
+        await app.devices.load()
+        let device = try XCTUnwrap(app.devices.devices.first { $0.connectionId != app.remote.host })
+        app.devices.connect(device, unattended: true)
+        try await waitFor { !engine.calls("remote_request").isEmpty }
+        let request = try XCTUnwrap(engine.calls("remote_request").last).object
+        XCTAssertEqual(request["host"] as? Int, Int(device.connectionId))
+        XCTAssertEqual(request["unattended"] as? Bool, true)
+        XCTAssertEqual(app.progress, "Requesting unattended access…")
+    }
+
     func testStaffOnlyPhoneClaimFailureExplainsTheSecondStep() async {
         let engine = MockEngine()
         Fixtures.company(engine)
@@ -157,7 +171,7 @@ final class ViewModelTests: XCTestCase {
         await host.loadSources()
         XCTAssertTrue(host.asking)
         XCTAssertEqual(host.source, "display:1")
-        XCTAssertTrue(host.confirmDisplay, "one screen is pre-confirmed")
+        XCTAssertTrue(host.canAccept)
         XCTAssertTrue(host.allowControl)
         host.allowFiles = true
         host.allowChat = true
@@ -165,12 +179,33 @@ final class ViewModelTests: XCTestCase {
         try await waitFor { !engine.calls("remote_decide").isEmpty }
         let decision = try XCTUnwrap(engine.calls("remote_decide").last?.object["decision"] as? [String: Any])
         XCTAssertEqual(decision["accept"] as? Bool, true)
+        XCTAssertEqual(decision["confirm"] as? Bool, true)
         XCTAssertEqual(decision["source"] as? String, "display:1")
         XCTAssertEqual(decision["control"] as? Bool, true)
         XCTAssertEqual(decision["files"] as? Bool, true)
         XCTAssertEqual(decision["chat"] as? Bool, true)
         XCTAssertEqual(decision["clipboard"] as? Bool, false)
         XCTAssertEqual(decision["recording"] as? Bool, false)
+    }
+
+    func testOneClickControlWithMoreThanOneDisplay() async throws {
+        let engine = MockEngine()
+        Fixtures.incoming(engine)
+        engine.reply("capture_targets", json: #"[{"id":"display:1","name":"Main display","full_display":true},{"id":"display:2","name":"Second display","full_display":true}]"#)
+        let app = await Fixtures.app(engine)
+        let host = app.host
+        await host.loadSources()
+        XCTAssertTrue(host.canAccept)
+        host.source = "display:2"
+        host.decide(accept: true)
+        try await waitFor { !engine.calls("remote_decide").isEmpty }
+        let decision = try XCTUnwrap(engine.calls("remote_decide").last?.object["decision"] as? [String: Any])
+        XCTAssertEqual(decision["source"] as? String, "display:2")
+        XCTAssertEqual(decision["control"] as? Bool, true)
+        XCTAssertEqual(decision["confirm"] as? Bool, true)
+        for option in ["clipboard", "files", "chat", "recording"] {
+            XCTAssertEqual(decision[option] as? Bool, false, option)
+        }
     }
 
     func testDeclineAllowsNothing() async throws {

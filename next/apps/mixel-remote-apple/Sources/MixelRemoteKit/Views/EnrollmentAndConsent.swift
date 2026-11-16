@@ -93,38 +93,39 @@ public struct ConsentSheet: View {
             if !host.screenAccess || host.sources.isEmpty {
                 MessageLine(L("Allow screen recording for Mixel Remote in System Settings to share a screen."), error: false)
                 Button(L("Enable screen sharing in macOS…")) { host.requestScreenAccess() }
-            } else {
+            } else if host.sources.count > 1 {
                 Picker(selection: $host.source) {
                     ForEach(host.sources) { Text(verbatim: $0.name).tag($0.id) }
                 } label: { Text(verbatim: L("Screen to share")) }
-                if host.selected?.fullDisplay == true {
-                    Toggle(isOn: $host.confirmDisplay) { Text(verbatim: L("I confirm sharing this whole display")) }
+            }
+            if !app.remote.inputAccess {
+                HStack {
+                    Text(verbatim: L("Enable Accessibility in macOS to allow keyboard and mouse control.")).font(.callout).foregroundStyle(.secondary)
+                    Button(L("Enable keyboard control in macOS…")) { host.requestInputAccess() }.linkButton()
                 }
             }
-            VStack(alignment: .leading, spacing: 8) {
-                Toggle(isOn: $host.allowControl) { Label(L("Keyboard & mouse"), systemImage: "computermouse") }
-                    .disabled(!host.controlAvailable)
-                if !app.remote.inputAccess {
-                    HStack {
-                        Text(verbatim: L("Enable Accessibility in macOS to allow keyboard and mouse control.")).font(.callout).foregroundStyle(.secondary)
-                        Button(L("Enable keyboard control in macOS…")) { host.requestInputAccess() }.linkButton()
-                    }
+            DisclosureGroup(L("Session options")) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Toggle(isOn: $host.allowControl) { Label(L("Keyboard & mouse"), systemImage: "computermouse") }
+                        .disabled(!host.controlAvailable)
+                    Toggle(isOn: $host.allowClipboard) { Label(L("Clipboard"), systemImage: "doc.on.clipboard") }
+                    Toggle(isOn: $host.allowFiles) { Label(L("Files"), systemImage: "folder") }
+                    Toggle(isOn: $host.allowChat) { Label(L("Chat"), systemImage: "bubble.left.and.bubble.right") }
+                    Toggle(isOn: $host.allowRecording) { Label(L("Allow recording of this session"), systemImage: "record.circle") }
                 }
-                Toggle(isOn: $host.allowClipboard) { Label(L("Clipboard"), systemImage: "doc.on.clipboard") }
-                Toggle(isOn: $host.allowFiles) { Label(L("Files"), systemImage: "folder") }
-                Toggle(isOn: $host.allowChat) { Label(L("Chat"), systemImage: "bubble.left.and.bubble.right") }
-                Toggle(isOn: $host.allowRecording) { Label(L("Allow recording of this session"), systemImage: "record.circle") }
+                .padding(.vertical, 8)
+                #if os(macOS)
+                .toggleStyle(.checkbox)
+                #endif
             }
-            #if os(macOS)
-            .toggleStyle(.checkbox)
-            #endif
             MessageLine(host.error)
             MessageLine(app.error)
             HStack {
                 Spacer()
                 Button(L("Decline")) { host.decide(accept: false) }
                     .keyboardShortcut(.cancelAction)
-                Button(host.allowControl && host.controlAvailable ? L("Allow with control") : L("Allow view only")) { host.decide(accept: true) }
+                    .disabled(app.busy)
+                Button(host.allowControl && host.controlAvailable ? L("Allow control") : L("Allow view only")) { host.decide(accept: true) }
                     .buttonStyle(PrimaryButtonStyle())
                     .keyboardShortcut(.defaultAction)
                     .disabled(!host.canAccept)
@@ -133,5 +134,6 @@ public struct ConsentSheet: View {
         .padding(24)
         .frame(width: 480)
         .background(Theme.background)
+        .id(app.remote.session)
     }
 }

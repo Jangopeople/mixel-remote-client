@@ -13,6 +13,18 @@ TABLES = json.load(open(os.path.join(HERE, 'Sources/MixelRemoteKit/Resources/eng
 
 # English key: (German (Swiss spelling), French, Italian)
 NATIVE = {
+    'Allow control': ('Steuerung erlauben', 'Autoriser le contrôle', 'Consenti il controllo'),
+    'Edit device': ('Gerät bearbeiten', 'Modifier l’appareil', 'Modifica dispositivo'),
+    'Save changes': ('Änderungen speichern', 'Enregistrer les modifications', 'Salva modifiche'),
+    'Moving this device changes which company can reach it. Its connection ID stays the same.': ('Durch das Verschieben ändert sich, welche Firma auf dieses Gerät zugreifen kann. Die Verbindungs-ID bleibt gleich.', 'Le déplacement change l’entreprise qui peut accéder à cet appareil. Son ID de connexion reste identique.', 'Lo spostamento cambia l’azienda che può accedere al dispositivo. L’ID di connessione resta invariato.'),
+    'Session options': ('Sitzungsoptionen', 'Options de la session', 'Opzioni della sessione'),
+    'Connection options': ('Verbindungsoptionen', 'Options de connexion', 'Opzioni di connessione'),
+    'Requesting unattended access…': ('Unbeaufsichtigter Zugriff wird angefragt…', 'Demande d’accès sans surveillance…', 'Richiesta di accesso non presidiato…'),
+    'Quick Support for computers': ('Quick Support für Computer', 'Quick Support pour ordinateurs', 'Quick Support per computer'),
+    'Ask the customer to open Quick Support on their Mac, Windows or Linux computer and share the Support ID. They approve the connection on their screen.': ('Bitten Sie den Kunden, Quick Support auf seinem Mac, Windows- oder Linux-Computer zu öffnen und Ihnen die Support-ID zu nennen. Er bestätigt die Verbindung auf seinem Bildschirm.', 'Demandez au client d’ouvrir Quick Support sur son ordinateur Mac, Windows ou Linux et de vous communiquer son ID de support. Il valide la connexion sur son écran.', 'Chieda al cliente di aprire Quick Support sul suo computer Mac, Windows o Linux e di comunicarle l’ID di supporto. Il cliente approva la connessione sul proprio schermo.'),
+    'Support ID': ('Support-ID', 'ID de support', 'ID di supporto'),
+    'Connect to Quick Support': ('Mit Quick Support verbinden', 'Se connecter à Quick Support', 'Connetti a Quick Support'),
+    'Get Quick Support': ('Quick Support herunterladen', 'Télécharger Quick Support', 'Scarica Quick Support'),
     '%d sessions': ('%d Sitzungen', '%d sessions', '%d sessioni'),
     'Add a note? It appears in the session report of your company.': ('Notiz hinzufügen? Sie erscheint im Sitzungsbericht Ihrer Firma.', 'Ajouter une note ? Elle apparaît dans le rapport des sessions de votre entreprise.', 'Aggiungere una nota? Compare nel rapporto delle sessioni della Sua azienda.'),
     'Add note': ('Notiz hinzufügen', 'Ajouter une note', 'Aggiungi nota'),

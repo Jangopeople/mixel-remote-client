@@ -6,6 +6,7 @@ public struct DevicesView: View {
     @ObservedObject var app: AppModel
     @ObservedObject var model: DevicesModel
     @State private var renaming: Device?
+    @State private var editing: Device?
     @State private var moving: Device?
     @State private var removing: Device?
     @State private var addingOthers = false
@@ -68,6 +69,7 @@ public struct DevicesView: View {
             }
         }
         .sheet(item: $moving) { device in MoveSheet(model: model, device: device) }
+        .sheet(item: $editing) { device in StaffDeviceSheet(model: model, device: device) }
         .sheet(isPresented: $addingOthers) { DeployLinkSheet(model: model) }
         .sheet(isPresented: $addingThis) {
             ScrollView { EnrollmentCard(app: app, enrollment: app.enrollment).padding(20) }.frame(minWidth: 460, minHeight: 320)
@@ -138,7 +140,7 @@ public struct DevicesView: View {
     }
 
     private func row(_ device: Device) -> some View {
-        DeviceRow(app: app, model: model, device: device, rename: { renaming = $0 }, move: { moving = $0 }, remove: { removing = $0 })
+        DeviceRow(app: app, model: model, device: device, rename: { renaming = $0 }, move: { moving = $0 }, remove: { removing = $0 }, edit: { editing = $0 })
     }
 
     private var emptyTitle: String {
@@ -166,6 +168,7 @@ struct DeviceRow: View {
     let rename: (Device) -> Void
     let move: (Device) -> Void
     let remove: (Device) -> Void
+    let edit: (Device) -> Void
 
     var body: some View {
         let presence = model.presence(of: device)
@@ -216,11 +219,20 @@ struct DeviceRow: View {
                 } label: { Text(verbatim: L("Manage")) }
                     .fixedSize()
                     .accessibilityLabel(Text(verbatim: L("Manage %@", device.name)))
+            } else if model.managesIsmDevices, ["macos", "windows", "linux"].contains(device.os) {
+                Button(L("Edit device")) { edit(device) }
             }
             Button(L("Connect")) { model.connect(device) }
                 .buttonStyle(PrimaryButtonStyle())
                 .disabled(!blocked.isEmpty)
                 .help(blocked.isEmpty ? L("Connect to %@", device.name) : blocked)
+            Menu {
+                Button(L("Connect without confirmation (unattended access)")) { model.connect(device, unattended: true) }
+            } label: {
+                Image(systemName: "ellipsis.circle").accessibilityLabel(Text(verbatim: L("Connection options")))
+            }
+            .fixedSize()
+            .disabled(!blocked.isEmpty)
         }
         .padding(.vertical, 6)
         .accessibilityElement(children: .contain)
@@ -232,6 +244,65 @@ struct DeviceRow: View {
         case .offline: .offline
         case .checking: .busy
         case .unknown: .unknown
+        }
+    }
+}
+
+private struct StaffDeviceSheet: View {
+    @ObservedObject var model: DevicesModel
+    let device: Device
+    @State private var settings: DevicesModel.StaffSettings?
+    @State private var name = ""
+    @State private var company: String?
+    @State private var saving = false
+    @State private var error = ""
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(verbatim: L("Edit device")).font(.title2.weight(.semibold))
+            Text(verbatim: Format.remoteId(device.connectionId)).monospacedDigit()
+            if let settings {
+                TextField(L("Device name"), text: $name).textFieldStyle(.roundedBorder)
+                Picker(selection: $company) {
+                    Text(verbatim: settings.currentCompany).tag(String?.none)
+                    ForEach(settings.companies) { Text(verbatim: $0.clientName).tag(Optional($0.clientId)) }
+                } label: { Text(verbatim: L("Company")) }
+                if company != nil {
+                    Text(verbatim: L("Moving this device changes which company can reach it. Its connection ID stays the same."))
+                        .foregroundStyle(.secondary).font(.callout)
+                }
+            } else if error.isEmpty {
+                ProgressView(L("Loading…"))
+            }
+            MessageLine(error)
+            HStack {
+                Spacer()
+                Button(L("Cancel")) { dismiss() }.keyboardShortcut(.cancelAction).disabled(saving)
+                Button(L("Save changes")) { Task { await save() } }
+                    .buttonStyle(PrimaryButtonStyle()).keyboardShortcut(.defaultAction)
+                    .disabled(saving || settings == nil || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(24).frame(width: 440)
+        .interactiveDismissDisabled(saving)
+        .task {
+            do {
+                let loaded = try await model.staffSettings(for: device)
+                settings = loaded
+                name = loaded.name
+            } catch { self.error = AppModel.message(error) }
+        }
+    }
+
+    private func save() async {
+        guard let settings, !saving else { return }
+        saving = true
+        defer { saving = false }
+        if await model.saveStaffSettings(device, settings: settings, name: name, company: company) {
+            dismiss()
+        } else {
+            error = model.error
         }
     }
 }

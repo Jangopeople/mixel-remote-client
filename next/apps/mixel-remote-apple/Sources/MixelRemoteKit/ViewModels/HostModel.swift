@@ -9,8 +9,7 @@ public final class HostModel: ObservableObject {
     let app: AppModel
     @Published public private(set) var sources: [CaptureTarget] = []
     @Published public var source = ""
-    @Published public var confirmDisplay = false
-    @Published public var allowControl = false
+    @Published public var allowControl = true
     @Published public var allowClipboard = false
     @Published public var allowFiles = false
     @Published public var allowChat = false
@@ -25,6 +24,8 @@ public final class HostModel: ObservableObject {
 
     private static let unattendedKey = "mixel.remote.unattended.v1"
     private var restored = false
+    private var restoring = false
+    private var enabledFor: (profile: String, host: UInt32)?
 
     init(app: AppModel) { self.app = app }
 
@@ -32,14 +33,19 @@ public final class HostModel: ObservableObject {
     /// A technician asks to connect and this person decides.
     public var asking: Bool { remote.phase == "incoming" && !remote.unattendedSession }
     public var selected: CaptureTarget? { sources.first { $0.id == source } }
-    public var canAccept: Bool {
-        guard asking, !app.busy, let selected else { return false }
-        return !selected.fullDisplay || confirmDisplay
-    }
+    public var canAccept: Bool { asking && !app.busy && screenAccess && selected?.fullDisplay == true }
     public var controlAvailable: Bool { asking && (selected?.fullDisplay ?? false) && remote.inputAccess }
 
     func statusChanged(from previous: RemoteStatus, to next: RemoteStatus) {
-        if next.phase == "incoming", previous.phase != "incoming", !next.controllerOnly {
+        if next.unattendedEnabled, let profile = app.account.account?.profile, let host = next.host {
+            enabledFor = (profile, host)
+        }
+        if asking, !next.controllerOnly, previous.phase != "incoming" || previous.session != next.session {
+            sources = []
+            source = ""
+            screenAccess = true
+            error = ""
+            allowControl = true
             allowChat = false; allowRecording = false; allowFiles = false; allowClipboard = false
             Task { await loadSources() }
         }
@@ -47,23 +53,24 @@ public final class HostModel: ObservableObject {
     }
 
     public func loadSources() async {
+        guard asking, let session = remote.session else { return }
         do {
-            screenAccess = (try? await app.engine.run("screen_access", as: Bool.self)) ?? true
+            let access = (try? await app.engine.run("screen_access", as: Bool.self)) ?? true
             let targets: [CaptureTarget] = try await app.engine.run("capture_targets")
-            sources = targets.filter(\.fullDisplay).sorted { $0.fullDisplay && !$1.fullDisplay }
+            guard asking, remote.session == session else { return }
+            screenAccess = access
+            sources = targets.filter(\.fullDisplay)
             if !sources.contains(where: { $0.id == source }) { source = sources.first?.id ?? "" }
-            // One screen: it is the one to share. Keyboard and mouse are pre-selected when they can be
-            // allowed; the person still decides with Allow.
-            confirmDisplay = sources.count == 1
-            allowControl = confirmDisplay && remote.inputAccess
+            error = ""
         } catch {
+            guard asking, remote.session == session else { return }
             self.error = AppModel.message(error)
         }
     }
 
     public func decide(accept: Bool) {
-        guard let session = remote.session else { return }
-        let decision = Decision(session: session, accept: accept, source: source, confirm: confirmDisplay,
+        guard asking, !app.busy, let session = remote.session, !accept || canAccept else { return }
+        let decision = Decision(session: session, accept: accept, source: source, confirm: accept,
                                 control: accept && allowControl && controlAvailable, clipboard: accept && allowClipboard,
                                 files: accept && allowFiles, chat: accept && allowChat, recording: accept && allowRecording)
         app.act { try await self.app.engine.perform("remote_decide", ["decision": decision]) }
@@ -117,34 +124,50 @@ public final class HostModel: ObservableObject {
             self.unattendedSources = targets.filter(\.fullDisplay)
             self.unattendedSource = self.unattendedSources.first?.id ?? ""
             self.unattendedConfirm = false
+            self.unattendedControl = self.remote.inputAccess
             if self.unattendedSources.isEmpty { throw EngineFailure("An available display is required before enabling unattended sharing.") }
         }
     }
 
     public func enableUnattended() {
-        guard !unattendedSource.isEmpty, unattendedConfirm else {
+        guard !unattendedSource.isEmpty, unattendedConfirm, let profile = app.account.account?.profile, let host = remote.host else {
             error = L("Choose a display and confirm it before enabling unattended sharing.")
             return
         }
         let source = unattendedSource, control = unattendedControl && remote.inputAccess
         unattendedConfirm = false
-        UserDefaults.standard.set(["source": source, "control": control], forKey: Self.unattendedKey)
-        app.act { try await self.app.engine.perform("remote_unattended", ["source": source, "control": control]) }
+        app.act {
+            try await self.app.engine.perform("remote_unattended", ["source": source, "control": control])
+            UserDefaults.standard.set(["source": source, "control": control, "profile": profile, "host": host], forKey: Self.unattendedKey)
+        }
     }
 
     public func disableUnattended() {
+        enabledFor = nil
         UserDefaults.standard.removeObject(forKey: Self.unattendedKey)
         app.act { try await self.app.engine.perform("remote_unattended", ["source": nil, "control": false]) }
     }
 
-    /// After a start with a remembered sign-in, unattended sharing comes back as the owner left it.
+    /// Restore after a trusted startup or after this same host reconnects during this app run.
     func restoreUnattended() async {
-        guard !restored, !remote.unattendedEnabled, remote.unattendedPending == nil,
+        guard !restoring, remote.phase == "ready", !remote.codeRequired, !remote.unattendedEnabled, remote.unattendedPending == nil,
+              let profile = app.account.account?.profile, let host = remote.host,
               let saved = UserDefaults.standard.dictionary(forKey: Self.unattendedKey),
               let source = saved["source"] as? String, let control = saved["control"] as? Bool else { return }
-        guard let startup: StartupSettings = try? await app.engine.run("startup_settings"), startup.restored || startup.launchedAtStartup,
-              let targets: [CaptureTarget] = try? await app.engine.run("capture_targets"),
-              targets.contains(where: { $0.id == source && $0.fullDisplay }) else { return }
+        guard saved["profile"] == nil || saved["profile"] as? String == profile,
+              saved["host"] == nil || (saved["host"] as? NSNumber)?.uint32Value == host else { return }
+        restoring = true
+        defer { restoring = false }
+        if enabledFor?.profile != profile || enabledFor?.host != host {
+            guard !restored, let startup: StartupSettings = try? await app.engine.run("startup_settings"),
+                  startup.restored || startup.launchedAtStartup else { return }
+        }
+        guard let targets: [CaptureTarget] = try? await app.engine.run("capture_targets"),
+              targets.contains(where: { $0.id == source && $0.fullDisplay }),
+              app.account.account?.profile == profile, remote.host == host, remote.phase == "ready",
+              !remote.unattendedEnabled, remote.unattendedPending == nil, !remote.codeRequired,
+              (UserDefaults.standard.dictionary(forKey: Self.unattendedKey) as NSDictionary?) == saved as NSDictionary
+        else { return }
         restored = true
         try? await app.engine.perform("remote_unattended", ["source": source, "control": control])
     }

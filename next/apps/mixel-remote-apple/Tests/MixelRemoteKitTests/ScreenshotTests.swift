@@ -178,8 +178,9 @@ enum Snapshot {
         // Never ordered front: drawn offscreen only.
         for _ in 0..<4 { host.layoutSubtreeIfNeeded(); RunLoop.current.run(until: Date().addingTimeInterval(0.08)) }
         guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { throw Failed() }
-        NSAppearance.current = appearance
-        host.cacheDisplay(in: host.bounds, to: rep)
+        host.effectiveAppearance.performAsCurrentDrawingAppearance {
+            host.cacheDisplay(in: host.bounds, to: rep)
+        }
         window.close()
         guard let png = rep.representation(using: .png, properties: [:]) else { throw Failed() }
         return png

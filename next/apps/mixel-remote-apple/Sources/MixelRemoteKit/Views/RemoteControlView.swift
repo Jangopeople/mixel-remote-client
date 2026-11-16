@@ -1,5 +1,26 @@
 import SwiftUI
 
+#if os(macOS)
+private struct ComputerSupportForm: View {
+    @ObservedObject var app: AppModel
+    @State private var supportId = ""
+
+    var body: some View {
+        FieldRow(L("Support ID")) { RemoteIdField(text: $supportId) }
+        HStack {
+            Button(L("Connect to Quick Support")) {
+                guard let id = Format.parseRemoteId(supportId) else { return }
+                app.act { try await app.engine.perform("connect_support_id", ["id": String(id)]) }
+            }
+            .disabled(app.busy || Format.parseRemoteId(supportId) == nil)
+            Button(L("Get Quick Support")) {
+                if let url = URL(string: "https://ism.mixel.ch/remote/support/") { app.openURL(url) }
+            }
+        }
+    }
+}
+#endif
+
 /// Remote control: connect to another computer or phone, and allow remote access to this computer.
 public struct RemoteControlView: View {
     @ObservedObject var app: AppModel
@@ -30,6 +51,9 @@ public struct RemoteControlView: View {
                     HStack(alignment: .top, spacing: 18) { controlCard; allowCard }
                     VStack(spacing: 18) { controlCard; allowCard }
                 }
+                #if os(macOS)
+                if !remote.controllerOnly { computerSupport }
+                #endif
                 if app.account.account?.staff == true { phoneCard }
                 if !remote.controllerOnly, app.signedIn, remote.phase == "ready" || remote.unattendedEnabled { unattendedCard }
                 MessageLine(app.error)
@@ -118,6 +142,17 @@ public struct RemoteControlView: View {
             }
         }
     }
+
+    #if os(macOS)
+    private var computerSupport: some View {
+        Card {
+            CardTitle(L("Quick Support for computers"), symbol: "person.wave.2")
+            Text(verbatim: L("Ask the customer to open Quick Support on their Mac, Windows or Linux computer and share the Support ID. They approve the connection on their screen."))
+                .foregroundStyle(.secondary).font(.callout)
+            ComputerSupportForm(app: app)
+        }
+    }
+    #endif
 
     @ViewBuilder private var pairing: some View {
         if let prompt = remote.pairing {

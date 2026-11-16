@@ -103,6 +103,13 @@ pub struct EnrollmentCompany {
     pub client_id: Uuid,
     pub client_name: String,
 }
+#[derive(Serialize, Deserialize)]
+pub struct StaffDeviceSettings {
+    pub name: String,
+    pub updated_at: String,
+    pub current_company: String,
+    pub companies: Vec<EnrollmentCompany>,
+}
 /// A phone that registered with a support code.
 #[derive(Serialize, Deserialize)]
 pub struct SupportDevice {
@@ -257,6 +264,29 @@ impl IsmAuth {
             return Err(AuthError);
         }
         Ok(companies)
+    }
+    pub async fn staff_device_settings(
+        &self,
+        token: &str,
+        device: Uuid,
+        expected_update: Option<String>,
+        name: Option<String>,
+        company: Option<Uuid>,
+    ) -> Result<StaffDeviceSettings, String> {
+        let unavailable = "The company device settings are unavailable";
+        let response = self.client
+            .post(self.base.join("/rest/v1/rpc/remote_staff_device_settings").map_err(|_| unavailable)?)
+            .header("apikey", &self.api_key)
+            .bearer_auth(token)
+            .json(&serde_json::json!({
+                "target": device, "expected_update": expected_update, "device_name": name, "target_client": company
+            }))
+            .send().await.map_err(|_| unavailable)?;
+        match response.status() {
+            reqwest::StatusCode::CONFLICT => Err("The device was changed. Open its settings again.".into()),
+            reqwest::StatusCode::BAD_REQUEST => Err("Check the device name and reopen its settings before trying again.".into()),
+            _ => Self::decode_response(response).await.map_err(|_| unavailable.into()),
+        }
     }
     /// Quick Support for phones: a one-time support code (30 minutes, one phone) for a
     /// company this MFA-verified team member looks after. The phone registers with it.

@@ -315,7 +315,9 @@ public final class AppModel: ObservableObject {
         struct Request: Encodable { var host: UInt32; var password: String?; var unattended: Bool }
         try await engine.perform("remote_request", Request(host: id, password: password?.isEmpty == false ? password : nil, unattended: phone ? false : unattended))
         session.lastRequestUnattended = unattended && !phone
-        progress = L("Waiting for the other person to accept your request.")
+        progress = session.lastRequestUnattended
+            ? L("Requesting unattended access…")
+            : L("Waiting for the other person to accept your request.")
     }
 
     /// The status line of the connection, as the desktop app words it.
@@ -328,7 +330,10 @@ public final class AppModel: ObservableObject {
             }
             return signedIn ? L("Make this computer available to start or receive a connection.") : L("Sign in to get your connection ID.")
         case "ready": return remote.message.isEmpty ? L("Ready for a connection.") : Translator.shared.translate(remote.message)
-        case "outgoing": return L("Waiting for the other person to accept your request.")
+        case "outgoing":
+            return session.lastRequestUnattended
+                ? L("Requesting unattended access…")
+                : L("Waiting for the other person to accept your request.")
         case "connecting", "deciding", "negotiating": return L("Connecting securely…")
         case "active":
             if remote.sharing { return L("Sharing your selected screen. You can end the session at any time.") }

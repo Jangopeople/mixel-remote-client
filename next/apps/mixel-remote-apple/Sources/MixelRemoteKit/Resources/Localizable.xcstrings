@@ -771,6 +771,28 @@
         }
       }
     },
+    "Allow control": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Steuerung erlauben"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Autoriser le contrôle"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Consenti il controllo"
+          }
+        }
+      }
+    },
     "Allow keyboard and mouse control": {
       "localizations": {
         "de": {
@@ -925,28 +947,6 @@
         }
       }
     },
-    "Allow with control": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mit Steuerung erlauben"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Autoriser avec contrôle"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Consenti con controllo"
-          }
-        }
-      }
-    },
     "Allowed": {
       "localizations": {
         "de": {
@@ -987,6 +987,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Freccia"
+          }
+        }
+      }
+    },
+    "Ask the customer to open Quick Support on their Mac, Windows or Linux computer and share the Support ID. They approve the connection on their screen.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bitten Sie den Kunden, Quick Support auf seinem Mac, Windows- oder Linux-Computer zu öffnen und Ihnen die Support-ID zu nennen. Er bestätigt die Verbindung auf seinem Bildschirm."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Demandez au client d’ouvrir Quick Support sur son ordinateur Mac, Windows ou Linux et de vous communiquer son ID de support. Il valide la connexion sur son écran."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chieda al cliente di aprire Quick Support sul suo computer Mac, Windows o Linux e di comunicarle l’ID di supporto. Il cliente approva la connessione sul proprio schermo."
           }
         }
       }
@@ -1805,6 +1827,28 @@
         }
       }
     },
+    "Connect to Quick Support": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mit Quick Support verbinden"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se connecter à Quick Support"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connetti a Quick Support"
+          }
+        }
+      }
+    },
     "Connect with your Mixel account": {
       "localizations": {
         "de": {
@@ -2043,6 +2087,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "ID di connessione"
+          }
+        }
+      }
+    },
+    "Connection options": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verbindungsoptionen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Options de connexion"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Opzioni di connessione"
           }
         }
       }
@@ -3169,6 +3235,28 @@
         }
       }
     },
+    "Edit device": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gerät bearbeiten"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modifier l’appareil"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modifica dispositivo"
+          }
+        }
+      }
+    },
     "Edit note": {
       "localizations": {
         "de": {
@@ -3917,6 +4005,28 @@
         }
       }
     },
+    "Get Quick Support": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quick Support herunterladen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Télécharger Quick Support"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scarica Quick Support"
+          }
+        }
+      }
+    },
     "Get remote clipboard": {
       "localizations": {
         "de": {
@@ -4111,28 +4221,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Accetto le condizioni d’uso e l’accordo sul trattamento dei dati"
-          }
-        }
-      }
-    },
-    "I confirm sharing this whole display": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ich bestätige, diesen ganzen Bildschirm zu teilen"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Je confirme le partage de tout cet écran"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Confermo la condivisione dell’intero schermo"
           }
         }
       }
@@ -5237,6 +5325,28 @@
         }
       }
     },
+    "Moving this device changes which company can reach it. Its connection ID stays the same.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Durch das Verschieben ändert sich, welche Firma auf dieses Gerät zugreifen kann. Die Verbindungs-ID bleibt gleich."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le déplacement change l’entreprise qui peut accéder à cet appareil. Son ID de connexion reste identique."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lo spostamento cambia l’azienda che può accedere al dispositivo. L’ID di connessione resta invariato."
+          }
+        }
+      }
+    },
     "Name": {
       "localizations": {
         "de": {
@@ -6271,6 +6381,28 @@
         }
       }
     },
+    "Quick Support for computers": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quick Support für Computer"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quick Support pour ordinateurs"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quick Support per computer"
+          }
+        }
+      }
+    },
     "Quit Mixel Remote": {
       "localizations": {
         "de": {
@@ -7019,6 +7151,28 @@
         }
       }
     },
+    "Requesting unattended access…": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unbeaufsichtigter Zugriff wird angefragt…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Demande d’accès sans surveillance…"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Richiesta di accesso non presidiato…"
+          }
+        }
+      }
+    },
     "Restart computer": {
       "localizations": {
         "de": {
@@ -7213,6 +7367,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "In corso"
+          }
+        }
+      }
+    },
+    "Save changes": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Änderungen speichern"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enregistrer les modifications"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Salva modifiche"
           }
         }
       }
@@ -7587,6 +7763,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Nota della sessione"
+          }
+        }
+      }
+    },
+    "Session options": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sitzungsoptionen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Options de la session"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Opzioni della sessione"
           }
         }
       }
@@ -8533,6 +8731,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Subresponsabili"
+          }
+        }
+      }
+    },
+    "Support ID": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Support-ID"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ID de support"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ID di supporto"
           }
         }
       }
