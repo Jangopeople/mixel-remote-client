@@ -58,6 +58,22 @@ final class ViewModelTests: XCTestCase {
         XCTAssertTrue(app.setupOffer)
     }
 
+    func testConnectWaitsWhileThisComputerIsStillRegistering() async throws {
+        let engine = MockEngine()
+        Fixtures.company(engine)
+        let app = await Fixtures.app(engine)
+        // The first status read says "connecting", every later one "ready".
+        var reads = 0
+        engine.handle("remote_status") { _ in
+            reads += 1
+            let phase = reads <= 1 ? "connecting" : "ready"
+            return .success(#"{"phase":"\#(phase)","message":"","host":482913557,"online":[],"sessions":[]}"#)
+        }
+        try await app.connectSteps(id: 731_204_118, password: nil, unattended: true, checkPhone: false)
+        XCTAssertEqual(engine.calls("remote_request").count, 1, "the request went out once this computer was ready")
+        XCTAssertGreaterThanOrEqual(reads, 2)
+    }
+
     func testPhoneIsClaimedAndWaitedForBeforeTheRequest() async throws {
         let engine = MockEngine()
         Fixtures.company(engine)

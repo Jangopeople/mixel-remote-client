@@ -514,6 +514,12 @@ public sealed class AppModel : Observable
                 throw new EngineFailure(string.IsNullOrEmpty(now.Message) ? "This computer could not go online. Check the internet connection and try again." : now.Message);
             }
         }
+        // This computer is just registering: wait for it instead of failing the connect.
+        if (await Status() is { Phase: "connecting" })
+        {
+            Progress = L("Getting this computer ready…");
+            await Wait(20, state => state.Phase != "connecting");
+        }
         var phone = false;
         if (checkPhone)
         {

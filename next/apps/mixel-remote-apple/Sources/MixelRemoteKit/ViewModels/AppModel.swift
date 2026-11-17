@@ -396,6 +396,11 @@ public final class AppModel: ObservableObject {
                 throw EngineFailure(state.message.isEmpty ? "This computer could not go online. Check the internet connection and try again." : Translator.shared.translate(state.message))
             }
         }
+        // This computer is just registering (signed in a moment ago): wait for it instead of failing the connect.
+        if let state = await status(), state.phase == "connecting" {
+            progress = L("Getting this computer ready…")
+            _ = await wait(seconds: 20, until: { $0.phase != "connecting" })
+        }
         let phone: Bool
         if checkPhone {
             progress = L("Looking up this ID…")

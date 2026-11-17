@@ -1079,6 +1079,11 @@ impl App {
                 return Err(if status.message.is_empty() { "This computer could not go online. Check the internet connection and try again.".into() } else { status.message });
             }
         }
+        // This computer is just registering: wait for it instead of failing the connect.
+        if self.status().await.is_some_and(|status| status.phase == "connecting") {
+            self.edit(|state| state.progress = t("Getting this computer ready…"));
+            self.wait_until(20, |status| status.phase != "connecting", None).await;
+        }
         self.edit(|state| state.progress = t("Looking up this ID…"));
         let phone: bool = match self.run("quick_phone_claim", json!({ "host": id })).await {
             Ok(phone) => phone,
