@@ -79,7 +79,8 @@ internal sealed class RemoteScreen : Grid
     {
         hook = new KeyboardHook(window, (scan, extended, down) =>
         {
-            if (!session.Controllable) return false;
+            // Only the focused session takes the keyboard; a session in the background never swallows a key.
+            if (!session.Controllable || !session.Focused) return false;
             if (KeyMap.Usage(scan, extended) is not { } usage) return true;
             var ctrl = held.Contains(KeyMap.Control) || held.Contains(228);
             var alt = held.Contains(KeyMap.Alt) || held.Contains(230);
@@ -280,7 +281,7 @@ internal sealed class RemoteScreen : Grid
             pointer = e.GetCurrentPoint(input).Position;
             Draw(last);
         }
-        if (!session.Controllable && !session.PointerMode) return;
+        if (!session.Focused || (!session.Controllable && !session.PointerMode)) return;
         if (PicturePoint(e, clamp: pressed.Count > 0) is { } point) session.MoveTo(point.X, point.Y);
     }
 
@@ -308,7 +309,7 @@ internal sealed class RemoteScreen : Grid
             e.Handled = true;
             return;
         }
-        if (!session.Controllable || session.PointerMode || PicturePoint(e) is not { } point) return;
+        if (!session.Focused || !session.Controllable || session.PointerMode || PicturePoint(e) is not { } point) return;
         var properties = e.GetCurrentPoint(input).Properties;
         if (Button(properties) is not { } button) return;
         session.MoveTo(point.X, point.Y);

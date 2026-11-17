@@ -47,7 +47,8 @@ internal sealed class DevicesPage : PageView
     private DevicesModel Model => App.Devices;
     private WorkspaceModel Workspace => App.Workspace;
     /// <summary>A connection is being prepared (its panel shows no failure): one at a time.</summary>
-    private bool Preparing => Workspace.Attempt is { Failure.Length: 0 };
+    // An engine that runs several sessions lets the next connection start while one is still being prepared.
+    private bool Preparing => Workspace.Attempt is { Failure.Length: 0 } && App.Remote.Sessions is null;
 
     public void FocusSearch() => Peek<TextBox>("search")?.Focus(FocusState.Keyboard);
     public void FocusConnectById() => Peek<TextBox>("byid")?.Focus(FocusState.Keyboard);
@@ -173,7 +174,7 @@ internal sealed class DevicesPage : PageView
             return created;
         });
         AutomationProperties.SetName(box, L("Connect by ID"));
-        var connect = Ui.Primary(L("Connect"), () => ConnectTyped(box), App.SignedIn && Format.ParseRemoteId(box.Text) is not null && !App.Remote.InSession && !Preparing, "\uE945");
+        var connect = Ui.Primary(L("Connect"), () => ConnectTyped(box), App.SignedIn && Format.ParseRemoteId(box.Text) is not null && App.CanStartConnection && !Preparing, "\uE945");
         return Ui.Row(8, Ui.Text(L("Connect by ID"), secondary: true, wrap: false), box, connect);
     }
 

@@ -230,7 +230,12 @@ public sealed partial class DevicesModel : Observable
     public string ConnectBlocked(Device device)
     {
         if (device.ConnectionId == app.Remote.Host) return L("This is the computer you are using.");
-        if (app.Remote.InSession) return L("End the current session first.");
+        if (!app.CanStartConnection)
+        {
+            return app.Remote.Sessions is { Count: > 0 } && !app.Remote.Sharing
+                ? L("You already have %d sessions open, the most Mixel Remote allows. Close one to start another.", app.Remote.SessionLimit)
+                : L("End the current session first.");
+        }
         if (PresenceOf(device) == Presence.Offline) return L("This device is offline.");
         if (app.Busy) return L("Please wait…");
         if (!app.SignedIn) return L("Sign in first.");

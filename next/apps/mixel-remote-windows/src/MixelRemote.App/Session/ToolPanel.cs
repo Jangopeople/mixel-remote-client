@@ -9,10 +9,16 @@ namespace MixelRemote.App.Session;
 /// <summary>Chat, files, clipboard (with typed text and print jobs) and AI help during a session.</summary>
 internal sealed class ToolPanel : PageView
 {
-    public ToolPanel(AppModel app, RemoteScreen screen) : base(app)
+    private readonly SessionModel session;
+    private readonly RemoteScreen screen;
+
+    /// <summary>The panel of one session: chat, files and clipboard go to that session only.</summary>
+    public ToolPanel(AppModel app, RemoteScreen screen, SessionModel session) : base(app)
     {
+        this.session = session;
+        this.screen = screen;
         Watch(app.Assistant);
-        app.Assistant.Screenshot = () => screen.Snapshot();
+        Watch(session);
     }
 
     /// <summary>chat, files, clipboard or help.</summary>
@@ -37,7 +43,6 @@ internal sealed class ToolPanel : PageView
 
     private StackPanel Chat()
     {
-        var session = App.Session;
         var messages = Ui.Column(6);
         foreach (var message in session.Chat)
         {
@@ -57,11 +62,11 @@ internal sealed class ToolPanel : PageView
         var draft = Keep("chat", () =>
         {
             var box = new TextBox { PlaceholderText = L("Chat message"), MinWidth = 190 };
-            box.TextChanged += (_, _) => App.Session.ChatDraft = box.Text;
+            box.TextChanged += (_, _) => session.ChatDraft = box.Text;
             box.KeyDown += (sender, key) =>
             {
                 if (key.Key != Windows.System.VirtualKey.Enter) return;
-                _ = App.Session.SendChat();
+                _ = session.SendChat();
                 box.Text = "";
             };
             return box;
@@ -71,8 +76,7 @@ internal sealed class ToolPanel : PageView
 
     private StackPanel Files()
     {
-        var remote = App.Remote;
-        var session = App.Session;
+        var remote = session.Remote;
         if (!remote.Files) return Ui.Column(8, Ui.Text(L("File transfer was not allowed for this session."), secondary: true));
         var view = session.Files;
         var busyOutgoing = view?.Outgoing is { Phase: "offered" or "waiting" or "transferring" or "verifying" or "paused" };
@@ -102,7 +106,7 @@ internal sealed class ToolPanel : PageView
     private Border Transfer(Transfer transfer, bool outgoing)
     {
         var cancel = transfer.Phase is "transferring" or "waiting" or "paused" or "offered"
-            ? Ui.Plain(L("Cancel"), () => _ = App.Session.CancelFile(transfer.Id))
+            ? Ui.Plain(L("Cancel"), () => _ = session.CancelFile(transfer.Id))
             : null;
         return new Border
         {
@@ -119,8 +123,7 @@ internal sealed class ToolPanel : PageView
 
     private StackPanel Clipboard()
     {
-        var remote = App.Remote;
-        var session = App.Session;
+        var remote = session.Remote;
         var items = Ui.Column(10);
         if (remote.Clipboard)
         {
@@ -137,11 +140,11 @@ internal sealed class ToolPanel : PageView
             var text = Keep("type", () =>
             {
                 var box = new TextBox { PlaceholderText = L("Text to type on the remote computer"), AcceptsReturn = false };
-                box.TextChanged += (_, _) => App.Session.TextToSend = box.Text;
+                box.TextChanged += (_, _) => session.TextToSend = box.Text;
                 box.KeyDown += (sender, key) =>
                 {
                     if (key.Key != Windows.System.VirtualKey.Enter) return;
-                    App.Session.TypeText();
+                    session.TypeText();
                     box.Text = "";
                 };
                 return box;
@@ -164,6 +167,8 @@ internal sealed class ToolPanel : PageView
 
     private StackPanel Help()
     {
+        // The AI help looks at the screen of the session this panel belongs to.
+        App.Assistant.Screenshot = () => screen.Snapshot();
         var assistant = App.Assistant;
         var items = Ui.Column(10);
         if (!assistant.Connected)

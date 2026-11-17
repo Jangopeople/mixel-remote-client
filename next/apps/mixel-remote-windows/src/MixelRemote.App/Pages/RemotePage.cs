@@ -54,7 +54,8 @@ internal sealed class RemotePage : PageView
         var partner = Keep("partner", () => new TextBox { PlaceholderText = "123 456 789", Width = 260, HorizontalAlignment = HorizontalAlignment.Left, FontSize = 18 });
         var password = Keep("password", () => new PasswordBox { Width = 260, HorizontalAlignment = HorizontalAlignment.Left });
         password.IsEnabled = true;
-        var ready = !App.Busy && App.SignedIn && Remote.Phase is "ready" or "offline" or "error";
+        var ready = !App.Busy && App.SignedIn && (Remote.Phase is "ready" or "offline" or "error" || (Remote.InSession && App.CanStartConnection));
+        var asking = Remote.TechnicianSessions.Any(item => item.Phase == "outgoing");
         void Go()
         {
             if (Format.ParseRemoteId(partner.Text) is not { } id)
@@ -76,8 +77,8 @@ internal sealed class RemotePage : PageView
             };
         }
         enter = ready ? Go : null;
-        var buttons = Ui.Row(8, connect, Remote.Phase == "outgoing" ? Ui.Plain(L("Cancel"), () => _ = App.Session.End()) : null);
-        UIElement? progress = App.Progress.Length > 0 && (App.Busy || Remote.Phase == "outgoing")
+        var buttons = Ui.Row(8, connect, asking ? Ui.Plain(L("Cancel"), () => _ = App.CancelRequests()) : null);
+        UIElement? progress = App.Progress.Length > 0 && (App.Busy || asking)
             ? Ui.Row(8, Ui.Spinner(), Ui.Text(App.Progress, secondary: true))
             : null;
         return Ui.Card(

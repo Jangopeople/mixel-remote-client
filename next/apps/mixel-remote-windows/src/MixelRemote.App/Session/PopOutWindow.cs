@@ -32,7 +32,13 @@ internal sealed class PopOutWindow
         Ui.FollowTheme(window);
         window.Activated += (sender, args) =>
         {
-            if (args.WindowActivationState == WindowActivationState.Deactivated) view.Screen.ReleaseKeyboard();
+            // Only the window that is active gets keyboard, mouse, clipboard and toolbar actions of its session.
+            if (args.WindowActivationState == WindowActivationState.Deactivated)
+            {
+                view.Screen.ReleaseKeyboard();
+                app.Workspace.WindowDeactivated(peer);
+            }
+            else app.Workspace.WindowActivated(peer);
         };
         window.AppWindow.Closing += (sender, args) =>
         {
@@ -41,7 +47,11 @@ internal sealed class PopOutWindow
             args.Cancel = true;
             app.Workspace.WindowClosed(peer);
         };
-        window.Closed += (_, _) => view.Detach();
+        window.Closed += (_, _) =>
+        {
+            app.Workspace.WindowDeactivated(peer);
+            view.Detach();
+        };
     }
 
     private string Title() => L("%@ — Mixel Remote", app.Workspace.Tab(peer)?.Name ?? MixelRemote.Support.Format.RemoteId(peer));

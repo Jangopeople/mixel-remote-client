@@ -111,7 +111,7 @@ internal static class Screenshots
         if (screen.StartsWith("session", StringComparison.Ordinal)) app.Session.ShowSample(VideoFrame.Sample(1280, 800, 9));
         await Task.Delay(900);
         var size = await Capture(WinRT.Interop.WindowNative.GetWindowHandle(window), path);
-        app.Session.Clear();
+        app.ClearSessions();
         close();
         await Task.Delay(200);
         return size;

@@ -10,6 +10,14 @@ internal sealed class TrayIcon : IDisposable
 {
     private const uint Callback = Native.WM_APP + 41;
     private const nuint SubclassId = 4711;
+    /// <summary>"End session": the shared session, or the one session in front; with several and none in front the window opens to choose.</summary>
+    private void EndSession()
+    {
+        var running = app.Sessions;
+        if (app.Remote.Sharing || running.Count <= 1 || app.Workspace.Focused is not null) _ = app.Session.End();
+        else window.Show();
+    }
+
     private enum Item : uint { Open = 1, CopyId, Online, Offline, EndSession, Quit }
 
     private readonly MainWindow window;
@@ -124,7 +132,7 @@ internal sealed class TrayIcon : IDisposable
             case Item.CopyId: _ = app.Host.CopyId(); break;
             case Item.Online: _ = app.GoOnline(); break;
             case Item.Offline: _ = app.GoOffline(); break;
-            case Item.EndSession: _ = app.Session.End(); break;
+            case Item.EndSession: EndSession(); break;
             case Item.Quit: _ = App.Current.Quit(); break;
         }
     }

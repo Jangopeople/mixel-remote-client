@@ -157,6 +157,11 @@ internal sealed partial class MainWindow : Window
         app.Workspace.PropertyChanged += OnChanged;
         app.Settings.PropertyChanged += OnSettings;
         app.Devices.PropertyChanged += OnChanged;
+        Activated += (_, args) =>
+        {
+            // The tab in front is the focused session while this window is the active one.
+            if (args.WindowActivationState != WindowActivationState.Deactivated) app.Workspace.MainActivated();
+        };
         Closed += (_, _) =>
         {
             closed = true;
@@ -301,7 +306,7 @@ internal sealed partial class MainWindow : Window
         foreach (var (peer, view) in sessionViews)
         {
             var visible = peer == shown;
-            view.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+            view.SetShown(visible);
             if (!visible) view.Screen.ReleaseKeyboard();
         }
     }

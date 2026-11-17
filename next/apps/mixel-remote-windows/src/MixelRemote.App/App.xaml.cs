@@ -145,9 +145,9 @@ public partial class App : Application
         if (Model.Host.Asking) consent?.Present();
         else consent?.Dismiss();
         // After a session to a company computer: offer a note for the session report.
-        if (!remote.InSession && Model.Session.NoteFor is { } helped && main is not null)
+        if (!remote.InSession && Model.NoteFor is { } helped && main is not null)
         {
-            Model.Session.NoteTaken();
+            Model.NoteTaken();
             main.Show();
             _ = Shell.Dialogs.Form(main.Root.XamlRoot, L("Session note"), L("What was done on computer %@? The note appears in the session report.", Format.RemoteId(helped)),
                 [(L("Note"), "")], L("Save"), async values =>

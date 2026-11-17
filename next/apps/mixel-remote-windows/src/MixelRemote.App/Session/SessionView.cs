@@ -20,6 +20,7 @@ internal sealed class SessionView : Grid
     private readonly AppModel app;
     private readonly Window window;
     private readonly uint peer;
+    private readonly SessionModel session;
     private readonly bool inWindow;
     private readonly Border recBadge = new() { HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(14), Padding = new Thickness(10, 5, 10, 5), CornerRadius = new CornerRadius(14), Visibility = Visibility.Collapsed, IsHitTestVisible = false };
     private readonly TextBlock recText = new() { FontFamily = new FontFamily("Cascadia Mono, Consolas"), FontWeight = Microsoft.UI.Text.FontWeights.Bold, FontSize = 12, Foreground = new SolidColorBrush(Microsoft.UI.Colors.White) };
@@ -31,6 +32,8 @@ internal sealed class SessionView : Grid
     private readonly Border drawBar = new() { HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(12), Padding = new Thickness(6), CornerRadius = new CornerRadius(8), BorderThickness = new Thickness(1), Visibility = Visibility.Collapsed };
     private bool pending;
     private bool closed;
+    private bool shown = true;
+    private bool stale;
     private TextBlock? detailLine;
 
     public SessionView(AppModel app, Window window, uint peer = 0, bool inWindow = false, string tool = "")
@@ -39,8 +42,10 @@ internal sealed class SessionView : Grid
         this.window = window;
         this.peer = peer;
         this.inWindow = inWindow;
-        Screen = new RemoteScreen(app.Session);
-        tools = new ToolPanel(app, Screen) { Width = 320, Visibility = Visibility.Collapsed };
+        // The view belongs to one session (by the device's Remote ID) and reads only that one.
+        session = app.SessionFor(peer) ?? app.Session;
+        Screen = new RemoteScreen(session);
+        tools = new ToolPanel(app, Screen, session) { Width = 320, Visibility = Visibility.Collapsed };
         if (tool.Length > 0)
         {
             tools.Tool = tool;
@@ -72,18 +77,18 @@ internal sealed class SessionView : Grid
         body.Children.Add(tools);
         Grid.SetRow(body, 1);
         Children.Add(body);
-        Screen.Attach(WinRT.Interop.WindowNative.GetWindowHandle(window), app.Session.CtrlAltDel, () => toolbar.Focus(FocusState.Keyboard), ToggleFullScreen, () => _ = ConfirmEnd(app.Workspace.Tab(peer)?.Name ?? ""));
+        Screen.Attach(WinRT.Interop.WindowNative.GetWindowHandle(window), session.CtrlAltDel, () => toolbar.Focus(FocusState.Keyboard), ToggleFullScreen, () => _ = ConfirmEnd(app.Workspace.Tab(peer)?.Name ?? ""));
         SizeChanged += (_, _) => { if ((ActualWidth < 1240) != compact) Rebuild(); };
         app.PropertyChanged += OnApp;
-        app.Session.PropertyChanged += OnSession;
+        session.PropertyChanged += OnSession;
         // A closed window has no AppWindow any more: stop following the models (the screenshot and demo
         // windows close while their session stays; the app's own session window only hides).
         window.Closed += (_, _) =>
         {
             closed = true;
             app.PropertyChanged -= OnApp;
-            app.Session.PropertyChanged -= OnSession;
-            app.Session.PrintJobArrived -= OnPrintJob;
+            session.PropertyChanged -= OnSession;
+            session.PrintJobArrived -= OnPrintJob;
             Translator.Shared.Changed -= OnLanguage;
         };
         Loaded += (_, _) =>
@@ -93,7 +98,7 @@ internal sealed class SessionView : Grid
         };
         Unloaded += (_, _) => Translator.Shared.Changed -= OnLanguage;
         // A print job of the other computer: the print jobs (Clipboard tool) open by themselves.
-        app.Session.PrintJobArrived += OnPrintJob;
+        session.PrintJobArrived += OnPrintJob;
         ActualThemeChanged += (_, _) => Rebuild();
         Loaded += (_, _) => Render();
     }
@@ -120,9 +125,28 @@ internal sealed class SessionView : Grid
         Rebuild();
     }
 
+    /// <summary>
+    /// A session in a background tab is not drawn again at every status; it catches up when it comes to the front.
+    /// </summary>
+    public void SetShown(bool visible)
+    {
+        shown = visible;
+        Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        if (visible && stale)
+        {
+            stale = false;
+            Render();
+        }
+    }
+
     private void Rebuild()
     {
         if (pending || closed) return;
+        if (!shown)
+        {
+            stale = true;
+            return;
+        }
         pending = true;
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
         {
@@ -144,9 +168,8 @@ internal sealed class SessionView : Grid
         toolbar.Background = Ui.Brush("LayerFillColorDefaultBrush");
         BuildToolbar();
         BuildDrawBar();
-        var session = app.Session;
         waiting.Visibility = session.Frame is null ? Visibility.Visible : Visibility.Collapsed;
-        ((TextBlock)waiting.Children[1]).Text = app.Remote.Phase == "outgoing" ? L("Waiting for the other person to accept your request.") : L("Starting video");
+        ((TextBlock)waiting.Children[1]).Text = session.Remote.Phase == "outgoing" ? L("Waiting for the other person to accept your request.") : L("Starting video");
         var lines = new[] { session.PasswordWarning(), session.Notice, session.MeetingNotice, session.Error, session.RecordingText }.Where(line => line.Length > 0).ToList();
         notices.Visibility = lines.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         notices.Child = Ui.Column(4, [.. lines.Select(line => (UIElement)new TextBlock { Text = line, Foreground = new SolidColorBrush(line == session.Error ? Windows.UI.Color.FromArgb(255, 0xFF, 0xB4, 0xBD) : Microsoft.UI.Colors.White), TextWrapping = TextWrapping.Wrap, MaxWidth = 620 })]);
@@ -156,7 +179,7 @@ internal sealed class SessionView : Grid
 
     private void UpdateRecording()
     {
-        var since = app.Session.RecordingSince;
+        var since = session.RecordingSince;
         if (recTimer is null)
         {
             // One tick a second: the recording time and the support-password warnings (5 and 1 minute before the end).
@@ -165,7 +188,7 @@ internal sealed class SessionView : Grid
             recTimer.Tick += (_, _) =>
             {
                 ShowRecordingTime();
-                var warning = app.Session.PasswordWarning();
+                var warning = session.PasswordWarning();
                 if (warning != lastWarning)
                 {
                     lastWarning = warning;
@@ -174,7 +197,7 @@ internal sealed class SessionView : Grid
             };
             recTimer.Start();
         }
-        if (since is null || app.Remote.Recording?.Running != true)
+        if (since is null || session.Remote.Recording?.Running != true)
         {
             recBadge.Visibility = Visibility.Collapsed;
             return;
@@ -199,8 +222,8 @@ internal sealed class SessionView : Grid
     {
         closed = true;
         app.PropertyChanged -= OnApp;
-        app.Session.PropertyChanged -= OnSession;
-        app.Session.PrintJobArrived -= OnPrintJob;
+        session.PropertyChanged -= OnSession;
+        session.PrintJobArrived -= OnPrintJob;
         Translator.Shared.Changed -= OnLanguage;
         recTimer?.Stop();
         Screen.Detach();
@@ -212,7 +235,6 @@ internal sealed class SessionView : Grid
     /// <summary>The drawing tools float over the remote picture while drawing is on, so the toolbar keeps its width.</summary>
     private void BuildDrawBar()
     {
-        var session = app.Session;
         drawBar.Visibility = session.Drawing ? Visibility.Visible : Visibility.Collapsed;
         if (!session.Drawing)
         {
@@ -261,8 +283,8 @@ internal sealed class SessionView : Grid
 
     private string Detail()
     {
-        var detail = app.Remote.Control ? L("View and control") : L("View only");
-        if (app.Session.Fps > 0 && app.Session.Frame is { } frame) detail += $" · {frame.Width} × {frame.Height} · {app.Session.Fps} fps";
+        var detail = session.Remote.Control ? L("View and control") : L("View only");
+        if (session.Fps > 0 && session.Frame is { } frame) detail += $" · {frame.Width} × {frame.Height} · {session.Fps} fps";
         return detail;
     }
 
@@ -297,8 +319,7 @@ internal sealed class SessionView : Grid
 
     private void BuildToolbar()
     {
-        var remote = app.Remote;
-        var session = app.Session;
+        var remote = session.Remote;
         var tab = peer != 0 ? app.Workspace.Tab(peer) : null;
         var name = tab?.Name ?? L("Computer %@", Format.RemoteId(remote.Peer));
         var os = tab?.Os ?? "";
@@ -388,13 +409,12 @@ internal sealed class SessionView : Grid
 
     private async Task ConfirmEnd(string name)
     {
-        if (await Dialogs.Confirm(window.Content.XamlRoot, L("End the session with %@?", name), L("The connection ends for both sides."), L("End session"))) await app.Session.End();
+        if (await Dialogs.Confirm(window.Content.XamlRoot, L("End the session with %@?", name), L("The connection ends for both sides."), L("End session"))) await session.End();
     }
 
     /// <summary>Signal bars and "30 fps": a popover with the picture's facts (the picture adapts to the line by itself).</summary>
     private Button QualityButton()
     {
-        var session = app.Session;
         var bars = session.Fps >= 20 ? 3 : session.Fps >= 8 ? 2 : session.Fps > 0 ? 1 : 0;
         var barsRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2, VerticalAlignment = VerticalAlignment.Center };
         for (var index = 0; index < 3; index++)
@@ -411,7 +431,7 @@ internal sealed class SessionView : Grid
             Ui.Split(Ui.Text(L("Pictures per second"), secondary: true), Ui.Text(L("%d fps", session.Fps))),
             Ui.Split(Ui.Text(L("Resolution"), secondary: true), Ui.Text(session.Frame is { } frame ? $"{frame.Width} × {frame.Height}" : "—")),
             Ui.Split(Ui.Text(L("Video decoding"), secondary: true), Ui.Text(L("Mixel engine"))),
-            Ui.Split(Ui.Text(L("Received"), secondary: true), Ui.Text(Format.Bytes(app.Remote.Received))),
+            Ui.Split(Ui.Text(L("Received"), secondary: true), Ui.Text(Format.Bytes(session.Remote.Received))),
             Ui.Caption(L("The picture adapts to the line by itself.")));
         facts.Width = 280;
         var button = new Button
@@ -428,8 +448,7 @@ internal sealed class SessionView : Grid
     /// <summary>"..." : privacy screen, block input, show pointer, sound, lock, restart, clipboard, colleague, sides, renew, fit.</summary>
     private Button More()
     {
-        var remote = app.Remote;
-        var session = app.Session;
+        var remote = session.Remote;
         var menu = new MenuFlyout();
         void Item(string text, Action run, bool enabled = true)
         {
@@ -471,7 +490,7 @@ internal sealed class SessionView : Grid
 
     private async Task InviteColleague()
     {
-        var remote = app.Remote;
+        var remote = session.Remote;
         var device = new TextBox { PlaceholderText = "123 456 789", MaxWidth = 220, HorizontalAlignment = HorizontalAlignment.Left };
         var control = false;
         var linkLine = new StackPanel();
@@ -485,7 +504,7 @@ internal sealed class SessionView : Grid
             remote.InviteMessage is { } message ? Ui.Message(Translator.Shared.Translate(message), error: false) : null,
             Ui.Link(L("Use a meeting link instead"), async () =>
             {
-                if (await app.Session.MeetingLink() is { } room)
+                if (await session.MeetingLink() is { } room)
                 {
                     linkLine.Children.Clear();
                     linkLine.Children.Add(Ui.Field(L("Meeting link"), Ui.Split(Ui.Selectable(room.Invite, mono: true), Ui.IconButton("\uE8C8", L("Copy"), () => app.CopyText(room.Invite)))));
@@ -496,10 +515,10 @@ internal sealed class SessionView : Grid
         {
             if (Format.ParseRemoteId(device.Text) is not { } id)
             {
-                app.Session.Error = L("Enter a nine-digit connection ID");
+                session.Error = L("Enter a nine-digit connection ID");
                 return false;
             }
-            await app.Session.Invite(null, id, control);
+            await session.Invite(null, id, control);
             return true;
         });
     }
