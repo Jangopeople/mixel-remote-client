@@ -7,16 +7,16 @@ using static MixelRemote.Support.T;
 namespace MixelRemote.ViewModels;
 
 /// <summary>The views chosen in the sidebar.</summary>
-public enum ListViewKind { All, Online, Favorites, Recent, Group }
+public enum DeviceViewKind { All, Online, Favorites, Recent, Group }
 
 /// <summary>A view of the device list: one of the four built-in ones, or a group.</summary>
-public readonly record struct ListView(ListViewKind Kind, string Group = "")
+public readonly record struct DeviceView(DeviceViewKind Kind, string Group = "")
 {
-    public static readonly ListView All = new(ListViewKind.All);
-    public static readonly ListView Online = new(ListViewKind.Online);
-    public static readonly ListView Favorites = new(ListViewKind.Favorites);
-    public static readonly ListView Recent = new(ListViewKind.Recent);
-    public static ListView InGroup(string name) => new(ListViewKind.Group, name);
+    public static readonly DeviceView All = new(DeviceViewKind.All);
+    public static readonly DeviceView Online = new(DeviceViewKind.Online);
+    public static readonly DeviceView Favorites = new(DeviceViewKind.Favorites);
+    public static readonly DeviceView Recent = new(DeviceViewKind.Recent);
+    public static DeviceView InGroup(string name) => new(DeviceViewKind.Group, name);
 }
 
 /// <summary>A group of rows in the table.</summary>
@@ -25,7 +25,7 @@ public sealed record RowGroup(string Id, string Name, List<Device> Devices, int 
 // The Devices console ("Pro Console"): views, quick filters, the grouped table, and the admin badges.
 public sealed partial class DevicesModel
 {
-    private ListView view = ListView.All;
+    private DeviceView view = DeviceView.All;
     private bool onlineOnly;
     private bool unattendedOnly;
     private bool updateOnly;
@@ -34,7 +34,7 @@ public sealed partial class DevicesModel
     private Dictionary<uint, AdminDevice> admin = [];
     private bool adminAvailable;
 
-    public ListView View { get => view; set => Set(ref view, value); }
+    public DeviceView View { get => view; set => Set(ref view, value); }
     public bool OnlineOnly { get => onlineOnly; set => Set(ref onlineOnly, value); }
     public bool UnattendedOnly { get => unattendedOnly; set => Set(ref unattendedOnly, value); }
     public bool UpdateOnly { get => updateOnly; set => Set(ref updateOnly, value); }
@@ -77,15 +77,15 @@ public sealed partial class DevicesModel
 
     private bool InSessionWithThis(Device device) => app.Workspace.StateOf(device.ConnectionId) is not null;
 
-    public List<Device> DevicesIn(ListView wanted)
+    public List<Device> DevicesIn(DeviceView wanted)
     {
         var all = AllDevices;
         return wanted.Kind switch
         {
-            ListViewKind.Online => [.. all.Where(device => IsOnline(device) || InSessionWithThis(device))],
-            ListViewKind.Favorites => [.. all.Where(device => Favorites.Contains(device.DeviceId))],
-            ListViewKind.Recent => [.. Recent.Select(row => all.FirstOrDefault(device => device.DeviceId == row.DeviceId)).OfType<Device>()],
-            ListViewKind.Group => [.. all.Where(device => (device.GroupName ?? "") == wanted.Group)],
+            DeviceViewKind.Online => [.. all.Where(device => IsOnline(device) || InSessionWithThis(device))],
+            DeviceViewKind.Favorites => [.. all.Where(device => Favorites.Contains(device.DeviceId))],
+            DeviceViewKind.Recent => [.. Recent.Select(row => all.FirstOrDefault(device => device.DeviceId == row.DeviceId)).OfType<Device>()],
+            DeviceViewKind.Group => [.. all.Where(device => (device.GroupName ?? "") == wanted.Group)],
             _ => [.. all],
         };
     }
@@ -222,6 +222,18 @@ public sealed partial class DevicesModel
             Error = AdminError(failure);
             return false;
         }
+    }
+
+    /// <summary>Removes a device with the typed ID as confirmation (the admin API checks it); falls back to the company call without admin data.</summary>
+    public async Task<bool> RemoveConfirmed(Device device, string typedId)
+    {
+        if (Format.ParseRemoteId(typedId) != device.ConnectionId)
+        {
+            Error = L("The ID does not match the device.");
+            return false;
+        }
+        if (AdminOf(device) is not { } info) return await Remove(device);
+        return await AdminChange(device, _ => DeviceAdmin.Remove(info, device.ConnectionId));
     }
 
     /// <summary>The stable error hint of the admin API as a sentence.</summary>

@@ -46,7 +46,7 @@ internal static class Screenshots
         }
         foreach (var language in system is "dark" ? [] : new[] { "de", "fr", "it" })
         {
-            foreach (var screen in new[] { "remote", "devices", "account", "settings", "session", "consent" })
+            foreach (var screen in new[] { "remote", "devices", "account", "settings", "session", "consent", "connecting", "reports" })
             {
                 var name = $"{screen}-light-{language}.png";
                 try
@@ -80,10 +80,10 @@ internal static class Screenshots
                 window.Content = Themed(ConsentWindow.Standalone(app), theme);
                 close = window.Close;
                 break;
-            case "session" or "session-chat" or "session-files":
-                window = Plain(1360, 860, L("Computer %@", Format.RemoteId(app.Remote.Peer)) + " · Mixel Remote");
+            case "session" or "session-chat" or "session-files" or "popout":
+                window = Plain(1360, 860, L("%@ — Mixel Remote", app.Devices.NameOf(731_204_118)));
                 var tool = screen switch { "session-chat" => "chat", "session-files" => "files", _ => "" };
-                window.Content = Themed(SessionWindow.Standalone(app, window, tool), theme);
+                window.Content = Themed(SessionView.Standalone(app, window, 731_204_118, tool, screen == "popout"), theme);
                 close = window.Close;
                 break;
             case "tray":

@@ -1,4 +1,5 @@
 using Microsoft.UI.Text;
+using MixelRemote.Support;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
@@ -264,5 +265,119 @@ internal static class Ui
             if (box.SelectedIndex >= 0 && box.SelectedIndex < list.Count) changed(list[box.SelectedIndex].Key);
         };
         return box;
+    }
+
+    // ---- The "Pro Console" building blocks ----
+
+    public static Border Hairline(bool vertical = false) => new()
+    {
+        Background = Brush("MixelHairline"),
+        Height = vertical ? double.NaN : 1,
+        Width = vertical ? 1 : double.NaN,
+        IsHitTestVisible = false,
+    };
+
+    /// <summary>A small rounded badge ("Unattended", "Update", "In session"): coloured text on a soft background.</summary>
+    public static Border Pill(string text, string? glyph, string foreground, string background)
+    {
+        var fg = Brush(foreground);
+        var row = Row(4);
+        if (glyph is not null) row.Children.Add(Icon(glyph, 11, fg));
+        row.Children.Add(new TextBlock { Text = text, FontSize = 12, FontWeight = FontWeights.SemiBold, Foreground = fg, VerticalAlignment = VerticalAlignment.Center });
+        var pill = new Border { Child = row, Padding = new Thickness(7, 2, 7, 3), CornerRadius = new CornerRadius(6), Background = Brush(background), VerticalAlignment = VerticalAlignment.Center };
+        AutomationProperties.SetName(pill, text);
+        return pill;
+    }
+
+    /// <summary>The system's mark on a small tile; <paramref name="dot"/> is the status dot in its corner.</summary>
+    public static FrameworkElement OsTile(string os, string? dotBrush, double size = 30)
+    {
+        var tile = new Grid { Width = size, Height = size };
+        var face = new Border
+        {
+            CornerRadius = new CornerRadius(7), BorderThickness = new Thickness(1), Background = Brush("MixelPaper"), BorderBrush = Brush("MixelHairline"),
+            Child = OsMark(os, size * 0.46),
+        };
+        tile.Children.Add(face);
+        if (dotBrush is not null)
+        {
+            tile.Children.Add(new Microsoft.UI.Xaml.Shapes.Ellipse
+            {
+                Width = 9, Height = 9, Fill = Brush(dotBrush), Stroke = Brush("MixelPaper"), StrokeThickness = 1.5,
+                HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Bottom, Margin = new Thickness(0, 0, -3, -3),
+            });
+        }
+        AutomationProperties.SetAccessibilityView(tile, Microsoft.UI.Xaml.Automation.Peers.AccessibilityView.Raw);
+        return tile;
+    }
+
+    /// <summary>The system's own mark: four panes for Windows, a glyph for the others.</summary>
+    public static FrameworkElement OsMark(string os, double size)
+    {
+        if (os.Equals("windows", StringComparison.OrdinalIgnoreCase))
+        {
+            var gap = Math.Max(1, size * 0.09);
+            var side = (size - gap) / 2;
+            var marks = new Grid { Width = size, Height = size, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+            var fill = Brush("TextFillColorPrimaryBrush");
+            for (var index = 0; index < 4; index++)
+            {
+                marks.Children.Add(new Microsoft.UI.Xaml.Shapes.Rectangle
+                {
+                    Width = side, Height = side, Fill = fill, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top,
+                    Margin = new Thickness(index % 2 * (side + gap), index / 2 * (side + gap), 0, 0),
+                });
+            }
+            return marks;
+        }
+        var icon = Icon(Format.OsGlyph(os), size, Brush("TextFillColorPrimaryBrush"));
+        icon.HorizontalAlignment = HorizontalAlignment.Center;
+        icon.VerticalAlignment = VerticalAlignment.Center;
+        return icon;
+    }
+
+    /// <summary>A quick filter: a pill that is on or off.</summary>
+    public static Button Chip(string text, bool on, Action action, string? dotBrush = null)
+    {
+        var row = Row(6);
+        if (dotBrush is not null) row.Children.Add(new Microsoft.UI.Xaml.Shapes.Ellipse { Width = 7, Height = 7, Fill = Brush(dotBrush), VerticalAlignment = VerticalAlignment.Center });
+        row.Children.Add(new TextBlock { Text = text, FontSize = 13, FontWeight = on ? FontWeights.SemiBold : FontWeights.Normal, Foreground = on ? BrandBrush : Brush("TextFillColorPrimaryBrush") });
+        var button = new Button
+        {
+            Content = row, Padding = new Thickness(12, 5, 12, 5), CornerRadius = new CornerRadius(16), BorderThickness = new Thickness(1),
+            Background = on ? Brush("MixelBrandSoft") : Brush("MixelPaper"), BorderBrush = on ? BrandBrush : Brush("MixelHairline"),
+        };
+        AutomationProperties.SetName(button, text);
+        AutomationProperties.SetItemStatus(button, on ? T.L("on") : T.L("off"));
+        button.Click += (_, _) => action();
+        return button;
+    }
+
+    /// <summary>A flat text/icon button (no border) for the title bar and rows.</summary>
+    public static Button Flat(UIElement content, string name, Action action, bool enabled = true)
+    {
+        var button = new Button { Content = content, IsEnabled = enabled, Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent), BorderThickness = new Thickness(0), Padding = new Thickness(8, 5, 8, 5) };
+        AutomationProperties.SetName(button, name);
+        ToolTipService.SetToolTip(button, name);
+        button.Click += (_, _) => action();
+        return button;
+    }
+
+    /// <summary>A small uppercase column or section heading.</summary>
+    public static TextBlock Label(string text)
+    {
+        var block = new TextBlock { Text = text.ToUpperInvariant(), FontSize = 11, FontWeight = FontWeights.SemiBold, CharacterSpacing = 60, Foreground = Secondary };
+        AutomationProperties.SetHeadingLevel(block, Microsoft.UI.Xaml.Automation.Peers.AutomationHeadingLevel.Level2);
+        return block;
+    }
+
+    /// <summary>A stable colour for a group's dot.</summary>
+    public static Brush GroupColor(string name)
+    {
+        uint[] palette = [0x5B5BD6, 0x12A594, 0xE5800E, 0xB14FD6, 0x2F80ED, 0xD6409F, 0x7A8B19];
+        uint hash = 5381;
+        foreach (var value in System.Text.Encoding.UTF8.GetBytes(name)) hash = unchecked(hash * 33 + value);
+        var color = palette[hash % palette.Length];
+        return new SolidColorBrush(Windows.UI.Color.FromArgb(255, (byte)(color >> 16), (byte)(color >> 8), (byte)color));
     }
 }

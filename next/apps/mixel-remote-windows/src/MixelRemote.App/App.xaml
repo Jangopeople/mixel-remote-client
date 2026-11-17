@@ -25,6 +25,20 @@
                     <SolidColorBrush x:Key="MixelWarning" Color="#A86400" />
                     <SolidColorBrush x:Key="MixelWarningSoft" Color="#FFF4E5" />
                     <SolidColorBrush x:Key="MixelPage" Color="#F7F7F8" />
+                    <SolidColorBrush x:Key="MixelChrome" Color="#F4F4F6" />
+                    <SolidColorBrush x:Key="MixelPaper" Color="#FFFFFF" />
+                    <SolidColorBrush x:Key="MixelGroupRow" Color="#F2F2F5" />
+                    <SolidColorBrush x:Key="MixelActiveRow" Color="#FBEFF1" />
+                    <SolidColorBrush x:Key="MixelHoverRow" Color="#F7F7F9" />
+                    <SolidColorBrush x:Key="MixelHairline" Color="#E4E4E9" />
+                    <SolidColorBrush x:Key="MixelInfoText" Color="#1D4ED8" />
+                    <SolidColorBrush x:Key="MixelInfoSoft" Color="#EAF1FF" />
+                    <SolidColorBrush x:Key="MixelUpdateText" Color="#8A4B00" />
+                    <SolidColorBrush x:Key="MixelUpdateSoft" Color="#FFF2D9" />
+                    <SolidColorBrush x:Key="MixelSessionText" Color="#1B6B3F" />
+                    <SolidColorBrush x:Key="MixelSessionSoft" Color="#E5F5EC" />
+                    <SolidColorBrush x:Key="MixelStage" Color="#111114" />
+                    <SolidColorBrush x:Key="MixelStar" Color="#D99A00" />
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="Dark">
                     <SolidColorBrush x:Key="MixelBrand" Color="#E2485B" />
@@ -33,6 +47,20 @@
                     <SolidColorBrush x:Key="MixelWarning" Color="#F0A43A" />
                     <SolidColorBrush x:Key="MixelWarningSoft" Color="#3A2A12" />
                     <SolidColorBrush x:Key="MixelPage" Color="#202022" />
+                    <SolidColorBrush x:Key="MixelChrome" Color="#1B1B1E" />
+                    <SolidColorBrush x:Key="MixelPaper" Color="#141416" />
+                    <SolidColorBrush x:Key="MixelGroupRow" Color="#1F1F23" />
+                    <SolidColorBrush x:Key="MixelActiveRow" Color="#2A171B" />
+                    <SolidColorBrush x:Key="MixelHoverRow" Color="#1C1C20" />
+                    <SolidColorBrush x:Key="MixelHairline" Color="#2C2C31" />
+                    <SolidColorBrush x:Key="MixelInfoText" Color="#8FB4FF" />
+                    <SolidColorBrush x:Key="MixelInfoSoft" Color="#16233D" />
+                    <SolidColorBrush x:Key="MixelUpdateText" Color="#F5C26B" />
+                    <SolidColorBrush x:Key="MixelUpdateSoft" Color="#3A2A10" />
+                    <SolidColorBrush x:Key="MixelSessionText" Color="#6FD69D" />
+                    <SolidColorBrush x:Key="MixelSessionSoft" Color="#13301F" />
+                    <SolidColorBrush x:Key="MixelStage" Color="#0B0B0D" />
+                    <SolidColorBrush x:Key="MixelStar" Color="#F5C24A" />
                 </ResourceDictionary>
             </ResourceDictionary.ThemeDictionaries>
         </ResourceDictionary>

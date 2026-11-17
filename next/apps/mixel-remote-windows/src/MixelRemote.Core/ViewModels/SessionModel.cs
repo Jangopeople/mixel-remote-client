@@ -80,6 +80,8 @@ public sealed class SessionModel : Observable
     public event EventHandler<VideoFrame>? FrameArrived;
 
     internal bool LastRequestUnattended { get; set; }
+    /// <summary>This session was requested as unattended (without asking the person at the other computer).</summary>
+    public bool RequestedUnattended => LastRequestUnattended;
     /// <summary>Milliseconds to wait when no picture is ready yet.</summary>
     internal int IdleDelay { get; set; } = 4;
 

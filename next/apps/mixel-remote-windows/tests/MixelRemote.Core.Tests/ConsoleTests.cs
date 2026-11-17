@@ -37,13 +37,13 @@ public sealed class ConsoleTests
     {
         var (_, app) = await Company();
         var devices = app.Devices;
-        CollectionAssert.AreEqual(new[] { "Accounting Mac" }, devices.DevicesIn(ListView.Favorites).Select(device => device.Name).ToArray());
-        CollectionAssert.AreEqual(new[] { "Reception PC", "Accounting Mac" }, devices.DevicesIn(ListView.Recent).Select(device => device.Name).ToArray());
-        CollectionAssert.AreEqual(new[] { "Reception PC" }, devices.DevicesIn(ListView.InGroup("Front office")).Select(device => device.Name).ToArray());
+        CollectionAssert.AreEqual(new[] { "Accounting Mac" }, devices.DevicesIn(DeviceView.Favorites).Select(device => device.Name).ToArray());
+        CollectionAssert.AreEqual(new[] { "Reception PC", "Accounting Mac" }, devices.DevicesIn(DeviceView.Recent).Select(device => device.Name).ToArray());
+        CollectionAssert.AreEqual(new[] { "Reception PC" }, devices.DevicesIn(DeviceView.InGroup("Front office")).Select(device => device.Name).ToArray());
         CollectionAssert.AreEqual(new[] { "Front office" }, devices.GroupNames.ToArray());
-        devices.View = ListView.InGroup("Front office");
+        devices.View = DeviceView.InGroup("Front office");
         Assert.AreEqual(1, devices.Filtered.Count);
-        Assert.AreEqual("All devices", ListView.All.Kind == ListViewKind.All ? "All devices" : "");
+        Assert.AreEqual("All devices", DeviceView.All.Kind == DeviceViewKind.All ? "All devices" : "");
     }
 
     [TestMethod]
@@ -162,5 +162,45 @@ public sealed class ConsoleTests
         await app.Reports.Load();
         Assert.IsTrue(app.Reports.NeedsPlan);
         Assert.AreEqual(0, app.Reports.Rows.Count);
+    }
+}
+
+[TestClass]
+public sealed class PointerPolicyTests
+{
+    [TestMethod]
+    public void Exactly_one_pointer_is_shown_whatever_the_host_draws()
+    {
+        foreach (var pointerMode in new[] { false, true })
+        {
+            foreach (var hostDraws in new[] { false, true })
+            {
+                Assert.AreEqual(1, PointerPolicy.PointersShown(pointerMode, hostDraws), $"pointerMode={pointerMode} hostDraws={hostDraws}");
+            }
+        }
+    }
+
+    [TestMethod]
+    public void The_local_cursor_is_hidden_only_when_the_host_draws_its_own()
+    {
+        Assert.AreEqual(PointerPolicy.LocalCursor.Arrow, PointerPolicy.For(false, false));
+        Assert.AreEqual(PointerPolicy.LocalCursor.Cross, PointerPolicy.For(true, false));
+        Assert.AreEqual(PointerPolicy.LocalCursor.Hidden, PointerPolicy.For(false, true));
+    }
+}
+
+[TestClass]
+public sealed class AppearanceTests
+{
+    [TestMethod]
+    public void Appearance_is_system_by_default_and_remembered()
+    {
+        var preferences = new MemoryPreferences();
+        var first = new AppModel(new MockEngine(), preferences).Settings;
+        Assert.AreEqual("system", first.Appearance);
+        first.Appearance = "dark";
+        Assert.AreEqual("dark", new AppModel(new MockEngine(), preferences).Settings.Appearance);
+        first.Appearance = "nonsense";
+        Assert.AreEqual("system", new AppModel(new MockEngine(), preferences).Settings.Appearance);
     }
 }

@@ -43,7 +43,7 @@ internal static class UiLiveCheck
         return done();
     }
 
-    public static async Task<int> Run(string[] args, AppModel app, MainWindow main, SessionWindow session)
+    public static async Task<int> Run(string[] args, AppModel app, MainWindow main)
     {
         var (suffix, folder) = (args[2], args[3]);
         Directory.CreateDirectory(folder);
@@ -52,7 +52,7 @@ internal static class UiLiveCheck
         LiveCheck.SetOutput(Print);
         try
         {
-            result = args[0] == "--live-host" ? await Host(app, main, suffix, folder) : await Technician(app, main, session, suffix, folder);
+            result = args[0] == "--live-host" ? await Host(app, main, suffix, folder) : await Technician(app, main, suffix, folder);
         }
         catch (Exception failure)
         {
@@ -101,8 +101,9 @@ internal static class UiLiveCheck
         if (company is not null) LiveCheck.Check("Delete company (Account)", await app.Company.DeleteCompany(company), app.Company.Error);
     }
 
-    private static async Task<int> Technician(AppModel app, MainWindow main, SessionWindow window, string suffix, string folder)
+    private static async Task<int> Technician(AppModel app, MainWindow main, string suffix, string folder)
     {
+        app.Workspace.WhenReady = WhenReady.Open;
         var (ready, company) = await Prepare(app, suffix, "technician");
         if (!ready) return 1;
         try
@@ -129,7 +130,7 @@ internal static class UiLiveCheck
             await Shot(main.Handle, Path.Combine(folder, "devices-with-lab-host.png"));
             await app.Connect(host.ConnectionId, unattended: true);
             LiveCheck.Check("Connect (unattended): session active, view and control", await Until(() => app.Remote is { Phase: "active", Control: true }, 60), app.Error + " " + app.Remote.Phase);
-            LiveCheck.Check("session window shows the remote picture", await Until(() => app.Session.Frame is not null && window.Visible, 30));
+            LiveCheck.Check("session tab shows the remote picture", await Until(() => app.Session.Frame is not null && app.Workspace.Selected.Peer is not null, 30));
             await Task.Delay(3000);
             LiveCheck.Check($"pictures arrive ({app.Session.Fps} per second, {app.Session.Frame?.Width}×{app.Session.Frame?.Height})", app.Session.Frame is not null);
             Print($"host actions: {string.Join(",", app.Remote.HostActions)} · features: {string.Join(",", app.Remote.PeerFeatures)} · displays: {app.Remote.Displays}");
@@ -141,11 +142,11 @@ internal static class UiLiveCheck
             app.Session.Press(41);
             await Task.Delay(1500);
             LiveCheck.Check("keyboard, mouse and wheel input delivered", app.Session.Error.Length == 0, app.Session.Error);
-            await Shot(window.Handle, Path.Combine(folder, "session-window.png"));
+            await Shot(main.Handle, Path.Combine(folder, "session-window.png"));
             foreach (var action in new[] { "privacy", "block", "sound" })
             {
                 if (!app.Remote.Offers(action)) continue;
-                if (action == "privacy") { app.Session.TogglePrivacy(); await Task.Delay(1500); await Shot(window.Handle, Path.Combine(folder, "session-privacy-on.png")); app.Session.TogglePrivacy(); }
+                if (action == "privacy") { app.Session.TogglePrivacy(); await Task.Delay(1500); await Shot(main.Handle, Path.Combine(folder, "session-privacy-on.png")); app.Session.TogglePrivacy(); }
                 if (action == "block") { app.Session.ToggleBlockInput(); await Task.Delay(800); app.Session.ToggleBlockInput(); }
                 if (action == "sound") { app.Session.ToggleSound(); await Task.Delay(800); app.Session.ToggleSound(); }
                 await Task.Delay(800);
@@ -164,7 +165,7 @@ internal static class UiLiveCheck
                 app.Session.ContinueStroke(0.42, 0.55);
                 app.Session.EndStroke();
                 await Task.Delay(2500);
-                await Shot(window.Handle, Path.Combine(folder, "session-drawing.png"));
+                await Shot(main.Handle, Path.Combine(folder, "session-drawing.png"));
                 LiveCheck.Check("drawing shown on the remote computer (its picture comes back with the strokes)", app.Session.Notice.Length == 0 && app.Session.Error.Length == 0, app.Session.Notice + app.Session.Error);
                 app.Session.ClearDrawing();
                 app.Session.Drawing = false;
@@ -191,7 +192,7 @@ internal static class UiLiveCheck
                 LiveCheck.Check("clipboard sent to the remote computer", app.Session.ClipboardResult == L("Remote clipboard updated."), app.Session.ClipboardResult);
             }
             await app.Session.End();
-            LiveCheck.Check("End session: back to ready, session window closed", await Until(() => app.Remote.Phase == "ready" && !window.Visible, 30), app.Remote.Phase);
+            LiveCheck.Check("End session: back to ready, session window closed", await Until(() => app.Remote.Phase == "ready" && app.Workspace.Tabs.Count == 0, 30), app.Remote.Phase);
             return 0;
         }
         finally
