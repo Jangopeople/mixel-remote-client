@@ -771,4 +771,18 @@ public sealed class ViewModelTests
             app.Session.Clear();
         }
     }
+
+    [TestMethod]
+    public async Task Pictures_only_raise_the_per_picture_properties()
+    {
+        var engine = new MockEngine();
+        DemoFixtures.Viewing(engine);
+        var app = await DemoFixtures.App(engine);
+        var raised = new HashSet<string>();
+        app.Session.PropertyChanged += (_, change) => raised.Add(change.PropertyName ?? "");
+        for (var i = 0; i < 60; i++) app.Session.ShowSample(VideoFrame.Sample(64, 40, (ulong)(i + 1)));
+        raised.ExceptWith(SessionModel.PerPictureProperties);
+        raised.Remove("Frame");
+        Assert.AreEqual(0, raised.Count, "pictures must not make pages rebuild: " + string.Join(",", raised));
+    }
 }

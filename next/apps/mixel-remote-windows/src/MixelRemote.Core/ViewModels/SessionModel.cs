@@ -80,6 +80,8 @@ public sealed class SessionModel : Observable
 
     /// <summary>The newest picture (the screen draws it).</summary>
     public VideoFrame? Frame { get => frame; private set => Set(ref frame, value); }
+    /// <summary>Properties that change with the pictures (many times a second): pages must not rebuild for them; the toolbar updates its own text.</summary>
+    public static readonly string[] PerPictureProperties = [nameof(Fps)];
     public int Fps { get => fps; private set => Set(ref fps, value); }
     public bool Stopping { get => stopping; private set => Set(ref stopping, value); }
     public string Error { get => error; set => Set(ref error, value); }

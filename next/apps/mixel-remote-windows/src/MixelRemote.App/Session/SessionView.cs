@@ -156,10 +156,24 @@ internal sealed class SessionView : Grid
         pending = true;
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
         {
+            // Rebuilding the toolbar replaces its buttons: an open menu (More, quality, draw options) would vanish under the pointer
+            // within a second. Wait until it is closed.
+            if (FlyoutOpen())
+            {
+                var wait = DispatcherQueue.CreateTimer();
+                wait.Interval = TimeSpan.FromMilliseconds(300);
+                wait.IsRepeating = false;
+                wait.Tick += (_, _) => { pending = false; Rebuild(); };
+                wait.Start();
+                return;
+            }
             pending = false;
             Render();
         });
     }
+
+    private bool FlyoutOpen() =>
+        XamlRoot is { } root && Microsoft.UI.Xaml.Media.VisualTreeHelper.GetOpenPopupsForXamlRoot(root).Any(popup => popup.Child is FlyoutPresenter or MenuFlyoutPresenter);
 
     public void Render()
     {

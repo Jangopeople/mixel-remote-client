@@ -414,12 +414,14 @@ internal sealed class DevicesPage : PageView
         {
             main = Ui.Plain(L("Show"), () => Workspace.Show(device.ConnectionId), true, "");
             ToolTipService.SetToolTip(main, L("Show the session with %@", device.Name));
+            AutomationProperties.SetName(main, L("Show the session with %@", device.Name));
         }
         else
         {
             main = Ui.Plain(connecting ? L("Connecting…") : L("Connect"), () => _ = Workspace.Connect(device.ConnectionId, device.Name, device.Os, unattended: true),
                 blocked.Length == 0 && !connecting && !Preparing);
             ToolTipService.SetToolTip(main, blocked.Length == 0 ? L("Connect to %@", device.Name) : blocked);
+            AutomationProperties.SetName(main, L("Connect to %@", device.Name));
         }
         var menu = DeviceMenu(device, presence);
         var more = new DropDownButton { Content = Ui.Icon("", 14), Flyout = menu, Padding = new Thickness(8, 6, 8, 6) };
@@ -520,16 +522,34 @@ internal sealed class DevicesPage : PageView
     private async Task Move(Device device)
     {
         string? group = device.GroupId;
-        var choice = Ui.Choice([("", L("No group")), .. Model.Groups.Select(item => (item.GroupId, item.Name))], group ?? "", value => group = string.IsNullOrEmpty(value) ? null : value);
+        var known = new List<(string Key, string Label)> { ("", L("No group")) };
+        known.AddRange(Model.Groups.Select(item => (item.GroupId, item.Name)));
+        var choice = Ui.Choice(known, group ?? "", value => group = string.IsNullOrEmpty(value) ? null : value);
         UIElement content = Ui.Field(L("Group"), choice);
         if (Model.Deploys)
         {
             var name = new TextBox { PlaceholderText = L("New group"), MinWidth = 220 };
+            var problem = Ui.Text("", secondary: false);
+            problem.Foreground = new SolidColorBrush(Microsoft.UI.Colors.IndianRed);
             var create = Ui.Plain(L("Create group"), async () =>
             {
-                if (name.Text.Trim().Length > 0 && await Model.CreateGroup(name.Text.Trim())) name.Text = "";
+                var wanted = name.Text.Trim();
+                if (wanted.Length == 0) return;
+                if (await Model.CreateGroup(wanted))
+                {
+                    problem.Text = "";
+                    name.Text = "";
+                    // The new group joins the list in this dialog and is chosen: it is not in the sidebar until a device is in it.
+                    if (Model.Groups.FirstOrDefault(item => item.Name == wanted) is { } created && !known.Any(item => item.Key == created.GroupId))
+                    {
+                        known.Add((created.GroupId, created.Name));
+                        choice.Items.Add(created.Name);
+                    }
+                    choice.SelectedIndex = known.FindIndex(item => item.Label == wanted);
+                }
+                else problem.Text = Model.Error;
             });
-            content = Ui.Column(12, content, Ui.Row(8, name, create));
+            content = Ui.Column(12, content, Ui.Row(8, name, create), problem);
         }
         await Dialogs.Show(Root, L("Move %@ to a group", device.Name), content, L("Move"), async () => await Model.Move(device, group));
     }

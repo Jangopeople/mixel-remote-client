@@ -18,7 +18,7 @@ function AppWindows { $ids = (Get-Process mixel-remote -ErrorAction SilentlyCont
     (Root).FindAll([System.Windows.Automation.TreeScope]::Children, $cond) | ForEach-Object { $_ } } }
 function Find([string]$name, [string]$type = '', [switch]$Contains, $scope = $null) {
   $res = @(); $roots = if ($scope) { @($scope) } else { @(AppWindows) }
-  foreach ($w in $roots) { foreach ($e in $w.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)) {
+  foreach ($w in $roots) { foreach ($e in @(try { $w.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition) } catch { @() })) {
     try { $n = $e.Current.Name; $t = $e.Current.ControlType.ProgrammaticName -replace 'ControlType\.',''
       $ok = if ($Contains) { $n -like "*$name*" } else { $n -eq $name }
       if ($ok -and ($type -eq '' -or $t -eq $type)) { $res += $e } } catch {} } }
@@ -36,7 +36,10 @@ function Keys([string]$k) { [System.Windows.Forms.SendKeys]::SendWait($k); Start
 function Shot([string]$path) { $b = [System.Windows.Forms.SystemInformation]::VirtualScreen; $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
   $g = [System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($b.Left, $b.Top, 0, 0, $bmp.Size); $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png); $g.Dispose(); $bmp.Dispose() }
 function Dump($scope = $null, [int]$max = 400) { $roots = if ($scope) { @($scope) } else { @(AppWindows) }; $i = 0
-  foreach ($w in $roots) { foreach ($e in $w.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)) { try {
+  foreach ($w in $roots) { foreach ($e in @(try { $w.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition) } catch { @() })) { try {
     $t = $e.Current.ControlType.ProgrammaticName -replace 'ControlType\.',''; $r = $e.Current.BoundingRectangle
     if ($e.Current.Name -ne '' -and -not $e.Current.IsOffscreen) { "{0,-12} {1} [{2},{3} {4}x{5}] {6}" -f $t, $e.Current.Name, [int]$r.X, [int]$r.Y, [int]$r.Width, [int]$r.Height, $e.Current.AutomationId; $i++; if ($i -ge $max) { return } } } catch {} } } }
 function Focus-App { $p = Get-Process mixel-remote -ErrorAction SilentlyContinue | ?{ $_.MainWindowHandle -ne 0 } | select -First 1; if ($p) { [Win]::ShowWindow($p.MainWindowHandle, 3) | Out-Null; [Win]::SetForegroundWindow($p.MainWindowHandle) | Out-Null } }
+function Nav([string]$id) { for ($i = 0; $i -lt 5; $i++) { $b = @(Find "" "Button" -Contains | ?{ $_.Current.AutomationId -eq "section-$id" })[0]; if ($b) { Inv $b | Out-Null; Start-Sleep 2; return }; Start-Sleep -Milliseconds 700 }; "NO NAV $id" }
+function Inv($e) { try { $e.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke(); Start-Sleep -Milliseconds 600; $true } catch { "invoke failed: $_"; $false } }
+function FindR([string]$name, [string]$type = '', [switch]$Contains) { for ($i = 0; $i -lt 6; $i++) { $r = @(Find $name $type -Contains:$Contains); if ($r.Count) { return $r[0] }; Start-Sleep -Milliseconds 700 }; $null }
