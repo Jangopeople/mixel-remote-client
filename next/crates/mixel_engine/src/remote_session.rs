@@ -2627,6 +2627,7 @@ async fn begin_reconnect(
     generation: u64,
     retries: &mut Vec<Reconnect>,
     last_access: &std::collections::HashMap<u32, crate::reconnect::Access>,
+    lost_at: &mut std::collections::HashMap<u32, std::time::Instant>,
     key: Uuid,
 ) -> bool {
     let Some((slot, host)) = state.slot_device(key).await else { return false };
@@ -2636,6 +2637,11 @@ async fn begin_reconnect(
     let Some(retry) = last_access.get(&host).cloned().and_then(|access| crate::reconnect::Retry::start(access, std::time::Instant::now())) else {
         return false;
     };
+    // When the computer was lost: a new session to it that is closed before it ever ran is asked for again
+    // until a minute after this moment (see `reconnect::WINDOW`).
+    if lost_at.get(&host).is_none_or(|at| at.elapsed() >= crate::reconnect::WINDOW) {
+        lost_at.insert(host, std::time::Instant::now());
+    }
     retries.push(Reconnect { host, slot, retry, gave_up: false });
     state
         .slot_change(generation, slot, |view| {
@@ -2703,7 +2709,7 @@ fn close_means_lost(reason: signaling_server::protocol::CloseReason, transport_l
 
 #[cfg(test)]
 mod close_tests {
-    use super::close_means_lost;
+    use super::{close_means_lost, closed_before_it_ran};
     use signaling_server::protocol::CloseReason::*;
 
     #[test]
@@ -2714,6 +2720,18 @@ mod close_tests {
         assert!(!close_means_lost(Expired, true));
         assert!(!close_means_lost(Rejected, true));
     }
+
+    #[test]
+    fn a_request_closed_while_the_computer_registers_again_is_asked_again() {
+        assert!(closed_before_it_ran(Rejected) && closed_before_it_ran(Requested) && closed_before_it_ran(Disconnected));
+        assert!(!closed_before_it_ran(Expired) && !closed_before_it_ran(Switched));
+    }
+}
+
+/// The reasons a request to a computer that is still registering again is closed with.
+fn closed_before_it_ran(reason: signaling_server::protocol::CloseReason) -> bool {
+    use signaling_server::protocol::CloseReason;
+    matches!(reason, CloseReason::Rejected | CloseReason::Requested | CloseReason::Disconnected)
 }
 
 fn media_end_ends_session(current_transport: Uuid, ended_transport: Uuid) -> bool {
@@ -3170,6 +3188,7 @@ async fn run(
         // Per device (a technician has one session per device): how it was asked for, and its asking again.
         let mut last_access:std::collections::HashMap<u32,crate::reconnect::Access>=std::collections::HashMap::new();
         let mut retries:Vec<Reconnect>=Vec::new();
+        let mut lost_at:std::collections::HashMap<u32,std::time::Instant>=std::collections::HashMap::new();
         // The media connections of the running sessions are still up: ask the connection service to continue
         // each of them (answers come in the order asked; one that fails ends alone).
         let kept_ids:Vec<Uuid>=peer.iter().chain(ctrl.iter()).map(|kept|kept.id).collect();
@@ -3425,7 +3444,7 @@ async fn run(
                         state.change(generation,|status|{status.phase=if accept{"negotiating"}else{"closing"}.into();status.message=if accept{"Accepted; authenticating the remote transport"}else{"Rejecting invitation"}.into();}).await;
                     },
                     Command::Reconnect(session)=>{
-                        begin_reconnect(state,generation,&mut retries,&last_access,session).await;
+                        begin_reconnect(state,generation,&mut retries,&last_access,&mut lost_at,session).await;
                     },
                     Command::Close(session)=>{
                         // The person ended it (or stopped the retries): nothing is asked again for this session.
@@ -3519,7 +3538,7 @@ async fn run(
                         let again=result.is_err() && !ctrl[index].joined && ctrl[index].signals.is_some() && !retries.iter().any(|active|active.host==ctrl[index].remote) && last_access.get(&ctrl[index].remote).is_some_and(crate::reconnect::Access::repeatable);
                         let mut over=ctrl.remove(index);over.take_close();remember_gone(&mut recent,over.id);remember_gone(&mut recent,session);
                         send(&mut socket,ClientMessage::Close{session:over.id}).await?;
-                        let asking_again=again && begin_reconnect(state,generation,&mut retries,&last_access,over.ui).await;
+                        let asking_again=again && begin_reconnect(state,generation,&mut retries,&last_access,&mut lost_at,over.ui).await;
                         if !asking_again {
                             state.slot_end(generation,over.ui,result.err().unwrap_or_else(||"Session closed; ready for a new connection".into())).await;
                         }
@@ -3906,13 +3925,23 @@ async fn run(
                             // The computer this session views went away: only this session asks again.
                             if let Some(index)=ctrl.iter().position(|active|active.id==session || active.ui==session){
                                 let over=ctrl.remove(index);remember_gone(&mut recent,over.id);
-                                begin_reconnect(state,generation,&mut retries,&last_access,over.ui).await;
+                                begin_reconnect(state,generation,&mut retries,&last_access,&mut lost_at,over.ui).await;
                             }
                         },
                         ServerMessage::Closed{session,reason}=>{
                             let text=if reason==signaling_server::protocol::CloseReason::Expired{"The support session reached its 2-hour limit.".to_owned()}else{format!("Session closed: {reason:?}")};
                             if peer.as_ref().is_some_and(|peer|media_end_ends_session(peer.id,session)){peer=None;state.change(generation,|status|{status.phase="ready".into();status.message=text;status.session=None;status.peer=None;status.requester=None;}).await;}
-                            else if let Some(index)=ctrl.iter().position(|active|media_end_ends_session(active.id,session)){let over=ctrl.remove(index);remember_gone(&mut recent,over.id);state.slot_end(generation,over.ui,text).await;}
+                            else if let Some(index)=ctrl.iter().position(|active|media_end_ends_session(active.id,session)){
+                                // A session that was asked for again after the computer was lost, closed before it ran (the
+                                // computer was still registering again): the minute of asking goes on.
+                                let again=closed_before_it_ran(reason) && !ctrl[index].joined && !ctrl[index].host && !ctrl[index].close_sent
+                                    && lost_at.get(&ctrl[index].remote).is_some_and(|at|at.elapsed()<crate::reconnect::WINDOW)
+                                    && !retries.iter().any(|active|active.host==ctrl[index].remote)
+                                    && last_access.get(&ctrl[index].remote).is_some_and(crate::reconnect::Access::repeatable);
+                                let over=ctrl.remove(index);remember_gone(&mut recent,over.id);
+                                let asking_again=again && begin_reconnect(state,generation,&mut retries,&last_access,&mut lost_at,over.ui).await;
+                                if !asking_again{state.slot_end(generation,over.ui,text).await;}
+                            }
                         },
                         ServerMessage::Error{code} if !resuming.is_empty()=>{
                             // Not known any more (older connection service, or the 90 seconds passed): the session that was
@@ -5231,7 +5260,7 @@ mod per_session_recovery_tests {
         let access = |host| Access { host, unattended: true, password: None };
         let last: std::collections::HashMap<u32, Access> = [(300_000_001, access(300_000_001)), (300_000_002, access(300_000_002))].into();
         let mut retries = Vec::new();
-        assert!(begin_reconnect(&remote, 0, &mut retries, &last, transports[0]).await);
+        assert!(begin_reconnect(&remote, 0, &mut retries, &last, &mut Default::default(), transports[0]).await);
         assert_eq!(retries.len(), 1);
         assert_eq!(retries[0].slot, stable[0]);
         let status = remote.status().await;
@@ -5241,10 +5270,10 @@ mod per_session_recovery_tests {
         assert!(first.message.contains("Reconnecting"));
         let second = view(&status, stable[1]);
         assert!(!second.reconnecting && !second.reconnect_failed, "the other session is not touched");
-        assert!(!begin_reconnect(&remote, 0, &mut retries, &last, transports[0]).await, "one retry per device");
+        assert!(!begin_reconnect(&remote, 0, &mut retries, &last, &mut Default::default(), transports[0]).await, "one retry per device");
         assert_eq!(retries.len(), 1);
         // Both can ask again at the same time, each on its own clock.
-        assert!(begin_reconnect(&remote, 0, &mut retries, &last, transports[1]).await);
+        assert!(begin_reconnect(&remote, 0, &mut retries, &last, &mut Default::default(), transports[1]).await);
         assert_eq!(retries.len(), 2);
     }
 
@@ -5254,8 +5283,8 @@ mod per_session_recovery_tests {
         let attended: std::collections::HashMap<u32, Access> =
             [(300_000_011, Access { host: 300_000_011, unattended: false, password: None })].into();
         let mut retries = Vec::new();
-        assert!(!begin_reconnect(&remote, 0, &mut retries, &attended, transports[0]).await);
-        assert!(!begin_reconnect(&remote, 0, &mut retries, &attended, Uuid::new_v4()).await);
+        assert!(!begin_reconnect(&remote, 0, &mut retries, &attended, &mut Default::default(), transports[0]).await);
+        assert!(!begin_reconnect(&remote, 0, &mut retries, &attended, &mut Default::default(), Uuid::new_v4()).await);
         assert!(retries.is_empty());
         assert!(!remote.status().await.sessions[0].reconnecting);
     }
