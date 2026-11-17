@@ -916,6 +916,18 @@ fn encoder_bitrate(size: (usize, usize), pace_bytes_per_second: f64) -> u32 {
     let carried = (pace_bytes_per_second * 8.0 * 0.6).clamp(0.0, f64::from(ceiling)) as u32;
     carried.clamp(ENCODER_MIN_BITRATE.min(ceiling), ceiling)
 }
+/// The encoder's next bit rate: down at once when the pace fell to less than two thirds of it, up
+/// by half at most when the pace allows 40 % more (the pace rises fast after a few complete
+/// pictures arrived, faster than a slow line can follow), otherwise unchanged.
+fn next_bitrate(current: u32, wanted: u32) -> u32 {
+    if u64::from(wanted) * 3 < u64::from(current) * 2 {
+        wanted
+    } else if u64::from(wanted) * 10 >= u64::from(current) * 14 {
+        wanted.min(current.saturating_add(current / 2))
+    } else {
+        current
+    }
+}
 /// The lowest bit rate the encoder is set to.
 const ENCODER_MIN_BITRATE: u32 = 400_000;
 /// The encoder is set up again for a new bit rate at most this often, and only when the rate it
@@ -933,6 +945,14 @@ mod bitrate_tests {
         assert_eq!(encoder_bitrate(full_hd, 500_000.0), 2_400_000, "the start pace (4 Mbit/s)");
         assert_eq!(encoder_bitrate(full_hd, 125_000.0), 600_000, "the slowest pace (1 Mbit/s)");
         assert_eq!(encoder_bitrate(full_hd, 10_000.0), ENCODER_MIN_BITRATE);
+    }
+    #[test]
+    fn the_bit_rate_falls_at_once_and_rises_by_half_at_most() {
+        assert_eq!(next_bitrate(2_400_000, 600_000), 600_000);
+        assert_eq!(next_bitrate(600_000, 6_000_000), 900_000);
+        assert_eq!(next_bitrate(900_000, 6_000_000), 1_350_000);
+        assert_eq!(next_bitrate(2_400_000, 2_000_000), 2_400_000, "small changes are left alone");
+        assert_eq!(next_bitrate(2_400_000, 3_000_000), 2_400_000);
     }
 }
 
@@ -1245,8 +1265,8 @@ async fn host_media(
             // The encoder follows the pace (see `encoder_bitrate`); a new encoder starts with a
             // complete picture.
             if bitrate_set.elapsed() >= BITRATE_SETTLE {
-                let wanted = encoder_bitrate(size, pacer.rate());
-                if u64::from(wanted) * 2 > u64::from(bitrate) * 3 || u64::from(wanted) * 3 < u64::from(bitrate) * 2 {
+                let wanted = next_bitrate(bitrate, encoder_bitrate(size, pacer.rate()));
+                if wanted != bitrate {
                     #[cfg(feature = "qa-session")]
                     eprintln!("QA encoder bit rate {} -> {} kbit/s (pace {:.0} kB/s)", bitrate / 1000, wanted / 1000, pacer.rate() / 1000.0);
                     encoder = start_encoder(size, wanted)?;
@@ -1453,6 +1473,8 @@ async fn viewer_media(
             Err(_) => {}
         }
     };
+    #[cfg(feature = "qa-session")]
+    let mut qa_shown = (0u32, Instant::now());
     let mut assembler = H264Assembler::default();
     // A packet lost on the way is asked for again (NACK) and waited for this long before the
     // picture is given up and a complete one is requested.
@@ -1647,6 +1669,21 @@ async fn viewer_media(
                             waiting_for_key = false;
                             if compressed {
                                 received += 1;
+                        #[cfg(feature = "qa-session")]
+                        {
+                            qa_shown.0 += 1;
+                            if qa_shown.1.elapsed() >= Duration::from_secs(1) {
+                                if let Some(path) = std::env::var_os("MIXEL_QA_VIDEO_LOG") {
+                                    let mut history = std::path::PathBuf::from(path).into_os_string();
+                                    history.push(".shown");
+                                    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(history) {
+                                        use std::io::Write;
+                                        let _ = writeln!(file, "{:>6} ms: shown/s={}", qa_started.elapsed().as_millis(), qa_shown.0);
+                                    }
+                                }
+                                qa_shown = (0, Instant::now());
+                            }
+                        }
                                 last = Instant::now();
                                 #[cfg(feature = "qa-session")]
                                 if received == 1 {
@@ -1710,6 +1747,21 @@ async fn viewer_media(
                             );
                         }
                         received += 1;
+                        #[cfg(feature = "qa-session")]
+                        {
+                            qa_shown.0 += 1;
+                            if qa_shown.1.elapsed() >= Duration::from_secs(1) {
+                                if let Some(path) = std::env::var_os("MIXEL_QA_VIDEO_LOG") {
+                                    let mut history = std::path::PathBuf::from(path).into_os_string();
+                                    history.push(".shown");
+                                    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(history) {
+                                        use std::io::Write;
+                                        let _ = writeln!(file, "{:>6} ms: shown/s={}", qa_started.elapsed().as_millis(), qa_shown.0);
+                                    }
+                                }
+                                qa_shown = (0, Instant::now());
+                            }
+                        }
                         last = Instant::now();
                         #[cfg(feature = "qa-session")]
                         if received == 1 {

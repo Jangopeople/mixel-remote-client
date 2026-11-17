@@ -70,6 +70,11 @@ pub enum TransportError {
     #[error("no usable relay candidate was gathered")]
     RelayUnavailable,
 }
+/// Lab builds only: the time of day in milliseconds, as the engine's lab lines print it.
+#[cfg(feature = "qa-session")]
+fn qa_clock() -> u128 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |since| since.as_millis() % 100_000_000)
+}
 struct Handler {
     gathered: watch::Sender<bool>,
     channels: mpsc::Sender<Arc<dyn DataChannel>>,
@@ -92,7 +97,14 @@ impl PeerConnectionEventHandler for Handler {
         }
     }
     async fn on_connection_state_change(&self, state: RTCPeerConnectionState) {
+        #[cfg(feature = "qa-session")]
+        eprintln!("QA transport: connection {state:?} (clock {})", qa_clock());
         self.state.send_replace(state);
+    }
+    async fn on_ice_connection_state_change(&self, _state: webrtc::peer_connection::RTCIceConnectionState) {
+        // Lab builds only: when ICE found its pair (the rest until the open channel is DTLS and SCTP).
+        #[cfg(feature = "qa-session")]
+        eprintln!("QA transport: ICE {_state:?} (clock {})", qa_clock());
     }
     async fn on_track(&self, track: Arc<dyn TrackRemote>) {
         let _ = self.tracks.try_send(track);
